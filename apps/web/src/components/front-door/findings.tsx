@@ -1,25 +1,3 @@
-// SELECTIVE FINDINGS — the band under the lead.
-//
-// A short, cover-led row of the newest findings, each one a link to its coordinate page. It is a
-// WINDOW onto `/findings`, never a feed: nothing loads on scroll, there is no pager, and the section
-// hands over to the full archive with one link. That restraint is the whole point of the front door
-// (PRODUCT.md "The front door") — a stranger should be able to see the shape of the thing and leave
-// in any direction, not be handed an infinite list.
-//
-// ── THE REGISTER ─────────────────────────────────────────────────────────────────────────────
-// Every row here is certified, so every row is lit: the cover, the Log ID coordinate in Oxanium, the
-// gold heat on hover. Only coordinate-bearing findings render, because the tile IS a log link. The
-// uncertified archive is a DIFFERENT band further down the page, in a different register — the
-// distinction is carried by placement and light, and named nowhere (DESIGN.md's Unlit Rule).
-//
-// ── THE TILES PLAY ───────────────────────────────────────────────────────────────────────────
-// Each tile's cover is its play button and the band is one list to the player (the lead above
-// included, so its play runs on into these); the coordinate and the caption beneath open the log
-// page. Playing is not a transport: nothing on the page advances, and the band stays a window.
-//
-// Every cover here is lazy. The lead's cover above is the page's one eager image; the signal only
-// helps while it is scarce.
-
 import { Link } from "@tanstack/react-router";
 import { type ReactNode } from "react";
 import { type TrackListItem } from "@fluncle/contracts";
@@ -55,7 +33,6 @@ export function FrontDoorFindings({ findings }: { findings: TrackListItem[] }): 
   );
 }
 
-/** The tile's cover: its play button when the finding has a live preview, the plain cover when not. */
 function FindingTileCover({ finding }: { finding: TrackListItem }): ReactNode {
   const cover = (
     <TrackArtwork
@@ -66,7 +43,6 @@ function FindingTileCover({ finding }: { finding: TrackListItem }): ReactNode {
   );
   const track = findingToDiscoveryTrack(finding);
 
-  // No preview: the cover opens the log page, beside the caption (siblings, never nested).
   if (!track.previewable || !finding.logId) {
     return finding.logId ? (
       <Link aria-hidden="true" params={{ logId: finding.logId }} tabIndex={-1} to="/log/$logId">

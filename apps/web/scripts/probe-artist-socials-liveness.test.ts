@@ -8,11 +8,6 @@ import {
   REMOVABLE,
 } from "./probe-artist-socials-liveness";
 
-// PURE coverage for the liveness probe's verdict + safety logic. The live HTTP probing
-// is exercised by running the script; this pins the cert-trap lesson: arbitrary-domain
-// oracles (homepage/bandcamp) are REPORT-only, and a neterr there is host-dead, never
-// an auto-removal.
-
 describe("interpretStatus — valid-cert honest oracles (soundcloud/mixcloud/youtube)", () => {
   for (const p of ["soundcloud", "mixcloud", "youtube"]) {
     it(`${p}: 200→live, 404→dead, other→unknown, neterr→unknown`, () => {
@@ -86,11 +81,11 @@ describe("computeFusedPlatforms — a suspect oracle removes nothing", () => {
   });
 
   it("fuses a reliable platform above 25% dead", () => {
-    const per = new Map([["soundcloud", tally(50, 40, 10)]]); // 40% dead
+    const per = new Map([["soundcloud", tally(50, 40, 10)]]);
     expect(computeFusedPlatforms(per).has("soundcloud")).toBe(true);
   });
   it("does not fuse under the threshold", () => {
-    const per = new Map([["youtube", tally(90, 5, 5)]]); // 5% dead
+    const per = new Map([["youtube", tally(90, 5, 5)]]);
     expect(computeFusedPlatforms(per).has("youtube")).toBe(false);
   });
   it("never fuses a soft platform", () => {

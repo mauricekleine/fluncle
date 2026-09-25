@@ -250,7 +250,6 @@ function runAdmissionSchedule(
   return { active, events, pending };
 }
 
-/** Discrete-event proof of the durable two-resource FIFO and fencing rules. */
 export function simulateFencedAdmission(
   requests: readonly AdmissionRequest[] = DEFAULT_ADMISSION_REQUESTS,
 ): AdmissionSimulation {
@@ -360,7 +359,6 @@ const DEFAULT_RECEIPT_STATES: readonly ReceiptObservedState[] = [
   "lookup-failed",
 ];
 
-/** Keep the production receipt vocabulary closed: unknown evidence is never silently retried. */
 export function classifyReceiptOutcome(state: ReceiptObservedState): ReceiptClassification {
   switch (state) {
     case "committed":
@@ -507,7 +505,6 @@ function sonarDigest(state: ReadonlyMap<string, { revision: number; value: strin
     .join("|");
 }
 
-/** Model local replica sync, one remote delta page, and a local steady-state reconciliation. */
 export function simulateSonarConvergence(
   trace: readonly SonarTraceStep[] = DEFAULT_SONAR_TRACE,
 ): SonarConvergenceReport {
@@ -643,7 +640,6 @@ const DEFAULT_DEVICE_TRACE: readonly DeviceTraceStep[] = [
   { generation: 2, kind: "consumer-read" },
 ];
 
-/** Model a local source replica, validated temp generation, and atomic publication pointer. */
 export function simulateDeviceConvergence(
   trace: readonly DeviceTraceStep[] = DEFAULT_DEVICE_TRACE,
 ): DeviceConvergenceReport {

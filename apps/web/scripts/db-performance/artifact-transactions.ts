@@ -1,19 +1,5 @@
 #!/usr/bin/env bun
-/**
- * Artifact write-transaction measurement over a production-schema local source seeded to a scale
- * profile's manifest counts. It drives the real `checkpointArtifactRebuild` page transaction
- * across every `sonar.track` snapshot page of the profile's embedded tracks, activates the
- * consumer, then drives the real `acknowledgeArtifactChanges` transaction over maximum-size change
- * pages. For each write transaction it records what happened while the lock was held: statements,
- * base64 calls (the vector wire encoder, with vector-length calls counted separately), `JSON.parse`
- * calls (payload decoding), SHA-256 calls, and wall time from `client.transaction("write")` through
- * commit. Local libSQL timing says nothing about hosted Turso; the statement and encoder counts are
- * the durable part, and `artifact-changes.transaction-work.integration.test.ts` pins them.
- *
- *   bun run --cwd apps/web scripts/db-performance/artifact-transactions.ts --profile 1x
- *   bun run --cwd apps/web scripts/db-performance/artifact-transactions.ts --profile 1x --markdown
- *   bun run --cwd apps/web scripts/db-performance/artifact-transactions.ts --ci --profile 1x
- */
+
 import {
   type Client,
   type InStatement,
@@ -56,7 +42,6 @@ const TIMESTAMP = "2026-01-01T00:00:00.000Z";
 
 type ArtifactClient = Pick<Client, "batch" | "execute" | "transaction">;
 
-/** What one write transaction did between `client.transaction()` and its commit or rollback. */
 export type ArtifactTransactionWork = {
   base64Calls: number;
   digestCalls: number;
@@ -67,7 +52,6 @@ export type ArtifactTransactionWork = {
 };
 
 export type ArtifactTransactionSample = ArtifactTransactionWork & {
-  /** Rows the transaction verified: snapshot items on a page, or events in a batch. */
   itemCount: number;
   sequence: number;
 };
@@ -123,9 +107,8 @@ export type ArtifactTransactionCensus = {
 };
 
 export type ArtifactTransactionOptions = {
-  /** Maximum-size change pages to append and acknowledge. */
   acknowledgements?: number;
-  /** A compact derivative; omitted for the exact manifest counts. */
+
   counts?: FixtureCounts;
 };
 
@@ -175,11 +158,6 @@ function summarize(samples: readonly ArtifactTransactionSample[]): ArtifactTrans
   };
 }
 
-/**
- * Wrap a client so every transaction it opens is observed for its full open window only. The
- * global encoder primitives are patched when the transaction opens and restored when it commits or
- * rolls back, so validation before the transaction and response assembly after it never count.
- */
 function instrumentTransactions(client: Client): {
   client: ArtifactClient;
   work: ArtifactTransactionWork[];
@@ -348,20 +326,6 @@ async function writeGenerated(
   }
 }
 
-/**
- * The profile's complete table census on the production schema, plus the manifest's proportional
- * artifact-log volume below the consumer's registration fence so the acknowledged pages sit on top
- * of a populated log rather than an empty one. Findings occupy the first tracks, which are also the
- * first embedded tracks, so the measured snapshot sees both sides of its findings left join. Every
- * track has one artist edge and the manifest's surplus edges are spread deterministically as second
- * credits.
- *
- * The two measured transactions do not read crawl-frontier state, label seed state, provenance or
- * analysis backlog fields. The pending-frontier, enabled-label-track, YouTube-provenance,
- * MusicBrainz-ISRC and full-analysis distributions therefore stay unmodelled: their table counts are
- * present for census fidelity, but reproducing the perf_* distribution machinery would not change a
- * statement, projected byte, digest or encoder call on either measured path.
- */
 async function seedSource(client: Client, counts: FixtureCounts): Promise<number> {
   if (counts.findings > counts.trackEmbeddings) {
     throw new Error("artifact transaction findings must fit inside the embedded track prefix");
@@ -643,7 +607,6 @@ function formatMs(value: number): string {
   return value.toFixed(2);
 }
 
-/** One Markdown row per path, in the shape a review or ledger table expects. */
 export function formatArtifactTransactionMarkdown(report: ArtifactTransactionReport): string {
   const row = (label: string, path: ArtifactTransactionPathReport): string => {
     const { summary } = path;

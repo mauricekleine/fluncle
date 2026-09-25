@@ -1,7 +1,3 @@
-// `/fresh` — the shared masthead. The nameplate and the intro are canon-approved strings (the copy
-// is careful never to claim Fluncle FOUND these — they're RELEASE dates; VOICE.md's Found Rule). The
-// newest-first ordering is SHOWN by the page (the date spine / big date stamps), never stated.
-
 export function FreshMasthead() {
   return (
     <header className="fresh-masthead">

@@ -205,17 +205,13 @@ function spawnSidecar(
         try {
           subprocess.kill("SIGTERM");
           sentTerminationSignal = true;
-        } catch {
-          // The launcher already exited.
-        }
+        } catch {}
       }
 
       if (sentTerminationSignal) {
         await Promise.race([exited.then(() => undefined), sleep(PROCESS_STOP_GRACE_MS)]);
       }
 
-      // A detached process group makes teardown resilient if this direct local server ever gains
-      // helper children. A missing group simply means the owned process tree is already gone.
       if (managesProcessGroup && pid !== undefined && signalProcessGroup(pid, 0)) {
         signalProcessGroup(pid, "SIGKILL");
       }
@@ -402,9 +398,6 @@ export async function startLocalLibsqlSidecar(
             "local libSQL readiness query",
           );
 
-          // A server already occupying the allocated port cannot authenticate this run's random
-          // token. Keep the successful connection through one poll as an additional bind-collision
-          // guard, then require this run's supervisor to still be alive before accepting it.
           await runtime.sleep(Math.min(readinessPollMs, Math.max(1, deadline - runtime.now())));
           const ownershipExitCode = sidecarProcess.exitCode;
           if (ownershipExitCode !== null) {

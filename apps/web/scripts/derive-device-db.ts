@@ -1,12 +1,5 @@
 #!/usr/bin/env bun
-/**
- * Derive the read-only public catalogue database shipped to mobile devices.
- *
- * The source is a stable local SQLite/libSQL snapshot. Production first synchronizes its
- * restart-safe embedded replica, closes that client, and invokes this same local-only derivation.
- * The output schema is generated exclusively from DEVICE_DB_COLUMNS; source-only cut inputs such
- * as the MuQ vector, storage pointers, admin state, auth, and telemetry cannot cross the boundary.
- */
+
 import { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
@@ -247,7 +240,6 @@ async function fsyncPath(path: string): Promise<void> {
   }
 }
 
-/** The destination is never unlinked first: rename is the single publication boundary. */
 export async function publishDeviceArtifactAtomically(
   temporaryPath: string,
   destinationPath: string,
@@ -417,9 +409,6 @@ export async function deriveDeviceDatabase(
   let selectedTrackCount = 0;
 
   try {
-    // Bun's SQLite binding does not pass URI `mode=ro` through ATTACH. The source is a private
-    // local replica under this process's single-flight lock; every statement names it only in a
-    // SELECT, and the before/after byte fingerprint rejects any accidental mutation.
     output.query("ATTACH DATABASE ? AS source").run(args.source);
     attached = true;
 
@@ -509,16 +498,12 @@ export async function deriveDeviceDatabase(
     if (attached) {
       try {
         output.run("DETACH DATABASE source");
-      } catch {
-        // Preserve the original derivation failure.
-      }
+      } catch {}
     }
 
     try {
       output.close();
-    } catch {
-      // The handle is already closed on the verified publication path.
-    }
+    } catch {}
 
     if (!published) {
       await removeDatabaseFiles(temporaryOut);

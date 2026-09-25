@@ -10,34 +10,8 @@ import { toQueueTrack } from "@/lib/player-tracks";
 import { usePreviewPlayer } from "@/lib/preview-player";
 import { Badge } from "@fluncle/ui/components/badge";
 
-// THE CHAIN CARD — ChatDnB builds a set that mixes (ChatDnB Phase 3).
-//
-// When `build_set` chains a mixable set off a seed finding, the workbench renders it as a real
-// card instead of a raw JSON marker: the SEED as a full Finding Card under a quiet "start here"
-// label, then a NUMBERED mini-chain of what mixes in after it — each step a compact play row
-// carrying the REASON it mixes as a quiet chip (the `mixReasonLabel` string, NEVER a number),
-// and a footer that hands the whole ordered set to `/mix`. It mirrors the Finding Card's play +
-// coordinate idioms so the chain reads like the rest of the archive, one step closer to a set.
-//
-// The chain carries BOTH registers, exactly like `/mix` (which is already catalogue-aware). A
-// certified step lights its coordinate and plays; a catalogue step Fluncle has not certified rides
-// the UNLIT mix register — it still carries its mixability (bpm/key + the reason chip, a
-// measurement, not narration) and its `?set=` token, but no coordinate, no play, no /log link, and
-// it links out to Spotify instead. A catalogue step cannot leak a coordinate: it has none.
-
-/**
- * A chain step: a {@link ChatFinding} plus the human `reason` it mixes (the `mixReasonLabel`
- * string the tool already resolved). NO score — reasons are words. Every finding field stays
- * optional (the tool output rides through `dropEmpty`), and there is no `previewUrl` here, same
- * as the Finding Card: playback goes through the live `/api/preview/<logId>` relay.
- */
 type ChatStep = ChatFinding & { reason?: string };
 
-/**
- * A mixable set as `build_set` emits it: the seed finding, the ordered steps that mix in after
- * it, the `/mix?set=…` handoff URL, and a `thin` flag the tool sets when the archive is too
- * sparse to chain from here (so the card says so in voice rather than showing an empty chain).
- */
 export type ChatSet = {
   seed?: ChatFinding;
   setUrl?: string;
@@ -54,9 +28,6 @@ export function ChainCard({ notation, set }: { notation: KeyNotation; set: ChatS
 
   const steps = set.steps ?? [];
 
-  // One object, not three: a bordered container (the sibling card rhythm) holds the seed under
-  // "Start here", the numbered steps as a divider-ruled sequence beneath it, and the "/mix" handoff
-  // as a footer inside — never a link dangling below the card.
   return (
     <div className="flex flex-col gap-3 rounded-md border border-border bg-card px-3 py-2.5">
       <div className="flex flex-col gap-2">
@@ -84,9 +55,6 @@ export function ChainCard({ notation, set }: { notation: KeyNotation; set: ChatS
       {set.setUrl && steps.length > 0 ? (
         <div className="border-t border-border pt-2.5">
           <a
-            // One action, one label (VOICE.md §4, the Chrome Rule): the accessible name
-            // carries the visible words. "the mixer" was a noun this surface invented for
-            // /mix and nothing else in the product uses.
             aria-label="Open this set in /mix"
             className="track-log-id-link inline-flex items-center gap-1 text-xs text-muted-foreground"
             href={set.setUrl}
@@ -100,9 +68,6 @@ export function ChainCard({ notation, set }: { notation: KeyNotation; set: ChatS
   );
 }
 
-// One step in the chain: a slim play row — the shared `.track-play` artwork idiom (lighter than a
-// full Finding Card), the `Artist — Title` line, the coordinate link, and the reason chip. Its own
-// component so the preview hook is called once per row, unconditionally.
 function ChainStep({
   notation,
   position,
@@ -119,11 +84,8 @@ function ChainStep({
   const keyText = formatKey(step.key, notation);
   const coverSrc = albumCoverAtSize(step.albumImageUrl, "small");
 
-  // The play control needs both a preview and a coordinate (the relay is keyed by logId). The
-  // hook is called unconditionally with a stable key ("" never matches an active track) so hooks
-  // stay unconditional even when this step is not playable.
   const playable = Boolean(step.hasPreview && logId);
-  // The relay is keyed by the coordinate here, so the queued track is too.
+
   const queued = useMemo(
     () =>
       toQueueTrack({
@@ -166,8 +128,6 @@ function ChainStep({
           </span>
         </button>
       ) : (
-        // A catalogue step (no coordinate) rides the unlit register: its tile is desaturated
-        // (Dust Veil), never a lit cover — DESIGN.md §157's Unlit Rule, mirroring the /mix unlit row.
         <span className={logId ? "shrink-0" : "chain-step--unlit shrink-0"}>{artwork}</span>
       )}
 
@@ -189,9 +149,6 @@ function ChainStep({
         </div>
       </div>
 
-      {/* A catalogue step rides the unlit mix register — it carries its mixability (bpm/key + the
-          reason chip, a measurement) but no coordinate, so it links OUT to Spotify the way an
-          unlit /mix row does. A certified step has its coordinate above and never shows this. */}
       {!logId && step.spotifyUrl ? (
         <a
           aria-label={`Open ${title} on Spotify`}

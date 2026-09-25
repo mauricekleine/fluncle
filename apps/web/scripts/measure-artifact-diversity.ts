@@ -1,35 +1,5 @@
 #!/usr/bin/env bun
-/**
- * measure-artifact-diversity.ts — the homogenisation MEASUREMENT harness.
- *
- * The roadmap's demand (docs/planning/ROADMAP.md § "Homogenisation"): every generated
- * artifact family wants a cheap, honest diversity metric run on the REAL corpus, so the
- * "our artifacts drift toward a mean" claim stays falsifiable. "An anti-sameness effort
- * with no metric is folklore." The notes already had one (`scoreNoteEcho` + the note-sweep
- * `--dry-run`); this runs the SAME measures across the WRITTEN families — notes, spoken
- * observations, logbook entries, and the newsletter's per-finding why-lines — off the live
- * archive and prints a ranked report. It also cuts the upstream context-note `Texture:`
- * vocabulary, the stored video axes (vehicle / grain /
- * register / palette, with the palette NULL share reported honestly), and — behind `--embed`
- * — a SEMANTIC cut: it embeds the written corpora with a local bge-class text model and
- * measures pairwise embedding distance, the one automated layer that sees MOVES not words.
- *
- * READ-ONLY. Nothing but SELECTs. It measures; it changes no artifact and writes no DB row.
- *
- * WHERE IT READS. Point it at any libSQL database via TURSO env vars, or let it fall back
- * to apps/web/.dev.vars (the per-worktree local dev server, which is itself seeded from a
- * prod snapshot via `db:pull-prod`). `--db <url>` overrides. To measure PRODUCTION, hand it
- * the prod creds out of 1Password (see the header of db-pull-prod.ts for the item), e.g.:
- *
- *   TURSO_DATABASE_URL="$(op read "$FLUNCLE_TURSO_OP_ITEM/TURSO_DATABASE_URL")" \
- *   TURSO_AUTH_TOKEN="$(op read "$FLUNCLE_TURSO_OP_ITEM/TURSO_AUTH_TOKEN")" \
- *   bun run --cwd apps/web scripts/measure-artifact-diversity.ts --out /tmp/sameness-report.md
- *
- * OUTPUT. The full markdown report goes to stdout; `--out <path>` also writes it to a file.
- *
- * Re-run it whenever the corpus, a prompt, or a model changes — the harness is what keeps
- * the drift claim honest as the archive grows (the roadmap's "re-measure as it grows").
- */
+
 import { createClient } from "@libsql/client";
 import { REMOTE_DB_CONCURRENCY } from "../src/lib/database-concurrency";
 import { config } from "dotenv";
@@ -56,20 +26,10 @@ import {
 } from "../src/lib/server/artifact-diversity";
 import { contentOverlap } from "../src/lib/server/note";
 
-// The crutch words tracked on observations — the closer formula
-// ("enjoy"/"cosmonaut"), the "hope" reflex, and the "shoulders" body-image tic. Tracked in a
-// fixed order so repeated reports remain column-for-column comparable.
 const CRUTCH_WORDS = ["hope", "enjoy", "cosmonaut", "cosmonauts", "shoulders"] as const;
 
-/** A family's diversity reading plus its register cut (openers/closers/crutches). */
 type FamilyReport = FamilyDiversity & { registers: RegisterStats };
 
-// The note work's ratified baseline, from the roadmap + PR #502: the vibe-neighbour layer
-// + echo gate CUT within-sonic-region mean pairwise word overlap from 0.041 to 0.015. It
-// is an INTRA-REGION number (a note vs its ~6 nearest sonic neighbours), so it is not the
-// same scope as this harness's whole-corpus mean — the report says so plainly — but it is
-// the one measured anti-sameness result Fluncle has, and every other family is judged
-// against the fact that the notes already have a working counter-measure and the rest do not.
 const NOTE_BASELINE = { after: 0.015, before: 0.041 } as const;
 
 function arg(flag: string): string | undefined {
@@ -86,7 +46,6 @@ function resolveDbUrl(): string {
   }
 
   if (!process.env.TURSO_DATABASE_URL) {
-    // Same fallback as the backfill scripts: load .dev.vars, never overriding a set var.
     config({ path: join(dirname(fileURLToPath(import.meta.url)), "..", ".dev.vars") });
   }
 
@@ -101,7 +60,6 @@ function resolveDbUrl(): string {
   return url;
 }
 
-/** A short, safe label for the report — the DB host/kind, never its token. */
 function dbLabel(url: string): string {
   if (url.startsWith("file:")) {
     return "a local libSQL file";
@@ -122,12 +80,6 @@ function pct(value: number): string {
   return `${(value * 100).toFixed(1)}%`;
 }
 
-/**
- * The REGISTER cut — how templated a family's openers, closers, and reflexes are. This is the
- * cut that makes the observations' worst homogenisation legible: the formulaic closer, the
- * "I…" opener, the "hope" crutch. The before/after on these lines is the proof the prompt +
- * neighbourhood rails broke the formula, in a way the whole-corpus mean overlap never showed.
- */
 function renderRegisters(registers: RegisterStats): string {
   const lines: string[] = [];
 
@@ -229,19 +181,8 @@ function renderFamily(reading: FamilyReport): string {
   return lines.join("\n");
 }
 
-// A family this small can post a high mean pairwise overlap off two or three artifacts,
-// and a mean over three items is not a trend. So a family below this size is reported as a
-// WATCH, never named the priority on its raw number alone — the honest read must not let a
-// thin corpus outshout a large one.
 const MIN_CONFIDENT_SIZE = 10;
 
-/**
- * The honest one-paragraph read. NOT a mechanical "highest mean wins": a three-entry family
- * can top the mean off almost nothing, so this is size-aware. It names the raw ranking, then
- * picks the PRIORITY as the largest, most-pervasively-echoing family that has NO shipped rail
- * yet — the one where fixing sameness pays the most and is least likely to be a sampling
- * artifact — and flags any thin family as a watch rather than the target.
- */
 function renderVerdict(readings: FamilyDiversity[]): string {
   const measurable = readings.filter((reading) => reading.size >= 2);
 
@@ -252,8 +193,6 @@ function renderVerdict(readings: FamilyDiversity[]): string {
   const byMean = [...measurable].sort((a, b) => b.meanPairwiseOverlap - a.meanPairwiseOverlap);
   const rawTop = byMean[0];
 
-  // The notes are the one family with a shipped anti-sameness rail; they are the yardstick,
-  // never the priority. The priority is a rail-less family with a corpus big enough to trust.
   const candidates = measurable.filter(
     (reading) => reading.family !== "notes" && reading.size >= MIN_CONFIDENT_SIZE,
   );
@@ -268,7 +207,6 @@ function renderVerdict(readings: FamilyDiversity[]): string {
     ? `For scale, the notes — the one family with a shipped rail (the vibe-neighbour layer + echo gate, measured to cut intra-region overlap ${NOTE_BASELINE.before}→${NOTE_BASELINE.after}) — sit at ${notes.meanPairwiseOverlap.toFixed(4)} whole-corpus overlap, ${notes.echoingCount}/${notes.size} echoing. `
     : "";
 
-  // The thin families that top the raw mean but cannot yet be trusted as a trend.
   const thin = measurable.filter(
     (reading) => reading.family !== "notes" && reading.size < MIN_CONFIDENT_SIZE,
   );
@@ -365,10 +303,6 @@ function renderReport(readings: FamilyReport[], meta: { db: string; when: string
   return lines.join("\n");
 }
 
-// A libsql cell as text. The columns read here are TEXT (log_id, note, body) or INTEGER
-// (sector); anything else — a blob, a null — honestly becomes the fallback. Narrowing by
-// typeof (rather than String(...)) is what satisfies oxlint's type-aware no-base-to-string:
-// a raw `Value` may be an ArrayBuffer, whose default stringification is garbage.
 function cellText(value: unknown, fallback: string): string {
   if (typeof value === "string") {
     return value;
@@ -381,7 +315,6 @@ function cellText(value: unknown, fallback: string): string {
   return fallback;
 }
 
-/** One family measured both ways — the overlap/lift reading and the register cut. */
 function measureBoth(family: string, artifacts: Artifact[]): FamilyReport {
   return {
     ...measureFamily(family, artifacts),
@@ -389,10 +322,6 @@ function measureBoth(family: string, artifacts: Artifact[]): FamilyReport {
   };
 }
 
-// Suffix duplicate ids so a why-line that references the same finding across two editions
-// stays a DISTINCT artifact (the lift scan filters by id !== id, so identical ids would be
-// read as self and never compared). With one sent edition today this is a no-op; it keeps
-// the newsletter cut honest once the corpus reaches the ≥4-edition re-measure the ledger asks for.
 function uniqueIds(artifacts: Artifact[]): Artifact[] {
   const seen = new Map<string, number>();
 
@@ -405,7 +334,6 @@ function uniqueIds(artifacts: Artifact[]): Artifact[] {
   });
 }
 
-/** The tags of one finding's video, as stored (any axis may be null on an older render). */
 type VideoAxes = {
   grain: string | null;
   palette: string | null;
@@ -413,15 +341,13 @@ type VideoAxes = {
   vehicle: string | null;
 };
 
-/** The whole archive reading: the family readings plus the Texture + video cuts + raw corpora. */
 type ArchiveReading = {
-  /** The overlap/register readings, ranked in the report. */
   families: FamilyReport[];
-  /** The raw written corpora, kept for the optional `--embed` semantic cut. */
+
   corpora: { name: string; texts: Artifact[] }[];
-  /** The upstream context-note Texture vocabulary. */
+
   texture: TextureVocabStats;
-  /** The stored video axes, one distribution per axis. */
+
   video: {
     grain: CategoricalDistribution;
     palette: CategoricalDistribution;
@@ -464,9 +390,6 @@ async function readCorpora(url: string): Promise<ArchiveReading> {
       text: stripLogbookProse(cellText(row.body, "")),
     }));
 
-    // The newsletter family: the per-finding "why" lines flattened out of every SENT
-    // edition's content_json (a draft mid-author is not a shipped artifact). A malformed
-    // payload yields no lines rather than crashing the re-run.
     const editionRows = await client.execute(
       "SELECT content_json FROM editions WHERE status = 'sent' ORDER BY number",
     );
@@ -474,7 +397,6 @@ async function readCorpora(url: string): Promise<ArchiveReading> {
       editionRows.rows.flatMap((row) => extractEditionWhyLines(cellText(row.content_json, ""))),
     );
 
-    // The upstream seed: the context notes' `Texture:` vocabulary.
     const contextRows = await client.execute(
       "SELECT log_id, context_note FROM findings WHERE context_note IS NOT NULL AND trim(context_note) != ''",
     );
@@ -484,7 +406,6 @@ async function readCorpora(url: string): Promise<ArchiveReading> {
     }));
     const texture = measureTextureVocab(contextNotes, { wornWords: WORN_TEXTURE_WORDS });
 
-    // The video axes: the flat category tags on every finding that HAS a video.
     const videoRows = await client.execute(
       "SELECT video_vehicle, video_grain, video_register, video_palette FROM findings WHERE video_url IS NOT NULL AND trim(video_url) != ''",
     );
@@ -521,8 +442,6 @@ async function readCorpora(url: string): Promise<ArchiveReading> {
     client.close();
   }
 }
-
-// ── The Texture + video render sections ───────────────────────────────────────────────
 
 function renderTexture(texture: TextureVocabStats): string {
   const lines: string[] = [];
@@ -606,20 +525,11 @@ function renderVideo(video: ArchiveReading["video"]): string {
   return lines.join("\n");
 }
 
-// ── The embedding (semantic) cut ──────────────────────────────────────────────────────
-//
-// A local bge-class text model, fetched once into a gitignored cache and run offline — no
-// secret, no paid API, no Workers AI (that is a separate roadmap pilot). Opt-in via `--embed`
-// so a normal re-run stays instant and needs no model. The math (cosineDistance,
-// pairwiseEmbeddingStats, rankPairDistance) is pure and unit-tested; only the vectors come
-// from the model.
-
 const EMBED_MODEL = "Xenova/bge-small-en-v1.5";
 
 async function embedCorpus(texts: readonly Artifact[]): Promise<EmbeddedArtifact[]> {
   const { env, pipeline } = await import("@huggingface/transformers");
 
-  // Keep the download inside the gitignored apps/web/.cache dir (a runtime cache).
   env.cacheDir = join(dirname(fileURLToPath(import.meta.url)), "..", ".cache", "transformers");
 
   const extractor = await pipeline("feature-extraction", EMBED_MODEL, { dtype: "fp32" });
@@ -638,7 +548,6 @@ async function embedCorpus(texts: readonly Artifact[]): Promise<EmbeddedArtifact
   return embedded;
 }
 
-/** The validation verdict for one family: does its lexically-worst pair separate in embedding space? */
 function renderEmbeddingFamily(
   name: string,
   stats: EmbeddingDistanceStats,
@@ -646,9 +555,7 @@ function renderEmbeddingFamily(
   texts: Map<string, string>,
 ): string {
   const lines: string[] = [];
-  // The lexical overlap for a pair — the same content-word Jaccard the echo gate uses. This
-  // is what turns the closest-pairs list into the gate-worthiness test: embedding-close +
-  // lexical-LOW is a paraphrase `scoreEcho` cannot see (the case for a second rail).
+
   const lexical = (a: string, b: string): number => {
     const left = texts.get(a);
     const right = texts.get(b);
@@ -674,9 +581,6 @@ function renderEmbeddingFamily(
       (stats.minPair.length === 2 ? ` — ${stats.minPair[0]} ↔ ${stats.minPair[1]}` : ""),
   );
 
-  // The validation: where does the LEXICALLY-worst pair (the one scoreEcho would already
-  // condemn) sit in the SEMANTIC ordering? Rank 1 far below the mean = the two agree, the
-  // condemned pair separates. Mid-pack = the semantic layer does not single it out.
   if (lexicalWorstPair.length === 2) {
     const [left, right] = lexicalWorstPair;
     const ranked = left && right ? rankPairDistance(stats, left, right) : undefined;
@@ -696,9 +600,6 @@ function renderEmbeddingFamily(
     }
   }
 
-  // The top-5 embedding-closest pairs, with their LEXICAL overlap alongside — the agreement
-  // check. A pair that is embedding-close but lexical-far is a PARAPHRASE the word gate misses
-  // (the case for a second rail); broad agreement means embedding just restates scoreEcho.
   lines.push("- **Embedding-closest pairs (with their lexical word overlap):**");
 
   for (const pair of stats.pairs.slice(0, 5)) {
@@ -729,8 +630,6 @@ async function renderEmbedding(reading: ArchiveReading): Promise<string> {
   );
   lines.push("");
 
-  // Embed the two ~61 written corpora (the ledger's Monrroe/Muffler condemned pair is an
-  // observation), plus the smaller families for completeness where they have ≥2 artifacts.
   for (const corpus of reading.corpora) {
     const family = reading.families.find((reading) => reading.family === corpus.name);
 

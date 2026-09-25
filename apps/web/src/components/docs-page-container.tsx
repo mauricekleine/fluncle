@@ -2,24 +2,6 @@ import { useDocsPage } from "fumadocs-ui/layouts/docs/page";
 import { type ComponentProps } from "react";
 import { cn } from "@/lib/utils";
 
-// The /docs content pane, as a MAIN LANDMARK.
-//
-// Fumadocs' stock container slot renders `<article id="nd-page">`. `article` maps to the `article`
-// role, which is not a landmark — the docs shell supplies `<main>`, so every line of a doc
-// page sits inside a landmark (axe: `landmark-one-main` plus six `region` nodes). A
-// screen-reader reader had no "skip to the content" target on the one surface that is nothing BUT
-// content.
-//
-// `slots={{ container }}` is Fumadocs' documented extension point for exactly this (fumadocs.dev,
-// "Replace Page Container with Custom Component"), so the swap is an API call rather than a patch.
-// The element becomes `<main>`; everything else is carried over verbatim from the stock slot,
-// including the `[grid-area:main]` placement the DocsLayout grid needs and the `data-full` hook. The
-// id stays `nd-page`, which is what both Fumadocs' own CSS and Fluncle's docs.css pane key off — no
-// rule in either is tag-keyed, so not a pixel moves.
-//
-// The class list mirrors fumadocs-ui's `layouts/docs/page/slots/container`. If a Fumadocs upgrade
-// restyles that slot, this is the file to re-sync (`npx @fumadocs/cli add slots/docs/page/container`
-// prints the current one).
 export function DocsPageContainer(props: ComponentProps<"article">) {
   const { full } = useDocsPage();
 

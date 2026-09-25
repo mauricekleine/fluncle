@@ -10,29 +10,14 @@ import {
 } from "@fluncle/ui/components/dialog";
 import { formatKey, useKeyNotation } from "@/lib/key-notation";
 
-// The Enrich cell's dialog — queue (or re-queue) one finding for the on-box
-// enrichment cron. Enrichment is the audio-analysis pass over the CAPTURED FULL SONG
-// (falling back to the 30s preview only when no capture has landed): BPM, musical key,
-// and the spectral features. Those features are internal creative fuel for the video
-// agent — the vibe-placement model they once seeded is retired, and a finding's sonic
-// grouping now comes from the separate MuQ embedding. Pressing the button
-// marks the finding "pending" (queue-eligible); the on-box `fluncle-enrich`
-// `--no-agent` cron picks it up on its next ~5-min tick, analyzes on-box, and
-// flips the status to "done"/"failed". The
-// cell reflects whichever state it's in.
-
 type EnrichDialogProps = {
   error?: string;
-  /**
-   * Whether the finding carries stored spectral features — lazily read for the OPEN row
-   * (the board projection no longer ships `features` on every row). Only refines the
-   * "features captured" vs "analysis complete" line under a `done` status.
-   */
+
   hasFeatures?: boolean;
   onOpenChange: (open: boolean) => void;
   onTrigger: () => Promise<void> | void;
   row: BoardRow | null;
-  /** True while the enqueue request is in flight. */
+
   triggering: boolean;
 };
 

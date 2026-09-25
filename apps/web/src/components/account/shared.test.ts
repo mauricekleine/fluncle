@@ -1,10 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { parseAccountTab } from "./shared";
 
-// The account URL contract: only `saves` and `settings` ride in `?tab`. The Galaxy is
-// the DEFAULT door, so it is deliberately never a valid explicit value — a bare
-// `/account` (and any junk value) resolves to `undefined`, which the route reads as
-// the Galaxy. This guards the wayfinding + loader tab-routing against drift.
 describe("parseAccountTab", () => {
   it("accepts the two doors that ride in the URL", () => {
     expect(parseAccountTab("saves")).toBe("saves");

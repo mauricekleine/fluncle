@@ -39,28 +39,6 @@ import {
 } from "@/lib/studio-clips";
 import { videoVersion } from "@/lib/media";
 
-// One clip in the cross-set library grid (the Fluncle Studio clip library).
-// A 9:16 poster tile that reveals an inline preview (the shared VideoScrubber +
-// the radio "one clock" discipline) and the hand-off: download WITH audio (Instagram)
-// or audio-STRIPPED (TikTok). A `pending` clip — minted in the editor, not yet cut by
-// the box — shows a quiet "cutting" state instead of a poster (no preview/download).
-//
-// The card also stamps the clip's CANON: the `fluncle://` coordinate chip(s) it resolves
-// to (the promoted mixtape's `.F.` if its source recording is published, else the
-// finding(s) the clip window overlaps — a blend = multiple), and an inline-editable
-// caption with a copy button that yields the BUILT caption (clean copy + those
-// coordinate line(s)) so the operator pastes it straight into Instagram. Both read
-// `get_clip_caption` (RFC plan→recording→mixtape §8 surface 4) — the one server-side
-// place that resolves a cue's `finding_id` to its published Log ID.
-//
-// Distribution rides the Instagram DRIP-FEED (clip-drip-feed RFC §3.6): every clip
-// auto-enters a queue and posts to Instagram on a jittered ~daily cadence. The old inert
-// "Distribute" seam is now the DRIP STATE — a chip reading `Scheduled for <date>` /
-// `Posted` (linking the permalink) / `Post failed`, with a popover to override the slot or
-// unschedule the clip (the operator-tier `set_clip_schedule` op). The page's global kill
-// switch pauses the whole drip. Reads `list_clip_posts` (merged onto the clip by the page).
-
-/** The built-caption shape from `GET /admin/clips/{clipId}/caption` (drops the `ok` flag). */
 type ClipCaption = {
   builtCaption: string;
   caption?: string;
@@ -68,19 +46,12 @@ type ClipCaption = {
   coordinates: string[];
 };
 
-/**
- * One clip's Instagram drip-feed row (`GET /admin/clips/social` → `list_clip_posts`), the
- * subset the card renders. `undefined` on the card means the clip has no schedule row yet.
- */
 export type ClipDrip = {
   postedUrl?: string;
   scheduledFor: string;
   status: "failed" | "posted" | "scheduled";
 };
 
-// Fetch the clip's BUILT caption (clean copy + resolved `fluncle://` coordinate line(s))
-// once the clip is cut. A pending clip has no cut window worth resolving, so we skip the
-// read until it's `done`. Keyed by clip id + its re-cut vintage so a re-cut re-resolves.
 function useClipCaption(clip: ClipDTO, enabled: boolean) {
   return useQuery<ClipCaption>({
     enabled,
@@ -115,14 +86,14 @@ export function ClipCard({
 }: {
   clip: ClipDTO;
   deleting: boolean;
-  /** This clip's Instagram drip-feed row, when it has one (merged from `list_clip_posts`). */
+
   drip: ClipDrip | undefined;
   onDelete: () => void;
-  /** Toggle this clip in the page's batch-schedule selection (cut clips only). */
+
   onToggleSelected: () => void;
-  /** The source recording, when it's in the loaded list (title + the Studio back-link). */
+
   recording: RecordingDTO | undefined;
-  /** Whether this clip is in the batch-schedule selection. */
+
   selected: boolean;
 }) {
   const queryClient = useQueryClient();
@@ -130,14 +101,10 @@ export function ClipCard({
   const setTitle = recording ? recording.title : "Unknown set";
   const lengthLabel = formatClock(clipDurationMs(clip) / 1000);
   const rangeLabel = `${formatClock(clip.inMs / 1000)} – ${formatClock(clip.outMs / 1000)}`;
-  // The clip's re-cut vintage rides every transform URL as its `?v` token, so a
-  // re-cut (which bumps updatedAt) mints new URLs and MT derives the fresh cut
-  // (its internal output cache is not purgeable — media.ts).
+
   const version = videoVersion(clip.updatedAt);
   const downloads = clipDownloadUrls(clip.id, version);
 
-  // The built caption (clean copy + coordinate line(s)) + the resolved coordinates for
-  // the chip row. Only the cut clip has a window worth resolving; a pending clip skips it.
   const { data: built } = useClipCaption(clip, isDone);
   const coordinates = built?.coordinates ?? [];
 
@@ -162,8 +129,7 @@ export function ClipCard({
     },
     onSuccess: async () => {
       setEditing(false);
-      // Re-read both the grid (the stored-clean caption) and this clip's built caption
-      // (the copy payload + the chips fold the fresh caption in).
+
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["admin", "clips"] }),
         queryClient.invalidateQueries({ queryKey: ["admin", "clip-caption", clip.id] }),
@@ -172,8 +138,6 @@ export function ClipCard({
   });
 
   const onCopy = () => {
-    // Prefer the freshly-built caption; fall back to the stored clean caption if the
-    // build hasn't landed yet (still copies something honest to paste).
     const payload = built?.builtCaption ?? clip.caption ?? "";
 
     if (!payload) {
@@ -184,7 +148,6 @@ export function ClipCard({
     setCopied(true);
   };
 
-  // Clear the "Copied" flash after a beat.
   useEffect(() => {
     if (!copied) {
       return;
@@ -222,11 +185,6 @@ export function ClipCard({
           <span>{rangeLabel}</span>
         </p>
 
-        {/* The clip's canon: the resolved `fluncle://` coordinate chip(s) — the promoted
-            mixtape's `.F.` when its source recording is published, else one per finding the
-            window overlaps (a blend = ≥2). Quiet Oxanium tabular (the Track-Row Log ID
-            face), muted — never gold (the One-Sun budget). An un-cued/no-coordinate clip
-            shows none (honest silence beats misattribution). */}
         {coordinates.length > 0 ? (
           <ul className="flex list-none flex-wrap gap-x-2 gap-y-1 p-0">
             {coordinates.map((coordinate) => (
@@ -251,10 +209,6 @@ export function ClipCard({
           saving={saveCaption.isPending}
         />
 
-        {/* The Instagram drip state: a chip reading this clip's schedule/post status, with a
-            popover to override the slot or unschedule; a select checkbox joins it to the page's
-            batch-schedule action. Only a cut (`done`) clip is postable — a pending clip shows
-            nothing here (the drip cron skips uncut clips server-side). */}
         {isDone ? (
           <div className="flex items-center gap-2">
             {/* oxlint-disable-next-line jsx-a11y/label-has-associated-control -- the control IS nested: Base UI's Checkbox.Root renders a hidden <input type="checkbox"> beside its span, so this label is wired and the hit area toggles; the rule just cannot see through the component. */}
@@ -292,18 +246,11 @@ export function ClipCard({
   );
 }
 
-// The clip's Instagram drip-feed control: at rest a quiet status chip (scheduled/posted/
-// failed, or "Not scheduled" when the clip has no row yet), and a popover that sets or
-// overrides the drip slot (a `datetime-local` field → the operator-tier `set_clip_schedule`
-// op) or unschedules the clip. Writing the schedule invalidates the page's `clip-posts` read
-// so the chip re-reads. A `posted`/`failed` row can be re-armed by re-scheduling it.
 function ClipDrip({ clipId, drip }: { clipId: string; drip: ClipDrip | undefined }) {
   const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
   const [error, setError] = useState<string>();
 
-  // The datetime-local field seed: the clip's current slot (rendered in local time) if it has
-  // one, else the browser default (empty ⇒ the operator picks).
   const [when, setWhen] = useState("");
 
   useEffect(() => {
@@ -315,8 +262,6 @@ function ClipDrip({ clipId, drip }: { clipId: string; drip: ClipDrip | undefined
 
   const schedule = useMutation<void, Error, string | null>({
     mutationFn: async (scheduledFor: string | null) => {
-      // `null` unschedules (delete the row); a value sets/overrides the slot. Both funnel
-      // through the same route pair (delete vs the operator schedule op).
       if (scheduledFor === null) {
         const response = await fetch(`/api/v1/admin/clips/${encodeURIComponent(clipId)}/schedule`, {
           method: "DELETE",
@@ -353,7 +298,6 @@ function ClipDrip({ clipId, drip }: { clipId: string; drip: ClipDrip | undefined
       return;
     }
 
-    // The `datetime-local` value is local wall-clock; the op wants an ISO instant.
     const iso = new Date(when).toISOString();
 
     schedule.mutate(iso);
@@ -380,7 +324,6 @@ function ClipDrip({ clipId, drip }: { clipId: string; drip: ClipDrip | undefined
           </PopoverDescription>
         </PopoverHeader>
 
-        {/* The permalink to the live post, once it's up — the one place to jump out to Instagram. */}
         {drip?.status === "posted" && drip.postedUrl ? (
           <a
             className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"
@@ -429,8 +372,6 @@ function ClipDrip({ clipId, drip }: { clipId: string; drip: ClipDrip | undefined
   );
 }
 
-// The at-rest drip chip: an icon + a one-line status. `scheduled` is a calendar + the local
-// date; `posted` a check; `failed` a warning; no row ⇒ the quiet "Not scheduled".
 function DripChip({ drip }: { drip: ClipDrip | undefined }) {
   if (!drip) {
     return (
@@ -467,7 +408,6 @@ function DripChip({ drip }: { drip: ClipDrip | undefined }) {
   );
 }
 
-/** The accessible name for the drip trigger — states the status + that it opens the slot editor. */
 function dripTriggerLabel(drip: ClipDrip | undefined): string {
   if (!drip) {
     return "Not scheduled for Instagram — schedule this clip";
@@ -484,8 +424,6 @@ function dripTriggerLabel(drip: ClipDrip | undefined): string {
   return `Scheduled for ${formatDripSlot(drip.scheduledFor)} — change the slot`;
 }
 
-// A drip slot for the chip: a short, local, human date (e.g. "Jul 8, 14:20"). Tabular numbers
-// carry it (the copy Tabular Rule). Falls back to the raw ISO if it can't parse.
 function formatDripSlot(iso: string): string {
   const date = new Date(iso);
 
@@ -501,8 +439,6 @@ function formatDripSlot(iso: string): string {
   });
 }
 
-// An ISO instant → the `datetime-local` field value (local wall-clock, `YYYY-MM-DDTHH:mm`).
-// The field has no timezone, so we shift by the local offset before slicing.
 function toLocalInput(iso: string): string {
   const date = new Date(iso);
 
@@ -515,11 +451,6 @@ function toLocalInput(iso: string): string {
   return local.toISOString().slice(0, 16);
 }
 
-// The clip's caption block: click-to-edit prose + a copy button that yields the BUILT
-// caption (clean copy + the `fluncle://` coordinate line(s)) for a straight Instagram
-// paste. At rest it shows the stored-clean caption (or the quiet empty state) with an
-// Edit + Copy pair; editing swaps to a Textarea with Save/Cancel. An empty save clears
-// the caption (the server folds "" → no caption).
 function ClipCaption({
   caption,
   copied,
@@ -542,8 +473,6 @@ function ClipCaption({
   const [draft, setDraft] = useState(caption ?? "");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  // Reset the draft to the stored caption whenever an edit opens (a fresh edit starts
-  // from the current value, not a stale prior draft), and focus the field.
   useEffect(() => {
     if (editing) {
       setDraft(caption ?? "");
@@ -615,9 +544,6 @@ function ClipCaption({
   );
 }
 
-// The done clip's 9:16 stage: a poster that, on play, mounts the inline preview. The
-// video is only loaded once the operator actually previews (lazy — a grid of many
-// clips never fetches every body).
 function ClipStage({
   clipId,
   title,
@@ -653,8 +579,6 @@ function ClipStage({
   );
 }
 
-// A pending clip's tile: a quiet, posterless placeholder (the box hasn't cut the
-// footage yet). No spinner — the cut is an async backlog beat, not a foreground load.
 function CuttingStage() {
   return (
     <div className="clip-stage clip-stage-pending">
@@ -664,10 +588,6 @@ function CuttingStage() {
   );
 }
 
-// The inline preview: the clip rendition over the shared `<Video>` compound, driven
-// off the element's own clock (the radio "one clock" discipline). `autoPlay` force-plays
-// on mount (mounted on the operator's click); the transport rides as the auto-hiding
-// overlay over the 9:16 frame.
 function ClipPreview({
   clipId,
   title,
@@ -691,14 +611,9 @@ function ClipPreview({
   );
 }
 
-// The two hand-off downloads. Cross-origin (found.fluncle.com), so the `download`
-// attribute can't force a Save dialog — the file opens in a new tab for the operator
-// to save and post by hand (the irreducible in-app beat).
 function ClipDownloads({ downloads, title }: { downloads: ClipDownloadUrls; title: string }) {
   return (
     <>
-      {/* The accessible name rides the <a>, not the Button: Base UI merges the two onto the
-          same DOM node, and only the render element satisfies the a11y lint. */}
       <Button
         nativeButton={false}
         render={

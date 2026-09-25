@@ -2,7 +2,7 @@
 
 `apps/web` ships one eager JavaScript chunk and one stylesheet that **every page downloads before it renders anything**, plus a lazy chunk per route. This doc is the contract on what is allowed in them, why the two rules exist, and the build gate that holds the first one.
 
-The shape of the split itself — how the client is carved into chunks and why grouping by package family was rejected — lives in [`apps/web/scripts/client-chunk-groups.ts`](../apps/web/scripts/client-chunk-groups.ts). This doc is about what gets IN.
+The split follows the load graph: the `$initial` group holds statically reachable modules, and lazy groups merge only modules reached by identical entry sets. Keep `entriesAwareMergeThreshold` at zero so a small lazy subgroup cannot cross that boundary and pull route-specific vendors into another page's first paint. Leave the eager group's `maxSize` unset: splitting it at arbitrary module boundaries can reorder CommonJS interop initialization and break hydration even when the build passes. [`client-chunk-groups.test.ts`](../apps/web/scripts/client-chunk-groups.test.ts) pins both settings.
 
 ## Rule 1 — no server-only module in any client chunk
 

@@ -55,10 +55,6 @@ function validateScratchUrl(rawUrl: string): string {
   return url;
 }
 
-/**
- * Local mode returns before touching the environment. Hosted credentials are read only after all
- * explicit gates are present, then validated before a client can be constructed.
- */
 export function resolveHostedReplay(gate: HostedReplayGate): HostedReplayConfiguration {
   if (!gate.hosted) {
     if (gate.preseededFixture) {

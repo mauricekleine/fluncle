@@ -1,11 +1,3 @@
-// `/fresh` — the album records, cover-led. An album is a NAMED graph node (it has a page), so each
-// tile links to `/album/<slug>` and carries its cover; the register is cream, never the unlit dust
-// (this is not the uncertified tier). Newest first, like everything on the page.
-//
-// Two treatments off the same tile: the RAIL is the quiet strip under the track stream in the "All"
-// view (today's 30-day cut); the BOARD is the wider grid the "Albums & EPs" view leads with, records
-// brought to the centre with their "N tracks" count and a heading over an empty stretch.
-
 import { FreshCoverCard } from "./shared";
 import { type FreshCover } from "./data";
 

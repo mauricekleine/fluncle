@@ -1,26 +1,3 @@
-// THE DISCOVERY ROW — the one track row every public list renders (DESIGN.md §5, Track Row).
-//
-// Derived from the canonical finding row (`components/track-row.tsx`) and shared by `/tracks`,
-// `/search`, `/fresh`, the front door's releases band, and the track lists on the artist, label
-// and album pages, so what is clickable, where play lives, the readout and the cover rule read
-// the same everywhere:
-//
-//   - THE COVER IS THE PLAY BUTTON (`PlayCover`): it plays the whole list from this row. Only a
-//     row with a live preview source shows it (a stored preview URL or an ISRC — the `/api/preview`
-//     relay re-resolves from those); a row without one keeps its cover as a plain image.
-//   - THE REST OF THE ROW OPENS THE TRACK: the title is a stretched link over the row, to the
-//     finding's coordinate page or the archive track's own destination. The credits, the cover
-//     button and the ⋮ menu sit ABOVE it as siblings, never inside it — a link inside a link is
-//     not a thing (GraphLink's excluded contexts).
-//   - THE TITLE IS THE LOUDEST TEXT. The artists and the imprint are GraphLinks on the metadata
-//     line in Stardust, with the release year beside them; the readout chips (duration, BPM, key)
-//     sit beneath (The Readout Rule). There is no date column.
-//   - THE LIGHT IS THE REGISTER, and nothing else says it (The Unlit Rule). A finding shows its
-//     cover in full colour, its coordinate, and heats to gold. A catalogue row shows its REAL cover
-//     desaturated and dimmed (the lead artist's portrait, dimmed, when it has no cover), catches the
-//     Dust Veil, and carries no coordinate and no gold. No word on the row names the register.
-//   - Everything rarer lives behind the quiet ⋮ menu: the same actions the player carries.
-
 import { Link } from "@tanstack/react-router";
 import { type ReactNode, useMemo } from "react";
 import { ArtistAvatar } from "@/components/artist-avatar";
@@ -73,7 +50,6 @@ export function DiscoveryRow({
   menuItems,
   track,
 }: {
-  /** A row's own extra ⋮ entries, rendered above the shared ones (a finding's story). */
   menuItems?: ReactNode;
   track: DiscoveryTrack;
 }): ReactNode {
@@ -96,13 +72,10 @@ export function DiscoveryRow({
 
       <div className="discovery-row-body">
         {track.href ? (
-          // Named with its credit, so two rows that share a title never read as one link.
           <Link aria-label={linkName} className="discovery-row-link" to={track.href as never}>
             <span className="discovery-row-title">{track.title}</span>
           </Link>
         ) : track.spotifyUrl ? (
-          // A row the destination would refuse (no title or credit) still has one honest way
-          // out: the whole row opens Spotify.
           <a
             aria-label={linkName}
             className="discovery-row-link"
@@ -116,7 +89,6 @@ export function DiscoveryRow({
           <span className="discovery-row-title">{track.title}</span>
         )}
         {hasMeta ? (
-          // The credits truncate; the year never does (The Readout Rule).
           <p className="discovery-row-meta">
             <span className="discovery-row-credits">
               <Credits credits={track.artists} />
@@ -159,11 +131,6 @@ export function DiscoveryRow({
   );
 }
 
-/**
- * The queue boundary for any markup that holds discovery rows: every `PlayCover` inside plays the
- * playable subset of `tracks`, in order, from its own row. Use it directly where one answer spans
- * several blocks (search's findings and tracks groups are one list to the player).
- */
 export function DiscoveryPlayableList({
   children,
   nextPageHref,
@@ -182,7 +149,6 @@ export function DiscoveryPlayableList({
   );
 }
 
-/** A list of discovery rows that plays as one: the player's queue is this list, in order. */
 export function DiscoveryList({
   className,
   label,
@@ -190,7 +156,7 @@ export function DiscoveryList({
   tracks,
 }: {
   className?: string;
-  /** The list's accessible name, when it has no visible heading naming it. */
+
   label?: string;
   nextPageHref?: string;
   tracks: DiscoveryTrack[];

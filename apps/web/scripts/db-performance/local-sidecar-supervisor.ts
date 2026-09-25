@@ -43,13 +43,9 @@ function safeWrite(stream: NodeJS.WriteStream, message: string): void {
   }
   try {
     stream.write(message);
-  } catch {
-    // The benchmark owner can disappear between the writable check and the write.
-  }
+  } catch {}
 }
 
-// A SIGKILLed owner closes these pipes without giving the supervisor a shutdown callback. Node
-// reports that asynchronously, so the handlers must exist even though diagnostic writes are safe.
 process.stdout.on("error", () => undefined);
 process.stderr.on("error", () => undefined);
 
@@ -130,12 +126,9 @@ async function main(): Promise<void> {
     env: process.env,
     stdio: ["ignore", "pipe", "pipe"],
   });
-  // A spawn failure emits close without ever populating exitCode or signalCode, so the shutdown
-  // escalation checks need close state tracked separately to stay off the kill ladder.
+
   let sidecarClosed = false;
-  // The ladder only needs the process to be dead, which is exit; the diagnostic read below needs
-  // the pipes drained, which is close. Settling on whichever lands first keeps a descendant that
-  // inherited the pipes from holding the ladder open for a grace period after the sidecar is gone.
+
   const sidecarSettled = new Promise<void>((resolve) => {
     sidecar.once("exit", () => resolve());
     sidecar.once("close", () => {
@@ -145,8 +138,7 @@ async function main(): Promise<void> {
   });
   let stdoutTail = "";
   let stderrTail = "";
-  // The supervisor owns its child's pipes. It retains only bounded diagnostics instead of
-  // forwarding them into owner pipes that can raise EPIPE after an uncatchable owner death.
+
   sidecar.stdout.on("data", (chunk: Uint8Array) => {
     stdoutTail = appendTail(stdoutTail, chunk);
   });
@@ -177,9 +169,7 @@ async function main(): Promise<void> {
 
       try {
         await removeScratchDirectory(scratchDirectory);
-        // A just-exited database process can finish closing its storage handles after emitting its
-        // exit event. Recheck after a short stabilization window so a late empty-directory recreate
-        // cannot survive owner-death cleanup.
+
         await sleep(100);
         await removeScratchDirectory(scratchDirectory);
       } catch (error) {

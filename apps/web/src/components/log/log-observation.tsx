@@ -2,16 +2,6 @@ import { PauseIcon, PlayIcon, WaveformIcon } from "@phosphor-icons/react";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@fluncle/ui/components/button";
 
-// The log page's audio-observation control: Fluncle's recovered field
-// observation, heard over the silent footage (the first HEARD surface — the
-// recovered-audio register, VOICE.md §5). A quiet, dark plate under the footage
-// with one play/pause control. The observation is its OWN audio artifact (not
-// baked into the video), so it plays through a dedicated <audio> element.
-//
-// Audible audio always needs a user gesture (browsers gate autoplay-with-sound),
-// so this never autoplays — it waits for the gesture regardless of motion
-// preference, which also satisfies prefers-reduced-motion for free. A load error
-// hides the control rather than stalling (a stale/missing R2 object).
 export function LogObservation({
   audioUrl,
   durationMs,
@@ -60,7 +50,6 @@ export function LogObservation({
 
     if (audio.paused) {
       audio.play().catch(() => {
-        // Playback denied or the object died — drop the control, don't stall.
         setFailed(true);
       });
     } else {

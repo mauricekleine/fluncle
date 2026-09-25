@@ -8,23 +8,6 @@ import { albumCoverAtSize } from "@/lib/media";
 import { toQueueTrack } from "@/lib/player-tracks";
 import { usePreviewPlayer, usePreviewProgress } from "@/lib/preview-player";
 
-// THE FINDING CARD — what Fluncle FOUND, rendered (ChatDnB Phase 1).
-//
-// When a chat tool returns a finding, the workbench shows a real card instead of a raw JSON
-// marker: the cover, the `Artist — Title` line, the Log ID coordinate linking to its log page,
-// the enrichment chips (duration/BPM/key), the galaxy as quiet text, and — when the finding has
-// a preview — an inline play control over the artwork wired to the shared preview singleton. It
-// is quiet, dark, and restrained: an admin station, not a streaming-app clone (PRODUCT.md). It
-// mirrors the TrackRow visual language (the same artwork, chips, and log-id idioms) so ChatDnB
-// reads like the rest of the archive, one component closer to the conversation.
-
-/**
- * The finding shape as the chat tools emit it — every field OPTIONAL because the tool outputs
- * ride through `dropEmpty` (a `Partial`) and a search hit the hydrator missed carries only the
- * lean subset. The card treats every field as maybe-absent. There is deliberately NO `previewUrl`
- * here: the expiring Deezer token never leaves the server; `hasPreview` + `coordinate` are all the
- * card needs, because playback goes through the live `/api/preview/<logId>` relay.
- */
 export type ChatFinding = {
   album?: string;
   albumImageUrl?: string;
@@ -38,15 +21,12 @@ export type ChatFinding = {
   key?: string;
   label?: string;
   note?: string;
-  /** When the track came OUT (a release date), present only on the fresh list — a public fact the
-      Found Rule frames as released, never found. Optional so every other tool that emits a finding
-      is unaffected. The card does not print it; it rides the tool output so Fluncle can cite it. */
+
   releaseDate?: string;
   spotifyUrl?: string;
   title?: string;
 };
 
-/** The gold progress hairline — only mounted (so only subscribed) while THIS card is playing. */
 function ProgressHairline() {
   const { currentTime, duration } = usePreviewProgress();
   const fraction = duration > 0 ? Math.min(1, currentTime / duration) : 0;
@@ -66,9 +46,6 @@ export function FindingCard({
   finding,
   notation,
 }: {
-  /** Drop the card's own pane (border/bg/rounding/padding) so it sits FLAT inside a parent
-      container — the chain card's seed, where the outer container is the single pane (One Pane
-      Rule, DESIGN.md §4). Standalone (the default) keeps its own card chrome. */
   embedded?: boolean;
   finding: ChatFinding;
   notation: KeyNotation;
@@ -80,11 +57,8 @@ export function FindingCard({
   const keyText = formatKey(finding.key, notation);
   const coverSrc = albumCoverAtSize(finding.albumImageUrl, "small");
 
-  // The play control needs both a preview and a coordinate (the relay is keyed by logId). The
-  // hook is called unconditionally with a stable key ("" never matches an active track) so hooks
-  // stay unconditional even when this finding is not playable.
   const playable = Boolean(finding.hasPreview && logId);
-  // The relay is keyed by the coordinate here, so the queued track is too.
+
   const queued = useMemo(
     () =>
       toQueueTrack({
@@ -107,8 +81,6 @@ export function FindingCard({
   return (
     <div
       className={
-        // items-center: the text block (title + coordinate line + chips) runs taller than the
-        // artwork square, and a top-pinned cover reads as a misalignment, not a choice.
         embedded
           ? "relative flex items-center gap-3 overflow-hidden"
           : "relative flex items-center gap-3 overflow-hidden rounded-md border border-border bg-card px-3 py-2.5"
@@ -134,14 +106,8 @@ export function FindingCard({
       )}
 
       <div className="min-w-0 flex-1">
-        {/* The ratified title register (.track-title, DESIGN.md §3): the music is the loudest
-            text on the card, same as every TrackRow — never a quiet caption. */}
         <p className="track-title">{trackLine}</p>
-        {/* The two lore items ride one line: the Log ID coordinate and its galaxy, a quiet
-            middot between them. The galaxy is the coordinate's suffix — same waypoint, said
-            twice — so they read as one place, not two stray captions. items-center, NOT
-            baseline: .track-log-id carries its own `align-self: center`, so a baseline row
-            floats the smaller galaxy text high against the centered coordinate. */}
+
         {logId || finding.galaxy ? (
           <div className="mt-0.5 flex min-w-0 items-center gap-1.5">
             {logId ? (

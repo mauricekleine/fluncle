@@ -7,16 +7,10 @@ import {
 } from "./galaxy-voyage";
 import { type GalaxyCompletion } from "./shared";
 
-// Flatten the parts to the plain sentence a reader sees, so the plural/zero variants
-// can be asserted as whole sentences. The renderer sets each `{ num }` in Oxanium
-// tabular; here we just splice the digits back in to read the line.
 function say(parts: VoyagePart[]): string {
   return parts.map((part) => (typeof part === "string" ? part : String(part.num))).join("");
 }
 
-// The numbers the renderer will set in the tabular coordinate face, in order. These
-// are the ONLY digits on the line — the Tabular Rule wants every number in Oxanium,
-// and a word-form count ("once") carries no digit at all.
 function nums(parts: VoyagePart[]): number[] {
   return parts.flatMap((part) => (typeof part === "string" ? [] : [part.num]));
 }
@@ -36,7 +30,7 @@ describe("buildVoyageSentence", () => {
     expect(say(parts)).toBe(
       "You've logged 24 stars across 3 galaxies, flown home 5 times, and been towed 2 times.",
     );
-    // Every count is a tabular number, in reading order.
+
     expect(nums(parts)).toEqual([24, 3, 5, 2]);
   });
 
@@ -54,7 +48,7 @@ describe("buildVoyageSentence", () => {
     expect(say(parts)).toBe(
       "You've logged 7 stars across 2 galaxies, flown home once, and been towed once.",
     );
-    // "once" carries no number: only the stars and galaxies counts are tabular.
+
     expect(nums(parts)).toEqual([7, 2]);
   });
 
@@ -68,13 +62,12 @@ describe("buildVoyageSentence", () => {
   });
 
   it("opens deliberately when nothing is logged yet (runs/tows only)", () => {
-    // Reachable: the door's guard opens the sentence on any of stars/wins/deaths.
     const parts = buildVoyageSentence({ galaxies: 0, homes: 1, stars: 0, tows: 0 });
 
     expect(say(parts)).toBe(
       "You haven't logged a star yet, flown home once, and never been towed.",
     );
-    // No "0 stars across 0 galaxies" — the zero opener carries no digit.
+
     expect(nums(parts)).toEqual([]);
   });
 

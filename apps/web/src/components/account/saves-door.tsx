@@ -1,12 +1,3 @@
-// The Saves door as the workbench.
-// A saved finding IS a certified finding, so its row adopts the archive's ignition
-// grammar: the Log ID leads in Oxanium and heats to gold on hover/focus, the row washes
-// the Gold Veil, the cover scales, and the whole row opens `/log/<id>`. The cover doubles
-// as an inline play control (ruling #4) through the shared `/api/preview` singleton —
-// one thing plays at a time, everywhere. The rare controls recede: Remove and the saved
-// note sit behind a ⋮ menu (the Quiet Surface Rule), and search + sort appear only at
-// power scale. Submissions leave the keep-lists for their own "Sent to Fluncle" ledger.
-
 import { DotsThreeIcon, PauseIcon, PlayIcon, TrashIcon } from "@phosphor-icons/react";
 import { Link } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
@@ -103,12 +94,6 @@ export function SavesDoor({
   );
 }
 
-/**
- * The saved findings — the workbench proper. The list carries the archive's row
- * grammar; above it, at power scale only, a quiet search + sort. The empty-list line
- * teaches the save gesture; a search that matches nothing says so without blaming the
- * user's spelling.
- */
 function SavedFindingsSection({
   csrfToken,
   findings,
@@ -143,8 +128,7 @@ function SavedFindingsSection({
             type="search"
             value={query}
           />
-          {/* The toggle names the ACTION it performs (the Chrome Rule), not the state
-              it left behind — pressing it re-sorts, and the label says to what. */}
+
           <Button
             onClick={() => setSort(sort === "saved" ? "title" : "saved")}
             size="sm"
@@ -181,7 +165,6 @@ function SavedFindingsSection({
   );
 }
 
-/** The cover-row pending state, shown only on a client-side switch into Saves. */
 export function SavesDoorSkeleton() {
   return (
     <div className="account-tab-panel" aria-hidden>
@@ -203,15 +186,6 @@ export function SavesDoorSkeleton() {
   );
 }
 
-/**
- * A saved row. The register rides the LIGHT, never the layout (the Unlit Rule): a
- * certified finding (`logId` present) renders the way every finding renders — the Log ID
- * leads and heats to gold, the row washes the Gold Veil, the cover scales and carries the
- * inline play control, and the whole row is one link to `/log/<id>`. An uncertified
- * catalogue save (no `logId`) renders cold in the unlit register — no coordinate, no
- * `/log` link, the cover on the Dust Veil, the title deferring at rest. Both wear the same
- * ⋮ menu; removing a save destroys nothing in the archive, so it stays a plain action.
- */
 function SavedFindingRow({
   csrfToken,
   finding,
@@ -230,9 +204,6 @@ function SavedFindingRow({
     setBusy(true);
 
     try {
-      // `requireJsonMutation` 415s ANY mutation without a JSON content-type — DELETEs
-      // included (the DELETE must carry this header or `requireJsonMutation` returns 415). The
-      // saved-set mutations already carry it; this matches them.
       const response = await fetch(`/api/v1/me/saved-findings/${finding.trackId}`, {
         headers: { "Content-Type": "application/json", "x-fluncle-csrf": csrfToken },
         method: "DELETE",
@@ -245,10 +216,6 @@ function SavedFindingRow({
     }
   }
 
-  // The unlit register: an uncertified catalogue save has no coordinate to print, so it
-  // prints none, its cover catches the cold Dust Veil, and the title defers at rest — the
-  // same treatment /mix and Recommended use. No preview control (a catalogue cut is seen
-  // from a distance, not visited); the empty leading cell keeps the covers column-aligned.
   if (!finding.logId) {
     return (
       <li className="saves-row saves-row--unlit">
@@ -279,8 +246,6 @@ function SavedFindingRow({
     );
   }
 
-  // The guard above narrows `logId` to a present coordinate — hand it down explicitly
-  // (no non-null assertion) so the lit row owns the `/log/<id>` targets.
   return (
     <SavedFindingLitRow
       busy={busy}
@@ -292,11 +257,6 @@ function SavedFindingRow({
   );
 }
 
-/**
- * The lit variant — a certified finding, split into its own component so the preview
- * hook (which subscribes to the shared `/api/preview` singleton) is only summoned for a
- * row that actually previews. `logId` is the caller's narrowed coordinate.
- */
 function SavedFindingLitRow({
   busy,
   finding,
@@ -310,9 +270,6 @@ function SavedFindingLitRow({
   onRemove: () => Promise<void>;
   trackLine: string;
 }) {
-  // Key the preview off the trackId (the row's own identity, and what `/api/preview`
-  // resolves). One shared <audio> element backs every row, so `toggle` starts this
-  // finding and stops whatever was playing.
   const queued = useMemo(
     () => toQueueTrack({ ...finding, albumImageUrl: finding.imageUrl }),
     [finding],
@@ -363,10 +320,6 @@ function SavedFindingLitRow({
       </span>
 
       <span className="saves-row-body min-w-0">
-        {/* The stretched row link mirrors TrackRow exactly: the `::after` overlay lives on
-            the bare link (statically positioned, so it anchors to the relative row), and
-            the truncation lives on an INNER span — overflow on the link itself would be a
-            trap if it ever gained a position. */}
         <Link
           aria-label={`Open the log page for ${trackLine}`}
           className="track-row-link"
@@ -383,11 +336,6 @@ function SavedFindingLitRow({
   );
 }
 
-/**
- * The row's receded actions (the Quiet Surface Rule): the saved note reads first (quiet,
- * non-interactive), then the one action this list owes — Remove. Keyboard-reachable: the
- * trigger is a button and the menu opens on Enter/Space, arrow-navigates its items.
- */
 function SavedFindingMenu({
   busy,
   finding,
@@ -409,9 +357,6 @@ function SavedFindingMenu({
       <DropdownMenuContent align="end" className="min-w-48">
         {finding.note ? (
           <>
-            {/* Base UI requires a GroupLabel to live inside a Group — a bare
-                DropdownMenuLabel throws MenuGroupContext at runtime (browser-verified;
-                the crew-slot menu documents the same trap). */}
             <DropdownMenuGroup>
               <DropdownMenuLabel className="saves-note">{finding.note}</DropdownMenuLabel>
             </DropdownMenuGroup>
@@ -427,12 +372,6 @@ function SavedFindingMenu({
   );
 }
 
-// One saved set: open it back on /mix (the stored tokens + taste handed to the route's
-// loader; the set's `id`/`name` ride as `from`/`fromName` so /mix adopts it as the
-// STABLE REFERENCE — every save there PATCHes THIS set), rename it, or delete it
-// (behind the same confirm-dialog vocabulary as account deletion — one grammar for
-// destructive acts). Rename + delete are plain CSRF fetches then a refresh, the page's
-// established mutation shape.
 function SavedSetRow({
   csrfToken,
   refresh,
@@ -544,10 +483,6 @@ function SavedSetRow({
   );
 }
 
-// The Watching list (D2a): the artists and labels the user asked to keep an eye on. A watch
-// keeps nothing in the archive and destroys nothing when removed, so — like the saved-set
-// row — the entity links out and Unwatch is a plain action, no destructive-confirm dialog.
-// The email digest that will read these watches is deferred; this list is the substrate.
 function WatchingSection({
   csrfToken,
   refresh,
@@ -585,9 +520,6 @@ function WatchingSection({
   );
 }
 
-// One watched entity: its name links back to the entity page (artist or label), a quiet kind
-// label sits beside it, and Unwatch drops the account row (a plain CSRF fetch then a refresh,
-// the page's established mutation shape). Removing a watch touches nothing but this list.
 function WatchRow({
   csrfToken,
   refresh,
@@ -625,8 +557,6 @@ function WatchRow({
           {watch.kind === "artist" ? "Artist" : "Label"}
         </span>
         <Button
-          // Every row's button reads "Unwatch" — the name disambiguates for a screen reader, and
-          // containing the visible text keeps it 2.5.3-safe.
           aria-label={`Unwatch ${watch.name}`}
           onClick={() => void unwatch()}
           size="sm"
@@ -640,10 +570,6 @@ function WatchRow({
   );
 }
 
-// The Sent ledger: what the user submitted, kept clearly apart from the keep-lists above.
-// A submission is SENT, not kept, so this is a status register — a row + a status badge,
-// no cover and no bookmark affordance. An approved (logged) submission links to the
-// finding it became; the rest read as plain lines. The empty state teaches the gesture.
 const SENT_STATUS = {
   logged: { label: "Logged", variant: "default" },
   passed_on: { label: "Passed on", variant: "secondary" },

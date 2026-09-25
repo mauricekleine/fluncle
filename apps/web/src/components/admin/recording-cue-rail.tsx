@@ -26,16 +26,6 @@ import { albumCoverAtSize } from "@/lib/media";
 import { type NewCue, parseArtists, recordingCueProgress } from "@/lib/recording-cues";
 import { useDebounced } from "@/lib/use-debounced";
 
-// The recording cue-authoring rail (RFC plan→recording→mixtape §8, surface 3). A TAKE's
-// cues carry the tracks the operator played, each ideally LINKED to a real Fluncle finding
-// (`finding_id`, the honest link to canon) so a promoted mixtape + every clip caption
-// resolve to a coordinate — not fuzzy text. So the primary add path is a FINDING-PICKER
-// (search canon, attach the finding); free-text stays the escape hatch for a non-finding
-// track. The operator's job is then to MARK each cue at its mix-in (the `C`/`X`/↑/↓ loop,
-// unchanged). This drives the clip cut's changing on-screen Log ID (`resolveClipTracks`).
-
-// What the finding-picker search returns (a subset of the admin track row). Kept local so
-// the rail stays a thin view over `/api/v1/admin/tracks`.
 type CueFinding = {
   albumImageUrl?: string;
   artists: string[];
@@ -56,21 +46,20 @@ export function RecordingCueRail({
   selectedId,
   tracklist,
 }: {
-  /** Append a new cue (a finding link or free text), then mark it at the playhead. */
   onAdd: (cue: NewCue) => void;
-  /** Clear one cue's startMs (back to unmarked), keyed by id. */
+
   onClear: (id: string) => void;
-  /** Edit a cue's authored text (artist(s) and/or title), keyed by id. */
+
   onEdit: (id: string, patch: Partial<NewCue>) => void;
-  /** Mark one cue at the playhead, keyed by id. */
+
   onMark: (id: string) => void;
-  /** Remove a cue entirely, keyed by id. */
+
   onRemove: (id: string) => void;
-  /** Seek the set to a cue's startMs. */
+
   onSeek: (ms: number) => void;
-  /** Select a cue (drives the keyboard mark/clear target). */
+
   onSelect: (id: string) => void;
-  /** Whether a cue write is in flight (the whole array persists at once). */
+
   saving: boolean;
   selectedId: string | null;
   tracklist: RecordingTracklistItem[];
@@ -125,9 +114,6 @@ export function RecordingCueRail({
   );
 }
 
-// The add-a-cue form: a FINDING-PICKER (search canon, attach a real finding) as the primary
-// path, with a free-text row below as the escape hatch for a non-finding track. A finding
-// carries its `trackId` as the cue's honest `finding_id`; a free-text cue omits it.
 function AddCueForm({ onAdd }: { onAdd: (cue: NewCue) => void }) {
   return (
     <div className="mt-2 space-y-2">
@@ -145,9 +131,6 @@ function AddCueForm({ onAdd }: { onAdd: (cue: NewCue) => void }) {
   );
 }
 
-// Search a Fluncle finding by Log ID / title / artist and attach it as a cue (its `trackId`
-// becomes the cue's honest `finding_id`). Mirrors the plan editor's finding search so the
-// operator picks from the same canon.
 function FindingPicker({ onPick }: { onPick: (finding: CueFinding) => void }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -222,10 +205,6 @@ function FindingPicker({ onPick }: { onPick: (finding: CueFinding) => void }) {
   );
 }
 
-// The escape hatch: a track that isn't a Fluncle finding (an unreleased dubplate, a bootleg)
-// still needs a cue so the clip overlay + tracklist carry it — typed as free text, no
-// `finding_id`. Enter in either field (or the Add button) appends and clears; a blank title
-// is a no-op.
 function FreeTextCueForm({ onAdd }: { onAdd: (cue: NewCue) => void }) {
   const [artists, setArtists] = useState("");
   const [title, setTitle] = useState("");
@@ -285,9 +264,6 @@ function FreeTextCueForm({ onAdd }: { onAdd: (cue: NewCue) => void }) {
   );
 }
 
-// One authored cue: a numbered, selectable row with inline free-text artist + title fields
-// (save on blur), a "linked" badge when the cue carries a `finding_id`, a seekable cue time,
-// and Mark / clear / remove controls.
 function CueRow({
   cue,
   index,

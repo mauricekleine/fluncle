@@ -1,7 +1,3 @@
-// `/fresh` — the page pieces the route mounts: the marquee treatment (the one `/fresh` ships), the
-// shared footer, and the empty state. The design exploration that once lived here (five variants +
-// a picker) resolved to the marquee, so the dispatcher and the picker are gone.
-
 import { Link } from "@tanstack/react-router";
 
 export { FreshMarquee } from "./marquee";

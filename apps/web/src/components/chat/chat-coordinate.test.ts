@@ -1,11 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { splitOnCoordinates } from "./chat-coordinate";
 
-// The pure half of the chat coordinate linkifier: prose in, segments out. The accept/reject
-// grammar itself lives in @fluncle/contracts/log-id (isLogId / isMixtapeLogId) — these tests
-// pin the SCANNING: what gets found inside running text, what the fences reject, and that the
-// plain runs survive byte-exact so `whitespace-pre-wrap` keeps working.
-
 describe("splitOnCoordinates", () => {
   it("finds a coordinate inside parens, keeping the surrounding prose byte-exact", () => {
     expect(splitOnCoordinates("Let's Leave Tomorrow (012.4.4D), from 2010.")).toEqual([

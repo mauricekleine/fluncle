@@ -44,11 +44,6 @@ function freezeInventory<T>(value: T): Readonly<T> {
   return value;
 }
 
-/**
- * Goal H's finite inventory. Source locations are reference evidence; runtimeTests name the
- * integration/component checks that execute the behavior. The inventory checker intentionally
- * verifies both kinds without treating a source-text match as runtime execution.
- */
 export const DOMINANT_REGRESSION_INVENTORY = freezeInventory([
   {
     compatibility: {

@@ -5,15 +5,6 @@ import { formatKey, useKeyNotation } from "@/lib/key-notation";
 import { albumCoverAtSize } from "@/lib/media";
 import { cn } from "@/lib/utils";
 
-// The finding's identity block — cover + title + artists (+ its coordinate) — shared by
-// every admin surface that lists findings so a row reads the same wherever it lands. Two
-// covers: the cover-led PLATE (the board / renders family — rounded, no frame, the
-// /fluncle-cover.png fallback) doubles as render status (a clip wears the gold story-ring +
-// play badge, the One Sun gold spent on the live artifact; clicking previews it), and the
-// compact ART thumb (the plan builder / dialogs — a framed square with the artwork
-// fallback). Trailing controls stay row-siblings at each call site; this owns only the
-// identity.
-
 const COVER_SIZE = {
   lg: "size-14",
   md: "size-11",
@@ -35,23 +26,23 @@ export function FindingIdentity({
   titleFormat = "stacked",
 }: {
   artists: string[];
-  /** Extra classes on the root flex row (e.g. grow / basis for a wrapping row). */
+
   className?: string;
-  /** Raw Spotify album image URL; resolved + fallback handled here. */
+
   cover?: string;
-  /** `plate` = cover-led, no frame, /fluncle-cover.png fallback (board/renders). `art` = compact framed thumb with the artwork fallback (plan builder / dialogs). */
+
   coverVariant?: "plate" | "art";
-  /** The finding carries a rendered clip — plate covers earn the gold ring + play badge. */
+
   hasClip?: boolean;
-  /** The Log ID coordinate — above the title (stacked) or below it (inline). */
+
   logId?: string;
-  /** Makes the inline coordinate a `fluncle://` deep link (the dialog rows). */
+
   logIdHref?: string;
-  /** Preview the clip (plate covers with a clip only). */
+
   onPreview?: () => void;
   size?: "xs" | "sm" | "md" | "lg";
   title: string;
-  /** `stacked` = title over artists (board/renders). `inline` = "artists — title" one line (plan builder / dialogs). */
+
   titleFormat?: "stacked" | "inline";
 }) {
   const previewable = coverVariant === "plate" && hasClip && Boolean(onPreview);
@@ -125,7 +116,6 @@ function Cover({
   variant: "plate" | "art";
 }) {
   if (variant === "art") {
-    // The compact framed thumb — the artwork fallback when there is no cover yet.
     return cover ? (
       <img
         alt=""
@@ -165,9 +155,7 @@ function Cover({
           loading="lazy"
           src={src}
         />
-        {/* A warm hairline ring, never an elevation drop shadow (DESIGN §4
-            Through-the-Glass, §2 Warm Dark) — it separates the gold disc from bright
-            cover art without a neutral black. Same recipe as `.cover-story-badge`. */}
+
         <span
           aria-hidden="true"
           className="absolute -right-1 -bottom-1 flex size-4 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-[0_0_0_1px_color-mix(in_oklch,var(--deep-field)_70%,transparent)]"
@@ -189,9 +177,6 @@ function Cover({
   );
 }
 
-// Tempo + key (+ duration when asked) as one quiet line — the match-up signal when ordering
-// a set (a 174 banger reads next to its neighbours). Tabular numerals like the Log ID column;
-// nothing renders until enrichment has produced a value.
 export function TrackMetaChips({
   bpm,
   className,

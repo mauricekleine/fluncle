@@ -1,32 +1,5 @@
 #!/usr/bin/env bun
-/**
- * Probe every `artist_socials` link for liveness and remove the genuinely-dead ones.
- *
- * ── Removal policy (clean-safe) ────────────────────────────────────────────────────────
- * Only links whose oracle runs against a VALID-cert, stable host are removable, because
- * there an HTTP 404 is an honest "gone":
- *   - soundcloud  → `soundcloud.com/oembed` JSON (404 = account gone)
- *   - mixcloud    → `api.mixcloud.com/<user>/` (404 = gone)
- *   - youtube     → `youtube.com/@|user|channel` (404 = handle/channel gone)
- *   - bluesky     → `public.api.bsky.app` resolveHandle (400 = handle no longer resolves)
- * bandcamp + homepage are RELIABLE enough to REPORT but NOT to auto-remove: they probe
- * arbitrary artist domains, where an expired TLS cert or a timeout is caught as "dead"
- * while the site is actually live (verified: foxstevenson.com throws cert-expired yet is
- * up). Those are held for the operator. Soft platforms (instagram/tiktok/facebook/twitter/
- * beatport/twitch) are platform-hosted (host always up) and login-walled — no logged-out
- * oracle exists, so they are not network-probed at all (zero signal, and it spares the IP).
- *
- * Safety: a removable-dead verdict is confirmed on TWO passes; a per-platform confirmed-dead
- * rate above `FUSE_RATE` trips a fuse that removes NOTHING there (assume the oracle broke);
- * every removal is written to a rollback file first.
- *
- * Operator-gated: plain run is a DRY RUN; `--confirm` deletes. Creds + dump prereqs as in
- * backfill-artist-socials-from-mb-dump.ts (TURSO_* env, `.dev.vars` fallback).
- *
- * Usage:
- *   bun run apps/web/scripts/probe-artist-socials-liveness.ts            # dry run + report
- *   bun run apps/web/scripts/probe-artist-socials-liveness.ts --confirm  # remove honest-404 deaths
- */
+
 import { type Client, createClient } from "@libsql/client";
 import { REMOTE_DB_CONCURRENCY } from "../src/lib/database-concurrency";
 import { config } from "dotenv";
@@ -42,7 +15,6 @@ export const FUSE_RATE = 0.25;
 const UA =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36";
 
-/** Oracles trustworthy enough to REPORT a death (valid-cert stable host OR arbitrary domain). */
 export const RELIABLE: ReadonlySet<string> = new Set([
   "soundcloud",
   "mixcloud",
@@ -51,7 +23,7 @@ export const RELIABLE: ReadonlySet<string> = new Set([
   "bandcamp",
   "homepage",
 ]);
-/** Subset trustworthy enough to auto-REMOVE — arbitrary-domain oracles (bandcamp/homepage) are NOT. */
+
 export const REMOVABLE: ReadonlySet<string> = new Set([
   "soundcloud",
   "mixcloud",
@@ -70,7 +42,6 @@ export type Row = {
 };
 export type PlatformTally = { live: number; dead: number; unknown: number; total: number };
 
-/** Map a fetched HTTP status (or "neterr" for a thrown request) to a verdict for a platform. */
 export function interpretStatus(platform: string, status: number | "neterr"): Verdict {
   if (platform === "soundcloud" || platform === "mixcloud" || platform === "youtube") {
     if (status === "neterr") {
@@ -79,8 +50,6 @@ export function interpretStatus(platform: string, status: number | "neterr"): Ve
     return status === 200 ? "live" : status === 404 ? "dead" : "unknown";
   }
   if (platform === "bluesky") {
-    // resolveHandle answers 200 with a DID for a live handle, 400 for one that no longer
-    // resolves (its "gone" — the honest oracle). A DID-form profile is skipped upstream.
     if (status === "neterr") {
       return "unknown";
     }
@@ -92,11 +61,10 @@ export function interpretStatus(platform: string, status: number | "neterr"): Ve
     }
     return status < 400 ? "live" : status === 404 || status === 410 ? "dead" : "unknown";
   }
-  // soft platforms — not probed
+
   return "unknown";
 }
 
-/** Platforms whose confirmed-dead rate exceeds the fuse — their oracle is suspect, remove none. */
 export function computeFusedPlatforms(
   perPlatform: Map<string, PlatformTally>,
   fuseRate = FUSE_RATE,
@@ -152,8 +120,6 @@ async function probe(row: Row): Promise<Verdict> {
       return interpretStatus(platform, await fetchStatus(url, { cookie: "SOCS=CAI" }));
     }
     if (platform === "bluesky") {
-      // The identity is the /profile/<handle> segment. A DID-form profile is already a
-      // stable identity — resolveHandle can't check it — so skip rather than misjudge.
       const handle = new URL(url).pathname.split("/").filter(Boolean)[1];
       if (!handle || handle.startsWith("did:")) {
         return "unknown";
@@ -173,7 +139,7 @@ async function probe(row: Row): Promise<Verdict> {
     if (platform === "homepage") {
       return interpretStatus(platform, await fetchStatus(url));
     }
-    return "unknown"; // soft platforms — never network-probed
+    return "unknown";
   } catch {
     return "unknown";
   }
@@ -233,7 +199,6 @@ async function main(): Promise<void> {
     return v;
   });
 
-  // confirm reliable-dead on a second pass
   const deadCandidates = rows
     .map((r, i) => ({ r, v: pass1[i] }))
     .filter((x) => RELIABLE.has(x.r.platform) && (x.v === "dead" || x.v === "host-dead"));

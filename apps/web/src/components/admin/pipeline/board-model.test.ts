@@ -2,16 +2,6 @@ import { describe, expect, it } from "vitest";
 import { type BoardRow } from "@/components/admin/use-publish";
 import { automatedSocialsBreakdown, type BoardActions, boardSteps, runStep } from "./board-model";
 
-// The Discogs cell is a workflow tracker whose FILL state is driven by `state`
-// (`open` renders an un-filled icon; `done` a filled one — see step-node.tsx). A
-// release can be linked by EITHER path: the on-add resolve (publishTrack writes
-// `in_release_id` directly, never stamping `backfill_discogs_attempted_at`) or the
-// backfill sweep (which stamps `discogsRan`, then skips already-linked findings).
-// So a finding resolved on add carries `discogsReleaseUrl` but NOT `discogsRan` —
-// it must still read `done`, otherwise a linked release shows an un-filled cell.
-
-// A minimal published finding; the fields the Discogs cell reads are overridden per
-// case. The rest only need to be present/array-shaped so `boardSteps` doesn't throw.
 function makeRow(overrides: Partial<BoardRow>): BoardRow {
   return {
     addedAt: "2026-06-01T00:00:00.000Z",
@@ -49,8 +39,6 @@ function discogsStep(row: BoardRow) {
 
 describe("boardSteps — Discogs cell", () => {
   it("reads done (filled) when a release is linked on add, even without a backfill stamp", () => {
-    // On-add resolution links the release (`discogsReleaseUrl`) even when the
-    // backfill has not run (`discogsRan` false), so the cell must render `done`.
     const step = discogsStep(
       makeRow({ discogsRan: false, discogsReleaseUrl: "https://www.discogs.com/release/1098936" }),
     );
@@ -76,13 +64,6 @@ describe("boardSteps — Discogs cell", () => {
   });
 });
 
-// The Embeddings cell is a read-only presence tracker (like Last.fm/Discogs): its
-// FILL is driven by `state` — `done` (filled gold check) once the finding carries a
-// MuQ audio embedding (a `track_embeddings` row, surfaced as `hasEmbedding`),
-// `open` (hollow) while it's still in the embed cron's queue. The on-box `fluncle-embed`
-// cron advances the STATE; the click opens the capture-source dialog, the one operator
-// control on the capture stage (the pin under the fingerprint gate — docs/the-ear.md §
-// Wrong audio). The Tag cell is not part of this board (docs/track-lifecycle.md).
 function embeddingStep(row: BoardRow) {
   const step = boardSteps(row).find((s) => s.key === "embedding");
 
@@ -99,7 +80,7 @@ describe("boardSteps — Embeddings cell", () => {
 
     expect(step.state).toBe("done");
     expect(step.statusLabel).toBe("Embedded");
-    // The cron advances the state; the click is the capture-source dialog, so it stays live.
+
     expect(step.actionable).toBe(true);
   });
 
@@ -138,17 +119,11 @@ describe("boardSteps — Embeddings cell", () => {
 
     expect(embeddingAt).toBe(enrichAt + 1);
     expect(contextAt).toBe(embeddingAt + 1);
-    // The board has no Tag cell.
+
     expect(keys).not.toContain("tag");
   });
 });
 
-// The TikTok cell reads its state from the finding's `social_posts` row. The live
-// bug: TikTok async-bounces the 6th+ pending inbox draft (Postiz still reports the
-// push a success), so a `draft` row would read `partial`/gone-out forever. Past 24h
-// (off `updatedAt`, the push time) the cell must re-open as a DISTINCT `stale` state —
-// your move again — never silently merged with either the gold `partial` (in-flight)
-// or the hollow "Push" (never pushed).
 const NOW = Date.parse("2026-07-06T20:00:00.000Z");
 
 function tiktokStep(row: BoardRow, now: number) {
@@ -185,13 +160,12 @@ describe("boardSteps — TikTok publish cell (stale-draft rule)", () => {
   });
 
   it("a STALE draft (past 24h, likely bounced) reads the distinct `stale` state + deadpan hint", () => {
-    // 34h old → "Stale 34h".
     const step = tiktokStep(tiktokDraftRow("2026-07-05T10:00:00.000Z"), NOW);
 
     expect(step.state).toBe("stale");
     expect(step.statusLabel).toBe("Stale 34h");
     expect(step.hint).toBe("Draft stale 34h — likely bounced; re-push");
-    // Still actionable — the Push dialog offers the re-push.
+
     expect(step.actionable).toBe(true);
   });
 
@@ -227,9 +201,6 @@ describe("boardSteps — TikTok publish cell (stale-draft rule)", () => {
   });
 });
 
-// The automated-socials cell (the repurposed LFM cell): the finding's hands-off Last.fm love
-// (workflow-tracker rule: done once the backfill RAN). done = actioned, open = not yet. The
-// Popover breakdown mirrors the count.
 function socialsStep(row: BoardRow) {
   const step = boardSteps(row).find((s) => s.key === "socials");
 

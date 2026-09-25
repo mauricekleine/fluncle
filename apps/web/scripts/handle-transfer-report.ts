@@ -1,22 +1,5 @@
 #!/usr/bin/env bun
-/**
- * Handle-transfer RECALL report — find likely TikTok accounts for artists that have a
- * trusted handle on another platform but no TikTok link. REPORT ONLY: writes nothing to
- * the database (existence is not identity — namesakes and squatters exist, so every hit
- * is a candidate for the operator / a verifier to confirm, never an auto-write).
- *
- * For each artist with a trusted (`auto`/`confirmed`) handle anchor on instagram /
- * soundcloud / twitter / youtube-@ but NO tiktok row, transfer the handle to
- * `tiktok.com/@<handle>` and check existence via the profile's `followerCount` marker
- * (the follower count is the operator's triage signal — a single-digit "hit" is likely a
- * squatter, not the artist). Short/namesake-prone handles are flagged. Probes are capped
- * and throttled to protect the runner's IP; handle variants are listed, not probed.
- *
- * Creds prereqs as in the sibling scripts (TURSO_* env, `.dev.vars` fallback).
- *
- * Usage:
- *   bun run apps/web/scripts/handle-transfer-report.ts
- */
+
 import { type Client, createClient } from "@libsql/client";
 import { REMOTE_DB_CONCURRENCY } from "../src/lib/database-concurrency";
 import { config } from "dotenv";
@@ -32,14 +15,11 @@ const TIMEOUT_MS = 12_000;
 const UA =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36";
 
-/** Anchors we can lift a usable handle from, in preference order. */
 const HANDLE_ANCHORS = ["instagram", "soundcloud", "twitter", "youtube"] as const;
 
-/** Extract a bare handle from a profile URL, or null when the URL carries no usable handle. */
 export function handleFromUrl(platform: string, url: string): string | null {
   try {
     if (platform === "youtube") {
-      // only @handle youtube URLs carry a transferable handle; channel/UC… / user/ do not
       if (!url.includes("/@")) {
         return null;
       }
@@ -53,7 +33,6 @@ export function handleFromUrl(platform: string, url: string): string | null {
   }
 }
 
-/** Deterministic handle variants to suggest for a miss (listed in the report, not probed). */
 export function handleVariants(handle: string): string[] {
   const base = handle.toLowerCase();
   return [
@@ -61,12 +40,10 @@ export function handleVariants(handle: string): string[] {
   ];
 }
 
-/** A normalized handle of 6 chars or fewer is namesake-prone — flag it for stricter review. */
 export function isShortHandle(handle: string): boolean {
   return handle.replace(/[._-]/g, "").length <= 6;
 }
 
-/** Parse a TikTok profile HTML body for existence + follower count. */
 export function parseTiktokProfile(
   body: string,
   handle: string,
@@ -134,7 +111,6 @@ function dbFromEnv(): Client {
 
 type Candidate = { artistId: string; name: string; handle: string; anchor: string; short: boolean };
 
-/** Pure: build the transfer candidates (artists with a trusted anchor handle but no tiktok). */
 export function buildCandidates(
   anchorsByArtist: Map<string, Map<string, string>>,
   nameById: Map<string, string>,
@@ -193,7 +169,7 @@ async function main(): Promise<void> {
   }
 
   const candidates = buildCandidates(anchorsByArtist, nameById);
-  // probe non-short handles first (higher precision), up to the cap
+
   const probeSet = [...candidates]
     .sort((a, b) => Number(a.short) - Number(b.short))
     .slice(0, PROBE_CAP);

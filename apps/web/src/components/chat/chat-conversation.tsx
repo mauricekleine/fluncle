@@ -35,21 +35,6 @@ import {
 } from "@fluncle/ui/components/message-scroller";
 import { Textarea } from "@fluncle/ui/components/textarea";
 
-// ── ChatDnB — the conversation, the one UI both doors render ─────────────────────────────
-//
-// Extracted from the /admin/chat workbench so the admin station and the public /chat door
-// share ONE transcript UI rather than forking into two that drift. The chrome around it
-// differs (admin wears the AdminShell; /chat is a quiet public plate) and so does the wire
-// (`transportApi` + the CSRF header a session-gated POST needs), but everything below the
-// plate — the streamed reply, the tool calls shown INLINE (the point of the grounding: the
-// crew watches the dig happen), the Finding Cards, the now-playing bar — is identical.
-//
-// Deliberately BARE, not a SaaS chat window (PRODUCT.md bans the streaming-app clone by
-// name): an input, the reply, and the grounding work made visible. History stays EPHEMERAL:
-// `useChat`'s in-memory messages, no persistence. The engine (the grounding prompt, the
-// archive tools, the UIMessage stream) is lib/server/chat.ts; this rides `useChat`, so tool
-// parts arrive typed and this only renders them and posts a turn.
-
 const DEFAULT_EMPTY_STATE =
   "Ask Fluncle something. He answers from the archive or he says he hasn't been there.";
 const DEFAULT_PLACEHOLDER = "What have you found on Hospital Records?";
@@ -60,25 +45,17 @@ export function ChatConversation({
   placeholder = DEFAULT_PLACEHOLDER,
   transportApi,
 }: {
-  /**
-   * The account mutation token, sent as the `x-fluncle-csrf` header on every message POST —
-   * the session-gated `/api/chat` door demands it (same rail the account mutations carry).
-   * Absent for the admin workbench, whose `/api/admin/chat` is grant-cookie gated instead.
-   */
   csrfToken?: string;
-  /** The invitation shown before the first turn — voiced per door (public vs admin). */
+
   emptyState?: ReactNode;
-  /** The input's resting hint. */
+
   placeholder?: string;
-  /** Where a turn POSTs: `/api/admin/chat` (admin) or `/api/chat` (the crew door). */
+
   transportApi: string;
 }) {
   const [draft, setDraft] = useState("");
   const { notation } = useKeyNotation();
-  // Memoised so a re-render never rebuilds the transport (which would reset the request
-  // shape mid-stream). Keyed on the api path + the token, the only inputs that shape a
-  // request. The CSRF header rides every POST when the token is present; the admin door
-  // passes none and sends bare.
+
   const transport = useMemo(
     () =>
       new DefaultChatTransport<FluncleUIMessage>({
@@ -88,11 +65,9 @@ export function ChatConversation({
     [transportApi, csrfToken],
   );
   const { error, messages, sendMessage, status } = useChat<FluncleUIMessage>({ transport });
-  // "submitted" is the gap between posting a turn and the first streamed chunk.
+
   const busy = status === "submitted" || status === "streaming";
 
-  // Every finding on the transcript, deduped by coordinate — one walk feeds both the
-  // persistent now-playing bar's rows AND the prose coordinate links' hover cards.
   const findingsByLogId = useMemo(() => collectChatFindings(messages), [messages]);
   const previewRows = useMemo(() => toPreviewRows(findingsByLogId), [findingsByLogId]);
 
@@ -180,20 +155,11 @@ export function ChatConversation({
         </Button>
       </form>
 
-      {/* The persistent now-playing bar (portals to document.body): renders null unless a
-          preview is actually playing, so it costs nothing until a card starts one. */}
       <MixPreviewBar notation={notation} tracks={previewRows} />
     </div>
   );
 }
 
-// Render a message's parts: user + assistant text as bubbles, every tool step as a visible
-// marker (the grounding work) — and, when a tool returns findings, the real Finding Cards in
-// place of the raw JSON output marker. Text bubbles read muted for the assistant, primary for
-// the crew. A tool part carries its whole lifecycle in one part, so the call marker renders from
-// the moment the input streams; while the dig is underway a skeleton card stands in for the
-// future output, and the cards (or the summarize fallback) join once the output arrives.
-// `step-start` and any other part types are workbench noise and render nothing.
 function renderParts(
   message: FluncleUIMessage,
   notation: KeyNotation,
@@ -210,8 +176,6 @@ function renderParts(
           variant={message.role === "user" ? "default" : "muted"}
         >
           <BubbleContent className="whitespace-pre-wrap">
-            {/* Fluncle's prose gets its coordinates linkified (the hover-card treatment);
-                the crew's own bubbles stay plain text — the links are his citations. */}
             {message.role === "assistant"
               ? linkifyCoordinates(part.text, findingsByLogId, notation)
               : part.text}
@@ -222,8 +186,7 @@ function renderParts(
 
     if (isToolUIPart(part)) {
       const name = getToolName(part);
-      // KEEP the call marker exactly as-is — watching the grounding work happen is the point of
-      // the workbench. The cards REPLACE only the raw `→ {json}` output marker.
+
       const call = (
         <Marker variant="separator">
           <MarkerIcon>
@@ -269,8 +232,6 @@ function renderParts(
         );
       }
 
-      // input-streaming / input-available — the dig is underway; a skeleton card stands in for
-      // the finding it is about to hand back, under the same call marker.
       return (
         <Fragment key={key}>
           {call}
@@ -283,10 +244,6 @@ function renderParts(
   });
 }
 
-// A tool output rendered as its card (a finding, a list, an artist, a label, a chain, a mixtape,
-// or the status strip), or `undefined` for the shapes no card owns (a not-found, an empty result)
-// — the caller keeps the plain summarize marker for those (and, unchanged, the error marker for
-// output-error). Structural, so one branch covers each shape regardless of the tool name.
 function renderFindingOutput(output: unknown, notation: KeyNotation): ReactNode {
   if (typeof output !== "object" || output === null) {
     return undefined;
@@ -304,8 +261,6 @@ function renderFindingOutput(output: unknown, notation: KeyNotation): ReactNode 
     return <LabelCard label={output.label as ChatLabel} notation={notation} />;
   }
 
-  // get_similar_artists → the "similar artists" chip rail; each neighbour carries `certified`, so a
-  // catalogue-only one renders unlit (structural, like every other branch).
   if ("similar" in output && Array.isArray(output.similar)) {
     return (
       <NeighbourList
@@ -319,7 +274,6 @@ function renderFindingOutput(output: unknown, notation: KeyNotation): ReactNode 
     return <MixtapeCard mixtape={output.mixtape as ChatMixtape} />;
   }
 
-  // get_status → the compact one-line strip (structural, like every other branch).
   if ("headline" in output && output.headline) {
     return <StatusStrip status={output as ChatStatus} />;
   }
@@ -328,10 +282,6 @@ function renderFindingOutput(output: unknown, notation: KeyNotation): ReactNode 
     return <FindingCard finding={output.finding as ChatFinding} notation={notation} />;
   }
 
-  // A list tool (search_archive / list_fresh) returns two typed buckets — certified findings and
-  // unlit catalogue rows. THE RENDER FIX: both must render, never either/or (a naive branch on
-  // catalogue-first would hide the findings). The findings lead, the catalogue block follows in
-  // the unlit register; the "Tracks" heading appears only when findings render above it.
   const plan = planListOutput(output);
 
   if (plan) {
@@ -356,8 +306,6 @@ function renderFindingOutput(output: unknown, notation: KeyNotation): ReactNode 
   return undefined;
 }
 
-// The "dig underway" placeholder: one artwork square + two text lines, sized to a Finding Card so
-// the layout does not jump when the real card arrives.
 function SkeletonCard(): ReactNode {
   return (
     <div className="flex items-start gap-3 rounded-md border border-border bg-card px-3 py-2.5">
@@ -370,9 +318,6 @@ function SkeletonCard(): ReactNode {
   );
 }
 
-// The now-playing bar's lean row set, derived from the transcript's findings map. Only
-// findings with a coordinate (the relay key) can ever be the active row — the map's own
-// invariant, since the coordinate is its key.
 function toPreviewRows(findingsByLogId: ReadonlyMap<string, ChatFinding>): {
   albumImageUrl?: string;
   artists: string[];
@@ -391,8 +336,6 @@ function toPreviewRows(findingsByLogId: ReadonlyMap<string, ChatFinding>): {
   }));
 }
 
-// A one-line, readable digest of a tool input/output for the transcript (never the raw
-// pretty-printed blob — this is a workbench log line, not a debugger).
 function summarize(value: unknown): string {
   const json = JSON.stringify(value ?? {});
 

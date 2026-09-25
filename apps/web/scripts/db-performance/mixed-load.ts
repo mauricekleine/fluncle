@@ -149,11 +149,6 @@ function emptyClassRecord(): Record<MixedLoadClass, number[]> {
   return { "heavy-reader": [], "public-read": [], "write-batch": [] };
 }
 
-/**
- * Deterministic discrete-event evidence for per-client bounds. The single write lane models
- * libSQL/SQLite transaction serialization inside this client scenario; it is not a fleet-wide or
- * cross-unit admission mechanism.
- */
 export function simulateMixedLoad(
   options: {
     bounds?: Readonly<Record<DatabaseClientClass, number>>;
@@ -449,11 +444,6 @@ function validateRequestWideSchedule(
   return violations;
 }
 
-/**
- * Several request-local clients each fan out to their own limit while one isolate-wide gate owns
- * the real remote-operation ceiling. The heavy-read lane remains separately bounded so queued
- * heavy work cannot consume or convoy the three ordinary seats beside a held heavy reader.
- */
 export function simulateRequestWideMixedLoad(
   options: {
     aggregateCeiling?: number;

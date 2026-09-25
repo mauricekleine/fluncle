@@ -1,20 +1,5 @@
 #!/usr/bin/env bun
-/**
- * Dump the PRODUCTION Turso database into the golden local snapshot at
- * apps/web/.dev/seed.sql — the seed that worktrees clone (see db-refresh.ts).
- * Run it (normally in the main checkout) when you want local dev to catch up to
- * production.
- *
- * Production credentials are never stored in .dev.vars. They are read at run
- * time from 1Password — point `FLUNCLE_TURSO_OP_ITEM` at the item that holds the
- * production Turso credentials (see the ops runbook note) — so this is a
- * deliberate, human-in-the-loop step: `op` must be unlocked. The dump itself is
- * read-only (SELECTs).
- *
- * The SQL emitter is shared with the restore drill + the on-box backup sweep
- * (src/lib/server/db-dump.ts), so the dev seed and the R2 backups are the exact
- * same, continuously-restore-tested format.
- */
+
 import { $ } from "bun";
 import { createClient } from "@libsql/client/web";
 import { REMOTE_DB_CONCURRENCY } from "../src/lib/database-concurrency";
@@ -47,8 +32,6 @@ async function readSecret(field: string): Promise<string> {
 const url = await readSecret("TURSO_DATABASE_URL");
 const authToken = await readSecret("TURSO_AUTH_TOKEN");
 
-// intMode:"bigint" keeps large integers exact through the dump (the shared emitter
-// serialises a bigint by its precise decimal string).
 const client = createClient({
   authToken,
   concurrency: REMOTE_DB_CONCURRENCY,
@@ -57,10 +40,6 @@ const client = createClient({
 });
 
 const schemaResult = await client.execute(
-  // `tracks_fts%` is the FTS5 search index and its shadow tables — a DERIVED artifact
-  // (docs/search.md), rebuilt by the dev flow itself. Dumping it double-creates the shadow
-  // tables on restore (the virtual-table CREATE emits them AND the dump re-creates them),
-  // which is exactly the parse error a refresh then dies on.
   `SELECT type, name, sql FROM sqlite_master
    WHERE sql IS NOT NULL
      AND name NOT LIKE 'sqlite_%'

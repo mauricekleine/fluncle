@@ -11,24 +11,7 @@ import {
 } from "@fluncle/ui/components/dialog";
 import { ScrollArea } from "@fluncle/ui/components/scroll-area";
 
-// The view dialogs for the two audio-observation columns on the admin board.
-// Both are READ-ONLY first-pass overviews:
-//
-//   Context     — the firecrawl-derived `context_note` (internal creative fuel for
-//                 the observation script). The dialog reads the note text lazily.
-//   Observation — Fluncle's spoken `observation.mp3`. The dialog plays it from its
-//                 R2 url.
-//
-// Neither dialog GENERATES anything, and that is now a choice rather than a gap. The
-// trigger path exists: `observe_track` (POST /admin/tracks/{trackId}/observe, admin
-// tier — the voice gate, the Cartesia render, and the R2 write all live server-side),
-// driven today by `fluncle admin tracks observe <id>` and the `fluncle-observation`
-// box timer. Wiring a "generate" button into these dialogs is DEFERRED to the admin
-// overhaul, which decides where a per-row action belongs across every station at once
-// (docs/admin-shell.md § placement contract) rather than growing one here first.
-
 type ContextDialogProps = {
-  /** The context-note text once fetched ("" = still absent / not yet fetched). */
   contextNote: string;
   loading: boolean;
   onOpenChange: (open: boolean) => void;
@@ -74,7 +57,7 @@ export function ContextDialog({ contextNote, loading, onOpenChange, row }: Conte
 type ObservationDialogProps = {
   onOpenChange: (open: boolean) => void;
   row: BoardRow | null;
-  /** The spoken transcript ("" = absent / not yet read), read lazily on open. */
+
   script: string;
   scriptLoading: boolean;
 };
@@ -88,9 +71,7 @@ export function ObservationDialog({
   const audioUrl = row?.observationAudioUrl;
   const durationMs = row?.observationDurationMs;
   const generatedAt = row?.observationGeneratedAt;
-  // A legacy stored script may carry the occasional SSML tag (a `<break …/>` pause,
-  // an `<emphasis>` span) from before the Cartesia migration — strip them so the
-  // transcript reads as the clean prose it speaks.
+
   const transcript = stripSsml(script);
 
   return (
@@ -133,8 +114,6 @@ export function ObservationDialog({
               ) : undefined}
             </dl>
 
-            {/* The spoken transcript, below the player — what the audio says, read
-                quietly (the recovered-audio voice on the page in text form). */}
             {scriptLoading ? (
               <p className="flex items-center gap-2 text-sm text-muted-foreground">
                 <CircleNotchIcon aria-hidden="true" className="animate-spin" weight="bold" />
@@ -159,9 +138,6 @@ export function ObservationDialog({
           </p>
         )}
 
-        {/* The observation echo gate's held script, when one exists for this finding — the
-            spoken sibling of the note dialog's held-note panel. Renders nothing for the
-            common case (no held rejection): the panel's own read returns an empty ledger. */}
         {row ? <HeldObservationPanel trackId={row.trackId} /> : undefined}
       </DialogContent>
     </Dialog>
