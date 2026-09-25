@@ -19,7 +19,7 @@ The custom per-user playlist cover is a Remotion render — which does **not** r
 
 ## Why a host timer + the /status marker
 
-Every automation cron runs off repo-checked-in host timers so the SCHEDULE is code (installed by [`../install-host-timers.sh`](../install-host-timers.sh), which auto-discovers every `*-timer/` dir). Because a `docker exec` sends stdout to journald instead of the gateway's output dir, the sweep self-writes the `/status` marker (`# Cron Job: fluncle-frontier-refresh`) via the shared [`cron-output.sh`](../scripts/cron-output.sh) helper. `cron.frontier-refresh` is registered in `@fluncle/registry`, so it lights up `/status` the moment the timer runs.
+Every automation cron runs off repo-checked-in host timers so the SCHEDULE is code (installed by [`../install-host-timers.sh`](../install-host-timers.sh), which auto-discovers every `*-timer/` dir). Because a `docker exec` sends stdout to journald, the sweep self-writes the `/status` marker (`# Cron Job: fluncle-frontier-refresh`) via the shared [`cron-output.sh`](../scripts/cron-output.sh) helper. `cron.frontier-refresh` is registered in `@fluncle/registry`, so it lights up `/status` the moment the timer runs.
 
 ## Install / operate (operator, on the box)
 

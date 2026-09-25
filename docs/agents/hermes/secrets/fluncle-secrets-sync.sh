@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # fluncle-secrets-sync.sh — materialize the box's secrets from 1Password (the single
 # source). Reads OP_SERVICE_ACCOUNT_TOKEN from /etc/hermes-bootstrap.env, op-injects
-# the gateway env-file + the shared sweep-secrets file (written into the mounted
+# the container env-file + the shared sweep-secrets file (written into the mounted
 # state dir the hermes container sees). Atomic (temp -> install) + sanity-checked, so
 # an op outage can never leave a partial/empty secrets file. Run at boot + on a timer.
 #
@@ -231,7 +231,7 @@ op inject -f -i "$TPL_DIR/hermes.env.tpl" -o "$tg"
 op inject -f -i "$TPL_DIR/fluncle-secrets.env.tpl" -o "$ts"
 grep -q FLUNCLE_API_TOKEN "$tg" || {
   ERRORS=$((ERRORS + 1))
-  echo "gateway inject sanity fail" >&2
+  echo "container env inject sanity fail" >&2
   exit 1
 }
 grep -q CLAUDE_CODE_OAUTH_TOKEN "$ts" || {
@@ -240,9 +240,9 @@ grep -q CLAUDE_CODE_OAUTH_TOKEN "$ts" || {
   exit 1
 }
 # The container's state mount ($SWEEP_DIR here = /opt/data/home in-container) does not exist
-# until the hermes container has started at least once. On a FRESH box that ordering made this
-# script half-succeed and exit 1 under `set -e`: the gateway env landed, the sweep env did not,
-# and the sweeps ran credential-less until someone noticed. Create it first, owned by the
+# until the hermes container has started at least once. On a FRESH box that ordering would make
+# this script half-succeed and exit 1 under `set -e`: the container env lands, the sweep env does
+# not, and the sweeps run credential-less until someone notices. Create it first, owned by the
 # in-container hermes uid — only when missing, so a live box's existing mode/ownership is never
 # rewritten. The GSC key below lands in the same dir, so it is covered by this too.
 SWEEP_DIR="$(dirname "$SWEEP_OUT")"

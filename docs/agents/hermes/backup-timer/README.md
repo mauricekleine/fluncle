@@ -27,16 +27,15 @@ The dump FORMAT is unchanged and byte-for-byte enforced: `backup-sweep.test.ts` 
 
 ## Leg 2 — the box-state snapshot (SHIPPED, DORMANT until the operator adds a key)
 
-**The backup that never existed.** Several docs claimed the accumulated agent state — sessions, memories, kanban, cron-output history — "restores from the daily `fluncle-backup` → R2 backup". It did not: leg 1 dumps the production database and never reads the agent data dir. The server has no attached volumes (state sits on the root disk) and no provider-level snapshots, so a disk loss permanently destroyed everything the box had accumulated — including the render conductor's `box-id`, whose loss **orphans a paid provisioned render box** nobody can then find or delete.
+**Why it exists.** Leg 1 dumps the production database and never reads the box's data dir. The server has no attached volumes (state sits on the root disk) and no provider-level snapshots, so without leg 2 a disk loss permanently destroys everything the box has accumulated — including the render conductor's `box-id`, whose loss **orphans a paid provisioned render box** nobody can then find or delete.
 
 **What it takes** (small, unrecoverable, load-bearing):
 
-- the gateway state db (`state.db` + `-wal`/`-shm`) — sessions, memories index, kanban
-- `config.yaml` — the gateway's expanded config
-- `memories/` — the agent's own memory files
 - `cron/output/` — the run markers `/status` judges every cron by
-- the cron user's `.render-conductor/` (`box-id` + the poison ledger) and `.healthcheck/` (the transition memory, so a restore doesn't re-baseline every service)
-- the hand-placed `0600` `*.env` files in the data dir and the cron user's home — discovered rather than named, so a new one is covered the night it appears
+- the cron user's `.render-conductor/` (`box-id` + the poison ledger), `.healthcheck/` (the transition memory, so a restore doesn't re-baseline every service), and `.entity-bio-sweep/` (the per-entity authoring budgets)
+- the hand-placed `0600` `*.env` files in the data dir and the cron user's home — the shared sweep secrets file among them — discovered rather than named, so a new one is covered the night it appears
+
+`BOX_STATE_INCLUDES` also names `state.db` (+ `-wal`/`-shm`), `config.yaml`, and `memories/` at the data root, with `state.db` and `memories/` marked required. No process in the current image writes them: they are archived where an older runtime left them on the mount, and a `/opt/data` that lacks them fails the drill's load-bearing check until that list is trimmed.
 
 **What it deliberately leaves** — this is the difference between a few-MB nightly and a 5 GB one:
 
@@ -116,7 +115,7 @@ What it proves, in order, exiting non-zero (loudly) on any of them:
 2. the artifact opens with the key, and the decrypted archive's size + SHA-256 match what the producer recorded;
 3. **tamper-detection is real** — a byte is flipped in a COPY of the ciphertext and the open MUST fail. GCM's whole job here is that a corrupted artifact refuses to open instead of unpacking garbage over live state, so a decrypt that succeeded anyway is a drill failure;
 4. every manifest entry is present after unpacking, at its recorded size, in the recorded count;
-5. the LOAD-BEARING set is there — the gateway state db, `memories/`, the cron markers, the render conductor's directory **including its `box-id`**, and at least one `0600` env file. That expectation is read from `BOX_STATE_INCLUDES` in [`../scripts/box-state-snapshot.ts`](../scripts/box-state-snapshot.ts), the same declaration the sweep archives from, so the drill cannot drift from the producer.
+5. the LOAD-BEARING set is there — every `required` entry (the cron markers, the render conductor's directory **including its `box-id`**, and the legacy entries noted above) and at least one `0600` env file. That expectation is read from `BOX_STATE_INCLUDES` in [`../scripts/box-state-snapshot.ts`](../scripts/box-state-snapshot.ts), the same declaration the sweep archives from, so the drill cannot drift from the producer.
 
 The drill is **read-only against storage**: LIST and GET only, no PUT and no DELETE anywhere in the file, so it can never overwrite or prune a backup object. It never restores over the live data dir either — it unpacks only into a temp dir it creates and removes. Its output is paths, sizes and counts; never a key, never a decrypted byte. The one exception is the one you ask for: `--keep <dir>` copies the unpacked tree out for inspection, **credentials included**, into a fresh `0700` directory (it refuses a non-empty target) — delete it when you are done.
 
@@ -140,13 +139,13 @@ shasum -a 256 box-state.tar.gz          # must equal the manifest's sha256
 tar -xzf box-state.tar.gz -C <data-root>
 ```
 
-`tar` preserves the `0600` modes, which is load-bearing for the restored env files. Restore into a STOPPED container — `state.db` is live SQLite.
+`tar` preserves the `0600` modes, which is load-bearing for the restored env files. Restore into a STOPPED container, so no sweep writes into the tree mid-restore.
 
 ## Why a host timer + the /status marker
 
-Every automation cron moved off the gateway's single serial runner onto repo-checked-in host timers so the SCHEDULE is code. Because a `docker exec` sends stdout to journald instead of the gateway's output dir, the sweep self-writes the `/status` marker (`# Cron Job: fluncle-backup`) via the shared [`cron-output.sh`](../scripts/cron-output.sh) helper, so the [`fluncle-healthcheck`](../scripts/fluncle-healthcheck.ts) prober's `cron.backup` row stays honest.
+Every automation cron runs from a repo-checked-in host timer so the SCHEDULE is code. Because a `docker exec` sends stdout to journald, the sweep self-writes the `/status` marker (`# Cron Job: fluncle-backup`) via the shared [`cron-output.sh`](../scripts/cron-output.sh) helper, so the [`fluncle-healthcheck`](../scripts/fluncle-healthcheck.ts) prober's `cron.backup` row stays honest.
 
-**The prober was NOT honest, and now is.** `cron-output.sh` WRAPS the sweep rather than exec'ing it, so a SIGKILLed run still writes a marker — a 28-byte file whose only line is the header. The prober used to take the last non-empty line, fail to parse it as JSON, and shrug ("freshness governs"), so three nights of total failure read GREEN on `/status`. `judgeCron` now scans a marker for the sweep's contracted JSON summary and treats a marker with **no summary at all** as a run that was killed before it could speak — `down` on first sighting, no one-miss grace (unlike a reported `ok: false`, which is a sweep handling a failure and retrying).
+**A killed run reads red.** `cron-output.sh` WRAPS the sweep rather than exec'ing it, so a SIGKILLed run still writes a marker — a 28-byte file whose only line is the header. `judgeCron` scans a marker for the sweep's contracted JSON summary and treats a marker with **no summary at all** as a run that was killed before it could speak — `down` on first sighting, no one-miss grace (unlike a reported `ok: false`, which is a sweep handling a failure and retrying).
 
 **The run's `ok` covers BOTH legs.** A leg-2 failure reports `ok: false` with `reason: "box_state_failed"` even though the dump landed — a half-backup that reads green is the exact failure mode above. Leg 2 runs only AFTER the dump is durable in R2, so it can never cost the night's dump; the skipped-for-no-key state is `ok: true` (nothing is broken — the key simply isn't provisioned).
 
@@ -165,5 +164,3 @@ sudo systemctl start fluncle-backup.service            # one tick now
 journalctl -u fluncle-backup.service -n 40 --no-pager  # expect a { "ok": true, … } summary line
 systemctl list-timers fluncle-backup.timer
 ```
-
-Then RETIRE the gateway copy (`hermes cron list` → `hermes cron delete <id>` for `fluncle-backup`) so it is not double-scheduled — green the timer first, never both live at once.

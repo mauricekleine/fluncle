@@ -1,10 +1,10 @@
 #!/usr/bin/env bun
-// clip-sweep.ts — the bun orchestrator behind the `--no-agent` Fluncle Studio clip-cut
-// cron (`fluncle-studio-clip`).
+// clip-sweep.ts — the bun orchestrator behind the Fluncle Studio clip-cut host-timer
+// sweep (`fluncle-studio-clip`).
 //
 // Version-controlled source; the repo is canonical and the box is a deploy target
-// (fluncle-hermes-operator skill). Invoked by the bash wrapper (clip-sweep.sh) the cron
-// runner execs every ~15m — see that file's header for the `host-timer` wire-up
+// (fluncle-hermes-operator skill). Invoked by the bash wrapper (clip-sweep.sh) the host
+// timer execs every ~15m — see that file's header for the `host-timer` wire-up
 // and docs/fluncle-studio.md for the full cut design.
 //
 // PURE-TRIGGER (the enrich-sweep shape): the cut is a deterministic ffmpeg job, zero LLM
@@ -30,8 +30,7 @@ import { spawnSync } from "node:child_process";
 import { type BoxCostEvent, emitCost, selfSecondsCost } from "./cost-emit";
 
 // ---------------------------------------------------------------------------
-// Config — a SMALL bounded batch so a tick stays well under the Hermes `--no-agent`
-// 120s kill (a 60s 1080p re-encode + a <100MB upload is a handful of seconds, but the
+// Config — a SMALL bounded batch so a tick stays short, under ~120s (a 60s 1080p re-encode + a <100MB upload is a handful of seconds, but the
 // set-rendition range fetch can add a few). The queue is the durable worklist; anything
 // not reached this tick is picked up on the next (~15m later). Raise CLIP_BATCH_CAP only
 // once a HEALTHY run measures comfortably under 120s per clip.

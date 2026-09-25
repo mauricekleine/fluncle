@@ -89,15 +89,6 @@ describe("oRPC public read — GET /mixtapes (list_mixtapes)", () => {
     expect(listMixtapes).toHaveBeenCalledWith();
   });
 
-  it("no longer serves the bare /api alias — the back-compat mount is gone (falls through)", async () => {
-    listMixtapes.mockResolvedValueOnce([]);
-
-    const { handleOrpc } = await import("./orpc");
-    // The vocabulary cut removed the bare `/api` alias: only `/api/v1` is oRPC's.
-    expect(await handleOrpc(get("https://www.fluncle.com/api/mixtapes"))).toBeNull();
-    expect(listMixtapes).not.toHaveBeenCalled();
-  });
-
   it("500s an unexpected fault generically — the raw detail never reaches the wire", async () => {
     listMixtapes.mockRejectedValueOnce(new Error("turso fell over"));
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -338,19 +329,6 @@ describe("oRPC public write — POST /newsletter (subscribe_newsletter)", () => 
     expect(response?.status).toBe(200);
     expect(await readJson(response)).toEqual({ ok: true });
     expect(subscribeToNewsletter.mock.calls[0]?.[0]).toEqual({ email: "fan@example.com" });
-  });
-
-  it("no longer serves the bare /api alias — the back-compat mount is gone (falls through)", async () => {
-    subscribeToNewsletter.mockResolvedValueOnce(undefined);
-
-    const { handleOrpc } = await import("./orpc");
-    // The vocabulary cut removed the bare `/api` alias: only `/api/v1` is oRPC's.
-    expect(
-      await handleOrpc(
-        postJson("https://www.fluncle.com/api/newsletter", { email: "fan@example.com" }),
-      ),
-    ).toBeNull();
-    expect(subscribeToNewsletter).not.toHaveBeenCalled();
   });
 
   it("carries the invalid_email ApiError code/status (400) byte-for-byte", async () => {

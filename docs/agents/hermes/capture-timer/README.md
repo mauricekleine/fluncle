@@ -4,9 +4,9 @@ The rave-02 (Hermes box) host trigger for the full-song **capture** sweep. `flun
 
 The sweep WORK is BAKED into the image — the `.sh`/`.ts` pair at `/opt/hermes-scripts/` (source: [`../scripts/capture-sweep.sh`](../scripts/capture-sweep.sh) → [`../scripts/capture-sweep.ts`](../scripts/capture-sweep.ts)) plus the PINNED `yt-dlp` fetcher at `/opt/hermes-scripts/yt-dlp`. Both ride the image and auto-update from `main` via the hourly pin-watch rebuild (Unit A/D) — no `docker cp`, no `/opt/data` copy. The host timer is only the trigger; the `.sh` is the same entry a manual `bash /opt/hermes-scripts/capture-sweep.sh` runs (it sources `${HOME}/.fluncle-secrets.env` and execs bun).
 
-## Why it's a host timer, not a Hermes cron
+## Why its own host timer
 
-Capture's per-finding work has an **unbounded tail**: it spawns `yt-dlp` against a residential proxy (a 60s search + up to a 180s download) for up to `BATCH_CAP` findings a tick. On the one serial Hermes `--no-agent` gateway runner — with its ~300s global `script_timeout` — a worst-case tick during the whole-archive backfill drain would blow the budget and **serialize behind / delay the latency-sensitive 5-minute sweeps** (enrich, context-note, note) it shares the runner with. A prober that starves the enrich sweep is exactly the failure the [`fluncle-healthcheck`](../healthcheck-timer/README.md) move fixed; capture has the same shape (long, tail-latent work that must not queue behind — or ahead of — the fast app sweeps), so it runs on a **host** systemd timer for the same reason: the host scheduler is never busy with Fluncle's app work, so the tick always fires on time, and a slow download can never delay another cron. (Same reasoning as [`fluncle-pin-watch`](../pin-watch/README.md) — a container can't cleanly rebuild itself — and the rave-01 watchdog.)
+Capture's per-finding work has an **unbounded tail**: it spawns `yt-dlp` against a residential proxy (a 60s search + up to a 180s download) for up to `BATCH_CAP` findings a tick. On its own parallel host timer, with a `TimeoutStartSec` sized to the worst-case tick, that tail can never queue behind — or ahead of — the latency-sensitive 5-minute sweeps (enrich, context-note, note): the tick fires on time, and a slow download never delays another cron.
 
 ## What a run does
 

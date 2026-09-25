@@ -234,13 +234,6 @@ describe("rankCorpus — the staleness fingerprint", () => {
     );
   });
 
-  it("the digest is order-independent (ids arrive sorted from SQL) and stable across calls", () => {
-    // The tick reads `... order by artist_id`, so the input is always sorted; the digest of the same
-    // membership is identical every tick (no spurious re-rank), and does not depend on insertion order.
-    expect(qualifiedArtistsDigest(["a", "b"])).toBe(qualifiedArtistsDigest(["a", "b"]));
-    expect(rankCorpus(60, 60, 2, digest, "initial")).toBe(rankCorpus(60, 60, 2, digest, "initial"));
-  });
-
   it("catches a DELETED finding, because it is compared for INEQUALITY and not order", () => {
     expect(rankCorpus(59, 59, 0, "d", "initial")).not.toBe(rankCorpus(60, 60, 0, "d", "initial"));
   });

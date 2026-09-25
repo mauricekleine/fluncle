@@ -4,7 +4,7 @@
 //
 // LIVE. Version-controlled source; the repo is canonical and the box is a deploy
 // target (fluncle-hermes-operator skill). Invoked by the bash wrapper
-// (newsletter-sweep.sh) the cron runner execs Fridays 15:00 Amsterdam — see that
+// (newsletter-sweep.sh) its host timer execs Fridays 15:00 Amsterdam — see that
 // file's header for the `host-timer` wire-up and ../cron/README.md.
 //
 // This sweep uses the same hybrid `--no-agent` pattern as note/observe: everything deterministic
@@ -23,7 +23,7 @@
 //   3. FETCH (deterministic): `/api/v1/findings?since&until&limit=48` (paged via
 //      nextCursor) for findings + `/api/v1/mixtapes` filtered to the window. Public reads,
 //      no auth. Findings are capped (FIND_CAP, newest-first) to keep the one authoring
-//      call inside the cron runner's 120s budget; a cap hit is logged.
+//      call inside a bounded time budget; a cap hit is logged.
 //   4. ZERO-FIND RULE (deterministic): no findings AND no mixtapes → author nothing,
 //      exit. A missed Friday is quieter than a hollow one.
 //   5. AUTHOR (the ONE agentic step): build the prompt (the voice + the verbatim
@@ -38,8 +38,8 @@
 //   7. OFFER (deterministic): a one-line operator summary + the exact send command. It
 //      reaches Discord TWO ways: stdout (captured by the host-timer /status marker +
 //      journald) AND a direct best-effort POST to DISCORD_ALERT_WEBHOOK — the sweep
-//      SELF-DELIVERS, so it no longer depends on the gateway's `--deliver discord` (retired
-//      with the host-timer migration). The operator runs `fluncle admin newsletter send <id>`
+//      SELF-DELIVERS, so the offer reaches the operator with no delivery layer in
+//      between. The operator runs `fluncle admin newsletter send <id>`
 //      (operator tier — silence is never consent for a send). The draft persists regardless;
 //      next Friday's miss-recovery re-offers an un-sent one.
 //
@@ -68,8 +68,8 @@ const SITE = process.env.FLUNCLE_SITE_URL ?? "https://www.fluncle.com";
 const NEWSLETTER_CLAUDE_MODEL = process.env.NEWSLETTER_CLAUDE_MODEL ?? "claude-sonnet-5";
 const NEWSLETTER_CLAUDE_EFFORT = process.env.NEWSLETTER_CLAUDE_EFFORT;
 
-// Cap the findings handed to the one authoring call so it stays inside the cron
-// runner's 120s kill (a normal week is well under this; a huge self-healed backlog
+// Cap the findings handed to the one authoring call so it stays inside a bounded
+// time budget (a normal week is well under this; a huge self-healed backlog
 // window is the only case that hits it — newest-first, the rest roll to next week).
 const FIND_CAP = Number(process.env.NEWSLETTER_FIND_CAP ?? "50");
 const PAGE_LIMIT = 48; // /api/v1/findings page size (matches the doctrine)
@@ -753,8 +753,8 @@ function offerLine(subject: string, id: string, finds: number, mixes: number): s
   ].join("\n");
 }
 
-// Self-deliver the operator offer line to Discord. The host-timer world has no gateway
-// `--deliver discord`, so the sweep POSTs the line to the ops-alert webhook itself (the same
+// Self-deliver the operator offer line to Discord. A host timer delivers nothing on its
+// own, so the sweep POSTs the line to the ops-alert webhook itself (the same
 // DISCORD_ALERT_WEBHOOK pingClaudeAuthFailure uses, sourced from the 0600 secrets file by the
 // .sh). Best-effort: the stdout line is the floor (it still lands in the /status marker +
 // journald), so a missing webhook or a failed POST never fails the run.
@@ -886,7 +886,7 @@ async function main(): Promise<void> {
   );
 
   // 7. OFFER — stdout (→ the host-timer /status marker + journald) AND a direct self-POST to
-  // the ops-alert Discord webhook (no gateway --deliver discord under a host timer); the
+  // the ops-alert Discord webhook (a host timer delivers nothing on its own); the
   // operator runs the send.
   const offer = offerLine(authored.subject, id, finds, mixes);
   console.log(offer);
@@ -895,7 +895,7 @@ async function main(): Promise<void> {
   // 8. COST — record the one authoring spend, best-effort, only now that the draft is
   // durable. The newsletter is a non-finding, so the row is `global`-scoped (logId +
   // trackId null); occurredAt is the window's `until` (this run). Cannot throw; a hard
-  // 15s cap keeps it well inside the runner budget. Rejected rows stay visible.
+  // 15s cap keeps it well inside the unit's time budget. Rejected rows stay visible.
   const cost: BoxCostEvent = {
     costBasis: "subsidized",
     logId: null,

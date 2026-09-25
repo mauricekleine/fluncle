@@ -10,7 +10,7 @@ There are two clip crons in the tree. This one — `fluncle-studio-clip` (`clip-
 
 ## Why a host timer + the /status marker
 
-Every automation cron moved off the gateway's single serial runner onto repo-checked-in host timers so the SCHEDULE is code. Because a `docker exec` sends stdout to journald instead of the gateway's output dir, the sweep self-writes the marker via the shared [`cron-output.sh`](../scripts/cron-output.sh) helper.
+Every automation cron runs from a repo-checked-in host timer so the SCHEDULE is code. Because a `docker exec` sends stdout to journald, the sweep self-writes the marker via the shared [`cron-output.sh`](../scripts/cron-output.sh) helper.
 
 ## Deploy (on rave-02, one time)
 
@@ -27,5 +27,3 @@ sudo systemctl start fluncle-studio-clip.service            # one tick now
 journalctl -u fluncle-studio-clip.service -n 40 --no-pager  # expect a { "ok": true, … } summary line
 systemctl list-timers fluncle-studio-clip.timer
 ```
-
-Then RETIRE the gateway copy (`hermes cron list` → `hermes cron delete <id>` for `fluncle-studio-clip`) so it is not double-scheduled — green the timer first, never both live at once.

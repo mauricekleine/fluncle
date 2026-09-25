@@ -4,11 +4,9 @@ The rave-02 (Hermes box) host half of the `/status` health loop. `fluncle-health
 
 The probe WORK is unchanged and BAKED into the image — the `.sh`/`.ts` pair at `/opt/hermes-scripts/` (source: [`../scripts/fluncle-healthcheck.sh`](../scripts/fluncle-healthcheck.sh) → [`../scripts/fluncle-healthcheck.ts`](../scripts/fluncle-healthcheck.ts)); it rides the image and auto-updates from `main` via the hourly pin-watch rebuild (Unit A) — no `docker cp`, no `/opt/data` copy. The host timer is only the trigger; there is no host-side wrapper script.
 
-## Why it's a host timer, not a Hermes cron
+## Why it has its own host timer
 
-A prober must not depend on the thing it monitors. As a Hermes `--no-agent` gateway cron, `fluncle-healthcheck` shared the one cron runner with the busy automation sweeps (enrich, context-note, note, observation, render, …). When a long sweep ran or several jobs piled up on an hour boundary, the gateway delayed the prober's 10m tick well past the rave-01 watchdog's 30m staleness threshold — so the board flapped "rave-02 prober dark" even though the box was perfectly healthy. The prober was being starved by the exact scheduler whose health it reports.
-
-Moving it to a **host** systemd timer decouples it: the host scheduler is never busy with Fluncle's app work, so the tick always fires on time. This is the same reasoning that makes the [`fluncle-pin-watch`](../pin-watch/README.md) self-deploy a host timer (a container can't cleanly rebuild itself) and the rave-01 [`fluncle-rave-watchdog`](../../../../apps/ssh/watchdog) a host-level watchdog (a watcher must outlive what it watches). The Hermes-container crons do _app_ work that can queue; this does _monitoring_ work that must not.
+A prober must not depend on the thing it monitors, or share a schedule with the busy automation sweeps (enrich, context-note, note, observation, render, …). On its own parallel host timer, a long sweep or an hour-boundary pile-up can never delay the prober's 10m tick past the rave-01 watchdog's 30m staleness threshold, so the board never flaps "rave-02 prober dark" while the box is healthy.
 
 ## What a run does
 
@@ -19,7 +17,7 @@ Each tick is one `docker exec -u hermes -e HOME=/opt/data/home hermes bash /opt/
 3. It pings the optional external dead-man's-switch beacon (`HEALTHCHECK_BEACON_URL`) so an outside service alerts if THIS box ever stops ticking.
 4. It POSTs the snapshot to the agent-tier `record_health` op that `/status` reads, then prints one JSON summary line. The write carries the stable `hermes-healthcheck` producer ID, a producer-scoped key derived from the canonical UTC timestamp, and the canonical request digest. After an ambiguous POST failure, the caller sends digest-bound read-only reconciliation before any replay: committed is success and only confirmed absence under flag-on permits another POST; flag-off, conflict, rejected, in-progress, not-found, or lookup failure stops without replay.
 
-A clean tick runs ~5s, well inside the unit's `TimeoutStartSec=310`. The unit deliberately does not enter primary-database admission: probes, alerts, and the external beacon are the control plane and must run while that database is unavailable. The small receipt-backed snapshot is recovery telemetry, runs only after the beacon, and remains best-effort. The prober's own `cron.healthcheck` `/status` row is now **self-evident** (reaching the probe means the timer fired → `ok`), not a gateway-output-dir read — a host-timer prober has no Hermes cron output dir of its own, and reading its own would be circular.
+A clean tick runs ~5s, well inside the unit's `TimeoutStartSec=310`. The unit deliberately does not enter primary-database admission: probes, alerts, and the external beacon are the control plane and must run while that database is unavailable. The small receipt-backed snapshot is recovery telemetry, runs only after the beacon, and remains best-effort. The prober's own `cron.healthcheck` `/status` row is **self-evident** (reaching the probe means the timer fired → `ok`), not a marker read — the prober writes no marker of its own, and reading its own would be circular.
 
 ## Alerting: the flip and the streak
 
@@ -55,7 +53,7 @@ Three properties worth knowing before touching it:
 
 ## Deploy (on rave-02, one time)
 
-The probe script is BAKED into the image at `/opt/hermes-scripts/` (it rides the image and auto-updates from `main` via pin-watch — no `docker cp`), so **no script redeploy is needed**. This is only the host-timer install plus retiring the old gateway cron.
+The probe script is BAKED into the image at `/opt/hermes-scripts/` (it rides the image and auto-updates from `main` via pin-watch — no `docker cp`), so **no script redeploy is needed**. This is only the host-timer install.
 
 ```bash
 # 1. Install the host units.
@@ -63,9 +61,6 @@ sudo install -m 0644 docs/agents/hermes/healthcheck-timer/fluncle-healthcheck.se
 sudo install -m 0644 docs/agents/hermes/healthcheck-timer/fluncle-healthcheck.timer   /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now fluncle-healthcheck.timer
-
-# 2. Retire the old Hermes gateway cron (the host timer now owns the schedule).
-docker exec hermes hermes cron remove fluncle-healthcheck
 
 # Verify.
 sudo systemctl start fluncle-healthcheck.service        # one tick now

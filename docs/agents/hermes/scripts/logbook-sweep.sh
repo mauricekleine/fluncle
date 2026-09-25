@@ -7,9 +7,9 @@
 # timer docker-execs it once a day — no docker cp. See ../logbook-timer/README.md. Box
 # activation is OPERATOR-GATED (a new cron; nothing to retire).
 #
-# Why a .sh that execs a .ts: the Hermes `--no-agent --script` runner dispatches by
-# extension — bash for `.sh`, so this thin wrapper is the bash entry; all the JSON work
-# lives in the bun orchestrator beside it. Its stdout is the cron's run output.
+# Why a .sh that execs a .ts: the host timer runs the sweep as `bash <sweep>.sh`, so
+# this thin wrapper is the bash entry; all the JSON work lives in the bun orchestrator
+# beside it. Its stdout is the cron's run output.
 #
 # THE HYBRID MODEL (same shape as note-sweep): NOT a pure trigger — one `claude -p`
 # authoring call per day sits in the middle. The gap read (the self-healing window +
@@ -21,8 +21,8 @@
 #
 # PRODUCTION PRE-REQS (see ../logbook-timer/README.md):
 #   - `claude` (Claude Code CLI) — BAKED into the image; authed via subscription
-#     CLAUDE_CODE_OAUTH_TOKEN. The `--no-agent` runner does NOT pass provider secrets,
-#     so the token is read from a 0600 operator-placed file at
+#     CLAUDE_CODE_OAUTH_TOKEN. The container env carries no provider secrets, so the
+#     token is read from a 0600 operator-placed file at
 #     ${HOME}/.fluncle-secrets.env (mounted ~/.hermes), sourced below.
 #   - the `copywriting-fluncle` skill — BAKED into the image at /opt/claude/skills/
 #     (discovered via CLAUDE_CONFIG_DIR=/opt/claude, readable by the cron user).
@@ -36,7 +36,7 @@
 # ~/.hermes/cron/output/fluncle-logbook/ (read by the /status prober).
 set -euo pipefail
 
-# The Hermes runner execs this with a minimal PATH; prepend the known install dirs so
+# A caller may exec this with a minimal PATH; prepend the known install dirs so
 # this wrapper's `bun` AND the orchestrator's `fluncle`/`bun`/`claude` spawns resolve.
 export PATH="/usr/local/bin:/root/.bun/bin:${PATH:-/usr/bin:/bin}"
 
@@ -45,9 +45,8 @@ export PATH="/usr/local/bin:/root/.bun/bin:${PATH:-/usr/bin:/bin}"
 export BUN_BIN="${BUN_BIN:-/usr/local/bin/bun}"
 export FLUNCLE_BIN="${FLUNCLE_BIN:-/usr/local/bin/fluncle}"
 
-# The runner WITHHOLDS provider credentials (CLAUDE_CODE_OAUTH_TOKEN, etc.) from
-# --no-agent scripts (the _HERMES_PROVIDER_ENV_BLOCKLIST hard blocklist), so `claude -p`'s
-# token can ONLY reach this script via a file the operator places — sourced here: a 0600
+# The sweep's credentials (CLAUDE_CODE_OAUTH_TOKEN for `claude -p`, and the rest) live in a
+# file the operator places — sourced here: a 0600
 # ${HOME}/.fluncle-secrets.env holding CLAUDE_CODE_OAUTH_TOKEN (required) + optionally
 # DISCORD_ALERT_WEBHOOK / LOGBOOK_CLAUDE_MODEL / LOGBOOK_CLAUDE_EFFORT. Written from the
 # configured 1Password item (see the ops runbook note).
@@ -62,7 +61,7 @@ fi
 # Resolve the orchestrator next to this wrapper so it runs regardless of CWD.
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
-# Host timers bypass the gateway runner's stdout capture, so self-report the /status
+# Host timers write no per-run output file, so self-report the /status
 # freshness marker the fluncle-healthcheck prober reads (see cron-output.sh) — WRAP the
 # payload (never `exec`) so the marker is written even on a nonzero run.
 # shellcheck source=./cron-output.sh

@@ -26,7 +26,7 @@
     "fluncle-box-restore": {
       "source": "packages/skills/fluncle-box-restore",
       "sourceType": "local",
-      "computedHash": "340f0ee6f9ed8a5f0fcb74bfd5f2bb35836393fe99c7857986637ce7fd0d8338"
+      "computedHash": "e3e29985ffbd815df5efe07aad1406882ec067736e5cd130f27ba206de3f9507"
     },
     "fluncle-catalogue-prune": {
       "source": "packages/skills/fluncle-catalogue-prune",
@@ -46,7 +46,7 @@
     "fluncle-hermes-operator": {
       "source": "packages/skills/fluncle-hermes-operator",
       "sourceType": "local",
-      "computedHash": "ddbd5af3797dc48979e0fc8345dc61603f7de07de238c0986aca8c7d41b926cd"
+      "computedHash": "1dc58a6603db16c23cd1a41e8cc3ec0b9d6fa42c3e4270a361de78052671c5b2"
     },
     "fluncle-label-triage": {
       "source": "packages/skills/fluncle-label-triage",
@@ -61,7 +61,7 @@
     "fluncle-maintenance": {
       "source": "packages/skills/fluncle-maintenance",
       "sourceType": "local",
-      "computedHash": "944a0dc39d493f528de8e3e2147125f7a6140955bb40e2027490624dfb237e74"
+      "computedHash": "5a954d764aa0b5fb48cf0077c0fb70f7ae174e3661bcc042418cd43dc900f070"
     },
     "fluncle-mixtapes": {
       "source": "packages/skills/fluncle-mixtapes",
@@ -101,7 +101,7 @@
     "fluncle-surfaces": {
       "source": "packages/skills/fluncle-surfaces",
       "sourceType": "local",
-      "computedHash": "6bb98f3fd96152cdb7a4de22cbec476e28623f4e6eab9883b4ad1928dbce7548"
+      "computedHash": "5df89752b209aa58615dc21d2fb46bef3291b376d9bf8159f6811969a8c220fd"
     },
     "fluncle-track-enrichment": {
       "source": "packages/skills/fluncle-track-enrichment",
@@ -111,7 +111,7 @@
     "fluncle-video": {
       "source": "packages/skills/fluncle-video",
       "sourceType": "local",
-      "computedHash": "803b6dc8d09f5b7e3b1471ff94d655278fba1e7a8271f64a04530fb0d2332a90"
+      "computedHash": "59dffdeb1c58307820f90a0f57ffa5b69f48999f04e5899f0a8c8d360a022fdb"
     },
     "hetzner-devbox": {
       "source": "packages/skills/hetzner-devbox",

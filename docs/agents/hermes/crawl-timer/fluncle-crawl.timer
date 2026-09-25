@@ -1,5 +1,5 @@
 [Unit]
-Description=fluncle-crawl timer — advance the catalogue crawl by one bounded pass every 10m on the rave-02 host (not the Hermes gateway)
+Description=fluncle-crawl timer — advance the catalogue crawl by one bounded pass every 10m on the rave-02 host
 
 [Timer]
 # Per-firing jitter dissolves timer-phase alignment: mass timer restarts, including a pin-watch

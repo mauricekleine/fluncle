@@ -1176,3 +1176,18 @@ describe("the scripts themselves", () => {
     });
   }
 });
+
+describe("the single-flight lock", () => {
+  test("its stale window outlasts the unit's start timeout, so a live tick keeps its lock", () => {
+    const script = readFileSync(CONDUCTOR, "utf8");
+    const unit = readFileSync(
+      join(import.meta.dir, "..", "render-timer", "fluncle-render.service"),
+      "utf8",
+    );
+    const stale = Number(/^LOCK_STALE_SECONDS=(\d+)$/m.exec(script)?.[1]);
+    const timeout = Number(/^TimeoutStartSec=(\d+)$/m.exec(unit)?.[1]);
+
+    expect(timeout).toBeGreaterThan(0);
+    expect(stale).toBeGreaterThan(timeout);
+  });
+});

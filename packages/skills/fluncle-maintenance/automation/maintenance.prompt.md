@@ -8,7 +8,7 @@ This is the entire task. Do not chase the whole dependency tree. Do not "catch u
 
 ## What you own (and what you don't)
 
-You own the **runtime pins** in `@fluncle-maintenance`'s inventory (`references/version-inventory.md`): the Nous Research Hermes base image, bun (three places), the `fluncle` CLI, the Claude Code CLI, the boat.dev CLI (pinned, manual-watch), the GitHub Actions SHA-pins, and yt-dlp. You do **not** own the workspace dependency catalog (the `bunfig.toml` `minimumReleaseAge` flow) or the agent's model/voice/permissions — if you notice drift there, mention it as "out of scope" and leave it.
+You own the **runtime pins** in `@fluncle-maintenance`'s inventory (`references/version-inventory.md`): the `oven/bun` base image = bun (the `FROM` tag + digest and `package.json` `packageManager`), node + uv (digest-pinned, manual-watch), the `fluncle` CLI, the Claude Code CLI, the boat.dev CLI (pinned, manual-watch), the GitHub Actions SHA-pins, and yt-dlp. You do **not** own the workspace dependency catalog (the `bunfig.toml` `minimumReleaseAge` flow) or the agent's model/voice/permissions — if you notice drift there, mention it as "out of scope" and leave it.
 
 Load the `@fluncle-maintenance` skill and follow it. `references/version-inventory.md` is the drift surface; `references/safety-doctrine.md` is the SHIP-vs-BRAKE decision; `references/bump-procedure.md` is the edit-PR-merge procedure. After a baked-pin merge you are DONE — the box self-deploys via the on-box `fluncle-pin-watch` timer (rebuild → pre-smoke → swap → auto-rollback; see `docs/agents/hermes/pin-watch/`). You never SSH to the box, never run `docker`, never touch `op`.
 
@@ -25,24 +25,24 @@ Run from the root of a Fluncle repo checkout on a clean, up-to-date `main`.
 
 ### 1. Read every pin
 
-Walk `references/version-inventory.md` and record the **current** pin for each inventory item (use the `grep`/marker one-liners — line numbers drift, the comment markers don't). For bun, read all three places and note if they already disagree.
+Walk `references/version-inventory.md` and record the **current** pin for each inventory item (use the `grep`/marker one-liners — line numbers drift, the comment markers don't). For bun, read both places (the `FROM oven/bun:` tag and `package.json` `packageManager`) and note if they already disagree.
 
 ### 2. Check latest for each
 
-Run each inventory "check latest" one-liner. Compute the **drift class**: none / patch / minor / major (semver: the leading digit = major). Base image = report-only; boat.dev = re-verify-only. If a "check latest" fails or returns something you can't parse, treat that item as **BRAKE** ("could not check") — never guess a version.
+Run each inventory "check latest" one-liner. Compute the **drift class**: none / patch / minor / major (semver: the leading digit = major). node/uv/gh = report-only; boat.dev = re-verify-only. If a "check latest" fails or returns something you can't parse, treat that item as **BRAKE** ("could not check") — never guess a version.
 
 ### 3. Judge per item
 
 Apply `references/safety-doctrine.md`. Classify each drifted item as **SHIP** or **BRAKE**:
 
-- **SHIP** (clearly safe, take end-to-end): a patch/minor `fluncle` or Claude Code CLI bump; a patch/minor bun bump (all three places); SHA-pinning a GitHub Action **at its current major**.
-- **BRAKE** (report, never ship): any MAJOR bump anywhere; the Hermes base image (any change — pre-1.0); boat.dev (pinned, manual-watch — re-verify note only; a CLI bump can move a verb or a blocking boundary under the render conductor); anything touching auth/runtime/the model; a release note flagging an auth/credential change even on a patch; an already-inconsistent pin set.
+- **SHIP** (clearly safe, take end-to-end): a patch/minor `fluncle` or Claude Code CLI bump; a patch/minor bun bump (the `FROM` tag + digest and `packageManager` together); SHA-pinning a GitHub Action **at its current major**.
+- **BRAKE** (report, never ship): any MAJOR bump anywhere (a bun major is a new base image); node/uv/gh (manual-watch — report only); boat.dev (pinned, manual-watch — re-verify note only; a CLI bump can move a verb or a blocking boundary under the render conductor); anything touching auth/runtime/the model; a release note flagging an auth/credential change even on a patch; an already-inconsistent pin set.
 - **When in doubt → BRAKE.**
 
 ### 4a. If there are SHIP items — carry them all the way
 
 1. **Branch** off `main` (e.g. `chore/maintenance-pins-<yyyy-mm-dd>`). Never work on `main` directly.
-2. **Edit each SHIP pin in place** per its inventory row. For bun, edit the Dockerfile installer line **and** `package.json` `packageManager` **and** every workflow `bun-version:` in the same commit. For an Actions SHA-pin, resolve the SHA the current tag points at (`gh api …/git/refs/tags/<tag> --jq '.object.sha'`, dereferencing annotated tags) and replace `@vN` with `@<sha> # vN`.
+2. **Edit each SHIP pin in place** per its inventory row. For bun, move the Dockerfile `FROM oven/bun:<ver>-debian@<digest>` (tag and its Docker Hub digest together) **and** `package.json` `packageManager` in the same commit; workflows follow via `bun-version-file`. For an Actions SHA-pin, resolve the SHA the current tag points at (`gh api …/git/refs/tags/<tag> --jq '.object.sha'`, dereferencing annotated tags) and replace `@vN` with `@<sha> # vN`.
 3. **Commit** with a conventional message per change class (`chore(deps): …`, `chore(ci): SHA-pin GitHub Actions (deepsec finding)`).
 4. **Run the repo-side gate locally** first: `bun run format:check && bun run lint && bun run go:check && bun run typecheck && bun run test` (or `bun run deploy:gate`). If it fails, drop the failing item back to a BRAKE/report — do not open the PR for it.
 5. **Open the PR** with `gh pr create`. Body: the drift table (item · old pin · new pin · drift class · ship/brake), the safety call per item, and — for any Dockerfile edit — a note that the on-box `fluncle-pin-watch` timer will rebuild + smoke-test + self-roll-back after merge.
@@ -52,7 +52,7 @@ Apply `references/safety-doctrine.md`. Classify each drifted item as **SHIP** or
 
 ### 4b. Report the BRAKE items
 
-In the run output (and the PR body if one exists, under "Pulled the brake"): each braked item with the current pin, the latest, the drift class, the **reason** (major / pre-1.0 base / auth-runtime-model / unparseable / inconsistent), and the `references/bump-procedure.md` pointer so the operator can ship it themselves. Add the one-line boat.dev "pinned, manual watch — re-verify the conductor with `render-conductor.sh --preflight` after the next base rebuild" note.
+In the run output (and the PR body if one exists, under "Pulled the brake"): each braked item with the current pin, the latest, the drift class, the **reason** (major / manual-watch / auth-runtime-model / unparseable / inconsistent), and the `references/bump-procedure.md` pointer so the operator can ship it themselves. Add the one-line boat.dev "pinned, manual watch — re-verify the conductor with `render-conductor.sh --preflight` after the next base rebuild" note.
 
 ### 5. Stop
 
@@ -62,7 +62,7 @@ Output a tight report: the pins read, the drift found, what you **shipped** (PR 
 
 - **One bounded sweep per run.** No catching up the whole tree; no second pass.
 - **Opus is the gate — when in doubt, STOP.** Take only what the safety doctrine calls _clearly_ safe all the way; everything else is a report.
-- **Never ship: a major bump, the Hermes base image, boat.dev, or anything touching auth/runtime/the model.** Report them; never merge them.
+- **Never ship: a major bump, node/uv/gh, boat.dev, or anything touching auth/runtime/the model.** Report them; never merge them.
 - **Never merge a red PR.** Wait for green; a failing check means report-and-leave, not merge.
 - **You never touch the box.** The deploy, smoke, rollback, and single-flight for a baked-pin merge are all the on-box `fluncle-pin-watch` timer's job (`docs/agents/hermes/pin-watch/`). Your job ends at the merge — do not SSH, rebuild, or `op`.
 - **Branch + PR, then merge-on-green** — never commit to `main` directly. The PR is the audit trail + the CI gate; the merge is gated on green.

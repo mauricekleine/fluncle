@@ -3,9 +3,10 @@ name: Hermes Pin Drift
 # The server-side drift sweep for the box's baked supply chain — the missing
 # bump-PR half of fluncle-maintenance (the rave-02 fluncle-pin-watch timer is the
 # DEPLOY half; this is what feeds it). It checks the `fluncle` CLI, the Claude
-# Code CLI, and bun against their registries and, for a clearly-safe same-major
-# bump, opens a PR; a major bump or a newer Hermes base image is reported as an
-# issue, never auto-bumped. On merge of a Dockerfile pin, rave-02 self-deploys it.
+# Code CLI, bun (the `oven/bun` base image tag + digest), and yt-dlp against their
+# registries and, for a clearly-safe bump, opens a PR; a major bump (a bun major is
+# a base-image change) is reported as an issue, never auto-bumped. On merge of a
+# Dockerfile pin, rave-02 self-deploys it.
 #
 # Auth: PIN_DRIFT_TOKEN (a fine-scoped PAT: Contents + Pull requests read/write)
 # is effectively REQUIRED — this repo blocks the default GITHUB_TOKEN from creating
@@ -90,12 +91,20 @@ jobs:
         if: steps.drift.outputs.braked == 'true'
         env:
           GH_TOKEN: ${{ secrets.PIN_DRIFT_TOKEN || github.token }}
+          BRAKE_SIGNATURE: ${{ steps.drift.outputs.brake_signature }}
         run: |
           set -euo pipefail
           title="Hermes supply-chain: drift needs an operator decision"
           existing="$(gh issue list --state open --search "$title in:title" \
             --json number --jq '.[0].number')"
           if [ -n "$existing" ]; then
+            # The sweep runs hourly; a brake that has not changed is already on the issue.
+            latest="$(gh issue view "$existing" --json body,comments \
+              --jq 'if (.comments | length) > 0 then .comments[-1].body else .body end')"
+            if grep -qF "brake-signature: $BRAKE_SIGNATURE" <<<"$latest"; then
+              echo "brake items unchanged since the last report on #$existing — not re-commenting."
+              exit 0
+            fi
             gh issue comment "$existing" --body-file "${RUNNER_TEMP}/pin-drift-issue-body.md"
           else
             gh issue create --title "$title" --body-file "${RUNNER_TEMP}/pin-drift-issue-body.md"

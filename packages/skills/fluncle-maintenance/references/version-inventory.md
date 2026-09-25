@@ -4,63 +4,50 @@ Every pinned/baked version in Fluncle's runtime supply chain, with where it live
 
 All commands assume the repo root as the working directory. The "check latest" one-liners are read-only (npm/curl) — safe to run on any tick.
 
-**Automation covers most of this.** `.github/workflows/hermes-pin-drift.yml` (the script `.github/scripts/hermes-pin-drift.sh`) sweeps items **2–4** (bun, the `fluncle` CLI, the Claude Code CLI) and item **7** (yt-dlp) on every `fluncle` release + hourly, and opens a PR for a same-major bump; **Renovate** (`renovate.json`) owns item **6** (the Actions digests); item **1** (base image) is report-only and item **5** (boat.dev) is pinned but manual-watch. This inventory stays the source of truth the workflow encodes and the operator's runbook for the brakes it reports.
+**Automation covers most of this.** `.github/workflows/hermes-pin-drift.yml` (the script `.github/scripts/hermes-pin-drift.sh`) sweeps item **1** (the `oven/bun` base = bun), items **3–4** (the `fluncle` CLI, the Claude Code CLI), and item **7** (yt-dlp) on every `fluncle` release + hourly, and opens a PR for a safe bump (a major is reported); **Renovate** (`renovate.json`) owns item **6** (the Actions digests); items **2**, **5**, **8**, and **9** (node, boat.dev, uv, gh) are pinned but manual-watch. This inventory stays the source of truth the workflow encodes and the operator's runbook for the brakes it reports.
 
 **A pin absent from this inventory is a pin nobody watches.** Every baked binary needs a row here. Item-level failures (e.g. `ytDlpFailures`) do not flip a run's verdict, so an unlisted pin that falls behind fails silently while each tick reports healthy.
 
 ---
 
-## 1. Nous Research Hermes base image — PRE-1.0, BRAKE BY DEFAULT
+## 1. bun — THE BASE IMAGE, TWO PLACES (auto-bumped same-major)
 
-- **File:** `docs/agents/hermes/Dockerfile`, the `FROM` line (~line 18).
-- **Marker:** `FROM nousresearch/hermes-agent:`
-- **Current pin:** read it —
-
-  ```bash
-  grep -n '^FROM nousresearch/hermes-agent:' docs/agents/hermes/Dockerfile
-  ```
-
-- **Check latest** (Docker Hub tags API, newest first):
-
-  ```bash
-  curl -fsSL "https://hub.docker.com/v2/repositories/nousresearch/hermes-agent/tags?page_size=20&ordering=last_updated" \
-    | grep -oE '"name":"[^"]+"' | sed 's/"name":"//;s/"//' | head -20
-  ```
-
-  These are calendar-versioned (`vYYYY.M.D`). Compare the newest tag to the pin.
-
-- **How to bump:** edit the `FROM` tag → open a PR → merge when CI green → the on-box `fluncle-pin-watch` timer self-deploys the rebuild (see `bump-procedure.md` and `docs/agents/hermes/pin-watch/`). The version line also busts the Docker layer cache.
-- **Safety:** **PULL THE BRAKE — always report, never ship.** Pre-1.0; a base bump can change the runtime or drop the gateway below the model-context floor at startup. The base's failure mode is the **whole gateway**, not one probe — too coarse and too consequential to ship unattended even with the pin-watch pre-smoke safety net. Report the available tag and let the operator decide. Periodically the operator _should_ take a base bump for upstream security patches — surface it, do not apply it.
-
----
-
-## 2. bun — ONE VERSION, THREE PLACES (keep in sync)
-
-bun is baked into the image, declared as the repo's `packageManager`, and requested by the CI workflows. A bump must move **all** of them together or the box runs a different interpreter than CI/the repo.
+The image is built `FROM oven/bun:<ver>-debian@sha256:<digest>` (Debian trixie), so the base image tag IS the box's bun pin. The repo declares the same version as its `packageManager`, and every workflow reads bun from there (`oven-sh/setup-bun` with `bun-version-file: package.json`), so CI follows automatically.
 
 - **Files + markers:**
-  - `docs/agents/hermes/Dockerfile` (~line 41): the installer pin — marker `curl -fsSL https://bun.sh/install | bash -s "bun-v` and the comment `# Bun — pinned to the repo's toolchain (packageManager bun@…)`.
+  - `docs/agents/hermes/Dockerfile`: the `FROM oven/bun:<ver>-debian@sha256:…` line — the tag and the digest move together.
   - `package.json` (root): `"packageManager": "bun@<version>"`.
-  - **Every workflow carrying `bun-version:`** — each `oven-sh/setup-bun` step pins one. Do not work from a remembered list; the `grep -rn 'bun-version:' .github/workflows/` below is the authority, since a new workflow adds a place to bump (today it matches five: `quality-checks`, `cli-release`, `skills-sync`, `e2e`, `post-deploy-probe`).
-- **Current pins:** read them all at once —
+- **Current pins:**
 
   ```bash
-  grep -n 'bun-v' docs/agents/hermes/Dockerfile
+  grep -n '^FROM oven/bun:' docs/agents/hermes/Dockerfile
   grep -n '"packageManager"' package.json
-  grep -rn 'bun-version:' .github/workflows/
+  grep -rn 'bun-version' .github/workflows/   # every hit should be bun-version-file: package.json
   ```
 
-  They should all match. If they already disagree, that drift itself is worth reporting.
+  The two versions should match. If they already disagree, or a workflow carries a literal `bun-version:`, that drift itself is worth reporting.
 
-- **Check latest** (bun's GitHub releases — tags are `bun-vX.Y.Z`):
+- **Check latest** (bun's GitHub releases — tags are `bun-vX.Y.Z` — and whether Docker Hub has the matching image yet):
 
   ```bash
   curl -fsSL https://api.github.com/repos/oven-sh/bun/releases/latest \
     | grep -m1 '"tag_name"' | sed 's/.*"bun-v//;s/".*//'
+  curl -fsSL "https://hub.docker.com/v2/repositories/oven/bun/tags/<ver>-debian" | jq -r .digest
   ```
 
-- **How to bump:** change the version in **all** of: the Dockerfile installer line (`bun-v<new>`), `package.json` `packageManager` (`bun@<new>`), and every workflow `bun-version:`. The Dockerfile change ships via the box's `fluncle-pin-watch` self-deploy after the PR merges; the `package.json` + workflow changes ship via the PR's CI deploy-gate and merge to `main`.
-- **Safety:** a **patch/minor** that the CI deploy-gate accepts is safe to ship (it is the same interpreter CI runs). A **major** bun bump = **brake** (toolchain-wide behaviour change). The repo-side `package.json` + workflow change ships on merge; the baked Dockerfile line ships via pin-watch (rebuild → pre-smoke → auto-rollback on fail).
+- **How to bump:** don't, by hand — `hermes-pin-drift.sh` rewrites the `FROM` tag + its re-resolved digest and `packageManager` in one PR. A bun release whose `-debian` image is not on Docker Hub yet waits for the next run. The `package.json` change ships on merge; the base change ships via the box's `fluncle-pin-watch` self-deploy (the Dockerfile is part of its baked-content fingerprint).
+- **Safety:** a **patch/minor** is safe to ship (it is the same interpreter CI runs, and pin-watch pre-smokes the rebuilt image before the swap, rolling back on failure). A **major** = **brake**: it is both a toolchain-wide behaviour change and a new base image under every sweep.
+
+---
+
+## 2. node + npm (copied from the node image) — PINNED, MANUAL-WATCH TIER
+
+- **File:** `docs/agents/hermes/Dockerfile`, the two `COPY --from=node:<ver>-trixie-slim@sha256:…` lines (node binary + `node_modules`, with the `npm`/`npx` symlinks after them).
+- **Why it is there:** Claude Code installs through npm and runs on node, and the nightly audit drives the repo's node tooling. The trixie variant links against the same glibc as the base; the digest pins it like the base.
+- **Current pin:** `grep -n 'COPY --from=node:' docs/agents/hermes/Dockerfile`.
+- **Check latest:** the Node.js release schedule / `https://nodejs.org/dist/index.json` for the line in use, and the Docker Hub `node` tags for the matching `-trixie-slim` digest.
+- **Action on a sweep:** **never bump automatically** — report drift. A bump edits both `COPY` lines (tag + digest together), and pin-watch's pre-smoke (`claude --version`) proves the copied runtime still starts before the swap.
+- **Safety:** a same-major bump with its digest is a reviewed manual PR; a node major = **brake** (Claude Code and the audit tooling run on it).
 
 ---
 
@@ -101,7 +88,7 @@ bun is baked into the image, declared as the repo's `packageManager`, and reques
   npm view @anthropic-ai/claude-code version
   ```
 
-- **How to bump:** edit `@anthropic-ai/claude-code@<version>` → open a PR → merge when CI green. The on-box `fluncle-pin-watch` timer then rebuilds, pre-smokes (including an agent-tier `{ok:true}` check), and auto-rolls-back on any failure. This is the `claude -p` binary the observation cron's one agentic step shells out to (subscription auth at run time; zero OpenRouter tokens). Never float `latest` — the Hermes toolchain is pinned whole.
+- **How to bump:** edit `@anthropic-ai/claude-code@<version>` → open a PR → merge when CI green. The on-box `fluncle-pin-watch` timer then rebuilds, pre-smokes (including an agent-tier `{ok:true}` check), and auto-rolls-back on any failure. This is the `claude -p` binary the observation cron's one agentic step shells out to (subscription auth at run time; zero OpenRouter tokens). Never float `latest` — the box toolchain is pinned whole.
 - **Safety:** a **patch/minor** is safe to ship (it is the agent CLI, not the model or the auth; a patch rarely changes the `claude -p` contract). The deploy-gate can't validate a baked pin; the pin-watch pre-smoke validates it on the box before the live container is touched. A **major** = brake (the `-p` / skills-discovery contract could change). Anything touching the **auth token shape** = brake regardless of version.
 
 ---
@@ -163,14 +150,37 @@ Every action in every workflow is SHA-pinned with a trailing version comment, an
 
 ---
 
+## 8. uv (the MuQ Python installer) — PINNED, MANUAL-WATCH TIER
+
+- **File:** `docs/agents/hermes/Dockerfile`, `COPY --from=ghcr.io/astral-sh/uv:<ver>@sha256:… /uv /uvx /usr/local/bin/`.
+- **Why it is there:** it installs the standalone Python the MuQ venv needs (Debian trixie's apt Python is newer than `muq` supports) and builds that venv.
+- **Current pin:** `grep -n 'astral-sh/uv:' docs/agents/hermes/Dockerfile`.
+- **Check latest:** `curl -fsSL https://api.github.com/repos/astral-sh/uv/releases/latest | jq -r .tag_name`, then the matching `ghcr.io/astral-sh/uv:<ver>` digest.
+- **Action on a sweep:** report drift; bump tag + digest together by hand. pin-watch's embed/cluster import pre-smoke proves the venv still resolves after a rebuild.
+- **Safety:** build-time only (nothing runs `uv` at sweep time), so a same-major bump is low-risk but still a reviewed manual PR; a major = **brake**.
+
+---
+
+## 9. gh (the audit PR driver) — PINNED, MANUAL-WATCH TIER
+
+- **File:** `docs/agents/hermes/Dockerfile`, the `github.com/cli/cli/releases/download/v<ver>/gh_<ver>_linux_` install block.
+- **Current pin:** `grep -o 'cli/cli/releases/download/v[0-9.]*' docs/agents/hermes/Dockerfile`.
+- **Check latest:** `curl -fsSL https://api.github.com/repos/cli/cli/releases/latest | jq -r .tag_name`.
+- **Action on a sweep:** report drift; bump by hand (the version appears several times in the block — move every occurrence). pin-watch's pre-smoke runs `gh --version` after any rebuild.
+- **Safety:** low-churn and backward-compatible, with the nightly Security audit as the staleness backstop; a major = **brake**.
+
+---
+
 ## Quick reference table
 
-| #   | Item                | File (marker)                                                                     | Current pin (read)             | Check latest                                      | Ship end-to-end?                  |
-| --- | ------------------- | --------------------------------------------------------------------------------- | ------------------------------ | ------------------------------------------------- | --------------------------------- |
-| 1   | Hermes base image   | `Dockerfile` `FROM nousresearch/hermes-agent:`                                    | `grep '^FROM nousresearch'`    | Docker Hub tags API                               | **Never** (pre-1.0)               |
-| 2   | bun (×3)            | `Dockerfile` `bun-v` + `package.json` `packageManager` + workflows `bun-version:` | the three greps above          | bun GH `releases/latest`                          | patch/minor yes, major brake      |
-| 3   | `fluncle` CLI       | `Dockerfile` `releases/download/v<ver>/fluncle-linux-` (standalone binary)        | `grep 'download/v.*/fluncle-'` | `npm view fluncle version`                        | patch/minor yes, major brake      |
-| 4   | Claude Code CLI     | `Dockerfile` `@anthropic-ai/claude-code@`                                         | `grep 'claude-code@'`          | `npm view @anthropic-ai/claude-code version`      | patch/minor yes, major/auth brake |
-| 5   | boat.dev CLI        | `Dockerfile` `releases/download/boat-cli-v<ver>/boat-linux-`                      | `grep 'boat-cli-v'`            | vendor release list (`boat-cli-v*` tags)          | **Never** (manual watch)          |
-| 6   | GitHub Actions pins | `.github/workflows/*.yml` `uses: …@<sha> # vN`                                    | `grep 'uses:.*@'`              | Renovate PRs (`gh pr list --author app/renovate`) | **Renovate (auto-pins + tracks)** |
-| 7   | yt-dlp              | `Dockerfile` `yt-dlp/releases/download/<ver>/yt-dlp_linux`                        | `grep 'yt-dlp/releases/down'`  | yt-dlp GH `releases/latest`                       | **Always** (staleness = outage)   |
+| #   | Item                | File (marker)                                                                       | Current pin (read)             | Check latest                                      | Ship end-to-end?                  |
+| --- | ------------------- | ----------------------------------------------------------------------------------- | ------------------------------ | ------------------------------------------------- | --------------------------------- |
+| 1   | bun base image      | `Dockerfile` `FROM oven/bun:<ver>-debian@sha256:` + `package.json` `packageManager` | `grep '^FROM oven/bun'`        | bun GH `releases/latest` + Docker Hub tag         | patch/minor yes, major brake      |
+| 2   | node + npm          | `Dockerfile` `COPY --from=node:<ver>-trixie-slim@sha256:`                           | `grep 'COPY --from=node:'`     | nodejs.org dist index + Docker Hub tag            | **Never** (manual watch)          |
+| 3   | `fluncle` CLI       | `Dockerfile` `releases/download/v<ver>/fluncle-linux-` (standalone binary)          | `grep 'download/v.*/fluncle-'` | `npm view fluncle version`                        | patch/minor yes, major brake      |
+| 4   | Claude Code CLI     | `Dockerfile` `@anthropic-ai/claude-code@`                                           | `grep 'claude-code@'`          | `npm view @anthropic-ai/claude-code version`      | patch/minor yes, major/auth brake |
+| 5   | boat.dev CLI        | `Dockerfile` `releases/download/boat-cli-v<ver>/boat-linux-`                        | `grep 'boat-cli-v'`            | vendor release list (`boat-cli-v*` tags)          | **Never** (manual watch)          |
+| 6   | GitHub Actions pins | `.github/workflows/*.yml` `uses: …@<sha> # vN`                                      | `grep 'uses:.*@'`              | Renovate PRs (`gh pr list --author app/renovate`) | **Renovate (auto-pins + tracks)** |
+| 7   | yt-dlp              | `Dockerfile` `yt-dlp/releases/download/<ver>/yt-dlp_linux`                          | `grep 'yt-dlp/releases/down'`  | yt-dlp GH `releases/latest`                       | **Always** (staleness = outage)   |
+| 8   | uv                  | `Dockerfile` `COPY --from=ghcr.io/astral-sh/uv:<ver>@sha256:`                       | `grep 'astral-sh/uv:'`         | uv GH `releases/latest`                           | **Never** (manual watch)          |
+| 9   | gh                  | `Dockerfile` `cli/cli/releases/download/v<ver>/gh_`                                 | `grep 'cli/cli/releases'`      | gh GH `releases/latest`                           | **Never** (manual watch)          |

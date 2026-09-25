@@ -38,7 +38,7 @@ Technical audit: **15/20 (Good)** — accessibility 3, performance 2, responsive
 5. **Track rows drop the readout** (duration, BPM, key, year) on `/tracks`, `/search`, `/fresh` and the front-door tiles — DESIGN.md's Readout Rule.
 6. **Page 1 of `/tracks` looks dead:** identical placeholder covers, the title quieter than the credit links, future-dated rows first.
 7. **Five track-row implementations** that disagree on what is clickable, the date format, the trailing mark and the cover rule. Only `components/track-row.tsx` (on `/findings`) matches DESIGN.md.
-8. **Small, split hit targets.** The `/tracks` row link is a 19 px title; Lighthouse `target-size` fails; 254 of 270 interactive elements are under 44 px tall.
+8. **Small, split hit targets.** The `/tracks` row link is a 19 px title; Lighthouse `target-size` fails; the capture finds 218 of 218 visible mobile interactive targets under 44 px in at least one dimension.
 9. **Wayfinding dead ends.** Hubs link to each other only through the footer (four different footer pairs); search stops at ~13 results with no "see all"; `/albums` has no letter lane; `/fresh` has its own date format and no plate.
 10. **Mobile performance.** LCP 6.1–7.8 s; 56 KB of render-blocking CSS; ~160 KB of unused JS per page; Cover Art Archive and Spotify 640 px art served unresized into 36–110 px tiles (up to ~460 KB of savings on `/search`).
 
@@ -65,4 +65,4 @@ Site-wide: the palette's sr-only `H2` precedes every page's `H1`; there is no sk
 
 ## Re-running it
 
-The capture is a Playwright script over the seven routes (plus `/search?q=liquid`, `?q=noisia`, an empty query) at both sizes, a DOM probe counting play controls and hit-target sizes, and mobile Lighthouse on `/`, `/search?q=liquid`, `/tracks`, `/artists`, `/fresh`. Wave 0 of the plan commits it as a repo script so each wave's before/after is one command.
+Run `bun run ux:capture -- --base https://www.fluncle.com --out /tmp/fluncle-ux-capture` from the repo root, then read `/tmp/fluncle-ux-capture/summary.md`. The command captures the ten discovery URLs at desktop and mobile sizes, saves viewport and full-page screenshots with per-page metrics JSON, probes taps to sound and orphaned audio, and runs mobile Lighthouse on `/`, `/search?q=liquid`, `/tracks`, `/artists`, and `/fresh`. Use `--pages /,/tracks` to narrow the URL list or `--no-lighthouse` for a faster browser-only run. Failed pages and probes remain in the summary as failures, with reasons in `metrics.json` and the per-page JSON. Lighthouse runs through pinned `bunx lighthouse@13.5.0` and requires local Chrome; its JSON is saved beside the screenshots. The pure report tests run under the scripts suite and never contact the network.

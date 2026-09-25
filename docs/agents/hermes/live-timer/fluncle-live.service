@@ -1,5 +1,5 @@
 [Unit]
-Description=fluncle-live — rave-02 host trigger for the Twitch live-set poller (migrated off the Hermes gateway cron runner)
+Description=fluncle-live — rave-02 host trigger for the Twitch live-set poller
 Documentation=https://github.com/mauricekleine/fluncle/blob/main/docs/agents/hermes/live-timer/README.md
 Wants=network-online.target docker.service
 After=network-online.target docker.service

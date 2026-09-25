@@ -95,16 +95,12 @@ RELEASE_HEAVY_TIMERS=(
 HERMES_CPUS="${PINWATCH_CPUS:-3}"
 HERMES_MEMORY_GIB="${PINWATCH_MEMORY_GIB:-6}"
 
-# The inherited s6 bootstrap needs CHOWN/DAC_OVERRIDE/FOWNER for /opt/data, SETUID/SETGID to enter hermes, and KILL to supervise that uid.
+# The container keeps no capabilities: its root main process only idles, and every sweep enters
+# as the unprivileged `hermes` user, which holds none anyway. `docker exec -u` switches user in
+# the runtime, outside the container's capability set.
 CONTAINER_SECURITY_ARGS=(
   --security-opt no-new-privileges
   --cap-drop ALL
-  --cap-add CHOWN
-  --cap-add DAC_OVERRIDE
-  --cap-add FOWNER
-  --cap-add KILL
-  --cap-add SETGID
-  --cap-add SETUID
 )
 
 MODE="--if-stale"
@@ -179,7 +175,7 @@ validate_ceiling() {
   # Docker itself refuses below these; refusing here names the variable instead of
   # failing deep inside the swap, where a refusal costs a rollback.
   [ "$CEILING_NANOCPUS" -ge 1000000000 ] || die "PINWATCH_CPUS='$HERMES_CPUS' is below docker's 1 CPU floor"
-  [ "$CEILING_MEMORY_BYTES" -ge 1073741824 ] || die "PINWATCH_MEMORY_GIB='$HERMES_MEMORY_GIB' is below the 1 GiB floor the gateway needs"
+  [ "$CEILING_MEMORY_BYTES" -ge 1073741824 ] || die "PINWATCH_MEMORY_GIB='$HERMES_MEMORY_GIB' is below the 1 GiB floor the container needs"
 }
 
 # Keep whichever ceiling is HIGHER: the configured default, or what the live container is
@@ -374,7 +370,7 @@ emit_run_summary() {
 # shellcheck disable=SC2329  # invoked indirectly from the EXIT trap armed after the lock
 pinwatch_on_exit() {
   local rc=$?
-  cleanup_gateway_smoke
+  cleanup_runtime_smoke
   restore_sweep_timers
   [ -n "$ENVTMP" ] && rm -f "$ENVTMP"
   emit_run_summary "$rc" || true
@@ -477,12 +473,12 @@ fi
 # a sweep (~daily). So before the first `docker build` we STOP the active sweep timers,
 # drain any sweep already mid-run, and GUARANTEE a restart via the EXIT trap.
 STOPPED_TIMERS=()
-GATEWAY_SMOKE_CONTAINER=""
+RUNTIME_SMOKE_CONTAINER=""
 
-cleanup_gateway_smoke() {
-  [ -n "$GATEWAY_SMOKE_CONTAINER" ] || return 0
-  docker rm -f "$GATEWAY_SMOKE_CONTAINER" >/dev/null 2>&1 || true
-  GATEWAY_SMOKE_CONTAINER=""
+cleanup_runtime_smoke() {
+  [ -n "$RUNTIME_SMOKE_CONTAINER" ] || return 0
+  docker rm -f "$RUNTIME_SMOKE_CONTAINER" >/dev/null 2>&1 || true
+  RUNTIME_SMOKE_CONTAINER=""
 }
 
 # The rebake LOCK — the half of the quiesce that covers what stopping timers cannot: a
@@ -903,39 +899,22 @@ GOT_CLAUDE="$(docker run --rm "${CONTAINER_SECURITY_ARGS[@]}" --entrypoint claud
 # manual-watch pin (not auto-bumped), so this just guards that a rebuild never ships a broken gh.
 docker run --rm "${CONTAINER_SECURITY_ARGS[@]}" --entrypoint gh "$NEW_IMAGE" --version >/dev/null 2>&1 || presmoke_fail "gh --version failed (audit PR driver missing)"
 verify_agent_role_boundary
-# Gateway startup without the live env or data mount: state lands on a scratch tmpfs and no
-# platform token exists, so no Discord connection can open. No config is mounted on purpose —
-# the s6 bootstrap SEEDS a default config into an empty HERMES_HOME (and Hermes rewrites its
-# config in place at boot, so a read-only bind here would EROFS the seeding path). Readiness is
-# asserted on observable state rather than a log string (the CLI's no-platform message is not
-# emitted on the `gateway run` path): the pid file `start_gateway` writes into HERMES_HOME,
-# plus the container still running after a settle. That proves image boot, the s6 bootstrap
-# (UID remap, volume chown, config seeding), the privilege drop, gateway imports, and
-# fresh-state writes under the production security flags.
-GATEWAY_SMOKE_CONTAINER="pinwatch-gateway-smoke-$$"
-docker run -d --name "$GATEWAY_SMOKE_CONTAINER" \
+# Runtime startup without the live env or data mount: state lands on a scratch tmpfs owned by
+# the hermes uid (the production mount is too). The container must start under the production
+# security flags, keep its idle main process up past a settle, and give the `hermes` user a
+# writable home, because every sweep execs in as that user and writes there.
+RUNTIME_SMOKE_CONTAINER="pinwatch-runtime-smoke-$$"
+docker run -d --name "$RUNTIME_SMOKE_CONTAINER" \
   "${CONTAINER_SECURITY_ARGS[@]}" \
-  --tmpfs /opt/data:rw,noexec,nosuid,nodev,size=64m \
-  "$NEW_IMAGE" gateway run --no-supervise >/dev/null 2>&1 || presmoke_fail "tokenless gateway container did not start"
-gateway_smoke_ready=0
-for _ in $(seq 1 60); do
-  if docker exec "$GATEWAY_SMOKE_CONTAINER" test -s /opt/data/gateway.pid 2>/dev/null; then
-    gateway_smoke_ready=1
-    break
-  fi
-  [ "$(docker inspect "$GATEWAY_SMOKE_CONTAINER" --format '{{.State.Running}}' 2>/dev/null || true)" = "true" ] || break
-  sleep 1
-done
-# Settle: a pid file alone could precede an early exit (e.g. the respawn-storm backoff path);
-# the gateway must still be up a beat later, and the scratch home must be hermes-writable.
+  --tmpfs /opt/data:rw,noexec,nosuid,nodev,size=64m,uid=10000,gid=10000,mode=0700 \
+  "$NEW_IMAGE" >/dev/null 2>&1 || presmoke_fail "runtime container did not start"
 sleep 3
-if [ "$gateway_smoke_ready" != "1" ] \
-  || [ "$(docker inspect "$GATEWAY_SMOKE_CONTAINER" --format '{{.State.Running}}' 2>/dev/null || true)" != "true" ] \
-  || ! docker exec -u hermes "$GATEWAY_SMOKE_CONTAINER" test -w /opt/data; then
-  cleanup_gateway_smoke
-  presmoke_fail "tokenless gateway did not reach a running, hermes-writable state"
+if [ "$(docker inspect "$RUNTIME_SMOKE_CONTAINER" --format '{{.State.Running}}' 2>/dev/null || true)" != "true" ] \
+  || ! docker exec -u hermes "$RUNTIME_SMOKE_CONTAINER" sh -c 'test -w "$HOME" && touch "$HOME/.pinwatch-probe"'; then
+  cleanup_runtime_smoke
+  presmoke_fail "runtime container did not reach a running, hermes-writable state"
 fi
-cleanup_gateway_smoke
+cleanup_runtime_smoke
 # embed + cluster engines: prove the MuQ interpreter resolves + the whole stack imports, in a
 # hard-capped throwaway container. NOT a full forward — the box has zero swap and the live
 # container is up, so an uncapped MuQ load could OOM the live agent. This catches the actual
@@ -978,7 +957,9 @@ run_container() {
     --env-file "$ENVTMP" \
     "$1" gateway run >/dev/null
 }
-# Healthy = the gateway came up and stays up (the CLI answers from inside).
+# `gateway run` is ignored by the current image (its entrypoint only idles) and is kept so a
+# rollback to an older image, which needs it, starts through this same line.
+# Healthy = the container came up and stays up (the CLI answers from inside).
 # Test hook: PINWATCH_TEST_FAIL_POSTSMOKE=1 forces the FIRST health check (the
 # post-swap one) to fail exactly once, to drill the rollback rail — the second
 # call (the rollback's own check) runs for real. The box swaps to the new image,

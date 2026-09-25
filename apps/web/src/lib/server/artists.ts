@@ -51,24 +51,6 @@ import {
   type ArtistSocialStatus,
 } from "../artist-review";
 
-// The artist-review queue's shapes and its pure predicates live in the CLIENT-SAFE
-// `lib/artist-review.ts` — the `/admin/artists` board calls them from its component, and a live
-// client reference into this module drags the whole database chain into the browser bundle
-// (docs/client-bundle.md, Rule 1). They are re-exported here so every server caller and this
-// module's tests keep reading them from where they always did.
-export {
-  artistNeedsLook,
-  type ArtistOverviewItem,
-  type ArtistSocial,
-  type ArtistSocialSource,
-  type ArtistSocialsQueueItem,
-  type ArtistSocialStatus,
-  type FreshLinkEntry,
-  type FreshLinksPartition,
-  partitionFreshLinks,
-  unreviewedSocials,
-} from "../artist-review";
-
 // The thin-content gate for artist pages: a `/artist/<slug>` page indexes (and
 // enters the sitemap) only at this many coordinate-bearing findings or more.
 // Below it the page still serves 200 (deep links + link equity) but is

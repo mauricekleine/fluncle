@@ -13,7 +13,7 @@
 # channel-ID resolution. Pure trigger, zero LLM tokens on the box.
 #
 # Scheduled by a repo-checked-in HOST systemd timer (../artist-sweep-timer/, installed by
-# ../install-host-timers.sh), NOT a gateway `hermes cron create`. `resolve_artist` is AGENT
+# ../install-host-timers.sh), which `docker exec`s it in the container. `resolve_artist` is AGENT
 # tier, so the box's existing agent-scoped token drives it — no operator token needed.
 # Per-run output is a freshness marker the sweep self-writes via cron-output.sh under
 # ~/.hermes/cron/output/fluncle-artist-sweep/ (read by the /status prober). See ../cron/README.md.
@@ -26,7 +26,7 @@ export FLUNCLE_BIN="${FLUNCLE_BIN:-/usr/local/bin/fluncle}"
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
-# Host timers bypass the Hermes gateway runner's stdout capture, so self-report the
+# Host timers write no per-run output file, so self-report the
 # /status freshness marker the fluncle-healthcheck prober reads (see cron-output.sh) —
 # WRAP the payload (never `exec`) so the marker is written even on a nonzero run.
 # shellcheck source=./cron-output.sh

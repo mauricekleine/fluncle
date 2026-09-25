@@ -1,8 +1,8 @@
 #!/usr/bin/env bun
 // cluster-sweep.ts — the bun orchestrator behind the sonic-galaxy cluster engine
 // (`fluncle-cluster`), scheduled NIGHTLY by a rave-02 HOST systemd timer
-// (../cluster-timer/), not a Hermes gateway cron: a stateful batch job that reads the
-// whole embedded corpus and writes the map wants the box, never the shared serial runner.
+// (../cluster-timer/): a stateful batch job that reads the whole embedded corpus and
+// writes the map wants the box and its own timer.
 // See ../cluster-timer/README.md + docs/agents/cluster-engine.md.
 //
 // LIVE-INTENT. Version-controlled source; the repo is canonical and the box is a deploy

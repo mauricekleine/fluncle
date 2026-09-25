@@ -2410,7 +2410,7 @@ export const findings = sqliteTable(
     // (agent tier) stamps `backfill_note_attempted_at` on EVERY authoring attempt and
     // `backfill_note_done_at` only when an empty `note` was actually FILLED. It reuses
     // the same backfill_* column convention purely so the admin board's "done-when-ran"
-    // semantics and `listBackfillRanForTracks` machinery work for the Note cell exactly
+    // semantics and ran-flag read (observation-board.ts) work for the Note cell exactly
     // like Discogs/Last.fm: grey/`open` = never run, `done` = the workflow ran (a note
     // exists). The operator override always wins — the handler fills an EMPTY note only,
     // never clobbering an operator-written one, so a hand-written note can carry no

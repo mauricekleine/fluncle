@@ -21,6 +21,13 @@ import { SearchProvider, SearchTrigger } from "@/components/search/search-comman
 //   canvas, the draggable machinery map). Each is a fixed inset-0 viewport that owns its
 //   own chrome (its own bottom status bar), so a mounted colophon only overlaps it.
 // - /device, /cli: bare auth / install flows.
+//
+// They carry no skip link, deliberately. A skip link bypasses a block that repeats across pages
+// (WCAG 2.4.1): here, the top bar and the colophon. A chromeless surface renders neither, so its
+// first Tab stop is already its own content (or, on `/galaxy`, whose keyboard interface is the
+// game's own keys, there is no tabbable control at all) and a skip link would have nothing to skip.
+// The public ones are pinned by `tests/e2e/chrome-a11y.spec.ts`: no shared chrome, and where each
+// one's first Tab stop lands.
 const CHROMELESS_PREFIXES = ["/admin", "/radio", "/galaxy", "/pipeline", "/device", "/cli"];
 
 function isChromeless(pathname: string): boolean {
@@ -74,6 +81,11 @@ export function PublicChrome({
         // so it changes no element and hydration is untouched.
         data-front-door={pathname === "/" ? "" : undefined}
       >
+        {/* The first stop for a keyboard: straight past the top bar to the page. Visually hidden
+            until it takes focus, then it surfaces over the bar's corner. */}
+        <a className="skip-link" href="#content">
+          Skip to the page
+        </a>
         <header className="nav-topbar">
           <div className="nav-topbar-inner">
             <Link aria-label="Fluncle home" className="nav-wordmark" to="/">
@@ -98,7 +110,11 @@ export function PublicChrome({
           </div>
         </header>
 
-        <div className="nav-content">{children}</div>
+        {/* The skip link's target. `tabIndex={-1}` lets it take focus programmatically, so the next
+            Tab continues from the page rather than from the top of the document. */}
+        <div className="nav-content" id="content" tabIndex={-1}>
+          {children}
+        </div>
 
         {workbench ? undefined : <NavFooter galaxiesLive={galaxiesLive} />}
       </div>

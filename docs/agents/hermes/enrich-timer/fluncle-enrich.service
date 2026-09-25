@@ -1,5 +1,5 @@
 [Unit]
-Description=fluncle-enrich — rave-02 host trigger for the on-box enrichment sweep (migrated off the Hermes gateway cron runner)
+Description=fluncle-enrich — rave-02 host trigger for the on-box enrichment sweep
 Documentation=https://github.com/mauricekleine/fluncle/blob/main/docs/agents/hermes/enrich-timer/README.md
 Wants=network-online.target docker.service
 After=network-online.target docker.service
@@ -17,7 +17,7 @@ EnvironmentFile=-/etc/fluncle/database-admission.env
 # the enrichment DSP skill at /opt/hermes-skills/ (Unit A — both auto-update from main via
 # pin-watch, no /opt/data copy); this host unit only TRIGGERS it, and the sweep self-writes
 # its /status marker (cron-output.sh) so the fluncle-healthcheck prober stays honest. Parallel
-# host timers replace the one serial gateway runner (~300s global budget); a staggered
+# host timers run each sweep independently of the others; a staggered
 # OnBootSec spreads the simultaneous 5-min ticks so the latency-sensitive sweeps never pile.
 # Catch-up pace: the catalogue-analyze arm runs 12 rows/tick (~3,450/day ceiling)
 # while capture drains the crawled backlog at ~2,200/day — a measured 2-row tick used 8-15s of

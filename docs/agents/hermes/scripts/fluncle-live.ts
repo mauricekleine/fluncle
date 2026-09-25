@@ -1,10 +1,10 @@
 #!/usr/bin/env bun
-// fluncle-live.ts — the bun orchestrator behind the `fluncle-live` `--no-agent`
-// Hermes cron. The poller for Fluncle's cross-surface live-set callout.
+// fluncle-live.ts — the bun orchestrator behind the `fluncle-live` host-timer
+// sweep. The poller for Fluncle's cross-surface live-set callout.
 //
 // Version-controlled source; the repo is canonical and the box is a deploy target
 // (fluncle-hermes-operator skill). Invoked by the bash wrapper (fluncle-live.sh) the
-// cron runner execs every ~1m — see that file's header for the env keys + the
+// host timer execs every ~1m — see that file's header for the env keys + the
 // `host-timer` wire-up, and ../cron/README.md § The live cron.
 //
 // THE TICK (all deterministic — no model time):
@@ -28,7 +28,7 @@ import { join } from "node:path";
 // ---------------------------------------------------------------------------
 // Config — the Twitch credentials come from the shared op-injected secrets file
 // (the .sh sources ${HOME}/.fluncle-secrets.env before exec'ing us); FLUNCLE_API_TOKEN
-// rides the cron env. The Worker origin defaults to prod (override via LIVE_WORKER_URL
+// rides the container env. The Worker origin defaults to prod (override via LIVE_WORKER_URL
 // only for testing). NO tokens are hard-coded — public-safe by construction.
 // ---------------------------------------------------------------------------
 
@@ -41,7 +41,7 @@ const TWITCH_USER_LOGIN = process.env.TWITCH_USER_LOGIN ?? "flunclelive";
 const FLUNCLE_API_TOKEN = process.env.FLUNCLE_API_TOKEN ?? "";
 
 // Per-request network timeout. Short on purpose: a hung Twitch endpoint degrades to
-// a clean failure well inside the runner's ~120s kill.
+// a clean failure well inside the unit's TimeoutStartSec.
 const REQUEST_TIMEOUT_MS = Number.parseInt(process.env.LIVE_TIMEOUT_MS ?? "", 10) || 5000;
 
 // The app token is cached in the mounted, writable HOME so we don't mint per tick.

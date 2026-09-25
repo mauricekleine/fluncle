@@ -25,7 +25,7 @@ fi
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
-# Host timers send stdout to journald rather than the gateway cron-output tree. Wrap the payload
+# Host timers send stdout to journald rather than the cron-output tree. Wrap the payload
 # so the same summary becomes both the freshness marker and the best-effort run-ledger payload.
 # shellcheck source=./cron-output.sh
 . "${SCRIPT_DIR}/cron-output.sh"

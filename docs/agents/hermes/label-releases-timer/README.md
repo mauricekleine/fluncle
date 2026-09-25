@@ -60,7 +60,7 @@ journalctl -u fluncle-label-releases.service -n 40 --no-pager  # expect a { "ok"
 
 ## Why a host timer + the /status marker
 
-Every automation cron runs off repo-checked-in host timers so the SCHEDULE is code. Because a `docker exec` sends stdout to journald instead of the gateway's output dir, the sweep self-writes the `/status` marker (`# Cron Job: fluncle-label-releases`) via the shared [`cron-output.sh`](../scripts/cron-output.sh) helper.
+Every automation cron runs off repo-checked-in host timers so the SCHEDULE is code. Because a `docker exec` sends stdout to journald, the sweep self-writes the `/status` marker (`# Cron Job: fluncle-label-releases`) via the shared [`cron-output.sh`](../scripts/cron-output.sh) helper.
 
 ## Activation (OPERATOR-GATED — the repo half ships; the box enable does not)
 

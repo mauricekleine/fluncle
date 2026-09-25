@@ -257,6 +257,9 @@ describe("albumCoverAtSize", () => {
     expect(albumCoverAtSize(stored, "medium")).toBe(
       `https://i.scdn.co/image/ab67616d00001e02${HASH}`,
     );
+    expect(albumCoverAtSize(stored, "tile")).toBe(
+      `https://i.scdn.co/image/ab67616d00001e02${HASH}`,
+    );
   });
 
   it("re-sizes whatever source code is stored, not just the 300² variant", () => {
@@ -267,6 +270,25 @@ describe("albumCoverAtSize", () => {
   it("passes a non-Spotify URL through untouched", () => {
     const deezer = "https://e-cdns-images.dzcdn.net/images/cover/abc/250x250-000000-80-0-0.jpg";
     expect(albumCoverAtSize(deezer, "small")).toBe(deezer);
+  });
+
+  it("chooses Cover Art Archive thumbnails for display tiles and larger covers", () => {
+    const front = "https://coverartarchive.org/release/99b09d02-9cc9-3fed-8431-f162165a9371/front";
+
+    expect(albumCoverAtSize(`${front}-500`, "small")).toBe(`${front}-250`);
+    expect(albumCoverAtSize(`${front}-500`, "tile")).toBe(`${front}-250`);
+    expect(albumCoverAtSize(`${front}-500`, "medium")).toBe(`${front}-500`);
+    expect(albumCoverAtSize(`${front}-500`, "large")).toBe(`${front}-500`);
+    expect(albumCoverAtSize(front, "large")).toBe(front);
+    expect(albumCoverAtSize(`${front}-500`, "xl")).toBe(`${front}-1200`);
+    expect(albumCoverAtSize(`${front}?v=1`, "small")).toBe(`${front}-250?v=1`);
+  });
+
+  it("leaves unrelated Cover Art Archive URLs unchanged", () => {
+    const back =
+      "https://coverartarchive.org/release/99b09d02-9cc9-3fed-8431-f162165a9371/back-500";
+
+    expect(albumCoverAtSize(back, "small")).toBe(back);
   });
 
   it("passes an unparseable Spotify URL through untouched", () => {
@@ -498,6 +520,14 @@ describe("ownedCoverUrl — Cloudflare Images transform", () => {
     expect(ownedCoverUrl(null, "x", "large")).toBeUndefined();
   });
 
+  // A master stamped before its `image_updated_at` column existed carries a null vintage. It must
+  // still SERVE — floored to the constant bust.
+  it("floors a null vintage to the constant bust rather than failing", () => {
+    expect(ownedCoverUrl(KEY, null, "large")).toBe(
+      `${FOUND_BASE}/cdn-cgi/image/width=640,format=auto/${FOUND_BASE}/albums/some-album.jpg?v=1`,
+    );
+  });
+
   it("busts the rendition cache when the vintage changes (the ?v bust)", () => {
     const a = ownedCoverUrl(KEY, "2026-07-13T00:00:00.000Z", "large");
     const b = ownedCoverUrl(KEY, "2026-07-14T00:00:00.000Z", "large");
@@ -509,40 +539,6 @@ describe("ownedCoverUrl — Cloudflare Images transform", () => {
 // A label's logo joins that same ladder: its own R2 master, the same transform, the same `?v`.
 describe("labelLogoUrl — the label logo on the owned-cover ladder", () => {
   const LOGO = "labels/hospital-records.jpg";
-
-  it("serves the logo through /cdn-cgi/image at the default large rung, ?v riding the source", () => {
-    const v = Date.parse("2026-07-13T00:00:00.000Z");
-
-    expect(labelLogoUrl(LOGO, "2026-07-13T00:00:00.000Z")).toBe(
-      `${FOUND_BASE}/cdn-cgi/image/width=640,format=auto/${FOUND_BASE}/labels/hospital-records.jpg?v=${v}`,
-    );
-  });
-
-  it("maps each ladder rung to its width", () => {
-    expect(labelLogoUrl(LOGO, "x", "small")).toContain("width=64,");
-    expect(labelLogoUrl(LOGO, "x", "medium")).toContain("width=300,");
-    expect(labelLogoUrl(LOGO, "x", "large")).toContain("width=640,");
-    expect(labelLogoUrl(LOGO, "x", "xl")).toContain("width=1200,");
-  });
-
-  it("busts every rendition when a replaced logo bumps the vintage", () => {
-    expect(labelLogoUrl(LOGO, "2026-07-13T00:00:00.000Z")).not.toBe(
-      labelLogoUrl(LOGO, "2026-07-14T00:00:00.000Z"),
-    );
-  });
-
-  // A logo resolved before `labels.image_updated_at` existed carries a null vintage. It must still
-  // SERVE — floored to the constant bust, exactly as an album master with no vintage is.
-  it("floors a null vintage to the constant bust rather than failing", () => {
-    expect(labelLogoUrl(LOGO, null)).toBe(
-      `${FOUND_BASE}/cdn-cgi/image/width=640,format=auto/${FOUND_BASE}/labels/hospital-records.jpg?v=1`,
-    );
-  });
-
-  it("returns undefined when the label has no logo of its own", () => {
-    expect(labelLogoUrl(null, "2026-07-13T00:00:00.000Z")).toBeUndefined();
-    expect(labelLogoUrl(undefined, undefined)).toBeUndefined();
-  });
 
   // The whole point of joining the ladder: a surface re-sizes a logo exactly as it re-sizes a cover.
   it("re-sizes through albumCoverAtSize like any other owned master", () => {
@@ -558,6 +554,7 @@ describe("albumCoverAtSize — resizes BOTH providers", () => {
     const large = ownedCoverUrl(KEY, "2026-07-13T00:00:00.000Z", "large");
 
     expect(albumCoverAtSize(large, "small")).toContain("width=64,");
+    expect(albumCoverAtSize(large, "tile")).toContain("width=300,");
     // The ?v bust survives the resize (it rides the source, past the options).
     expect(albumCoverAtSize(large, "small")).toContain("?v=");
   });

@@ -1,9 +1,8 @@
 #!/usr/bin/env bun
 // embed-sweep.ts — the bun orchestrator behind the audio-embedding sweep (`fluncle-embed`),
-// scheduled by a rave-02 HOST systemd timer (../embed-timer/), not a Hermes gateway cron: a
-// windowed full-song MuQ forward is minutes-scale and must not occupy the shared serial
-// gateway runner (its ~300s global budget would starve the latency-sensitive 5-min sweeps —
-// the same reason capture is a host timer). See ../embed-timer/README.md + docs/track-lifecycle.md.
+// scheduled by its own rave-02 HOST systemd timer (../embed-timer/): a windowed full-song MuQ
+// forward is minutes-scale, and its own timer keeps it from delaying the latency-sensitive
+// 5-min sweeps (the same reason capture is a host timer). See ../embed-timer/README.md + docs/track-lifecycle.md.
 //
 // LIVE-INTENT. Version-controlled source; the repo is canonical and the box is a deploy
 // target (fluncle-hermes-operator skill). Invoked by the bash wrapper (embed-sweep.sh) the
@@ -94,8 +93,8 @@ import {
 // ---------------------------------------------------------------------------
 // Config — the batch cap is how many tracks one tick embeds. A windowed full-song MuQ forward
 // is minutes-scale (each ~30s window is a full forward, and a 5-min song is ~10 windows), so
-// the cap is what bounds the tick's wall-clock. As a host timer the 120s/300s gateway kill no
-// longer applies, but the queue is still the durable worklist — anything not reached this tick
+// the cap is what bounds the tick's wall-clock (against the unit's `TimeoutStartSec`). The
+// queue is the durable worklist — anything not reached this tick
 // is picked up ~5m later, in drain order.
 //
 // WHY A BATCH BEATS ITS OWN ITEM COUNT: the manifest goes to ONE `embed-track.py` process, so

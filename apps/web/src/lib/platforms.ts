@@ -1,9 +1,9 @@
-// The single source of truth for the per-track video-push platform set — the
-// platforms the `/social/:platform/draft` push endpoint supports. Pure data (no
-// React, no icons) so both the server route and the admin UI import the same
-// list. Every per-platform map/switch in the push path is keyed on `Platform`,
-// so adding a member here forces those sites to cover it or fail the build (the
-// exhaustive switch in the draft route + platforms.test.ts).
+// The admin UI's per-track video-push platform set — the platforms the
+// `/social/:platform/draft` push endpoint supports. Pure data (no React, no icons).
+// Adding a member here fails the build until the exhaustive `PLATFORM_ICONS`
+// record in components/admin/platform-cell.tsx covers it. The server keeps its own
+// copy (the `SUPPORTED` set in lib/server/orpc/admin-social.ts and the contract's
+// `z.enum` in packages/contracts/src/orpc/admin-social.ts); keep all three in step.
 //
 // `directPost` distinguishes the push shapes: TikTok pushes a private inbox DRAFT
 // (the operator finishes in-app), YouTube posts DIRECTLY and publicly on click.
@@ -23,10 +23,3 @@ export const PLATFORMS = [
 
 /** A per-track video-push target. The union is derived from `PLATFORMS`. */
 export type Platform = (typeof PLATFORMS)[number]["key"];
-
-/** The platform keys, for runtime membership checks (the route validates a string param). */
-export const PLATFORM_KEYS: readonly Platform[] = PLATFORMS.map((platform) => platform.key);
-
-/** Narrow an arbitrary string (a route param) to a supported `Platform`. */
-export const isPlatform = (value: string): value is Platform =>
-  PLATFORM_KEYS.includes(value as Platform);

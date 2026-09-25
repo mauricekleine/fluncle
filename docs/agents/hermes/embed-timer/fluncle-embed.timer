@@ -1,5 +1,5 @@
 [Unit]
-Description=fluncle-embed timer — trigger the audio-embedding sweep every 5m on the rave-02 host (not the Hermes gateway)
+Description=fluncle-embed timer — trigger the audio-embedding sweep every 5m on the rave-02 host
 
 [Timer]
 # Per-firing jitter dissolves timer-phase alignment: mass timer restarts, including a pin-watch
@@ -10,8 +10,8 @@ RandomizedDelaySec=90
 # First tick shortly after boot, then every 5m — the embed cadence. Persistent catches up a
 # missed window (box reboot) on the next wake. The queue is idempotent (an embedded finding
 # leaves the `embedding_json IS NULL` queue) and key-gated + newest-first, so a skipped tick
-# just defers the batch (FLUNCLE_EMBED_BATCH); unlike a Hermes cron, the host scheduler is never busy
-# with long sweeps, so the tick fires on time even while a multi-minute full-song embed runs.
+# just defers the batch (FLUNCLE_EMBED_BATCH); each unit is its own systemd timer, never queued
+# behind a long sweep, so the tick fires on time even while a multi-minute full-song embed runs.
 OnBootSec=3min
 OnUnitActiveSec=5min
 Persistent=true

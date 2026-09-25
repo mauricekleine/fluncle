@@ -1,5 +1,5 @@
 [Unit]
-Description=fluncle-studio-clip — rave-02 host trigger for the Fluncle Studio clip-cut sweep (migrated off the Hermes gateway cron runner)
+Description=fluncle-studio-clip — rave-02 host trigger for the Fluncle Studio clip-cut sweep
 Documentation=https://github.com/mauricekleine/fluncle/blob/main/docs/agents/hermes/studio-clip-timer/README.md
 Wants=network-online.target docker.service
 After=network-online.target docker.service

@@ -21,7 +21,7 @@
 # (--dry-run + --domain compose; --dry-run leaves the workspace branch uncommitted for inspection.)
 set -uo pipefail
 
-# The runner execs with a minimal PATH; prepend the known install dirs so bun/claude/gh/git/fluncle resolve.
+# A caller may exec with a minimal PATH; prepend the known install dirs so bun/claude/gh/git/fluncle resolve.
 export PATH="/usr/local/bin:/root/.bun/bin:${PATH:-/usr/bin:/bin}"
 export BUN_BIN="${BUN_BIN:-/usr/local/bin/bun}"
 
@@ -341,7 +341,7 @@ audit_commit() {
 # Deliberately no queue_depth: one rotating domain is inspected per tick, and this driver does
 # not enumerate a whole outstanding audit backlog from which a real remaining count could be made.
 
-# Host timers bypass the gateway's stdout capture, so self-report the /status marker
+# Host timers write no per-run output file, so self-report the /status marker
 # (cron-output.sh) — WRAP the payload so the marker is written even on a nonzero run.
 # shellcheck source=./cron-output.sh
 . "${SCRIPT_DIR}/cron-output.sh"

@@ -6,11 +6,11 @@ The sweep WORK is BAKED at `/opt/hermes-scripts/` — the `.sh`/`.ts` pair (sour
 
 ## The timezone is in the timer, not the container clock
 
-The gateway ran the newsletter on the cron expression `0 15 * * 5` evaluated against the CONTAINER clock — which is the whole reason the box was pinned to `TZ=Europe/Amsterdam` (Hermes crons had no per-job TZ field). A systemd timer expresses the timezone DIRECTLY: `OnCalendar=Fri 15:00 Europe/Amsterdam`. So the Friday-afternoon slot is correct even if the host or container TZ ever drifts. `Persistent=true` catches up a Friday the box slept through — harmless, because a late run only persists a draft.
+The systemd timer expresses the timezone DIRECTLY: `OnCalendar=Fri 15:00 Europe/Amsterdam`. So the Friday-afternoon slot is correct whatever the host or container clock reads, across the CET⇄CEST flip. `Persistent=true` catches up a Friday the box slept through — harmless, because a late run only persists a draft.
 
 ## Why a host timer + the /status marker
 
-Every automation cron moved off the gateway's single serial runner onto repo-checked-in host timers so the SCHEDULE is code. Because a `docker exec` sends stdout to journald instead of the gateway's output dir, the sweep self-writes the `/status` marker (`# Cron Job: fluncle-newsletter`) via the shared [`cron-output.sh`](../scripts/cron-output.sh) helper, so the [`fluncle-healthcheck`](../scripts/fluncle-healthcheck.ts) prober's `cron.newsletter` row stays honest. The prober is UNCHANGED.
+Every automation cron runs from a repo-checked-in host timer so the SCHEDULE is code. Because a `docker exec` sends stdout to journald, the sweep self-writes the `/status` marker (`# Cron Job: fluncle-newsletter`) via the shared [`cron-output.sh`](../scripts/cron-output.sh) helper, so the [`fluncle-healthcheck`](../scripts/fluncle-healthcheck.ts) prober's `cron.newsletter` row stays honest. The prober is UNCHANGED.
 
 ## Deploy (on rave-02, one time)
 
@@ -27,5 +27,3 @@ sudo systemctl start fluncle-newsletter.service            # one tick now
 journalctl -u fluncle-newsletter.service -n 40 --no-pager  # expect a { "ok": true, … } summary line
 systemctl list-timers fluncle-newsletter.timer             # confirm the next Fri 15:00 slot
 ```
-
-Then RETIRE the gateway copy (`hermes cron list` → `hermes cron delete <id>` for `fluncle-newsletter`) so it is not double-scheduled — green the timer first, never both live at once.

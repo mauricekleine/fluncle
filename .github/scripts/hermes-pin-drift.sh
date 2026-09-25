@@ -11,15 +11,14 @@
 #     longer follow, and fluncle-capture fails every download while still reporting
 #     a healthy tick (item-level `ytDlpFailures`, never a run-level error). It sat
 #     unwatched at 2026.07.04 and cost 13 days of captured audio.
-#     bun moves in TWO places: the Dockerfile installer line and package.json
-#     `packageManager` — every workflow reads the bun version from packageManager
-#     via setup-bun's `bun-version-file`, so the workflows follow automatically
-#     (a literal per-workflow bun-version once split the toolchain: only 2 of 5
-#     workflows were in this script's rewrite set).
-#   • RISKY drift — a MAJOR bump (fluncle, Claude Code or bun), or a newer Nous Research
-#     Hermes BASE image tag — is recorded for a report-only issue, never edited.
-#     A major could rename/remove a command a cron calls; the base image's failure
-#     mode is the whole gateway. Those stay the operator's call.
+#     bun moves in TWO places: the Dockerfile base image (`FROM oven/bun:<ver>-debian@<digest>`,
+#     the tag and its re-resolved digest together) and package.json `packageManager` — every
+#     workflow reads the bun version from packageManager via setup-bun's `bun-version-file`,
+#     so the workflows follow automatically. A bun release whose image is not on Docker Hub
+#     yet waits for the next run.
+#   • RISKY drift — a MAJOR bump (fluncle, Claude Code or bun) — is recorded for a
+#     report-only issue, never edited. A major could rename/remove a command a cron calls,
+#     and a bun major is also a new base image. Those stay the operator's call.
 #
 # Deliberately NOT here: the boat.dev CLI and the GitHub Actions digests (Renovate's job —
 # see renovate.json). The boat.dev CLI IS pinned in the Dockerfile (a checksum-verified
@@ -54,22 +53,30 @@ log() { printf '%s\n' "$*" >&2; }
 ver_gt() { [ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -1)" = "$1" ]; }
 major()  { printf '%s' "${1#v}" | cut -d. -f1; }
 
+# bun_image_digest: stdin = a Docker Hub tag record; stdout = its multi-arch digest, or nothing
+# when the tag is not published.
+bun_image_digest() {
+  python3 -c 'import sys,json
+try: print(json.load(sys.stdin).get("digest") or "")
+except Exception: print("")'
+}
+
+# brake_signature: stdin = the brake lines; stdout = a short stable digest of them.
+brake_signature() {
+  if command -v sha256sum >/dev/null; then sha256sum; else shasum -a 256; fi | cut -c1-16
+}
+
 # in-place literal replace, portable across macOS/Linux (perl \Q…\E quotes meta).
 inplace() { SRCH="$2" REPL="$3" perl -i -pe 's/\Q$ENV{SRCH}\E/$ENV{REPL}/g' "$1"; }
 
 # ── read the current pins (markers, not line numbers) ─────────────────────────
 CUR_FLUNCLE="$(sed -n 's#.*releases/download/v\([0-9][0-9.]*\)/fluncle-.*#\1#p' "$DOCKERFILE" | head -1)"
 CUR_CLAUDE="$(sed -n 's#.*@anthropic-ai/claude-code@\([0-9][0-9.]*\).*#\1#p' "$DOCKERFILE" | head -1)"
-CUR_BUN="$(sed -n 's/.*bun-v\([0-9][0-9.]*\).*/\1/p' "$DOCKERFILE" | head -1)"
+CUR_BUN="$(sed -n 's#^FROM oven/bun:\([0-9][0-9.]*\)-debian@sha256:.*#\1#p' "$DOCKERFILE" | head -1)"
+CUR_BUN_DIGEST="$(sed -n 's#^FROM oven/bun:[0-9][0-9.]*-debian@\(sha256:[0-9a-f]*\).*#\1#p' "$DOCKERFILE" | head -1)"
 CUR_YTDLP="$(sed -n 's#.*yt-dlp/releases/download/\([0-9][0-9.]*\)/yt-dlp_linux.*#\1#p' "$DOCKERFILE" | head -1)"
-# The base is DIGEST-pinned (`FROM …@sha256:…`) for reproducible rebuilds, so its FROM line
-# carries no calendar version to drift-compare. The human-readable tag the digest was resolved
-# from lives in the adjacent `docker inspect …:v<ver>` comment — parse the version from there
-# (a `:v<ver>` marker anywhere in the Dockerfile), so the report-only base-drift check still
-# fires instead of FATALing on the digest form.
-CUR_BASE="$(sed -n 's#.*nousresearch/hermes-agent:v\([0-9][0-9.]*\).*#v\1#p' "$DOCKERFILE" | head -1)"
-[ -n "$CUR_FLUNCLE" ] && [ -n "$CUR_CLAUDE" ] && [ -n "$CUR_BUN" ] && [ -n "$CUR_YTDLP" ] && [ -n "$CUR_BASE" ] \
-  || { log "FATAL: could not parse one of the Dockerfile pins (fluncle='$CUR_FLUNCLE' claude='$CUR_CLAUDE' bun='$CUR_BUN' yt-dlp='$CUR_YTDLP' base='$CUR_BASE')"; exit 1; }
+[ -n "$CUR_FLUNCLE" ] && [ -n "$CUR_CLAUDE" ] && [ -n "$CUR_BUN" ] && [ -n "$CUR_BUN_DIGEST" ] && [ -n "$CUR_YTDLP" ] \
+  || { log "FATAL: could not parse one of the Dockerfile pins (fluncle='$CUR_FLUNCLE' claude='$CUR_CLAUDE' bun='$CUR_BUN' bun-digest='$CUR_BUN_DIGEST' yt-dlp='$CUR_YTDLP')"; exit 1; }
 
 # ── check latest (read-only; a fetch failure degrades to 'unknown', never fatal) ─
 LATEST_FLUNCLE="$(npm view fluncle version 2>/dev/null || true)"
@@ -78,10 +85,6 @@ LATEST_BUN="$(curl -fsSL https://api.github.com/repos/oven-sh/bun/releases/lates
   | python3 -c 'import sys,json; print(json.load(sys.stdin)["tag_name"].replace("bun-v","",1))' 2>/dev/null || true)"
 LATEST_YTDLP="$(curl -fsSL https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest 2>/dev/null \
   | python3 -c 'import sys,json; print(json.load(sys.stdin)["tag_name"])' 2>/dev/null || true)"
-LATEST_BASE="$(curl -fsSL "https://hub.docker.com/v2/repositories/nousresearch/hermes-agent/tags?page_size=50&ordering=last_updated" 2>/dev/null \
-  | python3 -c 'import sys,json,re
-tags=[t["name"] for t in json.load(sys.stdin)["results"] if t["name"].startswith("v")]
-print(max(tags,key=lambda v:[int(x) for x in re.findall(r"\d+",v)]) if tags else "")' 2>/dev/null || true)"
 
 # ── classify ──────────────────────────────────────────────────────────────────
 declare -a TABLE=("| pin | current | latest | verdict |" "| --- | --- | --- | --- |")
@@ -93,8 +96,7 @@ APPLY_FLUNCLE=""; APPLY_CLAUDE=""; APPLY_BUN=""; APPLY_YTDLP=""
 # leading component change?" — a real signal for semver, meaningless for a date, where it fires
 # every January on an ordinary release. A calendar pin therefore takes every newer version as a
 # safe bump. yt-dlp is the only one: its staleness IS the outage (see the Dockerfile comment),
-# so a held bump costs more than an unreviewed one. The base image is calendar-versioned too and
-# deliberately does NOT get this — it is the whole gateway, and it has its own report-only path.
+# so a held bump costs more than an unreviewed one.
 assess() { # name current latest [calendar]  → row + (sets APPLY_* / BRAKE_LINES)
   local name="$1" cur="$2" latest="$3" calendar="${4:-}" verdict
   if [ -z "$latest" ]; then
@@ -126,15 +128,20 @@ assess claude-code "$CUR_CLAUDE" "$LATEST_CLAUDE"
 assess bun "$CUR_BUN" "$LATEST_BUN"
 assess yt-dlp "$CUR_YTDLP" "$LATEST_YTDLP" calendar
 
-# base image — always report-only (pre-1.0; failure mode is the whole gateway)
-BASE_VERDICT="current"
-if [ -n "$LATEST_BASE" ] && ver_gt "${LATEST_BASE#v}" "${CUR_BASE#v}"; then
-  BASE_VERDICT="NEWER → $LATEST_BASE (report)"
-  BRAKE_LINES+=("- **Nous Hermes base image** \`$CUR_BASE\` → \`$LATEST_BASE\` — always operator-reviewed (pre-1.0; a base bump can change the runtime or drop the gateway below the model-context floor). Take it deliberately for upstream security patches.")
-elif [ -z "$LATEST_BASE" ]; then
-  BASE_VERDICT="unknown (fetch failed)"
+# A bun bump is a new base image, so it applies only once Docker Hub carries that tag.
+if [ -n "$APPLY_BUN" ]; then
+  APPLY_BUN_DIGEST="$(curl -fsSL "https://hub.docker.com/v2/repositories/oven/bun/tags/${APPLY_BUN}-debian" 2>/dev/null \
+    | bun_image_digest 2>/dev/null || true)"
+  if [ -z "$APPLY_BUN_DIGEST" ]; then
+    log "bun $APPLY_BUN is released but oven/bun:${APPLY_BUN}-debian is not on Docker Hub yet — next run"
+    APPLY_BUN=""
+    kept=(); for entry in "${SHORT[@]}"; do [ "${entry%% *}" = "bun" ] || kept+=("$entry"); done
+    SHORT=(${kept[@]+"${kept[@]}"})
+    for i in "${!TABLE[@]}"; do
+      case "${TABLE[$i]}" in "| bun |"*) TABLE[$i]="| bun | $CUR_BUN | $LATEST_BUN | newer, image not published yet |" ;; esac
+    done
+  fi
 fi
-TABLE+=("| base image | $CUR_BASE | ${LATEST_BASE:-?} | $BASE_VERDICT |")
 
 # ── report (always) ───────────────────────────────────────────────────────────
 log "Hermes supply-chain pin drift:"
@@ -157,10 +164,9 @@ if [ -n "$APPLY_YTDLP" ]; then
   CHANGES+=("\`yt-dlp\` \`$CUR_YTDLP\` → \`$APPLY_YTDLP\` (Dockerfile) — the fluncle-capture fetcher; a stale one fails every download while the tick still reads green")
 fi
 if [ -n "$APPLY_BUN" ]; then
-  inplace "$DOCKERFILE"  "bun-v$CUR_BUN"          "bun-v$APPLY_BUN"          # installer line
-  inplace "$DOCKERFILE"  "bun@$CUR_BUN"           "bun@$APPLY_BUN"           # the comment reference
-  inplace "$PKG_JSON"    "bun@$CUR_BUN"           "bun@$APPLY_BUN"           # packageManager — every workflow reads this via bun-version-file
-  CHANGES+=("\`bun\` \`$CUR_BUN\` → \`$APPLY_BUN\` (Dockerfile + package.json packageManager; workflows follow via bun-version-file)")
+  inplace "$DOCKERFILE" "oven/bun:$CUR_BUN-debian@$CUR_BUN_DIGEST" "oven/bun:$APPLY_BUN-debian@$APPLY_BUN_DIGEST" # the base image
+  inplace "$PKG_JSON"   "bun@$CUR_BUN"                             "bun@$APPLY_BUN"                               # packageManager — every workflow reads this via bun-version-file
+  CHANGES+=("\`bun\` \`$CUR_BUN\` → \`$APPLY_BUN\` (the Dockerfile base image + package.json packageManager; workflows follow via bun-version-file)")
 fi
 
 # ── write the PR body + emit outputs ──────────────────────────────────────────
@@ -192,6 +198,7 @@ fi
 
 # ── write the report issue body for risky drift ───────────────────────────────
 if [ ${#BRAKE_LINES[@]} -gt 0 ]; then
+  BRAKE_SIGNATURE="$(printf '%s\n' "${BRAKE_LINES[@]}" | brake_signature)"
   {
     echo "## Hermes supply-chain — drift that needs an operator decision"
     echo
@@ -204,8 +211,13 @@ if [ ${#BRAKE_LINES[@]} -gt 0 ]; then
     printf '%s\n' "${TABLE[@]}"
     echo
     echo "</details>"
+    echo
+    # The signature covers the brake items only (the table's other columns move every
+    # run), so the workflow can skip a comment that would repeat the last one.
+    echo "<!-- brake-signature: $BRAKE_SIGNATURE -->"
   } > "$ISSUE_BODY"
   emit "braked=true"
+  emit "brake_signature=$BRAKE_SIGNATURE"
   log "REPORTED: ${#BRAKE_LINES[@]} brake item(s)"
 else
   emit "braked=false"

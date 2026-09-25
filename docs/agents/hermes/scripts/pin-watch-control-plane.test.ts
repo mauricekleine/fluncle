@@ -94,7 +94,7 @@ docker() {
 }
 ${implementation}
 verify_agent_role_boundary
-printf 'gateway-pre-smoke-reached\n'
+printf 'runtime-pre-smoke-reached\n'
 printf 'swap-reached\n'
 `,
     "utf8",
@@ -121,11 +121,11 @@ printf 'swap-reached\n'
 }
 
 describe("pin-watch control-plane pre-smoke", () => {
-  test("a primary-database outage cannot suppress gateway pre-smoke or swap", () => {
+  test("a primary-database outage cannot suppress the runtime pre-smoke or swap", () => {
     const result = runBoundaryScenario("forbidden");
 
     expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toContain("gateway-pre-smoke-reached");
+    expect(result.stdout).toContain("runtime-pre-smoke-reached");
     expect(result.stdout).toContain("swap-reached");
     expect(result.calls).toContain("admin tracks publish");
     expect(result.calls).not.toContain("admin tracks enrich");
@@ -136,7 +136,7 @@ describe("pin-watch control-plane pre-smoke", () => {
 
     expect(result.status).toBe(70);
     expect(result.stdout).toContain("exact forbidden role-boundary response");
-    expect(result.stdout).not.toContain("gateway-pre-smoke-reached");
+    expect(result.stdout).not.toContain("runtime-pre-smoke-reached");
     expect(result.stdout).not.toContain("swap-reached");
   });
 
@@ -145,14 +145,14 @@ describe("pin-watch control-plane pre-smoke", () => {
 
     expect(result.status).toBe(70);
     expect(result.stdout).toContain("publish-class command was NOT refused");
-    expect(result.stdout).not.toContain("gateway-pre-smoke-reached");
+    expect(result.stdout).not.toContain("runtime-pre-smoke-reached");
     expect(result.stdout).not.toContain("swap-reached");
   });
 
-  test("the checked-in pre-smoke reaches gateway validation and swap without a database probe", () => {
+  test("the checked-in pre-smoke reaches runtime validation and swap without a database probe", () => {
     const source = readFileSync(PIN_WATCH, "utf8");
     const boundaryCall = source.lastIndexOf("\nverify_agent_role_boundary\n");
-    const gatewayPreSmoke = source.indexOf('GATEWAY_SMOKE_CONTAINER="pinwatch-gateway-smoke-$$"');
+    const runtimePreSmoke = source.indexOf('RUNTIME_SMOKE_CONTAINER="pinwatch-runtime-smoke-$$"');
     const preSmokePassed = source.indexOf('log "pre-smoke passed"');
     const swap = source.indexOf('log "swapping $CONTAINER: $OLD_IMAGE -> $NEW_IMAGE"');
 
@@ -160,8 +160,8 @@ describe("pin-watch control-plane pre-smoke", () => {
     expect(source).not.toContain(" admin add ");
     expect(source).toContain(" admin tracks publish ");
     expect(boundaryCall).toBeGreaterThanOrEqual(0);
-    expect(gatewayPreSmoke).toBeGreaterThan(boundaryCall);
-    expect(preSmokePassed).toBeGreaterThan(gatewayPreSmoke);
+    expect(runtimePreSmoke).toBeGreaterThan(boundaryCall);
+    expect(preSmokePassed).toBeGreaterThan(runtimePreSmoke);
     expect(swap).toBeGreaterThan(preSmokePassed);
   });
 

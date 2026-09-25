@@ -242,6 +242,27 @@ body::before {
   z-index: -2;
 }
 
+/* A phone uses a smaller cover behind this translucent, grain-overlaid backdrop. The plain WebP
+   declaration is the whole rule wherever `image-set()` with `type()` is unsupported: a value
+   holding `var()` is only rejected at computed-value time, which would blank the backdrop rather
+   than fall back, so the AVIF upgrade sits behind its own `@supports`. */
+@media (max-width: 640px) {
+  body::before {
+    background-image: var(--grain-tile), url("/fluncle-cover-no-text-mobile.webp");
+  }
+
+  @supports (background-image: image-set(url("/a.avif") type("image/avif"))) {
+    body::before {
+      background-image:
+        var(--grain-tile),
+        image-set(
+          url("/fluncle-cover-no-text-mobile.avif") type("image/avif"),
+          url("/fluncle-cover-no-text-mobile.webp") type("image/webp")
+        );
+    }
+  }
+}
+
 /* Gold as ignition, not fill: ONE directional Eclipse-Gold bloom, anchored
    where the cover's sun sits in the layout (upper left), under every pane.
    It breathes imperceptibly (the one sanctioned motion beyond the 72s drift,
@@ -9107,4 +9128,34 @@ a.catalogue-letter:focus-visible {
   .fd-finding:hover .fd-finding-cover {
     transform: none;
   }
+}
+
+/* ── The skip link ────────────────────────────────────────────────────────────
+   Off-screen until it takes focus, then a small Tape Black tab over the top
+   bar's corner with the gold focus ring (focus is an accessibility affordance,
+   not a claim about the music). The target takes focus without a ring of its
+   own: the page it lands on is the feedback. */
+.skip-link {
+  background: var(--tape-black);
+  border: 1px solid var(--border);
+  border-radius: var(--rounded-md);
+  color: var(--foreground);
+  font-size: 0.875rem;
+  font-weight: 700;
+  left: 0.75rem;
+  padding: 0.6rem 0.9rem;
+  position: fixed;
+  top: 0.75rem;
+  transform: translateY(-200%);
+  z-index: 60;
+}
+
+.skip-link:focus {
+  box-shadow: 0 0 0 3px color-mix(in oklch, var(--ring) 50%, transparent);
+  outline: none;
+  transform: none;
+}
+
+.nav-content:focus {
+  outline: none;
 }

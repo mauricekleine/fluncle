@@ -77,14 +77,16 @@ describe("the include / exclude rule", () => {
     const candidates = boxStateCandidates({ HOME: "/opt/data/home" } as NodeJS.ProcessEnv);
 
     for (const expected of [
-      "/opt/data/state.db",
-      "/opt/data/config.yaml",
-      "/opt/data/memories",
       "/opt/data/cron/output",
       "/opt/data/home/.render-conductor",
       "/opt/data/home/.healthcheck",
     ]) {
       expect(candidates).toContain(expected);
+    }
+
+    // Chat-agent runtime files are not state this box runs on.
+    for (const retired of ["/opt/data/state.db", "/opt/data/config.yaml", "/opt/data/memories"]) {
+      expect(candidates).not.toContain(retired);
     }
 
     // The two multi-GB git checkouts are never even candidates.

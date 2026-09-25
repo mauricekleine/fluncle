@@ -6,9 +6,9 @@ The engine's full doctrine (why the nightly run is assignment-only, why a full f
 
 The sweep WORK is BAKED into the image — the `.sh`/`.ts`/`.py` trio at `/opt/hermes-scripts/` (source: [`../scripts/cluster-sweep.sh`](../scripts/cluster-sweep.sh) → [`../scripts/cluster-sweep.ts`](../scripts/cluster-sweep.ts) → [`../scripts/cluster.py`](../scripts/cluster.py)) plus **sklearn + scipy** in the baked MuQ venv (`/opt/muq-venv`, the Dockerfile MuQ layer's third pinned pip step). It rides the image and auto-updates from `main` via the hourly pin-watch rebuild — no `docker cp`. The host timer is only the trigger; the `.sh` is the same entry a manual `bash /opt/hermes-scripts/cluster-sweep.sh` runs.
 
-## Why it's a host timer, not a Hermes cron
+## Why its own host timer
 
-The cluster engine is a **stateful nightly batch job**: it reads the whole embedded corpus + the map and writes the map back. It is not latency-sensitive and it must not occupy the shared serial Hermes `--no-agent` gateway runner (its ~300s global budget) where a batch read/write could starve the 5-minute enrich/context/note sweeps. So it runs on a **host** systemd timer, exactly like [`fluncle-embed`](../embed-timer/README.md), [`fluncle-capture`](../capture-timer/README.md), and the nightly [`fluncle-logbook`](../logbook-timer/README.md) / audit crons. The host scheduler is never busy with Fluncle's app work, so the tick fires on time.
+The cluster engine is a **stateful nightly batch job**: it reads the whole embedded corpus + the map and writes the map back. It is not latency-sensitive, and on its own parallel host timer with its own `TimeoutStartSec` a batch read/write can never delay the 5-minute enrich/context/note sweeps — exactly like [`fluncle-embed`](../embed-timer/README.md), [`fluncle-capture`](../capture-timer/README.md), and the nightly [`fluncle-logbook`](../logbook-timer/README.md) / audit crons.
 
 Nightly, not every-5m: the tick is assignment-only and idempotent — a **no-op on an unchanged corpus** — so once a night is plenty for a browse surface and reinforces the fixed-point discipline (structure changes only by an operator act).
 

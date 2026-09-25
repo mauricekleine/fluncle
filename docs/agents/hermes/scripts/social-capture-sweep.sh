@@ -24,34 +24,34 @@
 # it; no operator token.
 #
 # Scheduled by a repo-checked-in HOST systemd timer (../social-capture-timer/, installed by
-# ../install-host-timers.sh), NOT a gateway `hermes cron create`. Capture is AGENT tier, so
+# ../install-host-timers.sh), which `docker exec`s it in the container. Capture is AGENT tier, so
 # the box's existing agent-scoped token drives it — no operator token. Per-run output is a
 # freshness marker the sweep self-writes via cron-output.sh under
 # ~/.hermes/cron/output/fluncle-social-capture/ (read by the /status prober). See ../cron/README.md.
 set -euo pipefail
 
-# The Hermes cron `--no-agent --script` runner execs this with a minimal PATH that
+# A caller may exec this with a minimal PATH that
 # omits /usr/local/bin (the curl/bun symlinks) and /root/.bun/bin, so a bare command
-# can be "not found" → exit 127 (the runner's env, not the image's; a manual
-# `bash social-capture-sweep.sh` works because it inherits the container's full PATH).
-# Prepend the known install dirs so `curl` resolves regardless of the runner's PATH.
+# can be "not found" → exit 127 (a `docker exec`
+# inherits the image's full PATH, so the prepend is a guard).
+# Prepend the known install dirs so `curl` resolves regardless of the caller's PATH.
 export PATH="/usr/local/bin:/root/.bun/bin:${PATH:-/usr/bin:/bin}"
 export BUN_BIN="${BUN_BIN:-/usr/local/bin/bun}"
 
-# The Worker origin (the agent-scoped token is a custom var that passes Hermes'
-# provider-cred blocklist, so it rides the cron env like the other sweeps).
+# The Worker origin (the agent-scoped token rides the container env like the other
+# sweeps).
 API_BASE_URL="${FLUNCLE_API_BASE_URL:-https://www.fluncle.com}"
 CAPTURE_PATH="/api/v1/admin/social/posts/capture"
 
 # A JSON body is REQUIRED even when empty: the oRPC handler builds its input from the
 # request body, and a bodyless POST deserializes to `undefined` → a 400
 # `invalid_request`. Send `{}` with a JSON content-type. A short --max-time keeps a
-# hung Worker from ever blowing the runner's ~120s kill; -fsS fails on a non-2xx so a
+# hung Worker from ever stalling the tick; -fsS fails on a non-2xx so a
 # bad tick exits nonzero (visible in the run output) instead of swallowing an error.
 # Resolve this wrapper's dir so the shared marker helper is found next to it.
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
-# Host timers bypass the Hermes gateway runner's stdout capture, so self-report the
+# Host timers write no per-run output file, so self-report the
 # /status freshness marker the fluncle-healthcheck prober reads (see cron-output.sh) —
 # WRAP the curl (never `exec`) so the marker is written even when the trigger fails.
 # shellcheck source=./cron-output.sh

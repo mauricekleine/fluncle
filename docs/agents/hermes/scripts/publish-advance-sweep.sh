@@ -39,14 +39,14 @@
 # prober). See ../cron/README.md.
 set -euo pipefail
 
-# The `--no-agent --script` runner execs this with a minimal PATH that omits /usr/local/bin
+# A caller may exec this with a minimal PATH that omits /usr/local/bin
 # (the curl/bun symlinks) and /root/.bun/bin, so a bare command can be "not found" → exit
 # 127. Prepend the known install dirs so `curl` resolves regardless.
 export PATH="/usr/local/bin:/root/.bun/bin:${PATH:-/usr/bin:/bin}"
 export BUN_BIN="${BUN_BIN:-/usr/local/bin/bun}"
 
-# The Worker origin (the agent-scoped token is a custom var that passes Hermes'
-# provider-cred blocklist, so it rides the cron env like the other sweeps).
+# The Worker origin (the agent-scoped token rides the container env like the other
+# sweeps).
 API_BASE_URL="${FLUNCLE_API_BASE_URL:-https://www.fluncle.com}"
 ADVANCE_PATH="/api/v1/admin/social/publish/advance"
 
@@ -56,10 +56,10 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 # A JSON body is REQUIRED even when empty: the oRPC handler builds its input from the
 # request body, and a bodyless POST deserializes to `undefined` → a 400 `invalid_request`.
 # Send `{}` with a JSON content-type. A short --max-time keeps a hung Worker from ever
-# blowing the runner's ~120s kill; -fsS fails on a non-2xx so a bad tick exits nonzero
+# stalling the tick; -fsS fails on a non-2xx so a bad tick exits nonzero
 # (visible in the run output) instead of swallowing an error.
 #
-# Host timers bypass the Hermes gateway runner's stdout capture, so self-report the /status
+# Host timers write no per-run output file, so self-report the /status
 # freshness marker the fluncle-healthcheck prober reads (see cron-output.sh) — WRAP the curl
 # (never `exec`) so the marker is written even when the trigger fails.
 # shellcheck source=./cron-output.sh

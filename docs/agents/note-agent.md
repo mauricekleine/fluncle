@@ -116,7 +116,7 @@ So the sweep now keeps a per-item **attempt ledger** (`docs/agents/hermes/script
 
 ## The board
 
-The pipeline board's **Note** cell is an `auto` step that stays **actionable** (the operator can still hand-write). It reads `done` when a note exists (auto-authored OR operator-typed); `noteRan` (the `backfill_note_attempted_at` stamp) refines the grey state so a finding the cron visited but couldn't fill reads "Checked — no note" rather than a bare "Note" — exactly the done-when-ran pattern Discogs/Last.fm use, keyed off the same `listBackfillRanForTracks` machinery.
+The pipeline board's **Note** cell is an `auto` step that stays **actionable** (the operator can still hand-write). It reads `done` when a note exists (auto-authored OR operator-typed); `noteRan` (the `backfill_note_attempted_at` stamp) refines the grey state so a finding the cron visited but couldn't fill reads "Checked — no note" rather than a bare "Note" — exactly the done-when-ran pattern Discogs/Last.fm use, read by the same `attempted_at is not null` ran flags in `observation-board.ts`.
 
 ## The prompt lives in the DATABASE, not in the image
 

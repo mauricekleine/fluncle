@@ -1,5 +1,5 @@
 [Unit]
-Description=fluncle-embed — rave-02 host trigger for the audio-embedding sweep (decoupled from the latency-sensitive gateway cron runner)
+Description=fluncle-embed — rave-02 host trigger for the audio-embedding sweep
 Documentation=https://github.com/mauricekleine/fluncle/blob/main/docs/agents/hermes/embed-timer/README.md
 Wants=network-online.target docker.service
 After=network-online.target docker.service
@@ -16,10 +16,9 @@ EnvironmentFile=-/etc/fluncle/database-admission.env
 # the .sh sources). The .sh/.ts/.py trio is BAKED into the image at /opt/hermes-scripts/
 # (Unit A — it auto-updates from main via pin-watch, no /opt/data/scripts copy); this host
 # unit only TRIGGERS it. A windowed full-song MuQ forward is MINUTES-SCALE (each ~30s window
-# is a full forward; a 5-min song is ~10 windows), so it must NOT ride the one serial Hermes
-# cron runner (a ~300s global budget) where an embed tick would starve the latency-sensitive
-# 5-min enrich/context/note sweeps — the same reason capture, the healthcheck prober, and the
-# pin-watch rebuild are host timers.
+# is a full forward; a 5-min song is ~10 windows), so it runs on its own host timer, where an
+# embed tick never delays the latency-sensitive 5-min enrich/context/note sweeps — the same
+# reason capture, the healthcheck prober, and the pin-watch rebuild are host timers.
 # Database admission is phase-scoped inside the orchestrator: the worklist read and each vector
 # write take their own short lease through database-admission-runner.sh, while the source-audio
 # fetch and MuQ inference hold none. The admission environment rides the `docker exec` so it

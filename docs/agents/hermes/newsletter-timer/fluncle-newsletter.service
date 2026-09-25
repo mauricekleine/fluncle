@@ -1,5 +1,5 @@
 [Unit]
-Description=fluncle-newsletter — rave-02 host trigger for the weekly newsletter draft sweep (migrated off the Hermes gateway cron runner)
+Description=fluncle-newsletter — rave-02 host trigger for the weekly newsletter draft sweep
 Documentation=https://github.com/mauricekleine/fluncle/blob/main/docs/agents/hermes/newsletter-timer/README.md
 Wants=network-online.target docker.service
 After=network-online.target docker.service

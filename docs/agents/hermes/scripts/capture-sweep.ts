@@ -1,8 +1,7 @@
 #!/usr/bin/env bun
 // capture-sweep.ts — the bun orchestrator behind the full-song CAPTURE sweep
-// (`fluncle-capture`), scheduled by a rave-02 HOST systemd timer (../capture-timer/), not
-// a Hermes gateway cron (a proxied yt-dlp fetch has an unbounded tail that would starve
-// the 5-min sweeps). For each track still needing a capture — a certified FINDING or, once
+// (`fluncle-capture`), scheduled by its own rave-02 HOST systemd timer (../capture-timer/),
+// because a proxied yt-dlp fetch has an unbounded tail that must never delay the 5-min sweeps. For each track still needing a capture — a certified FINDING or, once
 // the operator opens the budget, an uncertified CATALOGUE row — it downloads the full song
 // ONCE (yt-dlp → a duration-gated public-stream match, through a residential proxy on a per-track STICKY
 // session), duration-guards the match against the track's Spotify length, stores the
