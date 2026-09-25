@@ -12,6 +12,7 @@ RandomizedDelaySec=60
 # fixes small nits + merges when CI is green and nothing high-impact remains, else comments and
 # leaves it for the operator. Persistent catches up a tick missed across a reboot.
 OnCalendar=*-*-* 05:00:00 Europe/Amsterdam
+OnCalendar=*-*-* 06:20:00 Europe/Amsterdam
 Persistent=true
 
 [Install]

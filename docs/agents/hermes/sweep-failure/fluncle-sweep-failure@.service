@@ -1,5 +1,5 @@
 [Unit]
-Description=fluncle sweep-failure notifier for %i — Discord alert when a host sweep dies before writing its /status marker
+Description=fluncle sweep-failure notifier for %i
 Documentation=https://github.com/mauricekleine/fluncle/blob/main/docs/agents/hermes/sweep-failure/README.md
 Wants=network-online.target docker.service
 After=network-online.target docker.service

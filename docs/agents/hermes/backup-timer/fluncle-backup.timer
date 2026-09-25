@@ -14,6 +14,7 @@ RandomizedDelaySec=60
 # off-site backup must not silently skip a day); the prune keeps 30 daily / 12 monthly, so a
 # caught-up extra run is harmless.
 OnCalendar=*-*-* 03:00:00 Europe/Amsterdam
+OnCalendar=*-*-* 05:20:00 Europe/Amsterdam
 Persistent=true
 
 [Install]

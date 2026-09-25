@@ -11,19 +11,10 @@ RandomizedDelaySec=60
 # date), so the day's numbers are captured just before it rolls over. The host clock is UTC, so no
 # TZ suffix is needed; naming UTC is explicit and DST-free. A fixed nightly slot (not a rolling
 # interval that drifts across the day) so the series reads as one clean daily cadence, and it sits in
-# a free minute clear of the other daily jobs (logbook 00:40, audit 01:00, cluster 02:20, backup
-# 03:00, reach 04:00 Amsterdam ≈ 02:00-03:00 UTC, audit-review 05:00). Persistent catches up a
-# snapshot the box slept through on the next wake — a caught-up extra run is a safe no-op (the
-# per-day upsert overwrites the row it already wrote).
+# a free minute clear of the other daily jobs (logbook 00:40, audit 01:00, backup 03:00, cluster
+# 03:20, reach 04:00 Amsterdam ≈ 02:00-03:00 UTC, audit-review 05:00). Persistent catches up a
+# snapshot the box slept through on the next wake.
 OnCalendar=*-*-* 23:45:00 UTC
-# THE RETRY FIRING, still inside the SAME UTC day. The 23:45 run can be skipped outright by the
-# database-admission runner (it yields before the payload starts), and no in-process retry inside
-# the sweep can recover from that — the sweep never ran. A missed day is a permanent hole in the
-# growth series (the counts are cumulative live readings with no per-day ledger behind them), so the
-# day gets a second firing 12 minutes later: past the runner's 120s admission wait, still before the
-# UTC date rolls over, and clear of the other daily jobs. The snapshot is an upsert keyed on the UTC
-# day, so a firing after a successful one simply overwrites its own row with fresher counts — the
-# healthy-night cost is one extra scan, and the failure-night payoff is the day.
 OnCalendar=*-*-* 23:57:00 UTC
 Persistent=true
 

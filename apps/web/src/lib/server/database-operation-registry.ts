@@ -1496,7 +1496,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
   }),
   defineOperation({
     accessClass: "write",
-    cadence: calendar("*-*-* 02:20:00 Europe/Amsterdam"),
+    cadence: calendar("*-*-* 03:20:00 Europe/Amsterdam"),
     directory: "cluster-timer",
     heavy: true,
     mutationTarget: "primary",
@@ -2025,7 +2025,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
   }),
   defineOperation({
     accessClass: "write",
-    cadence: every("23min", "24h"),
+    cadence: calendar("*-*-* 07:20:00 Europe/Amsterdam", "90"),
     directory: "label-releases-timer",
     heavy: false,
     mutationTarget: "primary",

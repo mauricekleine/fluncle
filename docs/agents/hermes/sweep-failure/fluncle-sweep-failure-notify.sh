@@ -42,7 +42,15 @@ else
 	echo "fluncle-sweep-failure: state dir ${STATE_DIR} missing/unwritable — posting without cooldown." >&2
 fi
 
-MSG="⚠️ fluncle sweep failed on rave-02: ${UNIT} (result=${RESULT:-unknown}, exit=${STATUS:-?}). It died before writing its /status marker — inspect with journalctl -u ${UNIT}.${MUTED_SUFFIX}"
+DETAIL="It died before writing its /status marker"
+if [ "$STATUS" = "75" ]; then
+	case "$UNIT" in
+	fluncle-audit.service | fluncle-audit-review.service | fluncle-backup.service | fluncle-cluster.service | fluncle-demand.service | fluncle-funnel-snapshot.service | fluncle-label-releases.service | fluncle-label-triage.service | fluncle-logbook.service | fluncle-newsletter.service | fluncle-reach.service | fluncle-reconcile-hub-counts.service | fluncle-sentry-triage.service | fluncle-social-metrics.service)
+		DETAIL="The daily payload is incomplete or unconfirmed"
+		;;
+	esac
+fi
+MSG="⚠️ fluncle sweep failed on the Hermes host: ${UNIT} (result=${RESULT:-unknown}, exit=${STATUS:-?}). ${DETAIL} — inspect with journalctl -u ${UNIT}.${MUTED_SUFFIX}"
 
 if curl -fsS -m 10 -H 'Content-Type: application/json' \
 	-d "$(printf '{"content":%s}' "$(printf '%s' "$MSG" | sed 's/\\/\\\\/g; s/"/\\"/g; s/^/"/; s/$/"/')")" \

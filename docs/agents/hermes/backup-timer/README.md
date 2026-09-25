@@ -25,7 +25,7 @@ The dump FORMAT is unchanged and byte-for-byte enforced: `backup-sweep.test.ts` 
 
 **Leg 1 needs temp disk** for the gzip artifact (`FLUNCLE_BACKUP_TMPDIR`, default the system temp dir) — currently ~90 MB. The `/status` `disk` probe already degrades past ~85% full, which is the early warning.
 
-## Leg 2 — the box-state snapshot (SHIPPED, DORMANT until the operator adds a key)
+## Leg 2 — the box-state snapshot
 
 **Why it exists.** Leg 1 dumps the production database and never reads the box's data dir. The server has no attached volumes (state sits on the root disk) and no provider-level snapshots, so without leg 2 a disk loss permanently destroys everything the box has accumulated — including the render conductor's `box-id`, whose loss **orphans a paid provisioned render box** nobody can then find or delete.
 
@@ -52,7 +52,7 @@ The archive carries `0600` credential-bearing env files, and the standing rule f
 
 Why not `age`/`gpg`: neither is in the image, and adding a binary means an image rebake the operator has to sequence — a dependency this leg does not need. Why not R2 server-side encryption: it would leave the plaintext-at-rest boundary with the same provider that holds the bucket, which is the opposite of what an owned off-site backup is for.
 
-**With no key there is no artifact.** `FLUNCLE_BOXSTATE_KEY` unset ⇒ leg 2 reports `{"boxState":{"skipped":true,"reason":"no_encryption_key"}}` and uploads nothing. That is the shipped state today: **leg 2 is dormant until the operator provisions the key** (below). Leg 1 is unaffected either way.
+**With no key there is no artifact.** `FLUNCLE_BOXSTATE_KEY` unset ⇒ leg 2 reports `{"boxState":{"ok":false,"error":"no_encryption_key"}}`, the sweep exits nonzero, and `/status` stays degraded until both artifacts are written. Leg 1 is unaffected either way.
 
 The manifest beside the artifact is deliberately NOT encrypted — it lists relative paths, sizes, the archive's SHA-256 and the cipher size, so the backup can be inventoried and verified without the key. It carries no file contents.
 
@@ -147,7 +147,9 @@ Every automation cron runs from a repo-checked-in host timer so the SCHEDULE is 
 
 **A killed run reads red.** `cron-output.sh` WRAPS the sweep rather than exec'ing it, so a SIGKILLed run still writes a marker — a 28-byte file whose only line is the header. `judgeCron` scans a marker for the sweep's contracted JSON summary and treats a marker with **no summary at all** as a run that was killed before it could speak — `down` on first sighting, no one-miss grace (unlike a reported `ok: false`, which is a sweep handling a failure and retrying).
 
-**The run's `ok` covers BOTH legs.** A leg-2 failure reports `ok: false` with `reason: "box_state_failed"` even though the dump landed — a half-backup that reads green is the exact failure mode above. Leg 2 runs only AFTER the dump is durable in R2, so it can never cost the night's dump; the skipped-for-no-key state is `ok: true` (nothing is broken — the key simply isn't provisioned).
+**The run's `ok` covers BOTH legs.** A missing encryption key or failed leg 2 reports `ok: false` with `reason: "box_state_failed"` even though the dump landed. The backup health row requires both daily artifact keys in the summary. Leg 2 runs only after the dump is durable in R2, so it cannot cost the night's database artifact. The host `OnFailure` notifier sends one alert for a failed service; the sweep does not send a second alert.
+
+The host timer fires at 03:00 and 05:20 Amsterdam. The shared [`daily-retry-runner.sh`](../scripts/daily-retry-runner.sh) no-ops the second slot only after both dated artifact keys appear in a successful marker. A database-admission skip or a partial artifact run can use the retry slot, and a day still incomplete after that slot fails the service for one Discord alert. Every attempt still passes through database admission. The `/status` backup row judges the two artifact keys, not a clean process exit.
 
 ## Deploy (on rave-02, one time)
 

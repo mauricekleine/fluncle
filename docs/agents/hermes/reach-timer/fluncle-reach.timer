@@ -12,10 +12,11 @@ RandomizedDelaySec=60
 # A fixed deep-off-peak nightly slot rather than a rolling interval that drifts across the day,
 # so the snapshot is taken at the same wall-clock moment every day (the series reads as one
 # clean daily cadence). Chosen to sit in a free minute clear of the other daily jobs
-# (logbook 00:40, audit 01:00, cluster 02:20, backup 03:00, audit-review 05:00). Persistent
+# (logbook 00:40, audit 01:00, backup 03:00, cluster 03:20, audit-review 05:00). Persistent
 # catches up a snapshot the box slept through on the next wake — a caught-up extra run is a safe
 # no-op (the per-(platform,metric,day) upsert lands `inserted: 0`).
 OnCalendar=*-*-* 04:00:00 Europe/Amsterdam
+OnCalendar=*-*-* 05:10:00 Europe/Amsterdam
 Persistent=true
 
 [Install]

@@ -12,6 +12,7 @@ RandomizedDelaySec=60
 # harmless, because the sweep only PERSISTS a draft (the Send is a separate operator-gated
 # command), so a late draft never auto-sends.
 OnCalendar=Fri 15:00 Europe/Amsterdam
+OnCalendar=Fri 16:15 Europe/Amsterdam
 Persistent=true
 
 [Install]

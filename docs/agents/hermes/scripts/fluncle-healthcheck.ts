@@ -475,6 +475,7 @@ export const AUTOMATION_CRONS: CronDef[] = [
 
 export type CronVerdict =
   | "fresh-ok"
+  | "incomplete"
   | "lagging"
   | "failed"
   | "failed-once"
@@ -646,6 +647,56 @@ export function boxUptimeMs(): number | null {
   }
 }
 
+function isAdmissionSkip(summary: Record<string, unknown> | null): boolean {
+  return summary?.gateState === "admission-skipped";
+}
+
+function isReconcilePrePayloadYield(summary: Record<string, unknown> | null): boolean {
+  return (
+    summary?.gateState === "paused" &&
+    summary.admissionOutcome === "phase-yielded" &&
+    summary.reason === "database_admission" &&
+    summary.partial === true &&
+    summary.windows === 0 &&
+    summary.checked === 0 &&
+    summary.produced === 0
+  );
+}
+
+function utcSlotDay(mtimeMs: number, primarySlot: string): string {
+  const stamp = new Date(mtimeMs).toISOString();
+  const day = new Date(`${stamp.slice(0, 10)}T00:00:00Z`);
+
+  if (stamp.slice(11, 16) < primarySlot) {
+    day.setUTCDate(day.getUTCDate() - 1);
+  }
+
+  return day.toISOString().slice(0, 10);
+}
+
+function resultCoversUtcSlotDay(
+  cron: CronDef,
+  summary: Record<string, unknown>,
+  mtimeMs: number,
+): boolean {
+  const primarySlot =
+    cron.service === "cron.funnel-snapshot"
+      ? "23:45"
+      : cron.service === "cron.social-metrics"
+        ? "22:15"
+        : null;
+
+  if (primarySlot === null || summary.ok !== true) {
+    return true;
+  }
+
+  const day = utcSlotDay(mtimeMs, primarySlot);
+  return (
+    summary.day === day ||
+    (Array.isArray(summary.backfilledDays) && summary.backfilledDays.includes(day))
+  );
+}
+
 export function judgeCron(
   cron: CronDef,
   dir: string | undefined,
@@ -696,8 +747,42 @@ export function judgeCron(
     return "no-summary";
   }
 
+  if (
+    cron.cadenceMs >= 24 * 60 * 60_000 &&
+    (isAdmissionSkip(summary) ||
+      summary.payloadStarted === false ||
+      (cron.service === "cron.reconcile-hub-counts" && isReconcilePrePayloadYield(summary)))
+  ) {
+    return "incomplete";
+  }
+
   if (summary.ok === false) {
     return runFailed(runFiles[1]?.path) ? "failed" : "failed-once";
+  }
+
+  if (cron.cadenceMs >= 24 * 60 * 60_000) {
+    if (!resultCoversUtcSlotDay(cron, summary, newest.mtimeMs)) {
+      return "incomplete";
+    }
+
+    if (cron.service === "cron.backup") {
+      const day = new Date(newest.mtimeMs).toISOString().slice(0, 10);
+      if (
+        summary.dailyKey !== `db-backups/daily/${day}/fluncle.sql.gz` ||
+        (summary.boxState as { key?: unknown } | null)?.key !==
+          `box-state/daily/${day}/box-state.tar.gz.enc`
+      ) {
+        return "incomplete";
+      }
+    }
+
+    if (
+      cron.service === "cron.logbook" &&
+      typeof summary.exhausted === "number" &&
+      summary.exhausted > 0
+    ) {
+      return "incomplete";
+    }
   }
 
   return "fresh-ok";
@@ -768,6 +853,10 @@ export function cronCheck(
       message: outcomeMessage("last run failed; watching the retry"),
       status: "degraded",
     };
+  }
+
+  if (verdict === "incomplete") {
+    return { ...base, message: outcomeMessage("behind schedule"), status: "degraded" };
   }
 
   if (verdict === "lagging") {
@@ -898,6 +987,10 @@ export function countSummaryStrain(summary: Record<string, unknown> | null): num
     return 0;
   }
 
+  if (isAdmissionSkip(summary) || isReconcilePrePayloadYield(summary)) {
+    return 0;
+  }
+
   let points = 0;
 
   for (const key of STRAIN_COUNTER_KEYS) {
@@ -917,6 +1010,10 @@ export function countSummaryStrain(summary: Record<string, unknown> | null): num
 
 export function countSummaryBackpressure(summary: Record<string, unknown> | null): number {
   if (!summary) {
+    return 0;
+  }
+
+  if (isAdmissionSkip(summary) || isReconcilePrePayloadYield(summary)) {
     return 0;
   }
 
@@ -950,7 +1047,10 @@ export function markerSignals(body: string): {
   return {
     backpressure,
     backpressureReason: backpressure > 0 ? summaryBackpressureReason(summary) : null,
-    strain: distress.runFailures + proseItemStrain + countSummaryStrain(summary),
+    strain:
+      isAdmissionSkip(summary) || isReconcilePrePayloadYield(summary)
+        ? 0
+        : distress.runFailures + proseItemStrain + countSummaryStrain(summary),
   };
 }
 

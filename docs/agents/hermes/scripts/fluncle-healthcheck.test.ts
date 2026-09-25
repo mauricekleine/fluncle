@@ -76,6 +76,20 @@ function marker(stdout: string): string {
   return `# Cron Job: fluncle-backup\n\n${stdout}`;
 }
 
+function completedBackup(ageMs: number = 60_000): { ageMs: number; body: string } {
+  const day = new Date(Date.now() - ageMs).toISOString().slice(0, 10);
+  return {
+    ageMs,
+    body: marker(
+      `${JSON.stringify({
+        boxState: { key: `box-state/daily/${day}/box-state.tar.gz.enc` },
+        dailyKey: `db-backups/daily/${day}/fluncle.sql.gz`,
+        ok: true,
+      })}\n`,
+    ),
+  };
+}
+
 const KILLED_MARKER = "# Cron Job: fluncle-backup\n\n";
 
 describe("probeWebWith — the latency that gates the write lane", () => {
@@ -315,10 +329,164 @@ describe("judgeCron — the marker's body", () => {
   });
 
   test("a well-formed summary is ok", () => {
-    const dir = markerDir([{ ageMs: 60_000, body: marker('{"ok":true,"dailyKey":"x"}\n') }]);
+    const dir = markerDir([completedBackup()]);
 
     expect(judgeCron(CRON, dir)).toBe("fresh-ok");
     expect(cronCheck(CRON, judgeCron(CRON, dir)).status).toBe("ok");
+  });
+
+  test.each(["backup", "reach", "cluster"])(
+    "%s admission skip stays degraded until a payload completes",
+    (job) => {
+      const cron = { cadenceMs: CRON.cadenceMs, match: job, service: `cron.${job}` };
+      const skipped = markerDir([
+        {
+          ageMs: 120_000,
+          body: `# Cron Job: fluncle-${job}\n\n${JSON.stringify({
+            admissionOutcome: "wait-expired",
+            gateState: "admission-skipped",
+            ok: true,
+            payloadStarted: false,
+          })}\n`,
+        },
+      ]);
+
+      expect(judgeCron(cron, skipped)).toBe("incomplete");
+      expect(cronCheck(cron, judgeCron(cron, skipped))).toMatchObject({
+        message: "behind schedule",
+        status: "degraded",
+      });
+
+      const complete =
+        job === "backup"
+          ? completedBackup()
+          : {
+              ageMs: 60_000,
+              body: `# Cron Job: fluncle-${job}\n\n{"ok":true,"checked":1}\n`,
+            };
+      const recovered = markerDir([
+        {
+          ageMs: 120_000,
+          body: `# Cron Job: fluncle-${job}\n\n{"gateState":"admission-skipped","payloadStarted":false,"ok":true}\n`,
+        },
+        complete,
+      ]);
+
+      expect(judgeCron(cron, recovered)).toBe("fresh-ok");
+      expect(cronCheck(cron, judgeCron(cron, recovered)).status).toBe("ok");
+    },
+  );
+
+  test("backup needs both daily artifacts from the run day", () => {
+    const day = new Date(Date.now() - 60_000).toISOString().slice(0, 10);
+    const missingBoxState = markerDir([
+      {
+        ageMs: 60_000,
+        body: marker(
+          JSON.stringify({ dailyKey: `db-backups/daily/${day}/fluncle.sql.gz`, ok: true }),
+        ),
+      },
+    ]);
+    const oldDay = markerDir([
+      {
+        ageMs: 60_000,
+        body: marker(
+          JSON.stringify({
+            boxState: { key: "box-state/daily/2020-01-01/box-state.tar.gz.enc" },
+            dailyKey: `db-backups/daily/${day}/fluncle.sql.gz`,
+            ok: true,
+          }),
+        ),
+      },
+    ]);
+
+    expect(judgeCron(CRON, missingBoxState)).toBe("incomplete");
+    expect(judgeCron(CRON, oldDay)).toBe("incomplete");
+  });
+
+  test("exhausted logbook gaps stay visible even when the reported queue is zero", () => {
+    const cron = { cadenceMs: CRON.cadenceMs, match: "logbook", service: "cron.logbook" };
+    const dir = markerDir([
+      {
+        ageMs: 60_000,
+        body: '# Cron Job: fluncle-logbook\n\n{"exhausted":3,"gapsRemaining":0,"ok":true}\n',
+      },
+    ]);
+
+    expect(judgeCron(cron, dir)).toBe("incomplete");
+    expect(cronCheck(cron, judgeCron(cron, dir)).status).toBe("degraded");
+  });
+
+  test("a reconcile phase yield before the first window is incomplete, but partial work started", () => {
+    const cron = {
+      cadenceMs: CRON.cadenceMs,
+      match: "reconcile-hub-counts",
+      service: "cron.reconcile-hub-counts",
+    };
+    const summary = {
+      admissionOutcome: "phase-yielded",
+      checked: 0,
+      errors: 1,
+      gateState: "paused",
+      ok: false,
+      partial: true,
+      produced: 0,
+      reason: "database_admission",
+      windows: 0,
+    };
+    const noWork = markerDir([
+      {
+        ageMs: 60_000,
+        body: `# Cron Job: fluncle-reconcile-hub-counts\n\n${JSON.stringify(summary)}\n`,
+      },
+    ]);
+    const partial = markerDir([
+      {
+        ageMs: 60_000,
+        body: `# Cron Job: fluncle-reconcile-hub-counts\n\n${JSON.stringify({ ...summary, errors: 0, ok: true, produced: 2, windows: 1 })}\n`,
+      },
+    ]);
+
+    expect(judgeCron(cron, noWork)).toBe("incomplete");
+    expect(cronCheck(cron, judgeCron(cron, noWork)).status).toBe("degraded");
+    expect(judgeCron(cron, partial)).toBe("fresh-ok");
+  });
+
+  test.each([
+    ["funnel-snapshot", "23:45"],
+    ["social-metrics", "22:15"],
+  ])("%s crossing UTC midnight needs its slot day in the result", (job, primarySlot) => {
+    const timer = readFileSync(
+      join(import.meta.dir, `../${job}-timer/fluncle-${job}.timer`),
+      "utf8",
+    );
+    expect(timer).toContain(`OnCalendar=*-*-* ${primarySlot}:00 UTC`);
+
+    const modified = new Date();
+    modified.setUTCHours(0, 3, 0, 0);
+    if (modified.getTime() > Date.now()) {
+      modified.setUTCDate(modified.getUTCDate() - 1);
+    }
+    const slotDay = new Date(modified);
+    slotDay.setUTCDate(slotDay.getUTCDate() - 1);
+    const priorDay = slotDay.toISOString().slice(0, 10);
+    const nextDay = modified.toISOString().slice(0, 10);
+    const cron = { cadenceMs: CRON.cadenceMs, match: job, service: `cron.${job}` };
+    const resultDir = (backfilledDays: string[]) => {
+      const dir = markerDir([
+        {
+          ageMs: 60_000,
+          body: `# Cron Job: fluncle-${job}\n\n${JSON.stringify({ backfilledDays, day: nextDay, ok: true })}\n`,
+        },
+      ]);
+      utimesSync(join(dir, "2026-07-20T000000Z-1.md"), modified, modified);
+      return dir;
+    };
+
+    const incomplete = resultDir([]);
+    expect(judgeCron(cron, incomplete)).toBe("incomplete");
+    expect(cronCheck(cron, judgeCron(cron, incomplete)).status).toBe("degraded");
+    expect(judgeCron(cron, resultDir([priorDay]))).toBe("fresh-ok");
   });
 
   const PROJECTION_CRON: CronDef = {
@@ -573,8 +741,9 @@ describe("judgeCron — the marker's body", () => {
   });
 
   test("a summary followed by trailing log lines is still ok", () => {
+    const completed = completedBackup();
     const dir = markerDir([
-      { ageMs: 60_000, body: marker('{"ok":true}\npruned 2 keys\nbox-state uploaded\n') },
+      { ...completed, body: `${completed.body}pruned 2 keys\nbox-state uploaded\n` },
     ]);
 
     expect(judgeCron(CRON, dir)).toBe("fresh-ok");
@@ -1031,6 +1200,52 @@ describe("the summary half — the sweeps' own counters", () => {
     expect(countSummaryStrain({ checked: 12, errors: 1, failed: 4, ok: false })).toBe(1);
   });
 
+  test("an admission skip remains a ledger error without entering the strain alert", () => {
+    const summary = {
+      admissionOutcome: "wait-expired",
+      errors: 1,
+      gateState: "admission-skipped",
+      payloadStarted: false,
+    };
+    const body = strainMarker(JSON.stringify(summary), ["fatal: coordinator unavailable"]);
+
+    expect(countSummaryStrain(summary)).toBe(0);
+    expect(markerSignals(body).strain).toBe(0);
+
+    const dir = markerDir([
+      { ageMs: 48 * 60 * 60_000, body },
+      { ageMs: 24 * 60 * 60_000, body },
+      { ageMs: 60 * 60_000, body },
+    ]);
+    const result = probeSweepStrain(new Map([[CRON.service, dir]]), {});
+
+    expect(result.strained).toEqual([]);
+    expect(result.newly).toEqual([]);
+    expect(buildStrainAlert(result.newly, result.cleared)).toBeNull();
+  });
+
+  test("a zero-window reconcile yield also stays out of strain while a failed partial run scores", () => {
+    const yielded = {
+      admissionOutcome: "phase-yielded",
+      checked: 0,
+      errors: 1,
+      gateState: "paused",
+      ok: false,
+      partial: true,
+      produced: 0,
+      reason: "database_admission",
+      throttled: true,
+      windows: 0,
+    };
+
+    expect(countSummaryStrain(yielded)).toBe(0);
+    expect(countSummaryBackpressure(yielded)).toBe(0);
+    expect(
+      markerStrain(strainMarker(JSON.stringify(yielded), ["fatal: coordinator unavailable"])),
+    ).toBe(0);
+    expect(countSummaryStrain({ ...yielded, produced: 2, windows: 1 })).toBe(1);
+  });
+
   test("a genuinely high item-failure rate still contributes one point", () => {
     expect(STRAIN_ITEM_FAILURE_RATE).toBe(0.5);
     expect(countSummaryStrain({ checked: 12, failed: 5, ok: true })).toBe(0);
@@ -1071,8 +1286,9 @@ describe("the summary half — the sweeps' own counters", () => {
     const dir = markerDir([{ ageMs: 60_000, body }]);
 
     expect(findJsonSummary(body)).toMatchObject({ ok: true });
-    expect(judgeCron(CRON, dir)).toBe("fresh-ok");
-    expect(cronCheck(CRON, judgeCron(CRON, dir)).status).toBe("ok");
+    const generic = { cadenceMs: 10 * 60_000, match: "capture", service: "cron.capture" };
+    expect(judgeCron(generic, dir)).toBe("fresh-ok");
+    expect(cronCheck(generic, judgeCron(generic, dir)).status).toBe("ok");
 
     expect(markerStrain(body)).toBe(1);
   });

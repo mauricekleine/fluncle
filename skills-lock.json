@@ -46,7 +46,7 @@
     "fluncle-hermes-operator": {
       "source": "packages/skills/fluncle-hermes-operator",
       "sourceType": "local",
-      "computedHash": "1dc58a6603db16c23cd1a41e8cc3ec0b9d6fa42c3e4270a361de78052671c5b2"
+      "computedHash": "4c798f7e9ca40cd25664d5a93fe9502c7fc72ff198fa49da2f60e921363c6f5d"
     },
     "fluncle-label-triage": {
       "source": "packages/skills/fluncle-label-triage",

@@ -58,7 +58,7 @@ The OPERATOR-tier `update_galaxy` (naming / rename / request-split) is NOT one t
 
 ## The box cron
 
-`fluncle-cluster` is the on-box `--no-agent` deterministic sweep — a rave-02 HOST systemd timer (nightly, 02:20 Amsterdam), the same host-timer shape as `fluncle-embed` (a stateful batch job runs on its own parallel timer, clear of the 5-minute sweeps). Source: [`hermes/scripts/cluster-sweep.{sh,ts}`](./hermes/scripts/) + [`cluster.py`](./hermes/scripts/cluster.py). The full box wire-up (units, install, the pre-smoke, the operator acts) is [`hermes/cluster-timer/README.md`](./hermes/cluster-timer/README.md).
+`fluncle-cluster` is the on-box `--no-agent` deterministic sweep — a Hermes host systemd timer (nightly, 03:20 Amsterdam), the same host-timer shape as `fluncle-embed` (a stateful batch job runs on its own parallel timer, clear of the 5-minute sweeps). Source: [`hermes/scripts/cluster-sweep.{sh,ts}`](./hermes/scripts/) + [`cluster.py`](./hermes/scripts/cluster.py). The full box wire-up (units, install, the pre-smoke, the operator acts) is [`hermes/cluster-timer/README.md`](./hermes/cluster-timer/README.md).
 
 ## Operator cold start
 

@@ -1,6 +1,6 @@
 # fluncle-sweep-failure — the OnFailure catch-all for the host sweeps
 
-Every rave-02 host-timer sweep self-reports its health by writing a `/status` marker (`scripts/cron-output.sh`) whose last stdout line the healthcheck prober parses (`.ok !== false`). That signal only exists if the run gets far enough to print a summary. A run that dies before that — an OOM kill, a missing binary, a crash before the sweep's top-level catch — writes no marker, so the prober reads the job as "fresh, no news" and nobody is told. That is the hole this dir closes.
+Every Hermes host-timer sweep self-reports its health by writing a `/status` marker (`scripts/cron-output.sh`) whose last stdout line the healthcheck prober parses (`.ok !== false`). That signal only exists if the run gets far enough to print a summary. A run that dies before that — an OOM kill, a missing binary, a crash before the sweep's top-level catch — writes no marker, so the prober reads the job as "fresh, no news" and nobody is told. Daily and weekly sweeps also use this notifier when their final retry leaves the payload incomplete, even though an admission-skip marker exists.
 
 Every sweep `.service` under `../*-timer/` carries `OnFailure=fluncle-sweep-failure@%n.service`. On a hard failure systemd instantiates the template unit here with the failed unit's name, and it posts one minimal Discord line.
 
@@ -15,7 +15,7 @@ The exit status is host-only information — the container can't see host system
 
 ## What the alert contains — and deliberately doesn't
 
-Minimal: the failed unit name, systemd's `Result` verdict (`exit-code` / `timeout` / `oom-kill` / …), and the process exit code, plus a pointer to `journalctl -u <unit>`. **Never a journal excerpt** — journald lines can carry sensitive material; the operator reads the journal themselves.
+Minimal: the failed unit name, systemd's `Result` verdict (`exit-code` / `timeout` / `oom-kill` / …), and the process exit code, plus a pointer to `journalctl -u <unit>`. Exit 75 from a daily retry unit says the payload is incomplete or unconfirmed; other failures retain the missing-marker wording. **Never a journal excerpt** — journald lines can carry sensitive material; the operator reads the journal themselves.
 
 ### Two filters, because a notification must mean real trouble
 
