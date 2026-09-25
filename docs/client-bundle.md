@@ -59,16 +59,4 @@ Import route-specific stylesheets with `?url` and link them from the route's `he
 
 ## Where the weight actually is
 
-Rendered-module weight of the eager entry chunk:
-
-| Group                                    | Rendered | Note                                                             |
-| ---------------------------------------- | -------- | ---------------------------------------------------------------- |
-| `react-dom`                              | 450 KB   | the floor                                                        |
-| `@base-ui/react`                         | 351 KB   | menu + tooltip + scroll-area + floating-ui, from the root chrome |
-| `@tanstack/router-core` + `react-router` | 195 KB   | the framework                                                    |
-| `@sentry/core` + `@sentry/browser`       | 167 KB   | must init early by design                                        |
-| `@phosphor-icons/react`                  | 93 KB    | icons actually on screen                                         |
-| `packages/registry/src`                  | 84 KB    | the surfaces registry, read by the nav model                     |
-| `cnfast`                                 | 62 KB    | the tailwind-merge table                                         |
-
-Nothing in that list is a leak. The next real cut is the root chrome's Base UI surface (a lazily-mounted menu/tooltip is an interaction-timing decision, not plumbing) and the registry — both belong to the design overhaul rather than to delivery.
+The search dialog and Browse popup load on first open, with focus and pointer prefetch from their triggers. The preview player bar stays eager so its pause, close, and keyboard controls are continuous from the first play. The `/status` cron data is derived from the surfaces registry inside its server function and serialized through the loader, so the registry does not enter the eager client chunk. React DOM, the router, Sentry, the root chrome triggers, and their Base UI roots remain eager. Measure the entry with a production build and `chunk.modules[id].renderedLength` before further cuts; keep the first interaction and keyboard handoffs in the browser suite.
