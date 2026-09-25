@@ -173,7 +173,7 @@ describe("the breaker TRIPS from real 429s on the real fetch path", () => {
       expect((await getSpotifyAnchorBreakerState()).tripped).toBe(false);
       expect(await anchorSpotifySearchGate(quotaAt)).toMatchObject({
         nextEligibleAt: "2026-07-22T01:30:00.000Z",
-        reason: "breaker_quota",
+        reason: "quota_hold",
       });
       expect((await anchorSpotifySearchGate(new Date("2026-07-22T01:30:00.000Z"))).reason).toBe(
         "open",

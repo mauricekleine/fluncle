@@ -149,6 +149,7 @@ export type AnchorPreflight = {
     | "flag_off"
     | "friday_window"
     | "open"
+    | "quota_hold"
     | "shared_meter";
   nextEligibleAt?: null | string;
 };
@@ -526,7 +527,25 @@ export function anchorFiringDeferral(
   if (preflight.gateReason === "friday_window") {
     return "awaiting_free_ask";
   }
-  if (preflight.gateReason === "breaker_quota" || longAnchorThrottle(preflight, now)) {
+  if (
+    preflight.gateReason !== undefined &&
+    ![
+      "breaker_quota",
+      "breaker_throttle",
+      "flag_off",
+      "friday_window",
+      "open",
+      "quota_hold",
+      "shared_meter",
+    ].includes(preflight.gateReason)
+  ) {
+    return "awaiting_free_ask";
+  }
+  if (
+    preflight.gateReason === "breaker_quota" ||
+    preflight.gateReason === "quota_hold" ||
+    longAnchorThrottle(preflight, now)
+  ) {
     return !preflight.apifyEnabled
       ? "apify_disabled"
       : preflight.apifyBudgetSpent
@@ -1366,7 +1385,7 @@ async function classifyAnchorFiring(
   const paidMode =
     preflight.gateReason === "breaker_quota"
       ? "quota"
-      : longAnchorThrottle(preflight, now)
+      : preflight.gateReason === "quota_hold" || longAnchorThrottle(preflight, now)
         ? "prior"
         : undefined;
   return {

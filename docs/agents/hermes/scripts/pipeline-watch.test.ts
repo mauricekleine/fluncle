@@ -124,6 +124,24 @@ describe("real box journal summary replay", () => {
     ).not.toBe("scheduled_pause");
   });
 
+  test("three hourly quota_hold ticks are a scheduled pause without an incident", () => {
+    const first = Date.parse("2026-09-24T00:30:00.000Z");
+    const markers = [0, 1, 2].map((hour) => ({
+      at: first + hour * 60 * 60_000,
+      summary: {
+        blockedReason: hour === 1 ? "quota_hold" : null,
+        gateReason: hour === 1 ? null : "quota_hold",
+        produced: 0,
+        queueDepth: 2000,
+      },
+    }));
+    const verdict = evaluate("anchor", markers);
+    expect(verdict.state).toBe("scheduled_pause");
+    expect(verdict.cause).toBe("quota_hold");
+    expect(verdict.output).toBe(0);
+    expect(planIncidents({}, [verdict], first + 3 * 60 * 60_000).alerts).toEqual([]);
+  });
+
   test("enrich repair pending remains a stall with a counted backlog", () => {
     const verdict = evaluate("analyze", asMarkers(fixtures.enrichRepair), {
       queues: { analyze: 100, capture: 5, embed: 5 },

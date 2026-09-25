@@ -938,6 +938,7 @@ export const AnchorRungFlagsSchema = z
     gateReason: z.enum([
       "friday_window",
       "flag_off",
+      "quota_hold",
       "breaker_quota",
       "breaker_throttle",
       "shared_meter",
