@@ -4,6 +4,8 @@ import { type ReactNode, useMemo } from "react";
 import { DiscoveryPlayableList, DiscoveryRow } from "@/components/discovery-row";
 import { SearchFilterChips } from "@/components/search/search-filter-chips";
 import { searchHitToDiscoveryTrack } from "@/lib/discovery-tracks";
+import { galaxySoundLine } from "@/lib/galaxy-sound";
+import { queueTrackFromHit } from "@/lib/player-tracks";
 import { albumCoverAtSize } from "@/lib/media";
 import {
   ENTITY_GROUPS,
@@ -12,7 +14,9 @@ import {
   type SearchEntity,
   type SearchHit,
   type SearchResponse,
+  searchSeeAll,
 } from "@/lib/search-results";
+import { anchorNames, styleBySlug } from "@/lib/search-styles";
 
 function Cover({ src }: { src?: string }): ReactNode {
   if (!src) {
@@ -30,6 +34,12 @@ function Cover({ src }: { src?: string }): ReactNode {
   );
 }
 
+export function EntitySoundLine({ entity }: { entity: SearchEntity }): ReactNode {
+  const line = entity.kind === "galaxy" ? galaxySoundLine(entity.slug) : undefined;
+
+  return line ? <span className="search-row-artists search-row-sound">{line}</span> : undefined;
+}
+
 function EntityRow({ entity }: { entity: SearchEntity }): ReactNode {
   return (
     <li>
@@ -37,6 +47,7 @@ function EntityRow({ entity }: { entity: SearchEntity }): ReactNode {
         <Cover src={entity.imageUrl} />
         <span className="search-row-text">
           <span className="search-row-title">{entity.name}</span>
+          <EntitySoundLine entity={entity} />
         </span>
         <span className="search-row-tail">
           <ArrowRightIcon aria-hidden="true" className="search-jump-icon" />
@@ -81,22 +92,56 @@ export function anchorCredit(anchor: SearchHit): string {
   return artists.length > 0 ? `${artists} — ${anchor.title}` : anchor.title;
 }
 
-export function SearchResultsList({ response }: { response: SearchResponse }): ReactNode {
-  const { findings, unlit } = partitionHits(response.results);
-
+export function SearchResultsList({
+  response,
+  sonicView = false,
+}: {
+  response: SearchResponse;
+  sonicView?: boolean;
+}): ReactNode {
+  const byDistance = response.kind === "sonic";
+  const { findings, unlit } = byDistance
+    ? { findings: [], unlit: response.results }
+    : partitionHits(response.results);
   const tracks = useMemo(
     () => [...findings, ...unlit].map(searchHitToDiscoveryTrack),
     [findings, unlit],
   );
 
   const headUnlit = findings.length > 0 || response.entities.length > 0;
+  const style = styleBySlug(response.filters?.sound);
+  const leanedOn = response.filters?.soundsLikeArtists ?? [];
+  const seeAll = searchSeeAll(response);
+  const seed = useMemo(
+    () => (response.anchor ? queueTrackFromHit(response.anchor) : undefined),
+    [response.anchor],
+  );
 
   return (
     <>
-      {response.anchor ? (
+      {response.anchor && sonicView ? (
+        leanedOn.length > 0 ? (
+          <p className="search-note">
+            <WaveformIcon aria-hidden="true" className="search-note-icon" />
+            <span>
+              I haven’t got a read on <strong>{response.anchor.title}</strong> yet, so I went by{" "}
+              <strong>{anchorNames(leanedOn)}</strong>.
+            </span>
+          </p>
+        ) : undefined
+      ) : response.anchor ? (
         <p className="search-note">
           <WaveformIcon aria-hidden="true" className="search-note-icon" />
           Near <strong>{anchorCredit(response.anchor)}</strong>
+        </p>
+      ) : undefined}
+
+      {style ? (
+        <p className="search-note">
+          <WaveformIcon aria-hidden="true" className="search-note-icon" />
+          <span>
+            Going by <strong>{anchorNames(leanedOn)}</strong>.
+          </span>
         </p>
       ) : undefined}
 
@@ -106,7 +151,9 @@ export function SearchResultsList({ response }: { response: SearchResponse }): R
         </p>
       ) : undefined}
 
-      {response.filters ? <SearchFilterChips filters={response.filters} /> : undefined}
+      {response.filters && !style && !sonicView ? (
+        <SearchFilterChips filters={response.filters} />
+      ) : undefined}
 
       {ENTITY_GROUPS.map((group) => {
         const entities = response.entities.filter((entity) => entity.kind === group.kind);
@@ -124,13 +171,22 @@ export function SearchResultsList({ response }: { response: SearchResponse }): R
         );
       })}
 
-      <DiscoveryPlayableList tracks={tracks}>
+      <DiscoveryPlayableList seed={seed} tracks={tracks}>
         {findings.length > 0 ? <TrackGroup heading="Findings" hits={findings} /> : undefined}
 
         {unlit.length > 0 ? (
           <TrackGroup heading={headUnlit ? "Tracks" : undefined} hits={unlit} />
         ) : undefined}
       </DiscoveryPlayableList>
+
+      {seeAll ? (
+        <p className="search-see-all">
+          <Link className="search-see-all-link" to={seeAll.href as never}>
+            {seeAll.label}
+            <ArrowRightIcon aria-hidden="true" className="search-jump-icon" />
+          </Link>
+        </p>
+      ) : undefined}
     </>
   );
 }

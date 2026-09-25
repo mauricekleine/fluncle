@@ -3,6 +3,7 @@ import { siteUrl } from "./fluncle-links";
 import { jsonLdScript } from "./json-ld";
 import { logPageUrl } from "./log-schema";
 import { textParam } from "./search-params";
+import { styleBySlug } from "./search-styles";
 
 export type TracksSearch = TracksHubFilters;
 
@@ -23,10 +24,10 @@ export function tracksPagedMeta(page: number): { description: string; title: str
 
 const heldCountFormatter = new Intl.NumberFormat("en-US");
 
-export function tracksMastheadLine(heldTotal: number): string {
+export function tracksMastheadLine(heldTotal: number, order = "newest first"): string {
   return heldTotal > 1
-    ? `${heldCountFormatter.format(heldTotal)} drum & bass tracks, newest first.`
-    : "Drum & bass tracks, newest first.";
+    ? `${heldCountFormatter.format(heldTotal)} drum & bass tracks, ${order}.`
+    : `Drum & bass tracks, ${order}.`;
 }
 
 const KEY_PITCH_CLASSES = [
@@ -68,6 +69,7 @@ export function parseTracksSearch(search: Record<string, unknown>): TracksSearch
     galaxy: textParam(search["galaxy"]),
     key: textParam(search["key"]),
     label: textParam(search["label"]),
+    sound: styleBySlug(textParam(search["sound"]))?.slug,
     yearMax: boundedIntParam(search["yearMax"], YEAR_BOUNDS),
     yearMin: boundedIntParam(search["yearMin"], YEAR_BOUNDS),
   };
@@ -112,6 +114,16 @@ function strictFilterString(value: unknown, field: string): string | undefined {
   return value;
 }
 
+function strictStyleSlug(value: unknown): string | undefined {
+  const slug = strictFilterString(value, "sound");
+
+  if (slug !== undefined && styleBySlug(slug)?.slug !== slug) {
+    throw new TracksHubPayloadError("sound", "a style the lexicon holds");
+  }
+
+  return slug;
+}
+
 export function parseTracksHubPayload(payload: { filters: TracksSearch; page: number }): {
   filters: TracksSearch;
   page: number;
@@ -140,9 +152,9 @@ export function parseTracksHubPayload(payload: { filters: TracksSearch; page: nu
     filters: {
       bpmMax: strictBoundedInt(filters["bpmMax"], "bpmMax", BPM_BOUNDS),
       bpmMin: strictBoundedInt(filters["bpmMin"], "bpmMin", BPM_BOUNDS),
-      galaxy: strictFilterString(filters["galaxy"], "galaxy"),
       key: strictFilterString(filters["key"], "key"),
       label: strictFilterString(filters["label"], "label"),
+      sound: strictStyleSlug(filters["sound"]),
       yearMax: strictBoundedInt(filters["yearMax"], "yearMax", YEAR_BOUNDS),
       yearMin: strictBoundedInt(filters["yearMin"], "yearMin", YEAR_BOUNDS),
     },
@@ -157,6 +169,9 @@ export function tracksSearchHasFilters(search: TracksSearch): boolean {
 export function buildTracksHref(filters: TracksSearch, page: number): string {
   const params = new URLSearchParams();
 
+  if (filters.sound !== undefined) {
+    params.set("sound", filters.sound);
+  }
   if (filters.yearMin !== undefined) {
     params.set("yearMin", String(filters.yearMin));
   }
@@ -174,9 +189,6 @@ export function buildTracksHref(filters: TracksSearch, page: number): string {
   }
   if (filters.label !== undefined) {
     params.set("label", filters.label);
-  }
-  if (filters.galaxy !== undefined) {
-    params.set("galaxy", filters.galaxy);
   }
   if (page > 1) {
     params.set("page", String(page));

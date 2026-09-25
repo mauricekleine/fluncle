@@ -13,8 +13,10 @@ import { SEARCH_EXAMPLES, type SearchHit, type SearchResponse } from "@/lib/sear
 
 const ROUTE_PATHS = ["/", "/search", "/tracks", "/findings", "/log/$logId", "/artist/$slug"];
 
-async function renderPage(data: SearchPageData, q?: string): Promise<string> {
-  const rootRoute = createRootRoute({ component: () => <SearchAnswer data={data} q={q} /> });
+async function renderPage(data: SearchPageData, q?: string, like?: string): Promise<string> {
+  const rootRoute = createRootRoute({
+    component: () => <SearchAnswer data={data} like={like} q={q} />,
+  });
   const children = ROUTE_PATHS.map((path) =>
     createRoute({ getParentRoute: () => rootRoute, path }),
   );
@@ -139,6 +141,83 @@ describe("the answered surface", () => {
     expect(html).toContain("key: A minor");
   });
 
+  it("counts a style answer as tracks in its order, one list, with where it continues", async () => {
+    const html = await renderPage(
+      answered({
+        filters: { sound: "liquid", soundsLikeArtists: ["Calibre", "LSB"] },
+        kind: "sonic",
+        results: [
+          hit({ title: "Near One", trackId: "t1" }),
+          hit({ certified: true, logId: "701.1.0A", title: "Lit Two", trackId: "t2" }),
+          hit({ title: "Far Three", trackId: "t3" }),
+        ],
+      }),
+      "liquid",
+    );
+
+    expect(html).toContain("3 tracks closest to Liquid.");
+    expect(html).toContain("Going by <strong>Calibre and LSB</strong>.");
+    expect(html.indexOf("Near One")).toBeLessThan(html.indexOf("Lit Two"));
+    expect(html.indexOf("Lit Two")).toBeLessThan(html.indexOf("Far Three"));
+    expect(html).not.toContain(">Findings<");
+    expect(html).toContain('href="/tracks?sound=liquid"');
+    expect(html).toContain("See all tracks closest to Liquid");
+  });
+
+  it("names the seed of the sonic view once, and says when it went by the artist instead", async () => {
+    const own = await renderPage(
+      answered({
+        anchor: hit({ title: "Seed Tune", trackId: "seed" }),
+        kind: "sonic",
+        results: [hit({ title: "Next Tune", trackId: "t2" })],
+      }),
+      undefined,
+      "seed",
+    );
+
+    expect(own).toContain("1 track close to Nova Kestrel — Seed Tune.");
+    expect(own).not.toContain("Near ");
+
+    const leaned = await renderPage(
+      answered({
+        anchor: hit({ title: "Seed Tune", trackId: "seed" }),
+        filters: { soundsLikeArtists: ["Nova Kestrel"] },
+        kind: "sonic",
+        results: [hit({ title: "Next Tune", trackId: "t2" })],
+      }),
+      undefined,
+      "seed",
+    );
+
+    expect(leaned).toContain("I haven’t got a read on <strong>Seed Tune</strong> yet");
+
+    const nothing = await renderPage(
+      answered({ anchor: hit({ title: "Seed Tune", trackId: "seed" }), kind: "sonic" }),
+      undefined,
+      "seed",
+    );
+
+    expect(nothing).toContain("I haven’t got a read on how Nova Kestrel — Seed Tune sounds yet.");
+    expect(await renderPage(answered({ kind: "sonic" }), undefined, "nope")).toContain(
+      "No track at that link.",
+    );
+  });
+
+  it("keeps echoing the rest of a compound sonic query beside its anchor", async () => {
+    const html = await renderPage(
+      answered({
+        anchor: hit({ certified: true, logId: "701.1.0A", title: "Synthetic Aurora" }),
+        filters: { label: "Hospital Records", soundsLike: "Synthetic Aurora" },
+        kind: "sonic",
+        results: [hit({ title: "Neon Undertow", trackId: "t2" })],
+      }),
+      "sounds like Synthetic Aurora but on Hospital Records",
+    );
+
+    expect(html).toContain("Near ");
+    expect(html).toContain("label: Hospital Records");
+  });
+
   it("names the track the sonic tier anchored on — a real row, never an invented vibe", async () => {
     const html = await renderPage(
       answered({
@@ -179,8 +258,56 @@ describe("the states that are not an answer", () => {
     expect(html).toContain("Try a different name, or ");
     expect(html).toContain("dig through every track I hold");
     expect(html).toContain('href="/tracks"');
+    expect(html.match(/Nothing out here for/g)).toHaveLength(1);
+    expect(html).toMatch(/<output[^>]*>Nothing out here for “zzzqqx”\.<\/output>/);
+    expect(html).toContain('href="/tracks?sound=liquid"');
+  });
 
-    expect(html).toContain("No matches for “zzzqqx”.");
+  it("offers the style a missed query mentioned as its nearest sound", async () => {
+    const html = await renderPage(answered({}), "chilled liquid zzqx");
+
+    expect(html).toContain("Closest sound I’ve got:");
+    expect(html.match(/href="\/tracks\?sound=/g)).toHaveLength(1);
+  });
+
+  it("answers a sentence typed live by its words, and leaves the language tier for Enter", async () => {
+    const words: SearchPageData = {
+      awaitsEnter: true,
+      response: {
+        degraded: false,
+        entities: [],
+        kind: "token",
+        results: [hit({ title: "Moonlit Current" })],
+      },
+      status: "answered",
+    };
+    const html = await renderPage(words, "moonlit current");
+
+    expect(html).toContain("1 match for “moonlit current”. Press Enter to read it as a sentence.");
+    expect(html).toContain("Moonlit Current");
+
+    const none = await renderPage(
+      { ...words, response: { ...words.response, results: [] } },
+      "zz qq",
+    );
+
+    expect(none).toContain("Press Enter to search for “zz qq”.");
+    expect(none).not.toContain("Nothing out here");
+  });
+
+  it("never passes an empty word match off as nothing out here when the language tier was down", async () => {
+    const html = await renderPage(answered({ degraded: true }), "tracks in F minor");
+
+    expect(html).toContain(
+      "Reading by name only right now, and nothing came up for “tracks in F minor”.",
+    );
+    expect(html).not.toContain("Nothing out here");
+  });
+
+  it("does not offer a style back as the nearest sound when the style itself came back empty", async () => {
+    const html = await renderPage(answered({}), "neurofunk");
+
+    expect(html).not.toContain("Closest sound I’ve got:");
   });
 
   it("tells a coordinate miss apart from a name miss", async () => {
@@ -219,5 +346,18 @@ describe("the field", () => {
 
     expect(html).toContain('for="search-page-q"');
     expect(html).toContain("Search the archive");
+  });
+});
+
+describe("a spent search budget", () => {
+  it("says so once and still hands you the whole list", async () => {
+    const html = await renderPage({ status: "limited" }, "liquid");
+
+    expect(html).toContain(
+      "That’s a lot of searching from one place in one go. Give it a minute, then try again.",
+    );
+    expect(html).toContain("Till then, ");
+    expect(html).toContain('href="/tracks"');
+    expect(html).not.toContain("Nothing out here");
   });
 });

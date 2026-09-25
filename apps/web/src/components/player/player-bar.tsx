@@ -1,11 +1,11 @@
 import { CaretRightIcon, PauseIcon, PlayIcon, SkipForwardIcon, XIcon } from "@phosphor-icons/react";
-import { Link, useNavigate } from "@tanstack/react-router";
+import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { TrackActionsMenu } from "@/components/player/track-actions-menu";
 import { TrackArtwork } from "@/components/track-artwork";
 import { albumCoverAtSize } from "@/lib/media";
-import { loadSimilarTracks } from "@/lib/player-tracks";
+import { loadSimilarTracks, similarSearchHref, trackCredit } from "@/lib/player-tracks";
 import {
   dismissPlayer,
   keepGoing,
@@ -13,8 +13,10 @@ import {
   skipPrevious,
   togglePlayback,
   usePlayerQueue,
+  type QueueTrack,
   usePreviewProgress,
   usePreviewStatus,
+  useSonicTrail,
 } from "@/lib/preview-player";
 
 function isTypingTarget(target: EventTarget | null): boolean {
@@ -94,6 +96,61 @@ function usePlayerKeys(enabled: boolean): void {
   }, [enabled]);
 }
 
+function SonicTrail({ trail }: { trail: readonly QueueTrack[] }): ReactNode {
+  const here = useRouterState({
+    select: (state): string | undefined => {
+      const like = (state.location.search as { like?: unknown }).like;
+
+      return state.location.pathname === "/search" && typeof like === "string" ? like : undefined;
+    },
+  });
+
+  if (trail.length === 0) {
+    return undefined;
+  }
+
+  const nearest = nearestSeedIndex(trail, here);
+
+  return (
+    <nav aria-label="Similar tracks trail" className="player-trail">
+      <ol className="player-trail-seeds">
+        {trail.map((seed, index) => (
+          <li
+            className="player-trail-seed"
+            data-nearest={index === nearest ? "" : undefined}
+            key={seed.id}
+          >
+            <Link
+              aria-current={here === seed.id ? "page" : undefined}
+              aria-label={`Similar to ${trackCredit(seed)}`}
+              className="player-trail-link"
+              data-discovery="similar"
+              preload={false}
+              to={similarSearchHref(seed) as never}
+            >
+              <TrackArtwork
+                alt=""
+                className="player-trail-cover"
+                src={albumCoverAtSize(seed.coverUrl, "small")}
+              />
+            </Link>
+          </li>
+        ))}
+      </ol>
+    </nav>
+  );
+}
+
+export function nearestSeedIndex(trail: readonly QueueTrack[], here: string | undefined): number {
+  for (let index = trail.length - 1; index >= 0; index -= 1) {
+    if (trail[index]?.id !== here) {
+      return index;
+    }
+  }
+
+  return trail.length - 1;
+}
+
 function ProgressLine({ lit }: { lit: boolean }): ReactNode {
   const { currentTime, duration } = usePreviewProgress();
   const fraction = duration > 0 ? Math.min(1, currentTime / duration) : 0;
@@ -110,6 +167,7 @@ export function PlayerBar(): ReactNode {
   const [continuing, setContinuing] = useState(false);
   const [noWayOn, setNoWayOn] = useState(false);
   const queue = usePlayerQueue();
+  const trail = useSonicTrail();
   const track = queue?.tracks[queue.index];
   const status = usePreviewStatus(track?.id);
   const navigate = useNavigate();
@@ -122,6 +180,22 @@ export function PlayerBar(): ReactNode {
   const docked = mounted && track !== undefined;
 
   usePlayerKeys(docked);
+
+  const trailed = docked && trail.length > 0;
+
+  useEffect(() => {
+    const root = document.documentElement;
+
+    if (trailed) {
+      root.dataset.playerTrail = "";
+    } else {
+      delete root.dataset.playerTrail;
+    }
+
+    return () => {
+      delete root.dataset.playerTrail;
+    };
+  }, [trailed]);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -185,6 +259,7 @@ export function PlayerBar(): ReactNode {
     <section aria-label="Player" className="player-bar" data-lit={track.lit ? "" : undefined}>
       <ProgressLine lit={track.lit === true} />
       <div className="player-bar-inner">
+        <SonicTrail trail={trail} />
         {track.href ? (
           <Link
             aria-hidden="true"
@@ -212,7 +287,7 @@ export function PlayerBar(): ReactNode {
             <output className="player-artists">Nothing else close in sound yet.</output>
           ) : (
             <p className="player-artists">
-              {track.artists.join(", ")}
+              <span className="player-artists-names">{track.artists.join(", ")}</span>
               <span aria-hidden="true" className="player-position player-position--inline">
                 {position}
               </span>
@@ -238,11 +313,12 @@ export function PlayerBar(): ReactNode {
               <button
                 aria-busy={continuing}
                 aria-disabled={continuing}
+                aria-label="Keep going"
                 className="player-keep-going"
                 onClick={onKeepGoing}
                 type="button"
               >
-                Keep going
+                <span className="player-keep-going-label">Keep going</span>
                 <CaretRightIcon aria-hidden="true" weight="bold" />
               </button>
             )

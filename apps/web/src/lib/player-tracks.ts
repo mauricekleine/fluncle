@@ -14,8 +14,14 @@ export function similarQuery(track: Pick<QueueTrack, "artists" | "title">): stri
   return `tracks that sound like ${trackCredit(track)}`;
 }
 
-export function similarSearchHref(track: Pick<QueueTrack, "artists" | "title">): string {
-  return searchPagePath(similarQuery(track));
+export function similarSearchHref(track: Pick<QueueTrack, "artists" | "id" | "title">): string {
+  return isTrackId(track.id)
+    ? `/search?like=${encodeURIComponent(track.id)}`
+    : searchPagePath(similarQuery(track));
+}
+
+function isTrackId(id: string): boolean {
+  return !/^\d{3,}\.(?:\d|f)\./i.test(id);
 }
 
 export function toQueueTrack(row: {
@@ -50,6 +56,7 @@ export function queueTrackFromHit(hit: SearchHit): QueueTrack {
     href: destination && !destination.external ? destination.href : undefined,
     id: hit.trackId,
     lit: hit.certified,
+    similar: hit.similar,
     spotifyUrl: hit.spotifyUrl,
     title: hit.title,
   };

@@ -1,3 +1,4 @@
+import { SONIC_SEED_SELECT, sonicSeedFlag } from "./sonic-seed";
 import {
   type FeedListPage,
   type MixArtist,
@@ -64,6 +65,7 @@ export type { RadioScheduleEntry };
 
 export type TrackRow = {
   added_at: string;
+  sonic_seed?: number | null;
   album: string | null;
 
   album_artwork_height: number | null;
@@ -172,7 +174,8 @@ export const TRACK_SELECT = `tracks.track_id, tracks.spotify_url, tracks.apple_m
   (select url from social_posts
      where track_id = tracks.track_id and platform = 'youtube' and status = 'published'
        and url is not null
-     order by published_at desc limit 1) as youtube_url`;
+     order by published_at desc limit 1) as youtube_url,
+  ${SONIC_SEED_SELECT}`;
 
 const LEAN_LIST_OMITTED_COLUMNS = new Set([
   "tracks.features_json",
@@ -212,6 +215,7 @@ const BOARD_OMITTED_SUBQUERY_ALIASES = new Set([
   "galaxy_name",
   "galaxy_slug",
   "label_slug",
+  "sonic_seed",
   "youtube_url",
 ]);
 const BOARD_TRACK_SELECT = deriveTrackSelect(
@@ -389,7 +393,7 @@ export function toLeanTrackListItem(row: LeanTrackRow): LeanTrackListItem {
     postedToTelegram: Boolean(row.posted_to_telegram),
     previewUrl: row.preview_url ?? undefined,
     releaseDate: row.release_date ?? undefined,
-
+    similar: sonicSeedFlag(row.sonic_seed),
     sourceAudioFailures: row.source_audio_failures > 0 ? row.source_audio_failures : undefined,
 
     sourceAudioKey: row.source_audio_key ?? undefined,

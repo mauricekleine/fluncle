@@ -35,6 +35,7 @@ export type QueueTrack = {
   id: string;
 
   lit?: boolean;
+  similar?: boolean;
   spotifyUrl?: string;
   title: string;
 };
@@ -70,6 +71,35 @@ const PAGE_HANDOFF_TTL_MS = 30_000;
 type PageHandoff = { at: number; generation: number; href: string };
 
 let pendingPageContinuation: PageHandoff | undefined;
+
+export const TRAIL_MAX = 5;
+
+let trail: readonly QueueTrack[] = [];
+const trailListeners = new Set<() => void>();
+
+function recordSeed(seed: QueueTrack | undefined): void {
+  if (!seed || trail.some((item) => item.id === seed.id)) {
+    return;
+  }
+
+  trail = [...trail, seed].slice(-TRAIL_MAX);
+  notify(trailListeners);
+}
+
+function clearTrail(): void {
+  if (trail.length === 0) {
+    return;
+  }
+
+  trail = [];
+  notify(trailListeners);
+}
+
+function subscribeTrail(listener: () => void): () => void {
+  trailListeners.add(listener);
+
+  return () => trailListeners.delete(listener);
+}
 
 let soundingGeneration = -1;
 
@@ -399,7 +429,11 @@ function playAt(index: number, origin: StartOrigin = "listener"): void {
 export function playQueue(
   tracks: QueueTrack[],
   startIndex: number,
-  options?: { continuation?: QueueContinuation; origin?: StartOrigin },
+  options?: {
+    continuation?: QueueContinuation;
+    origin?: StartOrigin;
+    seed?: QueueTrack;
+  },
 ): void {
   if (tracks.length === 0) {
     return;
@@ -407,6 +441,7 @@ export function playQueue(
 
   const index = Math.min(Math.max(0, startIndex), tracks.length - 1);
 
+  recordSeed(options?.seed);
   consecutiveMisses = 0;
   emitQueue({ continuation: options?.continuation, ended: false, index, tracks });
   load(tracks[index]?.id ?? "", { publicPreview: true }, options?.origin);
@@ -491,6 +526,7 @@ export function stopPreview(): void {
 export function dismissPlayer(): void {
   stop();
   emitQueue(undefined);
+  clearTrail();
   releaseMediaSession();
 }
 
@@ -545,7 +581,7 @@ export async function keepGoing(options: {
     return "none";
   }
 
-  playQueue(next, 0, { continuation: { kind: "similar" }, origin: "automatic" });
+  playQueue(next, 0, { continuation: { kind: "similar" }, origin: "automatic", seed: last });
 
   return "moved";
 }
@@ -668,19 +704,31 @@ export function usePlayerQueue(): QueueState | undefined {
   );
 }
 
+export function useSonicTrail(): readonly QueueTrack[] {
+  return useSyncExternalStore(
+    subscribeTrail,
+    () => trail,
+    () => EMPTY_TRAIL,
+  );
+}
+
+const EMPTY_TRAIL: readonly QueueTrack[] = [];
+
 export function readPlayer(): {
   missing: ReadonlySet<string>;
   queue: QueueState | undefined;
   status: PreviewStatus;
   trackId: string | undefined;
+  trail: readonly QueueTrack[];
 } {
-  return { missing: misses, queue, status: state.status, trackId: state.trackId };
+  return { missing: misses, queue, status: state.status, trackId: state.trackId, trail };
 }
 
 export function resetPreviewPlayer(): void {
   stop();
   audio = undefined;
   queue = undefined;
+  trail = [];
   misses = new Set();
   consecutiveMisses = 0;
   pendingPageContinuation = undefined;

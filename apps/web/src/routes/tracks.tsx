@@ -1,13 +1,7 @@
-import { Link, createFileRoute, notFound, useNavigate } from "@tanstack/react-router";
+import { Link, createFileRoute, notFound, redirect, useNavigate } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { type KeyboardEvent, type ReactNode, useMemo, useState } from "react";
-import {
-  CalendarBlankIcon,
-  CaretDownIcon,
-  MusicNotesIcon,
-  PlanetIcon,
-  TagIcon,
-} from "@phosphor-icons/react";
+import { CalendarBlankIcon, CaretDownIcon, MusicNotesIcon, TagIcon } from "@phosphor-icons/react";
 import { Button } from "@fluncle/ui/components/button";
 import {
   Combobox,
@@ -31,22 +25,19 @@ import {
 } from "@fluncle/ui/components/select";
 import { CataloguePager } from "@/components/catalogue-groups";
 import { HubYearLane } from "@/components/catalogue-hub-section";
+import { StyleChips } from "@/components/search/style-chips";
 import { StoryNotFoundState } from "@/components/stories/stories-states";
 import { DiscoveryPlayableList } from "@/components/discovery-row";
-import { readTracksHubAtOneTime } from "./-tracks-hub-reads";
+import { readTracksHubAtOneTime, readTracksHubSoundAtOneTime } from "./-tracks-hub-reads";
 import { TracksHubRow } from "@/components/tracks-hub-row";
 import { hubEntryToDiscoveryTrack } from "@/lib/discovery-tracks";
-import { isGalaxyMapFullyNamed, listPublicGalaxies } from "@/lib/server/galaxies-map";
 import {
   type CatalogueHubNumberedPage,
   CatalogueHubPageOutOfRangeError,
   listKnownLabelNames,
 } from "@/lib/server/labels";
-import {
-  type TracksHubEntry,
-  type TracksHubFilters,
-  type TracksHubYearLaneEntry,
-} from "@/lib/server/tracks-hub";
+import { type TracksHubEntry, type TracksHubYearLaneEntry } from "@/lib/server/tracks-hub";
+import { anchorNames, styleBySlug } from "@/lib/search-styles";
 import {
   KEY_FILTER_OPTIONS,
   TRACKS_HUB_MAX_PAGE,
@@ -66,8 +57,10 @@ import {
 // Log ID coordinate; an unlit catalogue row, coverless and dust-inked — DESIGN.md's Unlit Rule).
 //
 // The filter axes MIRROR the search vocabulary (`SearchFiltersSchema`): `yearMin`/`yearMax`,
-// `bpmMin`/`bpmMax`, `key`, `label`, compiled by the same `compileFilters`. `galaxy` is the one
-// extension (a galaxy slug; it narrows to certified findings, honestly).
+// `bpmMin`/`bpmMax`, `key`, `label`, compiled by the same `compileFilters`. `sound` is the one
+// extension: a style from the lexicon, which re-ranks the list closest first by that style's sound
+// rather than filtering it (lib/server/style-probe.ts). Galaxies are the lore map of findings, not a
+// catalogue filter, so an old `?galaxy=` link is sent to that galaxy's own page.
 //
 // PAGINATION IS NUMBERED (the `/labels` hub precedent, #731): every page — page 1 the bare `/tracks`,
 // `?page=N` beyond — SSRs one `limit/offset` slice behind a real-anchor pager, and a quiet YEAR fast
@@ -76,17 +69,18 @@ import {
 // `useLoaderData`, no react-query (AGENTS.md). The bare hub is indexable + in the sitemap; ANY filter
 // param present flips it to `noindex`, and only the bare `/tracks` is a sitemap URL.
 
-/** A galaxy the filter control can offer — a named, public galaxy (its display name + slug). */
-type GalaxyOption = { name: string; slug: string };
+/** How a `?sound=` page was ordered: the anchors its sound came from, and whether it ranked at all
+    (false when the ranking could not run and the page fell back to newest first). */
+type TracksSoundState = { anchors: string[]; limited?: boolean; ranked: boolean; slug: string };
 
 /** The serverFn payload: a page of the hub (or "missing" for a page past the end), the year lane, the
-    whole held count, and the galaxy + label options for the filter controls. */
+    whole held count, the label options for the filter control, and the sound state when ranked. */
 type TracksFetchResult =
   | {
-      galaxyOptions: GalaxyOption[];
       heldTotal: number;
       hub: CatalogueHubNumberedPage<TracksHubEntry>;
       labelOptions: string[];
+      sound?: TracksSoundState;
       status: "found";
       years: TracksHubYearLaneEntry[];
     }
@@ -96,12 +90,12 @@ type TracksFetchResult =
     them directly. */
 type TracksLoaderData = {
   filters: TracksSearch;
-  galaxyOptions: GalaxyOption[];
   hasFilters: boolean;
   heldTotal: number;
   hub: CatalogueHubNumberedPage<TracksHubEntry>;
   labelOptions: string[];
   page: number;
+  sound?: TracksSoundState;
   years: TracksHubYearLaneEntry[];
 };
 
@@ -115,52 +109,63 @@ function pageParam(value: unknown): number | undefined {
 }
 
 // The page fetch — the SAME serverFn the loader calls (no oRPC op; the hub reads through
-// `createServerFn` like the other hubs). It owns the galaxy LAUNCH GATE: a `galaxy` filter is honoured
-// only once the whole sonic map is named (the gate `/galaxies` ships behind), so a single mid-naming
-// galaxy can never leak via `?galaxy=`. It reads the page + the year lane + the held count together,
+// `createServerFn` like the other hubs). It reads the page + the year lane + the held count together,
 // and returns "missing" for a page past the end so the loader can 404 rather than clamp.
 //
 // ONE WAVE, NOT TWO. Every round trip here is the Worker reaching a database a continent away, so a
-// sequential wave costs a full latency unit however cheap its SQL. The filter-control options
-// (galaxies, label names) do not depend on the page read and the page read does not depend on them,
-// so they are all fired together. The one genuine dependency is the launch gate: when — and ONLY
-// when — a `?galaxy=` is present, the gate must settle before the filter set is known, so that path
-// alone keeps its leading round trip. The gate is never weakened to save it.
+// sequential wave costs a full latency unit however cheap its SQL. The label options do not depend on
+// the page read and the page read does not depend on them, so they are fired together.
+//
+// A `?sound=` page is a different ORDER over the same filters: the style's probe ranks the list
+// closest first, so the year lane (a map of the newest-first order onto pages) is not read for it.
 const fetchTracksHubPage = createServerFn({ method: "GET" })
   // A real runtime parse, not an identity cast: the fn is directly reachable over HTTP, so the
-  // payload is allowlisted to the hub's own axes before anything compiles (`certified` included —
-  // stripped here, API-only; the decision and the field rules live on `parseTracksHubPayload`).
+  // payload is allowlisted to the hub's own axes before anything compiles (`certified` and `galaxy`
+  // stripped here; the decision and the field rules live on `parseTracksHubPayload`).
   .validator(parseTracksHubPayload)
   .handler(async ({ data }): Promise<TracksFetchResult> => {
-    // Fired first and awaited last: the option lists ride alongside the page read rather than ahead
-    // of it.
-    const optionsPromise = Promise.all([listPublicGalaxies(), listKnownLabelNames()]);
-    // In flight before the gate's `await`, so a rejection there would leave this one unobserved for a
-    // tick. Attaching a handler now keeps it accounted for; the real result is still read below.
-    void optionsPromise.catch(() => undefined);
-    // The gate is consulted only when a galaxy filter is actually asked for; with none asked for the
-    // filter set is already final and nothing has to be awaited to know it.
-    const filters: TracksHubFilters = data.filters.galaxy
-      ? {
-          ...data.filters,
-          galaxy: (await isGalaxyMapFullyNamed()) ? data.filters.galaxy : undefined,
-        }
-      : data.filters;
+    const { filters } = data;
+    // Fired first and awaited last: the option list rides alongside the page read.
+    const labelOptionsPromise = listKnownLabelNames();
     const hasFilters = tracksSearchHasFilters(filters);
+    const style = styleBySlug(filters.sound);
     // The year lane is the A–Z lane over time; a year filter already narrows to one region of it, so
     // it is hidden then (the lane read is skipped, not just unrendered).
     const yearFiltered = filters.yearMin !== undefined || filters.yearMax !== undefined;
 
     try {
-      const [options, reads] = await Promise.all([
-        optionsPromise,
+      if (style) {
+        const [labelOptions, reads] = await Promise.all([
+          labelOptionsPromise,
+          import("@tanstack/react-start/server").then(({ getRequest }) =>
+            readTracksHubSoundAtOneTime(filters, style, data.page, { request: getRequest() }),
+          ),
+        ]);
+        const [soundPage, heldTotal] = reads;
+
+        return {
+          heldTotal,
+          hub: soundPage.hub,
+          labelOptions,
+          sound: {
+            anchors: soundPage.anchors,
+            ...(soundPage.limited ? { limited: true } : {}),
+            ranked: soundPage.ranked,
+            slug: style.slug,
+          },
+          status: "found",
+          // The newest-first year lane maps onto the fallback order only.
+          years: [],
+        };
+      }
+
+      const [labelOptions, reads] = await Promise.all([
+        labelOptionsPromise,
         readTracksHubAtOneTime(filters, data.page, yearFiltered, hasFilters),
       ]);
-      const [galaxies, labelOptions] = options;
       const [hub, years, heldTotal] = reads;
 
       return {
-        galaxyOptions: galaxies.map((galaxy) => ({ name: galaxy.name, slug: galaxy.slug })),
         heldTotal: heldTotal < 0 ? hub.total : heldTotal,
         hub,
         labelOptions,
@@ -192,7 +197,14 @@ export const Route = createFileRoute("/tracks")({
   }: {
     deps: { search: TracksSearch & { page?: number } };
   }): Promise<TracksLoaderData> => {
-    const { page: pageValue, ...filters } = deps.search;
+    const { galaxy, page: pageValue, ...filters } = deps.search;
+
+    // Galaxies are the lore map of findings, not a catalogue filter: an old `?galaxy=` link lands on
+    // that galaxy's own page, permanently.
+    if (galaxy !== undefined) {
+      throw redirect({ params: { slug: galaxy }, statusCode: 301, to: "/galaxies/$slug" });
+    }
+
     const page = pageValue ?? 1;
     const data = await fetchTracksHubPage({ data: { filters, page } });
 
@@ -202,12 +214,12 @@ export const Route = createFileRoute("/tracks")({
 
     return {
       filters,
-      galaxyOptions: data.galaxyOptions,
       hasFilters: tracksSearchHasFilters(filters),
       heldTotal: data.heldTotal,
       hub: data.hub,
       labelOptions: data.labelOptions,
       page,
+      sound: data.sound,
       years: data.years,
     };
   },
@@ -366,7 +378,7 @@ function CaretPill() {
   return <CaretDownIcon className="size-4 shrink-0 text-muted-foreground" />;
 }
 
-/** A single-select pill (Key, Galaxy): a base-ui Select dressed as a pill, committing on change.
+/** A single-select pill (Key): a base-ui Select dressed as a pill, committing on change.
     `items` maps value → trigger label so the closed pill reads the LABEL, and "" renders the quiet
     "Any …" default rather than a blank. */
 function SelectPill({
@@ -501,15 +513,7 @@ function LabelComboboxPill({
  * re-seeds from the URL — the single source of truth. No submit; "Clear filters" returns to the
  * bare hub.
  */
-function TracksFilters({
-  galaxyOptions,
-  labelOptions,
-  search,
-}: {
-  galaxyOptions: GalaxyOption[];
-  labelOptions: string[];
-  search: TracksSearch;
-}) {
+function TracksFilters({ labelOptions, search }: { labelOptions: string[]; search: TracksSearch }) {
   const navigate = useNavigate();
 
   // Merge a patch over the current filters and navigate. Dropping `page` (it is not in `search`)
@@ -545,22 +549,6 @@ function TracksFilters({
         value={search.label}
       />
 
-      {/* Galaxy is offered ONLY once the sonic map is named (the launch gate): an empty list keeps
-          the control off the page entirely (the /galaxies-dark precedent), never a dead pill. */}
-      {galaxyOptions.length > 0 ? (
-        <SelectPill
-          // The aria-label speaks the galaxy's NAME (what the pill shows), never the slug the URL carries.
-          ariaLabel={`Galaxy: ${
-            galaxyOptions.find((galaxy) => galaxy.slug === search.galaxy)?.name ?? "Any galaxy"
-          }`}
-          emptyLabel="Any galaxy"
-          icon={<PlanetIcon className="size-4 shrink-0 text-muted-foreground" />}
-          onCommit={(galaxy) => commit({ galaxy })}
-          options={galaxyOptions.map((galaxy) => ({ label: galaxy.name, value: galaxy.slug }))}
-          value={search.galaxy}
-        />
-      ) : undefined}
-
       {tracksSearchHasFilters(search) ? (
         <Button
           className="tracks-filter-clear"
@@ -585,9 +573,37 @@ function matchCount(count: number): string {
   return `${numberFormatter.format(count)} ${count === 1 ? "match" : "matches"}`;
 }
 
+/** The matchline: the count, and on a sound-ranked page the order and the artists it leans on (or,
+    when the ranking could not run, that this is the newest-first list instead). */
+function tracksMatchline(total: number, sound: TracksSoundState | undefined): string {
+  const style = styleBySlug(sound?.slug);
+
+  if (!sound || !style) {
+    return matchCount(total);
+  }
+
+  // A style orders the list and never filters it, so the count names tracks, never "matches".
+  const tracks = `${numberFormatter.format(total)} ${total === 1 ? "track" : "tracks"}`;
+
+  // Two different facts: the style has no anchors with a sound yet (a data gap), or the ranking
+  // engine could not answer just now (an outage). Neither is dressed up as the other.
+  if (sound.limited) {
+    return `${tracks}, newest first. That’s a lot of searching from one place in one go. Give it a minute, then reload for the ${style.label} order.`;
+  }
+
+  if (!sound.ranked) {
+    return sound.anchors.length === 0
+      ? `${tracks}, newest first. The ${style.label} order isn’t ready yet.`
+      : `${tracks}, newest first. The ${style.label} order didn’t load just then.`;
+  }
+
+  // The masthead names the order; the matchline counts the list and names what the sound was
+  // built from, in the phrasing `/search` uses for a style answer.
+  return `${tracks}, going by ${anchorNames(sound.anchors)}.`;
+}
+
 function TracksPage() {
-  const { filters, galaxyOptions, hasFilters, heldTotal, hub, labelOptions, years } =
-    Route.useLoaderData();
+  const { filters, hasFilters, heldTotal, hub, labelOptions, sound, years } = Route.useLoaderData();
   const buildHref = (page: number) => buildTracksHref(filters, page);
   const nextPageHref = hub.page < hub.pageCount ? buildHref(hub.page + 1) : undefined;
   const discoveryTracks = useMemo(() => hub.items.map(hubEntryToDiscoveryTrack), [hub.items]);
@@ -605,23 +621,35 @@ function TracksPage() {
               (see tracksMastheadLine): a conditional JSX clause SSRs as comment-split text nodes,
               which naive text extraction misreads as a missing count. */}
           <p className="log-index-intro">
-            {tracksMastheadLine(tracksSearchHasFilters(filters) ? 0 : heldTotal)}
+            {tracksMastheadLine(
+              tracksSearchHasFilters(filters) ? 0 : heldTotal,
+              sound?.ranked
+                ? `closest to ${styleBySlug(sound.slug)?.label ?? ""} first`
+                : undefined,
+            )}
           </p>
         </header>
 
         {/* Keyed by the search state: each pill seeds its local state from the URL, so a fresh URL
             must remount the bar to re-seed every control (otherwise a cleared filter would leave a
             stale value on a pill while the list resets under it). The URL is the one source of truth. */}
-        <TracksFilters
-          galaxyOptions={galaxyOptions}
-          key={JSON.stringify(filters)}
-          labelOptions={labelOptions}
-          search={filters}
+        {/* The way in by sound: a chip ranks this list closest first by that style, keeping every
+            other filter, and the pressed chip takes the ranking off again. */}
+        <StyleChips
+          active={filters.sound}
+          className="tracks-style-chips"
+          hrefFor={(style, pressed) =>
+            buildTracksHref({ ...filters, sound: pressed ? undefined : style.slug }, 1)
+          }
+          label="Sound"
+          labelId="tracks-style-chips-label"
         />
+
+        <TracksFilters key={JSON.stringify(filters)} labelOptions={labelOptions} search={filters} />
 
         {hasFilters ? (
           <p aria-live="polite" className="tracks-hub-matchline">
-            {matchCount(hub.total)}
+            {tracksMatchline(hub.total, sound)}
           </p>
         ) : undefined}
 

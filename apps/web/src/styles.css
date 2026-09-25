@@ -9826,9 +9826,16 @@ html[data-player-docked] .nav-shell--workbench {
   min-width: 0;
 }
 
+/* Both row targets clear the 24px floor as boxes while the text keeps its place: the title link
+   and each credit link grow their hit box with padding the layout never sees (negative margins on
+   the block title, inline padding on the credits), and the credit line sits just far enough below
+   the title that the two boxes never overlap. */
 .discovery-row-link {
   color: inherit;
+  display: block;
+  margin-block: -0.16rem;
   outline: none;
+  padding-block: 0.16rem;
   text-decoration: none;
 }
 
@@ -9862,7 +9869,7 @@ html[data-player-docked] .nav-shell--workbench {
   display: flex;
   font-size: 0.8rem;
   line-height: 1.3;
-  margin: 0.25rem 0 0;
+  margin: 0.42rem 0 0;
   max-width: 100%;
   min-width: 0;
   pointer-events: none;
@@ -9878,6 +9885,7 @@ html[data-player-docked] .nav-shell--workbench {
 }
 
 .discovery-row-meta .graph-link {
+  padding-block: 0.26rem;
   pointer-events: auto;
 }
 
@@ -10075,4 +10083,315 @@ html[data-player-docked] .nav-shell--workbench {
   justify-content: center;
   min-height: 2.75rem;
   min-width: 2.75rem;
+}
+
+/* ── The style chip row (Find it by feel) ─────────────────────────────────────────────────────
+   One scrolling line of quiet Dust-Veil pills, the `search-example` family: a chip heats on hover
+   (The Ignition Rule) and the pressed one reads as pressed through cream ink and a solid edge,
+   never a gold fill, so the One Sun on a catalogue page stays the focus ring and the lit rows. The
+   row scrolls sideways rather than wrapping; its trailing edge fades so a clipped chip reads as
+   more row to reach, and the end padding lets the last chip scroll clear of the fade. */
+.style-chips {
+  align-items: center;
+  display: flex;
+  gap: var(--space-2xs);
+  min-width: 0;
+}
+
+.style-chips-label {
+  color: var(--muted-foreground);
+  flex: none;
+  font-size: 0.78rem;
+  font-weight: 700;
+  margin: 0;
+}
+
+.style-chips-row {
+  display: flex;
+  flex: 1 1 auto;
+  gap: 0.4rem;
+  list-style: none;
+  margin: 0;
+  mask-image: linear-gradient(to right, #000 calc(100% - 2rem), transparent);
+  min-width: 0;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  /* Room for the focus ring at both ends; a focused chip scrolls clear of the trailing fade. */
+  padding: 0.25rem 2rem 0.25rem 0.25rem;
+  scroll-padding-inline: 0.25rem 2.25rem;
+  scroll-snap-type: x proximity;
+  scrollbar-width: none;
+}
+
+.style-chips-row::-webkit-scrollbar {
+  display: none;
+}
+
+.style-chips-row > li {
+  flex: none;
+  scroll-snap-align: start;
+}
+
+.style-chip {
+  align-items: center;
+  background: color-mix(in oklch, var(--dust-veil) 60%, transparent);
+  border: 1px solid var(--dust-line);
+  border-radius: 999px;
+  color: var(--muted-foreground);
+  display: inline-flex;
+  font-size: 0.82rem;
+  font-weight: 700;
+  min-height: 2.25rem;
+  padding: 0 var(--space-xs);
+  text-decoration: none;
+  transition:
+    background-color 150ms ease-out,
+    border-color 150ms ease-out,
+    color 150ms ease-out;
+  white-space: nowrap;
+}
+
+.style-chip:hover,
+.style-chip:focus-visible {
+  background: var(--gold-veil);
+  border-color: color-mix(in oklch, var(--eclipse-gold) 35%, transparent);
+  color: var(--eclipse-glow);
+}
+
+.style-chip:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.style-chip[data-active] {
+  background: color-mix(in oklch, var(--starlight-cream) 10%, transparent);
+  border-color: color-mix(in oklch, var(--starlight-cream) 55%, transparent);
+  color: var(--starlight-cream);
+}
+
+@media (pointer: coarse) {
+  .style-chip {
+    min-height: 2.75rem;
+  }
+}
+
+/* On /tracks the row sits between the masthead and the filter pills, on the plate's own rhythm. */
+.tracks-style-chips {
+  padding-block: var(--space-xs) 0;
+}
+
+/* On the front door and /search's zero state the row sits under the worked examples, its sentence
+   above the pills the way the examples' hint sits above theirs, so a phone keeps the chips in view. */
+.search-style-chips {
+  align-items: flex-start;
+  flex-direction: column;
+  gap: var(--space-3xs);
+  margin-top: var(--space-sm);
+}
+
+.search-style-chips .style-chips-row {
+  align-self: stretch;
+}
+
+.search-style-chips .style-chips-label {
+  font-weight: 400;
+}
+
+/* On the front door the chips wear the worked examples' size, one pill family on one band, and a
+   full touch target on a touch screen. */
+.fd-search .style-chip {
+  min-height: 2.5rem;
+}
+
+@media (pointer: coarse) {
+  .fd-search .style-chip {
+    min-height: 2.75rem;
+  }
+}
+
+/* "See all tracks closest to Liquid" — where a search result set continues. One quiet line under
+   the rows, Stardust at rest and heated on hover like every quiet control. */
+.search-see-all {
+  margin: var(--space-sm) 0 0;
+}
+
+.search-see-all-link {
+  align-items: center;
+  color: var(--muted-foreground);
+  display: inline-flex;
+  font-size: 0.86rem;
+  font-weight: 700;
+  gap: 0.4rem;
+  min-height: 2.75rem;
+  text-decoration: none;
+  transition: color 150ms ease-out;
+}
+
+.search-see-all-link:hover,
+.search-see-all-link:focus-visible {
+  color: var(--eclipse-glow);
+}
+
+/* ── The tether (the player's trail of seeds) ───────────────────────────────────────────────────
+   Small seed covers strung on one Dust-Line cable that runs on into the playing cover: the
+   headphone cable back up a rabbit hole. Unlit and quiet (a trail is navigation, not a finding),
+   each seed heats on hover like any quiet control, and the focus ring stays the one gold. */
+.player-trail {
+  flex: none;
+}
+
+.player-trail-seeds {
+  align-items: center;
+  display: flex;
+  gap: 0.5rem;
+  list-style: none;
+  margin: 0;
+  padding: 0 0.75rem 0 0;
+  position: relative;
+}
+
+/* The cable: one hairline behind the seeds, continuing past the last one toward the playing cover. */
+.player-trail-seeds::before {
+  border-top: 1px solid var(--dust-line);
+  content: "";
+  left: 0.75rem;
+  position: absolute;
+  right: 0;
+  top: 50%;
+}
+
+.player-trail-seed {
+  position: relative;
+}
+
+.player-trail-link {
+  border-radius: var(--radius-sm, 0.375rem);
+  display: block;
+  opacity: 0.72;
+  outline: none;
+  transition:
+    opacity 150ms ease-out,
+    filter 150ms ease-out;
+}
+
+.player-trail-link:hover,
+.player-trail-link:focus-visible {
+  opacity: 1;
+}
+
+.player-trail-link:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.player-trail-cover.track-artwork {
+  filter: saturate(0.6);
+  width: 1.75rem;
+}
+
+/* A seed comes a step closer on hover, as an unlit row's cover does, never to full colour. */
+.player-trail-link:hover .player-trail-cover.track-artwork,
+.player-trail-link:focus-visible .player-trail-cover.track-artwork {
+  filter: saturate(0.85);
+}
+
+/* A thumb-sized target on touch, for the one seed a phone keeps. */
+@media (pointer: coarse) {
+  .player-trail-link {
+    align-items: center;
+    display: flex;
+    justify-content: center;
+    min-height: 2.75rem;
+    min-width: 2.75rem;
+  }
+}
+
+/* On a phone the cable rises: the trail is a small strip on the bar's top edge, so the transport
+   keeps its room and the nearest seed back stays in reach. The page leaves room for the strip as well. */
+@media (max-width: 40rem) {
+  .player-trail {
+    background: color-mix(in oklch, var(--sleeve-black) 94%, transparent);
+    border: 1px solid var(--border);
+    border-bottom: none;
+    border-top-right-radius: var(--radius-md, 0.5rem);
+    bottom: 100%;
+    left: 0;
+    padding: 0.25rem 0.75rem 0.25rem 1.25rem;
+    position: absolute;
+  }
+
+  .player-trail-seeds {
+    padding-right: 0;
+  }
+
+  .player-trail-seeds::before {
+    left: 0;
+  }
+
+  .player-trail-seed:not([data-nearest]) {
+    display: none;
+  }
+
+  html[data-player-docked][data-player-trail] {
+    --player-dock: calc(4.5rem + 3.25rem + env(safe-area-inset-bottom));
+  }
+
+  /* "Keep going" folds to its caret, a full touch target in the Next slot. */
+  .player-keep-going-label {
+    border: 0;
+    clip-path: inset(50%);
+    height: 1px;
+    overflow: hidden;
+    position: absolute;
+    white-space: nowrap;
+    width: 1px;
+  }
+
+  .player-keep-going {
+    justify-content: center;
+    min-width: 2.75rem;
+    padding: 0;
+  }
+}
+
+/* The seed whose view is open now: marked, a step brighter, the cable's "you are here". */
+.player-trail-link[aria-current="page"] {
+  opacity: 1;
+  outline: 1px solid var(--dust-line);
+  outline-offset: 2px;
+}
+
+/* The inline position never truncates: the names give way, the count holds. */
+.player-artists {
+  display: flex;
+  min-width: 0;
+}
+
+.player-artists-names {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.player-position--inline {
+  flex: none;
+}
+
+/* A galaxy tile's plain sound line (lib/galaxy-sound.ts), between the name and the count.
+   It inherits the pane's Stardust, never gold: it describes, it is not an action. */
+.galaxy-pane-sound {
+  font-size: 0.85rem;
+  line-height: 1.4;
+  text-wrap: pretty;
+}
+
+/* A galaxy's sound line on its search row: a whole sentence, so it wraps rather than truncating. */
+.search-row-sound {
+  white-space: normal;
+}
+
+/* The year's " · " separator keeps its leading space inside the flex metadata line. */
+.discovery-row-year {
+  white-space: pre;
 }

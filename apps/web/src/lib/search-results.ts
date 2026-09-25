@@ -4,7 +4,9 @@ import {
   type SearchHit,
   type SearchKind,
 } from "@fluncle/contracts";
+import { styleBySlug, styleTracksPath } from "./search-styles";
 import { hasTrackPageIdentity, trackPagePath } from "./track-page";
+import { buildTracksHref } from "./tracks-search";
 
 export type { SearchEntity, SearchFilters, SearchHit, SearchKind };
 
@@ -76,6 +78,7 @@ export function filterChips(filters: SearchFilters, renderKey: (key: string) => 
     filters.artist && `artist: ${filters.artist}`,
     filters.label && `label: ${filters.label}`,
     filters.album && `album: ${filters.album}`,
+    filters.sound && `sound: ${styleBySlug(filters.sound)?.label ?? filters.sound}`,
     filters.soundsLikeArtists &&
       filters.soundsLikeArtists.length > 0 &&
       `sounds like: ${filters.soundsLikeArtists.join(", ")}`,
@@ -102,4 +105,47 @@ export function searchArchiveApiPath(query: string, limit?: number): string {
   }
 
   return `/api/v1/search/archive?${params.toString()}`;
+}
+
+export function searchSeeAll(
+  response: SearchResponse,
+): { href: string; label: string } | undefined {
+  const style = styleBySlug(response.filters?.sound);
+
+  if (style) {
+    return { href: styleTracksPath(style.slug), label: `See all tracks closest to ${style.label}` };
+  }
+
+  const entity = response.kind === "entity" ? response.entities[0] : undefined;
+
+  if (entity && response.results.length > 0) {
+    if (entity.kind === "artist") {
+      return { href: entityHref(entity), label: `See all tracks by ${entity.name}` };
+    }
+
+    if (entity.kind === "label" || entity.kind === "album") {
+      return { href: entityHref(entity), label: `See all tracks on ${entity.name}` };
+    }
+  }
+
+  const filters = response.filters;
+
+  if (!filters || response.results.length === 0 || response.kind === "sonic") {
+    return undefined;
+  }
+
+  const { bpmMax, bpmMin, key, label, yearMax, yearMin, ...other } = filters;
+  const onlyListAxes = Object.values(other).every((value) => value === undefined);
+  const anyListAxis = [bpmMax, bpmMin, key, label, yearMax, yearMin].some(
+    (value) => value !== undefined,
+  );
+
+  if (!onlyListAxes || !anyListAxis) {
+    return undefined;
+  }
+
+  return {
+    href: buildTracksHref({ bpmMax, bpmMin, key, label, yearMax, yearMin }, 1),
+    label: "See all matching tracks",
+  };
 }

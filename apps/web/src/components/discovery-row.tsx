@@ -13,6 +13,7 @@ import {
   discoveryQueue,
   discoveryQueueTrack,
 } from "@/lib/discovery-tracks";
+import { type QueueTrack } from "@/lib/preview-player";
 import { cn } from "@/lib/utils";
 
 function Credits({ credits }: { credits: DiscoveryCredit[] }): ReactNode {
@@ -145,16 +146,18 @@ export function DiscoveryRow({
 export function DiscoveryPlayableList({
   children,
   nextPageHref,
+  seed,
   tracks,
 }: {
   children: ReactNode;
   nextPageHref?: string;
+  seed?: QueueTrack;
   tracks: DiscoveryTrack[];
 }): ReactNode {
   const queue = useMemo(() => discoveryQueue(tracks), [tracks]);
 
   return (
-    <PlayableList nextPageHref={nextPageHref} tracks={queue}>
+    <PlayableList nextPageHref={nextPageHref} seed={seed} tracks={queue}>
       {children}
     </PlayableList>
   );

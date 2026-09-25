@@ -27,6 +27,7 @@ export type DiscoveryTrack = {
   logId?: string;
 
   previewable: boolean;
+  similar?: boolean;
   spotifyUrl?: string;
   title: string;
   trackId: string;
@@ -41,6 +42,7 @@ export function discoveryQueueTrack(track: DiscoveryTrack): QueueTrack {
     href: track.href,
     id: track.trackId,
     lit: track.lit,
+    similar: track.similar,
     spotifyUrl: track.spotifyUrl,
     title: track.title,
   };
@@ -87,6 +89,7 @@ export function findingToDiscoveryTrack(
     lit: true,
     logId: finding.logId,
     previewable: hasPreviewSource(finding),
+    similar: finding.similar,
     spotifyUrl: finding.spotifyUrl,
     title: finding.title,
     trackId: finding.trackId,
@@ -112,6 +115,7 @@ export function hubEntryToDiscoveryTrack(entry: TracksHubEntry): DiscoveryTrack 
     label: entry.label ? { name: entry.label, slug: entry.labelSlug } : undefined,
     lit: false,
     previewable: track.previewable,
+    similar: entry.similar,
     spotifyUrl: track.spotifyUrl,
     title: track.title,
     trackId: track.trackId,
@@ -155,6 +159,7 @@ export function searchHitToDiscoveryTrack(hit: SearchHit): DiscoveryTrack {
     lit: hit.certified,
     logId: hit.logId,
     previewable: hit.previewable === true,
+    similar: hit.similar,
     spotifyUrl: hit.spotifyUrl,
     title: hit.title,
     trackId: hit.trackId,
@@ -190,6 +195,7 @@ export function sonicNeighbourToDiscoveryTrack(neighbour: SonicNeighbour): Disco
     lit: neighbour.logId !== undefined,
     logId: neighbour.logId,
     previewable: neighbour.previewable,
+    similar: true,
     spotifyUrl: neighbour.spotifyUrl,
     title: neighbour.title,
     trackId: neighbour.trackId,
