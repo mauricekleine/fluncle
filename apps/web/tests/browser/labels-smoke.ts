@@ -1,19 +1,3 @@
-// The `/admin/labels` browser smoke (docs/admin-shell.md §Verifying): drives the label station in a
-// real Chrome as the operator, past hydration, and proves the ONE distinction the station exists to
-// make — an undecided label that carries per-label artist rules has been RULED (the `dnb_partial`
-// verdict) and belongs in its own settled section, never in the queue the header counts.
-//
-//   BASE_URL=http://127.0.0.1:3000 OUT_DIR=/tmp/labels-smoke SEED=1 \
-//     bun tests/browser/labels-smoke.ts
-//
-// `SEED=1` mints two labels around the run — one bare, one carrying an allow rule — and removes
-// them in a `finally`, so the assertions are deterministic instead of hostage to whatever the local
-// database happens to hold, and the shared dev database is left exactly as found. Seeding refuses
-// any non-local database URL. Without SEED=1 the run still drives the page and checks the headings
-// it finds, which is the fixture-dependent half; the split assertions need the seed.
-//
-// Exits non-zero on a failed expectation or any page error.
-
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { type Client, createClient } from "@libsql/client";
@@ -30,7 +14,6 @@ const failures: string[] = [];
 function watchErrors(page: Page, label: string): void {
   page.on("pageerror", (error) => failures.push(`[${label}] pageerror: ${error.message}`));
   page.on("console", (message) => {
-    // A dev cover 404 is a resource-load failure, not a station failure.
     if (message.type() === "error" && !message.text().includes("Failed to load resource")) {
       failures.push(`[${label}] console.error: ${message.text()}`);
     }
@@ -44,15 +27,12 @@ function expect(condition: boolean, label: string): void {
   console.log(`${condition ? "ok" : "FAIL"} — ${label}`);
 }
 
-// ── Seeding (SEED=1): two labels, local dev DB only ──────────────────────────
-
 const QA = {
   ruleId: "qa-labels-rule",
   ruled: "qa-labels-ruled",
   waiting: "qa-labels-waiting",
 } as const;
 
-/** The two seeded labels' display names — `zz` so they sort to the end of their sections. */
 const QA_NAMES = {
   ruled: "zz QA Partial Label",
   waiting: "zz QA Waiting Label",
@@ -73,7 +53,6 @@ function seedClient(): Client {
   });
 }
 
-/** One bare undecided label (the queue) and one carrying an allow rule (the settled verdict). */
 async function seedLabels(db: Client): Promise<void> {
   const now = new Date().toISOString();
 
@@ -102,23 +81,18 @@ async function cleanupLabels(db: Client): Promise<void> {
   await db.execute(`delete from labels where id in ('${QA.waiting}', '${QA.ruled}')`);
 }
 
-// ── The drive ────────────────────────────────────────────────────────────────
-
-/** A section's heading text, or "" when the section is absent (empty sections render nothing). */
 async function sectionHeading(page: Page, title: string): Promise<string> {
   const heading = page.getByRole("heading", { level: 2 }).filter({ hasText: title }).first();
 
   return (await heading.count()) === 0 ? "" : ((await heading.textContent()) ?? "").trim();
 }
 
-/** The count a section title leads with (`Waiting on a ruling · 12` → 12), or undefined. */
 function headingCount(heading: string): number | undefined {
   const match = /·\s*(\d+)\s*$/.exec(heading);
 
   return match?.[1] === undefined ? undefined : Number(match[1]);
 }
 
-/** The rows of one section, read off the object list that follows its heading. */
 function sectionRows(page: Page, title: string) {
   return page
     .locator("section")
@@ -127,8 +101,6 @@ function sectionRows(page: Page, title: string) {
     .locator("ul > li");
 }
 
-// Past-hydration gate: the sidebar collapse toggle only works once React is live, so a toggle that
-// actually flips `data-state` proves interactivity rather than painted SSR HTML.
 async function waitForHydration(page: Page): Promise<void> {
   await page.waitForLoadState("networkidle");
 
@@ -169,7 +141,6 @@ async function drive(browser: Awaited<ReturnType<typeof launchBrowser>>): Promis
   expect(waiting !== "", "the waiting section renders");
   expect(partial !== "", "the settled-partial section renders");
 
-  // Section ORDER: the queue leads (the disclosure law), the settled verdict follows it.
   const titles = await page.getByRole("heading", { level: 2 }).allTextContents();
   const waitingAt = titles.findIndex((title) => title.startsWith("Waiting on a ruling"));
   const partialAt = titles.findIndex((title) => title.startsWith("Seeding named artists"));
@@ -179,8 +150,6 @@ async function drive(browser: Awaited<ReturnType<typeof launchBrowser>>): Promis
     `the queue leads and the settled partials follow it (${waitingAt} → ${partialAt})`,
   );
 
-  // The intro states BOTH ways a label reaches the queue — most rows now come from the crawl and
-  // show `0 findings`, so a sentence naming only findings is one the operator can see is false.
   const intro = (await page.locator("section p").first().textContent()) ?? "";
 
   expect(
@@ -188,7 +157,6 @@ async function drive(browser: Awaited<ReturnType<typeof launchBrowser>>): Promis
     `the waiting intro names the crawl path (${intro.slice(0, 80)}…)`,
   );
 
-  // The HEADER count is the waiting section's total alone, never every undecided label.
   const subtitle = (await page.locator("header").first().textContent()) ?? "";
   const waitingCount = headingCount(waiting);
   const partialCount = headingCount(partial);
@@ -216,12 +184,12 @@ async function drive(browser: Awaited<ReturnType<typeof launchBrowser>>): Promis
       partialRows.some((row) => row.includes(QA_NAMES.ruled)),
       "the rule-carrying undecided label sits in the settled section",
     );
-    // Its rule count is the whole point of the state, so the row states it.
+
     expect(
       partialRows.some((row) => row.includes(QA_NAMES.ruled) && row.includes("Only 1 artist")),
       "the settled row states how many artists it takes",
     );
-    // The third verdict is reachable from the queue: the waiting row's ⋮ opens the rules dialog.
+
     expect(
       (await page.getByRole("button", { name: `Artist rules for ${QA_NAMES.waiting}` }).count()) ===
         1,
@@ -232,7 +200,6 @@ async function drive(browser: Awaited<ReturnType<typeof launchBrowser>>): Promis
   await page.screenshot({ fullPage: true, path: join(OUT_DIR, "labels-desktop.png") });
   await desktop.context.close();
 
-  // ── Phone: the sections survive the narrow layout ──────────────────────────
   const phone = await newAdminPage(browser, BASE_URL, { height: 844, width: 390 });
   watchErrors(phone.page, "phone");
   await phone.page.goto(`${BASE_URL}/admin/labels`);

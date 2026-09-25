@@ -113,6 +113,8 @@ Backfill query controls stay optional strings in the contracts because their han
 | `feed.podcast`          | `/podcast.xml`            | `application/rss+xml`   | the mixtapes as a podcast feed (episode audio on `found.fluncle.com`)               | secondary |
 | `feed.calendar`         | `/calendar.ics`           | `text/calendar`         | planned events as an iCalendar feed (Twitch-linked VEVENTs)                         | tertiary  |
 
+RSS finding items link to their permanent `/log` coordinate when one exists, with Spotify kept in the item body; a coordinate-less finding falls back to its Spotify URL. Cover art uses `media:content` because an RSS `enclosure` requires a byte length the archive does not hold for those images.
+
 ### Discovery — machine-/crawler-facing maps
 
 | Surface                     | Route                                  | Format                     | Exposes                                                                                                                           | Weight    |

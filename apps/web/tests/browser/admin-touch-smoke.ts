@@ -1,32 +1,9 @@
-// Browser proof for the touch-comfortable admin (DIST-02, docs/admin-shell.md
-// §Verifying). The operator triages the queue and pushes distribution from a
-// phone; the workspace stays desktop-dense by default and only floors controls
-// at the 44px touch target on a COARSE pointer (styles.css, scoped to
-// .admin-workspace). This smoke pins that contract two ways so it can't
-// silently regress:
-//
-//   1. On a touch context (iPhone viewport, hasTouch + isMobile → `pointer:
-//      coarse`), every button-control on every admin surface is ≥44px, and no
-//      surface bleeds horizontally.
-//   2. On a mouse context (fine pointer, same viewport), the SAME controls stay
-//      their dense sub-44px selves — proving the floor is touch-only and never
-//      bloats the desktop UI.
-//
-// Run against a local dev server seeded from the dev DB:
-//   BASE_URL=http://127.0.0.1:3000 bun tests/browser/admin-touch-smoke.ts
-//
-// Fails (non-zero exit) on any control under 44px on touch, any horizontal
-// overflow, any console/page error, or if the mouse context shows NO dense
-// controls (which would mean the floor leaked onto the desktop).
-
 import { type Browser, type Page } from "playwright-core";
 import { launchBrowser, loginAsAdmin } from "./admin";
 
 const BASE_URL = process.env.BASE_URL ?? "http://127.0.0.1:3000";
-const VIEWPORT = { height: 844, width: 390 }; // iPhone 12/13/14
+const VIEWPORT = { height: 844, width: 390 };
 
-// The admin surfaces the operator drives from a phone. Paths only — every one
-// renders through the same .admin-workspace plate, so the floor must hold on all.
 const SURFACES = [
   "/admin",
   "/admin/findings",
@@ -36,8 +13,7 @@ const SURFACES = [
   "/admin/recordings",
   "/admin/mixtapes",
   "/admin/plans",
-  // The labels station: three sections of rows, each with a ruling pair or a ⋮ carrying the
-  // re-ruling and the artist-rule dialog — the densest control cluster on any admin row.
+
   "/admin/labels",
 ] as const;
 
@@ -45,7 +21,6 @@ const MIN_TOUCH = 44;
 
 type Control = { w: number; h: number; text: string };
 
-/** Every visible button-control (button element or a select-trigger) on the page. */
 async function controlsOf(page: Page): Promise<Control[]> {
   return page.evaluate(() => {
     const out: Array<{ w: number; h: number; text: string }> = [];
@@ -82,7 +57,6 @@ async function withErrorGuard(page: Page, failures: string[]): Promise<void> {
   page.on("pageerror", (err) => failures.push(`page error: ${err.message.slice(0, 120)}`));
 }
 
-/** Touch context: assert every control ≥44px and no bleed on every surface. */
 async function checkTouch(browser: Browser, failures: string[]): Promise<void> {
   const context = await browser.newContext({ hasTouch: true, isMobile: true, viewport: VIEWPORT });
   const page = await context.newPage();
@@ -115,7 +89,6 @@ async function checkTouch(browser: Browser, failures: string[]): Promise<void> {
   await context.close();
 }
 
-/** Mouse context: the floor must NOT apply — dense (<44px) controls must exist. */
 async function checkMouseStaysDense(browser: Browser, failures: string[]): Promise<void> {
   const context = await browser.newContext({ viewport: { height: 900, width: 1280 } });
   const page = await context.newPage();

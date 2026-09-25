@@ -40,13 +40,7 @@ on Opus by default). Run state goes to `data/fluncle/`.
 
 To scan another codebase from this same `.deepsec/`:
 
-```bash
-pnpm deepsec init-project ../some-other-package   # path relative to .deepsec/
-```
-
-Appends an entry to `deepsec.config.ts` and writes
-`data/<id>/{INFO.md,SETUP.md,project.json}`. Open the new SETUP.md
-in your agent to fill in INFO.md.
+Add an `{ id, root }` entry to the `projects` array in `deepsec.config.ts`, with `root` relative to `.deepsec/`. Create `data/<id>/INFO.md` and `data/<id>/SETUP.md` from the existing project's templates, then open the new SETUP.md in your agent to fill in INFO.md. DeepSec's `init-project` command requires a comment marker in the config; this repository's no-comments rule removes that marker, so the command cannot update this config.
 
 ## Layout
 

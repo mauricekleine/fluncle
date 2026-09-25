@@ -43,6 +43,9 @@
     },
     {
       "files": [
+        ".claude/hooks/guard-protected-files.test.ts",
+        ".claude/hooks/unattended-skip.test.ts",
+        ".deepsec/deepsec.config.ts",
         "apps/cli/scripts/build-npm.ts",
         "apps/cli/src/api.ts",
         "apps/cli/src/cli.test.ts",

@@ -27,36 +27,6 @@ import {
   type PlatformStatsView,
 } from "@/lib/server/platform-stats";
 
-// The PUBLIC reach page — Fluncle's TELEMETRY CONSOLE (operator ruling).
-// The probes went out across the Galaxy; this is the panel where their readings come
-// home. It deliberately carries dashboard AFFORDANCES — one primary time-series chart,
-// grouped stat tiles with sparklines, a per-platform filter, period pills — because the
-// operator sanctioned them here; what stays banned is GENERICNESS. The panel must read
-// as Fluncle's own instrument cluster (the Nostalgic Cosmos: warm near-black, cream
-// tabular numbers, the One Sun spent on exactly one gold live-edge), never a Postiz or
-// X-Analytics clone.
-//
-// Anonymous by design: every number here is already public on its own platform (the
-// `list_platform_stats` contract op is public tier). Loader-only data flow (public-route
-// law, AGENTS.md): a GET server fn → the loader → `Route.useLoaderData()`. The platform
-// FILTER rides `?platform=` (shareable, SSR-clean); the chart's period + metric are
-// ephemeral view state and stay local.
-
-// ── The page taxonomy ────────────────────────────────────────────────────────
-//
-// Three honest buckets (the stats-page spike + the operator's dev-vs-social split):
-//
-//   - crew   — audience: people who opted in (followers, subscribers, saves, ratings).
-//              One person each, so the cross-surface SUM is honest — the masthead line
-//              and the primary chart both ride it.
-//   - reach  — carry: consumption + appreciation (views, plays, listens, scrobbles,
-//              likes). Never summed (a view isn't a listen); stated once per metric.
-//   - hangar — the developer bench, where the ship gets built: repo stars, CLI
-//              downloads. Real reach, different species — its own quiet lane.
-//
-// A (platform, metric) with no entry here is intentionally NOT surfaced — Fluncle's own
-// OUTPUT counts (mixcloud `uploads`, bluesky `posts`, lastfm `loved_tracks`) are neither
-// the crew growing nor a finding carrying, so they stay off the panel.
 type Bucket = "crew" | "hangar" | "reach";
 
 type SimpleIcon = { readonly path: string; readonly title: string };
@@ -67,10 +37,6 @@ type PlatformDef = {
   slug: string;
 };
 
-// Every platform the console knows (display order is alphabetical, applied at render).
-// `slug` is the `?platform=` value; icons are the OFFICIAL simple-icons marks (DESIGN.md §5
-// "Iconography") — the newsletter is Fluncle's own surface, so it carries a Phosphor
-// interface glyph instead of a brand mark.
 const PLATFORMS: PlatformDef[] = [
   { icon: siSpotify, label: "Spotify", slug: "spotify" },
   { icon: siYoutube, label: "YouTube", slug: "youtube" },
@@ -91,14 +57,12 @@ const PLATFORM_BY_SLUG = new Map(PLATFORMS.map((p) => [p.slug, p]));
 
 type MetricMeta = {
   bucket: Bucket;
-  // Telegram's `getChatMemberCount` counts the posting bot itself. The DATA stays raw
-  // (honesty lives in the ledger); the DISPLAY subtracts the bot.
-  botMinusOne?: boolean;
+
+  includesPostingBot?: boolean;
   metricLabel: string;
   platform: string;
 };
 
-// Keyed `${platform}:${metric}` over the collector's raw row names.
 const METRIC_META: Record<string, MetricMeta> = {
   "appstore:rating_count": { bucket: "crew", metricLabel: "ratings", platform: "appstore" },
   "bluesky:followers": { bucket: "crew", metricLabel: "followers", platform: "bluesky" },
@@ -123,8 +87,8 @@ const METRIC_META: Record<string, MetricMeta> = {
     platform: "spotify",
   },
   "telegram:audience": {
-    botMinusOne: true,
     bucket: "crew",
+    includesPostingBot: true,
     metricLabel: "on the channel",
     platform: "telegram",
   },
@@ -135,8 +99,6 @@ const METRIC_META: Record<string, MetricMeta> = {
   "youtube:subscribers": { bucket: "crew", metricLabel: "subscribers", platform: "youtube" },
   "youtube:views": { bucket: "reach", metricLabel: "views", platform: "youtube" },
 };
-
-// ── Rows ─────────────────────────────────────────────────────────────────────
 
 type ReachPoint = { at: string; value: number };
 
@@ -157,7 +119,7 @@ function toRow(series: PlatformStatSeries): ReachRow | undefined {
     return undefined;
   }
 
-  const adjust = (value: number) => (meta.botMinusOne ? Math.max(0, value - 1) : value);
+  const adjust = (value: number) => (meta.includesPostingBot ? Math.max(0, value - 1) : value);
 
   return {
     bucket: meta.bucket,
@@ -168,8 +130,6 @@ function toRow(series: PlatformStatSeries): ReachRow | undefined {
   };
 }
 
-// Alphabetical by platform, then metric (operator ruling): the console is
-// tabular, and tabular order is alphabetical; "loudest first" was the editor's bias).
 function orderRows(rows: ReachRow[]): ReachRow[] {
   return [...rows].sort((a, b) => {
     const byPlatform = a.platform.label.localeCompare(b.platform.label);
@@ -178,11 +138,8 @@ function orderRows(rows: ReachRow[]): ReachRow[] {
   });
 }
 
-// ── Formatting ───────────────────────────────────────────────────────────────
-
 const numberFormatter = new Intl.NumberFormat("en-US");
 
-// UTC-pinned "Jul 13" so the server render matches hydration exactly.
 const dateFormatter = new Intl.DateTimeFormat("en-US", {
   day: "numeric",
   month: "short",
@@ -194,8 +151,6 @@ const formatDate = (value: string) => dateFormatter.format(new Date(value));
 
 const latestOf = (row: ReachRow) => row.points[row.points.length - 1]?.value ?? 0;
 
-// The growth across the visible window: "+12" / "−3" (a real minus). Null when nothing
-// moved or the series has one point — the console never invents a trend.
 function windowDelta(points: ReachPoint[]): string | undefined {
   const first = points[0];
   const last = points[points.length - 1];
@@ -209,8 +164,6 @@ function windowDelta(points: ReachPoint[]): string | undefined {
   return delta > 0 ? `+${formatValue(delta)}` : `−${formatValue(Math.abs(delta))}`;
 }
 
-// ── Period slicing ───────────────────────────────────────────────────────────
-
 const PERIODS = [
   { days: 7, label: "7D" },
   { days: 30, label: "30D" },
@@ -223,26 +176,15 @@ function slicePoints(points: ReachPoint[], days: PeriodDays): ReachPoint[] {
   const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
   const sliced = points.filter((point) => new Date(point.at).getTime() >= cutoff);
 
-  // Never slice a series into nothing: the newest point always shows (the reading is
-  // real even when it predates the window).
   return sliced.length > 0 ? sliced : points.slice(-1);
 }
 
-// ── The primary chart ────────────────────────────────────────────────────────
-//
-// The console's centerpiece, hand-drawn SVG (no chart dependency): a translucent flat
-// area under a cream line, quiet min/max rails, and the ONE gold element on the page —
-// the pulsing live-edge dot (The One Sun). A single-point series renders the dot + its
-// reading, never a fake line. Flat fill, not a gradient (DESIGN.md's gradient ban).
 const CHART_W = 800;
 const CHART_H = 220;
 const CHART_PAD_Y = 18;
 
 type ChartSeries = { label: string; points: ReachPoint[] };
 
-// The geometry is the SHARED `chart-geometry.ts` helper (one line-chart shape for /reach and
-// /admin/funnel), pinned to this console's taller viewBox. Output is unchanged from the former
-// inline version — same math, same live-edge-at-the-right-edge quirk (see that module).
 const chartGeometry = (points: ReachPoint[]) =>
   sharedChartGeometry(points, { height: CHART_H, padY: CHART_PAD_Y, width: CHART_W });
 
@@ -275,7 +217,7 @@ function ReachChart({ series }: { series: ChartSeries }) {
               />
             </>
           )}
-          {/* The One Sun: the live edge, and nothing else on this page, is gold. */}
+
           <circle
             className="fill-primary motion-safe:animate-pulse"
             cx={geometry.last.x}
@@ -285,7 +227,6 @@ function ReachChart({ series }: { series: ChartSeries }) {
           />
         </svg>
 
-        {/* The quiet value rails: max top-left, min bottom-left, reading register. */}
         {single ? undefined : (
           <>
             <span className="pointer-events-none absolute left-0 top-0 text-[11px] tabular-nums text-muted-foreground">
@@ -318,8 +259,6 @@ function ReachChart({ series }: { series: ChartSeries }) {
     </figure>
   );
 }
-
-// ── Tiles ────────────────────────────────────────────────────────────────────
 
 const TILE_SPARK_W = 100;
 const TILE_SPARK_H = 28;
@@ -371,9 +310,6 @@ function PlatformMark({ className, platform }: { className?: string; platform: P
   );
 }
 
-// One crew/reach tile. The crew lane draws the area fill under its spark (the primary
-// lane); the reach lane keeps a bare line (quieter). Numbers stay tabular cream — the
-// console's sanctioned size is text-2xl, deliberately short of display type.
 function StatTile({ area, row }: { area: boolean; row: ReachRow }) {
   const latest = latestOf(row);
   const delta = windowDelta(row.points);
@@ -410,8 +346,6 @@ function StatTile({ area, row }: { area: boolean; row: ReachRow }) {
   );
 }
 
-// The hangar strip: the developer bench reads as one compact inline row, a different
-// species from the tile lanes on purpose (three identical grids would be wallpaper).
 function HangarRow({ row }: { row: ReachRow }) {
   const latest = latestOf(row);
   const delta = windowDelta(row.points);
@@ -436,8 +370,6 @@ function HangarRow({ row }: { row: ReachRow }) {
   );
 }
 
-// ── Sections ─────────────────────────────────────────────────────────────────
-
 const SECTION_HEADING_CLASS =
   "flex items-baseline justify-between border-b border-border pb-2 text-sm font-semibold uppercase tracking-wide text-foreground";
 
@@ -454,15 +386,10 @@ function LaneHeading({ detail, label }: { detail?: string; label: string }) {
   );
 }
 
-// ── Data plumbing ────────────────────────────────────────────────────────────
-
 const fetchReach = createServerFn({ method: "GET" }).handler(
   (): Promise<PlatformStatsView> => listPlatformStats(),
 );
 
-// The crew total per day: the one honest aggregate, summed over whatever audience
-// series reported that day (a platform joining the panel mid-history is a REAL step in
-// the crew's completeness, not noise to smooth away).
 function crewSeries(rows: ReachRow[]): ReachPoint[] {
   const byDay = new Map<string, number>();
 
@@ -482,12 +409,6 @@ const title = "Fluncle's reach across every platform";
 const description =
   "How far the findings have carried, platform by platform, and the crew aboard over time.";
 
-// The AEO half (docs § Log IDs in search + AI answers): this page is the one place
-// Fluncle's audience numbers exist as DATA, so the head hangs them as `interactionStatistic`
-// on the ONE canonical Fluncle entity node (`@id`, fully declared on /about) rather than
-// re-declaring a competing entity — schema.org's InteractionCounter, one FollowAction counter
-// per crew platform, refreshed on every crawl because the loader feeds the head. Every count is
-// already public on its own platform; this only makes the aggregate machine-readable.
 function reachHead({ loaderData }: { loaderData?: PlatformStatsView }) {
   const counters = (loaderData?.series ?? []).flatMap((series) => {
     const key = `${series.platform}:${series.metric}`;
@@ -498,7 +419,7 @@ function reachHead({ loaderData }: { loaderData?: PlatformStatsView }) {
       return [];
     }
 
-    const value = meta.botMinusOne ? Math.max(0, series.latest - 1) : series.latest;
+    const value = meta.includesPostingBot ? Math.max(0, series.latest - 1) : series.latest;
 
     return [
       {
@@ -537,8 +458,6 @@ function reachHead({ loaderData }: { loaderData?: PlatformStatsView }) {
 
 type ReachSearch = { platform?: string };
 
-// Route options follow TanStack's create-route-property-order (each step feeds the
-// next's inferred types), which isn't alphabetical — so sort-keys is off here.
 // oxlint-disable-next-line sort-keys
 export const Route = createFileRoute("/reach")({
   validateSearch: (search: Record<string, unknown>): ReachSearch => {
@@ -550,8 +469,6 @@ export const Route = createFileRoute("/reach")({
   head: reachHead,
   component: ReachPage,
 });
-
-// ── The page ─────────────────────────────────────────────────────────────────
 
 function ReachPage() {
   const { series } = Route.useLoaderData();
@@ -573,7 +490,6 @@ function ReachPage() {
     [series],
   );
 
-  // Period slicing applies everywhere at once — the pills govern the whole console.
   const rows = useMemo(
     () =>
       allRows.map((row) => ({
@@ -591,14 +507,7 @@ function ReachPage() {
   const crewTotal = crew.reduce((sum, row) => sum + latestOf(row), 0);
   const presentSlugs = new Set(allRows.map((row) => row.platform.slug));
 
-  // What the primary chart can draw in the current scope: the crew total (when the
-  // scope has audience series), then every scoped series by platform · metric. The
-  // selection resets to the scope's first option whenever it leaves scope.
   const chartOptions = useMemo<(ChartSeries & { key: string })[]>(() => {
-    // At "All" the chart draws the one honest aggregate and nothing else — the platform
-    // rail IS the selector (a 17-chip metric cloud was built, seen, and cut: it drowned
-    // the instrument it pointed at). Filtered to a platform, its 1–3 metrics become the
-    // chart's chips.
     if (!activeSlug) {
       return crew.length > 0
         ? [{ key: "crew-total", label: "The crew, aboard", points: crewSeries(crew) }]
@@ -651,8 +560,6 @@ function ReachPage() {
           </p>
         ) : (
           <div className="space-y-10">
-            {/* The console controls: the platform rail + the period pills. One row on
-                wide glass; the rail scrolls inside itself on a phone (never the page). */}
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div
                 aria-label="Filter by platform"
@@ -697,8 +604,6 @@ function ReachPage() {
               </div>
             </div>
 
-            {/* The primary instrument. Its metric selector only appears once there is
-                a real choice to make. */}
             {activeChart ? (
               <section aria-label="Primary chart">
                 {chartOptions.length > 1 ? (
@@ -725,9 +630,6 @@ function ReachPage() {
               </section>
             ) : undefined}
 
-            {/* The lanes. Three deliberately different densities: crew tiles carry the
-                area fill (the primary lane), reach tiles a bare line, the hangar a
-                compact strip. */}
             {crew.length > 0 ? (
               <section aria-label="The crew" className="space-y-4">
                 <LaneHeading detail={`${formatValue(crewTotal)} aboard`} label="The crew" />
