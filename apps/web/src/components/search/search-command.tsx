@@ -1,41 +1,3 @@
-// FLUNCLE'S SEARCH — the ACCELERATOR.
-//
-// A trigger in the top bar, ⌘K / Ctrl+K from anywhere, and one Shadcn `Command` dialog. The
-// text input lives INSIDE the dialog; the bar is only a way in.
-//
-// ── IT IS ONE OF TWO SURFACES, AND IT IS THE FAST ONE ────────────────────────────────
-// The palette is the quickest way to reach one known thing and the worst way to HOLD a result
-// set: it has no URL, so what it shows cannot be shared, reloaded, or walked back to. `/search`
-// (routes/search.tsx) is the other half — the same resolver, server-rendered, with the whole
-// query state in `?q=`. This dialog therefore HANDS OFF to it (the last row of every answer,
-// `openPage` below) rather than being replaced by it: ⌘K stays one keystroke from every public
-// page, and nothing a reader finds through it is trapped in a dialog.
-//
-// Everything that is not a rendering decision — the wire types, the grouping, the example
-// queries, the two destinations, the URL builders — lives in `lib/search-results.ts`, which the
-// page imports too, so the two rooms cannot drift on what an answer means.
-//
-// ── WHAT THE DIALOG IS SAYING, DESIGN-WISE ───────────────────────────────────────────
-// The colophon nav is deliberately restrained — a wordmark, a breadcrumb, and nothing else —
-// and the cover art is the hero of every page. So search does not get a field in the chrome,
-// which would put a form control in the quietest surface in the app. It gets a single quiet
-// glyph at the far right of the bar, on the opposite end from the trail, where it competes
-// with nothing. The weight is all in the dialog, which opens over the cosmos and closes again.
-//
-// ── THE UNLIT RULE (DESIGN.md) ───────────────────────────────────────────────────────
-// A finding is lit: it carries its coordinate in Oxanium and heats to Eclipse Gold on hover
-// (the Gold Veil), because Eclipse Gold is the CERTIFICATION light. A track Fluncle never
-// certified catches the Dust Veil instead — the cold light of a thing seen from a distance —
-// carries no coordinate, and opens its own `/track/<trackId>` destination when it has enough
-// identity. Only a row that destination refuses falls back OUT to Spotify.
-// The uncertified TIER is never named: no badge, no introduction, no noun of its own. In a
-// mixed list a heading may name the SUPERSET ("Tracks" — true of every row under it, the
-// mix-builder precedent), and the findings group carries the archive's own name ("Fluncle's
-// Findings") because a finding IS a named object. When the unlit rows are all there is, they
-// stand bare — a heading over the only content would exist just to name the tier.
-// The focus ring stays Eclipse Gold on every row either way — focus is an accessibility
-// affordance, not a claim about the music.
-
 import {
   Command,
   CommandDialog,
@@ -99,9 +61,6 @@ async function fetchSearch(q: string): Promise<SearchResponse> {
   return (await response.json()) as SearchResponse;
 }
 
-// ── Rows ─────────────────────────────────────────────────────────────────────────────
-
-/** The cover, or the Dust-Veil square that stands in for one. Never a gold placeholder. */
 function Cover({ hit }: { hit: SearchHit }): ReactNode {
   if (!hit.albumImageUrl) {
     return <span aria-hidden="true" className="search-cover search-cover--empty" />;
@@ -110,18 +69,6 @@ function Cover({ hit }: { hit: SearchHit }): ReactNode {
   return <img alt="" className="search-cover" loading="lazy" src={hit.albumImageUrl} />;
 }
 
-/**
- * One track row. The `certified` bit decides everything visible about it: a finding carries its
- * coordinate and lights gold; an uncertified track stays cold. Neither is labelled — the
- * difference is the register, not a badge.
- *
- * THE TRAILING MARK NAMES WHERE THE ROW GOES, and it has to, because the two are no longer the
- * same place. A row with enough identity now opens its own `/track/<trackId>` destination, so it
- * carries the Phosphor caret every other in-app row uses; only the fallback rows that still open
- * Spotify carry Spotify's own mark. A platform's identity is its own (DESIGN.md §5,
- * Iconography): a brand mark standing over a fluncle.com destination promises a tab that never
- * opens, which is the mirror of the rule that bans a Phosphor glyph as a brand mark.
- */
 function TrackRow({
   hit,
   onPick,
@@ -141,9 +88,7 @@ function TrackRow({
         <span className="search-row-title">{hit.title}</span>
         <span className="search-row-artists">{hit.artists.join(", ")}</span>
       </span>
-      {/* The trailing slot is a `CommandShortcut` in both registers — not for the shortcut
-          styling, but because the primitive suppresses its own trailing check glyph when it
-          finds one, which is what keeps the right edge clean. */}
+
       <CommandShortcut className="search-row-tail">
         {hit.certified && hit.logId ? (
           <span className="search-row-coordinate">{hit.logId}</span>
@@ -157,18 +102,6 @@ function TrackRow({
   );
 }
 
-/**
- * One entity row — an artist, a label, or an album. The FIRST-CLASS destination: the thing the
- * reader searched for, offered as somewhere to go, above the tracks it also brought back.
- *
- * The three are ONE row on purpose. A label is not a chip and an album is not a filter; each is
- * a page in the graph (`docs/album-entity.md`), and a search that hands you a list of tracks
- * while withholding the record they came off is answering a smaller question than you asked.
- *
- * The picture is the artist's portrait, or — where there is no portrait — the entity's cover
- * art (its freshest finding's sleeve, the same one `/labels` and `/albums` print). Failing
- * both, the same Dust-Veil square a coverless track gets. Never a gold placeholder.
- */
 function EntityRow({
   entity,
   onPick,
@@ -182,10 +115,6 @@ function EntityRow({
       onSelect={() => onPick(entity)}
       value={`${entity.kind}-${entity.slug}`}
     >
-      {/* A palette row's cover is 2.25rem — 36 CSS px, 72 on a 2× screen — so it takes the 64 rung
-          (an unowned artist portrait, Spotify's 160 floor), never the 640 the search DTO hands out
-          for consumers that never re-size. A palette can list ~20 rows at once, so this is the
-          heaviest single over-fetch a keystroke could trigger. */}
       {entity.imageUrl ? (
         <img
           alt=""
@@ -207,8 +136,6 @@ function EntityRow({
   );
 }
 
-// ── The dialog ───────────────────────────────────────────────────────────────────────
-
 function SearchDialog({
   onOpenChange,
   open,
@@ -216,12 +143,7 @@ function SearchDialog({
 }: {
   onOpenChange: (open: boolean) => void;
   open: boolean;
-  /**
-   * A query to open WITH — the front door's example pills hand one over, so a click lands in the
-   * dialog already answering rather than in an empty field the reader has to retype into. It is a
-   * SEED, not a controlled value: the reader owns the field from the first keystroke after. Bumping
-   * the token re-seeds, so clicking the same example twice re-opens it the same way.
-   */
+
   seed?: { query: string; token: number };
 }): ReactNode {
   const navigate = useNavigate();
@@ -231,22 +153,16 @@ function SearchDialog({
   const seedToken = seed?.token;
   const seedQuery = seed?.query;
 
-  // Seeding is an EFFECT on the token rather than a prop read on every render, because the field is
-  // the reader's the moment they type. Without the token a re-render would keep stamping the
-  // example back over what they wrote.
   useEffect(() => {
     if (seedToken === undefined || seedQuery === undefined) {
       return;
     }
 
     setQuery(seedQuery);
-    // Answer immediately: the reader picked a whole query, so there is no typing to wait out.
+
     setDebounced(seedQuery.trim());
   }, [seedQuery, seedToken]);
 
-  // A keystroke is not a query. The debounce is what keeps a typed word from firing five
-  // round trips (and, on the fourth tier, five model calls) on its way to being one.
-  // A worked example already emitted discovery_example; do not also fire discovery_search.
   useEffect(() => {
     const timer = setTimeout(() => {
       const next = query.trim();
@@ -272,7 +188,7 @@ function SearchDialog({
     enabled,
     queryFn: () => fetchSearch(debounced),
     queryKey: ["search", debounced],
-    // A public read: the archive does not change while you look away from the tab.
+
     refetchOnWindowFocus: false,
     staleTime: 60_000,
   });
@@ -283,10 +199,6 @@ function SearchDialog({
     setDebounced("");
   }, [onOpenChange]);
 
-  // The server hands back a plain path (`/log/024.7.2R`, `/artist/netsky`) — a data-driven
-  // destination, not a compile-time route literal — so the cast happens at the ONE navigate
-  // boundary, exactly as `NavRouteLink` does it for the data-driven nav model. TanStack builds
-  // the real href from the string at runtime regardless of the compile-time union.
   const goTo = useCallback(
     (to: string) => {
       close();
@@ -295,8 +207,6 @@ function SearchDialog({
     [close, navigate],
   );
 
-  /** An entity goes to its page — the row's own `url` when it carries one (a galaxy's plural
-      segment, a mixtape's log page), else the `/<kind>/<slug>` default. */
   const pickEntity = useCallback(
     (entity: SearchEntity) => {
       const href = entityHref(entity);
@@ -307,15 +217,6 @@ function SearchDialog({
     [goTo],
   );
 
-  /**
-   * Where a picked row goes — resolved by the SHARED {@link hitHref}, the same function the
-   * `/search` page's rows link through, so the accelerator and the page cannot disagree about
-   * where a result leads. A finding goes to its coordinate; a track with no coordinate goes to
-   * its own `/track/<trackId>` destination, where its record, its imprint, its tempo and every
-   * service that carries it are gathered, so a result stays INSIDE the archive rather than
-   * ejecting the reader to a streaming tab mid-search. Only a row the destination refuses leaves
-   * the origin, and it opens in a new tab because it is off-site.
-   */
   const pick = useCallback(
     (hit: SearchHit) => {
       const destination = hitHref(hit);
@@ -338,22 +239,14 @@ function SearchDialog({
     [close, goTo],
   );
 
-  /**
-   * THE HANDOFF. The palette is the accelerator; `/search` is the room you can link to, reload, and
-   * walk back through. So the last thing in every answer is the door to it, carrying the query the
-   * reader already typed — the palette stays the fast way in and stops being the ONLY way in.
-   */
   const openPage = useCallback(() => goTo(searchPagePath(debounced)), [debounced, goTo]);
 
   const showExamples = query.trim().length === 0;
   const nothing = enabled && !isFetching && data.results.length === 0 && data.entities.length === 0;
 
-  // The two registers, partitioned once. The server already ranks certified first; the split
-  // here is what lets each block carry its own heading (or, for a bare unlit list, none).
   const findings = useMemo(() => data.results.filter((hit) => hit.certified), [data.results]);
   const unlit = useMemo(() => data.results.filter((hit) => !hit.certified), [data.results]);
-  // "Tracks" earns its place only when something named renders above it — then it is doing
-  // contrastive work and names the superset. Alone, it would exist just to name the tier.
+
   const headUnlit = findings.length > 0 || data.entities.length > 0;
 
   const emptyCopy = useMemo(() => {
@@ -372,9 +265,6 @@ function SearchDialog({
       open={open}
       title="Search the archive"
     >
-      {/* `shouldFilter={false}` — the ranking is the SERVER's (bm25, vector distance, the
-          certified-first tier order). cmdk's own fuzzy filter would re-sort the answer and
-          quietly hide rows the resolver deliberately returned. */}
       <Command shouldFilter={false}>
         <CommandInput
           onValueChange={setQuery}
@@ -405,15 +295,10 @@ function SearchDialog({
         {data.anchor ? (
           <p className="search-note">
             <WaveformIcon aria-hidden="true" className="search-note-icon" />
-            {/* `Artist — Title`, the one sanctioned em dash (VOICE.md §6); inverted it would be an
-                em dash in prose, which the same rule bans. Shared with `/search`'s own note. */}
             Near <strong>{anchorCredit(data.anchor)}</strong>
           </p>
         ) : undefined}
 
-        {/* The honesty line. The model was wanted and could not run, so these are text hits,
-            not the filters you asked for — and search says so rather than passing one off as
-            the other. */}
         {data.degraded ? (
           <p className="search-note search-note--degraded">
             Reading by name only right now. These are the closest words I've got.
@@ -422,15 +307,6 @@ function SearchDialog({
 
         {data.filters ? <SearchFilterChips filters={data.filters} /> : undefined}
 
-        {/* There is no synthetic "Go to /artist/netsky" row anywhere in here, deliberately. A
-            resolved coordinate comes back as the FINDING (cover, title, coordinate) and a
-            resolved artist, label, or album as the ENTITY — the thing, never a rendering of the
-            URL you are about to visit. Each is first in the list, so Enter lands exactly where
-            the redirect would have taken you. */}
-        {/* The empty line sits OUTSIDE `CommandList`, where `CommandEmpty` used to live inside it.
-            `CommandEmpty` renders only while the list holds no items, and the handoff row below is
-            an item that is always there once a query is long enough — so keeping the message in
-            `CommandEmpty` would have silently deleted it in exactly the state it exists for. */}
         {nothing ? <p className="search-note search-note--empty">{emptyCopy}</p> : undefined}
 
         <CommandList>
@@ -454,10 +330,6 @@ function SearchDialog({
             );
           })}
 
-          {/* The findings lead, headed by the NAMED OBJECT rather than the collection's nameplate:
-              DESIGN.md's Unlit Rule reserves "Fluncle's Findings" for lore-area surfaces, and a
-              palette that opens over every page is not one. Same heading as `/search`, so the two
-              doors onto one resolver cannot drift. */}
           {findings.length > 0 ? (
             <CommandGroup heading="Findings">
               {findings.map((hit) => (
@@ -466,9 +338,6 @@ function SearchDialog({
             </CommandGroup>
           ) : undefined}
 
-          {/* The unlit rows follow. "Tracks" names the SUPERSET, never the tier (the Unlit
-              Rule; the mix-builder precedent) — and only when a named group renders above it.
-              A bare unlit list stays unheaded: the register is the only claim made about it. */}
           {unlit.length > 0 ? (
             headUnlit ? (
               <CommandGroup heading="Tracks">
@@ -481,9 +350,6 @@ function SearchDialog({
             )
           ) : undefined}
 
-          {/* Last, and present in EVERY answered state including the empty one — a query that found
-              nothing in a palette is precisely when a reader wants the surface that can explain
-              itself, hold the query in a URL, and be sent to someone else. */}
           {enabled ? (
             <CommandGroup>
               <CommandItem
@@ -507,38 +373,22 @@ function SearchDialog({
   );
 }
 
-// ── The one dialog, and the two ways in ──────────────────────────────────────────────
-
-/**
- * The search controller: `open()` with nothing to land in an empty field, or with a query to land
- * already answering.
- */
 export type SearchController = {
   open: (query?: string) => void;
-  /** The seed the dialog is mounted with, owned by the provider. */
+
   seed?: { query: string; token: number };
-  /** The dialog's setter, so the one MOUNT POINT below can close it. */
+
   setOpen: (open: boolean) => void;
-  /** Whether the dialog is open — read only by the mount point. */
+
   state: boolean;
 };
 
 const SearchContext = createContext<SearchController | undefined>(undefined);
 
-/**
- * ONE dialog and ONE ⌘K listener for the whole public app, mounted by `PublicChrome`.
- *
- * It is a provider rather than state inside the trigger because search now has TWO ways in — the
- * colophon's quiet glyph on every page, and the front door's large seeding entry with its example
- * pills. Two mounted dialogs would mean two ⌘K owners and two answer surfaces to keep in step; one
- * provider means the ways in are genuinely just doors onto the same room.
- */
 export function SearchProvider({ children }: { children: ReactNode }): ReactNode {
   const [open, setOpen] = useState(false);
   const [seed, setSeed] = useState<{ query: string; token: number }>();
 
-  // A monotonic token, not the query string: opening on the SAME example twice has to re-seed, and
-  // the token is the only thing that changes on the second click.
   const controller = useMemo<SearchController>(
     () => ({
       open: (query?: string) => {
@@ -571,11 +421,6 @@ export function SearchProvider({ children }: { children: ReactNode }): ReactNode
   return <SearchContext.Provider value={controller}>{children}</SearchContext.Provider>;
 }
 
-/**
- * Reach the one dialog from anywhere under the chrome. Outside a provider (the chromeless
- * full-bleed surfaces) it is a no-op rather than a throw: a way IN that cannot open is a dead
- * control, never a crashed page.
- */
 export function useSearchController(): SearchController {
   const controller = useContext(SearchContext);
 
@@ -584,18 +429,6 @@ export function useSearchController(): SearchController {
 
 const NO_SEARCH: SearchController = { open: () => {}, setOpen: () => {}, state: false };
 
-/**
- * The colophon's search slot: the quiet glyph, and the one MOUNT POINT for the dialog itself.
- *
- * `showTrigger` hides the GLYPH where the page already carries a larger door to the same action —
- * the front door's seeding field. Two controls answering to one name on one screen is ambiguous to a
- * screen reader and unusable by voice, and a second quieter door for an action already offered in
- * full is exactly what The Quiet Surface Rule takes off a surface. The ⌘K shortcut is unaffected:
- * its listener lives on the provider, so the keystroke works on every public page either way.
- *
- * `⌘K` on Apple, `Ctrl+K` elsewhere. The hint renders from the same check, so it never tells
- * a Windows reader to press a key their keyboard does not have.
- */
 export function SearchTrigger({ showTrigger = true }: { showTrigger?: boolean }): ReactNode {
   const { open, seed, setOpen, state } = useSearchController();
   const isApple = useIsApple();
@@ -612,32 +445,18 @@ export function SearchTrigger({ showTrigger = true }: { showTrigger?: boolean })
         >
           <MagnifyingGlassIcon aria-hidden="true" className="search-trigger-icon" />
           <span className="search-trigger-label">Search</span>
-          {/* The key hint is a VISUAL affordance only. Left exposed, the button's visible text reads
-              "Search ⌘K" while its accessible name is "Search the archive" — the visible label is
-              then not contained in the accessible name, which is a WCAG 2.5.3 failure (Lighthouse's
-              `label-content-name-mismatch`) and, worse, leaves a voice-control user saying a phrase
-              the button does not answer to. Hidden, the visible label is "Search", which the
-              accessible name does contain; `aria-keyshortcuts` above already tells assistive tech
-              about the shortcut, in the form it is meant to be announced. */}
+
           <kbd aria-hidden="true" className="search-trigger-kbd">
             {isApple ? "⌘K" : "Ctrl K"}
           </kbd>
         </button>
       ) : undefined}
 
-      {/* THE ONE MOUNT POINT, and it sits HERE — inside the colophon bar — rather than beside the
-          provider. The state is the provider's, so the front door's field opens this same dialog;
-          only the rendering stays put. The dialog's accessible name renders inside its popup, so a
-          closed palette adds nothing to the page's heading outline. */}
       <SearchDialog onOpenChange={setOpen} open={state} seed={seed} />
     </>
   );
 }
 
-/**
- * Whether the reader is on an Apple keyboard, resolved after mount. Shared by both ways in so the
- * colophon glyph and the front door's field never disagree about which key to name.
- */
 export function useIsApple(): boolean {
   const [isApple, setIsApple] = useState(false);
 

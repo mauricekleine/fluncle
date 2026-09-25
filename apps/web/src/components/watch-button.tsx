@@ -4,25 +4,6 @@ import { Button } from "@fluncle/ui/components/button";
 import { authClient } from "@/lib/auth-client";
 import { authedJsonFetch } from "@/lib/authed-fetch";
 
-// The quiet secondary in an artist/label masthead: a signed-in user watches the entity so a
-// future digest can reach for it (that digest is deferred — this only SAVES the watch).
-//
-// THE ACCOUNT NEVER GATES THE FEATURE. A signed-OUT visitor sees NOTHING here — no button,
-// no upsell — so the entity page reads identically whether or not you have an account. We
-// render only once a session is confirmed (the SaveSetDialog precedent); the anonymous
-// watcher equivalent is the entity's own fresh feed (`/artist/<slug>/fresh.xml`), which this
-// never touches.
-//
-// THE SESSION IS RESOLVED CLIENT-SIDE FIRST (`authClient.useSession()`, the shared store the
-// crew slot already reads on every page), so a signed-OUT visit costs the origin NOTHING —
-// these are PUBLIC pages, and a guaranteed-401 `/api/v1/me/watches` on every anonymous view was
-// both a wasted round-trip and the console error behind a Lighthouse best-practices ding.
-// Once a session IS known — including a sign-in later in the same session, which re-runs the
-// check — the one fetch tells us whether THIS entity is already watched, so the control
-// starts on the right face. The label shows the current state ("Watch" ↔ "Watching", the
-// ratified "Save finding" → "Saved" family), with `aria-pressed` carrying the toggle state
-// and the `aria-label` naming the action for assistive tech.
-
 type Face = "loading" | "not-watching" | "signed-out" | "watching";
 
 type WatchRow = { entityId: string; id: string; kind: string };
@@ -37,7 +18,7 @@ export function WatchButton({
   name: string;
 }) {
   const [face, setFace] = useState<Face>("loading");
-  // The stored watch's id, held so unwatch can DELETE it by id. Present only while watching.
+
   const [watchId, setWatchId] = useState<string | undefined>(undefined);
   const [busy, setBusy] = useState(false);
   const { data: session } = authClient.useSession();
@@ -46,11 +27,6 @@ export function WatchButton({
   useEffect(() => {
     let cancelled = false;
 
-    // No session, no request — and the origin never sees a doomed 401. The store's own
-    // "still resolving" flag is deliberately NOT a dependency here: it flips while the
-    // signed-in user is already known and would fire a second identical read for nothing,
-    // and it buys no render either, since a resolving session and a signed-out one both
-    // show the same thing — nothing at all.
     if (!userId) {
       setFace("signed-out");
       setWatchId(undefined);
@@ -79,7 +55,6 @@ export function WatchButton({
         }
       })
       .catch(() => {
-        // A failed check just leaves the control hidden — never a broken button.
         if (!cancelled) {
           setFace("signed-out");
         }
@@ -94,8 +69,6 @@ export function WatchButton({
     setBusy(true);
 
     try {
-      // A lapsed session — on the token mint or the write itself — resolves undefined,
-      // the helper having already sent them to sign in.
       const response = await authedJsonFetch("/api/v1/me/watches", {
         body: JSON.stringify({ entityId, kind }),
         method: "POST",
@@ -149,12 +122,9 @@ export function WatchButton({
 
   return (
     <Button
-      // The accessible name CONTAINS the visible label (WCAG 2.5.3 Label in Name — a speech-input
-      // user says "click Watching"); `aria-pressed` alone carries the toggle-to-unwatch semantics.
       aria-label={watching ? `Watching ${name}` : `Watch ${name}`}
       aria-pressed={watching}
-      // `mt-4` lives HERE, not on a route wrapper: the null faces (signed-out, loading) must render
-      // truly nothing — no empty grid item, no dead masthead space (the never-gates law, visually).
+
       className="mt-4 shrink-0"
       disabled={busy}
       onClick={() => void (watching ? unwatch() : watch())}
@@ -162,7 +132,6 @@ export function WatchButton({
       type="button"
       variant="outline"
     >
-      {/* One glyph, two weights: regular-idle → fill-active (DESIGN.md § Iconography). */}
       <EyeIcon aria-hidden="true" className="size-4" weight={watching ? "fill" : "bold"} />
       {watching ? "Watching" : "Watch"}
     </Button>

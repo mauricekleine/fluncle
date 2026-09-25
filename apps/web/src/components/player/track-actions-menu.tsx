@@ -1,14 +1,3 @@
-// The quiet ⋮ menu: the SAME actions on every row and on the player for the playing track
-// (DESIGN.md Track Row, The Quiet Surface Rule). Only what exists is offered — the Spotify mark
-// when the track has a Spotify link, and "Similar tracks" into `/search`'s sonic view. A row
-// can add its own entries (a finding with footage adds its story) through `children`, which
-// render first.
-//
-// Both entries are real anchors, so the one capture-phase discovery listener classifies them by
-// where they go: Spotify as an outbound listen, "Similar tracks" as a similar hop (the
-// `data-discovery="similar"` marker on the item — the menu renders in a portal, so the marker
-// rides the anchor itself rather than a wrapper).
-
 import { DotsThreeVerticalIcon, WaveformIcon } from "@phosphor-icons/react";
 import { Link } from "@tanstack/react-router";
 import { type ReactNode } from "react";
@@ -32,7 +21,7 @@ export function TrackActionsMenu({
 }: {
   children?: ReactNode;
   className?: string;
-  /** The player opens its menu upward; a row lets the menu pick. */
+
   side?: "bottom" | "top";
   track: Pick<QueueTrack, "artists" | "spotifyUrl" | "title">;
 }): ReactNode {
@@ -64,11 +53,7 @@ export function TrackActionsMenu({
           </DropdownMenuItem>
         ) : null}
         <DropdownMenuItem
-          render={
-            // The href is data (a `/search?q=` URL), so the cast happens at this one boundary,
-            // exactly as the search rows do it.
-            <Link data-discovery="similar" to={similarSearchHref(track) as never} />
-          }
+          render={<Link data-discovery="similar" to={similarSearchHref(track) as never} />}
         >
           <WaveformIcon aria-hidden="true" className="size-4" />
           Similar tracks

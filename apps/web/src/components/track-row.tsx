@@ -30,11 +30,6 @@ import { type QueueTrack } from "@/lib/preview-player";
 import { type Track } from "@/lib/tracks";
 import { cn } from "@/lib/utils";
 
-// The signature component (DESIGN.md): a finding, not just a row. The whole row
-// reads as one link to its log page (a stretched link); the artwork is the play
-// button for the finding's preview (it plays the feed from this row, as every
-// discovery list does), and a single ⋮ menu sits beside the caret, carrying the
-// story when there is footage — siblings of the stretched link, above it.
 export function TrackRow({ track, trackNumber }: { track: FeedItem; trackNumber: number }) {
   if (track.type === "mixtape") {
     const logId = track.logId as string;
@@ -50,8 +45,7 @@ export function TrackRow({ track, trackNumber }: { track: FeedItem; trackNumber:
         >
           {logId}
         </Link>
-        {/* The row slot is 52px (104px @2x): request the small `thumb` rendition,
-            not the 1500² `square` that backs coverImageUrl (distribution artwork). */}
+
         <TrackArtwork
           alt={`${track.title} cover art`}
           src={logId ? mixtapeCoverUrl(logId, "thumb") : track.coverImageUrl}
@@ -68,8 +62,7 @@ export function TrackRow({ track, trackNumber }: { track: FeedItem; trackNumber:
             </span>
           </Link>
           <span className="track-label mt-1 block truncate">{bangersLabel}</span>
-          {/* The run time as a badge — mirrors a finding's duration chip, so a
-              checkpoint row stands the same height as the rows around it. */}
+
           {track.durationMs ? (
             <span className="mt-1.5 flex flex-wrap items-center gap-1">
               <Badge className="track-chip track-chip-numeric" variant="outline">
@@ -86,11 +79,8 @@ export function TrackRow({ track, trackNumber }: { track: FeedItem; trackNumber:
     );
   }
 
-  // The story opener lives in the ⋮ menu when the finding has footage; the cover is the preview.
   const storyLogId = track.videoUrl ? track.logId : undefined;
-  // Artist — Title as the primary line (the em dash disambiguates titles that
-  // carry their own " - ", e.g. remixes), matching the log index and the rest
-  // of the surfaces. The record label, with the release year, reads beneath.
+
   const trackLine = `${track.artists.join(", ")} — ${track.title}`;
   const releaseYear = track.releaseDate?.slice(0, 4);
   const playable = findingToDiscoveryTrack(track);
@@ -104,8 +94,6 @@ export function TrackRow({ track, trackNumber }: { track: FeedItem; trackNumber:
   return (
     <li className="track-row">
       {track.logId ? (
-        // The coordinate links to its log page — the crawlable exact-match
-        // anchor that keeps /log/<id> pages from being orphans.
         <Link
           aria-label={`Open the log page for ${trackLine}`}
           className="track-log-id track-log-id-link"
@@ -115,13 +103,10 @@ export function TrackRow({ track, trackNumber }: { track: FeedItem; trackNumber:
           {track.logId}
         </Link>
       ) : (
-        // No coordinate yet (the ISRC straggler case): a bare ordinal, no log
-        // page to link until it's backfilled.
         <span className="track-log-id">{`#${trackNumber.toString().padStart(2, "0")}`}</span>
       )}
 
       {playable.previewable ? (
-        // The artwork IS the play button: the feed is one list to the player.
         <PlayCover lit track={discoveryQueueTrack(playable)}>
           {artwork}
         </PlayCover>
@@ -131,9 +116,6 @@ export function TrackRow({ track, trackNumber }: { track: FeedItem; trackNumber:
 
       <span className="min-w-0">
         {track.logId ? (
-          // The row opens the finding's log page (we keep listeners on
-          // fluncle.com). Stretched over the whole row via ::after; the artwork
-          // and the links menu sit above it as siblings.
           <Link
             aria-label={`Open the log page for ${trackLine}`}
             className="track-row-link"
@@ -145,8 +127,6 @@ export function TrackRow({ track, trackNumber }: { track: FeedItem; trackNumber:
             </span>
           </Link>
         ) : (
-          // No coordinate yet (the ISRC straggler): no log page, so the row
-          // still falls back to Spotify.
           <a
             aria-label={`Listen to ${trackLine} on Spotify`}
             className="track-row-link"
@@ -159,12 +139,7 @@ export function TrackRow({ track, trackNumber }: { track: FeedItem; trackNumber:
             </span>
           </a>
         )}
-        {/* The imprint line. The row's own link is STRETCHED (a `::after` over the whole row),
-            so the label sits above it — the same escape the artwork and the links menu already
-            make. The name is a graph link when the imprint has a page; the year beside it is
-            never part of the link (it names no entity). The artist names on the title line
-            above stay plain text on purpose: that line lives INSIDE the row's log link, and a
-            link inside a link is not a thing — the row's job is to open the finding. */}
+
         {track.label ? (
           <span className="track-label block truncate">
             {track.labelSlug ? (
@@ -249,10 +224,6 @@ function MixtapeLinksMenu({ track }: { track: Extract<FeedItem, { type: "mixtape
   );
 }
 
-// The single, scalable links affordance: one overflow button (left of the caret)
-// opening a menu of the platforms this finding actually has — Spotify always,
-// TikTok/YouTube when a published post exists — plus Share. New platforms slot in
-// here without changing the row's layout.
 function TrackLinksMenu({
   queued,
   storyLogId,
@@ -288,8 +259,6 @@ function TrackLinksMenu({
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="min-w-44 shadow-none">
         {storyLogId ? (
-          // The story opens OVER the feed: `/findings` owns the `?story=` param and mounts the
-          // dialog, and the mask shows (and crawlers see) the standalone /log/<id> URL.
           <DropdownMenuItem
             render={
               <Link
@@ -352,11 +321,6 @@ function TrackLinksMenu({
   );
 }
 
-// Enrichment metadata as quiet chips: tempo and key read as instrument-panel
-// numerals (Oxanium, tabular). Nothing renders until enrichment has produced
-// something to show. `className` overrides the wrapper spacing so the same chips
-// slot into another row's layout (e.g. the /mix builder) — the chip style is
-// shared, one definition, no drift.
 export function TrackChips({
   bpm,
   className,

@@ -18,6 +18,8 @@ Before the phases, the shape of the thing they act on. A track's data lives in a
 
 **Why the vector is a third table.** It is not a modelling claim — the vector IS a property of the recording, so it belongs on `tracks` by every rule above. It is a physics one. A 4 KB `F32_BLOB(1024)` inline in a 91-column, 31-index table spills to overflow pages that SQLite must WALK to reach any column stored after it, so every scan reaching a post-blob predicate paid for a vector it never selected — and hosted Turso cannot run `ANALYZE` (libsql-server rejects it), so there is no `sqlite_stat1` and the planner chooses among those 31 indexes by heuristic, permanently. We cannot make it guess better; the satellite makes a wrong guess CHEAP. `tracks.has_embedding` mirrors the satellite row's existence so a presence question still reads one column, and the pair moves in one write batch.
 
+The `F32_BLOB(1024)` width in `db/schema.ts` must match `EMBEDDING_DIMS` in `lib/server/embedding.ts`; the schema keeps the width literal so Drizzle can load it as a leaf module.
+
 **Why it is two tables and not one: `log_id` lives on `findings` and nowhere else, so any query that wants a coordinate MUST join.** It structurally cannot mistake a raw catalogue track for a certified finding. That is the entire point of the split — not tidiness — and it is why no certification field may ever be denormalised back onto `tracks`.
 
 So the two reads are:

@@ -1,10 +1,3 @@
-// A list that plays. Wrap any track list in `PlayableList` with the list's tracks, in display
-// order, and every `PlayCover` inside it plays the WHOLE list from its own row: the list becomes
-// the player's queue (lib/preview-player.ts). A cover outside a list plays its one track.
-//
-// It is a player, not a transport: nothing on the page moves because the queue did. The page
-// stays a scroll, the queue lives in the bar, and the listener can leave in any direction.
-
 import { PauseIcon, PlayIcon } from "@phosphor-icons/react";
 import { useRouterState } from "@tanstack/react-router";
 import { createContext, type ReactNode, useContext, useEffect, useMemo } from "react";
@@ -36,11 +29,7 @@ export function PlayableList({
   tracks,
 }: {
   children: ReactNode;
-  /**
-   * The next page of a paginated list. At the end of this page the player's "keep going" walks
-   * there and plays it from the top; without it, "keep going" plays the last track's sonic
-   * neighbours.
-   */
+
   nextPageHref?: string;
   tracks: QueueTrack[];
 }): ReactNode {
@@ -53,25 +42,17 @@ export function PlayableList({
     [nextPageHref, tracks],
   );
 
-  // The previous page asked to keep going into this one: play it from its first row. The claim
-  // is one-shot and matches this exact URL, so a list the listener reached any other way stays
-  // silent until they press play.
   useEffect(() => {
     if (tracks.length > 0 && claimPageContinuation(href)) {
-      // A continuation landing, not a press: it never silences another sound.
       playQueue(tracks, 0, { continuation: value.continuation, origin: "automatic" });
     }
-    // Only on arrival: a later re-render of the same page must never start the list again.
+
     // oxlint-disable-next-line react-hooks/exhaustive-deps
   }, [href]);
 
   return <PlayableListContext.Provider value={value}>{children}</PlayableListContext.Provider>;
 }
 
-/**
- * One track's play control inside (or outside) a list: its status, whether its preview came back
- * empty, and the press that plays the list from this track, pauses it, or resumes it in place.
- */
 function useListPlay(track: QueueTrack): {
   active: boolean;
   missing: boolean;
@@ -110,14 +91,6 @@ function useListPlay(track: QueueTrack): {
   return { active, missing, onClick, status };
 }
 
-/**
- * The cover IS the play button (DESIGN.md Track Row). The glyph shows on hover and focus, and
- * always, small, on a touch screen; the playing row holds a pause glyph. A track whose preview
- * came back empty dims its glyph and stays tappable (a second try is cheap and honest).
- *
- * `children` is the artwork itself, so every row keeps its own cover treatment (lit, unlit,
- * avatar fallback) and this component only adds the control around it.
- */
 export function PlayCover({
   children,
   className,
@@ -153,11 +126,6 @@ export function PlayCover({
   );
 }
 
-/**
- * The same control as a labelled button, for a placement that is not a cover (the front door's
- * lead finding). The caller supplies the visible label for each state; the accessible name adds
- * the track, so a screen reader hears what will play.
- */
 export function PlayButton({
   className,
   labels,

@@ -1,10 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { resolveCrumbs } from "./nav-breadcrumb";
 
-// The breadcrumb is the colophon architecture's ONE per-page nav link, and the SEO
-// counterweight to banking the rest of the nav in a boilerplate footer. It has to be
-// right on every page, not just the leaves.
-
 describe("resolveCrumbs", () => {
   it("renders nothing on home (a single dead crumb is not a trail)", () => {
     expect(resolveCrumbs("/")).toEqual([]);
@@ -17,7 +13,7 @@ describe("resolveCrumbs", () => {
   it("makes an index page its own unlinked tail", () => {
     expect(resolveCrumbs("/log")).toEqual([{ label: "Log" }]);
     expect(resolveCrumbs("/artists")).toEqual([{ label: "Artists" }]);
-    // /fresh is a hub too — one crumb, unlinked (the new-releases lens).
+
     expect(resolveCrumbs("/fresh")).toEqual([{ label: "Fresh" }]);
   });
 

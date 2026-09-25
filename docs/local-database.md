@@ -83,6 +83,8 @@ Production migrations run only from the Cloudflare deploy chain. Applied migrati
 
 The telemetry migration is required and runs after the primary migration but before `wrangler deploy`. Missing telemetry credentials or a failed telemetry migration exits non-zero, so a new Worker cannot become live before its additive run-ledger schema. The telemetry expansion may safely remain if the later Worker deployment fails or is rolled back.
 
+The run ledger stays in a separate telemetry database so a stalled primary writer cannot hide the sweep failures it should report. The primary and telemetry Drizzle configs use distinct schema entrypoints, migration folders, and credential pairs; neither schema imports the other's tables. A default added to an existing `tracks` column can make Drizzle rebuild the table and its indexes, so review the generated migration before changing a default on that table.
+
 The Cloudflare **Deploy command** is `bun run --cwd apps/web deploy:cf` (build still runs separately as the Build command). Prod `TURSO_DATABASE_URL` / `TURSO_AUTH_TOKEN` and `TURSO_TELEMETRY_DATABASE_URL` / `TURSO_TELEMETRY_AUTH_TOKEN` come from the Cloudflare build/deploy environment, so the two migration steps inspect and migrate their disjoint production databases there.
 
 ## Files

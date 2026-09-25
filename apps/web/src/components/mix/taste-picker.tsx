@@ -7,19 +7,6 @@ import { Input } from "@fluncle/ui/components/input";
 import { MAX_TASTE_ARTISTS } from "@/lib/mix-set";
 import { cn } from "@/lib/utils";
 
-// The taste seed — a stranger's first move on `/mix`, and the reason the tool works at all
-// for someone who has never heard of Fluncle. They cannot name a track in an archive they
-// have never seen, but they can always name artists they like; those artists' tracks carry
-// vectors, so a handful of names is a handful of vectors, and that is a taste.
-//
-// A GRID OF NAMES TO TAP, not a search box to type into. Recognition beats recall: a search
-// box asks the reader to guess what is in here, and every guess that misses reads as "this
-// place doesn't have my music". The grid shows them the archive's best-represented artists
-// and lets them point. The search is there for the one they wanted and did not see.
-//
-// The seed lives in the URL (`?taste=`), so this component holds no state that outlives a
-// click — see `mix-set.ts`.
-
 async function fetchMixArtists(q: string): Promise<MixArtist[]> {
   const params = new URLSearchParams({ limit: "48" });
 
@@ -38,7 +25,6 @@ async function fetchMixArtists(q: string): Promise<MixArtist[]> {
   return body.artists ?? [];
 }
 
-/** One artist as a toggle. Selected = the Gold Veil; a real `aria-pressed` button. */
 function ArtistToggle({
   artist,
   onToggle,
@@ -73,11 +59,10 @@ export function TastePicker({
   onSkip,
   seeded,
 }: {
-  /** Commit the seed (artist slugs) — the page writes it to `?taste=`. */
   onSeed: (slugs: string[]) => void;
-  /** "Or search for a track yourself" — skip seeding entirely. */
+
   onSkip: () => void;
-  /** The slugs already seeded, so re-opening the picker shows the current seed selected. */
+
   seeded: string[];
 }) {
   const [q, setQ] = useState("");
@@ -90,8 +75,6 @@ export function TastePicker({
     staleTime: 60_000,
   });
 
-  // Re-opening the picker with a live seed pre-selects it. The seed is slugs (that is all the
-  // URL carries), so the names are recovered from the first artist page that loads.
   if (!initialised && seeded.length > 0 && artists.length > 0) {
     const seededSet = new Set(seeded);
     const known = artists.filter((artist) => seededSet.has(artist.slug));

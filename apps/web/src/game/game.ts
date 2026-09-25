@@ -31,19 +31,14 @@ import {
 } from "./sim";
 import { type GameTrack } from "./types";
 
-// The conductor: loads the catalogue (N is fixed at boot — a banger logged
-// mid-session is a new star on the NEXT run), owns the master phase
-// (gate → boot → play → end), runs the fixed-step sim loop, and fans sim
-// events out to audio and the telemetry feed.
-
 const SIM_STEP = 1 / 60;
 const MAX_STEPS_PER_FRAME = 5;
-/** Hard cap on catalogue pages so a non-advancing cursor can't hang the loader. */
+
 const MAX_CATALOGUE_PAGES = 48;
-/** How long the log card lingers after you fly on. */
+
 const LOG_CARD_LINGER = 4;
 const TELEMETRY_SECONDS = 5;
-/** Grace after parking on a star, so a held key doesn't instantly eject you. */
+
 const DEPART_GRACE = 1.2;
 
 export type Game = {
@@ -55,7 +50,6 @@ type TelemetryLine = {
   until: number;
 };
 
-/** The console easter egg (and the harness tests' steering tap). */
 type FluncleConsole = {
   help: () => string;
   log: () => string;
@@ -73,12 +67,8 @@ export function createGame(container: HTMLElement): Game {
   const input = createInput(container, handleUiTap);
   const audio = createAudioManager();
 
-  // Per-run session seed: the galaxy's POSITIONS stay deterministic, but a few
-  // frontier choices (which black-hole slot is live) vary run to run off this.
   const sessionSeed = Math.floor(Math.random() * 0xffffffff) >>> 0;
 
-  // The card's Spotify link is canvas-drawn, so presses hit-test against the
-  // renderer's reported rect. Opening the tab auto-pauses via visibility.
   let cardSpotifyUrl: string | undefined;
 
   function handleUiTap(clientX: number, clientY: number): boolean {
@@ -93,8 +83,6 @@ export function createGame(container: HTMLElement): Game {
     const hit = (rect: { h: number; w: number; x: number; y: number } | undefined): boolean =>
       !!rect && ix >= rect.x && ix <= rect.x + rect.w && iy >= rect.y && iy <= rect.y + rect.h;
 
-    // The top-right volume toggle: a tap flips the master mute (the M key does
-    // the same). Eats the press so it never steers or launches.
     if (hit(renderer.volumeRect())) {
       audio.setMuted(!audio.muted());
 
@@ -114,9 +102,7 @@ export function createGame(container: HTMLElement): Game {
 
   let destroyed = false;
   let sim: SimState | undefined;
-  // The crew stamp on the ship (account brief, ruling #1): the signed-in traveller's
-  // enlistment number, painted small near the hull. Absent for anonymous flights, an
-  // unshipped field, or any sync failure — the renderer draws nothing when undefined.
+
   let crewNumber: number | undefined;
   let phase: MasterPhase = "gate";
   let bootT = 0;
@@ -131,18 +117,12 @@ export function createGame(container: HTMLElement): Game {
   let wasOrbiting = false;
   let orbitEnteredAt = 0;
   let paused = false;
-  // The atlas (C): the top-down chart. While it is open the sim freezes (a map
-  // read never burns fuel) but the audio keeps playing — an instrument, not a
-  // pause.
+
   let atlasOpen = false;
-  // One persistent view object so the renderer's sticky-hover write-back
-  // (lastHoverIndex) survives across frames; reset on every open.
+
   const atlasView: import("./render").AtlasView = {};
   let atlasPointer: { x: number; y: number } | undefined;
 
-  // Hover for the atlas's readout: track the latest pointer position in
-  // internal canvas px (the same mapping as handleUiTap). Letterbox positions
-  // fall outside [0, canvas.width] and simply miss every mark.
   function onPointerHover(event: PointerEvent): void {
     const bounds = renderer.canvas.getBoundingClientRect();
 
@@ -173,10 +153,6 @@ export function createGame(container: HTMLElement): Game {
   }
 
   async function loadCatalogue(): Promise<void> {
-    // The catalogue is small and the cursor must always advance. A bounded,
-    // cycle-guarded walk means a misbehaving endpoint (a non-advancing or
-    // repeating cursor) charts what it can and stops, instead of hanging the
-    // browser. 48 pages of 48 covers far more findings than exist.
     const tracks = await collectPages<GameTrack>(
       async (cursor) => {
         const page = await fetchTracks({ cursor, limit: 48 });
@@ -220,9 +196,7 @@ export function createGame(container: HTMLElement): Game {
       if (lifetime) {
         applyLifetimeMarkers(stars, lifetime.collectedLogIds);
       }
-    } catch {
-      // Anonymous play and a live flight always win over sync trouble.
-    }
+    } catch {}
 
     sim = createSim(stars, {
       frontier: { asteroids: true, blackHoles: true, setDressing: true },
@@ -234,8 +208,6 @@ export function createGame(container: HTMLElement): Game {
     emptyGalaxy = true;
   });
 
-  // The crew number rides its own tolerant fetch — never a gate on the flight. It
-  // lands (or does not) independently of the catalogue and the lifetime sync.
   void fetchCrewNumber().then((value) => {
     if (!destroyed) {
       crewNumber = value;
@@ -290,8 +262,6 @@ export function createGame(container: HTMLElement): Game {
   }
 
   function logCardView(state: SimState): LogCardView | undefined {
-    // Parked on any logged star, the card is pinned to it — fresh logs and
-    // revisits alike, including revisits long after an old card expired.
     if (state.orbitIndex >= 0 && state.stars[state.orbitIndex]?.collected) {
       if (card?.starIndex !== state.orbitIndex) {
         card = { shownAt: nowS, starIndex: state.orbitIndex };
@@ -328,8 +298,7 @@ export function createGame(container: HTMLElement): Game {
       }
 
       audio.resume();
-      // The amen break rides this same gesture unlock (autoplay-with-sound is
-      // blocked, so it can only start on the launch tap, never on load).
+
       audio.playIntro();
       bootT = 0;
       phase = "boot";
@@ -395,7 +364,6 @@ export function createGame(container: HTMLElement): Game {
       audio.setMuted(!audio.muted());
     }
 
-    // C toggles the atlas in flight; it never opens over the pause screen.
     if (input.consumeAtlasToggle() && phase === "play" && sim && !paused) {
       atlasOpen = !atlasOpen;
 
@@ -405,7 +373,6 @@ export function createGame(container: HTMLElement): Game {
     }
 
     if (input.consumePauseToggle() && phase === "play") {
-      // Esc closes the chart first; pausing is the next press.
       if (atlasOpen) {
         atlasOpen = false;
       } else {
@@ -431,7 +398,6 @@ export function createGame(container: HTMLElement): Game {
       towedT = Math.max(0, towedT - dt);
     }
 
-    // The atlas freezes the flight too: a chart read never burns fuel.
     advanceFlight(dt);
 
     while (telemetry[0] !== undefined && telemetry[0].until < nowS) {
@@ -490,8 +456,6 @@ export function createGame(container: HTMLElement): Game {
     }
   }
 
-  // The gate before the catalogue lands (or when there is nothing out there
-  // yet): keep the plate up with an honest line under it.
   function drawHolding(): void {
     const view: RenderView = {
       bootT: 0,
@@ -545,8 +509,6 @@ export function createGame(container: HTMLElement): Game {
 
   function onVisibility(): void {
     if (document.hidden) {
-      // Leaving the tab parks the run; you come back to a pause screen,
-      // not a ship that kept burning fuel.
       if (phase === "play") {
         setPaused(true);
       } else {
@@ -568,13 +530,8 @@ export function createGame(container: HTMLElement): Game {
 
   installFlightComputer();
 
-  // The flight computer: a console easter egg for the crew and the harness
-  // tests' steering tap in one. Methods return their reply so the console
-  // prints it.
   function installFlightComputer(): void {
     const fluncle: FluncleConsole = {
-      // The list goes through console.log: a RETURNED string renders as one
-      // escaped line in devtools; logged text keeps its line breaks.
       help: () => {
         console.log(
           [

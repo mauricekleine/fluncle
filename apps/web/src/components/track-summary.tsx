@@ -1,9 +1,6 @@
 import { TrackArtwork } from "@/components/track-artwork";
 import { albumCoverAtSize } from "@/lib/media";
 
-// The compact artwork + title + artist block shared by the dialog tiles
-// (random banger, submit-track search results). The interactive wrapper —
-// plain tile or selectable button — stays with the caller.
 export function TrackSummary({
   artists,
   artworkUrl,
@@ -15,7 +12,6 @@ export function TrackSummary({
 }) {
   return (
     <>
-      {/* The tile slot is ~52px: request the small Spotify rendition. */}
       <TrackArtwork src={albumCoverAtSize(artworkUrl, "small")} />
       <span className="min-w-0">
         <span className="block text-sm font-extrabold [overflow-wrap:anywhere]">{title}</span>

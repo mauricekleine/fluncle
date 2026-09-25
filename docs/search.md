@@ -110,7 +110,7 @@ The one place certified-first is **not** applied is the sonic ranking, and that 
 
 It does not need one. **An FTS index is a derived artifact, not schema history**: every byte is reconstructible from `tracks` in one SELECT. So it is built the way derived artifacts are built here — an idempotent, self-healing `ensureSearchIndex` folded into `db:migrate`, which reaches exactly the places a migration would: the Cloudflare deploy, every local dev boot, and the in-memory integration harness. It also sidesteps libsql#1811 (the open FTS5-inside-`db.batch()` panic) for free, since `drizzle-kit migrate` applies a migration file through `batch()` and these statements run one at a time.
 
-Two traps live in that file's header: FTS5's `MATCH` is a **query language** (a bind slot does not neutralise its operators — the expression is rebuilt from scrubbed tokens, never interpolated), and `INSERT OR REPLACE INTO tracks` would not fire the delete trigger. Every write path is a plain `INSERT`/`UPDATE`; the count reconcile is the backstop.
+FTS5's `MATCH` is a **query language**: a bind slot does not neutralise its operators, so the expression is rebuilt from scrubbed tokens, never interpolated. `INSERT OR REPLACE INTO tracks` does not fire the FTS delete trigger unless recursive triggers are enabled; track writes use plain `INSERT` or `UPDATE`, and the count reconcile is the backstop.
 
 ## The surface
 

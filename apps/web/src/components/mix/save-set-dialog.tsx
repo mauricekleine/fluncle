@@ -17,25 +17,6 @@ import { Label } from "@fluncle/ui/components/label";
 import { csrfJsonHeaders, fetchCsrfToken } from "@/lib/authed-fetch";
 import { buildSaveSetBody, canSaveSet } from "@/lib/mix-save";
 
-// The quiet secondary in the plate masthead: a signed-in user names the chain they built and
-// saves it so it survives the tab. It is NOT the gold primary — Copy set link keeps that (the
-// §3.0 one-gold-primary gate); this sits beside it as a plain outline.
-//
-// THE ACCOUNT NEVER GATES THE TOOL. A signed-OUT visitor sees NOTHING here — no button, no
-// upsell — so `/mix` reads identically whether or not you have an account. We only render once
-// `/api/v1/me` confirms a session, so nothing new appears for the anonymous stranger the tool is
-// built for.
-//
-// THE RULING — one save-set contract on web AND mobile:
-//  · "Save set" ALWAYS opens a small dialog: a name field, Save, Cancel.
-//  · The name PREFILLS with the opened set's name when editing an existing set (the stable
-//    reference), empty for a new one.
-//  · The `set`/`taste` come from the LIVE CHAIN state (props from the builder's source of
-//    truth), NEVER the `?set=` URL param — so save writes what is on screen now.
-//  · Opening a saved set makes it the STABLE REFERENCE: every save thereafter PATCHes THAT
-//    set (by `reference.id`), regardless of how the chain changed in between. A 404 (the set
-//    was deleted elsewhere) falls back to POST-create and adopts the new id — mirroring mobile.
-//  · A fresh POST adopts the returned id + entered name, so the second save is also an update.
 export function SaveSetDialog({
   chainLength,
   onAdopt,
@@ -43,15 +24,14 @@ export function SaveSetDialog({
   serializedSet,
   serializedTaste,
 }: {
-  /** The live chain's length — the empty-chain guard reads it, never the URL. */
   chainLength: number;
-  /** Adopt the account set this chain now belongs to, so the next save updates it. */
+
   onAdopt: (reference: { id: string; name: string }) => void;
-  /** The stable reference: the saved set this chain was opened from (or last saved to). */
+
   reference?: { id: string; name: string };
-  /** The live chain, serialized to `?set=` tokens — the save payload. */
+
   serializedSet: string;
-  /** The taste seed, serialized to `?taste=` — rides with the set. */
+
   serializedTaste: string;
 }) {
   const [signedIn, setSignedIn] = useState(false);
@@ -69,9 +49,7 @@ export function SaveSetDialog({
           setSignedIn(Boolean(body.user));
         }
       })
-      .catch(() => {
-        // A failed check just leaves the button hidden — never a broken control.
-      });
+      .catch(() => {});
 
     return () => {
       cancelled = true;
@@ -83,9 +61,6 @@ export function SaveSetDialog({
     setBusy(true);
 
     try {
-      // ONE token for the whole save, because the PATCH may fall back to a POST below.
-      // `undefined` means the session lapsed between the check and the click and the
-      // helper already sent them to sign in.
       const csrfToken = await fetchCsrfToken();
 
       if (csrfToken === undefined) {
@@ -99,8 +74,6 @@ export function SaveSetDialog({
       let response: Response;
 
       if (reference?.id) {
-        // The chain is opened from (or already saved to) an account set — UPDATE that set in
-        // place. Save never mints siblings of the set you are editing.
         response = await fetch(`/api/v1/me/saved-sets/${reference.id}`, {
           body,
           headers,
@@ -108,7 +81,6 @@ export function SaveSetDialog({
         });
 
         if (response.status === 404) {
-          // The set was deleted on another device — create anew and adopt it.
           response = await fetch("/api/v1/me/saved-sets", { body, headers, method: "POST" });
 
           if (response.ok) {
@@ -126,8 +98,6 @@ export function SaveSetDialog({
       }
 
       if (response.ok) {
-        // A saved set lands under "Saved sets" on /account (NOT under findings), so the old
-        // "Find it under your findings." locator was false — dropped, matching mobile.
         toast("Saved to your account.");
         setOpen(false);
       } else if (response.status === 401) {
@@ -142,7 +112,6 @@ export function SaveSetDialog({
     }
   }
 
-  // Adopt the id a fresh POST returned (+ the entered name) so the second save is an update.
   async function adopt(response: Response, savedName: string) {
     const data = (await response.json()) as { savedSet?: { id?: string } };
 
@@ -163,7 +132,6 @@ export function SaveSetDialog({
         setOpen(next);
 
         if (next) {
-          // Prefill with the stable reference's name when editing; empty for a new set.
           setName(reference?.name ?? "");
         }
       }}
@@ -176,9 +144,7 @@ export function SaveSetDialog({
       <DialogContent>
         <DialogHeader>
           <DialogTitle>Save set</DialogTitle>
-          {/* The overwrite clause shows ONLY when a stable reference exists — for a fresh
-              chain there is no "set you opened", and claiming one would be a false locator
-              (the same defect class the toast fix removed). */}
+
           <DialogDescription>
             {reference?.id
               ? "Name it and I'll keep it on your account. I'll update the set you opened."
