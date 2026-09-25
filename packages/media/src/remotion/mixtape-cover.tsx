@@ -3,39 +3,16 @@ import { colors } from "@fluncle/tokens";
 
 import { OXANIUM_STACK } from "./fonts";
 
-// <MixtapeCover> — cover art for a Fluncle mixtape (a checkpoint / "Fluncle
-// dreaming"; see packages/skills/fluncle-mixtapes). One code-generated still,
-// parametrized by the mixtape number and its Log ID coordinate, rendered at three
-// aspect ratios from this one component (mixtape-cover-specs.ts): square for
-// Mixcloud / SoundCloud + the /log coverImageUrl, 16:9 for the YouTube thumbnail,
-// and 1200×630 for the /log OG card.
-//
-// Reuses the founding hero — the lone cosmonaut (public/fluncle-cosmonaut.png,
-// Maurice's own artwork) on a warm Deep Field cosmos, exactly like the social
-// banners (cosmos-banner.tsx) — and adds only the two markers that make this
-// mixtape unique: "MIXTAPE #N" and its coordinate. Canon: Warm Dark ground, One
-// Sun (the single warm eclipse glow), Light-Years grain + scanlines, One Voice
-// (Oxanium caps for the marks). The starfield is seeded by the coordinate, so each
-// mixtape's field differs but renders reproducibly.
-
 export type MixtapeCoverProps = {
-  /** The Log ID coordinate, e.g. "019.F.1A". Also seeds the starfield. */
   coordinate: string;
-  /**
-   * Draw the "MIXTAPE #N" + coordinate markers. Default true for Studio preview
-   * and the legacy full-cover render; the on-the-fly cover endpoint bakes the
-   * background with `markers: false` and stamps the text in Satori instead
-   * (apps/web/src/routes/api/mixtape-cover.$logId.ts).
-   */
+
   markers?: boolean;
-  /** The mixtape sequence number, e.g. "1". */
+
   number: string;
 };
 
 type Star = { bright: number; size: number; x: number; y: number };
 
-// Static style for the coordinate marker — hoisted so its object identity is
-// stable across renders (all properties are constant, none per-render).
 const COORDINATE_STYLE: React.CSSProperties = {
   color: colors.starlightCream,
   fontFamily: OXANIUM_STACK,
@@ -48,11 +25,8 @@ const COORDINATE_STYLE: React.CSSProperties = {
   textShadow: `0 1px 14px ${colors.deepField}`,
 };
 
-// The cosmonaut fills ~46% of the height of its square cutout (the rest is
-// transparent margin); scale so the visible figure hits the target height.
 const FIGURE_IN_CUTOUT = 0.46;
 
-/** A quiet seeded starfield with the odd brighter punctuation, seeded by coordinate. */
 function buildStarfield(seed: string, count: number): Star[] {
   const stars: Star[] = [];
 
@@ -77,31 +51,26 @@ export const MixtapeCover: React.FC<MixtapeCoverProps> = ({
 }) => {
   const { height } = useVideoConfig();
   const stars = buildStarfield(coordinate, 170);
-  // The figure fills ~42% of the frame height, leaving the lower band for the
-  // markers (which sit over the cutout's transparent margin, not the figure).
+
   const imgSize = Math.round((height * 0.42) / FIGURE_IN_CUTOUT);
 
   return (
     <AbsoluteFill style={{ backgroundColor: colors.deepField }}>
-      {/* Warm Dark: a gentle vertical wash, warmer up top toward the sun. */}
       <AbsoluteFill
         style={{
           background: `linear-gradient(180deg, ${colors.sleeveBlack} 0%, ${colors.deepField} 55%, #060708 100%)`,
         }}
       />
-      {/* One Sun: a single large warm eclipse glow (gold → orange → a breath of
-          re-entry red), the only light in the frame. */}
+
       <AbsoluteFill
         style={{
           background: `radial-gradient(46% 78% at 50% 20%, ${colors.eclipseGlow}45 0%, ${colors.eclipseGold}2e 22%, ${colors.reentryRed}12 44%, transparent 70%)`,
         }}
       />
 
-      {/* Seeded starfield. */}
       <AbsoluteFill>
         {stars.map((star, index) => (
           <div
-            // deterministic seeded field; stable index keys
             key={index}
             style={{
               backgroundColor: colors.starlightCream,
@@ -117,8 +86,6 @@ export const MixtapeCover: React.FC<MixtapeCoverProps> = ({
         ))}
       </AbsoluteFill>
 
-      {/* The cosmonaut — the hero, centred and lifted so the lower band is free
-          for the markers; a soft gold glow seats it against the dark. */}
       <AbsoluteFill
         style={{ alignItems: "center", justifyContent: "center", paddingBottom: "18%" }}
       >
@@ -133,8 +100,6 @@ export const MixtapeCover: React.FC<MixtapeCoverProps> = ({
         />
       </AbsoluteFill>
 
-      {/* The two markers — the only thing that makes this cover unique. Skipped
-          when baking the shared background; the cover endpoint stamps them in Satori. */}
       {markers ? (
         <AbsoluteFill
           style={{
@@ -163,7 +128,6 @@ export const MixtapeCover: React.FC<MixtapeCoverProps> = ({
         </AbsoluteFill>
       ) : null}
 
-      {/* Light-Years: faint scanlines + a film-grain wash over the frame. */}
       <AbsoluteFill
         style={{
           backgroundImage: `repeating-linear-gradient(0deg, ${colors.deepField}00 0px, ${colors.deepField}00 2px, ${colors.deepField}40 3px, ${colors.deepField}40 3px)`,

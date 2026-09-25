@@ -37,8 +37,6 @@ describe("resolveRepoRoot", () => {
 });
 
 describe("REQUIRED_REPO_ASSETS", () => {
-  // The whole point of the skill is that a rebuild never has to hunt for its assets. If one of
-  // these moves, this test fails HERE rather than at 3am with the box gone.
   test("every listed asset exists in this checkout", () => {
     const root = resolveRepoRoot(import.meta.dir) ?? "";
     const missing = REQUIRED_REPO_ASSETS.filter((path) => !existsSync(join(root, path)));
@@ -167,8 +165,6 @@ describe("validateBoxStateManifest", () => {
 });
 
 describe("scanSecretTemplate", () => {
-  // Every reference below is a PLACEHOLDER (`op://<…>/…`), never a concrete vault path — this
-  // repo is public and CI greps the working tree for `op://` followed by an alphanumeric.
   test("separates op:// references from literals and never returns a literal value", () => {
     const scan = scanSecretTemplate(
       [
@@ -176,8 +172,7 @@ describe("scanSecretTemplate", () => {
         "",
         "OPENROUTER_API_KEY=op://<vault>/<item>/credential",
         'export FLUNCLE_API_TOKEN="op://<vault>/<other-item>/credential"',
-        // Both spellings are pointers `op inject` resolves, and a real vault name has spaces in
-        // it — a matcher that misses either form cries "leak" over the whole template.
+
         "MOUSTACHE_FORM={{ op://<some vault>/<item>/credential }}",
         "SPACED_BARE_FORM=op://<some vault>/<item>/credential",
         "LEAKED_TOKEN=sk-live-realvalue",
@@ -200,8 +195,6 @@ describe("scanSecretTemplate", () => {
 });
 
 describe("redactTopology", () => {
-  // Both children whose stderr this report repeats name the map in their failure text, and the
-  // report is agent-facing — one paste from a public issue. Diagnostics survive, topology does not.
   test("strips the op:// reference `op` quotes when a ref will not resolve", () => {
     const redacted = redactTopology(
       '[ERROR] "Private Vault" isn\'t a vault: op://<private vault>/<item>/credential',

@@ -1,14 +1,7 @@
-// The pre-flight parsers, tested against REAL tool output shapes (the first-set debrief:
-// the meter read [dark] "meter unread" though frames flowed, and the 44.1 kHz hold named
-// no devices). `interpretMeter` reads an ffmpeg `volumedetect` capture; `parseAudioDevices`
-// reads `system_profiler -json SPAudioDataType`. Both pure — importing show.ts must not
-// launch the rig (main() is guarded behind import.meta.main).
-
 import { describe, expect, test } from "bun:test";
 
 import { interpretMeter, parseAudioDevices } from "./show.ts";
 
-// Real volumedetect stderr (captured from ffmpeg): a 440 Hz tone and digital silence.
 const TONE_STDERR = [
   "[Parsed_volumedetect_0 @ 0x872c30780] n_samples: 0",
   "[Parsed_volumedetect_0 @ 0x872c30c00] n_samples: 144000",
@@ -35,7 +28,7 @@ describe("interpretMeter", () => {
     const r = interpretMeter({ stderr: SILENCE_STDERR, timedOut: false }, 3);
     expect(r.status).toBe("hold");
     expect(r.note).toContain("route alive, signal silent");
-    // The debrief's distinction: silence is its own message, never "meter unread".
+
     expect(r.note).not.toContain("meter unread");
   });
 
@@ -70,7 +63,6 @@ describe("interpretMeter", () => {
   });
 });
 
-// A trimmed `system_profiler -json SPAudioDataType` body: two 44.1 kHz devices, one 48 kHz.
 const SP_JSON = JSON.stringify({
   SPAudioDataType: [
     {

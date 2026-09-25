@@ -1,9 +1,3 @@
-// Integrity of the ONE keybindings table. These guard the drift-guard: if the
-// table is malformed the overlay, the dispatch, and the boot legend all inherit
-// the fault, so the table itself carries the tests. The behaviour↔table wiring
-// is additionally enforced at compile time (main.ts's handler map is typed
-// `Record<KeybindingId, …>`), so a missing/extra handler fails typecheck.
-
 import { describe, expect, test } from "bun:test";
 
 import {
@@ -64,7 +58,7 @@ describe("KEYBINDINGS table integrity", () => {
   test("the overlay toggle (i) and the special-cased Shift+X both live in the table", () => {
     const byKey = keyToBinding();
     expect(byKey.get("i")?.id).toBe("keys");
-    // Shift+X stays special-cased in behaviour but MUST appear here so the legend shows it.
+
     expect(byKey.get("X")?.id).toBe("smoke");
   });
 

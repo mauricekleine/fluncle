@@ -1,7 +1,3 @@
-// The arrival settle guard — pure envelope tests. Locks the shape the client rides:
-// a floor on the first frame, unity once the window closes, monotone-eased between,
-// and a smoothstep (zero slope at both ends — eased, never stepped).
-
 import { describe, expect, test } from "bun:test";
 
 import { SETTLE_FLOOR, SETTLE_MS, settleGain } from "./settle";
@@ -9,7 +5,7 @@ import { SETTLE_FLOOR, SETTLE_MS, settleGain } from "./settle";
 describe("settleGain — the arrival input-gain envelope", () => {
   test("starts at the floor on the first frame of an arrival", () => {
     expect(settleGain(0)).toBe(SETTLE_FLOOR);
-    expect(settleGain(-100)).toBe(SETTLE_FLOOR); // never below the floor
+    expect(settleGain(-100)).toBe(SETTLE_FLOOR);
   });
 
   test("reaches unity exactly at the window end and stays there", () => {
@@ -30,8 +26,7 @@ describe("settleGain — the arrival input-gain envelope", () => {
   test("is eased, not stepped: smoothstep has ~zero slope at both ends", () => {
     const dEnter = settleGain(1) - settleGain(0);
     const dExit = settleGain(SETTLE_MS) - settleGain(SETTLE_MS - 1);
-    // A linear ramp would rise ~ (1-floor)/SETTLE_MS per ms at BOTH ends; smoothstep
-    // is far flatter there. Guard the ease by requiring both endpoints to be gentle.
+
     const linearPerMs = (1 - SETTLE_FLOOR) / SETTLE_MS;
     expect(dEnter).toBeLessThan(linearPerMs);
     expect(dExit).toBeLessThan(linearPerMs);

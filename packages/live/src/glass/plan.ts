@@ -1,11 +1,3 @@
-// The /plan bridge — assemble the ordered tracklist enriched with each finding's
-// palette + seed + duration + videoVehicle tag + the extracted, replay-ready shader
-// scene (now multi-layer + velocity-aware). Same-origin so the page has no CORS.
-//
-// Source of the tracklist, in order: $FLUNCLE_SHOW_PLAN (a path a `fluncle run show
-// --plan` bridge writes), else the committed demo fixture, else empty (uncharted-
-// space standalone — the failure floor). Everything the arrival needs is already on
-// R2 (props.json + composition.tsx), CORS-clear — no backfill artifact.
 import { type Scene } from "./scene-extract.ts";
 import { extractScene, resolveSceneTextureUrls } from "./scene-extract.ts";
 
@@ -38,9 +30,7 @@ async function loadTracklist(): Promise<TracklistItem[]> {
       if (await f.exists()) {
         return (await f.json()) as TracklistItem[];
       }
-    } catch {
-      // try the next candidate
-    }
+    } catch {}
   }
   return [];
 }
@@ -62,9 +52,7 @@ async function fetchVehicleMap(): Promise<Record<string, string>> {
         }
       }
     }
-  } catch {
-    // feed unavailable -> tag-map falls back to hash for every track
-  }
+  } catch {}
   return map;
 }
 
@@ -105,9 +93,7 @@ export async function buildPlan(): Promise<PlanEntry[]> {
           durationMs = p.track?.durationMs ?? durationMs;
           artworkUrl = p.track?.artworkUrl ?? null;
         }
-      } catch {
-        // props.json missing -> canon palette for this arrival
-      }
+      } catch {}
       let scenePalette: string[] | undefined;
       try {
         const sr = await fetch(`https://found.fluncle.com/${t.logId}/scene.json`);
@@ -117,9 +103,7 @@ export async function buildPlan(): Promise<PlanEntry[]> {
             scenePalette = sc.palette;
           }
         }
-      } catch {
-        // scene.json missing -> the artwork palette carries the replay tint.
-      }
+      } catch {}
       let replay: Scene = {
         customUniforms: [],
         layers: [],
@@ -131,12 +115,9 @@ export async function buildPlan(): Promise<PlanEntry[]> {
       try {
         const cr = await fetch(`https://found.fluncle.com/${t.logId}/composition.tsx`);
         if (cr.ok) {
-          // Resolve plate/artwork samplers to concrete R2 URLs the glass loads + binds.
           replay = resolveSceneTextureUrls(extractScene(await cr.text()), t.logId, artworkUrl);
         }
-      } catch {
-        // fetch failed -> non-replayable (tag-map fallback)
-      }
+      } catch {}
       return {
         artists,
         durationMs,
@@ -155,7 +136,6 @@ export async function buildPlan(): Promise<PlanEntry[]> {
   return out;
 }
 
-/** Pre-extract all scenes at boot and print the replayability table. */
 export function logSummary(plan: PlanEntry[]): void {
   const pad = (s: string, n: number): string => (s + " ".repeat(n)).slice(0, n);
   let rep = 0;
@@ -170,8 +150,6 @@ export function logSummary(plan: PlanEntry[]): void {
   );
   console.log("-".repeat(118));
   for (const e of plan) {
-    // `replay` is present on both the glass's own entries and the bridge's (it always
-    // sets it), but a lagging bridge could omit it — narrate that rather than throw.
     const r = e.replay as Scene | undefined;
     if (r?.replayable) {
       rep++;
@@ -190,24 +168,8 @@ export function logSummary(plan: PlanEntry[]): void {
   console.log(`replayable: ${rep}/${plan.length}\n`);
 }
 
-// ── Bridge-first plan precedence (RFC §4 · the first-set debrief fix) ─────────
-// The glass keeps a standalone /plan (the fixture floor) for bridge-less mode, but when
-// the bridge is up its /plan WINS: the operator's real, full plan must drive the glass —
-// not the committed demo tracklist. The first live set exposed the gap (the glass cycled
-// its own 5-entry fixture while the bridge held the real 17-finding plan). `choosePlanSource`
-// is the pure precedence rule the glass server + client both narrate; `resolveBridgePlan`
-// reaches the bridge over the loopback. Both worlds index the SAME list, so the bridge
-// pointer (arrow keys / phone remote → matcher) and the glass plan stay in lock-step.
-
-/** Which /plan the glass ended up serving. */
 export type PlanSource = "bridge" | "local";
 
-/**
- * The pure precedence rule: the bridge's plan wins whenever it answered with a non-empty
- * tracklist; otherwise the local fixture floor. Returns the winning list, its source, and
- * the operator-facing log line ("plan: N findings via the bridge" vs "plan: N findings,
- * local fixture — no bridge"). Generic + side-effect-free, so it unit-tests directly.
- */
 export function choosePlanSource<T>(
   bridgePlan: readonly T[] | null,
   localPlan: readonly T[],
@@ -226,11 +188,6 @@ export function choosePlanSource<T>(
   };
 }
 
-/**
- * Ask the bridge for its /plan over the loopback. Returns the enriched tracklist, or null
- * when no bridge answers (down, wrong port, timeout, or a non-OK / non-array body) — the
- * signal to fall to the local fixture floor. One attempt; the caller owns any retry window.
- */
 export async function resolveBridgePlan(
   bridgePort: number,
   timeoutMs = 1200,
@@ -243,19 +200,13 @@ export async function resolveBridgePlan(
       return null;
     }
     const body: unknown = await res.json();
-    // The bridge's PlanEntry[] is the contract shape; the glass consumes it structurally
-    // (every field it reads is null/undefined-tolerant), so this is the one boundary cast.
+
     return Array.isArray(body) ? (body as PlanEntry[]) : null;
   } catch {
     return null;
   }
 }
 
-/**
- * Resolve the bridge plan with a brief retry window. `run show` raises the bridge first
- * and waits for it healthy, so at glass boot it is normally already answering; this only
- * covers the small startup race (and a rehearsal where the bridge is still coming up).
- */
 export async function resolveBridgePlanWithRetry(
   bridgePort: number,
   {

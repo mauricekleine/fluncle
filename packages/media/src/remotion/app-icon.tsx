@@ -3,91 +3,25 @@ import { colors } from "@fluncle/tokens";
 
 import { OXANIUM_STACK } from "./fonts";
 
-// <AppIcon> — candidate app icons for the Fluncle mobile app (apps/mobile).
-//
-// A single code-generated still (1024×1024, the iOS/Android master size),
-// parametrized by `variant` so one composition renders every candidate. The icon
-// must read as THE Fluncle mark at ~60px on a phone grid, so each variant is a
-// SIMPLE, warm-dark form with gold placed only where it earns it (The One Sun
-// Rule). This is a TASTE deliverable for the operator to choose one from.
-//
-// TWO FAMILIES OF VARIANTS. The operator ruled that the icon should be the
-// EXISTING brand mark — the drifting traveler (public/fluncle-cosmonaut.png,
-// Maurice's founding figure, the same transparent cut as
-// apps/web/public/fluncle-transparant.png and the site/socials avatar's
-// fluncle-small.jpg). The `traveler*` variants are therefore the live
-// candidates: the figure composited onto three canon backgrounds, SCALED UP so
-// it reads as a figure at 60px (in the raw cut the figure fills only ~41% of the
-// canvas height — exactly why fluncle-small.jpg is unusable as-is: the figure is
-// a speck). The four invented marks (eclipse/stamp/cover/diamond) stay as
-// exploration.
-//
-// ICON CRAFT (why the numbers are what they are):
-//   - Design to the FULL SQUARE. iOS applies its own superellipse ("squircle")
-//     corner mask, so we bake NO rounded corners here; the Deep Field ground
-//     bleeds edge to edge. Android's adaptive icon re-crops too, so the load-
-//     bearing content stays inside a generous central safe zone (SAFE_INSET) —
-//     nothing critical rides the corners where a mask would shear it.
-//   - NO alpha: iOS rejects an icon with transparency, so every variant fills an
-//     opaque Deep Field ground first.
-//   - NO text smaller than legible-at-60px: the only letterform is the "stamp"
-//     variant's single Oxanium `F`, which fills the frame.
-//
-// The canon it obeys (DESIGN.md):
-//   - Warm Dark Rule — the ground is a warm near-black Deep Field, never a flat
-//     cold black.
-//   - One Sun Rule — Eclipse Gold is the only light: exactly one gold source per
-//     variant (the eclipse, the diamond, or the `F`), owning ~10% of the frame.
-//   - Light-Years Rule — grain (and, where it suits, scanlines) are ON, but the
-//     WEIGHT is the mark's own: near-silent under a clean, electric mark (so the
-//     pop survives), heavier under the far-travelled "cover" scene.
-//   - The Ignition Rule — gold is placed like light. The burning corona and the
-//     sun-bloom read as a light source, never a painted chip.
-//
-// Determinism: the starfield and the stippled burning corona are seeded via
-// Remotion's random(), never Math.random(), so every candidate renders
-// identically each time. Dimensions live on the <Still> in root.tsx (1024×1024).
-
-/** The candidate axes. One composition renders all of them by `variant`. */
 export type AppIconVariant =
-  /** The drifting traveler on plain Deep Field — the mark, nothing else. */
   | "traveler"
-  /** The traveler over the quiet starfield — the fluncle-small.jpg avatar vibe. */
   | "traveler-stars"
-  /** The traveler with a faint warm eclipse glow behind — the rim light haloed. */
   | "traveler-glow"
-  /** PRODUCTION ASSET: the traveler on a TRANSPARENT ground, scaled to ~58% for
-      Android's adaptive-icon safe zone (the adaptive mask crops harder than iOS). */
   | "adaptive-foreground"
-  /** PRODUCTION ASSET: the splash mark — the traveler small over an edge-faded
-      starfield on a TRANSPARENT ground; the native splash backgroundColor
-      (Deep Field) supplies the ground, so the composited square has no seam. */
   | "splash"
-  /** Exploration: the burning eclipse mark alone on Deep Field. */
   | "eclipse"
-  /** Exploration: a single Oxanium `F` stamp, in the plate's printed frame. */
   | "stamp"
-  /** Exploration: the founding cover distilled — eclipse over a tower skyline. */
   | "cover"
-  /** Exploration: the banger-diamond star motif. */
   | "diamond";
 
 export type AppIconProps = {
   variant: AppIconVariant;
 };
 
-// The central region every platform mask is guaranteed to keep. iOS's squircle
-// and Android's adaptive crop both nibble the corners, so load-bearing content
-// stays inside this inset of the 1024 square.
 const SAFE_INSET = 96;
 
-/** A faint distant star: position (%), size (px), and brightness. */
 type Star = { bright: number; size: number; x: number; y: number };
 
-/**
- * A quiet seeded starfield, cleared around the sun so nothing competes with the
- * One Sun. `clearY` is the sun's vertical centre (%) — the field opens up there.
- */
 function buildStarfield(seed: string, count: number, clearY: number): Star[] {
   const stars: Star[] = [];
 
@@ -112,15 +46,8 @@ function buildStarfield(seed: string, count: number, clearY: number): Star[] {
   return stars;
 }
 
-/** One stippled corona particle: absolute px position, size, colour, opacity. */
 type Ember = { color: string; opacity: number; size: number; x: number; y: number };
 
-/**
- * The burning corona — the cover's signature. A ring band of seeded gold→orange→
- * red particles around the eclipse core, dithered so the "burning" reads as
- * pointillist heat (the founding artwork's stippled sun), not a clean gradient.
- * Denser and hotter near the core, thinning and reddening outward.
- */
 function buildCorona(
   seed: string,
   count: number,
@@ -133,13 +60,11 @@ function buildCorona(
 
   for (let index = 0; index < count; index += 1) {
     const angle = random(`${seed}-a-${index}`) * Math.PI * 2;
-    // Bias the radius inward (squared roll) so the band is densest at the core
-    // and frays outward, like the cover's corona.
+
     const roll = random(`${seed}-t-${index}`) ** 2;
     const radius = innerRadius + roll * bandWidth;
-    const t = (radius - innerRadius) / bandWidth; // 0 at core, 1 at the frayed rim
+    const t = (radius - innerRadius) / bandWidth;
 
-    // Colour ramp: Eclipse Glow → Eclipse Gold → Re-entry Red as it cools outward.
     const color = t < 0.4 ? colors.eclipseGlow : t < 0.72 ? colors.eclipseGold : colors.reentryRed;
 
     embers.push({
@@ -154,7 +79,6 @@ function buildCorona(
   return embers;
 }
 
-/** The seeded film-grain wash (Light-Years). `opacity` sets the relic weight. */
 const Grain: React.FC<{ id: string; opacity: number; seed: number }> = ({ id, opacity, seed }) => (
   <AbsoluteFill style={{ mixBlendMode: "overlay", opacity }}>
     <svg height="100%" width="100%" xmlns="http://www.w3.org/2000/svg">
@@ -167,7 +91,6 @@ const Grain: React.FC<{ id: string; opacity: number; seed: number }> = ({ id, op
   </AbsoluteFill>
 );
 
-/** The warm Deep Field ground + a gentle warm vignette centred on the sun. */
 const WarmGround: React.FC<{ sunY: number }> = ({ sunY }) => (
   <>
     <AbsoluteFill style={{ backgroundColor: colors.deepField }} />
@@ -183,7 +106,6 @@ const Starfield: React.FC<{ stars: Star[] }> = ({ stars }) => (
   <AbsoluteFill>
     {stars.map((star, index) => (
       <div
-        // Deterministic seeded field — stable index keys.
         key={index}
         style={{
           backgroundColor: colors.starlightCream,
@@ -204,7 +126,6 @@ const Corona: React.FC<{ embers: Ember[] }> = ({ embers }) => (
   <AbsoluteFill>
     {embers.map((ember, index) => (
       <div
-        // Deterministic seeded corona — stable index keys.
         key={index}
         style={{
           backgroundColor: ember.color,
@@ -221,11 +142,6 @@ const Corona: React.FC<{ embers: Ember[] }> = ({ embers }) => (
   </AbsoluteFill>
 );
 
-/**
- * The eclipse orb itself — a soft halo, the gold body, and a hot near-white
- * specular core so it reads as a light SOURCE (The Ignition Rule), not a chip.
- * `size` is the body diameter in px; the halo and core scale from it.
- */
 const EclipseOrb: React.FC<{ cx: number; cy: number; size: number }> = ({ cx, cy, size }) => (
   <div
     style={{
@@ -264,23 +180,9 @@ const EclipseOrb: React.FC<{ cx: number; cy: number; size: number }> = ({ cx, cy
   </div>
 );
 
-// ── The traveler figure ───────────────────────────────────────────────────────
-// The canonical mark: the drifting traveler cut (public/fluncle-cosmonaut.png,
-// byte-identical to apps/web/public/fluncle-transparant.png). The cut is a
-// 1180² transparent canvas with LARGE margins — the figure's measured alpha
-// bounding box (threshold α>8) is only 398×488 px, centred at (604, 607), i.e.
-// ~41% of the canvas height and slightly off canvas-centre. So the component
-// scales from the FIGURE's box, not the canvas, and re-centres on the figure:
-// at the default 72% target the 1180 canvas renders at ~1783 px, putting the
-// figure at ~737 px tall × ~601 px wide (59% of frame width) — big enough to
-// read as a figure at 60px, and still inside the superellipse safe zone.
 const FIGURE_CANVAS = 1180;
 const FIGURE_BOX = { height: 488, left: 405, top: 363, width: 398 } as const;
 
-/**
- * The traveler, scaled so the FIGURE (not the canvas) fills `heightFrac` of the
- * 1024 icon height, with the figure's bounding-box centre on the icon centre.
- */
 const Traveler: React.FC<{ heightFrac: number }> = ({ heightFrac }) => {
   const scale = (1024 * heightFrac) / FIGURE_BOX.height;
   const size = FIGURE_CANVAS * scale;
@@ -301,14 +203,8 @@ const Traveler: React.FC<{ heightFrac: number }> = ({ heightFrac }) => {
   );
 };
 
-// The ratified figure size for the icon candidates: 72% of icon height (the
-// middle of the 65–80% legibility band the redirection asked for).
 const TRAVELER_HEIGHT_FRAC = 0.72;
 
-// ── Variant E: the traveler on plain Deep Field ───────────────────────────────
-// The mark and nothing else: the figure's own baked gold/red rim light is the
-// One Sun, on the undecorated warm near-black ground. Near-silent grain — the
-// electric mark, its pop protected.
 const TravelerVariant: React.FC = () => (
   <>
     <WarmGround sunY={50} />
@@ -317,11 +213,6 @@ const TravelerVariant: React.FC = () => (
   </>
 );
 
-// ── Variant F: the traveler over the quiet starfield ─────────────────────────
-// The fluncle-small.jpg avatar vibe, but with the figure sized to read: a sparse
-// low-brightness field with the odd brighter punctuation star (so a hint of the
-// field survives the 60px downscale instead of turning to noise). The stars are
-// Starlight Cream and dim — the figure's rim light stays the only sun.
 const TravelerStarsVariant: React.FC = () => {
   const stars: Star[] = [];
 
@@ -346,17 +237,10 @@ const TravelerStarsVariant: React.FC = () => {
   );
 };
 
-// ── Variant G: the traveler with a faint eclipse glow ─────────────────────────
-// The figure's baked gold/orange rim light picks up a halo: one faint warm
-// radial glow (Eclipse Gold cooling into a breath of Re-entry Red) seated
-// behind the figure. The glow SERVES the figure — it is kept dim enough that
-// the rim light stays the brightest thing in frame (One Sun, The Ignition
-// Rule: gold placed like light, the figure lit rather than decorated).
 const TravelerGlowVariant: React.FC = () => (
   <>
     <WarmGround sunY={44} />
-    {/* The halo — centred just above the figure's centre, where the head's
-        burning-gold rim is hottest, so the glow reads as the figure's own. */}
+
     <AbsoluteFill
       style={{
         background: `radial-gradient(42% 42% at 50% 44%, ${colors.eclipseGlow}30 0%, ${colors.eclipseGold}1f 34%, ${colors.reentryRed}0d 58%, transparent 76%)`,
@@ -367,24 +251,8 @@ const TravelerGlowVariant: React.FC = () => (
   </>
 );
 
-// ── Production asset: the Android adaptive-icon foreground ───────────────────
-// The transparent traveler cut, re-scaled and re-centred for Android's adaptive
-// mask. Android composites this over the config's backgroundColor (Deep Field)
-// and crops to the launcher's shape — its safe zone is a 66/108 (~61%) circle,
-// tighter than iOS's superellipse — so the figure sits at 58% of frame height.
-// The ground stays TRANSPARENT (no WarmGround, no grain: grain would paint
-// noise into the transparent field); the figure's own lossy texture carries
-// the Light-Years Rule.
 const AdaptiveForegroundVariant: React.FC = () => <Traveler heightFrac={0.58} />;
 
-// ── Production asset: the splash mark ─────────────────────────────────────────
-// The picked icon's splash sibling, in variant F's family: the traveler small
-// over the quiet starfield. Rendered on a TRANSPARENT ground so the native
-// splash backgroundColor (Deep Field, already in app.config.js) supplies the
-// ground — and the stars FADE OUT toward the edges, so the composited square
-// dissolves into the native ground with no visible seam. The figure sits at
-// 46% of frame height: small, drifting, the fluncle-small.jpg composition
-// language reproduced from code.
 const SplashVariant: React.FC = () => {
   const stars: Star[] = [];
 
@@ -392,9 +260,7 @@ const SplashVariant: React.FC = () => {
     const roll = random(`splash-r-${index}`);
     const x = random(`splash-x-${index}`) * 100;
     const y = random(`splash-y-${index}`) * 100;
-    // Radial edge falloff: full brightness inside r=30% of centre, fading to
-    // zero by r=47% — the corner of the square never carries a star, so the
-    // asset dissolves into the native Deep Field ground.
+
     const distance = Math.hypot(x - 50, y - 50);
     const falloff = Math.min(1, Math.max(0, (47 - distance) / 17));
 
@@ -418,10 +284,6 @@ const SplashVariant: React.FC = () => {
   );
 };
 
-// ── Variant A: the burning eclipse mark alone ────────────────────────────────
-// The purest brand mark — the sun the traveler moves toward, big and centred,
-// wrapped in the cover's stippled burning corona. Minimal starfield, near-silent
-// grain: an electric mark, its pop protected.
 const EclipseVariant: React.FC = () => {
   const cx = 512;
   const cy = 512;
@@ -437,26 +299,20 @@ const EclipseVariant: React.FC = () => {
   );
 };
 
-// ── Variant B: the Oxanium `F` certification stamp ───────────────────────────
-// The typographic identity — the Discman-print letterform stamped on the
-// logbook plate. The plate grammar (crop-mark brackets, register cross, double-
-// rule frame) is printed in cream-dust (Dust Line), so the ONE gold is the `F`
-// itself: the certification light (The One Sun Rule, The Unlit Rule's companion).
 const StampVariant: React.FC = () => {
-  const frame = SAFE_INSET + 40; // the printed edge, inside the safe zone
-  const tick = 46; // crop-mark arm length
+  const frame = SAFE_INSET + 40;
+  const tick = 46;
 
   return (
     <>
       <WarmGround sunY={30} />
-      {/* A quiet sun-bloom from above — the sun sits off-frame, top (Ignition). */}
+
       <AbsoluteFill
         style={{
           background: `radial-gradient(70% 55% at 50% 8%, ${colors.eclipseGold}1f 0%, transparent 60%)`,
         }}
       />
 
-      {/* The double-rule frame — the plate's printed edge, in cream-dust. */}
       <div
         style={{
           border: `2px solid ${colors.dustLine}`,
@@ -474,7 +330,6 @@ const StampVariant: React.FC = () => {
         }}
       />
 
-      {/* Crop-mark corner brackets, printed just inside the frame. */}
       {[
         [frame - 22, frame - 22, false],
         [1024 - frame - tick + 22, frame - 22, false],
@@ -482,7 +337,6 @@ const StampVariant: React.FC = () => {
         [1024 - frame - tick + 22, 1024 - frame - tick + 22, false],
       ].map(([left, top], index) => (
         <div
-          // Fixed four corners — stable index keys.
           key={index}
           style={{
             height: tick,
@@ -515,7 +369,6 @@ const StampVariant: React.FC = () => {
         </div>
       ))}
 
-      {/* The register cross, printed centre-top just under the frame. */}
       <div style={{ height: 40, left: 512 - 20, position: "absolute", top: frame + 26, width: 40 }}>
         <div
           style={{
@@ -539,7 +392,6 @@ const StampVariant: React.FC = () => {
         />
       </div>
 
-      {/* The `F` — the one gold, the certification stamp. A gentle bloom seats it. */}
       <AbsoluteFill style={{ alignItems: "center", display: "flex", justifyContent: "center" }}>
         <div
           style={{
@@ -570,18 +422,12 @@ const StampVariant: React.FC = () => {
   );
 };
 
-// ── Variant C: the founding cover distilled ──────────────────────────────────
-// The whole cover as an icon — the burning eclipse riding high with a wide
-// stippled corona, a fuller starfield, and a low tower-skyline silhouette (the
-// home you floated up from). The far-travelled relic, so grain + scanlines run
-// heavier. Reads as a warm-lit scene, not a bare mark: the "scene" axis.
 const CoverVariant: React.FC = () => {
   const cx = 512;
   const sunY = 300;
 
   return (
     <>
-      {/* Warm sky: brighter high where the sun sits, falling to Deep Field. */}
       <AbsoluteFill style={{ backgroundColor: colors.deepField }} />
       <AbsoluteFill
         style={{
@@ -592,9 +438,6 @@ const CoverVariant: React.FC = () => {
       <Corona embers={buildCorona("cover", 360, cx, sunY, 150, 210)} />
       <EclipseOrb cx={cx} cy={sunY} size={210} />
 
-      {/* The tower skyline — a low band of warm-dark blocks with a few lit
-          windows: the earthbound pole. Kept low-contrast so at 60px it reads as
-          a warm base under the glow, never as mush competing with the sun. */}
       <AbsoluteFill style={{ alignItems: "flex-end", display: "flex", justifyContent: "center" }}>
         <div
           style={{
@@ -611,7 +454,6 @@ const CoverVariant: React.FC = () => {
 
             return (
               <div
-                // Fixed seeded skyline — stable index keys.
                 key={index}
                 style={{
                   background: colors.sleeveBlack,
@@ -641,7 +483,6 @@ const CoverVariant: React.FC = () => {
         </div>
       </AbsoluteFill>
 
-      {/* Light-Years: scanlines + a heavier grain (the far-travelled relic). */}
       <AbsoluteFill
         style={{
           backgroundImage: `repeating-linear-gradient(0deg, ${colors.deepField}00 0px, ${colors.deepField}00 3px, ${colors.deepField}40 4px, ${colors.deepField}40 4px)`,
@@ -654,10 +495,6 @@ const CoverVariant: React.FC = () => {
   );
 };
 
-// ── Variant D: the banger-diamond star motif ─────────────────────────────────
-// "Every banger out there is a star" (the Galaxy motif, galaxy-og.tsx) as a
-// mark: a rotated Eclipse-Gold diamond with a hot core and a soft halo, on Deep
-// Field. Geometric where the eclipse is a glow — the distinct fourth axis.
 const DiamondVariant: React.FC = () => {
   const size = 340;
 
@@ -714,10 +551,6 @@ const VARIANTS: Record<AppIconVariant, React.FC> = {
   "traveler-stars": TravelerStarsVariant,
 };
 
-// The production-asset variants keep a TRANSPARENT ground: Android layers the
-// adaptive foreground over the config's backgroundColor, and the splash mark
-// composites over the native splash ground. Every icon CANDIDATE stays opaque
-// (iOS rejects an app icon with alpha).
 const TRANSPARENT_VARIANTS: ReadonlySet<AppIconVariant> = new Set([
   "adaptive-foreground",
   "splash",

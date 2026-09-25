@@ -1,27 +1,7 @@
-// The `search` domain contract module. Owns TWO ops, and the split is a boundary, not a
-// migration: each op is the ONLY search its side of the boundary calls.
-//
-//   - `search_tracks` → SPOTIFY. The submit-funnel candidate search — music Fluncle does
-//     not have yet. It burns the operator's shared Spotify token, so it is rate-limited,
-//     and no browse surface calls it (search-consumers.test.ts locks the caller set).
-//   - `search_archive` → FLUNCLE. The archive/browse search every reading surface calls —
-//     web ⌘K, CLI, mobile, MCP. Four resolution tiers, an LLM only on the fourth, a sonic
-//     tier no other drum & bass tool has — and a pasted Spotify track link resolves
-//     LOCALLY, against the anchored `spotify_uri` column, never against Spotify.
-
 import { oc } from "@orpc/contract";
 import * as z from "zod";
 import { TrackSearchResultSchema } from "./_shared.js";
 
-/**
- * `search_tracks` → `GET /search` (operationId `searchTracks`).
- *
- * Spotify candidate search for the submit flow. The query is the `q` param;
- * kept as a tolerant optional string and length-checked in-handler so a < 2-char
- * query degrades to the live route's hand-rolled 400 (`invalid_query`) rather
- * than an oRPC schema rejection. The success body is the `{ ok: true, results }`
- * envelope (mirrors `SearchResponse` in ../index.ts).
- */
 export const searchTracks = oc
   .route({
     method: "GET",
@@ -33,24 +13,6 @@ export const searchTracks = oc
   .input(z.object({ q: z.string().max(512).optional() }))
   .output(z.object({ ok: z.literal(true), results: z.array(TrackSearchResultSchema) }));
 
-/**
- * The structured filter object — the ONLY thing the LLM is ever allowed to emit.
- *
- * This schema IS the safety property of the whole design. The model translates language
- * into filters; SQL does the retrieval. It never sees a track, never names a track, and
- * never returns one — so it CANNOT hallucinate a finding into existence. The worst a bad
- * parse can do is filter for something that isn't there and return an honest empty state.
- *
- * `soundsLike` is the sonic hook: a free-text reference to a real track, which the server
- * resolves against the archive and turns into that track's MuQ embedding. It is anchored on
- * a row that exists, so even the "vibe" query cannot be invented.
- *
- * `soundsLikeArtists` is the COMPOUND sonic hook — 1–6 artist names or slugs ("songs by artists
- * that sound like Koven and Maduk in A minor"). The server resolves each to an artist, averages
- * their stored `artist_centroids` into one probe, and ranks TRACKS by it, with every other filter
- * (key/BPM/year/label) applied as a btree pre-filter first. Like `soundsLike`, it is anchored on
- * real rows — an unresolved name simply does not weigh in, and a probe of nothing declines.
- */
 export const SearchFiltersSchema = z
   .object({
     album: z.string().optional(),
@@ -67,29 +29,19 @@ export const SearchFiltersSchema = z
   })
   .meta({ id: "SearchFilters" });
 
-/**
- * One row of the archive as search returns it — and the object that carries THE CATALOGUE
- * RULE across the wire.
- *
- * A certified finding has a `logId` and links to `/log/<logId>`. A track Fluncle has not
- * certified has NO coordinate and no `logId`, so it links OUT (`spotifyUrl`). `certified`
- * is the one bit a client needs to render the two registers, and it is deliberately a
- * boolean and not a tier NAME: the uncertified tier has no public name, is never labelled,
- * and is never introduced. "Finding" stays the only named object in Fluncle's world.
- */
 export const SearchHitSchema = z
   .object({
     album: z.string().optional(),
     albumImageUrl: z.string().optional(),
     artists: z.array(z.string()),
     bpm: z.number().optional(),
-    /** True ⇔ a `findings` row exists ⇔ this is one of Fluncle's Findings. */
+
     certified: z.boolean(),
     durationMs: z.number().optional(),
     galaxy: z.string().optional(),
     key: z.string().optional(),
     label: z.string().optional(),
-    /** The permanent coordinate. Present only on a certified finding. */
+
     logId: z.string().optional(),
     previewable: z.boolean().optional(),
     releaseDate: z.string().optional(),
@@ -99,49 +51,21 @@ export const SearchHitSchema = z
   })
   .meta({ id: "SearchHit" });
 
-/**
- * An entity a query named or prefixed — a jump target, not a result row.
- *
- * The nodes of the graph that have a PAGE: an artist (`/artist/<slug>`), a label
- * (`/label/<slug>`), an album (`/album/<slug>`), a named galaxy (`/galaxies/<slug>`), and a
- * published mixtape — whose page IS its log page (`/log/<F-logId>`). They are one shape because
- * they are one affordance: the thing you searched for, offered as a destination, with its cover
- * or its portrait. For most kinds the route is `/<kind>/<slug>`; where it is not (a galaxy's
- * plural segment, a mixtape's log page), the row carries an explicit `url`, so a consumer never
- * has to special-case the route. (A plain log coordinate needs no entity row — it resolves
- * straight to its finding.)
- */
 export const SearchEntitySchema = z
   .object({
     imageUrl: z.string().optional(),
     kind: z.enum(["album", "artist", "galaxy", "label", "mixtape"]),
     name: z.string(),
     slug: z.string(),
-    /** The page this entity IS, when it is not the `/<kind>/<slug>` default (galaxy, mixtape). */
+
     url: z.string().optional(),
   })
   .meta({ id: "SearchEntity" });
 
-/**
- * Which of the four tiers answered. Carried on the wire because it is not a debug detail —
- * it decides what the client renders (a `coordinate` is a jump, `sonic` names its anchor,
- * `filters` shows what it understood) and it is the honest label for HOW a result was found.
- */
 export const SearchKindSchema = z
   .enum(["coordinate", "empty", "entity", "filters", "sonic", "token"])
   .meta({ id: "SearchKind" });
 
-/**
- * `search_archive` → `GET /search/archive` (operationId `searchArchive`).
- *
- * The public read behind Fluncle's search. Resolution stops at the first tier that answers:
- * a coordinate, an exact entity, a bare token (FTS5), and only then a small LLM that
- * translates the sentence into `SearchFilters` which SQL executes.
- *
- * `degraded: true` says a semantic tier was ASKED FOR and could not run (no key, a slow
- * model or vector engine, a vendor outage) and the query fell back to full text. Search degrades;
- * it never breaks or presents bounded vector recall as a full-corpus answer.
- */
 export const searchArchive = oc
   .route({
     method: "GET",
@@ -155,31 +79,28 @@ export const searchArchive = oc
   )
   .output(
     z.object({
-      /** The track the sonic tier anchored on — a REAL row, never an invented vibe. */
       anchor: SearchHitSchema.optional(),
-      /** True when a requested semantic tier was unavailable; these are full-text results. */
+
       degraded: z.boolean(),
       entities: z.array(SearchEntitySchema),
-      /** What the LLM understood, echoed back so the reader can see it and correct it. */
+
       filters: SearchFiltersSchema.optional(),
       kind: SearchKindSchema,
       ok: z.literal(true),
-      /** A resolved coordinate/entity: the app route this query IS. */
+
       redirect: z.string().optional(),
       results: z.array(SearchHitSchema),
     }),
   );
 
-/** The filter object the LLM emits and SQL executes. */
 export type SearchFilters = z.infer<typeof SearchFiltersSchema>;
-/** One archive row as search returns it — `certified` carries the catalogue rule. */
+
 export type SearchHit = z.infer<typeof SearchHitSchema>;
-/** A jump target (an artist), not a result row. */
+
 export type SearchEntity = z.infer<typeof SearchEntitySchema>;
-/** Which of the four resolution tiers answered. */
+
 export type SearchKind = z.infer<typeof SearchKindSchema>;
 
-/** The `search` domain's ops, merged into the root contract by `./index.ts`. */
 export const searchContract = {
   search_archive: searchArchive,
   search_tracks: searchTracks,
