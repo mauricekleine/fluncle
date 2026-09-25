@@ -53,6 +53,8 @@ export const PIPELINE_SLOS = {
   embed: { capacityWindowMs: 24 * HOUR, windowMs: 30 * MINUTE },
 } as const;
 
+export const CRAWL_SUPPLY_MIN_WRITES = 20;
+
 export const BUDGET_EXHAUSTED_BYTES = 16 * 1024 * 1024;
 
 const CADENCE: Record<Stage, number> = {
@@ -121,6 +123,7 @@ function mostCommon(values: string[]): string | null {
 }
 
 const NAMED_CAUSE: Record<string, string> = {
+  apify_budget_spent: "apify_budget_spent",
   breaker_quota: "breaker_quota",
   breaker_throttle: "breaker_throttle",
   database_admission: "admission_lane_closed",
@@ -352,10 +355,15 @@ function evaluateStage(snapshot: PipelineSnapshot, stage: Stage, now: Date): Sta
       "Check marker history.",
     );
   }
+  const crawlRecentWrites =
+    stage === "crawl"
+      ? total(inWindow(markers, nowMs, PIPELINE_SLOS.crawl.windowMs), "tracksWritten")
+      : null;
   if (
     stage === "crawl" &&
     (snapshot.crawl?.frontier ?? 0) >= PIPELINE_SLOS.crawl.frontierFloor &&
-    snapshot.crawl?.storable === 0
+    snapshot.crawl?.storable === 0 &&
+    (crawlRecentWrites ?? 0) < CRAWL_SUPPLY_MIN_WRITES
   ) {
     if (snapshot.crawlZeroChecks < 2) {
       return result(
@@ -427,6 +435,21 @@ function evaluateStage(snapshot: PipelineSnapshot, stage: Stage, now: Date): Sta
       .slice(0, PIPELINE_SLOS.anchor.ticks);
     const anchorOutput = total(expected, "produced");
 
+    if (
+      expected.length > 0 &&
+      expected.every((marker) => marker.summary.blockedReason === "apify_budget_spent") &&
+      (anchorOutput ?? 0) < PIPELINE_SLOS.anchor.minOutput
+    ) {
+      return result(
+        stage,
+        "budget_closed",
+        "apify_budget_spent",
+        anchorOutput,
+        backlog,
+        windowMs,
+        "Anchoring resumes when free lookups reopen or the paid budget resets at 00:00 UTC.",
+      );
+    }
     if (
       expected.some(
         (marker) =>
