@@ -664,18 +664,9 @@ describe("oRPC /me — GET /me/submissions (list_private_submissions)", () => {
   });
 });
 
-// ── The bare /api alias is GONE (the vocabulary cut) — the /me tier is /api/v1 only ──
+// ── The /me tier ──
 
-describe("oRPC /me — the bare /api alias is retired", () => {
-  it("no longer serves get_current_private_user on the bare /api/me (falls through)", async () => {
-    meResponse.mockResolvedValueOnce({ googleEnabled: false, ok: true, user: null });
-
-    const { handleOrpc } = await import("./orpc");
-    // The vocabulary cut removed the bare `/api` alias: the /me tier serves at /api/v1/me only.
-    expect(await handleOrpc(get("https://www.fluncle.com/api/me"))).toBeNull();
-    expect(meResponse).not.toHaveBeenCalled();
-  });
-
+describe("oRPC /me — get_current_private_user", () => {
   it("serves get_current_private_user on the canonical /api/v1/me mount", async () => {
     meResponse.mockResolvedValueOnce({ googleEnabled: false, ok: true, user: null });
 

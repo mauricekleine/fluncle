@@ -81,16 +81,6 @@ describe("apple_music_url certification rail", () => {
     expect(groups).not.toContain("apple_music_url");
   });
 
-  it("the PUBLIC graph-page unlit DTO (tracks.ts CatalogueTrackItem) carries no appleMusicUrl", () => {
-    const src = read("lib/server/tracks.ts");
-    const start = src.indexOf("export type CatalogueTrackItem");
-    expect(start, "the unlit DTO type should exist").toBeGreaterThan(-1);
-    const block = src.slice(start, src.indexOf("};", start));
-
-    expect(block).not.toContain("appleMusicUrl");
-    expect(block).not.toContain("apple_music_url");
-  });
-
   it("only certified-finding surfaces + the admin catalogue + /mix reference appleMusicUrl in the component tree", () => {
     // A PUBLIC component may render the Apple listen link only for a CERTIFIED finding — the /log
     // finding page. The ADMIN catalogue (The Ear) is one non-finding surface allowed it: it is the

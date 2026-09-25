@@ -82,19 +82,12 @@ describe("an answered query", () => {
 
 describe("a fault is a fault, not an empty result", () => {
   // "Nothing out here" would be a lie about an archive nobody managed to look inside, so the third
-  // state exists purely so the page can say which of the two actually happened.
+  // state exists purely so the page can say which of the two actually happened. Resolving (never
+  // rethrowing) also keeps the page off the root error component, so the reader keeps the field.
   it("names the failure instead of returning zero rows", async () => {
     searchArchive.mockRejectedValue(new Error("SQLITE_BUSY"));
 
     await expect(resolveSearchPageData("netsky")).resolves.toEqual({ status: "failed" });
-  });
-
-  // Caught, never rethrown: a rethrow would hand the page to the root error component, which takes
-  // away the field the reader was typing into and the way onward.
-  it("never lets the fault escape to the route", async () => {
-    searchArchive.mockRejectedValue(new Error("boom"));
-
-    await expect(resolveSearchPageData("netsky")).resolves.toBeDefined();
   });
 
   // The diagnostic half is not lost to the catch — this is the one and only server-side capture.

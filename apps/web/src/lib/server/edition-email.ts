@@ -9,7 +9,7 @@ const POSTAL_ADDRESS = "With love, from somewhere deep in the Galaxy, Fluncle";
 
 // The per-listener Frontier shelf, on the site. The teaser links every recipient
 // here (one HTML for all — no per-recipient personalization).
-export const FRONTIER_TEASER_URL = `${siteUrl}/recommendations`;
+const FRONTIER_TEASER_URL = `${siteUrl}/recommendations`;
 
 // The Frontier teaser: EMAIL-ONLY chrome, the compliance footer's class of thing —
 // always rendered in the email, never part of the stored `content`, never on the
