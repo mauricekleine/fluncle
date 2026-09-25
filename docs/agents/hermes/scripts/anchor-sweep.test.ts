@@ -2001,6 +2001,81 @@ describe("runAnchorSweep — the firing preflight", () => {
     expect(summary.blockedReason).toBe("breaker_quota");
   });
 
+  test("quota_hold with no prior-ask work skips the normal 100-row queue", async () => {
+    const reads: { limit: number; mode: string | undefined }[] = [];
+    const summary = await runAnchorSweep(100, {
+      ...preflightDeps(
+        {
+          apifyBudgetRemaining: 300,
+          apifyBudgetSpent: false,
+          apifyEnabled: true,
+          gateReason: "quota_hold",
+          nextEligibleAt: "2026-09-20T09:00:00.000Z",
+          spotifySearchEnabled: true,
+        },
+        () => {},
+      ),
+      fetchQueue: (limit, mode) => {
+        reads.push({ limit, mode });
+        return Promise.resolve({ queueDepth: 0, rows: [] });
+      },
+    });
+    expect(reads).toEqual([{ limit: 25, mode: "prior" }]);
+    expect(summary.pulled).toBe(0);
+    expect(summary.blockedReason).toBe("quota_hold");
+    expect(summary.gateReason).toBe("quota_hold");
+  });
+
+  test("quota_hold still sends prior-ask work to Apify", async () => {
+    const modes: (string | undefined)[] = [];
+    const summary = await runAnchorSweep(100, {
+      ...preflightDeps(
+        {
+          apifyBudgetRemaining: 300,
+          apifyBudgetSpent: false,
+          apifyEnabled: true,
+          gateReason: "quota_hold",
+          spotifySearchEnabled: true,
+        },
+        () => {},
+      ),
+      fetchQueue: (_limit, mode) => {
+        modes.push(mode);
+        return Promise.resolve({
+          queueDepth: 1,
+          rows: [{ anchorQuery: "Weightless Etherwood", trackId: "mb_prior" }],
+        });
+      },
+    });
+    expect(modes).toEqual(["prior"]);
+    expect(summary.checked).toBe(1);
+    expect(summary.apifyRowsSent).toBe(1);
+  });
+
+  test("an unknown Worker gate reason closes the firing", async () => {
+    for (const reason of ["future_gate", ""]) {
+      let reads = 0;
+      const summary = await runAnchorSweep(
+        100,
+        preflightDeps(
+          {
+            apifyBudgetRemaining: 300,
+            apifyBudgetSpent: false,
+            apifyEnabled: true,
+            gateReason: reason as AnchorPreflight["gateReason"],
+            spotifySearchEnabled: true,
+          },
+          () => {
+            reads += 1;
+          },
+        ),
+      );
+      expect(reads).toBe(0);
+      expect(summary.gateReason).toBe(reason);
+      expect(summary.blockedReason).toBe("awaiting_free_ask");
+    }
+  });
+
   test("a transient shared meter and a nearly expired throttle use the normal queue", async () => {
     for (const gateReason of ["shared_meter", "breaker_throttle"] as const) {
       const modes: (string | undefined)[] = [];

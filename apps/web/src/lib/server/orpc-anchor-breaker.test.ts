@@ -98,6 +98,23 @@ describe("oRPC get_spotify_anchor_breaker (GET /admin/catalogue/anchor/breaker)"
     });
   });
 
+  it("reports a quota hold to the box through the breaker contract", async () => {
+    const { handleOrpc } = await import("./orpc");
+    gateMock.mockResolvedValue({
+      nextEligibleAt: "2026-09-20T09:00:00.000Z",
+      reason: "quota_hold",
+    });
+    const response = await handleOrpc(req(PATH, "GET", AGENT_TOKEN));
+
+    expect(response?.status).toBe(200);
+    expect(await readJson(response)).toMatchObject({
+      rungs: {
+        gateReason: "quota_hold",
+        nextEligibleAt: "2026-09-20T09:00:00.000Z",
+      },
+    });
+  });
+
   it("reports BOTH rungs disarmed — the state in which nothing can conclude", async () => {
     apifyEnabledMock.mockResolvedValue(false);
     spotifySearchEnabledMock.mockResolvedValue(false);
