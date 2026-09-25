@@ -69,6 +69,8 @@ Every band is conditional, and an empty one renders nothing at all — no headin
 
 `tracks.beatport_url`'s §F rail in `db/schema.ts` keeps the URL out of every derived corpus, because Beatport's terms bar using its content for text/data mining or for feeding AI. **A `sameAs` graph is a derived corpus** — `log-schema.ts` says in its own words that it exists "for crawlers + AI answer-engines" — and the certified `/log` page's `musicRecordingJsonLd` already withholds it. That shipped behaviour is the specification.
 
+Spotify `sameAs` values in structured data remain direct Spotify identity URLs even when visitor links use Fluncle's `/out/spotify/` redirect. A redirect URL inside `sameAs` would assert that the recording is identical to Fluncle's redirect resource instead of the Spotify recording; `log-schema-hop-carveout.test.ts` checks both the absence of hop URLs and the presence of the direct identity link.
+
 This page is the first surface that both renders a Beatport link _and_ composes a `sameAs` array from its outbound destinations, so it needs an explicit exclusion rather than an absence. The seam is `SAME_AS_EXCLUDED_LISTEN_KINDS` / `sameAsUrls` in [`apps/web/src/lib/track-page.ts`](../apps/web/src/lib/track-page.ts): the route's `head()` builds its `sameAs` input through it rather than mapping the destinations itself, the exclusion is keyed on the destination **kind** so it survives a rename or a URL-shape change, and `track-page.test.ts` fails if a future edit lets the kind through. The rendered control is untouched.
 
 - **"Close in sound"** — the neighbours, and the half of the page that makes the archive traversable.

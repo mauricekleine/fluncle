@@ -16,19 +16,10 @@ import {
   totalLoopDurationMs,
 } from "./radio-schedule";
 
-// The shared-clock math (the radio-broadcast RFC Unit A) is the load-bearing logic
-// of the whole broadcast — server and client compute it identically off one
-// epoch, so it MUST be tested in isolation, not only through the UI. The cases
-// that matter: the cumulative-walk + modulo correctness; the empty pool (no
-// divide-by-T); the single finding (n=1 loop forever); the duration floor; and
-// growth at the NEXT boundary without a playhead jump.
-
 function entry(trackId: string, observationDurationMs: number): RadioScheduleEntry {
   return { logId: `LOG-${trackId}`, observationDurationMs, trackId };
 }
 
-// A three-finding loop with distinct durations so a cumulative walk is exercised:
-// 10s + 20s + 30s = 60s total.
 const THREE = [entry("a", 10_000), entry("b", 20_000), entry("c", 30_000)];
 const EPOCH = 1_000_000_000_000;
 
@@ -79,7 +70,7 @@ describe("resolveRadioSlot — the cumulative walk + modulo", () => {
     const slot = resolveRadioSlot(THREE, EPOCH, EPOCH + 15_000);
 
     expect(slot?.current.trackId).toBe("b");
-    expect(slot?.offsetMs).toBe(5_000); // 15s − 10s
+    expect(slot?.offsetMs).toBe(5_000);
     expect(slot?.next.trackId).toBe("c");
   });
 
@@ -87,7 +78,7 @@ describe("resolveRadioSlot — the cumulative walk + modulo", () => {
     const slot = resolveRadioSlot(THREE, EPOCH, EPOCH + 40_000);
 
     expect(slot?.current.trackId).toBe("c");
-    expect(slot?.offsetMs).toBe(10_000); // 40s − 30s
+    expect(slot?.offsetMs).toBe(10_000);
     expect(slot?.next.trackId).toBe("a");
     expect(slot?.nextIndex).toBe(0);
   });
@@ -101,11 +92,10 @@ describe("resolveRadioSlot — the cumulative walk + modulo", () => {
   });
 
   it("handles a now BEFORE the epoch (skewed clock / future epoch) without going negative", () => {
-    // 5s before the epoch is 55s into the previous loop (third segment, 25s in).
     const slot = resolveRadioSlot(THREE, EPOCH, EPOCH - 5_000);
 
     expect(slot?.current.trackId).toBe("c");
-    expect(slot?.offsetMs).toBe(25_000); // 55s − 30s
+    expect(slot?.offsetMs).toBe(25_000);
   });
 
   it("returns undefined for an empty schedule (never divides by T)", () => {
@@ -114,7 +104,7 @@ describe("resolveRadioSlot — the cumulative walk + modulo", () => {
 
   it("loops a single finding forever (n=1) with next pointing at itself", () => {
     const one = [entry("solo", 12_000)];
-    const slot = resolveRadioSlot(one, EPOCH, EPOCH + 30_000); // 30 mod 12 = 6
+    const slot = resolveRadioSlot(one, EPOCH, EPOCH + 30_000);
 
     expect(slot?.current.trackId).toBe("solo");
     expect(slot?.offsetMs).toBe(6_000);
@@ -124,7 +114,7 @@ describe("resolveRadioSlot — the cumulative walk + modulo", () => {
 
   it("uses the floored duration in the walk (a corrupt zero-width slot can't swallow the loop)", () => {
     const withZero = [entry("a", 0), entry("b", 10_000)];
-    // Total = FLOOR + 10s. 1s in lands in the floored first segment.
+
     const slot = resolveRadioSlot(withZero, EPOCH, EPOCH + 1_000);
 
     expect(slot?.current.trackId).toBe("a");
@@ -135,29 +125,23 @@ describe("resolveRadioSlot — the cumulative walk + modulo", () => {
 
 describe("nextBoundaryEpochMs — growth applies at a seam, no playhead jump", () => {
   it("rolls the epoch to the next loop boundary at/after now (old T)", () => {
-    // Old loop = 60s; now is 95s in (loop 1, 35s deep). Next boundary is at +120s.
     const rolled = nextBoundaryEpochMs(EPOCH, 60_000, EPOCH + 95_000);
 
     expect(rolled).toBe(EPOCH + 120_000);
   });
 
   it("a listener riding the OLD loop sees no jump: their offset is continuous up to the seam", () => {
-    const oldSet = THREE; // 60s loop
+    const oldSet = THREE;
     const oldT = totalLoopDurationMs(oldSet);
     const now = EPOCH + 95_000;
 
-    // Just before the roll, the listener is at a well-defined slot on the old loop.
     const before = resolveRadioSlot(oldSet, EPOCH, now);
-    expect(before?.current.trackId).toBe("c"); // 95 mod 60 = 35 → 3rd segment (30-60)
-    expect(before?.offsetMs).toBe(5_000); // 35s − 30s
+    expect(before?.current.trackId).toBe("c");
+    expect(before?.offsetMs).toBe(5_000);
 
-    // The new (grown) schedule takes effect from the rolled epoch — which is in the
-    // FUTURE relative to now — so until the seam the OLD schedule still governs and
-    // the listener's current offset is unchanged by the reschedule.
     const rolledEpoch = nextBoundaryEpochMs(EPOCH, oldT, now);
     expect(rolledEpoch).toBeGreaterThan(now);
 
-    // At the seam, the grown schedule starts cleanly at its own offset 0.
     const grown = [...oldSet, entry("d", 15_000)];
     const atSeam = resolveRadioSlot(grown, rolledEpoch, rolledEpoch);
     expect(atSeam?.current.trackId).toBe("a");
@@ -177,7 +161,7 @@ describe("nextBoundaryEpochMs — growth applies at a seam, no playhead jump", (
 
 describe("radioBoundaryDecision — clock-driven advance + hysteresis + self-heal (Bug A)", () => {
   const START = 1_000_000_000_000;
-  const SEG = 20_000; // a 20s observation segment.
+  const SEG = 20_000;
 
   it("holds in the calm middle of a segment", () => {
     expect(radioBoundaryDecision(START, SEG, START + 10_000)).toBe("hold");
@@ -185,7 +169,7 @@ describe("radioBoundaryDecision — clock-driven advance + hysteresis + self-hea
 
   it("holds right at the end and just past it (hysteresis: the seam can't flip back)", () => {
     expect(radioBoundaryDecision(START, SEG, START + SEG)).toBe("hold");
-    // A sub-commit overshoot rides instead of advancing — no oscillation N↔N+1.
+
     expect(radioBoundaryDecision(START, SEG, START + SEG + BOUNDARY_COMMIT_MS - 1)).toBe("hold");
   });
 
@@ -201,7 +185,7 @@ describe("radioBoundaryDecision — clock-driven advance + hysteresis + self-hea
 
   it("resyncs when the on-screen segment hasn't started yet (a skew overshoot of the seam)", () => {
     expect(radioBoundaryDecision(START, SEG, START - BOUNDARY_COMMIT_MS - 1)).toBe("resync");
-    // A hair before the start still holds (within the commit band, no flip-back).
+
     expect(radioBoundaryDecision(START, SEG, START - BOUNDARY_COMMIT_MS + 1)).toBe("hold");
   });
 });
@@ -214,8 +198,8 @@ describe("breatherDimAt — the deterministic inter-clip fade (Feature B)", () =
   });
 
   it("is fully black at the exact seam (end of segment / start of next)", () => {
-    expect(breatherDimAt(SEG, SEG)).toBe(1); // end of the ending segment
-    expect(breatherDimAt(0, SEG)).toBe(1); // head of the new segment
+    expect(breatherDimAt(SEG, SEG)).toBe(1);
+    expect(breatherDimAt(0, SEG)).toBe(1);
   });
 
   it("ramps to black over the final fade-out window of the ending segment", () => {

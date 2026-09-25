@@ -5,38 +5,22 @@ import { artistTitleLine, definitionalProse, type LogProseInput } from "./log-pr
 import { type MixtapeDTO } from "./mixtapes";
 import { deriveRemixerNames, fold } from "./server/track-match";
 
-// Re-exported for callers that have always reached the log-URL builder through
-// the log schema; the canonical definition now lives in fluncle-links.
 export { logPageUrl };
-
-// The log page's JSON-LD, pure: the route's head() reads from here, and the
-// schema's description is the SAME string as the visible definitional block
-// (schema that contradicts the page gets discounted).
 
 export type LogSchemaInput = LogProseInput & {
   album?: string;
   albumImageUrl?: string;
-  // The finding's Apple Music URL — a per-track `sameAs` (the Spotify twin). Present
-  // only when the exact-ISRC resolve landed one.
+
   appleMusicUrl?: string;
-  // Name → slug for the finding's artists (the resolved artist entities). Present
-  // names get an `@id = <siteUrl>/artist/<slug>` stamped on their `byArtist`
-  // MusicGroup node — the cross-page graph that reconciles recording→artist across
-  // the whole site for crawlers + AI answer-engines (Unit 3, artist-relationship
-  // RFC §3). A name with no entity degrades to a bare `{ @type, name }`.
+
   artistSlugs?: Record<string, string>;
-  // The finding's Discogs release URL — a per-track `sameAs` (distinct from the
-  // artist-level sameAs on /about). Present only when the Discogs lookup resolved.
+
   discogsReleaseUrl?: string;
   durationMs: number;
   isrc?: string;
-  // The MusicBrainz recording MBID (the KG join key). Present ⇒ the MusicRecording gains a
-  // `https://musicbrainz.org/recording/<mbid>` `sameAs` + a `musicbrainz-recording-id`
-  // `identifier` PropertyValue. Absent until a fill path lands it (the honest degrade).
+
   mbRecordingId?: string;
-  // The spoken observation's public artefacts (the version-busted R2 audio URL, its
-  // length, its generated-at stamp) — the fields the AudioObject schema reads. All
-  // three come straight off the detail DTO; absent until an observation is rendered.
+
   observationAudioUrl?: string;
   observationDurationMs?: number;
   observationGeneratedAt?: string;
@@ -45,16 +29,10 @@ export type LogSchemaInput = LogProseInput & {
   title: string;
 };
 
-/** The `<siteUrl>/artist/<slug>` node id — the shared anchor of the @id graph. */
 export function artistPageUrl(slug: string): string {
   return `${siteUrl}/artist/${slug}`;
 }
 
-// A `byArtist` MusicGroup node, stamped with the artist entity's `@id` when the
-// name resolves to a slug — the id-less node today becomes the twin of the artist
-// page's own `@id` (the cross-page graph). The lookup is on the NORMALIZED name
-// (`fold`), matching how the slug map is keyed, so a casing/accent/`feat.` drift
-// between the display name and the canonical `artists.name` still stamps the `@id`.
 function byArtistNode(
   name: string,
   artistSlugs: Record<string, string> | undefined,
@@ -66,13 +44,6 @@ function byArtistNode(
     : { "@type": "MusicGroup", name };
 }
 
-// The REMIXER credit (RFC label-lineage-remixer, U2) → schema.org `contributor` nodes. A remix
-// title ("(Calibre Remix)") names its remixer; `deriveRemixerNames` returns only the credited
-// artists it EXACTLY folds to (never a guess). Each becomes the schema.org-canonical Role pattern
-// (schema.org/docs/roles.html): the `contributor` property points at a `Role` that carries a
-// `roleName` and REPEATS `contributor` for the actual entity — the MusicGroup node (with its
-// `@id` when the remixer is a known artist, the same cross-page anchor `byArtist` uses). Empty
-// (the key is omitted) for a non-remix, or a remixer with no `artists` row — the honest degrade.
 function remixerContributorNodes(
   title: string,
   artists: string[],
@@ -85,24 +56,6 @@ function remixerContributorNodes(
   }));
 }
 
-/**
- * The finding's MEASURED tempo + key, modelled as the composition this recording is
- * of (`recordingOf` → `MusicComposition`, both native schema.org). Fluncle measures
- * both first-party — DSP over the captured full song, graded by the operator's
- * Rekordbox — so with Spotify's audio-features API dead (Nov 2024) this is the live,
- * citable source for a track's tempo and key.
- *
- * - KEY rides `musicalKey`, the property schema.org defines specifically for this on
- *   MusicComposition (range Text, "The key, mode, or scale this composition uses").
- * - TEMPO has NO native schema.org property anywhere, so it rides an
- *   `additionalProperty` `PropertyValue` (name "tempo", unitText "BPM") — schema.org's
- *   sanctioned slot for "a characteristic for which there is no matching property".
- *
- * Emitted per-value: tempo ONLY when `bpm` is present, key ONLY when `key` is present.
- * A NULL key is below the DSP confidence floor — say nothing, never a guessed value.
- * The whole node is omitted when the finding carries neither. Additive to the
- * MusicRecording — it does not alter the recording's own Rich-Results shape.
- */
 function measuredCompositionNode(track: {
   bpm?: number;
   key?: string;
@@ -140,18 +93,13 @@ export function musicRecordingJsonLd(
     "@context": "https://schema.org",
     "@type": "MusicRecording",
     byArtist: track.artists.map((artist) => byArtistNode(artist, track.artistSlugs)),
-    // The remixer credit, when the title names one (a schema.org `contributor` Role). Additive to
-    // `byArtist` — the remixer both performs the recording and holds the remixer role. Omitted
-    // entirely for a non-remix, so a normal finding is byte-identical to before.
+
     ...(contributors.length > 0 ? { contributor: contributors } : {}),
     datePublished: track.addedAt.slice(0, 10),
     description: definitionalProse(track),
     duration: formatIsoDuration(track.durationMs),
     genre: "Drum and Bass",
-    // The Log ID in BOTH forms as identifiers (not alternateName): the bare
-    // coordinate and the fluncle:// URI are the retrieval tokens. The MusicBrainz recording MBID
-    // joins the list only when present — the canonical KG anchor a crawler reconciles this
-    // recording to MusicBrainz + Wikidata by (the MusicBrainz identity layer).
+
     identifier: [
       { "@type": "PropertyValue", propertyID: "fluncle-log-id", value: track.logId },
       { "@type": "PropertyValue", propertyID: "fluncle-log-id", value: `fluncle://${track.logId}` },
@@ -169,11 +117,7 @@ export function musicRecordingJsonLd(
     ...(track.isrc ? { isrcCode: track.isrc } : {}),
     ...(track.album ? { inAlbum: { "@type": "MusicAlbum", name: track.album } } : {}),
     name: track.title,
-    // The recording → label edge, closing the same loop the album schema's `recordLabel`
-    // already closes: point at the label page's Organization `@id` (`<labelPageUrl>#organization`)
-    // so a crawler reconciles this recording, its album, and its imprint to one graph. Emitted
-    // only when the finding carries a label WITH a resolved `/label/<slug>` entity — a bare label
-    // string with no page has no `@id` to point at, so it stays silent (the honest degrade).
+
     ...(track.label && track.labelSlug
       ? {
           recordLabel: {
@@ -190,27 +134,19 @@ export function musicRecordingJsonLd(
       ...(track.appleMusicUrl ? [track.appleMusicUrl] : []),
       ...(track.tiktokUrl ? [track.tiktokUrl] : []),
       ...(track.discogsReleaseUrl ? [track.discogsReleaseUrl] : []),
-      // The MusicBrainz recording page — the canonical KG anchor (present only once filled).
+
       ...(track.mbRecordingId ? [`https://musicbrainz.org/recording/${track.mbRecordingId}`] : []),
     ],
     url: logPageUrl(track.logId),
   };
 }
 
-/** One finding in a galaxy's playlist — a MusicRecording reference by its /log URL. */
 export type GalaxyPlaylistFinding = {
   artists: string[];
   logId: string;
   title: string;
 };
 
-/**
- * A sonic galaxy's JSON-LD (browse-by-feel RFC): a `MusicPlaylist` whose members are
- * `MusicRecording` references by `/log/<logId>` URL, in the page's core-first order
- * (`numTracks` is the members shown). The honest shape for "a set of recordings grouped
- * by sound" — reuses the same `byArtist`/reducer shape as `mixtapeAlbumJsonLd`, so a
- * galaxy reads to a crawler exactly like a mixtape's tracklist does.
- */
 export function musicPlaylistJsonLd(
   galaxy: { name: string; slug: string },
   findings: GalaxyPlaylistFinding[],
@@ -255,7 +191,6 @@ export function musicPlaylistJsonLd(
   };
 }
 
-/** Fluncle → Galaxies → the galaxy name, the galaxy page's breadcrumb. */
 export function galaxyBreadcrumbsJsonLd(name: string): Record<string, unknown> {
   return {
     "@context": "https://schema.org",
@@ -268,26 +203,12 @@ export function galaxyBreadcrumbsJsonLd(name: string): Record<string, unknown> {
   };
 }
 
-/**
- * Normalize a DB timestamp (or a bare date) to a full ISO 8601 datetime WITH a
- * timezone (the trailing `Z` = UTC) for schema.org. Google's VideoObject wants a
- * full datetime in `uploadDate` — a date-only value ("2026-06-29") trips GSC's
- * "Invalid datetime value for uploadDate" + "missing a timezone". Falls back to the
- * raw value if it can't be parsed (best-effort; never throws on the /log page).
- */
 function uploadDateIso(value: string): string {
   const parsed = new Date(value);
 
   return Number.isNaN(parsed.getTime()) ? value : parsed.toISOString();
 }
 
-/**
- * The finding's VideoObject — the richer crawl signal on top of the working
- * og:video, emitted only when the finding carries a rendered video. The
- * description mirrors the visible definitional prose (schema that contradicts the
- * page gets discounted); `uploadDate` is the finding's freshest real timestamp,
- * as a full ISO 8601 datetime with timezone.
- */
 export function videoObjectJsonLd(
   track: LogSchemaInput,
   {
@@ -300,8 +221,7 @@ export function videoObjectJsonLd(
     "@context": "https://schema.org",
     "@type": "VideoObject",
     contentUrl,
-    // The video is Fluncle's own artefact — reference the ONE canonical entity node as both
-    // its creator and publisher, so the video reconciles to the same `@id` as the finding.
+
     creator: { "@id": fluncleEntityId },
     description: definitionalProse(track),
     name: artistTitleLine(track),
@@ -312,26 +232,15 @@ export function videoObjectJsonLd(
   };
 }
 
-/**
- * The finding's spoken observation as an AudioObject — the schema identity for the
- * audio that already renders and streams on the page, the audio twin of
- * `videoObjectJsonLd`. Emitted only when the finding carries a rendered observation
- * (`observationAudioUrl`); `contentUrl` is the version-busted R2 URL the page itself
- * streams. Deliberately carries no spoken-text field in any form — the observation
- * script is internal authoring fuel (admin-only), and publishing it is an unruled
- * canon question.
- */
 export function observationAudioObjectJsonLd(track: LogSchemaInput): Record<string, unknown> {
   return {
     "@context": "https://schema.org",
     "@type": "AudioObject",
     contentUrl: track.observationAudioUrl,
-    // The observation is Fluncle's own artefact — reference the ONE canonical entity node as
-    // both its creator and publisher, so the audio reconciles to the same `@id` as the finding.
+
     creator: { "@id": fluncleEntityId },
     description: definitionalProse(track),
-    // The length + the generated-at stamp, each omitted cleanly when the finding lacks it
-    // (the honest degrade — never a null or a guessed value).
+
     ...(track.observationDurationMs
       ? { duration: formatIsoDuration(track.observationDurationMs) }
       : {}),
@@ -345,12 +254,6 @@ export function observationAudioObjectJsonLd(track: LogSchemaInput): Record<stri
   };
 }
 
-/**
- * The mixtape set video's VideoObject — parity with the finding VideoObject (the
- * crawl signal that gets the set video indexed like the rendered finding clips),
- * emitted only when the mixtape carries a set video (setVideoAt). uploadDate is
- * the set-video timestamp, as a full ISO 8601 datetime with timezone.
- */
 export function mixtapeVideoObjectJsonLd(
   mixtape: MixtapeDTO,
   {
@@ -382,8 +285,7 @@ export function mixtapeAlbumJsonLd(mixtape: MixtapeDTO): Record<string, unknown>
     "@context": "https://schema.org",
     "@type": "MusicAlbum",
     albumProductionType: "https://schema.org/DJMixAlbum",
-    // The mix is by — and published by — the ONE canonical entity node (`@id`), never a second
-    // dangling `/about` Person that reads as a different thing to a crawler.
+
     byArtist: { "@id": fluncleEntityId, "@type": "Person", name: "Fluncle" },
     ...(mixtape.recordedAt ? { datePublished: mixtape.recordedAt.slice(0, 10) } : {}),
     description: mixtape.note,
@@ -395,9 +297,7 @@ export function mixtapeAlbumJsonLd(mixtape: MixtapeDTO): Record<string, unknown>
     ],
     image: mixtape.coverImageUrl,
     name: mixtape.title,
-    // The renderable member count — the findings the tracklist actually resolves to a `/log`
-    // coordinate (a member without one is dropped from the ItemList below), so `numTracks`
-    // matches what the structured data carries.
+
     numTracks: mixtape.members.filter((member) => member.logId).length,
     publisher: { "@id": fluncleEntityId },
     sameAs: Object.values(mixtape.externalUrls).filter(Boolean),
@@ -447,53 +347,30 @@ export function breadcrumbsJsonLd(logId: string): Record<string, unknown> {
   };
 }
 
-/** The artist page's identity + its confirmed off-site anchors, for `sameAs`. */
 export type MusicGroupArtist = {
-  /**
-   * The artist's PUBLIC alternate names (the MusicBrainz identity layer, the label page's
-   * `alternateNames` twin) — the trusted `auto`/`confirmed`, `kind='name'` aliases the resolve
-   * pipeline harvested from MusicBrainz. Emitted as the MusicGroup's `alternateName`. Absent/empty
-   * ⇒ the key is omitted.
-   */
   alternateNames?: string[];
-  /**
-   * The artist's factual bio, when one is authored — the SAME paragraph the page prints. Emitted
-   * as the MusicGroup's `description` (schema description mirrors the visible definitional
-   * content). Undefined until the bio is backfilled ⇒ the key is omitted, never `description:
-   * null`.
-   */
+
   bio?: string;
-  /**
-   * The artist's Discogs page — a secondary identity anchor, the artist twin of the label
-   * Organization's Discogs `sameAs`. MusicBrainz-relation-sourced only (never guessed from a
-   * name), schema-only (no rendered link). Absent ⇒ it simply isn't in `sameAs`.
-   */
+
   discogsUrl?: string;
   imageUrl: string;
-  /** The artist's Last.fm page — the second secondary anchor; same rules as `discogsUrl`. */
+
   lastfmUrl?: string;
   mbid?: string;
   name: string;
   slug: string;
-  // The PUBLIC (auto/confirmed) social URLs; candidates are already filtered out.
+
   socials: string[];
   spotifyUrl?: string;
   wikidataQid?: string;
 };
 
-/** One finding on the artist page, for the `track` ItemList of MusicRecordings. */
 export type MusicGroupFinding = {
   artists: string[];
   logId: string;
   title: string;
 };
 
-// The identity graph's off-site anchors, ranked Wikidata > MusicBrainz > Discogs > Last.fm >
-// Spotify > the confirmed socials, de-duplicated (a spotify social row can repeat spotifyUrl).
-// The two metadata anchors sit directly under MusicBrainz — they are the same KIND of thing as
-// it (an authority's record OF the artist, which is what a reconciling crawler wants first),
-// where Spotify and the socials are channels the artist happens to run. This mirrors the label
-// Organization's `sameAs` (`labelOrganizationSameAs`), which ranks MusicBrainz then Discogs.
 function artistSameAs(artist: MusicGroupArtist): string[] {
   const ordered = [
     artist.wikidataQid ? `https://www.wikidata.org/wiki/${artist.wikidataQid}` : undefined,
@@ -507,13 +384,6 @@ function artistSameAs(artist: MusicGroupArtist): string[] {
   return [...new Set(ordered.filter((url): url is string => Boolean(url)))];
 }
 
-/**
- * The artist page's JSON-LD: a `MusicGroup` carrying its `@id` (the cross-page
- * graph anchor, twin of the `byArtist` node stamped on every `/log` page), its
- * `sameAs` identity graph, and a `track` → ItemList of the findings as
- * MusicRecordings (the same reducer shape as `mixtapeAlbumJsonLd`). No fabricated
- * portrait — `image` is the most-recent finding's cover (VOICE.md: never invent).
- */
 export function musicGroupJsonLd(
   artist: MusicGroupArtist,
   findings: MusicGroupFinding[],
@@ -521,35 +391,24 @@ export function musicGroupJsonLd(
   const artistUrl = artistPageUrl(artist.slug);
   const sameAs = artistSameAs(artist);
   const alternateNames = artist.alternateNames ?? [];
-  // The page's OWN artist name → slug, folded to match `byArtistNode`'s lookup.
-  // Every finding on this page credits this artist, so stamping the nested
-  // `byArtist` nodes reconciles each recording back to the artist's `@id` for
-  // free — the same graph anchor the top-level MusicGroup + the `/log` byArtist
-  // nodes carry (Unit 3, artist-relationship RFC §3).
+
   const artistSlugs: Record<string, string> = { [fold(artist.name)]: artist.slug };
 
   return {
     "@context": "https://schema.org",
     "@id": artistUrl,
     "@type": "MusicGroup",
-    // The artist's other recorded names (the MusicBrainz identity layer) — one string collapses to
-    // a scalar, several to an array (both valid schema.org), omitted entirely otherwise, so an
-    // artist without aliases is byte-identical to before. Mirrors the label page's alternateName.
+
     ...(alternateNames.length > 0
       ? { alternateName: alternateNames.length === 1 ? alternateNames[0] : alternateNames }
       : {}),
-    // The factual bio mirrors the page's visible definitional paragraph — omitted cleanly (never
-    // `description: null`) until one is authored.
+
     ...(artist.bio ? { description: artist.bio } : {}),
     genre: "Drum and Bass",
     image: artist.imageUrl,
     name: artist.name,
     ...(sameAs.length > 0 ? { sameAs } : {}),
-    // OMITTED, never an empty ItemList. Most artists in the archive are catalogue rows Fluncle
-    // has not certified a finding from, and the unnamed tier means their quieter tracks are never
-    // named here (docs/album-entity.md) — so `findings` is empty on the majority of these pages.
-    // An `ItemList` with no members asserts "this artist has a track list, and it holds nothing",
-    // which contradicts the page; the same omit-cleanly rule the rest of this node follows.
+
     ...(findings.length > 0
       ? {
           track: {
@@ -586,7 +445,6 @@ export function musicGroupJsonLd(
   };
 }
 
-/** Fluncle → Artists → the artist name, the artist page's breadcrumb. */
 export function artistBreadcrumbsJsonLd(name: string): Record<string, unknown> {
   return {
     "@context": "https://schema.org",
@@ -599,59 +457,31 @@ export function artistBreadcrumbsJsonLd(name: string): Record<string, unknown> {
   };
 }
 
-// ── The graph pages: labels + albums ────────────────────────────────────────────────
-//
-// The two nodes that complete `log ↔ artist ↔ label ↔ album`. Their JSON-LD follows the
-// artist page's shape — an `@id`-bearing entity node whose `@id` IS the page URL, so a
-// crawler reconciles every mention of the entity across the site to one thing — and their
-// track lists carry BOTH halves of the page: the findings (which link to their `/log`
-// coordinate) and the quieter rows (which have no Fluncle page and carry their off-site
-// URL instead, or none at all).
-//
-// That is honest structured data — these really are tracks on this record / this imprint —
-// and it never claims a certification that does not exist: only a finding gets a
-// `fluncle.com/log/...` url. Schema that contradicts the page gets discounted; schema that
-// matches it is what puts the page in an AI answer.
-
-/** The `<siteUrl>/label/<slug>` node id. */
 export function labelPageUrl(slug: string): string {
   return `${siteUrl}/label/${slug}`;
 }
 
-/** The `<siteUrl>/album/<slug>` node id. */
 export function albumPageUrl(slug: string): string {
   return `${siteUrl}/album/${slug}`;
 }
 
-/** One track on a graph page: a finding (with a Log ID) or a quieter uncertified row. */
 export type GraphPageTrack = {
   artists: string[];
-  /** The finding's length in ms → the MusicRecording's ISO-8601 `duration`. Findings only. */
+
   durationMs?: number;
-  /** The finding's ISRC → the MusicRecording's `isrcCode`. Findings only. */
+
   isrc?: string;
-  /** Present ⇒ a finding: the item's `url` is its `/log` page. */
+
   logId?: string;
-  /** The finding's release date → the MusicRecording's `datePublished`. Findings only. */
+
   releaseDate?: string;
-  /** The off-site URL, the LAST resort — only for a row with no Fluncle page at all. */
+
   spotifyUrl?: string;
   title: string;
-  /**
-   * The row's permanent id. An uncertified row now has a page of its own at `/track/<trackId>`,
-   * so the item resolves HOME rather than straight off-site (the off-site URL stays in the
-   * destination page's own `sameAs`). Absent on a row whose identity the destination would
-   * refuse, which falls back to the off-site URL exactly as before.
-   */
+
   trackId?: string;
 };
 
-// A track list as schema.org `ItemList` of `MusicRecording`s. A finding resolves to its
-// `/log/<id>` page; an uncertified row resolves to its own `/track/<trackId>` destination; a row
-// with neither falls back to its off-site URL, or to no url at all. The order MIRRORS what the
-// page links to, which is the point — schema that contradicts the page gets discounted.
-// `artistSlugs` stamps each credited artist's `@id` where the entity is known — the same
-// cross-page anchor `/log` and `/artist` already carry.
 function trackItemList(
   tracks: GraphPageTrack[],
   artistSlugs: Record<string, string>,
@@ -671,14 +501,9 @@ function trackItemList(
         item: {
           "@type": "MusicRecording",
           byArtist: track.artists.map((name) => byArtistNode(name, artistSlugs)),
-          // The remixer credit, when the title names one (a schema.org `contributor` Role) —
-          // the same derivation the /log recording carries, applied per tracklist item. Omitted
-          // entirely for a non-remix.
+
           ...(contributors.length > 0 ? { contributor: contributors } : {}),
-          // The finding's per-track facts (G1): its ISO-8601 length, its ISRC, and its release
-          // date. Present on findings only — a quieter catalogue row carries none of them, so
-          // the keys are omitted rather than emitted null (schema that contradicts the page gets
-          // discounted; an uncertified row stays as spare as it renders).
+
           ...(track.durationMs ? { duration: formatIsoDuration(track.durationMs) } : {}),
           ...(track.isrc ? { isrcCode: track.isrc } : {}),
           name: track.title,
@@ -691,7 +516,6 @@ function trackItemList(
   };
 }
 
-/** The label/album page's artist entities, folded for `byArtistNode`'s lookup. */
 function foldArtistSlugs(artists: { name: string; slug: string }[]): Record<string, string> {
   const slugs: Record<string, string> = {};
 
@@ -702,78 +526,36 @@ function foldArtistSlugs(artists: { name: string; slug: string }[]): Record<stri
   return slugs;
 }
 
-/** The label page's identity + the page's contents. */
 export type RecordLabelInput = {
-  /**
-   * The label's CONFIRMED alternate spellings (RFC musickit-second-authority, U2a, decision C).
-   * A second authority (Apple, corroborated by MusicBrainz) proposed them and the operator ruled
-   * them the same label; `candidate`/`hint` aliases never reach here. Emitted as the
-   * Organization's `alternateName`. Absent/empty ⇒ the key is omitted.
-   */
   alternateNames?: string[];
   artists: { name: string; slug: string }[];
-  /**
-   * The label's factual bio, when one is authored — the SAME paragraph the page prints. Emitted
-   * as the Organization's `description` (schema description mirrors the visible definitional
-   * content — and the bio describes the label entity, so it rides the Organization node, not the
-   * CollectionPage). Undefined until backfilled ⇒ the key is omitted, never `description: null`.
-   */
+
   bio?: string;
-  /**
-   * The Discogs label id (`labels.discogs_label_id`) — an off-site identity anchor. Emitted into
-   * the Organization's `sameAs` as `https://www.discogs.com/label/<id>`. Absent ⇒ omitted.
-   */
+
   discogsLabelId?: number;
-  /**
-   * The label's founding date (`labels.founding_date`, MusicBrainz `life-span.begin` verbatim — a
-   * year or a full date). Emitted as the Organization's `foundingDate` (schema.org accepts either).
-   * Absent ⇒ omitted (the label-lineage sweep, RFC label-lineage-remixer U1).
-   */
+
   foundingDate?: string;
-  /**
-   * The label's founding place (`labels.founded_location`, MusicBrainz `area.name`). Emitted as the
-   * Organization's `location` (a `Place` node). Absent ⇒ omitted.
-   */
+
   location?: string;
-  /**
-   * The label's OWN logo (its resolved image on R2, `labels.image_key` → a served URL), emitted as
-   * the Organization's `logo`. Currently only powers the page's OG image; here it becomes part of
-   * the entity itself. Absent ⇒ omitted.
-   */
+
   logoImageUrl?: string;
-  /**
-   * The MusicBrainz label MBID (`labels.mb_label_id`) — an off-site identity anchor. Emitted into
-   * the Organization's `sameAs` as `https://musicbrainz.org/label/<mbid>`. Absent ⇒ omitted.
-   */
+
   mbLabelId?: string;
   name: string;
-  /**
-   * The imprint this label belongs to (`labels.parent_label_id` → name + slug). Emitted as the
-   * Organization's `parentOrganization`, an `@id` edge to the parent's own `#organization` node —
-   * so a crawler reconciles the imprint hierarchy to one graph. Absent ⇒ omitted.
-   */
+
   parentOrganization?: { name: string; slug: string };
   slug: string;
-  /**
-   * The sublabels / imprints OF this label (the `parent_label_id` reverse read). Emitted as the
-   * Organization's `subOrganization` `@id` edges (both directions of the hierarchy where
-   * derivable). Absent/empty ⇒ omitted.
-   */
+
   subOrganizations?: { name: string; slug: string }[];
   tracks: GraphPageTrack[];
 };
 
-// A parent/sublabel edge → the related label's Organization `@id` node (`<labelPageUrl>#organization`,
-// the exact id `recordLabelJsonLd` mints for the label's own node), so `parentOrganization` /
-// `subOrganization` reconcile to one graph across the imprint hierarchy — the album→label
-// `recordLabel` edge's shape, one entity kind over.
 function labelOrganizationEdge(edge: { name: string; slug: string }): Record<string, unknown> {
   const url = labelPageUrl(edge.slug);
 
   return { "@id": `${url}#organization`, "@type": "Organization", name: edge.name, url };
 }
 
-/** The label Organization's off-site identity anchors → its `sameAs` (MusicBrainz, then Discogs). */
 function labelOrganizationSameAs(label: RecordLabelInput): string[] {
   const anchors = [
     label.mbLabelId ? `https://musicbrainz.org/label/${label.mbLabelId}` : undefined,
@@ -785,16 +567,6 @@ function labelOrganizationSameAs(label: RecordLabelInput): string[] {
   return anchors.filter((url): url is string => Boolean(url));
 }
 
-/**
- * The label page's JSON-LD: a `CollectionPage` ABOUT an `Organization` (schema.org has no
- * record-label type; a label is an organization, never a `MusicGroup` — it is not a band),
- * carrying the page's tracks as its `mainEntity` list. The Organization's `@id` is the
- * page URL, so the `recordLabel` node an album page emits points straight back here.
- *
- * When the label carries CONFIRMED aliases, the Organization gets an `alternateName` — the two
- * spellings the operator ruled one label, so a crawler that knows the imprint under either name
- * lands on the same entity (decision C).
- */
 export function recordLabelJsonLd(label: RecordLabelInput): Record<string, unknown> {
   const pageUrl = labelPageUrl(label.slug);
   const alternateNames = label.alternateNames ?? [];
@@ -808,32 +580,23 @@ export function recordLabelJsonLd(label: RecordLabelInput): Record<string, unkno
     about: {
       "@id": `${pageUrl}#organization`,
       "@type": "Organization",
-      // Only when confirmed aliases exist: one string collapses to a scalar, several to an array
-      // (both valid schema.org). Omitted entirely otherwise, so a label without aliases is byte-
-      // identical to before.
+
       ...(alternateNames.length > 0
         ? { alternateName: alternateNames.length === 1 ? alternateNames[0] : alternateNames }
         : {}),
-      // The factual bio mirrors the page's visible definitional paragraph — omitted cleanly
-      // (never `description: null`) until one is authored.
+
       ...(label.bio ? { description: label.bio } : {}),
-      // The founding facts (the label-lineage sweep, RFC label-lineage-remixer U1): the date rides
-      // schema.org's native `foundingDate`; the place rides a `location` Place node. Each omitted
-      // cleanly when MusicBrainz carried none.
+
       ...(label.foundingDate ? { foundingDate: label.foundingDate } : {}),
       ...(label.location ? { location: { "@type": "Place", name: label.location } } : {}),
-      // The label's OWN logo (its resolved R2 image) as the Organization's `logo` — it was only an
-      // OG image before; here it becomes part of the entity a crawler reads. Omitted when unresolved.
+
       ...(label.logoImageUrl ? { logo: label.logoImageUrl } : {}),
       name: label.name,
-      // The imprint hierarchy, both directions where derivable: `parentOrganization` (the label this
-      // is an imprint of) and `subOrganization` (its own sublabels), each an `@id` edge to the
-      // related label's own Organization node. Omitted when the edge is absent.
+
       ...(label.parentOrganization
         ? { parentOrganization: labelOrganizationEdge(label.parentOrganization) }
         : {}),
-      // The off-site identity anchors (MusicBrainz, Discogs) — the label's `sameAs`, the imprint
-      // twin of the artist entity's identity graph. Omitted entirely when the label carries none.
+
       ...(sameAs.length > 0 ? { sameAs } : {}),
       ...(subOrganizations.length > 0
         ? { subOrganization: subOrganizations.map(labelOrganizationEdge) }
@@ -846,44 +609,25 @@ export function recordLabelJsonLd(label: RecordLabelInput): Record<string, unkno
   };
 }
 
-/** The album page's identity + the page's contents. */
 export type MusicAlbumInput = {
   artists: { name: string; slug: string }[];
-  /**
-   * The album's factual bio, when one is authored — the SAME paragraph the page prints. Emitted
-   * as the MusicAlbum's `description` (schema description mirrors the visible definitional
-   * content). Undefined until backfilled ⇒ the key is omitted, never `description: null`.
-   */
+
   bio?: string;
-  /**
-   * The label's own catalogue number for this record (`albums.discogs_catno`) — the code printed on
-   * the sleeve. Emitted as the MusicRelease's `catalogNumber`, schema.org's property for exactly
-   * this. Absent ⇒ omitted.
-   */
+
   catalogNumber?: string;
   imageUrl?: string;
-  /** The album's label, when one of its tracks carried one — the album → label graph edge. */
+
   label?: { name: string; slug: string };
   name: string;
   releaseDate?: string;
-  /**
-   * The MusicBrainz release-group MBID (`albums.release_group_mbid`) — the album's off-site
-   * identity anchor. Emitted into `sameAs` as `https://musicbrainz.org/release-group/<mbid>`.
-   * Absent ⇒ omitted.
-   */
+
   releaseGroupMbid?: string;
   slug: string;
   tracks: GraphPageTrack[];
-  /** The album's barcode (`albums.upc`) → the MusicAlbum's `gtin13`. Absent ⇒ omitted. */
+
   upc?: string;
 };
 
-/**
- * The album page's JSON-LD: a real `MusicAlbum` — `byArtist` (the credited entities),
- * `track` (the ItemList), and, where the album's label is known, an `albumRelease` →
- * `MusicRelease.recordLabel` pointing at the label page's Organization `@id`. That last
- * edge is the whole reason both pages exist in one PR: the graph closes.
- */
 export function musicAlbumJsonLd(album: MusicAlbumInput): Record<string, unknown> {
   const pageUrl = albumPageUrl(album.slug);
   const labelUrl = album.label ? labelPageUrl(album.label.slug) : undefined;
@@ -892,11 +636,7 @@ export function musicAlbumJsonLd(album: MusicAlbumInput): Record<string, unknown
     "@context": "https://schema.org",
     "@id": pageUrl,
     "@type": "MusicAlbum",
-    // The MusicRelease node carries the two facts that belong to the PRESSING rather than the work:
-    // the label (the graph edge that closes log ↔ artist ↔ label ↔ album) and the label's own
-    // catalogue number. It emits when EITHER is known — a record can carry a catno Fluncle read off
-    // Discogs while its label row is still unlinked, and dropping the number for want of the edge
-    // would throw away a true fact.
+
     ...(album.label && labelUrl
       ? {
           albumRelease: {
@@ -920,10 +660,7 @@ export function musicAlbumJsonLd(album: MusicAlbumInput): Record<string, unknown
             },
           }
         : {}),
-    // OMITTED, never `byArtist: []`. A various-artists compilation resolves no album-level artist
-    // entity at all, and an empty `byArtist` asserts the record was made by nobody — while the
-    // `track` list directly below names an artist on every line. Absence is the true answer; the
-    // per-track credits carry the attribution.
+
     ...(album.artists.length > 0
       ? {
           byArtist: album.artists.map((artist) => ({
@@ -933,17 +670,15 @@ export function musicAlbumJsonLd(album: MusicAlbumInput): Record<string, unknown
           })),
         }
       : {}),
-    // The factual bio mirrors the page's visible definitional paragraph — omitted cleanly
-    // (never `description: null`) until one is authored.
+
     ...(album.bio ? { description: album.bio } : {}),
     genre: "Drum and Bass",
-    // The album's barcode as `gtin13` — schema.org's global-trade identity for a release.
+
     ...(album.upc ? { gtin13: album.upc } : {}),
     ...(album.imageUrl ? { image: album.imageUrl } : {}),
     name: album.name,
     ...(album.releaseDate ? { datePublished: album.releaseDate } : {}),
-    // The off-site identity anchor: the MusicBrainz release group (the album abstraction over its
-    // pressings). Omitted when the album carries no release-group MBID.
+
     ...(album.releaseGroupMbid
       ? { sameAs: [`https://musicbrainz.org/release-group/${album.releaseGroupMbid}`] }
       : {}),
@@ -952,7 +687,6 @@ export function musicAlbumJsonLd(album: MusicAlbumInput): Record<string, unknown
   };
 }
 
-/** Fluncle → Labels → the label name. */
 export function labelBreadcrumbsJsonLd(name: string): Record<string, unknown> {
   return {
     "@context": "https://schema.org",
@@ -965,21 +699,6 @@ export function labelBreadcrumbsJsonLd(name: string): Record<string, unknown> {
   };
 }
 
-/**
- * THE ARCHIVE TRACK's structured data — the `MusicRecording` for `/track/<trackId>`.
- *
- * It is a SEPARATE builder from {@link musicRecordingJsonLd}, and the separation is the
- * certification rail expressed in schema. That one is a FINDING's node: its `url` is the
- * coordinate's page, and it emits `fluncle-log-id` identifiers, a Found `datePublished`, and the
- * definitional prose Fluncle wrote. None of that is true of a recording he has never ruled on, and
- * a node that claimed any of it would be a claim the archive cannot back. This one carries only
- * what the archive actually holds about the RECORDING: who made it, what record it is on, whose
- * imprint pressed it, when it came out, how long it is, its measured tempo and key, and the
- * identifiers and platform pages that name the same recording elsewhere.
- *
- * `datePublished` is the RELEASE date here, never a Found date, because there is no found date to
- * tell — the Found Rule holds precisely by having nothing to say (VOICE.md).
- */
 export function archiveTrackJsonLd(track: ArchiveTrackSchemaInput): Record<string, unknown> {
   const recordingOf = measuredCompositionNode(track);
   const sameAs = [
@@ -1002,17 +721,12 @@ export function archiveTrackJsonLd(track: ArchiveTrackSchemaInput): Record<strin
     "@type": "MusicRecording",
     byArtist: track.artists.map((artist) => byArtistNode(artist, track.artistSlugs)),
     ...(track.releaseDate ? { datePublished: track.releaseDate } : {}),
-    // OMITTED, never `PT0M0S`. `tracks.duration_ms` is NOT NULL and carries 0 as its "unknown"
-    // (crawl.ts), so emitting it unconditionally would assert a zero-length recording to crawlers
-    // and answer engines. The DTO already converts that sentinel to an absence; this is the half
-    // that keeps it out of the graph.
+
     ...(track.durationMs ? { duration: formatIsoDuration(track.durationMs) } : {}),
     genre: "Drum and Bass",
     ...(identifier.length > 0 ? { identifier } : {}),
     ...(track.imageUrl ? { image: track.imageUrl } : {}),
-    // The record this recording is on, stamped with the album page's own `@id` when the entity
-    // resolved — the same cross-page anchor `/album/<slug>` emits, so a crawler reconciles the
-    // track, its record, and its imprint into one graph rather than three loose nodes.
+
     ...(track.album
       ? {
           inAlbum: track.album.slug
@@ -1045,24 +759,19 @@ export function archiveTrackJsonLd(track: ArchiveTrackSchemaInput): Record<strin
   };
 }
 
-/** What an archive track's `MusicRecording` is built from — only facts the archive stores. */
 export type ArchiveTrackSchemaInput = {
   album?: { name: string; slug?: string };
   artistSlugs?: Record<string, string>;
   artists: string[];
   bpm?: number;
   discogsReleaseUrl?: string;
-  /** Absent when the archive does not know the recording's length — see the `duration` note above. */
+
   durationMs?: number;
   imageUrl?: string;
   isrc?: string;
   key?: string;
   label?: { name: string; slug?: string };
-  /**
-   * The outbound platform pages that may enter the `sameAs` graph. Built by `sameAsUrls`, NOT by
-   * mapping the rendered destinations — Beatport is rendered and deliberately withheld here
-   * (lib/track-page.ts § the containment seam).
-   */
+
   listenUrls: string[];
   mbRecordingId?: string;
   releaseDate?: string;
@@ -1070,7 +779,6 @@ export type ArchiveTrackSchemaInput = {
   trackId: string;
 };
 
-/** Fluncle → Tracks → `Artist — Title`. The `/tracks` hub is this page's real parent. */
 export function trackBreadcrumbsJsonLd(name: string): Record<string, unknown> {
   return {
     "@context": "https://schema.org",
@@ -1083,7 +791,6 @@ export function trackBreadcrumbsJsonLd(name: string): Record<string, unknown> {
   };
 }
 
-/** Fluncle → Albums → the album name. */
 export function albumBreadcrumbsJsonLd(name: string): Record<string, unknown> {
   return {
     "@context": "https://schema.org",
@@ -1096,12 +803,6 @@ export function albumBreadcrumbsJsonLd(name: string): Record<string, unknown> {
   };
 }
 
-// The last two detail-page families to get a trail. Every other one already carried a
-// `BreadcrumbList` (a finding, an artist, a label, an album, a galaxy); a Logbook entry and a
-// newsletter edition are detail pages under a real hub too, so they get the same node — a
-// crawler reads the trail, and Google renders it in place of the raw URL.
-
-/** Fluncle → Logbook → the entry's coordinate, e.g. "036" — the leaf the page's h1 wears. */
 export function logbookBreadcrumbsJsonLd(sectorLabel: string): Record<string, unknown> {
   return {
     "@context": "https://schema.org",
@@ -1114,12 +815,6 @@ export function logbookBreadcrumbsJsonLd(sectorLabel: string): Record<string, un
   };
 }
 
-/**
- * Fluncle → Docs → the doc's own title, e.g. "Log ID".
- *
- * The leaf is the MDX front matter's `title`, never the slug: the chrome's trail can only
- * humanize `/docs/log-id` into "Log Id", and the markup is where the real name has to land.
- */
 export function docsBreadcrumbsJsonLd(title: string): Record<string, unknown> {
   return {
     "@context": "https://schema.org",
@@ -1132,7 +827,6 @@ export function docsBreadcrumbsJsonLd(title: string): Record<string, unknown> {
   };
 }
 
-/** Fluncle → Newsletter → the edition, e.g. "#4". */
 export function newsletterBreadcrumbsJsonLd(number: number): Record<string, unknown> {
   return {
     "@context": "https://schema.org",

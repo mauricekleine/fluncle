@@ -8,12 +8,6 @@ import {
   type LogProseInput,
 } from "./log-prose";
 
-// The definitional prose's galaxy clause (browse-by-feel RFC, Slice 4): the sonic
-// galaxy rides the prose as its OWN segment, so the visible block links the name to
-// `/galaxies/<slug>` while the JSON-LD description reads the same text plain. The mirror
-// ("schema mirrors the visible prose") holds by construction — `definitionalProse` is
-// the segments joined.
-
 const base: LogProseInput = {
   addedAt: "2026-06-01T00:00:00.000Z",
   artists: ["Calibre"],
@@ -48,11 +42,9 @@ describe("definitionalProse — the galaxy clause", () => {
       galaxy: { name: "The Liquid Deep", slug: "the-liquid-deep" },
     });
 
-    // The plain string carries the FULL clause — lead + the linked phrase + tail — so a
-    // crawler reads exactly what a person sees; the link is a visible-only affordance.
     expect(prose).toContain(`${GALAXY_CLAUSE_LEAD}${galaxyClauseLinkText("The Liquid Deep")}`);
     expect(galaxyClauseLinkText("The Liquid Deep")).toBe("The Liquid Deep galaxy");
-    // No dead vibe-quadrant language (energy/mood/vibe map) survives the swap.
+
     expect(prose).not.toMatch(/vibe map|quarter of/i);
   });
 
@@ -69,8 +61,6 @@ describe("definitionalProse — the galaxy clause", () => {
           return `${GALAXY_CLAUSE_LEAD}${galaxyClauseLinkText(segment.name)}, with the findings that hit the same way.`;
         }
 
-        // The release clause is a LINKABLE segment too when the imprint has an entity page
-        // (the graph-link system) — same mirror rule: the JSON-LD reads it plain.
         if (segment.kind === "label") {
           return `${LABEL_CLAUSE_LEAD}${segment.name}${segment.tail}`;
         }

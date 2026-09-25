@@ -15,10 +15,6 @@ import {
   togglePlayback,
 } from "./preview-player";
 
-/**
- * The simple synchronous double: each `dispatch` runs its listeners at once, after setting the
- * live state the browser would already show (`ended` for an end, `error` for a failure).
- */
 class FakeAudio {
   currentTime = 0;
   duration = Number.NaN;
@@ -406,11 +402,6 @@ describe("keep going — the one way on", () => {
   });
 });
 
-// ── THE RACES A BROWSER ACTUALLY PRODUCES ─────────────────────────────────────────────────────
-// A browser-shaped element: play() stays pending until the clip arrives, and a pause() or a new
-// source while it is pending rejects it with an AbortError (the HTML media spec's "pending play
-// promises" rejection), exactly the cancellation the player must not mistake for a missing clip.
-
 function domError(name: string, message: string): DOMException {
   return new DOMException(message, name);
 }
@@ -419,13 +410,6 @@ type MediaNotification = "canplay" | "ended" | "error" | "pause" | "playing";
 
 type MediaTask = { name: MediaNotification; run: () => void };
 
-/**
- * An <audio> element that behaves like the browser's where the player can tell: every media
- * notification is its OWN queued task (`deliver`, in any order the test chooses), while the
- * properties the browser sets synchronously (`paused` on play()/pause(), `ended` the moment the
- * clip reaches its end) change before that task runs. A new `src` drops the queued tasks and
- * rejects the pending play() with an AbortError, as the load algorithm does.
- */
 class BrowserLikeAudio {
   currentTime = 0;
   duration = Number.NaN;
@@ -434,7 +418,7 @@ class BrowserLikeAudio {
   muted = false;
   paused = true;
   preload = "";
-  /** The queued media tasks, oldest first. */
+
   readonly tasks: MediaTask[] = [];
   #src = "";
   #pending: { reject: (error: unknown) => void; resolve: () => void }[] = [];
@@ -474,7 +458,6 @@ class BrowserLikeAudio {
 
   play(): Promise<void> {
     if (this.ended) {
-      // Playing a finished clip starts it again from the top.
       this.ended = false;
       this.currentTime = 0;
       this.#sounding = false;
@@ -514,9 +497,6 @@ class BrowserLikeAudio {
     }
   }
 
-  // ── what the network and the clock do ──
-
-  /** The clip's data arrived while it was wanted: `canplay`, then `playing`, each its own task. */
   dataArrives(): boolean {
     if (this.paused || this.ended || this.#arrived || this.#src === "") {
       return false;
@@ -536,7 +516,6 @@ class BrowserLikeAudio {
     return true;
   }
 
-  /** A sounding clip reached its end: `ended` is true at once, the notification is queued. */
   reachEnd(): boolean {
     if (!this.#sounding || this.paused || this.ended) {
       return false;
@@ -556,7 +535,6 @@ class BrowserLikeAudio {
     return true;
   }
 
-  /** The relay answered with nothing playable: the failure task sets `error` and reports it. */
   loadFails(): boolean {
     if (this.#arrived || this.#src === "") {
       return false;
@@ -577,7 +555,6 @@ class BrowserLikeAudio {
     return true;
   }
 
-  /** Run one queued task (the oldest by default). */
   deliver(index = 0): boolean {
     const [task] = this.tasks.splice(index, 1);
 
@@ -586,28 +563,20 @@ class BrowserLikeAudio {
     return task !== undefined;
   }
 
-  /** Run every queued task in order, including any the delivered ones queue. */
   deliverAll(): void {
-    while (this.deliver()) {
-      // Each task may queue another; drain until the element is quiet.
-    }
+    while (this.deliver()) {}
   }
 
-  // ── the synchronous conveniences the scenario tests read as one step ──
-
-  /** The clip arrived and started sounding. */
   arrive(): void {
     this.dataArrives();
     this.deliverAll();
   }
 
-  /** The relay answered with nothing playable. */
   failToLoad(): void {
     this.loadFails();
     this.deliverAll();
   }
 
-  /** The clip played to its end. */
   finish(): void {
     this.reachEnd();
     this.deliverAll();
@@ -642,7 +611,6 @@ function installBrowserAudio(): BrowserLikeAudio {
   return element;
 }
 
-/** Another sound on the page: Stories' video, the radio's audio. */
 class OtherMedia {
   ended = false;
   muted = false;
@@ -657,17 +625,15 @@ class OtherMedia {
 }
 
 type Page = {
-  /** Run the page's oldest queued media notification. */
   deliver: () => boolean;
-  /** How many of the page's media notifications are still queued. */
+
   pending: () => number;
-  /** Another sound calls play(): `paused` flips now, its `play` notification is a later task. */
+
   play: (media: OtherMedia) => void;
-  /** Another sound starts and its notification runs at once. */
+
   start: (media: OtherMedia) => void;
 };
 
-/** A document that hears media events in the capture phase, as the real one does. */
 function installPage(others: OtherMedia[]): Page {
   const listeners = new Map<string, ((event: Event) => void)[]>();
   const tasks: (() => void)[] = [];
@@ -704,9 +670,7 @@ function installPage(others: OtherMedia[]): Page {
     start: (media) => {
       play(media);
 
-      while (deliver()) {
-        // The notification runs at once.
-      }
+      while (deliver()) {}
     },
   };
 }
@@ -891,7 +855,6 @@ describe("media session — the lock screen belongs to the live sound", () => {
     expect(typeof session.handlers.get("play")).toBe("function");
     expect(session.playbackState).toBe("playing");
 
-    // The radio starts: the preview pauses and gives the lock screen up.
     page.start(radio);
     await settled();
     expect(readPlayer().status).toBe("paused");
@@ -900,7 +863,6 @@ describe("media session — the lock screen belongs to the live sound", () => {
     expect(session.metadata).toBeNull();
     expect(session.playbackState).toBe("none");
 
-    // The listener resumes the preview from the bar: the radio stops first, the session returns.
     togglePlayback();
     expect(radio.paused).toBe(true);
     expect(radio.pauses).toBe(1);
@@ -922,11 +884,6 @@ describe("media session — the lock screen belongs to the live sound", () => {
     expect(session.playbackState).toBe("none");
   });
 });
-
-// ── EVERY CONTINUATION ACTS ONLY ON THE LISTENER'S LATEST INTENT ──────────────────────────────
-// "Keep going" is pressed with the queue already over (idle), so these races start from idle: the
-// intent has to lapse on a pause, a close, a newer start or a competing sound even when nothing is
-// sounding at that moment.
 
 describe("continuations lapse on any newer intent, even from idle", () => {
   async function endedQueue(
@@ -955,7 +912,7 @@ describe("continuations lapse on any newer intent, even from idle", () => {
     answer.resolve(tracks("x", "y"));
 
     expect(await outcome).toBe("stale");
-    // Nothing was loaded: the finished list left the element empty, and it stays empty.
+
     expect(element.src).toBe("");
     expect(readPlayer().status).toBe("idle");
     expect(radio.paused).toBe(false);
@@ -1072,11 +1029,6 @@ describe("continuations lapse on any newer intent, even from idle", () => {
   });
 });
 
-// ── AUTOMATIC ADVANCEMENT OBEYS THE SAME INTENT AS A PRESS ────────────────────────────────────
-// A clip's end, its failure and its `playing` are queued tasks, so a pause, a close or another
-// sound can land between the browser deciding and the notification running. Whatever the
-// listener did first wins, and a notification the element no longer vouches for is ignored.
-
 describe("automatic advancement stands down behind a newer intent", () => {
   it("an end that runs after the listener paused does not start the next track", async () => {
     const element = installBrowserAudio();
@@ -1175,7 +1127,7 @@ describe("a pause the player did not ask for", () => {
     playQueue(tracks("a", "b"), 0);
     element.pause();
     element.loadFails();
-    // The failure's task runs first: the element already says paused, and that is enough.
+
     element.deliver(1);
     await settled();
 
@@ -1203,14 +1155,13 @@ describe("a pause the player did not ask for", () => {
     element.dataArrives();
     pausePreview();
     togglePlayback();
-    // The old `canplay`, `playing` and `pause` run after the resume, in the order they were queued.
+
     element.deliverAll();
     await settled();
 
     expect(element.paused).toBe(false);
     expect(readPlayer()).toMatchObject({ status: "playing", trackId: "a" });
 
-    // The resumed clip still carries the list on when it ends.
     element.finish();
     await settled();
     expect(readPlayer()).toMatchObject({ status: "loading", trackId: "b" });
@@ -1237,10 +1188,6 @@ describe("the player lives across pages", () => {
   });
 });
 
-// ── AN AUTOMATIC START YIELDS TO A SOUND ALREADY PLAYING ──────────────────────────────────────
-// Another element's `paused` flips the moment it calls play(); its `play` notification is a later
-// task. An automatic start that runs in between must see it and stand down, never pause it.
-
 describe("an automatic start yields to a sound already playing", () => {
   it("the end of a clip does not start the next track over Stories whose notification is still queued", async () => {
     const element = installBrowserAudio();
@@ -1258,7 +1205,7 @@ describe("an automatic start yields to a sound already playing", () => {
     expect(story.pauses).toBe(0);
     expect(element.src).not.toBe("/api/preview/b");
     expect(readPlayer().status).toBe("idle");
-    // The bar stops, keeping its place on the track that would have played next.
+
     expect(readPlayer().queue).toMatchObject({ ended: false, index: 1 });
 
     page.deliver();
@@ -1350,28 +1297,6 @@ describe("an automatic start yields to a sound already playing", () => {
     expect(story.pauses).toBe(1);
   });
 });
-
-// ── THE INTENT INVARIANT, OVER THE INTERLEAVINGS ─────────────────────────────────────────────
-// A fresh player runs every sequence of up to four events from the alphabet below, then a fixed
-// set of seeded longer sequences. The element's notifications are queued tasks that only a
-// delivery event runs, oldest or newest first, so a notification can land before or after
-// anything the listener does. The oracle knows only what the LISTENER did: a press (play a list,
-// next, resume, keep going) asks for sound; a pause (the page's or the OS's), a close or another
-// sound starting silences it. After EVERY event:
-//
-//   - while silenced, the element is paused (nothing sounds), and the other sound was never paused
-//     by the preview;
-//   - the preview and the other sound never both sound;
-//   - once no notification is waiting, the store tells the truth: it says playing or loading
-//     exactly when the element is not paused, and never while the listener has silenced it.
-//
-// Another sound's `play` notification is queued too (its `paused` flips at once), so an automatic
-// start can run while it waits: it must see the sound and stand down, never pause it. While that
-// notification waits, the preview that was already sounding may still sound (nothing has told
-// it), but nothing NEW may start.
-//
-// The OS pause is issued only before the clip reaches its end: once it has, the browser's own
-// end-of-clip pause is indistinguishable from it at the element (see `noticeUnrequestedPause`).
 
 const MODEL_PAGE = "/tracks?page=2";
 
@@ -1465,7 +1390,6 @@ const MODEL_EVENTS: readonly ModelEvent[] = [
   {
     name: "the other sound finishes",
     run: (model) => {
-      // A sound finishes only after its own play notification has run.
       if (model.page.pending() === 0 && !model.radio.paused) {
         model.radio.paused = true;
         model.radio.ended = true;
@@ -1539,7 +1463,6 @@ function* interleavings(length: number): Generator<ModelEvent[]> {
   }
 }
 
-/** A small deterministic generator (mulberry32), so the long sequences are the same every run. */
 function seededRandom(seed: number): () => number {
   let state = seed;
 

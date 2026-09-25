@@ -1,14 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// The account (profile-sync) layer of the key-notation store. These drive the plain
-// exported functions directly (no React) with a stubbed `window.localStorage` + a
-// stubbed `fetch`, resetting the module between tests so the singleton state (the
-// `signedIn` / `accountSyncStarted` guards, the current notation) starts fresh.
-//
-// The GUARANTEE under test: an account NEVER gates the toggle. The anonymous path is
-// byte-for-byte unchanged (no network on an anonymous toggle); the profile value only
-// rides on top when a session is present.
-
 const STORAGE_KEY = "fluncle.admin.key-notation";
 
 function mockStorage() {
@@ -35,7 +26,6 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-/** A `fetch` stub routing the `/me` endpoints the sync + push touch. */
 function stubFetch(routes: {
   me?: { user: unknown };
   preferencesGet?: unknown;
@@ -70,14 +60,14 @@ function stubFetch(routes: {
 
 describe("key-notation account sync (adopt on sign-in)", () => {
   it("adopts the profile notation — the synced truth wins over the device value", async () => {
-    storage.setItem(STORAGE_KEY, "scales"); // device says scales
+    storage.setItem(STORAGE_KEY, "scales");
     stubFetch({ me: { user: { id: "u1" } }, preferencesGet: { keyNotation: "camelot" } });
 
     const mod = await import("./key-notation");
     await mod.syncKeyNotationFromAccount();
 
     expect(mod.getKeyNotation()).toBe("camelot");
-    expect(storage.getItem(STORAGE_KEY)).toBe("camelot"); // adopted onto the device too
+    expect(storage.getItem(STORAGE_KEY)).toBe("camelot");
   });
 
   it("leaves the store on default when the profile has no stored notation", async () => {
@@ -95,7 +85,7 @@ describe("key-notation account sync (adopt on sign-in)", () => {
     const mod = await import("./key-notation");
     await mod.syncKeyNotationFromAccount();
 
-    expect(fetchMock).toHaveBeenCalledTimes(1); // /api/me only; preferences never read
+    expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(mod.getKeyNotation()).toBe("scales");
   });
 
@@ -104,9 +94,9 @@ describe("key-notation account sync (adopt on sign-in)", () => {
 
     const mod = await import("./key-notation");
     await mod.syncKeyNotationFromAccount();
-    await mod.syncKeyNotationFromAccount(); // guarded — no second probe
+    await mod.syncKeyNotationFromAccount();
     const afterGuarded = fetchMock.mock.calls.length;
-    await mod.syncKeyNotationFromAccount({ force: true }); // forced — probes again
+    await mod.syncKeyNotationFromAccount({ force: true });
 
     expect(fetchMock.mock.calls.length).toBeGreaterThan(afterGuarded);
   });
@@ -122,14 +112,12 @@ describe("key-notation account sync (toggle write-through)", () => {
     });
 
     const mod = await import("./key-notation");
-    await mod.syncKeyNotationFromAccount(); // establishes the session
+    await mod.syncKeyNotationFromAccount();
     mod.setKeyNotation("camelot");
 
-    // The device write is synchronous + optimistic — never awaits the network.
     expect(storage.getItem(STORAGE_KEY)).toBe("camelot");
     expect(mod.getKeyNotation()).toBe("camelot");
 
-    // The profile mirror is fire-and-forget (csrf → PATCH); flush the microtasks.
     await vi.waitFor(() => {
       expect(fetchMock.mock.calls.some(([url]) => url === "/api/v1/me/csrf")).toBe(true);
       expect(patched).toEqual([{ keyNotation: "camelot" }]);
@@ -140,11 +128,11 @@ describe("key-notation account sync (toggle write-through)", () => {
     const fetchMock = stubFetch({ me: { user: null } });
 
     const mod = await import("./key-notation");
-    await mod.syncKeyNotationFromAccount(); // signedIn stays false
+    await mod.syncKeyNotationFromAccount();
     fetchMock.mockClear();
     mod.setKeyNotation("camelot");
 
     expect(storage.getItem(STORAGE_KEY)).toBe("camelot");
-    expect(fetchMock).not.toHaveBeenCalled(); // no csrf, no PATCH
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

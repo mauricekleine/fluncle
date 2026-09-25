@@ -2,16 +2,8 @@ import { type EditionDTO } from "@fluncle/contracts";
 
 export type { EditionDTO };
 
-/** A galaxy block as the archive page renders it (the content payload's shape). */
 export type EditionGalaxyBlock = NonNullable<EditionDTO["content"]["galaxies"]>[number];
 
-// The canonical galaxy reading order is now the LIVE sonic map (browse-by-feel RFC):
-// the operator-named galaxies in their public list order, passed in by the caller
-// (fetched from `listGalaxyNames`). A block's `galaxy` is a free label the agent
-// wrote, so match it case-insensitively against those live names; anything off-map
-// (e.g. "Also found", or a galaxy renamed since the edition was authored) keeps its
-// authored position after the known ones. Before the first galaxy is named the list
-// is empty and every block is off-map — so authored order is preserved, benign.
 function galaxyRank(label: string, knownGalaxyNames: readonly string[]): number {
   const index = knownGalaxyNames.findIndex(
     (name) => name.toLowerCase() === label.trim().toLowerCase(),
@@ -20,13 +12,6 @@ function galaxyRank(label: string, knownGalaxyNames: readonly string[]): number 
   return index === -1 ? knownGalaxyNames.length : index;
 }
 
-/**
- * Order an edition's galaxy blocks for reading — the live named galaxies in their
- * public list order, off-map labels trailing in authored order. A stable sort, so two
- * blocks with the same rank keep the order the agent wrote them in. Empty blocks (no
- * findings) are dropped so the page never renders a bare heading. `knownGalaxyNames`
- * is the live map (from `listGalaxyNames`); an empty list preserves authored order.
- */
 export function orderedGalaxies(
   content: EditionDTO["content"],
   knownGalaxyNames: readonly string[] = [],
@@ -42,11 +27,6 @@ export function orderedGalaxies(
     .map(({ block }) => block);
 }
 
-/**
- * A one-line preview of an edition for the archive list — the intro, trimmed to a
- * readable length on a word boundary with an ellipsis. Empty string when an
- * edition has no intro (the list falls back to its finding count).
- */
 export function editionIntroSnippet(content: EditionDTO["content"], maxLength = 140): string {
   const intro = content.intro?.trim();
 
@@ -66,12 +46,10 @@ export function editionIntroSnippet(content: EditionDTO["content"], maxLength = 
   return `${(lastSpace > maxLength * 0.6 ? clipped.slice(0, lastSpace) : clipped).trimEnd()}…`;
 }
 
-/** The total finding count across an edition's galaxy blocks (the list's fallback line). */
 export function editionFindingCount(content: EditionDTO["content"]): number {
   return (content.galaxies ?? []).reduce((sum, block) => sum + block.findings.length, 0);
 }
 
-/** The `editions` row shape the reads hydrate from (snake_case columns). */
 export type EditionRowLike = {
   added_at?: string | null;
   content_json: string;
@@ -86,12 +64,6 @@ export type EditionRowLike = {
   window_until?: string | null;
 };
 
-/**
- * The structured content the agent authors and the archive page + email both
- * render from. Parsed off `content_json` — a defensive parse keeps a malformed
- * payload from crashing a read (a draft mid-author could be partial). The fields
- * mirror `EditionContentSchema` (../../packages/contracts/src/orpc/_shared.ts).
- */
 function parseContent(contentJson: string): EditionDTO["content"] {
   try {
     const parsed = JSON.parse(contentJson) as unknown;
@@ -99,14 +71,11 @@ function parseContent(contentJson: string): EditionDTO["content"] {
     if (parsed && typeof parsed === "object") {
       return parsed as EditionDTO["content"];
     }
-  } catch {
-    // A malformed payload degrades to an empty edition body rather than a 500.
-  }
+  } catch {}
 
   return {};
 }
 
-/** Map a DB row to the public `EditionDTO` — the single mapping every read uses. */
 export function rowToEdition(row: EditionRowLike): EditionDTO {
   return {
     addedAt: row.added_at ?? undefined,

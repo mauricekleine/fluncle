@@ -11,10 +11,6 @@ import {
 } from "./sim";
 import { type Star } from "./types";
 
-// The pure-sim contract this game enforces: fuel burns and refuels, a
-// star parks and logs you, a dry tank drifts → tows → restarts, and N/N flips
-// the run home. All deterministic, state-in/state-out — no canvas, no audio.
-
 function makeStar(logId: string, x: number, y: number): Star {
   return {
     angle: 0,
@@ -76,7 +72,6 @@ describe("fuel", () => {
   it("warns low, then runs dry into adrift, then tows home and restarts", () => {
     const sim = createSim([makeStar("241.0.1A", 3000, 0)]);
 
-    // Already under the low-fuel line; burn it to empty.
     sim.ship.fuel = 2;
 
     let guard = 0;
@@ -89,8 +84,6 @@ describe("fuel", () => {
     expect(collectKinds(sim)).toContain("low-fuel");
     expect(sim.phase).toBe("adrift");
 
-    // The dead-stick drift, then the tow + restart (one death banked). Stop
-    // the moment the reset lands, before flight burns the fresh tank.
     guard = 0;
 
     while (sim.deaths === 0 && guard < 2000) {
@@ -163,7 +156,6 @@ describe("win", () => {
     expect(collectKinds(sim)).toContain("all-found");
     departOrbit(sim);
 
-    // Home with the full log: the run flips to the fly-home win.
     sim.ship.x = 0;
     sim.ship.y = 0;
     stepSim(sim, FLY, 1 / 60);

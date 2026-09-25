@@ -1,28 +1,12 @@
-// The shared RSS body behind the per-entity fresh feeds (/artist/<slug>/fresh.xml,
-// /label/<slug>/fresh.xml). Both routes narrow the whole-archive /fresh read to one entity and then
-// render the SAME two-tier RSS: a CERTIFIED finding links to its /log home and shows its cover; an
-// UNCERTIFIED catalogue row links OUT to Spotify only, with no /log and no cover (DESIGN.md's Unlit
-// Rule); a row with neither points nowhere. Every date is a RELEASE date, never a Found date
-// (VOICE.md's Found Rule). This mirrors the whole-archive /fresh.xml item contract verbatim, scoped.
-
 import { escapeXml } from "./feed-xml";
 import { siteUrl } from "./fluncle-links";
 import { itemId, itemLink, itemTitle, releaseInstant } from "./fresh-feed-item";
 import { type FreshTrack } from "./server/fresh";
 
-/** The site cover, reused for the feed-level image. */
 const coverUrl = `${siteUrl}/fluncle-cover.png`;
 
-/** The two entity kinds a per-entity fresh feed narrows to. */
 export type FreshFeedKind = "artist" | "label";
 
-/**
- * The RSS channel copy for a per-entity fresh feed — release-framed, scoped to the entity name, held
- * close to /fresh.xml's ratified "The freshest …, hot off the press. Every release from the last 30
- * days." line. The name does the work; the copy never claims Fluncle FOUND these (the Found Rule),
- * only that they just landed. An artist reads "New <name> releases"; a label reads "New releases on
- * <name>".
- */
 export function entityFreshChannel(
   kind: FreshFeedKind,
   name: string,
@@ -38,7 +22,6 @@ export function entityFreshChannel(
       };
 }
 
-/** Render the two-tier RSS 2.0 document for one entity's fresh tracks. */
 export function renderEntityFreshFeed(options: {
   description: string;
   link: string;
@@ -52,13 +35,12 @@ export function renderEntityFreshFeed(options: {
   const items = tracks.map((track) => {
     const itemTitleText = itemTitle(track);
     const itemLinkUrl = itemLink(track);
-    // Keep the Spotify link reachable in the body even when it is not the item link (a certified
-    // finding links to /log instead).
+
     const itemDescription = [itemTitleText, track.spotifyUrl ?? undefined]
       .filter(Boolean)
       .join("\n\n");
     const published = releaseInstant(track.releaseDate);
-    // Only a certified finding carries a cover; an uncertified row stays unlit.
+
     const imageUrl = track.coverImageUrl;
 
     return `<item>
@@ -88,18 +70,12 @@ ${items.join("\n")}
 </rss>`;
 }
 
-/** The cache + content-type headers every fresh feed serves (verbatim from /fresh.xml). */
 export function freshFeedResponse(xml: string, cacheControl: string): Response {
   return new Response(xml, {
     headers: {
-      // Readers get a short max-age; the CDN holds s-maxage; SWR keeps every repeat poll free
-      // while a background refresh runs.
       "Cache-Control": cacheControl,
       "Content-Type": "application/rss+xml; charset=utf-8",
-      // A feed is for readers, never a search result. Every artist/label page advertises its
-      // fresh feed via rel=alternate, so crawlers discover thousands of them — most an empty
-      // 30-day window — and without this they sit in GSC's "crawled, not indexed" judgment
-      // bucket being re-evaluated forever. noindex settles them without touching feed readers.
+
       "X-Robots-Tag": "noindex",
     },
   });

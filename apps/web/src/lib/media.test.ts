@@ -18,11 +18,6 @@ import {
   videoVersion,
 } from "./media";
 
-// The Media Transformations URLs are same-zone: the /cdn-cgi/media prefix lives
-// on the found.fluncle.com zone and the source is the master on that same zone,
-// so the transform never crosses an origin. These tests pin the URL shape
-// (https://developers.cloudflare.com/stream/transform-videos/) so a typo in the
-// options string — which would silently 404 to the fallback — is caught here.
 describe("videoRendition", () => {
   it("builds a same-zone mode=video transform pointing at the master footage", () => {
     expect(videoRendition("ABC123", { width: 720 })).toBe(
@@ -31,9 +26,6 @@ describe("videoRendition", () => {
   });
 
   it("rides the cache-bust token on the source so a re-rendered master re-keys the edge rendition", () => {
-    // Masters are overwritten in place (the square
-    // backfill), so the transform URL must carry a version or the edge keeps
-    // serving the stale rendition. Guard that the token is never silently dropped.
     expect(videoRendition("ABC123", { width: 720 })).toContain("/footage.mp4?v=");
   });
 
@@ -60,9 +52,6 @@ describe("videoRendition", () => {
   });
 });
 
-// The two-master crops + audio-strip. The square master
-// centre-crops to native-resolution portrait/landscape; TikTok strips audio off
-// the social cut via audio=false rather than a stored footage-silent.mp4.
 describe("videoCrop", () => {
   it("builds a centre-crop to portrait off the square master", () => {
     expect(videoCrop("ABC123", "portrait")).toBe(
@@ -81,15 +70,12 @@ describe("videoCrop", () => {
   });
 
   it("snaps the crop to a ladder width, deriving height from the portrait aspect (16/9)", () => {
-    // Stories sizes the crop to the measured pane (a 720-rung phone), not the
-    // native 1080. Height follows the 16/9 portrait ratio: round(720 * 16/9) = 1280.
     expect(videoCrop("ABC123", "portrait", 720)).toBe(
       `${FOUND_BASE}/cdn-cgi/media/fit=cover,width=720,height=1280/${FOUND_BASE}/ABC123/footage.mp4?v=1`,
     );
   });
 
   it("derives the landscape height from the 9/16 ratio at a requested width", () => {
-    // round(1280 * 9/16) = 720.
     expect(videoCrop("ABC123", "landscape", 1280)).toBe(
       `${FOUND_BASE}/cdn-cgi/media/fit=cover,width=1280,height=720/${FOUND_BASE}/ABC123/footage.mp4?v=1`,
     );
@@ -101,22 +87,15 @@ describe("videoCrop", () => {
   });
 
   it("folds audio=false into the SAME transform when silent (radio — never nested, one ?v)", () => {
-    // radio plays the observation over a silent cut. The crop + strip MUST be one
-    // combined transform; `videoAudioStripped(videoCrop(...))` nests a transform in
-    // a transform (Cloudflare 400s it) and double-appends `?v`. Verified 200 live.
     const url = videoCrop("ABC123", "landscape", undefined, true);
     expect(url).toBe(
       `${FOUND_BASE}/cdn-cgi/media/fit=cover,width=1920,height=1080,audio=false/${FOUND_BASE}/ABC123/footage.mp4?v=1`,
     );
-    expect(url.match(/cdn-cgi\/media/g)).toHaveLength(1); // one transform, not nested
-    expect(url.match(/\?v=/g)).toHaveLength(1); // one version token, not doubled
+    expect(url.match(/cdn-cgi\/media/g)).toHaveLength(1);
+    expect(url.match(/\?v=/g)).toHaveLength(1);
   });
 });
 
-// The squared poster twin: a single opening frame, centre-cropped to the same
-// orientation as videoCrop (Cloudflare MT accepts fit=cover + mode=frame —
-// verified 200 on a live portrait crop), so the squared <video> poster matches
-// the cropped clip instead of a square loading frame.
 describe("videoCropPoster", () => {
   it("builds a fit=cover + mode=frame portrait poster off the square master", () => {
     expect(videoCropPoster("ABC123", "portrait")).toBe(
@@ -143,8 +122,6 @@ describe("videoCropPoster", () => {
   });
 
   it("threads the offset frame for a mid-segment joiner (the shared-broadcast poster)", () => {
-    // A joiner 40s in must see the 40s still, not the opening frame, or the
-    // poster→video swap visibly jumps. The offset floors to whole seconds.
     expect(videoCropPoster("ABC123", "landscape", undefined, 40)).toBe(
       `${FOUND_BASE}/cdn-cgi/media/fit=cover,width=1920,height=1080,mode=frame,time=40s,format=jpg/${FOUND_BASE}/ABC123/footage.mp4?v=1`,
     );
@@ -156,10 +133,6 @@ describe("videoCropPoster", () => {
   });
 });
 
-// The fast offset-join clip (the radio-broadcast RFC Unit B). CF MT `mode=video`
-// `time=`/`duration=` returns a faststart rendition that BEGINS at the global
-// offset; a 5s/10s clip returns 200 as a ~7MB faststart, edge-cached rendition.
-// Crop + audio-strip + clip are ONE combined transform, never nested.
 describe("videoClipCrop", () => {
   it("builds one combined crop+strip+clip beginning at the offset (landscape)", () => {
     expect(videoClipCrop("ABC123", "landscape", 40, undefined, 20)).toBe(
@@ -211,8 +184,6 @@ describe("videoAudioStripped", () => {
     );
   });
 
-  // audio=false ALONE collapses to Cloudflare MT's ~202px default — a sub-720p
-  // cut TikTok rejects. The width is the load-bearing part of the fix, so pin it.
   it("requests an explicit width so the rendition is never the degenerate MT default", () => {
     const source = `${FOUND_BASE}/ABC123/footage.social.mp4`;
     expect(videoAudioStripped(source)).toContain("width=1080");
@@ -233,13 +204,9 @@ describe("videoPoster", () => {
   });
 });
 
-// Spotify encodes the pixel size in the image-id PREFIX (ab67616d0000b273 = 640²,
-// ab67616d00001e02 = 300², ab67616d00004851 = 64²). The helper swaps that prefix
-// to right-size a stored cover; these tests pin the codes (verified to resolve on
-// i.scdn.co) and guard the pass-through so a non-Spotify URL is never mangled.
 describe("albumCoverAtSize", () => {
   const HASH = "18c0fd64aad5d4fb51a499b0";
-  const stored = `https://i.scdn.co/image/ab67616d00001e02${HASH}`; // the 300² we store
+  const stored = `https://i.scdn.co/image/ab67616d00001e02${HASH}`;
 
   it("rewrites the size-code prefix to the small (64²) rendition", () => {
     expect(albumCoverAtSize(stored, "small")).toBe(
@@ -301,8 +268,6 @@ describe("albumCoverAtSize", () => {
   });
 });
 
-// trackMedia() must keep returning the RAW masters: admin, OG tags, and JSON-LD
-// all read it and must never be handed an edge-transform URL.
 describe("trackMedia (unchanged contract)", () => {
   it("returns raw master URLs, never /cdn-cgi/media transforms", () => {
     const media = trackMedia("ABC123");
@@ -316,17 +281,11 @@ describe("trackMedia (unchanged contract)", () => {
   });
 
   it("returns the BARE observation audio URL (the admin-overwrite source of truth)", () => {
-    // trackMedia is keyed by the logId alone (no render timestamp), so it stays
-    // the raw URL — the observe route reads it to PUT the object, and the DTO
-    // versions it for playback. It must never carry a ?v= here.
     expect(trackMedia("ABC123").observationAudioUrl).toBe(`${FOUND_BASE}/ABC123/observation.mp3`);
     expect(trackMedia("ABC123").observationAudioUrl).not.toContain("?v=");
   });
 });
 
-// The playback/consumer observation URL is versioned by observation_generated_at
-// so a re-`observe` (which overwrites observation.mp3 in place at the same R2 key)
-// re-keys the edge cache — the bare URL alone HITs stale until its max-age TTL.
 describe("versionedObservationAudioUrl", () => {
   const bare = `${FOUND_BASE}/ABC123/observation.mp3`;
 
@@ -360,10 +319,6 @@ describe("versionedObservationAudioUrl", () => {
   });
 });
 
-// The re-render purge set must mirror the builders above EXACTLY — a width the
-// surfaces request but the set omits stays stale; a width never requested is
-// wasted purge budget. These tests pin the set against the very builders it
-// shadows, so a future change to a builder that isn't reflected here fails.
 describe("videoPurgeUrls", () => {
   const LOG_ID = "004.7.2I";
 
@@ -419,7 +374,6 @@ describe("videoPurgeUrls", () => {
     const urls = videoPurgeUrls(LOG_ID, { squared: true });
 
     for (const orientation of ["landscape", "portrait"] as const) {
-      // native crop (no explicit width), silent loop, and opening poster
       expect(urls).toContain(videoCrop(LOG_ID, orientation));
       expect(urls).toContain(videoCrop(LOG_ID, orientation, undefined, true));
       expect(urls).toContain(videoCropPoster(LOG_ID, orientation));
@@ -440,9 +394,6 @@ describe("videoPurgeUrls", () => {
   });
 
   it("stays within two Cloudflare purge requests (the helper chunks at 30 URLs)", () => {
-    // The squared family is the larger set: 30 video/rendition URLs + the two
-    // bundle images (poster.jpg/cover.jpg) = 32, i.e. exactly two chunks. Keep it
-    // from creeping past that — a purge should stay a couple of requests, not a fan-out.
     expect(videoPurgeUrls(LOG_ID, { squared: true }).length).toBeLessThanOrEqual(60);
     expect(videoPurgeUrls(LOG_ID, { squared: true }).length).toBe(32);
   });
@@ -496,8 +447,6 @@ describe("videoVersion (the transform vintage token)", () => {
   });
 });
 
-// ── Owned cover masters (RFC U3b) ────────────────────────────────────────────
-
 const KEY = "albums/some-album.jpg";
 
 describe("ownedCoverUrl — Cloudflare Images transform", () => {
@@ -520,8 +469,6 @@ describe("ownedCoverUrl — Cloudflare Images transform", () => {
     expect(ownedCoverUrl(null, "x", "large")).toBeUndefined();
   });
 
-  // A master stamped before its `image_updated_at` column existed carries a null vintage. It must
-  // still SERVE — floored to the constant bust.
   it("floors a null vintage to the constant bust rather than failing", () => {
     expect(ownedCoverUrl(KEY, null, "large")).toBe(
       `${FOUND_BASE}/cdn-cgi/image/width=640,format=auto/${FOUND_BASE}/albums/some-album.jpg?v=1`,
@@ -536,11 +483,9 @@ describe("ownedCoverUrl — Cloudflare Images transform", () => {
   });
 });
 
-// A label's logo joins that same ladder: its own R2 master, the same transform, the same `?v`.
 describe("labelLogoUrl — the label logo on the owned-cover ladder", () => {
   const LOGO = "labels/hospital-records.jpg";
 
-  // The whole point of joining the ladder: a surface re-sizes a logo exactly as it re-sizes a cover.
   it("re-sizes through albumCoverAtSize like any other owned master", () => {
     const large = labelLogoUrl(LOGO, "2026-07-13T00:00:00.000Z");
 
@@ -555,7 +500,7 @@ describe("albumCoverAtSize — resizes BOTH providers", () => {
 
     expect(albumCoverAtSize(large, "small")).toContain("width=64,");
     expect(albumCoverAtSize(large, "tile")).toContain("width=300,");
-    // The ?v bust survives the resize (it rides the source, past the options).
+
     expect(albumCoverAtSize(large, "small")).toContain("?v=");
   });
 
@@ -570,20 +515,17 @@ describe("albumCoverAtSize — resizes BOTH providers", () => {
     );
   });
 
-  // The PORTRAIT family. Spotify keys an artist photo off `ab676161`, a different prefix from album
-  // art's `ab67616d`, on its own 640/320/160 ladder. Portraits use that ladder so a 1.5rem chip
-  // does not receive the stored 640² source.
   it("swaps a Spotify ARTIST-portrait prefix down its own ladder", () => {
     const portrait = "https://i.scdn.co/image/ab6761610000e5ebcafef00d";
 
     expect(albumCoverAtSize(portrait, "medium")).toBe(
       "https://i.scdn.co/image/ab67616100005174cafef00d",
     );
-    // No 64 rung exists for a portrait, so `small` clamps UP to Spotify's 160 floor.
+
     expect(albumCoverAtSize(portrait, "small")).toBe(
       "https://i.scdn.co/image/ab6761610000f178cafef00d",
     );
-    // …and `xl` clamps DOWN to 640, exactly as the album ladder does.
+
     expect(albumCoverAtSize(portrait, "xl")).toBe(portrait);
   });
 
@@ -593,8 +535,6 @@ describe("albumCoverAtSize — resizes BOTH providers", () => {
     );
   });
 
-  // A BARE R2 object on our own zone — no transform prefix, so there is no `width=` to rewrite.
-  // (A real label logo no longer arrives in this shape: `labelLogoUrl` transforms it.)
   it("passes a non-provider URL through untouched", () => {
     const bare = "https://found.fluncle.com/labels/some-label.jpg";
 
@@ -651,9 +591,6 @@ describe("bestArtistAvatarUrl — owned master preferred, raw avatar floor", () 
     expect(url).toBe(raw);
   });
 
-  // Both branches come out at `large`, so the DTO's contract is one size whichever provider
-  // answered — a consumer that never re-sizes (mobile, search) cannot land on a 160px portrait
-  // because that happened to be the rung the backfill stored.
   it("normalises a stored small portrait UP to the large rung", () => {
     const url = bestArtistAvatarUrl({
       imageKey: null,

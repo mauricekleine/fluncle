@@ -1,11 +1,3 @@
-// The mixtape coordinate — the `F`-marked Log ID on the spine, e.g. "019.F.1A".
-//
-// Client-safe (no server-only deps): the sector is the day-granular `sectorDay`
-// primitive shared with the finding Log ID, and the tail is a pure function of the
-// mint sequence. The mint lives server-side (publishMixtape in
-// lib/server/mixtapes.ts) and mints ONLY at publish. A plan's stable handle is the
-// Galaxy-vocab slug; the client never predicts a mixtape coordinate.
-
 import { sectorDay } from "./log-id-shared";
 
 const MIXTAPE_LETTERS = "ABCDEF";

@@ -20,7 +20,7 @@ describe("bioMetaDescription (the entity bio → ≤160 meta description trim)",
 
     expect(bio.length).toBeGreaterThan(160);
     expect(result.length).toBeLessThanOrEqual(160);
-    // A clean full first sentence, terminator kept, no ellipsis and no bleed into sentence two.
+
     expect(result.endsWith("dancefloor drum and bass.")).toBe(true);
     expect(result).not.toContain("…");
     expect(result).not.toContain("He runs");
@@ -38,8 +38,7 @@ describe("bioMetaDescription (the entity bio → ≤160 meta description trim)",
     expect(bio.length).toBeGreaterThan(160);
     expect(result.length).toBeLessThanOrEqual(160);
     expect(result.endsWith("…")).toBe(true);
-    // No mid-word cut: the head is a whole-word prefix of the bio (the next char is whitespace),
-    // and the char before the ellipsis is never a space.
+
     expect(bio.startsWith(head)).toBe(true);
     expect(/\s/u.test(bio.charAt(head.length))).toBe(true);
     expect(/\S…$/u.test(result)).toBe(true);
@@ -54,7 +53,7 @@ describe("bioMetaDescription (the entity bio → ≤160 meta description trim)",
   });
 
   it("keeps the FINAL string (ellipsis included) within the cap for a maximal bio", () => {
-    const bio = "word ".repeat(120).trim(); // ~600 chars, no sentence boundary at all
+    const bio = "word ".repeat(120).trim();
 
     expect(bioMetaDescription(bio).length).toBeLessThanOrEqual(160);
   });

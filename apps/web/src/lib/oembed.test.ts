@@ -113,7 +113,6 @@ describe("buildRichEmbed", () => {
     expect(capped.width).toBe(400);
     expect(capped.height).toBe(200);
 
-    // Never grown past the default, and never shrunk below the floor.
     const oversized = buildRichEmbed({ ...base, maxwidth: 5000 });
     expect(oversized.width).toBe(550);
     const tiny = buildRichEmbed({ ...base, maxwidth: 10 });

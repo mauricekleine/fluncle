@@ -13,10 +13,6 @@ import {
   searchPagePath,
 } from "./search-results";
 
-// The shared half of search — the module the ⌘K palette, the front door, and `/search` all read,
-// which is what stops the three surfaces drifting on what an answer MEANS. Everything here is pure,
-// so the whole vocabulary is pinned without a router, a DOM, or a database.
-
 function hit(overrides: Partial<SearchHit>): SearchHit {
   return {
     artists: ["Nova Kestrel"],
@@ -28,9 +24,6 @@ function hit(overrides: Partial<SearchHit>): SearchHit {
 }
 
 describe("searchPagePath — the persistent surface's URL", () => {
-  // THE ACCEPTANCE PROPERTY: the whole query state is one param, so every kind of query — a
-  // coordinate, a name, a sentence, a sonic reference — is shareable and reload-safe by
-  // construction, and no caller has to know which tier will answer it.
   it("carries every query kind in one round-trippable param", () => {
     for (const query of [
       "netsky",
@@ -50,8 +43,6 @@ describe("searchPagePath — the persistent surface's URL", () => {
     expect(searchPagePath("drum & bass?")).toBe("/search?q=drum%20%26%20bass%3F");
   });
 
-  // A blank query is a real destination (the zero state holds the worked examples), so it gets the
-  // bare path rather than an empty param that would fork the canonical URL in two.
   it("folds a blank or whitespace query onto the bare surface", () => {
     expect(searchPagePath()).toBe("/search");
     expect(searchPagePath("")).toBe("/search");
@@ -68,9 +59,6 @@ describe("searchPagePath — the persistent surface's URL", () => {
 });
 
 describe("the destinations", () => {
-  // THE CATALOGUE RULE on the wire: a finding goes to its coordinate, a track Fluncle never
-  // certified goes to its own destination, and neither is labelled — the difference is the
-  // destination and the register, never a badge.
   it("sends a finding to its coordinate and an uncertified track to its own destination", () => {
     expect(hitHref(hit({ certified: true, logId: "004.7.2I" }))).toEqual({
       external: false,
@@ -82,16 +70,12 @@ describe("the destinations", () => {
     });
   });
 
-  // The off-site anchor is the fallback for a row the destination REFUSES — one the archive cannot
-  // name — not the default for every uncertified row.
   it("falls back to the off-site anchor for a row the destination would refuse", () => {
     expect(
       hitHref(hit({ artists: [], spotifyUrl: "https://open.spotify.com/track/x", title: "" })),
     ).toEqual({ external: true, href: "https://open.spotify.com/track/x" });
   });
 
-  // A row with no destination AND no anchor is not a destination; a renderer must be able to tell,
-  // so it leaves the row as text rather than painting a dead link.
   it("declines a row that has nowhere to go", () => {
     expect(hitHref(hit({ artists: [], title: "" }))).toBeUndefined();
   });
@@ -171,9 +155,6 @@ describe("filterChips — what the language tier understood, echoed back", () =>
 });
 
 describe("SEARCH_EXAMPLES — one list, one owner", () => {
-  // The four are a lesson disguised as a shortcut: a coordinate, a bare name, a label, a sonic
-  // reference. Pinning the SHAPE here is what stops a fifth pill, or a duplicate tier, arriving
-  // unnoticed on one surface.
   it("teaches each tier exactly once, in one place", () => {
     expect(SEARCH_EXAMPLES.map((example) => example.icon)).toEqual([
       "token",
@@ -183,23 +164,12 @@ describe("SEARCH_EXAMPLES — one list, one owner", () => {
     ]);
   });
 
-  // THE CONTRACT, stated where the list lives. An example query is shown to readers as one that
-  // WORKS, and the only way to keep that promise is for every one of them to be answered by a tier
-  // that cannot vary — never the language tier, whose parse of the same sentence differs run to
-  // run (one parse returned rows, the next added a stray `text` filter and returned nothing).
-  //
-  // This asserts the DECLARATION; the two halves that assert the behaviour are
-  // `lib/server/search-examples.integration.test.ts` (answered deterministically, against a real
-  // database, with the model stubbed off) and `scripts/post-deploy-probe.ts` (non-empty against
-  // the live archive, after every deploy).
   it("declares only deterministic tiers — never the language tier", () => {
     for (const example of SEARCH_EXAMPLES) {
       expect(["coordinate", "sonic", "token"]).toContain(example.icon);
     }
   });
 
-  // An example query that finds nothing teaches the opposite of what it is for, so every one has to
-  // be a real, resolvable query — which at minimum means it clears the resolver's own floor.
   it("offers only queries the resolver will actually run", () => {
     for (const example of SEARCH_EXAMPLES) {
       expect(example.query.trim()).toBe(example.query);

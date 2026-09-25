@@ -1,18 +1,3 @@
-// The entity description is "reused verbatim; edit it here or nowhere" (see
-// ./identity.ts, and VOICE.md §7's Meta description row). Every TypeScript surface
-// honours that by importing the constant — home/about/reach heads, the MCP server
-// card, agent-discovery's markdown, the JSON-LD.
-//
-// Two surfaces cannot import it, because they are static assets served straight off
-// disk: `public/llms.txt` (the plain-language map every LLM and crawler reads) and
-// `public/manifest.webmanifest` (the installed PWA's description). Both hold a
-// HAND-COPIED duplicate of the same sentence, and nothing checked that the copies
-// still matched — so an edit to `fluncleDescription` would silently leave the two
-// most machine-read surfaces quoting the previous entity description.
-//
-// This is that check. It asserts equality, not containment: a paraphrase is exactly
-// the failure the verbatim rule exists to prevent, and containment would pass one.
-
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -28,8 +13,6 @@ function readPublicAsset(name: string): string {
 
 describe("the canonical entity description", () => {
   it("is quoted verbatim by public/llms.txt", () => {
-    // The blockquote directly under the `# Fluncle` heading — llms.txt's summary
-    // line, which is where the spec puts the one-sentence description of the site.
     const blockquote = readPublicAsset("llms.txt")
       .split("\n")
       .find((line) => line.startsWith("> "));
@@ -48,31 +31,8 @@ describe("the canonical entity description", () => {
   });
 });
 
-// THE TAGLINE, the other half of the same rule.
-//
-// `fluncleDescription` and `fluncleMetaDescription` both OPEN with it, and it is the
-// shortest form of the entity a stranger meets: the SSH figlet's under-line, the home
-// masthead, the global footer, the feed subtitles, the API reference's summary, the
-// Bluesky link card, the video close card, the Homebrew formula's `desc`. Twenty-one
-// files spell it out by hand, and they cannot all import a constant — one is Go, one is
-// Ruby, three are static assets served straight off disk, four render it HTML-escaped,
-// and one deliberately lowercases it inside a `<title>`. So the constant is the NAME of
-// the string rather than its only copy, and this is the pin that makes the copies one
-// edit: it derives its search from `fluncleTagline` itself, so changing the constant
-// without sweeping the sites empties the scan and fails here rather than shipping a
-// half-renamed entity.
-//
-// `*.test.*` files are skipped: a test that quotes the tagline already asserts on it and
-// fails on its own terms. `packages/skills` is skipped too — the copywriting skill quotes
-// the tagline as CANON (it is where the string is ratified), not as a surface that ships it.
-
 const REPO_ROOT = fileURLToPath(new URL("../../../../", import.meta.url));
 
-/**
- * Every file that spells the tagline out. Verified by the scan below, which fails both
- * ways: a new hand-typed copy that is not listed here, and a listed file that stopped
- * carrying it (which is what an un-swept edit to `fluncleTagline` looks like).
- */
 const TAGLINE_SITES = [
   "apps/cli/packaging/homebrew/fluncle.rb",
   "apps/cli/scripts/build-npm.ts",
@@ -98,23 +58,13 @@ const TAGLINE_SITES = [
 
 const SCAN_ROOTS = ["apps", "packages"];
 
-/**
- * Build output, vendored trees, and the canon that RATIFIES the tagline. Every
- * DOT-directory goes too, by rule rather than by name: `.expo`, `.output`, `.turbo`,
- * `apps/web/.dev` and whatever the next tool digs are untracked local artifacts, and one
- * of them holding a stale copy of the tagline would fail this scan on a developer's
- * machine while passing in CI.
- */
 const SKIPPED_DIRECTORIES = new Set([
   "build",
   "coverage",
   "dist",
   "node_modules",
   "out",
-  // Playwright's two artifact trees (both gitignored). Neither starts with a dot, so the rule
-  // above misses them — and an e2e run drops report and error-context files here that QUOTE the
-  // rendered page, tagline and all. That is this comment's own scenario: a red on a machine
-  // where the suite has run once, green in CI where it never has.
+
   "playwright-report",
   "skills",
   "target",
@@ -137,12 +87,6 @@ const SCANNED_EXTENSIONS = [
   ".webmanifest",
 ];
 
-/**
- * The tagline's SHAPE, derived from the constant so the two can never disagree: word
- * boundaries go loose, and the ampersand also matches its HTML entity and the spelled-out
- * "and". That looseness is the point — it catches a near-miss spelling ("Drum and bass
- * bangers from another dimension") that an exact search would walk straight past.
- */
 function looseTagline(): RegExp {
   const shape = fluncleTagline
     .split(/\s+/)
@@ -189,7 +133,6 @@ function codeWithoutComments(file: string, source: string): string {
   return code + source.slice(cursor);
 }
 
-/** Every tagline-shaped match in the repo, un-escaped back to what a reader sees. */
 function taglineMatches(): { file: string; text: string }[] {
   const files: string[] = [];
   for (const root of SCAN_ROOTS) {
@@ -220,9 +163,6 @@ describe("the canonical tagline", () => {
   });
 
   it("is spelled the same way at every one of them", () => {
-    // The one sanctioned variant: `__root.tsx` and the build banner lowercase the whole
-    // line INSIDE a title ("Fluncle: drum & bass bangers from another dimension"), which
-    // is sentence case doing its job, not a second spelling of the name.
     const drifted = taglineMatches()
       .filter(({ text }) => text !== fluncleTagline && text !== fluncleTagline.toLowerCase())
       .map(({ file, text }) => `${file} ${JSON.stringify(text)}`);

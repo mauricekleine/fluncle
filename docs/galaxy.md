@@ -22,6 +22,10 @@ The TypeScript placement and simulation authority is pinned by frozen golden fix
 
 The carrier previews enter the Web Audio gain and pan graph through the same-origin `/api/preview` proxy so the graph can read them without third-party CORS failures. A missing preview stays silent while its star remains navigable.
 
+The renderer draws on a 270px canvas and enlarges it by an integer scale so pixels and text stay crisp. It warms the canvas fonts before the first frame; HUD text is positioned from the measured cap height of `H`, since CSS font metric overrides can move Canvas's `top` baseline and strings without ascenders would otherwise jump. The gate plate uses alphabetic baselines before the HUD draws. Film texture is stronger over the world than over instruments so the readouts remain legible.
+
+Fuel is the flight sim's only run-ending pressure: a dry tank drifts and tows the ship home, while asteroid hits spend fuel and black holes transport it with a survivable top-up. A tow preserves the lifetime log and rebuilds the same seeded frontier. Reaching every star only starts the flight home when the run logged at least one new star; a returning player with a complete lifetime log cannot win merely by spawning beside Earth.
+
 ## The atlas
 
 **C** toggles the atlas in flight (C or Esc closes it): a full-screen top-down map of the voyage — the in-game chart and the demo surface in one, because the map shows the archive's growth inherently: with every new finding, the galaxy grows.

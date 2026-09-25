@@ -1,10 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { pageParam, textParam } from "./search-params";
 
-// The coercers every paged public hub narrows its URL with. A query string is attacker- and
-// crawler-authored, so the contract under test is TOLERANCE: junk folds to `undefined` (the bare
-// canonical view) rather than throwing, clamping, or minting a second URL for the same content.
-
 describe("pageParam", () => {
   it("keeps a page a reader can actually be on", () => {
     expect(pageParam("1")).toBe(1);

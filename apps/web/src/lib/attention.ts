@@ -1,15 +1,3 @@
-// The attention queue's pure model. Every decision the `/admin` home makes — which
-// rows exist, which tier they ride, what order they land in, what the working set
-// is, what a deadline reads as — lives here as plain functions over plain data with
-// an injected clock, so the queue's mechanics are provable without a database or a
-// browser (the track-stage.ts precedent). The server (lib/server/attention.ts) feeds `derive*` real
-// rows; the route feeds `orderQueue` the operator's snooze/won't-do prefs.
-//
-// The two-tier ordering is ratified: DEADLINE rows (a TikTok inbox draft racing
-// its 24h bounce) sort by time-to-deadline, everything else oldest-first. The
-// bounded working set keeps zero winnable: the top rows count toward zero, the
-// rest age into a backlog behind [Show all].
-
 import { TIKTOK_DRAFT_STALE_MS, trackLabel } from "@fluncle/contracts/util";
 import {
   type AttentionRow,
@@ -17,20 +5,8 @@ import {
   type AttentionSourceCount,
 } from "@fluncle/contracts";
 
-// ─── The rows ────────────────────────────────────────────────────────────────
-
-/**
- * The contract's source enum is exhaustive. `SOURCE_ORDER`, `primaryFor`, and `briefPhrase` below,
- * the admin route, CLI, and Raycast maps must cover every member.
- */
 export type { AttentionSource };
-/**
- * The near-match on an anchor-review row: what the anchor gate refused, and whether it is
- * anchorable. `descriptor` is the version words that differ from ours ("" when the CANDIDATE is the
- * plain one and we are the labelled one); `deltaMs` is signed and inside ±1s by construction — the
- * whole reason the descriptor disagreement reads as an upstream labelling error. `spotifyTrackId`
- * absent ⇒ nothing to anchor to, so the row is informational and Accept is never offered.
- */
+
 export type AttentionCandidate = {
   artists: string[];
   deltaMs: number;
@@ -39,55 +15,44 @@ export type AttentionCandidate = {
   title: string;
 };
 
-/** One row of the queue — artwork, the object line, data, and action routing. */
 export type AttentionItem = {
-  /** The oldest-first anchor (when this became the system's business). */
   anchorAt: string;
-  /** Cover art / mixtape cover; absent ⇒ the glyph tile (a recording has no cover). */
+
   artUrl?: string;
-  /** Held-note rows: how many times this finding's auto-note has bounced off the echo gate. */
+
   attempts?: number;
-  /** Anchor-review rows: the near-match the gate refused, and whether it can be anchored to. */
+
   candidate?: AttentionCandidate;
-  /** Present ⇒ the row rides the deadline tier, ordered by time-to-deadline. */
+
   deadlineAt?: string;
-  /** Bio-review rows: which entity the bypassed bio is about (the ruling's target). */
+
   entity?: { kind: "album" | "artist" | "label"; slug: string };
-  /** The deep-link target when the primary action navigates. */
+
   href?: string;
-  /** Stable identity (`source:objectId`) — the snooze/won't-do map keys on it. */
+
   id: string;
   logId?: string;
-  /** The machine an action is bound to (the machine model). */
+
   machine?: "M2" | "M5";
-  /** Anchor-review rows: the MusicBrainz recording page, where the metadata gets fixed upstream. */
+
   mbUrl?: string;
-  /** Distribution legs still missing on a promoted mixtape. */
+
   missing?: ("mixcloud" | "youtube")[];
-  /** Artist-review rows: how many of an artist's socials still need a look. */
+
   reviewLinks?: number;
   source: AttentionSource;
   title: string;
   trackId?: string;
-  /** A submission row's pre-chew triage verdict (the sweep's advisory one-liner). */
+
   verdict?: string;
-  /** Bio-review rows: the voice-gate reasons the final-attempt acceptance let through. */
+
   violations?: string[];
-  /** How many dressed findings wait behind this one (the post-tiktok row's datum). */
+
   waiting?: number;
 };
 
-// ─── Derivation (server-fed row shapes → items) ─────────────────────────────
-
-/** A finding's post status on one platform (absent ⇒ never pushed). */
 export type SocialStatus = "draft" | "scheduled" | "published" | "failed";
 
-/**
- * A dressed (video'd) finding with a pending distribution leg, joined to its per-platform
- * post state. The two platforms post differently, so each is its own todo: TikTok goes
- * none → draft (a silent inbox draft you finish in-app) → published; YouTube posts a public
- * Short the moment you push (none → published).
- */
 export type ClipInput = {
   addedAt: string;
   artUrl?: string;
@@ -96,197 +61,138 @@ export type ClipInput = {
   title: string;
   trackId: string;
   tiktokStatus?: SocialStatus;
-  /** The TikTok draft's push time — the 24h bounce clock (set when tiktokStatus is "draft"). */
+
   tiktokUpdatedAt?: string;
   youtubeStatus?: SocialStatus;
 };
 
-/** A distribution leg is settled once it's live (published) or scheduled to go. */
 function isPosted(status?: SocialStatus): boolean {
   return status === "published" || status === "scheduled";
 }
 
-/** A recording, trimmed to the cues verdict (`hasVideo && no tracklist`). */
 export type RecordingInput = {
   createdAt: string;
   hasVideo: boolean;
   id: string;
-  /** Present ⇒ already promoted; its cues shipped with the mixtape. */
+
   mixtapeId?: string;
   title: string;
   tracklistLength: number;
 };
 
-/** A mixtape, trimmed to the distribution verdict (`status` + the two leg URLs). */
 export type MixtapeInput = {
   anchorAt?: string;
   artUrl?: string;
   id: string;
   logId?: string;
   mixcloudUrl?: string;
-  /** The promoted-from recording — the Studio deep-link target. */
+
   recordingId?: string;
   status: string;
   title: string;
   youtubeUrl?: string;
 };
 
-/** A clip drip row, trimmed to the queue-depth read. */
 export type ClipPostInput = {
   scheduledFor: string;
   status: string;
 };
 
-/** An artist with unfinished review work (links discovered since the last "Looks good"). */
 export type ArtistReviewInput = {
-  /** The oldest not-yet-actioned social's stamp — the queue's oldest-first anchor. */
   anchorAt: string;
   artistId: string;
   name: string;
-  /** How many socials still need a look. */
+
   pending: number;
 };
 
-/**
- * A label nobody has ruled on yet — a banger landed on an imprint Fluncle has never
- * seen, so the operator has to say whether the next crawl may seed from it. Ruling is
- * CRAWL SCOPE ONLY: it never touches the finding that surfaced the label, or anything
- * else already stored.
- */
 export type LabelReviewInput = {
-  /** When the label first landed in the archive — the queue's oldest-first anchor. */
   anchorAt: string;
   labelId: string;
   name: string;
 };
 
-/**
- * An artist / label / album whose BIO landed only because it was the sweep's final attempt.
- *
- * The entity-bio sweep gives an entity three authoring passes, and the third draft is stored even
- * when the voice scan refuses it — the operator's ruling, and it stands, because the alternative is
- * a queue that spins on one entity forever. But a bio that landed that way is public copy the gate
- * said NO to, sitting on `/artist/<slug>`, in its JSON-LD, and on `/mcp`, and until this row existed
- * the only thing that knew was a line in a cron's stderr. So it becomes a queue row carrying the
- * gate's own reasons, and he rules: the bio stands, or it goes back for a rewrite.
- */
 export type BioReviewInput = {
-  /** When the acceptance happened — the queue's oldest-first anchor. */
   anchorAt: string;
   kind: "album" | "artist" | "label";
   name: string;
   slug: string;
-  /** The voice-gate reasons that were ACCEPTED, verbatim — the row's evidence. */
+
   violations: string[];
 };
 
-/**
- * A catalogue row the Spotify-anchor gate refused for ONE readable reason: a candidate that agreed
- * on artists, base title, and duration but named a different version — the fingerprint of metadata
- * that omits the version, so the row misses forever and retires under the retry cap. The gate
- * records the near-match instead of discarding it (lib/server/anchor.ts § the anchor review); this
- * is that note, on its way to a queue row the operator can rule on.
- */
 export type AnchorReviewInput = {
-  /** When the suspicion was recorded — the queue's oldest-first anchor. */
   anchorAt: string;
   artUrl?: string;
   artists: string[];
   candidateArtists: string[];
   candidateDescriptor: string;
-  /** Present ⇒ the candidate is anchorable, so the row offers Accept. */
+
   candidateSpotifyTrackId?: string;
   candidateTitle: string;
-  /** SIGNED candidate − row duration, in ms. */
+
   deltaMs: number;
-  /** The bare MusicBrainz recording MBID, when the row carries one. */
+
   mbRecordingId?: string;
   title: string;
   trackId: string;
 };
 
-/** A pending crew submission awaiting the operator's approve/reject in the review tray. */
 export type SubmissionInput = {
   artUrl?: string;
   artists: string[];
-  /** The oldest-first anchor (when the crew sent it in). */
+
   createdAt: string;
-  /** The submission id — the review-tray deep-link target and the row identity. */
+
   id: string;
   title: string;
-  /** The pre-chew sweep's advisory verdict, when it has visited (else undefined). */
+
   triageVerdict?: string;
 };
 
-/**
- * An auto-note the echo gate REFUSED to store, held for the operator's eye.
- *
- * The gate rejects a note that lifts a phrase from a sonic neighbour or reuses its words
- * wholesale — correctly, and it still refuses to store it. But a rejection that nobody can
- * see is a rejection nobody can supervise: he cannot read what the model wrote, cannot
- * judge whether it really was worse than nothing, and cannot tell whether the gate's dials
- * are wrong, because the evidence would be gone. So it becomes a queue row.
- */
 export type NoteRejectionInput = {
-  /** The latest bounce — the queue's oldest-first anchor. */
   anchorAt: string;
   artUrl?: string;
   artists: string[];
-  /** How many times this finding's note has bounced (a high count = it's stuck). */
+
   attempts: number;
-  /** The rejection id — the row identity. */
+
   id: string;
   title: string;
-  /** The finding — the note dialog's deep-link target. */
+
   trackId: string;
 };
 
-/**
- * An observation script the echo gate REFUSED to render, held for the operator's eye — the
- * spoken sibling of `NoteRejectionInput`. The gate rejects a script that lifts a phrase from a
- * sonic neighbour's script (before any Cartesia render is spent) and still refuses to render it,
- * but the script is no longer destroyed: it becomes a queue row so the operator can read what
- * the model wrote and rule (render it anyway, or agree with the gate).
- */
 export type ObservationRejectionInput = {
-  /** The FIRST hold — the queue's oldest-first anchor. */
   anchorAt: string;
   artUrl?: string;
   artists: string[];
-  /** How many times this finding's observation has bounced (a high count = it's stuck). */
+
   attempts: number;
-  /** The rejection id — the row identity. */
+
   id: string;
   logId?: string;
   title: string;
-  /** The finding — the review deep-link target. */
+
   trackId: string;
 };
 
-/**
- * A FINDING whose captured audio failed the fingerprint check against its official preview
- * (docs/the-ear.md § Wrong audio). The backfill stamped it `capture_verification = 'mismatch'` and
- * stops — a machine never rewinds a public finding — so it lands here for the operator, who
- * auditions and rules with `flag_wrong_audio`. Catalogue mismatches never appear (they quarantine).
- */
 export type CaptureSuspectInput = {
   artUrl?: string;
   artists: string[];
-  /** When the mismatch was recorded — the queue's oldest-first anchor. */
+
   anchorAt: string;
   logId?: string;
   title: string;
-  /** The finding — the flag target (`fluncle admin catalogue flag-wrong-audio <trackId>`). */
+
   trackId: string;
 };
 
-/** A drafted-but-unsent weekly newsletter edition awaiting the operator's send. */
 export type NewsletterInput = {
-  /** When the Friday sweep authored the draft — the queue's oldest-first anchor. */
   draftedAt: string;
-  /** The edition uuid — the row identity and the newsletter-page target. */
+
   id: string;
-  /** The edition's subject line (the row title); a barely-authored draft may lack one. */
+
   subject?: string;
 };
 
@@ -306,12 +212,10 @@ export type AttentionInputs = {
   submissions: SubmissionInput[];
 };
 
-/** When a pushed TikTok draft bounces: `updatedAt` + the shared 24h window. */
 export function draftDeadline(updatedAt: string): string {
   return new Date(Date.parse(updatedAt) + TIKTOK_DRAFT_STALE_MS).toISOString();
 }
 
-/** The Friday letter's send-by: a day after drafting it reads late. */
 export function newsletterDeadline(draftedAt: string): string {
   return new Date(Date.parse(draftedAt) + 24 * 60 * 60 * 1000).toISOString();
 }
@@ -365,14 +269,6 @@ function appendClipAttentionItems(items: AttentionItem[], clips: ClipInput[]): v
   }
 }
 
-/**
- * Map the sources' raw rows into queue items. Pure and clock-injected. A clip's two
- * distribution legs (TikTok, YouTube) are SEPARATE todos — each posts differently — so a
- * clip yields up to two rows, but only the oldest clip with a pending leg surfaces them:
- * the next clip appears once both of this one's legs land. Independent of that gate, every
- * TikTok inbox draft is a deadline row racing its 24h bounce (finish it / re-push it), so an
- * in-flight draft is never hidden behind the one-clip-at-a-time queue.
- */
 function appendRecordingAttentionItems(
   items: AttentionItem[],
   recordings: AttentionInputs["recordings"],
@@ -427,20 +323,12 @@ function appendMixtapeAttentionItems(
 export function deriveAttentionItems(inputs: AttentionInputs, now: number): AttentionItem[] {
   const items: AttentionItem[] = [];
 
-  // Every pending TikTok inbox draft races the 24h bounce — the one true deadline. ALL are
-  // shown (urgency), regardless of the one-clip-at-a-time gate on fresh pushes below.
   appendClipAttentionItems(items, inputs.clips);
 
-  // A recorded take with no cue tracklist — nothing downstream (chapters, clips,
-  // promote) works without cues. Derivation runs against Rekordbox on the M2.
   appendRecordingAttentionItems(items, inputs.recordings);
 
-  // A minted mixtape still mid-distribution — its missing legs (YouTube video,
-  // Mixcloud audio) move multi-GB masters, so the action is M5-bound.
   appendMixtapeAttentionItems(items, inputs.mixtapes, now);
 
-  // The Instagram drip has nothing left to post — one singleton row, anchored to
-  // the last slot that fired so it ages like everything else.
   const scheduled = inputs.clipPosts.filter((post) => post.status === "scheduled");
   if (scheduled.length === 0) {
     const lastSlot = inputs.clipPosts
@@ -457,8 +345,6 @@ export function deriveAttentionItems(inputs: AttentionInputs, now: number): Atte
     });
   }
 
-  // Each artist with unfinished review work is one row — the count is the datum, the
-  // primary action deep-links to /admin/artists (the manage surface) with it focused.
   for (const review of inputs.artistReviews) {
     items.push({
       anchorAt: review.anchorAt,
@@ -470,11 +356,6 @@ export function deriveAttentionItems(inputs: AttentionInputs, now: number): Atte
     });
   }
 
-  // Each unruled label is one row — a finding landed on an imprint nobody has ruled on,
-  // so the next crawl doesn't know whether it may seed from it. Oldest-first, deep-linking
-  // to /admin/labels where the three-state control lives. The ruling is CRAWL SCOPE ONLY:
-  // it changes what the NEXT crawl seeds from and touches nothing already stored, so this
-  // row is never urgent and never carries a deadline.
   for (const review of inputs.labelReviews) {
     items.push({
       anchorAt: review.anchorAt,
@@ -485,14 +366,6 @@ export function deriveAttentionItems(inputs: AttentionInputs, now: number): Atte
     });
   }
 
-  // Each bio that landed only because it was the sweep's FINAL attempt is one row — the voice gate
-  // read the paragraph, said no, and it went live anyway (the operator's own ruling, so the sweep
-  // terminates). That acceptance needs a row rather than a line in a cron log, which is a review flag
-  // with no reader; here it is the row, carrying the gate's own reasons so the ruling can be made
-  // from the queue instead of from a grep. Both rulings act on state the server already holds, so
-  // like the anchor-review row the decision IS the row — there is no bio station to deep-link to.
-  // Never a deadline: the paragraph has already shipped, so nothing is racing; it is here to be
-  // SEEN. Oldest acceptance first, and it settles out the moment he rules.
   for (const review of inputs.bioReviews) {
     items.push({
       anchorAt: review.anchorAt,
@@ -504,14 +377,6 @@ export function deriveAttentionItems(inputs: AttentionInputs, now: number): Atte
     });
   }
 
-  // Each suspected version mismatch is one row — the anchor gate found a candidate that agreed
-  // with the row on everything except the version's NAME, which is how a comp track billed
-  // without its "(… Remix)" suffix looks from the outside. The gate refused it (a wrong anchor is
-  // worse than none) and wrote the near-match down; this row is the operator reading it. Never a
-  // deadline: the row is simply un-anchored, a state it has been in for months and can stay in.
-  // The ruling lives inline (both actions are one tap on the stored candidate — there is no
-  // station to deep-link to), and the MusicBrainz link rides along so he can fix the metadata at
-  // the source and let every downstream consumer benefit, not just us.
   for (const review of inputs.anchorReviews) {
     items.push({
       anchorAt: review.anchorAt,
@@ -535,12 +400,6 @@ export function deriveAttentionItems(inputs: AttentionInputs, now: number): Atte
     });
   }
 
-  // Each finding whose capture failed fingerprint verification is one row — the backfill caught a
-  // finding whose stored audio does not match its official preview and STOPPED (a machine does not
-  // rewind a public finding), so the operator auditions and rules with `flag_wrong_audio`. Never a
-  // deadline: the wrong bytes are inaudible on every public surface (site/video/radio play the
-  // preview), so nothing is on fire — it is a correctness cleanup, seen not chased. Deep-links to
-  // the catalogue workstation where the wrong-audio verdict lives.
   for (const suspect of inputs.captureSuspects) {
     items.push({
       anchorAt: suspect.anchorAt,
@@ -554,17 +413,10 @@ export function deriveAttentionItems(inputs: AttentionInputs, now: number): Atte
     });
   }
 
-  // Each drafted-but-unsent newsletter edition is one row — the Friday sweep authored it
-  // and posted the send command to Discord, but the send is operator-only, so until the
-  // operator runs it the draft waits invisibly. Anchored to when it was drafted, deep-linking
-  // to /admin/newsletter where the review + Send control lives (the send authority stays on
-  // that page, never on the queue row). One draft per window in practice.
   for (const newsletter of inputs.newsletters) {
     items.push({
       anchorAt: newsletter.draftedAt,
-      // The Friday letter wants to go out while it is still Friday-fresh: a day after
-      // drafting it reads late, so the draft rides the DEADLINE tier (top of the queue)
-      // instead of sinking to the bottom of the backlog as its newest item.
+
       deadlineAt: newsletterDeadline(newsletter.draftedAt),
       href: "/admin/newsletter",
       id: `newsletter:${newsletter.id}`,
@@ -573,13 +425,6 @@ export function deriveAttentionItems(inputs: AttentionInputs, now: number): Atte
     });
   }
 
-  // Each held auto-note is one row — the echo gate wrote a line, judged it too close to a
-  // neighbour's, and refused to store it. It is NOT thrown away: the operator reads what
-  // the model wrote, sees which neighbour it echoed and by how much, and rules — keep it,
-  // edit it, or bin it. Deep-links to the finding's note dialog, where the held note and
-  // the neighbour it echoed sit side by side. One row per finding (the ledger holds one
-  // open rejection each), oldest-first, and never a deadline: a note-less finding is not
-  // urgent, it is just unfinished.
   for (const rejection of inputs.noteRejections) {
     items.push({
       anchorAt: rejection.anchorAt,
@@ -593,11 +438,6 @@ export function deriveAttentionItems(inputs: AttentionInputs, now: number): Atte
     });
   }
 
-  // Each held observation is one row — the echo gate wrote a spoken script, judged it too
-  // close to a sonic neighbour's, and refused to render it (before spending a cent). Like the
-  // held note, it is NOT thrown away: the operator reads what the model wrote and rules — render
-  // it anyway, or bin it. One row per finding (the ledger holds one open rejection each),
-  // oldest-first, never a deadline: an observation-less finding is unfinished, not urgent.
   for (const rejection of inputs.observationRejections) {
     items.push({
       anchorAt: rejection.anchorAt,
@@ -612,10 +452,6 @@ export function deriveAttentionItems(inputs: AttentionInputs, now: number): Atte
     });
   }
 
-  // Each pending crew submission is one row — a banger someone sent in, waiting on the
-  // operator's approve/reject. Oldest-first, deep-linking to the exact submission in the
-  // review tray (findings board). Its pre-chew triage verdict rides along as the row's
-  // advisory read when the sweep has visited; the decision itself stays operator-only.
   for (const submission of inputs.submissions) {
     items.push({
       anchorAt: submission.createdAt,
@@ -631,33 +467,22 @@ export function deriveAttentionItems(inputs: AttentionInputs, now: number): Atte
   return items;
 }
 
-// ─── Ordering + the working set ──────────────────────────────────────────────
-
-/** The operator's per-row decisions, persisted client-side (one operator, one browser). */
 export type QueuePrefs = {
   [id: string]: { snoozedUntil?: string; wontDoAt?: string } | undefined;
 };
 
 export type OrderedQueue = {
-  /** Beyond the working set — still active, behind [Show all]. */
   backlog: AttentionItem[];
-  /** Permanently dismissed ("Won't do") — restorable, never counted. */
+
   dismissed: AttentionItem[];
-  /** The bounded working set — these count toward zero. */
+
   due: AttentionItem[];
-  /** Snoozed until a time that hasn't passed yet. */
+
   snoozed: AttentionItem[];
 };
 
-/** The working-set bound: zero stays winnable, the rest is the backlog. */
 export const WORKING_SET_SIZE = 7;
 
-/**
- * Two-tier order + the operator's prefs: won't-do rows drop to `dismissed`,
- * unexpired snoozes to `snoozed` (an expired snooze re-enters on its own), then
- * deadline rows sort by time-to-deadline and everything else oldest-first. The
- * first `WORKING_SET_SIZE` are `due`; the rest are the backlog.
- */
 export function orderQueue(items: AttentionItem[], prefs: QueuePrefs, now: number): OrderedQueue {
   const active: AttentionItem[] = [];
   const snoozed: AttentionItem[] = [];
@@ -697,9 +522,6 @@ export function orderQueue(items: AttentionItem[], prefs: QueuePrefs, now: numbe
   };
 }
 
-// ─── The instrument readouts (Oxanium tabular data, never prose) ─────────────
-
-/** A duration as the panel's shortest honest unit: `17d`, `3h`, `12m`, `0m`. */
 export function formatSpan(ms: number): string {
   const clamped = Math.max(0, ms);
   const days = Math.floor(clamped / 86_400_000);
@@ -713,12 +535,6 @@ export function formatSpan(ms: number): string {
   return `${Math.floor(clamped / 60_000)}m`;
 }
 
-/**
- * A signed duration gap as the anchor-review row reads it: `+0.4s`, `-1.0s`, `0.0s`. One decimal,
- * because the whole gap is inside a second and the tenths ARE the evidence — a candidate 0.0s from
- * the row is a far stronger suspicion than one 0.9s away, and rounding to whole seconds would erase
- * the difference. Always signed (except an exact zero) so the direction is readable at a glance.
- */
 export function formatDelta(ms: number): string {
   const seconds = ms / 1000;
   const rounded = Math.abs(seconds) < 0.05 ? 0 : seconds;
@@ -727,13 +543,11 @@ export function formatDelta(ms: number): string {
   return `${sign}${Math.abs(rounded).toFixed(1)}s`;
 }
 
-/** A row's age readout off its oldest-first anchor. */
 export function formatAge(iso: string, now: number): string {
   const at = Date.parse(iso);
   return Number.isNaN(at) ? "0m" : formatSpan(now - at);
 }
 
-/** The deadline chip: counting down (`6h left`) or bounced (`bounced 3h`). */
 export function deadlineReadout(
   deadlineAt: string,
   now: number,
@@ -748,12 +562,10 @@ export function deadlineReadout(
     : { label: `bounced ${formatSpan(-remaining)}`, overdue: true };
 }
 
-/** `9:00` / `13:05` — the one clock format the snooze slots and readout share. */
 function clockLabel(at: Date): string {
   return `${at.getHours()}:${String(at.getMinutes()).padStart(2, "0")}`;
 }
 
-/** A snoozed row's chip: the until-time as data (`until 9:00` / `until Mon 9:00`). */
 export function snoozeReadout(untilIso: string, now: number): string {
   const at = Date.parse(untilIso);
   if (Number.isNaN(at)) {
@@ -768,24 +580,20 @@ export function snoozeReadout(untilIso: string, now: number): string {
   return `until ${day} ${clockLabel(until)}`;
 }
 
-// ─── Snooze slots ────────────────────────────────────────────────────────────
-
 export type SnoozeSlot = { label: string; until: string };
 
-/** 09:00 local on the given day. */
 function atNine(base: Date): string {
   const at = new Date(base);
   at.setHours(9, 0, 0, 0);
   return at.toISOString();
 }
 
-/** The three plain snooze-until times: +3h, tomorrow 09:00, next Monday 09:00. */
 export function snoozeSlots(now: number): SnoozeSlot[] {
   const tomorrow = new Date(now);
   tomorrow.setDate(tomorrow.getDate() + 1);
 
   const monday = new Date(now);
-  // Next Monday, always in the future (today-is-Monday rolls a full week).
+
   monday.setDate(monday.getDate() + ((8 - monday.getDay()) % 7 || 7));
 
   return [
@@ -795,15 +603,6 @@ export function snoozeSlots(now: number): SnoozeSlot[] {
   ];
 }
 
-// ─── The primary action ──────────────────────────────────────────────────────
-
-/**
- * What Enter fires on a row. Inline where an op exists: push a platform's video (a fresh
- * TikTok inbox draft or the public YouTube Short), copy the caption for a TikTok draft you're
- * finishing in-app, or re-push a bounced draft — all the same gated ops the board push dialog
- * calls. A deep-link with the object selected everywhere else (the Studio owns cues +
- * distribution, the clip library owns the drip).
- */
 export type PrimaryAction =
   | { kind: "accept-anchor"; label: "Use this match" }
   | { kind: "copy-caption"; label: "Copy caption" }
@@ -815,15 +614,6 @@ export type PrimaryAction =
 export function primaryFor(item: AttentionItem, now: number): PrimaryAction {
   switch (item.source) {
     case "anchor-review":
-      // Both rulings are one tap on a candidate the server already holds, so unlike the label /
-      // submission / held-note rows there is no station to deep-link to — the decision IS the row.
-      // Accepting writes a Spotify anchor, which is publish-class for the CATALOGUE (it feeds the
-      // Telescope playlist and the certify path), and that is exactly why the op behind this tap is
-      // operator-tier: the authority lives in `resolve_anchor_review`, not in this button.
-      //
-      // With no anchorable candidate there is nothing to accept, so the row's primary becomes the
-      // MusicBrainz recording — the place the wrong metadata actually gets fixed, for every
-      // consumer of the open graph and not just for us.
       return item.candidate?.spotifyTrackId
         ? { kind: "accept-anchor", label: "Use this match" }
         : { href: item.mbUrl ?? "/admin/catalogue", kind: "open", label: "Open in MusicBrainz" };
@@ -832,56 +622,30 @@ export function primaryFor(item: AttentionItem, now: number): PrimaryAction {
     case "attach-cues":
       return { href: item.href ?? "/admin/plans", kind: "open", label: "Attach cues" };
     case "bio-review":
-      // Like the anchor-review row, both rulings act on state the server already holds and there is
-      // no station that owns a bio, so the decision IS the row: this primary blesses the paragraph
-      // the gate refused (clearing the flag and nothing else) and the row carries "Rewrite it"
-      // alongside, which empties the bio and hands the entity back to the sweep. The row shows the
-      // gate's own reasons, so it is a ruling he can make from here rather than a link somewhere.
       return { kind: "keep-bio", label: "Bio stands" };
     case "capture-suspect":
-      // The operator auditions the captured bytes on the catalogue workstation and rules with
-      // flag_wrong_audio (or the CLI); the row opens there rather than flagging inline — flagging a
-      // public finding's audio is a judgement, and publishing-class authority never sits on a queue row.
       return { href: item.href ?? "/admin/catalogue", kind: "open", label: "Check it" };
     case "distribute":
       return { href: item.href ?? "/admin/plans", kind: "open", label: "Distribute" };
     case "drip-empty":
       return { href: item.href ?? "/admin/clips", kind: "open", label: "Cut clips" };
     case "label-review":
-      // The three-state ruling lives on /admin/labels; the row deep-links there rather
-      // than ruling inline (one home per control, like the artist review row).
       return { href: item.href ?? "/admin/labels", kind: "open", label: "Rule on it" };
     case "newsletter":
-      // Review + Send live on the newsletter page (send_edition is operator-tier); the row
-      // deep-links there rather than sending inline — the send authority never moves onto the
-      // queue row, matching the submission row's approve/reject.
       return { href: item.href ?? "/admin/newsletter", kind: "open", label: "Review" };
     case "note-rejected":
-      // Keep/edit/bin lives in the finding's note dialog, where the held note and the
-      // neighbour it echoed can be read SIDE BY SIDE — which is the whole point, and cannot
-      // be done on a queue row. So the row opens it rather than ruling inline: the same
-      // one-home-per-control move the submission and label rows make. Accepting a held note
-      // publishes a line to /log, and publishing authority never sits on the queue row.
       return { href: item.href ?? "/admin/findings", kind: "open", label: "Read it" };
     case "observation-rejected":
-      // The spoken sibling of the held note. Render-it/bin-it is the operator's ruling
-      // (`fluncle admin observations resolve`, or the resolve op) — publishing-class, since
-      // accepting spends a Cartesia render, so it never sits on the queue row. The row opens
-      // the finding so he can hear the neighbourhood it was judged against.
       return { href: item.href ?? "/admin/findings", kind: "open", label: "Hear it" };
     case "post-tiktok":
-      // No TikTok post yet — the first step is pushing the silent inbox draft.
       return { kind: "push", label: "Push draft", platform: "tiktok" };
     case "post-youtube":
       return { kind: "push", label: "Post to YouTube", platform: "youtube" };
     case "submission":
-      // Approve/reject lives in the review tray (a publish + a discard); the row
-      // deep-links there rather than deciding inline — publishing authority never
-      // moves onto the queue row.
       return { href: item.href ?? "/admin/findings?submission=", kind: "open", label: "Review" };
     case "tiktok-draft": {
       const bounced = item.deadlineAt !== undefined && Date.parse(item.deadlineAt) <= now;
-      // A pushed draft is finished in-app: copy the caption to paste there; re-push if bounced.
+
       return bounced
         ? { kind: "re-push", label: "Re-push draft" }
         : { kind: "copy-caption", label: "Copy caption" };
@@ -889,12 +653,6 @@ export function primaryFor(item: AttentionItem, now: number): PrimaryAction {
   }
 }
 
-// ─── The menu-bar digest (the operator's CLI + Raycast read) ─────────────────
-// The same snapshot the `/admin` dashboard renders, folded into a portable digest
-// so the operator's own tools (`fluncle admin queue`, its Raycast menu-bar sibling)
-// read it without a browser. Pure and clock-injected, like the rest of this model.
-
-/** The priority order the digest counts + the brief walk (deadline/urgent first). */
 const SOURCE_ORDER: AttentionSource[] = [
   "tiktok-draft",
   "post-tiktok",
@@ -905,42 +663,24 @@ const SOURCE_ORDER: AttentionSource[] = [
   "newsletter",
   "submission",
   "artist-review",
-  // The curation rows sit last: a label ruling steers the NEXT crawl, so it is never
-  // urgent and never blocks a finding.
+
   "label-review",
-  // A capture suspicion is a correctness cleanup, never urgent (the wrong bytes are inaudible on
-  // every public surface), so it sits among the low-priority curation rows.
+
   "capture-suspect",
-  // A suspected version mismatch is the same class: the row has been un-anchored for months and
-  // nothing downstream is blocked on it. Low priority, and here to be SEEN.
+
   "anchor-review",
-  // A bypassed bio is the same class again, with one difference worth naming: the copy is already
-  // PUBLIC, so unlike the rows above nothing is pending — the damage, if there is any, is done and
-  // steady. That makes it a review, never a race, and it sits with the other curation rows.
+
   "bio-review",
-  // A held auto-note is the least urgent row on the board and deliberately so: the finding
-  // is simply note-less, which is a state it can sit in indefinitely without hurting
-  // anything, and the sweep keeps trying to write a better line regardless. It is here to
-  // be SEEN, not to be chased.
+
   "note-rejected",
-  // A held observation is the spoken twin of the held note and sits at the same low urgency:
-  // the finding is simply unvoiced, a state it can hold indefinitely, and the sweep keeps
-  // trying a colder script. Here to be SEEN, not chased.
+
   "observation-rejected",
 ];
 
-/**
- * Where clicking a row lands the operator. Rows that carry an explicit `href`
- * (attach-cues, distribute, drip-empty, label-review, newsletter, submission, artist-review) open
- * it; the inline publish-loop rows (post-tiktok, post-youtube, tiktok-draft) and the inline
- * anchor-review / bio-review rulings have no href — their action lives on the dashboard itself, so
- * they open `/admin`.
- */
 export function attentionRowPath(item: AttentionItem): string {
   return item.href ?? "/admin";
 }
 
-/** An `AttentionItem` reduced to its wire row (the deep-link path + the meta the menu bar shows). */
 function toAttentionRow(item: AttentionItem): AttentionRow {
   return {
     ...(item.deadlineAt ? { deadlineAt: item.deadlineAt } : {}),
@@ -952,7 +692,6 @@ function toAttentionRow(item: AttentionItem): AttentionRow {
   };
 }
 
-/** English 2–9 as words (the dispatch's small-count voice: "two drafts to finish"). */
 const SMALL_WORDS = [
   "zero",
   "one",
@@ -966,19 +705,15 @@ const SMALL_WORDS = [
   "nine",
 ];
 
-/** A count as the dispatch spells it: 2–9 as a word, everything else as digits. */
 function countWord(n: number): string {
   return n >= 2 && n <= 9 ? (SMALL_WORDS[n] ?? String(n)) : String(n);
 }
 
-/** One source's phrase in the dispatch, from its waiting rows. */
 function briefPhrase(source: AttentionSource, rows: AttentionItem[]): string {
   const n = rows.length;
 
   switch (source) {
     case "anchor-review":
-      // Name the MECHANISM, like the held-note row: "version" is what he has to rule on, and a
-      // bare "a track to check" would hide the one thing that makes the row answerable.
       return n === 1
         ? "a track that may be the wrong version"
         : `${countWord(n)} tracks that may be the wrong version`;
@@ -987,15 +722,10 @@ function briefPhrase(source: AttentionSource, rows: AttentionItem[]): string {
     case "attach-cues":
       return n === 1 ? "a recording waiting on cues" : `${countWord(n)} recordings waiting on cues`;
     case "bio-review":
-      // Name the MECHANISM, like the held-note row: "past the voice gate" is the whole reason the
-      // row exists, and a bare "a bio to review" would hide the one fact he needs — the gate said
-      // no and the paragraph is live anyway.
       return n === 1
         ? "a bio that landed past the voice gate"
         : `${countWord(n)} bios that landed past the voice gate`;
     case "capture-suspect":
-      // Name the mechanism: the fingerprint check disagreed with the stored audio, and only the
-      // operator's ears can settle it.
       return n === 1
         ? "a capture that doesn't sound right"
         : `${countWord(n)} captures that don't sound right`;
@@ -1003,7 +733,7 @@ function briefPhrase(source: AttentionSource, rows: AttentionItem[]): string {
       if (n !== 1) {
         return `${countWord(n)} mixtapes to distribute`;
       }
-      // One mixtape: name the missing leg when it's the only one left ("waiting on Mixcloud").
+
       const missing = rows[0]?.missing ?? [];
       if (missing.length === 1 && missing[0] === "mixcloud") {
         return "a mixtape waiting on Mixcloud";
@@ -1022,15 +752,10 @@ function briefPhrase(source: AttentionSource, rows: AttentionItem[]): string {
         ? "the Friday letter waiting on your send"
         : `${countWord(n)} letters waiting on your send`;
     case "note-rejected":
-      // Name the MECHANISM, not just the count. "held back" tells him the gate fired and
-      // that the line still exists; a bare "a note to review" would hide the very thing
-      // this row was built to make visible.
       return n === 1
         ? "a note the echo gate held back"
         : `${countWord(n)} notes the echo gate held back`;
     case "observation-rejected":
-      // Name the mechanism, like the held note: the gate fired on a SPOKEN read and the script
-      // still exists, held for a ruling.
       return n === 1
         ? "an observation the echo gate held back"
         : `${countWord(n)} observations the echo gate held back`;
@@ -1045,12 +770,6 @@ function briefPhrase(source: AttentionSource, rows: AttentionItem[]): string {
   }
 }
 
-/**
- * The deterministic, Fluncle-voiced morning dispatch — one plain, deadpan line
- * assembled from the counts (never an LLM). Per-source phrases in priority order,
- * comma-joined; a clear board reads as a quiet all-clear. Operator-plain per the
- * admin persona register (functional, warm-by-brevity, no exclamation, no em dash).
- */
 export function attentionBrief(items: AttentionItem[], _now: number): string {
   const phrases: string[] = [];
 
@@ -1069,13 +788,10 @@ export function attentionBrief(items: AttentionItem[], _now: number): string {
   return `${joined.charAt(0).toUpperCase()}${joined.slice(1)}.`;
 }
 
-/** The whole digest: the total, per-source counts, ordered rows, and the dispatch. */
 export function deriveAttentionDigest(
   items: AttentionItem[],
   now: number,
 ): { brief: string; counts: AttentionSourceCount[]; rows: AttentionRow[]; total: number } {
-  // Order the rows the ratified way (deadline-first, then oldest) with no operator
-  // prefs — the digest carries the raw truth; snooze/won't-do is client-only.
   const ordered = orderQueue(items, {}, now);
   const rows = [...ordered.due, ...ordered.backlog].map(toAttentionRow);
 

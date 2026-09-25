@@ -10,9 +10,6 @@ import {
   removeCue,
 } from "./recording-cues";
 
-// The recording cue-authoring logic (RFC recording-primitive, Design B — Wave 3), tested
-// DOM-free: every array transform the add-a-cue editor drives, pure and deterministic.
-
 const base: RecordingTracklistItem[] = [
   { artists: ["Alix Perez"], id: "a", startMs: 0, title: "Forsaken" },
   { artists: ["Monty"], id: "b", title: "Zeal" },
@@ -38,7 +35,7 @@ describe("addCue", () => {
 
     expect(next).toHaveLength(3);
     expect(next[2]).toEqual({ artists: ["Skeptical"], id: "c", title: "Blue Eyes" });
-    expect(base).toHaveLength(2); // pure — original untouched
+    expect(base).toHaveLength(2);
   });
 
   it("generates a string id by default", () => {

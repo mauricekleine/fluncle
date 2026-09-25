@@ -137,8 +137,6 @@ function concurrencyExpression(config: AstNode): AstNode | undefined {
     return undefined;
   }
 
-  // An unexamined spread after the explicit property could overwrite it and
-  // silently restore libSQL's default, so that branch is deliberately unknown.
   for (const candidate of properties.slice(propertyIndex + 1)) {
     if (isAstNode(candidate) && candidate.type === "SpreadElement") {
       return undefined;
@@ -488,9 +486,7 @@ describe("database concurrency bounds", () => {
 
   it("gives every tracked createClient config branch an explicit nonzero bound", () => {
     const paths = trackedSourcePaths();
-    // Read every tracked source, including dot directories. This cheap candidate
-    // filter avoids parsing unrelated workflow DSL files; AST traversal below,
-    // rather than a regex, discovers the actual calls in each candidate.
+
     const sourceInfos = paths
       .map((file) => ({ file, source: readFileSync(file, "utf8") }))
       .filter(({ source }) => source.includes("createClient"))

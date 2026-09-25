@@ -1,9 +1,3 @@
-// The client-safe artist-socials surface (lib/artist-socials.ts) is pure and dep-free by
-// design — it renders the /admin/artists platform Select and the inline editor's instant
-// host-vs-platform gate in CLIENT code, so it must never drag the server module in. These
-// tests pin the two guards the render/Save path leans on (`isHttpUrl`, `urlHostMatchesPlatform`)
-// and the platform vocabulary. The SERVER stays authoritative (artist-resolution +
-// artists.assertHttpUrl); this layer is only the cheap pre-round-trip check.
 import { describe, expect, it } from "vitest";
 import {
   ARTIST_SOCIAL_PLATFORMS,
@@ -31,7 +25,7 @@ describe("isHttpUrl", () => {
   it("rejects unparseable strings and the empty string", () => {
     expect(isHttpUrl("not a url")).toBe(false);
     expect(isHttpUrl("")).toBe(false);
-    expect(isHttpUrl("example.com")).toBe(false); // no scheme
+    expect(isHttpUrl("example.com")).toBe(false);
   });
 });
 
@@ -76,7 +70,7 @@ describe("urlHostMatchesPlatform", () => {
 
   it("strips a www./music. prefix before matching the host", () => {
     expect(urlHostMatchesPlatform("spotify", "https://open.spotify.com/artist/abc")).toBe(true);
-    // music.youtube.com → youtube.com after the prefix strip
+
     expect(urlHostMatchesPlatform("youtube", "https://music.youtube.com/channel/abc")).toBe(true);
   });
 
