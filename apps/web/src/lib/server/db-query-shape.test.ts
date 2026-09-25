@@ -416,6 +416,13 @@ const ALLOWLIST: readonly AllowlistEntry[] = [
     reason:
       "The anchor gauge in getCrawlStatus. Deliberately kept on the `tracks_anchor_queue_idx` PARTIAL index (`isrc is not null and spotify_uri is null`) so it stays cheap as the table grows; the `not exists` is a residual on that indexed slice. Documented in-file as an indexed lower-bound gauge, not the full drain set.",
   },
+  {
+    count: 1,
+    file: "lib/server/pipeline-watch-read.ts",
+    pattern: "anti-join:not-exists-findings",
+    reason:
+      "The watchdog's anchor probe keeps the full status predicate on tracks_anchor_queue_idx and stops at 1,000 matches. Hosted EXPLAIN confirms the partial-index seek and findings PK probe; the bound prevents a full backlog walk.",
+  },
 
   {
     count: 3,
