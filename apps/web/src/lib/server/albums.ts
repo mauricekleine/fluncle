@@ -12,6 +12,7 @@ import {
 } from "./due-work";
 import { isDueWorkCutoverEnabled, readPromotedDueWorkPage } from "./due-work-cutover";
 import { relinkTracksToEntity } from "./hub-counts";
+import { validReleaseDateSql } from "./release-day";
 import {
   type CatalogueBrowsePage,
   type CatalogueBrowseQuery,
@@ -26,6 +27,7 @@ import {
   hubInclusionWhere,
   listCatalogueBrowsePage,
   listHubPage,
+  hubHasRecentActivity,
   listHubThisMonth,
 } from "./labels";
 
@@ -459,7 +461,12 @@ export const ALBUMS_HUB_QUERY: CatalogueHubQuery<AlbumHubEntry> = {
     year: row.latest_release_date?.slice(0, 4) ?? undefined,
   }),
   nameExpr: "albums.name",
-  select: `albums.name as name, albums.latest_release_date as latest_release_date, ${ALBUM_COVER_SELECT},
+  select: `albums.name as name, ${ALBUM_COVER_SELECT},
+           (select max(t2.release_date) from tracks t2
+              where t2.album_id = albums.id
+                and t2.dismissed_at is null and t2.duplicate_of_track_id is null
+                and ${validReleaseDateSql("t2.release_date")}
+                and t2.release_date <= strftime('%Y-%m-%d', 'now')) as latest_release_date,
            (select t2.artists_json from tracks t2
               where t2.album_id = albums.id
               order by t2.release_date is null asc, t2.release_date desc, t2.track_id asc
@@ -481,6 +488,10 @@ export function listAlbumsHubPage(
   order: HubOrder = "az",
 ): Promise<CatalogueHubNumberedPage<AlbumHubEntry>> {
   return listHubPage(ALBUMS_HUB_QUERY, page, !nameFilter, nameFilter, order);
+}
+
+export function albumsHaveRecentActivity(): Promise<boolean> {
+  return hubHasRecentActivity(ALBUMS_HUB_QUERY);
 }
 
 export function listAlbumsThisMonth(now?: Date, limit?: number): Promise<AlbumHubEntry[]> {

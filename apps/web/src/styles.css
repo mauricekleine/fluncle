@@ -2390,6 +2390,279 @@ a.catalogue-letter:focus-visible {
   color: var(--eclipse-glow);
 }
 
+/* ── HUBS WITH A PULSE (/artists, /albums, /labels) ─────────────────────────────────────────
+   The order switch, the "This month" strip, the album tile's credit line, the tile's play control
+   and the shared hub footer (components/hub-sections.tsx, hub-tile-play.tsx, hub-footer.tsx). */
+
+.hub-order {
+  display: flex;
+  margin-top: 1.25rem;
+  max-width: 100%;
+}
+
+/* On the narrowest phones the three segments wrap rather than push the plate sideways (WCAG 1.4.10). */
+.hub-order [data-slot="toggle-group"] {
+  flex-wrap: wrap;
+  max-width: 100%;
+}
+
+/* The segmented control's 28px segments grow to a thumb's 44px where the pointer is a finger. */
+@media (pointer: coarse) {
+  .hub-order [data-slot="toggle-group-item"] {
+    min-height: 2.75rem;
+  }
+}
+
+/* The strip: a heading that names a time (true of every tile under it, so it names no register),
+   one literal way on to /fresh, and a single row that scrolls sideways and snaps tile to tile. */
+.hub-this-month {
+  display: grid;
+  gap: 0.6rem;
+  margin-top: 1.5rem;
+}
+
+.hub-this-month-head {
+  align-items: baseline;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+  justify-content: space-between;
+}
+
+.hub-this-month-title {
+  color: var(--starlight-cream);
+  font-size: 1rem;
+  font-weight: 800;
+  margin: 0;
+}
+
+.hub-this-month-link {
+  align-items: center;
+  color: var(--stardust);
+  display: inline-flex;
+  font-size: 0.82rem;
+  font-weight: 600;
+  gap: 0.35rem;
+  min-height: 2.75rem;
+  transition: color 150ms ease-out;
+}
+
+.hub-this-month-link:hover,
+.hub-this-month-link:focus-visible {
+  color: var(--eclipse-glow);
+}
+
+.hub-this-month-link svg {
+  height: 0.8rem;
+  width: 0.8rem;
+}
+
+.hub-this-month-row {
+  display: grid;
+  gap: 0.7rem;
+  grid-auto-columns: 6.5rem;
+  grid-auto-flow: column;
+  list-style: none;
+  margin: 0;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  padding: 0 0 0.6rem;
+  scroll-snap-type: x proximity;
+  scrollbar-width: thin;
+}
+
+@media (min-width: 40rem) {
+  .hub-this-month-row {
+    grid-auto-columns: 7.5rem;
+  }
+}
+
+.hub-this-month-row > li {
+  scroll-snap-align: start;
+}
+
+/* The strip's tiles are the grid's tiles: the same link layout and the same neutral lift. */
+.hub-this-month-row a {
+  color: var(--stardust);
+  display: grid;
+  gap: 0.4rem;
+  text-decoration: none;
+}
+
+.hub-this-month-row .hub-tile[data-round] a {
+  justify-items: center;
+  text-align: center;
+}
+
+.hub-this-month-row a:hover .artist-grid-line,
+.hub-this-month-row a:focus-visible .artist-grid-line {
+  color: var(--starlight-cream);
+}
+
+.hub-this-month-row a.hub-tile-certified .artist-grid-line {
+  color: var(--eclipse-gold);
+}
+
+.hub-this-month-row a:focus-visible {
+  border-radius: var(--rounded-md);
+  outline: 2px solid var(--ring);
+  outline-offset: 3px;
+}
+
+/* An album tile's credit: who made the record, quieter than its title, one line. */
+.artist-grid-credit {
+  color: var(--stardust);
+  font-size: 0.7rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* THE TILE'S PLAY CONTROL. A 44px target pinned over the cover's lower corner, a sibling of the
+   tile's link; its visible mark is a 2rem disc. It rests hidden on a pointer screen and shows on the
+   tile's hover or focus, always on a touch screen, and holds while its queue plays. An unlit tile's
+   disc heats to cream, a certified tile's to gold (the Unlit Rule); the focus ring stays Eclipse. */
+.hub-tile {
+  container-type: inline-size;
+  position: relative;
+}
+
+.hub-tile-play {
+  align-items: center;
+  background: none;
+  border: none;
+  cursor: pointer;
+  display: flex;
+  height: 2.75rem;
+  justify-content: center;
+  opacity: 0;
+  padding: 0;
+  position: absolute;
+  right: 0;
+  top: calc(100cqw - 2.75rem);
+  transition: opacity 150ms ease-out;
+  width: 2.75rem;
+}
+
+/* On an artist's round portrait the disc sits on the circle's lower-right edge. */
+.hub-tile[data-round] .hub-tile-play {
+  left: calc(50cqw + min(6.5rem, 100cqw) * 0.3536 - 1.375rem);
+  right: auto;
+  top: calc(min(6.5rem, 100cqw) * 0.8536 - 1.375rem);
+}
+
+.hub-tile-play-glyph {
+  align-items: center;
+  background: color-mix(in oklch, var(--deep-field) 78%, transparent);
+  border: 1px solid var(--dust-line);
+  border-radius: 999px;
+  color: var(--starlight-cream);
+  display: flex;
+  font-size: 0.85rem;
+  height: 2rem;
+  justify-content: center;
+  transition:
+    background-color 150ms ease-out,
+    color 150ms ease-out;
+  width: 2rem;
+}
+
+.hub-tile:hover .hub-tile-play,
+.hub-tile:focus-within .hub-tile-play,
+.hub-tile-play[data-status="playing"],
+.hub-tile-play[data-status="loading"],
+.hub-tile-play[data-status="paused"] {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .hub-tile-play {
+    opacity: 1;
+  }
+}
+
+.hub-tile-play:hover .hub-tile-play-glyph {
+  background: color-mix(in oklch, var(--stardust) 30%, var(--deep-field));
+}
+
+/* A certified tile's disc catches the Gold Veil and its glyph glows: light, never a gold fill. */
+.hub-tile-play[data-lit]:hover .hub-tile-play-glyph,
+.hub-tile-play[data-lit][data-status="playing"] .hub-tile-play-glyph {
+  background: color-mix(in oklch, var(--eclipse-gold) 18%, var(--deep-field));
+  border-color: color-mix(in oklch, var(--eclipse-gold) 42%, transparent);
+  color: var(--eclipse-glow);
+}
+
+.hub-tile-play:focus-visible {
+  outline: none;
+}
+
+.hub-tile-play:focus-visible .hub-tile-play-glyph {
+  box-shadow: 0 0 0 2px var(--ring);
+}
+
+.hub-tile-play[data-status="loading"] .hub-tile-play-glyph {
+  animation: hub-tile-play-wait 1.2s ease-in-out infinite;
+}
+
+/* A tile whose tracks have no preview dims its mark and stays pressable: another try is cheap. */
+.hub-tile-play[data-missing] .hub-tile-play-glyph {
+  color: color-mix(in oklch, var(--starlight-cream) 70%, transparent);
+}
+
+@keyframes hub-tile-play-wait {
+  50% {
+    opacity: 0.55;
+  }
+}
+
+/* The shared hub footer: the five hubs in one wrapping row, the current one in cream. */
+.hub-footer-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1.25rem;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+/* Navigation, not an action: Stardust with a dotted underline at rest, heating to Eclipse Glow (the
+   Graph Link grammar), so the plate spends no gold at rest on five doors the colophon repeats. */
+.hub-footer-list a {
+  align-items: center;
+  color: var(--stardust);
+  display: inline-flex;
+  justify-content: center;
+  min-height: 2.75rem;
+  min-width: 2.75rem;
+  text-decoration: underline dotted;
+  text-underline-offset: 0.2em;
+  transition: color 150ms ease-out;
+}
+
+.hub-footer-list a:hover,
+.hub-footer-list a:focus-visible {
+  color: var(--eclipse-glow);
+  text-decoration-style: solid;
+}
+
+.hub-footer-list a[aria-current="page"] {
+  color: var(--starlight-cream);
+  text-decoration: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hub-tile-play,
+  .hub-tile-play-glyph,
+  .hub-this-month-link {
+    transition: none;
+  }
+
+  .hub-tile-play[data-status="loading"] .hub-tile-play-glyph {
+    animation: none;
+  }
+}
+
 /* ── THE HUB NAME SEARCH (/artists, /albums, /labels) ───────────────────────────────────────
    One quiet, bordered text field: reference-register chrome on a catalogue page, a Phosphor glass
    icon left, a clear button right when there is a term. No gold but the focus ring (the Unlit

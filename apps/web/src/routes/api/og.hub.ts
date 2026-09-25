@@ -29,25 +29,19 @@ const HUB_CARDS: Record<string, HubCard> = {
   albums: {
     count: countIndexableAlbums,
     line: (total) =>
-      total > 1
-        ? `${countFormatter.format(total)} drum & bass records, A to Z.`
-        : "Drum & bass records, A to Z.",
+      total > 1 ? `${countFormatter.format(total)} drum & bass records.` : "Drum & bass records.",
     name: "Albums",
   },
   artists: {
     count: countIndexableArtists,
     line: (total) =>
-      total > 1
-        ? `${countFormatter.format(total)} drum & bass artists, A to Z.`
-        : "Drum & bass artists, A to Z.",
+      total > 1 ? `${countFormatter.format(total)} drum & bass artists.` : "Drum & bass artists.",
     name: "Artists",
   },
   labels: {
     count: countIndexableLabels,
     line: (total) =>
-      total > 1
-        ? `${countFormatter.format(total)} drum & bass labels, A to Z.`
-        : "Drum & bass labels, A to Z.",
+      total > 1 ? `${countFormatter.format(total)} drum & bass labels.` : "Drum & bass labels.",
     name: "Labels",
   },
   tracks: {

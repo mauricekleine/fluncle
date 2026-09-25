@@ -550,6 +550,32 @@ export async function keepGoing(options: {
   return "moved";
 }
 
+export type LoadedQueueOutcome = "empty" | "played" | "stale";
+
+export async function playQueueWhenLoaded(
+  load: () => Promise<QueueTrack[]>,
+  options?: { stillWanted?: () => boolean },
+): Promise<LoadedQueueOutcome> {
+  supersedeIntent();
+
+  const generation = playbackGeneration;
+  const loaded = await load();
+
+  noticeLivePause();
+
+  if (playbackGeneration !== generation || options?.stillWanted?.() === false) {
+    return "stale";
+  }
+
+  if (loaded.length === 0) {
+    return "empty";
+  }
+
+  playQueue(loaded, 0);
+
+  return "played";
+}
+
 export function claimPageContinuation(href: string): boolean {
   noticeLivePause();
 

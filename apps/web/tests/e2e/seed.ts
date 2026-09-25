@@ -558,6 +558,33 @@ export async function seedE2eData(client: Client): Promise<void> {
   await stampLabelPointers(client);
   await seedStyleFixtures(client);
   await stampAlbumCounters(client);
+  await stampLatestReleaseDates(client);
+}
+
+async function stampLatestReleaseDates(client: Client): Promise<void> {
+  const today = new Date().toISOString().slice(0, 10);
+  const released = (column: string) => `${column} glob '[0-9][0-9][0-9][0-9]*' and ${column} <= ?`;
+
+  for (const [table, edge] of [
+    ["labels", "tracks.label_id = labels.id"],
+    ["albums", "tracks.album_id = albums.id"],
+  ] as const) {
+    await client.execute({
+      args: [today],
+      sql: `update ${table}
+               set latest_release_date = (select max(tracks.release_date) from tracks
+                                           where ${edge} and ${released("tracks.release_date")})`,
+    });
+  }
+  await client.execute({
+    args: [today],
+    sql: `update artists
+             set latest_release_date = (select max(tracks.release_date)
+                                          from track_artists
+                                          join tracks on tracks.track_id = track_artists.track_id
+                                         where track_artists.artist_id = artists.id
+                                           and ${released("tracks.release_date")})`,
+  });
 }
 
 /**
