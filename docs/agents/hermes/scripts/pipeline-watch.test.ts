@@ -494,3 +494,89 @@ describe("watchdog regression replays", () => {
     expect(parseIncidentState({ crawl: null, embed: { sentAt: "bad" } })).toEqual({});
   });
 });
+
+describe("second-review fixes", () => {
+  const base = Date.parse("2026-09-25T10:00:00Z");
+  const every = (
+    count: number,
+    stepMs: number,
+    summary: (index: number) => Record<string, unknown>,
+  ) =>
+    Array.from({ length: count }, (_, index) => ({
+      at: base + index * stepMs,
+      summary: summary(index),
+    }));
+
+  test("repair debt that also reports throttled is blamed on repair, not the vendor", () => {
+    const markers = every(12, 5 * 60_000, () => ({
+      produced: 0,
+      reason: "due_work_repair_pending",
+      throttled: true,
+    }));
+    expect(evaluate("embed", markers).cause).toBe("due_work_repair_pending");
+  });
+
+  test("a lane yield that also reports throttled is blamed on the lane", () => {
+    const markers = every(12, 5 * 60_000, () => ({
+      gateState: "paused",
+      produced: 0,
+      reason: "database_admission",
+      throttled: true,
+    }));
+    expect(evaluate("capture", markers).cause).toBe("admission_lane_closed");
+  });
+
+  test("a crawl sweep's named lane blocker maps onto the watchdog's cause name", () => {
+    const markers = every(14, 10 * 60_000, () => ({
+      blockedReason: "database_admission",
+      tracksWritten: 0,
+    }));
+    expect(evaluate("crawl", markers).cause).toBe("admission_lane_closed");
+  });
+
+  test("one label-gate tick outranks a majority of lane-paused ticks", () => {
+    const markers = every(14, 10 * 60_000, (index) => ({
+      blockedReason: index === 13 ? "label_gate" : "database_admission",
+      tracksWritten: 0,
+    }));
+    expect(evaluate("crawl", markers).cause).toBe("label_gate");
+  });
+
+  test("isrc recovery keeps its last known backlog through a yield tick", () => {
+    const markers = [
+      { at: base, summary: { produced: 3, queueDepth: 40 } },
+      { at: base + 10 * 60_000, summary: { produced: null, queueDepth: null } },
+    ];
+    const verdict = evaluate("isrc-recovery", markers);
+    expect(verdict.state).toBe("healthy");
+    expect(verdict.backlog).toBe(40);
+  });
+
+  test("an unreadable funnel marker directory is a measurement gap, not a missing snapshot", () => {
+    const verdict = evaluatePipeline(
+      snapshot("crawl", [], {
+        markers: { ...snapshot("crawl", []).markers, "funnel-snapshot": null },
+      }),
+      new Date("2026-09-25T12:00:00Z"),
+    ).find((item) => item.stage === "funnel-snapshot");
+    expect(verdict?.state).toBe("measurement_unavailable");
+  });
+
+  test("the Friday window freezes an open anchor stall instead of recovering it", () => {
+    const stalled: StageVerdict = {
+      backlog: 2000,
+      cause: "vendor_gate",
+      message: "m",
+      output: 0,
+      stage: "anchor",
+      state: "stalled",
+      windowMs: 0,
+    };
+    const paused: StageVerdict = { ...stalled, cause: "spotify_window", state: "scheduled_pause" };
+    const opened = planIncidents({}, [stalled], base);
+    const first = planIncidents(opened.next, [paused], base + 15 * 60_000);
+    const second = planIncidents(first.next, [paused], base + 30 * 60_000);
+    expect([...first.alerts, ...second.alerts].map((alert) => alert.type)).toEqual([]);
+    expect(Object.keys(second.next)).toEqual(["anchor"]);
+  });
+});

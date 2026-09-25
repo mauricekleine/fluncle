@@ -109,18 +109,6 @@ function result(
   };
 }
 
-const BLOCKED_REASONS = new Set([
-  "database_admission",
-  "due_work_repair_pending",
-  "label_gate",
-  "no_storable_work",
-  "mb_throttled",
-  "breaker_quota",
-  "breaker_throttle",
-  "shared_meter",
-  "friday_window",
-]);
-
 function mostCommon(values: string[]): string | null {
   const counts = new Map<string, number>();
   for (const value of values) {
@@ -135,54 +123,73 @@ function mostCommon(values: string[]): string | null {
   return best;
 }
 
-// A sweep that names its own blocker wins; otherwise the counters decide. A crawl window whose
-// every found candidate was refused by the label gate is a label-gate stall even when some of its
-// ticks also waited on the lane, because reopening the lane would store nothing.
+const NAMED_CAUSE: Record<string, string> = {
+  breaker_quota: "breaker_quota",
+  breaker_throttle: "breaker_throttle",
+  database_admission: "admission_lane_closed",
+  due_work_repair_pending: "due_work_repair_pending",
+  friday_window: "friday_window",
+  label_gate: "label_gate",
+  mb_throttled: "vendor_gate",
+  no_storable_work: "no_storable_work",
+  shared_meter: "shared_meter",
+};
+
+const isRepairPending = (summary: Record<string, unknown>): boolean =>
+  summary.reason === "due_work_repair_pending";
+
+const isLaneClosed = (summary: Record<string, unknown>): boolean =>
+  summary.reason === "database_admission" ||
+  (typeof summary.reason === "string" && summary.reason.includes("admission")) ||
+  summary.gateState === "paused" ||
+  summary.gateState === "admission-skipped";
+
+// The label gate outranks every other cause: a window whose finds were all refused stores nothing
+// even once the lane reopens. Then a sweep's own named blocker, then repair debt and lane pauses,
+// and only then the vendor heuristics. Repair and yield summaries also carry `throttled: true`, so
+// those ticks are excluded before the vendor check reads it.
 function attributedCause(markers: Marker[]): string {
   const summaries = markers.map((marker) => marker.summary);
+  const found = summaries.reduce((sum, summary) => sum + Number(summary.tracksFound ?? 0), 0);
+  const gated = summaries.reduce(
+    (sum, summary) => sum + Number(summary.tracksSkippedLabelGate ?? 0),
+    0,
+  );
+  if (
+    (found > 0 && gated >= found) ||
+    summaries.some((summary) => summary.blockedReason === "label_gate")
+  ) {
+    return "label_gate";
+  }
   const named = mostCommon(
     summaries.flatMap((summary) =>
-      typeof summary.blockedReason === "string" && BLOCKED_REASONS.has(summary.blockedReason)
-        ? [summary.blockedReason]
+      typeof summary.blockedReason === "string" && summary.blockedReason in NAMED_CAUSE
+        ? [NAMED_CAUSE[summary.blockedReason] ?? summary.blockedReason]
         : [],
     ),
   );
   if (named) {
     return named;
   }
-  const found = summaries.reduce((sum, summary) => sum + Number(summary.tracksFound ?? 0), 0);
-  const gated = summaries.reduce(
-    (sum, summary) => sum + Number(summary.tracksSkippedLabelGate ?? 0),
-    0,
-  );
-  if (found > 0 && gated >= found) {
-    return "label_gate";
+  if (summaries.some(isRepairPending)) {
+    return "due_work_repair_pending";
+  }
+  if (summaries.some(isLaneClosed)) {
+    return "admission_lane_closed";
   }
   if (
     summaries.some(
       (summary) =>
-        (number(summary.apifySkippedAwaitingSpotify) !== null &&
+        !isRepairPending(summary) &&
+        !isLaneClosed(summary) &&
+        ((number(summary.apifySkippedAwaitingSpotify) !== null &&
           Number(summary.apifySkippedAwaitingSpotify) > 0 &&
           summary.spotifyIsrcAsks === 0) ||
-        summary.throttled === true ||
-        Number(summary.throttles ?? 0) > 0,
+          summary.throttled === true ||
+          Number(summary.throttles ?? 0) > 0),
     )
   ) {
     return "vendor_gate";
-  }
-  if (summaries.some((summary) => summary.reason === "due_work_repair_pending")) {
-    return "due_work_repair_pending";
-  }
-  if (
-    summaries.some(
-      (summary) =>
-        summary.reason === "database_admission" ||
-        (typeof summary.reason === "string" && summary.reason.includes("admission")) ||
-        summary.gateState === "paused" ||
-        summary.gateState === "admission-skipped",
-    )
-  ) {
-    return "admission_lane_closed";
   }
   if (
     summaries.some(
@@ -225,6 +232,17 @@ function total(markers: Marker[], field: string): number | null {
 }
 
 function evaluateFunnel(markers: Marker[] | null, now: Date): StageVerdict {
+  if (markers === null) {
+    return result(
+      "funnel-snapshot",
+      "measurement_unavailable",
+      "measurement_unavailable",
+      null,
+      null,
+      0,
+      "Check the funnel snapshot marker directory.",
+    );
+  }
   const beforeDeadline = now.getUTCHours() === 0 && now.getUTCMinutes() < 30;
   const day = new Date(
     Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - (beforeDeadline ? 2 : 1)),
@@ -282,7 +300,10 @@ function evaluateStage(snapshot: PipelineSnapshot, stage: Stage, now: Date): Sta
         : stage === "capture" || stage === "analyze" || stage === "embed"
           ? snapshot.queues[stage]
           : stage === "isrc-recovery"
-            ? number(snapshot.markers[stage]?.[0]?.summary.queueDepth)
+            ? ([...(snapshot.markers[stage] ?? [])]
+                .sort((a, b) => b.at - a.at)
+                .map((marker) => number(marker.summary.queueDepth))
+                .find((depth) => depth !== null) ?? null)
             : null;
   const windowMs =
     stage === "crawl"
@@ -384,7 +405,7 @@ function evaluateStage(snapshot: PipelineSnapshot, stage: Stage, now: Date): Sta
       "healthy",
       "none",
       number(latest.summary.produced),
-      number(latest.summary.queueDepth),
+      backlog,
       0,
       "No yield SLO for this supporting lane.",
     );

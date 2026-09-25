@@ -166,7 +166,9 @@ export function planIncidents(
       continue;
     }
     const verdict = verdicts.find((item) => item.stage === key);
-    if (!verdict) {
+    // A scheduled pause neither extends nor recovers an open stall; it freezes it until the
+    // stage is judged again.
+    if (!verdict || verdict.state === "scheduled_pause") {
       continue;
     }
     prior.healthyChecks += 1;
