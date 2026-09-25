@@ -203,6 +203,93 @@ describe("upcoming entity tracks", () => {
     expect(labelTail.tracks.map((track) => track.trackId)).toEqual([rows.at(-1)]);
   });
 
+  it("pages the tracks before it reads any album or finding", async () => {
+    await seedArtist("art_future", "Future Artist", "future-artist");
+
+    const statements: string[] = [];
+    const recorder: Pick<Client, "execute"> = {
+      execute: async (statement: InStatement) => {
+        statements.push(typeof statement === "string" ? statement : statement.sql);
+        return db.execute(statement);
+      },
+    };
+
+    holder.db = recorder as Client;
+    await listArtistUpcoming("art_future", "2026-10-01");
+    await listLabelUpcoming("lbl_1", "2026-10-01");
+    holder.db = db;
+
+    const pageStatements = statements.filter((sql) => sql.includes("upcoming_page"));
+
+    expect(pageStatements).toHaveLength(2);
+
+    for (const sql of pageStatements) {
+      const plan = (
+        await db.execute({ args: [], sql: `explain query plan ${sql.replaceAll("?", "null")}` })
+      ).rows as unknown as { detail: string; id: number; parent: number }[];
+      const pageRoot = plan.find((row) =>
+        /(?:CO-ROUTINE|MATERIALIZE) upcoming_page/.test(row.detail),
+      );
+      const inPage = new Set<number>(pageRoot ? [pageRoot.id] : []);
+
+      for (const row of plan) {
+        if (inPage.has(row.parent)) {
+          inPage.add(row.id);
+        }
+      }
+
+      const page = plan
+        .filter((row) => inPage.has(row.id))
+        .map((row) => row.detail)
+        .join("\n");
+      const outside = plan
+        .filter((row) => !inPage.has(row.id))
+        .map((row) => row.detail)
+        .join("\n");
+
+      expect(pageRoot, sql).toBeDefined();
+      // The sorted, LIMITed page touches neither albums nor findings…
+      expect(page).not.toMatch(/\b(?:al|albums|findings)\b/);
+      // …and the album and finding seeks run on the returned page only.
+      expect(outside).toMatch(/SEARCH al USING INTEGER PRIMARY KEY|SEARCH al USING INDEX/);
+      expect(outside).toMatch(/SEARCH findings USING/);
+    }
+  });
+
+  it("carries the same cover, readout and preview flag as every other track row", async () => {
+    await seedArtist("art_future", "Future Artist", "future-artist");
+    await db.batch(
+      [
+        {
+          args: ["future-rich", "Rich", '["Future Artist"]', "2026-11-01", "lbl_1"],
+          sql: `insert into tracks(track_id,title,artists_json,release_date,label_id,duration_ms,
+                  bpm,key,isrc,album_image_url)
+                values (?,?,?,?,?,241000,174,'8A','GBTEST0000001','https://i.scdn.co/image/rich')`,
+        },
+        {
+          args: ["future-rich", "art_future"],
+          sql: `insert into track_artists(track_id,artist_id,position) values (?,?,1)`,
+        },
+      ],
+      "write",
+    );
+
+    for (const page of [
+      await listArtistUpcoming("art_future", "2026-10-01"),
+      await listLabelUpcoming("lbl_1", "2026-10-01"),
+    ]) {
+      expect(page.tracks[0]).toMatchObject({
+        albumImageUrl: expect.stringContaining("rich"),
+        bpm: 174,
+        durationMs: 241000,
+        key: "8A",
+        previewable: true,
+        releaseDate: "2026-11-01",
+        trackId: "future-rich",
+      });
+    }
+  });
+
   it("separates full and partial future dates from both released catalogues", async () => {
     await seedArtist("art_future", "Future Artist", "future-artist");
     for (const [trackId, releaseDate] of [
