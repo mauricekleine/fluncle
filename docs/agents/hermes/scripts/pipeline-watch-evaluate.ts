@@ -1,3 +1,5 @@
+import { cronStaleBudgetMs } from "./cron-freshness";
+
 export type Stage =
   | "crawl"
   | "anchor"
@@ -24,6 +26,7 @@ export type StageVerdict = {
   windowMs: number;
 };
 export type PipelineSnapshot = {
+  anchorQueue: number | null;
   budget: {
     closedReason: string | null;
     open: boolean;
@@ -31,15 +34,16 @@ export type PipelineSnapshot = {
     remainingTracks: number;
   } | null;
   crawl: { frontier: number; storable: number; unstorable: number } | null;
+  crawlZeroChecks: number;
   embedOldCapture: boolean | null;
   embedTrend?: { since: number; startingQueue: number } | null;
   markers: Record<Stage, Marker[] | null>;
   queues: { analyze: number | null; capture: number | null; embed: number | null };
-  quiesced: boolean;
 };
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
+const MARKER_RUN_GRACE_MS = 5 * MINUTE;
 
 // The audit measured 72 zero-write crawl ticks, 99/100 anchor deferrals, 39–42 captures/hour, and 18–25 embeds/hour; these shorter zero-yield windows are the initial tripwire.
 export const PIPELINE_SLOS = {
@@ -174,7 +178,8 @@ function attributedCause(markers: Marker[]): string {
       (summary) =>
         summary.reason === "database_admission" ||
         (typeof summary.reason === "string" && summary.reason.includes("admission")) ||
-        summary.gateState === "paused",
+        summary.gateState === "paused" ||
+        summary.gateState === "admission-skipped",
     )
   ) {
     return "admission_lane_closed";
@@ -200,7 +205,8 @@ function stageMarkers(snapshot: PipelineSnapshot, stage: Stage, nowMs: number): 
   const sorted = [...markers].sort((a, b) => b.at - a.at);
   if (
     stage !== "funnel-snapshot" &&
-    nowMs - (sorted[0]?.at ?? 0) > CADENCE[stage] * 2 + 2 * MINUTE
+    nowMs - (sorted[0]?.at ?? 0) >
+      cronStaleBudgetMs({ cadenceMs: CADENCE[stage] }) + MARKER_RUN_GRACE_MS
   ) {
     return null;
   }
@@ -208,10 +214,40 @@ function stageMarkers(snapshot: PipelineSnapshot, stage: Stage, nowMs: number): 
 }
 
 function total(markers: Marker[], field: string): number | null {
-  const values = markers.map((marker) => number(marker.summary[field]));
+  const values = markers.map((marker) =>
+    marker.summary.gateState === "admission-skipped" && marker.summary.payloadStarted === false
+      ? 0
+      : number(marker.summary[field]),
+  );
   return values.every((value) => value !== null)
     ? values.reduce<number>((sum, value) => sum + (value ?? 0), 0)
     : null;
+}
+
+function evaluateFunnel(markers: Marker[] | null, now: Date): StageVerdict {
+  const beforeDeadline = now.getUTCHours() === 0 && now.getUTCMinutes() < 30;
+  const day = new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - (beforeDeadline ? 2 : 1)),
+  )
+    .toISOString()
+    .slice(0, 10);
+  const present = markers?.some(
+    ({ summary }) =>
+      summary.ok === true &&
+      (summary.day === day ||
+        (Array.isArray(summary.backfilledDays) && summary.backfilledDays.includes(day))),
+  );
+  return present
+    ? result("funnel-snapshot", "healthy", "none", 1, 1, 0, `The ${day} UTC snapshot is recorded.`)
+    : result(
+        "funnel-snapshot",
+        "stalled",
+        "snapshot_missing",
+        0,
+        1,
+        0,
+        `Record or repair the ${day} UTC snapshot.`,
+      );
 }
 
 function inWindow(markers: Marker[], nowMs: number, windowMs: number): Marker[] {
@@ -226,21 +262,28 @@ function fullWindow(
 ): boolean {
   return (
     markers.some((marker) => marker.at <= nowMs - windowMs + cadenceMs) &&
-    markers.some((marker) => marker.at >= nowMs - cadenceMs * 2)
+    markers.some(
+      (marker) => marker.at >= nowMs - cronStaleBudgetMs({ cadenceMs }) - MARKER_RUN_GRACE_MS,
+    )
   );
 }
 
 // oxlint-disable-next-line eslint/complexity
 function evaluateStage(snapshot: PipelineSnapshot, stage: Stage, now: Date): StageVerdict {
   const nowMs = now.getTime();
+  if (stage === "funnel-snapshot") {
+    return evaluateFunnel(snapshot.markers[stage], now);
+  }
   const backlog =
     stage === "crawl"
       ? (snapshot.crawl?.frontier ?? null)
       : stage === "anchor"
-        ? number(snapshot.markers.anchor?.[0]?.summary.queueDepth)
+        ? snapshot.anchorQueue
         : stage === "capture" || stage === "analyze" || stage === "embed"
           ? snapshot.queues[stage]
-          : null;
+          : stage === "isrc-recovery"
+            ? number(snapshot.markers[stage]?.[0]?.summary.queueDepth)
+            : null;
   const windowMs =
     stage === "crawl"
       ? PIPELINE_SLOS.crawl.windowMs
@@ -254,22 +297,11 @@ function evaluateStage(snapshot: PipelineSnapshot, stage: Stage, now: Date): Sta
               ? PIPELINE_SLOS.embed.windowMs
               : 0;
   const markers = stageMarkers(snapshot, stage, nowMs);
-  if (stage === "funnel-snapshot" && !markers) {
-    return result(
-      stage,
-      now.toISOString().slice(11, 16) >= "00:30" ? "stalled" : "measurement_unavailable",
-      "snapshot_missing",
-      0,
-      1,
-      0,
-      "Check the daily snapshot sweep.",
-    );
-  }
   if (
     !markers ||
     (stage === "crawl" && !snapshot.crawl) ||
     (stage === "capture" && !snapshot.budget) ||
-    ((stage === "capture" || stage === "analyze" || stage === "embed") && backlog === null) ||
+    backlog === null ||
     (stage === "embed" && snapshot.embedOldCapture === null)
   ) {
     return result(
@@ -280,17 +312,6 @@ function evaluateStage(snapshot: PipelineSnapshot, stage: Stage, now: Date): Sta
       backlog,
       windowMs,
       "Check marker and agent read access.",
-    );
-  }
-  if (snapshot.quiesced) {
-    return result(
-      stage,
-      "scheduled_pause",
-      "timer_quiesced",
-      null,
-      backlog,
-      windowMs,
-      "Wait for the image swap to finish.",
     );
   }
   if (stage === "anchor" && withinFrontierRefreshWindow(now)) {
@@ -321,6 +342,17 @@ function evaluateStage(snapshot: PipelineSnapshot, stage: Stage, now: Date): Sta
     (snapshot.crawl?.frontier ?? 0) >= PIPELINE_SLOS.crawl.frontierFloor &&
     snapshot.crawl?.storable === 0
   ) {
+    if (snapshot.crawlZeroChecks < 2) {
+      return result(
+        stage,
+        "healthy",
+        "supply_empty_pending",
+        0,
+        snapshot.crawl.unstorable,
+        0,
+        "Recheck the storable release count next tick.",
+      );
+    }
     return result(
       stage,
       "stalled",
@@ -346,32 +378,6 @@ function evaluateStage(snapshot: PipelineSnapshot, stage: Stage, now: Date): Sta
       "Capture resumes when the rolling budget reopens.",
     );
   }
-  if (stage === "funnel-snapshot") {
-    const today = now.toISOString().slice(0, 10);
-    const yesterday = new Date(
-      Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - 1),
-    )
-      .toISOString()
-      .slice(0, 10);
-    const due = now.toISOString().slice(11, 16) >= "00:30";
-    const present = markers.some(
-      ({ summary }) =>
-        summary.ok === true &&
-        (summary.day === yesterday ||
-          (Array.isArray(summary.backfilledDays) && summary.backfilledDays.includes(yesterday))),
-    );
-    return due && !present
-      ? result(
-          stage,
-          "stalled",
-          "snapshot_missing",
-          0,
-          1,
-          0,
-          `Record or repair the ${yesterday} UTC snapshot.`,
-        )
-      : result(stage, "healthy", "none", present ? 1 : 0, 1, 0, `Next UTC day follows ${today}.`);
-  }
   if (stage === "isrc-recovery") {
     return result(
       stage,
@@ -384,10 +390,8 @@ function evaluateStage(snapshot: PipelineSnapshot, stage: Stage, now: Date): Sta
     );
   }
   const recent = inWindow(markers, nowMs, windowMs);
-  const outputField =
-    stage === "crawl" ? "tracksWritten" : stage === "anchor" ? "produced" : "done";
-  const output =
-    total(recent, outputField) ?? (stage === "analyze" ? total(recent, "produced") : null);
+  const outputField = stage === "crawl" ? "tracksWritten" : "produced";
+  const output = total(recent, outputField);
   if (output === null) {
     return result(
       stage,
@@ -399,7 +403,7 @@ function evaluateStage(snapshot: PipelineSnapshot, stage: Stage, now: Date): Sta
       "Check marker summary counters.",
     );
   }
-  if ((backlog ?? 0) === 0) {
+  if (backlog === 0) {
     return result(stage, "healthy", "supply_empty", output, backlog, windowMs, "No ready work.");
   }
   if (stage === "anchor") {

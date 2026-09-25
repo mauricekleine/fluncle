@@ -1,14 +1,6 @@
 #!/usr/bin/env bun
 
-import {
-  existsSync,
-  mkdirSync,
-  readdirSync,
-  readFileSync,
-  renameSync,
-  statSync,
-  writeFileSync,
-} from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { findJsonSummary } from "./cron-marker";
@@ -26,6 +18,7 @@ const MARKER_ROOT = process.env.HEALTHCHECK_CRON_OUTPUT_DIR ?? join(DATA_ROOT, "
 const STATE_DIR = join(HOME, ".pipeline-watch");
 const STATE_FILE = join(STATE_DIR, "state.json");
 const TREND_FILE = join(STATE_DIR, "embed-trend.json");
+const SUPPLY_FILE = join(STATE_DIR, "crawl-supply.json");
 const API_BASE = (
   process.env.FLUNCLE_API_BASE_URL ??
   process.env.HEALTHCHECK_WORKER_URL ??
@@ -46,27 +39,102 @@ const JOBS: Record<Stage, string> = {
 
 export const MEASUREMENT_GAP_GRACE_MS = 60 * 60_000;
 
-type Incident = { healthyChecks: number; openedAt: number; sentAt: number[] };
+type Incident = {
+  announcedCause: string | null;
+  cause: string;
+  healthyChecks: number;
+  openedAt: number;
+  sentAt: number[];
+};
 export type IncidentState = Record<string, Incident>;
-export type Alert = { key: string; message: string; type: "OPEN" | "REMINDER" | "RECOVERED" };
+export type Alert = {
+  cause?: string;
+  key: string;
+  message: string;
+  type: "OPEN" | "REMINDER" | "RECOVERED";
+};
+
+const validCount = (value: unknown): value is number =>
+  typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+
+export function parseIncidentState(value: unknown): IncidentState {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+  const state: IncidentState = {};
+  for (const [rawKey, raw] of Object.entries(value)) {
+    const [stage, legacyCause] = rawKey.split(":");
+    if (!stage || !(stage in JOBS) || !raw || typeof raw !== "object" || Array.isArray(raw)) {
+      continue;
+    }
+    const entry = raw as Record<string, unknown>;
+    const cause = typeof entry.cause === "string" ? entry.cause : legacyCause;
+    if (
+      !cause ||
+      !validCount(entry.healthyChecks) ||
+      !validCount(entry.openedAt) ||
+      !Array.isArray(entry.sentAt) ||
+      !entry.sentAt.every(validCount) ||
+      (entry.announcedCause !== undefined &&
+        entry.announcedCause !== null &&
+        typeof entry.announcedCause !== "string")
+    ) {
+      continue;
+    }
+    const sentAt = [...entry.sentAt].sort((left: number, right: number) => left - right);
+    const announcedCause =
+      typeof entry.announcedCause === "string"
+        ? entry.announcedCause
+        : sentAt.length > 0
+          ? cause
+          : null;
+    const prior = state[stage];
+    state[stage] = prior
+      ? {
+          announcedCause:
+            prior.sentAt.at(-1) && prior.sentAt.at(-1) > (sentAt.at(-1) ?? 0)
+              ? prior.announcedCause
+              : announcedCause,
+          cause: prior.openedAt > entry.openedAt ? prior.cause : cause,
+          healthyChecks: Math.min(prior.healthyChecks, entry.healthyChecks),
+          openedAt: Math.min(prior.openedAt, entry.openedAt),
+          sentAt: [...new Set([...prior.sentAt, ...sentAt])].sort((left, right) => left - right),
+        }
+      : {
+          announcedCause,
+          cause,
+          healthyChecks: entry.healthyChecks,
+          openedAt: entry.openedAt,
+          sentAt,
+        };
+  }
+  return state;
+}
 
 export function planIncidents(
   state: IncidentState,
   verdicts: StageVerdict[],
   nowMs: number,
 ): { alerts: Alert[]; next: IncidentState } {
-  const next: IncidentState = structuredClone(state);
+  const next = parseIncidentState(state);
   const alerts: Alert[] = [];
-  const active = new Set<string>();
+  const active = new Set<Stage>();
   for (const verdict of verdicts) {
     // `degraded` is reported, never paged: embed capacity below intake is drained by off-box
     // batches. A measurement gap pages only once it has lasted an hour, so the partial window
     // after an image swap stays quiet.
     const incident = verdict.state === "stalled" || verdict.state === "measurement_unavailable";
-    const key = `${verdict.stage}:${verdict.cause}`;
+    const key = verdict.stage;
     if (incident) {
-      active.add(key);
-      const prior = next[key] ?? { healthyChecks: 0, openedAt: nowMs, sentAt: [] };
+      active.add(verdict.stage);
+      const prior = next[key] ?? {
+        announcedCause: null,
+        cause: verdict.cause,
+        healthyChecks: 0,
+        openedAt: nowMs,
+        sentAt: [],
+      };
+      prior.cause = verdict.cause;
       prior.healthyChecks = 0;
       next[key] = prior;
       const age = nowMs - prior.openedAt;
@@ -80,9 +148,14 @@ export function planIncidents(
           ) ||
           (age >= 24 * 60 * 60_000 && nowMs - (prior.sentAt.at(-1) ?? 0) >= 24 * 60 * 60_000));
       if (due) {
+        const causeChange =
+          prior.announcedCause && prior.announcedCause !== verdict.cause
+            ? ` Cause changed from ${prior.announcedCause} to ${verdict.cause}.`
+            : "";
         alerts.push({
+          cause: verdict.cause,
           key,
-          message: `${verdict.message} Incident open ${Math.floor(age / 60_000)}m.`,
+          message: `${verdict.message} Incident open ${Math.floor(age / 60_000)}m.${causeChange}`,
           type: prior.sentAt.length === 0 ? "OPEN" : "REMINDER",
         });
       }
@@ -92,9 +165,8 @@ export function planIncidents(
     if (active.has(key)) {
       continue;
     }
-    const stage = key.split(":")[0];
-    const verdict = verdicts.find((item) => item.stage === stage);
-    if (verdict?.state !== "healthy") {
+    const verdict = verdicts.find((item) => item.stage === key);
+    if (!verdict) {
       continue;
     }
     prior.healthyChecks += 1;
@@ -106,7 +178,7 @@ export function planIncidents(
     if (prior.healthyChecks >= 2) {
       alerts.push({
         key,
-        message: `${stage}: recovered after ${Math.floor((nowMs - prior.openedAt) / 60_000)}m; ${verdict.message}`,
+        message: `${key}: recovered after ${Math.floor((nowMs - prior.openedAt) / 60_000)}m; ${verdict.message}`,
         type: "RECOVERED",
       });
     }
@@ -118,7 +190,11 @@ export function acceptAlert(state: IncidentState, alert: Alert, nowMs: number): 
   if (alert.type === "RECOVERED") {
     delete state[alert.key];
   } else {
-    state[alert.key]?.sentAt.push(nowMs);
+    const incident = state[alert.key];
+    if (incident) {
+      incident.sentAt.push(nowMs);
+      incident.announcedCause = alert.cause ?? incident.cause;
+    }
   }
 }
 
@@ -161,16 +237,13 @@ async function apiRead(path: string): Promise<Record<string, unknown> | null> {
   }
 }
 
-const validCount = (value: unknown): value is number =>
-  typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
-
 export async function collectSnapshot(): Promise<PipelineSnapshot> {
   const stages = Object.keys(JOBS) as Stage[];
   const markers = Object.fromEntries(
     stages.map((stage) => [stage, readMarkers(JOBS[stage])]),
   ) as PipelineSnapshot["markers"];
   const [crawl, budget, capture, analyze, embed] = await Promise.all([
-    apiRead("/api/v1/admin/catalogue/crawl"),
+    apiRead("/api/v1/admin/catalogue/crawl?summary=true"),
     apiRead("/api/v1/admin/catalogue/capture-budget"),
     apiRead("/api/v1/admin/tracks/work?kind=capture&scope=all&count=true&debtAware=true&limit=1"),
     apiRead("/api/v1/admin/tracks/work?kind=analyze&scope=all&count=true&debtAware=true&limit=1"),
@@ -203,8 +276,10 @@ export async function collectSnapshot(): Promise<PipelineSnapshot> {
         }
       : null;
   return {
+    anchorQueue: validCount(crawl?.anchorsPending) ? crawl.anchorsPending : null,
     budget: budgetState,
     crawl: crawlCounts,
+    crawlZeroChecks: 0,
     embedOldCapture:
       typeof embed?.oldestQueuedCaptureOver24h === "boolean"
         ? embed.oldestQueuedCaptureOver24h
@@ -215,16 +290,12 @@ export async function collectSnapshot(): Promise<PipelineSnapshot> {
       capture: validCount(capture?.queued) ? capture.queued : null,
       embed: validCount(embed?.queued) ? embed.queued : null,
     },
-    quiesced: existsSync(join(DATA_ROOT, "rebake.lock")),
   };
 }
 
 function loadState(): IncidentState {
   try {
-    const value: unknown = JSON.parse(readFileSync(STATE_FILE, "utf8"));
-    return value && typeof value === "object" && !Array.isArray(value)
-      ? (value as IncidentState)
-      : {};
+    return parseIncidentState(JSON.parse(readFileSync(STATE_FILE, "utf8")) as unknown);
   } catch {
     return {};
   }
@@ -237,7 +308,14 @@ function saveState(state: IncidentState): void {
   renameSync(temp, STATE_FILE);
 }
 
-type EmbedTrend = { lastAt: number; lastQueue: number; since: number; startingQueue: number };
+type EmbedSample = { at: number; queued: number };
+type EmbedTrend = {
+  lastAt: number;
+  lastQueue: number;
+  samples: EmbedSample[];
+  since: number;
+  startingQueue: number;
+};
 
 export function advanceEmbedTrend(
   previous: EmbedTrend | null,
@@ -247,10 +325,19 @@ export function advanceEmbedTrend(
   if (queued === null) {
     return null;
   }
-  if (previous && nowMs - previous.lastAt <= 30 * 60_000 && queued > previous.lastQueue) {
-    return { ...previous, lastAt: nowMs, lastQueue: queued };
-  }
-  return { lastAt: nowMs, lastQueue: queued, since: nowMs, startingQueue: queued };
+  const continuous = previous && nowMs >= previous.lastAt && nowMs - previous.lastAt <= 30 * 60_000;
+  const samples = [...(continuous ? previous.samples : []), { at: nowMs, queued }];
+  const cutoff = nowMs - 24 * 60 * 60_000;
+  const baseline = samples.findLastIndex((sample) => sample.at <= cutoff);
+  const kept = samples.slice(Math.max(0, baseline));
+  const first = kept[0] ?? { at: nowMs, queued };
+  return {
+    lastAt: nowMs,
+    lastQueue: queued,
+    samples: kept,
+    since: first.at,
+    startingQueue: first.queued,
+  };
 }
 
 function loadTrend(): EmbedTrend | null {
@@ -259,6 +346,15 @@ function loadTrend(): EmbedTrend | null {
     if (value && typeof value === "object" && !Array.isArray(value)) {
       const trend = value as Record<string, unknown>;
       if (
+        Array.isArray(trend.samples) &&
+        trend.samples.length <= 100 &&
+        trend.samples.every(
+          (sample: unknown) =>
+            sample !== null &&
+            typeof sample === "object" &&
+            validCount((sample as Record<string, unknown>).at) &&
+            validCount((sample as Record<string, unknown>).queued),
+        ) &&
         validCount(trend.lastAt) &&
         validCount(trend.lastQueue) &&
         validCount(trend.since) &&
@@ -269,6 +365,44 @@ function loadTrend(): EmbedTrend | null {
     }
   } catch {}
   return null;
+}
+
+type CrawlSupply = { checks: number; lastAt: number };
+
+export function advanceCrawlSupply(
+  previous: CrawlSupply | null,
+  storable: number | null,
+  nowMs: number,
+): CrawlSupply {
+  return {
+    checks:
+      storable === 0
+        ? previous && nowMs >= previous.lastAt && nowMs - previous.lastAt <= 30 * 60_000
+          ? previous.checks + 1
+          : 1
+        : 0,
+    lastAt: nowMs,
+  };
+}
+
+function loadSupply(): CrawlSupply | null {
+  try {
+    const value: unknown = JSON.parse(readFileSync(SUPPLY_FILE, "utf8"));
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      const supply = value as Record<string, unknown>;
+      if (validCount(supply.checks) && validCount(supply.lastAt)) {
+        return supply as CrawlSupply;
+      }
+    }
+  } catch {}
+  return null;
+}
+
+function saveSupply(supply: CrawlSupply): void {
+  mkdirSync(STATE_DIR, { mode: 0o700, recursive: true });
+  const temp = `${SUPPLY_FILE}.${process.pid}.tmp`;
+  writeFileSync(temp, JSON.stringify(supply), { mode: 0o600 });
+  renameSync(temp, SUPPLY_FILE);
 }
 
 function saveTrend(trend: EmbedTrend | null): void {
@@ -298,6 +432,9 @@ async function sendAlert(alert: Alert): Promise<boolean> {
 async function main(): Promise<void> {
   const now = new Date();
   const snapshot = await collectSnapshot();
+  const supply = advanceCrawlSupply(loadSupply(), snapshot.crawl?.storable ?? null, now.getTime());
+  snapshot.crawlZeroChecks = supply.checks;
+  saveSupply(supply);
   const trend = advanceEmbedTrend(loadTrend(), snapshot.queues.embed, now.getTime());
   snapshot.embedTrend = trend;
   saveTrend(trend);

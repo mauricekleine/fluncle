@@ -2,6 +2,8 @@
 
 The host timer fires every 15 minutes with up to 60 seconds of jitter. Its service runs `pipeline-watch.sh` as the unprivileged `hermes` user inside the long-lived container. The sweep reads bounded cron markers and agent-allowed Worker counters without a database admission lease, writes its own marker and run-ledger summary, and keeps incident delivery state under `${HOME}/.pipeline-watch/state.json`.
 
+The `get_crawl_status` read uses `?summary=true` for the watchdog. That response contains only indexed counts for pending frontier nodes, storable and unstorable ready releases, and unanchored catalogue tracks. The ordinary CLI status read keeps its full frontier groups, label list, and catalogue size. Hosted plans showed the old frontier group-by reads scanning the whole frontier, so the 15-minute watchdog does not repeat them.
+
 The embed worklist's opt-in `age=true` read checks the same partial-indexed queue predicate for any captured source older than 24 hours. It returns a boolean without a track ID; a queued row with no capture stamp carries no age and cannot make it true. A failed age read is treated as an unavailable measurement; queue growth over a full day is independently tracked in `${HOME}/.pipeline-watch/embed-trend.json`.
 
 After the image containing the sweep is baked and running, install the two host units from a checkout on the box and enable the timer:

@@ -224,6 +224,13 @@ export type CrawlStatus = {
   unstorablePending: number;
 };
 
+export type CrawlPipelineSummary = {
+  anchorsPending: number;
+  frontier: { pending: number };
+  storablePending: number;
+  unstorablePending: number;
+};
+
 type MbArtistCredit = { artist?: { id?: string; name?: string }; name?: string };
 type MbRecording = {
   "artist-credit"?: MbArtistCredit[];
@@ -2744,6 +2751,30 @@ export async function countFrontierPending(): Promise<number> {
   return Number(typedRows<{ n: number }>(result.rows)[0]?.n ?? 0);
 }
 
+const ANCHORS_PENDING_SQL = `select count(*) as n from tracks indexed by tracks_anchor_queue_idx
+  where isrc is not null and spotify_uri is null
+    and not exists (select 1 from findings where findings.track_id = tracks.track_id)`;
+const STORABLE_PENDING_SQL = `select count(*) as n from crawl_due_work indexed by crawl_due_work_release_ready_idx
+  where state = 'ready' and node_kind = 'release' and storable_rank = 0`;
+const UNSTORABLE_PENDING_SQL = `select count(*) as n from crawl_due_work indexed by crawl_due_work_release_ready_idx
+  where state = 'ready' and node_kind = 'release' and storable_rank = 1`;
+
+export async function getCrawlPipelineSummary(): Promise<CrawlPipelineSummary> {
+  const db = await getDb();
+  const [pending, anchors, storable, unstorable] = await Promise.all([
+    countFrontierPending(),
+    db.execute(ANCHORS_PENDING_SQL),
+    db.execute(STORABLE_PENDING_SQL),
+    db.execute(UNSTORABLE_PENDING_SQL),
+  ]);
+  return {
+    anchorsPending: Number(typedRows<{ n: number }>(anchors.rows)[0]?.n ?? 0),
+    frontier: { pending },
+    storablePending: Number(typedRows<{ n: number }>(storable.rows)[0]?.n ?? 0),
+    unstorablePending: Number(typedRows<{ n: number }>(unstorable.rows)[0]?.n ?? 0),
+  };
+}
+
 export async function getCrawlStatus(): Promise<CrawlStatus> {
   const db = await getDb();
   const [
@@ -2761,15 +2792,11 @@ export async function getCrawlStatus(): Promise<CrawlStatus> {
 
     db.execute(`select (select count(*) from tracks) - (select count(*) from findings) as n`),
 
-    db.execute(`select count(*) as n from tracks indexed by tracks_anchor_queue_idx
-                where isrc is not null and spotify_uri is null
-                  and not exists (select 1 from findings where findings.track_id = tracks.track_id)`),
+    db.execute(ANCHORS_PENDING_SQL),
 
-    db.execute(`select count(*) as n from crawl_due_work indexed by crawl_due_work_release_ready_idx
-                where state = 'ready' and node_kind = 'release' and storable_rank = 0`),
+    db.execute(STORABLE_PENDING_SQL),
 
-    db.execute(`select count(*) as n from crawl_due_work indexed by crawl_due_work_release_ready_idx
-                where state = 'ready' and node_kind = 'release' and storable_rank = 1`),
+    db.execute(UNSTORABLE_PENDING_SQL),
 
     db.execute(`select count(*) as n from labels l
                 where l.seed_state = 'undecided'

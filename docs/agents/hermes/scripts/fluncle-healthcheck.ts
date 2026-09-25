@@ -5,8 +5,10 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSy
 import { connect } from "node:net";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { cronStaleBudgetMs, type CronDef } from "./cron-freshness";
 import { findJsonSummary, splitMarker } from "./cron-marker";
 
+export { cronStaleBudgetMs, MAX_TIMER_JITTER_MS, type CronDef } from "./cron-freshness";
 export { findJsonSummary, splitMarker, STDERR_DELIMITER } from "./cron-marker";
 
 const HOME = process.env.HOME ?? homedir() ?? "/opt/data/home";
@@ -400,10 +402,6 @@ function probeDisk(): Check {
   return { latencyMs: null, message: msg(`${usedPct}% used`), service, status: "ok" };
 }
 
-export const MAX_TIMER_JITTER_MS = 90_000;
-
-export type CronDef = { cadenceMs: number; match: string; service: string };
-
 export const AUTOMATION_CRONS: CronDef[] = [
   { cadenceMs: 5 * 60_000, match: "enrich", service: "cron.enrich" },
   { cadenceMs: 5 * 60_000, match: "embed", service: "cron.embed" },
@@ -621,10 +619,6 @@ export function readProjectionMaintenanceState(
     };
   }
   return { converged: null, judgementAgeMs: null, oldestDebtAgeMs: null, outcome: null };
-}
-
-export function cronStaleBudgetMs(cron: CronDef): number {
-  return Math.max(cron.cadenceMs * 3, 90_000) + MAX_TIMER_JITTER_MS;
 }
 
 function formatElapsed(elapsedMs: number): string {

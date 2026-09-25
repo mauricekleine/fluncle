@@ -7,7 +7,13 @@ import {
   type Stage,
   type StageVerdict,
 } from "./pipeline-watch-evaluate";
-import { acceptAlert, advanceEmbedTrend, planIncidents } from "./pipeline-watch";
+import {
+  acceptAlert,
+  advanceCrawlSupply,
+  advanceEmbedTrend,
+  parseIncidentState,
+  planIncidents,
+} from "./pipeline-watch";
 
 const asMarkers = (rows: { at: number; summary: Record<string, unknown> }[]): Marker[] => rows;
 
@@ -17,8 +23,10 @@ function snapshot(
   options: Partial<PipelineSnapshot> = {},
 ): PipelineSnapshot {
   return {
+    anchorQueue: 2000,
     budget: { closedReason: null, open: true, remainingBytes: 1_000_000_000, remainingTracks: 800 },
     crawl: { frontier: 2000, storable: 100, unstorable: 100 },
+    crawlZeroChecks: 2,
     embedOldCapture: false,
     markers: {
       analyze: null,
@@ -31,7 +39,6 @@ function snapshot(
       [stage]: markers,
     },
     queues: { analyze: 5, capture: 5, embed: 5 },
-    quiesced: false,
     ...options,
   };
 }
@@ -153,7 +160,7 @@ describe("tripwire boundaries", () => {
   test("productive windows and genuinely empty queues stay healthy", () => {
     const productive = asMarkers(fixtures.embedFailure).map((marker, index) => ({
       ...marker,
-      summary: { ...marker.summary, done: index === 3 ? 1 : 0 },
+      summary: { ...marker.summary, done: index === 3 ? 1 : 0, produced: index === 3 ? 1 : 0 },
     }));
     expect(evaluate("embed", productive).state).toBe("healthy");
     expect(
@@ -173,7 +180,7 @@ describe("tripwire boundaries", () => {
     expect(evaluate("anchor", anchor).state).toBe("healthy");
     const capture = asMarkers(fixtures.captureBudget).map((marker, index) => ({
       ...marker,
-      summary: { ...marker.summary, done: index === 10 ? 1 : 0 },
+      summary: { ...marker.summary, done: index === 10 ? 1 : 0, produced: index === 10 ? 1 : 0 },
     }));
     expect(evaluate("capture", capture).state).toBe("healthy");
     const analyze = asMarkers(fixtures.enrichRepair).map((marker, index) => ({
@@ -192,7 +199,7 @@ describe("tripwire boundaries", () => {
     expect(trend?.since).toBe(start);
     const recent = asMarkers(fixtures.embedFailure).map((marker, index) => ({
       at: start + 24 * 60 * 60_000 - (6 - index) * 5 * 60_000,
-      summary: { ...marker.summary, done: index === 2 ? 1 : 0 },
+      summary: { ...marker.summary, done: index === 2 ? 1 : 0, produced: index === 2 ? 1 : 0 },
     }));
     const verdict = evaluate("embed", recent, {
       embedTrend: trend,
@@ -200,7 +207,7 @@ describe("tripwire boundaries", () => {
     });
     expect(verdict.state).toBe("degraded");
     expect(advanceEmbedTrend(trend, 100, start + 97 * 15 * 60_000)?.since).toBe(
-      start + 97 * 15 * 60_000,
+      start + 15 * 60_000,
     );
     expect(advanceEmbedTrend(trend, null, start + 97 * 15 * 60_000)).toBeNull();
   });
@@ -208,7 +215,7 @@ describe("tripwire boundaries", () => {
   test("an old queued capture degrades embed even while some vectors land", () => {
     const productive = asMarkers(fixtures.embedFailure).map((marker, index) => ({
       ...marker,
-      summary: { ...marker.summary, done: index === 3 ? 1 : 0 },
+      summary: { ...marker.summary, done: index === 3 ? 1 : 0, produced: index === 3 ? 1 : 0 },
     }));
     const verdict = evaluate("embed", productive, { embedOldCapture: true });
     expect(verdict.state).toBe("degraded");
@@ -318,5 +325,172 @@ describe("paging policy", () => {
     const twice = planIncidents(once.next, [healthy], start + 30 * 60_000);
     expect([...once.alerts, ...twice.alerts]).toEqual([]);
     expect(twice.next).toEqual({});
+  });
+});
+
+describe("watchdog regression replays", () => {
+  test("productive capture and embed windows tolerate yield and admission-skip summaries", () => {
+    for (const stage of ["capture", "embed"] as const) {
+      const source = stage === "capture" ? fixtures.captureBudget : fixtures.embedFailure;
+      const markers = asMarkers(source).map((marker, index) => ({
+        ...marker,
+        summary:
+          index === source.length - 3
+            ? {
+                checked: null,
+                gateState: "admission-skipped",
+                payloadStarted: false,
+                produced: null,
+              }
+            : index === source.length - 2
+              ? { gateState: "paused", produced: 0, reason: "database_admission" }
+              : { ...marker.summary, produced: index === source.length - 4 ? 1 : 0 },
+      }));
+      expect(evaluate(stage, markers).state).toBe("healthy");
+    }
+  });
+
+  test("an all-skip capture window is a stalled admission lane", () => {
+    const markers = asMarkers(fixtures.captureBudget).map((marker) => ({
+      ...marker,
+      summary: {
+        checked: null,
+        gateState: "admission-skipped",
+        payloadStarted: false,
+        produced: null,
+      },
+    }));
+    const verdict = evaluate("capture", markers);
+    expect(verdict.state).toBe("stalled");
+    expect(verdict.cause).toBe("admission_lane_closed");
+  });
+
+  test("paused anchor markers cannot erase the API backlog", () => {
+    const start = Date.parse("2026-09-23T10:00:00Z");
+    const markers = Array.from({ length: 3 }, (_, index) => ({
+      at: start + index * 60 * 60_000,
+      summary: { gateState: "paused", produced: 0, queueDepth: null, reason: "database_admission" },
+    }));
+    const verdict = evaluate("anchor", markers, { anchorQueue: 2000 } as Partial<PipelineSnapshot>);
+    expect(verdict.state).toBe("stalled");
+    expect(verdict.cause).toBe("admission_lane_closed");
+    expect(verdict.backlog).toBe(2000);
+    expect(
+      evaluate("anchor", markers, { anchorQueue: null } as Partial<PipelineSnapshot>).state,
+    ).toBe("measurement_unavailable");
+  });
+
+  test("a nonincident degraded span closes an announced stall before a new OPEN", () => {
+    const start = Date.parse("2026-09-25T00:00:00Z");
+    const stalled = evaluate("embed", asMarkers(fixtures.embedFailure));
+    const degraded = { ...stalled, cause: "capacity_below_intake", state: "degraded" as const };
+    const opened = planIncidents({}, [stalled], start);
+    acceptAlert(opened.next, opened.alerts[0] as NonNullable<(typeof opened.alerts)[0]>, start);
+    const first = planIncidents(opened.next, [degraded], start + 5 * 60 * 60_000);
+    const second = planIncidents(first.next, [degraded], start + 5 * 60 * 60_000 + 15 * 60_000);
+    expect(second.alerts.map((alert) => alert.type)).toEqual(["RECOVERED"]);
+    acceptAlert(
+      second.next,
+      second.alerts[0] as NonNullable<(typeof second.alerts)[0]>,
+      start + 5 * 60 * 60_000 + 15 * 60_000,
+    );
+    const again = planIncidents(second.next, [stalled], start + 10 * 60 * 60_000);
+    expect(again.alerts.map((alert) => alert.type)).toEqual(["OPEN"]);
+  });
+
+  test("a changing crawl cause stays one incident and the reminder explains the change", () => {
+    const start = Date.parse("2026-09-25T00:00:00Z");
+    const label = evaluate("crawl", asMarkers(fixtures.crawlLabel));
+    const admission = {
+      ...label,
+      cause: "admission_lane_closed",
+      message: "crawl admission lane closed",
+    };
+    const opened = planIncidents({}, [label], start);
+    acceptAlert(opened.next, opened.alerts[0] as NonNullable<(typeof opened.alerts)[0]>, start);
+    const flipped = planIncidents(opened.next, [admission], start + 15 * 60_000);
+    expect(flipped.alerts).toEqual([]);
+    expect(Object.keys(flipped.next)).toEqual(["crawl"]);
+    const reminder = planIncidents(flipped.next, [admission], start + 60 * 60_000);
+    expect(reminder.alerts.map((alert) => alert.type)).toEqual(["REMINDER"]);
+    expect(reminder.alerts[0]?.message).toContain("label_gate");
+    expect(reminder.alerts[0]?.message).toContain("admission_lane_closed");
+  });
+
+  test("real capture and enrich gaps remain within the marker freshness budget", () => {
+    const capture = evaluate(
+      "capture",
+      asMarkers(fixtures.captureBudget),
+      {
+        budget: {
+          closedReason: "bytes_spent",
+          open: false,
+          remainingBytes: 0,
+          remainingTracks: 10,
+        },
+      },
+      18 * 60_000,
+    );
+    expect(capture.state).toBe("budget_closed");
+    const enrich = evaluate("analyze", asMarkers(fixtures.enrichRepair), {}, 13 * 60_000);
+    expect(enrich.state).toBe("stalled");
+  });
+
+  test("crawl needs two consecutive zero-storable readings", () => {
+    const markers = asMarkers(fixtures.crawlLabel);
+    const crawl = { frontier: 183440, storable: 0, unstorable: 173754 };
+    const now = Date.parse("2026-09-25T12:00:00Z");
+    const first = advanceCrawlSupply(null, 0, now);
+    const second = advanceCrawlSupply(first, 0, now + 15 * 60_000);
+    expect(first.checks).toBe(1);
+    expect(second.checks).toBe(2);
+    expect(advanceCrawlSupply(second, 1, now + 30 * 60_000).checks).toBe(0);
+    expect(advanceCrawlSupply(first, 0, now + 45 * 60_000).checks).toBe(1);
+    expect(evaluate("crawl", markers, { crawl, crawlZeroChecks: first.checks }).state).not.toBe(
+      "stalled",
+    );
+    expect(evaluate("crawl", markers, { crawl, crawlZeroChecks: second.checks }).cause).toBe(
+      "supply_empty",
+    );
+  });
+
+  test("before 00:30 UTC the funnel keeps the previous day's missing verdict", () => {
+    const marker = [
+      { at: Date.parse("2026-09-24T23:46:00Z"), summary: { day: "2026-09-24", ok: true } },
+    ];
+    const verdict = evaluate("funnel-snapshot", marker, {}, 24 * 60_000);
+    expect(verdict.state).toBe("stalled");
+    expect(verdict.message).toContain("2026-09-23");
+    expect(evaluate("funnel-snapshot", marker, {}, 45 * 60_000).state).toBe("healthy");
+  });
+
+  test("embed growth can span normal flat and falling ticks", () => {
+    const start = Date.parse("2026-09-24T00:00:00Z");
+    let trend = advanceEmbedTrend(null, 5, start);
+    for (let tick = 1; tick <= 96; tick += 1) {
+      trend = advanceEmbedTrend(trend, tick % 2 === 0 ? 10 : 9, start + tick * 15 * 60_000);
+    }
+    expect(trend?.since).toBe(start);
+    expect(trend?.startingQueue).toBe(5);
+  });
+
+  test("a corrupt persisted incident entry is discarded without affecting other stages", () => {
+    const start = Date.parse("2026-09-25T00:00:00Z");
+    const healthy = {
+      ...evaluate("embed", asMarkers(fixtures.embedFailure)),
+      state: "healthy" as const,
+    };
+    const corrupt = { embed: { healthyChecks: "many", openedAt: "yesterday", sentAt: null } };
+    const planned = planIncidents(
+      corrupt as unknown as Record<
+        string,
+        { healthyChecks: number; openedAt: number; sentAt: number[] }
+      >,
+      [healthy],
+      start,
+    );
+    expect(planned.alerts).toEqual([]);
+    expect(planned.next).toEqual({});
+    expect(parseIncidentState({ crawl: null, embed: { sentAt: "bad" } })).toEqual({});
   });
 });
