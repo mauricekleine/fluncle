@@ -4,10 +4,6 @@ import { basename, join, relative } from "node:path";
 
 const SERVER_DIR = import.meta.dirname;
 
-// The settings.ts register, made executable. Adding a key is a two-sided change:
-// its module must call get/set/delete, and this inventory must name the owner.
-// A registered key with no reader or writer is an orphan; an unregistered key in
-// code is inventory drift. Both fail the build.
 const SETTINGS_INVENTORY = {
   "anchor-apify.ts": [
     "anchor_apify_daily_rows",

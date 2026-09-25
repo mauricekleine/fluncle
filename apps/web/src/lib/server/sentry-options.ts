@@ -8,7 +8,6 @@ import {
 
 const LEGACY_RECEIPT_KEY_IN_URL = /(\/api\/v1\/admin\/operation-receipts\/)[^/?#\s]+/g;
 
-/** Remove compatibility-era receipt keys from a URL, route, or transaction name. */
 export function scrubLegacyReceiptCoordinate(value: string): string {
   return value.replace(LEGACY_RECEIPT_KEY_IN_URL, "$1{operationKey}");
 }
@@ -26,12 +25,10 @@ function scrubEventCoordinates<T extends { request?: { url?: string }; transacti
   return event;
 }
 
-/** Redact stale keyed-receipt coordinates from error-event request context. */
 export function scrubServerSentryEvent(event: ErrorEvent): ErrorEvent {
   return scrubEventCoordinates(event);
 }
 
-/** Redact stale keyed-receipt coordinates from HTTP span names and URL attributes. */
 export function scrubServerSentrySpan(span: SpanJSON): SpanJSON {
   if (typeof span.description === "string") {
     span.description = scrubLegacyReceiptCoordinate(span.description);
@@ -46,7 +43,6 @@ export function scrubServerSentrySpan(span: SpanJSON): SpanJSON {
   return span;
 }
 
-/** Apply the same compatibility redaction to transaction events and their bundled spans. */
 export function scrubServerSentryTransaction(event: TransactionEvent): TransactionEvent {
   scrubEventCoordinates(event);
   event.spans = event.spans?.map(scrubServerSentrySpan);
@@ -54,7 +50,6 @@ export function scrubServerSentryTransaction(event: TransactionEvent): Transacti
   return event;
 }
 
-/** Replace Sentry's body-capturing HTTP integration with a metadata-only instance. */
 export function serverSentryIntegrations(defaultIntegrations: Integration[]): Integration[] {
   const metadataOnlyHttp = Sentry.httpServerIntegration({ maxRequestBodySize: "none" });
 

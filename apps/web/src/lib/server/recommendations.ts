@@ -1,46 +1,3 @@
-// The per-user recommendation engine — the operator's telescope (docs/the-ear.md),
-// generalized to a signed-in listener's own seed set. A user picks up to
-// MAX_REC_SEEDS tracks (archive or catalogue — a listener seeds with what they
-// like, not with what Fluncle certified), and the engine ranks the embedded,
-// Spotify-anchored catalogue against THEIR seeds by max-similarity, exactly the
-// way The Ear ranks it against the findings.
-//
-// Every scan here is a derivative of a PROVEN query shape, never a new one:
-//
-//   - The max-similarity scan is a SINGLE pass over the candidates with one
-//     `vector_distance_cos` term per probe folded by scalar `min(…)`, each
-//     probe bound ONCE as a raw float32 BLOB (`toVectorProbe` — never text,
-//     the 14× hosted cliff). Never a `union all` branch per probe over a CTE:
-//     the planner flattens the CTE and re-runs the candidate scan per branch
-//     (63 s hosted; docs/local-database.md). Probe
-//     fan-out is bounded by construction: ≤ MAX_REC_SEEDS terms.
-//   - The rank-and-cut lives IN SQL (`order by dist asc limit ?`), the
-//     `getSimilarFindings` shape — only (track_id, dist) pairs cross the wire,
-//     never a vector (docs/local-database.md: rank in SQL, or OOM the Worker).
-//   - The candidate exclusions are the ear lens's WHERE (catalogue.ts
-//     `listCatalogueTracks`, `lens === "ear"`): no findings row, not dismissed,
-//     no duplicate marker, under the long-form veto — plus the display-band
-//     duplicate cut (`nearest_finding_score < DUPLICATE_SIMILARITY`) the ear
-//     applies at read time, and the Spotify anchor this surface needs (a rec a
-//     listener cannot play is not a rec).
-//   - The diversity re-rank is `diversifyRanked` (catalogue.ts) — the SAME
-//     EAR_DIVERSITY_DECAY greed the ear lens uses, imported, never re-implemented.
-//
-// AND BOTH OF THOSE SCANS CAN LEAVE THE DATABASE, each behind ITS OWN dark flag (DEFAULT OFF,
-// ./sonar.ts): `sonar_recs_enabled` for the FINDINGS SLOTS, `sonar_recs_catalogue_enabled` for
-// the CATALOGUE POOL. The in-memory `sonar` sidecar folds multi-probe by the same nearest-probe
-// rule, exactly, so either route is the same ranking in RAM. The catalogue half could not route
-// until sonar's filter could express REC_ELIGIBLE_WHERE clause for clause — a flag flip must be a
-// pure latency win, never a ranking change — and the clause-by-clause argument that it now can is
-// written out at {@link sonarCataloguePool}.
-//
-// THE REGISTER SPLIT (the option-B blend, operator-ratified): 2–3 FINDINGS
-// nearest the seed set ride along as labeled slots — certified tracks, so those
-// rows carry Fluncle's full voice (the note, the Log ID). The catalogue rows
-// carry NOTHING editorial: no note, no coined noun, no invented WHY — the
-// instrument register (DESIGN.md's Unlit Rule on the wire). "Close to what you
-// picked" is UI copy, not data.
-
 import { bestAlbumCoverUrl } from "../media";
 import { REC_ELIGIBLE_WHERE } from "../catalogue-eligibility";
 import { parseArtistsJson } from "./artists";
@@ -58,69 +15,19 @@ import {
 } from "./sonar";
 import { executeVectorFallback, vectorFallbackCandidateLimitSql } from "./vector-fallback";
 
-/**
- * The seed cap. Twelve is the roadmap's "~10" with head-room, and it is
- * LOAD-BEARING for scale: the seed count IS the probe fan-out of every scan below
- * (one distance term per seed vector), so the cap bounds the per-request
- * vector work at ≤ 12 × candidates. The CANDIDATE side of that product is the
- * unbounded one — see the scale tripwire on the catalogue scan.
- */
 export const MAX_REC_SEEDS = 12;
 
-/** How many catalogue recommendations a request returns (post-decay). */
 export const RECOMMENDATIONS_PAGE = 30;
 
-/**
- * The over-fetch pool the diversity decay chooses from — the ear lens's exact
- * formula (`page * 3 + 25`, catalogue.ts): a decayed clone can only be displaced
- * by a fresh artist if that fresh artist made the pool.
- */
 export const RECOMMENDATIONS_POOL = RECOMMENDATIONS_PAGE * 3 + 25;
 
-/** The labeled findings slots (option B): the findings nearest the seed set. */
 export const FINDINGS_SLOT_COUNT = 3;
 
-/**
- * The NOVELTY WINDOW — how many of a user's most recent Frontier editions the weekly
- * refresh excludes from, so the playlist rotates instead of restating the same ~33
- * tracks every week. Consumed here (the `excludeRecent` derive) and by the snapshot hook
- * (A2, frontier-playlist.ts) that writes the editions this reads back.
- *
- * DESIGN ASSUMPTION (operator decision, no relaxation/fallback): by go-live the candidate
- * pool is thousands, so `candidates − (≤ FRONTIER_NOVELTY_WINDOW editions × ≤33 tracks)
- * ≫ target` and the strict `NOT IN` always fills. We do NOT build for a small pool that
- * could starve — if it ever did, the honest behavior is a shorter playlist that week,
- * never a guard that re-admits a just-served track.
- */
 export const FRONTIER_NOVELTY_WINDOW = 8;
 
-/**
- * The GET /me/recommendations rate limit: a modest per-user hourly budget,
- * because each request is a real vector scan in the database (≤ 12 probes ×
- * the embedded catalogue) — cheap enough to compute per request, not cheap
- * enough to hand a loop.
- */
 export const RECOMMENDATIONS_RATE_LIMIT = 60;
 export const RECOMMENDATIONS_RATE_WINDOW_MS = 60 * 60 * 1000;
 
-/**
- * THE REC-ELIGIBILITY PREDICATE — the exact, STATIC WHERE a catalogue row must clear to be
- * recommendable to any listener. It is the pool the catalogue scan below draws from: an
- * embedded, Spotify-anchored, non-dismissed, non-duplicate uncertified track under the
- * long-form veto and outside the near-1.0 display-duplicate band.
- *
- * Extracted to a shared constant on purpose (docs/admin-shell.md, the `/admin/funnel` station): the
- * catalogue FUNNEL's `rec_eligible` count MUST be the same gate this scan uses, and the only
- * way two counters cannot drift is to share the ONE predicate. The funnel count
- * (lib/server/funnel.ts) folds this exact fragment into its stage scan, and the
- * eligibility-agreement integration test proves the two agree on the same fixtures.
- *
- * Aliased `t` = `tracks`, `f` = the LEFT-joined `findings`. It carries NO bind params — the
- * two thresholds are interpolated numeric module constants — so it drops into any query with
- * a `tracks t left join findings f` shape without disturbing the arg order. The PER-USER
- * exclusions (the seed set, the recent-editions novelty window) are NOT part of pool
- * eligibility; `listRecommendations` appends them after this fragment.
- */
 export { REC_ELIGIBLE_WHERE } from "../catalogue-eligibility";
 
 type TrackRefRow = {
@@ -169,29 +76,21 @@ type HydrateRow = {
   track_id: string;
 };
 
-/** One seed as the list returns it — hydrated for recognition, like a saved finding. */
 export type RecSeedItem = {
   addedAt: string;
   artists: string[];
   imageUrl?: string;
-  /** Present only when the seed is a certified finding (a catalogue seed has none). */
   logId?: string;
   title: string;
   trackId: string;
 };
 
-/**
- * A recommended FINDING — a labeled slot. Certified, so it carries Fluncle's full
- * voice: the coordinate and, when he wrote one, the note (the row's WHY).
- */
 export type RecommendationFindingItem = {
   artists: string[];
-  /** The instrument readout (The Readout Rule) — each present only when the row carries it. */
   bpm?: number;
   durationMs?: number;
   imageUrl?: string;
   key?: string;
-  /** The imprint, for the Stardust label-and-year line (the Track Row anatomy). */
   label?: string;
   logId: string;
   note?: string;
@@ -200,30 +99,21 @@ export type RecommendationFindingItem = {
   spotifyUrl?: string;
   title: string;
   trackId: string;
-  /** The release year (`release_date.slice(0, 4)`), when the row has a release date. */
   year?: string;
 };
 
-/**
- * A recommended CATALOGUE track — the instrument register. Identity, links, and
- * the honest similarity number; deliberately NO editorial field of any kind
- * (no note, no coordinate — it has neither, and the wire never invents one).
- */
 export type RecommendationCatalogueItem = {
   artists: string[];
-  /** The instrument readout (The Readout Rule) — each present only when the row carries it. */
   bpm?: number;
   durationMs?: number;
   imageUrl?: string;
   key?: string;
-  /** The imprint, for the Stardust label-and-year line (the Track Row anatomy). */
   label?: string;
   similarity: number;
   spotifyUri?: string;
   spotifyUrl?: string;
   title: string;
   trackId: string;
-  /** The release year (`release_date.slice(0, 4)`), when the row has a release date. */
   year?: string;
 };
 
@@ -231,22 +121,10 @@ export type RecommendationsResult = {
   catalogue: RecommendationCatalogueItem[];
   findings: RecommendationFindingItem[];
   ok: true;
-  /**
-   * Seeds whose track has no embedding yet (its audio was never captured or
-   * measured) — skipped HONESTLY, named rather than silently ignored, so the
-   * surface can say "these three aren't steering yet".
-   */
   seedsSkipped: string[];
-  /** How many seed vectors actually steered this response. */
   seedsUsed: number;
 };
 
-/**
- * Resolve a seed reference — a `tracks.track_id` OR a finding's Log ID — to its
- * track row. The LEFT-join twin of account-data's `findTrackByTrackOrLog` (which
- * INNER-joins findings, because a saved finding must be certified): a seed may be
- * an uncertified catalogue row, so the certification is optional here.
- */
 async function findSeedTrack(trackIdOrLogId: string): Promise<TrackRefRow | undefined> {
   const value = trackIdOrLogId.trim();
 
@@ -268,7 +146,6 @@ async function findSeedTrack(trackIdOrLogId: string): Promise<TrackRefRow | unde
   return typedRow<TrackRefRow>(result.rows);
 }
 
-/** The signed-in user's seeds, newest first, hydrated for recognition. */
 export async function listRecSeeds(user: PublicUser): Promise<{ ok: true; seeds: RecSeedItem[] }> {
   const result = await (
     await getDb()
@@ -303,12 +180,6 @@ export async function listRecSeeds(user: PublicUser): Promise<{ ok: true; seeds:
   };
 }
 
-/**
- * Add a seed (by trackId or Log ID). Re-adding an existing seed refreshes its
- * `added_at` and never counts against the cap; a NEW seed past MAX_REC_SEEDS is a
- * 409 (`seed_limit`) with plain instructions — the cap is the scan's fan-out
- * bound, so it is enforced here, on the write.
- */
 export async function saveRecSeed(
   user: PublicUser,
   body: unknown,
@@ -363,7 +234,6 @@ export async function saveRecSeed(
   };
 }
 
-/** Remove a seed (by trackId or Log ID). An unknown track is a 404; removing a track that was never a seed is a no-op `{ ok: true }`, the `deleteSavedFinding` discipline. */
 export async function deleteRecSeed(
   user: PublicUser,
   trackIdOrLogId: string,
@@ -384,22 +254,6 @@ export async function deleteRecSeed(
   return { ok: true };
 }
 
-/**
- * THE ENGINE — compute the signed-in user's recommendations per request. No
- * cache in v1: the scan is bounded (≤ MAX_REC_SEEDS probes × the embedded
- * catalogue, ranked entirely in SQL) and the GET carries its own hourly rate
- * limit (RECOMMENDATIONS_RATE_LIMIT, applied in the handler).
- *
- * GATED on a VERIFIED EMAIL (the learning-cohort ruling): a signed-in but
- * unverified account gets a 403 `email_unverified`, never a silent empty list.
- * The session itself is the caller's job (`privateUserAuth`).
- *
- * `options.excludeRecent` (default false) turns on FRONTIER NOVELTY: when true, every
- * track in the user's last FRONTIER_NOVELTY_WINDOW Frontier editions is excluded from
- * both scans, so the weekly playlist rotates. Default false keeps the live-page shelf
- * (the `/recommendations` reads) byte-identical to today — only the refresh path (A2)
- * passes true.
- */
 export async function listRecommendations(
   user: PublicUser,
   options?: { excludeRecent?: boolean },
@@ -411,26 +265,9 @@ export async function listRecommendations(
   const excludeRecent = options?.excludeRecent ?? false;
   const db = await getDb();
 
-  // The seed vectors, the FRONTIER NOVELTY set, and the TWO sonar dark flags are mutually
-  // independent reads (each keyed only on the user, or on nothing), so they run CONCURRENTLY
-  // instead of laddering — so the flag reads add NO wall-clock on either side of a flip. The seed
-  // read is the one place a vector legitimately leaves the database — ≤ MAX_REC_SEEDS blobs,
-  // bounded and capped, re-bound as the probes below; a seed without a vector is skipped
-  // honestly and reported. The novelty read (only when `excludeRecent` is on) is the track
-  // ids in this user's last FRONTIER_NOVELTY_WINDOW editions, re-derived from the ledger each
-  // refresh (self-healing — no `last_used` tag to keep in sync); its outer `where fe.user_id
-  // = ?` is LOAD-BEARING — it binds `index(user_id, number desc)` and bounds the scan to one
-  // user (a bare `id in (...)` subquery would leave the outer as a full table scan). The
-  // default live-page read (`excludeRecent` false) fires a single query here, exactly as
-  // before. NO relaxation / fallback (operator decision): the pool is thousands of
-  // candidates, so the strict `not in` always fills the target — see FRONTIER_NOVELTY_WINDOW.
   const [seedResult, recentResult, sonarEnabled, sonarCatalogueEnabled] = await Promise.all([
     db.execute({
       args: [user.id],
-      // `tracks` stays an INNER join (a seed pointing at no track is not a seed) while
-      // `track_embeddings` joins LEFT: a seed the user added before its vector landed must
-      // still come back, because it is reported as skipped below. Making the satellite join
-      // inner would silently shorten the honest `seedsSkipped` list instead.
       sql: `select s.track_id, emb.embedding_blob
         from user_rec_seeds s
         join tracks t on t.track_id = s.track_id
@@ -453,10 +290,6 @@ export async function listRecommendations(
     isSonarRecsCatalogueEnabled(),
   ]);
   const seedRows = typedRows<SeedVectorRow>(seedResult.rows);
-  // Each seed's vector is decoded EXACTLY ONCE, into the two forms the two engines take:
-  // `vectors` is the plain `number[]` sonar's JSON body carries, and `probes` is the same
-  // vectors bound as raw float32 BLOBs for `vector_distance_cos` (never as text — the 14×
-  // hosted cliff, embedding.ts rule 2). Same order, same count, one decode.
   const vectors: number[][] = [];
   const seedIds: string[] = [];
   const seedsSkipped: string[] = [];
@@ -479,14 +312,9 @@ export async function listRecommendations(
 
   const probes = vectors.map(toVectorProbe);
 
-  // A row the user SEEDED is never recommended back to them — telling someone
-  // about the track they just told us about is not a recommendation. Applied to
-  // both halves of the blend.
   const seedExclusion =
     seedIds.length > 0 ? `and t.track_id not in (${seedIds.map(() => "?").join(", ")})` : "";
 
-  // Drain the FRONTIER NOVELTY read fired concurrently above (null when `excludeRecent`
-  // is off) into the exclusion id set.
   const excludedIds: string[] = [];
 
   if (recentResult) {
@@ -495,73 +323,15 @@ export async function listRecommendations(
     }
   }
 
-  // The recent-editions membership prune — placed IMMEDIATELY AFTER `${seedExclusion}` in
-  // both scans, with `...excludedIds` appended IMMEDIATELY AFTER `...seedIds` in both args
-  // arrays, so the bind order stays `[...probes, ...seedIds, ...excludedIds, LIMIT]`. Like
-  // the seed exclusion, it is a membership check the single-pass fold already visits — no
-  // second scan, no per-probe fan-out.
   const recentExclusion =
     excludeRecent && excludedIds.length > 0
       ? `and t.track_id not in (${excludedIds.map(() => "?").join(", ")})`
       : "";
 
-  // ONE PASS, one distance term per probe, folded to the row's best in the
-  // select list (max-similarity = min distance). NEVER a `union all` branch per
-  // probe over a CTE: the planner does not materialize the CTE — it FLATTENS it
-  // and re-executes the candidate scan once per branch, so 12 seeds meant 12
-  // full passes over `tracks` dragging the 4 KB vector each time (63 s hosted;
-  // docs/local-database.md "Local is not production").
-  //
-  // The one-probe case binds the bare distance: single-argument `min()` is
-  // SQLite's AGGREGATE min and would collapse the scan to one row.
   const distanceTerms = probes.map(() => "vector_distance_cos(embedding_blob, ?)");
   const bestDistance =
     distanceTerms.length === 1 ? distanceTerms.join("") : `min(${distanceTerms.join(", ")})`;
 
-  // THE CATALOGUE SCAN and THE FINDINGS SLOTS — two mutually independent one-pass folds
-  // over the SAME binds, so they run CONCURRENTLY (two server-side scans in parallel, one
-  // scan of wall-clock instead of two stacked). Each ranks IN SQL (getSimilarFindings) —
-  // only (track_id, dist) pairs come back, never a vector. SQL-TEXT order decides the bind
-  // order: one probe per distance term in the select list, then the seed + novelty
-  // exclusions, then the limit.
-  //
-  //   - CATALOGUE candidates are the ear lens's WHERE + the display-band duplicate cut + the
-  //     Spotify anchor. This is the half that carries the scale tripwire (see below), and the
-  //     Turso fold here is now the FALLBACK path rather than the only path.
-  //   - FINDINGS SLOTS (option B): the certified findings nearest the seed set, same fold.
-  //     `cross join` pins the join order so the tiny findings table DRIVES and `tracks` is
-  //     reached by primary key — left to itself the planner scanned all of `tracks` as the
-  //     outer loop (the 63 s plan). These are the labeled slots Fluncle's full voice rides —
-  //     hydrated with the note + Log ID below.
-  //
-  // THE TWO SONAR ROUTES (both dark, both DEFAULT OFF), one flag per scan. sonar folds
-  // multi-probe exactly the way this engine does — max over probes, the NEAREST probe and never a
-  // centroid (docs/the-ear.md: taste is multi-modal) — so either route is the same ranking, in
-  // RAM. The fidelity argument for each lives at {@link sonarFindingSlots} and
-  // {@link sonarCataloguePool}.
-  //
-  //   - `sonar_recs_enabled` → the FINDINGS SLOTS.
-  //   - `sonar_recs_catalogue_enabled` → the CATALOGUE POOL. SEPARATE, because the findings flag
-  //     is already on in production and the catalogue route needs a sonar binary carrying the
-  //     eligibility filter fields — which arrives on the box's own hourly self-deploy, not on this
-  //     merge. Two scans, two switches, so neither can turn the other on by accident.
-  //
-  // WHY THE CATALOGUE SCAN CAN ROUTE AT ALL NOW. It could not before: sonar's filter expressed
-  // five things and REC_ELIGIBLE_WHERE needs seven, four of them UNBOUNDED sets that cannot ride
-  // as `excludeIds`, and re-applying a missing predicate during hydration would prune rows sonar
-  // had already counted against `topK` — a shorter, differently-ranked page. The filter now
-  // carries all seven (`has_finding`, `dismissed`, `is_duplicate`, `nearest_finding_score_max`,
-  // `duration_ms_max` beside `anchored` and index membership), so the predicate is REPRODUCED,
-  // never approximated, and the flip stays a pure latency win. The thresholds stay HERE — sonar
-  // takes the raw values and the bound, so tuning DUPLICATE_SIMILARITY or LONG_FORM_MS is a
-  // Worker change, never a sonar redeploy.
-  //
-  // THE SCALE TRIPWIRE this finally moves: the probe count is capped (MAX_REC_SEEDS) but the
-  // candidate count is not — it grows with capture + Spotify anchoring, and it has already
-  // crossed the band this file warns about (9,859 eligible rows / ~1.84s in production).
-  // Because the two scans run
-  // CONCURRENTLY, this half sets the page's latency floor, so routing the findings slots alone
-  // could never move it.
   const [cataloguePool, findingSlots] = await Promise.all([
     resolveScan(
       sonarCatalogueEnabled ? sonarCataloguePool(vectors, [...seedIds, ...excludedIds]) : null,
@@ -636,9 +406,6 @@ export async function listRecommendations(
     ...findingSlots.map((row) => row.track_id),
   ]);
 
-  // The catalogue pool → the diversity decay (the ear's EAR_DIVERSITY_DECAY
-  // greed, via the shared diversifyRanked) → the page. The decay re-orders on
-  // artist/year/key; the similarity each row DISPLAYS stays the true number.
   type PoolEntry = { row: HydrateRow; similarity: number };
 
   const pool: PoolEntry[] = cataloguePool.flatMap((scan) => {
@@ -695,29 +462,6 @@ export async function listRecommendations(
   return { catalogue, findings, ok: true, seedsSkipped, seedsUsed: probes.length };
 }
 
-/**
- * Ask sonar for the FINDINGS SLOTS — the certified findings nearest the listener's seed set — as
- * ONE multi-probe call. Returns sonar's matches, or `null` whenever sonar cannot be used (the
- * client's documented fallback signal: unprovisioned env, non-2xx, timeout, malformed body).
- *
- * THE FIDELITY ARGUMENT, clause by clause against the Turso fold this replaces:
- *
- *   - `f.log_id is not null` ⇔ `filter: { certified: true }`. sonar DEFINES `certified` as "a
- *     findings row WITH a Log ID exists" — its loader joins `f.log_id is not null`
- *     (apps/sonar/src/turso.rs), tightened for exactly this reason. Identical set.
- *   - the `track_embeddings` join ⇔ membership in the index at all: sonar's `tracks` loader
- *     joins the same satellite, so an un-embedded row cannot be returned.
- *   - the seed exclusion + the FRONTIER NOVELTY prune ⇔ `excludeIds`. Both are FINITE, enumerated
- *     id sets already in memory (≤ MAX_REC_SEEDS seeds, ≤ FRONTIER_NOVELTY_WINDOW editions), which
- *     is the only reason they can cross the wire faithfully — an unbounded predicate could not.
- *   - the multi-probe fold ⇔ sonar's scan: `min(vector_distance_cos(…))` over probes and "max dot
- *     over probes" are the same nearest-probe rule on the two sides of `1 − cos`.
- *
- * Nothing in the fold is left unexpressed, so the flag flip cannot change WHICH findings come
- * back — only how fast. The `topK` matches FINDINGS_SLOT_COUNT exactly; the hydration below is a
- * flat lookup that re-asserts the Log ID (defense-in-depth against a stale sonar) and applies no
- * predicate sonar did not already apply.
- */
 function sonarFindingSlots(
   vectors: number[][],
   excludeIds: string[],
@@ -731,41 +475,6 @@ function sonarFindingSlots(
   });
 }
 
-/**
- * Ask sonar for the CATALOGUE POOL — the eligible, uncertified, Spotify-anchored catalogue rows
- * nearest the listener's seed set — as ONE multi-probe call. Returns sonar's matches, or `null`
- * whenever sonar cannot be used (the client's documented fallback signal).
- *
- * THE FIDELITY ARGUMENT, clause by clause against REC_ELIGIBLE_WHERE. Every one of the seven is
- * REPRODUCED; none is approximated, and none is left to be re-applied at hydration (which would
- * prune rows sonar had already counted against `topK` and hand back a shorter, wrong page):
- *
- *   - `f.track_id is null` ⇔ `has_finding: false`. NOT `certified: false` — sonar's `certified`
- *     means "a findings row WITH a Log ID", so a coordinate-less straggler (a findings row whose
- *     `log_id` is still NULL) passes `certified: false` and would be recommended as a catalogue
- *     row it is not. `has_finding` is the weaker fact this predicate actually negates, carried on
- *     sonar's index for exactly this reason (apps/sonar/src/turso.rs).
- *   - `emb.track_id is not null` ⇔ membership in the index at all: sonar's `tracks` loader
- *     joins the same `track_embeddings` satellite, so an un-embedded row cannot come back.
- *   - `t.spotify_uri is not null` ⇔ `anchored: true`.
- *   - `t.dismissed_at is null` ⇔ `dismissed: false`.
- *   - `t.duplicate_of_track_id is null` ⇔ `is_duplicate: false`.
- *   - `(t.nearest_finding_score is null or t.nearest_finding_score < DUPLICATE_SIMILARITY)` ⇔
- *     `nearest_finding_score_max: DUPLICATE_SIMILARITY`. sonar mirrors BOTH halves: the bound is
- *     exclusive AND a NULL score PASSES.
- *   - `t.duration_ms < LONG_FORM_MS` ⇔ `duration_ms_max: LONG_FORM_MS`, where a NULL duration
- *     FAILS — SQL's `NULL < x` is NULL, so the row is excluded. The OPPOSITE null rule to the
- *     line above, and sonar encodes the asymmetry deliberately.
- *
- * The seed exclusion + the FRONTIER NOVELTY prune ride as `excludeIds`: both are FINITE,
- * enumerated id sets already in memory (≤ MAX_REC_SEEDS, ≤ FRONTIER_NOVELTY_WINDOW editions).
- * `topK` is RECOMMENDATIONS_POOL — the same over-fetch the Turso scan takes, so the diversity
- * decay downstream chooses from an identically-sized pool.
- *
- * BOTH THRESHOLDS ARE SENT AS VALUES, never baked into sonar. Changing DUPLICATE_SIMILARITY or
- * LONG_FORM_MS (catalogue.ts) moves this filter and the Turso predicate together, with no
- * redeploy of the engine and no way for the two to drift.
- */
 function sonarCataloguePool(
   vectors: number[][],
   excludeIds: string[],
@@ -786,17 +495,6 @@ function sonarCataloguePool(
   });
 }
 
-/**
- * Resolve one scan from sonar when its dark flag routed it there AND sonar actually answered with
- * matches; otherwise run `runTursoScan` — the exact fold this engine has always used, returning
- * exactly what it returns today. Shared by both scans, so neither can grow its own fallback rule.
- *
- * `sonarMatches` is an ALREADY-IN-FLIGHT promise (never a thunk) so the two scans overlap; when the
- * flag is off it is `null` and the Turso scan fires immediately, keeping them exactly as concurrent
- * as they are today — the OFF path never ladders behind a sonar call it is not going to make.
- * A `null` (sonar unusable) or EMPTY (a reached corpus answering zero — a hiccup, since a draft
- * request always has a real probe) result falls back, per the client's contract.
- */
 async function resolveScan(
   sonarMatches: Promise<SonarMatch[] | null> | null,
   runTursoScan: () => Promise<ScanRow[]>,
@@ -805,9 +503,6 @@ async function resolveScan(
     const matches = await sonarMatches;
 
     if (matches && matches.length > 0) {
-      // sonar scores COSINE SIMILARITY (higher = nearer); this scan's wire contract is libSQL's
-      // cosine DISTANCE (`1 − cos`), which `cosineFromDistance` inverts back downstream. Convert
-      // here so BOTH paths hand the one mapper the same shape, in sonar's ranked order.
       return matches.map((match) => ({ dist: 1 - match.score, track_id: match.id }));
     }
   }
@@ -815,7 +510,6 @@ async function resolveScan(
   return runTursoScan();
 }
 
-/** Hydrate the recommended rows in ONE batched read (never N+1), keyed by track id. */
 async function hydrateTracks(trackIds: string[]): Promise<Map<string, HydrateRow>> {
   const ids = [...new Set(trackIds)];
 
@@ -846,11 +540,6 @@ async function hydrateTracks(trackIds: string[]): Promise<Map<string, HydrateRow
   return byTrackId;
 }
 
-/**
- * The instrument readout every track-shaped surface carries (DESIGN.md's Readout Rule): the
- * duration/BPM/key chips and the release year, each present ONLY when the row can back it — a
- * missing chip is an honest data gap upstream, never dropped by choice.
- */
 function readoutOf(row: HydrateRow): {
   bpm?: number;
   durationMs?: number;

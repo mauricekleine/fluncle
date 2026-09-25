@@ -1,14 +1,3 @@
-// The social-metrics snapshot, proven against the REAL migrated schema on an in-memory libSQL
-// engine (the integration-db harness). What is easy to get wrong and impossible to see without a DB:
-//
-//   1. APPEND-ONLY + IDEMPOTENT PER DAY — the first run appends one row per published post; a
-//      SAME-DAY re-run appends NOTHING (the (external_id, source, captured_day) unique index).
-//   2. THE BUDGET is deterministic — recent posts first, then a rolling least-recently-snapshotted
-//      tail, capped at SNAPSHOT_BUDGET (proven as a pure function, no DB).
-//   3. A MISSING / ERRORING post is skipped, never aborting the batch.
-//   4. NO POSTIZ KEY = a clean no-op on the Postiz half (configured:false) — the referrals block
-//      still rides along.
-
 import { type Client } from "@libsql/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -153,7 +142,6 @@ describe("selectSnapshotTargets (the deterministic budget)", () => {
 
     const chosen = selectSnapshotTargets(posts, NOW.getTime(), 2);
 
-    // Never-snapshotted first, then the oldest snapshot; the recently-snapshotted one is left out.
     expect(chosen.map((p) => p.externalId)).toEqual(["never", "snapshotted-long-ago"]);
   });
 });
@@ -193,7 +181,6 @@ describe("recordSocialMetrics", () => {
     expect(row.captured_day).toBe("2026-07-20");
     expect(row.source).toBe("postiz");
 
-    // Same UTC day again → idempotent (no new row).
     const second = await recordSocialMetrics({
       fetchAnalytics,
       now: NOW,
@@ -305,10 +292,8 @@ describe("recordSocialMetrics", () => {
     expect(summary.inserted).toBe(0);
     expect(analyticsCalls).toBe(0);
     expect(await metricsRowCount("yt-1")).toBe(0);
-    // The site-side reach block rides along regardless.
     expect(summary.referrals.total).toBe(42);
     expect(summary.referrals.arrivals).toEqual([{ pageviews: 42, platform: "tiktok" }]);
-    // The TikTok half is a clean no-op with no injected collector + no creds.
     expect(summary.tiktok).toEqual({
       configured: false,
       failed: 0,
@@ -317,7 +302,6 @@ describe("recordSocialMetrics", () => {
       matched: null,
       skipped: null,
     });
-    // The YouTube half is likewise a clean no-op with no injected collector + no creds.
     expect(summary.youtube).toEqual({
       configured: false,
       failed: 0,
@@ -329,8 +313,6 @@ describe("recordSocialMetrics", () => {
   });
 });
 
-// A published tiktok post carrying its native-id permalink — the row the TikTok half matches
-// a `video/list` id against.
 async function seedTikTokPost(input: { trackId: string; videoId: string }): Promise<void> {
   await db.execute({
     args: [
@@ -393,10 +375,8 @@ describe("recordSocialMetrics — the TikTok Display-API half", () => {
     expect(Number(row.views)).toBe(900);
     expect(Number(row.likes)).toBe(30);
     expect(Number(row.shares)).toBe(2);
-    // Unreported columns stay null.
     expect(row.impressions).toBeNull();
 
-    // Same UTC day again → idempotent (the (external_id, source, captured_day) key).
     const second = await recordSocialMetrics({
       collectTikTokVideos,
       fetchAnalytics: () => Promise.resolve({ kind: "missing" }),
@@ -409,9 +389,6 @@ describe("recordSocialMetrics — the TikTok Display-API half", () => {
   });
 
   it("coexists with the Postiz snapshot of the SAME post (source disambiguates the key)", async () => {
-    // The same finding, ONE tiktok post row carrying BOTH its Postiz id AND its native-id
-    // permalink: Postiz snapshots it by the POSTIZ id, TikTok by the NATIVE video id. Both land —
-    // the source is part of the idempotency key.
     await db.execute({
       args: [
         crypto.randomUUID(),
@@ -437,8 +414,8 @@ describe("recordSocialMetrics — the TikTok Display-API half", () => {
       readReferrers: () => Promise.resolve(NO_REFERRALS),
     });
 
-    expect(summary.inserted).toBe(1); // the Postiz row
-    expect(summary.tiktok.inserted).toBe(1); // the tiktok_display row
+    expect(summary.inserted).toBe(1);
+    expect(summary.tiktok.inserted).toBe(1);
     expect(await metricsRowCount("postiz-id")).toBe(1);
     expect(await tiktokRowCount("555")).toBe(1);
   });
@@ -490,8 +467,8 @@ describe("recordSocialMetrics — the TikTok Display-API half", () => {
       readReferrers: () => Promise.resolve(NO_REFERRALS),
     });
 
-    expect(summary.configured).toBe(false); // Postiz half no-op
-    expect(summary.tiktok.inserted).toBe(1); // TikTok half still ran
+    expect(summary.configured).toBe(false);
+    expect(summary.tiktok.inserted).toBe(1);
     expect(await tiktokRowCount("42")).toBe(1);
   });
 
@@ -536,8 +513,6 @@ describe("recordSocialMetrics — the TikTok Display-API half", () => {
   });
 });
 
-// A published youtube post carrying its canonical Shorts permalink — the row the YouTube half lifts
-// a native video id from. `publishedAt` orders the newest-first budget.
 async function seedYouTubePost(input: {
   publishedAt?: string;
   trackId: string;
@@ -633,7 +608,6 @@ describe("recordSocialMetrics — the YouTube Analytics half", () => {
     expect(Number(row.average_view_duration_seconds)).toBe(31);
     expect(Number(row.watch_time_seconds)).toBe(2700);
 
-    // Same UTC day again → idempotent (the (external_id, source, captured_day) key).
     const second = await recordSocialMetrics({
       collectYouTubeVideos,
       fetchAnalytics: () => Promise.resolve({ kind: "missing" }),
@@ -649,7 +623,6 @@ describe("recordSocialMetrics — the YouTube Analytics half", () => {
     await seedYouTubePost({ trackId: "track-1", videoId: "freshVIDEO1" });
 
     const summary = await recordSocialMetrics({
-      // The reader returns Data-API counters but null retention (Analytics hasn't caught up).
       collectYouTubeVideos: (ids) =>
         Promise.resolve(ids.map((id) => youtubeMetric(id, { likes: 2, views: 40 }))),
       fetchAnalytics: () => Promise.resolve({ kind: "missing" }),
@@ -672,8 +645,6 @@ describe("recordSocialMetrics — the YouTube Analytics half", () => {
   });
 
   it("coexists with the Postiz snapshot of the SAME youtube post (source disambiguates the key)", async () => {
-    // One youtube post carrying BOTH its Postiz id AND its Shorts permalink: Postiz snapshots it by
-    // the POSTIZ id, YouTube by the NATIVE video id. Both land — source is part of the key.
     await db.execute({
       args: [
         crypto.randomUUID(),
@@ -699,8 +670,8 @@ describe("recordSocialMetrics — the YouTube Analytics half", () => {
       readReferrers: () => Promise.resolve(NO_REFERRALS),
     });
 
-    expect(summary.inserted).toBe(1); // the Postiz row
-    expect(summary.youtube.inserted).toBe(1); // the youtube_analytics row
+    expect(summary.inserted).toBe(1);
+    expect(summary.youtube.inserted).toBe(1);
     expect(await metricsRowCount("postiz-id")).toBe(1);
     expect(await youtubeRowCount("nativeVID01")).toBe(1);
   });
@@ -756,8 +727,8 @@ describe("recordSocialMetrics — the YouTube Analytics half", () => {
       readReferrers: () => Promise.resolve(NO_REFERRALS),
     });
 
-    expect(summary.configured).toBe(false); // Postiz half no-op
-    expect(summary.youtube.inserted).toBe(1); // YouTube half still ran
+    expect(summary.configured).toBe(false);
+    expect(summary.youtube.inserted).toBe(1);
     expect(await youtubeRowCount("indep00VID1")).toBe(1);
   });
 

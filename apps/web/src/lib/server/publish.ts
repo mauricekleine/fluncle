@@ -103,19 +103,8 @@ function isPublishedFlag(value: number | null): boolean {
   return Number(value ?? 0) === 1;
 }
 
-/**
- * What a certify-in-place does to an already-linked entity's maintained hub counts (keystone 2):
- * the certified half gains one, the renderable half stands still — a certify moves no edges, only
- * the certified-ness of edges that already exist. See lib/server/hub-counts.ts.
- */
 const CERTIFY_DELTA: HubCountDelta = { certified: 1, renderable: 0 };
 
-/**
- * THE CERTIFICATION MINT, single-sourced. Resolve a unique Log ID for a track from the found
- * date + the recording's ISRC (the Spotify id as fallback), retrying to a fresh tail on the rare
- * collision. Shared by the Spotify add path (`publishTrack`) and the certify-in-place path
- * (`certifyExistingTrack`), so a coordinate is minted the SAME way however a finding is born.
- */
 async function resolveFindingLogId(
   db: Awaited<ReturnType<typeof getDb>>,
   input: { foundAt: string; isrc?: null | string; trackId: string },
@@ -133,13 +122,6 @@ async function resolveFindingLogId(
   );
 }
 
-/**
- * THE CERTIFICATION-HALF INSERT, single-sourced (docs/track-lifecycle.md). The one statement that
- * turns a `tracks` row into a finding: its coordinate, its note, its found date, and the publish
- * bookkeeping. `enrichment_status` takes its DDL default (`pending`), which is what enqueues the
- * fresh finding for the enrich sweep. Reused verbatim by `publishTrack` (inside its atomic
- * tracks+findings batch) and `certifyExistingTrack` (the row already exists, so this alone mints).
- */
 function findingInsertStatement(input: {
   logId: string;
   note?: null | string;
@@ -314,20 +296,12 @@ export async function publishTrack(
   const artistLine = `${track.artists.join(", ")} — ${track.title}`;
   const nowIso = new Date().toISOString();
 
-  // ISRC fallback (the track-add gap): Spotify occasionally
-  // omits the ISRC; Deezer usually carries it. Looked up BEFORE the Log ID is
-  // computed so the coordinate hashes from the recording's real identity, and
-  // the Deezer enrichment below (label + preview, keyed by ISRC) works too.
   const deezerByName = track.isrc?.trim() ? undefined : await lookupIsrcFromDeezer(track);
 
   if (deezerByName) {
     track.isrc = deezerByName.isrc;
   }
 
-  // The permanent Galaxy coordinate: deterministic from the found date + the
-  // recording's ISRC (Spotify id as fallback); a rare collision resolves to a
-  // fresh tail on the same sector. Computed even on dry run so the operator can
-  // preview the coordinate.
   const logId = await resolveFindingLogId(db, {
     foundAt: nowIso,
     isrc: track.isrc,
@@ -338,48 +312,10 @@ export async function publishTrack(
     return dryRunPublishResult(track, artistLine, logId, options.note);
   }
 
-  // Sync enrichment: HTTP-only and best-effort (label + preview from Deezer), so
-  // a miss never blocks the publish. The heavy, audio-derived fields (bpm, key,
-  // video) are filled later by the async enrichment agent; the finding's galaxy is
-  // assigned later still by the nightly `fluncle-cluster` sweep, k-means over the MuQ
-  // embedding (the manual tagging tool that once placed it by hand is retired).
   const deezer = await enrichFromDeezer(track.isrc, track.durationMs);
 
-  // THE DEEZER LINK, off whichever of the two reads above earned it (schema.ts § `deezer_track_id`).
-  // Both already have Deezer's track id in hand; keeping it costs no extra
-  // request and gives `/identity` a Deezer row. Neither is trusted bare:
-  //
-  //   · the BY-NAME hit is re-run through the anchor's own identity fold (same artist set, same base
-  //     title, same version descriptor, inside the ratified duration window), and the rung that
-  //     clears — `search` or the looser `search-subset` — is what gets recorded. Its own ±4s
-  //     duration confirm is the right bar for an ISRC that ISRC-equality re-checks downstream; a
-  //     link on a public page is a stronger claim and gets the stronger check.
-  //   · the BY-ISRC read is kept only when Deezer's returned duration agreed with the row's
-  //     (deezer.ts § the id guard), because that endpoint PICKS and picks wrong ~7% of the time.
-  //
-  // The by-name hit wins the tie: it cleared artist, title, AND length, where the by-ISRC pick
-  // cleared length alone. Neither gate clearing means no link, which is the honest answer.
-  //
-  // AND NEITHER READ STAMPS THE DEEZER LEDGER (schema.ts § `backfill_deezer_*`), deliberately. That
-  // ledger's whole job is to let a row say "Not found · checked <date>", and neither read here can
-  // support that sentence: `lookupIsrcFromDeezer` only runs at all when the row arrived WITHOUT an
-  // ISRC, and both helpers collapse a clean miss, a non-ok response, and a thrown request into the
-  // same empty return — while `enrichFromDeezer` additionally withholds its id on a duration
-  // disagreement, which is "found it, will not vouch for it" rather than absence. A stamp written off
-  // any of those would turn an outage or a skipped read into a claim that Deezer does not carry the
-  // recording. So a publish-born row keeps reading "Not checked yet" until the anchor rung (anchor.ts
-  // § recoverIsrcViaDeezer, the ledger's one writer) concludes a real look over it.
   const deezerLink = verifiedDeezerLink(track, deezerByName, deezer.deezerTrackId);
 
-  // Read-only Discogs release-ID enrichment (best-effort, alongside the Deezer
-  // label/preview it most resembles — both cheap HTTP, Worker-safe). A scored
-  // cascade with a tracklist-confirm gate (MusicBrainz ISRC bridge first, then a
-  // gated Discogs search): it stores an id ONLY on a high-confidence match and
-  // leaves the ids null otherwise — a wrong id is worse than a missing one. The
-  // `discogs.com/release/{id}` URL becomes a per-finding `sameAs`.
-  // discogsResolveRelease swallows its own errors and no-ops without the token, so
-  // a miss never blocks the add — same side-channel discipline as Deezer. The
-  // Deezer label feeds the labelSim signal.
   const discogs = await discogsResolveRelease({
     album: track.album,
     artists: track.artists,
@@ -389,12 +325,6 @@ export async function publishTrack(
     title: track.title,
   });
 
-  // THE DISCOGS ATTEMPT RECORD (schema.ts § `backfill_discogs_*` on `tracks`), read off the resolve
-  // above. `rateLimited` is what makes the stamp honest: an empty result under a live throttle is
-  // "we never got to ask", so it stamps NOTHING and the row stays genuinely unattempted for a later
-  // sweep. An empty result with no throttle is a real answer — "Discogs has no release we can
-  // confidently bind" — and stamps `attempted_at` with `done_at` left null. Failures stay 0: a
-  // mint-time look either concludes or is deferred, so there is no streak to back off from.
   const discogsResolved = hasDiscogsReference(discogs.releaseId, discogs.masterId);
   const discogsAttemptedAt = discogsResolved || !discogs.rateLimited ? nowIso : null;
   const artistsJson = JSON.stringify(track.artists);
@@ -414,46 +344,22 @@ export async function publishTrack(
           track.releaseDate ?? null,
           track.durationMs,
           track.isrc ?? null,
-          // The presence mirror, in the same insert as the ISRC it mirrors (schema.ts § `has_isrc`).
           hasIsrc(track.isrc),
           deezer.label ?? null,
           track.popularity ?? null,
           deezer.previewUrl ?? null,
           discogs.releaseId ?? null,
           discogs.masterId ?? null,
-          // THE ISRC ATTEMPT STAMP (schema.ts § `isrc_attempted_at`). Spotify's `external_ids` read
-          // has returned and the Deezer fallback above has had its turn, so the attempt has
-          // CONCLUDED — whichever way it went. A finding is born stamped, and an ISRC-less one says
-          // "looked, not there" instead of the ambiguous silence.
           nowIso,
-          // THE DISCOGS ATTEMPT RECORD (schema.ts § `backfill_discogs_*` on `tracks`).
           discogsAttemptedAt,
           discogsResolved ? nowIso : null,
           discogsAttemptedAt === null ? 0 : 1,
-          // THE ANCHOR PROVENANCE + THE HIT TIME (schema.ts § the pair). A finding is born
-          // ANCHORED, with the BEST provenance in the archive: the id came from the operator's own
-          // Spotify URL and was re-read through Spotify's own `GET /tracks/{id}`, so the platform's
-          // own record IS the answer. `source = 'publish'` names the path; `verified_by = 'publish'`
-          // names the signal, and it is a STRONGER claim than any search rung precisely because no
-          // gate ran — there was no candidate to compare, the id is the identity. These must never
-          // read `unknown-legacy`, which is what they did before this triple was written.
-          //
-          // The attempt stamp beside them stays NULL, correctly: the anchor GATE never ran here,
-          // and inventing a last-attempt time would put a publish-born finding into the re-ask
-          // backoff's reading.
           nowIso,
-          // THE DEEZER LINK + ITS PROVENANCE (schema.ts § `deezer_track_id`), written in the same
-          // insert as the reads that produced it. All three are null together when neither gate
-          // above cleared, so the row never carries an id without the record of how it was won.
           deezerLink?.trackId ?? null,
           deezerLink ? nowIso : null,
           deezerLink?.via ?? null,
-          // is_catalogue = 0: born CERTIFIED. The certification half is minted in the SAME batch
-          // (findingInsertStatement below), so the maintained invariant (a track with a findings
-          // row is is_catalogue = 0) holds from the very first write, never a moment as `1`.
           0,
         ],
-        // The RECORDING half — everything true of the track itself.
         sql: `insert into tracks (
             track_id,
             spotify_url,
@@ -490,8 +396,6 @@ export async function publishTrack(
         title: track.title,
         trackId: track.trackId,
       }),
-      // The CERTIFICATION half — the coordinate, the note, the found date, the publish state,
-      // minted through the shared `findingInsertStatement` so certify-in-place cannot drift.
       findingInsertStatement({ logId, note: options.note, nowIso, trackId: track.trackId }),
     ],
     [
@@ -501,16 +405,8 @@ export async function publishTrack(
     { producer: "publish-track" },
   );
 
-  // Best-effort: populate the artist entity tables (artists + track_artists) so
-  // the identity graph is ready for the resolution sweep. Uses the artist IDs
-  // Spotify returns on the track response (no extra API call). A failure here
-  // must never block the publish — same discipline as the Deezer / Last.fm side
-  // channels; the backfill covers any rows a failed call leaves behind.
   try {
     await upsertTrackArtists(track.trackId, track.artists, track.spotifyArtistIds);
-    // Stamp any remixer credit the title names (RFC label-lineage-remixer, U2) now the edge exists,
-    // so a "(X Remix)" whose remixer folds to a linked artist is credited as a schema.org
-    // contributor Role on the /log MusicRecording. Rides the same best-effort try.
     await stampRemixerRoles([track.trackId]);
   } catch (artistError) {
     logEvent("warn", "publish.artist-upsert-failed", {
@@ -520,28 +416,12 @@ export async function publishTrack(
     });
   }
 
-  // Best-effort: mint the graph entities this track hangs off — its LABEL (the one Deezer
-  // just handed back) and its ALBUM — and stamp the track's `label_id` / `album_id` pointers
-  // at them, which is the indexed edge the public /label/<slug> + /album/<slug> pages read
-  // by. A brand-new label enters `undecided` — never silently crawled, never silently
-  // dropped — and lands in the operator's attention queue as a label to rule on; an album
-  // carries no ruling at all (docs/album-entity.md).
-  //
-  // Purely additive: two entity rows and two pointers, nothing else touched — so a failure
-  // never blocks the publish (the deploy-time scripts/backfill-labels.ts + the one-off
-  // scripts/backfill-album-graph.ts back both of them up).
   try {
     await Promise.all([
       linkTrackToLabel(track.trackId, deezer.label),
       linkTrackToAlbum(track.trackId, track.album),
     ]);
 
-    // CAPTURE ON RESOLVE. The Discogs resolve above already held the release payload it scored,
-    // so its catalogue number + styles cost nothing extra — the album row exists as of the line
-    // above, and this stores them at the album grain that owns them (albums.ts). Only the scored
-    // SEARCH leg carries facts; a MusicBrainz-bridge resolve leaves them undefined and the album
-    // stays `pending` for `backfill_discogs_facts` to pick up. Fill-empty-only in SQL, so a second
-    // publish onto the same record never rewrites what the first one learned.
     if (discogs.catno !== undefined || discogs.styles !== undefined) {
       await storeAlbumDiscogsFactsForTrack(track.trackId, {
         catno: discogs.catno,
@@ -558,27 +438,10 @@ export async function publishTrack(
 
   await announcePublishedTrack(db, track, options.note, logId);
 
-  // A new finding now sits at the top of the `/log` index (and owns its own
-  // coordinate page), and joins the artist/album/label grids: drop all of those from
-  // the edge cache so they re-render with it.
   purgeLogCache(logId);
   purgeTrackEntityPages(track.trackId);
-  // Best-effort endorsement: love the finding on Last.fm (a Loved Track, not a
-  // scrobble — see lastfm.ts / the RFC). A single signed HTTPS call, Worker-safe.
-  // Never blocks or fails the add — same side-channel discipline as Deezer/Telegram:
-  // lastfmLove swallows its own errors and no-ops when Last.fm isn't provisioned.
   await lastfmLove(track.artists[0] ?? track.artists.join(", "), track.title);
-  // Best-effort: notify the mobile crew a fresh banger is live (push.ts). Gated on
-  // EXPO_ACCESS_TOKEN — a NO-OP until configured — and fire-and-forget (waitUntil):
-  // it NEVER throws and NEVER blocks/fails the publish, same discipline as above.
-  // The duplicate/incomplete_duplicate guards above throw before this hook, so a
-  // retry can't re-reach it — no extra gate needed.
   notifyNewFinding(track, logId);
-  // Best-effort: post the finding to Bluesky as a link card (bluesky.ts). Gated on
-  // BLUESKY_IDENTIFIER + BLUESKY_APP_PASSWORD — a NO-OP until configured. Awaited
-  // but wrapped: a Bluesky failure is logged and swallowed, so it can NEVER fail or
-  // delay the publish — nor the Telegram leg, which already ran above. Same
-  // side-channel discipline as the artist upsert / Last.fm love.
   try {
     await postToBluesky(track, options.note, logId);
   } catch (blueskyError) {
@@ -588,11 +451,6 @@ export async function publishTrack(
       trackId: track.trackId,
     });
   }
-  // Best-effort: ping IndexNow (Bing/Yandex + the shared network) so the fresh
-  // log page AND the graph pages it joins (artist/label/album) + the /fresh lens are
-  // crawled within minutes (indexnow.ts) — the same surfaces the purge above dropped
-  // from cache. Fire-and-forget via waitUntil; the key is a PUBLIC ownership token, so
-  // this needs no operator secret and NEVER throws or blocks the publish.
   submitFindingToIndexNow(logId, track.trackId);
 
   const message = `Banger logged
@@ -614,36 +472,6 @@ Posted to Telegram`;
   );
 }
 
-/**
- * CERTIFY IN PLACE (docs/the-ear.md § The operator's actions) — turn an EXISTING catalogue row
- * into a finding, WITHOUT creating a new track. This is the "Log it" the Ear's workstation fires:
- * a catalogue track (a `tracks` row with no `findings` row) is the same recording Fluncle already
- * knows — the Spotify add path would re-fetch it and try to insert a duplicate `tracks` row, so
- * certification here mints ONLY the certification half.
- *
- * It shares the exact mint the Spotify add uses (`resolveFindingLogId` + `findingInsertStatement`),
- * so a coordinate is born the same way however a finding arrives — AND the same announce fan-out
- * (operator ruling) a finding is a finding however it arrives. The differences from `publishTrack`, both deliberate:
- *
- *   · PRESENCE IS RESOLVED, NEVER ASSUMED. A crawled row may have no Spotify identity at all, so
- *     the playlist add rides the row's stored `spotify_uri` or an exact-ISRC lookup
- *     (`findSpotifyTrackByIsrc` — the honest resolver: a hit is stamped back onto the track, a
- *     miss is recorded, and a fuzzy metadata guess NEVER reaches the public playlist). The legs
- *     that print the Spotify link degrade with it: Telegram simply omits the line
- *     (`formatTelegramMessage`), Bluesky — whose card is built around the link — is skipped.
- *   · A LEG FAILURE NEVER UNWINDS THE MINT. `publishTrack` throws mid-chain because its caller is
- *     the CLI mid-add; here the finding already exists and the operator has moved on, so each leg
- *     records its failure on the findings error columns (`spotify_error` / `telegram_error` — the
- *     attention queue's existing rails) and the mint stands.
- *   · IT RESUMES. Re-certifying an already-logged row is a 409 only when BOTH announce legs are
- *     done; with legs missing it runs exactly the missing ones (fill-empty semantics — a posted
- *     leg is never re-posted). That makes `certify` its own retry: a leg that failed (or a finding
- *     certified before this fan-out existed) is finished by firing certify again.
- *
- * `enrichment_status` takes its DDL default (`pending`), which enqueues the fresh finding for the
- * enrichment chain, so the operator lands on the finding's admin surface with the pipeline moving.
- * Guards: the row must EXIST (404). Graph links + cache purge + IndexNow stay best-effort.
- */
 async function certifyExistingTrackWithOptions(
   trackId: string,
   options: { note?: string },
@@ -700,28 +528,11 @@ async function certifyExistingTrackWithOptions(
     throw new ApiError("already_certified", `Already logged: ${line}`, 409);
   }
 
-  // ── THE ISRC PRE-FLIGHT (recover BEFORE minting) ───────────────────────────────────────
-  // A crawler-born row's ISRC comes from MusicBrainz, whose underground-DnB ISRC coverage is
-  // sparse — ~60% arrive ISRC-less even though the track genuinely HAS one (the same gap the
-  // anchor sweep's Deezer rung fixes). Minting the finding as-is leaves it ISRC-less FOREVER:
-  // the anchor sweep only touches catalogue rows, so once certified it is never revisited, and
-  // an ISRC-less finding plays SILENT in the app (the public preview waterfall resolves the
-  // official 30s clip by ISRC). So recover it here, with the SAME verified Deezer-by-name rung
-  // the sweep uses (fill-empty-only; a wrong match is gated out; a Deezer miss changes nothing).
-  // Recovering before the Spotify pre-flight also lets an un-anchored row resolve its identity.
   const isrc =
     row.isrc ??
     (await recoverIsrcViaDeezer(trackId, db, artists, row.title, row.duration_ms)) ??
     null;
 
-  // ── THE ANCHOR PRE-FLIGHT (resolve BEFORE minting) ─────────────────────────────────────
-  // A finding must anchor to Spotify — the public playlist carries every
-  // banger, the feed contract requires `spotifyUrl`, and the log page's open action links it.
-  // The crawler still reaches beyond Spotify (archive value), but only a Spotify-linked track
-  // can be CERTIFIED. A crawler-born row arrives without an identity, so try the same
-  // exact-ISRC resolve the crawler's anchor uses — and when nothing resolves, REFUSE (409)
-  // rather than mint a finding that breaks every public list read. A successful resolve is
-  // stamped back onto the track, so it is paid once.
   let spotifyUri = row.spotify_uri;
   let spotifyUrl = row.spotify_url;
 
@@ -736,11 +547,6 @@ async function certifyExistingTrackWithOptions(
         [
           {
             args: [spotifyUri, spotifyUrl, new Date().toISOString(), trackId],
-            // The provenance rides the SAME statement as the link (schema.ts § the pair). This IS the
-            // `spotify-isrc` rung — Spotify's own `/search?type=track&q=isrc:` read, matched on the
-            // recording's real identity — so it is recorded as such rather than left to read as legacy;
-            // an exact-ISRC anchor is the strongest provenance in the corpus and the envelope should
-            // say so.
             sql: `update tracks
               set spotify_uri = ?,
                   spotify_url = ?,
@@ -768,23 +574,9 @@ async function certifyExistingTrackWithOptions(
   let logId: string;
 
   if (row.finding_id && row.finding_log_id) {
-    // THE RESUME: the finding exists with announce legs missing — a leg that failed, or a
-    // certify from before the fan-out. Run only what is missing; mint nothing.
     logId = row.finding_log_id;
   } else {
     logId = await resolveFindingLogId(db, { foundAt: nowIso, isrc, trackId });
-    // Mint the certification half AND flip the catalogue discriminator in ONE atomic write: the
-    // track now HAS a findings row, so `is_catalogue` must be 0. Batched so the pair can never
-    // half-apply — the invariant is never briefly violated. This is the ONLY 1 → 0 transition on an
-    // EXISTING row; `publishTrack` instead inserts the track already certified (is_catalogue = 0).
-    //
-    // The SAME batch carries the maintained hub counts' CERTIFIED half (keystone 2): a certify
-    // moves no EDGES — the track keeps whatever label / album / artists the crawl gave it — but it
-    // changes their certified-ness, so each already-linked entity's `certified_finding_count` gains
-    // one while `renderable_track_count` stands still. The link helpers below then see a track that
-    // is already `is_catalogue = 0`, so a link that genuinely MOVES (a null pointer filled, a
-    // re-point) carries its own certified delta and no double-count is possible: the entity credited
-    // here is the one the pointer held BEFORE the links ran, and a re-point debits it again.
     await batchDueWorkSourceMutation(
       db,
       [
@@ -801,9 +593,6 @@ async function certifyExistingTrackWithOptions(
       { producer: "certify-track" },
     );
 
-    // Best-effort, exactly as the Spotify add does it: mint the graph entities this track now
-    // hangs off (its label + album) and stamp its pointers. Purely additive; the label backfill
-    // + the one-off album-graph backfill back both up, so a miss never blocks the certify.
     try {
       await Promise.all([
         linkTrackToLabel(trackId, row.label),
@@ -813,18 +602,12 @@ async function certifyExistingTrackWithOptions(
       logEvent("warn", "certify.graph-entity-upsert-failed", { error: labelError, logId, trackId });
     }
 
-    // A new finding now sits at the top of `/log`, owns its coordinate page, and joins the
-    // artist/album/label grids: drop all from the edge cache and ping IndexNow so they
-    // re-render / re-crawl. All fire-and-forget-safe.
     purgeLogCache(logId);
     purgeTrackEntityPages(trackId);
     submitFindingToIndexNow(logId, trackId);
   }
 
   const note = options.note ?? row.finding_note ?? undefined;
-
-  // ── THE ANNOUNCE FAN-OUT (record-not-throw; each leg fills only its own empty slot) ────────
-  // The Spotify identity was resolved (or verified present) by the pre-flight above.
 
   const metadata: TrackMetadata = {
     album: row.album ?? undefined,
@@ -871,9 +654,6 @@ async function certifyExistingTrackWithOptions(
         );
       }
     } else {
-      // The honest miss: no stored identity and no exact-ISRC match. Recorded on the same
-      // attention rail as a failed add — the operator links it by hand (or re-certifies once an
-      // ISRC lands) — because a fuzzy metadata guess must never reach the public playlist.
       await batchDueWorkSourceMutation(
         db,
         [
@@ -922,13 +702,10 @@ async function certifyExistingTrackWithOptions(
       );
     }
 
-    // The best-effort announce wave rides the FIRST Telegram attempt (posted was 0 at entry), so
-    // a later Spotify-only resume never re-loves / re-pushes / re-posts what already went out.
     await lastfmLove(artists[0] ?? artists.join(", "), row.title);
     notifyNewFinding(metadata, logId);
 
     if (spotifyUrl) {
-      // Bluesky's link card is built around the Spotify link — a no-presence finding skips it.
       try {
         await postToBluesky(metadata, note, logId);
       } catch (blueskyError) {

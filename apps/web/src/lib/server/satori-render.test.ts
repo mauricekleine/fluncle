@@ -14,24 +14,14 @@ import {
   satoriText,
 } from "./satori-render";
 
-// The card contract has two build-gate checks: markup may ask only for registered weights,
-// because Satori synthesizes no missing face; and every TTF must carry the One Box metrics,
-// because Satori reads the font's own tables when positioning the render.
-
-/** The faces the render surfaces may ask for. One buffer per weight — no synthesis. */
 const REGISTERED: Record<string, number[]> = {
   Oxanium: [400, 800],
   "Space Grotesk": [400, 700],
 };
 
-// --- A minimal sfnt reader, so the assertion runs against the BYTES WE SHIP ---------------
-// (Reading the tables back, not trusting the cutting script's own word for it.)
-
 function tables(dataUri: string): DataView {
   const buffer = Buffer.from(dataUri.slice(dataUri.indexOf(",") + 1), "base64");
 
-  // A Buffer may be a view into a shared allocation. Scope the DataView to the decoded font
-  // rather than parsing unrelated bytes at the start of its backing ArrayBuffer.
   return new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength);
 }
 
@@ -91,15 +81,11 @@ const CUTS = [
 ];
 
 describe("the One Box Rule, baked into the cuts", () => {
-  // Satori has no @font-face, so styles.css's ascent-override/descent-override cannot reach
-  // it — the overrides live in the font's own tables (scripts/cut-satori-fonts.py).
   it.each(CUTS)("$name puts the cap band on the box centre", ({ data }) => {
     const m = metrics(data);
 
-    // The whole rule, in one line: ascent − descent == cap height (descender is negative).
     expect(m.ascender + m.descender).toBe(m.capHeight);
 
-    // Set on BOTH metric families, and flagged, so every consumer reads the same box.
     expect([m.typoAscender, m.typoDescender, m.lineGap]).toEqual([m.ascender, m.descender, 0]);
     expect([m.winAscent, m.winDescent]).toEqual([m.ascender, -m.descender]);
     expect(m.useTypoMetrics).toBe(true);
@@ -125,7 +111,6 @@ describe("registered faces", () => {
       "Space Grotesk 400",
       "Space Grotesk 700",
     ]);
-    // The mixtape cover carries only brand marks, so it registers no body face.
     expect(registered(brandFonts())).toEqual(["Oxanium 400", "Oxanium 800"]);
   });
 
@@ -133,7 +118,6 @@ describe("registered faces", () => {
     const fonts = cardFonts();
 
     for (const font of fonts) {
-      // sfnt magic for a TrueType outline font — not an empty buffer, not woff2.
       expect(new DataView(font.data).getUint32(0)).toBe(0x0001_0000);
       expect(font.data.byteLength).toBeGreaterThan(10_000);
     }
@@ -143,10 +127,6 @@ describe("registered faces", () => {
 });
 
 describe("every weight the cards ask for is registered", () => {
-  // Satori SYNTHESIZES NOTHING: an unregistered weight silently snaps to the nearest face, so
-  // the card renders a weight the code never asked for. That is exactly how these three
-  // surfaces shipped `font-weight:600` and `font-weight:700` against a 500/800-only registry.
-  // Read the real markup and prove every (family, weight) pair it uses has a buffer behind it.
   const SURFACES = [
     "src/routes/api/og.$logId.ts",
     "src/routes/api/og.set.ts",
@@ -163,8 +143,6 @@ describe("every weight the cards ask for is registered", () => {
       return style.includes("font-family:${BODY}") ? "Space Grotesk" : fallback;
     };
 
-    // The container sets the file's default face; every nested element inherits it unless it
-    // opts in to the other one.
     const container = source.match(/font-family:\$\{(BRAND|BODY)\}/)?.[1];
 
     expect(container).toBeDefined();
@@ -189,8 +167,6 @@ describe("every weight the cards ask for is registered", () => {
   });
 
   it("keeps BRAND and BODY pointing at the registered family names", () => {
-    // Satori matches on the literal family name — there is no fallback stack to fall down, so
-    // a typo here is a blank card, not a system-sans card.
     expect(BRAND).toBe("'Oxanium'");
     expect(BODY).toBe("'Space Grotesk'");
     expect(Object.keys(REGISTERED)).toContain(BRAND.replaceAll("'", ""));
@@ -199,9 +175,6 @@ describe("every weight the cards ask for is registered", () => {
 });
 
 describe("satoriText", () => {
-  // workers-og escapes text on the way OUT and never decodes on the way IN, so anything we
-  // pre-escape prints its own entity. This was live: `Calyx & TeeBee` rendered `Calyx &amp;
-  // TeeBee` on the link preview of every card whose title carried an ampersand.
   it("passes & and quotes through raw — the parser does not decode them", () => {
     expect(satoriText("Calyx & TeeBee")).toBe("Calyx & TeeBee");
     expect(satoriText('"Quoted" Mix')).toBe('"Quoted" Mix');
@@ -220,14 +193,6 @@ describe("satoriText", () => {
 });
 
 describe("fetchImageDataUri's inline ceiling", () => {
-  // The OG/cover routes are ANONYMOUS GETs whose hero URL comes off a database row, and the
-  // fetched bytes are base64'd and then parsed again as markup inside a 128 MB Worker. So the
-  // ceiling is asserted AT the cap and one byte past it, and the refusal is the module's own
-  // documented degradation (`undefined` → a card with a bare background), never a truncation:
-  // half an image is a broken render. The number is 2× the fetched-cover bound this repo already
-  // states in lib/server/cover-masters.ts.
-
-  /** A body delivered in chunks with NO `content-length` — the shape a declared-length cap misses. */
   function chunkedImage(bytes: number): Response {
     const chunkSize = 64 * 1024;
     let sent = 0;
@@ -278,8 +243,6 @@ describe("fetchImageDataUri's inline ceiling", () => {
   });
 
   it("refuses an honestly-declared oversized body without transferring it", async () => {
-    // The body here is three bytes — it would inline fine. Only the DECLARED length is over the
-    // cap, so a refusal proves the header is consulted first and the transfer is never spent.
     const declaredOversize = () =>
       new Response(new Uint8Array([1, 2, 3]), {
         headers: {
