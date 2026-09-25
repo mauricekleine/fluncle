@@ -372,24 +372,6 @@ export async function upsertDueWork<WorkKind extends string>(
   await client.execute(upsertDueWorkStatement(projection, options));
 }
 
-export function deleteDueWorkStatement<WorkKind extends string>(
-  identity: DueWorkIdentity<WorkKind>,
-): InStatement {
-  return {
-    args: [identity.workKind, identity.subjectType, identity.subjectId],
-    sql: `delete from due_work
-      where work_kind = ? and subject_type = ? and subject_id = ?`,
-  };
-}
-
-export async function deleteDueWork<WorkKind extends string>(
-  client: DueWorkClient,
-  identity: DueWorkIdentity<WorkKind>,
-): Promise<boolean> {
-  const result = await client.execute(deleteDueWorkStatement(identity));
-  return result.rowsAffected > 0;
-}
-
 export function markDueWorkRepairStatement<WorkKind extends string>(
   identity: DueWorkIdentity<WorkKind> & { sourceVersion: string },
   options: { generation?: string; now?: Date | string } = {},
@@ -843,18 +825,6 @@ export async function listServableDueWork<WorkKind extends string>(
     items: servable.slice(0, limit),
     withheld: withheldFlags.filter(Boolean).length,
   };
-}
-
-export async function hasReadyDueWork(client: DueWorkClient, workKind: string): Promise<boolean> {
-  const result = await client.execute({
-    args: [workKind],
-    sql: `select subject_id
-      from due_work
-      where work_kind = ? and state = 'ready'
-      order by sort_key, subject_id
-      limit 1`,
-  });
-  return result.rows.length > 0;
 }
 
 /**

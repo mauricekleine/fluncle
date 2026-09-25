@@ -548,24 +548,6 @@ export async function isCurrentProjectedTrackHubAnchorDocumentUsable(
   }
 }
 
-/**
- * Read a complete, current default-hub anchor document whole. The state, repair, address, format,
- * order epoch, and generation predicates are one snapshot; malformed or incomplete JSON is unusable.
- * For a leaf document the returned anchors are the runs' stored boundary rows, whose page numbers
- * are exact only until page-local maintenance amends an earlier run; page serving resolves through
- * `readProjectedTrackHubPageStart` instead.
- */
-export async function readProjectedTrackHubAnchors(
-  client: PublicProjectionReadClient,
-  address: PublicProjectionAnchorAddress,
-  pageSize: number,
-): Promise<ProjectedTrackHubAnchors | undefined> {
-  return readProjectedTrackHubAnchorsSnapshot(client, address, pageSize, {
-    allowLegacyDocument: true,
-    requireCutover: true,
-  });
-}
-
 /** The exact runtime validator without the flag prerequisite, used by the atomic open gate. */
 export async function readCurrentProjectedTrackHubAnchors(
   client: PublicProjectionReadClient,

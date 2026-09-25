@@ -5,7 +5,6 @@ import { createIntegrationDb } from "./integration-db";
 import {
   auditCrawlDueWork,
   claimCrawlDueWork,
-  completeCrawlDueClaim,
   crawlDueCleanupPageStatement,
   crawlClaimStatement,
   crawlGeneralReadyQuery,
@@ -19,14 +18,13 @@ import {
   markCrawlProjectionRepairStatement,
   promoteCrawlDueWork,
   readCrawlDueRebuild,
-  repairCrawlDueNode,
   rebuildCrawlDueWork,
   repairCrawlDueNodes,
   runCrawlDueRebuildChunk,
   shadowCrawlDueWork,
   startCrawlDueRebuild,
-  upsertCrawlDueProjectionStatement,
 } from "./crawl-due-work";
+import { settleClaimedCrawlFrontierRow } from "./crawl-cutover";
 import { CRAWL_DUE_AUDIT_FENCE_KEY, readProjectionFence } from "./projection-fences";
 import { advanceProjectionFor } from "./projection-operations";
 
@@ -236,7 +234,7 @@ describe("crawl due-work shadow runtime", () => {
     ).toThrow("1 through 500");
   });
 
-  it("preserves one direct repair-entry time until guarded repair clears it", async () => {
+  it("preserves one direct repair-entry time until the repair chunk clears it", async () => {
     await node({ externalId: "direct", hop: 0, id: "direct-repair", kind: "artist" });
 
     await db.execute(markCrawlNodeRepairStatement("direct-repair", "direct-v1", { now: OLD }));
@@ -252,7 +250,9 @@ describe("crawl due-work shadow runtime", () => {
       ).rows,
     ).toEqual([{ repair_entered_at: OLD, source_version: "direct-v2" }]);
 
-    expect(await repairCrawlDueNode(db, "direct-repair", { now: () => NOW })).toBe(true);
+    expect(await repairCrawlDueNodes(db, { limit: 1, now: () => NOW })).toMatchObject({
+      repaired: 1,
+    });
     expect(
       (
         await db.execute(`select repair_entered_at, state from crawl_due_work
@@ -430,10 +430,21 @@ describe("crawl due-work shadow runtime", () => {
     });
     expect(reclaimed.reaped).toBe(5);
     expect(reclaimed.items.map((row) => row.nodeId)).toEqual(shadow.projectedIds);
-    expect(await completeCrawlDueClaim(db, reclaimed.items[0]?.nodeId ?? "", "wrong-token")).toBe(
-      false,
-    );
-    expect(await completeCrawlDueClaim(db, reclaimed.items[0]?.nodeId ?? "", "claim-b")).toBe(true);
+    const firstClaimedId = reclaimed.items[0]?.nodeId ?? "";
+    expect(
+      await settleClaimedCrawlFrontierRow(db, {
+        claimToken: "wrong-token",
+        id: firstClaimedId,
+        state: "done",
+      }),
+    ).toBe(false);
+    expect(
+      await settleClaimedCrawlFrontierRow(db, {
+        claimToken: "claim-b",
+        id: firstClaimedId,
+        state: "done",
+      }),
+    ).toBe(true);
   });
 
   it("starts every steady selector at the intended partial index without a source scan or temp sort", async () => {
@@ -1332,17 +1343,14 @@ describe("crawl due-work shadow runtime", () => {
       newGeneration: true,
       now: () => NOW,
     });
-    const projection = {
-      createdAt: OLD,
-      demandRank: 0,
-      hop: 0,
-      labelSlug: null,
-      nextDueAt: null,
-      nodeKind: "artist" as const,
-      parentId: null,
-      sourceVersion: "cleanup",
-      state: "ready" as const,
-      storableRank: null,
+    const seedCleanupRow = async (nodeId: string, generation: string, updatedAt: string) => {
+      await db.execute({
+        args: [nodeId, OLD, generation, updatedAt],
+        sql: `insert into crawl_due_work
+          (node_id, node_kind, state, hop, demand_rank, created_at, storable_rank, next_due_at,
+           label_slug, parent_id, generation, source_version, updated_at)
+          values (?, 'artist', 'ready', 0, 0, ?, null, null, null, null, ?, 'cleanup', ?)`,
+      });
     };
     for (const [generation, nodeId, updatedAt] of [
       ["generation-a", "z-last-id", OLD],
@@ -1351,19 +1359,9 @@ describe("crawl due-work shadow runtime", () => {
       ["live", "y-old-live", OLD],
       ["live", "b-fresh-live", "2026-01-11T00:00:00.000Z"],
     ] as const) {
-      await db.execute(
-        upsertCrawlDueProjectionStatement(
-          { ...projection, generation, nodeId },
-          { generation, now: updatedAt },
-        ),
-      );
+      await seedCleanupRow(nodeId, generation, updatedAt);
     }
-    await db.execute(
-      upsertCrawlDueProjectionStatement(
-        { ...projection, nodeId: "repair-preserved" },
-        { generation: "generation-old", now: OLD },
-      ),
-    );
+    await seedCleanupRow("repair-preserved", "generation-old", OLD);
     await db.execute(markCrawlNodeRepairStatement("repair-preserved", "repair", { now: OLD }));
     const cleanupKey = `projection_cleanup_crawl_due_work_v1:${checkpoint.generation}`;
     await db.execute({

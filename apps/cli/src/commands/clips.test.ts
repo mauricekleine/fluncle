@@ -9,8 +9,6 @@ import {
   CLIP_WIDTH,
   clipCutFfmpegArgs,
   clipCutFilterComplex,
-  clipFootageKey,
-  setVideoUrl,
 } from "./clips";
 
 // Synthetic cue sheet: three tracks at 0 / 60s / 120s in a 180s set. `resolveClipTracks`
@@ -24,25 +22,9 @@ const CUED_MEMBERS: ClipTrackInput[] = [
 ];
 const SET_DURATION_MS = 180_000;
 
-// CI has NO ffmpeg, so every test here exercises the PURE logic only — the footage key,
-// the crop filtergraph, and the ffmpeg arg SHAPE (a string array, never invoked). The cut
+// CI has NO ffmpeg, so every test here exercises the PURE logic only — the crop filtergraph
+// and the ffmpeg arg SHAPE (a string array, never invoked). The cut
 // command's actual shell-out lives behind an `assertFfmpeg` probe and is never reached here.
-
-describe("clipFootageKey", () => {
-  test("is the clip's pseudo-finding master key", () => {
-    expect(clipFootageKey("clip-abc")).toBe("clip-abc/footage.mp4");
-  });
-});
-
-describe("setVideoUrl", () => {
-  test("is the set rendition on found.fluncle.com, by log id", () => {
-    expect(setVideoUrl("019.F.1A")).toBe("https://found.fluncle.com/019.F.1A/set.mp4");
-  });
-
-  test("encodes an unsafe log id", () => {
-    expect(setVideoUrl("a b")).toBe("https://found.fluncle.com/a%20b/set.mp4");
-  });
-});
 
 describe("clipCutFilterComplex — the overlay-free crop", () => {
   test("crops 16:9 → 9:16 at the xOffset, scales to 1080×1920, fixes SAR, maps [out]", () => {
