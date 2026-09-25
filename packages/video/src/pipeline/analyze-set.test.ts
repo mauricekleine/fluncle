@@ -1,10 +1,3 @@
-// Self-running checks for the set-analysis DSP (Unit B) — no framework, same style
-// as analyze-audio.test.ts. The PICKER is tested on synthetic IN-MEMORY curves with
-// planted "drops" (NO ffmpeg — so `bun run test` is green on a CI box with no ffmpeg
-// on PATH, exactly like analyze-audio.test.ts tests the DSP on synthetic samples).
-// A full decode→envelope integration check runs only when ffmpeg is present.
-// Run: `bun src/pipeline/analyze-set.test.ts` (exits non-zero on a failed assert).
-
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
@@ -14,14 +7,6 @@ import { join } from "node:path";
 import { HOP_MS } from "./audio-curves";
 import { analyzeSet, pickDrops, writeStudioEnvelope } from "./analyze-set";
 
-// ---------------------------------------------------------------------------
-// Synthetic internal-hop (20ms) curves with planted breakdown→slam drops.
-//   - bass/energy: baseline, dip to a quiet breakdown ~4s before each drop, then
-//     slam loud ~6s after → dropScore (quiet→loud bass) spikes right at the drop.
-//   - flux: a periodic onset impulse per beat (so the LOCAL tempo/phase snap has a
-//     grid to lock to) at `bpm`, with a stronger spike on the drop beat.
-// All values already in [0,1] (pickDrops expects normalized curves).
-// ---------------------------------------------------------------------------
 const buildCurves = (
   totalSec: number,
   bpm: number,
@@ -37,13 +22,13 @@ const buildCurves = (
   const ampAt = (sec: number): number => {
     for (const d of dropsSec) {
       if (sec >= d - 4 && sec < d) {
-        return 0.06; // breakdown
+        return 0.06;
       }
       if (sec >= d && sec < d + 6) {
-        return 1.0; // slam
+        return 1.0;
       }
     }
-    return 0.4; // baseline
+    return 0.4;
   };
 
   for (let h = 0; h < hopCount; h++) {
@@ -51,7 +36,7 @@ const buildCurves = (
     const a = ampAt(sec);
     energy[h] = a;
     bass[h] = a * 0.9;
-    flux[h] = 0.02; // a quiet between-onset floor
+    flux[h] = 0.02;
   }
 
   for (let beat = 0; beat * beatHops < hopCount; beat++) {
@@ -65,10 +50,6 @@ const buildCurves = (
   return { bass, energy, flux };
 };
 
-// ---------------------------------------------------------------------------
-// 1. pickDrops on a single-tempo set: spacing, downbeat-snap, pre-roll, ranking.
-//    (Pure synthetic curves — never touches ffmpeg.)
-// ---------------------------------------------------------------------------
 {
   const bpm = 174;
   const drops = [40, 80, 120];
@@ -85,22 +66,18 @@ const buildCurves = (
     suggestionMs,
   });
 
-  // BPM locks on a single-tempo set.
   assert.ok(estBpm !== null, "single-tempo bpm must not be null");
   assert.ok(Math.abs((estBpm ?? 0) - bpm) <= 3, `bpm ~${bpm} (got ${estBpm})`);
 
-  // The planted drops are found.
   assert.ok(
     suggestions.length >= 2 && suggestions.length <= 8,
     `2..8 candidate drops (got ${suggestions.length})`,
   );
 
-  // Suggestions are ranked by score (descending).
   for (let i = 1; i < suggestions.length; i++) {
     assert.ok(suggestions[i - 1].score >= suggestions[i].score, "suggestions sorted by score desc");
   }
 
-  // Anchors respect the minimum inter-peak spacing.
   const anchors = suggestions.map((s) => s.anchorMs).sort((a, b) => a - b);
   for (let i = 1; i < anchors.length; i++) {
     assert.ok(
@@ -111,11 +88,9 @@ const buildCurves = (
 
   const beatMs = 60_000 / bpm;
   for (const s of suggestions) {
-    // Window shape.
     assert.ok(s.startMs >= 0, "startMs ≥ 0");
     assert.ok(s.durationMs > 0 && s.durationMs <= suggestionMs, "duration in (0, suggestionMs]");
 
-    // The drop lands JUST INSIDE the window (a musical pre-roll, not at 0).
     const preRoll = s.anchorMs - s.startMs;
     assert.ok(
       preRoll > 0 && preRoll < s.durationMs,
@@ -123,21 +98,18 @@ const buildCurves = (
     );
     assert.ok(preRoll <= suggestionMs * 0.4 + 5, "pre-roll ≤ the cap (one bar here)");
 
-    // The anchor snapped to (near) a true beat of the 174 grid.
     const nearestBeat = Math.round(s.anchorMs / beatMs) * beatMs;
     assert.ok(
       Math.abs(s.anchorMs - nearestBeat) <= beatMs / 2,
       `anchor snapped to a beat (off by ${Math.abs(s.anchorMs - nearestBeat).toFixed(0)}ms)`,
     );
 
-    // Each candidate sits near a planted drop.
     assert.ok(
       drops.some((d) => Math.abs(s.anchorMs - d * 1000) < 2_000),
       `candidate ${s.anchorMs}ms sits near a planted drop`,
     );
   }
 
-  // Peaks mirror the suggestions, tagged drop, time-ordered.
   for (let i = 0; i < peaks.length; i++) {
     assert.equal(peaks[i].kind, "drop", "peak kind is 'drop'");
     if (i > 0) {
@@ -146,10 +118,6 @@ const buildCurves = (
   }
 }
 
-// ---------------------------------------------------------------------------
-// 2. pickDrops on a multi-tempo set: bpm → null, no crash, still an array.
-//    (Pure synthetic — first half 128 BPM, second half 174 BPM.)
-// ---------------------------------------------------------------------------
 {
   const a = buildCurves(70, 128, [40]);
   const b = buildCurves(70, 174, [30]);
@@ -175,9 +143,6 @@ const buildCurves = (
   }
 }
 
-// ---------------------------------------------------------------------------
-// 3. Empty / degenerate input does not crash.
-// ---------------------------------------------------------------------------
 {
   const z = new Float32Array(0);
   const res = pickDrops(z, z, z);
@@ -185,11 +150,6 @@ const buildCurves = (
   assert.equal(res.peaks.length, 0, "empty input → no peaks");
 }
 
-// ---------------------------------------------------------------------------
-// 4. (Integration) full decode→envelope — ONLY when ffmpeg is on PATH, so CI
-//    without ffmpeg stays green. Exercises the streaming decode + decimation +
-//    the JSON artifact round-trip.
-// ---------------------------------------------------------------------------
 const ffmpegBin = process.env.FLUNCLE_FFMPEG ?? "ffmpeg";
 const probe = spawnSync(ffmpegBin, ["-version"], { stdio: "ignore" });
 const hasFfmpeg = !probe.error && probe.status === 0;
@@ -221,7 +181,6 @@ if (hasFfmpeg) {
     return buf;
   };
 
-  // A 174 BPM kick train with a planted drop, just enough to exercise the decode.
   const totalSec = 60;
   const bpm = 174;
   const drops = [30];
@@ -254,7 +213,6 @@ if (hasFfmpeg) {
   const outPath = join(tmpdir(), "fluncle-analyze-set-integration.json");
   const env = await writeStudioEnvelope(wavPath, outPath, { suggestionMs: 12_000 });
 
-  // Display contract: full-length curves decimated to a 100ms hop, all in [0,1].
   assert.equal(env.hopMs, 100, "display hop is 100ms");
   assert.ok(env.durationMs > 55_000, `full-length duration (got ${env.durationMs})`);
   const expectedPoints = Math.floor(env.durationMs / env.hopMs);
@@ -272,12 +230,10 @@ if (hasFfmpeg) {
     }
   }
 
-  // Round-trips to valid JSON matching the return.
   const reparsed = JSON.parse(readFileSync(outPath, "utf8"));
   assert.equal(reparsed.hopMs, 100, "written artifact has hopMs 100");
   assert.equal(reparsed.suggestions.length, env.suggestions.length, "artifact matches return");
 
-  // The full decode→pick path still produces the planted drop.
   const directEnv = await analyzeSet(wavPath, { suggestionMs: 12_000 });
   assert.ok(directEnv.suggestions.length >= 1, "decode→pick finds the planted drop");
 }

@@ -2,6 +2,8 @@
 
 Fluncle validates the minimum sufficient evidence for a change's dependency closure, then escalates conservatively. This policy is shared by local agents and GitHub Actions through `scripts/quality/classifier.mjs`; there is no second hand-maintained path table for CI. A selected lane is mandatory, an unknown path is a full-matrix change, and the stable protected check `Lint, Format, and Typecheck` cannot pass when either the core or public-flow job fails.
 
+Package `bun test` suites load `@fluncle/test-support/preload` through their `bunfig.toml`; it blocks outbound network calls while permitting loopback fixture and libSQL servers. Each package’s `no-network.test.ts` checks that the preload is armed, so a missing preload fails the suite before network-dependent tests can reach external services.
+
 ## Closure contract
 
 `bun run quality:classify -- --base <base-sha> --head <head-sha>` prints the plan. Add `--output <file>` for `run-lane.mjs`, `--github-output <file>` in Actions, or `--force-full` for a backstop.
@@ -20,6 +22,8 @@ Fluncle validates the minimum sufficient evidence for a change's dependency clos
 | lockfiles, root build/lint/type configuration, patches, shared tool configuration, or an unrecognized path | full matrix                                                                                                       | yes                                            |
 
 The package graph is read from workspace manifests and selection walks reverse dependencies. The comparison uses full history and explicit base/head SHAs, including the pull request base rather than the synthetic merge ref. Scheduled and operator-dispatched Quality Checks are full backstops. Playwright's changed-test heuristic may be used for early local feedback, but it is never the CI authority.
+
+A linked worktree must resolve workspace packages inside its own checkout before its checks run. Node can otherwise walk to a parent checkout's `node_modules`, producing a passing check against another revision; `scripts/quality/workspace-install.mjs` checks the resolved package location.
 
 Security retains separate full-history Gitleaks and dependency-audit workflows. Audit still produces the raw report and applies the repository's policy gate in separate invocations. These inexpensive policy contracts are not path-pruned.
 

@@ -1,16 +1,3 @@
-// Render the Fluncle mobile app-icon candidates as 1024² stills.
-//
-//   bun src/render/render-app-icons.ts        (or: bun run render:app-icons)
-//
-// A TASTE deliverable: this renders every <AppIcon> variant (app-icon-specs.ts)
-// to out/app-icon/icon-<slug>.png so the operator can eyeball the candidates side
-// by side and pick one. out/ is gitignored — these are throwaway working stills,
-// NOT a committed asset. Once the operator picks, the chosen master gets wired
-// into apps/mobile (icon + Android adaptive foreground + splash); see the PR body.
-//
-// Mirrors render-og.ts: bundle the registry once, then select + renderStill each
-// candidate through ANGLE (hardware GL) so @remotion/fonts' loadFont settles.
-
 import fs from "node:fs/promises";
 import path from "node:path";
 
@@ -32,8 +19,6 @@ async function renderAppIcons(): Promise<void> {
 
   for (const spec of APP_ICON_SPECS) {
     const composition = await selectComposition({
-      // Match packages/video / render-og: ANGLE (Metal on Apple Silicon) gives a
-      // real hardware GL context headlessly, matching remotion.config.ts.
       chromiumOptions: { gl: "angle" },
       id: spec.id,
       serveUrl,

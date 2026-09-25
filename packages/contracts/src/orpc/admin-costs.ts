@@ -1,28 +1,6 @@
-// The `admin-costs` domain contract module — the agent-tier WRITE into the
-// append-only `cost_events` ledger (COST-01). The box holds the AGENT token and
-// POSTs the box-side numbers (the `claude -p` authoring tokens, enrich/embed
-// seconds, render box-minutes); the Worker-local capture paths reuse the SAME
-// `CostEventInput` shape in-process. Modeled on `record_health` — AGENT tier
-// (`adminAuth`, NOT `operatorGuard`), because the box's agent token drives it and
-// it writes only the internal ledger (no publish, fully reversible).
-//
-//   - `record_cost` — POST /admin/costs/events. Body: an ARRAY of CostEventInput
-//     (a sweep batches a tick's rows). MADE IDEMPOTENT: each event carries a
-//     client-generated STABLE `id`, and the handler inserts ON CONFLICT(id) DO
-//     NOTHING, so a retried best-effort POST re-inserts the same ids and is
-//     ignored (an append-only ledger double-counts a retry otherwise). Output is
-//     `{ ok: true, inserted }` — the count actually written, so a caller can see a
-//     retry land zero.
-//
-// This is a PRIVATE admin op: the ledger is internal cost data, kept off the
-// public OpenAPI doc by the `/admin/*` path filter (orpc.ts).
-
 import { oc } from "@orpc/contract";
 import * as z from "zod";
 
-// The closed sets, mirrored from the `cost_events` typed-enum columns (schema.ts).
-// The box supplies the semantic facts it alone knows; the Worker prices + stamps
-// `created_at`.
 const CostStep = z.enum([
   "enrich",
   "embed",
@@ -52,61 +30,31 @@ const CostUnitType = z.enum(["tokens", "characters", "seconds", "requests", "ema
 const CostBasis = z.enum(["cash", "subsidized"]);
 const CostSource = z.enum(["measured", "estimated"]);
 
-/**
- * One ledger row's worth of facts the emitter supplies. Pinned (RFC §3): the box
- * knows the SEMANTIC facts (which step/vendor/basis/source, how much, when, for
- * which finding); the Worker sets `createdAt` and prices
- * `estimatedUsd = usd ?? priceFromRates(...)` (NULL on a rate miss — unpriced,
- * never $0). `usd` is sent only by `anthropic` (the envelope's `total_cost_usd`)
- * and the OpenRouter distil (priced from its in/out token split); every other
- * vendor omits it and the Worker prices from `cost-rates.ts`.
- */
 export const CostEventInputSchema = z
   .object({
-    // Known at the call site, NOT inferable from vendor alone.
     costBasis: CostBasis,
-    // The deterministic idempotency key (see the schema's `id` note).
+
     id: z.string().min(1),
     logId: z.string().nullish(),
-    // LLM rows carry the model (e.g. claude-sonnet-4-6); others omit.
+
     model: z.string().nullish(),
-    occurredAt: z.string().min(1), // ISO when the work was spent
+    occurredAt: z.string().min(1),
     quantity: z.number(),
-    // Cartesia=measured vs Firecrawl=estimated can share a vendor, so it's explicit.
+
     source: CostSource,
     step: CostStep,
     trackId: z.string().nullish(),
     unitType: CostUnitType,
-    // anthropic sends the envelope's total_cost_usd; the OpenRouter distil sends
-    // its token-priced figure; every other vendor omits it → the Worker prices.
+
     usd: z.number().nullish(),
     vendor: CostVendor,
   })
   .meta({ id: "CostEventInput" });
 
-/** The pinned per-row input the box (and the Worker-local paths) supply. */
 export type CostEventInput = z.infer<typeof CostEventInputSchema>;
 
-/**
- * The per-request row cap. WHY: the handler prices and inserts every row in the batch, so an
- * unbounded array is unbounded DB work behind one agent token — and the token lives on a box, so
- * a compromised or buggy sweep is the realistic threat, not a stranger.
- *
- * SIZING: a tick posts one row per item it processed, and the widest sweep queue is
- * `QUEUE_LIMIT = 50` (docs/agents/hermes/scripts/embed-sweep.ts); every other sweep's batch is a
- * handful. 500 is 10× the largest real batch, so no sweep can grow into it by accident, and an
- * over-cap batch is rejected rather than trimmed (a silently dropped cost row is a wrong ledger).
- */
 const MAX_COST_EVENTS_PER_BATCH = 500;
 
-/**
- * `record_cost` → `POST /admin/costs/events` (operationId `recordCost`).
- *
- * AGENT tier (`adminAuth`, no `operatorGuard`): the box's agent-token sweeps POST
- * their tick's rows, the `record_health`/`context_track` precedent. Idempotent
- * insert (ON CONFLICT(id) DO NOTHING). Returns `{ ok, inserted }`. Capped at
- * {@link MAX_COST_EVENTS_PER_BATCH} rows per request.
- */
 export const recordCost = oc
   .route({
     method: "POST",
@@ -118,7 +66,6 @@ export const recordCost = oc
   .input(z.array(CostEventInputSchema).max(MAX_COST_EVENTS_PER_BATCH))
   .output(z.object({ inserted: z.number(), ok: z.literal(true) }));
 
-/** The `admin-costs` domain's ops, merged into the root contract by `./index.ts`. */
 export const adminCostsContract = {
   record_cost: recordCost,
 };

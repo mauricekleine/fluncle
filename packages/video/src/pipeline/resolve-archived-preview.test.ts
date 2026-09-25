@@ -1,9 +1,3 @@
-// resolveArchivedPreview points the render at the AGENT-tier preview-audio route
-// (the private R2 archive), together with the bearer headers needed to fetch it.
-// It probes the cheap metadata route first so a track with no archive returns
-// null HERE — the caller then falls back to the live Deezer/iTunes search. These
-// tests drive it through a swapped global fetch, so they never touch the network.
-
 import { afterEach, describe, expect, test } from "bun:test";
 
 import { resolveArchivedPreview } from "./resolve-archived-preview";
@@ -63,12 +57,11 @@ describe("resolveArchivedPreview", () => {
     expect(result?.confidence).toBe(1);
     expect(result?.source).toBe("archive");
     expect(result?.headers).toEqual({ authorization: "Bearer secret-agent-token" });
-    // The audio url is the metadata-probe url with `/preview` → `/preview-audio`
-    // (base decoupled from FLUNCLE_API_URL, which is captured once at import).
+
     const probeUrl = calls[0]?.url ?? "";
     expect(probeUrl).toMatch(/\/api\/admin\/tracks\/004\.6\.0K\/preview$/);
     expect(result?.url).toBe(probeUrl.replace(/\/preview$/, "/preview-audio"));
-    // The metadata probe carried the bearer too.
+
     expect((calls[0]?.init?.headers as Record<string, string> | undefined)?.authorization).toBe(
       "Bearer secret-agent-token",
     );
@@ -103,8 +96,6 @@ describe("resolveArchivedPreview", () => {
 
     const result = await resolveArchivedPreview("weird/id?x");
 
-    // The id is percent-encoded in both the probe and the audio url (base is
-    // captured once at import, so assert the encoded path, not the whole origin).
     expect(calls[0]?.url).toMatch(/\/api\/admin\/tracks\/weird%2Fid%3Fx\/preview$/);
     expect(result?.url).toMatch(/\/api\/admin\/tracks\/weird%2Fid%3Fx\/preview-audio$/);
   });

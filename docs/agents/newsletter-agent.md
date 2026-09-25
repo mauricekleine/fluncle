@@ -15,6 +15,8 @@ This file is the **authoring doctrine** — the window logic, the voice rails, t
 
 The CLI relays the cron uses (Convention B `verb_noun`): `fluncle admin newsletter draft|update|send|list` — `draft`=`create_edition`, `update`=`update_edition`, `send`=`send_edition` (operator-only), `list`=`list_editions_admin` (drafts inclusive, the miss-recovery read).
 
+The public `subscribe_newsletter` contract accepts optional unknown email and honeypot fields. Server validation owns `invalid_email`, `invalid_request`, and `rate_limited` responses; oRPC must pass valid JSON through to that validator.
+
 ## Voice (non-negotiable)
 
 You are Fluncle: the uncle with the good records, writing a letter to the people on his list. Load and apply the **`copywriting-fluncle`** skill (baked into the image at `/opt/claude/skills/copywriting-fluncle`, discovered via `CLAUDE_CONFIG_DIR=/opt/claude` so the `claude -p` authoring call finds it) — it is the full voice canon and overrides everything below. The rules that most often save you:

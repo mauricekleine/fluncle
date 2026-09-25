@@ -1,16 +1,3 @@
-// Strict RenderIntent validator (schema `fluncle.render-intent/1`) with PRECISE
-// per-field errors — the authoring-time counterpart to intent.ts's defensive
-// `validateRenderIntent` (which only returns null/RenderIntent and can't say WHY).
-//
-// The deterministic metrics run warn-and-stub on a bad intent; this makes the bug
-// legible before that: it checks EVERY field (including the ones the runtime
-// validator skips — register, textureFamily, arcSource, motionModel, climax, each
-// binding's band/axis enum, and the optional doctrine fields) and reports the exact
-// path + reason for each violation.
-//
-// CLI: bun src/pipeline/validate-intent.ts <intent.json> [--json]
-// Exit 0 = valid, 1 = invalid (errors printed), 2 = usage/read error.
-
 import { existsSync, readFileSync } from "node:fs";
 
 import {
@@ -33,7 +20,7 @@ export type IntentError = { path: string; message: string };
 export type ValidateIntentResult = {
   valid: boolean;
   errors: IntentError[];
-  /** the parsed intent when valid, else null. */
+
   intent: RenderIntent | null;
 };
 
@@ -57,7 +44,6 @@ function validateClimax(climax: unknown, err: (path: string, message: string) =>
   }
 }
 
-/** Strict, error-collecting validation of an already-parsed value. */
 export function validateIntentStrict(raw: unknown): ValidateIntentResult {
   const errors: IntentError[] = [];
   const err = (path: string, message: string): void => {
@@ -107,10 +93,8 @@ export function validateIntentStrict(raw: unknown): ValidateIntentResult {
     err("dropMs", "must be >= 0");
   }
 
-  // climax
   validateClimax(raw.climax, err);
 
-  // bindings
   if (!Array.isArray(raw.bindings)) {
     err("bindings", "must be an array");
   } else {
@@ -138,7 +122,6 @@ export function validateIntentStrict(raw: unknown): ValidateIntentResult {
     });
   }
 
-  // Optional fields — type-checked only when present.
   if (raw.secondaryPeaks !== undefined) {
     if (
       !Array.isArray(raw.secondaryPeaks) ||
@@ -160,7 +143,6 @@ export function validateIntentStrict(raw: unknown): ValidateIntentResult {
     err("focalPoint", "when present, must be a string");
   }
 
-  // ── The PRESENCE fields (optional) — enum-checked only when present ─────────
   const optEnum = (key: string, allowed: readonly string[]): void => {
     if (
       raw[key] !== undefined &&
@@ -177,8 +159,6 @@ export function validateIntentStrict(raw: unknown): ValidateIntentResult {
   optEnum("disclosure", DISCLOSURES);
   optEnum("subjectClock", SUBJECT_CLOCKS);
 
-  // ── Cross-field presence lints (fire only when the presence fields opt in, so
-  // every pre-presence intent stays valid) ───────────────────────────────────
   const bindingsList = Array.isArray(raw.bindings) ? raw.bindings : [];
   const hasBand = (band: string): boolean =>
     bindingsList.some((b) => isRecord(b) && b.band === band);
@@ -186,8 +166,6 @@ export function validateIntentStrict(raw: unknown): ValidateIntentResult {
     (b) => isRecord(b) && b.axis === "translation",
   ).length;
 
-  // A drop-resolved disclosure MUST bind the drop — the reveal is driven by the drop
-  // envelope; without a drop binding the "resolved-at-drop" claim has no driver.
   if (raw.disclosure === "resolved-at-drop" && !hasBand("drop")) {
     err(
       "disclosure",
@@ -195,10 +173,6 @@ export function validateIntentStrict(raw: unknown): ValidateIntentResult {
     );
   }
 
-  // A subject present (subjectClass ≠ "none", or a subjectClock declared) means the
-  // world answers the music while the thing keeps its own clock: the environment must
-  // own EVERY audio binding, so there can be no `translation`-axis binding (an
-  // indifferent subject and the constant-clock world never translate on audio).
   const subjectPresent =
     (raw.subjectClass !== undefined && raw.subjectClass !== "none") ||
     raw.subjectClock !== undefined;
@@ -213,7 +187,6 @@ export function validateIntentStrict(raw: unknown): ValidateIntentResult {
   return { errors, intent: valid ? (raw as RenderIntent) : null, valid };
 }
 
-/** Read + strict-validate an intent file. Read/parse failures surface as errors. */
 export function validateIntentFile(file: string): ValidateIntentResult {
   if (!existsSync(file)) {
     return {

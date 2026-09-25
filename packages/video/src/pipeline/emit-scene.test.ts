@@ -1,9 +1,3 @@
-// Coverage for the standalone scene-emission WRAPPER (emit-scene.ts). The pure
-// emitter itself (scene.ts buildScene) is covered by scene.test.ts; this locks the
-// wrapper's own logic: target resolution across the three kinds, palette resolution
-// (flag / props / default), and the end-to-end emit (read source + props + metrics
-// → buildScene → write scene.json) WITHOUT a render or a ship.
-
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -23,7 +17,6 @@ import { validateSceneStrict } from "./validate-scene";
 const OUT = "/tmp/out";
 const REMOTION = "/tmp/remotion";
 
-// A live-ready fixture body: header uniforms only, deps as bare `${GLSL.*}` refs.
 const FIXTURE_SOURCE = `
 const FRAG = /* glsl */ \`
 \${GLSL.hash}
@@ -154,15 +147,14 @@ describe("emitScene (end to end, no render)", () => {
     expect(scene.schema).toBe(SCENE_SCHEMA);
     expect(scene.id).toBe("the-passing-hull");
     expect(scene.kind).toBe("finding");
-    expect(scene.liveReady).toBe(true); // header-uniforms-only body
+    expect(scene.liveReady).toBe(true);
     expect(scene.palette).toEqual(["#0b0a10", "#3a2b4d", "#c98a5a", "#f4ead7"]);
     expect(scene.grain.family).toBe("grainCoarseSilver");
-    // the metrics folded: beat-pull + flash pass, arc inconclusive (presence-quiet path folds here)
+
     expect(scene.cleared.beatPull).toBe("pass");
     expect(scene.cleared.flash).toBe("pass");
     expect(scene.cleared.arc).toBe("inconclusive");
 
-    // the written file is a STRICTLY valid fluncle.scene/1 manifest.
     const written = JSON.parse(readFileSync(result.writtenTo ?? "", "utf8"));
     expect(validateSceneStrict(written).valid).toBe(true);
   });
@@ -178,7 +170,7 @@ describe("emitScene (end to end, no render)", () => {
     });
     expect(result.scene?.palette).toEqual(DEFAULT_SCENE_PALETTE);
     expect(result.warnings.some((w) => w.includes("warm-dark default"))).toBe(true);
-    expect(result.writtenTo).toBeNull(); // dryRun writes nothing
+    expect(result.writtenTo).toBeNull();
   });
 
   test("scene null (skipped, never a throw) when the source has no resolvable body", () => {

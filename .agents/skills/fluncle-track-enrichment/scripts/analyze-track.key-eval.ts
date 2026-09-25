@@ -1,23 +1,4 @@
 #!/usr/bin/env bun
-// analyze-track.key-eval — DEV / EVAL TOOL, NOT A CI TEST.
-//
-// Head-to-head accuracy gate for the musical-key estimator against a Rekordbox
-// ground-truth set (DJ-beatgridded, confident full-song keys). It hits the NETWORK
-// (Deezer/iTunes) and downloads COPYRIGHTED 30s previews, so it must never run in CI —
-// it is the ship/no-ship measurement the estimator rebuild is judged by.
-//
-// It resolves the SAME preview windows the production pipeline analyzes (via the
-// exported `resolvePreviews`), decodes them through the same ffmpeg seam, and scores
-// TWO estimators per row against the Rekordbox key:
-//   - "current": a frozen copy of the pre-rebuild K-S estimator (the baseline to beat);
-//   - "new":     the rebuilt whole-track chromagram estimator (analyze-track.ts).
-// Downloaded previews are cached under a temp dir so re-runs (config sweeps) are fast.
-//
-//   bun analyze-track.key-eval.ts \
-//     --csv /path/to/rekordbox-ground-truth.csv \
-//     [--cache /tmp/key-eval-cache] [--limit 35] [--sweep]
-//
-// Categories per row: exact / mode-flip (parallel) / relative / other / null.
 
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -35,9 +16,6 @@ function arg(name: string): string | undefined {
   return index >= 0 ? process.argv[index + 1] : undefined;
 }
 
-// The ground-truth CSV is an ad-hoc operator artifact (not committed — it holds a
-// Rekordbox export), so `--csv <path>` is REQUIRED. Columns: logId,title,artist,rbKey
-// (rbKey normalized to "<Note> major|minor").
 const csvPath = arg("csv");
 
 if (!csvPath) {
@@ -53,10 +31,6 @@ const sweep = process.argv.includes("--sweep");
 
 mkdirSync(cacheDir, { recursive: true });
 
-// ---------------------------------------------------------------------------
-// CSV + key parsing
-// ---------------------------------------------------------------------------
-
 type Row = { artist: string; logId: string; rbKey: string; title: string };
 
 function parseCsv(text: string): Row[] {
@@ -70,7 +44,6 @@ function parseCsv(text: string): Row[] {
   const rows: Row[] = [];
 
   for (const line of lines.slice(1)) {
-    // Minimal CSV: only the artist field is quoted (may contain commas).
     const cells: string[] = [];
     let cur = "";
     let inQuotes = false;
@@ -132,7 +105,6 @@ function categorize(pred: string | null, truth: string): Category {
     return "mode-flip";
   }
 
-  // Relative major/minor: C major ↔ A minor (major root +9 = its relative minor).
   if (p.mode === "major" && t.mode === "minor" && (p.root + 9) % 12 === t.root) {
     return "relative";
   }
@@ -143,13 +115,6 @@ function categorize(pred: string | null, truth: string): Category {
 
   return "other";
 }
-
-// ---------------------------------------------------------------------------
-// "current" estimator — a FROZEN copy of the pre-rebuild K-S key path
-// (main: spectral() 25 s linear-magnitude chroma + Pearson vs Krumhansl). Kept here
-// verbatim so the eval is an honest head-to-head against what shipped, independent of
-// the rebuilt analyze-track.ts.
-// ---------------------------------------------------------------------------
 
 const KS_MAJOR = [6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88];
 const KS_MINOR = [6.33, 2.68, 3.52, 5.38, 2.6, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17];
@@ -273,10 +238,6 @@ function currentEstimateKey(samples: Float32Array): { confidence: number; key: s
   return { confidence: Number(best.confidence.toFixed(2)), key: best.key };
 }
 
-// ---------------------------------------------------------------------------
-// Preview download + decode with an on-disk cache
-// ---------------------------------------------------------------------------
-
 async function samplesForRow(row: Row): Promise<Array<{ samples: Float32Array; source: string }>> {
   const previews = await resolvePreviews({ artist: row.artist, title: row.title });
   const out: Array<{ samples: Float32Array; source: string }> = [];
@@ -291,15 +252,12 @@ async function samplesForRow(row: Row): Promise<Array<{ samples: Float32Array; s
       }
 
       out.push({ samples: decodeToSamples(cacheFile), source: preview.source });
-    } catch {
-      // skip a preview that won't download/decode
-    }
+    } catch {}
   }
 
   return out;
 }
 
-// Mirror the CLI's per-field choice: key = the most-confident read across the previews.
 function bestKey(
   reads: Array<{ samples: Float32Array; source: string }>,
   estimate: (s: Float32Array) => { confidence: number; key: string },
@@ -316,10 +274,6 @@ function bestKey(
 
   return best;
 }
-
-// ---------------------------------------------------------------------------
-// Scoring
-// ---------------------------------------------------------------------------
 
 type Tally = Record<Category, number>;
 
@@ -344,7 +298,6 @@ async function main(): Promise<void> {
   const rows = parseCsv(readFileSync(csvPath, "utf8")).slice(0, limit);
   console.error(`[eval] ${rows.length} rows; cache ${cacheDir}`);
 
-  // Config sweep for the "new" estimator. The first is the shipped default.
   const configs: Array<{ name: string; opts?: Parameters<typeof estimateKey>[1] }> = sweep
     ? [
         { name: "new:default" },
@@ -398,7 +351,7 @@ async function main(): Promise<void> {
 
   const currentTally = emptyTally();
   const newTallies = new Map(configs.map((c) => [c.name, emptyTally()]));
-  // Floor-tuning: keep (confidence, category) for the shipped default.
+
   const newConfSamples: Array<{ category: Category; confidence: number }> = [];
 
   let evaluated = 0;
@@ -451,8 +404,6 @@ async function main(): Promise<void> {
     }
   }
 
-  // Floor tuning for the shipped default: precision (exact / non-null) and recall as
-  // the confidence floor rises. A row is "kept" when confidence >= floor.
   console.log(`\n=== FLOOR TUNING (new:default) ===`);
 
   for (const floor of [0, 0.25, 0.34, 0.4, 0.5, 0.6, 0.67, 0.75]) {

@@ -1,37 +1,13 @@
 #!/usr/bin/env bun
-// THE CONFLATION DETECTOR — read-only. Surfaces `artists` rows that hold TWO real-world acts.
-//
-//   bun run packages/skills/fluncle-catalogue-prune/scripts/find-conflated-artists.ts
-//   bun run …/find-conflated-artists.ts --labels "radar-records|cutting-edge" --samples 3
-//   bun run …/find-conflated-artists.ts --no-musicbrainz          # local signals only, no vendor calls
-//
-// WHY IT EXISTS. The namesake purge (SKILL.md § Namesake repair) deletes whole artists, so it
-// deliberately SPARES any artist holding genuine enabled-label tracks. A conflated row is exactly
-// the case that survives that rule and should not have: ONE `artists` row carrying a drum & bass act
-// AND an unrelated same-named act whose tracks came in on an impostor walk. Deleting the row would
-// take the real act's page with it; leaving it renders the impostor's tracks on that page. The
-// repair is a SPLIT or a STRIP, and `split-artist.ts` is the tool — this script finds the work.
-//
-// HOW A ROW ENDS UP HOLDING TWO ACTS is a code bug, now sealed: the crawl-time artist link joined on
-// NAME alone (`artists a on a.name = credit.value collate nocase`) while holding the credit's
-// MusicBrainz artist id, and slice 0's fold collapsed punctuation so `"K."` matched `"K"`. Both now
-// refuse a name match onto a row whose `mbid` says otherwise (apps/web/src/lib/server/artists.ts
-// § THE HOMONYM SEAL). This detector is the CLEANUP half; the seal stops the inflow.
-//
-// THE OUTPUT IS EVIDENCE, NOT A RULING. Every block ends in a hint, never a decision: the operator
-// rules split / strip / keep. A genuine crossover — one act that really did appear on both labels,
-// e.g. a drum & bass remix billed to the original artist — is NOT a conflation and must stay.
+
 import { writeFileSync } from "node:fs";
 
 import { getDb, getOrSet, slugify } from "./lib";
 
-/** MusicBrainz asks every client to identify itself; an anonymous UA gets throttled or blocked. */
 const MB_USER_AGENT = "Fluncle-CatalogueAudit/1.0 (https://www.fluncle.com)";
 
-/** MusicBrainz's published ceiling is 1 req/s; 1.2s leaves headroom for clock jitter. */
 const MB_INTERVAL_MS = 1200;
 
-/** The MusicBrainz compilation placeholder — never a real artist (the crawler skips it too). */
 const VARIOUS_ARTISTS_MBID = "89ad4ac3-39f7-470e-963a-56509c546377";
 
 export type ArtistRow = { id: string; mbid: null | string; name: string; slug: string };
@@ -47,15 +23,6 @@ export type TrackRow = {
   track_id: string;
 };
 
-/**
- * Which code path wrote a `track_artists` edge, read off the two backfill stamps on its track.
- *
- * This is the cheapest triage signal in the file and it needs no vendor call. `credit-sweep` edges
- * were resolved by MusicBrainz artist ID (`backfill-artist-credits.ts`), which refuses homonyms by
- * construction — so an impostor side written ENTIRELY by the credit sweep is very probably a real
- * crossover, not a conflation. `crawl-link` and `slice-0` are the two name-only writers, and on prod
- * they wrote 181 and 29 of the 225 impostor-side edges respectively (measured 2026-07-27).
- */
 export type EdgeWriter = "crawl-link" | "credit-sweep" | "slice-0";
 
 export function edgeWriter(track: TrackRow): EdgeWriter {
@@ -66,14 +33,6 @@ export function edgeWriter(track: TrackRow): EdgeWriter {
   return track.artist_edges_backfilled_at ? "slice-0" : "crawl-link";
 }
 
-/**
- * The impostor-walk label slugs, derived from the FRONTIER rather than typed by hand.
- *
- * `reseed-label.ts` stamps every wrong-namesake MusicBrainz label node with a `wrong namesake`
- * note instead of deleting it, precisely so the record survives — this reads that record back. An
- * operator can still override with `--labels`, which is what a fresh namesake case needs before its
- * frontier has been repaired.
- */
 export function namesakeLabelSlugs(
   rows: ReadonlyArray<{ label_slug: null | string }>,
 ): Set<string> {
@@ -81,7 +40,6 @@ export function namesakeLabelSlugs(
 }
 
 export type Side = {
-  /** Distinct raw `artists_json` credit spellings seen on this side — `"K"` vs `"K."`. */
   creditSpellings: string[];
   labels: string[];
   sampleTitles: string[];
@@ -105,7 +63,6 @@ const emptySide = (): Side => ({
   writers: [],
 });
 
-/** The credited spellings on a track that FOLD to this artist's name — the divergence fingerprint. */
 function matchingSpellings(track: TrackRow, artist: ArtistRow): string[] {
   let credited: unknown;
 
@@ -126,15 +83,6 @@ function matchingSpellings(track: TrackRow, artist: ArtistRow): string[] {
   );
 }
 
-/**
- * Split every artist's tracks into the IMPOSTOR side (tracks on a namesake-walked label) and the
- * CLEAN side (tracks on any OTHER enabled label), and keep only artists that hold both.
- *
- * Holding both is what makes a row interesting: an artist with only impostor-side tracks is the
- * plain namesake case `purge-artists.ts` already handles, and one with only clean tracks is simply
- * a drum & bass artist. Note the label alone cannot tell the two acts apart — the real label and
- * its namesake share ONE `labels` row — so this is a CANDIDATE gate, not a verdict.
- */
 export function buildCandidates(input: {
   artists: ReadonlyArray<ArtistRow>;
   edges: ReadonlyArray<{ artist_id: string; track_id: string }>;
@@ -160,8 +108,6 @@ export function buildCandidates(input: {
       continue;
     }
 
-    // A finding is Maurice's logged work and is never part of an impostor side. Excluded from BOTH
-    // sides so it can neither trigger a candidate nor be proposed for removal.
     if (findingTrackIds.has(track.track_id)) {
       continue;
     }
@@ -212,22 +158,11 @@ export function buildCandidates(input: {
   return candidates.sort((a, b) => b.impostor.tracks - a.impostor.tracks);
 }
 
-// ── MusicBrainz: whose recordings are these, really? ─────────────────────────────────────────────
-
-/** One recording's credited MB artists, as MusicBrainz itself reports them. */
 export type RecordingCredits = { ids: string[]; names: string[] };
 export type CreditLookup = (recordingMbid: string) => Promise<RecordingCredits | null>;
 
-/** What MusicBrainz says about one side of a candidate. */
 export type SideIdentity = { ids: string[]; names: string[]; sampled: number };
 
-/**
- * Ask MusicBrainz which artist actually made a side's recordings.
- *
- * This is the evidence that turns a candidate into a ruling: if the impostor side's recordings are
- * credited to MB artist X and the clean side's to MB artist Y, one Fluncle row is holding two
- * MusicBrainz artists and the split is a fact rather than a guess.
- */
 export async function identifySide(
   side: Side,
   tracks: ReadonlyMap<string, TrackRow>,
@@ -270,13 +205,6 @@ export async function identifySide(
 
 export type Verdict = "CONFLATION (proven)" | "crossover (proven)" | "unsure";
 
-/**
- * The hint, stated from the evidence only.
- *
- * PROVEN either way needs MusicBrainz to have answered for BOTH sides: disjoint artist ids prove
- * two acts, a shared id proves one. Everything else is `unsure` on purpose — a detector that
- * guesses is worse than one that says it does not know, because a wrong split is a destructive act.
- */
 export function verdictFor(impostor: SideIdentity, clean: SideIdentity): Verdict {
   if (impostor.ids.length === 0 || clean.ids.length === 0) {
     return "unsure";
@@ -287,7 +215,6 @@ export function verdictFor(impostor: SideIdentity, clean: SideIdentity): Verdict
     : "CONFLATION (proven)";
 }
 
-/** The local signals worth reading when MusicBrainz could not settle it. */
 export function localSignals(candidate: Candidate): string[] {
   const signals: string[] = [];
   const writers = new Set(candidate.impostor.writers);
@@ -320,8 +247,6 @@ export function localSignals(candidate: Candidate): string[] {
 
   return signals;
 }
-
-// ── The report ───────────────────────────────────────────────────────────────────────────────────
 
 export type Evidence = {
   candidate: Candidate;
@@ -358,8 +283,6 @@ export function renderEvidence(evidence: Evidence): string {
   return lines.join("\n");
 }
 
-// ── I/O ──────────────────────────────────────────────────────────────────────────────────────────
-
 const flag = (argv: string[], name: string): string | undefined => {
   const i = argv.indexOf(name);
 
@@ -373,7 +296,6 @@ const numberFlag = (argv: string[], name: string, fallback: number): number => {
   return Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback;
 };
 
-/** The paced MusicBrainz client. One request at a time, `MB_INTERVAL_MS` apart, memoised per run. */
 export function createCreditLookup(): CreditLookup {
   const cache = new Map<string, RecordingCredits | null>();
   let chain: Promise<unknown> = Promise.resolve();
@@ -434,7 +356,6 @@ type Loaded = {
   tracks: TrackRow[];
 };
 
-/** One read-only load. Every query here is a `select`; this script never writes to the database. */
 export async function load(labelsOverride?: string[]): Promise<Loaded> {
   const db = await getDb();
   const rows = async <T>(sql: string): Promise<T[]> => (await db.execute(sql)).rows as T[];

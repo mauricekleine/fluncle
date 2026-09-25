@@ -1,17 +1,3 @@
-// Render ONE "Fluncle's Frontier" playlist cover (E2, the public recommendation
-// machine) to a 640×640 JPEG. Remotion needs a real headless Chromium and does NOT run
-// in a Cloudflare Worker, so the cover is a NODE-SIDE leg: this script renders the JPEG,
-// and the driver (apps/web/scripts/render-frontier-covers.ts) reads it and uploads it to
-// Spotify via the Worker's grant.
-//
-//   bun run render:frontier-cover -- --crew 42 --out /tmp/frontier-42.jpg
-//   → writes a 640×640 JPEG (the FrontierCover composition stamped with crew № 42)
-//
-// The upload target (Spotify's playlist-image endpoint) accepts a base64 JPEG ≤256KB,
-// so the JPEG bytes must stay ≤~192KB. The cover is a dark, low-detail starfield, so a
-// quality-80 640² JPEG lands far under that; the size is asserted after the render so a
-// future design change that blows the ceiling fails loudly rather than at upload time.
-
 import { mkdir, stat } from "node:fs/promises";
 import path from "node:path";
 
@@ -20,10 +6,8 @@ import { renderStill, selectComposition } from "@remotion/renderer";
 
 const ENTRY_POINT = path.resolve(import.meta.dirname, "../remotion/index.ts");
 
-/** Spotify's playlist-cover upload accepts a base64 JPEG ≤256KB → ~192KB of JPEG bytes. */
 const MAX_JPEG_BYTES = 192 * 1024;
 
-/** Parse `--crew <n>` / `--out <path>` from argv. */
 function parseArgs(argv: string[]): { crewNumber: null | number; out: string } {
   let crewNumber: null | number = null;
   let out = "";
@@ -44,7 +28,6 @@ function parseArgs(argv: string[]): { crewNumber: null | number; out: string } {
   return { crewNumber, out };
 }
 
-/** Render the FrontierCover still for one crew № to `out` (a 640×640 JPEG). */
 export async function renderFrontierCoverToFile(options: {
   crewNumber: null | number;
   out: string;

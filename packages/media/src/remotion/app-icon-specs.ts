@@ -1,36 +1,18 @@
-// The app-icon spec sets — the single source of truth shared by the registry
-// (root.tsx maps them to <Still>s) and the render scripts.
-//
-// Two sets. APP_ICON_SPECS is the CANDIDATE set (render-app-icons.ts → the
-// gitignored out/, for the operator's taste pick: variant "traveler", plain Deep Field).
-// MOBILE_ASSET_SPECS is the PRODUCTION set
-// (render-mobile-assets.ts → apps/mobile/assets/, committed): the picked icon
-// master plus its two Expo siblings, the Android adaptive-icon foreground and
-// the splash mark. All render at the 1024×1024 master size (Expo's recommended
-// icon size; the OS masks/downscales from it).
-
 import { type AppIconVariant } from "./app-icon";
 
 export type AppIconSpec = {
-  /** Remotion <Still> id + selectComposition id. */
   id: string;
-  /** File slug: rendered to out/app-icon/icon-<slug>.png. */
+
   slug: string;
-  /** One-line design rationale, for the render log and the PR body. */
+
   rationale: string;
-  /** The variant this candidate renders. */
+
   variant: AppIconVariant;
 };
 
-// The iOS/Android master size. The OS applies its own corner mask (iOS
-// superellipse, Android adaptive crop) and downscales, so we render one clean
-// 1024² master per candidate and design to the full square.
 export const APP_ICON_SIZE = 1024;
 
 export const APP_ICON_SPECS: readonly AppIconSpec[] = [
-  // ── The live candidates: the existing brand mark, the drifting traveler
-  // (operator ruling — the icon is the canonical figure, not an invented mark;
-  // the figure is scaled to ~72% of icon height so it reads at 60px). ──
   {
     id: "AppIconTraveler",
     rationale:
@@ -52,7 +34,7 @@ export const APP_ICON_SPECS: readonly AppIconSpec[] = [
     slug: "g-traveler-eclipse",
     variant: "traveler-glow",
   },
-  // ── Exploration: the four invented marks, kept for reference. ──
+
   {
     id: "AppIconEclipse",
     rationale:
@@ -84,20 +66,15 @@ export const APP_ICON_SPECS: readonly AppIconSpec[] = [
 ] as const;
 
 export type MobileAssetSpec = {
-  /** The committed file name under apps/mobile/assets/. */
   file: string;
-  /** Remotion <Still> id + selectComposition id. */
+
   id: string;
-  /** What the asset is, for the render log. */
+
   rationale: string;
-  /** The variant this asset renders. */
+
   variant: AppIconVariant;
 };
 
-// The production mobile assets — the operator's "traveler" pick plus its Expo siblings.
-// render-mobile-assets.ts renders these to
-// apps/mobile/assets/, which app.config.js references; they are COMMITTED
-// files (like the OG card), regenerated + re-committed when the design changes.
 export const MOBILE_ASSET_SPECS: readonly MobileAssetSpec[] = [
   {
     file: "icon.png",

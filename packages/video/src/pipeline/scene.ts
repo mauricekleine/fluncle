@@ -1,42 +1,11 @@
-// The scene contract (`fluncle.scene/1`) — the replay manifest for a finding's
-// shader body (RFC: Live + Longform, Unit S). Sibling of intent.ts: intent.json
-// is the DESCRIPTIVE record the judge reads; scene.json is the EXECUTABLE record a
-// host (offline `SceneHost`, live `LiveSceneHost`) re-runs. The offline pipeline
-// authors + certifies; the runtime replays, never authors.
-//
-// The manifest carries a fully RESOLVED fragment body (every `${GLSL.*}` dependency
-// inlined by the emitter), the four palette stops, the grain floor, and the
-// optional bloom/reactivity post-config — everything a host needs to reproduce the
-// world with NO composition module in reach. `cleared` folds the ship-time gate
-// verdicts (the QA stamp — "cleared", never "certified", which is Fluncle's
-// protected verb). `liveReady` records whether the body reads HEADER UNIFORMS ONLY
-// (the scripted-clock law made mechanical): a body with custom clip-time uniforms
-// still ships everything else, but a live host cannot drive those uniforms, so it
-// is marked not-live-ready with the reason.
-//
-// This module owns the schema + the pure emitter helpers (module-evaluating the
-// composition source against the imported `GLSL` object, the `${GLSL.*}`-only
-// interpolation guard, the custom-uniform static scan, the cleared/bloom/reactivity
-// folds). ship.ts wires them; validate-scene.ts is the strict authoring-time CLI.
-
 import { luminance } from "../remotion/color";
 
 export const SCENE_SCHEMA = "fluncle.scene/1" as const;
 
-// Pins the CORE_UNIFORMS contract the resolved body was authored against. A host
-// that injects a different header version must refuse the body rather than guess.
 export const SCENE_HEADER_VERSION = "cosmos.header/1" as const;
 
-// The metrics contract the `cleared` block conforms to — the fallback when the
-// gate report (out/<trackId>.metrics.json) carries no explicit `metricsVersion`.
 export const SCENE_METRICS_VERSION = "cosmos.metrics/1" as const;
 
-// The authoritative CORE_UNIFORMS name set — MUST mirror the `CORE_UNIFORMS` block
-// in remotion/journey/shader-layer.tsx (pinned by SCENE_HEADER_VERSION). A
-// live-ready body reads ONLY these names (plus its own declared textures). The
-// emitter's live-ready scan flags any OTHER `uniform` declaration in the body. Keep
-// this list in lockstep with the header; SceneHost injects via the same ShaderLayer,
-// so a drift shows up as a compile error, not silent divergence.
 export const CORE_UNIFORM_NAMES: readonly string[] = [
   "u_time",
   "u_res",
@@ -65,24 +34,10 @@ export const CORE_UNIFORM_NAMES: readonly string[] = [
   "u_palette",
 ];
 
-// The Warm Dark ceiling (DESIGN.md "The Warm Dark Rule"): a scene GROUND
-// (palette[0]) must sit near-black. Read with the package's perceptual `luminance`
-// (0.299/0.587/0.114). Canon grounds clear it comfortably — deepField #090a0b ≈
-// 0.04, tapeBlack #171611 ≈ 0.09 — while any mid-tone (a rose #cc5374 ≈ 0.48) or
-// cream (#f4ead7 ≈ 0.91) trips it. The one load-time lint the taste pass kept.
 export const WARM_DARK_CEILING = 0.14;
 
 export type SceneKind = "finding" | "default" | "holding";
 
-/**
- * Where a host resolves a declared texture sampler from. All three are
- * host-resolvable without the composition module in reach:
- *   - `artwork`          — the matched finding's cover (CORS-clear).
- *   - `plate`            — the bundle's plate-lane photographic plate, the durable
- *                          `<log-id>/plate.png` R2 key (found.fluncle.com).
- *   - `plate-background` — the plate's subject-removed background for true
- *                          parallax, `<log-id>/plate.background.png`.
- */
 export type SceneTextureSource = "artwork" | "plate" | "plate-background";
 
 export const SCENE_TEXTURE_SOURCES: readonly SceneTextureSource[] = [
@@ -96,14 +51,6 @@ export type SceneTexture = {
   source: SceneTextureSource;
 };
 
-/**
- * The sampler-name convention that lets the emitter resolve a texture's SOURCE
- * statically (the textures prop's values are runtime expressions, so the NAME is
- * the contract): a plate-lane composition samples its plate as `u_plate` and the
- * subject-removed background as `u_plateBackground` — those names map to the
- * bundle's own `plate.png` / `plate.background.png`; any other sampler name reads
- * as the finding's artwork.
- */
 export function textureSourceForName(name: string): SceneTextureSource {
   if (name === "u_plate") {
     return "plate";
@@ -115,22 +62,20 @@ export function textureSourceForName(name: string): SceneTextureSource {
 }
 
 export type SceneGlsl = {
-  /** The fully RESOLVED fragment body (`${GLSL.*}` deps inlined; no interpolations left). */
   body: string;
-  /** Pins the CORE_UNIFORMS contract — SCENE_HEADER_VERSION. */
+
   headerVersion: string;
-  /** WebGL2 / GLSL ES 3.00 body (writes `out vec4 fragColor`). */
+
   glsl3: boolean;
-  /** Declared texture samplers, present only when the body samples artwork. */
+
   textures?: SceneTexture[];
 };
 
 export type ScenePalette = [string, string, string, string];
 
 export type SceneGrain = {
-  /** The grain-family id (e.g. `grainChemicalDye`), or `unknown` when unstated. */
   family: string;
-  /** The grain floor amount the host applies at minimum. */
+
   amount: number;
 };
 
@@ -141,13 +86,10 @@ export type SceneBloom = {
 };
 
 export type SceneReactivity = {
-  /** The drop envelope SHAPE. `peakTimeMs` is deliberately absent — live detects the
-   *  peak; offline injects it per render. */
   drop: { riseMs: number; holdMs: number; fallMs: number };
   swellBeatWeight: number;
 };
 
-/** A folded gate verdict: pass/fail from the hard gates, inconclusive/unknown otherwise. */
 export type SceneClearedVerdict = "pass" | "fail" | "inconclusive" | "unknown";
 
 export type SceneCleared = {
@@ -155,13 +97,13 @@ export type SceneCleared = {
   flash: SceneClearedVerdict;
   arc: SceneClearedVerdict;
   metricsVersion: string;
-  /** ISO-8601 stamp of when the gate report was folded (ship time). */
+
   at: string;
 };
 
 export type Scene = {
   schema: typeof SCENE_SCHEMA;
-  /** logId for findings; member id for defaults/holding. */
+
   id: string;
   kind: SceneKind;
   glsl: SceneGlsl;
@@ -170,34 +112,22 @@ export type Scene = {
   bloom?: SceneBloom;
   reactivity?: SceneReactivity;
   cleared: SceneCleared;
-  /** The body reads HEADER UNIFORMS ONLY (a live host can drive it exactly). */
+
   liveReady: boolean;
-  /** Why a scene is not live-ready (custom clip-time uniforms). Empty when ready. */
+
   liveReadyReasons: string[];
 };
 
-// The public read base for stored bundle artifacts (found.fluncle.com serves the
-// R2 bundle keyed by log-id) — where a host resolves the plate-lane textures from.
 const FOUND_BASE = "https://found.fluncle.com";
 
 export type SceneTextureUrls = {
-  /** The matched finding's artwork (binds every `source: "artwork"` sampler). */
   artworkUrl?: string;
-  /** Override for `source: "plate"`; defaults to the finding bundle's plate.png. */
+
   plateUrl?: string;
-  /** Override for `source: "plate-background"`; defaults to plate.background.png. */
+
   plateBackgroundUrl?: string;
 };
 
-/**
- * Resolve a scene's declared texture samplers to concrete URLs for a host —
- * the pure half of SceneHost's `textures` prop. Per-source: `artwork` binds the
- * caller's artworkUrl; `plate` / `plate-background` bind the caller's override or,
- * for a finding, the bundle's own durable R2 key (the same URL the composition
- * rendered from — the upload-first order guarantees it exists before any render).
- * Entries with no resolvable URL are omitted (never a throw); undefined when
- * nothing resolves, so a texture-less ShaderLayer path stays untouched.
- */
 export function resolveSceneTextures(
   scene: Pick<Scene, "glsl" | "id" | "kind">,
   urls: SceneTextureUrls,
@@ -235,12 +165,6 @@ function isHexTriquad(value: unknown): value is ScenePalette {
   );
 }
 
-/**
- * Defensive parse of an unknown (parsed JSON) into a Scene. Returns null on
- * anything malformed so a host can treat a bad/missing scene as a degrade (fall
- * back to the tag-mapped default), never a crash — the counterpart to
- * validateSceneStrict (which says WHY). Mirrors intent.ts's validateRenderIntent.
- */
 export function validateScene(raw: unknown): Scene | null {
   if (!isRecord(raw) || raw.schema !== SCENE_SCHEMA) {
     return null;
@@ -270,13 +194,6 @@ export function validateScene(raw: unknown): Scene | null {
   return raw as Scene;
 }
 
-/**
- * The ONE load-time lint (RFC: "palette[0] under the warm-dark ceiling"). Returns a
- * list of warnings — empty when the ground is dark enough. A host runs this on load
- * and warns; it is not a hard reject (a scene that already cleared the ship gates
- * ships). Kept a warning by design so a borderline artwork ground is legible, not
- * silently swapped.
- */
 export function lintScenePalette(scene: Pick<Scene, "palette">): string[] {
   const warnings: string[] = [];
   const ground = scene.palette[0];
@@ -289,30 +206,11 @@ export function lintScenePalette(scene: Pick<Scene, "palette">): string[] {
   return warnings;
 }
 
-// ---------------------------------------------------------------------------
-// The emitter — module evaluation, not text extraction (RFC Unit S, D2).
-//
-// The body is resolved by locating the composition's fragment template literal and
-// substituting each `${GLSL.member}` with the corresponding string on the IMPORTED
-// `GLSL` object (evaluation, not a regex slice of the snippet library). Any
-// interpolation that is not a bare `GLSL` member is REFUSED with a clear error: it
-// cannot be resolved from the GLSL object, so there is no valid body to ship. Ship
-// degrades gracefully on a refusal (warns, emits no scene.json) — it NEVER fails.
-// ---------------------------------------------------------------------------
-
 export type ResolveGlslResult = { ok: true; body: string } | { ok: false; error: string };
 
-/** Every `${GLSL.member}` interpolation must be a bare member of this shape. */
 const GLSL_MEMBER_RE = /^GLSL\.([A-Za-z_$][A-Za-z0-9_$]*)$/;
 const INTERPOLATION_RE = /\$\{([^}]*)\}/g;
 
-/**
- * Locate the fragment template literal in a composition's source text: the
- * backtick-delimited literal that contains `void main(`. Composition GLSL bodies
- * never contain a backtick (the memory rule: a backtick in a GLSL comment closes
- * the literal), so backticks strictly alternate open/close and the pairing is
- * unambiguous. Returns the RAW inner text (interpolations intact) or an error.
- */
 export function locateFragmentLiteral(
   source: string,
 ): { ok: true; raw: string } | { ok: false; error: string } {
@@ -334,12 +232,6 @@ export function locateFragmentLiteral(
   };
 }
 
-/**
- * Resolve a raw fragment literal into a complete GLSL body by substituting each
- * `${GLSL.member}` from the imported `GLSL` object. Refuses (ok:false) any
- * interpolation that is not a bare `GLSL` member, or a member absent from the
- * object — there is nothing valid to emit, so the scene is not shipped.
- */
 export function resolveGlslBody(raw: string, glsl: Record<string, string>): ResolveGlslResult {
   const bad: string[] = [];
   const body = raw.replace(INTERPOLATION_RE, (match, exprRaw: string) => {
@@ -368,12 +260,6 @@ export function resolveGlslBody(raw: string, glsl: Record<string, string>): Reso
 
 const UNIFORM_DECL_RE = /\buniform\s+\w+\s+([A-Za-z_][A-Za-z0-9_]*)\s*(?:\[[^\]]*\])?\s*;/g;
 
-/**
- * The live-ready static scan: every `uniform` DECLARED in the body (the header
- * uniforms are injected separately, so a body only declares its OWN customs).
- * Returns the names beyond CORE_UNIFORM_NAMES and the declared textures — a
- * non-empty list means the body is driven by clip-time JS and cannot replay live.
- */
 export function scanCustomUniforms(body: string, textureNames: string[] = []): string[] {
   const allowed = new Set<string>(CORE_UNIFORM_NAMES);
   for (const name of textureNames) {
@@ -392,11 +278,6 @@ export function scanCustomUniforms(body: string, textureNames: string[] = []): s
   return custom;
 }
 
-/**
- * Slice a balanced `{...}` region starting at (or after) `from`. Returns the
- * substring INCLUDING the outer braces, or null when unbalanced. Used to read a
- * JSX prop's object-literal value (`bloom={{ … }}`) out of the source.
- */
 function sliceBalancedBraces(text: string, from: number): string | null {
   const start = text.indexOf("{", from);
   if (start < 0) {
@@ -416,7 +297,6 @@ function sliceBalancedBraces(text: string, from: number): string | null {
   return null;
 }
 
-/** Parse `key: <number>` literal pairs from a snippet (non-literal values are skipped). */
 function numericFields(snippet: string): Record<string, number> {
   const out: Record<string, number> = {};
   const re = /([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(-?\d+(?:\.\d+)?)/g;
@@ -427,17 +307,10 @@ function numericFields(snippet: string): Record<string, number> {
   return out;
 }
 
-/** True when the composition opts the ShaderLayer into WebGL2 / GLSL3. */
 export function detectGlsl3(source: string): boolean {
   return /\bglsl3(?:\s*=\s*\{\s*true\s*\}|[\s/>])/.test(source);
 }
 
-/**
- * The texture sampler names the ShaderLayer is given (`textures={{ name: … }}`).
- * Each name resolves to its SOURCE via the sampler-name convention
- * (`textureSourceForName`): `u_plate` / `u_plateBackground` are the plate-lane
- * bundle files; every other name is the finding's artwork.
- */
 export function extractTextureNames(source: string): string[] {
   const idx = source.indexOf("textures=");
   if (idx < 0) {
@@ -447,7 +320,7 @@ export function extractTextureNames(source: string): string[] {
   if (!block) {
     return [];
   }
-  // The value is `{{ name: expr, … }}`; read the inner object's keys.
+
   const inner = sliceBalancedBraces(block, 1);
   if (!inner) {
     return [];
@@ -461,7 +334,6 @@ export function extractTextureNames(source: string): string[] {
   return names;
 }
 
-/** Read the ShaderLayer `bloom={{ … }}` config, if present (best-effort, literals only). */
 export function extractBloom(source: string): SceneBloom | undefined {
   const idx = source.indexOf("bloom=");
   if (idx < 0) {
@@ -479,7 +351,7 @@ export function extractBloom(source: string): SceneBloom | undefined {
   ) {
     return undefined;
   }
-  // ShaderLayer's own defaults (BloomOptions) fill any omitted knob.
+
   return {
     intensity: fields.intensity ?? 0.8,
     radius: fields.radius ?? 1,
@@ -487,12 +359,6 @@ export function extractBloom(source: string): SceneBloom | undefined {
   };
 }
 
-/**
- * Read the ShaderLayer `reactivity={{ drop: { … } }}` envelope, if present. Keeps
- * only the SHAPE (riseMs/holdMs/fallMs) + swellBeatWeight; peakTimeMs/floor are
- * deliberately dropped (the live host detects the peak, the offline host injects
- * it per render — RFC).
- */
 export function extractReactivity(source: string): SceneReactivity | undefined {
   const idx = source.indexOf("reactivity=");
   if (idx < 0) {
@@ -525,37 +391,13 @@ export function extractReactivity(source: string): SceneReactivity | undefined {
   };
 }
 
-/** Extract the grain floor amount the body applies (the leading literal on `.amount =`). */
 export function extractGrainAmount(source: string): number | undefined {
   const m = /\.amount\s*=\s*(-?\d+(?:\.\d+)?)/.exec(source);
   return m ? Number(m[1]) : undefined;
 }
 
-// ---------------------------------------------------------------------------
-// Palette fidelity (RFC Unit S): the emitted `palette` must be the stops the
-// COMPOSITION actually feeds ShaderLayer's `u_palette` — which can DIVERGE from
-// the finding's artwork palette (props.json) when a composition hard-codes a
-// retinted override (`paletteStops={["#..", …]}`, or a local `const stops = […]`
-// passed as `paletteStops={stops}`). A host drives `u_palette` from scene.json at
-// replay, so recording the artwork palette instead of the rendered stops re-tints
-// the world wrong (a warm composition replayed with its cool artwork stops — the
-// 026.4.0E finding). These helpers resolve the rendered stops STATICALLY from the
-// source text (the composition is TSX/JSX, not a plain module we can evaluate —
-// same reason the body/prop extractors above read the source). When the stops are
-// runtime-computed and cannot be pinned, buildScene falls back to the props
-// palette and warns.
-//
-// The common `palette={paletteMix(palette.swatches)}` / `palette={props.palette}`
-// path needs no override here: the pipeline BUILDS props.palette as
-// `paletteMix(swatches)` (social-preview.ts), so the props fallback already equals
-// the rendered palette. Only an explicit paletteStops (or a full inline palette
-// object) departs from props — that departure is what these capture.
-// ---------------------------------------------------------------------------
-
-/** A quoted hex-color string literal (`"#0e0a06"`, `'#abc'`). Group 1 is the hex. */
 const HEX_LITERAL_RE = /["'`](#[0-9a-fA-F]{3,8})["'`]/g;
 
-/** The hex-color string literals in a snippet, in source order. */
 function hexLiterals(snippet: string): string[] {
   const out: string[] = [];
   HEX_LITERAL_RE.lastIndex = 0;
@@ -566,17 +408,14 @@ function hexLiterals(snippet: string): string[] {
   return out;
 }
 
-/** The first four hex literals as a ScenePalette, or undefined when there are fewer than four. */
 function fourStops(colors: string[]): ScenePalette | undefined {
   return colors.length >= 4 ? [colors[0], colors[1], colors[2], colors[3]] : undefined;
 }
 
-/** Escape the regex-special `$` an identifier may legally contain. */
 function escapeIdent(name: string): string {
   return name.replace(/\$/g, "\\$");
 }
 
-/** The RHS initializer of a `const <name> … = <rhs>;` declaration (up to the `;`), or undefined. */
 function constInitializer(source: string, name: string): string | undefined {
   const re = new RegExp(`\\bconst\\s+${escapeIdent(name)}\\b[^=;]*=`);
   const m = re.exec(source);
@@ -588,11 +427,6 @@ function constInitializer(source: string, name: string): string | undefined {
   return source.slice(start, end < 0 ? source.length : end);
 }
 
-/**
- * The expression inside a JSX `name={…}` prop starting at/after `from` (outer
- * braces stripped, trimmed), plus the index just past the matched `name=` so a
- * caller can scan for the next occurrence.
- */
 function jsxPropExpr(
   source: string,
   name: string,
@@ -604,7 +438,7 @@ function jsxPropExpr(
     return undefined;
   }
   const at = from + m.index;
-  const block = sliceBalancedBraces(source, at); // includes the outer { }
+  const block = sliceBalancedBraces(source, at);
   if (!block) {
     return undefined;
   }
@@ -613,7 +447,6 @@ function jsxPropExpr(
 
 const IDENT_RE = /^[A-Za-z_$][\w$]*$/;
 
-/** A `palette={{ background, accent, glow, ink }}` object literal with all four hex roles. */
 function extractInlinePaletteObject(source: string): ScenePalette | undefined {
   const re = /\bpalette\s*=\s*\{\{/g;
   let m: RegExpExecArray | null;
@@ -635,18 +468,7 @@ function extractInlinePaletteObject(source: string): ScenePalette | undefined {
   return undefined;
 }
 
-/**
- * The four palette stops the COMPOSITION feeds ShaderLayer's `u_palette`, resolved
- * statically from the source — the render's source of truth when it diverges from
- * the finding's artwork palette. Priority:
- *   1. `paletteStops={[…]}`   — an inline four-hex array (positional).
- *   2. `paletteStops={<id>}`  — the local `const <id> = […]` array it names.
- *   3. `palette={{ background, accent, glow, ink }}` — a full inline object literal.
- * Returns undefined when the stops are runtime-computed (a prop, a paletteMix, a
- * partial CloseCard `palette`) — buildScene then records the props palette.
- */
 export function extractPaletteStops(source: string): ScenePalette | undefined {
-  // 1 + 2 — the explicit paletteStops override (wins over `palette` in ShaderLayer).
   let from = 0;
   for (;;) {
     const prop = jsxPropExpr(source, "paletteStops", from);
@@ -667,21 +489,14 @@ export function extractPaletteStops(source: string): ScenePalette | undefined {
       }
     }
   }
-  // 3 — a full inline palette object literal (all four roles as hex literals).
+
   return extractInlinePaletteObject(source);
 }
 
-/** True when the source declares an explicit `paletteStops` override (resolved or not). */
 export function hasPaletteStopsOverride(source: string): boolean {
   return /\bpaletteStops\s*=/.test(source);
 }
 
-/**
- * Fold the ship-time gate report (parsed out/<trackId>.metrics.json) into the
- * `cleared` stamp. Maps the two HARD gates (flash, beat-pull) + the arc gate to
- * pass/fail/inconclusive; anything missing reads `unknown` (the report is
- * optional — ship never fails because a gate report was absent).
- */
 export function foldCleared(report: unknown, at: string): SceneCleared {
   const r = isRecord(report) ? report : {};
   const beatPull = isRecord(r.beatPull) ? r.beatPull : {};
@@ -710,38 +525,26 @@ export function foldCleared(report: unknown, at: string): SceneCleared {
 export type BuildSceneInput = {
   id: string;
   kind: SceneKind;
-  /** The composition source text (composition.tsx) to emit from. */
+
   source: string;
-  /** The imported GLSL snippet object (`GLSL` from remotion/journey/glsl). */
+
   glsl: Record<string, string>;
-  /**
-   * The finding's four artwork palette stops (props.json CosmosPalette, dark→light).
-   * The FALLBACK: the emitter prefers the stops the composition feeds ShaderLayer
-   * (extractPaletteStops) when they can be resolved, and only records these when
-   * the rendered stops are runtime-computed or absent.
-   */
+
   palette: ScenePalette;
-  /** The grain family id (ship's --grain / render manifest), or null. */
+
   grainFamily: string | null;
-  /** The parsed gate report (out/<trackId>.metrics.json), or null when absent. */
+
   metricsReport: unknown;
-  /** ISO stamp folded into `cleared.at`. */
+
   at: string;
 };
 
 export type BuildSceneResult = {
-  /** The scene, or null when the body could not be resolved (ship degrades + warns). */
   scene: Scene | null;
-  /** Non-fatal diagnostics — always surfaced so a skipped scene is never silent. */
+
   warnings: string[];
 };
 
-/**
- * Assemble a scene.json from a composition's source + the GLSL object + the gate
- * report. Returns scene:null (with a warning) only when the body is unresolvable —
- * every other gap (missing bloom/reactivity/grain/report) degrades to a sane
- * default so a partial scene still ships. Pure + deterministic (given `at`).
- */
 export function buildScene(input: BuildSceneInput): BuildSceneResult {
   const warnings: string[] = [];
 
@@ -778,11 +581,6 @@ export function buildScene(input: BuildSceneInput): BuildSceneResult {
     warnings.push("grain family unset — recording `unknown`");
   }
 
-  // Palette FIDELITY: prefer the stops the composition actually feeds ShaderLayer
-  // (a hard-coded retint) over the finding's artwork palette (input.palette from
-  // props), so a replay re-tints the world the way the shipped footage looks. Fall
-  // back to props when the stops are runtime-computed — and warn only when the
-  // composition DECLARED an explicit override we could not pin (props may diverge).
   const renderedStops = extractPaletteStops(input.source);
   const palette = renderedStops ?? input.palette;
   if (!renderedStops && hasPaletteStopsOverride(input.source)) {

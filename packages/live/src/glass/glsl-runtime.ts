@@ -1,13 +1,5 @@
-// The shared GLSL runtime — the constants the server-side extractor and the
-// client renderer both build on. Split out of the v0.6 monolith so the header
-// contract (CORE_UNIFORMS) lives in exactly one place. Imports the REAL
-// packages/video vocabulary (zero duplication); the relative path keeps the
-// package portable (the seed's absolute /Users path is gone).
 import { GLSL } from "../../../video/src/remotion/journey/glsl.ts";
 
-// The header uniform names the live glass injects (must match CORE_UNIFORMS in
-// packages/video/src/remotion/journey/shader-layer.tsx). A `uniform` a replayed
-// body declares that is NOT in this set is a CUSTOM uniform (a journey helper).
 export const HEADER_UNIFORMS = new Set([
   "u_time",
   "u_res",
@@ -36,8 +28,6 @@ export const HEADER_UNIFORMS = new Set([
   "u_palette",
 ]);
 
-// The exact core-uniform + dither block ShaderLayer injects, so a replay program
-// compiles the archived body byte-for-byte the way the offline render did.
 export const CORE_UNIFORMS_GLSL = `uniform float u_time;
 uniform vec2  u_res;
 uniform float u_progress;
@@ -73,17 +63,11 @@ vec3 dither8(vec3 col, vec2 uv) {
   return col + ditherValue(uv * u_res);
 }`;
 
-// The header prepended to a replay body client-side to form the full fragment.
-// A replay layer may declare EXTRA custom uniforms after this header (the extractor
-// leaves them in the body) — they are set per their classified journey role.
 export const REPLAY_HEADER = `precision highp float;\n${CORE_UNIFORMS_GLSL}\n\n${DITHER_HELPERS_GLSL}\n\n`;
 
-/** The fullscreen-triangle vertex shader shared by every program (base + replay + bloom). */
 export const VERT = "attribute vec2 a; void main(){ gl_Position = vec4(a, 0.0, 1.0); }";
 
-// The default-vehicle world (uncharted space + the tag-mapped fallback + holding).
-// Three vehicles crossfaded on u_scene, plus the canon holding scene on u_holding.
-export const FRAG = /* glsl */ `
+export const FRAG = `
 precision highp float;
 uniform vec2 u_res;
 uniform float u_time;
@@ -169,12 +153,6 @@ void main() {
 }
 `;
 
-// --- Bloom post-pass (RFC §3 / Unit L item 2) --------------------------------
-// A shared bright-pass -> separable half-res blur -> additive composite chain,
-// mirroring packages/video/src/remotion/journey/shader-layer.tsx's bloom design
-// (same threshold/intensity/radius semantics). Applied to replayed scenes whose
-// plan entry carries bloom config, and to the default vehicles at tasteful defaults.
-
 export const BLOOM_BRIGHT_FRAG = `precision highp float;
 uniform sampler2D u_tex;
 uniform vec2 u_res;
@@ -214,7 +192,6 @@ void main() {
   gl_FragColor = vec4(scene.rgb + bloom * u_intensity, scene.a);
 }`;
 
-// A trivial passthrough used to blit an FBO texture to the screen/next FBO.
 export const BLIT_FRAG = `precision highp float;
 uniform sampler2D u_tex;
 uniform vec2 u_res;
@@ -226,25 +203,8 @@ void main() {
 export type BloomConfig = { threshold: number; intensity: number; radius: number };
 export const DEFAULT_BLOOM: BloomConfig = { intensity: 0.35, radius: 1, threshold: 0.78 };
 
-// --- Plate/artwork texture samplers (RFC: Media plates in the live glass) ------
-// A plate-lane composition samples its photographic plate through `sampler2D`
-// uniforms the OFFLINE ShaderLayer injects (never declared in the body): each
-// texture `<name>` gains `uniform sampler2D <name>;` + `uniform float
-// <name>AspectRatio;` (packages/video shader-header.ts `buildFragmentHeader`). The
-// body reads only header uniforms + those samplers, so the live host reproduces
-// the world by prepending the SAME sampler pair, loading the plate images, and
-// binding them at the SAME sorted units the render used. These pure helpers own
-// that reconstruction so the client and a unit test share one source of truth.
-
-/** Case-stable ascii sort — matches the offline `byName` so units line up with the render. */
 const byTextureName = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 
-/**
- * Deterministic texture-unit assignment: sorted sampler names → unit index (0,1,2,…),
- * mirroring the offline ShaderLayer's `assignTextureUnits`. The unit NUMBER only needs
- * to be internally consistent (the shader reads through the sampler uniform, which we
- * set to whatever unit the image is bound to) — sorting keeps it stable + render-aligned.
- */
 export function assignTextureUnits(names: readonly string[]): Record<string, number> {
   const units: Record<string, number> = {};
   [...names].sort(byTextureName).forEach((name, index) => {
@@ -253,14 +213,6 @@ export function assignTextureUnits(names: readonly string[]): Record<string, num
   return units;
 }
 
-/**
- * The `sampler2D <name>; float <name>AspectRatio;` declaration block a replayed plate
- * body needs — the SAME sorted pair the offline `buildFragmentHeader` injects. Prepended
- * after REPLAY_HEADER (uniform order is irrelevant in GLSL; all decls precede `main`), so
- * `REPLAY_HEADER + textureUniformDecls(names) + body` compiles the archived body verbatim.
- * A name already declared in the body (the rare body-declared sampler) is skipped so the
- * program never double-declares.
- */
 export function textureUniformDecls(
   names: readonly string[],
   declaredInBody: ReadonlySet<string> = new Set(),
@@ -276,7 +228,6 @@ export function textureUniformDecls(
   return lines.length > 0 ? lines.join("\n") + "\n" : "";
 }
 
-/** True when a body already declares `sampler2D <name>` itself (avoid a double decl). */
 export function bodyDeclaresSampler(body: string, name: string): boolean {
   return new RegExp(`\\buniform\\s+sampler2D\\s+${name.replace(/\$/g, "\\$")}\\b`).test(body);
 }

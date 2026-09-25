@@ -1,8 +1,3 @@
-// The Explainer renderer: turns a manifest into a timeline of chapter scenes
-// (each with its layout, surface tag, captions, and an optional card flash) and
-// lays a star-warp transition over every seam. calculateMetadata sums the
-// chapter durations so Studio + the render agree on length.
-
 import { AbsoluteFill, Sequence, useCurrentFrame, useVideoConfig } from "remotion";
 import { type CalculateMetadataFunction } from "remotion";
 
@@ -27,8 +22,6 @@ import {
   type ExplainerProps,
 } from "./types";
 
-// Only the picture-in-picture layout parks a cam bottom-right, so only it makes
-// the captions reserve that gutter. Every other layout keeps captions centered.
 const reserveFor = (layout: ExplainerChapter["layout"], frameWidth: number) =>
   layout === "pip" ? captionReserveRight(frameWidth) : 0;
 
@@ -73,8 +66,6 @@ const ChapterScene: React.FC<{ chapter: ExplainerChapter; showCaptions: boolean 
   );
 };
 
-// The global SRT caption track spans every chapter, so it has to read the
-// active chapter's layout each frame to decide whether to reserve the PiP gutter.
 const GlobalCaptions: React.FC<{
   lines: CaptionLine[];
   scenes: Array<{ chapter: ExplainerChapter; durationInFrames: number; from: number }>;

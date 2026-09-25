@@ -1,13 +1,3 @@
-// Unit tests for anchor-sweep.ts — the catalogue Spotify-anchor cron's orchestrator.
-//
-// The box only fetches candidates + POSTs them; the Worker verifies. So the contract worth
-// pinning here is the box's MAPPING (Apify's flat result array → per-row candidates, grouped by
-// the query `target`) and the tick's tally + fault handling. The fixtures below are trimmed to the
-// exact fields the sweep consumes, in the shape the real actor returns (verified live 2026-07-18).
-//
-// Runs outside any package's test runner (bun:test), like crawl-sweep.test.ts:
-//   bun test docs/agents/hermes/scripts/anchor-sweep.test.ts
-
 import { afterEach, describe, expect, test } from "bun:test";
 import {
   type AnchorDeps,
@@ -30,10 +20,8 @@ import {
   withinIsrcAskWindow,
 } from "./anchor-sweep";
 
-/** The sweep's own default Apify chunk size — passed positionally so the ask state can follow it. */
 const ACTOR_CHUNK = 15;
 
-// A representative slice of the actor's output (artists + album on) — two candidates for one query.
 const APIFY_SAMPLE: ApifyResultItem[] = [
   {
     albums: [{ album_image: "https://i.scdn.co/image/album1" }],
@@ -71,7 +59,6 @@ const APIFY_SAMPLE: ApifyResultItem[] = [
     ],
   },
   {
-    // Artists/album OFF (the pilot4 shape) — still maps, just with no artist ids.
     artists: [],
     error: null,
     success: true,
@@ -155,7 +142,7 @@ describe("runAnchorTick", () => {
           { anchorQuery: "No Candidates Here", trackId: "mb_none" },
         ]),
       log: () => {},
-      // A fixed clock + a no-op sleep by default: the pacer is exercised in its own tests below.
+
       now: () => 0,
       report: (trackId) =>
         Promise.resolve(
@@ -165,12 +152,10 @@ describe("runAnchorTick", () => {
               ? { anchored: true, verifiedBy: "search" }
               : { anchored: false, verifiedBy: null },
         ),
-      // The free rung misses by default, so every row falls through to the Apify fallback — the
-      // pre-waterfall behaviour the existing assertions were written against.
+
       resolveFree: () => Promise.resolve({ anchored: false, verifiedBy: null }),
       runActor: () => Promise.resolve(APIFY_SAMPLE),
-      // No default worklist row carries a `deezerQuery`, so this is never reached unless a test
-      // opts in — the Deezer rung is scoped to ISRC-less rows by the SERVER, not by the sweep.
+
       searchDeezer: () => Promise.resolve([]),
       sleep: () => Promise.resolve(),
       ...overrides,
@@ -201,7 +186,7 @@ describe("runAnchorTick", () => {
     expect(summary.anchoredBySearch).toBe(1);
     expect(summary.missed).toBe(1);
     expect(summary).toMatchObject({ checked: 3, errors: 0, produced: 2, queueDepth: 0 });
-    // The grouping routed the two Hold-Tight candidates to that row, one to FAU, none to mb_none.
+
     expect(posted).toEqual({ mb_fau: 1, mb_hold: 2, mb_none: 0 });
   });
 
@@ -235,8 +220,7 @@ describe("runAnchorTick", () => {
 
           return Promise.resolve({ anchored: false, verifiedBy: null });
         },
-        // The server resolved mb_hold via the Spotify ISRC rung and mb_fau via the fuzzy rung (each
-        // a Spotify search); mb_none missed every free rung and falls to Apify.
+
         resolveFree: (trackId) =>
           Promise.resolve(
             trackId === "mb_hold"
@@ -261,8 +245,8 @@ describe("runAnchorTick", () => {
     expect(summary.anchoredBySpotifyIsrc).toBe(1);
     expect(summary.anchoredBySpotifySearch).toBe(1);
     expect(summary.anchoredByListenbrainz).toBe(0);
-    expect(summary.missed).toBe(1); // mb_none, via the Apify fallback
-    // Only the full-miss row reached the paid anchor_track path.
+    expect(summary.missed).toBe(1);
+
     expect(reported).toEqual(["mb_none"]);
   });
 
@@ -270,9 +254,6 @@ describe("runAnchorTick", () => {
     const summary = await runAnchorTick(
       50,
       deps({
-        // mb_hold recovered its ISRC AND anchored (ListenBrainz); mb_fau recovered but still missed
-        // every free rung (it falls to Apify); mb_none recovered nothing. The recovery count is
-        // orthogonal to anchoring, so it must be 2.
         resolveFree: (trackId) =>
           Promise.resolve(
             trackId === "mb_hold"
@@ -300,10 +281,9 @@ describe("runAnchorTick", () => {
     await runAnchorTick(
       50,
       deps({
-        // Every free-rung call issues a Spotify search, so every call after the first must be paced.
         now: () => clock,
         resolveFree: () => {
-          clock += 10; // each call advances the clock a little (far less than the interval)
+          clock += 10;
           return Promise.resolve({
             anchored: false,
             source: null,
@@ -313,14 +293,12 @@ describe("runAnchorTick", () => {
         },
         sleep: (ms) => {
           sleeps.push(ms);
-          clock += ms; // honouring the sleep advances the fake clock
+          clock += ms;
           return Promise.resolve();
         },
       }),
     );
 
-    // Three rows → the first runs free, the next two are paced by ~the full interval (minus the tiny
-    // clock drift from the prior call). None is below the ceiling interval's near-full value.
     expect(sleeps.length).toBe(2);
     for (const ms of sleeps) {
       expect(ms).toBeGreaterThan(SPOTIFY_SEARCH_MIN_INTERVAL_MS - 100);
@@ -334,7 +312,6 @@ describe("runAnchorTick", () => {
     await runAnchorTick(
       50,
       deps({
-        // The server never searched (flag off / Friday window): spotifySearchDone is false throughout.
         resolveFree: () =>
           Promise.resolve({
             anchored: false,
@@ -359,7 +336,6 @@ describe("runAnchorTick", () => {
     const summary = await runAnchorTick(
       50,
       deps({
-        // The free rung anchors mb_hold; the other two miss and fall through to Apify.
         report: (trackId) => {
           reported.push(trackId);
 
@@ -384,11 +360,11 @@ describe("runAnchorTick", () => {
     );
 
     expect(summary.anchoredByListenbrainz).toBe(1);
-    expect(summary.anchoredBySearch).toBe(1); // mb_fau, via the Apify fallback
-    expect(summary.missed).toBe(1); // mb_none
-    // The Apify actor ran ONLY over the free-rung misses — mb_hold's query never reached it.
+    expect(summary.anchoredBySearch).toBe(1);
+    expect(summary.missed).toBe(1);
+
     expect(actorQueries.flat()).toEqual(["Technimatic For All of Us", "No Candidates Here"]);
-    // And mb_hold was never POSTed to the paid anchor_track path.
+
     expect(reported).not.toContain("mb_hold");
   });
 
@@ -446,8 +422,6 @@ describe("runAnchorTick", () => {
     const summary = await runAnchorTick(
       50,
       deps({
-        // The free rung errors on every row. The server is the only thing that may admit a row to
-        // the paid fallback, so a row it never answered about must not be bought on a guess.
         resolveFree: () => Promise.reject(new Error("resolve_anchor 500")),
         runActor: () => {
           actorRuns += 1;
@@ -462,10 +436,10 @@ describe("runAnchorTick", () => {
     expect(summary.apifyRowsSent).toBe(0);
     expect(summary.anchoredByIsrc).toBe(0);
     expect(summary.anchoredBySearch).toBe(0);
-    // Nothing was asked, so nothing was settled: the rows are skipped and the next tick asks again.
+
     expect(summary.missed).toBe(0);
     expect(summary.skipped).toBe(3);
-    // …and the throw is REPORTED, unconditionally, so the very first tick after a breakage says so.
+
     expect(summary.freeRungErrors).toBe(3);
     expect(summary.error).toBeNull();
     expect(summary.errors).toBe(0);
@@ -475,7 +449,6 @@ describe("runAnchorTick", () => {
   test("freeRungErrors is zero on a clean tick and survives the paged merge", async () => {
     expect((await runAnchorTick(50, deps())).freeRungErrors).toBe(0);
 
-    // Two pages, one throwing row each → the merged summary must carry both, not the last page's.
     const paged = await runAnchorSweep(
       6,
       deps({
@@ -509,13 +482,12 @@ describe("runAnchorTick", () => {
       deps({
         fetchQueue: () =>
           Promise.resolve([
-            // ISRC-LESS ⇒ the server attached a `deezerQuery`, so this row gets the search.
             {
               anchorQuery: "Muffler Dribble",
               deezerQuery: 'artist:"Muffler" track:"Dribble"',
               trackId: "mb_dz",
             },
-            // Already has an ISRC ⇒ no `deezerQuery`, so no Deezer request is spent on it.
+
             { anchorQuery: "Azuro Hold Tight", trackId: "mb_hold" },
           ]),
         resolveFree: (trackId, deezerCandidates) => {
@@ -537,9 +509,9 @@ describe("runAnchorTick", () => {
     );
 
     expect(searched).toEqual(['artist:"Muffler" track:"Dribble"']);
-    // The hits ride the resolve call VERBATIM — the box normalizes, the Worker verifies and writes.
+
     expect(supplied.mb_dz).toEqual(hits);
-    // A row with no `deezerQuery` sends NOTHING, so the server keeps its own (unchanged) behaviour.
+
     expect(supplied.mb_hold).toBeUndefined();
     expect(summary.isrcRecoveredByDeezer).toBe(1);
     expect(summary.deezerSearchFailed).toBe(0);
@@ -561,15 +533,13 @@ describe("runAnchorTick", () => {
 
           return Promise.resolve({ anchored: false, verifiedBy: null });
         },
-        // `null` = the search FAILED (quota-blind, network, bad body); `[]` = an honest empty result.
+
         searchDeezer: (query) => Promise.resolve(query.includes('"A"') ? null : []),
       }),
     );
 
-    // Only the failure counts — the honest miss is not a fault, and conflating them would hide the
-    // one signal that says this box has gone quota-blind now that the fetch lives here.
     expect(summary.deezerSearchFailed).toBe(1);
-    // BOTH send an empty list: re-asking from the saturated shared edge is a known-dead request.
+
     expect(supplied.mb_fail).toEqual([]);
     expect(supplied.mb_empty).toEqual([]);
   });
@@ -588,7 +558,7 @@ describe("runAnchorTick", () => {
 
     expect(summary.ok).toBe(true);
     expect(summary.deezerSearchFailed).toBe(1);
-    // The row still ran the whole waterfall — it just recovered no ISRC.
+
     expect(summary.missed).toBe(1);
   });
 
@@ -598,8 +568,6 @@ describe("runAnchorTick", () => {
     const summary = await runAnchorTick(
       50,
       deps({
-        // Out of Apify budget. Every free-rung call reports the global kill-flag OFF and misses — the
-        // server has already stamped-and-backed-off each row (slice 3), so they are terminal.
         resolveFree: () =>
           Promise.resolve({ anchored: false, apifyEnabled: false, verifiedBy: null }),
         runActor: (queries) => {
@@ -613,9 +581,9 @@ describe("runAnchorTick", () => {
     );
 
     expect(summary.ok).toBe(true);
-    // ZERO wasted 403-ing actor calls while out of budget.
+
     expect(actorCalls).toBe(0);
-    // All three full misses are counted honestly as missed (terminal, backed off), never skipped-for-retry.
+
     expect(summary.missed).toBe(3);
     expect(summary.skipped).toBe(0);
     expect(summary.anchoredByIsrc + summary.anchoredBySearch).toBe(0);
@@ -627,8 +595,6 @@ describe("runAnchorTick", () => {
     const summary = await runAnchorTick(
       50,
       deps({
-        // mb_hold/mb_fau report the flag OFF and miss (stamped by the server); mb_none THREW (no verdict,
-        // so the server stamped nothing) — it is honestly skipped-for-retry, not a terminal miss.
         resolveFree: (trackId) =>
           trackId === "mb_none"
             ? Promise.reject(new Error("resolve_anchor 500"))
@@ -643,17 +609,10 @@ describe("runAnchorTick", () => {
 
     expect(summary.ok).toBe(true);
     expect(actorCalls).toBe(0);
-    // The two stamped full misses → missed; the un-stamped throw → skipped.
+
     expect(summary.missed).toBe(2);
     expect(summary.skipped).toBe(1);
   });
-
-  // ── AN HONEST TICK: `missed` means RETIRED, and a tick that could conclude on nothing says so ────
-  //
-  // `missed` is the tick's claim that a row left the backlog. When the server parks nothing — every
-  // row deferred, or no rung armed to conclude — the queue depth does not move, and a summary that
-  // counts those rows as misses reports a drain that is standing still. Both sides are pinned: the
-  // parked case must still count `missed`, the unparked case must count `deferred`.
 
   test("a verdict that PARKED the row counts `missed`; one that did not counts `deferred`", async () => {
     const summary = await runAnchorTick(
@@ -680,7 +639,7 @@ describe("runAnchorTick", () => {
 
     expect(summary.missed).toBe(1);
     expect(summary.deferred).toBe(1);
-    // ONLY the parked row left the backlog — the deferred one is still in it.
+
     expect(summary.queueDepth).toBe(39);
   });
 
@@ -705,7 +664,6 @@ describe("runAnchorTick", () => {
   });
 
   test("a rung that CAN conclude, or a win, leaves `reason` null — the tripwire is not always-on", async () => {
-    // Side one: the paid rung is armed, so the tick could have concluded on every row.
     const armed = await runAnchorTick(
       50,
       deps({
@@ -721,7 +679,6 @@ describe("runAnchorTick", () => {
 
     expect(armed.reason).toBeNull();
 
-    // Side two: nothing is armed, but the free ListenBrainz oracle WON — the tick concluded.
     const won = await runAnchorTick(
       50,
       deps({
@@ -742,8 +699,6 @@ describe("runAnchorTick", () => {
   });
 
   test("a server that never reports the flags claims no capability verdict", async () => {
-    // The pinned box can outlive a Worker that predates `spotifySearchEnabled`. Silence is not
-    // evidence: the tick must not invent `no_capable_rung` from a field it never received.
     const summary = await runAnchorTick(
       50,
       deps({
@@ -753,7 +708,7 @@ describe("runAnchorTick", () => {
     );
 
     expect(summary.reason).toBeNull();
-    // And the older server's misses still settle exactly as they did before `stamped` existed.
+
     expect(summary.missed).toBe(3);
     expect(summary.deferred).toBe(0);
   });
@@ -811,7 +766,7 @@ describe("runAnchorTick", () => {
     expect(summary.apifyActorErrors).toBe(3);
     expect(summary.errors).toBe(3);
     expect(summary.skipped).toBe(5);
-    // The diagnostic is stable instead of last-write-wins; the numeric counters carry all N failures.
+
     expect(summary.error).toBe("apify failed chunk 1");
   });
 
@@ -857,10 +812,6 @@ describe("runAnchorTick", () => {
     expect(summary.error).toContain("queue down");
   });
 
-  // ── THE LISTENBRAINZ RUNG'S BREAKER YIELD ──────────────────────────────────────────────────────
-  // Through Spotify's throttle windows every LB candidate died on the rung's one by-id read, and the
-  // tick reported it as `lbMetadataFailed` — a broken rung, when the rung was fine and Spotify was
-  // pushing back. The server now says which it is; the tick must keep them apart.
   test("a yielded ListenBrainz rung counts as a YIELD, never as a metadata failure", async () => {
     const summary = await runAnchorTick(
       50,
@@ -876,11 +827,10 @@ describe("runAnchorTick", () => {
 
     expect(summary.lbYieldedOnBreaker).toBe(2);
     expect(summary.lbMetadataFailed).toBe(1);
-    // A yield is not a failure: only the genuine metadata failure moves `failed`.
+
     expect(summary.failed).toBe(1);
   });
 
-  // ── THE THREE TICK GUARDS (the Spotify rungs as a subordinate consumer) ─────────────────────────
   test("the exact-ISRC ask budget defers the Spotify leg once it is spent", async () => {
     const asked: (boolean | undefined)[] = [];
     const summary = await runAnchorTick(
@@ -891,7 +841,7 @@ describe("runAnchorTick", () => {
 
           return Promise.resolve({
             anchored: false,
-            // Every allowed call spends an exact-ISRC ask; a deferred one cannot.
+
             spotifyIsrcAsked: options?.spotifySearch !== false,
             verifiedBy: null,
           });
@@ -901,8 +851,6 @@ describe("runAnchorTick", () => {
       newSpotifyAskState(2, ""),
     );
 
-    // Two asks spend the budget; the third row is deferred — and the deferral is the ONLY thing the
-    // box sends, so the first two requests are byte-identical to a pre-slice one.
     expect(asked).toEqual([undefined, undefined, false]);
     expect(summary.spotifyIsrcAsks).toBe(2);
     expect(summary.spotifyDeferredBudget).toBe(1);
@@ -913,7 +861,6 @@ describe("runAnchorTick", () => {
     const summary = await runAnchorTick(
       50,
       deps({
-        // 12:00 UTC — outside "0-8".
         now: () => Date.UTC(2026, 7, 2, 12, 0, 0),
         resolveFree: (_trackId, _deezer, options) => {
           asked.push(options?.spotifySearch);
@@ -936,7 +883,6 @@ describe("runAnchorTick", () => {
     await runAnchorTick(
       50,
       deps({
-        // 03:00 UTC — inside "0-8".
         now: () => Date.UTC(2026, 7, 2, 3, 0, 0),
         resolveFree: (_trackId, _deezer, options) => {
           asked.push(options?.spotifySearch);
@@ -962,7 +908,7 @@ describe("runAnchorTick", () => {
           return Promise.resolve({
             anchored: false,
             spotifyIsrcAsked: options?.spotifySearch !== false,
-            // The FIRST row eats the throttle; every row after it must be deferred.
+
             spotifyThrottled: trackId === "mb_hold",
             verifiedBy: null,
           });
@@ -974,7 +920,7 @@ describe("runAnchorTick", () => {
 
     expect(asked).toEqual([undefined, false, false]);
     expect(summary.spotifyDeferredYield).toBe(2);
-    // The throttled row is NOT a failure and NOT a skip — it falls to Apify like any other miss.
+
     expect(summary.failed).toBe(0);
     expect(summary.spotifyIsrcAsks).toBe(1);
   });
@@ -983,7 +929,6 @@ describe("runAnchorTick", () => {
     let served = 0;
     const asked: (boolean | undefined)[] = [];
 
-    // Two pages of one row each. A per-page ask state would hand the second page a fresh budget.
     await runAnchorSweep(
       2,
       deps({
@@ -1005,13 +950,9 @@ describe("runAnchorTick", () => {
       1,
     );
 
-    // The env default is 25, so both rows are allowed here — what this pins is that the SECOND page
-    // ran under the same state object at all (a fresh one would also allow it, so the assertion that
-    // matters is the budget test above; this one guards the plumbing).
     expect(asked.length).toBe(2);
   });
 
-  // ── THE OBSERVABILITY COUNTERS ─────────────────────────────────────────────────────────────────
   test("surfaces the Worker's free-rung durationless-candidate count", async () => {
     const summary = await runAnchorTick(
       50,
@@ -1038,14 +979,13 @@ describe("runAnchorTick", () => {
       50,
       deps({
         report: () => Promise.resolve({ anchored: false, verifiedBy: null }),
-        // The actor answered for two of the three queries; "No Candidates Here" is simply absent.
+
         runActor: () => Promise.resolve(APIFY_SAMPLE),
       }),
     );
 
     expect(summary.apifyTargetOmitted).toBe(1);
-    // STAMPING IS UNCHANGED — the row is still a clean miss. This slice measures the class, it does
-    // not act on it.
+
     expect(summary.missed).toBe(3);
   });
 
@@ -1065,8 +1005,6 @@ describe("runAnchorTick", () => {
           Promise.resolve([
             APIFY_SAMPLE[0],
             {
-              // The durationless shape: the actor answered for the query, but the item carries no
-              // `track_duration_ms` — `itemToCandidate` normalizes it to `durationMs: null`.
               artists: [{ artist_name: "Azuro" }],
               error: null,
               success: true,
@@ -1084,14 +1022,12 @@ describe("runAnchorTick", () => {
     );
 
     expect(summary.apifyDurationMsOmitted).toBe(1);
-    // BEHAVIOUR IS UNCHANGED — both candidates still reach the Worker, the durationless one with
-    // its normalized `durationMs: null`, and the row is still a clean miss. The counter measures
-    // the class, it does not act on it.
+
     expect(posted.length).toBe(1);
     expect(posted[0].trackId).toBe("mb_hold");
     expect(posted[0].candidates.map((candidate) => candidate.durationMs)).toEqual([319_112, null]);
     expect(summary.missed).toBe(1);
-    // Distinct from the blackout tell: the actor DID answer for this query.
+
     expect(summary.apifyTargetOmitted).toBe(0);
   });
 
@@ -1110,7 +1046,7 @@ describe("runAnchorTick", () => {
     );
 
     expect(summary.deezerHitsDroppedIncomplete).toBe(3);
-    // Withholding is not failing: the row resolved normally, just unhelped.
+
     expect(summary.deezerSearchFailed).toBe(0);
     expect(summary.failed).toBe(0);
   });
@@ -1145,7 +1081,6 @@ describe("runAnchorTick", () => {
   });
 });
 
-// ── THE NIGHT WINDOW (pure) ──────────────────────────────────────────────────────────────────────
 describe("parseIsrcAskWindow / withinIsrcAskWindow", () => {
   const at = (hourUtc: number) => new Date(Date.UTC(2026, 7, 2, hourUtc, 30, 0));
 
@@ -1183,7 +1118,6 @@ describe("parseIsrcAskWindow / withinIsrcAskWindow", () => {
   });
 
   test("a degenerate range (start === end) is an EMPTY window, never an all-day one", () => {
-    // An operator who means `always` writes the empty string. The range is read literally.
     expect(withinIsrcAskWindow(parseIsrcAskWindow("4-4"), at(4))).toBe(false);
   });
 });
@@ -1242,12 +1176,6 @@ test("a genuine anchor run failure reports errors:1 and exits non-zero", async (
   expect(JSON.parse(stdout)).toMatchObject({ errors: 1, ok: false });
 });
 
-// ── THE BOX-SIDE DEEZER CLIENT (rung 0's fetch) ──────────────────────────────────────────────────
-// This code exists on the box precisely because Deezer's tokenless quota is per-IP: from Cloudflare's
-// shared edge the rung recovered 0 ISRCs out of 5,133 rows over 3 days, against 25/25 clean here. It
-// NORMALIZES and never judges — the Worker still verifies every hit and writes the ISRC. The one thing
-// it must get right is telling a FAILURE apart from an honest empty result, because Deezer signals a
-// throttle with HTTP **200** + an error body, and reading that as a miss is what hid the outage.
 describe("searchDeezerOnBox", () => {
   const HIT = {
     artist: { name: "Calibre" },
@@ -1275,7 +1203,7 @@ describe("searchDeezerOnBox", () => {
       ],
       droppedIncomplete: 0,
     });
-    // The server's spelling is sent VERBATIM — the sweep never rewrites the query it was handed.
+
     expect(decodeURIComponent(calls[0])).toContain('artist:"Calibre" track:"Mr Right On"');
     expect(calls[0]).toContain("https://api.deezer.com/search/track?q=");
   });
@@ -1286,10 +1214,10 @@ describe("searchDeezerOnBox", () => {
         Response.json({
           data: [
             HIT,
-            { ...HIT, isrc: "  " }, // no ISRC → there is nothing to recover
-            { ...HIT, duration: 0 }, // no duration → the window cannot be applied
-            { ...HIT, artist: { name: "" } }, // no artist → the fold cannot be applied
-            { ...HIT, title: undefined }, // no title → the fold cannot be applied
+            { ...HIT, isrc: "  " },
+            { ...HIT, duration: 0 },
+            { ...HIT, artist: { name: "" } },
+            { ...HIT, title: undefined },
           ],
         }),
       )) as typeof globalThis.fetch;
@@ -1297,9 +1225,7 @@ describe("searchDeezerOnBox", () => {
     const result = await searchDeezerOnBox("q");
 
     expect(result?.candidates.map((hit) => hit.isrc)).toEqual(["GBEXH1900314"]);
-    // …AND SAYS SO. Four hits were withheld; without the count this response and a genuinely empty
-    // one both leave as `[]`, so an upstream change that stripped `isrc` would read as "Deezer has
-    // never heard of this catalogue" instead of as the regression it is.
+
     expect(result?.droppedIncomplete).toBe(4);
   });
 
@@ -1320,10 +1246,8 @@ describe("searchDeezerOnBox", () => {
       );
     }) as typeof globalThis.fetch;
 
-    // `null`, never `[]` — reading a throttle as a clean miss is exactly what made the edge failure
-    // invisible for a week, and on the box it would hide a quota-blind IP the same way.
     expect(await searchDeezerOnBox("q", [0, 0])).toBeNull();
-    expect(calls).toBe(3); // the first attempt plus the two bounded retries
+    expect(calls).toBe(3);
   });
 
   test("a quota answer that clears on retry returns the candidates", async () => {
@@ -1367,7 +1291,6 @@ describe("spotifySearchPaceMs — the 60/min ceiling", () => {
   });
 
   test("waits out the remainder of the interval since the last search", () => {
-    // 500ms elapsed since the last search's start → wait the remaining 1500ms.
     expect(spotifySearchPaceMs(0, 500)).toBe(SPOTIFY_SEARCH_MIN_INTERVAL_MS - 500);
   });
 
@@ -1377,8 +1300,6 @@ describe("spotifySearchPaceMs — the 60/min ceiling", () => {
   });
 
   test("the ceiling holds: ≤ 2 searches per interval ⇒ ≤ 60/min", () => {
-    // resolve_anchor issues at most 2 searches per row, and consecutive search-bearing calls are
-    // held ≥ 2s apart, so the sustained rate is ≤ 2 / 2s = 60/min.
     const searchesPerCall = 2;
     const callsPerMinute = 60_000 / SPOTIFY_SEARCH_MIN_INTERVAL_MS;
     expect(callsPerMinute * searchesPerCall).toBeLessThanOrEqual(60);
@@ -1434,9 +1355,6 @@ describe("runAnchorSweep (paging past the worklist cap)", () => {
   });
 
   test("carries the Deezer recovery + failure tallies across pages", async () => {
-    // Regression: the paged merge summed every anchor tally but silently DROPPED
-    // `isrcRecoveredByDeezer`, so a `--limit` burn always reported 0 recoveries — the one number
-    // that says whether the ISRC-recovery rung is alive at all.
     const base = pagedDeps([rows("a", 2), rows("b", 2), rows("c", 2)]);
     const summary = await runAnchorSweep(
       4,
@@ -1456,7 +1374,7 @@ describe("runAnchorSweep (paging past the worklist cap)", () => {
 
     expect(summary.pages).toBe(2);
     expect(summary.isrcRecoveredByDeezer).toBe(4);
-    // No page's row carried a `deezerQuery`, so no search ran and nothing failed.
+
     expect(summary.deezerSearchFailed).toBe(0);
   });
 
@@ -1467,7 +1385,7 @@ describe("runAnchorSweep (paging past the worklist cap)", () => {
       {
         ...base,
         resolveFree: () => Promise.resolve({ anchored: false, verifiedBy: null }),
-        // Every query gets one candidate with no `track_duration_ms` — 2 per page, 4 in the sweep.
+
         runActor: (queries) =>
           Promise.resolve(
             queries.map((query) => ({
@@ -1598,14 +1516,7 @@ describe("runAnchorSweep (paging past the worklist cap)", () => {
   });
 });
 
-/** The verdict fields the admission-gate tests override. */
 type AnchorVerdictShape = Awaited<ReturnType<AnchorDeps["resolveFree"]>>;
-
-// ── THE PAID RUNG'S ADMISSION RULE, box side ─────────────────────────────────────────────────────
-//
-// The server decides whether a row may cost money and says so on the verdict; the sweep obeys. These
-// pin both sides of that gate, plus the firing-level preflight that keeps an out-of-window tick from
-// re-reading a queue head it cannot conclude anything about.
 
 describe("anchorFiringDeferral", () => {
   const OPEN: AnchorPreflight = {
@@ -1623,8 +1534,6 @@ describe("anchorFiringDeferral", () => {
   });
 
   test("outside it, with both rungs armed, the firing pulls NOTHING", () => {
-    // Every row it could reach would want a free ask this tick cannot make, so pulling them only
-    // re-reads the queue head — the churn the admission rule would otherwise reintroduce.
     expect(anchorFiringDeferral(OPEN, NIGHT, OUT_OF_WINDOW)).toBe("awaiting_free_ask");
   });
 
@@ -1635,8 +1544,6 @@ describe("anchorFiringDeferral", () => {
   });
 
   test("with the free search rungs DISARMED the firing always pulls — the load-bearing case", () => {
-    // No receipt can ever be written then, so the admission rule exempts every row and the sweep
-    // must drain exactly as it did before the rule existed.
     expect(
       anchorFiringDeferral({ ...OPEN, spotifySearchEnabled: false }, NIGHT, OUT_OF_WINDOW),
     ).toBeNull();
@@ -1657,8 +1564,6 @@ describe("anchorFiringDeferral", () => {
   });
 
   test("the escape hatch turns every deferral into a free-rungs-only firing", () => {
-    // `FLUNCLE_ANCHOR_DAY_FREE_RUNGS=1`: pull the batch, run the free rungs, spend nothing. Both
-    // deferral causes convert, so the knob reverses the whole tradeoff rather than half of it.
     expect(anchorFiringDeferral(OPEN, NIGHT, OUT_OF_WINDOW, true)).toBe("free_rungs_only");
     expect(anchorFiringDeferral({ ...OPEN, apifyBudgetSpent: true }, NIGHT, IN_WINDOW, true)).toBe(
       "free_rungs_only",
@@ -1715,7 +1620,7 @@ describe("runAnchorTick — the admission gate", () => {
     expect(summary.apifyRowsSent).toBe(0);
     expect(summary.apifySkippedAwaitingSpotify).toBe(2);
     expect(summary.deferred).toBe(2);
-    // `missed` means RETIRED. Nothing was asked about these rows, so nothing was settled.
+
     expect(summary.missed).toBe(0);
     expect(summary.ok).toBe(true);
   });
@@ -1742,7 +1647,7 @@ describe("runAnchorTick — the admission gate", () => {
     );
 
     expect(summary.apifyRowsSent).toBe(2);
-    // The actor bills per RESULT ITEM, so the ledger carries items, not runs.
+
     expect(summary.apifyResults).toBe(APIFY_SAMPLE.length);
     expect(summary.apifyBudgetRemaining).toBe(42);
     expect(summary.deferred).toBe(0);
@@ -1754,8 +1659,6 @@ describe("runAnchorTick — the admission gate", () => {
       gateDeps(() => ({})),
     );
 
-    // Version tolerance runs both ways: a Worker with no admission rule has no verdict to give, and
-    // the sweep must not invent one on its behalf.
     expect(summary.apifyRowsSent).toBe(2);
     expect(summary.apifySkippedAwaitingSpotify).toBe(0);
   });
@@ -1793,7 +1696,7 @@ describe("runAnchorSweep — the firing preflight", () => {
         return Promise.resolve([{ anchorQuery: "q", trackId: "mb_a" }]);
       },
       log: () => {},
-      // 12:00 UTC — outside the default "0-8" night window.
+
       now: () => Date.parse("2026-09-20T12:00:00Z"),
       readPreflight: typeof preflight === "function" ? preflight : () => Promise.resolve(preflight),
       report: () => Promise.resolve({ anchored: false, verifiedBy: null }),
@@ -1825,7 +1728,7 @@ describe("runAnchorSweep — the firing preflight", () => {
     expect(fetches).toBe(0);
     expect(summary.reason).toBe("awaiting_free_ask");
     expect(summary.checked).toBe(0);
-    // It measured nothing, so it claims nothing about the backlog.
+
     expect(summary.queueDepth).toBeNull();
     expect(summary.apifyBudgetRemaining).toBe(300);
     expect(summary.ok).toBe(true);
@@ -1860,8 +1763,6 @@ describe("runAnchorSweep — the firing preflight", () => {
       ),
     );
 
-    // The admission rule is enforced server-side on every row regardless, so a blip here must cost a
-    // wasted tick at worst, never a stalled drain.
     expect(fetches).toBe(1);
     expect(summary.reason).toBeNull();
     expect(summary.checked).toBe(1);
@@ -1887,8 +1788,6 @@ describe("runAnchorSweep — the firing preflight", () => {
       now: () => Date.parse("2026-09-20T03:00:00Z"),
     });
 
-    // A row only leaves this queue after the exact-ISRC rung has asked about it, and the tick may
-    // ask `ISRC_ASK_LIMIT` times — pulling more hands the surplus a pass that can conclude nothing.
     expect(asked).toEqual([newSpotifyAskState().limit]);
     expect(summary.ok).toBe(true);
   });
@@ -1912,7 +1811,6 @@ describe("runAnchorSweep — the firing preflight", () => {
       },
     });
 
-    // Disarmed, every row is admitted on sight, so the cap must not bind (200 is the page limit).
     expect(asked).toEqual([200]);
   });
 
@@ -1930,8 +1828,6 @@ describe("runAnchorSweep — the firing preflight", () => {
       ),
     );
 
-    // `checked: 0` alone reads like an empty queue. The ledger has to say the two FREE rungs did
-    // not run either, or a later reader infers a drained backlog from a firing that pulled nothing.
     expect(summary.rungsSkipped).toEqual([
       "listenbrainz",
       "deezer-isrc-recovery",
@@ -1977,10 +1873,9 @@ describe("runAnchorSweep — the firing preflight", () => {
       true,
     );
 
-    // The FREE rung still wins what it can — that is the entire point of the escape hatch.
     expect(summary.anchoredByListenbrainz).toBe(1);
     expect(summary.produced).toBe(1);
-    // …and the paid leg is untouched: no actor run, no POST, and the miss is DEFERRED not MISSED.
+
     expect(actorRuns).toBe(0);
     expect(posted).toBe(0);
     expect(summary.apifyRowsSent).toBe(0);

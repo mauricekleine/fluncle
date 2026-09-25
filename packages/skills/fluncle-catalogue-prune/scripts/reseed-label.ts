@@ -1,41 +1,13 @@
 #!/usr/bin/env bun
-// FRONTIER REPAIR for a wrong-namesake seed. Re-arms one enabled label's resolver node so the next
-// crawl tick re-resolves its MusicBrainz identity, and retires the impostor label nodes the old
-// resolver walked — without deleting them, so the walk history stays readable.
-//
-//   bun run packages/skills/fluncle-catalogue-prune/scripts/reseed-label.ts --slug radar-records
-//   bun run packages/skills/fluncle-catalogue-prune/scripts/reseed-label.ts --slug radar-records --confirm
-//
-// WHAT WENT WRONG. A seed label enters the frontier as `fluncle:label:<slug>` — a RESOLVER node
-// whose only job is to turn the operator's label NAME into a MusicBrainz label MBID and enqueue
-// `musicbrainz:label:<mbid>`, the node that actually browses the label's releases. When two labels
-// share a name, that resolution can pick the wrong one, and every release under it is then walked
-// as if the operator had approved it. The label ruling was never wrong; the identity was.
-//
-// WHAT THIS FIXES, and what it does not. It repairs the FRONTIER only. The tracks already written
-// under the impostor are `purge-artists.ts`'s job, and the resolver's own bug is a code fix that
-// must be DEPLOYED FIRST — re-arming against an unfixed resolver just walks the impostor again.
-// Ordered recipe: SKILL.md § Namesake repair.
-//
-//   (a) verifies the `labels` row exists, is `enabled`, and carries `mb_label_id` (the authority
-//       the fixed resolver keys on — without it nothing here can tell impostor from original);
-//   (b) lists every frontier LABEL node for the slug, flagging each MusicBrainz node whose
-//       `external_id` ≠ `mb_label_id` as WRONG NAMESAKE;
-//   (c) on --confirm: resets the resolver node to `state='pending', cursor=0` so the next tick
-//       re-mints the correct MB node, and stamps each wrong-namesake node's `note`. The row is
-//       KEPT: the tightened re-arm join leaves it inert, and it is the record of what was walked.
-//
-// Dry-run by default. Writes a rollback of the prior node rows before touching anything.
+
 import { writeFileSync } from "node:fs";
 
 import { type Client, type Value } from "@libsql/client/web";
 
 import { getDb } from "./lib";
 
-/** The resolver node's deterministic id — `<source>:<kind>:<external_id>` (see crawl.ts). */
 export const resolverNodeId = (slug: string): string => `fluncle:label:${slug}`;
 
-/** The note stamped on a retired impostor node. Greppable, and it dates itself. */
 export const retiredNote = (on: Date): string =>
   `wrong namesake; retired ${on.toISOString().slice(0, 10)}`;
 
@@ -58,7 +30,6 @@ export type FrontierLabelNode = {
   state: string;
 };
 
-/** A libSQL cell is a union (text/blob/number/null); take it as text only when it IS text. */
 const text = (v: Value): string => (typeof v === "string" ? v : "");
 const textOrNull = (v: Value): string | null => (typeof v === "string" ? v : null);
 
@@ -80,11 +51,6 @@ export async function readLabelSeed(db: Client, slug: string): Promise<LabelSeed
     : undefined;
 }
 
-/**
- * Every frontier LABEL node belonging to this seed: the `fluncle` resolver node (matched by its
- * deterministic id) plus every MusicBrainz label node the walk minted under it (matched by
- * `label_slug`, the provenance column that carries the seed the whole subtree descends from).
- */
 export async function readLabelNodes(db: Client, slug: string): Promise<FrontierLabelNode[]> {
   const result = await db.execute({
     args: [resolverNodeId(slug), slug],
@@ -112,11 +78,6 @@ export type NodeSplit = {
   wrongNamesake: FrontierLabelNode[];
 };
 
-/**
- * Split the seed's nodes against `mb_label_id`, the ONE authority on which MusicBrainz label the
- * operator's ruling actually refers to. A MusicBrainz label node whose `external_id` is a different
- * MBID is, by definition, a label the operator never ruled on — the impostor.
- */
 export function splitLabelNodes(
   nodes: FrontierLabelNode[],
   slug: string,
@@ -222,16 +183,10 @@ export async function main(
   const now = new Date();
   const nowIso = now.toISOString();
   const path = `${out}/reseed-label-${slug}-rollback.json`;
-  writeFileSync(
-    path,
-    JSON.stringify({ at: nowIso, label, prior: nodes, slug }, null, 2),
-    // The prior rows verbatim: restoring means writing `state`/`cursor`/`note` back onto each id.
-  );
+  writeFileSync(path, JSON.stringify({ at: nowIso, label, prior: nodes, slug }, null, 2));
   console.log(`\nrollback → ${path} (${nodes.length} node rows)`);
 
   if (resolver) {
-    // Re-arm the RESOLVER, never the MB browse node. Its expansion is what re-reads the operator's
-    // label name and (with the fixed resolver) enqueues the node keyed on `mb_label_id`.
     const result = await db.execute({
       args: [nowIso, resolver.id],
       sql: `update crawl_frontier set state = 'pending', cursor = 0, updated_at = ? where id = ?`,

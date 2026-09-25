@@ -1,22 +1,3 @@
-// Unit tests for the database-backup sweep's STREAMING dump (backup-sweep.ts).
-//
-// The sweep must never build the whole dump as a JavaScript string, `Buffer.from` it, then
-// `gzipSync` it. That creates three simultaneous full copies, and a UTF-16 JS string alone needs
-// about twice the dump size. The box has no swap and the container has a strict memory limit, so
-// the sweep streams the dump instead.
-//
-// So there are three things worth proving, and they are the three suites below:
-//   1. The streamed bytes are EXACTLY what the old builder produced — the format is the
-//      contract the restore drill and `db-refresh.ts` depend on. Proven against the REAL
-//      `buildDumpSql` from apps/web/src/lib/server/db-dump.ts (importable here because the
-//      "no workspace imports" rule is a BOX-RUNTIME constraint, not a test one), so the
-//      mirror is enforced rather than asserted.
-//   2. Peak memory does not scale with row count.
-//   3. The artifact is uploaded by STREAMING it off disk — signed with a hash computed
-//      without ever holding the file — and R2 receives the right length, hash, and bytes.
-//
-//   bun test docs/agents/hermes/scripts/backup-sweep.test.ts
-
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -32,8 +13,6 @@ import {
   type SqlValue,
 } from "../../../../apps/web/src/lib/server/db-dump";
 
-// `main()` is guarded behind `import.meta.main` in the sweep, so importing it here is
-// side-effect free — no Turso, no R2.
 import {
   beginBackupOperation,
   type DumpSource,
@@ -56,7 +35,6 @@ afterEach(() => {
   }
 });
 
-/** The message a rejected promise carries — `expect().rejects` is not type-aware-lint clean. */
 async function rejectionMessage(promise: Promise<unknown>): Promise<string> {
   try {
     await promise;
@@ -67,7 +45,6 @@ async function rejectionMessage(promise: Promise<unknown>): Promise<string> {
   }
 }
 
-/** A `DumpSource` over in-memory tables, paging exactly the way the libSQL source does. */
 function fixtureSource(schema: SchemaObject[], tables: DumpTable[]): DumpSource {
   return {
     fetchPage: async (name, limit, offset) => {
@@ -84,7 +61,6 @@ function fixtureSource(schema: SchemaObject[], tables: DumpTable[]): DumpSource 
   };
 }
 
-/** Collect a streamed dump into one string (fine at fixture scale, never in production). */
 async function collect(
   source: DumpSource,
   options: { batchRows?: number } = {},
@@ -100,9 +76,6 @@ async function collect(
   return { manifest, sql };
 }
 
-// A fixture that exercises every literal branch: NULL, a quote-bearing string, a bigint, a
-// float, a boolean, and a blob — plus an EMPTY table (emits no INSERTs but still counts) and
-// non-table schema objects (which must land AFTER the rows).
 const SCHEMA: SchemaObject[] = [
   {
     name: "tracks",
@@ -147,8 +120,6 @@ describe("streamDumpSql — byte-for-byte the format the restore drill expects",
   });
 
   test("a page that exactly fills the batch still terminates (no duplicate tail)", async () => {
-    // The off-by-one that would silently double a table: 3 rows with batchRows 3 means the
-    // first page comes back "full", so the loop must ask for a second page and stop on empty.
     const { manifest, sql } = await collect(fixtureSource(SCHEMA, TABLES), { batchRows: 3 });
 
     expect(sql.split("INSERT INTO").length - 1).toBe(3);
@@ -163,7 +134,7 @@ describe("streamDumpSql — byte-for-byte the format the restore drill expects",
     expect(manifest.sqlBytes).toBe(Buffer.byteLength(sql, "utf8"));
     expect(manifest.source).toBe("fixture");
     expect(manifest.generatedAt).toBe("2026-07-26T02:00:00.000Z");
-    // `tracks` wins the anchor by name, and its first column is the anchor column.
+
     expect(manifest.spot).toEqual({
       column: "id",
       count: 3,
@@ -210,9 +181,6 @@ describe("writeGzippedDump — the artifact on disk", () => {
 });
 
 describe("the memory bound (the whole point of the rewrite)", () => {
-  // A synthetic table big enough that the OLD shape could not have survived it: ~200 MB of
-  // SQL means ~400 MB for the UTF-16 string, plus a ~200 MB Buffer, plus the gzip output —
-  // 600 MB+ resident before compression even starts. The streamed writer must stay flat.
   const ROW_COUNT = 200_000;
   const PAYLOAD = "x".repeat(950);
   const CEILING_BYTES = 192 * 1024 * 1024;
@@ -222,8 +190,6 @@ describe("the memory bound (the whole point of the rewrite)", () => {
       { name: "big", sql: "CREATE TABLE big (id INTEGER, payload TEXT)", type: "table" },
     ];
 
-    // Rows are MINTED PER PAGE and never retained — the fixture holds no more than the sweep
-    // does, so what the sampler sees is the writer's own footprint.
     const source: DumpSource = {
       fetchPage: async (_name, limit, offset) => {
         const rows: SqlValue[][] = [];
@@ -275,10 +241,9 @@ describe("the memory bound (the whole point of the rewrite)", () => {
         `rssBaseline=${baseline} rssPeak=${peak} growth=${growth}`,
     );
 
-    // The dump really is large enough for the old shape to have died on it…
     expect(manifest.sqlBytes).toBeGreaterThan(190 * 1024 * 1024);
     expect(manifest.tables.big).toBe(ROW_COUNT);
-    // …and the streamed one never went near it.
+
     expect(growth).toBeLessThan(CEILING_BYTES);
   }, 180_000);
 });
@@ -324,8 +289,7 @@ describe("signedPut — the artifact is uploaded without being held", () => {
 
     expect(received).not.toBeNull();
     expect(received?.body.equals(payload)).toBe(true);
-    // SigV4 signs the payload hash it was GIVEN; R2 rejects the PUT if it doesn't match the
-    // bytes, so this equality is the whole reason the streamed upload is safe.
+
     expect(received?.headers["x-amz-content-sha256"]).toBe(sha256);
     expect(received?.headers["content-length"]).toBe(String(payload.byteLength));
     expect(received?.headers.authorization).toContain(
@@ -441,7 +405,7 @@ describe("run-ledger summary counters", () => {
     failBackupOperation(counters);
 
     expect(counters).toEqual({ checked: 2, errors: 0, failed: 1, produced: 1 });
-    // Backup has two explicit operations, not an outstanding work queue.
+
     expect("queueDepth" in counters).toBe(false);
     expect("queue_depth" in counters).toBe(false);
     expect("expectedIntervalMs" in counters).toBe(false);

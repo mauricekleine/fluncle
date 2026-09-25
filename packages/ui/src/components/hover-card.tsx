@@ -2,16 +2,10 @@ import { PreviewCard as PreviewCardPrimitive } from "@base-ui/react/preview-card
 
 import { cn } from "#lib/utils";
 
-// A hover card: rich content revealed on hover/focus, dismissed on leave/blur. Unlike a
-// Popover (which opens on click and manages focus into the popup), base-ui's PreviewCard
-// owns the hover intent + open/close delays itself — so a hover breakdown reads without the
-// focus/hover fight that flickers a click-Popover driven by manual mouse handlers.
 function HoverCard({ ...props }: PreviewCardPrimitive.Root.Props) {
   return <PreviewCardPrimitive.Root data-slot="hover-card" {...props} />;
 }
 
-// Snappier than the base-ui defaults (600ms open / 300ms close), which feel sluggish for an
-// inline grid glyph; the delays live on the trigger.
 function HoverCardTrigger({
   closeDelay = 90,
   delay = 90,

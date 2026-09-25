@@ -1,8 +1,3 @@
-// The plan-arg contract: `run show` passes `--plan <id>`, but the bridge can also be
-// driven with a bare positional id or `FLUNCLE_PLAN_MIXTAPE`. parsePlanArg is the one
-// place that reconciles all three — regressing it is how a requested plan silently
-// became the literal "--plan" (and fell to the fixture). Pure, so it tests directly.
-
 import { describe, expect, test } from "bun:test";
 
 import { type PlanEntry } from "../contract";
@@ -46,9 +41,6 @@ describe("parsePlanArg", () => {
 });
 
 describe("parseCommand (the WS never-crash rail)", () => {
-  // The socket carries arbitrary bytes, so every command is shape-checked before it reaches the
-  // state machine — the sibling of vj.ts's parseTransition on the WS side. A malformed frame
-  // yields null (dropped), never a blind cast fed to the matcher.
   test("passes the no-payload commands through", () => {
     expect(parseCommand({ cmd: "advance" })).toEqual({ cmd: "advance" });
     expect(parseCommand({ cmd: "rewind" })).toEqual({ cmd: "rewind" });
@@ -90,8 +82,8 @@ describe("parseCommand (the WS never-crash rail)", () => {
       frame: [1, 2, 3],
       t: 0,
     });
-    expect(parseCommand({ cmd: "mel", t: 0 })).toBeNull(); // no frame → dropped
-    expect(parseCommand({ cmd: "mel", frame: [1, 2, 3] })).toBeNull(); // no timestamp
+    expect(parseCommand({ cmd: "mel", t: 0 })).toBeNull();
+    expect(parseCommand({ cmd: "mel", frame: [1, 2, 3] })).toBeNull();
     expect(parseCommand({ cmd: "mel", frame: "not-an-array", t: 0 })).toBeNull();
   });
 
@@ -105,22 +97,19 @@ describe("parseCommand (the WS never-crash rail)", () => {
 });
 
 describe("shouldFingerprintFullSong", () => {
-  // The Tier-A swap is gated: full song ONLY when a token AND the flag are both present.
-  // This keeps merging Tier-A a live-path no-op until the operator flips the flag after
-  // the M5 accuracy re-tune — a token alone (which the M5 always has) must NOT flip it.
   const auth: AdminAuth = { base: "https://www.fluncle.com", token: "t" };
 
   test("token + flag on → full song", () => {
     expect(shouldFingerprintFullSong(auth, "1")).toBe(true);
     expect(shouldFingerprintFullSong(auth, "true")).toBe(true);
-    expect(shouldFingerprintFullSong(auth, "TRUE")).toBe(true); // case-insensitive
+    expect(shouldFingerprintFullSong(auth, "TRUE")).toBe(true);
   });
 
   test("token + no flag → preview (the default, the merge no-op)", () => {
     expect(shouldFingerprintFullSong(auth, undefined)).toBe(false);
     expect(shouldFingerprintFullSong(auth, "")).toBe(false);
     expect(shouldFingerprintFullSong(auth, "0")).toBe(false);
-    expect(shouldFingerprintFullSong(auth, "yes")).toBe(false); // only 1/true count as on
+    expect(shouldFingerprintFullSong(auth, "yes")).toBe(false);
   });
 
   test("no token + flag on → preview (no credential to authorize the private fetch)", () => {
@@ -134,9 +123,6 @@ describe("shouldFingerprintFullSong", () => {
 });
 
 describe("selectVjIndex (the closed-loop match-vs-fallback decision)", () => {
-  // A tiny fake plan (structurally Finding[]) — the two live ground-truth findings plus a
-  // decoy, with the ARCHIVE-side bpm/key (which read ~1.5 low vs Rekordbox — the resolver's
-  // guards cope). PlanEntry carries bpm/key, so it's a Finding.
   const plan: PlanEntry[] = [
     { artists: ["Some One"], bpm: 140, key: "A minor", logId: "000.1.0A", title: "A Decoy" },
     { artists: ["Technimatic"], bpm: 172.56, key: "G major", logId: "019.1.7X", title: "Strength" },
@@ -149,7 +135,6 @@ describe("selectVjIndex (the closed-loop match-vs-fallback decision)", () => {
     },
   ];
 
-  /** A fake bag that records `next`/`take` so the decision is observed without randomness. */
   function fakeBag(nextValue: number): {
     bag: ShuffleBag;
     calls: { next: number; taken: number[] };
@@ -183,8 +168,8 @@ describe("selectVjIndex (the closed-loop match-vs-fallback decision)", () => {
       score: expect.any(Number),
       via: "match",
     });
-    expect(calls.taken).toEqual([1]); // matched index removed from the cycle
-    expect(calls.next).toBe(0); // no random draw on a match
+    expect(calls.taken).toEqual([1]);
+    expect(calls.next).toBe(0);
   });
 
   test("the deck-2 ground truth resolves to 011.1.6E (truncated OCR title + Camelot key)", () => {
@@ -228,6 +213,6 @@ describe("selectVjIndex (the closed-loop match-vs-fallback decision)", () => {
       identity: { artist: "Technimatic", title: "Strength (Some Remix)" },
     };
     const sel = selectVjIndex(msg, plan, bag);
-    expect(sel.via).toBe("fallback"); // the version-signature gate holds
+    expect(sel.via).toBe("fallback");
   });
 });

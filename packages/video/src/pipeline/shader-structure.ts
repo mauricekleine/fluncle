@@ -1,44 +1,3 @@
-// The STRUCTURAL classifier — the diversity axis the vehicle NAME cannot carry.
-//
-// The diversity ledger records each finding's self-reported vehicle NAME (a poetic
-// identity: "crystal scaffold", "basalt organ", "tidal cell field"). Three of those
-// three are the SAME structural primitive — a voronoi/cellular field — yet their
-// names read as three different worlds, so a name-only diversity check let three
-// cellular findings ship inside six (two consecutive). This module reads the CODE,
-// not the label: it classifies a RESOLVED fragment body (every `${GLSL.*}` inlined)
-// into a closed set of structural families by the fingerprints the algorithms leave
-// in the shader — the min-distance voronoi loop, the ridged `1-abs(2n-1)` inversion,
-// the domain-warp advection, the caustic sine accumulator, and so on.
-//
-// The families are the CHECKED CLAIM (the vehicle name stays free poetic identity):
-//   - cellular : voronoi / worley — a nearest-site min-distance loop over hashed
-//                cell points, F2−F1 edge/wall math, per-cell ids.
-//   - flow     : fbm / domain-warp / curl advection — marbled, never-gridded fields.
-//   - caustic  : the rotate+sin/cos sine-accumulator light filaments (Paper caustic /
-//                neuroWeb) — interference webs, squared.
-//   - filament : ridged noise — the `pow(1-abs(2n-1), k)` inversion that turns a
-//                smooth field into sharp crests/threads/veins.
-//   - lattice  : a REGULAR grid — `fract`/`mod` tiling, dot screens, halftone.
-//   - radial   : polar / angular fields — `polarFold`, `atan`+`length(uv)` kaleido.
-//   - metaball : SDF blends / raymarched bodies — `smin`, `raymarch`, `map(vec3)`.
-//   - other    : no family cleared the floor.
-//
-// A body can carry several (a caustic web is often ridged); we report the DOMINANT
-// family plus an optional SECONDARY and a 0..1 confidence. Pure + deterministic:
-// no fs, no network, no clock. `classifyShaderStructure` takes a resolved body;
-// `classifyCompositionStructure` wires the scene resolver (locate the fragment
-// literal → inline `${GLSL.*}`) so a caller can hand it a raw composition source.
-//
-// Heuristics, calibrated against real shipped bodies (see shader-structure.test.ts):
-// ALGORITHMIC signatures (the fingerprint the primitive leaves) carry the weight;
-// NAMING (variable/function names in code, comments stripped first) only CORROBORATES
-// a family that already showed an algorithmic signal, so a stray word never invents a
-// phantom family. The one genuinely ambiguous case — a domain-warped field that is
-// ALSO ridged — is resolved by dataflow: if the warp field is rendered as a smooth
-// surface tone BEYOND the ridge it reads flow-dominant (the ridges are veins on a
-// body); if the field feeds ONLY the ridge it reads filament-dominant (threads on a
-// void).
-
 import { locateFragmentLiteral, resolveGlslBody } from "./scene";
 
 export const STRUCTURE_FAMILIES = [
@@ -54,7 +13,6 @@ export const STRUCTURE_FAMILIES = [
 
 export type StructureFamily = (typeof STRUCTURE_FAMILIES)[number];
 
-/** A scored family with the human-readable evidence that earned the score. */
 export type StructureSignal = {
   family: StructureFamily;
   score: number;
@@ -62,19 +20,17 @@ export type StructureSignal = {
 };
 
 export type StructureClassification = {
-  /** The highest-scoring family, or `other` when nothing cleared the floor. */
   dominant: StructureFamily;
-  /** The runner-up, when it is within range of the dominant (else omitted). */
+
   secondary?: StructureFamily;
-  /** 0..1 — how cleanly the dominant separates from the rest (1 = uncontested). */
+
   confidence: number;
-  /** Every family that scored above zero, dominant-first, with its evidence. */
+
   signals: StructureSignal[];
 };
 
-// A family must clear this to be named at all (below it → `other`).
 const FAMILY_FLOOR = 1.5;
-// The secondary must reach this fraction of the dominant's score to be reported.
+
 const SECONDARY_RATIO = 0.35;
 
 const GLSL_TYPE_KEYWORDS = new Set([
@@ -91,17 +47,10 @@ const GLSL_TYPE_KEYWORDS = new Set([
   "void",
 ]);
 
-/** Strip GLSL/JS comments so classification reads CODE only (names, not prose). */
 export function stripGlslComments(body: string): string {
   return body.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
 }
 
-/**
- * Count CALL sites of `name` — occurrences of `name(` whose preceding token is not a
- * GLSL type keyword (which would make it a function DEFINITION header, e.g.
- * `vec3 voronoi(`). Definitions are inlined into a resolved body, so this keeps the
- * count to actual invocations plus internal recursion, never the declaration.
- */
 function callCount(name: string, body: string): number {
   const re = new RegExp(`(\\w+)?\\s*\\b${name}\\s*\\(`, "g");
   let match: RegExpExecArray | null;
@@ -118,12 +67,6 @@ function matchCount(re: RegExp, body: string): number {
   return (body.match(re) ?? []).length;
 }
 
-/**
- * The ridged-noise inversion `pow(1.0 - abs(2.0 * X - 1.0), k)` (or the bare
- * `1.0 - abs(2.0 * X - 1.0)`) — the filament fingerprint. Returns the field variable
- * `X` it inverts, so the caller can ask whether that field is ALSO rendered as a
- * surface (flow) or only ridged (filament).
- */
 function detectRidge(body: string): { present: boolean; field: string | null } {
   const withPow = /pow\s*\(\s*1\.0\s*-\s*abs\s*\(\s*2\.0\s*\*\s*(\w+)/.exec(body);
   if (withPow) {
@@ -136,17 +79,11 @@ function detectRidge(body: string): { present: boolean; field: string | null } {
   return { field: null, present: false };
 }
 
-/**
- * True when the ridge's own field variable is ALSO consumed as a smooth surface tone
- * (a `smoothstep(..., field)` or `paletteRamp(field)`) OUTSIDE the ridge expression —
- * the tell that the warp field is a rendered body and the ridges are veins on it
- * (flow-dominant), not threads on a void (filament-dominant).
- */
 function ridgeFieldIsSurface(body: string, field: string | null): boolean {
   if (!field) {
     return false;
   }
-  // Remove the ridge statement(s) so the field's OTHER uses are what remain.
+
   const withoutRidge = body.replace(
     /(?:pow\s*\(\s*)?1\.0\s*-\s*abs\s*\(\s*2\.0\s*\*\s*\w+[^;]*;/g,
     ";",
@@ -173,14 +110,12 @@ function addDetector(
   }
 }
 
-/** Detect the cellular, caustic, and filament signals that share ridge/cell evidence. */
 function detectOrganicFamilies(body: string): {
   detectors: Detector[];
   ridge: { present: boolean; field: string | null };
 } {
   const detectors: Detector[] = [];
 
-  // ── cellular ────────────────────────────────────────────────────────────
   const voronoiCalls = callCount("voronoi", body) + callCount("voronoi3", body);
   const minDistLoop = /d\s*<\s*f1/.test(body) && /f2\s*=\s*f1/.test(body);
   const edgeMath = /f2\s*-\s*f1|vor\.y\s*-\s*vor\.x|F2\s*-\s*F1/.test(body);
@@ -215,7 +150,6 @@ function detectOrganicFamilies(body: string): {
     addDetector(detectors, "cellular", score, evidence);
   }
 
-  // ── caustic (sine-accumulator interference webs) ──────────────────────────
   const causticCalls = callCount("caustic", body);
   const neuroCalls = callCount("neuroWeb", body);
   const causticSig = /N\.x\s*\+\s*N\.y/.test(body) || /sine_acc\s*\+=\s*sin/.test(body);
@@ -245,7 +179,6 @@ function detectOrganicFamilies(body: string): {
     addDetector(detectors, "caustic", score, evidence);
   }
 
-  // ── filament (ridged-noise crests) ───────────────────────────────────────
   const ridge = detectRidge(body);
   const bareAbsInvert = /1\.0\s*-\s*abs\s*\(/.test(body) && !ridge.present;
   const filamentAlgo = ridge.present || bareAbsInvert;
@@ -272,7 +205,6 @@ function detectOrganicFamilies(body: string): {
   return { detectors, ridge };
 }
 
-/** Detect flow and geometric families after the ridge evidence has been established. */
 function hasGridRepeat(
   body: string,
   minDistLoop: boolean,
@@ -296,7 +228,6 @@ function detectGeometricFamilies(
   const causticCalls = callCount("caustic", body);
   const minDistLoop = /d\s*<\s*f1/.test(body) && /f2\s*=\s*f1/.test(body);
 
-  // ── flow (fbm / domain-warp / curl advection) ────────────────────────────
   const flowCalls =
     callCount("domainWarp", body) +
     callCount("swirlWarp", body) +
@@ -332,7 +263,6 @@ function detectGeometricFamilies(
     addDetector(detectors, "flow", score, evidence);
   }
 
-  // ── lattice (regular grid / dot screen) ──────────────────────────────────
   const dotCalls = callCount("dotField", body);
   const gridRepeat = hasGridRepeat(body, minDistLoop, ridge.present, causticCalls);
   const latticeAlgo = dotCalls > 0 || gridRepeat;
@@ -357,7 +287,6 @@ function detectGeometricFamilies(
     addDetector(detectors, "lattice", score, evidence);
   }
 
-  // ── radial (polar / angular fields) ──────────────────────────────────────
   const polarCalls = callCount("polarFold", body);
   const polarMap = /atan\s*\(/.test(body) && /length\s*\(\s*uv/.test(body);
   const radialAlgo = polarCalls > 0 || polarMap;
@@ -385,7 +314,6 @@ function detectGeometricFamilies(
     addDetector(detectors, "radial", score, evidence);
   }
 
-  // ── metaball (SDF blend / raymarched body) ───────────────────────────────
   const sminCalls = callCount("smin", body);
   const raymarchCalls = callCount("raymarch", body);
   const mapDef = /float\s+map\s*\(\s*vec3/.test(body);
@@ -424,7 +352,6 @@ function detectGeometricFamilies(
   return { detectors, ridgeSurface };
 }
 
-/** Detect every family's raw signal in a comment-stripped body. */
 function detectFamilies(body: string): {
   detectors: Detector[];
   ridge: { present: boolean; field: string | null };
@@ -440,11 +367,6 @@ function detectFamilies(body: string): {
   };
 }
 
-/**
- * Classify a RESOLVED fragment body (every `${GLSL.*}` already inlined) into its
- * structural families. Pure + deterministic. When nothing clears the floor the
- * dominant is `other` with confidence 0.
- */
 export function classifyShaderStructure(resolvedBody: string): StructureClassification {
   const body = stripGlslComments(resolvedBody);
   const { detectors, ridge, ridgeSurface } = detectFamilies(body);
@@ -454,10 +376,6 @@ export function classifyShaderStructure(resolvedBody: string): StructureClassifi
     scores.set(d.family, d);
   }
 
-  // The one principled tiebreak: a domain-warped field that is ALSO ridged. If the
-  // warp field is rendered as a surface tone beyond the ridge, flow leads (veins on a
-  // body); if it feeds only the ridge, filament leads (threads on a void). Nudge the
-  // loser just under the leader so the ranking reflects the dataflow, not tuning noise.
   const flow = scores.get("flow");
   const filament = scores.get("filament");
   if (ridge.present && flow && filament) {
@@ -483,8 +401,6 @@ export function classifyShaderStructure(resolvedBody: string): StructureClassifi
   const secondary =
     second && second.score >= SECONDARY_RATIO * top.score ? second.family : undefined;
 
-  // Confidence: how much of the field's mass the dominant owns, floored by its raw
-  // strength so an uncontested strong signal reads high and a near-tie reads low.
   const contender = secondary && second ? second.score : 0;
   const separation = top.score / (top.score + contender + 2);
   const confidence = Math.max(0, Math.min(1, separation));
@@ -497,12 +413,6 @@ export function classifyShaderStructure(resolvedBody: string): StructureClassifi
   };
 }
 
-/**
- * Resolve a raw composition source (locate its fragment template literal, inline
- * every `${GLSL.*}`) and classify the resolved body. Returns null (never throws)
- * when the body can't be located/resolved, so a caller degrades gracefully. `glsl`
- * is the imported `GLSL` snippet object.
- */
 export function classifyCompositionStructure(
   source: string,
   glsl: Record<string, string>,
@@ -518,14 +428,12 @@ export function classifyCompositionStructure(
   return classifyShaderStructure(resolved.body);
 }
 
-/** The render.json `structure` block — dominant + optional secondary + confidence. */
 export type StructureManifest = {
   dominant: StructureFamily;
   secondary?: StructureFamily;
   confidence: number;
 };
 
-/** Narrow a full classification to the render.json manifest shape. */
 export function toStructureManifest(c: StructureClassification): StructureManifest {
   return {
     confidence: c.confidence,
@@ -534,7 +442,6 @@ export function toStructureManifest(c: StructureClassification): StructureManife
   };
 }
 
-/** `vehicle (structure)` — the paired display so a human reads through the poetry. */
 export function labelWithStructure(
   vehicle: string | null | undefined,
   structure: StructureFamily | null | undefined,

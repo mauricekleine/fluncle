@@ -80,12 +80,6 @@ export const ProjectionStatusSchema = z.object({
     crawlDueWork: ProjectionFamilyStatusSchema,
     publicAggregates: ProjectionFamilyStatusSchema.extend({ anchorsReady: z.boolean() }),
     trackDueWork: ProjectionFamilyStatusSchema.extend({
-      // The synthetic catalogue-rank corpus marker's age. It is a resumable rebuild checkpoint
-      // wearing a source-marker row, not fan-out debt: it clears only when a whole rank generation
-      // completes against an unchanged corpus, and any corpus mutation restarts it. Its age is
-      // therefore reported here and excluded from `oldestOutstandingMarkerAge`, which exists to say
-      // whether ordinary debt is draining. Null when the marker holds no repair row; optional for
-      // rolling compatibility with an older server.
       catalogueRankMarkerAgeMs: CountSchema.nullable().optional(),
     }),
   }),
@@ -96,7 +90,6 @@ export const ProjectionStatusSchema = z.object({
   }),
 });
 
-/** Admin-authenticated bounded diagnostic read. No raw rows or identifiers leave it. */
 export const getProjectionStatus = oc
   .route({
     method: "GET",
@@ -107,7 +100,6 @@ export const getProjectionStatus = oc
   })
   .output(z.object({ ok: z.literal(true), status: ProjectionStatusSchema }));
 
-/** Run one bounded step; agent authority is handler-limited to runtime-family repair. */
 export const advanceProjection = oc
   .route({
     method: "POST",
@@ -130,20 +122,17 @@ export const advanceProjection = oc
       complete: z.boolean(),
       ok: z.literal(true),
       processed: CountSchema,
-      // Due-work repair only: the stale-definition rebuild walk this step drove with the page
-      // budget repair left behind, and how many families still carry an older definition version.
+
       rebuildRowsWalked: CountSchema.optional(),
       rebuildStaleFamilies: CountSchema.optional(),
       scheduled: CountSchema,
       status: ProjectionStatusSchema.optional(),
       target: ProjectionTargetSchema,
-      // Track repair only: whether an ordinary track source marker still awaits fanout after the
-      // step. The synthetic catalogue-rank corpus marker never counts.
+
       trackSourceMarkersPending: z.boolean().optional(),
     }),
   );
 
-/** The only supported projection flag writer; opening is readiness-gated, closing always works. */
 export const setProjectionCutover = oc
   .route({
     method: "PUT",
@@ -164,12 +153,6 @@ export const setProjectionCutover = oc
 
 export const DUE_WORK_REKEY_LIMIT_MAX = 500;
 
-/**
- * Mark one due-work queue's projected rows for repair, so the maintenance sweep re-keys them under
- * today's definition. Bounded and resumable; a dry run is the default. The automatic path is the
- * definition version stored with each rebuild checkpoint — this is the operator's lever for
- * forcing one queue now.
- */
 export const rekeyDueWorkQueue = oc
   .route({
     method: "POST",

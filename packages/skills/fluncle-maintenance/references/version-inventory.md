@@ -1,6 +1,6 @@
 # Version inventory — the drift surface
 
-Every pinned/baked version in Fluncle's runtime supply chain, with where it lives, how to read the current pin, the one-liner that checks latest, and how to bump it. Run the sweep top-to-bottom. **Line numbers are a hint, not a contract** — files drift; each pin carries a stable comment marker (quoted below) that locates it even if the line moved. When a line number is wrong, `grep` the marker.
+Every pinned/baked version in Fluncle's runtime supply chain, with where it lives, how to read the current pin, the one-liner that checks latest, and how to bump it. Run the sweep top-to-bottom. **Line numbers are a hint, not a contract** — files drift; locate each pin by its command or config key when a line number drifts.
 
 All commands assume the repo root as the working directory. The "check latest" one-liners are read-only (npm/curl) — safe to run on any tick.
 
@@ -75,7 +75,7 @@ The image is built `FROM oven/bun:<ver>-debian@sha256:<digest>` (Debian trixie),
 ## 4. Claude Code CLI (baked)
 
 - **File:** `docs/agents/hermes/Dockerfile` (~line 90).
-- **Marker:** `RUN npm install -g @anthropic-ai/claude-code@` (comment ends with `Bump lever: this version line.`)
+- **Marker:** `RUN npm install -g @anthropic-ai/claude-code@`
 - **Current pin:**
 
   ```bash
@@ -107,11 +107,11 @@ The image is built `FROM oven/bun:<ver>-debian@sha256:<digest>` (Debian trixie),
 
 ## 6. GitHub Actions pins — AXIS COMPLETE, Renovate owns it
 
-Every action in every workflow is SHA-pinned with a trailing version comment, and Renovate maintains the digests. Do not hand-resolve tags to digests.
+Every action in every workflow is SHA-pinned, and Renovate maintains the digests. Do not hand-resolve tags to digests.
 
 `renovate.json` (repo root) configures the Renovate GitHub App scoped to the `github-actions` manager with the `helpers:pinGitHubActionDigests` preset: it SHA-pins any newly-added action and refreshes each digest (same-major) as the action ships updates, while a new major waits for dependency-dashboard approval. The config is **inert until the Renovate app is installed** on the repo.
 
-- **Verify the axis still holds** — every `uses:` should carry a 40-char SHA plus a `# vN` comment. A bare `@vN` is an action someone added by hand, and pinning that one at its current major is the only fix this item still asks for.
+- **Verify the axis still holds** — every `uses:` should carry a 40-char SHA. A bare `@vN` is an action someone added by hand, and pinning that one at its current major is the only fix this item still asks for.
 
   ```bash
   grep -rn 'uses: ' .github/workflows/

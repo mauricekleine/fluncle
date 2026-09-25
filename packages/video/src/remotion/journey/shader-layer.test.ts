@@ -1,6 +1,3 @@
-// Unit tests for the ShaderLayer backing-store sizing (the resolutionScale lever).
-// Pure function — no Remotion/GL context needed.
-
 import { expect, test } from "bun:test";
 
 import { backingStoreSize } from "./shader-layer";
@@ -21,8 +18,8 @@ test("dimensions are rounded to positive integers", () => {
   const { width, height } = backingStoreSize(1081, 1921, 0.5);
   expect(Number.isInteger(width)).toBe(true);
   expect(Number.isInteger(height)).toBe(true);
-  expect(width).toBe(541); // round(540.5)
-  expect(height).toBe(961); // round(960.5)
+  expect(width).toBe(541);
+  expect(height).toBe(961);
 });
 
 test("out-of-range / invalid scales fall back to 1 (never a zero/negative backing store)", () => {

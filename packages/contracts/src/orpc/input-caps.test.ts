@@ -1,13 +1,3 @@
-// Self-running check for INPUT caps on bounded admin operations — no framework, the
-// `devices.test.ts` style. Most writes here are AGENT tier (the box's token drives them, so the
-// threat is a buggy or compromised sweep posting an unbounded payload, not a stranger);
-// `read_run_ledger` and two of the three R2 presigns are operator tier. Each cap is asserted at
-// the cap (accepted — the real sizes are far below it) and one past it (REJECTED at the edge,
-// never trimmed: a dropped cost row is a wrong ledger, a dropped cluster is a broken map).
-// The presign block at the bottom bounds a VALUE rather than a size, for the same reason: what
-// it refuses would otherwise be served to the world under a Fluncle origin.
-// Run: `bun src/orpc/input-caps.test.ts`.
-
 import assert from "node:assert/strict";
 
 import {
@@ -51,17 +41,12 @@ import {
   resolveOperationReceipt,
 } from "./admin-operation-receipts";
 
-/**
- * The Standard Schema surface we need, spelled out locally rather than imported from
- * `@standard-schema/spec` (a transitive dep of oRPC, not one this package declares).
- */
 type Validator = {
   "~standard": {
     validate: (input: unknown) => { issues?: readonly unknown[] } | Promise<unknown>;
   };
 };
 
-/** Does the op's declared INPUT schema accept this body? */
 function accepts(op: unknown, input: unknown): boolean {
   const schema = (op as { "~orpc": { inputSchema?: Validator } })["~orpc"].inputSchema;
 
@@ -74,7 +59,6 @@ function accepts(op: unknown, input: unknown): boolean {
   return result.issues === undefined;
 }
 
-// ── Discogs box evidence: explicit, bounded, and identity-keyed at the edge ───────────────
 {
   const release = (id: number) => ({
     artists: [{ name: "Calibre" }],
@@ -216,7 +200,6 @@ function accepts(op: unknown, input: unknown): boolean {
   );
 }
 
-// ── update_artist_rule: at least one drift-audit stamp, including explicit nulls ─────────
 {
   assert.equal(
     accepts(updateArtistRule, { id: "arl_test" }),
@@ -235,7 +218,6 @@ function accepts(op: unknown, input: unknown): boolean {
   );
 }
 
-// ── replace_label_artist_rules: a bounded, duplicate-free whole-set swap ────────────────
 {
   const rule = (index: number) => ({
     artistMbid: `00000000-0000-4000-8000-${index.toString(16).padStart(12, "0")}`,
@@ -274,7 +256,6 @@ function accepts(op: unknown, input: unknown): boolean {
   );
 }
 
-// ── record_cost: at most 500 rows per batch (the widest sweep queue is 50) ────────────────
 {
   const event = (index: number) => ({
     costBasis: "cash" as const,
@@ -306,14 +287,12 @@ function accepts(op: unknown, input: unknown): boolean {
   );
 }
 
-// ── update_galaxy_map: at most 64 clusters, each centroid at most 2048 floats ─────────────
 {
   const cluster = (dimensions = 1024) => ({
     centroid: Array.from({ length: dimensions }, () => 0.1),
     id: null,
   });
 
-  // k = 9 today; the live shape must stay comfortably inside both caps.
   assert.equal(
     accepts(updateGalaxyMap, { clusters: Array.from({ length: 9 }, () => cluster()) }),
     true,
@@ -341,12 +320,6 @@ function accepts(op: unknown, input: unknown): boolean {
   );
 }
 
-// ── resolve_anchor: the box-fetched Deezer hits, bounded on every axis ─────────────────────
-//
-// This one is not merely a batch cap. The whole point of moving the Deezer FETCH to the box is that
-// the box is a source we deliberately do NOT trust — the Worker re-verifies every hit before an ISRC
-// is written. An untrusted source's payload is exactly the thing to bound at the edge, so a malformed
-// one fails as a clean 400 instead of reaching the handler at all.
 {
   const hit = (over: Record<string, unknown> = {}) => ({
     artistName: "Muffler",
@@ -367,7 +340,6 @@ function accepts(op: unknown, input: unknown): boolean {
     "an EMPTY list is a first-class answer — the box searched and found nothing",
   );
 
-  // The array cap IS Deezer's page size: more hits than Deezer itself pages is already wrong.
   assert.equal(
     accepts(resolveAnchor, {
       deezerCandidates: Array.from({ length: DEEZER_CANDIDATE_LIMIT }, () => hit()),
@@ -385,8 +357,6 @@ function accepts(op: unknown, input: unknown): boolean {
     "one hit past the cap is rejected",
   );
 
-  // The three strings are bounded, generously — a cap that bit a real billing or title would turn a
-  // recoverable row into a rejected call, which is the worse failure.
   assert.equal(
     accepts(resolveAnchor, {
       deezerCandidates: [hit({ artistName: "a".repeat(300), title: "b".repeat(300) })],
@@ -417,8 +387,6 @@ function accepts(op: unknown, input: unknown): boolean {
     "an oversized isrc is rejected",
   );
 
-  // A duration that is not a recording length. The gate would read each of these as a plain miss —
-  // indistinguishable from an honest one — so the boundary names it instead.
   for (const durationMs of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
     assert.equal(
       accepts(resolveAnchor, { deezerCandidates: [hit({ durationMs })], trackId: "mb_1" }),
@@ -427,7 +395,6 @@ function accepts(op: unknown, input: unknown): boolean {
     );
   }
 
-  // …and the fields are still REQUIRED: a hit missing one cannot be verified against the row.
   assert.equal(
     accepts(resolveAnchor, { deezerCandidates: [{ isrc: "GBTESTDZ0001" }], trackId: "mb_1" }),
     false,
@@ -435,13 +402,6 @@ function accepts(op: unknown, input: unknown): boolean {
   );
 }
 
-// ── anchor_track: the box's Apify hits, bounded on every axis ─────────────────────────────
-//
-// The Spotify twin of `resolve_anchor` above, and its stated precedent — same untrusted-box posture,
-// so the same bounds. The sweep sends 3 candidates per row (`SEARCH_KEYWORD_LIMIT`, anchor-sweep.ts)
-// and at most 45 in the pathological same-query chunk, so the caps sit far above every real tick.
-// `artists` is the one that is not merely a size: a verified candidate's artist list is WRITTEN into
-// the artist graph by stable id, so an unbounded one is a write amplifier.
 {
   const hit = (over: Record<string, unknown> = {}) => ({
     artists: [{ id: "0TnOYISbd1XYRBk9myaseg", name: "Muffler" }],
@@ -479,7 +439,6 @@ function accepts(op: unknown, input: unknown): boolean {
     "one candidate past the cap is rejected",
   );
 
-  // The artist list — the axis that reaches the graph.
   assert.equal(
     accepts(anchorTrack, {
       candidates: [hit({ artists: Array.from({ length: 20 }, () => ({ name: "Artist" })) })],
@@ -497,7 +456,6 @@ function accepts(op: unknown, input: unknown): boolean {
     "one artist past the cap is rejected",
   );
 
-  // The strings, generous enough that a real remix title or billing can never trip them.
   assert.equal(
     accepts(anchorTrack, {
       candidates: [hit({ artists: [{ name: "a".repeat(300) }], title: "b".repeat(300) })],
@@ -546,7 +504,6 @@ function accepts(op: unknown, input: unknown): boolean {
     "an oversized url is rejected",
   );
 
-  // …and the id-carrier rule still stands: a candidate the server cannot anchor to is refused.
   assert.equal(
     accepts(anchorTrack, {
       candidates: [{ artists: [], durationMs: 201_000, isrc: "GBTESTDZ0001", title: "Dribble" }],
@@ -557,21 +514,6 @@ function accepts(op: unknown, input: unknown): boolean {
   );
 }
 
-// ── record_run: the run ledger's envelope, bounded and CLOSED ─────────────────────────────
-//
-// This one is not a batch cap. The envelope is assembled by a POSIX shell function on a box, so
-// the realistic threat is a buggy or skewed emitter, not a stranger — and the load-bearing property
-// is that the object is STRICT. A version skew between the wrapper and the Worker must degrade
-// LOUDLY (a 400, which leaves the row missing, which the absence alarm catches) rather than quietly
-// widening into a field nobody validated. Two keys can never appear: `ok`, because the ledger
-// derives it and a sweep asserting its own health is the defect that motivated the whole design,
-// and `id`, because it is derived from `unit` + `started_at`.
-//
-// MIND THE LAYER. That prohibition is on the ENVELOPE only. An `ok` INSIDE `summary_raw` is a
-// string this schema does not read, and it must stay accepted: 25 sweep scripts print one, so
-// rejecting it here would have left exactly those sweeps rowless — a missing row reads as a dead
-// sweep, and the founding case would have been the one case the ledger could not see. The Worker
-// records that claim in `self_asserted_ok` and overrules it (lib/server/run-events.ts, rule 1).
 {
   const run = (over: Record<string, unknown> = {}) => ({
     ended_at: "2026-07-29T03:00:12.500Z",
@@ -633,15 +575,12 @@ function accepts(op: unknown, input: unknown): boolean {
     assert.equal(accepts(recordRun, run({ [field]: 1.5 })), false, `${field} must be integral`);
   }
 
-  // The real nightly Sentry sweep line (sentry-triage-sweep.ts:489) — a summary carrying its
-  // own `ok`. It MUST reach the Worker, which records the claim rather than obeying it.
   assert.equal(
     accepts(recordRun, run({ summary_raw: '{"candidates":3,"ok":true,"resolved":3}' })),
     true,
     "a summary carrying its own `ok` is accepted — the claim is recorded, not rejected",
   );
 
-  // STRICT: an unknown envelope key is rejected, never ignored.
   assert.equal(
     accepts(recordRun, run({ ok: true })),
     false,
@@ -665,7 +604,6 @@ function accepts(op: unknown, input: unknown): boolean {
     );
   }
 
-  // Every field is REQUIRED: a run with no unit, no start, or no exit code is not a run.
   for (const key of ["ended_at", "exit_code", "started_at", "unit"]) {
     const partial: Record<string, unknown> = run();
 
@@ -674,7 +612,6 @@ function accepts(op: unknown, input: unknown): boolean {
     assert.equal(accepts(recordRun, partial), false, `an envelope missing ${key} is rejected`);
   }
 
-  // The bounds. `exit_code` is bash `$?`, definitionally 0–255.
   assert.equal(accepts(recordRun, run({ exit_code: 255 })), true, "exit code AT the cap");
   assert.equal(accepts(recordRun, run({ exit_code: 256 })), false, "an out-of-range exit code");
   assert.equal(accepts(recordRun, run({ exit_code: -1 })), false, "a negative exit code");
@@ -693,8 +630,6 @@ function accepts(op: unknown, input: unknown): boolean {
     "an oversized timestamp",
   );
 
-  // The summary is REJECTED past the cap, never truncated: a silently-trimmed summary is a
-  // summary you cannot trust, and an untrustworthy diagnostic is what this ledger exists to end.
   assert.equal(
     accepts(recordRun, run({ summary_raw: "s".repeat(MAX_SUMMARY_RAW_CHARS) })),
     true,
@@ -707,7 +642,6 @@ function accepts(op: unknown, input: unknown): boolean {
   );
 }
 
-// ── read_run_ledger: one bounded page, with closed boolean/time filters ──────────────────
 {
   assert.equal(
     accepts(readRunLedger, { limit: MAX_RUN_LEDGER_PAGE_SIZE }),
@@ -766,7 +700,6 @@ function accepts(op: unknown, input: unknown): boolean {
   );
 }
 
-// ── operation receipts: exact keys and explicit stale repair remain bounded ──────────────
 {
   assert.equal(
     accepts(getOperationReceipt, { operationKey: "k".repeat(OPERATION_RECEIPT_KEY_MAX) }),
@@ -863,12 +796,6 @@ function accepts(op: unknown, input: unknown): boolean {
   );
 }
 
-// ── record_health: one snapshot's checks, bounded in count and in service name ────────────
-//
-// Every check upserts a permanent `service_status` row the PUBLIC /status board renders, and
-// costs three or four sequential libSQL round trips inside one Worker request — so an
-// unbounded roster is both a public surface and a request amplifier. REJECTED at the edge,
-// never trimmed: a dropped check is a service that silently stays green on the board.
 {
   const snapshot = (checks: unknown) => ({ at: "2026-08-26T10:00:00.000Z", checks });
   const check = (service: string) => ({
@@ -898,7 +825,6 @@ function accepts(op: unknown, input: unknown): boolean {
     "a snapshot past the checks cap is rejected",
   );
 
-  // The widest real producer: the prober's cron roster plus its fixed rows, far below the cap.
   assert.equal(
     accepts(recordHealth, snapshot(Array.from({ length: 55 }, (_, i) => check(`cron.s${i}`)))),
     true,
@@ -926,13 +852,6 @@ function accepts(op: unknown, input: unknown): boolean {
   );
 }
 
-// ── the R2 presign ops: a world-served object's Content-Type is bounded to video/* ────────
-//
-// These three sign an upload into `fluncle-videos`, which is served world-readable at
-// found.fluncle.com, and the requested type becomes the stored object's Content-Type — so it
-// is what the CDN serves those bytes as. The bound is a value restriction rather than a batch
-// cap: `text/html` on a Fluncle origin is the thing it exists to refuse. Every real caller is
-// asserted accepted below, so the gate cannot bite a legitimate upload.
 {
   const presigns = [
     { input: (contentType: unknown) => ({ clipId: "clp_1", contentType }), op: presignClipUpload },
@@ -949,21 +868,16 @@ function accepts(op: unknown, input: unknown): boolean {
   for (const { input, op } of presigns) {
     const id = (op as { "~orpc": { route: { operationId: string } } })["~orpc"].route.operationId;
 
-    // Omitted entirely is the set-video CLI's shape — the handler then defaults to video/mp4.
     assert.equal(accepts(op, input(undefined)), true, `${id}: an absent contentType is accepted`);
 
-    // The values the real callers send: the CLI legs' literal, and the `accept="video/*"`
-    // recording dialog passing `file.type` through for a .mov / .webm / .mkv pick.
     for (const contentType of ["video/mp4", "video/quicktime", "video/webm", "video/x-matroska"]) {
       assert.equal(accepts(op, input(contentType)), true, `${id}: ${contentType} is accepted`);
     }
 
-    // A type that would make the CDN serve an uploaded object as something other than video.
     for (const contentType of ["text/html", "image/svg+xml", "application/javascript"]) {
       assert.equal(accepts(op, input(contentType)), false, `${id}: ${contentType} is rejected`);
     }
 
-    // Neither a non-string nor an unbounded string can reach the signer any more.
     assert.equal(accepts(op, input(123)), false, `${id}: a non-string contentType is rejected`);
     assert.equal(
       accepts(op, input(`video/${"x".repeat(122)}`)),

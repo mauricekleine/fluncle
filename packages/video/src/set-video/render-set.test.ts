@@ -17,19 +17,18 @@ describe("buildChapterPlan", () => {
       { endMs: 775_800, logId: "B", mixInMs: 588_300, startMs: 588_300 },
       { endMs: 1_000_000, logId: "C", mixInMs: 775_800, startMs: 775_800 },
     ]);
-    // Contiguous, no gaps.
+
     for (let i = 1; i < plan.length; i += 1) {
       expect(plan[i]?.startMs).toBe(plan[i - 1]?.endMs);
     }
   });
 
   test("sorts out-of-order anchors and dedupes fingerprint ties", () => {
-    // Models the real 019.F.1A noise: an out-of-order anchor + a duplicate ms.
     const plan = buildChapterPlan(
       [
         { bestMs: 3_488_000, logId: "late-1" },
-        { bestMs: 3_488_000, logId: "late-2-tie" }, // exact tie — dropped
-        { bestMs: 2_971_000, logId: "out-of-order" }, // sorts before the late ones
+        { bestMs: 3_488_000, logId: "late-2-tie" },
+        { bestMs: 2_971_000, logId: "out-of-order" },
       ],
       4_000_000,
     );

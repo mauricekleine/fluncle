@@ -4,19 +4,8 @@ import { CaretDownIcon, CheckIcon, MagnifyingGlassIcon } from "@phosphor-icons/r
 import { cn } from "#lib/utils";
 import { InputGroup, InputGroupAddon } from "#components/input-group";
 
-// The Base-UI combobox (shadcn `base-vega` registry), adapted to Fluncle's tokens and Phosphor
-// iconography and pared to a SELECT-LIKE combobox: a trigger button anchors the popup, and the
-// typeahead input lives INSIDE the popup (the classic Popover+Command shape). Only the parts the
-// app uses are re-exported — Base-UI 1.6 ships no `Separator` part, and chips/groups are unused.
-// Filtering is the caller's (`filter={null}` on the Root) so a free-typed value can be offered as
-// a creatable option; keyboard access, the listbox roles, and Escape/arrow handling come from
-// Base-UI unchanged.
-
 const Combobox = ComboboxPrimitive.Root;
 
-// The trigger's base chrome, exported so a sibling control with no baked Shadcn chrome of its own
-// (e.g. a PopoverTrigger dressed as the same pill) can wear the identical string and stay in
-// lockstep with this trigger and the Select's — one definition, no drift.
 const comboboxTriggerClass =
   "flex w-fit items-center justify-between gap-1.5 rounded-md border border-input bg-transparent py-2 pr-2 pl-2.5 text-sm whitespace-nowrap shadow-xs transition-[color,box-shadow] outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-input/30 dark:hover:bg-input/50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4";
 

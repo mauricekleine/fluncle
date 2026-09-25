@@ -9,12 +9,6 @@ import { type Client } from "@libsql/client/web";
 import { type Catalogue } from "./lib";
 import { ARTIST_REFERENCES, main, planMerge, reconcile, referenceStatements } from "./merge-artist";
 
-// The duplicate-row merge TOUCHES PRODUCTION — it deletes an `artists` row and re-points every
-// reference to it — so nothing here may reach a real database. These drive a recording stub of the
-// libSQL `Client` and pin the rails that decide whether the tool can do damage: the FINDINGS rule
-// (both faces), the same-row aborts, that a dry-run performs ZERO writes, that no TRACK is ever
-// deleted, and — the load-bearing one — that EVERY table referencing `artists.id` is settled.
-
 type Row = Record<string, unknown>;
 type Statement = { args?: unknown; sql: string };
 
@@ -24,11 +18,8 @@ type Stub = {
   executed: string[];
 };
 
-/** Every statement that could change the database. A dry-run must issue none of these. */
 const isWrite = (sql: string): boolean => /^\s*(delete|insert|replace|update)\b/i.test(sql);
 
-// Redirect the rollback snapshot before ANY test runs — in a real run that file is verbatim
-// production rows, and the script defaults `PRUNE_OUT_DIR` to `.`.
 const PRUNE_OUT_DIR = mkdtempSync(join(tmpdir(), "merge-artist-"));
 process.env.PRUNE_OUT_DIR = PRUNE_OUT_DIR;
 
@@ -61,7 +52,6 @@ function stub(rowsFor: (sql: string) => Row[] | undefined = () => undefined): St
         return { rows: override, rowsAffected: 1 };
       }
 
-      // The two reads `main` cannot run without: the artists rows, and the hub-count census.
       if (/from artists where id = \?/.test(sql)) {
         const row = ARTIST_ROWS[String(args[0])];
 
@@ -107,10 +97,6 @@ function catalogue(spec: Spec): Catalogue {
   };
 }
 
-/**
- * The live duplicate pair, in miniature: `orion` and `orion-2` are the same act, they SHARE
- * `t_shared`, and each carries tracks the other does not.
- */
 const duplicated = (db: Client, opts: { findingTrackIds?: string[] } = {}) =>
   catalogue({
     artists: [
@@ -157,7 +143,6 @@ async function run(argv: string[], cat: Catalogue): Promise<{ code: number; out:
   }
 }
 
-/** Every statement the run would send, `execute` and `batch` alike, whitespace-normalised. */
 const writes = (s: Stub): string[] =>
   [...s.executed, ...s.batches.flatMap((b) => b.stmts.map((st) => st.sql))]
     .filter(isWrite)
@@ -168,7 +153,7 @@ describe("planMerge", () => {
     const plan = planMerge(duplicated(stub().client), "A_CANON", "A_DUP");
 
     expect(plan.movedTrackIds.sort()).toEqual(["t_dup1", "t_dup2"]);
-    // The track BOTH rows credit is a double edge — it collapses, it does not move.
+
     expect(plan.collapsedTrackIds).toEqual(["t_shared"]);
   });
 
@@ -177,7 +162,7 @@ describe("planMerge", () => {
 
     expect(plan.movedTrackIds).not.toContain("t_canon_only");
     expect(plan.collapsedTrackIds).not.toContain("t_canon_only");
-    // …and neither is a third artist's track.
+
     expect([...plan.movedTrackIds, ...plan.collapsedTrackIds]).not.toContain("t_other");
   });
 });
@@ -201,8 +186,6 @@ describe("the findings rule", () => {
       "A_DUP",
     );
 
-    // Both rows sit on the track, so the merge only collapses a double credit and the finding's
-    // artist page is unchanged. Nothing moves, so there is nothing to rule on.
     expect(plan.findingBlockerTrackIds).toEqual([]);
     expect(plan.findingInheritedTrackIds).toEqual(["t_shared"]);
   });
@@ -306,7 +289,7 @@ describe("the dry run", () => {
     expect(out).toContain("DRY RUN — nothing written");
     expect(writes(s)).toEqual([]);
     expect(s.batches).toEqual([]);
-    // The report is real work, not a guess: every reference was counted against the database.
+
     for (const ref of ARTIST_REFERENCES) {
       expect(s.executed.some((sql) => sql.includes(`select * from ${ref.table}`))).toBe(true);
     }
@@ -336,9 +319,9 @@ describe("--confirm", () => {
     expect(code).toBe(0);
     expect(s.batches).toHaveLength(1);
     expect(s.batches[0]?.mode).toBe("write");
-    // Statement 0 frees the duplicate's UNIQUE slug + spotify_artist_id before anything adopts them.
+
     expect(s.batches[0]?.stmts[0]?.sql).toBe("delete from artists where id = ?");
-    // A MERGE MOVES CREDIT. It must never destroy catalogue rows — that is what makes it reversible.
+
     expect(writes(s).some((sql) => /delete from tracks\b/.test(sql))).toBe(false);
     expect(writes(s).some((sql) => /delete from albums\b/.test(sql))).toBe(false);
   });
@@ -366,7 +349,7 @@ describe("--confirm", () => {
 
     const hub = s.batches[0]?.stmts.find((st) => /renderable_track_count = max/.test(st.sql));
     expect(hub).toBeDefined();
-    // The stubbed census answers 2 renderable / 0 certified — the two tracks that actually move.
+
     expect(hub?.args).toEqual([2, 0, "A_CANON"]);
   });
 
@@ -393,7 +376,7 @@ describe("--confirm", () => {
 
     const w = writes(s);
     expect(w).toContain("delete from artist_socials where artist_id = ?");
-    // The re-point is gone — a different act's MB-sourced links never reach the survivor.
+
     expect(w).not.toContain(
       "update or ignore artist_socials set artist_id = ? where artist_id = ?",
     );
@@ -413,7 +396,7 @@ describe("the repoint-only shape (--canonical + --set-mbid, no --duplicate)", ()
     expect(code).toBe(0);
     expect(out).toContain("IDENTITY REPOINT (no merge)");
     expect(out).toContain("touches IDENTITY ONLY");
-    // A repoint reads no reference table at all — there is no duplicate to sweep.
+
     for (const ref of ARTIST_REFERENCES) {
       expect(s.executed.some((sql) => sql.includes(`select * from ${ref.table}`))).toBe(false);
     }
@@ -432,7 +415,7 @@ describe("the repoint-only shape (--canonical + --set-mbid, no --duplicate)", ()
     expect(stmts).toHaveLength(1);
     expect(stmts[0]?.sql).toContain("update artists set");
     expect(stmts[0]?.args).toContain("mb-real");
-    // The row it was asked about is the ONLY row it may touch.
+
     expect(writes(s).some((sql) => sql.startsWith("delete from"))).toBe(false);
     expect(writes(s).some((sql) => /insert into artist_aliases/.test(sql))).toBe(false);
     expect(writes(s).some((sql) => /renderable_track_count/.test(sql))).toBe(false);
@@ -492,7 +475,7 @@ describe("reconcile", () => {
     expect(set.image_key).toBe("k");
     expect(set.image_source).toBe("spotify");
     expect(set.image_state).toBe("resolved");
-    // A stored key under a `pending` state would be re-walked by the image sweep — hence the group.
+
     expect(set.image_updated_at).toBe("t");
   });
 
@@ -504,7 +487,7 @@ describe("reconcile", () => {
     );
 
     expect(set.mbid).toBe("the-real-one");
-    // The duplicate's stamp belongs to the OLD identity, so the re-walk wins.
+
     expect(set.resolved_at).toBeNull();
     expect(filled).not.toContain("resolved_at");
   });
@@ -516,18 +499,6 @@ describe("reconcile", () => {
   });
 });
 
-// ── THE COMPLETENESS PROOF ───────────────────────────────────────────────────────────────────────
-//
-// The merge's one non-negotiable invariant: after it runs, NO row anywhere still references the
-// deleted duplicate. That holds only while `ARTIST_REFERENCES` lists every table carrying an
-// `artists.id` — and a schema that grows, or a careless edit, silently breaks it.
-//
-// `REFERENCING_COLUMNS` below is the INDEPENDENT ground truth, transcribed from
-// apps/web/src/db/schema.ts and re-verified against the live production schema (2026-07-27) by
-// scanning `sqlite_master` for every `%artist%` column plus every `entity_id` column. It is
-// deliberately a SECOND copy: delete an entry from `ARTIST_REFERENCES` in the tool and both tests
-// below fail — the coverage check because the map no longer spans the truth, and the sweep check
-// because the emitted batch no longer clears that table.
 const REFERENCING_COLUMNS = [
   "track_artists.artist_id",
   "artist_socials.artist_id",
@@ -572,7 +543,6 @@ describe("re-point completeness", () => {
       "A_DUP",
     );
 
-    // Without it a merge would re-point a LABEL watch that happens to share the artist's uuid.
     expect(stmts).toHaveLength(2);
     for (const st of stmts) {
       expect(st.sql).toContain(`kind = 'artist'`);

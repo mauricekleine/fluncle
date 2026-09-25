@@ -1,6 +1,5 @@
 #!/usr/bin/env bun
-// Tests for the audit domain rotation — the pure selector the 1am driver leans on.
-// Run: bun test docs/agents/hermes/scripts/audit/rotation.test.ts
+
 import { describe, expect, it } from "bun:test";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
@@ -19,7 +18,7 @@ describe("domainForDate", () => {
     for (let i = 0; i < DOMAINS.length; i++) {
       seq.push(domainForDate(new Date(Date.UTC(2026, 5, 1 + i))));
     }
-    // DOMAINS.length consecutive days hit that many distinct domains — the full cycle, no repeat.
+
     expect(new Set(seq).size).toBe(DOMAINS.length);
   });
 
@@ -32,7 +31,7 @@ describe("domainForDate", () => {
   it("stays continuous across the year boundary (no day-of-year reset jump)", () => {
     const dec31 = domainForDate(new Date(Date.UTC(2026, 11, 31)));
     const jan1 = domainForDate(new Date(Date.UTC(2027, 0, 1)));
-    // Consecutive days must be adjacent in the cycle — never the same, never a jump.
+
     const i1 = DOMAINS.indexOf(dec31);
     const i2 = DOMAINS.indexOf(jan1);
     expect(i2).toBe((i1 + 1) % DOMAINS.length);
@@ -61,9 +60,6 @@ describe("catalog integrity", () => {
     }
   });
 
-  // The driver (audit-sweep.sh) resolves the brief as prompts/<domain>.md and BAILS when it is
-  // missing — a domain added without its brief would silently skip that night. Pin all three
-  // steps of the add together.
   it("has a prompt brief for every domain", () => {
     for (const key of DOMAINS) {
       expect(existsSync(join(import.meta.dir, "prompts", `${key}.md`))).toBe(true);

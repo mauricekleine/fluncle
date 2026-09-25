@@ -1,30 +1,7 @@
-// The show orchestrator — Unit T of the live longform RFC.
-//
-// One command brings the whole rig up in order: pre-flight the audio + disk +
-// ports, raise the bridge and wait for it to answer, raise the glass, then put
-// the pinned Chromium on the show display in fullscreen with `caffeinate`
-// holding the machine awake beside it. SIGINT tears the whole thing back down.
-//
-// It integrates with Units L (the glass) and B (the bridge) ONLY through
-// `contract.ts` — the shared ports and the /plan + /state health surfaces. It
-// never imports their source, so all three units build in parallel.
-//
-// Canonical invocation: `bun run --cwd packages/live show`. This is a LOCAL
-// orchestration (it spawns Chromium and holds `caffeinate`), not an HTTP call,
-// so it deliberately does NOT live on the `fluncle` CLI — that surface is a thin
-// HTTP client (AGENTS.md). The naming-registry ruling for `run_show` is recorded
-// in docs/naming-conventions.md and docs/live-show-setup.md.
-//
-// Voice: a recovered terminal from a research vessel (VOICE.md, SSH register).
-// Status tokens are deadpan machine states — [clear] verified, [hold] a blocker,
-// [dark] unreadable here — never a traffic light.
-
 import net from "node:net";
 import { basename, resolve } from "node:path";
 
 import { BRIDGE_PORT, BRIDGE_WS_PATH, GLASS_PORT } from "./contract";
-
-// ── Config ───────────────────────────────────────────────────────────────────
 
 const PKG_ROOT = resolve(import.meta.dir, "..");
 const BRIDGE_ENTRY = resolve(PKG_ROOT, "src/bridge/serve.ts");
@@ -33,9 +10,8 @@ const GLASS_URL = `http://localhost:${GLASS_PORT}`;
 const BRIDGE_PLAN_URL = `http://localhost:${BRIDGE_PORT}/plan`;
 const BRIDGE_WS_URL = `ws://localhost:${BRIDGE_PORT}${BRIDGE_WS_PATH}`;
 
-// Disk floor: the RFC's ~40 GB headroom for a full set recording (§5).
 const DISK_FLOOR_GB = 40;
-// The whole chain is locked to 48 kHz (getUserMedia + OBS + Rekordbox).
+
 const REQUIRED_SAMPLE_RATE = 48_000;
 
 type Options = {
@@ -133,14 +109,11 @@ Once up: press Enter to confirm the glass is on the show display, 'p' to
 re-place it (display IDs reorder on reconnect), 'p N' to re-place on display N,
 or 'q' to stand the rig down. The full runbook is docs/live-show-setup.md.`;
 
-// ── Voice-carrying status lines ──────────────────────────────────────────────
-
 type CheckStatus = "clear" | "hold" | "dark";
 
 type CheckResult = { status: CheckStatus; note: string };
 
 function line(status: CheckStatus, label: string, note: string): void {
-  // No colour, no traffic light — a recovered terminal reads in plain glyphs.
   const token = status === "clear" ? "[clear]" : status === "hold" ? "[hold] " : "[dark] ";
   console.log(`  ${token} ${label.padEnd(22)} ${note}`);
 }
@@ -149,16 +122,8 @@ function say(text: string): void {
   console.log(text);
 }
 
-// ── Pre-flight checks ────────────────────────────────────────────────────────
-
 type RunResult = { ok: boolean; stdout: string; stderr: string; timedOut: boolean };
 
-/**
- * Run a command, capture stdout+stderr, never throw (a missing binary is
- * [dark], not a crash) and never hang: on timeout it SIGKILLs — a blocked
- * ffmpeg avfoundation read ignores SIGTERM, so the polite signal would wedge
- * the whole orchestrator.
- */
 async function run(cmd: string[], timeoutMs = 8_000): Promise<RunResult> {
   const bin = cmd[0];
   if (bin === undefined || Bun.which(bin) === null) {
@@ -169,7 +134,7 @@ async function run(cmd: string[], timeoutMs = 8_000): Promise<RunResult> {
     let timedOut = false;
     const timer = setTimeout(() => {
       timedOut = true;
-      proc.kill(9); // SIGKILL — a wedged capture won't answer anything softer
+      proc.kill(9);
     }, timeoutMs);
     const [stdout, stderr, exitCode] = await Promise.all([
       new Response(proc.stdout).text(),
@@ -183,7 +148,6 @@ async function run(cmd: string[], timeoutMs = 8_000): Promise<RunResult> {
   }
 }
 
-/** Is a TCP port already held? (connect succeeds ⇒ occupied.) */
 function portOccupied(port: number): Promise<boolean> {
   return new Promise((resolvePort) => {
     const socket = net.connect({ host: "127.0.0.1", port });
@@ -197,7 +161,6 @@ function portOccupied(port: number): Promise<boolean> {
   });
 }
 
-/** Audio input present + the meter actually bounces over 3s (the automated meter-bounce). */
 async function checkAudio(audioIndex: number): Promise<CheckResult> {
   const list = await run([
     "ffmpeg",
@@ -214,20 +177,14 @@ async function checkAudio(audioIndex: number): Promise<CheckResult> {
   }
   const audioDevices = [
     ...list.stderr.matchAll(/\[AVFoundation[^\]]*\]\s+\[(\d+)\]\s+(.+)/g),
-  ].filter((m) =>
-    // avfoundation lists video devices first, then audio, under one banner;
-    // an audio device line appears after the "AVFoundation audio devices" header.
-    list.stderr.slice(0, m.index ?? 0).includes("audio devices"),
-  );
+  ].filter((m) => list.stderr.slice(0, m.index ?? 0).includes("audio devices"));
   if (audioDevices.length === 0) {
     return {
       note: "no avfoundation audio device answered — running dark (no capture rig here?)",
       status: "dark",
     };
   }
-  // Auto-select the rig's input by name when the operator didn't pin an index —
-  // the same preference order the glass uses. An Aggregate Device is never
-  // auto-picked (the forbidden route: it starves the real input and reads dead).
+
   if (audioIndex < 0) {
     const byName = (re: RegExp) =>
       audioDevices.find((m) => re.test(m[2] ?? "") && !/aggregate/i.test(m[2] ?? ""));
@@ -238,14 +195,7 @@ async function checkAudio(audioIndex: number): Promise<CheckResult> {
       audioDevices[0];
     audioIndex = Number(pick?.[1] ?? 0);
   }
-  // Capture ~3s and read the level with volumedetect: it prints ONE easy-to-parse summary
-  // (`mean_volume: X dB` / `max_volume: X dB`) at EOF. The old astats parse looked for
-  // `Overall.RMS_level=` — the METADATA-print format, which `astats=metadata=1` attaches to
-  // frames but never PRINTS without an `ametadata` filter — so it always read zero matches
-  // and reported [dark] "meter unread" even when frames flowed (the first-set symptom). A
-  // live input clocks frames (silence still summarizes, ≈ −91 dB); a dead route delivers NO
-  // frames, so volumedetect never summarizes and the capture wedges — the SIGKILL-on-timeout
-  // in run() catches that, and interpretMeter reads it as a dead route, not a hang.
+
   const cap = await run(
     [
       "ffmpeg",
@@ -267,19 +217,8 @@ async function checkAudio(audioIndex: number): Promise<CheckResult> {
   return interpretMeter(cap, audioIndex);
 }
 
-/** dB at or below which a capture is "silent" — a connected-but-not-playing route. */
 const METER_SILENCE_FLOOR_DB = -70;
 
-/**
- * Read the meter verdict from an ffmpeg `volumedetect` capture. Pure over the captured
- * stderr + the timeout flag, so it unit-tests against real fixture stderr. Four outcomes,
- * each its OWN message (the debrief wanted these disentangled):
- *   - a level above the floor              → [clear] route alive AND carrying signal;
- *   - a level at/below the floor (≈ −91 dB) → [hold] route alive, signal silent (is music
- *     playing?) — distinct from a dead route;
- *   - no summary + the capture wedged      → [hold] dead route, no frames in 3s;
- *   - no summary, capture returned         → [dark] can't-open (device error) or unread.
- */
 export function interpretMeter(
   cap: { stderr: string; timedOut: boolean },
   audioIndex: number,
@@ -325,16 +264,8 @@ export function interpretMeter(
   };
 }
 
-/** One audio device + its current sample rate, from `system_profiler -json SPAudioDataType`. */
 export type AudioDevice = { name: string; sampleRate: number };
 
-/**
- * Parse `system_profiler -json SPAudioDataType` into { name, sampleRate } pairs — the
- * device name lives at `SPAudioDataType[]._items[]._name`, its rate at
- * `coreaudio_device_srate`. Pure, so the 44.1 kHz-offender NAMING is unit-tested against a
- * fixture. Tolerant of a shapeless / non-JSON body (returns []), so a parse miss degrades
- * to "unread" rather than throwing.
- */
 export function parseAudioDevices(json: string): AudioDevice[] {
   let parsed: unknown;
   try {
@@ -364,7 +295,6 @@ export function parseAudioDevices(json: string): AudioDevice[] {
   return out;
 }
 
-/** Best-effort: every audio device is at 48 kHz; NAME the offenders so the hold is actionable. */
 async function checkSampleRate(): Promise<CheckResult> {
   const prof = await run(["system_profiler", "-json", "SPAudioDataType"]);
   if (prof.stderr.includes("no system_profiler aboard") || prof.stdout.length === 0) {
@@ -391,7 +321,6 @@ async function checkSampleRate(): Promise<CheckResult> {
   };
 }
 
-/** Disk headroom on the volume holding this checkout (the recording lands near here). */
 async function checkDisk(): Promise<CheckResult> {
   const df = await run(["df", "-k", PKG_ROOT]);
   if (!df.ok) {
@@ -399,7 +328,7 @@ async function checkDisk(): Promise<CheckResult> {
   }
   const dataLine = df.stdout.trim().split("\n").at(-1) ?? "";
   const cols = dataLine.split(/\s+/);
-  // df -k columns: filesystem, 1K-blocks, used, avail, ... (avail is index 3).
+
   const availKb = Number(cols[3]);
   if (!Number.isFinite(availKb)) {
     return { note: "disk headroom unread", status: "dark" };
@@ -413,7 +342,6 @@ async function checkDisk(): Promise<CheckResult> {
       };
 }
 
-/** The glass + bridge ports must be free for us to raise them. */
 async function checkPorts(): Promise<CheckResult> {
   const [glassHeld, bridgeHeld] = await Promise.all([
     portOccupied(GLASS_PORT),
@@ -434,7 +362,6 @@ async function checkPorts(): Promise<CheckResult> {
       };
 }
 
-/** Returns true if the rig is clear to depart (no [hold]). */
 async function preflight(opts: Options): Promise<boolean> {
   say("\npre-flight — reading the rig\n");
   const results: CheckResult[] = [];
@@ -472,8 +399,6 @@ async function preflight(opts: Options): Promise<boolean> {
   return true;
 }
 
-// ── The processes ────────────────────────────────────────────────────────────
-
 type Child = { name: string; proc: Bun.Subprocess };
 
 const children: Child[] = [];
@@ -492,9 +417,7 @@ async function waitForHttp(url: string, label: string, timeoutMs = 20_000): Prom
       if (res.ok) {
         return true;
       }
-    } catch {
-      // not up yet
-    }
+    } catch {}
     await Bun.sleep(300);
   }
   say(`  [hold]  ${label} never answered at ${url} (${timeoutMs / 1000}s)`);
@@ -533,13 +456,6 @@ function waitForSocket(url: string, timeoutMs = 8_000): Promise<boolean> {
   });
 }
 
-// ── Chromium placement (JXA reads the displays; System Events moves the window) ─
-
-/**
- * Resolve a `FLUNCLE_CHROMIUM` value to the executable we spawn + the process name
- * AppleScript drives. Accepts BOTH a `.app` bundle and a bare binary path — the same
- * two shapes the bridge supervisor honours — so one env value pins both launch paths.
- */
 function resolveChromiumEnv(value: string): { bin: string; procName: string } {
   const trimmed = value.replace(/\/+$/, "");
   if (trimmed.endsWith(".app")) {
@@ -549,12 +465,6 @@ function resolveChromiumEnv(value: string): { bin: string; procName: string } {
   return { bin: trimmed, procName: basename(trimmed) };
 }
 
-/**
- * Locate the Chromium to drive. `FLUNCLE_CHROMIUM` wins first — the same binary the
- * bridge supervisor relaunches — so the initial launch and every watchdog relaunch
- * agree; otherwise fall to a pinned Chromium, then Google Chrome (auto-updating —
- * fine for rehearsal, not the show-night rail; see docs/live-show-setup.md).
- */
 function findChromium(): { bin: string; procName: string } | undefined {
   const pinned = process.env.FLUNCLE_CHROMIUM;
   const candidates: Array<{ bin: string; procName: string }> = [];
@@ -581,7 +491,6 @@ function existsSync(path: string): boolean {
 
 type DisplayFrame = { x: number; y: number; w: number; h: number };
 
-/** Enumerate NSScreen frames via JXA (no extra deps). Empty on a headless box. */
 async function readDisplays(): Promise<DisplayFrame[]> {
   const jxa =
     'ObjC.import("AppKit"); const s = $.NSScreen.screens; const out = []; ' +
@@ -599,18 +508,13 @@ async function readDisplays(): Promise<DisplayFrame[]> {
   }
 }
 
-/**
- * Place the Chromium window on the chosen display and fullscreen it. NSScreen
- * frames are bottom-left origin; the Accessibility window position wants
- * top-left origin, so we flip against the main display's height.
- */
 async function placeGlass(procName: string, displayIndex: number | undefined): Promise<void> {
   const displays = await readDisplays();
   if (displays.length === 0) {
     say("  [dark]  no displays read (headless?) — place the glass by hand, then fullscreen it");
     return;
   }
-  const index = displayIndex ?? displays.length - 1; // default: the last display
+  const index = displayIndex ?? displays.length - 1;
   const target = displays[index];
   if (target === undefined) {
     say(`  [hold]  display ${index} does not exist (${displays.length} attached, 0-indexed)`);
@@ -618,7 +522,7 @@ async function placeGlass(procName: string, displayIndex: number | undefined): P
   }
   const mainHeight = displays[0]?.h ?? target.h;
   const axX = Math.round(target.x);
-  const axY = Math.round(mainHeight - (target.y + target.h)); // flip to top-left origin
+  const axY = Math.round(mainHeight - (target.y + target.h));
   const applescript = [
     `tell application "System Events" to tell process "${procName}"`,
     "  set frontmost to true",
@@ -637,7 +541,6 @@ async function placeGlass(procName: string, displayIndex: number | undefined): P
 }
 
 function launchChromium(bin: string): Bun.Subprocess {
-  // The RFC §3 flags: no throttling of a backgrounded/occluded show, own profile.
   const profileDir = resolve(PKG_ROOT, ".show-profile");
   const proc = Bun.spawn(
     [
@@ -659,8 +562,6 @@ function launchChromium(bin: string): Bun.Subprocess {
   return proc;
 }
 
-// ── Teardown ─────────────────────────────────────────────────────────────────
-
 let tearingDown = false;
 
 function teardown(reason: string): void {
@@ -672,20 +573,16 @@ function teardown(reason: string): void {
   for (const child of [...children].reverse()) {
     try {
       child.proc.kill();
-    } catch {
-      // already gone
-    }
+    } catch {}
   }
   say("  the glass is dark. caffeinate released. crew stood down.");
   process.exit(0);
 }
 
-// ── The interactive placement loop (Enter confirms, 'p' re-places, 'q' quits) ──
-
 function watchStdin(procName: string, initialIndex: number | undefined): void {
   if (!process.stdin.isTTY) {
     return;
-  } // non-interactive (a dry parse) — nothing to read
+  }
   let index = initialIndex;
   process.stdin.setEncoding("utf8");
   process.stdin.on("data", (chunk: string) => {
@@ -712,8 +609,6 @@ function watchStdin(procName: string, initialIndex: number | undefined): void {
     say("  keys: Enter confirm · p re-place · p N re-place on display N · q stand down");
   });
 }
-
-// ── Main ─────────────────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
   let opts: Options;
@@ -753,7 +648,6 @@ async function main(): Promise<void> {
   process.on("SIGINT", () => teardown("SIGINT"));
   process.on("SIGTERM", () => teardown("SIGTERM"));
 
-  // caffeinate holds display + system + idle awake for the whole show.
   if (Bun.which("caffeinate") !== null) {
     children.push({
       name: "caffeinate",
@@ -764,7 +658,6 @@ async function main(): Promise<void> {
     say("\n  [dark]  no caffeinate aboard — keep the machine from sleeping by hand");
   }
 
-  // The bridge: raise it, wait for /plan then the state socket.
   say("\nraising the bridge");
   const bridgeArgs = ["bun", BRIDGE_ENTRY];
   if (opts.plan !== undefined) {
@@ -787,7 +680,6 @@ async function main(): Promise<void> {
     }
   }
 
-  // The glass: raise it, wait for the page.
   say("\nraising the glass");
   spawnChild("glass", ["bun", GLASS_ENTRY], PKG_ROOT);
   const glassUp = await waitForHttp(GLASS_URL, "the glass");
@@ -798,7 +690,6 @@ async function main(): Promise<void> {
     line("clear", "glass", `serving at ${GLASS_URL}`);
   }
 
-  // Chromium on the show display.
   if (opts.noBrowser) {
     say(`\n  --no-browser: open ${GLASS_URL} yourself, fullscreen, on the show display.`);
   } else {
@@ -808,7 +699,7 @@ async function main(): Promise<void> {
       say("  [hold]  no Chromium or Chrome found — install one, or open the URL by hand");
     } else {
       launchChromium(chromium.bin);
-      await Bun.sleep(2_500); // let the window exist before we drive it
+      await Bun.sleep(2_500);
       await placeGlass(chromium.procName, opts.displayIndex);
       say("");
       say(
@@ -824,14 +715,9 @@ async function main(): Promise<void> {
   );
   say("Ctrl-C stands the whole rig down.\n");
 
-  // Hold the process open, supervising the children, until a signal.
-  await new Promise<void>(() => {
-    /* runs until SIGINT/SIGTERM/teardown */
-  });
+  await new Promise<void>(() => {});
 }
 
-// Only orchestrate when run as the entrypoint — importing this module (the pure-parser
-// tests do) must NOT spawn Chromium / caffeinate / the servers.
 if (import.meta.main) {
   void main();
 }

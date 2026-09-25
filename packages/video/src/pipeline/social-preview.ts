@@ -1,14 +1,3 @@
-// Entry point for the local social-preview pipeline.
-//
-//   bun src/pipeline/social-preview.ts <trackId|logId> [--skip-render] [--composition <Id>] [--composition-source <file>] [--duration-ms <10000-30000>] [--draft] [--no-overlay] [--aspect <portrait|landscape|square>] [--landscape]
-//
-// The positional id is a Spotify trackId or a Log ID (e.g. 004.6.0K) — the
-// latter lets you re-render an older clip that's aged out of the feed window.
-//
-// fetch track -> resolve preview -> download + normalize -> analyze audio ->
-// extract palette -> assemble inputProps -> write out/<trackId>.props.json ->
-// (unless --skip-render) bundle + render out/<trackId>.mp4.
-
 import { existsSync } from "node:fs";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -29,7 +18,6 @@ const OUT_DIR = path.resolve(import.meta.dirname, "../../out");
 const PACKAGE_ROOT = path.resolve(import.meta.dirname, "../..");
 const REMOTION_DIR = path.resolve(import.meta.dirname, "../remotion");
 
-/** Stable, deterministic 32-bit hash of a string -> non-negative integer seed. */
 function stableSeed(value: string): number {
   let h = 2166136261;
   for (let i = 0; i < value.length; i++) {
@@ -55,8 +43,6 @@ async function extractSwatches(artworkUrl: string | undefined): Promise<string[]
 }
 
 function findCompositionSource(compositionId: string): string | undefined {
-  // The composition id IS its workbench filename (root.tsx auto-registers
-  // `workbench/<id>.tsx`). That deterministic path is the source.
   const workbenchPath = path.join(REMOTION_DIR, "workbench", `${compositionId}.tsx`);
   if (existsSync(workbenchPath)) {
     return workbenchPath;
@@ -108,9 +94,6 @@ function socialPreviewOptions() {
 }
 
 async function main(): Promise<void> {
-  // Flag parsing swapped to the shared args.ts parser (also used by ship.ts) so
-  // `--flag <value>` handling can't drift between the two entrypoints. Same
-  // flags, same semantics as before.
   const {
     aspect,
     compositionId,
@@ -121,24 +104,7 @@ async function main(): Promise<void> {
     skipRender,
     trackId,
   } = socialPreviewOptions();
-  // --draft renders a fast, half-res, NON-SHIPPABLE proof (out/<trackId>.draft.mp4)
-  // for checking direction + motion + reactivity (and running the beat-pull gate)
-  // before the slow ship render. See render.ts.
-  // --composition <Id> selects a registered composition. The video agent authors
-  // a temporary per-track composition and renders it through this flag.
-  // --composition-source <file> records the exact source used for the render so
-  // ship can package it as out/<log-id>/composition.tsx and upload it to R2.
-  // --duration-ms lets the agent pick the clip length from the waveform (end on
-  // a drop or just before a transition); 20s default, clamped to the contract.
-  // --no-overlay renders the text-free cut (radio.fluncle.com): the scene shader
-  // with NO baked-in TypePlate/CloseCard, so a host UI can draw its own metadata
-  // over clean footage. Threaded as props.hideOverlay (gated inside the
-  // primitives via getInputProps, so no composition edit is needed).
-  // --aspect <portrait|landscape|square> (or the --landscape shorthand) selects
-  // the output dimensions. Portrait (1080×1920) stays the default; landscape
-  // (1920×1080) is the radio full-screen cut; square (1920×1920) is the clean
-  // source master MT crops to either orientation on the fly — the 9:16 shaders
-  // reflow under landscape/square.
+
   if (!skipRender && !compositionId) {
     throw new Error(
       "[social-preview] rendering now requires --composition <Id>; generated compositions are shipped as output artifacts, not kept in the codebase",
@@ -151,11 +117,6 @@ async function main(): Promise<void> {
   const track = await fetchTrack(trackId);
   console.log(`[social-preview] track: "${track.title}" by ${track.artists.join(", ")}`);
 
-  // Surface the finding's distilled context_note as CREATIVE FUEL (direction only,
-  // NEVER on-screen text — on-screen facts stay Spotify-sourced). The note is
-  // internal (admin-gated), so we read it via the CLI exactly as the observe sweep
-  // does (`fluncle admin tracks context <id> --json`, no re-fetch). Best-effort:
-  // a missing CLI or an un-context'd finding degrades to no fuel, like `features`.
   const context = readContextNote(track.logId ?? trackId);
   if (context) {
     track.contextNote = context.contextNote;
@@ -169,12 +130,7 @@ async function main(): Promise<void> {
   }
 
   console.log(`[social-preview] resolving preview`);
-  // Prefer the R2 analysis archive (region-independent — the render-host path); fall
-  // back to the live search (region-gated) when there is no archive or no admin
-  // token in env (local dev). The live search is ISRC-FIRST: the finding's ISRC
-  // names the EXACT recording, so we pass it through and resolve Deezer by ISRC
-  // before any fuzzy artist+title search (which can pick the wrong recording — the
-  // original for a remix). See resolve-archived-preview.ts + resolve-preview.ts.
+
   const preview =
     (await resolveArchivedPreview(track.logId ?? trackId)) ??
     (await resolvePreview({ artists: track.artists, isrc: track.isrc, title: track.title }));
@@ -197,9 +153,6 @@ async function main(): Promise<void> {
     await rm(downloaded.tmpDir, { force: true, recursive: true });
   }
 
-  // Bounded audio cache: keep only the 8 most-recently-downloaded preview m4as
-  // in public/ — an opportunistic sweep so the cache doesn't grow unboundedly
-  // across a batch of tracks. Best-effort; never fatal to the run.
   try {
     const swept = await sweepPreviewAudioCache(8);
     if (swept.length > 0) {
@@ -220,16 +173,11 @@ async function main(): Promise<void> {
     palette,
     seed: stableSeed(trackId),
     track,
-    // Variant flags are written only when non-default so a normal portrait/overlay
-    // render produces the same props.json it always has.
+
     ...(hideOverlay ? { hideOverlay: true } : {}),
     ...(aspect !== "portrait" ? { aspect } : {}),
   };
 
-  // Variant renders write to suffixed files so they never clobber the canonical
-  // `<trackId>.{props.json,mp4}` portrait+overlay master that ship reads. `.notext`
-  // for the text-free cut, `.landscape` for the 16:9 cut, `.square` for the
-  // 1:1 crop source (combinable). An empty suffix is the unchanged default path.
   const aspectSuffix = aspect === "landscape" ? ".landscape" : aspect === "square" ? ".square" : "";
   const variantSuffix = `${hideOverlay ? ".notext" : ""}${aspectSuffix}`;
   const isVariant = variantSuffix.length > 0;
@@ -238,7 +186,6 @@ async function main(): Promise<void> {
   await writeFile(propsPath, JSON.stringify(inputProps, null, 2));
   console.log(`[social-preview] props -> ${propsPath}`);
 
-  // Summary + assertions.
   const summary = {
     accent: palette.accent,
     artists: track.artists,
@@ -263,8 +210,6 @@ async function main(): Promise<void> {
   };
   console.log(`[social-preview] summary:\n${JSON.stringify(summary, null, 2)}`);
 
-  // The BPM is never clamped into [160,185], because that fabricates grids. An out-of-family tempo
-  // or a weak estimate is a loud WARNING to verify by ear, never a failure.
   const bpmConfidence = audio.bpmConfidence ?? 0;
   if (audio.bpm < 150 || audio.bpm > 190) {
     console.warn(
@@ -308,10 +253,6 @@ async function main(): Promise<void> {
     console.log(`[social-preview] rendering -> ${outputPath}`);
     const result = await render(inputProps, outputPath, compositionId, { draft });
 
-    // Silence guard: the audio HOOKS only drive visuals — the composition must
-    // include <TrackAudio audio={audio} /> for the render to carry sound. Remotion
-    // always muxes an aac track, so silence is invisible to a stream check; measure
-    // the actual level and fail loudly if the clip is effectively silent.
     const { spawnSync } = await import("node:child_process");
     const probe = spawnSync(
       "ffmpeg",
@@ -330,8 +271,6 @@ async function main(): Promise<void> {
     console.log(`[social-preview] audio level ok (mean_volume ${meanVolume} dB)`);
 
     if (draft) {
-      // Verify-only: no render.json manifest (that's the ship pointer). Gate the
-      // draft directly — the beat-pull gate runs on any clip, half-res included.
       console.log(
         `[social-preview] DRAFT done -> ${outputPath} (NON-SHIPPABLE). Eyeball direction + motion, and gate it:\n  bun run --cwd packages/video detect-beat-pull ${path.relative(PACKAGE_ROOT, outputPath)}\nRun without --draft for the ship-quality master.`,
       );
@@ -339,18 +278,12 @@ async function main(): Promise<void> {
     }
 
     if (isVariant) {
-      // The text-free / landscape cuts are staging-only radio.fluncle.com variants:
-      // no render.json (that's the ship pointer for the canonical portrait master,
-      // and ship has no R2 key scheme for variants yet). Eyeball the suffixed file.
       console.log(
         `[social-preview] VARIANT done -> ${outputPath} (staging only; no ship pointer written).`,
       );
       return;
     }
 
-    // --composition-source is forgiving about cwd: a path given as cwd-relative,
-    // package-relative, or repo-root-relative all resolve. If omitted or wrong,
-    // the workbench filename is the source of record.
     const resolveGivenSource = (given: string): string | undefined => {
       for (const candidate of [
         path.resolve(given),

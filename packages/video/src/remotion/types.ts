@@ -1,9 +1,6 @@
-// Shared inputProps contract for the "NostalgicCosmos" composition.
-// Every producer (pipeline, Studio default props, CLI) must satisfy this shape.
-
 export type EnergySample = {
   timeMs: number;
-  /** Normalized 0..1 */
+
   energy: number;
 };
 
@@ -13,186 +10,95 @@ export type CosmosTrack = {
   artists: string[];
   album?: string;
   artworkUrl?: string;
-  /** ISO timestamp */
+
   discoveredAt: string;
   note?: string;
-  /**
-   * The finding's permanent coordinate in the Galaxy (a star designation),
-   * shown bare as `007.8.1B`; canonical URI is `fluncle://007.8.1B`. Recovered
-   * telemetry on the video stamp (VOICE.md §3/§6, DESIGN.md's Tabular Rule).
-   */
+
   logId?: string;
-  /** Track duration in ms (Spotify metadata). Optional telemetry. */
+
   durationMs?: number;
-  /** Record label (Spotify metadata). Authoritative, render-safe fact. */
+
   label?: string;
-  /**
-   * The recording's ISRC — the unique identifier for THIS exact recording (an
-   * original and its remix carry different ISRCs). Not rendered; it's the key the
-   * preview resolver uses to fetch the EXACT recording's audio (Deezer by ISRC)
-   * instead of fuzzy-matching by name, which can pick the wrong recording.
-   */
+
   isrc?: string;
-  /**
-   * Release date ("2015-12-18", Spotify metadata). Authoritative, render-safe;
-   * the on-screen plate shows only the YEAR (a catalog credit beside the label),
-   * kept distinct from Fluncle's own Found date.
-   */
+
   releaseDate?: string;
-  /**
-   * The finding's distilled `context_note` (firecrawl FACTS → a small LLM): 1–2
-   * dry paragraphs of scene/label/release context, ending in a `Texture:` line.
-   * CREATIVE FUEL — direction only, NEVER rendered as on-screen text (on-screen
-   * facts stay Spotify-sourced; see the fluncle-video skill §"Metadata must
-   * visibly matter"). Where `features` says HOW the track sounds, this says WHAT
-   * it evokes. Internal (admin-gated) — read via `fluncle admin tracks context`,
-   * not the public API. Absent until the track is context'd, so treat it as
-   * optional and degrade gracefully (like `features`).
-   */
+
   contextNote?: string;
-  /**
-   * The pointers parsed out of the context note's trailing `Texture:` line — the
-   * most direct creative fuel (e.g. ["orchestrated", "layered", "atmospheric
-   * depth"]). Steers the vehicle, texture family, palette lean, and scene concept;
-   * it INFORMS, never templates. Empty/absent when there is no context note.
-   */
+
   texture?: string[];
-  /**
-   * Enrichment's track-level spectral summary (creative fuel — steers the
-   * vehicle, texture, and which band drives what; NOT per-frame reactivity, that
-   * is the audio analysis). Absent until the track is enriched.
-   */
+
   features?: {
-    /** Spectral centroid in Hz — overall brightness (low = dark/warm, high = bright/airy). */
     centroidHz?: number;
-    /** Fraction of energy >5kHz — treble/air. 0..1. */
+
     highRatio?: number;
-    /** Spectral flatness of the mids — tonal (low) vs noisy (high). 0..1. */
+
     midFlatness?: number;
-    /** Onsets per second — rhythmic busyness. */
+
     onsetRate?: number;
-    /** Fraction of energy <120Hz — sub-bass weight. 0..1. */
+
     subBassRatio?: number;
   };
 };
 
 export type CosmosAudio = {
-  /** Filename inside packages/video/public/ for staticFile() */
   file: string;
   startMs: number;
-  /** Clip length, 10000-30000; 20s default, agent-overridable via --duration-ms */
+
   durationMs: number;
   bpm: number;
-  /**
-   * 0..1 confidence in `bpm` (autocorrelation peak prominence + harmonic-comb
-   * agreement). `bpm` is HONEST — never clamped into the D&B family — so a low
-   * confidence or an out-of-family tempo is a signal to verify by ear, not a
-   * failure. Optional so old props.json on disk still typecheck.
-   */
+
   bpmConfidence?: number;
-  /** ms offsets relative to clip start */
+
   beatGrid: number[];
-  /**
-   * Bar downbeats (every 4th beat at the kick-scored bar phase), ms relative to
-   * clip start. Optional so old props.json still typecheck (missing reads as no
-   * downbeat pulse, matching prior behaviour).
-   */
+
   downbeats?: number[];
-  /** ms offsets relative to clip start */
+
   onsets: number[];
-  /**
-   * The primary detected drop (quiet-breakdown→loud-slam novelty, re-entry-flux
-   * weighted), ms relative to clip start. The drop envelope's default peak when
-   * present (explicit reactivity config still wins). Absent when the clip window
-   * carries no confident drop.
-   */
+
   dropMs?: number;
-  /**
-   * All scored drop candidates in the clip window, score-descending; `score` is
-   * the 0..1 window-normalized novelty. Fuel for choosing an alternate climax.
-   */
+
   dropCandidates?: { timeMs: number; score: number }[];
   energyCurve: EnergySample[];
-  /** Low band, <150Hz (kick/sub). 0..1, normalized. */
+
   bassCurve: EnergySample[];
-  /** Mid band, 150Hz-2kHz (lead/vocal/snare body). 0..1, normalized. */
+
   midCurve: EnergySample[];
-  /** High band, >2kHz (hats/cymbals/air). 0..1, normalized. */
+
   trebleCurve: EnergySample[];
-  /**
-   * Continuous transient/attack (flux) envelope, 0..1 — the half-wave band-delta
-   * "shimmer" between onsets. Optional so old props.json on disk + Studio defaults
-   * still typecheck (a missing curve reads 0, today's behaviour).
-   */
+
   fluxCurve?: EnergySample[];
-  /**
-   * Sub weight, <60Hz — the low-end floor under the kick. 0..1, shared-normalized
-   * with kick/snare/air (cross-band loudness survives). Optional like fluxCurve.
-   */
+
   subCurve?: EnergySample[];
-  /**
-   * Kick punch, 60-150Hz with the attack transient emphasized — the strike, not
-   * the sustained body. 0..1, shared-normalized with sub/snare/air. Optional.
-   */
+
   kickCurve?: EnergySample[];
-  /**
-   * Snare crack/presence, 2-5kHz, transient-emphasized. 0..1, shared-normalized
-   * with sub/kick/air. Optional like fluxCurve.
-   */
+
   snareCurve?: EnergySample[];
-  /**
-   * Air/sparkle, >5kHz (hat tails, cymbal wash, vinyl hiss). 0..1,
-   * shared-normalized with sub/kick/snare. Optional like fluxCurve.
-   */
+
   airCurve?: EnergySample[];
-  /** Pre-normalization per-band crest factor; lets the motion checker tell a flat track from a normalizer-flattened one. */
+
   rawDynamicsHint?: { bass: number; mid: number; treble: number };
 };
 
 export type CosmosPalette = {
-  /** Warm near-black field (Warm Dark Rule). */
   background: string;
-  /** Type-safe scene ink (cream-family). The only palette role meant for text. */
+
   ink: string;
-  /**
-   * The vehicle's heat accent — the artwork's OWN most-chromatic swatch,
-   * scene-led (no gold lean). LIGHT MATERIAL for shaders/glows, never type ink.
-   * For type emphasis, pick from `swatches` or derive from the scene.
-   */
+
   accent: string;
-  /** The scene's hot light — the accent lifted toward the brightest swatch. Light material, never type ink. */
+
   glow: string;
-  /** Artwork-derived hexes */
+
   swatches: string[];
 };
 
-/**
- * Render aspect. `portrait` is the unchanged 1080×1920 default (every clip to
- * date). `landscape` is 1920×1080 for the full-screen radio.fluncle.com surface;
- * the bespoke 9:16 shaders reflow under it (expected — landscape is scaffold, not
- * a polished catalogue pass). `square` is 1920×1920 — the clean source master MT
- * centre-crops to portrait (1080×1920) and landscape (1920×1080) on the fly, so
- * one render feeds both archive orientations. Square
- * compositions must read at 1:1 and keep their centre of gravity centered, since
- * only the centre "plus" of the square survives either crop. Resolved to concrete
- * dimensions in `root.tsx`'s `calculateMetadata`; portrait stays the default when
- * the prop is absent.
- */
 export type CosmosAspect = "portrait" | "landscape" | "square";
 
-/**
- * Provenance for one bundled master: the exact render flags it was produced with,
- * so a future "clean re-render from source" reproduces THIS cut and not the other.
- * The composition + props are shared across both masters; only these flags differ
- * (footage.mp4 = square/clean, footage.social.mp4 = portrait/text). Re-rendering an
- * output is `render(composition, props, variants[<output>])`.
- */
 export type RenderVariant = {
   aspect: CosmosAspect;
   hideOverlay: boolean;
 };
 
-/** Map of bundle output filename → the render flags that produced it. */
 export type RenderVariants = Record<string, RenderVariant>;
 
 export type NostalgicCosmosProps = {
@@ -200,21 +106,8 @@ export type NostalgicCosmosProps = {
   audio: CosmosAudio;
   palette: CosmosPalette;
   seed: number;
-  /**
-   * Suppress the BAKED-IN information overlay (the TypePlate identity/telemetry
-   * blocks AND the CloseCard sign-off) so a host UI can draw its own metadata
-   * over clean footage — the radio.fluncle.com text-free cut. The scene shader is
-   * untouched; only the type layer is gated. Read at render time via
-   * `getInputProps()` inside TypePlate/CloseCard, so it applies to every
-   * (self-contained) workbench composition without touching the composition.
-   * Default false — the overlay renders as it always has.
-   */
+
   hideOverlay?: boolean;
-  /**
-   * Output aspect. Default `portrait` (1080×1920). `landscape` (1920×1080) is the
-   * radio full-screen cut. `square` (1920×1920) is the clean source master MT
-   * crops to either orientation on the fly. Consumed by `calculateMetadata`;
-   * scenes may read it via `getInputProps()` if they want to reflow deliberately.
-   */
+
   aspect?: CosmosAspect;
 };

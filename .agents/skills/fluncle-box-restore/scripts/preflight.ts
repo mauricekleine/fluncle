@@ -1,58 +1,21 @@
 #!/usr/bin/env bun
-// preflight.ts — "could we restore rave-02 RIGHT NOW?", answered before the box is on fire.
-//
-// A restore path you have never exercised is a belief, not a capability. The expensive way to
-// discover a missing encryption key, a nightly that stopped landing three weeks ago, or an
-// `op://` ref that no longer resolves is the morning the disk is gone — at which point every
-// one of those is unfixable. So this asks the same questions on a quiet Tuesday, cheaply.
-//
-// READ-ONLY BY CONSTRUCTION. The only S3 verbs in this file are LIST, HEAD and a GET of the
-// small plaintext manifest: there is no PUT, no DELETE, no prune, and nothing is written
-// anywhere outside a temp dir. `op inject` output goes to /dev/null. Running it on a whim, at
-// any hour, on a live box or a laptop, changes nothing.
-//
-// IT NEVER FAKES A PASS. A check that cannot run — no bucket credentials, no `op`, no private
-// companion checkout — reports `unknown` ("could not verify") and says what it would need.
-// `unknown` is deliberately NOT success: the run exits 2 so an agent cannot read a half-blind
-// sweep as a clean bill of health.
-//
-// Usage (from the repo checkout):
-//   bun packages/skills/fluncle-box-restore/scripts/preflight.ts
-//   bun packages/skills/fluncle-box-restore/scripts/preflight.ts --json
-//   bun packages/skills/fluncle-box-restore/scripts/preflight.ts --max-age-days 7
-//   bun packages/skills/fluncle-box-restore/scripts/preflight.ts --labs <path-to-companion>
-//   bun packages/skills/fluncle-box-restore/scripts/preflight.ts --drill   # + the real restore drill
-//
-// Exit: 0 every check passed · 1 something FAILED · 2 nothing failed but something was unverifiable.
-//
-// Env it reads (never prints): FLUNCLE_BOXSTATE_KEY, R2_ACCOUNT_ID,
-// FLUNCLE_BACKUP_R2_ACCESS_KEY_ID, FLUNCLE_BACKUP_R2_SECRET_ACCESS_KEY, FLUNCLE_BACKUP_R2_BUCKET,
-// FLUNCLE_LABS_DIR.
 
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
-// ── the result shape ────────────────────────────────────────────────────────────────────
-
 export type CheckStatus = "fail" | "pass" | "unknown";
 
 export type CheckResult = {
-  /** What was observed. Never a secret value — key NAMES, counts, dates, sizes only. */
   detail: string;
   id: string;
-  /** What to do about it. Present whenever the status is not `pass`. */
+
   remedy?: string;
   status: CheckStatus;
   title: string;
 };
 
-/**
- * The repo files the rebuild runbook actually drives. If one of these is gone, the runbook has
- * a hole in it and the time to learn that is now — this is the cheapest check here and the only
- * one that needs no credentials at all.
- */
 export const REQUIRED_REPO_ASSETS: readonly string[] = [
   "docs/agents/hermes-agent.md",
   "docs/agents/hermes/Dockerfile",
@@ -71,25 +34,15 @@ export const REQUIRED_REPO_ASSETS: readonly string[] = [
   "packages/skills/hetzner-devbox/scripts/install-toolchain.sh",
 ];
 
-/** The `op inject` templates the companion repo holds — the box's whole secret map. */
 export const SECRET_TEMPLATE_NAMES: readonly string[] = [
   "hermes.env.tpl",
   "fluncle-secrets.env.tpl",
 ];
 
-/** Where those templates live inside the companion checkout. */
 export const LABS_BOX_DOC_DIR = join("docs", "rave-02");
 
-/** One missed night is tolerable; three is a stopped backup nobody noticed. */
 export const DEFAULT_MAX_AGE_DAYS = 3;
 
-// ── pure helpers (the tested surface) ───────────────────────────────────────────────────
-
-/**
- * Walk up from `startDir` until a directory looks like the Fluncle repo. Anchored on a file the
- * restore path itself needs rather than on `.git`, so a worktree, a shallow clone, or a copy
- * without git metadata all resolve — and a directory that is NOT this repo never does.
- */
 export function resolveRepoRoot(startDir: string): string | undefined {
   const marker = join("docs", "agents", "hermes", "scripts", "backup-sweep.ts");
   let dir = resolve(startDir);
@@ -105,11 +58,6 @@ export function resolveRepoRoot(startDir: string): string | undefined {
   }
 }
 
-/**
- * The newest `YYYY-MM-DD` (or `YYYY-MM`) folder under a backup prefix. Both legs write
- * `<prefix><date>/<file>`, and the dates sort lexicographically, so "newest" is a max over the
- * parsed segment — no listing order is assumed.
- */
 export function latestDatedFolder(keys: readonly string[], prefix: string): string | undefined {
   let best: string | undefined;
   for (const key of keys) {
@@ -127,7 +75,6 @@ export function latestDatedFolder(keys: readonly string[], prefix: string): stri
   return best;
 }
 
-/** Whole days between a `YYYY-MM-DD` folder name and `now`, UTC. Negative is clamped to 0. */
 export function ageInDays(date: string, now: Date): number {
   const parsed = Date.parse(`${date}T00:00:00Z`);
   if (Number.isNaN(parsed)) {
@@ -137,11 +84,6 @@ export function ageInDays(date: string, now: Date): number {
   return days < 0 ? 0 : days;
 }
 
-/**
- * `FLUNCLE_BOXSTATE_KEY` must decode to exactly 32 bytes (64 hex chars or base64) — the same
- * rule `boxStateKeyFromEnv` enforces on the box. Re-checked here rather than imported because
- * the point is to fail on a key that is absent or malformed, which that function throws on.
- */
 export function validateBoxStateKey(raw: string | undefined): {
   bytes: number;
   ok: boolean;
@@ -174,11 +116,6 @@ export type ManifestVerdict = {
   problems: string[];
 };
 
-/**
- * Does the stored box-state manifest still describe a restorable artifact? The manifest is the
- * one part of the backup that is deliberately unencrypted, precisely so an inventory pass like
- * this one can judge the artifact without holding the key.
- */
 export function validateBoxStateManifest(text: string): ManifestVerdict {
   let parsed: unknown;
   try {
@@ -216,31 +153,13 @@ export function validateBoxStateManifest(text: string): ManifestVerdict {
 }
 
 export type TemplateScan = {
-  /** Variable NAMES whose value is not an `op://` reference — i.e. a literal in a git repo. */
   literalKeys: string[];
-  /** Variable NAMES mapped to an `op://` reference. */
+
   refKeys: string[];
 };
 
-/**
- * A value that is a POINTER rather than a secret. Both spellings count: `op inject` resolves the
- * moustache form (`{{ op://… }}`) and the bare form alike — verified against the CLI rather than
- * assumed, because assuming otherwise would have condemned every real template line.
- *
- * Matched loosely after the scheme because a vault or item name may contain SPACES. A strict
- * `\S+` here reclassified every real reference as a leaked literal — a false alarm on the one
- * check whose whole job is to be believed.
- */
 const OP_REFERENCE = /^(?:\{\{\s*op:\/\/[^{}]+\}\}|op:\/\/.+)$/;
 
-/**
- * Read a secret TEMPLATE and prove it is still only a MAP. The companion repo is private, but
- * private is not the same as safe: the whole reason those files can be version-controlled at all
- * is that every value is an `op://` pointer. A hand-edit that pastes a real token turns the map
- * into a secret store, so this looks for exactly that.
- *
- * Returns NAMES and counts only — never a value, so a leak this finds is not a leak it repeats.
- */
 export function scanSecretTemplate(text: string): TemplateScan {
   const literalKeys: string[] = [];
   const refKeys: string[] = [];
@@ -267,30 +186,14 @@ export function scanSecretTemplate(text: string): TemplateScan {
   return { literalKeys, refKeys };
 }
 
-/**
- * Scrub the TOPOLOGY out of a child process's diagnostics before this report repeats it.
- *
- * The two children whose stderr is surfaced both name the map in their failure text: `op` quotes
- * the reference that would not resolve, and the restore drill quotes the bucket URL it could not
- * read. Both cases fire exactly when something is wrong — which is exactly when the output gets
- * pasted into a PR, an issue, or a chat. This report is agent-facing, so it must stay safe to
- * paste. What is diagnostically useful (which template, which verb, what the error said) all
- * survives; only the vault path and the endpoint go.
- */
 export function redactTopology(text: string): string {
-  return (
-    text
-      // A vault or item name may contain SPACES, so a `\S+` here leaves the tail of the path
-      // behind — the very part that identifies the item. `op` puts the reference at the end of
-      // its message, so redacting to end-of-line loses nothing that matters and cannot under-cut.
-      .replace(/op:\/\/.*/g, "op://<redacted>")
-      // A URL cannot contain a space, so `\S+` is exact here. The negative lookahead keeps this
-      // from re-redacting the `op://<redacted>` marker the previous pass just wrote.
-      .replace(/\b(?!op:)[a-z][a-z0-9+.-]*:\/\/\S+/gi, "<redacted-url>")
-  );
+  return text
+
+    .replace(/op:\/\/.*/g, "op://<redacted>")
+
+    .replace(/\b(?!op:)[a-z][a-z0-9+.-]*:\/\/\S+/gi, "<redacted-url>");
 }
 
-/** 0 clean · 1 something failed · 2 nothing failed but something could not be verified. */
 export function exitCodeFor(results: readonly CheckResult[]): number {
   if (results.some((result) => result.status === "fail")) {
     return 1;
@@ -300,8 +203,6 @@ export function exitCodeFor(results: readonly CheckResult[]): number {
   }
   return 0;
 }
-
-// ── the checks ──────────────────────────────────────────────────────────────────────────
 
 type BackupSweepModule = {
   BOXSTATE_ARTIFACT_NAME: string;
@@ -604,7 +505,6 @@ async function signedGetText(
   return response.text();
 }
 
-/** HEAD, so the sealed artifact's size is confirmed without pulling a byte of it. */
 async function signedHeadLength(
   module: BackupSweepModule,
   config: { accessKeyId: string; bucketUrl: string; secretAccessKey: string },
@@ -632,11 +532,6 @@ async function signedHeadLength(
   }
 }
 
-/**
- * Find the private companion checkout. Explicit flag wins, then the env var, then a sibling of
- * this repo. Never guessed beyond that — a wrong guess would report "missing" for a checkout
- * that exists elsewhere, which is worse than saying so.
- */
 export function resolveLabsDir(
   repoRoot: string,
   override: string | undefined,
@@ -724,15 +619,6 @@ function checkSecretTemplates(labsDir: string | undefined): CheckResult[] {
   return results;
 }
 
-/**
- * Ask 1Password to resolve every reference without ever materialising a value. `op inject` with
- * no `-o` renders to STDOUT, which is discarded here (`stdio: ignore`) — deliberately not
- * `-o /dev/null`, which makes `op` try to delete the device node and fail on a reference problem
- * it never actually looked for. Nothing touches disk; only the exit status is read.
- *
- * This is the check that catches a renamed vault item — a rename that stays invisible right up
- * until the night the box needs it.
- */
 function checkOpRefs(templatePaths: readonly string[]): CheckResult {
   const id = "op-refs";
   const title = "Every `op://` reference in those templates resolves";
@@ -811,10 +697,6 @@ function runRestoreDrill(repoRoot: string): CheckResult {
   return { detail: summariseDrillReport(run.stdout ?? ""), id, status: "pass", title };
 }
 
-/**
- * The drill prints one pretty-printed JSON report, so the summary is parsed rather than tailed —
- * the last LINE of that report is a closing brace, which read as a passing detail of "}".
- */
 export function summariseDrillReport(stdout: string): string {
   try {
     const report = JSON.parse(stdout) as Record<string, unknown>;
@@ -826,8 +708,6 @@ export function summariseDrillReport(stdout: string): string {
     return "verified, decrypted and unpacked";
   }
 }
-
-// ── the run ─────────────────────────────────────────────────────────────────────────────
 
 function argValue(flag: string): string | undefined {
   const index = process.argv.indexOf(flag);

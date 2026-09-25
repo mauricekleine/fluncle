@@ -1,8 +1,3 @@
-// Coverage for ship.ts's pure bundle-assembly logic. ship.ts itself is
-// side-effect-free on import (its work runs behind an import.meta.main guard),
-// so these exercise the exported functions directly — no fs, no spawnSync, no
-// network.
-
 import path from "node:path";
 
 import { describe, expect, test } from "bun:test";
@@ -31,7 +26,7 @@ describe("parseShipArgs", () => {
     expect(flags.reasoning).toBeUndefined();
     expect(flags.register).toBeUndefined();
     expect(flags.plateSubject).toBeUndefined();
-    // Audio is KEPT by default — the delete is opt-in (avoids the re-render 404 trap).
+
     expect(flags.pruneAudio).toBe(false);
   });
 
@@ -160,9 +155,9 @@ describe("buildRenderJson", () => {
       trackId: "abc123",
       vehicle: "voronoi cellular",
     });
-    // Plate-less renders record a null subject (the field is always present).
+
     expect(json.plateSubject).toBeNull();
-    // The palette axis rides through as its bucket tag + swatches.
+
     expect(json.palette).toBe("amber-warm");
     expect(json.paletteSwatches).toEqual(["#e8a94b", "#f2c976", "#171208"]);
   });
@@ -254,7 +249,6 @@ describe("squareInputsHash — the square crop source cache key", () => {
   });
 
   test("the NUL separators stop the three inputs bleeding across their boundary", () => {
-    // comp "MyComp" + props "X" must not hash the same as comp "MyCom" + props "pX".
     const a = squareInputsHash({
       bundleHash: base.bundleHash,
       compositionId: "MyComp",
@@ -279,8 +273,6 @@ describe("shouldReuseSquare — the cached-square reuse gate", () => {
   });
 
   test("reuses a square with NO sidecar (a direct social-preview square / pre-fix artifact)", () => {
-    // The escape-hatch rule: a missing sidecar means the square came from outside a
-    // ship render, so trust it rather than force a wasteful, possibly-clobbering re-render.
     expect(shouldReuseSquare("abc1230000000000", null)).toBe(true);
   });
 });

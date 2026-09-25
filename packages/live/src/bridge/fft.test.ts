@@ -1,13 +1,7 @@
-// The dependency-free radix-2 FFT (fft.ts) — pinned with known signals. This primitive is
-// vendored from the render path and must reproduce a fingerprint exactly; mel.test.ts exercises
-// it indirectly through melFrames, but these assert the transform itself: a pure sine lands its
-// energy in the right bin, DC lands in bin 0, and the window helpers are well-formed.
-
 import { describe, expect, test } from "bun:test";
 
 import { fftInPlace, hannWindow, nextPow2 } from "./fft";
 
-/** The magnitude spectrum |X[k]| of a real signal after fftInPlace. */
 function magnitudes(signal: number[]): number[] {
   const re = Float64Array.from(signal);
   const im = new Float64Array(signal.length);
@@ -15,7 +9,6 @@ function magnitudes(signal: number[]): number[] {
   return Array.from(re, (r, k) => Math.hypot(r, im[k]));
 }
 
-/** The index of the largest value in the first half (the non-aliased bins). */
 function peakBin(mags: number[]): number {
   const half = mags.length / 2;
   let best = 0;

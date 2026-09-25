@@ -1,17 +1,3 @@
-// The ship gates: the hard checks ship.ts runs before it writes anything into a bundle.
-//
-// - judge:metrics (analyze-motion.ts) stamps out/<trackId>.metrics.json with the sha256
-//   of the render it measured (`videoSha256`) and whether `--allow-flash` was passed
-//   (`allowFlash`). Ship hashes out/<trackId>.mp4 and refuses unless that record exists,
-//   measured THIS render, and cleared every hard gate (flash safety, beat-pull, arc). A
-//   flash override is honoured only when the record carries it, and ship names it.
-// - judge:palette's subject is the poster ship cuts from the square master, which does
-//   not exist before ship. So ship runs the palette gate itself on that poster and refuses
-//   on a FAIL. No published neighbour to compare against is a pass.
-//
-// The verdicts are pure over parsed inputs, so ship-gates.test.ts covers them without
-// renders, network, or fs (sha256File aside).
-
 import { createHash } from "node:crypto";
 import { closeSync, openSync, readSync } from "node:fs";
 
@@ -19,8 +5,6 @@ import { type PaletteGate } from "./judge-palette";
 
 export type GateVerdict = { ok: true; notes: string[] } | { ok: false; reason: string };
 
-/** Streamed sha256 of a file (hex). Streams in 1 MiB chunks so an hour-long set render
- *  never has to fit in one buffer. */
 export function sha256File(filePath: string): string {
   const hash = createHash("sha256");
   const fd = openSync(filePath, "r");
@@ -41,11 +25,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/**
- * Decide whether the judge:metrics record clears the render ship is about to package.
- * `record` is the parsed out/<trackId>.metrics.json (null when absent or unparseable);
- * `renderSha256` is the digest of out/<trackId>.mp4 as it sits on disk now.
- */
 export function metricsGateVerdict(input: {
   record: unknown;
   renderSha256: string;
@@ -101,7 +80,6 @@ export function metricsGateVerdict(input: {
   return { notes, ok: true };
 }
 
-/** Decide whether the palette gate result clears the poster ship just cut. */
 export function paletteGateVerdict(gate: PaletteGate): GateVerdict {
   if (gate.status === "fail") {
     return {

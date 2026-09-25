@@ -10,11 +10,6 @@ import {
   type Rollback,
 } from "./restore-from-rollback";
 
-// The restore WRITES TO PRODUCTION, so nothing here may reach a real database. These pin the rails
-// that decide whether it can do damage: the wrong-file abort, idempotence (`insert or ignore`), the
-// schema-drift guard, that a dry-run performs ZERO writes, and that it never touches a table it was
-// not asked about.
-
 type Statement = { args?: unknown; sql: string };
 
 type Stub = {
@@ -114,7 +109,7 @@ describe("planRestore", () => {
     const plan = planRestore(ROLLBACK, ["t_sl2"]);
 
     expect(plan.tracks.map((t) => t.track_id)).toEqual(["t_sl2"]);
-    // The purge's other victim stays deleted — that is the whole point of naming ids.
+
     expect(plan.tracks.map((t) => t.track_id)).not.toContain("t_cox");
   });
 
@@ -127,8 +122,6 @@ describe("planRestore", () => {
   });
 
   test("a track with no captured edges restores with no artist credit", () => {
-    // The edgeless purge deleted tracks that HAD no `track_artists` edge, so its rollback carries
-    // neither `artists` nor `track_artists`. Restoring must not invent either.
     const plan = planRestore({ tracks: ROLLBACK.tracks }, ["t_cox"]);
 
     expect(plan.tracks).toHaveLength(1);
@@ -173,7 +166,7 @@ describe("insertStatements", () => {
     );
 
     expect(stmt?.sql).not.toContain("gone_since");
-    // Columns keep the snapshot row's own order, minus the dropped one — so do their args.
+
     expect(stmt?.sql).toContain("(title, track_id)");
     expect(stmt?.args).toEqual(["x", "t"]);
   });
@@ -297,7 +290,6 @@ describe("--confirm", () => {
   });
 
   test("SCHEMA DRIFT is reported rather than thrown", async () => {
-    // The live `tracks` table has lost the `label` column the snapshot carries.
     const s = stub({ tracks: ["track_id", "title", "album", "album_id"] });
     const { code, out } = await run(["--rollback", "f.json", "--tracks", "t_sl2", "--confirm"], s);
 

@@ -65,6 +65,10 @@ Hand-maintained against the `SURFACES` catalog — nothing generates these table
 
 All `application/json`; the OpenAPI document at `/api/v1/openapi.json` advertises them.
 
+The oRPC Zod schemas in `packages/contracts/src/orpc` own wire response shapes; `packages/contracts/src/index.ts` derives response DTOs from them with type-only imports so the CLI and Raycast do not load Zod. Request DTOs remain typed send shapes because some boundary schemas deliberately accept `unknown` before server validation. The Go SSH app cannot import the TypeScript package: keep its `submissionRequest` and `newsletterRequest` structs in step when those request shapes change.
+
+Backfill query controls stay optional strings in the contracts because their handlers parse and clamp malformed values without returning 400. Ops that also accept box-supplied evidence use oRPC's detailed input structure to carry query controls and a bounded body together.
+
 | Surface                 | Route                       | Exposes                                                                                                                                        | Weight    |
 | ----------------------- | --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- | --------- |
 | `api.findings`          | `/api/v1/findings`          | the feed as JSON — findings and published mixtapes, newest found first, cursor-paginated (limit max 48, cursor)                                | primary   |
@@ -140,6 +144,8 @@ The `/mcp` endpoint speaks the full protocol, not just tools: **tools** (verbs),
 | `ssh.rave` | `ssh rave.fluncle.com` | the rave terminal TUI (Latest findings, Fresh releases, Artist archive, Sonic galaxies, Mixtape archive, Random banger, Submit a track, Subscribe, Install CLI, System status, About, Quit), plus the deep-register one-shots `ssh rave.fluncle.com latest\|fresh\|random` | primary |
 
 `ssh-menu.test.ts` requires every SSH-weighted surface to resolve to a terminal menu item, deep link, or About-screen link.
+
+The SSH Log ID pre-filter in `apps/ssh/main.go` mirrors the canonical grammar in `packages/contracts/src/log-id.ts`; the Chrome extension keeps a byte-checked copy because its bundle ships without workspace dependencies. Update their shared test vectors when changing the coordinate shape.
 
 ### CLI — the `fluncle` thin client
 
@@ -401,7 +407,7 @@ A surface is operator/agent-only where its only display weight is `hidden` (`cli
 
 `hidden` and `pending` are different shapes of "not loud." A `hidden` weight is a **live** surface that one context deliberately doesn't headline (it still probes, still serves, still answers). A surface marked **`pending: true`** is **not live at all yet**: registered (so it is reviewed and one field-flip away) but **DARK everywhere** — `liveSurfaces()` drops it, so every selector (`surfacesForContext`, `surfacesByWeight`, `surfacesByKind`, `statusProbes`, `cronSurfaces`) and every raw-catalog consumer that reads `liveSurfaces()` (the MCP `get_status` labels, the CLI status labels) skips it. It carries no `/status` probe and no service label, and it stays out of the §2/§3 tables (the parity test skips a `pending` surface) and off the hand-wired menus and crawler maps until it goes live.
 
-Three surfaces sit `pending` today, each naming its own flip in an inline comment: **`web.mix`** (the mixability engine's door, dark until the archive's own depth measurement opens it to the world), and **`web.chat`** and **`web.recommendations`** (the two crew doors — both live and 200 for anyone, but gated to the verified crew while their rollouts run as learning cohorts, so advertising them would point most readers at a door they cannot open yet). Adding the §2/§3 rows is part of each flip, never before it.
+Three surfaces sit `pending` today: **`web.mix`** stays dark until the archive's own depth measurement opens the mixability engine to the world; **`web.chat`** and **`web.recommendations`** serve verified crew cohorts while their rollouts run and stay out of public navigation until they open to everyone. Adding the §2/§3 rows is part of each flip, never before it.
 
 Use `pending: true` for a surface awaiting external approval. On approval, remove `pending`, set the final address, and add the §2 and §3 inventory rows in the same change.
 

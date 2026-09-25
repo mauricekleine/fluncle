@@ -1,25 +1,3 @@
-// Unit O · render-set — the orchestrator for the hour-long set video.
-//
-// The panel-corrected architecture: ONE parent composition (chapters + travel
-// transitions + the dreamer's-continuity driver), rendered in frameRange CHUNKS.
-// Remotion determinism makes chunk boundaries byte-consistent, so the chunks
-// concat with `-c copy` (no re-encode generation — the load-bearing grain never
-// suffers) and the mastered set audio is muxed ONCE, at the end (48k AAC).
-// Chunked = resumable (re-render only the missing chunks), parallelizable, and
-// QA-able per chunk.
-//
-// Two modes:
-//   • full   — build every chapter from the mix-in offsets, render the whole set.
-//   • pilot  — `--pilot <logId>`: prep + analyze + render ONE chapter end-to-end
-//              (the validate-one rule) with stills, to prove no freeze + the
-//              Log-ID moment + landscape, without paying for the hour.
-//
-// Usage:
-//   bun src/set-video/render-set.ts <mixtapeLogId> [--pilot <logId>] [--draft]
-//       [--from-fixtures] [--chunk-sec N] [--workers N] [--stills N]
-//
-// The full hour is the operator's evening GPU job; see docs/set-video.md.
-
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -44,27 +22,16 @@ const SET_OUT_ROOT = path.resolve(import.meta.dirname, "../../set-out");
 const FIXTURES = path.resolve(import.meta.dirname, "__fixtures__");
 const SET_ENTRY = path.resolve(import.meta.dirname, "set-entry.ts");
 
-// ---------------------------------------------------------------------------
-// The chapter plan (pure — tested)
-// ---------------------------------------------------------------------------
-
 export type Anchor = { logId: string; bestMs: number };
 export type ChapterPlanEntry = { logId: string; startMs: number; endMs: number; mixInMs: number };
 
-/**
- * Turn the fingerprint-derived mix-in offsets into a contiguous chapter plan.
- * Sorts by mix-in, drops degenerate (too-short) chapters, and makes the chapters
- * cover [0, setDurationMs] end-to-end (chapter 0 absorbs the pre-first-track
- * lead-in; the last runs to the set end). The mix-in is preserved separately so
- * the Log-ID moment can land on the true arrival even inside chapter 0.
- */
 export function buildChapterPlan(
   anchors: Anchor[],
   setDurationMs: number,
   minChapterMs = 8_000,
 ): ChapterPlanEntry[] {
   const sorted = [...anchors].filter((a) => a.bestMs >= 0).sort((a, b) => a.bestMs - b.bestMs);
-  // Dedupe near-equal mix-ins (fingerprint ties) — keep the first.
+
   const deduped: Anchor[] = [];
   for (const a of sorted) {
     const last = deduped[deduped.length - 1];
@@ -89,7 +56,6 @@ export function buildChapterPlan(
   return plan;
 }
 
-/** Inclusive frameRange chunks over [0, totalFrames). */
 export function chunkRanges(totalFrames: number, chunkFrames: number): [number, number][] {
   const ranges: [number, number][] = [];
   for (let start = 0; start < totalFrames; start += chunkFrames) {
@@ -97,10 +63,6 @@ export function chunkRanges(totalFrames: number, chunkFrames: number): [number, 
   }
   return ranges;
 }
-
-// ---------------------------------------------------------------------------
-// Small shell helpers
-// ---------------------------------------------------------------------------
 
 function probeDurationMs(input: string): number {
   const res = spawnSync(FFPROBE, [
@@ -130,10 +92,6 @@ async function run(cmd: string, args: string[]): Promise<void> {
   });
 }
 
-// ---------------------------------------------------------------------------
-// Assemble one chapter (prep the comp + analyze the audio slice)
-// ---------------------------------------------------------------------------
-
 type AssembledChapter = { spec: SetChapterSpec; report: PrepReport };
 
 async function assembleChapter(
@@ -146,8 +104,7 @@ async function assembleChapter(
     prepChapter({ chapterDurationMs: durationMs, isFinalChapter: isFinal, logId: entry.logId }),
     buildChapterAudio(setAudioPath, entry.startMs, entry.endMs),
   ]);
-  // Chapter props: the finding's OWN identity (track/palette/seed) + the freshly
-  // analyzed slice of the actual set audio.
+
   const props: NostalgicCosmosProps = {
     aspect: "landscape",
     audio,
@@ -158,10 +115,6 @@ async function assembleChapter(
   };
   return { report, spec: { durationMs, logId: entry.logId, props, startMs: entry.startMs } };
 }
-
-// ---------------------------------------------------------------------------
-// Render (chunked) + concat + mux
-// ---------------------------------------------------------------------------
 
 async function renderSet(opts: {
   props: SetCompositionProps;
@@ -201,7 +154,7 @@ async function renderSet(opts: {
     }
     const chunkPath = path.join(chunkDir, `chunk-${String(k).padStart(4, "0")}.mp4`);
     chunkPaths.push(chunkPath);
-    // Resume: skip a chunk that already rendered (non-empty).
+
     if (existsSync(chunkPath) && statSync(chunkPath).size > 1024) {
       console.error(`[render-set] chunk ${k} cached — skipping`);
       continue;
@@ -219,7 +172,7 @@ async function renderSet(opts: {
       serveUrl,
       timeoutInMilliseconds: 600_000,
       x264Preset: draft ? "veryfast" : "slow",
-      // Full: landscape 1080p, VBV cap ~22M + bt709 (RFC §6 encode). Draft: half-res.
+
       ...(draft
         ? { scale: 0.5 }
         : {
@@ -230,7 +183,6 @@ async function renderSet(opts: {
     });
   }
 
-  // Concat the chunks (stream copy — no re-encode, grain intact).
   const listPath = path.join(outDir, "concat.txt");
   writeFileSync(listPath, chunkPaths.map((p) => `file '${p.replace(/'/g, "'\\''")}'`).join("\n"));
   const silentPath = path.join(outDir, "set.silent.mp4");
@@ -250,7 +202,6 @@ async function renderSet(opts: {
     silentPath,
   ]);
 
-  // Mux the mastered set audio for the covered range (48k AAC), once.
   const finalPath = path.join(outDir, "set.mp4");
   const audioStartSec = coveredStartMs / 1000;
   const durSec = (coveredEndMs - coveredStartMs) / 1000;
@@ -285,32 +236,16 @@ async function renderSet(opts: {
   return finalPath;
 }
 
-// ---------------------------------------------------------------------------
-// QA hooks
-// ---------------------------------------------------------------------------
-
 type SetQa = {
-  /** The strobe gate — a HARD gate at any length (a real strobe is unsafe regardless). */
   flashPass: boolean;
-  /** The structural-arc change (0..1) and the 20 s-tuned floor. */
+
   arcChange: number | null;
   arcFloor: number | null;
-  /**
-   * The arc gate is ADVISORY at chapter length, not a blocker: it is calibrated for
-   * a 20 s per-track journey (depart→arrive), so a minutes-long STEADY-STATE chapter
-   * of one vehicle can read below the structural floor while being visibly alive (it
-   * floods/churns — brightness + density — without structurally reorganizing). Judge
-   * the piece off the StudioEnvelope + a visual review; see calibration/verdicts.json.
-   */
+
   arcBelowFloor: boolean;
   raw: string;
 };
 
-/**
- * Run the arc/flash gate (analyze-motion) on the piece and classify it for the SET
- * context: flash HARD, arc ADVISORY. `--allow-flash` is never passed (the strobe
- * gate stays live) — but a below-floor arc does not fail the render.
- */
 function judgeMetrics(video: string): SetQa {
   const script = path.resolve(import.meta.dirname, "../pipeline/analyze-motion.ts");
   const res = spawnSync("bun", [script, video, "--json"], { encoding: "utf8" });
@@ -329,9 +264,7 @@ function judgeMetrics(video: string): SetQa {
     if (parsed.flashSafety?.unsafe !== undefined) {
       flashPass = !parsed.flashSafety.unsafe;
     }
-  } catch {
-    // Fall back to the exit-code read above (which also trips on the advisory arc).
-  }
+  } catch {}
   return {
     arcBelowFloor: arcChange !== null && arcFloor !== null && arcChange < arcFloor,
     arcChange,
@@ -341,24 +274,15 @@ function judgeMetrics(video: string): SetQa {
   };
 }
 
-// ---------------------------------------------------------------------------
-// Fixtures + set audio
-// ---------------------------------------------------------------------------
-
 function loadAnchors(mixtapeLogId: string): Anchor[] {
   const file = path.join(FIXTURES, `${mixtapeLogId}.anchors.json`);
   const raw = JSON.parse(readFileSync(file, "utf8")) as { logId: string; bestMs: number }[];
   return raw.map((r) => ({ bestMs: r.bestMs, logId: r.logId }));
 }
 
-/** The mastered set audio URL — sliced on the fly by ffmpeg (R2 supports range seek). */
 function setAudioSource(mixtapeLogId: string): string {
   return `${MEDIA_BASE}/${encodeURIComponent(mixtapeLogId)}/mixtape.m4a`;
 }
-
-// ---------------------------------------------------------------------------
-// Main
-// ---------------------------------------------------------------------------
 
 async function main(argv: string[]): Promise<void> {
   const parsed = parseArgs(argv, {
@@ -386,8 +310,6 @@ async function main(argv: string[]): Promise<void> {
   const setAudio = setAudioSource(mixtapeLogId);
   const anchors = loadAnchors(mixtapeLogId);
 
-  // Build the chapter plan. Pilot mode narrows to a single chapter (with the true
-  // neighbouring mix-ins so the chapter length is real).
   const setDurationMs = probeDurationMs(setAudio) || anchors[anchors.length - 1]?.bestMs || 0;
   let plan = buildChapterPlan(anchors, setDurationMs);
   if (pilotLogId) {
@@ -404,7 +326,6 @@ async function main(argv: string[]): Promise<void> {
     `[render-set] plan: ${plan.length} chapter(s) — ${plan.map((c) => `${c.logId}[${Math.round(c.startMs / 1000)}-${Math.round(c.endMs / 1000)}s]`).join(", ")}`,
   );
 
-  // Assemble every chapter (prep + slice-analyze).
   const assembled: AssembledChapter[] = [];
   for (let i = 0; i < plan.length; i += 1) {
     const entry = plan[i];
@@ -415,9 +336,6 @@ async function main(argv: string[]): Promise<void> {
     assembled.push(await assembleChapter(entry, setAudio, i === plan.length - 1 && !pilotLogId));
   }
 
-  // The dreamer's-continuity trajectory: the whole-set energy envelope for full
-  // renders; for a pilot chapter, derive it from the chapter's own energy so the
-  // vignette still breathes (no need to decode the whole 87MB master).
   let continuity: SetCompositionProps["continuity"];
   if (pilotLogId) {
     const ch = assembled[0];
@@ -438,7 +356,6 @@ async function main(argv: string[]): Promise<void> {
     mixtape: { logId: mixtapeLogId, title: `Fluncle Mixtape ${mixtapeLogId}` },
   };
 
-  // Persist the prep reports + the set manifest (the audit trail).
   writeFileSync(
     path.join(outDir, "prep-report.json"),
     JSON.stringify({ chapters: assembled.map((a) => a.report), mixtapeLogId }, null, 2),
@@ -459,7 +376,6 @@ async function main(argv: string[]): Promise<void> {
     setAudioPath: setAudio,
   });
 
-  // Stills across the piece (visual proof: alive, no freeze, Log-ID moment, landscape).
   const stillsDir = path.join(outDir, "stills");
   mkdirSync(stillsDir, { recursive: true });
   const durMs = coveredEndMs - coveredStartMs;
@@ -481,9 +397,6 @@ async function main(argv: string[]): Promise<void> {
     ]);
   }
 
-  // QA: the strobe gate is HARD (a real strobe is unsafe at any length); the
-  // structural-arc gate is ADVISORY at chapter length (calibrated for a 20 s
-  // journey — a steady-state chapter can read below the floor while visibly alive).
   const qa = judgeMetrics(finalPath);
   writeFileSync(path.join(outDir, "qa.json"), qa.raw);
   const arcLine =

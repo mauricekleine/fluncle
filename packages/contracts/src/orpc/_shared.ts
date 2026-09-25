@@ -1,15 +1,5 @@
-// Shared oRPC contract schemas — the Zod mirrors of the pure-types DTOs in
-// `../index.ts`, kept structurally in lock-step with those types. Every domain
-// contract module (`./tracks.ts`, `./health.ts`, …) imports the shapes it needs
-// from here, so a DTO has exactly one Zod definition across the registry and the
-// generated OpenAPI components stay deduplicated (`.meta({ id })`).
-//
-// Where a future op needs the full TS shape, derive it from the schema
-// (`z.infer`) rather than maintaining two copies.
-
 import * as z from "zod";
 
-/** Enrichment's track-level spectral summary (`TrackFeatures` in ../index.ts). */
 export const TrackFeaturesSchema = z
   .object({
     centroidHz: z.number().optional(),
@@ -20,70 +10,33 @@ export const TrackFeaturesSchema = z
   })
   .meta({ id: "TrackFeatures" });
 
-/** A finding as the feed/log/admin board renders it (`TrackListItem` in ../index.ts). */
 export const TrackListItemSchema = z
   .object({
     addedAt: z.string(),
     addedToSpotify: z.boolean(),
     album: z.string().optional(),
     albumImageUrl: z.string().optional(),
-    // The `/album/<slug>` page this finding's record has, read through the `tracks.album_id`
-    // pointer — so it is present ONLY when the album entity really exists (an album is minted
-    // off a certified finding). This is what turns the album NAME into a graph link: a
-    // `GraphLink` renders with the page, server-side, with no lookup of its own. Its absence
-    // is the honest "there is nowhere to send you", and the name stays plain text.
+
     albumSlug: z.string().optional(),
-    // ISO timestamp of the last analysis write (bpm/key/features); RFC bpm-key-accuracy.
-    // Written on every successful analysis; ADMIN-ONLY like the sources — `toPublicTrackListItem`
-    // strips it before any public read. Read-only observability: the freshness companion to
-    // `analyzedFrom`/`keySource`, so a reader can tell WHEN a key was (re-)derived, not just by
-    // whom. No sweep predicate keys on it. Absent on legacy rows (pre-provenance).
+
     analyzedAt: z.string().optional(),
-    // Which audio class BPM/key were analyzed from — "full" (the captured full song) or
-    // "preview" (a 30s preview); RFC bpm-key-accuracy. Internal capture/enrich provenance
-    // on the admin-authed DTO — `toPublicTrackListItem` strips it before any public read, so
-    // it is present only on admin reads (the capture sweep + the `requeue-analysis` command
-    // read it to find preview-grade findings). Absent on legacy rows (pre-provenance).
+
     analyzedFrom: z.enum(["preview", "full"]).optional(),
-    // The finding's Apple Music track URL — a PUBLIC listen link, the Spotify twin,
-    // resolved EXACTLY by ISRC (the `apple-music` backfill). Present only once resolved;
-    // a missing link is honest (Apple has no match, or the leg is unprovisioned), a wrong
-    // one never renders — the resolve is exact-or-nothing. Feeds the /log "Listen on Apple
-    // Music" link + the MusicRecording `sameAs`.
+
     appleMusicUrl: z.string().optional(),
-    // The artist's own YouTube channel id(s) (`UC…`), gathered from the confirmed
-    // `artist_socials` YouTube links of every artist on the finding. Populated ONLY on
-    // the admin capture-queue read (`captureQueue=true`) — the full-song capture sweep
-    // reads it as its STRONGEST trust tier: a candidate on one of these is the artist's
-    // OWN upload. Absent on every other read (an internal, capture-only signal); absent
-    // here too when no artist has a resolvable `/channel/UC…` link.
+
     artistYoutubeChannelIds: z.array(z.string()).optional(),
     artists: z.array(z.string()),
-    // The best ≥1920 render source for this finding's cover — Apple's `{w}x{h}` artwork
-    // template composed server-side at 2048² (clamped to native) from the album facts U1
-    // stored (RFC musickit-second-authority U3a). Present ONLY when the album carries Apple
-    // artwork; absent otherwise, and the render falls through to `albumImageUrl`. RENDER-TIME
-    // ONLY (decision A: never persisted) — the video pipeline (`packages/video`) reads it as a
-    // dumb consumer, so it never composes an Apple URL itself. Web/mobile ignore it (they
-    // render `albumImageUrl` small).
+
     artworkMaxUrl: z.string().optional(),
     bpm: z.number().optional(),
-    // Who last set bpm/key — the source-hierarchy provenance (operator > rekordbox > DSP;
-    // apps/web track-update.ts). ADMIN-ONLY on this DTO: `toPublicTrackListItem` strips both
-    // before any public read, so they arrive undefined on `/api/v1/findings` and are present only
-    // on the admin path. The Rekordbox sync reads them to skip an operator-graded row and to
-    // detect a matching-but-unstamped value that still needs a protective `rekordbox` stamp.
+
     bpmSource: z.string().optional(),
     discogsReleaseUrl: z.string().optional(),
     durationMs: z.number(),
     enrichmentStatus: z.string(),
     features: TrackFeaturesSchema.optional(),
-    // The sonic galaxy this finding belongs to (browse-by-feel RFC): the operator-named
-    // cluster over the MuQ embedding space, read from `tracks.galaxy_id`. A nullable
-    // `{ name, slug }` — present ONLY when the finding is placed (assigned by the
-    // `fluncle-cluster` cron) AND its galaxy is operator-NAMED. `slug` links to the
-    // `/galaxies/<slug>` lens. Replaces the four fixed vibe-quadrant names (the dead
-    // `{ key, name }` union), which were derived from the retired vibe axes.
+
     galaxy: z
       .object({
         name: z.string(),
@@ -92,23 +45,17 @@ export const TrackListItemSchema = z
       .optional(),
     isrc: z.string().optional(),
     key: z.string().optional(),
-    // Key provenance — see `bpmSource` above. Admin-only (public-stripped).
+
     keySource: z.string().optional(),
     label: z.string().optional(),
-    // The `/label/<slug>` page this finding's imprint has — the `tracks.label_id` twin of
-    // `albumSlug` above, and the same contract: present only when the label entity exists,
-    // so a graph link never points at a 404.
+
     labelSlug: z.string().optional(),
     logId: z.string().optional(),
     logPageUrl: z.string().optional(),
-    // The MusicBrainz recording MBID — the canonical KG join key (the MusicBrainz identity
-    // layer). PUBLIC, like `isrc`: the `/log` MusicRecording emits it as a `sameAs`
-    // (`https://musicbrainz.org/recording/<mbid>`) + a KG `identifier`. Absent until filled.
+
     mbRecordingId: z.string().optional(),
     note: z.string().optional(),
-    // Word-level caption timings for the spoken observation (ms windows), driving the
-    // synced subtitles on the radio player. Present only once captured (a fresh
-    // Cartesia timestamped render or a forced-alignment backfill); absent ⇒ no captions.
+
     observationAlignment: z
       .object({
         words: z.array(z.object({ endMs: z.number(), startMs: z.number(), text: z.string() })),
@@ -121,16 +68,9 @@ export const TrackListItemSchema = z
     postedToTelegram: z.boolean(),
     previewUrl: z.string().optional(),
     releaseDate: z.string().optional(),
-    // The consecutive full-song capture failures (RFC full-audio § Unit 1). Internal
-    // capture state, surfaced so the `fluncle-capture` sweep reads the prior count and
-    // increments truthfully — the queue's failure-cap backoff depends on it. Present only
-    // when non-zero (a never-failed finding omits it).
+
     sourceAudioFailures: z.number().optional(),
-    // The R2 key of the captured full song (`<logId>/<sha256>.<ext>`; RFC full-audio).
-    // Presence = the song is captured. Internal capture state on the admin-authed DTO —
-    // the key grants nothing without the private-bucket R2 creds. The enrich + embed
-    // sweeps read it (the MuQ embed queue only embeds captured findings). Absent until
-    // captured.
+
     sourceAudioKey: z.string().optional(),
     spotifyUrl: z.string(),
     tiktokUrl: z.string().optional(),
@@ -152,14 +92,6 @@ export const TrackListItemSchema = z
   })
   .meta({ id: "TrackListItem" });
 
-/**
- * Why one finding mixes cleanly out of another — the structured reason a `/mix`
- * candidate row renders as its chip (the mixability engine, `lib/server/mixability.ts`).
- * NO numeric score reaches the crew (a SaaS tell + mono-genre compression makes
- * percentages read broken); the chip is this `{ kind, relationship }` alone. `kind`
- * is the dominant present sub-score; `relationship` names it — the harmonic labels for
- * `key`, `tempo_match` for `bpm`, `close_in_sound` for `sonic`.
- */
 export const MixReasonSchema = z
   .object({
     kind: z.enum(["key", "bpm", "sonic"]),
@@ -176,153 +108,87 @@ export const MixReasonSchema = z
   })
   .meta({ id: "MixReason" });
 
-/**
- * One track as `/mix` renders it — a chain row, a candidate, an opener.
- *
- * A DELIBERATELY SMALL SHAPE, and not a `TrackListItem`. `/mix` is the first surface where
- * a row may be a track Fluncle never certified (`certified: false` — it exists in the
- * archive, it has a key and a vector, it mixes), and DESIGN.md's Unlit Rule says such a row
- * carries no coordinate, no note, no video, no galaxy. Serving it a DTO with all of those
- * fields would leave "does a catalogue row ever show a Log ID?" as a question about every
- * consumer's discipline. This shape makes it a question about the TYPE: there is no `note`,
- * no `videoUrl`, no `galaxy` here to leak, and `logId` is present if and only if `certified`
- * is true (`toMixTrack` reads both off the same `findings.log_id`, so they cannot disagree).
- *
- * The tier is never NAMED — `certified` is a boolean and not a label. The client uses it to
- * pick a REGISTER (lit, with its coordinate → `/log`; or unlit, linking out to Spotify), and
- * nothing else. No badge, no noun, no heading over a homogeneous block of them.
- */
 export const MixTrackSchema = z
   .object({
     albumImageUrl: z.string().optional(),
-    /**
-     * The track's Apple Music URL — the Spotify twin on the unlit register's way out, resolved
-     * exactly by ISRC (the `apple-music` catalogue backfill fills it for catalogue rows the same
-     * way `spotify_url` gets its anchor). Present only once resolved; a crawler-minted row may
-     * carry neither, one, or both. The unlit `/mix` row shows whichever glyphs it has.
-     */
+
     appleMusicUrl: z.string().optional(),
     artists: z.array(z.string()),
     bpm: z.number().optional(),
-    /** True ⇔ Fluncle certified this track — i.e. it is a finding, and has a coordinate. */
+
     certified: z.boolean(),
     durationMs: z.number(),
     key: z.string().optional(),
-    /** The permanent coordinate. Present ⇔ `certified` (the Unlit Rule, structurally). */
+
     logId: z.string().optional(),
-    /**
-     * Absent for a crawler-minted catalogue row — MusicBrainz-born, no Spotify presence
-     * (docs/catalogue-crawler.md: Spotify is a per-track ISRC anchor, never a guarantee).
-     * Any keyed track is rankable, so the rail MUST serialize one; a required string here
-     * once 500'd the whole /mix domain the day the first crawled track earned a key.
-     */
+
     spotifyUrl: z.string().optional(),
     title: z.string(),
     trackId: z.string(),
   })
   .meta({ id: "MixTrack" });
 
-/**
- * A `/mix` candidate: a {@link MixTrackSchema} plus its `reason` chip, ordered by the
- * mixability core (`list_mixable_tracks`). NO score field (§3.0 invariant: numbers never
- * reach the crew — the chip is the whole explanation).
- */
 export const MixCandidateSchema = MixTrackSchema.extend({
   reason: MixReasonSchema,
 }).meta({ id: "MixCandidate" });
 
-/**
- * One track on the FLAT `/fresh` list (`list_fresh`) — what just came OUT, newest RELEASE first.
- * Structurally unlit-safe like {@link MixTrackSchema}: a `certified` finding carries its `logId`
- * coordinate and its `coverImageUrl`; an uncertified catalogue row carries NEITHER (present ⇔
- * `certified`, so a consumer physically cannot render an uncertified row as a named finding — the
- * Unlit Rule). `releaseDate` is the day the tune came OUT, never the day Fluncle found it (the Found
- * Rule): a surface labels it "Released", never "Found".
- */
 export const FreshTrackSchema = z
   .object({
     artists: z.array(z.string()),
     bpm: z.number().optional(),
     certified: z.boolean(),
-    /** The album cover. Present ⇔ `certified` (an uncertified row leads with nothing — Unlit Rule). */
+
     coverImageUrl: z.string().optional(),
     durationMs: z.number().optional(),
     key: z.string().optional(),
-    /** The permanent coordinate. Present ⇔ `certified` (structurally). */
+
     logId: z.string().optional(),
-    /** `YYYY-MM-DD` — the RELEASE date, never the Found date. */
+
     releaseDate: z.string(),
     spotifyUrl: z.string().optional(),
     title: z.string(),
   })
   .meta({ id: "FreshTrack" });
 
-/**
- * One row of the whole-archive `/tracks` enumerator (`list_tracks`) — every track Fluncle holds,
- * newest RELEASE first, findings and the quieter rows together. A DELIBERATELY LEAN row that mirrors
- * the web `/tracks` hub row for row: every row carries the archive's permanent `trackId` and, when
- * the row has a page, the `url` of that page — a certified finding's is its `/log/<logId>` page and
- * an uncertified row's is its `/track/<trackId>` destination (docs/track-destination.md), exactly
- * where the hub row links. A certified finding carries its `logId` coordinate + its `coverImageUrl`,
- * an uncertified row carries NEITHER (present ⇔ `certified`, so a consumer physically cannot render
- * an uncertified row as a named finding — the Unlit Rule; a destination is not a name).
- * `album`/`albumSlug` and `label`/`labelSlug` carry the record + imprint graph edges (the slug
- * present only when that entity has a page); `releaseDate` is the day the tune came OUT, never the
- * day Fluncle found it (the Found Rule).
- */
 export const CatalogueTrackListItemSchema = z
   .object({
     album: z.string().optional(),
-    /** `/album/<slug>` — present only when the record has a page. */
+
     albumSlug: z.string().optional(),
     artists: z.array(z.string()),
     certified: z.boolean(),
-    /** The album cover. Present ⇔ `certified` (an uncertified row leads with nothing — Unlit Rule). */
+
     coverImageUrl: z.string().optional(),
     label: z.string().optional(),
-    /** `/label/<slug>` — present only when the imprint has a page. */
+
     labelSlug: z.string().optional(),
-    /** The permanent coordinate. Present ⇔ `certified` (structurally). */
+
     logId: z.string().optional(),
-    /** `YYYY-MM-DD` — the RELEASE date, never the Found date. */
+
     releaseDate: z.string().optional(),
     spotifyUrl: z.string().optional(),
     title: z.string(),
-    /** The archive's permanent primary key for the recording — the identifier `/track/<trackId>` is keyed on. */
+
     trackId: z.string(),
-    /**
-     * The row's own page on fluncle.com, the same place the web `/tracks` hub links: a certified
-     * finding's `/log/<logId>` page, an uncertified row's `/track/<trackId>` destination. Absent only
-     * when the archive cannot yet name the recording (no title or no artist credit), which is the
-     * one case the destination itself refuses to serve.
-     */
+
     url: z.string().optional(),
   })
   .meta({ id: "CatalogueTrackListItem" });
 
-/** The TS shape of a `/tracks` enumerator row, derived from the schema (one definition, no drift). */
 export type CatalogueTrackListItem = z.infer<typeof CatalogueTrackListItemSchema>;
 
-/** An album entity a fresh release sits on — the browse-graph half of `/fresh`. */
 export const FreshAlbumSchema = z
   .object({
     artists: z.array(z.string()),
     coverImageUrl: z.string().optional(),
     name: z.string(),
-    /** `YYYY-MM-DD` — the newest RELEASE date across the record's fresh tracks. */
+
     releaseDate: z.string(),
-    /** `/album/<slug>` — always present; this row IS a minted album entity. */
+
     slug: z.string(),
   })
   .meta({ id: "FreshAlbum" });
 
-/**
- * The radio.fluncle.com now-playing slot (`RadioNowPlaying` in ../index.ts; the
- * radio-broadcast RFC, Unit A). The server-authoritative position on the shared loop
- * — `currentTrack` + `offsetMs` is what's playing right now; `nextTrack` the
- * preload target (offset 0); `serverEpochMs` + `scheduleVersion` drive the
- * client's NTP-lite skew + the re-fetch on a changed catalogue.
- */
 export const RadioNowPlayingSchema = z
   .object({
     currentTrack: TrackListItemSchema,
@@ -335,19 +201,14 @@ export const RadioNowPlayingSchema = z
   })
   .meta({ id: "RadioNowPlaying" });
 
-/** A per-platform distribution row (`MixtapeMember`-adjacent; see ../index.ts). */
 const MixtapeMemberSchema = TrackListItemSchema.extend({
   startMs: z.number().optional(),
 }).meta({ id: "MixtapeMember" });
 
-/** A mixtape as `/mixtapes` + `/api/v1/mixtapes` emit it (`MixtapeDTO` in ../index.ts). */
 export const MixtapeDTOSchema = z
   .object({
     addedAt: z.string().optional(),
-    // Set (ISO) once the mixtape has been announced to the crew (the Telegram crew
-    // channel) via `announce_mixtape` — the idempotency marker + the "already
-    // announced" signal the Studio reads to render its done state. Absent ⇒ not
-    // announced yet.
+
     announcedAt: z.string().optional(),
     artists: z.tuple([z.literal("Fluncle")]),
     coverImageUrl: z.string().optional(),
@@ -365,18 +226,12 @@ export const MixtapeDTOSchema = z
     note: z.string().optional(),
     publishedAt: z.string().optional(),
     recordedAt: z.string().optional(),
-    // The RECORDING this mixtape was promoted from (RFC recording-primitive, Design B) —
-    // the source of its set video + clips. Set on a promoted mixtape (and mixtape #1's
-    // backfilled recording); absent on a legacy mixtape published before recordings
-    // existed. A mixtape's Studio IS its recording's Studio
-    // (`/admin/studio/<recordingId>`) when present.
+
     recordingId: z.string().optional(),
     sequenceNumber: z.number().optional(),
-    // Set (ISO) once the full set video is uploaded to R2 — the `/log` page then
-    // shows the branded scrubber player. Absent ⇒ no set video yet.
+
     setVideoAt: z.string().optional(),
-    // No "draft" arm: a mixtape is only ever born minted-or-minting via
-    // `promote_recording`; pre-publish authoring lives on plans.
+
     status: z.enum(["distributing", "published"]),
     title: z.string(),
     type: z.literal("mixtape"),
@@ -384,71 +239,44 @@ export const MixtapeDTOSchema = z
   })
   .meta({ id: "MixtapeDTO" });
 
-/**
- * A feed item: a finding or a mixtape (`FeedItem` in ../index.ts). The merged
- * `/tracks` feed interleaves both; a mixtape is distinguished by `type:
- * "mixtape"`. The `TrackListItem` arm stays first so a finding (whose `type` is
- * an OPTIONAL `"finding"`) still matches when `type` is absent.
- */
 export const FeedItemSchema = z
   .union([TrackListItemSchema, MixtapeDTOSchema])
   .meta({ id: "FeedItem" });
 
-/** A Spotify search candidate (`TrackSearchResult` in ../index.ts; `/api/v1/search`). */
 export const TrackSearchResultSchema = z
   .object({
     album: z.string().optional(),
     artists: z.array(z.string()),
     artworkUrl: z.string().optional(),
-    // The track length in ms, when Spotify carries it. Optional and additive: the submit
-    // type-ahead ignores it, but the catalogue anchor's verified-search rung reads it as one
-    // of its three verification signals (crawl.ts `pickVerifiedCandidate`).
+
     durationMs: z.number().optional(),
     id: z.string(),
-    // Parallel to `artists`: each artist's stable Spotify id, same order. Optional and additive —
-    // the submit type-ahead ignores it, but the catalogue anchor's verified-search rung reads it
-    // to connect-or-create the crawled track's artist entities by stable id (crawl.ts), so a track
-    // anchored via the search rung earns the same stable-id link as an ISRC-anchored one.
+
     spotifyArtistIds: z.array(z.string()).optional(),
     spotifyUrl: z.string(),
     title: z.string(),
   })
   .meta({ id: "TrackSearchResult" });
 
-/**
- * A signed-in public user as the `/me` private tier returns it (`PublicUser` in
- * the server `public-auth` module). The cookie-session identity — distinct from
- * the admin grant. `username`/`displayUsername` are absent until the user claims
- * a handle, so both are optional.
- */
 export const PublicUserSchema = z
   .object({
     createdAt: z.string(),
-    // The account's enlistment ordinal, stamped once and fixed for life. Optional because an
-    // account without one is unstamped; readers must not interpret absence as zero.
+
     crewNumber: z.number().optional(),
     displayUsername: z.string().optional(),
-    // The account's OWN email. A `PublicUser` is only ever resolved from the
-    // requester's own session (the authenticated `/me` tier), so this is always the
-    // requester's own address — the DESIGN invariant "email never appears on PUBLIC
-    // surfaces" holds (no public route serializes a `PublicUser`). Powers the
-    // Settings email section + resend-verification action, and the data export.
+
     email: z.string(),
-    // Whether the account's email is verified. Always present (the `user` row's
-    // `email_verified` is NOT NULL). Verification gates future features, never the
-    // session — an unverified user still signs in. A Google sign-in arrives verified.
+
     emailVerified: z.boolean(),
     id: z.string(),
-    // The avatar URL when one exists (Google fills it; upload is a future slice).
+
     image: z.string().optional(),
-    // The freeform display name (Settings "Name"; what Google fills and the header
-    // shows). Distinct from username (the handle) and displayUsername (its casing).
+
     name: z.string(),
     username: z.string().optional(),
   })
   .meta({ id: "PublicUser" });
 
-/** A per-platform publication row (`SocialPostItem` in ../index.ts; `social_posts`). */
 export const SocialPostItemSchema = z
   .object({
     createdAt: z.string(),
@@ -462,12 +290,6 @@ export const SocialPostItemSchema = z
   })
   .meta({ id: "SocialPostItem" });
 
-/**
- * A finding reference inside an edition's content payload — the finding's own Log
- * ID plus the editorial "why" line written FOR this edition (which may differ from
- * the finding's own `note`). The archive page hydrates the live finding from
- * `tracks` by `logId`, so the reference stays tiny and current.
- */
 const EditionFindingRefSchema = z
   .object({
     logId: z.string(),
@@ -475,7 +297,6 @@ const EditionFindingRefSchema = z
   })
   .meta({ id: "EditionFindingRef" });
 
-/** A galaxy-grouped block of finding references inside an edition. */
 const EditionGalaxyBlockSchema = z
   .object({
     findings: z.array(EditionFindingRefSchema),
@@ -483,7 +304,6 @@ const EditionGalaxyBlockSchema = z
   })
   .meta({ id: "EditionGalaxyBlock" });
 
-/** A tidbit (a linkable fact) carried in an edition. */
 const EditionTidbitSchema = z
   .object({
     source: z.string().optional(),
@@ -491,13 +311,6 @@ const EditionTidbitSchema = z
   })
   .meta({ id: "EditionTidbit" });
 
-/**
- * The structured content payload an edition stores (`editions.content_json`). The
- * SINGLE source the agent authors that renders BOTH the web archive page and the
- * email HTML. LOOSE on the
- * agent's side at write time (the admin route passes it through), but this is the
- * canonical READ shape the public DTO exposes.
- */
 export const EditionContentSchema = z
   .object({
     galaxies: z.array(EditionGalaxyBlockSchema).optional(),
@@ -507,12 +320,6 @@ export const EditionContentSchema = z
   })
   .meta({ id: "EditionContent" });
 
-/**
- * An edition as the `/newsletter` archive surface + `/api/v1/newsletter/editions`
- * emit it (`EditionDTO` in ../index.ts). NOT a collectible: a plain integer
- * `number` (minted on send, absent on a draft), no Log ID, no coordinate. The
- * `content` is the structured payload above.
- */
 export const EditionDTOSchema = z
   .object({
     addedAt: z.string().optional(),
@@ -529,7 +336,6 @@ export const EditionDTOSchema = z
   })
   .meta({ id: "EditionDTO" });
 
-/** The cost-ledger buckets a subscription line falls in (COST-02). */
 export const SubscriptionCategorySchema = z.enum([
   "infra",
   "AI",
@@ -539,18 +345,10 @@ export const SubscriptionCategorySchema = z.enum([
   "tooling",
 ]);
 
-/** How a subscription line's charge recurs (COST-02). */
 export const SubscriptionCadenceSchema = z.enum(["monthly", "annual", "one-off", "usage"]);
 
-/** A subscription line's lifecycle (COST-02). */
 export const SubscriptionStatusSchema = z.enum(["active", "cancelled", "trial"]);
 
-/**
- * One line in the operator's private cost ledger (`SubscriptionDTO` in ../index.ts) —
- * a recurring or one-off spend on some Fluncle vendor. The whole surface is operator
- * tier: this shape never reaches a public route, only the admin `/admin/costs` station
- * + its CRUD ops. `amount` is minor units (cents). Nullable fields are `.optional()`.
- */
 export const SubscriptionDTOSchema = z
   .object({
     amount: z.number(),
@@ -570,13 +368,6 @@ export const SubscriptionDTOSchema = z
   })
   .meta({ id: "SubscriptionDTO" });
 
-/**
- * A clip — a lightweight 9:16 derivative cut from a recording's set video
- * (`mixtape_clips`; `ClipDTO` below). NOT a spine
- * object: it carries no Log ID. Many per set (the drip-feed backlog). This is the
- * wire shape the clip ops emit and the editor / clip library read. `xOffset` is the
- * 9:16 framing offset; `status` is the cut-queue + library-filter state.
- */
 export const ClipDTOSchema = z
   .object({
     caption: z.string().optional(),
@@ -584,10 +375,7 @@ export const ClipDTOSchema = z
     id: z.string(),
     inMs: z.number(),
     outMs: z.number(),
-    // The `recording` a clip was cut from — a clip's ONE owner since the
-    // plan→recording→mixtape Deploy-2 cutover dropped the legacy `mixtapeId`
-    // (every legacy mixtape clip was repointed onto its mixtape's recording first).
-    // Optional at the wire level (the column is nullable); `createClip` always sets it.
+
     recordingId: z.string().optional(),
     status: z.enum(["done", "pending"]),
     updatedAt: z.string(),
@@ -595,23 +383,12 @@ export const ClipDTOSchema = z
   })
   .meta({ id: "ClipDTO" });
 
-/** The TS shape of a clip, derived from the schema (one definition, no drift). */
 export type ClipDTO = z.infer<typeof ClipDTOSchema>;
 
-/**
- * A recording tracklist cue (`recording_cues`; RFC plan→recording→mixtape). `id` is
- * a stable cue ref; `artists`/`title` feed the clip overlay's
- * changing on-screen Track-ID (`resolveClipTracks`) with no re-splitting, and seed
- * `mixtape_tracks` on promote. `startMs` is the cue's start on the set timeline.
- */
 export const RecordingTracklistItemSchema = z
   .object({
     artists: z.array(z.string()),
-    // The honest link to canon (the cue's `recording_cues.finding_id`), when the operator
-    // picked a real Fluncle finding rather than typing a non-finding track. Absent for a
-    // free-text cue. Additive + OPTIONAL: legacy readers and the Rekordbox derivation
-    // script (which reads cues server-side, not via this DTO) are unaffected. The Studio
-    // cue rail reads it to render the finding-linked vs snapshot distinction.
+
     findingId: z.string().optional(),
     id: z.string(),
     startMs: z.number().optional(),
@@ -619,52 +396,36 @@ export const RecordingTracklistItemSchema = z
   })
   .meta({ id: "RecordingTracklistItem" });
 
-/** The TS shape of a recording tracklist cue, derived from the schema. */
 export type RecordingTracklistItem = z.infer<typeof RecordingTracklistItemSchema>;
 
-/**
- * A RECORDING — a captured DJ set that is NOT (yet) a published mixtape (RFC
- * recording-primitive, Design B). It OWNS its R2 key (`r2Key`) and carries an optional
- * cue tracklist. Coordinate-less until `promote` mints a mixtape from it; `logId` +
- * `mixtapeId` are then the promoted mixtape's coordinate + id (absent while un-promoted).
- */
 export const RecordingDTOSchema = z
   .object({
     createdAt: z.string(),
     durationMs: z.number().optional(),
-    // "has video" = the recording OWNS a set-video key. A PLAN has none (`false`);
-    // a TAKE has one (`true`). Derived server-side from `r2Key` presence so the UI
-    // never re-derives the plan/take split from a nullable key (RFC §1, taste #1).
+
     hasVideo: z.boolean(),
     id: z.string(),
-    // The promoted mixtape's committed Log ID coordinate (absent until promoted).
+
     logId: z.string().optional(),
-    // The promoted mixtape's id (absent until promoted).
+
     mixtapeId: z.string().optional(),
-    // The take→plan link (RFC plan→recording→mixtape §3): a TAKE points at its PLAN;
-    // absent for a plan or an orphan take (e.g. the rolling set).
+
     parentId: z.string().optional(),
-    // The scheduled date/time (ISO) of the upcoming live session a PLAN is for — the
-    // plan-side home of `mixtapes.planned_for` (RFC §6, D-plannedFor). Absent when unset
-    // and on takes/legacy rows. The plan editor's Live-session field reads + writes it.
+
     plannedFor: z.string().optional(),
-    // The owned R2 key. ABSENT for a PLAN (a recording with no video — RFC
-    // plan→recording→mixtape): "has video" = `r2Key` present.
+
     r2Key: z.string().optional(),
     recordedAt: z.string().optional(),
     title: z.string(),
     tracklist: z.array(RecordingTracklistItemSchema),
     updatedAt: z.string(),
-    // The human display label ("v2") among a plan's takes (RFC §3, D-version).
-    // Every recording carries one (defaults to 1 in the schema).
+
     version: z.number(),
   })
   .meta({ id: "RecordingDTO" });
 
-/** The TS shape of a recording, derived from the schema (one definition, no drift). */
 export type RecordingDTO = z.infer<typeof RecordingDTOSchema>;
 
-/** A mixtape per-platform distribution row (`MixtapeSocialPostItem`; `mixtape_social_posts`). */
 export const MixtapeSocialPostItemSchema = z
   .object({
     createdAt: z.string(),
@@ -677,7 +438,6 @@ export const MixtapeSocialPostItemSchema = z
   })
   .meta({ id: "MixtapeSocialPostItem" });
 
-/** A finding submission as `/api/v1/submissions` records it (`Submission` in ../index.ts). */
 export const SubmissionSchema = z
   .object({
     album: z.string().optional(),
@@ -693,36 +453,11 @@ export const SubmissionSchema = z
     spotifyUrl: z.string(),
     status: z.enum(["approved", "pending", "rejected"]),
     title: z.string(),
-    // The pre-chew triage verdict (the on-box `fluncle-triage` sweep's advisory
-    // one-liner). Operator-internal, absent until the sweep visits.
+
     triageVerdict: z.string().optional(),
   })
   .meta({ id: "Submission" });
 
-/**
- * The Content-Type a caller may ask for on a direct-to-R2 upload presign
- * (`presign_clip_upload`, `presign_set_video_upload`, `presign_recording_upload`).
- *
- * Bounded to `video/<subtype>` because all three ops sign an upload into
- * `fluncle-videos`, which is served WORLD-READABLE at found.fluncle.com: the value is
- * baked into the presigned signature (`X-Amz-SignedHeaders`) and stored as the object's
- * Content-Type, so it is what the CDN serves those bytes as. An unconstrained value lets
- * an admin-tier upload be served as `text/html` from a Fluncle origin. The sibling
- * `presign_track_video_uploads` needs no such bound — it derives every artifact's type
- * server-side from `VIDEO_ARTIFACTS` — and that server-derived map is the shape to prefer
- * whenever the set of types is known in advance.
- *
- * `video/*` is the widest shape any real caller sends: the recording dialog's picker is
- * `accept="video/*"` and forwards `file.type`, sending nothing when the browser cannot type
- * the pick (`file.type || undefined`), so an untyped file falls to the default rather than
- * tripping this gate; both CLI legs send `video/mp4` or nothing (each handler defaults to
- * `video/mp4`). Parameters (`; codecs=…`) are deliberately out — no caller produces one,
- * and the object stores a bare type.
- *
- * It REJECTS rather than falling back to the default, so a wrong type is a clean 400
- * instead of a silently mistyped world-served object. The subtype charset is RFC 6838's;
- * the 128-char ceiling is well over twice the longest registered `video/*` type.
- */
 export const UploadContentTypeSchema = z
   .string()
   .max(128)

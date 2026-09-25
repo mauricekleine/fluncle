@@ -45,6 +45,8 @@ The rendition is past the single-PUT presign budget (`apps/web/src/lib/server/r2
 
 The bytes never traverse the Cloudflare zone; only the tiny presign/complete control-plane calls do.
 
+The direct-upload presign contracts accept only bare `video/<subtype>` Content-Types and reject invalid values. The signed value becomes the world's served object type on Fluncle's CDN; accepting `text/html` would let an uploaded object execute from that origin. An omitted type defaults to `video/mp4`; the fixed track-video artifact map derives its types server-side.
+
 ## The pieces
 
 - CLI command + orchestration: `apps/cli/src/commands/recordings.ts` (`recordings create --video` mints the row + stages the rendition), `apps/cli/src/commands/mixtape-set-video.ts` (derive → multipart upload with per-part retry; the shared `uploadRenditionMultipart` + pure helpers `planMultipart` / `buildCompleteXml` / `renditionFfmpegArgs`, the retry `putPart` / `putPartOnce` / `MAX_PART_ATTEMPTS`), CLI wiring in `apps/cli/src/cli.ts` (`admin recordings create`).

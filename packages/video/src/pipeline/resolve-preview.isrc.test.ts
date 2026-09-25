@@ -1,9 +1,3 @@
-// ISRC-first preview resolution: a finding's ISRC names the EXACT recording, so a
-// remix never resolves to the original. Drives resolvePreview through a swapped
-// global fetch (so it never touches Deezer/iTunes) across the three legs. No
-// framework — self-running asserts, matching the rest of this package. Run:
-// `bun src/pipeline/resolve-preview.isrc.test.ts`.
-
 import assert from "node:assert/strict";
 
 import { resolvePreview } from "./resolve-preview";
@@ -49,7 +43,6 @@ const familyData = {
 };
 
 async function run(): Promise<void> {
-  // 1. ISRC hit → the EXACT recording via Deezer by ISRC, short-circuiting any search.
   {
     const { calls } = installMockFetch([
       {
@@ -64,15 +57,12 @@ async function run(): Promise<void> {
     assert.equal(calls.length, 1, "ISRC hit short-circuits — no fuzzy search/iTunes");
   }
 
-  // 2. No ISRC: the Deezer name search does NOT tip a remix finding to the original
-  //    (the original is FIRST in the family — the old bug).
   {
     installMockFetch([{ body: familyData, match: "api.deezer.com/search" }]);
     const preview = await resolvePreview({ artists: [ARTIST], title: REMIX });
     assert.equal(preview?.url, "https://cdn.deezer.com/REMIX.mp3", "remix wins over the original");
   }
 
-  // 3. ISRC lookup misses (no preview) → falls back to the version-aware name search.
   {
     const { calls } = installMockFetch([
       { body: { error: { code: 800 } }, match: `track/isrc:${REMIX_ISRC}` },
@@ -87,7 +77,6 @@ async function run(): Promise<void> {
     );
   }
 
-  // 4. An ORIGINAL finding does not take a remix from the name search.
   {
     installMockFetch([
       {
@@ -112,8 +101,6 @@ async function run(): Promise<void> {
     assert.equal(preview?.url, "https://cdn.deezer.com/ORIGINAL.mp3", "original ignores the remix");
   }
 
-  // 5. Deezer has only the original for a remix finding → falls through to iTunes
-  //    (version-aware: takes the iTunes remix, not the Deezer original).
   {
     installMockFetch([
       {
@@ -146,7 +133,6 @@ async function run(): Promise<void> {
     assert.equal(preview?.source, "itunes", "source is itunes");
   }
 
-  // 6. Nothing version-matches anywhere → null (better than archiving the original).
   {
     installMockFetch([
       {

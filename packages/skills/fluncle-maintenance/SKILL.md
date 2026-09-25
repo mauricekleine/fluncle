@@ -61,7 +61,7 @@ This skill owns the standing policy for dependency vulnerabilities — the count
 
 1. **Reachable on the deploy runner or the Worker runtime path** (anything `vite`/`wrangler`/`@tanstack/react-start`/the build chain pulls in): a high/critical fix ships promptly through a SHIP-classified bump, and MAY jump the 3-day `minimumReleaseAge` quarantine — the quarantine guards against fresh-release supply-chain attacks, and a targeted advisory fix is the opposite trade; still prefer the oldest release that carries the fix.
 2. **Local-only tooling** (lint, editor, docs, Raycast, Expo dev chains): rides the normal cadence; the quarantine holds.
-3. **Prefer bumping the direct parent** over pinning a transitive; a `resolutions`/`overrides` pin is a fork of someone else's tree and carries a comment naming when it can be dropped.
+3. **Prefer bumping the direct parent** over pinning a transitive; a `resolutions`/`overrides` pin is a fork of someone else's tree, so record its removal condition in `references/version-inventory.md`.
 4. **Nothing auto-merges.** Renovate automerges nothing here; every vulnerability-driven bump goes through the same SHIP/BRAKE judgment and green-CI gate as a pin bump.
 
 **The `--ignore` allowlist.** The allowlist lives in the root `audit` script (`package.json`), so local runs and CI report the same residual set. An entry is admitted only with a justification recorded here, and every pass re-checks that the justification still holds (an upstream fix retires the entry). The current entries:
@@ -86,6 +86,6 @@ Read top-down; earlier sources override on conflict.
 
 1. The user's current brief.
 2. **This skill and its references** — the doctrine, the inventory, the safety rules, the bump-and-ship procedure.
-3. `docs/agents/hermes/Dockerfile` and `docs/agents/hermes/pin-watch/` — the pins of record and the on-box self-deploy mechanism. The Dockerfile is the source of truth for what is pinned; if a line number in the inventory has drifted, the pin's **comment marker** (each pin line carries a "Bump lever" / "Pinned …" comment) still locates it.
+3. `docs/agents/hermes/Dockerfile` and `docs/agents/hermes/pin-watch/` — the pins of record and the on-box self-deploy mechanism. The Dockerfile is the source of truth for what is pinned; if a line number in the inventory has drifted, the pin's command or config key still locates it.
 4. **The `fluncle-hermes-operator` skill** — for the box rebuild/redeploy/smoke-test mechanics that the on-box pin-watch encodes.
 5. `AGENTS.md` — the repo's quality-check + git + skill conventions.

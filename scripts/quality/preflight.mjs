@@ -132,9 +132,7 @@ export function acquireLaunchLock(
       }
       try {
         unlinkSync(path);
-      } catch {
-        // Another hook recovered the same abandoned lock first; retry the atomic claim once.
-      }
+      } catch {}
     }
   }
 
@@ -151,9 +149,7 @@ export function releaseLaunchLock(directory, token) {
   }
   try {
     unlinkSync(path);
-  } catch {
-    // A vanished lock is already released.
-  }
+  } catch {}
 }
 
 function changedPaths(root) {
@@ -433,9 +429,6 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1
   const root = parseRoot(argv);
 
   try {
-    // A worktree that has not installed resolves `@fluncle/*` from the main checkout it sits
-    // inside, so every lane below would grade another branch's code and hand back a green nobody
-    // should trust. Refuse before a result is produced rather than after one is believed.
     const installProblem = operation === "status" ? null : workspaceInstallProblem(root);
     if (installProblem) {
       throw new Error(

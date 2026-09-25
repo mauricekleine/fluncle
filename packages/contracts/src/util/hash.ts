@@ -1,8 +1,3 @@
-/**
- * Stable 32-bit FNV-1a hash as an unsigned integer. Persisted Log IDs, plan handles,
- * observability tokens, and replica identities depend on this exact algorithm.
- * The optional seed gives replica identities two independent 32-bit lanes.
- */
 export function fnv1a32(value: string, seed = 0x811c9dc5): number {
   let hash = seed >>> 0;
 
@@ -14,7 +9,6 @@ export function fnv1a32(value: string, seed = 0x811c9dc5): number {
   return hash >>> 0;
 }
 
-/** Stable 64-bit FNV-1a hash over UTF-8 bytes for persisted due-work source versions. */
 export function fnv1a64(value: string): bigint {
   let hash = 0xcbf29ce484222325n;
 

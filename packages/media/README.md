@@ -33,6 +33,8 @@ The production variant is `traveler`: the figure on plain Deep Field. The produc
 
 ## Regenerate the OG card
 
+The on-the-fly mixtape cover URL carries the version from `MIXTAPE_COVER_VERSION` in `@fluncle/contracts/util/mixtape-cover`. Web and mobile share that cache key; raise it when rebaking the shared background or changing the stamped layout so both request the new rendition.
+
 Run from `packages/media` (or with `bun run --cwd packages/media …`). Use **bun**, never npm/pnpm/yarn.
 
 ```bash

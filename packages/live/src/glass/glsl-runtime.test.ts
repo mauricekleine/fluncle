@@ -1,10 +1,3 @@
-// Plate-texture reconstruction proof. The glass replays an archived plate body by
-// prepending the SAME `sampler2D <name>;` + `float <name>AspectRatio;` header pair the
-// OFFLINE ShaderLayer injected, bound at the SAME sorted units. Compiling GLSL needs a
-// GPU (unavailable in `bun test`), so these lock the reconstruction to the offline
-// `buildFragmentHeader` / `assignTextureUnits` by VALUE — if the live decls match the
-// ones the render already compiled from, the replay program compiles too.
-
 import { describe, expect, test } from "bun:test";
 
 import {
@@ -25,7 +18,7 @@ describe("assignTextureUnits — render-aligned, deterministic", () => {
     expect(assignTextureUnits(PLATE_NAMES)).toEqual({ u_plate: 0, u_plateBackground: 1 });
   });
   test("byte-for-byte agreement with packages/video assignTextureUnits", () => {
-    const names = ["u_plateBackground", "u_art", "u_plate"]; // unsorted input
+    const names = ["u_plateBackground", "u_art", "u_plate"];
     expect(assignTextureUnits(names)).toEqual(offlineUnits(names));
   });
 });
@@ -40,7 +33,6 @@ describe("textureUniformDecls — the injected sampler pair", () => {
     );
   });
   test("every emitted decl also appears in the offline buildFragmentHeader", () => {
-    // The render's header is the ground truth the archived body compiled against.
     const offline = buildFragmentHeader({
       coreUniforms: "uniform float u_time;",
       ditherHelpers: "",
@@ -65,7 +57,7 @@ describe("the reconstructed plate fragment", () => {
     const frag = REPLAY_HEADER + textureUniformDecls(PLATE_NAMES) + body;
     expect(frag).toContain("uniform sampler2D u_plate;");
     expect(frag).toContain("uniform float u_plateAspectRatio;");
-    expect(frag).toContain("uniform vec3  u_palette[4];"); // the core header is still present
+    expect(frag).toContain("uniform vec3  u_palette[4];");
     expect(frag).toContain("texture2D(u_plate");
   });
 });

@@ -1,37 +1,7 @@
-// The `admin-social` domain contract module — a finding's per-platform
-// publication control plane (list state, update status, push a draft). Part of
-// the admin fan-out, built on the same pattern as `./admin-tracks.ts`.
-//
-//   - `list_track_social` — admin tier (live `requireAdmin`): a read.
-//   - `update_track_social` — operator tier (live `requireOperator`): the manual
-//     review feedback (status + url), so the agent gets a 403.
-//   - `draft_track_social` — admin tier WITH a FIELD-LEVEL operator guard, ported
-//     VERBATIM from the live route: `requireAdmin` gates entry, then `youtube`
-//     (a direct PUBLIC upload) additionally requires `requireOperator`, while
-//     `tiktok` (a SELF_ONLY inbox draft) is agent-allowed. The handler reads
-//     `context.role` to reproduce that exact branch (a youtube push by the agent
-//     is a 403, a tiktok push is allowed).
-//   - `capture_post_urls` — admin tier: the polling SWEEP that captures the public
-//     YouTube/TikTok post URLs Postiz withholds on create (built from the native
-//     content id on `/missing`) and links each release-id for analytics.
-//
-// Inputs stay LOOSE/passthrough by design — the live routes narrow `unknown`
-// in-handler and emit their own codes (`bad_status`/`url_required`/
-// `unsupported_platform`/`no_video`/`no_post`), so a permissive contract keeps
-// those codes byte-for-byte for the `fluncle admin` CLI + the enrichment agent.
-
 import { oc } from "@orpc/contract";
 import * as z from "zod";
 import { SocialPostItemSchema } from "./_shared";
 
-/**
- * `list_track_social` → `GET /admin/tracks/{trackId}/social` (operationId
- * `listTrackSocial`).
- *
- * Admin tier (live `requireAdmin`). The track's per-platform publication rows.
- * Preserves the live `{ ok: true, posts, trackId }` envelope and the
- * `not_found`/404 (`trackNotFoundResponse`).
- */
 export const listTrackSocial = oc
   .route({
     method: "GET",
@@ -49,17 +19,6 @@ export const listTrackSocial = oc
     }),
   );
 
-/**
- * `update_track_social` → `PATCH /admin/tracks/{trackId}/social/{platform}`
- * (operationId `updateTrackSocial`).
- *
- * Operator tier (live `requireOperator`). Update the per-platform status (+ the
- * public URL) after the operator reviews the draft in-app. LOOSE body — the live
- * route validates `status`/`url` itself (`bad_status`/`url_required`), so the
- * contract stays permissive. Preserves the `{ ok: true, platform, status,
- * trackId }` envelope and the `bad_status`/`url_required`/`no_post`/`not_found`
- * codes.
- */
 export const updateTrackSocial = oc
   .route({
     method: "PATCH",
@@ -86,17 +45,6 @@ export const updateTrackSocial = oc
     }),
   );
 
-/**
- * `draft_track_social` → `POST /admin/tracks/{trackId}/social/{platform}/draft`
- * (operationId `draftTrackSocial`).
- *
- * Admin tier (live `requireAdmin`) WITH a field-level operator guard for
- * `youtube` (a direct PUBLIC upload — operator only) read in-handler from
- * `context.role`; `tiktok` (a SELF_ONLY inbox draft) is agent-allowed. Pushes the
- * track's video + caption via Postiz. Preserves the `{ ok: true, externalId,
- * platform, status, trackId }` envelope and the `unsupported_platform`/
- * `no_video`/`no_log_id`/`not_found` codes.
- */
 export const draftTrackSocial = oc
   .route({
     method: "POST",
@@ -116,18 +64,6 @@ export const draftTrackSocial = oc
     }),
   );
 
-/**
- * `capture_post_urls` → `POST /admin/social/posts/capture` (operationId
- * `capturePostUrls`).
- *
- * Admin tier (the on-box capture cron is agent-allowed — it only fills the public
- * `url` Postiz withheld on create and links the analytics release-id; it publishes
- * nothing). The polling SWEEP: select every youtube/tiktok post with a Postiz id
- * but no captured `url` (status published/draft), poll Postiz's `/missing`, build
- * each permalink from the platform's native content id, record it, link the
- * release-id, and flip a captured TikTok `draft` → `published`. LOOSE body — the
- * handler clamps `limit` itself. Returns the `{ ok, polled, captured }` envelope.
- */
 export const capturePostUrls = oc
   .route({
     method: "POST",
@@ -145,27 +81,6 @@ export const capturePostUrls = oc
     }),
   );
 
-/**
- * `advance_publish_queue` → `POST /admin/social/publish/advance` (operationId
- * `advancePublishQueue`).
- *
- * ADMIN tier (`adminAuth`, NOT `operatorGuard`): the on-box `fluncle-publish-advance` cron
- * drives it with its AGENT token — the `drip_clips` / `capture_post_urls` precedent (the
- * box holds no Postiz key, so it only TRIGGERS the Worker, which owns the key). One
- * bounded, idempotent tick of the render → publish auto-advance: the kill switch first (a
- * paused tick pushes nothing), then at most `ADVANCE_PER_TICK_CAP` READY findings are
- * pushed — YouTube as the hands-off public Short, TikTok as the inbox draft the operator
- * finishes in-app.
- *
- * Note the tier inversion this deliberately carries: `draft_track_social` refuses a
- * YouTube push from the agent role (a direct public upload was operator-only). The
- * auto-advance IS the decision to let the machine make that push — so the gate moves off
- * the request tier and onto the kill switch + the readiness gates, exactly as the clip
- * drip-feed moved Instagram posting behind `clip_drip_paused`. Nothing else may push
- * YouTube as the agent: the tier stays on `draft_track_social`.
- *
- * Empty body (`{}`).
- */
 export const advancePublishQueue = oc
   .route({
     method: "POST",
@@ -177,16 +92,15 @@ export const advancePublishQueue = oc
   .input(z.looseObject({}))
   .output(
     z.object({
-      /** Findings inspected this tick (after the per-tick cap). */
       candidates: z.number(),
-      /** Pushes that errored — the row is left `failed` for the operator, never retried. */
+
       failed: z.array(
         z.object({
           platform: z.enum(["tiktok", "youtube"]),
           trackId: z.string(),
         }),
       ),
-      /** Platforms held back, and why — a stuck advance says so out loud. */
+
       held: z.array(
         z.object({
           missing: z.array(z.string()).optional(),
@@ -202,9 +116,9 @@ export const advancePublishQueue = oc
         }),
       ),
       ok: z.literal(true),
-      /** The kill switch was on — nothing was pushed. */
+
       paused: z.boolean(),
-      /** The pushes that actually went out. */
+
       pushed: z.array(
         z.object({
           externalId: z.string(),
@@ -217,14 +131,6 @@ export const advancePublishQueue = oc
     }),
   );
 
-/**
- * `set_publish_advance` → `PUT /admin/social/publish/advance/state` (operationId
- * `setPublishAdvance`).
- *
- * OPERATOR tier — the auto-advance's KILL SWITCH (the `set_clip_drip` shape, on the same
- * `settings` KV). Pausing halts every future auto-publish within one tick, changing
- * nothing else about a finding; resuming continues it. The agent may never touch it.
- */
 export const setPublishAdvance = oc
   .route({
     method: "PUT",
@@ -236,24 +142,6 @@ export const setPublishAdvance = oc
   .input(z.object({ paused: z.boolean() }))
   .output(z.object({ ok: z.literal(true), paused: z.boolean() }));
 
-/**
- * `record_social_metrics` → `POST /admin/social/metrics/record` (operationId
- * `recordSocialMetrics`).
- *
- * AGENT tier (`adminAuth`, NOT `operatorGuard`): the box's daily social-metrics cron drives it with
- * its agent token — the `record_platform_stats` / `capture_post_urls` precedent (the box holds no
- * Postiz key; the Worker owns it). A bare trigger (empty body). The Worker reads each PUBLISHED
- * post's Postiz per-post analytics and APPENDS one `social_metrics` row per (post, source, UTC day)
- * — append-only (velocity), idempotent per day (a same-day re-run lands `inserted: 0`). Bounded to
- * ≤25 Postiz requests/run (the platform's 30/hour cap). It also reads the Simple-Analytics
- * social→site referrer arrivals (best-effort, one non-Postiz request), returned for observability.
- * When @fluncle's TikTok account is connected it additionally reads `POST /v2/video/list/` and
- * appends each video's OWN metrics under the `tiktok_display` source (independent of Postiz; a clean
- * no-op when TikTok is unconfigured/unconnected). When @fluncle's YouTube is connected it likewise
- * reads the Data API counters + Analytics per-video retention and appends under the
- * `youtube_analytics` source (independent, same no-op contract). Internal write only (no public
- * lastmod moves). Returns the per-run outcome.
- */
 export const recordSocialMetrics = oc
   .route({
     method: "POST",
@@ -265,70 +153,63 @@ export const recordSocialMetrics = oc
   .input(z.looseObject({}))
   .output(
     z.object({
-      /** The per-run Postiz request budget honoured (≤25). */
       budget: z.number().int(),
-      /** True when the Postiz key was present and the snapshot half ran. */
+
       configured: z.boolean(),
-      /** The UTC day the run's snapshots are keyed on. */
+
       day: z.string(),
-      /** Published posts with a Postiz id — the pool the budget selects from. */
+
       eligible: z.number().int(),
-      /** Posts whose Postiz read errored (skipped, never failing the batch). */
+
       failed: z.number().int(),
-      /** Snapshot rows actually appended this run (0 on a same-day re-run). */
+
       inserted: z.number().int(),
-      /** Posts Postiz reported as `{ missing: true }` (release-id unresolved) — skipped. */
+
       missing: z.number().int(),
       ok: z.literal(true),
-      /** Posts actually read from Postiz this run (≤ budget). */
+
       polled: z.number().int(),
-      /** The site-side reach block: social→site arrivals from Simple Analytics (best-effort). */
+
       referrals: z.object({
         arrivals: z.array(z.object({ pageviews: z.number().int(), platform: z.string() })),
         configured: z.boolean(),
         total: z.number().int(),
       }),
-      /** The TikTok Display-API half — @fluncle's own per-video metrics into the `tiktok_display`
-       *  source. Work counts are null when unconfigured or faulted, never fabricated zeroes. */
+
       tiktok: z.object({
-        /** True when configured/connected, false on a clean no-op, null when the arm faulted. */
         configured: z.boolean().nullable(),
-        /** One when the isolated arm faulted; zero when it completed or was unconfigured. */
+
         failed: z.number().int(),
-        /** Videos read from `video/list` this run. */
+
         fetched: z.number().int().nullable(),
-        /** Snapshot rows appended (0 on a same-day re-run — idempotent by day). */
+
         inserted: z.number().int().nullable(),
-        /** Fetched videos matched to a published tiktok post by native video id. */
+
         matched: z.number().int().nullable(),
-        /** Fetched videos with no matching post row (may predate the archive) — skipped. */
+
         skipped: z.number().int().nullable(),
       }),
-      /** The YouTube Analytics half — @fluncle's own per-video metrics (public counters + retention)
-       *  into the `youtube_analytics` source. Work counts are null when unconfigured or faulted. */
+
       youtube: z.object({
-        /** True when configured/connected, false on a clean no-op, null when the arm faulted. */
         configured: z.boolean().nullable(),
-        /** One when the isolated arm faulted; zero when it completed or was unconfigured. */
+
         failed: z.number().int(),
-        /** Videos the Data API returned metrics for this run. */
+
         fetched: z.number().int().nullable(),
-        /** Snapshot rows appended (0 on a same-day re-run — idempotent by day). */
+
         inserted: z.number().int().nullable(),
-        /** Published youtube posts with a parseable native video id — the pool queried (≤ budget). */
+
         matched: z.number().int().nullable(),
-        /** Published youtube posts whose url carried no parseable video id — skipped. */
+
         skipped: z.number().int().nullable(),
       }),
     }),
   );
 
-/** One day-point in a post's view series — the sparkline's raw data. */
 const ReachSeriesPointSchema = z
   .object({ day: z.string(), views: z.number().int() })
   .meta({ id: "ReachSeriesPoint" });
 
-/** One board row: a post's LATEST snapshot for one source, its velocity, and its creative axes. */
 const ReachPostRowSchema = z
   .object({
     artists: z.array(z.string()),
@@ -358,7 +239,6 @@ const ReachPostRowSchema = z
   })
   .meta({ id: "ReachPostRow" });
 
-/** One pivot cell — the (platform, axis value) group's summary. */
 const ReachPivotCellSchema = z
   .object({
     count: z.number().int(),
@@ -371,7 +251,6 @@ const ReachPivotCellSchema = z
   })
   .meta({ id: "ReachPivotCell" });
 
-/** One pivot — an axis and its cells. */
 const ReachPivotSchema = z
   .object({
     axis: z.enum(["plateSubject", "structure"]),
@@ -379,16 +258,6 @@ const ReachPivotSchema = z
   })
   .meta({ id: "ReachPivot" });
 
-/**
- * `get_social_metrics` → `GET /admin/social/metrics` (operationId `getSocialMetrics`).
- *
- * Admin tier (`adminAuth`): the /admin/reach board — the READ sibling of `record_social_metrics`.
- * Reduces the append-only `social_metrics` ledger to one row per (post, source) with its latest
- * snapshot + day-over-day view velocity (ranked in SQL), joined to platform / published_at /
- * track / the two creative axes (video structure + plate subject), plus the platform × axis
- * pivots and each post's bounded view series for the sparkline. A pure read. `windowDays` is a
- * tolerant optional query string (parsed + clamped in-handler, default 90, max 365).
- */
 export const getSocialMetrics = oc
   .route({
     method: "GET",
@@ -407,7 +276,6 @@ export const getSocialMetrics = oc
     }),
   );
 
-/** The `admin-social` domain's ops, merged into the root contract by `./index.ts`. */
 export const adminSocialContract = {
   advance_publish_queue: advancePublishQueue,
   capture_post_urls: capturePostUrls,
