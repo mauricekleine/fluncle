@@ -42,6 +42,7 @@ export function discoveryQueueTrack(track: DiscoveryTrack): QueueTrack {
     href: track.href,
     id: track.trackId,
     lit: track.lit,
+    logId: track.logId,
     similar: track.similar,
     spotifyUrl: track.spotifyUrl,
     title: track.title,

@@ -5,6 +5,8 @@ import { CrewSlot } from "@/components/nav/crew-slot";
 import { NavBreadcrumb } from "@/components/nav/nav-breadcrumb";
 import { NavFooter } from "@/components/nav/nav-footer";
 import { PlayerBar } from "@/components/player/player-bar";
+import { PublicToaster } from "@/components/public-toaster";
+import { SavedTracksSync } from "@/components/saved-tracks-sync";
 import { SearchProvider, SearchTrigger } from "@/components/search/search-command";
 import { expirePageContinuation, pausePreview } from "@/lib/preview-player";
 
@@ -83,6 +85,8 @@ export function PublicChrome({
         {workbench ? undefined : <NavFooter galaxiesLive={galaxiesLive} />}
 
         {pathname === "/mix" ? undefined : <PlayerBar />}
+        <PublicToaster />
+        <SavedTracksSync />
       </div>
     </SearchProvider>
   );

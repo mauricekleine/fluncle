@@ -391,9 +391,9 @@ describe("saveFinding (real SQL, any track — findings AND catalogue)", () => {
     expect(stored.rows[0]?.log_id).toBe("log-cert");
 
     const list = await listSavedFindings(publicUser(userA));
-    expect(list.savedFindings.map((f) => ({ logId: f.logId, trackId: f.trackId }))).toEqual([
-      { logId: "log-cert", trackId: "track-cert-00000000" },
-    ]);
+    expect(
+      list.savedFindings.map((f) => ({ href: f.href, logId: f.logId, trackId: f.trackId })),
+    ).toEqual([{ href: "/log/log-cert", logId: "log-cert", trackId: "track-cert-00000000" }]);
   });
 
   it("saves a certified finding by its Log ID, still storing the coordinate", async () => {
@@ -433,6 +433,21 @@ describe("saveFinding (real SQL, any track — findings AND catalogue)", () => {
     expect(list.savedFindings[0]?.title).toBe("Cold Cut");
     expect(list.savedFindings[0]?.artists).toEqual(["Nobody"]);
     expect(list.savedFindings[0]?.trackId).toBe("track-cat-000000000");
+    expect(list.savedFindings[0]?.href).toBe("/track/track-cat-000000000");
+  });
+
+  it("lists a nameless catalogue save with no page to link to", async () => {
+    const { saveFinding, listSavedFindings } = await import("./account-data");
+
+    await seedCatalogueTrack(db, { artists: [], title: "", trackId: "track-bare-00000000" });
+
+    expect(
+      await saveFinding(publicUser(userA), { trackId: "track-bare-00000000" }),
+    ).not.toBeInstanceOf(Response);
+
+    const list = await listSavedFindings(publicUser(userA));
+    expect(list.savedFindings[0]?.trackId).toBe("track-bare-00000000");
+    expect(list.savedFindings[0]?.href).toBeUndefined();
   });
 
   it("upserts on (user_id, track_id) — re-saving a catalogue track updates in place", async () => {

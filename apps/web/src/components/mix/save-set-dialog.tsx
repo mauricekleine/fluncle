@@ -1,6 +1,6 @@
 import { BookmarkSimpleIcon, CircleNotchIcon } from "@phosphor-icons/react";
 import { type FormEvent, useEffect, useState } from "react";
-import { toast } from "sonner";
+import { announce } from "@/lib/announce";
 import { Button } from "@fluncle/ui/components/button";
 import {
   Dialog,
@@ -98,15 +98,15 @@ export function SaveSetDialog({
       }
 
       if (response.ok) {
-        toast("Saved to your account.");
+        announce("Saved to your account.");
         setOpen(false);
       } else if (response.status === 401) {
         window.location.href = "/account";
       } else {
-        toast("Couldn't save that set.");
+        announce("Couldn't save that set.");
       }
     } catch {
-      toast("Couldn't save that set.");
+      announce("Couldn't save that set.");
     } finally {
       setBusy(false);
     }

@@ -1,5 +1,5 @@
 import { LinkSimpleIcon } from "@phosphor-icons/react";
-import { toast } from "sonner";
+import { announce } from "@/lib/announce";
 import { siteUrl } from "@/lib/fluncle-links";
 import { Button } from "@fluncle/ui/components/button";
 
@@ -19,14 +19,14 @@ export function ShareSetButton({
         await navigator.share({ title: "A Fluncle mix", url });
       } else {
         await navigator.clipboard.writeText(url);
-        toast("Set link copied. Send it to the crew.");
+        announce("Set link copied. Send it to the crew.");
       }
     } catch {
       try {
         await navigator.clipboard.writeText(url);
-        toast("Set link copied. Send it to the crew.");
+        announce("Set link copied. Send it to the crew.");
       } catch {
-        toast("Couldn't copy the link.");
+        announce("Couldn't copy the link.");
       }
     }
   };

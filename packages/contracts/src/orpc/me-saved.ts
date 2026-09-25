@@ -5,6 +5,7 @@ export const SavedFindingSchema = z
   .object({
     artists: z.array(z.string()),
 
+    href: z.string().optional(),
     imageUrl: z.string().optional(),
     logId: z.string().optional(),
     note: z.string().optional(),

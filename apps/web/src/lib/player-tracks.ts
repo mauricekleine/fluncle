@@ -1,4 +1,5 @@
 import { type QueueTrack } from "./preview-player";
+import { type SavableTrack } from "./saved-tracks";
 import { hitHref, searchArchiveApiPath, searchPagePath, type SearchHit } from "./search-results";
 import { hasTrackPageIdentity, trackPagePath } from "./track-page";
 
@@ -8,6 +9,23 @@ export function trackCredit(track: Pick<QueueTrack, "artists" | "title">): strin
   const artists = track.artists.join(", ");
 
   return artists.length > 0 ? `${artists} — ${track.title}` : track.title;
+}
+
+export function savableTrack(
+  track: Pick<
+    QueueTrack,
+    "artists" | "coverUrl" | "href" | "id" | "logId" | "spotifyUrl" | "title"
+  >,
+): SavableTrack {
+  return {
+    artists: track.artists,
+    coverUrl: track.coverUrl,
+    href: track.href,
+    logId: track.logId,
+    spotifyUrl: track.spotifyUrl,
+    title: track.title,
+    trackId: track.id,
+  };
 }
 
 export function similarQuery(track: Pick<QueueTrack, "artists" | "title">): string {
@@ -42,6 +60,7 @@ export function toQueueTrack(row: {
         : undefined,
     id: row.trackId,
     lit: row.logId !== undefined,
+    logId: row.logId,
     spotifyUrl: row.spotifyUrl,
     title: row.title,
   };
@@ -56,6 +75,7 @@ export function queueTrackFromHit(hit: SearchHit): QueueTrack {
     href: destination && !destination.external ? destination.href : undefined,
     id: hit.trackId,
     lit: hit.certified,
+    logId: hit.certified ? hit.logId : undefined,
     similar: hit.similar,
     spotifyUrl: hit.spotifyUrl,
     title: hit.title,

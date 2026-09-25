@@ -10,6 +10,7 @@ import {
 } from "@fluncle/contracts/orpc";
 import { bestAlbumCoverUrl } from "../media";
 import { parseSetParam, parseTasteParam, serializeSet, serializeTaste } from "../mix-set";
+import { hasTrackPageIdentity, trackPagePath } from "../track-page";
 import { parseArtistsJson } from "./artists";
 import { listedArtistWhere } from "./artist-visibility";
 import { getDb, typedRow, typedRows } from "./db";
@@ -122,6 +123,7 @@ export type GalaxyProgressResult = {
 
 export type SavedFindingItem = {
   artists: string[];
+  href?: string;
   imageUrl?: string;
   logId?: string;
   note?: string;
@@ -544,21 +546,40 @@ export async function listSavedFindings(
 
   return {
     ok: true,
-    savedFindings: typedRows<SavedRow>(result.rows).map((row) => ({
-      artists: parseArtistsJson(row.artists_json),
-      imageUrl: bestAlbumCoverUrl({
-        imageKey: row.album_image_key,
-        imageState: row.album_image_state,
-        imageUpdatedAt: row.album_image_updated_at,
-        spotifyUrl: row.album_image_url,
-      }),
-      logId: row.log_id ?? undefined,
-      note: row.note ?? undefined,
-      savedAt: row.saved_at,
-      title: row.title,
-      trackId: row.track_id,
-    })),
+    savedFindings: typedRows<SavedRow>(result.rows).map((row) => {
+      const artists = parseArtistsJson(row.artists_json);
+      const logId = row.log_id ?? undefined;
+
+      return {
+        artists,
+        href: savedTrackHref({ artists, logId, title: row.title, trackId: row.track_id }),
+        imageUrl: bestAlbumCoverUrl({
+          imageKey: row.album_image_key,
+          imageState: row.album_image_state,
+          imageUpdatedAt: row.album_image_updated_at,
+          spotifyUrl: row.album_image_url,
+        }),
+        logId,
+        note: row.note ?? undefined,
+        savedAt: row.saved_at,
+        title: row.title,
+        trackId: row.track_id,
+      };
+    }),
   };
+}
+
+export function savedTrackHref(track: {
+  artists: string[];
+  logId?: string;
+  title: string;
+  trackId: string;
+}): string | undefined {
+  if (track.logId) {
+    return `/log/${track.logId}`;
+  }
+
+  return hasTrackPageIdentity(track) ? trackPagePath(track.trackId) : undefined;
 }
 
 export async function saveFinding(
