@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { beforeAll, describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -9,6 +9,17 @@ const root = resolve(import.meta.dir, "..");
 
 const scope = await noCommentsScope();
 const files = await trackedScopedFiles(scope);
+
+const SHFMT_INSTALL_TIMEOUT_MS = 120_000;
+
+beforeAll(() => {
+  const setup = spawnSync(resolve(root, ".claude/hooks/setup-shfmt-helper.sh"), [], {
+    encoding: "utf8",
+  });
+  if (setup.status !== 0) {
+    throw new Error(`pinned shfmt helper could not be installed: ${setup.stderr}`);
+  }
+}, SHFMT_INSTALL_TIMEOUT_MS);
 
 type ShellComment = { line: number; text: string };
 

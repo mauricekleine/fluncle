@@ -1,10 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { subscribeToNewsletter } from "./newsletter";
 
-// The subscribe path validates + rate-limits, then hands the email to
-// `addContactToSegment`. Mock the Resend call + the auth/limiter so the test asserts
-// the email reaches Resend and the validation gates hold.
-
 const addContactToSegment = vi.hoisted(() => vi.fn(async () => undefined));
 
 vi.mock("./resend", () => ({ addContactToSegment }));

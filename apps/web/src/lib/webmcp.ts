@@ -1,15 +1,3 @@
-// WebMCP (https://webmachinelearning.github.io/webmcp/): expose the site's
-// key actions as in-page tools for agent-driving browsers. Registration is
-// best-effort; browsers without navigator.modelContext skip it silently.
-//
-// The TOOL set is not mirrored by hand: name, description, and input schema come from the
-// shared spec registry (lib/tool-specs.ts), the same one the server MCP (lib/server/mcp.ts)
-// and ChatDnB read, so the three surfaces cannot drift into three spellings of a verb. Only the
-// `fetch('/api/…')` bodies below are browser-specific. The server MCP also speaks resources (the
-// archive as a readable corpus) and prompts (Fluncle-voiced starting points), but
-// navigator.modelContext has no resource/prompt primitive — so the browser read path is the
-// get_track tool below, and resources/prompts stay server-MCP only.
-
 import { SHARED_TOOL_SPECS, toWebMcpTool } from "./tool-specs";
 
 type WebMcpToolResult = {
@@ -31,8 +19,6 @@ type ModelContext = {
 let registered = false;
 
 export function registerWebMcpTools(): void {
-  // Module-level guard: React StrictMode double-invokes effects in dev, and
-  // registerTool (unlike provideContext) appends rather than replaces.
   if (registered || typeof navigator === "undefined") {
     return;
   }
@@ -58,14 +44,11 @@ export function registerWebMcpTools(): void {
   }
 }
 
-// The browser HTTP execute per shared read tool. Name/description/schema come from the shared
-// registry specs (lib/tool-specs.ts); only these hand-written `fetch('/api/…')` bodies are
-// WebMCP's own (the browser has no in-process server functions).
 const httpExecutes: Record<string, WebMcpTool["execute"]> = {
   get_random_track: async () => jsonResult(await fetchJson("/api/v1/tracks/random")),
   get_track: async (input) =>
     jsonResult(await fetchJson(`/api/v1/tracks/${encodeURIComponent(asString(input.idOrLogId))}`)),
-  // The found-order FEED (findings + published mixtapes) — the public GET /api/v1/findings twin.
+
   list_findings: async (input) => {
     const limit = typeof input.limit === "number" ? input.limit : 10;
     const params = new URLSearchParams({ limit: String(limit) });
@@ -78,8 +61,7 @@ const httpExecutes: Record<string, WebMcpTool["execute"]> = {
 
     return jsonResult(await fetchJson(`/api/v1/tracks/fresh?${params}`));
   },
-  // The whole-archive ENUMERATOR — the public GET /api/v1/tracks twin (release-ordered, numbered
-  // pages, tri-state `certified`). Distinct from the found-order `list_findings` feed above.
+
   list_tracks: async (input) => {
     const params = new URLSearchParams();
     if (typeof input.page === "number") {
@@ -91,16 +73,13 @@ const httpExecutes: Record<string, WebMcpTool["execute"]> = {
 
     return jsonResult(await fetchJson(`/api/v1/tracks?${params}`));
   },
-  // The archive search — the public GET /api/v1/search/archive twin, whose `q` input matches the
-  // tool's `query` 1:1 and whose per-IP limiter is shared with the MCP (orpc/search.ts). Returns
-  // the whole SearchResult (both registers, each row certified-tagged).
+
   search_archive: async (input) => {
     const params = new URLSearchParams({ q: asString(input.query) });
 
     return jsonResult(await fetchJson(`/api/v1/search/archive?${params}`));
   },
-  // The two write verbs (submit_track resolves the URL to a candidate first, then POSTs it;
-  // subscribe_newsletter boards the email). Public POST routes; the browser has no in-process fns.
+
   submit_track: async (input) => {
     const spotifyUrl = asString(input.spotifyUrl);
     const search = (await fetchJson(
@@ -150,9 +129,6 @@ const httpExecutes: Record<string, WebMcpTool["execute"]> = {
     ),
 };
 
-// WebMCP-only tool: the Spotify candidate search (Epic-2 territory, not in the shared registry —
-// it searches Spotify, not the archive). Outside the registry nothing enforces its parity with the
-// server-MCP twin, so lib/mcp-webmcp-parity.test.ts pins the two by hand (hence the export).
 export const webmcpOnlyTools: WebMcpTool[] = [
   {
     description:
@@ -177,9 +153,6 @@ export const webmcpOnlyTools: WebMcpTool[] = [
   },
 ];
 
-// The realized WebMCP tool set: the shared read tools projected from the registry specs (each with
-// its browser HTTP execute), then the WebMCP-only verbs. get_status is codified off WebMCP, so the
-// `webmcp` transport filter drops it.
 const tools: WebMcpTool[] = [
   ...SHARED_TOOL_SPECS.filter((spec) => spec.transports.includes("webmcp")).map((spec) => {
     const httpExecute = httpExecutes[spec.name];
@@ -192,9 +165,6 @@ const tools: WebMcpTool[] = [
   }),
   ...webmcpOnlyTools,
 ];
-
-// The WebMCP tool set has no deprecation aliases, so it is exactly the shared web tools plus the
-// WebMCP-only verbs — one name per operation, in parity with the server MCP surface.
 
 function asString(value: unknown): string {
   return typeof value === "string" ? value : "";

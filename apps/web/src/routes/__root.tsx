@@ -21,32 +21,20 @@ import { fluncleMetaDescription } from "../lib/identity";
 import appCss from "../styles.css?url";
 
 const title = "Fluncle: drum & bass bangers from another dimension";
-// The site-wide <meta>/og/twitter description (every page inherits it unless it
-// sets its own, e.g. the log pages). Kept ≤155 chars for the SERP snippet.
+
 const description = fluncleMetaDescription;
 const coverUrl = `${siteUrl}/fluncle-cover.png`;
 
-// The nav's Galaxies gate, resolved on the SERVER. `/galaxies` 404s until the whole
-// sonic map is named, so the nav must not link it before then — but the check has to
-// happen server-side, or the link never lands in the SSR HTML and a crawler (which
-// is the whole point of banking the nav in a footer) never sees the map at all.
 const fetchGalaxiesLive = createServerFn({ method: "GET" }).handler(() => isGalaxyMapFullyNamed());
 
-// TanStack's canonical option order (loader feeds the next step's inference),
-// which isn't alphabetical — so sort-keys is off here. See AGENTS.md.
 // oxlint-disable-next-line sort-keys
 export const Route = createRootRoute({
   component: RootLayout,
   loader: async () => ({ galaxiesLive: await fetchGalaxiesLive() }),
-  // The root loader is a `count(*)` over the tiny `galaxies` table whose answer is
-  // effectively static — it flips once, when the whole map is finally named. Under the
-  // router's 60s default it would be re-counted on every client navigation (the root
-  // match is shared by every page). Pin it long so a nav reuses the answer.
+
   staleTime: 10 * 60_000,
   head: () => ({
     links: [
-      // The body face. Preloaded ahead of the display face because it now sets nearly
-      // every line of text on the page; a late swap would reflow the lot.
       {
         as: "font",
         crossOrigin: "anonymous",
@@ -134,11 +122,6 @@ export const Route = createRootRoute({
         name: "viewport",
       },
       {
-        // The browser chrome painted in Deep Field, so the UA's own bar joins the
-        // night sky instead of framing it. A meta tag cannot read a CSS var, so the
-        // hex is read from `@fluncle/tokens` (the generated mirror of DESIGN.md)
-        // rather than hand-copied — the same rule the OG cards and the oEmbed card
-        // follow, and the reason none of them can drift off-palette.
         content: colors.deepField,
         name: "theme-color",
       },
@@ -185,20 +168,7 @@ export const Route = createRootRoute({
         content: "Fluncle",
         property: "og:site_name",
       },
-      // `twitter:card` is the ONE X tag the root may set: the card TYPE has no Open Graph
-      // equivalent, so a page that wants the wide card overrides it with
-      // `summary_large_image` (the graph pages, the hub indexes, /log) and everything else
-      // inherits `summary`, which is the right shape for the square cover above.
-      //
-      // The root sets NO `twitter:title` / `twitter:description` / `twitter:image`, and that
-      // absence is load-bearing. `HeadContent` merges the matched routes deepest-first and
-      // dedupes by `name ?? property`, so any tag the root declares is emitted on every page
-      // that does not override it — and X reads `twitter:*` in PREFERENCE to `og:*`. A
-      // site-level `twitter:title` here therefore shadows each page's own `og:title` on the one
-      // surface that outranks it, which is how /about, /mixtapes, /log and the rest came to
-      // unfurl under the site's title instead of their own. Omitting the three lets X fall back
-      // to `og:title` / `og:description` / `og:image` — per page, by construction. The homepage
-      // is unaffected because its fallback resolves to the same page-specific strings.
+
       {
         content: "summary",
         name: "twitter:card",
@@ -211,23 +181,12 @@ export const Route = createRootRoute({
       },
     ],
   }),
-  // The site-wide error boundary: an unexpected throw in a loader or render that no
-  // route-local `errorComponent` caught (rough re-entry). Reports the caught error to
-  // Sentry — a custom boundary is not auto-captured. See root-error-state.tsx.
+
   errorComponent: RootErrorBoundary,
-  // The site-wide 404: the empty coordinate as a black hole (a finding Fluncle went
-  // looking for and found nothing where it should be). Catches every unmatched URL and
-  // any bubbled `notFound()` without a route-local state; the router serves it at a real
-  // HTTP 404. Entity routes keep their own `notFoundComponent` (the /log, /artist, …
-  // "no finding at that coordinate" states) — this is the fallback beneath them.
+
   notFoundComponent: NotFoundBlackHole,
 });
 
-// The site-wide error boundary, one step ahead of the error screen: a deploy replaces
-// every hashed asset, so a tab still holding an older build 404s on the next lazy chunk
-// and client-side navigation dies. When the caught error IS that failure, take the
-// standard remedy — one guarded reload onto the current build — and render the normal
-// error state behind it in case the reload is suppressed (see lib/stale-build-recovery).
 function RootErrorBoundary(props: ErrorComponentProps): ReactNode {
   const { error } = props;
 
@@ -241,15 +200,9 @@ function RootErrorBoundary(props: ErrorComponentProps): ReactNode {
 }
 
 function RootLayout(): ReactNode {
-  // One QueryClient per app instance (created once via useState so it survives
-  // re-renders). Admin boards read through it so they refetch on window focus —
-  // handy when the operator tabs back from TikTok/YouTube.
   const [queryClient] = useState(() => new QueryClient());
   const { galaxiesLive } = useLoaderData({ from: Route.id });
 
-  // The other place a stale build surfaces: Vite fires `vite:preloadError` when a
-  // module preload 404s, BEFORE the router ever sees a rejection. Preventing the
-  // default suppresses the unhandled throw; the guarded reload picks up the new build.
   useEffect(() => {
     const onPreloadError = (event: Event): void => {
       event.preventDefault();
@@ -267,16 +220,10 @@ function RootLayout(): ReactNode {
         <HeadContent />
       </head>
       <body>
-        {/* The one directional Eclipse-Gold bloom under every pane (gold as
-            ignition; breath gated to no-preference in CSS). */}
         <div aria-hidden="true" className="sun-bloom" />
         <QueryClientProvider client={queryClient}>
-          {/* One capture-phase listener for public discovery anchors. Chromeless surfaces
-              (radio, galaxy) still emit; /admin is skipped inside the handler. */}
           <DiscoveryListener />
-          {/* The single mount point for the public navigation (the logbook colophon):
-              the wordmark + breadcrumb top bar, and the liner-notes footer that
-              carries the whole nav. Skips /admin + the full-bleed surfaces. */}
+
           <PublicChrome galaxiesLive={galaxiesLive}>
             <Outlet />
           </PublicChrome>

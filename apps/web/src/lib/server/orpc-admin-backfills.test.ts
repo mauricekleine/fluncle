@@ -2,15 +2,6 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { readJson } from "./orpc-test-helpers";
 import { warmOrpcRouter } from "./orpc-test-kit";
 
-// The admin wave's `admin-backfills` parity + auth proof: the maintenance sweeps
-// driven end-to-end through `handleOrpc` against `/api/v1/admin/...`, so the REAL
-// admin auth spine (../orpc-auth) runs — only the data-layer helpers are mocked.
-//
-//   - backfill_discogs / backfill_lastfm — agent tier (`adminAuth`): 401 no token,
-//     the AGENT token now passes (the box cron drives it), the operator passes too;
-//     the live `?limit/dryRun/cursor` params parse in-handler and the success
-//     envelope is byte-for-byte.
-
 const backfillDiscogsIds = vi.fn();
 const backfillLastfmLoves = vi.fn();
 
@@ -34,9 +25,6 @@ beforeEach(() => {
   backfillLastfmLoves.mockReset();
 });
 
-// A bodyless POST (no Content-Type), the exact shape the CLI's `adminApiPost`
-// sends for these query-only ops after the wave (it no longer claims a JSON
-// content-type without a body).
 function post(path: string, token: string | undefined): Request {
   const headers: Record<string, string> = {};
 
@@ -47,7 +35,6 @@ function post(path: string, token: string | undefined): Request {
   return new Request(`https://www.fluncle.com/api/v1${path}`, { headers, method: "POST" });
 }
 
-// ── backfill_discogs — agent tier ─────────────────────────────────────────────────────────────────────────────────────
 describe("oRPC backfill_discogs (POST /admin/backfill/discogs)", () => {
   it("401s with no admin token", async () => {
     const { handleOrpc } = await import("./orpc");
@@ -112,7 +99,7 @@ describe("oRPC backfill_discogs (POST /admin/backfill/discogs)", () => {
       unresolved: ["004.7.3J"],
       unresolvedCount: 1,
     });
-    // The query params parsed in-handler (limit clamped, dryRun=1 → true, cursor).
+
     expect(backfillDiscogsIds).toHaveBeenCalledWith(10, true, "cur-1", {
       boxFetch: false,
       discogsCandidates: undefined,
@@ -120,7 +107,6 @@ describe("oRPC backfill_discogs (POST /admin/backfill/discogs)", () => {
   });
 });
 
-// ── backfill_lastfm — agent tier ───────────────────────────────────────────────────────────────────────────────────────
 describe("oRPC backfill_lastfm (POST /admin/backfill/lastfm)", () => {
   it("allows the AGENT (agent tier — the box cron drives it)", async () => {
     backfillLastfmLoves.mockResolvedValueOnce({
@@ -171,7 +157,7 @@ describe("oRPC backfill_lastfm (POST /admin/backfill/lastfm)", () => {
       skipped: ["004.7.4K"],
       skippedCount: 1,
     });
-    // Default limit (50), dryRun=true → true, no cursor.
+
     expect(backfillLastfmLoves).toHaveBeenCalledWith(50, true, undefined);
   });
 });

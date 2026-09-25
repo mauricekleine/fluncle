@@ -5813,6 +5813,255 @@ a.catalogue-letter:focus-visible {
   }
 }
 
+/* ── Browse: the one top-bar route between the catalogue hubs ──────────────── */
+/* The first control in the right-hand cluster (components/nav/browse-menu.tsx), dressed exactly
+   like search and the crew door: a glyph, a word on a wide bar, a caret, the Gold Veil heat on
+   hover and while open (the Ignition Rule). It takes the cluster's auto margin, so search and the
+   crew door sit beside it instead of splitting the slack with it. Two triggers render, one per
+   presentation, and the breakpoint shows exactly one: the dropdown from 40rem up, the sheet below. */
+.browse-trigger {
+  align-items: center;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md, 0.5rem);
+  color: var(--muted-foreground);
+  cursor: pointer;
+  display: inline-flex;
+  font-size: 0.82rem;
+  font-weight: 600;
+  gap: 0.4rem;
+  margin-left: auto;
+  padding: 0.3rem 0.5rem;
+  transition:
+    color 150ms ease-out,
+    background-color 150ms ease-out,
+    border-color 150ms ease-out;
+  white-space: nowrap;
+}
+
+.browse-trigger:hover,
+.browse-trigger:focus-visible,
+.browse-trigger[aria-expanded="true"],
+.browse-trigger[data-popup-open] {
+  background: var(--gold-veil);
+  border-color: color-mix(in oklch, var(--eclipse-gold) 30%, transparent);
+  color: var(--eclipse-glow);
+}
+
+.browse-trigger ~ .search-trigger,
+.browse-trigger ~ .crew-trigger {
+  margin-left: 0;
+}
+
+/* Only the trail's tail may shrink. With Browse in the bar a phone's trail is tight, and a crumb
+   that shrank before the tail would slide its text over the next crumb's separator. */
+.nav-breadcrumb li:not(:last-child) {
+  flex: none;
+}
+
+/* The front door has no breadcrumb and no search glyph, so its wordmark already takes the slack;
+   a second auto margin here would split it and float Browse mid-bar. */
+.nav-shell[data-front-door] .browse-trigger {
+  margin-left: 0;
+}
+
+.browse-trigger-icon {
+  flex: none;
+  height: 1rem;
+  width: 1rem;
+}
+
+.browse-trigger-caret {
+  color: color-mix(in oklch, var(--muted-foreground) 70%, transparent);
+  display: none;
+  flex: none;
+  height: 0.7rem;
+  width: 0.7rem;
+}
+
+/* The word is a courtesy on a wide bar; the glyph carries it on a phone, and the accessible name
+   rides on the trigger either way. */
+.browse-trigger-label {
+  display: none;
+}
+
+.browse-trigger--menu {
+  display: none;
+}
+
+/* On a phone the glyph alone is the target, so it takes a full 44px box (WCAG 2.5.5) and hands the
+   extra height back to the bar with a negative block margin: the bar stays one line, the same
+   height it was. */
+.browse-trigger--sheet {
+  justify-content: center;
+  margin-block: -0.5rem;
+  min-height: 2.75rem;
+  min-width: 2.75rem;
+}
+
+@media (min-width: 40rem) {
+  .browse-trigger--menu {
+    display: inline-flex;
+  }
+
+  .browse-trigger--sheet {
+    display: none;
+  }
+
+  .browse-trigger-label,
+  .browse-trigger-caret {
+    display: inline;
+  }
+}
+
+/* A hub row: its ratified label over its colophon blurb. The blurb is quieter Stardust; the row
+   heats like every quiet control, and the current hub keeps the account menu's cream tint. */
+.browse-hub-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 0;
+}
+
+.browse-hub-label {
+  color: var(--starlight-cream);
+  font-weight: 700;
+}
+
+.browse-hub-blurb {
+  color: var(--stardust);
+  font-size: 0.78rem;
+  line-height: 1.3;
+}
+
+.browse-menu .browse-hub {
+  padding-block: 0.45rem;
+}
+
+.browse-hub--active {
+  background: color-mix(in oklch, var(--stardust) 14%, transparent);
+}
+
+/* Unlayered, so these beat the Shadcn item's layered highlight: the current hub's resting tint
+   must still give way to the Gold Veil when a pointer or the keyboard reaches it (WCAG 2.4.7), and
+   the row's text heats with it (the Ignition Rule). */
+.browse-menu .browse-hub[data-highlighted],
+.browse-sheet-list .browse-hub:hover,
+.browse-sheet-list .browse-hub:focus-visible {
+  background: var(--gold-veil);
+}
+
+.browse-menu .browse-hub[data-highlighted] .browse-hub-label,
+.browse-sheet-list .browse-hub:hover .browse-hub-label,
+.browse-sheet-list .browse-hub:focus-visible .browse-hub-label {
+  color: var(--eclipse-glow);
+}
+
+.browse-sheet-list .browse-hub:focus-visible {
+  outline: 2px solid var(--eclipse-glow);
+  outline-offset: -2px;
+}
+
+/* The sheet: the plate's glass, as the behind-the-scenes drawer wears it, over the shared scrim. */
+.browse-sheet {
+  background: color-mix(in oklch, var(--card) 86%, transparent);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+@supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .browse-sheet {
+    -webkit-backdrop-filter: blur(18px) saturate(125%);
+    backdrop-filter: blur(18px) saturate(125%);
+    background: color-mix(in oklch, var(--card) 72%, transparent);
+  }
+}
+
+/* The sheet never outgrows the viewport (a phone on its side, enlarged text): its header and close
+   control stay put and the list scrolls inside. */
+.browse-sheet {
+  max-height: calc(100dvh - env(safe-area-inset-top));
+}
+
+.browse-sheet-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.browse-sheet-list {
+  display: grid;
+  list-style: none;
+  margin: 0;
+  padding: 0.5rem;
+}
+
+/* Thumb-sized rows: every row clears 44px, the whole row is the link. */
+.browse-sheet-list .browse-hub {
+  align-items: center;
+  border-radius: var(--radius-md, 0.5rem);
+  display: flex;
+  min-height: 3.25rem;
+  padding: 0.55rem 0.75rem;
+  transition: background-color 150ms ease-out;
+}
+
+/* The shortcut seam (the style-chip row): a heading and a wrapping row of chips, in both
+   presentations. Chips are the `.catalogue-letter` register: Stardust ink, no gold at rest. */
+.browse-shortcuts--sheet {
+  border-top: 1px solid var(--border);
+  padding: 0.75rem 1.25rem 1rem;
+}
+
+.browse-shortcuts-label {
+  color: var(--muted-foreground);
+  font-size: 0.76rem;
+  font-weight: 700;
+  margin: 0 0 0.5rem;
+}
+
+.browse-shortcut-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  list-style: none;
+  margin: 0;
+  padding: 0 0.25rem 0.25rem;
+}
+
+.browse-shortcut {
+  border: 1px solid var(--dust-line);
+  border-radius: 999px;
+  color: var(--stardust);
+  display: inline-flex;
+  font-size: 0.78rem;
+  font-weight: 600;
+  min-height: 2rem;
+  padding: 0.2rem 0.65rem;
+}
+
+.browse-shortcut:hover,
+.browse-shortcut[data-highlighted] {
+  color: var(--starlight-cream);
+}
+
+.browse-shortcut:focus-visible {
+  outline: 2px solid var(--eclipse-glow);
+  outline-offset: 2px;
+}
+
+.browse-shortcuts--sheet .browse-shortcut {
+  align-items: center;
+  min-height: 2.75rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .browse-trigger,
+  .browse-sheet-list .browse-hub {
+    transition: none;
+  }
+}
+
 /* ── Search: the dialog ────────────────────────────────────────────────────── */
 .search-dialog {
   max-width: 34rem;
@@ -7756,525 +8005,429 @@ a.catalogue-letter:focus-visible {
 }
 
 /* ════════════════════════════════════════════════════════════════════════════════════════
-   /fresh — THE NEW-RELEASES PAGE. Full-bleed and always-evolving, it breaks out of the reading
-   plate the wiki-style graph pages (artist/label/album) sit on. The treatment is THE MARQUEE: a
-   billboard of the newest drops at display scale, over a dimming Legible-Sky pane (no bordered card).
-   Register rules hold: a finding leads with a full-strength artist avatar + its Log ID and heats to
-   gold; a catalogue row carries a DIMMED avatar, no coordinate, dust ink (the Unlit Rule); the One
-   Sun gold budget is spent only on focus rings and finding hover-heat. Dates are RELEASE dates
-   ("Out Jul 3"), never Found. Numerals are Oxanium tabular; track titles stay in the body face.
-   Owner: components/fresh/. ════════════════════════════════════════════════════════════════ */
+   /fresh — A FINITE WEEK. A catalogue page on the shared plate (DESIGN.md's Plate, Three Areas):
+   the standouts (cover-led, one tile per release), then rolling week buckets of releases, each
+   with its count and one "Play this week" control, then the end of the window said outright.
+   A release of several tracks is one entry built from the discovery row's own parts; its tracks
+   fold out beneath it as discovery rows. The light is the register (the Unlit Rule): a finding's
+   cover is lit, every other cover unlit, and no mark names which is which. Gold is spent only on
+   focus and a finding's hover heat (One Sun). Owner: components/fresh/.
+   ════════════════════════════════════════════════════════════════════════════════════════ */
 
-.fresh-page {
-  --fresh-max: 72rem;
-  isolation: isolate;
-  min-height: 100vh;
-  padding: clamp(1.5rem, 4vw, 3rem) clamp(1rem, 5vw, 3rem) 7rem;
+.fresh-controls {
+  display: grid;
+  gap: var(--space-2xs);
+  justify-items: start;
+}
+
+.fresh-since-visit-row {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 0.75rem;
+}
+
+.fresh-since-visit {
+  color: var(--muted-foreground);
+  font-size: 0.9rem;
+  margin: 0;
+  /* The line arrives after hydration (the browser holds the visit, the server cannot); its row is
+     held open from the first paint so nothing below it moves when it lands. */
+  min-height: 1.3em;
+}
+
+/* The band heading on the plate: a real H2, quiet cream, the one size step under the title tier. */
+.fresh-band-title {
+  color: var(--foreground);
+  font-size: 1.05rem;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  line-height: 1.2;
+  margin: 0;
+}
+
+/* ── The standouts ─────────────────────────────────────────────────────────────────────── */
+.fresh-standouts {
+  display: grid;
+  gap: var(--space-sm);
+}
+
+.fresh-standout-grid {
+  display: grid;
+  gap: var(--space-md) var(--space-sm);
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.fresh-standout {
+  display: grid;
+  gap: var(--space-2xs);
+  grid-template-rows: auto 1fr;
+  min-width: 0;
   position: relative;
 }
 
-/* THE LEGIBLE SKY (DESIGN.md §4). Breaking out of the reading plate does not exempt the text from
-   sitting on a pane — the raw cosmos backdrop (body::before cover art + the upper-left sun-bloom)
-   breaks WCAG AA under the big cream/stardust type. So the whole stage gets a full-bleed DIMMING
-   pane instead of a bordered card: a warm-dark deep-field wash, blurred just enough to melt the
-   bright vinyl/astronaut behind it, holding AA without re-introducing the plate the page broke out
-   of. `isolation: isolate` scopes the z-index so this sits over the backdrop and under the content. */
-.fresh-page::before {
-  -webkit-backdrop-filter: blur(7px) saturate(115%);
-  backdrop-filter: blur(7px) saturate(115%);
-  background: linear-gradient(
-    180deg,
-    color-mix(in oklch, var(--deep-field) 86%, transparent) 0%,
-    color-mix(in oklch, var(--deep-field) 74%, transparent) 26%,
-    color-mix(in oklch, var(--deep-field) 78%, transparent) 100%
-  );
+.fresh-standout-play,
+.fresh-standout-still {
+  display: block;
+  width: 100%;
+}
+
+.fresh-standout-play .play-cover-glyph {
+  font-size: 1.6rem;
+}
+
+.fresh-standout-art.track-artwork,
+.fresh-standout-art.artist-avatar {
+  aspect-ratio: 1;
+  border: 1px solid var(--border);
+  border-radius: var(--rounded-artwork);
+  display: block;
+  object-fit: cover;
+  transition:
+    transform 180ms cubic-bezier(0.22, 1, 0.36, 1),
+    border-color 180ms ease-out,
+    filter 180ms ease-out;
+  width: 100%;
+}
+
+.fresh-standout[data-lit]:hover .fresh-standout-art,
+.fresh-standout[data-lit]:has(:focus-visible) .fresh-standout-art {
+  border-color: color-mix(in oklch, var(--primary) 42%, transparent);
+  transform: scale(1.03);
+}
+
+.fresh-standout:not([data-lit]) .fresh-standout-art {
+  filter: grayscale(0.85) brightness(0.62);
+}
+
+.fresh-standout:not([data-lit]):hover .fresh-standout-art,
+.fresh-standout:not([data-lit]):has(:focus-visible) .fresh-standout-art {
+  filter: grayscale(0.6) brightness(0.78);
+}
+
+.fresh-standout:not([data-lit]) .track-artwork-fallback {
+  background:
+    var(--grain-tile) repeat,
+    var(--muted);
+  background-blend-mode: overlay;
+}
+
+.fresh-standout-body {
+  display: grid;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+/* The title opens the release; its hit area stretches over the tile, under the cover's button. */
+.fresh-standout-link {
+  color: inherit;
+  outline: none;
+  text-decoration: none;
+}
+
+.fresh-standout-link::after {
   content: "";
   inset: 0;
-  pointer-events: none;
-  position: fixed;
-  z-index: -1;
+  position: absolute;
 }
 
-.fresh-stage {
-  margin-inline: auto;
-  max-width: var(--fresh-max);
-  width: 100%;
+.fresh-standout:has(.fresh-standout-link:focus-visible) {
+  border-radius: var(--rounded-artwork);
+  box-shadow: 0 0 0 2px var(--ring);
 }
 
-/* ── Masthead (shared) ─────────────────────────────────────────────────────────────────── */
-.fresh-masthead {
-  display: grid;
-  gap: 0.35rem;
-  margin-bottom: clamp(1.75rem, 4vw, 3rem);
-}
-
-.fresh-title {
-  color: var(--starlight-cream);
-  font-family: var(--font-display);
-  font-size: clamp(3.25rem, 13vw, 7.5rem);
-  font-weight: 800;
-  letter-spacing: -0.03em;
-  line-height: 0.86;
-  margin: 0;
-}
-
-.fresh-intro {
-  color: var(--stardust);
-  font-size: 1rem;
-  line-height: 1.5;
-  margin: 0.4rem 0 0;
-  max-width: 42rem;
-}
-
-.fresh-empty {
-  color: var(--muted-foreground);
-  font-size: 1rem;
-  margin-top: 2rem;
-}
-
-.fresh-section-label {
-  color: var(--muted-foreground);
-  font-size: 0.82rem;
-  font-weight: 700;
-  margin: 0 0 0.9rem;
-}
-
-/* ── Cover card (shared: findings + album records) ─────────────────────────────────────── */
-.fresh-cover-card {
-  border-radius: var(--rounded-md);
-  color: inherit;
-  display: grid;
-  gap: 0.55rem;
-  text-decoration: none;
-}
-
-.fresh-cover-art {
-  aspect-ratio: 1;
-  background: var(--tape-black);
-  height: auto;
-  width: 100%;
-}
-
-/* A cover-less release keeps the eclipse-gradient fallback (higher specificity than the flat tile
-   above), so an empty cover reads as intentional cosmos, never a broken image. */
-.fresh-cover-card .fresh-cover-art.track-artwork-fallback {
-  background:
-    linear-gradient(
-      145deg,
-      color-mix(in oklch, var(--eclipse-gold) 20%, transparent),
-      color-mix(in oklch, var(--reentry-red) 12%, transparent)
-    ),
-    var(--tape-black);
-}
-
-.fresh-cover-card:hover .fresh-cover-art,
-.fresh-cover-card:focus-visible .fresh-cover-art {
-  border-color: color-mix(in oklch, var(--eclipse-gold) 42%, transparent);
-  transform: scale(1.02);
-}
-
-.fresh-cover-body {
-  display: grid;
-  gap: 0.14rem;
-}
-
-.fresh-cover-title {
-  color: var(--starlight-cream);
-  font-size: 0.95rem;
-  font-weight: 600;
-  line-height: 1.25;
-  transition: color 150ms ease-out;
-}
-
-.fresh-cover-card:hover .fresh-cover-title,
-.fresh-cover-card:focus-visible .fresh-cover-title {
-  color: var(--eclipse-glow);
-}
-
-/* The album's credited artists can run long (a compilation lists dozens) — clamp to two lines so a
-   tile stays a tile, the record's name and date still lead. */
-.fresh-cover-sub {
-  -webkit-box-orient: vertical;
-  color: var(--stardust);
+.fresh-standout-title {
+  color: var(--foreground);
   display: -webkit-box;
-  font-size: 0.82rem;
-  line-clamp: 2;
-  -webkit-line-clamp: 2;
-  line-height: 1.3;
+  font-size: 0.95rem;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  line-height: 1.2;
   overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
-.fresh-cover-date {
+.fresh-standout[data-lit] .fresh-standout-link:hover .fresh-standout-title,
+.fresh-standout[data-lit] .fresh-standout-link:focus-visible .fresh-standout-title {
+  color: var(--accent-foreground);
+}
+
+.fresh-standout-meta,
+.fresh-standout-count {
   color: var(--muted-foreground);
-  font-family: var(--font-display);
-  font-size: 0.75rem;
-  font-variant-numeric: tabular-nums;
-  letter-spacing: 0.01em;
-}
-
-.fresh-cover-card:focus-visible {
-  border-radius: var(--rounded-md);
-  outline: 2px solid var(--eclipse-glow);
-  outline-offset: 3px;
-}
-
-/* ── Stream row (shared compact list row, with a leading date column) ──────────────────── */
-.fresh-rows {
-  display: flex;
-  flex-direction: column;
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-
-.fresh-row {
-  align-items: center;
-  border-top: 1px solid color-mix(in oklch, var(--border) 55%, transparent);
-  display: flex;
-  gap: 0.85rem;
-  min-height: 3.25rem;
-  padding: 0.5rem 0;
-}
-
-.fresh-row:first-child {
-  border-top: 0;
-}
-
-.fresh-row-date {
-  color: var(--muted-foreground);
-  flex: none;
-  font-family: var(--font-display);
-  font-size: 0.78rem;
-  font-variant-numeric: tabular-nums;
-  letter-spacing: 0.01em;
-  text-align: right;
-  width: 3.2rem;
-}
-
-/* The lead-artist avatar on a stream row — round, ~2.5rem. Full-strength on a finding; dimmed into
-   the unlit register on a catalogue row (the same 0.66 the catalogue grid uses). */
-.fresh-row-avatar {
-  flex: none;
-  font-size: 0.9rem;
-  width: 2.5rem;
-}
-
-.fresh-row-avatar-unlit {
-  opacity: 0.62;
-  transition: opacity 150ms ease-out;
-}
-
-.fresh-row:hover .fresh-row-avatar-unlit {
-  opacity: 0.85;
-}
-
-.fresh-row-main {
-  align-items: center;
-  color: inherit;
-  display: flex;
-  flex: 1;
-  gap: 0.6rem;
-  justify-content: space-between;
-  min-width: 0;
-  text-decoration: none;
-}
-
-.fresh-row-coordinate {
-  color: var(--muted-foreground);
-  flex: none;
-  font-family: var(--font-display);
-  font-size: 0.72rem;
-  font-variant-numeric: tabular-nums;
-  letter-spacing: 0.01em;
-}
-
-.fresh-row-title {
-  color: var(--stardust);
-  font-size: 0.9rem;
+  font-size: 0.8rem;
   line-height: 1.3;
-  min-width: 0;
+  margin: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-  transition: color 150ms ease-out;
   white-space: nowrap;
 }
 
-.fresh-row-lit .fresh-row-main {
-  gap: 0.75rem;
-  justify-content: flex-start;
-}
-
-.fresh-row-lit .fresh-row-title {
-  color: var(--starlight-cream);
-  font-weight: 500;
-}
-
-.fresh-row-lit .fresh-row-main:hover .fresh-row-title,
-.fresh-row-lit .fresh-row-main:focus-visible .fresh-row-title,
-.fresh-row-lit .fresh-row-main:hover ~ .fresh-row-caret,
-.fresh-row-lit .fresh-row-main:focus-visible ~ .fresh-row-caret {
-  color: var(--eclipse-glow);
-}
-
-/* Catalogue rows heat to cream on hover, never gold — the light belongs to the findings. */
-.fresh-row-unlit .fresh-row-main:hover .fresh-row-title,
-.fresh-row-unlit .fresh-row-main:focus-visible .fresh-row-title {
-  color: var(--starlight-cream);
-}
-
-.fresh-row-main:focus-visible {
-  border-radius: var(--rounded-sm);
-  outline: 2px solid var(--eclipse-glow);
-  outline-offset: 2px;
-}
-
-.fresh-row-mark {
-  color: var(--stardust);
-  flex: none;
-  height: 0.9rem;
-  opacity: 0.55;
-  width: 0.9rem;
-}
-
-.fresh-row-main:hover .fresh-row-mark,
-.fresh-row-main:focus-visible .fresh-row-mark {
-  opacity: 0.85;
-}
-
-/* The unlit row's second control: the way OUT, beside the way IN. The line leads to the recording's
-   own destination, so Spotify gets its own labelled anchor rather than a glyph riding the row link.
-   Cream on hover, never gold — the light belongs to the findings. */
-.fresh-row-out {
+.fresh-standout-count {
   align-items: center;
-  border-radius: var(--rounded-sm);
-  display: inline-flex;
-  flex: none;
-  /* The padding IS the tap target: a 0.9rem mark alone is a ~14px hit area on a phone, and this
-     control now sits beside another one. The same padding `.unlit-out` carries, for the same
-     reason. */
-  padding: 0.55rem 0.5rem;
-}
-
-.fresh-row-out:hover .fresh-row-mark,
-.fresh-row-out:focus-visible .fresh-row-mark {
-  color: var(--starlight-cream);
-  opacity: 0.85;
-}
-
-.fresh-row-out:focus-visible {
-  outline: 2px solid var(--eclipse-glow);
-  outline-offset: 2px;
-}
-
-.fresh-row-caret {
-  color: var(--muted-foreground);
-  flex: none;
-  transition: color 150ms ease-out;
-}
-
-.fresh-row-plain {
-  cursor: default;
-}
-
-/* ── View pills (All / Tracks / Albums & EPs) ──────────────────────────────────────────── */
-.fresh-views {
   display: flex;
-  margin-bottom: clamp(1.5rem, 3.5vw, 2.5rem);
-}
-
-/* ── Albums rail (shared) ──────────────────────────────────────────────────────────────── */
-.fresh-albums {
-  margin-top: clamp(2.5rem, 5vw, 4rem);
-}
-
-.fresh-albums-rail {
-  display: grid;
-  gap: clamp(1rem, 2.5vw, 1.6rem);
-  grid-template-columns: repeat(auto-fill, minmax(9rem, 1fr));
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-
-/* ── Albums board (the "Albums & EPs" view — records at the centre) ────────────────────── */
-/* Larger tiles than the rail: the album cut leads its own view, so the covers carry it. */
-.fresh-albums-grid {
-  display: grid;
-  gap: clamp(1.25rem, 3vw, 2rem);
-  grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr));
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-
-/* The "· 4 tracks" count trailing the "Out Jul 3" stamp — same quiet tabular register as the date. */
-.fresh-cover-count {
-  color: var(--muted-foreground);
-}
-
-/* ── Footer + picker ───────────────────────────────────────────────────────────────────── */
-.fresh-footer {
-  border-top: 1px solid var(--border);
-  display: flex;
-  gap: 1.5rem;
-  justify-content: space-between;
-  margin: clamp(3rem, 6vw, 5rem) auto 0;
-  max-width: var(--fresh-max);
-  padding-top: 1.25rem;
-}
-
-.fresh-footer a {
-  color: var(--muted-foreground);
-  font-size: 0.9rem;
-  text-decoration: none;
-  transition: color 150ms ease-out;
-}
-
-.fresh-footer a:hover,
-.fresh-footer a:focus-visible {
-  color: var(--starlight-cream);
-}
-
-/* ════ VARIANT 4 — MARQUEE ═════════════════════════════════════════════════════════════ */
-.fresh-mq-board {
-  border-top: 1px solid var(--rule-dark);
-  list-style: none;
-  margin: 0 0 clamp(2rem, 4vw, 3rem);
-  padding: 0;
-}
-
-.fresh-mq-row {
-  align-items: center;
-  border-bottom: 1px solid var(--rule-dark);
-  display: flex;
-  gap: 1.25rem;
-  padding: clamp(0.6rem, 1.5vw, 1.1rem) 0;
-}
-
-.fresh-mq-date {
-  align-items: baseline;
-  color: var(--muted-foreground);
-  display: flex;
-  flex: none;
   font-family: var(--font-display);
+  font-variant-numeric: tabular-nums;
+  gap: 0.4rem;
+  min-height: 1lh;
+}
+
+/* ── The week bucket ───────────────────────────────────────────────────────────────────── */
+.fresh-week {
+  display: grid;
+  gap: var(--space-xs);
+}
+
+/* A week below the first screen skips its layout and paint until it scrolls near. */
+.fresh-week:not(:first-of-type) {
+  contain-intrinsic-size: auto 32rem;
+  content-visibility: auto;
+}
+
+.fresh-week-head {
+  align-items: end;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  gap: var(--space-xs) var(--space-sm);
+  justify-content: space-between;
+  padding-bottom: var(--space-xs);
+}
+
+.fresh-week-label {
+  display: grid;
+  gap: var(--space-3xs);
+  min-width: 0;
+}
+
+.fresh-week-head .fresh-play-list {
+  flex: none;
+}
+
+.fresh-week-meta {
+  color: var(--muted-foreground);
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 0.82rem;
+  gap: 0 0.6rem;
+  margin: 0;
+}
+
+/* The count is a number in a column of weeks: Oxanium tabular (The Tabular Rule). */
+.fresh-week-count {
+  color: var(--foreground);
+  font-family: var(--font-display);
+  font-variant-numeric: tabular-nums;
+}
+
+.fresh-week-span {
+  font-family: var(--font-display);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── The release entry ─────────────────────────────────────────────────────────────────── */
+.fresh-releases {
+  display: grid;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.fresh-releases > li {
+  border-bottom: 1px solid color-mix(in oklch, var(--border) 72%, transparent);
+}
+
+.fresh-releases > li:last-child {
+  border-bottom: none;
+}
+
+/* A release's head IS a discovery row (its grid, its light); the list item carries the rule. */
+.fresh-release-head.discovery-row {
+  border-bottom: none;
+}
+
+.fresh-release-toggle {
+  align-items: center;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: var(--rounded-md);
+  color: var(--muted-foreground);
+  cursor: pointer;
+  display: inline-flex;
+  font-family: var(--font-display);
+  font-size: 0.82rem;
   font-variant-numeric: tabular-nums;
   gap: 0.3rem;
-  width: 4rem;
-}
-
-.fresh-mq-day {
-  color: var(--starlight-cream);
-  font-size: 1.5rem;
-  font-weight: 800;
-}
-
-.fresh-mq-mon {
-  font-size: 0.8rem;
-  font-weight: 700;
-}
-
-/* The lead-artist avatar beside a headline — larger than a row's, dimmed on an unlit headline. */
-.fresh-mq-avatar {
-  align-self: center;
-  flex: none;
-  font-size: 1.1rem;
-  width: clamp(2.25rem, 4vw, 3rem);
-}
-
-.fresh-mq-avatar-unlit {
-  opacity: 0.62;
-}
-
-/* A track title is READING text, so it stays in the body face (Space Grotesk) — Oxanium speaks only
-   for the brand and the numbers (DESIGN.md, The One Voice Rule). The big date numerals beside it,
-   and the "Fresh" masthead word, are the sanctioned Oxanium here.
-
-   MOBILE-FIRST: the line is a two-row stack (artists over title), each row truncating on its OWN, so
-   a long title never orphans the em dash mid-wrap and never shoves the artists out of view. Wide
-   screens (below) flow it back to one inline "Artist — Title" line. `min-width: 0` lets the flex
-   item shrink so the ellipsis can bite. */
-.fresh-mq-line {
-  color: var(--starlight-cream);
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  font-size: clamp(1.4rem, 4.5vw, 3rem);
-  font-weight: 700;
-  letter-spacing: -0.02em;
-  line-height: 1.02;
-  min-width: 0;
-  text-decoration: none;
-  transition: color 150ms ease-out;
-}
-
-.fresh-mq-artist,
-.fresh-mq-title {
-  display: block;
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  min-height: 2.75rem;
+  padding: 0 0.6rem;
+  pointer-events: auto;
+  transition:
+    color 150ms ease-out,
+    background-color 150ms ease-out;
   white-space: nowrap;
 }
 
-.fresh-mq-sep {
-  display: none;
+.fresh-release-toggle:hover {
+  background: var(--muted);
+  color: var(--foreground);
 }
 
-@media (min-width: 48rem) {
-  /* One inline line again, wrapping as ordinary text with a balanced break. */
-  .fresh-mq-line {
-    display: block;
-    text-wrap: balance;
-  }
-  .fresh-mq-artist,
-  .fresh-mq-title {
-    display: inline;
-    max-width: none;
-    overflow: visible;
-    white-space: normal;
-  }
-  .fresh-mq-sep {
-    display: inline;
-  }
+.fresh-release-toggle:focus-visible {
+  border-color: var(--ring);
+  box-shadow: 0 0 0 3px color-mix(in oklch, var(--ring) 50%, transparent);
+  outline: none;
 }
 
-.fresh-mq-lit .fresh-mq-line:hover,
-.fresh-mq-lit .fresh-mq-line:focus-visible {
-  color: var(--eclipse-glow);
+.fresh-release-caret {
+  transition: transform 180ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
-.fresh-mq-unlit .fresh-mq-line {
-  color: var(--stardust);
+.fresh-release-toggle[data-panel-open] .fresh-release-caret {
+  transform: rotate(180deg);
+}
+
+/* The folded tracks sit under their record, set in by the cover column and ruled from it. */
+/* Two classes, so the shared `.discovery-list` reset (later in this file) cannot undo the set-in. */
+.discovery-list.fresh-release-tracks {
+  border-top: 1px dashed color-mix(in oklch, var(--border) 72%, transparent);
+  margin-left: calc(0.75rem + 3.25rem + 0.9rem);
+}
+
+.fresh-release-tracks .discovery-row {
+  padding-left: 0;
+}
+
+/* The quiet "new since your last visit" mark: a cream point, never gold. */
+.fresh-new-mark {
+  border: 1px solid color-mix(in oklch, var(--foreground) 55%, transparent);
+  border-radius: 999px;
+  color: var(--foreground);
+  display: inline-block;
+  flex: none;
+  font-size: 0.75rem;
   font-weight: 700;
+  line-height: 1;
+  padding: 0.18rem 0.4rem;
 }
 
-.fresh-mq-unlit .fresh-mq-line:hover,
-.fresh-mq-unlit .fresh-mq-line:focus-visible {
-  color: var(--starlight-cream);
+/* The mark rides the title line: the title gives way (it may wrap on /fresh), the credit line keeps
+   its full width. */
+.discovery-row-headline {
+  align-items: center;
+  display: flex;
+  /* A title too long to share its line keeps the line, and the mark drops beneath it. */
+  flex-wrap: wrap;
+  gap: 0.25rem 0.45rem;
+  min-width: 0;
 }
 
-.fresh-mq-line:focus-visible {
-  outline: 2px solid var(--eclipse-glow);
-  outline-offset: 3px;
+.discovery-row-headline > .discovery-row-link,
+.discovery-row-headline > .discovery-row-title {
+  min-width: 0;
 }
 
-.fresh-mq-plain {
-  cursor: default;
+/* "Jump to the first new release": a quiet text control beside the count it acts on. */
+.fresh-since-visit-jump {
+  background: none;
+  border: none;
+  color: var(--foreground);
+  cursor: pointer;
+  font: inherit;
+  min-height: 2.75rem;
+  padding: 0;
+  text-decoration: underline dotted;
+  text-underline-offset: 0.2em;
 }
 
-.fresh-mq-rest {
-  margin-bottom: clamp(2rem, 4vw, 3rem);
+.fresh-since-visit-jump:hover,
+.fresh-since-visit-jump:focus-visible {
+  color: var(--accent-foreground);
+  text-decoration-style: solid;
+}
+
+.fresh-since-visit-jump:focus-visible {
+  border-radius: var(--rounded-md);
+  box-shadow: 0 0 0 3px color-mix(in oklch, var(--ring) 50%, transparent);
+  outline: none;
+}
+
+/* The view pills are the page's first control on a phone: a full 44px target. */
+.fresh-views [data-slot="toggle-group-item"] {
+  min-height: 2.75rem;
+}
+
+/* A release's name may take two lines on /fresh rather than truncate against its count. */
+.fresh-releases .discovery-row-title,
+.fresh-week-tracks .discovery-row-title {
+  display: -webkit-box;
+  overflow: hidden;
+  white-space: normal;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+/* ── The end of the window ─────────────────────────────────────────────────────────────── */
+.fresh-end {
+  border-top: 1px dashed var(--border);
+  color: var(--muted-foreground);
+  font-size: 0.95rem;
+  margin: 0;
+  padding-top: var(--space-sm);
+  text-align: center;
+}
+
+.fresh-end a {
+  color: var(--foreground);
+  text-decoration: underline dotted;
+  text-underline-offset: 0.2em;
+}
+
+.fresh-end a:hover,
+.fresh-end a:focus-visible {
+  color: var(--accent-foreground);
+  text-decoration-style: solid;
 }
 
 /* ── Responsive ────────────────────────────────────────────────────────────────────────── */
-@media (max-width: 48rem) {
-  .fresh-row-date {
-    width: 2.75rem;
+/* On a phone the standouts are one row the thumb swipes, so the week and its "Play this week"
+   stay in the first screen instead of under a 2×2 wall of covers. */
+@media (max-width: 40rem) {
+  .fresh-standout-grid {
+    grid-auto-columns: 38%;
+    grid-auto-flow: column;
+    grid-template-columns: none;
+    margin-inline: -0.25rem;
+    overflow-x: auto;
+    overscroll-behavior-inline: contain;
+    padding: 0.25rem 0.25rem 0.5rem;
+    scroll-padding-inline: 0.25rem;
+    scroll-snap-type: inline mandatory;
+    scrollbar-color: var(--border) transparent;
+    scrollbar-width: thin;
+  }
+
+  .fresh-standout {
+    scroll-snap-align: start;
+  }
+
+  .discovery-list.fresh-release-tracks {
+    margin-left: calc(0.75rem + 1.5rem);
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .fresh-cover-card:hover .fresh-cover-art {
+  .fresh-standout-art.track-artwork,
+  .fresh-standout-art.artist-avatar,
+  .fresh-release-caret,
+  .fresh-release-toggle {
+    transition-property: color, background-color, border-color, filter;
+  }
+
+  .fresh-standout[data-lit]:hover .fresh-standout-art,
+  .fresh-standout[data-lit]:has(:focus-visible) .fresh-standout-art {
     transform: none;
   }
 }
@@ -8896,7 +9049,7 @@ a.catalogue-letter:focus-visible {
 
 /* ── The release band ───────────────────────────────────────────────────────── */
 
-/* `FreshStreamRow` brings its own `.fresh-row*` rules (one definition, shared with
+/* The release entries bring their own `.fresh-release*` rules (one definition, shared with
    `/fresh`); this only re-seats the list inside the plate. */
 .fd-releases {
   list-style: none;
@@ -9749,6 +9902,8 @@ html[data-player-docked] .nav-shell--workbench {
   flex: none;
   font-family: var(--font-display);
   font-variant-numeric: tabular-nums;
+  /* A flex item trims its own leading space: keep the " · " separator whole. */
+  white-space: pre;
 }
 
 .discovery-row-chips {
@@ -9816,44 +9971,6 @@ html[data-player-docked] .nav-shell--workbench {
 }
 
 /* ── Playable lists on the discovery pages ──────────────────────────────────── */
-
-/* The release rows under their day (`/fresh`, the front door's release band):
-   the day heads its group once, a quiet Stardust label in Oxanium tabular. */
-.fresh-days {
-  display: grid;
-  gap: var(--space-sm);
-}
-
-.fresh-day-heading {
-  color: var(--muted-foreground);
-  font-family: var(--font-display);
-  font-size: 0.8rem;
-  font-variant-numeric: tabular-nums;
-  font-weight: 700;
-  letter-spacing: 0.02em;
-  margin: 0 0 var(--space-3xs);
-  padding: 0 0.75rem;
-}
-
-/* A `/fresh` headline's portrait is its play button: round like the portrait,
-   and never under a 44px target. */
-.fresh-mq-play {
-  align-self: center;
-  border-radius: 999px;
-}
-
-.fresh-mq-play .play-cover-glyph {
-  border-radius: 999px;
-}
-
-.fresh-mq-play .fresh-mq-avatar {
-  width: clamp(2.75rem, 4vw, 3rem);
-}
-
-/* A catalogue headline's portrait stays dimmed while it plays. */
-.fresh-mq-play:not([data-lit]) .fresh-mq-avatar-unlit {
-  opacity: 0.62;
-}
 
 /* The findings band: the cover plays, the caption beneath opens the log page. */
 .fd-finding-tile {

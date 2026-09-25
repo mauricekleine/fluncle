@@ -4,6 +4,8 @@ Fluncle validates the minimum sufficient evidence for a change's dependency clos
 
 Package `bun test` suites load `@fluncle/test-support/preload` through their `bunfig.toml`; it blocks outbound network calls while permitting loopback fixture and libSQL servers. Each package’s `no-network.test.ts` checks that the preload is armed, so a missing preload fails the suite before network-dependent tests can reach external services.
 
+Web integration suites use the production public-auth options with sign-up verification sending disabled: Node's undici can fail while better-auth clones the sign-up request body, while production runs on workerd. The public-auth suite separately pins the production send-on-sign-up setting.
+
 ## Closure contract
 
 `bun run quality:classify -- --base <base-sha> --head <head-sha>` prints the plan. Add `--output <file>` for `run-lane.mjs`, `--github-output <file>` in Actions, or `--force-full` for a backstop.

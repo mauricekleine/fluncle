@@ -1,19 +1,8 @@
-// `loadFindingsData` — the `/findings` feed's server-side composition — against a REAL libSQL database (the
-// migrations, the finding inner-join, the mixtape merge). The home page is the highest-traffic
-// surface, and its loader is a three-read fan-out whose merge rules (findings + mixtapes interleaved
-// by date, a findings-only `totalCount`, the newest-finding-with-footage resolved across the WHOLE
-// archive) are pure SQL — a mocked-DB test would pass while any of them was broken. So this drives
-// the real `listTracks` merge on the real schema, exactly like the server-side integration suites.
-
 import { type Client } from "@libsql/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createIntegrationDb, seedCatalogueTrack, seedTrack } from "@/lib/server/integration-db";
 import { FINDINGS_PAGE_SIZE, loadFindingsData } from "./-findings-data";
 
-// The one live database, swapped in fresh for each test. `getDb` closes over it, so the REAL query
-// functions (`listTracks`, `getLiveState`) run REAL SQL against the REAL
-// migrated schema. The route imports `getDb` through `@/lib/server/tracks` → `./db`, the same module
-// this alias resolves to.
 let db: Client;
 
 vi.mock("@/lib/server/db", async (importOriginal) => {
@@ -22,9 +11,6 @@ vi.mock("@/lib/server/db", async (importOriginal) => {
   return { ...actual, getDb: () => Promise.resolve(db) };
 });
 
-// ── Fixtures ─────────────────────────────────────────────────────────────────────────
-
-/** Seed a certified finding, then stamp its `added_at` so the feed order is deterministic. */
 async function seedFinding(
   trackId: string,
   logId: string,
@@ -38,12 +24,6 @@ async function seedFinding(
   });
 }
 
-/**
- * Stamp the internal admin/agent-only columns onto a seeded finding's `tracks` row — the
- * `PRIVATE_TRACK_FIELDS` set (`source_audio_key` the R2 key of the CAPTURED full song, plus the
- * `analyzed_*` and `*_source` provenance). A captured finding carries these on the ADMIN read; the
- * public feed must strip them, and this fixture is what makes the leak reproducible.
- */
 async function markCaptured(trackId: string): Promise<void> {
   await db.execute({
     args: [`sources/${trackId}/deadbeef.m4a`, "full", "dsp", "dsp", day(1), trackId],
@@ -54,7 +34,6 @@ async function markCaptured(trackId: string): Promise<void> {
   });
 }
 
-/** Mark a finding as carrying footage (a `video_url`) — the stories-entry signal. */
 async function giveFooting(trackId: string): Promise<void> {
   await db.execute({
     args: [`https://videos.example/${trackId}.mp4`, trackId],
@@ -62,7 +41,6 @@ async function giveFooting(trackId: string): Promise<void> {
   });
 }
 
-/** Seed a published mixtape row — the merge folds it into the feed by `added_at`. */
 async function seedMixtape(
   id: string,
   logId: string,
@@ -78,7 +56,6 @@ async function seedMixtape(
   });
 }
 
-/** A `YYYY-01-DD` timestamp — day `n` of January 2026, so a higher `n` sorts NEWER. */
 function day(n: number): string {
   return `2026-01-${String(n).padStart(2, "0")}T00:00:00.000Z`;
 }
@@ -98,10 +75,9 @@ describe("loadFindingsData — the empty archive", () => {
     expect(data.tracks).toEqual([]);
     expect(data.totalCount).toBe(0);
     expect(data.nextCursor).toBeUndefined();
-    // No finding with footage anywhere ⇒ no stories entry point.
+
     expect(data.newestStoryLogId).toBeUndefined();
-    // The ambient read defaults cleanly on an empty archive (it carries its own tests; here we
-    // only prove the loader wires it through).
+
     expect(data.live.on).toBe(false);
   });
 });
@@ -111,8 +87,7 @@ describe("loadFindingsData — the findings/catalogue split drives totalCount", 
     await seedFinding("t-a", "001.1.1A", day(3));
     await seedFinding("t-b", "002.1.1A", day(2));
     await seedFinding("t-c", "003.1.1A", day(1));
-    // A catalogue track — a `tracks` row with NO `findings` row. It must not appear in the feed nor
-    // move the count (the count is a `count(*)` over the finding inner-join).
+
     await seedCatalogueTrack(db, { title: "Uncertified Cut", trackId: "cat-1" });
 
     const data = await loadFindingsData();
@@ -122,7 +97,7 @@ describe("loadFindingsData — the findings/catalogue split drives totalCount", 
     expect(
       data.tracks.map((item) => (item.type === "mixtape" ? item.logId : item.trackId)),
     ).toEqual(["t-a", "t-b", "t-c"]);
-    // The count is findings-only — the catalogue row never enters it.
+
     expect(data.totalCount).toBe(3);
   });
 });
@@ -131,7 +106,7 @@ describe("loadFindingsData — the mixtape merge", () => {
   it("interleaves a published mixtape into the feed by its added_at", async () => {
     await seedFinding("t-new", "010.1.1A", day(5));
     await seedFinding("t-old", "011.1.1A", day(1));
-    // A mixtape recorded BETWEEN the two findings — it sorts second, ahead of the older finding.
+
     await seedMixtape("mix-1", "019.F.1A", day(3), "Deep Space Session");
 
     const data = await loadFindingsData();
@@ -141,7 +116,7 @@ describe("loadFindingsData — the mixtape merge", () => {
     const middle = data.tracks[1];
     expect(middle?.type).toBe("mixtape");
     expect(middle?.type === "mixtape" ? middle.logId : undefined).toBe("019.F.1A");
-    // The mixtape is a feed item but NOT a finding, so it never enters totalCount.
+
     expect(data.totalCount).toBe(2);
   });
 
@@ -162,7 +137,6 @@ describe("loadFindingsData — the mixtape merge", () => {
 
 describe("loadFindingsData — page one and the stories entry point", () => {
   it("caps page one at FINDINGS_PAGE_SIZE, sets a nextCursor, and returns the newest rows", async () => {
-    // Twelve findings, oldest→newest — more than one page, so page one is capped and a cursor opens.
     for (let n = 1; n <= 12; n += 1) {
       await seedFinding(
         `t-${String(n).padStart(2, "0")}`,
@@ -174,9 +148,9 @@ describe("loadFindingsData — page one and the stories entry point", () => {
     const data = await loadFindingsData();
 
     expect(data.tracks).toHaveLength(FINDINGS_PAGE_SIZE);
-    // A twelfth finding sits past the page, so the infinite-query contract needs a cursor to fetch on.
+
     expect(typeof data.nextCursor).toBe("string");
-    // The ten NEWEST (day 12 → day 3), newest first.
+
     expect(
       data.tracks.map((item) => (item.type === "mixtape" ? item.logId : item.trackId)),
     ).toEqual(["t-12", "t-11", "t-10", "t-09", "t-08", "t-07", "t-06", "t-05", "t-04", "t-03"]);
@@ -190,14 +164,13 @@ describe("loadFindingsData — page one and the stories entry point", () => {
         day(n),
       );
     }
-    // Give footage ONLY to the OLDEST finding (day 1) — it is off page one (page one is days 12→3).
-    // The stories entry must still find it, because the footage read scans the WHOLE archive.
+
     await giveFooting("s-01");
 
     const data = await loadFindingsData();
 
     expect(data.newestStoryLogId).toBe("201.1.1A");
-    // And it is genuinely off page one — proving the loader did not just read the first page.
+
     const onPageOne = data.tracks.some(
       (item) => item.type !== "mixtape" && item.trackId === "s-01",
     );
@@ -220,24 +193,21 @@ describe("loadFindingsData — page one and the stories entry point", () => {
 describe("loadFindingsData — the public strip (no private capture fields leak)", () => {
   it("strips PRIVATE_TRACK_FIELDS from every feed row (regression: the SSR feed once shipped sourceAudioKey)", async () => {
     await seedFinding("t-cap", "040.1.1A", day(2));
-    // A CAPTURED finding — its `tracks` row carries the R2 key of the copyrighted full song plus the
-    // analysis provenance. The home loader (edge-cached SSR HTML + the react-query seed) once returned
-    // these straight to the world; it is the one public read that skipped `toPublicTrackListItem`.
+
     await markCaptured("t-cap");
 
     const data = await loadFindingsData();
 
     expect(data.tracks).toHaveLength(1);
     const item = data.tracks[0];
-    // None of the five internal fields may carry a VALUE to a public surface — `toPublicTrackListItem`
-    // blanks each to `undefined`. Without the strip these held the R2 key + the analysis provenance.
+
     const fields = item as Record<string, unknown>;
     expect(fields.sourceAudioKey).toBeUndefined();
     expect(fields.bpmSource).toBeUndefined();
     expect(fields.keySource).toBeUndefined();
     expect(fields.analyzedAt).toBeUndefined();
     expect(fields.analyzedFrom).toBeUndefined();
-    // The public VALUES survive the strip — the feed still renders bpm/key (not their `*_source`).
+
     expect(item?.type === "mixtape" ? undefined : item?.bpm).toBe(174);
     expect(item?.type === "mixtape" ? undefined : item?.key).toBe("2A");
   });
@@ -253,8 +223,6 @@ describe("loadFindingsData — the Galaxies gate is NOT this loader's job", () =
 
     const data = await loadFindingsData();
 
-    // The home page reads `galaxiesLive` from the root loader, so this loader must not ask the
-    // database again or expose a duplicate field.
     expect(data).not.toHaveProperty("galaxiesLive");
   });
 });

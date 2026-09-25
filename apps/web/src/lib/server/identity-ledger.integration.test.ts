@@ -1,22 +1,3 @@
-// The identity ledger's two attempt stamps (RFC dnb-identity-graph, Unit 1 items 1–2), proven
-// against the REAL migrated schema on an in-memory libSQL engine.
-//
-// It is an INTEGRATION test because every claim here is SQL, and a mocked-DB test would pass while
-// any of it was broken:
-//
-//   - THE MIGRATION ITSELF — `tracks.isrc_attempted_at`, `tracks.isrc_recovery_attempted_at`, and the
-//     four `tracks.backfill_discogs_*` columns. If a migration did not apply, every statement below
-//     naming them would throw here, which is the guard we want, since `deploy:gate` runs this suite;
-//   - THE WRITE PATHS — the stamp is only real if the SAME statement that fills (or declines to
-//     fill) the identifier writes it, on a HIT and on a CLEAN MISS alike. A stamp that only lands
-//     on hits would leave the honest negative — the whole point of the column — unsayable;
-//   - THE THROTTLE RAIL — a rate-limited vendor is NOT an answer, and must leave the row
-//     untouched. This is the one behaviour that is easy to get backwards and impossible to see
-//     later, since a wrong stamp is indistinguishable from a right one after the fact;
-//   - THE LEGACY BACKFILL — idempotent, and never clobbering a stamp a real attempt has written.
-//
-// The vendors are mocked (there is no network): MusicBrainz and Deezer answer from fixtures.
-
 import { type Client } from "@libsql/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -53,7 +34,6 @@ beforeEach(async () => {
   searchDeezerCandidates.mockReset();
 });
 
-/** The ledger columns as the envelope will read them. */
 type LedgerRow = {
   backfill_discogs_attempted_at: null | string;
   backfill_discogs_attempts: number;
@@ -84,7 +64,6 @@ async function ledger(trackId: string): Promise<LedgerRow> {
   return row as unknown as LedgerRow;
 }
 
-/** A bare catalogue row (no `findings` row), as history left it. */
 async function insertCatalogueTrack(
   trackId: string,
   fields: { discogsRelease?: number; isrc?: string } = {},
@@ -96,7 +75,6 @@ async function insertCatalogueTrack(
   });
 }
 
-/** A certified row: a `tracks` row plus the `findings` row that carries its `added_at`. */
 async function insertFinding(
   trackId: string,
   addedAt: string,
@@ -121,8 +99,6 @@ describe("the migration", () => {
 
     const row = await ledger("mb_1");
 
-    // A row nobody has stamped is `unattempted`, not `absent` — the distinction the columns exist
-    // to carry. The two counters read 0 from their DDL default, never null.
     expect(row.isrc_attempted_at).toBeNull();
     expect(row.isrc_recovery_attempted_at).toBeNull();
     expect(row.backfill_discogs_attempted_at).toBeNull();
@@ -159,7 +135,6 @@ describe("the Deezer-recovery rung (anchor.ts § recoverIsrcViaDeezer)", () => {
   it("stamps on a CLEAN MISS — Deezer answered, nothing cleared the gate", async () => {
     await insertCatalogueTrack("mb_miss");
 
-    // A candidate that is a different recording entirely: the duration is nowhere near the row's.
     const recovered = await recoverIsrcViaDeezer(
       "mb_miss",
       db,
@@ -173,7 +148,6 @@ describe("the Deezer-recovery rung (anchor.ts § recoverIsrcViaDeezer)", () => {
 
     const after = await ledger("mb_miss");
 
-    // The honest negative: no ISRC, but we looked. Nothing else on the row moved.
     expect(after.isrc).toBeNull();
     expect(after.isrc_attempted_at).not.toBeNull();
     expect(after.isrc_recovery_attempted_at).not.toBeNull();
@@ -278,7 +252,7 @@ describe("the legacy backfill (scripts/backfill-identity-ledger.ts)", () => {
 
   it("leaves a row with no identifier honestly unattempted", async () => {
     await insertCatalogueTrack("mb_nothing");
-    // An empty-string ISRC is not an ISRC — the `trim(isrc) <> ''` half of the predicate.
+
     await insertCatalogueTrack("mb_blank", { isrc: "   " });
 
     const result = await backfillIdentityLedger(db, "2026-07-29T00:00:00.000Z");
@@ -356,19 +330,12 @@ describe("the legacy backfill (scripts/backfill-identity-ledger.ts)", () => {
 
     expect(after.isrc_attempted_at).toBe("2026-01-01T00:00:00.000Z");
     expect(after.backfill_discogs_attempted_at).toBe("2026-01-01T00:00:00.000Z");
-    // The real attempt's count survives — the backfill's floor of 1 never walks it back.
+
     expect(after.backfill_discogs_attempts).toBe(3);
   });
 });
-// ── THE PUBLISH-BORN ANCHOR PROVENANCE (RFC dnb-identity-graph, Unit 1 item 4) ─────────────────
-//
-// The backfill's third statement claims something the others do not: it INFERS a provenance from
-// the shape of a row rather than from a value that is already there. So the test that matters is
-// not "does it stamp" — it is "can it stamp the wrong row", and every neighbouring row shape that
-// could plausibly be mistaken for a publish-born finding is seeded here and asserted untouched.
 
 describe("backfillIdentityLedger — the publish-born anchor provenance", () => {
-  /** A publish-born finding as history left it: PK = the Spotify id, uri derived from it, no provenance. */
   async function insertPublishBorn(
     spotifyId: string,
     addedAt: string,
@@ -383,7 +350,7 @@ describe("backfillIdentityLedger — the publish-born anchor provenance", () => 
       sql: `insert into tracks (track_id, title, artists_json, duration_ms, spotify_uri, spotify_url, is_catalogue)
             values (?, 'Tune', '["Artist"]', 300000, ?, ?, 0)`,
     });
-    // A Log ID is UNIQUE, so a fixture seeding two findings has to vary it.
+
     await db.execute({
       args: [spotifyId, logId, addedAt],
       sql: `insert into findings (track_id, log_id, added_at) values (?, ?, ?)`,
@@ -411,15 +378,11 @@ describe("backfillIdentityLedger — the publish-born anchor provenance", () => 
 
     expect(after?.spotify_anchor_source).toBe("publish");
     expect(after?.spotify_anchor_verified_by).toBe("publish");
-    // The finding's own added_at, not this run's clock: publish writes the anchor and mints the
-    // finding in ONE batch, so that instant IS when the link was verified.
+
     expect(after?.spotify_anchored_at).toBe("2026-03-04T10:00:00.000Z");
   });
 
   it("CANNOT mislabel the row shapes that sit next to it", async () => {
-    // 1. A CRAWLER-born row anchored by the gate and certified later. Its uri does not match its
-    //    PK, and nothing stored says whether the gate or the certify-in-place pre-flight put the
-    //    link there — so it must keep reading `unknown-legacy`, which is the truth for it.
     await db.execute({
       args: [],
       sql: `insert into tracks (track_id, title, artists_json, duration_ms, spotify_uri, spotify_url, is_catalogue)
@@ -431,8 +394,6 @@ describe("backfillIdentityLedger — the publish-born anchor provenance", () => 
       sql: `insert into findings (track_id, log_id, added_at) values ('mb_crawled', '005.1.1A', '2026-04-01T00:00:00.000Z')`,
     });
 
-    // 2. A FRESHNESS-TAP catalogue row. Its PK is `sp_<spotifyId>`, so `'spotify:track:' ||
-    //    track_id` can never equal its uri — the prefix is what keeps the two apart.
     await db.execute({
       args: [],
       sql: `insert into tracks (track_id, title, artists_json, duration_ms, spotify_uri, spotify_url)
@@ -440,8 +401,6 @@ describe("backfillIdentityLedger — the publish-born anchor provenance", () => 
                     'spotify:track:qqqqqqqqqqqqqqqqqqqqqq', 'https://open.spotify.com/track/qqqqqqqqqqqqqqqqqqqqqq')`,
     });
 
-    // 3. A publish-SHAPED row with NO findings row. Whatever it is, it is not a certified finding,
-    //    and the EXISTS guard reads the invariant itself rather than the `is_catalogue` mirror.
     await db.execute({
       args: [],
       sql: `insert into tracks (track_id, title, artists_json, duration_ms, spotify_uri, spotify_url)
@@ -476,7 +435,6 @@ describe("backfillIdentityLedger — the publish-born anchor provenance", () => 
     expect(first.publishAnchorsStamped).toBe(0);
     expect((await provenance("ccccccccccccccccccccc1"))?.spotify_anchor_verified_by).toBe("search");
 
-    // And the ordinary idempotence: a second run over a row the FIRST run stamped changes nothing.
     await insertPublishBorn("dddddddddddddddddddddd", "2026-03-05T10:00:00.000Z", "006.2.2B");
     expect(
       (await backfillIdentityLedger(db, "2026-07-29T00:00:00.000Z")).publishAnchorsStamped,

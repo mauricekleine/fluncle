@@ -1,20 +1,8 @@
-// Render the WHOLE sitemap through its real route handlers — the index, then every child the
-// index advertises — and hand back the joined XML.
-//
-// It exists because `/sitemap.xml` is a `<sitemapindex>` and carries no `<url>` of its own, so
-// "is this URL in the sitemap?" is no longer a question one handler can answer. A test that
-// only reads the index would pass while a child leaked a catalogue track into the world. Both
-// the certification rail and the catalogue-scale suite drive through here so neither can be
-// fooled that way.
-
 type ServerHandlers<Ctx> = { GET: (ctx: Ctx) => Promise<Response> };
 
 export type RenderedSitemap = {
-  /** The `<sitemapindex>` document itself. */
   indexXml: string;
-  /** Every child the index advertised, e.g. `["pages-1.xml", "findings-1.xml"]`. */
   shards: string[];
-  /** Every child's body, joined — what a crawler would end up having read. */
   xml: string;
 };
 

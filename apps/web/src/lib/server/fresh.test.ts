@@ -9,15 +9,12 @@ vi.mock("./db", async (importOriginal) => {
   return { ...actual, getDb: async () => holder.db };
 });
 
+import { createIntegrationDb, seedLabel } from "./integration-db";
+import { listLabelFreshTracks } from "./fresh-entity";
 import {
-  freshRecordCovers,
-  freshStream,
-  freshTrackWindowRecordCovers,
-} from "@/components/fresh/data";
-import { createIntegrationDb } from "./integration-db";
-import {
-  FRESH_RECORDS_WINDOW_DAYS,
+  FRESH_FINDINGS_LIMIT,
   FRESH_WINDOW_DAYS,
+  listFreshRecords,
   listFreshReleases,
   listFreshTracks,
 } from "./fresh";
@@ -27,6 +24,7 @@ const NOW = new Date("2026-07-17T12:00:00.000Z");
 let db: Client;
 
 async function seedCatalogueTrack(options: {
+  album?: string;
   albumId?: string;
   albumImageUrl?: string;
   artists: string[];
@@ -39,13 +37,14 @@ async function seedCatalogueTrack(options: {
       `Title ${options.trackId}`,
       JSON.stringify(options.artists),
       options.releaseDate,
+      options.album ?? null,
       options.albumId ?? null,
       `https://open.spotify.com/track/${options.trackId}`,
       options.albumImageUrl ?? null,
     ],
     sql: `insert into tracks
-            (track_id, title, artists_json, release_date, album_id, spotify_url, album_image_url, duration_ms)
-          values (?, ?, ?, ?, ?, ?, ?, 210000)`,
+            (track_id, title, artists_json, release_date, album, album_id, spotify_url, album_image_url, duration_ms)
+          values (?, ?, ?, ?, ?, ?, ?, ?, 210000)`,
   });
 }
 
@@ -78,13 +77,38 @@ async function seedFinding(options: {
   });
 }
 
+async function seedAlbumEntity(id: string, name: string, slug: string): Promise<void> {
+  await db.execute({
+    args: [id, name, slug, "x", "x"],
+    sql: `insert or ignore into albums (id, name, slug, created_at, updated_at) values (?, ?, ?, ?, ?)`,
+  });
+}
+
+async function seedAlbumTrack(options: {
+  albumId: string;
+  albumName: string;
+  albumSlug: string;
+  artists: string[];
+  releaseDate: string;
+  trackId: string;
+}): Promise<void> {
+  await seedAlbumEntity(options.albumId, options.albumName, options.albumSlug);
+  await seedCatalogueTrack({
+    album: options.albumName,
+    albumId: options.albumId,
+    artists: options.artists,
+    releaseDate: options.releaseDate,
+    trackId: options.trackId,
+  });
+}
+
 beforeEach(async () => {
   db = await createIntegrationDb();
   holder.db = db;
 });
 
 describe("listFreshReleases", () => {
-  it("splits the window into lit findings and unlit catalogue, bucketed by recency", async () => {
+  it("splits the window into lit findings and unlit catalogue, each newest release first", async () => {
     await seedFinding({
       artists: ["Dimension"],
       logId: "200.7.1A",
@@ -113,30 +137,26 @@ describe("listFreshReleases", () => {
              bpm = 174, key = 'F minor', isrc = 'GBTEST2600001' where track_id = ?`,
     });
 
-    const { sections, windowDays } = await listFreshReleases(NOW);
+    const { catalogue, coverage, findings, windowDays } = await listFreshReleases(NOW);
 
     expect(windowDays).toBe(FRESH_WINDOW_DAYS);
-    expect(sections.map((section) => section.key)).toEqual(["week", "earlier"]);
+    expect(coverage).toEqual({ kind: "complete" });
+    expect(findings.map((finding) => finding.trackId)).toEqual(["f_week", "f_earlier"]);
+    expect(catalogue.map((track) => track.trackId)).toEqual(["c_week", "c_earlier"]);
 
-    const week = sections.find((section) => section.key === "week");
-    const earlier = sections.find((section) => section.key === "earlier");
-
-    expect(week?.findings.map((finding) => finding.trackId)).toEqual(["f_week"]);
-    expect(week?.catalogue.map((track) => track.trackId)).toEqual(["c_week"]);
-    expect(earlier?.findings.map((finding) => finding.trackId)).toEqual(["f_earlier"]);
-    expect(earlier?.catalogue.map((track) => track.trackId)).toEqual(["c_earlier"]);
-
-    expect(week?.findings.every((finding) => Boolean(finding.logId))).toBe(true);
-    const everyCatalogue = sections.flatMap((section) => section.catalogue);
-    expect(everyCatalogue.every((track) => !("logId" in track))).toBe(true);
-    expect(week?.catalogue[0]).toMatchObject({
+    expect(findings.every((finding) => Boolean(finding.logId))).toBe(true);
+    expect(catalogue.every((track) => !("logId" in track))).toBe(true);
+    expect(catalogue[0]).toMatchObject({
       albumImageUrl: expect.any(String),
       bpm: 174,
       durationMs: 210000,
+      isrc: "GBTEST2600001",
       key: "F minor",
       previewable: true,
+      releaseDate: "2026-07-12",
     });
-    expect(earlier?.catalogue[0]?.previewable).toBe(false);
+    expect(catalogue[1]?.previewable).toBe(false);
+    expect(catalogue[1]?.isrc).toBeUndefined();
   });
 
   it("excludes an older release and a future-dated pre-order", async () => {
@@ -168,13 +188,10 @@ describe("listFreshReleases", () => {
       trackId: "f_in",
     });
 
-    const { sections } = await listFreshReleases(NOW);
-    const trackIds = sections.flatMap((section) => [
-      ...section.findings.map((finding) => finding.trackId),
-      ...section.catalogue.map((track) => track.trackId),
-    ]);
+    const { catalogue, findings } = await listFreshReleases(NOW);
 
-    expect(trackIds).toEqual(["f_in", "c_current_month"]);
+    expect(findings.map((finding) => finding.trackId)).toEqual(["f_in"]);
+    expect(catalogue.map((track) => track.trackId)).toEqual(["c_current_month"]);
   });
 
   it("keeps a partial date on the first day of the release window", async () => {
@@ -184,13 +201,11 @@ describe("listFreshReleases", () => {
       trackId: "month_boundary",
     });
     const now = new Date("2026-10-31T12:00:00Z");
-    const { sections } = await listFreshReleases(now);
-    expect(sections.flatMap((section) => section.catalogue.map((track) => track.trackId))).toEqual([
-      "month_boundary",
-    ]);
+    const { catalogue } = await listFreshReleases(now);
+    expect(catalogue.map((track) => track.trackId)).toEqual(["month_boundary"]);
   });
 
-  it("renders nothing for a window with no releases (no empty sections)", async () => {
+  it("returns empty halves and a complete coverage for a window with no releases", async () => {
     await seedFinding({
       artists: ["Old"],
       logId: "100.1.1A",
@@ -198,22 +213,236 @@ describe("listFreshReleases", () => {
       trackId: "f_ancient",
     });
 
-    const { records, sections } = await listFreshReleases(NOW);
+    const data = await listFreshReleases(NOW);
 
-    expect(sections).toEqual([]);
-    expect(records).toEqual([]);
+    expect(data.findings).toEqual([]);
+    expect(data.catalogue).toEqual([]);
+    expect(data.coverage).toEqual({ kind: "complete" });
+    expect(await listFreshRecords(NOW)).toEqual([]);
   });
 
-  it("surfaces the album entities a fresh release sits on, newest first", async () => {
-    await db.execute({
-      args: ["alb_wgf", "Words Gone Forever", "words-gone-forever", "x", "x"],
-      sql: `insert into albums (id, name, slug, created_at, updated_at) values (?, ?, ?, ?, ?)`,
-    });
-    await db.execute({
-      args: ["alb_elem", "The Elements", "the-elements", "x", "x"],
-      sql: `insert into albums (id, name, slug, created_at, updated_at) values (?, ?, ?, ?, ?)`,
+  it("carries the record a catalogue row sits on: its album entity slug and its record name", async () => {
+    await seedAlbumTrack({
+      albumId: "alb_wgf",
+      albumName: "Words Gone Forever",
+      albumSlug: "words-gone-forever",
+      artists: ["Nu:Tone"],
+      releaseDate: "2026-07-14",
+      trackId: "c_on_entity",
     });
 
+    await seedCatalogueTrack({
+      album: "Loose Pressing",
+      artists: ["Halogenix"],
+      releaseDate: "2026-07-13",
+      trackId: "c_named_only",
+    });
+
+    const { catalogue } = await listFreshReleases(NOW);
+
+    expect(catalogue.find((track) => track.trackId === "c_on_entity")).toMatchObject({
+      album: "Words Gone Forever",
+      albumSlug: "words-gone-forever",
+    });
+    const named = catalogue.find((track) => track.trackId === "c_named_only");
+    expect(named?.album).toBe("Loose Pressing");
+    expect(named?.albumSlug).toBeUndefined();
+  });
+
+  it("attaches the lead artist's avatar to a catalogue row (the row shows WHO, dimmed in the UI)", async () => {
+    await db.execute({
+      args: ["art_lead", "Workforce", "workforce", "https://i.scdn.co/image/workforce", "x", "x"],
+      sql: `insert into artists (id, name, slug, image_url, created_at, updated_at)
+            values (?, ?, ?, ?, ?, ?)`,
+    });
+    await db.execute({
+      args: ["art_feat", "Tim Reaper", "tim-reaper", "x", "x"],
+      sql: `insert into artists (id, name, slug, created_at, updated_at) values (?, ?, ?, ?, ?)`,
+    });
+    await seedCatalogueTrack({
+      artists: ["Workforce", "Tim Reaper"],
+      releaseDate: "2026-07-14",
+      trackId: "c_avatar",
+    });
+    await db.execute({
+      args: ["c_avatar", "art_lead"],
+      sql: `insert into track_artists (track_id, artist_id, position) values (?, ?, 1)`,
+    });
+    await db.execute({
+      args: ["c_avatar", "art_feat"],
+      sql: `insert into track_artists (track_id, artist_id, position) values (?, ?, 2)`,
+    });
+
+    const { catalogue } = await listFreshReleases(NOW);
+    const row = catalogue.find((track) => track.trackId === "c_avatar");
+
+    expect(row?.artistAvatarUrl).toBe("https://i.scdn.co/image/workforce");
+  });
+});
+
+describe("listFreshReleases — the record's stored size", () => {
+  it("carries the album entity's stored track count on both halves", async () => {
+    await db.execute({
+      args: ["alb_lp", "Long Player", "long-player", "x", "x"],
+      sql: `insert into albums (id, name, slug, created_at, updated_at) values (?, ?, ?, ?, ?)`,
+    });
+    await db.execute({
+      sql: `update albums set renderable_track_count = 9 where id = 'alb_lp'`,
+    });
+    await seedCatalogueTrack({
+      albumId: "alb_lp",
+      artists: ["LP"],
+      releaseDate: "2026-07-15",
+      trackId: "c_lp",
+    });
+    await seedFinding({
+      artists: ["LP"],
+      logId: "301.7.1A",
+      releaseDate: "2026-07-15",
+      trackId: "f_lp",
+    });
+    await db.execute({ sql: `update tracks set album_id = 'alb_lp' where track_id = 'f_lp'` });
+    await seedCatalogueTrack({ artists: ["Loose"], releaseDate: "2026-07-15", trackId: "c_loose" });
+
+    const data = await listFreshReleases(NOW);
+
+    expect(data.catalogue.find((track) => track.trackId === "c_lp")?.albumTrackCount).toBe(9);
+    expect(data.findings.find((finding) => finding.trackId === "f_lp")?.albumTrackCount).toBe(9);
+    expect(
+      data.catalogue.find((track) => track.trackId === "c_loose")?.albumTrackCount,
+    ).toBeUndefined();
+  });
+});
+
+describe("listFreshReleases — the coverage a limit leaves", () => {
+  it("trims a limit cut to whole release days and names the oldest day it kept", async () => {
+    for (const trackId of ["c_15a", "c_15b", "c_15c"]) {
+      await seedCatalogueTrack({ artists: ["Newest"], releaseDate: "2026-07-15", trackId });
+    }
+    for (const trackId of ["c_10a", "c_10b"]) {
+      await seedCatalogueTrack({ artists: ["Older"], releaseDate: "2026-07-10", trackId });
+    }
+
+    await seedFinding({
+      artists: ["Kept"],
+      logId: "300.7.1A",
+      releaseDate: "2026-07-12",
+      trackId: "f_12",
+    });
+    await seedFinding({
+      artists: ["Cut"],
+      logId: "301.7.1A",
+      releaseDate: "2026-07-10",
+      trackId: "f_10",
+    });
+
+    const data = await listFreshReleases(NOW, { catalogueLimit: 3 });
+
+    expect(data.catalogue.map((track) => track.trackId).sort()).toEqual([
+      "c_15a",
+      "c_15b",
+      "c_15c",
+    ]);
+    expect(data.findings.map((finding) => finding.trackId)).toEqual(["f_12"]);
+    expect(data.coverage).toEqual({ kind: "partial", since: "2026-07-12" });
+  });
+
+  it("drops a day the limit cut partway through, even when the day before the cut fits", async () => {
+    for (const trackId of ["p_15a", "p_15b"]) {
+      await seedCatalogueTrack({ artists: ["Newest"], releaseDate: "2026-07-15", trackId });
+    }
+    for (const trackId of ["p_10a", "p_10b", "p_10c"]) {
+      await seedCatalogueTrack({ artists: ["Older"], releaseDate: "2026-07-10", trackId });
+    }
+
+    const data = await listFreshReleases(NOW, { catalogueLimit: 3 });
+
+    expect(data.catalogue.map((track) => track.trackId).sort()).toEqual(["p_15a", "p_15b"]);
+    expect(data.coverage).toEqual({ kind: "partial", since: "2026-07-15" });
+  });
+
+  it("holds only part of the newest day, and says so, when that day alone outgrows the limit", async () => {
+    for (const trackId of ["d_a", "d_b", "d_c", "d_d", "d_e"]) {
+      await seedCatalogueTrack({ artists: ["Flood"], releaseDate: "2026-07-15", trackId });
+    }
+    await seedCatalogueTrack({ artists: ["Older"], releaseDate: "2026-07-10", trackId: "o_a" });
+
+    const data = await listFreshReleases(NOW, { catalogueLimit: 3 });
+
+    expect(data.coverage).toEqual({ day: "2026-07-15", kind: "truncated" });
+    expect(data.catalogue).toHaveLength(3);
+    expect(data.catalogue.every((track) => track.releaseDate === "2026-07-15")).toBe(true);
+  });
+
+  it("never keeps an older row under a truncated day's claim, whichever half overflowed", async () => {
+    for (let index = 0; index <= FRESH_FINDINGS_LIMIT; index += 1) {
+      await seedFinding({
+        artists: ["Flood"],
+        logId: `300.7.${index}A`,
+        releaseDate: "2026-07-16",
+        trackId: `f_${index}`,
+      });
+    }
+    await seedCatalogueTrack({
+      artists: ["Same Day"],
+      releaseDate: "2026-07-16",
+      trackId: "c_same",
+    });
+    await seedCatalogueTrack({ artists: ["Older"], releaseDate: "2026-07-12", trackId: "c_older" });
+
+    const data = await listFreshReleases(NOW);
+
+    expect(data.coverage).toEqual({ day: "2026-07-16", kind: "truncated" });
+    expect(data.findings).toHaveLength(FRESH_FINDINGS_LIMIT);
+    expect(data.catalogue.map((track) => track.trackId)).toEqual(["c_same"]);
+  });
+
+  it("holds every day since a partial read's day whole, so an entity feed never shows a track the page left out", async () => {
+    await seedLabel(db, { id: "lbl_1", name: "Fresh Label", slug: "fresh-label" });
+    await seedCatalogueTrack({ artists: ["Other"], releaseDate: "2026-07-16", trackId: "x_1" });
+    await seedCatalogueTrack({ artists: ["Other"], releaseDate: "2026-07-16", trackId: "x_2" });
+    for (const [trackId, releaseDate] of [
+      ["l_1", "2026-07-15"],
+      ["l_2", "2026-07-15"],
+      ["l_3", "2026-07-12"],
+      ["l_4", "2026-07-05"],
+    ] as const) {
+      await seedCatalogueTrack({ artists: ["Label Artist"], releaseDate, trackId });
+      await db.execute({
+        args: ["lbl_1", trackId],
+        sql: `update tracks set label_id = ? where track_id = ?`,
+      });
+    }
+
+    const data = await listFreshReleases(NOW, { catalogueLimit: 4 });
+    const feed = await listLabelFreshTracks("fresh-label", { now: NOW });
+
+    expect(data.coverage).toEqual({ kind: "partial", since: "2026-07-15" });
+
+    const since = data.coverage.kind === "partial" ? data.coverage.since : "";
+    const onPage = new Set(data.catalogue.map((track) => track.title));
+    const feedSince = (feed?.tracks ?? []).filter((track) => track.releaseDate >= since);
+
+    expect(feedSince.length).toBeGreaterThan(0);
+    expect(feedSince.every((track) => onPage.has(track.title))).toBe(true);
+  });
+
+  it("reports a complete window when the rows fit exactly inside the limit", async () => {
+    for (const trackId of ["e_a", "e_b", "e_c"]) {
+      await seedCatalogueTrack({ artists: ["Exact"], releaseDate: "2026-07-15", trackId });
+    }
+
+    const data = await listFreshReleases(NOW, { catalogueLimit: 3 });
+
+    expect(data.catalogue).toHaveLength(3);
+    expect(data.coverage).toEqual({ kind: "complete" });
+  });
+});
+
+describe("listFreshRecords", () => {
+  it("surfaces the album entities a fresh release sits on, newest first", async () => {
+    await seedAlbumEntity("alb_wgf", "Words Gone Forever", "words-gone-forever");
+    await seedAlbumEntity("alb_elem", "The Elements", "the-elements");
     await seedCatalogueTrack({
       albumId: "alb_wgf",
       albumImageUrl: "https://i.scdn.co/image/wgf-newest",
@@ -234,7 +463,7 @@ describe("listFreshReleases", () => {
       trackId: "r_elem1",
     });
 
-    const { records } = await listFreshReleases(NOW);
+    const records = await listFreshRecords(NOW);
 
     expect(records.map((record) => record.slug)).toEqual(["words-gone-forever", "the-elements"]);
     const wgf = records[0];
@@ -284,7 +513,7 @@ describe("listFreshReleases", () => {
       trackId: "r_raw",
     });
 
-    const { records } = await listFreshReleases(NOW);
+    const records = await listFreshRecords(NOW);
     const owned = records.find((record) => record.slug === "owned-record");
     const raw = records.find((record) => record.slug === "raw-record");
 
@@ -297,38 +526,28 @@ describe("listFreshReleases", () => {
     expect(raw?.coverImageUrl).toBe("https://coverartarchive.org/release/raw/front");
   });
 
-  it("attaches the lead artist's avatar to a catalogue row (the row shows WHO, dimmed in the UI)", async () => {
-    await db.execute({
-      args: ["art_lead", "Workforce", "workforce", "https://i.scdn.co/image/workforce", "x", "x"],
-      sql: `insert into artists (id, name, slug, image_url, created_at, updated_at)
-            values (?, ?, ?, ?, ?, ?)`,
-    });
-    await db.execute({
-      args: ["art_feat", "Tim Reaper", "tim-reaper", "x", "x"],
-      sql: `insert into artists (id, name, slug, created_at, updated_at) values (?, ?, ?, ?, ?)`,
+  it("counts the record's tracks, never the artist-multiplied json_each join rows", async () => {
+    await seedAlbumTrack({
+      albumId: "alb_ep",
+      albumName: "Two Track EP",
+      albumSlug: "two-track-ep",
+      artists: ["Artist A", "Artist B", "Artist C"],
+      releaseDate: "2026-07-14",
+      trackId: "ep_1",
     });
     await seedCatalogueTrack({
-      artists: ["Workforce", "Tim Reaper"],
-      releaseDate: "2026-07-14",
-      trackId: "c_avatar",
-    });
-    await db.execute({
-      args: ["c_avatar", "art_lead"],
-      sql: `insert into track_artists (track_id, artist_id, position) values (?, ?, 1)`,
-    });
-    await db.execute({
-      args: ["c_avatar", "art_feat"],
-      sql: `insert into track_artists (track_id, artist_id, position) values (?, ?, 2)`,
+      albumId: "alb_ep",
+      artists: ["Artist A", "Artist B"],
+      releaseDate: "2026-07-13",
+      trackId: "ep_2",
     });
 
-    const { sections } = await listFreshReleases(NOW);
-    const row = sections
-      .flatMap((section) => section.catalogue)
-      .find((track) => track.trackId === "c_avatar");
-
-    expect(row?.artistAvatarUrl).toBe("https://i.scdn.co/image/workforce");
+    const records = await listFreshRecords(NOW);
+    expect(records.find((record) => record.slug === "two-track-ep")?.trackCount).toBe(2);
   });
+});
 
+describe("listFreshTracks — the flat list the syndication surfaces read", () => {
   it("flattens into a capped list, newest release first, unlit rows coordinate-free", async () => {
     await seedFinding({
       artists: ["Line25"],
@@ -367,142 +586,18 @@ describe("listFreshReleases", () => {
     expect(capped.tracks).toHaveLength(2);
     expect(capped.tracks[0]?.title).toBe("Title flat_f_15");
   });
-});
 
-async function seedAlbumTrack(options: {
-  albumId: string;
-  albumName: string;
-  albumSlug: string;
-  artists: string[];
-  releaseDate: string;
-  trackId: string;
-}): Promise<void> {
-  await db.execute({
-    args: [options.albumId, options.albumName, options.albumSlug, "x", "x"],
-    sql: `insert or ignore into albums (id, name, slug, created_at, updated_at) values (?, ?, ?, ?, ?)`,
-  });
-  await seedCatalogueTrack({
-    albumId: options.albumId,
-    artists: options.artists,
-    releaseDate: options.releaseDate,
-    trackId: options.trackId,
-  });
-}
-
-describe("listFreshReleases — the album window widens without touching the track stream", () => {
-  it("reaches records past the 30-day track window only when asked, flagging the track-window cut", async () => {
-    await seedAlbumTrack({
-      albumId: "alb_deep",
-      albumName: "Deep Cut",
-      albumSlug: "deep-cut",
-      artists: ["Seba"],
-      releaseDate: "2026-05-18",
-      trackId: "deep_1",
-    });
-
-    await seedAlbumTrack({
-      albumId: "alb_recent",
-      albumName: "Recent Cut",
-      albumSlug: "recent-cut",
-      artists: ["Nu:Tone"],
-      releaseDate: "2026-07-14",
-      trackId: "recent_1",
-    });
-
-    const narrow = await listFreshReleases(NOW);
-    expect(narrow.records.map((record) => record.slug)).toEqual(["recent-cut"]);
-
-    const wide = await listFreshReleases(NOW, FRESH_RECORDS_WINDOW_DAYS);
-    expect(wide.records.map((record) => record.slug)).toEqual(["recent-cut", "deep-cut"]);
-    expect(wide.records.find((record) => record.slug === "deep-cut")?.withinTrackWindow).toBe(
-      false,
-    );
-    expect(wide.records.find((record) => record.slug === "recent-cut")?.withinTrackWindow).toBe(
-      true,
-    );
-
-    expect(wide.windowDays).toBe(FRESH_WINDOW_DAYS);
-  });
-
-  it("counts the record's tracks, never the artist-multiplied json_each join rows", async () => {
-    await seedAlbumTrack({
-      albumId: "alb_ep",
-      albumName: "Two Track EP",
-      albumSlug: "two-track-ep",
-      artists: ["Artist A", "Artist B", "Artist C"],
-      releaseDate: "2026-07-14",
-      trackId: "ep_1",
-    });
-    await seedCatalogueTrack({
-      albumId: "alb_ep",
-      artists: ["Artist A", "Artist B"],
-      releaseDate: "2026-07-13",
-      trackId: "ep_2",
-    });
-
-    const { records } = await listFreshReleases(NOW, FRESH_RECORDS_WINDOW_DAYS);
-    expect(records.find((record) => record.slug === "two-track-ep")?.trackCount).toBe(2);
-  });
-});
-
-describe("the view split — the cuts the marquee switches the pills on", () => {
-  it("gives the album view the full 90-day set, the All-view rail only the 30-day cut, both views the stream", async () => {
-    await seedFinding({
-      artists: ["Dimension"],
-      logId: "200.7.1A",
-      releaseDate: "2026-07-15",
-      trackId: "split_f",
-    });
-    await seedCatalogueTrack({
-      artists: ["Lenzman"],
-      releaseDate: "2026-07-12",
-      trackId: "split_c",
-    });
-    await seedAlbumTrack({
-      albumId: "alb_in",
-      albumName: "In Window LP",
-      albumSlug: "in-window-lp",
-      artists: ["Nu:Tone"],
-      releaseDate: "2026-07-14",
-      trackId: "split_in",
-    });
-    await seedAlbumTrack({
-      albumId: "alb_deep",
-      albumName: "Deep Window LP",
-      albumSlug: "deep-window-lp",
-      artists: ["Seba"],
-      releaseDate: "2026-05-18",
-      trackId: "split_deep",
-    });
-
-    const data = await listFreshReleases(NOW, FRESH_RECORDS_WINDOW_DAYS);
-
-    expect(freshRecordCovers(data).map((cover) => cover.key)).toEqual([
-      "r-in-window-lp",
-      "r-deep-window-lp",
-    ]);
-
-    expect(freshTrackWindowRecordCovers(data).map((cover) => cover.key)).toEqual([
-      "r-in-window-lp",
-    ]);
-
-    expect(
-      freshStream(data)
-        .map((entry) => (entry.kind === "finding" ? entry.finding.trackId : entry.track.trackId))
-        .sort(),
-    ).toEqual(["split_c", "split_f", "split_in"]);
-  });
-});
-
-describe("the fresh FEED contract survives the album-window widening", () => {
-  it("keeps listFreshTracks on the 30-day window — a 60-day record never leaks into a feed read", async () => {
+  it("stays on the 30-day window: a 60-day record never leaks into a feed read", async () => {
     await seedFinding({
       artists: ["Dimension"],
       logId: "200.7.1A",
       releaseDate: "2026-07-15",
       trackId: "feed_f",
     });
-    await seedCatalogueTrack({
+    await seedAlbumTrack({
+      albumId: "alb_recent",
+      albumName: "Recent Record",
+      albumSlug: "recent-record",
       artists: ["Nu:Tone"],
       releaseDate: "2026-07-12",
       trackId: "feed_c",
@@ -523,8 +618,7 @@ describe("the fresh FEED contract survives the album-window widening", () => {
       "Title feed_c",
       "Title feed_f",
     ]);
-
-    expect(feed.albums.map((album) => album.slug)).toEqual([]);
+    expect(feed.albums.map((album) => album.slug)).toEqual(["recent-record"]);
     expect(feed.windowDays).toBe(FRESH_WINDOW_DAYS);
   });
 });

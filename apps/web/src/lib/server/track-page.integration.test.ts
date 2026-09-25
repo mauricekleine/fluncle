@@ -34,32 +34,6 @@ function listSonicNeighbours(trackId: string, limit?: number) {
   return listSonicNeighboursLive(trackId, limit, { allowBoundedSql: true });
 }
 
-// THE ARCHIVE TRACK DESTINATION, over a real schema.
-//
-// Five shapes, because five shapes is what the surface actually has to survive, and four of them
-// only exist because the archive is mostly UNCERTIFIED and mostly UNENRICHED:
-//
-//   1. a CERTIFIED track            — its destination is `/log`, permanently, and always was;
-//   2. an EVIDENCE-RICH uncertified — a page, indexed, and in the sitemap;
-//   3. a THIN uncertified           — a page, reachable and navigable, deliberately NOT indexed
-//                                      and deliberately NOT in the sitemap;
-//   4. a track with NO listening source at all — a page that offers no outbound control rather
-//                                      than a dead one;
-//   5. a track whose media is absent — no cover to preload, no preview anchor to play.
-//
-// The fifth shape's BROWSER half (a cover URL that 404s at request time, a preview relay that
-// answers empty) is `tests/e2e/track.spec.ts`; what is provable here is the data half — the page
-// asks for nothing it does not hold.
-//
-// ── THE ONE-EXPRESSION GUARANTEE ──────────────────────────────────────────────────────────────
-// The page's `indexable` and the sitemap's membership are the SAME SQL expression
-// (`TRACK_PAGE_INDEXABLE_WHERE`), one evaluated as a column and the other as a `where`. Two
-// definitions that can drift is the defect this file exists to make impossible: every shape below
-// is asserted on BOTH sides, so a change that moves one without the other fails here.
-//
-// It runs on the in-memory libSQL database built from the generated migrations, so the schema
-// under test is byte-identical to production.
-
 let db: Client;
 
 vi.mock("./db", async (importOriginal) => {
@@ -77,7 +51,6 @@ const NON_EMBEDDED_EARLY = "aa-non-embedded-neighbour";
 const EMBEDDED_EARLY = "bb-embedded-neighbour";
 const EMBEDDED_NEXT = "cc-embedded-neighbour";
 
-/** Stamp the four evidence columns onto a row — the shape the enrichment sweeps eventually reach. */
 async function makeEvidenceRich(trackId: string): Promise<void> {
   await db.execute({
     args: [trackId],
@@ -119,16 +92,12 @@ beforeEach(async () => {
   });
   await makeEvidenceRich(RICH);
 
-  // THIN: a bare crawl row. It has a name and a Spotify anchor (seedCatalogueTrack mints one), and
-  // nothing else — no record, no date, no cover. Exactly what most of the catalogue looks like.
   await seedCatalogueTrack(db, {
     artists: ["Quiet Cartel"],
     title: "Ferrite Bloom",
     trackId: THIN,
   });
 
-  // SOURCELESS: a MusicBrainz-born row with no streaming presence at all. Nulling both Spotify
-  // columns is what the crawler actually writes for one (they are nullable for this reason).
   await seedCatalogueTrack(db, {
     artists: ["Sable Lung"],
     title: "Paper Lantern Riot",
@@ -148,8 +117,6 @@ describe("the certified track (shape 1)", () => {
   });
 
   it("is excluded from the tracks sitemap child, however much evidence it carries", async () => {
-    // It is evidence-rich by every other term — the exclusion is `is_catalogue = 1`, and it is
-    // there because a 301 must never be submitted for indexing. Its page is in `findings`.
     const bag = await collectSitemapBag("tracks");
 
     expect(bag.tracks.map((row) => row.trackId)).not.toContain(CERTIFIED);
@@ -199,16 +166,13 @@ describe("the evidence-rich uncertified track (shape 2)", () => {
   });
 
   it("is counted by the sitemap INDEX exactly as often as the child lists it", async () => {
-    // The index reads a `count(*)`; the child reads the rows. They are two reads of one
-    // expression, and an archive where they disagree submits URLs that are not there.
     const [stats, bag] = await Promise.all([
       collectSitemapIndexStats(),
       collectSitemapBag("tracks"),
     ]);
 
     expect(stats.tracks.count).toBe(bag.tracks.length);
-    // Honestly undated: `tracks` carries no content-change timestamp, so a track entry omits
-    // `<lastmod>` rather than inventing one from a release date.
+
     expect(stats.tracks.lastmod).toBeUndefined();
 
     const plan = await db.execute({
@@ -229,8 +193,7 @@ describe("the evidence-rich uncertified track (shape 2)", () => {
       p1: typeof row.p1 === "number" ? row.p1 : -1,
       p4: typeof row.p4 === "string" ? row.p4 : "",
     }));
-    // A deferred seek is only a marker; a real table read would open the table cursor. Both
-    // branches are index-only when every evidence field is covered.
+
     expect(
       instructions.filter(({ opcode, p4 }) => opcode === "OpenRead" && !p4.startsWith("k(")),
     ).toEqual([]);
@@ -315,8 +278,6 @@ describe("the track with no listening source (shape 4)", () => {
   });
 
   it("offers no preview control either, since there is no short source to resolve one from", async () => {
-    // No stored preview URL and no ISRC ⇒ the relay's every rung would come back empty, so the
-    // page renders no control rather than one that fails on click.
     const data = await resolveTrackPageData(SOURCELESS);
 
     expect(data.status === "found" && data.track.previewable).toBe(false);
@@ -337,8 +298,6 @@ describe("the track with no media (shape 5, the data half)", () => {
   });
 
   it("becomes previewable the moment an ISRC lands, without a stored preview URL", async () => {
-    // The relay resolves a clip from the ISRC on demand (Deezer, then Apple), so the control is
-    // offered on the anchor rather than on a stored URL that expires.
     await db.execute({
       args: [SOURCELESS],
       sql: `update tracks set isrc = 'GBTEST2600009' where track_id = ?`,
@@ -351,8 +310,6 @@ describe("the track with no media (shape 5, the data half)", () => {
 
 describe("the operator stamps", () => {
   it("sends a stamped duplicate of a FINDING straight to the coordinate, in one hop", async () => {
-    // The column's own rule: a duplicate stamp is written only when a catalogue row's ISRC matches
-    // a FINDING's. Bouncing through `/track/<principal>` would 301 twice for one answer.
     await seedCatalogueTrack(db, {
       artists: ["Nova Kestrel"],
       title: "Synthetic Aurora",
@@ -426,22 +383,16 @@ describe("the sitemap window", () => {
   });
 });
 
-/** A unit vector pointing along one axis — the further apart two axes, the further apart the sound. */
 function axisVector(axis: number): number[] {
   return Array.from({ length: EMBEDDING_DIMS }, (_unused, index) => (index === axis ? 1 : 0));
 }
 
 describe("close in sound", () => {
   it("renders no band at all when the track carries no embedding", async () => {
-    // The honest degrade, and it is the SAME answer an empty corpus and a dark sonar produce: the
-    // page shows nothing rather than an empty band or an error.
     expect(await listSonicNeighbours(RICH)).toStrictEqual([]);
   });
 
   it("ranks BOTH registers against one another and excludes the target", async () => {
-    // The whole point of scanning `tracks` through a LEFT join: a certified neighbour competes on
-    // exactly the same terms as an uncertified one, and the register a row renders in is decided
-    // by whether it carries a coordinate — never by the query.
     await seedEmbedding(db, RICH, axisVector(0));
     await seedEmbedding(db, CERTIFIED, axisVector(1));
     await seedEmbedding(db, THIN, axisVector(500));
@@ -616,9 +567,6 @@ describe("the sentinels that are values, not nulls", () => {
   });
 
   it("reports NO length for a row whose duration is the crawler's 0", async () => {
-    // The crawler writes `recording.length ?? track.length ?? 0` and calls 0 "the honest
-    // 'unknown'" (crawl.ts), so the DTO must hand back an absence rather than a zero the page and
-    // the structured data would both render as a fact.
     await db.execute({
       args: [THIN],
       sql: `update tracks set duration_ms = 0 where track_id = ?`,
@@ -629,9 +577,6 @@ describe("the sentinels that are values, not nulls", () => {
   });
 
   it("reports NO isrc and NO recording mbid for the empty string", async () => {
-    // `schema.ts`'s `has_isrc` mirror trims before testing precisely because rows carry `''`. An
-    // untrimmed read prints a labelled field with no value and emits an identifier that names
-    // nothing.
     await db.execute({
       args: [THIN],
       sql: `update tracks set isrc = '', mb_recording_id = '   ' where track_id = ?`,
@@ -643,9 +588,6 @@ describe("the sentinels that are values, not nulls", () => {
   });
 
   it("serves the TRIMMED value, not the padded one the guard tested", async () => {
-    // The guard and the value must trim together. Testing the trimmed form and then serving the
-    // padded one puts the padding on the page and into the structured data — the same defect one
-    // step later, and invisible to a check that only asks whether the field is present.
     await db.execute({
       args: [THIN],
       sql: `update tracks
@@ -693,13 +635,11 @@ describe("the Beatport rail, over a real row", () => {
       return;
     }
 
-    // Rendered: the control is there, pointing at the URL the archive stores.
     expect(data.track.listen).toContainEqual({
       href: "https://www.beatport.com/track/undertow/9",
       kind: "beatport",
     });
 
-    // Asserted: it is not in the graph. Built exactly as the route's head() builds it.
     const sameAs = sameAsUrls(data.track.listen);
 
     expect(sameAs).not.toContain("https://www.beatport.com/track/undertow/9");
@@ -707,12 +647,6 @@ describe("the Beatport rail, over a real row", () => {
   });
 });
 
-/**
- * A vector a hair off axis 0 — STRICTLY nearer to `axisVector(0)` than any orthogonal axis is. It
- * is what lets a tempo test prove the window rather than accidentally pass on the `track_id`
- * tiebreak: two orthogonal candidates are equidistant, so the unfiltered scan would order them by
- * id and the assertion would hold whether or not the filter did anything.
- */
 function nearVector(): number[] {
   return Array.from({ length: EMBEDDING_DIMS }, (_unused, index) =>
     index === 0 ? 1 : index === 3 ? 0.05 : 0,
@@ -740,10 +674,6 @@ describe("the tempo pre-filter on close in sound", () => {
   });
 
   it("keeps the explicit index requirement on the BPM-window statement at the source", async () => {
-    // Standing constraint: the query-plan assertion above cannot distinguish the explicit
-    // requirement from SQLite independently choosing the same index — the plan reads the same
-    // whether or not the requirement is there. The source-level assertion is what retains the
-    // requirement, and the second assertion keeps it conditional on a window being applied.
     const statement = sonicNeighbourScanStatement(
       new Uint8Array(EMBEDDING_DIMS * Float32Array.BYTES_PER_ELEMENT),
       RICH,
@@ -762,8 +692,6 @@ describe("the tempo pre-filter on close in sound", () => {
   });
 
   it("excludes a NEARER neighbour that sits outside the target's tempo window", async () => {
-    // The far row is deliberately the nearest by vector, so only the window can keep it out. RICH
-    // and CERTIFIED are both 174 (makeEvidenceRich); the far row is put at half tempo.
     await db.execute({
       args: [SOURCELESS],
       sql: `update tracks set bpm = 87 where track_id = ?`,
@@ -779,9 +707,6 @@ describe("the tempo pre-filter on close in sound", () => {
   });
 
   it("widens to the unfiltered scan rather than returning a short band", async () => {
-    // Nothing else sits in the window, so the windowed scan comes back short of the limit and the
-    // unfiltered answer stands in for it. The window narrows the candidate set; it never shortens
-    // the band, and the nearest row still leads it.
     await db.execute({
       args: [SOURCELESS],
       sql: `update tracks set bpm = 87 where track_id = ?`,

@@ -17,7 +17,6 @@ const AGGREGATES = ["public_aggregates"] as const;
 const ARTISTS = ["artist_qualification"] as const;
 const BOTH = ["public_aggregates", "artist_qualification"] as const;
 
-/** The statement order is load-bearing because each epoch gate reads the preceding changes(). */
 function shapes(statements: readonly PublicProjectionStatement[]): string[] {
   return statements.map((statement) => {
     const sql = String(statement.sql);

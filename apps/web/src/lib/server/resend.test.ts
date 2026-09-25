@@ -7,9 +7,6 @@ import {
   sendVerificationEmail,
 } from "./resend";
 
-// The Resend client is raw `fetch` against the REST API; mock `fetch` + the env
-// reads so no real call goes out and assert the endpoints/bodies/idempotency.
-
 vi.mock("./env", () => ({
   readEnv: async (key: string) => {
     if (key === "RESEND_API_KEY") {
@@ -98,8 +95,6 @@ describe("createBroadcast + sendBroadcast", () => {
     expect(url).toBe("https://api.resend.com/broadcasts");
     expect(init.headers["Idempotency-Key"]).toBe("edition-broadcast/ed_1");
     const body = JSON.parse(init.body);
-    // Resend's REST API is snake_case — `segment_id`, not `segmentId` (the camelCase
-    // key is silently ignored → "Missing segment_id or audience_id" at send time).
     expect(body.segment_id).toBe("seg_fluncle");
     expect(body.segmentId).toBeUndefined();
     expect(body.from).toBe("Fluncle <fluncle@newsletter.fluncle.com>");
@@ -147,10 +142,8 @@ describe("sendPasswordResetEmail", () => {
     expect(body.from).toBe("Fluncle <fluncle@newsletter.fluncle.com>");
     expect(body.to).toBe("raver@example.com");
     expect(body.subject).toBe("Reset your Fluncle password");
-    // The whole link is the literal call to action — it must ride both bodies.
     expect(body.text).toContain("https://www.fluncle.com/api/auth/reset-password/tok_123");
     expect(body.html).toContain("https://www.fluncle.com/api/auth/reset-password/tok_123");
-    // Transactional-plain voice: no exclamation marks, no em dashes in the prose.
     expect(body.text).not.toContain("!");
     expect(body.text).not.toContain("—");
   });
@@ -181,10 +174,8 @@ describe("sendVerificationEmail", () => {
     expect(body.from).toBe("Fluncle <fluncle@newsletter.fluncle.com>");
     expect(body.to).toBe("raver@example.com");
     expect(body.subject).toBe("Verify your Fluncle email");
-    // The whole link is the literal call to action — it must ride both bodies.
     expect(body.text).toContain("token=tok_456");
     expect(body.html).toContain("token=tok_456");
-    // Transactional-plain voice: no exclamation marks, no em dashes in the prose.
     expect(body.text).not.toContain("!");
     expect(body.text).not.toContain("—");
   });

@@ -12,23 +12,16 @@ import { Route as FrontDoorRoute } from "./index";
 import { MEASURED_FAQ_ANCHOR } from "./log.$logId";
 import { Route as ReachRoute } from "./reach";
 
-// The entity surface: the ONE canonical Fluncle Person node (@id) + FAQPage, mirroring the visible
-// prose. The person node is declared ONCE here; every other surface references it by `@id`.
-
 type HeadResult = {
   links?: Array<{ href: string; rel: string }>;
   meta?: Array<{ content?: string; name?: string; title?: string }>;
   scripts?: Array<{ children: string; type: string }>;
 };
 
-/** A head's `<meta name="description">` — the same string og:/twitter: description carry. */
 function metaDescriptionOf(head: HeadResult): string | undefined {
   return head.meta?.find((entry) => entry.name === "description")?.content;
 }
 
-// JSON-LD is emitted via `jsonLdScript`, which HTML-escapes the serialized JSON
-// (`<`/`>`/`&`/U+2028/U+2029 → `\uXXXX`). Those escapes are still valid JSON, so
-// `JSON.parse` reads the original object back — the structured data is unchanged.
 function aboutSchemas(): Array<Record<string, unknown>> {
   const head = AboutRoute.options.head?.({} as never) as HeadResult;
 
@@ -39,15 +32,13 @@ function aboutSchemas(): Array<Record<string, unknown>> {
 
 describe("/about schema", () => {
   it("emits the Fluncle entity as the canonical Person node (@id) with the canonical description", () => {
-    // Retyped MusicGroup → Person: Wikidata P31=Q5 + MusicBrainz both say human, and it carries the
-    // ONE canonical `@id` every other surface references.
     const entity = aboutSchemas().find((schema) => schema["@type"] === "Person");
 
     expect(entity).toBeDefined();
     expect(entity?.["@id"]).toBe(fluncleEntityId);
     expect(entity?.name).toBe("Fluncle");
     expect(entity?.description).toBe(fluncleDescription);
-    // The full identity graph lives ONCE, here on the canonical node.
+
     expect(entity?.sameAs).toEqual(
       expect.arrayContaining([
         expect.stringContaining("tiktok.com/@fluncle"),
@@ -66,17 +57,13 @@ describe("/about schema", () => {
   });
 
   it("claims the Spotify playlist by its BARE URI, never the `?si=` share link", () => {
-    // A `sameAs` is an exact-URI identity claim, and the inbound side of this edge (MusicBrainz,
-    // Wikidata, and Fluncle's own static llms.txt) carries the bare playlist URL — so a share
-    // token in this array quietly fails to match the edge it exists to assert. The human share
-    // link keeps its token; only the identity claim drops it.
     const entity = aboutSchemas().find((schema) => schema["@type"] === "Person");
     const sameAs = entity?.sameAs as string[] | undefined;
     const playlist = sameAs?.find((url) => url.includes("open.spotify.com/playlist/"));
 
     expect(playlist).toBe(spotifyPlaylistCanonicalUrl);
     expect(playlist).not.toContain("?si=");
-    // The share link is untouched, and the two really are the same playlist.
+
     expect(spotifyPlaylistUrl).toContain("?si=");
     expect(spotifyPlaylistUrl.startsWith(spotifyPlaylistCanonicalUrl)).toBe(true);
   });
@@ -107,8 +94,6 @@ describe("/about schema", () => {
   });
 
   it("keeps the measurement question's anchor in step with the /log BPM/key link", () => {
-    // The cross-file contract: /log's BPM/Key labels link to this anchor on /about.
-    // A reword of the question would silently regenerate the id and no-op the link.
     expect(faqAnchor("How does Fluncle measure BPM and key?")).toBe(MEASURED_FAQ_ANCHOR);
   });
 
@@ -119,9 +104,6 @@ describe("/about schema", () => {
   });
 });
 
-// The whole point of the slice: ONE entity node, referenced everywhere. Every surface that names
-// Fluncle either IS the declared node (/about) or points at its `@id` — never a second, competing
-// re-declaration. This pins that resolution across the surfaces that carry a `#fluncle` reference.
 describe("the @id entity graph — every #fluncle reference resolves to the one declared node", () => {
   function schemasOf(head: HeadResult): Array<Record<string, unknown>> {
     return (head.scripts ?? [])
@@ -129,7 +111,6 @@ describe("the @id entity graph — every #fluncle reference resolves to the one 
       .map((script) => JSON.parse(script.children) as Record<string, unknown>);
   }
 
-  // The FRONT DOOR (`/`) carries the site-level `WebSite` node — highest authority, hit first.
   const homeHead = FrontDoorRoute.options.head?.({
     loaderData: {
       counts: { albums: 0, artists: 0, labels: 0, tracks: 0 },
@@ -139,7 +120,7 @@ describe("the @id entity graph — every #fluncle reference resolves to the one 
       releases: [],
     },
   } as never) as HeadResult;
-  // The ARCHIVE page (`/findings`) carries the `MusicPlaylist` — it IS the playlist of findings.
+
   const findingsHead = FindingsRoute.options.head?.({
     loaderData: { totalCount: 0, tracks: [] },
   } as never) as HeadResult;
@@ -161,14 +142,11 @@ describe("the @id entity graph — every #fluncle reference resolves to the one 
     const playlist = schemasOf(findingsHead).find((schema) => schema["@type"] === "MusicPlaylist");
 
     expect(playlist?.creator).toEqual({ "@id": fluncleEntityId });
-    // The identity graph lives once (on /about), not duplicated here.
+
     expect(playlist).not.toHaveProperty("sameAs");
   });
 
   it("carries its OWN meta description, never the front door's entity line", () => {
-    // Two indexable pages may not go to search wearing one description. `/` sets NO description of
-    // its own, so it inherits the root's canonical ≤155-char entity line; `/about` describes what
-    // /about answers, under the same cap.
     const aboutHead = AboutRoute.options.head?.({} as never) as HeadResult;
     const aboutDescription = metaDescriptionOf(aboutHead);
 
@@ -179,9 +157,6 @@ describe("the @id entity graph — every #fluncle reference resolves to the one 
   });
 
   it("the archive page carries its own description, distinct from the front door's inherited one", () => {
-    // `/` and `/findings` are BOTH indexable and both about the archive, which is exactly the pair
-    // most at risk of shipping one description twice. `/` inherits the root entity line; `/findings`
-    // states what its own page is.
     const findingsDescription = metaDescriptionOf(findingsHead);
 
     expect(findingsDescription).toBeDefined();
@@ -190,7 +165,6 @@ describe("the @id entity graph — every #fluncle reference resolves to the one 
   });
 
   it("the front door and the archive page each self-canonicalize to their own URL", () => {
-    // The pair must never point at each other: two real pages, two canonicals, no consolidation.
     expect(homeHead.links).toContainEqual({ href: "https://www.fluncle.com/", rel: "canonical" });
     expect(findingsHead.links).toContainEqual({
       href: "https://www.fluncle.com/findings",

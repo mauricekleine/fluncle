@@ -1,16 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-// The prompt registry (./prompts.ts). Three things are pinned here, and the first one is
-// the whole reason the feature is safe to ship:
-//
-//   1. THE FALLBACK. A missing row, a corrupt row, or a database that is simply DOWN
-//      must never stop a sweep — it falls back to the repo's baked-in default and logs.
-//      A pipeline that dies because a settings table hiccuped is worse than no feature.
-//   2. THE RENDERER is TOTAL. An operator's typo in the /admin editor cannot throw.
-//   3. THE REGISTRY IS COHERENT: every `{{variable}}` a default body actually uses is
-//      declared in that prompt's `variables` list, so the /admin editor cannot show the
-//      operator a prompt whose real inputs it failed to mention.
-
 const execute = vi.hoisted(() => vi.fn());
 
 vi.mock("./db", () => ({
@@ -35,11 +24,6 @@ beforeEach(() => {
   vi.spyOn(console, "error").mockImplementation(() => undefined);
 });
 
-// ---------------------------------------------------------------------------
-// THE FALLBACK — the cardinal guarantee. Each of these is a way the prompt store can
-// fail, and every one of them must land on the baked default rather than an exception.
-// ---------------------------------------------------------------------------
-
 describe("resolvePrompt — a broken prompt store can never break a sweep", () => {
   it("falls back to the baked default when the prompt has NO row (the cold state)", async () => {
     execute.mockResolvedValueOnce({ rows: [] });
@@ -48,8 +32,7 @@ describe("resolvePrompt — a broken prompt store can never break a sweep", () =
 
     expect(resolved.body).toBe(PROMPT_REGISTRY.note_author.defaultBody);
     expect(resolved.source).toBe("default");
-    // Version 0 is the registry default. It is a real, citable provenance value — an
-    // artifact authored under it is NOT "unknown", it is "the repo's own wording".
+
     expect(resolved.version).toBe(0);
   });
 
@@ -64,8 +47,6 @@ describe("resolvePrompt — a broken prompt store can never break a sweep", () =
   });
 
   it("falls back to the baked default when the stored override is EMPTY (corrupt row)", async () => {
-    // An operator cannot have meant "send the model an empty prompt". A blank body is a
-    // corrupt override, so we author from the default rather than from nothing.
     execute.mockResolvedValueOnce({ rows: [{ body: "   \n  ", version: 4 }] });
 
     const resolved = await resolvePrompt("note_author");
@@ -133,10 +114,6 @@ describe("renderRegisteredPrompt — the Worker's resolve-and-render", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// THE RENDERER — two constructs, and it is TOTAL. Every input renders to a string.
-// ---------------------------------------------------------------------------
-
 describe("renderPrompt", () => {
   it("substitutes a variable", () => {
     expect(renderPrompt("hello {{name}}", { name: "Fluncle" })).toBe("hello Fluncle");
@@ -151,8 +128,6 @@ describe("renderPrompt", () => {
   });
 
   it("renders an UNKNOWN variable as empty rather than throwing", () => {
-    // The operator typo'd a variable name in the /admin editor. That must degrade to a
-    // slightly thinner prompt, never to a stopped sweep.
     expect(renderPrompt("a{{nope}}b", {})).toBe("ab");
   });
 
@@ -167,7 +142,6 @@ describe("renderPrompt", () => {
   });
 
   it("never substitutes a variable inside a DROPPED block", () => {
-    // The conditional runs first, on purpose: a variable in a dead branch must not leak.
     expect(renderPrompt("{{#if gate}}secret {{leak}}{{/if}}", { leak: "LEAKED" })).toBe("");
   });
 
@@ -182,7 +156,6 @@ describe("renderPrompt", () => {
   });
 
   it("leaves an UNCLOSED {{#if}} as literal text rather than swallowing the prompt", () => {
-    // A half-typed conditional must not silently eat every rail below it.
     const out = renderPrompt("keep me {{#if v}} and me", { v: "x" });
     expect(out).toContain("keep me");
     expect(out).toContain("and me");
@@ -194,11 +167,6 @@ describe("renderPrompt", () => {
     }
   });
 });
-
-// ---------------------------------------------------------------------------
-// THE REGISTRY'S OWN COHERENCE. Cheap invariants that would otherwise rot silently and
-// show the operator a prompt whose real inputs it never declared.
-// ---------------------------------------------------------------------------
 
 describe("the registry", () => {
   it("defines every slug in PROMPT_SLUGS, with a non-empty default body", () => {
@@ -213,9 +181,6 @@ describe("the registry", () => {
   });
 
   it("DECLARES every variable its default body actually uses", () => {
-    // The invariant that keeps the /admin editor honest: if a body interpolates
-    // `{{neighbours}}`, the operator must be told `neighbours` is a thing they can
-    // reference. An undeclared variable is a prompt the operator cannot safely edit.
     for (const slug of PROMPT_SLUGS) {
       const { defaultBody, variables } = PROMPT_REGISTRY[slug];
       const used = new Set<string>();
@@ -238,8 +203,6 @@ describe("the registry", () => {
   });
 
   it("renders every default body to a non-empty prompt with NO variables supplied", () => {
-    // The degenerate case: the sweep could gather nothing at all. Every prompt must still
-    // resolve to something a model can act on rather than to an empty string.
     for (const slug of PROMPT_SLUGS) {
       expect(renderPrompt(PROMPT_REGISTRY[slug].defaultBody, {}).length).toBeGreaterThan(100);
     }
@@ -260,14 +223,10 @@ describe("the registry", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// THE WRITE — append-only. A rollback is a forward move, which is what makes it safe.
-// ---------------------------------------------------------------------------
-
 describe("appendPromptVersion", () => {
   it("mints version 1 against an un-overridden prompt", async () => {
-    execute.mockResolvedValueOnce({ rows: [{ version: null }] }); // max(version) on an empty slug
-    execute.mockResolvedValueOnce({ rows: [] }); // the insert
+    execute.mockResolvedValueOnce({ rows: [{ version: null }] });
+    execute.mockResolvedValueOnce({ rows: [] });
 
     expect(await appendPromptVersion({ body: "first", slug: "note_author" })).toEqual({
       version: 1,
@@ -303,9 +262,6 @@ describe("appendPromptVersion", () => {
   });
 
   it("A ROLLBACK IS AN APPEND: re-submitting v3's body mints v8, and v3 still stands", async () => {
-    // This is the safety net the whole feature turns on. Rolling back does not rewind the
-    // history — it adds to it — so the thing you rolled back FROM is still readable, and
-    // the rollback is itself undoable.
     execute.mockResolvedValueOnce({ rows: [{ version: 7 }] });
     execute.mockResolvedValueOnce({ rows: [] });
 
@@ -375,7 +331,7 @@ describe("listPrompts", () => {
     expect(note?.activeVersion).toBe(2);
     expect(note?.activeBody).toBe("v2 body");
     expect(note?.versions.map((version) => version.version)).toEqual([2, 1]);
-    // The baked default is always carried, so the operator can diff against it and reset.
+
     expect(note?.defaultBody).toBe(PROMPT_REGISTRY.note_author.defaultBody);
   });
 });

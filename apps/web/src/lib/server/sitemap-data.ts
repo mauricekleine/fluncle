@@ -1,32 +1,3 @@
-// Everything `/sitemap.xml` (the index) and `/sitemap/<kind>-<n>.xml` (the children) know.
-//
-// ── ONE DOCUMENT, ONE READ ──────────────────────────────────────────────────────────────────────
-// The index carries no `<url>` at all, so it reads AGGREGATES (`collectSitemapIndexStats` — a
-// `count(*)` and a `max()` per child) while each child reads ONE bag (`collectSitemapBag`).
-// The two agree by construction, and
-// `sitemap-data.integration.test.ts` proves it over a seeded archive rather than asserting it here.
-//
-// ── THE CERTIFICATION RAIL, RESTATED AS A BUDGET ────────────────────────────────────────
-// The TRACK read drives from `findings` through the inner join, so no `/log` <loc> is ever a
-// catalogue row: the log surface is bounded by the ARCHIVE (what Fluncle certified), never by
-// the CATALOGUE (what the crawler merely heard of), and a 30,000-row crawl adds exactly ZERO
-// `/log` <loc>s. That is not an accident to be re-derived each time someone reads this file, it
-// is the certification rail (docs/catalogue-crawler.md), and
-// `findings-certification.integration.test.ts` pins it against the real schema.
-//
-// What the catalogue DOES move is the ENTITY pages. An artist/label/album page counts its findings
-// PLUS its quieter uncertified rows toward the thin-content gate, so a record Fluncle found one
-// banger on becomes a real tracklist page once the rest of the record is there — and an entity the
-// crawler discovered and he has certified NOTHING on is a page too, built from its releases,
-// indexable once it clears the same floor. So the crawl DOES add <loc>s here: never for a track,
-// always only for the entity its tracks hang off.
-//
-// That is why the three graph reads below are NOT the ones the `/artists`, `/labels`, `/albums`
-// hubs use. The hubs are Fluncle's own editorial lists (findings-joined, "every label I've pulled a
-// banger off"); the sitemap is the machine's complete map of pages that exist and may be indexed.
-// Using the hub reads here would orphan every crawler-discovered page from the sitemap — exactly
-// the invariant this file exists to hold. See docs/album-entity.md.
-
 import { DOCS_PAGES } from "../docs-pages";
 import { formatSector } from "../log-id-shared";
 import { mixtapeSetVideoUrl, albumCoverAtSize, trackMedia } from "../media";
@@ -89,12 +60,6 @@ import {
 import { getMixChainDepth } from "./tracks";
 type SitemapWindow = { after?: string; limit: number };
 
-/**
- * The bounded key-only query that reconstructs one missing child boundary. Its inner read walks at
- * most one child page from a known key; the outer aggregate returns only that page's final key.
- * There is deliberately no OFFSET: a deep request chains fixed-size seeks through the current
- * corpus until it reaches the requested page.
- */
 export function sitemapBoundaryStatement(
   kind: SitemapSqlWindowedKind,
   limit: number,
@@ -114,11 +79,6 @@ export function sitemapBoundaryStatement(
               )`,
       };
     case "artists":
-      // The visibility gate rides here TOO, and it is not optional: this probe's membership must
-      // be the same set the row reader emits, or the boundary lands short by however many hidden
-      // artists fall inside the window and the next shard re-emits the slugs it skipped. Three
-      // legs, one predicate — the probe, `artistSitemapWindowStatement`, and
-      // `countIndexableArtists`.
       return {
         args: [start, ARTIST_INDEX_MIN_FINDINGS, limit],
         sql: `select max(slug) as boundary, count(*) as n from (
@@ -161,7 +121,6 @@ export function sitemapBoundaryStatement(
   }
 }
 
-/** The exact row-producing statement each SQL-windowed child executes. */
 export function sitemapWindowStatement(
   kind: SitemapSqlWindowedKind,
   limit: number,
@@ -205,8 +164,6 @@ function trackPage(row: TrackRow): SitemapLogPage {
   const logId = row.log_id;
   const media = trackMedia(logId);
   const artists = parseArtistsJson(row.artists_json);
-  // Google Images cover: the Spotify album art (full size), falling back to the
-  // rendered cover.jpg — mirrors the /log og:image choice, always a real URL.
   const imageLoc = albumCoverAtSize(row.album_image_url ?? undefined, "large") ?? media.coverUrl;
 
   if (!row.video_url) {
@@ -214,9 +171,6 @@ function trackPage(row: TrackRow): SitemapLogPage {
   }
 
   const title = artistTitleLine({ artists, title: row.title });
-  // The operator note is the richest description; fall back to the same
-  // definitional line the page's meta description uses (never empty — a
-  // video:description is required, and an empty one fails Google's validator).
   const description = row.note?.trim()
     ? row.note.trim()
     : definitionalSentences({
@@ -232,7 +186,6 @@ function trackPage(row: TrackRow): SitemapLogPage {
     lastmod: row.lastmod,
     logId,
     video: {
-      // The cover.jpg is the canonical video loading still (see lib/media.ts).
       contentLoc: media.videoUrl,
       description,
       thumbnailLoc: media.coverUrl,
@@ -241,9 +194,6 @@ function trackPage(row: TrackRow): SitemapLogPage {
   };
 }
 
-// A published mixtape: its cover for Google Images, plus a `<video:video>` block
-// when the full set video is live (setVideoAt) — parity with finding footage, so
-// the set recording is crawlable, not just a plain <loc>.
 function mixtapePage(row: MixtapeRow): SitemapLogPage {
   const logId = row.log_id;
   const imageLoc = mixtapeCoverUrl(logId, "card");
@@ -267,20 +217,9 @@ function mixtapePage(row: MixtapeRow): SitemapLogPage {
   };
 }
 
-// ── ONE BAG AT A TIME ────────────────────────────────────────────────────────────────────
-//
-// Each reader below is exactly one child sitemap's rows. They are separate functions rather than
-// one omnibus because each child reads exactly its own bag. `/sitemap.xml` is a ~1KB INDEX
-// carrying no `<url>` at all, so it reads only aggregate counts and timestamps.
-
-/** Every `/log/<coordinate>` page: the certified findings, then the published mixtapes. */
 async function readLogPages(): Promise<SitemapLogPage[]> {
   const db = await getDb();
   const [trackResult, mixtapeResult] = await Promise.all([
-    // lastmod = freshest of (video_squared_at, updated_at, added_at). added_at
-    // is NOT NULL, and ISO strings sort lexicographically, so coalescing the
-    // nullable two to '' keeps max() honest (scalar max() returns NULL on any
-    // NULL arg) and a just-squared video lifts the finding's lastmod.
     db.execute({
       sql: `select log_id, title, artists_json, note, bpm, album_image_url, video_url,
                    findings.added_at,
@@ -306,18 +245,12 @@ async function readLogPages(): Promise<SitemapLogPage[]> {
         return left.lastmod < right.lastmod ? 1 : -1;
       }
 
-      // Match SQLite's default BINARY text order so equal timestamps cannot move rows across a
-      // sitemap shard boundary when the engine happens to return the driver in a different order.
       return left.logId < right.logId ? -1 : left.logId > right.logId ? 1 : 0;
     });
 
   return [...trackPages, ...typedRows<MixtapeRow>(mixtapeResult.rows).map(mixtapePage)];
 }
 
-// Thin-content gate: `listArtistSitemapRows` applies the floor IN SQL over RENDERABLE tracks —
-// findings PLUS the quieter catalogue rows, the same sum the artist page's `indexable` keys off
-// — so a crawler-discovered artist with enough tracks is here and the thin ones (which render
-// `noindex, follow`) are not, exactly as labels + albums below.
 async function readArtists(window: SitemapWindow): Promise<SitemapArtist[]> {
   return (
     await listArtistSitemapRows(ARTIST_INDEX_MIN_FINDINGS, {
@@ -331,12 +264,6 @@ async function readArtists(window: SitemapWindow): Promise<SitemapArtist[]> {
   }));
 }
 
-// Thin-content gate, labels + albums: the page indexes past N RENDERABLE tracks — findings
-// PLUS the quieter uncertified rows, because both are content on the page and a page is
-// thin or not thin on what it RENDERS, never on who wrote it. That gate lives in SQL,
-// inside the two reads below, keyed off the very constants the routes' `indexable` uses —
-// so a page that says "index me" is always in the sitemap, and one that says `noindex`
-// never is. A crawler-discovered label with enough tracks has a real page, and it is here.
 async function readLabels(window: SitemapWindow): Promise<SitemapEntity[]> {
   return (
     await listLabelSitemapRows(LABEL_INDEX_MIN_TRACKS, {
@@ -363,8 +290,6 @@ async function readAlbums(window: SitemapWindow): Promise<SitemapEntity[]> {
   }));
 }
 
-/** The logbook travelogue entries — one <loc> per authored sector-day, with its last
-    (re)generation as lastmod. */
 function logbookSitemapWindowStatement(limit: number, afterSector?: string) {
   const seek = afterSector === undefined ? "sector <= ?" : "sector < ?";
 
@@ -387,31 +312,16 @@ async function readLogbook(window: SitemapWindow): Promise<SitemapLogbookEntry[]
   }));
 }
 
-/**
- * The named sonic galaxies — empty until the launch gate opens (browse-by-feel RFC), so no galaxy
- * <loc> leaks before the whole map is named. Thin-content gate on top: only galaxies past
- * GALAXY_INDEX_MIN_FINDINGS enter the sitemap (the thin ones render `noindex, follow`).
- */
 async function readGalaxies(): Promise<SitemapGalaxy[]> {
   return (await listPublicGalaxies())
     .filter((galaxy) => galaxy.memberCount >= GALAXY_INDEX_MIN_FINDINGS)
     .map((galaxy) => ({ slug: galaxy.slug }));
 }
 
-/** The developer docs: a static list, not a read (see lib/docs-pages.ts — the MDX collection
-    cannot be resolved from a module the tests exercise, so a parity test guards the list). */
 function readDocs(): SitemapDoc[] {
   return DOCS_PAGES.map((path) => ({ path }));
 }
 
-// ── THE AGGREGATES ───────────────────────────────────────────────────────────────────────
-//
-// The index needs one number and one date per bag, and the `pages` child needs two dates and two
-// gates. Both are answered by these small `count(*)` / `max()` reads, aggregated IN SQL — never by
-// pulling a bag into the isolate and counting it there (AGENTS.md / docs/local-database.md: rank
-// and aggregate in SQL, and never trust the local DB for the shape of either).
-
-/** The freshest of a handful of maybe-dates. ISO strings sort lexicographically. */
 function freshest(dates: (string | undefined)[]): string | undefined {
   return dates
     .filter((value): value is string => Boolean(value))
@@ -419,15 +329,8 @@ function freshest(dates: (string | undefined)[]): string | undefined {
     .at(-1);
 }
 
-/** The `findings` child's size and date: the certified findings and the published mixtapes,
-    counted and dated where {@link readLogPages} would have listed them. */
 async function readLogKindStats(): Promise<SitemapKindStats> {
   const db = await getDb();
-  // Two counted/dated reads over the CERTIFIED corpus, mirroring `readLogPages` clause for clause
-  // (the same `where`, the same lastmod expression) so the index cannot promise a child a
-  // different size than it serves. The outer one-argument `max()` is the AGGREGATE over the rows;
-  // the inner three-argument one is the scalar per-row freshest — the same nesting the row read
-  // does per row, folded into a single pass here.
   const [findingResult, mixtapeResult] = await Promise.all([
     db.execute({
       sql: `select count(*) as n,
@@ -455,7 +358,6 @@ async function readLogKindStats(): Promise<SitemapKindStats> {
   };
 }
 
-/** `count(*)` + `max(generated_at)` over the logbook — the child's size and date in one read. */
 async function readLogbookKindStats(): Promise<SitemapKindStats> {
   const db = await getDb();
   const result = await db.execute({
@@ -466,17 +368,13 @@ async function readLogbookKindStats(): Promise<SitemapKindStats> {
   return { count: Number(row?.n ?? 0), lastmod: row?.lastmod ?? undefined };
 }
 
-/** Every counted/dated child, plus the two gates — the whole aggregate pass, run once. */
 type SitemapAggregates = {
   albums: SitemapKindStats;
   artists: SitemapKindStats;
-  /** Archive-track destinations past the evidence gate. Only the SIZE — a track entry is undated. */
   archiveTrackCount: number;
-  /** Named galaxies past the thin-content floor. Only the SIZE matters; a lens page has no date. */
   galaxyCount: number;
   labels: SitemapKindStats;
   logbook: SitemapKindStats;
-  /** The `/log` pages: findings AND published mixtapes, counted and dated together. */
   logs: SitemapKindStats;
   mixOpen: boolean;
 };
@@ -487,7 +385,6 @@ type SitemapPageInputs = Pick<SitemapAggregates, "galaxyCount" | "logbook" | "lo
   labelLastmod: string | undefined;
 };
 
-/** Static hub URLs need dates and launch gates, never the catalogue's cardinality. */
 async function readSitemapPageInputs(): Promise<SitemapPageInputs> {
   const [logs, artistLastmod, labelLastmod, albumLastmod, logbook, galaxyCount, mixDepth] =
     await Promise.all([
@@ -510,26 +407,12 @@ async function readSitemapPageInputs(): Promise<SitemapPageInputs> {
   };
 }
 
-/**
- * ONE aggregate pass over the archive: a count and a date per child, plus the two self-lifting
- * gates. Every read in it is a `count(*)` or a `max()` — nothing here pulls a row set into the
- * isolate to size it (AGENTS.md), and they all go out in parallel.
- *
- * The three ENTITY counts read the STORED `renderable_track_count` through the same
- * `countIndexableHubEntities` gate `/admin/funnel` uses — an index range scan on
- * `<entity>_renderable_count_idx` — so the index, the funnel card and the children cannot drift
- * apart on what "indexable" means. The three entity DATES are driven from `findings` OUTWARD (see
- * `maxLabelSitemapLastmod`), bounded by the certified corpus rather than by the growing tables.
- */
 async function readSitemapAggregates(): Promise<SitemapAggregates> {
   const [pageInputs, artistCount, labelCount, albumCount, archiveTrackCount] = await Promise.all([
     readSitemapPageInputs(),
     countIndexableArtists(),
     countIndexableLabels(),
     countIndexableAlbums(),
-    // The archive-track destinations past the EVIDENCE gate. The one-row count locks the exact
-    // evidence-membership partial index; the child keyset remains on its active-catalogue index
-    // (lib/server/track-page.ts).
     countIndexableTrackPages(),
   ]);
 
@@ -545,10 +428,6 @@ async function readSitemapAggregates(): Promise<SitemapAggregates> {
   };
 }
 
-/**
- * The `pages` child's inputs. `latest` is the freshest date anywhere in the archive, so it is the
- * max of the five dated bags' own maxima, without enumerating their URLs.
- */
 function sitemapPagesFrom(aggregates: SitemapPageInputs): SitemapPages {
   return {
     galaxiesOpen: aggregates.galaxyCount > 0,
@@ -564,28 +443,6 @@ function sitemapPagesFrom(aggregates: SitemapPageInputs): SitemapPages {
   };
 }
 
-/**
- * Everything `/sitemap.xml` needs, and nothing more: a count and a date per child.
- *
- * ── WHY IT IS NOT `collectSitemapBag` EIGHT TIMES ────────────────────────────────────────
- * The index carries no `<url>`. Deriving ~eight `<sitemap>` lines by fetching every URL they
- * point at is the shape that made a ~1KB document answer in seconds and grow with the catalogue
- * — and it is the shape that timed the post-deploy surface sweep out. Each line is a `count(*)`
- * and a `max()` now. `sitemap-data.integration.test.ts` pins the whole result against
- * `sitemapIndexStatsFromBags` over the real rows, so the cheap read can never quietly promise a
- * different index than the children serve.
- */
-/**
- * Drop the artist sitemap documents after a write that changes which artists are indexable — the
- * global `unlisted` visibility ruling (lib/server/artist-visibility.ts).
- *
- * The detail-page purge alone is not enough: a sitemap child stays fresh far longer than a page, so
- * without this a newly unlisted artist keeps being ADVERTISED for indexing at a URL that now 404s.
- * The index goes too, because its per-child count moves with the same write.
- *
- * Bounded by construction: the artist child count comes off the same gated `countIndexableArtists`
- * the index itself reports, so this purges exactly the shards that exist and never a guessed range.
- */
 export async function purgeArtistSitemapCachesNow(): Promise<void> {
   const total = await countIndexableArtists();
   const shards = Math.max(1, Math.ceil(total / sitemapMaxUrls("artists")));
@@ -604,8 +461,6 @@ export async function collectSitemapIndexStats(): Promise<SitemapIndexStats> {
   return {
     albums: aggregates.albums,
     artists: aggregates.artists,
-    // The MDX carries no per-page timestamp, so the docs child is honestly undated — as is the
-    // galaxies child, whose lens pages date their own members' /log entries instead.
     docs: { count: readDocs().length },
     findings: aggregates.logs,
     galaxies: { count: aggregates.galaxyCount },
@@ -619,8 +474,6 @@ export async function collectSitemapIndexStats(): Promise<SitemapIndexStats> {
         labelLastmod: aggregates.labels.lastmod,
       }),
     ),
-    // Honestly undated, like `docs` and `galaxies`: `tracks` carries no content-change timestamp,
-    // and a release date is a different claim (lib/sitemap.ts § SitemapTrack).
     tracks: { count: aggregates.archiveTrackCount },
   };
 }
@@ -656,13 +509,6 @@ async function readSitemapBoundary(
   };
 }
 
-/**
- * Resolve a numbered child to the exact key immediately before it. Every request derives the
- * boundary from the current corpus as fixed-size keyset seeks. Reusing a persisted boundary would
- * be incorrect after a same-cardinality interior membership change: count and first-key
- * fingerprints cannot detect that shift. No request pays a growing OFFSET or transfers a
- * preceding page's rows into the isolate.
- */
 async function resolveSitemapWindow(
   kind: SitemapSqlWindowedKind,
   page: number,
@@ -699,17 +545,6 @@ async function resolveSitemapWindow(
   return { after, pastEnd: false };
 }
 
-/**
- * ONE child sitemap's bag — the rows `/sitemap/<kind>-<n>.xml` slices, and no other kind's.
- * Every other bag comes back empty, which is exactly what `buildSitemapShardXml` reads for that
- * kind, so a child serves precisely what it always did at one bag's cost instead of seven.
- *
- * The slug-ordered entity tables, sector-ordered logbook, and track-id-ordered archive all return
- * exactly one SQL window. Their bags are listed in `SITEMAP_SQL_WINDOWED_KINDS`, so the builder
- * renders them without a second slice. Findings retain their two-table concatenated order and
- * galaxies retain their derived member-count order; neither has an existing index that can serve
- * that order, so the no-migration sitemap contract keeps those bounded bags in memory.
- */
 export async function collectSitemapBag(
   kind: SitemapKind,
   page = 1,
@@ -757,8 +592,6 @@ export async function collectSitemapBag(
       };
     }
 
-    // The static child needs no rows at all — its `<loc>`s are constants and its two `<lastmod>`s
-    // are the same aggregates the index reads.
     case "pages":
       return { ...EMPTY_SITEMAP_BAGS, pages: sitemapPagesFrom(await readSitemapPageInputs()) };
 
@@ -772,13 +605,6 @@ export async function collectSitemapBag(
   }
 }
 
-/**
- * The sitemap documents' headers. The directive is the EDGE policy's own
- * ({@link SITEMAP_CACHE_POLICY}), stated once: `server.ts` serves these paths through
- * `withEdgeCache`, which stamps the same string on a hit, so origin and edge can never disagree
- * about how long a crawler may hold a sitemap. Shared by the index and its children, so a child is
- * never fresher than the index that pointed at it.
- */
 export const SITEMAP_HEADERS = {
   "Cache-Control": SITEMAP_CACHE_POLICY.cacheControl,
   "Content-Type": "application/xml; charset=utf-8",

@@ -19,14 +19,7 @@ import {
 } from "../../../lib/server/preview-archive";
 import { getTrackByIdOrLogId } from "../../../lib/server/tracks";
 
-// POST /api/admin/tracks/:idOrLogId/preview — stores one official 30s
-// preview at an operator-only archive path for later analysis/model training.
-// It is never a playback source and is never exposed through public DTOs.
-
 export const serverHandlers: ApiHandlers = {
-  // GET — agent tier: the autonomous render box reads its OWN finding's archived
-  // preview key to resolve audio region-independently. Authenticated + non-public,
-  // so the Deezer-licensing stance holds (POST/archive stays operator-only below).
   GET: async ({ params, request }) => {
     const unauthorized = await requireAdmin(request);
 
@@ -64,9 +57,6 @@ export const serverHandlers: ApiHandlers = {
       return unauthorized;
     }
 
-    // The multipart archive upload is a CLI (Bearer) path, so the origin guard is a
-    // no-op for it — it is here so the carve-out matches the RPC ops rather than
-    // being the one mutating admin route with weaker protection than its siblings.
     const crossOrigin = requireAdminMutationOrigin(request);
 
     if (crossOrigin) {

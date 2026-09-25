@@ -2,16 +2,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { takeWaitUntilPromises } from "../../test/cloudflare-workers-stub";
 import { get, readJson, warmOrpcRouter } from "./orpc-test-kit";
 
-// `search_archive` over HTTP, pinned at the LATENCY SHAPE its limiter gives it. The per-IP charge is
-// a write on the primary, and a write queues behind any long write holding the database's lock while
-// the reads that answer a search keep flowing. So the handler must answer without waiting past the
-// bound on a stalled charge, still refuse before any work when the verdict is prompt, still refuse
-// an answer the verdict beats, and never let the model tier run on an unknown verdict. The resolver
-// is mocked (its tiers are proven in the search suites); the database is mocked at the one statement
-// the limiter issues, so each test states exactly when the verdict lands.
-
 type Statement = { args?: unknown[]; sql: string };
-type SearchOptions = { beforeModel?: () => Promise<void>; limit?: number; q: string };
+type SearchOptions = {
+  beforeModel?: () => Promise<void>;
+  beforeVector?: () => Promise<void>;
+  limit?: number;
+  q: string;
+};
 
 const execute = vi.hoisted(() => vi.fn<(statement: Statement) => Promise<{ rows: unknown[] }>>());
 const searchArchive = vi.hoisted(() => vi.fn<(options: SearchOptions) => Promise<unknown>>());
@@ -43,6 +40,8 @@ const SONIC = {
 };
 const SONIC_URL =
   "https://www.fluncle.com/api/v1/search/archive?q=sounds%20like%20Better%20Places&limit=12";
+const NAME = { degraded: false, entities: [], kind: "token", results: SONIC.results };
+const NAME_URL = "https://www.fluncle.com/api/v1/search/archive?q=netsky&limit=12";
 
 type Verdict = "allowed" | "limited";
 
@@ -53,7 +52,6 @@ function isSearchCharge(statement: Statement): boolean {
   );
 }
 
-/** Hold the search charge until `release`, then answer it with the verdict given. */
 function holdCharge(): { isSettled: () => boolean; release: (verdict: Verdict) => void } {
   let release: (verdict: Verdict) => void = () => undefined;
   const landed = new Promise<Verdict>((resolve) => {
@@ -83,17 +81,16 @@ beforeEach(() => {
 });
 
 describe("oRPC public read — GET /search/archive (search_archive) and its limiter's bounded wait", () => {
-  it("answers a sonic search while its charge is still stalled on the primary", async () => {
+  it("answers a name search while its charge is still stalled on the primary", async () => {
     const charge = holdCharge();
 
-    searchArchive.mockResolvedValue(SONIC);
+    searchArchive.mockResolvedValue(NAME);
 
     const { handleOrpc } = await import("./orpc");
-    const response = await handleOrpc(get(SONIC_URL));
+    const response = await handleOrpc(get(NAME_URL));
 
     expect(response?.status).toBe(200);
-    expect(await readJson(response)).toEqual({ ok: true, ...SONIC });
-    // The answer went out before the charge landed; the charge finishes after the response.
+    expect(await readJson(response)).toEqual({ ok: true, ...NAME });
     expect(charge.isSettled()).toBe(false);
 
     const settling = takeWaitUntilPromises();
@@ -104,7 +101,7 @@ describe("oRPC public read — GET /search/archive (search_archive) and its limi
     await Promise.all(settling);
 
     expect(charge.isSettled()).toBe(true);
-    // One charge per request, stalled or not.
+
     expect(execute.mock.calls.filter(([statement]) => isSearchCharge(statement))).toHaveLength(1);
   });
 
@@ -134,6 +131,43 @@ describe("oRPC public read — GET /search/archive (search_archive) and its limi
 
     expect(response?.status).toBe(429);
     expect(await readJson(response)).toMatchObject({ code: "rate_limited", ok: false });
+  });
+
+  it("holds every vector pass for a stalled verdict and refuses it when the verdict is over the limit", async () => {
+    const charge = holdCharge();
+    let vectorRan = false;
+
+    searchArchive.mockImplementation(async ({ beforeVector }) => {
+      setTimeout(() => charge.release("limited"), 20);
+      await beforeVector?.();
+      vectorRan = true;
+
+      return SONIC;
+    });
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(get(SONIC_URL));
+
+    expect(response?.status).toBe(429);
+    expect(charge.isSettled()).toBe(true);
+    expect(vectorRan).toBe(false);
+  });
+
+  it("runs the vector pass once a stalled verdict lands within the budget", async () => {
+    const charge = holdCharge();
+
+    searchArchive.mockImplementation(async ({ beforeVector }) => {
+      setTimeout(() => charge.release("allowed"), 20);
+      await beforeVector?.();
+
+      return SONIC;
+    });
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(get(SONIC_URL));
+
+    expect(response?.status).toBe(200);
+    expect(charge.isSettled()).toBe(true);
   });
 
   it("holds the model tier for a stalled verdict and refuses it when the verdict is over the limit", async () => {

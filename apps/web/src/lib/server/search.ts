@@ -1,67 +1,3 @@
-// FLUNCLE'S SEARCH — the resolver. The surface that becomes the primary navigation once
-// the archive is deep enough that a feed cannot carry it.
-//
-// ── THE ARCHITECTURE, IN ONE LINE ────────────────────────────────────────────────────
-// Deterministic first; the model only on a miss; and the model never touches the data.
-//
-// A query is resolved by trying four tiers IN ORDER and stopping at the first that answers:
-//
-//   1. A COORDINATE (`004.7.2I`, `fluncle://004.7.2I`). A regex and one indexed lookup.
-//      This is a jump, not a search — it resolves to the `/log` page or to nothing.
-//   1½. A SPOTIFY LINK (`open.spotify.com/track/<id>`, `spotify:track:<id>`). A regex and one
-//      indexed `spotify_uri` seek — resolved LOCALLY, never a Spotify call. A miss falls
-//      through: the link becomes text, and the tiers below answer it honestly.
-//   2. An EXACT ENTITY (an artist / label / album named in full). One indexed lookup. All
-//      three have a page (`/artist/<slug>`, `/label/<slug>`, `/album/<slug>`), so all three
-//      are a jump — one shape, one affordance, no second pattern.
-//   3. A BARE TOKEN (`netsky`). FTS5 (bm25) + an entity prefix match. ~114 ms at 100k rows,
-//      measured on hosted Turso in the scale spike.
-//   3½. A SONIC PHRASE (`tracks that sound like Nine Clouds`). A regex, not a model — see the
-//      sonic tier below for why the headline query is the LAST one that should depend on a
-//      vendor being up.
-//   4. ANYTHING ELSE. A small LLM turns the sentence into a `SearchFilters` object, and SQL
-//      executes it over the real columns.
-//
-// Tiers 1–3½ are most of what anyone types, and NONE of them costs a model call. That is the
-// point of the ordering: the LLM is never on the hot path of a common query.
-//
-// ── THE MODEL NEVER TOUCHES THE DATA ─────────────────────────────────────────────────
-// Tier 4's model emits FILTERS, never rows. It cannot hallucinate a track, because it never
-// sees one and never returns one — SQL does every retrieval. See `search-llm.ts`.
-//
-// ── AND A FILTER'S NAME BECOMES AN ID BEFORE IT BECOMES SQL ──────────────────────────
-// A filter carries a NAME — that is all a reader types and all the model may emit. Compiled
-// against the raw columns that meant a full pass over a growing table on the commonest search
-// there is ("tracks by <artist>" read every track's JSON credits). So every path that executes
-// filters resolves the names FIRST (`resolveFilterEntities`) against the small entity tables,
-// and `compileFilters` turns a resolved name into an indexed seek — the `track_artists` edge,
-// `tracks.label_id`, `tracks.album_id`. A name the graph does not hold falls back to the old
-// string match, which is the honest answer for a name that has no entity behind it.
-//
-// ── AND IF IT IS DOWN, SEARCH STILL WORKS ────────────────────────────────────────────
-// `translateQuery` returns `null` when the model is unprovisioned, slow, or failing. Tier 4
-// then falls back to the FTS5 path with OR semantics + bm25 — so "Andromedik tracks in A
-// minor" still surfaces the Andromedik tracks, marked `degraded: true` so the client can be
-// honest about what it did. Search degrades; it never breaks. (`search.test.ts` proves it by
-// simulating the model failing.)
-//
-// ── THE SONIC TIER — the thing no other drum & bass tool has ─────────────────────────
-// The model may emit `soundsLike: "<reference>"`. That reference is resolved to a REAL track
-// in the archive; the search then rides THAT track's MuQ embedding through
-// `vector_distance_cos`. It is anchored on a row that exists, so it cannot invent a vibe.
-// The three ratified vector rules (docs/local-database.md) hold here without exception:
-// rank in SQL, bind the probe as a raw BLOB, and never build a `libsql_vector_idx`.
-//
-// ── THE CATALOGUE RULE ───────────────────────────────────────────────────────────────
-// `tracks` is the universal music object; `findings` is the certification, 1:1 and present
-// only for a track Fluncle certified. So a row with no `findings` row is a track Fluncle has
-// not been to. Every read here is a LEFT JOIN (not the `FINDINGS_FROM` inner join every
-// finding surface drives through — see `tracks.ts`), because search is the one public
-// surface that must see both. The uncertified rows come back with `certified: false`, no
-// coordinate, and a Spotify link OUT. They are never named, never labelled, never counted as
-// a tier the reader can learn — DESIGN.md's Unlit Rule carries the visual half of the same
-// rule. "Finding" stays the only named object in Fluncle's world.
-
 import { type SearchEntity, type SearchFilters, type SearchHit } from "@fluncle/contracts/orpc";
 import { slugify } from "@fluncle/contracts/util/galaxy-slug";
 import { parseKey } from "../key-camelot";
@@ -75,6 +11,7 @@ import {
   tokenize,
 } from "../search-query";
 import { bestArtistAvatarUrl, labelLogoUrl } from "../media";
+import { parseStyleQuery, type SearchStyle } from "../search-styles";
 import { hasPreviewSource } from "../track-preview";
 import { ALBUM_INDEX_MIN_TRACKS } from "./albums";
 import { MAX_SIMILAR_ARTISTS_INPUT, meanEmbedding } from "./artist-dossier";
@@ -85,45 +22,31 @@ import { hubInclusionWhere, LABEL_INDEX_MIN_TRACKS, resolveConfirmedAliasLabelId
 import { translateQuery } from "./search-llm";
 import { isSonarSonicEnabled, searchSonar, type SonarFilter, type SonarMatch } from "./sonar";
 import { hydrateRankedSonarMatches } from "./sonar-hydration";
+import { leadCentroidArtistSql, SONIC_SEED_SELECT, sonicSeedFlag } from "./sonic-seed";
+import { resolveStyleProbe } from "./style-probe";
 import {
   executeVectorFallback,
   VECTOR_FALLBACK_DEADLINE_MS,
   vectorFallbackCandidateLimitSql,
 } from "./vector-fallback";
 
-/** How many rows a search returns when the caller does not say. */
 const DEFAULT_LIMIT = 12;
 
-/** How many ranked sonic hits the resolver returns. */
 const SONIC_LIMIT = 12;
 
-/**
- * The hard wait ceiling on the sonic vector fallback. libSQL's `execute` takes no per-statement
- * signal, so the query itself cannot be cancelled; the deadline stops the caller and Worker
- * request waiting on it. The shared fallback contract separately caps the candidate relation.
- */
 export const SONIC_SCAN_TIMEOUT_MS = VECTOR_FALLBACK_DEADLINE_MS;
 
-/** The whole answer: which tier resolved it, what it found, and what it understood. */
 export type SearchResult = {
-  /** The real track the sonic tier anchored on (`sonic` only). */
   anchor?: SearchHit;
-  /** A requested semantic tier could not run; these are full-text results instead. */
   degraded: boolean;
-  /** Artists the query named or prefixed — jump targets, above the rows. */
   entities: SearchEntity[];
-  /** What the model understood, echoed back (`filters`/`sonic` only). */
   filters?: SearchFilters;
   kind: "coordinate" | "empty" | "entity" | "filters" | "sonic" | "token";
-  /** The app route this query simply IS (`coordinate`/`entity`). */
+  modelDeferred?: boolean;
   redirect?: string;
   results: SearchHit[];
 };
 
-// ── The row projection ───────────────────────────────────────────────────────────────
-
-// A search row, straight off the wire. `log_id` is the certification: NULL ⇒ `tracks` has a
-// row and `findings` does not ⇒ Fluncle never certified this track.
 type SearchRow = {
   album: string | null;
   album_image_url: string | null;
@@ -137,40 +60,21 @@ type SearchRow = {
   isrc: string | null;
   preview_url: string | null;
   release_date: string | null;
+  sonic_seed?: number | null;
   spotify_url: string | null;
   title: string;
   track_id: string;
 };
 
-// The columns every tier selects. `galaxy_name` comes through the correlated subquery the
-// rest of the app uses (an UNNAMED galaxy has no public name, so a machine handle can never
-// leak); it is NULL for an uncertified track by construction — a galaxy is a property of the
-// certified archive.
 const SEARCH_SELECT = `tracks.track_id, tracks.title, tracks.artists_json, tracks.album, tracks.album_image_url,
   tracks.bpm, tracks.duration_ms, tracks.isrc, tracks.preview_url, tracks.key, tracks.label, tracks.release_date, tracks.spotify_url, findings.log_id,
-  (select name from galaxies where galaxies.id = findings.galaxy_id) as galaxy_name`;
+  (select name from galaxies where galaxies.id = findings.galaxy_id) as galaxy_name,
+  ${SONIC_SEED_SELECT}`;
 
-/**
- * THE SEARCH JOIN — and the one place in the app that deliberately does NOT drive through
- * `FINDINGS_FROM`.
- *
- * Every finding surface uses an INNER join, so an uncertified track structurally cannot leak
- * onto it. Search is the exception BY DESIGN: it is the surface where the depth behind the
- * findings is the whole product. So the join is LEFT, and `findings.log_id IS NULL` is what
- * "Fluncle has not been here" means — one nullable column, checked in one place
- * ({@link toHit}), and carried to the client as a single boolean.
- */
 const SEARCH_FROM = `tracks left join findings on findings.track_id = tracks.track_id`;
 
-/**
- * Certified rows first, always — and this is not a taste call, it is arithmetic. `bm25()`'s
- * relevance is corpus-relative: a text score computed across a 60-row certified archive and a
- * 41k-row catalogue is not on one scale, so a blended cross-tier relevance list would be
- * meaningless even if we wanted one. Findings lead; the rest is depth behind them.
- */
 const CERTIFIED_FIRST = `case when findings.track_id is null then 1 else 0 end asc`;
 
-/** Parse the stored artist array. A malformed cell yields an empty list, never a throw. */
 function parseArtists(json: string): string[] {
   try {
     const raw: unknown = JSON.parse(json);
@@ -181,7 +85,6 @@ function parseArtists(json: string): string[] {
   }
 }
 
-/** Map a row to the wire shape. `certified` is derived from the coordinate, nowhere else. */
 function toHit(row: SearchRow): SearchHit {
   return {
     album: row.album ?? undefined,
@@ -196,26 +99,17 @@ function toHit(row: SearchRow): SearchHit {
     logId: row.log_id ?? undefined,
     previewable: hasPreviewSource({ isrc: row.isrc, previewUrl: row.preview_url }),
     releaseDate: row.release_date ?? undefined,
+    similar: sonicSeedFlag(row.sonic_seed),
     spotifyUrl: row.spotify_url ?? undefined,
     title: row.title,
     trackId: row.track_id,
   };
 }
 
-/** An empty answer, in the shape every caller already handles. */
 function empty(kind: SearchResult["kind"] = "empty"): SearchResult {
   return { degraded: false, entities: [], kind, results: [] };
 }
 
-// ── Tier 3 · full text ───────────────────────────────────────────────────────────────
-
-/**
- * The FTS5 read. `match` is built by {@link toFtsMatch}, which rebuilds the expression from
- * scrubbed tokens — the raw query NEVER reaches MATCH, because MATCH is a query language and
- * a bind slot does not make its operators inert.
- *
- * Ranked certified-first, then by bm25 (ascending: fts5 scores better matches lower).
- */
 async function ftsSearch(match: string, limit: number): Promise<SearchHit[]> {
   const db = await getDb();
   const result = await db.execute({
@@ -232,59 +126,26 @@ async function ftsSearch(match: string, limit: number): Promise<SearchHit[]> {
   return typedRows<SearchRow>(result.rows).map(toHit);
 }
 
-// ── The entities — the three graph nodes that have a page ────────────────────────────
-//
-// An artist, a label, and an album are ONE affordance, so they are one code path: the thing
-// you searched for, offered as a destination, above the rows it also brought back. Each has a
-// slug-keyed page (`/artist/<slug>`, `/label/<slug>`, `/album/<slug>`), each has a picture (a
-// portrait, or the freshest finding's cover art standing in for one), and `kind` decides the
-// route. There is deliberately no second pattern for the two that arrived later.
-//
-// (`docs/album-entity.md` is the shape they share; the LABEL and ALBUM pages are first-class
-// destinations rather than bare filter chips.)
-
-/**
- * A row from any of the three entity tables — one projection, three sources. `logo_key` is the
- * LABEL's own logo R2 key (labels only; null/absent for artists + albums), which — resolved to a
- * URL — leads over the cover so a label reads as its real logo, not a borrowed sleeve.
- */
 type EntityRow = {
-  // The OWNED avatar master columns (artists only; RFC U3b) — resolved to a CF Images URL that
-  // leads over the raw Spotify `image_url`, the label `logo_key` precedent one entity over.
   image_key?: string | null;
   image_state?: string | null;
   image_updated_at?: string | null;
   image_url: string | null;
   logo_key?: string | null;
-  // The logo's `?v` bust vintage (labels only) — the label twin of `image_updated_at`, kept under
-  // its own name so it pairs with `logo_key` rather than shadowing the artist columns above.
   logo_updated_at?: string | null;
   name: string;
   slug: string;
 };
 
-/** How many jump targets one kind may offer beside the rows. */
 const ENTITY_LIMIT = 3;
 
-/**
- * A read for one entity kind: the SQL, plus the bind args it takes for a `(needle, limit)` pair.
- * `buildArgs` owns the arg ORDER, because the kinds no longer bind the needle a uniform number of
- * times — an artist binds it three times (name, slug alias-tie, alias), a label/album binds it once
- * and then the thin-content FLOOR, and a galaxy/mixtape binds it once.
- */
 type EntityQuery = {
   buildArgs: (needle: string, limit: number) => (number | string)[];
   sql: string;
 };
 
-/** Tier 2 asks whether the query NAMES an entity; tier 3 asks whether it PREFIXES one. */
 export type EntityMatchMode = "exact" | "prefix";
 
-/**
- * The one statement `matchEntities` runs for a kind, a raw query, and a mode — or `undefined` for a
- * blank query, which matches nothing. Exposed so the integration suite pins its plan and its parity
- * with the `lower()` compare it serves.
- */
 export function entityMatchStatement(
   kind: SearchEntity["kind"],
   query: string,
@@ -302,15 +163,6 @@ export function entityMatchStatement(
   return { args: buildArgs(needle, limit), sql };
 }
 
-/**
- * The tier-2 exact-label probe `resolveEntity` falls back to when no hub-gated entity claims the
- * query, so a label NAME with no page still becomes the filter it obviously is. `needle` is the
- * trimmed, lowercased query. Every query that names no entity reaches this probe, so it is spelled
- * on the bare column (`name = ? collate nocase`) and `labels_name_nocase_idx` seeks it. That is
- * exactly the `lower(name) = ?` compare for a lowercased needle, and `order by rowid` names the row a
- * table scan found first, which the bare index yields in order with no sort. Exposed so the
- * integration suite pins its plan and its parity.
- */
 export function labelNameProbeStatement(needle: string): { args: string[]; sql: string } {
   return {
     args: [needle],
@@ -318,8 +170,6 @@ export function labelNameProbeStatement(needle: string): { args: string[]; sql: 
   };
 }
 
-/** The page an entity IS — `/<kind>/<slug>` for most, but a galaxy's segment is plural and a
-    mixtape's page is its LOG page. The one place a (kind, slug) becomes a route. */
 function entityUrl(kind: SearchEntity["kind"], slug: string): string {
   if (kind === "galaxy") {
     return `/galaxies/${slug}`;
@@ -332,88 +182,10 @@ function entityUrl(kind: SearchEntity["kind"], slug: string): string {
   return `/${kind}/${slug}`;
 }
 
-/**
- * The read for one entity kind, with `predicate` closing over `lower(name)`.
- *
- * `kind` is a closed union and `predicate` is one of two literals below — nothing a stranger
- * typed is ever interpolated here; the needle and the limit are BIND ARGS, as everywhere else
- * in this file. `buildArgs` owns the arg order because the kinds no longer bind the needle a
- * uniform number of times (an artist matches the needle against its name AND its aliases; a
- * label/album binds it once and then the thin-content FLOOR).
- *
- * An ARTIST is listed whatever it carries: the table is minted off the artist graph and every
- * row has a page. A LABEL or an ALBUM is offered when it clears the SHARED HUB GATE
- * ({@link hubInclusionWhere}) — a certified finding OR a page that clears the thin-content
- * floor — so search offers EXACTLY the labels/albums the `/labels` + `/albums` hubs and the API
- * list. The unified hub index uses this shared gate: a
- * catalogue-only label with enough renderable tracks now has a real page to jump to, so
- * withholding it would have been the lie. A below-floor imprint (the crawler mints a `labels`
- * row for every one it walks past) still declines the jump and falls back to a filter chip. The
- * picture is that freshest finding's cover art — the one `labels.ts` / `albums.ts` already put
- * on the `/labels` and `/albums` index rows, so a label reads here exactly as it reads there.
- * A LABEL additionally carries its own logo (`labels.image_key`); the mapper leads with it over
- * the cover, so the search row shows the real logo when the sweep has resolved one.
- *
- * A GALAXY (a named, non-retired sonic cluster) and a published MIXTAPE (matched by TITLE) are
- * two more jump nodes with a page — the galaxy's `/galaxies/<slug>`, the mixtape's `/log/<F-logId>`
- * (its page IS its log page). Both reads are archive-sized (galaxies and mixtapes are a handful today, dozens at most),
- * so they stay cheap exact/prefix lookups; a galaxy that is unnamed/retired and a mixtape that is
- * unpublished never surface.
- *
- * AN ARTIST ANSWERS TO EVERY NAME. Beyond the canonical `artists.name`, the artist read also
- * resolves through `artist_aliases` — the MusicBrainz-harvested AKAs that solve DnB's many-names
- * problem (a producer records under several names for one identity; `artist-resolution.ts` writes
- * them). The alias is matched by the SAME `predicate` as the name — exact in tier 2, prefix in
- * tier 3 — so an AKA becomes a jump target exactly as the primary name is, and it does so in the
- * DETERMINISTIC tiers, in front of the model: alias resolution keeps working when the LLM is down.
- * The alias set is gated to the SAME trust the public `alternateName` uses: a real display-name
- * alias (`kind='name'`) that is trusted (`status in ('auto','confirmed')`). A `hint` — a weak MB
- * "Search hint" lead, never rendered publicly — never resolves a search either. `name_rank` breaks
- * a tie the primary name's way: an artist the query names DIRECTLY outranks one it reaches only
- * through an alias, so a name that is one artist's primary and another's AKA still lands on the
- * primary. Matched on `lower(alias)` — the same case-insensitive raw compare the name uses, not
- * the slug.
- *
- * THE ARTIST READ IS TWO INDEXABLE `OR` ARMS, because `artists` is NOT archive-sized: the credit
- * sweep mints a row per unmatched MusicBrainz credit (`mintArtistByMbid`), so the table tracks the
- * crawl. The NAME arm is spelled on the bare column — `artists.name = ? collate nocase` for exact,
- * `artists.name like ?` with the `%` bound into the argument for prefix — so
- * `artists_name_nocase_idx` answers it with a seek or a range. Both spellings are exactly the
- * `lower(artists.name)` compare they replace: SQLite's `lower()`, its NOCASE collation, and `LIKE`
- * all fold ASCII A–Z and nothing else, and the needle is already lowercased. The ALIAS arm is an
- * uncorrelated `artists.id in (select artist_id …)` list, evaluated once per statement over the
- * small alias table and probed by primary key. Together they give the planner a MULTI-INDEX OR; a
- * correlated `exists` arm, or a `lower()`-wrapped name, makes it scan every artist and probe the
- * aliases per row instead. `search.integration.test.ts` pins the plan and the result parity.
- *
- * AND SO DOES A LABEL. `label_aliases` is the structural twin of `artist_aliases` — the same fold
- * an operator's label MERGE writes (the loser's name becomes a `confirmed` alias of the winner) and
- * the same one `ensureLabel` consults before minting — so a spelling folded away on the write side
- * had, until now, no way back on the read side: search answered nothing for a name the archive
- * still holds under another spelling. The label read resolves through it exactly as the artist read
- * does, with `name_rank` breaking a tie the primary name's way, and under the SAME `predicate`
- * (exact in tier 2, prefix in tier 3). ONE DIFFERENCE, AND IT IS THE LOAD-BEARING ONE: the trust
- * enums are NOT the same shape. `artist_aliases.status` is `auto|confirmed` and both are trusted
- * (an `auto` there is a DIRECT MusicBrainz statement of identity); `label_aliases.status` is
- * `candidate|confirmed`, where a `candidate` is an UNRULED derivation guess awaiting the operator.
- * So this gate is `status = 'confirmed'` ONLY — the same trust the public `alternateName` and
- * `ensureLabel`'s fold use. A `hint` never resolves either, on the same rule as the artist read.
- * Read as the same uncorrelated id list the artist read uses (`labels.id in (select label_id …)`),
- * so the confirmed aliases are read once per statement rather than once per label row, and the hub
- * gate still applies to whatever the list admits.
- *
- * THE LABEL AND ALBUM NAME ARMS are spelled on the bare column exactly as the artist arm is, so
- * `labels_name_nocase_idx` and `albums_name_nocase_idx` answer them with a seek or a range instead
- * of a scan of the table. An ALBUM has no alias table, so its read is that name arm and the gate.
- */
 function entitySql(kind: SearchEntity["kind"], mode: EntityMatchMode): EntityQuery {
   const predicate = mode === "exact" ? "= ?" : "like ? || '%'";
 
   if (kind === "artist") {
-    // The name arm binds its own argument: the bare needle for the NOCASE equality, the needle
-    // with its `%` for the prefix `LIKE` (a bound pattern is what lets the index range serve it).
-    // The two arms are parenthesized so the VISIBILITY term below binds over both: an artist a
-    // global `unlisted` rule has taken off the site must not be reachable by its alias either.
     const nameMatch = mode === "exact" ? "artists.name = ? collate nocase" : "artists.name like ?";
 
     return {
@@ -440,7 +212,6 @@ function entitySql(kind: SearchEntity["kind"], mode: EntityMatchMode): EntityQue
   }
 
   if (kind === "galaxy") {
-    // A NAMED, non-retired galaxy only — an unnamed/retired galaxy has no public page. Archive-sized.
     return {
       buildArgs: (needle, limit) => [needle, limit],
       sql: `select galaxies.name as name, galaxies.slug as slug
@@ -454,8 +225,6 @@ function entitySql(kind: SearchEntity["kind"], mode: EntityMatchMode): EntityQue
   }
 
   if (kind === "mixtape") {
-    // A PUBLISHED mixtape, matched by TITLE. Its `slug` is its Log ID — its page IS its log page,
-    // so the mapper builds `/log/<log_id>`. Archive-sized (mixtapes are a handful today, dozens at most).
     return {
       buildArgs: (needle, limit) => [needle, limit],
       sql: `select mixtapes.title as name, mixtapes.log_id as slug
@@ -471,22 +240,11 @@ function entitySql(kind: SearchEntity["kind"], mode: EntityMatchMode): EntityQue
   const pointer = kind === "album" ? "album_id" : "label_id";
   const floor = kind === "album" ? ALBUM_INDEX_MIN_TRACKS : LABEL_INDEX_MIN_TRACKS;
   const isLabel = kind === "label";
-  // The NAME arm is spelled on the bare column, exactly as the artist arm is: `name = ? collate
-  // nocase` for exact, `name like ?` with the `%` bound into its own argument for prefix, so
-  // `albums_name_nocase_idx` / `labels_name_nocase_idx` answers it with a seek or a range. Both
-  // spellings are exactly the `lower(name)` compare (see the artist arm above). The trailing
-  // `rowid` in the order names the tie order a table scan gave equal names, so the read answers
-  // identically whichever index serves it.
   const nameMatch = mode === "exact" ? `${table}.name = ? collate nocase` : `${table}.name like ?`;
   const nameArg = (needle: string) => (mode === "exact" ? needle : `${needle}%`);
-  // Labels carry their own logo; albums don't (the pointer to the label owns that image).
   const logoSelect = isLabel
     ? "labels.image_key as logo_key, labels.image_updated_at as logo_updated_at,"
     : "";
-  // A LABEL answers to every spelling the operator has RULED (see the doctrine above); an ALBUM
-  // has no alias table, so these three fragments are empty for it and its read is untouched. The
-  // alias arm is an uncorrelated id list, evaluated once per statement: a correlated `exists`
-  // would re-read the confirmed aliases for every label row the name arm does not match.
   const labelAliasWhere = isLabel
     ? `or labels.id in (select label_aliases.label_id from label_aliases
                         where label_aliases.kind = 'name'
@@ -499,17 +257,8 @@ function entitySql(kind: SearchEntity["kind"], mode: EntityMatchMode): EntityQue
   const labelRankOrder = isLabel ? "name_rank asc," : "";
 
   return {
-    // A LABEL binds, in SQL-TEXT order: the needle for the `name_rank` case, the name arm's own
-    // argument, then the needle for the alias predicate. An ALBUM binds only the name arm's
-    // argument. The shared hub gate inlines its floor, so nothing else binds before the limit.
     buildArgs: (needle, limit) =>
       isLabel ? [needle, nameArg(needle), needle, limit] : [nameArg(needle), limit],
-    // THE GATE, single-sourced with the hubs (`hubInclusionWhere`): it admits exactly the entities
-    // `/labels` + `/albums` list — a certified finding OR a page over the thin-content floor — never
-    // a bare crawler stub. Two STORED counters on the entity row answer it (keystone 2), avoiding a
-    // grouped `id in (select … from tracks left join findings … group by …)` subquery. The gate is
-    // two integer comparisons on the row the name predicate already matched. Only the cover
-    // subquery still reaches into `tracks`, and it runs only for those matched rows.
     sql: `select ${table}.name as name, ${table}.slug as slug, ${logoSelect} ${labelRankSelect}
             (select t.album_image_url
                from tracks t join findings f on f.track_id = t.track_id
@@ -523,11 +272,6 @@ function entitySql(kind: SearchEntity["kind"], mode: EntityMatchMode): EntityQue
   };
 }
 
-/**
- * The picture for one entity row. An ARTIST leads with its OWN avatar master (RFC U3b) when
- * resolved; a LABEL with its own logo; a MIXTAPE with its Log-ID-derived cover; an album or a
- * galaxy with whatever the read carried (an album's freshest cover; a galaxy carries none).
- */
 function entityImageUrl(kind: SearchEntity["kind"], row: EntityRow): string | undefined {
   if (kind === "artist") {
     return bestArtistAvatarUrl({
@@ -543,22 +287,12 @@ function entityImageUrl(kind: SearchEntity["kind"], row: EntityRow): string | un
   }
 
   if (kind === "mixtape") {
-    // The mixtape's `slug` IS its Log ID; the cover derives from it (never stored).
     return mixtapeCoverUrl(row.slug);
   }
 
-  // Album (freshest finding's cover) or galaxy (no cover of its own).
   return row.image_url ?? undefined;
 }
 
-/**
- * Entities of one kind whose name the query EXACTLY names, or PREFIXES.
- *
- * The prefix mode is the affordance that makes a search box feel like navigation: type `net`,
- * see Netsky; type `hospi`, see Hospital Records. Cheap either way — every entity table is
- * bounded by the ARCHIVE (a label/album by the hub floor; galaxies and mixtapes are a handful, dozens at most), not
- * by the catalogue, so this stays tens-to-hundreds of rows however deep the catalogue gets.
- */
 async function matchEntities(
   kind: SearchEntity["kind"],
   query: string,
@@ -579,17 +313,10 @@ async function matchEntities(
     kind,
     name: row.name,
     slug: row.slug,
-    // The route is `/<kind>/<slug>` for artist/label/album; a galaxy and a mixtape carry an
-    // explicit `url` (a plural segment, a log page) so no consumer has to special-case the route.
     ...(kind === "galaxy" || kind === "mixtape" ? { url: entityUrl(kind, row.slug) } : {}),
   }));
 }
 
-/**
- * Every jump target a bare token prefixes — artists, then labels, then albums, then galaxies,
- * then mixtapes. The order is the order they render in, and it is the order a reader means: a
- * name is most often a person, then the imprint/record it came off, then the wider structures.
- */
 async function prefixEntities(query: string): Promise<SearchEntity[]> {
   const [artists, labels, albums, galaxies, mixtapes] = await Promise.all([
     matchEntities("artist", query, "prefix"),
@@ -602,29 +329,10 @@ async function prefixEntities(query: string): Promise<SearchEntity[]> {
   return [...artists, ...labels, ...albums, ...galaxies, ...mixtapes];
 }
 
-/** The page an entity IS. The one place a kind becomes a route (galaxy/mixtape carry their own). */
 function entityRedirect(entity: SearchEntity): string {
   return entity.url ?? entityUrl(entity.kind, entity.slug);
 }
 
-// ── Tier 2 · the exact entity ────────────────────────────────────────────────────────
-
-/**
- * Does the query NAME an entity, in full? An exact (case-insensitive) hit on an artist, a
- * label, an album, a named galaxy, or a published mixtape — the graph nodes with a page.
- *
- * It comes back as an ENTITY carrying a REDIRECT, never as a synthetic "go to /label/hospital-
- * records" row: a reader should see the thing, not a rendering of the URL they are about to
- * visit. An artist/label/album carries the entity's TRACKS underneath it, because a jump the
- * reader did not want is a dead end if it is all they were offered — and the rows cost one query
- * they were going to want anyway. A galaxy and a mixtape are a PURE jump (a mixtape is itself one
- * finding; a galaxy has no column filter to list under it), so they carry no track list.
- *
- * THE FALLBACK is what is left of the world before the graph pages shipped: a label or an
- * album with no entity row — a crawler-minted imprint with nothing certified on it, an album
- * string that folds to no `albums` row — has no page, so a redirect would be a 404. It becomes
- * the filter it obviously is (every track on that label) instead of a dead link.
- */
 async function resolveEntity(query: string): Promise<SearchResult | null> {
   const needle = query.trim().toLowerCase();
 
@@ -642,7 +350,6 @@ async function resolveEntity(query: string): Promise<SearchResult | null> {
   const entity = artists[0] ?? labels[0] ?? albums[0] ?? galaxies[0] ?? mixtapes[0];
 
   if (entity) {
-    // A galaxy or a mixtape is a PURE jump — no column filter maps to it, so nothing lists under it.
     if (entity.kind === "galaxy" || entity.kind === "mixtape") {
       return {
         degraded: false,
@@ -683,17 +390,6 @@ async function resolveEntity(query: string): Promise<SearchResult | null> {
     };
   }
 
-  // The album probe seeks the `albums` ENTITY by its unique slug, never `lower(tracks.album)`.
-  // That equality was unindexable, so on a MISS — which is most queries, since most queries
-  // are not an album title — it scanned every row of `tracks`, on the hot path of the search
-  // box, growing 1:1 with the catalogue. The entity is slug-keyed and bounded by the archive:
-  // one index seek, at any catalogue size.
-  //
-  // It also resolves MORE, not less: the slug fold is punctuation-insensitive, so "Wormhole"
-  // and "wormhole." now ask the same question. What it stops resolving as an ENTITY is an
-  // album Fluncle has never certified anything on — which has no `albums` row and therefore no
-  // page to jump to, so calling it an entity was the lie. Its tracks are still found, by the
-  // FTS tier below, which indexes `tracks.album` for exactly this.
   const albumSlug = slugify(needle);
   const album = albumSlug
     ? typedRow<{ name: string }>(
@@ -717,64 +413,14 @@ async function resolveEntity(query: string): Promise<SearchResult | null> {
   return null;
 }
 
-// ── Tier 4 · the filters, executed as SQL ────────────────────────────────────────────
-
-/**
- * One `where` fragment plus the args it binds — assembled in SQL-text order. The args are
- * scalars by TYPE, not by convention: nothing a model or a stranger typed can arrive here as
- * anything but a bound value.
- */
 export type Clause = { args: (number | string)[]; sql: string };
 
-/**
- * The entity ids a filter set's NAMES resolved to — the indexed path {@link compileFilters}
- * takes when the graph already knows the name a reader (or the model) typed. An absent id is
- * not an error: it is the signal to compile the raw-string fallback instead.
- *
- * Produced by {@link resolveFilterEntities}, threaded in as a second argument rather than looked
- * up inside the compiler, because the compiler is SYNCHRONOUS and shared with the `/tracks` hub —
- * one resolve per read, at the read's own top, and both surfaces compile the same clause set.
- */
 export type ResolvedFilterEntities = {
   albumId?: string;
   artistId?: string;
   labelId?: string;
 };
 
-/**
- * THE NAME → ID STEP, and the reason the hottest search shape is no longer a catalogue scan.
- *
- * A filter arrives carrying a NAME, because a name is what a reader typed and all the model tier
- * is allowed to emit. Compiled against the raw columns, a name costs a full pass over a growing
- * table — `lower(tracks.artists_json) like '%netsky%'` had to read and lower-case every track's
- * JSON credits to answer "tracks by Netsky", on the single most common search there is. But the
- * data model already did that work: `track_artists` holds the artist edge, `tracks.label_id` and
- * `tracks.album_id` hold the imprint and the record, and all three are indexed. So the name is
- * resolved ONCE, here, against the SMALL entity tables, and the filter becomes a seek.
- *
- * Three bounded lookups at most, and only for the filters actually present:
- *   - ARTIST — alias-tolerant (the same `kind='name'` + `status in ('auto','confirmed')` trust
- *     the entity tier resolves an AKA by), name or slug, primary name winning a tie.
- *   - LABEL / ALBUM — by SLUG, the unique key, folded from the typed name the same way
- *     `resolveEntity`'s album probe folds it (punctuation-insensitive, so "Wormhole" and
- *     "wormhole." ask one question). A LABEL is additionally alias-tolerant, through the SAME
- *     `confirmed`-only fold `ensureLabel` mints against — so a spelling an operator merged away
- *     still reaches the label that absorbed it.
- *
- * AND THE COUNT GUARD IS WHAT KEEPS IT HONEST. Each read requires the entity's maintained
- * `renderable_track_count > 0` (keystone 2) — the stored mirror of exactly the edge the filter is
- * about to seek. An entity with no edges yet (an artist whose crawled catalogue the edge backfill
- * has not reached, a crawler-minted imprint with nothing pointing at it) therefore does NOT
- * resolve, and the caller compiles the substring fallback — today's answer, unchanged. Without
- * the guard the seek would return a confident, silent EMPTY for exactly those entities, which is
- * a worse failure than a slow query: the fallback is the degradation contract holding.
- *
- * The residual it does not cover: an artist with SOME edges but not all of them (the two draining
- * backfill crons, `fluncle-artist-edges` + `fluncle-artist-credits`, are what converge that) reads
- * from the graph, so search returns what `/artist/<slug>` returns. That is the shape the artist
- * page's catalogue list already tells the truth in; search now agrees with it instead of quietly
- * disagreeing.
- */
 export async function resolveFilterEntities(
   filters: SearchFilters,
 ): Promise<ResolvedFilterEntities> {
@@ -791,30 +437,6 @@ export async function resolveFilterEntities(
   };
 }
 
-/**
- * One artist NAME (or slug, or a trusted AKA) → `artists.id`, or `undefined`. `renderable_track_count
- * > 0` is the count guard: no edges, no id, and the caller keeps the substring fallback.
- *
- * ── WHY THIS IS TWO STATEMENTS AND NOT ONE `or` ─────────────────────────────────────────────────
- * `artists` is a GROWING table — the credit sweep mints a row per unmatched MusicBrainz credit
- * (`mintArtistByMbid`), so it tracks the crawl rather than the archive (`scripts/lib/scale-seed.ts`
- * seeds 30,000 of them for the 150k regime). One `where … or … or exists (…)` over it is therefore a
- * full scan with a correlated `artist_aliases` probe per row, on the single most common search shape
- * there is, and no index can serve it: an `or` arm that is a correlated `exists` is not indexable, so
- * SQLite cannot build a multi-index OR and falls back to the scan — and `lower(artists.name)` wraps
- * the column, which defeats `artists_name_nocase_idx` even on its own.
- *
- * So the two RANKS are asked separately, in rank order, which is all a `name_rank` tiebreak over one
- * `limit 1` ever expressed: a primary name or slug wins outright, and the alias is consulted ONLY
- * when nothing claims the name directly. Rank 0 is two indexable equalities — `name = ? collate
- * nocase` rides `artists_name_nocase_idx`, `slug = ?` rides the slug unique index — so the common
- * case is a seek. Rank 1 drives FROM `artist_aliases` and PK-joins `artists`, instead of scanning
- * every artist to ask whether one of its aliases matches.
- *
- * `name = ? collate nocase` is exactly `lower(name) = ?` for this needle, not an approximation of it:
- * SQLite's `lower()` and its NOCASE collation both fold ASCII A–Z and nothing else, so the two agree
- * character for character on every input (a non-ASCII capital matches under neither).
- */
 async function resolveFilterArtistId(name: string): Promise<string | undefined> {
   const needle = name.trim().toLowerCase();
 
@@ -824,8 +446,6 @@ async function resolveFilterArtistId(name: string): Promise<string | undefined> 
 
   const slug = slugify(name);
   const db = await getDb();
-  // Rank 0 — the artist claims the typed string as its own name or slug. Both `or` arms are plain
-  // equalities on indexed columns, so this is a seek pair rather than a scan.
   const primary = await db.execute({
     args: [needle, slug],
     sql: `select artists.id as id
@@ -841,9 +461,6 @@ async function resolveFilterArtistId(name: string): Promise<string | undefined> 
     return primaryId;
   }
 
-  // Rank 1 — a trusted AKA (`kind='name'`, `status in ('auto','confirmed')`), the same trust the
-  // entity tier resolves an alias by. Driven from the alias rows, so the count guard and the tiebreak
-  // read the joined artist by primary key.
   const alias = await db.execute({
     args: [needle],
     sql: `select artists.id as id
@@ -860,24 +477,6 @@ async function resolveFilterArtistId(name: string): Promise<string | undefined> 
   return typedRow<{ id: string }>(alias.rows)?.id;
 }
 
-/**
- * One label/album NAME → its entity id, or `undefined`. A single unique-index seek on the slug —
- * the shape `resolveEntity`'s album probe already established, for the same reason (the slug is
- * the key; `lower(tracks.album) = ?` was the unindexable question). Same count guard as the artist
- * read: an imprint the crawler minted but nothing points at does not resolve.
- *
- * A LABEL gets a SECOND chance when that seek finds nothing: the CONFIRMED-ALIAS fold, through
- * `labels.ts`'s own {@link resolveConfirmedAliasLabelId} — the very resolver `ensureLabel` consults
- * before minting, so the read side and the write side answer "which label is this spelling?" from
- * one place. It is two indexed seeks, never a join: `label_aliases_alias_slug_idx` on the folded
- * slug, then the canonical row by primary key. Only `confirmed` resolves; a `candidate` is an
- * unruled guess and must never become a filter.
- *
- * THE GATE HOLDS ON BOTH PATHS. The alias hand-back is re-read through the same
- * `renderable_track_count > 0` guard the direct seek applies, so an alias can never resurrect a
- * label the direct seek would have declined — the caller compiles the raw-string fallback instead,
- * which is the degradation contract, unchanged.
- */
 async function resolveFilterEntityId(
   table: "albums" | "labels",
   name: string,
@@ -891,7 +490,6 @@ async function resolveFilterEntityId(
   const db = await getDb();
   const result = await db.execute({
     args: [slug],
-    // `table` is a closed union of two literals — never anything a stranger or a model typed.
     sql: `select id from ${table} where slug = ? and renderable_track_count > 0 limit 1`,
   });
   const directId = typedRow<{ id: string }>(result.rows)?.id;
@@ -914,34 +512,6 @@ async function resolveFilterEntityId(
   return typedRow<{ id: string }>(gated.rows)?.id;
 }
 
-/**
- * Compile a `SearchFilters` object into `where` clauses. Every value is a BIND ARG; nothing
- * the model emitted is ever interpolated into SQL. (The model is untrusted input with extra
- * steps — it is downstream of a stranger's search box.)
- *
- * `resolved` is {@link resolveFilterEntities}' answer — the ids the filter's names were found to
- * be. It decides which SHAPE each name filter takes, and both shapes return the same rows for an
- * entity the graph knows:
- *
- *   - `artist` → an indexed edge seek through `track_artists` (`track_artists_artist_id_idx`)
- *     when the name resolved; the raw `artists_json` substring scan when it did not. The
- *     substring is what `searchTracks` in `tracks.ts` uses, and there it is bounded by the
- *     findings join — here it is the FALLBACK, reached only for a name Fluncle holds no linked
- *     entity for, which is also the only case where it can still find something the graph cannot.
- *   - `label` / `album` → `tracks.label_id` / `tracks.album_id`, the indexed graph pointers, when
- *     the name resolved; the raw-string equality when it did not (a free-typed imprint on the
- *     `/tracks` hub is a legitimate filter with no entity behind it).
- *
- * `key` goes through {@link keySpellings} as an EXACT set of canonical spellings, so "Bb minor"
- * and "A# minor" ask one question and `tracks_key_idx` answers it — the column is never wrapped.
- * `text` goes through the FTS index (a subquery, so bm25 does not have to survive the join).
- *
- * EXPORTED because the `/tracks` hub (`tracks-hub.ts`) compiles the SAME filter vocabulary
- * (`yearMin`/`yearMax`, `bpmMin`/`bpmMax`, `key`, `label`) off the SAME schema — the whole point
- * of aligning the hub's URL params with `SearchFilters`. The hub passes only that subset (never
- * `artist`/`album`/`text`) and adds its own `galaxy` clause on top; the key-spelling fold, the
- * name→id shapes and the sargable year compare live HERE, once, so the two surfaces cannot drift.
- */
 export function compileFilters(
   filters: SearchFilters,
   resolved: ResolvedFilterEntities = {},
@@ -997,12 +567,6 @@ export function compileFilters(
     clauses.push({ args: [filters.bpmMax], sql: `tracks.bpm <= ?` });
   }
 
-  // Sargable lexicographic range instead of `substr(tracks.release_date, 1, 4)` — wrapping the
-  // column defeats `tracks_release_date_track_id_idx`, while a bare range rides its release-date
-  // prefix (docs/db-scale-backlog Wave 1 #10). Correct for `YYYY`, `YYYY-MM`, and `YYYY-MM-DD`
-  // because zero-padded ISO dates sort
-  // lexicographically in chronological order. The max bound is HALF-OPEN (`< 'YYYY+1'`) so it
-  // includes every day of the max year regardless of the value's precision.
   if (typeof filters.yearMin === "number") {
     clauses.push({
       args: [String(filters.yearMin)],
@@ -1029,14 +593,6 @@ export function compileFilters(
   return clauses;
 }
 
-/**
- * Execute a compiled filter set. Certified first, then newest release — an archive read, not
- * a relevance read (there is no text score to rank by once the query became columns).
- *
- * A filter set that compiles to NOTHING (the model returned only `soundsLike`, or only fields
- * we do not filter on) would otherwise return the whole archive, which is not an answer to a
- * question. It returns nothing instead, and the caller degrades.
- */
 async function runFilters(filters: SearchFilters, limit: number): Promise<SearchResult> {
   const clauses = compileFilters(filters, await resolveFilterEntities(filters));
 
@@ -1063,14 +619,6 @@ async function runFilters(filters: SearchFilters, limit: number): Promise<Search
   };
 }
 
-// ── The sonic tier ───────────────────────────────────────────────────────────────────
-
-/**
- * Resolve a free-text track reference to a REAL row that has an embedding. Certified rows
- * win ties (they are the ones Fluncle has actually been to, and the ones a reader means when
- * they name a track). Returns `null` when nothing matches — at which point the sonic tier
- * declines rather than inventing a vibe to search for.
- */
 async function resolveAnchor(
   reference: string,
 ): Promise<{ hit: SearchHit; vector: number[] } | null> {
@@ -1104,73 +652,17 @@ async function resolveAnchor(
   return vector ? { hit: toHit(row), vector } : null;
 }
 
-/**
- * "Tracks that sound like <X>" — the sonic tier.
- *
- * The anchor is a real, embedded row. Its MuQ vector is the probe, and the DATABASE does the
- * ranking: an exact `vector_distance_cos` scan, `order by dist limit N`, which returns the
- * ~12 winners and never the corpus. The three rules from docs/local-database.md, and why each
- * one is load-bearing:
- *
- *   1. RANK IN SQL. Pulling the JSON vector into the isolate to cosine it there is 21 KB per
- *      candidate — it threw at ~460 rows against local sqld's 10 MiB cap, and on hosted
- *      (which has no cap) it would silently grow toward OOMing the 128 MB Worker.
- *   2. BIND THE PROBE AS A RAW BLOB (`toVectorProbe`), never as a JSON string: 1,883 ms vs
- *      26,700 ms at 100k on hosted. The cliff does NOT reproduce locally, so nothing in dev
- *      will ever warn you.
- *   3. NO `libsql_vector_idx`. It wedged hosted Turso's write path for 20+ minutes and builds
- *      an EMPTY index locally, silently. The exact scan is the ratified shape.
- *
- * ANY OTHER FILTERS THE QUERY CARRIED BECOME THE BTREE PRE-FILTER — "like Nine Clouds, on
- * Hospital Records" narrows the candidate set BEFORE the scan touches a vector, which is the
- * exact lever the spike measured (100k: 1,883 ms → 207 ms behind a key/BPM pre-filter). It is
- * the same `compileFilters` the non-sonic path uses; nothing special is written for it.
- *
- * The `track_embeddings` join is INNER for a reason: `vector_distance_cos` THROWS on a NULL, so
- * an un-embedded row must be gone before the ranking sees it — and a row's ABSENCE from the
- * satellite is exactly what "un-embedded" means.
- *
- * AND THE ORDER IS PURE DISTANCE — no certified-first tier break, unlike every other tier
- * here. That asymmetry is deliberate and it is arithmetic: bm25 is CORPUS-relative (a text
- * score computed across 60 findings and one across 41k catalogue tracks are not on one scale),
- * so a blended text ranking would be meaningless. A cosine distance is not — it is a property
- * of two vectors and nothing else. So sound CAN be ranked honestly across both tiers, and
- * pushing a nearer uncertified track below a further finding would be a lie about the sound.
- * The Unlit Rule keeps the two readable apart on the page; the ranking tells the truth.
- */
-/**
- * THE ONE VECTOR SCAN — rank TRACKS by cosine distance to a probe, behind a btree pre-filter.
- *
- * The heart of both sonic paths (a single anchor track's vector, or the mean of several artists'
- * centroids). Everything about the SHAPE is ratified (docs/local-database.md), and both callers
- * share it so there is exactly ONE place the rules live:
- *
- *   - RANK IN SQL (`vector_distance_cos … order by dist limit N`) — never pull the column into the
- *     isolate; that is how a query silently grows toward OOMing the 128 MB Worker.
- *   - BIND THE PROBE AS A RAW BLOB (`toVectorProbe`), never a JSON string: 1,883 ms vs 26,700 ms at
- *     100k on hosted. The cliff does NOT reproduce locally, so dev never warns you.
- *   - NO `libsql_vector_idx` — an exact scan behind a btree pre-filter is the shape.
- *
- * `columnFilters` are the OTHER filters the query carried (key/BPM/year/label), compiled to the
- * SAME `compileFilters` the non-sonic path uses and applied BEFORE the vector distance — "like X on
- * Hospital Records" narrows the candidate set before the scan touches a vector (the spike's
- * measured 1,883 ms → 207 ms lever). ONE pass, no union-all fan-out. The `track_embeddings` join is
- * INNER because `vector_distance_cos` THROWS on a NULL. The order is PURE DISTANCE
- * — no certified-first break, because a cosine distance is a property of two vectors and is honest
- * across both registers (unlike corpus-relative bm25); the Unlit Rule keeps them readable apart.
- */
+export type VectorGate = { allowBoundedSql?: boolean; beforeVector?: () => Promise<void> };
+
 export async function rankTracksByVector(
   probe: number[],
   columnFilters: SearchFilters,
   excludeTrackId: string | undefined,
   limit: number,
-  options: { allowBoundedSql?: boolean } = {},
+  options: VectorGate = {},
 ): Promise<SearchHit[] | null> {
-  // THE SONAR ROUTE (dark, DEFAULT OFF). When the sonic flag is on AND the column filters are ones
-  // sonar can express faithfully AND sonar answers, take the in-memory scan and hydrate its ids.
-  // Unsupported filters return the same typed unavailable result without asking Sonar. Once Sonar
-  // is actually asked, `null` means unavailable and `[]` means a valid empty result; neither starts
-  // the remote SQL fallback, whose work cannot be cancelled after Turso accepts it.
+  await options.beforeVector?.();
+
   if (await isSonarSonicEnabled()) {
     const filter = sonarTrackFilter(columnFilters);
 
@@ -1193,22 +685,15 @@ export async function rankTracksByVector(
     return null;
   }
 
-  // The pre-filter is compiled through the SAME name→id resolution the non-sonic path uses, so
-  // "like Nine Clouds, by Netsky" narrows on the artist EDGE before the scan touches a vector.
   const clauses = compileFilters(columnFilters, await resolveFilterEntities(columnFilters));
   const where = [
     ...clauses.map((clause) => clause.sql),
     ...(excludeTrackId ? ["tracks.track_id != ?"] : []),
-    // The satellite join below is INNER, so membership in `track_embeddings` already IS the
-    // old `embedding_blob is not null` guard. This clause keeps the `where` non-empty when a
-    // query carries no filters and no exclusion (a bare `where` is a syntax error), and it
-    // stays index-cheap: `has_embedding` is on the row the scan already has.
     `tracks.has_embedding = 1`,
   ].join(" and ");
 
   const db = await getDb();
   const result = await executeVectorFallback(db, "sonar.fallback.search", {
-    // SQL-TEXT ORDER: candidate pre-filter clauses and exclusion bind before the probe, then limit.
     args: [
       ...clauses.flatMap((clause) => clause.args),
       ...(excludeTrackId ? [excludeTrackId] : []),
@@ -1239,21 +724,6 @@ export async function rankTracksByVector(
   return typedRows<SearchRow>(result.rows).map(toHit);
 }
 
-/**
- * Map the sonic tier's `columnFilters` to sonar's metadata pre-filter, or `null` when they are NOT
- * faithfully expressible. An enabled sonic surface treats that as unavailable and degrades to
- * full text rather than presenting the capped SQL relation as complete-corpus vector recall.
- *
- * sonar can express ONLY inclusive BPM bounds with identical semantics. `key` is deliberately NOT
- * mapped: the Turso path matches the bare `tracks.key` column against a spread of canonical
- * spellings ({@link keySpellings}) and sonar's `key_in` is now the same kind of exact set, so the
- * two could be made to agree — but routing key queries to sonar is a RANKING-affecting flag change,
- * not the query-shape fix this path just took, so it takes the explicit full-text degradation until
- * that is measured.
- * `artist`/`album`/`label`/`year`/`text` have no
- * sonar-filter equivalent at all, so any of them present also declines (hydration cannot re-apply
- * them without breaking sonar's top-k, so routing to sonar would silently drop the filter).
- */
 function sonarTrackFilter(columnFilters: SearchFilters): SonarFilter | null {
   if (
     columnFilters.artist !== undefined ||
@@ -1280,12 +750,6 @@ function sonarTrackFilter(columnFilters: SearchFilters): SonarFilter | null {
   return filter;
 }
 
-/**
- * Hydrate sonar's ranked ids into full {@link SearchHit}s IN SONAR'S ORDER — one flat `where
- * track_id in (…)` read (no vector math), reusing the shared `SEARCH_SELECT`/{@link toHit} so the
- * DTO is identical to the Turso path. An id sonar returned but that no longer hydrates (a delete
- * between sonar's last refresh and now) is dropped, never faked.
- */
 async function hydrateTrackHits(matches: SonarMatch[]): Promise<SearchHit[]> {
   return hydrateRankedSonarMatches(
     matches,
@@ -1304,17 +768,13 @@ async function hydrateTrackHits(matches: SonarMatch[]): Promise<SearchHit[]> {
   );
 }
 
-/**
- * "Tracks that sound like <X>" — the sonic tier. The anchor is a real, embedded row; its MuQ vector
- * is the probe, and every other filter becomes the btree pre-filter in {@link rankTracksByVector}.
- */
 const SONIC_UNAVAILABLE = Symbol("sonic-unavailable");
 type SonicResolution = SearchResult | null | typeof SONIC_UNAVAILABLE;
 
 async function runSonic(
   filters: SearchFilters,
   limit: number,
-  allowBoundedSql: boolean,
+  gate: VectorGate,
 ): Promise<SonicResolution> {
   const reference = filters.soundsLike;
 
@@ -1325,11 +785,9 @@ async function runSonic(
   const anchor = await resolveAnchor(reference);
 
   if (!anchor) {
-    return null; // nothing to anchor on — decline, never invent
+    return null;
   }
 
-  // Everything EXCEPT the sonic references narrows the candidates (the btree pre-filter). The
-  // probe(s) and the words that made them are not column filters.
   const {
     soundsLike: _reference,
     soundsLikeArtists: _artists,
@@ -1341,9 +799,7 @@ async function runSonic(
     columnFilters,
     anchor.hit.trackId,
     limit,
-    {
-      allowBoundedSql,
-    },
+    gate,
   );
 
   if (results === null) {
@@ -1355,47 +811,10 @@ async function runSonic(
 
 type CentroidRow = { artist_id: string; centroid_blob: unknown; name: string };
 
-/** The projection + tiebreak both centroid RANKS share, so the two statements can never disagree. */
 const CENTROID_SELECT = `select artists.id as artist_id, artists.name as name,
              ac.centroid_blob as centroid_blob`;
 const CENTROID_TIEBREAK = `order by length(artists.name) asc, artists.name asc limit 1`;
 
-/**
- * Resolve 1–6 artist NAMES or SLUGS to their stored `artist_centroids`, alias-tolerant — the same
- * trust the entity read uses (`kind='name'`, `status in ('auto','confirmed')`). Each input resolves
- * to at most one artist (the primary name wins a tie over an alias); a name that resolves to no
- * artist, or to an artist with no centroid yet, simply does not weigh in. Returns the RESOLVED names
- * (for the transparency echo) alongside their vectors, de-duplicated by artist so passing one artist
- * twice never double-weights it.
- *
- * ── WHY EACH INPUT IS TWO STATEMENTS AND NOT ONE `or` ──────────────────────────────────────────
- * This is {@link resolveFilterArtistId}'s rewrite, applied to the read beside it, for the same
- * reason and with the same wording: `artists` is a GROWING table (the credit sweep mints a row per
- * unmatched MusicBrainz credit, `mintArtistByMbid`; `scripts/lib/scale-seed.ts` seeds 30,000 of
- * them for the 150k regime), and one `where lower(name) = ? or slug = ? or exists (<alias probe>)`
- * over it is a full scan with a correlated `artist_aliases` probe per row — `lower()` wraps the
- * column so `artists_name_nocase_idx` cannot be seeked, and an `or` arm that is a correlated
- * `exists` is not indexable, so SQLite cannot build a multi-index OR and falls back to the table.
- * Once per input, up to {@link MAX_SIMILAR_ARTISTS_INPUT} of them, on every `sounds like <artists>`
- * search. These are correlated table reads, never indexed single-row reads.
- *
- * The `name_rank asc … limit 1` tiebreak was only ever "ask rank 0, then rank 1", so the two ranks
- * are asked separately, in rank order. Rank 0 is two indexable equalities — `name = ? collate
- * nocase` rides `artists_name_nocase_idx`, `slug = ?` rides the slug unique index. Rank 1 drives
- * FROM `artist_aliases` and joins `artists` by primary key instead of scanning every artist to ask
- * whether one of its aliases matches. Both ranks keep the `artist_centroids` join, so an artist
- * with no centroid yet is passed over at the SAME rank it always was, and a lower-ranked artist
- * that does have one still wins — the split is a plan change, not a ranking change.
- *
- * `name = ? collate nocase` is exactly `lower(name) = ?` for this needle, not an approximation of
- * it: SQLite's `lower()` and its NOCASE collation both fold ASCII A–Z and nothing else, so the two
- * agree character for character on every input (a non-ASCII capital matches under neither).
- *
- * BOTH RANKS CARRY THE VISIBILITY GATE, and rank 0's two arms are parenthesized so it binds over
- * the pair. This read is not internal: it echoes Fluncle's canonical `artists.name` back as
- * `soundsLikeArtists`, so an ungated resolve would confirm an unlisted artist exists and print its
- * canonical name for anyone who typed a name or a trusted alias. Same rule as the entity tier.
- */
 async function resolveArtistCentroids(
   inputs: string[],
 ): Promise<{ names: string[]; vectors: number[][] }> {
@@ -1416,8 +835,6 @@ async function resolveArtistCentroids(
   for (const input of cleaned) {
     const needle = input.toLowerCase();
     const slug = slugify(input);
-    // Rank 0 — the artist claims the typed string as its own name or slug. Both `or` arms are plain
-    // equalities on indexed columns, so this is a seek pair rather than a scan.
     const primary = await db.execute({
       args: [needle, slug],
       sql: `${CENTROID_SELECT}
@@ -1430,10 +847,6 @@ async function resolveArtistCentroids(
     let row = typedRow<CentroidRow>(primary.rows);
 
     if (!row) {
-      // Rank 1, asked ONLY when nothing claims the name directly — a trusted AKA (`kind='name'`,
-      // `status in ('auto','confirmed')`), the same trust the entity tier resolves an alias by.
-      // Driven FROM the alias rows, so the artist and its centroid are reached by primary key
-      // rather than scanned for.
       const alias = await db.execute({
         args: [needle],
         sql: `${CENTROID_SELECT}
@@ -1468,18 +881,10 @@ async function resolveArtistCentroids(
   return { names, vectors };
 }
 
-/**
- * "Songs by artists that sound like Koven and Maduk (in A minor, before 2020)" — the COMPOUND sonic
- * tier. It resolves the named artists to their centroids, averages them into ONE probe (the mean of
- * means — each named artist weighs equally, the {@link rankSimilarToArtists} shape), and ranks TRACKS
- * by it with every other filter as the btree pre-filter. Declines (returns `null`) when no named
- * artist resolves to a centroid — anchored on real rows, never an invented vibe. The transparency
- * echo carries the RESOLVED names, so the reader sees which artists the vibe was actually built from.
- */
 async function runArtistSonic(
   filters: SearchFilters,
   limit: number,
-  allowBoundedSql: boolean,
+  gate: VectorGate,
 ): Promise<SonicResolution> {
   const inputs = filters.soundsLikeArtists;
 
@@ -1491,7 +896,7 @@ async function runArtistSonic(
   const probe = meanEmbedding(resolved.vectors);
 
   if (!probe) {
-    return null; // no named artist resolved to a centroid — decline, never invent
+    return null;
   }
 
   const {
@@ -1500,9 +905,7 @@ async function runArtistSonic(
     text: _words,
     ...columnFilters
   } = filters;
-  const results = await rankTracksByVector(probe, columnFilters, undefined, limit, {
-    allowBoundedSql,
-  });
+  const results = await rankTracksByVector(probe, columnFilters, undefined, limit, gate);
 
   if (results === null) {
     return SONIC_UNAVAILABLE;
@@ -1511,43 +914,127 @@ async function runArtistSonic(
   return {
     degraded: false,
     entities: [],
-    // Echo the RESOLVED artist names, so the reader sees which artists the vibe was built from.
     filters: { ...filters, soundsLikeArtists: resolved.names },
     kind: "sonic",
     results,
   };
 }
 
-// ── Tier 1½ · a pasted Spotify link ──────────────────────────────────────────────────
+async function exactNamesakes(query: string): Promise<SearchEntity[]> {
+  const needle = query.trim().toLowerCase();
+  const groups = await Promise.all(
+    (["artist", "label", "album", "galaxy", "mixtape"] as const).map((kind) =>
+      matchEntities(kind, needle, "exact", 1),
+    ),
+  );
 
-/**
- * A Spotify track reference — the share-sheet URL (`https://open.spotify.com/track/<id>`,
- * with `intl-*` path segments and query strings tolerated) or the bare `spotify:track:<id>`
- * URI. The capture is Spotify's 22-char base62 track id. Anchored (`^…$`) on purpose: a link
- * QUOTED inside a sentence is a sentence, and the tiers below own it.
- */
+  return groups.flat();
+}
+
+async function runStyle(
+  style: SearchStyle,
+  q: string,
+  limit: number,
+  gate: VectorGate,
+): Promise<SonicResolution> {
+  const probe = await resolveStyleProbe(style);
+
+  if (probe.status !== "ready") {
+    return SONIC_UNAVAILABLE;
+  }
+
+  const [results, entities] = await Promise.all([
+    rankTracksByVector(probe.probe, {}, undefined, limit, gate),
+    exactNamesakes(q),
+  ]);
+
+  if (results === null) {
+    return SONIC_UNAVAILABLE;
+  }
+
+  return {
+    degraded: false,
+    entities,
+    filters: { sound: style.slug, soundsLikeArtists: probe.anchors },
+    kind: "sonic",
+    results,
+  };
+}
+
+type LikeSeedRow = SearchRow & {
+  embedding_blob: unknown;
+  lead_centroid_blob: unknown;
+  lead_name: string | null;
+};
+
+export async function searchLikeTrack(options: {
+  allowBoundedSonicForDiagnostics?: boolean;
+  beforeVector?: () => Promise<void>;
+  limit?: number;
+  trackId: string;
+}): Promise<SearchResult | null> {
+  const limit = Math.min(Math.max(Math.trunc(options.limit ?? SONIC_LIMIT) || SONIC_LIMIT, 1), 50);
+  const db = await getDb();
+  const seed = typedRow<LikeSeedRow>(
+    (
+      await db.execute({
+        args: [options.trackId],
+        sql: `select ${SEARCH_SELECT}, emb.embedding_blob as embedding_blob,
+                     lead_artist.name as lead_name, lead_ac.centroid_blob as lead_centroid_blob
+              from ${SEARCH_FROM}
+              left join track_embeddings emb on emb.track_id = tracks.track_id
+              left join artists lead_artist
+                on lead_artist.id = ${leadCentroidArtistSql("tracks.track_id")}
+              left join artist_centroids lead_ac on lead_ac.artist_id = lead_artist.id
+              where tracks.track_id = ?
+              limit 1`,
+      })
+    ).rows,
+  );
+
+  if (!seed) {
+    return null;
+  }
+
+  const anchor = toHit(seed);
+  const own = readEmbeddingBlob(seed.embedding_blob);
+  const lead = own ? null : readEmbeddingBlob(seed.lead_centroid_blob);
+  const probe = own ?? lead;
+
+  if (!probe) {
+    return { anchor, degraded: false, entities: [], kind: "sonic", results: [] };
+  }
+
+  const results = await rankTracksByVector(probe, {}, anchor.trackId, limit, {
+    allowBoundedSql: options.allowBoundedSonicForDiagnostics === true,
+    beforeVector: options.beforeVector,
+  });
+
+  if (results === null) {
+    return { anchor, degraded: true, entities: [], kind: "sonic", results: [] };
+  }
+
+  return {
+    anchor,
+    degraded: false,
+    entities: [],
+    filters: lead && seed.lead_name ? { soundsLikeArtists: [seed.lead_name] } : undefined,
+    kind: "sonic",
+    results,
+  };
+}
+
 const SPOTIFY_TRACK_REFERENCE =
   /^(?:spotify:track:|https:\/\/open\.spotify\.com\/(?:intl-[a-zA-Z-]+\/)?track\/)([0-9A-Za-z]{22})(?:[?#].*)?$/;
 
-/** The Spotify track id a query IS, when it is one of the two reference forms — else null. */
 function parseSpotifyTrackId(q: string): string | null {
   return SPOTIFY_TRACK_REFERENCE.exec(q)?.[1] ?? null;
 }
 
-// ── The resolver ─────────────────────────────────────────────────────────────────────
-
-/**
- * Resolve one query. The four tiers, in order, stopping at the first that answers.
- *
- * Everything about the ORDER is a performance decision and a safety decision at once: the
- * common cases (a coordinate, a name, a word) never reach a model, and the case that does is
- * on a 3-second leash with a full-text fallback behind it.
- */
 async function textFallback(q: string, limit: number, degraded: boolean): Promise<SearchResult> {
   const match = toFtsMatch(q, "or");
   const [results, entities] = await Promise.all([
     match ? ftsSearch(match, limit) : Promise.resolve([]),
-    // The first token is the one worth prefixing an entity against ("andromedik tracks …").
     prefixEntities(tokenize(q)[0] ?? ""),
   ]);
 
@@ -1555,18 +1042,18 @@ async function textFallback(q: string, limit: number, degraded: boolean): Promis
 }
 
 export async function searchArchive(options: {
-  /** Keep the bounded SQL implementation reachable for local parity/integration diagnostics only. */
   allowBoundedSonicForDiagnostics?: boolean;
-  /**
-   * Awaited immediately before the model tier, the one step of a search that spends vendor money.
-   * A metered mount gates that spend here (a limiter verdict that throws refuses it); the
-   * deterministic tiers above it never wait on this.
-   */
   beforeModel?: () => Promise<void>;
+  beforeVector?: () => Promise<void>;
+  deferModel?: boolean;
   limit?: number;
   q: string;
 }): Promise<SearchResult> {
   const q = options.q.trim();
+  const gate: VectorGate = {
+    allowBoundedSql: options.allowBoundedSonicForDiagnostics === true,
+    beforeVector: options.beforeVector,
+  };
   const limit = Math.min(
     Math.max(Math.trunc(options.limit ?? DEFAULT_LIMIT) || DEFAULT_LIMIT, 1),
     50,
@@ -1576,12 +1063,6 @@ export async function searchArchive(options: {
     return empty();
   }
 
-  // ── 1 · A coordinate. A jump, not a search: it names exactly one finding.
-  //
-  // It comes back as a RESULT ROW as well as a redirect — the finding itself, cover and all.
-  // A reader who types a coordinate should see the finding they named, not a rendering of the
-  // URL they are about to visit. Enter still lands on `/log`, because that row is the first
-  // thing in the list and the list is keyboard-first.
   const coordinate = parseCoordinate(q);
 
   if (coordinate) {
@@ -1606,11 +1087,6 @@ export async function searchArchive(options: {
       : empty("coordinate");
   }
 
-  // ── 1½ · A pasted Spotify link. The archive is Spotify-anchored — every anchor path writes
-  // `tracks.spotify_uri` as `spotify:track:<id>` (anchor.ts) — so a share-sheet URL or a bare
-  // URI is an IDENTITY, not text: one seek on `tracks_spotify_uri_idx`, and NEVER a Spotify
-  // call. An id the archive does not hold falls through — the tiers below treat the link as
-  // the text it now is, and FTS-miss honestly.
   const spotifyTrackId = parseSpotifyTrackId(q);
 
   if (spotifyTrackId !== null) {
@@ -1629,14 +1105,26 @@ export async function searchArchive(options: {
     }
   }
 
-  // ── 2 · An exact entity name.
+  const style = parseStyleQuery(q);
+
+  if (style) {
+    const styled = await runStyle(style, q, limit, gate);
+
+    if (styled === SONIC_UNAVAILABLE) {
+      return textFallback(q, limit, true);
+    }
+
+    if (styled) {
+      return styled;
+    }
+  }
+
   const entity = await resolveEntity(q);
 
   if (entity) {
     return entity;
   }
 
-  // ── 3 · A bare token. FTS5 + the entity prefix jump (artist, label, album).
   if (isBareToken(q)) {
     const match = toFtsMatch(q);
     const [results, entities] = await Promise.all([
@@ -1647,25 +1135,10 @@ export async function searchArchive(options: {
     return { degraded: false, entities, kind: "token", results };
   }
 
-  // ── 3½ · "sounds like <X>". The headline query, and it does NOT get a model in front of it.
-  //
-  // Sonic search is the thing no other drum & bass tool has, so it is going to be one of the
-  // most-typed shapes here — and the rule this whole resolver is built on is that the LLM is
-  // never on the hot path of a COMMON query. It is also the feature that must not go down when
-  // a vendor does. "Sounds like X" needs a pattern, not understanding, so it gets one
-  // (`parseSonicPhrase`): zero latency, zero cost, zero dependency.
-  //
-  // Tier 4 still owns the phrasings this cannot see, and — the real prize — the COMPOUND
-  // query, where the reference is only half the question and the rest becomes the btree
-  // pre-filter in front of the scan.
   const sonicPhrase = parseSonicPhrase(q);
 
   if (sonicPhrase) {
-    const sonic = await runSonic(
-      { soundsLike: sonicPhrase },
-      Math.min(limit, SONIC_LIMIT),
-      options.allowBoundedSonicForDiagnostics === true,
-    );
+    const sonic = await runSonic({ soundsLike: sonicPhrase }, Math.min(limit, SONIC_LIMIT), gate);
 
     if (sonic === SONIC_UNAVAILABLE) {
       return textFallback(q, limit, true);
@@ -1674,23 +1147,17 @@ export async function searchArchive(options: {
     if (sonic) {
       return sonic;
     }
-    // The reference named no real track. Fall through — the model may read the sentence
-    // differently, and failing that, the text search below still answers.
   }
 
-  // ── 4 · Language. The model translates; SQL retrieves.
+  if (options.deferModel === true) {
+    return { ...(await textFallback(q, limit, false)), modelDeferred: true };
+  }
+
   await options.beforeModel?.();
   const filters = await translateQuery(q);
 
   if (filters) {
-    // The COMPOUND sonic tier goes first: "artists that sound like X and Y (in A minor)" is a
-    // vector rank behind a btree pre-filter, anchored on the artists' centroids. It declines (and
-    // falls through) when no named artist resolves to a centroid.
-    const artistSonic = await runArtistSonic(
-      filters,
-      Math.min(limit, SONIC_LIMIT),
-      options.allowBoundedSonicForDiagnostics === true,
-    );
+    const artistSonic = await runArtistSonic(filters, Math.min(limit, SONIC_LIMIT), gate);
 
     if (artistSonic === SONIC_UNAVAILABLE) {
       return textFallback(q, limit, true);
@@ -1700,11 +1167,7 @@ export async function searchArchive(options: {
       return artistSonic;
     }
 
-    const sonic = await runSonic(
-      filters,
-      Math.min(limit, SONIC_LIMIT),
-      options.allowBoundedSonicForDiagnostics === true,
-    );
+    const sonic = await runSonic(filters, Math.min(limit, SONIC_LIMIT), gate);
 
     if (sonic === SONIC_UNAVAILABLE) {
       return textFallback(q, limit, true);
@@ -1720,22 +1183,10 @@ export async function searchArchive(options: {
       return filtered;
     }
 
-    // Nothing came back. When the query named REAL COLUMNS (an artist, a key, a BPM range),
-    // that empty is the honest answer — "no Andromedik track is in A minor" is a fact, and
-    // papering over it with fuzzy text hits would be a worse product than saying so. But when
-    // the filters were only loose words (or the sonic reference resolved to no real track),
-    // there is nothing honest to report yet, so fall through to the text search below.
-    //
-    // Compiled UNRESOLVED on purpose: this asks only HOW MANY column clauses the filters carry,
-    // and a name compiles to exactly one clause whether it resolved to an id or fell back to the
-    // string. Resolving here would be a second round of lookups to learn nothing new.
     if (compileFilters({ ...filters, text: undefined }).length > 0) {
       return filtered;
     }
   }
 
-  // ── The degradation. The model was wanted and could not run (unprovisioned, slow, down),
-  // or it parsed to nothing usable. Full text with OR semantics: bm25 ranks by rarity, so the
-  // one distinctive word in the sentence carries the result.
   return textFallback(q, limit, filters === null);
 }

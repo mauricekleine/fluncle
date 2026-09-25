@@ -7,10 +7,6 @@ import { ApiError } from "./spotify";
 import { postMixtapeToTelegram } from "./telegram";
 import { getTrackByIdOrLogId, getTracksForMixtape } from "./tracks";
 
-// A mixtape is also a finding with a `/log/<F-id>` page (and a row in the `/log`
-// index). Any write that changes its published surface must drop those from the
-// edge cache. `purgeLogCache` no-ops on an unminted claim (no coordinate yet), so
-// it is safe to call after every member/metadata edit too.
 function purgeMixtapeLogCache(mixtape: MixtapeDTO): MixtapeDTO {
   purgeLogCache(mixtape.logId);
 
@@ -20,11 +16,6 @@ function purgeMixtapeLogCache(mixtape: MixtapeDTO): MixtapeDTO {
 const noteMaxLength = 1_200;
 const urlMaxLength = 500;
 
-// The title stub a claimed-but-unminted mixtape carries until the mint. Once the
-// Log ID + sequence number exist, a stub title (empty or this default) is
-// canonicalized to the real format; an operator-set title (a future custom series)
-// is left untouched. The cover is derived from the Log ID, never stored.
-// ("Untitled mixtape" is the legacy stub.)
 export const DEFAULT_MIXTAPE_TITLE = "Fluncle Drum & Bass Mixtape";
 const LEGACY_MIXTAPE_TITLE = "Untitled mixtape";
 
@@ -60,12 +51,6 @@ type StatusRow = {
   status: MixtapeStatus;
 };
 
-// The operator-authored subset of a mixtape (the post-promote edit surface). The
-// title (auto-set at mint) and cover (derived from the Log ID) are outputs, not
-// inputs. YouTube + Mixcloud links are recorded by `distribute`
-// (mixtape_social_posts), never set here; only the manual SoundCloud link is
-// editable, and it too writes a mixtape_social_posts row (see
-// setMixtapeSoundcloud).
 export type MixtapeInput = {
   durationMs?: unknown;
   note?: unknown;
@@ -78,11 +63,6 @@ export type MixtapeMemberInput = {
   members?: Array<string | { ref: string; startMs?: number }>;
 };
 
-// A finding's membership in one MINTED mixtape — the spine link the admin board
-// reads to mark which bangers are already spoken for (a published or distributing
-// checkpoint). Keyed by trackId; a finding can sit in more than one. (Pencilled-in
-// membership lives on PLANS now — see listPlanMembershipsForTracks in
-// ./recordings.)
 export type MixtapeMembership = {
   logId?: string;
   mixtapeId: string;
@@ -91,11 +71,6 @@ export type MixtapeMembership = {
 };
 
 export async function updateMixtape(id: string, input: MixtapeInput): Promise<MixtapeDTO> {
-  // A published mixtape stays editable — the note, links, and duration can change
-  // over time — but its minted coordinate freezes the recorded date the sector was
-  // derived from. (Members freeze at the mint; see setMixtapeMembers. The
-  // YouTube/Mixcloud links live in mixtape_social_posts via `distribute`; the
-  // manual SoundCloud link is handled below.)
   const current = await getMixtapeById(id);
   const fields = validateMixtapeInput(input);
 
@@ -137,7 +112,6 @@ export async function updateMixtape(id: string, input: MixtapeInput): Promise<Mi
     });
   }
 
-  // The manual SoundCloud link is a distribution row, not a column; `null`/"" clears it.
   if (fields.soundcloudUrl !== undefined) {
     await setMixtapeSoundcloud(id, fields.soundcloudUrl);
   }
@@ -145,10 +119,6 @@ export async function updateMixtape(id: string, input: MixtapeInput): Promise<Mi
   return purgeMixtapeLogCache(await getMixtapeById(id));
 }
 
-// The manual SoundCloud link as a `mixtape_social_posts` row (the single source of
-// truth for listen links). A non-empty URL upserts a `published` row; null/"" removes
-// it. Inlined here rather than calling mixtape-social to avoid an import cycle. Bumps
-// the mixtape's updated_at — the link changes its public surface + cover cache key.
 async function setMixtapeSoundcloud(mixtapeId: string, url: string | null): Promise<void> {
   const now = new Date().toISOString();
   const db = await getDb();
@@ -239,35 +209,15 @@ export async function setMixtapeMembers(
   return purgeMixtapeLogCache(await getMixtapeById(id));
 }
 
-// A cue: a member's start offset on the set timeline, keyed by the member's TRACK
-// ID (`ref`), matching the `(mixtape_id, track_id)` unique index. The Fluncle Studio
-// cue-backfill body.
 export type MixtapeCueInput = {
   cues?: Array<{ ref?: unknown; startMs?: unknown }>;
 };
 
-// Backfill a MINTED mixtape's per-track cues (`mixtape_tracks.start_ms`) — the
-// narrow, HARDENED write-path that unlocks #1's missing cues post-publish without
-// touching the frozen set/order. Unlike the pre-mint member seed
-// (setMixtapeMembers), this does NOT call assertUnmintedMixtape; instead it is the
-// inverse — it asserts the mixtape exists + is MINTED, then re-times the EXISTING
-// members only. Its guards (each a state backstop, not handler discipline):
-//   - the mixtape must exist + be minted (cues are a post-publish backfill);
-//   - every `ref` must be a CURRENT member, and the cue set must match the member set
-//     EXACTLY (same count + same trackId set) — so it can only re-time the frozen
-//     tracklist, never add/drop/reorder it (rejects a non-member ref);
-//   - the cues, in tracklist order, must start at 0 and increase monotonically
-//     (YouTube chapter rules).
-// It backfills the DB + `/mixtapes`, but NOT the already-distributed YouTube
-// description chapters (a chapters re-push is out of scope; M2).
 export async function setMixtapeCues(id: string, input: MixtapeCueInput): Promise<MixtapeDTO> {
   if (!Array.isArray(input.cues) || input.cues.length === 0) {
     throw new ApiError("invalid_cues", "Provide a cue for every track", 400);
   }
 
-  // Assert the mixtape exists (getMixtapeById throws mixtape_not_found/404) and is
-  // MINTED — cues backfill a published/distributing set, never an unminted claim
-  // (a claim's start_ms is seeded by setMixtapeMembers on the promote path).
   const mixtape = await getMixtapeById(id);
 
   if (!mixtape.logId) {
@@ -278,8 +228,6 @@ export async function setMixtapeCues(id: string, input: MixtapeCueInput): Promis
     );
   }
 
-  // Validate each cue's shape: a non-empty `ref` (trackId) + a non-negative integer
-  // `startMs`, no duplicate refs.
   const byRef = new Map<string, number>();
 
   for (const raw of input.cues) {
@@ -305,8 +253,6 @@ export async function setMixtapeCues(id: string, input: MixtapeCueInput): Promis
     byRef.set(ref, startMs);
   }
 
-  // Load the current members in tracklist order. The cue set must match this member
-  // set EXACTLY — the state backstop that keeps this from altering the tracklist.
   const db = await getDb();
   const membersResult = await db.execute({
     args: [id],
@@ -322,15 +268,12 @@ export async function setMixtapeCues(id: string, input: MixtapeCueInput): Promis
     );
   }
 
-  // Reject any ref that isn't a current member. With equal counts + unique refs,
-  // every ref matching a member means the two sets are identical.
   for (const ref of byRef.keys()) {
     if (!members.some((member) => member.track_id === ref)) {
       throw new ApiError("non_member_cue", `No current member with id ${ref}`, 400);
     }
   }
 
-  // Validate monotonic, start-at-0 cues along the tracklist order (YouTube chapters).
   let previous = -1;
 
   for (const [index, member] of members.entries()) {
@@ -351,8 +294,6 @@ export async function setMixtapeCues(id: string, input: MixtapeCueInput): Promis
     previous = startMs;
   }
 
-  // Re-time the existing members only — one UPDATE per member, plus the mixtape's
-  // updated_at bump (the cues change its public /mixtapes surface).
   const now = new Date().toISOString();
   await db.batch(
     [
@@ -368,9 +309,6 @@ export async function setMixtapeCues(id: string, input: MixtapeCueInput): Promis
   return purgeMixtapeLogCache(await getMixtapeById(id));
 }
 
-// Which mixtapes each of these findings sits in, keyed by trackId — one query, no
-// N+1, mirroring listSocialPostsForTracks. The board reads this for a page of
-// findings to mark what's already spoken for; a finding in no mixtape is absent.
 export async function listMixtapeMembershipsForTracks(
   trackIds: string[],
 ): Promise<Record<string, MixtapeMembership[]>> {
@@ -409,18 +347,9 @@ export async function listMixtapeMembershipsForTracks(
   return byTrack;
 }
 
-// Mint a claimed mixtape into the spine: commit its sequence number, Log ID, and
-// canonical title. The row arrives here as `promote_recording`'s claim insert
-// (status `distributing`, `log_id` still NULL — unminted); the mint commits the
-// coordinate. This is the FIRST half of publishing — the coordinate now exists (so
-// the cover endpoint and the platform assets can embed the real Log ID), but the
-// mixtape is NOT yet public. It becomes `published` only when the first platform
-// link lands (finalizeMixtapeDistribution), which supplies the listen link — there
-// is no link requirement to mint.
 export async function publishMixtape(id: string): Promise<MixtapeDTO> {
   const claim = await getMixtapeById(id);
 
-  // Minted = the Log ID exists; a coordinate is spent exactly once per mixtape.
   if (claim.logId) {
     if (claim.status === "published") {
       throw new ApiError("already_published", "Published mixtapes keep their coordinate", 409);
@@ -433,24 +362,14 @@ export async function publishMixtape(id: string): Promise<MixtapeDTO> {
     );
   }
 
-  // A claim is just the tracklist — that's the only hard requirement to mint. The
-  // recorded date is stamped by the promote claim (defaulting to today below only
-  // backdates the coordinate's sector when it is missing); the dream note is
-  // written later via the post-publish edit; the duration is derived from the
-  // upload by `distribute`. Title + Log ID + cover are minted/derived here.
   if (claim.memberCount < 1) {
     throw new ApiError("missing_members", "Add at least one finding before publishing", 409);
   }
 
-  // Fail before any upload starts if the spine is full (54 = 9 sectors × 6 letters).
-  // The mint CTE re-checks this atomically; this is the early, legible error.
   if ((await nextMixtapeSequence()) > 54) {
     throw new ApiError("mixtape_cap_reached", "The mixtape spine is full (54)", 409);
   }
 
-  // The coordinate's sector day: the recorded date, else today. `plannedFor` is not
-  // consulted; the PLAN's promote path stamps the take's `recorded_at` onto the claim.
-  // Forward only: already-minted mixtapes keep their frozen coordinate.
   const recordedAt = claim.recordedAt ?? new Date().toISOString();
   const sectorPrefix = mixtapeLogId(recordedAt, 1).slice(0, -2);
   const now = new Date().toISOString();
@@ -492,9 +411,6 @@ export async function publishMixtape(id: string): Promise<MixtapeDTO> {
     throw new ApiError("publish_failed", "Mixtape could not be minted", 409);
   }
 
-  // The Log ID and sequence number only exist now — canonicalize the title from
-  // them. A title an operator set (a future custom series) is left untouched; the
-  // empty/stub title every promote claim carries gets the standard format.
   const currentTitle = claim.title.trim();
   const isStub =
     currentTitle === "" ||
@@ -508,33 +424,14 @@ export async function publishMixtape(id: string): Promise<MixtapeDTO> {
     });
   }
 
-  // Read back by id (any status): the row is minted `distributing` now, so
-  // getMixtapeByLogId (published-only) would not return it. The coordinate now
-  // exists, so its `/log` page + the index need to re-render.
   return purgeMixtapeLogCache(await getMixtapeById(id));
 }
 
-// Announce a published mixtape to the crew (the Telegram crew channel) — the last
-// step of the mixtape lifecycle (mint → distribute → make public → announce). It's
-// Fluncle sharing his own dream/checkpoint: the crew callout is formatted in the
-// mixtape's own first-person voice (see formatMixtapeAnnouncement in ./telegram) and
-// carries its listen links + the permanent /log home.
-//
-// Idempotent by an `announced_at` marker, claimed atomically so a re-run or a
-// double-click can NEVER double-post to the crew: the guarded UPDATE flips
-// `announced_at` from NULL exactly once (rowsAffected === 1 only for the winning
-// call); a later call finds it set and 409s. The marker is only made permanent once
-// the Telegram send actually lands — a send failure releases the claim so the
-// operator can retry. Returns the posted message alongside the refreshed mixtape.
 export async function announceMixtape(
   id: string,
 ): Promise<{ message: string; mixtape: MixtapeDTO }> {
   const mixtape = await getMixtapeById(id);
 
-  // A coordinate + a live listen link are the two things a crew announcement needs.
-  // Both are guaranteed by `published` status: the mint commits the Log ID, and a
-  // mixtape only reaches `published` when its first platform link lands
-  // (finalizeMixtapeDistribution). So the announce sits AFTER distribution.
   if (!mixtape.logId) {
     throw new ApiError(
       "mixtape_not_minted",
@@ -551,8 +448,6 @@ export async function announceMixtape(
     );
   }
 
-  // Claim the announce atomically. Only the call that flips `announced_at` from NULL
-  // owns the post; a second call affects 0 rows → the crew is never double-posted.
   const now = new Date().toISOString();
   const db = await getDb();
   const claim = await db.execute({
@@ -568,8 +463,6 @@ export async function announceMixtape(
     );
   }
 
-  // Post to the crew channel. If Telegram fails, release the claim so a retry works —
-  // the marker only sticks once the post has actually landed.
   let message: string;
 
   try {
@@ -583,7 +476,6 @@ export async function announceMixtape(
     throw error;
   }
 
-  // The updated_at bump changes the public /log surface's freshness; drop it from cache.
   return { message, mixtape: purgeMixtapeLogCache(await getMixtapeById(id)) };
 }
 
@@ -598,13 +490,6 @@ export async function getMixtapeByLogId(logId: string): Promise<MixtapeDTO | und
   return row ? hydrateMixtape(row) : undefined;
 }
 
-/**
- * A mixtape for ASSET RENDERING (the on-the-fly cover endpoint). Unlike
- * getMixtapeByLogId (published-only — the public read), this also admits a
- * `distributing` mixtape: its coordinate is committed and the cover must render
- * while the platform uploads run. NEVER use this for a public surface — a
- * distributing mixtape has no live link yet.
- */
 export async function getMixtapeForRender(logId: string): Promise<MixtapeDTO | undefined> {
   const db = await getDb();
   const result = await db.execute({
@@ -616,8 +501,6 @@ export async function getMixtapeForRender(logId: string): Promise<MixtapeDTO | u
   return row ? hydrateMixtape(row) : undefined;
 }
 
-// The sequence number the next mint will claim (1-based). Used for the cap
-// pre-check before publish; the mint CTE re-derives this atomically.
 async function nextMixtapeSequence(): Promise<number> {
   const db = await getDb();
   const result = await db.execute({
@@ -629,9 +512,6 @@ async function nextMixtapeSequence(): Promise<number> {
   return Number(row?.n ?? 1);
 }
 
-// The by-id read admits ANY status (a `distributing` mixtape, or a mid-promote
-// unminted claim) — ids only travel admin/internal paths. The public reads are
-// getMixtapeByLogId (published-only) and listMixtapes' default.
 export async function getMixtapeById(id: string): Promise<MixtapeDTO> {
   const db = await getDb();
   const result = await db.execute({
@@ -653,8 +533,7 @@ export async function listMixtapes({
   limit = 54,
 }: {
   hydrateMembers?: boolean;
-  // Admin-only: also list `distributing` mixtapes (minted, assets still
-  // uploading). The public default is published-only.
+
   includeUnpublished?: boolean;
   limit?: number;
 } = {}): Promise<MixtapeDTO[]> {
@@ -674,13 +553,6 @@ export async function listMixtapes({
     : rows.map((row) => rowToMixtape(row, []));
 }
 
-/**
- * The mixtapes the subscribe-able /calendar.ics surfaces: every `published`
- * mixtape — a past event, dated by recorded_at. Upcoming live sessions come
- * from the PLAN side — `listUpcomingPlans` in ./recordings` — and
- * `mixtapes.planned_for` is not part of this read.
- * Members are hydrated so the .ics description can carry the tracklist.
- */
 export async function listCalendarMixtapes(): Promise<MixtapeDTO[]> {
   const db = await getDb();
   const result = await db.execute({
@@ -727,9 +599,6 @@ async function hydrateMixtape(row: MixtapeRow): Promise<MixtapeDTO> {
   return rowToMixtape(row, await getTracksForMixtape(row.id));
 }
 
-// The tracklist freezes at the mint: only an UNMINTED claim (no Log ID yet — the
-// row `promote_recording` inserts before minting) accepts member writes. This is
-// the immutability backstop that keeps a published checkpoint's tracklist fixed.
 async function assertUnmintedMixtape(id: string): Promise<void> {
   const db = await getDb();
   const result = await db.execute({

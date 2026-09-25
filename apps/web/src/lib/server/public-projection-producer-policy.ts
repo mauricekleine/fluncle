@@ -50,11 +50,6 @@ function staticPolicies(
   return producers.map((producerId) => ({ impact, kind: "static", producerId }));
 }
 
-/**
- * Closed policy over every atomic due-work producer. Static entries describe the authoritative
- * columns that producer writes; the three dynamic entries require their callsite to name the
- * branch it actually took. Nothing falls back to subject-type inference.
- */
 export const PUBLIC_PROJECTION_PRODUCER_POLICIES = [
   ...staticPolicies("neither", [
     "album-bio-fill",
@@ -143,8 +138,7 @@ export const PUBLIC_PROJECTION_PRODUCER_POLICIES = [
     "recording-mbid-resolved",
     "social-finding-touch",
     "track-capture-reconciliation",
-    // The capture-source pin writes only capture side-channel + YouTube provenance columns —
-    // no key, no seed state, no certification — so it moves no public aggregate.
+
     "track-capture-source-pin",
     "track-capture-source-pin-clear",
     "track-note-fill",
@@ -186,7 +180,6 @@ export const PUBLIC_PROJECTION_PRODUCER_POLICIES = [
 
 type ProducerInventory = readonly { producers: readonly string[] }[];
 
-/** Validate registry closure and return the unique producer lookup. Exported for fail-closed tests. */
 export function validatePublicProjectionProducerPolicies(
   inventory: ProducerInventory,
   policies: readonly PublicProjectionProducerPolicy[],
@@ -265,7 +258,6 @@ const POLICY_BY_PRODUCER = validatePublicProjectionProducerPolicies(
   PUBLIC_PROJECTION_PRODUCER_POLICIES,
 );
 
-/** Resolve one producer to explicit projection targets, rejecting every unregistered shortcut. */
 export function resolvePublicProjectionProducerTargets(
   producer: string,
   override?: PublicProjectionDynamicImpactOverride,

@@ -4,20 +4,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createIntegrationDb, seedCatalogueTrack, seedTrack } from "./integration-db";
 import { type ObservationEcho } from "./observation-echo";
 
-// THE OBSERVATION ECHO GATE'S LEDGER, against the real schema — the spoken sibling of
-// note-rejections.integration.test.ts, mirroring its cases one for one.
-//
-// The gate refuses to RENDER a script that echoes a sonic neighbour's script. The script is
-// held in the ledger, the operator rules, and the rejection remains visible for review.
-//
-// These run against the REAL in-memory libSQL schema (the generated migrations), because the
-// properties that matter most are SQL properties a mock could not prove: the partial unique
-// index that bounds the ledger, and the moot-when-voiced predicate on the open read.
-//
-// The one impure edge — accepting a held script RENDERS it (Cartesia + R2) — is mocked at the
-// `renderAndStoreObservation` seam, which is exactly the seam the resolve path shares with the
-// observe_track handler. The mock records what it was asked to render; the DB rows stay real.
-
 let db: Client;
 
 vi.mock("./db", async (importOriginal) => {
@@ -26,9 +12,6 @@ vi.mock("./db", async (importOriginal) => {
   return { ...actual, getDb: () => Promise.resolve(db) };
 });
 
-// The render seam: accepting a held script must call this with the finding + the held script.
-// Mocked because a unit test cannot (and must not) spend a Cartesia render; the seam is shared
-// with the observe handler, so the contract it proves is the one production takes.
 const renderMock = vi.hoisted(() =>
   vi.fn((..._args: unknown[]) =>
     Promise.resolve({
@@ -78,9 +61,6 @@ describe("the observation echo gate's ledger", () => {
     await seedTrack(db, { logId: "004.7.2I", trackId: TRACK_ID });
   });
 
-  // The partial unique index is LOAD-BEARING (the note ledger's precedent, same reasoning):
-  // it bounds the ledger by the archive rather than by the cron's tick rate, and the upsert's
-  // `on conflict (track_id) where resolved_at is null` cannot work without it.
   it("carries the partial unique index that bounds it (it survives the migration chain)", async () => {
     const result = await db.execute(
       `select sql from sqlite_master
@@ -107,15 +87,13 @@ describe("the observation echo gate's ledger", () => {
 
     const [held] = await listObservationRejections({ open: true });
 
-    // The whole point: the operator can READ what the model wrote.
     expect(held?.script).toBe("My shoulders went before I knew the tune had turned.");
-    // And WHY it was refused — with the other half of the comparison, not just a verdict.
+
     expect(held?.neighborLogId).toBe("027.2.8R");
     expect(held?.neighborScript).toBe("My shoulders went before I'd clocked the coordinate.");
     expect(held?.phrase).toBe("my shoulders went before");
     expect(held?.overlap).toBeCloseTo(0.34);
-    // And the dials THAT rejection was judged against — snapshotted, so a later retune
-    // cannot silently rewrite the meaning of this row.
+
     expect(held?.minPhraseWords).toBe(4);
     expect(held?.maxOverlap).toBeCloseTo(0.3);
   });
@@ -131,8 +109,7 @@ describe("the observation echo gate's ledger", () => {
     const open = await listObservationRejections({ open: true });
 
     expect(open).toHaveLength(1);
-    // The FRESHEST read is the one held — the later attempts are authored knowing the earlier
-    // echo, so the last one is the model's best effort.
+
     expect(open[0]?.script).toBe("The third read it tried.");
     expect(open[0]?.attempts).toBe(3);
   });
@@ -152,40 +129,33 @@ describe("the observation echo gate's ledger", () => {
     const result = await resolveObservationRejection(held?.id ?? "", "accepted");
 
     expect(result.skipped).toBe(false);
-    // The render seam was handed exactly the held script, for exactly this finding — with NULL
-    // provenance (an operator override, not a registry-prompt authorship).
+
     expect(renderMock).toHaveBeenCalledTimes(1);
     expect(renderMock).toHaveBeenCalledWith(
       expect.objectContaining({ trackId: TRACK_ID }),
       "A read the operator judges good.",
       expect.objectContaining({ promptVersion: null }),
     );
-    // The row settles (it leaves the queue) but is KEPT — the evidence behind a retune.
+
     expect(await listObservationRejections({ open: true })).toHaveLength(0);
     expect((await listObservationRejections({ open: false }))[0]?.resolution).toBe("accepted");
   });
 
-  // The spoken analogue of the note ledger's fill-empty-only rail: an observation that landed
-  // since the hold (a fresh script cleared the gate, or the operator rendered one) stands, and
-  // accepting the held script must not waste a render overwriting it.
   it("NEVER re-renders over a standing observation — accepting when one exists is a no-op", async () => {
     const { listObservationRejections, recordObservationRejection, resolveObservationRejection } =
       await import("./observation-rejections");
 
     await recordObservationRejection(TRACK_ID, "The agent's held read.", echo(), THRESHOLDS);
-    // Fetch the held row BEFORE the observation lands (the open read goes moot after).
+
     const [held] = await listObservationRejections({ open: true });
 
-    // An observation lands after the rejection was held.
     await db.execute({
       args: ["https://found.example/004.7.2I/observation.mp3", TRACK_ID],
       sql: "update findings set observation_audio_url = ? where track_id = ?",
     });
 
-    // The open read already treats the row as moot (never surface a non-actionable row)…
     expect(await listObservationRejections({ open: true })).toHaveLength(0);
 
-    // …and a direct ruling on it still refuses to spend a render.
     const result = await resolveObservationRejection(held?.id ?? "", "accepted");
 
     expect(result.skipped).toBe(true);
@@ -225,8 +195,6 @@ describe("the observation echo gate's ledger", () => {
     });
   });
 
-  // THE CATALOGUE RAIL: the read drives through the `findings ⋈ tracks` INNER join, so a track
-  // Fluncle never certified cannot surface here even with a row against it.
   it("a CATALOGUE track never surfaces in the ledger, even with a row against it", async () => {
     const { listObservationRejections, recordObservationRejection } =
       await import("./observation-rejections");
@@ -243,8 +211,6 @@ describe("the observation echo gate's ledger", () => {
     expect(await listObservationRejections({ trackId: CATALOGUE_ID })).toHaveLength(0);
   });
 });
-
-// ── The tunable dials, against the real `settings` KV ─────────────────────────────
 
 describe("the observation echo gate's dials", () => {
   beforeEach(async () => {
@@ -268,8 +234,6 @@ describe("the observation echo gate's dials", () => {
 
     await setObservationEchoThresholds({ maxOverlap: 0.5, minPhraseWords: 6 });
 
-    // The two written families' corpora differ (a 40s script vs a one-line note), so their
-    // honest thresholds can drift apart — the dials must be independent.
     expect(await getNoteEchoThresholds()).toEqual({ maxOverlap: 0.3, minPhraseWords: 4 });
   });
 

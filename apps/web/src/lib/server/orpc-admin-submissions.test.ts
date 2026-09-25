@@ -8,14 +8,6 @@ import {
   warmOrpcRouter,
 } from "./orpc-test-kit";
 
-// The admin wave's `admin-submissions` parity + auth proof, driven end-to-end
-// through `handleOrpc` so the REAL admin auth spine runs.
-//
-//   - list_submissions / get_submission — admin tier (live `requireAdmin`): the
-//     agent passes (200), a non-admin is a 401.
-//   - approve_submission / reject_submission — operator tier (live
-//     `requireOperator`): the agent is a 403, the operator passes.
-
 const listPendingSubmissions = vi.fn();
 const getSubmission = vi.fn();
 const approveSubmission = vi.fn();
@@ -55,7 +47,6 @@ beforeEach(() => {
   triageSubmission.mockReset();
 });
 
-// ── list_submissions — admin tier ────────────────────────────────────────────
 describe("oRPC list_submissions (GET /admin/submissions)", () => {
   it("401s with no admin token", async () => {
     const { handleOrpc } = await import("./orpc");
@@ -76,7 +67,6 @@ describe("oRPC list_submissions (GET /admin/submissions)", () => {
   });
 });
 
-// ── get_submission — admin tier ──────────────────────────────────────────────
 describe("oRPC get_submission (GET /admin/submissions/{submissionId})", () => {
   it("returns the live envelope for the operator", async () => {
     getSubmission.mockResolvedValueOnce(SUBMISSION);
@@ -92,7 +82,6 @@ describe("oRPC get_submission (GET /admin/submissions/{submissionId})", () => {
   });
 });
 
-// ── approve_submission — operator tier ───────────────────────────────────────
 describe("oRPC approve_submission (POST .../approve)", () => {
   it("401s with no token", async () => {
     const { handleOrpc } = await import("./orpc");
@@ -132,7 +121,6 @@ describe("oRPC approve_submission (POST .../approve)", () => {
   });
 });
 
-// ── reject_submission — operator tier ────────────────────────────────────────
 describe("oRPC reject_submission (POST .../reject)", () => {
   it("403s the AGENT (operator-only)", async () => {
     const { handleOrpc } = await import("./orpc");
@@ -161,7 +149,6 @@ describe("oRPC reject_submission (POST .../reject)", () => {
   });
 });
 
-// ── triage_submission — admin tier (agent-allowed) ───────────────────────────
 describe("oRPC triage_submission (POST .../triage)", () => {
   const body = { verdict: "looks like a find — not yet logged" };
 
@@ -186,8 +173,7 @@ describe("oRPC triage_submission (POST .../triage)", () => {
 
     expect(response?.status).toBe(200);
     expect(await readJson(response)).toEqual({ ok: true, submission: triaged });
-    // The third arg is the PROVENANCE stamp — which prompt-registry version phrased the
-    // verdict. This call sent none, so it is null (docs/agents/prompt-registry.md).
+
     expect(triageSubmission).toHaveBeenCalledWith(
       SUBMISSION_ID,
       "looks like a find — not yet logged",

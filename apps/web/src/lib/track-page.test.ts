@@ -12,9 +12,6 @@ import {
 
 describe("the destination's address", () => {
   it("is the row's permanent id, percent-encoded", () => {
-    // The crawler's ids are namespaced (`mb_<recording-mbid>`) and the freshness tap's are
-    // (`sp_<spotify-track-id>`); neither needs escaping, but a legacy id is whatever Spotify gave
-    // us, so the segment is encoded rather than trusted.
     expect(trackPagePath("mb_2b1c4d5e")).toBe("/track/mb_2b1c4d5e");
     expect(trackPagePath("a b/c")).toBe("/track/a%20b%2Fc");
     expect(trackPageUrl("mb_2b1c4d5e")).toBe("https://www.fluncle.com/track/mb_2b1c4d5e");
@@ -71,9 +68,6 @@ describe("the archive track's structured data", () => {
   });
 
   it("NEVER carries a Log ID identifier or a Found date — it is not a certification", () => {
-    // The rail, in schema form. A `/log` MusicRecording emits `fluncle-log-id` identifiers and a
-    // Found `datePublished`; a recording Fluncle has never ruled on can claim neither, and a node
-    // that did would be a claim the archive cannot back.
     const serialized = JSON.stringify(archiveTrackJsonLd(FULL));
 
     expect(serialized).not.toContain("fluncle-log-id");
@@ -163,10 +157,6 @@ describe("the archive track's structured data", () => {
 
 describe("the length the archive does not hold", () => {
   it("omits the `duration` KEY rather than emitting a zero-length claim", () => {
-    // `tracks.duration_ms` is NOT NULL and carries 0 as its "unknown" (crawl.ts), so an
-    // unconditional emit asserts `"PT0M0S"` — a zero-length recording — to crawlers and answer
-    // engines. Asserted on the KEY's absence, not on the string, because a page that emits
-    // `duration: undefined` or `duration: ""` is the same defect wearing a different value.
     const node = archiveTrackJsonLd({ ...FULL, durationMs: undefined });
 
     expect(node).not.toHaveProperty("duration");
@@ -187,9 +177,6 @@ describe("the sameAs containment seam", () => {
   ];
 
   it("keeps every EXCLUDED kind out of the graph, keyed on the kind and not on a URL", () => {
-    // The guard the rail needs: it fails if a future edit lets an excluded kind through, and it
-    // survives a rename of the service or a change to its URL shape, because it asks the seam
-    // which kinds it excludes rather than grepping for a literal.
     const urls = sameAsUrls(EVERY_KIND);
 
     for (const kind of SAME_AS_EXCLUDED_LISTEN_KINDS) {
@@ -210,9 +197,6 @@ describe("the sameAs containment seam", () => {
   });
 
   it("Beatport is one of the excluded kinds — the standing rail, made executable", () => {
-    // db/schema.ts §F: the Beatport URL may be RENDERED as a link and must never enter a derived
-    // corpus, and a `sameAs` graph is a derived corpus (log-schema.ts: "for crawlers + AI
-    // answer-engines"). The certified /log page withholds it; this surface must too.
     expect(SAME_AS_EXCLUDED_LISTEN_KINDS).toContain("beatport");
   });
 

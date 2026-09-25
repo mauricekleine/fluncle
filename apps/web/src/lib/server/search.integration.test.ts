@@ -1,21 +1,3 @@
-// The search resolver against a REAL libSQL database — the migrations, the FTS5 index and
-// its triggers, and `vector_distance_cos` over real `F32_BLOB` vectors. Nothing here is
-// mocked except the network (there is no network: the LLM tier is stubbed).
-//
-// It exists because three of this feature's load-bearing pieces are SQL, not TypeScript, and
-// a mocked-DB test would happily pass while every one of them was broken:
-//
-//   - the FTS5 DDL + the three sync triggers (they must apply on the same engine the deploy
-//     applies them on — and if they fail here, `deploy:gate` fails and prod is blocked, which
-//     is exactly the guard we want);
-//   - the LEFT JOIN that lets an uncertified track be FOUND while never being certified;
-//   - the vector scan, with the probe bound as a raw BLOB.
-//
-// The uncertified rows here are SYNTHETIC — the crawler fills the real catalogue in
-// production, but a test must state EXACTLY which unlit rows exist: the code path that
-// renders an unlit row and links it OUT to Spotify is proven on a known set, never on
-// whatever the crawl happens to have brought in.
-
 import { type Client, createClient } from "@libsql/client";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { copyFile, mkdtemp, rm } from "node:fs/promises";
@@ -34,16 +16,15 @@ import {
   labelNameProbeStatement,
   resolveFilterEntities,
   searchArchive as searchArchiveLive,
+  searchLikeTrack,
 } from "./search";
+import { SEARCH_STYLES } from "../search-styles";
+import { resetStyleProbeCache } from "./style-probe";
 
-// The LLM tier is a network call. Stubbed here so each test states EXACTLY what the model
-// returned — including "nothing", which is the degradation the spec demands be proven.
 const translateQuery = vi.hoisted(() => vi.fn<(q: string) => Promise<unknown>>());
 
 vi.mock("./search-llm", () => ({ translateQuery }));
 
-// The one live database, swapped in fresh for each test. `getDb` closes over it, so the REAL
-// query functions run REAL SQL against the REAL migrated schema.
 let db: Client;
 let fixtureDirectory: string | undefined;
 let fixtureClient: Client | undefined;
@@ -63,21 +44,12 @@ vi.mock("./db", async () => {
   return { ...actual, getDb: async () => db };
 });
 
-// This suite owns the real bounded-SQL diagnostic proof. Public callers omit this explicit seam
-// and degrade to full text when Sonar is dark, which search-sonar.test.ts proves separately.
-function searchArchive(options: { limit?: number; q: string }) {
+function searchArchive(options: { beforeVector?: () => Promise<void>; limit?: number; q: string }) {
   return searchArchiveLive({ ...options, allowBoundedSonicForDiagnostics: true });
 }
 
-// ── Fixtures ─────────────────────────────────────────────────────────────────────────
-
 const DIMS = 1024;
 
-/**
- * A unit vector at `angle` radians in the (0,1) plane of the MuQ space. Cosine similarity
- * between two of them is exactly `cos(a − b)`, so the expected neighbour ORDER is arithmetic
- * rather than a guess — which is what makes the vector assertions below real assertions.
- */
 function angleVector(angle: number): Float32Array {
   const vector = new Float32Array(DIMS);
 
@@ -94,7 +66,6 @@ type Fixture = {
   bpm?: number;
   key?: string;
   label?: string;
-  /** A `findings` row is minted when this is set — i.e. this track is a CERTIFIED finding. */
   logId?: string;
   releaseDate?: string;
   title: string;
@@ -124,8 +95,6 @@ async function seed(client: Client, track: Fixture): Promise<void> {
       values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   });
 
-  // The vector rides in the satellite, keyed 1:1 — and its presence is what the `has_embedding`
-  // mirror above claims, so the two are written together exactly as the pipeline writes them.
   if (embedding) {
     await client.execute({
       args: [track.trackId, new Uint8Array(embedding.buffer)],
@@ -138,35 +107,20 @@ async function seed(client: Client, track: Fixture): Promise<void> {
       args: [track.trackId, track.logId, "2026-07-01T00:00:00.000Z"],
       sql: `insert into findings (track_id, log_id, added_at) values (?, ?, ?)`,
     });
-    // Keystone 1's maintained discriminator, set exactly as `publishTrack` does: a track WITH a
-    // findings row is not catalogue. The link calls below read it to move the entity's maintained
-    // `certified_finding_count`, which is the half of the hub gate that decides whether search may
-    // offer this label/album at all — so the discriminator must be set before them.
     await client.execute({
       args: [track.trackId],
       sql: `update tracks set is_catalogue = 0 where track_id = ?`,
     });
   }
 
-  // The GRAPH POINTERS, written by the REAL publish-path functions rather than by a hand-
-  // rolled insert — so the `labels` / `albums` rows and the `tracks.label_id` / `album_id`
-  // edges this fixture stands on are exactly the ones production writes. The entity tier
-  // reads THROUGH those pointers; a fixture that only set the raw strings would let a broken
-  // join pass.
   await linkTrackToLabel(track.trackId, track.label);
   await linkTrackToAlbum(track.trackId, track.album);
 }
 
-// Build the real migrated schema, FTS triggers and publish-path seed once. Each test opens
-// its own copy of the closed template: interactive transactions stay file-backed, while
-// schema creation and seed writes are not repeated for every search assertion.
 beforeAll(async () => {
   templateDirectory = await mkdtemp(join(tmpdir(), "fluncle-search-template-"));
   db = await createIntegrationDb({ url: `file:${join(templateDirectory, "template.db")}` });
   try {
-    // Three certified findings — their angles fix the sonic order around the 1991 anchor
-    // (0.0): Netsky at 0.1 is nearest, the uncertified track at 0.3 next, Andromedik at 1.2
-    // furthest.
     await seed(db, {
       album: "Second Nature",
       angle: 0.1,
@@ -204,11 +158,6 @@ beforeAll(async () => {
       trackId: "certified-andromedik",
     });
 
-    // …and one UNCERTIFIED track. A `tracks` row with no `findings` row: a light Fluncle's
-    // instruments measured from a distance and never went to. It has no coordinate, so search
-    // must find it and the client must link it OUT. It sits on a label AND a record Fluncle
-    // HAS certified something on, so both entities carry it — which is the whole reason the
-    // graph pages exist.
     await seed(db, {
       album: "Second Nature",
       angle: 0.3,
@@ -226,7 +175,6 @@ beforeAll(async () => {
       sql: `insert into artists (id, name, slug, created_at, updated_at)
           values ('a1', 'Netsky', 'netsky', '2026-07-01', '2026-07-01')`,
     });
-    // The copied file must contain committed pages, never depend on a WAL sidecar.
     const checkpoint = await db.execute("pragma wal_checkpoint(TRUNCATE)");
     if (Number(checkpoint.rows[0]?.busy) !== 0) {
       throw new Error("Search fixture template WAL checkpoint is busy");
@@ -261,8 +209,6 @@ afterAll(async () => {
     templateDirectory = undefined;
   }
 });
-
-// ── The index itself ─────────────────────────────────────────────────────────────────
 
 describe("the FTS5 index", () => {
   it("isolates copied rows and FTS triggers from other fixtures and the template", async () => {
@@ -312,8 +258,6 @@ describe("the FTS5 index", () => {
   });
 });
 
-// ── Tier 1 · the coordinate ──────────────────────────────────────────────────────────
-
 describe("tier 1 — a coordinate", () => {
   it("resolves straight to the finding's page, with no candidate scan", async () => {
     const result = await searchArchive({ q: "024.7.2R" });
@@ -344,12 +288,6 @@ describe("tier 1 — a coordinate", () => {
   });
 });
 
-// ── Tier 1½ · a pasted Spotify link ──────────────────────────────────────────────────
-
-// The archive is Spotify-anchored: wherever an anchor has landed, `tracks.spotify_uri` holds
-// `spotify:track:<id>` (anchor.ts writes both columns in one statement). So a pasted share-sheet
-// URL — or the bare URI — is an IDENTITY the archive answers with one indexed seek, never a
-// Spotify call; an id the archive does not hold falls through to the ordinary tiers.
 describe("tier 1½ — a pasted Spotify link", () => {
   const NINE_CLOUDS_ID = "1A2b3C4d5E6f7G8h9I0jKl";
 
@@ -395,7 +333,6 @@ describe("tier 1½ — a pasted Spotify link", () => {
       q: "https://open.spotify.com/track/0000000000000000000000",
     });
 
-    // The link becomes text: no tier answers it, and nothing throws on the way down.
     expect(result.results).toEqual([]);
   });
 
@@ -413,11 +350,6 @@ describe("tier 1½ — a pasted Spotify link", () => {
   });
 });
 
-// ── Tier 2 · the exact entity ────────────────────────────────────────────────────────
-
-// An artist, a label, and an album are ONE affordance — the thing you searched for, offered as
-// a destination, with its tracks under it. The label and the album are first-class destinations,
-// and these three tests are the same test three times ON PURPOSE.
 describe("tier 2 — an exact entity name", () => {
   it("jumps to the artist page, offers the artist, and lists their tracks under it", async () => {
     const result = await searchArchive({ q: "Netsky" });
@@ -440,7 +372,6 @@ describe("tier 2 — an exact entity name", () => {
     expect(result.entities).toEqual([
       { kind: "label", name: "Hospital Records", slug: "hospital-records" },
     ]);
-    // No filter chip: the entity IS the answer, exactly as it is for the artist.
     expect(result.filters).toBeUndefined();
     expect(result.results.map((hit) => hit.trackId)).toEqual([
       "certified-netsky",
@@ -465,9 +396,6 @@ describe("tier 2 — an exact entity name", () => {
     expect(translateQuery).not.toHaveBeenCalled();
   });
 
-  // The guard that keeps search from offering an empty page: the catalogue crawler mints a
-  // `labels` row for every imprint it walks past, and one Fluncle has certified NOTHING on has
-  // nothing to show. It stays the filter it always was — never a dead link.
   it("declines to jump to a label with no certified finding on it", async () => {
     await db.execute({
       args: [],
@@ -484,25 +412,14 @@ describe("tier 2 — an exact entity name", () => {
   });
 });
 
-// ── Aliases · an artist answers to every name ────────────────────────────────────────
-
-// The MusicBrainz-harvested AKAs (`artist-resolution.ts`) that solve DnB's many-names problem
-// were invisible to search — a crew member typing a producer's other name found nothing. They
-// now resolve through the SAME entity path the primary name does, in the deterministic tiers
-// (exact in tier 2, prefix in tier 3), in front of the model — so an AKA is a jump target
-// exactly as the real name is, and it keeps working when the LLM is down.
 describe("aliases — an artist answers to every name", () => {
   beforeEach(async () => {
-    // A second artist whose PRIMARY name collides with one of Netsky's aliases (the tie case).
     await db.execute({
       args: [],
       sql: `insert into artists (id, name, slug, created_at, updated_at)
             values ('a2', 'Origin', 'origin', '2026-07-01', '2026-07-01')`,
     });
 
-    // Netsky's AKAs. One MB-curated (`auto`), one operator-ruled (`confirmed`) — both trusted,
-    // exactly as they feed the public `alternateName`. One `hint` (a weak MB "Search hint" lead,
-    // never public) that must NOT resolve. One that is ALSO Origin's primary name (the tie).
     const aliasRows: [string, string, string, string, string, string][] = [
       ["aa1", "Boris Daenen", "boris-daenen", "musicbrainz", "name", "auto"],
       ["aa2", "Netsky Live", "netsky-live", "operator", "name", "confirmed"],
@@ -527,7 +444,6 @@ describe("aliases — an artist answers to every name", () => {
     expect(byAlias.kind).toBe("entity");
     expect(byAlias.redirect).toBe("/artist/netsky");
     expect(byAlias.entities).toEqual([{ kind: "artist", name: "Netsky", slug: "netsky" }]);
-    // The alias lands on the canonical artist, so it lists exactly what the real name lists.
     expect(byAlias.results.map((hit) => hit.trackId)).toEqual(byName.results.map((h) => h.trackId));
     expect(byAlias.results.map((hit) => hit.trackId)).toEqual([
       "certified-netsky",
@@ -537,15 +453,11 @@ describe("aliases — an artist answers to every name", () => {
   });
 
   it("trusts BOTH an `auto` (MusicBrainz) and a `confirmed` (operator) alias", async () => {
-    // For an artist, `auto` is a DIRECT MB statement of identity — trusted exactly as an
-    // operator-`confirmed` alias is (there is no weaker `candidate` tier). Both resolve.
     expect((await searchArchive({ q: "Boris Daenen" })).redirect).toBe("/artist/netsky");
     expect((await searchArchive({ q: "Netsky Live" })).redirect).toBe("/artist/netsky");
   });
 
   it("prefix-matches an alias as a tier-3 jump target, exactly as it does the name", async () => {
-    // "boris" is a bare token that is nobody's exact name — it falls to tier 3, where the prefix
-    // jump lives. The AKA surfaces the artist beside the (here empty) row set.
     const result = await searchArchive({ q: "boris" });
 
     expect(result.kind).toBe("token");
@@ -554,8 +466,6 @@ describe("aliases — an artist answers to every name", () => {
   });
 
   it("lets the PRIMARY name win a tie against another artist's alias", async () => {
-    // "Origin" is Origin's real name AND Netsky's AKA. A name the query names DIRECTLY must beat
-    // one it only reaches through an alias — so this lands on Origin, never on Netsky.
     const result = await searchArchive({ q: "Origin" });
 
     expect(result.redirect).toBe("/artist/origin");
@@ -563,8 +473,6 @@ describe("aliases — an artist answers to every name", () => {
   });
 
   it("does NOT resolve a `hint` alias — a weak lead is never a public answer", async () => {
-    // A MB "Search hint" is kept for the record but never rendered publicly, so it never
-    // resolves a search either. "Phantom Hint" names no artist here; it falls through.
     const result = await searchArchive({ q: "Phantom Hint" });
 
     expect(result.redirect).toBeUndefined();
@@ -573,20 +481,7 @@ describe("aliases — an artist answers to every name", () => {
   });
 });
 
-// ── Aliases · a label answers to every spelling the operator ruled ───────────────────
-
-// `label_aliases` is the structural twin of `artist_aliases`, and it was invisible to search: a
-// merge folds the loser's name in as a `confirmed` alias, `ensureLabel` consults that fold before
-// minting — and then a reader typing the folded spelling found nothing. The label read now resolves
-// through it exactly as the artist read does, under the same `predicate` (exact in tier 2, prefix
-// in tier 3), and the filter path folds the same way.
-//
-// THE ONE DIVERGENCE FROM THE ARTIST PRECEDENT, and the reason these tests are not a copy of the
-// ones above: the trust enums differ. `artist_aliases.status` is `auto|confirmed` and BOTH are
-// trusted; `label_aliases.status` is `candidate|confirmed`, where a `candidate` is an unruled
-// derivation guess the operator has not seen. Only `confirmed` may ever answer.
 describe("aliases — a label answers to every spelling the operator ruled", () => {
-  /** The `labels` row one slug names — minted by the real publish path, so its id is the real one. */
   async function labelId(slug: string): Promise<string> {
     const rows = await db.execute({ args: [slug], sql: `select id from labels where slug = ?` });
     const id = rows.rows[0]?.id;
@@ -610,7 +505,6 @@ describe("aliases — a label answers to every spelling the operator ruled", () 
     });
   }
 
-  /** The compiled SQL for one filter set, resolved exactly as the reads resolve it. */
   async function compiledSql(filters: Parameters<typeof compileFilters>[0]): Promise<string> {
     const clauses = compileFilters(filters, await resolveFilterEntities(filters));
 
@@ -618,17 +512,12 @@ describe("aliases — a label answers to every spelling the operator ruled", () 
   }
 
   beforeEach(async () => {
-    // A below-floor imprint the crawler walked past — nothing points at it, so it clears neither
-    // half of the hub gate. It carries a CONFIRMED alias, which must not be a way back in.
     await db.execute({
       args: [],
       sql: `insert into labels (id, name, slug, created_at, updated_at)
             values ('l-crawled', 'Crawled Imprint', 'crawled-imprint', '2026-07-01', '2026-07-01')`,
     });
 
-    // Hospital Records absorbed "Med School" in a merge (the `confirmed` fold), carries a weak
-    // `hint` that is never public, and — the tie — also answers to "Andromedik", which is another
-    // real label's PRIMARY name.
     await addAlias("hospital-records", [
       "la1",
       "Med School",
@@ -653,7 +542,6 @@ describe("aliases — a label answers to every spelling the operator ruled", () 
       "name",
       "confirmed",
     ]);
-    // An UNRULED Apple derivation on the 1991 imprint — awaiting the operator, never an answer.
     await addAlias("1991", [
       "la4",
       "Nineteen Ninety One",
@@ -680,7 +568,6 @@ describe("aliases — a label answers to every spelling the operator ruled", () 
     expect(byAlias.entities).toEqual([
       { kind: "label", name: "Hospital Records", slug: "hospital-records" },
     ]);
-    // The alias lands on the canonical label, so it lists exactly what the real name lists.
     expect(byAlias.results.map((hit) => hit.trackId)).toEqual(byName.results.map((h) => h.trackId));
     expect(byAlias.results.map((hit) => hit.trackId)).toEqual([
       "certified-netsky",
@@ -690,8 +577,6 @@ describe("aliases — a label answers to every spelling the operator ruled", () 
   });
 
   it("prefix-matches a confirmed alias as a tier-3 jump target, exactly as it does the name", async () => {
-    // "med" is a bare token that is nobody's exact name — it falls to tier 3, where the prefix
-    // jump lives. The folded spelling surfaces the label beside the (here empty) row set.
     const result = await searchArchive({ q: "med" });
 
     expect(result.kind).toBe("token");
@@ -702,8 +587,6 @@ describe("aliases — a label answers to every spelling the operator ruled", () 
   });
 
   it("lets the PRIMARY name win a tie against another label's alias", async () => {
-    // "Andromedik" is one label's real name AND Hospital's folded spelling. A name the query names
-    // DIRECTLY must beat one it only reaches through an alias.
     const result = await searchArchive({ q: "Andromedik" });
 
     expect(result.redirect).toBe("/label/andromedik");
@@ -711,9 +594,6 @@ describe("aliases — a label answers to every spelling the operator ruled", () 
   });
 
   it("does NOT resolve a `candidate` alias — an unruled guess is never a public answer", async () => {
-    // THE DIVERGENCE FROM ARTISTS. `candidate` is an Apple-derived lead sitting in the operator's
-    // review queue; trusting it the way an artist's `auto` is trusted would let a derivation
-    // rename a label in public.
     const result = await searchArchive({ q: "Nineteen Ninety One" });
 
     expect(result.redirect).toBeUndefined();
@@ -729,8 +609,6 @@ describe("aliases — a label answers to every spelling the operator ruled", () 
   });
 
   it("does NOT resurrect a below-floor label through its alias — the hub gate outranks the fold", async () => {
-    // "Crawled Imprint" declines the jump by NAME (the gate), so it must decline it by ALIAS too:
-    // the alias is a second spelling of the same label, never a second inclusion rule.
     const byName = await searchArchive({ q: "Crawled Imprint" });
     const byAlias = await searchArchive({ q: "Walked Past Records" });
 
@@ -740,8 +618,6 @@ describe("aliases — a label answers to every spelling the operator ruled", () 
   });
 
   it("leaves the ALBUM read alone — an album has no alias table to fold through", async () => {
-    // The album branch shares this code path; the fold is label-only, so an album still answers to
-    // exactly one name and binds exactly one needle.
     const result = await searchArchive({ q: "second nature" });
 
     expect(result.redirect).toBe("/album/second-nature");
@@ -764,8 +640,6 @@ describe("aliases — a label answers to every spelling the operator ruled", () 
   });
 
   it("folds punctuation on the way to the alias too — one question, however it is typed", async () => {
-    // Compared against the CANONICAL name, not against the other spelling: two empty answers are
-    // equal too, and that is exactly the failure this has to catch.
     expect(await resolveFilterEntities({ label: "med-school!" })).toEqual(
       await resolveFilterEntities({ label: "Hospital Records" }),
     );
@@ -781,8 +655,6 @@ describe("aliases — a label answers to every spelling the operator ruled", () 
     expect(await compiledSql({ label: "Walked Past Records" })).toBe("lower(tracks.label) = ?");
   });
 });
-
-// ── Tier 3 · the bare token ──────────────────────────────────────────────────────────
 
 describe("tier 3 — a bare token", () => {
   it("finds by title through FTS5, without reaching the model", async () => {
@@ -800,8 +672,6 @@ describe("tier 3 — a bare token", () => {
   });
 
   it("offers the artist as a jump target beside the rows", async () => {
-    // "netsky" is an EXACT artist name, so tier 2 claims it; "nets" is not, so it falls to
-    // tier 3 — which is where the prefix jump lives.
     const result = await searchArchive({ q: "nets" });
 
     expect(result.kind).toBe("token");
@@ -818,8 +688,6 @@ describe("tier 3 — a bare token", () => {
   });
 
   it("orders the jump targets artist → label → album (a name is most often a person)", async () => {
-    // "andro" prefixes the Andromedik LABEL (the artist's own imprint); "net" prefixes the
-    // Netsky artist. Ask for both at once and the artist leads.
     const andro = await searchArchive({ q: "andro" });
 
     expect(andro.entities.map((entity) => entity.kind)).toEqual(["label"]);
@@ -830,8 +698,6 @@ describe("tier 3 — a bare token", () => {
     expect(nets.entities[0]?.kind).toBe("artist");
   });
 });
-
-// ── The catalogue rule ───────────────────────────────────────────────────────────────
 
 describe("the catalogue rule — findings are named, the rest is not", () => {
   it("finds an uncertified track, gives it NO coordinate, and links it OUT", async () => {
@@ -847,7 +713,6 @@ describe("the catalogue rule — findings are named, the rest is not", () => {
   it("puts certified rows first — bm25 is corpus-relative, so the tiers cannot be blended", async () => {
     const result = await searchArchive({ q: "netsky" });
 
-    // Tier 2 claims the exact name and redirects; the label filter shows the ordering.
     const byLabel = await searchArchive({ q: "Hospital Records" });
 
     expect(byLabel.results.map((hit) => hit.certified)).toEqual([true, false]);
@@ -862,8 +727,6 @@ describe("the catalogue rule — findings are named, the rest is not", () => {
     }
   });
 });
-
-// ── Tier 4 · the filters ─────────────────────────────────────────────────────────────
 
 describe("tier 4 — language becomes filters, and SQL does the retrieval", () => {
   it("executes an artist + key filter", async () => {
@@ -908,8 +771,6 @@ describe("tier 4 — language becomes filters, and SQL does the retrieval", () =
   });
 
   it("returns an HONEST empty when real columns simply do not match", async () => {
-    // The archive's one Andromedik track is in B minor. The right answer is "nothing", not a
-    // consolation prize of fuzzy text hits.
     translateQuery.mockResolvedValue({ artist: "Andromedik", key: "A minor" });
 
     const result = await searchArchive({ q: "Andromedik tracks in A minor" });
@@ -920,20 +781,7 @@ describe("tier 4 — language becomes filters, and SQL does the retrieval", () =
   });
 });
 
-// ── The name filters, resolved to indexed ids ────────────────────────────────────────
-
-// A filter carries a NAME; the graph is keyed by ID. Compiled against the raw columns, a name
-// meant a full pass over `tracks` on the commonest search there is — so the name is resolved
-// FIRST, against the small entity tables, and the filter becomes an indexed seek
-// (`track_artists.artist_id`, `tracks.label_id`, `tracks.album_id`).
-//
-// These tests are the SAME test twice on purpose: the id path and the string path must return
-// the same rows for an entity the graph knows, and the string path must still be REACHED —
-// and still work — for a name it does not. Backlog Wave 3-2.
 describe("the name filters resolve to indexed ids (and fall back when they cannot)", () => {
-  /** Mint the artist entities the graph edges need, then stamp the edges through the REAL
-      production link path (which also moves the maintained `renderable_track_count` the
-      resolver's guard reads — a hand-rolled insert would leave it at 0 and prove nothing). */
   async function seedArtistEntities(
     entities: { name: string; slug: string }[],
     trackIds: string[],
@@ -949,7 +797,6 @@ describe("the name filters resolve to indexed ids (and fall back when they canno
     await linkTracksToArtistEntities(trackIds);
   }
 
-  /** The compiled SQL for one filter set, resolved exactly as the reads resolve it. */
   async function compiledSql(filters: Parameters<typeof compileFilters>[0]): Promise<string> {
     const clauses = compileFilters(filters, await resolveFilterEntities(filters));
 
@@ -957,13 +804,11 @@ describe("the name filters resolve to indexed ids (and fall back when they canno
   }
 
   it("seeks the artist EDGE, and returns exactly what the substring scan returned", async () => {
-    // The fixture's `a1` Netsky row has no edges yet, so this is the fallback's answer…
     const beforeSql = await compiledSql({ artist: "Netsky" });
     const before = await searchArchive({ q: "Netsky" });
 
     expect(beforeSql).toContain("lower(tracks.artists_json) like");
 
-    // …and after the edges land it is the graph's answer. Identical rows, different shape.
     await seedArtistEntities([], ["certified-netsky", "uncertified-netsky"]);
 
     const afterSql = await compiledSql({ artist: "Netsky" });
@@ -982,7 +827,6 @@ describe("the name filters resolve to indexed ids (and fall back when they canno
   });
 
   it("finds a track that credits the artist SECOND — an edge is not a lead credit", async () => {
-    // "Take Me Away - Lexurus Remix" credits ["Andromedik", "Lexurus"]; Lexurus is position 2.
     await seedArtistEntities([{ name: "Lexurus", slug: "lexurus" }], ["certified-andromedik"]);
     translateQuery.mockResolvedValue({ artist: "Lexurus" });
 
@@ -993,8 +837,6 @@ describe("the name filters resolve to indexed ids (and fall back when they canno
   });
 
   it("KEEPS the substring scan for a name Fluncle holds no artist entity for", async () => {
-    // Bev Lee Harling is credited on the Netsky finding but has no `artists` row — nothing to
-    // seek, so the only thing that can still answer is the raw credit text. It does.
     translateQuery.mockResolvedValue({ artist: "Bev Lee Harling" });
 
     const result = await searchArchive({ q: "Bev Lee Harling tracks" });
@@ -1007,8 +849,6 @@ describe("the name filters resolve to indexed ids (and fall back when they canno
   });
 
   it("keeps the substring scan for an artist with no edges", async () => {
-    // THE COUNT GUARD. `a1` (Netsky) exists but carries no edges — resolving it would hand back a
-    // confident, silent EMPTY. It stays on the string, which is the degradation contract holding.
     expect(await resolveFilterEntities({ artist: "Netsky" })).toEqual({});
 
     const result = await searchArchive({ q: "Netsky" });
@@ -1018,13 +858,6 @@ describe("the name filters resolve to indexed ids (and fall back when they canno
       "uncertified-netsky",
     ]);
   });
-
-  // ── the two RANKS of the artist filter resolve, asked as two statements ────────────────────
-  //
-  // A primary name or slug is rank 0 and an AKA is rank 1, and the resolver asks them in that order
-  // so rank 0 can be an indexed seek instead of a scan of the growing `artists` table. These pin the
-  // behaviour that ordering encodes — the alias still resolves, it never outranks a primary name,
-  // and the count guard holds on both ranks.
 
   it("resolves a trusted AKA to the same artist the primary name resolves to", async () => {
     await seedArtistEntities([{ name: "Lexurus", slug: "lexurus" }], ["certified-andromedik"]);
@@ -1041,8 +874,6 @@ describe("the name filters resolve to indexed ids (and fall back when they canno
   });
 
   it("lets a PRIMARY name outrank another artist's AKA for the same spelling", async () => {
-    // `ax0` is credited on the track and answers to "Lexurus" by name; `ax1` carries "Lexurus" only
-    // as an AKA. Rank 0 is asked first, so the primary wins however the two rows are stored.
     await seedArtistEntities(
       [
         { name: "Lexurus", slug: "lexurus" },
@@ -1060,7 +891,6 @@ describe("the name filters resolve to indexed ids (and fall back when they canno
   });
 
   it("holds the count guard on the AKA rank — an edgeless artist resolves no id", async () => {
-    // `a1` (the fixture's Netsky row) has no edges, so neither rank may hand back its id.
     await db.execute({
       args: [],
       sql: `insert into artist_aliases (id, artist_id, alias, alias_slug, source, kind, status, created_at)
@@ -1075,8 +905,6 @@ describe("the name filters resolve to indexed ids (and fall back when they canno
 
   it("reads the GRAPH on the model's tier too — the emitted name is resolved, not scanned", async () => {
     await seedArtistEntities([], ["certified-netsky", "uncertified-netsky"]);
-    // Drop ONE edge while the raw `artists_json` still credits Netsky on both rows. A filter that
-    // read the JSON would return two; one that seeks the edge returns one. It returns one.
     await db.execute({
       args: ["uncertified-netsky"],
       sql: `delete from track_artists where track_id = ?`,
@@ -1096,8 +924,6 @@ describe("the name filters resolve to indexed ids (and fall back when they canno
     const result = await searchArchive({ q: "like Nine Clouds but Netsky" });
 
     expect(result.kind).toBe("sonic");
-    // Ranked by distance to the 1991 anchor: netsky@0.1 then uncertified-netsky@0.3, and NOTHING
-    // else — the artist edge bounded the scan.
     expect(result.results.map((hit) => hit.trackId)).toEqual([
       "certified-netsky",
       "uncertified-netsky",
@@ -1117,8 +943,6 @@ describe("the name filters resolve to indexed ids (and fall back when they canno
   });
 
   it("folds punctuation on the way to the label id — one question, however it is typed", async () => {
-    // The pointer is reached by SLUG, so "hospital records" and "Hospital-Records!" ask the same
-    // question — the fold `resolveEntity`'s album probe already established.
     expect(await resolveFilterEntities({ label: "Hospital-Records!" })).toEqual(
       await resolveFilterEntities({ label: "hospital records" }),
     );
@@ -1148,7 +972,6 @@ describe("the name filters resolve to indexed ids (and fall back when they canno
   });
 
   it("compares the KEY column bare, against the spellings the archive stores", async () => {
-    // No `lower(tracks.key)` anywhere: the INPUT is normalised, so `tracks_key_idx` can be seeked.
     const sql = await compiledSql({ key: "a minor" });
 
     expect(sql).not.toContain("lower(");
@@ -1165,8 +988,6 @@ describe("the name filters resolve to indexed ids (and fall back when they canno
   });
 });
 
-// ── The sonic tier ───────────────────────────────────────────────────────────────────
-
 describe("the sonic tier — anchored on a real track, ranked in SQL", () => {
   it("answers a sonic phrase WITHOUT a model — the headline query has no vendor dependency", async () => {
     const result = await searchArchive({ q: "tracks that sound like Nine Clouds" });
@@ -1175,7 +996,6 @@ describe("the sonic tier — anchored on a real track, ranked in SQL", () => {
     expect(translateQuery).not.toHaveBeenCalled();
     expect(result.anchor?.trackId).toBe("certified-1991");
     expect(result.anchor?.logId).toBe("024.7.2R");
-    // The anchor itself is excluded; the nearest vector leads, the distant one trails.
     expect(result.results.map((hit) => hit.trackId)).toEqual([
       "certified-netsky",
       "uncertified-netsky",
@@ -1213,9 +1033,6 @@ describe("the sonic tier — anchored on a real track, ranked in SQL", () => {
     expect(result.results.some((hit) => !hit.certified)).toBe(true);
   });
 
-  // The COMPOUND query is where the model earns its place on this tier: the reference is only
-  // half the question, and the other half becomes the btree pre-filter in FRONT of the vector
-  // scan (100k: 1,883 ms → 207 ms, measured). The regex declines it on purpose.
   it("hands a compound query to the model, and turns its filters into the btree pre-filter", async () => {
     translateQuery.mockResolvedValue({ label: "Hospital Records", soundsLike: "Nine Clouds" });
 
@@ -1239,15 +1056,8 @@ describe("the sonic tier — anchored on a real track, ranked in SQL", () => {
   });
 });
 
-// ── Tier 2 · a galaxy and a mixtape are jump nodes too ───────────────────────────────
-
-// Beyond the artist/label/album graph, search resolves a NAMED galaxy (`/galaxies/<slug>`) and a
-// PUBLISHED mixtape by its TITLE — whose page IS its log page (`/log/<F-logId>`). Both are archive-
-// sized reads and both are a pure jump: the row carries its own `url` so a consumer never has to
-// special-case the plural galaxy segment or the mixtape's log route.
 describe("tier 2 — a galaxy and a mixtape are jump nodes", () => {
   beforeEach(async () => {
-    // A named, non-retired galaxy (public) + a retired one and an unnamed one (both admin-only).
     await db.execute({
       args: [],
       sql: `insert into galaxies (id, handle, name, slug, centroid_json, created_at, updated_at)
@@ -1264,7 +1074,6 @@ describe("tier 2 — a galaxy and a mixtape are jump nodes", () => {
             values ('g-unnamed', 'gx-03', '[]', '2026-07-01', '2026-07-01')`,
     });
 
-    // A published mixtape (minted, log_id set) + a distributing one (unminted) that must NOT resolve.
     await db.execute({
       args: [],
       sql: `insert into mixtapes (id, title, log_id, status, created_at, updated_at)
@@ -1285,14 +1094,12 @@ describe("tier 2 — a galaxy and a mixtape are jump nodes", () => {
     expect(result.entities).toEqual([
       { kind: "galaxy", name: "Amber Drift", slug: "amber-drift", url: "/galaxies/amber-drift" },
     ]);
-    // A pure jump — no column filter maps to a galaxy, so nothing lists under it.
     expect(result.results).toEqual([]);
     expect(translateQuery).not.toHaveBeenCalled();
   });
 
   it("never resolves a retired or an unnamed galaxy", async () => {
     expect((await searchArchive({ q: "Faded Sector" })).entities).toEqual([]);
-    // The unnamed galaxy has no public name to match on at all.
     const named = await searchArchive({ q: "amber" });
 
     expect(named.entities.map((entity) => entity.slug)).toEqual(["amber-drift"]);
@@ -1309,7 +1116,6 @@ describe("tier 2 — a galaxy and a mixtape are jump nodes", () => {
       slug: "005.F.03",
       url: "/log/005.F.03",
     });
-    // Its cover derives from the Log ID (never stored), same as every mixtape surface.
     expect(result.entities[0]?.imageUrl).toContain("/api/mixtape-cover/005.F.03");
     expect(result.results).toEqual([]);
   });
@@ -1334,20 +1140,7 @@ describe("tier 2 — a galaxy and a mixtape are jump nodes", () => {
   });
 });
 
-// ── The entity reads · index-served, and exactly the `lower()` compare ───────────────
-
-// Tier 2 and tier 3 ask every entity table on every search, and `artists` grows with the crawl. The
-// artist read is two indexable `or` arms — the bare name column through `artists_name_nocase_idx`,
-// the aliases as one uncorrelated id list — and the label read's aliases are that same list. These
-// tests pin the plan, and prove the rewrite answers exactly what the `lower(name)` + correlated
-// `exists` reference answered, across ASCII case, LIKE wildcards in the needle, non-ASCII capitals
-// (which neither spelling folds), alias ties, and the label hub gate.
 describe("the entity reads — index-served, and exactly the lower() compare they replace", () => {
-  /**
-   * The reference: the `lower()`-wrapped name and the correlated alias `exists`, verbatim, each over
-   * its table read `not indexed` — the rowid-order scan these statements replace, so equal names tie
-   * exactly where that scan put them.
-   */
   function referenceStatement(
     kind: "album" | "artist" | "label",
     query: string,
@@ -1491,9 +1284,6 @@ describe("the entity reads — index-served, and exactly the lower() compare the
       });
     }
 
-    // Albums carry their gate counters directly. Two identical names sit in the opposite slug and
-    // rowid order, beside an all-caps twin, so the name sort's ties are exercised; one album stays
-    // under the floor.
     const albums: [string, string, string, number, number][] = [
       ["al1", "Dub Plate", "dub-plate-b", 3, 0],
       ["al2", "Dub Plate", "dub-plate-a", 4, 0],
@@ -1515,9 +1305,6 @@ describe("the entity reads — index-served, and exactly the lower() compare the
       });
     }
 
-    // A later, ungated label whose name folds to an existing one: the exact-label probe must still
-    // land on the earlier row. Two gated labels share one name in the opposite slug and rowid order,
-    // so the label arm's name sort ties too.
     const moreLabels: [string, string, string, number][] = [
       ["l-shout", "HOSPITAL RECORDS", "hospital-records-shout", 0],
       ["l-dub-b", "Dub Imprint", "dub-imprint-b", 3],
@@ -1588,7 +1375,6 @@ describe("the entity reads — index-served, and exactly the lower() compare the
       }
     }
 
-    // The matrix is not vacuous: both spellings match through the name, the alias, and a wildcard.
     expect(rowsOf(await db.execute(referenceStatement("artist", "net_", "prefix")))).toEqual([
       { name: "Netsky", slug: "netsky" },
       { name: "Net_Sky", slug: "net-sky" },
@@ -1688,17 +1474,8 @@ describe("the entity reads — index-served, and exactly the lower() compare the
   });
 });
 
-// ── The entity gate follows the shared hub floor ─────────────────────────────────────
-
-// A label/album is offered as a JUMP when it clears the SAME gate the /labels + /albums hubs and the
-// API list drive off (`hubInclusionWhere`, over the maintained per-entity counters): a certified
-// finding OR a page over the thin-content
-// floor. So a catalogue-only label with enough renderable tracks is a real destination now — while a
-// below-floor imprint still declines the jump and falls back to the filter chip it always was.
 describe("the entity gate follows the shared hub floor (not certified-only)", () => {
   beforeEach(async () => {
-    // A catalogue-only label with THREE uncertified tracks — no finding, but it clears the floor
-    // (LABEL_INDEX_MIN_TRACKS = 3), so its `/label/<slug>` page exists and search should offer it.
     for (const n of [1, 2, 3]) {
       await seed(db, {
         artists: [`Sunk`],
@@ -1708,7 +1485,6 @@ describe("the entity gate follows the shared hub floor (not certified-only)", ()
       });
     }
 
-    // A below-floor imprint — ONE uncertified track — that must still decline the jump.
     await seed(db, {
       artists: ["Lonely"],
       label: "Lone Imprint",
@@ -1723,7 +1499,6 @@ describe("the entity gate follows the shared hub floor (not certified-only)", ()
     expect(result.kind).toBe("entity");
     expect(result.redirect).toBe("/label/sofa-sound");
     expect(result.entities.map((entity) => entity.slug)).toEqual(["sofa-sound"]);
-    // The three uncertified rows list under it, exactly as the hub would show them.
     expect(result.results.map((hit) => hit.trackId).sort()).toEqual(["sofa-1", "sofa-2", "sofa-3"]);
   });
 
@@ -1736,17 +1511,8 @@ describe("the entity gate follows the shared hub floor (not certified-only)", ()
   });
 });
 
-// ── The compound sonic tier · sound like several artists ─────────────────────────────
-
-// `soundsLikeArtists` — the compound query "songs by artists that sound like Koven and Maduk in A
-// minor". The server resolves each name/slug to an artist, averages their stored `artist_centroids`
-// into ONE probe, ranks TRACKS by it, and every OTHER filter is the btree pre-filter in FRONT of the
-// scan. Anchored on real centroids: an unresolved name does not weigh in, and a probe of nothing
-// declines. The LLM only ever EMITS the filter — a hand-built one works with the model down.
 describe("the compound sonic tier — sound like several artists", () => {
   beforeEach(async () => {
-    // Two artists with stored centroids. Koven sits at 0.05 (nearest 1991@0.0, then netsky@0.1);
-    // Maduk sits at 1.15 (near andromedik@1.2). The centroid is the artist's position in MuQ space.
     for (const artist of [
       { angle: 0.05, id: "a-koven", name: "Koven", slug: "koven" },
       { angle: 1.15, id: "a-maduk", name: "Maduk", slug: "maduk" },
@@ -1773,15 +1539,12 @@ describe("the compound sonic tier — sound like several artists", () => {
 
     expect(result.kind).toBe("sonic");
     expect(result.anchor).toBeUndefined();
-    // Pure distance to Koven's centroid (0.05): 1991 (0.0) → netsky (0.1) → uncertified (0.3) →
-    // andromedik (1.2). Every embedded track ranks; none is excluded (there is no anchor track).
     expect(result.results.map((hit) => hit.trackId)).toEqual([
       "certified-1991",
       "certified-netsky",
       "uncertified-netsky",
       "certified-andromedik",
     ]);
-    // The transparency echo is the RESOLVED name, so the reader sees what the vibe was built from.
     expect(result.filters?.soundsLikeArtists).toEqual(["Koven"]);
   });
 
@@ -1801,15 +1564,11 @@ describe("the compound sonic tier — sound like several artists", () => {
 
     const result = await searchArchive({ q: "artists that sound like Koven in A minor" });
 
-    // Only the A-minor tracks survive the pre-filter, still ordered by distance to Koven's centroid:
-    // certified-netsky (0.1) then uncertified-netsky (0.3). andromedik/1991 are filtered out by key.
     expect(result.results.map((hit) => hit.trackId)).toEqual([
       "certified-netsky",
       "uncertified-netsky",
     ]);
 
-    // Pin the ratified SQL SHAPE: one exact vector pass, the btree pre-filter in the SAME statement,
-    // ordered by distance — never a union-all fan-out (the CTE-flattening trap), never an ANN index.
     const scan = spy.mock.calls
       .map((call) => call[0])
       .find(
@@ -1825,20 +1584,15 @@ describe("the compound sonic tier — sound like several artists", () => {
 
     expect(sql).toContain("vector_distance_cos(emb.embedding_blob, ?)");
     expect(sql).toContain("join track_embeddings emb on emb.track_id = tracks.track_id");
-    expect(sql).toContain("tracks.key in"); // the btree pre-filter, in the same statement
-    expect(sql).not.toContain("lower(tracks.key)"); // …and it is the BARE column, so the btree serves it
+    expect(sql).toContain("tracks.key in");
+    expect(sql).not.toContain("lower(tracks.key)");
     expect(sql).toContain("order by dist asc");
-    expect(sql).not.toContain("union all"); // one pass, no fan-out
+    expect(sql).not.toContain("union all");
     expect((sql.match(/vector_distance_cos/g) ?? []).length).toBe(1);
 
     spy.mockRestore();
   });
 
-  // RANK 1 — the trusted AKA. The resolve is two statements now (rank 0 = the artist's own name or
-  // slug, both indexed equalities; rank 1 = a trusted `artist_aliases` row, driven FROM the alias
-  // table), because one `or` over a correlated `exists` is a full scan of an `artists` table the
-  // crawl grows. These two cases pin that the SPLIT preserved the ranking the single statement's
-  // `name_rank asc … limit 1` expressed: an AKA still resolves, and a primary name still beats one.
   it("resolves an artist through a trusted AKA when nothing claims the name directly", async () => {
     await db.execute({
       args: ["al-1", "a-koven", "Kovenn", "kovenn"],
@@ -1850,14 +1604,9 @@ describe("the compound sonic tier — sound like several artists", () => {
     const result = await searchArchive({ q: "artists that sound like Kovenn" });
 
     expect(result.kind).toBe("sonic");
-    // The echo carries the artist's CANONICAL name, not the spelling that was typed.
     expect(result.filters?.soundsLikeArtists).toEqual(["Koven"]);
   });
 
-  // The sonic tier ECHOES Fluncle's canonical `artists.name` back to the reader, so an ungated
-  // resolve would confirm an unlisted artist exists and print its name for anyone who typed it —
-  // or one of its trusted aliases. Both ranks carry the visibility gate, so neither resolves and
-  // the tier declines exactly as it does for a name nobody claims.
   it("refuses an unlisted artist through BOTH its name and its trusted AKA", async () => {
     await db.execute({
       args: ["al-unlisted", "a-koven", "Kovenn", "kovenn"],
@@ -1885,7 +1634,6 @@ describe("the compound sonic tier — sound like several artists", () => {
   });
 
   it("lets a primary name beat another artist's AKA on the same spelling", async () => {
-    // Maduk carries "Koven" as a trusted AKA. Koven claims it as its own name, so rank 0 wins.
     await db.execute({
       args: ["al-2", "a-maduk", "Koven", "koven"],
       sql: `insert into artist_aliases (id, artist_id, alias, alias_slug, kind, source, status, created_at)
@@ -1897,7 +1645,6 @@ describe("the compound sonic tier — sound like several artists", () => {
 
     expect(result.kind).toBe("sonic");
     expect(result.filters?.soundsLikeArtists).toEqual(["Koven"]);
-    // Koven's own centroid (0.05) ranked it, not Maduk's (1.15) — the ordering is unchanged.
     expect(result.results.map((hit) => hit.trackId)).toEqual([
       "certified-1991",
       "certified-netsky",
@@ -1924,13 +1671,10 @@ describe("the compound sonic tier — sound like several artists", () => {
 
     spy.mockRestore();
 
-    // Rank 1 is asked ONLY when rank 0 finds nothing — a resolved name costs ONE statement, not two.
     expect(centroidReads).toHaveLength(1);
     const resolve = centroidReads[0];
     const sql = resolve?.sql ?? "";
 
-    // The column is BARE under a NOCASE comparison, so `artists_name_nocase_idx` can be seeked —
-    // `lower(artists.name)` wrapped it and could not be. No correlated alias probe here either.
     expect(sql).toContain("artists.name = ? collate nocase");
     expect(sql).not.toContain("lower(artists.name)");
     expect(sql).not.toContain("artist_aliases");
@@ -1951,32 +1695,21 @@ describe("the compound sonic tier — sound like several artists", () => {
 
     const result = await searchArchive({ q: "artists that sound like Nobody At All" });
 
-    // The probe is nothing, so the compound tier declines and the query falls through — never a
-    // sonic result built from an artist that does not exist.
     expect(result.kind).not.toBe("sonic");
   });
 });
 
-// ── THE DEGRADATION ──────────────────────────────────────────────────────────────────
-
 describe("the LLM is down — search degrades, it never breaks", () => {
   it("falls back to full text when the model cannot be reached", async () => {
-    // What `translateQuery` returns when the key is missing, the vendor 500s, or the 3s
-    // deadline blows: null. Every failure mode collapses to this one answer.
     translateQuery.mockResolvedValue(null);
 
     const result = await searchArchive({ q: "Andromedik tracks in A minor" });
 
     expect(result.degraded).toBe(true);
     expect(result.kind).toBe("token");
-    // bm25 ranks by rarity: "andromedik" is the one distinctive word in that sentence, so it
-    // carries the query. A worse answer than the filters would have given — and a far better
-    // one than an empty page.
     expect(result.results[0]?.trackId).toBe("certified-andromedik");
   });
 
-  // The sonic tier is DELIBERATELY not among the casualties: it is a regex, so a vendor
-  // outage cannot take the one feature nobody else has offline.
   it("keeps SONIC search fully working with the model down", async () => {
     translateQuery.mockResolvedValue(null);
 
@@ -1994,5 +1727,326 @@ describe("the LLM is down — search degrades, it never breaks", () => {
     expect((await searchArchive({ q: "Netsky" })).redirect).toBe("/artist/netsky");
     expect((await searchArchive({ q: "clouds" })).results).toHaveLength(1);
     expect((await searchArchive({ q: "sounds like Nine Clouds" })).kind).toBe("sonic");
+  });
+});
+
+describe("the style tier — a style word ranks by sound, ahead of a namesake", () => {
+  const liquid = SEARCH_STYLES[0];
+
+  async function seedAnchor(slug: string, angle: number): Promise<void> {
+    const id = `anchor-${slug}`;
+
+    await db.execute({
+      args: [id, slug.replace(/-/g, " "), slug],
+      sql: `insert into artists (id, name, slug, created_at, updated_at)
+            values (?, ?, ?, '2026-07-01', '2026-07-01')`,
+    });
+    await db.execute({
+      args: [id, new Uint8Array(angleVector(angle).buffer)],
+      sql: `insert into artist_centroids (artist_id, centroid_blob, computed_at, rank_corpus, vector_count)
+            values (?, ?, '2026-07-01', 'corpus-1', 4)`,
+    });
+  }
+
+  beforeEach(() => {
+    resetStyleProbeCache();
+  });
+
+  async function seedAllAnchors(centre: number): Promise<void> {
+    const count = liquid.anchors.length;
+
+    for (const [index, slug] of liquid.anchors.entries()) {
+      await seedAnchor(slug, centre + (index - (count - 1) / 2) * 0.01);
+    }
+  }
+
+  it("ranks the archive by the anchors' mean probe and echoes the anchors that weighed in", async () => {
+    await seedAllAnchors(0.3);
+
+    const result = await searchArchive({ q: "liquid" });
+
+    expect(result.kind).toBe("sonic");
+    expect(result.degraded).toBe(false);
+    expect(result.redirect).toBeUndefined();
+    expect(result.filters?.sound).toBe("liquid");
+    expect(result.filters?.soundsLikeArtists).toEqual(
+      liquid.anchors.map((slug) => slug.replace(/-/g, " ")),
+    );
+    expect(result.results.map((hit) => hit.trackId)).toEqual([
+      "uncertified-netsky",
+      "certified-netsky",
+      "certified-1991",
+      "certified-andromedik",
+    ]);
+    expect(translateQuery).not.toHaveBeenCalled();
+  });
+
+  it("reads the filler around a style word, and keeps a namesake as an entity row", async () => {
+    await seedAllAnchors(0.3);
+    await db.execute({
+      args: [],
+      sql: `insert into artists (id, name, slug, created_at, updated_at)
+            values ('a-liquid', 'Liquid', 'liquid-artist', '2026-07-01', '2026-07-01')`,
+    });
+
+    const result = await searchArchive({ q: "some liquid dnb" });
+
+    expect(result.kind).toBe("sonic");
+    expect(result.filters?.sound).toBe("liquid");
+
+    const named = await searchArchive({ q: "Liquid" });
+
+    expect(named.kind).toBe("sonic");
+    expect(named.redirect).toBeUndefined();
+    expect(named.entities.map((entity) => `${entity.kind}:${entity.name}`)).toEqual([
+      "artist:Liquid",
+    ]);
+  });
+
+  it("resolves every anchor in ONE slug-keyed statement, never one read per anchor", async () => {
+    await seedAllAnchors(0.2);
+    const spy = vi.spyOn(db, "execute");
+
+    await searchArchive({ q: "liquid" });
+
+    const anchorReads = spy.mock.calls
+      .map((call) => call[0])
+      .filter(
+        (arg) =>
+          typeof arg === "object" &&
+          arg !== null &&
+          typeof (arg as { sql?: unknown }).sql === "string" &&
+          (arg as { sql: string }).sql.includes("artist_centroids ac") &&
+          (arg as { sql: string }).sql.includes("artists.slug in"),
+      );
+
+    expect(anchorReads).toHaveLength(1);
+  });
+
+  it("reads by name, flagged, when no anchor has a centroid", async () => {
+    const result = await searchArchive({ q: "liquid" });
+
+    expect(result.kind).not.toBe("sonic");
+    expect(result.degraded).toBe(true);
+    expect(result.filters?.sound).toBeUndefined();
+  });
+
+  it("never serves an unmeasured probe: one missing anchor degrades the whole style", async () => {
+    for (const slug of liquid.anchors.slice(1)) {
+      await seedAnchor(slug, 0.3);
+    }
+
+    const result = await searchArchive({ q: "liquid" });
+
+    expect(result.degraded).toBe(true);
+    expect(result.kind).not.toBe("sonic");
+    expect(result.filters?.soundsLikeArtists).toBeUndefined();
+  });
+
+  it("never serves an unmeasured probe: an unlisted anchor degrades the whole style", async () => {
+    await seedAllAnchors(0.3);
+    const unlisted = liquid.anchors[0] ?? "";
+
+    await db.execute({
+      args: ["22222222-2222-4222-8222-222222222222", `anchor-${unlisted}`],
+      sql: `update artists set mbid = ? where id = ?`,
+    });
+    await db.execute(
+      `insert into artist_rules
+         (id, artist_mbid, artist_name, verdict, label_id, source, created_at, updated_at)
+       values ('arl_anchor', '22222222-2222-4222-8222-222222222222', 'Anchor', 'unlisted', null,
+               'operator', '2026-07-01', '2026-07-01')`,
+    );
+
+    const result = await searchArchive({ q: "liquid" });
+
+    expect(result.degraded).toBe(true);
+    expect(result.kind).not.toBe("sonic");
+  });
+
+  it("leaves a sentence with a style word inside it to the tiers that read sentences", async () => {
+    await seedAllAnchors(0.3);
+
+    const result = await searchArchive({ q: "dark liquid with vocals" });
+
+    expect(result.filters?.sound).toBeUndefined();
+    expect(translateQuery).toHaveBeenCalled();
+  });
+});
+
+describe("the sonic view of one track — its own sound, else its lead artist's", () => {
+  it("ranks by the track's own vector and leaves the seed out of its own list", async () => {
+    const result = await searchLikeTrack({
+      allowBoundedSonicForDiagnostics: true,
+      trackId: "certified-1991",
+    });
+
+    expect(result?.anchor?.trackId).toBe("certified-1991");
+    expect(result?.filters).toBeUndefined();
+    expect(result?.results.map((hit) => hit.trackId)).toEqual([
+      "certified-netsky",
+      "uncertified-netsky",
+      "certified-andromedik",
+    ]);
+  });
+
+  it("falls back to the lead artist's centroid for a track with no embedding, and says so", async () => {
+    await db.execute({
+      args: [],
+      sql: `insert into tracks (track_id, title, artists_json, spotify_url, duration_ms, has_embedding)
+            values ('unembedded', 'Quiet One', '["Koven"]', null, 180000, 0)`,
+    });
+    await db.execute({
+      args: [],
+      sql: `insert into artists (id, name, slug, created_at, updated_at)
+            values ('a-koven', 'Koven', 'koven', '2026-07-01', '2026-07-01')`,
+    });
+    await db.execute({
+      args: [new Uint8Array(angleVector(1.15).buffer)],
+      sql: `insert into artist_centroids (artist_id, centroid_blob, computed_at, rank_corpus, vector_count)
+            values ('a-koven', ?, '2026-07-01', 'corpus-1', 4)`,
+    });
+    await db.execute({
+      args: [],
+      sql: `insert into track_artists (track_id, artist_id, position) values ('unembedded', 'a-koven', 1)`,
+    });
+
+    const result = await searchLikeTrack({
+      allowBoundedSonicForDiagnostics: true,
+      trackId: "unembedded",
+    });
+
+    expect(result?.anchor?.similar).toBe(true);
+    expect(result?.filters?.soundsLikeArtists).toEqual(["Koven"]);
+    expect(result?.results[0]?.trackId).toBe("certified-andromedik");
+  });
+
+  it("counts only a LISTED performer's centroid as a sound, in the row flag and the view alike", async () => {
+    await db.execute({
+      args: [],
+      sql: `insert into tracks (track_id, title, artists_json, spotify_url, duration_ms, has_embedding)
+            values ('hidden-lead', 'Hidden Lead', '["Ghost"]', null, 180000, 0)`,
+    });
+    await db.execute({
+      args: [],
+      sql: `insert into artists (id, name, slug, mbid, created_at, updated_at)
+            values ('a-ghost', 'Ghost', 'ghost', '33333333-3333-4333-8333-333333333333',
+                    '2026-07-01', '2026-07-01')`,
+    });
+    await db.execute({
+      args: [new Uint8Array(angleVector(0.2).buffer)],
+      sql: `insert into artist_centroids (artist_id, centroid_blob, computed_at, rank_corpus, vector_count)
+            values ('a-ghost', ?, '2026-07-01', 'corpus-1', 4)`,
+    });
+    await db.execute({
+      args: [],
+      sql: `insert into track_artists (track_id, artist_id, position) values ('hidden-lead', 'a-ghost', 1)`,
+    });
+    await db.execute(
+      `insert into artist_rules
+         (id, artist_mbid, artist_name, verdict, label_id, source, created_at, updated_at)
+       values ('arl_ghost', '33333333-3333-4333-8333-333333333333', 'Ghost', 'unlisted', null,
+               'operator', '2026-07-01', '2026-07-01')`,
+    );
+
+    const viewed = await searchLikeTrack({
+      allowBoundedSonicForDiagnostics: true,
+      trackId: "hidden-lead",
+    });
+
+    expect(viewed?.results).toEqual([]);
+    expect(viewed?.anchor?.similar).toBe(false);
+  });
+
+  it("answers the seed alone when the track has neither, and nothing for an unknown id", async () => {
+    await db.execute({
+      args: [],
+      sql: `insert into tracks (track_id, title, artists_json, spotify_url, duration_ms, has_embedding)
+            values ('silent', 'No Read', '["Nobody"]', null, 180000, 0)`,
+    });
+
+    const alone = await searchLikeTrack({
+      allowBoundedSonicForDiagnostics: true,
+      trackId: "silent",
+    });
+
+    expect(alone?.anchor?.trackId).toBe("silent");
+    expect(alone?.anchor?.similar).toBe(false);
+    expect(alone?.results).toEqual([]);
+    expect(await searchLikeTrack({ trackId: "no-such-track" })).toBeNull();
+  });
+
+  it("degrades honestly when the ranking engine is off (the public default without Sonar)", async () => {
+    const result = await searchLikeTrack({ trackId: "certified-1991" });
+
+    expect(result?.degraded).toBe(true);
+    expect(result?.results).toEqual([]);
+  });
+});
+
+describe("the vector gate — no sonic work runs before the budget's verdict", () => {
+  const refused = async () => {
+    throw new Error("over the per-IP budget");
+  };
+
+  function vectorScans(spy: { mock: { calls: unknown[][] } }): number {
+    return spy.mock.calls.filter((call) => {
+      const arg = call[0];
+
+      const sql =
+        typeof arg === "object" && arg !== null ? (arg as { sql?: unknown }).sql : undefined;
+
+      return typeof sql === "string" && sql.includes("vector_distance_cos");
+    }).length;
+  }
+
+  it("refuses a style word before its ranking scan", async () => {
+    for (const slug of SEARCH_STYLES[0].anchors) {
+      await db.execute({
+        args: [`gate-${slug}`, slug, slug],
+        sql: `insert into artists (id, name, slug, created_at, updated_at)
+              values (?, ?, ?, '2026-07-01', '2026-07-01')`,
+      });
+      await db.execute({
+        args: [`gate-${slug}`, new Uint8Array(angleVector(0.3).buffer)],
+        sql: `insert into artist_centroids (artist_id, centroid_blob, computed_at, rank_corpus, vector_count)
+              values (?, ?, '2026-07-01', 'corpus-1', 4)`,
+      });
+    }
+    resetStyleProbeCache();
+    const spy = vi.spyOn(db, "execute");
+
+    await expect(searchArchive({ beforeVector: refused, q: "liquid" })).rejects.toThrow(
+      "over the per-IP budget",
+    );
+    expect(vectorScans(spy)).toBe(0);
+  });
+
+  it("refuses a sonic phrase before its ranking scan", async () => {
+    const spy = vi.spyOn(db, "execute");
+
+    await expect(
+      searchArchive({ beforeVector: refused, q: "tracks that sound like Nine Clouds" }),
+    ).rejects.toThrow("over the per-IP budget");
+    expect(vectorScans(spy)).toBe(0);
+  });
+
+  it("refuses the sonic view of one track before its ranking scan", async () => {
+    const spy = vi.spyOn(db, "execute");
+
+    await expect(
+      searchLikeTrack({
+        allowBoundedSonicForDiagnostics: true,
+        beforeVector: refused,
+        trackId: "certified-1991",
+      }),
+    ).rejects.toThrow("over the per-IP budget");
+    expect(vectorScans(spy)).toBe(0);
+  });
+
+  it("lets the cheap name tiers answer without waiting on it", async () => {
+    const result = await searchArchive({ beforeVector: refused, q: "Netsky" });
+
+    expect(result.kind).toBe("entity");
   });
 });

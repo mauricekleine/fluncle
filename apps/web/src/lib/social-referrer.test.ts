@@ -16,7 +16,6 @@ describe("classifySocialReferrer", () => {
   });
 
   it("matches platform-owned subdomains and share hosts", () => {
-    // TikTok share/shortener host, YouTube mobile + its own short domain, IG link wrapper.
     expect(classifySocialReferrer("https://vm.tiktok.com/ZM123/", ORIGIN)).toBe("tiktok");
     expect(classifySocialReferrer("https://m.youtube.com/watch?v=abc", ORIGIN)).toBe("youtube");
     expect(classifySocialReferrer("https://youtu.be/abc", ORIGIN)).toBe("youtube");
@@ -29,7 +28,7 @@ describe("classifySocialReferrer", () => {
 
   it("returns null for a same-origin (internal) referrer", () => {
     expect(classifySocialReferrer("https://fluncle.com/log/241.7.3A", ORIGIN)).toBeNull();
-    // A subdomain of our own host is still internal.
+
     expect(classifySocialReferrer("https://www.fluncle.com/", "https://fluncle.com")).toBeNull();
   });
 
@@ -42,13 +41,11 @@ describe("classifySocialReferrer", () => {
   it("returns null for off-allowlist sites, including generic shorteners", () => {
     expect(classifySocialReferrer("https://example.com/x", ORIGIN)).toBeNull();
     expect(classifySocialReferrer("https://www.google.com/search?q=fluncle", ORIGIN)).toBeNull();
-    // t.co-style shorteners are explicitly out of scope — they carry no platform identity.
+
     expect(classifySocialReferrer("https://t.co/abcdef", ORIGIN)).toBeNull();
   });
 
   it("does not match a lookalike domain that merely contains an allowlisted name", () => {
-    // Suffix matching must be on a dot boundary: `nottiktok.com` and
-    // `tiktok.com.evil.example` are not TikTok.
     expect(classifySocialReferrer("https://nottiktok.com/x", ORIGIN)).toBeNull();
     expect(classifySocialReferrer("https://tiktok.com.evil.example/x", ORIGIN)).toBeNull();
   });

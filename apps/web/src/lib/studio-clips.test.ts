@@ -12,9 +12,6 @@ import {
   sortClipsNewestFirst,
 } from "./studio-clips";
 
-// The clip library's pure logic (Fluncle Studio Unit G): the two-dropdown filter and
-// the download/poster URL builders, tested DOM-free (no ffmpeg, no `<video>`).
-
 function clip(overrides: Partial<ClipDTO> = {}): ClipDTO {
   return {
     caption: undefined,
@@ -157,7 +154,6 @@ describe("clipPurgeUrls", () => {
   });
 
   it("covers the clip's REAL silent download (audio=false off footage.mp4)", () => {
-    // The gap videoPurgeUrls({squared:true}) misses (it strips audio off footage.social).
     expect(urls).toContain(clipDownloadUrls("clip-xyz").silent);
     expect(
       urls.some((url) => url.includes("audio=false") && url.includes("clip-xyz/footage.mp4")),

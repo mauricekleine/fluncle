@@ -2,6 +2,8 @@
 
 TikTok and Instagram reach metrics come from Postiz. TikTok exposes followers, likes, and views. Instagram exposes engagement metrics but not follower count. Direct TikTok OAuth is unnecessary; Instagram OAuth remains inactive unless follower access justifies Meta verification.
 
+If Instagram OAuth is activated, its Instagram Login flow exchanges the callback code for a short-lived token and upgrades it to a long-lived token immediately. Instagram provides no refresh token for this flow; the Worker refreshes the stored long-lived token in place before expiry. The code-exchange response may be a flat token object or a `data` array, and the callback URL must match the registered request origin.
+
 **The one remaining activation is Twitch**, below.
 
 ## How the Twitch plumbing works

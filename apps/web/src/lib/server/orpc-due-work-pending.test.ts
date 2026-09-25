@@ -1,13 +1,3 @@
-// BACKPRESSURE IS NOT A FAULT — the whole-router guarantee.
-//
-// `DueWorkMaintenancePendingError` means a bounded maintenance pass converged as far as its budget
-// allowed and the read it fronted is deferred. That is a typed "come back", so every op answers a
-// 503 `due_work_maintenance_pending` and NOTHING is captured into Sentry: a write burst must never
-// page as an error, and a deferred read must never look like a 500 to the box sweeps that poll it.
-//
-// The guarantee is made in ONE place — the router-level middleware in `./orpc` — so it holds for a
-// handler with no catch, for a middleware, and for input validation, not only for the handlers that
-// happen to route their catch through `apiFault`.
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { contract } from "@fluncle/contracts/orpc";
@@ -72,9 +62,6 @@ afterEach(() => {
   captureException.mockClear();
 });
 
-// A COUNT IS A GAUGE, NOT A WORK HANDOUT. The deferral protects a metered ORDER, so it withholds
-// the page — but refusing the SIZE of the backlog blinds the operator and the gauge-publishing
-// sweeps exactly when debt is the thing they need to see.
 describe("the worklist count answers under debt while the page stays withheld", () => {
   const read = (query: string) =>
     import("./orpc").then(({ handleOrpc }) =>
@@ -100,11 +87,6 @@ describe("the worklist count answers under debt while the page stays withheld", 
     expect(captureException).not.toHaveBeenCalled();
   });
 
-  // THE OLD-SWEEP WINDOW. The box CLI is a pinned release; a sweep baked before this flag existed
-  // does not send it, and several of them size PAID capture and GPU rental off this read. Handed a
-  // 200 with an empty page it would report "no work" against a real backlog until its next rebake.
-  // It must keep getting the refusal it already pauses on, which is what makes the Worker safe to
-  // deploy ahead of the box.
   it("keeps the typed 503 for a counting caller that did NOT opt in", async () => {
     trackWorkPage = "pending";
 
@@ -130,7 +112,6 @@ describe("the worklist count answers under debt while the page stays withheld", 
   it("still refuses a page-only read, where the page IS the answer", async () => {
     trackWorkPage = "pending";
 
-    // Even opted in: without `count` there is no gauge to answer, only a page that was withheld.
     for (const query of ["", "debtAware=true"]) {
       const response = await read(query);
 
@@ -142,9 +123,6 @@ describe("the worklist count answers under debt while the page stays withheld", 
     }
   });
 
-  // An opted-in read answers the flag either way, so its presence is also the caller's proof that
-  // this Worker understood the flag. An OLD Worker omits the field entirely, which is how a NEW
-  // caller tells "the page is genuinely complete" from "my flag was ignored".
   it("answers debtPending false, not absent, when an opted-in read was served", async () => {
     trackWorkPage = "served";
 
@@ -180,8 +158,6 @@ describe("due-work maintenance pending is a typed 503, never a fault", () => {
     const { handleOrpc } = await import("./orpc");
     pendingFromListTracks = true;
 
-    // `list_findings` → `listTracks` → `listProjectedTracks` → `readPromotedDueWorkPage`: the
-    // deferred-read stack, answered as a pause rather than a 500.
     const response = await handleOrpc(new Request(apiUrl("/findings?limit=1")));
 
     expect(response?.status).toBe(503);
@@ -192,10 +168,6 @@ describe("due-work maintenance pending is a typed 503, never a fault", () => {
     expect(captureException).not.toHaveBeenCalled();
   });
 
-  // THE BEHAVIOURAL PROOF. The `list_findings` case above would pass without the middleware, since
-  // that handler catches and `apiFault` already maps the class. This one composes a handler with NO
-  // catch through the SAME base the router is built on, so the middleware is the only thing that
-  // can answer — if it were dropped, the raw error would escape and this fails.
   it("answers 503 for a catch-less op composed through the router's own base", async () => {
     const { dueWorkMaintenancePendingMiddleware } = await import("./orpc-backpressure");
     const base = implement(contract)
@@ -218,8 +190,6 @@ describe("due-work maintenance pending is a typed 503, never a fault", () => {
     });
     expect(captureException).not.toHaveBeenCalled();
 
-    // A real fault is not the middleware's business: it passes through as itself, so the rails
-    // still log it and capture it as the 500 it is.
     const boom = new Error("boom");
     await expect(
       call(
@@ -236,9 +206,6 @@ describe("due-work maintenance pending is a typed 503, never a fault", () => {
     const { dueWorkMaintenancePendingMiddleware } = await import("./orpc-backpressure");
     const { router } = await import("./orpc");
 
-    // The guarantee is whole-router or it is nothing: one op assembled without this middleware is
-    // one op free to surface a deferred read as a 500. Checked by reference over every op, so a
-    // domain spread onto a different base — not just a dropped `.use` — fails here.
     const missing = Object.entries(router as Record<string, unknown>)
       .filter(([, op]) => {
         const middlewares = ((op as { "~orpc"?: { middlewares?: unknown[] } })["~orpc"]

@@ -1,14 +1,3 @@
-// The `admin-observations` domain router — the observation echo gate's ledger made visible,
-// plus the authoring read the on-box observation sweep needs. The spoken sibling of
-// `admin-notes`. See docs/agents/observation-agent.md.
-//
-//   - `list_observation_neighbours` — `adminAuth` (agent-allowed read): the neighbourhood's
-//     stored scripts, the SPENT moves the box author routes around.
-//   - `list_observation_rejections` — `adminAuth` (agent-allowed read): the held scripts + dials.
-//   - `resolve_observation_rejection` — `adminAuth` + `operatorGuard` (OPERATOR): the ruling.
-//     Accepting spends a Cartesia render, so the box's agent token 403s.
-//   - `update_observation_gate` — `adminAuth` + `operatorGuard` (OPERATOR): retune the dials.
-
 import { observationNeighbours } from "../observation-neighbours";
 import {
   getObservationEchoThresholds,
@@ -19,12 +8,7 @@ import {
 import { adminAuth, operatorGuard } from "../orpc-auth";
 import { apiFault, type Implementer, parseLimit, requireTrack } from "./_shared";
 
-/** Build the `admin-observations` domain's handlers. */
 export function adminObservationsHandlers(os: Implementer) {
-  // GET /admin/tracks/{trackId}/observation-neighbours — `adminAuth` (agent-allowed read): the
-  // sonic neighbourhood's stored observation scripts, the fuel the box author routes around and
-  // the same set the echo gate re-reads. `requireTrack` resolves a Log ID to the trackId the
-  // neighbourhood reads by (and 404s a catalogue/unknown track — Fluncle only speaks of findings).
   const listObservationNeighboursHandler = os.list_observation_neighbours
     .use(adminAuth)
     .handler(async ({ input }) => {
@@ -39,7 +23,6 @@ export function adminObservationsHandlers(os: Implementer) {
       }
     });
 
-  // GET /admin/observation-rejections — `adminAuth`: the held observations + the gate's dials.
   const listObservationRejectionsHandler = os.list_observation_rejections
     .use(adminAuth)
     .handler(async ({ input }) => {
@@ -59,7 +42,6 @@ export function adminObservationsHandlers(os: Implementer) {
       }
     });
 
-  // POST /admin/observation-rejections/{id}/resolve — OPERATOR: render the held script or bin it.
   const resolveObservationRejectionHandler = os.resolve_observation_rejection
     .use(adminAuth)
     .use(operatorGuard)
@@ -76,7 +58,6 @@ export function adminObservationsHandlers(os: Implementer) {
       }
     });
 
-  // PATCH /admin/observation-gate — OPERATOR: retune the echo gate. A flip, not a deploy.
   const updateObservationGateHandler = os.update_observation_gate
     .use(adminAuth)
     .use(operatorGuard)

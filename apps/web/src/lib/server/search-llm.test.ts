@@ -22,7 +22,6 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-/** A well-formed OpenRouter chat reply carrying `content`. */
 function reply(content: string) {
   return {
     json: async () => ({
@@ -60,8 +59,6 @@ describe("parseFilterReply — a model reply is untrusted input", () => {
     expect(parseFilterReply("{}")).toBeNull();
   });
 
-  // The safety property, restated as a test: the schema has no field that could name a
-  // result, so a model that tries to hand back tracks hands back nothing.
   it("drops a hallucinated track list on the floor", () => {
     expect(
       parseFilterReply('{"tracks":[{"title":"A Song That Does Not Exist","logId":"999.9.9Z"}]}'),
@@ -104,7 +101,6 @@ describe("translateQuery — and every way it is allowed to fail", () => {
     expect(await translateQuery("anything")).toBeNull();
   });
 
-  /** The JSON body of the first captured fetch, or a loud throw when none was sent. */
   function sentBody(): Record<string, unknown> {
     const init = fetchMock.mock.calls[0]?.[1] as RequestInit | undefined;
 

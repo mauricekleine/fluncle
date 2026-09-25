@@ -1,16 +1,3 @@
-// Our own Instagram OAuth + token machinery for the /reach Tier-2 follower count, via
-// the "Instagram API with Instagram Login" business flow (NOT the Facebook-Login
-// variant — no Pages, no Business Manager linkage; the operator logs in with the
-// Instagram account itself). The token model differs from Spotify/YouTube: there is NO
-// refresh_token. The callback exchanges the code for a SHORT-lived token, immediately
-// upgrades it to a 60-day LONG-lived token, and stores THAT; getInstagramAccessToken
-// then refreshes the long-lived token IN PLACE (graph.instagram.com/refresh_access_token)
-// when it nears expiry. So instagram_auth carries just the durable token + its expiry.
-// DORMANT until the operator connects. Identity login stays Spotify-only.
-//
-// The redirect URI is derived from the request origin (like mixcloud.ts); the operator
-// registers that exact callback URL in the Meta app dashboard.
-
 import { getDb, typedRow } from "./db";
 import { type FetchImpl, readOptionalEnv } from "./env";
 import { ApiError } from "./spotify";
@@ -19,13 +6,12 @@ const instagramAuthorizeUrl = "https://www.instagram.com/oauth/authorize";
 const instagramCodeExchangeUrl = "https://api.instagram.com/oauth/access_token";
 const instagramGraphBase = "https://graph.instagram.com";
 
-// instagram_business_basic unlocks the account's own fields incl. followers_count.
 const instagramScopes = ["instagram_business_basic"];
 
 type InstagramShortTokenResponse = {
   access_token?: string;
   user_id?: number | string;
-  // The code-exchange body can arrive flat OR wrapped in a `data: [...]` array.
+
   data?: { access_token?: string; user_id?: number | string }[];
 };
 
@@ -33,7 +19,6 @@ type InstagramLongTokenResponse = { access_token?: string; expires_in?: number }
 
 type InstagramAuthRow = { access_token: string; expires_at: string };
 
-/** The callback URL, derived from the request origin (registered in the Meta app). */
 export function instagramRedirectUri(origin: string): string {
   return `${origin}/api/admin/instagram/auth/callback`;
 }
@@ -66,11 +51,6 @@ export async function buildInstagramAuthUrl(state: string, redirectUri: string):
   return `${instagramAuthorizeUrl}?${params.toString()}`;
 }
 
-/**
- * Exchange the authorization code for a short-lived token (fetch injected for testing).
- * The response can be flat (`{ access_token }`) or wrapped (`{ data: [{ access_token }] }`),
- * so both shapes are read.
- */
 export async function exchangeInstagramCodeForShortToken(
   code: string,
   redirectUri: string,
@@ -109,10 +89,6 @@ export async function exchangeInstagramCodeForShortToken(
   return accessToken;
 }
 
-/**
- * Upgrade a short-lived token to a 60-day long-lived token (fetch injected for testing).
- * This is a GET with the app secret, so it runs server-side only.
- */
 export async function exchangeInstagramForLongToken(
   shortToken: string,
   fetchImpl: FetchImpl = fetch,
@@ -138,10 +114,6 @@ export async function exchangeInstagramForLongToken(
   return (await response.json()) as InstagramLongTokenResponse;
 }
 
-/**
- * Refresh an existing long-lived token in place (fetch injected so the refresh path is
- * unit-testable). No client secret needed — the current token authorizes the refresh.
- */
 export async function refreshInstagramToken(
   accessToken: string,
   fetchImpl: FetchImpl = fetch,
@@ -167,7 +139,6 @@ export async function refreshInstagramToken(
   return (await response.json()) as InstagramLongTokenResponse;
 }
 
-/** Run the full callback path: code → short token → long token → store it. */
 export async function exchangeCodeForInstagramToken(
   code: string,
   redirectUri: string,
@@ -182,11 +153,6 @@ export async function exchangeCodeForInstagramToken(
   await upsertInstagramAuth(long.access_token, long.expires_in ?? 0);
 }
 
-/**
- * A valid long-lived Instagram token, refreshed IN PLACE when it is within a day of
- * expiry (the refresh endpoint requires the token be ≥24h old and unexpired; a 1-day
- * window keeps it comfortably inside that band on a daily collector cadence).
- */
 export async function getInstagramAccessToken(): Promise<string> {
   const db = await getDb();
   const result = await db.execute({
@@ -209,7 +175,6 @@ export async function getInstagramAccessToken(): Promise<string> {
   const refreshed = await refreshInstagramToken(auth.access_token);
 
   if (!refreshed.access_token) {
-    // The refresh failed to return a token but did not throw; keep the stored one.
     return auth.access_token;
   }
 

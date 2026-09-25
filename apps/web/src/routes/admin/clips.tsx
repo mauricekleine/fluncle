@@ -38,28 +38,6 @@ import {
   sortClipsNewestFirst,
 } from "@/lib/studio-clips";
 
-// The cross-recording clip LIBRARY (RFC recording-primitive, Design B — Wave 3). A captured
-// set (a RECORDING) yields MANY clips; beyond the per-set editor (/admin/studio/$recordingId)
-// this is ONE continuous grid of EVERY clip, sorted newest-first (by clip `createdAt`) — no
-// per-recording grouping, but each card still carries its own recording label so the operator
-// can tell which set/mixtape a clip is from. Browse, filter (by recording + status), preview
-// inline, download to hand-post. Reads `list_clips` + `list_recordings` (recordings feed the
-// filter dropdown + the per-card label); `delete_clip` prunes a bad cut. The recordings INDEX
-// + the Upload-recording action live on the sibling Recordings page (/admin/recordings) — the
-// Studio group split them out of here (ADM-03).
-//
-// Distribution rides the Instagram DRIP-FEED (clip-drip-feed RFC §3.6): the page header
-// carries the global KILL SWITCH (a Switch → `set_clip_drip`) and a BATCH schedule action
-// over a selection (chaining the jittered ~daily slots server-side, `nextDripSlot`); each
-// card shows its own drip state + a slot-override popover. The per-clip drip schedule (the
-// `list_clip_posts` read) is merged onto the cards.
-//
-// The grid, recordings, dropdown, drip rows, and paused state load SERVER-SIDE (a
-// createServerFn calling the server helpers in-process) — not a cross-origin client fetch.
-// Filtering + newest-first sorting then run client-side over the loaded set (the backlog is
-// small; instant, no refetch).
-
-// Every clip, newest-first. Server-side: in-process, no HTTP, no CORS.
 const fetchAllClips = createServerFn({ method: "GET" }).handler(async (): Promise<ClipDTO[]> => {
   if (!(await isAdminRequest())) {
     throw redirect({ to: "/admin/login" });
@@ -68,7 +46,6 @@ const fetchAllClips = createServerFn({ method: "GET" }).handler(async (): Promis
   return listClips();
 });
 
-// Every recording (the group headers + the recordings index + the filter dropdown).
 const fetchRecordings = createServerFn({ method: "GET" }).handler(
   async (): Promise<RecordingDTO[]> => {
     if (!(await isAdminRequest())) {
@@ -79,8 +56,6 @@ const fetchRecordings = createServerFn({ method: "GET" }).handler(
   },
 );
 
-// Every clip's Instagram drip row + whether the drip is paused (the kill switch's live
-// state) — read together so the header switch and every card's chip hydrate from the loader.
 const fetchDripState = createServerFn({ method: "GET" }).handler(
   async (): Promise<{ paused: boolean; posts: ClipSocialPost[] }> => {
     if (!(await isAdminRequest())) {
@@ -101,9 +76,6 @@ export const Route = createFileRoute("/admin/clips")({
   }),
 });
 
-// A clip carries `recordingId` directly — the one grouping/filtering axis, since the
-// plan→recording→mixtape Deploy-2 cutover dropped the legacy `mixtapeId` owner (every
-// legacy mixtape clip was repointed onto its mixtape's recording first).
 type LibraryClip = ClipDTO & { resolvedRecordingId: string | undefined };
 
 function ClipLibraryPage() {
@@ -121,9 +93,6 @@ function ClipLibraryPage() {
     refetchOnWindowFocus: true,
   });
 
-  // The recordings shelf/index + the filter dropdown, seeded from the loader and refetched on
-  // focus — so a browser-uploaded recording lands here without a reload (the header
-  // "Upload recording" action invalidates this key on success).
   const { data: recordings } = useQuery<RecordingDTO[]>({
     initialData: initialRecordings,
     queryFn: () => fetchRecordings(),
@@ -131,8 +100,6 @@ function ClipLibraryPage() {
     refetchOnWindowFocus: true,
   });
 
-  // The per-clip drip rows + the paused state, hydrated from the loader and refetched on
-  // focus (so a slot the drip cron fires while the operator is away re-reads as `posted`).
   const { data: drip } = useQuery({
     initialData: initialDrip,
     queryFn: () => fetchDripState(),
@@ -140,8 +107,6 @@ function ClipLibraryPage() {
     refetchOnWindowFocus: true,
   });
 
-  // The drip row per clip id — merged onto each card as its `scheduled`/`posted`/`failed`
-  // state (only the `instagram` platform rows exist today; keyed by clip).
   const dripByClip = useMemo(() => {
     const map = new Map<string, ClipDrip>();
 
@@ -161,38 +126,30 @@ function ClipLibraryPage() {
   const [error, setError] = useAutoNotice();
   const [notice, setNotice] = useAutoNotice();
 
-  // The batch-schedule selection: a set of clip ids the operator ticked to schedule together.
   const [selected, setSelected] = useState<ReadonlySet<string>>(() => new Set());
 
-  // Every recording by its id — the per-card recording label lookup (each flat-grid card
-  // still shows which set/mixtape its clip is from).
   const recordingById = useMemo(
     () => new Map(recordings.map((rec) => [rec.id, rec] as const)),
     [recordings],
   );
 
-  // Every clip's source recording id is the one grouping/filter axis.
   const libraryClips = useMemo<LibraryClip[]>(
     () => clips.map((clip) => ({ ...clip, resolvedRecordingId: clip.recordingId })),
     [clips],
   );
 
-  // The dropdown only offers recordings that actually yielded a clip — no empty options.
   const recordingsWithClips = useMemo(() => {
     const ids = new Set(libraryClips.map((clip) => clip.resolvedRecordingId).filter(Boolean));
 
     return recordings.filter((rec) => ids.has(rec.id));
   }, [libraryClips, recordings]);
 
-  // If the active recording filter no longer has clips, fall back to "all".
   useEffect(() => {
     if (recordingId !== ALL_FILTER && !recordingsWithClips.some((rec) => rec.id === recordingId)) {
       setRecordingId(ALL_FILTER);
     }
   }, [recordingId, recordingsWithClips]);
 
-  // Filter, then flatten to ONE continuous grid sorted newest-first by clip `createdAt`
-  // (no per-recording grouping — each card keeps its own recording label).
   const visible = useMemo<LibraryClip[]>(
     () => sortClipsNewestFirst(filterClips(libraryClips, { recordingId, status }) as LibraryClip[]),
     [libraryClips, recordingId, status],
@@ -215,8 +172,6 @@ function ClipLibraryPage() {
     },
   });
 
-  // The kill switch: pause / resume the whole drip. Optimistic — flip the cached paused
-  // state at once (the Switch tracks it instantly), roll back on error, re-read on settle.
   const setPaused = useMutation<void, Error, boolean, { previous?: typeof drip }>({
     mutationFn: async (paused: boolean) => {
       const response = await fetch("/api/v1/admin/clips/drip/state", {
@@ -249,12 +204,7 @@ function ClipLibraryPage() {
     onSettled: () => queryClient.invalidateQueries({ queryKey: ["admin", "clip-posts"] }),
   });
 
-  // Batch-schedule the current selection onto the jittered drip queue (server-side chain).
   const batchSchedule = useMutation<{ scheduled: number }, Error, string[]>({
-    // The operator-tier batch op (POST /admin/clips/schedule → set_clip_schedules): chains
-    // the jittered ~daily slots server-side (one nextDripSlot roll per clip off the live
-    // queue tail), snapshotting a fresh caption each. Same contract carrier as the per-clip
-    // schedule op — a plain fetch to the REST path, gated by the web admin grant.
     mutationFn: async (clipIds: string[]) => {
       const response = await fetch("/api/v1/admin/clips/schedule", {
         body: JSON.stringify({ clipIds }),
@@ -282,7 +232,6 @@ function ClipLibraryPage() {
 
   const statusItems = { all: "Any state", done: "Ready", pending: "Cutting" } as const;
 
-  // Toggle one clip in the batch-schedule selection.
   const toggleSelected = (clipId: string) =>
     setSelected((current) => {
       const next = new Set(current);
@@ -296,8 +245,6 @@ function ClipLibraryPage() {
       return next;
     });
 
-  // Prune selections that scroll out of the filtered view (a filter change shouldn't leave a
-  // hidden clip selected). Only cut, visible clips are selectable.
   const visibleIds = useMemo(() => new Set(visible.map((clip) => clip.id)), [visible]);
 
   useEffect(() => {
@@ -314,9 +261,6 @@ function ClipLibraryPage() {
       title="Clip library"
     >
       <div className="p-4 sm:p-5">
-        {/* The kill switch: pause / resume the whole Instagram drip-feed. Prominent at the top
-            of the page — one flip halts every future scheduled post (the schedule stays
-            intact). */}
         <DripKillSwitch
           onToggle={(paused) => setPaused.mutate(paused)}
           paused={drip.paused}
@@ -385,8 +329,6 @@ function ClipLibraryPage() {
           </p>
         ) : null}
 
-        {/* The batch-schedule bar — appears once the operator ticks one or more cut clips.
-            Schedules the whole selection onto the jittered drip chain in one move. */}
         {selected.size > 0 ? (
           <BatchScheduleBar
             count={selected.size}
@@ -428,8 +370,6 @@ function ClipLibraryPage() {
   );
 }
 
-// The kill switch: a prominent Switch that pauses / resumes the entire Instagram drip-feed.
-// Paused keeps every scheduled row intact — nothing fires until the operator flips it live.
 function DripKillSwitch({
   onToggle,
   paused,
@@ -462,8 +402,6 @@ function DripKillSwitch({
   );
 }
 
-// The batch-schedule action bar: shown while a selection exists. Schedules the whole
-// selection onto the jittered drip chain server-side, or clears the selection.
 function BatchScheduleBar({
   count,
   onClear,
@@ -495,8 +433,6 @@ function BatchScheduleBar({
   );
 }
 
-// A recording's display label for the filter dropdown: its coordinate once promoted
-// (`fluncle://<logId>`), else its title.
 function recordingLabel(recording: RecordingDTO): string {
   return recording.logId ? `fluncle://${recording.logId}` : recording.title;
 }

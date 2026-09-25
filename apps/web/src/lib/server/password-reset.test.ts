@@ -7,21 +7,6 @@ import { createIntegrationAuth } from "./integration-auth";
 import { createIntegrationDb } from "./integration-db";
 import { createPublicAuthOptions } from "./public-auth";
 
-// The password-reset rail and the Expo handshake, over the REAL production auth
-// options (`createPublicAuthOptions`) on an in-memory libSQL database with the real
-// migrations applied — the same harness the device-auth suite uses.
-//
-// Two things under test:
-//   1. The config carries the mobile handshake: the `expo` plugin is registered and
-//      the app scheme (`fluncle://`) is a trusted origin.
-//   2. The reset request is email-enumeration-safe: `/request-password-reset`
-//      returns the same 200 whether or not the address is on an account, and the
-//      reset email only goes out for a real account, delivered from `sendResetPassword`.
-
-// Capture the reset-email send without touching Resend. The mock covers EVERY
-// `./resend` export the sign-up path can reach (verification email, newsletter
-// segment) — a partial mock leaves those as throwing getters, which is noise here
-// and a variable this suite doesn't control.
 const sendPasswordResetEmail = vi.fn<(params: { to: string; url: string }) => Promise<void>>(
   async () => {},
 );
@@ -48,8 +33,7 @@ beforeEach(async () => {
   db = await createIntegrationDb();
   process.env.BETTER_AUTH_SECRET = "password-reset-test-secret-not-for-production";
   process.env.BETTER_AUTH_URL = BASE_URL;
-  // The real production options with sendOnSignUp off — see integration-auth.ts
-  // for why the verification branch's request clone cannot ride in a Node suite.
+
   auth = createIntegrationAuth(drizzle(db, { schema }));
 });
 
@@ -92,7 +76,7 @@ describe("mobile-accounts server config", () => {
     const options = createPublicAuthOptions(drizzle(db, { schema }));
 
     expect(options.trustedOrigins).toContain("fluncle://");
-    // The web origins stay put — the scheme is additive.
+
     expect(options.trustedOrigins).toContain("https://www.fluncle.com");
     expect(options.plugins?.some((plugin) => plugin.id === "expo")).toBe(true);
   });
@@ -128,7 +112,6 @@ describe("password-reset request (email-enumeration-safe)", () => {
       body: { email: "nobody@example.com", redirectTo: `${BASE_URL}/reset-password` },
     });
 
-    // Identical response shape to the real-account case — no enumeration signal.
     expect(response.status).toBe(200);
     expect(sendPasswordResetEmail).not.toHaveBeenCalled();
   });

@@ -26,17 +26,6 @@ import {
 } from "@/lib/server/account-data";
 import { createCsrfToken, getPublicSession } from "@/lib/server/public-auth";
 
-// The account area, redesigned as a per-door surface. The route owns the loader, the two `createServerFn`s the loader calls, the
-// page shell + per-door masthead, and the door switch; each door's contents live in
-// its own module under components/account. Loading is SSR-first (real content on first
-// paint, no blank→pop) with a react-query hybrid seeded from the loader; per-door
-// skeletons appear only on a client-side door switch.
-
-/**
- * The identity read: the `/me` session shape + a mutation token for the signed-in
- * user. Runs with the request (via `getRequest`) so `meResponse`/`getPublicSession`
- * resolve the caller's own session. Always fetched — signed-out gets identity only.
- */
 const getAccountIdentity = createServerFn({ method: "GET" }).handler(
   async (): Promise<AccountIdentity> => {
     const me = await meResponse(getRequest());
@@ -45,11 +34,6 @@ const getAccountIdentity = createServerFn({ method: "GET" }).handler(
   },
 );
 
-/**
- * The active door's data, and ONLY that door's — the loader passes the current tab so
- * a signed-in read never fetches the two doors the user isn't looking at. Settings
- * rides on `me`, so it carries nothing extra.
- */
 const getAccountDoorData = createServerFn({ method: "GET" })
   .validator((data: { tab: AccountTab }) => data)
   .handler(async ({ data }): Promise<DoorData> => {
@@ -100,9 +84,7 @@ export const Route = createFileRoute("/account")({
   loaderDeps: ({ search }) => ({ tab: search.tab }),
   loader: async ({ deps }): Promise<{ door: DoorData | undefined; identity: AccountIdentity }> => {
     const identity = await getAccountIdentity();
-    // Fetch the active door on the SERVER only: SSR paints real content on first
-    // paint, while a client-side door switch skips it so react-query can show the
-    // per-door skeleton before its data lands. Signed-out fetches no door.
+
     const door =
       import.meta.env.SSR && identity.me.user
         ? await getAccountDoorData({ data: { tab: deps.tab ?? "galaxy" } })
@@ -110,9 +92,7 @@ export const Route = createFileRoute("/account")({
 
     return { door, identity };
   },
-  // The loader carries this user's identity + door data. Override the router's 60s
-  // default to 0 so a client nav never reuses one user's account view for another; the
-  // component reads through react-query (below) for its own liveness posture.
+
   staleTime: 0,
   head: () => ({
     links: [{ href: `${siteUrl}/account`, rel: "canonical" }],
@@ -123,18 +103,13 @@ export const Route = createFileRoute("/account")({
           "Private Fluncle account settings, Galaxy progress, saved findings, and submissions.",
         name: "description",
       },
-      // A private, per-user surface (identity, saves, Galaxy progress): it exists for the
-      // signed-in crew, but there is nothing here for a crawler to index — same posture as
-      // /recommendations. Self-canonical above, `noindex` here.
+
       { content: "noindex", name: "robots" },
     ],
   }),
   component: AccountPage,
 });
 
-// The per-door masthead: the title names the room now that the in-page tab strip is
-// gone (the crew-slot menu is the switcher). Sentence-case taglines, no exclamation
-// marks, no em dashes.
 const DOOR_MASTHEAD: Record<AccountTab, { tagline: string; title: string }> = {
   galaxy: { tagline: "Your logs, your runs, and the stars you've reached.", title: "The Galaxy" },
   saves: { tagline: "The findings and sets you kept.", title: "Saves" },
@@ -153,11 +128,6 @@ function AccountPage() {
   const [message, setMessage] = useState("");
   const activeTab: AccountTab = tab ?? "galaxy";
 
-  // Identity is seeded from the loader (SSR) and never refetches on focus — the
-  // session rarely changes under the user's feet. Mutations invalidate it explicitly.
-  // Long `staleTime` so the seeded value isn't re-fetched on mount (the QueryClient has
-  // no client-wide defaultOptions); the explicit mutation invalidation is what refreshes
-  // it, not a mount refetch.
   const identityQuery = useQuery({
     initialData: loaderData.identity,
     queryFn: () => getAccountIdentity(),
@@ -168,13 +138,6 @@ function AccountPage() {
   const { csrfToken, me } = identityQuery.data;
   const signedIn = !!me.user;
 
-  // The active door's data, seeded from the loader and keyed by tab so each door has
-  // its own cache entry; focus-refetch keeps the live doors fresh (off for settings,
-  // which rides on `me`). On a client-side switch the initial data is absent, so the
-  // per-door skeleton shows until the fetch lands.
-  // A short `staleTime` suppresses the redundant mount refetch of the door the loader
-  // already SSR'd, while still letting focus-refetch deliver liveness (the operator tabs
-  // back) and a client-side door switch fetch its fresh data.
   const doorQuery = useQuery({
     enabled: signedIn,
     initialData: loaderData.door,
@@ -184,8 +147,6 @@ function AccountPage() {
     staleTime: 30_000,
   });
 
-  // The doors' mutations call refresh() after a write; repointed onto react-query so a
-  // profile/save/delete re-reads both identity and the active door.
   const refresh = () => queryClient.invalidateQueries({ queryKey: ["account"] });
 
   const masthead = signedIn ? DOOR_MASTHEAD[activeTab] : SIGNED_OUT_MASTHEAD;
@@ -239,7 +200,6 @@ function AccountPage() {
   );
 }
 
-/** The load-failure path (kept from the monolith): surface it, offer the retry. */
 function LoadFailed({ onRetry }: { onRetry: () => void }) {
   return (
     <div className="account-section">

@@ -3,16 +3,6 @@ import { beforeEach, describe, expect, it, type MockInstance, vi } from "vitest"
 
 import { createIntegrationDb } from "./integration-db";
 
-// THE LABEL TILE COVER, against the real migrated schema.
-//
-// A label borrows its cover from one of its tracks: the freshest release with cover art (an
-// undated release last), ties broken by the lower track id, carrying that track's album master
-// columns. The pick is two covering seeks on `tracks_label_cover_idx` (the label's newest dated
-// release with art, then the lowest track id with art on it) and reads the one winning cover by
-// primary key. These tests pin that it returns exactly the row both ordered references below return,
-// for every label shape and through every public read that carries it, and that its plan reads index
-// entries only, with no sort and no album seek inside the pick.
-
 let db: Client;
 let execute: MockInstance<Client["execute"]>;
 
@@ -22,7 +12,6 @@ vi.mock("./db", async (importOriginal) => {
   return { ...actual, getDb: () => Promise.resolve(db) };
 });
 
-// Imported AFTER the mock so the module's `getDb` reads the fixture database.
 const {
   LABEL_CATALOGUE_COVER_JSON,
   coverFromJson,
@@ -31,8 +20,6 @@ const {
   listLabelsHubPage,
 } = await import("./labels");
 
-/** The single ordered join the pick must agree with: the label's tracks ordered with their albums
-    joined, first row kept. */
 const REFERENCE_COVER_JSON = `(select json_object('u', t2.album_image_url, 'k', a2.image_key,
                               's', a2.image_state, 'v', a2.image_updated_at)
              from tracks t2
@@ -41,8 +28,6 @@ const REFERENCE_COVER_JSON = `(select json_object('u', t2.album_image_url, 'k', 
             order by t2.release_date is null asc, t2.release_date desc, t2.track_id asc
             limit 1)`;
 
-/** The ordered pick the two seeks must agree with: the label's tracks alone in the rule's full
-    order, first `track_id` kept, then that one row read by primary key with its album joined. */
 const ORDERED_PICK_COVER_JSON = `(select json_object('u', c.album_image_url, 'k', a2.image_key,
                               's', a2.image_state, 'v', a2.image_updated_at)
              from tracks c
@@ -71,10 +56,9 @@ const ALBUMS: SeedAlbum[] = [
   { id: "al-pending", key: "albums/al-pending.jpg", state: "pending", updatedAt: null },
   { id: "al-none", key: null, state: "none", updatedAt: null },
 ];
-/** Album ids a track may point at: real rows, no album, and an id with no album row. */
+
 const ALBUM_POOL = ["al-owned", "al-owned-2", "al-pending", "al-none", null, "al-dangling"];
 
-/** A deterministic PRNG, so the generated world is identical on every run. */
 function mulberry32(seed: number): () => number {
   let state = seed;
 
@@ -91,10 +75,6 @@ function art(trackId: string): string {
   return `https://covers.example/${trackId}.jpg`;
 }
 
-/**
- * The hand-built label shapes plus a generated tie-heavy world. Track ids, insertion order, and
- * release order all disagree, so an order that dropped a term would pick a different row.
- */
 function world(): { labels: SeedLabel[]; tracks: SeedTrack[] } {
   const labels: SeedLabel[] = [];
   const tracks: SeedTrack[] = [];
@@ -105,8 +85,6 @@ function world(): { labels: SeedLabel[]; tracks: SeedTrack[] } {
     return id;
   };
 
-  // A label with 1,200 tracks over a few dates, a tenth undated, some without art: the freshest
-  // date is shared by several tracks, and the lowest track id on it has no art.
   const big = label("big-imprint");
   for (let index = 0; index < 1200; index += 1) {
     const trackId = `big-${String((index * 7919) % 10_007).padStart(5, "0")}`;
@@ -123,7 +101,6 @@ function world(): { labels: SeedLabel[]; tracks: SeedTrack[] } {
     { albumId: "al-none", art: art("big-z"), labelId: big, releaseDate: null, trackId: "big-z" },
   );
 
-  // Equal release dates, inserted in descending id order: the lowest id wins.
   const tie = label("tie-break");
   for (const trackId of ["tie-d", "tie-c", "tie-b", "tie-a"]) {
     tracks.push({
@@ -135,22 +112,18 @@ function world(): { labels: SeedLabel[]; tracks: SeedTrack[] } {
     });
   }
 
-  // Every release undated: the lowest id with art wins.
   const undated = label("undated-only");
   for (const trackId of ["und-3", "und-1", "und-2"]) {
     tracks.push({ albumId: null, art: art(trackId), labelId: undated, releaseDate: null, trackId });
   }
 
-  // Tracks, but none with art: no cover.
   const noArt = label("no-art");
   for (const trackId of ["noart-1", "noart-2", "noart-3"]) {
     tracks.push({ albumId: "al-owned", art: null, labelId: noArt, releaseDate: NOW, trackId });
   }
 
-  // No tracks at all (the stored counter still clears the floor): no cover.
   label("no-tracks");
 
-  // The freshest release has no art, so the older one with art wins.
   const uncovered = label("fresh-uncovered");
   tracks.push(
     {
@@ -176,7 +149,6 @@ function world(): { labels: SeedLabel[]; tracks: SeedTrack[] } {
     },
   );
 
-  // Mixed date precision orders as text: the day beats the month beats the year.
   const precision = label("date-precision");
   tracks.push(
     {
@@ -202,7 +174,6 @@ function world(): { labels: SeedLabel[]; tracks: SeedTrack[] } {
     },
   );
 
-  // The winner has no album row, or points at an album id with no row: raw art, null master.
   const albumless = label("album-less");
   tracks.push(
     {
@@ -221,8 +192,6 @@ function world(): { labels: SeedLabel[]; tracks: SeedTrack[] } {
     },
   );
 
-  // The dated releases carry no art and the undated ones do: the undated lowest id wins, so the
-  // newest-date seek must only consider tracks with art.
   const undatedArt = label("undated-art-dated-bare");
   tracks.push(
     { albumId: null, art: null, labelId: undatedArt, releaseDate: "2025-01-01", trackId: "uab-0" },
@@ -237,7 +206,6 @@ function world(): { labels: SeedLabel[]; tracks: SeedTrack[] } {
     { albumId: null, art: art("uab-2"), labelId: undatedArt, releaseDate: null, trackId: "uab-2" },
   );
 
-  // A dated release with art beats an undated one with a lower id.
   const datedFirst = label("dated-beats-undated");
   tracks.push(
     { albumId: null, art: art("dbu-0"), labelId: datedFirst, releaseDate: null, trackId: "dbu-0" },
@@ -250,14 +218,12 @@ function world(): { labels: SeedLabel[]; tracks: SeedTrack[] } {
     },
   );
 
-  // An empty-string date is a dated release (it sorts below every other date, above undated).
   const emptyDate = label("empty-date");
   tracks.push(
     { albumId: null, art: art("ed-1"), labelId: emptyDate, releaseDate: null, trackId: "ed-1" },
     { albumId: null, art: art("ed-2"), labelId: emptyDate, releaseDate: "", trackId: "ed-2" },
   );
 
-  // Fresher tracks on no label: they must never leak into any label's pick.
   tracks.push({
     albumId: "al-owned",
     art: art("orphan-1"),
@@ -266,7 +232,6 @@ function world(): { labels: SeedLabel[]; tracks: SeedTrack[] } {
     trackId: "a-orphan",
   });
 
-  // A generated world: 45 labels over only six dates plus undated, so ties are the common case.
   const random = mulberry32(0x1abe1);
   const dates = ["2021-01-01", "2021-06-30", "2022-12-31", "2023", "2023-07", "2024-02-29", null];
   for (let labelIndex = 0; labelIndex < 45; labelIndex += 1) {
@@ -328,7 +293,6 @@ async function seed(labels: SeedLabel[], tracks: SeedTrack[]): Promise<void> {
   );
 }
 
-/** The cover rule, computed in TypeScript with no SQL: the picked track id per label. */
 function expectedPick(labelId: string, tracks: SeedTrack[]): string | undefined {
   return tracks
     .filter((track) => track.labelId === labelId && track.art !== null)
@@ -358,7 +322,6 @@ async function coverColumns(expression: string): Promise<Map<string, null | stri
   );
 }
 
-/** The SQL and bound args of one executed statement, whichever call shape it used. */
 function asStatement(value: unknown): { args: InArgs; sql: string } | undefined {
   if (typeof value === "string") {
     return { args: [], sql: value };
@@ -447,8 +410,6 @@ describe("the label tile cover pick", () => {
       );
     }
 
-    // A resolved album master wins over the raw art and an unresolved one does not, so both
-    // provider paths are exercised.
     expect(expected("tie-break")).toBe(art("tie-a"));
     expect(expected("fresh-uncovered")).toContain("albums/al-owned-2.png");
     expect(expected("undated-only")).toBe(art("und-1"));
@@ -467,7 +428,6 @@ describe("the label tile cover pick", () => {
       .map((call) => asStatement(call[0]))
       .filter((statement) => statement?.sql.includes("json_object('u'") === true);
 
-    // The hub's batched tile read and the single-label detail read.
     expect(statements.some((statement) => statement?.sql.includes("labels.slug in"))).toBe(true);
     expect(statements.some((statement) => statement?.sql.includes("labels.id = ?"))).toBe(true);
 
@@ -488,12 +448,9 @@ describe("the label tile cover pick", () => {
       const details = nodes.map((node) => node.detail);
       const scopeOf = (pattern: RegExp) => nodes.find((node) => pattern.test(node.detail))?.parent;
 
-      // Nothing is sorted and no `tracks` range is scanned: every `tracks` read is a seek.
       expect(details.filter((detail) => /TEMP B-TREE/.test(detail))).toEqual([]);
       expect(details.filter((detail) => detail.startsWith("SCAN "))).toEqual([]);
 
-      // The newest dated release with art and the lowest track id with art on it, both answered
-      // from the covering index entries.
       expect(details).toContainEqual(
         "SEARCH t3 USING COVERING INDEX tracks_label_cover_idx (label_id=?)",
       );
@@ -501,8 +458,6 @@ describe("the label tile cover pick", () => {
         "SEARCH t2 USING COVERING INDEX tracks_label_cover_idx (label_id=? AND release_date=?)",
       );
 
-      // No album seek and no `tracks` row read inside the pick; the winner's row and its album are
-      // read once, in the cover scope around it.
       const pickScope = scopeOf(/^SEARCH t2 /);
       const newestScope = scopeOf(/^SEARCH t3 /);
       const coverScope = nodes.find((node) => node.id === pickScope)?.parent;

@@ -1,8 +1,3 @@
-// The per-link review backfill, proven against the REAL migrated schema (createIntegrationDb),
-// so the derivation runs against the real `artist_socials.reviewed_at` DDL. The guarantee under
-// test is the migration-semantics choice: it reproduces the OLD per-artist needs-a-look truth at
-// the finer grain — a link is born reviewed iff its artist was reviewed AND it predates that
-// review; everything else stays fresh (null). And it is idempotent (a second run stamps nothing).
 import { type Client } from "@libsql/client";
 import { beforeEach, describe, expect, it } from "vitest";
 
@@ -48,13 +43,10 @@ beforeEach(async () => {
 
 describe("backfillArtistSocialReviews", () => {
   it("stamps a seen link, leaves a fresh link and a never-reviewed artist's links null", async () => {
-    // Reviewed artist: one link created BEFORE the review (seen), one AFTER (fresh, e.g. a Twitch
-    // re-queue onto an already-reviewed artist).
     await seedArtist("reviewed", "2026-07-05T00:00:00.000Z");
     await seedSocial("seen", "reviewed", "instagram", "2026-07-01T00:00:00.000Z");
     await seedSocial("fresh", "reviewed", "twitch", "2026-07-09T00:00:00.000Z");
 
-    // Never-reviewed artist: its links must stay fresh.
     await seedArtist("never", null);
     await seedSocial("never-link", "never", "youtube", "2026-07-01T00:00:00.000Z");
 

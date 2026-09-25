@@ -15,22 +15,7 @@ import { getLabelBySlug } from "@/lib/server/labels";
 import { resolveLogPageTarget } from "@/lib/server/log-resolver";
 import { getFindingsByAlbum, getFindingsByArtist, getFindingsByLabel } from "@/lib/server/tracks";
 
-// The oEmbed 1.0 provider endpoint (https://oembed.com). A consumer that found a
-// page's `<link rel="alternate" type="application/json+oembed" href="…/oembed?url=…">`
-// fetches this and gets a provider envelope it can unfurl — a `rich` iframe card for
-// a finding/mixtape, a `link` for an artist / label / album page or the mixtapes index.
-//
-// This is a root-level document emitter at the spec's fixed path `/oembed` (the
-// discovery link and every consumer hardcode it), taking an external query-string
-// contract (`url`, `format`, `maxwidth`, `maxheight`) and emitting either JSON or a
-// 501 on an unsupported format — a discovery surface exactly like the feeds
-// (/rss.xml) and the sitemap, none of which are oRPC operations. It lives outside
-// /api/v1, so the orpc-coverage net (which enumerates only that tree) never sees it,
-// same as the feeds; no carve-out entry is needed.
-
 const JSON_HEADERS = {
-  // A finding/mixtape/artist page is publish-then-immutable; let a consumer cache
-  // the envelope for an hour (parity with the other discovery documents).
   "Cache-Control": "public, max-age=3600",
   "Content-Type": "application/json; charset=utf-8",
 } as const;
@@ -46,8 +31,6 @@ function errorResponse(status: number, message: string): Response {
   });
 }
 
-// The OG card the /log page already points og:image at, versioned so a re-enriched
-// finding re-renders (parity with log.$logId.tsx).
 function findingThumbnailUrl(logId: string, updatedAt: string | undefined): string {
   const version = updatedAt ? Date.parse(updatedAt) : Number.NaN;
   const query = Number.isFinite(version) ? `?v=${version}` : "";
@@ -113,9 +96,7 @@ async function resolveOembed(
 
     const findings = await getFindingsByArtist(artist.id, artist.name);
     const cover = findings[0];
-    // The artist's OWN portrait leads, the same ladder the page head runs (artist.$slug.tsx),
-    // then the freshest finding's cover, then the house cover. An oEmbed-aware consumer prefers
-    // this payload over the page's og:image, so the card and the page must not disagree.
+
     const thumbnailUrl =
       artist.imageUrl ??
       (cover ? albumCoverAtSize(cover.albumImageUrl, "large") : undefined) ??
@@ -135,7 +116,6 @@ async function resolveOembed(
       return undefined;
     }
 
-    // Prefer a finding's cover, then the label's own logo, then the house cover.
     const cover = (await getFindingsByLabel(label.id))[0];
     const thumbnailUrl =
       (cover ? albumCoverAtSize(cover.albumImageUrl, "large") : undefined) ??
@@ -160,7 +140,7 @@ async function resolveOembed(
     const thumbnailUrl =
       (cover ? albumCoverAtSize(cover.albumImageUrl, "large") : undefined) ??
       `${siteUrl}/fluncle-cover.png`;
-    // A record's author is its artist(s); the cover finding carries them when the album has one.
+
     const authorName = cover && cover.artists.length > 0 ? cover.artists.join(", ") : undefined;
 
     return buildLinkResponse({
@@ -170,7 +150,6 @@ async function resolveOembed(
     });
   }
 
-  // The mixtapes index — a collection page, no per-item card.
   return buildLinkResponse({
     thumbnailUrl: `${siteUrl}/fluncle-cover.png`,
     title: "Fluncle: mixtapes",
@@ -184,8 +163,6 @@ export const Route = createFileRoute("/oembed")({
         const url = new URL(request.url);
         const format = url.searchParams.get("format");
 
-        // The spec: a provider that can't return the requested format returns 501.
-        // We serve JSON only (XML is legacy); absent format defaults to JSON.
         if (format !== null && format !== "json") {
           return errorResponse(
             501,

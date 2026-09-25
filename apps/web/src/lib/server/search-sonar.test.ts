@@ -2,14 +2,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { type SearchFilters } from "@fluncle/contracts/orpc";
 
-// The sonic surface's sonar seam, mocked at exactly the boundary this slice introduced (`./sonar`):
-//   - explicit diagnostic opt-in + flag OFF ⇒ the bounded Turso scan runs and sonar is NEVER called;
-//   - flag ON + sonar answers ⇒ the rows are hydrated IN SONAR'S ORDER, the vector scan is skipped;
-//   - flag ON + a filter sonar cannot express faithfully ⇒ it reports unavailable (sonar NOT
-//     called), so the flag flip can never silently drop a filter or imply full-corpus SQL recall.
-// The DB is mocked so the test states EXACTLY which rows hydrate; the real vector SQL is proven in
-// search.integration.test.ts.
-
 const isSonarSonicEnabled = vi.hoisted(() => vi.fn<() => Promise<boolean>>());
 const isSonarArtistsEnabled = vi.hoisted(() => vi.fn<() => Promise<boolean>>());
 const isSonarLogEnabled = vi.hoisted(() => vi.fn<() => Promise<boolean>>());
@@ -30,14 +22,12 @@ vi.mock("./db", async () => {
   return { ...actual, getDb: async () => ({ execute }) };
 });
 
-// The model tier is a network call; stubbed so the gate in front of it is observable.
 const translateQuery = vi.hoisted(() => vi.fn<(q: string) => Promise<unknown>>());
 
 vi.mock("./search-llm", () => ({ translateQuery }));
 
 import { rankTracksByVector, searchArchive } from "./search";
 
-/** A minimal `SEARCH_SELECT`-shaped row; only the fields the assertions read need be real. */
 function row(trackId: string) {
   return {
     album: null,
@@ -71,7 +61,6 @@ afterEach(() => {
 describe("rankTracksByVector — the sonar route (dark)", () => {
   it("explicit diagnostic mode runs the bounded Turso scan while the flag is off", async () => {
     isSonarSonicEnabled.mockResolvedValue(false);
-    // The one DB call is the explicitly requested Turso vector scan; it returns rows in scan order.
     execute.mockResolvedValue({ rows: [row("t1"), row("t2")] });
 
     const hits = await rankTracksByVector(PROBE, NO_FILTERS, undefined, 5, {
@@ -88,7 +77,6 @@ describe("rankTracksByVector — the sonar route (dark)", () => {
       { id: "t2", score: 0.9 },
       { id: "t1", score: 0.8 },
     ]);
-    // Hydration returns the rows in a DIFFERENT (DB) order — the output must follow sonar, not this.
     execute.mockResolvedValue({ rows: [row("t1"), row("t2")] });
 
     const hits = await rankTracksByVector(PROBE, NO_FILTERS, "anchor", 5);
@@ -243,9 +231,6 @@ describe("rankTracksByVector — the sonar route (dark)", () => {
   });
 });
 
-// A metered mount hands `searchArchive` a gate for the one step that spends vendor money. The sonic
-// tier is a regex, an anchor read, a Sonar call, and a hydration read, so it must answer without
-// ever touching that gate, and the answer must be the one an ungated search gives.
 describe("searchArchive — the model-tier gate", () => {
   const SENTENCE = "rolling tracks for a rainy night drive";
 

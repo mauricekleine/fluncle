@@ -49,22 +49,6 @@ import {
 } from "@/lib/server/galaxies-map";
 import { cn } from "@/lib/utils";
 
-// The `/admin/galaxies` NAMING view (Slice 3, browse-by-feel RFC) — the operator's one
-// sitting to turn the machine's sound-derived map into a named one. The nightly
-// `fluncle-cluster` cron (Slice 2) fits the k=9 galaxies and mints each a permanent
-// machine HANDLE; identity is the machine's, the NAME is the operator's editorial act.
-// So this view is a naming queue: each unnamed galaxy shows its handle, its member
-// covers (which double as an AUDITION — the shared `/api/preview` relay, so the operator
-// can HEAR what the cluster is before naming it), and its coherence evidence. The public
-// lens (Slice 4) gates on a fully-named map — the launch gate — so the header carries the
-// naming progress (n of N named). Renders honestly BEFORE any galaxies exist (a quiet
-// "the map hasn't been fit yet") and AFTER the fit lands (N unnamed galaxies awaiting a
-// name). The persona law (docs/admin-shell.md): naming is publish-class, so it rides the
-// operator-tier `update_galaxy` op (an agent token 403s) — a machine handle NEVER renders
-// publicly.
-
-// How many member covers to show per galaxy — a representative, core-first handful for
-// the audition, not the whole cluster (the row's count stays the true total).
 const MEMBER_CAP = 24;
 
 const GALAXIES_KEY = ["admin", "galaxies"] as const;
@@ -93,24 +77,13 @@ function AdminGalaxiesPage() {
     initialData: initial,
     queryFn: () => fetchGalaxies(),
     queryKey: GALAXIES_KEY,
-    // A DELIBERATE deviation from the admin-route default (`refetchOnWindowFocus: true`,
-    // AGENTS.md). This read is the single most expensive board on the admin: fetching it
-    // runs k (~9) `vector_distance_cos` scans — one core-first ranking per galaxy — plus k
-    // member hydrations. But the galaxy map is a NIGHTLY artifact: it only changes when the
-    // `fluncle-cluster` cron re-fits (once a night) or when the operator mutates it here
-    // (name / rename / request-split), and every one of those mutations already calls
-    // `invalidateQueries(GALAXIES_KEY)` in its `onSuccess` — so an operator edit still
-    // refreshes the board immediately. A window-focus refetch therefore buys nothing: it
-    // re-runs the whole k-vector-scan storm on every alt-tab for data that is byte-identical
-    // to what SSR already loaded. Off, with a `staleTime` floor as belt-and-suspenders
-    // against any other incidental refetch trigger.
+
     refetchOnWindowFocus: false,
     staleTime: 5 * 60 * 1000,
   });
 
   const board = useMemo(() => partitionGalaxyBoard(galaxies), [galaxies]);
-  // Every member across every shown galaxy — the union the shared preview bar resolves the
-  // now-playing finding against (one bar for the whole page, whichever cover is playing).
+
   const allMembers = useMemo(() => galaxies.flatMap((galaxy) => galaxy.members), [galaxies]);
 
   const subtitle =
@@ -155,17 +128,11 @@ function AdminGalaxiesPage() {
         )}
       </div>
 
-      {/* The shared /mix now-playing bar, reused verbatim: it portals past the admin
-          plate's backdrop-blur to the viewport and shows whichever member cover the
-          operator is auditioning. The whole audition rides the one preview singleton, so
-          starting a cover stops the last one. */}
       <MixPreviewBar notation={notation} tracks={allMembers} />
     </AdminShell>
   );
 }
 
-// The pre-fit state: the map is empty because the nightly cluster run hasn't drawn it yet
-// (or the archive has too few embedded findings to group). Quiet and honest — no fake rows.
 function EmptyMap() {
   return (
     <div className="mx-auto max-w-md rounded-lg border border-border bg-card/60 px-6 py-12 text-center">
@@ -239,23 +206,15 @@ function GalaxyCard({ galaxy }: { galaxy: GalaxyAdminWithMembers }) {
   const editing = !named || renaming;
 
   return (
-    // Neutral border in every state (One Sun: at the launch sitting up to nine unnamed
-    // cards share the screen, and a gold edge per card would blow the gold budget — the
-    // gold "Name it" button is the one sun each card carries; the "Awaiting a name"
-    // section grouping does the rest of the signposting).
     <article
       className={cn("rounded-lg border border-border bg-card/60 p-4", retired && "opacity-70")}
     >
       <div className="flex items-start gap-3">
         <div className="min-w-0 flex-1">
-          {/* The identity line. A NAMED galaxy leads with its editorial name (Title
-              register — the artist-name treatment); its machine handle sits quiet beneath.
-              An UNNAMED one leads with the handle alone, the only identity it has yet. */}
           {named ? (
             <>
               <h3 className="truncate text-base font-extrabold">{galaxy.name}</h3>
-              {/* The machine handle keeps the Oxanium coordinate face; the public URL
-                  rides plain muted text (Oxanium is for coordinates, not paths). */}
+
               <p className="truncate text-xs text-muted-foreground">
                 <span className="track-log-id">{galaxy.handle}</span> · /galaxies/{galaxy.slug}
               </p>
@@ -290,9 +249,6 @@ function GalaxyCard({ galaxy }: { galaxy: GalaxyAdminWithMembers }) {
         </div>
       </div>
 
-      {/* The audition: the member covers, core-first. Each cover is a play/pause button on
-          the shared preview singleton (the /mix machinery), so the operator hears the
-          cluster before naming it. */}
       {galaxy.members.length > 0 ? (
         <ul className="mt-3 flex list-none flex-wrap gap-2 p-0">
           {galaxy.members.map((member) =>
@@ -342,9 +298,6 @@ function GalaxyCard({ galaxy }: { galaxy: GalaxyAdminWithMembers }) {
   );
 }
 
-// One member cover, doubling as the row's audition control (the /mix `PreviewArtwork`
-// pattern): the album art with a hover/focus play-pause overlay driven by the shared
-// preview singleton, so starting one cover stops the last. `.preview-art` CSS is shared.
 function AuditionCover({ logId, member }: { logId: string; member: TrackListItem }) {
   const { activeTrackId, pauseResume, start, status } = usePreviewControls();
   const isCurrent = activeTrackId === logId;
@@ -386,9 +339,6 @@ function AuditionCover({ logId, member }: { logId: string; member: TrackListItem
   );
 }
 
-// The name/rename form — the operator's editorial act. The slug is derived from the name
-// (slugify), so one field is all the operator touches; the resulting public URL previews
-// live beneath it.
 function NameForm({
   busy,
   initial,
@@ -447,10 +397,6 @@ function NameForm({
   );
 }
 
-// The rare per-galaxy acts, off the resting surface (the disclosure law): rename (for a
-// named galaxy) and request a split. The split confirm is a CONTROLLED dialog owned by the
-// card (the renders.tsx pattern), so the menu item just opens it — no fragile nesting of a
-// dialog trigger inside a menu item.
 function GalaxyMenu({
   busy,
   named,
@@ -491,9 +437,6 @@ function GalaxyMenu({
   );
 }
 
-// The split confirm — a controlled AlertDialog. A split restructures the map on the next
-// nightly tick, so it names the consequence before the operator commits (the destructive-
-// confirm placement rule, though a split is structural rather than destructive).
 function SplitConfirm({
   busy,
   onConfirm,
@@ -542,9 +485,6 @@ function SplitConfirm({
   );
 }
 
-// The operator-tier `update_galaxy` op (PATCH /admin/galaxies/{id}). Naming is
-// publish-class, so this rides the operator carrier; the fetch mirrors the newsletter
-// admin's op calls (same-origin credentials implied, JSON body, message-bearing errors).
 async function patchGalaxy(
   id: string,
   body: { name?: string; requestSplit?: boolean; slug?: string },

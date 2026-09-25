@@ -1,21 +1,3 @@
-// The `admin-mixtapes` domain router module — the audio→Mixcloud /
-// video→YouTube distribution control plane for PROMOTED mixtapes. Each handler
-// reuses the live `/api/v1/admin/mixtapes/*` route logic verbatim; the auth tier
-// moves to the oRPC procedure middleware (../orpc-auth). The draft-authoring
-// handlers (create/members/publish/delete) are absent for draft mixtapes — a
-// mixtape is only ever born via `promote_recording`; plans own pre-publish
-// authoring.
-//
-// VERIFIED auth tiers (against the live handlers):
-//   - `list_mixtapes_admin` / `get_mixtape_social` — admin tier (`adminAuth`).
-//   - everything else — operator tier (`adminAuth` + `operatorGuard`).
-//
-// The live YouTube routes read their body via `parseJsonBody` (which returns a
-// Response on a non-JSON body); oRPC's OpenAPIHandler already decodes the body to
-// build `input`, so the handlers read the fields off `input` and reproduce the
-// in-handler validation (`invalid_request`, the status/log-id 409s, the YouTube
-// 502s) byte-for-byte.
-
 import { ORPCError } from "@orpc/server";
 import { mixcloudEditUrl, mixcloudSectionFields, mixcloudSections } from "@fluncle/contracts/util";
 import { buildClipCaption } from "../clip-caption";
@@ -55,27 +37,12 @@ import { purgeClipCache } from "../video-cache";
 import { getYouTubeAccessToken } from "../youtube";
 import { apiFault, type Implementer, toFault } from "./_shared";
 
-// YouTube's thumbnail cap, ported verbatim from the live finalize route.
 const THUMBNAIL_MAX_BYTES = 2 * 1024 * 1024;
 
-// The clip drip-feed's per-tick + rolling-24h caps (clip-drip-feed RFC §3/§4). At ~1
-// clip/day these never bite; they are the safety backstops. The 24h cap sits well under
-// Meta's ~25/day so the account never trips a rate flag.
 const DRIP_PER_TICK_CAP = 3;
 const DRIP_IG_DAILY_CAP = 10;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-/**
- * The clip drip-feed's capture-back pass: resolve the live Instagram permalink for every
- * posted-but-unlinked clip row and back-fill its `posted_url` (so the clip card's "View the
- * post on Instagram" link renders). Instagram publishes the Reel asynchronously — Postiz
- * auto-populates the real Graph-API permalink onto the post object a tick after the push —
- * so this runs at the head of each drip tick, draining the prior tick's posts. Mirrors the
- * YouTube/TikTok social-capture sweep: per row, `resolveSocialUrl(..., "instagram")` reads
- * the dated `/posts` list, and on a hit we set the URL + link the analytics release-id.
- * Best-effort — a not-yet-published post is simply skipped (retried next tick), and a single
- * failure never aborts the tick. Returns how many URLs were captured this pass.
- */
 async function captureDripPermalinks(): Promise<number> {
   const pending = await postedClipPostsAwaitingUrl();
   let captured = 0;
@@ -99,18 +66,11 @@ async function captureDripPermalinks(): Promise<number> {
   return captured;
 }
 
-// Ported verbatim from the live youtube/finalize route: a best-effort custom
-// thumbnail (the wide cover, rendered in-process). A thumbnail failure must not
-// fail finalize.
 async function trySetThumbnail(logId: string | undefined, videoId: string): Promise<void> {
   if (!logId) {
     return;
   }
 
-  // Lazy import: `mixtape-cover` pulls in `workers-og` (a yoga WASM module) that is
-  // heavy to evaluate and breaks under the vitest module resolver. Loading it only
-  // when a thumbnail is actually rendered keeps `./orpc`'s module graph clean (the
-  // live route loaded it lazily-by-route the same way).
   const { renderMixtapeCover } = await import("../mixtape-cover");
   const cover = await renderMixtapeCover(logId, "wide");
 
@@ -143,12 +103,7 @@ async function trySetThumbnail(logId: string | undefined, videoId: string): Prom
   }
 }
 
-/**
- * Build the `admin-mixtapes` domain's handlers. Each reuses the live route logic
- * verbatim; only the auth gate is relocated to the procedure middleware.
- */
 export function adminMixtapesHandlers(os: Implementer) {
-  // GET /admin/mixtapes — admin tier (live `requireAdmin`).
   const listMixtapesAdminHandler = os.list_mixtapes_admin.use(adminAuth).handler(async () => {
     try {
       return {
@@ -160,7 +115,6 @@ export function adminMixtapesHandlers(os: Implementer) {
     }
   });
 
-  // PATCH /admin/mixtapes/{mixtapeId} — operator tier (live `requireOperator`).
   const updateMixtapeHandler = os.update_mixtape
     .use(adminAuth)
     .use(operatorGuard)
@@ -175,7 +129,6 @@ export function adminMixtapesHandlers(os: Implementer) {
       }
     });
 
-  // GET /admin/mixtapes/{mixtapeId}/social — admin tier (live `requireAdmin`).
   const getMixtapeSocialHandler = os.get_mixtape_social
     .use(adminAuth)
     .handler(async ({ input }) => {
@@ -188,8 +141,6 @@ export function adminMixtapesHandlers(os: Implementer) {
       }
     });
 
-  // POST /admin/mixtapes/{mixtapeId}/mixcloud/finalize — operator tier (live
-  // `requireOperator`). The live route validates `url` (`invalid_request`/400).
   const finalizeMixtapeMixcloudHandler = os.finalize_mixtape_mixcloud
     .use(adminAuth)
     .use(operatorGuard)
@@ -217,8 +168,6 @@ export function adminMixtapesHandlers(os: Implementer) {
       }
     });
 
-  // POST /admin/mixtapes/{mixtapeId}/youtube/initiate — operator tier (live
-  // `requireOperator`).
   const initiateMixtapeYoutubeHandler = os.initiate_mixtape_youtube
     .use(adminAuth)
     .use(operatorGuard)
@@ -274,7 +223,7 @@ export function adminMixtapesHandlers(os: Implementer) {
           {
             body: JSON.stringify({
               snippet: {
-                categoryId: "10", // Music
+                categoryId: "10",
                 description,
                 title,
               },
@@ -324,8 +273,6 @@ export function adminMixtapesHandlers(os: Implementer) {
       }
     });
 
-  // POST /admin/mixtapes/{mixtapeId}/youtube/finalize — operator tier (live
-  // `requireOperator`).
   const finalizeMixtapeYoutubeHandler = os.finalize_mixtape_youtube
     .use(adminAuth)
     .use(operatorGuard)
@@ -360,8 +307,6 @@ export function adminMixtapesHandlers(os: Implementer) {
       }
     });
 
-  // POST /admin/mixtapes/{mixtapeId}/youtube/publish — operator tier (live
-  // `requireOperator`).
   const publishMixtapeYoutubeHandler = os.publish_mixtape_youtube
     .use(adminAuth)
     .use(operatorGuard)
@@ -418,12 +363,6 @@ export function adminMixtapesHandlers(os: Implementer) {
       }
     });
 
-  // POST /admin/mixtapes/{mixtapeId}/youtube/resync — operator tier. Re-derive the
-  // description + chapters from the mixtape's CURRENT cues and push them to the live
-  // video via videos.update — no re-upload. Server-side (the Worker holds the refresh
-  // token), like publish_mixtape_youtube. videos.update replaces the WHOLE snippet
-  // part, so we first videos.list the current snippet (title, categoryId, tags, …) and
-  // patch ONLY its description — nothing else about the video moves.
   const resyncMixtapeYoutubeHandler = os.resync_mixtape_youtube
     .use(adminAuth)
     .use(operatorGuard)
@@ -456,8 +395,6 @@ export function adminMixtapesHandlers(os: Implementer) {
 
         const accessToken = await getYouTubeAccessToken();
 
-        // videos.update needs the FULL snippet (title + categoryId are required); read
-        // the current one so the update preserves everything except the description.
         const listResponse = await fetch(
           `https://www.googleapis.com/youtube/v3/videos?part=snippet&id=${encodeURIComponent(videoId)}`,
           { headers: { Authorization: `Bearer ${accessToken}` } },
@@ -498,8 +435,7 @@ export function adminMixtapesHandlers(os: Implementer) {
           {
             body: JSON.stringify({
               id: videoId,
-              // Keep the whole existing snippet (title, categoryId, tags, …); replace
-              // only the description with the freshly-derived prose + chapter block.
+
               snippet: { ...currentSnippet, description },
             }),
             headers: {
@@ -530,13 +466,6 @@ export function adminMixtapesHandlers(os: Implementer) {
       }
     });
 
-  // POST /admin/mixtapes/{mixtapeId}/mixcloud/resync — operator tier. Re-derive the
-  // Mixcloud `sections[]` tracklist from the mixtape's CURRENT cues and push it to the
-  // live cloudcast via the Mixcloud edit endpoint — sections-only, NO audio re-upload.
-  // Server-side parity with resync_mixtape_youtube: the Worker holds the mixcloud_auth
-  // token (getMixcloudAccessToken), so this bytes-free edit runs here rather than
-  // CLI-side. Posting any `sections-*` field overwrites the whole tracklist; sending
-  // ONLY the section fields leaves name/description/picture untouched.
   const resyncMixtapeMixcloudHandler = os.resync_mixtape_mixcloud
     .use(adminAuth)
     .use(operatorGuard)
@@ -544,9 +473,7 @@ export function adminMixtapesHandlers(os: Implementer) {
       try {
         const posts = await listMixtapeSocialPosts(input.mixtapeId);
         const mixcloud = posts.find((post) => post.platform === "mixcloud");
-        // The cloudcast key/url live on the mixcloud distribution row (the SSOT);
-        // `externalId` is the key `/fluncle/<slug>/`. The recorded url/key never change
-        // on a re-sync, so there is nothing to finalize.
+
         const key = mixcloud?.externalId;
 
         if (!key) {
@@ -581,7 +508,6 @@ export function adminMixtapesHandlers(os: Implementer) {
           form.append(name, value);
         }
 
-        // Mixcloud diverges from Bearer auth — the token rides as a query param.
         const response = await fetch(
           `${mixcloudEditUrl(key)}?access_token=${encodeURIComponent(token)}`,
           { body: form, method: "POST" },
@@ -600,8 +526,6 @@ export function adminMixtapesHandlers(os: Implementer) {
           });
         }
 
-        // Mixcloud answers 200 even on a validation failure; the body carries the real
-        // outcome (`{ result: { success, message } }`).
         let success = false;
         let detail = text.slice(0, 300);
         try {
@@ -631,11 +555,6 @@ export function adminMixtapesHandlers(os: Implementer) {
       }
     });
 
-  // POST /admin/mixtapes/{mixtapeId}/announce — operator tier. The last lifecycle
-  // step: post the crew callout to the Telegram crew channel. `announceMixtape` owns
-  // the gates (minted + published), the idempotency marker (atomic claim → no
-  // double-post; `already_announced`/409 on a re-run), and the Telegram post itself,
-  // returning the exact text sent. It posts to a public channel, so the agent 403s.
   const announceMixtapeHandler = os.announce_mixtape
     .use(adminAuth)
     .use(operatorGuard)
@@ -649,9 +568,6 @@ export function adminMixtapesHandlers(os: Implementer) {
       }
     });
 
-  // ── Fluncle Studio: clips + cue backfill ──
-
-  // GET /admin/clips — admin tier (agent-allowed read). Optional ?recordingId/?status.
   const listClipsHandler = os.list_clips.use(adminAuth).handler(async ({ input }) => {
     try {
       return {
@@ -666,8 +582,6 @@ export function adminMixtapesHandlers(os: Implementer) {
     }
   });
 
-  // GET /admin/clips/{clipId}/caption — admin tier (agent-allowed read). Build the
-  // clip's caption: the stored-clean caption + the `fluncle://` coordinate line(s).
   const getClipCaptionHandler = os.get_clip_caption.use(adminAuth).handler(async ({ input }) => {
     try {
       const built = await buildClipCaption(input.clipId);
@@ -684,8 +598,6 @@ export function adminMixtapesHandlers(os: Implementer) {
     }
   });
 
-  // GET /admin/clips/social — admin tier (agent-allowed read). Every clip's IG drip row,
-  // so the library / CLI can show each clip's scheduled/posted/failed state.
   const listClipPostsHandler = os.list_clip_posts.use(adminAuth).handler(async () => {
     try {
       return { ok: true as const, posts: await listClipPosts() };
@@ -694,18 +606,10 @@ export function adminMixtapesHandlers(os: Implementer) {
     }
   });
 
-  // POST /admin/clips/drip — ADMIN tier (agent-allowed), NOT operator: the on-box
-  // `fluncle-clip-drip` cron drives it with the agent token (the `finalize_clip_cut` /
-  // `record_health` precedent — the box holds no Postiz key, so it only TRIGGERS the
-  // Worker, which owns the key). One bounded, idempotent tick of the drip-feed.
   const dripClipsHandler = os.drip_clips.use(adminAuth).handler(async () => {
     try {
-      // (a) Capture pass — back-fill `posted_url` for any posted-but-unlinked rows from a
-      // prior tick (Instagram publishes the Reel async, so its permalink lands a tick after
-      // the push). Read-only w.r.t. posting, so it runs even on a paused tick.
       const captured = await captureDripPermalinks();
 
-      // (b) The kill switch — a paused tick posts nothing (the schedule stays intact).
       if (await isDripPaused()) {
         return {
           attempted: 0,
@@ -719,7 +623,6 @@ export function adminMixtapesHandlers(os: Implementer) {
         };
       }
 
-      // (c) The budget: the per-tick cap AND the rolling-24h IG cap, whichever is smaller.
       const sinceIso = new Date(Date.now() - DAY_MS).toISOString();
       const recentPosted = await countRecentPostedInWindow(sinceIso);
       const remaining24h = Math.max(0, DRIP_IG_DAILY_CAP - recentPosted);
@@ -727,27 +630,17 @@ export function adminMixtapesHandlers(os: Implementer) {
 
       const totalDue = await countDueClipPosts();
       const due = await dueClipPosts({ limit: budget });
-      // What the cap deferred to a later tick (the due backlog beyond this tick's budget).
+
       const skippedCapped = Math.max(0, totalDue - due.length);
 
       let posted = 0;
       let failed = 0;
       let skippedBlank = 0;
 
-      // (d) Post each due, cut clip. A single failure marks its row `failed` (retryable by
-      // the operator rescheduling it) and never aborts the rest of the tick. The permalink
-      // is captured next tick (the Reel isn't published in-request), by the (a) pass above.
       for (const item of due) {
         try {
-          // Rebuild the caption fresh at fire time, so a late re-cut / edit is reflected.
           const built = await buildClipCaption(item.clipId);
 
-          // NEVER POST NAKED. A blank built caption means the clip has no stored caption AND
-          // its window resolves to no cued track at all — posting it would put a Reel on
-          // Fluncle's Instagram crediting nobody. That is not an ERROR, so the row is NOT
-          // marked `failed`: the clip is simply not ready. It stays `scheduled` and this
-          // tick skips it, so the next tick fires it the moment someone cues the source
-          // recording or writes it a caption.
           if (!built.builtCaption.trim()) {
             logEvent("warn", "drip-clips.blank-caption-skipped", { clipId: item.clipId });
             skippedBlank += 1;
@@ -769,8 +662,6 @@ export function adminMixtapesHandlers(os: Implementer) {
         }
       }
 
-      // `attempted` counts the rows this tick took off the queue, so the tally always
-      // closes: attempted = posted + failed + skippedBlank.
       return {
         attempted: due.length,
         captured,
@@ -786,9 +677,6 @@ export function adminMixtapesHandlers(os: Implementer) {
     }
   });
 
-  // PATCH /admin/clips/{clipId}/schedule — operator tier. The operator's schedule control:
-  // set/override a clip's drip slot. Confirms the clip exists (clean 404), re-snapshots the
-  // caption, and re-arms the row (a `failed`/`posted` row can be rescheduled).
   const setClipScheduleHandler = os.set_clip_schedule
     .use(adminAuth)
     .use(operatorGuard)
@@ -814,12 +702,6 @@ export function adminMixtapesHandlers(os: Implementer) {
       }
     });
 
-  // POST /admin/clips/schedule — operator tier (the batch sibling of set_clip_schedule).
-  // Schedules a whole selection onto the jittered drip queue in one move: each clip rolls a
-  // fresh `nextDripSlot` off the LIVE queue tail (so consecutive slots chain ~24h apart with
-  // real jitter, not a bot cadence) and snapshots a fresh caption. Sequential by design — each
-  // upsert extends the tail the next roll reads. The web clip library's batch bar drives it;
-  // operator tier, so the box agent token 403s (like the single set_clip_schedule).
   const setClipSchedulesHandler = os.set_clip_schedules
     .use(adminAuth)
     .use(operatorGuard)
@@ -840,10 +722,6 @@ export function adminMixtapesHandlers(os: Implementer) {
       }
     });
 
-  // DELETE /admin/clips/{clipId}/schedule — operator tier. The operator's "unschedule":
-  // take a clip off the drip queue (delete its un-posted row). Idempotent — a missing row is
-  // a clean no-op; a `posted` row is left intact (unscheduling is a queue action, not an
-  // un-post). Confirms the clip exists first (clean 404), symmetric with set_clip_schedule.
   const deleteClipScheduleHandler = os.delete_clip_schedule
     .use(adminAuth)
     .use(operatorGuard)
@@ -858,8 +736,6 @@ export function adminMixtapesHandlers(os: Implementer) {
       }
     });
 
-  // PUT /admin/clips/drip/state — operator tier. The global kill switch. Pausing halts
-  // every future scheduled post within one tick; resuming continues the drip.
   const setClipDripHandler = os.set_clip_drip
     .use(adminAuth)
     .use(operatorGuard)
@@ -873,8 +749,6 @@ export function adminMixtapesHandlers(os: Implementer) {
       }
     });
 
-  // POST /admin/recordings/{recordingId}/clips — operator tier. LOOSE body → createClip
-  // (recording-scoped under the RFC recording-primitive; the legacy mixtape path is gone).
   const createClipHandler = os.create_clip
     .use(adminAuth)
     .use(operatorGuard)
@@ -888,7 +762,6 @@ export function adminMixtapesHandlers(os: Implementer) {
       }
     });
 
-  // PATCH /admin/clips/{clipId} — operator tier. LOOSE body → updateClip.
   const updateClipHandler = os.update_clip
     .use(adminAuth)
     .use(operatorGuard)
@@ -902,7 +775,6 @@ export function adminMixtapesHandlers(os: Implementer) {
       }
     });
 
-  // DELETE /admin/clips/{clipId} — operator tier.
   const deleteClipHandler = os.delete_clip
     .use(adminAuth)
     .use(operatorGuard)
@@ -916,10 +788,6 @@ export function adminMixtapesHandlers(os: Implementer) {
       }
     });
 
-  // POST /admin/clips/{clipId}/presign — AGENT tier (Fluncle Studio Unit C). The box's
-  // clip-cut cron signs its OWN clip output with the agent token (the render-box
-  // `presign_track_video_uploads` precedent — adminAuth only, no operatorGuard). A clip
-  // is < 100 MB, so this is a SINGLE-PUT presign for `<clipId>/footage.mp4`.
   const presignClipUploadHandler = os.presign_clip_upload
     .use(adminAuth)
     .handler(async ({ input }) => {
@@ -929,10 +797,6 @@ export function adminMixtapesHandlers(os: Implementer) {
             ? input.contentType
             : "video/mp4";
 
-        // Confirm the clip exists for a clean 404 before signing (getClip throws
-        // `clip_not_found`/404). The footage key is the clip's pseudo-finding master
-        // (`trackMedia(clipId).videoUrl` is `<base>/<clipId>/footage.mp4`), so the merged
-        // `videoCrop(clipId)` / poster / silent MT helpers finish it.
         await getClip(input.clipId);
 
         const footageKey = `${input.clipId}/footage.mp4`;
@@ -954,19 +818,10 @@ export function adminMixtapesHandlers(os: Implementer) {
       }
     });
 
-  // POST /admin/clips/{clipId}/cut/finalize — AGENT tier (Fluncle Studio Unit C). After
-  // the box uploads `<clipId>/footage.mp4`, mark the cut `done` (the operator
-  // `update_clip` is unreachable to the agent token) AND purge the clip's stale edge
-  // renditions server-side (the box holds no Cloudflare creds), so a re-cut to the same
-  // clipId never keeps serving the previous cut. Mirrors `finalize_track_video`.
   const finalizeClipCutHandler = os.finalize_clip_cut.use(adminAuth).handler(async ({ input }) => {
     try {
       const clip = await markClipCutDone(input.clipId);
 
-      // Best-effort, off the request lifecycle (waitUntil). A genuine first cut has
-      // nothing cached yet, so this is a harmless no-op; a re-cut evicts the stale set.
-      // The fresh `updatedAt` is the vintage the clip surfaces mint as their `?v`
-      // token from now on (media.ts videoVersion) — the actual MT-rendition evictor.
       purgeClipCache(input.clipId, videoVersion(clip.updatedAt));
 
       return { clip, ok: true as const };
@@ -975,11 +830,6 @@ export function adminMixtapesHandlers(os: Implementer) {
     }
   });
 
-  // POST /admin/mixtapes/{mixtapeId}/set-video/presign — operator tier (Fluncle
-  // Studio Unit A). Open a multipart direct-to-R2 upload for the mixtape's set-video
-  // rendition at `<logId>/set.mp4` + presign every leg; the CLI streams the ~1.5GB
-  // rendition straight to R2. Gates like the YouTube initiate: a minted mixtape only
-  // (it needs a committed Log ID for the key).
   const presignSetVideoUploadHandler = os.presign_set_video_upload
     .use(adminAuth)
     .use(operatorGuard)
@@ -1046,9 +896,6 @@ export function adminMixtapesHandlers(os: Implementer) {
       }
     });
 
-  // PUT /admin/mixtapes/{mixtapeId}/cues — operator tier. The hardened post-publish
-  // cue backfill. LOOSE body → setMixtapeCues, which owns the minted-only + member-set
-  // + monotonic/start-at-0 guards.
   const setMixtapeCuesHandler = os.set_mixtape_cues
     .use(adminAuth)
     .use(operatorGuard)

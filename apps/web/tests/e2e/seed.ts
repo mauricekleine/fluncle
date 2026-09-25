@@ -23,6 +23,7 @@ import {
   seedTrack,
 } from "../../src/lib/server/integration-db";
 import { EMBEDDING_DIMS } from "../../src/lib/server/embedding";
+import { SEARCH_STYLES } from "../../src/lib/search-styles";
 import { LIBSQL_URL } from "./stack";
 
 // One graph entity of each kind, so the `/artist`, `/label`, `/album`, and
@@ -374,6 +375,93 @@ export const SEEDED_SONIC_ANCHOR = { title: FINDINGS[0]?.title ?? "", trackId: "
 /** The nearest embedded row to that anchor, so the tier has a deterministic first result. */
 export const SEEDED_SONIC_NEIGHBOUR = { title: FINDINGS[1]?.title ?? "", trackId: "e2e-track-2" };
 
+const STYLE = SEARCH_STYLES[0];
+const STYLE_TITLES = [
+  "Moonlit Current",
+  "Soft Signal",
+  "Blue Horizon",
+  "Low Tide Motion",
+  "Afterglow Circuit",
+  "Quiet Orbit",
+] as const;
+
+/** Liquid's six embedded catalogue tracks, nearest first by increasing angle from axis 40. */
+export const SEEDED_STYLE = {
+  rankedTitles: [...STYLE_TITLES],
+  rankedTrackIds: STYLE_TITLES.map((_title, index) => `e2e-style-${index + 1}`),
+  slug: STYLE.slug,
+} as const;
+
+/** No embedding: `/search?like=` uses the lead performer's centroid as its probe. */
+export const SEEDED_LEAD_CENTROID_TRACK = {
+  artist: STYLE.anchors[0],
+  title: "Satellite Without a Signal",
+  trackId: "e2e-style-lead-centroid",
+} as const;
+
+function styleVector(angle: number): number[] {
+  const vector = Array.from({ length: EMBEDDING_DIMS }, () => 0);
+
+  vector[40] = Math.cos(angle);
+  vector[41] = Math.sin(angle);
+
+  return vector;
+}
+
+function artistTitle(slug: string): string {
+  return slug === "lsb"
+    ? "LSB"
+    : slug.replaceAll("-", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+async function seedStyleFixtures(client: Client): Promise<void> {
+  for (const slug of STYLE.anchors) {
+    const artistId = `e2e-style-artist-${slug}`;
+    await seedArtist(client, { id: artistId, name: artistTitle(slug), slug });
+    await client.execute({
+      args: [artistId, JSON.stringify(styleVector(0)), new Date(BASE_EPOCH_MS).toISOString()],
+      sql: `insert into artist_centroids
+              (artist_id, centroid_blob, computed_at, rank_corpus, vector_count)
+            values (?, vector32(?), ?, 'e2e-style-corpus', 1)`,
+    });
+  }
+
+  for (const [index, trackId] of SEEDED_STYLE.rankedTrackIds.entries()) {
+    const slug = STYLE.anchors[index] ?? STYLE.anchors[0];
+    await seedCatalogueTrack(client, {
+      artists: [artistTitle(slug)],
+      title: STYLE_TITLES[index],
+      trackId,
+    });
+    await client.execute({
+      args: ["2025-01-01", `https://found.fluncle.com/e2e/style-${index + 1}.mp3`, trackId],
+      sql: `update tracks set release_date = ?, preview_url = ? where track_id = ?`,
+    });
+    await client.execute({
+      args: [trackId, `e2e-style-artist-${slug}`],
+      sql: `insert into track_artists (track_id, artist_id, position) values (?, ?, 0)`,
+    });
+    await seedEmbedding(client, trackId, styleVector((index + 1) * 0.06));
+  }
+
+  await seedCatalogueTrack(client, {
+    artists: [artistTitle(SEEDED_LEAD_CENTROID_TRACK.artist)],
+    title: SEEDED_LEAD_CENTROID_TRACK.title,
+    trackId: SEEDED_LEAD_CENTROID_TRACK.trackId,
+  });
+  await client.execute({
+    args: ["2025-01-01", SEEDED_LEAD_CENTROID_TRACK.trackId],
+    sql: `update tracks set release_date = ? where track_id = ?`,
+  });
+  await client.execute({
+    args: [
+      SEEDED_LEAD_CENTROID_TRACK.trackId,
+      `e2e-style-artist-${SEEDED_LEAD_CENTROID_TRACK.artist}`,
+    ],
+    sql: `insert into track_artists (track_id, artist_id, position) values (?, ?, 0)`,
+  });
+}
+
 /** Anchor first, then three neighbours fanning away from it in a fixed, arithmetic order. */
 const EMBEDDED_TRACKS: { angle: number; trackId: string }[] = [
   { angle: 0, trackId: SEEDED_SONIC_ANCHOR.trackId },
@@ -383,6 +471,10 @@ const EMBEDDED_TRACKS: { angle: number; trackId: string }[] = [
 ];
 
 export async function seedE2eData(client: Client): Promise<void> {
+  await client.execute({
+    args: ["sonar_sonic_enabled", "true"],
+    sql: `insert into settings (key, value) values (?, ?)`,
+  });
   await seedArtist(client, ARTIST);
   await seedLabel(client, LABEL);
   await seedAlbum(client, ALBUM);
@@ -464,6 +556,8 @@ export async function seedE2eData(client: Client): Promise<void> {
   await seedFrontDoorFixtures(client);
   await seedDestinationFixtures(client);
   await stampLabelPointers(client);
+  await seedStyleFixtures(client);
+  await stampAlbumCounters(client);
 }
 
 /**
@@ -586,6 +680,21 @@ async function stampLabelPointers(client: Client): Promise<void> {
   });
 }
 
+/**
+ * Every album's maintained counters, DERIVED from the rows that point at it once every fixture is in
+ * (the `stampLabelPointers` rule): the real write paths move them on every link, and `/fresh`'s
+ * "Albums & EPs" reads `renderable_track_count` to tell a record from a single. A two-track record
+ * left at the DDL default of 0 would describe a world the archive cannot be in.
+ */
+async function stampAlbumCounters(client: Client): Promise<void> {
+  await client.execute(`update albums
+     set renderable_track_count =
+           (select count(*) from tracks where tracks.album_id = albums.id),
+         certified_finding_count =
+           (select count(*) from tracks
+             where tracks.album_id = albums.id and tracks.is_catalogue = 0)`);
+}
+
 /** Standalone entry point (`bun run tests/e2e/seed.ts`) — global-setup imports `seedE2eData`. */
 async function main(): Promise<void> {
   const client = createClient({
@@ -597,7 +706,7 @@ async function main(): Promise<void> {
   await seedE2eData(client);
   client.close();
   console.log(
-    `e2e seed: ${FINDINGS.length + 1} findings (1 radio-eligible) + 1 mixtape + 5 catalogue tracks + artist/label/albums + ${EMBEDDED_TRACKS.length + 3} embeddings.`,
+    `e2e seed: ${FINDINGS.length + 1} findings (1 radio-eligible) + 1 mixtape + 12 catalogue tracks + artist/label/albums + ${EMBEDDED_TRACKS.length + 9} embeddings.`,
   );
 }
 

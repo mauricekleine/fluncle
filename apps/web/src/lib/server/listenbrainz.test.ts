@@ -2,12 +2,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { lookupSpotifyIdsByMbid } from "./listenbrainz";
 
-// The ListenBrainz labs client is a pure network→shape mapper that must NEVER throw. Every unhappy
-// path remains a fall-through to Apify, but its discriminator is the evidence the anchor summary
-// needs to tell "ListenBrainz had nothing" apart from "the free rung itself failed".
-
-// One entry of the labs response, in the exact shape the endpoint returns — note it carries NO ISRC
-// and NO duration, which is why an id it returns is only a CANDIDATE the caller must verify.
 const HIT = [
   {
     artist_name: "Rick Astley",
@@ -39,7 +33,6 @@ describe("lookupSpotifyIdsByMbid", () => {
       outcome: "match",
     });
 
-    // It POSTs the identified User-Agent + the single-MBID body to the `/json` endpoint.
     const [url, init] = fetchMock.mock.calls[0] ?? [];
     expect(url).toBe("https://labs.api.listenbrainz.org/spotify-id-from-mbid/json");
     expect((init as RequestInit).method).toBe("POST");

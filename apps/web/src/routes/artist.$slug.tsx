@@ -37,9 +37,6 @@ import { type CatalogueSort, catalogueSortParam, entityPageHref } from "@/lib/ca
 import { pageParam } from "@/lib/search-params";
 import { type ArtistPageData, type ArtistSocialLink } from "./-artist-page-data";
 
-// A confirmed/auto social — the brand mark + a plain label, from simple-icons
-// (never a Phosphor glyph for a brand). `homepage` is not a brand, so it takes the
-// Phosphor globe (an interface icon) — DESIGN.md "Iconography".
 const SOCIAL_META: Record<
   Exclude<ArtistSocialPlatform, "homepage">,
   { path: string; title: string }
@@ -74,14 +71,6 @@ const SOCIAL_LABEL: Record<ArtistSocialPlatform, string> = {
   youtube: "YouTube",
 };
 
-// The artist page: a dark, cover-led Instagram-style grid of Fluncle's findings
-// for one artist, under a plate masthead (name + a Fluncle-voice frame + the
-// confirmed socials row). Held to DESIGN.md — a Fluncle cover grid, not a bright
-// streaming clone. The @id graph + MusicGroup/sameAs JSON-LD make it the entity's
-// home for crawlers + AI answer-engines (Unit 3, artist-relationship RFC §3).
-
-// The resolver arrives by a DYNAMIC import inside the handler, and its types by `import type`,
-// so this route module never statically references `lib/server/**` — see `-artist-page-data.ts`.
 const fetchArtist = createServerFn({ method: "GET" })
   .validator(
     (data: { page: number; slug: string; sort: CatalogueSort; upcomingPage: number }) => data,
@@ -114,9 +103,7 @@ function artistHead(loaderData: ArtistPageData | undefined) {
     spotifyUrl,
     wikidataQid,
   } = loaderData;
-  // Self-referencing PER PAGE, sort-collapsing (the label page carries the long note): page 2
-  // is its own canonical, but the sort param always drops so order-variants of one page fold to
-  // one URL. Page 1 stays the bare `/artist/<slug>`.
+
   const pageUrl = entityPageHref(
     `${siteUrl}/artist/${slug}`,
     catalogue.page,
@@ -124,25 +111,16 @@ function artistHead(loaderData: ArtistPageData | undefined) {
     ARTIST_CATALOGUE_SORT_DEFAULT,
     upcoming.page,
   );
-  // The <title>/meta stay honestly-plain third-person (the Narrator rule); the
-  // first person lives only in the on-page voice frame.
+
   const baseTitle = `${name} · Fluncle`;
-  // The factual bio is the honest, UNIQUE description when one is authored — the same objective
-  // paragraph the page prints, trimmed to the meta cap. Absent (the bio backfill is in flight for
-  // many artists), it falls back to the templated line verbatim, so nothing regresses. This one
-  // string flows to meta + og + twitter below, so all three go unique together.
+
   const baseDescription =
     bio !== undefined
       ? bioMetaDescription(bio)
       : findings.length > 0
         ? `Drum & bass tracks by ${name} that Fluncle recommends, ${findings.length} so far, with the labels and releases behind them.`
         : `Drum & bass tracks by ${name}, with the labels and releases behind them.`;
-  // PAGED VARIANTS BAKE THE PAGE NUMBER INTO BOTH STRINGS — the `/artists` hub rule
-  // (artists.index.tsx) applied to the entity page, which paginates the same way. The canonical
-  // above is self-referencing per page, so `?page=N` is submitted as its own indexable URL; left
-  // wearing page 1's title and description it is a duplicate-meta URL competing with the page it
-  // came from. The paged description names what the page actually carries (the records band, the
-  // one section the pager moves), never the entity's bio, which describes only page 1's masthead.
+
   const { description, title } =
     catalogue.page > 1
       ? {
@@ -150,21 +128,13 @@ function artistHead(loaderData: ArtistPageData | undefined) {
           title: `${name}, page ${catalogue.page} · Fluncle`,
         }
       : { description: baseDescription, title: baseTitle };
-  // The artist's OWN portrait leads: its owned avatar master (or Spotify image) is the entity's
-  // true image. Only when it has none does the page fall back to its freshest finding's cover, then
-  // the site cover as the floor. This one URL flows to og:image, twitter:image, and MusicGroup.image.
+
   const coverFinding = findings[0];
   const imageUrl =
     artistImageUrl ??
     (coverFinding ? albumCoverAtSize(coverFinding.albumImageUrl, "large") : undefined) ??
     `${siteUrl}/fluncle-cover.png`;
-  // THE LEAD IMAGE — the one this page's LCP waits on, preloaded below because the loader already
-  // holds its exact URL. It is the findings band's first cover when the band renders (the widest
-  // paint on the page: a ~114 CSS px tile against the masthead portrait's 80), else the masthead
-  // portrait itself, which leads a catalogue-only artist with no certified findings. Both come out
-  // at the `medium` rung — byte-identical to what the components ask for, so the preload is a hit
-  // and never a second fetch. Exactly one is spent: a preload only buys priority while it is
-  // scarce (the homepage cover is the same one-preload shape).
+
   const leadImageUrl = leadGridCoverUrl(findings) ?? albumCoverAtSize(imageUrl, "medium");
 
   const musicGroup = musicGroupJsonLd(
@@ -191,22 +161,18 @@ function artistHead(loaderData: ArtistPageData | undefined) {
   return {
     links: [
       { href: pageUrl, rel: "canonical" },
-      // Preload the lead image (see `leadImageUrl`). Without it the browser discovers the cover
-      // mid-body-parse, behind the render-blocking CSS, and fetches it at Low priority; the
-      // preload starts it alongside the document's own subresources instead.
+
       ...(leadImageUrl
         ? [{ as: "image", fetchPriority: "high" as const, href: leadImageUrl, rel: "preload" }]
         : []),
-      // RSS discovery: this artist's new-releases feed (the 30-day window, this artist only).
-      // The bare `/artist/<slug>/fresh.xml`, never the paged catalogue URL.
+
       {
         href: `${siteUrl}/artist/${slug}/fresh.xml`,
         rel: "alternate",
         title: entityFreshChannel("artist", name).title,
         type: "application/rss+xml",
       },
-      // oEmbed discovery: a pasted /artist link unfurls as a `link`-type card
-      // (name + cover). See routes/oembed.ts.
+
       {
         href: `${siteUrl}/oembed?url=${encodeURIComponent(pageUrl)}&format=json`,
         rel: "alternate",
@@ -217,8 +183,7 @@ function artistHead(loaderData: ArtistPageData | undefined) {
     meta: [
       { title },
       { content: description, name: "description" },
-      // Below the thin-content threshold: keep the page reachable + link equity
-      // flowing, but out of the index (noindex, follow).
+
       ...(indexable ? [] : [{ content: "noindex, follow", name: "robots" }]),
       { content: title, property: "og:title" },
       { content: description, property: "og:description" },
@@ -230,35 +195,19 @@ function artistHead(loaderData: ArtistPageData | undefined) {
       { content: description, name: "twitter:description" },
       { content: imageUrl, name: "twitter:image" },
     ],
-    // JSON-LD goes through `jsonLdScript`, which HTML-escapes the serialized
-    // payload before it reaches the inline <script>'s `children` (rendered raw via
-    // dangerouslySetInnerHTML), so a `</script>` in a (Spotify-sourced) artist or
-    // track name can't break out of the <script> (stored-XSS sink, security review).
+
     scripts: [jsonLdScript(musicGroup), jsonLdScript(artistBreadcrumbsJsonLd(name))],
   };
 }
 
-// The artist page opens on the artist's LATEST RELEASE — the dropdown's "recent" key ("Latest
-// release"), not the shared A–Z default the label/album reads (`CATALOGUE_SORT_DEFAULT`). An
-// artist page is read like a discography: the newest record is what a visitor came for, so it
-// leads on the first (param-free) load and the dropdown reflects it. An explicit `?sort=name`
-// still round-trips to A–Z. Kept an artist-scoped constant (not a flip of the shared default) so
-// the crawler-stability argument the shared default is built on still holds for the label pages.
 export const ARTIST_CATALOGUE_SORT_DEFAULT: CatalogueSort = "recent";
 
-/**
- * The findings band's first cover at the rung its tile renders, or undefined when the band has no
- * cover to lead with. When it exists it is the page's lead image: preloaded from the head and the
- * one image fetched at high priority (the masthead portrait yields to it).
- */
 function leadGridCoverUrl(
   findings: Extract<ArtistPageData, { status: "found" }>["findings"],
 ): string | undefined {
   return albumCoverAtSize(findings.find((finding) => finding.logId)?.albumImageUrl, "medium");
 }
 
-// Route options follow TanStack's create-route-property-order (each step feeds the
-// next's inferred types), which isn't alphabetical — so sort-keys is off here.
 // oxlint-disable-next-line sort-keys
 export const Route = createFileRoute("/artist/$slug")({
   validateSearch: (search: Record<string, unknown>): ArtistSearch => ({
@@ -266,10 +215,7 @@ export const Route = createFileRoute("/artist/$slug")({
     sort: catalogueSortParam(search["sort"]),
     upcomingPage: pageParam(search["upcomingPage"]),
   }),
-  // Defaults land HERE, so the loader always gets a real page + sort while the URL keeps them
-  // implicit (a bare `/artist/<slug>` is the canonical, crawlable view). `validateSearch` has
-  // already narrowed `sort` to a known key or undefined, so an absent one falls to the artist
-  // default — latest release first.
+
   loaderDeps: ({ search }) => ({
     page: search.page ?? 1,
     sort: search.sort ?? ARTIST_CATALOGUE_SORT_DEFAULT,
@@ -296,8 +242,6 @@ export const Route = createFileRoute("/artist/$slug")({
   notFoundComponent: StoryNotFoundState,
 });
 
-// Both params OPTIONAL, so a plain `<Link to="/artist/$slug">` anywhere still type-checks with
-// no `search` prop (the `HomeSearch.story?` precedent).
 type ArtistSearch = { page?: number; sort?: CatalogueSort; upcomingPage?: number };
 
 function SocialLink({ social }: { social: ArtistSocialLink }) {
@@ -325,49 +269,30 @@ function ArtistPage() {
 
   const { bio, catalogue, dossier, findings, id, imageUrl, name, slug, socials, sort, upcoming } =
     data;
-  // The same rule the head's preload uses, so the high-priority image is the preloaded one.
+
   const findingsBandLeads = leadGridCoverUrl(findings) !== undefined;
 
   return (
     <main className="log-plate-stage">
       <article className="log-plate log-index">
         <header className="log-masthead">
-          {/* The entity's own portrait, above its name — the owned avatar master when resolved,
-              a quiet monogram tile otherwise (ArtistAvatar's fallback). The masthead slot is
-              `min(5rem, 40%)` — 80 CSS px, 160 on a 2× screen — so it takes the 300 rung; the 640
-              the DTO hands out is the og:image size, not this one. */}
           <ArtistAvatar
             className="artist-masthead-avatar"
-            // Above the fold on every viewport, so never lazy. It holds the page's one high
-            // fetch priority only when it IS the lead image (`leadImageUrl` in the route head): a
-            // catalogue-only artist with no findings cover. When the findings band leads, its first
-            // cover is the larger paint (114 CSS px on desktop, 161 on a phone, against this 80)
-            // and the preloaded LCP image, so this portrait stays at the default priority.
+
             eager
             name={name}
             priority={!findingsBandLeads}
             src={albumCoverAtSize(imageUrl, "medium")}
           />
           <h1 className="log-coordinate log-index-title artist-name">{name}</h1>
-          {/* The dossier bio is the masthead's prose — the reference register (the Three Areas
-              Rule; the first-person signature line is retired). Rendered once authored. */}
+
           {bio ? <p className="log-index-bio">{bio}</p> : undefined}
-          {/* The quiet watch control — a signed-in user keeps an eye on this artist. Renders
-              nothing for a signed-out visitor (the account never gates the page) — no wrapper, so
-              the null face leaves no empty grid item in the masthead. */}
+
           <WatchButton entityId={id} kind="artist" name={name} />
         </header>
 
-        {/* The findings lead: the logged tracks are the primary entity in the Galaxy — the artist
-            page frames THEM. Shared with the label/album graph pages via FindingsGrid: an artist
-            with no coordinate-bearing findings renders NOTHING here — no grid, no heading, no
-            empty-state apology. Its catalogue tracklist below and its masthead bio carry the page,
-            exactly as a crawler-discovered label's does (graph-sections.tsx header: a page with no
-            findings is a page about something else). Socials and kin follow. */}
         <FindingsGrid findings={findings} />
 
-        {/* Upcoming: releases with a date still ahead, held off the newest-first surfaces until
-            their day. It follows the findings lead, never above it. */}
         {upcoming.total > 0 ? (
           <section aria-labelledby="artist-upcoming-heading" className="catalogue-section">
             <h2 className="artist-similar-label" id="artist-upcoming-heading">
@@ -409,11 +334,6 @@ function ArtistPage() {
             <ul className="artist-similar-list">
               {dossier.neighbours.map((neighbour) => (
                 <li key={neighbour.slug}>
-                  {/* The same graph link as everywhere else, in its chip skin — hovering a kin
-                      artist previews them before you commit to the click. A neighbour Fluncle
-                      never certified renders UNLIT (DESIGN.md's Unlit Rule): the avatar sits a
-                      step down and the chip stays cool — listed, never introduced, no gold. Focus
-                      stays loud. */}
                   <GraphLink
                     className={
                       neighbour.certified
@@ -431,10 +351,7 @@ function ArtistPage() {
                           : "artist-similar-avatar artist-similar-avatar--unlit"
                       }
                       name={neighbour.name}
-                      // A 1.5rem chip avatar — 48 device px at 2× — takes the 64 rung, never the
-                      // 640 master the DTO hands out (26× the pixels this tile can show). A kin
-                      // artist with no owned master lands on Spotify's portrait floor (160), the
-                      // smallest rendition that family publishes.
+
                       src={albumCoverAtSize(neighbour.imageUrl, "small")}
                     />
                     <span>{neighbour.name}</span>
@@ -445,18 +362,8 @@ function ArtistPage() {
           </nav>
         ) : undefined}
 
-        {/* The rest of this artist's catalogue: the crawled tracks Fluncle never certified,
-            grouped into their records, each collapsing to its tracklist. Conditional like every
-            band here — nothing renders until the crawl fills it. The sort control rides above
-            only with more than one record to order; the pager only with more than one page. */}
         {catalogue.groups.length > 0 ? (
           <section aria-labelledby="artist-catalogue-heading" className="catalogue-section">
-            {/* The section's name, promoted from an `aria-label` to a real H2 so the heading
-                outline runs H1 → H2 → H3 (the record names inside are H3s, and a page that
-                jumps H1 → H3 fails `heading-order`). It stays visually hidden, so nothing about
-                the page's quiet, headingless look changes — and the string is the same one the
-                aria-label already carried: it names the RECORDS, never the tier they belong to
-                (graph-sections.tsx, the unnamed tier). */}
             <h2 className="sr-only" id="artist-catalogue-heading">
               More from {name}
             </h2>

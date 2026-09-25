@@ -1,24 +1,3 @@
-// THE FRESHNESS TAP (D8), proven against the REAL migrated schema on a file-backed libSQL engine
-// (the integration-db harness). The Spotify client (`./spotify`) is mocked so a test drives exactly
-// the Spotify response it wants and can flip the grant/throttle shut; every DB write executes REAL
-// SQL against the REAL schema.
-//
-// What is pinned here:
-//   - the pure parsers (album search, full albums + copyrights, full tracks);
-//   - the copyrights POST-FILTER — a fuzzy `label:` hit is minted ONLY when a copyright names the
-//     seed label (a junk album is rejected);
-//   - the allowlist gate — only ENABLED seed labels are ever probed;
-//   - the dedupe contract from the tap side (Spotify id / uri / ISRC / same-album title fold), the
-//     VIP/remix non-merge, convergence with a bare-id finding, plus mint idempotence across runs;
-//   - the SHARED-METER discipline: every Spotify call the tap makes is RECORDED into the per-app
-//     call meter, and the tap holds itself to `TAP_BUDGET_CEILING` (a fraction of the window) so a
-//     user-facing mint always finds headroom — the pass steps back cleanly and resumes next tick;
-//   - the undated-album drop (a null `release_date` row is invisible on /fresh, so it never mints);
-//   - the 429 short-circuit and the gone-grant no-op;
-//   - /fresh visibility of a minted row (in-window release_date, the unlit half);
-//   - the archive-spelling label invariant (`slugify(tracks.label) = labels.slug`, label_id at the
-//     KNOWN seed label — never Spotify's spelling).
-
 import { type Client } from "@libsql/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -27,9 +6,6 @@ import { join } from "node:path";
 
 const holder = vi.hoisted(() => ({ db: undefined as Client | undefined }));
 
-// The Spotify client mock's mutable state: a per-test responder routed by path, the grant switch, a
-// throw switch (429 / other), and a per-path failure predicate (a single read that 404/5xx's).
-// `calls` records every path so a test can assert WHICH endpoints were hit (the tier contract).
 const spotify = vi.hoisted(() => ({
   calls: [] as string[],
   failPath: (_path: string): boolean => false,
@@ -99,11 +75,7 @@ import {
   SPOTIFY_CALLS_WINDOW_START_KEY,
 } from "./spotify-budget";
 
-// ── Fixture builders (the Spotify JSON shapes) ──────────────────────────────────────────────────
-
 type AlbumFixture = {
-  /** The album's Spotify artist ids (the ARTIST-GROUNDING key). Defaults to the seeded known
-   *  artist, so a minting fixture is grounded unless it deliberately names an UNKNOWN artist. */
   artistIds?: string[];
   copyrights: string[];
   id: string;
@@ -112,7 +84,6 @@ type AlbumFixture = {
   trackIds: string[];
 };
 
-/** The Spotify artist id seeded into `artists` in beforeEach — the default grounding for a mint. */
 const KNOWN_ARTIST_ID = "sp_artist_known";
 
 type TrackFixture = {
@@ -128,8 +99,6 @@ function searchBody(albumIds: string[]): unknown {
   return { albums: { items: albumIds.map((id) => ({ id })) } };
 }
 
-/** The SINGLE-album response (`GET /albums/{id}`) — the album object is the top-level body. Carries
- *  `artists[].id` (the grounding key), defaulting to the seeded known artist. */
 function albumBody(album: AlbumFixture): unknown {
   return {
     artists: (album.artistIds ?? [KNOWN_ARTIST_ID]).map((id) => ({ id, name: "Some Artist" })),
@@ -141,7 +110,6 @@ function albumBody(album: AlbumFixture): unknown {
   };
 }
 
-/** The SINGLE-track response (`GET /tracks/{id}`) — the track object is the top-level body. */
 function trackBody(track: TrackFixture): unknown {
   const artistNames =
     track.artistNames ??
@@ -161,16 +129,10 @@ function trackBody(track: TrackFixture): unknown {
   };
 }
 
-/** The trailing `{id}` path segment of a single-resource read (`/albums/{id}` → `id`). */
 function idSegment(path: string): string {
   return decodeURIComponent((path.split("?")[0] ?? "").split("/").pop() ?? "");
 }
 
-/**
- * A per-label Spotify fixture: the search returns `searchAlbumIds`; each `GET /albums/{id}` returns
- * that one album; each `GET /tracks/{id}` returns that one track. SINGLES only — the batch endpoints
- * are 403 at our tier and are never called. An unknown id returns `{}` (parses to null).
- */
 function setSpotifyFixture(config: {
   albums?: AlbumFixture[];
   searchAlbumIds?: string[];
@@ -200,7 +162,6 @@ function setSpotifyFixture(config: {
   };
 }
 
-/** Insert an ENABLED seed label directly (seedLabel defaults to `undecided`). */
 async function seedEnabledLabel(
   client: Client,
   label: { id: string; name: string; slug: string },
@@ -214,7 +175,6 @@ async function seedEnabledLabel(
   });
 }
 
-/** Insert an artist carrying a `spotify_artist_id` — the grounding key. */
 async function seedArtist(client: Client, spotifyArtistId: string): Promise<void> {
   const now = new Date().toISOString();
 
@@ -232,7 +192,6 @@ async function seedArtist(client: Client, spotifyArtistId: string): Promise<void
   });
 }
 
-/** Insert a bridged or tap-blind artist rule directly for the integration fixture. */
 async function seedArtistRule(
   client: Client,
   rule: {
@@ -264,12 +223,6 @@ async function seedArtistRule(
   });
 }
 
-/**
- * Put the SHARED Spotify call meter into a known state: `count` calls recorded in a window that
- * opened `ageMs` ago. `ageMs: 0` is a live window (the count applies); anything past the meter's
- * 30s window is an ELAPSED one, so the effective count rolls back to zero — which is how a test
- * proves the tap RESUMES on the next window rather than staying parked.
- */
 async function setSpotifyCallMeter(client: Client, count: number, ageMs = 0): Promise<void> {
   const entries: Array<[string, string]> = [
     [SPOTIFY_CALLS_WINDOW_START_KEY, new Date(Date.now() - ageMs).toISOString()],
@@ -285,7 +238,6 @@ async function setSpotifyCallMeter(client: Client, count: number, ageMs = 0): Pr
   }
 }
 
-/** The standard one-album, one-track fixture — enough to drive a full search → album → track pass. */
 function setMintableFixture(): void {
   setSpotifyFixture({
     albums: [
@@ -309,8 +261,7 @@ beforeEach(async () => {
   fixtureDirectory = await mkdtemp(join(tmpdir(), "fluncle-label-releases-"));
   db = await createIntegrationDb({ url: `file:${join(fixtureDirectory, "fixture.db")}` });
   holder.db = db;
-  // The default grounding: a known artist whose Spotify id every un-overridden album fixture claims,
-  // so a minting fixture is grounded unless it deliberately names an UNKNOWN artist.
+
   await seedArtist(db, KNOWN_ARTIST_ID);
   spotify.calls = [];
   spotify.grantGone = false;
@@ -328,8 +279,6 @@ afterEach(async () => {
     fixtureDirectory = undefined;
   }
 });
-
-// ── The pure parsers + the post-filter ──────────────────────────────────────────────────────────
 
 describe("parseLabelAlbumSearch", () => {
   it("reads the album ids off a search response", () => {
@@ -370,9 +319,9 @@ describe("stripCopyrightPrefix", () => {
     expect(stripCopyrightPrefix("℗ 2026 Hospital Records")).toBe("Hospital Records");
     expect(stripCopyrightPrefix("© 2026 Med School")).toBe("Med School");
     expect(stripCopyrightPrefix("(P) 2026 Foo")).toBe("Foo");
-    expect(stripCopyrightPrefix("© ℗ 2026 Bar")).toBe("Bar"); // repeated symbols
-    expect(stripCopyrightPrefix("2026 Baz")).toBe("Baz"); // year, no symbol
-    // A label whose own name starts with a number keeps it (only ONE leading year is peeled).
+    expect(stripCopyrightPrefix("© ℗ 2026 Bar")).toBe("Bar");
+    expect(stripCopyrightPrefix("2026 Baz")).toBe("Baz");
+
     expect(stripCopyrightPrefix("℗ 2026 1985 Music")).toBe("1985 Music");
   });
 });
@@ -399,25 +348,22 @@ describe("parseProbeTrack", () => {
       title: "Foo",
     });
     expect(parseProbeTrack(null)).toBeNull();
-    expect(parseProbeTrack({ id: "t1" })).toBeNull(); // no name
+    expect(parseProbeTrack({ id: "t1" })).toBeNull();
   });
 });
 
 describe("copyrightMatchesLabel", () => {
   it("requires EXACT-fold equality on the stripped label portion (not a substring)", () => {
-    // Exact attribution → match (fold absorbs the space + case).
     expect(copyrightMatchesLabel(["℗ 2026 Med School"], "Medschool")).toBe(true);
     expect(copyrightMatchesLabel(["℗ 2026 Hospital Records"], "Hospital Records")).toBe(true);
-    // A substring near-match is REJECTED — the whole point of the tightening.
+
     expect(copyrightMatchesLabel(["℗ 2026 Silent Lens"], "Lens")).toBe(false);
-    // A longer real-label variant no longer sneaks through the loose substring match.
+
     expect(copyrightMatchesLabel(["℗ 2026 Med School Recordings"], "Medschool")).toBe(false);
     expect(copyrightMatchesLabel(["℗ 2026 Some Other Label"], "Hospital Records")).toBe(false);
     expect(copyrightMatchesLabel([], "Hospital Records")).toBe(false);
   });
 });
-
-// ── The probe ─────────────────────────────────────────────────────────────────────────────────
 
 describe("probeLabelReleases", () => {
   it("is a no-op when the Spotify grant is gone (configured:false)", async () => {
@@ -649,7 +595,6 @@ describe("probeLabelReleases", () => {
     await seedEnabledLabel(db, { id: "lbl_1", name: "Hospital Records", slug: "hospital-records" });
 
     setSpotifyFixture({
-      // The fuzzy `label:"Hospital Records"` returns one real album and one junk album.
       albums: [
         {
           copyrights: ["℗ 2026 Hospital Records"],
@@ -676,7 +621,7 @@ describe("probeLabelReleases", () => {
     const result = await probeLabelReleases();
 
     expect(result.albumsSeen).toBe(2);
-    expect(result.albumsMatched).toBe(1); // only the copyright-matching album
+    expect(result.albumsMatched).toBe(1);
     expect(result.newRows).toBe(1);
     expect(result.newTrackIds).toEqual(["sp_t_real"]);
     expect(
@@ -685,13 +630,13 @@ describe("probeLabelReleases", () => {
           where track_id = 'sp_t_real'`)
       ).rows,
     ).toEqual([{ normalized_isrc: "GB0000000001" }]);
-    // The junk album's track is NEVER minted.
+
     const junk = await db.execute({
       args: ["sp_t_junk"],
       sql: `select 1 from tracks where track_id = ?`,
     });
     expect(junk.rows).toHaveLength(0);
-    // The tap never even fetched the junk album's tracks (it failed the copyright filter).
+
     expect(spotify.calls.some((path) => path.includes("t_junk"))).toBe(false);
   });
 
@@ -700,9 +645,8 @@ describe("probeLabelReleases", () => {
 
     setSpotifyFixture({
       albums: [
-        // Both albums carry the EXACT copyright — the difference is ONLY the artist grounding.
         {
-          artistIds: [KNOWN_ARTIST_ID], // an artist we already hold → grounded → MINTS
+          artistIds: [KNOWN_ARTIST_ID],
           copyrights: ["℗ 2026 Medschool"],
           id: "grounded",
           name: "Real EP",
@@ -710,7 +654,7 @@ describe("probeLabelReleases", () => {
           trackIds: ["t_known"],
         },
         {
-          artistIds: ["sp_artist_unknown"], // an artist absent from `artists` → SKIPPED
+          artistIds: ["sp_artist_unknown"],
           copyrights: ["℗ 2026 Medschool"],
           id: "ungrounded",
           name: "Debut EP",
@@ -724,27 +668,24 @@ describe("probeLabelReleases", () => {
 
     const result = await probeLabelReleases();
 
-    expect(result.albumsMatched).toBe(1); // only the grounded album will mint
-    expect(result.skippedUngrounded).toBe(1); // the unknown-artist album, dropped + counted
+    expect(result.albumsMatched).toBe(1);
+    expect(result.skippedUngrounded).toBe(1);
     expect(result.newRows).toBe(1);
     expect(result.newTrackIds).toEqual(["sp_t_known"]);
-    // The ungrounded album's track is NEVER minted, and its tracks are never even fetched.
+
     const un = await db.execute("select 1 from tracks where track_id = 'sp_t_new'");
     expect(un.rows).toHaveLength(0);
     expect(spotify.calls.some((path) => path.includes("t_new"))).toBe(false);
   });
 
   it("SKIPS the homonym case — right label NAME, but all artists unknown (cross-genre junk)", async () => {
-    // "Earth Records" is a real seed label; a DIFFERENT "Earth Records" exists globally, whose
-    // copyright fold-EQUALS the seed name — so copyright alone would let its cross-genre releases in.
-    // Grounding (unknown artists) is what rejects them.
     await seedEnabledLabel(db, { id: "lbl_1", name: "Earth Records", slug: "earth-records" });
 
     setSpotifyFixture({
       albums: [
         {
-          artistIds: ["sp_artist_devotional", "sp_artist_folk"], // none in our archive
-          copyrights: ["℗ 2026 Earth Records"], // exact-fold match on the homonym
+          artistIds: ["sp_artist_devotional", "sp_artist_folk"],
+          copyrights: ["℗ 2026 Earth Records"],
           id: "homonym",
           name: "Bhajans Vol 3",
           releaseDate: "2026-07-19",
@@ -782,10 +723,9 @@ describe("probeLabelReleases", () => {
 
     await probeLabelReleases();
 
-    // The batch endpoints are GONE at our tier — the probe must never call them.
     expect(spotify.calls.some((path) => path.startsWith("/albums?ids="))).toBe(false);
     expect(spotify.calls.some((path) => path.startsWith("/tracks?ids="))).toBe(false);
-    // It DID hit the single reads.
+
     expect(spotify.calls).toContain("/albums/alb1");
     expect(spotify.calls).toContain("/tracks/t1");
   });
@@ -802,7 +742,7 @@ describe("probeLabelReleases", () => {
           releaseDate: "2026-07-19",
           trackIds: ["t1"],
         },
-        // `bad` is in the search results but its single read 404s.
+
         {
           copyrights: ["℗ 2026 Medschool"],
           id: "bad",
@@ -818,11 +758,11 @@ describe("probeLabelReleases", () => {
 
     const result = await probeLabelReleases();
 
-    expect(result.failedFetches).toBe(1); // the `bad` album read, skipped
-    expect(result.failedLabels).toEqual([]); // NOT a label failure — the search succeeded
-    expect(result.newRows).toBe(1); // the `good` album still minted
+    expect(result.failedFetches).toBe(1);
+    expect(result.failedLabels).toEqual([]);
+    expect(result.newRows).toBe(1);
     expect(result.newTrackIds).toEqual(["sp_t1"]);
-    // The label WAS stamped (a per-album miss does not hold the whole label back).
+
     const stamp = await db.execute(
       "select label_releases_checked_at, label_releases_failures from labels where slug = 'medschool'",
     );
@@ -836,7 +776,7 @@ describe("probeLabelReleases", () => {
     setSpotifyFixture({
       albums: [
         {
-          copyrights: ["℗ 2026 Med School"], // strips to "Med School" → fold-equals "Medschool"
+          copyrights: ["℗ 2026 Med School"],
           id: "alb1",
           name: "New EP",
           releaseDate: "2026-07-18",
@@ -857,16 +797,15 @@ describe("probeLabelReleases", () => {
     });
     const row = track.rows[0];
     expect(row?.track_id).toBe("sp_t1");
-    expect(row?.label).toBe("Medschool"); // the archive's spelling, so slugify(label)=slug
-    expect(row?.label_id).toBe("lbl_1"); // the KNOWN seed label, stamped directly
+    expect(row?.label).toBe("Medschool");
+    expect(row?.label_id).toBe("lbl_1");
     expect(row?.isrc).toBe("GB0000000001");
     expect(row?.release_date).toBe("2026-07-18");
     expect(row?.spotify_uri).toBe("spotify:track:t1");
     expect(row?.spotify_url).toContain("open.spotify.com");
     expect(row?.album).toBe("New EP");
-    expect(row?.capture_status).toBe("pending"); // the DDL default landed (never named at insert)
+    expect(row?.capture_status).toBe("pending");
 
-    // It is a CATALOGUE row — no findings row.
     const finding = await db.execute({
       args: ["sp_t1"],
       sql: `select 1 from findings where track_id = ?`,
@@ -890,7 +829,7 @@ describe("probeLabelReleases", () => {
       searchAlbumIds: ["alb1"],
       tracks: [
         { id: "t1", isrc: "GB0000000001", title: "Foo" },
-        // No ISRC on Spotify's response at all — the look still concluded.
+
         { id: "t2", title: "Bar" },
       ],
     });
@@ -906,10 +845,8 @@ describe("probeLabelReleases", () => {
     expect(rows.rows).toHaveLength(2);
 
     for (const row of rows.rows) {
-      // The probe read concluded for both, so both say so — including the ISRC-less one, which is
-      // the whole point: "Spotify carries none" is a fact, not an absence of one.
       expect(row.isrc_attempted_at).not.toBeNull();
-      // This path never looks at Discogs, so claiming an attempt there would be the lie. Untouched.
+
       expect(row.backfill_discogs_attempted_at).toBeNull();
       expect(Number(row.backfill_discogs_attempts)).toBe(0);
     }
@@ -948,7 +885,7 @@ describe("probeLabelReleases", () => {
 
   it("skips a track a CERTIFIED finding already holds by its spotify_uri (never a duplicate anchor)", async () => {
     await seedEnabledLabel(db, { id: "lbl_1", name: "Medschool", slug: "medschool" });
-    // A certified finding for the same Spotify track — its PK is the BARE id, its uri is set.
+
     await seedTrack(db, { logId: "AAA.01.01", title: "Foo", trackId: "t1" });
 
     setSpotifyFixture({
@@ -962,16 +899,15 @@ describe("probeLabelReleases", () => {
         },
       ],
       searchAlbumIds: ["alb1"],
-      tracks: [{ id: "t1", title: "Foo" /* no isrc — must converge on the uri */ }],
+      tracks: [{ id: "t1", title: "Foo" }],
     });
 
     const result = await probeLabelReleases();
 
     expect(result.newRows).toBe(0);
-    // The finding's `spotify_uri` is caught by the pre-fetch filter, so the tap never even fetches
-    // the album's tracks — the cheapest possible convergence.
+
     expect(spotify.calls.some((path) => path.startsWith("/tracks/"))).toBe(false);
-    // Still exactly one row for this track (the finding), no `sp_t1` twin.
+
     const rows = await db.execute("select track_id from tracks where track_id in ('t1','sp_t1')");
     expect(rows.rows.map((row) => row.track_id)).toEqual(["t1"]);
   });
@@ -982,14 +918,13 @@ describe("probeLabelReleases", () => {
       args: ["alb_row", "New EP", "new-ep", new Date().toISOString(), new Date().toISOString()],
       sql: `insert into albums (id, name, slug, created_at, updated_at) values (?, ?, ?, ?, ?)`,
     });
-    // An MB-crawled track on that album, NO ISRC, and no spotify anchor.
+
     await db.execute({
       args: ["mb_existing", "Foo", JSON.stringify(["Artist"]), 270_000, "alb_row"],
       sql: `insert into tracks (track_id, title, artists_json, duration_ms, album_id) values (?, ?, ?, ?, ?)`,
     });
 
     setSpotifyFixture({
-      // Same album title → same album_id (slug fold); same track title; NO isrc, DIFFERENT spotify id.
       albums: [
         {
           copyrights: ["℗ 2026 Medschool"],
@@ -1031,7 +966,7 @@ describe("probeLabelReleases", () => {
 
     const result = await probeLabelReleases();
 
-    expect(result.newRows).toBe(2); // "foo" and "foovip" fold apart — both minted
+    expect(result.newRows).toBe(2);
     expect(result.skippedKnown).toBe(0);
   });
 
@@ -1054,14 +989,12 @@ describe("probeLabelReleases", () => {
     const first = await probeLabelReleases();
     expect(first.newRows).toBe(1);
 
-    // Reset the probe stamp so the second pass is eligible again, and the call log to watch it.
     await db.execute("update labels set label_releases_checked_at = null where slug = 'medschool'");
     spotify.calls = [];
     const second = await probeLabelReleases();
 
     expect(second.newRows).toBe(0);
-    // The second pass never re-fetches the album's tracks — `unmintedSpotifyTrackIds` sees them all
-    // already held, so no `/tracks/{id}` call is made for that album.
+
     expect(spotify.calls.some((path) => path.startsWith("/tracks/"))).toBe(false);
     expect(Number((await db.execute("select count(*) as n from tracks")).rows[0]?.n)).toBe(1);
   });
@@ -1098,12 +1031,9 @@ describe("probeLabelReleases", () => {
     await probeLabelReleases();
     const fresh = await listFreshReleases(now);
 
-    const catalogueIds = fresh.sections.flatMap((section) =>
-      section.catalogue.map((item) => item.trackId),
-    );
+    const catalogueIds = fresh.catalogue.map((item) => item.trackId);
     expect(catalogueIds).toContain("sp_t1");
-    const findingIds = fresh.sections.flatMap((section) => section.findings);
-    expect(findingIds).toHaveLength(0);
+    expect(fresh.findings).toHaveLength(0);
   });
 
   it("NEVER mints an album with no release_date (a row /fresh could never surface)", async () => {
@@ -1111,7 +1041,6 @@ describe("probeLabelReleases", () => {
 
     setSpotifyFixture({
       albums: [
-        // Both albums are perfectly attributed AND grounded — the ONLY difference is the date.
         {
           copyrights: ["℗ 2026 Medschool"],
           id: "dated",
@@ -1123,7 +1052,7 @@ describe("probeLabelReleases", () => {
           copyrights: ["℗ 2026 Medschool"],
           id: "undated",
           name: "Dateless EP",
-          releaseDate: "", // parses to null — /fresh filters on release_date, so it could never show
+          releaseDate: "",
           trackIds: ["t_undated"],
         },
       ],
@@ -1137,13 +1066,13 @@ describe("probeLabelReleases", () => {
     const result = await probeLabelReleases();
 
     expect(result.skippedUndated).toBe(1);
-    expect(result.albumsMatched).toBe(1); // only the dated album reached the gate
+    expect(result.albumsMatched).toBe(1);
     expect(result.newTrackIds).toEqual(["sp_t_ok"]);
-    // The undated album's track is never minted — and never even fetched (it is dropped first).
+
     const ghost = await db.execute("select 1 from tracks where track_id = 'sp_t_undated'");
     expect(ghost.rows).toHaveLength(0);
     expect(spotify.calls.some((path) => path.includes("t_undated"))).toBe(false);
-    // No row in the archive carries a null release_date as a result of this pass.
+
     const undated = await db.execute(
       "select count(*) as n from tracks where release_date is null or release_date = ''",
     );
@@ -1151,23 +1080,17 @@ describe("probeLabelReleases", () => {
   });
 
   it("RECORDS every Spotify call it makes into the shared per-app meter", async () => {
-    // The meter is how the user-facing paths see the tap's spend. A call the tap forgets to record
-    // is budget a mint thinks it still has — so the count must match the calls, exactly.
     await seedEnabledLabel(db, { id: "lbl_1", name: "Medschool", slug: "medschool" });
     setMintableFixture();
     await setSpotifyCallMeter(db, 0);
 
     await probeLabelReleases();
 
-    // Three reads: the search, the single album, the single track.
     expect(spotify.calls).toHaveLength(3);
     expect(await readSpotifyCallCount()).toBe(spotify.calls.length);
   });
 
   it("holds itself to a FRACTION of the window, so a user path keeps real headroom", async () => {
-    // The priority rule, as a number: the tap's ceiling must leave room under the meter's hard max
-    // rather than sitting at it. If this ever equals SPOTIFY_CALL_WINDOW_MAX, the tap has become a
-    // peer of the user-facing mint instead of a background drain that yields to it.
     expect(TAP_BUDGET_CEILING).toBeLessThan(SPOTIFY_CALL_WINDOW_MAX);
     expect(TAP_BUDGET_CEILING).toBeGreaterThan(0);
   });
@@ -1175,8 +1098,7 @@ describe("probeLabelReleases", () => {
   it("STEPS BACK without a single call when the window is already at the tap's ceiling", async () => {
     await seedEnabledLabel(db, { id: "lbl_1", name: "Medschool", slug: "medschool" });
     setMintableFixture();
-    // The window is at the tap's ceiling — still BELOW the meter's hard max, so a user's mint could
-    // proceed. That is exactly the state in which the tap must not spend another call.
+
     await setSpotifyCallMeter(db, TAP_BUDGET_CEILING);
 
     const result = await probeLabelReleases();
@@ -1184,10 +1106,10 @@ describe("probeLabelReleases", () => {
     expect(result.budgetPaused).toBe(true);
     expect(result.labelsProbed).toBe(0);
     expect(result.newRows).toBe(0);
-    // Not one Spotify call was made, and the meter is untouched — the headroom is left for the user.
+
     expect(spotify.calls).toHaveLength(0);
     expect(await readSpotifyCallCount()).toBe(TAP_BUDGET_CEILING);
-    // It is a PAUSE, not a failure: nothing is stamped and no label is backed off.
+
     const label = await db.execute(
       "select label_releases_checked_at, label_releases_failures from labels where slug = 'medschool'",
     );
@@ -1204,8 +1126,6 @@ describe("probeLabelReleases", () => {
     expect(paused.budgetPaused).toBe(true);
     expect(paused.newRows).toBe(0);
 
-    // The window rolls over (the meter's window is 30s; this one opened a minute ago), so the
-    // effective count is 0 again. Nothing else changed — no stamp was written to hold the label back.
     await setSpotifyCallMeter(db, TAP_BUDGET_CEILING, 60_000);
     const resumed = await probeLabelReleases();
 
@@ -1215,20 +1135,17 @@ describe("probeLabelReleases", () => {
   });
 
   it("stops MID-PASS at the ceiling, leaving the unprobed labels for the next tick", async () => {
-    // Two due labels and a window one call short of the ceiling: the first label's search spends it,
-    // so the second must not be probed at all. The pass ends clean and the second label keeps its
-    // null stamp, which is what makes the next tick resume exactly here.
     await seedEnabledLabel(db, { id: "lbl_1", name: "Aaa Label", slug: "aaa-label" });
     await seedEnabledLabel(db, { id: "lbl_2", name: "Zzz Label", slug: "zzz-label" });
-    setSpotifyFixture({ searchAlbumIds: [] }); // an empty search: one call per label, nothing to mint
+    setSpotifyFixture({ searchAlbumIds: [] });
     await setSpotifyCallMeter(db, TAP_BUDGET_CEILING - 1);
 
     const result = await probeLabelReleases();
 
     expect(result.budgetPaused).toBe(true);
-    expect(result.labelsProbed).toBe(1); // only the first label got its search
+    expect(result.labelsProbed).toBe(1);
     expect(spotify.calls).toHaveLength(1);
-    // The first label WAS completed and stamped; the second was never touched, so it stays due.
+
     const stamps = await db.execute(
       "select slug, label_releases_checked_at from labels order by slug asc",
     );
@@ -1237,8 +1154,6 @@ describe("probeLabelReleases", () => {
   });
 
   it("never blocks the tap when the meter's own store faults (fail-open)", async () => {
-    // The meter is a soft governor and `spotifyFetch`'s 429 backoff is the real safety net, so a
-    // settings-store hiccup must degrade to "carry on", never to a dark tap.
     await seedEnabledLabel(db, { id: "lbl_1", name: "Medschool", slug: "medschool" });
     setMintableFixture();
     await db.execute("drop table settings");

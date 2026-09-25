@@ -1,15 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-// POST /api/chat — ChatDnB's crew door (the verified-user rollout). Driven straight
-// through the exported `serverHandlers.POST`, with the REAL rail helpers wherever they
-// are pure: `requireJsonMutation` (origin + CSRF, recomputed with the real HMAC via
-// `createCsrfToken`) and `parseChatRequest` (the zod body guard) run live; only the
-// session read (`requirePublicUser` — better-auth over the DB), the rate limiter
-// (`enforceRateLimit` — a DB counter), and the model call (`streamChat` — OpenRouter)
-// are mocked. The security-critical properties, in rail order: anonymous 401s,
-// unverified 403s (`email_unverified`), a cross-site or token-less POST 403s, the two
-// per-user rate dials 429, and only then does a turn reach the engine.
-
 const requirePublicUserMock = vi.fn();
 const enforceRateLimitMock = vi.fn();
 const streamChatMock = vi.fn();
@@ -36,9 +26,6 @@ vi.mock("../../lib/server/chat", async (importOriginal) => {
   };
 });
 
-// Imported AFTER the mocks are registered. `createCsrfToken` is the REAL minting
-// function (the mock spreads the actual module), so the happy-path token is verified by
-// the same HMAC the production rail recomputes.
 const { serverHandlers } = await import("./chat");
 const { createCsrfToken } = await import("../../lib/server/public-auth");
 const { MAX_CHAT_MESSAGES } = await import("../../lib/server/chat");
@@ -97,8 +84,6 @@ function callPost(req: Request) {
 }
 
 beforeAll(() => {
-  // The secret both `createCsrfToken` (minting) and `requireJsonMutation`
-  // (verification) read, so the real HMAC round-trips in the test.
   process.env.BETTER_AUTH_SECRET = "chat-route-test-secret";
 });
 
@@ -106,7 +91,7 @@ beforeEach(() => {
   requirePublicUserMock.mockReset();
   enforceRateLimitMock.mockReset();
   streamChatMock.mockReset();
-  // Default: both dials open. Individual tests close one.
+
   enforceRateLimitMock.mockResolvedValue(undefined);
 });
 
@@ -181,7 +166,7 @@ describe("POST /api/chat", () => {
     const res = await callPost(request({ csrf: createCsrfToken(user) }));
 
     expect(res.status).toBe(429);
-    // The friends-phase hourly dial: 30/h, per-user (never the IP).
+
     expect(enforceRateLimitMock).toHaveBeenCalledTimes(1);
     expect(enforceRateLimitMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -205,7 +190,7 @@ describe("POST /api/chat", () => {
     const res = await callPost(request({ csrf: createCsrfToken(user) }));
 
     expect(res.status).toBe(429);
-    // The friends-phase daily ceiling: 150/24h, per-user.
+
     expect(enforceRateLimitMock).toHaveBeenCalledTimes(2);
     expect(enforceRateLimitMock).toHaveBeenLastCalledWith(
       expect.objectContaining({
@@ -234,8 +219,6 @@ describe("POST /api/chat", () => {
   });
 
   it("400s an over-cap turn history without ever reaching the paid model", async () => {
-    // The size caps are the per-request budget the rate limiter cannot express (it caps how
-    // OFTEN, not how MUCH). This proves the reject happens on the route, before `streamChat`.
     const user = verifiedUser();
 
     requirePublicUserMock.mockResolvedValue(user);
@@ -281,7 +264,7 @@ describe("POST /api/chat", () => {
     const res = await callPost(request({ csrf: createCsrfToken(user) }));
 
     expect(res).toBe(stream);
-    // The engine received the parsed turn history — the same messages the body carried.
+
     expect(streamChatMock).toHaveBeenCalledTimes(1);
     const [messages] = streamChatMock.mock.calls[0] as [
       { parts: { text: string; type: string }[]; role: string }[],
@@ -289,7 +272,7 @@ describe("POST /api/chat", () => {
 
     expect(messages).toHaveLength(1);
     expect(messages[0]?.role).toBe("user");
-    // Both dials were consulted before any inference was paid for.
+
     expect(enforceRateLimitMock).toHaveBeenCalledTimes(2);
   });
 });

@@ -23,6 +23,12 @@ What changed is one sentence in [album-entity.md](./album-entity.md): a crawled 
 
 The address is guessable only in the sense any primary key is — a stable opaque token, not a counter — and nothing behind it is private: every field the page prints is already public through `/api/v1`, the feeds, and the entity pages.
 
+## The identity answer
+
+The `get_track` identity projection resolves track IDs, Log IDs, ISRCs, and MusicBrainz recording IDs to arrays of recordings. ISRCs and recording IDs can name several archive rows, so the answer preserves every match and marks its relation as canonical, duplicate, or ambiguous; it never picks an unstamped winner. Each platform state and timestamp is backed by a stored fact, with `null` where the archive cannot support a stronger claim. The Spotify anchor-attempt counter is a spend budget that can decrease, so it is never presented as a count of completed looks. Certification appears only as `certified` and the separate nullable `logId`; uncertified rows expose recording metadata and links without Fluncle-authored findings.
+
+Apple Music links from MusicKit appear on Fluncle's own pages, but machine-served identity answers report that platform as unsupported under the Apple Developer Program License Agreement's MusicKit redistribution limits. Spotify follow links use `/out/spotify/<trackId>` to resolve Fluncle’s archive track ID, never a caller-supplied Spotify ID. Unknown rows and rows without a stored Spotify destination return 404; successful redirects stay privately and briefly cached so each hop remains countable. This protects the metered mapping for crawler-born rows, while publish-born finding IDs can coincide with Spotify IDs; JSON-LD `sameAs` retains the raw identity URL. Identity lookup limits count keys, including every ISRC in a batch, against both a burst and a daily allowance. The limiter uses the edge-provided client IP or signed-in user ID, and its abuse alerts identify a hashed bucket rather than storing the IP address.
+
 ## The two predicates
 
 They live together in [`apps/web/src/lib/server/track-page.ts`](../apps/web/src/lib/server/track-page.ts) and answer different questions. Collapsing them would be a defect.
@@ -66,6 +72,8 @@ Every band is conditional, and an empty one renders nothing at all — no headin
 - **The outbound destinations** — one control per service the archive actually stores an exact link for. Nothing is composed from a search term: a wrong link is worse than an absent one. YouTube rides its officialness gate. Discogs is deliberately **not** here — it is a release database, not somewhere to hear a record — and rides the structured data's `sameAs` instead.
 
 ### Beatport is rendered, never asserted
+
+The Beatport resolver reads the public search page through Firecrawl because direct Worker requests receive 403; it does not use the partner-gated API or a client ID copied from Beatport's web player. It matches only an exact ISRC from the search page's `__NEXT_DATA__`, then stores only a track URL that Beatport rendered as a link. A matching result without a rendered link is a miss: a fabricated slug can serve a track while echoing that wrong slug as canonical. A missing or malformed data island is a failed lookup, not a clean miss. Scraped key, BPM, genre, label, and length are discarded; the stored URL stays out of derived search and AI corpora.
 
 `tracks.beatport_url`'s §F rail in `db/schema.ts` keeps the URL out of every derived corpus, because Beatport's terms bar using its content for text/data mining or for feeding AI. **A `sameAs` graph is a derived corpus** — `log-schema.ts` says in its own words that it exists "for crawlers + AI answer-engines" — and the certified `/log` page's `musicRecordingJsonLd` already withholds it. That shipped behaviour is the specification.
 

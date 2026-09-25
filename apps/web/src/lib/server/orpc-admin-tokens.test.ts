@@ -8,11 +8,6 @@ import {
   warmOrpcRouter,
 } from "./orpc-test-kit";
 
-// The admin wave's `admin-tokens` parity + auth proof, driven end-to-end through
-// `handleOrpc`. ALL four ops are operator tier (live `requireOperator`): the agent
-// is a 403, a non-admin a 401, the operator passes. The two YouTube/Mixcloud token
-// mints + the Last.fm `auth/start` are bodyless; `auth/session` validates `token`.
-
 const getYouTubeAccessToken = vi.fn();
 const getMixcloudAccessToken = vi.fn();
 const lastfmGetToken = vi.fn();
@@ -42,7 +37,6 @@ beforeEach(() => {
   lastfmGetSession.mockReset();
 });
 
-// ── mint_youtube_token — operator tier ───────────────────────────────────────
 describe("oRPC mint_youtube_token (POST /admin/youtube/token)", () => {
   it("401s with no token", async () => {
     const { handleOrpc } = await import("./orpc");
@@ -71,7 +65,6 @@ describe("oRPC mint_youtube_token (POST /admin/youtube/token)", () => {
   });
 });
 
-// ── mint_mixcloud_token — operator tier ──────────────────────────────────────
 describe("oRPC mint_mixcloud_token (POST /admin/mixcloud/token)", () => {
   it("403s the AGENT (operator-only)", async () => {
     const { handleOrpc } = await import("./orpc");
@@ -92,7 +85,6 @@ describe("oRPC mint_mixcloud_token (POST /admin/mixcloud/token)", () => {
   });
 });
 
-// ── start_lastfm_auth — operator tier ────────────────────────────────────────
 describe("oRPC start_lastfm_auth (GET /admin/lastfm/auth/start)", () => {
   it("403s the AGENT (operator-only)", async () => {
     const { handleOrpc } = await import("./orpc");
@@ -117,7 +109,6 @@ describe("oRPC start_lastfm_auth (GET /admin/lastfm/auth/start)", () => {
   });
 });
 
-// ── exchange_lastfm_session — operator tier ──────────────────────────────────
 describe("oRPC exchange_lastfm_session (POST /admin/lastfm/auth/session)", () => {
   it("403s the AGENT (operator-only)", async () => {
     const { handleOrpc } = await import("./orpc");

@@ -15,16 +15,6 @@ import {
   seedTrack,
 } from "./integration-db";
 
-// THE PER-USER RECOMMENDATION ENGINE, PROVEN — against the REAL schema, with
-// vectors we control (the catalogue.integration.test.ts discipline). The engine
-// promises a listener specific things: their seeds are theirs alone, the cap
-// holds, an excluded row (duplicate / dismissed / long-form / un-anchored /
-// certified / their own seed) never lands in the catalogue list, the findings
-// slots carry Fluncle's voice (note + Log ID), the diversity decay spreads the
-// page without rewriting a score, and an unverified email is a 403 — never a
-// silent empty. Each is asserted here through the real SQL on a real libSQL
-// engine built from the generated migrations.
-
 let db: Client;
 
 vi.mock("./db", async (importOriginal) => {
@@ -35,7 +25,6 @@ vi.mock("./db", async (importOriginal) => {
 
 const DIMS = 1024;
 
-/** A unit vector pointing along one axis — an "artificial genre" we can aim tracks at. */
 function axis(index: number): number[] {
   const vector = Array.from<number>({ length: DIMS }).fill(0);
   vector[index] = 1;
@@ -43,19 +32,16 @@ function axis(index: number): number[] {
   return vector;
 }
 
-/** Normalize, so every fixture vector is unit-length like a real MuQ vector. */
 function unit(vector: number[]): number[] {
   const norm = Math.sqrt(vector.reduce((sum, value) => sum + value * value, 0));
 
   return vector.map((value) => value / norm);
 }
 
-/** A vector `weight` of the way from `from` toward `toward` — a controlled near-neighbour. */
 function blend(from: number[], toward: number[], weight: number): number[] {
   return unit(from.map((value, index) => value * (1 - weight) + (toward[index] ?? 0) * weight));
 }
 
-/** The write the embed pipeline performs: the validated JSON → ranked F32_BLOB. */
 async function embed(trackId: string, vector: number[]): Promise<void> {
   await seedEmbedding(db, trackId, vector);
 }
@@ -76,7 +62,6 @@ type CatalogueSeedOptions = {
   vector?: number[];
 };
 
-/** A catalogue track (no findings row), embedded when a vector is given. */
 async function seedCatalogue(trackId: string, options: CatalogueSeedOptions = {}): Promise<void> {
   await seedCatalogueTrack(db, {
     artists: options.artists ?? ["Catalogue Artist"],
@@ -89,7 +74,6 @@ async function seedCatalogue(trackId: string, options: CatalogueSeedOptions = {}
   }
 }
 
-/** A certified finding, embedded when a vector is given, with an optional note. */
 async function seedFinding(
   trackId: string,
   options: CatalogueSeedOptions & { logId?: string; note?: string } = {},
@@ -117,8 +101,6 @@ beforeEach(async () => {
   db = await createIntegrationDb();
 });
 
-// ── The seed set: CRUD, the cap, the scoping ─────────────────────────────────
-
 describe("rec seeds (real SQL)", () => {
   it("saves by trackId AND by Log ID, lists hydrated newest-first, and only a finding carries a logId", async () => {
     const { listRecSeeds, saveRecSeed } = await import("./recommendations");
@@ -127,7 +109,6 @@ describe("rec seeds (real SQL)", () => {
     await seedFinding("finding-1", { logId: "001.1.1A" });
     await seedCatalogue("catalogue-1");
 
-    // By Log ID (the finding), then by trackId (the catalogue row — it HAS no Log ID).
     const first = await saveRecSeed(user, { logId: "001.1.1A" });
     const second = await saveRecSeed(user, { trackId: "catalogue-1" });
 
@@ -146,7 +127,6 @@ describe("rec seeds (real SQL)", () => {
     const catalogueSeed = list.seeds.find((seed) => seed.trackId === "catalogue-1");
     const findingSeed = list.seeds.find((seed) => seed.trackId === "finding-1");
 
-    // Hydrated for recognition; the catalogue seed stays coordinate-less.
     expect(catalogueSeed?.title).toBe("Catalogue catalogue-1");
     expect(catalogueSeed?.artists).toEqual(["Catalogue Artist"]);
     expect(catalogueSeed?.logId).toBeUndefined();
@@ -188,7 +168,6 @@ describe("rec seeds (real SQL)", () => {
       expect(saved).not.toBeInstanceOf(Response);
     }
 
-    // The 13th NEW seed breaks the cap.
     const thirteenth = await saveRecSeed(user, { trackId: "cat-12" });
 
     expect(thirteenth).toBeInstanceOf(Response);
@@ -201,7 +180,6 @@ describe("rec seeds (real SQL)", () => {
       expect(body.code).toBe("seed_limit");
     }
 
-    // Re-adding an EXISTING seed at the cap is a refresh, never a breach.
     const refreshed = await saveRecSeed(user, { trackId: "cat-3" });
 
     expect(refreshed).not.toBeInstanceOf(Response);
@@ -221,12 +199,10 @@ describe("rec seeds (real SQL)", () => {
     expect(removed).not.toBeInstanceOf(Response);
     expect((await listRecSeeds(user)).seeds).toHaveLength(0);
 
-    // A real track that was never a seed: a quiet { ok: true }, the unsave discipline.
     const noop = await deleteRecSeed(user, "cat-2");
 
     expect(noop).not.toBeInstanceOf(Response);
 
-    // A track that does not exist at all: 404.
     const missing = await deleteRecSeed(user, "never-seen");
 
     expect(missing).toBeInstanceOf(Response);
@@ -246,14 +222,11 @@ describe("rec seeds (real SQL)", () => {
 
     expect((await listRecSeeds(userB)).seeds).toHaveLength(0);
 
-    // B "removes" the track — a no-op on B's empty set, and A's seed survives.
     await deleteRecSeed(userB, "cat-1");
 
     expect((await listRecSeeds(userA)).seeds).toHaveLength(1);
   });
 });
-
-// ── The engine: the gate, the exclusions, the blend, the decay ───────────────
 
 describe("listRecommendations (real SQL)", () => {
   it("403s an unverified email with the email_unverified code — the learning-cohort gate", async () => {
@@ -277,13 +250,9 @@ describe("listRecommendations (real SQL)", () => {
     const user = publicUser("user-A");
     const home = axis(0);
 
-    // The seed: a catalogue track the user picked, embedded at the home axis.
     await seedCatalogue("seed-1", { vector: home });
     await saveRecSeed(user, { trackId: "seed-1" });
 
-    // Every candidate sits NEAR the seed — close enough to win a slot on
-    // similarity alone — so an absence below is the exclusion working, never
-    // the ranking losing them.
     await seedCatalogue("good-1", { vector: blend(home, axis(1), 0.1) });
     await seedCatalogue("dup-1", { vector: blend(home, axis(2), 0.1) });
     await seedCatalogue("dismissed-1", { vector: blend(home, axis(3), 0.1) });
@@ -297,7 +266,6 @@ describe("listRecommendations (real SQL)", () => {
     await db.execute(
       `update tracks set dismissed_at = '2026-01-01T00:00:00.000Z' where track_id = 'dismissed-1'`,
     );
-    // LONG_FORM_MS is 15 minutes; sit the mix just past it.
     await db.execute(`update tracks set duration_ms = 900000 where track_id = 'longform-1'`);
     await db.execute(`update tracks set spotify_uri = null where track_id = 'unanchored-1'`);
 
@@ -311,11 +279,8 @@ describe("listRecommendations (real SQL)", () => {
 
     const catalogueIds = result.catalogue.map((row) => row.trackId);
 
-    // The one clean candidate is recommended; every excluded class is absent.
     expect(catalogueIds).toEqual(["good-1"]);
-    // The certified finding never rides the catalogue list — it is a labeled slot.
     expect(result.findings.map((row) => row.trackId)).toEqual(["finding-1"]);
-    // And the user's own seed is in neither half.
     expect(catalogueIds).not.toContain("seed-1");
   });
 
@@ -327,7 +292,6 @@ describe("listRecommendations (real SQL)", () => {
     await seedCatalogue("seed-1", { vector: home });
     await saveRecSeed(user, { trackId: "seed-1" });
 
-    // Four findings at staggered distances: the slots take the nearest 3.
     await seedFinding("find-1", {
       logId: "001.1.1A",
       note: "this one goes off",
@@ -347,7 +311,6 @@ describe("listRecommendations (real SQL)", () => {
       return;
     }
 
-    // 3 slots, nearest first, the farthest finding cut.
     expect(result.findings.map((row) => row.trackId)).toEqual(["find-1", "find-2", "find-3"]);
 
     const nearest = result.findings[0];
@@ -356,11 +319,9 @@ describe("listRecommendations (real SQL)", () => {
     expect(nearest?.note).toBe("this one goes off");
     expect(nearest?.similarity).toBeGreaterThan(0.9);
 
-    // A finding without a note still carries its coordinate; note is simply absent.
     expect(result.findings[1]?.logId).toBe("002.1.1A");
     expect(result.findings[1]?.note).toBeUndefined();
 
-    // The instrument register: a catalogue row carries NO editorial field at all.
     const catalogueRow = result.catalogue[0] as unknown as Record<string, unknown>;
 
     expect(catalogueRow.trackId).toBe("cat-1");
@@ -376,8 +337,6 @@ describe("listRecommendations (real SQL)", () => {
     await seedCatalogue("seed-1", { vector: home });
     await saveRecSeed(user, { trackId: "seed-1" });
 
-    // A finding and a catalogue row, each near the seed so both win a slot, each carrying the
-    // full readout in the DB (duration_ms is the fixture default, 270_000ms → 4:30).
     await seedFinding("find-1", { logId: "001.1.1A", vector: blend(home, axis(1), 0.05) });
     await seedCatalogue("cat-1", { vector: blend(home, axis(2), 0.05) });
 
@@ -385,8 +344,6 @@ describe("listRecommendations (real SQL)", () => {
       `update tracks set bpm = 174, key = 'A minor', release_date = '2014-06-01'
         where track_id = 'find-1'`,
     );
-    // The catalogue row carries no release_date — its year must come back UNDEFINED (honest
-    // absence, The Readout Rule), while its bpm/key/duration still land.
     await db.execute(
       `update tracks set bpm = 172, key = 'F minor', release_date = null where track_id = 'cat-1'`,
     );
@@ -402,13 +359,11 @@ describe("listRecommendations (real SQL)", () => {
     const finding = result.findings.find((row) => row.trackId === "find-1");
     const catalogue = result.catalogue.find((row) => row.trackId === "cat-1");
 
-    // The findings register — every chip plus the year.
     expect(finding?.bpm).toBe(174);
     expect(finding?.durationMs).toBe(270_000);
     expect(finding?.key).toBe("A minor");
     expect(finding?.year).toBe("2014");
 
-    // The catalogue register — chips land; the missing release_date drops the year, never fakes it.
     expect(catalogue?.bpm).toBe(172);
     expect(catalogue?.durationMs).toBe(270_000);
     expect(catalogue?.key).toBe("F minor");
@@ -423,9 +378,6 @@ describe("listRecommendations (real SQL)", () => {
     await seedCatalogue("seed-1", { vector: home });
     await saveRecSeed(user, { trackId: "seed-1" });
 
-    // Raw similarity order: clone-1 (~.9986) > clone-2 (~.9939) > fresh-1 (~.9848).
-    // After one same-artist pick, clone-2 decays ×0.97 (~.964) — below fresh-1 —
-    // so the page reads clone-1, fresh-1, clone-2.
     await seedCatalogue("clone-1", {
       artists: ["Same Artist"],
       vector: blend(home, axis(1), 0.05),
@@ -446,8 +398,6 @@ describe("listRecommendations (real SQL)", () => {
 
     expect(result.catalogue.map((row) => row.trackId)).toEqual(["clone-1", "fresh-1", "clone-2"]);
 
-    // The decay re-orders, never rewrites: clone-2 still DISPLAYS its true
-    // (higher) similarity even though it now sits below fresh-1.
     const clone2 = result.catalogue.find((row) => row.trackId === "clone-2");
     const fresh1 = result.catalogue.find((row) => row.trackId === "fresh-1");
 
@@ -458,15 +408,11 @@ describe("listRecommendations (real SQL)", () => {
     const { listRecommendations, saveRecSeed } = await import("./recommendations");
     const user = publicUser("user-A");
 
-    // Two seeds on ORTHOGONAL axes — a bimodal taste, the operator's own shape.
     await seedCatalogue("seed-a", { vector: axis(0) });
     await seedCatalogue("seed-b", { vector: axis(1) });
     await saveRecSeed(user, { trackId: "seed-a" });
     await saveRecSeed(user, { trackId: "seed-b" });
 
-    // A dead ringer for seed B alone, and a mediocre middle-of-the-road blend.
-    // Under max-similarity the ringer wins (~1.0 to B); under a centroid the
-    // middler would (it hugs the mean of A and B).
     await seedCatalogue("ringer-b", { artists: ["Ringer"], vector: blend(axis(1), axis(2), 0.02) });
     await seedCatalogue("middler", {
       artists: ["Middler"],
@@ -490,7 +436,6 @@ describe("listRecommendations (real SQL)", () => {
     const user = publicUser("user-A");
     const home = axis(0);
 
-    // One measured seed, one whose audio was never captured.
     await seedCatalogue("seed-1", { vector: home });
     await seedCatalogue("seed-2");
     await saveRecSeed(user, { trackId: "seed-1" });
@@ -510,7 +455,6 @@ describe("listRecommendations (real SQL)", () => {
     expect(result.seedsSkipped).toEqual(["seed-2"]);
     expect(result.catalogue.map((row) => row.trackId)).toEqual(["cat-1"]);
 
-    // A user whose EVERY seed is unmeasured gets the honest empty, never a 500.
     const userB = publicUser("user-B");
 
     await seedCatalogue("seed-3");
@@ -535,7 +479,6 @@ describe("listRecommendations (real SQL)", () => {
     const userA = publicUser("user-A");
     const userB = publicUser("user-B");
 
-    // A seeds axis 0; B seeds axis 1. One candidate near each axis.
     await seedCatalogue("seed-a", { vector: axis(0) });
     await seedCatalogue("seed-b", { vector: axis(1) });
     await saveRecSeed(userA, { trackId: "seed-a" });
@@ -553,17 +496,12 @@ describe("listRecommendations (real SQL)", () => {
       return;
     }
 
-    // Each user's page leads with the candidate near THEIR axis — the seed sets
-    // never bleed across accounts.
     expect(resultA.catalogue[0]?.trackId).toBe("near-a");
     expect(resultB.catalogue[0]?.trackId).toBe("near-b");
   });
 });
 
-// ── Frontier novelty: the excludeRecent flag over the editions ledger ─────────
-
 describe("listRecommendations excludeRecent (real SQL)", () => {
-  /** Freeze an edition holding the given track ids — the exact builder A2 uses. */
   async function insertEdition(
     userId: string,
     trackIds: Array<{ slot?: "catalogue" | "finding"; trackId: string }>,
@@ -596,17 +534,13 @@ describe("listRecommendations excludeRecent (real SQL)", () => {
     await saveRecSeed(user, { trackId: "seed-1" });
     await seedCatalogue("cat-1", { vector: blend(home, axis(1), 0.1) });
 
-    // The behaviour BEFORE any edition exists.
     const baseline = await listRecommendations(user);
 
-    // Freeze an edition that holds the candidate — this WOULD exclude it if novelty were on.
     await insertEdition("user-A", [{ trackId: "cat-1" }]);
 
     const withDefault = await listRecommendations(user);
     const withExplicitFalse = await listRecommendations(user, { excludeRecent: false });
 
-    // Neither the default nor an explicit false consults the ledger: both equal the
-    // pre-edition baseline byte-for-byte, and the candidate is still recommended.
     expect(withDefault).toEqual(baseline);
     expect(withExplicitFalse).toEqual(baseline);
 
@@ -627,13 +561,11 @@ describe("listRecommendations excludeRecent (real SQL)", () => {
     await seedCatalogue("seed-1", { vector: home });
     await saveRecSeed(user, { trackId: "seed-1" });
 
-    // Two catalogue + two finding candidates, all near the seed so all would win a slot.
     await seedCatalogue("cat-recent", { vector: blend(home, axis(1), 0.05) });
     await seedCatalogue("cat-clean", { vector: blend(home, axis(2), 0.05) });
     await seedFinding("find-recent", { logId: "001.1.1A", vector: blend(home, axis(3), 0.05) });
     await seedFinding("find-clean", { logId: "002.1.1A", vector: blend(home, axis(4), 0.05) });
 
-    // A recent edition froze one of each — the novelty window must drop both.
     await insertEdition("user-A", [
       { trackId: "cat-recent" },
       { slot: "finding", trackId: "find-recent" },
@@ -652,7 +584,6 @@ describe("listRecommendations excludeRecent (real SQL)", () => {
 
     expect(catalogueIds).not.toContain("cat-recent");
     expect(findingIds).not.toContain("find-recent");
-    // The clean candidates — in no edition — still ride.
     expect(catalogueIds).toContain("cat-clean");
     expect(findingIds).toContain("find-clean");
   });
@@ -668,15 +599,12 @@ describe("listRecommendations excludeRecent (real SQL)", () => {
     await seedCatalogue("cat-old", { vector: blend(home, axis(1), 0.05) });
     await seedCatalogue("cat-recent", { vector: blend(home, axis(2), 0.05) });
 
-    // The oldest edition holds cat-old...
     await insertEdition("user-A", [{ trackId: "cat-old" }]);
 
-    // ...then exactly FRONTIER_NOVELTY_WINDOW newer filler editions push it out of the window.
     for (let index = 0; index < FRONTIER_NOVELTY_WINDOW - 1; index += 1) {
       await insertEdition("user-A", [{ trackId: `filler-${index}` }]);
     }
 
-    // The newest edition (the window's leading edge) holds cat-recent.
     await insertEdition("user-A", [{ trackId: "cat-recent" }]);
 
     const result = await listRecommendations(user, { excludeRecent: true });
@@ -689,17 +617,12 @@ describe("listRecommendations excludeRecent (real SQL)", () => {
 
     const catalogueIds = result.catalogue.map((row) => row.trackId);
 
-    // cat-old aged out of the window, so it returns; cat-recent is still inside it.
     expect(catalogueIds).toContain("cat-old");
     expect(catalogueIds).not.toContain("cat-recent");
   });
 });
 
 describe("seed writes never create editions (the draft-then-checkpoint boundary)", () => {
-  // RFC D2: seeds are INPUTS; editions are CHECKPOINTS. An edition is born only from the
-  // two triggers ("Get playlist" and the weekly sweep) — never as a side effect of a seed
-  // change. This pins that the seed CRUD path writes zero `frontier_editions` rows, so a
-  // draft-phase user (adding/removing seeds) stays in the draft with nothing frozen.
   it("saving and removing seeds leaves the edition ledger empty", async () => {
     const { deleteRecSeed, saveRecSeed } = await import("./recommendations");
     const user = publicUser("user-A");

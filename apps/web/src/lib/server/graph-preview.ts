@@ -1,24 +1,3 @@
-// THE GRAPH-LINK HOVER CARD'S ONE READ.
-//
-// `GraphLink` names an entity (artist, label, album, galaxy) wherever it is mentioned; hovering
-// or focusing one reveals a card previewing it. This resolves that card.
-//
-// TWO GUARANTEES HOLD IT HONEST, and both come from reusing what the entity's own page uses
-// rather than writing a second, parallel truth:
-//
-//   1. THE LINE IS THE PAGE'S LINE. Not a paraphrase, not a clamped prose excerpt — the same
-//      `graphSignatureLine` dispatch, over the same inputs. Since the Three Areas Rule only the
-//      galaxy masthead prints one; the three catalogue kinds return undefined here exactly as
-//      their pages print none (lib/graph-prose.ts) — the card's prose for them is the bio.
-//   2. THE COUNT IS THE PAGE'S COUNT. It drives through the same `getFindingsBy*` reads, which
-//      run through the `findings` inner join — so it counts FINDINGS and can never include an
-//      uncertified catalogue row. A card that said "4" over a page that says "3" would be a
-//      bug with a very long tail; this makes the two the same number by construction.
-//
-// The per-entity finding lists are bounded by the archive (a label carries single-digit
-// findings), and the card is fetched lazily — on card OPEN, once per entity per session,
-// shared across every link that names it (see the contract's note on why this is not an N+1).
-
 import {
   firstFoundAt,
   type GraphEntityKind,
@@ -33,20 +12,10 @@ import { getLabelBySlug } from "./labels";
 import { getFindingsByAlbum, getFindingsByArtist, getFindingsByLabel } from "./tracks";
 import { type TrackListItem } from "./tracks";
 
-/** Thrown when a slug names no entity of that kind — the router maps it to a 404. */
 export class GraphEntityNotFoundError extends Error {}
 
-/** How many covers the card shows. Four fills its row without turning it into a grid. */
 const PREVIEW_COVER_CAP = 4;
 
-/**
- * The findings' covers, freshest first, capped — the card's visual proof. A `leadCover` (a
- * label's own logo) takes the front slot when present, so a label's card leads with its real
- * logo and fills the rest with finding covers (deduped against the lead).
- *
- * The lead is taken down to the SAME `small` rung as the covers beside it — it sits in the same
- * thumbnail row, so a label's logo has no reason to arrive ten times heavier than its neighbours.
- */
 function coversOf(findings: TrackListItem[], leadCover?: string): string[] {
   const covers = findings.flatMap((finding) => {
     const cover = albumCoverAtSize(finding.albumImageUrl, "small");
@@ -60,15 +29,7 @@ function coversOf(findings: TrackListItem[], leadCover?: string): string[] {
   return ordered.slice(0, PREVIEW_COVER_CAP);
 }
 
-/**
- * Resolve one graph entity's hover-card preview. Throws `GraphEntityNotFoundError` when the
- * slug names no entity of that kind — including EVERY galaxy slug while the browse-by-feel
- * launch gate is closed, which is exactly what `get_galaxy` already answers.
- */
 export async function getGraphPreview(kind: GraphEntityKind, slug: string): Promise<GraphPreview> {
-  // The galaxy is the one entity whose count is not a list length: the lens read hands back a
-  // derived `memberCount` over the whole cluster, and its own page opens on that number (its
-  // line takes no first-found date at all). Take its covers off the core-first head.
   if (kind === "galaxy") {
     const { findings, galaxy } = await getPublicGalaxyBySlug(slug, PREVIEW_COVER_CAP, 0).catch(
       () => {
@@ -92,16 +53,11 @@ export async function getGraphPreview(kind: GraphEntityKind, slug: string): Prom
     throw new GraphEntityNotFoundError(`No ${kind} with slug "${slug}"`);
   }
 
-  // Coordinate-bearing findings only — the same filter each entity page applies before it
-  // counts, so the card's number is the page's number.
   const findings = entity.findings.filter((finding) => finding.logId);
 
   return {
-    // The factual bio (artist/label/album all carry it now; `resolveEntity` returns it where the
-    // entity read has one). Undefined ⇒ the card renders no bio row, exactly as before.
     bio: entity.bio,
-    // A label leads with its own logo (when the sweep has resolved one); artists/albums have no
-    // lead cover, so their cards read exactly as before.
+
     covers: coversOf(findings, entity.leadCover),
     findingCount: findings.length,
     kind,
@@ -111,10 +67,6 @@ export async function getGraphPreview(kind: GraphEntityKind, slug: string): Prom
   };
 }
 
-/**
- * The by-slug read for the three findings-counted entities. `leadCover` is the label's own logo
- * (labels only) — the front slot of the hover card's covers, so a label leads with its real image.
- */
 async function resolveEntity(
   kind: Exclude<GraphEntityKind, "galaxy">,
   slug: string,

@@ -17,7 +17,6 @@ describe("isTopicChannel — YouTube's auto-generated art-track channels", () =>
 
 describe("isOfficialAuthor — the permission, not the identity", () => {
   it("accepts an art-track channel regardless of who is credited", () => {
-    // The Topic channel IS the rights-holder's delivered audio, so it needs no name agreement.
     expect(isOfficialAuthor("Some Artist - Topic", { artists: [] })).toBe(true);
     expect(isOfficialAuthor("Netsky - Topic", { artists: ["Someone Else"] })).toBe(true);
   });
@@ -25,7 +24,7 @@ describe("isOfficialAuthor — the permission, not the identity", () => {
   it("accepts the artist's own channel on folded equality", () => {
     expect(isOfficialAuthor("Netsky", { artists: ["Netsky"] })).toBe(true);
     expect(isOfficialAuthor("netsky", { artists: ["Netsky"] })).toBe(true);
-    // The house fold meets `&` with `and`, and strips accents.
+
     expect(isOfficialAuthor("Chase and Status", { artists: ["Chase & Status"] })).toBe(true);
     expect(isOfficialAuthor("Noisia", { artists: ["Noïsia"] })).toBe(true);
   });
@@ -35,7 +34,6 @@ describe("isOfficialAuthor — the permission, not the identity", () => {
   });
 
   it("REFUSES a channel that merely embeds an artist's name", () => {
-    // The whole reason this is equality and not containment: a rip channel names the artist too.
     expect(isOfficialAuthor("Netsky Fan Rips", { artists: ["Netsky"] })).toBe(false);
     expect(isOfficialAuthor("Best of Netsky", { artists: ["Netsky"] })).toBe(false);
   });
@@ -46,8 +44,6 @@ describe("isOfficialAuthor — the permission, not the identity", () => {
   });
 
   it("refuses a VEVO channel — the documented false-negative bias", () => {
-    // Genuinely official, and still refused: the id stays internal rather than widening the rule
-    // that keeps a rip off the page. Changing this is a ruling, and the label class below IS one.
     expect(isOfficialAuthor("NetskyVEVO", { artists: ["Netsky"] })).toBe(false);
   });
 
@@ -57,16 +53,12 @@ describe("isOfficialAuthor — the permission, not the identity", () => {
   });
 
   it("never lets a credited name that folds away match an empty author", () => {
-    // A punctuation-only credit folds to "", and so would a punctuation-only channel; equality on
-    // two empty strings would accept anything. Both sides guard for it.
     expect(isOfficialAuthor("!!!", { artists: ["???"] })).toBe(false);
   });
 });
 
 describe("isOfficialAuthor — the recording's own label channel", () => {
   it("accepts the label that released THIS recording", () => {
-    // A label's own upload of its release is official even when the artist-channel rule does not
-    // match; the recording's canonical label is part of the equality check.
     expect(
       isOfficialAuthor("Fokuz Recordings", {
         artists: ["Lauren Ritchie"],
@@ -76,8 +68,6 @@ describe("isOfficialAuthor — the recording's own label channel", () => {
   });
 
   it("accepts on EITHER label spelling — the canonical name or the raw release string", () => {
-    // `labels` carries both: `labels.name` (the collapsed entity) and the raw `tracks.label`. A
-    // crawled row can have only the second one, and a channel matching it is still that label's.
     expect(isOfficialAuthor("Fokuz Recordings", { artists: ["Anile"], labels: ["Fokuz"] })).toBe(
       false,
     );
@@ -87,22 +77,18 @@ describe("isOfficialAuthor — the recording's own label channel", () => {
   });
 
   it("REFUSES a label channel on a track that label did not release", () => {
-    // The narrowness is the whole safety property: a label channel is permission for that label's
-    // own releases and for nothing else. Hospital's channel over a Fokuz release is a re-upload.
     expect(
       isOfficialAuthor("Hospital Records", {
         artists: ["Lauren Ritchie"],
         labels: ["Fokuz Recordings"],
       }),
     ).toBe(false);
-    // And on a track with no label at all it has nothing to be equal to.
+
     expect(isOfficialAuthor("Hospital Records", { artists: ["Netsky"] })).toBe(false);
     expect(isOfficialAuthor("Hospital Records", { artists: ["Netsky"], labels: [] })).toBe(false);
   });
 
   it("accepts Hospital's own channel on a Hospital release, on the same equality", () => {
-    // Not a special case and not an allowlist — the same clause, met by a row that actually is one
-    // of theirs. This is the pair that shows the rule is scoped to the ROW, not to the channel.
     expect(
       isOfficialAuthor("Hospital Records", { artists: ["Netsky"], labels: ["Hospital Records"] }),
     ).toBe(true);
@@ -124,9 +110,6 @@ describe("isOfficialAuthor — the recording's own label channel", () => {
   });
 
   it("does NOT strip label boilerplate the way the capture sweep's ranker does", () => {
-    // The ranker normalizes "Hospital Records" → "hospital" because it is CHOOSING between
-    // candidates and can afford to be generous. This is GRANTING PERMISSION and cannot: "Critical"
-    // and "Critical Music" are not provably the same party, so the shorter channel is refused.
     expect(isOfficialAuthor("Critical", { artists: ["Enei"], labels: ["Critical Music"] })).toBe(
       false,
     );
@@ -146,7 +129,6 @@ describe("isOfficialAuthor — the recording's own label channel", () => {
   });
 });
 
-/** A `fetch` stand-in returning one canned oEmbed response. */
 function stubFetch(response: { body?: unknown; ok: boolean; throws?: boolean }): typeof fetch {
   return (async () => {
     if (response.throws) {
@@ -172,8 +154,6 @@ describe("checkYoutubeOfficial — a verdict only when YouTube actually answered
   });
 
   it("rules 1 on the recording's own label channel", async () => {
-    // The Fokuz case, end to end through the transport: the oEmbed answer names the label, the
-    // widened predicate accepts it, and the verdict that reaches the column is 1.
     const verdict = await checkYoutubeOfficial(
       "RFObrLVHMvg",
       { artists: ["Lauren Ritchie"], labels: ["Fokuz Recordings"] },
@@ -204,8 +184,6 @@ describe("checkYoutubeOfficial — a verdict only when YouTube actually answered
   });
 
   it("leaves the verdict NULL when the video is gone or private", async () => {
-    // A 404/401 says nothing about WHO uploaded it, so it concludes nothing. Storing 0 here would
-    // be a guess dressed as a check.
     const verdict = await checkYoutubeOfficial(
       "abc123",
       { artists: ["Netsky"] },

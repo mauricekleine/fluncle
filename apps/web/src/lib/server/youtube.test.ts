@@ -1,15 +1,3 @@
-// Two things are proven here:
-//
-//   1. `extractYoutubeChannelId` / `extractYoutubeVideoId` — PURE, network-free lifts off a stored
-//      URL. The channel lift pulls a `UC…` id from a `…/channel/UC…` URL; the video lift pulls the
-//      native 11-char id from the shapes our own posts land as (`/shorts/<id>`, `watch?v=<id>`,
-//      `youtu.be/<id>`, `/embed/<id>`). Both return `null` for anything else.
-//   2. `collectYouTubeVideoMetrics` — the per-video metrics reader (Wave 2), proven against the REAL
-//      migrated schema on an in-memory libSQL engine plus injected fetch. What is easy to get wrong:
-//      the no-op GATE (a clean `null` when unconfigured OR unconnected), the Data-API + Analytics
-//      MERGE (public counters from one host, retention from the other, keyed by video id), and the
-//      BEST-EFFORT Analytics leg (a lagging/failed report leaves retention null but keeps the stats).
-
 import { type Client } from "@libsql/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -55,7 +43,6 @@ describe("extractYoutubeChannelId", () => {
   });
 
   it("returns null for a channel path that is not a UC… id", () => {
-    // Only the canonical `UC…` id form is a usable channel id for yt-dlp matching.
     expect(extractYoutubeChannelId("https://www.youtube.com/channel/HCabcdef")).toBeNull();
   });
 
@@ -114,15 +101,10 @@ describe("extractYoutubeVideoId", () => {
   }
 });
 
-// ── The reader (the gate + the Data/Analytics merge) ─────────────────────────────────────────────
-
 let db: Client;
 
 const NOW = new Date("2026-07-26T12:00:00.000Z");
 
-// An injected token getter, so a test never touches the real refresh path (its expiry-vs-clock check
-// made the pass environmental). The `seedAuth` row below still exists — it satisfies the DB-read
-// connection gate (`hasYouTubeAuth`) — but this stub, not the network, supplies the access token.
 const getAccessToken = () => Promise.resolve("test-token");
 
 async function seedAuth(): Promise<void> {
@@ -141,13 +123,11 @@ async function seedAuth(): Promise<void> {
   });
 }
 
-/** A fetch stub routing by host: the Data API `videos` endpoint vs the Analytics `reports` endpoint. */
 function fetchStub(handlers: {
   analytics?: (url: URL) => Response;
   data?: (url: URL) => Response;
 }): typeof fetch {
   return vi.fn((input: Parameters<typeof fetch>[0]) => {
-    // The reader always passes a string URL; narrow the full `RequestInfo | URL` type anyway.
     const href = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
     const url = new URL(href);
 
@@ -227,7 +207,7 @@ describe("collectYouTubeVideoMetrics (the gate + the merge)", () => {
             { name: "averageViewDuration" },
             { name: "averageViewPercentage" },
           ],
-          // v2 has no retention row yet (the ~2–3 day lag) — absent, so its retention stays null.
+
           rows: [["v1", 1500, 50, 30, 45.5]],
         }),
       data: () =>
@@ -253,11 +233,10 @@ describe("collectYouTubeVideoMetrics (the gate + the merge)", () => {
         id: "v1",
         likes: 20,
         views: 1500,
-        // estimatedMinutesWatched (50) × 60.
+
         watchTimeSeconds: 3000,
       },
       {
-        // No Analytics row for v2 yet → retention null, but the public counters still land.
         averageViewDurationSeconds: null,
         averageViewPercentage: null,
         comments: 0,

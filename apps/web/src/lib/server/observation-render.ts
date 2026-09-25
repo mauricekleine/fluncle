@@ -1,13 +1,3 @@
-// observation-render.ts — the render-and-store half of the observation pipeline, extracted
-// from the observe_track handler so it has TWO callers: the handler (after its voice + echo
-// gates) and the rejection ledger's `accepted` ruling (the operator overruling the echo gate
-// on a held script). Both must render, upload, and persist identically — one definition.
-//
-// It does NOT gate. The voice gate and the echo gate live in the handler, BEFORE this runs,
-// so a script reaching here has already cleared them (or is being deliberately overruled by
-// the operator). This keeps the render path free of the anti-sameness policy: it renders what
-// it is handed.
-
 import { env } from "cloudflare:workers";
 import { FOUND_BASE, trackMedia } from "../media";
 import {
@@ -24,21 +14,18 @@ import { getTrackContextNote } from "./tracks";
 import { type TrackListItem } from "./tracks";
 import { updateTrack } from "./track-update";
 
-/** The tunable knobs the two callers pass through to a render. */
 export type RenderObservationOptions = {
-  /** An explicit factual context to author-render from; else the stored note, else a fetch. */
   contextNote?: string;
-  /** An `ffprobe` override; absent, the length is derived from the render's word timestamps. */
+
   durationMs?: number;
-  /** The 20–45s target (clamped 5–90); a last-resort duration when there is no alignment. */
+
   durationTargetSec: number;
-  /** The prompt-registry version that authored this script (stamped as provenance). */
+
   promptVersion: number | null;
-  /** Override the configured Cartesia voice id. */
+
   voiceId?: string;
 };
 
-/** The observe endpoint's success payload (shared so the handler + the ledger return one shape). */
 export type RenderObservationResult = {
   audioUrl: string;
   durationMs: number;
@@ -50,13 +37,6 @@ export type RenderObservationResult = {
   voiceId: string;
 };
 
-/**
- * Render a gated observation script for a finding via Cartesia, upload the three R2 objects,
- * and persist the row (audio url + duration + timestamp + the script transcript + the alignment
- * + the prompt-version provenance). Requires a Log ID (the coordinate every artifact keys off).
- * The finding's `contextNote` is resolved in the same order the handler used it: an explicit
- * override, then the stored note, then a best-effort fetch (persisted only if freshly fetched).
- */
 export async function renderAndStoreObservation(
   track: TrackListItem,
   script: string,
@@ -68,7 +48,6 @@ export async function renderAndStoreObservation(
     throw new Error("renderAndStoreObservation requires a Log ID");
   }
 
-  // Resolve the factual context: an explicit override, then the stored note, then a fetch.
   const storedContextNote = await getTrackContextNote(track.trackId);
   let contextNote = "";
   let freshlyFetched = false;

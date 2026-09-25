@@ -1,42 +1,3 @@
-// The track_artists graph backfill — fold `tracks.artists_json` names onto EXISTING artist
-// identities (RFC artist-primary-capture, slice 0).
-//
-// ── THE GAP ────────────────────────────────────────────────────────────────────────────────────
-// The `track_artists` graph is crawl-era-only: only ~12.3k of ~37.5k tracks carry
-// edges. Older rows carry artist NAMES in `tracks.artists_json` but no identity link. Slice 1's
-// identity-keyed capture authorization (a track's audio may be bought iff a CREDITED ARTIST is
-// qualified) matches BY IDENTITY through this graph — so it needs the graph as full as honest
-// matching can make it. This backfill closes the history.
-//
-// ── THE MATCHER IS IDENTITY-HONEST ───────────────────────────────────────────────────────────────
-// For each track lacking edges, each credited name is matched to an EXISTING `artists` row — first
-// by exact case-insensitive FOLD on the canonical name (the codebase's `fold`: lowercased,
-// accent-folded, `&`→`and`, punctuation collapsed), then via `artist_aliases` (status auto|confirmed,
-// kind='name' — the search resolver's alias semantics). It MINTS NOTHING: an `artists` row is an
-// entity with a public page, and a bare name string is not enough identity to create one (the RFC
-// rule). A name that matches no existing identity is the UNMATCHED RESIDUAL — counted honestly, so a
-// later paced MusicBrainz credit-sweep can decide whether the tail is worth minting from.
-//
-// A fold that two DISTINCT identities share is AMBIGUOUS: a bare name can't choose between them, so
-// the key matches nothing (fail-closed). A primary `artists.name` beats an alias for the same fold
-// (an alias never overrides or ambiguates a real name).
-//
-// ── SET-BASED ────────────────────────────────────────────────────────────────────────────────────
-// The whole artist + alias corpus (~1.8k rows) folds into ONE in-memory name→artist_id map per pass;
-// each track batch matches against that map with NO per-name query. Edges are written `insert or
-// ignore` on the natural key `(track_id, artist_id)` so a re-run writes nothing, position from array
-// order (1-based, first = lead), role null.
-//
-// ── RELIABILITY ──────────────────────────────────────────────────────────────────────────────────
-// A ZERO-match track writes no edge, so the "no edge yet" anti-join alone would re-chew it every tick
-// forever. The `tracks.artist_edges_backfilled_at` stamp retires EVERY visited track — matched,
-// partial, OR zero — so the worklist drains to empty and a re-run is a cheap no-op (the
-// `mb_recording_id_attempted_at` discipline). It is a `tracks` write, so it moves no finding lastmod.
-//
-// NO VENDOR CALL anywhere — pure DB matching — so batches are generous (`MAX_BATCH` 200) and history
-// drains in a handful of ticks. The box cron's `--limit` default EQUALS `MAX_BATCH`, so the CLI's
-// cursor loop fires exactly ONE HTTP request per tick.
-
 import { getDb, typedRows } from "./db";
 import {
   batchDueWorkSourceMutation,
@@ -50,63 +11,44 @@ import { restaleCatalogueRankStatements } from "./catalogue-rank-restale";
 import { hubCountArtistEdgeStatements } from "./hub-counts";
 import { fold } from "./track-match";
 
-// One bounded pass visits at most this many un-backfilled tracks. Pure DB matching (no vendor call),
-// so a generous batch drains the ~25k-row history in a handful of ticks. The box cron's `--limit`
-// default is pinned to THIS number so the CLI loop fires one request per tick (never a second).
 export const MAX_BATCH = 200;
 
-// Multi-row `insert or ignore` chunk — triples per statement. 100 triples = 300 bound args, well
-// under libSQL's per-statement variable ceiling.
 const INSERT_CHUNK = 100;
 
-// `update … where track_id in (…)` chunk — track ids per stamp statement. 200 ids + 1 (the stamp
-// value) = 201 bound args, comfortably under the ceiling.
 const STAMP_CHUNK = 200;
 
-/** The report a single pass returns — the honest residual is what decides a future MB-credit sweep. */
 export type ArtistEdgesBackfillResult = {
   dryRun: boolean;
-  // `track_artists` edges written this pass (in a dry run, the count that WOULD be written).
+
   edgesWritten: number;
-  // Track ids where EVERY credited name matched an existing identity.
+
   fullyMatched: string[];
   fullyMatchedCount: number;
-  // The track-id cursor to resume from, or null once the worklist is drained.
+
   nextCursor: string | null;
   ok: boolean;
-  // Track ids where SOME names matched and some did not (their unmatched names feed the residual).
+
   partiallyMatched: string[];
   partiallyMatchedCount: number;
-  // Authoritative rows still in the worklist after this pass.
+
   queueDepth: number;
-  // Tracks VISITED this pass (fully + partially + zero). The CLI loop's cap unit — with the sweep's
-  // `--limit` pinned to `MAX_BATCH`, a full page equals the limit and the loop stops after one call.
+
   scanned: number;
-  // Total credited names across the batch that matched NO identity — the residual a future paced
-  // MusicBrainz credit-sweep would mint from (RFC).
+
   unmatchedNames: number;
-  // Track ids where NO credited name matched an identity.
+
   zeroMatched: string[];
   zeroMatchedCount: number;
 };
 
-/** The outcome of matching one track's credited names against the fold map. */
 export type TrackNameMatch = {
-  // One edge per DISTINCT matched artist, carrying its 1-based array position (first = lead).
   edges: Array<{ artistId: string; position: number }>;
-  // How many credited (non-empty) names resolved to an identity.
+
   matchedNames: number;
-  // How many credited (non-empty) names the track carried.
+
   totalNames: number;
 };
 
-/**
- * Build the fold → artist_id map from the WHOLE artist + alias corpus in one pass (set-based; no
- * per-name query). A primary `artists.name` claims a fold first; an alias fills only a fold no
- * primary owns. A fold two DISTINCT identities share is ambiguous and matches nothing (fail-closed),
- * whether the collision is name↔name or alias↔alias. Aliases are pre-filtered by the caller to the
- * trusted set (`kind='name'`, `status in ('auto','confirmed')`) — the search resolver's semantics.
- */
 export function buildArtistFoldMap(
   artists: ReadonlyArray<{ id: string; name: string }>,
   aliases: ReadonlyArray<{ alias: string; artist_id: string }>,
@@ -115,7 +57,6 @@ export function buildArtistFoldMap(
   const primaryKeys = new Set<string>();
   const ambiguous = new Set<string>();
 
-  // Primary names first — a real name always wins its fold.
   for (const artist of artists) {
     const key = fold(artist.name);
 
@@ -129,14 +70,12 @@ export function buildArtistFoldMap(
       byFold.set(key, artist.id);
       primaryKeys.add(key);
     } else if (existing !== artist.id) {
-      // Two distinct identities share this fold — a bare name can't choose. Fail closed.
       byFold.delete(key);
       primaryKeys.delete(key);
       ambiguous.add(key);
     }
   }
 
-  // Aliases fill only the folds no primary name owns, and never un-ambiguate one.
   for (const { alias, artist_id: artistId } of aliases) {
     const key = fold(alias);
 
@@ -157,21 +96,6 @@ export function buildArtistFoldMap(
   return byFold;
 }
 
-/**
- * The EXACT spellings an IDENTITY-CLAIMED artist answers to, keyed by fold — the punctuation half of
- * the conflation seal (artists.ts § THE HOMONYM SEAL is the identity half).
- *
- * `fold()` collapses punctuation and diacritics, so `"K."` and `"K"` fold to the same key. That is
- * the right latitude for a row nobody has identified yet, and the wrong latitude for one that
- * carries an `mbid`: an MB artist id is a curated identity, and quietly attaching a DIFFERENTLY
- * SPELLED credit to it merges two acts. In the J-pop/drum & bass namesake case, the act credited `"K."`
- * had 23 tracks folded onto the Audio Couture / Subtitles drum & bass act `"K"` this exact way.
- *
- * So for a row with an `mbid`, this map holds the spellings it may still be matched on — its own
- * name plus its trusted aliases, lowercased — and `matchTrackNames` refuses anything else. A row
- * with NO mbid is absent from this map entirely and keeps the historical fold latitude, because
- * there is no identity there to protect and the fold is all the signal that exists.
- */
 export function buildIdentityClaimedNames(
   artists: ReadonlyArray<{ id: string; mbid?: null | string; name: string }>,
   aliases: ReadonlyArray<{ alias: string; artist_id: string }>,
@@ -201,7 +125,6 @@ export function buildIdentityClaimedNames(
   return byFold;
 }
 
-/** Get a set entry, creating it when absent. Avoids a non-null assertion. */
 function getOrAdd(map: Map<string, Set<string>>, key: string): Set<string> {
   let set = map.get(key);
 
@@ -213,15 +136,6 @@ function getOrAdd(map: Map<string, Set<string>>, key: string): Set<string> {
   return set;
 }
 
-/**
- * Match one track's credited names against the fold map. Empty names are skipped (they count toward
- * neither total nor matched). A single artist credited twice yields ONE edge (the natural key
- * dedupes anyway); the position is the 1-based index of that artist's FIRST occurrence.
- *
- * `identityClaimedNames` (optional — omitted, behaviour is exactly the historical fold) applies the
- * spelling rail above: when the fold lands on an artist that has claimed an MB identity, the credit
- * must be one of that artist's real spellings, not merely something that folds to it.
- */
 export function matchTrackNames(
   names: string[],
   foldMap: Map<string, string>,
@@ -248,9 +162,6 @@ export function matchTrackNames(
       continue;
     }
 
-    // The spelling rail: an identity-claimed fold answers only to its own spellings. A near-miss is
-    // NOT a match, so it counts toward the unmatched residual and can reach the mbid-keyed credit
-    // sweep, which is the path allowed to decide it is a separate artist and mint one.
     const spellings = identityClaimedNames?.get(key);
 
     if (spellings && !spellings.has(name.toLowerCase())) {
@@ -270,20 +181,15 @@ export function matchTrackNames(
   return { edges, matchedNames, totalNames };
 }
 
-// ── DB layer ─────────────────────────────────────────────────────────────────────────────────────
-
 type WorkRow = {
   artists_json: string;
-  /** Keystone 1's catalogue discriminator — `0` means the track HAS a findings row (certified). */
+
   is_catalogue?: bigint | number;
-  /** The mix projection contribution carried beside the edge candidate. */
+
   is_rankable?: bigint | number;
   track_id: string;
 };
 
-/** One bounded page of the worklist: tracks with NO `track_artists` edge, not yet backfill-stamped,
- *  track-id cursored. Rides `tracks_artist_edges_backfill_queue_idx` for the ordered candidate walk;
- *  the anti-join rides `track_artists_track_id_idx`. */
 async function listWork(
   db: Awaited<ReturnType<typeof getDb>>,
   limit: number,
@@ -337,12 +243,6 @@ async function hydrateProjectedWork(
   });
 }
 
-/**
- * Authoritative remaining work after a pass. The candidate predicate rides
- * `tracks_artist_edges_backfill_queue_idx`; the anti-join probes
- * `track_artists_track_id_idx`. Both are existing btrees, so this gauge does not turn the hourly
- * tick into a table scan.
- */
 export const ARTIST_EDGES_QUEUE_DEPTH_SQL = `select count(*) as queued
           from tracks t
           where t.artist_edges_backfilled_at is null
@@ -360,21 +260,14 @@ async function countWork(db: Awaited<ReturnType<typeof getDb>>): Promise<number>
   return Number(row?.queued ?? 0);
 }
 
-/** Load the full `artists` name corpus (id + canonical name + mbid) for the fold map — one bounded
- *  read. Shared with the credits sweep (backfill-artist-credits.ts), which folds against the same
- *  corpus and additionally reads `mbid` for its ADOPT/exact-mbid rungs. */
 export async function loadArtists(
   db: Awaited<ReturnType<typeof getDb>>,
 ): Promise<Array<{ id: string; mbid: null | string; name: string }>> {
-  // `mbid` rides along for the spelling rail (`buildIdentityClaimedNames`) — same one bounded read.
   const result = await db.execute({ args: [], sql: `select id, name, mbid from artists` });
 
   return typedRows<{ id: string; mbid: null | string; name: string }>(result.rows);
 }
 
-/** Load the TRUSTED alias corpus — real-name AKAs only (`kind='name'`, `status in
- *  ('auto','confirmed')`), the search resolver's alias semantics. One bounded read. Shared with the
- *  credits sweep (backfill-artist-credits.ts) so the two sweeps cannot drift on alias trust. */
 export async function loadAliases(
   db: Awaited<ReturnType<typeof getDb>>,
 ): Promise<Array<{ alias: string; artist_id: string }>> {
@@ -387,16 +280,6 @@ export async function loadAliases(
   return typedRows<{ alias: string; artist_id: string }>(result.rows);
 }
 
-/**
- * Write the batch's edges `insert or ignore`, chunked. Returns the summed rows actually inserted.
- *
- * Each chunk carries the maintained artists hub-count deltas (keystone 2) in its own batch, so a new
- * edge and the count that mirrors it can never half-apply. The per-artist attribution needs no
- * pre-read here — this sweep's worklist selects ONLY edge-less tracks (`ta.track_id is null`, see
- * `listWork`), and `matchTrackNames` already folds a doubly-credited artist to one edge, so every
- * tuple IS a new edge. `certifiedTracks` carries keystone 1's flag off the worklist row, so the
- * certified half costs nothing either. See lib/server/hub-counts.ts.
- */
 async function insertEdges(
   db: Awaited<ReturnType<typeof getDb>>,
   tuples: ReadonlyArray<[string, string, number]>,
@@ -422,9 +305,7 @@ async function insertEdges(
             trackId,
           })),
         ),
-        // Every tuple is a NEW edge (the worklist selects edge-less tracks), so each catalogue row
-        // in the chunk just gained the artist graph the capture gate reads — re-stale it for the
-        // next `rank_catalogue` tick, atomically with the edge write (catalogue-rank-restale.ts).
+
         ...restaleCatalogueRankStatements(chunk.map(([trackId]) => trackId)),
         ...markDueWorkSourceMaintenanceStatements(
           [
@@ -450,7 +331,6 @@ async function insertEdges(
   return affected;
 }
 
-/** Stamp every visited track's `artist_edges_backfilled_at` so it drains the worklist, chunked. */
 async function stampVisited(
   db: Awaited<ReturnType<typeof getDb>>,
   trackIds: ReadonlyArray<string>,
@@ -476,15 +356,6 @@ async function stampVisited(
   }
 }
 
-// ── The pass ─────────────────────────────────────────────────────────────────────────────────────
-
-/**
- * One bounded, idempotent pass of the track_artists graph backfill. Reads a page of un-backfilled,
- * edge-less tracks; folds the whole artist + alias corpus into one map; matches each track's names;
- * writes the matched edges `insert or ignore`; and stamps EVERY visited track so it drains. A dry run
- * reports the same classification without any write. `nextCursor` resumes the scan when a full page
- * came back (more to drain); null once exhausted.
- */
 export async function resolveArtistEdges(
   limit: number,
   dryRun: boolean,
@@ -507,7 +378,6 @@ export async function resolveArtistEdges(
     });
     rows = await hydrateProjectedWork(db, page.subjectIds);
   } else {
-    // GOAL H: delete the unchanged source-table selector after the default-off cutover is proven.
     rows = await listWork(db, batchLimit, cursor);
   }
 
@@ -534,15 +404,13 @@ export async function resolveArtistEdges(
     };
   }
 
-  // Build the fold map once for the whole batch (set-based; no per-name query).
   const [artists, aliases] = await Promise.all([loadArtists(db), loadAliases(db)]);
   const foldMap = buildArtistFoldMap(artists, aliases);
   const identityClaimedNames = buildIdentityClaimedNames(artists, aliases);
 
   const tuples: Array<[string, string, number]> = [];
   const visited: string[] = [];
-  // Which of the batch's tracks are CERTIFIED — read straight off the worklist row (keystone 1's
-  // `is_catalogue`), so the hub-count deltas the insert carries need no extra query.
+
   const certifiedTracks = new Set<string>();
   const rankableTracks = new Set<string>();
 
@@ -577,9 +445,6 @@ export async function resolveArtistEdges(
     }
   }
 
-  // A dry run reports the edges it WOULD write (the tuple count); a wet run reports the rows the
-  // `insert or ignore` actually landed (identical here, since the worklist holds only edge-less
-  // tracks, but reported from the write for honesty).
   let edgesWritten = tuples.length;
 
   if (!dryRun) {

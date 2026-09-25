@@ -7,13 +7,6 @@ import {
   toTrackListItem,
 } from "./tracks";
 
-// The served (mapped) observation audio URL must be versioned by
-// observation_generated_at, so a re-`observe` — which overwrites
-// observation.mp3 in place at the same R2 key — re-keys the edge cache instead
-// of HITting the stale object until its max-age TTL. The bare URL stays in the
-// observation_audio_url column (the admin-overwrite source of truth); the DTO
-// the API + web read is the canonical consumer surface, so it carries the ?v=.
-
 const BASE_ROW: TrackRow = {
   added_at: "2026-06-21T09:00:00.000Z",
   added_to_spotify: 0,
@@ -109,9 +102,6 @@ describe("toTrackListItem — observation audio URL versioning", () => {
   });
 });
 
-// The sonic galaxy DTO field (browse-by-feel RFC): read from the `galaxy_id` join,
-// present as `{ name, slug }` ONLY when the galaxy is operator-named (both name + slug
-// non-null). The four dead vibe-quadrant names no longer feed it.
 describe("galaxy — the named-galaxy DTO field", () => {
   it("surfaces { name, slug } when the galaxy is named (both columns present)", () => {
     const item = toTrackListItem({
@@ -128,17 +118,12 @@ describe("galaxy — the named-galaxy DTO field", () => {
   });
 
   it("omits galaxy when the galaxy is assigned but not yet named (slug null)", () => {
-    // An unnamed galaxy is admin-only — its findings carry a galaxy_id but the name/slug
-    // columns read null through the join, so the public DTO shows nothing.
     const item = toTrackListItem({ ...BASE_ROW, galaxy_name: null, galaxy_slug: null });
 
     expect(item.galaxy).toBeUndefined();
   });
 });
 
-// The private full-song capture key: the ADMIN DTO carries it (the on-box sweeps read
-// it), but every PUBLIC read strips it via toPublicTrackListItem — the captured full
-// song is a private analysis artifact and its R2 key must never world-serve.
 describe("sourceAudioKey — admin carries, public strips", () => {
   const CAPTURED_ROW: TrackRow = { ...BASE_ROW, source_audio_key: "004.7.2I/abc123.m4a" };
 
@@ -150,7 +135,7 @@ describe("sourceAudioKey — admin carries, public strips", () => {
     const publicItem = toPublicTrackListItem(toTrackListItem(CAPTURED_ROW));
 
     expect(publicItem.sourceAudioKey).toBeUndefined();
-    // Everything else survives — only the private key is removed.
+
     expect(publicItem.trackId).toBe(CAPTURED_ROW.track_id);
     expect(publicItem.title).toBe(CAPTURED_ROW.title);
   });
@@ -163,11 +148,6 @@ describe("sourceAudioKey — admin carries, public strips", () => {
   });
 });
 
-// Analysis provenance (RFC bpm-key-accuracy): the ADMIN DTO carries analyzedFrom (the capture
-// sweep + the requeue-analysis command read it), but every PUBLIC read strips it — it is
-// internal capture/enrich state, never part of a public DTO. This also covers the case a
-// captured key alone would miss: a preview-analyzed finding with NO source audio still leaks
-// analyzedFrom unless the public mapper strips it independently of sourceAudioKey.
 describe("analyzedFrom — admin carries, public strips", () => {
   const PREVIEW_ROW: TrackRow = { ...BASE_ROW, analyzed_from: "preview" };
 
@@ -180,7 +160,7 @@ describe("analyzedFrom — admin carries, public strips", () => {
 
     expect(publicItem.analyzedFrom).toBeUndefined();
     expect(publicItem.sourceAudioKey).toBeUndefined();
-    // Everything else survives.
+
     expect(publicItem.trackId).toBe(PREVIEW_ROW.track_id);
   });
 
@@ -189,9 +169,6 @@ describe("analyzedFrom — admin carries, public strips", () => {
   });
 });
 
-// analyzedAt (RFC bpm-key-accuracy): the freshness companion to analyzedFrom/keySource — the
-// admin DTO carries it so a reader can tell WHEN a key was (re-)derived, but every public read
-// strips it, since exposing analysis freshness advertises internal curation state.
 describe("analyzedAt — admin carries, public strips", () => {
   const STAMPED_ROW: TrackRow = { ...BASE_ROW, analyzed_at: "2026-07-10T14:02:00.000Z" };
 
@@ -203,7 +180,7 @@ describe("analyzedAt — admin carries, public strips", () => {
     const publicItem = toPublicTrackListItem(toTrackListItem(STAMPED_ROW));
 
     expect(publicItem.analyzedAt).toBeUndefined();
-    // Everything else survives.
+
     expect(publicItem.trackId).toBe(STAMPED_ROW.track_id);
   });
 
@@ -212,10 +189,6 @@ describe("analyzedAt — admin carries, public strips", () => {
   });
 });
 
-// Source-hierarchy provenance (operator > rekordbox > DSP): the ADMIN DTO carries
-// bpmSource/keySource (the Rekordbox sync reads them to skip an operator-graded row and to
-// detect a matching-but-unstamped value), but every PUBLIC read strips them — they are
-// internal curation state, never part of a public DTO.
 describe("bpmSource/keySource — admin carries, public strips", () => {
   const GRADED_ROW: TrackRow = { ...BASE_ROW, bpm_source: "operator", key_source: "rekordbox" };
 
@@ -231,7 +204,7 @@ describe("bpmSource/keySource — admin carries, public strips", () => {
 
     expect(publicItem.bpmSource).toBeUndefined();
     expect(publicItem.keySource).toBeUndefined();
-    // Everything else survives — only the private provenance is removed.
+
     expect(publicItem.trackId).toBe(GRADED_ROW.track_id);
     expect(publicItem.title).toBe(GRADED_ROW.title);
   });
@@ -241,40 +214,25 @@ describe("bpmSource/keySource — admin carries, public strips", () => {
 
     expect(item.bpmSource).toBeUndefined();
     expect(item.keySource).toBeUndefined();
-    // An un-graded finding has nothing to strip — same reference back.
+
     expect(toPublicTrackListItem(item)).toBe(item);
   });
 });
 
-// ── The schema → projection → contract round-trip guard (Finding B20) ──
-//
-// Adding a `tracks` column takes a lockstep edit across THREE files: db/schema.ts (the
-// column), this module's `toTrackListItem` (the DTO field), and the contract's
-// `TrackListItemSchema` (the wire shape). Miss the projection or the contract and the
-// column silently never reaches the API — with nothing to catch it. These build-fail
-// tests catch it: they compare the KEY SET the fat/lean mappers emit against the contract
-// schema's keys and fail with a message naming which side to update.
 describe("track projection ↔ contract round-trip (Finding B20)", () => {
-  // The fat mapper always assigns every key (some to `undefined`), so `Object.keys`
-  // yields the full key set regardless of the sample row's values.
   const fatKeys = new Set(Object.keys(toTrackListItem(BASE_ROW)));
   const leanKeys = new Set(Object.keys(toLeanTrackListItem(BASE_ROW)));
   const schemaKeys = new Set(Object.keys(TrackListItemSchema.shape));
 
-  // `artistYoutubeChannelIds` is on the contract but NOT the shared mapper — it is
-  // attached out-of-band (`attachArtistYoutubeChannelIds`) ONLY on the admin capture-queue
-  // read, so the mapper legitimately never sets it. Every other schema key must be mapped.
   const SCHEMA_ONLY_KEYS = new Set(["artistYoutubeChannelIds"]);
 
-  // The three heavy fields the lean list projection (Finding B4) deliberately omits.
   const LEAN_OMITTED_KEYS = new Set(["features", "observationAlignment", "videoModelReasoning"]);
 
   it("the fat DTO (toTrackListItem) maps exactly the contract's list-item keys", () => {
-    // In schema but not emitted by the mapper ⇒ add the field to `toTrackListItem`.
     const missingFromDto = [...schemaKeys].filter(
       (key) => !SCHEMA_ONLY_KEYS.has(key) && !fatKeys.has(key),
     );
-    // Emitted by the mapper but not on the schema ⇒ add the field to `TrackListItemSchema`.
+
     const missingFromContract = [...fatKeys].filter((key) => !schemaKeys.has(key));
 
     expect({ missingFromContract, missingFromDto }).toEqual({
@@ -286,8 +244,6 @@ describe("track projection ↔ contract round-trip (Finding B20)", () => {
   it("the lean DTO (toLeanTrackListItem) drops exactly the heavy fields, nothing else", () => {
     const expectedLeanKeys = new Set([...fatKeys].filter((key) => !LEAN_OMITTED_KEYS.has(key)));
 
-    // Anything the lean mapper dropped beyond the three heavy fields ⇒ a lean surface would
-    // silently lose it. Anything it kept that should be heavy ⇒ the lean projection leaked.
     const droppedBeyondHeavy = [...fatKeys].filter(
       (key) => !LEAN_OMITTED_KEYS.has(key) && !leanKeys.has(key),
     );
@@ -300,13 +256,6 @@ describe("track projection ↔ contract round-trip (Finding B20)", () => {
     expect(leanKeys).toEqual(expectedLeanKeys);
   });
 });
-
-// ── The best-cover DTO fix (RFC musickit-second-authority U3a) ────────────────
-//
-// The DTO is where web, mobile, and the video pipeline all upgrade at once: the stored
-// Spotify 300² is swapped to 640² server-side, and the album's stored Apple facts are
-// composed into a ≥1920 render source (`artworkMaxUrl`). Neither reads a schema — the
-// swap is pure over the row, so these tests pin the exact behaviour.
 
 const SPOTIFY_HASH = "18c0fd64aad5d4fb51a499b0";
 
@@ -350,7 +299,6 @@ describe("toLeanTrackListItem — artworkMaxUrl composed from the album's Apple 
       album_artwork_width: 3000,
     });
 
-    // 2048 clears the render pipeline's ≥1920 need; clamped BELOW native 3000 (no upscale).
     expect(item.artworkMaxUrl).toBe("https://is1-ssl.mzstatic.com/image/thumb/abc/2048x2048bb.jpg");
   });
 

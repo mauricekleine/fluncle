@@ -2077,6 +2077,7 @@ describe("sonar-freshen reports a run", () => {
 });
 
 type PinWatchFixture = {
+  activeTimer?: boolean;
   buildExit?: number;
 
   containerRunning?: boolean;
@@ -2123,7 +2124,15 @@ async function runPinWatch(
 
   writeStub(bin, "sha256sum", 'exec shasum -a 256 "$@"');
 
-  writeStub(bin, "systemctl", "exit 0");
+  writeStub(
+    bin,
+    "systemctl",
+    [
+      'if [ "${1:-}" = "list-units" ] && [ "${PW_ACTIVE_TIMER:-0}" = "1" ]; then printf "fluncle-crawl.timer loaded active waiting\\n"; fi',
+      'if [ "${1:-}" = "is-active" ]; then exit 1; fi',
+      "exit 0",
+    ].join("\n"),
+  );
   writeStub(
     bin,
     "git",
@@ -2185,9 +2194,11 @@ async function runPinWatch(
         FLUNCLE_API_BASE_URL: base,
         PATH: `${bin}:/usr/bin:/bin:/usr/sbin:/sbin`,
         PINWATCH_CONTAINER: "hermes-fixture",
+        PINWATCH_LAST_BUILD_FILE: join(root, "last-build-at"),
         PINWATCH_LOCK: join(root, "lock"),
         PINWATCH_REPO_DIR: repoDir,
         PINWATCH_WORKER_URL: base,
+        PW_ACTIVE_TIMER: fixture.activeTimer ? "1" : "0",
         PW_BUILD_EXIT: String(fixture.buildExit ?? 0),
         PW_CONTAINER: "hermes-fixture",
         PW_CONTAINER_RUNNING: fixture.containerRunning === false ? "0" : "1",
@@ -2232,6 +2243,7 @@ describe("pin-watch reports a run", () => {
     "FIRES: a failed build is a failed run, with the undeployed drift still on the worklist",
     async () => {
       const { calls, code, stderr, summary } = await runPinWatch({
+        activeTimer: true,
         buildExit: 1,
         fingerprintCurrent: false,
       });
@@ -2242,6 +2254,10 @@ describe("pin-watch reports a run", () => {
       expect(posted.exit_code).toBe(1);
 
       expect(summary).toMatchObject({ checked: 1, errors: 1, produced: 0, queue_depth: 1 });
+      expect(summary.quiesce_started_at).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+      expect(summary.quiesce_ended_at).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+      expect(summary.quiesce_duration_seconds).toBeGreaterThanOrEqual(0);
+      expect(stderr).toContain("quiesce ended");
       expect(derivedOk(code, summary.errors)).toBe(false);
     },
     SCRIPT_TEST_TIMEOUT_MS,

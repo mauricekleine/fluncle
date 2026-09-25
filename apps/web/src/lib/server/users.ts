@@ -1,21 +1,6 @@
-// The user-account roster's backing read — the `labels.ts` / `artists.ts` twin,
-// consumed by the oRPC handler (`./orpc/admin-users.ts`) and the `/admin/users`
-// route loader. READ-ONLY: this module only lists accounts and their derived
-// artifact counts; it never mutates the account lifecycle (that lives behind Better
-// Auth and the user's own `/me` tier).
-//
-// ── ONE BOUNDED QUERY, COUNTED IN SQL ──────────────────────────────────────────
-// The three per-user artifact counts are correlated subqueries evaluated IN SQLite,
-// never by pulling the artifact tables into the isolate to count them (the repo DB
-// law). Each subquery hits an index on its `user_id` prefix
-// (`user_saved_findings_user_track_idx`, `user_saved_sets_user_updated_idx`, and the
-// `user_galaxy_state` primary key), so the read stays cheap as the roster grows. The
-// `"user"` table is quoted because `user` is a reserved word in SQLite.
-
 import { type UserAdminItem } from "@fluncle/contracts";
 import { getDb, typedRows } from "./db";
 
-/** A row from the roster read (snake_case columns + the derived counts). */
 type UserRosterRow = {
   created_at: number;
   display_username: string | null;
@@ -32,22 +17,12 @@ type UserRosterRow = {
   username: string | null;
 };
 
-// A generous cap so the newest-first roster stays a single bounded read. The account
-// base is small today; this keeps it bounded by construction as it grows, and the
-// station's job (watch the rollout) never needs the whole tail at once.
 const USER_ROSTER_LIMIT = 500;
 
-/** `created_at`/`last_seen_at` are stored as integer epoch-ms; the wire wants ISO. */
 function msToIso(ms: number): string {
   return new Date(Number(ms)).toISOString();
 }
 
-/**
- * Every account, newest-first, each with its verified/status flags and its three
- * derived artifact counts (saved findings, saved `/mix` sets, whether a
- * `user_galaxy_state` row exists at all). One bounded query; the counts are computed
- * in SQL. Capped at {@link USER_ROSTER_LIMIT}.
- */
 export async function listAdminUsers(): Promise<UserAdminItem[]> {
   const db = await getDb();
   const result = await db.execute({

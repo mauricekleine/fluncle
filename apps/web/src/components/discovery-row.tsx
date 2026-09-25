@@ -30,7 +30,7 @@ function Credits({ credits }: { credits: DiscoveryCredit[] }): ReactNode {
   ));
 }
 
-function RowArt({ track }: { track: DiscoveryTrack }): ReactNode {
+export function RowArt({ track }: { track: DiscoveryTrack }): ReactNode {
   const cover = albumCoverAtSize(track.coverUrl, "small");
 
   if (!cover && !track.lit && track.avatarUrl) {
@@ -47,9 +47,12 @@ function RowArt({ track }: { track: DiscoveryTrack }): ReactNode {
 }
 
 export function DiscoveryRow({
+  marker,
   menuItems,
   track,
 }: {
+  marker?: ReactNode;
+
   menuItems?: ReactNode;
   track: DiscoveryTrack;
 }): ReactNode {
@@ -57,6 +60,23 @@ export function DiscoveryRow({
   const credit = track.artists.map((artist) => artist.name).join(", ");
   const linkName = credit.length > 0 ? `${track.title} by ${credit}` : undefined;
   const hasMeta = track.artists.length > 0 || track.label || track.year;
+  const headline = track.href ? (
+    <Link aria-label={linkName} className="discovery-row-link" to={track.href as never}>
+      <span className="discovery-row-title">{track.title}</span>
+    </Link>
+  ) : track.spotifyUrl ? (
+    <a
+      aria-label={linkName}
+      className="discovery-row-link"
+      href={track.spotifyUrl}
+      rel="noopener noreferrer"
+      target="_blank"
+    >
+      <span className="discovery-row-title">{track.title}</span>
+    </a>
+  ) : (
+    <span className="discovery-row-title">{track.title}</span>
+  );
 
   return (
     <li className="discovery-row" data-lit={track.lit ? "" : undefined}>
@@ -71,22 +91,13 @@ export function DiscoveryRow({
       )}
 
       <div className="discovery-row-body">
-        {track.href ? (
-          <Link aria-label={linkName} className="discovery-row-link" to={track.href as never}>
-            <span className="discovery-row-title">{track.title}</span>
-          </Link>
-        ) : track.spotifyUrl ? (
-          <a
-            aria-label={linkName}
-            className="discovery-row-link"
-            href={track.spotifyUrl}
-            rel="noopener noreferrer"
-            target="_blank"
-          >
-            <span className="discovery-row-title">{track.title}</span>
-          </a>
+        {marker ? (
+          <div className="discovery-row-headline">
+            {headline}
+            {marker}
+          </div>
         ) : (
-          <span className="discovery-row-title">{track.title}</span>
+          headline
         )}
         {hasMeta ? (
           <p className="discovery-row-meta">

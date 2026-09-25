@@ -1,28 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-// The graph pages' thin-content gate (`/label/<slug>` + `/album/<slug>`), pinned as a pure
-// unit — the `-artist-page.test.ts` precedent.
-//
-// The contract: `noindex` (and sitemap absence) keys off the same stored renderable-track count
-// the sitemap reads, which includes Upcoming rows because they are real content on the page. A page that
-// declares itself indexable is always in the sitemap and one that declares `noindex` never is.
-// An indexable page that the sitemap orphans is the bug these pin.
-//
-// The label's quieter rows are now GROUPED (by artist), so its catalogue read returns a
-// `CatalogueGroupPage`; the gate uses the stored entity count, never the rendered page. The album's rows are a flat
-// tracklist still (an album is one record), so it keeps the `{ total, tracks }` slice.
-//
-// The second contract, and the one that matters more: a page with ZERO quieter rows renders
-// them as NOTHING — no heading, no empty state, no dangling anything. That is the state of
-// every page whose entity the crawler has not touched, and it is asserted here.
-
 const getLabelBySlug = vi.hoisted(() => vi.fn());
 const getLabelForAlbum = vi.hoisted(() => vi.fn());
-// The label page reads confirmed aliases for its JSON-LD `alternateName` (U2a); this gate test
-// is blind to them, so it stays a stub returning none.
+
 const getConfirmedAliasNames = vi.hoisted(() => vi.fn(async () => []));
-// A missing label slug consults the merge-redirect resolver (U2b) before 404ing; this gate test
-// has no merged labels, so it stays a stub returning none (an unknown slug stays missing → 404).
+
 const resolveLabelAliasRedirect = vi.hoisted(() => vi.fn(async () => undefined));
 const getAlbumBySlug = vi.hoisted(() => vi.fn());
 const listArtistsByLabel = vi.hoisted(() => vi.fn());
@@ -66,12 +48,10 @@ vi.mock("@/lib/server/tracks", async (importOriginal) => ({
 }));
 
 const { Route: LabelRoute } = await import("./label.$slug");
-// Both resolvers live beside their routes rather than in them, so neither route module carries a
-// static `lib/server/**` import into the browser bundle (see `-album-page-data.ts`).
+
 const { resolveLabelPageData } = await import("./-label-page-data");
 const { resolveAlbumPageData } = await import("./-album-page-data");
 
-/** The label route's `<meta name="description">` — the same string og:/twitter: description carry. */
 function labelMetaDescription(data: unknown): string | undefined {
   const head = LabelRoute.options.head?.({ loaderData: data } as never) as
     | { meta?: Array<{ content?: string; name?: string }> }
@@ -80,7 +60,6 @@ function labelMetaDescription(data: unknown): string | undefined {
   return head?.meta?.find((entry) => entry.name === "description")?.content;
 }
 
-/** The label route's `<title>` — the same string og:title / twitter:title carry. */
 function labelHeadTitle(data: unknown): string | undefined {
   const head = LabelRoute.options.head?.({ loaderData: data } as never) as
     | { meta?: Array<{ title?: string }> }
@@ -97,7 +76,6 @@ const LABEL = {
 };
 const ALBUM = { id: "alb_1", name: "Wormhole", slug: "wormhole" };
 
-/** N coordinate-bearing findings, in the shape the page reads. */
 function findings(count: number) {
   return Array.from({ length: count }, (_value, index) => ({
     addedAt: `2026-07-0${index + 1}T00:00:00.000Z`,
@@ -109,12 +87,6 @@ function findings(count: number) {
   }));
 }
 
-/**
- * A LABEL's grouped catalogue page. `totalTracks` is the entity's TRUE uncertified total (the SQL
- * counts it and the gate keys off it); `rendered` is how many tracks this one page carries after
- * the grouping's bound. They are the same until a label gets crowded, and the whole point of the
- * pair is that they may then differ — the gate must never key off the rendered page.
- */
 function labelCatalogue(totalTracks: number, rendered = totalTracks) {
   return {
     groups:
@@ -148,7 +120,6 @@ function labelCatalogue(totalTracks: number, rendered = totalTracks) {
   };
 }
 
-/** An ALBUM's flat tracklist slice — no logId, ever. `total` is the entity's TRUE count. */
 function albumCatalogue(total: number, rendered = total) {
   return {
     total,
@@ -214,14 +185,6 @@ describe("the label page", () => {
   });
 
   it("SERVES a label with no findings — a discography is a page", async () => {
-    // THE REVERSAL. A label the crawler discovered carries a `labels` row (that row IS the
-    // operator's ruling queue) and can carry hundreds of crawled releases. That is a real,
-    // useful page — an honest record of what the label put out — and it indexes. A discovered label
-    // with releases must not 404 under the rule "the catalogue deepens a page, it never creates one".
-    //
-    // A page becomes a DOORWAY through HOLLOW RENDERING, not through its existence —
-    // a "Nothing logged off this one yet." heading over a wall of Spotify outlinks. Conditional
-    // sections fix that at the source: no findings, no findings section, no apology.
     getFindingsByLabel.mockResolvedValue([]);
     getLabelBySlug.mockResolvedValue({ ...LABEL, renderableTrackCount: 400 });
     listLabelCatalogue.mockResolvedValue(labelCatalogue(400, 100));
@@ -229,14 +192,11 @@ describe("the label page", () => {
     const data = await resolveLabelPageData("metalheadz", "name", 1);
 
     expect(data).toMatchObject({ indexable: true, status: "found" });
-    // Nothing reaches the findings band, so nothing renders there.
+
     expect(data.status === "found" && data.findings).toEqual([]);
   });
 
   it("keeps a 2-row discovered label OUT of the index (thin is still thin)", async () => {
-    // The floor does the job the 404 rule overreached at. Two crawled rows and nothing else is a
-    // stub: it still serves 200 (deep links, link equity), it is just `noindex, follow` and
-    // absent from the sitemap. This is the case the operator drew the line at.
     getFindingsByLabel.mockResolvedValue([]);
     listLabelCatalogue.mockResolvedValue(labelCatalogue(2));
 
@@ -247,7 +207,6 @@ describe("the label page", () => {
   });
 
   it("gates on the entity's full count, never the rendered page slice", async () => {
-    // The gate reads all eligible entity rows while the page carries one bounded group page.
     getLabelBySlug.mockResolvedValue({ ...LABEL, renderableTrackCount: 3001 });
     getFindingsByLabel.mockResolvedValue(findings(1));
     listLabelCatalogue.mockResolvedValue(labelCatalogue(3000, 100));
@@ -282,8 +241,6 @@ describe("the label page", () => {
   it("derives a ≤160-char meta description from the bio, and the template when there is none", async () => {
     getFindingsByLabel.mockResolvedValue(findings(1));
 
-    // A bio over the meta cap: the description is bio-derived, trimmed to ≤160, and drops the
-    // catalogue-count template (unique per label, not the near-duplicate line).
     const bio =
       "Hospital Records is a British drum and bass label founded in 1996 by London Elektricity, " +
       "long the definitive home of liquid and soulful drum and bass across a deep back catalogue.";
@@ -296,7 +253,6 @@ describe("the label page", () => {
     expect(desc).not.toContain("each with a coordinate");
     expect(desc?.startsWith("Hospital Records is a British drum and bass label")).toBe(true);
 
-    // No bio ⇒ the original template is preserved verbatim (no regression).
     getLabelBySlug.mockResolvedValue(LABEL);
     const withoutBio = await resolveLabelPageData("hospital-records", "name", 1);
     expect(labelMetaDescription(withoutBio)).toBe(
@@ -320,7 +276,6 @@ describe("the label page", () => {
 
     const data = await resolveLabelPageData("hospital-records", "name", 1);
 
-    // Empty, not absent-and-headed: no groups, so the band renders nothing at all.
     expect(data.status === "found" && data.catalogue.groups).toEqual([]);
     expect(data).toMatchObject({ indexable: true });
   });
@@ -335,9 +290,6 @@ describe("the label page", () => {
   });
 
   it("varies BOTH the title and the description by page (the /labels hub rule)", async () => {
-    // Every `?page=N` is self-canonical, so it is submitted as its own indexable URL. Two such
-    // URLs may not wear one title and one description; the paged pair names the page and the
-    // artists band the pager actually moves, and the bio never rides a page past the first.
     const bio =
       "Hospital Records is a British drum and bass label founded in 1996 by London Elektricity.";
     getLabelBySlug.mockResolvedValue({ ...LABEL, bio });
@@ -351,7 +303,6 @@ describe("the label page", () => {
       "Page 3 of the drum & bass artists released on Hospital Records that Fluncle holds.",
     );
 
-    // Page 1 is untouched: the bio still leads, under the bare entity title.
     listLabelCatalogue.mockResolvedValue(labelCatalogue(4));
     const first = await resolveLabelPageData("hospital-records", "name", 1);
 
@@ -368,22 +319,17 @@ describe("the album page", () => {
   });
 
   it("SERVES a findings-free album — a discography is a page (the album twin of the label reversal)", async () => {
-    // A crawl-minted `albums` row with no finding and a full tracklist is a real, useful page — an
-    // honest record of what is on it — exactly as a discovered label is. It renders AND indexes
-    // once it clears the renderable-track floor; only a slug with no `albums` row at all 404s.
     getFindingsByAlbum.mockResolvedValue([]);
     listCatalogueTracksByAlbum.mockResolvedValue(albumCatalogue(12));
 
     const data = await resolveAlbumPageData("wormhole");
 
     expect(data).toMatchObject({ indexable: true, status: "found" });
-    // Nothing reaches the findings band, so nothing renders there.
+
     expect(data.status === "found" && data.findings).toEqual([]);
   });
 
   it("keeps a 1-row findings-free album OUT of the index (thin is still thin)", async () => {
-    // One crawled track and nothing else is a stub: it still serves 200 (deep links, link equity),
-    // it is just `noindex, follow` and absent from the sitemap.
     getFindingsByAlbum.mockResolvedValue([]);
     listCatalogueTracksByAlbum.mockResolvedValue(albumCatalogue(1));
 
@@ -427,8 +373,6 @@ describe("the album page", () => {
   });
 
   it("carries no catalogue number until the Discogs facts sweep has ruled on the record", async () => {
-    // The absence is the honest default: an album minted today has a `pending` ledger and no
-    // number, and the page must simply not print the line rather than print a placeholder.
     getFindingsByAlbum.mockResolvedValue(findings(3));
 
     expect(await resolveAlbumPageData("wormhole")).toMatchObject({ catalogNumber: undefined });

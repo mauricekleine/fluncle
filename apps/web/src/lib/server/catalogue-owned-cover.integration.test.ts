@@ -1,8 +1,3 @@
-// A catalogue row's cover is its album's OWNED master whenever the album has one, on every bounded
-// read that renders catalogue rows — the same preference the hub, the entity pages and the sonic
-// neighbours already apply. A record whose raw vendor cover is gone must still show its master on
-// `/fresh`, the front door's release band and its own album page.
-
 import { type Client } from "@libsql/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -46,7 +41,7 @@ beforeEach(async () => {
     title: "Owned Cover",
     trackId: "owned-cover-1",
   });
-  // No raw vendor cover on the track row at all: only the album's master can paint it.
+
   await db.execute({
     sql: `update tracks set album_id = 'album-owned', album_image_url = null,
                  release_date = '2026-09-20', is_catalogue = 1
@@ -59,9 +54,7 @@ describe("catalogue rows carry the album's owned cover master", () => {
     expect(OWNED).toBeDefined();
 
     const fresh = await listFreshReleases(NOW);
-    const row = fresh.sections
-      .flatMap((section) => section.catalogue)
-      .find((item) => item.trackId === "owned-cover-1");
+    const row = fresh.catalogue.find((item) => item.trackId === "owned-cover-1");
 
     expect(row?.albumImageUrl).toBe(OWNED);
   });

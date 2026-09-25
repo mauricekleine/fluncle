@@ -1,17 +1,6 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { AGENT_TOKEN, OPERATOR_TOKEN, setAdminTokenEnv } from "../../../lib/server/orpc-test-kit";
 
-// The agent-tier streaming route for a finding's ARCHIVED 30s preview bytes
-// (REF-05 slice 2). Driven straight through its exported `serverHandlers.GET` —
-// the SAME live auth spine (`../../../lib/server/env`: `requireAdmin` → `adminRole`)
-// runs; only the DB metadata read and the private R2 bucket are mocked. The
-// security-critical property: the tier is AGENT (the render box's agent token
-// passes; an unauthenticated request 401s). Every archived preview now reads from
-// the PRIVATE `fluncle-source-audio` bucket (binding SOURCE_AUDIO) — REF-05 migrated
-// the legacy public objects off the world-served bucket, so the dual-bucket read is
-// gone and a stale `analysis/previews/…` key simply misses (a `preview_audio_missing`
-// 404), never a public read.
-
 const sourceAudioGet = vi.fn();
 const getPreviewArchiveMetadata = vi.fn();
 
@@ -25,8 +14,6 @@ vi.mock("../../../lib/server/preview-archive", () => ({
   getPreviewArchiveMetadata: (...args: unknown[]) => getPreviewArchiveMetadata(...args),
 }));
 
-// Import AFTER the mocks are registered (vitest hoists vi.mock above imports, but
-// keep the route import here so its module-scope `env` binding resolves to the mock).
 const { serverHandlers } = await import("./tracks.$trackId.preview-audio");
 
 const TRACK_ID = "004.7.2I";
@@ -34,8 +21,6 @@ const NEW_KEY = "004.7.2I/deadbeef.mp3";
 const LEGACY_KEY = "analysis/previews/004.7.2I/deadbeef.mp3";
 const BYTES = new Uint8Array([1, 2, 3, 4, 5]);
 
-// A fake R2 object: a byte body, a known size, and a `writeHttpMetadata` that
-// carries a stored Content-Type only when one was set on upload (mirrors R2).
 function fakeObject(storedContentType?: string) {
   return {
     body: BYTES,
@@ -155,8 +140,6 @@ describe("GET /api/admin/tracks/:idOrLogId/preview-audio", () => {
   });
 
   it("404s a stale legacy analysis/previews key (it simply misses in SOURCE_AUDIO)", async () => {
-    // Post-migration there is no public fallback: a hypothetical leftover legacy key
-    // is looked up in SOURCE_AUDIO only, misses, and returns the standard 404.
     getPreviewArchiveMetadata.mockResolvedValue(metadata({ key: LEGACY_KEY }));
     sourceAudioGet.mockResolvedValue(null);
 

@@ -1,11 +1,6 @@
 import { type MixtapeDTO } from "@fluncle/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// The /podcast.xml route emits one RSS episode per published mixtape, enclosing
-// its `<logId>/mixtape.m4a` audio. An episode whose audio object isn't really
-// there (failed/zero-length HEAD) must be DROPPED, not emitted as a broken
-// enclosure a podcast app can't play. We mock the server query + the HEAD probe.
-
 const listMixtapes = vi.hoisted(() => vi.fn<() => Promise<MixtapeDTO[]>>());
 
 vi.mock("../lib/server/mixtapes", () => ({ listMixtapes }));
@@ -38,7 +33,6 @@ function mixtape(overrides: Partial<MixtapeDTO>): MixtapeDTO {
   };
 }
 
-/** A HEAD response with a given Content-Length (or a failed/absent one). */
 function headResponse(length: number | null, ok = true): Response {
   return {
     headers: {
@@ -48,7 +42,6 @@ function headResponse(length: number | null, ok = true): Response {
   } as unknown as Response;
 }
 
-/** Install a stub fetch for the route's HEAD probe. */
 function stubFetch(impl: (url: string) => Response): void {
   globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
     const url = input instanceof URL ? input.href : typeof input === "string" ? input : input.url;
@@ -87,7 +80,6 @@ describe("/podcast.xml audio-presence guard", () => {
 
     const body = await render();
 
-    // The feed is still a valid channel — just with no broken episode in it.
     expect(body).toContain("<channel>");
     expect(body).not.toContain("<item>");
     expect(body).not.toContain("020.F.1A");

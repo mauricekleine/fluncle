@@ -3,11 +3,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { type SubmissionInput } from "./submissions";
 import { createIntegrationDb, seedSubmission, seedTrack } from "./integration-db";
 
-// `validateSubmissionInput` is a PURE function (no DB) — tested directly below.
-// `approveSubmission` is DB-backed (it reads the submission + the published track
-// row), so those cases run against the in-memory libSQL harness via a `getDb()`
-// mock, exercising the REAL status-guard SQL.
-
 let db: Client;
 
 vi.mock("./db", async (importOriginal) => {
@@ -19,7 +14,7 @@ vi.mock("./db", async (importOriginal) => {
   };
 });
 
-const validTrackId = "abcdefghij0123456789AB"; // exactly 22 [A-Za-z0-9]
+const validTrackId = "abcdefghij0123456789AB";
 const validUrl = `https://open.spotify.com/track/${validTrackId}`;
 
 function baseInput(overrides: Partial<SubmissionInput> = {}): SubmissionInput {
@@ -57,8 +52,6 @@ describe("validateSubmissionInput (pure unit, no DB)", () => {
   ])("rejects a track id that is %s", async (_label, badId) => {
     const { validateSubmissionInput } = await import("./submissions");
 
-    // Keep the URL well-formed so the 22-char track-id regex is the thing that
-    // trips (a bad id in the URL would 400 in parseSpotifyTrackUrl first).
     expect(() =>
       validateSubmissionInput(baseInput({ spotifyTrackId: badId, spotifyUrl: validUrl })),
     ).toThrowError(/Invalid selected track id|Invalid Spotify/);
@@ -132,7 +125,6 @@ describe("approveSubmission (real SQL status guard)", () => {
     expect(result.status).toBe("approved");
     expect(result.reviewedAt).toBeDefined();
 
-    // The status guard actually wrote: a second approve now 409s.
     await expect(approveSubmission("sub-ok")).rejects.toMatchObject({
       code: "invalid_status",
       status: 409,

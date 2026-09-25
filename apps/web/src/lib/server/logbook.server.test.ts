@@ -1,12 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-// The logbook server module against a controllable in-memory DB stub. Proves the two
-// load-bearing behaviors: the CARDINAL fill-empty-only guarantee (the agent create
-// never clobbers an existing entry) + the voice gate, and the self-healing gap window
-// (findings-bearing days before today that have no entry, oldest first).
-
-// A tiny DB stub: route each `execute({ sql, args })` by matching the SQL to a
-// handler. Unmatched SQL throws (a test wiring bug, surfaced loudly).
 type ExecResult = { rows: Record<string, unknown>[] };
 type Route = { match: RegExp; rows: (args: unknown[]) => Record<string, unknown>[] };
 
@@ -44,8 +37,6 @@ const EXISTING_ROW = {
   title: "Sector 036",
 };
 
-// A clean body that clears the voice gate (no banned words, no earthly geography, no
-// exclamation, no "we", past the prose floor) and carries a figure token.
 const CLEAN_BODY =
   "The day opened on a low, patient sub that took its time finding the room. I let it breathe, then the break rolled in and the whole sector leaned forward.\n\n[[036.7.2I]]\n\nI played it twice before the crew stopped talking.";
 
@@ -71,8 +62,7 @@ describe("listLogbookIndexEntries — the lean index read (no body)", () => {
       { sector: 42, title: "Sector 042" },
       { sector: 40, title: "Sector 040" },
     ]);
-    // The read never loads `body` — the biggest per-row column (up to 12k chars, over up to
-    // 500 rows) — because the index renders only sector + title.
+
     const sql = executeCalls[0]?.sql ?? "";
     expect(sql).not.toContain("body");
     expect(sql).toContain("select sector, title");
@@ -84,13 +74,11 @@ describe("createLogbookEntry — the fill-empty-only guarantee", () => {
     setRoutes([{ match: /from logbook_entries where sector/, rows: () => [EXISTING_ROW] }]);
     const { createLogbookEntry } = await import("./logbook");
 
-    // A body that WOULD fail the voice gate ("signal") — proof the guard short-circuits
-    // BEFORE gating, so an existing entry is untouched regardless of the input.
     const result = await createLogbookEntry(36, { body: "signal signal", title: "x" });
 
     expect(result.skipped).toBe(true);
     expect(result.entry.generatedBy).toBe("operator");
-    // Only the existence SELECT ran — no INSERT, no second read.
+
     expect(executeCalls).toHaveLength(1);
   });
 
@@ -101,9 +89,6 @@ describe("createLogbookEntry — the fill-empty-only guarantee", () => {
       {
         match: /insert into logbook_entries/,
         rows: (args) => {
-          // args: sector, title, body, generated_by, PROMPT_VERSION, generated_at,
-          // created_at, updated_at. `prompt_version` (args[4]) is the provenance stamp —
-          // which prompt-registry version authored the entry (docs/agents/prompt-registry.md).
           inserted.push({
             body: args[2],
             generated_at: args[5],
@@ -116,15 +101,13 @@ describe("createLogbookEntry — the fill-empty-only guarantee", () => {
           return [];
         },
       },
-      // The day's sayable names (THE NAME EXEMPTION) — nothing banned in this day's roster.
+
       { match: /select tracks\.title, tracks\.artists_json/, rows: () => [] },
-      // The title-collision guard's read — no stored titles, so no collision.
+
       { match: /select sector, title from logbook_entries$/, rows: () => [] },
-      // The body echo gate's neighbour read — no recent entries, so nothing to echo.
+
       { match: /where sector != \?/, rows: () => [] },
       {
-        // The existence SELECT returns nothing first, then the post-insert read
-        // returns the stored row.
         match: /where sector = \?/,
         rows: () => (inserted.length === 0 ? [] : inserted),
       },
@@ -136,10 +119,9 @@ describe("createLogbookEntry — the fill-empty-only guarantee", () => {
     expect(result.skipped).toBe(false);
     expect(result.entry.generatedBy).toBe("agent");
     expect(result.entry.sector).toBe(36);
-    // No prompt version was supplied, so the provenance column stays NULL — the honest
-    // record that no registry prompt wrote this entry.
+
     expect(inserted[0]?.prompt_version).toBeNull();
-    // The figure token survives into storage (the renderer needs it).
+
     expect(result.entry.body).toContain("[[036.7.2I]]");
   });
 
@@ -157,7 +139,7 @@ describe("createLogbookEntry — the fill-empty-only guarantee", () => {
         title: "Sector 036",
       }),
     ).rejects.toBeInstanceOf(ApiError);
-    // No INSERT ran — only the existence check.
+
     expect(executeCalls.every((call) => !/insert/i.test(call.sql))).toBe(true);
   });
 
@@ -175,17 +157,7 @@ describe("createLogbookEntry — the fill-empty-only guarantee", () => {
   });
 });
 
-// ── THE NAME EXEMPTION ────────────────────────────────────────────────────────────
-//
-// A logbook entry is the write-up of a DAY, and the sweep hands the author every finding's artist
-// and title as its material. Scanning those names made the gate unsatisfiable for any day that
-// logged a track by "Future Signal": the entry names what it was given, the scan rejects it, and
-// no rewrite can converge. The day then sits at the head of a cap-1 oldest-first gap list forever.
-// The exempt set comes from the DB (`sectorSubjectNames`), so it is what was actually logged that
-// day — never widened by whoever is posting.
-
 describe("createLogbookEntry — the name exemption", () => {
-  // The day logged one finding, by an artist whose name carries a banned word.
   const DAY_ROSTER = [{ artists_json: JSON.stringify(["Future Signal"]), title: "Fractals" }];
 
   function routesForDay(inserted: Record<string, unknown>[]): void {
@@ -221,8 +193,6 @@ describe("createLogbookEntry — the name exemption", () => {
     const body =
       "Future Signal opened the day with something patient, and I let it run twice before the crew looked up.\n\n[[036.7.2I]]\n\nBy the time it landed I had already logged it and moved on.";
 
-    // Before the exemption BOTH gates threw voice_gate on "signal", and the day could never be
-    // written up at all — it stayed a gap forever, blocking every older day behind it.
     const result = await createLogbookEntry(36, { body, title });
 
     expect(result.skipped).toBe(false);
@@ -230,7 +200,6 @@ describe("createLogbookEntry — the name exemption", () => {
     expect(result.entry.body).toContain("Future Signal");
   });
 
-  // The masking must not become a hole. Everything OUTSIDE the day's names is Fluncle's prose.
   it("STILL rejects the same banned word used generically in the body", async () => {
     routesForDay([]);
 
@@ -267,15 +236,14 @@ describe("updateLogbookEntry — the operator overwrite", () => {
       {
         match: /insert into logbook_entries/,
         rows: () => {
-          storedGeneratedBy = "operator"; // the SQL hard-codes 'operator'
+          storedGeneratedBy = "operator";
 
           return [];
         },
       },
-      // The day's sayable names (THE NAME EXEMPTION) — nothing banned in this day's roster.
+
       { match: /select tracks\.title, tracks\.artists_json/, rows: () => [] },
-      // The operator path still runs the title-collision guard (against OTHER sectors) —
-      // no other titles here, so it passes.
+
       { match: /select sector, title from logbook_entries$/, rows: () => [] },
       {
         match: /where sector = \?/,
@@ -292,7 +260,6 @@ describe("updateLogbookEntry — the operator overwrite", () => {
   });
 
   it("re-saving a sector's OWN title passes (the exclude-self rule), but a cross-sector collision 422s", async () => {
-    // Sector 018 already holds "Shoulders Down"; sector 036 holds "A slow drift".
     const STORED = [
       { sector: 18, title: "Shoulders Down" },
       { sector: 36, title: "A slow drift" },
@@ -307,12 +274,10 @@ describe("updateLogbookEntry — the operator overwrite", () => {
     const { updateLogbookEntry } = await import("./logbook");
     const { ApiError } = await import("./spotify");
 
-    // Re-saving sector 36 under its own (normalized-equal) title is allowed.
     await expect(
       updateLogbookEntry(36, { body: CLEAN_BODY, title: "A Slow Drift" }),
     ).resolves.toBeDefined();
 
-    // But taking sector 018's title on sector 036 collides (case- + punctuation-insensitive).
     await expect(
       updateLogbookEntry(36, { body: CLEAN_BODY, title: "shoulders down" }),
     ).rejects.toMatchObject({ code: "title_echoes_logbook" });
@@ -324,25 +289,20 @@ describe("updateLogbookEntry — the operator overwrite", () => {
 
 describe("listLogbookGaps — the self-healing window", () => {
   it("returns findings-bearing days with no entry, oldest first, excluding today", async () => {
-    // sectorDay('2026-05-31…') = 1, '2026-06-01…' = 2, '2026-06-02…' = 3. Findings on
-    // sectors 1, 2, 3; sector 2 already has an entry; "today" is far ahead (a fixed
-    // clock below), so all three are past days.
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-08-01T12:00:00.000Z"));
 
     setRoutes([
       {
-        // The findings-per-day scan (no added_at range → the day list).
         match: /select added_at from findings where log_id is not null$/,
         rows: () => [
-          { added_at: "2026-05-31T10:00:00.000Z" }, // sector 1
-          { added_at: "2026-06-01T10:00:00.000Z" }, // sector 2 (has an entry)
-          { added_at: "2026-06-02T10:00:00.000Z" }, // sector 3
+          { added_at: "2026-05-31T10:00:00.000Z" },
+          { added_at: "2026-06-01T10:00:00.000Z" },
+          { added_at: "2026-06-02T10:00:00.000Z" },
         ],
       },
       { match: /select sector from logbook_entries/, rows: () => [{ sector: 2 }] },
       {
-        // The per-sector material gather (ranged) — one finding each.
         match: /where findings\.log_id is not null\s+and findings\.added_at >= \?/,
         rows: (args) => {
           const start = String(args[0]);
@@ -365,36 +325,31 @@ describe("listLogbookGaps — the self-healing window", () => {
 
     const gaps = await listLogbookGaps({ limit: 10 });
 
-    // Sector 2 is authored → skipped; 1 and 3 remain, oldest first.
     expect(gaps.map((gap) => gap.sector)).toEqual([1, 3]);
-    // The material is gathered + trimmed; the poster URL is derived from the coordinate.
+
     expect(gaps[0]?.findings[0]).toMatchObject({
       artists: ["Fizzy"],
       contextNote: "a fact",
       logId: "001.0.1A",
       posterUrl: "https://found.fluncle.com/001.0.1A/poster.jpg",
     });
-    // A blank note/observation is omitted (not carried as an empty string).
+
     expect(gaps[0]?.findings[0]?.note).toBeUndefined();
 
     vi.useRealTimers();
   });
 });
 
-// ── The anti-sameness rail (Layers A + C) ─────────────────────────────────────
-
-// A neighbour body a draft can lift a run of words from (the low-end run below).
 const NEIGHBOR_BODY =
   "The low end rolled in slow and patient and it never let go of the whole room that night.";
 
 describe("createLogbookEntry — the title-collision guard (Layer A, deterministic)", () => {
   it("rejects a title that NORMALIZED-matches a stored title (case + punctuation insensitive)", async () => {
     setRoutes([
-      // The day's sayable names (THE NAME EXEMPTION) — nothing banned in this day's roster.
       { match: /select tracks\.title, tracks\.artists_json/, rows: () => [] },
-      // Empty sector (create is fill-empty-only), so the guard is reached.
+
       { match: /where sector = \?/, rows: () => [] },
-      // Sector 018 already holds "Shoulders Down".
+
       {
         match: /select sector, title from logbook_entries$/,
         rows: () => [{ sector: 18, title: "Shoulders Down" }],
@@ -402,11 +357,10 @@ describe("createLogbookEntry — the title-collision guard (Layer A, determinist
     ]);
     const { createLogbookEntry } = await import("./logbook");
 
-    // "Shoulders, Down" (punctuation + case) normalizes to the same "shoulders down".
     await expect(
       createLogbookEntry(19, { body: CLEAN_BODY, title: "Shoulders, Down" }),
     ).rejects.toMatchObject({ code: "title_echoes_logbook", status: 422 });
-    // No INSERT ran — the guard fired before the store.
+
     expect(executeCalls.every((call) => !/insert/i.test(call.sql))).toBe(true);
   });
 });
@@ -414,14 +368,13 @@ describe("createLogbookEntry — the title-collision guard (Layer A, determinist
 describe("createLogbookEntry — the body echo gate (Layer C, scored)", () => {
   function echoRoutes(neighborBody: string) {
     return [
-      // The day's sayable names (THE NAME EXEMPTION) — nothing banned in this day's roster.
       { match: /select tracks\.title, tracks\.artists_json/, rows: () => [] },
       { match: /insert into logbook_entries/, rows: () => [] },
       { match: /where sector = \?/, rows: () => [] },
       { match: /select sector, title from logbook_entries$/, rows: () => [] },
-      // The recent-entries neighbour read.
+
       { match: /where sector != \?/, rows: () => [{ body: neighborBody, sector: 12 }] },
-      // The dials — unset, so the calibrated defaults (minPhraseWords 4, maxOverlap 0.3).
+
       { match: /from settings where key/, rows: () => [] },
     ];
   }
@@ -445,7 +398,6 @@ describe("createLogbookEntry — the body echo gate (Layer C, scored)", () => {
     setRoutes(echoRoutes(neighbor));
     const { createLogbookEntry } = await import("./logbook");
 
-    // Same distinctive words, reordered so no 4-word run is shared — the overlap catches it.
     const overlap =
       "Pressure everywhere, coiled and tidal across the sector. The break felt gunmetal, the sub dusk-toned, tension under halogen light.";
 
@@ -458,7 +410,6 @@ describe("createLogbookEntry — the body echo gate (Layer C, scored)", () => {
     const inserted: Record<string, unknown>[] = [];
 
     setRoutes([
-      // The day's sayable names (THE NAME EXEMPTION) — nothing banned in this day's roster.
       { match: /select tracks\.title, tracks\.artists_json/, rows: () => [] },
       {
         match: /insert into logbook_entries/,
@@ -475,7 +426,7 @@ describe("createLogbookEntry — the body echo gate (Layer C, scored)", () => {
         },
       },
       { match: /select sector, title from logbook_entries$/, rows: () => [] },
-      // A recent entry that shares nothing with the draft below.
+
       {
         match: /where sector != \?/,
         rows: () => [
@@ -513,17 +464,16 @@ describe("listSpentMoves — the anti-sameness fuel (Layer B)", () => {
 
     const spent = await listSpentMoves();
 
-    // Newest sector first, and the query is capped (default 12).
     expect(spent.map((entry) => entry.sector)).toEqual([36, 35]);
     expect(executeCalls[0]?.args?.[0]).toBe(12);
-    // Opener = first sentence, closer = last sentence, with the figure token stripped out.
+
     expect(spent[0]).toMatchObject({
       closer: "I played it twice.",
       opener: "A low sub opened the night.",
       title: "A slow drift",
     });
     expect(spent[0]?.opener).not.toContain("[[036.7.2I]]");
-    // A single-sentence body: opener === closer.
+
     expect(spent[1]?.opener).toBe("One long roller, start to finish.");
     expect(spent[1]?.closer).toBe("One long roller, start to finish.");
   });
@@ -551,8 +501,6 @@ describe("getLogbookEchoThresholds — the tunable dials, bounded on read", () =
   });
 
   it("degrades a nonsense KV value to the default rather than disabling the gate", async () => {
-    // minPhraseWords 1 (below the floor of 2) and maxOverlap 0 (below 0.05) would open/shut
-    // the gate — both must snap back to the defaults.
     setRoutes(
       settingsRoutes({ logbook_echo_max_overlap: "0", logbook_echo_min_phrase_words: "1" }),
     );

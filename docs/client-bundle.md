@@ -31,6 +31,8 @@ Tree-shaking is not a safety net. A module-level side effect Rollup cannot prove
 
 A loader that awaits a heavy route-specific module must dynamically import it inside the loader. The `/docs` routes are the exemplar.
 
+The `/docs` route serializes its server-built Fumadocs page tree before client hydration; the generated page-tree source reaches `node:path` and must stay outside the client bundle. Scope Fumadocs providers and the `.dark` class to the docs layout, not `<html>`: a root-level theme class persists after client navigation and changes the public app’s Shadcn styles.
+
 ### The one exemption, and why it is safe
 
 `lib/server/track-match.ts` is permitted, and it earns it by having an **empty import list** — a pure fold over strings, 3 KB, with nothing behind it to drag. `lib/log-schema.ts` needs it for a finding's remixer credits and is read from route `head`s. Its path is canon across `docs/`, the `fluncle-rekordbox-sync` skill, and a Python port kept in lockstep, so relocating it is a repo-wide rename for 3 KB.
@@ -44,6 +46,8 @@ The gate reads the **path**, not the module's contents: anything matching `apps/
 The gate's own tripwire is [`apps/web/scripts/client-chunk-purity.test.ts`](../apps/web/scripts/client-chunk-purity.test.ts): it drives the predicate and the Rollup hook over a leaking bundle, a clean one, the SSR output it must ignore, and the exemption with its premise broken.
 
 HTML cached at the edge references build-scoped `/assets/<hash>.js` URLs. Keep its stale-while-revalidate tail within the deploy cadence (the page tier caps it at one hour); an older HTML response can otherwise point a browser at removed chunks. The root route's chunk-load recovery is the second guard.
+
+The eager router preloads routes on intent and reuses client-navigation loader data for 60 seconds, matching the public hubs' edge freshness window. Personalized or volatile routes set their own shorter `staleTime` so the shared default cannot reuse a previous session's data.
 
 ## Rule 2 — one render-blocking stylesheet, and it is `styles.css`
 

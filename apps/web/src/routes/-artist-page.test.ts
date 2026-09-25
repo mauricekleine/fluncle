@@ -10,18 +10,6 @@ import { renderToString } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { FindingsGrid } from "@/components/graph-sections";
 
-// The artist page earns its page on CONTENT, exactly as a label/album does: a `getPublicArtistBySlug` row
-// renders, and the thin-content gate (NOT a certified-finding gate) decides whether it indexes.
-//
-//   · REACHABILITY: any artist ROW renders 200 (a crawl-minted, findings-free artist has a public
-//     catalogue page); only a slug with no row 404s.
-//   · INDEXABILITY: the page is `noindex` (and out of the sitemap) below ARTIST_INDEX_MIN_FINDINGS
-//     linked tracks, read off the maintained `renderable_track_count` — the same stored gate the
-//     sitemap keys off, so an indexable page is never an orphan. Upcoming rows are linked tracks and
-//     count; the `artists_json` completeness fallback in the grid is deliberately NOT part of it.
-//
-// These tests pin that contract.
-
 const getPublicArtistBySlug = vi.hoisted(() => vi.fn());
 const getPublicArtistSocials = vi.hoisted(() => vi.fn());
 const getPublicArtistAliasNames = vi.hoisted(() => vi.fn());
@@ -44,27 +32,21 @@ vi.mock("@/lib/server/tracks", async (importOriginal) => ({
   getFindingsByArtist,
 }));
 
-// The grouped catalogue read is DB-backed; stub it so the resolver stays a pure unit (its
-// grouping + bounds are covered by catalogue-groups.test.ts and the scale integration test).
 vi.mock("@/lib/server/catalogue-groups", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/server/catalogue-groups")>()),
   listArtistCatalogue,
   listArtistUpcoming,
 }));
 
-/** The empty grouped catalogue — an artist the crawler has not touched. */
 const NO_CATALOGUE = { groups: [], page: 1, pageCount: 1, totalGroups: 0, totalTracks: 0 };
 
-// The dossier's neighbours are DB-backed; stub them so the resolver stays a pure
-// unit (the ranking itself is covered by artist-dossier.test.ts).
 vi.mock("@/lib/server/artist-dossier", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/server/artist-dossier")>()),
   getArtistNeighbours,
 }));
 
 const { ARTIST_CATALOGUE_SORT_DEFAULT, Route } = await import("./artist.$slug");
-// The resolver lives beside the route rather than in it, so the route module carries no static
-// `lib/server/**` import into the browser bundle (see `-artist-page-data.ts`).
+
 const { resolveArtistPageData } = await import("./-artist-page-data");
 
 const ARTIST = {
@@ -79,9 +61,6 @@ const ARTIST = {
   wikidataQid: undefined,
 };
 
-// A minimal grid finding — only the fields the resolver passes through matter.
-// `addedAt`/`bpm`/`key` feed the dossier signature; a bare finding leaves them
-// undefined, which the signature degrades cleanly on.
 function finding(logId: string, extra: { addedAt?: string; bpm?: number; key?: string } = {}) {
   return { artists: ["Drift"], logId, title: "Untitled", trackId: `t-${logId}`, ...extra };
 }
@@ -98,18 +77,15 @@ function robotsMeta(data: unknown): string | undefined {
   return headMeta(data).find((entry) => entry.name === "robots")?.content;
 }
 
-/** The `<meta name="description">` — the same string og:/twitter: description carry. */
 function metaDescription(data: unknown): string | undefined {
   return headMeta(data).find((entry) => entry.name === "description")?.content;
 }
 
-/** The `<title>` — the same string og:title / twitter:title carry. */
 function headTitle(data: unknown): string | undefined {
   return (headMeta(data) as Array<{ title?: string }>).find((entry) => entry.title !== undefined)
     ?.title;
 }
 
-/** The head's first JSON-LD payload — the MusicGroup (`jsonLdScript` children still parse as JSON). */
 function musicGroupFromHead(data: unknown): Record<string, unknown> {
   const head = Route.options.head?.({ loaderData: data } as never) as
     | { scripts?: Array<{ children?: string }> }
@@ -119,7 +95,6 @@ function musicGroupFromHead(data: unknown): Record<string, unknown> {
   return payload ? (JSON.parse(payload) as Record<string, unknown>) : {};
 }
 
-/** The route's resolved catalogue sort for a given (validated) search — where the default lands. */
 function resolvedSort(search: { page?: number; sort?: "name" | "recent" }): string {
   const deps = Route.options.loaderDeps?.({ search } as never) as { sort: string } | undefined;
 
@@ -128,21 +103,14 @@ function resolvedSort(search: { page?: number; sort?: "name" | "recent" }): stri
 
 describe("the artist page catalogue default (latest release first)", () => {
   it("defaults to the 'recent' (Latest release) key — the dropdown's own sort key", () => {
-    // Reused verbatim, never a fresh ordering: the constant IS the value the dropdown's "Latest
-    // release" option carries, so the control reflects the default on the first (param-free) load.
     expect(ARTIST_CATALOGUE_SORT_DEFAULT).toBe("recent");
   });
 
   it("resolves to latest-release with NO sort param, so a bare /artist/<slug> opens on it", () => {
-    // No `?sort` in the URL → `validateSearch` narrows `sort` to undefined → the loader falls to
-    // the artist default. This is the "both must agree" pin: the URL default and the sort handed
-    // to the server read are the SAME latest-release key.
     expect(resolvedSort({})).toBe("recent");
   });
 
   it("still round-trips an explicitly chosen sort through the URL", () => {
-    // A reader who picks A–Z (or re-picks Latest release) keeps exactly that — the default only
-    // fills an ABSENT param, it never overrides a present one.
     expect(resolvedSort({ sort: "name" })).toBe("name");
     expect(resolvedSort({ sort: "recent" })).toBe("recent");
   });
@@ -190,9 +158,6 @@ describe("resolveArtistPageData (the artist page indexability gate)", () => {
   });
 
   it("renders (noindex) a findings-free artist with no catalogue — a thin crawl-minted page", async () => {
-    // The artist ROW exists (the crawler minted it off a crawled track's Spotify anchor) and has no
-    // certified finding and no catalogue tracks yet. It renders 200 — a public page, like a label —
-    // but below the renderable-track floor, so it is noindex + out of the sitemap.
     getPublicArtistBySlug.mockResolvedValue(ARTIST);
     getFindingsByArtist.mockResolvedValue([]);
     countArtistFindings.mockResolvedValue(0);
@@ -204,7 +169,6 @@ describe("resolveArtistPageData (the artist page indexability gate)", () => {
   });
 
   it("indexes a findings-free artist once its CATALOGUE clears the floor", async () => {
-    // The stored counter the sitemap gate reads.
     getPublicArtistBySlug.mockResolvedValue({ ...ARTIST, renderableTrackCount: 5 });
     getFindingsByArtist.mockResolvedValue([]);
     countArtistFindings.mockResolvedValue(0);
@@ -217,9 +181,6 @@ describe("resolveArtistPageData (the artist page indexability gate)", () => {
   });
 
   it("keeps the gate off the artists_json fallback — grid covers alone do not index a page", async () => {
-    // The completeness fallback (`getFindingsByArtist` reads `artists_json`) can show covers, but
-    // the gate reads the stored counter the sitemap reads, zero here, so the page stays noindex
-    // exactly as its sitemap entry stays absent.
     getFindingsByArtist.mockResolvedValue([
       finding("001.1.1A"),
       finding("002.1.1A"),
@@ -235,7 +196,7 @@ describe("resolveArtistPageData (the artist page indexability gate)", () => {
 
   it("renders (noindex) an artist with one or two certified findings, below the index threshold", async () => {
     getFindingsByArtist.mockResolvedValue([finding("001.1.1A"), finding("002.1.1A")]);
-    // Two certified findings: past the EXISTENCE gate (row is public), below the INDEX threshold.
+
     countArtistFindings.mockResolvedValue(2);
 
     const data = await resolveArtistPageData("drift", "name", 1);
@@ -264,13 +225,11 @@ describe("resolveArtistPageData (the artist page indexability gate)", () => {
       throw new Error("expected the artist to be found");
     }
     expect(data.indexable).toBe(true);
-    // Past the gate: no robots override, so the page is indexable.
+
     expect(robotsMeta(data)).toBeUndefined();
   });
 
   it("carries the Discogs + Last.fm anchors from the record into the MusicGroup's sameAs", async () => {
-    // The KG anchors are schema-only — nothing on the page links to them — so the loader
-    // carrying them into `sameAs` IS the whole surface. Ranked directly under MusicBrainz.
     getPublicArtistBySlug.mockResolvedValue({
       ...ARTIST,
       discogsUrl: "https://www.discogs.com/artist/4321-Drift",
@@ -331,9 +290,9 @@ describe("resolveArtistPageData (the artist page indexability gate)", () => {
       throw new Error("expected the artist to be found");
     }
     expect(data.dossier.findingCount).toBe(3);
-    // The earliest finding is when the artist first crossed his path.
+
     expect(data.dossier.firstFoundAt).toBe("2026-01-05T00:00:00.000Z");
-    // The similar-artists row carries each neighbour's identity + avatar.
+
     expect(data.dossier.neighbours).toEqual([
       { imageUrl: "https://i.scdn.co/image/echo", name: "Echo", slug: "echo" },
     ]);
@@ -365,8 +324,6 @@ describe("resolveArtistPageData (the artist page indexability gate)", () => {
     getFindingsByArtist.mockResolvedValue([finding("001.1.1A")]);
     countArtistFindings.mockResolvedValue(1);
 
-    // A bio over the meta cap: the description is bio-derived, trimmed to ≤160, and drops the
-    // catalogue-count template entirely (the whole point — a unique description per entity).
     const bio =
       "Drift is a British drum and bass producer known for deep, rolling liquid cuts and a run " +
       "of releases across the scene's most respected labels over the past decade of the sound.";
@@ -379,7 +336,6 @@ describe("resolveArtistPageData (the artist page indexability gate)", () => {
     expect(desc).not.toContain("each with a coordinate");
     expect(desc?.startsWith("Drift is a British drum and bass producer")).toBe(true);
 
-    // No bio ⇒ the original template is preserved verbatim (no regression).
     getPublicArtistBySlug.mockResolvedValue(ARTIST);
     const withoutBio = await resolveArtistPageData("drift", "name", 1);
     expect(metaDescription(withoutBio)).toBe(
@@ -388,9 +344,6 @@ describe("resolveArtistPageData (the artist page indexability gate)", () => {
   });
 
   it("varies BOTH the title and the description by page (the /artists hub rule)", async () => {
-    // Every `?page=N` is self-canonical, so it is submitted as its own indexable URL. Two such
-    // URLs may not wear one title and one description; the paged pair names the page and the
-    // records band the pager actually moves, and the bio never rides a page past the first.
     getFindingsByArtist.mockResolvedValue([finding("001.1.1A")]);
     countArtistFindings.mockResolvedValue(1);
     getPublicArtistBySlug.mockResolvedValue({
@@ -406,7 +359,6 @@ describe("resolveArtistPageData (the artist page indexability gate)", () => {
       "Page 2 of the drum & bass records by Drift that Fluncle holds.",
     );
 
-    // Page 1 is untouched: the bio still leads, under the bare entity title.
     listArtistCatalogue.mockResolvedValue(NO_CATALOGUE);
     const first = await resolveArtistPageData("drift", "name", 1);
 
@@ -415,17 +367,12 @@ describe("resolveArtistPageData (the artist page indexability gate)", () => {
   });
 });
 
-// The artist page's findings band is the shared FindingsGrid (the label/album graph pages use it too):
-// a findings-free entity renders NOTHING (no grid, no heading, no apology) and findings render a
-// real cover-grid.
-
 describe("FindingsGrid render contract (the band the artist page delegates to)", () => {
-  /** SSR FindingsGrid through a router (its <Link> needs one), returning the static HTML. */
   async function renderFindingsGrid(findings: unknown[]): Promise<string> {
     const rootRoute = createRootRoute({
       component: () => createElement(FindingsGrid, { findings } as never),
     });
-    // The band's covers link to /log/$logId — the router needs the route so Link builds the href.
+
     const logRoute = createRoute({ getParentRoute: () => rootRoute, path: "/log/$logId" });
     const router = createRouter({
       history: createMemoryHistory({ initialEntries: ["/"] }),
@@ -456,19 +403,12 @@ describe("FindingsGrid render contract (the band the artist page delegates to)",
 
     expect(html).toContain('class="artist-grid"');
     expect(html).toContain("/log/001.1.1A");
-    // The findings block is titled (DESIGN.md mixed-list carve-out): a VISIBLE curator heading,
-    // a real H2 (page outline), wired as the grid's accessible name via aria-labelledby. The
-    // string is folded into the component (no `label` prop), so it can't drift per call site.
+
     expect(html).toContain("Recommended by Fluncle");
     expect(html).toMatch(/<h2[^>]*id="findings-grid-heading"/);
     expect(html).toContain('aria-labelledby="findings-grid-heading"');
   });
 
-  // The band's FIRST cover is the LCP candidate on every graph page (artist/album/label): it is
-  // above the fold on every viewport and it is the widest paint. A lazy image that happens to be in
-  // the viewport still loads, but Chrome holds it at Low priority and defers it until layout — which
-  // is exactly the wait an entity page's LCP was sitting in. Tile 1 is eager + high; tiles 2..n stay
-  // lazy, because the priority signal only buys anything while it is scarce.
   it("fetches the FIRST cover eagerly at high priority and leaves the rest lazy", async () => {
     const html = await renderFindingsGrid([
       {
@@ -490,8 +430,6 @@ describe("FindingsGrid render contract (the band the artist page delegates to)",
     const covers = html.match(/<img[^>]*class="track-artwork artist-grid-cover"[^>]*>/g) ?? [];
     expect(covers).toHaveLength(2);
 
-    // React serialises the prop as `fetchPriority`; HTML attribute names are case-insensitive, so
-    // match without caring which casing the renderer emits.
     const [lead = "", follower = ""] = covers;
     expect(lead).toContain('loading="eager"');
     expect(lead.toLowerCase()).toContain('fetchpriority="high"');
@@ -532,10 +470,6 @@ it("renders a findings-free artist masthead without a findings band or apology",
   expect(html).not.toContain("Quiet sector");
 });
 
-// ONE lead image per artist page: the image the head preloads is the only one fetched at high
-// priority. With a findings band that is its first cover (the larger paint: 114 CSS px on desktop,
-// 161 on a phone, against the masthead portrait's 80); a catalogue-only artist leads with the
-// portrait instead.
 describe("the artist page spends high fetch priority on one image", () => {
   async function renderArtistPage(findings: unknown[]): Promise<{ head: string; html: string }> {
     getPublicArtistBySlug.mockResolvedValue({

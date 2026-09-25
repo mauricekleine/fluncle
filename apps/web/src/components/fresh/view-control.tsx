@@ -1,5 +1,5 @@
 import { SegmentedControl } from "@/components/segmented-control";
-import { type FreshView } from "./data";
+import { type FreshView } from "@/lib/fresh-releases";
 
 const VIEW_OPTIONS: readonly { label: string; value: FreshView }[] = [
   { label: "All", value: "all" },

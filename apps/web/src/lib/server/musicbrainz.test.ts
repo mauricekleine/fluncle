@@ -1,28 +1,11 @@
-// The MB pacing gate's two load-bearing properties: slot allocation must keep an unsettled
-// call from blocking the next one, and an alive call must settle before the next call fires.
-
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { mbFetch, setMusicbrainzRateLimitForTests } from "./musicbrainz";
 
 const realFetch = globalThis.fetch;
 
-// Every property here is about WHEN one call fires relative to another, so the whole file runs
-// on FAKE time: the gate's two waits (the chain deadline, the slot delay) are stepped explicitly
-// instead of slept through. Real sleeps make the pacing assertion flaky — the slot clock hands
-// caller B a fixed timestamp, so timer jitter can collapse the measured gap. Fake time removes
-// the lateness term and keeps the file near-zero in runtime.
-//
-// Two rules keep the stepping honest, both learned by getting them wrong:
-//   - Step with `advanceTimersByTimeAsync`, never `runAllTimersAsync`. The latter jumps straight
-//     to the FARTHEST timer, which fires the chain deadline before the predecessor has even run —
-//     the serialization under test would be skipped rather than exercised.
-//   - Give each test its own clock epoch. `nextSlotAt` is module state with no reset seam (its
-//     one setter is also called by artist-resolution/discogs at runtime, so it must not be
-//     repurposed as a test reset), and a fresh `useFakeTimers()` rewinds the clock to real now —
-//     leaving the previous test's slot stamp in the FUTURE. Distinct epochs keep it in the past.
 const CLOCK_EPOCH = Date.UTC(2026, 0, 1);
-// Wider than any single test advances the clock, so no test inherits a future slot stamp.
+
 const EPOCH_STRIDE_MS = 1_000_000;
 let testIndex = 0;
 
@@ -39,7 +22,6 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-/** Drain the pending microtasks without moving the fake clock. */
 async function settle(): Promise<void> {
   await vi.advanceTimersByTimeAsync(0);
 }
@@ -60,24 +42,19 @@ describe("mbFetch pacing", () => {
       calls += 1;
 
       if (calls === 1) {
-        // A call whose settlement never comes — the shape a dead request context leaves behind.
         return new Promise<Response>(() => {});
       }
 
       return Promise.resolve(jsonResponse({ ok: true }));
     }) as unknown as typeof fetch;
 
-    // Fire the doomed call and deliberately do NOT await it.
     void mbFetch("/label/dead-context");
 
     const pending = mbFetch<{ ok: boolean }>("/label/alive");
 
-    // Let the doomed call take its slot and hang, so the live caller is genuinely queued
-    // behind an unsettled predecessor rather than racing it.
     await settle();
     expect(calls).toBe(1);
 
-    // The dead head never settles, so the chain deadline (interval × 40) IS the unwedge.
     await vi.advanceTimersByTimeAsync(10 * 40);
 
     const second = await pending;
@@ -87,8 +64,6 @@ describe("mbFetch pacing", () => {
   });
 
   it("serializes in-flight calls — the second fires only after a SLOW (but alive) first settles", async () => {
-    // Arrival pacing alone lets calls overlap when one runs long, and the overlap compounds
-    // into 503 throttling. One call in flight at a time is the etiquette MB expects.
     setMusicbrainzRateLimitForTests(10);
 
     const events: string[] = [];
@@ -109,12 +84,9 @@ describe("mbFetch pacing", () => {
 
     const pending = Promise.all([mbFetch("/label/slow"), mbFetch("/label/second")]);
 
-    // The slow call is in flight and the second caller is queued behind it.
     await settle();
     expect(events).toEqual(["start-1"]);
 
-    // 150 < the 400ms chain deadline, so the second caller is released by its predecessor
-    // SETTLING — the property under test — and not by the wedge-immunity timeout.
     await vi.advanceTimersByTimeAsync(150);
     await pending;
 
@@ -133,7 +105,6 @@ describe("mbFetch pacing", () => {
 
     const pending = Promise.all([mbFetch("/label/first"), mbFetch("/label/second")]);
 
-    // The first call fires immediately; the second is holding its 50ms slot delay.
     await settle();
     expect(fetchTimes).toHaveLength(1);
 
@@ -142,8 +113,7 @@ describe("mbFetch pacing", () => {
 
     expect(fetchTimes).toHaveLength(2);
     const [first, second] = fetchTimes;
-    // On fake time the slot arithmetic is exact, so this is the interval itself rather than
-    // a tolerance for real-timer jitter.
+
     expect(Math.abs((second ?? 0) - (first ?? 0))).toBeGreaterThanOrEqual(50);
   });
 });

@@ -11,11 +11,6 @@ import {
   stateIsBoundToThisBrowser,
 } from "../../../../../lib/server/oauth-state";
 
-// Instagram redirects here after the consent screen. We verify the signed state
-// (purpose instagram-auth), exchange the code for a short-lived token, upgrade it to the
-// 60-day long-lived token, store THAT in instagram_auth, and bounce back to the board.
-// There is no login branch: Instagram is a stats source, not an admin identity provider
-// (that stays Spotify-only).
 export const serverHandlers: ApiHandlers = {
   GET: async ({ request }) => {
     const url = new URL(request.url);
@@ -38,7 +33,6 @@ export const serverHandlers: ApiHandlers = {
         return jsonError(400, "invalid_state", "Invalid state");
       }
 
-      // The browser binding, checked BEFORE the code is spent (oauth-state.ts).
       if (!stateIsBoundToThisBrowser(request, statePayload)) {
         return jsonError(400, "invalid_state", "Invalid state");
       }
@@ -53,8 +47,6 @@ export const serverHandlers: ApiHandlers = {
         status: 302,
       });
     } catch (authError) {
-      // Raw token-exchange detail goes to the server log, not the wire to this
-      // unauthenticated callback; keep the code the board keys on, answer plainly.
       logEvent("error", "instagram.auth-callback-failed", { error: authError });
       return jsonError(
         400,

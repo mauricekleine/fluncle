@@ -8,19 +8,6 @@ import {
   warmOrpcRouter,
 } from "./orpc-test-kit";
 
-// The admin wave's `admin-social` parity + auth proof, driven end-to-end through
-// `handleOrpc`. The security-critical piece is the FIELD-LEVEL operator guard on
-// `draft_track_social`: the live route is `requireAdmin`, then `youtube` (a direct
-// PUBLIC upload) additionally requires the operator, while `tiktok` (a SELF_ONLY
-// inbox draft) is agent-allowed.
-//
-//   - list_track_social — admin tier (live `requireAdmin`).
-//   - update_track_social — operator tier (live `requireOperator`).
-//   - draft_track_social — admin tier WITH the per-platform operator branch: a
-//     youtube push by the agent is a 403, a tiktok push by the agent is allowed.
-//   - capture_post_urls — admin tier: the polling sweep. It resolves each pending
-//     post's permalink from the platform native id and records it.
-
 const getTrackByIdOrLogId = vi.fn();
 const listSocialPosts = vi.fn();
 const updateSocialStatus = vi.fn();
@@ -60,9 +47,6 @@ vi.mock("./captions", () => ({
   readCaptions: (...args: unknown[]) => readCaptions(...args),
 }));
 
-// The mention-injection seam is proved in mentions.test.ts; here it passes the caption
-// through unchanged so the push assertions stay about auth + orchestration (and the
-// handler never touches the DB via `captionForPlatform`).
 vi.mock("./mentions", () => ({
   captionForPlatform: (_trackId: string, _platform: string, caption: string) => caption,
 }));
@@ -97,7 +81,6 @@ beforeEach(() => {
   readCaptions.mockReset().mockResolvedValue({ "004.7.2I": "a caption" });
 });
 
-// ── list_track_social — admin tier ───────────────────────────────────────────
 describe("oRPC list_track_social (GET /admin/tracks/{trackId}/social)", () => {
   it("401s with no token", async () => {
     const { handleOrpc } = await import("./orpc");
@@ -136,7 +119,6 @@ describe("oRPC list_track_social (GET /admin/tracks/{trackId}/social)", () => {
   });
 });
 
-// ── update_track_social — operator tier ──────────────────────────────────────
 describe("oRPC update_track_social (PATCH .../social/{platform})", () => {
   it("403s the AGENT (operator-only)", async () => {
     const { handleOrpc } = await import("./orpc");
@@ -211,7 +193,6 @@ describe("oRPC update_track_social (PATCH .../social/{platform})", () => {
   });
 });
 
-// ── draft_track_social — admin tier + per-platform operator guard ────────────
 describe("oRPC draft_track_social (POST .../social/{platform}/draft)", () => {
   it("401s with no token", async () => {
     const { handleOrpc } = await import("./orpc");
@@ -240,7 +221,7 @@ describe("oRPC draft_track_social (POST .../social/{platform}/draft)", () => {
 
     expect(response?.status).toBe(403);
     expect(((await readJson(response)) as { code: string }).code).toBe("forbidden");
-    // The operator gate fires BEFORE the track lookup, exactly as the live route.
+
     expect(getTrackByIdOrLogId).not.toHaveBeenCalled();
   });
 
@@ -268,7 +249,7 @@ describe("oRPC draft_track_social (POST .../social/{platform}/draft)", () => {
   it("lets the OPERATOR push to YOUTUBE (published); url unresolved leaves it null", async () => {
     getTrackByIdOrLogId.mockResolvedValueOnce(TRACK);
     pushYouTubeShort.mockResolvedValueOnce({ postId: "yt-1" });
-    // The publish lag: /missing resolves nothing this time, so no url is recorded.
+
     resolveSocialUrl.mockResolvedValueOnce(null);
 
     const { handleOrpc } = await import("./orpc");
@@ -287,8 +268,7 @@ describe("oRPC draft_track_social (POST .../social/{platform}/draft)", () => {
     expect(pushYouTubeShort).toHaveBeenCalled();
     expect(upsertPost).toHaveBeenCalledWith(TRACK_ID, "youtube", "published", "yt-1");
     expect(resolveSocialUrl).toHaveBeenCalledWith("yt-1", "youtube");
-    // No url resolved → nothing recorded, no release-id linked; the operator's
-    // manual entry (or the capture sweep) is the fallback.
+
     expect(recordPostUrl).not.toHaveBeenCalled();
     expect(postizSetReleaseId).not.toHaveBeenCalled();
   });
@@ -296,8 +276,7 @@ describe("oRPC draft_track_social (POST .../social/{platform}/draft)", () => {
   it("auto-records the live YouTube URL + links the release-id when it resolves", async () => {
     getTrackByIdOrLogId.mockResolvedValueOnce(TRACK);
     pushYouTubeShort.mockResolvedValueOnce({ postId: "yt-2" });
-    // The resolver reads the releaseId (the videoId) off the dated /posts list and
-    // builds the canonical Short URL; that is what the caller records.
+
     resolveSocialUrl.mockResolvedValueOnce({
       nativeId: "h61ZuxQVnBA",
       url: "https://www.youtube.com/shorts/h61ZuxQVnBA",
@@ -309,8 +288,7 @@ describe("oRPC draft_track_social (POST .../social/{platform}/draft)", () => {
     );
 
     expect(response?.status).toBe(200);
-    // The draft envelope is unchanged; the resolved url is a side-effect on the
-    // row (surfaced via list_track_social), not part of the response.
+
     expect(await readJson(response)).toEqual({
       externalId: "yt-2",
       ok: true,
@@ -319,13 +297,13 @@ describe("oRPC draft_track_social (POST .../social/{platform}/draft)", () => {
       trackId: TRACK_ID,
     });
     expect(resolveSocialUrl).toHaveBeenCalledWith("yt-2", "youtube");
-    // The canonical Short URL the resolver built is what gets recorded.
+
     expect(recordPostUrl).toHaveBeenCalledWith(
       TRACK_ID,
       "youtube",
       "https://www.youtube.com/shorts/h61ZuxQVnBA",
     );
-    // The videoId links the post to its content for Postiz analytics.
+
     expect(postizSetReleaseId).toHaveBeenCalledWith("yt-2", "h61ZuxQVnBA");
   });
 
@@ -339,13 +317,12 @@ describe("oRPC draft_track_social (POST .../social/{platform}/draft)", () => {
 
     expect(response?.status).toBe(409);
     expect(((await readJson(response)) as { code: string }).code).toBe("youtube_url_pending");
-    // The gate fires BEFORE the track lookup and the push — nothing is published.
+
     expect(getTrackByIdOrLogId).not.toHaveBeenCalled();
     expect(pushYouTubeShort).not.toHaveBeenCalled();
   });
 
   it("the gate does NOT block a TIKTOK push (youtube-only)", async () => {
-    // A pending youtube URL must not stop a tiktok draft.
     hasPostAwaitingUrl.mockResolvedValue(true);
     getTrackByIdOrLogId.mockResolvedValueOnce(TRACK);
     pushTikTokDraft.mockResolvedValueOnce({ postId: "tt-9" });
@@ -357,7 +334,7 @@ describe("oRPC draft_track_social (POST .../social/{platform}/draft)", () => {
 
     expect(response?.status).toBe(200);
     expect(pushTikTokDraft).toHaveBeenCalled();
-    // The youtube gate was never consulted for a tiktok push.
+
     expect(hasPostAwaitingUrl).not.toHaveBeenCalled();
   });
 
@@ -374,11 +351,6 @@ describe("oRPC draft_track_social (POST .../social/{platform}/draft)", () => {
   });
 });
 
-// ── permalinkFromMissingId — TikTok's native aweme id → permalink ─────────────
-// Verified against live Postiz: only TikTok needs this builder — its `releaseURL`
-// is a useless `…/messages?…` placeholder, so the permalink is BUILT from the
-// `/missing` native aweme id. YouTube reads its real `releaseURL` straight off the
-// post (so this returns null for youtube). (Imported un-mocked via importActual.)
 describe("permalinkFromMissingId (TikTok native aweme id → permalink)", () => {
   it("builds a TikTok @fluncle/video permalink from the aweme id", async () => {
     const { permalinkFromMissingId } = await vi.importActual<typeof import("./postiz")>("./postiz");
@@ -416,15 +388,6 @@ describe("permalinkFromMissingId (TikTok native aweme id → permalink)", () => 
   });
 });
 
-// ── resolveSocialUrl — the corrected resolver, against a mocked Postiz ─────────
-// Verified against live Postiz (see the postiz.ts doctrine):
-//   - YouTube: read the dated `/posts` list, find the post by id, and once it's
-//     PUBLISHED with an auto-populated `releaseId` + a real YouTube `releaseURL`,
-//     return that URL VERBATIM (never reconstruct it).
-//   - TikTok: fall back to `/missing` (its `releaseURL` is a `…/messages?…`
-//     placeholder) and BUILD the permalink from the newest native aweme id.
-// `resolveSocialUrl` is imported un-mocked via importActual; only global `fetch`
-// (the Postiz HTTP boundary) and `POSTIZ_API_KEY` are stubbed.
 describe("resolveSocialUrl (YouTube releaseURL / TikTok /missing)", () => {
   const ORIGINAL_KEY = process.env.POSTIZ_API_KEY;
   const ORIGINAL_URL = process.env.POSTIZ_API_URL;
@@ -440,9 +403,6 @@ describe("resolveSocialUrl (YouTube releaseURL / TikTok /missing)", () => {
     process.env.POSTIZ_API_URL = ORIGINAL_URL;
   });
 
-  // A tiny router over the Postiz endpoints `resolveSocialUrl` touches. Routes
-  // return a verbatim body string (so we can reproduce the unescaped newline
-  // Postiz really sends in the dated list `content`).
   function mockPostiz(routes: Array<{ body: string; match: string }>): void {
     vi.stubGlobal(
       "fetch",
@@ -461,10 +421,6 @@ describe("resolveSocialUrl (YouTube releaseURL / TikTok /missing)", () => {
   it("YouTube: captures the canonical /shorts/<id> URL built from the videoId once PUBLISHED", async () => {
     const { resolveSocialUrl } = await vi.importActual<typeof import("./postiz")>("./postiz");
 
-    // The dated /posts list. NOTE the unescaped newline in `content` — exactly the
-    // shape live Postiz returns — to prove the lenient parse recovers the post.
-    // Postiz auto-populates `releaseURL` as a `watch?v=<id>` URL; we capture the
-    // canonical Short form built from `releaseId` (the videoId) instead.
     const listBody =
       '{"posts":[' +
       '{"id":"yt-live","state":"PUBLISHED","releaseId":"h61ZuxQVnBA",' +
@@ -496,7 +452,6 @@ describe("resolveSocialUrl (YouTube releaseURL / TikTok /missing)", () => {
   it("YouTube: returns null when releaseURL is the placeholder, not a real URL", async () => {
     const { resolveSocialUrl } = await vi.importActual<typeof import("./postiz")>("./postiz");
 
-    // PUBLISHED but releaseURL is a non-YouTube placeholder → not a real permalink.
     const listBody =
       '{"posts":[{"id":"yt-x","state":"PUBLISHED","releaseId":"missing",' +
       '"releaseURL":"https://www.tiktok.com/messages?lang=en"}]}';
@@ -509,7 +464,6 @@ describe("resolveSocialUrl (YouTube releaseURL / TikTok /missing)", () => {
   it("TikTok: builds the @fluncle/video permalink from the newest /missing aweme id", async () => {
     const { resolveSocialUrl } = await vi.importActual<typeof import("./postiz")>("./postiz");
 
-    // The /missing body for a finished inbox draft: [{ id: awemeId, url: cover }].
     const missingBody =
       '[{"id":"7280000000000000000","url":"https://p16.tiktokcdn.com/cover.jpg"}]';
 
@@ -532,11 +486,8 @@ describe("resolveSocialUrl (YouTube releaseURL / TikTok /missing)", () => {
   });
 });
 
-// ── capture_post_urls — the polling sweep ────────────────────────────────────
 describe("oRPC capture_post_urls (POST /admin/social/posts/capture)", () => {
   it("401s with no token", async () => {
-    // A JSON body (the CLI always sends one) so auth is reached: a bodyless POST
-    // would 400 on input validation before the auth middleware runs.
     const { handleOrpc } = await import("./orpc");
     const response = await handleOrpc(req(`/admin/social/posts/capture`, "POST", undefined, {}));
 
@@ -585,11 +536,9 @@ describe("oRPC capture_post_urls (POST /admin/social/posts/capture)", () => {
       polled: 2,
     });
 
-    // Each pending post is polled by its OWN post id + platform.
     expect(resolveSocialUrl).toHaveBeenCalledWith("yt-9", "youtube");
     expect(resolveSocialUrl).toHaveBeenCalledWith("tt-9", "tiktok");
 
-    // The url is recorded (fill-empty-only) and the release-id linked for both.
     expect(recordPostUrl).toHaveBeenCalledWith(
       "t-yt",
       "youtube",
@@ -603,8 +552,6 @@ describe("oRPC capture_post_urls (POST /admin/social/posts/capture)", () => {
     expect(postizSetReleaseId).toHaveBeenCalledWith("yt-9", "vid9");
     expect(postizSetReleaseId).toHaveBeenCalledWith("tt-9", "aweme9");
 
-    // A captured TikTok DRAFT flips to published (it reached the app + went live);
-    // the YouTube post was already published, so it is not re-flipped.
     expect(updateSocialStatus).toHaveBeenCalledTimes(1);
     expect(updateSocialStatus).toHaveBeenCalledWith("t-tt", "tiktok", {
       status: "published",
@@ -636,7 +583,7 @@ describe("oRPC capture_post_urls (POST /admin/social/posts/capture)", () => {
       nativeId: "aweme0",
       url: "https://www.tiktok.com/@fluncle/video/aweme0",
     });
-    // recordPostUrl fills nothing (no empty-url row to fill).
+
     recordPostUrl.mockResolvedValueOnce(false);
 
     const { handleOrpc } = await import("./orpc");
@@ -649,9 +596,6 @@ describe("oRPC capture_post_urls (POST /admin/social/posts/capture)", () => {
   });
 
   it("skips a TikTok URL already claimed by another track (the unpublished-draft trap)", async () => {
-    // The just-pushed draft (t-new) still sits unpublished in the inbox, so
-    // TikTok's /missing returns the @fluncle account's NEWEST aweme — which is
-    // the PREVIOUS track's video, a URL already stored on another track's row.
     listPostsAwaitingUrl.mockResolvedValueOnce([
       { externalId: "tt-new", platform: "tiktok", status: "draft", trackId: "t-new" },
     ]);
@@ -659,20 +603,20 @@ describe("oRPC capture_post_urls (POST /admin/social/posts/capture)", () => {
       nativeId: "awemePrev",
       url: "https://www.tiktok.com/@fluncle/video/awemePrev",
     });
-    // That URL is already attached to a different track → do not re-use it.
+
     isUrlClaimedByOtherTrack.mockResolvedValueOnce(true);
 
     const { handleOrpc } = await import("./orpc");
     const response = await handleOrpc(req(`/admin/social/posts/capture`, "POST", AGENT_TOKEN, {}));
 
     expect(response?.status).toBe(200);
-    // Polled but not captured — the row stays pending until a fresh permalink.
+
     expect(await readJson(response)).toEqual({ captured: [], ok: true, polled: 1 });
     expect(isUrlClaimedByOtherTrack).toHaveBeenCalledWith(
       "https://www.tiktok.com/@fluncle/video/awemePrev",
       "t-new",
     );
-    // Nothing is written: no url recorded, no release-id linked, no draft flip.
+
     expect(recordPostUrl).not.toHaveBeenCalled();
     expect(postizSetReleaseId).not.toHaveBeenCalled();
     expect(updateSocialStatus).not.toHaveBeenCalled();
@@ -686,7 +630,7 @@ describe("oRPC capture_post_urls (POST /admin/social/posts/capture)", () => {
       nativeId: "awemeFresh",
       url: "https://www.tiktok.com/@fluncle/video/awemeFresh",
     });
-    // The newest aweme is unclaimed → this draft really did go live in-app.
+
     isUrlClaimedByOtherTrack.mockResolvedValueOnce(false);
 
     const { handleOrpc } = await import("./orpc");

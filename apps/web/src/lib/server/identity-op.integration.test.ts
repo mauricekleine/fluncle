@@ -1,20 +1,3 @@
-// `get_track`'s IDENTITY PROJECTION, driven END TO END through the REAL `handleOrpc(Request)`
-// dispatcher (RFC dnb-identity-graph, Unit 2).
-//
-// The envelope's CONTENT is proven next door (identity-envelope.integration.test.ts). What only a
-// dispatcher test can prove is the TRANSPORT, and each claim here is one that was easy to get
-// wrong:
-//
-//   - the contract's output union accepts the envelope, so the widened schema really validates;
-//   - the plain `GET /tracks/{idOrLogId}` read is BYTE-UNCHANGED and still unmetered — every
-//     existing caller (the CLI, MCP, the app, the newsletter agent) reads through this op;
-//   - the key is EXCLUSIVE, and every malformed key is a 422 thrown IN-HANDLER (oRPC's own schema
-//     rejection emits 400, which is why the input schema stays tolerant optional strings);
-//   - an unknown key is a 404 that does NOT invite a submission;
-//   - the dial is charged on the identity reads and on nothing else;
-//   - a pasted Spotify or Deezer link resolves through EVERY spelling the archive stores;
-//   - a batch answers in the single-key SHAPE and spends one unit of allowance PER KEY.
-
 import { type Client } from "@libsql/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -37,7 +20,6 @@ import { readJson, warmOrpcRouter } from "./orpc-test-kit";
 
 let db: Client;
 
-/** A libSQL cell as a string, without leaning on Object's default stringification. */
 const text = (value: unknown): string => (typeof value === "string" ? value : "");
 
 const BASE = "https://www.fluncle.com/api/v1";
@@ -163,7 +145,6 @@ describe("the key rails", () => {
 
     const message = ((await readJson(response)) as { message: string }).message.toLowerCase();
 
-    // A machine caller must never be pointed at the crew's triage queue.
     expect(message).not.toContain("submit");
     expect(message).not.toContain("submission");
   });
@@ -209,9 +190,6 @@ describe("the dial", () => {
       `select action, count from rate_limit_counters where action like 'get_track_identity%' order by action`,
     );
 
-    // Three ISRCs in one request, three units off each dial. Charged as one, a caller pacing
-    // themselves under the per-minute dial would walk the archive N times faster than the
-    // published number says they can.
     expect(after.rows.map((row) => Number(row.count))).toEqual([
       BATCH_ISRCS.length,
       BATCH_ISRCS.length,
@@ -219,16 +197,10 @@ describe("the dial", () => {
   });
 });
 
-// ── THE PLATFORM-LINK KEYS ─────────────────────────────────────────────────────────────────────
-// One Spotify track is spelled three different ways in this archive depending on which road the
-// recording arrived by, and a pasted link has to find all three or the answer depends on an
-// accident of birth. Each row below is one of those roads.
-
-/** A published finding: the row IS keyed by its Spotify id (publish.ts). */
 const SPOTIFY_FINDING_ID = "4cOdK2wGLETKBW3PvgPWqT";
-/** The freshness tap's catalogue mint: `sp_<spotify id>` (label-releases.ts). */
+
 const SPOTIFY_TAP_ID = "1AbCdEfGhIjKlMnOpQrStU";
-/** A crawler row keyed by its MusicBrainz mint, wearing an anchor's `spotify_uri` (anchor.ts). */
+
 const SPOTIFY_ANCHORED_ID = "7GhIjKlMnOpQrStUvWxYz0";
 
 const DEEZER_ID = "3135556";
@@ -252,16 +224,15 @@ describe("the platform-link keys", () => {
     const { handleOrpc } = await import("./orpc");
 
     const cases: [string, string][] = [
-      // The published finding, whose row key IS the Spotify id.
       [`https://open.spotify.com/track/${SPOTIFY_FINDING_ID}?si=abc123`, SPOTIFY_FINDING_ID],
-      // The freshness tap's `sp_` mint.
+
       [`spotify:track:${SPOTIFY_TAP_ID}`, `sp_${SPOTIFY_TAP_ID}`],
-      // A crawler row wearing an anchor's `spotify_uri` under a MusicBrainz key.
+
       [
         `https://open.spotify.com/intl-nl/track/${SPOTIFY_ANCHORED_ID}`,
         "mb_aaaaaaaa-bbbb-cccc-dddd-ffffffffffff",
       ],
-      // A bare id, which the API accepts because the query key already names the platform.
+
       [SPOTIFY_FINDING_ID, SPOTIFY_FINDING_ID],
     ];
 
@@ -337,8 +308,6 @@ describe("the platform-link keys", () => {
   });
 });
 
-// ── THE BATCH ──────────────────────────────────────────────────────────────────────────────────
-
 const BATCH_ISRCS = ["GBABC1234567", "GBABC1234568", "GBABC1234569"];
 
 async function seedBatch(): Promise<void> {
@@ -356,7 +325,7 @@ describe("the ISRC batch", () => {
     await seedBatch();
 
     const { handleOrpc } = await import("./orpc");
-    // Deliberately out of stored order, to prove the answer follows the REQUEST.
+
     const asked = [BATCH_ISRCS[2], BATCH_ISRCS[0], BATCH_ISRCS[1]];
     const response = await handleOrpc(read(`/tracks/-?isrc=${asked.join(",")}`, "4.4.4.4"));
 
@@ -377,13 +346,11 @@ describe("the ISRC batch", () => {
       "b-1",
       "b-2",
     ]);
-    // Each answer carries its own ISRC, which is how a caller pairs it back to what it asked.
+
     expect(body.identity.recordings.map((recording) => recording.identifiers.isrc.value)).toEqual(
       asked,
     );
-    // THE RELATION IS PER KEY. Three keys each matching one recording is three CANONICAL answers;
-    // computed over the flattened batch they would all read `ambiguous`, which is the envelope's
-    // one claim about Fluncle's own opinion, inverted.
+
     expect(body.identity.recordings.every((recording) => recording.relation === "canonical")).toBe(
       true,
     );
@@ -418,7 +385,6 @@ describe("the ISRC batch", () => {
     expect(tooMany?.status).toBe(422);
     expect(((await readJson(tooMany)) as { code: string }).code).toBe("invalid_isrc");
 
-    // Nineteen good keys and one typo is not nineteen answers: the caller has to be told.
     const oneBad = await handleOrpc(read("/tracks/-?isrc=GBABC1234567,nope"));
 
     expect(oneBad?.status).toBe(422);

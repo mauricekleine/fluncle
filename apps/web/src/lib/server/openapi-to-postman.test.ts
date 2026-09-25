@@ -2,11 +2,6 @@ import { describe, expect, it } from "vitest";
 import { generateOpenApiDocument } from "./orpc";
 import { openApiToPostman } from "./openapi-to-postman";
 
-// A self-contained OpenAPI 3.1 fixture exercising the converter's full surface —
-// a $ref request body with typed fields, a REQUIRED query param next to an
-// OPTIONAL one, a path param, and two server-grouped folders. The live generated
-// spec (below) is looser (all-optional query params, inline `unknown` bodies), so
-// it would leave these converter paths untested; this fixture keeps them covered.
 const FIXTURE = {
   components: {
     schemas: {
@@ -122,10 +117,6 @@ describe("openApiToPostman — converter surface (inline fixture)", () => {
   });
 });
 
-// The route at /api/v1/postman.json builds the collection from the GENERATED public
-// spec at request time. This is the real end-to-end check the spec flip needs: the
-// converter must run cleanly over the actual generated document and cover every
-// public op (Postman shows the whole public surface, nothing dropped).
 describe("openApiToPostman — over the generated public spec", () => {
   it("converts the live generated spec into a v2.1 collection covering every op", async () => {
     const document = (await generateOpenApiDocument()) as {
@@ -150,7 +141,6 @@ describe("openApiToPostman — over the generated public spec", () => {
     const itemCount = collection.item.reduce((total, folder) => total + folder.item.length, 0);
     expect(itemCount).toBe(specOperationCount);
 
-    // No admin folder/items leak through (admin is filtered out of the public spec).
     expect(collection.item.map((folder) => folder.name)).not.toContain("admin");
 
     expect(() => JSON.parse(JSON.stringify(collection))).not.toThrow();

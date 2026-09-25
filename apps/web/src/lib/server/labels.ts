@@ -1,24 +1,3 @@
-// The label entity's backing functions — the `artists.ts` / `galaxies-map.ts` twin,
-// consumed by the oRPC handlers (`./orpc/admin-labels.ts`), the `/admin/labels`
-// route loader, the attention queue's read, and the publish path's upsert.
-//
-// ── THE ONE RULE: `seed_state` IS CRAWL SCOPE, NEVER STORAGE ────────────────────
-// A label's seed state answers exactly one question — MAY THE CATALOGUE CRAWLER
-// SEED FROM THIS LABEL? Disabling a label removes it from the NEXT crawl's
-// seed set and touches nothing already stored: no deletion, no hiding, no
-// retroactive effect on tracks, on findings, or on anything a previous crawl
-// brought in. There is deliberately NO function in this module that reads
-// `seed_state` to decide what is shown, kept, or removed — and there must never be
-// one. `listLabels("enabled")` is the ONLY consumer shape: the seed set the
-// crawler reads (crawl.ts). See docs/label-entity.md.
-//
-// Identity is the SLUG, not the name. `tracks.label` stays the raw captured string
-// forever (the audit trail and the re-normalization input); a label row is related
-// to it by `slugify(tracks.label) = labels.slug`, which is what folds `Pilot.` and
-// `Pilot` into one label without a destructive rewrite of the findings. SQLite has
-// no `slugify`, so the fold happens here in TS over a bounded `GROUP BY label` read
-// (one row per DISTINCT label, never a row per track).
-
 import { type Client, type InStatement, type Row } from "@libsql/client";
 import { randomUUID } from "node:crypto";
 import {
@@ -68,35 +47,12 @@ import {
   toHubCountMoveGroups,
 } from "./hub-counts";
 
-// Re-exported so the label module is the one home for label string identity: the crawler
-// (`crawl.ts`) folds MB label names with it, and the alias derivation folds Apple recordLabels
-// with it, so the two agree by construction. `labelFold` is more aggressive than `labelSlug`:
-// it drops ALL non-alphanumerics ("Med School" ⇄ "Medschool"), where the slug keeps the fold's
-// hyphen boundary ("med-school" ≠ "medschool"). See @fluncle/contracts/util/galaxy-slug.
 export { labelFold };
 
-// The thin-content gate for label pages: a `/label/<slug>` page indexes (and enters the
-// sitemap) only with this many RENDERABLE tracks or more — its findings plus the quieter
-// rows beneath them, because both are real content on the page. Below it the page still
-// serves 200 (deep links + link equity) but is `noindex, follow` and stays out of the
-// sitemap. Same value and same job as `ARTIST_INDEX_MIN_FINDINGS`; see
-// `ALBUM_INDEX_MIN_TRACKS` for why the count is over renderable tracks rather than
-// findings alone.
 export const LABEL_INDEX_MIN_TRACKS = 3;
 
-// The distributor denylist (U2a) lives in a client-safe module so the deploy-time derivation
-// shares one source of truth; re-exported here as the runtime home the label consumers reach.
 export { DISTRIBUTOR_DENYLIST, isDistributorLabel } from "../label-distributors";
 
-/**
- * A row from the `labels` table (snake_case columns) — exactly what {@link LABEL_COLUMNS} selects.
- *
- * The four IDENTITY columns (`mb_label_id`, `disambiguation`, `founding_date`, `founded_location`)
- * ride this shape because RULING on a label is an identity question: `/admin/labels` asks the
- * operator to decide about "Helix", and a name plus a logo cannot tell him WHICH Helix. They are
- * short text columns on an archive-sized table already being read, so carrying them costs the reads
- * nothing and saves a second query.
- */
 type LabelRow = {
   created_at: string;
   disambiguation: string | null;
@@ -114,14 +70,8 @@ type LabelRow = {
   updated_at: string;
 };
 
-/** One `(label, count)` pair from the distinct-label read over `tracks` (the reconcile backstop). */
 type LabelCountRow = { label: string; n: number };
 
-/**
- * The join key between a raw `tracks.label` string and a `labels` row. Returns
- * `undefined` for a blank or all-punctuation label (e.g. `"."`), which is exactly
- * the set of strings that must NOT mint a label row.
- */
 export function labelSlug(raw: string | null | undefined): string | undefined {
   if (typeof raw !== "string") {
     return undefined;
@@ -151,33 +101,11 @@ function toLabelItem(row: LabelRow, findingCount: number): LabelAdminItem {
   };
 }
 
-/**
- * The `labels` projection every admin/seed read shares — one list, so the reads cannot drift apart
- * and {@link LabelRow} describes all of them. It carries the label's IDENTITY (`mb_label_id`,
- * `disambiguation`, `founding_date`, `founded_location`) alongside its state, because the operator
- * ruling on a label needs to know which label it IS.
- */
 const LABEL_COLUMNS = `id, name, slug, seed_state, ruled_at, scope_changed_at, created_at, updated_at,
    image_key, image_updated_at, mb_label_id, disambiguation, founding_date, founded_location`;
 
-/** The `/admin/labels` section page size — each of the station's sections pages this many. */
 export const LABELS_ADMIN_PAGE_SIZE = 50;
 
-/**
- * The CONFIRMED-ALIAS choke point: does a slug resolve to an existing label through a spelling
- * the operator has already folded in? Returns the canonical `label_id`, or `undefined` when the
- * slug is nobody's confirmed alias. One indexed read on `label_aliases_alias_slug_idx`.
- *
- * This is the correctness trap the whole unit exists for. `tracks.label` is immutable, so a raw
- * string whose spelling an operator folded into another label (via a confirmed alias) would, on
- * the next `ensureLabel` or deploy `reconcileLabels`, re-mint its own slug as a NEW label —
- * un-doing the fold every deploy. Consulting confirmed aliases BEFORE minting closes that.
- *
- * EXPORTED because SEARCH asks the same question on the read side (`search.ts`): a filter naming a
- * folded spelling must reach the canonical label, through THIS one resolver rather than a second
- * spelling of the same join. Only `confirmed` ever resolves — a `candidate` is an unruled
- * derivation guess, and search must never answer from one.
- */
 export async function resolveConfirmedAliasLabelId(
   slug: string,
   client?: Pick<Client, "execute">,
@@ -191,39 +119,6 @@ export async function resolveConfirmedAliasLabelId(
   return typedRows<{ label_id: string }>(result.rows)[0]?.label_id;
 }
 
-/**
- * Ensure a `labels` row exists for one raw label string, and return its id. A brand-new
- * label enters as `undecided` (the DDL default) — never silently crawled, never silently
- * dropped — and lands in the operator's attention queue as a label to rule on.
- *
- * Idempotent and NON-CLOBBERING: an existing row keeps its `seed_state`, its
- * `ruled_at`, and its display `name` (the first spelling seen wins). A blank or
- * all-punctuation label mints nothing. Called best-effort from the publish path, so
- * a failure here must never block an add — the deploy-time reconcile backstops it.
- *
- * TWO IDENTITIES, resolved in priority order (the `ensureAlbum` twin — read that first):
- *
- *   1. THE MUSICBRAINZ LABEL MBID (`mb_label_id`), when the caller has one — the catalogue
- *      crawler does, off MusicBrainz's release `label-info[].label.id`. It is the STABLE fold
- *      key: two spellings of one label that slugify apart ("Med School" ⇄ "Medschool") resolve
- *      to the SAME row. Resolved FIRST, so a label already folded on this MBID is reused outright.
- *   2. THE CONFIRMED ALIAS (`resolveConfirmedAliasLabelId`) — a spelling the operator has folded
- *      into another label. Then THE SLUG (`slugify(name)`) — the display identity, and the
- *      fallback fold when no MBID exists (the publish path passes none; a discovered label whose
- *      release carries no label MBID has none).
- *
- * When a caller carries an MBID and the row it lands on (minted this call, or pre-existing off the
- * slug/alias because a finding minted it first) has none yet, the MBID is ADOPTED onto that row —
- * fill-empty-only, so a row already folded on a DIFFERENT MBID is never rewritten and the unique
- * index guards a genuine collision. That is what lets a publish-minted label and the crawler's
- * later discovery collapse into one row instead of duplicating. It mirrors the SEED path, which
- * stamps the same column via `setLabelMbLabelId` (label-images.ts) — the two write fill-empty-only,
- * so they never fight.
- *
- * ── ALIAS-AWARE (RFC musickit-second-authority, U2a) ────────────────────────────
- * The crawler reaches this same choke point (`crawl.ts` calls `ensureLabel` on a discovered
- * label), so its discovery path is covered by both the MBID fold and the confirmed-alias fold.
- */
 export async function ensureLabel(
   raw: string | null | undefined,
   mbLabelId?: null | string,
@@ -232,7 +127,6 @@ export async function ensureLabel(
   const db = client ?? (await getDb());
   const mbid = typeof mbLabelId === "string" && mbLabelId.trim() ? mbLabelId.trim() : null;
 
-  // 1. mbid-first: a label already folded on this MusicBrainz MBID wins, whatever its slug.
   if (mbid) {
     const byMbid = await db.execute({
       args: [mbid],
@@ -245,7 +139,6 @@ export async function ensureLabel(
     }
   }
 
-  // 2. the alias/slug path — mint (or reuse) by the operator's fold, then the display identity.
   const slug = labelSlug(raw);
 
   if (!slug || typeof raw !== "string") {
@@ -289,7 +182,6 @@ export async function ensureLabel(
     return undefined;
   }
 
-  // Adopt the MBID onto a pre-existing slug row that has none — fill-empty-only.
   if (!row.mb_label_id) {
     await adoptLabelMbLabelId(row.id, mbid, db);
   }
@@ -297,16 +189,6 @@ export async function ensureLabel(
   return row.id;
 }
 
-/**
- * Adopt a MusicBrainz label MBID onto a row that has none — fill-empty-only (`where mb_label_id
- * is null`). A rare concurrent adoption of the same MBID onto two slugs loses the unique-index
- * race harmlessly; the id is already in the caller's hand, so a throw here must not lose it (the
- * `.catch()` keeps it). A no-op when there is no MBID to adopt.
- *
- * EXPORTED for the crawler, which already holds the row it would adopt onto (`canonicalLabelRow`,
- * crawl.ts) and so reaches the write directly rather than paying {@link ensureLabel}'s resolve to
- * find it again — the crawl commits inside a bounded transaction-op budget.
- */
 export async function adoptLabelMbLabelId(
   labelId: string,
   mbid: null | string,
@@ -327,21 +209,6 @@ export async function adoptLabelMbLabelId(
     .catch(() => undefined);
 }
 
-/**
- * The publish path's one call: mint the label entity for the label Deezer handed back, and
- * stamp the track's `label_id` pointer at it — the indexed edge the public `/label/<slug>`
- * page reads by (schema.ts, `tracks.label_id`). Best-effort and purely additive; the
- * deploy-time reconcile backstops a failure.
- *
- * This writes a POINTER, never a ruling: it can mint an `undecided` label, and it can
- * never move a `seed_state`.
- *
- * THE POINTER IS AN UNCONDITIONAL OVERWRITE, so this is also the RE-POINT path: a track already
- * pointed at label A can land on label B (a re-certify whose Deezer label resolved differently, an
- * adopted alias). `relinkTracksToEntity` is what makes that safe for the maintained hub counts — it
- * censuses the CURRENT pointer first, then debits the source label and credits the new one in the same
- * batch as the UPDATE (keystone 2, lib/server/hub-counts.ts). A no-move re-link counts nothing.
- */
 export async function linkTrackToLabel(
   trackId: string,
   raw: string | null | undefined,
@@ -355,86 +222,39 @@ export async function linkTrackToLabel(
   await relinkTracksToEntity("labels", labelId, [trackId]);
 }
 
-/** A parent or sublabel edge — the name + slug the graph JSON-LD + the visible line read. */
 export type LabelLineageEdge = { name: string; slug: string };
 
-/** The canonical label identity record the public page + JSON-LD read. */
 export type LabelRecord = {
-  /**
-   * The label's voiced public bio (the entity sibling of a finding's `note`), or undefined
-   * when none is authored yet. Optional so the callers that mint a bare `LabelRecord`
-   * (e.g. `getLabelForAlbum`) need not carry it; the surfacing PR reads it off
-   * `getLabelBySlug`. See lib/server/bio.ts.
-   */
   bio?: string;
-  /**
-   * The Discogs label id (`labels.discogs_label_id`), or undefined — the off-site identity anchor
-   * the public Organization JSON-LD emits into `sameAs` (`discogs.com/label/<id>`).
-   */
+
   discogsLabelId: number | undefined;
-  /**
-   * The label's founding place (`labels.founded_location`, MusicBrainz `area.name`), or undefined.
-   * Emitted as the Organization's `location` Place + the visible "Founded … · <place>" line.
-   * Optional — only `getLabelBySlug` carries lineage; a bare edge (`getLabelForAlbum`) omits it.
-   */
+
   foundedLocation?: string;
-  /**
-   * The label's founding date (`labels.founding_date`, MusicBrainz `life-span.begin` verbatim — a
-   * year or a full date), or undefined. Emitted as the Organization's `foundingDate` + the visible
-   * "Founded <date> …" line.
-   */
+
   foundingDate?: string;
   id: string;
-  /**
-   * The label's OWN logo (its resolved Discogs/Wikidata image on R2), or undefined when it has
-   * none yet — the caller then falls back to the freshest finding's cover. See label-images.ts.
-   */
+
   logoImageUrl: string | undefined;
-  /**
-   * The MusicBrainz label MBID (`labels.mb_label_id`), or undefined — the off-site identity anchor
-   * the public Organization JSON-LD emits into `sameAs` (`musicbrainz.org/label/<mbid>`).
-   */
+
   mbLabelId: string | undefined;
   name: string;
-  /**
-   * The label this one is a SUBLABEL / imprint of (`labels.parent_label_id`), resolved to its
-   * name + slug, or undefined. Emitted as the Organization's `parentOrganization` `@id` edge.
-   */
+
   parentLabel?: LabelLineageEdge;
-  /**
-   * The maintained `renderable_track_count`: the page's robots gate, the same one the sitemap
-   * reads. Present on the full `getLabelBySlug` record; a bare edge record carries none.
-   */
+
   renderableTrackCount?: number;
   slug: string;
-  /**
-   * The labels that are sublabels / imprints OF this one (the `parent_label_id` reverse read),
-   * name + slug each — the Organization's `subOrganization` `@id` edges. Empty/undefined for a
-   * label with no children (or a bare edge record).
-   */
+
   subLabels?: LabelLineageEdge[];
 };
 
-// The most sublabels a `/label/<slug>` page's `subOrganization` edges will ever carry. Real imprint
-// families are a handful; the cap defends the page + JSON-LD against a pathological crawl folding
-// hundreds of children onto one parent. An indexed seek on `labels_parent_label_id_idx`, never a scan.
 const LABEL_SUBLABELS_LIMIT = 50;
 
-/**
- * The lineage EDGES for one label — its parent (the imprint it belongs to) resolved to name + slug,
- * and the sublabels that point back at it. Two indexed seeks (`labels` PK for the parent,
- * `labels_parent_label_id_idx` for the children), bounded by {@link LABEL_SUBLABELS_LIMIT}. Called
- * only by the page read, so it is one extra round trip on a single-label render, never a catalogue scan.
- */
 async function getLabelLineageEdges(
   labelId: string,
   parentLabelId: string | null,
 ): Promise<{ parentLabel?: LabelLineageEdge; subLabels: LabelLineageEdge[] }> {
   const db = await getDb();
 
-  // The parent seek (labels PK) and the children seek (labels_parent_label_id_idx) are mutually
-  // independent once `labelId` / `parentLabelId` are known, so they run in ONE round trip rather
-  // than two serial ones — a full trip to Ireland saved on every label page load.
   const [parentResult, childrenResult] = await Promise.all([
     parentLabelId
       ? db.execute({
@@ -460,7 +280,6 @@ async function getLabelLineageEdges(
   };
 }
 
-/** Resolve one label by its public slug (undefined = no such label). */
 export async function getLabelBySlug(slug: string): Promise<LabelRecord | undefined> {
   const db = await getDb();
   const result = await db.execute({
@@ -506,24 +325,6 @@ export async function getLabelBySlug(slug: string): Promise<LabelRecord | undefi
   };
 }
 
-/**
- * The label an album came out on — the album → label edge of the graph, and the one place the
- * graph CLOSES (it is stamped into the `MusicAlbum` JSON-LD as `albumRelease.recordLabel`).
- * An album's tracks can in principle disagree (a compilation, a re-press); the MOST COMMON
- * label wins, which is the honest answer and a stable one. Undefined when no finding on the
- * album carries a label.
- *
- * Only CERTIFIED tracks vote, and it is now the HONEST reason carrying this alone: this edge
- * says "the label Fluncle's finding came out on", and a crawled row that merely shares a
- * release is not evidence about that. Let the whole catalogue vote and a compilation's thirty
- * crawled rows outvote the one finding the page is ABOUT.
- *
- * It also has a structural reason — a zero-finding label 404'd, so an uncertified
- * winner would point the link (and an `@id` in the schema.org graph) at a page that was not
- * there. That reason is GONE: a label earns a page on its content now, so an uncertified
- * winner would resolve fine. The findings-only vote stays anyway, because it was always the
- * better answer on the merits; it just no longer has a safety net under it.
- */
 export async function getLabelForAlbum(albumId: string): Promise<LabelRecord | undefined> {
   const db = await getDb();
   const result = await db.execute({
@@ -540,9 +341,6 @@ export async function getLabelForAlbum(albumId: string): Promise<LabelRecord | u
 
   const row = typedRows<{ id: string; name: string; slug: string }>(result.rows)[0];
 
-  // The album → label edge closes the graph in JSON-LD (recordLabel) — a name/slug pointer, never
-  // the label's own identity anchors or image — so the logo and the MB/Discogs ids are left
-  // undefined here (they belong to the label PAGE's Organization node, not this edge).
   return row
     ? {
         discogsLabelId: undefined,
@@ -555,23 +353,6 @@ export async function getLabelForAlbum(albumId: string): Promise<LabelRecord | u
     : undefined;
 }
 
-/**
- * The cover columns of ONE representative track, packed into a single correlated subquery.
- *
- * A cover now has two possible sources — the album's OWNED ≤1200² master on Fluncle's R2 (served
- * through the Cloudflare Images ladder) and the raw provider URL the track was captured with — and
- * `bestAlbumCoverUrl` needs FOUR columns to choose between them. Four separate correlated
- * subqueries could each land on a different track, pairing one record's master with another's
- * fallback; `json_object` keeps them on one picked row by construction, at one subquery's cost.
- *
- * The pick runs alone, then the cover is read once. `pick` is a scalar subquery returning only the
- * winning `track_id`; the outer read fetches that one row by primary key and joins its album.
- * Joining `albums` inside the pick would seek an album, and read the late `tracks.album_id` column
- * of a wide row, for every candidate track before one is kept.
- *
- * `pick` is a CONSTANT fragment from this file (never reader input). The album join is `left`, so
- * a track with no album entity still yields its raw cover.
- */
 function coverJsonSelect(pick: string): string {
   return `(select json_object('u', c.album_image_url, 'k', a2.image_key,
                               's', a2.image_state, 'v', a2.image_updated_at)
@@ -580,24 +361,6 @@ function coverJsonSelect(pick: string): string {
             where c.track_id = ${pick})`;
 }
 
-/**
- * The label's cover track: among its tracks with cover art, the freshest release, an undated
- * release only when no dated release has art, ties to the lower `track_id`. That is the total order
- * `release_date is null asc, release_date desc, track_id asc`, first row kept.
- *
- * It is spelled as two seeks so `tracks_label_cover_idx (label_id, release_date, track_id,
- * album_image_url)` answers both from index entries alone. The mixed-direction order above cannot
- * come off a plain ASC index (the index walks `release_date desc` only as `track_id desc`), so
- * written as one `order by … limit 1` it reads and sorts every track on the label.
- *   1. `max(release_date)` over the label's tracks with art: the last entry of the label's range
- *      that carries art. `max` skips NULLs, so it is NULL exactly when no dated track has art.
- *   2. The lowest `track_id` with art on that date. `is` is null-safe equality, so a NULL maximum
- *      selects the undated tracks — the order's `release_date is null asc` term — and the seek is
- *      `(label_id=? AND release_date=?)` walked in `track_id` order, stopping at the first entry.
- * Both steps compare `release_date` under the column's BINARY collation, the same comparison the
- * order uses, so the kept row is identical. `label-hub-cover.integration.test.ts` pins the parity
- * against the single ordered pick and the index-only plan.
- */
 const LABEL_COVER_PICK = `(select t2.track_id
                              from tracks t2
                             where t2.label_id = labels.id and t2.album_image_url is not null
@@ -608,15 +371,8 @@ const LABEL_COVER_PICK = `(select t2.track_id
                             order by t2.track_id asc
                             limit 1)`;
 
-/** Any track on a label — the `/labels` hub tile's cover and `get_label`'s, certified or not. */
 export const LABEL_CATALOGUE_COVER_JSON = coverJsonSelect(LABEL_COVER_PICK);
 
-// An ALBUM needs no packed subquery: it OWNS its master columns (`albums.image_key` and friends
-// sit on the row the hub already selects), so albums.ts pairs them with a plain `album_image_url`
-// subquery and calls `bestAlbumCoverUrl` directly. Only labels — whose cover is borrowed from
-// whichever record a track happens to sit on — need the four columns kept on one picked row.
-
-/** The four cover columns `coverJsonSelect` packs, as they come back off the wire. */
 type CoverJson = {
   k?: null | string;
   s?: null | string;
@@ -624,7 +380,6 @@ type CoverJson = {
   v?: null | string;
 };
 
-/** Resolve a `coverJsonSelect` column to the best cover URL — the owned master when resolved. */
 export function coverFromJson(raw: unknown): string | undefined {
   if (typeof raw !== "string" || raw === "") {
     return undefined;
@@ -646,25 +401,9 @@ export function coverFromJson(raw: unknown): string | undefined {
   });
 }
 
-/**
- * Just the NAMES of the labels Fluncle has pulled a banger off — the typeahead pool for the
- * `/tracks` filter's label combobox. Findings-bounded (a label he never certified on is rightly
- * absent), alphabetical, but without the per-group cover/date subqueries a tile read carries —
- * strictly a lighter pass over the same findings join, so it stays archive-bounded (~the label
- * count, not the catalogue). The control still compiles a free-typed string that matches no known
- * name, so this is a suggestion pool, never a closed set.
- */
 export async function listKnownLabelNames(): Promise<string[]> {
   const db = await getDb();
   const result = await db.execute({
-    // `trim(labels.name) <> ''` drops a blank/whitespace-only (or null) name at the source, so the
-    // filter combobox never offers an empty "Any label"-looking row. `trim(null)` is null and
-    // `null <> ''` is not true, so a null name falls out the same way.
-    //
-    // `findings cross join tracks` pins the small certified set as the outer loop: each finding
-    // seeks its track by primary key and its label by id. With no statistics the planner otherwise
-    // rates a full walk of `tracks_label_cover_idx` (every catalogue track's `label_id` + `track_id`)
-    // cheaper than scanning `findings`, and probes `findings` once per catalogue track.
     sql: `select labels.name as name
           from findings
           cross join tracks on tracks.track_id = findings.track_id
@@ -678,38 +417,13 @@ export async function listKnownLabelNames(): Promise<string[]> {
   return typedRows<{ name: string }>(result.rows).map((row) => row.name);
 }
 
-/** A sitemap candidate: an entity whose page clears the thin-content floor. */
 export type EntitySitemapRow = {
   coverImageUrl: string | undefined;
-  /** Freshest finding date on the entity, or undefined when it carries none. */
+
   lastmod: string | undefined;
   slug: string;
 };
 
-/**
- * Every LABEL whose page clears the thin-content floor — findings or no findings.
- *
- * ── WHY THIS IS NOT `listLabelsHubPage` ─────────────────────────────────────────────────
- * That read is the PAGED `/labels` index: one alphabetical `?page=N` window over the same
- * floor-clearing set, for a human to browse. The SITEMAP asks a different question — "what
- * pages exist and may be indexed?" — so it wants the WHOLE set at once (no `limit`/`offset`)
- * and only the slug + `lastmod` a `<url>` needs, never the tile columns. Same floor, same
- * grouped scan; different shape, so they stay two reads (the sitemap must never be paged to a
- * page size, or it would omit every entity past the window and orphan its page).
- *
- * ── THE FLOOR IS APPLIED IN SQL ─────────────────────────────────────────────────────────
- * `where` it, not filtering it in the isolate: a wide crawl mints a `labels` row per imprint
- * it walks past and most will sit on one or two rows, so filtering in TypeScript would drag
- * every one of those stubs across the wire to throw them away (AGENTS.md — never rank or
- * filter a growing table in the Worker). `minTracks` is the caller's constant, so the gate
- * has exactly one definition and the page and the sitemap cannot drift apart.
- *
- * The floor reads the STORED `renderable_track_count` (keystone 2), so the gate is an indexed
- * pre-filter on `labels` and no longer a `having` over a grouped scan of the whole corpus. The
- * `tracks ⋈ findings` join SURVIVES for the two per-row columns a `<url>` needs and the entity
- * row does not carry — `lastmod` (the freshest certified finding's date, `max` over that join)
- * and the cover — but it now walks only the labels the floor already admitted.
- */
 export function labelSitemapWindowStatement(minTracks: number, limit: number, afterSlug?: string) {
   const seek = afterSlug === undefined ? "labels.slug >= ?" : "labels.slug > ?";
 
@@ -770,18 +484,6 @@ export async function listLabelSitemapRows(
   }));
 }
 
-/**
- * The FRESHEST `lastmod` across every indexable `/label/<slug>` page — the one date the sitemap
- * INDEX needs from this bag, and the twin of `maxArtistSitemapLastmod` / `maxAlbumSitemapLastmod`.
- * Identical in value to `max` over {@link listLabelSitemapRows}'s dates, computed in SQL so the
- * index never drags a row per label into the isolate to find it (AGENTS.md — never rank or
- * aggregate a growing table in the Worker).
- *
- * It is driven from `findings` OUTWARD, not from `labels` inward, and that is the shape: the
- * answer is the newest CERTIFIED date, so the certified corpus — the small table — is the natural
- * outer, and every hop from it is a unique-key lookup (`tracks.track_id` PK → `labels.id` PK).
- * The walk is therefore bounded by the findings count, never by `tracks`.
- */
 export async function maxLabelSitemapLastmod(minTracks: number): Promise<string | undefined> {
   const db = await getDb();
   const result = await db.execute({
@@ -796,96 +498,20 @@ export async function maxLabelSitemapLastmod(minTracks: number): Promise<string 
   return typedRows<{ lastmod: string | null }>(result.rows)[0]?.lastmod ?? undefined;
 }
 
-// ── THE UNIFIED HUB: one catalogue-scale index per entity ─────────────────────────────────────
-//
-// `/labels`, `/albums`, and `/artists` are each ONE index of every entity Fluncle holds —
-// certified findings and the wider catalogue alike, alphabetical, in a single paginated list (the
-// `/tracks` hub's shape, one node type up). The old two-section shape (Fluncle's editorial list on
-// top, the crawler's quiet tail below) is retired: the operator's ruling is one unified index, with
-// a certified entity distinguished VISUALLY — its name takes the certification light (DESIGN.md's
-// Unlit Rule, Eclipse Gold) — never VERBALLY (no badge, no tier heading, no count of findings).
-//
-// Each row carries its name, slug, cover, its RENDERABLE track count (findings + the quieter rows,
-// the superset noun the tile prints), and a `certified` flag (≥1 coordinate-bearing finding). ONE
-// navigation model serves humans and crawlers alike — every page SSRs one bounded slice behind a
-// `?page=N` pager, so every tile is reachable as a real <a> and nothing depends on running JS.
-
-/** The hub read's page size, shared by all three entity indexes. */
 export const CATALOGUE_HUB_DEFAULT_LIMIT = 48;
 
-/** A label tile in the unified `/labels` index — lit (certified) or unlit, one row shape for both. */
 export type LabelHubEntry = {
-  /** True ⇔ the label carries ≥1 coordinate-bearing finding — the certification light, visual only. */
   certified: boolean;
-  /** A representative cover from any of the label's tracks (a finding cover when it has one). */
+
   coverImageUrl: string | undefined;
-  /** The label's OWN logo (its resolved Discogs/Wikidata image on R2), preferred over the cover. */
+
   logoImageUrl: string | undefined;
   name: string;
   slug: string;
-  /** Renderable tracks on the label — findings plus the quieter rows, the tile's "N tracks". */
+
   trackCount: number;
 };
 
-// ── THE ?page=N PAGED INDEX: the whole hub becomes internal links ─────────────────────────────────
-//
-// Every page SSRs one OFFSET slice of the WHOLE entity set behind a `?page=N` URL so every tile is
-// reachable as a real <a> — no crawlable-link gap, no dependence on running JS, and the footer stays
-// reachable at every catalogue size. One operation, three tables — the generic below takes the
-// entity-specific SQL FRAGMENTS as constants (never reader input; every value is bound), exactly as
-// `catalogue-groups.ts`'s `fetchGroupTracks` does, so the labels/albums/artists reads cannot drift
-// apart.
-//
-// ── SCALE: THE GATE READS THE STORED COUNTS (keystone 2) ───────────────────────────────────────
-//
-// `labels`, `albums` and `artists` each carry two MAINTAINED integers — `renderable_track_count`
-// and `certified_finding_count`. Their canonical semantics live on `artists.certified_finding_count`
-// (schema.ts); the delta write side is lib/server/hub-counts.ts. They are the stored mirrors of the
-// aggregates every read in this section would otherwise recompute over the growing tables:
-//
-//   `HUB_CERTIFIED`        `sum(findings.log_id is not null)`  ⇒  `<entity>.certified_finding_count`
-//   `HUB_RENDERABLE`       certified + the findings-free rows  ⇒  `<entity>.renderable_track_count`
-//   `HUB_INCLUSION_HAVING` `certified > 0 or renderable >= ?`  ⇒  {@link hubInclusionWhere}
-//
-// So the gate no longer walks `entity ⋈ tracks left join findings` and groups it — it FILTERS the
-// small entity table by two stored integers, and each entity's `<entity>_hub_listing_idx` (schema.ts)
-// holds exactly that filtered set in slug order (see {@link hubInclusionWhere}). The totals, the A–Z
-// lane, the pagination offsets and the alphabetical order all run over that index, the name-search
-// LIKE over the entity table alone, and a hub row's `track_count` / `certified` come off the same
-// two columns. Measured at
-// 150k hosted: the labels gate 262 ms → 45 ms (5.8×), the artists gate 2,075 ms → 45 ms (46×, over
-// ~225k `track_artists` edges). The `count(*) over ()` window the paged shape used is likewise now
-// a `count(*)` over the entity table.
-//
-// THE ONE DIVERGENCE, and it is the write side's definition rather than a new one: the stored
-// `certified_finding_count` keys off `tracks.is_catalogue = 0` (a `findings` row EXISTS), where the
-// old aggregate keyed off `findings.log_id is not null` (that row also carries a coordinate). The
-// two differ only for a coordinate-less finding straggler — a state schema.ts describes as
-// momentary, whose one-time backfill has run — and slice A verified the stored pair exact against
-// production. Everything else is identical by construction.
-
-/**
- * The hub inclusion gate over an entity's STORED counts, single-sourced: a CERTIFIED entity is
- * always in; an uncertified catalogue entity is in only when its page clears the thin-content
- * floor. `alias` is the entity table's name or alias as the read spells it (`labels`, `albums`,
- * `a`) — a CONSTANT from the query fragments below, never reader input — and `floor` is that
- * entity's floor constant.
- *
- * THE FLOOR IS AN INLINED LITERAL, NEVER A BOUND `?`. The term is the exact expression of each
- * entity's `<entity>_hub_listing_idx` partial WHERE (schema.ts). SQLite admits that index for a
- * statement carrying the same expression, but it drops the term from the per-row check only when
- * the floor is the same literal: with a bound floor the plan still names the index while every
- * entry seeks its table row to re-test the counters, which is the whole-table read the index
- * exists to remove. `entity-hub-seek.integration.test.ts` pins both halves.
- *
- * Parenthesized on purpose: it is a `where` term now, so it has to compose with a name filter's
- * `and` without the inner `or` escaping the gate.
- *
- * The web hubs (`listHubPage`), the MCP browse (`listCatalogueBrowsePage`), the API list ops, the
- * three bio worklists and search's entity gate all drive off THIS one helper, so no two of them can
- * disagree on which entities exist. `hub-stored-counts.integration.test.ts` pins every one of those
- * consumers against a world where the columns and the raw edges deliberately disagree.
- */
 export function hubInclusionWhere(alias: string, floor: number): string {
   if (!Number.isSafeInteger(floor) || floor < 0) {
     throw new Error(`hub floor must be a non-negative integer constant, got ${floor}`);
@@ -894,22 +520,10 @@ export function hubInclusionWhere(alias: string, floor: number): string {
   return hubGateSql(alias, String(floor));
 }
 
-/** The gate's one spelling with the floor as given: a literal in a statement, `?` in an address. */
 function hubGateSql(alias: string, floor: string): string {
   return `(${alias}.certified_finding_count > 0 or ${alias}.renderable_track_count >= ${floor})`;
 }
 
-/**
- * The WHOLE gate for one entity read: the stored-count inclusion gate above, plus that hub's own
- * visibility term when it carries one. Every gated statement below compiles from this single
- * function, so the total, the A–Z lane, the page slice, the seek boundaries and the name filter
- * cannot disagree about which entities the hub contains.
- *
- * The visibility term is a per-row check on top of the entity's hub listing index rather than part
- * of it: the index still serves the scan and the order, and the term probes a tiny operator-authored
- * table. It is keyed into {@link entityAnchorAddress} beside the gate, so changing it changes the
- * clause hash and cached page anchors recompute rather than serve a stale membership.
- */
 function entityGateWhere(
   query: Pick<CatalogueEntityPageQuery, "alias" | "floor" | "visibilityWhere">,
 ): string {
@@ -918,14 +532,10 @@ function entityGateWhere(
   return query.visibilityWhere ? `${gate} and ${query.visibilityWhere}` : gate;
 }
 
-/** The stored RENDERABLE count, qualified by an entity read's table name/alias — the thin-content
-    floor's own term (`>= floor`), which is the SITEMAP's narrower gate, not the browsable index's. */
 function hubRenderableColumn(alias: string): string {
   return `${alias}.renderable_track_count`;
 }
 
-/** A raw hub TILE row — the union of every tile column the three entity kinds select. The gated scan
-    stamps `track_count` + `certified` onto it; the rest are the entity's own columns. */
 type CatalogueHubRow = {
   certified?: number | null;
   cover_json?: string | null;
@@ -939,15 +549,6 @@ type CatalogueHubRow = {
   track_count: number;
 };
 
-/**
- * The entity-specific SQL for ONE hub, as CONSTANT fragments (never reader input).
- *
- * `entity` is the entity table with its alias if it has one (`labels`, `artists a`) — the ONLY table
- * every read here touches now that the gate is two stored columns: the GATED SCAN filters it, and
- * the TILE LOOKUP re-reads it for the ≤48 slugs the page shows. `alias` is how the read spells that
- * table when it qualifies a column (`labels`, `a`), which is what the count columns and
- * {@link hubInclusionWhere} are prefixed with. `select` adds the tile columns, `mapRow` reads them.
- */
 export type CatalogueEntityPageQuery = {
   alias: string;
   entity: string;
@@ -956,43 +557,21 @@ export type CatalogueEntityPageQuery = {
   idExpr: string;
   nameExpr: string;
   slugExpr: string;
-  /**
-   * An extra CONSTANT term ANDed onto the gate for hubs whose entity can be hidden independently of
-   * its counts — today only `artists`, which a global `unlisted` rule takes off the site
-   * (lib/server/artist-visibility.ts). Absent on a hub with nothing to hide.
-   */
+
   visibilityWhere?: string;
 };
 
 export type CatalogueHubQuery<Entry> = CatalogueEntityPageQuery & {
   mapRow: (row: CatalogueHubRow) => Entry;
-  /**
-   * The entity's display-name column (e.g. `labels.name`, `a.name`) — the column the optional NAME
-   * FILTER matches against (`where <nameExpr> like ?`). It is a bare grouped column of the entity
-   * table, never reader input, so it interpolates into the gated scan the same way `from`/`groupBy` do.
-   */
+
   select: string;
 };
 
-/**
- * The count of INDEXABLE pages for one hub — every entity whose page clears the thin-content floor
- * (`renderable_track_count >= floor`). That is exactly the set the entity's `list…SitemapRows` enumerates
- * and the sitemap exposes as live, indexable public pages; `/admin/funnel`'s public-surfaces card
- * reads it so the card can never disagree with what search engines can reach.
- *
- * ONE `count(*)` over the entity table, gated by its STORED `renderable_track_count` — the same
- * column the entity's sitemap reader now filters on, so the card and the sitemap cannot drift. Note
- * the gate here is `renderable >= floor` ALONE (the sitemap's indexable set), NOT the wider
- * {@link hubInclusionWhere} (which also admits sub-floor CERTIFIED entities into the browsable
- * index). It replaced a grouped `count(*)` wrapper over `entity ⋈ tracks left join findings`; no
- * growing table is touched at all now.
- */
 export async function countIndexableHubEntities(
   query: Pick<CatalogueHubQuery<unknown>, "alias" | "entity" | "floor" | "visibilityWhere">,
 ): Promise<number> {
   const db = await getDb();
-  // The hub's visibility term rides here too: a hidden entity is absent from the sitemap, so the
-  // card's number and the sitemap's membership stay the same set.
+
   const visibility = query.visibilityWhere ? ` and ${query.visibilityWhere}` : "";
   const result = await db.execute({
     args: [query.floor],
@@ -1004,68 +583,30 @@ export async function countIndexableHubEntities(
   return Number(typedRows<{ n: number }>(result.rows)[0]?.n ?? 0);
 }
 
-/**
- * Escape the LIKE metacharacters in a reader's search term so a literal `%`, `_`, or `\` matches
- * itself rather than acting as a wildcard. The pattern is bound as `%<escaped>%` with an explicit
- * `escape '\'` clause (see `listHubPage`), so a search for "50%" finds "50%" and not everything.
- */
 function escapeLikePattern(term: string): string {
   return term.replace(/[\\%_]/g, (char) => `\\${char}`);
 }
 
-/** One NUMBERED page of a hub's findings-free section — the crawlable `?page=N` variant's payload. */
 export type CatalogueHubNumberedPage<Entry> = {
   items: Entry[];
-  /**
-   * Each present first letter → the page its first entity lands on (the A–Z fast lane). Absent
-   * when the reader did not ask for a lane (`/albums` has none) or on a hub that carries its own
-   * (`/tracks` has a YEAR lane instead).
-   */
+
   letters?: CatalogueHubLetter[];
   page: number;
   pageCount: number;
-  /** Every floor-clearing entity the hub carries (certified + catalogue), counted in SQL — the
-      pager's key and the masthead's total. */
+
   total: number;
 };
 
-/** A present first letter of a name-sorted hub, mapped to the page its first entity lands on. */
 export type CatalogueHubLetter = { letter: string; page: number };
 
-/**
- * A page past the end of a pager does not exist, and says so — the twin of
- * `CataloguePageOutOfRangeError` (catalogue-groups.ts), same semantics: a `?page=99` on a 3-page hub
- * is NOT clamped to page 1 (that would be a second URL for page 1's tiles, an infinite supply of
- * them for a crawler), it throws so the route can 404. Kept a hub-local class to keep labels.ts free
- * of a catalogue-groups import (which would close an artists→labels→catalogue-groups cycle).
- *
- * The three ENTITY hubs do not raise it — `listHubPage` returns an honest empty page past the end
- * and each ROUTE 404s off `page > pageCount`. `/tracks` (its own reader) still throws.
- */
 export class CatalogueHubPageOutOfRangeError extends Error {}
 
-/**
- * The unified entity order as the shallow reads spell it over their `gated` CTE. It also names the
- * order inside the persisted boundary address ({@link entityAnchorAddress}); the boundary
- * statements spell the same order on the entity table's own columns ({@link entityHubOrderBy}).
- */
 export const ENTITY_HUB_ORDER_BY = "g.slug asc, g.id asc";
 
-/**
- * The entity order on the entity table's own columns: one literal owns every boundary window,
- * offset page, and seek page. `slug` is unique and never NULL, and it is the key of the entity's
- * UNIQUE hub listing index, so the planner walks that index in order (the `id` tiebreak is implied
- * by uniqueness) instead of reading the whole table into a temp b-tree.
- */
 export function entityHubOrderBy(query: Pick<CatalogueEntityPageQuery, "idExpr" | "slugExpr">) {
   return `${query.slugExpr} asc, ${query.idExpr} asc`;
 }
 
-/**
- * The strict alphabetical suffix after one entity boundary, spelled as a slug range plus a residual
- * so the hub listing index serves it as `SEARCH … (slug>?)`. `slug >= k and (slug > k or id > i)` is
- * exactly `slug > k or (slug = k and id > i)`. Slugs are non-null.
- */
 export function entityHubSeekClause(
   query: Pick<CatalogueEntityPageQuery, "idExpr" | "slugExpr">,
   anchor: HubPageAnchor,
@@ -1076,18 +617,10 @@ export function entityHubSeekClause(
   };
 }
 
-/** The boundary columns a fingerprint probe and an anchor extraction need: the row id and slug. */
 function entityBoundaryColumns(query: CatalogueEntityPageQuery): string {
   return `${query.idExpr} as id, ${query.slugExpr} as slug`;
 }
 
-/**
- * One ordered entity list read straight off the entity table: the shared hub gate as its only
- * clause, and the entity's hub listing index (keyed on slug, partial on exactly that gate) as its
- * access path and its order. Every boundary statement (extraction, offset, seek) compiles from it,
- * so they cannot disagree on rank, and the offset and seek pages read only the index entries up to
- * their window plus the table rows they return, instead of the whole gated set.
- */
 function catalogueEntityPageShape(
   query: CatalogueEntityPageQuery,
   pageSize: number,
@@ -1106,7 +639,6 @@ function catalogueEntityPageShape(
   };
 }
 
-/** SQL-only sparse boundary extraction for one entity list. */
 export function catalogueEntityAnchorExtractionQuery(
   query: CatalogueEntityPageQuery,
   pageSize: number,
@@ -1116,11 +648,6 @@ export function catalogueEntityAnchorExtractionQuery(
   );
 }
 
-/**
- * Direct entity offset shape: every unfiltered page served without boundaries, the fingerprint's
- * first-row probe, and the hosted proof artifact. It walks the hub listing index in slug order, so
- * the rows the offset skips never read the table.
- */
 export function catalogueEntityOffsetPageQuery(
   query: CatalogueEntityPageQuery,
   pageSize: number,
@@ -1134,7 +661,6 @@ export function catalogueEntityOffsetPageQuery(
   );
 }
 
-/** Entity seek shape: one slug range from the nearest boundary, never UNION branches. */
 export function catalogueEntitySeekPageQuery(
   query: CatalogueEntityPageQuery,
   pageSize: number,
@@ -1145,7 +671,6 @@ export function catalogueEntitySeekPageQuery(
   return hubSeekPageQuery(catalogueEntityPageShape(query, pageSize, projection), page, anchors);
 }
 
-/** The gated total, counted off the entity's hub listing index without reading a table row. */
 export function catalogueEntityCountQuery(query: CatalogueEntityPageQuery) {
   return {
     args: [],
@@ -1167,14 +692,9 @@ function entityAnchorAddress(
         floor: query.floor,
         orderBy: ENTITY_HUB_ORDER_BY,
         pageSize,
-        // The gate with its floor as a placeholder: `floor` is keyed beside it, so the address names
-        // the same membership however a statement spells the literal, and boundaries already
-        // persisted under this address stay valid.
+
         where: hubGateSql(query.alias, "?"),
-        // The hub's own visibility term, keyed SEPARATELY so it is part of the address rather than
-        // invisible to it. It is a membership predicate like the gate: a persisted boundary
-        // computed under one spelling of it is wrong under another, so changing it has to
-        // recompute the anchors rather than serve a stale window.
+
         whereVisibility: query.visibilityWhere ?? null,
       }),
     ),
@@ -1182,14 +702,6 @@ function entityAnchorAddress(
   };
 }
 
-/**
- * Every statement one entity-list read needs, as ONE `"read"` batch. libSQL runs a read batch inside
- * a single read-only transaction, so the gated total, the first row, the boundaries, and the page
- * slice all see the same snapshot. Independent executes can straddle a counter write that moves a
- * row across the gate: the page's rows then disagree with its own total (an in-range last page can
- * even come back empty), boundaries can be stored under a fingerprint they do not match, and the
- * hubs' edge cache serves such a page to every reader until it revalidates.
- */
 async function readOneSnapshot(statements: InStatement[]): Promise<Row[][]> {
   const db = await getDb();
   const results = await db.batch(statements, "read");
@@ -1208,8 +720,6 @@ async function refreshCatalogueEntityAnchors(
   pageSize: number,
   surface: "browse" | "hub",
 ): Promise<void> {
-  // The boundaries and the fingerprint they are stored under come from one snapshot, so a stored
-  // fingerprint always describes the corpus its boundaries were cut from.
   const [anchorRows = [], countRows = [], firstRows = []] = await readOneSnapshot([
     catalogueEntityAnchorExtractionQuery(query, pageSize),
     catalogueEntityCountQuery(query),
@@ -1244,12 +754,6 @@ function scheduleCatalogueEntityAnchorRefresh(
   );
 }
 
-/**
- * The per-initial counts of the gated set — the A–Z lane's input, counted off the entity's hub
- * listing index without reading a table row. Their sum is exactly the gated total (every gated row
- * has a slug and lands in one group), so a lane-carrying page reads that index once for both
- * instead of once for the count and again for the lane.
- */
 export function catalogueEntityLetterCountsQuery(query: CatalogueEntityPageQuery) {
   return {
     args: [],
@@ -1261,12 +765,10 @@ export function catalogueEntityLetterCountsQuery(query: CatalogueEntityPageQuery
   };
 }
 
-/** The statement behind a page's gated total: the A–Z lane's per-initial counts when it has one. */
 function catalogueEntityTotalQuery(query: CatalogueEntityPageQuery, withLetters: boolean) {
   return withLetters ? catalogueEntityLetterCountsQuery(query) : catalogueEntityCountQuery(query);
 }
 
-/** The gated total (and the A–Z lane when asked) read off {@link catalogueEntityTotalQuery}. */
 function catalogueEntityTotalFromRows(
   rows: Parameters<typeof typedRows>[0],
   withLetters: boolean,
@@ -1287,7 +789,6 @@ function catalogueEntityTotalFromRows(
   };
 }
 
-/** The unified entity order in the isolate, for rows whose statement carries no order guarantee. */
 function compareSlugThenId(
   left: { id: string; slug: string },
   right: { id: string; slug: string },
@@ -1303,17 +804,6 @@ function compareSlugThenId(
           : 0;
 }
 
-/**
- * One deep page off persisted boundaries, or `undefined` when none are stored yet (a best-effort
- * build is scheduled and the caller serves the direct slice).
- *
- * Every statement reads the entity's hub listing index: the gated total that keys the fingerprint
- * (folded from the A–Z lane's per-initial counts when the page carries one) counts it without a
- * table row, and the fingerprint's first row and the page itself walk it in slug order — the first
- * row stops at the first gated entity, and the seek stops after its remainder plus one page. All
- * three read one snapshot ({@link readOneSnapshot}); the fingerprint decision only schedules a
- * refresh, so the seek never waits on it.
- */
 async function anchoredCatalogueEntityRows(
   query: CatalogueEntityPageQuery,
   page: number,
@@ -1357,14 +847,6 @@ async function anchoredCatalogueEntityRows(
   };
 }
 
-/**
- * One unfiltered page of an entity list at any depth: off persisted boundaries when a deep page has
- * them ({@link anchoredCatalogueEntityRows}), otherwise the direct slug-ordered offset slice beside
- * the gated total. Either way every statement reads the entity's hub listing index plus the table
- * rows the page returns, so the shallow and deep pages cannot disagree on the gate, the order, or
- * the counts, and a page's statements share one snapshot ({@link readOneSnapshot}), so its rows
- * cannot disagree with its own total.
- */
 async function unfilteredCatalogueEntityRows(
   query: CatalogueEntityPageQuery,
   page: number,
@@ -1399,45 +881,6 @@ async function unfilteredCatalogueEntityRows(
   };
 }
 
-/**
- * One numbered page of the WHOLE entity index — certified findings + the wider catalogue,
- * alphabetical — plus its total and (optionally) its A–Z lane.
- *
- * ── THE SERVING LADDER ──────────────────────────────────────────────────────────────────────────
- * An unfiltered page reads the entity's hub listing index (`<entity>_hub_listing_idx`, keyed on slug
- * and partial on exactly the gate): the gated total, or the A–Z lane's per-initial counts it folds
- * out of, counts that index without reading a table row, and the page walks it in slug order,
- * reading the table only for the rows it returns. A shallow page, or a deep one with no stored
- * boundaries yet, takes the direct offset slice; a deep page with boundaries seeks from the nearest
- * one (one slug range, no `union all` branches, plus the nearest-anchor offset remainder). A page's
- * total and slice are one read batch, so they describe one snapshot. Missing
- * boundaries schedule a best-effort build; stale boundaries serve and schedule refresh. A
- * NAME-FILTERED page reads the entity table once through a materialized gated CTE, because its
- * `like '%…%'` has to read every gated row's name wherever the rows come from. Every read is over
- * the small entity table and its stored counters, never tracks.
- *
- * ── WHAT THE GATE ADMITS ────────────────────────────────────────────────────────────────────────
- * A CERTIFIED entity is always in (`certified_finding_count > 0`); an uncertified catalogue entity is
- * in only when its page clears the thin-content floor (`renderable_track_count >= floor`). That
- * disjunction is the whole ruling: the certified rows the editorial section carries, and the
- * floor-gated catalogue rows the second section carries, folded into ONE alphabetical list. Both
- * terms are STORED columns on the entity row (keystone 2), so every read here touches the small
- * entity table and no `tracks` / `track_artists` / `findings` at all — the slice carries each row's
- * `certified` flag (the certification light the tile reads) beside its renderable count straight off
- * the row.
- *
- * ── WHY THE TILES ARE A SECOND STATEMENT ────────────────────────────────────────────────────────
- * The page's slice carries only id + slug + renderable count + certified. The tile columns (name,
- * cover, owned-master key) come off a plain indexed `where slug in (…)` lookup of the ≤48 slugs the
- * page actually shows, so the per-row cover subqueries — the one part that still reaches into
- * `tracks` — run 48 times rather than once per entity in the gated set.
- *
- * A page past the end is NOT an error here: it returns an empty slice with the honest `total` and
- * `pageCount`, and the ROUTE decides the 404 off `page > pageCount`. Nothing is ever clamped to page 1.
- *
- * The fragments and the floor are constants from the callers; only the name pattern, boundary, page
- * size, and remainder are bound.
- */
 export async function listHubPage<Entry>(
   query: CatalogueHubQuery<Entry>,
   page: number,
@@ -1471,21 +914,13 @@ export async function listHubPage<Entry>(
   }
 
   const db = await getDb();
-  // Arm 1 is the total (always exactly one row, so an empty page still reports an honest size);
-  // arm 2 is the page's slice, carrying `certified`; arm 3 is the A–Z lane's per-initial counts.
-  // `kind` discriminates; `slug`/`n`/`cert` are one column shape across all three arms (the total
-  // and letter arms carry a 0 placeholder in `cert`).
+
   const letterArm = withLetters
     ? `union all
        select 'letter' as kind, '' as id, substr(g.slug, 1, 1) as slug, count(*) as n, 0 as cert
        from gated g group by substr(g.slug, 1, 1)`
     : "";
 
-  // The NAME FILTER narrows the gated set — a `<nameExpr> like ?` on the entity's name column ANDed
-  // with the gate, so the total, the page's slice, and the A–Z lane all agree (every arm reads the
-  // ONE `gated` CTE). It leaves the gate itself untouched (single-sourced in `hubInclusionWhere`,
-  // which parenthesizes its `or` so this `and` cannot widen it): a name match that does not clear
-  // the floor is still out. The pattern is the one bound value ahead of the page window.
   const result = await db.execute({
     args: [`%${escapeLikePattern(term)}%`, limit, (page - 1) * limit],
     sql: `with gated as materialized (
@@ -1509,8 +944,7 @@ export async function listHubPage<Entry>(
     result.rows,
   );
   const total = Number(rows.find((row) => row.kind === "total")?.n ?? 0);
-  // A compound select gives no cross-arm order guarantee, so the arms are split and re-sorted
-  // here — over 48 slugs and ~27 letters, never a growing set.
+
   const sliced = rows.filter((row) => row.kind === "row").sort(compareSlugThenId);
   const letters = letterPages(
     rows
@@ -1529,11 +963,6 @@ export async function listHubPage<Entry>(
   };
 }
 
-/**
- * The tile columns for one page's slugs — a bounded, index-driven `where slug in (…)` over the
- * entity table alone. Returns them in the slice's slug order (the lookup's own order is not
- * guaranteed), each carrying its renderable count + certified flag off the gated scan.
- */
 async function hubTiles<Entry>(
   query: CatalogueHubQuery<Entry>,
   slice: { cert: number; n: number; slug: string }[],
@@ -1562,12 +991,6 @@ async function hubTiles<Entry>(
   });
 }
 
-/**
- * Fold per-first-char counts (slug-ordered) into one page number per DISPLAY letter. Pure, so
- * `labels.test.ts` pins it. Slugs are lowercase alphanumerics: an a–z lead keeps its letter, any
- * other lead (a digit) folds into "#". The FIRST (smallest-rank) occurrence of a display letter wins
- * its page — digits sort before letters, so "#" is contiguous at the front.
- */
 export function letterPages(
   counts: { letter: string; n: number }[],
   pageSize: number,
@@ -1588,23 +1011,11 @@ export function letterPages(
   return [...byLetter].map(([letter, page]) => ({ letter, page }));
 }
 
-// ── THE FULL A–Z BROWSE: the hub index, MCP-shaped ────────────────────────────────────────────
-//
-// `listHubPage` above already folds certified + floor-clearing catalogue into ONE alphabetical
-// index (the `hubInclusionWhere` gate) for the /artists //albums //labels web pages. The MCP
-// browse tools (list_artists/list_albums/list_labels) need the SAME entity set — same gate, same
-// floor, certified-always-in — but not the web tile: an agent reads name/slug/certified/trackCount,
-// never a cover. So this read shares the ONE gate helper with `listHubPage` (they can never drift on
-// which entities exist) and keeps a lighter projection — the entity NAME is a bare column of the
-// entity table (no cover subquery, no second tile lookup), so one statement answers it.
-
-/** One row of the full A–Z catalogue browse — an entity, whether Fluncle has certified it, its size. */
 export type CatalogueBrowseRow = {
-  /** True when Fluncle has certified at least one finding on the entity (a track with a Log ID). */
   certified: boolean;
   name: string;
   slug: string;
-  /** Renderable tracks the entity carries — its findings plus the quieter catalogue rows. */
+
   trackCount: number;
 };
 
@@ -1612,30 +1023,14 @@ export type CatalogueBrowsePage = {
   items: CatalogueBrowseRow[];
   page: number;
   pageCount: number;
-  /** Every floor-clearing entity the browse carries, counted in SQL — the pager's key. */
+
   total: number;
 };
 
-/**
- * The entity-specific SQL for one browse read, as CONSTANT fragments (never reader input). `entity`
- * is the entity table with its alias if it has one (the gated scan's only table); `alias` is how the
- * read qualifies a column of it. `nameExpr`/`slugExpr` are bare columns off that table.
- */
 export type CatalogueBrowseQuery = CatalogueEntityPageQuery;
 
-/** How many rows one browse page carries — a bounded, documented slice of a catalogue-scale index. */
 export const CATALOGUE_BROWSE_PAGE_SIZE = 50;
 
-/**
- * One numbered page of the full A–Z browse — every entity `listHubPage` would list (certified +
- * floor-clearing catalogue). It reuses {@link hubInclusionWhere} (the ONE gate `listHubPage` drives
- * off, so the MCP browse and the web hubs can never disagree on which entities exist) and the same
- * unfiltered serving ladder over the entity's hub listing index, but keeps a lighter projection than
- * the web hub: the entity NAME is a bare column of the entity table, so there is no second tile
- * lookup and no cover subquery an agent would only discard. The browse page size keeps its own
- * boundaries, independent from the web hub's. A page past the end returns an empty slice with the
- * honest total.
- */
 export async function listCatalogueBrowsePage(
   query: CatalogueBrowseQuery,
   page: number,
@@ -1675,7 +1070,6 @@ export async function listCatalogueBrowsePage(
   };
 }
 
-/** The LABELS hub's `?page=N` + A–Z reads, over every floor-clearing label (certified + catalogue). */
 export const LABELS_HUB_QUERY: CatalogueHubQuery<LabelHubEntry> = {
   alias: "labels",
   entity: "labels",
@@ -1697,28 +1091,17 @@ export const LABELS_HUB_QUERY: CatalogueHubQuery<LabelHubEntry> = {
   slugExpr: "labels.slug",
 };
 
-/** The count of INDEXABLE `/label/<slug>` pages — the floor-clearing set `listLabelSitemapRows`
-    enumerates, for `/admin/funnel`'s public-surfaces card. Reuses `LABELS_HUB_QUERY` (scan + floor). */
 export function countIndexableLabels(): Promise<number> {
   return countIndexableHubEntities(LABELS_HUB_QUERY);
 }
 
-/**
- * One numbered page of the unified `/labels` index (the crawlable `?page=N` view) — every label
- * Fluncle holds, certified and catalogue alike, carrying the A–Z fast lane: each present letter →
- * the page its first label lands on.
- */
 export function listLabelsHubPage(
   page: number,
   nameFilter?: string,
 ): Promise<CatalogueHubNumberedPage<LabelHubEntry>> {
-  // A name search hides the A–Z lane (the reader is looking a label up by name, not browsing the
-  // alphabet), so the letter arm is skipped when a filter is active.
   return listHubPage(LABELS_HUB_QUERY, page, !nameFilter, nameFilter);
 }
 
-// Derives its table + floor from LABELS_HUB_QUERY (the web hub's), so the MCP browse and the
-// /labels page can never diverge on which labels exist; only the projection differs (name inline).
 const LABELS_BROWSE_QUERY: CatalogueBrowseQuery = {
   alias: LABELS_HUB_QUERY.alias,
   entity: LABELS_HUB_QUERY.entity,
@@ -1733,22 +1116,6 @@ export function listLabelsBrowsePage(page: number): Promise<CatalogueBrowsePage>
   return listCatalogueBrowsePage(LABELS_BROWSE_QUERY, page);
 }
 
-// ── THE PUBLIC CATALOGUE LIST/GET API OPS (list_labels / get_label + the album/artist twins) ─────
-//
-// The public API list ops serve the SAME index the web /labels //albums //artists pages do: every
-// entity that clears the unified hub gate (`hubInclusionWhere` — a certified entity is always in,
-// an uncertified one only above the renderable floor). So they are built ON the shared hub reader
-// (`listHubPage`, which already carries the gate, the cover tile lookup, and the pager) rather than
-// a bespoke scan — the API list, the web hub, and the MCP browse can never disagree on which entities
-// exist, and there is no separate scale proof to carry (the shared CTE is the hosted-proven one). The
-// API adds the ONE column the web tile does not project: `findingCount`, the stored
-// `certified_finding_count` read for the page's ≤48 slugs; cover/logo ride the hub row.
-//
-// The GET ops resolve ANY entity that has a page — a below-floor entity the browse index omits still
-// renders on its `/label//album//artist/<slug>` page (just noindex) — so get is intentionally WIDER
-// than the list index.
-
-/** One page of a catalogue list API op — the envelope the handlers wrap in `{ ok, <rows>, … }`. */
 export type CatalogueListPage<Entry> = {
   items: Entry[];
   page: number;
@@ -1756,13 +1123,6 @@ export type CatalogueListPage<Entry> = {
   total: number;
 };
 
-/**
- * Per-slug finding count — the STORED `certified_finding_count` for a BOUNDED set of slugs, read off
- * the same entity rows the gate filters, so it agrees with that query's own certified determination
- * by construction. The API list adds this ONE column the web hub tile does not project; `certified` +
- * `trackCount` already ride the hub row. An entity with no linked tracks now reports 0 rather than
- * being absent from the map — the callers already floor a miss to 0, so the payload is unchanged.
- */
 export async function hubFindingCountsBySlug(
   query: Pick<CatalogueHubQuery<unknown>, "alias" | "entity" | "slugExpr">,
   slugs: string[],
@@ -1790,15 +1150,6 @@ export async function hubFindingCountsBySlug(
   return map;
 }
 
-/**
- * Counts for a BOUNDED SET of slugs — the STORED `certified_finding_count` + `renderable_track_count`
- * off the same entity rows the hub gate filters, so a row's `certified`/`findingCount`/`trackCount`
- * here agree with the hub's determination by construction. The plural sibling of `hubCountsBySlug`,
- * for a caller that already has a handful of slugs in hand (the multi-artist "sounds like these"
- * results) and wants their counts in one indexed read rather than one round trip each. Returns a
- * slug → counts map; a slug that names no entity is absent (one with no tracks now reports zeros,
- * which is what its callers already substituted for a miss).
- */
 export async function hubCountsBySlugs(
   query: Pick<CatalogueHubQuery<unknown>, "alias" | "entity" | "slugExpr">,
   slugs: string[],
@@ -1834,12 +1185,6 @@ export async function hubCountsBySlugs(
   return map;
 }
 
-/**
- * One entity's counts by slug — the `get_*` op's shape, read off the SAME two stored columns the hub
- * gate filters on, so a certified entity's list row and its get read agree. Resolves ANY slug (a
- * below-floor entity the list omits too); an entity with no tracks, and a slug that names none at
- * all, both report zero.
- */
 export async function hubCountsBySlug(
   query: Pick<CatalogueHubQuery<unknown>, "alias" | "entity" | "slugExpr">,
   slug: string,
@@ -1859,13 +1204,6 @@ export async function hubCountsBySlug(
   return { certified: findingCount > 0, findingCount, trackCount: Number(row?.track_count ?? 0) };
 }
 
-/**
- * One alphabetical page of the unified `/labels` index over the API — the `list_labels` read: the
- * SAME floor-clearing set the `/labels` web page and the MCP browse serve (all three off
- * `hubInclusionWhere`), so they can never disagree on which labels exist. Reuses the hub reader
- * for the page + covers + pager, and stamps each row's `findingCount` off the same stored column.
- * Blind to `seed_state` (crawl scope, never storage), like every public label read.
- */
 export async function listLabelsApiPage(page: number): Promise<CatalogueListPage<LabelListItem>> {
   const hub = await listHubPage(LABELS_HUB_QUERY, page, false);
   const findingCounts = await hubFindingCountsBySlug(
@@ -1889,7 +1227,6 @@ export async function listLabelsApiPage(page: number): Promise<CatalogueListPage
   };
 }
 
-/** A representative cover borrowed from any of a label's tracks — the single-label cover read. */
 async function labelCoverUrl(labelId: string): Promise<string | undefined> {
   const db = await getDb();
   const result = await db.execute({
@@ -1900,13 +1237,6 @@ async function labelCoverUrl(labelId: string): Promise<string | undefined> {
   return coverFromJson(typedRows<{ cover_json: string | null }>(result.rows)[0]?.cover_json);
 }
 
-/**
- * One label's full public read — the `get_label` op's shape. Resolves ANY label that has a page (a
- * below-floor label the browse index omits still renders on `/label/<slug>`, just noindex), so get
- * is intentionally wider than the list. Counts come from `hubCountsBySlug` (the same aggregates the
- * hub gate uses), so a certified label's list row and get read agree. Undefined when no label
- * carries the slug (the handler 404s).
- */
 export async function getLabelDetail(slug: string): Promise<LabelDetail | undefined> {
   const record = await getLabelBySlug(slug);
 
@@ -1935,46 +1265,17 @@ export async function getLabelDetail(slug: string): Promise<LabelDetail | undefi
   };
 }
 
-/** Finding-bounded label counts used by the runtime label reconciliation. */
 export const FINDING_LABEL_CENSUS_SQL = `select tracks.label as label, count(*) as n
       from findings cross join tracks on tracks.track_id = findings.track_id
       where tracks.label is not null and trim(tracks.label) <> ''
       group by tracks.label`;
 
-/**
- * The deterministic reconcile: a `labels` row for every distinct label carried by a
- * CERTIFIED finding. The self-healing backstop behind `ensureLabel` (a publish whose
- * best-effort upsert threw, a label written by a direct admin update, a row that
- * predates the table). Idempotent — an existing label is left completely alone. Returns
- * how many rows it minted. Driven by `scripts/backfill-labels.ts` on every deploy.
- *
- * It seeds from the finding join, NOT from a bare `tracks` scan, and that is deliberate:
- * a label earns a row — and a slot in the operator's `label-review` attention queue —
- * because Fluncle FOUND something on it. Minting off the raw catalogue would flood that
- * queue with the label of every track Fluncle has merely heard of, the moment the
- * catalogue epic lands. Same finding-scoped predicate as the deploy backfill's reconcile,
- * so the two mint identically.
- *
- * It is MINT-ONLY: it ensures a `labels` row EXISTS, and leaves the `tracks.label_id` graph
- * edge to the deploy backfill's link step (`scripts/backfill-labels.ts` → `linkTracksToLabels`).
- *
- * ── ALIAS-AWARE (RFC musickit-second-authority, U2a) ────────────────────────────
- * A confirmed alias's slug is NEVER re-minted: it already resolves to another label, and
- * `tracks.label` is immutable, so minting it here would re-open a fold the operator closed —
- * every deploy. The confirmed-alias slug set is preloaded once (the bounded distinct-read
- * pattern) and any slug in it is skipped. NOTE: the deploy path is `scripts/backfill-labels.ts`
- * (which carries the same guard); this runtime twin is proven by the re-mint regression test.
- */
 export async function reconcileLabels(): Promise<number> {
   const db = await getDb();
   const result = await db.execute({ args: [], sql: FINDING_LABEL_CENSUS_SQL });
 
-  // Every slug the operator has already folded into another label — preloaded once so the
-  // mint loop below never re-mints one (the re-mint trap this unit closes).
   const confirmedAliasSlugs = await confirmedAliasSlugSet();
 
-  // First spelling wins per slug — stable across runs because the row is only ever
-  // inserted once (`on conflict do nothing`).
   const bySlug = new Map<string, string>();
 
   for (const row of typedRows<LabelCountRow>(result.rows)) {
@@ -2012,23 +1313,10 @@ export async function reconcileLabels(): Promise<number> {
   return minted;
 }
 
-/**
- * A label WITHOUT its finding count — the shape the seed-set read returns. The finding count is
- * DERIVED and only the `/admin/labels` station shows it, so the count is computed there (bounded to
- * a page), never on this read: the crawler asks for its seed set every tick and never uses a count.
- *
- * It NARROWS one field the admin item leaves optional: `mbLabelId`, the label's RULED MusicBrainz
- * identity, is always PRESENT here (null or a string, never absent). The catalogue crawler's seed
- * resolution is the consumer — a ruled MBID is the authority for which MusicBrainz label a seed slug
- * means, so the crawler reads it off the seed set it already fetches (crawl.ts `expandSeedLabel`)
- * rather than searching a name that namesakes share. The contract now carries the field too, so
- * `list_labels_admin` no longer strips it on the way out.
- */
 export type LabelSeedItem = Omit<LabelAdminItem, "findingCount"> & {
   mbLabelId: null | string;
 };
 
-/** One paged section of the `/admin/labels` station — see {@link LabelsAdminSection}. */
 export type LabelsAdminPage = {
   items: LabelAdminItem[];
   page: number;
@@ -2042,17 +1330,6 @@ function toLabelSeedItem(row: LabelRow): LabelSeedItem {
   return { ...item, mbLabelId: row.mb_label_id };
 }
 
-/**
- * The seed-set read — every label, or the labels in one seed state, name-sorted, WITHOUT counts.
- * `listLabels("enabled")` is the catalogue crawler's seed set (`crawl.ts`): the ONE sanctioned
- * consumer of `seed_state`. It is deliberately COUNTLESS — the whole-corpus finding aggregate this
- * read on every crawl tick would be for a count the crawler never reads. The `/admin/labels`
- * station's finding counts come from {@link listLabelsPage} instead, bounded to the visible page.
- *
- * `mb_label_id` rides {@link LABEL_COLUMNS} itself now — one shared projection for every admin/seed
- * read, so the seed resolver gets the ruled identity for free instead of paying a second query for
- * it. See {@link LabelSeedItem}.
- */
 export async function listLabels(
   seedState?: LabelSeedState,
   client?: Pick<Client, "execute">,
@@ -2072,13 +1349,6 @@ export async function listLabels(
   return typedRows<LabelRow>(result.rows).map(toLabelSeedItem);
 }
 
-/**
- * ONE enabled seed label by its slug — the crawler's seed-node resolve, which asks exactly "is the
- * label this seed node names still enabled, and what is it?". `slug` is UNIQUE, so this is one seek
- * on `labels.slug`'s index with `seed_state` as a residual on that single row: the same answer as
- * `listLabels("enabled").find((label) => label.slug === slug)` without reading the whole enabled
- * seed set (thousands of rows) to find it. Undefined = no such label, or it is no longer enabled.
- */
 export async function getEnabledSeedLabel(
   slug: string,
   client?: Pick<Client, "execute">,
@@ -2094,23 +1364,8 @@ export async function getEnabledSeedLabel(
   return row ? toLabelSeedItem(row) : undefined;
 }
 
-/**
- * The certified-finding aggregate the OPERATOR's station computes from the raw edge —
- * `sum(findings.log_id is not null)` per group. It is what every public hub read would otherwise compute
- * (schema.ts still names it `HUB_CERTIFIED` when it describes what the stored counters mirror), and
- * the public side has moved OFF it onto `labels.certified_finding_count` (see
- * {@link hubInclusionWhere} and the keystone-2 note above). It survives here, deliberately, for the
- * ONE read below: `/admin/labels` is where a certification mismatch has to be VISIBLE, so its count
- * is derived from truth rather than from the maintained mirror the reconciliation sweep backstops.
- */
 const HUB_CERTIFIED = `sum(case when findings.log_id is not null then 1 else 0 end)`;
 
-/**
- * The certified-finding count for a BOUNDED set of label ids, grouped over the INDEXED
- * `tracks.label_id` edge (`where tracks.label_id in (…)`, on `tracks_label_id_idx`) — never a
- * whole-corpus `GROUP BY` over the raw `tracks.label` string, and never a growing scan (the id set is
- * one `/admin/labels` page). A label with no findings is simply absent from the map.
- */
 async function labelFindingCountsByIds(labelIds: string[]): Promise<Map<string, number>> {
   if (labelIds.length === 0) {
     return new Map();
@@ -2136,46 +1391,11 @@ async function labelFindingCountsByIds(labelIds: string[]): Promise<Map<string, 
   return counts;
 }
 
-/**
- * One `/admin/labels` section. Three of them ARE a seed state; `partial` is the other half of
- * `undecided`.
- *
- * ── WHY `undecided` IS TWO SECTIONS ──────────────────────────────────────────────────────
- * An undecided label that carries PER-LABEL artist rules has been ruled — writing allows and
- * leaving the seed state alone IS the `dnb_partial` verdict (the fluncle-label-triage skill's
- * exception model, docs/label-entity.md): the next crawl takes the named artists off that label
- * and nothing else. An undecided label has NO other way to acquire per-label rules, so the check
- * is EXACT rather than a heuristic, and it is the same one the triage pull partitions on
- * (`packages/skills/fluncle-label-triage/scripts/partition-undecided.py`) — the station and the
- * pull must agree about what is still waiting on the operator.
- *
- * A GLOBAL rule (`artist_rules.label_id is null`) is the other axis and never counts here: it says
- * nothing about this label.
- */
 export type LabelsAdminSection = LabelSeedState | "partial";
 
-/**
- * Does this label carry a rule of its OWN? A correlated `exists` on `artist_rules_label_id_idx`,
- * driven from the small side — the same shape the crawl status read uses to attribute due work to
- * undecided labels (crawl.ts). `label_id = labels.id` excludes a global rule by construction.
- */
 const LABEL_CARRIES_ARTIST_RULE = `exists (select 1 from artist_rules
                                             where artist_rules.label_id = labels.id)`;
 
-/**
- * One numbered page of the `/admin/labels` station's section — the read the station hydrates each
- * of its four sections from. Bounded: `where seed_state = ?` rides the `(seed_state, name)` index,
- * `order by name` reads it in order, and `count(*) over ()` returns the section total for the pager
- * without a second query. Only the page's ≤{@link LABELS_ADMIN_PAGE_SIZE} labels get their finding
- * count, via {@link labelFindingCountsByIds} over the indexed `label_id` edge — so the whole-corpus
- * aggregate is absent from every load/focus.
- *
- * The `undecided` / `partial` split is one extra `where` term ({@link LABEL_CARRIES_ARTIST_RULE}),
- * so it is decided in SQL: the two sections are disjoint and their totals sum to the seed state's,
- * and neither section ever drags the other's rows into the isolate to filter them out. The term is
- * a per-row check on top of the same index walk, never a new access path, and `count(*) over ()`
- * is evaluated after the `where`, so a section's total is its OWN count.
- */
 export async function listLabelsPage(
   section: LabelsAdminSection,
   page: number,
@@ -2213,16 +1433,8 @@ export async function listLabelsPage(
   };
 }
 
-/** Thrown when an operator write targets a label id that isn't there. */
 export class LabelNotFoundError extends Error {}
 
-/**
- * ONE label in the `/admin/labels` shape, by id — the single-row twin of {@link listLabelsPage}.
- * It exists so a caller that already holds a label id (the MusicBrainz mint, label-mint.ts) reads
- * the operator shape back through the SAME projection + count the station uses, instead of
- * assembling a second spelling of `LabelAdminItem` from a raw row. Its count is bounded to this one
- * label's indexed `label_id` edge, never a whole-corpus aggregate. `undefined` = no such label.
- */
 export async function getLabelAdminItem(id: string): Promise<LabelAdminItem | undefined> {
   const db = await getDb();
   const result = await db.execute({
@@ -2240,27 +1452,6 @@ export async function getLabelAdminItem(id: string): Promise<LabelAdminItem | un
   return toLabelItem(row, counts.get(row.id) ?? 0);
 }
 
-/**
- * The operator's scope write — the ONLY write that moves `seed_state`. A supplied ruling stamps
- * `ruled_at`, which tells the one-time D7 bootstrap (scripts/backfill-labels.ts) to keep its hands
- * off this row forever after. A bare re-walk preserves the ruling and stamps only the scope
- * watermark plus `updated_at`.
- *
- * It changes what the NEXT crawl seeds from. It touches nothing already stored — no
- * finding, no track, no crawled row is read, hidden, or deleted here, and none ever
- * should be.
- *
- * ── THE ONE EXCEPTION, AND WHY IT IS NOT A STORAGE MOVE ────────────────────────────────
- * A ruling DOES change one derived thing: the CAPTURE authorization of this label's own catalogue
- * tracks (`enabled` authorizes them, `disabled` vetoes them — `capturePriorityFor`). So this write
- * ALSO nulls their `catalogue_rank_corpus` — the "stale" sentinel — so the next `rank_catalogue`
- * tick re-derives their tier under the new ruling (RFC artist-primary-capture; catalogue-rank-restale.ts).
- * A bounded, indexed UPDATE on `tracks_label_id_idx`, run atomically with the ruling. This is a
- * RE-RANK trigger, not a storage move: no row is hidden, deleted, or shown differently — it stamps a
- * staleness marker the sweep already understands. (The SECOND-ORDER effect — a ruling that re-crosses
- * an artist's weighted qualification, flipping their OTHER-label tracks — is caught by the fingerprint's
- * qualified-set size, `rankCorpus`, not here.)
- */
 export async function updateLabelSeedState(
   id: string,
   seedState?: LabelSeedState,
@@ -2318,8 +1509,6 @@ export async function updateLabelSeedState(
     ),
   ];
 
-  // A seed-state ruling changes capture authorization and owes The Ear a re-rank. A bare re-walk
-  // changes only crawl scheduling, so it deliberately leaves catalogue ranking fresh.
   if (seedState !== undefined) {
     statements.push(
       restaleCatalogueRankByLabelStatement(id),
@@ -2365,32 +1554,11 @@ export async function updateLabelSeedState(
     throw new LabelNotFoundError(`No label with id ${id}.`);
   }
 
-  // Just this one label's count, bounded by its own `label_id` — never the whole-corpus aggregate.
   const counts = await labelFindingCountsByIds([row.id]);
 
   return toLabelItem(row, counts.get(row.id) ?? 0);
 }
 
-// ── The voiced bio: fill-empty-only write + the worklist (the entity-bio engine) ──────
-//
-// The label bio is the entity sibling of a finding's `note` and inherits its cardinal
-// safety guarantee: the agent NEVER overwrites an existing bio. The `and (bio is null or
-// trim(bio) = '')` predicate lives in the SQL, so an operator bio (or a second agent tick)
-// that lands between the handler's read and this write can never be clobbered — the loser
-// matches no row (mirrors `fillEmptyNote` / `fillEmptyArtistBio`).
-
-/**
- * Fill a label's bio ATOMICALLY, only when it is currently empty. The bio + its PROVENANCE
- * (`bio_prompt_version`) + `bio_status = 'resolved'` land in the SAME statement, gated by the
- * fill-empty-only predicate. Returns whether a row was written (false = a non-empty bio was
- * already there / the label is gone). `promptVersion` is undefined for an operator-typed bio
- * and null when the sweep fell back to its baked prompt — both store NULL. The caller has
- * already voice-gated the bio (`gateBioText`).
- *
- * `gateBypass` carries the voice-gate reasons a FINAL-ATTEMPT ACCEPTANCE accepted, written in the
- * SAME statement so a clean bio wipes the review flag by construction (see `fillEmptyArtistBio`
- * and ./bio-review.ts).
- */
 export async function fillEmptyLabelBio(
   slug: string,
   bio: string,
@@ -2426,28 +1594,8 @@ export async function fillEmptyLabelBio(
   return (results.at(-1)?.rowsAffected ?? 0) > 0;
 }
 
-/** One row of the bio worklist: a label with findings but no bio yet. */
 export type LabelBioWorkItem = { id: string; name: string; slug: string };
 
-/**
- * The bio worklist: bio-empty labels whose page is INDEXABLE, oldest-first — the worklist the
- * `describe_label` cron drains. A bare read (no writes), bounded by `limit`. Two ways in, matching
- * exactly the two ways a `/label/<slug>` page renders:
- *
- * - a CERTIFIED label (at least one finding) — the original floor, preserved, so a
- *   certified-but-thin label never regresses out of the queue; OR
- * - a findings-free CATALOGUE label whose page clears the thin-content floor
- *   ({@link LABEL_INDEX_MIN_TRACKS}) on renderable tracks alone — a crawl-minted page that is
- *   indexable earns a bio too, so it stops showing a bare tracklist with no dossier.
- *
- * Both arms are the shared hub gate ({@link hubInclusionWhere}) — the STORED
- * `certified_finding_count` / `renderable_track_count` on the label row, which is exactly the pair
- * `listLabelSitemapRows` and `/labels` now read. Two correlated per-row subqueries over
- * `tracks ⋈ findings` would otherwise compute them on every tick; the worklist is a filtered read of the
- * labels table now. Bounding the findings-free arm to the indexable floor caps the Firecrawl +
- * `claude -p` cost — a wide crawl mints thousands of stub labels, and only the ones with a real page
- * should ever enter the sweep.
- */
 export async function listLabelsMissingBio(limit: number): Promise<LabelBioWorkItem[]> {
   const db = await getDb();
 
@@ -2471,7 +1619,6 @@ export async function listLabelsMissingBio(limit: number): Promise<LabelBioWorkI
     });
   }
 
-  // GOAL H: unchanged generic legacy selector retained behind the default-off cutover flag.
   const result = await db.execute({
     args: [limit],
     sql: `select l.id, l.name, l.slug
@@ -2489,32 +1636,10 @@ export async function listLabelsMissingBio(limit: number): Promise<LabelBioWorkI
   }));
 }
 
-/** An unruled label, in the shape the attention queue's pure model derives from. */
 export type LabelReviewRow = { anchorAt: string; labelId: string; name: string };
 
-/**
- * The most unruled labels the attention queue will ever carry.
- *
- * The queue takes ALL of them, which is appropriate when a new label arrives only on a
- * publish — tens of rows, ever. The crawler changed the arithmetic: every imprint the walk
- * discovers mints an `undecided` row (that row IS the ruling queue — docs/catalogue-crawler.md,
- * "the widening loop"), so a wide crawl over 27 seed labels proposes HUNDREDS. Uncapped, that
- * is hundreds of `AttentionItem`s in the `/admin` SSR payload, in the react-query cache, and
- * printed one-per-line by `fluncle admin queue` and the Raycast menu bar — a cockpit you
- * cannot read is a cockpit that is off.
- *
- * So the queue takes a WORKING SET, oldest-first, and `/admin/labels` stays the station where
- * the full list is ruled on. Capping the queue never hides a label from the operator; it stops
- * one source from drowning the other five.
- */
 export const LABEL_REVIEW_QUEUE_LIMIT = 25;
 
-/**
- * The attention-queue source: the oldest labels still awaiting the operator's ruling, capped
- * at {@link LABEL_REVIEW_QUEUE_LIMIT}. Oldest-first (the queue's anchor is when the label
- * first enters the archive), so a banger on an unseen label surfaces a cockpit row instead
- * of quietly sitting in a state nobody chose.
- */
 export async function listLabelReviewRows(): Promise<LabelReviewRow[]> {
   const db = await getDb();
   const result = await db.execute({
@@ -2533,17 +1658,6 @@ export async function listLabelReviewRows(): Promise<LabelReviewRow[]> {
   }));
 }
 
-// ── LABEL ALIASES: two spellings, one label (RFC musickit-second-authority, U2a) ────────────
-// A second metadata authority (Apple `recordLabel`, corroborated by MusicBrainz over a shared
-// ISRC) proposes an alternate spelling of a label; the operator confirms or rejects it. A
-// CONFIRMED alias (1) protects its slug from re-minting (above), and (2) joins the public
-// `/label/<slug>` Organization JSON-LD as `alternateName` (decision C). See docs/label-entity.md.
-
-/**
- * Every slug the operator has folded into another label via a CONFIRMED alias — preloaded once
- * for the reconcile's re-mint guard (the bounded distinct-read pattern). Bounded: `label_aliases`
- * holds a handful of rows per label, never one per track.
- */
 async function confirmedAliasSlugSet(): Promise<Set<string>> {
   const db = await getDb();
   const result = await db.execute(
@@ -2553,11 +1667,6 @@ async function confirmedAliasSlugSet(): Promise<Set<string>> {
   return new Set(typedRows<{ alias_slug: string }>(result.rows).map((row) => row.alias_slug));
 }
 
-/**
- * A label's CONFIRMED alternate spellings, name-sorted — the `alternateName` array the public
- * `/label/<slug>` Organization JSON-LD carries (decision C). `candidate`/`hint` never surface
- * publicly, so this filters to `status = 'confirmed'`. Empty for a label with no confirmed alias.
- */
 export async function getConfirmedAliasNames(labelId: string): Promise<string[]> {
   const db = await getDb();
   const result = await db.execute({
@@ -2570,11 +1679,6 @@ export async function getConfirmedAliasNames(labelId: string): Promise<string[]>
   return typedRows<{ alias: string }>(result.rows).map((row) => row.alias);
 }
 
-/**
- * Every OPEN alias candidate (`status = 'candidate'`), joined to its canonical label, newest
- * first — the `/admin/labels` review section's read. Bounded by the alias table, which the
- * derivation keeps small (one row per corroborated/hinted spelling, `on conflict do nothing`).
- */
 export async function listLabelAliasCandidates(): Promise<LabelAliasCandidate[]> {
   const db = await getDb();
   const result = await db.execute(
@@ -2609,12 +1713,6 @@ export async function listLabelAliasCandidates(): Promise<LabelAliasCandidate[]>
   }));
 }
 
-/**
- * The operator's CONFIRM: rule a candidate the same label (`status → confirmed`). Only then does
- * it fold into resolution and the public `alternateName`. Idempotent — confirming an already-
- * confirmed or absent alias is a harmless no-op (the `/admin` board is a live surface; a double
- * tap or a stale row must never throw). Returns whether a row moved.
- */
 export async function confirmLabelAlias(id: string): Promise<boolean> {
   const db = await getDb();
   const result = await db.execute({
@@ -2625,11 +1723,6 @@ export async function confirmLabelAlias(id: string): Promise<boolean> {
   return result.rowsAffected > 0;
 }
 
-/**
- * The operator's REJECT: rule a candidate NOT the same label, and delete the row. It never
- * touched `tracks.label` or `labels.name`, so there is nothing to unwind. Idempotent — rejecting
- * an absent alias is a no-op. Returns whether a row was removed.
- */
 export async function rejectLabelAlias(id: string): Promise<boolean> {
   const db = await getDb();
   const result = await db.execute({
@@ -2640,12 +1733,6 @@ export async function rejectLabelAlias(id: string): Promise<boolean> {
   return result.rowsAffected > 0;
 }
 
-/**
- * The confirmed-alias REDIRECT lookup: does this slug resolve to a canonical label through a
- * confirmed alias (the spelling of a label the operator merged away)? Returns the owning label's
- * slug, or undefined. The `/label/<slug>` loader uses it to 301 a merged-away slug to its canonical
- * page. One indexed read on `label_aliases_alias_slug_idx`, joined to `labels` for the target slug.
- */
 export async function resolveLabelAliasRedirect(slug: string): Promise<string | undefined> {
   const db = await getDb();
   const result = await db.execute({
@@ -2660,21 +1747,10 @@ export async function resolveLabelAliasRedirect(slug: string): Promise<string | 
   return typedRows<{ slug: string }>(result.rows)[0]?.slug;
 }
 
-// ── LABEL MERGE: fold a slug-split twin into its canonical row (RFC musickit-second-authority U2b) ──
-// The cleanup for a PRE-EXISTING split — two `labels` rows that mean one label (the Med School /
-// Medschool class U2a stopped going FORWARD). The operator merges the LOSING row into the CANONICAL
-// one, in ONE transaction: re-point every FK that references the loser, reconcile the loser's
-// identity + facts onto the canonical CANONICAL-WINS, land the losing NAME as a confirmed alias
-// (so the immutable `tracks.label` free-text can never re-mint the merged-away slug), and delete the
-// loser. See docs/label-entity.md § merge.
-
-/** Thrown when both rows carry an operator ruling and their seed states disagree — stop and ask. */
 export class LabelMergeConflictError extends Error {}
 
-/** Thrown when the two merge slugs resolve to the same row (nothing to merge). */
 export class LabelMergeSameRowError extends Error {}
 
-/** Every column the merge reads off a label row to re-point, reconcile, and resolve the ruling. */
 type LabelMergeRow = {
   discogs_label_id: null | number;
   founded_location: null | string;
@@ -2721,34 +1797,6 @@ function mergeLabelRuling(
   return { ruledAt: canonical.ruled_at, seedState: canonical.seed_state };
 }
 
-/**
- * Merge the LOSING label (`losingSlug`) into the CANONICAL one (`canonicalSlug`) atomically.
- *
- * ── WHAT IT DOES ────────────────────────────────────────────────────────────────
- * 1. RE-POINTS every FK that references the loser: `tracks.label_id`, the loser's SUBLABELS'
- *    `labels.parent_label_id`, and `label_aliases.label_id`. (`albums` carries no label FK — its
- *    label edge is derived at read time from the raw string, docs/album-entity.md.)
- * 2. RECONCILES the loser's identity + facts onto the canonical CANONICAL-WINS: for `mb_label_id`,
- *    `discogs_label_id`, `image_key`, `founding_date`, `founded_location`, `parent_label_id`, and
- *    `lineage_state`, the canonical's existing value ALWAYS stands and the loser's fills only an
- *    EMPTY canonical slot (coalesce). This is load-bearing: a loser whose MBID mis-resolved to the
- *    wrong label (a "Polydor Records" → J-Pop division mismatch) must never overwrite the
- *    canonical's correct identity.
- * 3. RESOLVES `seed_state` by `ruled_at` precedence (the more recent operator ruling wins). When
- *    BOTH rows carry a non-null `ruled_at` AND their seed states disagree it throws
- *    {@link LabelMergeConflictError} — it never silently picks a side.
- * 4. Writes the losing NAME to `label_aliases` as `confirmed` (source `operator`), so a later
- *    `ensureLabel`/`reconcileLabels` over the immutable `tracks.label` resolves the merged-away
- *    slug to the canonical instead of re-minting it.
- * 5. DELETES the losing row (the alias carries the memory; the losing slug then 301s via
- *    {@link resolveLabelAliasRedirect}).
- *
- * ── ATOMICITY ───────────────────────────────────────────────────────────────────
- * All of it runs in one `db.batch(_, "write")` (libSQL's one-implicit-transaction batch, the
- * `updateGalaxyMap` precedent), so a crash can never half-apply a merge. The loser row is DELETED
- * first so its unique `slug`/`mb_label_id` are free before the canonical adopts them; the FK
- * re-points match the loser's id VALUE (a plain string column, no cascade), so they still land.
- */
 export async function mergeLabel(
   losingSlug: string,
   canonicalSlug: string,
@@ -2771,18 +1819,14 @@ export async function mergeLabel(
     throw new LabelMergeSameRowError(`${losingSlug} and ${canonicalSlug} are the same label.`);
   }
 
-  // ── seed_state by ruled_at precedence; refuse an operator-vs-operator disagreement ──
   const { ruledAt, seedState } = mergeLabelRuling(loser, canonical, losingSlug, canonicalSlug);
 
-  // A scope watermark is an event cursor, not an identity fact. Preserve the latest timestamp
-  // across both rows so a merge can never move the crawler's re-arm boundary backwards.
   const scopeChangedAt =
     canonical.scope_changed_at == null ||
     (loser.scope_changed_at != null && loser.scope_changed_at > canonical.scope_changed_at)
       ? loser.scope_changed_at
       : canonical.scope_changed_at;
 
-  // ── identity + facts, CANONICAL-WINS (fill an EMPTY canonical slot from the loser only) ──
   const reconciled: string[] = [];
   const take = <T extends number | string>(
     field: string,
@@ -2807,8 +1851,6 @@ export async function mergeLabel(
     loser.founded_location,
   );
 
-  // The logo and its resolve state travel together: a stored `image_key` with a non-`resolved`
-  // state would be re-walked by the image sweep, so image_state follows whichever row's key wins.
   const imageKey = take("imageKey", canonical.image_key, loser.image_key);
   const imageState =
     canonical.image_key != null
@@ -2817,8 +1859,6 @@ export async function mergeLabel(
         ? loser.image_state
         : canonical.image_state;
 
-  // The parent edge is canonical-wins, but must never point at the (deleted) loser or at the
-  // canonical itself. A canonical whose parent WAS the loser adopts the loser's parent instead.
   const canonParent = canonical.parent_label_id === loser.id ? null : canonical.parent_label_id;
   let parentLabelId: null | string = canonParent;
 
@@ -2831,8 +1871,6 @@ export async function mergeLabel(
     }
   }
 
-  // `pending` is the un-walked "empty" lineage state — adopt the loser's resolved/none when the
-  // canonical has never been walked, so the coalesced founding facts are not re-walked away.
   let lineageState = canonical.lineage_state;
 
   if (canonical.lineage_state === "pending" && loser.lineage_state !== "pending") {
@@ -2843,12 +1881,6 @@ export async function mergeLabel(
   const now = new Date().toISOString();
   const sourceVersion = `label-merge:${randomUUID()}`;
 
-  // ── the maintained hub counts (keystone 2): census the loser's tracks BEFORE the re-point ──
-  // Every track pointed at the loser lands on the canonical, so the canonical's two counters gain
-  // exactly what the loser held. The loser's own counters die with its row (statement 0 deletes it),
-  // so there is nothing to debit. This is measured DELTA arithmetic — one grouped count over the
-  // loser's own indexed slice, then `+=` — and NEVER a recompute of the canonical from truth (that
-  // shape measured 27,400 ms at 150k hosted against ~200 ms for this one).
   const [loserCounts] = toHubCountMoveGroups(
     typedRows<HubCountCensusRow>(
       (
@@ -2867,28 +1899,22 @@ export async function mergeLabel(
   };
 
   const statements: Array<{ args: Array<null | number | string>; sql: string }> = [
-    // 0: DELETE the loser FIRST — frees its slug + UNIQUE mb_label_id before the canonical update
-    //    can adopt them. The FK re-points below match the loser's id VALUE (a plain string column,
-    //    no cascade), so they still land after the row is gone.
     { args: [loser.id], sql: `delete from labels where id = ?` },
-    // 1: re-point every finding/catalogue track off the loser onto the canonical.
+
     { args: [canonical.id, loser.id], sql: `update tracks set label_id = ? where label_id = ?` },
-    // 2: re-point the loser's SUBLABELS onto the canonical — never the canonical itself (that would
-    //    make it its own parent; the canonical's own parent is set in statement 5).
+
     {
       args: [canonical.id, now, loser.id, canonical.id],
       sql: `update labels set parent_label_id = ?, updated_at = ? where parent_label_id = ? and id <> ?`,
     },
-    // 3: re-point the loser's OWN aliases onto the canonical. `or ignore` skips a row that would
-    //    collide with an alias the canonical already carries (the (label_id, alias_slug, source)
-    //    unique index); statement 4 then drops those leftovers (duplicates of the canonical's).
+
     {
       args: [canonical.id, loser.id],
       sql: `update or ignore label_aliases set label_id = ? where label_id = ?`,
     },
-    // 4: drop any loser-pointed alias that could not move (a duplicate of one the canonical holds).
+
     { args: [loser.id], sql: `delete from label_aliases where label_id = ?` },
-    // 5: reconcile the identity + facts + the resolved seed state onto the canonical.
+
     {
       args: [
         mbLabelId,
@@ -2911,22 +1937,18 @@ export async function mergeLabel(
                   seed_state = ?, ruled_at = ?, scope_changed_at = ?, updated_at = ?
             where id = ?`,
     },
-    // 6: the losing NAME becomes a CONFIRMED alias on the canonical, so the immutable tracks.label
-    //    free-text can never re-mint the merged-away slug on a later backfill. Idempotent insert.
+
     {
       args: [`lba_${randomUUID()}`, canonical.id, loser.name, loser.slug, now],
       sql: `insert into label_aliases (id, label_id, alias, alias_slug, source, kind, status, created_at)
             values (?, ?, ?, ?, 'operator', 'name', 'confirmed', ?)
             on conflict (label_id, alias_slug, source) do nothing`,
     },
-    // 7: the canonical ADOPTS the loser's maintained hub counts, censused above — the same batch,
-    //    so the re-point (statement 1) and the counts it implies can never half-apply.
+
     hubCountDeltaStatement("labels", canonical.id, canonicalCredit),
-    // 8: scoped rules belong to this exact label identity. Never repoint or union the losing set
-    //    onto the canonical, because either move can invert the survivor's operator intent.
+
     { args: [loser.id], sql: `delete from artist_rules where label_id = ?` },
-    // The slug-keyed image projection cannot recover the loser's slug after statement 0. Remove
-    // both entity identity forms in this same transaction; the canonical marker below rebuilds it.
+
     {
       args: [loser.id, loser.slug],
       sql: `delete from due_work where subject_type = 'label' and subject_id in (?, ?)`,

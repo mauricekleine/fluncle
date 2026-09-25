@@ -3,18 +3,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createIntegrationDb, seedCatalogueTrack, seedTrack } from "./integration-db";
 
-// THE FORWARD-ACCRETION LEGS, PROVEN against the REAL schema.
-//
-// Both legs are worklist-and-ledger machines: what they read is SQL over `tracks` (an anti-join
-// onto the certification, a capture-priority ladder, four ledger columns), and what they write is
-// the ledger itself. Neither can be proven by a unit test with a fake db — the whole risk lives in
-// the predicates and the write statements, so a real engine is the only witness. The vendor reads
-// are mocked; the worklists, the ledger law, and the spend bounds are what is on trial.
-//
-// The ledger law under test (schema.ts § `backfill_deezer_*`): stamp ONLY an outcome that settles
-// whether the platform carries the recording. A found-but-unvouchable pick, a throttle, and a
-// transport failure each settle nothing, and each must leave a different, deliberate trace.
-
 let db: Client;
 
 const lookupDeezerTrackByIsrc = vi.fn();
@@ -26,8 +14,6 @@ vi.mock("./db", async (importOriginal) => {
   return { ...actual, getDb: () => Promise.resolve(db) };
 });
 vi.mock("./deezer", async (importOriginal) => {
-  // Partial mock: only the network-touching lookup is stubbed, so the pure helpers beside it stay
-  // real and a whole-module mock cannot silently hide a new one.
   const actual = await importOriginal<typeof import("./deezer")>();
 
   return {
@@ -41,7 +27,6 @@ vi.mock("./beatport-resolve", async (importOriginal) => {
   return { ...actual, resolveBeatportUrl: (...a: unknown[]) => resolveBeatportUrl(...a) };
 });
 
-/** Stamp a row's ISRC (and optionally its Ear rank), the two things both worklists read by. */
 async function withIsrc(trackId: string, isrc: string, capturePriority?: number): Promise<void> {
   await db.execute({
     args: [isrc, capturePriority ?? null, trackId],
@@ -49,7 +34,6 @@ async function withIsrc(trackId: string, isrc: string, capturePriority?: number)
   });
 }
 
-/** Read one track row. */
 async function readTrack(trackId: string): Promise<Record<string, unknown> | undefined> {
   const result = await db.execute({
     args: [trackId],
@@ -83,19 +67,17 @@ describe("backfillDeezer — the worklist", () => {
 
     const track = await readTrack("cat00000000000000000001");
     expect(track?.deezer_track_id).toBe("3263968181");
-    // The provenance is the narrow one the schema defines for this endpoint, not a guess.
+
     expect(track?.deezer_verified_by).toBe("isrc");
     expect(track?.deezer_verified_at).toBeTruthy();
     expect(track?.backfill_deezer_done_at).toBeTruthy();
     expect(track?.backfill_deezer_attempted_at).toBeTruthy();
     expect(Number(track?.backfill_deezer_attempts)).toBe(1);
-    // The moment the link was won and the moment the ledger says it resolved cannot drift.
+
     expect(track?.backfill_deezer_done_at).toBe(track?.deezer_verified_at);
   });
 
   it("drains CERTIFIED rows before catalogue ones", async () => {
-    // The order is the budget: a finding is what Fluncle actually speaks about, so it resolves
-    // first on a tick that cannot fit everything.
     await seedCatalogueTrack(db, { trackId: "cat00000000000000000002" });
     await withIsrc("cat00000000000000000002", "ISRCCAT", 900);
     await seedTrack(db, {
@@ -111,8 +93,6 @@ describe("backfillDeezer — the worklist", () => {
     const { backfillDeezer } = await import("./backfill");
     await backfillDeezer(1, false);
 
-    // Exactly one row was asked about this pass, and it was the certified one — even though the
-    // catalogue row carries a high Ear rank.
     expect(lookupDeezerTrackByIsrc).toHaveBeenCalledTimes(1);
     expect(lookupDeezerTrackByIsrc).toHaveBeenCalledWith("ISRCFIND", 270_000);
   });
@@ -133,8 +113,6 @@ describe("backfillDeezer — the worklist", () => {
   });
 
   it("excludes a row that already holds an id, and one already concluded", async () => {
-    // The second half is what keeps the operator's completed campaign from being re-spent: a
-    // stamped row is out of the worklist for good, because no re-check cadence is ruled.
     await seedCatalogueTrack(db, { trackId: "cat00000000000000000005" });
     await withIsrc("cat00000000000000000005", "ISRC005");
     await db.execute({
@@ -157,8 +135,6 @@ describe("backfillDeezer — the worklist", () => {
   });
 
   it("excludes a row with no ISRC and one with no duration to vouch with", async () => {
-    // A duration-less row could only ever come back `unvouchable`, which stamps nothing — so
-    // without this predicate it would sit in the worklist being re-asked forever.
     await seedCatalogueTrack(db, { trackId: "cat00000000000000000007" });
     await seedCatalogueTrack(db, { durationMs: 0, trackId: "cat00000000000000000008" });
     await withIsrc("cat00000000000000000008", "ISRC008");
@@ -200,13 +176,11 @@ describe("backfillDeezer — the ledger law", () => {
     expect(Number(track?.backfill_deezer_attempts)).toBe(1);
     expect(track?.backfill_deezer_done_at).toBeNull();
     expect(track?.deezer_track_id).toBeNull();
-    // A clean conclusion resets the streak — it is not the transport failure a streak backs off from.
+
     expect(Number(track?.backfill_deezer_failures)).toBe(0);
   });
 
   it("an UNVOUCHABLE pick stamps NOTHING AT ALL — neither a hit nor a miss", async () => {
-    // Deezer demonstrably carries something here, so "not found" would misstate it; the pick
-    // cannot be trusted, so an id would be a wrong public link. Neither state fits, none is claimed.
     await seedCatalogueTrack(db, { trackId: "cat00000000000000000011" });
     await withIsrc("cat00000000000000000011", "ISRC011");
     lookupDeezerTrackByIsrc.mockResolvedValueOnce({ outcome: "unvouchable" });
@@ -217,10 +191,7 @@ describe("backfillDeezer — the ledger law", () => {
     expect(result.unvouchable).toEqual(["cat00000000000000000011"]);
 
     const track = await readTrack("cat00000000000000000011");
-    // No RECEIPT moves (no attempt stamp, no id) — but the can't-conclude streak does, or the
-    // `attempted_at is null` worklist re-serves the same unvouchable rows every tick forever
-    // Three streaks and the row leaves the
-    // budget via the `failures < cap` gate, its receipt honestly still "Not checked yet".
+
     expect(track?.backfill_deezer_attempted_at).toBeNull();
     expect(Number(track?.backfill_deezer_attempts)).toBe(0);
     expect(Number(track?.backfill_deezer_failures)).toBe(1);
@@ -228,8 +199,6 @@ describe("backfillDeezer — the ledger law", () => {
   });
 
   it("a QUOTA answer ends the pass and stamps nothing, on this row or any later one", async () => {
-    // The known ledger poison: the throttle arrives in an HTTP-200 body, and stamping it would
-    // mark a whole tick's rows "not on Deezer" because a neighbour on the shared IP burst.
     await seedCatalogueTrack(db, { trackId: "cat00000000000000000012" });
     await withIsrc("cat00000000000000000012", "ISRC012", 500);
     await seedCatalogueTrack(db, { trackId: "cat00000000000000000013" });
@@ -241,7 +210,7 @@ describe("backfillDeezer — the ledger law", () => {
     const result = await backfillDeezer(50, false);
 
     expect(result.rateLimited).toBe(true);
-    // The pass stopped on the FIRST row rather than marching the second into the same wall.
+
     expect(lookupDeezerTrackByIsrc).toHaveBeenCalledTimes(1);
 
     for (const trackId of ["cat00000000000000000012", "cat00000000000000000013"]) {
@@ -264,11 +233,9 @@ describe("backfillDeezer — the ledger law", () => {
 
     const track = await readTrack("cat00000000000000000014");
     expect(Number(track?.backfill_deezer_failures)).toBe(1);
-    // Stamping attempted_at here would make /identity read "Not found · checked <date>" off a
-    // timeout — a conclusion nobody reached.
+
     expect(track?.backfill_deezer_attempted_at).toBeNull();
 
-    // Still eligible: a later tick picks it straight back up.
     const second = await backfillDeezer(50, false);
     expect(second.failedCount).toBe(1);
     expect(Number((await readTrack("cat00000000000000000014"))?.backfill_deezer_failures)).toBe(2);
@@ -292,8 +259,7 @@ describe("backfillDeezer — the ledger law", () => {
   it("FIRST WRITE WINS: an id and provenance already on the row are never relabelled", async () => {
     await seedCatalogueTrack(db, { trackId: "cat00000000000000000016" });
     await withIsrc("cat00000000000000000016", "ISRC016");
-    // A row that somehow holds provenance without an id (defensive: the trio moves together, so
-    // this cannot happen through a write path — which is exactly why the guard must be in SQL).
+
     await db.execute({
       args: ["cat00000000000000000016"],
       sql: `update tracks set deezer_verified_by = 'search' where track_id = ?`,
@@ -305,7 +271,7 @@ describe("backfillDeezer — the ledger law", () => {
 
     const track = await readTrack("cat00000000000000000016");
     expect(track?.deezer_track_id).toBe("999");
-    // The earlier answer stands: a row can never wear an id with someone else's provenance.
+
     expect(track?.deezer_verified_by).toBe("search");
   });
 
@@ -359,13 +325,9 @@ describe("backfillBeatportUrls — the catalogue tier", () => {
   });
 
   it("NEVER re-spends on a campaign-concluded row, even long past the cooldown", async () => {
-    // The certified tier gates on `shouldSkip`, whose base cooldown is 24h — survivable across ~85
-    // findings, ruinous across a five-figure catalogue where each retry is a Firecrawl credit. So
-    // this tier asks ONCE: a row that has ever concluded is out for good.
     await seedCatalogueTrack(db, { trackId: "cat00000000000000000021" });
     await withIsrc("cat00000000000000000021", "ISRC021");
     await db.execute({
-      // A concluded no-match from the operator's campaign: attempted, counted, streak clean.
       args: ["2020-01-01T00:00:00.000Z", "cat00000000000000000021"],
       sql: `update tracks
             set backfill_beatport_attempted_at = ?, backfill_beatport_failures = 0
@@ -405,8 +367,7 @@ describe("backfillBeatportUrls — the catalogue tier", () => {
       trackId: "finding0000000000000003",
     });
     await withIsrc("finding0000000000000003", "ISRCBP");
-    // The findings tier would normally scrape it; make it unconfigured so only the tier boundary
-    // is on trial here, then assert the catalogue tier reported nothing for it.
+
     resolveBeatportUrl.mockResolvedValue({ configured: false, ok: false });
 
     const { backfillBeatportUrls } = await import("./backfill");
@@ -448,15 +409,10 @@ describe("backfillBeatportUrls — the catalogue tier", () => {
     const { backfillBeatportUrls } = await import("./backfill");
     const result = await backfillBeatportUrls(10, false);
 
-    // The in-code default, not "unbounded" and not "zero".
     expect(result.catalogueUnresolvedCount).toBe(5);
   });
 
   it("does NOT run while the certified feed still has a pass left — the spend bound", async () => {
-    // Two guarantees in one: certified rows genuinely come first, and the sub-cap means what it
-    // says. The CLI LOOPS this endpoint until the feed drains, so a catalogue drain on every pass
-    // would silently multiply the operator's cap by the number of passes a tick happens to take.
-    // Only the pass that exhausts the feed (nextCursor null) may spend on the catalogue.
     for (const suffix of ["1", "2", "3", "4"]) {
       await seedTrack(db, {
         addedToSpotify: true,
@@ -478,7 +434,6 @@ describe("backfillBeatportUrls — the catalogue tier", () => {
     const { backfillBeatportUrls } = await import("./backfill");
     const result = await backfillBeatportUrls(10, false);
 
-    // The pass filled its certified budget and handed back a cursor, so the catalogue waits.
     expect(result.nextCursor).not.toBeNull();
     expect(result.resolvedCount).toBeGreaterThan(0);
     expect(result.catalogueResolvedCount).toBe(0);
