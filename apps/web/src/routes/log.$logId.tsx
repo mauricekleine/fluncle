@@ -481,7 +481,17 @@ function LogPage() {
               Listen on Apple Music
             </Button>
           ) : undefined}
-          <SaveFindingButton logId={logId} trackId={track.trackId} />
+          <SaveFindingButton
+            track={{
+              artists: track.artists,
+              coverUrl: track.albumImageUrl,
+              href: `/log/${logId}`,
+              logId,
+              spotifyUrl: track.spotifyUrl,
+              title: track.title,
+              trackId: track.trackId,
+            }}
+          />
           {track.tiktokUrl ? (
             <Button
               nativeButton={false}

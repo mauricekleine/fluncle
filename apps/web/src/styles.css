@@ -4941,6 +4941,91 @@ a.catalogue-letter:focus-visible {
   min-width: 0;
 }
 
+.device-saves {
+  margin-top: 1.5rem;
+}
+
+.device-saves-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+.device-saves-row {
+  align-items: center;
+  border-radius: var(--radius);
+  display: grid;
+  gap: 0.65rem;
+  grid-template-columns: 40px minmax(0, 1fr);
+  padding: 0.4rem 0.5rem;
+  position: relative;
+  transition: background-color 150ms ease-out;
+}
+
+.device-saves-row:hover,
+.device-saves-row:focus-within {
+  background: var(--dust-veil);
+}
+
+.device-saves-row:has(.track-row-link:focus-visible) {
+  box-shadow: inset 0 0 0 2px var(--ring);
+}
+
+.device-saves-cover {
+  height: 40px;
+  width: 40px;
+}
+
+.device-saves-row[data-unlit] .device-saves-title {
+  color: var(--stardust);
+  font-weight: 500;
+}
+
+.device-saves-row[data-unlit] .device-saves-cover {
+  filter: saturate(0.55) brightness(0.8);
+  opacity: 0.75;
+}
+
+.device-saves-row[data-unlit]:hover .device-saves-title,
+.device-saves-row[data-unlit]:focus-within .device-saves-title {
+  color: var(--starlight-cream);
+}
+
+.device-saves-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 0;
+}
+
+.device-saves-title {
+  color: var(--foreground);
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.device-saves-credit {
+  color: var(--stardust);
+  font-size: 0.8rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (pointer: coarse) {
+  .track-menu-content [role="menuitem"] {
+    min-height: 2.75rem;
+  }
+}
+
+.public-toaster [data-sonner-toast][data-styled="true"] {
+  background: var(--sleeve-black);
+  box-shadow: none;
+  font-family: var(--font-sans);
+}
+
 .saves-row-title {
   color: var(--foreground);
   font-weight: 700;

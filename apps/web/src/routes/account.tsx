@@ -5,6 +5,7 @@ import { getRequest } from "@tanstack/react-start/server";
 import { useState } from "react";
 import { Button } from "@fluncle/ui/components/button";
 import { AuthForms, ClaimUsernameDialog } from "@/components/account/auth-forms";
+import { DeviceSaves } from "@/components/account/device-saves";
 import { GalaxyDoor, GalaxyDoorSkeleton } from "@/components/account/galaxy-door";
 import { SavesDoor, SavesDoorSkeleton } from "@/components/account/saves-door";
 import { SettingsDoor } from "@/components/account/settings-door";
@@ -100,7 +101,7 @@ export const Route = createFileRoute("/account")({
       { title: "Your place in the Galaxy" },
       {
         content:
-          "Private Fluncle account settings, Galaxy progress, saved findings, and submissions.",
+          "Private Fluncle account settings, Galaxy progress, saved tracks, and submissions.",
         name: "description",
       },
 
@@ -112,12 +113,12 @@ export const Route = createFileRoute("/account")({
 
 const DOOR_MASTHEAD: Record<AccountTab, { tagline: string; title: string }> = {
   galaxy: { tagline: "Your logs, your runs, and the stars you've reached.", title: "The Galaxy" },
-  saves: { tagline: "The findings and sets you kept.", title: "Saves" },
+  saves: { tagline: "The tracks and sets you kept.", title: "Saves" },
   settings: { tagline: "Your profile, preferences, and account.", title: "Settings" },
 };
 
 const SIGNED_OUT_MASTHEAD = {
-  tagline: "Private progress, saved findings, and submissions.",
+  tagline: "Private progress, saved tracks, and submissions.",
   title: "Your place in the Galaxy",
 };
 
@@ -188,12 +189,15 @@ function AccountPage() {
             )}
           </>
         ) : (
-          <AuthForms
-            googleEnabled={me.googleEnabled}
-            message={message}
-            refresh={refresh}
-            setMessage={setMessage}
-          />
+          <>
+            <AuthForms
+              googleEnabled={me.googleEnabled}
+              message={message}
+              refresh={refresh}
+              setMessage={setMessage}
+            />
+            <DeviceSaves />
+          </>
         )}
       </article>
     </main>
