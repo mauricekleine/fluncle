@@ -7,20 +7,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { typedRows } from "./db";
 import { createIntegrationDb, seedArtist, seedCatalogueTrack, seedTrack } from "./integration-db";
 
-// THE HOMONYM SEAL, PROVEN AGAINST THE REAL MIGRATED SCHEMA (lib/server/artists.ts).
-//
-// THE BUG IT CLOSES. `linkTracksToArtistEntities` joined `artists a on a.name = credit.value
-// collate nocase` — a bare NAME, no identity. Two real-world acts sharing a name therefore landed
-// on ONE Fluncle `artists` row, and the impostor's tracks rendered on the real act's public page.
-// Across the six namesake-walked labels: 225 impostor-side edges, of
-// which 181 were written by THIS name join, 29 by slice 0's punctuation fold, and 15 by the
-// mbid-keyed credit sweep — which refuses homonyms by construction and so wrote only genuine
-// crossovers. The crawler had each credit's MB artist id in hand the whole time and dropped it.
-//
-// The rung order under test is `backfill-artist-credits.ts`'s ratified ladder: the mbid row wins;
-// an unclaimed row may still be claimed by name; a row holding a DIFFERENT mbid is a homonym and
-// gets NO edge, because a wrong artist merge is unrecoverable and a missing edge is not.
-
 let db: Client;
 let fixtureDirectory: string | undefined;
 
@@ -30,14 +16,12 @@ vi.mock("./db", async (importOriginal) => {
   return { ...actual, getDb: () => Promise.resolve(db) };
 });
 
-// Imported AFTER the mock so the module's `getDb` is the mocked one.
 const { buildArtistLinkStatement, creditMbidTriples, linkTracksToArtistEntities } =
   await import("./artists");
 
 const MB_DNB = "b78f09e9-3abb-4fd0-b809-4a1138c478b2";
 const MB_JPOP = "1a7b4a25-197a-4ab3-acc9-f4afd6dcacdd";
 
-/** Seed an artist and claim an MB identity for it (the seeder writes identity-free rows). */
 async function seedIdentifiedArtist(
   artist: { id: string; name: string; slug: string },
   mbid: null | string,
@@ -49,7 +33,6 @@ async function seedIdentifiedArtist(
   }
 }
 
-/** The artist ids edged to a track, so a refusal reads as an empty list rather than a count. */
 async function edgedArtists(trackId: string): Promise<string[]> {
   const result = await db.execute({
     args: [trackId],
@@ -59,7 +42,6 @@ async function edgedArtists(trackId: string): Promise<string[]> {
   return typedRows<{ artist_id: string }>(result.rows).map((row) => row.artist_id);
 }
 
-/** The stored edge shape, including the duplicate-credit position choice. */
 async function artistEdges(
   trackId: string,
 ): Promise<Array<{ artistId: string; position: number }>> {
@@ -286,8 +268,6 @@ describe("linkTracksToArtistEntities — the homonym seal", () => {
       row.detail.toLowerCase(),
     );
 
-    // SQLite changes SEARCH/SCAN phrasing across releases; the stable contract is that both named
-    // indexes participate and neither an artist branch nor the claimed-MBID anti-join scans.
     expect(details.some((detail) => detail.includes("artists_mbid_idx"))).toBe(true);
     expect(details.some((detail) => detail.includes("artists_name_nocase_idx"))).toBe(true);
     expect(
@@ -369,8 +349,6 @@ describe("linkTracksToArtistEntities — the homonym seal", () => {
   });
 
   it("REFUSES the edge when the credit's mbid differs from the same-named row's", async () => {
-    // The live shape: Fluncle holds the drum & bass `K`; the crawler brings a J-pop act also
-    // credited `K`, carrying its own MusicBrainz identity.
     await seedIdentifiedArtist({ id: "art-k-dnb", name: "K", slug: "k" }, MB_DNB);
     await seedCatalogueTrack(db, { artists: ["K"], trackId: "t-cat-jpop-000000001" });
 
@@ -384,7 +362,6 @@ describe("linkTracksToArtistEntities — the homonym seal", () => {
   });
 
   it("LINKS by mbid when the identity matches, whatever the row is named", async () => {
-    // The stored name drifted (`K` vs the credit's `K.`); identity is what decides, not spelling.
     await seedIdentifiedArtist({ id: "art-k-dnb", name: "K", slug: "k" }, MB_DNB);
     await seedCatalogueTrack(db, { artists: ["K."], trackId: "t-cat-dnb-0000000001" });
 
@@ -411,8 +388,6 @@ describe("linkTracksToArtistEntities — the homonym seal", () => {
   });
 
   it("prefers the mbid row and does NOT also claim a same-named unclaimed row", async () => {
-    // Both rows answer to the name; only one answers to the identity. Linking both would be the
-    // conflation in a different costume.
     await seedIdentifiedArtist({ id: "art-k-dnb", name: "K", slug: "k" }, MB_DNB);
     await seedIdentifiedArtist({ id: "art-k-open", name: "K", slug: "k-2" }, null);
     await seedCatalogueTrack(db, { artists: ["K"], trackId: "t-cat-dnb-0000000002" });
@@ -439,7 +414,6 @@ describe("linkTracksToArtistEntities — the homonym seal", () => {
   });
 
   it("passing no map at all is byte-identical to the historical behaviour", async () => {
-    // The Spotify-sourced freshness tap has no MB ids to give and must not change.
     await seedIdentifiedArtist({ id: "art-k-dnb", name: "K", slug: "k" }, MB_DNB);
     await seedCatalogueTrack(db, { artists: ["K"], trackId: "t-cat-tap-0000000001" });
 
@@ -448,8 +422,6 @@ describe("linkTracksToArtistEntities — the homonym seal", () => {
   });
 
   it("seals ONE credit of a track without dropping the other", async () => {
-    // A collaboration where one credit is a homonym and the other is genuine: the genuine edge
-    // must still land, so a refusal never costs the track its real artist.
     await seedIdentifiedArtist({ id: "art-k-dnb", name: "K", slug: "k" }, MB_DNB);
     await seedIdentifiedArtist({ id: "art-open", name: "Luna", slug: "luna" }, null);
     await seedCatalogueTrack(db, { artists: ["K", "Luna"], trackId: "t-cat-mixed-00000001" });

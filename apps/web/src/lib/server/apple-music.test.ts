@@ -1,17 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-// The Apple Music resolve side: the ES256 developer-token minting (the load-bearing,
-// easy-to-get-wrong bit — verified by a real WebCrypto round-trip), the response
-// parsing, and the no-op-until-configured discipline. The env is mocked so a test can
-// flip the leg between configured and unconfigured; `logEvent` is stubbed to keep the
-// error path side-effect free.
-
 const readOptionalEnv = vi.fn(async (_key: string): Promise<string | undefined> => undefined);
 
 vi.mock("./env", () => ({ readOptionalEnv: (key: string) => readOptionalEnv(key) }));
 vi.mock("./log", () => ({ logEvent: vi.fn() }));
 
-// base64url → bytes, for verifying the signature the module produced.
 function base64UrlToBytes(value: string): Uint8Array<ArrayBuffer> {
   const b64 = value
     .replace(/-/g, "+")
@@ -31,7 +24,6 @@ function decodeJwtSegment(segment: string): Record<string, unknown> {
   return JSON.parse(new TextDecoder().decode(base64UrlToBytes(segment)));
 }
 
-// A throwaway EC P-256 key in PKCS#8 PEM — the shape a real MusicKit `.p8` carries.
 async function generatePkcs8Pem(): Promise<{ pem: string; publicKey: CryptoKey }> {
   const keyPair = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, [
     "sign",
@@ -94,7 +86,7 @@ describe("buildAppleMusicJwt", () => {
     const payload = decodeJwtSegment(payloadB64 ?? "");
     expect(payload.iss).toBe("TEAM456");
     expect(payload.iat).toBe(1_000_000);
-    // ~150 days, comfortably under Apple's 6-month cap.
+
     expect(payload.exp).toBe(1_000_000 + 150 * 24 * 60 * 60);
 
     const verified = await crypto.subtle.verify(
@@ -144,10 +136,6 @@ describe("appleMusicLookupByIsrc — no-op until configured", () => {
   });
 });
 
-// ── The catalog oracle (RFC musickit-second-authority, U0) ─────────────────────
-
-// A `{w}x{h}bb.jpg`-templated artwork block, the shape Apple returns on a song and
-// on an album alike (native 3000², palette fields).
 function artworkFixture(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     bgColor: "202020",
@@ -162,7 +150,6 @@ function artworkFixture(overrides: Record<string, unknown> = {}): Record<string,
   };
 }
 
-// A song datum with an ISRC, a share URL, artwork, a preview, and album refs.
 function songFixture(options: {
   albumIds: string[];
   id: string;
@@ -191,7 +178,6 @@ function songFixture(options: {
   };
 }
 
-// An album resource for `included[]`.
 function albumFixture(options: {
   id: string;
   isCompilation?: boolean;
@@ -238,7 +224,6 @@ describe("appleArtworkUrl", () => {
       width: 1400,
     };
 
-    // Asking for 3000 on a 1400-native source clamps to 1400 — the render-defect fix.
     expect(appleArtworkUrl(art, 3000, 3000)).toBe("https://example.com/1400x1400bb.jpg");
   });
 });
@@ -282,7 +267,6 @@ describe("pickCanonicalAlbum", () => {
       ])?.id,
     ).toBe("album");
 
-    // Fully-tied: deterministic ascending id, regardless of input order.
     expect(
       pickCanonicalAlbum([
         { id: "b222", releaseDate: "2019-01-01" },
@@ -302,9 +286,6 @@ describe("buildCatalogBundle", () => {
   });
 
   it("THE REAL SHAPE: albums arrive INLINED in relationships.albums.data with attributes — no included[] at all", async () => {
-    // Apple does NOT send a top-level `included[]` (contra generic JSON:API). The full
-    // album objects ride inside the relationship array, so an included[]-only join finds none.
-    // this is that bug, pinned.
     const { buildCatalogBundle } = await import("./apple-music");
 
     const body = {
@@ -356,9 +337,6 @@ describe("buildCatalogBundle", () => {
   it("THE ADVERSARIAL CASE: data[0]'s first album is a distributor compilation, the correct original is deeper in included[]", async () => {
     const { buildCatalogBundle } = await import("./apple-music");
 
-    // The primary song belongs to BOTH a compilation (listed first, EARLIER release,
-    // carrying the distributor "Believe") and its original album (deeper in included[],
-    // carrying the real imprint "Hospital Records"). The picker must land on the original.
     const body = {
       data: [songFixture({ albumIds: ["comp1", "orig1"], id: "song1", isrc: "GB1234567890" })],
       included: [
@@ -386,7 +364,7 @@ describe("buildCatalogBundle", () => {
     expect(bundle?.songUrl).toBe("https://music.apple.com/us/album/x/song1?i=song1");
     expect(bundle?.songArtwork?.width).toBe(3000);
     expect(bundle?.preview?.url).toBe("https://audio-ssl.itunes.apple.com/mzaf_song1.m4a");
-    // The distributor compilation's label never surfaces; the real imprint does.
+
     expect(bundle?.canonicalAlbum?.id).toBe("orig1");
     expect(bundle?.canonicalAlbum?.recordLabel).toBe("Hospital Records");
     expect(bundle?.canonicalAlbum?.upc).toBe("originalupc");
@@ -403,7 +381,6 @@ describe("buildCatalogBundle", () => {
 
     const bundle = buildCatalogBundle(body);
 
-    // The song facts are still returned — only the album provenance is withheld.
     expect(bundle?.songId).toBe("song2");
     expect(bundle?.songArtwork).toBeDefined();
     expect(bundle?.canonicalAlbum).toBeUndefined();
@@ -453,7 +430,7 @@ describe("buildBatchBundles", () => {
     expect(bundles.get("AAA")?.songId).toBe("s1");
     expect(bundles.get("BBB")?.songId).toBe("s2");
     expect(bundles.get("AAA")?.preview?.url).toBe("https://audio-ssl.itunes.apple.com/mzaf_s1.m4a");
-    // The unmatched ISRC is an honest miss, not a wrong entry.
+
     expect(bundles.has("ZZZ")).toBe(false);
   });
 
@@ -467,7 +444,6 @@ describe("buildBatchBundles", () => {
 });
 
 describe("appleCatalogLookupByIsrc / appleCatalogLookupByIsrcs — wired", () => {
-  // Provision the three MusicKit secrets so the configured path runs.
   function configureCredentials(): void {
     readOptionalEnv.mockImplementation(async (key: string) => {
       if (key === "APPLE_MUSIC_TEAM_ID") {
@@ -547,7 +523,7 @@ describe("appleCatalogLookupByIsrc / appleCatalogLookupByIsrcs — wired", () =>
 
   it("batched lookup validates + chunks ≤25 per request", async () => {
     configureCredentials();
-    // 30 distinct ISRCs → two requests (25 + 5). Each request echoes its chunk as data.
+
     const isrcs = Array.from({ length: 30 }, (_, i) => `GB${String(i).padStart(10, "0")}`);
 
     const fetchMock = vi.fn(async (url: string) => {

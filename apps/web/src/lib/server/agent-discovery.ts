@@ -1,7 +1,3 @@
-// The static map lives at public/llms.txt (a single source of truth). Cloudflare
-// serves that file as text/plain, but it is advertised as text/markdown (the Link
-// header + the api-catalog), so we intercept /llms.txt here and re-serve the SAME
-// bytes with the correct content-type — mirroring llms-full.txt, which already does.
 import llmsTxt from "../../../public/llms.txt?raw";
 import { siteUrl, spotifyPlaylistCanonicalUrl, telegramUrl } from "../fluncle-links";
 import { findingsCount } from "../format";
@@ -12,34 +8,15 @@ import { sha256Hex } from "./hash";
 import { mcpToolNames } from "./mcp";
 import { type TrackCursor, type TrackListItem, decodeTrackCursor, listTracks } from "./tracks";
 
-// Agent-facing discovery surfaces served ahead of the TanStack router:
-// the RFC 9727 API catalog, the Agent Skills Discovery index, a text/markdown
-// rendering of the homepage for Accept-negotiating agents (the router's SSR
-// handler refuses a non-HTML Accept header; server.ts turns that refusal into a
-// 406 on the public page tiers, and this markdown twin answers the homepage
-// before it gets there), and llms-full.txt — the entire archive as one
-// ingestible document.
-
 const markdownTracksLimit = 25;
 
-// The A2A (Agent2Agent) protocol version the agent card declares conformance to.
-// A2A is the cross-vendor agent-interop standard backed by the Agent Governance /
-// AI Agent Interoperability effort (originated at Google, now stewarded by the
-// Linux Foundation with Google/Microsoft/OpenAI/Anthropic and others). The card is
-// the A2A analogue of the MCP server card (mcp.ts) — a discovery document, not a new
-// runtime surface.
 const a2aProtocolVersion = "1.0.0";
-// The agent's own version (distinct from the protocol version), mirroring the MCP
-// server card's SERVER_VERSION so the two discovery cards read the same.
+
 const a2aAgentVersion = "1.0.0";
 
-// llms-full.txt page size and a runaway backstop; if the archive ever exceeds
-// the cap we render up to it and say so (never a silent truncation).
 const llmsFullPageSize = 100;
 const llmsFullMaxFindings = 2000;
 
-// RFC 8288 Link header advertised on the homepage so agents can find the
-// machine-readable surfaces without guessing well-known paths.
 const agentLinkHeader = [
   '</.well-known/api-catalog>; rel="api-catalog"',
   '</api/v1/openapi.json>; rel="service-desc"; type="application/openapi+json"',
@@ -49,7 +26,6 @@ const agentLinkHeader = [
 ].join(", ");
 
 export function appendAgentLinkHeaders(response: Response): Response {
-  // Worker responses arrive with immutable headers; re-wrap to mutate.
   const linked = new Response(response.body, response);
   linked.headers.append("Link", agentLinkHeader);
   linked.headers.append("Vary", "Accept");
@@ -57,21 +33,8 @@ export function appendAgentLinkHeaders(response: Response): Response {
   return linked;
 }
 
-// The web onion's v3 hostname (without scheme or the trailing `.onion`). This is
-// the live address minted by the onionspray mirror on the public-edge box;
-// setting it and pushing is the whole of the onion go-live. Once set,
-// appendOnionLocation advertises the onion twin on every
-// HTML response. The private key is custodied in the configured 1Password item
-// (see the ops runbook note).
 const WEB_ONION_HOSTNAME = "p53pc2uzfu2tnih4cd6wd42ok6zup2uttj6xdmjdccy5kqo33fyppkqd";
 
-// Advertise the onion twin via the Onion-Location response header (Tor Browser
-// desktop shows a ".onion available" pill that one-clicks to the mirror). Unlike
-// the homepage-only Link header, this is per-path: a Tor user on /log/<id> lands
-// on that finding's onion page. The hostname is a parameter so tests can exercise
-// the "set" state without a real address baked into source; production passes the
-// module constant. Gated to text/html responses — the pill does nothing on the
-// JSON/XML surfaces (/api/v1/*, /rss.xml, /mcp), where the header would be noise.
 export function appendOnionLocation(
   response: Response,
   url: URL,
@@ -85,7 +48,6 @@ export function appendOnionLocation(
     return response;
   }
 
-  // Worker responses arrive with immutable headers; re-wrap to mutate.
   const located = new Response(response.body, response);
   located.headers.set(
     "Onion-Location",
@@ -105,8 +67,7 @@ export async function handleAgentDiscovery(request: Request): Promise<Response |
   switch (url.pathname) {
     case "/.well-known/api-catalog":
       return apiCatalogResponse();
-    // The A2A agent card, served at the current canonical path and the legacy short
-    // path older clients still probe (same bytes).
+
     case "/.well-known/agent-card.json":
     case "/.well-known/agent.json":
       return agentCardResponse();
@@ -129,7 +90,6 @@ function prefersMarkdown(request: Request): boolean {
   return request.headers.get("accept")?.includes("text/markdown") ?? false;
 }
 
-// RFC 9727: linkset (RFC 9264) describing the public API.
 function apiCatalogResponse(): Response {
   const catalog = {
     linkset: [
@@ -164,39 +124,21 @@ function apiCatalogResponse(): Response {
   });
 }
 
-// The A2A Agent Card — the cross-vendor agent-discovery document (the A2A analogue
-// of the MCP server card). It advertises Fluncle's ACTIONABLE public capabilities as
-// A2A `skills`, each mapping 1:1 to a real op the public API and the MCP server both
-// expose (the MCP tool list is the source of truth) — search / list / read tracks,
-// submit a track, subscribe to the newsletter. Honest scope: these are the archive's
-// public read + submit ops over plain HTTP+JSON under `/api/v1` (documented by the
-// OpenAPI + llms.txt the card points at); Fluncle is not a conversational A2A task
-// agent, so it declares no streaming and no push, and invents no capability.
-//
-// The identity strings come from lib/identity.ts (fluncleDescription) and
-// lib/fluncle-links.ts (siteUrl) verbatim, as the MCP card does. Keys are
-// alphabetized to satisfy sort-keys, matching serverCard()/apiCatalogResponse().
 function agentCard() {
   return {
     capabilities: { pushNotifications: false, streaming: false },
-    // Input/output content types for the actionable ops: JSON request/response over HTTP.
+
     defaultInputModes: ["application/json", "text/plain"],
     defaultOutputModes: ["application/json"],
     description: fluncleDescription,
-    // Where an agent reads the full contract behind these skills.
+
     documentationUrl: `${siteUrl}/llms.txt`,
     name: "Fluncle",
-    // A2A transport enum: the public API is RESTful HTTP+JSON, not JSON-RPC or gRPC.
+
     preferredTransport: "HTTP+JSON",
     protocolVersion: a2aProtocolVersion,
     provider: { organization: "Fluncle", url: siteUrl },
     skills: [
-      // The archive's OWN search leads the list: it is the read an agent actually wants,
-      // and the registry weights it `web: primary` alongside the findings feed and the
-      // track enumerator. Its Spotify-candidate sibling below is a SUBMIT step, not an
-      // archive read; the two descriptions say which is which so a caller cannot confuse
-      // them. The wording mirrors the `search_archive` MCP spec (lib/tool-specs.ts), the
-      // stated source of truth for what a skill maps onto — the sonic tier included.
       {
         description:
           "Search Fluncle's drum & bass archive by Log ID coordinate, artist, label, album, a bare word, a plain-language question, or 'sounds like <a real track>'. Findings come first, and an empty answer means nothing in the archive matched. This searches the archive; search-tracks searches Spotify for something to submit.",
@@ -257,15 +199,12 @@ function agentCard() {
         tags: ["newsletter", "email"],
       },
     ],
-    // The base URL of the actionable HTTP+JSON surface these skills resolve to.
+
     url: `${siteUrl}/api/v1`,
     version: a2aAgentVersion,
   };
 }
 
-// Served at the current canonical A2A path `/.well-known/agent-card.json` AND the
-// legacy short path `/.well-known/agent.json` (older A2A clients still probe it) —
-// same bytes, maximal reach.
 function agentCardResponse(): Response {
   return new Response(JSON.stringify(agentCard(), null, 2), {
     headers: {
@@ -275,8 +214,6 @@ function agentCardResponse(): Response {
   });
 }
 
-// Agent Skills Discovery RFC v0.2.0 index. The digest is computed from the
-// served SKILL.md bytes at runtime so the two can never drift.
 async function skillsIndexResponse(): Promise<Response> {
   const index = {
     $schema: "https://schemas.agentskills.io/discovery/0.2.0/schema.json",
@@ -323,10 +260,7 @@ async function skillDigest(): Promise<string> {
 
 async function markdownHomeResponse(): Promise<Response> {
   const page = await listTracks({ includeMixtapes: true, lean: true, limit: markdownTracksLimit });
-  // The browse-by-feel launch gate (decision 5): the galaxies lens + API stay dark on
-  // every public surface — this map included — until the operator has NAMED the whole
-  // sonic map, so agents are never pointed at a lens that 404s. Once named, the line
-  // lights up here the same moment it does everywhere else.
+
   const galaxiesLive = await isGalaxyMapFullyNamed();
   const galaxiesLine = galaxiesLive
     ? `\n- [Galaxies API](${siteUrl}/api/v1/galaxies): the archive grouped into operator-named sonic galaxies (clusters over the audio-embedding space), each with its member count, as JSON; /api/v1/galaxies/{slug} for one galaxy's findings core-first. Browse them at ${siteUrl}/galaxies`
@@ -410,10 +344,6 @@ ${tracks.join("\n")}
   });
 }
 
-// /llms-full.txt: the entire archive as one ingestible markdown document — the
-// lore plus every finding (coordinate, found date, BPM/key/galaxy, Spotify),
-// so an LLM can read the whole archive in a single fetch. Pure renderer,
-// exported for tests; the response wraps it.
 export function renderLlmsFull(
   tracks: FeedItem[],
   totalCount: number,
@@ -454,8 +384,6 @@ ${omitted > 0 ? `\n_${omitted} older findings omitted here; page the rest at ${s
 `;
 }
 
-// One finding: the coordinate-led header, then the dry facts (present fields
-// only).
 function renderFinding(track: TrackListItem): string {
   const coordinate = track.logId ? `fluncle://${track.logId}` : "uncoordinated";
   const lines = [
@@ -479,11 +407,6 @@ function renderFinding(track: TrackListItem): string {
   facts.push(track.spotifyUrl);
   lines.push(`  ${facts.join(" · ")}`);
 
-  // The graph edges carried on the finding itself (album + label slugs load in the
-  // same select), rendered as their entity-page URLs so an agent can walk the graph
-  // without a second fetch. The artist edge has no slug on the list DTO (artists are
-  // a name array here), so it is not linkable from this row — the /artists hub above
-  // is the entry point for that leg.
   const graph: string[] = [];
 
   if (track.labelSlug) {
@@ -511,9 +434,6 @@ function renderMixtape(track: Extract<FeedItem, { type: "mixtape" }>): string {
   return [`- **${track.title}** (${coordinate})`, `  ${facts.join(" · ")}`].join("\n");
 }
 
-// /llms.txt: the static map (public/llms.txt), re-served with the text/markdown
-// content-type it is advertised as (Cloudflare's static handler serves the raw
-// file as text/plain). Same bytes, honest content-type — the llms-full.txt shape.
 function llmsTxtResponse(): Response {
   return new Response(llmsTxt, {
     headers: {
@@ -543,10 +463,6 @@ async function llmsFullResponse(): Promise<Response> {
     cursor = page.nextCursor ? decodeTrackCursor(page.nextCursor) : undefined;
   } while (cursor && all.length < llmsFullMaxFindings);
 
-  // The browse-by-feel launch gate again: until the whole map is named, strip the
-  // galaxy fact from every finding here too (the per-finding "{name} galaxy" line in
-  // renderFinding reads `track.galaxy`), so a named galaxy never leaks before the lens
-  // ships. Post-launch the facts and the "More" pointer light up together.
   const galaxiesLive = await isGalaxyMapFullyNamed();
   const tracks = galaxiesLive
     ? all
@@ -565,8 +481,6 @@ async function llmsFullResponse(): Promise<Response> {
   });
 }
 
-// Served at /.well-known/agent-skills/fluncle-api/SKILL.md. Lives here as a
-// constant so the index digest above always matches the served bytes.
 const skillMarkdown = `---
 name: fluncle-api
 description: Read and contribute to Fluncle's drum & bass archive over the public HTTP API. List certified tracks, pull a random one, search the archive, search Spotify candidates, and submit tracks for Fluncle to review.

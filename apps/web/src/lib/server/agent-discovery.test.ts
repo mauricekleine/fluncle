@@ -2,8 +2,6 @@ import { describe, expect, it } from "vitest";
 import { appendOnionLocation, handleAgentDiscovery, renderLlmsFull } from "./agent-discovery";
 import { type TrackListItem } from "./tracks";
 
-// A stand-in v3 onion hostname (56 base32 chars, correct shape, not a real
-// address) so the test exercises the "set" state without an address in source.
 const testOnion = "examplefluncleonionaddressplaceholder0000000000000000aaaa";
 
 function htmlResponse(): Response {
@@ -40,8 +38,7 @@ describe("renderLlmsFull", () => {
     expect(doc).toContain("Drum & bass bangers from another dimension.");
     expect(doc).toContain("How to read a Log ID");
     expect(doc).toContain("## The findings (0)");
-    // The artist hub sits parallel to the labels + albums hubs (the human page, not
-    // the API), and the mixtape surface is advertised too.
+
     expect(doc).toContain("The artists: https://www.fluncle.com/artists");
     expect(doc).toContain("The labels: https://www.fluncle.com/labels");
     expect(doc).toContain("The albums: https://www.fluncle.com/albums");
@@ -101,10 +98,8 @@ describe("renderLlmsFull", () => {
   });
 
   it("advertises the sonic-galaxies API only once the map is named (launch gate)", () => {
-    // Default (map not yet fully named): the galaxies lens stays out of the map, so
-    // an agent is never pointed at a lens the launch gate 404s.
     expect(renderLlmsFull([], 0)).not.toContain("/api/v1/galaxies");
-    // Named: the galaxies API joins the "More" pointer list.
+
     expect(renderLlmsFull([], 0, true)).toContain("The sonic galaxies: ");
     expect(renderLlmsFull([], 0, true)).toContain("/api/v1/galaxies");
   });
@@ -118,7 +113,7 @@ describe("handleAgentDiscovery — /llms.txt", () => {
     expect(res?.headers.get("Content-Type")).toBe("text/markdown; charset=utf-8");
 
     const body = await res?.text();
-    // The SAME bytes as public/llms.txt — a single source of truth, re-typed.
+
     expect(body).toContain("# Fluncle");
     expect(body).toContain("Reading a Log ID");
   });
@@ -133,8 +128,7 @@ describe("handleAgentDiscovery — the fluncle-api SKILL.md tool list", () => {
     const body = (await res?.text()) ?? "";
 
     expect(res?.headers.get("Content-Type")).toBe("text/markdown; charset=utf-8");
-    // Every realized MCP tool name — including Slice F's browse tools — appears verbatim; a tool
-    // added or renamed shows up here without a hand-edit.
+
     for (const name of mcpToolNames) {
       expect(body, `SKILL.md is missing tool ${name}`).toContain(`\`${name}\``);
     }
@@ -156,8 +150,6 @@ describe("handleAgentDiscovery — the A2A agent card", () => {
   }
 
   it("serves the SAME card at the canonical and the legacy well-known paths", async () => {
-    // The current canonical A2A path and the legacy short path older clients still
-    // probe must return byte-identical bytes — one source, two doors.
     const canonical = await handleAgentDiscovery(
       new Request("https://www.fluncle.com/.well-known/agent-card.json"),
     );
@@ -171,8 +163,6 @@ describe("handleAgentDiscovery — the A2A agent card", () => {
   it("carries every A2A-required top-level field", async () => {
     const card = await fetchCard("/.well-known/agent-card.json");
 
-    // The A2A v1.0 required set: protocolVersion, name, description, url, provider,
-    // capabilities, skills. A missing one makes the card fail a conformant validator.
     for (const field of [
       "protocolVersion",
       "name",
@@ -190,7 +180,7 @@ describe("handleAgentDiscovery — the A2A agent card", () => {
     const card = await fetchCard("/.well-known/agent-card.json");
 
     expect(card.name).toBe("Fluncle");
-    // fluncleDescription (lib/identity.ts), reused verbatim as the MCP card does.
+
     expect(card.description).toContain("Drum & bass bangers from another dimension.");
     expect(card.url).toBe("https://www.fluncle.com/api/v1");
     expect(card.provider).toEqual({ organization: "Fluncle", url: "https://www.fluncle.com" });
@@ -201,21 +191,12 @@ describe("handleAgentDiscovery — the A2A agent card", () => {
   it("declares an honest, non-conversational capability scope", async () => {
     const card = await fetchCard("/.well-known/agent-card.json");
 
-    // Fluncle is a read + submit archive over HTTP, not a streaming/push A2A task agent —
-    // so it must not claim either capability.
     expect(card.capabilities).toEqual({ pushNotifications: false, streaming: false });
   });
 
   it("advertises exactly the actionable public ops as skills — no invented capability", async () => {
     const card = await fetchCard("/.well-known/agent-card.json");
 
-    // Each skill maps 1:1 to a real op the public API + MCP server expose (the MCP tool
-    // list is the source of truth): the archive search, the Spotify candidate search,
-    // the findings feed, the track enumerator, read one, submit, subscribe.
-    //
-    // The two SEARCHES are both listed and both named for what they search, because an
-    // agent that reads only this card is otherwise told Fluncle can be searched against
-    // Spotify and never told the archive itself is queryable.
     expect(card.skills.map((skill: { id: string }) => skill.id)).toEqual([
       "search-archive",
       "search-tracks",

@@ -1,80 +1,3 @@
-// THE SPOTIFY ANCHOR — the verify+write boundary for a catalogue row's Spotify identity.
-//
-// A catalogue track (a `tracks` row with no `findings` row) is resolved from MusicBrainz, so
-// it may land with no Spotify presence at all — hence the nullable `spotify_uri`/`spotify_url`.
-// The ANCHOR is the step that fills them: given candidate Spotify tracks for a row, it VERIFIES
-// one is genuinely the same recording and stamps the row. A wrong anchor poisons the private
-// telescope playlist and the certify path, so this module's whole job is precision over recall:
-// a miss is fine, a wrong stamp is not.
-//
-// ── WHERE THE CANDIDATES COME FROM: THE RESOLVER WATERFALL ───────────────────────────────────
-// The candidates come from the resolver calling Spotify's own `search`/`tracks` endpoints
-// inside the crawl tick (`fillSpotifyAnchors`). That app is a dev-mode Spotify app on a tiny
-// permanent budget, and at catalogue scale it starved under sustained 429s. So ALL catalogue
-// anchor-filling moved OFF the official Spotify app onto a box sweep
-// (docs/agents/hermes/scripts/anchor-sweep.*). That sweep runs a resolver waterfall per row, all
-// resolved through the ONE `resolve_anchor` call the box makes FIRST — only a full miss spends Apify:
-//   1. THE FREE LISTENBRAINZ RUNG (`resolveAnchorFree`, below). ListenBrainz labs maps the row's
-//      MusicBrainz recording MBID → Spotify track ids for free, with no auth (lib/server/
-//      listenbrainz.ts). The first id's metadata is fetched with ONE `GET /v1/tracks/{id}` (a cheap
-//      by-id read, never a search) to get its ISRC + duration, and that candidate runs the gate below.
-//      That one read draws on the SHARED official app, so it YIELDS to the throttle breaker
-//      (anchor-spotify-search.ts) and RECORDS into the shared call meter — before it did neither, and
-//      through Spotify's throttle windows every free candidate died on it and was re-bought from Apify.
-//   2/3. THE SPOTIFY SEARCH RUNGS (slice 2, DARK). When the free rung misses, and ONLY when the dark
-//      flag `anchor_spotify_search_enabled` is on and we are outside the Friday-refresh window
-//      (lib/server/anchor-spotify-search.ts), the row is resolved against the official Spotify app's
-//      SEARCH: first `findSpotifyTrackByIsrc` (the exact ISRC key lookup), then `searchTrackCandidates`
-//      (the fuzzy fallback for a no-ISRC row or an ISRC miss). Each candidate runs the SAME gate. This
-//      is free in dollars but shares the official app's rate budget with user-facing mints, so it ships
-//      default-OFF and the box paces it under a 60/min ceiling (see anchor-spotify-search.ts).
-//   4. THE APIFY FALLBACK (`anchorTrack`). Only when EVERY free rung above misses does the box spend
-//      the metered Apify search actor, map its results to candidates, and POST them to `anchor_track`.
-// So Apify became the last resort: a hit on any earlier rung spends no Apify money, and an Apify outage
-// still leaves the free rungs anchoring their share (graceful degradation). When the dark flag is OFF,
-// the official Spotify app serves ONLY user-facing paths (adds, publish, the Frontier playlist mints)
-// plus the free rung's one by-id metadata read per hit — never a catalogue search.
-//
-// NO SOURCE'S VERDICT IS EVER TRUSTED. Not the box's Apify match, not ListenBrainz's mapping, and not
-// the Deezer hits the box now fetches for rung 0 (`recoverIsrcViaDeezer`): the SERVER re-runs the full
-// verification below against ALL THREE, exactly as it did when it held the calls itself — so a re-baked
-// box script (or a wrong ListenBrainz map) can never invent a looser match rule, and the only thing a
-// box can change is WHETHER a candidate is offered, never whether one is accepted. This is the
-// `verify_capture` doctrine: the sources fetch, the Worker rules.
-//
-// ── TWO RUNGS, precision over recall ─────────────────────────────────────────────────────────
-//   1. ISRC EQUALITY — the exact rung. The Apify actor returns each candidate's `track_isrc`, so
-//      a row that carries an ISRC anchors to the candidate whose ISRC matches it (case-insensitive).
-//      If several candidates share the ISRC — a re-press under a different Spotify track id, seen
-//      live — the closest duration wins. An ISRC match is the recording's real identity: trustworthy.
-//   2. THE VERIFIED SEARCH TRIPLE — the recall unlock, and the fallback for a no-ISRC row (or a row
-//      whose ISRC matched nothing). A candidate anchors ONLY when it clears ALL THREE signals: the
-//      same artist SET, the same base title, and the same version descriptor (all three carried by
-//      the ratified `matchKey` fold — so the original of a logged VIP can never anchor to the VIP),
-//      AND a duration within ±3s of the row's. Of the candidates that clear it, the closest duration
-//      wins. This is the SAME gate the in-Worker fill used, moved here verbatim.
-//
-// EVERY ATTEMPTED ROW is stamped `spotify_anchor_attempted_at` — a hit AND a miss — so the anchor
-// worklist can back a missed row off (track-work.ts `ANCHOR_REASK_AFTER_DAYS`) instead of re-asking
-// it every tick (each re-ask is a billed Apify search). See docs/catalogue-crawler.md § the anchor.
-//
-// ── ONE MISS IS WRITTEN DOWN: THE ANCHOR REVIEW ──────────────────────────────────────────────
-// A miss is normally silent, and normally that is right. One class is not: a candidate that agrees
-// with the row on artists, base title, and duration (inside 1s) but names a DIFFERENT version. That
-// is the fingerprint of MusicBrainz metadata missing the version — a comp track billed plain at the
-// remix's length — so the row can never anchor, misses every tick, and retires under the cap with
-// nobody the wiser. `detectVersionMismatch` spots exactly that shape after BOTH rungs miss and
-// records it on the row (`tracks.anchor_review_json`), where the /admin attention queue reads it and
-// the OPERATOR rules with `resolve_anchor_review`. The gate is not loosened by one millisecond: the
-// review is evidence beside a miss, never an anchor. See "THE ANCHOR REVIEW" section at the bottom.
-//
-// `spotify_anchor_attempts` is the SECOND, separate ledger — the RETRY CAP's counter, which is what
-// makes the backoff terminate rather than re-ask forever: at `ANCHOR_MAX_ATTEMPTS` the worklist stops
-// offering the row (track-work.ts). It is bumped only when a rung CAPABLE OF CONCLUDING (the Spotify
-// search pair through `anchorTrack`, or the paid Apify fallback) was actually asked and missed; the
-// free positive-only ListenBrainz rung can park a row without spending one of its finite tries. See
-// `stampAnchorAttempt` for the rule in full.
-
 import { chargeAnchorApifyRow, getAnchorApifyBudget, isAnchorApifyEnabled } from "./anchor-apify";
 import {
   anchorSpotifyBreakerAllows,
@@ -101,52 +24,16 @@ import {
 } from "./spotify";
 import { canonicalizeSearchTitle, matchKey, normalizeArtists, splitTitle } from "./track-match";
 
-/**
- * ±window on the row↔candidate duration match — one of the search rung's three verification
- * signals. 3000, calibrated against 397 ISRC-matched same-recording pairs (our MB
- * duration vs Deezer's independent master): same-recording drift P95 ≈ 1.0–1.5s and 3s cuts the
- * false-miss rate by a third (2.0% → 1.3%), while every identity-passing candidate inside 5s in
- * the collision sample was a benign re-press of the SAME recording — the nearest genuinely
- * different recording sat ≥21s out (an empty 5–21s gap), so 3s admits nothing wrong. Widening
- * past 3s stops paying (the residual misses are >15s cross-edit ISRC collisions no sane window
- * recovers). The exact-ISRC rung is NOT gated by this (ISRC equality is the identity there;
- * duration only tiebreaks) — this window guards the search triple and the Deezer ISRC-recovery
- * rung. Raw data + method: the duration-gate calibration run (scripts kept with the session).
- */
 export const ANCHOR_DURATION_TOLERANCE_MS = 3000;
 
-/**
- * The TIGHT window the subset fallback demands (see `pickVerifiedCandidate`): a candidate that
- * credits only a SUBSET of the row's artists may still verify, but only this close in duration —
- * the loosened artist signal is paid for with a hardened duration signal. At ≤1s, 20 of 226
- * stable misses were recoverable (platforms crediting only the primary
- * artist on a collab — "LSB & DRS" listed as "LSB", Δ0.0s), with the same-recording drift P50 at
- * 0.13s comfortably inside.
- */
 export const ANCHOR_SUBSET_DURATION_TOLERANCE_MS = 1000;
 
-/**
- * The free-text query the search rung asks of Spotify — the row's artists, then its title, spelled
- * the way the platforms index it (`canonicalizeSearchTitle`: `rmx` → `Remix`, a redundant trailing
- * `mix` dropped — the retrieval-side twin of the identity fold `anchorTrack`'s gate verifies with,
- * kept in lockstep in ./track-match). Asking for the row's own spelling of a version the platform
- * writes differently returns NOTHING, and a gate handed no candidate cannot forgive anything.
- *
- * ONE owner, every rung: this is what the Worker's search rung sends, and what `list_track_work`
- * hands the box's Apify sweep as each row's ready-made `anchorQuery` (the sweep never builds one).
- */
 export function anchorSearchQuery(artists: string[], title: string): string {
   return [...artists, canonicalizeSearchTitle(title)].join(" ").trim();
 }
 
-/** One credited artist on a candidate — its name, and its stable Spotify id when the actor carried one. */
 export type AnchorArtist = { id?: null | string; name: string };
 
-/**
- * One Spotify candidate for a catalogue row, mapped from the Apify actor's output. `spotifyTrackId`
- * is the resolved bare id (the handler derives it from the actor's `track_id` / `track_uri` /
- * `track_url`); the anchor is written as `spotify:track:<id>` + `https://open.spotify.com/track/<id>`.
- */
 export type AnchorCandidate = {
   albumImageUrl?: null | string;
   artists: AnchorArtist[];
@@ -156,16 +43,6 @@ export type AnchorCandidate = {
   title: string;
 };
 
-/**
- * Which SIGNAL verified an anchor, or `null` on a miss — persisted as
- * `tracks.spotify_anchor_verified_by` (schema.ts) and served as the identity envelope's
- * `verification.method`.
- *
- * `search-subset` is DISTINCT from `search` on purpose: the ±1s proper-subset fallback loosened the
- * artist signal and paid for it with a hardened duration one, so it is a different confidence and
- * an envelope that flattened the two would overstate what was checked. `operator` is written only
- * by `resolveAnchorReview`'s accept — a human read both titles.
- */
 export type AnchorVerification =
   | "isrc"
   | "operator"
@@ -174,60 +51,22 @@ export type AnchorVerification =
   | "search-subset"
   | null;
 
-/**
- * The subset of {@link AnchorVerification} the automated GATE can return — everything but
- * `operator` (only the human ruling in `resolveAnchorReview` writes it) and `publish` (only the add
- * flow does). Split from the persisted domain so the `anchor_track` / `resolve_anchor` contracts
- * advertise exactly the values their handlers can produce, rather than values no gate path reaches.
- */
 export type AnchorGateVerification = Exclude<AnchorVerification, "operator" | "publish">;
 
-/**
- * The domain of `tracks.spotify_anchor_source` — WHICH PATH produced the link. A superset of
- * {@link AnchorReviewSource} by exactly one member, and the split is deliberate:
- * `AnchorReviewSource` is the domain of the REVIEW note's `candidate.source` (the five rungs that
- * can fetch a candidate for the operator to rule on), and `publish` is not one of them — no rung
- * searched, the operator handed over a Spotify URL and Spotify's own API answered. Widening
- * `AnchorReviewSource` itself would let `publish` into a review note where it can never be true.
- */
 export type AnchorSource = AnchorReviewSource | "publish";
 
-/** The minimal shape the verified-search gate reads off a candidate. */
 type VerifiableCandidate = {
   artists: string[];
   durationMs?: null | number;
   title: string;
 };
 
-/**
- * The "closest duration to the row wins" comparator every rung tiebreaks with — the one place the
- * rule is written, shared by the gate, the ISRC rung, and the mismatch detector below. A candidate
- * with no duration sorts as if it were 0 (the gate has already dropped it by then).
- */
 function closestTo<T extends { durationMs?: null | number }>(rowDurationMs: number) {
   return (left: T, right: T) =>
     Math.abs((left.durationMs ?? 0) - rowDurationMs) -
     Math.abs((right.durationMs ?? 0) - rowDurationMs);
 }
 
-/**
- * THE VERIFIED-SEARCH GATE. A candidate anchors ONLY when it clears ALL THREE signals: the same
- * artist SET, the same base title, and the same version descriptor as the row (all three carried
- * by the ratified `matchKey` fold — which deliberately keeps a remix/VIP descriptor distinct, so
- * the original of a logged VIP can never anchor to the VIP), AND a duration within
- * `ANCHOR_DURATION_TOLERANCE_MS` of the row's. Of the candidates that clear it, the closest
- * duration wins; if none clear it, `undefined` and the row stays in rotation. A candidate with no
- * duration cannot be verified, so it is dropped.
- *
- * THE SUBSET FALLBACK (~9% of stable misses): platforms routinely credit
- * only the PRIMARY artist on a collab ("LSB & DRS — Could Be" listed under "LSB" alone), which
- * fails the artist-set equality forever. When no candidate clears the full gate, a candidate
- * whose artist set is a non-empty PROPER SUBSET of the row's may verify instead — same base
- * title, same descriptor, and the TIGHT `ANCHOR_SUBSET_DURATION_TOLERANCE_MS` window: the
- * loosened artist signal is paid for with a hardened duration one. The subset direction is
- * one-way on purpose — a candidate crediting artists the row does NOT name is a different credit
- * (a feat. variant, another act's cover) and still never matches.
- */
 export function pickVerifiedCandidate<T extends VerifiableCandidate>(
   rowArtists: string[],
   rowTitle: string,
@@ -237,16 +76,6 @@ export function pickVerifiedCandidate<T extends VerifiableCandidate>(
   return verifySearchCandidate(rowArtists, rowTitle, rowDurationMs, candidates)?.candidate;
 }
 
-/**
- * {@link pickVerifiedCandidate}, plus WHICH of its two rungs cleared — `"search"` for the full
- * triple, `"search-subset"` for the ±1s proper-subset fallback. The gate has always known this and
- * always discarded it; the anchor write persists it now (`tracks.spotify_anchor_verified_by`), so
- * the identity envelope can say which confidence a link was verified at instead of flattening two
- * genuinely different checks into one word.
- *
- * `pickVerifiedCandidate` stays the shape every non-persisting caller wants (the Deezer
- * ISRC-recovery gate does not care which rung agreed, only that one did), so this is additive.
- */
 export function verifySearchCandidate<T extends VerifiableCandidate>(
   rowArtists: string[],
   rowTitle: string,
@@ -269,9 +98,6 @@ export function verifySearchCandidate<T extends VerifiableCandidate>(
     return { candidate: full, via: "search" };
   }
 
-  // The subset fallback. Compare base title + descriptor with the row's artist set SUBSTITUTED
-  // into the candidate's key, so the title fold stays the ratified one; the artist relation is
-  // checked explicitly as a proper, non-empty subset.
   const rowNames = normalizeArtists(rowArtists);
 
   const subset = candidates
@@ -295,7 +121,6 @@ export function verifySearchCandidate<T extends VerifiableCandidate>(
         }
       }
 
-      // Titles must agree exactly as they would under the full gate — swap the row's artists in.
       return matchKey(rowArtists, candidate.title) === rowKey;
     })
     .sort(byClosestDuration)[0];
@@ -303,32 +128,6 @@ export function verifySearchCandidate<T extends VerifiableCandidate>(
   return subset ? { candidate: subset, via: "search-subset" } : undefined;
 }
 
-/**
- * THE SUSPECTED VERSION MISMATCH — the one miss the gate writes DOWN instead of forgetting.
- *
- * A measured class of catalogue rows carries MusicBrainz metadata that OMITS the version: a
- * compilation track billed as plain "Typical Description" at 394s, where streaming holds the plain
- * mix at 313s and "(Calibre Remix)" at 394s. The duration fingerprints it — the row IS the remix,
- * mislabelled upstream — but the descriptor signal (correctly, and permanently) refuses the anchor,
- * so the row misses every tick until it retires under the retry cap. Nobody ever learns why.
- *
- * This detects exactly that shape, and ONLY after both gate rungs have missed: a candidate whose
- * artist set EQUALS the row's or is a non-empty PROPER SUBSET of it (the same one-way relation the
- * subset fallback allows — a candidate crediting artists the row does not name is a different
- * credit, not a mislabelled version), the SAME base title, a duration inside the TIGHT
- * `ANCHOR_SUBSET_DURATION_TOLERANCE_MS` window, and a DIFFERENT version descriptor. The tight
- * window is the whole precision story: at ≤1s the duration is doing the identifying, which is the
- * only reason a descriptor disagreement is readable as an upstream labelling error rather than as
- * two genuinely different recordings. Of the suspects, the closest duration wins.
- *
- * It is EVIDENCE, NEVER AN ANCHOR. The caller records it on the row for the operator's eye
- * (`recordAnchorReview`) and the miss stands exactly as it did before — the never-wrong-stamp rail
- * is the reason this module exists, and a heuristic strong enough to raise a question is nowhere
- * near strong enough to stamp an identity. Only the operator's `resolve_anchor_review` binds it.
- *
- * `undefined` when the row has no measured duration, no artists, or no base title (nothing to
- * fingerprint against, so nothing to suspect), or when no candidate fits the shape.
- */
 export function detectVersionMismatch<T extends VerifiableCandidate>(
   rowArtists: string[],
   rowTitle: string,
@@ -353,8 +152,6 @@ export function detectVersionMismatch<T extends VerifiableCandidate>(
 
       const candidateNames = normalizeArtists(candidate.artists);
 
-      // Equal-or-proper-subset, one way (the subset fallback's relation): every credited name
-      // must be one the row names, and the row may name more.
       if (candidateNames.size === 0 || candidateNames.size > rowNames.size) {
         return false;
       }
@@ -367,25 +164,16 @@ export function detectVersionMismatch<T extends VerifiableCandidate>(
 
       const split = splitTitle(candidate.title);
 
-      // The SAME recording by every signal except the one that names the version — which is
-      // precisely the suspicion.
       return split.base === row.base && split.descriptor !== row.descriptor;
     })
     .sort(closestTo<T>(rowDurationMs))[0];
 }
 
-/** The minimal shape the exact-ISRC rung reads off a candidate. */
 type IsrcCandidate = {
   durationMs?: null | number;
   isrc?: null | string;
 };
 
-/**
- * THE EXACT-ISRC RUNG. Of the candidates whose ISRC equals the row's (case-insensitive, trimmed),
- * the closest duration wins — a recording pressed under several Spotify track ids shares one ISRC,
- * so duration is the tiebreak. `undefined` when no candidate carries the row's ISRC. An ISRC match
- * is the recording's real identity, so this is the trusted first answer before the fuzzy search rung.
- */
 export function pickIsrcCandidate<T extends IsrcCandidate>(
   rowIsrc: string,
   rowDurationMs: number,
@@ -406,19 +194,6 @@ export function pickIsrcCandidate<T extends IsrcCandidate>(
     )[0];
 }
 
-/**
- * Connect-or-create a just-anchored catalogue track's ARTISTS by their stable `spotify_artist_id`
- * — riding the SAME candidate the anchor was read from (no extra Spotify call). `upsertTrackArtists`
- * mints an `artists` row per id (folded on the unique `spotify_artist_id`) and stamps the indexed
- * `track_artists` edge, so an artist that once folded fragilely on its NAME now folds on its stable
- * id. It MINTS NO FINDING: every read that means "finding" inner-joins `findings … log_id is not
- * null`, so this link moves none of them. `fillImages: false` keeps avatar fetches off this path —
- * the batched `backfill-artist-images` sweep fills them.
- *
- * Best-effort: the anchor columns are already stamped, so a link failure here must never derail the
- * fill. A track with NO Spotify presence never reaches here — its artist edge comes from the
- * name-fold `linkTracksToArtistEntities` at crawl-write time, minting nothing.
- */
 export async function connectAnchorArtists(
   trackId: string,
   artistNames: string[],
@@ -430,15 +205,13 @@ export async function connectAnchorArtists(
 
   try {
     await upsertTrackArtists(trackId, artistNames, spotifyArtistIds, { fillImages: false });
-    // A newly-anchored crawled remix may have just minted the remixer's `artists` row by its stable
-    // Spotify id — so stamp the remixer credit now the link exists (RFC label-lineage-remixer, U2).
+
     await stampRemixerRoles([trackId]);
   } catch (error) {
     logEvent("warn", "anchor.artist-link-failed", { error, trackId });
   }
 }
 
-/** The one anchorable-row read: identity + the two rails (already anchored / certified). */
 type AnchorRow = {
   artists_json: string;
   certified: number;
@@ -449,44 +222,8 @@ type AnchorRow = {
   title: string;
 };
 
-// ── THE PAID RUNG'S ADMISSION RULE ────────────────────────────────────────────────────────────────
-//
-// THE LEAK THIS CLOSES. The free exact-ISRC rung (`findSpotifyTrackByIsrc`) and the metered Apify
-// search answer the SAME question about an ISRC-bearing row — "which Spotify track is this ISRC?" —
-// and the free one answers it about four times out of five. But the free rung is metered by the box's
-// per-tick ask budget and its night window, so every ISRC-bearing row the tick could not ask about
-// fell straight through to the paid rung in the same tick and was BOUGHT. Almost all of that spend
-// bought answers the free rung would have given away.
-//
-// THE RULE. An ISRC-bearing row reaches the paid rung only with a receipt that the free rung genuinely
-// asked Spotify about IT and got a clean miss — `tracks.spotify_isrc_asked_at` (schema.ts), written by
-// nothing but a real ask. A deferral, a 429, a dead grant, a tripped breaker, a spent meter and a
-// failed metadata read all leave it NULL, because none of them put the question.
-//
-// THE ONE EXEMPTION, and it is what keeps anchoring alive: when the free exact-ISRC rung is NOT ARMED
-// at all (`anchor_spotify_search_enabled` off — its default), no receipt can ever be written, so
-// requiring one would permanently close the only rung left. A disarmed free rung gives nothing away,
-// so there is nothing to wait for and the row is eligible immediately — the pre-rule behaviour,
-// unchanged. The rule bites exactly when the free rung is armed, which is exactly when it is cheaper.
-//
-// AN ISRC-LESS ROW is held to the same rule where it is cheap: the only free rung that can conclude
-// about it is the FUZZY Spotify search, so it is eligible once that search actually ran and was not
-// throttled — or immediately when the search rungs are disarmed, for the same reason as above. The
-// Deezer ISRC-recovery rung runs before either, so a row that just won an ISRC is judged as the
-// ISRC-bearing row it now is.
-//
-// WHERE IT IS ENFORCED. `resolveAnchorFree` decides and reports it as `apifyEligible`, so the sweep is
-// TOLD rather than trusted; `anchorTrack` re-checks it on the paid path, so a lagging box cannot talk
-// the Worker into writing an anchor it refused to authorise.
-
-/** Why a row may not be sent to the metered Apify rung right now, or null when it may. */
 export type AnchorApifyIneligibleReason = "apify_budget_spent" | "awaiting_free_ask";
 
-/**
- * The catalogue row the anchor targets is missing, certified, or already anchored — plus the two
- * rails the operator's anchor-review ruling adds: the row carries no review to rule on, and the
- * reviewed candidate carries no Spotify id to anchor TO.
- */
 export type AnchorTrackReason =
   | "already_anchored"
   | "awaiting_free_ask"
@@ -505,26 +242,6 @@ export class AnchorTrackError extends Error {
   }
 }
 
-/**
- * VERIFY box-supplied candidates against a catalogue row and, on a hit, write its Spotify anchor.
- *
- * The rails, checked before any verification (each throws `AnchorTrackError` so the op maps them to
- * an honest HTTP status): the row must EXIST, must be UNCERTIFIED (a finding's Spotify id is its
- * identity, written at publish — an agent never re-anchors one), and must not ALREADY carry an
- * anchor (a race with a concurrent user add).
- *
- * Then the two rungs, in order — exact ISRC first when the row carries one, the verified search
- * triple otherwise (or when the ISRC matched nothing). A HIT stamps the anchor + coalesces the
- * cover image + links the candidate's artists by their stable id, and always stamps
- * `spotify_anchor_attempted_at`.
- *
- * `stampOnMiss` (default true) governs ONLY the miss path. The Apify sweep POSTs with it true: a
- * miss stamps the attempt so the worklist backs the row off (`ANCHOR_REASK_AFTER_DAYS`) instead of
- * re-billing a search every tick. The FREE ListenBrainz rung (`resolveAnchorFree`) passes it FALSE:
- * a free-rung miss must leave the row UNSTAMPED so the SAME tick's Apify fallback (and, if Apify is
- * down, the next tick) still gets its turn — the row is only truly "attempted" once the rung that
- * SPENDS money has run. So the stamp reflects a full attempt, never a free-rung near-miss.
- */
 export async function anchorTrack(
   trackId: string,
   candidates: AnchorCandidate[],
@@ -564,17 +281,6 @@ export async function anchorTrack(
     );
   }
 
-  // THE PAID RUNG'S ADMISSION RULE, re-checked at the write boundary (see the section above). Only
-  // the `apify` source is held to it — every other source IS one of the free rungs, and a rung cannot
-  // be made to wait for itself. The flag read is ordered LAST so a free-rung call and an ISRC-less row
-  // pay nothing for a check that cannot apply to them.
-  //
-  // IT REFUSES, IT DOES NOT PARK. A row that was never asked is not a row that missed, so it keeps its
-  // turn and stamps nothing; the 409 is loud on purpose. The only caller that can reach it is a sweep
-  // that ignored the `apifyEligible` verdict it was given — a stale baked box — and a refusal that is
-  // visible in the tick summary is what gets that box rebaked. The operator keeps the Apify kill-flag
-  // OFF across such a rollout (the box already honours it and skips the actor entirely), which is what
-  // stops the money rather than this rail: by the time a candidate list arrives here it is bought.
   if (
     source === "apify" &&
     row.isrc?.trim() &&
@@ -590,7 +296,6 @@ export async function anchorTrack(
   const rowArtists = parseArtistsJson(row.artists_json);
   const durationMs = Number(row.duration_ms);
 
-  // RUNG ONE — exact ISRC. Only when the row carries one; the closest-duration winner takes it.
   let verified: AnchorCandidate | undefined;
   let verifiedBy: AnchorGateVerification = null;
 
@@ -603,9 +308,6 @@ export async function anchorTrack(
     }
   }
 
-  // RUNG TWO — the verified search triple. Reached when the row has no ISRC, or its ISRC found
-  // nothing among the candidates. A row with no measured duration cannot clear the triple, so the
-  // gate simply returns nothing for it (a permanent no-stamp, correctly).
   if (!verified) {
     const searchHit = verifySearchCandidate(
       rowArtists,
@@ -621,8 +323,7 @@ export async function anchorTrack(
 
     if (searchHit) {
       verified = searchHit.candidate.candidate;
-      // The gate's own word for which rung cleared — "search-subset" when only the ±1s
-      // proper-subset fallback agreed. Persisted below, so the envelope never overstates it.
+
       verifiedBy = searchHit.via;
     }
   }
@@ -630,10 +331,6 @@ export async function anchorTrack(
   const now = new Date().toISOString();
 
   if (!verified) {
-    // BOTH gate rungs missed. Before the row goes back in the pile, ask the ONE question a miss
-    // can still answer usefully: was a candidate the same recording under a different version
-    // name? A suspect is recorded for the operator's eye and changes NOTHING about the miss —
-    // no anchor, no altered stamp — so this write is invisible to every rung and every worklist.
     const suspect = detectVersionMismatch(
       rowArtists,
       row.title,
@@ -650,18 +347,13 @@ export async function anchorTrack(
       await recordAnchorReview(db, trackId, row.title, suspect.candidate, source, now);
     }
 
-    // A MISS — leave the row un-anchored. Stamp the attempt so the worklist backs the row off,
-    // UNLESS this is the free rung (`stampOnMiss: false`), which must not back a row off before the
-    // metered Apify fallback has had its turn on it (see the doc above).
     if (stampOnMiss) {
       await batchDueWorkSourceMutation(
         db,
         [
           {
             args: [now, trackId],
-            // The free exact-ISRC ask receipt is cleared with the stamp it authorised (schema.ts §
-            // `spotify_isrc_asked_at`): it is evidence about THIS re-ask window, and the window just
-            // closed. A row coming back in a fortnight must be asked for free again before it is bought.
+
             sql: `update tracks
                   set spotify_anchor_attempted_at = ?,
                       spotify_anchor_attempts = coalesce(spotify_anchor_attempts, 0) + 1,
@@ -689,31 +381,17 @@ export async function anchorTrack(
           `spotify:track:${spotifyId}`,
           `https://open.spotify.com/track/${spotifyId}`,
           verified.albumImageUrl ?? null,
-          // The verified candidate's ISRC recovers the recording's real ISRC when our own row lacks
-          // one — the crawler's ISRC comes from MusicBrainz, whose ISRC coverage of underground DnB is
-          // sparse (an editor-contributed field), so ~60% of catalogue rows arrive ISRC-less even
-          // though the track genuinely has one. Spotify carries it, and we already fetched it here to
-          // VERIFY the match, so storing it is free. FILL-EMPTY-ONLY via `coalesce`: a real ISRC (an
-          // exact-ISRC anchor, or one already present) is never overwritten — the recovered value only
-          // fills a NULL. This strengthens dedup (ISRC-equality is the strongest identity signal) and
-          // lets a related pressing resolve via the exact ISRC rung instead of fuzzy search.
-          // Bound twice, consecutively — FILL_ISRC_SQL's contract (lib/server/isrc.ts): the second
-          // binding feeds the `has_isrc` mirror the same candidate the coalesce sees.
+
           candidateIsrc,
           candidateIsrc,
           now,
-          // THE PROVENANCE PAIR + THE HIT TIME (schema.ts § `spotify_anchor_source`). They ride the
-          // SAME statement as `spotify_uri` on purpose: a link and the story of how it was found are
-          // one fact, and writing them apart would let a row wear someone else's provenance.
+
           source,
           verifiedBy,
           now,
           trackId,
         ],
-        // The anchor landed, so any suspected-version-mismatch review this row was carrying describes a
-        // miss that no longer exists — it is CLEARED here rather than left to nag the operator with a
-        // question the machine has now answered itself (the queue's trust rule: never surface a row the
-        // system cannot confirm is actionable). Unconditional: clearing a NULL costs nothing.
+
         sql: `update tracks
           set spotify_uri = ?,
               spotify_url = ?,
@@ -737,9 +415,6 @@ export async function anchorTrack(
     { producer: "anchor-hit" },
   );
 
-  // Connect the artists by their stable Spotify id, off the SAME candidate — no extra call. A
-  // candidate that carried no artist ids simply mints/links nothing (the name-fold already ran at
-  // crawl time), so the empty-id case is a safe no-op.
   await connectAnchorArtists(
     trackId,
     verified.artists.map((artist) => artist.name),
@@ -749,18 +424,8 @@ export async function anchorTrack(
   return { anchored: true, verifiedBy };
 }
 
-/** Which rung of the free (non-Apify) resolver waterfall anchored a row, or `null` on a full miss. */
 export type AnchorResolveSource = "listenbrainz" | "spotify-isrc" | "spotify-search";
 
-/**
- * The ListenBrainz rung's exact terminal outcome for this row.
- *
- * `yielded-on-breaker` is DISTINCT from `metadata-failed` on purpose. Both end with no candidate,
- * but one is a read that FAILED and the other is a read we chose not to make — and folding the
- * second into the first is exactly how the money leak stayed invisible: through a Spotify throttle
- * window `lbMetadataFailed` climbed to equal the whole tick's `failed` count, which reads as a broken
- * rung rather than as backpressure. A yielded rung must look in the summary like what it is.
- */
 export type ListenBrainzAnchorOutcome =
   | "anchored"
   | "empty-ids"
@@ -772,64 +437,16 @@ export type ListenBrainzAnchorOutcome =
   | "request-failed"
   | "yielded-on-breaker";
 
-/**
- * The `resolve_anchor` outcome. `source` names the rung that anchored (or `null` on a miss), so the
- * box sweep can tally per-rung. `spotifySearchDone` is TRUE iff this call issued at least one Spotify
- * SEARCH request against the shared official app — the signal the box's pacer uses to throttle the
- * next call (see anchor-spotify-search.ts). When the dark flag is OFF it is always FALSE (and no
- * `findSpotifyTrackByIsrc` / `searchTrackCandidates` ran) — the load-bearing safety property.
- *
- * `isrcRecoveredByDeezer` is TRUE iff this call recovered a verified ISRC from Deezer into a
- * previously ISRC-less row (the pre-anchor recovery rung, below). It is orthogonal to `anchored`: a
- * recovery can happen and the row still miss every anchor rung this tick — the recovered ISRC is
- * persisted regardless, so the next tick's exact-ISRC rung and dedup both benefit. The box sweep
- * tallies it to measure the recovery rate.
- *
- * `apifyEnabled` reflects the `anchor_apify_enabled` operator kill-flag (default ON, ./anchor-apify.ts)
- * as read for this call — a GLOBAL flag, so every verdict in a tick agrees. When FALSE (out of Apify
- * budget), the box skips the whole Apify actor loop for this tick, and this call has already
- * stamped-and-backed-off the row if it was a genuinely-exhausted full miss (see below).
- *
- * `spotifyIsrcAsked` is TRUE iff this call spent an EXACT-ISRC search (`findSpotifyTrackByIsrc`) —
- * the unit the box's per-tick ask budget counts (`FLUNCLE_ANCHOR_ISRC_ASK_LIMIT`). It is narrower
- * than `spotifySearchDone`, which any Spotify search sets.
- *
- * `spotifyThrottled` is TRUE iff a Spotify call in this call's anchor path came back 429. It is the
- * YIELD LAW's wire: a throttle is PASS-ENDING (the box stops asking for Spotify rungs for the rest
- * of the tick) and never ROW-FAILING — the row stamps nothing and keeps its turn, the same shape the
- * Deezer quota law already has.
- *
- * `spotifySearchEnabled` reflects the `anchor_spotify_search_enabled` dark flag (default OFF,
- * ./anchor-spotify-search.ts) as read for this call — the FLAG, never the window/breaker/meter gate
- * around it. With it and `apifyEnabled` both false NO rung in the waterfall can conclude about a row,
- * which is what lets the box say so in its tick summary instead of reporting a healthy empty run.
- *
- * `stamped` is TRUE iff this call wrote the row's re-ask backoff stamp — i.e. the row was settled or
- * parked and will not be re-offered until the backoff ages out. It is FALSE on an anchor (the row is
- * done, not backed off) and FALSE whenever the row kept its turn. `!anchored && !stamped` is the box's
- * one honest test for "this row is coming back", and the reason the tick's `missed` count can stop
- * claiming rows the server never actually retired.
- */
 export type AnchorResolveResult = {
   anchored: boolean;
-  /**
-   * Rows the metered Apify rung may still be sent TODAY under the operator's daily cap
-   * (anchor-apify.ts), as it stands AFTER this call's own authorisation. The sweep reports it and
-   * stops pulling work once it reaches 0 — the brake itself is server-side, this is the readout.
-   */
+
   apifyBudgetRemaining: number;
-  /**
-   * THE PAID RUNG'S ADMISSION VERDICT for this row — the server telling the sweep whether it may
-   * spend Apify money on it (see "THE PAID RUNG'S ADMISSION RULE" above). FALSE on an anchor (there
-   * is nothing left to buy), on a row whose free exact-ISRC ask has not happened yet, and on a row
-   * the daily cap has no room for. The box is TOLD, never trusted: `anchorTrack` re-checks the rule
-   * at the write boundary.
-   */
+
   apifyEligible: boolean;
-  /** Why `apifyEligible` is false, or null (an anchor, or an eligible row). */
+
   apifyIneligibleReason: AnchorApifyIneligibleReason | null;
   apifyEnabled: boolean;
-  /** Free-rung candidates that arrived without a numeric duration, counted without filtering them. */
+
   freeDurationMsOmitted: number;
   isrcRecoveredByDeezer: boolean;
   listenbrainzOutcome: ListenBrainzAnchorOutcome;
@@ -842,10 +459,6 @@ export type AnchorResolveResult = {
   verifiedBy: AnchorGateVerification;
 };
 
-/**
- * The free-rung outcome BEFORE the Deezer-recovery + Apify-flag fields are folded in by
- * `resolveAnchorFree` (the Spotify-search rungs never learn of Deezer or the Apify flag).
- */
 type FreeResolveOutcome = Omit<
   AnchorResolveResult,
   | "apifyBudgetRemaining"
@@ -857,17 +470,9 @@ type FreeResolveOutcome = Omit<
   | "spotifySearchEnabled"
   | "stamped"
 > & {
-  /**
-   * INTERNAL, never on the wire: the exact-ISRC rung ASKED Spotify about this row and Spotify had
-   * nothing — the receipt condition (schema.ts § `spotify_isrc_asked_at`). Strictly narrower than
-   * `spotifyIsrcAsked`, which is also true for the asks that ended in a 429, a dead grant, or a
-   * metadata read that failed: none of those is a clean miss, and treating them as one would buy an
-   * Apify search for a question Spotify never actually answered.
-   */
   spotifyIsrcCleanMiss: boolean;
 };
 
-/** A Spotify-rung outcome with every field a miss carries — the shared "nothing happened" shape. */
 const NO_SPOTIFY_OUTCOME: FreeResolveOutcome = {
   anchored: false,
   freeDurationMsOmitted: 0,
@@ -879,27 +484,10 @@ const NO_SPOTIFY_OUTCOME: FreeResolveOutcome = {
   verifiedBy: null,
 };
 
-/**
- * `spotifyFetch` throws a plain Error whose message carries the upstream status, so a 429 is read
- * back off the message — the SAME sniff `findSpotifyTrackByIsrc` uses to set its own `rateLimited`.
- * One helper so the yield law's definition of "Spotify pushed back" is written once.
- */
 function isSpotifyThrottle(error: unknown): boolean {
   return error instanceof Error && error.message.includes("429");
 }
 
-/**
- * Fetch a Spotify track's metadata and shape it into a verifiable candidate — best-effort.
- *
- * The call is RECORDED into the shared fixed-window meter whichever way it goes (a 429 is still a
- * unit of pressure on the app), so the catalogue's draw on the official app stops being invisible to
- * the paths that pace against it.
- *
- * `throttled` is reported rather than swallowed with the rest of the failure. The yield law is
- * "ANY 429 in the anchor path ends the tick's remaining Spotify asks", and this by-id read is a
- * Spotify call like any other — folding its throttle into an undifferentiated `undefined` would
- * leave the law relying on the breaker's much slower 5-in-10-minutes threshold to notice.
- */
 async function metadataCandidate(
   spotifyTrackId: string,
   now: Date,
@@ -931,12 +519,8 @@ async function metadataCandidate(
 }
 
 type ListenBrainzResolveResult = {
-  /** The rung's single candidate lacked a numeric duration; absent when no candidate arrived. */
   durationMsOmitted?: number;
-  /**
-   * True iff this rung's ONE by-id Spotify read came back 429. Carried up so the yield law sees a
-   * throttle wherever in the anchor path it happened — the rung is free, but its read is not.
-   */
+
   throttled?: boolean;
 } & (
   | {
@@ -948,34 +532,6 @@ type ListenBrainzResolveResult = {
     }
 );
 
-/**
- * THE FREE LISTENBRAINZ RUNG. Given the row's MusicBrainz recording MBID, ListenBrainz labs returns
- * the Spotify track ids for that exact recording (free, no auth). The FIRST id's metadata is fetched
- * with ONE `GET /v1/tracks/{id}` — a cheap by-id read, NEVER a search — and that single candidate runs
- * the SAME `anchorTrack` gate. Every outcome stays distinct (`no-mbid`, `no-map`, `empty-ids`,
- * `request-failed`, `metadata-failed`, `gate-rejected`, `yielded-on-breaker`, or `anchored`) so the
- * box can measure where candidates die. Anchors with `stampOnMiss: false` so a miss leaves the row
- * for the later rungs. The `AnchorTrackError` rails propagate (the caller maps them to status).
- *
- * ── THE BY-ID READ YIELDS TO THE BREAKER (the money leak this closes) ────────────────────────────
- * That one by-id read draws on the SAME official Spotify app the mint and publish do, and it must
- * consult nothing at all: not the throttle breaker, not the shared call meter. Through Spotify's
- * daily throttle windows the consequence was total and silent — every LB candidate died on the read
- * (whole ticks where `summary.failed` equalled `summary.lbMetadataFailed` exactly, and the breaker
- * re-tripped ~11s in), and each of those rows then bought a billed Apify search for an anchor it
- * already had for free (~1,400 rows/day). So the read now checks the breaker FIRST and yields when
- * it is tripped.
- *
- * WHERE THE CHECK SITS IS DELIBERATE: after the free ListenBrainz lookup, immediately before the
- * Spotify read. Yielding earlier would save a free call and cost the diagnosis — `no-mbid` /
- * `no-map` / `empty-ids` are answers about the ROW that stay true regardless of Spotify's mood, and
- * collapsing them into a yield would blind the tally to where candidates actually die.
- *
- * A YIELD IS NOT A FAILURE. It stamps nothing, writes nothing, and reports its own outcome, so the
- * row falls through to the later rungs exactly as any miss does. The breaker is durable state, so
- * the first yield in a tick is effectively the whole tick's — which is the intent: while Spotify is
- * pushing back, the free rung stops asking rather than burning its candidates one 429 at a time.
- */
 async function resolveViaListenBrainz(
   trackId: string,
   mbid: null | string,
@@ -1009,8 +565,6 @@ async function resolveViaListenBrainz(
     return { outcome: "empty-ids" };
   }
 
-  // THE YIELD. A tripped breaker means the shared app has been pushing back; spending the by-id read
-  // into that wall just converts a free candidate into a paid Apify search.
   if (!(await anchorSpotifyBreakerAllows(now))) {
     return { outcome: "yielded-on-breaker" };
   }
@@ -1040,12 +594,6 @@ async function resolveViaListenBrainz(
   };
 }
 
-/**
- * Map a Spotify search result to a verified-search candidate. The search result already carries the
- * candidate's duration + title + artists — every signal the search-triple gate reads — so no extra
- * by-id metadata read is spent. It carries no ISRC, so these candidates only ever clear the gate via
- * the search triple (never the ISRC-equality rung), which is exactly the fuzzy rung's role.
- */
 function searchResultCandidate(result: TrackSearchResult): AnchorCandidate {
   return {
     albumImageUrl: result.artworkUrl ?? null,
@@ -1060,32 +608,6 @@ function searchResultCandidate(result: TrackSearchResult): AnchorCandidate {
   };
 }
 
-/**
- * THE DARK SPOTIFY SEARCH RUNGS (slice 2). Reached only after a ListenBrainz miss AND only when
- * `anchorSpotifySearchAllowed` is true — so a caller that never reaches here has issued ZERO Spotify
- * search calls (the load-bearing property is enforced by the caller, below).
- *
- *   RUNG 2 — exact ISRC. Only when the row carries an ISRC: `findSpotifyTrackByIsrc` finds the id, and
- *   we fetch its OWN metadata (the honest re-derivation — the box's/query's word is never trusted) and
- *   run it through the gate, where the ISRC-equality rung fires when the candidate's real ISRC matches.
- *   A throttle (429) or a dead grant STOPS the row here — no second search is spent — and it falls to
- *   Apify: yielding the shared token to the user-facing paths is the whole point of the low ceiling.
- *
- *   RUNG 3 — the verified fuzzy search. For a no-ISRC row, or when the ISRC rung missed:
- *   `searchTrackCandidates` returns up to 8 candidates, fed straight through the search-triple gate.
- *
- * `spotifySearchDone` is set the moment the first search is issued, so the box paces even on a miss.
- * `spotifyIsrcAsked` is the NARROWER signal — set only by rung 2 — because the exact rung is the unit
- * the box's per-tick ask budget meters. A HIT anchors with `stampOnMiss: false` (a miss stays open
- * for Apify), so this never stamps a miss.
- *
- * ── THE YIELD LAW ────────────────────────────────────────────────────────────────────────────────
- * ANY 429 in here reports `spotifyThrottled`, and a throttle is PASS-ENDING, never ROW-FAILING: the
- * box stops asking for Spotify rungs for the rest of the tick, and this row stamps nothing — it is
- * not a settled miss, it is a question we did not get to ask. Exactly the shape the Deezer quota law
- * already has, and the reason the caller's terminal-stamp branch consults it. A row asked-and-MISSED
- * under the exact rung is the opposite case and stamps normally: that IS a settled miss.
- */
 async function resolveViaSpotifySearch(
   trackId: string,
   isrc: null | string,
@@ -1094,21 +616,13 @@ async function resolveViaSpotifySearch(
   now: Date,
 ): Promise<FreeResolveOutcome> {
   let freeDurationMsOmitted = 0;
-  // The receipt condition (schema.ts § `spotify_isrc_asked_at`): the exact rung ASKED and Spotify's
-  // answer settled the question. Two shapes qualify — Spotify holds no track under this ISRC, and
-  // Spotify holds one that this row's own gate refuses. Both are answers the PAID rung would only
-  // buy again, because it scrapes the same catalogue and is judged by the same gate. Every other exit
-  // below (a 429, a dead grant, a failed by-id read) leaves it false: the question went unanswered.
+
   let spotifyIsrcCleanMiss = false;
 
-  // RUNG 2 — the exact ISRC search, only for a row that carries one.
   if (isrc?.trim()) {
     const lookup = await findSpotifyTrackByIsrc(isrc);
     await recordAnchorSpotifyCall(now);
 
-    // A throttle or a dead grant: do NOT spend the fuzzy search too — back off and fall to Apify.
-    // Only the THROTTLE arms the yield law; a dead grant is an operator problem the breaker does
-    // not model, and it already stops this row without pretending Spotify pushed back.
     if (lookup.rateLimited || lookup.unauthorized) {
       return {
         ...NO_SPOTIFY_OUTCOME,
@@ -1119,15 +633,12 @@ async function resolveViaSpotifySearch(
     }
 
     if (!lookup.match) {
-      // Spotify answered, and it does not hold this ISRC. The cleanest possible miss.
       spotifyIsrcCleanMiss = true;
     }
 
     if (lookup.match) {
       const read = await metadataCandidate(lookup.match.trackId, now);
 
-      // The re-derivation read is a Spotify call too: a 429 on it ends the tick's asks and must not
-      // be spent again on the fuzzy rung.
       if (read.throttled) {
         return {
           ...NO_SPOTIFY_OUTCOME,
@@ -1157,8 +668,6 @@ async function resolveViaSpotifySearch(
           };
         }
 
-        // Spotify holds the ISRC and this row's own gate refused what it holds. The paid rung reads
-        // the same catalogue through the same gate, so it can only refuse it again — asked, answered.
         spotifyIsrcCleanMiss = true;
       }
     }
@@ -1166,8 +675,6 @@ async function resolveViaSpotifySearch(
 
   const isrcAsked = Boolean(isrc?.trim());
 
-  // RUNG 3 — the verified fuzzy search (a no-ISRC row, or an ISRC miss). Best-effort: a search that
-  // throws is a miss, and the row falls to Apify un-stamped.
   let candidates: TrackSearchResult[];
 
   try {
@@ -1208,60 +715,6 @@ async function resolveViaSpotifySearch(
   };
 }
 
-/**
- * THE PRE-ANCHOR DEEZER ISRC-RECOVERY RUNG. Runs FIRST, and ONLY for an ISRC-less row: the crawler's
- * ISRC comes from MusicBrainz, whose ISRC coverage of underground DnB is sparse, so ~60% of catalogue
- * rows arrive with no ISRC even though the track genuinely HAS one — which forces anchoring down the
- * low-precision FUZZY rung. Deezer is a free, no-auth ISRC oracle: a title+artist search returns hits
- * already carrying the real ISRC + duration. We recover it BEFORE anchoring so the high-precision
- * EXACT-ISRC rungs (ListenBrainz maps + Spotify ISRC search) do the work instead of fuzzy.
- *
- * PRECISION IS PARAMOUNT: the recovered ISRC feeds ISRC-EQUALITY anchoring downstream, so a wrong
- * Deezer match would seed a wrong (and permanent) anchor. Every hit is re-verified against the row to
- * the SAME bar the anchor gate uses — the folded artist-set + base-title identity AND a duration within
- * `ANCHOR_DURATION_TOLERANCE_MS` — via the shared `pickVerifiedCandidate` gate (Deezer's billed
- * `artistName` folds into an artist set through `matchKey`). On any doubt, no recovery: the row simply
- * stays ISRC-less and falls to fuzzy, exactly as before this rung existed.
- *
- * EITHER CONCLUSION IS AN ATTEMPT, and stamps the shared `isrc_attempted_at` (schema.ts) — a recovery
- * and a gate-clean refusal both answer the question. That shared stamp stays untouched on an empty
- * candidate list, since the Worker-self-fetched `searchDeezerCandidates` result cannot distinguish
- * "Deezer has nothing" from quota/network failure. The dedicated `isrc_recovery_attempted_at` has a
- * narrower signal: a BOX-SUPPLIED result stamps it on recovery, gate refusal, and present-but-empty
- * clean miss, because the box sweep never calls the resolver for quota or transport outcomes.
- *
- * AND THE HIT'S DEEZER ID RIDES ALONG (`tracks.deezer_track_id`, schema.ts). A hit that cleared this
- * gate IS this recording on Deezer, so its id is kept in the same statement with the rung that
- * cleared as its provenance, and `/identity` serves a Deezer link off it. It is free — the id came
- * in the search response that was already read — and it is never kept off an ungated answer.
- *
- * THIS IS ALSO THE ONE PLACE THE DEEZER LEDGER IS WRITTEN (`tracks.backfill_deezer_*`, schema.ts).
- * It is stamped by the two outcomes that settle whether Deezer carries this recording — a hit that
- * cleared the gate WITH an id, and a gate-clean refusal — and by nothing else. The two exits above
- * (an unverifiable row, an empty candidate list) stamp nothing IN THIS ENRICHMENT LEDGER, on exactly
- * the reasoning that governs the shared `isrc_attempted_at` here, and neither does the legacy branch
- * where a cleared hit arrives with no id (see the write below). The dedicated box-recovery ledger is
- * independent and does settle a supplied empty list. The enrichment ledger is what lets a
- * checked-and-gate-refused row say so without consuming the separate ISRC-gated backfill worklist.
- *
- * A verified hit's ISRC is written FILL-EMPTY-ONLY (`coalesce(isrc, ?)`, mirroring the anchor-hit
- * write) — a real ISRC is never overwritten (defensive; we only reach here for an ISRC-less row) — and
- * returned so the SAME resolve call carries it forward in memory to the exact-ISRC rungs. Returns
- * `undefined` on a miss (no artist/title/duration to verify against, a Deezer miss, or no hit clears
- * the gate). Best-effort: the Deezer client never throws, so a Deezer outage degrades cleanly to no
- * recovery — anchoring is never broken, only unhelped, on that row.
- *
- * WHO FETCHED THE HITS. `suppliedCandidates` is the box's — the anchor sweep runs the Deezer search
- * from rave-02's own dedicated IP because Deezer's tokenless quota is PER-IP and the Worker's shared
- * Cloudflare edge IPs are saturated by the whole platform (measured: 0 recoveries out of 5,133
- * ISRC-less rows over 3 days from the edge, 25/25 clean from the box; see ./deezer.ts's header). ONLY
- * THE FETCH MOVED: the gate below and the write below are unchanged and still the only thing that can
- * authorise an ISRC, so a box that hands over a wrong hit gets exactly what a wrong Deezer answer
- * always got — a refusal. The box's own verdict is never asked for and there is nothing to trust.
- * PRESENT (even as an EMPTY array) ⇒ the box already searched and this call issues NO Deezer request;
- * ABSENT ⇒ nobody searched yet, so we search here (the certify path, and any caller with no box in
- * front of it). This is the `anchor_track`/Apify precedent: the sources fetch, the Worker rules.
- */
 export async function recoverIsrcViaDeezer(
   trackId: string,
   db: Awaited<ReturnType<typeof getDb>>,
@@ -1270,8 +723,6 @@ export async function recoverIsrcViaDeezer(
   rowDurationMs: number,
   suppliedCandidates?: DeezerIsrcCandidate[],
 ): Promise<string | undefined> {
-  // No stable duration or identity to verify against ⇒ we cannot trust a match, so we do not recover.
-  // Checked BEFORE the source split, so a box-supplied hit is held to the same precondition.
   if (!rowTitle.trim() || rowArtists.length === 0 || !(rowDurationMs > 0)) {
     return undefined;
   }
@@ -1281,10 +732,6 @@ export async function recoverIsrcViaDeezer(
 
   if (candidates.length === 0) {
     if (suppliedCandidates !== undefined) {
-      // A PRESENT empty list is a trustworthy clean miss only for the box-supplied path. The
-      // isrc-recovery sweep sends `[]` solely after an `ok` Deezer response; quota and transport
-      // outcomes never call `resolve_anchor`. The Worker-self-fetched client still collapses its
-      // empty and failed outcomes, so absence of supplied candidates must remain unstamped.
       await batchDueWorkSourceMutation(
         db,
         [
@@ -1303,14 +750,6 @@ export async function recoverIsrcViaDeezer(
     return undefined;
   }
 
-  // The SAME gate an anchor candidate clears: folded artist-set + base-title identity AND a duration
-  // within ±ANCHOR_DURATION_TOLERANCE_MS. Deezer's fuzzy search may lead with a remix — the fold keeps
-  // its version descriptor distinct, so the original never recovers a remix's ISRC (and vice-versa).
-  //
-  // `verifySearchCandidate` rather than `pickVerifiedCandidate` because the Deezer ID kept below
-  // has to say WHICH rung agreed (`search` vs the looser `search-subset`), the same distinction the
-  // anchor persists. The ISRC decision is byte-for-byte the one it always was: same gate, same
-  // candidate, same tiebreak.
   const verified = verifySearchCandidate(
     rowArtists,
     rowTitle,
@@ -1327,23 +766,6 @@ export async function recoverIsrcViaDeezer(
   const recovered = verified?.candidate.isrc.trim();
 
   if (!recovered) {
-    // A GATE-CLEAN MISS, and therefore a concluded attempt: Deezer answered with candidates and not
-    // one of them cleared the identity gate. Stamped (schema.ts § `isrc_attempted_at`) so the row
-    // reads "looked, not there" rather than the ambiguous silence — the honest negative is the point
-    // of the column. Note where this sits: BELOW the empty-candidates return above. That return
-    // deliberately leaves THIS shared stamp untouched because `searchDeezerCandidates` hands back
-    // the same empty array for "Deezer has nothing" and for quota/network failure. The dedicated
-    // box-recovery ledger can distinguish a supplied clean-empty response and handles it above.
-    //
-    // THE DEEZER LEDGER RIDES THE SAME STATEMENT (schema.ts § `backfill_deezer_*`), because this is
-    // the miss it was built for. The same candidates that failed the ISRC gate failed the DEEZER-ID
-    // gate — the id is kept only off a hit that clears, so a gate-clean miss ends with no id — and
-    // that is a look CONCLUDED, not a look never taken. Without this stamp the row's receipt would
-    // go on claiming "Not checked yet" after Fluncle had checked and come back empty; with it the
-    // row reads "Not found · checked <date>". `attempted_at` is a plain assignment (the last
-    // concluded look, a moving watermark) and `attempts` increments (the monotone tally the identity
-    // envelope prints). `done_at` stays null — nothing resolved — and `failures` stays 0, since this
-    // branch IS the clean conclusion rather than the transport failure a streak would back off from.
     const missAt = new Date().toISOString();
     const recoveryAttemptedAt = suppliedCandidates === undefined ? null : missAt;
 
@@ -1367,34 +789,6 @@ export async function recoverIsrcViaDeezer(
     return undefined;
   }
 
-  // FILL-EMPTY-ONLY, exactly like the anchor-hit write (PR #813): a NULL is filled, a real ISRC is
-  // never clobbered. Persisted whether or not a rung then anchors, so the next tick's exact-ISRC rung
-  // and the ISRC-equality dedup both benefit even on a full miss this tick. The attempt stamp rides
-  // the SAME statement — a recovery is a concluded attempt too, and the pair cannot be written apart.
-  //
-  // AND THE DEEZER LINK (schema.ts § `deezer_track_id`). The hit that just cleared the anchor's own
-  // identity gate is, by that fact, this recording on Deezer — so its id is KEPT rather than dropped,
-  // in this same statement, with the rung that cleared as its provenance. Free: no extra request was
-  // made for it. The trio is first-write-wins through `coalesce` and moves together, so a row can
-  // never wear an id with another id's provenance. Null id (an older box's payload, or a hit Deezer
-  // sent without one) binds three nulls and changes nothing.
-  //
-  // AND THE DEEZER LEDGER (schema.ts § `backfill_deezer_*`), in this same statement — but ONLY when
-  // an id actually came back. A hit that cleared the gate AND carried an id is a look concluded, so
-  // `attempted_at` moves and `attempts` increments; a tally that counted only misses would be no
-  // tally at all. `done_at` follows the id exactly: it coalesces on the same first-write-wins rule
-  // and binds the same value as `deezer_verified_at`, so the moment the link was won and the moment
-  // the ledger says it resolved can never drift apart.
-  //
-  // A CLEARED HIT THAT ARRIVED WITHOUT AN ID STAMPS NOTHING IN THE DEEZER-ENRICHMENT LEDGER, and the
-  // reason is the receipt's vocabulary. That branch is a legacy-box-payload defence
-  // (`searchDeezerCandidates` sets the id from Deezer's numeric `id`, which it always sends), and on
-  // it Deezer demonstrably DOES carry the recording — the ISRC being written on this very line came
-  // out of that hit. Stamping the enrichment ledger would render the row "Not found · checked
-  // <date>", and on every other row of that page "Not found" means the look could not identify the
-  // recording on that platform, not that a payload omitted a field. No enrichment state fits:
-  // `absent` misstates the fact and `verified` has no link to show. The dedicated box-recovery ledger
-  // still stamps this settling outcome when the candidates were supplied.
   const now = new Date().toISOString();
   const deezerTrackId = verified?.candidate.deezerTrackId ?? null;
   const deezerWonAt = deezerTrackId === null ? null : now;
@@ -1405,7 +799,6 @@ export async function recoverIsrcViaDeezer(
     [
       {
         args: [
-          // Bound twice — FILL_ISRC_SQL's contract (lib/server/isrc.ts).
           recovered,
           recovered,
           now,
@@ -1439,28 +832,6 @@ export async function recoverIsrcViaDeezer(
   return recovered;
 }
 
-/**
- * Stamp a catalogue row's re-ask backoff (`spotify_anchor_attempted_at`) — the rotation clock the
- * worklist reads (14 days, track-work.ts `ANCHOR_REASK_AFTER_DAYS`) — and, when `chargeAttempt`,
- * the retry-cap counter `spotify_anchor_attempts` with it. `anchorTrack`'s stamped miss is the same
- * write with the charge always on, because a candidate list reaching the gate IS a real ask.
- *
- * ── THE TWO LEDGERS ARE NOT ONE ──────────────────────────────────────────────────────────────────
- * The STAMP parks a row so the priority-ordered queue head rotates past it; the COUNTER spends one of
- * the row's `ANCHOR_MAX_ATTEMPTS` finite tries and eventually retires it for good. They answer
- * different questions, so they are written on different conditions:
- *
- *   - the stamp is written whenever nothing that could conclude about this row is pending for it, so
- *     that re-offering it on the next tick would ask the same free oracle the same question;
- *   - the counter is charged ONLY when a rung CAPABLE OF CONCLUDING was actually asked and said no.
- *
- * A rung capable of concluding is the Spotify SEARCH pair (exact ISRC, then fuzzy) or the paid Apify
- * fallback: those look for the row across the whole catalogue and a miss from them is evidence. The
- * free ListenBrainz rung is a POSITIVE-ONLY oracle — it answers from one MusicBrainz↔Spotify mapping
- * table, so a hit is proof and a miss says only that the mapping is absent. Charging a lifetime
- * attempt to a ListenBrainz-only miss retires a row over `ANCHOR_MAX_ATTEMPTS` re-ask windows for a
- * question that was never put to anything that could have answered it.
- */
 async function stampAnchorAttempt(
   db: Awaited<ReturnType<typeof getDb>>,
   trackId: string,
@@ -1472,8 +843,7 @@ async function stampAnchorAttempt(
     [
       {
         args: [now.toISOString(), trackId],
-        // The free exact-ISRC ask receipt is cleared with the stamp, always — parking a row ends the
-        // re-ask window the receipt was evidence about (schema.ts § `spotify_isrc_asked_at`).
+
         sql: `update tracks
               set spotify_anchor_attempted_at = ?,
                   spotify_isrc_asked_at = null
@@ -1486,21 +856,6 @@ async function stampAnchorAttempt(
   );
 }
 
-/**
- * THE OPERATOR REQUEUE (`requeue_anchor`) — clear the named rows' re-ask stamp so the next sweep
- * tick attempts them again NOW rather than after `ANCHOR_REASK_AFTER_DAYS`. The lever for "the
- * resolver just got better, give these rows their shot": a matcher fix, a recovered ISRC, a
- * reviewed candidate. Deliberately clears ONLY the stamp — `spotify_anchor_attempts` (the lifetime
- * cap) stays honest, so a requeue re-times a row's next try without re-arming its bounded spend —
- * and only un-anchored rows qualify (`spotify_uri is null`). Idempotent: already-clear rows and
- * anchored rows count zero. Returns the number of rows actually re-queued.
- *
- * ISRC-LESS ROWS ARE EXCLUDED (`has_isrc = 1`, the presence mirror — schema.ts): anchoring
- * concludes off the ISRC anchor in practice, so re-arming a row without one re-bills a search that
- * cannot conclude — a bulk requeue must never put that dead weight back on the paid queue. The
- * "recovered ISRC" use case above is unharmed: a row whose ISRC was just recovered carries the
- * mirror by the time it is named here (every ISRC write path maintains it in the same statement).
- */
 export async function requeueAnchorStamps(trackIds: string[]): Promise<number> {
   if (trackIds.length === 0) {
     return 0;
@@ -1538,44 +893,12 @@ export async function requeueAnchorStamps(trackIds: string[]): Promise<number> {
   return result?.rowsAffected ?? 0;
 }
 
-/**
- * The rows `requeue_isrc_recovery` acts on, as ONE predicate shared by the count and the update so a
- * dry run can never describe a different set than the apply takes.
- *
- * `isrc_attempted_at is not isrc_recovery_attempted_at` is the arm discriminator, and it reads
- * straight off how {@link recoverIsrcViaDeezer} writes: the Deezer-EMPTY branch stamps the recovery
- * watermark ALONE, while the gate-refused branch stamps it and `isrc_attempted_at` with the SAME
- * instant in one statement. So an equal pair is a verdict about the row (Deezer answered, nothing
- * cleared the identity gate) and is left standing; an unequal pair is "Deezer said nothing", which is
- * exactly what a broken ask also says. SQLite's `is not` is the null-safe form — a row whose
- * `isrc_attempted_at` is null still qualifies.
- *
- * `has_isrc = 0` and `spotify_uri is null` restate the worklist's own scope: a row that has since
- * won an ISRC or an anchor has nothing to recover and must not be handed back to the pass.
- */
 const ISRC_RECOVERY_EMPTY_MISS_WHERE = `isrc_recovery_attempted_at is not null
         and isrc_recovery_attempted_at >= ?
         and isrc_attempted_at is not isrc_recovery_attempted_at
         and has_isrc = 0
         and spotify_uri is null`;
 
-/**
- * THE OPERATOR REQUEUE FOR THE FREE DEEZER PASS (`requeue_isrc_recovery`) — clear
- * `isrc_recovery_attempted_at` on the rows the pass retired as a Deezer-EMPTY clean miss at or after
- * `since`, so they re-enter the `isrc-recovery` worklist on the next tick instead of waiting out
- * `ISRC_RECOVERY_REASK_AFTER_DAYS`. The lever for "the ask itself was broken in that window": an
- * empty answer is the one negative this pass writes down, and a query spelling the vendor stops
- * honouring produces exactly that answer for every row.
- *
- * `dryRun` (the contract's default) runs the SAME predicate as a count and writes nothing, so the
- * blast radius is read before it is taken. `matched` is that count on both paths; `requeued` is 0 on
- * a dry run and the rows actually cleared on an apply.
- *
- * It touches ONE column. `spotify_anchor_attempted_at` in particular is left alone: the anchor
- * worklist sorts by sunk cost, so bulk-clearing anchor stamps on ISRC-less rows walls its head with
- * work that cannot conclude. A row whose ISRC this pass then recovers reaches the anchor queue the
- * ordinary way, at its real priority.
- */
 export async function requeueIsrcRecoveryStamps(input: {
   dryRun: boolean;
   since: string;
@@ -1614,14 +937,6 @@ export async function requeueIsrcRecoveryStamps(input: {
   return { matched, requeued: results.at(-1)?.rowsAffected ?? 0 };
 }
 
-/**
- * Write the FREE exact-ISRC ask receipt (schema.ts § `spotify_isrc_asked_at`) — the one write that
- * makes an ISRC-bearing row eligible for the paid rung. Called on exactly one condition: the rung
- * ASKED Spotify about this row and Spotify's answer settled the question (`spotifyIsrcCleanMiss`).
- *
- * A plain assignment, not a coalesce: the receipt is about the CURRENT re-ask window, and the
- * freshest ask is the one the admission rule should read.
- */
 async function stampSpotifyIsrcAsked(
   db: Awaited<ReturnType<typeof getDb>>,
   trackId: string,
@@ -1640,39 +955,25 @@ async function stampSpotifyIsrcAsked(
   );
 }
 
-/** What {@link admitToApifyRung} reads about a row before it authorises money on it. */
 type ApifyAdmissionInput = {
   anchored: boolean;
   apifyEnabled: boolean;
-  /** The row carries an ISRC — read AFTER rung 0's Deezer recovery, so a just-recovered row counts. */
+
   hasIsrc: boolean;
-  /** The receipt was ALREADY on the row when this call read it (a clean ask from an earlier tick). */
+
   priorAsk: boolean;
-  /** This call's exact-ISRC rung asked and Spotify settled it (`resolveViaSpotifySearch`). */
+
   spotifyIsrcCleanMiss: boolean;
   spotifySearchEnabled: boolean;
-  /** The FUZZY rung ran this call and was not throttled — an ISRC-less row's only free verdict. */
+
   spotifySearchSettled: boolean;
 };
 
-/** The three admission fields every `resolveAnchorFree` return path carries. */
 type ApifyAdmission = Pick<
   AnchorResolveResult,
   "apifyBudgetRemaining" | "apifyEligible" | "apifyIneligibleReason"
 >;
 
-/**
- * THE ADMISSION DECISION — may this row be sent to the metered Apify rung, and has the day's budget
- * room for it? The one place the rule in "THE PAID RUNG'S ADMISSION RULE" above is evaluated, so the
- * verdict the sweep obeys and the guard `anchorTrack` enforces can never read two different rules.
- *
- * It also WRITES THE RECEIPT, because the ask and the record of the ask are one fact: a clean miss
- * that could not be spent today (the budget had no room) must still authorise the spend tomorrow.
- *
- * THE CHARGE IS THE LAST THING IT DOES, and only for a row actually about to be sent: an anchored
- * row, an unadmitted row, and a row under a disabled kill-flag (the sweep skips the actor entirely,
- * so no money moves) all leave the tally alone.
- */
 async function admitToApifyRung(
   db: Awaited<ReturnType<typeof getDb>>,
   trackId: string,
@@ -1693,12 +994,9 @@ async function admitToApifyRung(
   });
 
   if (input.anchored) {
-    // Nothing left to buy — not a refusal, so no reason.
     return withBudget(false, null);
   }
 
-  // THE EXEMPTION: a DISARMED free exact-ISRC rung can never write a receipt, so waiting for one
-  // would close the only rung the row has left. See the rule's section header.
   const asked = input.hasIsrc
     ? input.priorAsk || input.spotifyIsrcCleanMiss
     : input.spotifySearchSettled;
@@ -1708,8 +1006,6 @@ async function admitToApifyRung(
   }
 
   if (!input.apifyEnabled) {
-    // The kill-flag already stops the actor loop on the box, so this row is admitted by the rule this
-    // function governs and the tally is untouched — there is no spend to meter.
     return withBudget(true, null);
   }
 
@@ -1722,62 +1018,6 @@ async function admitToApifyRung(
   };
 }
 
-/**
- * THE FREE (non-Apify) RESOLVER RUNGS of the waterfall — try to anchor a catalogue row without any
- * Apify money (docs/catalogue-crawler.md § the anchor). The box's sweep calls this FIRST per row and
- * spends the metered Apify search only when it MISSES.
- *
- * Order: (0) the pre-anchor DEEZER ISRC-recovery rung — ONLY for an ISRC-less row, recover the real
- * ISRC from Deezer's free oracle (verified to the anchor gate's bar) so the exact-ISRC rungs run
- * instead of fuzzy; then (1) the FREE ListenBrainz rung (recording MBID → Spotify ids → one by-id
- * metadata read → gate); then, ONLY when the dark flag `anchor_spotify_search_enabled` is on and we
- * are outside the Friday-refresh window (`anchorSpotifySearchAllowed`), (2) the exact Spotify ISRC
- * search and (3) the fuzzy Spotify search. When the flag is off (or during the Friday window) the
- * Spotify rungs are SKIPPED ENTIRELY: not one `findSpotifyTrackByIsrc` / `searchTrackCandidates` call
- * is issued — the load-bearing safety property that lets slice 2 ship dark.
- *
- * ── WHEN A MISS IS PARKED, AND WHEN IT IS CHARGED ────────────────────────────────────────────────
- * Every rung anchors with `stampOnMiss: false`, so a full miss normally leaves the row UNSTAMPED and
- * the Apify fallback (or the next tick) still gets its turn. The two exceptions are decided by ONE
- * question asked twice, in the two ledgers `stampAnchorAttempt` keeps apart:
- *
- *   PARK (the `spotify_anchor_attempted_at` stamp) when NOTHING THAT COULD CONCLUDE IS PENDING for
- *   this row — the Apify kill-flag is OFF *and* the dark search flag is OFF *and* the ListenBrainz
- *   rung did not yield to the breaker. Re-offering such a row on the next tick would put the same
- *   question to the same positive-only oracle, so it backs off (14 days) and the priority-ordered
- *   queue head rotates past it. THE CALLER'S OWN DEFERRAL DOES NOT SUPPRESS THIS: a tick-level
- *   deferral of rungs that are disarmed anyway defers nothing, and treating it as pending is exactly
- *   what pinned a day's ticks on one unmoving 250-row head.
- *
- *   CHARGE (`spotify_anchor_attempts`, the lifetime cap) only when the Spotify SEARCH rungs actually
- *   RAN and missed. A ListenBrainz-only miss is parked but never charged: it was never asked of
- *   anything that could have concluded, and charging it retires the row after
- *   `ANCHOR_MAX_ATTEMPTS` re-ask windows without a single real ask.
- *
- * A HIT is neither parked nor charged here (the anchor write settles it), and a row whose Spotify
- * search is genuinely merely DEFERRED — the flag is ON and the window/breaker/meter or the caller's
- * tick budget moved it to a later tick — is left alone, still pending, exactly as before. The Apify
- * read is reported as `apifyEnabled` so the box can skip the whole actor loop for the tick, and the
- * dark-flag read as `spotifySearchEnabled` so it can say in its summary that no rung could conclude.
- *
- * Best-effort throughout — a missing MBID, a Deezer outage, a ListenBrainz miss, a throttle, or a
- * Spotify read that throws all fall through to the later rungs without stamping, but the
- * `listenbrainzOutcome` field keeps those cases distinguishable. The `AnchorTrackError` rails
- * (not_found / certified / already_anchored) still propagate, so the op maps them to the same honest
- * status the Apify path does. `now` is injected for deterministic tests.
- *
- * `options.deezerCandidates` are the Deezer hits the BOX fetched for this row from its own IP (see
- * `recoverIsrcViaDeezer` — only the fetch moved; the gate and the write did not). Present ⇒ rung 0
- * verifies exactly those and issues no Deezer request of its own; absent ⇒ rung 0 searches Deezer here.
- *
- * `options.spotifySearch` is THE CALLER'S DEFERRAL — the box saying "not on this row". The sweep owns
- * three guards the server cannot see because they are properties of a TICK rather than of a call: the
- * per-tick exact-ISRC ask budget (`FLUNCLE_ANCHOR_ISRC_ASK_LIMIT`), the night window
- * (`FLUNCLE_ANCHOR_ISRC_WINDOW_UTC`), and the yield law (any 429 ends the tick's remaining asks). It
- * is ANDed with the server's own gate exactly like every other clause there, so a caller can only
- * ever SUBTRACT permission — no request can talk the Spotify rungs INTO running, and the dark flag
- * remains the one thing that arms them. Omitted ⇒ true ⇒ the pre-slice behaviour, unchanged.
- */
 export async function resolveAnchorFree(
   trackId: string,
   now: Date = new Date(),
@@ -1785,14 +1025,8 @@ export async function resolveAnchorFree(
 ): Promise<AnchorResolveResult> {
   const db = await getDb();
 
-  // The Apify-fallback kill-flag (default ON). Read ONCE up front, so every return path reports the
-  // same GLOBAL value and the terminal-miss stamping below can consult it. When OFF, the free rungs
-  // must back off their own full misses (no Apify rung will).
   const apifyEnabled = await isAnchorApifyEnabled();
 
-  // The dark SEARCH flag itself — the FLAG, never `anchorSpotifySearchAllowed`'s window/breaker/meter
-  // gate around it. Read ONCE up front for the same reason: every return path reports the same value,
-  // and both the parking rule below and the box's "no rung could conclude" summary read it.
   const spotifySearchEnabled = await isAnchorSpotifySearchEnabled();
 
   const found = await db.execute({
@@ -1809,9 +1043,6 @@ export async function resolveAnchorFree(
     title: null | string;
   }>(found.rows)[0];
 
-  // An unknown track has nothing to resolve — a clean miss, zero vendor calls (slice-1 behaviour).
-  // It is NOT admitted to the paid rung: there is no row to anchor, so a search on it could only ever
-  // be money spent on a 404. The budget is reported, never charged.
   if (!row) {
     const { spotifyIsrcCleanMiss: _ignored, ...noSpotify } = NO_SPOTIFY_OUTCOME;
 
@@ -1828,20 +1059,10 @@ export async function resolveAnchorFree(
     };
   }
 
-  // The receipt AS THE ROW ALREADY CARRIED IT — a clean exact-ISRC ask from an earlier tick, which
-  // admits the row to the paid rung without asking Spotify the same question twice (schema.ts §
-  // `spotify_isrc_asked_at`). Captured before any rung runs, so the admission rule reads the state the
-  // call started from rather than one its own writes changed.
   const priorAsk = Boolean(row.spotify_isrc_asked_at);
 
   const rowArtists = parseArtistsJson(row.artists_json ?? "[]");
 
-  // RUNG 0 — the pre-anchor DEEZER ISRC-recovery rung. ONLY for an ISRC-less row; on a verified hit it
-  // persists the ISRC (fill-empty-only) AND carries it forward in memory so the exact-ISRC rungs below
-  // run on it this same call (ListenBrainz's `anchorTrack` re-reads the row and sees the persisted
-  // value; the Spotify rungs read `isrc` from the in-memory variable). The ISRC-LESS gate is the
-  // SERVER's, not the box's: box-supplied hits on a row that already carries an ISRC are ignored here,
-  // exactly as a Deezer search would have been.
   let isrc = row.isrc;
   let isrcRecoveredByDeezer = false;
 
@@ -1861,13 +1082,10 @@ export async function resolveAnchorFree(
     }
   }
 
-  // RUNG 1 — the FREE ListenBrainz rung.
   const listenbrainz = await resolveViaListenBrainz(trackId, row.mb_recording_id, now);
   const listenbrainzDurationMsOmitted = listenbrainz.durationMsOmitted ?? 0;
 
   if (listenbrainz.outcome === "anchored") {
-    // A HIT already wrote the anchor + stamped the attempt — never re-stamp, regardless of the flag.
-    // The free waterfall's cheapest win, and the paid rung never hears about this row.
     const { spotifyIsrcCleanMiss: _ignored, ...noSpotify } = NO_SPOTIFY_OUTCOME;
 
     return {
@@ -1893,29 +1111,11 @@ export async function resolveAnchorFree(
     };
   }
 
-  // THE DARK GATE — off ⇒ zero Spotify search calls. Checked BEFORE either Spotify rung runs, and
-  // ANDed with the caller's own deferral (`options.spotifySearch`, the box's tick-level budget /
-  // night window / yield law), which can only ever subtract permission.
   const callerDefers = options.spotifySearch === false;
-  // A YIELD IS NOT A SETTLED MISS. The rung declined to spend its by-id read into a tripped breaker,
-  // so nothing was asked of Spotify about this row and it must keep its turn — the same rail the
-  // throttle case below obeys. Without this the row could burn a lifetime attempt on a question that
-  // was never put (Apify off + search flag off + breaker tripped is a reachable state).
+
   const listenbrainzYielded = listenbrainz.outcome === "yielded-on-breaker";
 
   if (callerDefers || !(await anchorSpotifySearchAllowed(now))) {
-    // The Spotify search rungs will not run this call, so the ListenBrainz rung is all this row got.
-    //
-    // PARK IT when nothing that could conclude is pending: Apify OFF (no paid rung is coming) AND the
-    // dark search flag OFF (no later tick will search either) AND the ListenBrainz rung did not yield
-    // to the breaker (it still owes this row its free by-id read). The caller's own deferral is NOT a
-    // reason to keep the row at the head here: a tick-level deferral of rungs that are disarmed
-    // anyway defers nothing, and honouring it re-serves the same head every tick outside the night
-    // window while the whole backlog behind it waits. With the flag ON, a deferral is real — the window,
-    // the breaker, the meter or the box's ask budget will come round — so the row keeps its turn.
-    //
-    // NEVER CHARGED. ListenBrainz is a positive-only oracle (see `stampAnchorAttempt`), so no rung
-    // capable of concluding was asked and no lifetime attempt may be spent.
     const park = !apifyEnabled && !spotifySearchEnabled && !listenbrainzYielded;
 
     if (park) {
@@ -1926,9 +1126,7 @@ export async function resolveAnchorFree(
 
     return {
       ...noSpotify,
-      // NOT ASKED IS NOT MISSED. The Spotify rungs did not run, so an ISRC-bearing row has no receipt
-      // and is refused the paid rung — it keeps its turn for the tick that can ask for free. The one
-      // exception is a DISARMED search flag, where no receipt can ever exist (see the rule's header).
+
       ...(await admitToApifyRung(db, trackId, now, {
         anchored: false,
         apifyEnabled,
@@ -1943,14 +1141,12 @@ export async function resolveAnchorFree(
       isrcRecoveredByDeezer,
       listenbrainzOutcome: listenbrainz.outcome,
       spotifySearchEnabled,
-      // A throttle anywhere in the anchor path arms the yield law, including on this rung's own
-      // by-id read — the box stops asking for Spotify rungs for the rest of the tick.
+
       spotifyThrottled: Boolean(listenbrainz.throttled),
       stamped: park,
     };
   }
 
-  // RUNGS 2/3 — the dark Spotify search rungs, fed the (possibly Deezer-recovered) ISRC.
   const searchOutcome = await resolveViaSpotifySearch(
     trackId,
     isrc,
@@ -1959,15 +1155,6 @@ export async function resolveAnchorFree(
     now,
   );
 
-  // With Apify OFF, a FULL MISS after the Spotify search rungs is terminal — every rung available to
-  // the row this call has now been spent — so back it off. (Apify ON ⇒ UNCHANGED: the miss stays
-  // un-stamped for the Apify fallback's turn.) This is the one path that CHARGES: the search pair is
-  // the rung capable of concluding, and it ran and said no.
-  //
-  // A THROTTLE IS THE ONE EXCEPTION, and it is the yield law: a 429 means the question was never
-  // actually put to Spotify, so the row is deferred rather than exhausted and stamping it would
-  // spend a lifetime attempt on a call that did not happen. A ListenBrainz throttle counts too — the
-  // shared app pushed back either way.
   const throttled = searchOutcome.spotifyThrottled || Boolean(listenbrainz.throttled);
   const settled = !apifyEnabled && !searchOutcome.anchored && !throttled;
 
@@ -1979,9 +1166,7 @@ export async function resolveAnchorFree(
 
   return {
     ...searchWire,
-    // The admission decision, on everything this call actually learned: whether the exact rung asked
-    // and Spotify settled it, and whether the fuzzy rung ran for an ISRC-less row. A throttled pass
-    // settled nothing, so it admits nothing — the yield law and the money rail agree.
+
     ...(await admitToApifyRung(db, trackId, now, {
       anchored: searchOutcome.anchored,
       apifyEnabled,
@@ -2001,33 +1186,8 @@ export async function resolveAnchorFree(
   };
 }
 
-// ── THE ANCHOR REVIEW: a miss the operator can read ──────────────────────────────────────────
-// Everything above is a machine deciding, silently, in one of two directions: anchored, or not.
-// That is the right shape for a precision gate and the wrong shape for the one miss that is
-// ACTIONABLE — the suspected version mismatch (`detectVersionMismatch`), where the metadata we hold
-// is wrong rather than the match. Those rows miss deterministically forever and now retire under
-// the retry cap, so a pipeline that discards the near-match discards the only evidence anyone could
-// act on. This half writes it down (`tracks.anchor_review_json`), reads it back for the /admin
-// attention queue, and lets the OPERATOR — never a machine — either bind the row to the reviewed
-// candidate or say it is not a match.
-//
-// The rails, in one place:
-//   - the gate is UNCHANGED. A review is a note beside a miss, never a looser rule.
-//   - a review NEVER outlives its miss: any anchor clears it (`anchorTrack`'s hit write), and so
-//     does either ruling.
-//   - ACCEPTING is operator-only, and refuses a candidate with no Spotify id — there would be
-//     nothing to anchor to. Such a review (a Deezer-rung suspect, or one seeded by the backfill
-//     script) rides the queue as INFORMATION: the MusicBrainz link so the operator can fix the
-//     metadata upstream, and the row re-detects with a Spotify-sourced candidate on a later tick.
-
-/** Why a row is in the operator's anchor-review queue. One reason today; the column is a note, not a flag. */
 export type AnchorReviewReason = "version_mismatch";
 
-/**
- * Which rung produced the reviewed candidate — provenance for the operator, never a verdict.
- * `apify` is the default (the box's `anchor_track` POST); `deezer` is reachable only through the
- * backfill script, which may seed a suspect the ISRC-recovery rung noticed.
- */
 export type AnchorReviewSource =
   | "apify"
   | "deezer"
@@ -2035,12 +1195,6 @@ export type AnchorReviewSource =
   | "spotify-isrc"
   | "spotify-search";
 
-/**
- * The reviewed candidate, as stored. It carries everything the ACCEPT write needs so the ruling
- * spends no vendor call: the artists with their stable Spotify ids (so the accepted anchor links
- * the graph exactly as a gate hit does), the cover, the ISRC, and the duration the suspicion was
- * measured on. `spotifyTrackId` is OPTIONAL by design — see the section header.
- */
 export type AnchorReviewCandidate = {
   albumImageUrl?: null | string;
   artists: AnchorArtist[];
@@ -2051,28 +1205,16 @@ export type AnchorReviewCandidate = {
   title: string;
 };
 
-/** The stored note itself: the candidate, the row's own title at detection time, why, and when. */
 export type AnchorReview = {
   at: string;
   candidate: AnchorReviewCandidate;
   reason: AnchorReviewReason;
-  /** The row's title AS IT READ when the suspicion was recorded — the other half of the evidence. */
+
   title: string;
 };
 
-/**
- * The most anchor-review rows the attention queue will ever carry — the `LABEL_REVIEW_QUEUE_LIMIT`
- * discipline. A suspected mismatch is rare, so this cap is not expected to bite; it exists so a bad
- * crawl batch (or a wide backfill seed) can never drown the queue's other thirteen sources in the
- * `/admin` SSR payload, the react-query cache, and the one-per-line CLI + Raycast reads.
- */
 export const ANCHOR_REVIEW_QUEUE_LIMIT = 25;
 
-/**
- * Parse a stored review, tolerantly. A row whose JSON is absent, malformed, or shaped wrong reads
- * as NO review (and logs): the column is operator evidence, so a corrupt value must degrade to
- * silence rather than throw on an `/admin` load or wedge the anchor sweep mid-tick.
- */
 export function parseAnchorReview(raw: null | string | undefined): AnchorReview | undefined {
   if (!raw?.trim()) {
     return undefined;
@@ -2129,12 +1271,6 @@ export function parseAnchorReview(raw: null | string | undefined): AnchorReview 
   };
 }
 
-/**
- * Write (or OVERWRITE) a row's suspected-version-mismatch review. Overwrite is deliberate: a row is
- * re-asked for months, and the NEWEST near-match is the one worth reading — a later rung's suspect
- * is better evidence than a stale one, and keeping a history would turn a note into a ledger nobody
- * reads. Best-effort by design at the call site: the anchor's own stamping is what must not fail.
- */
 async function recordAnchorReview(
   db: Awaited<ReturnType<typeof getDb>>,
   trackId: string,
@@ -2164,37 +1300,24 @@ async function recordAnchorReview(
   });
 }
 
-/** One anchor-review queue row — the row's identity, the candidate's, and the gap between them. */
 export type AnchorReviewRow = {
-  /** When the suspicion was recorded — the queue's oldest-first anchor. */
   anchorAt: string;
   artUrl?: string;
   artists: string[];
   candidateArtists: string[];
-  /** The candidate's version descriptor ("calibre remix"); "" when IT is the plain one. */
+
   candidateDescriptor: string;
-  /** Present ⇒ the candidate can be anchored to, so Accept is offered. */
+
   candidateSpotifyTrackId?: string;
   candidateTitle: string;
-  /** SIGNED candidate − row duration, in ms. Inside ±1s by construction; the sign is the read. */
+
   deltaMs: number;
-  /** The bare MusicBrainz recording MBID (any `mb_` prefix stripped), when the row carries one. */
+
   mbRecordingId?: string;
   title: string;
   trackId: string;
 };
 
-/**
- * The anchor-review queue read as a statement, so `anchor.integration.test.ts` can pin its plan
- * against the migrated schema.
- *
- * The unary `+` on `spotify_uri` is load-bearing. Hosted Turso carries no `sqlite_stat1`, so the
- * planner rates an `is null` equality on any indexed column as selective and would seek
- * `tracks_spotify_uri_idx` — every un-anchored catalogue row — then sort the survivors in a temp
- * b-tree. The `+` removes `spotify_uri` from index consideration, leaving the partial
- * `tracks_anchor_review_idx` as the only access path: a walk of the reviewed rows in `track_id`
- * order that stops at the limit.
- */
 export function anchorReviewQueueStatement(): { args: number[]; sql: string } {
   return {
     args: [ANCHOR_REVIEW_QUEUE_LIMIT],
@@ -2209,21 +1332,6 @@ export function anchorReviewQueueStatement(): { args: number[]; sql: string } {
   };
 }
 
-/**
- * The attention-queue source: every UN-ANCHORED catalogue row carrying a suspected-version-mismatch
- * review, capped at {@link ANCHOR_REVIEW_QUEUE_LIMIT}.
- *
- * The trust rule, as SQL: `spotify_uri is null` (an anchored row's review is history — a hit clears
- * it, and this guards a row anchored by any path that somehow did not) and `dismissed_at is null`
- * (a row the operator already said "not for me" about is not his business). Both ride the tiny
- * partial `tracks_anchor_review_idx`, so this never scans the growing `tracks` table — which
- * matters here more than anywhere: every embedded row carries a 4 KB vector blob that a full scan
- * would drag off the page.
- *
- * Ordered by `track_id` (the index's own order — stable and index-served) rather than by the
- * review's `at`, which lives inside the JSON and would cost a per-row `json_extract` + a sort. The
- * queue's ORDERING is the pure model's job anyway: it sorts every source oldest-first on `anchorAt`.
- */
 export async function listAnchorReviewRows(): Promise<AnchorReviewRow[]> {
   const db = await getDb();
   const result = await db.execute(anchorReviewQueueStatement());
@@ -2241,7 +1349,6 @@ export async function listAnchorReviewRows(): Promise<AnchorReviewRow[]> {
   return rows.flatMap((row): AnchorReviewRow[] => {
     const review = parseAnchorReview(row.anchor_review_json);
 
-    // A row whose note we cannot read is not a row the operator can act on (the trust rule).
     if (!review) {
       return [];
     }
@@ -2267,29 +1374,8 @@ export async function listAnchorReviewRows(): Promise<AnchorReviewRow[]> {
   });
 }
 
-/** The operator's two rulings on a held anchor review. */
 export type AnchorReviewResolution = "accepted" | "dismissed";
 
-/**
- * THE OPERATOR'S RULING on a suspected version mismatch. The one path by which a review becomes an
- * anchor — and it is operator-tier for the reason the whole module exists: the evidence is a
- * heuristic, and a wrong `spotify_uri` poisons the Telescope playlist and the certify path
- * permanently. A machine may raise the question; only a human may answer it.
- *
- * `accepted` — he read both titles and the candidate IS the row. The anchor is written EXACTLY as a
- * gate hit writes it (uri + url, fill-empty-only cover + ISRC, the attempt stamp and its counter
- * moving together as they always do) and the artists are linked off the SAME stored candidate, so
- * an accepted anchor is indistinguishable from a verified one downstream. Refuses (`no_spotify_
- * candidate`) when the reviewed candidate carries no Spotify id: there is nothing to anchor to, and
- * inventing one is the failure mode this module is built to prevent.
- *
- * `dismissed` — not a match (or the metadata is right and streaming is wrong). The review is cleared
- * and the row keeps its NORMAL lifecycle: same stamp, same counter, same retry cap. Dismissing
- * decides nothing about the row except that this near-match was not it.
- *
- * The rails, before either: the row must EXIST, be UNCERTIFIED, be UN-ANCHORED, and carry a
- * readable review (`no_review`). Each throws `AnchorTrackError` so the op maps it to an honest status.
- */
 export async function resolveAnchorReview(
   trackId: string,
   resolution: AnchorReviewResolution,
@@ -2357,7 +1443,6 @@ export async function resolveAnchorReview(
     );
   }
 
-  // The gate's hit write, verbatim (see `anchorTrack`) — plus clearing the review the ruling settles.
   const candidateIsrc = review.candidate.isrc?.trim() ? review.candidate.isrc.trim() : null;
   const expectedIsrc = row.isrc ?? candidateIsrc;
 
@@ -2369,13 +1454,11 @@ export async function resolveAnchorReview(
           `spotify:track:${spotifyId}`,
           `https://open.spotify.com/track/${spotifyId}`,
           review.candidate.albumImageUrl ?? null,
-          // Bound twice, consecutively — FILL_ISRC_SQL's contract (lib/server/isrc.ts).
+
           candidateIsrc,
           candidateIsrc,
           now.toISOString(),
-          // `verified_by = 'operator'`, and `source` left NULL: no rung found this link — he did, off
-          // evidence a rung could only raise as a question. These are the best-provenance anchors in
-          // the corpus and the envelope must never read them as legacy (schema.ts § the pair).
+
           now.toISOString(),
           trackId,
         ],

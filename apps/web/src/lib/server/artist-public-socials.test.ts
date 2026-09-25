@@ -1,10 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-// The public socials render boundary (`getPublicArtistSocials`): only auto/confirmed
-// links surface, and they sort the artist's own homepage/website FIRST, then every
-// other platform alphabetically by key. The DB is mocked with a row-returning
-// `execute`, so a test never hits a real database.
-
 const execute = vi.fn();
 
 vi.mock("./db", async () => {
@@ -21,8 +16,6 @@ beforeEach(() => {
 
 describe("getPublicArtistSocials — the public render boundary", () => {
   it("puts the homepage first, then the rest alphabetically by platform", async () => {
-    // Deliberately shuffled input, mixing statuses; the query returns every row and
-    // the boundary orders + filters them.
     execute.mockResolvedValue({
       rows: [
         { platform: "youtube", status: "auto", url: "https://youtube.com/@x" },
@@ -70,8 +63,6 @@ describe("getPublicArtistSocials — the public render boundary", () => {
 
     const links = await getPublicArtistSocials("artist-x");
 
-    // Only the auto Spotify row survives (candidate IG, unknown Myspace, empty-url
-    // homepage all dropped).
     expect(links.map((link) => link.platform)).toEqual(["spotify"]);
   });
 });

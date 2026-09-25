@@ -13,17 +13,13 @@ import { parseSetParam, parseTasteParam, serializeSet, serializeTaste } from "..
 import { parseArtistsJson } from "./artists";
 import { listedArtistWhere } from "./artist-visibility";
 import { getDb, typedRow, typedRows } from "./db";
-// Type-only: the runtime import of recommendations.ts is lazy (see exportAccountData).
+
 import { type RecSeedItem } from "./recommendations";
 import { isGalaxyMapFullyNamed } from "./galaxies-map";
 import { jsonError } from "./env";
 import { enforceRateLimit } from "./rate-limit";
 import { bulkTrackOrLogIdCte, TRACK_OR_LOG_ID_CTE } from "./track-id-resolver";
 
-// Re-export the shared limiter from its established import site. `enforceRateLimit`
-// moved to `./rate-limit` (the one atomic, cf-connecting-ip-keyed limiter), but
-// the account/auth call sites (`orpc/devices.ts`, `routes/api/auth/$.ts`) and the
-// `/me` preamble below still reach for it here.
 export { enforceRateLimit };
 import {
   isAllowedDisplayUsername,
@@ -58,7 +54,7 @@ type SavedRow = {
   album_image_updated_at: string | null;
   album_image_url: string | null;
   artists_json: string;
-  // Null for an uncertified catalogue save (no `findings` row → no coordinate).
+
   log_id: string | null;
   note: string | null;
   saved_at: string;
@@ -87,9 +83,7 @@ type SubmissionRow = {
   artists_json: string;
   created_at: string;
   id: string;
-  // The certified finding this recording became, via the LEFT JOIN on
-  // `findings.track_id = submissions.spotify_track_id`. NULL when no finding
-  // exists (the recording was never certified, or the submission is not approved).
+
   log_id: string | null;
   note: string | null;
   source: string;
@@ -117,16 +111,6 @@ type SqlStatement = {
 
 export type { MeResponse };
 
-// The success shapes of the `/me` read/write helpers. These are RETURN-TYPE
-// annotations only (no behavior change): TypeScript widens a bare `ok: true`
-// sibling of a computed property to `boolean` (and a ternary status to `string`),
-// which the oRPC contract outputs (`z.literal(true)`, the status enum) reject.
-// Pinning the shapes here keeps the wire body byte-identical AND lets the
-// contract stay honest (`ok` literal, status enum), so the handlers can return
-// these helpers' results directly. The Zod mirrors live in
-// `@fluncle/contracts/orpc` (`GalaxyProgress`, `SavedFinding`, `PrivateSubmission`).
-
-/** The Galaxy-progress body (`getGalaxyProgress`). `ok` pinned `true`. */
 export type GalaxyProgressResult = {
   collectedLogIds: string[];
   deaths: number;
@@ -136,11 +120,6 @@ export type GalaxyProgressResult = {
   wins: number;
 };
 
-/**
- * One saved track as the list returns it (`listSavedFindings`). `logId` rides only on
- * a certified finding — an uncertified catalogue save omits it (the unlit tier stays
- * unnamed), and the account list renders that row without a coordinate.
- */
 export type SavedFindingItem = {
   artists: string[];
   imageUrl?: string;
@@ -151,12 +130,6 @@ export type SavedFindingItem = {
   trackId: string;
 };
 
-/**
- * One saved `/mix` set as the list returns it (`listSavedSets`). `setTokens` is the
- * serialized `?set=` chain and `taste` the serialized `?taste=` seed — stored and
- * echoed verbatim, so the account page opens a set by handing them straight back to
- * `/mix`'s loader, no new hydration path.
- */
 export type SavedSetItem = {
   createdAt: string;
   id: string;
@@ -166,12 +139,6 @@ export type SavedSetItem = {
   updatedAt: string;
 };
 
-/**
- * One watched entity as the list returns it (`listWatches`). `name`/`slug` are joined from
- * the entity's own `artists`/`labels` row at read time — never denormalized onto the watch —
- * so the account row links to `/artist/<slug>` or `/label/<slug>` and shows the live name.
- * `includeSimilar` rides along for completeness; it has no consumer yet (the deferred digest).
- */
 export type WatchItem = {
   createdAt: string;
   entityId: string;
@@ -182,14 +149,11 @@ export type WatchItem = {
   slug: string;
 };
 
-/** One submission as the signed-in user sees it (`listUserSubmissions`). */
 export type PrivateSubmissionItem = {
   artists: string[];
   createdAt: string;
   id: string;
-  // The coordinate of the finding an approved submission became — present only on
-  // a `logged` submission whose recording carries a certified finding. The Sent
-  // ledger links the row to `/log/<id>` when it's here.
+
   logId?: string;
   note?: string;
   source: string;
@@ -212,13 +176,6 @@ export async function meResponse(request: Request): Promise<MeResponse> {
   };
 }
 
-/**
- * The shared `me/` mutation preamble: a signed-in public user, a JSON mutation
- * guard (content-type + origin + CSRF), and a rate-limit check. Returns the
- * user on success or a `Response` (401/415/403/429) for any guard failure —
- * handlers return it directly. `windowMs` defaults to one hour (the common
- * account-write window); pass 24h for the delete/export daily windows.
- */
 export async function requireAccountMutation(
   request: Request,
   {
@@ -256,13 +213,6 @@ export async function updatePrivateUsername(
     return jsonError(400, "invalid_request", "Invalid account settings");
   }
 
-  // The two-name model: `username` is the
-  // handle (normalized lowercase; its as-typed casing becomes `display_username`),
-  // and `name` is the freeform display name (what Google fills, what the header
-  // shows). An EMPTY submitted value falls back rather than failing: display casing
-  // falls back to the handle as typed, and a cleared name falls back to the handle —
-  // an empty-string displayUsername must fall back before validation rather than
-  // blaming the USERNAME for it.
   const usernameInput = typeof body.username === "string" ? body.username.trim() : "";
   const username = usernameInput.toLowerCase();
   const displayUsername =
@@ -271,8 +221,6 @@ export async function updatePrivateUsername(
       : usernameInput;
   const name = typeof body.name === "string" && body.name.trim() ? body.name.trim() : usernameInput;
 
-  // Literal, surface-appropriate errors: a settings form is a tool, not a stage —
-  // say what is wrong and what fits (the canon register stays off validation copy).
   if (!isAllowedUsername(username) || !isAllowedDisplayUsername(displayUsername)) {
     return jsonError(
       400,
@@ -340,31 +288,10 @@ export async function getGalaxyProgress(user: PublicUser): Promise<GalaxyProgres
   };
 }
 
-/**
- * The ceiling on ONE `merge_private_galaxy_progress` PUT's `collectedLogIds`.
- *
- * WHY A CEILING: the payload is a local save a signed-in caller hands us, and a Spotify login is
- * open to anyone. Uncapped, one PUT can carry 100k ids; the shared limiter caps how OFTEN a
- * caller may merge (`account.galaxy.merge`/30 an hour), never how MUCH one merge carries.
- *
- * SIZING: a Galaxy collectible is a CERTIFIED FINDING — `collectLogId` refuses anything without a
- * `findings.log_id`, so the honest ceiling is "every finding in the archive", which is in the
- * hundreds and grows by a handful a week. 10,000 is more than an order of magnitude above that:
- * no real save can reach it for years, and a save that somehow did would be a bug worth a 400.
- *
- * OVERFLOW IS A REJECT: silently dropping the tail would tell the player their progress synced
- * when part of it did not.
- */
 export const MAX_GALAXY_MERGE_LOG_IDS = 10_000;
 
-/**
- * How many ids ride in one SQL statement — both the `in (…)` resolve and the insert batch. Keeps
- * placeholder counts and batch sizes well inside libSQL's limits while holding the whole merge to
- * a handful of round trips (a Worker gets ~1,000 subrequests, and every query is one).
- */
 const GALAXY_MERGE_CHUNK = 250;
 
-/** The one collection upsert, shared by the single-id and bulk paths so they cannot drift. */
 const COLLECT_LOG_SQL = `insert into user_galaxy_collections
       (id, user_id, track_id, log_id, first_collected_at, last_collected_at, source_surface)
       values (?, ?, ?, ?, ?, ?, ?)
@@ -403,7 +330,6 @@ export async function mergeGalaxyProgress(
   const deaths = numberDelta(body.deaths);
   const wins = numberDelta(body.wins);
 
-  // The cap is on the DEDUPED set, so a save that repeats a coordinate is never punished for it.
   if (logIds.length > MAX_GALAXY_MERGE_LOG_IDS) {
     return jsonError(
       400,
@@ -418,17 +344,6 @@ export async function mergeGalaxyProgress(
   return getGalaxyProgress(user);
 }
 
-/**
- * Collect a whole set of coordinates in a BOUNDED number of round trips: resolve the tokens in
- * `in (…)` chunks, then upsert the resolved ones as chunked write batches, ensuring/touching the
- * galaxy state once for the merge instead of once per id.
- *
- * It replaces a `for (…) await collectLogId(…)` loop that spent THREE serialized queries per id —
- * a 300-coordinate save alone was ~900 queries, past the Worker's subrequest budget. Semantics are
- * unchanged: only a track that resolves WITH a `findings.log_id` is collected (an unknown or
- * uncertified token is skipped silently, exactly as the loop's ignored 404 did), and nothing is
- * ensured or touched when nothing resolves.
- */
 async function collectLogIds(
   user: PublicUser,
   tokens: readonly string[],
@@ -439,21 +354,18 @@ async function collectLogIds(
   }
 
   const db = await getDb();
-  // track_id → log_id, so two tokens naming the same track (its raw id and its Log ID) collect once.
+
   const resolved = new Map<string, string>();
 
   for (const chunk of chunked(tokens, GALAXY_MERGE_CHUNK)) {
     const result = await db.execute({
       args: chunk,
-      // The set form of `findTrackByTrackOrLog`: scan only the bounded input CTE, seek `tracks`
-      // and `findings` independently, prefer a raw id on collisions, and suppress the Log-ID arm
-      // when the same finding was already named by its raw id.
+
       sql: `with ${bulkTrackOrLogIdCte(chunk.length)}
         select track_id, log_id from resolved_tracks`,
     });
 
     for (const row of typedRows<TrackRefRow>(result.rows)) {
-      // No Log ID ⇒ not a finding ⇒ not collectible (the single path's 404).
       if (row.log_id) {
         resolved.set(row.track_id, row.log_id);
       }
@@ -523,21 +435,6 @@ type GalaxyTotalRow = {
   total: number;
 };
 
-/**
- * The signed-in user's Galaxy collection as a browsable object (the read sibling
- * of `collectLogId`): every collected row enriched through the certification join
- * (title, artists, cover, galaxy), plus the per-NAMED-galaxy completion lines.
- * The galaxy name/slug follow the DTO's omission rule — present only once the
- * operator has named the galaxy; an unnamed or unassigned finding reaches the
- * client without one and renders unheaded (never introduced, no coined noun).
- * The WHOLE galaxy layer sits behind `isGalaxyMapFullyNamed()` — the same gate
- * every galaxy-naming surface uses — so a half-named map never leaks: until the
- * map ships, the read returns a flat collection (no names, no completion lines).
- * Retired galaxies are excluded everywhere (`retired_at is null`, the
- * galaxies-map precedent); a finding in a retired galaxy simply loses its
- * clause. Ordered oldest-first: the collection reads as the user's own log, and
- * their first star stays line one.
- */
 export async function listGalaxyCollection(user: PublicUser): Promise<{
   collection: GalaxyCollectionItem[];
   galaxies: GalaxyCompletion[];
@@ -634,9 +531,7 @@ export async function listSavedFindings(
     await getDb()
   ).execute({
     args: [user.id],
-    // Join `tracks` DIRECTLY (not through `findings`) so an uncertified catalogue save
-    // — a `tracks` row with no `findings` row — still resolves. `s.log_id` is the stored
-    // coordinate (null for a catalogue save); the row's register split rides that.
+
     sql: `select s.track_id, s.log_id, s.saved_at, s.note, t.title, t.artists_json, t.album_image_url,
         (select image_key from albums where albums.id = t.album_id) as album_image_key,
         (select image_state from albums where albums.id = t.album_id) as album_image_state,
@@ -687,9 +582,6 @@ export async function saveFinding(
     typeof body.note === "string" && body.note.trim() ? body.note.trim().slice(0, 500) : null;
   const track = await findTrackByTrackOrLog(id);
 
-  // ANY track can be saved — a certified finding stores its `log_id`, an uncertified
-  // catalogue track stores `null` (the unlit tier stays unnamed). Only a token that
-  // resolves to no track at all 404s.
   if (!track) {
     return jsonError(404, "track_not_found", "No track at that coordinate");
   }
@@ -739,15 +631,8 @@ export async function deleteSavedFinding(
   return { ok: true };
 }
 
-// The most characters a saved set's name carries (the user renames it on /account).
 const MAX_SET_NAME = 120;
 
-/**
- * Derive a default name for a set the user saved without one — "the first track ·
- * the date". Resolves the first token's title against the archive (certified by Log
- * ID, or an uncertified catalogue row by track id); a token we've never seen (a raw
- * Spotify id) leaves the plain fallback. Cheap single-row lookup, only on save.
- */
 async function defaultSetName(tokens: string[]): Promise<string> {
   const date = new Date().toISOString().slice(0, 10);
   const first = tokens[0];
@@ -772,14 +657,12 @@ async function defaultSetName(tokens: string[]): Promise<string> {
   return `A set · ${date}`;
 }
 
-/** A user-supplied name, trimmed + capped, or the derived default when it's blank. */
 async function resolveSetName(raw: unknown, tokens: string[]): Promise<string> {
   const trimmed = typeof raw === "string" ? raw.trim() : "";
 
   return trimmed ? trimmed.slice(0, MAX_SET_NAME) : defaultSetName(tokens);
 }
 
-/** The signed-in user's saved `/mix` sets, most-recently-touched first. */
 export async function listSavedSets(
   user: PublicUser,
 ): Promise<{ ok: true; savedSets: SavedSetItem[] }> {
@@ -799,13 +682,6 @@ export async function listSavedSets(
   };
 }
 
-/**
- * Save a chained set for the user. The body carries the SAME serialized `?set=` +
- * `?taste=` strings the `/mix` route uses; they're re-parsed through the shared
- * codec (junk dropped, capped, order kept) and re-serialized, so what's stored
- * round-trips back through the same loader. An empty chain is a 400 — there's
- * nothing to save yet.
- */
 export async function saveSet(
   user: PublicUser,
   body: unknown,
@@ -849,13 +725,6 @@ export async function saveSet(
   };
 }
 
-/**
- * Rename a saved set and/or overwrite its chain — both scoped to the owner. The
- * row is fetched by `(id, user_id)` first, so another user's set is invisible (a
- * 404, never a silent no-op): that is the ownership guard. A `set` in the body
- * overwrites the chain AND its taste seed together (a chain and the lane it was
- * built in travel as one); a blank `name` keeps the existing one.
- */
 export async function updateSavedSet(
   user: PublicUser,
   id: string,
@@ -922,7 +791,6 @@ export async function updateSavedSet(
   };
 }
 
-/** Remove a saved set — scoped to the owner (another user's id is a 404). */
 export async function deleteSavedSet(
   user: PublicUser,
   id: string,
@@ -952,12 +820,6 @@ function rowToItem(row: SavedSetRow): SavedSetItem {
   };
 }
 
-// ── Watched entities (the artists + labels a user keeps an eye on) ────────────
-// The saved-sets sibling, one table over. THE ACCOUNT NEVER GATES THE FEATURE: watching
-// only SAVES the entity to the account; every entity page stays fully usable signed-out.
-// The email digest that will READ these is deferred (operator ruling) — this is the substrate only, so
-// `include_similar` is stored (default off) but has no consumer.
-
 type WatchRow = {
   created_at: string;
   entity_id: string;
@@ -970,18 +832,6 @@ type WatchRow = {
 
 const WATCH_KINDS = new Set(["artist", "label"]);
 
-/**
- * The signed-in user's watched artists and labels, newest first. The entity name + slug are
- * joined from the entity's OWN row at read time (a per-row seek on the `artists`/`labels`
- * primary key, bounded by the user's watch count — never a scan of a growing table), so a
- * renamed entity always reads current and nothing is denormalized onto the watch. A watch
- * whose entity has vanished (no join match) is dropped from the read rather than rendered
- * nameless.
- *
- * An UNLISTED artist does not join either, so it drops the same way: the door must never hand back
- * a row whose link 404s. The stored `user_watches` row is untouched, so removing the rule brings
- * the watch straight back (lib/server/artist-visibility.ts).
- */
 export async function listWatches(user: PublicUser): Promise<{ ok: true; watches: WatchItem[] }> {
   const result = await (
     await getDb()
@@ -1016,14 +866,6 @@ export async function listWatches(user: PublicUser): Promise<{ ok: true; watches
   };
 }
 
-/**
- * Watch an artist or label, resolved by its entity id. Idempotent: a second watch of the
- * same entity upserts on the (user, kind, entity) unique key rather than duplicating, and
- * echoes the row that ended up stored (the original `id`/`createdAt`, so a re-watch is a
- * true no-op the client can trust). `include_similar` is stored at its default (off) — there
- * is no UI or path that writes anything else yet. A bad `kind` is `invalid_request`/400; an
- * id that matches no entity of that kind is `entity_not_found`/404.
- */
 export async function saveWatch(
   user: PublicUser,
   body: unknown,
@@ -1052,9 +894,7 @@ export async function saveWatch(
   }
 
   const db = await getDb();
-  // Resolve the entity by its id in the RIGHT table — the existence check that keeps a watch
-  // pointing at something real. The table is chosen by the validated `kind`, never
-  // interpolated from user input.
+
   const table = kind === "artist" ? "artists" : "labels";
   const entity = await db.execute({
     args: [entityId],
@@ -1075,8 +915,6 @@ export async function saveWatch(
       on conflict(user_id, kind, entity_id) do nothing`,
   });
 
-  // Read the row that actually landed (the fresh insert, or a pre-existing watch the
-  // conflict left untouched) so the echo carries the true stored id/createdAt.
   const stored = await db.execute({
     args: [user.id, kind, entityId],
     sql: `select id, kind, entity_id, include_similar, created_at
@@ -1096,7 +934,6 @@ export async function saveWatch(
   };
 }
 
-/** Stop watching an entity — scoped to the owner (another user's watch id is a 404). */
 export async function deleteWatch(user: PublicUser, id: string): Promise<Response | { ok: true }> {
   const result = await (
     await getDb()
@@ -1112,20 +949,6 @@ export async function deleteWatch(user: PublicUser, id: string): Promise<Respons
   return { ok: true };
 }
 
-// ── User preferences (the cross-device settings store) ────────────────────────
-// One row per user holding the whole `UserPreferences` object as JSON. The account
-// NEVER gates a feature: every preference also has a device-local home, so this is
-// purely the SYNCED copy for a signed-in user. Extensible by construction — a new
-// preference is a field on the shared `UserPreferences` schema, no migration.
-
-/**
- * Read a user's stored preferences, tolerant of a missing or corrupt blob. A row
- * that is absent, not JSON, or holds an out-of-range value resolves to an EMPTY
- * object — the read never throws, so a bad blob degrades to "nothing set" (the
- * device/default value wins) rather than a 500. Parsed through the LENIENT
- * `UserPreferencesSchema` (unknown keys stripped), so a blob a newer deploy wrote
- * mid-rollout still yields its known fields.
- */
 async function readStoredPreferences(userId: string): Promise<UserPreferences> {
   const result = await (
     await getDb()
@@ -1144,25 +967,16 @@ async function readStoredPreferences(userId: string): Promise<UserPreferences> {
 
     return parsed.success ? parsed.data : {};
   } catch {
-    // Not valid JSON — treat a corrupt blob as empty, never throw on read.
     return {};
   }
 }
 
-/** The signed-in user's stored preferences (`{}` when none set or the blob is unreadable). */
 export async function getUserPreferences(
   user: PublicUser,
 ): Promise<{ ok: true; preferences: UserPreferences }> {
   return { ok: true, preferences: await readStoredPreferences(user.id) };
 }
 
-/**
- * Merge a partial preferences patch into the user's stored object. The body is the
- * closed `UserPreferencesInputSchema` (`.strict()`, so an unknown key is a 400); a
- * field it carries is written, a field it omits is preserved from the current blob,
- * so preferences update INDEPENDENTLY. Upserts one row per user and echoes the full
- * merged object.
- */
 export async function updateUserPreferences(
   user: PublicUser,
   body: unknown,
@@ -1197,11 +1011,7 @@ export async function listUserSubmissions(
     await getDb()
   ).execute({
     args: [user.id],
-    // LEFT JOIN the certification: a submission's `spotify_track_id` is the recording
-    // id, which becomes `tracks.track_id` when it's added — and `findings.track_id` is
-    // that same key (1:1). So `findings.log_id` is the coordinate the recording became,
-    // present only once it's a certified finding. The join stays a per-row seek (findings
-    // PK), never a scan.
+
     sql: `select s.id, s.title, s.artists_json, s.spotify_url, s.source, s.status, s.note,
         s.created_at, f.log_id
       from submissions s
@@ -1216,10 +1026,7 @@ export async function listUserSubmissions(
       artists: parseArtistsJson(row.artists_json),
       createdAt: row.created_at,
       id: row.id,
-      // The finding link is surfaced only for an APPROVED (logged) submission — the
-      // one that became a finding. A pending/passed-on row omits it even if a finding
-      // happens to share the recording (the brief: an approved submission links to the
-      // finding it became).
+
       logId: row.status === "approved" ? (row.log_id ?? undefined) : undefined,
       note: row.note ?? undefined,
       source: row.source,
@@ -1251,9 +1058,6 @@ export async function exportAccountData(user: PublicUser): Promise<{
   };
   ok: true;
 }> {
-  // Lazy import: recommendations.ts imports catalogue.ts (the shared diversity
-  // decay), and pulling that chain at account-data module-eval time is weight the
-  // other /me paths never need.
   const { listRecSeeds } = await import("./recommendations");
   const requestedAt = new Date().toISOString();
   const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
@@ -1415,9 +1219,6 @@ export function accountDeletionStatements({
       sql: `delete from user_saved_findings where user_id = ?`,
     },
     {
-      // The user's frozen Frontier editions (the novelty ledger + history). Child rows
-      // FIRST — there is no SQL cascade (logical FK), so the child delete is scoped by a
-      // subquery over the parent before the parent rows go.
       args: [userId],
       sql: `delete from frontier_edition_tracks where edition_id in (select id from frontier_editions where user_id = ?)`,
     },
@@ -1426,16 +1227,10 @@ export function accountDeletionStatements({
       sql: `delete from frontier_editions where user_id = ?`,
     },
     {
-      // The user's Frontier playlist row (E2). This drops OUR pointer to the Spotify
-      // playlist; the playlist itself lives on Fluncle's Spotify account and is left as
-      // an orphan artifact (no per-user OAuth to revoke), harmless and unreachable once
-      // the row is gone.
       args: [userId],
       sql: `delete from user_frontier_playlists where user_id = ?`,
     },
     {
-      // The user's paced-drain cursor (the sweep's last-processed stamp). A logical FK
-      // (no SQL cascade), the sibling per-user precedent — deletion is application code.
       args: [userId],
       sql: `delete from user_frontier_refresh where user_id = ?`,
     },
@@ -1444,8 +1239,6 @@ export function accountDeletionStatements({
       sql: `delete from user_saved_sets where user_id = ?`,
     },
     {
-      // The user's watched artists + labels (D2a). A logical FK (no SQL cascade), the
-      // saved-sets precedent — deletion is application code, never a constraint.
       args: [userId],
       sql: `delete from user_watches where user_id = ?`,
     },
@@ -1462,9 +1255,6 @@ export function accountDeletionStatements({
       sql: `delete from user_galaxy_state where user_id = ?`,
     },
     {
-      // Push tokens bound to this user (the mobile app). Anonymous rows (the
-      // V1 default, user_id NULL) are reaped by the
-      // last_seen_at staleness policy instead; this clears the linked ones.
       args: [userId],
       sql: `delete from push_tokens where user_id = ?`,
     },
@@ -1549,9 +1339,7 @@ async function findTrackByTrackOrLog(trackIdOrLogId: string): Promise<TrackRefRo
     await getDb()
   ).execute({
     args: [value, value, value],
-    // LEFT JOIN so ANY track resolves — a certified finding carries its `log_id`, an
-    // uncertified catalogue track (a `tracks` row with no `findings` row) resolves with
-    // a null `log_id`. Resolving by either a raw track id OR a Log ID.
+
     sql: `with ${TRACK_OR_LOG_ID_CTE}
       select tracks.track_id, findings.log_id from resolved_track
       join tracks on tracks.track_id = resolved_track.track_id

@@ -3,13 +3,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createIntegrationDb } from "./integration-db";
 
-// THE FREE RUNG (`resolveAnchorFree`), against the REAL schema. Its guarantees are statements about
-// SQL + the reuse of the anchor gate: on a ListenBrainz hit it fetches ONE candidate's metadata and
-// runs it through the SAME verification `anchorTrack` uses, writing the anchor only on a hard match,
-// and — crucially — it NEVER stamps a miss (so the Apify fallback still gets its turn on the row).
-// The ListenBrainz client and the single Spotify metadata read are the two vendor edges, so they are
-// mocked; the database + the verification gate + the stamping are the real thing.
-
 let db: Client;
 
 const lookupSpotifyIdsByMbid = vi.fn();
@@ -53,10 +46,8 @@ vi.mock("./deezer", async (importOriginal) => {
   };
 });
 
-/** A libSQL cell → string. */
 const text = (value: unknown): string => (typeof value === "string" ? value : "");
 
-/** Insert an UN-ANCHORED catalogue row, optionally carrying a MusicBrainz recording MBID. */
 async function seedCatalogue(row: {
   artists?: string[];
   durationMs?: number;
@@ -79,7 +70,6 @@ async function seedCatalogue(row: {
   });
 }
 
-/** The anchor + attempt-stamp state of a row, for the assertions. */
 async function anchorState(trackId: string): Promise<{
   attempted: unknown;
   deezerAttemptedAt: unknown;
@@ -118,7 +108,6 @@ async function anchorState(trackId: string): Promise<{
   };
 }
 
-/** A full TrackMetadata for the mocked single by-id Spotify read. */
 function metadata(over: Partial<Record<string, unknown>> = {}): Record<string, unknown> {
   return {
     albumImageUrl: "https://i.scdn.co/image/cover",
@@ -138,8 +127,7 @@ beforeEach(async () => {
   db = await createIntegrationDb();
   lookupSpotifyIdsByMbid.mockReset();
   fetchTrackMetadata.mockReset();
-  // Deezer misses by default (the client never throws — an outage IS an empty list), so the
-  // pre-anchor recovery rung is a no-op and the pre-Deezer waterfall behaviour is what's asserted.
+
   searchDeezerCandidates.mockReset();
   searchDeezerCandidates.mockResolvedValue([]);
 });
@@ -176,13 +164,12 @@ describe("resolveAnchorFree — a ListenBrainz hit through the verification gate
       stamped: false,
       verifiedBy: "isrc",
     });
-    // The row already carried an ISRC, so the Deezer recovery rung is skipped entirely.
+
     expect(searchDeezerCandidates).not.toHaveBeenCalled();
     const state = await anchorState("mb_rec-1");
     expect(text(state.uri)).toBe("spotify:track:lbAnchor001");
     expect(state.attempted).not.toBeNull();
 
-    // ONLY the FIRST id's metadata was fetched — the free rung's whole Spotify footprint is one GET.
     expect(fetchTrackMetadata).toHaveBeenCalledTimes(1);
     expect(fetchTrackMetadata).toHaveBeenCalledWith("lbAnchor001");
   });
@@ -242,8 +229,6 @@ describe("resolveAnchorFree — a candidate that FAILS verification is never sta
   it("leaves the row un-anchored AND un-stamped (the Apify fallback keeps its turn)", async () => {
     const { resolveAnchorFree } = await import("./anchor");
 
-    // The row's ISRC and the candidate's differ, AND the candidate's duration is 3s off — so neither
-    // the ISRC rung nor the search triple can verify it. It is a genuine miss.
     await seedCatalogue({
       artists: ["Muffler"],
       durationMs: 200_000,
@@ -289,7 +274,7 @@ describe("resolveAnchorFree — a candidate that FAILS verification is never sta
     });
     const state = await anchorState("mb_wrong");
     expect(state.uri).toBeNull();
-    // THE KEY GUARANTEE: a free-rung miss does NOT stamp the re-ask backoff.
+
     expect(state.attempted).toBeNull();
   });
 
@@ -443,9 +428,7 @@ describe("resolveAnchorFree — the zero-Spotify-call misses", () => {
       spotifyIsrcAsked: false,
       spotifySearchDone: false,
       spotifySearchEnabled: false,
-      // The fixture's failure IS a 429, so the yield law reads it: a throttle on this rung's own
-      // by-id read is still a throttle in the anchor path. The outcome stays `metadata-failed`
-      // (the read was made and failed — distinct from `yielded-on-breaker`, where it was not made).
+
       spotifyThrottled: true,
       stamped: false,
       verifiedBy: null,
@@ -455,15 +438,12 @@ describe("resolveAnchorFree — the zero-Spotify-call misses", () => {
 });
 
 describe("resolveAnchorFree — slice 3: the Apify kill-flag (out-of-budget → graceful state)", () => {
-  /** A Wednesday noon — well outside the Friday-refresh window, so only the flags decide. */
   const NON_FRIDAY = new Date("2026-07-22T12:00:00Z");
 
   it("flag OFF ⇒ a FULL free-rung miss is STAMPED (backs off) and reports apifyEnabled:false", async () => {
     const { resolveAnchorFree } = await import("./anchor");
     const { setAnchorApifyEnabled } = await import("./anchor-apify");
 
-    // Out of Apify budget. A row with no MBID (ListenBrainz never runs) that carries an ISRC (Deezer
-    // recovery skipped) is a clean full miss with no anchor — and no Apify rung is coming to stamp it.
     await setAnchorApifyEnabled(false);
     await seedCatalogue({ isrc: "ROWISRC00001", mbid: null, trackId: "mb_apify_off" });
 
@@ -471,8 +451,7 @@ describe("resolveAnchorFree — slice 3: the Apify kill-flag (out-of-budget → 
 
     expect(result).toEqual({
       anchored: false,
-      // The kill-flag is OFF, so no actor run is coming and the day's tally is NOT charged — the
-      // brake meters money, and with the paid rung disarmed there is none to meter.
+
       apifyBudgetRemaining: 300,
       apifyEligible: true,
       apifyEnabled: false,
@@ -490,8 +469,7 @@ describe("resolveAnchorFree — slice 3: the Apify kill-flag (out-of-budget → 
     });
     const state = await anchorState("mb_apify_off");
     expect(state.uri).toBeNull();
-    // THE SLICE-3 GUARANTEE: with Apify off, the free rung backs the exhausted row off itself, so it
-    // enters the 14-day re-ask backoff instead of recirculating at the head of the worklist forever.
+
     expect(state.attempted).not.toBeNull();
   });
 
@@ -499,8 +477,6 @@ describe("resolveAnchorFree — slice 3: the Apify kill-flag (out-of-budget → 
     const { resolveAnchorFree } = await import("./anchor");
     const { setAnchorApifyEnabled } = await import("./anchor-apify");
 
-    // Apify has budget (the steady state). The identical full miss must behave EXACTLY as before slice 3:
-    // it leaves the row un-stamped so the metered Apify fallback keeps its turn on it.
     await setAnchorApifyEnabled(true);
     await seedCatalogue({ isrc: "ROWISRC00001", mbid: null, trackId: "mb_apify_on" });
 
@@ -523,7 +499,7 @@ describe("resolveAnchorFree — slice 3: the Apify kill-flag (out-of-budget → 
       stamped: false,
       verifiedBy: null,
     });
-    // Byte-for-byte the pre-slice-3 behaviour: a free-rung miss does NOT stamp the re-ask backoff.
+
     expect((await anchorState("mb_apify_on")).attempted).toBeNull();
   });
 
@@ -531,8 +507,6 @@ describe("resolveAnchorFree — slice 3: the Apify kill-flag (out-of-budget → 
     const { resolveAnchorFree } = await import("./anchor");
     const { setAnchorApifyEnabled } = await import("./anchor-apify");
 
-    // Apify off, but this row ANCHORS via ListenBrainz — the stamp comes from the hit's own write, not
-    // the slice-3 back-off. The flag must not double-stamp or otherwise disturb the hit path.
     await setAnchorApifyEnabled(false);
     await seedCatalogue({ isrc: "gbcjy1300173", mbid: "mbid-hit", trackId: "mb_apify_off_hit" });
     lookupSpotifyIdsByMbid.mockResolvedValue({
@@ -572,9 +546,6 @@ describe("resolveAnchorFree — the pre-anchor Deezer ISRC-recovery rung", () =>
   it("recovers a verified ISRC into an empty row, then anchors via the exact-ISRC rung", async () => {
     const { resolveAnchorFree } = await import("./anchor");
 
-    // An ISRC-LESS crawler row. Deezer holds the real ISRC; its search hit matches the row's folded
-    // identity + duration (±3s), so it is trusted. The recovered ISRC then equals the ListenBrainz
-    // candidate's own metadata ISRC, so the row anchors through the EXACT-ISRC rung (not fuzzy).
     await seedCatalogue({
       artists: ["Muffler"],
       durationMs: 200_000,
@@ -622,7 +593,7 @@ describe("resolveAnchorFree — the pre-anchor Deezer ISRC-recovery rung", () =>
       verifiedBy: "isrc",
     });
     const state = await anchorState("mb_dz");
-    // The recovered ISRC was persisted, and it drove the anchor.
+
     expect(text(state.isrc)).toBe("GBTESTDZ0001");
     expect(text(state.uri)).toBe("spotify:track:lbDz");
   });
@@ -638,8 +609,7 @@ describe("resolveAnchorFree — the pre-anchor Deezer ISRC-recovery rung", () =>
       title: "Dribble",
       trackId: "mb_dzbad",
     });
-    // A hit whose duration is 3.5s off the row (> the ±3s bar) — a wrong recording. It must be refused,
-    // so its ISRC is never trusted and the row stays ISRC-less.
+
     searchDeezerCandidates.mockResolvedValue([
       { artistName: "Muffler", durationMs: 203_500, isrc: "GBWRONGDZ001", title: "Dribble" },
     ]);
@@ -685,7 +655,7 @@ describe("resolveAnchorFree — the pre-anchor Deezer ISRC-recovery rung", () =>
     const result = await resolveAnchorFree("mb_dzhas");
 
     expect(result.isrcRecoveredByDeezer).toBe(false);
-    // The recovery rung is gated on an EMPTY ISRC, so Deezer is never even asked.
+
     expect(searchDeezerCandidates).not.toHaveBeenCalled();
     expect(text((await anchorState("mb_dzhas")).isrc)).toBe("EXISTINGISRC");
   });
@@ -701,8 +671,7 @@ describe("resolveAnchorFree — the pre-anchor Deezer ISRC-recovery rung", () =>
       title: "Dribble",
       trackId: "mb_dzout",
     });
-    // The Deezer client swallows an outage into an empty list (it never throws), so recovery is a
-    // no-op and the row anchors exactly as it would have without this rung — via the search triple.
+
     searchDeezerCandidates.mockResolvedValue([]);
     lookupSpotifyIdsByMbid.mockResolvedValue({
       artistName: "Muffler",
@@ -745,12 +714,6 @@ describe("resolveAnchorFree — the pre-anchor Deezer ISRC-recovery rung", () =>
   });
 });
 
-// ── THE BOX-FETCHED DEEZER HITS ──────────────────────────────────────────────────────────────────
-// Deezer's tokenless quota is per-IP and the Worker egresses from Cloudflare's saturated shared edge,
-// so the SEARCH moved to the box (0 recoveries out of 5,133 rows over 3 days from the edge; 25/25
-// clean from the box). ONLY the fetch moved. These tests pin the half that did NOT: the gate is still
-// the only thing that can authorise an ISRC write, and it is the same gate, applied to the row as the
-// DATABASE holds it — so box-supplied hits get precisely what Worker-fetched ones got.
 describe("resolveAnchorFree — Deezer hits supplied by the box", () => {
   it("verifies box-supplied hits and writes the recovered ISRC, without asking Deezer itself", async () => {
     const { resolveAnchorFree } = await import("./anchor");
@@ -775,14 +738,10 @@ describe("resolveAnchorFree — Deezer hits supplied by the box", () => {
     const state = await anchorState("mb_box_ok");
     expect(text(state.isrc)).toBe("GBBOXDZ00001");
     expect(state.isrcRecoveryAttemptedAt).not.toBeNull();
-    // The Worker issued NO Deezer request of its own — the whole point of moving the fetch.
+
     expect(searchDeezerCandidates).not.toHaveBeenCalled();
   });
 
-  // ── THE DEEZER LINK, KEPT (schema.ts § `deezer_track_id`) ────────────────────────────────────
-  // The hits this rung already fetches carry Deezer's own track id, and the id is retained. A hit
-  // that CLEARS the gate is this recording on Deezer, so its id is kept — in the same statement as
-  // the ISRC, with the rung that cleared as its provenance. No extra request is made for it.
   it("keeps the verified hit's Deezer id with the rung that cleared", async () => {
     const { resolveAnchorFree } = await import("./anchor");
 
@@ -813,10 +772,7 @@ describe("resolveAnchorFree — Deezer hits supplied by the box", () => {
     expect(text(state.deezerTrackId)).toBe("3135556");
     expect(text(state.deezerVerifiedBy)).toBe("search");
     expect(state.deezerVerifiedAt).not.toBeNull();
-    // THE LEDGER MOVES WITH IT (schema.ts § `backfill_deezer_*`). A hit is a look concluded, so the
-    // tally counts it — a counter that only ever counted misses would misreport how often Fluncle
-    // has actually asked. `done_at` binds the same moment as `deezer_verified_at`, so the moment the
-    // link was won and the moment the ledger calls it resolved can never drift apart.
+
     expect(state.deezerAttemptedAt).not.toBeNull();
     expect(Number(state.deezerAttempts)).toBe(1);
     expect(text(state.deezerDoneAt)).toBe(text(state.deezerVerifiedAt));
@@ -836,8 +792,6 @@ describe("resolveAnchorFree — Deezer hits supplied by the box", () => {
     });
     lookupSpotifyIdsByMbid.mockResolvedValue(null);
 
-    // A remix, carrying a perfectly real Deezer id. The fold refuses it, and refusing the ISRC and
-    // refusing the link is the same act — a wrong link on a public page is the worse of the two.
     await resolveAnchorFree("mb_box_dzbad", new Date(), {
       deezerCandidates: [
         {
@@ -856,11 +810,7 @@ describe("resolveAnchorFree — Deezer hits supplied by the box", () => {
     expect(state.deezerVerifiedBy).toBeNull();
     expect(state.deezerVerifiedAt).toBeNull();
     expect(state.isrcRecoveryAttemptedAt).not.toBeNull();
-    // AND THE LEDGER RECORDS THE MISS, which is the whole reason it exists. Deezer answered, the
-    // gate ruled, and Fluncle came away with nothing — so `/identity` must read "Not found · checked
-    // <date>" here rather than going on claiming "Not checked yet". `done_at` stays null (nothing
-    // resolved) and `failures` stays 0: this is a clean conclusion, not the transport failure a
-    // streak would back off from.
+
     expect(state.deezerAttemptedAt).not.toBeNull();
     expect(Number(state.deezerAttempts)).toBe(1);
     expect(state.deezerDoneAt).toBeNull();
@@ -880,9 +830,6 @@ describe("resolveAnchorFree — Deezer hits supplied by the box", () => {
     });
     lookupSpotifyIdsByMbid.mockResolvedValue(null);
 
-    // The box sends `[]` only after a valid empty Deezer response. Quota and transport outcomes do
-    // not call the resolver, so this signal settles the recovery pass without changing the separate
-    // Deezer-enrichment ledger's meaning.
     await resolveAnchorFree("mb_box_dzempty", new Date(), { deezerCandidates: [] });
 
     const state = await anchorState("mb_box_dzempty");
@@ -906,8 +853,6 @@ describe("resolveAnchorFree — Deezer hits supplied by the box", () => {
     });
     lookupSpotifyIdsByMbid.mockResolvedValue(null);
 
-    // The id is not evidence the gate reads, so a box on a build that predates the field degrades to
-    // "no link kept" and never to a refused recovery.
     const result = await resolveAnchorFree("mb_box_dznone", new Date(), {
       deezerCandidates: [
         { artistName: "Muffler", durationMs: 200_000, isrc: "GBBOXDZ00004", title: "Dribble" },
@@ -919,12 +864,7 @@ describe("resolveAnchorFree — Deezer hits supplied by the box", () => {
     expect(result.isrcRecoveredByDeezer).toBe(true);
     expect(text(state.isrc)).toBe("GBBOXDZ00004");
     expect(state.deezerTrackId).toBeNull();
-    // AND THE LEDGER STAYS EMPTY, which is the subtle one. A look did conclude — but what it
-    // concluded is that Deezer DOES carry this recording (the recovered ISRC came out of that very
-    // hit); the id was simply missing from the payload. Stamping would render the row "Not found ·
-    // checked <date>", and on every other row of /identity "Not found" means the look could not
-    // identify the recording on that platform — a different claim in the same words. `absent`
-    // misstates the fact and `verified` has no link to show, so neither is claimed.
+
     expect(state.deezerAttemptedAt).toBeNull();
     expect(Number(state.deezerAttempts)).toBe(0);
     expect(state.deezerDoneAt).toBeNull();
@@ -945,16 +885,15 @@ describe("resolveAnchorFree — Deezer hits supplied by the box", () => {
 
     const result = await resolveAnchorFree("mb_box_bad", new Date(), {
       deezerCandidates: [
-        // Wrong artist — the folded identity disagrees, so the ISRC is refused…
         { artistName: "Etherwood", durationMs: 200_000, isrc: "GBWRONGART01", title: "Dribble" },
-        // …wrong version descriptor, so the original can never take the remix's ISRC…
+
         {
           artistName: "Muffler",
           durationMs: 200_000,
           isrc: "GBWRONGVER01",
           title: "Dribble (Calibre Remix)",
         },
-        // …and a duration outside the ratified window, so a different recording is refused too.
+
         { artistName: "Muffler", durationMs: 240_000, isrc: "GBWRONGDUR01", title: "Dribble" },
       ],
     });
@@ -977,8 +916,6 @@ describe("resolveAnchorFree — Deezer hits supplied by the box", () => {
     });
     lookupSpotifyIdsByMbid.mockResolvedValue(null);
 
-    // A perfectly verifiable hit — but the ROW already carries an ISRC, and that gate is the
-    // server's to read, not the box's to assert. The fill-empty-only write stands.
     const result = await resolveAnchorFree("mb_box_has", new Date(), {
       deezerCandidates: [
         { artistName: "Muffler", durationMs: 200_000, isrc: "GBBOXDZ00002", title: "Dribble" },
@@ -1006,7 +943,7 @@ describe("resolveAnchorFree — Deezer hits supplied by the box", () => {
 
     expect(result.isrcRecoveredByDeezer).toBe(false);
     expect((await anchorState("mb_box_empty")).isrc).toBeNull();
-    // Re-asking from the saturated shared edge is a known-dead request, so it is never made.
+
     expect(searchDeezerCandidates).not.toHaveBeenCalled();
   });
 
@@ -1034,20 +971,6 @@ describe("resolveAnchorFree — Deezer hits supplied by the box", () => {
   });
 });
 
-// ── THE TWO LEDGERS: what PARKS a row, and what CHARGES one of its finite tries ───────────────────
-//
-// `spotify_anchor_attempted_at` rotates the priority-ordered queue head past a row; the separate
-// `spotify_anchor_attempts` counter spends one of its `ANCHOR_MAX_ATTEMPTS` lifetime tries and
-// eventually retires it for good. The rule under test: a row is CHARGED only when a rung capable of
-// concluding (the Spotify SEARCH pair, or the paid Apify fallback) was actually asked and missed.
-// ListenBrainz is a positive-only oracle, so a ListenBrainz-only miss may park a row but never
-// charges it.
-//
-// Each case is asserted from BOTH sides, because every clause here is one that can silently stop
-// firing: the parking rule against the state that must park AND the states that must not, and the
-// charge against the one path that spends a try AND the paths that must not.
-
-/** Read a row's lifetime retry-cap counter — the ledger a free-rung miss must not touch. */
 async function anchorAttempts(trackId: string): Promise<null | number> {
   const result = await db.execute({
     args: [trackId],
@@ -1059,15 +982,12 @@ async function anchorAttempts(trackId: string): Promise<null | number> {
 }
 
 describe("resolveAnchorFree — an attempt is charged only for a real ask", () => {
-  /** A Wednesday noon — well outside the Friday-refresh window, so only the flags decide. */
   const NON_FRIDAY = new Date("2026-07-22T12:00:00Z");
 
   it("a ListenBrainz-only miss with NO capable rung armed PARKS the row without charging it", async () => {
     const { resolveAnchorFree } = await import("./anchor");
     const { setAnchorApifyEnabled } = await import("./anchor-apify");
 
-    // Apify off, the dark search flag off (its default): nothing that could conclude about this row
-    // is armed, and ListenBrainz — the one rung that ran — has no mapping for it.
     await setAnchorApifyEnabled(false);
     await seedCatalogue({ isrc: "ROWISRC00001", mbid: "mbid-unmapped", trackId: "mb_lb_only" });
     lookupSpotifyIdsByMbid.mockResolvedValue(null);
@@ -1076,9 +996,9 @@ describe("resolveAnchorFree — an attempt is charged only for a real ask", () =
 
     expect(result.listenbrainzOutcome).toBe("no-map");
     expect(result.stamped).toBe(true);
-    // PARKED so the head rotates…
+
     expect((await anchorState("mb_lb_only")).attempted).not.toBeNull();
-    // …but NOT CHARGED: no rung capable of concluding was asked anything about this row.
+
     expect(await anchorAttempts("mb_lb_only")).toBeNull();
   });
 
@@ -1086,9 +1006,6 @@ describe("resolveAnchorFree — an attempt is charged only for a real ask", () =
     const { resolveAnchorFree } = await import("./anchor");
     const { setAnchorApifyEnabled } = await import("./anchor-apify");
 
-    // The box defers the Spotify leg for this row (its night window / ask budget / yield law). With
-    // the search flag OFF those rungs were never going to run, so honouring the deferral would hold
-    // the row at the queue head every tick outside the window while the backlog behind it waits.
     await setAnchorApifyEnabled(false);
     await seedCatalogue({ isrc: "ROWISRC00002", mbid: null, trackId: "mb_deferred_off" });
 
@@ -1104,8 +1021,6 @@ describe("resolveAnchorFree — an attempt is charged only for a real ask", () =
     const { setAnchorApifyEnabled } = await import("./anchor-apify");
     const { setAnchorSpotifySearchEnabled } = await import("./anchor-spotify-search");
 
-    // The other side of the same clause: the rungs ARE armed, so the box's tick-level deferral is a
-    // real deferral and the row must come back rather than sit out the re-ask window.
     await setAnchorApifyEnabled(false);
     await setAnchorSpotifySearchEnabled(true);
     await seedCatalogue({ isrc: "ROWISRC00003", mbid: null, trackId: "mb_deferred_on" });
@@ -1124,8 +1039,6 @@ describe("resolveAnchorFree — an attempt is charged only for a real ask", () =
     const { recordSpotifyThrottle, SPOTIFY_ANCHOR_BREAKER_MAX_FAILURES } =
       await import("./spotify-anchor-breaker");
 
-    // The rung declined to spend its ONE by-id read into a tripped breaker, so it still owes this row
-    // its free look. Parking it here would retire a row on a question that was never put.
     await setAnchorApifyEnabled(false);
     await seedCatalogue({ isrc: "ROWISRC00004", mbid: "mbid-yield", trackId: "mb_yielded" });
     lookupSpotifyIdsByMbid.mockResolvedValue({
@@ -1152,9 +1065,6 @@ describe("resolveAnchorFree — an attempt is charged only for a real ask", () =
     const { setAnchorApifyEnabled } = await import("./anchor-apify");
     const { setAnchorSpotifySearchEnabled } = await import("./anchor-spotify-search");
 
-    // The one path that spends a try: the search pair is the rung capable of concluding, it ran, and
-    // it said no. The row carries no ISRC, so the exact rung is skipped and the fuzzy search is the
-    // one issued — `spotifySearchDone` is the proof that a real ask left the building.
     await setAnchorApifyEnabled(false);
     await setAnchorSpotifySearchEnabled(true);
     await seedCatalogue({ isrc: null, mbid: null, trackId: "mb_searched" });

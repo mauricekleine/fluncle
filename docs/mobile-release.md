@@ -117,6 +117,8 @@ Append these account notes to the existing review-notes block:
 >
 > Account deletion is available in the app. The account screen has a "Delete account" action, behind a confirmation, that permanently deletes the account and all associated data from within the app itself (Guideline 5.1.1(v)) — no website visit or support request is required. The same screen also lets a user export their saved data. Users who forget their password can reset it from the sign-in screen via an email link.
 
+The server deletes each user's private rows and sessions in one account-deletion batch, removing child Frontier edition tracks before their parent editions because that relationship has no SQL cascade. It detaches submissions from the user while retaining their review history, marks and anonymizes the user row, and deletes user-bound push tokens; anonymous tokens follow their separate staleness policy. Deleting a Frontier playlist pointer cannot remove the playlist from Fluncle's Spotify account, which has no per-user OAuth grant to revoke.
+
 On the exact store build, verify account creation, sign-in, sign-out, password reset, data export, and in-app deletion behind its confirmation.
 
 - [ ] On the device build, verify a `https://www.fluncle.com/out/spotify/<trackId>` hop link opens the **Spotify app** and not Safari — the resolver (`apps/mobile/src/lib/external-link.ts`) follows the 302 and hands iOS the final url. It rides `response.url` under RN's native networking, which is verify-on-device: a Safari bounce means the fallback fired and the `Location`-header path is the fix. The API serves hops only after the server flip, so until then tap a hop url pasted into a deep link rather than waiting on the feed.

@@ -9,22 +9,6 @@ import {
   warmOrpcRouter,
 } from "./orpc-test-kit";
 
-// The ADMIN MUTATION ORIGIN GUARD, both halves: the pure helper (env.ts) and the
-// oRPC middleware that applies it (orpc-auth.ts `adminAuth`).
-//
-// WHAT IT DEFENDS. `SameSite=Lax` is insufficient as the only CSRF brake on an admin mutation
-// carried by the browser's grant COOKIE. Lax is SITE-scoped (eTLD+1), so a
-// request from any `*.fluncle.com` host is same-site and DOES carry the grant, and
-// Chrome's "Lax-allowing-unsafe" intervention additionally lets a top-level
-// cross-site POST through for two minutes after the cookie is set. Requiring the
-// Origin (or a Referer, when a client omits Origin) to match the request's own origin
-// closes both.
-//
-// WHAT IT MUST NOT BREAK. Every non-browser admin caller — the operator's CLI, the
-// agent box, Raycast (which shells the CLI), any script — authenticates with a Bearer
-// header and legitimately sends no Origin. Those are exempt BY CARRIER, and this suite
-// proves it on the same op the browser path is proven on.
-
 const SESSION_SECRET = "test-session-secret-admin-origin";
 
 let epochValue: string | undefined;
@@ -60,16 +44,12 @@ beforeEach(() => {
   lastfmGetToken.mockReset();
 });
 
-/** A real grant, minted through the production signing path. */
 async function grantCookieHeader(): Promise<string> {
   const { signGrant } = await import("./admin-auth");
 
   return `${ADMIN_COOKIE_NAME}=${await signGrant()}`;
 }
 
-// The op every case below drives: bodyless, operator tier, and it needs nothing but
-// the (mocked) settings KV — so a 403 can only come from the origin guard or the role
-// guard, never from an unrelated failure downstream.
 const REVOKE_PATH = "/admin/auth/revoke-grants";
 
 function request(path: string, method: string, headers: Record<string, string>): Request {
@@ -204,7 +184,7 @@ describe("the guard on the live oRPC admin tier (POST /admin/auth/revoke-grants)
 
     expect(response?.status).toBe(403);
     expect(((await readJson(response)) as { code: string }).code).toBe("invalid_origin");
-    // Nothing was written: the guard runs before the handler.
+
     expect(epochValue).toBeUndefined();
   });
 

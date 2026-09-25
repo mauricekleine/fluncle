@@ -1,9 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-// The cross-cutting Apple failure-regime breaker + call meter (RFC musickit-second-authority).
-// The `settings` KV is mocked with an in-memory map so the durable trip/streak/window state is
-// exercised without a database, and `now` is injected so the cooldown/window are deterministic.
-
 const store = new Map<string, string>();
 
 vi.mock("./settings", () => ({
@@ -68,7 +64,7 @@ describe("recordAppleAuthOutcome — the trip", () => {
 
     await recordAppleAuthOutcome("auth_failure", now);
     await recordAppleAuthOutcome("auth_failure", now);
-    await recordAppleAuthOutcome("auth_failure", now); // trips (K = 3)
+    await recordAppleAuthOutcome("auth_failure", now);
     expect(await areAppleCallsAllowed(now)).toBe(false);
 
     await recordAppleAuthOutcome("ok", now);
@@ -82,10 +78,9 @@ describe("recordAppleAuthOutcome — the trip", () => {
     const now = 10_000;
 
     await recordAppleAuthOutcome("auth_failure", now);
-    await recordAppleAuthOutcome("other", now); // must NOT reset the streak
+    await recordAppleAuthOutcome("other", now);
     await recordAppleAuthOutcome("auth_failure", now);
 
-    // Two auth failures survived the intervening 429 (K = 3 not yet reached, streak intact).
     expect((await getAppleBreakerState(now)).consecutiveAuthFailures).toBe(2);
   });
 
@@ -117,7 +112,6 @@ describe("the call meter", () => {
     await recordAppleCall(t0 + 1);
     expect(await readAppleCallCount(t0 + 2)).toBe(2);
 
-    // A read past the window elapse reads 0, and the next record opens a fresh window.
     expect(await readAppleCallCount(t0 + APPLE_CALL_WINDOW_MS)).toBe(0);
     await recordAppleCall(t0 + APPLE_CALL_WINDOW_MS);
     expect(await readAppleCallCount(t0 + APPLE_CALL_WINDOW_MS)).toBe(1);
