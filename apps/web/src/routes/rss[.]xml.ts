@@ -9,8 +9,6 @@ type TrackRow = {
   album_image_url: string | null;
   artists_json: string;
   item_type: "finding" | "mixtape";
-  // The permanent coordinate: a finding's `findings.log_id` (its /log home), or a
-  // mixtape's own Log ID. NULL only for a coordinate-less finding straggler.
   log_id: string | null;
   note: string | null;
   added_at: string;
@@ -19,7 +17,6 @@ type TrackRow = {
   track_id: string;
 };
 
-// The site cover, reused for the feed-level image other pages fall back to.
 const coverUrl = `${siteUrl}/fluncle-cover.png`;
 
 export const Route = createFileRoute("/rss.xml")({
@@ -64,17 +61,10 @@ export const Route = createFileRoute("/rss.xml")({
           const artists = parseArtistsJson(row.artists_json);
           const title =
             row.item_type === "mixtape" ? row.title : `${artists.join(", ")} — ${row.title}`;
-          // A finding's home is its own /log page (the citation surface the archive
-          // owns); Spotify stays in the body. Fall back to Spotify only when no
-          // coordinate has been minted yet.
           const link = row.log_id ? logPageUrl(row.log_id) : (row.spotify_url ?? siteUrl);
-          // Keep the Spotify link reachable from the item body now that it is no
-          // longer the item link.
           const description = [title, row.note?.trim() || undefined, row.spotify_url ?? undefined]
             .filter(Boolean)
             .join("\n\n");
-          // A mixtape's cover renders on the fly from its Log ID; a finding carries
-          // its album cover. `media:content` avoids `enclosure`'s required byte length.
           const imageUrl =
             row.item_type === "mixtape"
               ? row.log_id
@@ -110,8 +100,6 @@ ${items.join("\n")}
 
         return new Response(xml, {
           headers: {
-            // Readers get a short max-age; the CDN holds s-maxage; SWR keeps
-            // every repeat poll free while a background refresh runs.
             "Cache-Control": "public, max-age=300, s-maxage=3600, stale-while-revalidate=86400",
             "Content-Type": "application/rss+xml; charset=utf-8",
           },

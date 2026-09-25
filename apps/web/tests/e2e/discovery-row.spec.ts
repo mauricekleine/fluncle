@@ -1,17 +1,8 @@
-// THE DISCOVERY ROW'S INTERACTION CONTRACT (DESIGN.md §5 Track Row), in a real browser.
-//
-//   - The whole row opens the track: a click on the coordinate, the year or the gaps lands on the
-//     row's title link, never on dead chrome.
-//   - Every row control is operable from the keyboard: the cover plays, the ⋮ opens and closes and
-//     hands focus back.
-//   - Every row menu is a real target (44px), including the archive row's, which carries the story.
-
 import { expect, test, type Page } from "@playwright/test";
 import { blockExternalRequests } from "./browser";
 import { routePreviews } from "./player";
 import { SEEDED_LEAD } from "./seed";
 
-/** A pointer click at an element's centre: what a user's click on it hits, whatever it is. */
 async function clickWhereItSits(page: Page, selector: ReturnType<Page["locator"]>): Promise<void> {
   const box = await selector.boundingBox();
 

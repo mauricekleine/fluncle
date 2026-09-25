@@ -1,14 +1,3 @@
-// PUBLIC DISCOVERY JOURNEY EVENTS — retained evidence for the three journeys
-// the instrumentation exists to see, at desktop and mobile widths.
-//
-// Each journey records the Simple Analytics event REQUESTS a probe would send
-// (`installDiscoveryEventProbe` beacons queue.simpleanalyticscdn.com; the hermetic
-// route stub fulfils them). JSON lands in the gitignored `apps/web/.dev/discovery-events/`
-// and CI uploads it as the `discovery-events` artifact.
-//
-// Negative tests prove analytics-independence: navigation, outbound, /search submit,
-// and preview start still complete when the tag is absent or `sa_event` throws.
-
 import { expect, test, type ConsoleMessage, type Page } from "@playwright/test";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";

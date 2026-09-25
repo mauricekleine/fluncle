@@ -1,20 +1,10 @@
 import { Link, createFileRoute } from "@tanstack/react-router";
 import { siteUrl } from "@/lib/fluncle-links";
 
-// The terms of use: the public site's rules page, pointed at by TikTok's developer-app
-// review and overdue for the site generally. Same register as the privacy page — an
-// ARRIVAL surface read by strangers and reviewers, so honest-plain (third person for the
-// entity, plain-legal-lite) with a light touch of Fluncle warmth and zero cosmos
-// vocabulary in the substance. Everything here MUST stay accurate to what Fluncle
-// actually is and does. The "last updated" date is static (no new Date() at render);
-// bump it by hand whenever the text below changes.
-
 const title = "Terms · Fluncle";
 const description =
   "The plain terms for fluncle.com: a personal, non-commercial drum & bass archive. What you can do here, who owns the music and the writing, and what to expect.";
 
-// Static so it is identical on the server and the client; bump by hand when the terms
-// text below changes.
 const lastUpdated = "July 29, 2026";
 
 function termsHead() {

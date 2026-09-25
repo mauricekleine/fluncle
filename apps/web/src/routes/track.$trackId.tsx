@@ -17,31 +17,6 @@ import { siteUrl } from "@/lib/fluncle-links";
 import { sameAsUrls, trackPageUrl } from "@/lib/track-page";
 import { type TrackPageData } from "./-track-page-data";
 
-// `/track/<trackId>` — THE ARCHIVE TRACK DESTINATION.
-//
-// Fluncle holds far more recordings than he has certified. A certified one is a FINDING and lives
-// at `/log/<coordinate>`; that URL, that identifier and that page are untouched here, and a
-// `/track/<id>` that resolves to one is a permanent 301 home to it. What this route adds is a
-// destination for everything else: the rows the crawler and the freshness tap put in the archive,
-// which until now were quiet lines on an entity page whose only way out was a streaming service.
-//
-// The address is the row's PRIMARY KEY, and `lib/track-page.ts` carries the four reasons in full.
-// The short version: it is the only identifier on the row that exists for every track, never moves
-// when metadata is corrected, and does not change the day an ISRC backfill lands.
-//
-// A CATALOGUE page in the Three Areas (VOICE.md): reference register, no nameplate, no first
-// person. It says what the recording is, plainly, and never introduces or names the tier it
-// belongs to — that tier has no public name (docs/album-entity.md), and its distinction is carried
-// here the way it is carried everywhere else, by placement and light.
-//
-// The bands take the FRONT DOOR's section grammar (`components/front-door/section.tsx`): a
-// heading, at most one line of intro, at most one link out, then the content. Every band is
-// conditional and an empty one renders nothing at all.
-//
-// The resolver is reached by a DYNAMIC import inside the handler, and its type by `import type`,
-// so nothing in this module statically references `lib/server/**` — the client build removes a
-// handler body wholesale, which takes the `getDb` → `@libsql/client` → `drizzle-orm` chain out of
-// the eager entry chunk every page pays for (docs/client-bundle.md rule 1).
 const fetchTrack = createServerFn({ method: "GET" })
   .validator((data: { trackId: string }) => data)
   .handler(async ({ data: { trackId } }): Promise<TrackPageData> => {
@@ -50,11 +25,6 @@ const fetchTrack = createServerFn({ method: "GET" })
     return resolveTrackPageData(trackId);
   });
 
-/**
- * The `<meta name="description">` budget. Search engines flag and truncate past roughly this, and
- * `bioMetaDescription` already trims authored prose to 160 — this is the COMPOSED-string twin of
- * that cap, applied to the one optional clause rather than by clipping mid-sentence.
- */
 const META_DESCRIPTION_BUDGET = 155;
 
 function trackHead(loaderData: TrackPageData | undefined) {
@@ -68,22 +38,9 @@ function trackHead(loaderData: TrackPageData | undefined) {
     title: track.title,
   });
   const pageUrl = trackPageUrl(track.trackId);
-  // Honestly-plain third-person for the machine-facing strings (VOICE.md's Narrator rule): the
-  // page is DESCRIBED here, never spoken, and no faked warmth is injected.
+
   const title = `${line} · Fluncle`;
-  // ── THE DESCRIPTION ─────────────────────────────────────────────────────────────────────────
-  // Built ONLY from facts this row actually carries, in the order a reader needs them, and it
-  // claims NOTHING about certification: no Found date, no coordinate, and not the word "archive"
-  // either — public copy uses "the archive" for the set Fluncle certified (/log's footer sends you
-  // "Back to the archive" at /findings; /about says every track in it is one he heard in full and
-  // certified), so putting this page inside it would be the exact claim the page exists not to
-  // make. It never names the tier either, so nothing about the register can leak into a snippet.
-  //
-  // IT IS BUDGETED, not merely short. Search engines truncate around 155–160, and a long
-  // `Artist — Title` credit alone can eat half of that, so the FACTS sentence is built first and
-  // the closing clause is appended only when the result still fits. A title, a year, a label and a
-  // tempo is already a complete, honest snippet; the clause that would be cut off is dropped
-  // instead of shipped half-rendered.
+
   const year = track.releaseDate?.slice(0, 4);
   const releaseClause = [
     year === undefined ? undefined : `a ${year} drum & bass release`,
@@ -105,11 +62,7 @@ function trackHead(loaderData: TrackPageData | undefined) {
   ]
     .filter((part) => part !== undefined)
     .join(" ");
-  // THE TAIL PROMISES ONLY WHAT THE PAGE HAS. Both bands it names are conditional — the listen band
-  // renders nothing when the archive holds no short source and no outbound link, the neighbour band
-  // renders nothing when the scan came back empty — so a fixed tail would front every share and
-  // every citation with two things the page does not carry. It is built from the same two facts the
-  // bands are, and dropped entirely when neither holds.
+
   const hasListen = track.previewable || track.listen.length > 0;
   const hasNeighbours = neighbours.length > 0;
   const tail =
@@ -123,9 +76,7 @@ function trackHead(loaderData: TrackPageData | undefined) {
   const withTail = `${facts}${tail}`;
   const description = withTail.length <= META_DESCRIPTION_BUDGET ? withTail : facts;
   const imageUrl = albumCoverAtSize(track.albumImageUrl, "large") ?? `${siteUrl}/fluncle-cover.png`;
-  // THE LEAD IMAGE — the cover in the masthead, this page's LCP candidate, preloaded at the exact
-  // rung the masthead asks for so it is a cache hit rather than a second fetch (the /album and
-  // /artist precedent).
+
   const leadImageUrl = albumCoverAtSize(track.albumImageUrl, "medium");
 
   return {
@@ -138,12 +89,7 @@ function trackHead(loaderData: TrackPageData | undefined) {
     meta: [
       { title },
       { content: description, name: "description" },
-      // THE EVIDENCE GATE, and it is the DATABASE's verdict rather than a second rule written
-      // here: `indexable` is `TRACK_PAGE_INDEXABLE_WHERE` evaluated as a column of the same select
-      // that loaded this row, and the sitemap puts that identical expression in its `where`. A
-      // low-evidence page still serves 200 and stays fully crawlable and citable (`follow`); it is
-      // simply not submitted for indexing, and it is not in the sitemap either — the two cannot
-      // disagree, because there is only one expression.
+
       ...(track.indexable ? [] : [{ content: "noindex, follow", name: "robots" }]),
       { content: title, property: "og:title" },
       { content: description, property: "og:description" },
@@ -172,9 +118,7 @@ function trackHead(loaderData: TrackPageData | undefined) {
           isrc: track.isrc,
           key: track.key,
           label: track.label ? { name: track.label.name, slug: track.label.slug } : undefined,
-          // THROUGH THE SEAM, never a bare map: `sameAsUrls` withholds the kinds that may be
-          // rendered as a control but must not become a structured-data identity claim
-          // (lib/track-page.ts). Keyed on the destination KIND, so it survives a rename.
+
           listenUrls: sameAsUrls(track.listen),
           mbRecordingId: track.mbRecordingId,
           releaseDate: track.releaseDate,
@@ -187,18 +131,11 @@ function trackHead(loaderData: TrackPageData | undefined) {
   };
 }
 
-// Route options follow TanStack's create-route-property-order (each step feeds the next's
-// inferred types), which isn't alphabetical — so sort-keys is off here.
 // oxlint-disable-next-line sort-keys
 export const Route = createFileRoute("/track/$trackId")({
   loader: async ({ params }): Promise<TrackPageData> => {
     const data = await fetchTrack({ data: { trackId: params.trackId } });
 
-    // THE TWO PERMANENT REDIRECTS. A certified track's destination is its coordinate and always
-    // was, so `/track/<id>` for one is a 301 to `/log/<logId>` — this route never mints a second
-    // URL for a finding, and `/log` is untouched by its existence. A stamped duplicate goes to the
-    // principal the operator ruled is the real row; the twin's own id keeps resolving, to the page
-    // that exists.
     if (data.status === "redirect") {
       if (data.logId) {
         throw redirect({ params: { logId: data.logId }, statusCode: 301, to: "/log/$logId" });
@@ -237,9 +174,6 @@ function TrackPage() {
     <main className="log-plate-stage">
       <article className="log-plate track-plate">
         <header className="log-masthead track-masthead">
-          {/* Cover-led, like every other detail page in the archive. The eclipse fallback stands in
-              when the record carries no art, so a missing or failed cover degrades to the mark
-              rather than a broken-image glyph (components/track-artwork.tsx). */}
           <TrackArtwork
             alt=""
             className="track-masthead-cover"
@@ -256,8 +190,6 @@ function TrackPage() {
 
         <TrackListenBand track={track} />
 
-        {/* "Close in sound" — the way on. Rendered only when the scan came back with something, so
-            an un-embedded track, an empty corpus, and a dark sonar all read as no band at all. */}
         {neighbours.length > 0 ? (
           <FrontDoorSection id="track-neighbours" title="Close in sound">
             <SonicNeighbours neighbours={neighbours} />

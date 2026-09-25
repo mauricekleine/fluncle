@@ -25,27 +25,6 @@ import {
 } from "@/lib/server/recommendations";
 import { buildRecsGate } from "@/lib/server/recs-gate";
 
-// ── /recommendations — the per-listener telescope, the crew door ──────────────────────
-//
-// A signed-in listener points Fluncle at ~10 tracks they love, and the Ear's anchored
-// max-similarity scan (E1's server core) lines up the catalogue against THEIR seeds, plus the
-// findings nearest that seed set as full-voice slots (the register split). Fluncle mints the
-// result into a playlist on his own Spotify, refreshed weekly. This route is the door.
-//
-// The never-gates law holds through three states off the session (the /chat crew-door
-// precedent): anonymous (a quiet pitch + join link), signed-in-but-unverified (the verify
-// pointer — the learning cohort), and verified (the working surface). The server re-checks the
-// session and the verification on every op; the gate here is wayfinding, and the SSR loader
-// seeds the verified surface's react-query with real content on first paint.
-
-/**
- * The DRAFT engine read, rate-limited and degrading — the one place the live vector scan sits
- * on the read path (the draft cohort; the shelf-from-editions RFC is pruned, see git history). The
- * `account.recs.read` hourly budget is enforced here (the web door reads through serverFns, not
- * the oRPC op, so this is where the guard has to land for the door path), then the scan runs;
- * a limit or a `Response` fault both degrade to empty rather than blocking the door. The
- * COMMITTED path never calls this — a stored edition read is not a scan.
- */
 async function readDraftRecommendations(
   user: PublicUser,
   request: Request,
@@ -67,13 +46,6 @@ async function readDraftRecommendations(
   return result instanceof Response ? EMPTY_RECS : result;
 }
 
-/**
- * The gate, resolved from the requester's own session via `buildRecsGate` (the DI seam — the
- * "committed page views never run the engine" invariant lives there, unit-tested). The verified
- * state carries the seed set, the past editions, and — by phase — either the LIVE draft
- * recommendations or the LATEST frozen edition, plus the mutation token (the account/chat
- * loader-mint pattern). The engine read is the rate-limited, degrading draft path above.
- */
 const getRecsGate = createServerFn({ method: "GET" }).handler(async (): Promise<RecsGate> => {
   const request = getRequest();
   const user = await getPublicSession(request);
@@ -87,8 +59,6 @@ const getRecsGate = createServerFn({ method: "GET" }).handler(async (): Promise<
   });
 });
 
-/** The latest frozen edition on its own — the committed shelf's react-query refetch. `null`
- *  when the user has no edition (the draft phase) or the read races to nothing. */
 const getLatestEdition = createServerFn({ method: "GET" }).handler(
   async (): Promise<FrontierEditionDetail | null> => {
     const user = await getPublicSession(getRequest());
@@ -108,7 +78,6 @@ const getLatestEdition = createServerFn({ method: "GET" }).handler(
   },
 );
 
-/** A user's past editions on their own — the react-query refetch after a real refresh. */
 const loadFrontierEditions = createServerFn({ method: "GET" }).handler(
   async (): Promise<FrontierEditionSummary[]> => {
     const user = await getPublicSession(getRequest());
@@ -121,8 +90,6 @@ const loadFrontierEditions = createServerFn({ method: "GET" }).handler(
   },
 );
 
-/** One past edition's frozen tracklist, lazy-loaded when the dialog opens (null = no edition
- *  at that number for this user). Scoped to the requester's own session on every call. */
 const loadFrontierEdition = createServerFn({ method: "GET" })
   .validator((data: { number: number }) => data)
   .handler(async ({ data: { number } }): Promise<FrontierEditionDetail | null> => {
@@ -135,7 +102,6 @@ const loadFrontierEdition = createServerFn({ method: "GET" })
     return (await getFrontierEdition(user.id, number)) ?? null;
   });
 
-/** The seed set on its own — the react-query refetch after a seed write. */
 const getRecSeeds = createServerFn({ method: "GET" }).handler(async (): Promise<RecSeedItem[]> => {
   const user = await getPublicSession(getRequest());
 
@@ -146,8 +112,6 @@ const getRecSeeds = createServerFn({ method: "GET" }).handler(async (): Promise<
   return (await listRecSeeds(user)).seeds;
 });
 
-/** The DRAFT recommendations on their own — the react-query refetch after a seed write (draft
- *  phase only). Shares the rate-limited, degrading draft read with the gate. */
 const getRecommendations = createServerFn({ method: "GET" }).handler(
   async (): Promise<RecommendationsResult> => {
     const request = getRequest();
@@ -164,10 +128,7 @@ const getRecommendations = createServerFn({ method: "GET" }).handler(
 // oxlint-disable-next-line sort-keys -- TanStack's canonical option order (loader feeds head/component).
 export const Route = createFileRoute("/recommendations")({
   loader: () => getRecsGate(),
-  // Per-listener, per-session data (the gate + this user's seeds/editions/draft scan).
-  // Override the router's 60s default to 0 so a client nav never reuses one listener's
-  // frontier for another, or a stale one after a seed write. The server re-checks the
-  // session on every op; this keeps the CLIENT cache from outliving it.
+
   staleTime: 0,
   head: () => ({
     links: [{ href: `${siteUrl}/recommendations`, rel: "canonical" }],
@@ -177,11 +138,7 @@ export const Route = createFileRoute("/recommendations")({
         content: "Point Fluncle at the tracks you love and he digs the archive for more.",
         name: "description",
       },
-      // Unlisted while the door is gated (ROADMAP § the recommendation machine): it exists for
-      // the crew who sign in, but it is not announced and not indexed. It IS catalogued in
-      // @fluncle/registry as `web.recommendations` with `pending: true` — the pre-staged, DARK
-      // gate (no menu, no /status probe, no sitemap) — so opening the door is that one flip
-      // plus deleting this tag.
+
       { content: "noindex", name: "robots" },
     ],
   }),
@@ -191,7 +148,7 @@ export const Route = createFileRoute("/recommendations")({
 const MASTHEAD: Record<RecsGate["state"], string> = {
   anonymous: "The crate Fluncle digs from the archive, pointed at your taste.",
   unverified: "The crate Fluncle digs from the archive, pointed at your taste.",
-  // The verified door shows no tagline — the playlist header carries the meaning.
+
   verified: "",
 };
 
@@ -204,14 +161,12 @@ function RecommendationsPage() {
         <header className="home-masthead">
           <div>
             <h1 className="home-nameplate">Recommendations</h1>
-            {/* The verified door carries its own meaning — the tagline speaks only where
-                the gate still has to make the pitch. */}
+
             {gate.state === "verified" ? null : (
               <p className="home-tagline">{MASTHEAD[gate.state]}</p>
             )}
           </div>
-          {/* The archive-browse control sits top-right, verified only (the mix.tsx masthead
-              pattern); it renders nothing until there is a past edition to reach back to. */}
+
           {gate.state === "verified" ? (
             <div className="home-masthead-actions">
               <FrontierEditions

@@ -1,10 +1,3 @@
-// THE PLAYER BAR — the persistent preview player of the public chrome (DESIGN.md §5).
-//
-// The contract, at both widths: hidden until the first play; once a preview starts it docks and
-// SURVIVES client navigation (the sound never runs away from its control); it pauses and resumes
-// from the bar on another page, from the keyboard, and closes on request. A preview never plays
-// without a visible control that can stop it.
-
 import { expect, test, type ConsoleMessage, type Page } from "@playwright/test";
 import { blockExternalRequests } from "./browser";
 import { mediaSessionState, routePreviews } from "./player";
@@ -51,7 +44,6 @@ for (const viewport of VIEWPORTS) {
 
       const player = page.getByRole("region", { name: "Player" });
 
-      // Hidden until the first play.
       await expect(player).toHaveCount(0);
 
       await page.getByRole("button", { name: "Play the preview" }).click();
@@ -60,13 +52,11 @@ for (const viewport of VIEWPORTS) {
       await expect(player.getByRole("button", { exact: true, name: "Pause" })).toBeVisible();
       await expect.poll(() => mediaSessionState(page)).toBe("playing");
 
-      // Client navigation to another page: the bar and the sound come along.
       await page.getByRole("banner").getByRole("link", { name: "Fluncle home" }).click();
       await expect(page).toHaveURL(/\/$/);
       await expect(player).toBeVisible();
       await expect(player).toContainText(SEEDED_LEAD.title);
 
-      // Pause from the bar on the new page, then resume.
       await player.getByRole("button", { exact: true, name: "Pause" }).click();
       await expect(player.getByRole("button", { exact: true, name: "Play" })).toBeVisible();
       await expect.poll(() => mediaSessionState(page)).toBe("paused");
@@ -87,15 +77,12 @@ for (const viewport of VIEWPORTS) {
 
       await expect(player.getByRole("button", { exact: true, name: "Pause" })).toBeVisible();
 
-      // K toggles from anywhere outside a field.
       await page.locator("body").click({ position: { x: 5, y: 300 } });
       await page.keyboard.press("k");
       await expect(player.getByRole("button", { exact: true, name: "Play" })).toBeVisible();
       await page.keyboard.press("k");
       await expect(player.getByRole("button", { exact: true, name: "Pause" })).toBeVisible();
 
-      // A modifier held means the key is not the transport's: Shift+K, Shift+L and Shift+Space
-      // leave playback exactly as it was (Shift+Space still scrolls the page up).
       const position = await player.locator(".player-position").first().textContent();
 
       for (const chord of ["Shift+K", "Shift+L", "Shift+J", "Shift+Space"]) {

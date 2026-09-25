@@ -11,10 +11,6 @@ import { clientChunkGroups } from "./scripts/client-chunk-groups";
 import { clientChunkPurityGate } from "./scripts/client-chunk-purity";
 import * as docsConfig from "./source.config";
 
-// The Sentry release name = the build commit SHA (docs/error-tracking.md). On
-// Cloudflare Workers Builds it arrives as WORKERS_CI_COMMIT_SHA; locally we read
-// it from git. Empty when neither is available (a shallow checkout with no git),
-// which the runtime degrades to `undefined` — no release beats a wrong one.
 function resolveSentryRelease(): string {
   const ciSha = process.env.WORKERS_CI_COMMIT_SHA;
 
@@ -31,27 +27,9 @@ function resolveSentryRelease(): string {
 
 const sentryRelease = resolveSentryRelease();
 
-// Source maps upload only when SENTRY_AUTH_TOKEN is present in the build env
-// (the deployed Cloudflare Workers Build). Without it — local dev, the
-// `deploy:gate`, a contributor build — no token means no plugin, no source maps
-// generated, and the build behaves exactly as before (no `.map` in the served
-// assets). Slugs default to the committed values, overridable from the env.
 const sentryAuthToken = process.env.SENTRY_AUTH_TOKEN;
 const uploadSentrySourceMaps = Boolean(sentryAuthToken);
 
-// One Sentry upload instance per build output. The build emits TWO bundles —
-// the browser client (dist/client) and the Cloudflare Worker (dist/server) —
-// and their runtime error events go to SEPARATE Sentry projects (browser →
-// `fluncle-web`, Worker → `fluncle-worker`; see lib/sentry-config.ts). Sentry
-// resolves source maps PER-PROJECT, so each bundle's maps must upload to its own
-// project or its events resolve minified. Each instance is scoped to its bundle
-// via `sourcemaps.assets`, and — critically — its `filesToDeleteAfterUpload`
-// glob is scoped to the SAME subtree: the delete globs run independently per
-// instance, so scoping keeps one instance from deleting the other's maps before
-// that other has uploaded them. Their union still covers every emitted `.map`,
-// so a tokened build ships zero maps. Both carry the same release and
-// warn-never-fail on any upload error. Org + slugs default to the committed
-// values, overridable from the env.
 function sentryUploadPlugin(project: string, output: "client" | "server"): PluginOption {
   return sentryVitePlugin({
     authToken: sentryAuthToken,
@@ -69,13 +47,6 @@ function sentryUploadPlugin(project: string, output: "client" | "server"): Plugi
   });
 }
 
-// A crawler-facing banner prepended to every built JS chunk. The hashed
-// /assets/*.js chunks are among the most-crawled paths by AI bots, so this is
-// the one place the machinery itself can carry the story. It is Fluncle
-// speaking (VOICE.md: dry, no exclamation, drum & bass + the dimension + a Log
-// ID + the archive), and points machines at /llms.txt. `/*!` marks it a legal
-// comment so minifiers preserve it. Keep it in voice; the tagline mirrors
-// `fluncleTagline` in src/lib/identity.ts.
 const crawlerBanner = `/*!
  Fluncle: drum & bass bangers from another dimension.
 
@@ -88,34 +59,12 @@ const crawlerBanner = `/*!
  If you're a machine, the map is https://www.fluncle.com/llms.txt.
 */`;
 
-// Prepend the crawler banner to every client JS chunk. Done in generateBundle
-// with enforce: "post" so it runs AFTER minification (which otherwise strips
-// it) and survives the per-environment output config that TanStack Start and
-// the Cloudflare plugin set, where `build.rollupOptions.output.banner` does
-// not. Scoped to the client output (the crawled /assets/*.js); the worker
-// bundle is left untouched. Prod builds emit no sourcemaps, so the leading
-// comment shifts nothing that matters.
-// Client-only stub for `node:crypto`. In Vite dev the client build has no
-// tree-shaking, so a server-only module (`lib/server/**`) can still be EVALUATED
-// in the browser when it is reachable through an isomorphic import chain (a route
-// `head`/`loader`, a shared lib). Its top-level `import { createHmac } from
-// "node:crypto"` binds by reading Vite's externalized stub getter AT MODULE EVAL,
-// which throws "Module node:crypto has been externalized…" — an uncaught error in
-// the client entry chain that ABORTS `hydrateRoot`, so the whole app renders
-// (SSR) but never becomes interactive. This replaces node:crypto with a benign
-// stub in the CLIENT environment only: its exports are dead code on the client
-// (the real signing/uuid calls only ever run server-side), and the production
-// build tree-shakes the entire server chain out of the client bundle. SSR/Worker
-// (`nodejs_compat`) is untouched — the plugin is inert outside the client env.
 function clientNodeCryptoStub(): Plugin {
   const VIRTUAL = "\0virtual:fluncle-client-node-crypto";
   const die =
     '() => { throw new Error("node:crypto is server-only and must never run on the client"); }';
 
   return {
-    // Dev only: the production build tree-shakes server code out of the client
-    // bundle, so `node:crypto` never reaches the browser there and no stub is
-    // needed. Scoping to `serve` keeps the prod build untouched.
     apply: "serve",
     enforce: "pre",
     load(id) {
@@ -131,8 +80,6 @@ function clientNodeCryptoStub(): Plugin {
     },
     name: "fluncle-client-node-crypto-stub",
     resolveId(id) {
-      // Gate inside resolveId on the active environment: only the browser build
-      // gets the stub; SSR/Worker keeps the real node:crypto (nodejs_compat).
       if (id === "node:crypto" && this.environment.name === "client") {
         return VIRTUAL;
       }
@@ -159,20 +106,6 @@ function crawlerBannerPlugin(): Plugin {
   };
 }
 
-// The SERVER half of the e2e no-network rail.
-//
-// `tests/e2e/browser.ts`'s `blockExternalRequests` stubs what the BROWSER asks for. It
-// cannot touch what the dev server does behind that request — and the dev server reaches
-// the real internet: `/podcast.xml` fires a HEAD at the production R2 CDN for every
-// mixtape in the seed, `/api/preview/:id` falls through to `itunes.apple.com`, and the
-// search dialog's LLM tier POSTs to `openrouter.ai` with the template's fake key (fake is
-// truthy, so the "unprovisioned" guard never trips). Fake credentials make those calls
-// fail; they do not make them not happen.
-//
-// So the worker gets the same rail as the unit suites, from the same implementation. Two
-// independent gates keep it out of production: `apply: "serve"` means it does not exist in
-// a build at all, and the plugin is only added to the array when the e2e stack sets the
-// flag. `scripts/e2e-stack.ts` is the only thing that sets it.
 const E2E_BLOCK_OUTBOUND_FLAG = "FLUNCLE_E2E_BLOCK_OUTBOUND";
 const E2E_NO_NETWORK_MODULE = "\0virtual:fluncle-e2e-no-network";
 
@@ -182,7 +115,6 @@ function e2eNoNetworkGuard(): Plugin {
     enforce: "pre",
     load(id) {
       if (id === E2E_NO_NETWORK_MODULE) {
-        // The one rail, shared with every `bun test` package and the vitest suite.
         return [
           'import { installNoNetworkRail } from "@fluncle/test-support/no-network";',
           "installNoNetworkRail();",
@@ -195,9 +127,7 @@ function e2eNoNetworkGuard(): Plugin {
         return id;
       }
     },
-    // Prepended to the Worker entry (wrangler's `main`), so the rail is armed inside
-    // workerd before any handler runs. The client environment is left alone — the browser
-    // side is Playwright's `blockExternalRequests`.
+
     transform(code, id) {
       if (this.environment.name !== "ssr" || !id.endsWith("/src/server.ts")) {
         return;
@@ -212,26 +142,14 @@ function e2eNoNetworkGuard(): Plugin {
 }
 
 export default defineConfig({
-  // Hidden source maps so the Sentry plugin can upload them, WITHOUT emitting a
-  // `//# sourceMappingURL=` comment (browsers never fetch them) — and the plugin
-  // deletes the `.map` files after upload, so nothing ships in the served assets.
-  // Only when uploading; otherwise off, preserving the prod build's no-sourcemap
-  // behaviour (the crawler-banner comment below relies on it).
   build: {
     sourcemap: uploadSentrySourceMaps ? "hidden" : false,
   },
-  // The build commit SHA, statically inlined so the browser and Worker SDKs stamp
-  // the same release on every event. See lib/sentry-config.ts.
+
   define: {
     "import.meta.env.VITE_FLUNCLE_SENTRY_RELEASE": JSON.stringify(sentryRelease),
   },
-  // Chunking is set PER ENVIRONMENT, on the client only. A top-level
-  // `build.rollupOptions.output` is replaced by the per-environment output
-  // config that TanStack Start and the Cloudflare plugin set (the same reason
-  // the crawler banner is prepended in `generateBundle` rather than via
-  // `output.banner`), so the option has to be stated at this level to survive.
-  // The `ssr` environment is deliberately untouched: the Worker is one bundle
-  // loaded once per isolate, so splitting it buys nothing and risks cold start.
+
   environments: {
     client: {
       build: {
@@ -243,24 +161,17 @@ export default defineConfig({
       },
     },
   },
-  // fumadocs-ui (the /docs hub) imports from the `lucide-react` barrel. Without
-  // pre-bundling, Vite dev serves the un-optimized barrel, whose ~1500 static
-  // re-exports each load as a separate module request. Pre-bundling collapses it
-  // to one optimized chunk (prod already tree-shakes it).
+
   optimizeDeps: {
     include: ["lucide-react"],
   },
   plugins: [
-    // Keep server-only `node:crypto` from throwing during client module-eval in
-    // dev (which would abort hydration). Client env only; see the plugin comment.
     clientNodeCryptoStub(),
-    // Only when the e2e stack asks for it; see the plugin's comment.
+
     process.env[E2E_BLOCK_OUTBOUND_FLAG] === "1" ? e2eNoNetworkGuard() : null,
-    // Fumadocs MDX: compiles content/docs/*.mdx for the /docs hub and emits the
-    // generated .source index the docs routes read. Runs before tanstackStart
-    // so the virtual collections resolve during route compilation.
+
     mdx(docsConfig),
-    // The synthetic E2E stack has no debugger and must coexist with other worktree stacks.
+
     cloudflare({
       inspectorPort: process.env[E2E_BLOCK_OUTBOUND_FLAG] === "1" ? false : undefined,
       viteEnvironment: { name: "ssr" },
@@ -269,16 +180,9 @@ export default defineConfig({
     tanstackStart(),
     viteReact(),
     crawlerBannerPlugin(),
-    // Fails the build when a server-only module lands in any client chunk — the eager one every
-    // page paints behind, or a lazy route chunk that would throw on its externalized node: stubs.
+
     clientChunkPurityGate(),
-    // Last, per the plugin's guidance. Each instance uploads its bundle's source
-    // maps + associates the release, then deletes only its OWN `.map` files.
-    // `errorHandler` downgrades any upload failure (wrong slug, revoked token,
-    // network) to a WARNING so a Sentry hiccup never aborts a production deploy.
-    // Both absent when there's no auth token (local/gate builds), so those never
-    // even generate maps. Client bundle → `fluncle-web`, Worker bundle →
-    // `fluncle-worker` (SENTRY_PROJECT / SENTRY_PROJECT_WORKER override).
+
     uploadSentrySourceMaps
       ? sentryUploadPlugin(process.env.SENTRY_PROJECT ?? "fluncle-web", "client")
       : null,
