@@ -1696,10 +1696,61 @@ describe("anchorFiringDeferral", () => {
     expect(anchorFiringDeferral(OPEN, NIGHT, OUT_OF_WINDOW)).toBe("awaiting_free_ask");
   });
 
-  test("a spent daily cap stops the firing whatever the clock says", () => {
-    expect(anchorFiringDeferral({ ...OPEN, apifyBudgetSpent: true }, NIGHT, IN_WINDOW)).toBe(
-      "apify_budget_spent",
-    );
+  test("a spent daily cap preserves free rungs when the gate is open", () => {
+    expect(
+      anchorFiringDeferral(
+        { ...OPEN, apifyBudgetSpent: true, gateReason: "open" },
+        NIGHT,
+        IN_WINDOW,
+      ),
+    ).toBe("free_rungs_only");
+  });
+
+  test("a spent daily cap preserves free rungs when the search flag is off", () => {
+    expect(
+      anchorFiringDeferral(
+        {
+          ...OPEN,
+          apifyBudgetSpent: true,
+          gateReason: "flag_off",
+          spotifySearchEnabled: false,
+        },
+        NIGHT,
+        IN_WINDOW,
+      ),
+    ).toBe("free_rungs_only");
+  });
+
+  test("transient gates with Apify disabled still read the normal queue", () => {
+    for (const gateReason of ["shared_meter", "breaker_throttle"] as const) {
+      expect(
+        anchorFiringDeferral(
+          {
+            ...OPEN,
+            apifyEnabled: false,
+            gateReason,
+            nextEligibleAt: "2026-09-20T03:01:00.000Z",
+          },
+          NIGHT,
+          IN_WINDOW,
+        ),
+      ).toBeNull();
+    }
+  });
+
+  test("a long throttle with Apify disabled still defers the prior-only queue", () => {
+    expect(
+      anchorFiringDeferral(
+        {
+          ...OPEN,
+          apifyEnabled: false,
+          gateReason: "breaker_throttle",
+          nextEligibleAt: "2026-09-20T03:30:00.000Z",
+        },
+        NIGHT,
+        IN_WINDOW,
+      ),
+    ).toBe("apify_disabled");
   });
 
   test("with the free search rungs DISARMED the firing always pulls — the load-bearing case", () => {
@@ -1996,21 +2047,86 @@ describe("runAnchorSweep — the firing preflight", () => {
     expect(modes).toEqual(["prior"]);
   });
 
-  test("a spent cap defers the firing with its own reason", async () => {
-    const summary = await runAnchorSweep(
-      15,
-      preflightDeps(
+  test("a spent cap reads the normal queue and makes free ISRC asks without Apify", async () => {
+    const modes: (string | undefined)[] = [];
+    let actorRuns = 0;
+    let freeAsks = 0;
+    const summary = await runAnchorSweep(1, {
+      ...preflightDeps(
         {
           apifyBudgetRemaining: 0,
           apifyBudgetSpent: true,
           apifyEnabled: true,
-          spotifySearchEnabled: false,
+          gateReason: "open",
+          spotifySearchEnabled: true,
         },
         () => {},
       ),
-    );
+      fetchQueue: (_limit, mode) => {
+        modes.push(mode);
+        return Promise.resolve([{ anchorQuery: "q", trackId: "mb_a" }]);
+      },
+      now: () => Date.parse("2026-09-20T03:00:00Z"),
+      resolveFree: () => {
+        freeAsks += 1;
+        return Promise.resolve({
+          anchored: true,
+          source: "spotify_isrc",
+          spotifyIsrcAsked: true,
+          spotifySearchDone: true,
+          verifiedBy: "isrc",
+        });
+      },
+      runActor: () => {
+        actorRuns += 1;
+        return Promise.resolve([]);
+      },
+    });
 
-    expect(summary.reason).toBe("apify_budget_spent");
+    expect(modes).toEqual([undefined]);
+    expect(freeAsks).toBe(1);
+    expect(summary.spotifyIsrcAsks).toBe(1);
+    expect(summary.checked).toBe(1);
+    expect(actorRuns).toBe(0);
+  });
+
+  test("a transient gate with Apify disabled still pulls and asks the normal queue", async () => {
+    for (const gateReason of ["shared_meter", "breaker_throttle"] as const) {
+      const modes: (string | undefined)[] = [];
+      let freeAsks = 0;
+      const summary = await runAnchorSweep(1, {
+        ...preflightDeps(
+          {
+            apifyBudgetRemaining: 300,
+            apifyBudgetSpent: false,
+            apifyEnabled: false,
+            gateReason,
+            nextEligibleAt: "2026-09-20T12:01:00.000Z",
+            spotifySearchEnabled: true,
+          },
+          () => {},
+        ),
+        fetchQueue: (_limit, mode) => {
+          modes.push(mode);
+          return Promise.resolve([{ anchorQuery: "q", trackId: "mb_a" }]);
+        },
+        resolveFree: () => {
+          freeAsks += 1;
+          return Promise.resolve({
+            anchored: true,
+            source: "spotify_isrc",
+            spotifyIsrcAsked: true,
+            spotifySearchDone: true,
+            verifiedBy: "isrc",
+          });
+        },
+      });
+
+      expect(modes).toEqual([undefined]);
+      expect(freeAsks).toBe(1);
+      expect(summary.spotifyIsrcAsks).toBe(1);
+      expect(summary.checked).toBe(1);
+    }
   });
 
   test("a preflight that THROWS is fail-open — the firing runs as it always did", async () => {

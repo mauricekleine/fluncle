@@ -510,6 +510,13 @@ export function spotifyAskDeferral(
   return state.asksSpent >= state.limit ? "budget" : null;
 }
 
+function longAnchorThrottle(preflight: AnchorPreflight, now: Date): boolean {
+  return (
+    preflight.gateReason === "breaker_throttle" &&
+    Date.parse(preflight.nextEligibleAt ?? "") - now.getTime() > ANCHOR_EXPECTED_SWEEP_MS
+  );
+}
+
 export function anchorFiringDeferral(
   preflight: AnchorPreflight,
   askWindow: IsrcAskWindow,
@@ -519,11 +526,7 @@ export function anchorFiringDeferral(
   if (preflight.gateReason === "friday_window") {
     return "awaiting_free_ask";
   }
-  if (
-    preflight.gateReason === "breaker_quota" ||
-    preflight.gateReason === "breaker_throttle" ||
-    preflight.gateReason === "shared_meter"
-  ) {
+  if (preflight.gateReason === "breaker_quota" || longAnchorThrottle(preflight, now)) {
     return !preflight.apifyEnabled
       ? "apify_disabled"
       : preflight.apifyBudgetSpent
@@ -533,10 +536,12 @@ export function anchorFiringDeferral(
   if (!preflight.apifyEnabled) {
     return null;
   }
+  if (preflight.apifyBudgetSpent) {
+    return "free_rungs_only";
+  }
 
-  const deferral = preflight.apifyBudgetSpent
-    ? "apify_budget_spent"
-    : preflight.spotifySearchEnabled && !withinIsrcAskWindow(askWindow, now)
+  const deferral =
+    preflight.spotifySearchEnabled && !withinIsrcAskWindow(askWindow, now)
       ? "awaiting_free_ask"
       : null;
 
@@ -1356,17 +1361,12 @@ async function classifyAnchorFiring(
   if (!preflight) {
     return { askArmed: false, deferral: null, freeRungsOnly: false };
   }
-  const deferral = anchorFiringDeferral(
-    preflight,
-    askState.askWindow,
-    new Date(deps.now()),
-    DAY_FREE_RUNGS,
-  );
+  const now = new Date(deps.now());
+  const deferral = anchorFiringDeferral(preflight, askState.askWindow, now, DAY_FREE_RUNGS);
   const paidMode =
     preflight.gateReason === "breaker_quota"
       ? "quota"
-      : preflight.gateReason === "breaker_throttle" &&
-          Date.parse(preflight.nextEligibleAt ?? "") - deps.now() > ANCHOR_EXPECTED_SWEEP_MS
+      : longAnchorThrottle(preflight, now)
         ? "prior"
         : undefined;
   return {
