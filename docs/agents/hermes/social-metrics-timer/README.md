@@ -17,6 +17,8 @@ Postiz caps the public API at **30 requests/hour**. Each snapshotted post costs 
 
 The selection is a pure function of DB state + the clock, so it is deterministic and re-runnable. A post Postiz reports as `{ missing: true }` (a TikTok inbox draft whose release-id it hasn't resolved) is skipped cleanly; a post whose read errors is skipped as `failed` — neither aborts the batch.
 
+TikTok Display API and YouTube Analytics are independent snapshot sources: each runs when its own account is connected, even without a Postiz key, and records the platform's native video id under its own `source` so same-day rows cannot collide with Postiz rows. An absent connection is a clean no-op; a failed source reports its own failure without aborting the other sources. YouTube retention can arrive days after publication, so a later daily snapshot may be the first one with retention values. TikTok's web OAuth scope list is comma-separated, its refresh token may rotate, and `video/list` allows at most 20 videos per page; a missing metric remains null rather than becoming a measured zero.
+
 ## The model: box triggers, the Worker computes
 
 The box holds no computation authority — it only fires the trigger. Per tick:

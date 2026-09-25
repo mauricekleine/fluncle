@@ -13,14 +13,6 @@ import {
 } from "../../tool-specs";
 import { compactFinding, publicFindingRecord, SHARED_TOOLS, toMcpTool } from "./registry";
 
-// The registry projects one tool set onto three transports. These tests are the drift guard: the
-// SAME five verbs, byte-identical output per transport, projected to exactly the surfaces each is
-// declared for. They pair with mcp.test.ts / chat.test.ts (which exercise the executes end to end
-// through each transport's dispatcher); here we assert the registry's structure + the two record
-// projections directly, without a database.
-
-// A finding with every field a projection reads — including the private ones a projection MUST
-// strip (the capture key, the expiring preview token).
 function findingFixture(overrides: Partial<TrackListItem> = {}): TrackListItem {
   return {
     addedAt: "2026-06-15T20:00:00.000Z",
@@ -58,9 +50,6 @@ const byName = (name: string): ToolSpec => {
   return spec;
 };
 
-// The full realized registry after the vocabulary cut: the found-order `list_findings` feed, the
-// reborn `list_tracks` browse enumerator, the rest of the overlapping reads, the reads lifted out of
-// ChatDnB (`list_similar_artists` among them), the three catalogue browse reads, and the two writes.
 const ALL_TOOL_NAMES = [
   "build_set",
   "get_artist",
@@ -86,7 +75,7 @@ const ALL_TOOL_NAMES = [
 describe("SHARED_TOOLS registry — one definition, every verb", () => {
   it("seeds exactly the registered tools (reads + writes)", () => {
     expect(SHARED_TOOL_SPECS.map((spec) => spec.name).sort()).toEqual(ALL_TOOL_NAMES);
-    // SHARED_TOOLS (spec + execute) mirrors the specs one-for-one.
+
     expect(SHARED_TOOLS.map((def) => def.name).sort()).toEqual(
       SHARED_TOOL_SPECS.map((spec) => spec.name).sort(),
     );
@@ -96,8 +85,6 @@ describe("SHARED_TOOLS registry — one definition, every verb", () => {
   });
 
   it("keeps the fresh cap in step with the fresh library (client-safe duplicate)", () => {
-    // FRESH_LIMIT_MAX lives in the client-safe specs; this asserts it never drifts from the
-    // server-only source of truth.
     expect(FRESH_LIMIT_MAX).toBe(FRESH_TRACKS_MAX);
   });
 });
@@ -109,7 +96,7 @@ describe("output-shape / behavior-preserving — a finding through each projecti
     expect(record).toMatchObject({
       album: "The Album",
       artists: ["Camo & Krooked"],
-      bpm: 173, // rounded
+      bpm: 173,
       coordinate: "012.8.0A",
       found: "2026-06-15T20:00:00.000Z",
       galaxy: "Liquid",
@@ -121,7 +108,7 @@ describe("output-shape / behavior-preserving — a finding through each projecti
       uri: "fluncle://finding/012.8.0A",
     });
     expect(record.links).toMatchObject({ spotify: "https://open.spotify.com/track/abc" });
-    // Never the private capture key, never the expiring preview token.
+
     expect(JSON.stringify(record)).not.toContain("deadbeef");
     expect(JSON.stringify(record)).not.toContain("expiring-token");
   });
@@ -135,16 +122,16 @@ describe("output-shape / behavior-preserving — a finding through each projecti
       bpm: 173,
       coordinate: "012.8.0A",
       durationMs: 215_000,
-      hasPreview: true, // derived from previewUrl
+      hasPreview: true,
       key: "F minor",
       note: "A hook that folds the room in half.",
       title: "Test Banger",
     });
-    // The card gets the boolean, NEVER the raw expiring URL or the capture key.
+
     expect(hasKeyDeep(card, "previewUrl")).toBe(false);
     expect(JSON.stringify(card)).not.toContain("expiring-token");
     expect(JSON.stringify(card)).not.toContain("deadbeef");
-    // The compact card deliberately does NOT carry the MCP-only record fields.
+
     expect(hasKeyDeep(card, "uri")).toBe(false);
     expect(hasKeyDeep(card, "observation")).toBe(false);
   });
@@ -187,13 +174,9 @@ describe("tool-set parity — each transport gets exactly its declared projectio
         .map((spec) => spec.name)
         .sort();
 
-    // Every tool is on the MCP + chat (the two full-coverage surfaces).
     expect(forTransport("mcp")).toEqual(ALL_TOOL_NAMES);
     expect(forTransport("chat")).toEqual(ALL_TOOL_NAMES);
-    // WebMCP carries only the tools with a matching public /api endpoint: the four original reads,
-    // the archive search (its `q` twin), and the two writes. The codified asymmetries stay off it —
-    // get_status, get_artist, get_label, build_set, list_similar_artists (no name-keyed public op,
-    // and this PR adds none).
+
     expect(forTransport("webmcp")).toEqual([
       "get_random_track",
       "get_track",
@@ -224,8 +207,6 @@ describe("tool-set parity — each transport gets exactly its declared projectio
   });
 
   it("get_recent_tracks is fully retired — never a shared tool, never a per-transport alias", () => {
-    // The vocabulary cut removed the last deprecation alias with no replacement shim, so
-    // `get_recent_tracks` is not a registry tool and not minted on any transport.
     expect(SHARED_TOOL_SPECS.map((spec) => spec.name)).not.toContain("get_recent_tracks");
   });
 });
@@ -243,7 +224,7 @@ describe("the transport adapters bridge signatures", () => {
     expect(mcpTool.title).toBe("Recent findings");
     expect(typeof mcpTool.description).toBe("string");
     expect(mcpTool.inputSchema).toMatchObject({ type: "object" });
-    expect(mcpTool.execute.length).toBe(2); // (args, request)
+    expect(mcpTool.execute.length).toBe(2);
   });
 
   it("toWebMcpTool keeps the hand-written HTTP execute and shares name + description + schema", async () => {
@@ -287,7 +268,7 @@ describe("schema snapshot — z.toJSONSchema carries required / min / max", () =
     expect(schema.type).toBe("object");
     expect(schema.properties.page).toMatchObject({ minimum: 1, type: "integer" });
     expect(schema.properties.certified?.type).toBe("boolean");
-    // The browse enumerator pages by `page`, never the feed's `limit`.
+
     expect(schema.properties.limit).toBeUndefined();
     expect(schema.required).toBeUndefined();
   });
@@ -312,7 +293,7 @@ describe("schema snapshot — z.toJSONSchema carries required / min / max", () =
 
     expect(schema.properties.idOrLogId.type).toBe("string");
     expect(schema.required).toEqual(["idOrLogId"]);
-    // The chat arg `coordinate` was renamed to the canonical `idOrLogId` (0 consumers).
+
     expect(Object.keys(schema.properties)).not.toContain("coordinate");
   });
 
@@ -322,16 +303,12 @@ describe("schema snapshot — z.toJSONSchema carries required / min / max", () =
 
       expect(schema.type).toBe("object");
       expect(schema.properties).toEqual({});
-      // The explicit-opts toJSONSchema form deliberately omits additionalProperties:false.
+
       expect(schema.additionalProperties).toBeUndefined();
     }
   });
 });
 
-// The registry names now come under the same `verb_noun` naming test the contract ops do
-// (orpc-naming.test.ts). `build_set` brought `build` under it — the sibling of the `anchor` / `drip`
-// pattern (a concrete non-CRUD action verb, added deliberately, mirrored in
-// docs/naming-conventions.md's closed set).
 const VERB_NOUN_SHAPE = /^[a-z]+(?:_[a-z0-9]+)+$/;
 const APPROVED_TOOL_VERBS = new Set<string>([
   "build",
@@ -357,15 +334,13 @@ describe("registry naming — verb_noun over the tool names (incl. build)", () =
         `${spec.name} leads with unapproved verb "${verb}"`,
       ).toBe(true);
     }
-    // build_set is the verb that had to be added — assert it is present and approved.
+
     expect(byName("build_set").name.split("_")[0]).toBe("build");
   });
 });
 
 describe("the auth model — transports authored independently of access", () => {
   it("the realized MCP tool set contains NO access:session tool (the cross-field guard)", () => {
-    // Not a tautology: nothing projects on `access`, so a future privileged tool mislabeled onto
-    // the anonymous MCP would trip this. Today every MCP tool is public.
     for (const spec of SHARED_TOOL_SPECS) {
       if (spec.transports.includes("mcp")) {
         expect(spec.access, `${spec.name} on the MCP`).toBe("public");
@@ -374,14 +349,11 @@ describe("the auth model — transports authored independently of access", () =>
   });
 
   it("the writes are effect:write + public (the review rule: any user-owned-state mutation is session)", () => {
-    // The two writes mutate no session-owned state (an anonymous submission, a newsletter board),
-    // so they are public — exactly as the anonymous MCP already exposed them. The registry lint: a
-    // future tool that mutates USER-owned state must be access:session (none are today).
     for (const name of ["submit_track", "subscribe_newsletter"]) {
       expect(byName(name).effect, name).toBe("write");
       expect(byName(name).access, name).toBe("public");
     }
-    // Every read is effect:read.
+
     for (const spec of SHARED_TOOL_SPECS) {
       if (spec.name !== "submit_track" && spec.name !== "subscribe_newsletter") {
         expect(spec.effect, spec.name).toBe("read");
@@ -423,7 +395,7 @@ describe("the catalogue browse tools — the unlit register, by name (PR-5)", ()
       expect(spec.effect, name).toBe("read");
       expect(spec.access, name).toBe("public");
       expect(spec.transports.sort(), name).toEqual(["chat", "mcp"]);
-      // Chat splits into the two buckets (catalogue-only by construction); the MCP world-serves.
+
       expect(spec.project, name).toEqual({ chat: "twoBucket", mcp: "publicRecord" });
     }
   });
@@ -437,15 +409,12 @@ describe("the catalogue browse tools — the unlit register, by name (PR-5)", ()
 
       expect(schema.properties.name.type, name).toBe("string");
       expect(schema.required, name).toEqual(["name"]);
-      // `page` is the optional pager (1-based); it never becomes required.
+
       expect(schema.properties.page, name).toMatchObject({ minimum: 1, type: "integer" });
     }
   });
 
   it("states the certified split plainly and leaks no mechanism word (Flat Copy Test)", () => {
-    // Slice F neutralised these: the description states factually that the rows are not certified
-    // findings (so none carries a Log ID) and names no mechanism word (anti-join / uncertified /
-    // the catalogue table), which would teach a leakable tier.
     for (const name of BROWSE_TOOLS) {
       const spec = byName(name);
       const text = `${spec.description} ${spec.title}`.toLowerCase();
@@ -469,7 +438,7 @@ describe("the full A–Z browse tools (Slice F) — list_artists / list_albums /
       expect(spec.effect, name).toBe("read");
       expect(spec.access, name).toBe("public");
       expect(spec.transports.sort(), name).toEqual(["chat", "mcp"]);
-      // Naming an entity is always allowed, so both transports share the one browse shape.
+
       expect(spec.project, name).toEqual({ chat: "browseIndex", mcp: "browseIndex" });
     }
   });
@@ -494,7 +463,7 @@ describe("the full A–Z browse tools (Slice F) — list_artists / list_albums /
       expect(text, `${name} description`).toContain("a to z");
       expect(text, `${name} description`).toContain("certified");
       expect(text, `${name} description`).toContain("log id");
-      // "catalogue" is the internal tier noun — never minted as a public tier name (Unlit Rule).
+
       for (const banned of ["catalogue", "anti-join", "sitemap", "having", "renderable"]) {
         expect(text, `${name} leaks "${banned}"`).not.toContain(banned);
       }
@@ -502,7 +471,6 @@ describe("the full A–Z browse tools (Slice F) — list_artists / list_albums /
   });
 });
 
-/** Walk any value and report whether `key` appears anywhere in it (arrays + nested objects). */
 function hasKeyDeep(value: unknown, key: string): boolean {
   if (Array.isArray(value)) {
     return value.some((entry) => hasKeyDeep(entry, key));

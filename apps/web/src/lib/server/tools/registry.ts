@@ -1,30 +1,3 @@
-// The server half of the shared tool registry — one `execute` per archive verb, and the three
-// transport adapters.
-//
-// ── WHY THIS EXISTS ──────────────────────────────────────────────────────────────────
-// Fluncle exposes the same drum & bass archive as agent-callable TOOLS on three surfaces: the
-// public MCP server (lib/server/mcp.ts), ChatDnB's AI-SDK tools (lib/server/chat.ts), and the
-// in-page WebMCP surface (lib/webmcp.ts). The shared registry prevents those three surfaces from
-// hand-maintaining their own copies of
-// every overlapping tool's name, description, and input schema — so the same verb could drift
-// into three subtly different answers (the `list_fresh` empty-in-chat bug that kicked off this
-// work). The tool SPECS (name + title + description + Zod input schema, client-safe) live in
-// lib/tool-specs.ts; this module attaches the server-side `execute` to each and PROJECTS it onto each
-// transport through a thin adapter. Change a tool here (or its spec) and all three surfaces move
-// together.
-//
-// ── WHAT IS AND ISN'T SHARED (the honest divergence) ─────────────────────────────────
-// The overlapping tools intentionally diverge in OUTPUT per transport — the MCP world-serves the
-// fuller public record (`publicFindingRecord` / `toPublicTrackListItem`), ChatDnB serves the
-// compact card (`compactFinding`), and `get_status` carries the full service list on MCP but only
-// a one-line summary in chat. Two of the five also diverge in the QUERY they issue: `list_tracks`
-// includes mixtapes on MCP but is findings-only in chat. A single transport-agnostic `execute`
-// returning one raw shape therefore cannot be byte-identical across transports. So each tool keeps
-// ONE `execute` that reads `ctx.transport` and lifts today's per-transport wiring verbatim into
-// each branch; the closed `project` map (on the spec) names the projection each transport realizes
-// (the four sanctioned output shapes), and the tool-set parity + output-shape tests assert
-// `execute` honours it. Divergence stays constrained to the four named shapes.
-
 import { type MixCandidate } from "@fluncle/contracts";
 import { liveSurfaces } from "@fluncle/registry";
 import { tool } from "ai";
@@ -109,9 +82,6 @@ import {
   toWebMcpTool,
 } from "../../tool-specs";
 
-// The client-safe spec types, the spec list, and the WebMCP adapter are re-exported so a server
-// consumer can reach the whole registry from one import. (WebMCP itself imports lib/tool-specs.ts directly,
-// so it never pulls this server module — and its Turso imports — into the browser bundle.)
 export type {
   Projection,
   ToolAccess,
@@ -122,41 +92,25 @@ export type {
   WebMcpToolDescriptor,
 } from "../../tool-specs";
 export { SHARED_TOOL_SPECS, toInputJsonSchema, toWebMcpTool };
-// The tool error carrier — re-exported so callers share the one `ApiError` in the server (the MCP
-// dispatcher's `instanceof` check depends on it).
+
 export { ApiError };
 
-// ── The ToolDef shape ────────────────────────────────────────────────────────────────
-
-/**
- * The per-call context. `request` carries the inbound `Request` to a write's server function (the
- * submitter hash, rate limits); `signal` maps an AI-SDK abort through to a server read; `transport`
- * is set by the adapter so a shared `execute` can lift each transport's exact wiring (see the module
- * header for why one agnostic `execute` cannot be byte-identical).
- */
 export type ToolCtx = { request?: Request; signal?: AbortSignal; transport: Transport };
 
-/** A tool spec (from lib/tool-specs.ts) plus its canonical server `execute`. */
 export type ToolDef = ToolSpec & {
   execute: (args: Record<string, unknown>, ctx: ToolCtx) => Promise<unknown>;
 };
 
-// ── Small utilities ──────────────────────────────────────────────────────────────────
-
-/** Trim a value to a string, or "" when it is not one (the tolerant coercion the MCP uses). */
 function asTrimmedString(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
-/** Pass a string arg through untouched, or `undefined` when it is not a string (optional fields). */
 function optionalString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
-/** The recent-window default (the cap `MAX_RECENT_LIMIT` lives in lib/tool-specs.ts alongside the schema). */
 const DEFAULT_RECENT_LIMIT = 10;
 
-/** Clamp a recent-window limit into `[1, 48]`, defaulting to 10 — the shape `list_tracks` uses. */
 function clampRecentLimit(value: unknown): number {
   if (typeof value !== "number" || !Number.isInteger(value) || value < 1) {
     return DEFAULT_RECENT_LIMIT;
@@ -165,7 +119,6 @@ function clampRecentLimit(value: unknown): number {
   return Math.min(value, MAX_RECENT_LIMIT);
 }
 
-/** Clamp an integer into `[1, max]`, defaulting to `fallback` — chat's tolerant list clamp. */
 function clampInt(value: unknown, max: number, fallback: number): number {
   if (typeof value !== "number" || !Number.isInteger(value) || value < 1) {
     return fallback;
@@ -174,25 +127,16 @@ function clampInt(value: unknown, max: number, fallback: number): number {
   return Math.min(value, max);
 }
 
-/** Clamp a `page` arg to a positive integer, defaulting to 1 — the browse tools' tolerant page. */
 function clampPage(value: unknown): number {
   return typeof value === "number" && Number.isInteger(value) && value >= 1 ? value : 1;
 }
 
-/** Coerce an incoming `list_fresh` view arg to the advertised enum, defaulting to `all`. */
 function normalizeFreshView(value: unknown): "albums" | "all" | "tracks" {
   return value === "albums" || value === "tracks" ? value : "all";
 }
 
-// ── The MCP `publicRecord` shapers (lifted verbatim from mcp.ts) ─────────────────────
-//
-// The archive's PUBLIC record — deliberately the same fields /log/<id> renders (plus the
-// observation transcript /radio renders), never the private capture key or internal fields.
-// Shared with mcp.ts's resources (resources/read serves the same record).
-
 const RESOURCE_SCHEME = "fluncle://";
 
-/** The resource URI for a coordinated item, typed by kind (fluncle://finding/012.8.0A). */
 export function resourceUri(
   kind: "finding" | "mixtape",
   logId: string | undefined,
@@ -200,17 +144,12 @@ export function resourceUri(
   return logId ? `${RESOURCE_SCHEME}${kind}/${logId}` : undefined;
 }
 
-/** Drop undefined values so the served JSON carries only present, public fields. */
 function compactRecord<T extends Record<string, unknown>>(record: T): Partial<T> {
   const entries = Object.entries(record).filter(([, value]) => value !== undefined);
 
   return Object.fromEntries(entries) as Partial<T>;
 }
 
-/**
- * The recovered observation as a public sub-record: the audio URL (the /log audio element source)
- * plus, when aligned, the transcript /radio renders. Absent when there is none.
- */
 function observationRecord(track: TrackListItem) {
   if (!track.observationAudioUrl) {
     return undefined;
@@ -228,10 +167,6 @@ function observationRecord(track: TrackListItem) {
   });
 }
 
-/**
- * A finding's PUBLIC record — only the fields /log/<id> renders (plus the observation transcript).
- * `toPublicTrackListItem` strips the private full-song capture key first.
- */
 export function publicFindingRecord(item: TrackListItem) {
   const track = toPublicTrackListItem(item);
 
@@ -261,7 +196,6 @@ export function publicFindingRecord(item: TrackListItem) {
   });
 }
 
-/** A mixtape's PUBLIC record — the fields the /log mixtape plate renders (title, note, tracklist). */
 export function publicMixtapeRecord(mixtape: MixtapeDTO) {
   return compactRecord({
     bangerCount: mixtape.memberCount,
@@ -293,16 +227,10 @@ export function publicMixtapeRecord(mixtape: MixtapeDTO) {
   });
 }
 
-/** The resolved public record for a coordinate — a finding or a mixtape (or undefined). */
 export type ResolvedRecord =
   | { kind: "finding"; record: ReturnType<typeof publicFindingRecord> }
   | { kind: "mixtape"; record: ReturnType<typeof publicMixtapeRecord> };
 
-/**
- * Resolve a coordinate (Log ID) or Spotify track id to its public record, reusing the same
- * resolver the /log page uses so the MCP read and the web read never drift. Shared with mcp.ts's
- * resources/read.
- */
 export async function readCoordinate(idOrLogId: string): Promise<ResolvedRecord | undefined> {
   const target = await resolveLogPageTarget(idOrLogId);
 
@@ -315,9 +243,6 @@ export async function readCoordinate(idOrLogId: string): Promise<ResolvedRecord 
     : { kind: "finding", record: publicFindingRecord(target.track) };
 }
 
-// ── The chat `compactCard` shapers (lifted verbatim from chat.ts) ────────────────────
-
-/** Drop undefined/null/empty so a tool result carries only present, real facts (never a null). */
 export function dropEmpty<T extends Record<string, unknown>>(record: T): Partial<T> {
   return Object.fromEntries(
     Object.entries(record).filter(([, value]) => {
@@ -330,11 +255,6 @@ export function dropEmpty<T extends Record<string, unknown>>(record: T): Partial
   ) as Partial<T>;
 }
 
-/**
- * A finding as Fluncle needs to speak it AND as the card needs to show it. The card plays through
- * the live `/api/preview/<logId>` relay, so the raw `previewUrl` (an EXPIRING Deezer token) NEVER
- * rides a tool output — only the derived `hasPreview` boolean does.
- */
 export function compactFinding(item: TrackListItem) {
   const track = toPublicTrackListItem(item);
 
@@ -356,7 +276,6 @@ export function compactFinding(item: TrackListItem) {
   });
 }
 
-/** A mixtape reduced to what Fluncle speaks from — the checkpoint, not the full tracklist. */
 function compactMixtape(mixtape: {
   durationMs?: number;
   logId?: string;
@@ -373,11 +292,6 @@ function compactMixtape(mixtape: {
   });
 }
 
-/**
- * A fresh-release row reduced to the finding fields the card needs — the fallback for a certified
- * release the batch hydrator missed. A fresh row carries no previewUrl, so `hasPreview` is false;
- * its date is a RELEASE date (the Found Rule, echoed on the wire).
- */
 function freshTrackToFinding(track: FreshTrack) {
   return dropEmpty({
     albumImageUrl: track.coverImageUrl,
@@ -393,17 +307,6 @@ function freshTrackToFinding(track: FreshTrack) {
   });
 }
 
-// ── The chat `catalogue` shapers (the unlit register, PR-4) ──────────────────────────
-//
-// A catalogue row is a track Fluncle knows is out there but has never certified. Its shape is the
-// DISTINCT `ChatCatalogueTrack` (mirror of the server's `CatalogueTrackItem`): a name, its artists,
-// a best-effort way out, and quiet context — and NOTHING that would make Fluncle speak about it as
-// a finding (no coordinate/note/observation/cover/galaxy/bpm/key/hasPreview). `artists` + `title`
-// are always present; `dropEmpty` strips only the optional context so a row carries no null.
-
-/** A fresh RELEASE row Fluncle has not certified, reduced to the unlit catalogue shape. Its
-    `releaseDate` is a public RELEASE fact (when it came out), NOT a Fluncle measurement like the
-    bpm/key an uncertified row never carries — so it rides the unlit row without lighting it. */
 function freshTrackToCatalogue(track: FreshTrack) {
   return {
     artists: track.artists,
@@ -412,17 +315,10 @@ function freshTrackToCatalogue(track: FreshTrack) {
   };
 }
 
-/**
- * A fresh RECORD reduced to the SAME unlit catalogue shape (PR-6's `view=albums`). A record has no
- * Fluncle coordinate, so register-wise it belongs in the unlit bucket exactly like a catalogue
- * track — named and listed, never spoken as found. Its `name` fills `title`; it carries no Spotify
- * link, so the row is name + artists only. Reuse, not a new card (DESIGN.md's Unlit Rule).
- */
 function freshAlbumToCatalogue(album: FreshRecord) {
   return { artists: album.artists, title: album.name };
 }
 
-/** A search hit Fluncle has not certified, reduced to the unlit catalogue shape. */
 function searchHitToCatalogue(hit: {
   album?: string;
   artists: string[];
@@ -437,21 +333,8 @@ function searchHitToCatalogue(hit: {
   };
 }
 
-// ── The catalogue browse shapers (PR-5) ──────────────────────────────────────────────
-//
-// A catalogue browse (list_album/artist/label_catalogue) resolves a NAME to a slug then id, then
-// reads an existing anti-join over `tracks` — so every row it can ever return is a record Fluncle
-// has never certified. The rows carry only a name, its artists, a way out, and quiet context (the
-// record / the label). NOTHING lit — no coordinate/note/observation/cover/galaxy/bpm/key.
-
-/** How many catalogue rows a browse tool returns — a bounded slice of a (possibly huge) discography. */
 const CATALOGUE_BROWSE_LIMIT = 24;
 
-/**
- * A catalogue (anti-join) row reduced to the unlit chat shape, with the optional record / label
- * context the page it came off already knows. `artists` + `title` are always present; `dropEmpty`
- * strips the optional context so a row carries no null.
- */
 function catalogueItemToChat(
   item: CatalogueTrackItem,
   context: { label?: string; release?: string } = {},
@@ -463,16 +346,8 @@ function catalogueItemToChat(
   };
 }
 
-/** One page's pagination facts, carried onto every browse projection. */
 type BrowsePagination = { page: number; pageCount: number; total: number };
 
-/**
- * Project a `list_*_catalogue` tool's chat-shaped catalogue rows per transport, with its pagination.
- * Chat gets the catalogue-only two-bucket ({ findings: [], catalogue }) that renders bare/unheaded;
- * the MCP world-serves the flat catalogue list, each row certified-tagged (mirrors how list_fresh's
- * MCP projection serves its uncertified rows — never a coordinate, so an agent reads them as records,
- * not findings). Both carry `page`/`pageCount` so an agent knows there is more to walk.
- */
 function projectCatalogueBrowse(
   catalogue: ReturnType<typeof catalogueItemToChat>[],
   pagination: BrowsePagination,
@@ -497,11 +372,6 @@ function projectCatalogueBrowse(
   };
 }
 
-/**
- * Run a grouped catalogue read (artist/label) for one page and flatten it to browse rows. A page
- * past the end throws `CataloguePageOutOfRangeError` (as the web route relies on); here it is the
- * honest empty page, so an agent walking pages just runs out rather than erroring.
- */
 async function pagedGroupedCatalogue<
   TPage extends { page: number; pageCount: number; totalTracks: number },
 >(
@@ -525,11 +395,6 @@ async function pagedGroupedCatalogue<
   }
 }
 
-/**
- * The `list_{artists,albums,labels}` browse index — a page of the whole A–Z index, register-neutral
- * (naming an entity is always allowed), so both transports serve the identical shape: entity rows
- * each carrying `certified`, plus the page/pageCount/total an agent pages by.
- */
 function projectBrowseIndex(page: CatalogueBrowsePage) {
   return {
     items: page.items,
@@ -540,46 +405,19 @@ function projectBrowseIndex(page: CatalogueBrowsePage) {
   };
 }
 
-// ── The archive-read helpers (lifted verbatim from chat.ts) ──────────────────────────
-//
-// PR-2 moved search_archive / get_artist / get_label / build_set out of chat.ts into the shared
-// registry. Their compact shapers + the seed resolver move with them, unchanged, so the MCP + chat
-// executes read exactly what ChatDnB read before.
-
-/** The archive-search cap handed to search_archive / the build_set seed resolver. */
 const MAX_SEARCH = 12;
 
-/**
- * How many mixable steps `build_set` chains off the seed — one full rail's worth of what mixes in
- * next, both registers (the seed leads; the card + `/mix` link are at most this many rows plus the
- * seed).
- */
 const MIX_CHAIN_LIMIT = 7;
 
-/**
- * How many of an entity's findings ride on a `get_artist`/`get_label` card — the recent/
- * representative ones. The card links to the full page for the rest, so a dossier reads as a
- * conversation, not a discography dump.
- */
 const MAX_ENTITY_FINDINGS = 6;
 
-// The MCP `search_archive`'s shared rate-limit budget — the SAME `action` + window as the public
-// HTTP twin (orpc/search.ts), so the anonymous MCP and the public /api surface share one per-IP
-// limiter (its tier-4 sonic + LLM path spends real money; the /mcp endpoint has no session).
 const SEARCH_ARCHIVE_RL_LIMIT = 30;
 const SEARCH_ARCHIVE_RL_WINDOW_MS = 60 * 1000;
 
-/**
- * Compact an entity's findings for a card, CERTIFIED-ONLY. The resolvers already inner-join on a
- * coordinate, but the coordinate filter is the same wire-level grounding boundary search_archive
- * applies — a row without a coordinate is not something Fluncle speaks about, so it never reaches
- * the model even if a resolver's shape ever changed. Newest-first is preserved; the caller slices.
- */
 function compactCertifiedFindings(items: TrackListItem[]) {
   return items.map(compactFinding).filter((finding) => finding.coordinate);
 }
 
-/** A search hit, reduced to the facts Fluncle speaks from (certified rows only reach here). */
 function searchHitToFinding(hit: {
   album?: string;
   albumImageUrl?: string;
@@ -604,14 +442,6 @@ function searchHitToFinding(hit: {
   });
 }
 
-/**
- * A mix candidate reduced to the fields the Chain Card needs, WITHOUT its `previewUrl` (a mix
- * candidate carries none anyway). It shapes two kinds of step: the fallback for a CERTIFIED step
- * the batch hydrator missed, and — since PR-4 — a genuine CATALOGUE step, which carries no
- * `coordinate` (its `logId` is undefined) and so rides the unlit mix register with its bpm/key and
- * a Spotify way out, but nothing that would name it. The reason chip is added by the caller as a
- * human string; this never carries a score.
- */
 function mixTrackToFinding(candidate: MixCandidate) {
   return dropEmpty({
     albumImageUrl: candidate.albumImageUrl,
@@ -626,11 +456,6 @@ function mixTrackToFinding(candidate: MixCandidate) {
   });
 }
 
-/**
- * Resolve `build_set`'s seed to a CERTIFIED finding Fluncle can chain from, or `undefined`.
- * A coordinate resolves directly (a mixtape is not a mixable seed, so it is rejected); anything
- * else is a NAME — the top certified search hit is the start, hydrated to the full finding.
- */
 async function resolveSeedTrack(seed: string): Promise<TrackListItem | undefined> {
   if (!seed) {
     return undefined;
@@ -652,9 +477,6 @@ async function resolveSeedTrack(seed: string): Promise<TrackListItem | undefined
   return (await getTracksByLogIds([hit.logId]))[hit.logId];
 }
 
-// ── The `identity` (status) summarizers ──────────────────────────────────────────────
-
-/** One service in the MCP get_status summary. */
 type StatusService = {
   label: string;
   message: string | null;
@@ -662,8 +484,6 @@ type StatusService = {
   status: ServiceHealthStatus;
 };
 
-// A friendly label per `/status` service id, derived from the surfaces registry so the two never
-// drift (mcp.ts's original derivation, lifted verbatim).
 const SERVICE_PROBE_MARKER = /service `([a-z0-9-]+)`/i;
 const registryServiceLabels: Record<string, string> = (() => {
   const labels: Record<string, string> = {
@@ -683,7 +503,6 @@ const registryServiceLabels: Record<string, string> = (() => {
   return labels;
 })();
 
-/** The MCP one-line verdict — names down/degraded services so an agent can relay specifics. */
 function statusHeadline(total: number, down: StatusService[], degraded: StatusService[]): string {
   if (down.length === 0 && degraded.length === 0) {
     return `All ${total} Fluncle systems are operational.`;
@@ -706,11 +525,6 @@ function listNames(services: StatusService[]): string {
   return services.map((service) => service.name).join(", ");
 }
 
-/**
- * The MCP get_status summary — every service labelled from the registry, with synthesized
- * never-reported rows kept visible while only reported rows drive the headline and `ok`.
- * An empty store remains unknown (never a false all-clear).
- */
 async function summarizeStatusMcp(): Promise<{
   headline: string;
   ok: boolean;
@@ -736,10 +550,6 @@ async function summarizeStatusMcp(): Promise<{
   return { headline: statusHeadline(reportedServices.length, down, degraded), ok, services };
 }
 
-/**
- * The chat get_status summary — a one-line, model-facing headline + ok, nothing else.
- * Never-reported roster entries are not reclassified as ordinary degraded reports.
- */
 async function summarizeStatusChat(): Promise<{ headline: string; ok: boolean }> {
   const rows = await getServiceStatuses();
   const reportedRows = rows.filter((row) => row.checked_at !== null);
@@ -765,16 +575,12 @@ async function summarizeStatusChat(): Promise<{ headline: string; ok: boolean }>
   return { headline: `Not all systems up: ${parts.join("; ")}.`, ok: false };
 }
 
-// ── The five overlapping tools (spec + server execute) ────────────────────────────────
-
 const listFindingsTool = {
   ...listFindingsSpec,
   execute: async (args, ctx) => {
     const limit = clampRecentLimit((args as { limit?: unknown }).limit);
 
     if (ctx.transport === "chat") {
-      // Findings only (no mixtapes) — a mixtape is reached by its F-coordinate through get_track,
-      // and keeping the list findings-only means every row is a TrackListItem.
       const page = await listTracks({ limit });
 
       return { findings: page.tracks.map(compactFinding), ok: true };
@@ -782,16 +588,10 @@ const listFindingsTool = {
 
     const page = await listTracks({ includeMixtapes: true, limit });
 
-    // Strip the private capture key before the archive world-serves to the agent.
     return { ...page, tracks: page.tracks.map(toPublicTrackListItem) };
   },
 } satisfies ToolDef;
 
-// The reborn `list_tracks` browse enumerator: the machine twin of the web `/tracks` page, reading the
-// SAME hosted-proven `listTracksHubPage` hub with the tri-state `certified` filter. FLAT for every
-// transport (the `browseTracks` projection) — chat gets the identical certified-tagged rows the MCP
-// does, because a browse list is something the model reads, not a set of lore cards. A page past the
-// end is an honest empty page (like the `list_*_catalogue` reads), never a throw.
 const listTracksTool = {
   ...listTracksSpec,
   execute: async (args) => {
@@ -824,44 +624,29 @@ const listFreshTool = {
   ...listFreshSpec,
   execute: async (args, ctx) => {
     const rawLimit = (args as { limit?: unknown }).limit;
-    // The `/fresh` pills' twin (PR-6): `tracks` the release stream, `albums` the records they sit
-    // on, `all` (the default) both. Coerced defensively so a direct execute (a test, a loose caller)
-    // still lands on the enum the schema advertises.
+
     const view = normalizeFreshView((args as { view?: unknown }).view);
     const showTracks = view !== "albums";
     const showAlbums = view !== "tracks";
 
     if (ctx.transport === "chat") {
-      // Chat keeps its own default (12) and tolerant clamp; only the CAP unifies to 100.
       const fresh = await listFreshTracks({ limit: clampInt(rawLimit, FRESH_LIMIT_MAX, 12) });
 
-      // THE REGISTER SPLIT (PR-4): the fresh list carries both registers. Certified releases
-      // hydrate into `findings` (Fluncle speaks about them as just dropped); the uncertified rows —
-      // already cover/coordinate-free from listFreshTracks — ride into the UNLIT `catalogue` bucket,
-      // named and listed, never spoken as found. NO new server read; an all-uncertified fresh
-      // window still returns its catalogue rows.
       const certified = showTracks
         ? fresh.tracks.filter((track) => track.certified && track.logId)
         : [];
       const trackCatalogue = showTracks
         ? fresh.tracks.filter((track) => !track.certified).map(freshTrackToCatalogue)
         : [];
-      // PR-6: a fresh RECORD rides the SAME unlit bucket — a coordinate-less entity is register-equal
-      // to a catalogue track, so it reuses the catalogue card (no new shape). Tracks lead, records
-      // follow. `view=albums` shows records alone; `view=tracks` drops them.
+
       const albumCatalogue = showAlbums ? fresh.albums.map(freshAlbumToCatalogue) : [];
 
-      // Hydrate the certified logIds to full findings so each card shows its cover, chips, and a
-      // play control. A logId the hydrator misses falls back to the fresh row's own fields.
       const hydrated = await getTracksByLogIds(
         certified.flatMap((track) => (track.logId ? [track.logId] : [])),
       );
       const findings = certified.map((track) => {
         const item = track.logId ? hydrated[track.logId] : undefined;
 
-        // Carry the RELEASE date onto both paths — the hydrated finding (the common case, whose
-        // generic shaper does not know a release date) and the fallback (which reads it from the
-        // fresh row itself) — so Fluncle can say when a certified tune dropped.
         return item
           ? { ...compactFinding(item), releaseDate: track.releaseDate }
           : freshTrackToFinding(track);
@@ -874,10 +659,6 @@ const listFreshTool = {
       });
     }
 
-    // MCP/WebMCP world-serve the whole flat fresh list (findings + uncertified rows) as-is —
-    // listFreshTracks strips the private key and mints nothing for the uncertified rows. `view`
-    // narrows the flat payload: `all` (default) keeps both buckets (backwards-compatible), a single
-    // view empties the other.
     const limit = typeof rawLimit === "number" ? rawLimit : undefined;
     const fresh = await listFreshTracks({ limit });
 
@@ -895,7 +676,6 @@ const getTrackTool = {
     const idOrLogId = asTrimmedString((args as { idOrLogId?: unknown }).idOrLogId);
 
     if (ctx.transport === "chat") {
-      // Chat resolves and returns a compact card, or the honest "he has not found it".
       const target = idOrLogId ? await resolveLogPageTarget(idOrLogId) : undefined;
 
       if (!target) {
@@ -907,7 +687,6 @@ const getTrackTool = {
         : { finding: compactFinding(target.track), ok: true };
     }
 
-    // MCP/WebMCP world-serve the full public record; a missing/unknown coordinate is a tool error.
     if (!idOrLogId) {
       throw new ApiError("invalid_query", "A Log ID or Spotify track id is required", 400);
     }
@@ -945,20 +724,12 @@ const getStatusTool = {
     ctx.transport === "chat" ? summarizeStatusChat() : summarizeStatusMcp(),
 } satisfies ToolDef;
 
-// ── The archive-read tools PR-2 lifted out of ChatDnB ────────────────────────────────
-
 const searchArchiveTool = {
   ...searchArchiveSpec,
   execute: async (args, ctx) => {
     const query = asTrimmedString((args as { query?: unknown }).query);
 
     if (ctx.transport === "chat") {
-      // THE REGISTER SPLIT (PR-4): split result.results by certification into two buckets BEFORE
-      // returning. The sonic tier has NO certified-first order, so the register is decided by
-      // FIELD-PRESENCE (a coordinate), never list position. Certified hits hydrate into `findings`
-      // (Fluncle speaks about them in full); every other row rides into the UNLIT `catalogue` bucket
-      // (named and listed only, never narrated). A row that claims certified without a coordinate
-      // still lands in catalogue — it is not something Fluncle speaks about.
       const result = await searchArchive({ limit: MAX_SEARCH, q: query });
       const certifiedHits = result.results.filter((hit) => hit.certified && hit.logId);
       const catalogue = result.results
@@ -982,12 +753,6 @@ const searchArchiveTool = {
       });
     }
 
-    // MCP world-serves the WHOLE SearchResult — both registers, each row certified-tagged (never
-    // findings-filtered, exactly like list_fresh). First, the mandatory shared limiter: the
-    // anonymous /mcp has no session, and this search's sonic + LLM tiers spend real money, so it
-    // shares the public HTTP twin's per-IP budget (same `action`, same window ⇒ one limiter) and
-    // its bounded wait: the model tier waits for the verdict, the free tiers do not wait on a
-    // charge stalled behind another write on the primary.
     const charge = ctx.request
       ? await chargeRateLimit({
           action: "search_archive",
@@ -1026,12 +791,6 @@ const getArtistTool = {
     ]);
     const certified = compactCertifiedFindings(findingItems);
 
-    // Naming an artist is always allowed (the Unlit Rule silences uncertified TRACKS, never
-    // artists). When Fluncle has certified nothing from this artist, hand back the UNLIT entity —
-    // his name, socials, and bio, plus the records of theirs Fluncle knows are out there but has
-    // never certified — so the model can name the artist and LIST their catalogue, never present
-    // them as one of Fluncle's Findings. The catalogue is the SAME grouped read the /artist page
-    // uses, flattened to a bounded, coordinate-free row slice (the unlit register).
     if (findingCount === 0 && certified.length === 0) {
       const page = await listArtistCatalogue(artist.id, CATALOGUE_SORT_DEFAULT, 1);
       const catalogue = page.groups
@@ -1089,12 +848,6 @@ const getLabelTool = {
     ]);
     const certified = compactCertifiedFindings(certifiedFindings);
 
-    // Naming a label is always allowed (the Unlit Rule silences uncertified TRACKS, never the label
-    // entity). When Fluncle has certified nothing on this label, hand back the UNLIT entity — its
-    // name, aliases, and bio, plus the records on it Fluncle knows are out there but has never
-    // certified — so the model can name the label and LIST its catalogue, never present them as one
-    // of Fluncle's Findings. The catalogue is the SAME grouped read the /label page uses, flattened
-    // to a bounded, coordinate-free row slice (the unlit register).
     if (certified.length === 0) {
       const page = await listLabelCatalogue(label.id, CATALOGUE_SORT_DEFAULT, 1);
       const catalogue = page.groups
@@ -1139,7 +892,6 @@ const buildSetTool = {
   execute: async (args) => {
     const seedTrack = await resolveSeedTrack(asTrimmedString((args as { seed?: unknown }).seed));
 
-    // No certified finding to start from is the honest "he has not logged it".
     if (!seedTrack) {
       return { found: false, ok: true };
     }
@@ -1149,13 +901,6 @@ const buildSetTool = {
       limit: MIX_CHAIN_LIMIT,
     });
 
-    // THE REGISTER SPLIT (PR-4): the chain carries BOTH registers, exactly like /mix (which is
-    // already catalogue-aware). A certified candidate rides lit (coordinate + play + a `?set=` Log
-    // ID token); a catalogue candidate rides the UNLIT mix register — its bpm/key + reason chip (a
-    // measurement, not narration) and a `?set=` trackId token, but no coordinate/note/observation.
-    // The register is decided by the `certified` FLAG, mirroring /mix (MixTrack: logId is present
-    // iff certified): normalize so a non-certified candidate never carries a coordinate even if a
-    // malformed row held a stray id. `setToken` then resolves the missing coordinate to the trackId.
     const steps = candidates.map((candidate) =>
       candidate.certified ? candidate : { ...candidate, logId: undefined },
     );
@@ -1203,27 +948,16 @@ const listSimilarArtistsTool = {
     const slug = name ? toArtistSlug(name) : "";
     const artist = slug ? await getPublicArtistBySlug(slug) : undefined;
 
-    // An unresolved name is the honest "he has not logged them" — same as get_artist.
     if (!artist) {
       return { found: false, ok: true };
     }
 
-    // A thin pass-through of the artist page's neighbour read (getArtistNeighbours). The neighbour
-    // MECHANISM is a separate operator workstream — this only resolves name→slug→id and relays what
-    // it returns; if `ArtistNeighbour` later gains a register field it rides through unchanged.
     const limit = clampInt(source.limit, SIMILAR_ARTISTS_MAX, SIMILAR_ARTISTS_DEFAULT);
     const similar = await getArtistNeighbours(artist.id, limit);
 
     return { of: dropEmpty({ name: artist.name, slug: artist.slug }), ok: true, similar };
   },
 } satisfies ToolDef;
-
-// ── The catalogue browse tools (PR-5) ────────────────────────────────────────────────
-//
-// name → slug → id → an existing anti-join read. An unresolved name is the honest empty (no album/
-// artist/label he knows) — an empty catalogue bucket, never an error, exactly as get_artist /
-// get_label do. The artist/label reads are GROUPED by record + paginated; a browse takes the first
-// page (the stable A–Z default) and flattens it to a bounded row slice.
 
 const listAlbumCatalogueTool = {
   ...listAlbumCatalogueSpec,
@@ -1237,9 +971,6 @@ const listAlbumCatalogueTool = {
       return projectCatalogueBrowse([], { page, pageCount: 1, total: 0 }, ctx);
     }
 
-    // The album read returns the whole (already bounded) track list; page over it in the isolate so
-    // rows past the first CATALOGUE_BROWSE_LIMIT are reachable. The set is ≤ the read's own cap, so
-    // this is a bounded slice, never a growing scan.
     const slice = await listCatalogueTracksByAlbum(album.id);
     const pageCount = Math.max(Math.ceil(slice.tracks.length / CATALOGUE_BROWSE_LIMIT), 1);
     const start = (page - 1) * CATALOGUE_BROWSE_LIMIT;
@@ -1263,9 +994,6 @@ const listArtistCatalogueTool = {
       return projectCatalogueBrowse([], { page, pageCount: 1, total: 0 }, ctx);
     }
 
-    // The artist's catalogue is grouped by record; a browse returns one whole GROUP PAGE flattened
-    // (bounded by GRAPH_GROUP_ROW_CEILING), each row keeping its record name as quiet context. Paging
-    // over group pages reaches every record, with no first-page-only or ≤24-row cap.
     const { pagination, rows } = await pagedGroupedCatalogue(
       () => listArtistCatalogue(artist.id, CATALOGUE_SORT_DEFAULT, page),
       (loaded) =>
@@ -1291,8 +1019,6 @@ const listLabelCatalogueTool = {
       return projectCatalogueBrowse([], { page, pageCount: 1, total: 0 }, ctx);
     }
 
-    // The label's catalogue is grouped by artist then record; a browse returns one whole GROUP PAGE
-    // (its artists) flattened, each row keeping the label name and its record as quiet context.
     const { pagination, rows } = await pagedGroupedCatalogue(
       () => listLabelCatalogue(label.id, CATALOGUE_SORT_DEFAULT, page),
       (loaded) =>
@@ -1309,12 +1035,6 @@ const listLabelCatalogueTool = {
     return projectCatalogueBrowse(rows, pagination, ctx);
   },
 } satisfies ToolDef;
-
-// ── The full A–Z browse tools (Slice F) ──────────────────────────────────────────────
-//
-// Each pages the whole alphabetical index of one entity kind through its `list*BrowsePage` server
-// read (the sitemap's floor-gated set, in SQL, certified + catalogue alike). Register-neutral — a
-// row is an ENTITY, and naming one is always allowed — so both transports serve the same shape.
 
 const listArtistsTool = {
   ...listArtistsSpec,
@@ -1333,11 +1053,6 @@ const listLabelsTool = {
   execute: async (args) =>
     projectBrowseIndex(await listLabelsBrowsePage(clampPage((args as { page?: unknown }).page))),
 } satisfies ToolDef;
-
-// ── The write tools PR-2 lifted into the shared registry ─────────────────────────────
-//
-// They receive `ctx.request` (the submitter hash / rate limit). On the MCP it is the inbound
-// JSON-RPC Request; on ChatDnB it is threaded from the gated /api/chat route (session-safe).
 
 const submitTrackTool = {
   ...submitTrackSpec,
@@ -1394,11 +1109,6 @@ const subscribeNewsletterTool = {
   },
 } satisfies ToolDef;
 
-/**
- * Every shared tool, single-sourced. Order mirrors SHARED_TOOL_SPECS: `list_tracks` first (the MCP
- * alias clones it), the five overlapping reads, the reads lifted out of ChatDnB, the PR-5 catalogue
- * browse reads, then the writes.
- */
 export const SHARED_TOOLS: ToolDef[] = [
   listFindingsTool,
   listTracksTool,
@@ -1421,9 +1131,6 @@ export const SHARED_TOOLS: ToolDef[] = [
   subscribeNewsletterTool,
 ];
 
-// ── The server transport adapters ─────────────────────────────────────────────────────
-
-/** The MCP tool shape (structurally compatible with mcp.ts's `McpTool`, minus its alias flag). */
 export type McpToolDescriptor = {
   description: string;
   execute: (args: Record<string, unknown>, request: Request) => Promise<unknown>;
@@ -1432,12 +1139,6 @@ export type McpToolDescriptor = {
   title: string;
 };
 
-/**
- * Project a ToolDef onto the server MCP. Bridges the dispatcher's positional `(args, request)`
- * call to `execute(args, ctx)`. Args are passed through UN-validated — the MCP does not validate
- * today; the limit tools clamp inside `execute`, so a tolerant clamp is preserved (no throwing
- * parse). `ctx.transport` is "mcp".
- */
 export function toMcpTool(def: ToolDef): McpToolDescriptor {
   return {
     description: def.description,
@@ -1448,13 +1149,6 @@ export function toMcpTool(def: ToolDef): McpToolDescriptor {
   };
 }
 
-/**
- * Project a ToolDef onto ChatDnB's AI-SDK tool set. The Zod object goes STRAIGHT to `ai`'s
- * `tool({ inputSchema })` — never through JSON Schema, which erases the `z.infer` arg typing. The
- * SDK's `abortSignal` maps to `ctx.signal`; `ctx.transport` is "chat". `request` is threaded from
- * the gated /api/chat route so the WRITE tools have the submitter hash / rate-limit context the AI
- * SDK's `execute` options do not carry (the SDK gives no inbound `Request`).
- */
 export function toAiSdkTool<In extends z.ZodType>(
   def: {
     description: string;
@@ -1475,11 +1169,6 @@ export function toAiSdkTool<In extends z.ZodType>(
   });
 }
 
-/**
- * Every shared chat tool, as a literal-keyed object so `InferUITools` keeps each tool's precise
- * types. `request` is threaded onto every tool's `ctx` (the writes need it; the reads ignore it),
- * so ChatDnB now exposes the full archive read set + the two writes from one source of truth.
- */
 export function sharedChatTools(request?: Request) {
   return {
     build_set: toAiSdkTool(buildSetTool, request),

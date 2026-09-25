@@ -8,20 +8,6 @@ function getSimilarFindings(idOrLogId: string, limit = 6) {
   return getSimilarFindingsLive(idOrLogId, limit, { allowBoundedSql: true });
 }
 
-// The DB-backed "more like this" reader (docs/track-lifecycle.md) — the data source for
-// the public `list_similar_tracks` op AND the `/log` row.
-//
-// THIS SUITE RUNS AGAINST REAL libSQL, not a mocked `execute`. It has to: the ranking now
-// happens IN SQL (`vector_distance_cos` over an `F32_BLOB(1024)`, the probe bound as raw
-// bytes — lib/server/embedding.ts), so a hand-rolled mock would only ever be testing the
-// mock. The in-memory client applies the real generated migrations, and the real libSQL
-// vector functions are what answer.
-//
-// THE PIN (the last test) is the one that matters most: over a 40-finding pseudo-random
-// corpus it asserts the SQL ranking returns the SAME findings in the SAME order as an
-// independent in-isolate oracle (`readEmbeddingBlob` decodes the stored blob and
-// `rankBySimilarity` cosines it in JS). Same results, computed two different ways.
-
 const execute = vi.hoisted(() => vi.fn());
 let db: Client;
 
@@ -31,7 +17,6 @@ vi.mock("./db", async (importOriginal) => {
   return { ...actual, getDb: async () => ({ execute }) };
 });
 
-/** A 1024-d vector pointing in the (a, b) direction (the rest zero) — a valid MuQ shape. */
 function vector(a: number, b: number): number[] {
   const values = Array.from({ length: EMBEDDING_DIMS }, () => 0);
   values[0] = a;
@@ -40,10 +25,6 @@ function vector(a: number, b: number): number[] {
   return values;
 }
 
-/**
- * A deterministic pseudo-random unit-ish vector — the pin's corpus. Real MuQ vectors are
- * dense and L2-normalized; a corpus of axis-aligned toys would let a broken ranking pass.
- */
 function pseudoVector(seed: number): number[] {
   let state = seed * 2654435761;
   const values: number[] = [];
@@ -59,7 +40,6 @@ function pseudoVector(seed: number): number[] {
 }
 
 type Seed = {
-  /** The MuQ vector to store in `track_embeddings`, or null for an un-embedded row. */
   embedding?: number[] | null;
   logId: string | null;
   title?: string;
@@ -77,13 +57,11 @@ async function seed(rows: Seed[]): Promise<void> {
       args: [`https://img/${row.trackId}.jpg`, row.trackId],
       sql: `update tracks set album_image_url = ?1 where track_id = ?2`,
     });
-    // Through the pipeline's own write, so the fixture's satellite row and `has_embedding`
-    // mirror move together exactly as production's do. `null` = an un-embedded row.
+
     await seedEmbedding(db, row.trackId, row.embedding ?? null);
   }
 }
 
-/** The reference ranking: an independent in-isolate oracle that decodes the stored blob. */
 async function rankInIsolate(targetId: string, limit: number): Promise<string[]> {
   const rows = await db.execute({
     args: [targetId],
@@ -116,12 +94,11 @@ async function rankInIsolate(targetId: string, limit: number): Promise<string[]>
 beforeEach(async () => {
   db = await createIntegrationDb();
   execute.mockReset();
-  // `getDb()` hands the REAL in-memory client's `execute` to the code under test.
+
   execute.mockImplementation((query: unknown) => db.execute(query as never));
 });
 
 describe("getSimilarFindings", () => {
-  // Self (the target) and three neighbours in decreasing similarity.
   const CORPUS: Seed[] = [
     { embedding: vector(1, 0), logId: "004.0.0A", trackId: "t_self" },
     { embedding: vector(1, 0), logId: "004.1.1A", title: "Identical", trackId: "t_ident" },
@@ -134,8 +111,6 @@ describe("getSimilarFindings", () => {
 
     const findings = await getSimilarFindings("t_self");
 
-    // identical (cos 1) > diagonal (~0.707) > orthogonal (0). `t_self` never appears
-    // (the self-exclusion predicate).
     expect(findings.map((finding) => finding.trackId)).toEqual(["t_ident", "t_diag", "t_orth"]);
   });
 
@@ -169,10 +144,6 @@ describe("getSimilarFindings", () => {
   });
 
   it("SKIPS a finding with no vector rather than ranking it", async () => {
-    // The ranking INNER JOINs `track_embeddings` and the DB does the cosine in SQL, so a finding
-    // with no satellite row is dropped by the join, never pulled into the isolate. That is the
-    // real un-embedded state — the write path creates the satellite row and its `has_embedding`
-    // mirror together (track-update.ts), and the clear removes both.
     await seed(CORPUS);
     await seedEmbedding(db, "t_diag", null);
 
@@ -218,7 +189,6 @@ describe("getSimilarFindings", () => {
     expect(await getSimilarFindings("t_self")).toEqual([]);
   });
 
-  // ── THE PIN ────────────────────────────────────────────────────────────────
   it("returns exactly what the in-isolate oracle returns (same findings, same order)", async () => {
     const corpus: Seed[] = Array.from({ length: 40 }, (_, index) => ({
       embedding: pseudoVector(index + 1),
@@ -236,8 +206,6 @@ describe("getSimilarFindings", () => {
       expect(fromSql).toHaveLength(limit);
     }
 
-    // …and the ordering it produces is a genuine descending-cosine order, not an accident
-    // of insertion (the guard against a silently-empty or reversed SQL ranking).
     const target = pseudoVector(1);
     const ranked = await getSimilarFindings("t_00", 6);
     const cosines = ranked.map((finding) =>

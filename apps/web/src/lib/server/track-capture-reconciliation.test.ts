@@ -92,9 +92,6 @@ describe("capture reconciliation expected state", () => {
   });
 
   test("a capture-source pin set or cleared mid-flight stales the in-flight commit", () => {
-    // The pin decides WHICH upload the sweep downloads, so a commit prepared under one pin state
-    // must not land under another: a ladder capture must not overwrite a row the operator just
-    // pinned, and a pinned capture must not land on a row whose pin he just withdrew.
     const prepared = snapshot();
     const pinned = structuredClone(prepared);
     pinned.extra.captureSourcePin = "dQw4w9WgXcQ";
@@ -104,8 +101,6 @@ describe("capture reconciliation expected state", () => {
   });
 
   test("a snapshot frozen before the pin column existed still matches an unpinned row", () => {
-    // The pin compares as `?? null`, so a token minted by a Worker that never read the column
-    // does not stale every in-flight capture the moment the column lands.
     const prepared = snapshot();
     const { captureSourcePin: _absent, ...legacyExtra } = prepared.extra;
     const legacy = { ...prepared, extra: legacyExtra } as unknown as CaptureSnapshot;
@@ -114,10 +109,6 @@ describe("capture reconciliation expected state", () => {
   });
 
   test("the pin's duration override flipped mid-flight stales the in-flight commit", () => {
-    // The override decides whether the sweep WAIVES the duration guard for the pinned id, so a
-    // capture prepared under one reading of it must not land under the other: a guarded download
-    // must not commit as a waived one, and a waived one must not commit after the operator took
-    // the waiver back.
     const guarded = snapshot();
     guarded.extra.captureSourcePin = "dQw4w9WgXcQ";
     const waived = structuredClone(guarded);
@@ -128,7 +119,6 @@ describe("capture reconciliation expected state", () => {
   });
 
   test("a snapshot frozen before the override column existed still matches an un-waived row", () => {
-    // `?? false`: absent reads as the column's default, so the column landing stales nothing.
     const prepared = snapshot();
     const { captureSourcePinAllowDuration: _absent, ...legacyExtra } = prepared.extra;
     const legacy = { ...prepared, extra: legacyExtra } as unknown as CaptureSnapshot;
@@ -175,7 +165,7 @@ describe("capture reconciliation transaction and provider boundaries", () => {
 
     const application = source.slice(
       source.indexOf("async function applyCaptureResult("),
-      // The exact single-row commit, not its batched sibling `commitCaptureReconciliations`.
+
       source.indexOf("export async function commitCaptureReconciliation(options: {"),
     );
     expect(application).toContain("source_audio_failures = coalesce(source_audio_failures, 0) + 1");

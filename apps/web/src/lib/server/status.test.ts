@@ -1,13 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { type ServiceStatusRow } from "./status";
 
-// `getServiceStatuses` is the SHARED read every status surface goes through (the
-// /status page, /api/status, the CLI `status` command, the MCP `get_status` tool).
-// It must drop retired/orphaned service ids — chiefly the pre-split `automation`
-// aggregate, which the healthcheck cron no longer posts but which lingers in
-// `service_status` until an operator deletes the row — so a permanently-stale row
-// never surfaces on any consumer. We mock the db so the read returns a fixed set.
-
 const execute = vi.hoisted(() => vi.fn());
 
 vi.mock("./db", () => ({
@@ -46,7 +39,7 @@ describe("getServiceStatuses retired-row filter", () => {
     const ids = services.map((service) => service.service);
 
     expect(ids).not.toContain("automation");
-    // Every CURRENT service still passes through, including both render probes.
+
     expect(ids.filter((id) => ["web", "cron.render", "render-box"].includes(id))).toEqual([
       "web",
       "cron.render",
@@ -63,7 +56,7 @@ describe("getServiceStatuses retired-row filter", () => {
     const ids = services.map((service) => service.service);
 
     expect(ids).not.toContain("cron.artist-follow");
-    // The kept resolution cron (cron.artist-sweep) still passes through.
+
     expect(ids.filter((id) => ["cron.artist-sweep", "cron.enrich"].includes(id))).toEqual([
       "cron.artist-sweep",
       "cron.enrich",
@@ -109,8 +102,6 @@ describe("getServiceStatuses report freshness", () => {
   });
 
   it("keeps a green prober-owned row fresh inside three 10m report cycles", async () => {
-    // `cron.live` itself runs every minute. Its service_status row is nevertheless
-    // refreshed by the 10m prober, so 29m is fresh and must not use the marker cadence.
     execute.mockResolvedValue({
       rows: [
         row("cron.live", {
@@ -159,11 +150,6 @@ describe("getServiceStatuses expected-writer absence", () => {
   });
 });
 
-// A cron that has NEVER run must not sit green forever. The box healthcheck emits
-// "no runs yet" as `ok` on purpose (a freshly-rebuilt box has not ticked, and that is not a
-// fault) — but the grace was UNBOUNDED, so `cron.clip-drip`, registered in the registry but
-// never installed on rave-02, reported ok/"no runs yet" for days. A monitor that reassures
-// you about a job that does not exist is worse than no monitor.
 describe("getServiceStatuses — a cron stuck on 'no runs yet' stops being green", () => {
   const NOW = Date.parse("2026-07-11T00:00:00.000Z");
 
@@ -182,7 +168,6 @@ describe("getServiceStatuses — a cron stuck on 'no runs yet' stops being green
   });
 
   it("keeps a fresh no-runs-yet green (a box that just rebuilt has not ticked)", async () => {
-    // 1h ago — well inside the grace window.
     execute.mockResolvedValue({ rows: [noRuns("cron.enrich", "2026-07-10T23:00:00.000Z")] });
 
     const [service] = await getServiceStatuses(NOW);
@@ -192,8 +177,6 @@ describe("getServiceStatuses — a cron stuck on 'no runs yet' stops being green
   });
 
   it("degrades a no-runs-yet that has persisted past the grace window (never deployed)", async () => {
-    // 4 days of "no runs yet" is not a fresh box — the cron is not installed, so the
-    // row is filtered before it reaches the service-status read.
     execute.mockResolvedValue({ rows: [noRuns("cron.enrich", "2026-07-07T00:00:00.000Z")] });
 
     const [service] = await getServiceStatuses(NOW);

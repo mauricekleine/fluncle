@@ -7,12 +7,6 @@ import {
   updateTrack,
 } from "./track-update";
 
-// updateTrack runs two statements: a SELECT (existing isrc/log_id/added_at) then
-// the UPDATE. The mock returns an existing row for the SELECT and captures the
-// UPDATE so we can assert which columns it set — specifically whether it bumped
-// `updated_at` (the sitemap/log lastmod source). Internal fuel fields (features,
-// context_note) must NOT bump it; visible fields (observation audio, note) must.
-
 const execute = vi.hoisted(() => vi.fn());
 const projectionMaintenance = (sql: string) =>
   sql.includes("insert into due_work") ||
@@ -21,11 +15,6 @@ const projectionMaintenance = (sql: string) =>
   sql.includes("projection_repairs");
 
 vi.mock("./db", () => ({
-  // `updateTrack` fans ONE logical write out across the tracks/findings pair, issued as a
-  // single libSQL BATCH (at most two statements: the recording's columns, then the
-  // certification's). The mock replays each statement through the same `execute` spy the
-  // tests already assert on, so a batched write is observed like a single
-  // UPDATE — one call per statement, in order, with its bound args.
   getDb: async () => ({
     batch: (statements: { args?: unknown[]; sql: string }[]) =>
       Promise.all(
@@ -41,17 +30,10 @@ vi.mock("./db", () => ({
   typedRows: <T extends object>(rows: T[]) => rows,
 }));
 
-// The officialness gate makes a real oEmbed request, so it is stubbed here: this file is about
-// which COLUMNS a write sets, and a unit test must never reach YouTube. The gate's own logic is
-// proven in youtube-official.test.ts.
 const checkYoutubeOfficial = vi.hoisted(() => vi.fn(async () => 1 as null | number));
 
 vi.mock("./youtube-official", () => ({ checkYoutubeOfficial }));
 
-// A CERTIFIED finding: the resolve query outer-joins `findings`, so `certified` is the flag
-// that says a `findings` row exists. Every case in this file is about a finding; the
-// UNCERTIFIED (catalogue) half of `updateTrack` — the certification rail — is proven against
-// the real schema in findings-certification.integration.test.ts, where a mock could not.
 const EXISTING = {
   added_at: "2026-06-01T00:00:00.000Z",
   artists_json: '["Calibre"]',
@@ -68,7 +50,6 @@ const EXISTING = {
   youtube_video_official: null,
 };
 
-/** Re-point the SELECT at a modified existing row, keeping the UPDATE capture intact. */
 function withExistingRow(overrides: Record<string, unknown>): void {
   execute.mockImplementation((query: { args?: unknown[]; sql: string }) => {
     if (query.sql.startsWith("select")) {
@@ -153,9 +134,6 @@ describe("updateTrack — the visible-field lastmod bump", () => {
   });
 
   it("does NOT bump updated_at for a galaxy assignment (internal grouping, VISIBLE_FIELDS excluded)", async () => {
-    // The browse-by-feel ratified confirmation: a galaxy assignment surfaces only once
-    // the galaxy is operator-named, so writing galaxy_id moves no public lastmod (the
-    // embedding precedent). The built-in purgeLogCache keeps the /log prose fresh.
     await updateTrack("track-123", { galaxyId: "gal_abc" });
 
     expect(lastUpdateSql).toContain("galaxy_id = ?");
@@ -176,7 +154,7 @@ describe("updateTrack — the visible-field lastmod bump", () => {
     await updateTrack("track-123", { galaxyId: "" });
 
     expect(lastUpdateSql).toContain("galaxy_id = ?");
-    // The first bound arg is the cleared (null) galaxy id, not an empty string.
+
     expect(argsSeen[0]).toBeNull();
   });
 
@@ -201,17 +179,13 @@ describe("updateTrack — the visible-field lastmod bump", () => {
     await updateTrack("track-123", { observationAudioUrl: "" });
 
     expect(lastUpdateSql).toContain("observation_audio_url = ?");
-    // The first bound arg is the cleared (null) audio url.
+
     expect(argsSeen[0]).toBeNull();
   });
 });
 
 describe("updateTrack — the column allowlist (the agent-tier write guard)", () => {
   it("ignores an unknown field instead of writing it (allowlist, not passthrough)", async () => {
-    // A field that is not on TrackUpdate / the known `if (update.x !== undefined)`
-    // ladder must never reach the SQL — it is silently dropped, not interpolated
-    // into the column list. With only the unknown field present, no real column is
-    // set, so updateTrack rejects with no_fields rather than emitting a write.
     await expect(
       updateTrack("track-123", {
         droppedColumn: "1; drop table tracks",
@@ -235,7 +209,6 @@ describe("updateTrack — the column allowlist (the agent-tier write guard)", ()
 
 describe("updateTrack — isrc immutability and validation (identity guard)", () => {
   it("rejects an isrc write with a 409 when one is already set (immutable identity)", async () => {
-    // EXISTING.isrc is "GB1234567890" — already set, so any isrc write is a 409.
     await expect(updateTrack("track-123", { isrc: "US9999999999" })).rejects.toMatchObject({
       code: "immutable",
       status: 409,
@@ -248,7 +221,6 @@ describe("updateTrack — isrc immutability and validation (identity guard)", ()
     execute.mockReset();
     execute.mockImplementation((query: { sql: string }) => {
       if (query.sql.startsWith("select")) {
-        // A row whose isrc slot is empty, so the backfill path is reached.
         return Promise.resolve({ rows: [{ ...EXISTING, isrc: null }] });
       }
 
@@ -282,15 +254,13 @@ describe("updateTrack — isrc immutability and validation (identity guard)", ()
     await updateTrack("track-123", { isrc: "  US9999999999  " });
 
     expect(lastUpdateSql).toContain("isrc = ?");
-    // isrc is a visible identity repair, so it bumps lastmod.
+
     expect(lastUpdateSql).toContain("updated_at = ?");
     expect(argsSeen).toContain("US9999999999");
   });
 });
 
 describe("updateTrack — the source hierarchy (operator > rekordbox > DSP)", () => {
-  // Re-mock the SELECT to return a row with the given provenance sources, and capture
-  // the UPDATE's sql + bound args so we can assert exactly which columns/values land.
   function mockExisting(row: Partial<typeof EXISTING> & Record<string, unknown>) {
     const argsSeen: unknown[] = [];
     execute.mockReset();
@@ -323,13 +293,12 @@ describe("updateTrack — the source hierarchy (operator > rekordbox > DSP)", ()
       { writer: "agent" },
     );
 
-    // The key + its provenance are dropped; the bpm write survives untouched.
     expect(lastUpdateSql).not.toContain("key = ?");
     expect(lastUpdateSql).not.toContain("key_source = ?");
     expect(lastUpdateSql).not.toContain("key_confidence = ?");
     expect(lastUpdateSql).toContain("bpm = ?");
     expect(lastUpdateSql).toContain("bpm_source = ?");
-    // bpm is a VISIBLE field, so the surviving write still bumps lastmod.
+
     expect(lastUpdateSql).toContain("updated_at = ?");
     expect(result.fields).toContain("bpm");
     expect(result.fields).not.toContain("key");
@@ -360,7 +329,7 @@ describe("updateTrack — the source hierarchy (operator > rekordbox > DSP)", ()
     );
 
     expect(lastUpdateSql).not.toContain("key = ?");
-    // Everything else in the same update still applies (the sweep keeps succeeding).
+
     expect(lastUpdateSql).toContain("enrichment_status = ?");
   });
 
@@ -373,7 +342,6 @@ describe("updateTrack — the source hierarchy (operator > rekordbox > DSP)", ()
       { writer: "agent" },
     );
 
-    // audio-file / deezer are DSP sources, NOT protected — the agent write lands.
     expect(lastUpdateSql).toContain("key = ?");
     expect(lastUpdateSql).toContain("bpm = ?");
   });
@@ -381,8 +349,6 @@ describe("updateTrack — the source hierarchy (operator > rekordbox > DSP)", ()
   it("is a silent no-op (not a no_fields error) when the guard empties the update", async () => {
     mockExisting({ bpm_source: "rekordbox", key_source: "rekordbox" });
 
-    // An agent write carrying ONLY key/bpm provenance onto a fully-protected row: every
-    // field is dropped, so there is nothing left to write — a clean success, no throw.
     const result = await updateTrack(
       "track-123",
       { bpm: 174, key: "A minor", keySource: "audio-file" },
@@ -390,7 +356,7 @@ describe("updateTrack — the source hierarchy (operator > rekordbox > DSP)", ()
     );
 
     expect(result.fields).toEqual([]);
-    // No UPDATE emitted at all.
+
     expect(lastUpdateSql).toBe("");
   });
 
@@ -401,7 +367,7 @@ describe("updateTrack — the source hierarchy (operator > rekordbox > DSP)", ()
 
     expect(lastUpdateSql).toContain("key = ?");
     expect(lastUpdateSql).toContain("key_source = ?");
-    // The stamped source value is the literal "operator".
+
     expect(argsSeen).toContain("operator");
   });
 
@@ -424,7 +390,7 @@ describe("updateTrack — the source hierarchy (operator > rekordbox > DSP)", ()
     );
 
     expect(lastUpdateSql).toContain("key_source = ?");
-    // The operator's explicit source wins over the auto-stamp — rekordbox, not operator.
+
     expect(argsSeen).toContain("rekordbox");
     expect(argsSeen).not.toContain("operator");
   });
@@ -432,7 +398,6 @@ describe("updateTrack — the source hierarchy (operator > rekordbox > DSP)", ()
   it("leaves bpm/key untouched when no writer tier is supplied (internal server write)", async () => {
     mockExisting({ bpm_source: "rekordbox", key_source: "rekordbox" });
 
-    // With no `writer` the provenance guard is inert — a trusted internal write lands.
     await updateTrack("track-123", { bpm: 174, key: "A minor" });
 
     expect(lastUpdateSql).toContain("bpm = ?");
@@ -442,8 +407,6 @@ describe("updateTrack — the source hierarchy (operator > rekordbox > DSP)", ()
   it("does NOT bump updated_at for a guard-dropped agent provenance write", async () => {
     mockExisting({ key_source: "rekordbox" });
 
-    // Only key provenance is written and it's dropped; the surviving keyConfidence-less
-    // payload has just analyzedAt (internal), so no visible field → no lastmod bump.
     await updateTrack(
       "track-123",
       { analyzedAt: "2026-07-10T00:00:00.000Z", key: "A minor", keySource: "audio-file" },
@@ -483,30 +446,14 @@ describe("updateTrack — empty-string clears to null (not stored as '')", () =>
       await updateTrack("track-123", { [field]: "" });
 
       expect(lastUpdateSql).toContain(column);
-      // The first bound arg is the cleared (null) value, not an empty string.
+
       expect(argsSeen[0]).toBeNull();
     });
   }
 });
 
-// ---------------------------------------------------------------------------
-// THE PROVENANCE INVARIANT (docs/agents/prompt-registry.md).
-//
-// A `*_prompt_version` column always describes the text CURRENTLY in its row, or it is
-// NULL. It must never be left pointing at the prompt that wrote the text it just replaced
-// — that is worse than pointing at nothing, because it is a confident WRONG answer to the
-// one question the column exists to answer ("which prompt drafted this?").
-//
-// The scenario that makes this bite: the auto-note sweep writes a note under prompt v7,
-// the operator reads it, hates it, and types their own over the top through the generic
-// `update_track` path. If the version stayed at 7, the archive would claim v7 wrote a line
-// v7 has never seen.
-// ---------------------------------------------------------------------------
-
 describe("updateTrack — the prompt-provenance invariant", () => {
   it("CLEARS note_prompt_version when the note is rewritten with no stated provenance", async () => {
-    // The operator typing over an auto-note. No prompt wrote this line, so no prompt may
-    // be credited with it.
     await updateTrack("track-123", { note: "My own words, thanks." });
 
     expect(lastUpdateSql).toContain("note = ?");
@@ -527,7 +474,7 @@ describe("updateTrack — the prompt-provenance invariant", () => {
       .find((query) => query.sql.includes("note_prompt_version = ?"));
 
     expect(update?.args).toContain(7);
-    // And it is written EXACTLY once — never once as the stated value and again as null.
+
     expect(lastUpdateSql.match(/note_prompt_version = \?/g)).toHaveLength(1);
   });
 
@@ -561,8 +508,6 @@ describe("updateTrack — the capture's YouTube provenance", () => {
       youtubeVideoId: "dQw4w9WgXcQ",
     });
 
-    // The gate is asked with the recording's OWN names — the comparison it makes is "is this
-    // channel one of the people this track is by, or the label it came out on".
     expect(checkYoutubeOfficial).toHaveBeenCalledWith("dQw4w9WgXcQ", {
       artists: ["Calibre"],
       labels: [],
@@ -575,8 +520,6 @@ describe("updateTrack — the capture's YouTube provenance", () => {
   });
 
   it("stores the verdict the SERVER reached, never one the caller supplied", async () => {
-    // The box reports an id; permission is not its to grant. An unconcluded check stores NULL,
-    // which renders nothing — the honest degradation.
     checkYoutubeOfficial.mockResolvedValue(null);
 
     await updateTrack("track-123", {
@@ -598,9 +541,6 @@ describe("updateTrack — the capture's YouTube provenance", () => {
   });
 
   it("gates the VERDICT on the id being empty, so a later check cannot adopt an earlier id", async () => {
-    // The trap `coalesce` alone would walk into: `youtube_video_official` is legitimately NULL
-    // beside a set id, so coalescing the verdict would let a second capture's ruling attach itself
-    // to the first capture's upload. Both stamp clauses therefore test the PRE-UPDATE id.
     await updateTrack("track-123", {
       captureVerification: "preview-match",
       youtubeVideoId: "dQw4w9WgXcQ",
@@ -615,11 +555,6 @@ describe("updateTrack — the capture's YouTube provenance", () => {
   });
 
   it("refuses an id from the ABSTAIN path, where nothing was fingerprinted", async () => {
-    // `unverified` is the capture sweep's honest abstain: the track had no preview reference, so
-    // the bytes were kept on duration and ranking alone and no comparison ran. The envelope serves
-    // this id under `method: "fingerprint"`, so taking one from here would print "matched by audio
-    // fingerprint" beneath a match that never happened. The sweep withholds it; the server refuses
-    // it regardless, so a stale box build cannot talk its way past.
     await updateTrack("track-123", {
       captureVerification: "unverified",
       youtubeVideoId: "abstainId",
@@ -627,7 +562,7 @@ describe("updateTrack — the capture's YouTube provenance", () => {
 
     expect(checkYoutubeOfficial).not.toHaveBeenCalled();
     expect(lastUpdateSql).not.toContain("youtube_video_id");
-    // The capture itself still lands — only the optional provenance is dropped.
+
     expect(lastUpdateSql).toContain("capture_verification");
   });
 
@@ -639,8 +574,6 @@ describe("updateTrack — the capture's YouTube provenance", () => {
   });
 
   it("spends no oEmbed request on a row that already holds an id", async () => {
-    // Fill-empty-only short-circuits BEFORE the network: the write would discard the answer, so
-    // asking for it would be a request bought for nothing.
     execute.mockImplementation((query: { args?: unknown[]; sql: string }) => {
       if (query.sql.startsWith("select")) {
         return Promise.resolve({ rows: [{ ...EXISTING, youtube_video_id: "alreadyHeld" }] });
@@ -659,14 +592,11 @@ describe("updateTrack — the capture's YouTube provenance", () => {
 
     expect(checkYoutubeOfficial).not.toHaveBeenCalled();
     expect(lastUpdateSql).not.toContain("youtube_video_id");
-    // The rest of the capture write still lands — the provenance is optional, the capture is not.
+
     expect(lastUpdateSql).toContain("capture_status");
   });
 
   it("asks the gate with the recording's LABEL as well as its artists", async () => {
-    // A D&B release lives on its label's channel far more often than on
-    // the artist's. BOTH spellings go in — the canonical `labels.name` and the raw `tracks.label` —
-    // because a crawled row may only have the second, and a channel matching either is the label's.
     withExistingRow({ label: "Fokuz", label_name: "Fokuz Recordings" });
 
     await updateTrack("track-123", {
@@ -683,10 +613,6 @@ describe("updateTrack — the capture's YouTube provenance", () => {
 
 describe("updateTrack — the PROVENANCE backfill's write path", () => {
   it("accepts an id proved by the provenance sweep, with no capture column in the body", async () => {
-    // The backfill re-ran the whole ladder over an already-captured row and threw the candidate
-    // bytes away. It has capture's PROOF and deliberately no capture WRITE, so it carries its own
-    // verdict field — and the server accepts that as authorization for the id exactly as it accepts
-    // `captureVerification` on the capture path.
     await updateTrack("track-123", {
       youtubeVerification: "preview-match",
       youtubeVideoId: "dQw4w9WgXcQ",
@@ -701,10 +627,6 @@ describe("updateTrack — the PROVENANCE backfill's write path", () => {
   });
 
   it("THE RAIL — a provenance write can never move a capture column", async () => {
-    // The pilot's verdict, enforced at the boundary rather than only in the box script: a recapture
-    // replaced a finding's clean archived audio with a fan blend that legitimately passed the
-    // fingerprint gate. The backfill's payload carries no capture field, so its statement cannot
-    // set one — and this is the assertion a future box build cannot talk its way past.
     await updateTrack("track-123", {
       youtubeVerification: "preview-match",
       youtubeVideoId: "dQw4w9WgXcQ",
@@ -727,9 +649,6 @@ describe("updateTrack — the PROVENANCE backfill's write path", () => {
   });
 
   it("records a NO-MATCH as a stamp and nothing else", async () => {
-    // The ladder ran and cost a real download. Without this the worklist hands the same row back
-    // next tick and buys it again, forever. The stamp is a SCHEDULE, not a verdict: the id stays
-    // NULL, so a later capture still fills it.
     await updateTrack("track-123", { youtubeVerification: "no-match" });
 
     expect(checkYoutubeOfficial).not.toHaveBeenCalled();
@@ -741,8 +660,6 @@ describe("updateTrack — the PROVENANCE backfill's write path", () => {
   });
 
   it("refuses a bare id from the provenance path too — the guard is the PAYLOAD, not the sender", async () => {
-    // The server cannot know which sweep sent a body, and does not try to. What it checks is
-    // whether a fingerprint verdict rides along, and `no-match` is not one.
     await updateTrack("track-123", {
       youtubeVerification: "no-match",
       youtubeVideoId: "unprovenId",
@@ -750,7 +667,7 @@ describe("updateTrack — the PROVENANCE backfill's write path", () => {
 
     expect(checkYoutubeOfficial).not.toHaveBeenCalled();
     expect(lastUpdateSql).not.toContain("youtube_video_id");
-    // …and the no-match stamp is withheld too: a body claiming both is not a shape any sweep sends.
+
     expect(lastUpdateSql).not.toContain("youtube_verified_at");
   });
 
@@ -793,10 +710,6 @@ describe("updateTrack — SoundCloud provenance evidence", () => {
 
 describe("updateTrack — the CATALOGUE ladder's verdicts", () => {
   it("accepts the Topic rung's metadata proof and stores it as `search`, never `fingerprint`", async () => {
-    // The rung matched artist, title and length on an `<Artist> - Topic` art-track channel and
-    // compared NO AUDIO. That is a real claim and a weaker one, so the receipt has to say the weaker
-    // thing: `search` renders "matched by artist, title, and length" on /identity, and the id must
-    // never be able to arrive wearing the fingerprint's sentence.
     await updateTrack("track-123", {
       youtubeVerification: "metadata-match",
       youtubeVideoId: "topicId",
@@ -815,8 +728,6 @@ describe("updateTrack — the CATALOGUE ladder's verdicts", () => {
   });
 
   it("OFFICIALNESS IS STILL THE SERVER'S CALL, even on a Topic pick the box could see", async () => {
-    // The box knows the channel name and could have ruled; it deliberately does not. The same
-    // keyless oEmbed check runs, and a Topic channel earns its 1 from the server's own rule.
     await updateTrack("track-123", {
       youtubeVerification: "metadata-match",
       youtubeVideoId: "topicId",
@@ -827,8 +738,6 @@ describe("updateTrack — the CATALOGUE ladder's verdicts", () => {
   });
 
   it("accepts the segment rung's archive fingerprint under the SAME claim as a preview one", async () => {
-    // `archive-match` names what was compared — the row's own archived master rather than a 30s
-    // preview — and carries the identical claim class, because both are the sound.
     await updateTrack("track-123", {
       youtubeVerification: "archive-match",
       youtubeVideoId: "segmentId",
@@ -849,8 +758,6 @@ describe("updateTrack — the CATALOGUE ladder's verdicts", () => {
   });
 
   it("an UNRECOGNISED verdict proves nothing — fail closed, exactly like a bare id", async () => {
-    // The map is the guard. A verdict value the server does not know maps to no method, so it
-    // authorizes no id — which is what keeps a future or garbled box build from talking its way in.
     await updateTrack("track-123", {
       youtubeVerification: "sounds-about-right" as never,
       youtubeVideoId: "smuggledId",
@@ -861,9 +768,6 @@ describe("updateTrack — the CATALOGUE ladder's verdicts", () => {
   });
 
   it("an INCONCLUSIVE run moves the streak and NOTHING else — no stamp, no receipt", async () => {
-    // The ladder ran and the CDN refused every section it tried. That is not an answer, so burning
-    // the 90-day window on it would cost the row months for a reason that had nothing to do with the
-    // row. The streak still moves, because a row refused forever must stop being asked forever.
     await updateTrack("track-123", { youtubeVerification: "inconclusive" });
 
     expect(lastUpdateSql).toContain(
@@ -875,8 +779,6 @@ describe("updateTrack — the CATALOGUE ladder's verdicts", () => {
   });
 
   it("a NO-MATCH moves the streak AS WELL AS the stamp", async () => {
-    // The window paces a row that concluded honestly; the streak retires one that never will. Both
-    // empty-handed reports move it, so a row that never concludes still reaches the cap.
     await updateTrack("track-123", { youtubeVerification: "no-match" });
 
     expect(lastUpdateSql).toContain(
@@ -894,8 +796,6 @@ describe("updateTrack — the CATALOGUE ladder's verdicts", () => {
   });
 
   it("an unrecognised verdict on its own is a silent no-op, never a `no_fields` 400", async () => {
-    // The box's whole payload is these fields, so a declined ask has to read as success or a stale
-    // build would see a failed write and call the sweep broken.
     await expect(
       updateTrack("track-123", { youtubeVerification: "sounds-about-right" as never }),
     ).resolves.toBeDefined();
@@ -904,9 +804,6 @@ describe("updateTrack — the CATALOGUE ladder's verdicts", () => {
 
 describe("updateTrack — the RE-VERDICT", () => {
   it("re-rules a refused id under the current heuristic and re-stamps it", async () => {
-    // The live case: a row holding `RFObrLVHMvg` (uploaded by "Fokuz Recordings", its label) was
-    // ruled 0 under the artist-only rule. The widened rule says 1, and this is the path that
-    // reaches it — no id moves, no capture column moves, and no download is spent.
     withExistingRow({
       label_name: "Fokuz Recordings",
       youtube_video_id: "RFObrLVHMvg",
@@ -922,13 +819,11 @@ describe("updateTrack — the RE-VERDICT", () => {
     expect(lastUpdateSql).toContain("youtube_video_official = ?");
     expect(lastUpdateSql).toContain("youtube_verified_at = ?");
     expect(lastUpdateArgs).toContain(1);
-    // The id itself is never rewritten — the re-verdict rules on what is already there.
+
     expect(lastUpdateSql).not.toContain("youtube_video_id =");
   });
 
   it("re-rules a NEVER-CONCLUDED id too", async () => {
-    // NULL is "nobody checked" — an oEmbed that 404'd or timed out at capture time. It is exactly
-    // the row a re-ask is for.
     withExistingRow({ youtube_video_id: "heldId", youtube_video_official: null });
 
     await updateTrack("track-123", { youtubeReverdict: true });
@@ -938,8 +833,6 @@ describe("updateTrack — the RE-VERDICT", () => {
   });
 
   it("NEVER DEMOTES — a row already ruled official is not re-asked at all", async () => {
-    // The widening is the only reason to re-ask, so it can only ever say yes more often. A channel
-    // that renamed itself must not quietly retract a link Fluncle has been serving.
     withExistingRow({ youtube_video_id: "heldId", youtube_video_official: 1 });
 
     await updateTrack("track-123", { youtubeReverdict: true });
@@ -956,9 +849,6 @@ describe("updateTrack — the RE-VERDICT", () => {
   });
 
   it("advances the stamp but keeps the existing verdict when the check does not conclude", async () => {
-    // A 404 or a timeout says nothing about who uploaded it, so overwriting a stored 0 with NULL
-    // would lose the fact that it WAS checked. The stamp still moves, so the round-robin walks on
-    // instead of spinning on an unreachable video.
     checkYoutubeOfficial.mockResolvedValue(null);
     withExistingRow({ youtube_video_id: "goneId", youtube_video_official: 0 });
 
@@ -978,8 +868,6 @@ describe("updateTrack — the RE-VERDICT", () => {
     expect(lastUpdateSql).not.toContain("source_audio_key");
   });
 });
-
-// ── THE OPERATOR'S CAPTURE-SOURCE PIN (docs/the-ear.md § Wrong audio) ──────────────────────────
 
 describe("parseCaptureSourceVideoId — the URL → id reduction, server-side", () => {
   it("passes a bare 11-character id through", () => {
@@ -1010,9 +898,9 @@ describe("parseCaptureSourceVideoId — the URL → id reduction, server-side", 
     for (const input of [
       "",
       "   ",
-      "dQw4w9WgXc", // 10 chars
-      "dQw4w9WgXcQ1", // 12 chars
-      "dQw4w9WgX$Q", // bad character
+      "dQw4w9WgXc",
+      "dQw4w9WgXcQ1",
+      "dQw4w9WgX$Q",
       "https://soundcloud.com/artist/track",
       "https://example.com/watch?v=dQw4w9WgXcQ",
       "https://www.youtube.com/channel/UCxyz",
@@ -1032,24 +920,23 @@ describe("pinCaptureSource — the write the pin lands", () => {
 
     const update = lastUpdateSql;
     expect(update).toContain("capture_source_pin = ?");
-    // Re-queued through the same `duplicate-cleared` sentinel guard `updateTrack` respects.
+
     expect(update).toContain(
       "capture_status = case when capture_status = 'duplicate-cleared' then capture_status else 'pending' end",
     );
     expect(update).toContain("source_audio_failures = 0");
     expect(update).toContain("source_audio_rejected = null");
-    // The YouTube trio + method are written OUTRIGHT — the operator's ruling replaces a sweep's.
+
     expect(update).toContain("youtube_video_id = ?");
     expect(update).not.toContain("coalesce(youtube_video_id");
     expect(update).toContain("youtube_video_official = ?");
     expect(update).toContain("youtube_verified_at = ?");
     expect(update).toContain("youtube_verified_by = 'operator'");
     expect(update).toContain("source_verification = 'operator'");
-    // The duration override is written on EVERY pin — a plain pin writes it FALSE, so a re-pin
-    // without the flag withdraws a standing waiver rather than inheriting it.
+
     expect(update).toContain("capture_source_pin_allow_duration = ?");
     expect(lastUpdateArgs.slice(0, 3)).toEqual(["dQw4w9WgXcQ", 0, "dQw4w9WgXcQ"]);
-    // Officialness is still the SERVER's oEmbed verdict — asked with the recording's own names.
+
     expect(checkYoutubeOfficial).toHaveBeenCalledWith(
       "dQw4w9WgXcQ",
       { artists: ["Calibre"], labels: [] },
@@ -1064,15 +951,12 @@ describe("pinCaptureSource — the write the pin lands", () => {
     expect(lastUpdateSql).not.toContain("update findings");
     expect(lastUpdateSql).not.toContain("updated_at");
     expect(lastUpdateSql).not.toContain("enrichment_status");
-    // …and touches no captured audio: the pin instructs the NEXT capture, it does not rewind one.
+
     expect(lastUpdateSql).not.toContain("source_audio_key");
     expect(lastUpdateSql).not.toContain("source_audio_captured_at");
   });
 
   it("writes the duration override TRUE when the operator waives the guard, and reports it", async () => {
-    // The waiver is the operator saying, with the two lengths in front of him, that this different
-    // edit IS the recording — so the sweep skips the guard for this id. It rides the pin's own
-    // statement, and NOTHING here touches `duration_ms`: the finding keeps its store length.
     withExistingRow({ capture_source_pin: "dQw4w9WgXcQ", capture_source_pin_allow_duration: 1 });
 
     const result = await pinCaptureSource("track-123", "dQw4w9WgXcQ", {
@@ -1109,8 +993,7 @@ describe("clearCaptureSource — the withdrawal", () => {
     const result = await clearCaptureSource("track-123");
 
     expect(lastUpdateSql).toContain("capture_source_pin = null");
-    // Every YouTube clause is conditioned on the method being `operator`: an id a fingerprint sweep
-    // earned is never touched, and an operator-stamped one goes as a whole, never half.
+
     for (const column of [
       "youtube_video_id",
       "youtube_video_official",
@@ -1124,7 +1007,7 @@ describe("clearCaptureSource — the withdrawal", () => {
     expect(lastUpdateSql).toContain(
       "source_verification = case when source_verification = 'operator' then null else source_verification end",
     );
-    // The duration waiver goes with the pin it rode on.
+
     expect(lastUpdateSql).toContain("capture_source_pin_allow_duration = 0");
     expect(result).toEqual({
       captureSourcePin: null,

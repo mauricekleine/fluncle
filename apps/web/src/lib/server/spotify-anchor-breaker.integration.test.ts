@@ -3,29 +3,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createIntegrationDb } from "./integration-db";
 
-// THE SPOTIFY ANCHOR BREAKER, END TO END, ON THE REAL PATH.
-//
-// The unit suite (`spotify-anchor-breaker.test.ts`) pins the state machine against a mocked KV. This
-// one exists because a safety mechanism that only passes its own self-test is not proven: it wires
-// the REAL `spotifyFetch` to the REAL `settings` table and drives the breaker with REAL 429
-// responses, so a regression that disconnects the recorder from the 429 path — or the gate from the
-// breaker — fails HERE even though every unit test still passes.
-//
-// The database, the `settings` reads/writes, the breaker, `spotifyFetch`'s 429 handling and
-// `anchorSpotifySearchAllowed`'s three-clause gate are all the real thing. Only the network (global
-// `fetch`) and the env reads are doubled.
-//
-// It proves four things:
-//   1. TRIPS — N real 429 responses through `spotifyFetch` close the anchor-search gate.
-//   2. DOES NOT PAUSE THE USER-FACING PATHS — while tripped, the mint's by-id read and the publish
-//      playlist write both still reach Spotify. This is the load-bearing safety property.
-//   3. RELEASES — the gate re-opens by itself once the cooldown elapses.
-//   4. The gate is an AND — the breaker can only ever subtract permission from the dark flag.
-//
-// Every 429 stub carries `Retry-After: 20`, which blows `spotifyFetch`'s ~10s wait budget on the
-// first retry: exactly one request, one recorded throttle, and no timer to drive (the shape the
-// existing `spotifyFetch 429 backoff` suite pins in `spotify.test.ts`).
-
 let db: Client;
 
 vi.mock("./db", async (importOriginal) => {
@@ -41,14 +18,12 @@ vi.mock("./env", () => ({
   readOptionalEnv: async () => undefined,
 }));
 
-/** A Wednesday noon — well outside the Friday-morning Frontier-refresh window. */
 const NON_FRIDAY = new Date("2026-07-22T12:00:00Z");
 
 const TRACK_PREFIX = "https://api.spotify.com/v1/tracks/";
 const SEARCH_PREFIX = "https://api.spotify.com/v1/search";
 const PLAYLIST_PREFIX = "https://api.spotify.com/v1/playlists/";
 
-/** A connected Spotify account whose access token is fresh, so no token refresh is ever attempted. */
 async function seedSpotifyAuth(): Promise<void> {
   await db.execute({
     args: [
@@ -64,7 +39,6 @@ async function seedSpotifyAuth(): Promise<void> {
   });
 }
 
-/** One Spotify track payload, enough for `fetchTrackMetadata` to parse. */
 const TRACK_BODY = JSON.stringify({
   artists: [{ id: "sp-etherwood", name: "Etherwood" }],
   duration_ms: 261_901,
@@ -74,10 +48,6 @@ const TRACK_BODY = JSON.stringify({
   uri: "spotify:track:spLive",
 });
 
-/**
- * Stub the network. `throttle` decides whether Spotify pushes back; every call is recorded so a test
- * can assert a request was actually ISSUED (the only honest proof that a path was not gated).
- */
 function stubSpotify(options: { throttle: boolean }): { calls: string[] } {
   const calls: string[] = [];
 
@@ -87,7 +57,6 @@ function stubSpotify(options: { throttle: boolean }): { calls: string[] } {
       calls.push(url);
 
       if (options.throttle) {
-        // `Retry-After: 20` exceeds the ~10s retry budget, so the call issues exactly one request.
         return new Response("rate limited", { headers: { "Retry-After": "20" }, status: 429 });
       }
 
@@ -110,10 +79,6 @@ function stubSpotify(options: { throttle: boolean }): { calls: string[] } {
   return { calls };
 }
 
-/**
- * Drive `count` REAL throttled Spotify calls through `spotifyFetch`. Uses `searchTrackCandidates` —
- * a plain GET — so each call is one request that ends in the 429 error shape callers already sniff.
- */
 async function driveThrottledCalls(count: number): Promise<void> {
   const { searchTrackCandidates } = await import("./spotify");
 
@@ -137,14 +102,11 @@ describe("the breaker TRIPS from real 429s on the real fetch path", () => {
     await setAnchorSpotifySearchEnabled(true);
     stubSpotify({ throttle: true });
 
-    // Armed and healthy: the rungs may run.
     expect(await anchorSpotifySearchAllowed(NON_FRIDAY)).toBe(true);
 
-    // One short of the threshold is still normal backpressure — the gate stays open.
     await driveThrottledCalls(SPOTIFY_ANCHOR_BREAKER_MAX_FAILURES - 1);
     expect(await anchorSpotifySearchAllowed(NON_FRIDAY)).toBe(true);
 
-    // The N-th throttle is a regime, not a blip.
     await driveThrottledCalls(1);
     expect(await anchorSpotifySearchAllowed(NON_FRIDAY)).toBe(false);
   });
@@ -165,7 +127,6 @@ describe("the breaker TRIPS from real 429s on the real fetch path", () => {
     expect(state.tripped).toBe(true);
     expect(state.reason).toBe(SPOTIFY_ANCHOR_BREAKER_REASON_THROTTLED);
 
-    // The durable row, in the same table the operator can inspect and clear.
     const row = await db.execute({
       args: [SPOTIFY_ANCHOR_BREAKER_TRIPPED_AT_KEY],
       sql: "select value from settings where key = ?",
@@ -177,9 +138,6 @@ describe("the breaker TRIPS from real 429s on the real fetch path", () => {
   });
 
   it("a throttled anchor sweep trips the breaker that pauses it — the self-limiting loop", async () => {
-    // The regression this whole slice exists to prevent: a sustained anchor sweep starving the
-    // shared app. `searchTrackCandidates` IS the fuzzy anchor rung, so these are the sweep's own
-    // calls — and the fifth one closes the gate on the sweep itself.
     const { anchorSpotifySearchAllowed, setAnchorSpotifySearchEnabled } =
       await import("./anchor-spotify-search");
     const { SPOTIFY_ANCHOR_BREAKER_MAX_FAILURES } = await import("./spotify-anchor-breaker");
@@ -193,7 +151,6 @@ describe("the breaker TRIPS from real 429s on the real fetch path", () => {
 });
 
 describe("THE LOAD-BEARING PROPERTY: a tripped breaker pauses ONLY the anchor search", () => {
-  /** Trip the breaker for real, then hand back a healthy (200) network. */
   async function tripThenRecover(): Promise<{ calls: string[] }> {
     const { SPOTIFY_ANCHOR_BREAKER_MAX_FAILURES } = await import("./spotify-anchor-breaker");
     const { spotifyAnchorSearchBreakerTripped } = await import("./spotify-anchor-breaker");
@@ -214,7 +171,7 @@ describe("THE LOAD-BEARING PROPERTY: a tripped breaker pauses ONLY the anchor se
     const metadata = await fetchTrackMetadata("spLive");
 
     expect(metadata.spotifyUri).toBe("spotify:track:spLive");
-    // Not "it did not throw" — the request was ISSUED. A gated path would never reach the network.
+
     expect(calls.filter((url) => url.startsWith(TRACK_PREFIX))).toHaveLength(1);
   });
 
@@ -274,20 +231,10 @@ describe("the breaker RELEASES", () => {
     await driveThrottledCalls(SPOTIFY_ANCHOR_BREAKER_MAX_FAILURES);
     expect(await anchorSpotifySearchAllowed(NON_FRIDAY)).toBe(false);
 
-    // The real 429s above stamped the trip from the REAL clock, so a cooldown measured off it lands
-    // the release probe at a wall-clock-dependent weekday/hour — and the gate's FIRST clause is the
-    // Friday 06:00–09:00 Amsterdam refresh window. Run this suite in the ~3h before that window on a
-    // Friday and `released` falls inside it, so the gate answers false for a reason that has nothing
-    // to do with the breaker and the test fails on the clock rather than on a regression.
-    // Re-stamp the trip onto NON_FRIDAY (the frozen Wednesday the assertions above already use) so
-    // both probes are pinned outside the window. The trip itself is still driven by real 429s
-    // through the real recorder — only the instant it is measured from becomes deterministic, and
-    // the release verdict reads exactly this stored stamp.
     await setSetting(SPOTIFY_ANCHOR_BREAKER_TRIPPED_AT_KEY, NON_FRIDAY.toISOString());
 
     const trippedAtMs = NON_FRIDAY.getTime();
 
-    // `anchorSpotifySearchAllowed` takes `now`, so the cooldown is driven without touching timers.
     const stillCooling = new Date(trippedAtMs + SPOTIFY_ANCHOR_BREAKER_COOLDOWN_MS - 60_000);
     const released = new Date(trippedAtMs + SPOTIFY_ANCHOR_BREAKER_COOLDOWN_MS + 60_000);
 
@@ -317,7 +264,6 @@ describe("the gate is an AND — the breaker only ever subtracts", () => {
   it("a clear breaker does not open the gate when the dark flag is OFF", async () => {
     const { anchorSpotifySearchAllowed } = await import("./anchor-spotify-search");
 
-    // No flag row ⇒ default OFF, breaker clear. The dark flag still rules.
     expect(await anchorSpotifySearchAllowed(NON_FRIDAY)).toBe(false);
   });
 

@@ -1,14 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// The Spotify access-token acquire path (`getSpotifyAccessToken`, exercised here
-// through the exported `searchTrackCandidates`, which reads the token then does one
-// GET /search carrying it as a Bearer header). These pin the refresh lifecycle and
-// the concurrent-refresh RACE GUARD: when Spotify rotates a single-use refresh token,
-// the operator action that loses a two-way refresh race gets invalid_grant on a token
-// the winner already consumed — the connection is healthy, so we must NOT nuke the
-// row. The guard re-reads the row and, when a concurrent winner has rotated it,
-// returns the winner's fresh access token instead of clearing.
-
 vi.mock("./env", () => ({
   readEnv: async () => "test-value",
   readEnvs: async (keys: readonly string[]) =>
@@ -32,8 +23,6 @@ type AuthRow = {
   expires_at: string;
 };
 
-// A queue of rows handed out one-per-SELECT, so a test can make the re-read (the
-// second SELECT on the invalid_grant path) observe a different row than the first.
 let selectQueue: Array<AuthRow | undefined> = [];
 let deleteCount = 0;
 let upsertCount = 0;
@@ -75,9 +64,6 @@ const SEARCH_PREFIX = "https://api.spotify.com/v1/search";
 const future = () => new Date(Date.now() + 3_600_000).toISOString();
 const past = () => new Date(Date.now() - 1_000).toISOString();
 
-// A fetch double: the token endpoint answers per the staged refresh outcome; the
-// search endpoint records the Authorization header it was called with (revealing
-// which access token the acquire path resolved) and returns an empty result set.
 function stubFetch(
   refresh: { kind: "invalid_grant" } | { kind: "ok"; access_token: string; refresh_token?: string },
 ) {
@@ -143,7 +129,7 @@ describe("getSpotifyAccessToken refresh lifecycle", () => {
 
   it("refreshes an expired token and carries the fresh access token", async () => {
     selectQueue = [{ access_token: "at-old", expires_at: past(), refresh_token: "rt-old" }];
-    // Spotify omits refresh_token on a non-rotating refresh; the stored one is kept.
+
     const { searchAuth } = stubFetch({ access_token: "at-fresh", kind: "ok" });
 
     await searchTrackCandidates("amen break");
@@ -154,8 +140,6 @@ describe("getSpotifyAccessToken refresh lifecycle", () => {
   });
 
   it("clears the row and demands reconnect when invalid_grant hits an UNCHANGED row", async () => {
-    // Both the acquire read and the re-read return the same token: the grant is
-    // genuinely dead, so today's behavior stands — clear the row and throw.
     const dead: AuthRow = { access_token: "at-dead", expires_at: past(), refresh_token: "rt-dead" };
     selectQueue = [dead, dead];
     stubFetch({ kind: "invalid_grant" });
@@ -168,8 +152,6 @@ describe("getSpotifyAccessToken refresh lifecycle", () => {
   });
 
   it("does NOT clear and returns the winner's token when a concurrent refresh rotated the row", async () => {
-    // The acquire read sees the stale row; our refresh loses the race and gets
-    // invalid_grant; the re-read sees the row a concurrent winner already rotated.
     selectQueue = [
       { access_token: "at-old", expires_at: past(), refresh_token: "rt-old" },
       { access_token: "at-winner", expires_at: future(), refresh_token: "rt-winner" },
@@ -197,7 +179,6 @@ describe("spotifyFetch 429 backoff", () => {
       if (url.startsWith(SEARCH_PREFIX)) {
         searchCalls += 1;
 
-        // First hit throttles with a 1s Retry-After; the retry lands.
         if (searchCalls === 1) {
           return new Response("rate limited", {
             headers: { "Retry-After": "1" },
@@ -215,7 +196,6 @@ describe("spotifyFetch 429 backoff", () => {
 
     const promise = searchTrackCandidates("amen break");
 
-    // Drive the Retry-After sleep (1s) so the retry fires.
     await vi.advanceTimersByTimeAsync(1000);
 
     await expect(promise).resolves.toEqual([]);
@@ -230,7 +210,6 @@ describe("spotifyFetch 429 backoff", () => {
       if (url.startsWith(SEARCH_PREFIX)) {
         searchCalls += 1;
 
-        // A 20s Retry-After blows the ~10s budget on the FIRST retry, so no wait happens.
         return new Response("rate limited", {
           headers: { "Retry-After": "20" },
           status: 429,
@@ -242,7 +221,6 @@ describe("spotifyFetch 429 backoff", () => {
 
     vi.stubGlobal("fetch", fetchMock);
 
-    // The message still carries "429" — the shape a caller sniffs to tell a throttle apart.
     await expect(searchTrackCandidates("amen break")).rejects.toThrow(/429/);
     expect(searchCalls).toBe(1);
   });
@@ -279,7 +257,6 @@ describe("spotifyFetch 429 backoff", () => {
       }),
     ).rejects.toThrow(/429/);
 
-    // One shot, no replay — a 429'd add must not fire twice and risk a duplicate.
     expect(addCalls).toBe(1);
   });
 });
@@ -290,8 +267,6 @@ describe("fetchArtistImages classifications and shared budget", () => {
 
     const fetchMock = vi.fn(async (url: string) => {
       if (url.startsWith(ARTIST_PREFIX)) {
-        // This exceeds spotifyFetch's total wait budget, so the helper sees the
-        // exhausted 429 immediately and must not try the next artist.
         return new Response("rate limited", {
           headers: { "Retry-After": "20" },
           status: 429,
@@ -381,8 +356,6 @@ describe("the publish grant's authorize URL — the scope pin", () => {
     const url = new URL(await buildSpotifyAuthUrl("state-1"));
     const scopes = (url.searchParams.get("scope") ?? "").split(" ");
 
-    // `ugc-image-upload` is what un-inerts the Frontier cover leg; this pin exists
-    // because the cover path requires the scope in the re-auth URL to remain active.
     expect(scopes).toContain("playlist-modify-public");
     expect(scopes).toContain("playlist-modify-private");
     expect(scopes).toContain("ugc-image-upload");

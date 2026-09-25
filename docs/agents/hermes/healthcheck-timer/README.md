@@ -2,6 +2,8 @@
 
 The rave-02 (Hermes box) host half of the `/status` health loop. `fluncle-healthcheck` is the prober behind Fluncle's public [`/status`](https://www.fluncle.com/status) dashboard: every ~10m it probes each service (web / R2 / DNS / the SSH app / the on-box automation crons / the scale-to-zero render box / Hermes itself), detects status transitions, Discord-pings on a flip (and again when a service stays down — see [Alerting](#alerting-the-flip-and-the-streak)), and POSTs the snapshot to the agent-tier `record_health` op the page reads. This is what SCHEDULES it: a small host systemd timer on the rave-02 host that `docker exec`s the baked probe script inside the `hermes` container every 10m.
 
+The shared status read exposes only public-safe names, statuses, bounded messages, latencies, and timestamps; probe messages must never contain internal addresses or raw error bodies. It filters retired service ids before any web, API, CLI, or MCP consumer sees them. A cron row's `checked_at` is the prober's last write, so its freshness uses the prober's cadence rather than that cron's own timer; a never-run cron receives only a bounded grace period before it stops appearing healthy.
+
 The probe WORK is unchanged and BAKED into the image — the `.sh`/`.ts` pair at `/opt/hermes-scripts/` (source: [`../scripts/fluncle-healthcheck.sh`](../scripts/fluncle-healthcheck.sh) → [`../scripts/fluncle-healthcheck.ts`](../scripts/fluncle-healthcheck.ts)); it rides the image and auto-updates from `main` via the hourly pin-watch rebuild (Unit A) — no `docker cp`, no `/opt/data` copy. The host timer is only the trigger; there is no host-side wrapper script.
 
 ## Why it has its own host timer

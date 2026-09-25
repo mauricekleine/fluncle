@@ -12,9 +12,6 @@ import {
   splitTitle,
 } from "./track-match";
 
-// The TS port of the rekordbox_sync.py matcher — these cases mirror the Python
-// source's documented discipline so the two stay in lockstep.
-
 describe("fold", () => {
   it("lowercases, strips accents, folds & → and, drops punctuation", () => {
     expect(fold("Beyoncé & JAY-Z!")).toBe("beyonce and jay z");
@@ -59,8 +56,7 @@ describe("splitTitle", () => {
   it("treats Original Version as the original too, so it folds onto the base title", () => {
     expect(splitTitle("Song (Original Version)")).toEqual({ base: "song", descriptor: "" });
     expect(splitTitle("Song - Original Version")).toEqual({ base: "song", descriptor: "" });
-    // The identity is therefore the same as the bare title — a reissue tagged "(Original
-    // Version)" is the SAME recording, so it collapses onto it.
+
     expect(matchKey(["Aphrodite"], "Song (Original Version)")).toBe(
       matchKey(["Aphrodite"], "Song"),
     );
@@ -85,8 +81,6 @@ describe("splitTitle", () => {
   });
 
   it("folds a BARE trailing strong version word into the descriptor (the anchor false-miss)", () => {
-    // "Paint It Black VIP" and Spotify's "Paint It Black (Vip)" are the same recording;
-    // without this fold it is un-anchorable.
     expect(splitTitle("Paint It Black VIP")).toEqual({ base: "paint it black", descriptor: "vip" });
     expect(splitTitle("Song Remix")).toEqual({ base: "song", descriptor: "remix" });
     expect(matchKey(["Sigma"], "Paint It Black VIP")).toBe(
@@ -106,8 +100,6 @@ describe("splitTitle", () => {
   });
 
   it("folds the `rmx` spelling onto `remix` so the two forms share a key", () => {
-    // "Feels Like Before (Air.K & Cephei rmx)" and "(Air.K & Cephei Remix)" identify the
-    // same recording, so the descriptor cannot remain opaque.
     expect(splitTitle("Feels Like Before (Air.K & Cephei rmx)")).toEqual({
       base: "feels like before",
       descriptor: "air k and cephei remix",
@@ -115,14 +107,13 @@ describe("splitTitle", () => {
     expect(matchKey(["Minos"], "Feels Like Before (Air.K & Cephei rmx)")).toBe(
       matchKey(["Minos"], "Feels Like Before (Air.K & Cephei Remix)"),
     );
-    // The dash-suffixed spelling folds the same way.
+
     expect(matchKey(["Minos"], "Feels Like Before - Air.K & Cephei rmx")).toBe(
       matchKey(["Minos"], "Feels Like Before (Air.K & Cephei Remix)"),
     );
   });
 
   it("drops a redundant trailing `mix` after a version word", () => {
-    // "Part of Me (instrumental mix)" and streaming's "(Instrumental)" share a descriptor.
     expect(splitTitle("Part of Me (instrumental mix)")).toEqual({
       base: "part of me",
       descriptor: "instrumental",
@@ -134,10 +125,9 @@ describe("splitTitle", () => {
   });
 
   it("leaves a `mix` alone when dropping it would empty the descriptor or a non-version word precedes it", () => {
-    // A bare "(Mix)" keeps its one token — an empty descriptor would fold it onto the original.
     expect(splitTitle("Song (Mix)")).toEqual({ base: "song", descriptor: "mix" });
     expect(matchKey(["Klute"], "Song (Mix)")).not.toBe(matchKey(["Klute"], "Song"));
-    // "dj" is not a version word, so "dj mix" is left whole (no descriptor-subset matching).
+
     expect(splitTitle("Song (Nu:Tone DJ Mix)")).toEqual({
       base: "song",
       descriptor: "nu tone dj mix",
@@ -145,8 +135,6 @@ describe("splitTitle", () => {
   });
 
   it("canonicalizes AFTER the neutral check, so Original/Extended Mix still fold to the original", () => {
-    // "original mix" is neutral BEFORE canonicalization could turn it into a distinguishing
-    // "original" — the ordering is the guarantee, so assert the resulting identity too.
     expect(splitTitle("Song (Original Mix)")).toEqual({ base: "song", descriptor: "" });
     expect(matchKey(["Klute"], "Song (Original Mix)")).toBe(matchKey(["Klute"], "Song"));
     expect(splitTitle("Song (Extended Mix)")).toEqual({ base: "song", descriptor: "" });
@@ -160,7 +148,6 @@ describe("splitTitle", () => {
   });
 
   it("a found descriptor wins over a bare trailing word", () => {
-    // The paren descriptor is already the identity; the base keeps its remaining words.
     expect(splitTitle("Song VIP (Calibre Remix)")).toEqual({
       base: "song vip",
       descriptor: "calibre remix",
@@ -169,9 +156,6 @@ describe("splitTitle", () => {
 });
 
 describe("canonicalizeSearchTitle (the query spelling)", () => {
-  // The retrieval-side twin of the descriptor fold: the SAME two rules on the RAW title the anchor
-  // rungs search with. Both cases below are retrievable under the canonical spelling and
-  // unreachable under the row's raw spelling.
   it("spells `rmx` the way the platforms index it", () => {
     expect(canonicalizeSearchTitle("Feels Like Before (Air.K & Cephei rmx)")).toBe(
       "Feels Like Before (Air.K & Cephei Remix)",
@@ -190,8 +174,7 @@ describe("canonicalizeSearchTitle (the query spelling)", () => {
     expect(canonicalizeSearchTitle("Feels Like Before (Air.K & Cephei rmx)")).toContain(
       "Air.K & Cephei",
     );
-    // The row's register is preserved: a shouted title keeps shouting, a lowercase descriptor stays
-    // lowercase. Only the `rmx`/`mix` token itself is rewritten.
+
     expect(canonicalizeSearchTitle("FEELS LIKE BEFORE (AIR.K RMX)")).toBe(
       "FEELS LIKE BEFORE (AIR.K REMIX)",
     );
@@ -199,11 +182,10 @@ describe("canonicalizeSearchTitle (the query spelling)", () => {
   });
 
   it("holds the same guards the identity fold does", () => {
-    // Dropping the `mix` would empty the descriptor.
     expect(canonicalizeSearchTitle("Song (Mix)")).toBe("Song (Mix)");
-    // A non-version word before it — a DJ mix is not a version of the track.
+
     expect(canonicalizeSearchTitle("Song (Nu:Tone DJ Mix)")).toBe("Song (Nu:Tone DJ Mix)");
-    // A neutral descriptor names the original; `splitTitle` never folds it, so nor does the query.
+
     expect(canonicalizeSearchTitle("Song (Extended Mix)")).toBe("Song (Extended Mix)");
     expect(canonicalizeSearchTitle("Song (Original Mix)")).toBe("Song (Original Mix)");
   });
@@ -250,7 +232,7 @@ describe("buildTrackMatchIndex / resolveTrackByText", () => {
   const index = buildTrackMatchIndex([
     { artists: ["Netsky", "Bev Lee Harling"], title: "Let's Leave Tomorrow", trackId: "t1" },
     { artists: ["Dawn Wall"], title: "I See You", trackId: "t2" },
-    // Two DIFFERENT findings sharing one identity → ambiguous, never guessed.
+
     { artists: ["Dup"], title: "Same Song", trackId: "t3" },
     { artists: ["Dup"], title: "Same Song", trackId: "t4" },
   ]);
@@ -303,7 +285,6 @@ describe("dedupeByRecordingIdentity (the render-time twin fold)", () => {
   });
 
   it("prefers ISRC, then newest release, then the lowest id — deterministically", () => {
-    // No Spotify anywhere: the ISRC row wins over the bare one.
     expect(
       dedupeByRecordingIdentity(
         [row({ trackId: "t_bare" }), row({ isrc: "AAA", trackId: "t_isrc" })],
@@ -311,7 +292,6 @@ describe("dedupeByRecordingIdentity (the render-time twin fold)", () => {
       )[0]?.trackId,
     ).toBe("t_isrc");
 
-    // Neither has Spotify or ISRC: the newer release wins.
     expect(
       dedupeByRecordingIdentity(
         [
@@ -322,7 +302,6 @@ describe("dedupeByRecordingIdentity (the render-time twin fold)", () => {
       )[0]?.trackId,
     ).toBe("t_new");
 
-    // A dead heat on every signal falls back to the lowest id, regardless of input order.
     const forward = dedupeByRecordingIdentity(
       [row({ trackId: "t_a" }), row({ trackId: "t_b" })],
       identify,
@@ -353,8 +332,6 @@ describe("dedupeByRecordingIdentity (the render-time twin fold)", () => {
   });
 
   it("keeps genuinely distinct versions apart (the Baddadan case)", () => {
-    // Distinct descriptors are distinct recordings — a remix never folds onto the original, so
-    // both survive even though the base title is identical.
     const kept = dedupeByRecordingIdentity(
       [
         row({ title: "Baddadan", trackId: "t_orig" }),
@@ -403,7 +380,6 @@ describe("deriveRemixerNames (the remixer credit, RFC label-lineage-remixer U2)"
   });
 
   it("never guesses beyond an exact fold match (an uncredited remixer stays absent)", () => {
-    // The title names Calibre, but Calibre is not one of the track's linked artists.
     expect(deriveRemixerNames("Nobody Else (Calibre Remix)", ["Axwell", "Marcus Intalex"])).toEqual(
       [],
     );
@@ -414,7 +390,6 @@ describe("deriveRemixerNames (the remixer credit, RFC label-lineage-remixer U2)"
   });
 
   it("is unchanged by descriptor canonicalization — the version word is stripped either spelling", () => {
-    // `rmx` canonicalizes to `remix`; both are VERSION_WORDS, so the remainder is the same name.
     expect(
       deriveRemixerNames("Feels Like Before (Air.K & Cephei rmx)", [
         "Minos",
@@ -425,9 +400,9 @@ describe("deriveRemixerNames (the remixer credit, RFC label-lineage-remixer U2)"
     expect(deriveRemixerNames("Nobody Else (Calibre rmx)", ["Axwell", "Calibre"])).toEqual([
       "Calibre",
     ]);
-    // A bare "(rmx)" names nobody, exactly as a bare "(Remix)" does.
+
     expect(deriveRemixerNames("Nobody Else (rmx)", ["Axwell"])).toEqual([]);
-    // "instrumental mix" collapses to "instrumental" — still a version word, still no remixer.
+
     expect(deriveRemixerNames("Part of Me (instrumental mix)", ["Klute"])).toEqual([]);
   });
 });
