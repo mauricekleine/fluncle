@@ -644,6 +644,7 @@ function installBrowserAudio(): BrowserLikeAudio {
 
 /** Another sound on the page: Stories' video, the radio's audio. */
 class OtherMedia {
+  ended = false;
   muted = false;
   paused = true;
   pauses = 0;
@@ -655,9 +656,21 @@ class OtherMedia {
   }
 }
 
+type Page = {
+  /** Run the page's oldest queued media notification. */
+  deliver: () => boolean;
+  /** How many of the page's media notifications are still queued. */
+  pending: () => number;
+  /** Another sound calls play(): `paused` flips now, its `play` notification is a later task. */
+  play: (media: OtherMedia) => void;
+  /** Another sound starts and its notification runs at once. */
+  start: (media: OtherMedia) => void;
+};
+
 /** A document that hears media events in the capture phase, as the real one does. */
-function installPage(others: OtherMedia[]): { start: (media: OtherMedia) => void } {
+function installPage(others: OtherMedia[]): Page {
   const listeners = new Map<string, ((event: Event) => void)[]>();
+  const tasks: (() => void)[] = [];
 
   vi.stubGlobal("HTMLMediaElement", OtherMedia);
   vi.stubGlobal("document", {
@@ -667,12 +680,32 @@ function installPage(others: OtherMedia[]): { start: (media: OtherMedia) => void
     querySelectorAll: () => others,
   });
 
-  return {
-    start: (media) => {
-      media.paused = false;
+  const deliver = (): boolean => {
+    const task = tasks.shift();
 
+    task?.();
+
+    return task !== undefined;
+  };
+  const play = (media: OtherMedia): void => {
+    media.paused = false;
+    media.ended = false;
+    tasks.push(() => {
       for (const listener of listeners.get("play") ?? []) {
         listener({ target: media } as unknown as Event);
+      }
+    });
+  };
+
+  return {
+    deliver,
+    pending: () => tasks.length,
+    play,
+    start: (media) => {
+      play(media);
+
+      while (deliver()) {
+        // The notification runs at once.
       }
     },
   };
@@ -1204,6 +1237,101 @@ describe("the player lives across pages", () => {
   });
 });
 
+// ── AN AUTOMATIC START YIELDS TO A SOUND ALREADY PLAYING ──────────────────────────────────────
+// Another element's `paused` flips the moment it calls play(); its `play` notification is a later
+// task. An automatic start that runs in between must see it and stand down, never pause it.
+
+describe("an automatic start yields to a sound already playing", () => {
+  it("the end of a clip does not start the next track over Stories whose notification is still queued", async () => {
+    const element = installBrowserAudio();
+    const story = new OtherMedia();
+    const page = installPage([story]);
+
+    playQueue(tracks("a", "b"), 0);
+    element.arrive();
+    element.reachEnd();
+    page.play(story);
+    element.deliverAll();
+    await settled();
+
+    expect(story.paused).toBe(false);
+    expect(story.pauses).toBe(0);
+    expect(element.src).not.toBe("/api/preview/b");
+    expect(readPlayer().status).toBe("idle");
+    // The bar stops, keeping its place on the track that would have played next.
+    expect(readPlayer().queue).toMatchObject({ ended: false, index: 1 });
+
+    page.deliver();
+    await settled();
+    expect(story.pauses).toBe(0);
+  });
+
+  it("a missing preview does not skip to the next track over another sound", async () => {
+    const element = installBrowserAudio();
+    const story = new OtherMedia();
+    const page = installPage([story]);
+
+    playQueue(tracks("a", "b"), 0);
+    page.play(story);
+    element.failToLoad();
+    await settled();
+
+    expect(readPlayer().missing.has("a")).toBe(true);
+    expect(element.src).not.toBe("/api/preview/b");
+    expect(story.pauses).toBe(0);
+  });
+
+  it("a similar-tracks answer stands down when another sound is already playing", async () => {
+    const element = installBrowserAudio();
+    const story = new OtherMedia();
+    const page = installPage([story]);
+
+    playQueue(tracks("a"), 0);
+    element.arrive();
+    element.finish();
+    await settled();
+
+    const answer = deferred<QueueTrack[]>();
+    const outcome = keepGoing({ loadSimilar: () => answer.promise, navigate: () => {} });
+
+    page.play(story);
+    answer.resolve(tracks("x"));
+
+    expect(await outcome).toBe("stale");
+    expect(element.src).toBe("");
+    expect(story.pauses).toBe(0);
+  });
+
+  it("a next-page hand-off stands down when another sound is already playing", async () => {
+    const element = installBrowserAudio();
+    const story = new OtherMedia();
+    const page = installPage([story]);
+    const next = { href: "/tracks?page=2", kind: "page" as const };
+
+    playQueue(tracks("a"), 0, { continuation: next });
+    element.arrive();
+    element.finish();
+    await settled();
+    await keepGoing({ loadSimilar: async () => [], navigate: () => {} });
+    page.play(story);
+
+    expect(claimPageContinuation(next.href)).toBe(false);
+    expect(story.pauses).toBe(0);
+  });
+
+  it("the listener's own press still takes the room", () => {
+    installBrowserAudio();
+    const story = new OtherMedia();
+    const page = installPage([story]);
+
+    page.play(story);
+    playQueue(tracks("a"), 0);
+
+    expect(story.paused).toBe(true);
+    expect(story.pauses).toBe(1);
+  });
+});
+
 // ── THE INTENT INVARIANT, OVER THE INTERLEAVINGS ─────────────────────────────────────────────
 // A fresh player runs every sequence of up to four events from the alphabet below, then a fixed
 // set of seeded longer sequences. The element's notifications are queued tasks that only a
@@ -1218,6 +1346,11 @@ describe("the player lives across pages", () => {
 //   - once no notification is waiting, the store tells the truth: it says playing or loading
 //     exactly when the element is not paused, and never while the listener has silenced it.
 //
+// Another sound's `play` notification is queued too (its `paused` flips at once), so an automatic
+// start can run while it waits: it must see the sound and stand down, never pause it. While that
+// notification waits, the preview that was already sounding may still sound (nothing has told
+// it), but nothing NEW may start.
+//
 // The OS pause is issued only before the clip reaches its end: once it has, the browser's own
 // end-of-clip pause is indistinguishable from it at the element (see `noticeUnrequestedPause`).
 
@@ -1227,10 +1360,11 @@ type Model = {
   answer?: (tracks: QueueTrack[]) => void;
   element: BrowserLikeAudio;
   outcome?: Promise<unknown>;
+  page: Page;
   radio: OtherMedia;
   radioPausesWhenSilenced: number;
   silenced: boolean;
-  start: (media: OtherMedia) => void;
+  srcWhenSilenced: string;
 };
 
 type ModelEvent = { name: string; run: (model: Model) => void | Promise<void> };
@@ -1242,6 +1376,7 @@ function pressed(model: Model): void {
 function silenced(model: Model): void {
   if (!model.silenced) {
     model.radioPausesWhenSilenced = model.radio.pauses;
+    model.srcWhenSilenced = model.element.src;
   }
 
   model.silenced = true;
@@ -1304,8 +1439,18 @@ const MODEL_EVENTS: readonly ModelEvent[] = [
     name: "another sound starts",
     run: (model) => {
       silenced(model);
-      model.radio.paused = true;
-      model.start(model.radio);
+      model.page.play(model.radio);
+    },
+  },
+  { name: "its play notification runs", run: (model) => void model.page.deliver() },
+  {
+    name: "the other sound finishes",
+    run: (model) => {
+      // A sound finishes only after its own play notification has run.
+      if (model.page.pending() === 0 && !model.radio.paused) {
+        model.radio.paused = true;
+        model.radio.ended = true;
+      }
     },
   },
   {
@@ -1402,11 +1547,17 @@ function* longInterleavings(count: number, length: number): Generator<ModelEvent
 }
 
 function modelViolation(model: Model): string | undefined {
-  const { element, radio } = model;
+  const { element, page, radio } = model;
   const { status } = readPlayer();
   const storeSounding = status === "playing" || status === "loading";
+  const otherNotified = page.pending() === 0;
+  const quiet = otherNotified && element.tasks.length === 0;
 
-  if (model.silenced && !element.paused) {
+  if (model.silenced && element.src !== "" && element.src !== model.srcWhenSilenced) {
+    return "a new preview started without a live intent";
+  }
+
+  if (model.silenced && otherNotified && !element.paused) {
     return "sound without a live intent";
   }
 
@@ -1414,15 +1565,15 @@ function modelViolation(model: Model): string | undefined {
     return "the preview silenced the other sound on its own";
   }
 
-  if (!radio.paused && !element.paused) {
+  if (otherNotified && !radio.paused && !element.paused) {
     return "two sounds at once";
   }
 
-  if (element.tasks.length === 0 && storeSounding !== !element.paused) {
+  if (quiet && storeSounding !== !element.paused) {
     return `the store says ${status} while the element is ${element.paused ? "paused" : "sounding"}`;
   }
 
-  if (element.tasks.length === 0 && model.silenced && storeSounding) {
+  if (quiet && model.silenced && storeSounding) {
     return `the store says ${status} after the listener silenced it`;
   }
 
@@ -1438,10 +1589,11 @@ async function runInterleaving(events: readonly ModelEvent[]): Promise<string | 
   const page = installPage([radio]);
   const model: Model = {
     element,
+    page,
     radio,
     radioPausesWhenSilenced: 0,
     silenced: false,
-    start: page.start,
+    srcWhenSilenced: "",
   };
 
   for (const [step, event] of events.entries()) {

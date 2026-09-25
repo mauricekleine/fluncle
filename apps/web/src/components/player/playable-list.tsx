@@ -56,7 +56,8 @@ export function PlayableList({
   // silent until they press play.
   useEffect(() => {
     if (tracks.length > 0 && claimPageContinuation(href)) {
-      playQueue(tracks, 0, { continuation: value.continuation });
+      // A continuation landing, not a press: it never silences another sound.
+      playQueue(tracks, 0, { continuation: value.continuation, origin: "automatic" });
     }
     // Only on arrival: a later re-render of the same page must never start the list again.
     // oxlint-disable-next-line react-hooks/exhaustive-deps

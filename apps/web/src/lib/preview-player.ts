@@ -27,6 +27,9 @@
 // ONE SOUND AT A TIME. Any other audible media element on the page (Stories, the
 // radio, a video someone unmutes) pauses the preview the moment it starts, and
 // the chrome pauses it on the way into a surface that never shows the bar.
+// Only the listener's own press takes the room back from another sound: the list
+// moving on by itself, or a continuation landing, yields to one already playing
+// and leaves the bar stopped.
 //
 // SOUND STARTS ONLY ON A LIVE INTENT. There are exactly three ways a preview starts: a press
 // (a row's cover, the bar, a key, the lock screen while the preview holds the session); the list
@@ -215,19 +218,37 @@ function errorName(error: unknown): string | undefined {
 }
 
 /**
+ * Who started a clip. `listener`: a press (a row, the bar, a key, the lock screen while the preview
+ * holds the session), which may silence any other sound. `automatic`: the list moving on by itself
+ * or a continuation landing later, which never silences anything and yields to a sound already
+ * playing (`otherMediaActive`).
+ */
+export type StartOrigin = "automatic" | "listener";
+
+/**
  * One play() attempt on the shared element. An interrupted attempt (a pause, a new source)
  * rejects with an AbortError: a cancellation the caller already handled, so it does nothing.
  * Autoplay refusal leaves the clip waiting, paused, for a tap. Anything else is a clip that
  * cannot play.
  */
-function attemptPlay(element: HTMLAudioElement, trackId: string | undefined): void {
+function attemptPlay(
+  element: HTMLAudioElement,
+  trackId: string | undefined,
+  origin: StartOrigin = "listener",
+): void {
   playAttempt += 1;
 
   const attempt = playAttempt;
   const token = loadToken;
 
   claimMediaSession();
-  silenceOtherMedia();
+
+  // Only the listener's own press takes the room from another sound. An automatic start (the list
+  // moving on, a continuation landing) has already checked that nothing else is sounding.
+  if (origin === "listener") {
+    silenceOtherMedia();
+  }
+
   element.play().catch((error: unknown) => {
     const name = errorName(error);
 
@@ -289,10 +310,10 @@ function onEnded(): void {
   }
 
   consecutiveMisses = 0;
-  advance();
+  advance("automatic");
 }
 
-function advance(): void {
+function advance(origin: StartOrigin = "listener"): void {
   if (!queue) {
     return;
   }
@@ -300,7 +321,13 @@ function advance(): void {
   const next = queue.index + 1;
 
   if (next < queue.tracks.length) {
-    playAt(next);
+    if (origin === "automatic" && otherMediaActive()) {
+      yieldToOtherMedia(next);
+
+      return;
+    }
+
+    playAt(next, origin);
 
     return;
   }
@@ -334,7 +361,7 @@ function failCurrent(token: number): void {
     consecutiveMisses += 1;
 
     if (consecutiveMisses < MAX_CONSECUTIVE_MISSES) {
-      advance();
+      advance("automatic");
 
       return;
     }
@@ -460,7 +487,11 @@ export function startPreview(trackId: string, options?: StartPreviewOptions): vo
   load(trackId, options);
 }
 
-function load(trackId: string, options?: StartPreviewOptions): void {
+function load(
+  trackId: string,
+  options?: StartPreviewOptions,
+  origin: StartOrigin = "listener",
+): void {
   pendingPublicPreview = shouldEmitDiscoveryPreview(options);
 
   const element = ensureAudio();
@@ -471,10 +502,10 @@ function load(trackId: string, options?: StartPreviewOptions): void {
   element.src = options?.src ?? previewProxyUrl(trackId);
   emit({ status: "loading", trackId });
   emitProgress(idleProgress);
-  attemptPlay(element, trackId);
+  attemptPlay(element, trackId, origin);
 }
 
-function playAt(index: number): void {
+function playAt(index: number, origin: StartOrigin = "listener"): void {
   if (!queue) {
     return;
   }
@@ -486,17 +517,19 @@ function playAt(index: number): void {
   }
 
   emitQueue({ ...queue, ended: false, index });
-  load(track.id, { publicPreview: true });
+  load(track.id, { publicPreview: true }, origin);
 }
 
 /**
  * Play a list from one of its rows: the list becomes the queue, in its own order, starting at
  * `startIndex`. Always a public preview — the rows that hand over a list are visitor controls.
+ * `origin: "automatic"` is a continuation landing (a next page claiming its hand-off): it never
+ * silences another sound, and the caller has checked that none is playing.
  */
 export function playQueue(
   tracks: QueueTrack[],
   startIndex: number,
-  options?: { continuation?: QueueContinuation },
+  options?: { continuation?: QueueContinuation; origin?: StartOrigin },
 ): void {
   if (tracks.length === 0) {
     return;
@@ -506,7 +539,7 @@ export function playQueue(
 
   consecutiveMisses = 0;
   emitQueue({ continuation: options?.continuation, ended: false, index, tracks });
-  load(tracks[index]?.id ?? "", { publicPreview: true });
+  load(tracks[index]?.id ?? "", { publicPreview: true }, options?.origin);
 }
 
 // The feed toggle: the same track playing → stop; anything else → start.
@@ -659,13 +692,21 @@ export async function keepGoing(options: {
     return "stale";
   }
 
+  // Another sound started while the archive answered (its own notification may not have run yet):
+  // the answer stands down, and the bar stays stopped at the end of its list.
+  if (otherMediaActive()) {
+    yieldToOtherMedia();
+
+    return "stale";
+  }
+
   const next = found.filter((track) => !heard.has(track.id));
 
   if (next.length === 0) {
     return "none";
   }
 
-  playQueue(next, 0, { continuation: { kind: "similar" } });
+  playQueue(next, 0, { continuation: { kind: "similar" }, origin: "automatic" });
 
   return "moved";
 }
@@ -684,12 +725,20 @@ export function claimPageContinuation(href: string): boolean {
 
   pendingPageContinuation = undefined;
 
-  return (
+  const honoured =
     handoff !== undefined &&
     handoff.generation === playbackGeneration &&
     Date.now() - handoff.at <= PAGE_HANDOFF_TTL_MS &&
-    samePath(handoff.href, href)
-  );
+    samePath(handoff.href, href);
+
+  // Another sound is already playing on the new page: the hand-off stands down.
+  if (honoured && otherMediaActive()) {
+    yieldToOtherMedia();
+
+    return false;
+  }
+
+  return honoured;
 }
 
 /**
@@ -864,6 +913,40 @@ function onOtherMedia(event: Event): void {
     // The other sound owns the lock screen and the headset buttons now; a stray Play there must
     // not bring the preview back over it.
     releaseMediaSession();
+  }
+}
+
+/**
+ * Whether another audible sound is live on the page RIGHT NOW, read off each element's own state
+ * (its `play` notification may still be queued behind the preview's own). Muted media (the log
+ * page's footage loop) is not a sound, the same rule the one-sound guard applies.
+ */
+function otherMediaActive(): boolean {
+  if (typeof document === "undefined" || typeof HTMLMediaElement === "undefined") {
+    return false;
+  }
+
+  return Array.from(document.querySelectorAll("audio, video")).some(
+    (element) =>
+      element instanceof HTMLMediaElement &&
+      element !== audio &&
+      !element.paused &&
+      !element.ended &&
+      !element.muted &&
+      element.volume > 0,
+  );
+}
+
+/**
+ * An automatic start found another sound playing: the preview does not start. The queue stops
+ * with its place kept (on the track that would have played next, when there is one), the pending
+ * intent lapses, and the bar waits, stopped, for the listener's own press.
+ */
+function yieldToOtherMedia(nextIndex?: number): void {
+  stop();
+
+  if (queue && nextIndex !== undefined) {
+    emitQueue({ ...queue, ended: false, index: nextIndex });
   }
 }
 
