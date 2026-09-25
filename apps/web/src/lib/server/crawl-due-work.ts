@@ -476,42 +476,6 @@ function projectionArgs(
   ];
 }
 
-export function upsertCrawlDueProjectionStatement(
-  projection: CrawlDueProjection,
-  options: { generation?: string; now?: Date | string } = {},
-): CrawlDueStatement {
-  const updatedAt = iso(options.now ?? new Date(), "crawl due-work update time");
-  const generation = options.generation ?? projection.generation ?? CRAWL_DUE_LIVE_GENERATION;
-  assertNonEmpty(projection.nodeId, "crawl node id");
-  assertNonEmpty(projection.sourceVersion, "crawl source version");
-
-  return {
-    args: projectionArgs(projection, generation, updatedAt),
-    sql: `insert into crawl_due_work
-      (node_id, node_kind, state, hop, demand_rank, created_at, storable_rank, next_due_at,
-       label_slug, parent_id, generation, source_version, updated_at)
-      values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      on conflict(node_id) do update set
-        node_kind = excluded.node_kind,
-        state = excluded.state,
-        hop = excluded.hop,
-        demand_rank = excluded.demand_rank,
-        created_at = excluded.created_at,
-        storable_rank = excluded.storable_rank,
-        next_due_at = excluded.next_due_at,
-        label_slug = excluded.label_slug,
-        parent_id = excluded.parent_id,
-        generation = excluded.generation,
-        source_version = excluded.source_version,
-        claim_expires_at = null,
-        claim_position = null,
-        claim_token = null,
-        claimed_by = null,
-        updated_at = excluded.updated_at,
-        repair_entered_at = null`,
-  };
-}
-
 export function markCrawlProjectionRepairStatement(
   sourceType: "artist" | "label",
   sourceId: string,
@@ -699,75 +663,6 @@ async function readCrawlSourceChunk(
 ): Promise<CrawlSourceSqlRow[]> {
   const result = await client.execute(crawlSourceChunkStatement(options));
   return result.rows as unknown as CrawlSourceSqlRow[];
-}
-
-async function readCrawlSourceNode(
-  client: CrawlDueClient,
-  nodeId: string,
-): Promise<CrawlSourceSqlRow | undefined> {
-  const result = await client.execute({
-    args: [nodeId],
-    sql: `select ${CRAWL_SOURCE_COLUMNS}
-      ${CRAWL_SOURCE_FROM}
-      where cf.id = ? limit 1`,
-  });
-  return result.rows[0] as unknown as CrawlSourceSqlRow | undefined;
-}
-
-/** Re-evaluate one physical marker from authoritative frontier, label, and artist-rule state. */
-export async function repairCrawlDueNode(
-  client: CrawlDueClient,
-  nodeId: string,
-  options: { now?: () => Date } = {},
-): Promise<boolean> {
-  const markerResult = await client.execute({
-    args: [nodeId],
-    sql: `select ${CRAWL_DUE_COLUMNS} from crawl_due_work
-      where node_id = ? and state = 'repair' limit 1`,
-  });
-  const markerRow = markerResult.rows[0] as unknown as CrawlDueSqlRow | undefined;
-  if (markerRow === undefined) {
-    return false;
-  }
-  const marker = crawlDueRow(markerRow);
-  const source = await readCrawlSourceNode(client, nodeId);
-  const projection = source === undefined ? null : projectCrawlSource(source);
-  const updatedAt = nowIso(options.now);
-  const statement: CrawlDueStatement =
-    projection === null
-      ? {
-          args: [nodeId, marker.sourceVersion],
-          sql: `delete from crawl_due_work
-            where node_id = ? and state = 'repair' and source_version = ?`,
-        }
-      : {
-          args: [
-            ...projectionArgs(projection, CRAWL_DUE_LIVE_GENERATION, updatedAt),
-            marker.sourceVersion,
-          ],
-          sql: `insert into crawl_due_work
-            (node_id, node_kind, state, hop, demand_rank, created_at, storable_rank, next_due_at,
-             label_slug, parent_id, generation, source_version, updated_at)
-            select ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
-            where exists (
-              select 1 from crawl_due_work
-              where node_id = ?1 and state = 'repair' and source_version = ?14
-            )
-            on conflict(node_id) do update set
-              node_kind = excluded.node_kind, state = excluded.state, hop = excluded.hop,
-              demand_rank = excluded.demand_rank, created_at = excluded.created_at,
-              storable_rank = excluded.storable_rank, next_due_at = excluded.next_due_at,
-              label_slug = excluded.label_slug, parent_id = excluded.parent_id,
-              generation = excluded.generation, source_version = excluded.source_version,
-              claim_expires_at = null, claim_position = null, claim_token = null,
-              claimed_by = null, updated_at = excluded.updated_at,
-              repair_entered_at = null`,
-        };
-  const results = await client.batch(
-    [statement, advanceProjectionFenceStatement(CRAWL_DUE_AUDIT_FENCE_KEY)],
-    "write",
-  );
-  return (results[0]?.rowsAffected ?? 0) > 0;
 }
 
 export async function repairCrawlDueNodes(
@@ -1379,19 +1274,6 @@ export async function claimCrawlDueWork(
     promoted: promotion.promoted,
     reaped,
   };
-}
-
-export async function completeCrawlDueClaim(
-  client: CrawlDueClient,
-  nodeId: string,
-  claimToken: string,
-): Promise<boolean> {
-  const result = await client.execute({
-    args: [nodeId, claimToken],
-    sql: `delete from crawl_due_work
-      where node_id = ? and state = 'leased' and claim_token = ?`,
-  });
-  return result.rowsAffected > 0;
 }
 
 export async function readProjectedCrawlSelection(

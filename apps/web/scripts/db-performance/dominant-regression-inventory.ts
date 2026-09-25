@@ -208,8 +208,7 @@ export const DOMINANT_REGRESSION_INVENTORY = freezeInventory([
       },
       {
         file: "apps/web/src/lib/server/public-projections.integration.test.ts",
-        marker:
-          "reads literal year/key buckets and projection indexes without a source scan or temp sort",
+        marker: "reads projected buckets and served hub pages without a source scan or temp sort",
       },
     ],
   },

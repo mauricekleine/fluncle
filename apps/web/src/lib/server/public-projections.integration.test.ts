@@ -8,7 +8,8 @@ import {
   PUBLIC_PROJECTION_CUTOVER_ENABLED_KEY,
   readProjectedAggregateBuckets,
   readProjectedDefaultTrackTotal,
-  readProjectedTrackHubAnchors,
+  readProjectedTrackHubPageStart,
+  readStoredTrackHubAnchorsForAudit,
   readQualifiedArtistIds,
   type PublicProjectionReadClient,
 } from "./public-projection-cutover";
@@ -22,7 +23,6 @@ import {
   publicTrackSourceVersion,
   rebuildDefaultTrackHubAnchors,
   rebuildPublicProjection,
-  repairPublicAggregateTrack,
   repairPublicProjectionChunk,
   runPublicProjectionRebuildChunk,
   shadowPublicProjections,
@@ -403,8 +403,12 @@ describe("public shadow projections", () => {
       "primary",
     ]);
     expect(
-      await readProjectedTrackHubAnchors(db, TRACKS_HUB_ANCHOR_ADDRESS, TRACKS_HUB_PAGE_SIZE),
-    ).toEqual({ anchors: [], total: 4 });
+      await readStoredTrackHubAnchorsForAudit(db, TRACKS_HUB_ANCHOR_ADDRESS, TRACKS_HUB_PAGE_SIZE),
+    ).toMatchObject({ anchors: [], total: 4 });
+    expect(
+      (await readProjectedTrackHubPageStart(db, TRACKS_HUB_ANCHOR_ADDRESS, TRACKS_HUB_PAGE_SIZE, 1))
+        ?.total,
+    ).toBe(4);
 
     await db.execute(`update artist_qualification_state
       set state = 'running', completed_at = null, source_digest = null, projected_digest = null
@@ -464,7 +468,7 @@ describe("public shadow projections", () => {
       sql: `delete from hub_page_anchor_validity where hub = ? and clause_hash = ?`,
     });
     expect(
-      await readProjectedTrackHubAnchors(db, TRACKS_HUB_ANCHOR_ADDRESS, TRACKS_HUB_PAGE_SIZE),
+      await readProjectedTrackHubPageStart(db, TRACKS_HUB_ANCHOR_ADDRESS, TRACKS_HUB_PAGE_SIZE, 1),
     ).toBeUndefined();
 
     await rebuildDefaultTrackHubAnchors(db, { generation: "aggregate-a", now: () => NOW });
@@ -475,7 +479,7 @@ describe("public shadow projections", () => {
         where hub = ? and clause_hash = ?`,
     });
     expect(
-      await readProjectedTrackHubAnchors(db, TRACKS_HUB_ANCHOR_ADDRESS, TRACKS_HUB_PAGE_SIZE),
+      await readProjectedTrackHubPageStart(db, TRACKS_HUB_ANCHOR_ADDRESS, TRACKS_HUB_PAGE_SIZE, 1),
     ).toBeUndefined();
 
     await rebuildDefaultTrackHubAnchors(db, { generation: "aggregate-a", now: () => NOW });
@@ -485,7 +489,7 @@ describe("public shadow projections", () => {
         where hub = ? and clause_hash = ?`,
     });
     expect(
-      await readProjectedTrackHubAnchors(db, TRACKS_HUB_ANCHOR_ADDRESS, TRACKS_HUB_PAGE_SIZE),
+      await readProjectedTrackHubPageStart(db, TRACKS_HUB_ANCHOR_ADDRESS, TRACKS_HUB_PAGE_SIZE, 1),
     ).toBeUndefined();
 
     await rebuildDefaultTrackHubAnchors(db, { generation: "aggregate-a", now: () => NOW });
@@ -495,7 +499,7 @@ describe("public shadow projections", () => {
         where hub = ? and clause_hash = ?`,
     });
     expect(
-      await readProjectedTrackHubAnchors(db, TRACKS_HUB_ANCHOR_ADDRESS, TRACKS_HUB_PAGE_SIZE),
+      await readProjectedTrackHubPageStart(db, TRACKS_HUB_ANCHOR_ADDRESS, TRACKS_HUB_PAGE_SIZE, 1),
     ).toBeUndefined();
 
     await rebuildDefaultTrackHubAnchors(db, { generation: "aggregate-a", now: () => NOW });
@@ -506,11 +510,11 @@ describe("public shadow projections", () => {
     });
     expect(await readProjectedDefaultTrackTotal(db)).toBe(4);
     expect(
-      await readProjectedTrackHubAnchors(db, TRACKS_HUB_ANCHOR_ADDRESS, TRACKS_HUB_PAGE_SIZE),
+      await readProjectedTrackHubPageStart(db, TRACKS_HUB_ANCHOR_ADDRESS, TRACKS_HUB_PAGE_SIZE, 1),
     ).toBeUndefined();
   });
 
-  it("reads literal year/key buckets and projection indexes without a source scan or temp sort", async () => {
+  it("serves literal key buckets ascending and release-year buckets newest-first", async () => {
     await seedProjectionWorld();
     await rebuildAll();
     await setCutover("true");
@@ -525,6 +529,12 @@ describe("public shadow projections", () => {
       { bucket: "C minor", count: 1 },
       { bucket: "wat", count: 1 },
     ]);
+  });
+
+  it("reads projected buckets and served hub pages without a source scan or temp sort", async () => {
+    await seedBulkProjectionWorld(TRACKS_HUB_PAGE_SIZE + 1);
+    await rebuildAll();
+    await setCutover("true");
 
     const statements: Array<{ args: InValue[]; sql: string }> = [];
     const traced: PublicProjectionReadClient = {
@@ -542,7 +552,22 @@ describe("public shadow projections", () => {
     };
     await readProjectedAggregateBuckets(traced, "key");
     await readQualifiedArtistIds(traced, QUALIFIED_ARTISTS_SQL);
-    await readProjectedTrackHubAnchors(traced, TRACKS_HUB_ANCHOR_ADDRESS, TRACKS_HUB_PAGE_SIZE);
+    expect(
+      await readProjectedTrackHubPageStart(
+        traced,
+        TRACKS_HUB_ANCHOR_ADDRESS,
+        TRACKS_HUB_PAGE_SIZE,
+        1,
+      ),
+    ).toMatchObject({ total: TRACKS_HUB_PAGE_SIZE + 1 });
+    expect(
+      await readProjectedTrackHubPageStart(
+        traced,
+        TRACKS_HUB_ANCHOR_ADDRESS,
+        TRACKS_HUB_PAGE_SIZE,
+        2,
+      ),
+    ).toMatchObject({ total: TRACKS_HUB_PAGE_SIZE + 1 });
 
     for (const statement of statements.filter(
       ({ sql }) => !sql.includes("from settings") && !sql.includes("select artist_id from ("),
@@ -704,9 +729,13 @@ describe("public shadow projections", () => {
       },
       execute: db.execute.bind(db),
     };
-    expect(await repairPublicAggregateTrack(racingClient, "track-empty", { now: () => NOW })).toBe(
-      false,
-    );
+    expect(
+      await repairPublicProjectionChunk(racingClient, {
+        limit: 1,
+        now: () => NOW,
+        projection: "public_aggregates",
+      }),
+    ).toEqual({ fanout: 0, repaired: 0 });
     expect(
       (
         await db.execute(`select source_version from projection_repairs
@@ -915,10 +944,12 @@ describe("public shadow projections", () => {
             "write",
           );
           expect(
-            await repairPublicAggregateTrack(db, "aggregate-gap", {
+            await repairPublicProjectionChunk(db, {
+              limit: 1,
               now: () => new Date(liveAt),
+              projection: "public_aggregates",
             }),
-          ).toBe(true);
+          ).toEqual({ fanout: 0, repaired: 1 });
         }
         return db.batch(statements, mode);
       },
@@ -1104,10 +1135,12 @@ describe("public shadow projections", () => {
             "write",
           );
           expect(
-            await repairPublicAggregateTrack(db, "aggregate-delete-gap", {
+            await repairPublicProjectionChunk(db, {
+              limit: 1,
               now: () => new Date("2026-01-10T00:00:00.000Z"),
+              projection: "public_aggregates",
             }),
-          ).toBe(true);
+          ).toEqual({ fanout: 0, repaired: 1 });
         }
         return db.batch(statements, mode);
       },

@@ -7,7 +7,6 @@ import {
   clearDueWorkSourceRepairStatement,
   claimDueWork,
   compareDueWorkRows,
-  deleteDueWork,
   DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID,
   DUE_WORK_LIVE_GENERATION,
   DUE_WORK_SOURCE_REPAIR_KIND,
@@ -16,7 +15,6 @@ import {
   DUE_WORK_READY_SCAN_CAP,
   DUE_WORK_READY_SCAN_MULTIPLE,
   dueWorkReadyScanWindow,
-  hasReadyDueWork,
   listReadyDueWork,
   listServableDueWork,
   MAX_DUE_WORK_CHUNK_SIZE,
@@ -71,7 +69,6 @@ function ready(
 
 describe("due-work ready reads and leases", () => {
   it("reads an empty queue and returns ordered limit-plus-one pages without a count scan", async () => {
-    expect(await hasReadyDueWork(db, "sample-ready")).toBe(false);
     expect(await listReadyDueWork(db, "sample-ready", { limit: 2 })).toEqual({
       hasMore: false,
       items: [],
@@ -96,14 +93,6 @@ describe("due-work ready reads and leases", () => {
     const page = await listReadyDueWork(db, "sample-ready", { limit: 2 });
     expect(page.items.map((item) => item.subjectId)).toEqual(["track-a", "track-b"]);
     expect(page.hasMore).toBe(true);
-    expect(await hasReadyDueWork(db, "sample-ready")).toBe(true);
-    expect(
-      await deleteDueWork(db, {
-        subjectId: "track-c",
-        subjectType: "track",
-        workKind: "sample-ready",
-      }),
-    ).toBe(true);
   });
 
   it("atomically separates two claimers, hides leases, and reclaims only after expiry", async () => {
@@ -628,7 +617,10 @@ describe("due-work repair and drift", () => {
       },
       { now: T0 },
     );
-    expect(await hasReadyDueWork(db, "repair-kind")).toBe(false);
+    expect(await listReadyDueWork(db, "repair-kind", { limit: 1 })).toEqual({
+      hasMore: false,
+      items: [],
+    });
     expect(
       (
         await db.execute(`select repair_entered_at from due_work

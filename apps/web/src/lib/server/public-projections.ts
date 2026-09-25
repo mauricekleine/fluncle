@@ -417,69 +417,6 @@ function assertProjectionSourceEpochFence(
   }
 }
 
-async function readTrackProjectionSource(
-  client: PublicProjectionClient,
-  trackId: string,
-): Promise<TrackProjectionSource | undefined> {
-  const result = await client.execute({
-    args: [trackId],
-    sql: `select track_id, release_date, substr(release_date, 1, 4) as release_date_bucket,
-             key as key_bucket
-      from tracks where track_id = ? limit 1`,
-  });
-  const row = result.rows[0] as
-    | {
-        key_bucket: null | string;
-        release_date: null | string;
-        release_date_bucket: null | string;
-        track_id: string;
-      }
-    | undefined;
-  return row === undefined
-    ? undefined
-    : {
-        keyBucket: row.key_bucket,
-        releaseDate: row.release_date,
-        releaseDateBucket: row.release_date_bucket,
-        sourceVersion: publicTrackSourceVersion({
-          key: row.key_bucket,
-          releaseDate: row.release_date,
-        }),
-        trackId: row.track_id,
-      };
-}
-
-async function readAggregateMembership(
-  client: PublicProjectionClient,
-  trackId: string,
-): Promise<AggregateMembership | undefined> {
-  const result = await client.execute({
-    args: [trackId],
-    sql: `select track_id, release_date_bucket, key_bucket, generation, source_version, updated_at
-      from public_aggregate_membership where track_id = ? limit 1`,
-  });
-  const row = result.rows[0] as
-    | {
-        generation: string;
-        key_bucket: null | string;
-        release_date_bucket: null | string;
-        source_version: string;
-        track_id: string;
-        updated_at: string;
-      }
-    | undefined;
-  return row === undefined
-    ? undefined
-    : {
-        generation: row.generation,
-        keyBucket: row.key_bucket,
-        releaseDateBucket: row.release_date_bucket,
-        sourceVersion: row.source_version,
-        trackId: row.track_id,
-        updatedAt: row.updated_at,
-      };
-}
-
 function selectedTrackCte(trackIds: readonly string[]): {
   args: string[];
   sql: string;
@@ -620,30 +557,6 @@ function cleanAggregateEpochStatement(updatedAt: string): PublicProjectionStatem
           updated_at = ?
       where scope = 'tracks'`,
   };
-}
-
-async function repairPublicAggregateTrackProjection(
-  client: PublicProjectionClient,
-  trackId: string,
-  options: {
-    expectedSourceEpoch?: number;
-    generation: string;
-    guard?: ReturnType<typeof markerGuard>;
-    marker?: ProjectionRepairMarker;
-    now: string;
-    preserveAfter?: string;
-  },
-): Promise<boolean> {
-  const [source, old] = await Promise.all([
-    readTrackProjectionSource(client, trackId),
-    readAggregateMembership(client, trackId),
-  ]);
-  const writes = publicAggregateTrackProjectionStatements(trackId, source, old, options);
-  if (writes === undefined) {
-    return false;
-  }
-  const results = await client.batch(writes, "write");
-  return options.marker === undefined || (results.at(-2)?.rowsAffected ?? 0) > 0;
 }
 
 function appendAggregateSourceStatements(
@@ -842,23 +755,6 @@ function publicAggregateTrackProjectionStatements(
     writes.push(cleanAggregateEpochStatement(options.now));
   }
   return writes;
-}
-
-export async function repairPublicAggregateTrack(
-  client: PublicProjectionClient,
-  trackId: string,
-  options: { now?: () => Date } = {},
-): Promise<boolean> {
-  const marker = await readRepairMarker(client, "public_aggregates", "track", trackId);
-  if (marker === undefined) {
-    return false;
-  }
-  return repairPublicAggregateTrackProjection(client, trackId, {
-    generation: PUBLIC_PROJECTION_LIVE_GENERATION,
-    guard: markerGuard(marker),
-    marker,
-    now: nowIso(options.now),
-  });
 }
 
 async function readTrackArtistContributions(
