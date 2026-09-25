@@ -70,8 +70,7 @@ test("Dave follows a label with one email and lands signed in, following it", as
 
   const following = page.getByRole("button", {
     exact: true,
-    name: `Follow ${label.name}`,
-    pressed: true,
+    name: `Following ${label.name}`,
   });
 
   await expect(following).toBeVisible({ timeout: 30_000 });
@@ -88,12 +87,10 @@ test("Dave follows a label with one email and lands signed in, following it", as
   const followArtist = page.getByRole("button", {
     exact: true,
     name: `Follow ${artist.name}`,
-    pressed: false,
   });
   const followingArtist = page.getByRole("button", {
     exact: true,
-    name: `Follow ${artist.name}`,
-    pressed: true,
+    name: `Following ${artist.name}`,
   });
 
   await expect(async () => {

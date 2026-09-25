@@ -107,7 +107,7 @@ test("Dave follows an artist with one email and gets the Friday digest, once, an
 
   await page.goto(link, { waitUntil: "networkidle" });
   await expect(
-    page.getByRole("button", { exact: true, name: `Follow ${ARTIST.name}`, pressed: true }),
+    page.getByRole("button", { exact: true, name: `Following ${ARTIST.name}` }),
   ).toBeVisible({ timeout: 30_000 });
 
   const first = await sendDigests(page.request);

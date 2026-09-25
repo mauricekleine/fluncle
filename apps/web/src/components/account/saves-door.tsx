@@ -525,7 +525,11 @@ function FollowingSection({
       <h2>Following</h2>
       <ListEmpty
         items={follows}
-        empty="Not following anyone yet. Tap Follow on an artist or label and I'll email you their new releases every Friday."
+        empty={
+          subscribed
+            ? "Not following anyone yet. Tap Follow on an artist or label and I'll email you their new releases every Friday."
+            : "Not following anyone. Tap Follow on an artist or label and they show up here."
+        }
       >
         {follows.map((follow) => (
           <FollowRow
@@ -577,7 +581,9 @@ function FollowRow({
       method: "DELETE",
     });
 
-    setMessage(response.ok ? "" : "Could not unfollow that. Try again in a moment.");
+    setMessage(
+      response.ok ? "" : `I couldn't unfollow ${follow.name} just now. Try again in a moment.`,
+    );
     await refresh();
   }
 

@@ -177,7 +177,7 @@ export function FollowButton({
         setFace("following");
         setNote(followingNote(name, body.followsEmail !== false));
       } else if (response) {
-        setNote("Could not follow right now. Try again in a moment.");
+        setNote(`I couldn't follow ${name} just now. Try again in a moment.`);
       }
     } finally {
       setBusy(false);
@@ -202,7 +202,7 @@ export function FollowButton({
         setFace("not-following");
         setNote(`Unfollowed ${name}.`);
       } else if (response) {
-        setNote("Could not unfollow right now. Try again in a moment.");
+        setNote(`I couldn't unfollow ${name} just now. Try again in a moment.`);
       }
     } finally {
       setBusy(false);
@@ -255,8 +255,7 @@ export function FollowButton({
       ) : (
         <Button
           aria-disabled={busy || face === "loading"}
-          aria-label={`Follow ${name}`}
-          aria-pressed={following}
+          aria-label={`${label} ${name}`}
           className="shrink-0"
           onClick={() => void (following ? unfollow() : follow())}
           size="sm"

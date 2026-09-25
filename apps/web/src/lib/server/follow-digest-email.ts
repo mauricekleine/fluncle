@@ -49,7 +49,7 @@ export function renderFollowDigestEmail(input: {
     const cover = item.coverUrl
       ? `<a href="${href}" style="color:#b7ab95;font-size:11px;text-decoration:none"><img src="${safeHttpsUrl(item.coverUrl)}" alt="Cover for ${title}" width="64" height="64" style="width:64px;height:64px;object-fit:cover;border-radius:4px;display:block;color:#b7ab95;font-size:11px"></a>`
       : "";
-    return `<tr><td width="64" style="width:64px;padding:10px 12px 10px 0;vertical-align:top">${cover}</td><td style="padding:10px 0;vertical-align:top"><a href="${href}" style="color:#f4ead7;font-weight:700;text-decoration:none">${title}</a><div style="color:#f4ead7">${artists}</div><div style="color:#b7ab95;font-size:13px">${because}</div></td></tr>`;
+    return `<tr><td width="64" style="width:64px;padding:10px 12px 10px 0;vertical-align:top">${cover}</td><td style="padding:10px 0;vertical-align:top"><a href="${href}" style="color:#f4ead7;font-weight:700;text-decoration:none">${artists} — ${title}</a><div style="color:#b7ab95;font-size:13px">${because}</div></td></tr>`;
   });
   const moreHtml = input.more
     ? `<p><a href="https://www.fluncle.com/fresh" style="color:#f5b800">${escapeFollowDigestHtml(followDigestCopy.more)}</a></p>`

@@ -75,7 +75,7 @@ async function digestRequest(path: string, method: "DELETE" | "POST"): Promise<b
 }
 
 const COPY = {
-  done: "Done, no more follows email. You still follow everyone, and you can switch it back on here or from your account.",
+  done: "Done, no more follows email. You still follow everyone, and you can switch it back on from your account.",
   emailHeading: "Follows email",
   emailOff: "Off. You still follow everyone below.",
   emailOn: "On. I send it on Fridays when there's something new, and skip the weeks there isn't.",
@@ -148,6 +148,16 @@ function StopEmail({ token }: { token: string }) {
       <p aria-live="polite" className="account-muted">
         {phase === "done" ? COPY.done : COPY.prompt}
       </p>
+      {phase === "done" ? (
+        <Button
+          className="self-start"
+          nativeButton={false}
+          render={<Link to="/account" />}
+          variant="outline"
+        >
+          Go to your account
+        </Button>
+      ) : null}
       {subscribed ? (
         <Button
           aria-disabled={phase === "working"}
