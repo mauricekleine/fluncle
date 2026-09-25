@@ -22,6 +22,7 @@ vi.mock("./db", async (importOriginal) => {
 });
 
 import { createIntegrationDb } from "./integration-db";
+import { listFreshTracks } from "./fresh";
 import { listArtistFreshTracks, listLabelFreshTracks } from "./fresh-entity";
 
 // A fixed clock so the window boundaries are deterministic. Relative to this NOW:
@@ -88,6 +89,31 @@ beforeEach(async () => {
 });
 
 describe("listArtistFreshTracks", () => {
+  it("agrees with the whole fresh list on a month-precision release at month end", async () => {
+    const now = new Date("2026-07-31T12:00:00.000Z");
+    await seedArtist("art_a", "Camo & Krooked", "camo-and-krooked");
+    await seedLabel("lab_a", "Hospital Records", "hospital-records");
+    await seedTrack({
+      artistIds: ["art_a"],
+      artists: ["Camo & Krooked"],
+      labelId: "lab_a",
+      releaseDate: "2026-07",
+      trackId: "month_precision",
+    });
+
+    expect((await listFreshTracks({ now })).tracks.map((track) => track.title)).toContain(
+      "Title month_precision",
+    );
+    expect(
+      (await listArtistFreshTracks("camo-and-krooked", { now }))?.tracks.map(
+        (track) => track.title,
+      ),
+    ).toContain("Title month_precision");
+    expect(
+      (await listLabelFreshTracks("hospital-records", { now }))?.tracks.map((track) => track.title),
+    ).toContain("Title month_precision");
+  });
+
   it("returns only the artist's own fresh tracks, split lit/unlit, newest first", async () => {
     await seedArtist("art_a", "Camo & Krooked", "camo-and-krooked");
     await seedArtist("art_b", "Someone Else", "someone-else");

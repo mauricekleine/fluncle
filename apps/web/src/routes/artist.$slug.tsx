@@ -22,7 +22,7 @@ import {
   CatalogueRecords,
   CatalogueSortControl,
 } from "@/components/catalogue-groups";
-import { FindingsGrid } from "@/components/graph-sections";
+import { FindingsGrid, UnlitTracks } from "@/components/graph-sections";
 import { GraphLink } from "@/components/graph-link";
 import { StoryNotFoundState } from "@/components/stories/stories-states";
 import { WatchButton } from "@/components/watch-button";
@@ -33,7 +33,7 @@ import { jsonLdScript } from "@/lib/json-ld";
 import { artistBreadcrumbsJsonLd, musicGroupJsonLd } from "@/lib/log-schema";
 import { bioMetaDescription } from "@/lib/meta-description";
 import { albumCoverAtSize } from "@/lib/media";
-import { type CatalogueSort, cataloguePageHref, catalogueSortParam } from "@/lib/catalogue";
+import { type CatalogueSort, catalogueSortParam, entityPageHref } from "@/lib/catalogue";
 import { pageParam } from "@/lib/search-params";
 import { type ArtistPageData, type ArtistSocialLink } from "./-artist-page-data";
 
@@ -83,11 +83,13 @@ const SOCIAL_LABEL: Record<ArtistSocialPlatform, string> = {
 // The resolver arrives by a DYNAMIC import inside the handler, and its types by `import type`,
 // so this route module never statically references `lib/server/**` — see `-artist-page-data.ts`.
 const fetchArtist = createServerFn({ method: "GET" })
-  .validator((data: { page: number; slug: string; sort: CatalogueSort }) => data)
-  .handler(async ({ data: { page, slug, sort } }): Promise<ArtistPageData> => {
+  .validator(
+    (data: { page: number; slug: string; sort: CatalogueSort; upcomingPage: number }) => data,
+  )
+  .handler(async ({ data: { page, slug, sort, upcomingPage } }): Promise<ArtistPageData> => {
     const { resolveArtistPageData } = await import("./-artist-page-data");
 
-    return resolveArtistPageData(slug, sort, page);
+    return resolveArtistPageData(slug, sort, page, upcomingPage);
   });
 
 function artistHead(loaderData: ArtistPageData | undefined) {
@@ -99,6 +101,7 @@ function artistHead(loaderData: ArtistPageData | undefined) {
     alternateNames,
     bio,
     catalogue,
+    upcoming,
     findings,
     imageUrl: artistImageUrl,
     indexable,
@@ -114,10 +117,13 @@ function artistHead(loaderData: ArtistPageData | undefined) {
   // Self-referencing PER PAGE, sort-collapsing (the label page carries the long note): page 2
   // is its own canonical, but the sort param always drops so order-variants of one page fold to
   // one URL. Page 1 stays the bare `/artist/<slug>`.
-  const pageUrl =
-    catalogue.page > 1
-      ? `${siteUrl}/artist/${slug}?page=${catalogue.page}`
-      : `${siteUrl}/artist/${slug}`;
+  const pageUrl = entityPageHref(
+    `${siteUrl}/artist/${slug}`,
+    catalogue.page,
+    ARTIST_CATALOGUE_SORT_DEFAULT,
+    ARTIST_CATALOGUE_SORT_DEFAULT,
+    upcoming.page,
+  );
   // The <title>/meta stay honestly-plain third-person (the Narrator rule); the
   // first person lives only in the on-page voice frame.
   const baseTitle = `${name} · Fluncle`;
@@ -249,6 +255,7 @@ export const Route = createFileRoute("/artist/$slug")({
   validateSearch: (search: Record<string, unknown>): ArtistSearch => ({
     page: pageParam(search["page"]),
     sort: catalogueSortParam(search["sort"]),
+    upcomingPage: pageParam(search["upcomingPage"]),
   }),
   // Defaults land HERE, so the loader always gets a real page + sort while the URL keeps them
   // implicit (a bare `/artist/<slug>` is the canonical, crawlable view). `validateSearch` has
@@ -257,10 +264,16 @@ export const Route = createFileRoute("/artist/$slug")({
   loaderDeps: ({ search }) => ({
     page: search.page ?? 1,
     sort: search.sort ?? ARTIST_CATALOGUE_SORT_DEFAULT,
+    upcomingPage: search.upcomingPage ?? 1,
   }),
   loader: async ({ deps, params }): Promise<ArtistPageData> => {
     const data = await fetchArtist({
-      data: { page: deps.page, slug: params.slug, sort: deps.sort },
+      data: {
+        page: deps.page,
+        slug: params.slug,
+        sort: deps.sort,
+        upcomingPage: deps.upcomingPage,
+      },
     });
 
     if (data.status === "missing") {
@@ -276,7 +289,7 @@ export const Route = createFileRoute("/artist/$slug")({
 
 // Both params OPTIONAL, so a plain `<Link to="/artist/$slug">` anywhere still type-checks with
 // no `search` prop (the `HomeSearch.story?` precedent).
-type ArtistSearch = { page?: number; sort?: CatalogueSort };
+type ArtistSearch = { page?: number; sort?: CatalogueSort; upcomingPage?: number };
 
 function SocialLink({ social }: { social: ArtistSocialLink }) {
   const label = SOCIAL_LABEL[social.platform];
@@ -301,7 +314,8 @@ function ArtistPage() {
     return null;
   }
 
-  const { bio, catalogue, dossier, findings, id, imageUrl, name, slug, socials, sort } = data;
+  const { bio, catalogue, dossier, findings, id, imageUrl, name, slug, socials, sort, upcoming } =
+    data;
 
   return (
     <main className="log-plate-stage">
@@ -337,6 +351,32 @@ function ArtistPage() {
             exactly as a crawler-discovered label's does (graph-sections.tsx header: a page with no
             findings is a page about something else). Socials and kin follow. */}
         <FindingsGrid findings={findings} />
+
+        {/* Upcoming: releases with a date still ahead, held off the newest-first surfaces until
+            their day. It follows the findings lead, never above it. */}
+        {upcoming.total > 0 ? (
+          <section aria-labelledby="artist-upcoming-heading" className="catalogue-section">
+            <h2 className="artist-similar-label" id="artist-upcoming-heading">
+              Upcoming
+            </h2>
+            <FindingsGrid findings={upcoming.findings} label="Upcoming findings" />
+            <UnlitTracks label="Upcoming tracks" tracks={upcoming.tracks} />
+            <CataloguePager
+              buildHref={(nextPage) =>
+                entityPageHref(
+                  `/artist/${slug}`,
+                  catalogue.page,
+                  sort,
+                  ARTIST_CATALOGUE_SORT_DEFAULT,
+                  nextPage,
+                )
+              }
+              label="Upcoming, more pages"
+              page={upcoming.page}
+              pageCount={upcoming.pageCount}
+            />
+          </section>
+        ) : undefined}
 
         {socials.length > 0 ? (
           <nav aria-label={`Follow ${name}`} className="artist-follow">
@@ -418,7 +458,13 @@ function ArtistPage() {
 
             <CataloguePager
               buildHref={(page) =>
-                cataloguePageHref(`/artist/${slug}`, page, sort, ARTIST_CATALOGUE_SORT_DEFAULT)
+                entityPageHref(
+                  `/artist/${slug}`,
+                  page,
+                  sort,
+                  ARTIST_CATALOGUE_SORT_DEFAULT,
+                  upcoming.page,
+                )
               }
               label={`More from ${name}, more pages`}
               page={catalogue.page}

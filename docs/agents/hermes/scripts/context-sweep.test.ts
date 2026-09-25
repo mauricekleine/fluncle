@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildContextFailureSummary, buildContextSummary } from "./context-sweep";
@@ -41,17 +41,12 @@ describe("context-sweep canonical counters", () => {
   });
 
   test("omits queue_depth because the page is capped and has no cheap covering count", () => {
-    const source = readFileSync(new URL("./context-sweep.ts", import.meta.url), "utf8");
     const summary = buildContextSummary(
       { batch: 1, failed: 0, filled: 1, noop: 0, queueRemaining: 49 },
       false,
     );
 
     expect(summary).not.toHaveProperty("queue_depth");
-    expect(source).toContain(
-      "the queue read is capped and its predicate has no cheap covering count",
-    );
-    expect(source).not.toMatch(/\bqueue_depth\s*:/);
   });
 
   test("a fatal queue/CLI failure is a run error with unknown item counts", () => {

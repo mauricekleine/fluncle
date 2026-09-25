@@ -17,7 +17,6 @@ import {
 import {
   ARTIST_INDEX_MIN_FINDINGS,
   type ArtistSocialLink,
-  countArtistFindings,
   getPublicArtistBySlug,
   getPublicArtistAliasNames,
   getPublicArtistSocials,
@@ -27,8 +26,10 @@ import {
   type CatalogueGroupPage,
   type CatalogueRecord,
   type CatalogueSort,
+  type UpcomingTrackPage,
 } from "@/lib/catalogue";
-import { listArtistCatalogue } from "@/lib/server/catalogue-groups";
+import { listArtistCatalogue, listArtistUpcoming } from "@/lib/server/catalogue-groups";
+import { releaseTodayUtc } from "@/lib/server/release-day";
 import { getFindingsByArtist, type TrackListItem } from "@/lib/server/tracks";
 
 // The socials row's shape travels with the page data, so the route renders it without
@@ -57,6 +58,7 @@ export type ArtistPageData =
       catalogue: CatalogueGroupPage<CatalogueRecord>;
       dossier: ArtistDossier;
       findings: TrackListItem[];
+      upcoming: UpcomingTrackPage;
       // The artist's OWN portrait (owned avatar master, else Spotify image), or undefined. Preferred
       // for og:image + the MusicGroup's `image`, and rendered in the masthead. Falls back to the
       // freshest finding's album cover only when the artist carries no avatar of their own.
@@ -84,25 +86,26 @@ export type ArtistPageData =
 // label/album does: a `getPublicArtistBySlug` row renders, and the thin-content gate below (not a
 // certified-finding gate) decides whether it indexes. The grid's `findings` come from
 // `getFindingsByArtist` (which has an `artists_json` fallback so a pre-backfill artist still shows
-// its covers), but the `indexable` gate keys off `countArtistFindings` + the catalogue's
-// `totalTracks` — the SAME canonical `track_artists` join the sitemap uses — so an indexable page
-// is never orphaned from the sitemap.
+// its covers). The indexability gate is the maintained `renderable_track_count` against the
+// floor, the same stored gate the sitemap reads, so an indexable page is never orphaned from it.
 export async function resolveArtistPageData(
   slug: string,
   sort: CatalogueSort,
   page: number,
+  upcomingPage = 1,
 ): Promise<ArtistPageData> {
+  const today = releaseTodayUtc(new Date());
   const artist = await getPublicArtistBySlug(slug);
 
   if (!artist) {
     return { status: "missing" };
   }
 
-  // Ride the catalogue read in the SAME parallel wave as the four finding/social/neighbour
-  // reads — all five key only off `artist.id` and are mutually independent. A page past the
+  // Ride the catalogue read in the same parallel wave as the finding/social/neighbour
+  // reads — all key only off `artist.id` and are mutually independent. A page past the
   // end of the pager throws `CataloguePageOutOfRangeError`; map ONLY that to null here so it
   // no longer blocks the batch, and 404 once the wave settles. Any other error still throws.
-  const cataloguePromise = listArtistCatalogue(artist.id, sort, page).catch(
+  const cataloguePromise = listArtistCatalogue(artist.id, sort, page, today).catch(
     (error: unknown): CatalogueGroupPage<CatalogueRecord> | null => {
       if (error instanceof CataloguePageOutOfRangeError) {
         return null;
@@ -112,19 +115,25 @@ export async function resolveArtistPageData(
     },
   );
 
-  const [catalogue, findings, socials, canonicalFindingCount, neighbours, alternateNames] =
-    await Promise.all([
-      cataloguePromise,
-      getFindingsByArtist(artist.id, artist.name),
-      getPublicArtistSocials(artist.id),
-      countArtistFindings(artist.id),
-      getArtistNeighbours(artist.id),
-      // The trusted MB/operator aliases — keyed off `artist.id`, mutually independent, so it rides
-      // the same parallel wave as the four finding/social/neighbour reads (the MusicBrainz identity layer).
-      getPublicArtistAliasNames(artist.id),
-    ]);
+  const [catalogue, findings, socials, neighbours, alternateNames, upcoming] = await Promise.all([
+    cataloguePromise,
+    getFindingsByArtist(artist.id, artist.name, today),
+    getPublicArtistSocials(artist.id),
+    getArtistNeighbours(artist.id),
+    // The trusted MB/operator aliases — keyed off `artist.id`, mutually independent, so it rides
+    // the same parallel wave as the finding/social/neighbour reads (the MusicBrainz identity layer).
+    getPublicArtistAliasNames(artist.id),
+    listArtistUpcoming(artist.id, today, upcomingPage).catch(
+      (error: unknown): UpcomingTrackPage | null => {
+        if (error instanceof CataloguePageOutOfRangeError) {
+          return null;
+        }
+        throw error;
+      },
+    ),
+  ]);
 
-  if (catalogue === null) {
+  if (catalogue === null || upcoming === null) {
     // A page past the end of the pager is genuinely not-found, not a 500 — a crawler or a
     // hand-typed `?page=99` on a 3-page artist gets an honest 404, never an empty page that
     // duplicates page 1's content under a new URL.
@@ -147,16 +156,12 @@ export async function resolveArtistPageData(
     findings,
     id: artist.id,
     imageUrl: artist.imageUrl,
-    // Thin-content gate: index only past ARTIST_INDEX_MIN_FINDINGS RENDERABLE tracks — the
-    // certified findings PLUS the quieter catalogue rows, because both are real content on the
-    // page and a page is thin or not thin on what it RENDERS, never on who wrote it. Both counts
-    // read through the canonical `track_artists` join (`countArtistFindings` + the catalogue's
-    // SQL-counted `totalTracks`), the same source the sitemap keys off, so an indexable page is
-    // never orphaned from it. Below the floor the page still serves 200 (deep links, link equity)
-    // but is noindex + out of the sitemap. A crawl-minted, findings-free artist with enough
-    // catalogue tracks is a real page and indexes; a 1–2-track one renders noindex
-    // (docs/artist-relationship.md).
-    indexable: canonicalFindingCount + catalogue.totalTracks >= ARTIST_INDEX_MIN_FINDINGS,
+    // Thin-content gate: index only past ARTIST_INDEX_MIN_FINDINGS linked tracks, read off the
+    // maintained `renderable_track_count` — the same stored gate `listArtistSitemapRows` keys off,
+    // so the page and the sitemap can never disagree. It counts every linked track, Upcoming ones
+    // included, because they render on the page. Below the floor the page still serves 200 (deep
+    // links, link equity) but is noindex + out of the sitemap (docs/artist-relationship.md).
+    indexable: artist.renderableTrackCount >= ARTIST_INDEX_MIN_FINDINGS,
     lastfmUrl: artist.lastfmUrl,
     mbid: artist.mbid,
     name: artist.name,
@@ -165,6 +170,7 @@ export async function resolveArtistPageData(
     sort,
     spotifyUrl: artist.spotifyUrl,
     status: "found",
+    upcoming,
     wikidataQid: artist.wikidataQid,
   };
 }

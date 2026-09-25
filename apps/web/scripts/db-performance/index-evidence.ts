@@ -18,6 +18,7 @@ import {
   type ProductionLockEvidenceDefinition,
 } from "./production-lock-inventory";
 import { trackSitemapIndexCountStatement } from "../../src/lib/server/track-page";
+import { releasedByTodaySql } from "../../src/lib/server/release-day";
 
 const INDEX_EVIDENCE_LIMIT = 25;
 const INDEX_EVIDENCE_ITERATIONS = 2;
@@ -1626,16 +1627,18 @@ function planSpecFor(
       const exact = `select substr(tracks.release_date, 1, 4) as year, count(*) as n
          from perf_tracks tracks
         where tracks.release_date is not null
+          and ${releasedByTodaySql("tracks.release_date")}
         group by year
         order by year desc`;
+      const args = ["2026-12-31"];
       const forced = exact.replace(
         "from perf_tracks tracks",
         "from perf_tracks tracks indexed by perf_tracks_release_date_track_id_idx",
       );
       return {
         ...releaseDateComparison(
-          [statement(exact)],
-          [statement(forced)],
+          [statement(exact, args)],
+          [statement(forced, args)],
           [
             {
               allowFullScanOf: ["perf_tracks"],

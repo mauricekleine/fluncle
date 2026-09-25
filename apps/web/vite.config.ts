@@ -260,7 +260,11 @@ export default defineConfig({
     // generated .source index the docs routes read. Runs before tanstackStart
     // so the virtual collections resolve during route compilation.
     mdx(docsConfig),
-    cloudflare({ viteEnvironment: { name: "ssr" } }),
+    // The synthetic E2E stack has no debugger and must coexist with other worktree stacks.
+    cloudflare({
+      inspectorPort: process.env[E2E_BLOCK_OUTBOUND_FLAG] === "1" ? false : undefined,
+      viteEnvironment: { name: "ssr" },
+    }),
     tailwindcss(),
     tanstackStart(),
     viteReact(),

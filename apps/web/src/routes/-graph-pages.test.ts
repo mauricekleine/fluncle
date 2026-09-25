@@ -3,15 +3,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // The graph pages' thin-content gate (`/label/<slug>` + `/album/<slug>`), pinned as a pure
 // unit — the `-artist-page.test.ts` precedent.
 //
-// The contract: `noindex` (and sitemap absence) keys off the RENDERABLE track count — the
-// findings PLUS the quieter uncertified rows, because both are real content on the page. The
-// sitemap route filters on exactly the same sum (findingCount + catalogueCount), so a page that
+// The contract: `noindex` (and sitemap absence) keys off the same stored renderable-track count
+// the sitemap reads, which includes Upcoming rows because they are real content on the page. A page that
 // declares itself indexable is always in the sitemap and one that declares `noindex` never is.
 // An indexable page that the sitemap orphans is the bug these pin.
 //
 // The label's quieter rows are now GROUPED (by artist), so its catalogue read returns a
-// `CatalogueGroupPage` and the gate keys off that page's SQL-counted `totalTracks` — the
-// entity's TRUE uncertified total, never the rendered page. The album's rows are a flat
+// `CatalogueGroupPage`; the gate uses the stored entity count, never the rendered page. The album's rows are a flat
 // tracklist still (an album is one record), so it keeps the `{ total, tracks }` slice.
 //
 // The second contract, and the one that matters more: a page with ZERO quieter rows renders
@@ -32,6 +30,7 @@ const listArtistsByAlbum = vi.hoisted(() => vi.fn());
 const getFindingsByLabel = vi.hoisted(() => vi.fn());
 const getFindingsByAlbum = vi.hoisted(() => vi.fn());
 const listLabelCatalogue = vi.hoisted(() => vi.fn());
+const listLabelUpcoming = vi.hoisted(() => vi.fn());
 const listCatalogueTracksByAlbum = vi.hoisted(() => vi.fn());
 
 vi.mock("@/lib/server/labels", async (importOriginal) => ({
@@ -56,6 +55,7 @@ vi.mock("@/lib/server/artists", async (importOriginal) => ({
 vi.mock("@/lib/server/catalogue-groups", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/server/catalogue-groups")>()),
   listLabelCatalogue,
+  listLabelUpcoming,
 }));
 
 vi.mock("@/lib/server/tracks", async (importOriginal) => ({
@@ -89,7 +89,12 @@ function labelHeadTitle(data: unknown): string | undefined {
   return head?.meta?.find((entry) => entry.title !== undefined)?.title;
 }
 
-const LABEL = { id: "lbl_1", name: "Hospital Records", slug: "hospital-records" };
+const LABEL = {
+  id: "lbl_1",
+  name: "Hospital Records",
+  renderableTrackCount: 0,
+  slug: "hospital-records",
+};
 const ALBUM = { id: "alb_1", name: "Wormhole", slug: "wormhole" };
 
 /** N coordinate-bearing findings, in the shape the page reads. */
@@ -169,10 +174,31 @@ beforeEach(() => {
   getFindingsByLabel.mockResolvedValue([]);
   getFindingsByAlbum.mockResolvedValue([]);
   listLabelCatalogue.mockResolvedValue(NO_LABEL_CATALOGUE);
+  listLabelUpcoming.mockResolvedValue({
+    findings: [],
+    page: 1,
+    pageCount: 1,
+    total: 0,
+    tracks: [],
+  });
   listCatalogueTracksByAlbum.mockResolvedValue(NO_ALBUM_CATALOGUE);
 });
 
 describe("the label page", () => {
+  it("passes upcoming rows into their own page block", async () => {
+    listLabelUpcoming.mockResolvedValue({
+      findings: [],
+      page: 1,
+      pageCount: 1,
+      total: 1,
+      tracks: [{ artists: ["Nu:Tone"], title: "Next", trackId: "future" }],
+    });
+    const data = await resolveLabelPageData("hospital-records", "name", 1);
+    expect(
+      data.status === "found" ? data.upcoming.tracks.map((track) => track.trackId) : [],
+    ).toEqual(["future"]);
+  });
+
   it("404s on a slug with no label entity", async () => {
     getLabelBySlug.mockResolvedValue(undefined);
 
@@ -197,6 +223,7 @@ describe("the label page", () => {
     // a "Nothing logged off this one yet." heading over a wall of Spotify outlinks. Conditional
     // sections fix that at the source: no findings, no findings section, no apology.
     getFindingsByLabel.mockResolvedValue([]);
+    getLabelBySlug.mockResolvedValue({ ...LABEL, renderableTrackCount: 400 });
     listLabelCatalogue.mockResolvedValue(labelCatalogue(400, 100));
 
     const data = await resolveLabelPageData("metalheadz", "name", 1);
@@ -219,10 +246,9 @@ describe("the label page", () => {
     });
   });
 
-  it("gates on the entity's TRUE catalogue total, never the rendered page", async () => {
-    // A 3,000-row label and a 100-row one must not read as the same page to the gate — so the
-    // gate keys off `totalTracks` (SQL-counted over the whole label), while the PAGE only ever
-    // carries one bounded group page.
+  it("gates on the entity's full count, never the rendered page slice", async () => {
+    // The gate reads all eligible entity rows while the page carries one bounded group page.
+    getLabelBySlug.mockResolvedValue({ ...LABEL, renderableTrackCount: 3001 });
     getFindingsByLabel.mockResolvedValue(findings(1));
     listLabelCatalogue.mockResolvedValue(labelCatalogue(3000, 100));
 
@@ -233,6 +259,7 @@ describe("the label page", () => {
   });
 
   it("indexes at the floor, on findings alone", async () => {
+    getLabelBySlug.mockResolvedValue({ ...LABEL, renderableTrackCount: 3 });
     getFindingsByLabel.mockResolvedValue(findings(3));
 
     expect(await resolveLabelPageData("hospital-records", "name", 1)).toMatchObject({
@@ -278,6 +305,7 @@ describe("the label page", () => {
   });
 
   it("counts the quieter rows toward the floor (they are content on the page)", async () => {
+    getLabelBySlug.mockResolvedValue({ ...LABEL, renderableTrackCount: 3 });
     getFindingsByLabel.mockResolvedValue(findings(1));
     listLabelCatalogue.mockResolvedValue(labelCatalogue(2));
 
@@ -287,6 +315,7 @@ describe("the label page", () => {
   });
 
   it("renders an EMPTY quieter section today (the catalogue is empty)", async () => {
+    getLabelBySlug.mockResolvedValue({ ...LABEL, renderableTrackCount: 5 });
     getFindingsByLabel.mockResolvedValue(findings(5));
 
     const data = await resolveLabelPageData("hospital-records", "name", 1);

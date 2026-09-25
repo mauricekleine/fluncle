@@ -401,6 +401,11 @@ export type LabelRecord = {
    * name + slug, or undefined. Emitted as the Organization's `parentOrganization` `@id` edge.
    */
   parentLabel?: LabelLineageEdge;
+  /**
+   * The maintained `renderable_track_count`: the page's robots gate, the same one the sitemap
+   * reads. Present on the full `getLabelBySlug` record; a bare edge record carries none.
+   */
+  renderableTrackCount?: number;
   slug: string;
   /**
    * The labels that are sublabels / imprints OF this one (the `parent_label_id` reverse read),
@@ -460,7 +465,7 @@ export async function getLabelBySlug(slug: string): Promise<LabelRecord | undefi
   const db = await getDb();
   const result = await db.execute({
     args: [slug],
-    sql: `select ${LABEL_COLUMNS}, bio, discogs_label_id, parent_label_id
+    sql: `select ${LABEL_COLUMNS}, bio, discogs_label_id, parent_label_id, renderable_track_count
           from labels where slug = ? limit 1`,
   });
 
@@ -469,6 +474,7 @@ export async function getLabelBySlug(slug: string): Promise<LabelRecord | undefi
       bio: string | null;
       discogs_label_id: number | null;
       parent_label_id: string | null;
+      renderable_track_count: number;
     }
   >(result.rows)[0];
 
@@ -494,6 +500,7 @@ export async function getLabelBySlug(slug: string): Promise<LabelRecord | undefi
     mbLabelId: typeof row.mb_label_id === "string" && row.mb_label_id ? row.mb_label_id : undefined,
     name: row.name,
     parentLabel: lineage.parentLabel,
+    renderableTrackCount: Number(row.renderable_track_count),
     slug: row.slug,
     subLabels: lineage.subLabels,
   };

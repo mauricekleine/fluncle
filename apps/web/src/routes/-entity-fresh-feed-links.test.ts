@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // The per-entity fresh feeds' contract, pinned — the /fresh.xml two-tier contract narrowed to one
 // artist or one label. A CERTIFIED finding links to its /log home and shows its cover; an
@@ -63,6 +63,17 @@ async function handlerFor(importer: Promise<{ Route: unknown }>): Promise<Handle
 
 const CERTIFIED_LOG = "https://www.fluncle.com/log/012.8.0A";
 
+// The release-sensitive pages bound their cache lifetime by the next UTC midnight, so these exact
+// directives hold only away from it: the clock sits at midday, whatever time the suite runs.
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-07-20T12:00:00.000Z"));
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+});
+
 describe("/artist/$slug/fresh.xml — release-framed, two tiers, one artist", () => {
   it("links a certified finding to its /log page, shows its cover, keeps Spotify in the body", async () => {
     listArtistFreshTracks.mockResolvedValueOnce({ name: "Camo & Krooked", tracks: TRACKS });
@@ -124,7 +135,7 @@ describe("/artist/$slug/fresh.xml — release-framed, two tiers, one artist", ()
 
     expect(res.headers.get("Content-Type")).toBe("application/rss+xml; charset=utf-8");
     expect(res.headers.get("Cache-Control")).toBe(
-      "public, max-age=300, s-maxage=3600, stale-while-revalidate=86400",
+      "public, max-age=0, s-maxage=300, stale-while-revalidate=3600",
     );
     // Feeds are for readers, never search results — noindex keeps the thousands of
     // rel=alternate-discovered entity feeds out of GSC's crawled-not-indexed churn.

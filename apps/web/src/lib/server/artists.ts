@@ -107,6 +107,8 @@ export type ArtistRecord = {
   lastfmUrl: string | undefined;
   mbid: string | undefined;
   name: string;
+  /** The maintained `renderable_track_count`: the page's robots gate, the same one the sitemap reads. */
+  renderableTrackCount: number;
   slug: string;
   spotifyUrl: string | undefined;
   wikidataQid: string | undefined;
@@ -150,7 +152,7 @@ async function resolveArtistBySlug(
   const result = await db.execute({
     args: [slug],
     sql: `select id, name, slug, spotify_url, mbid, wikidata_qid, discogs_url, lastfm_url, bio,
-                 image_url, image_key, image_state, image_updated_at
+                 image_url, image_key, image_state, image_updated_at, renderable_track_count
           from artists where slug = ?${visibility} limit 1`,
   });
 
@@ -175,6 +177,7 @@ async function resolveArtistBySlug(
     lastfmUrl: optionalText(row["lastfm_url"]),
     mbid: optionalText(row["mbid"]),
     name: row["name"],
+    renderableTrackCount: Number(row["renderable_track_count"] ?? 0),
     slug: typeof row["slug"] === "string" ? row["slug"] : slug,
     spotifyUrl: optionalText(row["spotify_url"]),
     wikidataQid: optionalText(row["wikidata_qid"]),

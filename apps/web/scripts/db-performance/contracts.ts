@@ -1,5 +1,11 @@
 import { DATABASE_CLIENT_BOUNDS } from "./client-bounds";
+import {
+  releasedByTodaySql,
+  upcomingAfterTodaySql,
+  validReleaseDateSql,
+} from "../../src/lib/server/release-day";
 import { DUE_WORK_COLUMNS, DUE_WORK_COLUMN_NAMES } from "../../src/lib/server/due-work-columns";
+import { artistCandidateIdsSql } from "../../src/lib/server/artist-membership";
 import {
   trackSitemapIndexCountStatement,
   trackSitemapWindowStatement,
@@ -21,6 +27,101 @@ import {
 } from "./registry";
 
 export const performanceRegistry = new PerformanceRegistry();
+
+const artistCandidates = artistCandidateIdsSql("?", "?", "?")
+  .replaceAll("track_artists_artist_id_idx", "perf_track_artists_artist_id_idx")
+  .replaceAll("findings_added_at_track_id_idx", "perf_findings_added_at_track_id_idx")
+  .replaceAll("tracks_release_date_track_id_idx", "perf_tracks_release_date_track_id_idx")
+  .replace(/\btrack_artists\b/g, "perf_track_artists")
+  .replace(/\bfindings\b/g, "perf_findings")
+  .replace(/\btracks\b/g, "perf_tracks")
+  .replace(/\bt\.track_id\b/g, "t.id")
+  .replace(
+    "select t.id from perf_tracks t indexed by",
+    "select t.id as track_id from perf_tracks t indexed by",
+  );
+
+const artistReadPlan = {
+  growingTables: ["perf_findings", "perf_tracks", "perf_track_artists"],
+  requiredDetails: [
+    /perf_track_artists_artist_id_idx/i,
+    /perf_findings_added_at_track_id_idx/i,
+    /perf_tracks_release_date_track_id_idx/i,
+  ],
+};
+
+for (const [id, today, lane] of [
+  ["artist.findings", "9999-12-31", "findings"],
+  ["artist.upcoming", "0000", "upcoming"],
+] as const) {
+  const statement =
+    lane === "findings"
+      ? {
+          args: [
+            "synthetic-artist-000000055",
+            "Synthetic Artist 000000055",
+            today,
+            "Synthetic Artist 000000055",
+            today,
+          ],
+          sql: `select f.track_id from (${artistCandidates}) members
+          join perf_findings f on f.track_id = members.track_id
+          join perf_tracks t on t.id = members.track_id
+          where t.dismissed_at is null and t.duplicate_of_track_id is null
+            and ${releasedByTodaySql("t.release_date")}
+          order by f.added_at desc, f.track_id desc`,
+        }
+      : {
+          args: [
+            "synthetic-artist-000000055",
+            "Synthetic Artist 000000055",
+            today,
+            "Synthetic Artist 000000055",
+            today,
+          ],
+          sql: `select t.id as track_id from (${artistCandidates}) members
+          join perf_tracks t on t.id = members.track_id
+          where t.dismissed_at is null and t.duplicate_of_track_id is null
+            and ${upcomingAfterTodaySql("t.release_date")}
+          order by t.release_date asc, t.id asc limit 100`,
+        };
+  const contract = sqlContract({
+    description: `Artist ${lane} starts at an edge seek and bounds both display-credit windows`,
+    id,
+    iterations: 12,
+    plan: { policy: artistReadPlan, statement },
+    statement,
+    validate(execution) {
+      const cardinality = execution.resultRowCount;
+      const valid =
+        lane === "findings" ? cardinality === 1 : cardinality >= 1 && cardinality <= 100;
+      return valid
+        ? []
+        : [`artist ${lane} returned ${cardinality} rows outside its fixture cardinality`];
+    },
+    warmupIterations: 2,
+    workClass: "route-db",
+  });
+  performanceRegistry.register({
+    ...contract,
+    async execute(context) {
+      const fullFixture = (context.fixtureCounts?.tracks ?? 0) >= 100_000;
+      const artistId = fullFixture ? "synthetic-artist-000001272" : "synthetic-artist-000000055";
+      const artistName = fullFixture ? "Synthetic Artist 000001272" : "Synthetic Artist 000000055";
+      const startedAt = context.now();
+      const result = await context.client.execute({
+        args: [artistId, artistName, today, artistName, today],
+        sql: statement.sql,
+      });
+      return {
+        affectedRowCount: result.rowsAffected ?? 0,
+        durationMs: Math.max(0, context.now() - startedAt),
+        rawResult: result,
+        resultRowCount: result.rows.length,
+      };
+    },
+  });
+}
 
 function explainDetails(result: PerformanceResult): string[] {
   return result.rows.map((row, index) => {
@@ -1264,6 +1365,188 @@ for (const contract of [
     iterations: 20,
     validate: validateMixedLoadContract,
   });
+}
+
+// Release membership moves at UTC midnight without a source write. These statements use the
+// projection's small state rows and the release-date index; the findings reads drive from the
+// small certified set in found order and probe one track by primary key per candidate.
+const RELEASE_CONTRACT_DAY = "2026-06-30";
+const RELEASE_FRONT_DOOR_DAY = "2026-12-31";
+const RELEASE_AGGREGATE_READY = `aggregate.state = 'complete'
+  and aggregate.aggregate_epoch = aggregate.source_epoch
+  and not exists (select 1 from perf_projection_repairs indexed by perf_projection_repairs_order_idx
+    where projection = 'public_aggregates')`;
+
+const releaseStatements = [
+  {
+    description: "An indexed date range counts the unreleased and retained malformed head",
+    expectedRows: 1,
+    growingTables: ["perf_tracks"],
+    id: "release.hub-future-count",
+    requiredDetails: [
+      /SEARCH perf_tracks USING COVERING INDEX perf_tracks_release_date_track_id_idx/i,
+    ],
+    statement: {
+      args: [RELEASE_CONTRACT_DAY],
+      sql: `select count(*) as after_today,
+        coalesce(sum(case when ${validReleaseDateSql("perf_tracks.release_date")} then 1 else 0 end), 0) as future_count
+        from perf_tracks indexed by perf_tracks_release_date_track_id_idx
+        where perf_tracks.release_date > ?`,
+    },
+  },
+  {
+    description: "The bare page total reads one clean projection state row",
+    expectedRows: 1,
+    growingTables: ["perf_projection_repairs"],
+    id: "release.hub-projected-total",
+    requiredDetails: [
+      /sqlite_autoindex_perf_public_aggregate_state_1/i,
+      /perf_projection_repairs_order_idx/i,
+    ],
+    statement: {
+      args: [],
+      sql: `select aggregate.default_track_total as total
+        from perf_public_aggregate_state as aggregate
+        where aggregate.scope = 'tracks' and ${RELEASE_AGGREGATE_READY} limit 1`,
+    },
+  },
+  {
+    description: "The bare page resolves one current projected anchor document",
+    expectedRows: 1,
+    growingTables: ["perf_projection_repairs"],
+    id: "release.hub-page-start",
+    requiredDetails: [
+      /sqlite_autoindex_perf_public_aggregate_state_1/i,
+      /sqlite_autoindex_perf_hub_page_anchor_validity_1/i,
+    ],
+    statement: {
+      args: ["tracks", "synthetic-default", 1],
+      sql: `select aggregate.default_track_total as total, validity.generation
+        from perf_public_aggregate_state as aggregate
+        join perf_hub_page_anchor_validity as validity
+          on validity.hub = ? and validity.clause_hash = ?
+          and validity.anchor_format_version = ?
+          and validity.order_epoch = aggregate.release_hub_order_epoch
+          and validity.generation = aggregate.generation
+        where aggregate.scope = 'tracks' and ${RELEASE_AGGREGATE_READY} limit 1`,
+    },
+  },
+  {
+    description: "A deep released page seeks from a projected date/id boundary",
+    expectedRows: 48,
+    growingTables: ["perf_tracks"],
+    id: "release.hub-deep-page",
+    requiredDetails: [
+      /SEARCH perf_tracks USING COVERING INDEX perf_tracks_release_date_track_id_idx/i,
+    ],
+    statement: {
+      args: [RELEASE_CONTRACT_DAY, "~", 48, 2],
+      sql: `select perf_tracks.id as track_id
+        from perf_tracks indexed by perf_tracks_release_date_track_id_idx
+        where (perf_tracks.release_date, perf_tracks.id) < (?, ?)
+        order by perf_tracks.release_date desc, perf_tracks.id desc
+        limit ? offset ?`,
+    },
+  },
+  {
+    description: "Projected year buckets subtract only future dates in each indexed year range",
+    expectedRows: 5,
+    growingTables: ["perf_tracks", "perf_projection_repairs"],
+    id: "release.hub-year-lane",
+    requiredDetails: [
+      /perf_tracks_release_date_track_id_idx/i,
+      /sqlite_autoindex_perf_public_aggregate_counts_1/i,
+    ],
+    statement: {
+      args: [RELEASE_CONTRACT_DAY, "release_date_bucket"],
+      sql: `select counts.bucket, counts.track_count -
+        (select count(*) from perf_tracks indexed by perf_tracks_release_date_track_id_idx
+          where ${upcomingAfterTodaySql("perf_tracks.release_date")}
+            and perf_tracks.release_date >= counts.bucket
+            and perf_tracks.release_date < counts.bucket || '~') as track_count
+        from perf_public_aggregate_state as aggregate
+        left join perf_public_aggregate_counts as counts on counts.aggregate_kind = ?
+        where aggregate.scope = 'tracks' and ${RELEASE_AGGREGATE_READY}
+        order by counts.bucket desc`,
+    },
+  },
+  {
+    description: "The noted lead walks findings in found order and checks release day",
+    expectedRows: 1,
+    growingTables: ["perf_tracks"],
+    id: "release.front-door-lead",
+    requiredDetails: [/perf_findings_added_at_track_id_idx/i, /sqlite_autoindex_perf_tracks_1/i],
+    statement: {
+      args: [RELEASE_FRONT_DOOR_DAY, 1],
+      sql: `select perf_tracks.id as track_id, perf_tracks.release_date
+        from perf_findings indexed by perf_findings_added_at_track_id_idx
+        join perf_tracks on perf_tracks.id = perf_findings.track_id
+        where perf_findings.note is not null and trim(perf_findings.note) != ''
+          and ${releasedByTodaySql("perf_tracks.release_date")}
+        order by perf_findings.added_at desc, perf_findings.track_id desc limit ?`,
+    },
+  },
+  {
+    description: "The latest findings band walks the same bounded found-order path",
+    expectedRows: 7,
+    growingTables: ["perf_tracks"],
+    id: "release.front-door-band",
+    requiredDetails: [/perf_findings_added_at_track_id_idx/i, /sqlite_autoindex_perf_tracks_1/i],
+    statement: {
+      args: [RELEASE_FRONT_DOOR_DAY, 7],
+      sql: `select perf_tracks.id as track_id, perf_tracks.release_date
+        from perf_findings indexed by perf_findings_added_at_track_id_idx
+        join perf_tracks on perf_tracks.id = perf_findings.track_id
+        where ${releasedByTodaySql("perf_tracks.release_date")}
+        order by perf_findings.added_at desc, perf_findings.track_id desc limit ?`,
+    },
+  },
+] as const;
+
+for (const contract of releaseStatements) {
+  const policy = {
+    allowFullScanOf: ["perf_findings"],
+    forbidTempSort: true,
+    growingTables: contract.growingTables,
+    requiredDetails: contract.requiredDetails,
+  };
+  performanceRegistry.register(
+    sqlContract({
+      description: contract.description,
+      id: contract.id,
+      iterations: 12,
+      plan: { policy, statement: contract.statement },
+      statement: contract.statement,
+      validate(execution) {
+        const failures: string[] = [];
+        if (contract.id === "release.front-door-band") {
+          if (execution.resultRowCount < 1 || execution.resultRowCount > 7) {
+            failures.push(`expected 1–7 findings, got ${execution.resultRowCount}`);
+          }
+        } else if (execution.resultRowCount !== contract.expectedRows) {
+          failures.push(`expected ${contract.expectedRows} rows, got ${execution.resultRowCount}`);
+        }
+        if (contract.id.startsWith("release.front-door")) {
+          for (const row of execution.rawResult?.rows ?? []) {
+            const date = valueAt(row, "release_date");
+            if (date > RELEASE_FRONT_DOOR_DAY) {
+              failures.push("future finding reached the front door");
+            }
+          }
+        }
+        if (contract.id === "release.hub-future-count") {
+          const row = execution.rawResult?.rows[0];
+          const future = Number(valueAt(row, "future_count"));
+          if (future < 1 || Number(valueAt(row, "after_today")) < future) {
+            failures.push("fixture did not exercise a future release prefix");
+          }
+        }
+        return failures;
+      },
+      warmupIterations: 2,
+      workClass: "route-db",
+    }),
+  );
 }
 
 export function selectPerformanceContracts(ids: readonly string[]) {

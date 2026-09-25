@@ -16,6 +16,8 @@ import { type FeedItem, type MixtapeMember, rowToMixtape } from "../mixtapes";
 import { composeAppleArtworkUrl } from "./apple-music";
 import { parseArtistsJson } from "./artists";
 import { getDb, typedRow, typedRows } from "./db";
+import { artistCandidateIdsSql } from "./artist-membership";
+import { releasedByTodaySql } from "./release-day";
 import { countDueWorkNow } from "./due-work";
 import { discogsReleaseUrl } from "./discogs";
 import { isDueWorkCutoverEnabled, readPromotedDueWorkPage } from "./due-work-cutover";
@@ -849,45 +851,60 @@ export async function getBoardTracksByIds(
 /**
  * Every coordinate-bearing finding that features an artist, newest-first — the
  * artist page's cover grid (Unit 3, artist-relationship RFC §3). The canonical
- * source is the `track_artists` join; when it returns nothing (an artist not yet
- * backfilled into the join) it falls back to the kept `artists_json` cache,
- * matching the name EXACTLY within the parsed array so a substring like "Sub"
+ * source is the `track_artists` edge plus the kept `artists_json` display cache,
+ * matching the name EXACTLY within the JSON array so a substring like "Sub"
  * can't drag in "Subtronics". A finding with no Log ID never appears (the page is
  * a grid of log links).
  */
 export async function getFindingsByArtist(
   artistId: string,
   artistName: string,
+  today?: string,
 ): Promise<GraphFindingItem[]> {
   const db = await getDb();
-  const viaJoin = await db.execute({
-    args: [artistId],
-    sql: `select ${GRAPH_TRACK_SELECT} from ${FINDINGS_FROM}
-          join track_artists on track_artists.track_id = tracks.track_id
-          where track_artists.artist_id = ? and findings.log_id is not null
-          order by findings.added_at desc, tracks.track_id desc`,
-  });
-
-  const joined = typedRows<TrackRow>(viaJoin.rows);
-
-  if (joined.length > 0) {
-    return joined.map(toGraphFindingItem);
-  }
-
-  // Fallback: the artist has no track_artists rows yet (pre-backfill). Match the
-  // kept display cache, then keep only exact-name members (case-insensitive).
-  const needle = artistName.toLowerCase();
-  const viaJson = await db.execute({
-    args: [needle],
-    sql: `select ${GRAPH_TRACK_SELECT} from ${FINDINGS_FROM}
+  const result = await db.execute({
+    args: [
+      artistId,
+      artistName,
+      today ?? "0000",
+      artistName,
+      ...(today === undefined ? [] : [today]),
+    ],
+    sql: `select ${GRAPH_TRACK_SELECT} from (
+            ${artistCandidateIdsSql("?", "?", "?")}
+          ) artist_tracks
+          join findings on findings.track_id = artist_tracks.track_id
+          join tracks on tracks.track_id = artist_tracks.track_id
           where findings.log_id is not null
-            and lower(tracks.artists_json) like '%' || ? || '%'
+            and tracks.dismissed_at is null and tracks.duplicate_of_track_id is null
+            ${today === undefined ? "" : `and ${releasedByTodaySql("tracks.release_date")}`}
           order by findings.added_at desc, tracks.track_id desc`,
   });
+  return typedRows<TrackRow>(result.rows).map(toGraphFindingItem);
+}
 
-  return typedRows<TrackRow>(viaJson.rows)
-    .map(toGraphFindingItem)
-    .filter((finding) => finding.artists.some((name) => name.toLowerCase() === needle));
+/** Hydrate only the certified rows of one already bounded upcoming entity page. */
+export async function getGraphFindingsByIds(ids: string[]): Promise<GraphFindingItem[]> {
+  if (ids.length === 0) {
+    return [];
+  }
+  const db = await getDb();
+  const placeholders = ids.map(() => "?").join(", ");
+  const result = await db.execute({
+    args: ids,
+    sql: `select ${GRAPH_TRACK_SELECT} from ${FINDINGS_FROM}
+          where tracks.track_id in (${placeholders}) and findings.log_id is not null`,
+  });
+  const byId = new Map(
+    typedRows<TrackRow>(result.rows).map((row) => [
+      row.track_id,
+      toPublicTrackListItem(toGraphFindingItem(row)),
+    ]),
+  );
+  return ids.flatMap((id) => {
+    const item = byId.get(id);
+    return item ? [item] : [];
+  });
 }
 
 /**
@@ -896,8 +913,11 @@ export async function getFindingsByArtist(
  * pointer (an indexed seek, never a fold over the catalogue; see schema.ts) and drives
  * from `FINDINGS_FROM`, so it can only ever return findings.
  */
-export async function getFindingsByLabel(labelId: string): Promise<GraphFindingItem[]> {
-  return findingsByEntity("tracks.label_id", labelId);
+export async function getFindingsByLabel(
+  labelId: string,
+  today?: string,
+): Promise<GraphFindingItem[]> {
+  return findingsByEntity("tracks.label_id", labelId, today);
 }
 
 export async function getFindingsByAlbum(albumId: string): Promise<GraphFindingItem[]> {
@@ -909,12 +929,15 @@ export async function getFindingsByAlbum(albumId: string): Promise<GraphFindingI
 async function findingsByEntity(
   column: "tracks.album_id" | "tracks.label_id",
   entityId: string,
+  today?: string,
 ): Promise<GraphFindingItem[]> {
   const db = await getDb();
   const result = await db.execute({
-    args: [entityId],
+    args: [entityId, ...(today === undefined ? [] : [today])],
     sql: `select ${GRAPH_TRACK_SELECT} from ${FINDINGS_FROM}
           where ${column} = ? and findings.log_id is not null
+            and tracks.dismissed_at is null and tracks.duplicate_of_track_id is null
+            ${today === undefined ? "" : `and ${releasedByTodaySql("tracks.release_date")}`}
           order by findings.added_at desc, tracks.track_id desc`,
   });
 
@@ -2828,6 +2851,8 @@ type ListTracksOptions = {
    * effect unless `hasContext === false`. Omitted for public reads.
    */
   retryEmptyContext?: boolean;
+  /** Public release-day ceiling; undated findings keep their existing place. */
+  releaseThrough?: string;
   since?: string;
   /**
    * Enrichment-state filter (admin only). A bare status matches that exact
@@ -2939,6 +2964,7 @@ type FindingDueWorkSelector = Pick<
   | "includeMixtapes"
   | "order"
   | "retryEmptyContext"
+  | "releaseThrough"
   | "since"
   | "status"
   | "until"
@@ -2953,6 +2979,7 @@ function isUnsupportedFindingDueWorkShape(options: FindingDueWorkSelector): bool
     options.order !== "asc" ||
     options.captureQueue ||
     options.includeMixtapes ||
+    options.releaseThrough !== undefined ||
     options.since !== undefined ||
     options.until !== undefined ||
     options.hasEmbedding !== undefined ||
@@ -3029,6 +3056,7 @@ type TrackListFilters = Pick<
   | "hasNote"
   | "hasObservation"
   | "hasVideo"
+  | "releaseThrough"
   | "retryEmptyContext"
   | "since"
   | "status"
@@ -3049,12 +3077,18 @@ function buildTrackListFilters({
   hasObservation,
   hasVideo,
   retryEmptyContext = false,
+  releaseThrough,
   since,
   status,
   until,
 }: TrackListFilters): { filterArgs: string[]; filterClauses: string[] } {
   const filterClauses: string[] = [];
   const filterArgs: string[] = [];
+
+  if (releaseThrough) {
+    filterClauses.push(releasedByTodaySql("tracks.release_date"));
+    filterArgs.push(releaseThrough);
+  }
 
   if (since) {
     filterClauses.push("findings.added_at >= ?");
@@ -3284,6 +3318,7 @@ export async function listTracks({
   limit,
   order = "desc",
   retryEmptyContext = false,
+  releaseThrough,
   since,
   status,
   until,
@@ -3307,6 +3342,7 @@ export async function listTracks({
     hasVideo,
     includeMixtapes,
     order,
+    releaseThrough,
     retryEmptyContext,
     since,
     status,
@@ -3339,6 +3375,7 @@ export async function listTracks({
     hasNote,
     hasObservation,
     hasVideo,
+    releaseThrough,
     retryEmptyContext,
     since,
     status,
@@ -3374,7 +3411,7 @@ export async function listTracks({
       sql: `select ${trackSelect}
             from ${FINDINGS_FROM}
             ${where}
-            order by findings.added_at ${dir}, tracks.track_id ${dir}
+            order by findings.added_at ${dir}, findings.track_id ${dir}
             limit ?`,
     }),
     countTotal

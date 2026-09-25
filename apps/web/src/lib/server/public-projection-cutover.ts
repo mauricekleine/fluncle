@@ -9,6 +9,7 @@ import {
   parseHubAnchorLeafMeta,
 } from "./hub-page-anchors";
 import { getSetting } from "./settings";
+import { upcomingAfterTodaySql } from "./release-day";
 
 /** The public aggregate/artist reader flag. Only the exact string `true` opens the cutover. */
 export const PUBLIC_PROJECTION_CUTOVER_ENABLED_KEY = "public_projection_cutover_enabled";
@@ -224,6 +225,7 @@ export async function readProjectedDefaultTrackTotal(
 export async function readProjectedAggregateBuckets(
   client: PublicProjectionReadClient,
   kind: "key" | "release_date_bucket",
+  today?: string,
 ): Promise<ProjectedAggregateBucket[] | undefined> {
   if (!(await isPublicProjectionCutoverEnabledFor(client))) {
     return undefined;
@@ -231,9 +233,16 @@ export async function readProjectedAggregateBuckets(
 
   try {
     const order = kind === "release_date_bucket" ? "desc" : "asc";
+    const futureAdjustment =
+      kind === "release_date_bucket" && today !== undefined
+        ? ` - (select count(*) from tracks indexed by tracks_release_date_track_id_idx
+            where ${upcomingAfterTodaySql("tracks.release_date")}
+              and tracks.release_date >= counts.bucket
+              and tracks.release_date < counts.bucket || '~')`
+        : "";
     const result = await client.execute({
-      args: [kind],
-      sql: `select counts.bucket, counts.track_count
+      args: today !== undefined && kind === "release_date_bucket" ? [today, kind] : [kind],
+      sql: `select counts.bucket, counts.track_count${futureAdjustment} as track_count
         from public_aggregate_state as aggregate
         left join public_aggregate_counts as counts
           on counts.aggregate_kind = ?
