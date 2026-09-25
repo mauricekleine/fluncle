@@ -1,4 +1,5 @@
 import { ORPCError } from "@orpc/server";
+import { readOptionalEnv } from "../env";
 import { chargeRateLimit } from "../rate-limit";
 import { searchArchive } from "../search";
 import { searchTracks } from "../track-search";
@@ -6,8 +7,36 @@ import { apiFault, type Implementer } from "./_shared";
 
 export const MIN_QUERY_LENGTH = 2;
 
-const SEARCH_LIMIT = 30;
-const SEARCH_WINDOW_MS = 60 * 1000;
+export const SEARCH_LIMIT = 30;
+export const SEARCH_WINDOW_MS = 60 * 1000;
+
+export async function searchArchiveRateLimit(): Promise<number> {
+  const [flag, databaseUrl, override] = await Promise.all([
+    readOptionalEnv("FLUNCLE_E2E"),
+    readOptionalEnv("TURSO_DATABASE_URL"),
+    readOptionalEnv("SEARCH_ARCHIVE_RATE_LIMIT"),
+  ]);
+
+  if (flag !== "1" || !isLoopbackDatabase(databaseUrl)) {
+    return SEARCH_LIMIT;
+  }
+
+  const raw = Number(override);
+
+  return Number.isSafeInteger(raw) && raw > 0 ? raw : SEARCH_LIMIT;
+}
+
+function isLoopbackDatabase(url: string | undefined): boolean {
+  if (url === undefined) {
+    return false;
+  }
+
+  try {
+    return ["127.0.0.1", "localhost", "[::1]"].includes(new URL(url).hostname);
+  } catch {
+    return false;
+  }
+}
 
 export function searchHandlers(os: Implementer) {
   const searchTracksHandler = os.search_tracks.handler(async ({ context, input }) => {
@@ -43,7 +72,7 @@ export function searchHandlers(os: Implementer) {
     try {
       const charge = await chargeRateLimit({
         action: "search_archive",
-        limit: SEARCH_LIMIT,
+        limit: await searchArchiveRateLimit(),
         request: context.request,
         windowMs: SEARCH_WINDOW_MS,
       });

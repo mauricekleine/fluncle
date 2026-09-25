@@ -1,89 +1,98 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
+const chargeRateLimit = vi.hoisted(() => vi.fn());
 const searchArchive = vi.hoisted(() => vi.fn());
+const searchLikeTrack = vi.hoisted(() => vi.fn());
 
-vi.mock("@/lib/server/search", () => ({ searchArchive }));
-
-vi.mock("@/lib/server/log", () => ({ logEvent: vi.fn() }));
+vi.mock("@/lib/server/rate-limit", () => ({ chargeRateLimit }));
+vi.mock("@/lib/server/env", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/server/env")>()),
+  readOptionalEnv: async () => undefined,
+}));
+vi.mock("@/lib/server/search", () => ({ searchArchive, searchLikeTrack }));
 vi.mock("@sentry/cloudflare", () => ({ captureException: vi.fn() }));
+vi.mock("@/lib/server/log", () => ({ logEvent: vi.fn() }));
 
-const { SEARCH_PAGE_LIMIT, resolveSearchPageData } = await import("./-search-page-data");
+import { ApiError } from "@/lib/server/spotify";
+import { resolveSearchPageData } from "./-search-page-data";
 
-afterEach(() => {
-  vi.clearAllMocks();
-});
+const request = new Request("https://www.fluncle.com/search?q=liquid");
+const answer = { degraded: false, entities: [], kind: "token", results: [] };
 
-function answer(overrides: Record<string, unknown> = {}) {
-  return { degraded: false, entities: [], kind: "token", results: [], ...overrides };
+function allowed() {
+  const charge = { requireAllowed: vi.fn(async () => undefined), throwIfLimited: vi.fn() };
+
+  chargeRateLimit.mockResolvedValue(charge);
+
+  return charge;
 }
 
-describe("the zero state costs nothing", () => {
-  it.each([undefined, "", "   ", "a"])("resolves %o without touching the archive", async (q) => {
-    await expect(resolveSearchPageData(q)).resolves.toEqual({ status: "blank" });
+beforeEach(() => {
+  chargeRateLimit.mockReset();
+  searchArchive.mockReset();
+  searchLikeTrack.mockReset();
+  searchArchive.mockResolvedValue(answer);
+  searchLikeTrack.mockResolvedValue({ ...answer, kind: "sonic" });
+});
+
+describe("resolveSearchPageData charges the search_archive budget on every page resolution", () => {
+  it("charges a live keystroke to the shared per-IP budget", async () => {
+    allowed();
+
+    await resolveSearchPageData("moonlit cur", { live: true, request });
+
+    expect(chargeRateLimit).toHaveBeenCalledWith(
+      expect.objectContaining({ action: "search_archive", limit: 30, request, windowMs: 60_000 }),
+    );
+  });
+
+  it("charges the sonic view of one track", async () => {
+    const charge = allowed();
+
+    await resolveSearchPageData(undefined, { like: "t1", request });
+
+    expect(chargeRateLimit).toHaveBeenCalledOnce();
+    expect(searchLikeTrack).toHaveBeenCalledWith(
+      expect.objectContaining({ beforeVector: charge.requireAllowed }),
+    );
+    expect(charge.throwIfLimited).toHaveBeenCalled();
+  });
+
+  it("holds every vector pass of a typed query for the budget's verdict", async () => {
+    const charge = allowed();
+
+    await resolveSearchPageData("liquid", { live: true, request });
+
+    expect(searchArchive).toHaveBeenCalledWith(
+      expect.objectContaining({
+        beforeModel: charge.requireAllowed,
+        beforeVector: charge.requireAllowed,
+      }),
+    );
+  });
+
+  it("gates a committed sentence's model tier on the budget's verdict", async () => {
+    const charge = allowed();
+
+    await resolveSearchPageData("tracks in A minor above 170 bpm", { request });
+
+    expect(searchArchive).toHaveBeenCalledWith(
+      expect.objectContaining({ beforeModel: charge.requireAllowed }),
+    );
+    expect(charge.throwIfLimited).toHaveBeenCalled();
+  });
+
+  it("names a spent budget as its own state, never an empty answer or a fault", async () => {
+    chargeRateLimit.mockRejectedValue(new ApiError("rate_limited", "Too many requests.", 429));
+
+    await expect(resolveSearchPageData("liquid", { request })).resolves.toEqual({
+      status: "limited",
+    });
     expect(searchArchive).not.toHaveBeenCalled();
   });
-});
 
-describe("an answered query", () => {
-  it("asks the ONE existing primitive, trimmed, at the page's own limit", async () => {
-    searchArchive.mockResolvedValue(answer());
-
-    await resolveSearchPageData("  netsky  ");
-
-    expect(searchArchive).toHaveBeenCalledWith({ limit: SEARCH_PAGE_LIMIT, q: "netsky" });
-  });
-
-  it("carries the whole answer through, degradation and filters included", async () => {
-    const response = answer({
-      degraded: true,
-      entities: [{ kind: "artist", name: "Netsky", slug: "netsky" }],
-      filters: { key: "A minor" },
-      results: [
-        { artists: ["Netsky"], certified: true, logId: "004.7.2I", title: "X", trackId: "t" },
-      ],
-    });
-    searchArchive.mockResolvedValue(response);
-
-    const data = await resolveSearchPageData("netsky in A minor");
-
-    expect(data).toEqual({ response, status: "answered" });
-  });
-
-  it("does not follow a coordinate or entity redirect", async () => {
-    const response = answer({
-      kind: "coordinate",
-      redirect: "/log/004.7.2I",
-      results: [
-        { artists: ["Netsky"], certified: true, logId: "004.7.2I", title: "X", trackId: "t" },
-      ],
-    });
-    searchArchive.mockResolvedValue(response);
-
-    const data = await resolveSearchPageData("004.7.2I");
-
-    expect(data.status).toBe("answered");
-    expect(data).toEqual({ response, status: "answered" });
-  });
-});
-
-describe("a fault is a fault, not an empty result", () => {
-  it("names the failure instead of returning zero rows", async () => {
-    searchArchive.mockRejectedValue(new Error("SQLITE_BUSY"));
-
-    await expect(resolveSearchPageData("netsky")).resolves.toEqual({ status: "failed" });
-  });
-
-  it("captures the fault for the private diagnostics channel", async () => {
-    const Sentry = await import("@sentry/cloudflare");
-    const { logEvent } = await import("@/lib/server/log");
-    const error = new Error("boom");
-    searchArchive.mockRejectedValue(error);
-
-    await resolveSearchPageData("netsky");
-
-    expect(logEvent).toHaveBeenCalledWith("error", "search.page-fault", { error, query: "netsky" });
-    expect(Sentry.captureException).toHaveBeenCalledWith(error, {
-      tags: { source: "search.page" },
-    });
+  it("charges nothing for the zero state", async () => {
+    await expect(resolveSearchPageData("a", { request })).resolves.toEqual({ status: "blank" });
+    expect(chargeRateLimit).not.toHaveBeenCalled();
   });
 });

@@ -4,6 +4,7 @@ import { StoryNotFoundState } from "@/components/stories/stories-states";
 import { TrackArtwork } from "@/components/track-artwork";
 import { siteUrl } from "@/lib/fluncle-links";
 import { findingsCount } from "@/lib/format";
+import { galaxySoundLine } from "@/lib/galaxy-sound";
 import { jsonLdScript } from "@/lib/json-ld";
 import { albumCoverAtSize } from "@/lib/media";
 import { type GalaxyPane, listGalaxyPanes } from "@/lib/server/galaxies-map";
@@ -78,26 +79,46 @@ function GalaxiesPage() {
         </header>
 
         <ul aria-label="Galaxies" className="galaxy-index-grid">
-          {galaxies.map((galaxy) => (
-            <li key={galaxy.slug}>
-              <Link className="galaxy-pane" params={{ slug: galaxy.slug }} to="/galaxies/$slug">
-                {galaxy.covers.length > 0 ? (
-                  <span aria-hidden="true" className="galaxy-pane-covers">
-                    {galaxy.covers.map((cover) => (
-                      <TrackArtwork
-                        alt=""
-                        className="galaxy-pane-cover"
-                        key={cover}
-                        src={albumCoverAtSize(cover, "small")}
-                      />
-                    ))}
+          {galaxies.map((galaxy) => {
+            const sound = galaxySoundLine(galaxy.slug);
+            const idBase = `galaxy-pane-${galaxy.slug}`;
+
+            return (
+              <li key={galaxy.slug}>
+                <Link
+                  aria-describedby={sound ? `${idBase}-sound` : undefined}
+                  aria-labelledby={`${idBase}-name ${idBase}-count`}
+                  className="galaxy-pane"
+                  params={{ slug: galaxy.slug }}
+                  to="/galaxies/$slug"
+                >
+                  {galaxy.covers.length > 0 ? (
+                    <span aria-hidden="true" className="galaxy-pane-covers">
+                      {galaxy.covers.map((cover) => (
+                        <TrackArtwork
+                          alt=""
+                          className="galaxy-pane-cover"
+                          key={cover}
+                          src={albumCoverAtSize(cover, "small")}
+                        />
+                      ))}
+                    </span>
+                  ) : null}
+                  <span className="galaxy-pane-name" id={`${idBase}-name`}>
+                    {galaxy.name}
                   </span>
-                ) : null}
-                <span className="galaxy-pane-name">{galaxy.name}</span>
-                <span className="galaxy-pane-count">{findingsCount(galaxy.memberCount)}</span>
-              </Link>
-            </li>
-          ))}
+                  {sound ? (
+                    <span className="galaxy-pane-sound" id={`${idBase}-sound`}>
+                      {sound}
+                    </span>
+                  ) : null}
+                  <span className="galaxy-pane-count" id={`${idBase}-count`}>
+                    {findingsCount(galaxy.memberCount)}
+                  </span>
+                </Link>
+              </li>
+            );
+          })}
         </ul>
 
         <footer className="log-plate-footer">

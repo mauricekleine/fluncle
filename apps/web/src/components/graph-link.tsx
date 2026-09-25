@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { type ComponentPropsWithoutRef, type ReactNode, useState } from "react";
 import { findingsCount } from "@/lib/format";
+import { galaxySoundLine } from "@/lib/galaxy-sound";
 import { type GraphEntityKind, type GraphPreview } from "@/lib/graph-prose";
 import { cn } from "@/lib/utils";
 
@@ -62,7 +63,8 @@ function PreviewBody({
     return <p className="graph-card-loading">Digging that out…</p>;
   }
 
-  const { bio, covers, findingCount, line, name } = preview;
+  const { bio, covers, findingCount, line, name, slug } = preview;
+  const sound = kind === "galaxy" ? galaxySoundLine(slug) : undefined;
 
   return (
     <>
@@ -74,7 +76,7 @@ function PreviewBody({
           ))}
         </span>
       ) : undefined}
-
+      {sound ? <p className="graph-card-line">{sound}</p> : undefined}
       {line ? <p className="graph-card-line">{line}</p> : undefined}
 
       {bio ? <p className="graph-card-bio">{bio}</p> : undefined}
