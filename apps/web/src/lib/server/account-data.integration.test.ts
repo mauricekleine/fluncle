@@ -12,11 +12,6 @@ import {
   seedUser,
 } from "./integration-db";
 
-// REAL-SQL integration tests for the /me account paths. Instead of mocking the
-// DB-write function (which never exercises the actual SQL, data-scoping, or
-// schema), we point `getDb()` at an in-memory libSQL database with the generated
-// migrations applied, then drive the REAL query functions in account-data.ts.
-
 let db: Client;
 
 vi.mock("./db", async (importOriginal) => {
@@ -48,8 +43,6 @@ afterEach(() => {
 });
 
 describe("deleteAccount (real SQL via accountDeletionStatements)", () => {
-  // Seed a user with a row in EVERY table the deletion touches, then assert the
-  // post-state of all of them — not just the two mocked paths.
   async function seedFullUser(userId: string, email: string): Promise<void> {
     const trackId = `track-${userId}-0000000000`;
     const logId = `log-${userId}`;
@@ -148,7 +141,6 @@ describe("deleteAccount (real SQL via accountDeletionStatements)", () => {
 
     expect(result.ok).toBe(true);
 
-    // 1. Hard-deleted per-user tables are now empty for this user.
     for (const table of [
       "user_rec_seeds",
       "user_saved_findings",
@@ -166,16 +158,12 @@ describe("deleteAccount (real SQL via accountDeletionStatements)", () => {
       expect(await rowCount(db, table), `${table} should be cleared`).toBe(0);
     }
 
-    // 2. Verification rows for the user's email are gone.
     expect(await rowCount(db, "verification")).toBe(0);
 
-    // 3. Submissions are ANONYMIZED, not hard-deleted: the row survives with
-    //    user_id = null (kept as review history).
     const subs = await db.execute("select id, user_id from submissions");
     expect(subs.rows.length).toBe(1);
     expect(subs.rows[0]?.user_id).toBeNull();
 
-    // 4. The user row is marked-deleted + anonymized, NOT dropped.
     const userRow = await db.execute({
       args: ["user-A"],
       sql: `select status, deleted_at, username, display_username, email, name, image
@@ -191,7 +179,6 @@ describe("deleteAccount (real SQL via accountDeletionStatements)", () => {
     expect(row?.name).toBe("Deleted account");
     expect(row?.image).toBeNull();
 
-    // 5. A completed deletion request is recorded.
     const requests = await db.execute(
       `select status, mode, summary_json from user_deletion_requests where user_id = 'user-A'`,
     );
@@ -208,7 +195,6 @@ describe("deleteAccount (real SQL via accountDeletionStatements)", () => {
 
     await deleteAccount(publicUser("user-A"));
 
-    // User B's rows survive untouched.
     const bSaved = await db.execute(
       `select count(*) as n from user_saved_findings where user_id = 'user-B'`,
     );
@@ -224,8 +210,6 @@ describe("deleteAccount (real SQL via accountDeletionStatements)", () => {
     );
     expect(Number(bWatches.rows[0]?.n)).toBe(1);
 
-    // B's frontier editions + their frozen tracks survive A's deletion (child scoped by
-    // the parent subquery, so B's children are never caught by A's delete).
     const bEditions = await db.execute(
       `select count(*) as n from frontier_editions where user_id = 'user-B'`,
     );
@@ -243,7 +227,6 @@ describe("deleteAccount (real SQL via accountDeletionStatements)", () => {
     expect(bUser.rows[0]?.status).toBe("active");
     expect(bUser.rows[0]?.email).toBe("b@example.com");
 
-    // Both submissions survive; only A's is anonymized.
     const subs = await db.execute("select user_id from submissions order by id");
     expect(subs.rows.map((r) => r.user_id)).toEqual([null, "user-B"]);
   });
@@ -272,12 +255,10 @@ describe("/me cross-user data scoping (real SQL, two seeded users)", () => {
         values (?, ?, ?, ?, ?, ?)`,
     });
 
-    // B reads its own export: returned.
     const owner = await getAccountExport(publicUser(userB), "export-of-B");
     expect(owner).not.toBeInstanceOf(Response);
     expect((owner as { export: { id: string } }).export.id).toBe("export-of-B");
 
-    // A guesses B's export id: scoped out → 404 Response, not B's row.
     const attacker = await getAccountExport(publicUser(userA), "export-of-B");
     expect(attacker).toBeInstanceOf(Response);
     expect((attacker as Response).status).toBe(404);
@@ -301,11 +282,9 @@ describe("/me cross-user data scoping (real SQL, two seeded users)", () => {
       },
     ]);
 
-    // A's list returns only A's saved finding.
     const aList = await listSavedFindings(publicUser(userA));
     expect(aList.savedFindings.map((f) => f.trackId)).toEqual(["track-shared-00000000"]);
 
-    // A unsaves the SAME track id: only A's row is deleted; B's survives.
     const result = await deleteSavedFinding(publicUser(userA), "track-shared-00000000");
     expect(result).toEqual({ ok: true });
 
@@ -338,9 +317,6 @@ describe("/me cross-user data scoping (real SQL, two seeded users)", () => {
   it("carries the finding's logId on an APPROVED submission that became a finding", async () => {
     const { listUserSubmissions } = await import("./account-data");
 
-    // A recording that IS a certified finding (log-shared), submitted and approved:
-    // the join surfaces its coordinate. `seedTrack` mints `findings.track_id =
-    // trackId`, and a submission's `spotify_track_id` is that same recording id.
     await seedSubmission(db, {
       id: "sub-approved",
       spotifyTrackId: "track-shared-00000000",
@@ -358,8 +334,6 @@ describe("/me cross-user data scoping (real SQL, two seeded users)", () => {
   it("omits the logId on a PENDING submission even when a finding shares the recording", async () => {
     const { listUserSubmissions } = await import("./account-data");
 
-    // Same certified recording, but the submission is still pending: the brief limits
-    // the link to the finding an APPROVED submission BECAME, so a pending row stays bare.
     await seedSubmission(db, {
       id: "sub-pending",
       spotifyTrackId: "track-shared-00000000",
@@ -377,8 +351,6 @@ describe("/me cross-user data scoping (real SQL, two seeded users)", () => {
   it("omits the logId on an approved submission whose recording is not a finding", async () => {
     const { listUserSubmissions } = await import("./account-data");
 
-    // Approved, but the recording it names has no `findings` row (never certified):
-    // the LEFT JOIN yields no log_id, so the row carries none.
     await seedSubmission(db, {
       id: "sub-orphan",
       spotifyTrackId: "track-uncertified-000",
@@ -397,7 +369,6 @@ describe("/me cross-user data scoping (real SQL, two seeded users)", () => {
 describe("saveFinding (real SQL, any track — findings AND catalogue)", () => {
   const userA = "user-A";
 
-  // The success shape of `saveFinding` (the non-Response branch).
   type SaveResult = {
     savedFinding: { logId?: string; note?: string; savedAt: string; trackId: string };
   };
@@ -415,7 +386,6 @@ describe("saveFinding (real SQL, any track — findings AND catalogue)", () => {
     expect((result as SaveResult).savedFinding.logId).toBe("log-cert");
     expect((result as SaveResult).savedFinding.trackId).toBe("track-cert-00000000");
 
-    // The stored row carries the coordinate (the finding path is byte-identical).
     const stored = await db.execute("select track_id, log_id from user_saved_findings");
     expect(stored.rows.length).toBe(1);
     expect(stored.rows[0]?.log_id).toBe("log-cert");
@@ -441,7 +411,7 @@ describe("saveFinding (real SQL, any track — findings AND catalogue)", () => {
 
   it("saves an UNCERTIFIED catalogue track with a null log_id and lists it", async () => {
     const { saveFinding, listSavedFindings } = await import("./account-data");
-    // A `tracks` row with NO `findings` row — the row the findings-only ceiling dropped.
+
     await seedCatalogueTrack(db, {
       artists: ["Nobody"],
       title: "Cold Cut",
@@ -453,13 +423,10 @@ describe("saveFinding (real SQL, any track — findings AND catalogue)", () => {
     expect((result as SaveResult).savedFinding.logId).toBeUndefined();
     expect((result as SaveResult).savedFinding.trackId).toBe("track-cat-000000000");
 
-    // Stored with a NULL coordinate (the unlit tier stays unnamed).
     const stored = await db.execute("select track_id, log_id from user_saved_findings");
     expect(stored.rows.length).toBe(1);
     expect(stored.rows[0]?.log_id).toBeNull();
 
-    // The list read joins `tracks` directly, so the catalogue row renders sanely with no
-    // coordinate — the null `log_id` does not crash the mapper.
     const list = await listSavedFindings(publicUser(userA));
     expect(list.savedFindings.length).toBe(1);
     expect(list.savedFindings[0]?.logId).toBeUndefined();
@@ -492,9 +459,7 @@ describe("saveFinding (real SQL, any track — findings AND catalogue)", () => {
 describe("saved sets (real SQL, owner-scoped)", () => {
   const userA = "user-A";
   const userB = "user-B";
-  // Two 22-char base62 Spotify ids — valid `?set=` tokens with no DB row needed
-  // (the codec accepts them; the name-derivation title lookup simply finds nothing
-  // and falls back), so a set round-trips without seeding a certified finding.
+
   const SET_A = "4iV5W9uYEdYUVa79Axb7Rh,1301WleyT98MSxVHPZCA6M";
 
   beforeEach(async () => {
@@ -547,23 +512,19 @@ describe("saved sets (real SQL, owner-scoped)", () => {
       savedSet: { id: string };
     };
 
-    // A's list holds only A's set.
     const aList = await listSavedSets(publicUser(userA));
     expect(aList.savedSets.map((s) => s.id)).toEqual([aSaved.savedSet.id]);
 
-    // A cannot update B's set (scoped → 404).
     const updateAttempt = await updateSavedSet(publicUser(userA), bSaved.savedSet.id, {
       name: "hijacked",
     });
     expect(updateAttempt).toBeInstanceOf(Response);
     expect((updateAttempt as Response).status).toBe(404);
 
-    // A cannot delete B's set (scoped → 404).
     const deleteAttempt = await deleteSavedSet(publicUser(userA), bSaved.savedSet.id);
     expect(deleteAttempt).toBeInstanceOf(Response);
     expect((deleteAttempt as Response).status).toBe(404);
 
-    // B's set survived both attacks, name intact.
     const bList = await listSavedSets(publicUser(userB));
     expect(bList.savedSets.map((s) => s.id)).toEqual([bSaved.savedSet.id]);
     expect(bList.savedSets[0]?.name).toBe("B's set");
@@ -630,7 +591,6 @@ describe("user preferences (real SQL, closed schema + owner-scoped)", () => {
     const read = await getUserPreferences(publicUser(userA));
     expect(read.preferences).toEqual({ keyNotation: "camelot" });
 
-    // Upsert (not a second row): a further write updates the same row in place.
     await updateUserPreferences(publicUser(userA), { keyNotation: "scales" });
     expect(await rowCount(db, "user_preferences")).toBe(1);
     expect((await getUserPreferences(publicUser(userA))).preferences).toEqual({
@@ -657,7 +617,7 @@ describe("user preferences (real SQL, closed schema + owner-scoped)", () => {
     } as unknown);
     expect(result).toBeInstanceOf(Response);
     expect((result as Response).status).toBe(400);
-    // A rejected write persists nothing.
+
     expect(await rowCount(db, "user_preferences")).toBe(0);
   });
 
@@ -733,9 +693,6 @@ describe("listGalaxyCollection (real SQL, the collection browser read)", () => {
     });
   }
 
-  // The fully-named map: two live named galaxies + one RETIRED named galaxy (which
-  // must leak nowhere) + one finding with no galaxy assignment at all. The unnamed
-  // half-named-map case gets its own test below (it flips the whole gate).
   beforeEach(async () => {
     const { collectLogId } = await import("./account-data");
 
@@ -822,8 +779,6 @@ describe("listGalaxyCollection (real SQL, the collection browser read)", () => {
   it("GATES the whole galaxy layer while the map is half-named (isGalaxyMapFullyNamed)", async () => {
     const { listGalaxyCollection } = await import("./account-data");
 
-    // One live UNNAMED galaxy flips the gate: names and completion lines vanish,
-    // the collection itself stays (flat, unheaded).
     await seedGalaxy("g-fresh", null, null);
 
     const result = await listGalaxyCollection(userA);
@@ -858,7 +813,7 @@ describe("watches (real SQL, owner-scoped — D2a)", () => {
     expect(list.watches[0]?.entityId).toBe("artist-1");
     expect(list.watches[0]?.name).toBe("Netsky");
     expect(list.watches[0]?.slug).toBe("netsky");
-    // include_similar defaults OFF in storage (no consumer/UI yet — the deferred digest).
+
     expect(list.watches[0]?.includeSimilar).toBe(false);
   });
 
@@ -885,7 +840,6 @@ describe("watches (real SQL, owner-scoped — D2a)", () => {
       kind: "artist",
     })) as { watch: { id: string } };
 
-    // The second save echoes the SAME stored row, not a fresh one.
     expect(second.watch.id).toBe(first.watch.id);
 
     const list = await listWatches(publicUser(userA));
@@ -896,8 +850,6 @@ describe("watches (real SQL, owner-scoped — D2a)", () => {
   it("the same entity id under artist and label are distinct watches", async () => {
     const { listWatches, saveWatch } = await import("./account-data");
 
-    // Seed an artist + a label that happen to share an id — the UNIQUE keys on
-    // (user, KIND, entity), so both watches coexist.
     await seedLabel(db, { id: "shared-id", name: "A Label", slug: "a-label" });
     await seedArtist(db, { id: "shared-id", name: "An Artist", slug: "an-artist" });
 
@@ -928,8 +880,6 @@ describe("watches (real SQL, owner-scoped — D2a)", () => {
   it("404s an id that matches no entity of that kind", async () => {
     const { saveWatch } = await import("./account-data");
 
-    // The id exists as a LABEL, but the caller asked to watch an ARTIST — no artist row
-    // matches, so it 404s (the kind selects the table the existence check reads).
     const result = await saveWatch(publicUser(userA), { entityId: "label-1", kind: "artist" });
     expect(result).toBeInstanceOf(Response);
     expect((result as Response).status).toBe(404);
@@ -960,17 +910,14 @@ describe("watches (real SQL, owner-scoped — D2a)", () => {
       kind: "artist",
     })) as { watch: { id: string } };
 
-    // A cannot delete B's watch (scoped → 404).
     const hijack = await deleteWatch(publicUser(userA), bSaved.watch.id);
     expect(hijack).toBeInstanceOf(Response);
     expect((hijack as Response).status).toBe(404);
 
-    // A removes its own — clean.
     const removed = await deleteWatch(publicUser(userA), aSaved.watch.id);
     expect(removed).toEqual({ ok: true });
     expect(await listWatches(publicUser(userA)).then((r) => r.watches)).toHaveLength(0);
 
-    // B's watch is untouched.
     expect(await listWatches(publicUser(userB)).then((r) => r.watches)).toHaveLength(1);
   });
 
@@ -983,13 +930,6 @@ describe("watches (real SQL, owner-scoped — D2a)", () => {
   });
 });
 
-// ── mergeGalaxyProgress: the SIZE cap + the bounded write path ────────────────────────────────
-//
-// The merge takes a client's local save, so `collectedLogIds` is untrusted and was uncapped: a
-// signed-in caller (a Spotify login is open to anyone) could PUT 100k coordinates and the old
-// `for (…) await collectLogId(…)` loop would spend three serialized queries on each. The cap
-// bounds the size; the bulk path bounds the round trips. Both are asserted against real SQL, and
-// the collect semantics are pinned so the batching cannot quietly change what gets collected.
 describe("mergeGalaxyProgress (real SQL — the capped, batched local-save merge)", () => {
   const user = publicUser("merger");
 
@@ -997,7 +937,7 @@ describe("mergeGalaxyProgress (real SQL — the capped, batched local-save merge
     await seedUser(db, { email: "merger@x.test", id: user.id, username: user.id });
     await seedTrack(db, { logId: "log-m1", title: "One", trackId: "track-merge-1-000000" });
     await seedTrack(db, { logId: "log-m2", title: "Two", trackId: "track-merge-2-000000" });
-    // A catalogue row: it has NO findings row, so it is not a collectible.
+
     await seedCatalogueTrack(db, { title: "Uncertified", trackId: "track-merge-3-000000" });
   });
 
@@ -1051,8 +991,6 @@ describe("mergeGalaxyProgress (real SQL — the capped, batched local-save merge
   it("accepts a save AT the cap and 400s one coordinate more, writing nothing", async () => {
     const { MAX_GALAXY_MERGE_LOG_IDS, mergeGalaxyProgress } = await import("./account-data");
 
-    // At the cap: every id past the two real ones is unresolvable, so it is accepted and only the
-    // real finding lands — the point is that the SIZE is allowed, not that the ids exist.
     const filler = (count: number) =>
       Array.from({ length: count }, (_, index) => `log-filler-${index}`);
     const atCap = await mergeGalaxyProgress(user, {
@@ -1069,7 +1007,7 @@ describe("mergeGalaxyProgress (real SQL — the capped, batched local-save merge
     expect(over).toBeInstanceOf(Response);
     expect((over as Response).status).toBe(400);
     expect(await (over as Response).clone().json()).toMatchObject({ code: "too_many_log_ids" });
-    // The reject is total: log-m2 was NOT collected, and the counters did not move.
+
     expect(await rowCount(db, "user_galaxy_collections")).toBe(1);
   });
 

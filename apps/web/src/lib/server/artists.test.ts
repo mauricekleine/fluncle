@@ -1,9 +1,3 @@
-// The pure helpers of the artist entity module (lib/server/artists.ts): the JSON parse of the
-// raw `artists_json` names, the canonical slug mint, and the write-path URL guard. The review
-// predicates live with their client-safe owner (lib/artist-review.test.ts).
-// These carry no DB — they are exercised directly, no libSQL engine needed. The DB-backed paths
-// (upsert/link/queue) mock `./db` against the real schema like labels.test.ts and are out of
-// scope here; this file closes the pure-unit gap flagged by the coverage audit.
 import { describe, expect, it } from "vitest";
 import { assertHttpUrl, InvalidArtistSocialError, parseArtistsJson, toArtistSlug } from "./artists";
 

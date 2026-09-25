@@ -42,11 +42,6 @@ type ArtifactStreamDefinition = {
   vectorBytes: number | null;
 };
 
-/**
- * The fail-closed producer/consumer registry. A stream exists only when its exact stream and
- * payload format versions are named here. Adding or changing a payload is a registry/version
- * change; an unknown tuple is rejected at every producer, registration, snapshot, and ack edge.
- */
 export const ARTIFACT_STREAM_REGISTRY = {
   "device.album": {
     deviceTable: "albums",
@@ -860,10 +855,6 @@ function buildPreparedArtifactChangeInsertStatement(event: ValidatedArtifactChan
   };
 }
 
-/**
- * Build only the validated event-body statement. Source writers must call
- * insertArtifactChangeInTransaction so the durable retry receipt lands in the same transaction.
- */
 export function buildArtifactChangeInsertStatement(input: ArtifactChangeInput): InStatement {
   return buildPreparedArtifactChangeInsertStatement(validateArtifactChange(input));
 }
@@ -1063,11 +1054,6 @@ async function latestArtifactRevisionInTransaction(
   return Number(typedRow<{ revision: bigint | number | null }>(latestResult.rows)?.revision ?? 0);
 }
 
-/**
- * Append one material revision inside the caller's source write transaction. An exact retry
- * returns the immutable existing event; reusing the revision for different bytes fails, and a
- * stale revision cannot land after a newer one.
- */
 export async function insertArtifactChangeInTransaction(
   client: Pick<Client, "execute">,
   prepared: PreparedArtifactChange,
@@ -1166,7 +1152,6 @@ async function insertPreparedArtifactChangeInTransaction(
   return { inserted: true, row: inserted };
 }
 
-/** Open a write transaction and append one material revision atomically. */
 export async function insertArtifactChange(
   client: ArtifactClient,
   input: ArtifactChangeInput,
@@ -1274,7 +1259,6 @@ function generationId(consumerId: string, snapshotSeq: number, stream: ArtifactS
   return `${consumerId}:${snapshotSeq}:${stream}:${crypto.randomUUID()}`;
 }
 
-/** Register or re-register a consumer. Every call starts a fresh fenced rebuild. */
 export async function registerArtifactConsumer(
   client: ArtifactClient,
   input: { consumerId: string; contracts: readonly ArtifactContract[] },
@@ -1525,9 +1509,7 @@ export function buildArtifactSnapshotStatement(
     predicate = "1 = 1";
   } else if (table === "track_artists") {
     from = "track_artists ta";
-    // The edge ships only when BOTH its endpoints do. `artists` below refuses an unlisted artist,
-    // and an edge pointing at a row the artifact does not carry would fail the artifact's own
-    // `track_artists.artist_id -> artists.id` closure check (scripts/lib/device-db-derivation.ts).
+
     predicate = `exists (
       select 1
       from tracks t
@@ -1540,10 +1522,7 @@ export function buildArtifactSnapshotStatement(
     )`;
   } else if (table === "artists") {
     from = "artists source_row";
-    // A replica is a public artifact: it leaves the server and is reachable through an
-    // unauthenticated replica token, so the visibility rule binds here exactly as it does on the
-    // web. A track's CREDIT is unaffected — the device renders it from `tracks.artists_json`, not
-    // from this table (apps/mobile/src/lib/replica-rows.ts).
+
     predicate = `exists (
       select 1
       from track_artists ta
@@ -1666,11 +1645,6 @@ export async function prepareCurrentSonarTrackArtifactChange(input: {
   };
 }
 
-/**
- * Append one prepared Sonar projection in a caller-owned write transaction. The write transaction
- * serializes revision allocation with every other producer; compacted receipts participate in the
- * same maximum as live event bodies.
- */
 export async function insertCurrentSonarTrackArtifactChangeInTransaction(
   client: Pick<Client, "execute">,
   prepared: PreparedArtifactChangeMaterial,
@@ -1773,8 +1747,7 @@ async function sourceSnapshotVerificationPage(
     checkpoint.sourceDigest,
     materials.map(({ payloadDigest: digest }) => digest),
   );
-  // The keyset cursor is the page tail only. Encoding it once keeps the wire encoder off every
-  // other row while the rebuild-checkpoint transaction holds the write lock.
+
   const tail = materials.at(-1);
 
   return {
@@ -1870,7 +1843,6 @@ export async function listArtifactSnapshot(
   };
 }
 
-/** Re-read and durably acknowledge one exact source-snapshot page. */
 export async function checkpointArtifactRebuild(
   client: ArtifactClient,
   input: {
@@ -1968,7 +1940,6 @@ export async function checkpointArtifactRebuild(
   }
 }
 
-/** Transition a fully snapshotted consumer to active at its original log fence. */
 export async function activateArtifactConsumer(
   client: ArtifactClient,
   consumerId: string,
@@ -2121,7 +2092,6 @@ async function verifyChangesFromCheckpoint(
   };
 }
 
-/** Read the next bounded global-sequence page from an active consumer's durable checkpoint. */
 export async function listArtifactChanges(
   client: ArtifactReadClient,
   input: { consumerId: string; limit?: number },
@@ -2143,11 +2113,6 @@ export async function listArtifactChanges(
   );
 }
 
-/**
- * Acknowledge exactly the next observed page. The server re-reads and re-digests it inside the
- * write transaction, so a caller cannot regress, jump ahead, omit an event, or acknowledge an
- * unknown stream/version. A crash before this commit simply re-delivers the same page.
- */
 export async function acknowledgeArtifactChanges(
   client: ArtifactClient,
   input: {
@@ -2253,7 +2218,6 @@ export async function acknowledgeArtifactChanges(
   return getArtifactConsumerStatus(client, input.consumerId);
 }
 
-/** Inactive consumers retain declarations for introspection but no reusable fence/checkpoint. */
 export async function inactivateArtifactConsumer(
   client: ArtifactClient,
   consumerId: string,
@@ -2312,10 +2276,6 @@ export function buildArtifactConsumerPurgeCandidateStatement(
   };
 }
 
-/**
- * List one primary-key-keyset page of inactive consumer identities old enough for an operator to
- * consider purging. This is deliberately read-only: no runtime route or delete operation exists.
- */
 export async function listArtifactConsumerPurgeCandidates(
   client: Pick<Client, "execute">,
   input: { cursor?: string; inactiveBefore: string; limit?: number },
@@ -2366,7 +2326,6 @@ async function compactionBarrier(client: Pick<Client, "execute">): Promise<numbe
   return barrier === null ? null : Number(barrier);
 }
 
-/** Delete one bounded, transactionally barrier-checked prefix of the immutable log. */
 export async function compactArtifactChanges(
   client: ArtifactClient,
   input: { limit?: number } = {},

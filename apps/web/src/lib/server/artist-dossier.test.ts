@@ -8,12 +8,6 @@ import {
   summarizeArtistSignature,
 } from "./artist-dossier";
 
-// The pure core of the artist dossier: the artist-level mean embedding + cosine
-// ranking that powers the "similar artists" row, and the signature summary (the
-// first-found date). Small fixture vectors only — the math is dimension-agnostic
-// (cosine over the shared width), so 2-D vectors exercise it exactly like the real
-// 1024-D MuQ space, with no DB or network.
-
 describe("meanEmbedding — the artist centroid", () => {
   it("returns null for an empty set (an artist with no embedded finding)", () => {
     expect(meanEmbedding([])).toBeNull();
@@ -33,7 +27,6 @@ describe("meanEmbedding — the artist centroid", () => {
   });
 
   it("treats a missing component in a ragged vector as zero", () => {
-    // [4, 4] widened to width 3 contributes 0 to the third slot.
     expect(
       meanEmbedding([
         [4, 4, 6],
@@ -44,9 +37,6 @@ describe("meanEmbedding — the artist centroid", () => {
 });
 
 describe("rankSimilarArtists — the similar-artists ranking", () => {
-  // Drift points along +x. Echo hugs +x (nearest), Pulse is diagonal (further),
-  // Void is orthogonal (furthest). Cosine of the means, so direction is all that
-  // matters — magnitude is normalized away.
   const groups: ArtistEmbeddingGroup[] = [
     { artistId: "drift", imageUrl: undefined, name: "Drift", slug: "drift", vectors: [[1, 0]] },
     {
@@ -67,7 +57,7 @@ describe("rankSimilarArtists — the similar-artists ranking", () => {
     const neighbours = rankSimilarArtists("drift", groups, 4);
 
     expect(neighbours.map((n) => n.slug)).toEqual(["echo", "pulse", "void"]);
-    // The target never appears in its own neighbours.
+
     expect(neighbours.some((n) => n.slug === "drift")).toBe(false);
   });
 
@@ -112,8 +102,6 @@ describe("rankSimilarArtists — the similar-artists ranking", () => {
 });
 
 describe("rankSimilarToArtists — the multi-artist 'sounds like these' probe math", () => {
-  // The same fixture as rankSimilarArtists: drift is +x, echo hugs +x, pulse is the diagonal, void
-  // is +y. The probe is the mean OF the selected artists' means, so it aims between them.
   const groups: ArtistEmbeddingGroup[] = [
     { artistId: "drift", imageUrl: undefined, name: "Drift", slug: "drift", vectors: [[1, 0]] },
     {
@@ -131,8 +119,6 @@ describe("rankSimilarToArtists — the multi-artist 'sounds like these' probe ma
   ];
 
   it("ranks by cosine to the AVERAGE of the selected artists, both selected excluded", () => {
-    // drift (+x) and void (+y) average to the diagonal — pulse sits exactly on it, echo is off toward
-    // +x. So pulse leads echo, and neither selected artist appears in its own results.
     const results = rankSimilarToArtists(["drift", "void"], groups, 4);
 
     expect(results.map((artist) => artist.slug)).toEqual(["pulse", "echo"]);
@@ -146,11 +132,8 @@ describe("rankSimilarToArtists — the multi-artist 'sounds like these' probe ma
   });
 
   it("weighs each selected artist equally regardless of catalogue depth (mean of means)", () => {
-    // echo carries TWO vectors, drift one; the probe is mean(mean(echo), mean(drift)), so echo's
-    // extra track does not tilt the probe toward it — the two selected weigh 1:1.
     const results = rankSimilarToArtists(["drift", "echo"], groups, 4);
 
-    // Both selected are excluded; the remaining pulse (diagonal) and void (+y) rank by the probe.
     expect(results.map((artist) => artist.slug)).toEqual(["pulse", "void"]);
   });
 
@@ -189,8 +172,6 @@ describe("artistCentroidFingerprint — the per-artist staleness fingerprint", (
   it("moves when the artist's embedded-track count moves (an embed, a re-link, a deletion)", () => {
     const base = artistCentroidFingerprint(5);
 
-    // The count is PER-ARTIST, so only an artist whose OWN discography changed goes stale — not the
-    // whole archive on any global change. A gain and a loss both diverge (compared with `<>`).
     expect(artistCentroidFingerprint(6)).not.toBe(base);
     expect(artistCentroidFingerprint(4)).not.toBe(base);
   });

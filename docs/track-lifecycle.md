@@ -16,6 +16,8 @@ Before the phases, the shape of the thing they act on. A track's data lives in a
 
 **A track is a track; certification is a _relationship_ Fluncle has with it.** Everything on `tracks` is derivable from the recording itself and would be just as true of a track Fluncle has never heard of. Everything on `findings` only exists because Fluncle logged it.
 
+The Apple Music exact-ISRC catalogue read requests `include=albums`. Apple can place the full album attributes in each song's `relationships.albums.data` rather than a top-level `included` array, so the album parser reads both shapes and ranks non-compilation pressings first. Authentication failures (401/403) clear the cached developer token and feed the shared Apple breaker; a transient 429 leaves the auth-failure streak alone.
+
 **Why the vector is a third table.** It is not a modelling claim — the vector IS a property of the recording, so it belongs on `tracks` by every rule above. It is a physics one. A 4 KB `F32_BLOB(1024)` inline in a 91-column, 31-index table spills to overflow pages that SQLite must WALK to reach any column stored after it, so every scan reaching a post-blob predicate paid for a vector it never selected — and hosted Turso cannot run `ANALYZE` (libsql-server rejects it), so there is no `sqlite_stat1` and the planner chooses among those 31 indexes by heuristic, permanently. We cannot make it guess better; the satellite makes a wrong guess CHEAP. `tracks.has_embedding` mirrors the satellite row's existence so a presence question still reads one column, and the pair moves in one write batch.
 
 The `F32_BLOB(1024)` width in `db/schema.ts` must match `EMBEDDING_DIMS` in `lib/server/embedding.ts`; the schema keeps the width literal so Drizzle can load it as a leaf module.

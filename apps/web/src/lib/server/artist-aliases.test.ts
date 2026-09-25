@@ -1,5 +1,3 @@
-// Artist aliases (the MusicBrainz identity layer): the pure MB-alias harvest + the upsert
-// idempotence against a real in-memory libSQL engine. `getDb` is mocked to the per-test client.
 import { type Client, createClient } from "@libsql/client";
 import { LOCAL_DB_CONCURRENCY } from "../database-concurrency";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -19,12 +17,12 @@ describe("extractAliasesFromArtistData (the MB alias harvest)", () => {
     const aliases = extractAliasesFromArtistData(
       {
         aliases: [
-          { name: "Nu:Tone", type: "Artist name" }, // == canonical (folds to the same slug) → skipped
+          { name: "Nu:Tone", type: "Artist name" },
           { name: "Nutone", type: "Artist name" },
           { name: "Daniel Trigg", type: "Legal name" },
-          { name: "Nutone DnB", type: "Search hint" }, // a search hint → kind 'hint'
-          { name: "  Nutone  ", type: "Artist name" }, // dupe by slug → skipped
-          { name: "   ", type: "Artist name" }, // empty → skipped
+          { name: "Nutone DnB", type: "Search hint" },
+          { name: "  Nutone  ", type: "Artist name" },
+          { name: "   ", type: "Artist name" },
         ],
       },
       "Nu:Tone",
@@ -98,9 +96,6 @@ describe("persistResolution — MB aliases are upserted idempotently", () => {
   });
 
   it("never reverts an operator-CONFIRMED alias back to auto on a re-resolve", async () => {
-    // The operator ruled an alias confirmed; the (artist, slug, source) key differs by source, so
-    // an MB row would coexist — but the SAME-source MB re-write is `do nothing`, so a confirmed
-    // operator row is never touched. Seed an operator-confirmed row, then re-resolve.
     await db.execute({
       args: ["op1", "a1", "Nutone", "nutone", "operator", "name", "confirmed", "t0"],
       sql: `insert into artist_aliases (id, artist_id, alias, alias_slug, source, kind, status, created_at)
@@ -121,7 +116,7 @@ describe("persistResolution — MB aliases are upserted idempotently", () => {
       args: ["a1"],
       sql: `select source, status from artist_aliases where artist_id = ? order by source`,
     });
-    // The operator's confirmed row survives; the MB row lands alongside it (different source key).
+
     expect(result.rows).toEqual([
       { source: "musicbrainz", status: "auto" },
       { source: "operator", status: "confirmed" },

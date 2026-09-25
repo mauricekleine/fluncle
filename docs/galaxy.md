@@ -26,6 +26,8 @@ The renderer draws on a 270px canvas and enlarges it by an integer scale so pixe
 
 Fuel is the flight sim's only run-ending pressure: a dry tank drifts and tows the ship home, while asteroid hits spend fuel and black holes transport it with a survivable top-up. A tow preserves the lifetime log and rebuilds the same seeded frontier. Reaching every star only starts the flight home when the run logged at least one new star; a returning player with a complete lifetime log cannot win merely by spawning beside Earth.
 
+A signed-in progress merge accepts at most 10,000 distinct Log IDs per request, after trimming and deduplication. The caller controls this list, so the per-hour request limiter alone cannot bound one merge; overflow rejects the entire merge rather than silently dropping progress. The server resolves and writes IDs in bounded SQL batches, and only certified findings can be collected.
+
 ## The atlas
 
 **C** toggles the atlas in flight (C or Esc closes it): a full-screen top-down map of the voyage — the in-game chart and the demo surface in one, because the map shows the archive's growth inherently: with every new finding, the galaxy grows.

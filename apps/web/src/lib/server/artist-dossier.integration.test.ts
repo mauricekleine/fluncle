@@ -9,17 +9,6 @@ import {
   syncHubCounts,
 } from "./integration-db";
 
-// THE SIMILAR-ARTISTS ENGINE, PROVEN — against the REAL schema, with vectors we control.
-//
-// The `rank_artists` sweep folds each artist's embedded tracks (findings AND catalogue) into a
-// stored centroid, then re-ranks its top-K nearest neighbours IN SQL (`vector_distance_cos` over
-// `artist_centroids`). None of that can be checked by reading it, so these cases seed artists whose
-// tracks aim at known axes, run the sweep, and assert the centroids, the edges, the `certified`
-// tier, the bounded tick, the fingerprint staleness, the orphan purge, and determinism.
-//
-// Runs on the in-memory libSQL database built from the generated migrations, so the vector SQL
-// under test (`vector32`, `vector_distance_cos`) executes against the real DDL — not a mock.
-
 let db: Client;
 
 vi.mock("./db", async (importOriginal) => {
@@ -28,14 +17,12 @@ vi.mock("./db", async (importOriginal) => {
   return { ...actual, getDb: () => Promise.resolve(db) };
 });
 
-// Imported AFTER the mock so the module's `getDb` is the mocked one.
 const { ARTIST_NEIGHBOURS_SQL, getArtistNeighbours, rankArtists } =
   await import("./artist-dossier");
 
 const DIMS = 1024;
 const NOW = () => "2026-07-18T00:00:00.000Z";
 
-/** A unit vector pointing along one axis — an "artificial genre" we can aim tracks at. */
 function axis(index: number): number[] {
   const vector = Array.from<number>({ length: DIMS }).fill(0);
   vector[index] = 1;
@@ -43,19 +30,16 @@ function axis(index: number): number[] {
   return vector;
 }
 
-/** Normalize, so every fixture vector is unit-length like a real MuQ vector. */
 function unit(vector: number[]): number[] {
   const norm = Math.sqrt(vector.reduce((sum, value) => sum + value * value, 0));
 
   return vector.map((value) => value / norm);
 }
 
-/** A vector `weight` of the way from `from` toward `toward` — a controlled near-neighbour. */
 function blend(from: number[], toward: number[], weight: number): number[] {
   return unit(from.map((value, index) => value * (1 - weight) + (toward[index] ?? 0) * weight));
 }
 
-/** Insert one artist (only the columns the sweep + read touch). */
 async function seedArtist(id: string, name: string): Promise<void> {
   const now = new Date().toISOString();
 
@@ -66,13 +50,6 @@ async function seedArtist(id: string, name: string): Promise<void> {
   });
 }
 
-/**
- * Link a track to an artist (position 1, lead), then bring the MAINTAINED artist hub counters back
- * into agreement with the edge — the read's `certified` tier is `artists.certified_finding_count`
- * (keystone 2), which in production is moved as a delta by the write paths. A fixture that inserts
- * into `track_artists` directly bypasses those writers, so without this the seeded world would hold
- * edges with counters at the DDL default and every neighbour would read uncertified.
- */
 async function link(trackId: string, artistId: string): Promise<void> {
   await db.execute({
     args: [trackId, artistId],
@@ -81,16 +58,10 @@ async function link(trackId: string, artistId: string): Promise<void> {
   await syncHubCounts(db);
 }
 
-/** The write the agent-tier `update_track` path performs: validated JSON → ranked F32_BLOB. */
 async function embed(trackId: string, vector: number[]): Promise<void> {
   await seedEmbedding(db, trackId, vector);
 }
 
-/**
- * Seed an artist with one embedded FINDING (certified) aimed at `vector`. `catalogueVector`, when
- * given, adds a second embedded CATALOGUE track under the same artist — so the centroid is the mean
- * over a findings+catalogue mix.
- */
 async function seedCertifiedArtist(
   id: string,
   vector: number[],
@@ -108,7 +79,6 @@ async function seedCertifiedArtist(
   }
 }
 
-/** Seed a CATALOGUE-ONLY artist (no finding — uncertified) with one embedded catalogue track. */
 async function seedCatalogueArtist(id: string, vector: number[]): Promise<void> {
   await seedArtist(id, id);
   await seedCatalogueTrack(db, { title: `${id} cat`, trackId: `${id}-cat` });
@@ -128,8 +98,6 @@ beforeEach(async () => {
 
 describe("rankArtists — the sweep", () => {
   it("stores one centroid per embedded artist and its top-K sonic edges", async () => {
-    // A sits at axis 0 (mean of a finding + a catalogue track, both near axis 0). B is closest to A,
-    // then D (a small tilt), then Z (orthogonal, axis 40).
     await seedCertifiedArtist("a", axis(0), blend(axis(0), axis(1), 0.1));
     await seedCertifiedArtist("b", blend(axis(0), axis(1), 0.15));
     await seedCertifiedArtist("d", blend(axis(0), axis(1), 0.5));
@@ -142,7 +110,6 @@ describe("rankArtists — the sweep", () => {
     expect(summary.remaining).toBe(0);
     expect(await centroidCount()).toBe(4);
 
-    // A folded TWO vectors (finding + catalogue) into its mean.
     const aCentroid = await db.execute({
       args: ["a"],
       sql: `select vector_count from artist_centroids where artist_id = ?`,
@@ -151,14 +118,14 @@ describe("rankArtists — the sweep", () => {
 
     const neighbours = await getArtistNeighbours("a", 4);
     expect(neighbours.map((n) => n.slug)).toEqual(["b", "d", "z"]);
-    // A never appears among its own neighbours.
+
     expect(neighbours.some((n) => n.slug === "a")).toBe(false);
   });
 
   it("marks a catalogue-only neighbour uncertified (the unlit tier) and a finding-artist certified", async () => {
     await seedCertifiedArtist("a", axis(0));
-    await seedCertifiedArtist("b", blend(axis(0), axis(1), 0.1)); // has a finding → certified
-    await seedCatalogueArtist("c", blend(axis(0), axis(1), 0.2)); // catalogue only → uncertified
+    await seedCertifiedArtist("b", blend(axis(0), axis(1), 0.1));
+    await seedCatalogueArtist("c", blend(axis(0), axis(1), 0.2));
 
     await rankArtists(100, NOW);
 
@@ -173,22 +140,17 @@ describe("rankArtists — the sweep", () => {
       await seedCatalogueArtist(`ar${index}`, blend(axis(0), axis(index + 1), 0.2));
     }
 
-    // A FULL batch answers with the positive SENTINEL, not a count: more is stale by construction,
-    // so the second pass over `track_artists ⋈ track_embeddings` buys a number nothing reads.
     const first = await rankArtists(2, NOW);
     expect(first.centroidsComputed).toBe(2);
     expect(first.remaining).toBeGreaterThan(0);
     expect(await centroidCount()).toBe(2);
 
-    // Draining the rest converges to zero — the sweep is resumable.
     await rankArtists(2, NOW);
     const last = await rankArtists(2, NOW);
     expect(last.remaining).toBe(0);
     expect(await centroidCount()).toBe(5);
   });
 
-  // `countRemaining` is the human readout's opt-in: the exact backlog, at the cost of the scan the
-  // sentinel exists to skip. The `--json` automation path never asks for it.
   it("reports the EXACT stale backlog on a full batch when countRemaining asks for it", async () => {
     for (let index = 0; index < 5; index += 1) {
       await seedCatalogueArtist(`ar${index}`, blend(axis(0), axis(index + 1), 0.2));
@@ -199,10 +161,6 @@ describe("rankArtists — the sweep", () => {
     expect(counted.remaining).toBe(3);
   });
 
-  // A SHORT batch is where the two sweeps part company. `rankCatalogue` stamps every row it took,
-  // so a short batch is drained; `rankArtists` purges an undecodable artist's centroid while the
-  // artist still credits embedded tracks, so that artist is stale again next tick. The short arm
-  // therefore COUNTS rather than assuming 0 — otherwise the drain loop stops one tick early.
   it("counts (never assumes zero) after a short batch", async () => {
     await seedCatalogueArtist("a", axis(0));
     await seedCatalogueArtist("b", axis(1));
@@ -212,10 +170,6 @@ describe("rankArtists — the sweep", () => {
     expect(short.remaining).toBe(0);
   });
 
-  // THE DRAIN SIGNAL'S TWO BRANCHES. An empty page over a POSITIVE limit proves the stale set is
-  // empty, so `remaining` is 0 without a second `group by` over `track_artists ⋈ track_embeddings`.
-  // A limit of 0 observes NO page, so it must still COUNT — otherwise an idling cron would read
-  // "drained" while artists were stale and stop looping.
   it("counts remaining on a zero limit, and infers it on an empty positive-limit page", async () => {
     await seedCatalogueArtist("a", axis(0));
     await seedCatalogueArtist("b", axis(1));
@@ -237,26 +191,21 @@ describe("rankArtists — the sweep", () => {
     const settled = await rankArtists(100, NOW);
     expect(settled.remaining).toBe(0);
 
-    // Idempotent no-op on a settled graph.
     const again = await rankArtists(100, NOW);
     expect(again.centroidsComputed).toBe(0);
     expect(again.remaining).toBe(0);
 
-    // A brand-new artist stales ONLY itself — a and b are untouched (their own counts didn't move).
-    // This is the whole point of a PER-ARTIST fingerprint: a new finding is not a full re-drain.
     await seedCertifiedArtist("c", blend(axis(0), axis(1), 0.2));
     const added = await rankArtists(100, NOW);
     expect(added.centroidsComputed).toBe(1);
     expect(added.remaining).toBe(0);
 
-    // Adding a second embedded track to an EXISTING artist stales only that artist (its count moved).
     await seedCatalogueTrack(db, { title: "a extra", trackId: "a-extra" });
     await link("a-extra", "a");
     await embed("a-extra", blend(axis(0), axis(2), 0.1));
     const grown = await rankArtists(100, NOW);
     expect(grown.centroidsComputed).toBe(1);
 
-    // A's centroid now folds TWO vectors (its original finding + the new catalogue track).
     const aCount = await db.execute({
       args: ["a"],
       sql: `select vector_count from artist_centroids where artist_id = ?`,
@@ -270,13 +219,12 @@ describe("rankArtists — the sweep", () => {
     await rankArtists(100, NOW);
     expect(await centroidCount()).toBe(2);
 
-    // Clear A's only embedding (the wrong-audio path) → A becomes an orphan.
     await seedEmbedding(db, "a-find", null);
 
     const summary = await rankArtists(100, NOW);
     expect(summary.centroidsRemoved).toBe(1);
     expect(await centroidCount()).toBe(1);
-    // B no longer lists A (A's edge to B and B's edge to A are both gone).
+
     expect(await getArtistNeighbours("b", 4)).toEqual([]);
   });
 
@@ -290,7 +238,6 @@ describe("rankArtists — the sweep", () => {
       `select artist_id, neighbour_artist_id, rank, similarity from artist_similar order by artist_id, rank`,
     );
 
-    // A fresh DB, the same seeds, the same injected clock → the same rows.
     db = await createIntegrationDb();
     await seedCertifiedArtist("a", axis(0));
     await seedCertifiedArtist("b", blend(axis(0), axis(1), 0.1));
@@ -307,7 +254,7 @@ describe("rankArtists — the sweep", () => {
 describe("getArtistNeighbours — the read", () => {
   it("returns [] for an artist with no edge rows yet (the rail hides)", async () => {
     await seedCertifiedArtist("a", axis(0));
-    // No sweep has run — no edges exist.
+
     expect(await getArtistNeighbours("a", 4)).toEqual([]);
   });
 
@@ -325,11 +272,6 @@ describe("getArtistNeighbours — the read", () => {
     expect((await getArtistNeighbours("a", 2)).map((n) => n.slug)).toEqual(["b", "c"]);
   });
 
-  // THE SHAPE, PINNED. The rail's `certified` tier is the MAINTAINED
-  // `artists.certified_finding_count` (keystone 2), so the read is a seek of one artist's stored
-  // edges plus a primary-key join — it must touch NEITHER of the tables the crawler grows. The
-  // spelling it replaced (a correlated `exists` over `track_artists ⋈ findings`) ran once per
-  // neighbour row and walked an uncertified artist's whole edge list to answer false.
   it("answers `certified` off the stored mirror, naming no growing table in its plan", async () => {
     await seedCertifiedArtist("a", axis(0));
     await seedCertifiedArtist("b", blend(axis(0), axis(1), 0.1));
