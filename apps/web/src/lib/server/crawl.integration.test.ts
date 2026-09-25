@@ -578,7 +578,7 @@ describe("the catalogue crawler", () => {
   });
 
   it("is RESUMABLE — a pass that dies leaves the frontier where the next one picks up", async () => {
-    const { crawlCatalogue, getCrawlStatus } = await import("./crawl");
+    const { crawlCatalogue, getCrawlPipelineSummary, getCrawlStatus } = await import("./crawl");
 
     await crawlCatalogue({ limit: 1, maxHop: 2 });
     const mid = await getCrawlStatus();
@@ -586,12 +586,19 @@ describe("the catalogue crawler", () => {
     expect(mid.frontier.done).toBe(1);
     expect(mid.frontier.pending).toBe(1);
     expect(mid.catalogueTracks).toBe(0);
+    expect(await getCrawlPipelineSummary()).toEqual({
+      anchorsPending: mid.anchorsPending,
+      frontier: { pending: mid.frontier.pending },
+      storablePending: mid.storablePending,
+      unstorablePending: mid.unstorablePending,
+    });
 
     await drain();
     const end = await getCrawlStatus();
 
     expect(end.catalogueTracks).toBe(2);
     expect(end.frontier.pending).toBe(0);
+    expect((await getCrawlPipelineSummary()).frontier.pending).toBe(0);
   });
 
   it("skips a seed label MusicBrainz does not know, with a reason, instead of retrying forever", async () => {

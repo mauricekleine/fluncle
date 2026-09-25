@@ -455,6 +455,17 @@ export async function listTrackWork(options: {
   return items;
 }
 
+export async function oldestQueuedEmbedCaptureOver24h(): Promise<boolean> {
+  const db = await getDb();
+  const cutoff = new Date(Date.now() - 24 * 60 * 60_000).toISOString();
+  const clause = kindClause("embed");
+  const old = await db.execute({
+    args: [...clause.args, cutoff],
+    sql: `select 1 from tracks t indexed by tracks_embed_queue_idx where ${clause.sql} and t.source_audio_captured_at < ? limit 1`,
+  });
+  return old.rows.length > 0;
+}
+
 export async function countTrackWork(options: {
   captureState?: CatalogueCaptureState;
   kind: TrackWorkKind;
