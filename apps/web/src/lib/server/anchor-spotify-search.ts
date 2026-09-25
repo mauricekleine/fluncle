@@ -9,6 +9,10 @@ import { isSpotifyCallBudgetAvailable, recordSpotifyCall } from "./spotify-budge
 
 export const ANCHOR_SPOTIFY_SEARCH_ENABLED_KEY = "anchor_spotify_search_enabled";
 
+// oxlint-disable-next-line no-comments/no-comments
+// The free Spotify window was measured to run through 09:00 UTC.
+export const ANCHOR_QUOTA_EXCEPTION_START_HOUR_UTC = 9;
+
 export async function isAnchorSpotifySearchEnabled(): Promise<boolean> {
   return (await getSetting(ANCHOR_SPOTIFY_SEARCH_ENABLED_KEY)) === "true";
 }
@@ -49,6 +53,7 @@ export type AnchorSpotifyGateReason =
   | "flag_off"
   | "friday_window"
   | "open"
+  | "quota_hold"
   | "shared_meter";
 
 export type AnchorSpotifyGate = { nextEligibleAt: null | string; reason: AnchorSpotifyGateReason };
@@ -73,18 +78,33 @@ export async function anchorSpotifySearchGate(now: Date): Promise<AnchorSpotifyG
       return { nextEligibleAt: null, reason: "breaker_throttle" };
     }
     const quotaUntil = await getSpotifyAnchorQuotaUntil(now.getTime());
+    const quotaHoldEnd = Date.UTC(
+      now.getUTCFullYear(),
+      now.getUTCMonth(),
+      now.getUTCDate(),
+      ANCHOR_QUOTA_EXCEPTION_START_HOUR_UTC,
+    );
     if (breaker.tripped && breaker.reason === SPOTIFY_ANCHOR_BREAKER_REASON_QUOTA) {
+      const cooldownEnd = now.getTime() + breaker.cooldownRemainingMs;
+      if (now.getTime() < quotaHoldEnd) {
+        return {
+          nextEligibleAt: new Date(Math.min(cooldownEnd, quotaHoldEnd)).toISOString(),
+          reason: "quota_hold",
+        };
+      }
+      const quotaEnd = Math.max(cooldownEnd, quotaUntil ? Date.parse(quotaUntil) : 0);
       return {
-        nextEligibleAt: new Date(
-          Math.max(
-            now.getTime() + breaker.cooldownRemainingMs,
-            quotaUntil ? Date.parse(quotaUntil) : 0,
-          ),
-        ).toISOString(),
+        nextEligibleAt: new Date(quotaEnd).toISOString(),
         reason: "breaker_quota",
       };
     }
     if (quotaUntil) {
+      if (now.getTime() < quotaHoldEnd) {
+        return {
+          nextEligibleAt: new Date(Math.min(Date.parse(quotaUntil), quotaHoldEnd)).toISOString(),
+          reason: "quota_hold",
+        };
+      }
       return { nextEligibleAt: quotaUntil, reason: "breaker_quota" };
     }
     if (breaker.tripped) {

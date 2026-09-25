@@ -129,6 +129,7 @@ const NAMED_CAUSE: Record<string, string> = {
   label_gate: "label_gate",
   mb_throttled: "vendor_gate",
   no_storable_work: "no_storable_work",
+  quota_hold: "quota_hold",
   shared_meter: "shared_meter",
 };
 
@@ -425,6 +426,24 @@ function evaluateStage(snapshot: PipelineSnapshot, stage: Stage, now: Date): Sta
       .filter((marker) => !withinFrontierRefreshWindow(new Date(marker.at)))
       .slice(0, PIPELINE_SLOS.anchor.ticks);
     const anchorOutput = total(expected, "produced");
+    if (
+      expected.length === PIPELINE_SLOS.anchor.ticks &&
+      expected.every(
+        (marker) =>
+          marker.summary.gateReason === "quota_hold" ||
+          marker.summary.blockedReason === "quota_hold",
+      )
+    ) {
+      return result(
+        stage,
+        "scheduled_pause",
+        "quota_hold",
+        anchorOutput,
+        backlog,
+        windowMs,
+        "Resume when the quota hold lifts.",
+      );
+    }
     if (
       backlog !== null &&
       backlog >= 1000 &&
