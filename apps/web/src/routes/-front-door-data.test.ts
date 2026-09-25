@@ -2,7 +2,7 @@
 // (the migrations, the finding inner-join, the release window, the maintained hub counters). `/` is
 // the page a stranger lands on, and its loader is an eight-read fan-out whose rules are pure SQL and
 // pure merge: the lead is the newest finding with a NOTE (not the newest finding), the findings band
-// must never repeat that lead, the release band carries BOTH registers, and every count is a real
+// must never repeat that lead, the release band carries BOTH registers one entry per release, and every count is a real
 // number off a real column. A mocked-DB test would pass while any of them was broken, so this drives
 // the real reads on the real schema — the `-findings-data.test.ts` shape.
 
@@ -280,7 +280,7 @@ describe("loadFrontDoorData — the public strip", () => {
 });
 
 describe("loadFrontDoorData — the release band carries both registers", () => {
-  it("streams a certified finding and an uncertified row together, and only the finding carries a coordinate", async () => {
+  it("lists a certified finding and an uncertified row as releases, and only the finding carries a coordinate", async () => {
     await seedFinding("r-finding", "050.1.1A", day(1));
     await releaseOn("r-finding", releasedDaysAgo(2));
     // The unlit half: a `tracks` row with no `findings` row. It belongs in the band — it just came
@@ -293,28 +293,97 @@ describe("loadFrontDoorData — the release band carries both registers", () => 
     await releaseOn("r-month", "2026-02");
 
     const data = await loadFrontDoorData(RELEASE_NOW);
+    const trackIds = data.releases.flatMap((release) =>
+      release.tracks.map((track) => track.trackId),
+    );
 
     expect(data.releases).toHaveLength(3);
-    expect(
-      data.releases.some(
-        (entry) => entry.kind === "catalogue" && entry.track.trackId === "r-future",
-      ),
-    ).toBe(false);
-    expect(
-      data.releases.some(
-        (entry) => entry.kind === "catalogue" && entry.track.trackId === "r-month",
-      ),
-    ).toBe(true);
+    expect(trackIds).not.toContain("r-future");
+    expect(trackIds).toContain("r-month");
     expect(data.counts.tracks).toBe(3);
-    const finding = data.releases.find((entry) => entry.kind === "finding");
-    const catalogue = data.releases.find((entry) => entry.kind === "catalogue");
-    expect(finding?.kind === "finding" ? finding.finding.logId : undefined).toBe("050.1.1A");
-    // The STRUCTURAL half of the Unlit Rule: the uncertified entry has no coordinate field at all,
+
+    const finding = data.releases.find((release) => release.lit);
+    const catalogue = data.releases.find((release) => release.key === "track:r-catalogue");
+    expect(finding?.tracks[0]?.lit).toBe(true);
+    expect(finding?.tracks[0]?.logId).toBe("050.1.1A");
+    // The STRUCTURAL half of the Unlit Rule: the uncertified row has no coordinate field at all,
     // so no surface downstream can print one or link it into the log.
-    expect(catalogue?.kind === "catalogue" ? "logId" in catalogue.track : true).toBe(false);
-    expect(catalogue?.kind === "catalogue" ? catalogue.track.trackId : undefined).toBe(
-      "r-catalogue",
-    );
+    expect(catalogue?.lit).toBe(false);
+    expect(catalogue?.tracks[0]?.lit).toBe(false);
+    expect(catalogue?.tracks[0] ? "logId" in catalogue.tracks[0] : true).toBe(false);
+  });
+
+  it("folds every track on one album entity into one release, lit when any track is a finding", async () => {
+    await seedAlbum(db, { id: "album-ep", name: "Two Sides EP", slug: "two-sides-ep" });
+    await seedFinding("ep-finding", "051.1.1A", day(1));
+    await seedCatalogueTrack(db, { title: "B Side", trackId: "ep-catalogue" });
+    for (const trackId of ["ep-finding", "ep-catalogue"]) {
+      await releaseOn(trackId, releasedDaysAgo(3));
+      await db.execute({
+        args: [trackId],
+        sql: `update tracks set album_id = 'album-ep', album = 'Two Sides EP' where track_id = ?`,
+      });
+    }
+    // The record's own order (ISRC) runs the release: the catalogue side first, the finding second.
+    await db.execute({
+      sql: `update tracks set isrc = 'GBAAA2600001' where track_id = 'ep-catalogue'`,
+    });
+    await db.execute({
+      sql: `update tracks set isrc = 'GBAAA2600002' where track_id = 'ep-finding'`,
+    });
+
+    const data = await loadFrontDoorData(RELEASE_NOW);
+
+    expect(data.releases).toHaveLength(1);
+    const release = data.releases[0];
+    expect(release).toMatchObject({
+      albumSlug: "two-sides-ep",
+      key: "album:two-sides-ep",
+      lit: true,
+      title: "Two Sides EP",
+    });
+    // Each track keeps its own register inside the one release.
+    expect(release?.tracks.map((track) => [track.trackId, track.lit])).toEqual([
+      ["ep-catalogue", false],
+      ["ep-finding", true],
+    ]);
+  });
+
+  it("fills its releases even when a few long records crowd the head of the window", async () => {
+    // Six ten-track albums fill the band's first read (60 rows); two older singles lie past it.
+    for (let album = 1; album <= 6; album += 1) {
+      await seedAlbum(db, {
+        id: `alb-${album}`,
+        name: `Long Player ${album}`,
+        slug: `long-player-${album}`,
+      });
+      for (let track = 1; track <= 10; track += 1) {
+        const trackId = `lp-${album}-${String(track).padStart(2, "0")}`;
+        await seedCatalogueTrack(db, { title: `LP ${album} Track ${track}`, trackId });
+        await releaseOn(trackId, releasedDaysAgo(1));
+        await db.execute({
+          args: [`alb-${album}`, trackId],
+          sql: `update tracks set album_id = ? where track_id = ?`,
+        });
+      }
+    }
+    for (const [trackId, days] of [
+      ["single-a", 3],
+      ["single-b", 4],
+    ] as const) {
+      await seedCatalogueTrack(db, { title: `Single ${trackId}`, trackId });
+      await releaseOn(trackId, releasedDaysAgo(days));
+    }
+
+    const data = await loadFrontDoorData(RELEASE_NOW);
+
+    expect(data.releases).toHaveLength(FRONT_DOOR_RELEASES);
+    expect(data.releases.map((release) => release.key).slice(-2)).toEqual([
+      "track:single-a",
+      "track:single-b",
+    ]);
+    // Each record comes whole: all ten of its tracks.
+    expect(data.releases[0]?.tracks).toHaveLength(10);
   });
 
   it("caps the band at FRONT_DOOR_RELEASES and hands the rest to /fresh", async () => {

@@ -1031,12 +1031,9 @@ describe("probeLabelReleases", () => {
     await probeLabelReleases();
     const fresh = await listFreshReleases(now);
 
-    const catalogueIds = fresh.sections.flatMap((section) =>
-      section.catalogue.map((item) => item.trackId),
-    );
+    const catalogueIds = fresh.catalogue.map((item) => item.trackId);
     expect(catalogueIds).toContain("sp_t1");
-    const findingIds = fresh.sections.flatMap((section) => section.findings);
-    expect(findingIds).toHaveLength(0);
+    expect(fresh.findings).toHaveLength(0);
   });
 
   it("NEVER mints an album with no release_date (a row /fresh could never surface)", async () => {

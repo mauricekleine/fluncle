@@ -464,6 +464,7 @@ export async function seedE2eData(client: Client): Promise<void> {
   await seedFrontDoorFixtures(client);
   await seedDestinationFixtures(client);
   await stampLabelPointers(client);
+  await stampAlbumCounters(client);
 }
 
 /**
@@ -584,6 +585,21 @@ async function stampLabelPointers(client: Client): Promise<void> {
                      where tracks.label_id = labels.id and tracks.is_catalogue = 0)
            where id = ?`,
   });
+}
+
+/**
+ * Every album's maintained counters, DERIVED from the rows that point at it once every fixture is in
+ * (the `stampLabelPointers` rule): the real write paths move them on every link, and `/fresh`'s
+ * "Albums & EPs" reads `renderable_track_count` to tell a record from a single. A two-track record
+ * left at the DDL default of 0 would describe a world the archive cannot be in.
+ */
+async function stampAlbumCounters(client: Client): Promise<void> {
+  await client.execute(`update albums
+     set renderable_track_count =
+           (select count(*) from tracks where tracks.album_id = albums.id),
+         certified_finding_count =
+           (select count(*) from tracks
+             where tracks.album_id = albums.id and tracks.is_catalogue = 0)`);
 }
 
 /** Standalone entry point (`bun run tests/e2e/seed.ts`) — global-setup imports `seedE2eData`. */

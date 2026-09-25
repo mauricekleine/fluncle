@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatReleaseDate } from "./format";
+import { formatReleaseDate, formatReleaseDayRange } from "./format";
 
 describe("formatReleaseDate (the /tracks date column)", () => {
   it("formats a full YYYY-MM-DD release date in the canon short-month form, in UTC", () => {
@@ -16,5 +16,26 @@ describe("formatReleaseDate (the /tracks date column)", () => {
 
   it("shows an em dash for an undated catalogue row", () => {
     expect(formatReleaseDate("")).toBe("—");
+  });
+});
+
+describe("formatReleaseDayRange (the /fresh week spans)", () => {
+  const RANGE = "\u2009\u2013\u2009";
+
+  it("collapses a span the way the locale collapses a range", () => {
+    expect(formatReleaseDayRange("2026-09-05", "2026-09-11")).toBe(`Sep 5${RANGE}11, 2026`);
+    expect(formatReleaseDayRange("2026-08-29", "2026-09-04")).toBe(`Aug 29${RANGE}Sep 4, 2026`);
+    expect(formatReleaseDayRange("2025-12-29", "2026-01-04")).toBe(
+      `Dec 29, 2025${RANGE}Jan 4, 2026`,
+    );
+  });
+
+  it("reads a single day as that day", () => {
+    expect(formatReleaseDayRange("2026-09-05", "2026-09-05")).toBe("Sep 5, 2026");
+  });
+
+  it("falls back to the end's own release-date form when either end is not a full day", () => {
+    expect(formatReleaseDayRange("2026-09", "2026-09-11")).toBe("Sep 11, 2026");
+    expect(formatReleaseDayRange("2026-09-01", "2026")).toBe("2026");
   });
 });

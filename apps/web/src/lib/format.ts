@@ -46,6 +46,14 @@ export function formatReleaseDate(releaseDate: string): string {
   return releaseDate.slice(0, 4) || "—";
 }
 
+export function formatReleaseDayRange(from: string, to: string): string {
+  if (!FULL_DAY.test(from) || !FULL_DAY.test(to)) {
+    return formatReleaseDate(to);
+  }
+
+  return releaseDateFormatter.formatRange(new Date(from), new Date(to));
+}
+
 export function findingsCount(count: number): string {
   return `${count} ${count === 1 ? "finding" : "findings"}`;
 }

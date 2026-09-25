@@ -29,11 +29,11 @@
 // `renderable_track_count` column. Nothing here scans a growing table.
 
 import { type TrackListItem } from "@fluncle/contracts";
-import { type FreshStreamEntry, freshStream } from "@/components/fresh/data";
+import { type FreshRelease, newestFreshReleases } from "@/lib/fresh-releases";
 import { type FrontDoorCounts } from "@/lib/front-door";
 import { countIndexableAlbums } from "@/lib/server/albums";
 import { countIndexableArtists } from "@/lib/server/artists";
-import { listFreshReleases } from "@/lib/server/fresh";
+import { type FreshReleases, listFreshReleases } from "@/lib/server/fresh";
 import { countIndexableLabels } from "@/lib/server/labels";
 import { getLiveState, type LiveState } from "@/lib/server/live";
 import { countAllTracks } from "@/lib/server/tracks-hub";
@@ -45,6 +45,13 @@ export const FRONT_DOOR_FINDINGS = 6;
 
 /** How many releases the "what just came out" section shows before handing over to `/fresh`. */
 export const FRONT_DOOR_RELEASES = 8;
+
+/**
+ * The rows the band reads first to find its releases: the head of `/fresh`'s window. When that head
+ * holds fewer than {@link FRONT_DOOR_RELEASES} releases and the window goes on (a few long records
+ * filled it), the band reads once more at `/fresh`'s own bounded ceiling, never beyond it.
+ */
+export const FRONT_DOOR_RELEASE_ROWS = 60;
 
 export { type FrontDoorCounts } from "@/lib/front-door";
 
@@ -65,11 +72,27 @@ export type FrontDoorData = {
   /** The edited lead: the newest finding Fluncle wrote about. Absent on an empty archive. */
   lead: TrackListItem | undefined;
   live: LiveState;
-  /** What just came out, newest release first — findings and the wider archive, in one stream. */
-  releases: FreshStreamEntry[];
+  /** What just came out, newest release first — one entry per release, findings and the wider
+      archive together, exactly as `/fresh` folds them. */
+  releases: FreshRelease[];
   /** Echoed for the honest copy ("the last 30 days"). */
   releaseWindowDays: number;
 };
+
+/**
+ * The band's releases: the newest {@link FRONT_DOOR_RELEASES} whole releases. A head read that ran
+ * short while the window goes on is read again at `/fresh`'s ceiling, so the band fills whenever the
+ * window holds that many releases inside the ceiling — two bounded reads at most.
+ */
+async function frontDoorReleases(now: Date, head: FreshReleases): Promise<FreshRelease[]> {
+  const releases = newestFreshReleases(head, FRONT_DOOR_RELEASES);
+
+  if (releases.length >= FRONT_DOOR_RELEASES || head.coverage.kind === "complete") {
+    return releases;
+  }
+
+  return newestFreshReleases(await listFreshReleases(now), FRONT_DOOR_RELEASES);
+}
 
 /**
  * Compose the front door's data in one parallel read fan-out. Pure of any route/serverFn machinery
@@ -87,7 +110,8 @@ export async function loadFrontDoorData(now: Date = new Date()): Promise<FrontDo
     listTracks({ countTotal: false, hasNote: true, lean: true, limit: 1, releaseThrough }),
     // One extra row, so dropping the lead (when it is also the newest finding) still fills the block.
     listTracks({ lean: true, limit: FRONT_DOOR_FINDINGS + 1, releaseThrough }),
-    listFreshReleases(now),
+    // The band shows the head of the window, so it reads the head of it first.
+    listFreshReleases(now, { catalogueLimit: FRONT_DOOR_RELEASE_ROWS }),
     // The four shelf sizes. Each entity count is the INDEXABLE set — every entity whose page
     // clears the thin-content floor, the same set the sitemap submits — which is a hair NARROWER
     // than what the hub itself lists: `hubInclusionWhere` also admits a sub-floor entity that
@@ -123,6 +147,6 @@ export async function loadFrontDoorData(now: Date = new Date()): Promise<FrontDo
     lead,
     live,
     releaseWindowDays: fresh.windowDays,
-    releases: freshStream(fresh).slice(0, FRONT_DOOR_RELEASES),
+    releases: await frontDoorReleases(now, fresh),
   };
 }
