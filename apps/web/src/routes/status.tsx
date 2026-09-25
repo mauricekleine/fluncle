@@ -1,6 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
-import { cronSurfaces, type CronSchedule } from "@fluncle/registry";
 import { siteUrl } from "@/lib/fluncle-links";
 import { elapsedShort } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -16,36 +15,16 @@ import {
   getRecentStatusEvents,
   getServiceCheckSamples,
   getServiceStatuses,
+  getStatusCronConfig,
   type ServiceCheckSampleRow,
   type ServiceHealthStatus,
   type ServiceStatusRow,
+  type StatusCronConfig,
   type StatusEventRow,
 } from "@/lib/server/status";
 import { SELF_POSTED_AUTOMATION_ORDER } from "@/lib/status-services";
 
-const CRON_SURFACES = cronSurfaces();
-export const CRON_ORDER = CRON_SURFACES.map((surface) => surface.name);
-
-const CRON_CADENCE_MS: Record<string, number> = {};
-
-const CRON_SCHEDULE: Record<string, CronSchedule> = {};
-
-for (const surface of CRON_SURFACES) {
-  const cadence = surface.probeConfig?.cadenceMs;
-  const schedule = surface.probeConfig?.schedule;
-
-  if (cadence !== undefined) {
-    CRON_CADENCE_MS[surface.name] = cadence;
-  }
-
-  if (schedule !== undefined) {
-    CRON_SCHEDULE[surface.name] = schedule;
-  }
-}
-
 export { SELF_POSTED_AUTOMATION_ORDER } from "@/lib/status-services";
-const AUTOMATION_ORDER = [...SELF_POSTED_AUTOMATION_ORDER, ...CRON_ORDER];
-const AUTOMATION_SERVICE_IDS = new Set(AUTOMATION_ORDER);
 
 const OPS_AUTOMATION_IDS = new Set([
   "cron.audit",
@@ -76,19 +55,6 @@ export const SERVICE_ORDER = [
 
   "sweep-errors",
 ];
-
-const REGISTRY_STATUS_TITLES = new Map<string, string>(
-  CRON_SURFACES.flatMap((surface) =>
-    surface.title === undefined ? [] : [[surface.name, surface.title] as const],
-  ),
-);
-const REGISTRY_STATUS_DESCRIPTIONS = new Map<string, string>(
-  CRON_SURFACES.flatMap((surface) =>
-    surface.statusDescription === undefined
-      ? []
-      : [[surface.name, surface.statusDescription] as const],
-  ),
-);
 
 export const INFRA_SERVICE_LABELS: Record<string, string> = {
   db: "Database",
@@ -124,8 +90,8 @@ export const INFRA_SERVICE_SUBTITLES: Record<string, string> = {
   web: "www.fluncle.com",
 };
 
-export function serviceLabel(service: string): string {
-  const registryTitle = REGISTRY_STATUS_TITLES.get(service);
+export function serviceLabel(service: string, cronConfig: StatusCronConfig): string {
+  const registryTitle = cronConfig.rows[service]?.title;
   if (registryTitle) {
     return registryTitle;
   }
@@ -137,14 +103,15 @@ export function serviceLabel(service: string): string {
   return service.startsWith("cron.") ? service.slice("cron.".length) : service;
 }
 
-export function serviceSubtitle(service: string): string | undefined {
-  return REGISTRY_STATUS_DESCRIPTIONS.get(service) ?? INFRA_SERVICE_SUBTITLES[service];
+export function serviceSubtitle(service: string, cronConfig: StatusCronConfig): string | undefined {
+  return cronConfig.rows[service]?.statusDescription ?? INFRA_SERVICE_SUBTITLES[service];
 }
 
 const SECTION_HEADING_CLASS =
   "mb-4 border-b border-border pb-2 text-sm font-semibold uppercase tracking-wide text-foreground";
 
 type StatusPageData = {
+  cronConfig: StatusCronConfig;
   events: StatusEventRow[];
   now: string;
   samples: Record<string, ServiceCheckSampleRow[]>;
@@ -158,7 +125,13 @@ const fetchStatus = createServerFn({ method: "GET" }).handler(async (): Promise<
     getServiceCheckSamples(),
   ]);
 
-  return { events, now: new Date().toISOString(), samples, services };
+  return {
+    cronConfig: getStatusCronConfig(),
+    events,
+    now: new Date().toISOString(),
+    samples,
+    services,
+  };
 });
 
 const title = "System status · Fluncle";
@@ -331,7 +304,10 @@ function sortByOrder(services: ServiceStatusRow[], order: string[]): ServiceStat
   });
 }
 
-function groupServices(services: ServiceStatusRow[]): {
+function groupServices(
+  services: ServiceStatusRow[],
+  cronConfig: StatusCronConfig,
+): {
   core: ServiceStatusRow[];
   opsCrons: ServiceStatusRow[];
   trackCrons: ServiceStatusRow[];
@@ -339,9 +315,11 @@ function groupServices(services: ServiceStatusRow[]): {
   const core: ServiceStatusRow[] = [];
   const opsCrons: ServiceStatusRow[] = [];
   const trackCrons: ServiceStatusRow[] = [];
+  const automationOrder = [...SELF_POSTED_AUTOMATION_ORDER, ...cronConfig.order];
+  const automationServiceIds = new Set(automationOrder);
 
   for (const service of services) {
-    if (!AUTOMATION_SERVICE_IDS.has(service.service)) {
+    if (!automationServiceIds.has(service.service)) {
       core.push(service);
     } else if (OPS_AUTOMATION_IDS.has(service.service)) {
       opsCrons.push(service);
@@ -352,8 +330,8 @@ function groupServices(services: ServiceStatusRow[]): {
 
   return {
     core: sortByOrder(core, SERVICE_ORDER),
-    opsCrons: sortByOrder(opsCrons, AUTOMATION_ORDER),
-    trackCrons: sortByOrder(trackCrons, AUTOMATION_ORDER),
+    opsCrons: sortByOrder(opsCrons, automationOrder),
+    trackCrons: sortByOrder(trackCrons, automationOrder),
   };
 }
 
@@ -374,16 +352,18 @@ function overallHeadline(services: ServiceStatusRow[]): string {
 }
 
 export function ServiceRow({
+  cronConfig,
   now,
   samples,
   service,
 }: {
+  cronConfig: StatusCronConfig;
   now: string;
   samples: ServiceCheckSampleRow[];
   service: ServiceStatusRow;
 }) {
   const pct = uptimePercent(samples);
-  const subtitle = serviceSubtitle(service.service);
+  const subtitle = serviceSubtitle(service.service, cronConfig);
   const oldest = samples[0];
   const statusAge =
     pct !== null
@@ -392,8 +372,8 @@ export function ServiceRow({
         ? null
         : humanizeSince(service.since, now, service.status);
 
-  const cadence = CRON_CADENCE_MS[service.service];
-  const schedule = CRON_SCHEDULE[service.service];
+  const cadence = cronConfig.rows[service.service]?.cadenceMs;
+  const schedule = cronConfig.rows[service.service]?.schedule;
   const nextRun =
     (schedule ? nextScheduledRun(schedule, now) : null) ??
     (cadence === undefined || service.checked_at === null
@@ -403,7 +383,9 @@ export function ServiceRow({
   return (
     <article className="py-6 first:pt-0">
       <div className="flex items-baseline justify-between gap-3">
-        <h3 className="text-base font-medium text-foreground">{serviceLabel(service.service)}</h3>
+        <h3 className="text-base font-medium text-foreground">
+          {serviceLabel(service.service, cronConfig)}
+        </h3>
         <StatusIndicator status={service.status} />
       </div>
 
@@ -446,11 +428,13 @@ export function ServiceRow({
 }
 
 function ServiceGroup({
+  cronConfig,
   label,
   now,
   rows,
   samples,
 }: {
+  cronConfig: StatusCronConfig;
   label: string;
   now: string;
   rows: ServiceStatusRow[];
@@ -472,6 +456,7 @@ function ServiceGroup({
         {rows.map((service) => (
           <ServiceRow
             key={service.service}
+            cronConfig={cronConfig}
             now={now}
             samples={samples[service.service] ?? []}
             service={service}
@@ -483,8 +468,8 @@ function ServiceGroup({
 }
 
 function StatusPage() {
-  const { events, now, samples, services } = Route.useLoaderData();
-  const { core, opsCrons, trackCrons } = groupServices(services);
+  const { cronConfig, events, now, samples, services } = Route.useLoaderData();
+  const { core, opsCrons, trackCrons } = groupServices(services, cronConfig);
   const reporting = [...core, ...trackCrons, ...opsCrons];
 
   return (
@@ -501,9 +486,27 @@ function StatusPage() {
           </p>
         ) : (
           <div className="space-y-8">
-            <ServiceGroup label="Services" now={now} rows={core} samples={samples} />
-            <ServiceGroup label="Track automation" now={now} rows={trackCrons} samples={samples} />
-            <ServiceGroup label="Ops automation" now={now} rows={opsCrons} samples={samples} />
+            <ServiceGroup
+              cronConfig={cronConfig}
+              label="Services"
+              now={now}
+              rows={core}
+              samples={samples}
+            />
+            <ServiceGroup
+              cronConfig={cronConfig}
+              label="Track automation"
+              now={now}
+              rows={trackCrons}
+              samples={samples}
+            />
+            <ServiceGroup
+              cronConfig={cronConfig}
+              label="Ops automation"
+              now={now}
+              rows={opsCrons}
+              samples={samples}
+            />
           </div>
         )}
 
@@ -516,7 +519,9 @@ function StatusPage() {
                   <div className="flex min-w-0 items-center gap-2">
                     <StatusIndicator status={event.status} />
                     <span className="truncate">
-                      <span className="text-foreground">{serviceLabel(event.service)}</span>
+                      <span className="text-foreground">
+                        {serviceLabel(event.service, cronConfig)}
+                      </span>
                       {event.message ? (
                         <span className="text-muted-foreground"> — {event.message}</span>
                       ) : undefined}

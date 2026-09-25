@@ -2,8 +2,8 @@ import { cronSurfaces } from "@fluncle/registry";
 import { describe, expect, it } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { getStatusCronConfig } from "@/lib/server/status";
 import {
-  CRON_ORDER,
   INFRA_SERVICE_LABELS,
   INFRA_SERVICE_SUBTITLES,
   ServiceRow,
@@ -15,6 +15,7 @@ import {
 } from "./status";
 
 const infraServiceIds = [...SERVICE_ORDER, ...SELF_POSTED_AUTOMATION_ORDER];
+const cronConfig = getStatusCronConfig();
 
 describe("/status label coverage", () => {
   it("every non-registry infra probe carries an explicit label + subtitle", () => {
@@ -22,33 +23,41 @@ describe("/status label coverage", () => {
       expect(INFRA_SERVICE_LABELS[id], `${id}: missing an infra label`).toBeTruthy();
       expect(INFRA_SERVICE_SUBTITLES[id], `${id}: missing an infra subtitle`).toBeTruthy();
 
-      expect(serviceLabel(id)).toBe(INFRA_SERVICE_LABELS[id]);
-      expect(serviceSubtitle(id)).toBe(INFRA_SERVICE_SUBTITLES[id]);
+      expect(serviceLabel(id, cronConfig)).toBe(INFRA_SERVICE_LABELS[id]);
+      expect(serviceSubtitle(id, cronConfig)).toBe(INFRA_SERVICE_SUBTITLES[id]);
     }
   });
 
   it("every registry cron resolves its title + description from the registry", () => {
-    for (const name of CRON_ORDER) {
-      const label = serviceLabel(name);
+    const surfaces = cronSurfaces();
+    expect(cronConfig.order).toEqual(surfaces.map((surface) => surface.name));
 
-      expect(label, `${name}: unlabeled`).toBeTruthy();
+    for (const surface of surfaces) {
+      const name = surface.name;
+      const label = serviceLabel(name, cronConfig);
+
+      expect(label).toBe(surface.title);
       expect(label).not.toBe(name.slice("cron.".length));
-      expect(serviceSubtitle(name), `${name}: no description`).toBeTruthy();
+      expect(serviceSubtitle(name, cronConfig)).toBe(surface.statusDescription);
+      expect(cronConfig.rows[name]?.cadenceMs).toBe(surface.probeConfig?.cadenceMs);
+      expect(cronConfig.rows[name]?.schedule).toEqual(surface.probeConfig?.schedule);
     }
+
+    expect(JSON.parse(JSON.stringify(cronConfig))).toEqual(cronConfig);
   });
 
   it("sonar files as a service and its freshen timer as an ops automation", () => {
     expect(SERVICE_ORDER).toContain("sonar");
     expect(SELF_POSTED_AUTOMATION_ORDER).not.toContain("sonar");
-    expect(CRON_ORDER).not.toContain("sonar");
+    expect(cronConfig.order).not.toContain("sonar");
 
     expect(SELF_POSTED_AUTOMATION_ORDER).toContain("self-deploy-sonar");
     expect(SERVICE_ORDER).not.toContain("self-deploy-sonar");
 
-    expect(serviceLabel("sonar")).toBe("Sonar");
-    expect(serviceSubtitle("sonar")).toBe("the sonic-similarity engine");
-    expect(serviceLabel("self-deploy-sonar")).toBe("Self-deploy (sonar)");
-    expect(serviceSubtitle("self-deploy-sonar")).toBe(
+    expect(serviceLabel("sonar", cronConfig)).toBe("Sonar");
+    expect(serviceSubtitle("sonar", cronConfig)).toBe("the sonic-similarity engine");
+    expect(serviceLabel("self-deploy-sonar", cronConfig)).toBe("Self-deploy (sonar)");
+    expect(serviceSubtitle("self-deploy-sonar", cronConfig)).toBe(
       "the engine pulls a new build when apps/sonar changes",
     );
   });
@@ -66,6 +75,7 @@ describe("/status report age", () => {
     const now = "2026-07-30T12:00:00.000Z";
     const html = renderToStaticMarkup(
       createElement(ServiceRow, {
+        cronConfig,
         now,
         samples: [],
         service: {

@@ -1,8 +1,6 @@
 import { Link } from "@tanstack/react-router";
 import { type ReactNode } from "react";
 import { navIcon } from "@/components/nav/nav-icons";
-import { SubmitTrackDialog } from "@/components/submit-track-dialog";
-import { SubscribeDialog } from "@/components/subscribe-dialog";
 import { type NavItem } from "@/lib/nav-model";
 import { cn } from "@/lib/utils";
 
@@ -97,22 +95,4 @@ export function NavItemLink({
   }
 
   return undefined;
-}
-
-export function NavActionItem({
-  className,
-  item,
-}: {
-  className?: string;
-  item: NavItem;
-}): ReactNode {
-  if (item.kind !== "action") {
-    return undefined;
-  }
-
-  if (item.action === "submit") {
-    return <SubmitTrackDialog className={className} />;
-  }
-
-  return <SubscribeDialog className={className} label={item.label} />;
 }

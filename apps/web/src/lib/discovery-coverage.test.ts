@@ -71,7 +71,7 @@ describe("public discovery event coverage", () => {
 
     expect(consumers.map((file) => file.rel).sort()).toEqual([
       "components/front-door/search-entry.tsx",
-      "components/search/search-command.tsx",
+      "components/search/search-dialog.tsx",
       "routes/search.tsx",
     ]);
 
@@ -88,7 +88,7 @@ describe("public discovery event coverage", () => {
 
   it("covers the archive search form and the palette type-ahead as discovery_search", () => {
     const searchPage = sources.find((file) => file.rel === "routes/search.tsx");
-    const palette = sources.find((file) => file.rel === "components/search/search-command.tsx");
+    const palette = sources.find((file) => file.rel === "components/search/search-dialog.tsx");
 
     expect(searchPage?.source).toContain('action="/search"');
     expect(searchPage?.source).toContain('"discovery_search"');
@@ -101,7 +101,7 @@ describe("public discovery event coverage", () => {
   });
 
   it("classifies the palette's resolved destination before any fallback window.open", () => {
-    const palette = sources.find((file) => file.rel === "components/search/search-command.tsx");
+    const palette = sources.find((file) => file.rel === "components/search/search-dialog.tsx");
     const source = palette?.source ?? "";
     const openAt = source.indexOf("window.open");
 
@@ -189,10 +189,7 @@ describe("public discovery event coverage", () => {
         const body = match[1] ?? "";
 
         if (body.includes("emitDiscoveryEvent") || body.includes("emitDiscoveryFromHref")) {
-          if (
-            file.rel === "components/search/search-command.tsx" &&
-            body.includes("exampleClick")
-          ) {
+          if (file.rel === "components/search/search-dialog.tsx" && body.includes("exampleClick")) {
             continue;
           }
 

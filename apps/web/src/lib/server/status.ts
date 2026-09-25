@@ -5,7 +5,7 @@ import {
   HEALTH_SNAPSHOT_PRODUCER_MAX,
   HEALTH_SNAPSHOT_PRODUCER_PATTERN,
 } from "@fluncle/contracts/orpc";
-import { cronSurfaces } from "@fluncle/registry";
+import { cronSurfaces, type CronSchedule } from "@fluncle/registry";
 import { SELF_POSTED_AUTOMATION_ORDER } from "../status-services";
 import { getDb, typedRows } from "./db";
 import { logEvent } from "./log";
@@ -39,6 +39,19 @@ export type ServiceCheckSampleRow = {
   latency_ms: number | null;
   service: string;
   status: ServiceHealthStatus;
+};
+
+export type StatusCronConfig = {
+  order: string[];
+  rows: Record<
+    string,
+    {
+      cadenceMs?: number;
+      schedule?: CronSchedule;
+      statusDescription?: string;
+      title?: string;
+    }
+  >;
 };
 
 export type HealthCheckInput = {
@@ -122,6 +135,30 @@ const SERVICE_CHECK_SAMPLES_KEEP = 90;
 type HealthSnapshotWriteClient = Pick<Client, "execute">;
 
 const CRON_SURFACES = cronSurfaces();
+const STATUS_CRON_CONFIG: StatusCronConfig = {
+  order: CRON_SURFACES.map((surface) => surface.name),
+  rows: Object.fromEntries(
+    CRON_SURFACES.map((surface) => [
+      surface.name,
+      {
+        ...(surface.probeConfig?.cadenceMs === undefined
+          ? {}
+          : { cadenceMs: surface.probeConfig.cadenceMs }),
+        ...(surface.probeConfig?.schedule === undefined
+          ? {}
+          : { schedule: surface.probeConfig.schedule }),
+        ...(surface.statusDescription === undefined
+          ? {}
+          : { statusDescription: surface.statusDescription }),
+        ...(surface.title === undefined ? {} : { title: surface.title }),
+      },
+    ]),
+  ),
+};
+
+export function getStatusCronConfig(): StatusCronConfig {
+  return STATUS_CRON_CONFIG;
+}
 const STATUS_STALE_CYCLES = 3;
 const STATUS_STALE_FLOOR_MS = 90_000;
 const SELF_POSTED_CADENCE_MS = 60 * 60_000;
