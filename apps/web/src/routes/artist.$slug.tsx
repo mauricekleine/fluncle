@@ -25,7 +25,7 @@ import {
 import { FindingsGrid, UnlitTracks } from "@/components/graph-sections";
 import { GraphLink } from "@/components/graph-link";
 import { StoryNotFoundState } from "@/components/stories/stories-states";
-import { WatchButton } from "@/components/watch-button";
+import { FollowButton } from "@/components/follow-button";
 import { type ArtistSocialPlatform } from "@/lib/artist-socials";
 import { entityFreshChannel } from "@/lib/fresh-feed-rss";
 import { siteUrl } from "@/lib/fluncle-links";
@@ -288,7 +288,7 @@ function ArtistPage() {
 
           {bio ? <p className="log-index-bio">{bio}</p> : undefined}
 
-          <WatchButton entityId={id} kind="artist" name={name} />
+          <FollowButton entityId={id} kind="artist" name={name} />
         </header>
 
         <FindingsGrid findings={findings} />

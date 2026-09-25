@@ -9,6 +9,8 @@ import { type PublicUser } from "@fluncle/contracts";
 import * as schema from "../../db/schema";
 import { getDb, getDrizzleDb, typedRow } from "./db";
 import { notifyDiscordSignup } from "./discord-alert";
+import { attachFollowIntent, parseFollowTarget, signFollowIntent } from "./follow-intent";
+import { resolveFollowTarget } from "./follow-targets";
 import { jsonError, readOptionalEnv } from "./env";
 import { sendMagicLinkEmail, sendPasswordResetEmail, sendVerificationEmail } from "./resend";
 
@@ -91,7 +93,7 @@ export function resolvePublicAuthSecret(secret: string | undefined, isDev: boole
   throw new Error("BETTER_AUTH_SECRET is required outside local development");
 }
 
-function publicAuthSecret(): string {
+export function publicAuthSecret(): string {
   return resolvePublicAuthSecret(process.env.BETTER_AUTH_SECRET, import.meta.env.DEV);
 }
 
@@ -168,6 +170,42 @@ function requestFromHookContext(ctx: unknown): Request {
   return new Request("https://www.fluncle.com/internal/signup-subscribe", {
     headers: maybe?.headers,
   });
+}
+
+export async function withFollowIntent({
+  email,
+  metadata,
+  url,
+}: {
+  email: string;
+  metadata?: Record<string, unknown>;
+  url: string;
+}): Promise<{ followName?: string; url: string }> {
+  const requested = parseFollowTarget(metadata?.follow);
+
+  if (!requested) {
+    return { url };
+  }
+
+  try {
+    const target = await resolveFollowTarget(requested);
+
+    if (!target) {
+      return { url };
+    }
+
+    const intent = signFollowIntent({ email, secret: publicAuthSecret(), target });
+    const baseUrl = resolvePublicAuthBaseUrl(process.env.BETTER_AUTH_URL, import.meta.env.DEV);
+
+    return {
+      followName: target.name,
+      url: attachFollowIntent({ baseUrl, intent, magicLinkUrl: url }),
+    };
+  } catch (error) {
+    console.error("follow intent could not be attached to the sign-in link", error);
+
+    return { url };
+  }
 }
 
 export function createPublicAuthOptions(
@@ -263,8 +301,11 @@ export function createPublicAuthOptions(
 
       magicLink({
         expiresIn: MAGIC_LINK_TTL_SECONDS,
-        sendMagicLink: async ({ email, url }) => {
-          await sendMagicLinkEmail({ to: email, url });
+        sendMagicLink: async ({ email, metadata, url }) => {
+          await sendMagicLinkEmail({
+            to: email,
+            ...(await withFollowIntent({ email, metadata, url })),
+          });
         },
         storeToken: "hashed",
       }),

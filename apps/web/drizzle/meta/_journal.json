@@ -1338,6 +1338,20 @@
       "when": 1790348478295,
       "tag": "0190_supreme_magik",
       "breakpoints": true
+    },
+    {
+      "idx": 191,
+      "version": "6",
+      "when": 1790353146085,
+      "tag": "0191_awesome_black_bolt",
+      "breakpoints": true
+    },
+    {
+      "idx": 192,
+      "version": "6",
+      "when": 1790364011297,
+      "tag": "0192_daily_the_watchers",
+      "breakpoints": true
     }
   ]
 }

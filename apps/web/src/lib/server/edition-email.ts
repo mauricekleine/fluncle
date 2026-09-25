@@ -2,7 +2,7 @@ import { type EditionDTO, type TrackListItem } from "@fluncle/contracts";
 import { logPageUrl, siteUrl } from "../fluncle-links";
 import { getTracksByLogIds } from "./tracks";
 
-const POSTAL_ADDRESS = "With love, from somewhere deep in the Galaxy, Fluncle";
+export const POSTAL_ADDRESS = "With love, from somewhere deep in the Galaxy, Fluncle";
 
 const FRONTIER_TEASER_URL = `${siteUrl}/recommendations`;
 

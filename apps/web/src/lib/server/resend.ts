@@ -5,6 +5,15 @@ const resendApiUrl = "https://api.resend.com";
 
 type ResendErrorBody = { message?: string; name?: string };
 
+export class ResendDeliveryError extends ApiError {
+  upstreamStatus: number;
+
+  constructor(message: string, upstreamStatus: number) {
+    super("email_send_failed", message, 502);
+    this.upstreamStatus = upstreamStatus;
+  }
+}
+
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]"]);
 
 export function resolveResendApiUrl({
@@ -193,12 +202,15 @@ export async function sendBroadcast(
 }
 
 async function sendTransactionalEmail(params: {
+  from?: string;
+  headers?: Record<string, string>;
   html: string;
+  idempotencyKey?: string;
   subject: string;
   text: string;
   to: string;
-}): Promise<void> {
-  const from = await readOptionalEnv("RESEND_FROM");
+}): Promise<{ id?: string }> {
+  const from = params.from ?? (await readOptionalEnv("RESEND_FROM"));
 
   if (!from) {
     throw new ApiError(
@@ -211,21 +223,49 @@ async function sendTransactionalEmail(params: {
   const response = await resendFetch("/emails", {
     body: {
       from,
+      headers: params.headers,
       html: params.html,
       subject: params.subject,
       text: params.text,
       to: params.to,
     },
+    idempotencyKey: params.idempotencyKey,
     method: "POST",
   });
 
   if (!response.ok) {
-    throw new ApiError(
-      "email_send_failed",
+    throw new ResendDeliveryError(
       `Resend could not send the email (${await readError(response)})`,
-      502,
+      response.status,
     );
   }
+
+  const body = (await response.json().catch(() => undefined)) as { id?: string } | undefined;
+  return { id: body?.id };
+}
+
+export async function sendFollowDigestEmail(params: {
+  from: string;
+  headers: Record<string, string>;
+  html: string;
+  idempotencyKey: string;
+  subject: string;
+  text: string;
+  to: string;
+}): Promise<{ id: string }> {
+  const result = await sendTransactionalEmail(params);
+  if (!result.id) {
+    throw new ApiError("email_send_failed", "Resend did not return an email id", 502);
+  }
+  return { id: result.id };
+}
+
+export async function readResendSender(): Promise<string> {
+  const from = await readOptionalEnv("RESEND_FROM");
+  if (!from) {
+    throw new ApiError("send_misconfigured", "RESEND_FROM is not configured", 500);
+  }
+  return from;
 }
 
 export async function sendPasswordResetEmail(params: { to: string; url: string }): Promise<void> {
@@ -280,31 +320,49 @@ export async function sendVerificationEmail(params: { to: string; url: string })
   });
 }
 
-export async function sendMagicLinkEmail(params: { to: string; url: string }): Promise<void> {
+export async function sendMagicLinkEmail(params: {
+  followName?: string;
+  to: string;
+  url: string;
+}): Promise<void> {
+  const name = params.followName;
+  const safeName = name ? escapeHtmlAttribute(name) : undefined;
+  const opener = name
+    ? `Hey, good to have you with the crew. Open this link and you're in, following ${name}:`
+    : "Hey, good to have you with the crew. Open this link and you're in:";
+  const htmlOpener = safeName
+    ? `Hey, good to have you with the crew. Open this link and you&rsquo;re in, following ${safeName}:`
+    : "Hey, good to have you with the crew. Open this link and you&rsquo;re in:";
+  const closing = name
+    ? `Every Friday I'll email you ${name}'s new releases. Nothing new, no email.`
+    : "Save any banger that gets you moving and I'll keep it for you, wherever you sign in.";
+  const htmlClosing = safeName
+    ? `Every Friday I&rsquo;ll email you ${safeName}&rsquo;s new releases. Nothing new, no email.`
+    : "Save any banger that gets you moving and I&rsquo;ll keep it for you, wherever you sign in.";
   const text = [
-    "Hey, good to have you with the crew. Open this link and you're in:",
+    opener,
     "",
     params.url,
     "",
     "It works once, for the next 15 minutes. If you didn't ask for it, ignore this and nothing happens.",
     "",
-    "Save any banger that gets you moving and I'll keep it for you, wherever you sign in.",
+    closing,
     "",
     "Happy raving,",
     "Fluncle",
   ].join("\n");
 
   const html = [
-    "<p>Hey, good to have you with the crew. Open this link and you&rsquo;re in:</p>",
-    `<p><a href="${escapeHtmlAttribute(params.url)}">Sign in to Fluncle</a></p>`,
+    `<p>${htmlOpener}</p>`,
+    `<p><a href="${escapeHtmlAttribute(params.url)}">${safeName ? `Sign in and follow ${safeName}` : "Sign in to Fluncle"}</a></p>`,
     "<p>It works once, for the next 15 minutes. If you didn&rsquo;t ask for it, ignore this and nothing happens.</p>",
-    "<p>Save any banger that gets you moving and I&rsquo;ll keep it for you, wherever you sign in.</p>",
+    `<p>${htmlClosing}</p>`,
     "<p>Happy raving,<br>Fluncle</p>",
   ].join("\n");
 
   await sendTransactionalEmail({
     html,
-    subject: "Your Fluncle sign-in link",
+    subject: name ? `Your link to follow ${name}` : "Your Fluncle sign-in link",
     text,
     to: params.to,
   });
