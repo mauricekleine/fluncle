@@ -1,16 +1,3 @@
-// THE `sameAs` CARVE-OUT (RFC dnb-identity-graph, ruling 7a).
-//
-// Every Spotify link Fluncle SERVES for following is now his own `/out/spotify/<trackId>` 302. The
-// one place that must keep the RAW link is structured data: `sameAs` is an identity ASSERTION —
-// "this recording IS that Spotify resource" — not a link being handed to a visitor, and pointing it
-// at a redirect on Fluncle's own domain would tell a knowledge graph that the recording is the
-// same thing as a Fluncle URL. The anchoring the whole schema block exists for would be poisoned by
-// it, quietly and permanently.
-//
-// So this is a STANDING guard rather than a one-off check: it walks every JSON-LD builder in
-// log-schema.ts with hop-ready fixtures and asserts that no `fluncle.com/out/` URL appears anywhere
-// in the emitted document. It fails the moment a future edit routes an entity link through the hop.
-
 import { describe, expect, it } from "vitest";
 import {
   artistBreadcrumbsJsonLd,
@@ -39,7 +26,6 @@ const track = {
   title: "Nobody Else - 1991 Remix",
 };
 
-/** Every URL-ish string anywhere in a JSON-LD document, however deeply nested. */
 function urlsIn(value: unknown): string[] {
   if (typeof value === "string") {
     return value.startsWith("http") ? [value] : [];
@@ -110,8 +96,6 @@ describe("JSON-LD keeps the RAW Spotify link, never the hop", () => {
   }
 
   it("still asserts the RAW open.spotify.com link on the recording", () => {
-    // The positive half of the same rule: the carve-out is only meaningful while the raw link is
-    // actually there. A future edit that dropped `sameAs` entirely would pass the guard above.
     expect(urlsIn(documents.musicRecording)).toContain("https://open.spotify.com/track/abc");
   });
 });

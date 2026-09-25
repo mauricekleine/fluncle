@@ -13,9 +13,6 @@ const CERTIFIED: FreshTrack = {
   title: "Mystic",
 };
 
-// No `logId`, no `coverImageUrl`: the Unlit Rule is structural upstream — `listFreshTracks`
-// gives a catalogue row neither field (see the `FreshTrack` note in lib/server/fresh.ts), so
-// this is the only shape an uncertified row can arrive in.
 const UNCERTIFIED: FreshTrack = {
   artists: ["Unknown Act"],
   certified: false,
@@ -33,7 +30,6 @@ function render(tracks: FreshTrack[]): string {
   });
 }
 
-/** The `<item>` block for one track, so a per-item rule can be checked in isolation. */
 function itemFor(xml: string, title: string): string {
   const block = xml.split("<item>").find((part) => part.includes(title));
   expect(block, `no <item> carrying "${title}"`).toBeDefined();
@@ -74,9 +70,6 @@ describe("renderEntityFreshFeed", () => {
   });
 
   it("keeps an uncertified row unlit: Spotify out-link, no /log, no cover", () => {
-    // DESIGN.md's Unlit Rule on the wire. The renderer never re-derives a cover or a coordinate,
-    // so an uncertified row can only render out-linked — the tier is decided upstream and the
-    // envelope cannot promote it.
     const item = itemFor(render([UNCERTIFIED]), "Untitled");
 
     expect(item).toContain("<link>https://open.spotify.com/track/unlit</link>");
@@ -85,8 +78,6 @@ describe("renderEntityFreshFeed", () => {
   });
 
   it("refuses a /log link even if an uncertified row somehow arrives carrying a coordinate", () => {
-    // The one half of the Unlit Rule the envelope DOES enforce itself (`itemLink` gates on
-    // `certified && logId`), so a producer slip cannot mint a Fluncle home for a catalogue row.
     const item = itemFor(render([{ ...UNCERTIFIED, logId: "019.4.2C" }]), "Untitled");
 
     expect(item).not.toContain("/log/");

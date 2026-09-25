@@ -1,9 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { logbookPath, parseLogbookBody, resolveLogbookFigure } from "./logbook";
 
-// The logbook body model: the markdown-lite parser + the figure-token → poster
-// resolution, the two pieces the /logbook/<sector> page renders from.
-
 describe("parseLogbookBody", () => {
   it("turns a lone `[[logId]]` line into a figure block (the photo token)", () => {
     const blocks = parseLogbookBody("The day opened slow.\n\n[[036.7.2I]]\n\nThen it kicked.");

@@ -1,45 +1,15 @@
-/**
- * The primary Worker client preserves ordinary request fan-out while capping
- * libSQL's default of 20 concurrent requests.
- */
 export const PRIMARY_DB_CONCURRENCY = 4;
 
-/**
- * One Worker isolate admits at most four database operations across every
- * client it creates. This matches the deliberate primary-client fan-out while
- * preventing concurrent requests from multiplying that cap. It is an isolate
- * bound, not cross-isolate or cross-unit admission control.
- */
 export const WORKER_DB_AGGREGATE_CONCURRENCY = 4;
 
-/**
- * Only one heavy read occupies the isolate gate at once, leaving three seats
- * for ordinary reads and writes when that reader is held.
- */
 export const WORKER_DB_HEAVY_READ_CONCURRENCY = 1;
 
-/**
- * The telemetry client matches `readRunLedger`'s three-query fan-out while
- * keeping ledger diagnostics independent from the primary client.
- */
 export const TELEMETRY_DB_CONCURRENCY = 3;
 
-/**
- * The catalogue-public-entities count intentionally permits its three-count
- * read to fan out together.
- */
 export const CATALOGUE_PUBLIC_ENTITY_COUNT_DB_CONCURRENCY = 3;
 
-/**
- * Maintenance, benchmark, seed, and readiness remote clients use one slot:
- * these tools perform sequential or deliberately batched work.
- */
 export const REMOTE_DB_CONCURRENCY = 1;
 
-/**
- * Local, file, and test clients use one slot to document serial intent even
- * though the current sqlite3 transport ignores this option.
- */
 export const LOCAL_DB_CONCURRENCY = 1;
 
 export type WorkerDatabaseAccessClass = "heavy-read" | "read" | "write";
@@ -63,7 +33,6 @@ function waitForAdmissionTurn(): Promise<void> {
   });
 }
 
-/** A queued heavy read cannot consume or convoy the ordinary seats beside it. */
 export class WorkerDatabaseConcurrencyGate {
   readonly #aggregateCeiling: number;
   readonly #heavyReadCeiling: number;
@@ -99,9 +68,6 @@ export class WorkerDatabaseConcurrencyGate {
         return lease;
       }
 
-      // A module-global resolver would let one request resolve another request's
-      // Promise, which Workerd cancels. Each waiter wakes in its own request
-      // context and competes only when its access class has capacity.
       await waitForAdmissionTurn();
     }
   }

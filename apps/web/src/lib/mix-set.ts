@@ -10,11 +10,6 @@ export {
   setToken,
 } from "@fluncle/contracts/util/mix-set";
 
-/**
- * Set-level `MusicPlaylist` JSON-LD makes a shared mix legible to crawlers. A member links to
- * Spotify when available because the playlist describes the recording; a `/log` URL would claim
- * Fluncle certification. A crawler-minted row with no store link carries no `url` claim.
- */
 export function mixPlaylistJsonLd(
   chain: { artists: string[]; spotifyUrl?: string; title: string }[],
   pageUrl: string,

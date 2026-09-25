@@ -18,11 +18,6 @@ import {
   WORKING_SET_SIZE,
 } from "./attention";
 
-// The attention queue's pure model (lib/attention.ts) — the `/admin` home's
-// mechanics, proven against an injected clock: the five sources' derivation and
-// their partition, the ratified two-tier ordering, the bounded working set, the
-// snooze/won't-do buckets, and the instrument readouts.
-
 const NOW = Date.parse("2026-07-06T12:00:00.000Z");
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
@@ -72,7 +67,7 @@ describe("deriveAttentionItems", () => {
             tiktokUpdatedAt: pushedAt,
             title: "Glowing Embers",
             trackId: "t1",
-            // YouTube already up, so the only pending leg is the TikTok draft.
+
             youtubeStatus: "published",
           },
         ],
@@ -111,8 +106,6 @@ describe("deriveAttentionItems", () => {
       NOW,
     );
 
-    // Only the oldest clip (t1) surfaces — its TikTok and YouTube legs, both pending; the
-    // waiting count is every clip still needing work.
     expect(items.map((entry) => entry.id)).toEqual(["post-tiktok:t1", "post-youtube:t1"]);
     expect(items.every((entry) => entry.waiting === 3)).toBe(true);
   });
@@ -126,7 +119,7 @@ describe("deriveAttentionItems", () => {
             addedAt: iso(NOW - 3 * DAY),
             artists: ["A"],
             logId: "l1",
-            // TikTok is live already; only the YouTube leg is pending.
+
             tiktokStatus: "published",
             title: "One",
             trackId: "t1",
@@ -158,7 +151,6 @@ describe("deriveAttentionItems", () => {
       NOW,
     );
 
-    // t1 is fully distributed, so t2 becomes the focus.
     expect(items.map((entry) => entry.id)).toEqual(["post-tiktok:t2", "post-youtube:t2"]);
   });
 
@@ -167,7 +159,6 @@ describe("deriveAttentionItems", () => {
       {
         ...EMPTY_INPUTS,
         clips: [
-          // The focus clip: both legs fresh.
           {
             addedAt: iso(NOW - 17 * DAY),
             artists: ["A"],
@@ -175,7 +166,7 @@ describe("deriveAttentionItems", () => {
             title: "One",
             trackId: "t1",
           },
-          // A newer clip whose TikTok draft is already racing its bounce — must still show.
+
           {
             addedAt: iso(NOW - 3 * DAY),
             artists: ["B"],
@@ -195,7 +186,7 @@ describe("deriveAttentionItems", () => {
     expect(ids).toContain("tiktok-draft:t2");
     expect(ids).toContain("post-tiktok:t1");
     expect(ids).toContain("post-youtube:t1");
-    // t2's TikTok is a draft (its own deadline row), never also a fresh post-tiktok.
+
     expect(ids).not.toContain("post-tiktok:t2");
   });
 
@@ -204,8 +195,6 @@ describe("deriveAttentionItems", () => {
       {
         ...EMPTY_INPUTS,
         recordings: [
-          // A plan (no video) never rows; a promoted take is the mixtape's business;
-          // a take with cues is settled; only the cue-less take surfaces.
           {
             createdAt: iso(NOW - DAY),
             hasVideo: false,
@@ -347,7 +336,7 @@ describe("deriveAttentionItems", () => {
       source: "label-review",
       title: "spiration music",
     });
-    // A ruling steers the NEXT crawl, so it is never urgent: no deadline, no bounce clock.
+
     expect(items[0]?.deadlineAt).toBeUndefined();
     expect(primaryFor(items[0] as AttentionItem, NOW)).toEqual({
       href: "/admin/labels",
@@ -356,9 +345,6 @@ describe("deriveAttentionItems", () => {
     });
   });
 
-  // The entity-bio sweep's FINAL-ATTEMPT ACCEPTANCE (lib/server/bio-review.ts). The voice gate
-  // refused the paragraph and the third draft was stored anyway — the operator's own ruling, kept
-  // — so the acceptance becomes a queue row instead of a line in a cron log nobody greps.
   it("rows each bio that landed past the voice gate, carrying its entity and the accepted reasons", () => {
     const items = deriveAttentionItems(
       {
@@ -385,10 +371,9 @@ describe("deriveAttentionItems", () => {
       title: "Future Signal",
       violations: ["banned identity word: signal", "the Dry Rule: an exclamation mark"],
     });
-    // The paragraph has already shipped, so nothing is racing — a review, never a deadline.
+
     expect(items[0]?.deadlineAt).toBeUndefined();
-    // Both rulings act on state the server already holds and no station owns a bio, so the
-    // decision IS the row (the anchor-review shape), not a deep-link.
+
     expect(items[0]?.href).toBeUndefined();
     expect(primaryFor(items[0] as AttentionItem, NOW)).toEqual({
       kind: "keep-bio",
@@ -396,9 +381,6 @@ describe("deriveAttentionItems", () => {
     });
   });
 
-  // THE FALSE-POSITIVE CASE, and the reason the queue is worth acting on: a bio the gate PASSED
-  // must raise nothing at all. A review source that fires on clean work is one the operator learns
-  // to ignore, which would put the bypass right back where it started.
   it("rows nothing when no bio was bypassed", () => {
     const items = deriveAttentionItems({ ...EMPTY_INPUTS, bioReviews: [] }, NOW);
 
@@ -430,8 +412,6 @@ describe("deriveAttentionItems", () => {
       NOW,
     );
 
-    // Two kinds can carry the same slug, and the snooze/won't-do map keys on the row id — so the
-    // id has to carry the kind, or ruling on one would silently park the other.
     expect(items.map((item) => item.id)).toEqual([
       "bio-review:label:shared-slug",
       "bio-review:album:shared-slug",
@@ -442,10 +422,6 @@ describe("deriveAttentionItems", () => {
     ]);
   });
 
-  // The anchor gate's suspected version mismatches (lib/server/anchor.ts § the anchor review).
-  // The gate refused a candidate that agreed on artists, base title, and duration but named a
-  // different version — the fingerprint of metadata missing the version — so the near-match becomes
-  // a queue row the operator rules on inline. Nothing auto-anchors; the row is the question.
   it("rows a suspected version mismatch with the candidate inline, ruling in place", () => {
     const items = deriveAttentionItems(
       {
@@ -484,9 +460,9 @@ describe("deriveAttentionItems", () => {
       title: "Calibre — Typical Description",
       trackId: "mb_queued",
     });
-    // The row has been un-anchored for months — nothing is on fire, so no deadline tier.
+
     expect(items[0]?.deadlineAt).toBeUndefined();
-    // Both rulings are one tap on the stored candidate, so there is no station to deep-link to.
+
     expect(items[0]?.href).toBeUndefined();
     expect(attentionRowPath(items[0] as AttentionItem)).toBe("/admin");
     expect(primaryFor(items[0] as AttentionItem, NOW)).toEqual({
@@ -516,8 +492,6 @@ describe("deriveAttentionItems", () => {
       NOW,
     );
 
-    // Nothing to anchor to, so the row is INFORMATION: it points at the place the wrong metadata
-    // gets fixed for every consumer of the open graph, not just for us.
     expect(items[0]?.candidate?.spotifyTrackId).toBeUndefined();
     expect(primaryFor(items[0] as AttentionItem, NOW)).toEqual({
       href: "https://musicbrainz.org/recording/9f0c1234-5678-90ab-cdef-1234567890ab",
@@ -526,11 +500,6 @@ describe("deriveAttentionItems", () => {
     });
   });
 
-  // The capture-verification backfill's finding mismatches (docs/the-ear.md § Wrong audio).
-  // A machine never rewinds a public finding, so a fingerprint mismatch on one becomes a queue
-  // row for the operator's ears — pre-evidenced, deep-linked to the catalogue workstation where
-  // the flag_wrong_audio verdict lives. Never urgent: the wrong bytes are inaudible on every
-  // public surface (the site/video/radio all play the official preview).
   it("rows each capture suspect, deep-linked to the catalogue workstation, never a deadline", () => {
     const items = deriveAttentionItems(
       {
@@ -566,10 +535,6 @@ describe("deriveAttentionItems", () => {
     });
   });
 
-  // The echo gate's held notes. The gate still refuses to STORE these — that is unchanged
-  // and deliberate — but it no longer destroys them: each one becomes a row here, so the
-  // operator can read what the model wrote and rule on it. A gate whose rejections nobody
-  // can see is a gate nobody can supervise.
   it("rows each held auto-note, deep-linked to the finding's note dialog", () => {
     const items = deriveAttentionItems(
       {
@@ -592,15 +557,14 @@ describe("deriveAttentionItems", () => {
     expect(items[0]).toEqual({
       anchorAt: iso(NOW - 2 * DAY),
       attempts: 2,
-      // The note dialog is the ONE place the held note and the neighbour it echoed can be
-      // read side by side, so the row opens it rather than ruling inline.
+
       href: "/admin/findings?note=trk_1",
       id: "note-rejected:rej_1",
       source: "note-rejected",
       title: "Halogenix — Blue Nights",
       trackId: "trk_1",
     });
-    // A note-less finding is unfinished, not urgent: never a deadline row.
+
     expect(items[0]?.deadlineAt).toBeUndefined();
     expect(primaryFor(items[0] as AttentionItem, NOW)).toEqual({
       href: "/admin/findings?note=trk_1",
@@ -761,8 +725,7 @@ describe("deriveAttentionItems", () => {
     expect(items).toHaveLength(1);
     expect(items[0]).toMatchObject({
       anchorAt: iso(NOW - 3 * HOUR),
-      // The send-by deadline (drafted + 24h) puts the letter on the DUE tier — top of
-      // the dashboard — instead of sinking to the bottom as the newest backlog item.
+
       deadlineAt: iso(NOW + 21 * HOUR),
       href: "/admin/newsletter",
       id: "newsletter:ed-1",
@@ -804,7 +767,7 @@ describe("orderQueue", () => {
 
     expect(due).toHaveLength(WORKING_SET_SIZE);
     expect(backlog).toHaveLength(3);
-    // Oldest-first: the oldest anchors fill the working set.
+
     expect(due[0]?.id).toBe(`row-${WORKING_SET_SIZE + 2}`);
   });
 
@@ -819,7 +782,7 @@ describe("orderQueue", () => {
     const { dismissed, due, snoozed } = orderQueue(rows, prefs, NOW);
 
     expect(snoozed.map((entry) => entry.id)).toEqual(["a"]);
-    // An expired snooze re-enters on its own.
+
     expect(due.map((entry) => entry.id)).toEqual(["b"]);
     expect(dismissed.map((entry) => entry.id)).toEqual(["c"]);
   });
@@ -841,7 +804,7 @@ describe("the readouts", () => {
   it("reads a signed duration gap to a tenth of a second (the anchor-review evidence)", () => {
     expect(formatDelta(400)).toBe("+0.4s");
     expect(formatDelta(-1000)).toBe("-1.0s");
-    // An exact (or sub-50ms) match carries no sign — it is not "more" or "less", it is the same.
+
     expect(formatDelta(0)).toBe("0.0s");
     expect(formatDelta(-20)).toBe("0.0s");
   });
@@ -872,7 +835,7 @@ describe("snoozeSlots", () => {
     for (const slot of slots) {
       expect(Date.parse(slot.until)).toBeGreaterThan(NOW);
     }
-    // The two nine-o'clock slots land at 09:00 local.
+
     for (const slot of slots.slice(1)) {
       expect(new Date(slot.until).getHours()).toBe(9);
       expect(new Date(slot.until).getMinutes()).toBe(0);
@@ -880,7 +843,6 @@ describe("snoozeSlots", () => {
   });
 
   it("rolls a full week when today is the target weekday", () => {
-    // NOW is a Monday (2026-07-06); "Mon 9:00" must be NEXT Monday.
     const monday = snoozeSlots(NOW)[2];
     const until = new Date(monday?.until ?? "");
 
@@ -989,7 +951,6 @@ describe("attentionBrief", () => {
       item({ id: "t", source: "post-tiktok" }),
     ];
 
-    // post-tiktok precedes artist-review in the priority order.
     expect(attentionBrief(items, NOW)).toBe(
       "A clip to push to TikTok, an artist's links to review.",
     );
@@ -1001,7 +962,6 @@ describe("attentionBrief", () => {
       item({ href: "/admin/newsletter", id: "n", source: "newsletter" }),
     ];
 
-    // newsletter precedes submission in the priority order.
     expect(attentionBrief(items, NOW)).toBe(
       "The Friday letter waiting on your send, a crew submission to hear.",
     );
@@ -1028,7 +988,6 @@ describe("deriveAttentionDigest", () => {
 
     const digest = deriveAttentionDigest(items, NOW);
 
-    // The deadline row leads; each row carries its `/admin/…` path.
     expect(digest.rows.map((row) => row.source)).toEqual(["tiktok-draft", "artist-review"]);
     expect(digest.rows[0]?.path).toBe("/admin");
     expect(digest.rows[0]?.logId).toBe("004.7.2I");

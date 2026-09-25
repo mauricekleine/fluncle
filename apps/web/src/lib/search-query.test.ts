@@ -60,9 +60,6 @@ describe("parseSonicPhrase — the headline query, with no model in front of it"
     }
   });
 
-  // A compound query is two questions, and the second one is a FILTER. The regex declines it
-  // so tier 4 can compile that half into columns — which is what puts a btree pre-filter in
-  // front of the vector scan.
   it("declines a compound query and leaves it for the model", () => {
     for (const query of [
       "sounds like Nine Clouds but on Hospital Records",
@@ -84,8 +81,6 @@ describe("toFtsMatch — the injection boundary", () => {
     expect(toFtsMatch("nine clouds")).toBe('"nine" "clouds"*');
   });
 
-  // The degraded path drops the scaffolding words, because under OR a document matching two
-  // throwaway words out-scores one matching the single word the query was about.
   it("ORs for the degraded path, and keeps only the words the query is ABOUT", () => {
     expect(toFtsMatch("Andromedik tracks in A minor", "or")).toBe('"andromedik" OR "minor"*');
   });
@@ -98,9 +93,6 @@ describe("toFtsMatch — the injection boundary", () => {
     expect(toFtsMatch("the the", "or")).toBe('"the" OR "the"*');
   });
 
-  // THE ONE THAT MATTERS. FTS5's MATCH argument is a query LANGUAGE — a bind slot does not
-  // make its operators inert, it just delivers them to the parser. So the expression is
-  // rebuilt from scrubbed tokens, and there is no path from user text to an operator.
   it("neutralises every FTS5 operator a hostile query could reach for", () => {
     expect(toFtsMatch('netsky" OR title:x NEAR/2 (a b) -c ^d *')).toBe(
       '"netsky" "or" "title" "x" "near" "2" "a" "b" "c" "d"*',
@@ -125,9 +117,6 @@ describe("keySpellings — one question, however it is spelled", () => {
     ]);
   });
 
-  // The spellings ARE the bind args of `tracks.key in (…)`, so they have to be the strings the
-  // column actually holds — the analyzer's and the Rekordbox sync's `<Note> major|minor`. Emit
-  // them lower-cased again and the filter silently matches nothing at all.
   it("spells the key the way the archive stores it, so the comparison needs no lower()", () => {
     const parsed = parseKey("bb minor");
 

@@ -25,25 +25,18 @@ import {
 } from "./sprites";
 import { type FrontierEntity } from "./types";
 
-// The renderer: one low-resolution canvas (270p) upscaled with
-// image-rendering: pixelated, so every line of text and every sprite lands on
-// the same chunky grid — the 80s look is the scaling, not a shader. Heavy
-// grain and scanlines stay on top of every frame (the Light-Years Rule:
-// lossy is narrative, a clean frame reads as fake).
-
 const INTERNAL_HEIGHT = 270;
 const HORIZON_FRACTION = 0.42;
 const BOOT_SECONDS = 4.2;
 const TOWED_SECONDS = 1.8;
 const DISTANT_STARS = 170;
 const STREAK_COUNT = 64;
-/** World size of a banger star's glowing body. */
+
 const STAR_BODY = 26;
 const EARTH_BODY = 170;
 
 export type MasterPhase = "boot" | "end" | "gate" | "play";
 
-/** Distance band relative to the instruments: audio range, radar range, past. */
 type StarTier = "far" | "mid" | "near";
 
 export type LogCardView = {
@@ -55,7 +48,6 @@ export type LogCardView = {
   title: string;
 };
 
-/** An on-canvas hit zone, in internal canvas pixels. */
 type HitRect = {
   h: number;
   w: number;
@@ -63,15 +55,9 @@ type HitRect = {
   y: number;
 };
 
-/** The atlas overlay's per-frame inputs (open when present). */
 export type AtlasView = {
-  /** Latest pointer position in internal canvas px, for the hover label. */
   pointer?: { x: number; y: number };
-  /**
-   * Sticky hover: the last star the pointer actually hit. A pointer sweeping the
-   * gap BETWEEN marks holds this label instead of flashing the keyboard fallback
-   * (nearest-to-ship reads as "the first star" from Earth's parking orbit).
-   */
+
   lastHoverIndex?: number;
 };
 
@@ -79,7 +65,7 @@ export type RenderView = {
   atlas?: AtlasView;
   bootT: number;
   carrier?: CarrierInfo;
-  /** The signed-in traveller's crew number, stamped on the ship. Absent = no stamp. */
+
   crewNumber?: number;
   endT: number;
   logCard?: LogCardView;
@@ -103,7 +89,6 @@ type DistantStar = {
 };
 
 type Streak = {
-  /** Horizontal angle offset from dead ahead, radians. */
   bearing: number;
   depth: number;
   vOffset: number;
@@ -114,9 +99,9 @@ export type Renderer = {
   destroy: () => void;
   draw: (view: RenderView) => void;
   resize: (cssWidth: number, cssHeight: number) => void;
-  /** Where the card's Spotify link was drawn this frame, if anywhere. */
+
   spotifyLinkRect: () => HitRect | undefined;
-  /** Where the top-right volume toggle was drawn this frame. */
+
   volumeRect: () => HitRect | undefined;
 };
 
@@ -139,8 +124,7 @@ export function createRenderer(container: HTMLElement): Renderer {
   const ctx = maybeCtx;
 
   ctx.imageSmoothingEnabled = false;
-  // Pin the baseline. It is sticky canvas state, so each draw must set its intended baseline;
-  // leaving it implicit would let a later draw inherit the wrong value.
+
   ctx.textBaseline = "alphabetic";
 
   const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -149,8 +133,6 @@ export function createRenderer(container: HTMLElement): Renderer {
   const distant = makeDistantStars();
   const streaks = makeStreaks();
 
-  // Hero sprites (image-gen, curated, quantized to the canon ramp) load over
-  // the procedural placeholders; until onload fires, the fallbacks draw.
   const heroShip = new Image();
   const heroEarth = new Image();
   let heroShipReady = false;
@@ -165,8 +147,6 @@ export function createRenderer(container: HTMLElement): Renderer {
   heroShip.src = "/galaxy/ship.png";
   heroEarth.src = "/galaxy/earth.png";
 
-  // Frontier set-dressing sprites (Unit B): bespoke Nano-Banana PNGs over the
-  // procedural fallbacks, the same hero pattern as ship/earth.
   const roadsterSprite = makeRoadsterSprite();
   const ufoSprite = makeUfoSprite();
   const asteroidSprite = makeAsteroidSprite();
@@ -191,7 +171,6 @@ export function createRenderer(container: HTMLElement): Renderer {
   heroAsteroid.src = "/galaxy/asteroid.png";
 
   type ShipSpriteInfo = {
-    /** Engine nozzle x-positions in sprite pixels. */
     flameAnchors: [number, number];
     height: number;
     img: CanvasImageSource;
@@ -204,7 +183,6 @@ export function createRenderer(container: HTMLElement): Renderer {
       : { flameAnchors: [5, 10], height: 15, img: shipSprite, width: SHIP_SIZE };
   }
 
-  /** Earth, centered at (x, y) with the given pixel diameter. */
   function drawEarthAt(x: number, y: number, size: number): void {
     if (heroEarthReady) {
       const drawHeight = Math.round((size * heroEarth.naturalHeight) / heroEarth.naturalWidth);
@@ -231,31 +209,16 @@ export function createRenderer(container: HTMLElement): Renderer {
   let spotifyRect: HitRect | undefined;
   let volumeRect: HitRect | undefined;
 
-  // Warm every canvas-visible face, or the first painted frames fall back and the
-  // pixel grid visibly jumps when the real face lands.
   document.fonts?.load('800 22px "Oxanium"').catch(() => undefined);
   document.fonts?.load('400 10px "Oxanium"').catch(() => undefined);
   document.fonts?.load('700 11px "Space Grotesk"').catch(() => undefined);
   document.fonts?.load('400 9px "Space Grotesk"').catch(() => undefined);
 
-  /**
-   * Draw text hanging from its CAP TOP, not from the canvas "top" baseline.
-   *
-   * Canvas `textBaseline = "top"` is measured from the font's ASCENT — and our
-   * @font-face metric overrides deliberately move the ascent (DESIGN.md's One Box
-   * Rule). So anything positioned off "top" silently shifts whenever a face is
-   * re-normalised: normalising Oxanium moved its ascent from .79em to .97em and
-   * dropped this HUD 4px at 22px, on a 270px-tall canvas.
-   *
-   * Measuring the cap height instead makes the placement independent of the font's
-   * metric box, so it survives the next normalisation too.
-   */
   function fillTextFromCapTop(text: string, x: number, capTopY: number): void {
     const previous = ctx.textBaseline;
 
     ctx.textBaseline = "alphabetic";
-    // 'H' rather than the string itself: a string of digits, or one with no
-    // ascenders, would otherwise measure a different height and hop.
+
     ctx.fillText(text, x, capTopY + ctx.measureText("H").actualBoundingBoxAscent);
     ctx.textBaseline = previous;
   }
@@ -275,10 +238,6 @@ export function createRenderer(container: HTMLElement): Renderer {
     return sprite;
   }
 
-  // Strict integer upscaling: the internal grid is blown up by a whole
-  // factor and letterboxed by at most scale-1 px. Fractional nearest-
-  // neighbour scaling smears pixels unevenly — integer scaling is what
-  // keeps the 8-bit text crisp.
   function resize(cssWidth: number, cssHeight: number): void {
     const byHeight = Math.round(Math.max(1, cssHeight) / INTERNAL_HEIGHT);
     const byWidth = Math.floor(Math.max(1, cssWidth) / 160);
@@ -306,9 +265,6 @@ export function createRenderer(container: HTMLElement): Renderer {
     ctx.fillStyle = palette.deepField;
     ctx.fillRect(0, 0, width, height);
 
-    // The film texture lands hard on the world and only whispers over the
-    // instruments: the Light-Years Rule wants the lossiness, and its own
-    // fine print wants the UI readable (degradation never breaks the HUD).
     if (view.phase === "gate") {
       drawGate(view);
       drawFilmTexture(view.nowS, 0.55);
@@ -429,8 +385,6 @@ export function createRenderer(container: HTMLElement): Renderer {
     ctx.globalAlpha = 1;
   }
 
-  // Foreground motion: pseudo-3D specks streaming out of the horizon. Their
-  // outward acceleration is the speed read; boost stretches them to streaks.
   function drawStreaks(dt: number, speedFactor: number, steer: number, horizon: number): void {
     for (let index = 0; index < streaks.length; index++) {
       const streak = streaks[index];
@@ -464,7 +418,6 @@ export function createRenderer(container: HTMLElement): Renderer {
   }
 
   type Projected = {
-    /** Forward distance in the ship frame. */
     f: number;
     sx: number;
     sy: number;
@@ -486,9 +439,6 @@ export function createRenderer(container: HTMLElement): Renderer {
     const focal = width * 0.55;
     const horizon = height * HORIZON_FRACTION;
 
-    // Apparent height saturates close-in: far stars scatter well above and
-    // below the horizon (depth cue), while an approached star glides toward
-    // eye level instead of flying off the screen edge.
     const effectiveVOffset = vOffset * Math.min(1, f / 700);
 
     return {
@@ -503,7 +453,6 @@ export function createRenderer(container: HTMLElement): Renderer {
 
     const bodies: Body[] = [];
 
-    // Earth.
     const earth = project(sim, 0, 0, 0);
 
     if (earth) {
@@ -533,9 +482,6 @@ export function createRenderer(container: HTMLElement): Renderer {
       const { ship } = sim;
       const distance = Math.hypot(star.x - ship.x, star.y - ship.y);
 
-      // Depth tiers that match the instruments: past radar range a star is a
-      // faint speck, on the scope it burns steady gold, inside audio range it
-      // pulses and swells fast. "Fat and glowing" means "on your scope."
       const tier: StarTier =
         distance <= sim.config.audioRange
           ? "near"
@@ -562,9 +508,6 @@ export function createRenderer(container: HTMLElement): Renderer {
       });
     }
 
-    // The dynamic frontier (set-dressing, hazards, bolts) shares the depth sort
-    // with the stars and Earth. Set-dressing drifts/tumbles cosmetically off
-    // nowS so the motion freezes under reduced-motion without touching the sim.
     for (const entity of sim.entities) {
       const sway = reducedMotion ? 0 : Math.sin(view.nowS * 0.05 + (entity.spin ?? 0)) * 18;
       const projected = project(
@@ -620,9 +563,6 @@ export function createRenderer(container: HTMLElement): Renderer {
     return undefined;
   }
 
-  // Dispatch by kind. Set-dressing is atmosphere: the Roadster tumbles slowly,
-  // the UFO hovers over a dim teal underglow and bobs — placed and alive, never
-  // a static decal. Hazards and bolts use their own draw paths.
   function drawFrontierEntity(
     entity: FrontierEntity,
     x: number,
@@ -630,9 +570,6 @@ export function createRenderer(container: HTMLElement): Renderer {
     size: number,
     nowS: number,
   ): void {
-    // The black hole: a void that bends the light around it. The cool lensing
-    // rim shimmers (frozen under reduced-motion); the gravity is gameplay, not
-    // decoration, so it never freezes (it lives in the sim).
     if (entity.kind === "blackhole") {
       const r = Math.max(2, Math.round(size / 2));
       const shimmer =
@@ -648,8 +585,6 @@ export function createRenderer(container: HTMLElement): Renderer {
       return;
     }
 
-    // The laser bolt: a short streak of Re-entry-Red heat along its flight (not
-    // gold — gold stays the bangers and the sun, One Sun Rule).
     if (entity.kind === "bolt") {
       const angle = Math.atan2(entity.vy, entity.vx);
       const length = Math.max(4, Math.round(size * 1.6));
@@ -694,7 +629,6 @@ export function createRenderer(container: HTMLElement): Renderer {
       return;
     }
 
-    // Roadster: a slow tumble, frozen to a fixed lean under reduced-motion.
     const rotation = reducedMotion ? phase : nowS * 0.4 + phase;
 
     drawSpriteScaled(sprite.img, x, y, drawWidth, drawHeight, rotation);
@@ -719,7 +653,6 @@ export function createRenderer(container: HTMLElement): Renderer {
     ctx.restore();
   }
 
-  /** A banger star: a pulsing pixel diamond, gold while uncollected. */
   function drawStarBody(
     x: number,
     y: number,
@@ -729,7 +662,6 @@ export function createRenderer(container: HTMLElement): Renderer {
     isCarrier: boolean,
     tier: StarTier = "near",
   ): void {
-    // Past the scope's reach: a faint dim speck, no pulse, no halo.
     if (tier === "far") {
       ctx.globalAlpha = collected ? 0.3 : 0.5;
       pixelDiamond(
@@ -790,7 +722,6 @@ export function createRenderer(container: HTMLElement): Renderer {
     ctx.translate(Math.round(shipX), Math.round(shipY));
     ctx.rotate(tilt);
 
-    // Engine flames first, under the hull. Boost burns long and bright.
     const boosting = sim.ship.boosting;
     const flameBase = boosting ? 9 : 4;
     const sprite = shipInfo();
@@ -818,9 +749,6 @@ export function createRenderer(container: HTMLElement): Renderer {
     );
     ctx.restore();
 
-    // The crew stamp (account brief, ruling #1): the signed-in traveller's enlistment
-    // number, painted small and upright just above the nose — near the hull, clear of
-    // the engine flames below, never over the play space. Absent = nothing drawn.
     if (view.crewNumber !== undefined) {
       ctx.font = '7px "Oxanium", "Space Grotesk", ui-sans-serif, system-ui, sans-serif';
       ctx.fillStyle = palette.cream;
@@ -830,9 +758,6 @@ export function createRenderer(container: HTMLElement): Renderer {
     }
   }
 
-  // The listening moment: a meditative side-on scene. The banger burns big at
-  // center, the ship drifts around it in a lazy ellipse, the card hangs above,
-  // and the only instruction is the way out. No radar, no signal readout.
   function drawOrbitScene(view: RenderView): void {
     const { sim } = view;
     const star = sim.stars[sim.orbitIndex];
@@ -862,7 +787,6 @@ export function createRenderer(container: HTMLElement): Renderer {
     };
     const drawOrbitStar = (): void => drawStarBody(cx, cy, 58, view.nowS, false, false);
 
-    // Top of the ellipse reads as the far side; the star occludes the ship.
     if (Math.sin(theta) < 0) {
       drawOrbitShip();
       drawOrbitStar();
@@ -907,10 +831,6 @@ export function createRenderer(container: HTMLElement): Renderer {
     }
   }
 
-  // The master volume toggle, top-right: a control, not a light (cream/dim,
-  // never gold). A speaker with sound-waves when on, a Re-entry-Red slash when
-  // muted. Reports its hit zone so taps/clicks reach handleUiTap; the M key
-  // still toggles too. Default ON (the sim starts unmuted).
   function drawVolumeToggle(view: RenderView): void {
     const x0 = width - 14;
     const cy = 8;
@@ -919,7 +839,7 @@ export function createRenderer(container: HTMLElement): Renderer {
     volumeRect = { h: 14, w: 16, x: x0 - 2, y: 1 };
 
     ctx.fillStyle = ink;
-    // The cone: a triangle widening down-right from the back.
+
     ctx.fillRect(x0, cy - 1, 1, 3);
     ctx.fillRect(x0 + 1, cy - 2, 1, 5);
     ctx.fillRect(x0 + 2, cy - 3, 1, 7);
@@ -934,7 +854,6 @@ export function createRenderer(container: HTMLElement): Renderer {
       return;
     }
 
-    // Sound waves rolling out.
     ctx.fillRect(x0 + 4, cy - 1, 1, 3);
     ctx.fillRect(x0 + 6, cy - 3, 1, 7);
   }
@@ -966,7 +885,7 @@ export function createRenderer(container: HTMLElement): Renderer {
 
     ctx.font = '7px "Oxanium", "Space Grotesk", ui-sans-serif, system-ui, sans-serif';
     ctx.fillStyle = palette.creamDim;
-    // The label sits ON the gauge: y - 9 is its cap top, two pixels clear of the bar.
+
     fillTextFromCapTop("Fuel", x, y - 9);
 
     for (let segment = 0; segment < segments; segment++) {
@@ -1005,7 +924,6 @@ export function createRenderer(container: HTMLElement): Renderer {
     ctx.stroke();
     ctx.globalAlpha = 1;
 
-    // Sweep line, heading-up.
     if (!reducedMotion) {
       const sweep = (view.nowS * 1.6) % (Math.PI * 2);
 
@@ -1038,7 +956,6 @@ export function createRenderer(container: HTMLElement): Renderer {
       }
     }
 
-    // The ship: a tick at scope center, always pointing up.
     ctx.fillStyle = palette.cream;
     ctx.fillRect(cx, cy - 2, 1, 4);
     ctx.fillRect(cx - 1, cy + 1, 3, 1);
@@ -1092,7 +1009,7 @@ export function createRenderer(container: HTMLElement): Renderer {
     }
 
     const cardWidth = Math.min(width - 32, 250);
-    // Narrow screens give the Spotify link its own row.
+
     const linkOnOwnRow = cardWidth < 215;
     const cardHeight = linkOnOwnRow ? 68 : 56;
     const x = Math.round((width - cardWidth) / 2);
@@ -1105,8 +1022,6 @@ export function createRenderer(container: HTMLElement): Renderer {
     ctx.fillStyle = palette.tapeBlack;
     ctx.fillRect(x, y, cardWidth, cardHeight);
 
-    // Every line hangs from its CAP TOP: the offsets below are distances from the
-    // card's top edge, the same idiom as the atlas chip.
     ctx.fillStyle = palette.gold;
     ctx.font = '9px "Oxanium", "Space Grotesk", ui-sans-serif, system-ui, sans-serif';
     ctx.textAlign = "left";
@@ -1128,7 +1043,6 @@ export function createRenderer(container: HTMLElement): Renderer {
       y + 45,
     );
 
-    // The way out to the music itself; pressing it never steers the ship.
     const label = "Listen on Spotify";
     const labelWidth = ctx.measureText(label).width;
     const linkX = linkOnOwnRow ? x + 8 : x + cardWidth - 8 - labelWidth;
@@ -1169,13 +1083,7 @@ export function createRenderer(container: HTMLElement): Renderer {
     ctx.textAlign = "left";
   }
 
-  // The gate is the ONE screen whose type is positioned from the alphabetic
-  // baseline, and deliberately so: it only ever draws before the first HUD frame
-  // (draw() returns early in the gate phase, and the phase never comes back), so
-  // it never shares the frame's baseline state. Its offsets are baselines. Leave them; do not
-  // "fix" them to cap-top.
   function drawGate(view: RenderView): void {
-    // A quiet starfield behind the plate, drifting just enough to feel alive.
     drawDistantStars(reducedMotion ? 0 : view.nowS * 0.02, view.nowS);
 
     const cx = width / 2;
@@ -1193,8 +1101,6 @@ export function createRenderer(container: HTMLElement): Renderer {
     ctx.font = '9px "Space Grotesk", ui-sans-serif, system-ui, sans-serif';
     ctx.fillText("Every banger out there is a star.", cx, orbY + 58);
 
-    // Same face and size as the subtitle (the sans renders cleanly at this
-    // grid; 8px Oxanium doesn't); the muted ink keeps the hierarchy.
     ctx.fillStyle = palette.creamMuted;
     ctx.font = '9px "Space Grotesk", ui-sans-serif, system-ui, sans-serif';
 
@@ -1202,7 +1108,7 @@ export function createRenderer(container: HTMLElement): Renderer {
       ? "Touch sides to steer · hold centre to boost"
       : "Steer with arrows · hold space to boost";
     const restLine = "Fly to a star to log it and refuel. Dry tank, towed home.";
-    // The atlas is a keyboard instrument; touch gates skip the line.
+
     const atlasLines = view.touch ? [] : ["C opens the atlas."];
     const lines =
       width < 330
@@ -1236,7 +1142,6 @@ export function createRenderer(container: HTMLElement): Renderer {
     );
     ctx.globalAlpha = 1;
 
-    // Status line while the catalogue loads (or when the sector is quiet).
     const status = view.telemetry.at(-1);
 
     if (status) {
@@ -1253,7 +1158,6 @@ export function createRenderer(container: HTMLElement): Renderer {
     const t = view.bootT;
     const cx = width / 2;
 
-    // Earth falls away below as the ship climbs out.
     const earthSize = Math.max(10, 150 - t * 170);
     const earthY = height - 30 + t * 190;
 
@@ -1261,7 +1165,6 @@ export function createRenderer(container: HTMLElement): Renderer {
       drawEarthAt(cx, earthY, earthSize);
     }
 
-    // The ship climbs into frame with a long burn.
     const shipY = height - 20 - t * 26;
     const shake = reducedMotion || t > 0.7 ? 0 : Math.round(Math.random() * 2 - 1);
     const sprite = shipInfo();
@@ -1295,7 +1198,6 @@ export function createRenderer(container: HTMLElement): Renderer {
   }
 
   function drawTowed(view: RenderView): void {
-    // In, hold, out: a full fade with the tow line on the black.
     const t = view.towedT / TOWED_SECONDS;
     const alpha = t < 0.3 ? t / 0.3 : t > 0.75 ? (1 - t) / 0.25 : 1;
 
@@ -1334,7 +1236,6 @@ export function createRenderer(container: HTMLElement): Renderer {
     ctx.font = '10px "Oxanium", "Space Grotesk", ui-sans-serif, system-ui, sans-serif';
     fillTextFromCapTop(`${sim.collectedCount}/${sim.stars.length} bangers`, cx, 42);
 
-    // The full log rolls like credits, oldest coordinate first.
     const rollTop = 60;
     const rollBottom = height - 22;
     const lineHeight = 11;
@@ -1362,8 +1263,7 @@ export function createRenderer(container: HTMLElement): Renderer {
       ctx.fillStyle = palette.goldDim;
       ctx.font = '7px "Oxanium", "Space Grotesk", ui-sans-serif, system-ui, sans-serif';
       ctx.textAlign = "right";
-      // Each row hangs from its cap top, so the roll's first line clears rollTop —
-      // the clip rect starts exactly there and would otherwise slice its caps off.
+
       fillTextFromCapTop(star.logId, cx - 6, y);
 
       ctx.fillStyle = palette.creamMuted;
@@ -1389,9 +1289,6 @@ export function createRenderer(container: HTMLElement): Renderer {
     ctx.textAlign = "left";
   }
 
-  // Scanlines, vignette, grain — the cost of light-years. Full intensity
-  // belongs on the world; the light pass over the HUD keeps the screen
-  // feeling like one tube without making the instruments hard to read.
   function drawFilmTexture(nowS: number, intensity: number): void {
     ctx.globalAlpha = 0.07 * intensity;
     ctx.fillStyle = "#000000";
@@ -1434,7 +1331,6 @@ export function createRenderer(container: HTMLElement): Renderer {
     }
   }
 
-  /** Esc parks the run: dim the cosmos, hold everything, point the way back. */
   function drawPause(view: RenderView): void {
     ctx.globalAlpha = 0.72;
     ctx.fillStyle = palette.deepField;
@@ -1454,7 +1350,6 @@ export function createRenderer(container: HTMLElement): Renderer {
 
     let hintY = baseY + 36;
 
-    // Keyboard players get the chart reminder; touch has no atlas key.
     if (!view.touch) {
       ctx.fillStyle = palette.creamDim;
       ctx.font = '8px "Space Grotesk", ui-sans-serif, system-ui, sans-serif';
@@ -1472,22 +1367,10 @@ export function createRenderer(container: HTMLElement): Renderer {
     ctx.textAlign = "left";
   }
 
-  // The atlas (C): the top-down map of the voyage — the in-game chart and the
-  // demo surface in one. The spiral is drawn from placement.ts's own
-  // spiralPoint — the exact function that placed the stars — so the thread and
-  // its marks share one source of truth and cannot drift apart. Warm Dark
-  // canon: the thread is a dim warm line (never neon), logged findings are
-  // small filled cream marks, uncharted ones dim hollow gold rings, Earth
-  // keeps the radar's blue idiom, and the ship is a cream chevron. The view is
-  // a static zoom-to-fit (no pan/zoom easing to gate); the only motion is the
-  // close-hint blink, stilled under reduced-motion.
   function drawAtlas(view: RenderView): void {
     const { sim } = view;
     const stars = sim.stars;
 
-    // The chart is its own plate: an opaque Deep Field ground so the bright
-    // cockpit (ship sprite, HUD) never ghosts through the map. The film pass
-    // that follows keeps it on the same tube as everything else.
     ctx.fillStyle = palette.deepField;
     ctx.fillRect(0, 0, width, height);
 
@@ -1498,8 +1381,6 @@ export function createRenderer(container: HTMLElement): Renderer {
     const toX = (worldX: number): number => cx + worldX * scale;
     const toY = (worldY: number): number => cy + worldY * scale;
 
-    // The voyage thread: one faint warm line from the clear-space edge to just
-    // past the frontier tip.
     ctx.strokeStyle = palette.creamDim;
     ctx.globalAlpha = 0.55;
     ctx.lineWidth = 1;
@@ -1521,7 +1402,6 @@ export function createRenderer(container: HTMLElement): Renderer {
     ctx.stroke();
     ctx.globalAlpha = 1;
 
-    // Earth at the center — the radar's own idiom, a notch larger.
     const earthX = Math.round(toX(0));
     const earthY = Math.round(toY(0));
 
@@ -1530,7 +1410,6 @@ export function createRenderer(container: HTMLElement): Renderer {
     ctx.fillStyle = palette.creamBright;
     ctx.fillRect(earthX, earthY, 1, 1);
 
-    // The frontier tip, subtly marked: a dim gold diamond around the newest finding.
     const tip = stars[frontierTipIndex(stars)];
 
     if (tip !== undefined) {
@@ -1544,9 +1423,6 @@ export function createRenderer(container: HTMLElement): Renderer {
       ctx.globalAlpha = 1;
     }
 
-    // Every finding at its true position: logged burns cream (the log endures —
-    // logged IS collected, across runs and sessions), uncharted stays a dim
-    // hollow ring.
     for (const star of stars) {
       const starX = Math.round(toX(star.x));
       const starY = Math.round(toY(star.y));
@@ -1565,7 +1441,6 @@ export function createRenderer(container: HTMLElement): Renderer {
       pixelDiamond(starX, starY, 1, palette.creamBright);
     }
 
-    // The ship: a small cream chevron at its position, nose along its heading.
     ctx.save();
     ctx.translate(Math.round(toX(sim.ship.x)), Math.round(toY(sim.ship.y)));
     ctx.rotate(sim.ship.heading);
@@ -1581,7 +1456,6 @@ export function createRenderer(container: HTMLElement): Renderer {
 
     drawAtlasLabel(view, toX, toY, scale);
 
-    // The frame text: title, the growth caption, the way back.
     ctx.textAlign = "center";
     ctx.fillStyle = palette.cream;
     ctx.font = '800 12px "Oxanium", "Space Grotesk", ui-sans-serif, system-ui, sans-serif';
@@ -1603,9 +1477,6 @@ export function createRenderer(container: HTMLElement): Renderer {
     ctx.textAlign = "left";
   }
 
-  // The chart's readout: the star under the pointer (when one is over the map)
-  // or the star nearest the ship — its coordinate in the log-card idiom plus
-  // the Artist — Title line, on a small tape-black chip clamped on-screen.
   function drawAtlasLabel(
     view: RenderView,
     toX: (worldX: number) => number,
@@ -1632,14 +1503,11 @@ export function createRenderer(container: HTMLElement): Renderer {
       if (index >= 0 && atlas) {
         atlas.lastHoverIndex = index;
       } else if (atlas?.lastHoverIndex !== undefined) {
-        // The pointer is between marks — hold the last hover instead of flashing
-        // the ship fallback.
         index = atlas.lastHoverIndex;
       }
     }
 
     if (index < 0) {
-      // No pointer at all (keyboard-only): the star nearest the ship.
       index = nearestStarIndex(stars, sim.ship.x, sim.ship.y);
     }
 
@@ -1652,7 +1520,6 @@ export function createRenderer(container: HTMLElement): Renderer {
     const markX = Math.round(toX(star.x));
     const markY = Math.round(toY(star.y));
 
-    // A cream ring singles the labelled star out.
     ctx.strokeStyle = palette.cream;
     ctx.globalAlpha = 0.9;
     ctx.beginPath();

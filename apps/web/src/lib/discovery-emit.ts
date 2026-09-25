@@ -1,7 +1,3 @@
-// The fire-and-forget half of public discovery events. Kept free of the search
-// classifier so preview-player (and any other singleton) does not pull the example list
-// into every surface that plays audio.
-
 export const DISCOVERY_EVENTS = [
   "discovery_search",
   "discovery_example",
@@ -103,10 +99,6 @@ type SaEvent = {
 
 type AnalyticsWindow = Window & { sa_event?: SaEvent };
 
-/**
- * Fire one aggregate event through the already-loaded Simple Analytics tag. Never throws.
- * Never sends a key that is not in the allow-list above. A blocked or absent tag is a no-op.
- */
 export function emitDiscoveryEvent(event: DiscoveryEventName, metadata?: DiscoveryMetadata): void {
   try {
     if (!EVENT_SET.has(event) || typeof window === "undefined") {
@@ -128,9 +120,7 @@ export function emitDiscoveryEvent(event: DiscoveryEventName, metadata?: Discove
     }
 
     sa(event);
-  } catch {
-    // Analytics must never surface. The control's own action is the product.
-  }
+  } catch {}
 }
 
 export type StartPreviewOptions = {
@@ -138,7 +128,6 @@ export type StartPreviewOptions = {
   src?: string;
 };
 
-/** Public visitor previews opt in. Omitted `src` is not public intent — admin auditions omit it too. */
 export function shouldEmitDiscoveryPreview(options?: StartPreviewOptions): boolean {
   return options?.publicPreview === true;
 }

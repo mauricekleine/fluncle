@@ -11,23 +11,10 @@ import { siteUrl } from "./fluncle-links";
 export type { FeedItem, MixtapeDTO, MixtapeExternalUrls, MixtapeMember, MixtapeStatus };
 export { type MixtapeCoverSize } from "@fluncle/contracts/util/mixtape-cover";
 
-/**
- * The title for on-site display (feed row, /mixtapes index, /log plate): the
- * canonical title minus its " | <coordinate>" suffix, since the Log ID is shown
- * right beside it everywhere. Keeps "#N". The full canonical title still rides
- * into <title>, og:title, and the JSON-LD. (A custom-series title with no " | "
- * passes through unchanged.)
- */
 export function mixtapeDisplayTitle(title: string): string {
   return title.split(" | ")[0] ?? title;
 }
 
-/**
- * The cover URL for a published mixtape, rendered on the fly by the cover
- * endpoint (Satori over the baked Deep-Field background). square backs the
- * coverImageUrl + Mixcloud/SoundCloud artwork, og the /log link-preview, wide
- * the YouTube thumbnail. There's no render step — the cover just exists here.
- */
 export function mixtapeCoverUrl(logId: string, size: MixtapeCoverSize = "square"): string {
   return buildMixtapeCoverUrl(siteUrl, logId, size);
 }
@@ -59,9 +46,7 @@ export function rowToMixtape(row: MixtapeRowLike, members: MixtapeMember[] = [])
     addedAt: row.added_at ?? undefined,
     announcedAt: row.announced_at ?? undefined,
     artists: ["Fluncle"],
-    // The cover is derived, never stored: a minted mixtape's Log ID resolves to
-    // the on-the-fly cover endpoint (mixtapeCoverUrl); an unminted claim (no Log
-    // ID yet) has no cover.
+
     coverImageUrl: row.log_id ? mixtapeCoverUrl(row.log_id, "square") : undefined,
     createdAt: row.created_at ?? undefined,
     durationMs: row.duration_ms ?? undefined,
@@ -77,12 +62,11 @@ export function rowToMixtape(row: MixtapeRowLike, members: MixtapeMember[] = [])
     note: row.note?.trim() ? row.note : undefined,
     publishedAt: row.published_at ?? undefined,
     recordedAt: row.recorded_at ?? undefined,
-    // The recording this mixtape was promoted from (its set video + clips live there).
+
     recordingId: row.recording_id ?? undefined,
     sequenceNumber: row.sequence_number ?? undefined,
     setVideoAt: row.set_video_at ?? undefined,
-    // The column is NOT NULL, so the fallback never fires in practice; it only
-    // satisfies the loose `MixtapeRowLike` input shape.
+
     status: row.status ?? "published",
     title: row.title,
     type: "mixtape",

@@ -1,26 +1,3 @@
-// PUBLIC DISCOVERY JOURNEY EVENTS — aggregate Simple Analytics beacons, never a person.
-//
-// Fluncle already loads Simple Analytics for cookieless pageviews (`routes/__root.tsx`). This
-// module is the small extra layer on top: six named journey steps, fired from existing public
-// controls, with payloads that are bounded categories and never the words a visitor typed.
-// Analytics is progressive enhancement. `emitDiscoveryEvent` never awaits, never throws, and
-// never intercepts navigation or playback. If `window.sa_event` is missing or throws, the
-// control's own action still runs.
-//
-// Vocabulary (one name, one step):
-//   discovery_search   — committed an archive query (the /search form, or a palette type-ahead)
-//   discovery_example  — followed a worked example into /search
-//   discovery_open     — opened an entity destination (finding, track, artist, label, album, galaxy, mixtape)
-//   discovery_similar  — continued through a sonic neighbour (Close in sound, similar artists)
-//   discovery_preview  — started an in-place preview
-//   discovery_outbound — left for an outbound listening service
-//
-// Classification is by RESOLVED destination (the href, or hitHref / entityHref), never by the
-// English on the control. A catalogue row and a finding can share a component: certified + Log ID
-// opens `/log/<id>` (discovery_open/finding); an identified uncertified row opens
-// `/track/<trackId>` (discovery_open/track); only the fallback Spotify URL leaves the origin
-// (discovery_outbound). See docs/search.md, "Discovery journey events".
-
 import { isBareToken, parseCoordinate, parseSonicPhrase } from "./search-query";
 import { SEARCH_EXAMPLES } from "./search-results";
 import {
@@ -76,7 +53,6 @@ const EXAMPLE_BY_QUERY = new Map<string, DiscoveryExampleKind>(
   SEARCH_EXAMPLES.map((example) => [example.query, example.icon]),
 );
 
-/** The resolver-tier SHAPE of a query, with no text retained. Multi-word names fold to `other`. */
 export function classifySearchQueryKind(query: string): DiscoveryQueryKind {
   const trimmed = query.trim();
 
@@ -139,10 +115,6 @@ function openKindFromPath(pathname: string): DiscoveryOpenKind | undefined {
   return undefined;
 }
 
-/**
- * Classify a control by where it actually goes. `similar` is the behavioural marker on a
- * neighbour rail (`data-discovery="similar"`), not a reading of the English on the chip.
- */
 export function classifyDiscoveryHref(
   href: string,
   options: { base?: string; similar?: boolean } = {},
@@ -163,8 +135,6 @@ export function classifyDiscoveryHref(
   const query = url.searchParams.get("q")?.trim() ?? "";
 
   if (pathname === "/search" && query.length > 0) {
-    // "Similar tracks" is a /search link into the sonic view, and it is a similar hop by
-    // behaviour: a rail-marked sonic query counts as one, never as a typed search.
     if (options.similar && classifySearchQueryKind(query) === "sonic") {
       return { event: "discovery_similar", metadata: { kind: "track" } };
     }
@@ -194,7 +164,6 @@ export function classifyDiscoveryHref(
   return undefined;
 }
 
-/** Classify an href and emit, used by palette rows that navigate imperatively rather than as anchors. */
 export function emitDiscoveryFromHref(href: string, options: { similar?: boolean } = {}): void {
   const classified = classifyDiscoveryHref(href, options);
 

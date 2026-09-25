@@ -33,7 +33,6 @@ describe("itemLink — the two-tier Unlit Rule", () => {
   });
 
   it("points an uncertified row OUT to Spotify, never at a /log page", () => {
-    // An uncertified row has no coordinate to borrow: it must never gain a Fluncle home.
     const link = itemLink(
       track({ logId: "019.4.2C", spotifyUrl: "https://open.spotify.com/track/x" }),
     );
@@ -60,8 +59,6 @@ describe("itemId", () => {
   });
 
   it("falls back to a deterministic release urn that borrows no coordinate", () => {
-    // The Unlit Rule holds in the id too: a linkless row's stable id is built from its release
-    // date and title, never from a Log ID it has not earned.
     const id = itemId(track({ logId: "019.4.2C", title: "Mystic & Co" }), undefined);
 
     expect(id).toBe("urn:fluncle:release:2026-08-01:Calibre%20%E2%80%94%20Mystic%20%26%20Co");

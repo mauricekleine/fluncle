@@ -1,12 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { stripSsml } from "./observation-text";
 
-// A legacy observation script may embed SSML tags (`<break time="1.0s" />`,
-// `<emphasis>…`); stripSsml drops those spans so the admin transcript reads as clean
-// prose. The cases that matter: a tag mid-sentence (the gap collapses to one space),
-// a tag at the start (no leading space), several tags in a row, and the no-tag
-// passthrough (unchanged besides trim).
-
 describe("stripSsml", () => {
   it("strips a break tag mid-sentence and collapses to a single space", () => {
     expect(stripSsml('It hangs there. <break time="1.0s" /> Then it drops.')).toBe(

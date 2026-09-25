@@ -8,11 +8,6 @@ import {
   renderableItems,
 } from "./nav-model";
 
-// The nav model is the ONE source every variant reads, so its completeness is the
-// contract: every public index surface must be reachable, the admin-only + future
-// slots must be flagged (never rendered as live public links), and the galaxies gate
-// must actually hide the lens until it is live. Pin all of that here.
-
 describe("nav model completeness", () => {
   it("reaches every public index surface", () => {
     const paths = navRoutePaths();
@@ -36,18 +31,15 @@ describe("nav model completeness", () => {
     }
   });
 
-  // THE FORK. Browsing is two things, not one: what Fluncle DID out there (his own
-  // objects — the log, the logbook, the galaxies, the mixtapes) and what he found it
-  // AMONG (the music's own taxonomy — artists, albums, labels). A flat list of both
-  // reads as a sitemap. Pin the split so a new surface has to choose a side.
   it("splits browsing into travelling along (what he did) and browsing (what he found it among)", () => {
     const travel = navSections.find((section) => section.id === "travel");
     const browse = navSections.find((section) => section.id === "browse");
 
     expect(travel?.label).toBe("Travel along");
     expect(browse?.label).toBe("Browse");
-    expect(publicItems(travel ?? { id: "travel", items: [], label: "" }).map((item) => item.id)) //
-      .toEqual(["findings", "log", "logbook", "galaxies", "mixtapes"]);
+    expect(
+      publicItems(travel ?? { id: "travel", items: [], label: "" }).map((item) => item.id),
+    ).toEqual(["findings", "log", "logbook", "galaxies", "mixtapes"]);
     expect(browse?.items.map((item) => item.id)).toEqual([
       "search",
       "tracks",
@@ -58,10 +50,6 @@ describe("nav model completeness", () => {
     ]);
   });
 
-  // Every heading is one plain word or phrase, and it names something you DO or someone you
-  // are — Travel along / Browse / Listen / Crew. The two it replaced ("The trail", "The
-  // crates") were abstract nouns that matched neither their siblings nor the canon. A
-  // heading that opens with "The " is the tell that an abstraction crept back in.
   it("keeps every section heading plain, in the Listen/Crew register", () => {
     expect(navSections.map((section) => section.label)).toEqual([
       "Travel along",
@@ -72,14 +60,11 @@ describe("nav model completeness", () => {
 
     for (const section of navSections) {
       expect(section.label).not.toMatch(/^The /);
-      // Sentence case: never an uppercase-tracked label (VOICE.md reserves caps for the
-      // cover-art brand marks).
+
       expect(section.label).not.toBe(section.label.toUpperCase());
     }
   });
 
-  // The word for the uncertified tier is INTERNAL and must never reach public copy
-  // (docs/album-entity.md). The nav is public copy.
   it("never says the internal word for the unnamed tier", () => {
     const copy = navSections
       .flatMap((section) => [
@@ -92,7 +77,6 @@ describe("nav model completeness", () => {
     expect(copy).not.toContain("catalog");
   });
 
-  // "Imprint" is trade-press English, not something the uncle says out loud. It is a label.
   it("never says imprint", () => {
     const copy = navSections
       .flatMap((section) => [
@@ -122,9 +106,8 @@ describe("nav model completeness", () => {
       throw new Error("travel section missing");
     }
 
-    // It exists in the raw model (completeness) …
     expect(travel.items.some((item) => item.id === "mix")).toBe(true);
-    // … but publicItems drops it (admin-gated).
+
     expect(publicItems(travel).some((item) => item.id === "mix")).toBe(false);
   });
 
@@ -133,9 +116,6 @@ describe("nav model completeness", () => {
     const labels = browse?.items.find((item) => item.id === "labels");
     const albums = browse?.items.find((item) => item.id === "albums");
 
-    // The `future` flag is reserved for designed-but-unavailable slots; Labels and Albums are
-    // real routes, so neither may carry it —
-    // a future item renders as a disabled "soon" slot, which would now be a lie.
     expect(labels?.future).toBeUndefined();
     expect(albums?.future).toBeUndefined();
     expect(renderableItems(browse ?? { id: "browse", items: [], label: "" }, true)).toEqual(

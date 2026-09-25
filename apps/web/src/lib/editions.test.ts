@@ -7,19 +7,11 @@ import {
   rowToEdition,
 } from "./editions";
 
-// The presentation helpers the /newsletter archive + back-issue pages render
-// with. Pure functions over the stored content payload, so they're unit-testable
-// without a React harness (the same pattern as galaxies.test.ts).
-
 function content(partial: EditionDTO["content"]): EditionDTO["content"] {
   return partial;
 }
 
-// The section matcher now ranks against the LIVE sonic map (browse-by-feel RFC) —
-// the operator-named galaxies in their public list order, passed in by the caller
-// (fetched from `listGalaxyNames`), not the four dead vibe constants.
 describe("orderedGalaxies", () => {
-  // A stand-in live map — the operator-named galaxies in their public list order.
   const LIVE = ["The Liquid Deep", "The Feral Steppers", "Drifting Aurora"];
 
   it("orders the known galaxies by the live map order regardless of authored order", () => {
