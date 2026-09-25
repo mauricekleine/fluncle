@@ -1,7 +1,6 @@
 import { MagnifyingGlassIcon } from "@phosphor-icons/react";
 import {
   createContext,
-  lazy,
   type ReactNode,
   Suspense,
   useContext,
@@ -9,8 +8,10 @@ import {
   useMemo,
   useState,
 } from "react";
+import { LazyPopupBoundary } from "@/components/lazy-popup-boundary";
+import { lazyNamed } from "@/lib/lazy-named";
 const loadSearchDialog = () => import("@/components/search/search-dialog");
-const SearchDialog = lazy(async () => ({ default: (await loadSearchDialog()).SearchDialog }));
+const SearchDialog = lazyNamed(loadSearchDialog, "SearchDialog");
 
 export function prefetchSearchDialog(): void {
   void loadSearchDialog();
@@ -105,9 +106,11 @@ export function SearchTrigger({ showTrigger = true }: { showTrigger?: boolean })
       ) : undefined}
 
       {state || activated ? (
-        <Suspense fallback={null}>
-          <SearchDialog onOpenChange={setOpen} open={state} seed={seed} />
-        </Suspense>
+        <LazyPopupBoundary>
+          <Suspense fallback={null}>
+            <SearchDialog onOpenChange={setOpen} open={state} seed={seed} />
+          </Suspense>
+        </LazyPopupBoundary>
       ) : undefined}
     </>
   );

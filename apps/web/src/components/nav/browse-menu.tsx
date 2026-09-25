@@ -1,16 +1,14 @@
 import { CaretDownIcon, SquaresFourIcon } from "@phosphor-icons/react";
 import { useRouterState } from "@tanstack/react-router";
-import { lazy, type ReactNode, type RefObject, Suspense, useEffect, useRef, useState } from "react";
+import { type ReactNode, type RefObject, Suspense, useEffect, useRef, useState } from "react";
 import { DropdownMenu, DropdownMenuTrigger } from "@fluncle/ui/components/dropdown-menu";
 import { Sheet, SheetTrigger } from "@fluncle/ui/components/sheet";
+import { LazyPopupBoundary } from "@/components/lazy-popup-boundary";
+import { lazyNamed } from "@/lib/lazy-named";
 
 const loadBrowsePopup = () => import("@/components/nav/browse-popup");
-const BrowseDropdownContent = lazy(async () => ({
-  default: (await loadBrowsePopup()).BrowseDropdownContent,
-}));
-const BrowseSheetContent = lazy(async () => ({
-  default: (await loadBrowsePopup()).BrowseSheetContent,
-}));
+const BrowseDropdownContent = lazyNamed(loadBrowsePopup, "BrowseDropdownContent");
+const BrowseSheetContent = lazyNamed(loadBrowsePopup, "BrowseSheetContent");
 
 export type BrowseShortcut = {
   label: string;
@@ -83,13 +81,15 @@ function BrowseDropdown({
         <TriggerFace />
       </DropdownMenuTrigger>
       {open || activated ? (
-        <Suspense fallback={null}>
-          <BrowseDropdownContent
-            current={current}
-            returnFocus={returnFocus}
-            shortcuts={shortcuts}
-          />
-        </Suspense>
+        <LazyPopupBoundary>
+          <Suspense fallback={null}>
+            <BrowseDropdownContent
+              current={current}
+              returnFocus={returnFocus}
+              shortcuts={shortcuts}
+            />
+          </Suspense>
+        </LazyPopupBoundary>
       ) : null}
     </DropdownMenu>
   );
@@ -126,14 +126,16 @@ function BrowseSheet({
         <TriggerFace />
       </SheetTrigger>
       {open || activated ? (
-        <Suspense fallback={null}>
-          <BrowseSheetContent
-            current={current}
-            returnFocus={returnFocus}
-            setOpen={setOpen}
-            shortcuts={shortcuts}
-          />
-        </Suspense>
+        <LazyPopupBoundary>
+          <Suspense fallback={null}>
+            <BrowseSheetContent
+              current={current}
+              returnFocus={returnFocus}
+              setOpen={setOpen}
+              shortcuts={shortcuts}
+            />
+          </Suspense>
+        </LazyPopupBoundary>
       ) : null}
     </Sheet>
   );
