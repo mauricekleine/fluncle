@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import { blockExternalRequests } from "./browser";
 import { routePreviews } from "./player";
 import {
@@ -26,6 +26,15 @@ function watchForErrors(page: Page): string[] {
   });
 
   return problems;
+}
+
+async function openActionsMenu(trigger: Locator): Promise<void> {
+  await expect(async () => {
+    if ((await trigger.getAttribute("aria-expanded")) !== "true") {
+      await trigger.click();
+    }
+    await expect(trigger).toHaveAttribute("aria-expanded", "true", { timeout: 500 });
+  }).toPass({ timeout: 10_000 });
 }
 
 test.describe("Jade, 390×844", () => {
@@ -78,7 +87,7 @@ test.describe("Jade, 390×844", () => {
 
     const firstRow = page.getByRole("list", { name: "Tracks" }).locator("li").first();
 
-    await firstRow.getByRole("button", { name: /^Actions for / }).click();
+    await openActionsMenu(firstRow.getByRole("button", { name: /^Actions for / }));
     await page.getByRole("menuitem", { name: "Similar tracks" }).click();
     await expect(page).toHaveURL(
       new RegExp(`/search\\?like=${SEEDED_STYLE.rankedTrackIds[0] ?? ""}$`),
@@ -99,7 +108,7 @@ test.describe("Jade, 390×844", () => {
 
     await expect(trail.getByRole("link")).toHaveCount(1);
 
-    await player.getByRole("button", { name: /^Actions for / }).click();
+    await openActionsMenu(player.getByRole("button", { name: /^Actions for / }));
     await page.getByRole("menuitem", { name: "Similar tracks" }).click();
     await expect(page).toHaveURL(/\/search\?like=/);
     await page
@@ -127,7 +136,7 @@ test.describe("Jade, 390×844", () => {
 
     const firstRow = page.getByRole("list", { name: "Tracks" }).locator("li").first();
 
-    await firstRow.getByRole("button", { name: /^Actions for / }).click();
+    await openActionsMenu(firstRow.getByRole("button", { name: /^Actions for / }));
     await page.getByRole("menuitem", { name: "Similar tracks" }).click();
     await expect(page).toHaveURL(/\/search\?like=/);
 

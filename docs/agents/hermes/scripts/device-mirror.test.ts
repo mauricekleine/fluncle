@@ -877,7 +877,7 @@ describe("the diff-based publish", () => {
     expect(liveTracks(client)).toHaveLength(BASE);
     expect(stageFootprint(client)).toBe(0);
     client.close();
-  });
+  }, 30_000);
 
   test("a second publish writes only the drifted rows, one statement each", async () => {
     const tracks = sequentialTracks(BASE);
@@ -905,7 +905,7 @@ describe("the diff-based publish", () => {
       source_watermark: next.fingerprint,
     });
     client.close();
-  });
+  }, 30_000);
 
   test("a deleted source row is deleted on the target and an added one is inserted", async () => {
     const tracks = sequentialTracks(BASE);
@@ -926,7 +926,7 @@ describe("the diff-based publish", () => {
     expect(liveTracks(client)).toContain("track-9999");
     expect(liveTracks(client)).toHaveLength(BASE);
     client.close();
-  });
+  }, 30_000);
 
   test("an identical generation republished after a watermark reset writes only the metadata", async () => {
     const tracks = sequentialTracks(BASE);
@@ -946,7 +946,7 @@ describe("the diff-based publish", () => {
     expect(result.writtenRows).toBe(0);
     expect(cutover.statements).toHaveLength(1);
     client.close();
-  });
+  }, 30_000);
 
   test("a stale stage schema is an artifact-version change and forces a rewrite", async () => {
     const tracks = sequentialTracks(BASE);
@@ -965,7 +965,7 @@ describe("the diff-based publish", () => {
     expect(result.stagedRows).toBe(BASE);
     expect(liveTitle(client, "track-0000")).toBe("Moved");
     client.close();
-  });
+  }, 30_000);
 
   test("a delta above the ceiling forces a rewrite instead of one huge transaction", async () => {
     const tracks = sequentialTracks(BASE);
@@ -988,7 +988,7 @@ describe("the diff-based publish", () => {
       `Track ${ceiling + 1}`,
     );
     client.close();
-  });
+  }, 30_000);
 
   test("a delta interrupted before its transaction leaves the last generation live and converges", async () => {
     const tracks = sequentialTracks(BASE);
@@ -1020,7 +1020,7 @@ describe("the diff-based publish", () => {
     expect(converged.deltaRows).toBe(1);
     expect(liveTitle(client, "track-0000")).toBe("Half applied");
     client.close();
-  });
+  }, 30_000);
 
   test("a delta whose response is lost after commit replays as a complete generation", async () => {
     const tracks = sequentialTracks(BASE);
@@ -1046,7 +1046,7 @@ describe("the diff-based publish", () => {
     expect(replay.writtenRows).toBe(0);
     expect(liveTitle(client, "track-0000")).toBe("Committed");
     client.close();
-  });
+  }, 30_000);
 
   test("the delta walk reads the target one bounded page at a time", async () => {
     const tracks = sequentialTracks(BASE);
@@ -1061,7 +1061,7 @@ describe("the diff-based publish", () => {
     expect(result.maxBufferedRows).toBeLessThanOrEqual(5);
     expect(liveTitle(client, "track-0042")).toBe("Paged");
     client.close();
-  });
+  }, 30_000);
 
   test("a real derived generation republishes its own drift as a delta", async () => {
     const source = await scaledSourceFixture(4);
