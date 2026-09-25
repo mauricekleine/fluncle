@@ -78,7 +78,7 @@ const COPY = {
   done: "Done, no more follows email. You still follow everyone, and you can switch it back on from your account.",
   emailHeading: "Follows email",
   emailOff: "Off. You still follow everyone below.",
-  emailOn: "On. I send it on Fridays when there's something new, and skip the weeks there isn't.",
+  emailOn: "On. I send it on Fridays, and skip the weeks your artists and labels are quiet.",
   failed: "I couldn't change that just now. Try again in a moment.",
   invalid:
     "That link doesn't work anymore. Sign in and you can change who you follow from your account.",
@@ -98,8 +98,7 @@ function FollowsPage() {
           <div>
             <h1 className="home-nameplate">Your follows email</h1>
             <p className="home-tagline">
-              New releases from the artists and labels you follow, on Fridays when there&rsquo;s
-              something new.
+              New tunes from the artists and labels you follow. First rewind&rsquo;s probably yours.
             </p>
           </div>
         </header>

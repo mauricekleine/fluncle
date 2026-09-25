@@ -527,7 +527,7 @@ function FollowingSection({
         items={follows}
         empty={
           subscribed
-            ? "Not following anyone yet. Tap Follow on an artist or label and I'll email you their new releases on Fridays when there's something new."
+            ? "Not following anyone yet. Tap Follow on an artist or label and I'll send you their new tunes on Fridays. Odds are you'll hit rewind before I do."
             : "Not following anyone. Tap Follow on an artist or label and they show up here."
         }
       >
@@ -545,8 +545,8 @@ function FollowingSection({
         <div className="account-row">
           <p className="account-muted">
             {subscribed
-              ? "I email you their new releases every Friday, and skip the weeks with nothing new."
-              : "Your follows email is off. Switch it on and I'll send their new releases on Fridays when there's something new."}
+              ? "I send you new tunes from the artists and labels you follow on Fridays, and skip the weeks they're quiet."
+              : "Your follows email is off. Start it and I'll send you new tunes from the artists and labels you follow on Fridays. First rewind's probably yours."}
           </p>
           <Button
             aria-disabled={busy}
