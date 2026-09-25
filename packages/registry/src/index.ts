@@ -1269,6 +1269,19 @@ export const SURFACES: readonly Surface[] = [
     weights: { status: "hidden" },
   },
   {
+    exposedContent: [
+      "checks pipeline yield against measured backlog and alerts the operator on sustained stalls",
+    ],
+    kind: "cron",
+    name: "cron.pipeline-watch",
+    operatorNotes:
+      "Every 15m from a host calendar timer. Reads sweep markers and agent-tier status/worklist counters; alerts Discord on incident open, reminders, and recovery. Source: docs/agents/hermes/scripts/pipeline-watch.*.",
+    probeConfig: { cadenceMs: 15 * MINUTE_MS, cronName: "fluncle-pipeline-watch", kind: "cron" },
+    statusDescription: "watches for stalled track processing",
+    title: "Track watch",
+    weights: { status: "hidden" },
+  },
+  {
     command: "fluncle admin catalogue rank",
     exposedContent: [
       "score each stale catalogue track against every embedded finding → its nearest finding + capture priority",

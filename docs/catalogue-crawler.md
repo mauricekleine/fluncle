@@ -41,6 +41,8 @@ The quantifier is the **FIRST credited MusicBrainz artist MBID** in both directi
 
 Hop distance bounds the **discovery**, never the **storage**. A hop-2 release on an enabled label **is** stored; a hop-0 seed release is stored because its seed label is enabled, not because it sits at hop 0. A hop-2 release on a reggae, jazz, or major label is walked for the labels it reveals and then its tracks are dropped on the floor — unless an allow rule names its first-credited artist, which is exactly what the allow exists for. A node past the limit is never enqueued, so the walk **terminates by construction** rather than by a watchdog. Set `--max-hop 0` and the crawl never leaves the seed labels' own releases at all.
 
+At the default two-hop limit, a pending hop-2 release whose own label is known disabled can settle as `skipped` without a release-detail request only when that label has no scoped allow rule and there is no global allow rule. The browse page does not contain every recording's artist credits, so the crawler cannot safely rule out a track-level allow from the parent artist alone. The skip gate is checked again when the claim commits; an intervening scope change returns it to `pending`. The indexed, bounded re-arm pass returns skipped releases to the claim lane when the own label becomes enabled, an allow rule is added, the label merges into an enabled or allow-scoped label, or the hop limit widens. Unknown and undecided own labels still receive release details. The crawler leaves legacy NULL-own-label rows and their ranking unchanged.
+
 The one hard-coded exclusion is an identity, not a judgement: MusicBrainz's **"Various Artists"** placeholder is credited on every compilation ever pressed, so following it as a hop-1 artist would walk the crawler out of drum & bass and into the whole of recorded music in a single step.
 
 ### The widening loop — the crawler proposes, the operator rules
@@ -259,6 +261,8 @@ fluncle admin catalogue crawl --limit 10         # one bounded pass
 fluncle admin catalogue crawl --max-hop 0        # the seed labels' own releases only
 fluncle admin catalogue status                   # the frontier, the catalogue's size, the seed set
 ```
+
+The pipeline watchdog calls the same admin status operation with `?summary=true`. That response contains only the pending frontier count, the two ready-release counts, and `anchorsPending`, so its 15-minute check avoids the full frontier group reads used by the operator status view.
 
 `status` also reports **`storablePending`** — release nodes that are claimable right now AND are storable: their OWN label is enabled, or their parent is an allow-listed artist. It is the head of the claim's release lane, and it answers the one question the frontier depth cannot: whether the next tick is going to write tracks or only walk discovery. A deep frontier with `storablePending` at zero means the walk is healthy and the STORAGE gate is the bottleneck — an `undecided` label backlog, not a crawl that needs hurrying. It is a range count on the same partial index the claim orders by, so it costs an index seek and never a scan.
 

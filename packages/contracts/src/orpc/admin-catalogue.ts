@@ -355,6 +355,8 @@ export const CrawlPassSchema = z
 
     rateLimited: z.boolean(),
 
+    releaseDetailsStored: z.number().optional(),
+
     releasesRearmed: z.number(),
 
     seeded: z.number(),
@@ -451,6 +453,7 @@ const CrawlPhaseInputSchema = z.discriminatedUnion("phase", [
     limit: z.number().int().min(1).max(MAX_CRAWL_PREPARE_LIMIT).default(2),
     maxHop: z.number().int().min(0).max(3).default(2),
     phase: z.literal("prepare"),
+    sampleStorableRepair: z.boolean().optional(),
   }),
   z.object({
     phase: z.literal("fetch"),
@@ -484,6 +487,7 @@ const CrawlPhaseOutputSchema = z.discriminatedUnion("phase", [
         z.object({
           fetchPlan: CrawlFetchPlanSchema,
           nodeId: z.string(),
+          nodeKind: z.enum(["artist", "label", "release"]).optional(),
           preparedToken: z.string(),
         }),
       )
@@ -491,6 +495,7 @@ const CrawlPhaseOutputSchema = z.discriminatedUnion("phase", [
     kind: z.enum(["drained", "prepared", "unavailable"]),
     ok: z.literal(true),
     phase: z.literal("prepare"),
+    storableReady: z.boolean().nullable().optional(),
   }),
   z.object({
     commitToken: z.string(),
@@ -551,6 +556,16 @@ export const CrawlStatusSchema = z
   })
   .meta({ id: "CrawlStatus" });
 
+export const CrawlPipelineSummarySchema = z
+  .object({
+    anchorsPending: z.number(),
+    frontier: z.object({ pending: z.number() }),
+    storablePending: z.number(),
+    summary: z.literal(true),
+    unstorablePending: z.number(),
+  })
+  .meta({ id: "CrawlPipelineSummary" });
+
 export const crawlCatalogue = oc
   .route({
     inputStructure: "detailed",
@@ -604,8 +619,13 @@ export const getCrawlStatus = oc
     summary: "The crawl frontier's state, the catalogue size, and the seed set",
     tags: ["Admin"],
   })
-  .input(z.object({}))
-  .output(CrawlStatusSchema.extend({ ok: z.literal(true) }));
+  .input(z.object({ summary: z.string().optional() }))
+  .output(
+    z.union([
+      CrawlStatusSchema.extend({ ok: z.literal(true) }),
+      CrawlPipelineSummarySchema.extend({ ok: z.literal(true) }),
+    ]),
+  );
 
 export const ANCHOR_CANDIDATE_LIMIT = 100;
 

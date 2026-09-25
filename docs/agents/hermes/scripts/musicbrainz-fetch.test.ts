@@ -142,17 +142,20 @@ describe("the one shared rate budget", () => {
 
   it("honours a 503's Retry-After for the whole box and reports the exhausted throttle", async () => {
     let calls = 0;
+    const outcomes: string[] = [];
     const result = await fetchMusicbrainz("https://musicbrainz.org/ws/2/release/x?fmt=json", {
       fetch: () => {
         calls += 1;
         return Promise.resolve(new Response("", { headers: { "Retry-After": "0" }, status: 503 }));
       },
       intervalMs: 0,
+      onAttempt: ({ outcome }) => outcomes.push(outcome),
       stateDir,
     });
 
     expect(result).toEqual({ outcome: "throttled", url: expect.any(String) });
     expect(calls).toBe(3);
+    expect(outcomes).toEqual(["retry_503", "retry_503", "throttled"]);
   });
 
   it("defaults its state dir to the sweep home so every sibling shares one budget", () => {

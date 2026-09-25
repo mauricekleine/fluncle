@@ -2541,6 +2541,12 @@ export const crawlFrontier = sqliteTable(
     index("crawl_frontier_label_node_idx")
       .on(table.state, table.doneAt)
       .where(sql`${table.kind} = 'label' and ${table.source} = 'musicbrainz'`),
+
+    index("crawl_frontier_disabled_skip_idx")
+      .on(table.state, table.releaseLabelSlug, table.id)
+      .where(
+        sql`${table.kind} = 'release' and ${table.note} = 'disabled own label at terminal hop'`,
+      ),
   ],
 );
 

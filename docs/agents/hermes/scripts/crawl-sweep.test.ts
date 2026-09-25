@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { blockedReason, recordBoxAttempt } from "./crawl-sweep";
 
 const SWEEP = resolve(import.meta.dirname, "crawl-sweep.ts");
 const REAL_PHASE_RUNNER = resolve(import.meta.dirname, "database-admission-runner.sh");
@@ -10,6 +11,89 @@ const PROCESS_TIMEOUT_MS = 8_000;
 
 const CHOREOGRAPHY_TEST_TIMEOUT_MS = 45_000;
 const temporaryDirectories: string[] = [];
+
+test("request kinds count every box attempt, including retries, and identify a label-only block", () => {
+  const requestsByKind = {
+    artist_browse: 0,
+    label_browse: 0,
+    rearm_probe: 0,
+    release_detail: 0,
+    seed_search: 0,
+  };
+  const tally = { boxFetched: 0, requestsByKind };
+  const browse = { kind: "single" as const, url: "https://musicbrainz.org/ws/2/release?artist=a" };
+  const detail = { kind: "single" as const, url: "https://musicbrainz.org/ws/2/release/r" };
+  const stderr = console.error;
+  console.error = () => {};
+  try {
+    recordBoxAttempt(tally, browse, "artist", { outcome: "retry_503", url: browse.url });
+    recordBoxAttempt(tally, browse, "artist", { outcome: "body", url: browse.url });
+    recordBoxAttempt(tally, detail, "release", { outcome: "body", url: detail.url });
+    recordBoxAttempt(tally, detail, undefined, { outcome: "body", url: detail.url });
+  } finally {
+    console.error = stderr;
+  }
+  expect(tally.requestsByKind).toMatchObject({ artist_browse: 2, release_detail: 2 });
+  expect(Object.values(tally.requestsByKind).reduce((sum, count) => sum + count, 0)).toBe(
+    tally.boxFetched,
+  );
+  expect(
+    blockedReason({
+      error: null,
+      failed: 0,
+      ok: true,
+      pending: 0,
+      reason: null,
+      storableReady: false,
+      throttled: false,
+      tracksFound: 4,
+      tracksSkippedLabelGate: 4,
+      tracksWritten: 0,
+    }),
+  ).toBe("label_gate");
+  expect(
+    blockedReason({
+      error: "MusicBrainz request failed",
+      failed: 1,
+      ok: false,
+      pending: 1,
+      reason: null,
+      storableReady: true,
+      throttled: false,
+      tracksFound: 0,
+      tracksSkippedLabelGate: 0,
+      tracksWritten: 0,
+    }),
+  ).toBeNull();
+  expect(
+    blockedReason({
+      error: null,
+      failed: 0,
+      ok: true,
+      pending: 0,
+      reason: null,
+      storableReady: null,
+      throttled: false,
+      tracksFound: 0,
+      tracksSkippedLabelGate: 0,
+      tracksWritten: 0,
+    }),
+  ).toBeNull();
+  expect(
+    blockedReason({
+      error: null,
+      failed: 0,
+      ok: true,
+      pending: 1,
+      reason: null,
+      storableReady: true,
+      throttled: false,
+      tracksFound: 0,
+      tracksSkippedLabelGate: 0,
+      tracksWritten: 0,
+    }),
+  ).toBeNull();
+});
 
 const COMMIT_BATCH_ALL_COMMITTED =
   '{"ok":true,"deferred":0,"receipts":[{"operationKey":"crawl-key","outcome":"committed","replayed":false,"state":"committed","result":{"expanded":1,"failed":0,"tracksFound":3,"tracksWritten":3,"tracksSkipped":0,"rateLimited":false}},{"operationKey":"crawl-key","outcome":"committed","replayed":false,"state":"committed","result":{"expanded":1,"failed":0,"tracksFound":3,"tracksWritten":3,"tracksSkipped":0,"rateLimited":false}}]}';
@@ -108,6 +192,25 @@ function fixture(): Fixture {
     '      limit=$(sed -n \'s/.*"limit":\\([0-9]*\\).*/\\1/p\' "$phase_file")',
     "      printf 'prepare-limit:%s\\n' \"$limit\" >> " + data.calls,
     '      printf \'%s\\n\' \'{"ok":true,"phase":"prepare","kind":"prepared","items":[{"nodeId":"node-1","preparedToken":"prepared-token-1"},{"nodeId":"node-2","preparedToken":"prepared-token-2"}],"frontierPending":2}\' ;;',
+    "    prepare:storable-first)",
+    "      count=$(grep -c '^prepare:' " + data.calls + ")",
+    "      if grep -q '\"sampleStorableRepair\":true' \"$phase_file\"; then printf 'sample-repair:true\\n' >> " +
+      data.calls +
+      "; else printf 'sample-repair:absent\\n' >> " +
+      data.calls +
+      "; fi",
+    '      if [ "$count" -eq 1 ]; then',
+    '        printf \'%s\\n\' \'{"ok":true,"phase":"prepare","kind":"prepared","items":[{"nodeId":"node-1","preparedToken":"prepared-token-1"}],"frontierPending":1,"storableReady":true}\'',
+    "      else",
+    '        printf \'%s\\n\' \'{"ok":true,"phase":"prepare","kind":"drained","items":[],"frontierPending":0,"storableReady":false}\'',
+    "      fi ;;",
+    "    prepare:storable-unknown-first)",
+    "      count=$(grep -c '^prepare:' " + data.calls + ")",
+    '      if [ "$count" -eq 1 ]; then',
+    '        printf \'%s\\n\' \'{"ok":true,"phase":"prepare","kind":"prepared","items":[{"nodeId":"node-1","preparedToken":"prepared-token-1"}],"frontierPending":1,"storableReady":null}\'',
+    "      else",
+    '        printf \'%s\\n\' \'{"ok":true,"phase":"prepare","kind":"drained","items":[],"frontierPending":0,"storableReady":true}\'',
+    "      fi ;;",
     "    prepare:repair-pending|fetch:repair-pending-fetch)",
     '      printf \'%s\\n\' \'{"code":"due_work_maintenance_pending","message":"Due-work maintenance is still converging","ok":false}\'',
     "      exit 1 ;;",
@@ -128,7 +231,7 @@ function fixture(): Fixture {
     "        while [ ! -e " + data.fetchRelease + " ]; do sleep 0.01; done",
     "      fi",
     '      printf \'%s\\n\' \'{"ok":true,"phase":"fetch","commitToken":"commit-token","operationId":"crawl-op","operationKey":"crawl-key","requestDigest":"digest"}\' ;;',
-    "    commit:normal|commit:batch|commit:provider-pause|commit:box-fetch|commit:box-fetch-off|commit:commit-batch|commit:commit-batch-poison|commit:box-fetch-batch)",
+    "    commit:normal|commit:batch|commit:storable-first|commit:storable-unknown-first|commit:provider-pause|commit:box-fetch|commit:box-fetch-off|commit:commit-batch|commit:commit-batch-poison|commit:box-fetch-batch)",
     '      printf \'%s\\n\' \'{"ok":true,"phase":"commit","receipt":{"outcome":"committed","state":"committed","result":{"expanded":1,"failed":0,"tracksFound":3,"tracksWritten":3,"tracksSkipped":0,"rateLimited":false}}}\' ;;',
     "    commit:throttle-then-work)",
     "      count=$(grep -c '^commit:' " + data.calls + ")",
@@ -312,6 +415,54 @@ describe("crawl-sweep phase protocol", () => {
       expect(calls).toContain("prepare-limit:2");
       expect(calls.match(/^fetch:/gm)).toHaveLength(2);
       expect(calls.match(/^commit:/gm)).toHaveLength(2);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "keeps tick-start storable work when a later prepare drains the lane",
+    async () => {
+      const data = fixture();
+      const result = await collect(
+        Bun.spawn([process.execPath, SWEEP], {
+          detached: true,
+          env: { ...sweepEnvironment(data, "storable-first"), FLUNCLE_CRAWL_NODES: "2" },
+          stderr: "pipe",
+          stdout: "pipe",
+        }),
+      );
+
+      expect(result.exitCode, result.stderr).toBe(0);
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        checked: 1,
+        storableReady: true,
+        tracksWritten: 3,
+      });
+      expect(readFileSync(data.calls, "utf8").match(/^prepare:/gm)).toHaveLength(2);
+      expect(readFileSync(data.calls, "utf8").match(/^sample-repair:.*$/gm)).toEqual([
+        "sample-repair:true",
+        "sample-repair:absent",
+      ]);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "keeps an unknown first sample when a later prepare reports storable work",
+    async () => {
+      const data = fixture();
+      const result = await collect(
+        Bun.spawn([process.execPath, SWEEP], {
+          detached: true,
+          env: { ...sweepEnvironment(data, "storable-unknown-first"), FLUNCLE_CRAWL_NODES: "2" },
+          stderr: "pipe",
+          stdout: "pipe",
+        }),
+      );
+
+      expect(result.exitCode, result.stderr).toBe(0);
+      expect(JSON.parse(result.stdout)).toMatchObject({ checked: 1, storableReady: null });
+      expect(readFileSync(data.calls, "utf8").match(/^prepare:/gm)).toHaveLength(2);
     },
     TEST_TIMEOUT_MS,
   );

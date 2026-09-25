@@ -1,0 +1,1014 @@
+{
+  "anchorGate": [
+    {
+      "at": 1790164968000,
+      "summary": {
+        "apifySkippedAwaitingSpotify": 99,
+        "checked": 100,
+        "deferred": 99,
+        "errors": 0,
+        "failed": 8,
+        "ok": true,
+        "produced": 0,
+        "queueDepth": 65865,
+        "reason": null,
+        "spotifyIsrcAsks": 0
+      }
+    },
+    {
+      "at": 1790168514000,
+      "summary": {
+        "apifySkippedAwaitingSpotify": 99,
+        "checked": 100,
+        "deferred": 99,
+        "errors": 0,
+        "failed": 1,
+        "ok": true,
+        "produced": 0,
+        "queueDepth": 65869,
+        "reason": null,
+        "spotifyIsrcAsks": 0
+      }
+    },
+    {
+      "at": 1790172150000,
+      "summary": {
+        "apifySkippedAwaitingSpotify": 99,
+        "checked": 100,
+        "deferred": 99,
+        "errors": 0,
+        "failed": 1,
+        "ok": true,
+        "produced": 0,
+        "queueDepth": 65879,
+        "reason": null,
+        "spotifyIsrcAsks": 0
+      }
+    },
+    {
+      "at": 1790175829000,
+      "summary": {
+        "apifySkippedAwaitingSpotify": 99,
+        "checked": 100,
+        "deferred": 99,
+        "errors": 0,
+        "failed": 1,
+        "ok": true,
+        "produced": 0,
+        "queueDepth": 66049,
+        "reason": null,
+        "spotifyIsrcAsks": 0
+      }
+    },
+    {
+      "at": 1790179497000,
+      "summary": {
+        "apifySkippedAwaitingSpotify": 99,
+        "checked": 100,
+        "deferred": 99,
+        "errors": 0,
+        "failed": 1,
+        "ok": true,
+        "produced": 0,
+        "queueDepth": 66125,
+        "reason": null,
+        "spotifyIsrcAsks": 0
+      }
+    },
+    {
+      "at": 1790183203000,
+      "summary": {
+        "apifySkippedAwaitingSpotify": 99,
+        "checked": 100,
+        "deferred": 99,
+        "errors": 0,
+        "failed": 1,
+        "ok": true,
+        "produced": 0,
+        "queueDepth": 66128,
+        "reason": null,
+        "spotifyIsrcAsks": 0
+      }
+    },
+    {
+      "at": 1790186812000,
+      "summary": {
+        "apifySkippedAwaitingSpotify": 99,
+        "checked": 100,
+        "deferred": 99,
+        "errors": 0,
+        "failed": 3,
+        "ok": true,
+        "produced": 0,
+        "queueDepth": 66128,
+        "reason": null,
+        "spotifyIsrcAsks": 2
+      }
+    },
+    {
+      "at": 1790190484000,
+      "summary": {
+        "apifySkippedAwaitingSpotify": 99,
+        "checked": 100,
+        "deferred": 99,
+        "errors": 0,
+        "failed": 5,
+        "ok": true,
+        "produced": 0,
+        "queueDepth": 66134,
+        "reason": null,
+        "spotifyIsrcAsks": 2
+      }
+    },
+    {
+      "at": 1790194130000,
+      "summary": {
+        "apifySkippedAwaitingSpotify": 99,
+        "checked": 100,
+        "deferred": 99,
+        "errors": 0,
+        "failed": 5,
+        "ok": true,
+        "produced": 0,
+        "queueDepth": 66181,
+        "reason": null,
+        "spotifyIsrcAsks": 2
+      }
+    },
+    {
+      "at": 1790197789000,
+      "summary": {
+        "apifySkippedAwaitingSpotify": 99,
+        "checked": 100,
+        "deferred": 99,
+        "errors": 0,
+        "failed": 5,
+        "ok": true,
+        "produced": 0,
+        "queueDepth": 66181,
+        "reason": null,
+        "spotifyIsrcAsks": 2
+      }
+    },
+    {
+      "at": 1790201446000,
+      "summary": {
+        "apifySkippedAwaitingSpotify": 99,
+        "checked": 100,
+        "deferred": 99,
+        "errors": 0,
+        "failed": 2,
+        "ok": true,
+        "produced": 0,
+        "queueDepth": 66192,
+        "reason": null,
+        "spotifyIsrcAsks": 2
+      }
+    },
+    {
+      "at": 1790204992000,
+      "summary": {
+        "apifySkippedAwaitingSpotify": 99,
+        "checked": 100,
+        "deferred": 99,
+        "errors": 0,
+        "failed": 1,
+        "ok": true,
+        "produced": 0,
+        "queueDepth": 66191,
+        "reason": null,
+        "spotifyIsrcAsks": 0
+      }
+    },
+    {
+      "at": 1790208609000,
+      "summary": {
+        "apifySkippedAwaitingSpotify": 99,
+        "checked": 100,
+        "deferred": 99,
+        "errors": 0,
+        "failed": 1,
+        "ok": true,
+        "produced": 0,
+        "queueDepth": 66191,
+        "reason": null,
+        "spotifyIsrcAsks": 0
+      }
+    },
+    {
+      "at": 1790212224000,
+      "summary": {
+        "apifySkippedAwaitingSpotify": 99,
+        "checked": 100,
+        "deferred": 99,
+        "errors": 0,
+        "failed": 1,
+        "ok": true,
+        "produced": 0,
+        "queueDepth": 66191,
+        "reason": null,
+        "spotifyIsrcAsks": 0
+      }
+    },
+    {
+      "at": 1790215879000,
+      "summary": {
+        "apifySkippedAwaitingSpotify": 99,
+        "checked": 100,
+        "deferred": 99,
+        "errors": 0,
+        "failed": 5,
+        "ok": true,
+        "produced": 0,
+        "queueDepth": 66192,
+        "reason": null,
+        "spotifyIsrcAsks": 2
+      }
+    }
+  ],
+  "captureBudget": [
+    {
+      "at": 1790190366000,
+      "summary": {
+        "batch": 0,
+        "checked": 0,
+        "done": 0,
+        "errors": 0,
+        "failed": 0,
+        "ok": true,
+        "produced": 0
+      }
+    },
+    {
+      "at": 1790190547000,
+      "summary": {
+        "batch": 0,
+        "checked": 0,
+        "done": 0,
+        "errors": 0,
+        "failed": 0,
+        "ok": true,
+        "produced": 0
+      }
+    },
+    {
+      "at": 1790190898000,
+      "summary": {
+        "batch": 0,
+        "checked": 0,
+        "done": 0,
+        "errors": 0,
+        "failed": 0,
+        "ok": true,
+        "produced": 0
+      }
+    },
+    {
+      "at": 1790191216000,
+      "summary": {
+        "batch": 0,
+        "checked": 0,
+        "done": 0,
+        "errors": 0,
+        "failed": 0,
+        "ok": true,
+        "produced": 0
+      }
+    },
+    {
+      "at": 1790192149000,
+      "summary": {
+        "checked": 0,
+        "errors": 0,
+        "gateState": "paused",
+        "ok": true,
+        "produced": 0,
+        "reason": "database_admission"
+      }
+    },
+    {
+      "at": 1790192331000,
+      "summary": {
+        "batch": 0,
+        "checked": 0,
+        "done": 0,
+        "errors": 0,
+        "failed": 0,
+        "ok": true,
+        "produced": 0
+      }
+    },
+    {
+      "at": 1790192519000,
+      "summary": {
+        "batch": 0,
+        "checked": 0,
+        "done": 0,
+        "errors": 0,
+        "failed": 0,
+        "ok": true,
+        "produced": 0
+      }
+    },
+    {
+      "at": 1790192988000,
+      "summary": {
+        "batch": 0,
+        "checked": 0,
+        "done": 0,
+        "errors": 0,
+        "failed": 0,
+        "ok": true,
+        "produced": 0
+      }
+    },
+    {
+      "at": 1790193349000,
+      "summary": {
+        "batch": 0,
+        "checked": 0,
+        "done": 0,
+        "errors": 0,
+        "failed": 0,
+        "ok": true,
+        "produced": 0
+      }
+    },
+    {
+      "at": 1790194168000,
+      "summary": {
+        "batch": 0,
+        "checked": 0,
+        "done": 0,
+        "errors": 0,
+        "failed": 0,
+        "ok": true,
+        "produced": 0
+      }
+    },
+    {
+      "at": 1790194283000,
+      "summary": {
+        "batch": 0,
+        "checked": 0,
+        "done": 0,
+        "errors": 0,
+        "failed": 0,
+        "ok": true,
+        "produced": 0
+      }
+    },
+    {
+      "at": 1790194568000,
+      "summary": {
+        "checked": 0,
+        "errors": 0,
+        "gateState": "paused",
+        "ok": true,
+        "produced": 0,
+        "reason": "due_work_repair_pending"
+      }
+    },
+    {
+      "at": 1790194900000,
+      "summary": {
+        "batch": 0,
+        "checked": 0,
+        "done": 0,
+        "errors": 0,
+        "failed": 0,
+        "ok": true,
+        "produced": 0
+      }
+    },
+    {
+      "at": 1790195257000,
+      "summary": {
+        "batch": 0,
+        "checked": 0,
+        "done": 0,
+        "errors": 0,
+        "failed": 0,
+        "ok": true,
+        "produced": 0
+      }
+    },
+    {
+      "at": 1790195688000,
+      "summary": {
+        "checked": 0,
+        "errors": 0,
+        "gateState": "paused",
+        "ok": true,
+        "produced": 0,
+        "reason": "due_work_repair_pending"
+      }
+    },
+    {
+      "at": 1790196609000,
+      "summary": {
+        "batch": 0,
+        "checked": 0,
+        "done": 0,
+        "errors": 0,
+        "failed": 0,
+        "ok": true,
+        "produced": 0
+      }
+    },
+    {
+      "at": 1790196989000,
+      "summary": {
+        "batch": 0,
+        "checked": 0,
+        "done": 0,
+        "errors": 0,
+        "failed": 0,
+        "ok": true,
+        "produced": 0
+      }
+    },
+    {
+      "at": 1790197017000,
+      "summary": {
+        "checked": 0,
+        "errors": 0,
+        "gateState": "paused",
+        "ok": true,
+        "produced": 0,
+        "reason": "due_work_repair_pending"
+      }
+    }
+  ],
+  "crawlLabel": [
+    {
+      "at": 1790033353000,
+      "summary": {
+        "checked": 60,
+        "errors": 0,
+        "failed": 0,
+        "gateState": "active",
+        "ok": true,
+        "produced": 60,
+        "queueDepth": 119412,
+        "reason": null,
+        "tracksFound": 31,
+        "tracksSkippedLabelGate": 31,
+        "tracksWritten": 0
+      }
+    },
+    {
+      "at": 1790034105000,
+      "summary": {
+        "checked": 60,
+        "errors": 0,
+        "failed": 0,
+        "gateState": "active",
+        "ok": true,
+        "produced": 60,
+        "queueDepth": 120071,
+        "reason": null,
+        "tracksFound": 125,
+        "tracksSkippedLabelGate": 125,
+        "tracksWritten": 0
+      }
+    },
+    {
+      "at": 1790034690000,
+      "summary": {
+        "checked": 60,
+        "errors": 0,
+        "failed": 0,
+        "gateState": "active",
+        "ok": true,
+        "produced": 60,
+        "queueDepth": 120394,
+        "reason": null,
+        "tracksFound": 175,
+        "tracksSkippedLabelGate": 175,
+        "tracksWritten": 0
+      }
+    },
+    {
+      "at": 1790035316000,
+      "summary": {
+        "checked": 0,
+        "errors": 0,
+        "failed": 0,
+        "gateState": "paused",
+        "ok": true,
+        "produced": 0,
+        "reason": "database_admission",
+        "tracksFound": 0,
+        "tracksSkippedLabelGate": 0,
+        "tracksWritten": 0
+      }
+    },
+    {
+      "at": 1790036015000,
+      "summary": {
+        "checked": 60,
+        "errors": 0,
+        "failed": 0,
+        "gateState": "active",
+        "ok": true,
+        "produced": 60,
+        "queueDepth": 120433,
+        "reason": null,
+        "tracksFound": 209,
+        "tracksSkippedLabelGate": 209,
+        "tracksWritten": 0
+      }
+    },
+    {
+      "at": 1790036656000,
+      "summary": {
+        "checked": 60,
+        "errors": 0,
+        "failed": 0,
+        "gateState": "active",
+        "ok": true,
+        "produced": 60,
+        "queueDepth": 120576,
+        "reason": null,
+        "tracksFound": 311,
+        "tracksSkippedLabelGate": 311,
+        "tracksWritten": 0
+      }
+    },
+    {
+      "at": 1790037295000,
+      "summary": {
+        "checked": 60,
+        "errors": 0,
+        "failed": 0,
+        "gateState": "active",
+        "ok": true,
+        "produced": 60,
+        "queueDepth": 121144,
+        "reason": null,
+        "tracksFound": 363,
+        "tracksSkippedLabelGate": 363,
+        "tracksWritten": 0
+      }
+    },
+    {
+      "at": 1790037879000,
+      "summary": {
+        "checked": 60,
+        "errors": 0,
+        "failed": 0,
+        "gateState": "active",
+        "ok": true,
+        "produced": 60,
+        "queueDepth": 121914,
+        "reason": null,
+        "tracksFound": 460,
+        "tracksSkippedLabelGate": 460,
+        "tracksWritten": 0
+      }
+    },
+    {
+      "at": 1790038794000,
+      "summary": {
+        "checked": 6,
+        "errors": 0,
+        "failed": 0,
+        "gateState": "paused",
+        "ok": true,
+        "produced": 6,
+        "queueDepth": 122052,
+        "reason": "database_admission",
+        "tracksFound": 53,
+        "tracksSkippedLabelGate": 53,
+        "tracksWritten": 0
+      }
+    },
+    {
+      "at": 1790039287000,
+      "summary": {
+        "checked": 60,
+        "errors": 0,
+        "failed": 0,
+        "gateState": "active",
+        "ok": true,
+        "produced": 60,
+        "queueDepth": 122032,
+        "reason": null,
+        "tracksFound": 142,
+        "tracksSkippedLabelGate": 142,
+        "tracksWritten": 0
+      }
+    },
+    {
+      "at": 1790039834000,
+      "summary": {
+        "checked": 60,
+        "errors": 0,
+        "failed": 0,
+        "gateState": "active",
+        "ok": true,
+        "produced": 60,
+        "queueDepth": 121989,
+        "reason": null,
+        "tracksFound": 175,
+        "tracksSkippedLabelGate": 175,
+        "tracksWritten": 0
+      }
+    },
+    {
+      "at": 1790040513000,
+      "summary": {
+        "checked": 60,
+        "errors": 0,
+        "failed": 0,
+        "gateState": "active",
+        "ok": true,
+        "produced": 60,
+        "queueDepth": 121949,
+        "reason": null,
+        "tracksFound": 158,
+        "tracksSkippedLabelGate": 158,
+        "tracksWritten": 0
+      }
+    },
+    {
+      "at": 1790041232000,
+      "summary": {
+        "checked": 60,
+        "errors": 0,
+        "failed": 0,
+        "gateState": "active",
+        "ok": true,
+        "produced": 60,
+        "queueDepth": 122330,
+        "reason": null,
+        "tracksFound": 164,
+        "tracksSkippedLabelGate": 164,
+        "tracksWritten": 0
+      }
+    },
+    {
+      "at": 1790041965000,
+      "summary": {
+        "checked": 60,
+        "errors": 0,
+        "failed": 0,
+        "gateState": "active",
+        "ok": true,
+        "produced": 60,
+        "queueDepth": 122790,
+        "reason": null,
+        "tracksFound": 292,
+        "tracksSkippedLabelGate": 292,
+        "tracksWritten": 0
+      }
+    },
+    {
+      "at": 1790042522000,
+      "summary": {
+        "checked": 6,
+        "errors": 0,
+        "failed": 0,
+        "gateState": "paused",
+        "ok": true,
+        "produced": 6,
+        "queueDepth": 122830,
+        "reason": "database_admission",
+        "tracksFound": 7,
+        "tracksSkippedLabelGate": 7,
+        "tracksWritten": 0
+      }
+    },
+    {
+      "at": 1790042985000,
+      "summary": {
+        "checked": 6,
+        "errors": 0,
+        "failed": 0,
+        "gateState": "paused",
+        "ok": true,
+        "produced": 6,
+        "queueDepth": 122840,
+        "reason": "database_admission",
+        "tracksFound": 15,
+        "tracksSkippedLabelGate": 15,
+        "tracksWritten": 0
+      }
+    },
+    {
+      "at": 1790043693000,
+      "summary": {
+        "checked": 0,
+        "errors": 0,
+        "failed": 0,
+        "gateState": "paused",
+        "ok": true,
+        "produced": 0,
+        "queueDepth": 122844,
+        "reason": "database_admission",
+        "tracksFound": 0,
+        "tracksSkippedLabelGate": 0,
+        "tracksWritten": 0
+      }
+    },
+    {
+      "at": 1790044392000,
+      "summary": {
+        "checked": 36,
+        "errors": 0,
+        "failed": 0,
+        "gateState": "paused",
+        "ok": true,
+        "produced": 36,
+        "queueDepth": 122820,
+        "reason": "database_admission",
+        "tracksFound": 134,
+        "tracksSkippedLabelGate": 134,
+        "tracksWritten": 0
+      }
+    },
+    {
+      "at": 1790044859000,
+      "summary": {
+        "checked": 12,
+        "errors": 0,
+        "failed": 0,
+        "gateState": "paused",
+        "ok": true,
+        "produced": 12,
+        "queueDepth": 122832,
+        "reason": "database_admission",
+        "tracksFound": 32,
+        "tracksSkippedLabelGate": 32,
+        "tracksWritten": 0
+      }
+    },
+    {
+      "at": 1790045489000,
+      "summary": {
+        "checked": 0,
+        "errors": 0,
+        "failed": 0,
+        "gateState": "paused",
+        "ok": true,
+        "produced": 0,
+        "reason": "database_admission",
+        "tracksFound": 0,
+        "tracksSkippedLabelGate": 0,
+        "tracksWritten": 0
+      }
+    }
+  ],
+  "embedFailure": [
+    {
+      "at": 1789085125000,
+      "summary": {
+        "checked": 1,
+        "done": 0,
+        "embedFailed": 1,
+        "errors": 0,
+        "failed": 1,
+        "ok": true,
+        "produced": 0,
+        "queued": 5
+      }
+    },
+    {
+      "at": 1789085442000,
+      "summary": {
+        "checked": 1,
+        "done": 0,
+        "embedFailed": 1,
+        "errors": 0,
+        "failed": 1,
+        "ok": true,
+        "produced": 0,
+        "queued": 5
+      }
+    },
+    {
+      "at": 1789085812000,
+      "summary": {
+        "checked": 1,
+        "done": 0,
+        "embedFailed": 1,
+        "errors": 0,
+        "failed": 1,
+        "ok": true,
+        "produced": 0,
+        "queued": 5
+      }
+    },
+    {
+      "at": 1789086244000,
+      "summary": {
+        "checked": 1,
+        "done": 0,
+        "embedFailed": 1,
+        "errors": 0,
+        "failed": 1,
+        "ok": true,
+        "produced": 0,
+        "queued": 5
+      }
+    },
+    {
+      "at": 1789086918000,
+      "summary": {
+        "checked": 1,
+        "done": 0,
+        "embedFailed": 1,
+        "errors": 0,
+        "failed": 1,
+        "ok": true,
+        "produced": 0,
+        "queued": 5
+      }
+    },
+    {
+      "at": 1789087596000,
+      "summary": {
+        "checked": 1,
+        "done": 0,
+        "embedFailed": 1,
+        "errors": 0,
+        "failed": 1,
+        "ok": true,
+        "produced": 0,
+        "queued": 5
+      }
+    },
+    {
+      "at": 1789087936000,
+      "summary": {
+        "checked": 1,
+        "done": 0,
+        "embedFailed": 1,
+        "errors": 0,
+        "failed": 1,
+        "ok": true,
+        "produced": 0,
+        "queued": 5
+      }
+    }
+  ],
+  "enrichRepair": [
+    {
+      "at": 1790304692000,
+      "summary": {
+        "checked": 0,
+        "errors": 0,
+        "gateState": "paused",
+        "ok": true,
+        "produced": 0,
+        "queueDepth": null,
+        "queued": null,
+        "reason": "due_work_repair_pending"
+      }
+    },
+    {
+      "at": 1790305055000,
+      "summary": {
+        "checked": 0,
+        "errors": 0,
+        "gateState": "paused",
+        "ok": true,
+        "produced": 0,
+        "queueDepth": null,
+        "queued": null,
+        "reason": "due_work_repair_pending"
+      }
+    },
+    {
+      "at": 1790305444000,
+      "summary": {
+        "checked": 0,
+        "errors": 0,
+        "gateState": "paused",
+        "ok": true,
+        "produced": 0,
+        "queueDepth": null,
+        "queued": null,
+        "reason": "due_work_repair_pending"
+      }
+    },
+    {
+      "at": 1790305794000,
+      "summary": {
+        "checked": 0,
+        "errors": 0,
+        "gateState": "paused",
+        "ok": true,
+        "produced": 0,
+        "queueDepth": null,
+        "queued": null,
+        "reason": "due_work_repair_pending"
+      }
+    },
+    {
+      "at": 1790306100000,
+      "summary": {
+        "checked": 0,
+        "errors": 0,
+        "gateState": "paused",
+        "ok": true,
+        "produced": 0,
+        "queueDepth": null,
+        "queued": null,
+        "reason": "due_work_repair_pending"
+      }
+    },
+    {
+      "at": 1790306447000,
+      "summary": {
+        "checked": 0,
+        "errors": 0,
+        "gateState": "paused",
+        "ok": true,
+        "produced": 0,
+        "queueDepth": null,
+        "queued": null,
+        "reason": "due_work_repair_pending"
+      }
+    },
+    {
+      "at": 1790306762000,
+      "summary": {
+        "checked": 0,
+        "errors": 0,
+        "gateState": "paused",
+        "ok": true,
+        "produced": 0,
+        "queueDepth": null,
+        "queued": null,
+        "reason": "due_work_repair_pending"
+      }
+    },
+    {
+      "at": 1790307222000,
+      "summary": {
+        "checked": 0,
+        "errors": 0,
+        "gateState": "paused",
+        "ok": true,
+        "produced": 0,
+        "queueDepth": null,
+        "queued": null,
+        "reason": "due_work_repair_pending"
+      }
+    },
+    {
+      "at": 1790307480000,
+      "summary": {
+        "checked": 0,
+        "errors": 0,
+        "gateState": "paused",
+        "ok": true,
+        "produced": 0,
+        "queueDepth": null,
+        "queued": null,
+        "reason": "due_work_repair_pending"
+      }
+    },
+    {
+      "at": 1790307823000,
+      "summary": {
+        "checked": 0,
+        "errors": 0,
+        "gateState": "paused",
+        "ok": true,
+        "produced": 0,
+        "queueDepth": null,
+        "queued": null,
+        "reason": "due_work_repair_pending"
+      }
+    },
+    {
+      "at": 1790308193000,
+      "summary": {
+        "checked": 0,
+        "errors": 0,
+        "gateState": "paused",
+        "ok": true,
+        "produced": 0,
+        "queueDepth": null,
+        "queued": null,
+        "reason": "due_work_repair_pending"
+      }
+    },
+    {
+      "at": 1790308958000,
+      "summary": {
+        "checked": 0,
+        "errors": 0,
+        "gateState": "paused",
+        "ok": true,
+        "produced": 0,
+        "queueDepth": null,
+        "queued": null,
+        "reason": "due_work_repair_pending"
+      }
+    }
+  ]
+}

@@ -578,7 +578,7 @@ describe("the catalogue crawler", () => {
   });
 
   it("is RESUMABLE — a pass that dies leaves the frontier where the next one picks up", async () => {
-    const { crawlCatalogue, getCrawlStatus } = await import("./crawl");
+    const { crawlCatalogue, getCrawlPipelineSummary, getCrawlStatus } = await import("./crawl");
 
     await crawlCatalogue({ limit: 1, maxHop: 2 });
     const mid = await getCrawlStatus();
@@ -586,12 +586,19 @@ describe("the catalogue crawler", () => {
     expect(mid.frontier.done).toBe(1);
     expect(mid.frontier.pending).toBe(1);
     expect(mid.catalogueTracks).toBe(0);
+    expect(await getCrawlPipelineSummary()).toEqual({
+      anchorsPending: mid.anchorsPending,
+      frontier: { pending: mid.frontier.pending },
+      storablePending: mid.storablePending,
+      unstorablePending: mid.unstorablePending,
+    });
 
     await drain();
     const end = await getCrawlStatus();
 
     expect(end.catalogueTracks).toBe(2);
     expect(end.frontier.pending).toBe(0);
+    expect((await getCrawlPipelineSummary()).frontier.pending).toBe(0);
   });
 
   it("skips a seed label MusicBrainz does not know, with a reason, instead of retrying forever", async () => {
@@ -1557,6 +1564,68 @@ describe("the allowed-artist re-arm", () => {
     );
     expect(artist.rows[0]?.state).toBe("done");
     expect(artist.rows[0]?.done_at).not.toBe(before);
+  });
+
+  it("an allowed-artist replay promotes a skipped terminal release to hop zero", async () => {
+    const before = "2026-07-01T00:00:00.000Z";
+    await seedArtistRule({
+      artistMbid: "artist-skipped-replay",
+      labelId: "lbl_medschool",
+      verdict: "allow",
+    });
+    await seedFrontierNode({
+      createdAt: before,
+      externalId: "artist-skipped-replay",
+      hop: 2,
+      id: "musicbrainz:artist:artist-skipped-replay",
+      kind: "artist",
+      labelSlug: "medschool",
+      state: "done",
+    });
+    await db.execute({
+      args: [before],
+      sql: `update crawl_frontier set done_at = ?
+        where id = 'musicbrainz:artist:artist-skipped-replay'`,
+    });
+    await seedFrontierNode({
+      createdAt: before,
+      externalId: "release-skipped-replay",
+      hop: 2,
+      id: "musicbrainz:release:release-skipped-replay",
+      kind: "release",
+      labelSlug: "medschool",
+      state: "skipped",
+    });
+    await db.execute(`update crawl_frontier
+      set release_label_slug = 'anjunabeats', note = 'disabled own label at terminal hop'
+      where id = 'musicbrainz:release:release-skipped-replay'`);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        Promise.resolve(
+          new Response(
+            JSON.stringify({
+              "release-count": 1,
+              releases: [{ id: "release-skipped-replay" }],
+            }),
+            { status: 200 },
+          ),
+        ),
+      ),
+    );
+
+    const { crawlCatalogue } = await import("./crawl");
+    const replay = await crawlCatalogue({ limit: 1, maxHop: 2 });
+    expect(replay.artistsRearmed).toBe(1);
+    expect(replay.nodesEnqueued).toBe(1);
+    const revived = await db.execute(`select hop, note, parent_id, state from crawl_frontier
+      where id = 'musicbrainz:release:release-skipped-replay'`);
+    expect(revived.rows[0]).toMatchObject({
+      hop: 0,
+      note: null,
+      parent_id: "musicbrainz:artist:artist-skipped-replay",
+      state: "pending",
+    });
   });
 
   it("an allow-artist browse promotes an already-pending release into storable provenance", async () => {

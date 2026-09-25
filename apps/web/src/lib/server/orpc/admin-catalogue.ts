@@ -46,6 +46,7 @@ import {
   crawlCatalogue,
   DEFAULT_MAX_HOP,
   fetchCrawlPhase,
+  getCrawlPipelineSummary,
   getCrawlStatus,
   initializeCrawlPhase,
   MAX_HOP_CEILING,
@@ -260,7 +261,11 @@ export function adminCatalogueHandlers(os: Implementer) {
       }
       if (phase?.phase === "prepare") {
         return {
-          ...(await prepareCrawlPhase({ limit: phase.limit, maxHop: phase.maxHop })),
+          ...(await prepareCrawlPhase({
+            limit: phase.limit,
+            maxHop: phase.maxHop,
+            sampleStorableRepair: phase.sampleStorableRepair,
+          })),
           ok: true as const,
           phase: phase.phase,
         };
@@ -305,8 +310,11 @@ export function adminCatalogueHandlers(os: Implementer) {
       }
     });
 
-  const getCrawlStatusHandler = os.get_crawl_status.use(adminAuth).handler(async () => {
+  const getCrawlStatusHandler = os.get_crawl_status.use(adminAuth).handler(async ({ input }) => {
     try {
+      if (input.summary === "true") {
+        return { ...(await getCrawlPipelineSummary()), ok: true as const, summary: true as const };
+      }
       return { ...(await getCrawlStatus()), ok: true as const };
     } catch (error) {
       throw apiFault(error);

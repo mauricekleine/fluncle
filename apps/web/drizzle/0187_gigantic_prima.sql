@@ -1,0 +1,1 @@
+CREATE INDEX `crawl_frontier_disabled_skip_idx` ON `crawl_frontier` (`state`,`release_label_slug`,`id`) WHERE "crawl_frontier"."kind" = 'release' and "crawl_frontier"."note" = 'disabled own label at terminal hop';
