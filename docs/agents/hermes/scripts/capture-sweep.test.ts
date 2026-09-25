@@ -291,6 +291,31 @@ describe("capture sweep canonical counters", () => {
       produced: null,
     });
   });
+
+  test("a fatal invocation reports errors:1 and exits non-zero", async () => {
+    const proc = Bun.spawn(
+      [
+        process.execPath,
+        new URL("./capture-sweep.ts", import.meta.url).pathname,
+        "--admission-phase",
+        "invalid",
+      ],
+      { stderr: "pipe", stdout: "pipe" },
+    );
+    const [exitCode, stdout] = await Promise.all([
+      proc.exited,
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+    ]);
+
+    expect(exitCode).not.toBe(0);
+    expect(JSON.parse(stdout)).toMatchObject({
+      errors: 1,
+      failed: null,
+      ok: false,
+      reason: "capture_failed",
+    });
+  });
 });
 
 describe("capture reconciliation durability and admission boundaries", () => {
@@ -2363,13 +2388,6 @@ describe("captureSessionSeed — retry runs rotate off the flagged exit", () => 
 describe("the accepted upload's id rides the successful reconciliation", () => {
   const source = readFileSync(new URL("./capture-sweep.ts", import.meta.url), "utf8");
 
-  test("the success update carries youtubeVideoId, taken from the candidate that WON", () => {
-    // The walk is the only place that knows which upload the fingerprint gate accepted; before
-    // this it remembered only the ids it REJECTED. `accepted.videoId` is the winner the shared
-    // ladder hands back — the same value the rejection memory would have stored on a mismatch.
-    expect(source).toContain("update.youtubeVideoId = accepted.videoId");
-  });
-
   test("only a REAL match reports an id — the abstain path stays silent", () => {
     // The verdict is `no-reference` when the track had no preview reference: the bytes were kept
     // on duration and ranking alone and nothing was compared. The identity payload serves this id
@@ -2379,6 +2397,11 @@ describe("the accepted upload's id rides the successful reconciliation", () => {
     expect(source).toMatch(
       /if \(accepted\.verdict === "match" && accepted\.source !== "soundcloud"\) \{\s*update\.youtubeVideoId = accepted\.videoId;/,
     );
+    const captureFn = source.slice(
+      source.indexOf("async function captureFinding("),
+      source.indexOf("// ── THE CATALOGUE PROVENANCE LADDER"),
+    );
+    expect(captureFn.match(/update\.youtubeVideoId = accepted\.videoId;/g)).toHaveLength(1);
   });
 
   test("only the SUCCESS path reports an id — never unmatched or failed results", () => {
@@ -4825,16 +4848,5 @@ describe("the consensus check — independent uploads agreeing where the preview
       "utf8",
     );
     expect(contract).toContain('"consensus-verified"');
-  });
-
-  test("a consensus capture ships NO YouTube id — the id rides only a preview match", () => {
-    const captureFn = source.slice(
-      source.indexOf("async function captureFinding("),
-      source.indexOf("// ── THE CATALOGUE PROVENANCE LADDER"),
-    );
-    expect(captureFn).toContain(
-      'if (accepted.verdict === "match" && accepted.source !== "soundcloud") {',
-    );
-    expect(captureFn.match(/update\.youtubeVideoId = accepted\.videoId;/g)).toHaveLength(1);
   });
 });

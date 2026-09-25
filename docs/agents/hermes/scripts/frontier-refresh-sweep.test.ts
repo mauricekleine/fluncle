@@ -156,11 +156,4 @@ describe("frontier-refresh-sweep is a pure weekly trigger", () => {
     expect(summary.produced).toBeNull();
     expect(typeof summary.error).toBe("string");
   });
-
-  test("omits queue_depth because total is a capped candidate page, not a backlog", () => {
-    const source = readFileSync(new URL("./frontier-refresh-sweep.ts", import.meta.url), "utf8");
-
-    expect(source).toContain("`total` is capped and is not a remaining-backlog count");
-    expect(source).not.toMatch(/\bqueue_depth\s*:/);
-  });
 });

@@ -1,13 +1,15 @@
-// Unit tests for the pure source-selection helpers in enrich-sweep.ts — the box-script
+// Tests for source selection and run summaries in enrich-sweep.ts — the box-script
 // sweep is self-contained (it can't import the workspace) and lives outside any package's
 // test runner, so this file uses `bun:test` and is run directly:
 //
 //   bun test docs/agents/hermes/scripts/enrich-sweep.test.ts
 //
-// `main()` is guarded behind `import.meta.main` in the sweep, so importing it here is
-// side-effect free (no fluncle spawn, no R2, no network). Keep this green when touching
-// how the sweep chooses between the captured full song and the 30s preview.
+// `main()` is guarded behind `import.meta.main` in the sweep, so helper imports are
+// side-effect free. Subprocess tests run the real entrypoint with a stub CLI and phase runner.
 import { describe, expect, test } from "bun:test";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { buildAnalyzeArgs, extFromKey } from "./enrich-sweep";
 
@@ -67,5 +69,65 @@ describe("extFromKey", () => {
 
   test("falls back to 'bin' when the key has no extension", () => {
     expect(extFromKey("004.7.2I/nohash")).toBe("bin");
+  });
+});
+
+describe("enrich sweep summary", () => {
+  async function run(mode: "empty" | "failure"): Promise<{
+    exitCode: number;
+    summary: Record<string, unknown>;
+  }> {
+    const dir = mkdtempSync(join(tmpdir(), "enrich-sweep-test-"));
+    const fluncle = join(dir, "fluncle");
+    const runner = join(dir, "admission-runner");
+    writeFileSync(
+      fluncle,
+      '#!/usr/bin/env bash\nif [ "$ENRICH_STUB_MODE" = "failure" ]; then\n  printf "queue unavailable\\n" >&2\n  exit 1\nfi\nprintf \'{"tracks":[]}\\n\'\n',
+    );
+    writeFileSync(runner, '#!/usr/bin/env bash\nshift 3\n"$@"\n');
+    chmodSync(fluncle, 0o755);
+    chmodSync(runner, 0o755);
+
+    try {
+      const proc = Bun.spawn(
+        [process.execPath, new URL("./enrich-sweep.ts", import.meta.url).pathname],
+        {
+          env: {
+            ...process.env,
+            DATABASE_ADMISSION_RUNNER: runner,
+            ENRICH_STUB_MODE: mode,
+            FLUNCLE_API_TOKEN: "",
+            FLUNCLE_BIN: fluncle,
+          },
+          stderr: "pipe",
+          stdout: "pipe",
+        },
+      );
+      const [exitCode, stdout] = await Promise.all([
+        proc.exited,
+        new Response(proc.stdout).text(),
+        new Response(proc.stderr).text(),
+      ]);
+
+      return { exitCode, summary: JSON.parse(stdout) as Record<string, unknown> };
+    } finally {
+      rmSync(dir, { force: true, recursive: true });
+    }
+  }
+
+  test("a genuine queue failure reports errors:1 and exits non-zero", async () => {
+    const { exitCode, summary } = await run("failure");
+
+    expect(exitCode).not.toBe(0);
+    expect(summary).toMatchObject({ errors: 1, ok: false, reason: "enrich_failed" });
+    expect(summary).not.toHaveProperty("failed");
+  });
+
+  test("a capped empty queue does not publish queue_depth", async () => {
+    const { exitCode, summary } = await run("empty");
+
+    expect(exitCode).toBe(0);
+    expect(summary).toMatchObject({ checked: 0, errors: 0, failed: 0, ok: true });
+    expect(summary).not.toHaveProperty("queue_depth");
   });
 });
