@@ -3,13 +3,6 @@ import { type SubscriptionDTO } from "@fluncle/contracts";
 import { getDb, typedRow, typedRows } from "./db";
 import { ApiError } from "./spotify";
 
-// The operator's private cost ledger (COST-02) — the server-side CRUD over the
-// `subscriptions` table. The oRPC `admin-subscriptions` handlers wrap these, and the
-// `/admin/costs` station reads them in-process. There is no public or agent caller:
-// the ledger is the operator's single source of truth for Fluncle's spend, so every
-// write is operator tier. Vendor names + amounts are private data — they live here in
-// the DB at runtime, never in a committed file.
-
 const NAME_MAX = 200;
 const VENDOR_MAX = 200;
 const CURRENCY_MAX = 8;
@@ -17,7 +10,6 @@ const URL_MAX = 2048;
 const POWERS_MAX = 500;
 const NOTES_MAX = 2000;
 
-// The closed sets — mirrored from the drizzle `subscriptions` typed-enum columns.
 const CATEGORIES = ["infra", "AI", "media", "distribution", "domains", "tooling"] as const;
 const CADENCES = ["monthly", "annual", "one-off", "usage"] as const;
 const STATUSES = ["active", "cancelled", "trial"] as const;
@@ -48,7 +40,6 @@ const SUBSCRIPTION_SELECT = `select
   renews_at, billing_url, powers, notes, created_at, updated_at
   from subscriptions`;
 
-/** Map a DB row to the wire DTO — nulls become undefined (the DTO's optional fields). */
 function rowToSubscription(row: SubscriptionRow): SubscriptionDTO {
   return {
     amount: row.amount,
@@ -68,8 +59,6 @@ function rowToSubscription(row: SubscriptionRow): SubscriptionDTO {
   };
 }
 
-// ── The operator's input (LOOSE — validated here) ─────────────────────────────
-
 export type SubscriptionInput = {
   amount?: unknown;
   billingUrl?: unknown;
@@ -84,7 +73,6 @@ export type SubscriptionInput = {
   vendor?: unknown;
 };
 
-/** The full ledger, most-recently-updated first (then created, then id — stable). */
 export async function listSubscriptions(): Promise<SubscriptionDTO[]> {
   const db = await getDb();
   const result = await db.execute({
@@ -96,7 +84,6 @@ export async function listSubscriptions(): Promise<SubscriptionDTO[]> {
   return typedRows<SubscriptionRow>(result.rows).map(rowToSubscription);
 }
 
-/** Add one cost line. Requires name, vendor, category, cadence, and a numeric amount. */
 export async function createSubscription(input: SubscriptionInput): Promise<SubscriptionDTO> {
   const name = requiredText(input.name, "name", NAME_MAX);
   const vendor = requiredText(input.vendor, "vendor", VENDOR_MAX);
@@ -141,12 +128,10 @@ export async function createSubscription(input: SubscriptionInput): Promise<Subs
   return getSubscriptionById(id);
 }
 
-/** Edit a cost line's fields. Only the provided fields change. */
 export async function updateSubscription(
   id: string,
   input: SubscriptionInput,
 ): Promise<SubscriptionDTO> {
-  // Confirm it exists first — a missing row is a 404, not a silent no-op.
   await getSubscriptionById(id);
 
   const sets: string[] = [];
@@ -215,7 +200,6 @@ export async function updateSubscription(
   return getSubscriptionById(id);
 }
 
-/** Remove a cost line by id. */
 export async function deleteSubscription(id: string): Promise<{ id: string }> {
   const db = await getDb();
   const result = await db.execute({
@@ -232,7 +216,6 @@ export async function deleteSubscription(id: string): Promise<{ id: string }> {
   return { id: row.id };
 }
 
-/** A single cost line by id, or a 404. */
 async function getSubscriptionById(id: string): Promise<SubscriptionDTO> {
   const db = await getDb();
   const result = await db.execute({
@@ -247,8 +230,6 @@ async function getSubscriptionById(id: string): Promise<SubscriptionDTO> {
 
   return rowToSubscription(row);
 }
-
-// ── Validation ────────────────────────────────────────────────────────────────
 
 function requiredText(value: unknown, field: string, maxLength: number): string {
   if (typeof value !== "string" || !value.trim()) {
@@ -266,8 +247,6 @@ function requireEnum<T extends string>(value: unknown, allowed: readonly T[], fi
   throw new ApiError("invalid_input", `${field} must be one of: ${allowed.join(", ")}`, 400);
 }
 
-// Amount in minor units (cents). Accept a number or a numeric string; reject
-// non-integers and negatives — a charge is a whole-cent, non-negative figure.
 function requireAmount(value: unknown): number {
   const amount = typeof value === "string" ? Number(value) : value;
 

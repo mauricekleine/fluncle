@@ -6,25 +6,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createIntegrationDb, seedCatalogueTrack, seedTrack } from "./integration-db";
 
-// THE VECTOR SATELLITE (schema.ts § `trackEmbeddings`, docs/track-lifecycle.md).
-//
-// The MuQ vector lives 1:1 in `track_embeddings`, and
-// `tracks.has_embedding` mirrors that row's EXISTENCE. Three things have to hold for that split to
-// be invisible to everything above it, and each gets a case here:
-//
-//   1. THE WRITE IS ATOMIC. The satellite row and its mirror move in one libSQL write batch. A
-//      track with a vector but no mirror is hidden from the embed queue; a mirror with no vector is
-//      a funnel that over-reports and a `/mix` gate that opens on nothing. Neither is an error the
-//      database would raise — it is silent corruption, so it is pinned rather than trusted.
-//   2. A MOVED JOIN READ still ranks. `getSimilarFindings` computes `vector_distance_cos` against
-//      the satellite in SQL, and its join is INNER — which is the old `embedding_blob is not null`
-//      filter, spelled as membership.
-//   3. A MOVED EXISTS READ still answers. `listEmbeddingPresenceForTracks` probes the satellite by
-//      primary key for the admin board's Embeddings cell.
-//
-// Driven against the REAL migrated schema (`createIntegrationDb`), so the SQL under test is
-// byte-identical to production's — including the foreign key and its cascade.
-
 let db: Client;
 let fixtureDirectory: string | undefined;
 
@@ -34,16 +15,14 @@ vi.mock("./db", async (importOriginal) => {
   return { ...actual, getDb: () => Promise.resolve(db) };
 });
 
-const TARGET = "aaaaaaaaaaaaaaaaaaaaaa"; // 22 chars, the tracks PK shape
+const TARGET = "aaaaaaaaaaaaaaaaaaaaaa";
 const NEAR = "bbbbbbbbbbbbbbbbbbbbbb";
 const FAR = "cccccccccccccccccccccc";
 
-/** A unit vector leaning `first` toward axis 0 — the whole corpus sits on one plane. */
 function vector(first: number): number[] {
   return [first, ...Array.from({ length: 1023 }, () => 0.01)];
 }
 
-/** The mirror `tracks` carries, and the count of satellite rows for the same track. */
 async function stateOf(trackId: string): Promise<{ mirror: number; vectors: number }> {
   const result = await db.execute({
     args: [trackId, trackId],
@@ -84,7 +63,7 @@ describe("the vector write keeps the satellite row and its mirror in step", () =
     const result = await updateTrack(TARGET, { embedding: JSON.stringify(vector(1)) });
 
     expect(await stateOf(TARGET)).toEqual({ mirror: 1, vectors: 1 });
-    // The caller is still told the vector moved, even though it is no longer a `tracks` column.
+
     expect(result.fields).toContain("embedding_blob");
     expect(result.fields).toContain("has_embedding");
   });
@@ -95,7 +74,6 @@ describe("the vector write keeps the satellite row and its mirror in step", () =
     await updateTrack(TARGET, { embedding: JSON.stringify(vector(1)) });
     await updateTrack(TARGET, { embedding: JSON.stringify(vector(0.5)) });
 
-    // Still exactly one row — a fresh capture must overwrite, never accumulate or throw.
     expect(await stateOf(TARGET)).toEqual({ mirror: 1, vectors: 1 });
 
     const { readEmbeddingBlob } = await import("./embedding");
@@ -117,10 +95,6 @@ describe("the vector write keeps the satellite row and its mirror in step", () =
   });
 
   it("a quarantine clears both halves, and a GUARDED quarantine that matches nothing clears neither", async () => {
-    // `flagWrongAudio` carries its guard in the update's WHERE, and the satellite delete is driven
-    // by the `has_embedding = 0` that update writes — so a guard that matched no row must leave the
-    // vector standing. That is the whole reason the delete reads the mirror instead of re-spelling
-    // the guard, and it is the case a second copy of the guard would get wrong.
     const { flagWrongAudio } = await import("./catalogue");
     const { updateTrack } = await import("./track-update");
 
@@ -129,14 +103,12 @@ describe("the vector write keeps the satellite row and its mirror in step", () =
       sourceAudioKey: "010.1.1A/beef.webm",
     });
 
-    // No captured audio on this one, so the guard cannot match: nothing moves.
     await seedTrack(db, { logId: "011.1.1A", title: "Untouched", trackId: NEAR });
     await updateTrack(NEAR, { embedding: JSON.stringify(vector(0.9)) });
 
     expect(await flagWrongAudio(NEAR)).toBe(false);
     expect(await stateOf(NEAR)).toEqual({ mirror: 1, vectors: 1 });
 
-    // This one qualifies, so both halves go.
     expect(await flagWrongAudio(TARGET)).toBe(true);
     expect(await stateOf(TARGET)).toEqual({ mirror: 0, vectors: 0 });
   });
@@ -149,8 +121,6 @@ describe("the vector write keeps the satellite row and its mirror in step", () =
     await db.execute({ args: [TARGET], sql: "delete from findings where track_id = ?" });
     await db.execute({ args: [TARGET], sql: "delete from tracks where track_id = ?" });
 
-    // An orphan vector is not merely untidy — it is a vector the ranking can still reach for a
-    // track that no longer exists.
     expect((await stateOf(TARGET)).vectors).toBe(0);
   });
 });
@@ -209,14 +179,10 @@ describe("the moved reads still answer off the satellite", () => {
     expect(await listEmbeddingPresenceForTracks([])).toEqual(new Set());
   });
 
-  // The cluster engine's corpus read is the ONE path that ships whole vectors over the wire
-  // (cursor-paged, off the hot path — docs/agents/cluster-engine.md), so its join is the one
-  // place a wrong satellite read would poison every galaxy assignment rather than one page.
   it("the cluster corpus read pages coordinate-bearing embedded findings, decoding each vector", async () => {
     const { listTrackEmbeddingsPage } = await import("./galaxies-map");
     const { updateTrack } = await import("./track-update");
 
-    // A finding with no vector, and a catalogue track WITH one: neither belongs in the corpus.
     await seedTrack(db, {
       logId: "023.1.1A",
       title: "Unembedded",

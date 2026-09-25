@@ -17,9 +17,6 @@ type StoredTrack = {
   track_id: string;
 };
 
-// A tiny in-memory archive the mocked DB queries against. We reproduce just the
-// matching + ordering semantics of searchTracks's SQL so the test exercises the
-// real function (its trim/clamp/arg-binding and row→DTO mapping) end to end.
 const archive: StoredTrack[] = [
   {
     added_at: "2026-06-03T00:00:00.000Z",
@@ -79,7 +76,6 @@ function baseRow(stored: StoredTrack) {
 beforeEach(() => {
   execute.mockReset();
   execute.mockImplementation(async (query: { args: unknown[]; sql: string }) => {
-    // searchTracks binds [needle, needle, needle, needle, limit].
     const needle = String(query.args[0]);
     const limit = Number(query.args.at(-1));
     const matched = archive
@@ -117,7 +113,6 @@ describe("searchTracks", () => {
   it("matches by artist", async () => {
     const results = await searchTracks({ q: "calibre" });
 
-    // Newest-first: the Calibre solo (06-03) before the Alix Perez x Calibre (06-02).
     expect(results.map((t) => t.trackId)).toEqual(["track-calibre", "track-alix"]);
   });
 
@@ -159,7 +154,7 @@ describe("searchTracks", () => {
     const results = await searchTracks({ limit: 2, q: "track" });
 
     expect(results).toHaveLength(2);
-    // Newest-first across all three findings.
+
     expect(results.map((t) => t.trackId)).toEqual(["track-calibre", "track-alix"]);
   });
 });

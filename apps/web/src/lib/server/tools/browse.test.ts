@@ -1,10 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { type ToolCtx, type ToolDef } from "./registry";
 
-// Slice F's browse tools exercised through the registry handler layer: the `list_*` A–Z index reads
-// and the paginated `list_*_catalogue` reads. Their server reads are partial-mocked (the rest of
-// each module stays real, so registry.ts's other imports resolve) so the executes run hermetically.
-
 const listArtistsBrowsePageMock = vi.hoisted(() => vi.fn());
 const getPublicArtistBySlugMock = vi.hoisted(() => vi.fn());
 const listAlbumsBrowsePageMock = vi.hoisted(() => vi.fn());
@@ -58,7 +54,6 @@ function tool(name: string): ToolDef {
   return def;
 }
 
-/** One catalogue track row (the anti-join read's item shape). */
 function catTrack(id: string) {
   return {
     artists: [`Artist ${id}`],
@@ -156,7 +151,7 @@ describe("list_artists / list_albums / list_labels — the A–Z browse index", 
 describe("list_artist_catalogue — pagination over the grouped read", () => {
   it("passes page to the grouped read and returns the whole flattened group page", async () => {
     getPublicArtistBySlugMock.mockResolvedValue({ id: "art-1", name: "Netsky", slug: "netsky" });
-    // A group page whose flattened rows exceed the per-page row cap — all must survive.
+
     const tracks = Array.from({ length: 30 }, (_, i) => catTrack(`t${i}`));
     listArtistCatalogueMock.mockResolvedValue({
       groups: [{ name: "A Record", releaseDate: undefined, slug: "a-record", tracks }],
@@ -177,7 +172,7 @@ describe("list_artist_catalogue — pagination over the grouped read", () => {
     };
 
     expect(listArtistCatalogueMock).toHaveBeenCalledWith("art-1", "name", 2);
-    expect(result.catalogue).toHaveLength(30); // NOT truncated to 24 — the fix
+    expect(result.catalogue).toHaveLength(30);
     expect(result).toMatchObject({ page: 2, pageCount: 5, total: 900 });
   });
 
@@ -235,7 +230,7 @@ describe("list_album_catalogue — pagination over the bounded flat read", () =>
 
     expect(first.catalogue).toHaveLength(24);
     expect(first.catalogue[0]?.title).toBe("Track c0");
-    expect(first).toMatchObject({ pageCount: 3, total: 50 }); // ceil(50/24) = 3
-    expect(second.catalogue[0]?.title).toBe("Track c24"); // the second page starts past row 24
+    expect(first).toMatchObject({ pageCount: 3, total: 50 });
+    expect(second.catalogue[0]?.title).toBe("Track c24");
   });
 });

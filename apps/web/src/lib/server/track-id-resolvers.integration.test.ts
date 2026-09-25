@@ -88,7 +88,7 @@ async function seedResolverFixture(): Promise<void> {
   });
   await seedTrack(db, {
     artists: ["Log Owner Artist"],
-    // This coordinate deliberately collides with another row's raw track PK.
+
     logId: COLLISION_TOKEN,
     title: "Log Owner",
     trackId: LOG_OWNER_TRACK_ID,
@@ -322,8 +322,6 @@ describe("track-id / Log-ID resolver equivalence and precedence", () => {
       trackId: LOG_OWNER_TRACK_ID,
     });
 
-    // Optional-finding readers preserve raw-ID precedence for the catalogue row. Readers whose
-    // contract requires a finding ignore that uncertified raw row and resolve the valid Log ID.
     expect(await getLivePreviewTrack(CATALOGUE_COLLISION_TOKEN)).toMatchObject({
       title: "Catalogue Collision",
     });

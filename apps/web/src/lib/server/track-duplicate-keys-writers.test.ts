@@ -25,9 +25,6 @@ function source(file: string): string {
   return readFileSync(join(SERVER, file), "utf8");
 }
 
-// This inventory discovers new write sites; textual co-occurrence cannot prove
-// transaction ordering. The publish, crawl, label-release and duplicate-key
-// integration suites exercise persisted keys and rollback behavior.
 describe("track_duplicate_keys writer inventory", () => {
   it("keeps discovered track inserters on the duplicate-key maintenance API", () => {
     const inserts: string[] = [];

@@ -1,15 +1,3 @@
-// The TikTok Display-API leg, proven against the REAL migrated schema on an in-memory libSQL
-// engine (the integration-db harness) plus injected fetch. What is easy to get wrong:
-//
-//   1. THE AUTHORIZE URL — the right host/params, and scope COMMA-separated (TikTok's format,
-//      not Google's space string), with the CSRF state carried through.
-//   2. TOKEN REFRESH ROTATION — TikTok rotates the refresh token; the NEW one must be persisted
-//      (a stale stored refresh token would break the next refresh). The stored one is kept only
-//      when the response omits a new one.
-//   3. VIDEO-ID PARSING — the native aweme id lifted from a `…/video/<id>` permalink (pure).
-//   4. THE COLLECTOR GATE + PAGINATION — a clean `null` no-op when unconfigured OR unconnected,
-//      and a budget-capped cursor walk when connected.
-
 import { type Client } from "@libsql/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -34,7 +22,6 @@ let db: Client;
 
 const NOW = Date.now();
 
-/** Seed a single-row tiktok_auth. `expiresInMs` from now: negative = already expired. */
 async function seedAuth(input: {
   accessToken?: string;
   expiresInMs: number;
@@ -89,7 +76,7 @@ describe("buildTikTokAuthUrl", () => {
       "https://www.fluncle.com/api/admin/tiktok/auth/callback",
     );
     expect(url.searchParams.get("state")).toBe("state-123");
-    // Comma-separated (URLSearchParams decodes %2C back to ",") — TikTok's format.
+
     expect(url.searchParams.get("scope")).toBe("user.info.basic,video.list");
   });
 
@@ -158,7 +145,7 @@ describe("getTikTokAccessToken", () => {
 
     const row = await readAuth();
     expect(row?.access_token).toBe("new-access");
-    // The ROTATION: the new refresh token replaces the stored one.
+
     expect(row?.refresh_token).toBe("rotated-refresh");
   });
 
@@ -233,11 +220,10 @@ describe("collectOwnTikTokVideos (the gate + pagination)", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(2);
     expect(videos).toEqual([
       { comments: 3, id: "v1", likes: 20, shares: 1, views: 100 },
-      // Unreported metrics stay null (never coerced to 0).
+
       { comments: null, id: "v2", likes: 5, shares: null, views: 50 },
     ]);
 
-    // The second request carried the first page's cursor.
     const secondCall = fetchImpl.mock.calls[1];
     expect(JSON.parse(secondCall?.[1]?.body as string)).toMatchObject({ cursor: 1111 });
   });

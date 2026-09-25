@@ -1,63 +1,3 @@
-// `/tracks` — THE WHOLE LIST, across the whole archive.
-//
-// The top-level index every other surface implies but never was: every track Fluncle holds, the
-// certified findings and the wider catalogue he is charting, in ONE newest-release-first list you
-// can filter and page through. It is a CATALOGUE page (VOICE.md's Three Areas) — a reference shelf,
-// not a lore page — and it renders the two-register grammar the rest of the archive lives by: a
-// certified finding is LIT (its cover, its Log ID coordinate, a link to `/log/<logId>`), an
-// uncertified catalogue row is UNLIT (a dimmed cover, no coordinate, out to
-// Spotify — DESIGN.md's Unlit Rule). The register is a bit the mapper reads, structural in the shape
-// below; the row component (`components/tracks-hub-row.tsx`) renders each register without deciding
-// which one it is.
-//
-// ── RELEASE DATE, NOT FOUND DATE ───────────────────────────────────────────────────────
-// Like `/fresh`, this list is ordered by `tracks.release_date` (when a tune CAME OUT), never
-// `findings.added_at` (when Fluncle FOUND it). A catalogue row has no found date at all — release
-// date is the one axis both registers share — so it is the only honest ordering key for a unified
-// list, and the copy never claims Fluncle found the catalogue rows (VOICE.md's Found Rule).
-//
-// ── WHY IT SCALES ──────────────────────────────────────────────────────────────────────
-// Unlike `/fresh` (a 30-day window), this is the UNBOUNDED archive, so it cannot fold the whole
-// table into the isolate. It is NUMBERED-page paginated (the `/labels` + `/albums` + `/artists` hub
-// precedent, #731), but a page number does not require an unbounded OFFSET walk. The first ten pages
-// use a direct bounded offset. Every deeper unfiltered page seeks from a persisted sparse boundary;
-// a missing boundary set falls back once and schedules its build, while a stale set seeks
-// immediately and schedules a refresh. Deep filtered pages build the same SQL-only boundary window
-// once per exact clause-set memo. The nearest boundary plus an offset remainder preserves tail
-// reachability when a stored set predates corpus growth. The primary sort rides
-// `tracks_release_date_track_id_idx`; TRACK_SELECT stays a NAMED column list, so neither boundary
-// extraction nor hydration brings the wide embedding BLOBs across the isolate. The total remains a
-// separate memoized `count(*)`. Hosted Turso is still the only performance proof
-// (`scripts/bench-tracks-hub.ts --seek-vs-offset`); local libSQL proves correctness only.
-//
-// ── THE JOIN IS PAID ONLY WHEN IT IS READ ──────────────────────────────────────────────
-// `findings.track_id` is the PRIMARY KEY of `findings`, so `left join findings` is strictly
-// cardinality-preserving — it can neither add nor drop a `tracks` row nor repeat one. Of the hub's
-// predicates only the GALAXY extension reads a `findings` column; the shared six read `tracks`
-// alone. So the two scanning reads and the pager's `count(*)` drop the join whenever no clause names
-// `findings.`. Measured by `explain query plan` (SHAPE evidence — the timings belong to the hosted
-// bench, never to a local run), the win is NOT where it looks:
-//
-//   • THE YEAR LANE is where it is large. Carrying the join, the planner chose a bare `SCAN tracks`
-//     — a full scan of the WIDE row, dragging every `F32_BLOB(1024)` embedding off disk to read one
-//     10-byte date — plus a `findings` probe per row. Without it: `SEARCH tracks USING COVERING
-//     INDEX tracks_release_date_track_id_idx`. The table is never touched at all.
-//   • THE `count(*)` loses its per-row `findings` probe: `SCAN tracks USING COVERING INDEX …
-//     + SEARCH findings … LEFT-JOIN` becomes a lone covering scan.
-//   • THE ID PAGE is unchanged — SQLite already proved the join unused there and elided it. Dropping
-//     it in the builder is defensive tidiness, not a speedup; it is honest to say so.
-//
-// The HYDRATE step keeps the join unconditionally: it reads findings columns for real.
-//
-// ── THE PAGE-INDEPENDENT READS ARE MEMOISED ────────────────────────────────────────────
-// The pager's `count(*)` and the year lane are IDENTICAL for every `?page=N` of the same filter set
-// — two full-set aggregates re-run on every deep page for an answer that did not change. They ride a
-// short in-isolate TTL memo (see {@link HUB_AGGREGATE_TTL_MS}) that also de-duplicates concurrent
-// in-flight loads, so a crawler walking the pager pays them once per window rather than once per
-// page. Staleness is structurally harmless: the total feeds only the pager's page COUNT and the
-// masthead number, never the 404 decision (that reads the id slice's emptiness), and the same 60 s
-// window is already what the bare hub's edge cache accepts.
-
 import { type CatalogueTrackListItem, type SearchFilters } from "@fluncle/contracts/orpc";
 import { type Client } from "@libsql/client";
 import { parseArtistsJson } from "./artists";
@@ -108,53 +48,20 @@ import { fold } from "./track-match";
 import { releasedByTodaySql, releaseTodayUtc, validReleaseDateSql } from "./release-day";
 import { TRACK_SELECT, toPublicTrackListItem, toTrackListItem, type TrackRow } from "./tracks";
 
-// Note: this hub deliberately does NOT drive through `tracks.ts`'s inner `FINDINGS_FROM` join — it
-// uses a LEFT join so a catalogue row (no `findings` row) survives in the unlit register.
-
-/** A browse page's size — a reading surface, not an infinite feed. Shared with the year fast lane's
-    year → page mapping, so a year links to exactly the page its first release lands on. */
 export const TRACKS_HUB_PAGE_SIZE = 48;
 
-/** One literal owns the window rank, offset page, and seek page order. */
 export const TRACKS_HUB_ORDER_BY = "tracks.release_date desc, tracks.track_id desc";
 
-/**
- * The hub's filter axes. The shared six are `Pick`ed from the contract's `SearchFilters`
- * (`yearMin`/`yearMax`, `bpmMin`/`bpmMax`, `key`, `label`) — same names, same semantics, compiled by
- * the same `compileFilters` — so one filter vocabulary reads the same on `/search` and here, typed
- * from ONE source.
- *
- * `galaxy` (a galaxy SLUG) is the one extension beyond that schema. Because a galaxy lives on
- * `findings.galaxy_id`, filtering by it structurally narrows the list to certified findings — the
- * filtered list simply contains only lit rows, rendered honestly.
- */
 export type TracksHubFilters = Pick<
   SearchFilters,
   "bpmMax" | "bpmMin" | "key" | "label" | "yearMax" | "yearMin"
 > & {
-  // The `list_tracks` API enumerator's tri-state certification filter (the machine twin's ONE filter):
-  // `true` narrows to certified findings, `false` to the uncertified rows, `undefined` returns both.
-  // Folded into the SAME compiled clause set as every other filter (one gate, no forked query); it reads
-  // the maintained `is_catalogue` flag (Keystone 1), so it needs no `findings` join at all. The web
-  // `/tracks` page never sets it (its register split is visual, not a filter) — this is API-only.
   certified?: boolean;
   galaxy?: string;
 };
 
-/**
- * One artist credit on a hub row, with the `/artist/<slug>` slug when the artist entity exists (a
- * bare name when it does not — nowhere honest to send you, so the row component renders it plain).
- * Resolved in the SAME select that loaded the row (a JSON subquery over `track_artists`), so linking
- * every artist on 48 rows costs no per-row round trip.
- */
 export type TracksHubArtistLink = { name: string; slug?: string };
 
-/**
- * One row of the hub: a lit finding or an unlit catalogue row, plus the release date the row's date
- * column prints and the resolved artist links both registers render. A finding carries its full
- * public DTO (cover, coordinate, label + slug); a catalogue row carries its own cover and readout, plus
- * the label + slug so its imprint still links to `/label/<slug>` when the entity exists.
- */
 export type TracksHubEntry =
   | {
       artistLinks: TracksHubArtistLink[];
@@ -171,27 +78,15 @@ export type TracksHubEntry =
       track: FreshCatalogueItem;
     };
 
-/** A present release YEAR in the result set, mapped to the page its first (newest) release lands on
-    — the year fast lane's data (the A–Z lane mechanic mapped onto time). */
 export type TracksHubYearLaneEntry = { page: number; year: string };
 
-/** The row shape the unified read hands back — `TRACK_SELECT` + the lead-artist columns + the flag +
-    the artist-slug JSON. */
 type TracksHubRow = LeadArtistRow &
   TrackRow & {
-    /** The `[{name, slug}]` JSON for the row's artists (via `track_artists`), or "[]"/null for none. */
     artist_slugs_json: string | null;
-    /** 1 ⇔ a `findings` row exists ⇔ this is a certified finding (lit); 0 ⇔ a catalogue row (unlit). */
+
     certified: number;
   };
 
-/**
- * The galaxy clause — the hub's one extension past `compileFilters`. A galaxy lives on
- * `findings.galaxy_id`, so this resolves the slug to its id via a subquery and requires the galaxy
- * to be NAMED and non-retired (never a machine handle, never a retired cluster). On a LEFT join a
- * catalogue row's `findings.galaxy_id` is null, so this predicate is false for every catalogue row —
- * which is exactly why a galaxy filter narrows the list to certified findings.
- */
 function galaxyClause(slug: string): Clause {
   return {
     args: [slug],
@@ -201,29 +96,17 @@ function galaxyClause(slug: string): Clause {
   };
 }
 
-/**
- * Resolve the hub's one name filter — the imprint — to its indexed `labels.id`, so the label clause
- * compiles to `tracks.label_id = ?` instead of `lower(tracks.label) = ?` (backlog Wave 3-2). ONE
- * unique-index seek on the small `labels` table per read, and it stays a raw-string filter when the
- * name resolves to nothing: the label control deliberately accepts a free-typed imprint that has no
- * entity behind it, and that is exactly the case the fallback exists for.
- */
 export async function resolveTracksHubEntities(
   filters: TracksHubFilters,
 ): Promise<ResolvedFilterEntities> {
   return resolveFilterEntities(filters);
 }
 
-/** Assemble the where-clause set: the shared compiled filters + the galaxy extension. `resolved` is
-    {@link resolveTracksHubEntities}' answer; omitting it compiles the raw-string fallback, which is
-    what the hosted bench and any caller with no id in hand wants. */
 export function tracksHubClauses(
   filters: TracksHubFilters,
   resolved: ResolvedFilterEntities = {},
   today?: string,
 ): Clause[] {
-  // The shared six, compiled by the SAME function `/search` uses. The hub type carries only that
-  // subset — never `artist`/`album`/`text` — so the compiled SQL is exactly the hub's vocabulary.
   const clauses = compileFilters(filters, resolved);
 
   if (today !== undefined) {
@@ -234,12 +117,6 @@ export function tracksHubClauses(
     clauses.push(galaxyClause(filters.galaxy));
   }
 
-  // The API enumerator's tri-state certification filter, expressed on the maintained `is_catalogue`
-  // flag (Keystone 1) rather than a `findings` anti-join: `is_catalogue = 1` is the uncertified
-  // catalogue slice (and rides the partial `tracks_is_catalogue_idx`), `= 0` the certified findings.
-  // Because neither reads a `findings` column, `findingsJoinFor` DROPS the LEFT JOIN for this filter —
-  // no per-row findings probe over the growing table. Absent, no clause is added and both registers
-  // appear (the web page's default).
   if (filters.certified === true) {
     clauses.push({ args: [], sql: `tracks.is_catalogue = 0` });
   } else if (filters.certified === false) {
@@ -249,7 +126,6 @@ export function tracksHubClauses(
   return clauses;
 }
 
-/** The `where …` fragment + its bound args for a filter set (empty string when nothing is filtered). */
 function whereFor(clauses: Clause[]): { args: (number | string)[]; where: string } {
   return {
     args: clauses.flatMap((clause) => clause.args),
@@ -257,23 +133,12 @@ function whereFor(clauses: Clause[]): { args: (number | string)[]; where: string
   };
 }
 
-/** The join a scanning read only pays when a predicate actually reads a `findings` column. Derived
-    from the compiled SQL rather than from `filters.galaxy` so a future findings-reading clause turns
-    it back on by itself — the join is never silently dropped out from under a predicate that needs
-    it. Safe to drop otherwise: `findings.track_id` is that table's PRIMARY KEY, so the LEFT JOIN is
-    1:0..1 and cannot change which `tracks` rows survive or how many times each appears. */
 function findingsJoinFor(clauses: Clause[]): string {
   return clauses.some((clause) => clause.sql.includes("findings."))
     ? "left join findings on findings.track_id = tracks.track_id"
     : "";
 }
 
-/**
- * The strict suffix after one release-date boundary. Empty-string dates are ordinary TEXT values:
- * they use this non-null branch, sort after every ISO date in DESC order, and before the NULL zone.
- * A boundary inside the real NULL zone has its own predicate because `release_date = null` is never
- * true in SQL.
- */
 export function tracksHubSeekClause(anchor: HubPageAnchor): Clause {
   if (anchor.key === null) {
     return {
@@ -307,7 +172,6 @@ function tracksHubOrderedShape(
   };
 }
 
-/** The exact compiled clause-set key also used by the filtered aggregate/anchor memo. */
 export function tracksHubClauseKey(
   filters: TracksHubFilters,
   resolved: ResolvedFilterEntities = {},
@@ -330,25 +194,14 @@ export const TRACKS_HUB_ANCHOR_ADDRESS = {
   hub: "tracks",
 } as const;
 
-/** The window a page-independent aggregate (the pager total, the year lane) may be served stale
-    within — matched to the bare hub's edge-cache freshness window. */
 const HUB_AGGREGATE_TTL_MS = 60_000;
 
-/** A hard ceiling on distinct memoised filter sets, so an adversarial filter fan-out cannot grow the
-    isolate's memory without bound. The oldest insertion is evicted first (a Map iterates in
-    insertion order), which is the right victim: the bare hub is re-inserted constantly. */
 const HUB_AGGREGATE_CACHE_MAX = 32;
 
 type HubAggregateEntry = { expires: number; value: Promise<unknown> };
 
 const hubAggregateCache = new Map<string, HubAggregateEntry>();
 
-/**
- * Serve a page-independent aggregate from the in-isolate TTL memo, loading it at most once per
- * window. The PROMISE is cached rather than the resolved value, so concurrent pages of the same
- * filter set share one in-flight query instead of racing N identical full-set scans; a rejection
- * evicts itself, so a failed load is never cached.
- */
 async function memoizedAggregate<T>(key: string, load: () => Promise<T>): Promise<T> {
   const cached = hubAggregateCache.get(key);
   const now = Date.now();
@@ -378,29 +231,18 @@ async function memoizedAggregate<T>(key: string, load: () => Promise<T>): Promis
   }
 }
 
-/** Drop every memoised aggregate. The hub's reads are never invalidated in production (the TTL is
-    the whole contract); this exists so a test that reseeds the database between cases starts from a
-    cold memo rather than reading the previous case's totals. */
 export function resetTracksHubAggregateCache(): void {
   hubAggregateCache.clear();
 }
 
-/** The memo key for a filter set — the compiled clause set, which is exactly what the SQL and its
-    bound args are built from, so two filter objects that compile identically share one entry. */
 function aggregateKey(kind: string, clauses: Clause[]): string {
   return `${kind}:${hubClauseSetKey(clauses)}`;
 }
 
-/** The `track_artists → artists` JSON subquery: `[{name, slug}]` for the row's artists, one indexed
-    seek (`track_artists_track_id_idx` + the `artists` PK), the lead-artist subquery's sibling. An
-    artist a global `unlisted` rule has taken off the site is absent, so the credit is plain text. */
 const ARTIST_SLUGS_SELECT = `(select json_group_array(json_object('name', a.name, 'slug', a.slug))
      from track_artists ta join artists a on a.id = ta.artist_id
      where ta.track_id = tracks.track_id and ${listedArtistWhere("a")}) as artist_slugs_json`;
 
-/** Fold a row's artist-slug JSON into a `fold(name) → slug` map (the `getArtistSlugMap` shape),
-    keyed by the NORMALIZED name so a casing/accent drift between the canonical `artists.name` and
-    the `artists_json` display cache still resolves. A blank/absent JSON yields an empty map. */
 function parseArtistSlugMap(json: string | null): Map<string, string> {
   const map = new Map<string, string>();
 
@@ -428,7 +270,6 @@ function parseArtistSlugMap(json: string | null): Map<string, string> {
   return map;
 }
 
-/** Map one unified row to its register shape — a lit finding, or an unlit catalogue row. */
 function toTracksHubEntry(row: TracksHubRow): TracksHubEntry {
   const releaseDate = row.release_date ?? "";
   const artistAvatarUrl = leadArtistAvatarUrl(row);
@@ -441,8 +282,6 @@ function toTracksHubEntry(row: TracksHubRow): TracksHubEntry {
   });
 
   if (row.certified) {
-    // A finding carries the full `TRACK_SELECT` columns (findings.* are non-null here); map it the
-    // way `/fresh` does — public-stripped, plus the lead-artist avatar.
     return {
       artistLinks,
       finding: { ...toPublicTrackListItem(toTrackListItem(row)), artistAvatarUrl },
@@ -451,9 +290,6 @@ function toTracksHubEntry(row: TracksHubRow): TracksHubEntry {
     };
   }
 
-  // A catalogue row: the findings.* columns are null and NEVER read. Only the `tracks` columns map,
-  // and no coordinate crosses the wire. The
-  // label + slug ride along so the row's imprint still links to `/label/<slug>` when it has a page.
   return {
     artistLinks,
     kind: "catalogue",
@@ -481,16 +317,6 @@ function toTracksHubEntry(row: TracksHubRow): TracksHubEntry {
   };
 }
 
-/**
- * Flatten one hub entry into the lean `list_tracks` API row (`CatalogueTrackListItem`) — the machine
- * twin of what the web row renders. Every row carries its `trackId` and the `url` of the page the
- * hub row links to (a finding's `/log` page, a catalogue row's `/track` destination). A finding
- * carries its `logId` coordinate, cover, and record + imprint edges; an uncertified row carries
- * neither coordinate nor cover (the Unlit Rule holds by construction, since the finding-only fields
- * are read only in the `finding` arm). The heavy DTO
- * (note/video/features) never crosses this boundary — a browse enumerator wants the identity, not the
- * lore.
- */
 export function toCatalogueTrackListItem(entry: TracksHubEntry): CatalogueTrackListItem {
   if (entry.kind === "finding") {
     const finding = entry.finding;
@@ -508,14 +334,11 @@ export function toCatalogueTrackListItem(entry: TracksHubEntry): CatalogueTrackL
       spotifyUrl: finding.spotifyUrl,
       title: finding.title,
       trackId: finding.trackId,
-      // The finding's one URL — its `/log` page, built off the coordinate the row carries.
+
       ...(finding.logId ? { url: logPageUrl(finding.logId) } : {}),
     };
   }
 
-  // The catalogue row's `url` is the SAME decision the web hub row makes before it links
-  // (`hasTrackPageIdentity`, the client-side twin of the destination's identity predicate): a row
-  // the destination would refuse never gets a link, on either surface.
   return {
     artists: entry.track.artists,
     certified: false,
@@ -529,30 +352,6 @@ export function toCatalogueTrackListItem(entry: TracksHubEntry): CatalogueTrackL
   };
 }
 
-/**
- * ONE numbered page of the `/tracks` hub: every track (findings + catalogue) that survives the
- * filters, newest release first, as a shallow offset or anchored seek riding
- * `tracks_release_date_track_id_idx`.
- * Throws {@link CatalogueHubPageOutOfRangeError} for a page past the end (page 1 of an empty result
- * is a legitimate empty page, never a throw) so the route can 404 rather than clamp — a `?page=99`
- * on a 3-page hub is NOT a second URL for page 1's rows. The `count(*)` for the total runs in
- * parallel over the same filtered set.
- *
- * ── LATE ROW LOOKUP + SEEK LADDER: page IDS, then hydrate exactly 48 ──────────────────
- * SQLite evaluates SELECT-list scalar subqueries for every materialized row before OFFSET skips
- * it, so every path first pages bare ids and hydrates only the selected rows. The id path is:
- *
- *   1. A page whose offset is at most 450 rows uses the direct ordered slice.
- *   2. A deeper unfiltered page loads persisted anchors. Missing anchors use the direct slice once
- *      and schedule a detached build; stale anchors serve immediately and schedule refresh.
- *   3. A deeper filtered page extracts anchors in SQL once per exact compiled-clause memo.
- *   4. Seek starts strictly after the largest boundary at or before the requested page and applies
- *      `(page - boundaryPage) * 48` as the remainder. A fresh set has remainder zero; an older set
- *      still reaches pages beyond its last boundary. Empty-string release dates are normal TEXT;
- *      actual NULL boundaries use the dedicated NULL-zone predicate.
- *   5. Hydrate exactly those ≤48 ids with the full column set and restore the id-page order in code.
- */
-/** The filtered `count(*)` — the pager's total, over the same clause set as the id page. */
 export function tracksHubCountQuery(
   filters: TracksHubFilters,
   resolved: ResolvedFilterEntities = {},
@@ -573,14 +372,6 @@ export function tracksHubCountQuery(
   };
 }
 
-/**
- * Step 1's SQL: the bare id slice. No SELECT-list subqueries, so the offset walk touches only the
- * `tracks_release_date_track_id_idx` order and the filter predicates. The `findings` join appears
- * ONLY when a predicate reads it (the galaxy filter) — the plan here is identical either way
- * (SQLite already elided the unused join), so that is tidiness rather than a speedup; the join drop
- * earns its keep on the year lane and the `count(*)`. Exported so the hosted bench
- * (`scripts/bench-tracks-hub.ts`) measures the EXACT production shape.
- */
 export function tracksHubIdPageQuery(
   filters: TracksHubFilters,
   limit: number,
@@ -597,7 +388,6 @@ export function tracksHubIdPageQuery(
   };
 }
 
-/** The SQL-only sparse boundary extraction used by persisted and filtered in-isolate anchors. */
 export function tracksHubAnchorExtractionQuery(
   filters: TracksHubFilters,
   resolved: ResolvedFilterEntities = {},
@@ -608,7 +398,6 @@ export function tracksHubAnchorExtractionQuery(
   );
 }
 
-/** Step 1 as an anchored seek plus the nearest-boundary offset remainder. */
 export function tracksHubSeekIdPageQuery(
   filters: TracksHubFilters,
   page: number,
@@ -632,14 +421,6 @@ export type ProjectedTracksHubIdPageQueries = {
   primary: ProjectedTracksHubIdQuery;
 };
 
-/**
- * A projected page starts a bounded offset behind one exact row (or a zone head) that the current
- * anchor document resolved for it. Split the one transition page at the NULL zone so both halves
- * are true composite-index ranges. The row-value bound intentionally excludes NULL release dates
- * under SQL's three-valued logic; `nullFill` reads that zone explicitly and skips nothing, because a
- * non-NULL start that runs short has exhausted the non-NULL zone exactly at the zone head. The
- * general OR-shaped legacy seek remains available only to shadow/rollback callers.
- */
 export function projectedTracksHubIdPageQueries(
   start: HubProjectedPageStart,
   limit: number,
@@ -720,10 +501,6 @@ async function readProjectedTracksHubIdPage(
   return { ...primary, rows: [...primary.rows, ...fill.rows] };
 }
 
-/**
- * Step 2's SQL: hydrate exactly one page's ids with the full column set. The per-row subqueries run
- * once per HYDRATED row (≤ the page size), whatever the offset was. Exported for the hosted bench.
- */
 export function tracksHubHydrateQuery(ids: string[]): { args: string[]; sql: string } {
   const placeholders = ids.map(() => "?").join(", ");
 
@@ -739,8 +516,6 @@ export function tracksHubHydrateQuery(ids: string[]): { args: string[]; sql: str
   };
 }
 
-/** The pager's total for a filter set, served from the TTL memo. Page-independent by construction —
-    every `?page=N` of one filter set asks the same question of the same rows. */
 async function countTracksHub(
   filters: TracksHubFilters,
   resolved: ResolvedFilterEntities,
@@ -820,16 +595,12 @@ export async function listTracksHubPage(
   const boundary = releaseTodayUtc(now);
   const { futureCount, retainedHeadCount } = await releaseHeadCounts(db, boundary);
   const today = futureCount > 0 ? boundary : undefined;
-  // The imprint name → `labels.id`, ONCE for both reads below, so the pager total and the id slice
-  // compile the same clause set (the memo key is that clause set) and both ride `tracks_label_id_idx`.
+
   const resolved = await resolveTracksHubEntities(filters);
   const clauses = tracksHubClauses(filters, resolved, today);
   let total: number;
   let idsResult: Awaited<ReturnType<typeof db.execute>>;
 
-  // The projection keeps whole-corpus ranks. Count the date-index head at request time so the
-  // valid-future shift changes at UTC midnight without a write. Malformed dates above today are
-  // retained at the head and read separately; they cannot displace a projected page start.
   const logicalRank = (page - 1) * limit;
   const retainedHeadRows = Math.min(limit, Math.max(0, retainedHeadCount - logicalRank));
   const projectedRank = futureCount + Math.max(logicalRank, retainedHeadCount);
@@ -867,15 +638,11 @@ export async function listTracksHubPage(
       rows: [...(headResult?.rows ?? []), ...(projectedRows?.rows.slice(projectedSkip) ?? [])],
     };
   } else if (isShallowHubPage(page, limit)) {
-    // The bounded front of the pager stays on today's direct offset path; the total remains
-    // page-independent and memoized.
     [total, idsResult] = await Promise.all([
       countTracksHub(filters, resolved, today, futureCount),
       db.execute(tracksHubIdPageQuery(filters, limit, (page - 1) * limit, resolved, today)),
     ]);
   } else if (clauses.length > 0) {
-    // Filter combinations are unbounded, so their anchors live only in the existing exact-clause
-    // TTL memo. The first deep request pays one SQL window extraction; later pages seek from it.
     const anchorsPromise = memoizedAggregate(aggregateKey("anchors", clauses), () =>
       extractTracksHubAnchors(filters, resolved, today),
     );
@@ -888,9 +655,6 @@ export async function listTracksHubPage(
       tracksHubSeekIdPageQuery(filters, page, result[1], resolved, today),
     );
   } else {
-    // The crawler highway persists its sparse boundary set. A missing record deliberately falls
-    // back to the old offset once while a detached rebuild starts; a stale record serves by seek
-    // immediately and self-heals in the same non-blocking way.
     const firstQuery = tracksHubIdPageQuery({}, 1, 0);
     const [resolvedTotal, stored, firstResult] = await Promise.all([
       countTracksHub(filters, resolved, today, futureCount),
@@ -926,13 +690,11 @@ export async function listTracksHubPage(
     throw new CatalogueHubPageOutOfRangeError();
   }
 
-  // Step 2: hydrate exactly the page's ids. Empty page (page 1 of an empty result) skips the trip.
   const rows: TracksHubRow[] = [];
 
   if (ids.length > 0) {
     const hydrated = await db.execute(tracksHubHydrateQuery(ids));
 
-    // Re-impose the step-1 order: `in (…)` returns rows in storage order, not list order.
     const byId = new Map(typedRows<TracksHubRow>(hydrated.rows).map((row) => [row.track_id, row]));
 
     for (const id of ids) {
@@ -952,13 +714,6 @@ export async function listTracksHubPage(
   };
 }
 
-/**
- * The whole held count: every track Fluncle holds, findings + catalogue. Drives the masthead's "all
- * N of them" line when a filter is active (so the masthead still names the archive's true size while
- * the filtered count sits by the form). A bare `count(*)`, the cheapest read on the table. On an
- * UNFILTERED view the page read's own total already IS this, so the route reuses it and skips this.
- * Page-independent, so it rides the same TTL memo as the pager's total.
- */
 async function releaseHeadCounts(
   client: Pick<Client, "execute">,
   today: string,
@@ -989,7 +744,6 @@ export async function countAllTracks(now: Date = new Date()): Promise<number> {
   });
 }
 
-/** The shared cutover-safe default total used by the hub, its OG count, and the admin funnel. */
 export async function readDefaultTracksHubTotal(client: Pick<Client, "execute">): Promise<number> {
   const projected = await readProjectedDefaultTrackTotal(client);
   if (projected !== undefined) {
@@ -999,25 +753,10 @@ export async function readDefaultTracksHubTotal(client: Pick<Client, "execute">)
   return Number(typedRows<{ total: number }>(result.rows)[0]?.total ?? 0);
 }
 
-/** A lane chip is only ever a four-digit year. The lane read's `release_date is not null` gate lets
-    an EMPTY-STRING release date through, and `substr('', 1, 4)` is `''` — which rendered a chip with
-    no text at all (a link with no accessible name, axe `link-name`, /tracks 2026-07-26). A partial
-    date short of four characters lands the same way. Both are undated rows the null check missed. */
 function isYearBucket(year: string): boolean {
   return /^\d{4}$/.test(year);
 }
 
-/**
- * Fold per-year counts (newest year first) into one page number per year — the year fast lane. Pure,
- * so it is unit-pinned. Because the list orders `release_date desc`, every release of a later year
- * sorts before any release of an earlier one, so a year's first row lands at the running rank of all
- * later years' rows; its page is `floor(rank / pageSize) + 1`. Undated rows sort last and never move
- * a year, so the lane read excludes them.
- *
- * A bucket that is not a real year is dropped from the LANE but still advances `rank` — it holds real
- * rows on real pages, so skipping its count would misplace every year after it. Order-independent by
- * construction, so it holds whichever end of the sort the empty bucket lands on.
- */
 export function yearPages(
   counts: { n: number; year: string }[],
   pageSize: number,
@@ -1036,13 +775,6 @@ export function yearPages(
   return lane;
 }
 
-/**
- * The year fast lane: every release YEAR present in the (dated) result set, newest first, each
- * mapped to the page its first release lands on. ONE grouped query over the same filtered set the
- * page read uses (composing with any active non-year filter), folded to pages by {@link yearPages} —
- * never a per-year query. The route hides the lane when a year filter is active (a single year needs
- * no time lane), so the filters here carry no year bound in practice.
- */
 export function tracksHubYearLaneQuery(
   filters: TracksHubFilters,
   resolved: ResolvedFilterEntities = {},
@@ -1061,10 +793,7 @@ export function tracksHubYearLaneQuery(
   return {
     args,
     clauses,
-    // Unfiltered (and under any `tracks`-only filter) this references `tracks.release_date` and
-    // nothing else, so the grouped scan is a covering read of
-    // `tracks_release_date_track_id_idx` rather than a drag over the wide row — the embedding BLOBs
-    // on `tracks` are never touched.
+
     sql: `select substr(tracks.release_date, 1, 4) as year, count(*) as n
           from tracks
           ${findingsJoinFor(clauses)}
