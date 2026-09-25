@@ -122,6 +122,14 @@ export const Route = createFileRoute("/")({
         "@context": "https://schema.org",
         "@id": fluncleWebsiteId,
         "@type": "WebSite",
+        // The real-world maker of the site, distinct from `publisher` (the in-universe Fluncle
+        // entity). Out-of-character, the same register as the footer's maker credit.
+        creator: {
+          "@id": "https://www.mauricekleine.com/#maurice",
+          "@type": "Person",
+          name: "Maurice Kleine",
+          url: "https://www.mauricekleine.com/",
+        },
         description: fluncleDescription,
         name: "Fluncle",
         publisher: { "@id": fluncleEntityId },

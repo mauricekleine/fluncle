@@ -62,6 +62,8 @@ Project source code and documentation are licensed under the [Apache License 2.0
 
 The Fluncle name, logo, visual identity, social/profile artwork, generated media assets, track curation data, playlist identity, and other brand assets are not licensed for reuse except where explicitly stated.
 
+Built by [Maurice Kleine](https://www.mauricekleine.com/).
+
 ## Root Workflows
 
 ```bash

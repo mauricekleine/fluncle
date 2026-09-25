@@ -75,7 +75,12 @@ describe("NavFooter SSR anchors", () => {
   it("renders the quiet meta/legal links (privacy + terms)", () => {
     expect(html).toContain('href="/privacy"');
     expect(html).toContain('href="/terms"');
-    expect(html).toContain('aria-label="Legal"');
+    expect(html).toContain('aria-label="Legal and credits"');
+  });
+
+  it("renders the out-of-character maker credit", () => {
+    expect(html).toContain('href="https://www.mauricekleine.com/"');
+    expect(html).toContain("a side quest by maurice kleine");
   });
 
   it("renders the developer docs deep-links via the /docs splat", () => {

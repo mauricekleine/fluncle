@@ -147,6 +147,19 @@ describe("/ head — the structured data", () => {
     expect(website?.publisher).toEqual({ "@id": fluncleEntityId });
   });
 
+  it("credits the site's real-world maker, distinct from the in-universe publisher", () => {
+    const website = schemasOf(headOf({ findings: BAND, lead: LEAD })).find(
+      (schema) => schema["@type"] === "WebSite",
+    );
+
+    expect(website?.creator).toEqual({
+      "@id": "https://www.mauricekleine.com/#maurice",
+      "@type": "Person",
+      name: "Maurice Kleine",
+      url: "https://www.mauricekleine.com/",
+    });
+  });
+
   it("describes the lead plus the band and nothing more", () => {
     const list = itemListOf(headOf({ findings: BAND, lead: LEAD }));
 
