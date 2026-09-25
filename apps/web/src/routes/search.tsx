@@ -1,10 +1,17 @@
-import { Link, createFileRoute, useNavigate, useRouter } from "@tanstack/react-router";
+import {
+  Link,
+  createFileRoute,
+  useNavigate,
+  useRouter,
+  useRouterState,
+} from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { MagnifyingGlassIcon } from "@phosphor-icons/react";
-import { type FormEvent, type ReactNode, useEffect, useRef } from "react";
+import { type FormEvent, type ReactNode, useEffect, useRef, useState } from "react";
 import { Button } from "@fluncle/ui/components/button";
 import { SearchExampleGlyph } from "@/components/search/search-glyph";
-import { SearchResultsList } from "@/components/search/search-results-list";
+import { anchorCredit, SearchResultsList } from "@/components/search/search-results-list";
+import { StyleChips } from "@/components/search/style-chips";
 import { classifySearchQueryKind, emitDiscoveryEvent } from "@/lib/discovery-events";
 import {
   MAX_QUERY_LENGTH,
@@ -13,6 +20,13 @@ import {
   searchPagePath,
 } from "@/lib/search-results";
 import { type SearchPageSearch, parseSearchPageSearch, searchPageHead } from "@/lib/search-page";
+import {
+  parseStyleQuery,
+  STYLE_CHIPS_LINE,
+  styleBySlug,
+  styleMentionedIn,
+  styleTracksPath,
+} from "@/lib/search-styles";
 import { type SearchPageData } from "./-search-page-data";
 
 // `/search` — THE PERSISTENT SEARCH SURFACE.
@@ -38,9 +52,10 @@ import { type SearchPageData } from "./-search-page-data";
 //
 // A public route, so it is loader + `useLoaderData` and no react-query (AGENTS.md). Nothing about
 // this page is live — a result set is a snapshot of an archive that does not change while you read
-// it — and the field commits by SUBMIT rather than by keystroke, deliberately: a debounced
-// navigate-per-character would write a history entry per character and make the back button
-// unusable, which is the very thing this surface exists to provide.
+// it. The field answers AS YOU TYPE for the deterministic tiers (a name, a coordinate, a style word,
+// a title): a settled keystroke REPLACES `?q=` rather than pushing it, so the back button still
+// walks the searches a reader committed, not every character. A sentence that would need the model
+// tier waits for Enter, so typing never spends a model call per pause (docs/search.md).
 //
 // The bare `/search` is indexable and carries the `SearchAction`; any `?q=` view is `noindex,
 // follow` (lib/search-page.ts).
@@ -48,17 +63,30 @@ import { type SearchPageData } from "./-search-page-data";
 /** The resolver arrives by a DYNAMIC import inside the handler, and its types by `import type`, so
     this route module never statically references `lib/server/**` (docs/client-bundle.md, Rule 1). */
 const fetchSearchPage = createServerFn({ method: "GET" })
-  .validator((data: { q?: string }) => ({
-    q: typeof data.q === "string" ? data.q.slice(0, MAX_QUERY_LENGTH) : undefined,
-  }))
+  .validator((data: { like?: string; live?: boolean; q?: string }) => {
+    const { like, q } = parseSearchPageSearch({ like: data.like, q: data.q });
+
+    return { like, live: data.live === true, q };
+  })
   .handler(async ({ data }): Promise<SearchPageData> => {
     const { resolveSearchPageData } = await import("./-search-page-data");
 
-    return resolveSearchPageData(data.q);
+    return resolveSearchPageData(data.q, { like: data.like, live: data.live });
   });
 
+// A settled keystroke marks its history entry live, so the loader knows the query was typed and not
+// committed. The flag rides history STATE, never the URL: a shared or reloaded link is always a
+// committed search.
+declare module "@tanstack/history" {
+  // Module augmentation merges only through an interface.
+  // oxlint-disable-next-line typescript/consistent-type-definitions
+  interface HistoryState {
+    searchLive?: boolean;
+  }
+}
+
 /** What the component reads: the answer, and the query it answered, so both come off one object. */
-type SearchLoaderData = { data: SearchPageData; q: string | undefined };
+type SearchLoaderData = { data: SearchPageData; like: string | undefined; q: string | undefined };
 
 // TanStack canonical option order (validateSearch → loaderDeps → loader → head → component); each
 // step feeds the next's type inference, so the order isn't alphabetical and sort-keys is off here.
@@ -66,12 +94,26 @@ type SearchLoaderData = { data: SearchPageData; q: string | undefined };
 export const Route = createFileRoute("/search")({
   validateSearch: (search: Record<string, unknown>): SearchPageSearch =>
     parseSearchPageSearch(search),
-  loaderDeps: ({ search }: { search: SearchPageSearch }) => ({ q: search.q }),
-  loader: async ({ deps }: { deps: { q: string | undefined } }): Promise<SearchLoaderData> => ({
-    data: await fetchSearchPage({ data: { q: deps.q } }),
+  loaderDeps: ({ search }: { search: SearchPageSearch }) => ({ like: search.like, q: search.q }),
+  loader: async ({ deps, location }): Promise<SearchLoaderData> => ({
+    data: await fetchSearchPage({
+      data: { like: deps.like, live: location.state.searchLive === true, q: deps.q },
+    }),
+    like: deps.like,
     q: deps.q,
   }),
-  head: ({ loaderData }: { loaderData?: SearchLoaderData }) => searchPageHead(loaderData?.q),
+  head: ({ loaderData }: { loaderData?: SearchLoaderData }) =>
+    searchPageHead(
+      loaderData?.q,
+      loaderData?.like === undefined
+        ? undefined
+        : {
+            credit:
+              loaderData.data.status === "answered" && loaderData.data.response.anchor
+                ? anchorCredit(loaderData.data.response.anchor)
+                : undefined,
+          },
+    ),
   component: SearchPage,
 });
 
@@ -91,14 +133,17 @@ function matchCount(count: number): string {
  * (lib/search-results.ts) and each query returns rows against the live archive, because an example
  * that finds nothing teaches the opposite of what it is for.
  */
-function SearchExamples({ label }: { label: string }): ReactNode {
+function SearchExamples({ exclude, label }: { exclude?: string; label: string }): ReactNode {
   return (
     <>
       <p className="search-page-hint" id="search-page-examples-hint">
         {label}
       </p>
       <ul aria-labelledby="search-page-examples-hint" className="search-page-examples">
-        {SEARCH_EXAMPLES.map((example) => (
+        {/* Never the query that just came back empty: offering it again is a loop, not a way on. */}
+        {SEARCH_EXAMPLES.filter(
+          (example) => example.query.toLowerCase() !== (exclude ?? "").trim().toLowerCase(),
+        ).map((example) => (
           <li key={example.query}>
             <Link className="search-example" to={searchPagePath(example.query) as never}>
               <SearchExampleGlyph className="search-example-icon" icon={example.icon} />
@@ -111,32 +156,66 @@ function SearchExamples({ label }: { label: string }): ReactNode {
   );
 }
 
+/** How long a keystroke has to settle before the field asks the archive. */
+const LIVE_SEARCH_DEBOUNCE_MS = 300;
+
 /**
  * The field. A REAL `<form method="get" action="/search">`, so a reader with no JS still searches:
- * the browser's own submit builds exactly the URL this route reads. With JS, the submit handler
- * takes over and navigates client-side to the same URL, which keeps the transition fast and the
- * history stack honest — one entry per committed query, so back and forward walk the searches a
- * reader actually made rather than every character they typed.
+ * the browser's own submit builds exactly the URL this route reads.
  *
- * ── WHY THE INPUT IS UNCONTROLLED, AND KEYED ON THE COMMITTED QUERY ──────────────────────────
- * The committed query is the ONLY source of truth for what this field says, so the field is not a
- * second copy of it living in component state. It is seeded from `q` and keyed on `q`, which means
- * every way the query can change — a submit, a clicked example, a shared link, a back step — mounts
- * a fresh input already reading what the URL says, with no sync effect that could drift from it and
- * no state to reconcile. The value is read off the form at submit, so there is nothing to keep.
+ * ── LIVE AS YOU TYPE, AND HONEST ABOUT THE HISTORY ──────────────────────────────────────────────
+ * A settled keystroke (debounced) navigates with `replace`, so `?q=` always says what the field
+ * says and a reload or a shared link holds the live answer, while the back button still walks the
+ * searches a reader committed rather than every character they typed: the first live keystroke after
+ * a committed search pushes one entry, and every keystroke after it replaces that entry, so the
+ * committed search stays one Back away. The entry is marked live in history state; the loader then
+ * answers a sentence by its words and leaves the language tier for Enter. Enter is a push.
  *
- * The remount costs focus, which matters after a keyboard submit — so a submit sets a flag and the
- * effect below returns focus to the fresh input. A cold load never sets the flag, so arriving on a
- * shared link does not steal focus from the top of the page.
+ * ── WHY THE INPUT IS UNCONTROLLED, AND WHEN IT REMOUNTS ─────────────────────────────────────────
+ * The URL is the one source of truth for what the field says, so the input is seeded from `q` and
+ * remounted when `q` changes from OUTSIDE the field — a clicked example, a shared link, a back step
+ * — with no sync effect that could drift. A `q` the field itself just wrote live is not a reason to
+ * remount: that would drop the caret mid-word. A submit returns focus to the fresh input; a cold
+ * load never steals focus from the top of the page.
  */
-function SearchField({ q }: { q: string | undefined }): ReactNode {
+function SearchField({
+  awaitsEnter,
+  q,
+}: {
+  /** The current answer is a sentence typed live, waiting for Enter to be read as one. */
+  awaitsEnter: boolean;
+  q: string | undefined;
+}): ReactNode {
   const navigate = useNavigate();
+  const router = useRouter();
+  const onLiveEntry = useRouterState({
+    select: (state) => state.location.state.searchLive === true,
+  });
   const inputRef = useRef<HTMLInputElement>(null);
   const submitted = useRef(false);
+  const liveWritten = useRef<string | undefined>(undefined);
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const [fieldKey, setFieldKey] = useState(0);
+  const seenQ = useRef(q);
 
-  // A submit remounts the keyed input (below), which would otherwise drop focus to the body — a bad
-  // place to leave a reader who just pressed Enter. A cold load never sets the flag, so arriving on
-  // a shared link does not steal focus from the top of the page.
+  // A `q` the field did not write itself is an outside change: remount the input to read it.
+  useEffect(() => {
+    if (q === seenQ.current) {
+      return;
+    }
+
+    seenQ.current = q;
+
+    if (liveWritten.current !== undefined && liveWritten.current === (q ?? "")) {
+      return;
+    }
+
+    liveWritten.current = undefined;
+    setFieldKey((key) => key + 1);
+  }, [q]);
+
+  // A submit remounts nothing when the query is unchanged, but a changed one does; either way the
+  // reader who just pressed Enter keeps the field.
   useEffect(() => {
     if (!submitted.current) {
       return;
@@ -144,28 +223,62 @@ function SearchField({ q }: { q: string | undefined }): ReactNode {
 
     submitted.current = false;
     inputRef.current?.focus();
-  }, [q]);
+  }, [q, fieldKey]);
+
+  useEffect(() => () => clearTimeout(timer.current), []);
+
+  const onInput = (value: string): void => {
+    clearTimeout(timer.current);
+    timer.current = setTimeout(() => {
+      const next = value.trim().slice(0, MAX_QUERY_LENGTH);
+
+      if (next === (q ?? "")) {
+        return;
+      }
+
+      liveWritten.current = next;
+      void navigate({
+        // One entry per typing burst: push off a committed search, then keep replacing it.
+        replace: onLiveEntry,
+        resetScroll: false,
+        search: { q: next.length > 0 ? next : undefined },
+        state: { searchLive: true },
+        to: "/search",
+      });
+    }, LIVE_SEARCH_DEBOUNCE_MS);
+  };
 
   const onSubmit = (event: FormEvent<HTMLFormElement>): void => {
     event.preventDefault();
+    clearTimeout(timer.current);
 
     // `FormData.get` widens to `File | string`, which a text input can never be; narrow rather
     // than stringify, so a `File` could never reach the URL as "[object File]".
     const raw = new FormData(event.currentTarget).get("q");
     const next = typeof raw === "string" ? raw.trim() : "";
 
-    // A no-op guard: re-submitting the committed query would push a duplicate history entry and
-    // re-run the loader for the same answer.
-    if (next === (q ?? "")) {
-      return;
-    }
-
-    submitted.current = true;
-
     if (next.length > 0) {
       emitDiscoveryEvent("discovery_search", { kind: classifySearchQueryKind(next) });
     }
 
+    if (next === (q ?? "")) {
+      // The URL already says this. A live answer is asked again in full (the sentence gets its
+      // language tier); anything else would push a duplicate entry for the same answer.
+      if (awaitsEnter || onLiveEntry) {
+        void navigate({
+          replace: true,
+          resetScroll: false,
+          search: { q: next.length > 0 ? next : undefined },
+          state: { searchLive: false },
+          to: "/search",
+        }).then(() => router.invalidate());
+      }
+
+      return;
+    }
+
+    submitted.current = true;
+    liveWritten.current = undefined;
     void navigate({ search: { q: next.length > 0 ? next : undefined }, to: "/search" });
   };
 
@@ -192,9 +305,10 @@ function SearchField({ q }: { q: string | undefined }): ReactNode {
             className="search-page-input"
             defaultValue={q ?? ""}
             id="search-page-q"
-            key={q ?? ""}
+            key={fieldKey}
             maxLength={MAX_QUERY_LENGTH}
             name="q"
+            onInput={(event) => onInput(event.currentTarget.value)}
             placeholder="A name, a coordinate, or the sound of it…"
             ref={inputRef}
             type="search"
@@ -209,27 +323,45 @@ function SearchField({ q }: { q: string | undefined }): ReactNode {
 }
 
 /**
- * Nothing came back, and the page says which KIND of nothing it is. A coordinate that names no
- * finding is a different fact from a name the archive does not hold, and collapsing the two would
- * lose the only useful thing the resolver learned. Either way there is a way onward: the whole list,
- * and the four worked examples.
+ * Nothing came back, and the page still hands you music. The "nothing" itself is said ONCE, by the
+ * live matchline above (the one line a screen reader hears and the one line a reader sees); this
+ * block is only the way onward. A coordinate that names no finding is a different fact from a name
+ * the archive does not hold, so the onward advice branches. A query that MENTIONED a style ("chilled
+ * liquid 174") is offered that sound directly; any other miss gets the whole chip row, and the worked
+ * examples stay below.
  */
 function SearchEmpty({ coordinate, q }: { coordinate: boolean; q: string }): ReactNode {
+  // A style word that found nothing is a style that could not rank: offering it back as the
+  // nearest sound would point at the same empty room.
+  const nearest = coordinate || parseStyleQuery(q) ? undefined : styleMentionedIn(q);
+
   return (
     <div className="search-page-state">
-      <p className="log-index-empty empty-scanlines">
-        {coordinate ? "No finding at that coordinate." : `Nothing out here for “${q}”.`}
-      </p>
+      {nearest ? (
+        <p className="search-page-way-back">
+          Closest sound I’ve got:{" "}
+          <Link className="style-chip" to={styleTracksPath(nearest.slug) as never}>
+            {nearest.label}
+          </Link>
+        </p>
+      ) : undefined}
       {/* The way onward is branch-specific: "try a different name" is wrong advice for a reader who
           typed a coordinate, which is not a name and has no near-miss to try. */}
       <p className="search-page-way-back">
         {coordinate ? "Nothing logged there yet. " : "Try a different name, or "}
         <Link to="/tracks">dig through every track I hold</Link>.
       </p>
+      {nearest || coordinate ? undefined : (
+        <StyleChips
+          className="search-style-chips"
+          label={STYLE_CHIPS_LINE}
+          labelId="search-page-empty-styles"
+        />
+      )}
       {/* Not a boast about queries that always work: this renders straight after the reader's own
           search landed nothing, and scoring a point off them there is exactly what the Mosh Pit Rule
           takes off a surface. It keeps the ratified "Try one of these" stem and adds one word. */}
-      <SearchExamples label="Try one of these instead." />
+      <SearchExamples exclude={q} label="Try one of these instead." />
     </div>
   );
 }
@@ -242,14 +374,17 @@ function SearchEmpty({ coordinate, q }: { coordinate: boolean; q: string }): Rea
  * "Try again" re-runs the loader for the SAME URL (`router.invalidate`), which is what a reader means
  * by it; a `Link` to the current URL would navigate nowhere and refetch nothing.
  */
-function SearchFailed(): ReactNode {
+function SearchFailed({ said = false }: { said?: boolean }): ReactNode {
   const router = useRouter();
 
   return (
     <div className="search-page-state">
-      <p className="log-index-empty empty-scanlines">
-        Couldn&apos;t get an answer out of the archive just then.
-      </p>
+      {/* When the matchline has already said what failed, this block is only the way onward. */}
+      {said ? undefined : (
+        <p className="log-index-empty empty-scanlines">
+          Couldn&apos;t get an answer out of the archive just then.
+        </p>
+      )}
       <p className="search-page-way-back">
         <button
           className="search-page-retry"
@@ -265,9 +400,74 @@ function SearchFailed(): ReactNode {
 }
 
 function SearchPage(): ReactNode {
-  const { data, q } = Route.useLoaderData();
+  const { data, like, q } = Route.useLoaderData();
 
-  return <SearchAnswer data={data} q={q} />;
+  return <SearchAnswer data={data} like={like} q={q} />;
+}
+
+/** What the live matchline says: the one place an outcome is reported, in every committed state. */
+function searchOutcome(
+  data: SearchPageData,
+  q: string | undefined,
+  like: string | undefined,
+): string {
+  if (data.status === "failed") {
+    return "Search did not answer.";
+  }
+
+  if (data.status !== "answered") {
+    return "";
+  }
+
+  // A sentence typed live: its words answer now, and Enter reads it as a sentence.
+  if (data.awaitsEnter) {
+    const count = data.response.results.length + data.response.entities.length;
+
+    return count > 0
+      ? `${matchCount(count)} for “${q ?? ""}”. Press Enter to read it as a sentence.`
+      : `Press Enter to search for “${q ?? ""}”.`;
+  }
+
+  const { response } = data;
+  const total = response.results.length + response.entities.length;
+
+  if (like !== undefined) {
+    if (!response.anchor) {
+      return "No track at that link.";
+    }
+
+    const credit = anchorCredit(response.anchor);
+
+    if (total > 0) {
+      return `${matchFormatter.format(total)} ${total === 1 ? "track" : "tracks"} close to ${credit}.`;
+    }
+
+    return response.degraded
+      ? `Couldn’t line up tracks like ${credit} just then.`
+      : `I haven’t got a read on how ${credit} sounds yet.`;
+  }
+
+  const style = styleBySlug(response.filters?.sound);
+
+  // A style orders the archive rather than matching it, so its count names tracks and the order.
+  if (style && response.results.length > 0) {
+    const count = response.results.length;
+
+    return `${matchFormatter.format(count)} ${count === 1 ? "track" : "tracks"} closest to ${style.label}.`;
+  }
+
+  if (total > 0) {
+    return `${matchCount(total)} for “${q ?? ""}”.`;
+  }
+
+  if (response.kind === "coordinate") {
+    return "No finding at that coordinate.";
+  }
+
+  // The language tier was wanted and could not run: an empty word match is not "nothing out here".
+  return response.degraded
+    ? `Reading by name only right now, and nothing came up for “${q ?? ""}”.`
+    : `Nothing out here for “${q ?? ""}”.`;
 }
 
 /**
@@ -280,23 +480,33 @@ function SearchPage(): ReactNode {
  */
 export function SearchAnswer({
   data,
+  like,
   q,
 }: {
   data: SearchPageData;
+  like?: string;
   q: string | undefined;
 }): ReactNode {
   const answered = data.status === "answered" ? data.response : undefined;
   const total = answered ? answered.results.length + answered.entities.length : 0;
   // What the live region says. The zero state stays silent on purpose: nothing was committed, so
   // there is no outcome to announce, and the worked examples below are the whole content.
-  const outcome =
-    data.status === "failed"
-      ? "Search did not answer."
-      : answered
-        ? total > 0
-          ? `${matchCount(total)} for “${q ?? ""}”.`
-          : `No matches for “${q ?? ""}”.`
-        : "";
+  const outcome = searchOutcome(data, q, like);
+  // A miss is reported ONCE: the matchline carries the "nothing" at the empty state's weight, and
+  // the block under it only offers the way onward.
+  const missed =
+    answered !== undefined &&
+    total === 0 &&
+    like === undefined &&
+    !(data.status === "answered" && data.awaitsEnter === true);
+  // A live answer is on its way: the results say so while the next one loads. Only after mount:
+  // the server renders a settled page, so the first paint must agree with it.
+  const routerPending = useRouterState({ select: (state) => state.status === "pending" });
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => setMounted(true), []);
+
+  const pending = mounted && routerPending;
 
   return (
     <main className="log-plate-stage">
@@ -306,10 +516,13 @@ export function SearchAnswer({
             and the mechanics already print twice below — once in the placeholder and once in the
             zero state's hint. A third copy above them was clutter by definition. */}
         <header className="log-masthead">
-          <h1 className="log-coordinate log-index-title">Search</h1>
+          {/* The sonic view of one track is its own room: it is named for what it holds. */}
+          <h1 className="log-coordinate log-index-title">
+            {like === undefined ? "Search" : "Similar tracks"}
+          </h1>
         </header>
 
-        <SearchField q={q} />
+        <SearchField awaitsEnter={data.status === "answered" && data.awaitsEnter === true} q={q} />
 
         {/* The outcome line, and it is a LIVE REGION that speaks in every committed state rather
             than only the ones with rows. A submit returns focus to the field (SearchField), so a
@@ -320,11 +533,24 @@ export function SearchAnswer({
             A native `<output>`: it carries an implicit `status` role, so there is no `role`
             attribute to keep in step with it. `aria-live` is stated anyway, because `<output>`'s
             implicit politeness is not honoured uniformly across the browser/AT matrix. */}
-        <output aria-live="polite" className="search-page-matchline">
+        <output
+          aria-busy={pending || undefined}
+          aria-live="polite"
+          className={
+            missed
+              ? "search-page-matchline log-index-empty empty-scanlines"
+              : "search-page-matchline"
+          }
+        >
           {outcome}
         </output>
 
         {data.status === "failed" ? <SearchFailed /> : undefined}
+
+        {/* The sonic view's engine was resting: the same retry the fault state offers. */}
+        {like !== undefined && answered?.degraded && total === 0 ? (
+          <SearchFailed said />
+        ) : undefined}
 
         {data.status === "blank" ? (
           <div className="search-page-state">
@@ -338,14 +564,21 @@ export function SearchAnswer({
                   : "Give me a name, a coordinate, or the sound of a track. Try one of these."
               }
             />
+            <StyleChips
+              className="search-style-chips"
+              label={STYLE_CHIPS_LINE}
+              labelId="search-page-styles"
+            />
           </div>
         ) : undefined}
 
-        {answered && total === 0 ? (
+        {missed ? (
           <SearchEmpty coordinate={answered.kind === "coordinate"} q={q ?? ""} />
         ) : undefined}
 
-        {answered && total > 0 ? <SearchResultsList response={answered} /> : undefined}
+        {answered && total > 0 ? (
+          <SearchResultsList response={answered} sonicView={like !== undefined} />
+        ) : undefined}
 
         <footer className="log-plate-footer">
           <Link to="/findings">Back to the archive</Link>

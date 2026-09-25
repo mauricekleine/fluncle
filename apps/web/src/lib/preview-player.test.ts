@@ -1586,3 +1586,40 @@ describe("the intent invariant over the interleavings", () => {
     expect(failures).toEqual([]);
   }, 180_000);
 });
+
+describe("the tether — the trail of seeds a listener followed", () => {
+  it("records each sonic view's seed once, oldest first, and keeps its place on a step back", async () => {
+    installAudio();
+    const [a, b, c] = tracks("seed-a", "seed-b", "seed-c");
+
+    playQueue(tracks("x", "y"), 0, { seed: a });
+    playQueue(tracks("p", "q"), 0, { seed: b });
+    // Stepping back to the first seed's view and playing it again never reorders the cable.
+    playQueue(tracks("x", "y"), 1, { seed: a });
+    playQueue(tracks("m"), 0, { seed: c });
+    playQueue(tracks("n"), 0);
+    await settled();
+
+    expect(readPlayer().trail.map((seed) => seed.id)).toEqual(["seed-a", "seed-b", "seed-c"]);
+  });
+
+  it("keeps the nearest seeds when the rabbit hole runs deeper than the cable", () => {
+    installAudio();
+
+    for (const [index, seed] of tracks("s1", "s2", "s3", "s4", "s5", "s6", "s7").entries()) {
+      playQueue(tracks(`list-${index}`), 0, { seed });
+    }
+
+    expect(readPlayer().trail.map((seed) => seed.id)).toEqual(["s3", "s4", "s5", "s6", "s7"]);
+  });
+
+  it("clears with the player", () => {
+    installAudio();
+    const [seed] = tracks("seed");
+
+    playQueue(tracks("x"), 0, { seed });
+    dismissPlayer();
+
+    expect(readPlayer().trail).toEqual([]);
+  });
+});

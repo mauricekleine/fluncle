@@ -79,7 +79,11 @@ test("Jade hears three tracks from the front door inside a minute, without leavi
 
   await player.getByRole("button", { name: /^Actions for / }).click();
   await page.getByRole("menuitem", { name: "Similar tracks" }).click();
-  await expect(page).toHaveURL(/\/search\?q=tracks(%20|\+)that(%20|\+)sound(%20|\+)like/);
+  await expect(page).toHaveURL(/\/search\?like=e2e-track-/);
+  // The sonic view names its seed once, in the matchline.
+  await expect(page.locator(".search-page-matchline")).toContainText("close to");
+  await expect(page.getByText("Reading by name only right now.", { exact: false })).toHaveCount(0);
+  await expect(page.locator(".search-page-tracks .discovery-row-link").first()).toBeVisible();
   // The player comes along into the results.
   await expect(player).toBeVisible();
 });

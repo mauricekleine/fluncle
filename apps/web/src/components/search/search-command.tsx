@@ -29,7 +29,7 @@ import {
 import { SpotifyIcon } from "@/components/platform-icons";
 import { SearchFilterChips } from "@/components/search/search-filter-chips";
 import { SearchExampleGlyph } from "@/components/search/search-glyph";
-import { anchorCredit } from "@/components/search/search-results-list";
+import { anchorCredit, EntitySoundLine } from "@/components/search/search-results-list";
 import { albumCoverAtSize } from "@/lib/media";
 import {
   classifySearchQueryKind,
@@ -128,6 +128,7 @@ function EntityRow({
       )}
       <span className="search-row-text">
         <span className="search-row-title">{entity.name}</span>
+        <EntitySoundLine entity={entity} />
       </span>
       <CommandShortcut className="search-row-tail">
         <ArrowRightIcon aria-hidden="true" className="search-jump-icon" />

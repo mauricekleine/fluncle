@@ -50,6 +50,11 @@ describe("parseTracksSearch", () => {
     });
   });
 
+  it("keeps a style the lexicon holds and folds any other ?sound= away", () => {
+    expect(parseTracksSearch({ sound: " Liquid " }).sound).toBe("liquid");
+    expect(parseTracksSearch({ sound: "polka" }).sound).toBeUndefined();
+  });
+
   it("folds junk numeric params to undefined (clean defaults)", () => {
     expect(
       parseTracksSearch({ bpmMax: "not-a-number", bpmMin: "-4", yearMax: "", yearMin: "0" }),
@@ -109,9 +114,9 @@ describe("parseTracksHubPayload — the serverFn boundary parses, never casts", 
     const filters: TracksSearch = {
       bpmMax: 180,
       bpmMin: 160,
-      galaxy: "green-sector",
       key: "F minor",
       label: "Hospital Records",
+      sound: "liquid",
       yearMax: 2026,
       yearMin: 2015,
     };
@@ -147,6 +152,23 @@ describe("parseTracksHubPayload — the serverFn boundary parses, never casts", 
     expect("certified" in filters).toBe(false);
   });
 
+  it("strips galaxy — an old ?galaxy= link redirects before any read, so the list never narrows", () => {
+    const { filters } = parseTracksHubPayload(
+      crafted({ filters: { galaxy: "green-sector" }, page: 1 }),
+    );
+
+    expect("galaxy" in filters).toBe(false);
+  });
+
+  it("accepts only a style the lexicon holds", () => {
+    expect(parseTracksHubPayload({ filters: { sound: "neurofunk" }, page: 1 }).filters.sound).toBe(
+      "neurofunk",
+    );
+    expect(() => parseTracksHubPayload(crafted({ filters: { sound: "polka" }, page: 1 }))).toThrow(
+      /sound/,
+    );
+  });
+
   it("rejects a known axis at the wrong type instead of coercing it into a clause", () => {
     expect(() => parseTracksHubPayload(crafted({ filters: { bpmMin: "170" }, page: 1 }))).toThrow(
       /bpmMin/,
@@ -158,8 +180,8 @@ describe("parseTracksHubPayload — the serverFn boundary parses, never casts", 
     expect(() => parseTracksHubPayload(crafted({ filters: { label: "" }, page: 1 }))).toThrow(
       /label/,
     );
-    expect(() => parseTracksHubPayload(crafted({ filters: { galaxy: null }, page: 1 }))).toThrow(
-      /galaxy/,
+    expect(() => parseTracksHubPayload(crafted({ filters: { sound: null }, page: 1 }))).toThrow(
+      /sound/,
     );
   });
 
@@ -182,7 +204,7 @@ describe("parseTracksHubPayload — the serverFn boundary parses, never casts", 
       key: "F minor",
     });
 
-    for (const field of ["galaxy", "key", "label"] as const) {
+    for (const field of ["key", "label", "sound"] as const) {
       expect(() =>
         parseTracksHubPayload(crafted({ filters: { [field]: ` ${field} ` }, page: 1 })),
       ).toThrow(new RegExp(field));
@@ -299,9 +321,9 @@ describe("buildTracksHref", () => {
     const filters: TracksSearch = {
       bpmMax: 180,
       bpmMin: 160,
-      galaxy: "green-sector",
       key: "F minor",
       label: "Hospital Records",
+      sound: "liquid",
       yearMax: 2026,
       yearMin: 2015,
     };
@@ -313,7 +335,7 @@ describe("buildTracksHref", () => {
     expect(href).toContain("bpmMax=180");
     expect(href).toContain("key=F+minor");
     expect(href).toContain("label=Hospital+Records");
-    expect(href).toContain("galaxy=green-sector");
+    expect(href).toContain("sound=liquid");
     expect(href).toContain("page=2");
   });
 
@@ -321,9 +343,9 @@ describe("buildTracksHref", () => {
     const filters: TracksSearch = {
       bpmMax: 180,
       bpmMin: 160,
-      galaxy: "green-sector",
       key: "F minor",
       label: "Hospital Records",
+      sound: "neurofunk",
       yearMax: 2026,
       yearMin: 2015,
     };

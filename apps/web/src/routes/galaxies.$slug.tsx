@@ -3,6 +3,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { GraphLink } from "@/components/graph-link";
 import { FindingsGridList } from "@/components/graph-sections";
 import { galaxyIntroLine } from "@/lib/graph-prose";
+import { galaxySoundLine } from "@/lib/galaxy-sound";
 import { StoryNotFoundState } from "@/components/stories/stories-states";
 import { siteUrl } from "@/lib/fluncle-links";
 import { findingsCount } from "@/lib/format";
@@ -92,6 +93,7 @@ export const Route = createFileRoute("/galaxies/$slug")({
 function GalaxyPage() {
   const { adjacent, findings, galaxy } = Route.useLoaderData();
   const grid = findings.filter((finding) => finding.logId);
+  const sound = galaxySoundLine(galaxy.slug);
 
   return (
     <main className="log-plate-stage">
@@ -99,6 +101,7 @@ function GalaxyPage() {
         <header className="log-masthead">
           <p className="log-nameplate">Fluncle's Findings</p>
           <h1 className="log-coordinate log-index-title galaxy-title">{galaxy.name}</h1>
+          {sound ? <p className="log-index-intro">{sound}</p> : undefined}
           <p className="log-index-intro">{galaxyIntroLine(galaxy.memberCount)}</p>
         </header>
 

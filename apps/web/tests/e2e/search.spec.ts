@@ -314,6 +314,15 @@ test("a style ranks the seeded catalogue by its anchor artists' sound", async ({
   }
 
   expect(rawHtml).not.toContain("Reading by name only right now.");
+
+  await page.goto(`/tracks?sound=${SEEDED_STYLE.slug}`, { waitUntil: "networkidle" });
+  await expect(page.locator(".log-index-intro")).toContainText("closest to Liquid first");
+
+  const rankedIds = await page
+    .locator("a[href^='/track/e2e-style-']")
+    .evaluateAll((links) => links.map((link) => link.getAttribute("href")?.split("/").at(-1)));
+
+  expect(rankedIds).toEqual(SEEDED_STYLE.rankedTrackIds);
 });
 
 test("a coordinate resolves on the page WITHOUT bouncing the URL away", async ({ page }) => {

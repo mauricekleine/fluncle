@@ -18,6 +18,7 @@ import { buttonVariants } from "@fluncle/ui/components/button";
 
 type PlayableListValue = {
   continuation?: QueueContinuation;
+  seed?: QueueTrack;
   tracks: QueueTrack[];
 };
 
@@ -26,25 +27,32 @@ const PlayableListContext = createContext<PlayableListValue | undefined>(undefin
 export function PlayableList({
   children,
   nextPageHref,
+  seed,
   tracks,
 }: {
   children: ReactNode;
 
   nextPageHref?: string;
+  seed?: QueueTrack;
   tracks: QueueTrack[];
 }): ReactNode {
   const href = useRouterState({ select: (state) => state.location.href });
   const value = useMemo<PlayableListValue>(
     () => ({
       continuation: nextPageHref ? { href: nextPageHref, kind: "page" } : undefined,
+      seed,
       tracks,
     }),
-    [nextPageHref, tracks],
+    [nextPageHref, seed, tracks],
   );
 
   useEffect(() => {
     if (tracks.length > 0 && claimPageContinuation(href)) {
-      playQueue(tracks, 0, { continuation: value.continuation, origin: "automatic" });
+      playQueue(tracks, 0, {
+        continuation: value.continuation,
+        origin: "automatic",
+        seed: value.seed,
+      });
     }
 
     // oxlint-disable-next-line react-hooks/exhaustive-deps
@@ -80,7 +88,7 @@ function useListPlay(track: QueueTrack): {
     const index = list ? list.tracks.findIndex((item) => item.id === track.id) : -1;
 
     if (list && index >= 0) {
-      playQueue(list.tracks, index, { continuation: list.continuation });
+      playQueue(list.tracks, index, { continuation: list.continuation, seed: list.seed });
 
       return;
     }

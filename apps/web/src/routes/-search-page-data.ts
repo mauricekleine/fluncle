@@ -1,35 +1,61 @@
 import * as Sentry from "@sentry/cloudflare";
 import { MIN_QUERY_LENGTH, type SearchResponse } from "@/lib/search-results";
 import { logEvent } from "@/lib/server/log";
-import { searchArchive } from "@/lib/server/search";
+import { searchArchive, searchLikeTrack } from "@/lib/server/search";
 
 export const SEARCH_PAGE_LIMIT = 40;
 
 export type SearchPageData =
   | { status: "blank" }
-  | { response: SearchResponse; status: "answered" }
+  | {
+      awaitsEnter?: boolean;
+      response: SearchResponse;
+      status: "answered";
+    }
   | { status: "failed" };
 
-export async function resolveSearchPageData(query: string | undefined): Promise<SearchPageData> {
+function pageResponse(response: SearchResponse): SearchResponse {
+  return {
+    anchor: response.anchor,
+    degraded: response.degraded,
+    entities: response.entities,
+    filters: response.filters,
+    kind: response.kind,
+    redirect: response.redirect,
+    results: response.results,
+  };
+}
+
+export async function resolveSearchPageData(
+  query: string | undefined,
+  options: {
+    like?: string;
+    live?: boolean;
+  } = {},
+): Promise<SearchPageData> {
   const q = (query ?? "").trim();
 
-  if (q.length < MIN_QUERY_LENGTH) {
-    return { status: "blank" };
-  }
-
   try {
-    const response = await searchArchive({ limit: SEARCH_PAGE_LIMIT, q });
+    if (options.like !== undefined) {
+      const liked = await searchLikeTrack({ limit: SEARCH_PAGE_LIMIT, trackId: options.like });
+
+      return {
+        response: pageResponse(
+          liked ?? { degraded: false, entities: [], kind: "sonic", results: [] },
+        ),
+        status: "answered",
+      };
+    }
+
+    if (q.length < MIN_QUERY_LENGTH) {
+      return { status: "blank" };
+    }
+
+    const response = await searchArchive({ deferModel: options.live, limit: SEARCH_PAGE_LIMIT, q });
 
     return {
-      response: {
-        anchor: response.anchor,
-        degraded: response.degraded,
-        entities: response.entities,
-        filters: response.filters,
-        kind: response.kind,
-        redirect: response.redirect,
-        results: response.results,
-      },
+      ...(response.modelDeferred ? { awaitsEnter: true } : {}),
+      response: pageResponse(response),
       status: "answered",
     };
   } catch (error) {

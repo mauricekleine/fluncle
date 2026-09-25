@@ -2,8 +2,10 @@ import { MagnifyingGlassIcon } from "@phosphor-icons/react";
 import { Link } from "@tanstack/react-router";
 import { type ReactNode } from "react";
 import { SearchExampleGlyph } from "@/components/search/search-glyph";
+import { StyleChips } from "@/components/search/style-chips";
 import { useIsApple, useSearchController } from "@/components/search/search-command";
 import { SEARCH_EXAMPLES, searchPagePath } from "@/lib/search-results";
+import { STYLE_CHIPS_LINE } from "@/lib/search-styles";
 
 export function FrontDoorSearch(): ReactNode {
   const { open } = useSearchController();
@@ -38,6 +40,14 @@ export function FrontDoorSearch(): ReactNode {
           </li>
         ))}
       </ul>
+
+      {/* The way in for a stranger who knows no subgenre words: tap a sound, get the list ranked
+          closest to it (`/tracks?sound=`). */}
+      <StyleChips
+        className="search-style-chips"
+        label={STYLE_CHIPS_LINE}
+        labelId="fd-search-styles"
+      />
     </div>
   );
 }

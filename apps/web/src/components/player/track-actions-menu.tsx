@@ -23,7 +23,7 @@ export function TrackActionsMenu({
   className?: string;
 
   side?: "bottom" | "top";
-  track: Pick<QueueTrack, "artists" | "spotifyUrl" | "title">;
+  track: Pick<QueueTrack, "artists" | "id" | "similar" | "spotifyUrl" | "title">;
 }): ReactNode {
   const credit = trackCredit(track);
 
@@ -52,12 +52,14 @@ export function TrackActionsMenu({
             Listen on Spotify
           </DropdownMenuItem>
         ) : null}
-        <DropdownMenuItem
-          render={<Link data-discovery="similar" to={similarSearchHref(track) as never} />}
-        >
-          <WaveformIcon aria-hidden="true" className="size-4" />
-          Similar tracks
-        </DropdownMenuItem>
+        {track.similar === false ? null : (
+          <DropdownMenuItem
+            render={<Link data-discovery="similar" to={similarSearchHref(track) as never} />}
+          >
+            <WaveformIcon aria-hidden="true" className="size-4" />
+            Similar tracks
+          </DropdownMenuItem>
+        )}
       </DropdownMenuContent>
     </DropdownMenu>
   );

@@ -3,12 +3,18 @@ import { fluncleWebsiteId, siteUrl } from "./fluncle-links";
 import { jsonLdScript } from "./json-ld";
 import { textParam } from "./search-params";
 
-export type SearchPageSearch = { q?: string };
+export type SearchPageSearch = { like?: string; q?: string };
+
+const TRACK_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
 
 export function parseSearchPageSearch(search: Record<string, unknown>): SearchPageSearch {
   const q = textParam(search["q"]);
+  const like = textParam(search["like"]);
 
-  return { q: q === undefined ? undefined : q.slice(0, MAX_QUERY_LENGTH) };
+  return {
+    like: like !== undefined && TRACK_ID_PATTERN.test(like) ? like : undefined,
+    q: q === undefined ? undefined : q.slice(0, MAX_QUERY_LENGTH),
+  };
 }
 
 export const searchPageTitle = "Search the drum & bass archive · Fluncle";
@@ -19,10 +25,15 @@ export function searchPageMetaTitle(query: string | undefined): string {
   return query === undefined ? searchPageTitle : `Search: ${query} · Fluncle`;
 }
 
-export function searchPageHead(query: string | undefined) {
-  const indexable = query === undefined;
+export function searchPageHead(query: string | undefined, like?: { credit?: string }) {
+  const indexable = query === undefined && like === undefined;
   const canonical = `${siteUrl}/search`;
-  const title = searchPageMetaTitle(query);
+  const title =
+    like === undefined
+      ? searchPageMetaTitle(query)
+      : like.credit === undefined
+        ? searchPageMetaTitle(query)
+        : `Tracks like ${like.credit} · Fluncle`;
   const description = searchPageDescription;
   const ogImage = `${siteUrl}/fluncle-cover.png`;
 
