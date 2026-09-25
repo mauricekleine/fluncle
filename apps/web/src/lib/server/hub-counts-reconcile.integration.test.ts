@@ -84,15 +84,15 @@ describe("reconcileHubCounts — the grouped correction", () => {
     await db.execute(`update artists set rankable_track_count = 9 where id = 'art-1'`);
     const result = await reconcileHubCounts();
     row = await db.execute(`select rankable_track_count as n from artists where id = 'art-1'`);
-    expect(result.artists).toEqual({ corrected: 1, deferred: 0 });
+    expect(result.artists).toEqual({ corrected: 1, deferred: 0, latestCorrected: 0 });
     expect(Number(row.rows[0]?.n ?? -1)).toBe(1);
   });
   it("corrects a drifted counter on all three tables and reports one row each", async () => {
     const result = await reconcileHubCounts();
 
-    expect(result.labels).toEqual({ corrected: 1, deferred: 0 });
-    expect(result.albums).toEqual({ corrected: 1, deferred: 0 });
-    expect(result.artists).toEqual({ corrected: 1, deferred: 0 });
+    expect(result.labels).toEqual({ corrected: 1, deferred: 0, latestCorrected: 0 });
+    expect(result.albums).toEqual({ corrected: 1, deferred: 0, latestCorrected: 0 });
+    expect(result.artists).toEqual({ corrected: 1, deferred: 0, latestCorrected: 0 });
     expect(await counts("labels", "lab-1")).toEqual({ certified: 2, renderable: 3 });
     expect(await counts("albums", "alb-1")).toEqual({ certified: 2, renderable: 3 });
     expect(await counts("artists", "art-1")).toEqual({ certified: 2, renderable: 3 });
@@ -113,7 +113,7 @@ describe("reconcileHubCounts — the grouped correction", () => {
 
     const result = await reconcileHubCounts();
 
-    expect(result.labels).toEqual({ corrected: 1, deferred: 0 });
+    expect(result.labels).toEqual({ corrected: 1, deferred: 0, latestCorrected: 0 });
     expect(await counts("labels", "lab-1")).toEqual({ certified: 2, renderable: 3 });
   });
 
@@ -122,7 +122,7 @@ describe("reconcileHubCounts — the grouped correction", () => {
 
     const result = await reconcileHubCounts();
 
-    expect(result.albums).toEqual({ corrected: 1, deferred: 0 });
+    expect(result.albums).toEqual({ corrected: 1, deferred: 0, latestCorrected: 0 });
     expect(await counts("albums", "alb-1")).toEqual({ certified: 2, renderable: 3 });
   });
 
@@ -130,9 +130,9 @@ describe("reconcileHubCounts — the grouped correction", () => {
     await reconcileHubCounts();
     const second = await reconcileHubCounts();
 
-    expect(second.labels).toEqual({ corrected: 0, deferred: 0 });
-    expect(second.albums).toEqual({ corrected: 0, deferred: 0 });
-    expect(second.artists).toEqual({ corrected: 0, deferred: 0 });
+    expect(second.labels).toEqual({ corrected: 0, deferred: 0, latestCorrected: 0 });
+    expect(second.albums).toEqual({ corrected: 0, deferred: 0, latestCorrected: 0 });
+    expect(second.artists).toEqual({ corrected: 0, deferred: 0, latestCorrected: 0 });
   });
 
   it("is idempotent — a third pass still writes nothing and reports nothing", async () => {
@@ -165,7 +165,7 @@ describe("reconcileHubCounts — the zero-truth pass", () => {
 
     const result = await reconcileHubCounts();
 
-    expect(result.labels).toEqual({ corrected: 1, deferred: 0 });
+    expect(result.labels).toEqual({ corrected: 1, deferred: 0, latestCorrected: 0 });
     expect(await counts("labels", "lab-1")).toEqual({ certified: 0, renderable: 0 });
   });
 
@@ -175,8 +175,8 @@ describe("reconcileHubCounts — the zero-truth pass", () => {
 
     const result = await reconcileHubCounts();
 
-    expect(result.albums).toEqual({ corrected: 1, deferred: 0 });
-    expect(result.artists).toEqual({ corrected: 1, deferred: 0 });
+    expect(result.albums).toEqual({ corrected: 1, deferred: 0, latestCorrected: 0 });
+    expect(result.artists).toEqual({ corrected: 1, deferred: 0, latestCorrected: 0 });
     expect(await counts("albums", "alb-1")).toEqual({ certified: 0, renderable: 0 });
     expect(await counts("artists", "art-1")).toEqual({ certified: 0, renderable: 0 });
   });
@@ -186,7 +186,7 @@ describe("reconcileHubCounts — the zero-truth pass", () => {
 
     const result = await reconcileHubCounts();
 
-    expect(result.labels).toEqual({ corrected: 1, deferred: 0 });
+    expect(result.labels).toEqual({ corrected: 1, deferred: 0, latestCorrected: 0 });
     expect(await counts("labels", "lab-empty")).toEqual({ certified: 0, renderable: 0 });
   });
 
@@ -196,7 +196,7 @@ describe("reconcileHubCounts — the zero-truth pass", () => {
 
     const result = await reconcileHubCounts();
 
-    expect(result.labels).toEqual({ corrected: 1, deferred: 0 });
+    expect(result.labels).toEqual({ corrected: 1, deferred: 0, latestCorrected: 0 });
     expect(await counts("labels", "lab-1")).toEqual({ certified: 0, renderable: 0 });
   });
 });
@@ -209,8 +209,7 @@ describe("reconcileHubCounts — the pinned artists source (orphaned edges)", ()
 
     const result = await reconcileHubCounts();
 
-    expect(result.artists).toEqual({ corrected: 1, deferred: 0 });
-
+    expect(result.artists).toEqual({ corrected: 1, deferred: 0, latestCorrected: 0 });
     expect(await counts("artists", "art-1")).toEqual({ certified: 2, renderable: 2 });
   });
 
@@ -222,7 +221,7 @@ describe("reconcileHubCounts — the pinned artists source (orphaned edges)", ()
 
     const edges = await db.execute(`select count(*) as n from track_artists`);
     expect(Number(edges.rows[0]?.n ?? 0)).toBe(3);
-    expect(result.artists).toEqual({ corrected: 1, deferred: 0 });
+    expect(result.artists).toEqual({ corrected: 1, deferred: 0, latestCorrected: 0 });
     expect(await counts("artists", "art-1")).toEqual({ certified: 0, renderable: 0 });
   });
 });
@@ -452,9 +451,21 @@ describe("reconcileHubCounts — parity with the whole-graph correction", () => 
       expect(expected.labels).toBeGreaterThan(0);
       expect(expected.albums).toBeGreaterThan(0);
       expect(expected.artists).toBeGreaterThan(0);
-      expect(result.labels).toEqual({ corrected: expected.labels, deferred: 0 });
-      expect(result.albums).toEqual({ corrected: expected.albums, deferred: 0 });
-      expect(result.artists).toEqual({ corrected: expected.artists, deferred: 0 });
+      expect(result.labels).toEqual({
+        corrected: expected.labels,
+        deferred: 0,
+        latestCorrected: 0,
+      });
+      expect(result.albums).toEqual({
+        corrected: expected.albums,
+        deferred: 0,
+        latestCorrected: 0,
+      });
+      expect(result.artists).toEqual({
+        corrected: expected.artists,
+        deferred: 0,
+        latestCorrected: 0,
+      });
       expect(result.next).toBeNull();
       expect(await counterSnapshot(db)).toEqual(await counterSnapshot(oracleDb));
     },
@@ -548,7 +559,7 @@ describe("reconcileHubCounts — bounded statement shape", () => {
       expect(sql).toMatch(/^\s*with page as \(/);
       expect(sql).not.toMatch(/\b(insert|update|delete)\b/);
       expect(sql).toMatch(/where id > \?\s+order by id\s+limit \?/);
-      expect(argsOf(statement).at(-1)).toBe(pageSize);
+      expect(argsOf(statement)[1]).toBe(pageSize);
     }
 
     expect(recorder.batches.length).toBeGreaterThan(0);
@@ -576,9 +587,9 @@ describe("reconcileHubCounts — bounded statement shape", () => {
 
     expect(recorder.batches).toEqual([]);
     expect(result).toMatchObject({
-      albums: { corrected: 0, deferred: 0 },
-      artists: { corrected: 0, deferred: 0 },
-      labels: { corrected: 0, deferred: 0 },
+      albums: { corrected: 0, deferred: 0, latestCorrected: 0 },
+      artists: { corrected: 0, deferred: 0, latestCorrected: 0 },
+      labels: { corrected: 0, deferred: 0, latestCorrected: 0 },
     });
   });
 });
@@ -611,7 +622,7 @@ describe("reconcileHubCounts — a maintained delta between read and write", () 
 
     const result = await reconcileHubCounts();
 
-    expect(result.labels).toEqual({ corrected: 1, deferred: 0 });
+    expect(result.labels).toEqual({ corrected: 1, deferred: 0, latestCorrected: 0 });
     expect(await counts("labels", "lab-1")).toEqual({ certified: 2, renderable: 4 });
   });
 
@@ -630,8 +641,7 @@ describe("reconcileHubCounts — a maintained delta between read and write", () 
 
     const result = await reconcileHubCounts();
 
-    expect(result.labels).toEqual({ corrected: 0, deferred: 1 });
-
+    expect(result.labels).toEqual({ corrected: 0, deferred: 1, latestCorrected: 0 });
     expect(await counts("labels", "lab-1")).toEqual({ certified: 9, renderable: 14 });
     const markers = await db.execute({
       args: [DUE_WORK_SOURCE_REPAIR_KIND],
@@ -642,7 +652,107 @@ describe("reconcileHubCounts — a maintained delta between read and write", () 
 
     wrapped = undefined;
     const next = await reconcileHubCounts();
-    expect(next.labels).toEqual({ corrected: 1, deferred: 0 });
+    expect(next.labels).toEqual({ corrected: 1, deferred: 0, latestCorrected: 0 });
     expect(await counts("labels", "lab-1")).toEqual({ certified: 2, renderable: 5 });
+  });
+});
+
+describe("latest released date reconciliation", () => {
+  it("fills only differing dates, ignores future and malformed dates, and clears deleted truth", async () => {
+    await db.batch(
+      [
+        "update tracks set release_date = '2026-01-15' where track_id = 't-cert-0000000000000a'",
+        "update tracks set release_date = '2999-01-01' where track_id = 't-cert-0000000000000b'",
+        "update tracks set release_date = 'bad-date' where track_id = 't-cat-00000000000000a'",
+      ],
+      "write",
+    );
+    const first = await reconcileHubCounts();
+    for (const table of ["labels", "albums", "artists"] as const) {
+      expect(first[table].latestCorrected).toBe(1);
+      const stored = await db.execute(
+        `select latest_release_date from ${table} where id = '${table === "labels" ? "lab-1" : table === "albums" ? "alb-1" : "art-1"}'`,
+      );
+      expect(stored.rows[0]?.latest_release_date).toBe("2026-01-15");
+    }
+    const second = await reconcileHubCounts();
+    expect(second.labels.latestCorrected).toBe(0);
+    expect(second.albums.latestCorrected).toBe(0);
+    expect(second.artists.latestCorrected).toBe(0);
+    await db.execute("delete from tracks where track_id = 't-cert-0000000000000a'");
+    const third = await reconcileHubCounts();
+    expect(third.labels.latestCorrected).toBe(1);
+    expect(third.albums.latestCorrected).toBe(1);
+    expect(third.artists.latestCorrected).toBe(1);
+  });
+
+  it("counts neither a dismissed nor a duplicate release as the latest one", async () => {
+    await db.batch(
+      [
+        "update tracks set release_date = '2026-01-15' where track_id = 't-cert-0000000000000a'",
+        "update tracks set release_date = '2026-03-01', dismissed_at = '2026-03-02' where track_id = 't-cat-00000000000000a'",
+        "update tracks set release_date = '2026-02-01', duplicate_of_track_id = 't-cert-0000000000000a' where track_id = 't-cert-0000000000000b'",
+      ],
+      "write",
+    );
+    await reconcileHubCounts();
+    for (const [table, id] of [
+      ["labels", "lab-1"],
+      ["albums", "alb-1"],
+      ["artists", "art-1"],
+    ] as const) {
+      const stored = await db.execute({
+        args: [id],
+        sql: `select latest_release_date from ${table} where id = ?`,
+      });
+      expect(stored.rows[0]?.latest_release_date, table).toBe("2026-01-15");
+    }
+  });
+
+  it("does not create due work for a date-only correction", async () => {
+    await setCounts("labels", "lab-1", { certified: 2, renderable: 3 });
+    await setCounts("albums", "alb-1", { certified: 2, renderable: 3 });
+    await setCounts("artists", "art-1", { certified: 2, renderable: 3 });
+    await db.execute("update artists set rankable_track_count = 1 where id = 'art-1'");
+    await db.execute(
+      "update tracks set release_date = '2026-01-15' where track_id = 't-cert-0000000000000a'",
+    );
+    const result = await reconcileHubCounts();
+    expect(result.labels).toEqual({ corrected: 0, deferred: 0, latestCorrected: 1 });
+    expect(result.albums).toEqual({ corrected: 0, deferred: 0, latestCorrected: 1 });
+    expect(result.artists).toEqual({ corrected: 0, deferred: 0, latestCorrected: 1 });
+    const markers = await db.execute({
+      args: [DUE_WORK_SOURCE_REPAIR_KIND],
+      sql: "select subject_id from due_work where work_kind = ?",
+    });
+    expect(markers.rows).toHaveLength(0);
+  });
+});
+
+describe("latest date guard", () => {
+  it("re-reads once and defers a date correction whose guard loses twice", async () => {
+    await reconcileHubCounts();
+    await db.execute(
+      "update tracks set release_date = '2026-01-15' where track_id = 't-cert-0000000000000a'",
+    );
+    let moves = 0;
+    wrapped = recordingClient(db, async (statements) => {
+      if (
+        moves < 2 &&
+        statements.some((statement) =>
+          sqlOf(statement).includes("update labels set latest_release_date"),
+        )
+      ) {
+        moves += 1;
+        await db.execute({
+          args: [moves === 1 ? "2025-01-01" : "2024-01-01"],
+          sql: "update labels set latest_release_date = ? where id = 'lab-1'",
+        });
+      }
+    }).client;
+    const result = await reconcileHubCounts();
+    expect(result.labels).toEqual({ corrected: 0, deferred: 1, latestCorrected: 0 });
+    const stored = await db.execute("select latest_release_date from labels where id = 'lab-1'");
+    expect(stored.rows[0]?.latest_release_date).toBe("2024-01-01");
   });
 });

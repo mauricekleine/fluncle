@@ -6,6 +6,7 @@ import {
   keepGoing,
   pausePreview,
   playQueue,
+  playQueueWhenLoaded,
   type QueueTrack,
   readPlayer,
   resetPreviewPlayer,
@@ -838,6 +839,63 @@ describe("keep going — a late answer never overrides the listener", () => {
     answer.resolve(tracks("x", "y"));
 
     expect(await outcome).toBe("moved");
+    expect(element.src).toBe("/api/preview/x");
+  });
+});
+
+describe("a list loaded on a press plays only while it is still the newest intent", () => {
+  it("a slower answer for an earlier press never replaces the newer press's list", async () => {
+    const element = installBrowserAudio();
+    const first = deferred<QueueTrack[]>();
+    const second = deferred<QueueTrack[]>();
+    const earlier = playQueueWhenLoaded(() => first.promise);
+    const later = playQueueWhenLoaded(() => second.promise);
+
+    second.resolve(tracks("b1", "b2"));
+    expect(await later).toBe("played");
+    first.resolve(tracks("a1", "a2"));
+    expect(await earlier).toBe("stale");
+
+    expect(readPlayer().queue?.tracks.map((track) => track.id)).toEqual(["b1", "b2"]);
+    expect(element.src).toBe("/api/preview/b1");
+  });
+
+  it("an answer that lands after a pause starts nothing", async () => {
+    installBrowserAudio();
+    const answer = deferred<QueueTrack[]>();
+    const outcome = playQueueWhenLoaded(() => answer.promise);
+
+    pausePreview();
+    answer.resolve(tracks("a"));
+
+    expect(await outcome).toBe("stale");
+    expect(readPlayer()).toMatchObject({ queue: undefined, status: "idle" });
+  });
+
+  it("an answer that lands after its control has gone starts nothing", async () => {
+    installBrowserAudio();
+    const answer = deferred<QueueTrack[]>();
+    let mounted = true;
+    const outcome = playQueueWhenLoaded(() => answer.promise, { stillWanted: () => mounted });
+
+    mounted = false;
+    answer.resolve(tracks("a"));
+
+    expect(await outcome).toBe("stale");
+    expect(readPlayer()).toMatchObject({ queue: undefined, status: "idle" });
+  });
+
+  it("an empty answer is reported, not played", async () => {
+    installBrowserAudio();
+
+    expect(await playQueueWhenLoaded(() => Promise.resolve([]))).toBe("empty");
+    expect(readPlayer().queue).toBeUndefined();
+  });
+
+  it("an answer that lands while nothing newer happened plays from the top", async () => {
+    const element = installBrowserAudio();
+
+    expect(await playQueueWhenLoaded(() => Promise.resolve(tracks("x", "y")))).toBe("played");
     expect(element.src).toBe("/api/preview/x");
   });
 });

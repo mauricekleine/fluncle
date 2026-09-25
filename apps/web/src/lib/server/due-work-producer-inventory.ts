@@ -406,6 +406,13 @@ export const DUE_WORK_REVIEWED_NONPRODUCER_WRITERS = [
     sites: ["hub-counts.ts:update:artists:f6f4cece"],
   },
   {
+    disposition: "non-eligibility",
+    file: "hub-counts-reconcile.ts",
+    rationale:
+      "Corrects a derived latest-release ordering date; due-work evaluators read source track dates, not this entity mirror.",
+    sites: ["hub-counts-reconcile.ts:update:dynamic:7b9f1232"],
+  },
+  {
     disposition: "test-fixture",
     file: "integration-db.ts",
     rationale: "Seeds isolated integration databases and is not a production mutation surface.",
@@ -735,6 +742,12 @@ export const GOAL_D_REVIEWED_NONPROJECTION_WRITERS = [
     file: "hub-counts.ts",
     rationale: "Updates maintained entity and mixability counters, not Goal D source facts.",
     sites: ["hub-counts.ts:update:dynamic:4b68e04a"],
+  },
+  {
+    disposition: "derived-projection-write",
+    file: "hub-counts-reconcile.ts",
+    rationale: "Corrects the maintained latest-release date from track truth, not a source fact.",
+    sites: ["hub-counts-reconcile.ts:update:dynamic:7b9f1232"],
   },
   {
     disposition: "test-fixture",

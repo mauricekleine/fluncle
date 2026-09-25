@@ -4,7 +4,12 @@ import { hasPreviewSource } from "../track-preview";
 import { parseArtistsJson } from "./artists";
 import { listedArtistWhere } from "./artist-visibility";
 import { getDb, typedRows } from "./db";
-import { datedReleaseByTodaySql, releaseTodayUtc, releaseWindowLowerBound } from "./release-day";
+import {
+  datedReleaseByTodaySql,
+  FRESH_WINDOW_DAYS,
+  releaseTodayUtc,
+  releaseWindowLowerBound,
+} from "./release-day";
 import {
   type CatalogueTrackItem,
   FINDINGS_FROM,
@@ -41,7 +46,7 @@ export function leadArtistAvatarUrl(row: LeadArtistRow): string | undefined {
   });
 }
 
-export const FRESH_WINDOW_DAYS = 30;
+export { FRESH_WINDOW_DAYS } from "./release-day";
 
 export const FRESH_FINDINGS_LIMIT = 60;
 export const FRESH_CATALOGUE_LIMIT = 300;

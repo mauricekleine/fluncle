@@ -26,7 +26,11 @@ export type ReconcileTable = (typeof RECONCILE_TABLES)[number];
 
 export type ReconcileCursor = { afterId: null | string; table: ReconcileTable };
 
-export type ReconcileTableResult = { corrected?: number; deferred?: number };
+export type ReconcileTableResult = {
+  corrected?: number;
+  deferred?: number;
+  latestCorrected?: number;
+};
 
 export type ReconcileHubCountsResponse = {
   albums?: ReconcileTableResult;
@@ -53,6 +57,7 @@ export type ReconcileHubCountsSummary = {
   errors: number;
   gateState?: string;
   labels: null | number;
+  latestCorrected: null | number;
   ok: boolean;
 
   partial: boolean;
@@ -72,7 +77,9 @@ export type ReconcileHubCountsDeps = {
   reconcile: (cursor: ReconcileCursor | null) => Promise<ReconcileHubCountsResponse | undefined>;
 };
 
-type Totals = Record<ReconcileTable, null | { corrected: number; deferred: number }>;
+type TableTotals = { corrected: number; deferred: number; latest: null | number };
+
+type Totals = Record<ReconcileTable, null | TableTotals>;
 
 type Walk = {
   cursor: ReconcileCursor | null;
@@ -90,6 +97,14 @@ function correctedOf(table: ReconcileTableResult | undefined): null | number {
 
 function deferredOf(table: ReconcileTableResult | undefined): number {
   return typeof table?.deferred === "number" ? table.deferred : 0;
+}
+
+function latestOf(table: ReconcileTableResult | undefined): null | number {
+  return typeof table?.latestCorrected === "number" ? table.latestCorrected : null;
+}
+
+function addLatest(running: null | number, value: null | number): null | number {
+  return value === null ? running : (running ?? 0) + value;
 }
 
 export function parseReconcileCursor(value: unknown): ReconcileCursor | null {
@@ -125,7 +140,11 @@ function foldLegacyResponse(totals: Totals, response: ReconcileHubCountsResponse
   for (const table of RECONCILE_TABLES) {
     const corrected = correctedOf(response[table]);
     if (corrected !== null) {
-      totals[table] = { corrected, deferred: deferredOf(response[table]) };
+      totals[table] = {
+        corrected,
+        deferred: deferredOf(response[table]),
+        latest: latestOf(response[table]),
+      };
     }
   }
 }
@@ -147,9 +166,10 @@ function foldWindowResponse(
     if (corrected === null) {
       throw new Error(`reconcile_hub_counts window omitted ${table}`);
     }
-    const running = totals[table] ?? { corrected: 0, deferred: 0 };
+    const running = totals[table] ?? { corrected: 0, deferred: 0, latest: null };
     running.corrected += corrected;
     running.deferred += deferredOf(response[table]);
+    running.latest = addLatest(running.latest, latestOf(response[table]));
     totals[table] = running;
   }
 
@@ -226,6 +246,13 @@ function sumOf(totals: Totals, field: "corrected" | "deferred"): number {
   return RECONCILE_TABLES.reduce((sum, table) => sum + (totals[table]?.[field] ?? 0), 0);
 }
 
+function latestSum(totals: Totals): null | number {
+  return RECONCILE_TABLES.reduce<null | number>(
+    (sum, table) => addLatest(sum, totals[table]?.latest ?? null),
+    null,
+  );
+}
+
 function logAudit(
   write: (message: string) => void,
   summary: ReconcileHubCountsSummary,
@@ -246,6 +273,7 @@ function logAudit(
       `albums=${summary.albums ?? "?"} artists=${summary.artists ?? "?"} ` +
       `tookMs=${summary.tookMs ?? "?"}` +
       (summary.deferred === null ? "" : ` deferred=${summary.deferred}`) +
+      (summary.latestCorrected === null ? "" : ` latest=${summary.latestCorrected}`) +
       stopped,
   );
 }
@@ -259,7 +287,8 @@ function legacySummary(
   const perTable = [summary.labels, summary.albums, summary.artists];
   summary.checked = perTable.filter((value) => value !== null).length;
   summary.corrected = perTable.every((value) => value !== null) ? sumOf(totals, "corrected") : null;
-  summary.produced = summary.corrected;
+  summary.produced =
+    summary.corrected === null ? null : summary.corrected + (summary.latestCorrected ?? 0);
 
   if (summary.checked === 0) {
     summary.ok = false;
@@ -289,6 +318,7 @@ export async function runReconcileHubCountsTick(
     error: null,
     errors: 0,
     labels: totals.labels?.corrected ?? null,
+    latestCorrected: latestSum(totals),
     ok: true,
     partial: false,
     produced: null,
@@ -310,8 +340,9 @@ export async function runReconcileHubCountsTick(
   }
 
   const landed = sumOf(totals, "corrected");
+  const written = landed + (summary.latestCorrected ?? 0);
   summary.deferred = sumOf(totals, "deferred");
-  summary.produced = landed;
+  summary.produced = written;
   if (walk.stop === "complete") {
     summary.checked = RECONCILE_TABLES.length;
     summary.corrected = landed;
@@ -326,7 +357,7 @@ export async function runReconcileHubCountsTick(
       ...databaseAdmissionYieldSummary({
         checked: summary.checked,
         partial: true,
-        produced: landed,
+        produced: written,
       }),
     } as ReconcileHubCountsSummary;
   }

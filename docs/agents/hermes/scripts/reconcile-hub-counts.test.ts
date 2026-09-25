@@ -95,6 +95,49 @@ describe("runReconcileHubCountsTick", () => {
     expect(audit).toBe("AUDIT corrected=48 labels=1 albums=3 artists=44 tookMs=1150");
   });
 
+  test("reports date-only writes as latest, never as a clean zero-write tick", async () => {
+    const run = capturing({
+      albums: { corrected: 0, latestCorrected: 5 },
+      artists: { corrected: 0, latestCorrected: 7 },
+      labels: { corrected: 0, latestCorrected: 2 },
+      ok: true,
+      tookMs: 300,
+    });
+    const summary = await runReconcileHubCountsTick(run.deps);
+
+    expect(summary.corrected).toBe(0);
+    expect(summary.latestCorrected).toBe(14);
+    expect(summary.produced).toBe(14);
+    expect(run.lines).toContain(
+      "AUDIT corrected=0 labels=0 albums=0 artists=0 tookMs=300 latest=14",
+    );
+  });
+
+  test("sums date writes across windows", async () => {
+    const responses: ReconcileHubCountsResponse[] = [
+      {
+        labels: { corrected: 1, deferred: 0, latestCorrected: 3 },
+        next: { afterId: null, table: "albums" },
+        ok: true,
+        tookMs: 10,
+      },
+      {
+        albums: { corrected: 0, deferred: 0, latestCorrected: 4 },
+        artists: { corrected: 2, deferred: 0, latestCorrected: 1 },
+        next: null,
+        ok: true,
+        tookMs: 20,
+      },
+    ];
+    const summary = await runReconcileHubCountsTick(
+      deps({ reconcile: () => Promise.resolve(responses.shift()) }),
+    );
+
+    expect(summary.corrected).toBe(3);
+    expect(summary.latestCorrected).toBe(8);
+    expect(summary.produced).toBe(11);
+  });
+
   test("logs the AUDIT line on a CLEAN tick too — zeroes are the evidence of health", async () => {
     const { deps: capturingDeps, lines } = capturing(CLEAN);
 

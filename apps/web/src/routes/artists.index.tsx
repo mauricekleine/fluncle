@@ -5,17 +5,22 @@ import { Button } from "@fluncle/ui/components/button";
 import { ArtistAvatar } from "@/components/artist-avatar";
 import { CataloguePager } from "@/components/catalogue-groups";
 import { HubLetterLane } from "@/components/catalogue-hub-section";
+import { HubFooter } from "@/components/hub-footer";
+import { HubOrderSwitch, HubThisMonth, HubTile } from "@/components/hub-sections";
 import { HubSearchInput } from "@/components/hub-search-input";
 import { StoryNotFoundState } from "@/components/stories/stories-states";
 import { siteUrl } from "@/lib/fluncle-links";
 import { tracksCount } from "@/lib/format";
 import { jsonLdScript } from "@/lib/json-ld";
 import { albumCoverAtSize, HUB_COVER_TILE_SIZE } from "@/lib/media";
+import { type HubOrder, hubHref, hubOrderParam } from "@/lib/hub-order";
 import { pageParam, textParam } from "@/lib/search-params";
 import {
   type ArtistHubEntry,
   artistNamesBySlugs,
   listArtistsHubPage,
+  listArtistsThisMonth,
+  artistsHaveRecentActivity,
   listSimilarArtistTiles,
 } from "@/lib/server/artists";
 import { type CatalogueHubNumberedPage } from "@/lib/server/labels";
@@ -26,15 +31,17 @@ const MAX_COMPARE_SLUGS = 6;
 
 type ArtistsFoundData = {
   hub: CatalogueHubNumberedPage<ArtistHubEntry>;
+  order: HubOrder;
   page: number;
-
+  recentReady: boolean;
+  requestedOrder: HubOrder;
   q: string | undefined;
   status: "found";
+  thisMonth: ArtistHubEntry[];
 };
 
 type ArtistsSimilarData = {
   names: string[];
-
   results: ArtistHubEntry[];
   status: "similar";
 };
@@ -44,20 +51,39 @@ type ArtistsPageData = ArtistsFoundData | ArtistsSimilarData | { status: "missin
 async function resolveArtistsPage(
   page: number | undefined,
   q: string | undefined,
+  order: HubOrder,
 ): Promise<ArtistsPageData> {
   const requested = page ?? 1;
-  const hub = await listArtistsHubPage(requested, q);
+  const recentReady = await artistsHaveRecentActivity();
+  const served: HubOrder = order === "recent" && !recentReady ? "most" : order;
+  const withStrip = requested === 1 && q === undefined && served === "most";
+  const [hub, thisMonth] = await Promise.all([
+    listArtistsHubPage(requested, q, served),
+    withStrip ? listArtistsThisMonth() : Promise.resolve([]),
+  ]);
 
   if (requested > hub.pageCount) {
     return { status: "missing" };
   }
 
-  return { hub, page: requested, q, status: "found" };
+  return {
+    hub,
+    order: served,
+    page: requested,
+    q,
+    recentReady,
+    requestedOrder: order,
+    status: "found",
+    thisMonth,
+  };
 }
 
 const fetchArtistsPage = createServerFn({ method: "GET" })
-  .validator((data: { page?: number; q?: string }) => data)
-  .handler(({ data }): Promise<ArtistsPageData> => resolveArtistsPage(data.page, data.q));
+  .validator((data: { order?: HubOrder; page?: number; q?: string }) => data)
+  .handler(
+    ({ data }): Promise<ArtistsPageData> =>
+      resolveArtistsPage(data.page, data.q, data.order ?? "most"),
+  );
 
 function parseCompareSlugs(like: string): string[] {
   return [
@@ -87,9 +113,9 @@ const fetchSimilarArtists = createServerFn({ method: "GET" })
     return { names, results };
   });
 
-const title = "Every drum & bass artist, A to Z · Fluncle";
+const title = "Every drum & bass artist · Fluncle";
 const description =
-  "Every drum & bass artist Fluncle holds, A to Z, with the labels that pressed their records.";
+  "Every drum & bass artist Fluncle holds, with the labels that pressed their records.";
 
 function pagedMeta(page: number): { description: string; title: string } {
   if (page <= 1) {
@@ -97,7 +123,7 @@ function pagedMeta(page: number): { description: string; title: string } {
   }
 
   return {
-    description: `Page ${page} of every drum & bass artist Fluncle holds, A to Z.`,
+    description: `Page ${page} of every drum & bass artist Fluncle holds.`,
     title: `Every drum & bass artist, page ${page} · Fluncle`,
   };
 }
@@ -135,7 +161,7 @@ function artistsHead(loaderData: ArtistsPageData | undefined) {
     return { links: [{ href: canonical, rel: "canonical" }], meta: metaTags };
   }
 
-  const filtered = loaderData.q !== undefined;
+  const filtered = loaderData.q !== undefined || loaderData.requestedOrder !== "most";
   const canonical =
     filtered || loaderData.page <= 1
       ? `${siteUrl}/artists`
@@ -169,7 +195,6 @@ function artistsHead(loaderData: ArtistsPageData | undefined) {
   return {
     links: [{ href: canonical, rel: "canonical" }],
     meta: metaTags,
-
     scripts: [jsonLdScript(collectionPage)],
   };
 }
@@ -178,10 +203,16 @@ function artistsHead(loaderData: ArtistsPageData | undefined) {
 export const Route = createFileRoute("/artists/")({
   validateSearch: (search: Record<string, unknown>): ArtistsSearch => ({
     like: textParam(search["like"]),
+    order: hubOrderParam(search["order"]),
     page: pageParam(search["page"]),
     q: textParam(search["q"]),
   }),
-  loaderDeps: ({ search }) => ({ like: search.like, page: search.page, q: search.q }),
+  loaderDeps: ({ search }) => ({
+    like: search.like,
+    order: search.order,
+    page: search.page,
+    q: search.q,
+  }),
   loader: async ({ deps }): Promise<ArtistsPageData> => {
     if (deps.like !== undefined && parseCompareSlugs(deps.like).length >= 2) {
       const data = await fetchSimilarArtists({ data: { like: deps.like } });
@@ -189,7 +220,9 @@ export const Route = createFileRoute("/artists/")({
       return { names: data.names, results: data.results, status: "similar" };
     }
 
-    const data = await fetchArtistsPage({ data: { page: deps.page, q: deps.q } });
+    const data = await fetchArtistsPage({
+      data: { order: deps.order, page: deps.page, q: deps.q },
+    });
 
     if (data.status === "missing") {
       throw notFound();
@@ -202,12 +235,12 @@ export const Route = createFileRoute("/artists/")({
   notFoundComponent: StoryNotFoundState,
 });
 
-type ArtistsSearch = { like?: string; page?: number; q?: string };
+type ArtistsSearch = { like?: string; order?: "az" | "recent"; page?: number; q?: string };
 
 function mastheadLine(total: number): string {
   return total > 1
-    ? `${countFormatter.format(total)} drum & bass artists, A to Z.`
-    : "Drum & bass artists, A to Z.";
+    ? `${countFormatter.format(total)} drum & bass artists.`
+    : "Drum & bass artists.";
 }
 
 function matchCount(count: number): string {
@@ -225,6 +258,20 @@ function ArtistTileContent({ artist }: { artist: ArtistHubEntry }) {
       <span className="artist-grid-line">{artist.name}</span>
       <span className="artist-grid-count">{tracksCount(artist.trackCount)}</span>
     </>
+  );
+}
+
+function ArtistLinkTile({ artist }: { artist: ArtistHubEntry }) {
+  return (
+    <HubTile kind="artist" lit={artist.certified} name={artist.name} round slug={artist.slug}>
+      <Link
+        className={artist.certified ? "hub-tile-certified" : undefined}
+        params={{ slug: artist.slug }}
+        to="/artist/$slug"
+      >
+        <ArtistTileContent artist={artist} />
+      </Link>
+    </HubTile>
   );
 }
 
@@ -275,7 +322,7 @@ function ArtistsBrowseGrid({ artists }: { artists: ArtistHubEntry[] }) {
     <>
       <div className="hub-compare-bar">
         <span aria-live="polite" className="hub-compare-hint">
-          {selecting ? hint : ""}
+          {selecting ? hint : "Pick two to six artists to see who sounds closest to them."}
         </span>
         {selecting ? (
           <>
@@ -303,28 +350,20 @@ function ArtistsBrowseGrid({ artists }: { artists: ArtistHubEntry[] }) {
         {artists.map((artist) => {
           const isSelected = selected.includes(artist.slug);
 
-          return (
+          return selecting ? (
             <li key={artist.slug}>
-              {selecting ? (
-                <button
-                  aria-pressed={isSelected}
-                  className={`hub-tile-select${artist.certified ? " hub-tile-certified" : ""}`}
-                  disabled={atCap && !isSelected}
-                  onClick={() => toggle(artist.slug)}
-                  type="button"
-                >
-                  <ArtistTileContent artist={artist} />
-                </button>
-              ) : (
-                <Link
-                  className={artist.certified ? "hub-tile-certified" : undefined}
-                  params={{ slug: artist.slug }}
-                  to="/artist/$slug"
-                >
-                  <ArtistTileContent artist={artist} />
-                </Link>
-              )}
+              <button
+                aria-pressed={isSelected}
+                className={`hub-tile-select${artist.certified ? " hub-tile-certified" : ""}`}
+                disabled={atCap && !isSelected}
+                onClick={() => toggle(artist.slug)}
+                type="button"
+              >
+                <ArtistTileContent artist={artist} />
+              </button>
             </li>
+          ) : (
+            <ArtistLinkTile artist={artist} key={artist.slug} />
           );
         })}
       </ul>
@@ -363,23 +402,12 @@ function ArtistsSimilarView({ names, results }: { names: string[]; results: Arti
             data-discovery="similar"
           >
             {results.map((artist) => (
-              <li key={artist.slug}>
-                <Link
-                  className={artist.certified ? "hub-tile-certified" : undefined}
-                  params={{ slug: artist.slug }}
-                  to="/artist/$slug"
-                >
-                  <ArtistTileContent artist={artist} />
-                </Link>
-              </li>
+              <ArtistLinkTile artist={artist} key={artist.slug} />
             ))}
           </ul>
         )}
 
-        <footer className="log-plate-footer">
-          <Link to="/artists">Back to artists</Link>
-          <Link to="/log">The full log</Link>
-        </footer>
+        <HubFooter />
       </article>
     </main>
   );
@@ -397,24 +425,27 @@ function ArtistsPage() {
     return <ArtistsSimilarView names={data.names} results={data.results} />;
   }
 
-  const { hub, q } = data;
+  const { hub, order, q, thisMonth } = data;
   const filtered = q !== undefined;
-  const buildHref = (page: number) => buildArtistsHref(q, page);
+  const buildHref = (page: number) => hubHref("/artists", { order, page, q });
   const showSearch = filtered || hub.total > 0;
+  const setOrder = (next: HubOrder) =>
+    void navigate({ search: { order: hubOrderParam(next), q }, to: "/artists" });
 
   return (
     <main className="log-plate-stage">
       <article className="log-plate log-index">
         <header className="log-masthead">
           <h1 className="log-coordinate log-index-title">Artists</h1>
-
           <p className="log-index-intro">{mastheadLine(filtered ? 0 : hub.total)}</p>
         </header>
 
         {showSearch ? (
           <HubSearchInput
             label="Search artists by name"
-            onSearch={(term) => void navigate({ search: { q: term }, to: "/artists" })}
+            onSearch={(term) =>
+              void navigate({ search: { order: hubOrderParam(order), q: term }, to: "/artists" })
+            }
             placeholder="Search artists"
             value={q}
           />
@@ -426,13 +457,21 @@ function ArtistsPage() {
           </p>
         ) : undefined}
 
+        <HubThisMonth count={thisMonth.length} label="Artists with a record out this month">
+          {thisMonth.map((artist) => (
+            <ArtistLinkTile artist={artist} key={artist.slug} />
+          ))}
+        </HubThisMonth>
+
         {hub.items.length === 0 ? (
           <p className="log-index-empty empty-scanlines">
             {filtered ? "No artists match that name." : "No drum & bass artists yet."}
           </p>
         ) : (
           <>
-            {filtered ? undefined : (
+            <h2 className="sr-only">Every artist</h2>
+            <HubOrderSwitch onChange={setOrder} order={order} recentReady={data.recentReady} />
+            {filtered || order !== "az" ? undefined : (
               <HubLetterLane
                 buildHref={buildHref}
                 label="Artists A to Z"
@@ -449,26 +488,8 @@ function ArtistsPage() {
           </>
         )}
 
-        <footer className="log-plate-footer">
-          <Link to="/">Home</Link>
-          <Link to="/log">The full log</Link>
-        </footer>
+        <HubFooter current="/artists" />
       </article>
     </main>
   );
-}
-
-function buildArtistsHref(q: string | undefined, page: number): string {
-  const params = new URLSearchParams();
-
-  if (q !== undefined) {
-    params.set("q", q);
-  }
-  if (page > 1) {
-    params.set("page", String(page));
-  }
-
-  const query = params.toString();
-
-  return query ? `/artists?${query}` : "/artists";
 }

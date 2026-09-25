@@ -1,3 +1,5 @@
+export const FRESH_WINDOW_DAYS = 30;
+
 export function releaseTodayUtc(now: Date): string {
   return now.toISOString().slice(0, 10);
 }

@@ -2169,6 +2169,7 @@ export const artists = sqliteTable(
     imageUrl: text("image_url"),
 
     lastfmUrl: text("lastfm_url"),
+    latestReleaseDate: text("latest_release_date"),
     mbid: text("mbid"),
     name: text("name").notNull(),
 
@@ -2199,6 +2200,12 @@ export const artists = sqliteTable(
       .on(table.slug)
       .where(sql`(${table.certifiedFindingCount} > 0 or ${table.renderableTrackCount} >= 3)`),
 
+    index("artists_hub_most_idx")
+      .on(sql`-${table.renderableTrackCount}`, table.slug)
+      .where(sql`(${table.certifiedFindingCount} > 0 or ${table.renderableTrackCount} >= 3)`),
+    index("artists_hub_recent_idx")
+      .on(table.latestReleaseDate, table.slug)
+      .where(sql`(${table.certifiedFindingCount} > 0 or ${table.renderableTrackCount} >= 3)`),
     index("artists_mbid_idx").on(table.mbid, table.slug),
 
     index("artists_bio_review_queue_idx")
@@ -2341,6 +2348,7 @@ export const labels = sqliteTable(
     labelReleasesCheckedAt: text("label_releases_checked_at"),
     labelReleasesFailures: integer("label_releases_failures").notNull().default(0),
 
+    latestReleaseDate: text("latest_release_date"),
     lineageAttemptedAt: text("lineage_attempted_at"),
     lineageFailures: integer("lineage_failures").notNull().default(0),
     lineageState: text("lineage_state", { enum: ["pending", "resolved", "none"] })
@@ -2388,6 +2396,12 @@ export const labels = sqliteTable(
       .on(table.slug)
       .where(sql`(${table.certifiedFindingCount} > 0 or ${table.renderableTrackCount} >= 3)`),
 
+    index("labels_hub_most_idx")
+      .on(sql`-${table.renderableTrackCount}`, table.slug)
+      .where(sql`(${table.certifiedFindingCount} > 0 or ${table.renderableTrackCount} >= 3)`),
+    index("labels_hub_recent_idx")
+      .on(table.latestReleaseDate, table.slug)
+      .where(sql`(${table.certifiedFindingCount} > 0 or ${table.renderableTrackCount} >= 3)`),
     index("labels_name_nocase_idx").on(sql`${table.name} collate nocase`),
 
     index("labels_bio_review_queue_idx")
@@ -2522,6 +2536,7 @@ export const albums = sqliteTable(
       .default("pending"),
     imageUpdatedAt: text("image_updated_at"),
 
+    latestReleaseDate: text("latest_release_date"),
     name: text("name").notNull(),
     recordLabelRaw: text("record_label_raw"),
 
@@ -2541,6 +2556,12 @@ export const albums = sqliteTable(
       .on(table.slug)
       .where(sql`(${table.certifiedFindingCount} > 0 or ${table.renderableTrackCount} >= 3)`),
 
+    index("albums_hub_most_idx")
+      .on(sql`-${table.renderableTrackCount}`, table.slug)
+      .where(sql`(${table.certifiedFindingCount} > 0 or ${table.renderableTrackCount} >= 3)`),
+    index("albums_hub_recent_idx")
+      .on(table.latestReleaseDate, table.slug)
+      .where(sql`(${table.certifiedFindingCount} > 0 or ${table.renderableTrackCount} >= 3)`),
     index("albums_name_nocase_idx").on(sql`${table.name} collate nocase`),
 
     index("albums_bio_review_queue_idx")
