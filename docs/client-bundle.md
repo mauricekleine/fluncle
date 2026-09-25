@@ -47,6 +47,8 @@ The gate's own tripwire is [`apps/web/scripts/client-chunk-purity.test.ts`](../a
 
 HTML cached at the edge references build-scoped `/assets/<hash>.js` URLs. Keep its stale-while-revalidate tail within the deploy cadence (the page tier caps it at one hour); an older HTML response can otherwise point a browser at removed chunks. The root route's chunk-load recovery is the second guard.
 
+The eager router preloads routes on intent and reuses client-navigation loader data for 60 seconds, matching the public hubs' edge freshness window. Personalized or volatile routes set their own shorter `staleTime` so the shared default cannot reuse a previous session's data.
+
 ## Rule 2 — one render-blocking stylesheet, and it is `styles.css`
 
 Not enforced by a gate (it needs a judgement call the gate cannot make), but the rule is simple: **a CSS file enters the app through `__root.tsx`'s `styles.css?url` link, or it is scoped to the route that needs it.**

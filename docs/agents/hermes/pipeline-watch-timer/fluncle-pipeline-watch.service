@@ -1,0 +1,14 @@
+[Unit]
+Description=Fluncle pipeline yield watchdog
+Wants=network-online.target docker.service
+After=network-online.target docker.service
+OnFailure=fluncle-sweep-failure@%n.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/docker exec -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/pipeline-watch.sh
+TimeoutStartSec=180
+NoNewPrivileges=true
+ProtectControlGroups=true
+ProtectKernelTunables=true
+RestrictSUIDSGID=true

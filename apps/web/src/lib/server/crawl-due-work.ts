@@ -154,6 +154,15 @@ export function crawlRankLabelSlugSql(prefix = ""): string {
     else ${prefix}label_slug end`;
 }
 
+export function crawlParentAllowedSql(prefix = ""): string {
+  return `exists (
+    select 1 from artist_rules parent_rule
+    where substr(${prefix}parent_id, 1, length('musicbrainz:artist:')) = 'musicbrainz:artist:'
+      and parent_rule.artist_mbid = substr(${prefix}parent_id, length('musicbrainz:artist:') + 1)
+      and parent_rule.verdict = 'allow'
+  )`;
+}
+
 const CRAWL_SOURCE_FROM = `from crawl_frontier cf
       left join labels provenance_label on provenance_label.slug = ${crawlRankLabelSlugSql("cf.")}`;
 
@@ -162,12 +171,7 @@ const CRAWL_SOURCE_COLUMNS = `cf.attempted_at, cf.created_at, cf.demand_rank, cf
   cf.release_label_slug, ${crawlRankLabelSlugSql("cf.")} as rank_label_slug,
   cf.source, cf.state, cf.updated_at,
   case when provenance_label.seed_state = 'enabled' then 1 else 0 end as label_enabled,
-  exists (
-    select 1 from artist_rules parent_rule
-    where substr(cf.parent_id, 1, length('musicbrainz:artist:')) = 'musicbrainz:artist:'
-      and parent_rule.artist_mbid = substr(cf.parent_id, length('musicbrainz:artist:') + 1)
-      and parent_rule.verdict = 'allow'
-  ) as parent_allowed,
+  ${crawlParentAllowedSql("cf.")} as parent_allowed,
   exists (
     select 1 from artist_rules self_rule
     where self_rule.artist_mbid = cf.external_id and self_rule.verdict = 'allow'

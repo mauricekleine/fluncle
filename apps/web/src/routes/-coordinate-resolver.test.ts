@@ -3,12 +3,6 @@ import { LOG_ID_TEST_VECTORS } from "@fluncle/contracts/log-id";
 import { canonicalCoordinate, isLogPageParam } from "@/lib/log-page-param";
 import { Route as CoordinateRoute } from "./$coordinate";
 
-// The bare-coordinate resolver: `fluncle.com/049.7.6B` → 301 `/log/049.7.6B`. Only the
-// finding + mixtape coordinate grammar resolves (uppercased first, so a viewer's
-// lowercase typing still lands); anything else throws notFound() and falls through to
-// the site-wide 404. Captions keep `fluncle://<coord>` — this route serves the viewer
-// who types what they see in the frame.
-
 type ThrownRedirect = {
   options?: { params?: unknown; statusCode?: number; to?: string };
   params?: unknown;
@@ -24,9 +18,6 @@ function captureThrow(run: () => unknown): { redirect?: ThrownRedirect; notFound
   try {
     run();
   } catch (thrown) {
-    // beforeLoad throws exactly two shapes: a redirect (carries a `to` target, on the
-    // object or under `.options`) or a `notFound()` (has neither). Detect by the target
-    // rather than an internal flag name, so the check survives a router-internal rename.
     const value = thrown as ThrownRedirect;
     const target = value.to ?? value.options?.to;
 
@@ -66,11 +57,9 @@ describe("canonicalCoordinate", () => {
   });
 
   it("uppercases a lowercase-typed coordinate to its canonical form", () => {
-    // The frame reads `049.7.6B`; a viewer may type `049.7.6b`. Both must resolve.
     expect(canonicalCoordinate("049.7.6b")).toBe("049.7.6B");
     expect(canonicalCoordinate("019.f.1a")).toBe("019.F.1A");
-    // The shared lowercase vectors (which the case-SENSITIVE bare guards reject) resolve
-    // here precisely because this guard uppercases first.
+
     for (const lower of LOG_ID_TEST_VECTORS.lowercase) {
       expect(canonicalCoordinate(lower)).toBe(lower.toUpperCase());
     }
@@ -83,7 +72,6 @@ describe("canonicalCoordinate", () => {
   });
 
   it("rejects a bare Spotify track id (uppercasing would corrupt it)", () => {
-    // A 22-char base-62 id IS a valid /log param, but never a root coordinate.
     const spotifyId = "6Y44zcYp0vUkmKCBve1Epr";
     expect(isLogPageParam(spotifyId)).toBe(true);
     expect(canonicalCoordinate(spotifyId)).toBeUndefined();
@@ -106,11 +94,10 @@ describe("/$coordinate → /log/$logId", () => {
   });
 
   it("301s a lowercase-typed coordinate to the CANONICAL uppercased /log home", () => {
-    // Without the uppercase, /log's case-sensitive guard would 404 the forwarded param.
     const redirect = captureRedirect("049.7.6b");
 
     expect(redirect.params).toEqual({ logId: "049.7.6B" });
-    // The forwarded param is admitted by /log's own guard with no further hop.
+
     expect(isLogPageParam((redirect.params as { logId: string }).logId)).toBe(true);
   });
 

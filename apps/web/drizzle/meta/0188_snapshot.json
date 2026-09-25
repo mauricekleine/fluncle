@@ -1,8 +1,8 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "b503d115-f800-46bc-bbd1-c2bfde5a39d9",
-  "prevId": "175c6222-9c3d-4c78-9930-7d8f355a4ad5",
+  "id": "7ec06702-a46b-4b97-b2fc-3f94f4500470",
+  "prevId": "ab219b8c-5e7f-4a87-97fc-613738d356fb",
   "tables": {
     "account": {
       "name": "account",
@@ -2596,6 +2596,12 @@
           "columns": ["state", "done_at"],
           "isUnique": false,
           "where": "\"crawl_frontier\".\"kind\" = 'label' and \"crawl_frontier\".\"source\" = 'musicbrainz'"
+        },
+        "crawl_frontier_disabled_skip_idx": {
+          "name": "crawl_frontier_disabled_skip_idx",
+          "columns": ["state", "release_label_slug", "id"],
+          "isUnique": false,
+          "where": "\"crawl_frontier\".\"kind\" = 'release' and \"crawl_frontier\".\"note\" = 'disabled own label at terminal hop'"
         }
       },
       "foreignKeys": {},
@@ -9277,9 +9283,7 @@
   "_meta": {
     "schemas": {},
     "tables": {},
-    "columns": {
-      "\"tracks\".\"spotify_anchor_quota_admitted_at\"": "\"tracks\".\"spotify_anchor_paid_admitted_at\""
-    }
+    "columns": {}
   },
   "internal": {
     "indexes": {

@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "175c6222-9c3d-4c78-9930-7d8f355a4ad5",
+  "id": "ab219b8c-5e7f-4a87-97fc-613738d356fb",
   "prevId": "07f03235-e414-4f88-b6e3-6fb4f338d5fa",
   "tables": {
     "account": {
@@ -2596,6 +2596,12 @@
           "columns": ["state", "done_at"],
           "isUnique": false,
           "where": "\"crawl_frontier\".\"kind\" = 'label' and \"crawl_frontier\".\"source\" = 'musicbrainz'"
+        },
+        "crawl_frontier_disabled_skip_idx": {
+          "name": "crawl_frontier_disabled_skip_idx",
+          "columns": ["state", "release_label_slug", "id"],
+          "isUnique": false,
+          "where": "\"crawl_frontier\".\"kind\" = 'release' and \"crawl_frontier\".\"note\" = 'disabled own label at terminal hop'"
         }
       },
       "foreignKeys": {},
@@ -8045,30 +8051,8 @@
           "notNull": false,
           "autoincrement": false
         },
-        "spotify_anchor_invalid_attempts": {
-          "name": "spotify_anchor_invalid_attempts",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": 0
-        },
-        "spotify_anchor_quota_admitted_at": {
-          "name": "spotify_anchor_quota_admitted_at",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
         "spotify_anchor_source": {
           "name": "spotify_anchor_source",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "spotify_anchor_terminal_error": {
-          "name": "spotify_anchor_terminal_error",
           "type": "text",
           "primaryKey": false,
           "notNull": false,
@@ -8335,23 +8319,11 @@
           "isUnique": false,
           "where": "\"tracks\".\"spotify_uri\" is null"
         },
-        "tracks_anchor_prior_order_idx": {
-          "name": "tracks_anchor_prior_order_idx",
-          "columns": ["has_isrc", "has_embedding", "nearest_finding_score", "track_id"],
-          "isUnique": false,
-          "where": "\"tracks\".\"spotify_uri\" is null and \"tracks\".\"spotify_isrc_asked_at\" is not null"
-        },
         "tracks_anchor_review_idx": {
           "name": "tracks_anchor_review_idx",
           "columns": ["track_id"],
           "isUnique": false,
           "where": "\"tracks\".\"anchor_review_json\" is not null"
-        },
-        "tracks_anchor_terminal_idx": {
-          "name": "tracks_anchor_terminal_idx",
-          "columns": ["track_id"],
-          "isUnique": false,
-          "where": "\"tracks\".\"spotify_anchor_terminal_error\" is not null"
         },
         "tracks_dismissed_idx": {
           "name": "tracks_dismissed_idx",

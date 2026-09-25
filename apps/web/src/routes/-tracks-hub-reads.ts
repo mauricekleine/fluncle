@@ -5,7 +5,6 @@ import {
   listTracksHubYearLane,
 } from "@/lib/server/tracks-hub";
 
-/** All release-sensitive reads in one hub response share one UTC boundary. */
 export async function readTracksHubAtOneTime(
   filters: TracksHubFilters,
   page: number,

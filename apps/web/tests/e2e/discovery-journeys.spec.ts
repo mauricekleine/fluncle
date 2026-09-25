@@ -17,7 +17,12 @@ import {
   installDiscoveryEventProbe,
   type ObservedDiscoveryEvent,
 } from "./browser";
-import { SEEDED_GRAPH_ENTITIES, SEEDED_LEAD, SEEDED_SONIC_ANCHOR } from "./seed";
+import {
+  SEEDED_GRAPH_ENTITIES,
+  SEEDED_LEAD,
+  SEEDED_SONIC_ANCHOR,
+  SEEDED_SONIC_NEIGHBOUR,
+} from "./seed";
 
 const VIEWPORTS = [
   { height: 900, name: "desktop-1440x900", width: 1440 },
@@ -152,7 +157,7 @@ for (const viewport of VIEWPORTS) {
       expect(problems, `expected a clean console, saw:\n${problems.join("\n")}`).toEqual([]);
     });
 
-    test("known sonic seed degrades to a name match before outbound listen", async ({ page }) => {
+    test("known sonic seed ranks its nearest finding before outbound listen", async ({ page }) => {
       await blockExternalRequests(page);
 
       const probe = await installDiscoveryEventProbe(page);
@@ -165,14 +170,18 @@ for (const viewport of VIEWPORTS) {
       await field.press("Enter");
       await expect(page).toHaveURL(/q=/);
       await expect(page.locator("html[data-discovery-listening]")).toBeAttached();
+      await expect(page.getByText("Reading by name only right now.", { exact: false })).toHaveCount(
+        0,
+      );
       await expect(
-        page.getByText("Reading by name only right now.", { exact: false }),
-      ).toBeVisible();
-      await expect(
-        page.getByText(SEEDED_SONIC_ANCHOR.title, { exact: false }).first(),
+        page.getByText(SEEDED_SONIC_NEIGHBOUR.title, { exact: false }).first(),
       ).toBeVisible();
 
-      await page.getByRole("link").filter({ hasText: SEEDED_SONIC_ANCHOR.title }).first().click();
+      await page
+        .getByRole("link")
+        .filter({ hasText: SEEDED_SONIC_NEIGHBOUR.title })
+        .first()
+        .click();
       await expect(page).toHaveURL(/\/log\//);
       await expect(page.locator("html[data-discovery-listening]")).toBeAttached();
 
@@ -188,7 +197,7 @@ for (const viewport of VIEWPORTS) {
       expect(events[1]?.kind).toBe("finding");
       expect(events[2]?.service).toBe("spotify");
 
-      writeEvidence(viewport.name, "known-seed-sonic-degraded", events);
+      writeEvidence(viewport.name, "known-seed-sonic-ranked", events);
       expect(problems, `expected a clean console, saw:\n${problems.join("\n")}`).toEqual([]);
     });
 

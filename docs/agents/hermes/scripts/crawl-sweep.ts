@@ -54,7 +54,13 @@ type PrepareEnvelope = PhaseEnvelope & {
   boxFetch?: boolean;
   capabilities?: CommitBatchCapabilities;
   frontierPending?: number;
-  items?: { fetchPlan?: CrawlFetchPlan; nodeId: string; preparedToken: string }[];
+  storableReady?: boolean | null;
+  items?: {
+    fetchPlan?: CrawlFetchPlan;
+    nodeId: string;
+    nodeKind?: "artist" | "label" | "release";
+    preparedToken: string;
+  }[];
   kind?: "drained" | "prepared" | "unavailable";
 };
 type FetchEnvelope = PhaseEnvelope & {
@@ -87,6 +93,13 @@ type ReceiptEnvelope = PhaseEnvelope & {
 };
 type SweepSummary = {
   admissionOutcome: string;
+  blockedReason:
+    | "database_admission"
+    | "due_work_repair_pending"
+    | "label_gate"
+    | "mb_throttled"
+    | "no_storable_work"
+    | null;
 
   boxFetch: boolean;
 
@@ -111,7 +124,13 @@ type SweepSummary = {
   queueDepth: number | undefined;
   reason: string | null;
   reconciledCommits: number;
+  releaseDetailsStored: number;
+  requestsByKind: Record<
+    "artist_browse" | "label_browse" | "rearm_probe" | "release_detail" | "seed_search",
+    number
+  >;
   staleRejected: number;
+  storableReady: boolean | null;
   throttled: boolean;
 
   throttles: number;
@@ -336,6 +355,7 @@ function validateConfig(): void {
 function createSummary(): SweepSummary {
   return {
     admissionOutcome: "completed",
+    blockedReason: null,
     boxFetch: false,
     boxFetched: 0,
     checked: 0,
@@ -353,7 +373,16 @@ function createSummary(): SweepSummary {
     queueDepth: undefined,
     reason: null,
     reconciledCommits: 0,
+    releaseDetailsStored: 0,
+    requestsByKind: {
+      artist_browse: 0,
+      label_browse: 0,
+      rearm_probe: 0,
+      release_detail: 0,
+      seed_search: 0,
+    },
     staleRejected: 0,
+    storableReady: null,
     throttled: false,
     throttles: 0,
     tracksFound: 0,
@@ -363,6 +392,78 @@ function createSummary(): SweepSummary {
     tracksSkippedLabelGate: 0,
     tracksWritten: 0,
   };
+}
+
+export function blockedReason(
+  summary: Pick<
+    SweepSummary,
+    | "error"
+    | "failed"
+    | "ok"
+    | "pending"
+    | "reason"
+    | "storableReady"
+    | "throttled"
+    | "tracksFound"
+    | "tracksSkippedLabelGate"
+    | "tracksWritten"
+  >,
+): SweepSummary["blockedReason"] {
+  if (summary.tracksWritten > 0) {
+    return null;
+  }
+  if (summary.reason === "due_work_repair_pending") {
+    return "due_work_repair_pending";
+  }
+  if (summary.reason === "database_admission") {
+    return "database_admission";
+  }
+  if (summary.reason === "musicbrainz_throttle" || summary.throttled) {
+    return "mb_throttled";
+  }
+  if (summary.tracksFound > 0 && summary.tracksFound === summary.tracksSkippedLabelGate) {
+    return "label_gate";
+  }
+  if (!summary.ok || summary.failed > 0 || summary.error !== null || summary.reason !== null) {
+    return null;
+  }
+  return summary.storableReady === false ? "no_storable_work" : null;
+}
+
+function finishSummary(summary: SweepSummary): void {
+  summary.blockedReason = blockedReason(summary);
+  summary.leases = admittedPhaseCount;
+  Object.assign(summary, summariseItemTiming(itemTiming) ?? {});
+  console.log(JSON.stringify(summary));
+}
+
+export function recordBoxAttempt(
+  summary: Pick<SweepSummary, "boxFetched" | "requestsByKind">,
+  plan: Exclude<CrawlFetchPlan, { kind: "none" }>,
+  nodeKind: "artist" | "label" | "release" | undefined,
+  attempt: { outcome: string; url: string },
+): void {
+  const requestKind =
+    plan.kind === "tail" && attempt.url === plan.probeUrl
+      ? "rearm_probe"
+      : nodeKind === "release" || /\/release\/[^/?]+(?:\?|$)/.test(attempt.url)
+        ? "release_detail"
+        : attempt.url.includes("/label?query=")
+          ? "seed_search"
+          : nodeKind === "artist" || attempt.url.includes("artist=")
+            ? "artist_browse"
+            : "label_browse";
+  summary.boxFetched += 1;
+  summary.requestsByKind[requestKind] += 1;
+  console.error(
+    JSON.stringify({
+      event: "crawl.musicbrainz-request",
+      nodeKind: nodeKind ?? null,
+      outcome: attempt.outcome,
+      requestKind,
+      source: "box",
+    }),
+  );
 }
 
 function recordFailure(summary: SweepSummary, error: unknown): void {
@@ -416,6 +517,7 @@ function applyLegacyPass(summary: SweepSummary, pass: JsonObject): void {
   summary.throttles = pass.rateLimited === true ? 1 : 0;
   summary.tracksFound = Number(pass.tracksFound ?? 0);
   summary.tracksWritten = Number(pass.tracksWritten ?? 0);
+  summary.releaseDetailsStored = Number(pass.releaseDetailsStored ?? 0);
   summary.tracksSkipped = Number(pass.tracksSkipped ?? 0);
   summary.tracksSkippedArtistRule = Number(pass.tracksSkippedArtistRule ?? 0);
   summary.tracksSkippedHeld = Number(pass.tracksSkippedHeld ?? 0);
@@ -448,6 +550,7 @@ function applyReceipt(summary: SweepSummary, committed: ReceiptEnvelope): NodeOu
   );
   summary.tracksFound += Number(result.tracksFound ?? 0);
   summary.tracksWritten += Number(result.tracksWritten ?? 0);
+  summary.releaseDetailsStored += Number(result.releaseDetailsStored ?? 0);
   summary.tracksSkipped += Number(result.tracksSkipped ?? 0);
   summary.tracksSkippedArtistRule += Number(result.tracksSkippedArtistRule ?? 0);
   summary.tracksSkippedHeld += Number(result.tracksSkippedHeld ?? 0);
@@ -521,6 +624,7 @@ function commitFetched(
 
 async function supplyProviderBodies(
   plan: CrawlFetchPlan | undefined,
+  nodeKind: "artist" | "label" | "release" | undefined,
   boxFetch: boolean,
   summary: SweepSummary,
 ): Promise<MusicbrainzFetchResult[]> {
@@ -528,8 +632,9 @@ async function supplyProviderBodies(
     return [];
   }
   try {
-    const supplied = await runCrawlFetchPlan(plan);
-    summary.boxFetched += supplied.length;
+    const supplied = await runCrawlFetchPlan(plan, {
+      onAttempt: (attempt) => recordBoxAttempt(summary, plan, nodeKind, attempt),
+    });
     return supplied;
   } catch (error) {
     log(
@@ -542,11 +647,15 @@ async function supplyProviderBodies(
 async function fetchPreparedNode(
   directory: string,
   index: number,
-  item: { fetchPlan?: CrawlFetchPlan; preparedToken: string },
+  item: {
+    fetchPlan?: CrawlFetchPlan;
+    nodeKind?: "artist" | "label" | "release";
+    preparedToken: string;
+  },
   boxFetch: boolean,
   summary: SweepSummary,
 ): Promise<{ boxThrottled: boolean; fetched: FetchEnvelope }> {
-  const supplied = await supplyProviderBodies(item.fetchPlan, boxFetch, summary);
+  const supplied = await supplyProviderBodies(item.fetchPlan, item.nodeKind, boxFetch, summary);
   const boxThrottled = supplied.some((entry) => entry.outcome === "throttled");
   const fetched = directPhase<FetchEnvelope>(directory, `fetch-${index}`, {
     phase: "fetch",
@@ -559,7 +668,11 @@ async function fetchPreparedNode(
 async function processPreparedItem(
   directory: string,
   index: number,
-  item: { fetchPlan?: CrawlFetchPlan; preparedToken: string },
+  item: {
+    fetchPlan?: CrawlFetchPlan;
+    nodeKind?: "artist" | "label" | "release";
+    preparedToken: string;
+  },
   boxFetch: boolean,
   summary: SweepSummary,
 ): Promise<NodeOutcome> {
@@ -668,7 +781,11 @@ function commitFetchedBatch(
 
 async function drainPreparedBatch(
   directory: string,
-  items: readonly { fetchPlan?: CrawlFetchPlan; preparedToken: string }[],
+  items: readonly {
+    fetchPlan?: CrawlFetchPlan;
+    nodeKind?: "artist" | "label" | "release";
+    preparedToken: string;
+  }[],
   processed: number,
   boxFetch: boolean,
   summary: SweepSummary,
@@ -762,6 +879,7 @@ async function drainFrontier(directory: string, summary: SweepSummary): Promise<
   const startedAt = Date.now();
   const spentMs = (): number => Date.now() - startedAt;
   let processed = 0;
+  let firstPrepare = true;
 
   while (processed < NODES) {
     if (spentMs() >= WALL_BUDGET_MS) {
@@ -772,6 +890,7 @@ async function drainFrontier(directory: string, summary: SweepSummary): Promise<
       limit: Math.min(PREPARE_LIMIT, NODES - processed),
       maxHop: MAX_HOP,
       phase: "prepare",
+      ...(firstPrepare ? { sampleStorableRepair: true } : {}),
     });
     if (!prepared) {
       recordPhaseYield(summary);
@@ -779,6 +898,10 @@ async function drainFrontier(directory: string, summary: SweepSummary): Promise<
     }
     summary.pending = prepared.frontierPending ?? summary.pending;
     summary.queueDepth = summary.pending;
+    if (firstPrepare) {
+      summary.storableReady = prepared.storableReady ?? null;
+      firstPrepare = false;
+    }
 
     const boxFetch = BOX_FETCH && prepared.boxFetch === true;
     summary.boxFetch = boxFetch;
@@ -828,9 +951,7 @@ export async function main(): Promise<void> {
     validateConfig();
   } catch (error) {
     recordFailure(summary, error);
-    summary.leases = admittedPhaseCount;
-    Object.assign(summary, summariseItemTiming(itemTiming));
-    console.log(JSON.stringify(summary));
+    finishSummary(summary);
     process.exitCode = 1;
     return;
   }
@@ -845,9 +966,7 @@ export async function main(): Promise<void> {
         recordFailure(summary, error);
       }
     }
-    summary.leases = admittedPhaseCount;
-    Object.assign(summary, summariseItemTiming(itemTiming) ?? {});
-    console.log(JSON.stringify(summary));
+    finishSummary(summary);
     if (!summary.ok) {
       process.exitCode = 1;
     }
@@ -862,9 +981,7 @@ export async function main(): Promise<void> {
     });
     if (!initialized) {
       recordPhaseYield(summary);
-      summary.leases = admittedPhaseCount;
-      Object.assign(summary, summariseItemTiming(itemTiming) ?? {});
-      console.log(JSON.stringify(summary));
+      finishSummary(summary);
       return;
     }
     if (initialized.ok !== true || initialized.phase !== "initialize") {
@@ -874,9 +991,7 @@ export async function main(): Promise<void> {
       summary.admissionOutcome = "cutover-disabled";
       summary.gateState = "disabled";
       summary.reason = "crawl_due_cutover_disabled";
-      summary.leases = admittedPhaseCount;
-      Object.assign(summary, summariseItemTiming(itemTiming) ?? {});
-      console.log(JSON.stringify(summary));
+      finishSummary(summary);
       return;
     }
     if (initialized.kind !== "initialized") {
@@ -895,9 +1010,7 @@ export async function main(): Promise<void> {
     rmSync(directory, { force: true, recursive: true });
   }
 
-  summary.leases = admittedPhaseCount;
-  Object.assign(summary, summariseItemTiming(itemTiming) ?? {});
-  console.log(JSON.stringify(summary));
+  finishSummary(summary);
   if (!summary.ok) {
     process.exitCode = 1;
   }

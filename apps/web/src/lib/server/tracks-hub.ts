@@ -47,6 +47,9 @@ import { hasPreviewSource } from "../track-preview";
 import { fold } from "./track-match";
 import { releasedByTodaySql, releaseTodayUtc, validReleaseDateSql } from "./release-day";
 import { TRACK_SELECT, toPublicTrackListItem, toTrackListItem, type TrackRow } from "./tracks";
+import { type SearchStyle } from "../search-styles";
+import { SONIC_SEED_SELECT, sonicSeedFlag } from "./sonic-seed";
+import { rankTrackIdsByProbe, resolveStyleProbe } from "./style-probe";
 
 export const TRACKS_HUB_PAGE_SIZE = 48;
 
@@ -58,6 +61,7 @@ export type TracksHubFilters = Pick<
 > & {
   certified?: boolean;
   galaxy?: string;
+  sound?: string;
 };
 
 export type TracksHubArtistLink = { name: string; slug?: string };
@@ -75,6 +79,7 @@ export type TracksHubEntry =
       label?: string;
       labelSlug?: string;
       releaseDate: string;
+      similar?: boolean;
       track: FreshCatalogueItem;
     };
 
@@ -85,6 +90,7 @@ type TracksHubRow = LeadArtistRow &
     artist_slugs_json: string | null;
 
     certified: number;
+    sonic_seed?: number | null;
   };
 
 function galaxyClause(slug: string): Clause {
@@ -296,6 +302,7 @@ function toTracksHubEntry(row: TracksHubRow): TracksHubEntry {
     label: row.label ?? undefined,
     labelSlug: row.label_slug ?? undefined,
     releaseDate,
+    similar: sonicSeedFlag(row.sonic_seed),
     track: {
       albumImageUrl: bestAlbumCoverUrl({
         imageKey: row.album_image_key,
@@ -508,7 +515,8 @@ export function tracksHubHydrateQuery(ids: string[]): { args: string[]; sql: str
     args: ids,
     sql: `select ${TRACK_SELECT}, ${LEAD_ARTIST_SELECT},
                  (findings.track_id is not null) as certified,
-                 ${ARTIST_SLUGS_SELECT}
+                 ${ARTIST_SLUGS_SELECT},
+                 ${SONIC_SEED_SELECT}
           from tracks
           left join findings on findings.track_id = tracks.track_id
           ${LEAD_ARTIST_JOIN}
@@ -829,4 +837,123 @@ export async function listTracksHubYearLane(
 
     return yearPages(typedRows<{ n: number; year: string }>(result.rows), TRACKS_HUB_PAGE_SIZE);
   });
+}
+
+export const TRACKS_SOUND_DEPTH = TRACKS_HUB_PAGE_SIZE * 10;
+
+export type TracksHubSoundPage = {
+  anchors: string[];
+  hub: CatalogueHubNumberedPage<TracksHubEntry>;
+  ranked: boolean;
+};
+
+async function rankedSoundIds(
+  style: SearchStyle,
+  probe: number[],
+  filters: TracksHubFilters,
+  resolved: ResolvedFilterEntities,
+  today: string,
+): Promise<string[] | null> {
+  const { bpmMax, bpmMin, sound: _sound, ...rest } = filters;
+  const columnClauses = tracksHubClauses(rest, resolved);
+  const bpmClauses = tracksHubClauses({ bpmMax, bpmMin }, resolved);
+  const sonarRoute = columnClauses.length === 0;
+  const clauses = sonarRoute
+    ? []
+    : [
+        ...tracksHubClauses({ ...rest, bpmMax, bpmMin }, resolved),
+        { args: [today], sql: releasedByTodaySql("tracks.release_date") },
+      ];
+  const key = `sound:${style.slug}:${today}:${hubClauseSetKey([...columnClauses, ...bpmClauses])}`;
+  const unavailable = Symbol("unavailable");
+
+  try {
+    return await memoizedAggregate(key, async () => {
+      const ranked = await rankTrackIdsByProbe(probe, {
+        clauses,
+        depth: TRACKS_SOUND_DEPTH,
+        from: findingsJoinFor(clauses),
+        releasedBy: sonarRoute ? today : undefined,
+        sonarFilter: sonarRoute ? { bpmMax, bpmMin } : undefined,
+      });
+
+      if (ranked === null) {
+        throw unavailable;
+      }
+
+      return ranked;
+    });
+  } catch (error) {
+    if (error === unavailable) {
+      return null;
+    }
+
+    throw error;
+  }
+}
+
+export async function listTracksHubSoundPage(
+  filters: TracksHubFilters,
+  style: SearchStyle,
+  page: number,
+  now: Date = new Date(),
+  options: {
+    beforeVector?: () => Promise<void>;
+  } = {},
+): Promise<TracksHubSoundPage> {
+  const { sound: _sound, ...plain } = filters;
+  const probe = await resolveStyleProbe(style);
+  const newestFirst = async (anchors: string[]): Promise<TracksHubSoundPage> => ({
+    anchors,
+    hub: await listTracksHubPage(plain, page, now),
+    ranked: false,
+  });
+
+  if (probe.status !== "ready") {
+    return newestFirst([]);
+  }
+
+  const resolved = await resolveTracksHubEntities(plain);
+
+  await options.beforeVector?.();
+
+  const ids = await rankedSoundIds(style, probe.probe, plain, resolved, releaseTodayUtc(now));
+
+  if (ids === null) {
+    return newestFirst(probe.anchors);
+  }
+
+  const limit = TRACKS_HUB_PAGE_SIZE;
+  const pageIds = ids.slice((page - 1) * limit, page * limit);
+
+  if (pageIds.length === 0 && page > 1) {
+    throw new CatalogueHubPageOutOfRangeError();
+  }
+
+  const rows: TracksHubRow[] = [];
+
+  if (pageIds.length > 0) {
+    const db = await getDb();
+    const hydrated = await db.execute(tracksHubHydrateQuery(pageIds));
+    const byId = new Map(typedRows<TracksHubRow>(hydrated.rows).map((row) => [row.track_id, row]));
+
+    for (const id of pageIds) {
+      const row = byId.get(id);
+
+      if (row) {
+        rows.push(row);
+      }
+    }
+  }
+
+  return {
+    anchors: probe.anchors,
+    hub: {
+      items: rows.map(toTracksHubEntry),
+      page,
+      pageCount: Math.max(Math.ceil(ids.length / limit), 1),
+      total: ids.length,
+    },
+    ranked: true,
+  };
 }

@@ -1,26 +1,7 @@
-// The Fluncle Studio editor's pure geometry.
-// Two coordinate spaces meet here, kept DOM-free so they are unit-testable on
-// synthetic inputs (no ffmpeg, no `<video>`, no React):
-//
-//   1. The CROP space — a draggable 9:16 portrait window over the LANDSCAPE set
-//      rendition (the VibeMap pointer model lives in the component; the maths
-//      live here). The window keeps the source's full height and crops its width
-//      to 9:16; the operator slides it left↔right. The committed value is an
-//      integer `xOffset` in SOURCE PIXELS — exactly what Unit C's ffmpeg cut
-//      (`crop=ih*9/16:ih:<xOffset>:0`) and the merged `create_clip` validator
-//      (a non-negative integer) consume.
-//   2. The TIMELINE space — a suggestion window or a hand-picked in/out band, as
-//      fractions of the set duration (what the energy lane draws) ⇄ millisecond
-//      `inMs`/`outMs` (what `create_clip` stores).
-//
-// The producer and editor share this artifact through the contracts package. These
-// type-only imports keep the Worker free of the Node/ffmpeg/Remotion video package.
-
 import { type StudioEnvelope, type StudioPeak, type StudioSuggestion } from "@fluncle/contracts";
 
 export type { StudioEnvelope, StudioPeak, StudioSuggestion };
 
-/** A timeline region as fractions of the set duration (what the energy lane draws). */
 export type TimelineRegion = {
   leftFraction: number;
   widthFraction: number;
@@ -28,30 +9,14 @@ export type TimelineRegion = {
 
 const clamp01 = (n: number): number => Math.max(0, Math.min(1, n));
 
-// ── Crop space (9:16 window over the landscape rendition) ─────────────────────
-
-/**
- * The width (source px) of a 9:16 portrait window cropped from a landscape source
- * of `videoHeight`. The window keeps the full height, so its width is `H·9/16`
- * (matching Unit C's `crop=ih*9/16:ih`). Rounded to a whole pixel.
- */
 export function cropWindowWidthPx(videoHeight: number): number {
   return Math.round((Math.max(0, videoHeight) * 9) / 16);
 }
 
-/**
- * The largest valid `xOffset` (source px) — the window's left edge cannot push its
- * right edge past the source width. Clamps to 0 when the source is already as
- * narrow as (or narrower than) a 9:16 window (nothing to slide).
- */
 export function maxXOffset(videoWidth: number, videoHeight: number): number {
   return Math.max(0, Math.round(videoWidth) - cropWindowWidthPx(videoHeight));
 }
 
-/**
- * The crop window's width as a FRACTION of the displayed preview width — the width
- * of the draggable rect. 0 for a zero-width source (nothing to frame).
- */
 export function cropWidthFraction(videoWidth: number, videoHeight: number): number {
   if (videoWidth <= 0) {
     return 0;
@@ -60,11 +25,6 @@ export function cropWidthFraction(videoWidth: number, videoHeight: number): numb
   return clamp01(cropWindowWidthPx(videoHeight) / videoWidth);
 }
 
-/**
- * Map a dragged rect LEFT-edge fraction (0..1 of the preview width) to the integer
- * `xOffset` (source px) that `create_clip` stores. Clamped to `[0, maxXOffset]` so
- * the baked crop always stays inside the frame.
- */
 export function cropRectToXOffset({
   leftFraction,
   videoHeight,
@@ -80,10 +40,6 @@ export function cropRectToXOffset({
   return Math.max(0, Math.min(px, max));
 }
 
-/**
- * The inverse: a stored `xOffset` (source px) → the rect's left-edge fraction, for
- * drawing an existing clip's framing over the preview. 0 for a zero-width source.
- */
 export function xOffsetToLeftFraction({
   videoWidth,
   xOffset,
@@ -98,11 +54,6 @@ export function xOffsetToLeftFraction({
   return clamp01(xOffset / videoWidth);
 }
 
-/**
- * The left-edge fraction that CENTRES the 9:16 window in the frame — the natural
- * default + "reset framing" target for a centred top-down set. 0 when there's no
- * travel (the window already fills the frame).
- */
 export function centredCropLeftFraction(videoWidth: number, videoHeight: number): number {
   if (videoWidth <= 0) {
     return 0;
@@ -111,10 +62,6 @@ export function centredCropLeftFraction(videoWidth: number, videoHeight: number)
   return maxXOffset(videoWidth, videoHeight) / 2 / videoWidth;
 }
 
-/**
- * Clamp a rect left-edge fraction so the whole 9:16 window stays inside the frame
- * (its right edge never crosses 1). Used while dragging, so the rect can't escape.
- */
 export function clampCropLeftFraction(
   leftFraction: number,
   videoWidth: number,
@@ -129,9 +76,6 @@ export function clampCropLeftFraction(
   return Math.max(0, Math.min(clamp01(leftFraction), maxLeft));
 }
 
-// ── Timeline space (suggestions / in-out bands ⇄ ms) ──────────────────────────
-
-/** A millisecond position → a 0..1 fraction of the set duration. */
 export function msToFraction(ms: number, durationMs: number): number {
   if (durationMs <= 0) {
     return 0;
@@ -140,15 +84,10 @@ export function msToFraction(ms: number, durationMs: number): number {
   return clamp01(ms / durationMs);
 }
 
-/** A 0..1 fraction of the set duration → a whole-millisecond position. */
 export function fractionToMs(fraction: number, durationMs: number): number {
   return Math.round(clamp01(fraction) * Math.max(0, durationMs));
 }
 
-/**
- * A suggestion window (start + duration, in ms) → a timeline region (fractions of
- * the set duration) the energy lane draws as a dashed ghost band.
- */
 export function suggestionToRegion(
   suggestion: Pick<StudioSuggestion, "durationMs" | "startMs">,
   totalDurationMs: number,
@@ -159,10 +98,6 @@ export function suggestionToRegion(
   return { leftFraction, widthFraction: Math.max(0, endFraction - leftFraction) };
 }
 
-/**
- * A clip's stored window (in/out, in ms) → a timeline region (the committed,
- * Gold-Veil band the lane draws for an existing clip).
- */
 export function clipToRegion(
   clip: { inMs: number; outMs: number },
   totalDurationMs: number,
@@ -173,12 +108,6 @@ export function clipToRegion(
   return { leftFraction, widthFraction: Math.max(0, endFraction - leftFraction) };
 }
 
-/**
- * A hand-picked band (two edge fractions, in any order) → an ordered, whole-ms
- * `{ inMs, outMs }` window. The edges are sorted so a right-to-left drag still
- * yields in < out; `create_clip` rejects a non-positive window, so the caller
- * gates a zero-length band before posting.
- */
 export function bandToWindow(
   edgeFractionA: number,
   edgeFractionB: number,
@@ -190,12 +119,6 @@ export function bandToWindow(
   return { inMs: Math.min(a, b), outMs: Math.max(a, b) };
 }
 
-/**
- * Drop a default in/out band of `clipLengthMs`, centred-forward from the playhead:
- * it starts at `playheadMs` and runs `clipLengthMs`, clamped so it never runs past
- * the set end (sliding the start back if needed). The keyboard `M` mark and the
- * "accept suggestion" both land here so every minted clip has a sane window.
- */
 export function defaultBandAt(
   playheadMs: number,
   clipLengthMs: number,
@@ -209,23 +132,8 @@ export function defaultBandAt(
   return { inMs, outMs: Math.min(total, inMs + length) };
 }
 
-// ── Cue space (per-member start offsets on the set timeline) ───────────────────
-// A cue is one member's `start_ms` — the moment that track mixes in. The cue rail
-// marks them at the playhead; these pure helpers do the drop-snapping assist and the
-// order/completeness read the rail draws, kept DOM-free so they are unit-testable.
-
-/**
- * How close (ms) a playhead mark snaps to a `StudioPeak` drop. The audible mix-in of a
- * track usually lands on a loudness rise, so a mark near a drop is nudged onto it as an
- * assist — the operator scrubs roughly to the transition and the cue lands clean.
- */
 export const CUE_SNAP_WINDOW_MS = 2_000;
 
-/**
- * A playhead ms, snapped to the nearest drop within `windowMs` (else left raw, rounded
- * to a whole ms and floored at 0). `snapped` tells the UI whether the assist fired, so
- * it can say so and offer the exact (un-snapped) value.
- */
 export function snapCueToPeak(
   ms: number,
   peaks: Pick<StudioPeak, "atMs">[],
@@ -247,18 +155,8 @@ export function snapCueToPeak(
   return best === null ? { ms: raw, snapped: false } : { ms: best, snapped: true };
 }
 
-/** A member as the cue rail reads it: its stable track id + its current cue (ms). */
 export type CueMember = { startMs?: number | null; trackId: string };
 
-/**
- * The set's cue completeness, computed in tracklist order.
- *   - `complete` is the EXACT state YouTube chapters + the batch `set_mixtape_cues`
- *     want: every member cued, the first at 0, strictly increasing.
- *   - `outOfOrderTrackIds` flags any cued member whose cue is NOT strictly after the
- *     previous cued member's — the out-of-order mark the operator should see (the
- *     interactive path allows it transiently; the rail surfaces it, never blocks it).
- *   - `firstNotZero` explains an otherwise-cued set whose first track isn't at 0:00.
- */
 export type CueProgress = {
   complete: boolean;
   firstNotZero: boolean;

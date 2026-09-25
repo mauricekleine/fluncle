@@ -792,6 +792,7 @@ export const listTrackWork = oc
   })
   .input(
     z.object({
+      age: z.string().optional(),
       count: z.string().optional(),
 
       debtAware: z.string().optional(),
@@ -807,6 +808,7 @@ export const listTrackWork = oc
 
       debtPending: z.boolean().optional(),
       ok: z.literal(true),
+      oldestQueuedCaptureOver24h: z.boolean().optional(),
 
       queued: z.number().optional(),
       tracks: z.array(TrackWorkItemSchema),

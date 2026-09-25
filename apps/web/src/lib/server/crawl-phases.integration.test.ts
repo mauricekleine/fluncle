@@ -6,22 +6,32 @@ import { join } from "node:path";
 
 import { createIntegrationDb } from "./integration-db";
 import { markCrawlNodeRepairStatement, rebuildCrawlDueWork } from "./crawl-due-work";
-import { MAX_CRAWL_PREPARE_LIMIT } from "@fluncle/contracts/orpc";
+import {
+  crawlCatalogue as crawlCatalogueContract,
+  MAX_CRAWL_PREPARE_LIMIT,
+} from "@fluncle/contracts/orpc";
 
 import {
   commitCrawlPhase,
   CRAWL_PHASE_TOKEN_MAX_BYTES,
   type CrawlPhasePrepareResult,
+  crawlCatalogue as runCrawlCatalogue,
   fetchCrawlPhase,
   initializeCrawlPhase,
   prepareCrawlPhase,
 } from "./crawl";
 import { CRAWL_BOX_FETCH_ENABLED_KEY, CRAWL_DUE_CUTOVER_ENABLED_KEY } from "./crawl-cutover";
 import { setMusicbrainzRateLimitForTests } from "./musicbrainz";
+import { mergeLabel } from "./labels";
 
 let db: Client;
 let fixtureDirectory: string | undefined;
 const timestamp = "2026-08-01T00:00:00.000Z";
+const crawlInputSchema = crawlCatalogueContract["~orpc"].inputSchema;
+const crawlOutputSchema = crawlCatalogueContract["~orpc"].outputSchema;
+if (!crawlInputSchema || !crawlOutputSchema) {
+  throw new Error("crawl catalogue contract schema is missing");
+}
 
 type TransactionCounts = {
   batch: number;
@@ -111,6 +121,16 @@ function instrumentTransactions(client: Client): { client: Client; counts: Trans
   return { client, counts };
 }
 
+function executedSql(statement: unknown): string {
+  if (typeof statement === "string") {
+    return statement;
+  }
+  if (typeof statement === "object" && statement !== null && "sql" in statement) {
+    return typeof statement.sql === "string" ? statement.sql : "";
+  }
+  return "";
+}
+
 async function seedRelease(): Promise<void> {
   await db.execute({
     args: [CRAWL_DUE_CUTOVER_ENABLED_KEY, "true"],
@@ -176,6 +196,219 @@ afterEach(async () => {
 });
 
 describe("crawl admission phases", () => {
+  it("preserves the first-prepare repair sample flag through the oRPC input contract", () => {
+    const delivered = crawlInputSchema.parse({
+      body: { limit: 1, maxHop: 2, phase: "prepare", sampleStorableRepair: true },
+      query: {},
+    });
+    expect(delivered.body).toMatchObject({ phase: "prepare", sampleStorableRepair: true });
+  });
+
+  it("preserves prepare telemetry through the oRPC output contract", async () => {
+    const prepared = await prepareCrawlPhase({ limit: 1, maxHop: 2 });
+    const delivered = crawlOutputSchema.parse({
+      ...prepared,
+      ok: true,
+      phase: "prepare",
+    });
+    expect(delivered).toMatchObject({ items: [{ nodeKind: "release" }], storableReady: true });
+  });
+
+  it("preserves a positive legacy release numerator through the oRPC output contract", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(new Response(JSON.stringify(providerRelease(1))))),
+    );
+    const pass = await runCrawlCatalogue({ limit: 1, maxHop: 2 });
+    expect(pass.releaseDetailsStored).toBe(1);
+    const delivered = crawlOutputSchema.parse({ ...pass, ok: true });
+    expect(delivered).toHaveProperty("releaseDetailsStored", 1);
+  });
+
+  it("reports storable release work while its due-work row awaits repair", async () => {
+    await db.execute(`update crawl_due_work set state = 'repair', storable_rank = 1,
+      repair_entered_at = '2026-08-01T00:00:01.000Z'
+      where node_id = 'musicbrainz:release:release-phase'`);
+    const prepared = await prepareCrawlPhase({ limit: 1, maxHop: 2, sampleStorableRepair: true });
+    expect(prepared.storableReady).toBe(true);
+  });
+
+  it("uses only the ready lane when the repair sample flag is absent", async () => {
+    await db.execute(`update crawl_due_work set state = 'repair', storable_rank = 1,
+      repair_entered_at = '2026-08-01T00:00:01.000Z'
+      where node_id = 'musicbrainz:release:release-phase'`);
+    const execute = vi.spyOn(db, "execute");
+    const prepared = await prepareCrawlPhase({ limit: 1, maxHop: 2 });
+    const sampledRepair = execute.mock.calls.some(([statement]) => {
+      const sql = executedSql(statement);
+      return sql.includes("crawl_due_work_repair_idx") && sql.includes("crawl_frontier as node");
+    });
+    expect(sampledRepair).toBe(false);
+    expect(prepared.storableReady).toBeNull();
+  });
+
+  it("returns unknown after a capped repair sample without a storable release", async () => {
+    await db.execute("update labels set seed_state = 'disabled' where id = 'label-phase'");
+    await db.execute(`update crawl_due_work set state = 'repair', storable_rank = 1,
+      repair_entered_at = '2026-08-01T00:00:01.000Z'
+      where node_id = 'musicbrainz:release:release-phase'`);
+    await db.batch(
+      Array.from({ length: 200 }, (_, index) => ({
+        args: [`musicbrainz:release:repair-${String(index).padStart(3, "0")}`, timestamp],
+        sql: `insert into crawl_due_work
+          (node_id, node_kind, state, hop, demand_rank, created_at, storable_rank,
+           generation, source_version, updated_at, repair_entered_at)
+          values (?, 'release', 'repair', 0, 1, ?, 1,
+            'test', 'test', '2026-08-01T00:00:00.000Z', '2026-08-01T00:00:00.000Z')`,
+      })),
+      "write",
+    );
+    const execute = vi.spyOn(db, "execute");
+    const prepared = await prepareCrawlPhase({ limit: 1, maxHop: 2, sampleStorableRepair: true });
+    const cappedSample = execute.mock.calls.find(([statement]) => {
+      const sql = executedSql(statement);
+      return sql.includes("repair_page") && sql.includes("crawl_due_work_repair_idx");
+    });
+    expect(cappedSample).toBeDefined();
+    expect(cappedSample?.[0]).toMatchObject({ args: [200] });
+    expect(executedSql(cappedSample?.[0])).toContain("order by node_id limit ?");
+    expect(prepared.storableReady).toBeNull();
+  });
+
+  it("settles a terminal known-disabled release without a MusicBrainz call and re-arms after enable", async () => {
+    await db.execute("delete from crawl_due_work");
+    await db.execute("delete from crawl_frontier");
+    await db.execute("update labels set seed_state = 'disabled' where id = 'label-phase'");
+    await db.execute({
+      args: [timestamp, timestamp],
+      sql: `insert into crawl_frontier
+        (id, kind, source, external_id, hop, label_slug, release_label_slug,
+         created_at, updated_at)
+        values ('musicbrainz:release:release-phase', 'release', 'musicbrainz',
+          'release-phase', 2, 'phase-label', 'phase-label', ?, ?)`,
+    });
+    await rebuildCrawlDueWork(db, { generation: crypto.randomUUID(), limit: 10 });
+    await db.batch(
+      [markCrawlNodeRepairStatement("musicbrainz:release:release-phase", crypto.randomUUID())],
+      "write",
+    );
+    const fetchMock = vi.fn(() =>
+      Promise.resolve(new Response(JSON.stringify(providerRelease(1)))),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const prepared = await prepareCrawlPhase({ limit: 1, maxHop: 2 });
+    expect(prepared.items[0]?.fetchPlan).toEqual({ kind: "none" });
+    const fetched = await fetchCrawlPhase(prepared.items[0]?.preparedToken ?? "");
+    expect(fetchMock).toHaveBeenCalledTimes(0);
+    expect(await commitCrawlPhase(fetched)).toMatchObject({
+      outcome: "committed",
+      result: { releaseDetailsStored: 0, tracksWritten: 0 },
+    });
+    expect(
+      (await db.execute("select state from crawl_frontier where external_id = 'release-phase'"))
+        .rows[0]?.state,
+    ).toBe("skipped");
+
+    await db.execute("update labels set seed_state = 'enabled' where id = 'label-phase'");
+    const rearmed = await prepareCrawlPhase({ limit: 1, maxHop: 2 });
+    expect(rearmed.items[0]?.fetchPlan.kind).toBe("single");
+    const stored = await commitCrawlPhase(
+      await fetchCrawlPhase(rearmed.items[0]?.preparedToken ?? ""),
+    );
+    expect(stored).toMatchObject({ result: { releaseDetailsStored: 1, tracksWritten: 1 } });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("still fetches an undecided-label terminal release", async () => {
+    await db.execute("update labels set seed_state = 'undecided' where id = 'label-phase'");
+    await db.execute(`update crawl_frontier set hop = 2, release_label_slug = 'phase-label'
+      where external_id = 'release-phase'`);
+    const fetchMock = vi.fn(() =>
+      Promise.resolve(new Response(JSON.stringify(providerRelease(1)))),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const prepared = await prepareCrawlPhase({ limit: 1, maxHop: 2 });
+    expect(prepared.items[0]?.fetchPlan.kind).toBe("single");
+    await fetchCrawlPhase(prepared.items[0]?.preparedToken ?? "");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("re-arms a skipped disabled release after a scoped artist allow", async () => {
+    await db.execute("delete from crawl_due_work");
+    await db.execute("delete from crawl_frontier");
+    await db.execute("update labels set seed_state = 'disabled' where id = 'label-phase'");
+    await db.execute({
+      args: [timestamp, timestamp],
+      sql: `insert into crawl_frontier
+        (id, kind, source, external_id, hop, label_slug, release_label_slug, state, note,
+         created_at, updated_at)
+        values ('musicbrainz:release:release-phase', 'release', 'musicbrainz',
+          'release-phase', 2, 'phase-label', 'phase-label', 'skipped',
+          'disabled own label at terminal hop', ?, ?)`,
+    });
+    await db.execute({
+      args: [timestamp, timestamp],
+      sql: `insert into artist_rules
+        (id, artist_mbid, artist_name, label_id, source, verdict, created_at, updated_at)
+        values ('rule-phase', 'artist-0', 'Artist 0', 'label-phase', 'operator', 'allow', ?, ?)`,
+    });
+    const fetchMock = vi.fn(() =>
+      Promise.resolve(new Response(JSON.stringify(providerRelease(1)))),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const prepared = await prepareCrawlPhase({ limit: 1, maxHop: 2 });
+    expect(prepared.items[0]?.fetchPlan.kind).toBe("single");
+    const receipt = await commitCrawlPhase(
+      await fetchCrawlPhase(prepared.items[0]?.preparedToken ?? ""),
+    );
+    expect(receipt).toMatchObject({ result: { releaseDetailsStored: 1, tracksWritten: 1 } });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("re-arms a disabled terminal release after its label merges into an enabled label", async () => {
+    await db.execute("delete from crawl_due_work");
+    await db.execute("delete from crawl_frontier");
+    await db.execute({
+      args: [timestamp, timestamp],
+      sql: `insert into labels (id, name, slug, seed_state, created_at, updated_at)
+        values ('label-loser', 'Losing Label', 'losing-label', 'disabled', ?, ?)`,
+    });
+    await db.execute({
+      args: [timestamp, timestamp],
+      sql: `insert into crawl_frontier
+        (id, kind, source, external_id, hop, label_slug, release_label_slug, state, note,
+         created_at, updated_at)
+        values ('musicbrainz:release:release-phase', 'release', 'musicbrainz',
+          'release-phase', 2, 'losing-label', 'losing-label', 'skipped',
+          'disabled own label at terminal hop', ?, ?)`,
+    });
+    await mergeLabel("losing-label", "phase-label");
+    const prepared = await prepareCrawlPhase({ limit: 1, maxHop: 2 });
+    expect(prepared.items[0]?.fetchPlan.kind).toBe("single");
+    expect(
+      (await db.execute("select state from crawl_frontier where external_id = 'release-phase'"))
+        .rows[0]?.state,
+    ).toBe("pending");
+  });
+
+  it("re-arms a disabled terminal release when the hop limit widens", async () => {
+    await db.execute("delete from crawl_due_work");
+    await db.execute("delete from crawl_frontier");
+    await db.execute("update labels set seed_state = 'disabled' where id = 'label-phase'");
+    await db.execute({
+      args: [timestamp, timestamp],
+      sql: `insert into crawl_frontier
+        (id, kind, source, external_id, hop, label_slug, release_label_slug, state, note,
+         created_at, updated_at)
+        values ('musicbrainz:release:release-phase', 'release', 'musicbrainz',
+          'release-phase', 2, 'phase-label', 'phase-label', 'skipped',
+          'disabled own label at terminal hop', ?, ?)`,
+    });
+    const prepared = await prepareCrawlPhase({ limit: 1, maxHop: 3 });
+    expect(prepared.items[0]?.fetchPlan.kind).toBe("single");
+  });
+
   it("claims at most two nearby nodes while preserving release and discovery progress", async () => {
     await db.execute({
       args: [timestamp, timestamp],

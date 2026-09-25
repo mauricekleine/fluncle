@@ -1,11 +1,3 @@
-// `loadFrontDoorData` — the FRONT DOOR's server-side composition — against a REAL libSQL database
-// (the migrations, the finding inner-join, the release window, the maintained hub counters). `/` is
-// the page a stranger lands on, and its loader is an eight-read fan-out whose rules are pure SQL and
-// pure merge: the lead is the newest finding with a NOTE (not the newest finding), the findings band
-// must never repeat that lead, the release band carries BOTH registers one entry per release, and every count is a real
-// number off a real column. A mocked-DB test would pass while any of them was broken, so this drives
-// the real reads on the real schema — the `-findings-data.test.ts` shape.
-
 import { type Client } from "@libsql/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FRESH_WINDOW_DAYS } from "@/lib/server/fresh";
@@ -20,9 +12,6 @@ import {
 import { resetTracksHubAggregateCache } from "@/lib/server/tracks-hub";
 import { FRONT_DOOR_FINDINGS, FRONT_DOOR_RELEASES, loadFrontDoorData } from "./-front-door-data";
 
-// The one live database, swapped in fresh for each test. `getDb` closes over it, so the REAL query
-// functions (`listTracks`, `listFreshReleases`, `countAllTracks`, the three hub counts, `getLiveState`)
-// run REAL SQL against the REAL migrated schema.
 let db: Client;
 
 vi.mock("@/lib/server/db", async (importOriginal) => {
@@ -31,9 +20,6 @@ vi.mock("@/lib/server/db", async (importOriginal) => {
   return { ...actual, getDb: () => Promise.resolve(db) };
 });
 
-// ── Fixtures ─────────────────────────────────────────────────────────────────────────
-
-/** Seed a certified finding, then stamp its `added_at` so the band's order is deterministic. */
 async function seedFinding(trackId: string, logId: string, addedAt: string): Promise<void> {
   await seedTrack(db, { logId, title: `Finding ${trackId}`, trackId });
   await db.execute({
@@ -42,11 +28,6 @@ async function seedFinding(trackId: string, logId: string, addedAt: string): Pro
   });
 }
 
-/**
- * Write the editorial note onto a finding — the column `hasNote: true` reads. A note is what makes
- * the lead EDITED rather than merely latest, so this fixture is the whole difference between the
- * loader's two lead paths.
- */
 async function writeNote(trackId: string, note: string): Promise<void> {
   await db.execute({
     args: [note, trackId],
@@ -54,7 +35,6 @@ async function writeNote(trackId: string, note: string): Promise<void> {
   });
 }
 
-/** Stamp a track's RELEASE date — the release band's ordering key, unrelated to the found date. */
 async function releaseOn(trackId: string, releaseDate: string): Promise<void> {
   await db.execute({
     args: [releaseDate, trackId],
@@ -62,13 +42,6 @@ async function releaseOn(trackId: string, releaseDate: string): Promise<void> {
   });
 }
 
-/**
- * Stamp the internal admin/agent-only columns onto a seeded finding's `tracks` row — the
- * `PRIVATE_TRACK_FIELDS` set (`source_audio_key` the R2 key of the CAPTURED full song, plus the
- * `analyzed_*` and `*_source` provenance). A captured finding carries these on the ADMIN read; the
- * front door must strip them from the lead AND the band, and this fixture is what makes a leak
- * reproducible.
- */
 async function markCaptured(trackId: string): Promise<void> {
   await db.execute({
     args: [`sources/${trackId}/deadbeef.m4a`, "full", "dsp", "dsp", day(1), trackId],
@@ -79,12 +52,6 @@ async function markCaptured(trackId: string): Promise<void> {
   });
 }
 
-/**
- * Set the MAINTAINED hub counters production's write paths move as deltas (`hub-counts.ts`). The
- * three browse counts are one `count(*)` over `renderable_track_count >= floor`, so a fixture that
- * only inserts entity rows leaves every counter at the DDL default of 0 and describes a world the
- * archive cannot be in.
- */
 async function stampHubCounts(
   table: "albums" | "artists" | "labels",
   id: string,
@@ -92,31 +59,24 @@ async function stampHubCounts(
   certified: number,
 ): Promise<void> {
   await db.execute({
-    // `table` is one of three literals chosen here, never reader input; libSQL has no bind slot
-    // for an identifier.
     args: [renderable, certified, id],
     sql: `update ${table} set renderable_track_count = ?, certified_finding_count = ? where id = ?`,
   });
 }
 
-/** A `2026-01-DD` timestamp — day `n` of January 2026, so a higher `n` sorts NEWER. */
 function day(n: number): string {
   return `2026-01-${String(n).padStart(2, "0")}T00:00:00.000Z`;
 }
 
-/** The instant the release-window tests read from, so "the last 30 days" is a fixed span of days. */
 const RELEASE_NOW = new Date("2026-02-10T12:00:00.000Z");
 
-/** A `YYYY-MM-DD` release date `daysAgo` days before {@link RELEASE_NOW} — inside the window. */
 function releasedDaysAgo(daysAgo: number): string {
   return new Date(RELEASE_NOW.getTime() - daysAgo * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
 }
 
 beforeEach(async () => {
   db = await createIntegrationDb();
-  // The tracks hub memoises its aggregates at ISOLATE level, and that memo outlives a fixture: the
-  // whole-archive `countAllTracks()` the browse band reads is keyed by filter set, not by database,
-  // so without this every case after the first reads the previous case's total.
+
   resetTracksHubAggregateCache();
 });
 
@@ -133,11 +93,9 @@ describe("loadFrontDoorData — the empty archive", () => {
     expect(data.findingsTotal).toBe(0);
     expect(data.releases).toEqual([]);
     expect(data.counts).toEqual({ albums: 0, artists: 0, labels: 0, tracks: 0 });
-    // The window is echoed for the band's copy ("the last 30 days"), so it is the real constant even
-    // when nothing landed in it.
+
     expect(data.releaseWindowDays).toBe(FRESH_WINDOW_DAYS);
-    // The ambient read defaults cleanly on an empty archive (it carries its own tests; here we only
-    // prove the loader wires it through).
+
     expect(data.live.on).toBe(false);
   });
 });
@@ -160,21 +118,18 @@ describe("loadFrontDoorData — the edited lead", () => {
     await seedFinding("t-newest", "001.1.1A", day(4));
     await seedFinding("t-noted", "002.1.1A", day(3));
     await seedFinding("t-older", "003.1.1A", day(2));
-    // The note sits on a finding that is NOT the newest — the only fixture that can tell an edited
-    // lead apart from a latest-row lead.
+
     await writeNote("t-noted", "The one I keep rewinding.");
 
     const data = await loadFrontDoorData();
 
     expect(data.lead?.trackId).toBe("t-noted");
     expect(data.lead?.note).toBe("The one I keep rewinding.");
-    // And the newest finding is still in the band beneath it, in its own place.
+
     expect(data.findings[0]?.trackId).toBe("t-newest");
   });
 
   it("falls back to the newest finding when nothing carries a note yet", async () => {
-    // A young archive, or one the note sweep has not reached. The placement stays honest — just not
-    // yet edited — rather than shipping a hole where the door should be.
     await seedFinding("t-a", "010.1.1A", day(1));
     await seedFinding("t-b", "011.1.1A", day(3));
     await seedFinding("t-c", "012.1.1A", day(2));
@@ -187,9 +142,6 @@ describe("loadFrontDoorData — the edited lead", () => {
 
 describe("loadFrontDoorData — the band under the lead", () => {
   it("never repeats the lead, and still fills the band when the lead IS the newest finding", async () => {
-    // FRONT_DOOR_FINDINGS + 2 findings, oldest→newest, with the note on the NEWEST: the one case
-    // where the lead and the band's first row would collide. The loader reads one extra row so the
-    // band is still full after the duplicate is dropped.
     for (let n = 1; n <= FRONT_DOOR_FINDINGS + 2; n += 1) {
       await seedFinding(
         `d-${String(n).padStart(2, "0")}`,
@@ -215,8 +167,7 @@ describe("loadFrontDoorData — the band under the lead", () => {
         day(n),
       );
     }
-    // The note sits on the OLDEST finding, so the lead is off the band entirely and the band is
-    // purely the newest rows in found order.
+
     await writeNote("c-01", "Dug this one out of the bottom of the crate.");
 
     const data = await loadFrontDoorData();
@@ -237,9 +188,7 @@ describe("loadFrontDoorData — the band under the lead", () => {
     await seedFinding("f-a", "030.1.1A", day(3));
     await seedFinding("f-b", "031.1.1A", day(2));
     await seedFinding("f-c", "032.1.1A", day(1));
-    // A catalogue track — a `tracks` row with NO `findings` row. The findings band is a window onto
-    // the LOG, so an uncertified row must be invisible to its total (the count drives the "All N"
-    // link, which points at `/findings`).
+
     await seedCatalogueTrack(db, { title: "Uncertified Cut", trackId: "cat-1" });
     await seedCatalogueTrack(db, { title: "Another Uncertified Cut", trackId: "cat-2" });
 
@@ -252,9 +201,6 @@ describe("loadFrontDoorData — the band under the lead", () => {
 
 describe("loadFrontDoorData — the public strip", () => {
   it("strips PRIVATE_TRACK_FIELDS from the lead and from every band row", async () => {
-    // A CAPTURED finding carries the R2 key of the copyrighted full song plus the analysis
-    // provenance on the admin read. `/` is edge-cached SSR HTML served to everyone, so both the
-    // lead and the band have to go out through `toPublicTrackListItem`.
     await seedFinding("p-lead", "040.1.1A", day(2));
     await seedFinding("p-band", "041.1.1A", day(1));
     await writeNote("p-lead", "Captured, logged, still ringing.");
@@ -273,7 +219,7 @@ describe("loadFrontDoorData — the public strip", () => {
       expect(fields.analyzedAt).toBeUndefined();
       expect(fields.analyzedFrom).toBeUndefined();
     }
-    // The public VALUES survive the strip — the door still prints bpm/key, never their `*_source`.
+
     expect(data.lead?.bpm).toBe(174);
     expect(data.lead?.key).toBe("2A");
   });
@@ -283,8 +229,7 @@ describe("loadFrontDoorData — the release band carries both registers", () => 
   it("lists a certified finding and an uncertified row as releases, and only the finding carries a coordinate", async () => {
     await seedFinding("r-finding", "050.1.1A", day(1));
     await releaseOn("r-finding", releasedDaysAgo(2));
-    // The unlit half: a `tracks` row with no `findings` row. It belongs in the band — it just came
-    // out — and it is never named, never given a coordinate (DESIGN.md's Unlit Rule).
+
     await seedCatalogueTrack(db, { title: "Quiet Pressing", trackId: "r-catalogue" });
     await releaseOn("r-catalogue", releasedDaysAgo(4));
     await seedCatalogueTrack(db, { title: "Later Pressing", trackId: "r-future" });
@@ -306,8 +251,7 @@ describe("loadFrontDoorData — the release band carries both registers", () => 
     const catalogue = data.releases.find((release) => release.key === "track:r-catalogue");
     expect(finding?.tracks[0]?.lit).toBe(true);
     expect(finding?.tracks[0]?.logId).toBe("050.1.1A");
-    // The STRUCTURAL half of the Unlit Rule: the uncertified row has no coordinate field at all,
-    // so no surface downstream can print one or link it into the log.
+
     expect(catalogue?.lit).toBe(false);
     expect(catalogue?.tracks[0]?.lit).toBe(false);
     expect(catalogue?.tracks[0] ? "logId" in catalogue.tracks[0] : true).toBe(false);
@@ -324,7 +268,7 @@ describe("loadFrontDoorData — the release band carries both registers", () => 
         sql: `update tracks set album_id = 'album-ep', album = 'Two Sides EP' where track_id = ?`,
       });
     }
-    // The record's own order (ISRC) runs the release: the catalogue side first, the finding second.
+
     await db.execute({
       sql: `update tracks set isrc = 'GBAAA2600001' where track_id = 'ep-catalogue'`,
     });
@@ -342,7 +286,7 @@ describe("loadFrontDoorData — the release band carries both registers", () => 
       lit: true,
       title: "Two Sides EP",
     });
-    // Each track keeps its own register inside the one release.
+
     expect(release?.tracks.map((track) => [track.trackId, track.lit])).toEqual([
       ["ep-catalogue", false],
       ["ep-finding", true],
@@ -350,7 +294,6 @@ describe("loadFrontDoorData — the release band carries both registers", () => 
   });
 
   it("fills its releases even when a few long records crowd the head of the window", async () => {
-    // Six ten-track albums fill the band's first read (60 rows); two older singles lie past it.
     for (let album = 1; album <= 6; album += 1) {
       await seedAlbum(db, {
         id: `alb-${album}`,
@@ -382,7 +325,7 @@ describe("loadFrontDoorData — the release band carries both registers", () => 
       "track:single-a",
       "track:single-b",
     ]);
-    // Each record comes whole: all ten of its tracks.
+
     expect(data.releases[0]?.tracks).toHaveLength(10);
   });
 
@@ -396,15 +339,13 @@ describe("loadFrontDoorData — the release band carries both registers", () => 
     const data = await loadFrontDoorData(RELEASE_NOW);
 
     expect(data.releases).toHaveLength(FRONT_DOOR_RELEASES);
-    // Newest release first — the band's whole claim is "what just came out".
+
     expect(data.releases[0]?.releaseDate).toBe(releasedDaysAgo(1));
   });
 });
 
 describe("loadFrontDoorData — the browse counts are real numbers off real columns", () => {
   it("counts every entity that clears the thin-content floor, and no entity below it", async () => {
-    // Three tracks, all wired to one artist / label / album, so the counters below describe edges
-    // that genuinely exist.
     for (let n = 1; n <= 3; n += 1) {
       await seedFinding(`b-${n}`, `06${n}.1.1A`, day(n));
     }
@@ -424,8 +365,7 @@ describe("loadFrontDoorData — the browse counts are real numbers off real colu
     await stampHubCounts("artists", "artist-lit", 3, 3);
     await stampHubCounts("labels", "label-lit", 3, 3);
     await stampHubCounts("albums", "album-lit", 3, 3);
-    // A second entity of each kind, one renderable track short of the floor. It has a page and a
-    // 200, but it is not part of the shelf the door offers a number for.
+
     await seedArtist(db, { id: "artist-thin", name: "Thin Artist", slug: "thin-artist" });
     await seedLabel(db, { id: "label-thin", name: "Thin Label", slug: "thin-label" });
     await seedAlbum(db, { id: "album-thin", name: "Thin Album", slug: "thin-album" });
@@ -448,8 +388,6 @@ describe("loadFrontDoorData — the browse counts are real numbers off real colu
 
     const data = await loadFrontDoorData();
 
-    // The browse band never counts the uncertified tier separately or names it; "tracks" is true of
-    // every row beneath it.
     expect(data.counts.tracks).toBe(3);
     expect(data.findingsTotal).toBe(1);
   });

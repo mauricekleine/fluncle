@@ -5,6 +5,11 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSy
 import { connect } from "node:net";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { cronStaleBudgetMs, type CronDef } from "./cron-freshness";
+import { findJsonSummary, splitMarker } from "./cron-marker";
+
+export { cronStaleBudgetMs, MAX_TIMER_JITTER_MS, type CronDef } from "./cron-freshness";
+export { findJsonSummary, splitMarker, STDERR_DELIMITER } from "./cron-marker";
 
 const HOME = process.env.HOME ?? homedir() ?? "/opt/data/home";
 
@@ -397,10 +402,6 @@ function probeDisk(): Check {
   return { latencyMs: null, message: msg(`${usedPct}% used`), service, status: "ok" };
 }
 
-export const MAX_TIMER_JITTER_MS = 90_000;
-
-export type CronDef = { cadenceMs: number; match: string; service: string };
-
 export const AUTOMATION_CRONS: CronDef[] = [
   { cadenceMs: 5 * 60_000, match: "enrich", service: "cron.enrich" },
   { cadenceMs: 5 * 60_000, match: "embed", service: "cron.embed" },
@@ -416,6 +417,7 @@ export const AUTOMATION_CRONS: CronDef[] = [
   { cadenceMs: 60 * 60_000, match: "observation", service: "cron.observation" },
   { cadenceMs: 30 * 60_000, match: "backfill", service: "cron.backfill" },
   { cadenceMs: 10 * 60_000, match: "crawl", service: "cron.crawl" },
+  { cadenceMs: 15 * 60_000, match: "pipeline-watch", service: "cron.pipeline-watch" },
   { cadenceMs: 24 * 60 * 60_000, match: "label-releases", service: "cron.label-releases" },
   { cadenceMs: 30 * 60_000, match: "rank", service: "cron.rank" },
   {
@@ -565,31 +567,6 @@ function claimCronDirs(crons: CronDef[]): Map<string, string> {
   return claimed;
 }
 
-export function findJsonSummary(body: string): Record<string, unknown> | null {
-  const lines = splitMarker(body)
-    .stdout.split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean);
-
-  for (let index = lines.length - 1; index >= 0; index -= 1) {
-    const line = lines[index] ?? "";
-
-    if (!line.startsWith("{")) {
-      continue;
-    }
-
-    try {
-      const parsed: unknown = JSON.parse(line);
-
-      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-        return parsed as Record<string, unknown>;
-      }
-    } catch {}
-  }
-
-  return null;
-}
-
 function carriesConvergenceJudgement(summary: Record<string, unknown>): boolean {
   return typeof summary.converged === "boolean" || summary.gateState === "disabled";
 }
@@ -642,10 +619,6 @@ export function readProjectionMaintenanceState(
     };
   }
   return { converged: null, judgementAgeMs: null, oldestDebtAgeMs: null, outcome: null };
-}
-
-export function cronStaleBudgetMs(cron: CronDef): number {
-  return Math.max(cron.cadenceMs * 3, 90_000) + MAX_TIMER_JITTER_MS;
 }
 
 function formatElapsed(elapsedMs: number): string {
@@ -823,18 +796,6 @@ function probeCrons(claimed: Map<string, string>): Check[] {
       cron.service === "cron.projection-maintenance" ? readProjectionMaintenanceState(dir) : null;
     return cronCheck(cron, judgeCron(cron, dir, uptimeMs), projection);
   });
-}
-
-export const STDERR_DELIMITER = "<!-- fluncle-cron-output: stderr tail -->";
-
-export function splitMarker(body: string): { stderr: string; stdout: string } {
-  const index = body.indexOf(STDERR_DELIMITER);
-
-  if (index === -1) {
-    return { stderr: "", stdout: body };
-  }
-
-  return { stderr: body.slice(index + STDERR_DELIMITER.length), stdout: body.slice(0, index) };
 }
 
 export const STRAIN_PHRASES = [

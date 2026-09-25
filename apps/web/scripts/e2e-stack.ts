@@ -1,9 +1,9 @@
 #!/usr/bin/env bun
-
 import { type Subprocess } from "bun";
 import { rmSync } from "node:fs";
 import { join } from "node:path";
 import { seedE2eData } from "../tests/e2e/seed";
+import { startFakeSonar } from "../tests/e2e/fake-sonar";
 import { LOCAL_DB_CONCURRENCY } from "../src/lib/database-concurrency";
 import {
   isPortListening,
@@ -14,6 +14,7 @@ import {
   reapPorts,
   restoreDevVars,
   runScript,
+  SONAR_PORT,
   startLibsql,
   VITE_PORT,
   WEB_ROOT,
@@ -21,6 +22,7 @@ import {
 
 let turso: Subprocess | undefined;
 let vite: Subprocess | undefined;
+let sonar: ReturnType<typeof startFakeSonar> | undefined;
 let cleanedUp = false;
 
 async function cleanup(): Promise<void> {
@@ -29,6 +31,7 @@ async function cleanup(): Promise<void> {
   }
 
   cleanedUp = true;
+  await sonar?.stop(true);
   killProc(vite);
   killProc(turso);
 
@@ -44,7 +47,7 @@ for (const signal of ["SIGTERM", "SIGINT"] as const) {
 }
 
 async function main(): Promise<void> {
-  for (const port of [VITE_PORT, LIBSQL_PORT]) {
+  for (const port of [VITE_PORT, LIBSQL_PORT, SONAR_PORT]) {
     if (await isPortListening(port)) {
       throw new Error(
         `port ${port} is already in use — stop what's on it and retry the e2e suite.`,
@@ -70,7 +73,9 @@ async function main(): Promise<void> {
     url: LIBSQL_URL,
   });
   await seedE2eData(client);
-  client.close();
+
+  console.log(`e2e-stack: starting fake Sonar on :${SONAR_PORT}…`);
+  sonar = startFakeSonar(client);
 
   console.log(`e2e-stack: booting Vite on :${VITE_PORT}…`);
   vite = Bun.spawn(
@@ -85,6 +90,7 @@ async function main(): Promise<void> {
 
   const code = await vite.exited;
   await cleanup();
+  client.close();
   process.exit(code);
 }
 

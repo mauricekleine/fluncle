@@ -155,6 +155,24 @@ beforeEach(async () => {
 });
 
 describe("listTrackWork — the catalogue is workable", () => {
+  it("reports whether an embed work item has waited over a day without exposing its identity", async () => {
+    const { oldestQueuedEmbedCaptureOver24h } = await import("./track-work");
+    const trackId = "cat0000000000000000000";
+    await seedCatalogueTrack(db, { trackId });
+    await withAudio(trackId);
+    expect(await oldestQueuedEmbedCaptureOver24h()).toBe(false);
+    await db.execute({
+      args: [new Date(Date.now() - 60 * 60_000).toISOString(), trackId],
+      sql: "update tracks set source_audio_captured_at = ? where track_id = ?",
+    });
+    expect(await oldestQueuedEmbedCaptureOver24h()).toBe(false);
+    await db.execute({
+      args: [new Date(Date.now() - 25 * 60 * 60_000).toISOString(), trackId],
+      sql: "update tracks set source_audio_captured_at = ? where track_id = ?",
+    });
+    expect(await oldestQueuedEmbedCaptureOver24h()).toBe(true);
+  });
+
   it("embeds a CATALOGUE track: finding-free tracks are work items", async () => {
     const { listTrackWork } = await import("./track-work");
 
