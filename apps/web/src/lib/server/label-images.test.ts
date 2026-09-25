@@ -1,10 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// The label-image resolve sweep: give each label its OWN logo up the ladder
-// Discogs → Wikidata → the cover floor. The DB, the MB client, the Discogs client, the
-// env, and `fetch` (for Wikidata) are all mocked, so a test never hits a real database
-// or the network. `parseDiscogsLabelUrl` is the REAL pure function (importActual).
-
 const execute = vi.fn();
 const mbFetch = vi.fn();
 const fetchDiscogsLabelImage = vi.fn();
@@ -40,7 +35,6 @@ vi.mock("./musicbrainz", async () => {
 vi.mock("./discogs", async () => {
   const actual = await vi.importActual<typeof import("./discogs")>("./discogs");
 
-  // Keep the real `parseDiscogsLabelUrl` (pure); mock only the networked image fetch.
   return { ...actual, fetchDiscogsLabelImage };
 });
 
@@ -49,7 +43,6 @@ vi.mock("./log", () => ({ logEvent: vi.fn() }));
 
 const { resolveLabelImages } = await import("./label-images");
 
-/** A fake R2 bucket that records its `put`s (typed args, so `.mock.calls[i][0]` is the key). */
 function fakeBucket() {
   const put = vi.fn(
     (_key: string, _value: ArrayBuffer | string, _options?: unknown): Promise<undefined> =>
@@ -59,7 +52,6 @@ function fakeBucket() {
   return { bucket: { put } as unknown as Pick<R2Bucket, "put">, put };
 }
 
-/** The worklist SELECT returns these rows; every later write returns empty. */
 function seedWorklist(rows: unknown[]): void {
   execute.mockResolvedValueOnce({ rows });
   execute.mockResolvedValue({ rows: [] });
@@ -73,7 +65,6 @@ const HOSPITAL = {
   slug: "hospital-records",
 };
 
-/** The SQL of every write the pass issued (skipping the leading worklist SELECT). */
 function writtenSql(): string[] {
   return execute.mock.calls.slice(1).map((call) => String(call[0]?.sql ?? ""));
 }
@@ -160,7 +151,7 @@ describe("resolveLabelImages — the fallback ladder", () => {
 
   it("resolves a label's logo via Discogs and stores it in R2", async () => {
     seedWorklist([HOSPITAL]);
-    // MB label search → MBID, then its url-rels → a curated Discogs label relation.
+
     mbFetch
       .mockResolvedValueOnce({
         data: { labels: [{ id: "mbid-hospital", name: "Hospital Records" }] },
@@ -186,11 +177,11 @@ describe("resolveLabelImages — the fallback ladder", () => {
     expect(result.noneCount).toBe(0);
     expect(result.failedCount).toBe(0);
     expect(result.rateLimited).toBe(false);
-    // Downloaded once and stored under our own key (never a Discogs hotlink).
+
     expect(put).toHaveBeenCalledTimes(1);
     expect(put.mock.calls[0]?.[0]).toBe("labels/hospital-records.jpg");
     expect(fetchDiscogsLabelImage).toHaveBeenCalledWith(1111, "discogs-token");
-    // The identity ids were persisted + the row marked resolved.
+
     expect(writtenSql().some((sql) => sql.includes("mb_label_id"))).toBe(true);
     expect(writtenSql().some((sql) => sql.includes("discogs_label_id"))).toBe(true);
     expect(writtenSql().some((sql) => sql.includes("image_state = 'resolved'"))).toBe(true);
@@ -203,7 +194,7 @@ describe("resolveLabelImages — the fallback ladder", () => {
         data: { labels: [{ id: "mbid-hospital", name: "Hospital Records" }] },
         rateLimited: false,
       })
-      // url-rels carry ONLY a Wikidata link — no Discogs relation.
+
       .mockResolvedValueOnce({
         data: {
           relations: [
@@ -225,7 +216,6 @@ describe("resolveLabelImages — the fallback ladder", () => {
         );
       }
 
-      // The Commons image itself.
       return new Response(new ArrayBuffer(128), {
         headers: { "content-type": "image/png" },
         status: 200,
@@ -237,7 +227,7 @@ describe("resolveLabelImages — the fallback ladder", () => {
     const result = await resolveLabelImages(bucket, 50, false);
 
     expect(result.resolved).toEqual(["hospital-records"]);
-    // Discogs was never consulted (no discogs id); the logo is the Wikidata one, as a .png.
+
     expect(fetchDiscogsLabelImage).not.toHaveBeenCalled();
     expect(put).toHaveBeenCalledTimes(1);
     expect(put.mock.calls[0]?.[0]).toBe("labels/hospital-records.png");
@@ -250,7 +240,7 @@ describe("resolveLabelImages — the fallback ladder", () => {
         data: { labels: [{ id: "mbid-hospital", name: "Hospital Records" }] },
         rateLimited: false,
       })
-      // A Discogs relation exists, but the label has no image on Discogs and no Wikidata.
+
       .mockResolvedValueOnce({
         data: {
           relations: [
@@ -333,7 +323,7 @@ describe("resolveLabelImages — the fallback ladder", () => {
   });
 
   it("is idempotent: a drained worklist fetches nothing and writes nothing", async () => {
-    seedWorklist([]); // every label already resolved/none → not 'pending'.
+    seedWorklist([]);
 
     const { bucket, put } = fakeBucket();
     const result = await resolveLabelImages(bucket, 50, false);
@@ -355,13 +345,11 @@ describe("resolveLabelImages — the fallback ladder", () => {
     expect(result.resolved).toEqual(["hospital-records"]);
     expect(mbFetch).not.toHaveBeenCalled();
     expect(put).not.toHaveBeenCalled();
-    // Only the worklist SELECT ran — no writes.
+
     expect(execute).toHaveBeenCalledTimes(1);
   });
 
   it("reuses a crawler-persisted MBID (skips the MB search) and reports a resume cursor at the cap", async () => {
-    // A full page (MAX_BATCH=4) of labels that already carry an MBID: the pass skips the MB
-    // search and walks each label's url-rels directly. All resolve → the last slug is the cursor.
     const rows = Array.from({ length: 4 }, (_, i) => ({
       discogs_label_id: 2000 + i,
       image_failures: 0,
@@ -370,8 +358,7 @@ describe("resolveLabelImages — the fallback ladder", () => {
       slug: `label-${i}`,
     }));
     seedWorklist(rows);
-    // Only the url-rels walk is called per label (no search) — one mbFetch each, all with a
-    // Discogs relation already reflected by the pre-set discogs_label_id.
+
     mbFetch.mockResolvedValue({
       data: {
         relations: [{ type: "discogs", url: { resource: "https://www.discogs.com/label/9-X" } }],
@@ -387,7 +374,7 @@ describe("resolveLabelImages — the fallback ladder", () => {
     const result = await resolveLabelImages(bucket, 50, false);
 
     expect(result.resolvedCount).toBe(4);
-    // 4 url-rels walks, zero MB searches (the MBID was already stored).
+
     expect(mbFetch).toHaveBeenCalledTimes(4);
     expect(result.nextCursor).toBe("label-3");
   });

@@ -1,19 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { resolveLogId, sector } from "./log-id";
 
-// The coordinate MINT. `resolveLogId` runs exactly twice in the app — the certification mint
-// (publish.ts § resolveFindingLogId) and the `logId: "auto"` backfill (track-update.ts) — and
-// what it returns is written to `findings.log_id` and never recomputed (log-id.ts's own header:
-// "Permanent: computed once at add time and STORED"). So every property below is a PUBLIC
-// contract the moment a finding is minted: the sector must stay chronological, the tail must
-// stay derived from the recording's identity, and a collision must move the tail WITHOUT moving
-// the sector. `log-id-shared.test.ts` pins the day-math underneath; this pins the mint on top.
-
 const FOUND_AT = "2026-06-08T12:00:00.000Z";
 const ISRC = "GBABC2600001";
 const TRACK_ID = "3n3Ppam7vgaVa1iaRUc9Lp";
 
-/** An `isTaken` that reports the given coordinates taken and everything else free. */
 function taken(...coordinates: string[]): (candidate: string) => Promise<boolean> {
   const set = new Set(coordinates);
 
@@ -29,17 +20,12 @@ describe("sector — the chronological head of a coordinate", () => {
   });
 
   it("widens past three digits rather than truncating (the 2029 rollover)", () => {
-    // Day 1024 after the epoch. A `.slice(-3)` style pad would silently alias this
-    // onto sector 024 and collide two eras of coordinates.
     expect(sector("2029-03-19T00:00:00.000Z")).toBe("1024");
   });
 });
 
 describe("resolveLogId — the canonical candidate", () => {
   it("mints `sector.orbit.markL` and pins the algorithm on a golden value", async () => {
-    // A golden, not just a shape check: the tail is an FNV-1a slice, so a refactor that
-    // reorders the shifts still produces a well-formed coordinate while renaming every
-    // finding that would be minted after it.
     await expect(
       resolveLogId({ foundAt: FOUND_AT, isrc: ISRC, trackId: TRACK_ID }, free),
     ).resolves.toBe("009.9.4H");
@@ -81,8 +67,7 @@ describe("resolveLogId — the canonical candidate", () => {
     await expect(
       resolveLogId({ foundAt: FOUND_AT, isrc: null, trackId: TRACK_ID }, free),
     ).resolves.toBe(expected);
-    // A whitespace-only ISRC is not an identity. `isrc?.trim() || trackId` is what makes it
-    // fall through; a `??` there would seed the hash on "   " and mint a nonsense tail.
+
     await expect(
       resolveLogId({ foundAt: FOUND_AT, isrc: "   ", trackId: TRACK_ID }, free),
     ).resolves.toBe(expected);
@@ -96,7 +81,6 @@ describe("resolveLogId — collision resolution", () => {
       taken("009.9.4H"),
     );
 
-    // Chronology is fixed: a collision NEVER moves the finding to another day.
     expect(logId.startsWith("009.")).toBe(true);
     expect(logId).not.toBe("009.9.4H");
     expect(logId).toMatch(/^\d{3,}\.\d\.\d[A-Z]$/);
@@ -117,7 +101,7 @@ describe("resolveLogId — collision resolution", () => {
     );
 
     expect(second).toBe(first);
-    // Blocking attempt 0 AND attempt 1 walks on rather than looping on a used tail.
+
     expect(third).not.toBe(first);
     expect(third.startsWith("009.")).toBe(true);
   });
@@ -149,8 +133,6 @@ describe("resolveLogId — collision resolution", () => {
       }),
     ).rejects.toThrow("log-id: exhausted attempts resolving a unique coordinate");
 
-    // The bound is the loop's own, not the caller's: a silent `undefined` here would land
-    // a NOT NULL violation (or worse, a duplicate coordinate) far from the cause.
     expect(asked).toBe(64);
   });
 });

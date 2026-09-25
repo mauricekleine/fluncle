@@ -2,12 +2,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { readKeyHistogram, resetKeyHistogramCache } from "./key-histogram";
 
-// THE MEMO, PINNED. The histogram's whole reason to exist is that its two consumers — the `/mix`
-// depth gate and the rail's `key in (…)` pre-filter (tracks.ts) — ask the same question of the same
-// growing index, and the answer moves only when a track is keyed. So what is worth proving is not
-// the SQL (two dozen buckets off `tracks_key_idx`) but the COUNT of times it is issued: once per
-// window, whoever asks, and once again after the fixture reset `createIntegrationDb` calls.
-
 const execute = vi.hoisted(() => vi.fn());
 
 vi.mock("./db", () => ({
@@ -20,7 +14,6 @@ const HISTOGRAM = [
   { count: 7, key: "F major" },
 ];
 
-/** How many times the archive's `group by key` walk was actually issued. */
 function histogramReads(): number {
   return execute.mock.calls.filter(([statement]) => String(statement).includes("group by key"))
     .length;
@@ -55,9 +48,6 @@ describe("readKeyHistogram", () => {
     await readKeyHistogram();
     await readKeyHistogram();
 
-    // Concurrent cold callers share ONE in-flight read. A burst of `/mix` rails arriving at a
-    // fresh isolate together is exactly the shape that would otherwise multiply a walk of an
-    // index that grows with the catalogue, once per rail.
     expect(histogramReads()).toBe(1);
     expect(first).toEqual(HISTOGRAM);
     expect(second).toEqual(HISTOGRAM);
@@ -69,9 +59,6 @@ describe("readKeyHistogram", () => {
     execute.mockClear();
     execute.mockResolvedValue({ rows: [{ count: 3, key: "G minor" }] });
 
-    // Past the window. The reader is not made to wait for the walk: it gets the remembered
-    // spellings, and only the NEXT reader sees the refreshed ones. Exactly one caller per isolate
-    // ever pays this read — the first.
     vi.setSystemTime(Date.now() + 11 * 60_000);
 
     expect(await readKeyHistogram()).toEqual(HISTOGRAM);
@@ -86,7 +73,6 @@ describe("readKeyHistogram", () => {
 
     vi.setSystemTime(Date.now() + 11 * 60_000);
 
-    // A failed background refresh is never the reader's problem: the rail keeps its pre-filter.
     expect(await readKeyHistogram()).toEqual(HISTOGRAM);
     await vi.waitFor(() => expect(histogramReads()).toBe(1));
 

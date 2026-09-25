@@ -9,25 +9,23 @@ export type HubPageClause = {
 };
 
 export type HubPageAnchor = {
-  /** The first page whose rows start strictly after this boundary row. */
   page: number;
   id: string;
   key: null | string;
 };
 
 export type HubOrderedPageShape = {
-  /** Clauses applied before any seek boundary. */
   clauses: HubPageClause[];
-  /** The ordered source, including constant joins when the hub needs them. */
+
   from: string;
   idExpr: string;
   keyAlias: string;
   keyExpr: string;
   orderBy: string;
   pageSize: number;
-  /** A CTE or other constant prefix whose bind arguments precede the page query's arguments. */
+
   prefix?: HubPageClause;
-  /** The page row projection. The anchor query always projects only id + ordering key. */
+
   projection: string;
   seekAfter: (anchor: HubPageAnchor) => HubPageClause;
 };
@@ -35,7 +33,7 @@ export type HubOrderedPageShape = {
 export type HubPageQuery = {
   anchor?: HubPageAnchor;
   args: HubPageSqlArg[];
-  /** Rows still skipped after the nearest known boundary. Zero for a fresh per-page anchor set. */
+
   remainder: number;
   sql: string;
 };
@@ -52,11 +50,6 @@ export type PersistedAnchorDecision = {
   refresh: boolean;
 };
 
-/**
- * A bounded offset is cheaper than reading + fingerprinting an anchor record. The first ten hub
- * pages stay on the direct path: their largest offset is 432 rows at size 48 and 450 rows at size
- * 50. Every larger walk uses anchors when they exist.
- */
 export const HUB_SHALLOW_MAX_OFFSET = 450;
 
 function joinedWhere(clauses: HubPageClause[]): { args: HubPageSqlArg[]; sql: string } {
@@ -73,11 +66,6 @@ function queryPrefix(shape: HubOrderedPageShape): { args: HubPageSqlArg[]; sql: 
   };
 }
 
-/**
- * Extract one boundary row per full page entirely in SQL. No growing corpus crosses into the
- * isolate: only `(rn, id, key)` rows at page-size intervals do. `orderBy` is the same literal the
- * offset and seek builders consume, so the three statements cannot silently disagree on rank.
- */
 export function hubAnchorExtractionQuery(shape: HubOrderedPageShape): {
   args: HubPageSqlArg[];
   sql: string;
@@ -98,7 +86,6 @@ export function hubAnchorExtractionQuery(shape: HubOrderedPageShape): {
   };
 }
 
-/** Compile today's direct `limit/offset` page while sharing the ordered shape with seek. */
 export function hubOffsetPageQuery(
   shape: HubOrderedPageShape,
   limit: number,
@@ -118,7 +105,6 @@ export function hubOffsetPageQuery(
   };
 }
 
-/** The largest boundary whose target page does not exceed the requested page. */
 export function nearestHubPageAnchor(
   page: number,
   anchors: HubPageAnchor[],
@@ -134,14 +120,6 @@ export function nearestHubPageAnchor(
   return nearest;
 }
 
-/**
- * Build a numbered page as a seek from the nearest known boundary plus a bounded offset remainder.
- * A fresh extraction contains the requested page's exact boundary, so the remainder is zero. A
- * stale set can end before a newly grown tail; retaining the nearest older boundary and walking
- * only `(page - anchor.page) * pageSize` keeps that tail reachable. Rows around concurrent archive
- * mutations may drift between numbered pages, which is the pager's documented drift-window
- * semantics, but stale anchors never become a hard end cursor.
- */
 export function hubSeekPageQuery(
   shape: HubOrderedPageShape,
   page: number,
@@ -165,7 +143,6 @@ export function hubSeekPageQuery(
   };
 }
 
-/** Convert the extraction's tiny boundary result into persisted/memoized anchors. */
 export function hubPageAnchorsFromRows(
   rows: Record<string, unknown>[],
   keyAlias: string,
@@ -190,7 +167,6 @@ export function hubPageAnchorsFromRows(
   });
 }
 
-/** The exact clause-set key can stay readable in memory; persistence stores its compact hash. */
 export function hubClauseSetKey(clauses: HubPageClause[]): string {
   return JSON.stringify(clauses.map((clause) => [clause.sql, clause.args]));
 }
@@ -315,10 +291,6 @@ export async function persistHubPageAnchors(
 
 const scheduledRefreshes = new Map<string, Promise<void>>();
 
-/**
- * De-duplicate one in-isolate rebuild. Refreshes are best-effort: failure is swallowed and the
- * detached promise can never block or fail the page it accelerates.
- */
 export function scheduleHubPageAnchorRefresh(key: string, refresh: () => Promise<void>): void {
   if (scheduledRefreshes.has(key)) {
     return;
@@ -331,22 +303,14 @@ export function scheduleHubPageAnchorRefresh(key: string, refresh: () => Promise
 
   scheduledRefreshes.set(key, task);
 
-  // This module also powers the standalone hosted bench, where no Worker execution context exists;
-  // the detached refresh may be cut short if an isolate ends immediately after the response.
   void task;
 }
 
-/** One row's position in a hub order: the ordering key plus the id tiebreak. A NULL key sorts last. */
 export type HubOrderKey = {
   id: string;
   key: null | string;
 };
 
-/**
- * The release-hub order, `key desc, id desc` with NULL keys last: negative when `a` precedes `b`,
- * zero only for the same row. Both sides use binary text comparison, which is the collation of the
- * serving index, so the isolate and SQL agree on rank.
- */
 export function compareHubOrderKeys(a: HubOrderKey, b: HubOrderKey): number {
   if (a.key !== null && b.key !== null && a.key !== b.key) {
     return a.key > b.key ? -1 : 1;
@@ -363,14 +327,6 @@ export function compareHubOrderKeys(a: HubOrderKey, b: HubOrderKey): number {
   return a.id > b.id ? -1 : 1;
 }
 
-/**
- * The self-description a projected anchor shard carries beside its boundary rows. A shard then
- * covers one contiguous run of the order, `(after, next.after]`: `after` is the row the run starts
- * strictly behind (`null` for the head of the order), `n` counts the rows in the run and `nn` the
- * leading non-NULL-key rows among them, and `base` is the run's absolute start position when its
- * boundary rows were last computed. Boundary rows keep their page numbers so a pager can recover a
- * boundary's position inside the run from `base` even after earlier runs grew or shrank.
- */
 export type HubAnchorLeafMeta = {
   after: HubOrderKey | null;
   base: number;
@@ -379,7 +335,6 @@ export type HubAnchorLeafMeta = {
   v: 1;
 };
 
-/** The persisted marker that makes a shard fingerprint leaf metadata rather than a corpus fingerprint. */
 const HUB_ANCHOR_LEAF_META_VERSION = 1;
 
 function isHubOrderKey(value: unknown): value is HubOrderKey {
@@ -437,10 +392,6 @@ export function serializeHubAnchorLeafMeta(meta: HubAnchorLeafMeta): string {
   });
 }
 
-/**
- * The boundary rows of one run whose first row sits at absolute position `prefix`: every row whose
- * one-based rank is a page-size multiple, numbered with the page it opens.
- */
 export function hubLeafSamplesFromRows(
   rows: readonly HubOrderKey[],
   prefix: number,
@@ -452,31 +403,21 @@ export function hubLeafSamplesFromRows(
   });
 }
 
-/** Where a projected numbered page starts: a bounded offset behind one exact row or a zone head. */
 export type HubProjectedPageStart = {
-  /** The row to seek strictly behind; `null` seeks from the head of the phase. */
   after: HubOrderKey | null;
-  /** Rows still skipped behind `after`; always below the page size for a maintained run. */
+
   offset: number;
-  /** Which composite-index zone the seek runs in. */
+
   phase: "non_null" | "null";
 };
 
 export type HubAnchorLeaf = {
   anchors: HubPageAnchor[];
   meta: HubAnchorLeafMeta;
-  /** The run's absolute start position under the current prefix counts. */
+
   prefix: number;
 };
 
-/**
- * Resolve the page whose first row has absolute zero-based position `pageStart` inside the run that
- * holds it. Boundary rows recover their position in the run from the run's `base`; the nearest one
- * before the page start keeps the offset below the page size, and the run's `after` row covers a
- * page start before the first boundary. A page starting in the run's NULL-key tail seeks inside the
- * NULL zone: behind a NULL boundary row when one precedes it, else from the zone head, which the run
- * itself opens because it holds both key phases.
- */
 export function hubLeafPageStart(
   pageStart: number,
   leaf: HubAnchorLeaf,
@@ -536,11 +477,6 @@ function splitShardSuffix(suffix: string): { fraction: string; integer: string }
   return { fraction: match[2] ?? "", integer: match[1] ?? "" };
 }
 
-/**
- * A shard suffix that sorts strictly between `lower` and `upper` under binary text order, so a run
- * can split in place without renumbering its neighbours. Suffixes are a fixed-width integer with an
- * optional decimal fraction that never ends in zero; `upper` absent means the next integer.
- */
 export function hubAnchorShardSuffixBetween(lower: string, upper: string | undefined): string {
   const low = splitShardSuffix(lower);
   const high = upper === undefined ? undefined : splitShardSuffix(upper);

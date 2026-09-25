@@ -124,7 +124,7 @@ describe("seek SQL compilation", () => {
     expect(query.sql).not.toContain("gated");
     expect(query.sql).toContain("(e.slug >= ? and (e.slug > ? or e.id > ?))");
     expect(query.sql.toLowerCase()).not.toContain("union all");
-    // The gate inlines its floor, so the seek's own bounds lead the bound arguments.
+
     expect(query.sql).toContain("(e.certified_finding_count > 0 or e.renderable_track_count >= 3)");
     expect(query.args.slice(0, 3)).toEqual(["metalheadz", "metalheadz", "entity-500"]);
   });
@@ -312,7 +312,7 @@ describe("leaf runs", () => {
       meta: { after: { id: "a", key: "2027" }, base: 5, n: 12, nn: 12, v: 1 as const },
       prefix: 7,
     };
-    // Boundary positions inside the run stay 2 and 6 whatever the current prefix is.
+
     expect(hubLeafPageStart(7, leaf, 4)).toEqual({
       after: leaf.meta.after,
       offset: 0,
@@ -343,9 +343,9 @@ describe("leaf runs", () => {
       meta: { after: { id: "a", key: "2027" }, base: 0, n: 12, nn: 5, v: 1 as const },
       prefix: 0,
     };
-    // Rows 5.. are NULL-dated; the run opened the NULL zone, so it starts at offset (start - nn).
+
     expect(hubLeafPageStart(6, transition, 4)).toEqual({ after: null, offset: 1, phase: "null" });
-    // Behind the NULL boundary row at position 7 the seek runs on `track_id` alone.
+
     expect(hubLeafPageStart(9, transition, 4)).toEqual({
       after: { id: "n1", key: null },
       offset: 1,

@@ -12,21 +12,8 @@ import {
 import { DUE_WORK_SOURCE_REPAIR_KIND, MAX_DUE_WORK_CHUNK_SIZE } from "./due-work";
 import { hubCountDeltaStatement } from "./hub-counts";
 
-// THE HUB-COUNTS DRIFT BACKSTOP, PROVEN AGAINST THE REAL SCHEMA (docs/db-scale-backlog Wave 2
-// keystone 2, slice C).
-//
-// Every case here fabricates drift the way production produces it — RAW edge writes with no delta
-// (an out-of-band prune, a missed write path, the slice-A deploy-window skew that left 44 artists /
-// 3 albums / 1 label wrong on rollout day) — then asserts the sweep both FIXES it and REPORTS the
-// right number. The reported count is the operator's drift audit, so an over-count is as much a bug
-// as a missed correction: `corrected` must be the number of rows that were actually WRONG, never
-// the number of rows re-written.
-//
-// Driven against the in-memory libSQL harness with the real migrations applied, so the page reads
-// and guarded writes under test are byte-identical to production's.
-
 let db: Client;
-/** When set, the module under test talks to this wrapper instead of `db` (recording, races). */
+
 let wrapped: Client | undefined;
 
 vi.mock("./db", async (importOriginal) => {
@@ -35,7 +22,6 @@ vi.mock("./db", async (importOriginal) => {
   return { ...actual, getDb: () => Promise.resolve(wrapped ?? db) };
 });
 
-// Imported AFTER the mock so the module's `getDb` is the mocked one.
 const { HUB_COUNTS_RECONCILE_PAGE_SIZE, reconcileHubCounts } =
   await import("./hub-counts-reconcile");
 
@@ -52,7 +38,6 @@ async function counts(table: "albums" | "artists" | "labels", id: string): Promi
   return { certified: Number(row?.certified ?? -1), renderable: Number(row?.renderable ?? -1) };
 }
 
-/** Force a row's stored counters to an arbitrary (wrong) pair — the drift fabricator. */
 async function setCounts(
   table: "albums" | "artists" | "labels",
   id: string,
@@ -75,7 +60,7 @@ beforeEach(async () => {
   await seedTrack(db, { logId: "004.7.2A", trackId: "t-cert-0000000000000a" });
   await seedTrack(db, { logId: "004.7.2B", trackId: "t-cert-0000000000000b" });
   await seedCatalogueTrack(db, { trackId: "t-cat-00000000000000a" });
-  // The edges, written RAW (no deltas) — three linked tracks, two of them certified.
+
   await db.batch(
     [
       `update tracks set label_id = 'lab-1', album_id = 'alb-1'`,
@@ -103,7 +88,6 @@ describe("reconcileHubCounts — the grouped correction", () => {
     expect(Number(row.rows[0]?.n ?? -1)).toBe(1);
   });
   it("corrects a drifted counter on all three tables and reports one row each", async () => {
-    // The slice-A rollout shape: the edges exist, the counters were never moved for them.
     const result = await reconcileHubCounts();
 
     expect(result.labels).toEqual({ corrected: 1, deferred: 0 });
@@ -175,8 +159,7 @@ describe("reconcileHubCounts — the grouped correction", () => {
 describe("reconcileHubCounts — the zero-truth pass", () => {
   it("zeroes a label whose last track was deleted out of band", async () => {
     await reconcileHubCounts();
-    // The out-of-band prune: the tracks vanish, the counters keep their stale non-zero reading and
-    // the label appears in NO group, so only the zero pass can reach it.
+
     await db.execute(`delete from tracks`);
     expect(await counts("labels", "lab-1")).toEqual({ certified: 2, renderable: 3 });
 
@@ -203,14 +186,11 @@ describe("reconcileHubCounts — the zero-truth pass", () => {
 
     const result = await reconcileHubCounts();
 
-    // Only lab-1 drifted; the empty label is already truthful at 0/0 and must not inflate the count.
     expect(result.labels).toEqual({ corrected: 1, deferred: 0 });
     expect(await counts("labels", "lab-empty")).toEqual({ certified: 0, renderable: 0 });
   });
 
   it("still zeroes when NO track carries the pointer at all (the NOT IN null trap)", async () => {
-    // Every remaining track points at NO label. A `not in (select label_id from tracks)` without
-    // the `is not null` filter would yield a NULL predicate here and silently match nothing.
     await reconcileHubCounts();
     await db.execute(`update tracks set label_id = null`);
 
@@ -224,15 +204,13 @@ describe("reconcileHubCounts — the zero-truth pass", () => {
 describe("reconcileHubCounts — the pinned artists source (orphaned edges)", () => {
   it("does NOT count a track_artists edge whose track is gone", async () => {
     await reconcileHubCounts();
-    // The production condition: the track row is deleted
-    // out of band and its `track_artists` edge survives. The hub reads join `tracks`, so counting
-    // the raw edge would 'correct' the counter into disagreeing with what renders.
+
     await db.execute(`delete from tracks where track_id = 't-cat-00000000000000a'`);
 
     const result = await reconcileHubCounts();
 
     expect(result.artists).toEqual({ corrected: 1, deferred: 0 });
-    // Two surviving tracks, both certified — the orphan contributes nothing.
+
     expect(await counts("artists", "art-1")).toEqual({ certified: 2, renderable: 2 });
   });
 
@@ -242,23 +220,12 @@ describe("reconcileHubCounts — the pinned artists source (orphaned edges)", ()
 
     const result = await reconcileHubCounts();
 
-    // The three edges survive the track delete; the zero pass carries the same join, so the artist
-    // is zeroed rather than pinned at its stale reading.
     const edges = await db.execute(`select count(*) as n from track_artists`);
     expect(Number(edges.rows[0]?.n ?? 0)).toBe(3);
     expect(result.artists).toEqual({ corrected: 1, deferred: 0 });
     expect(await counts("artists", "art-1")).toEqual({ certified: 0, renderable: 0 });
   });
 });
-
-// ── Parity with the whole-graph correction ─────────────────────────────────────────────────────
-//
-// The oracle is the single-statement reconcile the paged pass replaces: per table a grouped
-// `UPDATE … FROM (… GROUP BY fk)` guarded by counts-differ, then a zero-truth `NOT IN` pass. On an
-// archive drifted in every way production drifts (over- and under-counts, half-drifted pairs,
-// stale non-zero entities with no tracks, orphaned artist edges, dangling pointers, rankable
-// drift), the paged pass must end on byte-identical counters and report identical corrections at
-// every page size, including sizes that land exactly on a table boundary.
 
 type HubTable = "albums" | "artists" | "labels";
 const HUB_TABLES: readonly HubTable[] = ["labels", "albums", "artists"];
@@ -306,7 +273,6 @@ async function oracleReconcile(client: Client): Promise<Record<HubTable, number>
   return corrected;
 }
 
-/** Deterministic PRNG so every run drifts the same archive. */
 function mulberry32(seed: number): () => number {
   let state = seed >>> 0;
 
@@ -325,10 +291,6 @@ function entityId(table: HubTable, index: number): string {
   return `${table.slice(0, 3)}-${String(index).padStart(2, "0")}`;
 }
 
-/**
- * Seed a drifted archive. Entity 00 of each table has no tracks and stale non-zero counters; label
- * and album 01 point only at tracks that are then deleted; artist 01 keeps only orphaned edges.
- */
 async function seedDriftedArchive(client: Client, seed: number): Promise<void> {
   const random = mulberry32(seed);
   const pick = (table: HubTable) => entityId(table, 2 + Math.floor(random() * (ENTITY_COUNT - 2)));
@@ -396,7 +358,6 @@ async function seedDriftedArchive(client: Client, seed: number): Promise<void> {
     }
   }
 
-  // Counter drift: random stored values everywhere, stale non-zero on entity 00 and 01.
   for (const table of HUB_TABLES) {
     for (let index = 0; index < ENTITY_COUNT; index += 1) {
       const stale = index < 2;
@@ -438,7 +399,6 @@ async function counterSnapshot(client: Client): Promise<Record<HubTable, unknown
   return snapshot;
 }
 
-/** Wrap a client so every `execute` and `batch` the module issues is recorded, then delegated. */
 function recordingClient(
   target: Client,
   onBatch?: (statements: InStatement[]) => Promise<void>,
@@ -449,7 +409,7 @@ function recordingClient(
 } {
   const batches: Array<{ mode: string | undefined; statements: InStatement[] }> = [];
   const executes: InStatement[] = [];
-  // The module under test issues only `execute` (page reads) and `batch` (guarded writes).
+
   const client = {
     batch: async (statements: InStatement[], mode?: "deferred" | "read" | "write") => {
       batches.push({ mode, statements });
@@ -489,7 +449,6 @@ describe("reconcileHubCounts — parity with the whole-graph correction", () => 
       const expected = await oracleReconcile(oracleDb);
       const result = await reconcileHubCounts({ pageSize });
 
-      // The fixture really drifts every table, so parity is not vacuous.
       expect(expected.labels).toBeGreaterThan(0);
       expect(expected.albums).toBeGreaterThan(0);
       expect(expected.artists).toBeGreaterThan(0);
@@ -627,7 +586,6 @@ describe("reconcileHubCounts — bounded statement shape", () => {
 describe("reconcileHubCounts — a maintained delta between read and write", () => {
   let lateTracks = 0;
 
-  /** The maintained edge writer's shape: the edge and its counter delta in one write batch. */
   async function linkLateTrack(): Promise<void> {
     lateTracks += 1;
     const trackId = `t-late-${String(lateTracks).padStart(15, "0")}`;
@@ -653,8 +611,6 @@ describe("reconcileHubCounts — a maintained delta between read and write", () 
 
     const result = await reconcileHubCounts();
 
-    // A blind write of the page's truth would land 3/2 and lose the late track. The guard misses,
-    // the page is re-read, and the correction includes it.
     expect(result.labels).toEqual({ corrected: 1, deferred: 0 });
     expect(await counts("labels", "lab-1")).toEqual({ certified: 2, renderable: 4 });
   });
@@ -675,7 +631,7 @@ describe("reconcileHubCounts — a maintained delta between read and write", () 
     const result = await reconcileHubCounts();
 
     expect(result.labels).toEqual({ corrected: 0, deferred: 1 });
-    // Both late deltas survive on top of the stale reading; nothing clobbered them.
+
     expect(await counts("labels", "lab-1")).toEqual({ certified: 9, renderable: 14 });
     const markers = await db.execute({
       args: [DUE_WORK_SOURCE_REPAIR_KIND],
