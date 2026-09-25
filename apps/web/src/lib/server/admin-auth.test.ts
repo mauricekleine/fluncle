@@ -17,11 +17,6 @@ const TOKEN = "test-token-admin-auth";
 const AGENT_TOKEN = "test-token-agent-auth";
 const SESSION_SECRET = "test-session-secret-admin-auth";
 
-// The grant epoch lives in the `settings` KV, which env.ts reads through a lazy
-// `import("./settings")`. Stub that KV in-memory: the epoch is a COLLABORATOR of the
-// auth logic under test, and stubbing it lets the suite drive the three states that
-// matter — unset (a fresh deploy), bumped (a revocation), and unreadable (a DB blip,
-// which must FAIL CLOSED).
 let epochValue: string | undefined;
 let epochReadThrows = false;
 
@@ -47,9 +42,6 @@ function adminRequest(headers: Record<string, string>): Request {
   return new Request("https://fluncle.com/api/admin/tracks/abc", { headers, method: "PATCH" });
 }
 
-// A cookie-carried admin request that satisfies the mutation origin guard, so these
-// suites keep testing the CARRIER (cookie vs Bearer) rather than the origin check —
-// which has its own suite in ./admin-mutation-origin.test.ts.
 function cookieRequest(grant: string): Request {
   return adminRequest({
     cookie: `${ADMIN_COOKIE_NAME}=${grant}`,
@@ -57,20 +49,11 @@ function cookieRequest(grant: string): Request {
   });
 }
 
-// Pin deterministic secrets. readEnv reads process.env at call time (not import
-// time), and loadLocalEnv's dotenv never overrides an already-set value, so
-// these win over .dev.vars and keep the suite independent of local secrets. The
-// Bearer carrier (FLUNCLE_API_TOKEN) and the cookie/state signing key
-// (ADMIN_SESSION_SECRET) are DELIBERATELY different values here — they are
-// separate secrets in production too.
 beforeAll(() => {
   process.env.FLUNCLE_API_TOKEN = TOKEN;
   process.env.FLUNCLE_AGENT_TOKEN = AGENT_TOKEN;
   process.env.ADMIN_SESSION_SECRET = SESSION_SECRET;
-  // Freeze the clock so every `Date.now()` — the `iat` a state is signed with AND
-  // the `now` it is verified against — reads the same instant. The grant/OAuth
-  // window math (fresh vs stale, expired) becomes exact instead of relying on the
-  // two reads landing in the same tick.
+
   vi.useFakeTimers();
   vi.setSystemTime(new Date("2026-06-22T12:00:00.000Z"));
 });
@@ -86,9 +69,6 @@ afterAll(() => {
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-// The two labeled subkeys env.ts derives from ADMIN_SESSION_SECRET. Reproduced here
-// (rather than imported) so the test pins the DERIVATION, not just the code path: if
-// the labels or the derivation change, these hand-forges stop verifying.
 function subkey(label: string): Buffer {
   return createHmac("sha256", SESSION_SECRET).update(label).digest();
 }
@@ -96,7 +76,6 @@ function subkey(label: string): Buffer {
 const GRANT_KEY = subkey("fluncle/admin-grant-cookie/v1");
 const OAUTH_KEY = subkey("fluncle/oauth-state/v1");
 
-/** Hand-forge a `<base64url body>.<base64url HMAC>` credential under an arbitrary key. */
 function forge(payload: Record<string, string | number>, key: Buffer | string): string {
   const body = Buffer.from(JSON.stringify(payload)).toString("base64url");
   const signature = createHmac("sha256", key).update(body).digest("base64url");
@@ -148,9 +127,6 @@ describe("admin grant (the browser carrier)", () => {
   });
 });
 
-// The key separation: ADMIN_SESSION_SECRET signs nothing directly, so a credential
-// minted for one purpose can never be replayed as the other — even though the two
-// share a root secret and a wire format.
 describe("grant cookie and OAuth state ride SEPARATE derived subkeys", () => {
   it("refuses a grant payload signed with the OAUTH subkey", async () => {
     const crossSigned = forge({ epoch: 0, iat: Date.now(), role: "admin" }, OAUTH_KEY);
@@ -183,7 +159,6 @@ describe("grant cookie and OAuth state ride SEPARATE derived subkeys", () => {
   });
 });
 
-// The revocation handle for an otherwise unrevocable stateless cookie.
 describe("grant epoch (revocation)", () => {
   it("accepts a grant when the epoch key is UNSET (fresh deploy, epoch 0)", async () => {
     const grant = await signGrant();
@@ -198,11 +173,9 @@ describe("grant epoch (revocation)", () => {
 
     expect(await revokeAdminGrants()).toBe(1);
 
-    // The pre-bump cookie is dead...
     expect(await verifyGrant(before)).toBe(false);
     expect((await requireAdmin(cookieRequest(before)))?.status).toBe(401);
 
-    // ...and a fresh login works immediately.
     const after = await signGrant();
     expect(await verifyGrant(after)).toBe(true);
     expect(await requireAdmin(cookieRequest(after))).toBeUndefined();
@@ -249,7 +222,6 @@ describe("grant epoch (revocation)", () => {
     expect(await verifyGrant(grant)).toBe(false);
     expect((await requireAdmin(cookieRequest(grant)))?.status).toBe(401);
 
-    // The Bearer carrier is unaffected, which is what keeps the CLI recovery path open.
     expect(await requireAdmin(adminRequest({ Authorization: `Bearer ${TOKEN}` }))).toBeUndefined();
   });
 
@@ -263,8 +235,6 @@ describe("grant epoch (revocation)", () => {
 
     epochValue = "not-a-number";
 
-    // The repair jumps to a whole-seconds timestamp (the previous epoch is unknown,
-    // so incrementing would be unsafe), then normal minting works again.
     const repaired = await revokeAdminGrants();
     expect(repaired).toBe(Math.floor(Date.now() / 1000));
     expect(await verifyGrant(await signGrant())).toBe(true);
@@ -315,10 +285,6 @@ describe("requireAdmin accepts either carrier (one identity, two carriers)", () 
   });
 });
 
-// Two roles, one umbrella. requireAdmin accepts any admin principal (operator OR
-// agent); requireOperator accepts only the operator and 403s a valid agent token.
-// This is what moves the publish boundary off the box gate and into the Worker:
-// the agent token simply lacks the authority, server-side.
 describe("admin roles (operator vs agent)", () => {
   const bearer = (token: string) => adminRequest({ Authorization: `Bearer ${token}` });
 
@@ -350,16 +316,12 @@ describe("admin roles (operator vs agent)", () => {
   });
 });
 
-// The whole point of the secret split: a session/state signed with the API
-// Bearer token (FLUNCLE_API_TOKEN) must NOT verify — only ADMIN_SESSION_SECRET
-// does. So a leaked Bearer token can never forge a {role:"admin"} cookie.
 describe("admin-session signing key is split from the API Bearer token", () => {
   it("rejects a grant cookie forged with the API token", async () => {
     const forged = forge({ epoch: 0, iat: Date.now(), role: "admin" }, TOKEN);
 
-    // The cookie carrier rejects it...
     expect(await verifyGrant(forged)).toBe(false);
-    // ...and so does the route gate that consumes the same cookie.
+
     expect((await requireAdmin(cookieRequest(forged)))?.status).toBe(401);
   });
 
@@ -380,8 +342,6 @@ describe("admin-session signing key is split from the API Bearer token", () => {
 });
 
 describe("isAllowedSpotifyUser (the operator allow-list, from env)", () => {
-  // Synthetic values — the real operator identity lives only in the deployed
-  // env, never in the repo. dotenv won't override these already-set vars.
   beforeAll(() => {
     process.env.ADMIN_ALLOWED_EMAILS = "operator@example.com";
     process.env.ADMIN_ALLOWED_SPOTIFY_IDS = "test_operator";

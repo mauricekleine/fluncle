@@ -1,46 +1,6 @@
-// Artist social resolution pipeline (Unit 2.1 of the artist-relationship RFC).
-//
-// Resolves an artist's cross-platform social identity into `artist_socials` rows:
-//
-//   1. MusicBrainz (primary): a NAME search — /ws/2/artist?query=artist:"<name>" —
-//      cross-referenced against the artist's stored Spotify id. Each top candidate's
-//      /ws/2/artist/<mbid>?inc=url-rels is deep-fetched; the candidate whose Spotify
-//      url-rel id equals ours is the definitive identity match (accepted even over a
-//      higher-scored candidate). A candidate whose Spotify rel DIFFERS is a namesake
-//      and is rejected. Only when NO candidate exposes any Spotify rel to cross-check
-//      do we fall back to a name+score match; otherwise the artist stays unresolved
-//      rather than resolve to a namesake. The matched MBID's url-rels are classified
-//      by host. MB url-rels are human-curated → status="auto" (trusted). Also stamps
-//      `artists.mbid` + `artists.wikidata_qid`.
-//
-//      ISRC-based MBID lookup is unsuitable: DnB ISRCs are frequently absent from MB's
-//      index and the walk can land on empty/wrong MBIDs, resolving most artists to 0–1
-//      links. Name-search + Spotify cross-reference is the correct, durable identity.)
-//
-//   2. Firecrawl (gap-fill): fills every missing social platform except homepage (MB
-//      covers it) and spotify (always known — it's the identity key), CHEAPEST source
-//      first — scrape a link hub MB already gave us (linktree/homepage), else /v2/search
-//      for the hub then scrape it, else a broad /v2/search bucketed by host. Uses the
-//      Worker-held FIRECRAWL_API_KEY. Gap-fill rows → status="candidate" (operator-review
-//      gated). (/v2/extract was retired — it never polled its async job AND only scraped
-//      the Spotify-SPA seed, so it silently returned nothing for every artist.)
-//
-//   3. URL normalization: deep-link → profile root (TikTok/IG @handle), YouTube
-//      @handle → channelId (best-effort via YouTube OAuth), UTM/query stripped.
-//
-//   4. Trust gate: `candidate` rows are excluded from the public artist page and
-//      sameAs JSON-LD until the operator confirms them in the /admin/artists queue.
-//      `auto`/`confirmed` rows are public.
-//
-// All vendor calls are best-effort: a failure for one platform never blocks the
-// others. MB is throttled at 1 req/s (the shared Worker-isolate ceiling).
-
 import { slugify } from "@fluncle/contracts/util/galaxy-slug";
 import { randomUUID } from "node:crypto";
-// The platform vocabulary and the http(s) guard live in the client-safe ../artist-socials
-// (imported back here exactly as its header prescribes, the way lib/server/artists.ts does).
-// `isHttpUrl` rejects a scraped `javascript:`/`data:` value before it can become a social row
-// — stored-XSS defense at ingestion; the operator confirm + render guards are the second layer.
+
 import { type ArtistSocialPlatform, isHttpUrl } from "../artist-socials";
 import { getDb, typedRow, typedRows } from "./db";
 import { readOptionalEnv } from "./env";
@@ -48,35 +8,17 @@ import { logEvent } from "./log";
 import { mbFetch, setMusicbrainzRateLimitForTests } from "./musicbrainz";
 import { getYouTubeAccessToken } from "./youtube";
 
-// ── Constants ────────────────────────────────────────────────────────────────
-
-// Firecrawl gap-fill endpoints. /v2/extract was RETIRED: it's async (the code never
-// polled the returned job id → it read `data` off the initial POST, which is always
-// empty → the gap-fill was a silent no-op for every artist) AND it only reads the seed
-// URL you hand it — seeded with the Spotify SPA (which lists no socials) it found
-// nothing. The replacements read a page that ACTUALLY lists the socials: /v2/scrape
-// (JSON mode) over a link hub (linktree/homepage), and /v2/search for real web search.
 const FIRECRAWL_SCRAPE_URL = "https://api.firecrawl.dev/v2/scrape";
 const FIRECRAWL_SEARCH_URL = "https://api.firecrawl.dev/v2/search";
-// A hard per-call ceiling so a slow/hung hub scrape can't stall the resolve (a real
-// homepage can be very slow; best-effort → abort and move on).
+
 const FIRECRAWL_TIMEOUT_MS = 45_000;
 const YOUTUBE_CHANNELS_API = "https://www.googleapis.com/youtube/v3/channels?part=id&maxResults=1";
-// The YouTube handle→channel lookup is a best-effort refinement (the @handle URL is a
-// fine fallback), so bound it too — an unbounded fetch here can hang the whole resolve.
+
 const YOUTUBE_RESOLVE_TIMEOUT_MS = 10_000;
 
-// ── Rate limiter ─────────────────────────────────────────────────────────────
-// The MB gate lives in ./musicbrainz.ts — the ONE client every MB caller in the
-// Worker shares (this resolver, the Discogs bridge, the catalogue crawler), so they
-// share one honest 1 req/s budget instead of keeping three and tripling the real rate.
-
-/** Test seam: set the pacing floor to run without real timers. */
 export function __setRateLimitForTests(ms: number): void {
   setMusicbrainzRateLimitForTests(ms);
 }
-
-// ── MB types ─────────────────────────────────────────────────────────────────
 
 type MbArtistSearchCandidate = {
   id?: string;
@@ -95,9 +37,6 @@ type MbUrlRel = {
   "target-type"?: string;
 };
 
-// One MusicBrainz alias (from `inc=aliases`) — the artist's other recorded names. We read `name`
-// (the display spelling) and `type` (to split real names from "Search hint" leads). `sort-name`,
-// `primary`, `locale`, and the begin/end dates are carried by MB but not needed here.
 type MbAlias = {
   name?: string;
   type?: string | null;
@@ -111,25 +50,15 @@ type MbArtistResponse = {
   error?: unknown;
 };
 
-// ── Firecrawl types ───────────────────────────────────────────────────────────
-
-// /v2/scrape JSON mode answers synchronously with the extracted object under
-// `data.json` — one string URL per requested platform key (built from the missing
-// targets at call time, so widen to a partial platform map). "" means the hub page
-// didn't list that platform.
 type FirecrawlScrapeResponse = {
   success?: boolean;
   data?: { json?: Partial<Record<ArtistSocialPlatform, string>> };
 };
 
-// /v2/search groups hits by source; we only read the `web` results' URLs. Tolerate a
-// bare-array `data` shape too (defensive — the field has shifted across versions).
 type FirecrawlSearchResponse = {
   success?: boolean;
   data?: { web?: Array<{ url?: string }> } | Array<{ url?: string }>;
 };
-
-// ── Result types ──────────────────────────────────────────────────────────────
 
 export type ResolvedSocial = {
   platform: ArtistSocialPlatform;
@@ -137,8 +66,6 @@ export type ResolvedSocial = {
   source: "musicbrainz" | "firecrawl";
 };
 
-// One harvested alias — an artist's alternate name from MusicBrainz (the many-names problem).
-// `kind` splits a real display name from a "Search hint" (kept for the record, never rendered).
 export type ResolvedAlias = {
   alias: string;
   slug: string;
@@ -149,19 +76,13 @@ export type ArtistResolutionResult = {
   artistId: string;
   mbid: string | null;
   wikidataQid: string | null;
-  // The secondary KG anchors (the artist's Discogs/Last.fm pages) — `sameAs` identities the
-  // artist page emits, with no rendered link. Null when MusicBrainz carried no such relation.
+
   discogsUrl: string | null;
   lastfmUrl: string | null;
   socials: ResolvedSocial[];
   rateLimited: boolean;
 };
 
-// ── URL classification ────────────────────────────────────────────────────────
-
-// Link HUBS — a page whose whole job is to list an artist's profiles (a linktree). MB
-// sometimes carries one; it's the ideal free scrape seed (one call → every social), so
-// the resolver CAPTURES these as hub URLs rather than discarding them.
 const LINK_HUB_HOSTS = new Set([
   "linktr.ee",
   "lnk.to",
@@ -173,8 +94,6 @@ const LINK_HUB_HOSTS = new Set([
   "ffm.to",
 ]);
 
-// METADATA sites — catalogue/discography pages, NOT the artist's own link list. Their
-// footers don't carry the socials, so scraping one just burns a call; keep dropping them.
 const METADATA_HOSTS = new Set([
   "musicbrainz.org",
   "discogs.com",
@@ -186,7 +105,6 @@ const METADATA_HOSTS = new Set([
   "setlist.fm",
 ]);
 
-/** True when a URL is a link-hub (linktr.ee/lnk.to/…) — a scrapeable list of socials. */
 export function isLinkHubUrl(resource: string): boolean {
   try {
     return LINK_HUB_HOSTS.has(new URL(resource).hostname.replace(/^www\./, ""));
@@ -195,13 +113,6 @@ export function isLinkHubUrl(resource: string): boolean {
   }
 }
 
-/**
- * Classify an MB url-relation resource URL to a social platform (or null if unhandled).
- *
- * `relType` is the MB relation `type` field. Only an `"official homepage"` rel type
- * maps to the `"homepage"` social; everything else that isn't a recognized
- * social/aggregator returns null (skipped, not stored).
- */
 export function classifyMbUrl(
   resource: string,
   relType?: string | null,
@@ -209,7 +120,6 @@ export function classifyMbUrl(
   let host: string;
 
   try {
-    // Strip www. AND music. subdomains so music.youtube.com → youtube.com.
     host = new URL(resource).hostname.replace(/^(www\.|music\.)/, "");
   } catch {
     return null;
@@ -255,36 +165,17 @@ export function classifyMbUrl(
     return "wikidata";
   }
 
-  // Link hubs + metadata sites are never a "social" row: a hub is captured separately as
-  // a scrape seed (see isLinkHubUrl / extractSocialsFromArtistData), a metadata site is
-  // dropped outright.
   if (LINK_HUB_HOSTS.has(host) || METADATA_HOSTS.has(host)) {
     return null;
   }
 
-  // Only store a homepage when MB explicitly tagged it as one.
   if (relType === "official homepage") {
     return "homepage";
   }
 
-  // Everything else (Wikipedia, streaming, VIAF, ISNI, IMDb, …) is unhandled → skip.
   return null;
 }
 
-/**
- * Classify an MB url-relation as a secondary KG identity ANCHOR — a metadata catalogue page
- * that is NOT a social row but IS a real off-site identity for the artist page's `sameAs`.
- *
- * The counterpart to `classifyMbUrl`, deliberately separate rather than a widening of it:
- * Discogs and Last.fm stay in `METADATA_HOSTS` and stay null there, so the operator's inline
- * social-URL validation and the Firecrawl search bucket keep rejecting them as social platforms.
- * They land on `artists.discogs_url` / `artists.lastfm_url` instead — the `labels.discogs_label_id`
- * precedent, an identity column with no rendered link.
- *
- * Path-shape guarded, because only an ARTIST page is an identity: a Discogs `/release/…` or a
- * bare host says nothing about who this artist is. Query strings are irrelevant to the shape,
- * so the caller stores `stripQuery(resource)`.
- */
 export function classifyMbAnchorUrl(resource: string): "discogs" | "lastfm" | null {
   let host: string;
   let path: string;
@@ -309,9 +200,6 @@ export function classifyMbAnchorUrl(resource: string): "discogs" | "lastfm" | nu
   return null;
 }
 
-// ── URL normalization ─────────────────────────────────────────────────────────
-
-/** Strip query parameters from a URL (keep just origin + pathname). */
 function stripQuery(rawUrl: string): string {
   try {
     const u = new URL(rawUrl);
@@ -321,7 +209,6 @@ function stripQuery(rawUrl: string): string {
   }
 }
 
-/** The first non-empty path segment of a URL (the username slot on most socials), or null. */
 function firstPathSegment(rawUrl: string): string | null {
   try {
     return new URL(rawUrl).pathname.split("/").filter(Boolean)[0] ?? null;
@@ -330,13 +217,6 @@ function firstPathSegment(rawUrl: string): string | null {
   }
 }
 
-/**
- * Reduce a username-in-first-segment social URL to its profile root — so a scraped/searched
- * DEEP link (a SoundCloud track, a Facebook post, a tweet) canonicalizes to the profile
- * instead of being stored verbatim. Returns null when the first segment is a known
- * non-profile section (a track list, a post) rather than a handle. Idempotent on MB's
- * already-clean profile URLs.
- */
 function profileRootFromFirstSegment(
   rawUrl: string,
   base: string,
@@ -351,7 +231,6 @@ function profileRootFromFirstSegment(
   return `${base}/${segment}`;
 }
 
-/** Extract the @handle (without `@`) from a TikTok URL. */
 function extractTikTokHandle(rawUrl: string): string | null {
   try {
     const pathname = new URL(rawUrl).pathname;
@@ -362,11 +241,6 @@ function extractTikTokHandle(rawUrl: string): string | null {
   }
 }
 
-/**
- * Extract the Bluesky identifier from a `bsky.app/profile/<handle-or-did>` URL — the handle
- * (`fluncle.com`, `name.bsky.social`) OR the `did:plc:…` a DID-form profile URL carries. Both
- * are the identity slot after `/profile/`; a URL with no profile segment returns null.
- */
 function extractBlueskyHandle(rawUrl: string): string | null {
   try {
     const segments = new URL(rawUrl).pathname.split("/").filter(Boolean);
@@ -377,7 +251,6 @@ function extractBlueskyHandle(rawUrl: string): string | null {
   }
 }
 
-/** Extract the username from an Instagram URL. */
 function extractInstagramHandle(rawUrl: string): string | null {
   try {
     const pathname = new URL(rawUrl).pathname;
@@ -388,11 +261,6 @@ function extractInstagramHandle(rawUrl: string): string | null {
   }
 }
 
-/**
- * Resolve a YouTube /@handle URL to a stable channel/UC... URL using the YouTube
- * Data API (via the stored OAuth access token). Best-effort: if the token isn't
- * provisioned or the call fails, the @handle URL is returned as-is.
- */
 async function resolveYouTubeHandleToChannelUrl(rawUrl: string): Promise<string> {
   try {
     const u = new URL(rawUrl);
@@ -413,8 +281,7 @@ async function resolveYouTubeHandleToChannelUrl(rawUrl: string): Promise<string>
     const apiUrl = `${YOUTUBE_CHANNELS_API}&forHandle=@${encodeURIComponent(handle)}`;
     const response = await fetch(apiUrl, {
       headers: { Authorization: `Bearer ${accessToken}` },
-      // Bound the call — an unbounded fetch here can stall the whole resolve, and the
-      // handle-only URL below is a fine fallback. Matches the Firecrawl gap-fill's deadline.
+
       signal: AbortSignal.timeout(YOUTUBE_RESOLVE_TIMEOUT_MS),
     });
 
@@ -439,30 +306,25 @@ async function resolveYouTubeHandleToChannelUrl(rawUrl: string): Promise<string>
   }
 }
 
-/** Strip a YouTube URL to the channel root (no videos/playlists). */
 async function normalizeYouTubeUrl(rawUrl: string): Promise<string | null> {
   try {
     const u = new URL(rawUrl);
     const pathname = u.pathname;
 
-    // Already a channel/UC URL — clean.
     if (pathname.startsWith("/channel/")) {
       const channelId = pathname.split("/")[2];
 
       return channelId ? `https://www.youtube.com/channel/${channelId}` : null;
     }
 
-    // @handle — try to resolve to stable channelId.
     if (pathname.startsWith("/@")) {
       return await resolveYouTubeHandleToChannelUrl(rawUrl);
     }
 
-    // User/* or c/* legacy — keep as-is stripped.
     if (pathname.startsWith("/user/") || pathname.startsWith("/c/")) {
       return stripQuery(rawUrl);
     }
 
-    // A video or playlist URL — not a channel profile root; skip.
     if (pathname.startsWith("/watch") || pathname.startsWith("/playlist")) {
       return null;
     }
@@ -473,10 +335,6 @@ async function normalizeYouTubeUrl(rawUrl: string): Promise<string | null> {
   }
 }
 
-/**
- * Normalize a social URL to the canonical profile root. Returns null when the
- * URL can't be reduced to a profile page (e.g. a TikTok video URL with no handle).
- */
 export async function normalizeProfileUrl(
   platform: ArtistSocialPlatform,
   rawUrl: string,
@@ -497,8 +355,6 @@ export async function normalizeProfileUrl(
     }
 
     case "bluesky": {
-      // The identity is the handle/DID after /profile/; a deep link (a post, a feed)
-      // collapses to the profile root, an unparseable one is dropped.
       const handle = extractBlueskyHandle(rawUrl);
       return handle ? `https://bsky.app/profile/${handle}` : null;
     }
@@ -507,7 +363,6 @@ export async function normalizeProfileUrl(
       return normalizeYouTubeUrl(rawUrl);
 
     case "spotify": {
-      // Keep the artist URL, strip query params.
       const stripped = stripQuery(rawUrl);
       return stripped.includes("/artist/") ? stripped : null;
     }
@@ -551,8 +406,6 @@ export async function normalizeProfileUrl(
       );
 
     case "twitch":
-      // The channel handle IS the first path segment (twitch.tv/flunclelive); reduce a
-      // clip/video/directory deep link to the channel root.
       return profileRootFromFirstSegment(
         rawUrl,
         "https://www.twitch.tv",
@@ -560,8 +413,6 @@ export async function normalizeProfileUrl(
       );
 
     case "bandcamp": {
-      // The subdomain IS the identity (nutone.bandcamp.com); reduce to the origin so a
-      // /track or /album deep link collapses to the artist page.
       try {
         return new URL(rawUrl).origin;
       } catch {
@@ -574,10 +425,6 @@ export async function normalizeProfileUrl(
   }
 }
 
-// ── Operator inline-edit validation ────────────────────────────────────────────
-// The plain platform display names the operator-facing validation messages read from.
-// Kept here beside the classifier they describe (the route's PLATFORM_LABELS is the
-// client twin; this one feeds the SERVER's authoritative message).
 const SOCIAL_DISPLAY_NAMES: Record<ArtistSocialPlatform, string> = {
   bandcamp: "Bandcamp",
   beatport: "Beatport",
@@ -594,26 +441,8 @@ const SOCIAL_DISPLAY_NAMES: Record<ArtistSocialPlatform, string> = {
   youtube: "YouTube",
 };
 
-/** The result of validating an operator-entered social URL against its row's platform. */
 export type SocialUrlValidation = { ok: true; url: string } | { ok: false; reason: string };
 
-/**
- * Validate + normalize an operator-entered social URL against the row's KNOWN platform —
- * the server half of the fresh-links inline edit (an operator correcting a resolver miss
- * without leaving the row). REUSES the resolver's own per-platform knowledge:
- *
- *   - `classifyMbUrl` maps the URL's host → the platform it belongs to. The URL's host
- *     must classify to the SAME platform as the row (a YouTube row rejects an
- *     instagram.com URL). `homepage` is the exception: an artist's own site can be any
- *     host, so it accepts anything that ISN'T some OTHER known social/aggregator.
- *   - `normalizeProfileUrl` reduces a deep link to the profile root (a `youtu.be/<video>`
- *     collapses to the channel root where it can; an unreducible deep link is rejected
- *     with an honest message rather than stored verbatim).
- *
- * Pure per-platform validation — no DB, no external I/O beyond the best-effort YouTube
- * channel lookup `normalizeProfileUrl` already does. Returns the normalized URL to store,
- * or a plain, quiet reason for the row's inline error.
- */
 export async function validateSocialUrlForPlatform(
   platform: ArtistSocialPlatform,
   rawUrl: string,
@@ -631,8 +460,6 @@ export async function validateSocialUrlForPlatform(
   const classified = classifyMbUrl(trimmed);
 
   if (platform === "homepage") {
-    // A homepage is the artist's own front door — any host EXCEPT a recognized social
-    // (those belong in their own row). `classified` is null for a plain website.
     if (classified && classified !== "wikidata") {
       return {
         ok: false,
@@ -652,12 +479,6 @@ export async function validateSocialUrlForPlatform(
   return { ok: true, url: normalized };
 }
 
-// ── MB fetch helper ────────────────────────────────────────────────────────────
-// `mbFetch` is the shared client (./musicbrainz.ts): 1 req/s, an identifiable
-// User-Agent, Retry-After honoured on a 503, and `rateLimited` reported honestly.
-
-// ── MB name similarity (lightweight match, not casefold-full) ─────────────────
-
 function mbNameMatch(mbName: string, artistName: string): boolean {
   const normalize = (s: string) =>
     s
@@ -669,23 +490,10 @@ function mbNameMatch(mbName: string, artistName: string): boolean {
   return normalize(mbName) === normalize(artistName);
 }
 
-// ── Lucene / Spotify-id helpers (for the name search + cross-reference) ────────
-
-/**
- * Escape the two characters (`\` and `"`) that are special INSIDE a Lucene quoted
- * phrase, so an artist name can be sent as `artist:"<escaped>"` without breaking the
- * query or splitting on spaces. The whole phrase is quoted, so term-level specials
- * (`+ - && || ! ( ) …`) are inert and need no escaping.
- */
 export function luceneEscapePhrase(value: string): string {
   return value.replace(/[\\"]/g, "\\$&");
 }
 
-/**
- * Extract the Spotify artist id from an `open.spotify.com/artist/<id>` URL, or null
- * if the URL isn't a Spotify artist URL. Used to cross-check an MB name-search
- * candidate's identity against the Fluncle artist's stored `spotify_artist_id`.
- */
 export function parseSpotifyArtistId(rawUrl: string): string | null {
   try {
     const u = new URL(rawUrl);
@@ -702,7 +510,6 @@ export function parseSpotifyArtistId(rawUrl: string): string | null {
   }
 }
 
-/** Find the Spotify artist id among an MB artist's url-rels (null if none present). */
 function spotifyArtistIdFromRelations(relations?: MbUrlRel[]): string | null {
   for (const relation of relations ?? []) {
     const resource = relation.url?.resource;
@@ -721,22 +528,11 @@ function spotifyArtistIdFromRelations(relations?: MbUrlRel[]): string | null {
   return null;
 }
 
-// The MB search `score` (0–100) a name-only candidate must clear to be accepted when
-// NO candidate exposed a Spotify url-rel to cross-check against. Paired with an exact
-// name match, this biases hard toward correctness — a wrong social link on a public
-// artist page is worse than a missing one.
 const NAME_SEARCH_SCORE_THRESHOLD = 90;
 
-// How many name-search hits MB returns, and how many of the top ones we deep-fetch
-// url-rels for (each deep-fetch is 1 req/s under MB's limit). Name search is now the
-// primary — not a fallback — so we examine the full returned set to give the Spotify
-// cross-reference the best chance of finding the identity match.
 const NAME_SEARCH_LIMIT = 5;
 const NAME_SEARCH_MAX_DEEP_FETCH = 5;
 
-// ── URL-rel classification ────────────────────────────────────────────────────
-
-/** Classify an MB artist's url-rels into resolved socials + the KG anchors. */
 async function extractSocialsFromArtistData(artistData: MbArtistResponse): Promise<{
   socials: ResolvedSocial[];
   wikidataQid: string | null;
@@ -757,8 +553,6 @@ async function extractSocialsFromArtistData(artistData: MbArtistResponse): Promi
       continue;
     }
 
-    // A secondary KG anchor (Discogs/Last.fm) — an off-site identity for `sameAs`, never a
-    // social row and never a rendered link. First one wins, exactly like the socials below.
     const anchor = classifyMbAnchorUrl(resource);
 
     if (anchor) {
@@ -771,8 +565,6 @@ async function extractSocialsFromArtistData(artistData: MbArtistResponse): Promi
       continue;
     }
 
-    // A link hub (linktr.ee/lnk.to/…) isn't a social row — capture it as a scrape seed
-    // for the Firecrawl gap-fill (one scrape → every social it lists) instead of dropping it.
     if (isLinkHubUrl(resource)) {
       hubUrls.push(resource);
       continue;
@@ -785,7 +577,6 @@ async function extractSocialsFromArtistData(artistData: MbArtistResponse): Promi
     }
 
     if (classification === "wikidata") {
-      // Extract QID (e.g. Q12345) from the Wikidata URL.
       const match = resource.match(/\/wiki\/(Q\d+)/);
 
       if (match?.[1]) {
@@ -801,13 +592,10 @@ async function extractSocialsFromArtistData(artistData: MbArtistResponse): Promi
       continue;
     }
 
-    // A homepage is also a scrapeable hub — an artist's own site footer usually lists
-    // every social — so seed the gap-fill with it in addition to storing it as a social.
     if (classification === "homepage") {
       hubUrls.push(normalizedUrl);
     }
 
-    // Deduplicate by platform (first wins).
     if (!socials.some((s) => s.platform === classification)) {
       socials.push({ platform: classification, source: "musicbrainz", url: normalizedUrl });
     }
@@ -816,13 +604,6 @@ async function extractSocialsFromArtistData(artistData: MbArtistResponse): Promi
   return { discogsUrl, hubUrls, lastfmUrl, socials, wikidataQid };
 }
 
-/**
- * Harvest an MB artist's `inc=aliases` into ResolvedAlias rows — the artist's other recorded names
- * (the many-names problem). Skips empties and any alias whose slug equals the canonical artist
- * name's (it IS the primary name, not an alternate); dedupes by slug (first wins). A MusicBrainz
- * "Search hint" alias is kept as `kind='hint'` (never rendered publicly) — everything else is a
- * real display name (`kind='name'`).
- */
 export function extractAliasesFromArtistData(
   artistData: MbArtistResponse,
   canonicalName: string,
@@ -851,26 +632,19 @@ export function extractAliasesFromArtistData(
   return aliases;
 }
 
-// ── MB artist resolution (name search + Spotify cross-reference) ───────────────
-
 type MbResolution = {
   mbid: string | null;
   wikidataQid: string | null;
-  // The secondary KG anchors MB carried (Discogs/Last.fm artist pages) — `sameAs` identities,
-  // not socials. Null when the matched MB entity had no such url-rel; never synthesized.
+
   discogsUrl: string | null;
   lastfmUrl: string | null;
   socials: ResolvedSocial[];
-  // The artist's MusicBrainz aliases (the many-names problem) — harvested off the SAME matched
-  // candidate's `inc=aliases` payload, so they cost no extra MB call.
+
   aliases: ResolvedAlias[];
   rateLimited: boolean;
-  // The trust the MB socials persist at: an exact Spotify-id identity match earns "auto"
-  // (public/trusted); the weaker name+score soft fallback is downgraded to "candidate"
-  // (awaits an operator glance before it can surface publicly). Meaningless when there
-  // are no socials — defaults to "candidate", the harmless floor.
+
   mbSocialStatus: "auto" | "candidate";
-  // Link hubs (linktree/homepage) MB carried — the free scrape seeds for the gap-fill.
+
   hubUrls: string[];
 };
 
@@ -888,26 +662,6 @@ function emptyResolution(mbid: string | null, rateLimited: boolean): MbResolutio
   };
 }
 
-/**
- * Resolve an artist's socials + KG anchors via MusicBrainz, name-search primary:
- *
- *   1. Search MB by artist NAME: /ws/2/artist?query=artist:"<lucene-escaped>".
- *   2. Deep-fetch each top candidate's `inc=url-rels`.
- *   3. Definitive match (auto): a candidate whose Spotify url-rel id === the stored
- *      `spotify_artist_id` is our artist — accept it immediately, even over a
- *      higher-scored candidate. Identity confirmed.
- *   4. Namesake reject: a candidate whose Spotify rel is present but DIFFERS is a
- *      different artist — never accept it.
- *   5. Soft fallback (candidate): only when NO candidate exposed ANY Spotify rel to
- *      cross-check against, accept the top candidate on a strong MB `score` (≥ threshold)
- *      plus an exact normalized name match — but at LOWER trust (`mbSocialStatus`
- *      "candidate": awaits an operator glance, never public until confirmed), since there
- *      was no identity confirmation. Otherwise stay unresolved rather than resolve to a
- *      namesake — the downstream Firecrawl gap-fill / operator review takes it.
- *
- * The matched MBID's url-rels are classified into socials. The whole walk is throttled
- * at 1 req/s (per-isolate serial gate). ISRC-based MBID lookup was retired (see header).
- */
 export async function resolveArtistViaMb(
   artistName: string,
   spotifyArtistId: string | null,
@@ -935,13 +689,8 @@ export async function resolveArtistViaMb(
 
   const deepFetchCount = Math.min(candidates.length, NAME_SEARCH_MAX_DEEP_FETCH);
 
-  // Whether any examined candidate carried a Spotify url-rel at all. If one did and none
-  // matched ours, we're in namesake territory (MB tracks Spotify for this name-space and
-  // our id isn't among the hits) → disable the soft name+score fallback: better a miss.
   let anyCandidateHadSpotifyRel = false;
 
-  // The best-scored candidate we could examine that had NO Spotify rel — the only kind
-  // eligible for the soft fallback. First (highest-scored) one wins.
   let fallbackCandidate: MbArtistSearchCandidate | null = null;
   let fallbackData: MbArtistResponse | null = null;
 
@@ -954,8 +703,6 @@ export async function resolveArtistViaMb(
     }
 
     const artistResult = await mbFetch<MbArtistResponse>(
-      // `+aliases` harvests the artist's alternate names on the SAME lookup that classifies its
-      // url-rels — no extra MusicBrainz call (the many-names problem, the MusicBrainz identity layer).
       `/artist/${encodeURIComponent(candidateId)}?inc=url-rels+aliases`,
     );
 
@@ -971,8 +718,6 @@ export async function resolveArtistViaMb(
 
     const candidateSpotifyId = spotifyArtistIdFromRelations(artistData.relations);
 
-    // (3) Definitive identity match — accept immediately, even over a higher score.
-    // Identity confirmed by the Spotify cross-reference → socials are trusted (auto).
     if (spotifyArtistId && candidateSpotifyId && candidateSpotifyId === spotifyArtistId) {
       const { socials, wikidataQid, discogsUrl, lastfmUrl, hubUrls } =
         await extractSocialsFromArtistData(artistData);
@@ -990,15 +735,11 @@ export async function resolveArtistViaMb(
       };
     }
 
-    // (4) Candidate carries a Spotify rel we could check and it didn't match → namesake.
-    // Record that a cross-check signal existed; never let it become the soft fallback.
     if (candidateSpotifyId) {
       anyCandidateHadSpotifyRel = true;
       continue;
     }
 
-    // (5) No Spotify rel on this candidate — eligible for the soft name+score fallback.
-    // Keep the first (highest-scored) qualifier; keep looping for a possible (3) match.
     if (
       fallbackCandidate === null &&
       (candidate?.score ?? 0) >= NAME_SEARCH_SCORE_THRESHOLD &&
@@ -1009,17 +750,11 @@ export async function resolveArtistViaMb(
     }
   }
 
-  // No definitive match. Only take the soft fallback when NOTHING gave us a Spotify rel
-  // to cross-check — otherwise a namesake would slip through on name+score alone. The
-  // fallback is name+score only (no identity confirmation) → its socials persist as
-  // "candidate", never public until an operator confirms them.
   if (!anyCandidateHadSpotifyRel && fallbackCandidate?.id && fallbackData) {
     const { socials, wikidataQid, discogsUrl, lastfmUrl, hubUrls } =
       await extractSocialsFromArtistData(fallbackData);
 
     return {
-      // Even the soft (name+score) match's aliases are harvested — they come from the same MB
-      // entity, and an alias is a low-risk display-name enrichment (never a link on a public page).
       aliases: extractAliasesFromArtistData(fallbackData, trimmedName),
       discogsUrl,
       hubUrls,
@@ -1035,13 +770,6 @@ export async function resolveArtistViaMb(
   return emptyResolution(null, false);
 }
 
-// ── Firecrawl gap-fill ────────────────────────────────────────────────────────
-
-// The social platforms Firecrawl is allowed to backfill. Deliberately EXCLUDES
-// `homepage` (MB covers it ~11/12 and a "find the homepage" extract returns junk
-// like Wikipedia) and `spotify` (always known — it's the identity key). Everything
-// Firecrawl returns persists as status="candidate" (operator-review gated), so the
-// wider net stays accuracy-safe. The order feeds the schema + prompt render order.
 const FIRECRAWL_TARGETS: ArtistSocialPlatform[] = [
   "instagram",
   "tiktok",
@@ -1056,10 +784,6 @@ const FIRECRAWL_TARGETS: ArtistSocialPlatform[] = [
   "beatport",
 ];
 
-/**
- * Build the /v2/scrape JSON-mode extract (schema + prompt) for a link-hub page: one
- * string property per still-missing platform. `""` = the hub didn't list that platform.
- */
 function buildHubExtract(targets: ArtistSocialPlatform[]): { prompt: string; schema: object } {
   const schema = {
     properties: Object.fromEntries(
@@ -1078,10 +802,6 @@ function buildHubExtract(targets: ArtistSocialPlatform[]): { prompt: string; sch
   return { prompt, schema };
 }
 
-/**
- * A Firecrawl POST with a hard abort timeout. Returns parsed JSON, or null on any
- * non-2xx / network error / timeout (best-effort — the gap-fill never throws).
- */
 async function firecrawlPost<T>(url: string, body: unknown, apiKey: string): Promise<T | null> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), FIRECRAWL_TIMEOUT_MS);
@@ -1108,11 +828,6 @@ async function firecrawlPost<T>(url: string, body: unknown, apiKey: string): Pro
   }
 }
 
-/**
- * Scrape ONE link hub (a linktree/homepage) with /v2/scrape JSON mode → the missing
- * platforms it lists. /v2/scrape reads the URL you hand it, so this only works on a page
- * that ACTUALLY lists the socials (a hub) — never on the Spotify SPA. Best-effort → {}.
- */
 async function scrapeHubForSocials(
   hubUrl: string,
   targets: ArtistSocialPlatform[],
@@ -1148,7 +863,6 @@ async function scrapeHubForSocials(
   return found;
 }
 
-/** Real web search via /v2/search → the hit URLs (best-effort; [] on failure). */
 async function firecrawlSearch(query: string, apiKey: string, limit: number): Promise<string[]> {
   const payload = await firecrawlPost<FirecrawlSearchResponse>(
     FIRECRAWL_SEARCH_URL,
@@ -1162,14 +876,8 @@ async function firecrawlSearch(query: string, apiKey: string, limit: number): Pr
   return rows.map((r) => r.url).filter((u): u is string => typeof u === "string");
 }
 
-// Fluncle's entire archive is drum & bass, so every artist is a DnB act — appending this
-// to a web search disambiguates HARD against same-name artists in other genres. It's the
-// difference between soundcloud.com/nutone and a random "nu-tone" namesake: without it a
-// broad search returns whatever ranks for the bare name (wrong artists), with it the DnB
-// act's real profiles rank first. Validated live on Nu:Tone across every platform.
 const ARTIST_SEARCH_CONTEXT = "drum and bass";
 
-/** The link-hub URL (linktr.ee/lnk.to/…) a web search surfaces for an artist, or null. */
 async function findHubViaSearch(artistName: string, apiKey: string): Promise<string | null> {
   const urls = await firecrawlSearch(
     `"${artistName}" ${ARTIST_SEARCH_CONTEXT} linktree official links`,
@@ -1179,18 +887,11 @@ async function findHubViaSearch(artistName: string, apiKey: string): Promise<str
   return urls.find(isLinkHubUrl) ?? null;
 }
 
-/** Bucket a web-search result URL to one of the gap-fill target platforms (or null). */
 function bucketSearchUrl(url: string): ArtistSocialPlatform | null {
   const classification = classifyMbUrl(url);
   return classification && classification !== "wikidata" ? classification : null;
 }
 
-// Platforms whose profile handle IS the first path segment — so a search result's handle
-// can be name-checked to reject a namesake/label (a TikTok search for an act with none
-// returns the label's account). The rest are exempt: YouTube resolves to an opaque
-// /channel/<id>, Bandcamp's identity is the subdomain, Beatport's is /artist/<slug>/<id>,
-// Bluesky's handle is the SECOND segment (/profile/<handle>) — name-checking the first
-// segment there would wrongly drop correct hits.
 const HANDLE_IN_FIRST_SEGMENT = new Set<ArtistSocialPlatform>([
   "instagram",
   "tiktok",
@@ -1201,7 +902,6 @@ const HANDLE_IN_FIRST_SEGMENT = new Set<ArtistSocialPlatform>([
   "twitch",
 ]);
 
-/** Name tokens for the relatedness check: the full concatenation + each ≥3-char word. */
 function artistNameTokens(artistName: string): string[] {
   const full = artistName.toLowerCase().replace(/[^a-z0-9]/g, "");
   const words = artistName
@@ -1212,12 +912,6 @@ function artistNameTokens(artistName: string): string[] {
   return [...new Set(full.length >= 3 ? [full, ...words] : words)];
 }
 
-/**
- * A safe namesake guard for a Stage-3 search hit: on the first-segment platforms, the
- * result's handle must share a name token with the artist. Exempt (always true) for the
- * platforms whose handle isn't the first segment, and when the artist name yields no
- * usable token. Kills a label/namesake account a bare-platform search returns.
- */
 function searchHitLooksRelated(
   platform: ArtistSocialPlatform,
   url: string,
@@ -1245,23 +939,6 @@ function searchHitLooksRelated(
   return tokens.some((token) => handle.includes(token) || token.includes(handle));
 }
 
-/**
- * Fill the social platforms MB didn't resolve, cheapest source first so we spend the
- * fewest Firecrawl credits:
- *
- *   1. Scrape any link hub MB already handed us (homepage / linktr.ee) — /v2/scrape JSON,
- *      one call → every social the hub lists. FREE discovery (MB gave us the URL).
- *   2. Still missing → /v2/search for the artist's link hub, then scrape it.
- *   3. Still missing → a DISAMBIGUATED per-platform web search, taking the first result
- *      that both host-matches the platform AND reduces to a profile root (so a video/post
- *      is skipped). Per-platform + the DnB context keeps the RIGHT artist's profile on top.
- *
- * (/v2/extract was retired — see the FIRECRAWL_* constants. It never polled its async job
- * AND only read the Spotify-SPA seed, so it returned nothing for every artist.)
- *
- * Every hit is stored already normalized to its canonical profile root, and returned as a
- * candidate row (status set to "candidate" at persist). Best-effort throughout — never throws.
- */
 export async function resolveGapViaFirecrawl(
   artistName: string,
   spotifyUrl: string | null,
@@ -1275,8 +952,6 @@ export async function resolveGapViaFirecrawl(
     return [];
   }
 
-  // Need SOME identity anchor before spending on a name-based web search — an MB hub, an
-  // MB identity match, or the Spotify URL. Otherwise a bare name search risks a namesake.
   if (!spotifyUrl && !mbid && mbHubUrls.length === 0) {
     return [];
   }
@@ -1287,8 +962,6 @@ export async function resolveGapViaFirecrawl(
     return [];
   }
 
-  // `found` holds the canonical profile root per platform (normalized at insertion, so a
-  // deep link / video is dropped here, not later).
   const found = new Map<ArtistSocialPlatform, string>();
   const remaining = (): ArtistSocialPlatform[] => targets.filter((p) => !found.has(p));
 
@@ -1312,7 +985,6 @@ export async function resolveGapViaFirecrawl(
     }
   };
 
-  // Stage 1 — scrape the hubs MB already handed us (free; dedupe URLs).
   for (const hubUrl of new Set(mbHubUrls)) {
     if (remaining().length === 0) {
       break;
@@ -1321,7 +993,6 @@ export async function resolveGapViaFirecrawl(
     await absorbHub(await scrapeHubForSocials(hubUrl, remaining(), apiKey));
   }
 
-  // Stage 2 — no MB hub covered it: search for the artist's link hub, then scrape it.
   if (remaining().length > 0) {
     const hubUrl = await findHubViaSearch(artistName, apiKey);
 
@@ -1330,7 +1001,6 @@ export async function resolveGapViaFirecrawl(
     }
   }
 
-  // Stage 3 — per-platform disambiguated search (parallel), first related profile-root wins.
   const stillMissing = remaining();
 
   if (stillMissing.length > 0) {
@@ -1360,8 +1030,6 @@ export async function resolveGapViaFirecrawl(
   return [...found].map(([platform, url]) => ({ platform, source: "firecrawl", url }));
 }
 
-// ── DB helpers ────────────────────────────────────────────────────────────────
-
 type ArtistRow = {
   id: string;
   name: string;
@@ -1375,10 +1043,6 @@ type ExistingSocialRow = {
   platform: string;
 };
 
-/**
- * Fetch an artist for the MB name search. Its `spotify_artist_id` is the identity the
- * name-search cross-reference matches against; `spotify_url` seeds the Firecrawl gap-fill.
- */
 async function fetchArtist(artistId: string): Promise<ArtistRow | null> {
   const db = await getDb();
 
@@ -1391,7 +1055,6 @@ async function fetchArtist(artistId: string): Promise<ArtistRow | null> {
   return typedRow<ArtistRow>(artistResult.rows) ?? null;
 }
 
-/** Fetch the platforms already resolved for an artist (to skip in Firecrawl gap-fill). */
 async function fetchExistingPlatforms(artistId: string): Promise<Set<ArtistSocialPlatform>> {
   const db = await getDb();
   const result = await db.execute({
@@ -1408,24 +1071,6 @@ async function fetchExistingPlatforms(artistId: string): Promise<Set<ArtistSocia
   return platforms;
 }
 
-/**
- * Upsert artist_socials rows and stamp the artist's KG anchors + .resolved_at.
- *
- * OPERATOR ROWS ARE IMMUNE. A re-resolve never overwrites a link the operator owns — one
- * they ADDED (`source='operator'`) or CONFIRMED (`status='confirmed'`): its url, source,
- * AND status all stay exactly as the operator left them (the MB upsert's WHERE clause skips
- * those rows entirely, and the Firecrawl upsert is `do nothing`). Only machine rows
- * (`auto`/`candidate`) get refreshed — so MB confirming a platform still promotes a
- * firecrawl `candidate` to `auto`.
- *
- * `mbSocialStatus` carries the MB socials' trust: "auto" (public/trusted) for an exact
- * Spotify-id identity match, "candidate" (awaits an operator glance) for the weaker
- * name+score soft fallback.
- *
- * `anchors` carries the secondary KG anchors (Discogs/Last.fm) on the same never-clobber terms
- * as `mbid`/`wikidataQid`: a null leaves whatever is stored, so a re-resolve that MB answers
- * more thinly than last time can never blank an anchor the archive already holds.
- */
 export async function persistResolution(
   artistId: string,
   mbid: string | null,
@@ -1442,7 +1087,6 @@ export async function persistResolution(
   const db = await getDb();
   const nowIso = new Date().toISOString();
 
-  // Stamp the KG anchors + resolvedAt on the artist row.
   await db.execute({
     args: [mbid, wikidataQid, anchors.discogsUrl, anchors.lastfmUrl, nowIso, nowIso, artistId],
     sql: `update artists
@@ -1455,11 +1099,6 @@ export async function persistResolution(
           where id = ?`,
   });
 
-  // Upsert MB socials at the resolver-determined trust (auto for a confirmed identity,
-  // candidate for the soft name+score fallback). The WHERE clause makes an OPERATOR-OWNED
-  // row immune: a re-resolve skips (leaves untouched) any row the operator added
-  // (source='operator') or confirmed (status='confirmed') — url, source, and status all
-  // preserved. Only auto/candidate machine rows are refreshed to the fresh MB values.
   for (const social of mbSocials) {
     const id = randomUUID();
     await db.execute({
@@ -1473,10 +1112,7 @@ export async function persistResolution(
         nowIso,
         nowIso,
       ],
-      // A NEW link is born unreviewed (`reviewed_at = null`). On a re-resolve of a machine
-      // row, the stamp is nulled ONLY when the URL actually CHANGED (a fresh link to look at);
-      // an untouched re-resolve keeps whatever stamp the operator left. Operator/confirmed rows
-      // are skipped wholesale by the WHERE clause, so their review stamp is never disturbed.
+
       sql: `insert into artist_socials
               (id, artist_id, platform, url, source, status, reviewed_at, created_at, updated_at)
             values (?, ?, ?, ?, ?, ?, null, ?, ?)
@@ -1494,13 +1130,11 @@ export async function persistResolution(
     });
   }
 
-  // Upsert Firecrawl socials (status=candidate) — only if platform not already resolved.
   for (const social of firecrawlSocials) {
     const id = randomUUID();
     await db.execute({
       args: [id, artistId, social.platform, social.url, "firecrawl", "candidate", nowIso, nowIso],
-      // A gap-fill only ever INSERTS (does-nothing on conflict), so the row is always new →
-      // born unreviewed (`reviewed_at = null`), surfacing in the fresh-links queue.
+
       sql: `insert into artist_socials
               (id, artist_id, platform, url, source, status, reviewed_at, created_at, updated_at)
             values (?, ?, ?, ?, ?, ?, null, ?, ?)
@@ -1508,11 +1142,6 @@ export async function persistResolution(
     });
   }
 
-  // Upsert the MusicBrainz aliases (the many-names problem). MB is authoritative + DIRECT (a stated
-  // identity, not the fuzzy cross-source inference label_aliases guards behind `candidate`), so they
-  // are born `status='auto'` — trusted/public exactly as MB socials are. Source-stamped
-  // `musicbrainz`; INSERT-only (`on conflict do nothing` on the (artist, alias_slug, source) key), so
-  // a re-resolve never duplicates one and never disturbs an operator-added `confirmed` alias.
   for (const alias of mbAliases) {
     await db.execute({
       args: [`aa_${randomUUID()}`, artistId, alias.alias, alias.slug, alias.kind, nowIso],
@@ -1524,16 +1153,6 @@ export async function persistResolution(
   }
 }
 
-// ── Main entry point ──────────────────────────────────────────────────────────
-
-/**
- * Resolve an artist's cross-platform social identity by artistId. Runs the MB
- * name search (cross-referenced by Spotify id) then the Firecrawl gap-fill,
- * persists results, and returns a summary.
- *
- * This is the Worker-side logic behind the `resolve_artist` oRPC op. The box's
- * `fluncle-artist-sweep` cron drives it per unresolved artist via the CLI.
- */
 export async function resolveArtist(artistId: string): Promise<ArtistResolutionResult> {
   const artist = await fetchArtist(artistId);
 
@@ -1541,18 +1160,14 @@ export async function resolveArtist(artistId: string): Promise<ArtistResolutionR
     throw new Error(`Artist not found: ${artistId}`);
   }
 
-  // ── 1. MusicBrainz name search + Spotify-id cross-reference ────────────────
   const mbResult = await resolveArtistViaMb(artist.name, artist.spotify_artist_id);
 
-  // ── 2. Firecrawl gap-fill (every missing social except homepage + spotify) ──
   const existingPlatforms = await fetchExistingPlatforms(artistId);
 
-  // Add MB-resolved platforms to the "existing" set so Firecrawl only fills gaps.
   for (const s of mbResult.socials) {
     existingPlatforms.add(s.platform);
   }
 
-  // Rate-limited: nothing to persist yet — stay in the unresolved queue (resolved_at NULL).
   if (mbResult.rateLimited) {
     return {
       artistId,
@@ -1565,7 +1180,6 @@ export async function resolveArtist(artistId: string): Promise<ArtistResolutionR
     };
   }
 
-  // Every Firecrawl-eligible platform not already resolved (by MB or a prior sweep).
   const gapPlatforms = new Set<ArtistSocialPlatform>();
   for (const platform of FIRECRAWL_TARGETS) {
     if (!existingPlatforms.has(platform)) {
@@ -1581,7 +1195,6 @@ export async function resolveArtist(artistId: string): Promise<ArtistResolutionR
     mbResult.hubUrls,
   );
 
-  // ── 3. Persist ─────────────────────────────────────────────────────────────
   await persistResolution(
     artistId,
     mbResult.mbid,
@@ -1604,27 +1217,13 @@ export async function resolveArtist(artistId: string): Promise<ArtistResolutionR
   };
 }
 
-// ── Queue helpers (for the sweep) ─────────────────────────────────────────────
-
 type UnresolvedArtistRow = {
   id: string;
   name: string;
 };
 
-// A finished-but-empty artist (resolved_at stamped, zero socials) is re-queued once
-// its stamp is older than this — so a transient MB failure (a 503 window, a namesake we
-// couldn't yet disambiguate, an artist MB has since gained a Spotify rel for) self-heals
-// on the next sweep instead of sticking on 0 socials forever. Artists that DO have
-// socials are never re-queued; a genuinely social-less artist re-tries at most once per
-// window.
 const STALE_EMPTY_RETRY_DAYS = 30;
 
-/**
- * Fetch a bounded page of artists the sweep should (re)resolve — the worklist.
- * Includes both the never-resolved (`resolved_at IS NULL`) and the self-healing set:
- * artists resolved to ZERO socials whose stamp is older than `STALE_EMPTY_RETRY_DAYS`.
- * Cursor-paged by artist id (same opaque convention as the backfills).
- */
 export async function listUnresolvedArtists(
   limit: number,
   cursor?: string,
@@ -1636,7 +1235,6 @@ export async function listUnresolvedArtists(
     Date.now() - STALE_EMPTY_RETRY_DAYS * 24 * 60 * 60 * 1000,
   ).toISOString();
 
-  // Eligible = never resolved, OR resolved-but-empty and stale (0 socials + old stamp).
   const eligible = `(
     resolved_at is null
     or (

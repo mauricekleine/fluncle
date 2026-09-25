@@ -19,11 +19,6 @@ import {
   topWords,
 } from "./artifact-diversity";
 
-// The corpus-wide sameness harness — the family-scale sibling of the note echo gate.
-// These pin the three measures on small synthetic corpora whose answers are hand-checkable,
-// plus the logbook prose cleaner. The primitives underneath (echoWords / contentOverlap /
-// scoreNoteEcho) are already pinned by note.test.ts; this pins the AGGREGATION on top.
-
 const A = (id: string, text: string): Artifact => ({ id, text });
 
 describe("meanPairwiseOverlap", () => {
@@ -88,7 +83,6 @@ describe("topPhrases", () => {
       A("2", "a completely different line about airy euphoric summer vocals"),
     ];
 
-    // "and roll" repeats four times but in ONE artifact — not a family stock move.
     const phrases = topPhrases(corpus, { maxN: 6, minDocFreq: 2, minN: 3, topK: 10 });
 
     expect(phrases).toHaveLength(0);
@@ -100,8 +94,6 @@ describe("topPhrases", () => {
 
     const phrases = topPhrases(corpus, { maxN: 6, minDocFreq: 2, minN: 3, topK: 10 });
 
-    // The long shared run is kept; the bare "my shoulders dropped" sub-run — which only
-    // ever appears inside it — is not separately listed.
     expect(phrases.some((phrase) => phrase.n >= 5)).toBe(true);
     expect(phrases.some((phrase) => phrase.phrase === "my shoulders dropped")).toBe(false);
   });
@@ -129,7 +121,7 @@ describe("topWords", () => {
     const shoulders = words.find((entry) => entry.word === "shoulders");
 
     expect(shoulders?.docFreq).toBe(3);
-    // A word appearing in only one artifact ("euphoric") is not a family stock word.
+
     expect(words.some((entry) => entry.word === "euphoric")).toBe(false);
   });
 });
@@ -139,15 +131,13 @@ describe("nearestNeighbourLifts", () => {
     A("027.2.8R", "My shoulders dropped before the break even settled; Eternity earns it."),
     A("012.2.4L", "Liquid roller with nocturnal depth; I've been rewinding this since 2018."),
     A("clean", "The piano loops into your chest and the vocal keeps you there, 2025."),
-    // Lifts a four-word run straight from 027.2.8R.
+
     A("echoer", "My shoulders dropped before I even knew the tune had turned over."),
   ];
 
   it("flags the artifact that lifts a phrase from a sibling, naming the neighbour", () => {
     const lifts = nearestNeighbourLifts(CORPUS);
-    // A lift is symmetric — both ends of a shared phrase echo each other — so BOTH twins
-    // are flagged; the clean one is not. The point is that `echoer` is caught and its
-    // echo names the sibling it shares the run with.
+
     const echoer = lifts.find((lift) => lift.id === "echoer");
 
     expect(echoer).toBeDefined();
@@ -174,7 +164,7 @@ describe("measureFamily", () => {
     const reading = measureFamily("observations", corpus);
 
     expect(reading.family).toBe("observations");
-    // The blank artifact is excluded from the denominator.
+
     expect(reading.size).toBe(3);
     expect(reading.meanPairwiseOverlap).toBeGreaterThan(0);
     expect(reading.topPhrases[0]?.phrase).toContain("drop has a weight to it");
@@ -195,9 +185,6 @@ describe("measureFamily", () => {
 });
 
 describe("measureRegisters", () => {
-  // The register cut is what makes the observations' worst homogenisation legible: the
-  // formulaic closer, the "I…" opener, the "hope" crutch (the hand-made
-  // numbers, as a function). These pin it on a corpus whose answers are hand-checkable.
   const CORPUS = [
     A(
       "1",
@@ -214,10 +201,9 @@ describe("measureRegisters", () => {
     const registers = measureRegisters(CORPUS, { crutchWords: ["hope", "enjoy", "cosmonauts"] });
 
     expect(registers.size).toBe(3);
-    // Two of three close on the exact formula — the "…enjoy cosmonauts" cut. The closer is
-    // the LAST 3 words, so the shared run must be exact ("it enjoy cosmonauts" in both).
+
     expect(registers.closers[0]).toEqual({ docFreq: 2, phrase: "it enjoy cosmonauts" });
-    // Two of three open on "I …" — the opening-word histogram catches the register.
+
     expect(registers.openingWords[0]).toEqual({ docFreq: 2, word: "i" });
   });
 
@@ -352,11 +338,9 @@ describe("measureTextureVocab", () => {
   it("counts the worn words by TOKEN so a compound descriptor still counts", () => {
     const stats = measureTextureVocab(NOTES, { wornWords: ["rolling", "liquid", "breakbeats"] });
 
-    // Three of four notes carry a Texture line (note 4 has none).
     expect(stats.size).toBe(3);
     expect(stats.total).toBe(4);
-    // `rolling` is a token in all three Texture-bearing notes (note 2 via "rolling breakbeats"),
-    // `liquid` in two, and `breakbeats` in one — the compound is NOT lost to the worn count.
+
     expect(stats.worn).toEqual([
       { docFreq: 3, word: "rolling" },
       { docFreq: 2, word: "liquid" },
@@ -367,15 +351,13 @@ describe("measureTextureVocab", () => {
   it("keeps a compound descriptor WHOLE in the phrase histogram and strips trailing punctuation", () => {
     const stats = measureTextureVocab(NOTES);
 
-    // "rolling breakbeats" is one authored descriptor (docFreq 1 here) — it is not split.
-    // "atmospheric." lost its trailing full stop, so it does not masquerade as its own token.
     expect(extractTextureDescriptors("x\nTexture: rolling breakbeats, atmospheric.")).toEqual([
       "rolling breakbeats",
       "atmospheric",
     ]);
-    // A descriptor used once ("gunmetal") is below the docFreq≥2 bar for the ranked list.
+
     expect(stats.descriptors.some((entry) => entry.word === "gunmetal")).toBe(false);
-    // …but it still counts toward the raw vocabulary size.
+
     expect(stats.vocabulary).toBeGreaterThan(stats.descriptors.length);
   });
 });
@@ -451,13 +433,12 @@ describe("pairwiseEmbeddingStats", () => {
     const twins = rankPairDistance(stats, "twinA", "twinB");
     const wide = rankPairDistance(stats, "twinA", "far");
 
-    // The twins are the closest pair — rank 1, top percentile.
     expect(twins?.rank).toBe(1);
     expect(twins?.totalPairs).toBe(3);
     expect(twins?.percentile).toBeCloseTo(1, 6);
-    // A far pair sits later in the ordering.
+
     expect((wide?.rank ?? 0) > (twins?.rank ?? 0)).toBe(true);
-    // An absent pair reads undefined.
+
     expect(rankPairDistance(stats, "twinA", "ghost")).toBeUndefined();
   });
 });

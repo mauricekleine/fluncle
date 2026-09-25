@@ -1,13 +1,3 @@
-// THE UNLISTED ARTIST, PROVEN — a global `unlisted` rule is a VISIBILITY ruling and nothing else.
-//
-// The shape it exists for: MusicBrainz bills a remix to the ORIGINAL artist, so a drum & bass remix
-// of a pop song mints an artist entity for the pop act. The remix belongs in the archive; the pop
-// act does not get a page. Every case below is one public surface reading the rule at request time,
-// against a world where the artist's rows, edges and counters are all intact — because they are.
-//
-// The rule is never stamped on the `artists` row, so the last case is the whole argument for that
-// design: deleting the rule restores every surface at once, with no backfill.
-
 import { type Client } from "@libsql/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -74,7 +64,6 @@ async function seedArtist(options: {
   });
 }
 
-/** One CERTIFIED track credited to an artist — the row a sitemap entry and a credit both need. */
 async function seedFinding(options: {
   artistId: string;
   labelId: string;
@@ -105,7 +94,6 @@ const TEST_USER = {
   name: "Listener",
 } satisfies PublicUser;
 
-/** One watch on each artist — the signed-in door's own read, not a public one. */
 async function seedWatchedArtists(): Promise<void> {
   for (const [id, artistId] of [
     ["watch-pop", "R_pop"],
@@ -220,8 +208,6 @@ describe("a global unlisted rule takes the artist's PAGE off the site", () => {
   });
 
   it("drops out of the track's credit slug map, so the credit renders as PLAIN TEXT", async () => {
-    // The remix is untouched: the row, its finding and its `track_artists` edge all stand. What is
-    // gone is the slug the page turns into a link and the JSON-LD turns into an `@id`.
     expect(await getArtistSlugMap("track-remix")).toEqual({});
     expect(await getArtistSlugMap("track-dnb")).toEqual({ remixer: "remixer" });
 
@@ -235,9 +221,6 @@ describe("a global unlisted rule takes the artist's PAGE off the site", () => {
     expect((await listArtistsMissingBio(10)).map((item) => item.slug)).toEqual(["remixer"]);
   });
 
-  // The `/mix` taste picker is a PUBLIC name search that prints a name and a face and writes the
-  // picked slug into a shareable URL. Both arms of the read gate, and the picker pre-selects by
-  // filtering this same list, so a URL that already carries an unlisted slug resolves to no tile.
   it.each(["legacy", "projection"] as const)(
     "drops out of the /mix taste picker on the %s arm, by name and by slug",
     async (arm) => {
@@ -276,7 +259,7 @@ describe("a global unlisted rule takes the artist's PAGE off the site", () => {
     await seedWatchedArtists();
 
     expect((await listWatches(TEST_USER)).watches.map((watch) => watch.slug)).toEqual(["remixer"]);
-    // The watch itself stands, so clearing the rule brings it straight back.
+
     const stored = await db.execute(`select count(*) as n from user_watches`);
     expect(Number(stored.rows[0]?.n)).toBe(2);
 

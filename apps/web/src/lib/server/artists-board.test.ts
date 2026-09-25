@@ -1,12 +1,3 @@
-// Integration tests for the paginated `/admin/artists` board reads, driven against a real
-// in-memory libSQL engine (vitest env = node). `getDb` is mocked to hand back the per-test client.
-// These pin the shapes that replaced the former single unbounded whole-archive query:
-//   - listArtistsPage keyset-pages by (name, id), searches server-side, and hydrates each artist
-//     with its socials (platform-sorted in the isolate) + a GROUPED finding count (log_id not null,
-//     once per page, never per output row),
-//   - listFreshLinks returns the capped, name-sorted set of artists with unreviewed links plus the
-//     TRUE total so overflow past the cap is visible,
-//   - listArtistReviewRows is capped at ARTIST_REVIEW_QUEUE_LIMIT (the label-review twin).
 import { type Client, createClient } from "@libsql/client";
 import { LOCAL_DB_CONCURRENCY } from "../database-concurrency";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -65,8 +56,6 @@ async function seedSocial(
   });
 }
 
-// A coordinate-bearing finding (log_id not null) credited to an artist — one row in each of
-// track_artists + findings, joined on track_id (the shape hydrateArtistOverview counts by).
 async function seedFinding(
   db: Client,
   row: { artistId: string; logId: string | null; trackId: string },
@@ -120,7 +109,6 @@ describe("the paginated /admin/artists board reads", () => {
   });
 
   it("disambiguates equal names by id so no row is skipped or repeated across the page boundary", async () => {
-    // Two artists share the exact name — the (name, id) keyset must still walk past both.
     await seedArtist(db, { id: "id-1", name: "Twins" });
     await seedArtist(db, { id: "id-2", name: "Twins" });
     await seedArtist(db, { id: "id-3", name: "Zephyr" });
@@ -146,13 +134,11 @@ describe("the paginated /admin/artists board reads", () => {
 
   it("hydrates socials platform-sorted and counts only coordinate-bearing findings", async () => {
     await seedArtist(db, { id: "a", name: "Artist" });
-    await seedArtist(db, { id: "b", name: "Bare" }); // socialless + findingless — still lists.
+    await seedArtist(db, { id: "b", name: "Bare" });
 
-    // Insert socials out of alphabetical order — the isolate sorts them.
     await seedSocial(db, { artistId: "a", id: "s-yt", platform: "youtube" });
     await seedSocial(db, { artistId: "a", id: "s-ig", platform: "instagram" });
 
-    // Two coordinate-bearing findings (counted) + one catalogue row with log_id null (not counted).
     await seedFinding(db, { artistId: "a", logId: "L-1", trackId: "t1" });
     await seedFinding(db, { artistId: "a", logId: "L-2", trackId: "t2" });
     await seedFinding(db, { artistId: "a", logId: null, trackId: "t3" });
@@ -168,7 +154,6 @@ describe("the paginated /admin/artists board reads", () => {
   });
 
   it("listFreshLinks caps the set, name-sorts it, and reports the true overflow total", async () => {
-    // One more fresh artist than the cap serializes.
     for (let i = 0; i <= FRESH_LINKS_LIMIT; i += 1) {
       const id = `fresh-${String(i).padStart(4, "0")}`;
       await seedArtist(db, { id, name: `Fresh ${String(i).padStart(4, "0")}` });
@@ -180,7 +165,7 @@ describe("the paginated /admin/artists board reads", () => {
         reviewedAt: null,
       });
     }
-    // A reviewed-only artist never appears in the fresh queue.
+
     await seedArtist(db, { id: "seen", name: "Already Seen" });
     await seedSocial(db, {
       artistId: "seen",
@@ -192,7 +177,7 @@ describe("the paginated /admin/artists board reads", () => {
     const fresh = await listFreshLinks();
     expect(fresh.artists).toHaveLength(FRESH_LINKS_LIMIT);
     expect(fresh.total).toBe(FRESH_LINKS_LIMIT + 1);
-    // Name-sorted, and the reviewed-only artist is absent.
+
     const names = fresh.artists.map((artist) => artist.name);
     expect(names).toEqual([...names].sort());
     expect(names).not.toContain("Already Seen");
@@ -213,7 +198,7 @@ describe("the paginated /admin/artists board reads", () => {
 
     const rows = await listArtistReviewRows();
     expect(rows).toHaveLength(ARTIST_REVIEW_QUEUE_LIMIT);
-    // Oldest-first: the anchors are non-decreasing across the capped window.
+
     const anchors = rows.map((row) => row.anchorAt);
     expect(anchors).toEqual([...anchors].sort());
   });

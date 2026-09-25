@@ -2,19 +2,6 @@ import { validReleaseDateSql } from "./release-day";
 
 export const ARTIST_JSON_FALLBACK_LIMIT = 5_000;
 
-/**
- * Artist membership starts at the edge index; legacy display credits use fixed index windows.
- *
- * Two BOUNDED, TRANSIENT limits, both closed by the artist-edge graph backfill (the
- * `fluncle-artist-edges` and `fluncle-artist-credits` sweeps), never by a whole-corpus predicate:
- *
- *   - the credit fallback reads only tracks with NO artist edge, so a track linked to its first
- *     credited artist but not yet to a second one is absent from the second artist's findings and
- *     Upcoming until the sweep links it;
- *   - each fallback window takes the first `ARTIST_JSON_FALLBACK_LIMIT` rows of its index order
- *     BEFORE matching the credit, so an edgeless track past that many newer findings (or earlier
- *     future releases) is absent until the sweep gives it an edge.
- */
 export function artistCandidateIdsSql(
   artistIdSql: string,
   artistNameSql: string,

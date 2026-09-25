@@ -3,12 +3,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createIntegrationDb, seedEmbedding, seedTrack } from "./integration-db";
 
-// THE SPOTIFY ANCHOR, against the REAL schema. anchorTrack's guarantees are all statements about
-// SQL — the two verification rungs, the three rails, the attempt stamp, the artist link — so a
-// mocked database would prove none of them. These run the actual writes against the in-memory
-// libSQL database built from the generated migrations. The anchor worklist (track-work.ts
-// `kind: "anchor"`) is exercised here too, since its ordering + backoff are also pure SQL.
-
 let db: Client;
 
 vi.mock("./db", async (importOriginal) => {
@@ -20,25 +14,16 @@ vi.mock("./db", async (importOriginal) => {
 const DIMS = 1024;
 const NOW = "2026-07-18T00:00:00.000Z";
 
-/** A libSQL cell → string (its value type is a union). */
 const text = (value: unknown): string => (typeof value === "string" ? value : "");
 
-/** A 1024-d zero vector — enough to give a row a `track_embeddings` entry for the order test. */
 function zeroVector(): number[] {
   return Array.from<number>({ length: DIMS }).fill(0);
 }
 
-/**
- * Give a row a vector THE WAY PRODUCTION DOES — the blob and its `has_embedding` mirror in the
- * same statement (schema.ts § `has_embedding`; `embedding-mirror.test.ts` fails the build on a
- * writer that forgets it). The anchor worklist's drain order sorts on the mirror, so a fixture
- * that wrote only the blob would be testing a state the app cannot produce.
- */
 async function embed(trackId: string): Promise<void> {
   await seedEmbedding(db, trackId, zeroVector());
 }
 
-/** Insert an UN-ANCHORED catalogue row (spotify_uri NULL — the anchor worklist's shape). */
 async function seedUnanchored(row: {
   artists?: string[];
   durationMs?: number;
@@ -48,9 +33,6 @@ async function seedUnanchored(row: {
 }): Promise<void> {
   const isrc = row.isrc ?? null;
 
-  // The presence mirror rides the same insert, the way every production writer pairs it
-  // (schema.ts § `has_isrc`) — the worklist's drain order leads with it, so a fixture that
-  // wrote only `isrc` would be testing a state the app cannot produce.
   await db.execute({
     args: [
       row.trackId,
@@ -95,10 +77,9 @@ describe("anchorTrack — the exact-ISRC rung", () => {
     expect(text(row.rows[0]?.spotify_url)).toBe("https://open.spotify.com/track/spotAnchor001");
     expect(text(row.rows[0]?.album_image_url)).toBe("https://i.scdn.co/image/cover");
     expect(row.rows[0]?.spotify_anchor_attempted_at).not.toBeNull();
-    // The retry counter moves with the stamp on a HIT too — one attempt, one bump, from a NULL start.
+
     expect(Number(row.rows[0]?.spotify_anchor_attempts)).toBe(1);
 
-    // The artist was minted (folded on the stable id) and the edge stamped — and NO finding.
     const artist = await db.execute(
       "select id from artists where spotify_artist_id = 'sp-etherwood'",
     );
@@ -169,8 +150,6 @@ describe("anchorTrack — the verified-search rung", () => {
   it("recovers the candidate's ISRC into an ISRC-LESS row (the MusicBrainz-gap backfill)", async () => {
     const { anchorTrack } = await import("./anchor");
 
-    // A no-ISRC row (MusicBrainz never carried one) anchored via the search rung — the candidate
-    // carries the real ISRC Spotify knows, so it fills the empty column.
     await seedUnanchored({
       artists: ["Recover Me"],
       durationMs: 200_000,
@@ -197,8 +176,6 @@ describe("anchorTrack — the verified-search rung", () => {
   it("NEVER overwrites a row's existing ISRC with the candidate's (fill-empty-only)", async () => {
     const { anchorTrack } = await import("./anchor");
 
-    // The row already carries its own ISRC; a search-verified candidate with a DIFFERENT ISRC (a
-    // re-press) must anchor without clobbering the row's authoritative value.
     await seedUnanchored({
       artists: ["Keep Mine"],
       durationMs: 200_000,
@@ -233,7 +210,6 @@ describe("anchorTrack — the verified-search rung", () => {
       trackId: "mb_isrc-miss",
     });
 
-    // The candidate's ISRC is a different pressing's, so the ISRC rung misses — but the triple verifies.
     const result = await anchorTrack("mb_isrc-miss", [
       {
         artists: [{ name: "Artist X" }],
@@ -261,7 +237,6 @@ describe("anchorTrack — a miss stamps the attempt but writes no anchor", () =>
       trackId: "mb_miss",
     });
 
-    // Right title/artist but 3s off — the triple refuses it, and there is no ISRC to match.
     const result = await anchorTrack("mb_miss", [
       {
         artists: [{ name: "Muffler" }],
@@ -277,7 +252,7 @@ describe("anchorTrack — a miss stamps the attempt but writes no anchor", () =>
     );
     expect(row.rows[0]?.spotify_uri).toBeNull();
     expect(row.rows[0]?.spotify_anchor_attempted_at).not.toBeNull();
-    // A NULL counter reads as zero, so the first miss lands on 1 (no `.default()` on the column).
+
     expect(Number(row.rows[0]?.spotify_anchor_attempts)).toBe(1);
   });
 
@@ -345,19 +320,18 @@ describe("requeueAnchorStamps — the operator requeue", () => {
   it("clears the stamp but NEVER the attempts cap, and only on un-anchored stamped rows", async () => {
     const { requeueAnchorStamps } = await import("./anchor");
 
-    // A stamped, capped-progress row WITH an ISRC: eligible — stamp clears, attempts stay.
     await seedUnanchored({ isrc: "GBCJY1300173", trackId: "mb_rq_eligible" });
     await db.execute(
       `update tracks set spotify_anchor_attempted_at = '2026-07-26T12:00:00.000Z',
         spotify_anchor_attempts = 3 where track_id = 'mb_rq_eligible'`,
     );
-    // An anchored row: skipped even when named.
+
     await seedUnanchored({ isrc: "GBCJY1300174", trackId: "mb_rq_anchored" });
     await db.execute(
       `update tracks set spotify_uri = 'spotify:track:done',
         spotify_anchor_attempted_at = '2026-07-26T12:00:00.000Z' where track_id = 'mb_rq_anchored'`,
     );
-    // A never-stamped row: nothing to clear, counts zero.
+
     await seedUnanchored({ isrc: "GBCJY1300175", trackId: "mb_rq_fresh" });
 
     const requeued = await requeueAnchorStamps(["mb_rq_eligible", "mb_rq_anchored", "mb_rq_fresh"]);
@@ -374,17 +348,14 @@ describe("requeueAnchorStamps — the operator requeue", () => {
     );
     expect(anchored.rows[0]?.at).not.toBeNull();
 
-    // Idempotent: a second call finds nothing left to clear.
     expect(await requeueAnchorStamps(["mb_rq_eligible", "mb_rq_anchored", "mb_rq_fresh"])).toBe(0);
-    // And an empty list is a zero-write no-op.
+
     expect(await requeueAnchorStamps([])).toBe(0);
   });
 
   it("an ISRC-less previously-attempted row's stamp SURVIVES the requeue (dead weight stays backed off)", async () => {
     const { requeueAnchorStamps } = await import("./anchor");
 
-    // Previously attempted, stamped, and ISRC-less: anchoring concludes off the ISRC anchor, so a
-    // bulk requeue naming this row must NOT put it back on the paid queue — its stamp stands.
     await seedUnanchored({ isrc: null, trackId: "mb_rq_isrcless" });
     await db.execute(
       `update tracks set spotify_anchor_attempted_at = '2026-07-26T12:00:00.000Z',
@@ -402,8 +373,6 @@ describe("requeueAnchorStamps — the operator requeue", () => {
 });
 
 describe("requeueIsrcRecoveryStamps — the Deezer-empty window requeue", () => {
-  // Stamp the two arms the way the recovery step writes them: the EMPTY arm moves the recovery
-  // watermark alone, the gate-refused arm moves it together with `isrc_attempted_at` at one instant.
   const stampEmpty = (trackId: string, at: string) =>
     db.execute({
       args: [at, trackId],
@@ -420,16 +389,16 @@ describe("requeueIsrcRecoveryStamps — the Deezer-empty window requeue", () => 
 
     await seedUnanchored({ isrc: null, trackId: "mb_ir_empty" });
     await stampEmpty("mb_ir_empty", "2026-09-10T04:00:00.000Z");
-    // The same arm, but BEFORE the window: a genuine older miss the operator did not name.
+
     await seedUnanchored({ isrc: null, trackId: "mb_ir_old" });
     await stampEmpty("mb_ir_old", "2026-09-01T04:00:00.000Z");
-    // Deezer answered and the identity gate refused — a verdict about the row, left standing.
+
     await seedUnanchored({ isrc: null, trackId: "mb_ir_refused" });
     await stampRefused("mb_ir_refused", "2026-09-10T04:00:00.000Z");
-    // Carries an ISRC now: nothing left for the recovery pass to ask for.
+
     await seedUnanchored({ isrc: "GBCJY1300180", trackId: "mb_ir_has_isrc" });
     await stampEmpty("mb_ir_has_isrc", "2026-09-10T04:00:00.000Z");
-    // Anchored: outside the worklist's scope entirely.
+
     await seedUnanchored({ isrc: null, trackId: "mb_ir_anchored" });
     await stampEmpty("mb_ir_anchored", "2026-09-10T04:00:00.000Z");
     await db.execute(
@@ -438,7 +407,6 @@ describe("requeueIsrcRecoveryStamps — the Deezer-empty window requeue", () => 
 
     const since = "2026-09-09";
 
-    // The dry run counts the SAME set and writes nothing.
     expect(await requeueIsrcRecoveryStamps({ dryRun: true, since })).toEqual({
       matched: 1,
       requeued: 0,
@@ -465,7 +433,6 @@ describe("requeueIsrcRecoveryStamps — the Deezer-empty window requeue", () => 
       mb_ir_refused: "2026-09-10T04:00:00.000Z",
     });
 
-    // Idempotent: a second apply finds nothing left to clear.
     expect(await requeueIsrcRecoveryStamps({ dryRun: false, since })).toEqual({
       matched: 0,
       requeued: 0,
@@ -495,15 +462,14 @@ describe("the anchor worklist (track-work.ts kind: anchor)", () => {
   it("orders embedded rows first, then nearest_finding_score DESC, then track_id", async () => {
     const { listTrackWork } = await import("./track-work");
 
-    // C: embedded (no score) — must lead by the first key, ahead of the higher-scored B.
     await seedUnanchored({ title: "Embedded", trackId: "mb_c-embedded" });
     await embed("mb_c-embedded");
-    // B: not embedded, high score.
+
     await seedUnanchored({ title: "Ranked", trackId: "mb_b-ranked" });
     await db.execute(
       "update tracks set nearest_finding_score = 0.9 where track_id = 'mb_b-ranked'",
     );
-    // A: not embedded, no score — the tail.
+
     await seedUnanchored({ title: "Unranked", trackId: "mb_a-unranked" });
 
     const work = await listTrackWork({ kind: "anchor", limit: 10 });
@@ -513,16 +479,13 @@ describe("the anchor worklist (track-work.ts kind: anchor)", () => {
       "mb_b-ranked",
       "mb_a-unranked",
     ]);
-    // Each row carries a ready-made query so the box never builds one.
+
     expect(work[0]?.anchorQuery).toBe("Etherwood Embedded");
   });
 
   it("sorts ISRC-bearing rows ahead of ISRC-less rows at equal embedding and score", async () => {
     const { listTrackWork } = await import("./track-work");
 
-    // Anchorability leads the drain order: at EQUAL sunk cost (both embedded, same score) the row
-    // the exact-ISRC rung can conclude on outranks the one it cannot — even though `mb_a-` loses
-    // the `track_id desc` tiebreak, so this fails if `has_isrc` ever stops being the first key.
     await seedUnanchored({ isrc: "GBTST2600001", title: "Keyed", trackId: "mb_a-keyed" });
     await embed("mb_a-keyed");
     await seedUnanchored({ title: "Keyless", trackId: "mb_b-keyless" });
@@ -539,9 +502,6 @@ describe("the anchor worklist (track-work.ts kind: anchor)", () => {
   it("puts an ISRC-bearing unembedded row ahead of an embedded ISRC-less one", async () => {
     const { listTrackWork } = await import("./track-work");
 
-    // The whole point of the lead key: sunk cost no longer outranks anchorability. An embedded
-    // ISRC-less row at the head is a billed search that cannot conclude, so the unembedded row
-    // the ISRC rung CAN answer goes first.
     await seedUnanchored({ title: "Sunk", trackId: "mb_b-sunk" });
     await embed("mb_b-sunk");
     await seedUnanchored({ isrc: "GBTST2600002", title: "Answerable", trackId: "mb_a-answerable" });
@@ -551,21 +511,13 @@ describe("the anchor worklist (track-work.ts kind: anchor)", () => {
     expect(work.map((item) => item.trackId)).toEqual(["mb_a-answerable", "mb_b-sunk"]);
   });
 
-  // THE ORDER BY'S SHAPE, pinned (docs/db-scale-backlog Wave 2 #4). The clause is written to be
-  // ONE REVERSE WALK of the plain-ASC `tracks_anchor_order_idx` — `(has_isrc, has_embedding,
-  // nearest_finding_score, track_id) where spotify_uri is null` — and the tests here each fix
-  // one key of it, so a rewrite that quietly breaks the walk breaks a test instead.
   it("sorts on the has_embedding MIRROR, not the vector itself", async () => {
     const { listTrackWork } = await import("./track-work");
 
-    // The mirror is what the index keys on, so it is what the order must read. A row whose vector
-    // was written WITHOUT the mirror is a drift bug (`embedding-mirror.test.ts` fails the build on
-    // one), and here it proves which column the clause is actually sorting by.
     await seedUnanchored({ title: "Mirrored", trackId: "mb_b-mirrored" });
     await embed("mb_b-mirrored");
     await seedUnanchored({ title: "Bare", trackId: "mb_a-bare" });
-    // Written RAW, deliberately bypassing the paired write: a satellite row with no mirror is
-    // precisely the drift state, and it proves which column the clause is actually sorting by.
+
     await db.execute({
       args: [JSON.stringify(zeroVector())],
       sql: `insert into track_embeddings (track_id, embedding_blob)
@@ -586,17 +538,12 @@ describe("the anchor worklist (track-work.ts kind: anchor)", () => {
 
     const work = await listTrackWork({ kind: "anchor", limit: 10 });
 
-    // Even the WORST-scored row outranks the unscored one, and `mb_z-` sorts after `mb_a-` by id —
-    // so this fails if a plain `desc` ever stopped meaning `desc nulls last`.
     expect(work.map((item) => item.trackId)).toEqual(["mb_a-low", "mb_z-unranked"]);
   });
 
   it("breaks a tie on track_id DESC, so the whole clause stays one reverse index walk", async () => {
     const { listTrackWork } = await import("./track-work");
 
-    // Identical on both leading keys (both embedded, both scored 0.5): only the tiebreak decides.
-    // It is DESC on purpose — a mixed `desc, desc, asc` cannot ride the composite index and forces
-    // a temp B-tree over the entire un-anchored set. Its direction is otherwise arbitrary.
     for (const trackId of ["mb_a-tie", "mb_b-tie", "mb_c-tie"]) {
       await seedUnanchored({ title: "Tie", trackId });
       await embed(trackId);
@@ -613,24 +560,24 @@ describe("the anchor worklist (track-work.ts kind: anchor)", () => {
   it("excludes anchored, certified, dismissed, duplicate, zero-duration, and recently-attempted rows", async () => {
     const { listTrackWork } = await import("./track-work");
 
-    await seedUnanchored({ trackId: "mb_ok" }); // the one that should surface
-    // Already anchored.
+    await seedUnanchored({ trackId: "mb_ok" });
+
     await seedUnanchored({ trackId: "mb_anchored" });
     await db.execute(
       "update tracks set spotify_uri = 'spotify:track:x' where track_id = 'mb_anchored'",
     );
-    // Certified (a finding).
+
     await seedTrack(db, { logId: "001.1.1A", trackId: "spotifyFinding001" });
     await db.execute("update tracks set spotify_uri = null where track_id = 'spotifyFinding001'");
-    // Dismissed.
+
     await seedUnanchored({ trackId: "mb_dismissed" });
     await db.execute("update tracks set dismissed_at = ? where track_id = 'mb_dismissed'", [NOW]);
-    // A known duplicate of a finding.
+
     await seedUnanchored({ trackId: "mb_dup" });
     await db.execute("update tracks set duplicate_of_track_id = 'x' where track_id = 'mb_dup'");
-    // Zero measured duration — can never clear the triple.
+
     await seedUnanchored({ durationMs: 0, trackId: "mb_nodur" });
-    // Attempted 2 days ago — inside the 14-day backoff.
+
     await seedUnanchored({ trackId: "mb_recent" });
     await db.execute(
       "update tracks set spotify_anchor_attempted_at = ? where track_id = 'mb_recent'",
@@ -660,17 +607,16 @@ describe("the anchor worklist (track-work.ts kind: anchor)", () => {
   it("RETIRES a row at the retry cap and still offers the one below it", async () => {
     const { ANCHOR_MAX_ATTEMPTS, listTrackWork } = await import("./track-work");
 
-    // At the cap — out of the queue for good, however long ago it was last attempted.
     await seedUnanchored({ title: "Spent", trackId: "mb_capped" });
     await db.execute("update tracks set spotify_anchor_attempts = ? where track_id = 'mb_capped'", [
       ANCHOR_MAX_ATTEMPTS,
     ]);
-    // One below the cap — still has a try left.
+
     await seedUnanchored({ title: "One Left", trackId: "mb_nearly" });
     await db.execute("update tracks set spotify_anchor_attempts = ? where track_id = 'mb_nearly'", [
       ANCHOR_MAX_ATTEMPTS - 1,
     ]);
-    // Never attempted — a NULL counter must read as zero, not drop the row.
+
     await seedUnanchored({ title: "Fresh", trackId: "mb_null_attempts" });
 
     const work = await listTrackWork({ kind: "anchor", limit: 50 });
@@ -690,11 +636,11 @@ describe("the anchor worklist (track-work.ts kind: anchor)", () => {
     await seedUnanchored({ artists: ["Unknown"], trackId: "mb_bare_unknown" });
     await seedUnanchored({ artists: ["[unknown]"], trackId: "mb_bracket_unknown" });
     await seedUnanchored({ artists: ["traditional"], trackId: "mb_traditional" });
-    // Case is not identity — the match folds it.
+
     await seedUnanchored({ artists: ["UNKNOWN ARTIST"], trackId: "mb_shouty_unknown" });
-    // A real name rides along, so the row is anchorable and stays.
+
     await seedUnanchored({ artists: ["Unknown Artist", "Calibre"], trackId: "mb_with_calibre" });
-    // A name that merely CONTAINS a placeholder word is a real artist.
+
     await seedUnanchored({ artists: ["Unknown Error"], trackId: "mb_real_name" });
 
     const work = await listTrackWork({ kind: "anchor", limit: 50 });
@@ -702,10 +648,7 @@ describe("the anchor worklist (track-work.ts kind: anchor)", () => {
 
     expect(ids.sort()).toEqual(["mb_real_name", "mb_with_calibre"]);
   });
-  // ── THE RULED-OUT-LABEL VETO (the capture ladder's tier −1, in the other metered queue) ────────
-  // Every offer this queue makes is a billed Apify search, so the operator's "not our lane" ruling
-  // has to be a PREDICATE here exactly as it is in the capture ladder. A veto that only sorts last
-  // is not a veto: the queue drains, and last eventually arrives.
+
   it("excludes a row whose label the operator ruled out, and keeps every other ruling in", async () => {
     const { countTrackWork, listTrackWork } = await import("./track-work");
 
@@ -724,7 +667,7 @@ describe("the anchor worklist (track-work.ts kind: anchor)", () => {
     await seedUnanchored({ trackId: "mb_lbl_disabled" });
     await seedUnanchored({ trackId: "mb_lbl_enabled" });
     await seedUnanchored({ trackId: "mb_lbl_undecided" });
-    // …and a row with no label pointer at all: unlinked is not ruled out.
+
     await seedUnanchored({ trackId: "mb_lbl_none" });
     await db.execute("update tracks set label_id = 'ruled-out' where track_id = 'mb_lbl_disabled'");
     await db.execute("update tracks set label_id = 'in-lane' where track_id = 'mb_lbl_enabled'");
@@ -737,8 +680,7 @@ describe("the anchor worklist (track-work.ts kind: anchor)", () => {
       "mb_lbl_none",
       "mb_lbl_undecided",
     ]);
-    // The COUNT narrows with the queue — a backlog number that advertises work the queue refuses to
-    // hand out is the exact failure the shared `kindClause` exists to prevent.
+
     expect(await countTrackWork({ kind: "anchor" })).toBe(3);
   });
 
@@ -755,7 +697,6 @@ describe("the anchor worklist (track-work.ts kind: anchor)", () => {
 
     expect(await listTrackWork({ kind: "anchor", limit: 50 })).toEqual([]);
 
-    // docs/label-entity.md's crawl-scope-never-storage rule: the row was never touched, only skipped.
     await db.execute("update labels set seed_state = 'enabled' where id = 'flip'");
 
     expect((await listTrackWork({ kind: "anchor", limit: 50 })).map((i) => i.trackId)).toEqual([
@@ -764,14 +705,6 @@ describe("the anchor worklist (track-work.ts kind: anchor)", () => {
   });
 });
 
-// ── THE ANCHOR REVIEW ────────────────────────────────────────────────────────────────────────
-// The one miss the gate writes down: a candidate that agrees on artists, base title, and duration
-// but names a different version. Every guarantee here is a statement about SQL — the note is
-// written, the anchor is NOT, any anchor clears it, and the operator's ruling either anchors exactly
-// like a gate hit or clears the note and leaves the row's lifecycle alone — so these run against the
-// real migrated schema like the rungs above.
-
-/** The review JSON on a row, parsed (or undefined when the column is null). */
 async function readReview(trackId: string) {
   const { parseAnchorReview } = await import("./anchor");
   const result = await db.execute({
@@ -787,7 +720,6 @@ describe("anchorTrack — the suspected version mismatch it records on a miss", 
   it("records the near-match, and still refuses to anchor", async () => {
     const { anchorTrack } = await import("./anchor");
 
-    // Our row: plain title at the REMIX's length (the MusicBrainz metadata gap).
     await seedUnanchored({
       artists: ["Calibre"],
       durationMs: 394_000,
@@ -807,7 +739,6 @@ describe("anchorTrack — the suspected version mismatch it records on a miss", 
       },
     ]);
 
-    // The gate is UNCHANGED: still a miss, still stamped, still un-anchored.
     expect(result).toEqual({ anchored: false, verifiedBy: null });
     const row = await db.execute(
       "select spotify_uri, spotify_anchor_attempts from tracks where track_id = 'mb_mismatch'",
@@ -822,8 +753,7 @@ describe("anchorTrack — the suspected version mismatch it records on a miss", 
     expect(review?.candidate.spotifyTrackId).toBe("spotRemix001");
     expect(review?.candidate.durationMs).toBe(394_000);
     expect(review?.candidate.artists).toEqual([{ id: "sp-calibre", name: "Calibre" }]);
-    // The rung is stamped so the operator can see where the suspicion came from; the box's
-    // `anchor_track` POST is `apify` by default.
+
     expect(review?.candidate.source).toBe("apify");
   });
 
@@ -884,7 +814,6 @@ describe("anchorTrack — the suspected version mismatch it records on a miss", 
       trackId: "mb_healed",
     });
 
-    // Tick one: the mismatch is recorded.
     await anchorTrack("mb_healed", [
       {
         artists: [{ name: "Calibre" }],
@@ -895,7 +824,6 @@ describe("anchorTrack — the suspected version mismatch it records on a miss", 
     ]);
     expect(await readReview("mb_healed")).toBeDefined();
 
-    // Tick two: a candidate clears the gate honestly, so the question is answered by the machine.
     const hit = await anchorTrack("mb_healed", [
       {
         artists: [{ name: "Calibre" }],
@@ -911,7 +839,6 @@ describe("anchorTrack — the suspected version mismatch it records on a miss", 
 });
 
 describe("listAnchorReviewRows — the attention-queue read", () => {
-  /** Record a real version-mismatch review on an un-anchored row, through the gate that writes it. */
   async function seedReviewed(trackId: string): Promise<void> {
     const { anchorTrack } = await import("./anchor");
 
@@ -939,7 +866,7 @@ describe("listAnchorReviewRows — the attention-queue read", () => {
       await seedReviewed(trackId);
     }
     await seedUnanchored({ trackId: "mb_unreviewed" });
-    // An anchor that arrived by a path which left the note behind: the trust rule still hides it.
+
     await db.execute(
       "update tracks set spotify_uri = 'spotify:track:anchored' where track_id = 'mb_anchored'",
     );
@@ -955,8 +882,6 @@ describe("listAnchorReviewRows — the attention-queue read", () => {
     const { anchorReviewQueueStatement } = await import("./anchor");
     const statement = anchorReviewQueueStatement();
 
-    // The in-memory schema carries no `sqlite_stat1`, exactly like hosted Turso, so it reproduces
-    // the planner's statistics-free choice between `tracks_spotify_uri_idx` and the partial index.
     const plan = await db.execute({
       args: statement.args,
       sql: `explain query plan ${statement.sql}`,
@@ -972,7 +897,6 @@ describe("listAnchorReviewRows — the attention-queue read", () => {
 });
 
 describe("the anchor provenance pair, persisted with the link", () => {
-  /** The three provenance columns the identity envelope reads (schema.ts § the pair). */
   async function provenance(trackId: string) {
     const row = await db.execute({
       args: [trackId],
@@ -1009,14 +933,13 @@ describe("the anchor provenance pair, persisted with the link", () => {
 
     expect(stamped.source).toBe("listenbrainz");
     expect(stamped.verifiedBy).toBe("isrc");
-    // The HIT time, distinct from the last-attempt stamp beside it.
+
     expect(stamped.anchoredAt).not.toBeNull();
   });
 
   it("distinguishes the ±1s PROPER-SUBSET fallback from the full search triple", async () => {
     const { anchorTrack } = await import("./anchor");
 
-    // Full gate: the candidate credits the row's whole artist set.
     await seedUnanchored({
       artists: ["Muffler"],
       durationMs: 200_000,
@@ -1034,8 +957,6 @@ describe("the anchor provenance pair, persisted with the link", () => {
       },
     ]);
 
-    // Subset fallback: the platform credits only the primary artist of a collab, so the artist
-    // signal is loosened and paid for with the tight ±1s duration window.
     await seedUnanchored({
       artists: ["LSB", "DRS"],
       durationMs: 200_000,
@@ -1054,7 +975,7 @@ describe("the anchor provenance pair, persisted with the link", () => {
     ]);
 
     expect((await provenance("mb_prov_full")).verifiedBy).toBe("search");
-    // A DISTINCT confidence, and the envelope must never flatten the two.
+
     expect((await provenance("mb_prov_subset")).verifiedBy).toBe("search-subset");
   });
 
@@ -1081,7 +1002,6 @@ describe("the anchor provenance pair, persisted with the link", () => {
 });
 
 describe("resolveAnchorReview — the operator's ruling", () => {
-  /** Seed a row already carrying a recorded review (one miss against the mismatch shape). */
   async function seedReviewed(trackId: string, spotifyTrackId: null | string): Promise<void> {
     const { anchorTrack } = await import("./anchor");
 
@@ -1103,7 +1023,6 @@ describe("resolveAnchorReview — the operator's ruling", () => {
       },
     ]);
 
-    // A rung with no Spotify id (a Deezer suspect, or a backfilled seed) — the informational case.
     if (spotifyTrackId === null) {
       const review = await readReview(trackId);
       const stripped = { ...review, candidate: { ...review?.candidate, spotifyTrackId: null } };
@@ -1129,25 +1048,21 @@ describe("resolveAnchorReview — the operator's ruling", () => {
     expect(text(row.rows[0]?.spotify_uri)).toBe("spotify:track:spotRemix001");
     expect(text(row.rows[0]?.spotify_url)).toBe("https://open.spotify.com/track/spotRemix001");
     expect(text(row.rows[0]?.album_image_url)).toBe("https://i.scdn.co/image/remix");
-    // The candidate's ISRC fills the row's empty one, the same fill-empty-only recovery a hit does.
+
     expect(text(row.rows[0]?.isrc)).toBe("GBCJY1300173");
     expect(row.rows[0]?.anchor_review_json).toBeNull();
     expect(row.rows[0]?.spotify_anchor_attempted_at).not.toBeNull();
-    // The stamp and the counter move together, always — the miss that recorded the review bumped
-    // it to 1, and the accept is the second write.
+
     expect(Number(row.rows[0]?.spotify_anchor_attempts)).toBe(2);
 
-    // ...and the provenance says a HUMAN ruled, never that we have no record. These are the
-    // best-provenance anchors in the corpus, and the envelope must not read them as legacy.
     const provenance = await db.execute(
       "select spotify_anchor_source, spotify_anchor_verified_by, spotify_anchored_at from tracks where track_id = 'mb_accept'",
     );
     expect(text(provenance.rows[0]?.spotify_anchor_verified_by)).toBe("operator");
-    // No rung fetched it; he did. A null source is the honest answer, not a gap.
+
     expect(provenance.rows[0]?.spotify_anchor_source).toBeNull();
     expect(provenance.rows[0]?.spotify_anchored_at).not.toBeNull();
 
-    // The graph edge rides the SAME stored candidate, so an accepted anchor links like a verified one.
     const artist = await db.execute(
       "select id from artists where spotify_artist_id = 'sp-calibre'",
     );
@@ -1157,7 +1072,7 @@ describe("resolveAnchorReview — the operator's ruling", () => {
       sql: "select 1 from track_artists where track_id = 'mb_accept' and artist_id = ?",
     });
     expect(link.rows.length).toBe(1);
-    // And it certifies NOTHING.
+
     expect(Number((await db.execute("select count(*) as n from findings")).rows[0]?.n)).toBe(0);
   });
 
@@ -1177,7 +1092,7 @@ describe("resolveAnchorReview — the operator's ruling", () => {
     );
     expect(row.rows[0]?.anchor_review_json).toBeNull();
     expect(row.rows[0]?.spotify_uri).toBeNull();
-    // Dismissing spends no retry budget: the cap lifecycle is untouched.
+
     expect(Number(row.rows[0]?.spotify_anchor_attempts)).toBe(
       Number(before.rows[0]?.spotify_anchor_attempts),
     );
@@ -1246,8 +1161,6 @@ describe("listAnchorReviewRows — the attention read", () => {
       ]);
     };
 
-    // The one that should surface, with a MusicBrainz recording identity carrying the `mb_` prefix
-    // history's crawler rows have.
     await seedUnanchored({
       artists: ["Calibre"],
       durationMs: 394_000,
@@ -1259,7 +1172,6 @@ describe("listAnchorReviewRows — the attention read", () => {
       "update tracks set mb_recording_id = 'mb_9f0c1234-5678-90ab-cdef-1234567890ab' where track_id = 'mb_queued'",
     );
 
-    // Reviewed, then anchored by hand — its question is over.
     await seedUnanchored({
       artists: ["Calibre"],
       durationMs: 394_000,
@@ -1271,7 +1183,6 @@ describe("listAnchorReviewRows — the attention read", () => {
       "update tracks set spotify_uri = 'spotify:track:x' where track_id = 'mb_anchored_review'",
     );
 
-    // Reviewed, but the operator already said "not for me".
     await seedUnanchored({
       artists: ["Calibre"],
       durationMs: 394_000,
@@ -1283,7 +1194,6 @@ describe("listAnchorReviewRows — the attention read", () => {
       NOW,
     ]);
 
-    // No review at all.
     await seedUnanchored({ trackId: "mb_quiet" });
 
     const rows = await listAnchorReviewRows();
@@ -1295,9 +1205,9 @@ describe("listAnchorReviewRows — the attention read", () => {
     expect(rows[0]?.candidateDescriptor).toBe("calibre remix");
     expect(rows[0]?.candidateArtists).toEqual(["Calibre"]);
     expect(rows[0]?.candidateSpotifyTrackId).toBe("spotRemix001");
-    // Signed candidate − row, so the operator reads the direction as well as the size.
+
     expect(rows[0]?.deltaMs).toBe(400);
-    // The `mb_` prefix is stripped so the link resolves.
+
     expect(rows[0]?.mbRecordingId).toBe("9f0c1234-5678-90ab-cdef-1234567890ab");
   });
 

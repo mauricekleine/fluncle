@@ -1,10 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-// The socials review model (docs/artist-relationship.md): review lands on the LINK, not the
-// artist. These tests pin the "Looks good" bulk write (`reviewArtist`); the per-link predicates are
-// pinned beside their owner (lib/artist-review.test.ts). The DB is mocked with a SQL-dispatching
-// `execute`, so a test never hits a real database.
-
 const execute = vi.fn();
 
 vi.mock("./db", async () => {
@@ -21,7 +16,6 @@ beforeEach(() => {
 
 describe("reviewArtist", () => {
   it("promotes surviving candidates and bulk-stamps the artist's fresh links reviewed", async () => {
-    // First execute = the candidate → confirmed UPDATE (2 rows), second = the reviewed_at stamp.
     execute
       .mockResolvedValueOnce({ rows: [], rowsAffected: 2 })
       .mockResolvedValueOnce({ rows: [], rowsAffected: 3 });
@@ -35,7 +29,6 @@ describe("reviewArtist", () => {
     expect(promoteSql).toContain("status = 'confirmed'");
     expect(promoteSql).toContain("status = 'candidate'");
 
-    // The stamp lands on the LINKS now (artist_socials.reviewed_at), not on the artist row.
     const stampSql = String(execute.mock.calls[1]?.[0].sql);
     expect(stampSql).toContain("update artist_socials set reviewed_at");
     expect(stampSql).toContain("reviewed_at is null");

@@ -1,7 +1,3 @@
-// Integration test for persistResolution's upsert semantics against a real in-memory
-// libSQL engine (vitest env = node) — the only way to validate the WHERE-clause guarantee
-// that a re-resolve NEVER overwrites an operator-owned row. `getDb` is mocked to hand back
-// the per-test in-memory client.
 import { type Client, createClient } from "@libsql/client";
 import { LOCAL_DB_CONCURRENCY } from "../database-concurrency";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -315,8 +311,6 @@ describe("persistResolution — the secondary KG anchors (Discogs + Last.fm)", (
   });
 
   it("a thinner re-resolve NEVER clears a known anchor (the coalesce guarantee)", async () => {
-    // Same never-clobber semantics as mbid/wikidata_qid: MB answering with fewer relations than
-    // last time must not blank an identity the archive already holds.
     await persistResolution("a1", "mb1", null, [], "auto", [], [], {
       discogsUrl: "https://www.discogs.com/artist/4321-Andromedik",
       lastfmUrl: "https://www.last.fm/music/Andromedik",

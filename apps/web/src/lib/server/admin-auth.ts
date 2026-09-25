@@ -1,14 +1,3 @@
-// Web admin auth — the browser carrier for the single admin identity. The
-// operator proves who they are with "Login with
-// Spotify" (the existing Spotify app, allow-listed to one account), and we hand
-// the browser a SIGNED GRANT COOKIE: `{ epoch, iat, role: "admin" }` HMAC'd with a
-// subkey DERIVED from ADMIN_SESSION_SECRET (`signAdminGrant` in env.ts — the OAuth
-// state rides a different subkey, so neither can be replayed as the other). The
-// secret is the signing KEY, never the cookie's value, so it never reaches the
-// client. `epoch` is the revocation handle: bumping it (`revoke_admin_grants`)
-// invalidates every outstanding cookie at once. requireAdmin (env.ts) accepts this
-// cookie OR the CLI's Bearer token — one identity, two carriers.
-
 import { getCookie } from "@tanstack/react-start/server";
 import {
   ADMIN_COOKIE_NAME,
@@ -20,11 +9,6 @@ import {
 } from "./env";
 import { type SpotifyProfile } from "./spotify";
 
-// The operator allow-list comes from required env, never hardcoded in this public
-// repo. ADMIN_ALLOWED_EMAILS is required (comma-separated, case-insensitive — the
-// reliable check via user-read-email); ADMIN_ALLOWED_SPOTIFY_IDS is optional
-// (comma-separated, exact — a belt-and-suspenders match when the email scope or
-// display differs from the stable id).
 function parseAllowList(value: string, lowercase: boolean): Set<string> {
   return new Set(
     value.split(",").flatMap((entry) => {
@@ -53,20 +37,10 @@ export async function verifyGrant(value: string | null | undefined): Promise<boo
   return verifyAdminGrant(value);
 }
 
-/**
- * Whether the current server request carries a valid admin grant cookie. Use
- * this at the TOP of every admin server function — a route beforeLoad guard only
- * protects the page render, not the RPC endpoint behind a server function, which
- * is directly callable (TanStack Start auth note).
- */
 export async function isAdminRequest(): Promise<boolean> {
   return verifyGrant(getCookie(ADMIN_COOKIE_NAME));
 }
 
-// Set-Cookie strings for the login/logout responses. Secure is dropped in dev
-// (no HTTPS on localhost) but the gate stays active so the flow is testable.
-// Path=/ so the cookie reaches BOTH /admin/* (the page) and /api/admin/* (the
-// write) — a /admin-scoped cookie would never be sent to the PATCH endpoint.
 export function grantCookie(value: string): string {
   return [
     `${ADMIN_COOKIE_NAME}=${value}`,

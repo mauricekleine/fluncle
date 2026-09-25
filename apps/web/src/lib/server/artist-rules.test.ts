@@ -454,9 +454,6 @@ describe("global artist rules", () => {
   });
 });
 
-// ── THE VISIBILITY VERDICT ──────────────────────────────────────────────────────────────────
-// `unlisted` hides one public artist PAGE. A page is not per-label, so the verdict exists only at
-// global scope, and both write paths have to say so rather than storing a rule nothing reads.
 describe("the unlisted verdict is global-only", () => {
   it("refuses a label-scoped unlisted rule before any MusicBrainz call or write", async () => {
     await seedLabel("lbl_unlisted_scope");
@@ -467,8 +464,7 @@ describe("the unlisted verdict is global-only", () => {
         {
           artistMbid: "mbid-unlisted",
           artistName: "Unlisted",
-          // The contract's per-label enum refuses this at the boundary; the server keeps its own
-          // closed door for a body that reaches it another way.
+
           verdict: "unlisted" as unknown as "allow",
         },
       ]),
@@ -507,9 +503,6 @@ describe("the unlisted verdict is global-only", () => {
     expect(await listArtistRules()).toEqual([]);
   });
 
-  // `artist_rules_global_artist_idx` is one row per MBID, so all three verdicts share ONE global
-  // slot. The refusal has to name the verdict already in it — "clear it first" is only actionable
-  // once the operator knows what he is clearing.
   it.each([
     ["allow", "unlisted"],
     ["unlisted", "block"],

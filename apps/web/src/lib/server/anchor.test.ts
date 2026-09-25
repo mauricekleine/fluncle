@@ -8,11 +8,6 @@ import {
   pickVerifiedCandidate,
 } from "./anchor";
 
-// The verification rungs are pure, so they are unit-tested here without a database — the exact
-// title fold, artist set, ±2s duration window, and ISRC equality that decide whether a candidate
-// is genuinely the same recording. The `anchorTrack` write path (rails + stamping) is exercised
-// against the real schema in anchor.integration.test.ts.
-
 describe("anchorSearchQuery", () => {
   it("joins the row's artists then its title, trimmed", () => {
     expect(anchorSearchQuery(["Etherwood"], "Weightless")).toBe("Etherwood Weightless");
@@ -23,9 +18,6 @@ describe("anchorSearchQuery", () => {
     expect(anchorSearchQuery([], "Amen Break")).toBe("Amen Break");
   });
 
-  // RETRIEVAL, not verification: the gate forgives these spellings, but only on a candidate we were
-  // handed — and the platform hands back nothing when asked in the row's own spelling. Both rows are
-  // measured misses, retrievable under the canonical spelling.
   it("asks in the spelling the platforms index", () => {
     expect(anchorSearchQuery(["Minos"], "Feels Like Before (Air.K & Cephei rmx)")).toBe(
       "Minos Feels Like Before (Air.K & Cephei Remix)",
@@ -47,8 +39,6 @@ describe("pickIsrcCandidate — the exact rung", () => {
   });
 
   it("when several candidates share the ISRC (a re-press), the closest duration wins", () => {
-    // The pilot4 case: one ISRC resolves several Spotify track ids (different pressings). The row's
-    // duration is the tiebreak — a wrong-length pressing must not win over the true recording.
     const candidates = [
       { durationMs: 200_000, isrc: "GBCJY1300173", spotifyTrackId: "long-press" },
       { durationMs: 261_500, isrc: "GBCJY1300173", spotifyTrackId: "true-press" },
@@ -90,7 +80,6 @@ describe("pickVerifiedCandidate — the verified search triple", () => {
   });
 
   it("anchors at 2.6s off — the calibrated window (same-recording drift P99 ≈ 5s, wrong-recording ≥21s)", () => {
-    // The false-miss shape: compilation master vs single master, Δ2.6s.
     const candidates = [
       { ...base, artists: ["Donnie Dubson"], durationMs: 320_000, title: "Monday" },
     ];
@@ -117,7 +106,6 @@ describe("pickVerifiedCandidate — the verified search triple", () => {
   });
 
   it("SUBSET fallback: a primary-only credit anchors when the duration is within the tight 1s window", () => {
-    // The measured class (~9% of stable misses): "LSB & DRS — Could Be" listed under "LSB" alone.
     const candidates = [{ ...base, artists: ["LSB"], durationMs: 340_400, title: "Could Be" }];
 
     expect(
@@ -211,8 +199,6 @@ describe("detectVersionMismatch — the one miss worth writing down", () => {
   const base = { spotifyTrackId: "suspect" };
 
   it("fires on the measured shape: same artists + base title + duration, DIFFERENT descriptor", () => {
-    // The real case: a comp track whose MusicBrainz title omits the version. Our row
-    // says plain "Typical Description" at 394s; streaming has plain at 313s and the remix at 394s.
     const candidates = [
       {
         ...base,
@@ -265,8 +251,6 @@ describe("detectVersionMismatch — the one miss worth writing down", () => {
   });
 
   it("does NOT fire outside the TIGHT 1s window, even inside the gate's own 3s", () => {
-    // Past a second the duration stops doing the identifying, so a descriptor disagreement is just
-    // two different recordings again — exactly the case the gate is right to refuse silently.
     const candidates = [
       {
         ...base,
@@ -355,7 +339,7 @@ describe("parseAnchorReview — a corrupt note reads as NO note, never a throw",
     expect(parseAnchorReview("   ")).toBeUndefined();
     expect(parseAnchorReview("{not json")).toBeUndefined();
     expect(parseAnchorReview("[]")).toBeUndefined();
-    // A shape from some other feature, or a half-written row: no candidate, no reason.
+
     expect(parseAnchorReview(JSON.stringify({ at: "x", title: "y" }))).toBeUndefined();
   });
 });

@@ -1,10 +1,3 @@
-// Integration tests for the per-link review writes + the fresh-links queue read, driven against a
-// real in-memory libSQL engine (vitest env = node). `getDb` is mocked to hand back the per-test
-// client. These pin the behaviours that move review from the artist down to the link:
-//   - an operator add is born reviewed,
-//   - reviewArtistSocial marks ONE link reviewed and promotes a candidate,
-//   - reviewArtist bulk-stamps the whole list,
-//   - listArtistReviewRows counts UNREVIEWED links per artist (the /admin attention read).
 import { type Client, createClient } from "@libsql/client";
 import { LOCAL_DB_CONCURRENCY } from "../database-concurrency";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -110,10 +103,9 @@ describe("per-link review writes + the fresh-links queue", () => {
 
     expect(reviewed.reviewedAt).not.toBeNull();
     expect(reviewed.status).toBe("confirmed");
-    // The other link is untouched — still fresh.
+
     expect((await readSocial(db, "s-auto"))?.reviewed_at).toBeNull();
 
-    // Only the still-fresh auto link remains in the queue, with pending = 1.
     const rows = await listArtistReviewRows();
     expect(rows).toHaveLength(1);
     expect(rows[0]?.pending).toBe(1);
@@ -146,14 +138,13 @@ describe("per-link review writes + the fresh-links queue", () => {
       status: "candidate",
     });
 
-    // A pasted profile deep-link normalizes to the profile root on the way in.
     const updated = await updateArtistSocial("s-firecrawl", "https://www.instagram.com/dimension/");
 
     expect(updated.url).toBe("https://www.instagram.com/dimension");
     expect(updated.source).toBe("operator");
     expect(updated.status).toBe("confirmed");
     expect(updated.reviewedAt).not.toBeNull();
-    // The corrected link left the fresh-links queue.
+
     expect(await listArtistReviewRows()).toEqual([]);
   });
 
@@ -170,7 +161,6 @@ describe("per-link review writes + the fresh-links queue", () => {
       updateArtistSocial("s-firecrawl", "https://www.youtube.com/@dimension"),
     ).rejects.toBeInstanceOf(InvalidArtistSocialError);
 
-    // The bad edit never landed — the row is still the fresh firecrawl candidate.
     const row = await readSocial(db, "s-firecrawl");
     expect(row?.status).toBe("candidate");
     expect(row?.reviewed_at).toBeNull();

@@ -19,11 +19,6 @@ import { mbFetch } from "./musicbrainz";
 
 const ARTIST_RULE_LIMIT = 100;
 
-/**
- * Two axes in one column. `allow`/`block` are ACQUISITION scope (what a future crawl takes);
- * `unlisted` is the one VISIBILITY verdict (the artist entity has no public page) and is inert at
- * crawl time. `unlisted` is valid only on a GLOBAL rule — see `LabelScopedUnlistedRuleError`.
- */
 export type { ArtistRule, ArtistRuleSource, ArtistRuleVerdict, LabelArtistRuleVerdict };
 
 export type LabelArtistRuleInput = ArtistRuleInput;
@@ -67,20 +62,12 @@ type ResolvedArtistRuleIdentity = {
 const RULE_COLUMNS = `id, artist_mbid, artist_name, artist_spotify_id, verdict,
   resolved_mbid, resolved_name, checked_at, created_at, updated_at`;
 
-/** A global rule already exists for this exact MusicBrainz artist identity. */
 export class DuplicateGlobalArtistRuleError extends Error {}
 
-/** A global rule omitted its name and neither MusicBrainz nor the local artist graph supplied one. */
 export class MissingArtistRuleNameError extends Error {}
 
-/** No global or per-label artist rule carries the requested globally unique id. */
 export class ArtistRuleNotFoundError extends Error {}
 
-/**
- * A per-label rule was handed the `unlisted` verdict. Visibility is a property of the artist's one
- * public page, not of any label, so a label-scoped `unlisted` could only ever be a silent no-op.
- * The contract's narrower per-label enum rejects it first; this is the server's own closed door.
- */
 export class LabelScopedUnlistedRuleError extends Error {}
 
 function toArtistRule(row: ArtistRuleRow): ArtistRule {
@@ -116,12 +103,6 @@ function spotifyArtistIdFromRelations(relations: MbArtist["relations"]): null | 
   return null;
 }
 
-/**
- * Resolve the write-time Spotify bridge from the artist's exact MB entity. MusicBrainz failure is
- * deliberately non-fatal: a rule still protects the catalogue by MBID, and the freshness tap
- * simply treats a null bridge as tap-blind. The local graph is the fallback for both the bridge and
- * an omitted global display name.
- */
 async function resolveArtistRuleIdentity(artistMbid: string): Promise<ResolvedArtistRuleIdentity> {
   const path = `/artist/${encodeURIComponent(artistMbid)}?inc=url-rels`;
   const mbArtist = await mbFetch<MbArtist>(path)
@@ -195,11 +176,6 @@ export async function listLabelArtistRules(labelId: string): Promise<ArtistRule[
   return typedRows<ArtistRuleRow>(result.rows).map(toArtistRule);
 }
 
-/**
- * Replace one label's complete rule set atomically. Every remote identity walk finishes before the
- * transaction begins, so an MB miss cannot leave the existing set half-deleted. The rule write stamps
- * the crawl re-arm watermark and `updated_at`, never the human seed-ruling stamp (`ruled_at`).
- */
 export async function replaceLabelArtistRules(
   labelId: string,
   rules: LabelArtistRuleInput[],
@@ -209,7 +185,6 @@ export async function replaceLabelArtistRules(
     throw new RangeError(`A label may carry at most ${ARTIST_RULE_LIMIT} artist rules.`);
   }
 
-  // The input type forbids it; a JSON body decoded at the edge does not, so the check is runtime.
   const unlisted = rules.find((rule) => (rule.verdict as ArtistRuleVerdict) === "unlisted");
 
   if (unlisted) {
@@ -302,13 +277,6 @@ export async function listArtistRules(): Promise<ArtistRule[]> {
   return typedRows<ArtistRuleRow>(result.rows).map(toArtistRule);
 }
 
-/**
- * Add ONE global rule. `artist_rules_global_artist_idx` is unique on `artist_mbid` where `label_id`
- * is null, so an artist carries at most ONE GLOBAL RULING and all three verdicts share that slot —
- * `unlisted` and a global `allow`/`block` are mutually exclusive today. Per-label rules are a
- * separate slot and coexist with any of them. The conflict names the verdict already holding the
- * slot, because "clear it first" is only actionable once the operator knows what he is clearing.
- */
 export async function addArtistRule(input: GlobalArtistRuleInput): Promise<ArtistRule> {
   const db = await getDb();
   const existing = await db.execute({
@@ -367,8 +335,6 @@ export async function addArtistRule(input: GlobalArtistRuleInput): Promise<Artis
     );
   } catch (error) {
     if (isGlobalArtistRuleCollision(error)) {
-      // The unique index caught a ruling written between the read above and this insert. It cannot
-      // name the verdict without a second read on a failed path, so it states the law instead.
       throw new DuplicateGlobalArtistRuleError(
         `A global artist rule already exists for ${input.artistMbid}. ` +
           `An artist carries one global ruling — clear it before setting another.`,
@@ -391,14 +357,6 @@ export async function addArtistRule(input: GlobalArtistRuleInput): Promise<Artis
   return toArtistRule(row);
 }
 
-/**
- * Every `/artist/<slug>` page one MusicBrainz identity owns.
- *
- * A visibility ruling flips exactly these pages, so it is exactly what the edge cache has to be
- * told to drop. One indexed read (`artists_mbid_idx`); the mbid is deliberately not unique on
- * `artists` (a double-mint is a row for the operator to merge, not a write error), so this can
- * legitimately return more than one slug.
- */
 export async function artistSlugsForMbid(artistMbid: string): Promise<string[]> {
   const db = await getDb();
   const result = await db.execute({
@@ -409,11 +367,6 @@ export async function artistSlugsForMbid(artistMbid: string): Promise<string[]> 
   return typedRows<{ slug: string }>(result.rows).map((row) => row.slug);
 }
 
-/**
- * Remove one global rule, returning what it was so the caller can act on the removal — a removed
- * `unlisted` rule puts a page back on the site, which the edge cache has to be told about. The
- * delete stays idempotent: an already-absent id returns undefined rather than throwing.
- */
 export async function removeArtistRule(
   id: string,
 ): Promise<undefined | { artistMbid: string; verdict: ArtistRuleVerdict }> {
@@ -448,11 +401,6 @@ export async function removeArtistRule(
   return removed ? { artistMbid: removed.artist_mbid, verdict: removed.verdict } : undefined;
 }
 
-/**
- * Stamp MusicBrainz drift-audit bookkeeping on either scope of artist rule. The assignment list is
- * deliberately closed over the three audit columns; identity, verdict, scope, and re-arm state are
- * unreachable here, and unlike a whole-set replace this never touches the owning label.
- */
 export async function updateArtistRule(
   id: string,
   input: UpdateArtistRuleInput,

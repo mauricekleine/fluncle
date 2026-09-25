@@ -12,7 +12,6 @@ import {
   validateSocialUrlForPlatform,
 } from "@/lib/server/artist-resolution";
 
-// A tiny URL-routing fetch mock identical in spirit to discogs.test.ts.
 function mockFetch(routes: Array<{ match: string; body?: unknown; response?: Response }>) {
   const calls: string[] = [];
 
@@ -42,8 +41,6 @@ function mockFetch(routes: Array<{ match: string; body?: unknown; response?: Res
 const MB_ARTIST_SEARCH = "musicbrainz.org/ws/2/artist?query=";
 const FIRECRAWL_SCRAPE = "api.firecrawl.dev/v2/scrape";
 const FIRECRAWL_SEARCH = "api.firecrawl.dev/v2/search";
-
-// ── classifyMbUrl ─────────────────────────────────────────────────────────────
 
 describe("classifyMbUrl", () => {
   it("classifies Spotify artist URLs", () => {
@@ -131,8 +128,6 @@ describe("classifyMbUrl", () => {
   });
 });
 
-// ── classifyMbAnchorUrl ───────────────────────────────────────────────────────
-
 describe("classifyMbAnchorUrl (the secondary KG anchors)", () => {
   it("classifies a Discogs ARTIST page", () => {
     expect(classifyMbAnchorUrl("https://www.discogs.com/artist/12345-Nu-Tone")).toBe("discogs");
@@ -145,8 +140,6 @@ describe("classifyMbAnchorUrl (the secondary KG anchors)", () => {
   });
 
   it("returns null for the right host on the wrong path shape", () => {
-    // Only an ARTIST page is an identity: a release, a label, or a bare host says nothing about
-    // who this artist is, and a wrong sameAs edge misidentifies the entity to every crawler.
     expect(classifyMbAnchorUrl("https://www.discogs.com/release/98765-Some-EP")).toBeNull();
     expect(classifyMbAnchorUrl("https://www.discogs.com/label/1111-Hospital")).toBeNull();
     expect(classifyMbAnchorUrl("https://www.discogs.com")).toBeNull();
@@ -161,19 +154,13 @@ describe("classifyMbAnchorUrl (the secondary KG anchors)", () => {
   });
 
   it("leaves classifyMbUrl untouched — both hosts stay non-social metadata sites", () => {
-    // The regression guard on the deliberate split: promoting these to `sameAs` anchors must NOT
-    // make them acceptable as artist_socials rows. The operator's inline social-URL validation
-    // and the Firecrawl search bucket both read `classifyMbUrl`, and both must keep rejecting them.
     expect(classifyMbUrl("https://www.discogs.com/artist/12345-Nu-Tone")).toBeNull();
     expect(classifyMbUrl("https://www.last.fm/music/Nu:Tone")).toBeNull();
   });
 });
 
-// ── normalizeProfileUrl ───────────────────────────────────────────────────────
-
 describe("normalizeProfileUrl", () => {
   beforeEach(() => {
-    // Stub fetch so YouTube API calls don't hit the network; return no items.
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({ items: [] })));
   });
 
@@ -204,9 +191,7 @@ describe("normalizeProfileUrl", () => {
       "instagram",
       "https://www.instagram.com/dimension/tagged/",
     );
-    // The trailing path and sub-paths: extractInstagramHandle only matches single-segment.
-    // A URL like /dimension/tagged/ won't match — only /dimension/ or /dimension would.
-    // So this tests the multi-segment fallback.
+
     expect(result).toBeNull();
   });
 
@@ -243,7 +228,7 @@ describe("normalizeProfileUrl", () => {
     expect(await normalizeProfileUrl("soundcloud", "https://soundcloud.com/nutone/a-track")).toBe(
       "https://soundcloud.com/nutone",
     );
-    // A non-profile section (a track list) has no username → null.
+
     expect(await normalizeProfileUrl("soundcloud", "https://soundcloud.com/tracks")).toBeNull();
   });
 
@@ -260,28 +245,27 @@ describe("normalizeProfileUrl", () => {
     expect(
       await normalizeProfileUrl("twitch", "https://www.twitch.tv/flunclelive/clip/AbC123"),
     ).toBe("https://www.twitch.tv/flunclelive");
-    // A non-channel section (the video list) has no handle → null.
+
     expect(await normalizeProfileUrl("twitch", "https://www.twitch.tv/directory")).toBeNull();
   });
 
   it("normalizes a Bluesky profile URL and reduces a deep link to the profile root", async () => {
-    // A handle-form profile is kept as-is (idempotent).
     expect(
       await normalizeProfileUrl("bluesky", "https://bsky.app/profile/nutone.bsky.social"),
     ).toBe("https://bsky.app/profile/nutone.bsky.social");
-    // A custom-domain handle works the same way.
+
     expect(await normalizeProfileUrl("bluesky", "https://bsky.app/profile/fluncle.com")).toBe(
       "https://bsky.app/profile/fluncle.com",
     );
-    // A DID-form profile is preserved (the DID IS the identity).
+
     expect(await normalizeProfileUrl("bluesky", "https://bsky.app/profile/did:plc:abc123")).toBe(
       "https://bsky.app/profile/did:plc:abc123",
     );
-    // A post deep link collapses to the profile root.
+
     expect(
       await normalizeProfileUrl("bluesky", "https://bsky.app/profile/nutone.bsky.social/post/xyz"),
     ).toBe("https://bsky.app/profile/nutone.bsky.social");
-    // A URL with no /profile/ segment is rejected.
+
     expect(await normalizeProfileUrl("bluesky", "https://bsky.app/")).toBeNull();
   });
 
@@ -291,8 +275,6 @@ describe("normalizeProfileUrl", () => {
     );
   });
 });
-
-// ── luceneEscapePhrase / parseSpotifyArtistId (pure helpers) ───────────────────
 
 describe("luceneEscapePhrase", () => {
   it("escapes backslash and double-quote (the phrase-internal specials)", () => {
@@ -323,10 +305,7 @@ describe("parseSpotifyArtistId", () => {
   });
 });
 
-// ── resolveArtistViaMb (name search primary + Spotify-URL cross-reference) ─────
-
 describe("resolveArtistViaMb (MB name search + Spotify cross-reference)", () => {
-  // The Andromedik / Freaks & Geeks Spotify ids from the validated live examples.
   const ANDROMEDIK_SPOTIFY_ID = "7miXLG9boDOGHJaEelSL7T";
   const FREAKS_SPOTIFY_ID = "6Qcn4TflUyLRoA6w44IQSU";
 
@@ -342,7 +321,6 @@ describe("resolveArtistViaMb (MB name search + Spotify cross-reference)", () => 
   });
 
   it("resolves via name-search, confirmed by an exact Spotify-id identity match", async () => {
-    // Mirrors Andromedik: top hit score 100, 18 url-rels incl. our Spotify id.
     const { calls } = mockFetch([
       {
         body: { artists: [{ id: "mb-andromedik", name: "Andromedik", score: 100 }] },
@@ -367,19 +345,17 @@ describe("resolveArtistViaMb (MB name search + Spotify cross-reference)", () => 
     expect(result.mbid).toBe("mb-andromedik");
     expect(result.wikidataQid).toBe("Q123456");
     expect(result.rateLimited).toBe(false);
-    // A confirmed Spotify-id identity → the socials persist as trusted/public.
+
     expect(result.mbSocialStatus).toBe("auto");
 
     const platforms = result.socials.map((s) => s.platform);
     expect(platforms).toContain("spotify");
     expect(platforms).toContain("soundcloud");
 
-    // All MB-sourced socials must report source=musicbrainz (→ status=auto).
     for (const social of result.socials) {
       expect(social.source).toBe("musicbrainz");
     }
 
-    // Name search was the entry point; no ISRC endpoint is ever consulted.
     expect(calls.some((c) => c.includes("artist?query="))).toBe(true);
     expect(calls.some((c) => c.includes("/isrc/"))).toBe(false);
   });
@@ -398,7 +374,7 @@ describe("resolveArtistViaMb (MB name search + Spotify cross-reference)", () => 
             { url: { resource: `https://open.spotify.com/artist/${ANDROMEDIK_SPOTIFY_ID}` } },
             { url: { resource: "https://www.discogs.com/artist/4321-Andromedik?anv=Andro" } },
             { url: { resource: "https://www.last.fm/music/Andromedik" } },
-            // The wrong path shape on the right host stays dropped — not an identity.
+
             { url: { resource: "https://www.discogs.com/release/999-Some-EP" } },
           ],
         },
@@ -410,13 +386,11 @@ describe("resolveArtistViaMb (MB name search + Spotify cross-reference)", () => 
 
     expect(result.discogsUrl).toBe("https://www.discogs.com/artist/4321-Andromedik");
     expect(result.lastfmUrl).toBe("https://www.last.fm/music/Andromedik");
-    // The anchors live on the artist row, never in the social identity graph.
+
     expect(result.socials.map((s) => s.platform)).toEqual(["spotify"]);
   });
 
   it("leaves both anchors null when MusicBrainz carried no such relation", async () => {
-    // The never-synthesize rail: no relation ⇒ no anchor. A URL guessed from the artist's name
-    // would be a fabricated identity, and `persistResolution` coalesces a null to whatever is stored.
     mockFetch([
       {
         body: { artists: [{ id: "mb-andromedik", name: "Andromedik", score: 100 }] },
@@ -462,18 +436,14 @@ describe("resolveArtistViaMb (MB name search + Spotify cross-reference)", () => 
 
     const result = await resolveArtistViaMb("X", "spotifyxid123");
 
-    // The linktree is captured as a hub seed (never a social); the homepage is BOTH a
-    // homepage social AND a hub seed (an artist's own footer lists its socials).
     expect(result.hubUrls).toContain("https://linktr.ee/thex");
     expect(result.hubUrls).toContain("https://thex.com");
     expect(result.socials.map((s) => s.platform)).toContain("homepage");
-    // A link hub is never stored as a social platform row.
+
     expect(result.socials.every((s) => !s.url.includes("linktr.ee"))).toBe(true);
   });
 
   it("(a) accepts the Spotify-id match even over a HIGHER-scored earlier candidate", async () => {
-    // Mirrors Freaks & Geeks: the top-scored hit is the wrong/empty entry; the
-    // definitive identity is a lower-scored candidate carrying our Spotify id.
     const { calls } = mockFetch([
       {
         body: {
@@ -485,7 +455,6 @@ describe("resolveArtistViaMb (MB name search + Spotify cross-reference)", () => 
         match: MB_ARTIST_SEARCH,
       },
       {
-        // Higher-scored candidate: empty/wrong entry, zero url-rels.
         body: { id: "mb-wrong", name: "Freaks & Geeks", relations: [] },
         match: "artist/mb-wrong",
       },
@@ -507,7 +476,7 @@ describe("resolveArtistViaMb (MB name search + Spotify cross-reference)", () => 
     expect(result.mbid).toBe("mb-real");
     expect(result.mbSocialStatus).toBe("auto");
     expect(result.socials.map((s) => s.platform)).toContain("soundcloud");
-    // Both candidates were deep-fetched (the wrong one first, then the match).
+
     expect(calls.some((c) => c.includes("artist/mb-wrong"))).toBe(true);
     expect(calls.some((c) => c.includes("artist/mb-real"))).toBe(true);
   });
@@ -533,15 +502,11 @@ describe("resolveArtistViaMb (MB name search + Spotify cross-reference)", () => 
 
     const result = await resolveArtistViaMb("Andromedik", ANDROMEDIK_SPOTIFY_ID);
 
-    // Different Spotify id → not our artist. Better a miss than a wrong link.
     expect(result.mbid).toBeNull();
     expect(result.socials).toHaveLength(0);
   });
 
   it("(Dimension trap) does NOT accept the top-scored namesake — leaves it unresolved", async () => {
-    // The disambiguation trap: the highest-scored hit is the wrong artist (Japanese
-    // jazz group), and the real DnB entry carries a Spotify id that isn't ours. No
-    // candidate exposes OUR Spotify id → unresolved, never the top-scored namesake.
     mockFetch([
       {
         body: {
@@ -553,7 +518,6 @@ describe("resolveArtistViaMb (MB name search + Spotify cross-reference)", () => 
         match: MB_ARTIST_SEARCH,
       },
       {
-        // Japanese jazz group — high score, exact name, but a DIFFERENT Spotify id.
         body: {
           id: "mb-jazz",
           name: "DIMENSION",
@@ -578,7 +542,6 @@ describe("resolveArtistViaMb (MB name search + Spotify cross-reference)", () => 
   });
 
   it("(c) accepts a no-Spotify-rel candidate on a strong score + exact name match", async () => {
-    // No candidate exposes ANY Spotify rel → the soft name+score fallback applies.
     mockFetch([
       {
         body: { artists: [{ id: "mb-nospotify", name: "Andromedik", score: 95 }] },
@@ -597,8 +560,7 @@ describe("resolveArtistViaMb (MB name search + Spotify cross-reference)", () => 
     const result = await resolveArtistViaMb("Andromedik", ANDROMEDIK_SPOTIFY_ID);
 
     expect(result.mbid).toBe("mb-nospotify");
-    // No identity confirmation → the soft fallback's socials are DOWNGRADED to candidate
-    // (awaits an operator glance; never public until confirmed).
+
     expect(result.mbSocialStatus).toBe("candidate");
     expect(result.socials.map((s) => s.platform)).toContain("soundcloud");
   });
@@ -647,9 +609,6 @@ describe("resolveArtistViaMb (MB name search + Spotify cross-reference)", () => 
   });
 
   it("disables the soft fallback once ANY candidate exposed a Spotify rel (namesake guard)", async () => {
-    // First candidate carries a (differing) Spotify rel → a cross-check signal existed
-    // and didn't match ours; a later no-Spotify candidate must NOT slip through on
-    // name+score alone. Result: unresolved.
     mockFetch([
       {
         body: {
@@ -773,7 +732,7 @@ describe("resolveArtistViaMb (MB name search + Spotify cross-reference)", () => 
           name: "Noisia",
           relations: [
             { url: { resource: `https://open.spotify.com/artist/${ANDROMEDIK_SPOTIFY_ID}` } },
-            { url: {} }, // no resource
+            { url: {} },
             { url: { resource: "https://soundcloud.com/noisia" } },
           ],
         },
@@ -788,7 +747,6 @@ describe("resolveArtistViaMb (MB name search + Spotify cross-reference)", () => 
     expect(result.socials.every((s) => Boolean(s.url))).toBe(true);
   });
 });
-// ── resolveGapViaFirecrawl ────────────────────────────────────────────────────
 
 describe("resolveGapViaFirecrawl (MB-hub-first scrape + web-search gap-fill)", () => {
   beforeEach(() => {
@@ -802,9 +760,6 @@ describe("resolveGapViaFirecrawl (MB-hub-first scrape + web-search gap-fill)", (
     delete process.env.FIRECRAWL_API_KEY;
   });
 
-  // A routing mock over the two Firecrawl endpoints. `scrape` answers /v2/scrape JSON
-  // mode with a platform→url object under data.json; `search` answers /v2/search with a
-  // `web` result list. Records request URLs + parsed bodies so a test can assert the flow.
   function mockFirecrawl(opts: { scrape?: Record<string, string>; search?: string[] }) {
     const calls: string[] = [];
     const bodies: Array<{ body: Record<string, unknown>; url: string }> = [];
@@ -836,7 +791,6 @@ describe("resolveGapViaFirecrawl (MB-hub-first scrape + web-search gap-fill)", (
     return { bodies, calls, fetchMock };
   }
 
-  /** The scrape request body (its JSON-mode schema property keys) for an assertion. */
   function scrapeSchemaKeys(
     bodies: Array<{ body: Record<string, unknown>; url: string }>,
   ): string[] {
@@ -870,7 +824,6 @@ describe("resolveGapViaFirecrawl (MB-hub-first scrape + web-search gap-fill)", (
       expect(social.source).toBe("firecrawl");
     }
 
-    // The hub covered everything → zero /v2/search spend.
     expect(calls.some((c) => c.includes(FIRECRAWL_SCRAPE))).toBe(true);
     expect(calls.some((c) => c.includes(FIRECRAWL_SEARCH))).toBe(false);
   });
@@ -928,8 +881,6 @@ describe("resolveGapViaFirecrawl (MB-hub-first scrape + web-search gap-fill)", (
   });
 
   it("Stage 3 — falls back to a broad web search, bucketing profile-root results by host", async () => {
-    // No MB hub; the hub-search finds no linktree → broad search returns raw profiles,
-    // including a deep SoundCloud track link that must reduce to the profile root.
     mockFirecrawl({
       search: [
         "https://www.instagram.com/nutone/?hl=en",
@@ -1044,7 +995,6 @@ describe("resolveGapViaFirecrawl (MB-hub-first scrape + web-search gap-fill)", (
   });
 
   it("skips a scraped value that won't normalize to a profile root", async () => {
-    // A TikTok URL with no handle → normalizeProfileUrl returns null → dropped.
     mockFirecrawl({ scrape: { tiktok: "https://www.tiktok.com/" } });
 
     const result = await resolveGapViaFirecrawl(
@@ -1059,7 +1009,6 @@ describe("resolveGapViaFirecrawl (MB-hub-first scrape + web-search gap-fill)", (
   });
 
   it("Stage 3 — rejects a namesake/label hit whose handle doesn't relate to the artist name", async () => {
-    // A TikTok search for an act with no TikTok returns the LABEL's account → dropped.
     mockFirecrawl({ search: ["https://www.tiktok.com/@hospitalrecords"] });
 
     const result = await resolveGapViaFirecrawl(
@@ -1088,8 +1037,6 @@ describe("resolveGapViaFirecrawl (MB-hub-first scrape + web-search gap-fill)", (
   });
 });
 
-// ── validateSocialUrlForPlatform (the fresh-links inline edit) ──────────────────
-
 describe("validateSocialUrlForPlatform", () => {
   it("accepts a matching-platform URL and normalizes it to the profile root", async () => {
     expect(
@@ -1102,7 +1049,6 @@ describe("validateSocialUrlForPlatform", () => {
   });
 
   it("normalizes a deep link down to the profile root", async () => {
-    // A SoundCloud track deep-link collapses to the artist profile.
     expect(
       await validateSocialUrlForPlatform(
         "soundcloud",
