@@ -586,11 +586,22 @@ const CHROME = `
 </div>
 `;
 
-// keep vivid brand colours; lift only DESATURATED-dark marks toward warm cream so they read on near-black
-function fillFor(hex: string): string {
+// Nebula Violet's reserved BAND (DESIGN.md §2, The Lore-Art Paint Exemption): blue the top
+// channel with red above green, which is exactly the h240–h300 arc.
+export function inVioletBand(r: number, g: number, b: number): boolean {
+  return b > r && b > g && r > g;
+}
+
+// keep vivid brand colours; lift only DESATURATED-dark marks toward warm cream so they read on near-black.
+// A brand whose own colour sits in the violet band (Twitch, Mixcloud, Deezer, …) drops to the chip's
+// ink instead — `currentColor`, the canon form of a brand mark — since a violet node reads as live.
+export function fillFor(hex: string): string {
   const r = parseInt(hex.slice(1, 3), 16),
     g = parseInt(hex.slice(3, 5), 16),
     b = parseInt(hex.slice(5, 7), 16);
+  if (inVioletBand(r, g, b)) {
+    return "currentColor";
+  }
   const mx = Math.max(r, g, b),
     mn = Math.min(r, g, b),
     lum = 0.2126 * r + 0.7152 * g + 0.0722 * b,
