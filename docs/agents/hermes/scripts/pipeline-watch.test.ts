@@ -157,7 +157,7 @@ describe("real box journal summary replay", () => {
         },
       },
     ];
-    const verdict = evaluate("anchor", markers);
+    const verdict = evaluate("anchor", markers, { anchorQueue: { atLeast: true, count: 1000 } });
     expect(verdict.state).toBe("scheduled_pause");
     expect(planIncidents({}, [verdict], first + 2 * 60 * 60_000).alerts).toEqual([]);
   });
@@ -168,7 +168,9 @@ describe("real box journal summary replay", () => {
       at: first + hour * 60 * 60_000,
       summary: { gateReason: "quota_hold", produced: 15, queueDepth: 2000 },
     }));
-    expect(evaluate("anchor", markers).state).toBe("healthy");
+    expect(evaluate("anchor", markers, { anchorQueue: { atLeast: true, count: 1000 } }).state).toBe(
+      "healthy",
+    );
   });
 
   test("a crawler still writing tracks is not a supply stall while its ready lane reads zero", () => {
@@ -178,10 +180,33 @@ describe("real box journal summary replay", () => {
       summary: { tracksWritten: index % 3 === 0 ? 10 : 3 },
     }));
     const verdict = evaluate("crawl", markers, {
-      crawl: { frontier: 180000, storable: 0, unstorable: 174000 },
+      crawl: {
+        frontier: { atLeast: true, count: 180000 },
+        storable: { atLeast: false, count: 0 },
+        unstorable: { atLeast: true, count: 174000 },
+      },
       crawlZeroChecks: 2,
     });
     expect(verdict.state).not.toBe("stalled");
+  });
+
+  test("a bounded empty crawler ready lane is a supply stall below the write threshold", () => {
+    const first = Date.parse("2026-09-25T18:45:00.000Z");
+    const markers = Array.from({ length: 12 }, (_, index) => ({
+      at: first + index * 10 * 60_000,
+      summary: { tracksWritten: index === 0 ? 1 : 0 },
+    }));
+    const verdict = evaluate("crawl", markers, {
+      crawl: {
+        frontier: { atLeast: true, count: 180000 },
+        storable: { atLeast: false, count: 0 },
+        unstorable: { atLeast: true, count: 174000 },
+      },
+      crawlZeroChecks: 2,
+    });
+    expect(verdict.state).toBe("stalled");
+    expect(verdict.cause).toBe("supply_empty");
+    expect(verdict.backlog).toEqual({ atLeast: true, count: 174000 });
   });
 
   test("a spent Apify budget is a closed budget, never a page", () => {
@@ -195,7 +220,7 @@ describe("real box journal summary replay", () => {
         produced: 0,
       },
     }));
-    const verdict = evaluate("anchor", markers);
+    const verdict = evaluate("anchor", markers, { anchorQueue: { atLeast: true, count: 1000 } });
     expect(verdict.state).toBe("budget_closed");
     expect(planIncidents({}, [verdict], first + 3 * 60 * 60_000).alerts).toEqual([]);
   });
