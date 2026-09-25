@@ -9,7 +9,6 @@ import {
   type ReachSource,
 } from "./reach-board";
 
-/** The first pivot cell, asserted present — the pivots under test always produce at least one. */
 function firstCell(pivot: ReachPivot): ReachPivotCell {
   const cell = pivot.cells[0];
 
@@ -20,12 +19,6 @@ function firstCell(pivot: ReachPivot): ReachPivotCell {
   return cell;
 }
 
-// The /admin/reach board's pure aggregation math (reach-board.ts). The SQL reduction over the
-// growing ledger is proven against hosted Turso, not here; these tests pin the two pieces that
-// run in the isolate over the already-bounded per-post rows — the day-over-day velocity (gap
-// days + the lone-snapshot case) and the platform × axis pivots (grouping, dedupe, small-n).
-
-// A board row with sane defaults; each test overrides only what it cares about.
 function post(overrides: Partial<ReachPostRow> = {}): ReachPostRow {
   return {
     artists: [],
@@ -85,7 +78,6 @@ describe("dailyViewVelocity", () => {
   });
 
   it("normalises across GAP DAYS so a missed tick never inflates the rate", () => {
-    // 900 views gained, but over four days (a missed daily tick), so 225/day — not 900.
     const result = dailyViewVelocity({
       latestDay: "2026-07-24",
       latestViews: 1900,
@@ -177,8 +169,8 @@ describe("buildPivots", () => {
     const cell = firstCell(buildPivots(posts).structure);
 
     expect(cell.count).toBe(4);
-    expect(cell.medianViews).toBe(25); // (20 + 30) / 2
-    expect(cell.meanViews).toBe(40); // (10 + 20 + 30 + 100) / 4 — the mean is dragged by the outlier
+    expect(cell.medianViews).toBe(25);
+    expect(cell.meanViews).toBe(40);
   });
 
   it("keeps a small-n cell readable — a lone post is count 1, not a trend", () => {
@@ -209,8 +201,6 @@ describe("buildPivots", () => {
   });
 
   it("dedupes a post carrying two sources to ONE unit, preferring native views", () => {
-    // The same YouTube post appears as both a postiz and a youtube_analytics series. It must count
-    // once, take the native view number, and lift retention off the youtube_analytics row.
     const shared = { platform: "youtube" as const, structure: "flow", trackId: "same" };
     const posts = [
       post({ ...shared, source: "postiz", views: 900 }),
@@ -224,8 +214,8 @@ describe("buildPivots", () => {
 
     const cell = firstCell(buildPivots(posts).structure);
 
-    expect(cell.count).toBe(1); // one post, not two
-    expect(cell.meanViews).toBe(1000); // native (youtube_analytics) views win over postiz
+    expect(cell.count).toBe(1);
+    expect(cell.meanViews).toBe(1000);
     expect(cell.meanRetention).toBe(62);
     expect(cell.retentionCount).toBe(1);
   });
@@ -248,7 +238,6 @@ describe("buildPivots", () => {
         trackId: "b",
         views: 200,
       }),
-      // A third post with no retention: it counts toward n but not toward mean retention.
       post({ platform: "youtube", source: "postiz", structure: "flow", trackId: "c", views: 300 }),
     ];
 
@@ -256,7 +245,7 @@ describe("buildPivots", () => {
 
     expect(cell.count).toBe(3);
     expect(cell.retentionCount).toBe(2);
-    expect(cell.meanRetention).toBe(60); // (50 + 70) / 2, the third post excluded
+    expect(cell.meanRetention).toBe(60);
   });
 
   it("leaves mean retention null when no post in a cell reported it", () => {

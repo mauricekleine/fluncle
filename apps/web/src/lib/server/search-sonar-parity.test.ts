@@ -50,7 +50,6 @@ function cosine(left: number[], right: number[]): number {
   return left.reduce((sum, value, index) => sum + value * (right[index] ?? 0), 0);
 }
 
-/** The `tracks` Sonar index's inclusive BPM filter and deterministic similarity order. */
 async function referenceSonar(request: SonarRequest): Promise<SonarMatch[]> {
   const result = await db.execute(
     `select tracks.track_id, tracks.bpm, track_embeddings.embedding_blob

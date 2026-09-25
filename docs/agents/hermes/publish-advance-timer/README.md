@@ -23,9 +23,9 @@ Turning it off again is the same flip in reverse (`fluncle admin publish pause`)
 Every gate lives Worker-side, where it is tested (`apps/web/src/lib/server/publish-advance.ts`, `orpc-publish-advance.test.ts`):
 
 - **Never twice.** The advance only picks a finding with NO `social_posts` row for the platform, and it CLAIMS that row atomically (`insert … on conflict do nothing` against the `(track, platform)` unique index) BEFORE any call to Postiz. Two overlapping ticks race on the index; the loser skips.
-- **Never half-rendered.** READY means the render finalized with BOTH masters (`video_url` + `video_squared_at`), it has settled 15 minutes (so a bad render is still the operator's to requeue), the whole publishable bundle is SERVED on R2 (the server-side mirror of the CLI's `bundle_incomplete` guard), and the caption is non-empty.
+- **Never half-rendered.** READY means the render finalized with BOTH masters (`video_url` + `video_squared_at`), it has settled six hours (so a bad render is still the operator's to requeue), the whole publishable bundle is SERVED on R2 (the server-side mirror of the CLI's `bundle_incomplete` guard), and the caption is non-empty.
 - **Fail closed, visibly.** A failed push leaves the row `failed` and is NEVER auto-retried — the finding keeps its `post-youtube` / `post-tiktok` row in the `/admin` attention queue, so a broken auto-publisher degrades into the manual flow the operator already knows.
-- **Bounded.** One finding per tick; a rolling-24h cap of 6 pushes across both platforms; at most one YouTube push pending its URL at a time; TikTok held once its inbox has 5 unfinished drafts.
+- **Bounded.** One finding per tick; a rolling-24h cap of four pushes across both platforms, including hand-pushed posts; at most one YouTube push pending its URL at a time; TikTok held once its inbox has five unfinished drafts because the next draft can be accepted by the push API but dropped asynchronously.
 
 ## Deploy (on rave-02, one time)
 
