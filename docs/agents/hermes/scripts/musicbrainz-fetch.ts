@@ -138,6 +138,7 @@ export type MusicbrainzFetchResult = {
 export type MusicbrainzFetchOptions = {
   fetch?: typeof globalThis.fetch;
   intervalMs?: number;
+  onAttempt?: (attempt: { outcome: string; url: string }) => void;
   stateDir?: string;
 };
 
@@ -170,14 +171,20 @@ export async function fetchMusicbrainz(
         signal: AbortSignal.timeout(MB_REQUEST_TIMEOUT_MS),
       });
     } catch {
+      options.onAttempt?.({ outcome: "network_error", url });
       return { outcome: "empty", url };
     }
 
     if (response.status >= 300 && response.status < 400) {
+      options.onAttempt?.({ outcome: `http_${response.status}`, url });
       return { outcome: "empty", url };
     }
 
     if (response.status === 503) {
+      options.onAttempt?.({
+        outcome: attempt === MB_ATTEMPTS - 1 ? "throttled" : "retry_503",
+        url,
+      });
       if (attempt === MB_ATTEMPTS - 1) {
         return { outcome: "throttled", url };
       }
@@ -189,16 +196,27 @@ export async function fetchMusicbrainz(
     }
 
     if (!response.ok) {
+      options.onAttempt?.({ outcome: `http_${response.status}`, url });
       return { outcome: "empty", url };
     }
 
-    const text = await response.text();
+    let text: string;
+    try {
+      text = await response.text();
+    } catch {
+      options.onAttempt?.({ outcome: "network_error", url });
+      return { outcome: "empty", url };
+    }
     if (Buffer.byteLength(text, "utf8") > MB_MAX_BODY_BYTES) {
+      options.onAttempt?.({ outcome: "oversize", url });
       return { outcome: "oversize", url };
     }
     try {
-      return { body: JSON.parse(text), outcome: "body", url };
+      const body: unknown = JSON.parse(text);
+      options.onAttempt?.({ outcome: "body", url });
+      return { body, outcome: "body", url };
     } catch {
+      options.onAttempt?.({ outcome: "invalid", url });
       return { outcome: "invalid", url };
     }
   }

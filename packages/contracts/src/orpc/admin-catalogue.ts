@@ -355,6 +355,8 @@ export const CrawlPassSchema = z
 
     rateLimited: z.boolean(),
 
+    releaseDetailsStored: z.number().optional(),
+
     releasesRearmed: z.number(),
 
     seeded: z.number(),
@@ -451,6 +453,7 @@ const CrawlPhaseInputSchema = z.discriminatedUnion("phase", [
     limit: z.number().int().min(1).max(MAX_CRAWL_PREPARE_LIMIT).default(2),
     maxHop: z.number().int().min(0).max(3).default(2),
     phase: z.literal("prepare"),
+    sampleStorableRepair: z.boolean().optional(),
   }),
   z.object({
     phase: z.literal("fetch"),
@@ -484,6 +487,7 @@ const CrawlPhaseOutputSchema = z.discriminatedUnion("phase", [
         z.object({
           fetchPlan: CrawlFetchPlanSchema,
           nodeId: z.string(),
+          nodeKind: z.enum(["artist", "label", "release"]).optional(),
           preparedToken: z.string(),
         }),
       )
@@ -491,6 +495,7 @@ const CrawlPhaseOutputSchema = z.discriminatedUnion("phase", [
     kind: z.enum(["drained", "prepared", "unavailable"]),
     ok: z.literal(true),
     phase: z.literal("prepare"),
+    storableReady: z.boolean().nullable().optional(),
   }),
   z.object({
     commitToken: z.string(),
