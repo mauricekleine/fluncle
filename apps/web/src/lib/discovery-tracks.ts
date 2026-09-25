@@ -27,8 +27,6 @@ export type DiscoveryTrack = {
   logId?: string;
 
   previewable: boolean;
-  /** False when the track has no sound to find similar tracks from (no embedding, no artist
-      centroid); absent when the list does not know, which never hides the action. */
   similar?: boolean;
   spotifyUrl?: string;
   title: string;
@@ -91,6 +89,7 @@ export function findingToDiscoveryTrack(
     lit: true,
     logId: finding.logId,
     previewable: hasPreviewSource(finding),
+    similar: finding.similar,
     spotifyUrl: finding.spotifyUrl,
     title: finding.title,
     trackId: finding.trackId,
@@ -196,7 +195,6 @@ export function sonicNeighbourToDiscoveryTrack(neighbour: SonicNeighbour): Disco
     lit: neighbour.logId !== undefined,
     logId: neighbour.logId,
     previewable: neighbour.previewable,
-    // A neighbour came out of a vector scan, so it has an embedding by construction.
     similar: true,
     spotifyUrl: neighbour.spotifyUrl,
     title: neighbour.title,

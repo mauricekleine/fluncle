@@ -68,6 +68,7 @@ export const TrackListItemSchema = z
     postedToTelegram: z.boolean(),
     previewUrl: z.string().optional(),
     releaseDate: z.string().optional(),
+    similar: z.boolean().optional(),
 
     sourceAudioFailures: z.number().optional(),
 

@@ -306,7 +306,13 @@ function TrackLinksMenu({
           </DropdownMenuItem>
         ) : null}
         <DropdownMenuItem
-          render={<Link data-discovery="similar" to={similarSearchHref(queued) as never} />}
+          render={
+            <Link
+              data-discovery="similar"
+              preload={false}
+              to={similarSearchHref(queued) as never}
+            />
+          }
         >
           <WaveformIcon aria-hidden="true" className="size-4" />
           Similar tracks

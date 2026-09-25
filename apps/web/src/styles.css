@@ -9826,9 +9826,16 @@ html[data-player-docked] .nav-shell--workbench {
   min-width: 0;
 }
 
+/* Both row targets clear the 24px floor as boxes while the text keeps its place: the title link
+   and each credit link grow their hit box with padding the layout never sees (negative margins on
+   the block title, inline padding on the credits), and the credit line sits just far enough below
+   the title that the two boxes never overlap. */
 .discovery-row-link {
   color: inherit;
+  display: block;
+  margin-block: -0.16rem;
   outline: none;
+  padding-block: 0.16rem;
   text-decoration: none;
 }
 
@@ -9862,7 +9869,7 @@ html[data-player-docked] .nav-shell--workbench {
   display: flex;
   font-size: 0.8rem;
   line-height: 1.3;
-  margin: 0.25rem 0 0;
+  margin: 0.42rem 0 0;
   max-width: 100%;
   min-width: 0;
   pointer-events: none;
@@ -9878,6 +9885,7 @@ html[data-player-docked] .nav-shell--workbench {
 }
 
 .discovery-row-meta .graph-link {
+  padding-block: 0.26rem;
   pointer-events: auto;
 }
 
@@ -10299,7 +10307,7 @@ html[data-player-docked] .nav-shell--workbench {
 }
 
 /* On a phone the cable rises: the trail is a small strip on the bar's top edge, so the transport
-   keeps its room and every seed stays in reach. The page leaves room for the strip as well. */
+   keeps its room and the nearest seed back stays in reach. The page leaves room for the strip as well. */
 @media (max-width: 40rem) {
   .player-trail {
     background: color-mix(in oklch, var(--sleeve-black) 94%, transparent);
@@ -10318,6 +10326,10 @@ html[data-player-docked] .nav-shell--workbench {
 
   .player-trail-seeds::before {
     left: 0;
+  }
+
+  .player-trail-seed:not([data-nearest]) {
+    display: none;
   }
 
   html[data-player-docked][data-player-trail] {

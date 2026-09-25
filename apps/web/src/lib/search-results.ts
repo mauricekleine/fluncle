@@ -107,13 +107,6 @@ export function searchArchiveApiPath(query: string, limit?: number): string {
   return `/api/v1/search/archive?${params.toString()}`;
 }
 
-/**
- * Where a result set continues past what search shows (DX-15): the whole list the answer is the top
- * of. A style is the head of `/tracks?sound=`; a named artist, label, or album is the head of its
- * own page; a reading made only of `/tracks` axes (key, BPM, year, label) is the head of that
- * filtered list. Anything else (free text, a sonic reference, a coordinate) has no fuller list to
- * send you to, so there is no link rather than a link to less.
- */
 export function searchSeeAll(
   response: SearchResponse,
 ): { href: string; label: string } | undefined {

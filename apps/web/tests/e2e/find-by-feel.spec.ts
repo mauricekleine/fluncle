@@ -1,12 +1,3 @@
-// FIND IT BY FEEL (Discovery UX Wave 2), as the personas walk it, in a real browser past hydration.
-//
-//   - Jade (390×844): hears something that sounds like liquid without typing a word (a style chip on
-//     the front door), then follows "Similar tracks" twice and walks back up the trail.
-//   - Tom (1440×900): a half-remembered title resolves while typing; a sentence waits for Enter.
-//
-// The e2e stack runs a deterministic fake Sonar (tests/e2e/fake-sonar.ts), so the sound ranking
-// takes the production route. The preview relay is answered with silence (tests/e2e/player.ts).
-
 import { expect, test, type Page } from "@playwright/test";
 import { blockExternalRequests } from "./browser";
 import { routePreviews } from "./player";
@@ -74,7 +65,6 @@ test.describe("Jade, 390×844", () => {
       SEEDED_STYLE.rankedTitles[0] ?? "",
     );
 
-    // The pressed chip takes the ranking off again.
     await page.getByRole("link", { name: "Liquid, clear sound" }).click();
     await expect(page).toHaveURL(/\/tracks$/);
     expect(problems).toEqual([]);
@@ -97,7 +87,6 @@ test.describe("Jade, 390×844", () => {
       SEEDED_STYLE.rankedTitles[0] ?? "",
     );
 
-    // Its results play as a list, and the seed joins the trail.
     const results = page.locator(".search-page-tracks li");
 
     await results
@@ -110,7 +99,6 @@ test.describe("Jade, 390×844", () => {
 
     await expect(trail.getByRole("link")).toHaveCount(1);
 
-    // From the player: the playing track's own sonic view, then play it — a second seed.
     await player.getByRole("button", { name: /^Actions for / }).click();
     await page.getByRole("menuitem", { name: "Similar tracks" }).click();
     await expect(page).toHaveURL(/\/search\?like=/);
@@ -121,12 +109,10 @@ test.describe("Jade, 390×844", () => {
       .click();
     await expect(trail.locator("li")).toHaveCount(2);
 
-    // A phone keeps only the nearest seed visible; the cable holds both. Step back by the first.
-    await trail
-      .locator("li")
-      .first()
-      .locator("a")
-      .evaluate((link: HTMLElement) => link.click());
+    const visibleSeeds = trail.getByRole("link");
+
+    await expect(visibleSeeds).toHaveCount(1);
+    await visibleSeeds.click();
     await expect(page).toHaveURL(
       new RegExp(`/search\\?like=${SEEDED_STYLE.rankedTrackIds[0] ?? ""}$`),
     );
@@ -145,7 +131,6 @@ test.describe("Jade, 390×844", () => {
     await page.getByRole("menuitem", { name: "Similar tracks" }).click();
     await expect(page).toHaveURL(/\/search\?like=/);
 
-    // The last row of the sonic view: it ends at once, and the bar offers the way on.
     await page
       .locator(".search-page-tracks li")
       .filter({ has: page.locator("[data-discovery-play]") })
@@ -165,6 +150,15 @@ test.describe("Jade, 390×844", () => {
 
     expect((close?.x ?? 999) + (close?.width ?? 0)).toBeLessThanOrEqual(390);
     expect((trail?.y ?? 0) + (trail?.height ?? 0)).toBeLessThanOrEqual((bar?.y ?? 0) + 1);
+  });
+
+  test("a row's title link is a full target, not a 19px line", async ({ page }) => {
+    await blockExternalRequests(page);
+    await hydrate(page, "/tracks");
+
+    const box = await page.locator(".discovery-row-link").first().boundingBox();
+
+    expect(box?.height ?? 0).toBeGreaterThanOrEqual(24);
   });
 
   test("a track with no sound hides Similar tracks; one with only its artist's sound says so", async ({
@@ -202,18 +196,30 @@ test.describe("Tom, 1440×900", () => {
     const field = page.getByRole("searchbox", { name: "Search the archive" });
     const title = SEEDED_FINDING_TITLES[0] ?? "";
 
-    // Two words, half typed: the words answer live, without Enter.
     await field.click();
     await field.pressSequentially(title.slice(0, 12), { delay: 40 });
 
     await expect(page).toHaveURL(/\/search\?q=/);
     await expect(page.locator(".search-page-tracks").filter({ hasText: title })).toHaveCount(1);
     await expect(field).toBeFocused();
-    // The burst pushed ONE entry off the committed search and replaced it on every keystroke after.
     expect(await page.evaluate(() => history.length)).toBe(before + 1);
 
     await page.goBack();
     await expect(page).toHaveURL(/\/search$/);
+  });
+
+  test("a keystroke still settling never lands on top of a clicked example", async ({ page }) => {
+    await blockExternalRequests(page);
+    await hydrate(page, "/search");
+
+    const field = page.getByRole("searchbox", { name: "Search the archive" });
+
+    await field.click();
+    await field.pressSequentially("li", { delay: 20 });
+    await page.getByRole("link", { name: "netsky" }).first().click();
+    await expect(page).toHaveURL(/\/search\?q=netsky$/);
+    await page.waitForTimeout(800);
+    await expect(page).toHaveURL(/\/search\?q=netsky$/);
   });
 
   test("a sentence shows its words at once and is read as a sentence on Enter", async ({
@@ -240,7 +246,6 @@ test.describe("Tom, 1440×900", () => {
 
     await expect(page.locator(".search-page-matchline")).toContainText("tracks closest to Liquid.");
     await expect(page.locator(".search-note").first()).toContainText("Going by");
-    // A sound answer is ONE list in distance order, findings and tracks told apart by light alone.
     const tracks = page.locator(".search-page-tracks").first().locator("li");
 
     await expect(tracks.first()).toContainText(SEEDED_STYLE.rankedTitles[0] ?? "");
@@ -254,8 +259,6 @@ test.describe("Tom, 1440×900", () => {
     await blockExternalRequests(page);
     await hydrate(page, "/search?q=chilled%20liquid%20zzqx%20174");
 
-    // The e2e stack has no language tier, so the sentence is read by name only, and the page says so
-    // ONCE, in the matchline, rather than passing the empty word match off as nothing out there.
     await expect(
       page.getByText(/^Reading by name only right now, and nothing came up/),
     ).toHaveCount(1);

@@ -203,6 +203,21 @@ describe("the answered surface", () => {
     );
   });
 
+  it("keeps echoing the rest of a compound sonic query beside its anchor", async () => {
+    const html = await renderPage(
+      answered({
+        anchor: hit({ certified: true, logId: "701.1.0A", title: "Synthetic Aurora" }),
+        filters: { label: "Hospital Records", soundsLike: "Synthetic Aurora" },
+        kind: "sonic",
+        results: [hit({ title: "Neon Undertow", trackId: "t2" })],
+      }),
+      "sounds like Synthetic Aurora but on Hospital Records",
+    );
+
+    expect(html).toContain("Near ");
+    expect(html).toContain("label: Hospital Records");
+  });
+
   it("names the track the sonic tier anchored on — a real row, never an invented vibe", async () => {
     const html = await renderPage(
       answered({
@@ -331,5 +346,18 @@ describe("the field", () => {
 
     expect(html).toContain('for="search-page-q"');
     expect(html).toContain("Search the archive");
+  });
+});
+
+describe("a spent search budget", () => {
+  it("says so once and still hands you the whole list", async () => {
+    const html = await renderPage({ status: "limited" }, "liquid");
+
+    expect(html).toContain(
+      "That’s a lot of searching from one place in one go. Give it a minute, then try again.",
+    );
+    expect(html).toContain("Till then, ");
+    expect(html).toContain('href="/tracks"');
+    expect(html).not.toContain("Nothing out here");
   });
 });

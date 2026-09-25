@@ -33,7 +33,11 @@ export function FrontDoorSearch(): ReactNode {
       <ul aria-labelledby="fd-search-examples-hint" className="fd-search-examples">
         {SEARCH_EXAMPLES.map((example) => (
           <li key={example.query}>
-            <Link className="fd-search-example" to={searchPagePath(example.query) as never}>
+            <Link
+              className="fd-search-example"
+              preload={false}
+              to={searchPagePath(example.query) as never}
+            >
               <SearchExampleGlyph className="fd-search-example-icon" icon={example.icon} />
               {example.query}
             </Link>
@@ -41,8 +45,6 @@ export function FrontDoorSearch(): ReactNode {
         ))}
       </ul>
 
-      {/* The way in for a stranger who knows no subgenre words: tap a sound, get the list ranked
-          closest to it (`/tracks?sound=`). */}
       <StyleChips
         className="search-style-chips"
         label={STYLE_CHIPS_LINE}

@@ -151,7 +151,7 @@ export function SearchResultsList({
         </p>
       ) : undefined}
 
-      {response.filters && !style && !response.anchor ? (
+      {response.filters && !style && !sonicView ? (
         <SearchFilterChips filters={response.filters} />
       ) : undefined}
 

@@ -54,7 +54,13 @@ export function TrackActionsMenu({
         ) : null}
         {track.similar === false ? null : (
           <DropdownMenuItem
-            render={<Link data-discovery="similar" to={similarSearchHref(track) as never} />}
+            render={
+              <Link
+                data-discovery="similar"
+                preload={false}
+                to={similarSearchHref(track) as never}
+              />
+            }
           >
             <WaveformIcon aria-hidden="true" className="size-4" />
             Similar tracks

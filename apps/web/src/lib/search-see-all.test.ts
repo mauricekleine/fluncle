@@ -1,6 +1,3 @@
-// Where a search result set continues (DX-15): the style's ranked list, the entity's own page, or
-// the filtered `/tracks` list — and no link where there is no fuller list to send you to.
-
 import { describe, expect, it } from "vitest";
 import { type SearchResponse, searchSeeAll } from "./search-results";
 

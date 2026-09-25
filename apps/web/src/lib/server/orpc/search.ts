@@ -1,4 +1,5 @@
 import { ORPCError } from "@orpc/server";
+import { readOptionalEnv } from "../env";
 import { chargeRateLimit } from "../rate-limit";
 import { searchArchive } from "../search";
 import { searchTracks } from "../track-search";
@@ -6,8 +7,14 @@ import { apiFault, type Implementer } from "./_shared";
 
 export const MIN_QUERY_LENGTH = 2;
 
-const SEARCH_LIMIT = 30;
-const SEARCH_WINDOW_MS = 60 * 1000;
+export const SEARCH_LIMIT = 30;
+export const SEARCH_WINDOW_MS = 60 * 1000;
+
+export async function searchArchiveRateLimit(): Promise<number> {
+  const raw = Number(await readOptionalEnv("SEARCH_ARCHIVE_RATE_LIMIT"));
+
+  return Number.isSafeInteger(raw) && raw > 0 ? raw : SEARCH_LIMIT;
+}
 
 export function searchHandlers(os: Implementer) {
   const searchTracksHandler = os.search_tracks.handler(async ({ context, input }) => {
@@ -43,7 +50,7 @@ export function searchHandlers(os: Implementer) {
     try {
       const charge = await chargeRateLimit({
         action: "search_archive",
-        limit: SEARCH_LIMIT,
+        limit: await searchArchiveRateLimit(),
         request: context.request,
         windowMs: SEARCH_WINDOW_MS,
       });

@@ -69,9 +69,16 @@ const fetchSearchPage = createServerFn({ method: "GET" })
     return { like, live: data.live === true, q };
   })
   .handler(async ({ data }): Promise<SearchPageData> => {
-    const { resolveSearchPageData } = await import("./-search-page-data");
+    const [{ resolveSearchPageData }, { getRequest }] = await Promise.all([
+      import("./-search-page-data"),
+      import("@tanstack/react-start/server"),
+    ]);
 
-    return resolveSearchPageData(data.q, { like: data.like, live: data.live });
+    return resolveSearchPageData(data.q, {
+      like: data.like,
+      live: data.live,
+      request: getRequest(),
+    });
   });
 
 // A settled keystroke marks its history entry live, so the loader knows the query was typed and not
@@ -145,7 +152,11 @@ function SearchExamples({ exclude, label }: { exclude?: string; label: string })
           (example) => example.query.toLowerCase() !== (exclude ?? "").trim().toLowerCase(),
         ).map((example) => (
           <li key={example.query}>
-            <Link className="search-example" to={searchPagePath(example.query) as never}>
+            <Link
+              className="search-example"
+              preload={false}
+              to={searchPagePath(example.query) as never}
+            >
               <SearchExampleGlyph className="search-example-icon" icon={example.icon} />
               {example.query}
             </Link>
@@ -226,6 +237,15 @@ function SearchField({
   }, [q, fieldKey]);
 
   useEffect(() => () => clearTimeout(timer.current), []);
+
+  // Any navigation while a keystroke is still settling came from somewhere else (a clicked
+  // example, a result, Back): the stale keystroke must never land on top of it. The field's own
+  // write happens only once its timer has fired, so there is nothing left to cancel then.
+  const href = useRouterState({ select: (state) => state.location.href });
+
+  useEffect(() => {
+    clearTimeout(timer.current);
+  }, [href]);
 
   const onInput = (value: string): void => {
     clearTimeout(timer.current);
@@ -415,6 +435,10 @@ function searchOutcome(
     return "Search did not answer.";
   }
 
+  if (data.status === "limited") {
+    return "That’s a lot of searching from one place in one go. Give it a minute, then try again.";
+  }
+
   if (data.status !== "answered") {
     return "";
   }
@@ -546,6 +570,15 @@ export function SearchAnswer({
         </output>
 
         {data.status === "failed" ? <SearchFailed /> : undefined}
+
+        {/* A spent search budget still hands you music: the list itself is not rate-limited. */}
+        {data.status === "limited" ? (
+          <div className="search-page-state">
+            <p className="search-page-way-back">
+              Till then, <Link to="/tracks">dig through every track I hold</Link>.
+            </p>
+          </div>
+        ) : undefined}
 
         {/* The sonic view's engine was resting: the same retry the fault state offers. */}
         {like !== undefined && answered?.degraded && total === 0 ? (

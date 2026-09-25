@@ -1594,7 +1594,6 @@ describe("the tether — the trail of seeds a listener followed", () => {
 
     playQueue(tracks("x", "y"), 0, { seed: a });
     playQueue(tracks("p", "q"), 0, { seed: b });
-    // Stepping back to the first seed's view and playing it again never reorders the cable.
     playQueue(tracks("x", "y"), 1, { seed: a });
     playQueue(tracks("m"), 0, { seed: c });
     playQueue(tracks("n"), 0);

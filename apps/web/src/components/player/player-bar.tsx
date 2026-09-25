@@ -109,16 +109,23 @@ function SonicTrail({ trail }: { trail: readonly QueueTrack[] }): ReactNode {
     return undefined;
   }
 
+  const nearest = nearestSeedIndex(trail, here);
+
   return (
     <nav aria-label="Similar tracks trail" className="player-trail">
       <ol className="player-trail-seeds">
-        {trail.map((seed) => (
-          <li className="player-trail-seed" key={seed.id}>
+        {trail.map((seed, index) => (
+          <li
+            className="player-trail-seed"
+            data-nearest={index === nearest ? "" : undefined}
+            key={seed.id}
+          >
             <Link
               aria-current={here === seed.id ? "page" : undefined}
               aria-label={`Similar to ${trackCredit(seed)}`}
               className="player-trail-link"
               data-discovery="similar"
+              preload={false}
               to={similarSearchHref(seed) as never}
             >
               <TrackArtwork
@@ -132,6 +139,16 @@ function SonicTrail({ trail }: { trail: readonly QueueTrack[] }): ReactNode {
       </ol>
     </nav>
   );
+}
+
+export function nearestSeedIndex(trail: readonly QueueTrack[], here: string | undefined): number {
+  for (let index = trail.length - 1; index >= 0; index -= 1) {
+    if (trail[index]?.id !== here) {
+      return index;
+    }
+  }
+
+  return trail.length - 1;
 }
 
 function ProgressLine({ lit }: { lit: boolean }): ReactNode {

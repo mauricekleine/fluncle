@@ -1,8 +1,3 @@
-// The galaxy sound lines are public lore copy, so the voice canon's mechanical rules are pinned
-// here (packages/skills/copywriting-fluncle/references/voice.md: §3 Banned, §4 the Dry Rule,
-// §6 Mechanics). A new
-// galaxy's line joins GALAXY_SOUND_LINES and inherits every check below.
-
 import { describe, expect, it } from "vitest";
 import { GALAXY_SOUND_LINES, galaxySoundLine } from "./galaxy-sound";
 
@@ -18,7 +13,6 @@ const BANNED_WORDS = [
   /\bmint(s|ed|ing)?\b/i,
 ];
 
-// Words sentence case still capitalises: the uncle's "I" and his name.
 const ALWAYS_CAPITALISED = /^(I|I'm|I've|I'd|I'll|Fluncle('s)?)\W*$/;
 
 describe("galaxySoundLine", () => {
@@ -46,9 +40,7 @@ describe.each(LINES)("the %s sound line", (_slug, line) => {
   it("is one sentence in sentence case ending in a full stop", () => {
     expect(line).toMatch(/^[A-Z]/);
     expect(line.endsWith(".")).toBe(true);
-    // One sentence: no terminal punctuation before the final full stop.
     expect(line.slice(0, -1)).not.toMatch(/[.?!]/);
-    // Sentence case: no capitalised word after the first.
     const laterWords = line
       .split(" ")
       .slice(1)

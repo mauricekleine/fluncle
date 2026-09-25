@@ -151,7 +151,6 @@ export function DiscoveryPlayableList({
 }: {
   children: ReactNode;
   nextPageHref?: string;
-  /** The track a sonic view's list sounds like; it joins the player's trail when the list plays. */
   seed?: QueueTrack;
   tracks: DiscoveryTrack[];
 }): ReactNode {

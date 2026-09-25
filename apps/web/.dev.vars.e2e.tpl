@@ -17,6 +17,9 @@ TURSO_AUTH_TOKEN=e2e-local-token
 SONAR_BASE_URL=http://127.0.0.1:__E2E_SONAR_PORT__
 SONAR_SECRET=e2e-fake-sonar-secret
 
+# Every spec shares one local address, so the per-IP search budget is raised for the suite.
+SEARCH_ARCHIVE_RATE_LIMIT=100000
+
 # Admin identity + signing. Fake — the e2e suite exercises PUBLIC surfaces, and the
 # browser-fixture admin grant (tests/browser/admin.ts) mints against whatever secret
 # is here, so a fake one is self-consistent.
