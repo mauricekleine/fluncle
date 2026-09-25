@@ -35,15 +35,6 @@ import { listEditions } from "@/lib/server/editions";
 import { listGalaxyNames } from "@/lib/server/galaxies-map";
 import { useAutoNotice } from "@/lib/use-auto-notice";
 
-// The operator's newsletter front-end (`/admin/newsletter`): the editions list
-// (drafts inclusive), a preview of what each one renders to, and the Send control
-// — the operator tap that the Friday agent can't make (send_edition is operator
-// tier; the agent token 403s, the browser grant is operator). The send is a real
-// Resend broadcast, gated behind an explicit confirm. Surfaced from the test that
-// found the editions were CLI/API-only.
-
-// The loader hydrates every finding's logId to its `Artist — Title` label (server-side,
-// one batched read across all editions) and ships the label strings to the client.
 type EditionsLoaderData = {
   editions: EditionDTO[];
   galaxyNames: string[];
@@ -58,7 +49,6 @@ const fetchEditions = createServerFn({ method: "GET" }).handler(
       throw redirect({ to: "/admin/login" });
     }
 
-    // Drafts inclusive — the operator is here to review and send the unsent ones.
     const editions = await listEditions({ includeDrafts: true });
     const [labels, galaxyNames] = await Promise.all([editionsLabels(editions), listGalaxyNames()]);
 
@@ -80,7 +70,7 @@ function AdminNewsletterPage() {
     initialData,
     queryFn: () => fetchEditions(),
     queryKey: EDITIONS_KEY,
-    // Admin convention: focus-refetch ON, so a send made elsewhere lands here.
+
     refetchOnWindowFocus: true,
   });
   const { editions, galaxyNames, labels } = data;
@@ -224,9 +214,6 @@ function EditionRow({
   );
 }
 
-// A read-only render of the stored content payload — what the edition becomes on
-// the page and (in spirit) in the email. The same view helpers the public archive
-// uses, so the preview matches the back issue.
 function EditionPreview({
   content,
   galaxyNames,
@@ -325,9 +312,6 @@ function EditionPreview({
   );
 }
 
-// The Send control — the operator tap. A draft needs a subject before it can go
-// (the server enforces the same); the send is a real broadcast to the whole list,
-// so it sits behind an explicit confirm, never a single click.
 function SendControl({ edition, refresh }: { edition: EditionDTO; refresh: () => Promise<void> }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useAutoNotice();
@@ -414,11 +398,6 @@ function SendControl({ edition, refresh }: { edition: EditionDTO; refresh: () =>
   );
 }
 
-// The Delete control — the operator's archive-pull. Available on EVERY row (drafts
-// AND sent): a sent test edition is exactly what needs removing from the public
-// /newsletter archive. A hard delete with no recall, so it sits behind an explicit
-// confirm that names it as permanent. Destructive styling (Re-entry Red), but quiet
-// — a small trailing control, not a loud one.
 function DeleteControl({
   edition,
   refresh,
@@ -429,8 +408,7 @@ function DeleteControl({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useAutoNotice();
   const isSent = edition.status === "sent";
-  // A real name to put in the title: the minted number, else the subject. A
-  // subject-less draft has neither, so the title falls back to a natural phrasing.
+
   const name = edition.number ? `No. ${edition.number}` : edition.subject?.trim();
   const title = name ? `Delete edition ${name}?` : "Delete this draft?";
 

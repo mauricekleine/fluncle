@@ -28,16 +28,10 @@ export const serverHandlers: ApiHandlers = {
     try {
       const statePayload = await verifyState(state);
 
-      // The browser binding, checked BEFORE the code is spent: a browser-started
-      // flow must present back the nonce cookie the start leg set (oauth-state.ts).
-      // A lifted state replayed from anywhere else stops here.
       if (!stateIsBoundToThisBrowser(request, statePayload)) {
         return jsonError(400, "invalid_state", "Invalid state");
       }
 
-      // Admin web login: read the caller's Spotify identity, discard the
-      // tokens (never touch the publish refresh token), and — if it's the
-      // allow-listed operator — hand the browser the signed grant cookie.
       if (statePayload.purpose === "admin-login") {
         const profile = await fetchSpotifyProfile(code);
 
@@ -48,16 +42,10 @@ export const serverHandlers: ApiHandlers = {
           });
         }
 
-        // The CLI round trip (lib/server/oauth-handoff.ts): if the operator got here
-        // by opening a connect link while signed out, the login state carries that
-        // ticket and we drop them back on the connect instead of the board. The
-        // destination is a FIXED path with the ticket as a percent-encoded query
-        // value — never a caller-supplied URL — and the handoff route re-verifies
-        // the ticket from scratch, so a stale one just answers "expired" there.
         const carried = statePayload.handoff;
         const destination =
           typeof carried === "string" && carried ? handoffUrl("", carried) : "/admin";
-        // Two Set-Cookie headers: the grant in, the consumed state nonce out.
+
         const headers = new Headers({ Location: destination });
         headers.append("Set-Cookie", grantCookie(await signGrant()));
         headers.append("Set-Cookie", clearedStateCookie("admin-login"));
@@ -71,8 +59,6 @@ export const serverHandlers: ApiHandlers = {
 
       await exchangeCodeForToken(code);
 
-      // Close the loop back to the board's reconnect banner rather than a dead
-      // text page — the board re-reads the connection status on focus.
       return new Response(null, {
         headers: {
           Location: "/admin?spotify=connected",
@@ -81,9 +67,6 @@ export const serverHandlers: ApiHandlers = {
         status: 302,
       });
     } catch (authError) {
-      // The raw token-exchange detail belongs in the server log, not on the wire
-      // to this unauthenticated callback; the board keys its reconnect banner on
-      // the code, so keep that and answer with plain operator-facing copy.
       logEvent("error", "spotify.auth-callback-failed", { error: authError });
       return jsonError(
         400,

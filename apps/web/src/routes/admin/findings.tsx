@@ -69,83 +69,39 @@ import {
 } from "@/lib/server/tracks";
 import { cn } from "@/lib/utils";
 
-// The findings board — the per-finding pipeline station at `/admin/findings`
-// (the attention queue at `/admin` is the workspace home now; it deep-links here).
-// This route owns the data (the social-joined infinite query), the filters
-// (worklist + mixtape lens), and every stage dialog;
-// the rendering is the PipelineBoard grid (components/admin/pipeline). Each finding
-// is a row, each pipeline step a cell, the steps split into two column groups —
-// Agents (an agent does it) and Yours (your hands) — because the pipeline isn't a
-// strict chain: steps run in parallel, fail, and retry. A cell reads by SHAPE
-// (round = agent, square = yours) and FILL (open → in-flight → done), and clicking
-// it opens that step's dialog (Enrich → re-queue for the box cron; YouTube/TikTok →
-// the publish loop). The board derives its steps from a pure model
-// (pipeline/board-model) and wires every cell back to the dialogs through `actions`.
-//
-// Reads + writes go through the same gated admin API the CLI uses. This board is the
-// single admin surface — Posts and Tag concerns live here. (Manual vibe-map
-// tagging has since been retired — MuQ audio embeddings supersede it — so the board's
-// analysis lane now surfaces embedding presence in the Tag cell's place.)
-
 const PAGE_SIZE = 50;
 
-// Cap the infinite query's retained pages. On window focus react-query REFETCHES every
-// retained page (one request per page); without a cap a deep scroll accumulates unbounded
-// refetch cost on each tab-back. Five pages (250 findings) is a generous working window —
-// older pages drop from the cache and re-fetch on scroll-back. The board's pill counts +
-// staged derivations already read only the LOADED rows, so a bounded window doesn't change
-// their meaning (it was always "loaded rows", just now bounded).
 const BOARD_MAX_PAGES = 5;
-// Treat the board data as fresh for this long, so rapid tab-switching doesn't re-fire the
-// focus refetch every time — it only re-reads once the data has aged past this.
+
 const BOARD_STALE_MS = 20_000;
 
-// The board's react-query cache key. Optimistic publish patches + window-focus
-// refetch land on this one entry.
 const BOARD_KEY = ["admin", "posts", "board"] as const;
-// The Spotify connection-status cache for the reconnect banner.
+
 const SPOTIFY_STATUS_KEY = ["admin", "spotify", "status"] as const;
-// The pending-submissions cache for the candidates tray (and its header badge).
+
 const SUBMISSIONS_KEY = ["admin", "submissions"] as const;
-// One dressed board row, for a deep-linked finding beyond the loaded pages.
+
 const BOARD_ROW_KEY = ["admin", "board-row"] as const;
-// The plan targets for the "Add to a plan" sheet.
+
 const PLAN_TARGETS_KEY = ["admin", "plans", "targets"] as const;
-// The lazily-read context_note for the Context cell's view dialog, keyed by trackId.
+
 const CONTEXT_NOTE_KEY = ["admin", "context-note"] as const;
-// The lazily-read observation script (transcript) for the Observation dialog, keyed by trackId.
+
 const OBSERVATION_SCRIPT_KEY = ["admin", "observation-script"] as const;
-// The lazily-read spectral-features presence for the Enrich dialog, keyed by trackId.
+
 const ENRICH_FEATURES_KEY = ["admin", "enrich-features"] as const;
-// The lazily-read capture-source state for the Embeddings cell's dialog, keyed by trackId.
+
 const CAPTURE_SOURCE_KEY = ["admin", "capture-source"] as const;
 
-// The worklists — a `blockedOn` filter (the next action) plus "all" and a "done"
-// terminal bucket. The active one lives in `?stage` so it's deep-linkable and
-// survives reload. The checklist columns show each stage's own state; this just
-// narrows the rows to a focus ("show me everything still needing a video").
 type Worklist = "all" | "needs-tagging" | "needs-video" | "ready-youtube" | "ready-tiktok" | "done";
 
-// The worklists kept to the ones actually worked from: everything and the terminal
-// "Live" bucket. The render/publish-readiness buckets were dropped as noise — each
-// stage's own cell already shows its state — and the "Needs tagging" bucket retired
-// with the vibe map (MuQ embeddings supersede manual tagging; there's no board action
-// left to advance it). ?stage values stay back-compatible: an old link to a dropped
-// bucket validates back to "all" (WORKLIST_KEYS no longer has it).
 type WorklistDef = { blockedOn?: BlockedOn; key: Worklist; label: string };
-// The "all" worklist is the canonical fallback when no key matches; naming it
-// keeps the fallback statically defined (not an unchecked index).
+
 const ALL_WORKLIST: WorklistDef = { key: "all", label: "All" };
 const WORKLISTS: WorklistDef[] = [ALL_WORKLIST, { blockedOn: null, key: "done", label: "Live" }];
 
 const WORKLIST_KEYS = new Set(WORKLISTS.map((worklist) => worklist.key));
 
-// The mixtape lens — a SECOND filter axis, ANDed with the worklist. A finding is
-// "on a tape" once it lands in a minted checkpoint (every mixtape membership is
-// published/distributing now — drafts retired for plans), "in a plan" while it is
-// only pencilled into a plan's cues, and "open" when it's in neither. Powers the
-// "show me what I haven't used yet, to build a set around it" view; deep-linked via
-// ?mix so it survives reload. (An old ?mix=draft link validates back to "all".)
 type MixState = "open" | "plan" | "tape";
 type MixFilter = "all" | MixState;
 
@@ -158,9 +114,6 @@ const MIX_FILTERS: { key: MixFilter; label: string }[] = [
 
 const MIX_FILTER_KEYS = new Set(MIX_FILTERS.map((filter) => filter.key));
 
-// A finding is "on a tape" the moment it's in a minted checkpoint (every mixtape
-// membership is one — the coordinate is committed); "plan" while it is only
-// pencilled into a plan's cues.
 function mixtapeStateOf(row: BoardRow): MixState {
   if (row.mixtapes.length > 0) {
     return "tape";
@@ -176,8 +129,6 @@ function matchesWorklistFilter(blockedOn: BlockedOn, worklist: WorklistDef): boo
   return worklist.key === "all" || blockedOn === worklist.blockedOn;
 }
 
-// Every admin server function re-checks the grant — the page guard only protects
-// the render, not the RPC behind a server function.
 const fetchBoard = createServerFn({ method: "GET" })
   .validator((data: { cursor?: string }) => data)
   .handler(async ({ data }): Promise<BoardPage> => {
@@ -186,9 +137,6 @@ const fetchBoard = createServerFn({ method: "GET" })
     }
 
     const page = await listTracks({
-      // The BOARD projection (no graph/discovery subqueries) + no count(*) companion —
-      // the board renders neither a total (its pills count loaded rows) nor a finding's
-      // graph edges, so both are pure waste on this hot read.
       board: true,
       countTotal: false,
       cursor: decodeTrackCursor(data.cursor ?? null),
@@ -196,16 +144,7 @@ const fetchBoard = createServerFn({ method: "GET" })
       order: "desc",
     });
     const trackIds = page.tracks.map((track) => track.trackId);
-    // Batch fetches — one query each for the whole page, no N+1: the per-platform posts,
-    // the mixtape + plan memberships (which tapes each finding is already on, and which
-    // plans it's pencilled into), which carry a MuQ audio embedding (the Embeddings column
-    // — a `track_embeddings` row), and — folded into ONE `findings` pass — every board
-    // STATUS FLAG: the internal `context_note` presence (Context cell) plus the Discogs /
-    // Last.fm / Note backfill RAN-stamps (`*_attempted_at`) + the Last.fm LOVED-stamp
-    // (`backfill_lastfm_done_at`). All pulled admin-only (none ride the public track
-    // contract). The Discogs/Last.fm/Note cells are workflow trackers: `done` once the
-    // backfill ran, grey only while it's never run — the ran-stamp drives the cell, the
-    // data-stamp (release url / loved) only refines the label.
+
     const [posts, mixtapes, plans, embeddings, flags] = await Promise.all([
       listSocialPostsForTracks(trackIds),
       listMixtapeMembershipsForTracks(trackIds),
@@ -236,14 +175,6 @@ const fetchBoard = createServerFn({ method: "GET" })
     };
   });
 
-// ONE dressed board row, for a finding the board's loaded pages may not contain.
-//
-// The board is cursor-paginated newest-first, so a deep-link can point at a finding that is
-// simply not in `rows` yet — and the attention queue's held-note row deep-links to an
-// ARBITRARY finding (the one whose auto-note the echo gate held), which is very often an
-// older one. Without this the dialog would silently fail to open for exactly the findings
-// the queue most wants the operator to look at. Lazily fetched, only when the deep-linked
-// finding is missing from the loaded pages.
 const fetchBoardRow = createServerFn({ method: "GET" })
   .validator((data: { trackId: string }) => data)
   .handler(async ({ data }): Promise<BoardRow | null> => {
@@ -281,11 +212,6 @@ const fetchBoardRow = createServerFn({ method: "GET" })
     };
   });
 
-// The plans the board's "Add to a plan" sheet can pencil findings into — every
-// plan with its CURRENT cues in the `replace_recording_cues` body shape, so the
-// dialog's append replays them untouched (non-finding snapshot rows and marked
-// start times included). Lazily fetched the first time the sheet opens, then
-// cached + focus-refetched.
 const fetchPlanTargets = createServerFn({ method: "GET" }).handler(
   async (): Promise<PlanTarget[]> => {
     if (!(await isAdminRequest())) {
@@ -311,9 +237,6 @@ const fetchPlanTargets = createServerFn({ method: "GET" }).handler(
   },
 );
 
-// Lazy caption read — only when the operator copies a finding's caption, never
-// preloaded for the whole page. Reads the public note.txt server-side (no CORS;
-// works in dev too, the binding is just empty there).
 const fetchCaption = createServerFn({ method: "GET" })
   .validator((data: { logId: string; trackId?: string }) => data)
   .handler(async ({ data }): Promise<{ caption: string }> => {
@@ -324,16 +247,9 @@ const fetchCaption = createServerFn({ method: "GET" })
     const captions = await readCaptions([data.logId]);
     const raw = captions[data.logId] ?? "";
 
-    // The copied caption is the operator's manual TikTok paste (YouTube auto-pushes with
-    // its own handles), so it carries the finding's TikTok @handles — read here, at copy
-    // time, so the freshest artist_socials trust state applies.
     return { caption: await captionForPlatform(data.trackId ?? "", "tiktok", raw) };
   });
 
-// Lazy context-note read — only when the operator opens a finding's Context cell to
-// view the firecrawl-derived facts that fuel its observation script. Internal fuel,
-// so it stays on this gated admin path and off
-// the public track contract; never preloaded for the whole page.
 const fetchContextNote = createServerFn({ method: "GET" })
   .validator((data: { trackId: string }) => data)
   .handler(async ({ data }): Promise<{ contextNote: string }> => {
@@ -344,11 +260,6 @@ const fetchContextNote = createServerFn({ method: "GET" })
     return { contextNote: await getContextNote(data.trackId) };
   });
 
-// Lazy observation-script read — only when the operator opens a finding's
-// Observation dialog, to read the spoken transcript under the audio player. The
-// script mirrors the R2 observation.json `text` on the row (written by the observe
-// render); internal like the context note, so it rides this gated admin path and
-// never the public track contract. Never preloaded for the whole page.
 const fetchObservationScript = createServerFn({ method: "GET" })
   .validator((data: { trackId: string }) => data)
   .handler(async ({ data }): Promise<{ script: string }> => {
@@ -359,11 +270,6 @@ const fetchObservationScript = createServerFn({ method: "GET" })
     return { script: await getObservationScript(data.trackId) };
   });
 
-// Lazy spectral-features PRESENCE read — only when the operator opens a finding's Enrich
-// dialog, to show "Spectral features captured" vs "Analysis complete". The board projection
-// drops `features` from every row (this dialog is its only reader), so the single OPEN row
-// probes for it here, mirroring the context-note / observation-script lazy reads. Presence
-// only — the feature blob itself never leaves the server.
 const fetchEnrichFeatures = createServerFn({ method: "GET" })
   .validator((data: { trackId: string }) => data)
   .handler(async ({ data }): Promise<{ hasFeatures: boolean }> => {
@@ -374,10 +280,6 @@ const fetchEnrichFeatures = createServerFn({ method: "GET" })
     return { hasFeatures: await hasTrackFeatures(data.trackId) };
   });
 
-// Lazy capture-source read — only when the operator opens a finding's Embeddings cell, to show
-// where the full-song capture stands and the pin on file (docs/the-ear.md § Wrong audio). Capture
-// state is internal side-channel, so it rides this gated admin path and never the board's hot page
-// read or the public track contract.
 const fetchCaptureSource = createServerFn({ method: "GET" })
   .validator((data: { trackId: string }) => data)
   .handler(async ({ data }): Promise<CaptureSourceState | null> => {
@@ -388,9 +290,6 @@ const fetchCaptureSource = createServerFn({ method: "GET" })
     return getCaptureSourceState(data.trackId);
   });
 
-// The Spotify connection light. Read-only (no token refresh) and focus-refetched,
-// so the moment a publish/search trips invalid_grant and clears the stored token,
-// tabbing back to the board surfaces the Reconnect banner. See spotify.ts.
 const fetchSpotifyStatus = createServerFn({ method: "GET" }).handler(
   async (): Promise<SpotifyAuthStatus> => {
     if (!(await isAdminRequest())) {
@@ -401,11 +300,6 @@ const fetchSpotifyStatus = createServerFn({ method: "GET" }).handler(
   },
 );
 
-// The candidates tray's pending queue — a small scoped read (pending rows only),
-// fetched on mount for the header badge's honest count and focus-refetched so a
-// fresh crew submission surfaces when the operator tabs back. The writes
-// (approve = the add path + the status flip, reject) go through the operator-tier
-// oRPC routes, same as the CLI.
 const fetchSubmissions = createServerFn({ method: "GET" }).handler(
   async (): Promise<Submission[]> => {
     if (!(await isAdminRequest())) {
@@ -416,12 +310,6 @@ const fetchSubmissions = createServerFn({ method: "GET" }).handler(
   },
 );
 
-// The render → publish auto-advance's KILL SWITCH state — the one control that decides
-// whether a freshly-rendered finding publishes itself (a hands-off public YouTube Short +
-// a TikTok inbox draft) or waits for the operator's tap on the board below. It belongs
-// HERE, above the board it governs: this page is where publishing is worked, and the
-// switch has to be findable in the one second it matters. Default-deny server-side
-// (lib/server/publish-advance.ts), so an unset flag reads as paused.
 const fetchPublishAdvance = createServerFn({ method: "GET" }).handler(
   async (): Promise<{ paused: boolean }> => {
     if (!(await isAdminRequest())) {
@@ -442,8 +330,6 @@ type BoardSearch = {
 
 const ADVANCE_KEY = ["admin", "publish-advance"] as const;
 
-// Route options follow TanStack's create-route-property-order (each step feeds the
-// next's inferred types), which isn't alphabetical — so sort-keys is off here.
 // oxlint-disable-next-line sort-keys
 export const Route = createFileRoute("/admin/findings")({
   validateSearch: (search: Record<string, unknown>): BoardSearch => ({
@@ -455,27 +341,17 @@ export const Route = createFileRoute("/admin/findings")({
       typeof search.stage === "string" && WORKLIST_KEYS.has(search.stage as Worklist)
         ? (search.stage as Worklist)
         : "all",
-    // The attention queue's HELD-NOTE deep-link (`?note=<trackId>`): present ⇒ open that
-    // finding's note dialog, where the echo gate's held note and the neighbour it echoed sit
-    // side by side and the operator rules on it. The queue row cannot rule inline — reading
-    // the two notes against each other is the whole act.
+
     ...(typeof search.note === "string" ? { note: search.note } : {}),
-    // The attention queue's HELD-OBSERVATION deep-link (`?observation=<trackId>`): present ⇒
-    // open that finding's observation dialog (the spoken sibling of the held-note link). The
-    // ruling itself (render it / bin it) is the operator's resolve op — publish-class (a
-    // Cartesia spend), so it never sits on a queue row or a dialog button.
+
     ...(typeof search.observation === "string" ? { observation: search.observation } : {}),
-    // The attention queue's submission-row deep-link (`?submission=<id>`): present ⇒
-    // open the review tray with that candidate focused. A bare `?submission=` (the
-    // pure model's fallback when the row had no id) still opens the tray.
+
     ...(typeof search.submission === "string" ? { submission: search.submission } : {}),
   }),
   beforeLoad: async () => {
     await ensureAdmin();
   },
   loader: async () => {
-    // Two independent reads — fetch them in parallel so the SSR loader waits on the
-    // slower of the two, not their sum.
     const [board, advance] = await Promise.all([fetchBoard({ data: {} }), fetchPublishAdvance()]);
     return { advance, board };
   },
@@ -583,10 +459,6 @@ function AdminBoardPage() {
   const navigate = Route.useNavigate();
   const queryClient = useQueryClient();
 
-  // The board reads through react-query so it refetches on window focus — when the
-  // operator tabs back from TikTok/YouTube, the per-platform statuses come back
-  // fresh without a manual reload. Seeded with the SSR loader page so the first
-  // paint is instant and no client fetch fires on mount.
   const {
     data,
     error: queryError,
@@ -608,8 +480,6 @@ function AdminBoardPage() {
 
   const { busy, error, pushDraft, setError, setStatus } = usePublish(BOARD_KEY);
 
-  // The auto-advance kill switch, seeded from the loader and focus-refetched like the
-  // board — so a flip made from the CLI (or the box) shows up when the operator tabs back.
   const { data: advance } = useQuery({
     initialData: initialAdvance,
     queryFn: () => fetchPublishAdvance(),
@@ -617,9 +487,6 @@ function AdminBoardPage() {
     refetchOnWindowFocus: true,
   });
 
-  // Flipping it is optimistic — the Switch tracks the operator's intent instantly, rolls
-  // back on error, and re-reads on settle. Operator tier server-side; the agent can tick
-  // the advance but can never turn it on.
   const setAdvancePaused = useMutation<void, Error, boolean, { previous?: { paused: boolean } }>({
     mutationFn: async (paused: boolean) => {
       const response = await fetch("/api/v1/admin/social/publish/advance/state", {
@@ -651,66 +518,47 @@ function AdminBoardPage() {
     onSettled: () => queryClient.invalidateQueries({ queryKey: ADVANCE_KEY }),
   });
 
-  // Dialogs are keyed by identity (not a row snapshot) so they always render the
-  // LIVE row — right after a push the cache patches, the row updates, and the open
-  // dialog shows the next step without reopening.
   const [enrichId, setEnrichId] = useState<string | undefined>();
   const [push, setPush] = useState<{ platformKey: string; trackId: string } | undefined>();
   const [preview, setPreview] = useState<BoardRow | undefined>();
   const [copiedId, setCopiedId] = useState<string | undefined>();
   const [enrichBusy, setEnrichBusy] = useState(false);
   const [enrichError, setEnrichError] = useState<string | undefined>();
-  // The Embeddings cell's dialog — the capture stage's source control (the operator's pin).
+
   const [captureSourceId, setCaptureSourceId] = useState<string | undefined>();
-  // Seeded from the attention queue's held-note deep-link (`?note=<trackId>`), so landing
-  // straight from the queue row opens the note dialog on that finding with its held note in it.
+
   const [noteId, setNoteId] = useState<string | undefined>(() => focusNoteTrackId);
   const [noteSaving, setNoteSaving] = useState(false);
   const [noteError, setNoteError] = useState<string | undefined>();
-  // The two audio-observation view cells (Context · Observation). View-only for now
-  // — backfill (authoring + the observe render) needs an agent-authored script via
-  // the observe endpoint, so the board reflects status and lets the operator read
-  // the context note / play the observation; generating is left to the agent.
+
   const [contextId, setContextId] = useState<string | undefined>();
-  // Seeded from the attention queue's held-observation deep-link (`?observation=<trackId>`).
+
   const [observationId, setObservationId] = useState<string | undefined>(
     () => focusObservationTrackId,
   );
 
-  // The web intake: [Add finding] is the
-  // board's primary header action; the candidates tray sits beside it as a quiet
-  // sheet. Both land on the same publish path the CLI uses, so a fresh add appears
-  // at the board's top on invalidation with its enrichment cells still open — the
-  // crons fill them in.
   const [addOpen, setAddOpen] = useState(false);
-  // Seed the tray open from the attention-queue deep-link (`?submission=<id>`) so a
-  // landing straight from the /admin queue row shows the candidate at once.
+
   const [trayOpen, setTrayOpen] = useState(() => focusSubmissionId !== undefined);
 
-  // A deep-link that arrives after mount (the operator clicks a queue row in another
-  // tab, or navigates in-app) still opens the tray.
   useEffect(() => {
     if (focusSubmissionId !== undefined) {
       setTrayOpen(true);
     }
   }, [focusSubmissionId]);
 
-  // The same for the held-note deep-link — an in-app navigation from the queue row must open
-  // the note dialog, not just change the URL.
   useEffect(() => {
     if (focusNoteTrackId !== undefined) {
       setNoteId(focusNoteTrackId);
     }
   }, [focusNoteTrackId]);
 
-  // And for the held-observation deep-link — same contract, the spoken sibling.
   useEffect(() => {
     if (focusObservationTrackId !== undefined) {
       setObservationId(focusObservationTrackId);
     }
   }, [focusObservationTrackId]);
 
-  // Closing the note dialog drops the deep-link param so a reload/back doesn't re-open it.
   const onNoteOpenChange = useCallback(
     (open: boolean) => {
       if (open) {
@@ -726,7 +574,6 @@ function AdminBoardPage() {
     [focusNoteTrackId, navigate],
   );
 
-  // Closing the observation dialog drops its deep-link param so a reload/back doesn't re-open it.
   const onObservationOpenChange = useCallback(
     (open: boolean) => {
       if (open) {
@@ -742,7 +589,6 @@ function AdminBoardPage() {
     [focusObservationTrackId, navigate],
   );
 
-  // Closing the tray drops the deep-link param so a reload/back doesn't re-open it.
   const onTrayOpenChange = useCallback(
     (open: boolean) => {
       setTrayOpen(open);
@@ -763,7 +609,6 @@ function AdminBoardPage() {
     void queryClient.invalidateQueries({ queryKey: BOARD_KEY });
   }, [queryClient]);
 
-  // An approve also publishes, so the board refetches alongside the tray.
   const onSubmissionsChanged = useCallback(() => {
     void queryClient.invalidateQueries({ queryKey: SUBMISSIONS_KEY });
     void queryClient.invalidateQueries({ queryKey: BOARD_KEY });
@@ -776,9 +621,7 @@ function AdminBoardPage() {
   const enrichRow = rowFor(enrichId);
   const captureSourceRow = rowFor(captureSourceId);
   const boardNoteRow = rowFor(noteId);
-  // The deep-linked finding may sit beyond the board's loaded pages (the held-note queue row
-  // points at an arbitrary, often older, finding). Fetch that one row when it's missing, so
-  // the dialog opens for every finding the queue can send us to — not just the recent ones.
+
   const { data: fetchedNoteRow } = useQuery({
     enabled: noteId !== undefined && boardNoteRow === undefined,
     queryFn: () => fetchBoardRow({ data: { trackId: noteId as string } }),
@@ -791,18 +634,13 @@ function AdminBoardPage() {
   const pushRow = rowFor(selectedPushTrackId(push));
   const pushPlatform = platformForPush(push);
 
-  // A failed load-more shouldn't be swallowed; surface it next to mutation errors
-  // and use it to pause the infinite-scroll observer until a manual retry.
   const loadError = queryErrorMessage(queryError);
   const shownError = boardError(error, loadError);
 
-  // Each row carries its derived stage so the worklist filter reads the same
-  // source as the lifecycle model. In-memory filtering is fine at current scale.
   const staged = useMemo(() => rows.map((row) => ({ ...trackStage(row), row })), [rows]);
 
   const worklistDef = WORKLISTS.find((worklist) => worklist.key === activeWorklist) ?? ALL_WORKLIST;
-  // Both filters AND together: the worklist narrows by pipeline stage, the mixtape
-  // lens by tape membership. In-memory, like the worklist — fine at current scale.
+
   const visible = useMemo(
     () =>
       staged.filter(
@@ -813,9 +651,6 @@ function AdminBoardPage() {
     [activeMix, staged, worklistDef],
   );
 
-  // The board entries every variant reads — the filtered findings plus their derived
-  // lifecycle position and full step list (the shared model). One derivation feeds
-  // the table, the constellation, the lanes, all of them.
   const entries = useMemo<BoardEntry[]>(
     () =>
       visible.map(({ blockedOn, row, stage }) => ({
@@ -827,9 +662,6 @@ function AdminBoardPage() {
     [visible],
   );
 
-  // Each axis's pill counts reflect the OTHER axis's active filter, so a pill's
-  // number is exactly how many rows you'd see if you clicked it. Worklist counts are
-  // taken over the mixtape-filtered set; mix counts over the worklist-filtered set.
   const byMix = useMemo(
     () => staged.filter((entry) => matchesMixFilter(entry.row, activeMix)),
     [activeMix, staged],
@@ -858,10 +690,6 @@ function AdminBoardPage() {
       filter === "all" ? byWorklist.length : (byState.get(filter) ?? 0);
   }, [byWorklist]);
 
-  // Advisory pending-draft count among loaded rows — surfaced inside the TikTok
-  // push dialog (cap 5/24h), not in the header. A STALE draft (past the 24h window)
-  // has already left the inbox one way or another — bounced or aged out — so it no
-  // longer occupies a cap slot and is excluded from the count.
   const tiktokPending = useMemo(() => {
     const now = Date.now();
 
@@ -887,8 +715,6 @@ function AdminBoardPage() {
     [navigate],
   );
 
-  // The Mixtape stage cell opens a per-finding plan picker (keyed by trackId, like
-  // the other dialogs). The plan targets load lazily the first time it opens.
   const [mixtapeId, setMixtapeId] = useState<string | undefined>();
   const mixtapeRow = rowFor(mixtapeId);
 
@@ -899,16 +725,12 @@ function AdminBoardPage() {
     refetchOnWindowFocus: true,
   });
 
-  // After a successful add: close the picker and refresh both the board (the Mixtape
-  // cell's state) and the plan list (cue counts changed).
   const onAddedToPlan = useCallback(() => {
     setMixtapeId(undefined);
     void queryClient.invalidateQueries({ queryKey: BOARD_KEY });
     void queryClient.invalidateQueries({ queryKey: PLAN_TARGETS_KEY });
   }, [queryClient]);
 
-  // Patch one row's own fields in the board cache (the publish hook patches posts;
-  // this is for the track-level fields tagging + enrichment change).
   const patchRow = useCallback(
     (trackId: string, patch: Partial<BoardRow>) => {
       queryClient.setQueryData<InfiniteData<BoardPage, string | undefined>>(BOARD_KEY, (current) =>
@@ -933,9 +755,6 @@ function AdminBoardPage() {
     window.setTimeout(() => setCopiedId((current) => (current === id ? undefined : current)), 1600);
   }, []);
 
-  // Quick caption copy — lazily fetch the caption inside the tap and hand it to the
-  // clipboard as a Promise, so the async read stays within the user gesture (iOS
-  // rejects a write that lands after an awaited fetch).
   const copyCaption = useCallback(
     (row: BoardRow) => {
       if (!row.logId) {
@@ -957,10 +776,6 @@ function AdminBoardPage() {
     [markCopied, setError],
   );
 
-  // The Spotify connection light — polled on focus so an expired authorization
-  // (cleared server-side on invalid_grant) surfaces the moment the operator tabs
-  // back. Reconnecting hands the browser to the gated auth-start, which returns the
-  // Spotify authorize URL; the callback lands back on the board.
   const { data: spotifyStatus } = useQuery({
     queryFn: fetchSpotifyStatus,
     queryKey: SPOTIFY_STATUS_KEY,
@@ -986,8 +801,6 @@ function AdminBoardPage() {
     }
   }, [setError]);
 
-  // The Context dialog's note text — lazily read the first time a Context cell is
-  // opened, keyed per finding so each opens its own note (cached, never refetched).
   const { data: contextNoteData, isFetching: contextFetching } = useQuery({
     enabled: contextId !== undefined,
     queryFn: () => fetchContextNote({ data: { trackId: contextId as string } }),
@@ -995,8 +808,6 @@ function AdminBoardPage() {
     staleTime: Number.POSITIVE_INFINITY,
   });
 
-  // The Observation dialog's spoken transcript — lazily read the first time an
-  // Observation cell is opened, keyed per finding (cached, never refetched).
   const { data: observationScriptData, isFetching: observationScriptFetching } = useQuery({
     enabled: observationId !== undefined,
     queryFn: () => fetchObservationScript({ data: { trackId: observationId as string } }),
@@ -1004,8 +815,6 @@ function AdminBoardPage() {
     staleTime: Number.POSITIVE_INFINITY,
   });
 
-  // The Enrich dialog's spectral-features presence — lazily read the first time an Enrich
-  // cell is opened (the board projection no longer carries it), keyed per finding.
   const { data: enrichFeaturesData } = useQuery({
     enabled: enrichId !== undefined,
     queryFn: () => fetchEnrichFeatures({ data: { trackId: enrichId as string } }),
@@ -1013,9 +822,6 @@ function AdminBoardPage() {
     staleTime: Number.POSITIVE_INFINITY,
   });
 
-  // The capture-source dialog's query + pin/clear mutation, keyed per finding and lazily read the
-  // first time an Embeddings cell is opened (docs/the-ear.md § Wrong audio). The hook owns the
-  // refetch-after-write so the dialog shows the row as the server left it.
   const captureSource = useCaptureSource({
     fetchState: (trackId) => fetchCaptureSource({ data: { trackId } }),
     onClose: () => setCaptureSourceId(undefined),
@@ -1024,9 +830,6 @@ function AdminBoardPage() {
     trackId: captureSourceId,
   });
 
-  // The next finding in the current worklist — powers "Save & next" in the Tag and
-  // Note dialogs so a batch is one sitting. Undefined at the end of the list, which
-  // closes the dialog.
   const nextVisibleTrackId = useCallback(
     (currentTrackId: string): string | undefined => {
       const index = visible.findIndex((entry) => entry.row.trackId === currentTrackId);
@@ -1035,8 +838,6 @@ function AdminBoardPage() {
     [visible],
   );
 
-  // Save the finding's note (the editorial "why" that feeds its log-page prose +
-  // schema). Optimistically patches the row; "Save & next" walks the worklist.
   const saveNote = useCallback(
     async (note: string, advance?: boolean) => {
       if (!noteRow) {
@@ -1078,9 +879,6 @@ function AdminBoardPage() {
     setEnrichError(undefined);
 
     try {
-      // Re-queue the finding for the on-box `fluncle-enrich` cron: PATCH the
-      // status back to "pending" (queue-eligible). The cron picks it up on its
-      // next ~5-min tick, analyzes on-box, and writes "done"/"failed" back.
       const response = await fetch(`/api/v1/admin/tracks/${enrichRow.trackId}`, {
         body: JSON.stringify({ enrichmentStatus: "pending" }),
         credentials: "same-origin",
@@ -1092,8 +890,6 @@ function AdminBoardPage() {
         throw new Error(`Queue failed (${response.status})`);
       }
 
-      // Optimistic: show it queued immediately. Window-focus refetch reconciles
-      // with the cron's result.
       patchRow(enrichRow.trackId, { enrichmentStatus: "pending" });
       setEnrichId(undefined);
     } catch (caught) {
@@ -1128,9 +924,6 @@ function AdminBoardPage() {
     setPush(undefined);
   }, [push, setStatus]);
 
-  // Infinite scroll: auto-load when the sentinel nears the viewport bottom; the
-  // button stays as a manual fallback. After a load error, auto mode pauses until a
-  // manual retry clears it.
   const sentinelRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -1154,9 +947,6 @@ function AdminBoardPage() {
     return () => observer.disconnect();
   }, [fetchNextPage, hasNextPage, isFetchingNextPage, loadError]);
 
-  // The single action surface every variant opens its dialogs through — each maps a
-  // finding to the right keyed-by-identity dialog the page already owns. Setters are
-  // stable, so this never re-creates.
   const actions = useMemo<BoardActions>(
     () => ({
       onCaptureSource: (row) => setCaptureSourceId(row.trackId),
@@ -1174,9 +964,7 @@ function AdminBoardPage() {
   const subheader = (
     <>
       <SpotifyStatusBanner onReconnect={() => void reconnectSpotify()} status={spotifyStatus} />
-      {/* One filter strip, two axes: the pipeline worklist, then — past a divider —
-          the mixtape lens (the cassette glyph marks the group; every pill says
-          "tape"). Wraps to two lines on a phone. */}
+
       <div className="flex flex-wrap items-center gap-1.5 border-b border-border px-4 py-2.5 sm:px-5">
         {WORKLISTS.map((worklist) => (
           <FilterPill
@@ -1213,9 +1001,6 @@ function AdminBoardPage() {
 
   const headerActions = (
     <>
-      {/* Labels collapse to icons under sm so the two actions + badge stop
-          squeezing the "Findings" title into an ellipsis on a phone (DIST-02).
-          aria-label carries the name when the text is hidden. */}
       <Button aria-label="Submissions" onClick={() => setTrayOpen(true)} size="sm" variant="ghost">
         <TrayIcon aria-hidden="true" weight={submissions.length > 0 ? "fill" : "regular"} />
         <span className="hidden sm:inline">Submissions</span>
@@ -1319,8 +1104,6 @@ function AdminBoardPage() {
         tiktokPending={tiktokPending}
       />
 
-      {/* Single-clip preview — the same Stories UI as /log/<id>, one post (no
-          swipe). Loads the clip only on open; handy for lining up the TikTok sound. */}
       <Dialog onOpenChange={(open) => !open && setPreview(undefined)} open={preview !== undefined}>
         <DialogContent
           aria-label="Clip preview"
@@ -1352,10 +1135,6 @@ function AdminBoardPage() {
   );
 }
 
-// The Spotify connection banner — shown only when there's something to act on:
-// disconnected (the stored authorization is gone, so search + publishing are
-// paused) or stale (still working, but old enough to reconnect before the
-// six-month expiry). A quiet strip under the header with one Reconnect action.
 function SpotifyStatusBanner({
   onReconnect,
   status,
@@ -1390,8 +1169,6 @@ function SpotifyStatusBanner({
   );
 }
 
-// One filter pill — a worklist or mixtape lens, with its live count. Shared by both
-// groups in the filter strip so they read identically.
 function FilterPill({
   active,
   count,
@@ -1419,14 +1196,6 @@ function FilterPill({
   );
 }
 
-// The render → publish AUTO-ADVANCE switch — the last autonomy gap, as one control.
-//
-// Live, a finding that finishes rendering publishes itself: a public YouTube Short (nothing
-// left for a human) and a TikTok inbox draft (which the operator still finishes in-app — the
-// licensed sound attaches only there). Paused, every rendered finding waits for the Push tap
-// on the board below, exactly as it always did. It sits above that board because this is the
-// page where publishing is worked, and a kill switch has to be findable in the one second it
-// matters.
 function AutoPublishSwitch({
   onToggle,
   paused,

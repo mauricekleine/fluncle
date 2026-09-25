@@ -82,23 +82,8 @@ import { useAutoNotice } from "@/lib/use-auto-notice";
 import { useDebounced } from "@/lib/use-debounced";
 import { usePrefersReducedMotion } from "@/lib/use-prefers-reduced-motion";
 
-// The PLAN editor (RFC plan→recording→mixtape §8, surface 1). A PLAN is a videoless
-// `recordings` row (kind=plan, `r2Key` NULL): the operator lines up the findings for an
-// upcoming set and carries the plan's handle onto Beatport / Rekordbox / a USB stick. A
-// captured set is a TAKE (a recording that owns a video); a take attaches to its plan and
-// is clipped + promoted in the Studio. Plans and published mixtapes have separate concerns: the
-// draft-mixtape editor's publish-time cruft (recorded date, dream note, SoundCloud,
-// the CLI publish panel) belongs to the PUBLISHED mixtape, not the plan.
-//
-// Reads run SERVER-SIDE (createServerFn calling the server helpers in-process — no
-// cross-origin fetch, no CORS); writes go through the operator-tier oRPC routes at
-// `/api/v1/admin/recordings/*`. The findings builder + live session autosave; attaching a
-// take is one click.
-
 const PLANS_KEY = ["admin", "plans"] as const;
 
-// The cover-render row a plan's findings builder keeps — a finding hydrated from its cue's
-// `finding_id`. Mirrors the mixtape builder's member shape so the row renders identically.
 type MemberRef = {
   albumImageUrl?: string;
   artists: string[];
@@ -110,13 +95,8 @@ type MemberRef = {
   trackId: string;
 };
 
-// A plan and its hydrated findings — the loader resolves each cue's `finding_id` to a live
-// finding so the builder renders rich rows (cover, BPM, key) after a reload.
 type PlanView = { members: MemberRef[]; recording: RecordingDTO };
 
-// Every plan with its findings hydrated, every take (to attach + list), and the per-take
-// clip count. In-process: no HTTP, no CORS. Cues carry only text + a `finding_id`, so this
-// resolves each `finding_id` to a live finding (one batched query across every plan).
 const fetchPlans = createServerFn({ method: "GET" }).handler(
   async (): Promise<{
     clipCounts: Record<string, number>;
@@ -133,8 +113,6 @@ const fetchPlans = createServerFn({ method: "GET" }).handler(
       listClips(),
     ]);
 
-    // Read each plan's cues (with `finding_id`, which the DTO tracklist drops), then
-    // hydrate every referenced finding in ONE batched query.
     const cuesByPlan = new Map(
       await Promise.all(
         plans.map(async (plan) => [plan.id, await getRecordingCues(plan.id)] as const),
@@ -191,8 +169,6 @@ function AdminPlansPage() {
 
   const { clipCounts, plans, takes } = data;
 
-  // The loose takes a plan can adopt: a captured set not yet attached to any plan. Computed
-  // once here so every plan's "Attach a take" picker offers the same pool.
   const looseTakes = useMemo(() => takes.filter((take) => !take.parentId), [takes]);
 
   const refresh = useCallback(
@@ -322,7 +298,6 @@ function PlanEditor({
   const [error, setError] = useAutoNotice();
   const [busy, setBusy] = useState(false);
 
-  // A plan's own takes (this plan's children), newest first via the server order.
   const planTakes = useMemo(
     () => takes.filter((take) => take.parentId === recording.id),
     [recording.id, takes],
@@ -333,9 +308,6 @@ function PlanEditor({
     stateRef.current = { members, plannedFor };
   });
 
-  // Adopt an incoming server snapshot only when there are no unsaved local edits (the whole
-  // local state still matches what we last saved). Autosave makes that window sub-second, so
-  // a focus refetch never clobbers work in progress.
   const lastServer = useRef(recording);
   const [savedSig, setSavedSig] = useState(() => planSignature(recording.plannedFor, plan.members));
   const [autosaveStatus, setAutosaveStatus] = useState<"idle" | "saving" | "error">("idle");
@@ -374,8 +346,6 @@ function PlanEditor({
     const savedMembers = lastSavedMembers(savedSig);
     const nextPlanned = fromLocalDateTime(plannedFor);
     try {
-      // Save only what changed — the live session (a PATCH) and the findings (a cue
-      // replace) live on separate ops.
       if (nextPlanned !== savedPlanned) {
         await patchRecording(recording.id, { plannedFor: nextPlanned });
       }
@@ -532,9 +502,6 @@ function PlanEditor({
   );
 }
 
-// The plan's handle — the auto Galaxy-vocab slug the operator carries onto Beatport,
-// Rekordbox, and the USB. Read-only, one-tap copyable, rendered body/mono (a label you
-// paste, not a coordinate — so it is NOT the Oxanium numeral of a Log ID).
 function PlanHandleField({ handle }: { handle: string }) {
   const [copied, setCopied] = useState(false);
 
@@ -567,10 +534,6 @@ function PlanHandleField({ handle }: { handle: string }) {
   );
 }
 
-// "Attach a take" (RFC §8, surface 2 — the CLI-upload-then-attach cut, R2 CORS pending): a
-// take is a captured set uploaded from the CLI. This picks a loose take (one not yet on any
-// plan) and attaches it, then lists this plan's takes with their version, promoted state,
-// clip count, and a link into the Studio.
 function AttachTake({
   clipCounts,
   looseTakes,
@@ -653,9 +616,6 @@ function AttachTake({
   );
 }
 
-// One take under a plan (the RecordingsIndex row, plan-scoped): its version label, promoted
-// state (`fluncle://<logId>` once a mixtape was minted from it, else "take"), clip count, and
-// the link into the Studio to clip + promote it.
 function TakeRow({ clipCount, take }: { clipCount: number; take: RecordingDTO }) {
   return (
     <li className="flex items-center gap-3 px-3 py-2">
@@ -692,9 +652,6 @@ function TakeRow({ clipCount, take }: { clipCount: number; take: RecordingDTO })
   );
 }
 
-// The findings builder — search a banger, drag to reorder, remove. Ported verbatim from the
-// mixtape builder (the plan's tracklist is the set you'll play). Order + membership is the
-// whole edit; timing (cue start times) is marked later on the TAKE, in the Studio.
 function MembersBuilder({
   members,
   onChange,
@@ -962,8 +919,6 @@ function Field({
   );
 }
 
-// The plan's only "save" surface: it persists continuously, so this just reports where that
-// stands — saving, saved, or failed with a retry.
 function AutosaveStatus({
   dirty,
   error,
@@ -1000,7 +955,6 @@ function AutosaveStatus({
   );
 }
 
-// An ISO instant → the `datetime-local` input's value (local wall-clock, minute precision).
 function toLocalDateTime(iso?: string): string {
   if (!iso) {
     return "";
@@ -1013,8 +967,6 @@ function toLocalDateTime(iso?: string): string {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
-// The `datetime-local` value (local wall-clock) → an ISO instant for the API. Empty string
-// clears the field (server stores null).
 function fromLocalDateTime(value: string): string {
   const trimmed = value.trim();
   if (trimmed.length === 0) {
@@ -1037,15 +989,10 @@ function toMemberRef(track: TrackListItem): MemberRef {
   };
 }
 
-// The findings' identity is their ordered trackIds, so a reorder or add/remove changes the
-// signature but a re-fetch of the same set does not.
 function membersSignature(members: MemberRef[]): string {
   return members.map((member) => member.trackId).join("\n");
 }
 
-// One string capturing both savable halves — the live session (normalized to its ISO
-// instant) and the ordered findings — so the dirty check and the last-saved decode read the
-// same value.
 function planSignature(plannedForIso: string | undefined, members: MemberRef[]): string {
   return JSON.stringify([plannedForIso ?? "", membersSignature(members)]);
 }
@@ -1069,7 +1016,6 @@ async function searchAdminTracks(q: string): Promise<TrackListItem[]> {
   return body.tracks ?? [];
 }
 
-// PATCH a recording (the plan's live session, or a take's plan link). Operator-tier oRPC.
 async function patchRecording(id: string, body: { parentId?: string; plannedFor?: string }) {
   const response = await fetch(`/api/v1/admin/recordings/${encodeURIComponent(id)}`, {
     body: JSON.stringify(body),
@@ -1081,8 +1027,6 @@ async function patchRecording(id: string, body: { parentId?: string; plannedFor?
   }
 }
 
-// Replace the plan's cues (its findings) — each finding's `trackId` is the cue's honest
-// `finding_id`. Operator-tier oRPC (`replace_recording_cues`); positions reindex from order.
 async function replaceCues(id: string, members: MemberRef[]) {
   const response = await fetch(`/api/v1/admin/recordings/${encodeURIComponent(id)}/cues`, {
     body: JSON.stringify({

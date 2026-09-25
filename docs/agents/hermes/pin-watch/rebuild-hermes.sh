@@ -32,6 +32,8 @@ REPO_URL="${PINWATCH_REPO_URL:-https://github.com/mauricekleine/fluncle.git}"
 REPO_DIR="${PINWATCH_REPO_DIR:-/opt/fluncle-build}"
 DOCKERFILE="docs/agents/hermes/Dockerfile"
 LOCK="${PINWATCH_LOCK:-/run/lock/fluncle-pin-watch.lock}"
+LAST_BUILD_FILE="${PINWATCH_LAST_BUILD_FILE:-/opt/fluncle-pin-watch/last-build-at}"
+REBUILD_INTERVAL_SECS=7200
 KEEP_IMAGES="${PINWATCH_KEEP_IMAGES:-2}"  # running + 1 rollback; each hermes image is ~10GB, so 4 fills the 38GB box
 SWEEP_DRAIN_TIMEOUT="${PINWATCH_SWEEP_DRAIN_TIMEOUT:-300}"  # max seconds to wait for an in-flight sweep to finish before the rebuild proceeds anyway
 
@@ -109,6 +111,11 @@ case "${1:-}" in
   --dry-run) MODE="--dry-run" ;;         # build + pre-smoke the new image, then STOP (never swap)
   --fingerprint) MODE="--fingerprint" ;; # print the watched paths + the fingerprint at REPO_DIR HEAD, then STOP
 esac
+case "${PINWATCH_FORCE_IMMEDIATE:-0}" in
+  0) ;;
+  1) if [ "$MODE" = "--if-stale" ]; then MODE="--force"; fi ;;
+  *) printf '[pin-watch] FATAL: PINWATCH_FORCE_IMMEDIATE must be 0 or 1\n' >&2; exit 1 ;;
+esac
 
 log() { printf '[pin-watch] %s\n' "$*" >&2; }
 die() { ERRORS=1; log "FATAL: $*"; exit 1; }
@@ -140,6 +147,10 @@ DRIFT=0
 SUMMARY_EMITTED=0
 STARTED_AT=""
 ENVTMP=""
+QUIESCE_STARTED_AT=""
+QUIESCE_ENDED_AT=""
+QUIESCE_STARTED_EPOCH=0
+QUIESCE_DURATION_SECONDS=0
 
 # Read one KEY out of the LIVE container's env — the credential-free read this script already
 # uses for the webhook and the agent token. Container down ⇒ empty ⇒ the caller degrades.
@@ -342,6 +353,27 @@ run_event_now() {
 }
 # <<< END MIRRORED BLOCK: record_run_event <<<
 
+rebuild_window_open() {
+  [ "$MODE" = "--force" ] && return 0
+  [ -f "$LAST_BUILD_FILE" ] || return 0
+  local last_build_at now
+  last_build_at="$(cat "$LAST_BUILD_FILE")"
+  case "$last_build_at" in '' | *[!0-9]*) die "invalid last-build timestamp in $LAST_BUILD_FILE" ;; esac
+  now="$(date -u +%s)"
+  if [ "$now" -lt "$((last_build_at + REBUILD_INTERVAL_SECS))" ]; then
+    log "drift deferred until epoch $((last_build_at + REBUILD_INTERVAL_SECS)); the next eligible tick builds latest main"
+    return 1
+  fi
+  return 0
+}
+
+record_build_start() {
+  local build_stamp_tmp
+  build_stamp_tmp="$(mktemp "${LAST_BUILD_FILE}.XXXXXX")" || die "cannot reserve the last-build timestamp"
+  printf '%s\n' "$(date -u +%s)" > "$build_stamp_tmp" || die "cannot write the last-build timestamp"
+  mv -f "$build_stamp_tmp" "$LAST_BUILD_FILE" || die "cannot persist the last-build timestamp"
+}
+
 # Print the run's summary line and POST its run record, exactly once, whatever exit path got
 # here. Runs from the EXIT trap so a `die` deep in the script cannot skip it — the shape that
 # leaves a ledger row missing is the shape that reads as a missed run.
@@ -349,13 +381,16 @@ run_event_now() {
 # THE LINE CARRIES NO `ok`. The verdict is `exit_code == 0 && errors == 0` and the Worker computes
 # it from the two facts below; a self-reported one is rejected at the edge.
 emit_run_summary() {
-  local rc="${1:-0}" ended summary
+  local rc="${1:-0}" ended summary quiesce_started_json=null quiesce_ended_json=null
   if [ "$SUMMARY_EMITTED" = "1" ]; then return 0; fi
   SUMMARY_EMITTED=1
   case "$rc" in '' | *[!0-9]*) rc=0 ;; esac
   ended="$(run_event_now)"
-  summary="$(printf '{"checked":%d,"produced":%d,"errors":%d,"queue_depth":%d,"gateState":null,"expectedIntervalMs":%d}' \
-    "$CHECKED" "$DEPLOYED" "$ERRORS" "$DRIFT" "$RUN_EVENT_INTERVAL_MS")"
+  if [ -n "$QUIESCE_STARTED_AT" ]; then quiesce_started_json="\"$QUIESCE_STARTED_AT\""; fi
+  if [ -n "$QUIESCE_ENDED_AT" ]; then quiesce_ended_json="\"$QUIESCE_ENDED_AT\""; fi
+  summary="$(printf '{"checked":%d,"produced":%d,"errors":%d,"queue_depth":%d,"gateState":null,"expectedIntervalMs":%d,"quiesce_started_at":%s,"quiesce_ended_at":%s,"quiesce_duration_seconds":%d}' \
+    "$CHECKED" "$DEPLOYED" "$ERRORS" "$DRIFT" "$RUN_EVENT_INTERVAL_MS" \
+    "$quiesce_started_json" "$quiesce_ended_json" "$QUIESCE_DURATION_SECONDS")"
   printf '%s\n' "$summary"
   if [ -z "${FLUNCLE_API_TOKEN:-}" ]; then
     FLUNCLE_API_TOKEN="${APITOKEN:-$(container_env FLUNCLE_API_TOKEN)}"
@@ -635,6 +670,11 @@ restore_sweep_timers() {
     log "restored ${count} sweep timer(s)"
   fi
   STOPPED_TIMERS=()
+  if [ -n "${QUIESCE_STARTED_AT:-}" ]; then
+    QUIESCE_ENDED_AT="$(run_event_now)"
+    QUIESCE_DURATION_SECONDS=$(($(date -u +%s) - QUIESCE_STARTED_EPOCH))
+    log "quiesce ended at $QUIESCE_ENDED_AT after ${QUIESCE_DURATION_SECONDS}s"
+  fi
 }
 
 quiesce_sweeps() {
@@ -672,6 +712,9 @@ quiesce_sweeps() {
     [ -n "$REBAKE_LOCK" ] && log "rebake lock held: $REBAKE_LOCK"
   fi
 
+  QUIESCE_STARTED_AT="$(run_event_now)"
+  QUIESCE_STARTED_EPOCH="$(date -u +%s)"
+  log "quiesce started at $QUIESCE_STARTED_AT for ${#STOPPED_TIMERS[@]} sweep timer(s)"
   for t in "${STOPPED_TIMERS[@]}"; do
     systemctl stop "$t" >/dev/null 2>&1 || true
   done
@@ -825,6 +868,10 @@ fi
 # The WORKLIST: drift is known and undeployed. It stays 1 until a swap actually lands, so an
 # hourly run of failed builds reads as `produced == 0 AND queue_depth > 0` in the ledger.
 DRIFT=1
+if ! rebuild_window_open; then
+  post_health ok "tool update deferred to the next rebuild window"
+  exit 0
+fi
 log "pins or baked content drifted (or --force) — rebuilding"
 
 # ── 3. capture the running container's runtime env (the secrets) into a tmpfs ──
@@ -869,6 +916,7 @@ docker builder prune -f --keep-storage=3GB >/dev/null 2>&1 || true
 # here the docker daemon churns (build + throwaway pre-smoke runs + the swap), so
 # stop the sweeps first and let the EXIT trap guarantee they come back.
 quiesce_sweeps
+record_build_start
 
 # ── 4. build the new image ────────────────────────────────────────────────────
 SHA="$(git -C "$REPO_DIR" rev-parse --short HEAD)"

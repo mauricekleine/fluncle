@@ -30,30 +30,8 @@ import {
 import { pageParam } from "@/lib/search-params";
 import { type LabelPageData } from "./-label-page-data";
 
-// The label page — one label's place in the archive, and the third node of the graph
-// (log ↔ artist ↔ label ↔ album). Findings lead, then the label's crawled catalogue GROUPED
-// BY ARTIST (each artist a collapsing section, its records inside), then the graph JSON-LD and
-// the same thin-content gate. See docs/label-entity.md and docs/album-entity.md.
-//
-// ── WHY GROUPED ────────────────────────────────────────────────────────────────────────
-// A crawled label is a discography, not a list. The pilot pulled 735 tracks off ONE small
-// label; Hospital will be several times that. Rendered flat that is a dump, so the quieter
-// rows are grouped by artist and paginated, and the bound the flat read carried (a 100-row
-// cap after a 4.34 MB page) moves into `catalogue-groups.ts` rather than disappearing: a page
-// of `GRAPH_GROUP_PAGE_SIZE` artist sections, each capped inside, with a crawlable pager for
-// the rest. Nothing is unbounded and nothing is unreachable.
-//
-// It is BLIND to `seed_state`. A label the operator skipped for the crawler renders here
-// exactly as it always did — crawl scope, never storage (lib/server/labels.ts).
-
-// Both params are OPTIONAL, so a plain `<Link to="/label/$slug">` anywhere in the app still
-// type-checks without a `search` prop (the `HomeSearch.story?` precedent). The default page and
-// sort are applied in `loaderDeps`, never here — the URL stays clean (`/label/x`, not
-// `/label/x?sort=name&page=1`) for the canonical, crawlable view.
 type LabelSearch = { page?: number; sort?: CatalogueSort; upcomingPage?: number };
 
-// The resolver arrives by a DYNAMIC import inside the handler, and its type by `import type`,
-// so this route module never statically references `lib/server/**` — see `-label-page-data.ts`.
 const fetchLabel = createServerFn({ method: "GET" })
   .validator(
     (data: { page: number; slug: string; sort: CatalogueSort; upcomingPage: number }) => data,
@@ -87,10 +65,7 @@ function labelHead(loaderData: LabelPageData | undefined) {
     slug,
     subLabels,
   } = loaderData;
-  // The canonical is SELF-REFERENCING PER PAGE (page 2 is its own page, not a duplicate of page
-  // 1) but SORT-COLLAPSING: it always drops the sort param, so `?sort=recent` and the default
-  // A–Z view of the same page fold to one canonical URL rather than diluting each other. Page 1
-  // stays the bare `/label/<slug>`.
+
   const pageUrl = entityPageHref(
     `${siteUrl}/label/${slug}`,
     catalogue.page,
@@ -98,28 +73,16 @@ function labelHead(loaderData: LabelPageData | undefined) {
     CATALOGUE_SORT_DEFAULT,
     upcoming.page,
   );
-  // The <title>/meta stay honestly-plain third-person (the Narrator rule); the first person
-  // lives only in the on-page voice frame.
+
   const baseTitle = `${name} · Fluncle`;
-  // The factual bio is the honest, UNIQUE description when one is authored — the same objective
-  // paragraph the page prints, trimmed to the meta cap. Absent (the bio backfill is in flight for
-  // many labels), it falls back to the templated line verbatim, so nothing regresses: it still
-  // describes the page it is actually on (with findings, the findings; without, the records this
-  // label put out), never claiming findings a page does not have and never naming the unlit tier
-  // (docs/album-entity.md), so "catalogue" cannot leak into a SERP snippet. This one string flows
-  // to meta + og + twitter below, so all three go unique together.
+
   const baseDescription =
     bio !== undefined
       ? bioMetaDescription(bio)
       : findings.length > 0
         ? `Drum & bass tracks on ${name} that Fluncle recommends, ${findings.length} so far, with the artists behind them.`
         : `Drum & bass records released on ${name}, with the artists behind them.`;
-  // PAGED VARIANTS BAKE THE PAGE NUMBER INTO BOTH STRINGS — the `/labels` hub rule
-  // (labels.index.tsx) applied to the entity page, which paginates the same way. The canonical
-  // above is self-referencing per page, so `?page=N` is submitted as its own indexable URL; left
-  // wearing page 1's title and description it is a duplicate-meta URL competing with the page it
-  // came from. The paged description names what the page actually carries (the artists band, the
-  // one section the pager moves), never the entity's bio, which describes only page 1's masthead.
+
   const { description, title } =
     catalogue.page > 1
       ? {
@@ -127,21 +90,13 @@ function labelHead(loaderData: LabelPageData | undefined) {
           title: `${name}, page ${catalogue.page} · Fluncle`,
         }
       : { description: baseDescription, title: baseTitle };
-  // The label's representative image, up the same ladder every surface uses: its OWN logo first,
-  // then the freshest finding's cover, then the site cover as the final floor.
+
   const coverFinding = findings[0];
   const imageUrl =
     albumCoverAtSize(logoImageUrl, "large") ??
     (coverFinding ? albumCoverAtSize(coverFinding.albumImageUrl, "large") : undefined) ??
     `${siteUrl}/fluncle-cover.png`;
-  // THE LEAD IMAGE — the findings band's first cover, this page's LCP candidate and above the fold
-  // on every viewport. Preloaded at the `medium` rung, byte-identical to what FindingsGrid asks for,
-  // so it is a cache hit rather than a second fetch. Same one-preload shape as /artist and /album;
-  // FindingsGrid marks the matching tile non-lazy. The label's own LOGO is not a candidate for a
-  // different reason than it once was: it is not PAINTED on this page at all. The masthead is the
-  // name, the bio, and the founding line — the logo is a HEAD-only asset (the OG/Twitter image
-  // above and the Organization's `logo` in the JSON-LD below), so preloading it would fetch an
-  // image the layout never asks for.
+
   const leadImageUrl = albumCoverAtSize(
     findings.find((finding) => finding.logId)?.albumImageUrl,
     "medium",
@@ -153,8 +108,7 @@ function labelHead(loaderData: LabelPageData | undefined) {
       ...(leadImageUrl
         ? [{ as: "image", fetchPriority: "high" as const, href: leadImageUrl, rel: "preload" }]
         : []),
-      // RSS discovery: this label's new-releases feed (the 30-day window, this label only).
-      // The bare `/label/<slug>/fresh.xml`, never the paged catalogue URL.
+
       {
         href: `${siteUrl}/label/${slug}/fresh.xml`,
         rel: "alternate",
@@ -165,8 +119,7 @@ function labelHead(loaderData: LabelPageData | undefined) {
     meta: [
       { title },
       { content: description, name: "description" },
-      // Below the thin-content threshold: keep the page reachable + link equity flowing,
-      // but out of the index (noindex, follow).
+
       ...(indexable ? [] : [{ content: "noindex, follow", name: "robots" }]),
       { content: title, property: "og:title" },
       { content: description, property: "og:description" },
@@ -178,10 +131,7 @@ function labelHead(loaderData: LabelPageData | undefined) {
       { content: description, name: "twitter:description" },
       { content: imageUrl, name: "twitter:image" },
     ],
-    // The JSON-LD's track list describes exactly what the page RENDERS — the findings, then the
-    // quieter rows on this page flattened out of their groups (schema that contradicts the page
-    // gets discounted). `jsonLdScript` HTML-escapes the payload, so a `</script>` in a
-    // vendor-sourced label or track name can't break out (stored-XSS sink, security review).
+
     scripts: [
       jsonLdScript(
         recordLabelJsonLd({
@@ -189,11 +139,10 @@ function labelHead(loaderData: LabelPageData | undefined) {
           artists,
           bio,
           discogsLabelId,
-          // The founding facts + imprint hierarchy (RFC label-lineage-remixer U1) → the
-          // Organization's `foundingDate` / `location` / `parentOrganization` / `subOrganization`.
+
           foundingDate,
           location: foundedLocation,
-          // The label's own logo becomes the Organization's `logo` (it was only the OG image before).
+
           logoImageUrl,
           mbLabelId,
           name,
@@ -208,8 +157,6 @@ function labelHead(loaderData: LabelPageData | undefined) {
   };
 }
 
-// Route options follow TanStack's create-route-property-order (each step feeds the next's
-// inferred types), which isn't alphabetical — so sort-keys is off here.
 // oxlint-disable-next-line sort-keys
 export const Route = createFileRoute("/label/$slug")({
   validateSearch: (search: Record<string, unknown>): LabelSearch => ({
@@ -217,8 +164,7 @@ export const Route = createFileRoute("/label/$slug")({
     sort: catalogueSortParam(search["sort"]),
     upcomingPage: pageParam(search["upcomingPage"]),
   }),
-  // Defaults land HERE, so the loader always gets a real page + sort while the URL keeps them
-  // implicit. `parseCatalogueSort` folds anything to the default A–Z.
+
   loaderDeps: ({ search }) => ({
     page: search.page ?? 1,
     sort: parseCatalogueSort(search.sort),
@@ -235,7 +181,6 @@ export const Route = createFileRoute("/label/$slug")({
     });
 
     if (data.status === "redirect") {
-      // The slug is a merged-away spelling — 301 (permanent) to the canonical label's page.
       throw redirect({ params: { slug: data.canonicalSlug }, statusCode: 301, to: "/label/$slug" });
     }
 
@@ -250,12 +195,6 @@ export const Route = createFileRoute("/label/$slug")({
   notFoundComponent: StoryNotFoundState,
 });
 
-/**
- * The label's dossier dateline (reference register): "Founded 1996 · London" (date + place),
- * "Founded 1996" (date only), or the bare place. Undefined when the label carries neither, so the
- * masthead renders nothing. The founding date is shown as its YEAR (the verbatim value on the row —
- * a year or a full date — rides the JSON-LD `foundingDate`, but the visible line stays terse).
- */
 function labelDateline(
   foundingDate: string | undefined,
   foundedLocation: string | undefined,
@@ -301,24 +240,16 @@ function LabelPage() {
       <article className="log-plate log-index">
         <header className="log-masthead">
           <h1 className="log-coordinate log-index-title artist-name">{name}</h1>
-          {/* The dossier bio is the masthead's prose — the reference register (the Three Areas
-              Rule; the first-person signature line is retired). Rendered once authored. */}
+
           {bio ? <p className="log-index-bio">{bio}</p> : undefined}
-          {/* One quiet reference-register line: where and when the label started (label-lineage
-              sweep, U1). Rendered only when MusicBrainz carried a founding date or place. */}
+
           {dateline ? <p className="log-index-dateline">{dateline}</p> : undefined}
-          {/* The quiet watch control — a signed-in user keeps an eye on this label. Renders
-              nothing for a signed-out visitor (the account never gates the page) — no wrapper, so
-              the null face leaves no empty grid item in the masthead. */}
+
           <WatchButton entityId={id} kind="label" name={name} />
         </header>
 
-        {/* Every band below is conditional: an empty one renders nothing at all, so this page
-            is only ever about what it actually carries (components/graph-sections.tsx). */}
         <FindingsGrid findings={findings} />
 
-        {/* Upcoming: releases with a date still ahead, held off the newest-first surfaces until
-            their day. It follows the findings lead, never above it. */}
         {upcoming.total > 0 ? (
           <section aria-labelledby="label-upcoming-heading" className="catalogue-section">
             <h2 className="artist-similar-label" id="label-upcoming-heading">
@@ -345,16 +276,8 @@ function LabelPage() {
 
         <ArtistChips artists={artists} title={`Artists on ${name}`} />
 
-        {/* The crawled catalogue, grouped by artist. The sort control rides above it only when
-            there is more than one group to order; the pager below only when there is more than
-            one page. Changing either resets to page 1 — a different order has different pages. */}
         {catalogue.groups.length > 0 ? (
           <section aria-labelledby="label-catalogue-heading" className="catalogue-section">
-            {/* The section's name, promoted from an `aria-label` to a real H2 so the heading
-                outline runs H1 → H2 → H3 (the artist names inside are H3s, and a page that jumps
-                H1 → H3 fails `heading-order`). It stays visually hidden, so the page's quiet look
-                is unchanged — and the string is the same one the aria-label already carried: it
-                names the ARTISTS, never the tier their tracks belong to. */}
             <h2 className="sr-only" id="label-catalogue-heading">
               Artists released on {name}
             </h2>

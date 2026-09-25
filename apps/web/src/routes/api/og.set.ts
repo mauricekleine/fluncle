@@ -13,18 +13,6 @@ import {
 } from "@/lib/server/satori-render";
 import { getTracksByLogIds } from "@/lib/server/tracks";
 
-// The set-level Open Graph card (1200×630) for a shared `/mix` link (RFC
-// mixability-engine §3.2) — a `/mix` link that unfurls as a naked URL on
-// Discord/Telegram (where the crew lives) has no share step, so this is IN SCOPE. The
-// chain's covers fanned across the cosmos background + the track count, in the same
-// visual system as the per-finding card (`og.$logId.ts`). Rendered on the edge with
-// workers-og (Satori + resvg WASM). Satori doesn't fetch remote <img>, so each cover
-// is inlined as a data-URI.
-//
-// TYPE: same role split as the per-finding card (DESIGN.md §3, lib/server/satori-render.ts).
-// The "A FLUNCLE MIX" lockup is a brand mark → Oxanium. The count line and the tagline are
-// reading text → Space Grotesk, which is also the container default.
-
 const WIDTH = 1200;
 const HEIGHT = 630;
 
@@ -35,14 +23,6 @@ const COLOR = {
   stardust: colors.stardust,
 } as const;
 
-// BARE-ONLY MOUNT, SO NO `aliasHandlers`: that helper's `as never` exists only to unbind
-// the phantom path coupling when ONE handler object is mounted at both /api/x and
-// /api/v1/x (see ./-alias.ts). This card has no /api/v1 twin — `/api/og/set` is the single
-// mount (and the documented bare-only carve-out in orpc-coverage.test.ts) — so there is
-// nothing to share, and routing the object through the cast erased TanStack's type-check
-// at the mount for no benefit: a handler with the wrong shape would have compiled. The
-// handlers are declared directly and mounted inline below, so the compiler checks them
-// against this route's own literal path.
 export const serverHandlers = {
   GET: async ({ request }: { request: Request }) => {
     const url = new URL(request.url);
@@ -54,7 +34,6 @@ export const serverHandlers = {
       return finding ? [finding] : [];
     });
 
-    // Up to five covers fan across the card; the count names the whole set.
     const covers = await Promise.all(
       chain.slice(0, 5).map((finding) => {
         const src = albumCoverAtSize(finding.albumImageUrl, "medium");

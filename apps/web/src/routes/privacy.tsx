@@ -1,21 +1,10 @@
 import { Link, createFileRoute } from "@tanstack/react-router";
 import { siteUrl } from "@/lib/fluncle-links";
 
-// The privacy policy: the public site's data page, and the page the Chrome Web Store
-// points to for Fluncle Lens. TikTok's developer-app review also points here.
-// Register is honest-plain (machine/legal, third person for the entity) with a light
-// touch of Fluncle warmth — an ARRIVAL surface read by strangers and reviewers, so
-// zero cosmos vocabulary in the substance. Everything here MUST stay accurate to what
-// the site, the account system, and the extension actually do — no invented claims,
-// no embellishment. The "last updated" date is passed in statically (no new Date() at
-// render); bump it by hand whenever the text below changes.
-
 const title = "Privacy · Fluncle";
 const description =
   "How fluncle.com and Fluncle Lens handle your data: privacy-friendly analytics with no tracking cookies, no ads, no data sold, and clear ways to export or delete your account.";
 
-// Static so it is identical on the server and the client; bump by hand when the
-// policy text below changes.
 const lastUpdated = "July 20, 2026";
 
 function privacyHead() {

@@ -7,14 +7,6 @@ import { formatSector, sectorDateISO } from "@/lib/log-id-shared";
 import { logbookPath } from "@/lib/logbook";
 import { listLogbookIndexEntries, type LogbookIndexEntry } from "@/lib/server/logbook";
 
-// The Logbook index: every sector-day Fluncle has written up, newest first — the
-// crawlable internal-link surface that keeps the /logbook/<sector> travelogues from
-// being orphans. Text-first, the quiet archival plate; the cover-led archive stays
-// the homepage.
-
-// The index renders only each entry's sector + title (the date derives from the sector),
-// so it reads the lean `{ sector, title }` projection — never the long-form `body` the
-// article page (`/logbook/<sector>`) loads.
 const fetchLogbook = createServerFn({ method: "GET" }).handler(() =>
   listLogbookIndexEntries({ limit: 500 }),
 );
@@ -24,8 +16,6 @@ const description =
   "Fluncle's Logbook: one first-person entry per day of the voyage. What the day was like, where the trip went, and how each banger landed, with the findings inlined as photos.";
 
 function logbookIndexHead(entries: LogbookIndexEntry[] | undefined) {
-  // A Blog whose blogPost list is the entries — honest structured data mirroring the
-  // visible index (each item a real /logbook/<sector> Article).
   const blog = {
     "@context": "https://schema.org",
     "@type": "Blog",
@@ -50,14 +40,11 @@ function logbookIndexHead(entries: LogbookIndexEntry[] | undefined) {
       { content: `${siteUrl}/fluncle-cover.png`, property: "og:image" },
       { content: `${siteUrl}/logbook`, property: "og:url" },
     ],
-    // JSON-LD goes through `jsonLdScript`, which HTML-escapes the serialized payload
-    // before the inline <script>, so a `</script>` in an entry title can't break out.
+
     scripts: [jsonLdScript(blog)],
   };
 }
 
-// Route options follow TanStack's create-route-property-order (each step feeds the
-// next's inferred types), which isn't alphabetical — so sort-keys is off here.
 // oxlint-disable-next-line sort-keys
 export const Route = createFileRoute("/logbook/")({
   loader: () => fetchLogbook(),

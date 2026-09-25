@@ -59,34 +59,6 @@ import {
 } from "@/lib/server/catalogue";
 import { albumCoverAtSize } from "@/lib/media";
 
-// THE EAR — `/admin/catalogue` (docs/the-ear.md).
-//
-// A CATALOGUE TRACK is a `tracks` row with no `findings` row: a track the archive knows and
-// Fluncle never logged. This page ranks them, and it is deliberately NOT a queue to grind.
-//
-// ── IT IS A TELESCOPE, NOT A CONVEYOR BELT ──────────────────────────────────────────────
-// The operator finds ~15 bangers a week, so volume is not his constraint — but that pace is
-// shallow and recency-biased: he sees whatever the feeds put in front of him, while whole
-// regions of the genre (older releases, small labels, the long tail) never cross his path.
-// This page points at the tracks sitting near what he already loves and never reached him. So
-// it is a short, high-conviction list he WANTS to open. If it ever feels like a backlog to
-// process, it has failed, and the fix is to show fewer rows — never more.
-//
-// ── EVERY ROW CARRIES ITS WHY ───────────────────────────────────────────────────────────
-// A bare score is not a reason. Each row names the finding it matched ("Closest to 012.2.4L ·
-// Krakota — See For Miles"), because an instrument the operator cannot interrogate is one he
-// stops looking through. The score is the claim; the finding is the evidence.
-//
-// ── THE PAGE DOES NO VECTOR MATH ────────────────────────────────────────────────────────
-// It reads columns the `rank_catalogue` sweep precomputed and sorts on an index. Ranking at
-// request time would be a 10k × 60 cross join over 1024-d vectors, per page load. See
-// lib/server/catalogue.ts.
-//
-// ── AND NOTHING HERE IS LIT LIKE A FINDING ──────────────────────────────────────────────
-// No coordinate, no gold, no note, no video — a catalogue row cannot carry any of them,
-// because those columns live on `findings` and this row has none. The rows are the same shape
-// as a finding's and deliberately not the same weight: he has not been to these ones.
-
 const CATALOGUE_KEY = ["admin", "catalogue"] as const;
 
 type CataloguePayload = {
@@ -107,8 +79,7 @@ const fetchCatalogue = createServerFn({ method: "GET" })
     const [tracks, summary, budget] = await Promise.all([
       listCatalogueTracks(lens, 50),
       getCatalogueSummary(),
-      // The spend, read through the SAME function the capture queue's brake obeys — so what he
-      // sees here and what the machine does cannot drift.
+
       getCatalogueCaptureState(),
     ]);
 
@@ -117,8 +88,6 @@ const fetchCatalogue = createServerFn({ method: "GET" })
 
 // oxlint-disable-next-line sort-keys
 export const Route = createFileRoute("/admin/catalogue")({
-  // The lens is view state, so it deep-links (the placement contract): a pasted URL restores
-  // the view, and a reload keeps it.
   validateSearch: (search: Record<string, unknown>): CatalogueSearch => ({
     lens:
       search.lens === "capture"
@@ -146,39 +115,25 @@ function AdminCataloguePage() {
     queryFn: () => fetchCatalogue({ data: lens }),
     queryKey: [...CATALOGUE_KEY, lens],
     refetchOnWindowFocus: true,
-    // The summary read is now a cheap KV read (the counts are cached, not scanned), so focus
-    // refetch stays on. `staleTime` is burst protection: a flurry of row mutations each invalidates
-    // this query, and 20s coalesces those into one refetch instead of one per click.
+
     staleTime: 20_000,
   });
 
-  // The sweep, by hand. It is a periodic job, but the operator must be able to poke it after
-  // logging a finding and watch the ranking move — otherwise the list's freshness is a thing
-  // he has to take on faith. `remaining > 0` means the backlog needs more ticks.
   const rank = useMutation({
     mutationFn: () => postRank(),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: CATALOGUE_KEY }),
   });
 
-  // THE KILL SWITCH. It reads back the server's recomputed state rather than assuming the flip
-  // landed, because this is the control he reaches for when the bill is climbing — the one
-  // place a hopeful optimistic update would be a lie.
   const setPaused = useMutation({
     mutationFn: (paused: boolean) => putCaptureBudget({ paused }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: CATALOGUE_KEY }),
   });
 
-  // THE WRONG-AUDIO OVERRIDE. The operator disagrees with a quarantine — "this capture is fine".
-  // It flips the row to `quarantine-cleared` (a sticky state the sweep never re-quarantines) and
-  // re-reads, so the list reflects the server's verdict rather than an optimistic guess.
   const clearAudio = useMutation({
     mutationFn: (trackId: string) => postClearWrongAudio(trackId),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: CATALOGUE_KEY }),
   });
 
-  // THE OTHER VERDICT. The operator heard this row's captured bytes and they ARE the row's own
-  // song — so the poisoned capture is the FINDING'S. One decision settles the pair: flag the
-  // finding (vector out, re-capture queued, bad bytes hash-rejected) AND keep this row.
   const blameFinding = useMutation({
     mutationFn: async ({
       findingTrackId,
@@ -200,11 +155,6 @@ function AdminCataloguePage() {
     },
   });
 
-  // THE DUPE-VETO ESCAPE HATCH. The sweep marked this row "already in the archive", but the
-  // operator disagrees — a shared or mis-assigned ISRC, a title collision on a different recording.
-  // Force-capture lifts the duplicate veto stickily (the sweep never re-marks it), so the row
-  // re-ranks onto the capture ladder and the next open-budget tick buys it. It re-reads the server's
-  // verdict rather than guessing, so the list reflects what actually changed.
   const forceCapture = useMutation({
     mutationFn: (trackId: string) => postForceCapture(trackId),
     onError: (error) =>
@@ -217,14 +167,11 @@ function AdminCataloguePage() {
     },
   });
 
-  // THE RESTORE. Put a dismissed row back — declared before `dismiss` so its toast Undo can call it.
   const restore = useMutation({
     mutationFn: (trackId: string) => putDismissed(trackId, false),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: CATALOGUE_KEY }),
   });
 
-  // "NOT FOR ME". A reversible veto: it drops the row out of the ranking + the capture ladder and
-  // re-reads. The toast Undo is the immediate reversal; the durable one is the "Dismissed" lens.
   const dismiss = useMutation({
     mutationFn: (trackId: string) => putDismissed(trackId, true),
     onSuccess: (_result, trackId) => {
@@ -235,9 +182,6 @@ function AdminCataloguePage() {
     },
   });
 
-  // "LOG IT" — behind a confirm (below): certifying creates lore, so the row's button only OPENS
-  // the dialog; this mutation fires from the dialog's own gold action. It mints the finding in
-  // place — no new track — then hands the operator to the findings board with the pipeline moving.
   const [confirmTrack, setConfirmTrack] = useState<CatalogueTrackItem | null>(null);
   const certify = useMutation({
     mutationFn: (trackId: string) => postCertify(trackId),
@@ -246,8 +190,7 @@ function AdminCataloguePage() {
     onSuccess: (result) => {
       void queryClient.invalidateQueries({ queryKey: CATALOGUE_KEY });
       toast.success(`Logged — ${result.logId}`, { description: "Enrichment is running." });
-      // Hand the operator to the findings board with the pipeline already moving, to finish the
-      // note / galaxy / publish. The board's search is required, so we pass its defaults.
+
       void navigate({ search: { mix: "all", stage: "all" }, to: "/admin/findings" });
     },
   });
@@ -284,9 +227,7 @@ function AdminCataloguePage() {
             label="Next to capture"
             onClick={() => void navigate({ search: { lens: "capture" } })}
           />
-          {/* The wrong-audio holding pen — a QUIET pill, shown only when there is something in
-              it (or the operator is looking at it), so a clean catalogue never advertises a
-              section that is empty. */}
+
           {summary.quarantined > 0 || lens === "quarantine" ? (
             <LensPill
               active={lens === "quarantine"}
@@ -295,8 +236,7 @@ function AdminCataloguePage() {
               onClick={() => void navigate({ search: { lens: "quarantine" } })}
             />
           ) : null}
-          {/* The restore pile — a QUIET pill, shown only when there is something dismissed (or the
-              operator is looking at it), so a clean catalogue never advertises an empty section. */}
+
           {summary.dismissed > 0 || lens === "dismissed" ? (
             <LensPill
               active={lens === "dismissed"}
@@ -316,9 +256,6 @@ function AdminCataloguePage() {
       title="The Ear"
     >
       <div className="space-y-4 p-4 sm:p-5">
-        {/* THE SPEND, on the capture lens. It lives here and not on a settings page because
-            this is the list of tracks the money would be spent ON — the cost belongs next to
-            the thing being bought, where he is already looking when he decides. */}
         {lens === "capture" ? (
           <CaptureBudgetCard
             budget={budget}
@@ -377,9 +314,6 @@ function AdminCataloguePage() {
   );
 }
 
-// The certify confirm — the SplitConfirm pattern (admin/galaxies.tsx): the one action on this
-// page that creates lore gets a beat before it commits, and the dialog is where the page's gold
-// belongs (one sun, one moment). It names exactly what is about to happen.
 function LogItConfirm({
   busy,
   onConfirm,
@@ -420,11 +354,6 @@ function LogItConfirm({
   );
 }
 
-/**
- * A compact "how long ago" for the counts stamp. The six counts are cached (computed by the rank
- * sweep, not scanned on load), so this is the honest freshness marker for them. Admin-only, so
- * plain wording is fine. Null when there is no stamp (a cold cache) or an unparseable value.
- */
 function countsAgo(iso: string | null): string | null {
   if (!iso) {
     return null;
@@ -457,7 +386,6 @@ function countsAgo(iso: string | null): string | null {
   return `${Math.round(hours / 24)} d ago`;
 }
 
-/** The quiet line under the title: what the catalogue holds, how much is ranked, and how fresh the counts are. */
 function summaryLine(summary: CatalogueSummary): string {
   if (summary.total === 0) {
     return "Nothing out there yet";
@@ -477,7 +405,6 @@ function summaryLine(summary: CatalogueSummary): string {
     parts.push(`${summary.awaitingRank} unranked`);
   }
 
-  // The freshness stamp — subtle, last: these counts are cached, so say how fresh they are.
   const ago = countsAgo(summary.computedAt);
 
   if (ago) {
@@ -487,12 +414,7 @@ function summaryLine(summary: CatalogueSummary): string {
   return parts.join(" · ");
 }
 
-// The honest empty state. Three different nothings, and they mean different things, so
-// the page says which one it is instead of showing one shrug for all three.
 function EmptyCatalogue({ lens, summary }: { lens: CatalogueLens; summary: CatalogueSummary }) {
-  // The quarantine lens is clean when nothing is quarantined — the GOOD state, said plainly and
-  // independent of whether the catalogue is empty (a bad capture is a per-row event, not a
-  // catalogue-wide one).
   if (lens === "quarantine") {
     return (
       <Empty>
@@ -510,8 +432,6 @@ function EmptyCatalogue({ lens, summary }: { lens: CatalogueLens; summary: Catal
     );
   }
 
-  // The restore pile is clean when nothing is set aside — the resting state, said plainly and
-  // independent of whether the catalogue itself is empty.
   if (lens === "dismissed") {
     return (
       <Empty>
@@ -617,10 +537,6 @@ function CatalogueRow({
     <ObjectRow
       trailing={
         <>
-          {/* THE DUPLICATE MARKER. When this row is the same recording as a finding, it reads
-              as "already in the archive" rather than a discovery — the honest register on both
-              lenses. On capture it REPLACES the ladder chip (a duplicate is never bought, so the
-              rung is moot); on ear the score stays too, because the ~1.0 IS the tell. */}
           {lens === "quarantine" ? (
             <Badge className="whitespace-nowrap" variant="outline">
               Wrong audio
@@ -634,10 +550,7 @@ function CatalogueRow({
               {captureTierLabel(track.captureReason)}
             </Badge>
           ) : null}
-          {/* THE FULL-LISTEN LINKS — quiet icon buttons out to the real thing, the twin of the
-              inline 30s audition on the artwork. A FIXED-WIDTH slot on the live lenses (rendered
-              even when empty) so the score column never shifts: comparing scores down the list is
-              the lens's whole job, and a column that jitters cannot be compared. */}
+
           {lens === "ear" || lens === "capture" ? (
             <span className="flex w-14 shrink-0 items-center justify-end gap-0.5">
               {track.spotifyUrl ? (
@@ -652,8 +565,7 @@ function CatalogueRow({
               ) : null}
             </span>
           ) : null}
-          {/* THE SCORE — its own fixed, right-aligned column, after the links so nothing variable
-              sits between it and the actions. */}
+
           {lens === "ear" ? (
             <span
               aria-label={`Similarity to its nearest finding: ${formatScore(track.nearestFindingScore)}`}
@@ -662,13 +574,7 @@ function CatalogueRow({
               {formatScore(track.nearestFindingScore)}
             </span>
           ) : null}
-          {/* THE VERDICTS. The quarantine says same-recording, not which title is lying — the
-              operator's ears decide, and DOING NOTHING is a verdict too (the default: a fresh
-              download of this row is already queued, the bad bytes hash-rejected — the WHY line
-              says so). The explicit actions are the overrides: the thumbs-down cancels the
-              re-capture outright (a dismissed row leaves the capture queue — no metered download
-              for a track he'd wave off anyway); "Keep it" is the rare true-twin call; "Re-capture
-              the finding" flips the accusation when the captured bytes are this row's OWN song. */}
+
           {lens === "quarantine" ? (
             <>
               <Button
@@ -708,29 +614,20 @@ function CatalogueRow({
               ) : null}
             </>
           ) : null}
-          {/* RESTORE — put a dismissed row back into the ranking. The restore lens' one action. */}
+
           {lens === "dismissed" ? (
             <PendingButton onClick={onRestore} pending={busy.restoring} variant="outline">
               <ArrowUUpLeftIcon aria-hidden="true" weight="bold" />
               Restore
             </PendingButton>
           ) : null}
-          {/* THE DUPE-VETO ESCAPE HATCH (docs/the-ear.md § Duplicates). A capture-lens row the sweep
-              vetoed as "already in the archive" (a STORED duplicate) can be a false positive — a
-              shared or mis-assigned ISRC, a title collision on a genuinely different recording. This
-              quiet override lifts the veto so the row is captured anyway. Only here (the stored veto
-              only surfaces on the capture lens), only on a duplicate, and deliberately quiet
-              (outline, no gold): a rare escape hatch, never a primary action. */}
+
           {lens === "capture" && track.duplicateOf ? (
             <PendingButton onClick={onForceCapture} pending={busy.forcing} variant="outline">
               Capture anyway
             </PendingButton>
           ) : null}
-          {/* THE TWO WORKSTATION ACTIONS on the live lenses. "Not for me" is the FREQUENT verdict
-              (most of the catalogue is not lore), so it recedes to a quiet thumbs-down icon — it
-              is reversible (a toast Undo + the Dismissed lens), never a confirm. "Log it" is the
-              RARE, impactful one: it stays the row's only worded action, and clicking it opens a
-              confirm (the moment lore is created deserves a beat). */}
+
           {lens === "ear" || lens === "capture" ? (
             <>
               <Button
@@ -751,10 +648,7 @@ function CatalogueRow({
                   <ThumbsDownIcon aria-hidden="true" />
                 )}
               </Button>
-              {/* OUTLINE, not gold: a gold CTA per row makes a screen of suns (The One Sun Rule
-                  caps gold at ~10%); the Ignition Rule's hover heat still marks it as the row's
-                  primary. Gold on this page belongs to certification MOMENTS — the confirm dialog
-                  this opens. */}
+
               <PendingButton onClick={onCertify} pending={busy.certifying} variant="outline">
                 Log it
               </PendingButton>
@@ -766,12 +660,6 @@ function CatalogueRow({
       <ObjectLead
         leading={
           <CatalogueCover
-            // On the quarantine lens the artwork auditions the CAPTURED BYTES, not the preview:
-            // the preview is ISRC-resolved and always the right song, so it cannot answer the one
-            // question this lens asks — which side of the collision actually holds wrong audio.
-            // On every other lens the captured bytes are the FALLBACK: a row with no resolvable
-            // store preview (no URL, no ISRC — the small-label case) still plays the full song
-            // Fluncle owns, instead of a dead artwork.
             auditionSrc={
               lens === "quarantine" || (!track.hasPreview && track.hasCapturedAudio)
                 ? `/api/v1/admin/tracks/${encodeURIComponent(track.trackId)}/source-audio`
@@ -804,9 +692,7 @@ function CatalogueRow({
                 <span>{track.releaseDate.slice(0, 4)}</span>
               </>
             ) : null}
-            {/* THE WHY, on its own line (basis-full). It is not decoration and it is not
-                secondary to the score: the score is the claim, and this is the evidence for
-                it. Without it the number is an oracle, and an oracle gets ignored. */}
+
             <span className="basis-full truncate text-foreground/80">
               <Why lens={lens} track={track} />
             </span>
@@ -818,15 +704,8 @@ function CatalogueRow({
   );
 }
 
-/** The row's reason for being where it is, in one line. */
 function Why({ lens, track }: { lens: CatalogueLens; track: CatalogueTrackItem }): ReactNode {
-  // The wrong-audio WHY names the finding the capture was mistaken FOR — the evidence — and then
-  // says the DEFAULT out loud: a fresh download is already queued, so doing nothing is a verdict
-  // the operator can trust rather than a gap he has to wonder about.
   if (lens === "quarantine") {
-    // Two ways in, two honest WHYs: the rank sweep's cross-title collision names the finding the
-    // audio came back as; the verification backfill's preview mismatch has no collided finding —
-    // its evidence is the fingerprint check itself (docs/the-ear.md § Wrong audio).
     if (track.captureVerification === "mismatch" && !track.nearestFinding) {
       return "Its audio doesn't match the official preview — a fresh download is queued.";
     }
@@ -841,8 +720,6 @@ function Why({ lens, track }: { lens: CatalogueLens; track: CatalogueTrackItem }
     );
   }
 
-  // The duplicate WHY wins on both lenses: "you already logged this one." It NAMES the finding
-  // (coordinate, artists, title) — the same evidence line the nearest-finding WHY carries.
   if (track.duplicateOf) {
     return <MatchLine lead="Already in the archive —" match={track.duplicateOf} />;
   }
@@ -860,7 +737,6 @@ function Why({ lens, track }: { lens: CatalogueLens; track: CatalogueTrackItem }
   return <MatchLine lead="Closest to" match={match} />;
 }
 
-/** A finding named in one line: the lead-in, its coordinate, and its identity. */
 function MatchLine({ lead, match }: { lead: string; match: CatalogueMatch }): ReactNode {
   return (
     <>
@@ -873,7 +749,6 @@ function MatchLine({ lead, match }: { lead: string; match: CatalogueMatch }): Re
   );
 }
 
-/** The capture ladder, spoken. Each rung is a claim about a track nobody has heard. */
 function captureWhy(reason: CapturePriorityReason | null): string {
   switch (reason?.kind) {
     case "artist": {
@@ -886,12 +761,9 @@ function captureWhy(reason: CapturePriorityReason | null): string {
       return `${reason.name} is a label the crawler digs from.`;
     }
     case "skipped-label": {
-      // The veto, said plainly. The row is still here — it is just last, and it says why.
       return `${reason.name} is not your lane. Ranked last, kept anyway.`;
     }
     case "unauthorized": {
-      // Money withheld, metadata welcome — no qualified artist, and the label is not a seed.
-      // It flips the moment an artist qualifies or the label is enabled. Kept, never bought.
       return "No artist here has earned the spend yet. Held back, kept anyway.";
     }
     default: {
@@ -900,23 +772,14 @@ function captureWhy(reason: CapturePriorityReason | null): string {
   }
 }
 
-/**
- * The rung, as a chip — quiet data, never an alarm. A cold track is not a failure. The words come
- * from the shared ladder vocabulary (`@/lib/capture-tier`), because `/admin/funnel`'s capture
- * backlog names the same rungs and two stations in one nav group must not name a column two ways.
- */
 function captureTierLabel(reason: CapturePriorityReason | null): string {
   return CAPTURE_TIER_LABELS[reason?.kind ?? "none"];
 }
 
-/** Cosine similarity, to two places. The number the whole list is sorted by. */
 function formatScore(score: number | null): string {
   return typeof score === "number" ? score.toFixed(2) : "—";
 }
 
-// A quiet full-listen link out to a platform — an <a> styled as a small ghost icon button, the
-// twin of the inline 30s audition on the artwork. Brand marks come from platform-icons, never a
-// Phosphor logo (DESIGN.md "Iconography").
 function ListenLink({
   children,
   href,
@@ -928,9 +791,6 @@ function ListenLink({
 }) {
   return (
     <Button
-      // `nativeButton={false}` is required when the render node is an <a>: Base UI otherwise
-      // keeps native button semantics on a link, which breaks a11y. The accessible name rides
-      // the render node for the same reason — that is the element the DOM (and the lint) sees.
       nativeButton={false}
       render={<a aria-label={label} href={href} rel="noreferrer" target="_blank" title={label} />}
       size="icon-sm"
@@ -941,8 +801,6 @@ function ListenLink({
   );
 }
 
-// A row action that shows a spinner while its mutation is in flight — the shared shape for
-// Keep it / Restore / Not for me / Log it, so every one reads and disables the same way.
 function PendingButton({
   children,
   onClick,
@@ -964,12 +822,6 @@ function PendingButton({
   );
 }
 
-// The cover, at the shared size-11 Object Row footprint — and deliberately WITHOUT the finding
-// plate's gold story-ring: that ring is certification light, and Fluncle never certified this.
-// When the row has a preview source the cover DOUBLES as the audition control (the shared /mix
-// `PreviewArtwork` pattern, docs/the-ear.md § The operator's actions): a click plays the official
-// 30s preview through the shared singleton player, so starting one preview stops any other. A row
-// with no preview source (and no cover) falls back to the plain, non-playable ObjectGlyph.
 function CatalogueCover({
   auditionSrc,
   cover,
@@ -977,8 +829,6 @@ function CatalogueCover({
   title,
   trackId,
 }: {
-  // When set, the audition plays THESE bytes (the captured full song via the admin source-audio
-  // proxy) instead of the official preview — the quarantine lens's evidence player.
   auditionSrc?: string;
   cover: string | null;
   playable: boolean;
@@ -990,8 +840,6 @@ function CatalogueCover({
   const isCurrent = activeTrackId === trackId;
   const isPlaying = isCurrent && (status === "playing" || status === "loading");
 
-  // A crawled row's album art URL can 404 (no owned master, a dead upstream link) — swap to the
-  // glyph instead of the browser's broken-image mark, which reads as a defect in every row.
   const art =
     cover && !coverFailed ? (
       <img
@@ -1037,12 +885,10 @@ function CatalogueCover({
 
 const GB = 1024 * 1024 * 1024;
 
-/** GB to two places — the unit the proxy invoices in. A raw byte count is not a cost. */
 function formatGb(bytes: number): string {
   return `${(bytes / GB).toFixed(2)} GB`;
 }
 
-/** How much of a cap is used, 0–100, clamped (an overshoot pins at full rather than overflowing). */
 function usedPercent(spent: number, cap: number): number {
   if (cap <= 0) {
     return 100;
@@ -1051,18 +897,6 @@ function usedPercent(spent: number, cap: number): number {
   return Math.min(100, Math.round((spent / cap) * 100));
 }
 
-/**
- * THE CAPTURE BUDGET CARD — the spend, made visible, next to the thing being bought.
- *
- * Capture is the only thing Fluncle does that bills per unit of work: a residential proxy
- * charges per GB, and the queue below is a list of tracks it would spend that money on. A
- * metered thing the operator cannot SEE is a thing he cannot control, so this card answers the
- * three questions he would otherwise have to go and dig for — what did it buy in the last 24h,
- * how many GB was that, and how much is left — and puts the kill switch in the same glance.
- *
- * The findings line is not a footnote. It is the promise that stopping the catalogue never
- * stops the archive: pausing here changes nothing about a banger he actually logged.
- */
 function CaptureBudgetCard({
   budget,
   onToggle,
@@ -1131,7 +965,6 @@ function CaptureBudgetCard({
   );
 }
 
-/** One cap, as a number and a bar. The bar is what makes "nearly spent" readable at a glance. */
 function Meter({
   detail,
   label,
@@ -1156,8 +989,6 @@ function Meter({
   );
 }
 
-// One tick of the agent-tier `rank_catalogue` sweep (POST /admin/catalogue/rank). The browser
-// carries the admin grant cookie; the fetch mirrors the labels/galaxies calls.
 async function postRank(): Promise<void> {
   const response = await fetch("/api/v1/admin/catalogue/rank", {
     body: JSON.stringify({}),
@@ -1170,8 +1001,6 @@ async function postRank(): Promise<void> {
   }
 }
 
-// The operator-tier wrong-audio override (POST /admin/catalogue/wrong-audio/clear). Flips one
-// quarantined row to `quarantine-cleared`, the sticky state the sweep never re-quarantines.
 async function postClearWrongAudio(trackId: string): Promise<void> {
   const response = await fetch("/api/v1/admin/catalogue/wrong-audio/clear", {
     body: JSON.stringify({ trackId }),
@@ -1184,9 +1013,6 @@ async function postClearWrongAudio(trackId: string): Promise<void> {
   }
 }
 
-// The operator-tier wrong-audio FLAG (POST /admin/catalogue/wrong-audio/flag) — the clear's
-// counterpart: the FINDING's capture is the wrong recording. Its vector drops, its analysis
-// provenance resets, and a fresh capture is queued with the bad bytes hash-rejected.
 async function postFlagWrongAudio(trackId: string): Promise<void> {
   const response = await fetch("/api/v1/admin/catalogue/wrong-audio/flag", {
     body: JSON.stringify({ trackId }),
@@ -1199,9 +1025,6 @@ async function postFlagWrongAudio(trackId: string): Promise<void> {
   }
 }
 
-// The operator-tier dupe-veto escape hatch (POST /admin/catalogue/force-capture). Lifts a WRONG
-// duplicate veto stickily so the row re-ranks onto the capture ladder and the next open-budget
-// tick buys it. Bypasses the duplicate veto, never the verification gate (docs/the-ear.md § Duplicates).
 async function postForceCapture(trackId: string): Promise<void> {
   const response = await fetch("/api/v1/admin/catalogue/force-capture", {
     body: JSON.stringify({ trackId }),
@@ -1214,9 +1037,6 @@ async function postForceCapture(trackId: string): Promise<void> {
   }
 }
 
-// The operator-tier "Log it" — certify an existing catalogue row in place (POST
-// /admin/catalogue/certify). It mints the finding WITHOUT creating a new track and returns the
-// minted Log ID, so the caller can confirm and route the operator to the finding.
 async function postCertify(trackId: string): Promise<{ logId: string }> {
   const response = await fetch("/api/v1/admin/catalogue/certify", {
     body: JSON.stringify({ trackId }),
@@ -1231,8 +1051,6 @@ async function postCertify(trackId: string): Promise<{ logId: string }> {
   return (await response.json()) as { logId: string };
 }
 
-// The operator-tier "not for me" / restore toggle (PUT /admin/catalogue/dismissed). `dismissed:
-// true` takes the row out of the ranking + capture ladder; `false` restores it.
 async function putDismissed(trackId: string, dismissed: boolean): Promise<void> {
   const response = await fetch("/api/v1/admin/catalogue/dismissed", {
     body: JSON.stringify({ dismissed, trackId }),
@@ -1245,7 +1063,6 @@ async function putDismissed(trackId: string, dismissed: boolean): Promise<void> 
   }
 }
 
-/** The operator-tier kill switch / cap write (PUT /admin/catalogue/capture-budget). */
 async function putCaptureBudget(input: {
   dailyBytes?: number;
   dailyTracks?: number;

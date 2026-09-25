@@ -69,77 +69,14 @@ import {
   searchRuleArtists,
 } from "./-artist-rule-reads";
 
-// The `/admin/labels` station — the record-label entity and the operator's CRAWL-SEED
-// control (the-archive RFC, D7). Every label a finding has ever carried is a row here.
-//
-// ── WHAT THE CONTROL DOES, AND ONLY WHAT IT DOES ────────────────────────────────
-// Ruling on a label answers exactly one question: may the next crawl dig from this
-// label? It is CRAWL SCOPE, NEVER STORAGE. Turning a label off removes it from the NEXT
-// crawl's seed set and touches nothing already stored: no finding is deleted, hidden, or
-// changed, and nothing a previous crawl brought in moves. The page says so in plain words
-// above the rows, because an operator who thinks "disabled" means "gone" would never dare
-// use it.
-//
-// The queue behind it: a brand-new label enters `undecided` (never silently crawled, never
-// silently dropped) and surfaces as an `/admin` attention row ("a new label to rule on"),
-// which deep-links here. So the page's primary goal is CLEARING that section — the two
-// ruling buttons on an undecided row are the loudest thing on the page, and re-ruling a
-// settled label is the rare act, tucked behind the row's ⋮ (the disclosure law).
-//
-// ── WAITING IS NOT THE SAME AS UNDECIDED ────────────────────────────────────────
-// An undecided label that carries PER-LABEL artist rules has been RULED: writing allows and
-// leaving the seed state alone is the `dnb_partial` verdict, and the next crawl then takes the
-// named artists off that label and nobody else. So `undecided` is two sections here, split in SQL
-// ({@link LabelsAdminSection}) — the queue, and the settled partials — and only the first is work.
-// The header count leads with the first alone, because a number that calls a settled verdict a gap
-// is a queue the operator learns to stop believing.
-//
-// The ruling is publish-class in authority terms (it steers what Fluncle crawls next), so
-// it rides the OPERATOR-tier `update_label` op — an agent token 403s.
-//
-// ── WHY THIS PAGES PER SECTION ──────────────────────────────────────────────────
-// The crawler mints labels endlessly, so this station is a catalogue-scale surface now.
-// Each of the three seed-state sections (undecided / enabled / not seeding) reads its OWN
-// bounded page (`listLabelsPage`, name-sorted, ~50/page) off the `(seed_state, name)` index,
-// and its finding counts come from the indexed `tracks.label_id` edge for just that page —
-// never a whole-corpus fold over `tracks.label`. The undecided section leads with its TOTAL
-// (the backlog size stays honest even though the rows page in). A ruling invalidates the
-// whole board, so a label that moves sections refreshes both the one it left and the one it
-// joined, and every section's count re-settles.
-//
-// ── ARTIST RULES: THE EXCEPTIONS TO A RULING ────────────────────────────────────────────────
-// The ruling is the label-level DEFAULT. An artist rule is an exception to it, in one of two
-// shapes: an enabled label may BLOCK an artist ("everything except them"), and a skipped label
-// may ALLOW one ("only them"). Both are the same acquisition scope the ruling is — they change
-// what the next crawl takes and touch nothing already stored — so they live behind the settled
-// row's ⋮ beside the re-ruling, never at the weight of the ruling buttons.
-//
-// A rule matches on the artist's MusicBrainz id and nothing else (a name is not an identity: one
-// act is credited two ways, and two acts share one name). So the dialog's typeahead reads the
-// LOCAL `artists` table for id-carrying artists, and a pasted MBID is accepted verbatim. Nothing
-// here calls MusicBrainz — a dialog render may not spend the crawler's one-request-a-second
-// budget — and nothing here shows a match count, because the count that would mean anything is
-// taken at ratification, where the MusicBrainz payload is in hand.
-
 const LABELS_KEY = ["admin", "labels"] as const;
 const ALIASES_KEY = [...LABELS_KEY, "aliases"] as const;
 const RULES_KEY = [...LABELS_KEY, "rules"] as const;
 
-/** One label's rule set — the dialog's own read, invalidated by its own save. */
 const labelRulesKey = (labelId: string) => [...RULES_KEY, labelId] as const;
 
-/** The infinite-query key for one section, so a ruling can invalidate the whole board. */
 const sectionKey = (section: LabelsAdminSection) => [...LABELS_KEY, "section", section] as const;
 
-// The sections, in the order the work arrives: the queue, then the three settled sets.
-//
-// `Waiting on a ruling` states BOTH ways a label reaches the queue — a finding carried it, or the
-// crawl walked into it — because most rows here now come from the crawl and show `0 findings`, and
-// a sentence that describes only the other path is one the operator can see is false.
-//
-// The intro is SPLIT so the exception count can join the sentence that states the SCOPE, never the
-// one that exists to promise storage is untouched. `scope` is the joinable head (no full stop),
-// `tail` whatever must follow the count.
 const SECTIONS: {
   section: LabelsAdminSection;
   scope: string;
@@ -167,30 +104,23 @@ const SECTIONS: {
   },
 ];
 
-/**
- * One section page plus the two per-page aggregates the rows read: each visible label's rule
- * counts, and how many release nodes its re-walk still owes. Both are grouped reads bounded to
- * exactly the labels on the page — never a whole-frontier or whole-corpus fold.
- */
 type LabelsSectionPage = LabelsAdminPage & {
   queued: Record<string, number>;
   rules: Record<string, LabelRuleCounts>;
 };
 
-/** The board the page hydrates from: page 1 of each section + the alias spellings to confirm. */
 type LabelsBoard = {
   aliases: LabelAliasCandidate[];
   disabled: LabelsSectionPage;
   enabled: LabelsSectionPage;
-  /** The undecided labels that DO carry per-label rules — a settled verdict, never the queue. */
+
   partial: LabelsSectionPage;
-  /** How many labels in each seed state carry an artist rule — the settled sections' intros. */
+
   ruled: Record<string, number>;
-  /** The undecided labels carrying no per-label rule — the only section that is work. */
+
   undecided: LabelsSectionPage;
 };
 
-/** Attach the per-page rule counts + queued-release counts to a section page, in two reads. */
 async function withRuleContext(page: LabelsAdminPage): Promise<LabelsSectionPage> {
   const [rules, queued] = await Promise.all([
     labelRuleCounts(page.items.map((item) => item.id)),
@@ -200,8 +130,6 @@ async function withRuleContext(page: LabelsAdminPage): Promise<LabelsSectionPage
   return { ...page, queued, rules };
 }
 
-// The loader's ONE round-trip: page 1 of each of the four sections plus the (already bounded)
-// alias candidates, in parallel. Each section then hydrates its own infinite query from its slice.
 const fetchBoard = createServerFn({ method: "GET" }).handler(async (): Promise<LabelsBoard> => {
   if (!(await isAdminRequest())) {
     throw redirect({ to: "/admin/login" });
@@ -232,9 +160,6 @@ const fetchBoard = createServerFn({ method: "GET" }).handler(async (): Promise<L
   };
 });
 
-// One numbered page of a single section — the queryFn behind each section's infinite scroll and
-// the refetch a ruling invalidation fires. Re-checks the admin grant (the page guard only protects
-// the render, never the server function behind it).
 const fetchSection = createServerFn({ method: "GET" })
   .validator((data: { page: number; section: LabelsAdminSection }) => data)
   .handler(async ({ data }): Promise<LabelsSectionPage> => {
@@ -245,8 +170,6 @@ const fetchSection = createServerFn({ method: "GET" })
     return withRuleContext(await listLabelsPage(data.section, data.page));
   });
 
-// The rules dialog's artist typeahead — a page-local admin read of the LOCAL artists table (the
-// `/admin/artists` search precedent), never a public operation and never a MusicBrainz call.
 const fetchRuleArtists = createServerFn({ method: "GET" })
   .validator((data: { query: string }) => data)
   .handler(async ({ data }): Promise<RuleArtistMatch[]> => {
@@ -257,7 +180,6 @@ const fetchRuleArtists = createServerFn({ method: "GET" })
     return searchRuleArtists(data.query);
   });
 
-// The alias candidates — bounded already (a handful per crawl), so one read, focus-refetched.
 const fetchAliases = createServerFn({ method: "GET" }).handler(
   async (): Promise<LabelAliasCandidate[]> => {
     if (!(await isAdminRequest())) {
@@ -270,8 +192,6 @@ const fetchAliases = createServerFn({ method: "GET" }).handler(
 
 // oxlint-disable-next-line sort-keys
 export const Route = createFileRoute("/admin/labels")({
-  // `?label=<slug>` is the deep-link target: the triage ratification page links a ruled label
-  // straight to its row here, which lands highlighted and scrolled into view.
   validateSearch: (search: Record<string, unknown>): { label?: string } =>
     typeof search["label"] === "string" ? { label: search["label"] } : {},
   beforeLoad: () => ensureAdmin(),
@@ -284,13 +204,8 @@ function AdminLabelsPage() {
   const { label: focusSlug } = Route.useSearch();
   const queryClient = useQueryClient();
 
-  // The rules dialog is ONE controlled dialog for the whole board (the renders-page precedent),
-  // opened by a row's ⋮. Mounting per target keeps its draft state fresh per label.
   const [rulesTarget, setRulesTarget] = useState<LabelAdminItem | undefined>();
 
-  // The backlog size the operator steers by — the WAITING total (the undecided labels carrying no
-  // per-label rule), not the count of rows loaded so far and not every undecided row. Read off the
-  // waiting section's own `count(*) over ()`, so the number and the section it names are one fact.
   const waiting = board.undecided.total;
   const hasAnyLabels =
     board.undecided.total + board.partial.total + board.enabled.total + board.disabled.total > 0 ||
@@ -305,8 +220,6 @@ function AdminLabelsPage() {
   return (
     <AdminShell subtitle={subtitle} title="Labels">
       <div className="space-y-8 p-4 sm:p-5">
-        {/* The one thing an operator must know before they touch a control here. Stated
-            plainly, above the rows, in the admin's functional register. */}
         <p className="max-w-2xl text-sm text-muted-foreground">
           A ruling only sets where the next crawl digs. Nothing already in the archive moves: the
           findings on a label stay exactly where they are, whichever way you rule.
@@ -344,19 +257,6 @@ function AdminLabelsPage() {
   );
 }
 
-/**
- * A settled section's intro, plus how many of its labels carry an artist rule. Said on the
- * section rather than repeated on every row: the number is the operator's cue that exceptions
- * exist at all, and the rows carry which ones.
- *
- * The count joins the SCOPE clause on the operator register's em-dash — an exception qualifies
- * what the crawl takes, so hanging it off the storage promise ("Their findings are untouched")
- * would attach it to the one sentence it has nothing to do with.
- *
- * Only the two SEED-STATE sections take it. The waiting section has no exceptions by definition,
- * and `partial` is ALL exceptions — its section total already is the number, so repeating it as a
- * qualifier would say the same thing twice.
- */
 function sectionIntro(
   section: { scope: string; section: LabelsAdminSection; tail?: string },
   ruled: Record<string, number>,
@@ -371,9 +271,6 @@ function sectionIntro(
   return section.tail ? `${scoped} ${section.tail}` : scoped;
 }
 
-// One section, hydrating its own infinite query from the loader's page 1 and paging the rest in on
-// demand. Empty sections render nothing (no heading over zero rows). The title leads with the
-// section TOTAL so the backlog reads true even before the operator scrolls the rows in.
 function LabelSection({
   focusSlug,
   initialPage,
@@ -397,15 +294,13 @@ function LabelSection({
     queryFn: ({ pageParam }) => fetchSection({ data: { page: pageParam, section } }),
     queryKey: sectionKey(section),
     refetchOnWindowFocus: true,
-    // A short-lived seed matches the pace a crawl mints labels; without it every focus
-    // re-fetched every loaded page of every section on tab-back.
+
     staleTime: 20_000,
   });
 
   const labels = data.pages.flatMap((page) => page.items);
   const total = data.pages.at(-1)?.total ?? initialPage.total;
 
-  // The two per-page aggregates, folded across the loaded pages so a row can read its own.
   const queued = Object.assign({}, ...data.pages.map((page) => page.queued)) as Record<
     string,
     number
@@ -453,8 +348,6 @@ function LabelSection({
   );
 }
 
-// The alias-review section — bounded (a handful of open candidates), so a plain focus-refetched
-// query, seeded from the loader. Renders nothing when there is nothing to confirm.
 function AliasSection({ initialAliases }: { initialAliases: LabelAliasCandidate[] }) {
   const { data: aliases } = useQuery({
     initialData: initialAliases,
@@ -482,8 +375,6 @@ function AliasSection({ initialAliases }: { initialAliases: LabelAliasCandidate[
   );
 }
 
-// No label has been seen yet: the archive is empty, or every finding landed without one.
-// Quiet and honest, no fake rows.
 function EmptyLabels() {
   return (
     <div className="mx-auto max-w-md rounded-lg border border-border bg-card/60 px-6 py-12 text-center">
@@ -521,7 +412,6 @@ function Section({
   );
 }
 
-/** The finding count, spoken the way the rest of the admin speaks a count. */
 function LabelRow({
   focused,
   label,
@@ -540,8 +430,6 @@ function LabelRow({
   const queryClient = useQueryClient();
   const [error, setError] = useState<string | undefined>();
 
-  // The deep-link target (`?label=<slug>`) lands scrolled into view. A label past the first page
-  // of its section simply is not mounted yet, exactly as the artists board's `?artist=` behaves.
   const rowRef = useRef<HTMLLIElement | null>(null);
   useEffect(() => {
     if (focused) {
@@ -554,8 +442,7 @@ function LabelRow({
     onError: (caught) => setError(caught instanceof Error ? caught.message : String(caught)),
     onSuccess: () => {
       setError(undefined);
-      // A ruling can move a label between sections, so invalidate the WHOLE board (the section
-      // it left and the one it joined both refresh, and every count re-settles).
+
       void queryClient.invalidateQueries({ queryKey: LABELS_KEY });
     },
   });
@@ -577,14 +464,6 @@ function LabelRow({
               weight="bold"
             />
           ) : section === "undecided" ? (
-            // The one thing the operator came here to do: rule. Both ways are one tap, and
-            // neither is dressed as destructive, because neither destroys anything.
-            //
-            // The THIRD verdict — take the named artists and nobody else — is the rare one and
-            // lands the row in the settled section, so it sits behind the ⋮ at the weight the
-            // disclosure law gives it, reusing the same whole-set rules dialog the settled rows
-            // open. The row carries NO re-ruling options there: they would only repeat the two
-            // buttons beside them.
             <>
               <Button onClick={() => rule.mutate("enabled")} size="sm">
                 Seed from it
@@ -599,9 +478,6 @@ function LabelRow({
               />
             </>
           ) : label.seedState === "undecided" ? (
-            // Settled by its rules. Its state IS the chip above ("Only N artists"), so it takes no
-            // seed-state chip — "Seeding" would overclaim (the crawl never seeds from it) and
-            // "Skipped" would deny the artists it does take.
             <RuleMenu
               name={label.name}
               onManageRules={onManageRules}
@@ -609,8 +485,6 @@ function LabelRow({
               seedState={label.seedState}
             />
           ) : (
-            // Settled. The state reads as quiet data; changing your mind is the rare act, so
-            // it lives off the resting surface behind the ⋮ (the disclosure law).
             <>
               <SeedStateChip seedState={label.seedState} />
               <RuleMenu
@@ -642,23 +516,6 @@ function LabelRow({
   );
 }
 
-// WHICH LABEL IS THIS? The ruling-time identity line.
-//
-// A ruling turns on the entity behind the name, not just its display fields. The row says what
-// MusicBrainz knows about the entity behind it: its disambiguation comment (the field MB writes FOR
-// exactly this problem), when and where it started, and a link straight to the MBID so the whole
-// entity is one click away while ruling.
-//
-// Every part is optional and most labels carry none — a label with nothing to say renders NO
-// subtitle at all rather than a placeholder or an empty row of separators. That is why this is a
-// plain node-returning helper and not a component: `ObjectLead` renders its subtitle WRAPPER
-// whenever the prop is a truthy element, so the emptiness has to be decided before the prop is
-// built, never inside a child that renders nothing.
-// The line also carries the WORK STILL COMING. Enabling a label, or changing its artist rules,
-// re-arms that label's release nodes, and the back catalogue then lands over hours rather than at
-// once. `N releases queued` is that wait, read straight off the frontier — so the operator can
-// tell "the rule did nothing" from "the rule is still working through the queue". A label with an
-// empty queue says nothing at all.
 function labelIdentity(label: LabelAdminItem, queued: number): ReactNode | undefined {
   const foundingYear = label.foundingDate?.slice(0, 4);
   const facts = [
@@ -706,16 +563,6 @@ function labelIdentity(label: LabelAdminItem, queued: number): ReactNode | undef
   );
 }
 
-// The exception chip — quiet data beside the seed state, and MODE-DISTINCT, because the same
-// table means opposite things on the two sides of a ruling: on a seeded label a rule SUBTRACTS
-// ("Except 2 artists"), on a skipped one it ADDS ("Only 3 artists"). Only the live half counts;
-// a block on a skipped label changes nothing, so it is not advertised as if it did.
-//
-// An UNDECIDED label reads exactly as a skipped one: the crawl takes nothing off it by default, so
-// the ALLOW half is the live one (an allow admits that artist's billed records on a non-enabled
-// label, crawl.ts). That is what makes the chip the settled-partial row's state — a waiting row
-// carries no rules, so it renders nothing and the promise is never made for a crawl that is not
-// happening.
 function RuleChip({
   ruleCounts,
   section,
@@ -735,9 +582,6 @@ function RuleChip({
     );
   }
 
-  // The settled-partial section is DEFINED by carrying rules, so a row whose rules are all inert
-  // here — blocks left on a label that was seeded and then put back in the queue — still states
-  // what it holds rather than reading as a row with no reason to be in the section.
   const inert = ruleCounts?.block ?? 0;
 
   if (section === "partial" && inert > 0) {
@@ -751,12 +595,6 @@ function RuleChip({
   return null;
 }
 
-// The label's OWN logo (the Discogs→R2 backfill), at the object row's md plate footprint. Falls
-// back to the exact tag-icon glyph when the label has no resolved logo yet, so a label without
-// an image reads exactly as it did before. Decorative (the name sits beside it), lazy-loaded.
-//
-// The plate is size-11 (44px), so it asks the owned-cover ladder for its SMALLEST rung: this is a
-// 50-row board and the logo is a decorative tile beside the name, never the thing being read.
 function LabelLogo({ logoImageUrl }: { logoImageUrl: string | undefined }) {
   const src = albumCoverAtSize(logoImageUrl, "small");
 
@@ -774,8 +612,6 @@ function LabelLogo({ logoImageUrl }: { logoImageUrl: string | undefined }) {
   );
 }
 
-// A settled label's state, as quiet data (the galaxies "Named" chip precedent): an icon plus
-// a word, never a coloured alarm — a skipped label is a routing decision, not a failure.
 function SeedStateChip({ seedState }: { seedState: "disabled" | "enabled" }) {
   const enabled = seedState === "enabled";
   const Glyph = enabled ? CheckCircleIcon : ProhibitIcon;
@@ -788,13 +624,6 @@ function SeedStateChip({ seedState }: { seedState: "disabled" | "enabled" }) {
   );
 }
 
-// Change your mind about a settled label: the two states it is not currently in, and the artist
-// exception to the state it is in. Both are rare, so both stay behind the ⋮ rather than sitting at
-// the same weight as the ruling buttons above.
-//
-// `onRule` is ABSENT on a row that already carries the ruling buttons (the waiting queue). The menu
-// is then the artist exception alone — the third verdict, which is the one thing those buttons
-// cannot say — and never a second, quieter copy of the two controls beside it.
 function RuleMenu({
   name,
   onManageRules,
@@ -838,21 +667,6 @@ function RuleMenu({
   );
 }
 
-// ── The artist-rule dialog (the `ManageLinksDialog` pattern, route-local) ────────────────────
-// Whole-set editing, saved through one `replace_label_artist_rules` PUT: the operator adds and
-// drops chips locally and commits once, which is what makes the write transactional and what
-// keeps a half-authored set from ever reaching the crawler.
-//
-// It shows two markers a rule can carry and nothing else it cannot honestly know:
-//   DRIFTED   — MusicBrainz has moved this id to another entity since the rule was written.
-//               The rule still matches the id it was written with; the drift sweep stamps this.
-//   TAP-BLIND — a BLOCK with no Spotify id resolved, so the freshness tap cannot see it. The
-//               crawler still enforces it exactly. Never shown on an allow: allows are not the
-//               tap's business (it probes seeded labels only).
-//
-// There is deliberately no "this would match N tracks" count here. The number that means
-// something is taken at ratification, off the MusicBrainz payload; a database-side count is
-// structurally near-empty and would read as "this rule does nothing".
 function LabelRulesDialog({
   label,
   onClose,
@@ -875,13 +689,9 @@ function LabelRulesDialog({
     refetchOnWindowFocus: true,
   });
 
-  // The draft the operator edits, seeded once from the stored set. Held apart from the query so a
-  // background refetch can never wipe half-typed work.
   const [draft, setDraft] = useState<ArtistRuleInput[] | undefined>();
   useEffect(() => {
     if (saved && !draft) {
-      // A per-label rule carries acquisition scope only — the `unlisted` visibility verdict is
-      // global-only and the boundary refuses it here, so the draft never models one.
       setDraft(
         saved.flatMap((rule) =>
           rule.verdict === "unlisted"
@@ -931,7 +741,6 @@ function LabelRulesDialog({
           </DialogDescription>
         </DialogHeader>
 
-        {/* The boundary, stated wherever a rule is edited. */}
         <p className="text-xs text-muted-foreground">
           Rules change what the next crawl takes. Everything already here stays.
         </p>
@@ -939,8 +748,6 @@ function LabelRulesDialog({
         {loading ? (
           <p className="text-sm text-muted-foreground">Loading the rules…</p>
         ) : isError ? (
-          // Never state "no exceptions" over a failed read — an unknown set and an empty one are
-          // opposite facts, and the whole-set save would be authored against the wrong baseline.
           <p className="text-sm text-destructive" role="alert">
             Couldn&apos;t read this label&apos;s rules — reopen the dialog to try again.
           </p>
@@ -1002,7 +809,6 @@ function LabelRulesDialog({
   );
 }
 
-/** One rule in the dialog: the artist, whatever the rule row knows about itself, and a drop. */
 function RuleChipRow({
   onRemove,
   rule,
@@ -1044,16 +850,6 @@ function RuleChipRow({
   );
 }
 
-/**
- * A rule's state marker. The word alone is terse operator shorthand and the explanation behind it
- * is the only place that shorthand is defined, so it opens on TAP as well as on hover — a popover
- * over a real button, never a hover-only tooltip on a synthetic tab stop.
- *
- * The trigger keeps `Button size="sm"`'s own height rather than shrinking to badge size: this
- * lives inside a `DialogContent`, which portals to `document.body` and therefore OUTSIDE
- * `.admin-workspace`, so the admin 44px touch floor cannot reach it — the control has to be
- * tappable on its own.
- */
 function RuleMarker({ children, label }: { children: ReactNode; label: string }) {
   return (
     <Popover>
@@ -1076,15 +872,8 @@ function RuleMarker({ children, label }: { children: ReactNode; label: string })
   );
 }
 
-/** A typeahead row: an artist Fluncle already knows, or a pasted id offered as a creatable. */
 type RuleArtistOption = RuleArtistMatch & { isNew?: boolean };
 
-/**
- * Add a rule, on the shared Shadcn combobox (the `/tracks` label-filter shape): type a name to
- * search the artists Fluncle already knows, or paste a MusicBrainz artist id outright. A pasted id
- * Fluncle has never seen carries no name, so the form asks for one — the boundary rejects a
- * nameless rule, and a rule nobody can read is a rule nobody can audit.
- */
 function AddRuleForm({
   disabled,
   onAdd,
@@ -1100,8 +889,6 @@ function AddRuleForm({
   const [name, setName] = useState("");
   const search = useDebounced(term.trim(), 250);
 
-  // Unseeded on purpose (the loader never carried a search) and NOT focus-refetched: a typed
-  // term is the operator's own scratch state, not a live board that can go stale behind them.
   const { data: matches, isFetching } = useQuery({
     enabled: search.length >= 2,
     queryFn: () => fetchRuleArtists({ data: { query: search } }),
@@ -1109,14 +896,11 @@ function AddRuleForm({
     refetchOnWindowFocus: false,
   });
 
-  // The list is trustworthy only once the debounce AND the request have settled; until then an
-  // empty result means "not yet", never "nobody".
   const settled = search === term.trim() && !isFetching;
 
   const items = useMemo<RuleArtistOption[]>(() => {
     const hits: RuleArtistOption[] = matches ?? [];
 
-    // A pasted id Fluncle has never crawled is still a legal rule — offer it as the creatable row.
     return settled && isMbid(search) && hits.length === 0
       ? [{ isNew: true, mbid: search, name: search }]
       : hits;
@@ -1163,7 +947,6 @@ function AddRuleForm({
           }
 
           if (item.isNew) {
-            // The id is legal but nameless — hold it and ask for the name below.
             setPending(item.mbid);
             setName("");
           } else {
@@ -1231,17 +1014,6 @@ function AddRuleForm({
   );
 }
 
-// ── The label-alias review section (RFC musickit-second-authority, U2a) ─────────────────────
-// A second authority (Apple's album `recordLabel`, corroborated by MusicBrainz over a shared
-// ISRC) proposes an alternate spelling of a label; the operator confirms or rejects it here.
-//
-// DELIBERATELY a page SECTION, not a new attention-queue source. Alias candidates are
-// crawl-volume, and the `label-review` attention source is capped at 25 (LABEL_REVIEW_QUEUE_LIMIT)
-// precisely because an uncapped crawl-volume source drowns the other five in the /admin cockpit.
-// Spelling curation is low-priority background work — it steers nothing and blocks nothing — so
-// it lives on this page and never rides the queue.
-
-/** One alias candidate: the proposed spelling, its provenance, and confirm/reject. */
 function AliasRow({ alias }: { alias: LabelAliasCandidate }) {
   const queryClient = useQueryClient();
   const [error, setError] = useState<string | undefined>();
@@ -1251,14 +1023,11 @@ function AliasRow({ alias }: { alias: LabelAliasCandidate }) {
     onError: (caught) => setError(caught instanceof Error ? caught.message : String(caught)),
     onSuccess: () => {
       setError(undefined);
-      // A confirmed alias folds a spelling into its label, which can change that label's counts,
-      // so refresh the whole board alongside the alias list.
+
       void queryClient.invalidateQueries({ queryKey: LABELS_KEY });
     },
   });
 
-  // The corroboration state, in the archive's flat functional register: a `name` alias is Apple
-  // AND MusicBrainz agreeing; a `hint` is Apple alone.
   const provenance =
     alias.kind === "name" ? "Apple, matched to MusicBrainz" : "Apple only, unmatched";
 
@@ -1303,9 +1072,6 @@ function AliasRow({ alias }: { alias: LabelAliasCandidate }) {
   );
 }
 
-// The operator-tier alias ops: confirm (POST /admin/labels/aliases/{id}/confirm) and reject
-// (DELETE /admin/labels/aliases/{id}). Same admin grant cookie + message-bearing errors as
-// `patchLabel`.
 async function decideAlias(id: string, decision: "confirm" | "reject"): Promise<void> {
   const base = `/api/v1/admin/labels/aliases/${encodeURIComponent(id)}`;
   const response = await fetch(decision === "confirm" ? `${base}/confirm` : base, {
@@ -1317,8 +1083,6 @@ async function decideAlias(id: string, decision: "confirm" | "reject"): Promise<
   }
 }
 
-// The admin-tier `list_label_artist_rules` op (GET /admin/labels/{id}/artists) — the dialog's own
-// read, so the board never carries a rule set it may not need.
 async function listLabelRules(id: string): Promise<ArtistRule[]> {
   const response = await fetch(`/api/v1/admin/labels/${encodeURIComponent(id)}/artists`, {
     credentials: "same-origin",
@@ -1333,9 +1097,6 @@ async function listLabelRules(id: string): Promise<ArtistRule[]> {
   return data.rules;
 }
 
-// The operator-tier `replace_label_artist_rules` op (PUT /admin/labels/{id}/artists). A WHOLE-SET
-// swap: the server replaces the label's rules in one transaction, resolves each rule's Spotify
-// bridge as it writes, and stamps the label's re-arm watermark so the next crawl tick re-walks it.
 async function replaceLabelRules(id: string, rules: ArtistRuleInput[]): Promise<void> {
   const response = await fetch(`/api/v1/admin/labels/${encodeURIComponent(id)}/artists`, {
     body: JSON.stringify({ rules }),
@@ -1349,9 +1110,6 @@ async function replaceLabelRules(id: string, rules: ArtistRuleInput[]): Promise<
   }
 }
 
-// The operator-tier `update_label` op (PATCH /admin/labels/{id}). The browser carries the
-// admin grant cookie; the fetch mirrors the galaxies naming call (JSON body, message-bearing
-// errors).
 async function patchLabel(id: string, seedState: LabelSeedState): Promise<void> {
   const response = await fetch(`/api/v1/admin/labels/${encodeURIComponent(id)}`, {
     body: JSON.stringify({ seedState }),

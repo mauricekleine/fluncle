@@ -2,12 +2,6 @@ import { createFileRoute } from "@tanstack/react-router";
 import { siteUrl } from "@/lib/fluncle-links";
 import { useEffect, useRef } from "react";
 
-// Fluncle's /pipeline — a wide, draggable infographic of a finding's whole life, from the
-// CMD+F add through the enrichment crons and dispatch to the launch into the Galaxy. A
-// client-only DOM/SVG/canvas toy (the whole map is a chunk loaded in useEffect so the
-// archive's bundle stays light). noindex: a for-the-nerds internal-machinery view, not a
-// search surface.
-
 const title = "Fluncle's Galaxy factory";
 const description =
   "Follow a banger through every machine Fluncle built, from the first CMD+F to the launch into the Galaxy.";

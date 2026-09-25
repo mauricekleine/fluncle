@@ -70,12 +70,7 @@ import {
 } from "@/lib/artist-socials";
 import { findingsCount } from "@/lib/format";
 import { isAdminRequest } from "@/lib/server/admin-auth";
-// The board's two client-side folds and the shapes it renders come from the CLIENT-SAFE module.
-// A live client reference into `lib/server/artists.ts` pins that module in the browser bundle and
-// with it the whole `getDb` chain, whose externalized `node:async_hooks` stub throws on module
-// evaluation and takes the route down (docs/client-bundle.md, Rule 1 — build-enforced by the
-// `fluncle-client-chunk-purity` gate). The reads below are only ever called inside a
-// `createServerFn().handler()`, whose body the client build removes wholesale.
+
 import {
   artistNeedsLook,
   type ArtistOverviewItem,
@@ -93,49 +88,13 @@ import { useDebounced } from "@/lib/use-debounced";
 import { cn } from "@/lib/utils";
 import { type ArtistRuleState, artistRuleStates } from "./-artist-rule-reads";
 
-// The `/admin/artists` overview — the stable MANAGE surface for every artist Fluncle features
-// (Unit 5). Not a worklist: an artist never drops off for being resolved, so the operator can
-// browse, search, and edit/add/remove a link any time. Following the admin design doctrine
-// (docs/admin-shell.md — one primary per object, rare actions hidden by default), each artist
-// is a COLLAPSED summary row (name, finding count, link count, a "needs a look" flag) that
-// expands to reveal its links (read-only) and ONE acknowledgment: "Looks good".
-//
-// The review model: review lands on the LINK, not the artist (docs/artist-relationship.md). A
-// link "needs a look" while its `reviewedAt` is null — a fresh resolver insert, or a machine
-// re-resolve that changed its URL. The FRESH LINKS section at the top lists exactly those,
-// grouped by artist, each with Approve (review_artist_social: mark reviewed + promote a candidate)
-// and Remove — so a single new Twitch link surfaces without re-flagging the whole already-reviewed
-// artist. The per-artist "Looks good" (review_artist) stays as the bulk: it stamps ALL of an
-// artist's links reviewed at once. The structural edits — add, remove — live behind the "Manage
-// links" dialog. The WORK surfaces as an /admin attention row (source "artist-review") that
-// deep-links here with ?artist=<id>, auto-expanding that artist.
-//
-// ── THE GLOBAL ARTIST RULE ──────────────────────────────────────────────────────────────────
-// The row's ⋮ also carries the artist's standing with the catalogue crawler: never take their
-// records anywhere, or always take them anywhere. It is the GLOBAL half of the same exception
-// model `/admin/labels` scopes to one label, and it is acquisition scope like every other ruling
-// — it steers what the next crawl takes and moves nothing already stored. A rule matches on the
-// artist's MusicBrainz id, so an artist with no id resolved yet cannot carry one, and the menu
-// says that rather than offering an action the boundary would refuse.
-
-// The board's PAGE query key — the search term is the last segment, so an invalidate on the
-// bare prefix clears every search's cache at once (a mutation must refresh whatever page the
-// operator is looking at, filtered or not). The FRESH-LINKS work queue is its own key.
 const ARTISTS_PAGE_KEY = ["admin", "artists", "page"] as const;
 const ARTISTS_FRESH_KEY = ["admin", "artists", "fresh"] as const;
-// The /admin attention queue's key — a confirm/add here changes an artist-review row, so
-// invalidate it too and the dashboard's count stays honest without waiting on a refetch.
+
 const ATTENTION_KEY = ["admin", "attention"] as const;
 
-/**
- * One board page, plus each visible artist's global-rule standing and the MusicBrainz id a rule
- * write posts as its match key. Both come from ONE bounded indexed read over the page's ids — the
- * `list_artist_rules` op reads the rules, this read is what joins them to the rows on screen.
- */
 type ArtistsBoardPage = ArtistsPage & { ruleStates: Record<string, ArtistRuleState> };
 
-// One page of the name-sorted artist board — a keyset slice, optionally name-filtered. The
-// loader calls it with no cursor for page 1; the infinite query pages by the returned cursor.
 const fetchArtistsPage = createServerFn({ method: "GET" })
   .validator((data: { cursor?: string; search?: string }) => data)
   .handler(async ({ data }): Promise<ArtistsBoardPage> => {
@@ -151,9 +110,6 @@ const fetchArtistsPage = createServerFn({ method: "GET" })
     return { ...page, ruleStates: await artistRuleStates(page.items.map((item) => item.id)) };
   });
 
-// The fresh-links work queue — every artist with an unreviewed link (capped, oldest-first),
-// with the true total so overflow past the cap stays visible. Its own seeded query so approving
-// a link and a focus-refetch keep it live independent of which page the board is scrolled to.
 const fetchFreshLinks = createServerFn({ method: "GET" }).handler(
   async (): Promise<FreshLinksData> => {
     if (!(await isAdminRequest())) {
@@ -180,14 +136,10 @@ const PLATFORM_LABELS: Record<ArtistSocialPlatform, string> = {
   youtube: "YouTube",
 };
 
-// The add-platform Select lists platforms alphabetically by their display label
-// (the canonical registry order is resolution priority, not a menu order).
 const PLATFORM_OPTIONS: ArtistSocialPlatform[] = [...ARTIST_SOCIAL_PLATFORMS].sort((a, b) =>
   PLATFORM_LABELS[a].localeCompare(PLATFORM_LABELS[b]),
 );
 
-// The brand marks (simple-icons) for each platform; `homepage` has no brand, so it uses
-// a Phosphor globe (an interface icon — DESIGN.md's platform-vs-interface split).
 function PlatformLogo({
   className,
   platform,
@@ -225,8 +177,6 @@ function PlatformLogo({
   }
 }
 
-// A JSON-bodied admin POST (the global rule add). Same grant cookie and message-bearing errors
-// as the bodyless writes below.
 async function postJson<T>(url: string, body: unknown): Promise<T> {
   const response = await fetch(url, {
     body: JSON.stringify(body),
@@ -254,10 +204,6 @@ async function mutateJson<T>(url: string, method: "POST" | "DELETE"): Promise<T>
   return data;
 }
 
-// The fresh-links inline edit's write: PATCH a corrected URL onto one social. The server
-// validates + normalizes it against the row's platform and, on success, stores it operator-
-// owned + confirmed + reviewed (correct AND approve in one act). A validation failure comes
-// back as a 400 whose message the row shows inline (quiet, no toast).
 async function patchSocialUrl(socialId: string, url: string): Promise<{ message?: string }> {
   const response = await fetch(`/api/v1/admin/artists/socials/${socialId}`, {
     body: JSON.stringify({ url }),
@@ -280,8 +226,6 @@ export const Route = createFileRoute("/admin/artists")({
     typeof search["artist"] === "string" ? { artist: search["artist"] } : {},
   beforeLoad: () => ensureAdmin(),
   loader: async () => {
-    // Seed BOTH the board's first page and the fresh-links work queue in one round-trip, so the
-    // page renders server-side and neither query fetches on mount.
     const [firstPage, fresh] = await Promise.all([
       fetchArtistsPage({ data: {} }),
       fetchFreshLinks(),
@@ -300,14 +244,8 @@ function AdminArtistsPage() {
   const [query, setQuery] = useState("");
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
 
-  // Server-side name search: the typed value debounces into the page query key. An empty search
-  // reads the loader-seeded first page; a real search is an on-demand, unseeded fetch (the loader
-  // never carried it) — the AGENTS.md secondary-query carve-out.
   const search = useDebounced(query.trim(), 250);
 
-  // The board pages through react-query so "Load more" pages stay cached and a focus-refetch
-  // brings each loaded page back fresh. Seeded with the SSR loader's first page — but ONLY for the
-  // unfiltered key, since that is the page the loader actually returned.
   const {
     data,
     error: pageError,
@@ -336,7 +274,7 @@ function AdminArtistsPage() {
 
   const artists = useMemo(() => data?.pages.flatMap((page) => page.items) ?? [], [data]);
   const totalCount = data?.pages.at(-1)?.totalCount ?? firstPage.totalCount;
-  // The rule standings of every loaded page, folded into one lookup the rows read by id.
+
   const ruleStates = useMemo(
     () =>
       Object.assign({}, ...(data?.pages ?? []).map((page) => page.ruleStates)) as Record<
@@ -364,8 +302,6 @@ function AdminArtistsPage() {
     void queryClient.invalidateQueries({ queryKey: ATTENTION_KEY });
   };
 
-  // "Looks good" — acknowledge the whole link list (review_artist): stamp it seen + promote any
-  // surviving candidates. Clears needs-a-look until a NEW link is discovered.
   const reviewArtist = useMutation({
     mutationFn: (artistId: string) =>
       mutateJson(`/api/v1/admin/artists/${artistId}/review`, "POST"),
@@ -378,7 +314,7 @@ function AdminArtistsPage() {
     onError: (caught) => setError(caught instanceof Error ? caught.message : String(caught)),
     onSuccess: invalidate,
   });
-  // Approve ONE fresh link (the fresh-links section) — mark it reviewed + promote a candidate.
+
   const reviewSocial = useMutation({
     mutationFn: (socialId: string) =>
       mutateJson(`/api/v1/admin/artists/socials/${socialId}/review`, "POST"),
@@ -403,8 +339,6 @@ function AdminArtistsPage() {
     onSuccess: invalidate,
   });
 
-  // The operator-tier global-rule writes (`add_artist_rule` / `remove_artist_rule`). Both change
-  // what the NEXT crawl takes and nothing already stored, so neither is dressed as destructive.
   const addRule = useMutation({
     mutationFn: (input: { artistMbid: string; artistName: string; verdict: ArtistRuleVerdict }) =>
       postJson("/api/v1/admin/artist-rules", input),
@@ -432,11 +366,6 @@ function AdminArtistsPage() {
       : String(pageError)
     : undefined;
 
-  // Deep-linked from the /admin attention row (?artist=<id>): auto-expand it and scroll it into
-  // view so the operator lands ready to review. A needs-review artist is always in the fresh-links
-  // section at the top (both are oldest-first and the attention queue caps tighter), so the review
-  // controls are on screen immediately; the accordion focus fires too when that artist's page is
-  // loaded below.
   const focusRef = useRef<HTMLElement | null>(null);
   useEffect(() => {
     if (focusId) {
@@ -449,9 +378,6 @@ function AdminArtistsPage() {
     }
   }, [focusId, artists]);
 
-  // Auto-fetch the next page when the load-more row drifts near the viewport bottom; the button
-  // stays clickable as the keyboard-reachable fallback. Paused while a fetch is in flight so a
-  // slow page isn't requested twice.
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     const sentinel = loadMoreRef.current;
@@ -567,16 +493,6 @@ function AdminArtistsPage() {
   );
 }
 
-// The FRESH LINKS section — every unreviewed link (`reviewedAt === null`), so the operator reviews
-// exactly what's new since he last looked instead of re-reviewing whole artists. Read server-side
-// from its OWN bounded query (`listFreshLinks`, capped at FRESH_LINKS_LIMIT), independent of which
-// board page is scrolled to — fresh work is global, not scoped to a name filter. SPLIT by
-// mention-loop impact (partitionFreshLinks): "High priority" holds the links whose artist has a
-// finding — once approved, a tiktok/youtube handle there feeds the caption mention loop the moment
-// that finding's video posts (lib/server/mentions.ts) — and leads; "Everything else" holds the
-// catalogue-only artists below. Each row keeps its identical UI (Approve / edit / Remove). Hidden
-// entirely when nothing is fresh (the resting state). When more artists carry fresh links than the
-// cap serializes, a quiet overflow note says so — the work is drained, not hidden.
 function FreshLinksSection({
   busy,
   data,
@@ -643,8 +559,6 @@ function FreshLinksSection({
   );
 }
 
-// One subsection of the fresh-links board — a labeled group ("High priority" / "Everything else")
-// with its own count, then the identical link rows. Rendered only when it has entries.
 function FreshLinkGroup({
   busy,
   entries,
@@ -688,11 +602,6 @@ function FreshLinkGroup({
   );
 }
 
-// One fresh link — the platform mark, the artist it belongs to, its URL, and the actions.
-// At rest: Approve (stamp reviewed) + Edit (correct the URL) + Remove. In EDIT mode the URL
-// text becomes an input IN PLACE and Approve becomes Save (correct + approve in one act). The
-// input matches the row's existing sm-button band (h-8), so opening the editor never shifts the
-// row height. Escape or blur restores the original; a validation error shows quietly in the row.
 function FreshLinkRow({
   artistName,
   busy,
@@ -724,7 +633,6 @@ function FreshLinkRow({
     },
   });
 
-  // Focus the field the moment the editor opens (and place the caret at the end).
   useEffect(() => {
     if (editing) {
       const input = inputRef.current;
@@ -758,8 +666,6 @@ function FreshLinkRow({
     }
   };
 
-  // The quiet inline message: the server's ruling once a Save has failed, else the cheap
-  // client host-mismatch hint. The Chrome Rule — plain, literal, no toast.
   const inlineMessage =
     saveError ??
     (hostMismatch
@@ -781,9 +687,6 @@ function FreshLinkRow({
           aria-label={`${PLATFORM_LABELS[social.platform]} URL for ${artistName}`}
           className="h-8 min-w-0 flex-1 text-xs"
           onBlur={(event) => {
-            // Blur cancels — EXCEPT when focus is moving to this row's Save button, whose
-            // click is about to fire the save (a disabled Save can't take focus, so an
-            // invalid entry still cancels on blur, restoring the original).
             const next = event.relatedTarget;
             if (
               saveButtonRef.current &&
@@ -863,8 +766,6 @@ function FreshLinkRow({
         <TrashIcon aria-hidden="true" className="size-3.5" />
       </Button>
 
-      {/* The quiet inline error — full-width so it sits under the row without shifting the
-          controls; only present while editing with a client hint or a server rejection. */}
       {editing && inlineMessage ? (
         <p className="basis-full pl-6 text-[11px] text-destructive">{inlineMessage}</p>
       ) : null}
@@ -908,8 +809,6 @@ function ArtistAccordion({
       className={cn("border-b border-border last:border-b-0", focused && "bg-primary/5")}
       ref={ref}
     >
-      {/* The ⋮ sits BESIDE the expand control rather than inside it — a menu trigger nested in
-          the header button would be a button inside a button. */}
       <div className="flex items-center gap-1 pr-2">
         <button
           aria-controls={bodyId}
@@ -958,9 +857,6 @@ function ArtistAccordion({
           )}
 
           <div className="flex flex-wrap items-center gap-3">
-            {/* The one acknowledgment: Looks good stamps the whole list seen (and promotes any
-                surviving candidates). It only appears while there's something new to see; once
-                reviewed, a quiet "Reviewed" marker holds until a new link re-arms the flag. */}
             {artist.socials.length > 0 ? (
               needsLook ? (
                 <Button disabled={busy} onClick={onReview} size="sm">
@@ -992,8 +888,6 @@ function ArtistAccordion({
   );
 }
 
-// The artist's standing with the crawler, as quiet data (the labels board's seed-state chip
-// precedent): a rule is a routing decision, never an alarm. Absent while the artist carries none.
 function RuleBadge({ rule }: { rule: ArtistRuleState["rule"] }) {
   if (!rule) {
     return null;
@@ -1013,8 +907,6 @@ function RuleBadge({ rule }: { rule: ArtistRuleState["rule"] }) {
   );
 }
 
-// The global rule, behind the row's ⋮ (the disclosure law — it is the rare act beside browsing
-// and link review). One verdict per artist: while a rule stands, the only move is clearing it.
 function ArtistRuleMenu({
   busy,
   name,
@@ -1041,14 +933,9 @@ function ArtistRuleMenu({
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="max-w-72 min-w-56">
         {!mbid ? (
-          // A rule matches on the MusicBrainz id, so a row without one cannot carry a rule. Said
-          // as a LABEL rather than a disabled item: roving focus skips a disabled item, which
-          // would land a screen reader in an apparently empty menu.
           <DropdownMenuLabel className="font-normal">No MusicBrainz id yet</DropdownMenuLabel>
         ) : (
           <DropdownMenuGroup>
-            {/* The boundary leads, because it is what makes the action below safe to take —
-                the same clause the labels station's rules dialog carries. */}
             <DropdownMenuLabel className="font-normal text-wrap">
               Rules change what the next crawl takes, or whether this artist gets a page. Everything
               already here stays.
@@ -1065,8 +952,7 @@ function ArtistRuleMenu({
                 <DropdownMenuItem disabled={busy} onClick={() => onRule(mbid, "allow")}>
                   Always take their records
                 </DropdownMenuItem>
-                {/* The visibility verdict, last because it is the other axis: the records stay,
-                    the page goes. The disposition for a pop act billed a DnB remix. */}
+
                 <DropdownMenuItem disabled={busy} onClick={() => onRule(mbid, "unlisted")}>
                   Keep their records, drop their page
                 </DropdownMenuItem>
@@ -1079,13 +965,7 @@ function ArtistRuleMenu({
   );
 }
 
-// One link in the expanded list — READ-ONLY: the platform, its URL (click through to the
-// profile), and a quiet provenance chip. No per-link todo: acknowledging the whole list is the
-// operator's one action (Looks good).
 function LinkRow({ social }: { social: ArtistSocial }) {
-  // Belt-and-suspenders: only emit a clickable href for an http(s) URL. React does NOT sanitize
-  // href, so a stored `javascript:`/`data:` URL would be click-to-execute XSS in the admin
-  // origin — render it inert instead.
   const safeUrl = isHttpUrl(social.url);
 
   return (
@@ -1110,8 +990,6 @@ function LinkRow({ social }: { social: ArtistSocial }) {
         </span>
       )}
 
-      {/* Quiet provenance: a link Fluncle discovered (MusicBrainz / Firecrawl) vs one the
-          operator typed in. */}
       {social.source !== "operator" ? (
         <Badge className="shrink-0 text-muted-foreground" variant="outline">
           Auto
@@ -1121,8 +999,6 @@ function LinkRow({ social }: { social: ArtistSocial }) {
   );
 }
 
-// The structural edits, off the resting surface (doctrine: rare actions hidden by default).
-// Lists every link with a Remove, plus the Add-a-platform form.
 function ManageLinksDialog({
   artist,
   busy,

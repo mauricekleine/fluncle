@@ -24,17 +24,11 @@ import {
 } from "@/lib/server/logbook";
 import { type LogbookEntryDTO } from "@fluncle/contracts";
 
-// One Logbook entry — a first-person travelogue for a single sector-day, at
-// /logbook/<sector> (e.g. /logbook/036). Long-form AEO fuel: server-rendered, clean
-// heading structure, the day's findings inlined as real "photos" (their posters),
-// and an Article JSON-LD block that mirrors the visible prose. The quiet archival
-// plate register, shared with /log.
-
 type LogbookPageData =
   | {
       status: "found";
       entry: LogbookEntryDTO;
-      // The day's findings, keyed by Log ID — the figure-caption source.
+
       findings: Record<string, LogbookFigureFinding>;
       newer?: LogbookNeighbor;
       older?: LogbookNeighbor;
@@ -58,8 +52,6 @@ const fetchLogbookEntry = createServerFn({ method: "GET" })
     return { ...neighbors, entry, findings, status: "found" };
   });
 
-// A typed head() outside the route options (reading loaderData inline makes the
-// route's own inference circular — the /log precedent).
 function logbookHead(loaderData: LogbookPageData | undefined) {
   if (loaderData?.status !== "found") {
     return {};
@@ -68,17 +60,12 @@ function logbookHead(loaderData: LogbookPageData | undefined) {
   const { entry } = loaderData;
   const sectorLabel = formatSector(entry.sector);
   const pageUrl = `${siteUrl}${logbookPath(entry.sector)}`;
-  // Coordinate, then the human line, then the surface — the house title shape a finding
-  // already wears (`241.7.3A · Artist — Title · Fluncle`). The bare coordinate leads; the
-  // entry's own title keeps it from stranding a stranger in a SERP.
+
   const title = `${sectorLabel} · ${entry.title} · Fluncle's Logbook`;
   const datePublished = sectorDateISO(entry.sector);
-  // A short, honest description: the entry title, the human dateline.
+
   const description = `${entry.title}. An entry from Fluncle's Logbook, ${formatDateLong(datePublished)}.`;
 
-  // An Article that mirrors the visible entry (headline = title, the coordinate URL,
-  // the sector-day as datePublished, the last (re)generation as dateModified, Fluncle
-  // as the author). Honest structured data, not invented.
   const article = {
     "@context": "https://schema.org",
     "@type": "Article",
@@ -110,18 +97,13 @@ function logbookHead(loaderData: LogbookPageData | undefined) {
       { content: title, name: "twitter:title" },
       { content: description, name: "twitter:description" },
     ],
-    // JSON-LD goes through `jsonLdScript`, which HTML-escapes the serialized payload
-    // before it reaches the inline <script> (rendered raw via dangerouslySetInnerHTML),
-    // so a `</script>` in the (agent-authored) title/body can't break out.
+
     scripts: [jsonLdScript(article), jsonLdScript(logbookBreadcrumbsJsonLd(sectorLabel))],
   };
 }
 
-// Route options follow TanStack's create-route-property-order (each step feeds the
-// next's inferred types), which isn't alphabetical — so sort-keys is off here.
 // oxlint-disable-next-line sort-keys
 export const Route = createFileRoute("/logbook/$sector")({
-  // Shape-guard BEFORE the loader: a non-sector param is a 404, no DB roundtrip.
   beforeLoad: ({ params }) => {
     if (parseSectorParam(params.sector) === null) {
       throw notFound();
@@ -232,9 +214,7 @@ function NeighborLink({
       {isOlder ? undefined : <CaretLeftIcon aria-hidden="true" weight="bold" />}
       <span>
         <span className="log-neighbor-label">{isOlder ? "Earlier" : "Later"}</span>
-        {/* The neighbor's own title, exactly as /log's prev/next carries an Artist — Title:
-            the line tells you where you're headed, and `.log-neighbor-line` already clips a
-            long one. A bare coordinate here would navigate by number alone. */}
+
         <span className="log-neighbor-line">{neighbor.title}</span>
       </span>
       {isOlder ? <CaretRightIcon aria-hidden="true" weight="bold" /> : undefined}
@@ -259,8 +239,7 @@ function LogbookEntryPage() {
       <article className="log-plate logbook-entry">
         <header className="log-masthead">
           <p className="log-nameplate">Fluncle's Logbook</p>
-          {/* The bare coordinate, set as the coordinate it is — the same masthead a finding
-              wears at /log/<logId>. The dateline directly below carries the human date. */}
+
           <h1 className="log-coordinate">{sectorLabel}</h1>
           <p className="logbook-dateline">
             <time dateTime={datePublished}>{formatDateLong(datePublished)}</time>

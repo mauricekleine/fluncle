@@ -44,37 +44,15 @@ import {
   listTracks,
 } from "@/lib/server/tracks";
 
-// The admin Renders view (docs/admin-shell.md) — the web control plane for the
-// video render pipeline that was otherwise CLI/box-only. Three surfaces, top to
-// bottom, so the operator reads the machine, the backlog, then the output:
-//
-//   1. Box state — the render conductor cron (`cron.render`) and the scale-to-zero
-//      box (`render-box`) as data, read from the SAME `service_status` store /status
-//      shows (no new probe invented). Their last-report freshness is the machine's pulse.
-//   2. The queue — findings awaiting a video (the box's own `fluncle admin tracks
-//      queue` read: hasContext && !hasVideo, oldest-first). The head is next to film.
-//   3. Recently shipped — the freshest renders (by video vintage), the operator's
-//      morning review. Each carries [Watch] + the two operator-tier render controls
-//      (Requeue, Purge), both destructive → behind a confirm.
-//
-// Every write reuses the LIVE oRPC ops the CLI hits (POST .../video/requeue|purge),
-// not a fork. Reads run server-side (createServerFn, in-process, no CORS), then
-// refetch on focus + after a write so a requeued finding is seen to move lists.
-
 const QUEUE_LIMIT = 60;
 const SHIPPED_LIMIT = 24;
 
 const RENDERS_KEY = ["admin", "renders"] as const;
-// Treat the renders board as fresh for this long, so rapid tab-switching doesn't re-run
-// the whole board read (queue + shipped + box status) on every focus — only once it ages.
+
 const RENDERS_STALE_MS = 20_000;
-// The sidebar's render-backlog badge reads this key; invalidate it after a requeue so
-// the count re-reads honest without a reload.
+
 const NAV_COUNTS_KEY = ["admin", "nav", "counts"] as const;
 
-// The render conductor + box as the /status store carries them: the last-report
-// freshness IS the pulse (a cron is health-checked by its last run). Null when the
-// prober hasn't reported that service yet.
 type BoxService = {
   checkedAt: string;
   message: string | null;
@@ -84,13 +62,10 @@ type BoxService = {
 
 type RendersData = {
   box: { conductor: BoxService; renderBox: BoxService };
-  // The loader's fixed reference instant, so a server-rendered "waiting 3h" matches
-  // hydration exactly (no client clock drift) and re-reads live on every refetch.
+
   now: string;
   queue: BoardTrackListItem[];
-  // Whether the queue runs past what we fetched (`QUEUE_LIMIT`) — drives the "N+" count.
-  // We skip the exact `count(*)` (a second full scan of the join) and read the overflow off
-  // the list query's own limit+1 over-fetch instead; the head-of-queue is what matters here.
+
   queueMore: boolean;
   shipped: BoardTrackListItem[];
 };
@@ -101,10 +76,6 @@ const fetchRenders = createServerFn({ method: "GET" }).handler(async (): Promise
   }
 
   const [queuePage, shipped, services] = await Promise.all([
-    // The box's canonical render queue read (fluncle admin tracks queue): context'd
-    // findings still needing a video, oldest-first — the next to film is the head. BOARD
-    // projection (no graph subqueries) and no count(*) — the queue rows show identity only,
-    // and the header count reads the overflow off `nextCursor`, not a full count.
     listTracks({
       board: true,
       countTotal: false,
@@ -229,9 +200,6 @@ function RendersPage() {
         />
       </div>
 
-      {/* One controlled confirm for both destructive controls — the consequences read
-          as a deadpan two-item list (data, not narration), and the finding it acts on
-          is named in the dialog description. */}
       <ConfirmDialog
         onConfirm={onConfirm}
         onOpenChange={(open) => !open && !pending && setConfirm(undefined)}
@@ -239,7 +207,6 @@ function RendersPage() {
         target={confirm}
       />
 
-      {/* Watch — the same single-clip Stories UI the board's preview uses. */}
       <Dialog onOpenChange={(open) => !open && setWatch(undefined)} open={watch !== undefined}>
         <DialogContent
           aria-label="Render preview"
@@ -261,9 +228,6 @@ function RendersPage() {
   );
 }
 
-// The render machine as data — the conductor cron's last run + the scale-to-zero
-// box's reachability, both from the /status store. Two quiet cells so the operator
-// reads the pulse before the backlog it drains.
 function BoxState({ box, now }: { box: RendersData["box"]; now: string }) {
   return (
     <section aria-label="Render machine">
@@ -322,10 +286,6 @@ const STATUS_LABEL: Record<ServiceHealthStatus, string> = {
   ok: "Operational",
 };
 
-// The canon status indicator (DESIGN.md — no green; The One Sun caps gold; escalate
-// by loudness so the eye lands on trouble): ok is a calm gold ping, degraded the
-// Eclipse-Glow amber chip, down the Re-entry-Red destructive badge. Null (never
-// probed) reads as a quiet muted chip.
 function StatusIndicator({ status }: { status: ServiceHealthStatus | null }) {
   if (status === null) {
     return (
@@ -365,9 +325,6 @@ function StatusIndicator({ status }: { status: ServiceHealthStatus | null }) {
   );
 }
 
-// The queue — findings awaiting a video, oldest-first. Data only (there is no video
-// to act on yet); the head-of-queue is marked "Next up" (the one gold accent). The
-// context gate that admitted every row is shown as an honest chip.
 function QueueSection({
   more,
   now,
@@ -416,9 +373,6 @@ function QueueSection({
   );
 }
 
-// Recently shipped — the freshest renders (by vintage), the morning review. Each
-// carries its diversity ledger (vehicle · grain · register) + vintage, then the
-// controls: Watch, Requeue, Purge.
 function ShippedSection({
   now,
   onPurge,
@@ -471,8 +425,6 @@ function ShippedSection({
   );
 }
 
-// The diversity ledger the next video agent reads to diversify away from — vehicle,
-// grain, register — as a quiet middle-dot line (absent parts drop out).
 function Ledger({ track }: { track: BoardTrackListItem }) {
   const parts = [track.videoVehicle, track.videoGrain, track.videoRegister].filter(
     (part): part is string => Boolean(part?.trim()),
@@ -485,10 +437,6 @@ function Ledger({ track }: { track: BoardTrackListItem }) {
   return <span className="text-xs text-muted-foreground">{parts.join(" · ")}</span>;
 }
 
-// A finding's identity block plus the shared Object Row shell. The identity is the shared
-// FindingIdentity; on a shipped render `onWatch` makes the cover itself the play affordance
-// (the gold story-ring + play badge — the same cover-as-play the findings board uses), so
-// there is no separate Watch button. A queue row has no clip yet, so its cover stays inert.
 function RenderRow({
   onWatch,
   track,
@@ -514,10 +462,6 @@ function RenderRow({
   );
 }
 
-// The two rare, destructive render controls behind a ⋮ (docs/admin-shell.md — one primary
-// action per object; rare actions hidden by default). Requeue clears the video + re-renders;
-// Purge evicts the cached edge renditions. Both route through the page's single confirm
-// dialog, which carries the consequences.
 function RenderActionsMenu({
   onPurge,
   onRequeue,
@@ -549,8 +493,6 @@ function RenderActionsMenu({
   );
 }
 
-// The two destructive controls, one controlled confirm. The consequences render as a
-// deadpan two-item list — the machine facts, not prose.
 const CONFIRM_COPY = {
   purge: {
     action: "Purge renditions",
@@ -630,7 +572,7 @@ function SectionHeading({
 }: {
   count: number;
   label: string;
-  /** The count is a floor (there are more past what we fetched) — render it as "N+". */
+
   more?: boolean;
 }) {
   return (
@@ -651,9 +593,6 @@ function EmptyRow({ children }: { children: ReactNode }) {
   );
 }
 
-// POST the finding to the LIVE operator-tier oRPC op the CLI hits (bodyless — the
-// trackId path param is the whole input; no content-type, mirroring adminApiPost).
-// The browser admin grant cookie is the operator carrier, so it satisfies the tier.
 async function postVideoAction(trackId: string, action: "purge" | "requeue"): Promise<void> {
   const response = await fetch(
     `/api/v1/admin/tracks/${encodeURIComponent(trackId)}/video/${action}`,

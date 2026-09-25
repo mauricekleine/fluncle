@@ -8,31 +8,12 @@ import { mixtapeCoverUrl, mixtapeDisplayTitle } from "@/lib/mixtapes";
 import { requireParam } from "@/lib/server/http-errors";
 import { resolveLogPageTarget } from "@/lib/server/log-resolver";
 
-// The self-contained finding card that the oEmbed `rich` payload frames. A pasted
-// fluncle.com link unfurls (in Notion / WordPress / Ghost / …) as this <iframe>:
-// a dark, cover-led plate with the coordinate, the Artist — Title, the found date,
-// a Spotify open action, and a quiet link back to the /log page.
-//
-// It is a STANDALONE HTML document (inline CSS, no SPA shell, no external assets),
-// so the iframe is tiny and fast, and — unlike every other page — it is served with
-// a permissive `frame-ancestors *` CSP so third parties may frame it. That header
-// is set on THIS route's Response only; the rest of the site emits no framing
-// header and keeps its default posture. The canon palette (DESIGN.md's Nostalgic
-// Cosmos) is inlined; the sanctioned font fallback (system sans) keeps it font-load
-// free.
-
-// Frame-ancestors is the modern, iframe-scoped successor to X-Frame-Options; `*`
-// lets any site embed this route, and setting NO X-Frame-Options means an old
-// browser doesn't fall back to a DENY. Scoped to this route only.
 const EMBED_HEADERS = {
   "Cache-Control": "public, max-age=3600",
   "Content-Security-Policy": "frame-ancestors *",
   "Content-Type": "text/html; charset=utf-8",
 } as const;
 
-// Read from `@fluncle/tokens` (the generated mirror of DESIGN.md) rather than
-// hand-copied: a standalone document has no CSS vars to inherit, but it can still
-// import the canon, so the card cannot drift off-palette.
 const COLOR = {
   bg: colors.deepField,
   cream: colors.starlightCream,
