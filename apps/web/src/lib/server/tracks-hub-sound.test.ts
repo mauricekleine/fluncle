@@ -1,8 +1,3 @@
-// `/tracks?sound=<style>` against a REAL migrated libSQL database: the style's anchors resolve to
-// their centroids, the probe re-ranks the list closest first, and every other filter is the btree
-// pre-filter in front of the one vector pass. Sonar is mocked at its module seam so each case states
-// which route the ranking took; the Turso scan itself is real SQL over real `F32_BLOB` vectors.
-
 import { type Client } from "@libsql/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -38,7 +33,6 @@ const liquid = SEARCH_STYLES[0];
 const NOW = new Date("2026-09-25T12:00:00.000Z");
 let db: Client;
 
-/** A unit vector at `angle` radians in the (0,1) plane: cosine similarity is exactly cos(a − b). */
 function angleVector(angle: number): Uint8Array {
   const vector = new Float32Array(1024);
 
@@ -104,10 +98,9 @@ beforeEach(async () => {
   isSonarSonicEnabled.mockResolvedValue(false);
   searchSonar.mockReset();
 
-  // The probe sits at 0.5 (two anchors at 0.4 and 0.6). Four A-minor tracks fan away from it, one
-  // F-minor track sits right on it, one A-minor track is dated after today, and one has no vector.
-  await seedAnchor(liquid.anchors[0] ?? "", 0.4);
-  await seedAnchor(liquid.anchors[1] ?? "", 0.6);
+  for (const [index, slug] of liquid.anchors.entries()) {
+    await seedAnchor(slug, 0.5 + (index - (liquid.anchors.length - 1) / 2) * 0.02);
+  }
   await seedTrack({ angle: 0.5, key: "F minor", releaseDate: "2021-01-01", trackId: "f-exact" });
   await seedTrack({ angle: 0.55, key: "A minor", releaseDate: "2019-01-01", trackId: "a-near" });
   await seedTrack({ angle: 0.9, key: "A minor", releaseDate: "2024-01-01", trackId: "a-mid" });
@@ -121,9 +114,7 @@ describe("listTracksHubSoundPage — a style re-ranks, the filters pre-filter", 
     const page = await listTracksHubSoundPage({ key: "A minor" }, liquid, 1, NOW);
 
     expect(page.ranked).toBe(true);
-    expect(page.anchors).toEqual([liquid.anchors[0], liquid.anchors[1]]);
-    // The F-minor track is filtered out, the future release is held back, the unembedded track
-    // has no sound to rank by: what is left is pure distance to the probe.
+    expect(page.anchors).toEqual([...liquid.anchors]);
     expect(ids(page.hub.items)).toEqual(["a-near", "a-mid", "a-far"]);
     expect(page.hub.total).toBe(3);
     expect(page.hub.pageCount).toBe(1);
@@ -147,7 +138,6 @@ describe("listTracksHubSoundPage — a style re-ranks, the filters pre-filter", 
   it("takes Sonar's complete-corpus scan when no column filter is active", async () => {
     isSonarSonicEnabled.mockResolvedValue(true);
     searchSonar.mockResolvedValue([
-      { id: "a-future", score: 1 },
       { id: "f-exact", score: 1 },
       { id: "a-near", score: 0.99 },
       { id: "a-mid", score: 0.9 },
@@ -158,12 +148,12 @@ describe("listTracksHubSoundPage — a style re-ranks, the filters pre-filter", 
     expect(page.ranked).toBe(true);
     expect(searchSonar).toHaveBeenCalledWith(
       expect.objectContaining({
+        excludeIds: ["a-future"],
         filter: { bpm_min: 170 },
         index: "tracks",
         topK: TRACKS_SOUND_DEPTH,
       }),
     );
-    // Sonar's order holds; the future release passes the same release-day gate the list applies.
     expect(ids(page.hub.items)).toEqual(["f-exact", "a-near", "a-mid"]);
   });
 
@@ -172,8 +162,20 @@ describe("listTracksHubSoundPage — a style re-ranks, the filters pre-filter", 
     const newest = await listTracksHubPage({}, 1, NOW);
 
     expect(page.ranked).toBe(false);
-    expect(page.anchors).toEqual([liquid.anchors[0], liquid.anchors[1]]);
+    expect(page.anchors).toEqual([...liquid.anchors]);
     expect(ids(page.hub.items)).toEqual(ids(newest.items));
+  });
+
+  it("never ranks by an unmeasured probe: one anchor without a centroid means no order yet", async () => {
+    await db.execute({
+      args: [`anchor-${liquid.anchors[0] ?? ""}`],
+      sql: "delete from artist_centroids where artist_id = ?",
+    });
+
+    const page = await listTracksHubSoundPage({ key: "A minor" }, liquid, 1, NOW);
+
+    expect(page.ranked).toBe(false);
+    expect(page.anchors).toEqual([]);
   });
 
   it("declines to the newest-first list when no anchor has a centroid", async () => {

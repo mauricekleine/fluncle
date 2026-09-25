@@ -72,14 +72,11 @@ def test_evidence_bar_needs_a_confident_majority_at_both_depths():
     tail = ["positive"] * 11 + ["negative"] * 2 + ["unlabelled"] * 37
     views = [labelled_view(head + tail, 50), labelled_view(head + tail, 100)]
     assert passes_evidence_bar(views, 0.3)
-    # A strong head with a weak tail fails at the deeper cut.
     weak_tail = ["negative"] * 12 + ["unlabelled"] * 38
     assert not passes_evidence_bar(
         [labelled_view(head + weak_tail, 50), labelled_view(head + weak_tail, 100)], 0.3
     )
-    # A majority that only matches the labelled base rate is no lift.
     assert not passes_evidence_bar(views, 0.7)
-    # Too few labelled rows cannot carry a claim.
     thin = ["positive"] * 8 + ["unlabelled"] * 92
     assert not passes_evidence_bar(
         [labelled_view(thin, 50), labelled_view(thin, 100)], 0.2

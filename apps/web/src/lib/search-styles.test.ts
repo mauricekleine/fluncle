@@ -1,7 +1,3 @@
-// The style lexicon's offline guard. The production half (every anchor resolves to a listed artist
-// with a centroid) runs after every deploy in `scripts/post-deploy-probe.ts`, because only the live
-// archive can say whether an anchor still has a centroid.
-
 import { describe, expect, it } from "vitest";
 import {
   anchorNames,

@@ -22,7 +22,7 @@ import { hubInclusionWhere, LABEL_INDEX_MIN_TRACKS, resolveConfirmedAliasLabelId
 import { translateQuery } from "./search-llm";
 import { isSonarSonicEnabled, searchSonar, type SonarFilter, type SonarMatch } from "./sonar";
 import { hydrateRankedSonarMatches } from "./sonar-hydration";
-import { SONIC_SEED_SELECT, sonicSeedFlag } from "./sonic-seed";
+import { leadCentroidArtistSql, SONIC_SEED_SELECT, sonicSeedFlag } from "./sonic-seed";
 import { resolveStyleProbe } from "./style-probe";
 import {
   executeVectorFallback,
@@ -939,8 +939,8 @@ async function runStyle(
 ): Promise<SonicResolution> {
   const probe = await resolveStyleProbe(style);
 
-  if (!probe) {
-    return null;
+  if (probe.status !== "ready") {
+    return SONIC_UNAVAILABLE;
   }
 
   const [results, entities] = await Promise.all([
@@ -977,20 +977,14 @@ export async function searchLikeTrack(options: {
   const seed = typedRow<LikeSeedRow>(
     (
       await db.execute({
-        args: [options.trackId, options.trackId],
+        args: [options.trackId],
         sql: `select ${SEARCH_SELECT}, emb.embedding_blob as embedding_blob,
-                     lead.name as lead_name, lead.centroid_blob as lead_centroid_blob
+                     lead_artist.name as lead_name, lead_ac.centroid_blob as lead_centroid_blob
               from ${SEARCH_FROM}
               left join track_embeddings emb on emb.track_id = tracks.track_id
-              left join (
-                select ta.track_id as track_id, artists.name as name, ac.centroid_blob as centroid_blob
-                from track_artists ta
-                join artists on artists.id = ta.artist_id
-                join artist_centroids ac on ac.artist_id = artists.id
-                where ta.track_id = ? and ta.role is null and ${listedArtistWhere()}
-                order by ta.position asc
-                limit 1
-              ) lead on lead.track_id = tracks.track_id
+              left join artists lead_artist
+                on lead_artist.id = ${leadCentroidArtistSql("tracks.track_id")}
+              left join artist_centroids lead_ac on lead_ac.artist_id = lead_artist.id
               where tracks.track_id = ?
               limit 1`,
       })

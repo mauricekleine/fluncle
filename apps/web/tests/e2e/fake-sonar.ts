@@ -65,7 +65,6 @@ function parseBody(value: unknown): SearchBody | null {
     return null;
   }
 
-  // Centroids carry no track metadata; accepting a filter here would widen the answer.
   if (body.index === "centroids" && Object.keys(fields).length > 0) {
     return null;
   }
@@ -147,7 +146,6 @@ async function search(client: Client, body: SearchBody): Promise<Response> {
   return json({ matches });
 }
 
-/** Tiny live DB-backed Sonar for the isolated browser stack. */
 export function startFakeSonar(client: Client): ReturnType<typeof Bun.serve> {
   return Bun.serve({
     fetch: async (request) => {

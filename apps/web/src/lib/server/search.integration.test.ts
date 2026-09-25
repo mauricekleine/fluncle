@@ -1752,10 +1752,16 @@ describe("the style tier — a style word ranks by sound, ahead of a namesake", 
     resetStyleProbeCache();
   });
 
+  async function seedAllAnchors(centre: number): Promise<void> {
+    const count = liquid.anchors.length;
+
+    for (const [index, slug] of liquid.anchors.entries()) {
+      await seedAnchor(slug, centre + (index - (count - 1) / 2) * 0.01);
+    }
+  }
+
   it("ranks the archive by the anchors' mean probe and echoes the anchors that weighed in", async () => {
-    const [first, second] = liquid.anchors;
-    await seedAnchor(first ?? "", 0.25);
-    await seedAnchor(second ?? "", 0.35);
+    await seedAllAnchors(0.3);
 
     const result = await searchArchive({ q: "liquid" });
 
@@ -1763,10 +1769,9 @@ describe("the style tier — a style word ranks by sound, ahead of a namesake", 
     expect(result.degraded).toBe(false);
     expect(result.redirect).toBeUndefined();
     expect(result.filters?.sound).toBe("liquid");
-    expect(result.filters?.soundsLikeArtists).toEqual([
-      (first ?? "").replace(/-/g, " "),
-      (second ?? "").replace(/-/g, " "),
-    ]);
+    expect(result.filters?.soundsLikeArtists).toEqual(
+      liquid.anchors.map((slug) => slug.replace(/-/g, " ")),
+    );
     expect(result.results.map((hit) => hit.trackId)).toEqual([
       "uncertified-netsky",
       "certified-netsky",
@@ -1777,7 +1782,7 @@ describe("the style tier — a style word ranks by sound, ahead of a namesake", 
   });
 
   it("reads the filler around a style word, and keeps a namesake as an entity row", async () => {
-    await seedAnchor(liquid.anchors[0] ?? "", 0.3);
+    await seedAllAnchors(0.3);
     await db.execute({
       args: [],
       sql: `insert into artists (id, name, slug, created_at, updated_at)
@@ -1799,9 +1804,7 @@ describe("the style tier — a style word ranks by sound, ahead of a namesake", 
   });
 
   it("resolves every anchor in ONE slug-keyed statement, never one read per anchor", async () => {
-    for (const [index, slug] of liquid.anchors.entries()) {
-      await seedAnchor(slug, 0.2 + index * 0.01);
-    }
+    await seedAllAnchors(0.2);
     const spy = vi.spyOn(db, "execute");
 
     await searchArchive({ q: "liquid" });
@@ -1820,15 +1823,49 @@ describe("the style tier — a style word ranks by sound, ahead of a namesake", 
     expect(anchorReads).toHaveLength(1);
   });
 
-  it("DECLINES when no anchor has a centroid, and the query falls through to the name tiers", async () => {
+  it("reads by name, flagged, when no anchor has a centroid", async () => {
     const result = await searchArchive({ q: "liquid" });
 
     expect(result.kind).not.toBe("sonic");
+    expect(result.degraded).toBe(true);
     expect(result.filters?.sound).toBeUndefined();
   });
 
+  it("never serves an unmeasured probe: one missing anchor degrades the whole style", async () => {
+    for (const slug of liquid.anchors.slice(1)) {
+      await seedAnchor(slug, 0.3);
+    }
+
+    const result = await searchArchive({ q: "liquid" });
+
+    expect(result.degraded).toBe(true);
+    expect(result.kind).not.toBe("sonic");
+    expect(result.filters?.soundsLikeArtists).toBeUndefined();
+  });
+
+  it("never serves an unmeasured probe: an unlisted anchor degrades the whole style", async () => {
+    await seedAllAnchors(0.3);
+    const unlisted = liquid.anchors[0] ?? "";
+
+    await db.execute({
+      args: ["22222222-2222-4222-8222-222222222222", `anchor-${unlisted}`],
+      sql: `update artists set mbid = ? where id = ?`,
+    });
+    await db.execute(
+      `insert into artist_rules
+         (id, artist_mbid, artist_name, verdict, label_id, source, created_at, updated_at)
+       values ('arl_anchor', '22222222-2222-4222-8222-222222222222', 'Anchor', 'unlisted', null,
+               'operator', '2026-07-01', '2026-07-01')`,
+    );
+
+    const result = await searchArchive({ q: "liquid" });
+
+    expect(result.degraded).toBe(true);
+    expect(result.kind).not.toBe("sonic");
+  });
+
   it("leaves a sentence with a style word inside it to the tiers that read sentences", async () => {
-    await seedAnchor(liquid.anchors[0] ?? "", 0.3);
+    await seedAllAnchors(0.3);
 
     const result = await searchArchive({ q: "dark liquid with vocals" });
 
@@ -1882,6 +1919,43 @@ describe("the sonic view of one track — its own sound, else its lead artist's"
     expect(result?.anchor?.similar).toBe(true);
     expect(result?.filters?.soundsLikeArtists).toEqual(["Koven"]);
     expect(result?.results[0]?.trackId).toBe("certified-andromedik");
+  });
+
+  it("counts only a LISTED performer's centroid as a sound, in the row flag and the view alike", async () => {
+    await db.execute({
+      args: [],
+      sql: `insert into tracks (track_id, title, artists_json, spotify_url, duration_ms, has_embedding)
+            values ('hidden-lead', 'Hidden Lead', '["Ghost"]', null, 180000, 0)`,
+    });
+    await db.execute({
+      args: [],
+      sql: `insert into artists (id, name, slug, mbid, created_at, updated_at)
+            values ('a-ghost', 'Ghost', 'ghost', '33333333-3333-4333-8333-333333333333',
+                    '2026-07-01', '2026-07-01')`,
+    });
+    await db.execute({
+      args: [new Uint8Array(angleVector(0.2).buffer)],
+      sql: `insert into artist_centroids (artist_id, centroid_blob, computed_at, rank_corpus, vector_count)
+            values ('a-ghost', ?, '2026-07-01', 'corpus-1', 4)`,
+    });
+    await db.execute({
+      args: [],
+      sql: `insert into track_artists (track_id, artist_id, position) values ('hidden-lead', 'a-ghost', 1)`,
+    });
+    await db.execute(
+      `insert into artist_rules
+         (id, artist_mbid, artist_name, verdict, label_id, source, created_at, updated_at)
+       values ('arl_ghost', '33333333-3333-4333-8333-333333333333', 'Ghost', 'unlisted', null,
+               'operator', '2026-07-01', '2026-07-01')`,
+    );
+
+    const viewed = await searchLikeTrack({
+      allowBoundedSonicForDiagnostics: true,
+      trackId: "hidden-lead",
+    });
+
+    expect(viewed?.results).toEqual([]);
+    expect(viewed?.anchor?.similar).toBe(false);
   });
 
   it("answers the seed alone when the track has neither, and nothing for an unknown id", async () => {

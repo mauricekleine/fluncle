@@ -181,13 +181,6 @@ def labelled_view(labels: list[str], depth: int) -> dict:
     }
 
 
-# THE BAR. The weak labels (Discogs release styles, MusicBrainz artist tags) reach only about a
-# quarter to a third of any probe's top 50, and they are just as sparse in a uniform random sample,
-# so an unlabelled row is missing evidence rather than evidence of another style. "Mostly that
-# style" is therefore measured where evidence exists: among the labelled non-anchor rows, the style
-# must be the majority with 95% confidence (Wilson lower bound above one half), with enough labelled
-# rows to say so, at the top 50 and again at the top 100 so a lucky head does not carry it, and at
-# a clear lift over the style's share of labelled tracks in the random sample.
 EVIDENCE_BAR = {
     "minimumLabelled": 10,
     "lowerBoundAbove": 0.5,
@@ -576,8 +569,6 @@ def report(args: argparse.Namespace) -> None:
                 }
             )
         if attempts:
-            # Every attempt is reported; the one that ships is the passing attempt with the most
-            # confident top-50 majority, else the last attempt is shown as the closest miss.
             passing = [attempt for attempt in attempts if attempt["passesEvidence"]]
             chosen = (
                 max(

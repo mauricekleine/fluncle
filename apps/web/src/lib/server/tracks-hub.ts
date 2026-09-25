@@ -873,6 +873,7 @@ async function rankedSoundIds(
         clauses,
         depth: TRACKS_SOUND_DEPTH,
         from: findingsJoinFor(clauses),
+        releasedBy: sonarRoute ? today : undefined,
         sonarFilter: sonarRoute ? { bpmMax, bpmMin } : undefined,
       });
 
@@ -880,23 +881,7 @@ async function rankedSoundIds(
         throw unavailable;
       }
 
-      if (!sonarRoute || ranked.length === 0) {
-        return ranked;
-      }
-
-      const db = await getDb();
-      const placeholders = ranked.map(() => "?").join(", ");
-      const released = await db.execute({
-        args: [...ranked, today],
-        sql: `select tracks.track_id as track_id from tracks
-              where tracks.track_id in (${placeholders})
-                and ${releasedByTodaySql("tracks.release_date")}`,
-      });
-      const keep = new Set(
-        typedRows<{ track_id: string }>(released.rows).map((row) => row.track_id),
-      );
-
-      return ranked.filter((id) => keep.has(id));
+      return ranked;
     });
   } catch (error) {
     if (error === unavailable) {
@@ -921,7 +906,7 @@ export async function listTracksHubSoundPage(
     ranked: false,
   });
 
-  if (!probe) {
+  if (probe.status !== "ready") {
     return newestFirst([]);
   }
 
