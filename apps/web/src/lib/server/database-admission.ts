@@ -134,12 +134,6 @@ function resourceProfileForOwner(owner: string): AdmissionResourceProfile {
   throw new Error(`database admission owner is not a classified writer or heavy reader: ${owner}`);
 }
 
-/**
- * A mixed writer/heavy-reader owns the physical write lane but conflicts with both resources.
- * Heavy readers reciprocally conflict with the resource suffix persisted when a contender joins,
- * so a rolling registry change cannot weaken an already-held lease. The predicate is reused for
- * active exclusion and FIFO ordering inside one serialized batch.
- */
 function conflictingResourcePredicate(
   profile: AdmissionResourceProfile,
   tableAlias?: string,
@@ -170,13 +164,6 @@ function persistedOperationId(profile: AdmissionResourceProfile): string {
   return operationId;
 }
 
-/**
- * Stored health can make every ordinary writer ineligible while only the snapshot writer can
- * clear that state. Its eligible FIFO is therefore chosen from the stored health visible inside
- * the same serialized statement that grants the lease: recovery writers alone while blocked, or
- * every conflicting writer once healthy. Active exclusion always uses the complete conflicting
- * resource predicate.
- */
 function queuedResourcePredicate(
   profile: AdmissionResourceProfile,
   nowMs: number,
@@ -280,10 +267,6 @@ async function observeGuardrails(
     return { directReadLatencyMs, nowMs, reason: "direct-read-latency" };
   }
 
-  // The snapshot writer is the mechanism that clears a stored degraded/down row after a live
-  // probe recovers. Its current harmless DB read remains load-bearing, but gating it on its own
-  // previous snapshot would make recovery impossible. Its queue predicate independently reads the
-  // stored state inside the serialized grant transaction so a concurrent recovery cannot stale it.
   if (!includeStoredHealth) {
     return { directReadLatencyMs, nowMs, reason: null };
   }
@@ -665,11 +648,6 @@ function shadowResult(
   };
 }
 
-/**
- * Observe the exact registry lane, durable queue, database clock, and public-priority guardrails
- * without inserting a contender or delaying/stopping the caller. This is the dark compatibility
- * path: every response is explicitly `enforced: false`.
- */
 export async function observeDatabaseAdmissionFor(
   client: AdmissionClient,
   request: DatabaseAdmissionRequest,
@@ -722,7 +700,6 @@ export async function observeDatabaseAdmissionFor(
   return result;
 }
 
-/** Only the exact settings value `true` enables enforcement; absent/malformed/read-failed is dark. */
 export async function isDatabaseAdmissionEnforcedFor(client: AdmissionClient): Promise<boolean> {
   try {
     const setting = await client.execute({
@@ -735,10 +712,6 @@ export async function isDatabaseAdmissionEnforcedFor(client: AdmissionClient): P
   }
 }
 
-/**
- * Coordinate one polling turn. The caller bounds total acquisition wait and owns the payload;
- * this function keeps every database transaction to queue maintenance plus one state transition.
- */
 export async function coordinateDatabaseAdmissionFor(
   client: AdmissionClient,
   request: DatabaseAdmissionRequest,

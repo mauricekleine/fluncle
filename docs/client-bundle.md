@@ -43,6 +43,8 @@ The gate reads the **path**, not the module's contents: anything matching `apps/
 
 The gate's own tripwire is [`apps/web/scripts/client-chunk-purity.test.ts`](../apps/web/scripts/client-chunk-purity.test.ts): it drives the predicate and the Rollup hook over a leaking bundle, a clean one, the SSR output it must ignore, and the exemption with its premise broken.
 
+HTML cached at the edge references build-scoped `/assets/<hash>.js` URLs. Keep its stale-while-revalidate tail within the deploy cadence (the page tier caps it at one hour); an older HTML response can otherwise point a browser at removed chunks. The root route's chunk-load recovery is the second guard.
+
 ## Rule 2 — one render-blocking stylesheet, and it is `styles.css`
 
 Not enforced by a gate (it needs a judgement call the gate cannot make), but the rule is simple: **a CSS file enters the app through `__root.tsx`'s `styles.css?url` link, or it is scoped to the route that needs it.**

@@ -1,76 +1,3 @@
-// THE CATALOGUE CRAWLER — Fluncle's acquisition of METADATA, and nothing else.
-//
-// It walks the MusicBrainz release graph outward from the labels the operator ENABLED
-// and writes catalogue rows into `tracks`. It never writes a `findings` row, because it
-// cannot certify anything: certification is a relationship Fluncle has with a track, and
-// a crawler has no ears. That firewall is structural, not a rule to remember — this
-// module contains no `insert into findings`, and the certification test proves a crawled
-// track is invisible to `/log`, the feeds, the sitemap and the Galaxy (see
-// findings-certification.integration.test.ts). It does not capture audio either: the row
-// simply lands with `capture_status` at its DDL default, and a separate, operator-gated
-// pipeline decides whether the bytes are ever fetched.
-//
-// ── THE BOUNDARY GATE: label defaults + artist exceptions + graph discovery ─────
-// THE BOUNDARY GATE uses label defaults plus exact FIRST-credit artist exceptions. There is NO
-// genre inference here — no MusicBrainz tag, no Discogs style, no BPM band.
-// The operator already drew the boundary when he ruled on the labels (`labels.seed_state`,
-// docs/label-entity.md). Two things follow from it, and they are DISTINCT:
-//
-//   STORAGE — `labels.seed_state` is the default: enabled stores, disabled/undecided skips.
-//     Artist rules are FIRST-credit exceptions at the `expandRelease` write chokepoint: a block
-//     can refuse an artist's billed records on an enabled label, and an allow can admit their billed
-//     records on a non-enabled one. Per-label rules beat global rules; names never participate.
-//
-//   DISCOVERY — the walk still runs to graph distance so it can FIND the next labels to rule on:
-//       hop 0 — a release on a label whose `seed_state` is `enabled`
-//       hop 1 — an artist who appears on such a release
-//       hop 2 — a release that artist ALSO appears on
-//     …and STOP at `maxHop` (default 2). A node past the limit is never enqueued, so the walk
-//     terminates by construction rather than by a watchdog. Hop distance bounds the DISCOVERY,
-//     never the STORAGE: a hop-2 release on an enabled label IS stored; a hop-0 seed release is
-//     stored because its seed label is enabled, not because it sits at hop 0.
-//
-// A label the walk DISCOVERS that nobody has ruled on enters as `undecided` (the
-// `labels` DDL default) and surfaces in the operator's attention queue. It is NOT
-// crawled as a label seed until enabled. An allow-artist browse can still reach it and admit only
-// that artist's billed records. That is the self-widening-but-operator-ratified loop: the crawler
-// proposes, the operator rules, and exact exceptions never widen discovery without a ruling.
-//
-// ── WHY MUSICBRAINZ CARRIES THE WALK ───────────────────────────────────────────
-// MusicBrainz is the only one of the three sources that is RECORDING-centric, which is
-// what a track-level catalogue needs: label → releases → recordings (with ISRCs) →
-// artist credits → their other releases is a clean, complete, paginated graph, CC0, and
-// free of a token. Discogs is RELEASE-centric — it has no recording entity and no ISRCs,
-// so it cannot supply a stable track identity and cannot be the spine. We still reach
-// the Discogs release graph, but through the join that already exists: MusicBrainz's
-// CURATED `url-rels` relation, which hands us the Discogs release/master id for free, in
-// the same request that brought the tracks, with zero Discogs API calls. Spotify no longer
-// enters the crawl at all: the `spotify_uri`/`spotify_url` anchor is optional — a track with
-// no Spotify presence is a perfectly good row — and filling it moved ENTIRELY off this Worker
-// path onto the box's Apify-driven anchor sweep (docs/agents/hermes/scripts/anchor-sweep.*),
-// which POSTs verified candidates to the agent-tier `anchor_track` op (lib/server/anchor.ts).
-// The first pilot put a per-ISRC Spotify lookup in the write path and Spotify 429'd; the
-// second ran it as a bounded in-Worker step against the official dev-mode Spotify app, and at
-// catalogue scale THAT starved under sustained 429s too. So the crawl is now MusicBrainz-only,
-// its documented mandate, and the anchor's worklist is DERIVED (`spotify_uri is null`) — nothing
-// is lost when the box sweep is paused. See docs/catalogue-crawler.md § the anchor.
-//
-// ── DETERMINISTIC · RESUMABLE · POLITE · IDEMPOTENT ────────────────────────────
-//   Deterministic — the frontier is picked `order by hop, created_at, id`, so two runs
-//     over the same graph expand the same nodes in the same order.
-//   Resumable — every scrap of walk state lives in `crawl_frontier` (docs/, schema.ts),
-//     never in a process. A tick that dies mid-label is RESUMED by the next one: the
-//     node it was on is still `pending` with its browse cursor where it got to.
-//   Polite — every MB call goes through the ONE shared client (./musicbrainz.ts): an
-//     identifiable User-Agent, ~1 req/s, `Retry-After` honoured on a 503. An exhausted
-//     503 trips the run's circuit breaker (`rateLimited`) and the pass STOPS — it does
-//     not grind the same wall. Same discipline as the shipped `fluncle-backfill` sweep.
-//   Idempotent — a track is deduped on ISRC where MusicBrainz has one, else on its MB
-//     recording id (which IS the minted `track_id`, `mb_<uuid>`). A re-crawl of the same
-//     graph writes ZERO new rows.
-//
-// See docs/catalogue-crawler.md.
-
 import {
   CRAWL_COMMIT_BATCH_MAX_TOTAL_BYTES,
   MAX_CRAWL_COMMIT_BATCH,
@@ -137,62 +64,26 @@ import { readEnv } from "./env";
 import { ApiError } from "./spotify";
 import { insertTrackDuplicateKeyStatement } from "./track-duplicate-keys";
 
-// ── Policy constants ─────────────────────────────────────────────────────────
-
-/** The ratified default: label → release → artist → release, then stop. */
 export const DEFAULT_MAX_HOP = 2;
 
-/** A hard ceiling on the configurable limit — past 3 the walk is the whole of music. */
 export const MAX_HOP_CEILING = 3;
 
-/** MusicBrainz's browse page size ceiling. One page = one request. */
 const BROWSE_PAGE_SIZE = 100;
 
 type CrawlDbClient = Pick<Client, "batch" | "execute">;
 
-/**
- * THE CURSOR, SIGNED — one integer carries a browse node's walk DIRECTION and its offset, so
- * the tail-first re-arm needs no schema column (the frontier stays exactly as wide as it was):
- *
- *   `cursor >= 0`  — a FORWARD walk (a cold seed's initial drain). `offset = cursor`. The whole
- *                    list, head to tail, one page a tick. Unchanged from before this existed.
- *   `cursor === REARM_TAIL` (`-1`) — a re-armed node whose tail has not been located yet. Its
- *                    first backward tick probes the CURRENT `release-count`, then reads the tail.
- *   `cursor <= -2` — a backward DESCENT page. `offset = descendOffset(cursor)` (a page walking
- *                    from the tail toward the head, stopping at the first all-known page).
- *
- * The three bands are disjoint by construction, so `expandBrowse` reads the mode straight off
- * the sign with no ambiguity, and `descendCursor(0) = -2` never collides with `REARM_TAIL`.
- */
 const REARM_TAIL = -1;
 
-/** A backward-descent offset → its (negative) cursor. `0 → -2`, `100 → -102`. */
 function descendCursor(offset: number): number {
   return -(offset + 2);
 }
 
-/** A descent cursor → its browse offset — the inverse of {@link descendCursor}. */
 function descendOffset(cursor: number): number {
   return -cursor - 2;
 }
 
-/** Consecutive failures after which a node is abandoned (stays `failed`, never picked). */
 const MAX_FAILURES = 5;
 
-/**
- * THE THROTTLE IS NOT A NODE FAULT. A vendor 503 that survived the shared client's `Retry-After`
- * retries says something about MusicBrainz's current mood, never about this node — the same
- * request will succeed once the wall lifts. Charging it as a consecutive failure costs the node
- * the exponential backoff (15min × 2^n) it did nothing to earn and, five throttles apart, ABANDONS
- * a perfectly good node forever. So a throttled node is returned to `pending` with its browse
- * cursor and its failure count exactly as they were: nothing is charged, nothing is abandoned, and
- * the walk resumes where it stood.
- *
- * The WAIT that keeps a throttled node from being re-asked into the same wall is the sweep's, not
- * the frontier's: `crawl-sweep.ts` sleeps a bounded number of times per tick before it claims
- * again. That is the layer that can see the vendor's state across nodes; a per-node not-before
- * column could only guess at it.
- */
 function throttledSettlement(node: { cursor: number; failures: number }): {
   cursor: number;
   failures: number;
@@ -207,45 +98,16 @@ function throttledSettlement(node: { cursor: number; failures: number }): {
   };
 }
 
-/**
- * THE ALLOWED-ARTIST TAIL CADENCE. How stale a `done` allowed-artist browse node may get before
- * `rearmStaleAllowedArtists` re-reads its tail. An allowed artist is a narrow, operator-minted
- * population — one node per identity carrying an allow rule — so a daily tail read stays a
- * rounding error against the MusicBrainz budget, and the seed labels' release-week schedule
- * (`crawl-rearm-schedule.ts`) deliberately does not govern it.
- */
 export const ALLOWED_ARTIST_REARM_AFTER_DAYS = 1;
 
-/**
- * How many due seed-label nodes one pass re-arms, oldest-done-first. Bounded so a mass re-arm —
- * every enabled label coming due on the same pass boundary, which is the NORMAL shape of a
- * weekday-anchored schedule rather than a rare cohort — spreads over passes instead of flooding
- * the frontier head and starving the deep walk it SHARES the 1 req/s MusicBrainz budget with. A
- * row this pass skips comes round on the next tick, and the boundary comparison keeps it due
- * until it is actually served, so nothing is dropped.
- */
 export const REARM_BATCH = 10;
 
-/** Scope-widening label re-arms per pass, oldest watermark first. */
 export const REARM_SCOPED_BATCH = 10;
 
-/** Allow-rule artist nodes minted/revived per pass, and stale allowed-artist subscriptions re-armed. */
 export const REARM_ALLOWED_BATCH = CRAWL_STALE_ARTIST_REARM_LIMIT;
 
-/**
- * SOURCE REPAIR MARKERS ONE ADMITTED TICK MINTS — the mint side of the admission invariant.
- *
- * A tick is admission then claim, and the claim must be able to clear every source marker the
- * admission it follows minted; a marker it cannot reach defers the claim, and a tick that mints as
- * fast as it drains never claims a frontier row again. `rearmAllowedArtists` is the only re-arm
- * that mints SOURCE markers — one per selected identity, bounded by `REARM_ALLOWED_BATCH`. Its
- * siblings (`seedFromEnabledLabels`, `rearmScopedLabelReleases`, `rearmSeedLabels`,
- * `rearmStaleAllowedArtists`) mint NODE markers only, which drain on the claim's other lane.
- */
 export const CRAWL_ADMISSION_SOURCE_MARKER_MINT_BOUND = REARM_ALLOWED_BATCH;
 
-// The invariant itself, checked where both constants are literal so a future change to either one
-// fails the build instead of stalling the production crawl.
 if (CRAWL_ADMISSION_SOURCE_MARKER_MINT_BOUND >= CRAWL_CLAIM_SOURCE_MARKER_DRAIN_CAPACITY) {
   throw new Error(
     `crawl admission mints up to ${CRAWL_ADMISSION_SOURCE_MARKER_MINT_BOUND} source repair markers ` +
@@ -253,27 +115,6 @@ if (CRAWL_ADMISSION_SOURCE_MARKER_MINT_BOUND >= CRAWL_CLAIM_SOURCE_MARKER_DRAIN_
   );
 }
 
-/**
- * NODE REPAIR MARKERS ONE BATCHED COMMIT MINTS — the batched shape's side of the same invariant.
- *
- * One admitted phase batches K node commits and therefore mints K nodes' worth of markers. The
- * markers a commit mints are NODE markers, not the crawl
- * PROJECTION source markers {@link CRAWL_ADMISSION_SOURCE_MARKER_MINT_BOUND} bounds: a node's
- * settlement marks the node it settled, and each newly enqueued neighbour is marked with it. The
- * enqueue side is already bounded per node by the browse page (`BROWSE_PAGE_SIZE`), and a batch's
- * worst case is therefore K pages of them.
- *
- * They drain on the claim's NODE lane, whose capacity is
- * `CRAWL_CLAIM_REPAIR_DRAIN_BUDGET.nodeChunks × .nodeChunkRows`. The assertion below is the same
- * shape as the source-marker one and for the same reason: a tick that mints faster than its claim
- * drains never claims a frontier row again, so a future change to the claim width, the browse page,
- * or the drain budget fails the build instead of stalling the production crawl.
- *
- * The TRACK side needs no bound of its own. A commit that discovers a label mints one track-side
- * source marker per new label, and a track-side source marker withholds ITS OWN SUBJECT and nothing
- * else (`due-work-cutover.ts`): the rest of every worklist stays exactly as servable as it was, so K
- * labels' markers delay at most those K labels' own rows rather than the queue they sit in.
- */
 export const CRAWL_COMMIT_BATCH_NODE_MARKER_MINT_BOUND =
   MAX_CRAWL_COMMIT_BATCH * (BROWSE_PAGE_SIZE + 1);
 
@@ -287,26 +128,12 @@ if (CRAWL_COMMIT_BATCH_NODE_MARKER_MINT_BOUND >= CRAWL_CLAIM_NODE_MARKER_DRAIN_C
   );
 }
 
-/** Hard ceiling on the one per-tick rules read; overflow fails the pass instead of losing a rule. */
 const ARTIST_RULE_MEMO_LIMIT = 10_000;
 
-// The retry window for a FAILED node, growing with its consecutive-failure count — the
-// shipped `backfill_*` backoff, verbatim in shape (backfill.ts): base × 2^failures,
-// capped, so a node the vendor keeps throttling backs off hard instead of being retried
-// every tick. Shorter base than the backfill's 24h because a crawl node's failure is
-// usually transient (a 503), not a settled no-match.
 const RETRY_BASE_MS = 15 * 60 * 1000;
 const RETRY_MAX_MS = 24 * 60 * 60 * 1000;
 
-/**
- * MusicBrainz's "Various Artists" placeholder. It is credited on every compilation ever
- * pressed, so following it as a hop-1 artist would walk the crawler straight out of drum
- * & bass and into the entire recorded-music graph in a single step. The one hard-coded
- * exclusion in the walk — and it is an IDENTITY exclusion, not a genre judgement.
- */
 const VARIOUS_ARTISTS_MBID = "89ad4ac3-39f7-470e-963a-56509c546377";
-
-// ── Types ────────────────────────────────────────────────────────────────────
 
 export type CrawlNodeKind = "artist" | "label" | "release";
 export type CrawlNodeState = "done" | "failed" | "pending" | "skipped";
@@ -324,18 +151,11 @@ type FrontierRow = {
   source: CrawlNodeSource;
 };
 
-/** One catalogue track the walk found on a release, before it meets the archive. */
 type TrackCandidate = {
   album: string | null;
   albumImageUrl: string | null;
   artists: string[];
-  /**
-   * The MusicBrainz artist id behind each entry of `artists`, POSITIONALLY ALIGNED with it (null
-   * where the credit named nobody resolvable, or named Various Artists). This is the identity the
-   * artist-edge seal needs: without it a credited NAME is all the link step has, and two acts that
-   * share a name land on one `artists` row (artists.ts § THE HOMONYM SEAL). Never stored on the
-   * `tracks` row — it is carried from the release parse to `linkTracksToArtistEntities` and dropped.
-   */
+
   creditMbids: (null | string)[];
   durationMs: number;
   inMasterId: number | null;
@@ -347,98 +167,62 @@ type TrackCandidate = {
   title: string;
 };
 
-/** What one `crawl_catalogue` pass did. Every number here is real, not an estimate. */
 export type CrawlPass = {
-  /**
-   * Initial distinct allow identities processed (their rules stamped; failed nodes stay failed)
-   * plus stale allowed-artist browse nodes actually tail-rearmed this pass.
-   */
   artistsRearmed: number;
   dryRun: boolean;
-  /** Frontier nodes expanded this pass. */
+
   expanded: number;
-  /** Frontier nodes that failed (a vendor error) and were backed off. */
+
   failed: number;
-  /** Nodes still waiting after this pass — 0 means the reachable graph is drained. */
+
   frontierPending: number;
-  /** Labels the walk discovered and minted as `undecided` (the operator's next ruling). */
+
   labelsDiscovered: string[];
   maxHop: number;
-  /** New frontier nodes this pass enqueued (the walk's outward edge). */
+
   nodesEnqueued: number;
-  /** True when MusicBrainz actively throttled us and the pass STOPPED on the breaker. */
+
   rateLimited: boolean;
-  /** Label browse nodes re-armed after their acquisition scope widened. */
+
   releasesRearmed: number;
-  /** Seed nodes minted from the operator's `enabled` labels this pass. */
+
   seeded: number;
-  /**
-   * Due seed-label browse nodes re-armed this pass (bounded by `REARM_BATCH`) — an enabled label
-   * re-paginates on each release-week pass boundary so its later releases surface. See
-   * `rearmSeedLabels`.
-   */
+
   seedsRearmed: number;
-  /** Catalogue tracks the walk SAW on the releases it expanded. */
+
   tracksFound: number;
-  /** Candidates admitted by an allow because their label default was non-enabled. */
+
   tracksAllowedIn: number;
-  /** Candidates refused by an explicit block rule. */
+
   tracksSkippedArtistRule: number;
-  /** Tracks already in the archive (by ISRC, MB recording id, or album/title fold). */
+
   tracksSkippedHeld: number;
-  /** Candidates refused by their non-enabled label default. */
+
   tracksSkippedLabelGate: number;
-  /** Exact sum of held/idempotent, label-default, and artist-rule skips. */
+
   tracksSkipped: number;
-  /** Catalogue rows actually written into `tracks`. Never a `findings` row. */
+
   tracksWritten: number;
 };
 
-/** The frontier's shape at rest — the `get_crawl_status` read. */
 export type CrawlStatus = {
-  /** Catalogue rows with an ISRC still awaiting their Spotify anchor (the derived queue). */
   anchorsPending: number;
-  /** Catalogue tracks in the archive: `tracks` rows with NO `findings` row. */
+
   catalogueTracks: number;
-  /** Every distinct label the walk has minted but nobody has ruled on yet. */
+
   labelsUndecided: number;
-  /** Frontier node counts, grouped `<state>` and `<state>:<kind>`. */
+
   frontier: { done: number; failed: number; pending: number; skipped: number };
   frontierByKind: { artist: number; label: number; release: number };
-  /** The operator's enabled seed labels — what the NEXT crawl would seed from. */
+
   seedLabels: string[];
-  /**
-   * Release nodes that are claimable RIGHT NOW and whose provenance is storable — an enabled
-   * label or an allow-artist parent. This is the head of the claim's release lane, so it answers
-   * the only question the frontier depth cannot: is the next tick going to write tracks, or only
-   * walk discovery? It is a range count on the partial `crawl_due_work_release_ready_idx`, whose
-   * leading columns are exactly this predicate, so it costs an index seek and never a scan.
-   */
+
   storablePending: number;
-  /**
-   * Distinct `undecided` labels that already hold at least one due-work node — the rulings standing
-   * between the walk and the lane above. `labelsUndecided` counts every unruled label the walk has
-   * ever minted, including ones with nothing queued behind them; this counts the ones a ruling would
-   * actually move. An `exists` probe per undecided label on the covering
-   * `crawl_due_work_label_slug_node_id_idx`, so it reads index entries and never a due-work row.
-   */
+
   undecidedLabelsQueued: number;
-  /**
-   * Claimable release nodes whose provenance CANNOT store — the exact complement of
-   * `storablePending` on the same partial index (`storable_rank = 1`). It is the size of the lane a
-   * label round would unlock: the walk has these nodes in hand and ready, and the storage gate is
-   * the only thing between them and written tracks. Read together with `storablePending`, a deep
-   * frontier splits into "the crawl is behind" and "the rulings are behind" without guessing.
-   *
-   * It does NOT attribute each node to an `undecided` label, deliberately: `label_slug` is not in
-   * `crawl_due_work_release_ready_idx`, so per-node attribution costs a table row for every blocked
-   * node — a growing-table read on a status command. `undecidedLabelsQueued` answers the same
-   * question from the small side of the graph instead, and stays index-only.
-   */
+
   unstorablePending: number;
 };
-
-// ── MusicBrainz response shapes (only the fields we consume) ──────────────────
 
 type MbArtistCredit = { artist?: { id?: string; name?: string }; name?: string };
 type MbRecording = {
@@ -460,15 +244,13 @@ type MbReleaseDetail = {
   "label-info"?: MbLabelInfo[];
   media?: MbMedium[];
   relations?: MbRelation[];
-  // MusicBrainz's album abstraction over a release's pressings, returned as a singular object
-  // (a release belongs to exactly one) when `release-groups` is in `inc`. Its MBID is the
-  // catalogue's stable album fold key. Verified against the live web service.
+
   "release-group"?: { id?: string };
   title?: string;
 };
 type MbBrowseRelease = {
   id?: string;
-  // Present on an ARTIST browse, which asks for `inc=labels` (see `browsePath`).
+
   "label-info"?: { label?: { id?: string; name?: string } | null }[];
   status?: string;
 };
@@ -478,50 +260,16 @@ type MbReleaseBrowse = {
 };
 type MbLabelSearch = { labels?: { id?: string; name?: string; score?: number }[] };
 
-// ── Identity ─────────────────────────────────────────────────────────────────
-
-/**
- * A frontier node's DETERMINISTIC id. Re-discovering a node the walk already holds is
- * then an `on conflict do nothing`, not a second traversal of the same subtree — which
- * is what keeps a graph with cycles (and the release graph is full of them: two artists
- * on one release each point back at it) from looping forever.
- */
 function frontierId(source: CrawlNodeSource, kind: CrawlNodeKind, externalId: string): string {
   return `${source}:${kind}:${externalId}`;
 }
 
-/**
- * A crawled track's `track_id`. `tracks.track_id` is an opaque PK that HAPPENS to be the
- * Spotify id for a finding; a catalogue track mints its own from the identity that
- * actually exists for it — the MusicBrainz recording MBID. Deterministic, so re-crawling
- * the same recording collides on the primary key and writes nothing.
- *
- * The freshness tap (label-releases.ts) is the sibling minter: its rows carry `sp_<spotify-track-id>`,
- * the same namespaced-id convention off the identity Spotify gives it. The two converge on ONE row
- * per recording via the shared dedupe contract (ISRC + same-album title fold — catalogue-dedupe.ts).
- */
 export function catalogueTrackId(recordingMbid: string): string {
   return `mb_${recordingMbid}`;
 }
 
-// The aggressive label fold ("Medschool" ⇄ "Med School", "Pilot." ⇄ "Pilot") is the shared
-// `labelFold` (re-exported from ./labels), so the crawler's label dedup and the Apple
-// recordLabel corroboration agree by construction. A fold is a NAME test, never an identity
-// test: two unrelated labels fold the same (there are two "Hospital Records", London and US;
-// two "Radar Records", Belgian DnB and UK punk). Seed resolution must not take the first —
-// MusicBrainz returns them score-ordered — which is deterministic and WRONG whenever the
-// operator meant the other one. It now resolves on the ruled `labels.mb_label_id` and declines
-// to guess when the name alone is ambiguous; see `expandSeedLabel`.
 const fold = labelFold;
 
-// ── Frontier persistence ─────────────────────────────────────────────────────
-
-/**
- * Enqueue a node, unless the frontier already holds it. `on conflict do nothing` is the
- * whole cycle guard: an artist reached from two different releases is ONE node.
- * Returns 1 when a node was actually minted, 0 when it collided — the NEWNESS signal the
- * tail-first re-arm early-stops on (a browse page that mints 0 new nodes is already walked).
- */
 type EnqueueNode = {
   externalId: string;
   hop: number;
@@ -573,7 +321,6 @@ async function enqueueMany(nodes: readonly EnqueueNode[], client?: CrawlDbClient
   return results.reduce((count, group) => count + (group[0]?.rowsAffected ?? 0), 0);
 }
 
-/** Record how a node's expansion ended. The durable state the next tick resumes from. */
 async function settle(
   id: string,
   state: CrawlNodeState,
@@ -618,33 +365,10 @@ async function settle(
   );
 }
 
-/**
- * The pass's pick: the next `limit` nodes to expand — breadth-first and deterministic
- * (`hop, demand_rank, created_at, id`) WITHIN each class of a kind-aware split. The RELEASE half
- * drains storable releases (the release's own label enabled, or an allow-artist parent) first;
- * the DISCOVERY half is unchanged. `demand_rank` (docs/catalogue-crawler.md § Demand) sits AFTER
- * `hop`, so a demanded entity's subtree is expanded before its undemanded siblings AT THE SAME
- * HOP within its class — never ahead of a nearer hop in that class. It takes `pending`
- * nodes plus `failed` ones whose exponential backoff has elapsed and which have not
- * yet been abandoned — so a transient 503 is retried by a later tick instead of
- * silently pruning a subtree.
- *
- * THE SPLIT. A pure `hop asc` drain starves the
- * track-bearing kind: a wave of hop-1 ARTIST nodes (2,015 of them, measured live)
- * sorts ahead of every hop-2 RELEASE node, and each artist expansion enqueues ~9
- * more releases — so the frontier grew ~12k nodes in a day while `tracksWritten`
- * sat at ZERO for eight hours. The crawler's whole job is metadata acquisition;
- * only a RELEASE node writes tracks. So every pick now GUARANTEES releases half
- * the batch (rounded up) when any are pending, and discovery kinds (label/artist)
- * fill the rest — acquisition and discovery move together, deterministically, and
- * neither can starve the other (releases still drain a widening artist wave's
- * output; artists still drain even under a release glut).
- */
 async function pickNodes(limit: number): Promise<FrontierRow[]> {
   const db = await getDb();
   const now = Date.now();
-  // One cutoff per failure count, computed here rather than in SQL: SQLite has no clean
-  // exponential, and an ISO string comparison is exact.
+
   const cutoff = (failures: number): string =>
     new Date(now - Math.min(RETRY_BASE_MS * 2 ** failures, RETRY_MAX_MS)).toISOString();
 
@@ -686,8 +410,6 @@ async function pickNodes(limit: number): Promise<FrontierRow[]> {
     return releaseRows;
   }
 
-  // The rest of the batch: any kind, oldest-lowest-hop first, excluding the release
-  // ids already picked (releases may win these slots too when discovery is drained).
   const placeholders = releaseRows.map(() => "?").join(", ");
   const rest = await db.execute({
     args: [...cutoffs, ...releaseRows.map((row) => row.id), remainder],
@@ -702,47 +424,6 @@ async function pickNodes(limit: number): Promise<FrontierRow[]> {
   return [...releaseRows, ...typedRows<FrontierRow>(rest.rows)];
 }
 
-/**
- * THE ARCHIVE'S OWN SPELLING of a label MusicBrainz just handed us — or `undefined` if it
- * has never heard of it. Two jobs ride on this one lookup, and both are load-bearing.
- *
- * The problem it solves is real and the pilot found it twice: the operator's archive spells
- * the label **"Medschool"**; MusicBrainz spells it **"Med School"**. They fold to the same
- * label and they slugify to two different slugs (`medschool` vs `med-school`).
- *
- * 1. THE ATTENTION QUEUE. A slug check would mint a SECOND `labels` row for a label he has
- *    already ruled on, and drop it in his queue asking him to rule on it again. The queue
- *    is his steering wheel; filling it with the crawler's own spelling variants blunts it.
- *    Fold-equal ⇒ already known ⇒ say nothing.
- *
- * 2. THE CAPTURE-PRIORITY LADDER (docs/the-ear.md), and this one is sharper. The Ear keys
- *    every label rung on `slugify(tracks.label) = labels.slug`. If the crawler wrote MB's
- *    spelling onto the row, `med-school` would match no label, so the "its label carries a
- *    finding" and "its label is one he seeds from" rungs would NEVER FIRE on a crawled
- *    track — and, far worse, neither would the `skipped-label` VETO, the rung whose whole
- *    job is to stop the metered capture budget being spent on a label he ruled out.
- *    Measured: before this, a full Medschool crawl produced 223 rows at tier 3 and 512 at
- *    tier 0, with NOTHING at tiers 1 or 2. The ladder was silently half-dead.
- *
- * So the crawler writes back the name the ARCHIVE uses, not the name the vendor used. That
- * is not a loss of provenance — the row's MB identity is its `track_id` — it is what makes
- * `slugify(tracks.label) = labels.slug` true by construction for every crawled row, which
- * is the invariant every label consumer already assumes.
- *
- * A genuinely NEW label is returned `undefined`; the caller then mints the row from MB's
- * spelling and writes that same spelling onto the track, so the two agree by construction.
- *
- * It returns the ROW, not just the name, so the caller can adopt the release's label MBID onto a
- * row that carries none without a second resolve — one write, and only when there is something to
- * write. The crawl commits inside a bounded transaction-op budget, so a read it already pays for
- * is the right place to learn that.
- *
- * NOT bounded by a constant: `labels` holds one row per DISTINCT label, never one per track, but
- * the crawl mints a row for every newly identified label it walks into, so the table grows with
- * discovery (thousands of rows, see `getCrawlStatus`). This is a lean three-column read of it
- * once per release commit. The fold cannot be asked in SQL without a stored fold key, which is
- * the change that would bound it.
- */
 async function canonicalLabelRow(
   name: string,
   client?: Pick<Client, "execute">,
@@ -757,31 +438,8 @@ async function canonicalLabelRow(
   return row ? { id: row.id, mbLabelId: row.mb_label_id, name: row.name } : undefined;
 }
 
-// ── Seeding ──────────────────────────────────────────────────────────────────
-
-/** How many seed ids one primary-key probe asks for, well inside the bind-variable ceiling. */
 const SEED_PROBE_CHUNK_SIZE = 500;
 
-/**
- * Mint a seed node for every label the operator ENABLED. This is the ONE place the crawl
- * reads `labels.seed_state`, and it reads it for exactly the question the column answers:
- * may the next crawl seed from this label? A `disabled` or `undecided` label is simply
- * not seeded — nothing already stored is touched, hidden, or removed (docs/label-entity.md).
- *
- * Idempotent: re-seeding an already-seeded label is a no-op, so an operator enabling a new
- * label mid-crawl just adds one node to the frontier on the next tick.
- *
- * READ FIRST, THEN WRITE ONLY THE MISSING. Seeding runs at the head of EVERY tick, inside the
- * exclusive writer admission, and the enabled set is the whole seed list — thousands of labels
- * whose seed nodes were minted long ago. Issuing one `on conflict do nothing` write batch per
- * label spends the admitted window proving, over and over, that nothing needs writing. So the
- * seed reads which seed ids the frontier already holds (bounded primary-key probes, the label
- * count being the bound) and enqueues only the ones it does not. The steady state is therefore
- * reads and no writes at all, which is also why no repair marker is written: `enqueueMany` marks
- * a node for repair only when its insert actually changed a row, so a per-label marker per tick —
- * repair debt that pauses the very claim this tick wanted — was never the behaviour and is not
- * introduced here.
- */
 async function seedFromEnabledLabels(): Promise<{ minted: number; slugs: string[] }> {
   const enabled = await listLabels("enabled");
   const slugs = enabled.map((label) => label.slug);
@@ -820,61 +478,6 @@ async function seedFromEnabledLabels(): Promise<{ minted: number; slugs: string[
   return { minted, slugs };
 }
 
-/**
- * THE SEED RE-ARM — turn an enabled seed label back into a live subscription.
- *
- * A `done` node is otherwise TERMINAL: `pickNodes` only ever picks `pending` (or backed-off
- * `failed`) nodes, so a seed label whose MusicBrainz browse finished paginating goes `done`
- * and stays there. That is correct for the deep walk (a re-crawl of the same graph writes
- * zero rows), but it means a label's LATER releases — a Friday drop on a label the operator
- * enabled — are never seen. An enabled label should be a subscription, not a one-shot walk.
- *
- * WHICH node. The seed's `fluncle:label` node only resolves the name→MBID once; the node that
- * actually browses `/release?label=<mbid>` and paginates is the MusicBrainz label ENTITY node
- * (`source = 'musicbrainz'`, `kind = 'label'`). Re-arming THAT — `state → 'pending'`, `cursor
- * → REARM_TAIL` — makes `expandBrowse` re-read the label's release list TAIL-FIRST. Re-arming
- * the `fluncle` seed node would be pure waste: its expansion just re-enqueues the (already-present,
- * still-`done`) MBID node as an `on conflict do nothing` no-op. So this targets `source =
- * 'musicbrainz'` precisely.
- *
- * WHY it stays cheap — TAIL-FIRST, not a full re-walk. MusicBrainz's release browse has NO date
- * sort: its order is append-ish, so a label's NEWEST releases sit at the END of the list (page 1
- * is the oldest pressing, the last page the newest). So the re-arm does NOT re-walk the whole
- * list from the head — `expandRearmedBrowse` starts at the LAST page and pages backward, stopping
- * at the first page that adds nothing new (every release node already present ⇒ the territory
- * below is already walked). In steady state that is ONE browse page (probe + tail) per label with
- * no drop. A genuinely new release still mints a `pending` node and gets walked, and the two-layer
- * idempotence in `writeCatalogueTracks` folds any already-held track (a re-press) to a cheap skip.
- *
- * WHEN — the RELEASE-WEEK SCHEDULE, not an interval. Three pass boundaries a week, all UTC
- * (`crawl-rearm-schedule.ts` holds the schedule and the rationale: Friday 12:00, Sunday 00:00,
- * Tuesday 00:00). A node is due when the most recent boundary at or before now is NEWER than its
- * last drain — one comparison, self-healing, no catch-up backlog and no schema column. The cost
- * is what makes it a schedule rather than a daily sweep: every enabled label is one browse page,
- * and at the enabled-label count the crawl carries a daily pass consumed more of the shared
- * 1 req/s MusicBrainz budget than the whole general walk, starving artist-hop discovery. Three
- * passes cut that to three sevenths of it while still landing a Friday drop on the day, which is
- * all MusicBrainz's own hours-to-days editorial lag can deliver anyway.
- *
- * THE GUARDS, all load-bearing:
- *   - `seed_state = 'enabled'` (joined on the node's `label_slug`) — a subscription is only for
- *     labels the operator still seeds from. A `disabled`/`undecided` label's node never re-arms:
- *     re-arm is crawl SCOPE, the same rule seeding obeys.
- *   - THE IDENTITY GUARD — the node's `external_id` must BE the label's ruled `mb_label_id`
- *     (or the row must carry no ruling yet). `label_slug` alone is not identity: a node minted
- *     from a namesake resolve (see `expandSeedLabel`'s namesake seal) carries the RIGHT slug and
- *     the WRONG MBID, so a slug-only join re-armed the wrong label's browse forever under the
- *     operator's correct ruling. A
- *     mismatched node simply stops being re-armed; nothing it already stored is touched here.
- *   - `kind = 'label'` — never an artist or release node (those are re-reached BY the browse).
- *   - `state = 'done'` — a `failed` node is owned by its own exponential backoff; never disturb it.
- *   - `done_at < <the most recent pass boundary>` — a label drained since the boundary is not
- *     re-walked again until the next one.
- *
- * BOUNDED. At most `REARM_BATCH` per pass, oldest-done-first, so the labels coming due together
- * on a boundary spread across ticks rather than flooding the frontier head. Returns the count and
- * logs it, so a re-arm wave is visible rather than silent.
- */
 async function rearmSeedLabels(): Promise<number> {
   const db = await getDb();
   const cutoff = currentSeedRearmBoundary().toISOString();
@@ -929,16 +532,6 @@ async function rearmSeedLabels(): Promise<number> {
   return rearmed;
 }
 
-/**
- * THE SCOPE RE-ARM — replay an enabled label's full release list after its ruling widened.
- *
- * `labels.scope_changed_at` is the durable request watermark. A matching, drained MusicBrainz
- * label node whose prior `done_at` predates it returns to the HEAD (`cursor = 0`), not the daily
- * subscription tail: releases refused by the gate may live anywhere in the back catalogue.
- * The previous `done_at` stays on the node while this forward walk paginates; expansion resolves
- * the newer watermark from the label row on every tick, so process death cannot turn later pages
- * into an ordinary no-revival browse.
- */
 async function rearmScopedLabelReleases(): Promise<number> {
   const db = await getDb();
   const now = new Date().toISOString();
@@ -995,19 +588,6 @@ async function rearmScopedLabelReleases(): Promise<number> {
   return rearmed;
 }
 
-// ── The writes ───────────────────────────────────────────────────────────────
-
-/**
- * THE ALLOW-ARTIST RE-ARM — an allow is also a request to walk that artist's back catalogue.
- *
- * Rules, rather than `artists` rows, own the request because an allowed MusicBrainz identity may
- * not have an entity row yet. One bounded DISTINCT read chooses artists with an unstamped allow;
- * each gets a hop-0 forward browse node. An existing pending or drained node is rooted at the head;
- * a drained node keeps its old `done_at` as the replay watermark. A failed node keeps its failure
- * state/backoff but is likewise rooted at cursor 0, so its eventual retry cannot resume halfway
- * through the newly-allowed catalogue. All selected rules for the identity are stamped together,
- * so global + per-label duplicates cost one browse and the next pass is a no-op.
- */
 async function rearmAllowedArtists(): Promise<number> {
   const db = await getDb();
   const selected = await db.execute({
@@ -1030,11 +610,6 @@ async function rearmAllowedArtists(): Promise<number> {
   const now = new Date().toISOString();
   const sourceVersion = `crawl-artist-rearm:${crypto.randomUUID()}`;
 
-  // ONE batch, not a statement per identity. The selection is capped at `REARM_ALLOWED_BATCH`, so
-  // a statement-per-identity loop is a bounded N+1 rather than an unbounded one — but it still
-  // spends that many sequential round-trips inside a tick that fires 144×/day, and it lets the node
-  // writes and the stamp half-apply. As ONE write transaction, a tick that dies mid-way re-arms the
-  // same identities next time instead of stamping some of them.
   const writes: DueWorkStatement[] = [];
   for (const artistMbid of artistMbids) {
     const nodeId = frontierId("musicbrainz", "artist", artistMbid);
@@ -1079,7 +654,6 @@ async function rearmAllowedArtists(): Promise<number> {
   return artistMbids.length;
 }
 
-/** Daily tail-first subscription for artists carrying any allow rule. */
 async function rearmStaleAllowedArtists(): Promise<number> {
   const db = await getDb();
   const cutoff = new Date(
@@ -1144,29 +718,6 @@ async function rearmStaleAllowedArtists(): Promise<number> {
   return rearmed;
 }
 
-/**
- * Write a release's tracks into `tracks` as CATALOGUE rows — and nowhere near `findings`.
- *
- * IDEMPOTENCE, in THREE layers, because two were not enough once the freshness tap arrived:
- *   1. A bounded pre-read over the candidates' ISRCs + minted ids (`tracks_isrc_idx`).
- *      An ISRC is the recording's real identity, so a track Fluncle already CERTIFIED —
- *      whose `track_id` is a Spotify id, not `mb_…` — is recognised and skipped. Without
- *      this the crawler would happily mint a second, uncertified row for a finding.
- *   2. THE SAME-ALBUM TITLE-FOLD CONVERGENCE (`releaseAlbumId`). A freshness-tapped row
- *      (`sp_<id>`, label-releases.ts) can arrive with a MISSING or DIVERGENT ISRC — Spotify
- *      and MusicBrainz occasionally disagree on a recording's ISRC — so layer 1 would miss
- *      it and this later MB walk of the same release would mint an `mb_` twin. This closes
- *      that: a candidate whose title EXACT-folds to an existing row on the SAME album row
- *      (the release's `album_id`, resolved before the write) is recognised as that row and
- *      skipped. Deliberately TIGHT — exact fold, one album — so a VIP/remix (a different
- *      title, "Foo VIP" ≠ "Foo") is never merged. See catalogue-dedupe.ts.
- *   3. `on conflict (track_id) do nothing` on the insert, which closes the race the
- *      pre-reads cannot (two ticks, same recording) at the primary key.
- *
- * `capture_status` and every other queue column are simply never named: the DDL defaults
- * land, the row is nobody's work item, and no agent sweep can reach it (the enrichment,
- * note, observe and video queues all live on `findings`, which this row does not have).
- */
 async function writeCatalogueTracks(
   candidates: TrackCandidate[],
   releaseAlbumId: null | string,
@@ -1200,7 +751,6 @@ async function writeCatalogueTracks(
     }
   }
 
-  // Layer 2: the same-album title-fold convergence index (the Apple-twin guard).
   const albumTitleFolds = await existingAlbumTitleFolds(releaseAlbumId, db);
 
   let written = 0;
@@ -1208,8 +758,7 @@ async function writeCatalogueTracks(
   const writtenIds: string[] = [];
   const plannedGroups: InStatement[][] = [];
   const plannedTrackIds: string[] = [];
-  // One instant for the whole batch — these rows all came out of the same release read, so they
-  // were all attempted at the same moment, and a per-row `new Date()` would only pretend otherwise.
+
   const writtenAt = new Date().toISOString();
 
   for (const candidate of candidates) {
@@ -1225,10 +774,6 @@ async function writeCatalogueTracks(
       continue;
     }
 
-    // NO Spotify call here. The `spotify_uri`/`spotify_url` anchor is filled off this Worker path
-    // entirely — the box's Apify anchor sweep → the agent-tier `anchor_track` op (anchor.ts). Its
-    // worklist is derived (`spotify_uri is null`), so a row landing here with no anchor is simply
-    // picked up on a later anchor tick. See docs/catalogue-crawler.md § the anchor.
     const artistsJson = JSON.stringify(candidate.artists);
     const insertTrack = {
       args: [
@@ -1239,25 +784,15 @@ async function writeCatalogueTracks(
         candidate.album,
         candidate.albumImageUrl,
         candidate.isrc,
-        // The presence mirror, in the same insert as the ISRC it mirrors (schema.ts § `has_isrc`).
+
         hasIsrc(candidate.isrc),
         candidate.label,
         candidate.releaseDate,
         candidate.inReleaseId,
         candidate.inMasterId,
-        // The MusicBrainz recording MBID — the canonical KG join key (docs/catalogue-crawler.md §
-        // the MusicBrainz identity layer). It is already in the PK (`track_id` is `mb_<mbid>`), but
-        // stamping it here too means a crawled row is graph-joinable off the bat instead of waiting
-        // on the prefix-strip backfill, and the `/log` MusicRecording emits it the moment such a row
-        // is certified in place. The one-off `recording-mbids.ts` strip only catches history up.
+
         candidate.recordingId,
-        // THE TWO ATTEMPT STAMPS (schema.ts § `isrc_attempted_at`, § `backfill_discogs_*`). The
-        // release read this candidate came from carried BOTH answers — `recording.isrcs` and the
-        // `discogs` url-rels — so both looks have concluded by the time the row lands, and a
-        // catalogue row is born able to tell "MusicBrainz has none" from "nobody has looked". That
-        // matters more here than anywhere: the insert is `on conflict do nothing` and the
-        // per-finding Discogs sweep cannot reach a row with no `findings` row, so for a catalogue
-        // track this is the only stamp it will ever get.
+
         writtenAt,
         writtenAt,
         candidate.inReleaseId === null && candidate.inMasterId === null ? null : writtenAt,
@@ -1277,9 +812,6 @@ async function writeCatalogueTracks(
       trackId,
     });
 
-    // The retained bodyless/manual crawler does not own one outer write transaction. Preserve its
-    // result-by-result race behavior; only a caller-supplied transaction can safely reserve the
-    // candidate's identities before the grouped batch reports its insert result.
     if (!client) {
       const result = (
         await batchDueWorkSourceMutation(
@@ -1323,7 +855,6 @@ async function writeCatalogueTracks(
     }
 
     if (titleFold) {
-      // Guard two candidates on one release that fold to the same title within this batch.
       albumTitleFolds.set(titleFold, trackId);
     }
   }
@@ -1356,27 +887,6 @@ async function writeCatalogueTracks(
   return { skipped, written, writtenIds };
 }
 
-/**
- * Stamp `tracks.label_id` on the rows this release just wrote — the indexed edge the public
- * `/label/<slug>` page reads by (docs/label-entity.md), which shows every track on a label,
- * certified or not. One resolve + one batched UPDATE per RELEASE, never per track.
- *
- * The deploy-time `linkTracksToLabels` backfill self-heals any writer that does not know
- * the column, this crawler included. But a crawl ticks every ten minutes and a deploy
- * does not, so a crawled row would sit off its label's page until the next one. This closes
- * that window; the backfill stays the backstop.
- *
- * It resolves the label on the MBID FIRST (`where mb_label_id = ?`), then falls back to
- * `slugify(label)`. The MBID fold is why two spellings that slugify apart ("Med School" ⇄
- * "Medschool") point at the SAME label row; the slug fallback is why the crawler writes the
- * ARCHIVE's spelling of a label it already knows (`canonicalLabelRow`) rather than
- * MusicBrainz's, so even a label with no MBID lands on a real `labels.slug` rather than
- * pointing at nothing. Purely resolve-and-stamp — it never mints (the discovered label was
- * already minted by `ensureLabel` above, and a known label already exists).
- *
- * Its album twin is `linkTracksToAlbumId` below: the album edge is written INLINE at crawl
- * time now, folded on the release-group MBID, not deferred to a deploy backfill.
- */
 async function linkTracksToLabel(
   trackIds: string[],
   labelName: string,
@@ -1390,8 +900,6 @@ async function linkTracksToLabel(
   const db = client ?? (await getDb());
   const mbid = mbLabelId?.trim() ? mbLabelId.trim() : null;
 
-  // mbid-first: the row `ensureLabel` just folded on this MBID, whatever its slug. Falls back
-  // to the archive-spelling slug for a label with no MBID (the common pre-catalogue case).
   let labelId: string | undefined;
 
   if (mbid) {
@@ -1420,26 +928,9 @@ async function linkTracksToLabel(
     return;
   }
 
-  // The stamp is an UNCONDITIONAL bulk overwrite, so `relinkTracksToEntity` runs the bounded
-  // pre-move census (one grouped row per current `label_id`) and rides the debit/credit deltas for
-  // the maintained hub counts in the same batch as the UPDATE — the ratified DELTA arithmetic, never
-  // a recompute (keystone 2, lib/server/hub-counts.ts).
   await relinkTracksToEntity("labels", labelId, trackIds, db);
 }
 
-/**
- * Stamp `tracks.album_id` on the rows this release just wrote — the album twin of
- * `linkTracksToLabel`, and the indexed edge the public `/album/<slug>` page reads by
- * (docs/album-entity.md). ONE batched UPDATE per RELEASE, never per track, mirroring the label
- * pattern above.
- *
- * `albumId` is resolved ONCE by the caller (`ensureAlbum(release.title, releaseGroupMbid)`) BEFORE
- * the write, because the same id is the same-album title-fold dedupe key `writeCatalogueTracks`
- * needs — resolving it in two places would risk two ids. The fold key is the release-group MBID
- * (every pressing of one record → the SAME album row; an album a finding minted first is adopted
- * onto the mbid rather than duplicated), with `ensureAlbum`'s slug fallback for a release MB has no
- * release group for. A null id (a blank title, no release group) links nothing.
- */
 async function linkTracksToAlbumId(
   trackIds: string[],
   albumId: null | string,
@@ -1449,13 +940,9 @@ async function linkTracksToAlbumId(
     return;
   }
 
-  // Same census-then-delta contract as the label twin above (keystone 2).
   await relinkTracksToEntity("albums", albumId, trackIds, client);
 }
 
-// ── Node expansion ───────────────────────────────────────────────────────────
-
-/** What one node's expansion produced, before the pass folds it in. */
 type Expansion = {
   enqueued: number;
   labelsDiscovered: string[];
@@ -1509,18 +996,10 @@ type CrawlProviderOutcome =
   | { kind: "failed"; message: string; rateLimited: boolean }
   | { data: CrawlProviderData; kind: "success" };
 
-/** Thrown when MusicBrainz is actively throttling — the pass's circuit breaker. */
 class ThrottledError extends Error {}
 
-/**
- * One MusicBrainz read the provider leg needs, however it is made. The seam exists so a body the
- * BOX fetched can be consumed by exactly the code path a Worker-fetched body goes through — one
- * parser, one set of `applyCrawlProvider` branches, one meaning for null. A transport may only
- * decide WHERE the bytes come from; it can never decide what they mean.
- */
 export type CrawlProviderTransport = <T>(path: string) => Promise<T | null>;
 
-/** One MB call over Worker egress, with the run-level breaker wired in. */
 async function mb<T>(path: string): Promise<T | null> {
   const { data, rateLimited } = await mbFetch<T>(path);
 
@@ -1539,12 +1018,6 @@ function seedSearchPath(name: string): string {
   return `/label?query=${encodeURIComponent(name)}&limit=5`;
 }
 
-/**
- * An ARTIST browse asks for each release's label credits (`inc=labels`, the same request, a few
- * more bytes per release), because the release node it mints is ranked on its OWN label: an artist
- * found on an enabled label mostly releases elsewhere, and only the label credit says where. A LABEL
- * browse needs no credits, since every release it lists is on the label being browsed.
- */
 function browsePath(
   key: string,
   externalId: string,
@@ -1645,17 +1118,6 @@ async function fetchCrawlProvider(
   };
 }
 
-/**
- * THE URL(S) ONE CLAIM MAY FETCH — everything the box is allowed to ask MusicBrainz for this node,
- * composed here and nowhere else.
- *
- * The box never builds a MusicBrainz URL. It receives one, or a probe plus a template whose only
- * free slot is a bounded offset, and the Worker re-derives the same strings at commit from the
- * SIGNED plan and node. A submitted body is read only under a URL the Worker itself asks for, so a
- * body for anything else — another entity, another host — is unreachable rather than merely
- * rejected. The `{offset}` slot is the one exception, and it is not a hole: the Worker computes the
- * offset from the probe body it accepted and looks up only that one substitution.
- */
 export type CrawlFetchPlan =
   | { kind: "none" }
   | { kind: "single"; url: string }
@@ -1667,7 +1129,6 @@ export type CrawlFetchPlan =
       probeUrl: string;
     };
 
-/** The literal the tail template's offset slot is spelled with, on both sides of the wire. */
 export const CRAWL_FETCH_OFFSET_SLOT = "{offset}";
 
 export function crawlFetchPlan(plan: CrawlProviderPlan, node: FrontierRow): CrawlFetchPlan {
@@ -1678,8 +1139,6 @@ export function crawlFetchPlan(plan: CrawlProviderPlan, node: FrontierRow): Craw
     return { kind: "single", url: musicbrainzUrl(releasePath(node.external_id)) };
   }
   if (plan.kind === "seed") {
-    // A ruled identity answers without a search, and a slug MusicBrainz has no label row for has
-    // nothing to ask about. Either way the provider leg makes no request at all.
     return !plan.label || plan.label.mbLabelId
       ? { kind: "none" }
       : { kind: "single", url: musicbrainzUrl(seedSearchPath(plan.label.name)) };
@@ -1709,13 +1168,6 @@ export function crawlFetchPlan(plan: CrawlProviderPlan, node: FrontierRow): Craw
   };
 }
 
-/**
- * One MusicBrainz read the box already made, as it crosses back to the Worker. The outcomes are the
- * Worker transport's own vocabulary, one for one, so a box-fetched node settles exactly as a
- * Worker-fetched one does: a body, an empty answer (network error, timeout, or a non-503 status a
- * Worker fetch would also have swallowed), a body that is not JSON, a body past the envelope bound,
- * and the vendor's throttle — which keeps the node's turn rather than charging it.
- */
 export type SuppliedCrawlBody = {
   body?: unknown;
   outcome: "body" | "empty" | "invalid" | "oversize" | "throttled";
@@ -1734,7 +1186,6 @@ function assertMusicbrainzUrl(url: string): void {
   }
 }
 
-/** Does `url` differ from the tail template only by a non-negative integer in its offset slot? */
 function matchesOffsetTemplate(template: string, url: string): boolean {
   const slot = template.indexOf(CRAWL_FETCH_OFFSET_SLOT);
   if (slot < 0) {
@@ -1749,12 +1200,6 @@ function matchesOffsetTemplate(template: string, url: string): boolean {
   return /^(0|[1-9][0-9]{0,15})$/.test(offset) && Number.isSafeInteger(Number(offset));
 }
 
-/**
- * Bind submitted bodies to the claim. A body survives only when its url is one THIS node's signed
- * plan issues; anything else is a bug or a forgery and is refused loudly rather than ignored, so a
- * box that has drifted from the Worker's derivation is visible in the run ledger instead of quietly
- * spending Worker egress.
- */
 export function suppliedCrawlBodies(
   plan: CrawlProviderPlan,
   node: FrontierRow,
@@ -1781,11 +1226,6 @@ export function suppliedCrawlBodies(
   return accepted;
 }
 
-/**
- * The submitted body rides the same 2 MiB bound as the envelope it is about to be signed into, and
- * it is measured rather than trusted: a body over the bound could never be signed, so it settles as
- * the oversize provider failure a Worker fetch of the same response settles as.
- */
 function boundedSuppliedBody(entry: SuppliedCrawlBody): SuppliedCrawlBody {
   if (entry.outcome !== "body") {
     return { outcome: entry.outcome, url: entry.url };
@@ -1801,12 +1241,6 @@ function boundedSuppliedBody(entry: SuppliedCrawlBody): SuppliedCrawlBody {
     : { body: entry.body ?? null, outcome: "body", url: entry.url };
 }
 
-/**
- * Read a node's provider bytes from what the box brought back, falling through to Worker egress for
- * any url the box did not supply. The fall-through is what makes the whole change version-tolerant
- * in both directions: an old sweep supplies nothing and every read is a Worker fetch, and a new
- * sweep that guessed the tail offset wrong costs one Worker request rather than a wrong answer.
- */
 function suppliedCrawlProviderTransport(
   supplied: Map<string, SuppliedCrawlBody>,
   live: CrawlProviderTransport,
@@ -1829,29 +1263,6 @@ function suppliedCrawlProviderTransport(
   };
 }
 
-/**
- * A SEED label node (the operator's slug) → the MusicBrainz label entity.
- *
- * Resolution is its own graph step, and that is deliberate: it makes the (fallible,
- * rate-limited) name→MBID lookup RESUMABLE and recorded, instead of a lookup repeated
- * on every tick. A label MusicBrainz does not know is `skipped` with a reason — recorded
- * honestly, never retried forever, and visible in `get_crawl_status`.
- *
- * ── THE NAMESAKE SEAL: THE RULED IDENTITY IS THE AUTHORITY ─────────────────────────────
- * A label NAME is not an identity. Same-named labels fold identically (`labelFold` is
- * deliberately aggressive), so a free-text search's top-scoring hit is whichever namesake
- * MusicBrainz ranks first — not the one the operator ruled on. A
- * operator enabled the Belgian drum & bass "Radar Records" and the crawl walked the 1978 UK
- * punk label (MB score 100 vs 85), minting 303 new-wave tracks under his enabled ruling. Six
- * enabled seeds in all had been resolved to a namesake this way.
- *
- * So the resolution order is now IDENTITY FIRST, name second:
- *   1. `labels.mb_label_id` — the RULED identity, written by the independent label
- *      identity-resolution path (label-images.ts) and by this function's own persist below.
- *      When it is there, it IS the answer: enqueue that MBID and make no search at all.
- *   2. The free-text search, for a row that carries no MBID yet — with the ambiguity guard
- *      below, so a coin-flip is never taken on the operator's behalf.
- */
 async function applySeedLabel(
   node: FrontierRow,
   plan: Extract<CrawlProviderPlan, { kind: "seed" }>,
@@ -1861,15 +1272,10 @@ async function applySeedLabel(
   const label = await getEnabledSeedLabel(node.external_id, client);
 
   if (!label) {
-    // The operator disabled it since the seed was minted. Crawl scope is the next
-    // crawl's seed set — so we simply stop walking it. Nothing stored is touched.
     return { ...EMPTY, next: { cursor: 0, note: "label no longer enabled", state: "skipped" } };
   }
 
   if (label.mbLabelId) {
-    // Step 1 — the ruled identity. No search: a name lookup could only disagree with it, and
-    // when it disagrees the name is what is wrong. Nothing to persist either (it is already
-    // stored), so this path costs ZERO MusicBrainz requests.
     return {
       ...EMPTY,
       enqueued: await enqueue(
@@ -1897,11 +1303,6 @@ async function applySeedLabel(
     };
   }
 
-  // Step 2 — the fallback, for a label whose identity nobody has resolved yet.
-  //
-  // A FREE-TEXT query, not a field-scoped exact phrase: `label:"Medschool"` returns
-  // nothing (MusicBrainz spells it "Med School"), while the free-text search returns it
-  // at score 100. Verified live. The exactness lives in the fold, not in the query.
   const want = fold(label.name);
   const matches = (search?.labels ?? []).filter(
     (candidate): candidate is { id: string; name: string } =>
@@ -1909,7 +1310,7 @@ async function applySeedLabel(
       typeof candidate.name === "string" &&
       fold(candidate.name) === want,
   );
-  // Distinct MBIDs — one label listed twice is one candidate, not an ambiguity.
+
   const candidateIds = [...new Set(matches.map((candidate) => candidate.id))];
   const [only] = candidateIds;
 
@@ -1921,10 +1322,6 @@ async function applySeedLabel(
   }
 
   if (candidateIds.length > 1) {
-    // THE AMBIGUITY GUARD. Two namesakes fold the same and nothing in the archive says which
-    // one he meant, so the crawl declines to guess: `skipped`, with the candidates named in the
-    // note, and a log line so the seed surfaces for a human identity ruling. Ruling it is a
-    // one-field write (`labels.mb_label_id`), after which step 1 above takes over forever.
     logEvent("warn", "crawl.seed-label-ambiguous", { candidates: candidateIds, slug: label.slug });
 
     return {
@@ -1937,10 +1334,6 @@ async function applySeedLabel(
     };
   }
 
-  // Persist the MBID the walk just resolved — the label-image sweep reads it to skip its own
-  // MB search (and it is the label's durable KG anchor). Non-clobbering + best-effort: it never
-  // fights the sweep and a failure here must not derail the crawl. See label-images.ts. It is
-  // also what turns this seed into a step-1 resolve on every later tick.
   await setLabelMbLabelId(label.slug, only, client).catch((error) => {
     logEvent("warn", "crawl.persist-mb-label-id-failed", { error, slug: label.slug });
   });
@@ -1962,8 +1355,6 @@ async function applySeedLabel(
 
 type BrowsedRelease = { id: string; label: null | { id: null | string; name: null | string } };
 
-/** The releases off a browse response, each with its first named label credit — the ill-formed and
- * scoped exclusions dropped. The credit is picked exactly as `applyRelease` picks it. */
 function browseReleases(browse: MbReleaseBrowse | null, scoped = false): BrowsedRelease[] {
   return (browse?.releases ?? [])
     .filter(
@@ -1980,17 +1371,8 @@ function browseReleases(browse: MbReleaseBrowse | null, scoped = false): Browsed
     });
 }
 
-/** A name fold two different labels share: the gate refuses to guess between them, and so does
- * the rank. */
 const AMBIGUOUS_FOLD = Symbol("ambiguous label fold");
 
-/**
- * Each browsed release's OWN label, as the `labels` slug the archive knows it by: the listing
- * label itself for a label browse, and for an artist browse the release's credited label resolved
- * exactly the way the storage gate resolves it (exact MBID first, then an unambiguous name fold).
- * Null when the archive holds no such label, which ranks the release as not storable, the same
- * answer the gate would give it today.
- */
 async function releaseLabelSlugs(
   node: FrontierRow,
   releases: readonly BrowsedRelease[],
@@ -2032,18 +1414,6 @@ async function releaseLabelSlugs(
   return new Map(releases.map((release) => [release.id, slugFor(release.label)]));
 }
 
-/**
- * Enqueue one browse page's releases as `release` nodes and return how many were GENUINELY NEW
- * (an `on conflict do nothing` no-op returns 0). That new-count is load-bearing twice over: it is
- * the walk's outward edge (`enqueued`), and it is the tail-first re-arm's EARLY-STOP signal — a
- * page that mints nothing new means every release below it is already walked.
- *
- * Every node carries its release's OWN label (`release_label_slug`), which is what the claim ranks
- * it on. A release this page re-reaches that is still waiting and has no own label on record has
- * one stamped, and is re-queued for projection, so a release another walk reached first is ranked
- * on the truth as soon as any listing names its label. The stamp never counts toward the new-count,
- * and it leaves a leased node alone, since changing a claimed node would void that claim's commit.
- */
 async function enqueueReleaseNodes(
   node: FrontierRow,
   releases: BrowsedRelease[],
@@ -2057,7 +1427,7 @@ async function enqueueReleaseNodes(
   const db = client ?? (await getDb());
   const ownLabels = await releaseLabelSlugs(node, releases, client);
   const groups: InStatement[][] = [];
-  // Which groups are the inserts: only those carry the new-count, never a stamp.
+
   const insertGroups = new Set<number>();
   for (const release of releases) {
     const now = new Date().toISOString();
@@ -2120,8 +1490,7 @@ async function enqueueReleaseNodes(
         }),
       ]);
     }
-    // Stamped after its own insert, so a release this page just minted is already labelled and its
-    // stamp is a no-op.
+
     if (releaseLabelSlug !== null) {
       groups.push([
         {
@@ -2150,11 +1519,6 @@ async function enqueueReleaseNodes(
   );
 }
 
-/**
- * Resolve the durable watermark for a full-forward label or allow-artist replay. The prior
- * `done_at` is retained on the pending browse node until its final settle, so later pages keep
- * reviving release nodes whose terminal state predates the scope change, even across isolates.
- */
 async function forwardReplayWatermark(
   node: FrontierRow,
   client?: Pick<Client, "execute">,
@@ -2184,9 +1548,6 @@ async function forwardReplayWatermark(
     return undefined;
   }
 
-  // An artist replay is warranted by ANY applicable allow: global and per-label rules both need
-  // the full release list, while the release gate later decides which label scope actually admits
-  // each candidate. The durable watermark is max(max(created_at, updated_at)) for this identity.
   const result = await db.execute({
     args: [node.external_id],
     sql: `select max(max(created_at, updated_at)) as watermark
@@ -2198,23 +1559,6 @@ async function forwardReplayWatermark(
   return watermark && (!node.done_at || watermark > node.done_at) ? watermark : undefined;
 }
 
-/**
- * A MusicBrainz label (or artist) node → one page of its releases, as `release` nodes.
- *
- * ONE request per tick per node (the tail-first re-arm's first tick is the one exception — a
- * count probe plus the tail read). A node stays `pending` with its browse cursor advanced, so a
- * 900-release label drains across ticks instead of blowing a single one — the resumability that
- * matters most in practice, because the biggest seed label is also the one most likely to be
- * interrupted.
- *
- * TWO WALKS, read straight off the signed cursor (see `REARM_TAIL` / `descendCursor`):
- *   - `cursor >= 0` — a COLD node's FORWARD drain (`expandForwardBrowse`): the whole list, head
- *     to tail, one page a tick. The initial walk must see everything.
- *   - `cursor < 0`  — a RE-ARMED node's TAIL-FIRST re-read (`expandRearmedBrowse`): MusicBrainz's
- *     browse has no date sort and appends new pressings at the END, so the fresh drop lives at the
- *     tail. Page backward from the last page, stop at the first all-known page.
- */
-/** A COLD browse node's forward drain — the whole release list, head to tail, one page a tick. */
 async function applyForwardBrowse(
   node: FrontierRow,
   childHop: number,
@@ -2225,9 +1569,6 @@ async function applyForwardBrowse(
   const releases = browseReleases(browse, node.kind === "label" && replayWatermark !== undefined);
   const enqueued = await enqueueReleaseNodes(node, releases, childHop, replayWatermark, client);
 
-  // Cursor movement follows MusicBrainz's RAW page array, including scoped status exclusions and
-  // malformed entries. Otherwise one dropped item in a full page advances by 99, overlaps the next
-  // page, and can strand the final release forever.
   const rawPageLength = browse?.releases?.length ?? 0;
   const consumed = node.cursor + rawPageLength;
   const total = browse?.["release-count"] ?? consumed;
@@ -2240,26 +1581,6 @@ async function applyForwardBrowse(
   };
 }
 
-/**
- * A RE-ARMED browse node's TAIL-FIRST re-read. Because MusicBrainz appends new pressings at the
- * end of an unsorted browse list, a re-arm only needs to look at the TAIL — it starts at the last
- * page and pages backward, stopping the moment a page adds nothing new.
- *
- * FIRST tick (`cursor === REARM_TAIL`): the tail's offset depends on the CURRENT count, which the
- * node does not store, so it is probed (`limit=1`) and the tail read in the SAME tick — the count
- * that aims the tail is then at most one shared-client hop stale, which closes the race below.
- *
- * THE GROW RACE. If the count GREW between the probe and the tail read, `offset` aimed at the OLD
- * tail and the page missed the newest rows `[staleTotal, total)`. Re-aim the descent at the FRESH
- * tail and do NOT early-stop — the true newest have not been seen. This can only happen on the
- * first (tail-locating) page; a normal descent page is deliberately below the tail, so it is never
- * mistaken for an under-aim. Growth AFTER the tail read is the NEXT daily re-arm's job.
- *
- * EARLY STOP: a page that mints nothing new (`newlyEnqueued === 0`) means everything below is
- * already walked; and `offset === 0` is the floor (the whole list re-swept). Either ends the walk.
- * The one-page label (< `BROWSE_PAGE_SIZE` releases) is the degenerate tail = page 0 case, handled
- * by the same two conditions. Every new release still mints a `pending` node the deep walk drains.
- */
 async function applyRearmedBrowse(
   node: FrontierRow,
   childHop: number,
@@ -2275,7 +1596,6 @@ async function applyRearmedBrowse(
   const enqueued = await enqueueReleaseNodes(node, releases, childHop, undefined, client);
 
   if (staleTotal !== null && total > staleTotal) {
-    // The count grew in the probe→tail window: re-aim at the fresh tail, cover the miss next tick.
     return {
       ...EMPTY,
       enqueued,
@@ -2287,8 +1607,6 @@ async function applyRearmedBrowse(
     return { ...EMPTY, enqueued, next: { cursor: 0, state: "done" } };
   }
 
-  // Descend one page toward the head. Clamp at 0 so a non-page-aligned tail offset (`total` is
-  // rarely a multiple of the page size) lands on the head remainder rather than a negative offset.
   return {
     ...EMPTY,
     enqueued,
@@ -2296,15 +1614,6 @@ async function applyRearmedBrowse(
   };
 }
 
-// ── THE STORAGE GATE: label default + FIRST-credit artist exception ─────────────
-// `labels.seed_state` is the default, not the final verdict. Exact FIRST-credit artist rules are
-// exceptions: per-label beats global, then enabled stores and non-enabled skips. Names never match
-// rules. Exact MB label identity wins over the name fold; an unsafe fold collision falls back to the
-// label default only, so two namesakes never borrow each other's artist scope.
-//
-// Read ONCE per release commit (the bounded `artist_rules` read plus the label entity set), never
-// once per candidate. A phased commit reads it through that commit's transaction so a ruling made
-// during provider I/O wins and no process-global snapshot can cross requests.
 type LabelScopeEntry = { enabled: boolean; labelId: string };
 type FoldScopeEntry = "ambiguous" | LabelScopeEntry;
 type ScopeMemo = {
@@ -2319,7 +1628,7 @@ type ScopeMemo = {
 type ArtistRuleMemoRow = {
   artist_mbid: string;
   label_id: string | null;
-  // The memo read filters to the two ACQUISITION verdicts, so `unlisted` never reaches this type.
+
   verdict: "allow" | "block";
 };
 type ReleaseLabelScope = { enabled: boolean; labelId: string | null; rulesAllowed: boolean };
@@ -2334,10 +1643,7 @@ function addLabelRule(map: Map<string, Set<string>>, labelId: string, artistMbid
 async function getScopeMemo(client?: Pick<Client, "execute">): Promise<ScopeMemo> {
   const labels = await listLabels(undefined, client);
   const db = client ?? (await getDb());
-  // ONLY the acquisition verdicts. `unlisted` is a VISIBILITY ruling and is inert here — an
-  // unlisted artist's records store exactly as the label seed state decides, as if no rule
-  // existed — so it is filtered in SQL rather than in the fold below, which also keeps it from
-  // spending the memo budget.
+
   const result = await db.execute({
     args: [ARTIST_RULE_MEMO_LIMIT + 1],
     sql: `select artist_mbid, label_id, verdict from artist_rules
@@ -2388,9 +1694,6 @@ async function getScopeMemo(client?: Pick<Client, "execute">): Promise<ScopeMemo
   }
 
   for (const rule of rules) {
-    // Exhaustive by construction: a verdict the memo does not model is DROPPED, never folded into
-    // block. "Carries a global rule" must never read as "is blocked" — the visibility verdict is
-    // exactly the rule that would break that way.
     const scoped =
       rule.verdict === "allow"
         ? { global: memo.globalAllow, label: memo.labelAllow }
@@ -2444,7 +1747,6 @@ function releaseLabelScope(
   return { enabled: false, labelId: null, rulesAllowed: true };
 }
 
-/** The exact precedence function: FIRST non-null credit; per-label, then global, then default. */
 function artistScopeVerdict(
   candidate: TrackCandidate,
   scope: ReleaseLabelScope,
@@ -2496,18 +1798,6 @@ function discogsIdsForRelease(release: MbReleaseDetail): {
   return { inMasterId, inReleaseId };
 }
 
-/**
- * A release node → THE WRITE. One request brings the whole release: its tracks, their
- * recordings (with MBIDs and ISRCs), the artist credits, the label, and — for free, in
- * the same payload — MusicBrainz's curated Discogs `url-rels` relation, which is how the
- * catalogue reaches the Discogs release graph without a single Discogs API call.
- *
- * It also mints a `labels` row for the release's label. THAT is the widening loop: a
- * label nobody has ruled on enters `undecided` and lands in the operator's attention
- * queue. It does not become a seed until he enables it; artist allows can still admit exactly the
- * billed records they cover. An album is minted + linked only when at least one candidate survives
- * that gate, folded on the release-group MBID (`inc=release-groups`).
- */
 async function applyRelease(
   node: FrontierRow,
   maxHop: number,
@@ -2518,20 +1808,13 @@ async function applyRelease(
     return { ...EMPTY, next: { cursor: 0, note: "no MusicBrainz release", state: "skipped" } };
   }
 
-  // The Discogs ids, straight off MusicBrainz's curated relation. Never guessed.
   const { inMasterId, inReleaseId } = discogsIdsForRelease(release);
 
-  // The label edge, taken from the SAME `label-info` entry so the name and the MBID belong to
-  // one label. The MBID (`label.id`) is MusicBrainz's stable label identity — the discovered
-  // label's fold key, the twin of the release-group MBID the album edge folds on.
   const mbLabel = (release["label-info"] ?? []).find((info) => info.label?.name)?.label;
   const mbLabelName = mbLabel?.name;
   const mbLabelId = mbLabel?.id ?? null;
   const labelsDiscovered: string[] = [];
-  // The name we WRITE onto the track: the archive's own spelling when it already knows this
-  // label under any spelling, else MusicBrainz's. Either way `slugify(tracks.label)` lands
-  // on a real `labels.slug`, which is what every label consumer — above all The Ear's
-  // capture-priority ladder and its disabled-label VETO — silently depends on.
+
   let labelName = mbLabelName;
 
   if (mbLabelName && labelSlug(mbLabelName)) {
@@ -2540,31 +1823,13 @@ async function applyRelease(
     if (known) {
       labelName = known.name;
 
-      // THE ADOPTION. A release is MusicBrainz telling the crawler which label this is, and the
-      // publish path mints a label off a bare vendor string, so a label the archive already knows
-      // is exactly the row most likely to be carrying no MBID. Adopt rather than drop it:
-      // fill-empty-only, never rewriting a row already folded on a different MBID. This is how a
-      // publish-minted label acquires its MusicBrainz identity — off a release that STATES it,
-      // never off a name search that would guess between namesakes. One write, only for a row
-      // with something to gain, and it never fires for that row again.
       if (mbLabelId && !known.mbLabelId) {
         await adoptLabelMbLabelId(known.id, mbLabelId, client);
       }
     } else if (mbLabelId) {
-      // A label nobody has ruled on: it enters `undecided` (the `labels` DDL default) and
-      // surfaces in the operator's attention queue. It is NOT crawled — the next crawl
-      // seeds from it only if he enables it. The crawler proposes; the operator rules.
-      // Minted (or folded) on the MBID so two spellings that slugify apart collapse to one row.
       await ensureLabel(mbLabelName, mbLabelId, client);
       labelsDiscovered.push(mbLabelName);
     } else {
-      // A release whose `label-info` names a label but carries no `label.id` identifies NOTHING,
-      // and the crawler walks by identity — it would be proposing a row whose MusicBrainz entity
-      // nobody can name, which is the namesake class (packages/skills/fluncle-catalogue-prune,
-      // references/traps.md). So the DISCOVERY path declines: no row, no queue entry, and the
-      // release's tracks keep the raw string alone. This is the one place the two mint paths
-      // differ, and deliberately: publish mints on a string because a certified finding must have
-      // its label page; the crawler mints only on an MBID because it walks by identity.
       logEvent("info", "crawl.label-discovery-unidentified", { name: mbLabelName });
     }
   }
@@ -2588,9 +1853,7 @@ async function applyRelease(
         }
 
         const credits = recording["artist-credit"] ?? release["artist-credit"] ?? [];
-        // Name and MB artist id are kept TOGETHER through the filter so the two arrays stay
-        // positionally aligned — the alignment is what lets the link step tell which identity a
-        // given credited name carries (crawl → `linkTracksToArtistEntities`'s homonym seal).
+
         const named = credits
           .map((credit) => ({
             mbid: credit.artist?.id ?? null,
@@ -2611,15 +1874,14 @@ async function applyRelease(
           album: release.title ?? null,
           albumImageUrl: coverUrl,
           artists: artists.length > 0 ? artists : ["Unknown"],
-          // The `["Unknown"]` fallback above names no identity, so its slot is null too.
+
           creditMbids:
             artists.length > 0
               ? named.map((credit) =>
                   credit.mbid && credit.mbid !== VARIOUS_ARTISTS_MBID ? credit.mbid : null,
                 )
               : [null],
-          // `duration_ms` is NOT NULL on `tracks`. MusicBrainz genuinely does not always
-          // know a recording's length, and 0 is the honest "unknown" — never a guess.
+
           durationMs: recording.length ?? track.length ?? 0,
           inMasterId,
           inReleaseId,
@@ -2635,9 +1897,6 @@ async function applyRelease(
 
   collectReleaseCandidates();
 
-  // ── THE STORAGE GATE ──────────────────────────────────────────────────────────
-  // Apply FIRST-credit exceptions to the label default. The artist-hop walk below remains
-  // deliberately unfiltered: storage scope never prunes discovery, and maxHop still terminates it.
   const memo = await getScopeMemo(client);
   const scope = releaseLabelScope(mbLabelId, mbLabelName ?? labelName, memo);
   const labelCanAllow = scope.labelId ? (memo.labelAllow.get(scope.labelId)?.size ?? 0) > 0 : false;
@@ -2647,7 +1906,6 @@ async function applyRelease(
   let tracksSkippedArtistRule = 0;
   let tracksSkippedLabelGate = 0;
 
-  // Preserve the cheap non-enabled no-op: no candidate verdict work when no allow can match.
   const applyStorageGate = (): void => {
     if (!scope.enabled && !canAllow) {
       tracksSkippedLabelGate = candidates.length;
@@ -2675,10 +1933,6 @@ async function applyRelease(
   let written = 0;
 
   if (kept.length > 0) {
-    // The album row, resolved ONCE up front (folded on the release-group MBID, slug fallback). It is
-    // the same-album title-fold dedupe key `writeCatalogueTracks` reads (the Apple-twin guard) AND
-    // the `album_id` edge stamped below — one resolve, so the two can never disagree. Resolved inside
-    // the gate: a non-enabled release stores no album either, so no childless `albums` row is minted.
     const albumId =
       (await ensureAlbum(release.title ?? null, release["release-group"]?.id ?? null, client)) ??
       null;
@@ -2692,25 +1946,8 @@ async function applyRelease(
       await linkTracksToLabel(writtenIds, labelName, mbLabelId, client);
     }
 
-    // The album edge, stamped INLINE — every pressing of a record resolves to one album row.
-    // Purely additive; a crawled album is minted here now, no deploy backfill.
     await linkTracksToAlbumId(writtenIds, albumId, client);
 
-    // The other indexed edge these rows need, stamped in the same breath as `label_id` and for
-    // the same reason: `/artist/<slug>` shows the rest of an artist's catalogue, and it can only
-    // find these rows by an indexed seek on `track_artists`. This is the NAME-FOLD half — the
-    // FALLBACK for a track with no Spotify presence: it links a crawled track to an artist Fluncle
-    // has ALREADY certified (by name), mints nothing, and makes nothing here countable as a finding
-    // (lib/server/artists.ts). The stable-id half runs later, at the Spotify-anchor step
-    // (`connectAnchorArtists` in anchor.ts, driven by the box's anchor sweep), which MINTS the entity
-    // by `spotify_artist_id` for a track that gains a Spotify presence. A track credited to nobody he
-    // has found stays unlinked until its
-    // entity exists; the one-off `backfill-artist-links.ts` reconciles that (no longer a deploy step).
-    //
-    // The credits' MB artist ids ride along, which is what makes this link IDENTITY-CHECKED rather
-    // than name-only: a credited name whose MB id belongs to a different act than the same-named
-    // `artists` row gets NO edge (artists.ts § THE HOMONYM SEAL). This is the crawl-side half of the
-    // conflation fix; the credit sweep already refused these by construction.
     await linkTracksToArtistEntities(
       writtenIds,
       new Map(
@@ -2719,17 +1956,9 @@ async function applyRelease(
       client,
     );
 
-    // Stamp any remixer credit these titles name (RFC label-lineage-remixer, U2), now the
-    // `track_artists` edges exist. A crawled remix by an ALREADY-CERTIFIED remixer (the only kind
-    // `linkTracksToArtistEntities` links) gets its `role='remixer'` stamp; an uncertified remixer
-    // has no linked row, so nothing is stamped — the same exact-match-only rail.
     await stampRemixerRoles(writtenIds, client);
   }
 
-  // The outward edge: the artists on this release, one hop further out. Past the limit
-  // nothing is enqueued, which is what makes the walk terminate. This is the DISCOVERY leg —
-  // it runs whether or not the release was stored, so a non-enabled release still leads the
-  // walk on to the labels it can reveal.
   const artistHop = node.hop + 1;
   const enqueued =
     artistHop <= maxHop
@@ -2831,11 +2060,6 @@ export type CrawlPhaseCapabilities = {
 };
 
 export type CrawlPhasePrepareResult = {
-  /**
-   * Whether this Worker will consume a MusicBrainz body the box fetched. The box asks BEFORE it
-   * spends a request, so a flag flip cannot leave a sweep fetching bodies nobody will read — the
-   * rollback costs the vendor nothing and the box nothing.
-   */
   boxFetch: boolean;
   capabilities?: CrawlPhaseCapabilities;
   frontierPending: number;
@@ -2844,11 +2068,6 @@ export type CrawlPhasePrepareResult = {
   kind: "drained" | "prepared" | "unavailable";
 };
 
-/**
- * What this Worker offers the sweep, answered on the prepare it already runs before any commit. A
- * sweep that does not see this field is talking to a Worker without {@link commitCrawlNodes} and
- * commits node by node; see the contract's `CrawlPhaseCapabilitiesSchema`.
- */
 export const CRAWL_PHASE_CAPABILITIES: CrawlPhaseCapabilities = {
   commitBatchLimit: MAX_CRAWL_COMMIT_BATCH,
   commitBatchMaxTotalBytes: CRAWL_COMMIT_BATCH_MAX_TOTAL_BYTES,
@@ -2999,7 +2218,6 @@ async function initializeCrawlPhaseState(
   return initialization;
 }
 
-/** Run the bounded DB-only subscription maintenance before per-node provider phases begin. */
 export async function initializeCrawlPhase(): Promise<
   CrawlPhaseInitialization & { kind: "initialized" | "unavailable" }
 > {
@@ -3010,33 +2228,6 @@ export async function initializeCrawlPhase(): Promise<
   return { ...(await initializeCrawlPhaseState(true)), kind: "initialized" };
 }
 
-/**
- * Claim a few nearby nodes immediately before their serial provider requests.
- *
- * HOW MANY NODES ONE CLAIM MAY HOLD, and why it is a small number rather than the tick's whole
- * budget. A prepare is an admitted phase: it pays a coordinator round trip and a process spawn,
- * and every node it does NOT claim pays that toll again. So the bound wants to be as large as the
- * durable guarantees allow — and exactly that large.
- *
- * The binding guarantee is the CLAIM LEASE. One prepare stamps `claim_expires_at` on every node it
- * claims at the same instant, and a commit whose lease has passed is REJECTED (the fence in
- * `isClaimedCrawlFrontierRowCurrent`), so the last node of a batch must reach its commit inside
- * {@link CRAWL_CATALOGUE_LEASE_MS}. A node's provider leg is the shared MusicBrainz client's ~1
- * req/s pacing over at most a few calls, and a slow one (an aborted fetch plus two `Retry-After`
- * sleeps) runs ~35s; its commit is a bounded write batch. Six nodes therefore consume ~210s of a
- * 600s lease in the worst provider case, leaving the rest for the admission waiting each commit
- * may do. A wider batch would spend the lease's margin on nodes it claimed but had no time to
- * reach, and a claim it cannot honour is worse than a prepare it has to repeat.
- *
- * Everything else the batch touches is per node and unchanged by this bound: each node still
- * commits its own receipt-backed transaction under {@link MAX_CRAWL_DUE_CHUNK_SIZE}, each still
- * signs its own provider envelope under {@link CRAWL_PHASE_TOKEN_MAX_BYTES}, and the claim's
- * release/general lane split is `ceil(limit / 2)` at any limit, so acquisition and discovery keep
- * moving together.
- *
- * The number itself is the wire bound, so it lives with the contract that carries it
- * (`@fluncle/contracts/orpc`) and cannot drift from the schema that validates a prepare request.
- */
 export async function prepareCrawlPhase({
   limit = 2,
   maxHop = DEFAULT_MAX_HOP,
@@ -3125,14 +2316,12 @@ function crawlCommitCoordinates(commitToken: string): Promise<{
   }));
 }
 
-/** Perform only provider I/O. The returned bytes are signed before crossing back into admission. */
 export async function fetchCrawlPhase(
   preparedToken: string,
   supplied?: readonly SuppliedCrawlBody[],
 ): Promise<CrawlPhaseFetchResult> {
   const prepared = await verifyCrawlPhaseToken<PreparedCrawlPhaseToken>(preparedToken, "prepared");
-  // Binding runs OUTSIDE the provider try: a body for a url this claim never issued is a drift or a
-  // forgery, and it must surface as a fault rather than settle quietly as one node's bad luck.
+
   const accepted =
     supplied !== undefined && supplied.length > 0 && (await isCrawlBoxFetchEnabled())
       ? suppliedCrawlBodies(prepared.plan, prepared.node, supplied)
@@ -3197,7 +2386,6 @@ function expansionResult(expansion: Expansion): JsonValue {
   };
 }
 
-/** Apply a fetched result and settle its claim in the operation receipt's single transaction. */
 export async function commitCrawlPhase(
   options: CrawlPhaseFetchResult,
 ): Promise<OperationReceiptOutcome> {
@@ -3232,8 +2420,6 @@ export async function commitCrawlPhase(
       }
 
       if (fetched.outcome.kind === "failed") {
-        // A throttle keeps its turn (see `throttledSettlement`); every other provider failure is
-        // the node's own and rides the exponential backoff.
         const settled = await settleClaimedCrawlFrontierRow(transaction, {
           claimToken: fetched.claimToken,
           id: fetched.node.id,
@@ -3296,21 +2482,6 @@ export async function commitCrawlPhase(
   });
 }
 
-/**
- * THE BATCHED COMMIT'S WALL BUDGET, and why a batch needs one at all.
- *
- * An admitted phase holds the single `write` lane under a 90s lease, renewed by a 30s heartbeat and
- * reaped by a watchdog that allows roughly a 75s window. A per-node commit could never approach that
- * — one node, one bounded transaction. A batch multiplies the same transaction by K, so the request
- * has to be able to stop itself: K × p99(per-node commit) must stay inside the window, and when a
- * slow database makes that untrue the request must return rather than run long and lose its fence
- * mid-transaction.
- *
- * So the budget is checked BEFORE each item and the first item always runs: the batch can overshoot
- * by at most one node's commit, exactly as the sweep's own tick budget overshoots by at most one
- * node's provider leg. Everything past the budget comes back `safely-retryable`, which is the same
- * verdict the receipt rail already hands a caller that must reconcile.
- */
 export const CRAWL_COMMIT_BATCH_WALL_BUDGET_MS = 45_000;
 
 export type CrawlCommitBatchItem = CrawlPhaseFetchResult;
@@ -3338,31 +2509,9 @@ export type CrawlCommitBatchResult = {
   receipts: CrawlCommitBatchReceipt[];
 };
 
-/**
- * Settle one claim's fetched nodes inside a single admitted phase.
- *
- * PER-ITEM RECEIPTS ARE THE WHOLE POINT. Every item is committed through the same
- * {@link commitCrawlPhase} the single-node phase calls, with its own signed envelope and its own
- * receipt coordinates, and its answer is recorded on its own. Nothing is collapsed into a batch-wide
- * operation id, so `catalogue.crawl` keeps its `phased(…, 0)` non-replayable shape and a caller can
- * still ask `resolve_operation_receipt` about exactly one node.
- *
- * ONE NODE'S FAILURE IS ONE NODE'S FAILURE. A throw is caught, bounded, and recorded as this item's
- * `failed`; the loop carries on. That is what makes the poisoned-middle-item case behave: the nodes
- * on either side of it commit, and the caller reconciles only the one that failed.
- *
- * ADMISSION MARKERS. A node's commit mints CRAWL NODE repair markers (`markCrawlNodeRepairStatement`)
- * and, when it discovers a label, one TRACK-side source marker per new label. Neither is the
- * quantity {@link CRAWL_ADMISSION_SOURCE_MARKER_MINT_BOUND} bounds — that is the crawl PROJECTION
- * source marker, minted only by the re-arms in the initialize phase, which batching does not touch.
- * The node markers a batch mints are bounded by
- * {@link CRAWL_COMMIT_BATCH_NODE_MARKER_MINT_BOUND} and drain on the claim's node lane; the
- * assertion beside that constant is what keeps the two in step.
- */
 export async function commitCrawlNodes(
   items: readonly CrawlCommitBatchItem[],
   options: {
-    /** The per-node commit. Injectable so the batch's own contract is provable without a database. */
     commit?: (item: CrawlCommitBatchItem) => Promise<OperationReceiptOutcome>;
     now?: () => number;
     wallBudgetMs?: number;
@@ -3422,17 +2571,6 @@ export async function commitCrawlNodes(
   return { deferred, receipts };
 }
 
-// ── The pass ─────────────────────────────────────────────────────────────────
-
-/**
- * ONE bounded, polite, resumable crawl pass. Seeds from the operator's enabled labels,
- * expands `limit` frontier nodes breadth-first, writes the catalogue rows it finds, and
- * stops. Everything it learned is durable, so the next tick continues rather than
- * restarts — which is the whole point: this is a sweep, not a session.
- *
- * `dryRun` performs the SEED PLAN and no writes at all (no frontier rows, no tracks, no
- * labels): the honest answer to "what would this do", not a half-crawl.
- */
 export async function crawlCatalogue({
   dryRun = false,
   limit = 10,
@@ -3468,9 +2606,6 @@ export async function crawlCatalogue({
   if (dryRun) {
     const enabled = await listLabels("enabled");
 
-    // Only the pending frontier depth is reported, so take it as a single index-served count — never
-    // the full `getCrawlStatus` (its catalogue anti-join + by-kind group-by are scans no caller here
-    // reads, docs/db-scale-backlog Wave 1 #3).
     return { ...pass, frontierPending: await countFrontierPending(), seeded: enabled.length };
   }
 
@@ -3517,10 +2652,6 @@ export async function crawlCatalogue({
     } catch (error) {
       const throttled = error instanceof ThrottledError;
 
-      // Preserve the browse cursor across a transient failure so the retry RESUMES where it was —
-      // a paginated forward drain keeps its offset, and a re-armed node keeps its tail-first state
-      // (`REARM_TAIL`/descent) instead of collapsing to `0`, which would restart it as a full walk.
-      // A throttle additionally keeps its turn and its failure count (see `throttledSettlement`).
       const { state: throttledState, ...throttledPatch } = throttledSettlement(node);
       const settled = throttled
         ? await settleNode(node, throttledState, throttledPatch)
@@ -3542,8 +2673,6 @@ export async function crawlCatalogue({
       });
 
       if (throttled) {
-        // The circuit breaker. Re-firing into an active 503 wall just grinds the tick to
-        // its timeout; the next tick resumes from a fresh rate window, from durable state.
         pass.rateLimited = true;
         break;
       }
@@ -3571,35 +2700,17 @@ export async function crawlCatalogue({
     pass.labelsDiscovered.push(...expansion.labelsDiscovered);
   }
 
-  // The crawl is MusicBrainz-only now. Filling the Spotify anchor moved ENTIRELY off this Worker
-  // path onto the box's Apify anchor sweep → the agent-tier `anchor_track` op (lib/server/anchor.ts,
-  // docs/catalogue-crawler.md § the anchor); its worklist is derived (`spotify_uri is null`), so a
-  // row the crawl just wrote is picked up by the next anchor tick with no state to remember here.
-  //
-  // Only the pending frontier depth is read here, so take it as a single index-served count rather
-  // than the full `getCrawlStatus` — its catalogue anti-join + by-kind group-by were 144×/day of
-  // scans no caller on this path wants (docs/db-scale-backlog Wave 1 #3).
   pass.frontierPending = await countFrontierPending();
 
   return pass;
 }
 
-/** The frontier's by-STATE counts — the one small `crawl_frontier` group-by shared everywhere. */
 export type FrontierCounts = {
   frontier: { done: number; failed: number; pending: number; skipped: number };
 };
 
-/** The frontier's by-KIND breakdown — computed ONLY by the on-demand admin `catalogue status` read. */
 export type FrontierByKind = { artist: number; label: number; release: number };
 
-/**
- * The frontier by-STATE counts — the ONE small `crawl_frontier` group-by, nothing that scans a
- * growing table. This is the lean read the daily funnel snapshot and the crawl pass share: they
- * consume `frontier.done/pending` and never want more. The by-KIND breakdown is split out into
- * `getFrontierByKind` so only `getCrawlStatus` (the on-demand admin read) pays for that second
- * `group by kind` scan of the ~90k-row frontier — the crawl pass fires 144×/day and never renders it
- * (docs/db-scale-backlog Wave 1 #3). `getCrawlStatus` composes both for its full shape.
- */
 export async function getFrontierCounts(): Promise<FrontierCounts> {
   const db = await getDb();
   const states = await db.execute("select state, count(*) as n from crawl_frontier group by state");
@@ -3612,11 +2723,6 @@ export async function getFrontierCounts(): Promise<FrontierCounts> {
   return { frontier };
 }
 
-/**
- * The frontier's by-KIND breakdown — the `group by kind` scan of `crawl_frontier`. Split out of
- * `getFrontierCounts` (docs/db-scale-backlog Wave 1 #3) so ONLY the on-demand `catalogue status`
- * read runs it; the recurring crawl pass and funnel snapshot take the state-only counts.
- */
 export async function getFrontierByKind(): Promise<FrontierByKind> {
   const db = await getDb();
   const kinds = await db.execute("select kind, count(*) as n from crawl_frontier group by kind");
@@ -3629,13 +2735,6 @@ export async function getFrontierByKind(): Promise<FrontierByKind> {
   return frontierByKind;
 }
 
-/**
- * The pending frontier depth alone — a single leading-column count that rides
- * `crawl_frontier_pick_idx` (schema.ts, `state` is the index's first column). The `frontierPending`
- * meter the crawl pass and its dry-run report read, WITHOUT the by-state/by-kind group-bys, the
- * catalogue anti-join, the anchor gauge, or `listLabels` that `getCrawlStatus` also runs — the
- * 144×/day scan this hoist removes (docs/db-scale-backlog Wave 1 #3).
- */
 export async function countFrontierPending(): Promise<number> {
   const db = await getDb();
   const result = await db.execute(
@@ -3645,10 +2744,6 @@ export async function countFrontierPending(): Promise<number> {
   return Number(typedRows<{ n: number }>(result.rows)[0]?.n ?? 0);
 }
 
-/**
- * The frontier at rest — what the walk holds, what it has drained, and what the operator
- * still has to rule on. The `/status`-shaped read behind `fluncle admin catalogue status`.
- */
 export async function getCrawlStatus(): Promise<CrawlStatus> {
   const db = await getDb();
   const [
@@ -3661,39 +2756,21 @@ export async function getCrawlStatus(): Promise<CrawlStatus> {
     undecidedQueued,
     labels,
   ] = await Promise.all([
-    // The by-STATE frontier counts (shared with the funnel snapshot's lean read) and the by-KIND
-    // breakdown — the latter computed only here, the on-demand admin read (docs/db-scale-backlog
-    // Wave 1 #3), never on the recurring crawl pass.
     getFrontierCounts(),
     getFrontierByKind(),
-    // A CATALOGUE track is a `tracks` row with no `findings` row. `findings` is a strict 1:1 subtype
-    // of `tracks` on the shared PK, so that anti-join count IS `count(tracks) − count(findings)` — two
-    // plain covering-index counts instead of a per-row anti-join probe (docs/db-scale-backlog Wave 1
-    // #9), still computed in SQL, never by pulling the table into the isolate.
+
     db.execute(`select (select count(*) from tracks) - (select count(*) from findings) as n`),
-    // The anchor gauge — the ISRC-bearing slice of the un-anchored catalogue, kept on the
-    // `tracks_anchor_queue_idx` PARTIAL index so it stays cheap as the table grows. NOTE: the
-    // anchor sweep drains a WIDER worklist (`spotify_uri is null`, ISRC or not — track-work.ts
-    // `kind: "anchor"`) — this count is the indexed lower-bound gauge, not the full drain set (a
-    // no-ISRC row has no partial index to count it cheaply, and counting the whole table on every
-    // status read is exactly the growing-table scan the DB rules forbid).
+
     db.execute(`select count(*) as n from tracks indexed by tracks_anchor_queue_idx
                 where isrc is not null and spotify_uri is null
                   and not exists (select 1 from findings where findings.track_id = tracks.track_id)`),
-    // The storable head of the claim's release lane, counted through the SAME partial index the
-    // claim orders by — its `where` clause is the predicate and `storable_rank` its second column,
-    // so this is a bounded range count rather than a walk of the due-work table.
+
     db.execute(`select count(*) as n from crawl_due_work indexed by crawl_due_work_release_ready_idx
                 where state = 'ready' and node_kind = 'release' and storable_rank = 0`),
-    // THE HELD LANE — the same partial index, the other rank. `storable_rank` is the index's SECOND
-    // column, so `= 1` is the neighbouring equality range and this costs exactly what the read above
-    // costs: an index seek, never a row and never a scan. It is what a label round would unlock.
+
     db.execute(`select count(*) as n from crawl_due_work indexed by crawl_due_work_release_ready_idx
                 where state = 'ready' and node_kind = 'release' and storable_rank = 1`),
-    // HOW MANY RULINGS STAND IN FRONT OF IT — driven from the SMALL side (a few thousand `labels`
-    // rows, already read below by `listLabels`), with an existence probe per undecided label on the
-    // covering `(label_slug, node_id)` index. Uncorrelated attribution the other way round would
-    // need `label_slug` on every blocked due-work row, which that index does not carry.
+
     db.execute(`select count(*) as n from labels l
                 where l.seed_state = 'undecided'
                   and exists (select 1 from crawl_due_work d where d.label_slug = l.slug)`),

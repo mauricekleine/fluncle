@@ -2,13 +2,6 @@ import { galaxySlug } from "@fluncle/contracts/util/galaxy-slug";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { updateGalaxyMap } from "./galaxies-map";
 
-// updateGalaxyMap (the browse-by-feel cluster cron's transactional map write) is
-// answered by SQL shape — enough to prove the server-side identity mint (a `gal_<uuid>`
-// id + a collision-salted `galaxySlug` handle), the collision salt itself, and the ONE
-// `db.batch(_, "write")` transaction (insert new / upsert centroid / retire), without a
-// real libsql instance. `randomUUID` is pinned so the minted id — and thus the handle
-// the salt loop derives — is deterministic.
-
 const FIXED_UUID = "0000-fixed-uuid";
 const NEW_ID = `gal_${FIXED_UUID}`;
 
@@ -27,8 +20,6 @@ vi.mock("./db", () => ({
   typedRows: <T extends object>(rows: T[]) => rows,
 }));
 
-// The `select handle from galaxies` pre-read — the handles the salt loop avoids. Set
-// per test so a seeded collision forces `galaxySlug(id, 1)`.
 let takenHandles: Array<{ handle: string }> = [];
 
 beforeEach(() => {
@@ -44,12 +35,9 @@ beforeEach(() => {
     }
 
     if (sql.includes("count(*)")) {
-      // memberCounts (the final listGalaxiesAdmin read) — no members in these tests.
       return Promise.resolve({ rows: [] });
     }
 
-    // The final listGalaxiesAdmin `select ... from galaxies order by ...` — return the
-    // freshly-minted row so the op has something to echo back.
     return Promise.resolve({
       rows: [
         {
@@ -83,13 +71,12 @@ describe("updateGalaxyMap — server-side identity mint", () => {
     expect(mode).toBe("write");
     expect(statements).toHaveLength(1);
     expect(statements[0]?.sql).toContain("insert into galaxies");
-    // args: [id, handle, centroid_json, now, now]
+
     expect(statements[0]?.args[0]).toBe(NEW_ID);
     expect(statements[0]?.args[1]).toBe(galaxySlug(NEW_ID, 0));
   });
 
   it("salts the handle past a collision (galaxySlug attempt 0 taken → attempt 1)", async () => {
-    // Seed the taken set with exactly what attempt 0 would mint, forcing the salt loop.
     takenHandles = [{ handle: galaxySlug(NEW_ID, 0) }];
 
     await updateGalaxyMap([{ centroid: [0.3], id: null }]);

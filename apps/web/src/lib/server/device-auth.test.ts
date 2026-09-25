@@ -6,26 +6,9 @@ import * as schema from "../../db/schema";
 import { createIntegrationDb } from "./integration-db";
 import { createIntegrationAuth } from "./integration-auth";
 
-// End-to-end test of the `fluncle login` device-authorization flow AND the hard
-// user/admin token boundary. We build the REAL production auth options
-// (`createPublicAuthOptions` — the deviceAuthorization + bearer + username plugin
-// stack the Worker ships) over an in-memory libSQL database with the real
-// migrations applied, so the schema, the device-code table, and the session
-// machinery are byte-identical to production. A fresh instance per test keeps each
-// case isolated (sidestepping the module-level getPublicAuth memo).
-//
-// The two things under test, both non-negotiable:
-//   1. The device flow works: code → approve (as a signed-in user) → token, and
-//      the minted token resolves the user's own session via a Bearer header.
-//   2. The boundary is hard: a USER session token is NOT an admin credential
-//      (`adminRole` returns null for it), and the ADMIN token is NOT a user
-//      session (`auth.api.getSession` resolves nothing for it).
-
 let db: Client;
 let auth: ReturnType<typeof betterAuth>;
 
-// `adminRole` reads FLUNCLE_API_TOKEN via the server env module; point its DB at
-// the in-memory client so the whole suite runs without Turso.
 vi.mock("./db", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./db")>();
 
@@ -41,8 +24,7 @@ beforeEach(async () => {
   process.env.BETTER_AUTH_URL = BASE_URL;
   process.env.FLUNCLE_API_TOKEN = ADMIN_TOKEN;
   delete process.env.FLUNCLE_AGENT_TOKEN;
-  // The real production options with sendOnSignUp off — see integration-auth.ts
-  // for why the verification branch's request clone cannot ride in a Node suite.
+
   auth = createIntegrationAuth(drizzle(db, { schema }));
 });
 
@@ -53,7 +35,6 @@ afterEach(() => {
   delete process.env.FLUNCLE_API_TOKEN;
 });
 
-// Drive the better-auth fetch handler the way the `/api/auth/$` route does.
 async function authFetch(
   path: string,
   init: { body?: unknown; headers?: Record<string, string>; method?: string } = {},
@@ -62,8 +43,7 @@ async function authFetch(
 
   if (init.body !== undefined) {
     headers["Content-Type"] = "application/json";
-    // Better Auth enforces an Origin check on cookie-session mutations (CSRF). A
-    // browser always sends it; reproduce it for the approve/deny calls.
+
     headers.Origin ??= BASE_URL;
   }
 
@@ -76,8 +56,6 @@ async function authFetch(
   );
 }
 
-// Sign up a public user and return their session cookie (the carrier the /device
-// approval surface uses) plus the bearer session token (the carrier the CLI uses).
 async function signUpUser(): Promise<{ bearerToken: string; cookie: string }> {
   const response = await authFetch("/sign-up/email", {
     body: {
@@ -100,9 +78,6 @@ async function signUpUser(): Promise<{ bearerToken: string; cookie: string }> {
   return { bearerToken, cookie };
 }
 
-// Claim a user code against a signed-in session — the RFC 8628 user-interaction
-// step (`GET /device`) that binds the code to the approving session. Approve/deny
-// is rejected until this happens.
 async function claimUserCode(userCode: string, cookie: string): Promise<void> {
   const claim = await authFetch(`/device?user_code=${encodeURIComponent(userCode)}`, {
     headers: { cookie },
@@ -141,7 +116,6 @@ describe("device-authorization login flow", () => {
   it("issues a device code, approves it, and exchanges it for a working session token", async () => {
     const { cookie } = await signUpUser();
 
-    // 1. The CLI requests a device + user code.
     const codeResponse = await authFetch("/device/code", {
       body: { client_id: "fluncle-cli", scope: "galaxy-sync" },
     });
@@ -155,8 +129,6 @@ describe("device-authorization login flow", () => {
     expect(code.user_code).toBeTruthy();
     expect(code.verification_uri).toContain("/device");
 
-    // 2. The signed-in user opens /device, which claims the code against their
-    //    session, then approves it (both carry the session cookie).
     await claimUserCode(code.user_code, cookie);
     const approve = await authFetch("/device/approve", {
       body: { userCode: code.user_code },
@@ -164,14 +136,11 @@ describe("device-authorization login flow", () => {
     });
     expect(approve.status).toBe(200);
 
-    // 3. The CLI's poll now mints a session token.
     const tokenResponse = await pollToken(code.device_code);
     expect(tokenResponse.status).toBe(200);
     const token = (await tokenResponse.json()) as { access_token: string };
     expect(token.access_token).toBeTruthy();
 
-    // 4. That token, as a Bearer header, resolves the user's own session — exactly
-    //    the path `fluncle me` and the `/me` reads take (bearer plugin → getSession).
     const session = await auth.api.getSession({
       headers: new Headers({ Authorization: `Bearer ${token.access_token}` }),
     });
@@ -240,14 +209,10 @@ describe("user/admin token boundary", () => {
       }),
     );
 
-    // The user token is a random session token; it can never equal FLUNCLE_API_TOKEN.
     expect(role).toBeNull();
   });
 
   it("the ADMIN token is NOT a user session", async () => {
-    // Mint a user + session first so the user/session tables are non-empty; the
-    // admin token must STILL resolve no session (it is a shared secret, not a
-    // session token).
     await mintUserToken();
 
     const session = await auth.api.getSession({

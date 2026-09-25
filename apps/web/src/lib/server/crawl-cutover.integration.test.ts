@@ -28,7 +28,6 @@ import { DueWorkMaintenancePendingError } from "./due-work";
 
 const OLD = "2026-01-01T00:00:00.000Z";
 
-/** A drain budget whose units are one row, so a small fixture exercises the multi-unit lanes. */
 function narrowBudget(
   overrides: Partial<CrawlClaimRepairDrainBudget> = {},
 ): CrawlClaimRepairDrainBudget {
@@ -103,7 +102,6 @@ async function markLabelRepair(slug: string): Promise<void> {
   });
 }
 
-/** Three ready release nodes on one enabled label, the shape one repair marker fans out across. */
 async function seedRepairableLabel(slug: string): Promise<string[]> {
   await seedLabel(slug, true);
   const ids = ["a", "b", "c"].map((suffix) => `release:${slug}-${suffix}`);
@@ -410,8 +408,6 @@ describe("crawl runtime cutover", () => {
       }),
     ).rejects.toBeInstanceOf(DueWorkMaintenancePendingError);
 
-    // The deferred claim still converged the repair its budget allowed, so the next pass resumes
-    // from that durable progress instead of starting the fan-out over.
     expect(await countByState("repair")).toBe(2);
     expect(await countRepairMarkers()).toBe(1);
   });
@@ -462,7 +458,7 @@ describe("crawl runtime cutover", () => {
         token: "stalled-token",
       }),
     ).rejects.toBeInstanceOf(DueWorkMaintenancePendingError);
-    // The first page always runs, so even a claim the wall bound stops advances the repair by one.
+
     expect(await countByState("repair")).toBe(1);
   });
 
@@ -489,9 +485,6 @@ describe("crawl runtime cutover", () => {
   });
 
   it("absorbs more admission-minted source markers than its page budget and still claims", async () => {
-    // THE ADMISSION INVARIANT, end to end: an operator ruling that lands many allow rules at once
-    // makes one admission phase mint more source markers than the claim has pages. The claim must
-    // clear all of them and go on to claim, or every tick after it answers pending instead.
     const rules = CRAWL_CLAIM_REPAIR_DRAIN_BUDGET.sourcePages + 2;
     expect(rules).toBeLessThanOrEqual(CRAWL_ADMISSION_SOURCE_MARKER_MINT_BOUND);
     for (let index = 0; index < rules; index += 1) {

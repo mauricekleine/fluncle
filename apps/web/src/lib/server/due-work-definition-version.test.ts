@@ -35,17 +35,6 @@ import {
   type DueWorkVendorSource,
 } from "./due-work-vendor-definitions";
 
-// The committed fixture of every due-work family's DEFINITION version.
-//
-// This is the build-fail half of the mechanism. The versions themselves are DERIVED — each one is a
-// fingerprint of the running eligibility/order code over a fixed probe matrix, never a hand-bumped
-// constant — so this table cannot drift from the definitions: it can only fail. Editing a queue's
-// order components, its membership predicate, or one of the constants those read moves that
-// family's value and fails here until the fixture is updated in the same commit.
-//
-// A line changing in this table is the notice that the deploy will RE-PROJECT that queue: the
-// rebuild checkpoint stores the version, a mismatch is not `complete`, and the maintenance sweep
-// opens a fresh generation for it (docs/database-performance.md).
 const DEFINITION_VERSIONS: Record<string, string> = {
   "album.bio": "dv1-b16f0116bc6fed16",
   "album.cover-master": "dv1-e7552d3fadd73a54",
@@ -104,19 +93,12 @@ const REGISTERED_KINDS: readonly string[] = [
   CRAWL_DUE_WORK_FRONTIER,
 ];
 
-// Every constant the three definition modules export, classified. A constant an evaluator COMPARES
-// a source value against is invisible unless the ladder straddles it, so it must be in
-// `DUE_WORK_PROBE_THRESHOLDS`. A constant an evaluator ADDS to a timestamp lands in the computed
-// `nextDueAt`, so instead it needs a probe PAIR in the real matrix whose decisions differ — which
-// is only true when some base carries the companion stamp the branch reads. Both halves are
-// asserted below, and the last case in this file fails when a new exported constant appears
-// without being classified here.
 type ThresholdCase = { constant: string; kind: "threshold" };
 type AdditiveTrackCase = {
   constant: string;
   field: keyof DueWorkTrackSource;
   kind: "additive-track";
-  /** The probe in the real matrix this constant acts on, named by the fields that identify it. */
+
   match: Partial<DueWorkTrackSource>;
   queue: DueWorkTrackKind;
   value: unknown;
@@ -180,8 +162,6 @@ const CONSTANT_CASES: readonly ConstantCase[] = [
     value: null,
   },
   {
-    // The clamp only bites above `VENDOR_COOLDOWN_BASE_MS * 2 ** failures`, so the pair straddles
-    // the failure count at which `min(…)` starts returning the ceiling.
     constant: "VENDOR_COOLDOWN_MAX_MS",
     field: "discogsFailures",
     kind: "additive-vendor",
@@ -199,7 +179,6 @@ const CONSTANT_CASES: readonly ConstantCase[] = [
   },
 ];
 
-/** The entity families are probed through their evaluators, so their additive pairs live here. */
 const ENTITY_ADDITIVE_CASES: readonly {
   constant: string;
   field: string;
@@ -228,7 +207,6 @@ function vendorDecision(source: DueWorkVendorSource, queue: DueWorkVendorKind): 
   return describeDueWorkVendorDecision(queue, source, PROBE_NOW, "rank-corpus-probe");
 }
 
-/** The one probe in the real matrix whose named fields all match; ambiguity is a failing case. */
 function selectProbe<Source extends Record<string, unknown>>(
   matrix: readonly Source[],
   match: Record<string, unknown>,
@@ -238,7 +216,6 @@ function selectProbe<Source extends Record<string, unknown>>(
   );
 }
 
-/** True when the exact probe object is in the matrix the fingerprint actually hashes. */
 function matrixHolds(matrix: readonly unknown[], probe: unknown): boolean {
   const wanted = JSON.stringify(probe);
   return matrix.some((entry) => JSON.stringify(entry) === wanted);
@@ -266,8 +243,6 @@ describe("due-work definition versions", () => {
   });
 
   it("watches the anchored-first term the catalogue capture queue orders by", () => {
-    // The transcript the capture-catalogue version hashes must SEE this distinction, else an
-    // order change like it could ship without moving the version.
     const [base] = trackProbeMatrix();
     if (base === undefined) {
       throw new Error("the track probe matrix is empty");
@@ -296,11 +271,6 @@ describe("due-work definition versions", () => {
   });
 
   it("is independent of the host timezone", () => {
-    // `Date.parse` of a non-ISO value reads in LOCAL time, so an ill-typed probe in an `*_at`
-    // column made the fingerprint a function of the machine's UTC offset: a developer on +02:00
-    // pins a fixture the UTC Worker disagrees with, and the queue re-projects every time it is
-    // read from the other side. A half-hour zone is deliberate — it catches an offset a
-    // whole-hour zone could coincidentally round away.
     const transcriptUnder = (timeZone: string) => {
       const previous = process.env.TZ;
       process.env.TZ = timeZone;
@@ -338,7 +308,6 @@ describe("due-work definition versions", () => {
   });
 
   it("probes a timestamp column only with values whose parse is specified", () => {
-    // The guard the case above rests on: nothing ill-typed may reach `Date.parse`.
     for (const source of [...trackProbeMatrix(), ...vendorProbeMatrix()]) {
       for (const [column, value] of Object.entries(source)) {
         if (!isTimestampProbeColumn(column)) {
@@ -354,7 +323,7 @@ describe("due-work definition versions", () => {
     for (const value of [4, 5, 6, 39, 40, 41]) {
       expect(ladder).toContain(value);
     }
-    // Derived, so retuning a constant retunes the ladder: no hand-listed number to fall behind.
+
     expect(probeLadderCrossing([6])).not.toEqual(ladder);
   });
 });
@@ -449,8 +418,6 @@ describe("the probe matrix crosses every constant the evaluators read", () => {
   });
 });
 
-// The entity harness the version module uses, duplicated here so the coverage test probes the same
-// shapes without exporting the module's private base builder.
 function entityProbeBaseFor(kind: entityDefinitions.DueWorkKind): Record<string, unknown> {
   const overrides: Record<string, Record<string, unknown>> = {
     "finding.enrich": { enrichment_status: "processing" },

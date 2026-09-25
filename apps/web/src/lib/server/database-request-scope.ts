@@ -17,7 +17,6 @@ export type DatabaseRequestOperationLease = {
 
 const databaseRequestScope = new AsyncLocalStorage<DatabaseRequestScope>();
 
-/** Share database clients and fan-out measurement across one Worker request. */
 export function runWithDatabaseRequestScope<Result>(run: () => Result): Result {
   if (databaseRequestScope.getStore() !== undefined) {
     return run();
@@ -29,10 +28,6 @@ export function runWithDatabaseRequestScope<Result>(run: () => Result): Result {
   );
 }
 
-/**
- * One request-wide value under a caller-owned key, created on first use. Outside a Worker request
- * there is no request to share it with, so the caller receives `undefined` and keeps its own value.
- */
 export function getRequestScopedValue<Value>(key: symbol, create: () => Value): Value | undefined {
   const scope = databaseRequestScope.getStore();
   if (scope === undefined) {
@@ -44,7 +39,6 @@ export function getRequestScopedValue<Value>(key: symbol, create: () => Value): 
   return scope.values.get(key) as Value;
 }
 
-/** Memoize creation immediately so concurrent helpers cannot race out extra clients. */
 export function getRequestScopedDatabaseClient<ClientResult extends Client | undefined>(
   slot: DatabaseClientSlot,
   create: () => Promise<ClientResult>,
@@ -64,7 +58,6 @@ export function getRequestScopedDatabaseClient<ClientResult extends Client | und
   return created;
 }
 
-/** Count operations admitted to the remote client, not helpers waiting at the gate. */
 export function enterDatabaseRequestOperation(): DatabaseRequestOperationLease {
   const scope = databaseRequestScope.getStore();
   if (scope === undefined) {

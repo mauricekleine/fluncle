@@ -261,8 +261,6 @@ function trackBackfillDefinition(
   entry: TrackWorkInventoryEntry,
 ): DueWorkRebuildDefinition<string, TrackDueWorkSource> {
   return {
-    // A getter, so the probe matrix behind a definition version is paid on the first rebuild step
-    // that needs it rather than at module load.
     get definitionVersion() {
       return dueWorkDefinitionVersion(entry.workKind);
     },
@@ -550,8 +548,7 @@ function vendorBackfillDefinition(
       return dueWorkDefinitionVersion(entry.workKind);
     },
     project: (source, context) => projectVendorSource(entry, source, context),
-    // Rebuild pages derive rank staleness from their owned generation rather than the mutable
-    // cache. This keeps source identity and projection evaluation fixed across every cursor page.
+
     readSourceChunk: ({ after, client, generation, limit }) =>
       readVendorDueWorkSourceChunk(client, entry.workKind, { after, generation, limit }),
     ...(entry.workKind === "catalogue-rank"
@@ -953,11 +950,6 @@ function projectFindingSourceRepair(
       );
 }
 
-/**
- * The finding-derived queues one track source marker projects into, beside the track and vendor
- * inventories. The three lists together are the marker's fan-out width, which is what bounds a
- * source-repair page's row count.
- */
 export const FINDING_DUE_WORK_KINDS = [
   "finding.enrich",
   "finding.context",
@@ -968,7 +960,6 @@ export const FINDING_DUE_WORK_KINDS = [
   "finding.render.requires-observation",
 ] as const;
 
-/** Project a source-marker page from one authoritative read per track source family. */
 export async function projectTrackDueWorkSourceRepairs<Marker extends DueWorkRow<string>>(
   client: DueWorkClient,
   markers: readonly Marker[],
@@ -1186,7 +1177,6 @@ function registeredDefinition<Source extends DueWorkRebuildSource>(
   };
 }
 
-/** Complete, machine-checkable inventory consumed by the local rebuild script. */
 export const DUE_WORK_BACKFILLS: readonly DueWorkRebuildDefinition<string, DueWorkRebuildSource>[] =
   [
     ...TRACK_DUE_WORK_BACKFILLS.map(registeredDefinition),

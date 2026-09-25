@@ -1,20 +1,3 @@
-// The operator's lever for forcing ONE due-work queue back onto today's definition now.
-//
-// The standing mechanism is automatic: a definition version stored with the rebuild checkpoint
-// makes an order or eligibility change re-project on the ordinary rebuild path
-// (`due-work-definition-fingerprint.ts`). That path walks every family in turn, so it is the right
-// tool for correctness and the wrong tool for urgency. This one names a single `work_kind` and
-// marks its projected rows for repair in bounded, resumable pages; the runtime maintenance sweep
-// then drains those markers and every row comes back with today's `sort_key`.
-//
-// The page seek is `(work_kind, subject_type, subject_id)` — the table's own primary key — so it is
-// index-served at catalogue scale and adds no index.
-//
-// A marked row is WITHHELD from its queue's reads until it is repaired (a marker withholds its own
-// subject and nothing else, `due-work-cutover.ts`). Marking a whole queue at once therefore takes
-// that queue's servable rows to zero until the drain finishes; the paging exists so the operator
-// can choose how much of a queue is in flight at a time. No other queue is touched.
-
 import { advanceProjectionFenceStatement, TRACK_DUE_AUDIT_FENCE_KEY } from "./projection-fences";
 import {
   markDueWorkRepairStatement,
@@ -24,7 +7,6 @@ import {
 } from "./due-work";
 import { DUE_WORK_BACKFILLS } from "./due-work-registry";
 
-/** How far past the page a bounded remaining-count probe looks before it reports `truncated`. */
 export const DUE_WORK_REKEY_REMAINING_LIMIT = 10_000;
 
 export type DueWorkRekeyInput = {
@@ -57,7 +39,6 @@ export class UnknownDueWorkQueueError extends Error {
   }
 }
 
-/** Every queue this operation can re-key, in registry order. */
 export function rekeyableDueWorkQueues(): readonly string[] {
   return DUE_WORK_BACKFILLS.map((definition) => definition.workKind);
 }
@@ -101,7 +82,7 @@ export async function rekeyDueWorkQueue(
         { now },
       ),
     );
-    // New markers invalidate a completed audit, exactly as an ordinary source repair does.
+
     writes.push(advanceProjectionFenceStatement(TRACK_DUE_AUDIT_FENCE_KEY));
     await client.batch(writes, "write");
   }

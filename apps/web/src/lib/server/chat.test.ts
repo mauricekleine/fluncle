@@ -1,9 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// The archive/DB modules the tools wire to are mocked: this suite exercises the PURE parts
-// (the grounding prompt, request parsing, tool SHAPE, the unprovisioned guard, the model
-// resolve). The tools' `execute` closures — the only DB-touching part — are covered by the
-// route at runtime, not here.
 const readOptionalEnv = vi.hoisted(() => vi.fn<(name: string) => Promise<string | undefined>>());
 const getTracksByLogIds = vi.hoisted(() =>
   vi.fn<(logIds: string[]) => Promise<Record<string, unknown>>>(),
@@ -27,16 +23,12 @@ const listFreshTracks = vi.hoisted(() =>
 const getArtistNeighbours = vi.hoisted(() =>
   vi.fn<() => Promise<Array<{ imageUrl?: string; name: string; slug: string }>>>(),
 );
-// The PR-5 catalogue browse reads. `getAlbumBySlug`/`listCatalogueTracksByAlbum` back
-// list_album_catalogue; the two grouped reads back list_artist/label_catalogue.
+
 const getAlbumBySlug = vi.hoisted(() => vi.fn<(slug: string) => Promise<unknown>>());
 const listCatalogueTracksByAlbum = vi.hoisted(() => vi.fn<() => Promise<unknown>>());
 const listArtistCatalogue = vi.hoisted(() => vi.fn<() => Promise<unknown>>());
 const listLabelCatalogue = vi.hoisted(() => vi.fn<() => Promise<unknown>>());
 
-// A faithful stand-in for the real deterministic slug helpers (the DB-touching modules stay
-// mocked). "Netsky" → "netsky", "Hospital Records" → "hospital-records" — enough to prove the
-// name → helper → getBySlug wiring without importing node:crypto + spotify + db.
 function toSlug(name: string): string {
   return name
     .toLowerCase()
@@ -99,18 +91,14 @@ beforeEach(() => {
   readOptionalEnv.mockReset();
   readOptionalEnv.mockResolvedValue(undefined);
   getTracksByLogIds.mockReset();
-  // Default: the hydrator finds nothing, so search falls back to the bare hit shape. Tests that
-  // exercise the rich card path override this with the findings they expect hydrated.
+
   getTracksByLogIds.mockResolvedValue({});
 
-  // Entity tools default to "resolves to nothing" so an unrelated test never trips them; the
-  // entity suite overrides these with the records it expects.
   getFindingsByArtist.mockReset();
   getFindingsByArtist.mockResolvedValue([]);
   getFindingsByLabel.mockReset();
   getFindingsByLabel.mockResolvedValue([]);
-  // build_set defaults: no chain, and a deep-enough archive (so an empty chain is "just this
-  // seed", not "thin"). The build_set suite overrides both with the fixtures it needs.
+
   getMixableTracks.mockReset();
   getMixableTracks.mockResolvedValue([]);
   getMixChainDepth.mockReset();
@@ -129,15 +117,13 @@ beforeEach(() => {
   getLabelBySlug.mockResolvedValue(undefined);
   getConfirmedAliasNames.mockReset();
   getConfirmedAliasNames.mockResolvedValue([]);
-  // list_fresh defaults to "nothing came out" so an unrelated test never trips it; the fresh
-  // suite overrides it with the release rows it needs.
+
   listFreshTracks.mockReset();
   listFreshTracks.mockResolvedValue({ albums: [], tracks: [], windowDays: 30 });
-  // list_similar_artists defaults to "no neighbours yet"; its suite overrides with real neighbours.
+
   getArtistNeighbours.mockReset();
   getArtistNeighbours.mockResolvedValue([]);
-  // The catalogue browse reads default to "no such record" so an unrelated test never trips them;
-  // the browse suite overrides them with the rows it needs.
+
   getAlbumBySlug.mockReset();
   getAlbumBySlug.mockResolvedValue(undefined);
   listCatalogueTracksByAlbum.mockReset();
@@ -168,19 +154,17 @@ describe("FLUNCLE_CHAT_SYSTEM_PROMPT — the grounding rule is the product", () 
   it("mandates answering only from the tools and refusing to invent", () => {
     const prompt = FLUNCLE_CHAT_SYSTEM_PROMPT.toLowerCase();
 
-    // The grounding rail: every fact comes from a tool result, and the empty case is honesty.
     expect(prompt).toContain("from the archive or you do not answer");
     expect(prompt).toContain("must come from a tool result");
     expect(prompt).toContain("never invent");
-    // The two-tier rule: a finding is spoken in full; a catalogue row is named and listed only.
+
     expect(prompt).toContain("certified");
     expect(prompt).toContain("catalogue row");
-    // The tier-noun gag: the model never SPEAKS the tier name to the crew (the Unlit Rule at the
-    // wire — the prompt is the only control over what Fluncle utters).
+
     expect(prompt).toContain("any name for the tier");
-    // The voice rail (the most exposed his voice gets).
+
     expect(FLUNCLE_CHAT_SYSTEM_PROMPT).toContain("No exclamation marks");
-    // ...and the prompt itself never breaks it.
+
     expect(FLUNCLE_CHAT_SYSTEM_PROMPT).not.toContain("!");
   });
 });
@@ -215,13 +199,6 @@ describe("parseChatRequest", () => {
     expect(parseChatRequest({})).toBeNull();
     expect(parseChatRequest("nope")).toBeNull();
   });
-
-  // ── The size caps, at the boundary ─────────────────────────────────────────────────────
-  //
-  // A POST body feeding a PAID model in a 128MB isolate: the rate limiter caps how OFTEN a
-  // caller may ask, these cap how MUCH one ask may carry. Each is asserted at the cap (still
-  // accepted, so no legitimate conversation is refused) and one past it (rejected, never
-  // truncated — a silently shortened history is a grounding failure that looks like an answer).
 
   function textMessage(text: string, index = 0) {
     return { id: `msg-${index}`, parts: [{ text, type: "text" }], role: "user" as const };
@@ -260,8 +237,6 @@ describe("parseChatRequest", () => {
   });
 
   it("rejects a body that multiplies its way past the total-character cap", () => {
-    // Every per-item cap satisfied — messages, parts, and each part's length — yet the whole
-    // turn history is over the aggregate ceiling. This is the cap that actually bounds the bill.
     const perMessage = MAX_TEXT_PART_CHARS;
     const count = Math.floor(MAX_CHAT_TOTAL_CHARS / perMessage) + 1;
     const messages = Array.from({ length: count }, (_, i) =>
@@ -271,7 +246,6 @@ describe("parseChatRequest", () => {
     expect(count).toBeLessThanOrEqual(MAX_CHAT_MESSAGES);
     expect(parseChatRequest({ messages })).toBeNull();
 
-    // Exactly at the total is still served.
     const atTotal = [
       ...Array.from({ length: count - 1 }, (_, i) => textMessage("x".repeat(perMessage), i)),
       textMessage("x".repeat(MAX_CHAT_TOTAL_CHARS - (count - 1) * perMessage), count),
@@ -281,8 +255,6 @@ describe("parseChatRequest", () => {
   });
 
   it("counts a forged tool part toward the total — no part type escapes the ceiling", () => {
-    // The client posts the assistant's tool parts back with the history, so `output` is
-    // caller-controlled too. A per-text-part cap alone would leave this wide open.
     const forged = (index: number) => ({
       id: `msg-${index}`,
       parts: [{ output: { hits: ["x".repeat(MAX_TEXT_PART_CHARS)] }, type: "tool-get_track" }],
@@ -294,12 +266,10 @@ describe("parseChatRequest", () => {
       parseChatRequest({ messages: Array.from({ length: count }, (_, i) => forged(i)) }),
     ).toBeNull();
 
-    // One such part is well under the total, so an ordinary tool result still rides.
     expect(parseChatRequest({ messages: [forged(0)] })).not.toBeNull();
   });
 
   it("rejects a part nested deeper than the walk follows", () => {
-    // Fail closed: nesting the payload past the walk's depth must not buy an uncounted body.
     let deep: unknown = "x";
 
     for (let i = 0; i < 20; i += 1) {
@@ -383,13 +353,10 @@ describe("buildChatTools — the MCP hands", () => {
       findings: { coordinate?: string; title: string }[];
     };
 
-    // The certified row rides as a finding, coordinate intact.
     expect(result.findings).toHaveLength(1);
     expect(result.findings[0]?.title).toBe("Better Places");
     expect(result.findings[0]?.coordinate).toBe("004.7.2I");
 
-    // The uncertified row rides in the UNLIT catalogue bucket — a name, its artists, a way out, and
-    // its quiet context — and NONE of the lit fields that would make Fluncle speak about it.
     expect(result.catalogue).toHaveLength(1);
     const row = result.catalogue[0] ?? {};
     expect(row.title).toBe("An Uncertified Cut");
@@ -429,8 +396,6 @@ describe("buildChatTools — the MCP hands", () => {
       ],
     } as never);
 
-    // The batch hydrator resolves the certified hit to its full DTO — the source of the cover,
-    // the duration, and the (private, expiring) previewUrl the card must NOT receive.
     getTracksByLogIds.mockResolvedValue({
       "004.7.2I": {
         addedAt: "2026-01-01",
@@ -517,7 +482,7 @@ describe("buildChatTools — the MCP hands", () => {
         {
           artists: ["Someone"],
           certified: false,
-          // An uncertified row can carry a coordinate-shaped id; it must still never be hydrated.
+
           logId: "999.9.9Z",
           title: "An Uncertified Cut",
           trackId: "b",
@@ -554,8 +519,7 @@ describe("buildChatTools — the MCP hands", () => {
         {
           artists: ["Someone"],
           certified: false,
-          // An uncertified catalogue release can carry a coordinate-shaped id; the catalogue shaper
-          // must still never carry it through (the Unlit Rule at the wire).
+
           logId: "999.9.9Z",
           releaseDate: "2026-07-16",
           spotifyUrl: "https://open.spotify.com/track/uncert",
@@ -576,37 +540,28 @@ describe("buildChatTools — the MCP hands", () => {
       findings: { coordinate?: string; title: string }[];
     };
 
-    // The certified release rides as a finding.
     expect(result.findings).toHaveLength(1);
     expect(result.findings[0]?.title).toBe("Better Places");
     expect(result.findings[0]?.coordinate).toBe("004.7.2I");
-    // Both registers carry the RELEASE date so Fluncle can say when a tune dropped (a public
-    // release fact, framed as released not found).
+
     expect((result.findings[0] as { releaseDate?: string }).releaseDate).toBe("2026-07-15");
 
-    // The uncertified release now REACHES the model — as an unlit catalogue row (the bug was that
-    // an all-uncertified fresh window returned nothing in chat). It carries a name, artists, and a
-    // way out, and none of the lit fields — not even the coordinate-shaped id it came in with.
     expect(result.catalogue).toHaveLength(1);
     const row = result.catalogue[0] ?? {};
     expect(row.title).toBe("An Uncertified Cut");
     expect(row.spotifyUrl).toBe("https://open.spotify.com/track/uncert");
-    // The release date is register-safe on an unlit row — a public fact, not a Fluncle measurement.
+
     expect(row.releaseDate).toBe("2026-07-16");
     for (const lit of ["coordinate", "logId", "note", "observation", "bpm", "key", "hasPreview"]) {
       expect(row, `catalogue row must not carry ${lit}`).not.toHaveProperty(lit);
     }
 
-    // The uncertified release's logId is never hydrated (only certified rows are).
     const lookedUp = getTracksByLogIds.mock.calls.at(-1)?.[0] ?? [];
     expect(lookedUp).toContain("004.7.2I");
     expect(lookedUp).not.toContain("999.9.9Z");
   });
 
   it("carries the release date on a HYDRATED certified finding (the common path, not just the fallback)", async () => {
-    // The certified fresh finding usually hydrates to a full record whose generic shaper knows no
-    // release date; the execute must spread the fresh row's date onto it so the hydrated card still
-    // carries when it dropped.
     listFreshTracks.mockResolvedValue({
       albums: [],
       tracks: [
@@ -621,7 +576,7 @@ describe("buildChatTools — the MCP hands", () => {
       ],
       windowDays: 30,
     });
-    // The hydrator returns the full finding (no releaseDate of its own).
+
     getTracksByLogIds.mockResolvedValue({
       "004.7.2I": {
         artists: ["Nu:Tone"],
@@ -680,22 +635,18 @@ describe("buildChatTools — the MCP hands", () => {
       findings?: unknown[];
     };
 
-    // The records ride the UNLIT bucket — a record has no coordinate, so it is register-equal to a
-    // catalogue track (reused shape, no new card). The track stream is dropped for this view.
     expect(result.findings).toBeUndefined();
     expect(result.catalogue).toHaveLength(1);
     const row = result.catalogue?.[0] ?? {};
     expect(row.title).toBe("Simpler Times");
     expect(row.artists).toEqual(["Break", "Kyo"]);
-    // A record carries no Spotify link and never a lit field.
+
     for (const lit of ["coordinate", "logId", "spotifyUrl", "note", "bpm", "key"]) {
       expect(row, `record row must not carry ${lit}`).not.toHaveProperty(lit);
     }
   });
 
   it("exposes the two WRITE verbs on chat, each with an input schema + executor", () => {
-    // PR-2 puts submit_track + subscribe_newsletter on ChatDnB (gated-session-safe), so Fluncle
-    // can take a submission / newsletter signup mid-conversation.
     const tools = buildChatTools();
 
     for (const name of ["submit_track", "subscribe_newsletter"] as const) {
@@ -728,10 +679,9 @@ describe("list_similar_artists — the artist-discovery read", () => {
       similar: { name: string; slug: string }[];
     };
 
-    // name → slug helper → getPublicArtistBySlug(slug) — the same resolution get_artist uses.
     expect(toArtistSlug).toHaveBeenCalledWith("Koven");
     expect(getPublicArtistBySlug).toHaveBeenCalledWith("koven");
-    // A thin pass-through: the id goes to getArtistNeighbours, and its list rides back unchanged.
+
     expect(getArtistNeighbours).toHaveBeenCalledWith("art-1", expect.any(Number));
     expect(result.of).toEqual({ name: "Koven", slug: "koven" });
     expect(result.similar.map((artist) => artist.slug)).toEqual(["camo-krooked", "metrik"]);
@@ -797,11 +747,9 @@ describe("the catalogue browse tools — name → the unlit catalogue bucket (PR
       ok: boolean;
     };
 
-    // name → albumSlug → getAlbumBySlug(slug), then the anti-join read.
     expect(getAlbumBySlug).toHaveBeenCalledWith("colours");
     expect(listCatalogueTracksByAlbum).toHaveBeenCalledWith("alb-1");
-    // Catalogue-only by construction: findings is always empty; the rows carry the record as context
-    // and NOTHING lit (no coordinate/note/cover/bpm/key).
+
     expect(result).toMatchObject({ ok: true });
     expect(result.findings).toEqual([]);
     expect(result.catalogue).toHaveLength(2);
@@ -914,7 +862,7 @@ describe("the catalogue browse tools — name → the unlit catalogue bucket (PR
         pageCount: 1,
       });
     }
-    // Not one of the reads was reached — an unresolved name never touches the anti-join.
+
     expect(listCatalogueTracksByAlbum).not.toHaveBeenCalled();
     expect(listArtistCatalogue).not.toHaveBeenCalled();
     expect(listLabelCatalogue).not.toHaveBeenCalled();
@@ -973,7 +921,6 @@ describe("get_artist / get_label — the entity cards' grounding", () => {
       };
     };
 
-    // name → slug helper → getPublicArtistBySlug(slug) is the resolution the /artist page uses.
     expect(toArtistSlug).toHaveBeenCalledWith("Netsky");
     expect(getPublicArtistBySlug).toHaveBeenCalledWith("netsky");
     expect(result.artist.slug).toBe("netsky");
@@ -982,7 +929,7 @@ describe("get_artist / get_label — the entity cards' grounding", () => {
       "004.7.2I",
       "005.1.3B",
     ]);
-    // The avatar is the freshest certified finding's cover (no avatar rides on the record).
+
     expect(result.artist.avatarUrl).toBe("https://cover.example/rio.jpg");
     expect(result.artist.socials).toEqual([
       { platform: "spotify", url: "https://open.spotify.com/artist/x" },
@@ -998,9 +945,6 @@ describe("get_artist / get_label — the entity cards' grounding", () => {
   });
 
   it("get_artist returns the UNLIT entity (name + catalogue, no findings) for a catalogue-only artist", async () => {
-    // He has certified nothing from this artist, but the artist row EXISTS and carries records in
-    // the catalogue. The Unlit Rule silences uncertified TRACKS, never artists — so instead of the
-    // old found:false, get_artist names the artist and lists their records in the unlit register.
     getPublicArtistBySlug.mockResolvedValue({
       bio: "A quiet one from the far sectors.",
       id: "art-2",
@@ -1043,31 +987,28 @@ describe("get_artist / get_label — the entity cards' grounding", () => {
       };
     };
 
-    // Not found:false — the entity resolves and names the artist.
     expect(result.artist).toBeDefined();
     expect(result.artist.name).toBe("Quiet One");
     expect(result.artist.slug).toBe("quiet-one");
-    // The catalogue is the SAME grouped read the /artist page uses (name → slug → id → the read).
+
     expect(listArtistCatalogue).toHaveBeenCalledWith("art-2", "name", 1);
     expect(result.artist.catalogue).toHaveLength(1);
     const row = result.artist.catalogue?.[0];
     expect(row?.title).toBe("Drift");
     expect(row?.release).toBe("Far Sectors EP");
-    // An unlit row never carries a coordinate (the wire-level Unlit Rule).
+
     expect(row).not.toHaveProperty("coordinate");
-    // Socials + bio still ride (naming an artist is always allowed); no findings, no findingCount.
+
     expect(result.artist.socials).toEqual([
       { platform: "spotify", url: "https://open.spotify.com/artist/q" },
     ]);
     expect(result.artist.bio).toBe("A quiet one from the far sectors.");
     expect(result.artist).not.toHaveProperty("findingCount");
-    // dropEmpty strips the empty findings array, so the entity carries no findings at all.
+
     expect(result.artist.findings ?? []).toEqual([]);
   });
 
   it("get_artist still names a resolved artist even with an empty catalogue (never found:false)", async () => {
-    // A resolved artist with neither findings nor catalogue is still NAMED — the entity carries his
-    // name (and socials/bio when present), never found:false. Naming an artist is allowed.
     getPublicArtistBySlug.mockResolvedValue({
       id: "art-3",
       name: "Faint Trace",
@@ -1075,7 +1016,6 @@ describe("get_artist / get_label — the entity cards' grounding", () => {
     });
     countArtistFindings.mockResolvedValue(0);
     getFindingsByArtist.mockResolvedValue([]);
-    // listArtistCatalogue defaults to empty groups (beforeEach).
 
     const result = (await artistExecutor()({ name: "Faint Trace" }, {} as never)) as {
       artist?: { name?: string };
@@ -1091,7 +1031,7 @@ describe("get_artist / get_label — the entity cards' grounding", () => {
     countArtistFindings.mockResolvedValue(1);
     getFindingsByArtist.mockResolvedValue([
       { artists: ["Netsky"], logId: "004.7.2I", title: "Rio" },
-      // No logId → no coordinate → never something Fluncle speaks about, so it is dropped.
+
       { artists: ["Netsky"], title: "Uncertified Cut" },
     ]);
 
@@ -1123,7 +1063,6 @@ describe("get_artist / get_label — the entity cards' grounding", () => {
       "Belgian producer who bends liquid drum and bass toward daylight.",
     );
 
-    // No bio on the record → `dropEmpty` strips the key entirely (not a null / empty string).
     getPublicArtistBySlug.mockResolvedValue({ id: "art-1", name: "Netsky", slug: "netsky" });
     const withoutBio = await artistExecutor()({ name: "Netsky" }, {} as never);
     expect(hasKeyDeep(withoutBio, "bio")).toBe(false);
@@ -1180,7 +1119,6 @@ describe("get_artist / get_label — the entity cards' grounding", () => {
       "London imprint that has carried liquid drum and bass for two decades.",
     );
 
-    // No bio on the record → `dropEmpty` strips the key entirely (not a null / empty string).
     getLabelBySlug.mockResolvedValue({
       id: "lbl-1",
       logoImageUrl: undefined,
@@ -1192,10 +1130,6 @@ describe("get_artist / get_label — the entity cards' grounding", () => {
   });
 
   it("get_label returns the UNLIT entity (name + catalogue, no findings) for a catalogue-only label", async () => {
-    // He has certified nothing on this label, but the label row EXISTS and carries records in the
-    // catalogue. The Unlit Rule silences uncertified TRACKS, never the label entity — so instead of
-    // found:false, get_label names the label and lists the records on it in the unlit
-    // register. Mirrors the get_artist unlit-entity behaviour exactly.
     getLabelBySlug.mockResolvedValue({
       bio: "A young imprint out past the certified sectors.",
       id: "lbl-2",
@@ -1246,29 +1180,26 @@ describe("get_artist / get_label — the entity cards' grounding", () => {
       };
     };
 
-    // Not found:false — the entity resolves and names the label.
     expect(result.label).toBeDefined();
     expect(result.label.name).toBe("Empty Imprint");
     expect(result.label.slug).toBe("empty-imprint");
-    // The catalogue is the SAME grouped read the /label page uses (name → slug → id → the read).
+
     expect(listLabelCatalogue).toHaveBeenCalledWith("lbl-2", "name", 1);
     expect(result.label.catalogue).toHaveLength(1);
     const row = result.label.catalogue?.[0];
     expect(row?.title).toBe("Drift");
     expect(row?.release).toBe("Debut EP");
-    // An unlit row never carries a coordinate (the wire-level Unlit Rule).
+
     expect(row).not.toHaveProperty("coordinate");
-    // Aliases + bio still ride (naming a label is always allowed); no findings, no findingCount.
+
     expect(result.label.aliases).toEqual(["Empty"]);
     expect(result.label.bio).toBe("A young imprint out past the certified sectors.");
     expect(result.label).not.toHaveProperty("findingCount");
-    // dropEmpty strips the empty findings array, so the entity carries no findings at all.
+
     expect(result.label.findings ?? []).toEqual([]);
   });
 
   it("get_label still names a resolved label even with an empty catalogue (never found:false)", async () => {
-    // A resolved label with neither findings nor catalogue is still NAMED — the entity carries its
-    // name (and aliases/bio when present), never found:false. Naming a label is allowed.
     getLabelBySlug.mockResolvedValue({
       id: "lbl-3",
       logoImageUrl: undefined,
@@ -1276,7 +1207,6 @@ describe("get_artist / get_label — the entity cards' grounding", () => {
       slug: "faint-imprint",
     });
     getFindingsByLabel.mockResolvedValue([]);
-    // listLabelCatalogue defaults to empty groups (beforeEach).
 
     const result = (await labelExecutor()({ name: "Faint Imprint" }, {} as never)) as {
       found?: boolean;
@@ -1318,13 +1248,12 @@ describe("get_artist / get_label — the entity cards' grounding", () => {
 
     expect(hasKeyDeep(artistResult, "previewUrl")).toBe(false);
     expect(hasKeyDeep(labelResult, "previewUrl")).toBe(false);
-    // The derived boolean DID ride through — the card still knows a preview exists.
+
     expect(hasKeyDeep(artistResult, "hasPreview")).toBe(true);
     expect(hasKeyDeep(labelResult, "hasPreview")).toBe(true);
   });
 });
 
-/** Walk any value and report whether `key` appears anywhere in it (arrays + nested objects). */
 function hasKeyDeep(value: unknown, key: string): boolean {
   if (Array.isArray(value)) {
     return value.some((entry) => hasKeyDeep(entry, key));
@@ -1350,7 +1279,6 @@ describe("build_set — the chain card's grounding + the no-numbers invariant", 
     return execute;
   }
 
-  // A real finding coordinate (isLogId is the unmocked grammar guard) resolving to a seed track.
   function seedTargetIs(track: Record<string, unknown>) {
     return { kind: "track", track };
   }
@@ -1386,8 +1314,7 @@ describe("build_set — the chain card's grounding + the no-numbers invariant", 
         trackId: "t2",
       },
     ]);
-    // The certified steps hydrate to full findings (the card fields), carrying the private,
-    // expiring previewUrl the output must NOT leak.
+
     getTracksByLogIds.mockResolvedValue({
       "005.1.3B": {
         albumImageUrl: "https://cover.example/one.jpg",
@@ -1414,18 +1341,17 @@ describe("build_set — the chain card's grounding + the no-numbers invariant", 
       };
     };
 
-    // The seed came from the coordinate resolver, and the engine was asked from the seed's logId.
     expect(getMixableTracks).toHaveBeenCalledWith("004.7.2I", { limit: 7 });
     expect(result.set.seed.coordinate).toBe("004.7.2I");
     expect(result.set.steps.map((step) => step.coordinate)).toEqual(["005.1.3B", "006.2.4C"]);
-    // Every step's reason is a human STRING (mixReasonLabel), never the reason object.
+
     expect(result.set.steps.map((step) => step.reason)).toEqual(["Same key", "Tempo locked"]);
     for (const step of result.set.steps) {
       expect(typeof step.reason).toBe("string");
     }
-    // The handoff carries the seed FIRST, then the chain in order — all certified Log IDs.
+
     expect(result.set.setUrl).toBe("/mix?set=004.7.2I,005.1.3B,006.2.4C");
-    // No numeric score, and no expiring preview token, anywhere in the output.
+
     expect(hasKeyDeep(result, "score")).toBe(false);
     expect(hasKeyDeep(result, "previewUrl")).toBe(false);
   });
@@ -1457,8 +1383,7 @@ describe("build_set — the chain card's grounding + the no-numbers invariant", 
         certified: false,
         durationMs: 230_000,
         key: "F minor",
-        // A malformed catalogue candidate carrying a coordinate-shaped id — the register is decided
-        // by the `certified` flag (mirroring /mix: logId iff certified), so this must be dropped.
+
         logId: "999.9.9Z",
         reason: { kind: "sonic", relationship: "close_in_sound" },
         spotifyUrl: "https://open.spotify.com/track/cat",
@@ -1483,12 +1408,9 @@ describe("build_set — the chain card's grounding + the no-numbers invariant", 
       };
     };
 
-    // BOTH steps chain now (the panel's "certified-only" was overturned — /mix is catalogue-aware).
     expect(result.set.steps).toHaveLength(2);
     expect(result.set.steps[0]?.coordinate).toBe("005.1.3B");
 
-    // The catalogue step rides the UNLIT mix register: its mixability (bpm/key + the reason chip)
-    // and a way out, but NO coordinate — not even the stray id it came in with.
     const catalogueStep = result.set.steps[1];
     expect(catalogueStep?.coordinate).toBeUndefined();
     expect(catalogueStep?.reason).toBe("Close in sound");
@@ -1496,10 +1418,9 @@ describe("build_set — the chain card's grounding + the no-numbers invariant", 
     expect(catalogueStep?.key).toBe("F minor");
     expect(catalogueStep?.spotifyUrl).toBe("https://open.spotify.com/track/cat");
 
-    // The `?set=` handoff names the catalogue step by its trackId (no coordinate), never the stray id.
     expect(result.set.setUrl).toBe("/mix?set=004.7.2I,005.1.3B,t3");
     expect(result.set.setUrl).not.toContain("999.9.9Z");
-    // The stray id is never hydrated (only certified steps are), and no score ever rides out.
+
     const hydrated = getTracksByLogIds.mock.calls.at(-1)?.[0] ?? [];
     expect(hydrated).not.toContain("999.9.9Z");
     expect(hasKeyDeep(result, "score")).toBe(false);
@@ -1535,7 +1456,6 @@ describe("build_set — the chain card's grounding + the no-numbers invariant", 
       set: { seed: { coordinate?: string } };
     };
 
-    // The seed resolved via the certified hit's logId, and the engine was asked from it.
     expect(getMixableTracks).toHaveBeenCalledWith("004.7.2I", { limit: 7 });
     expect(result.set.seed.coordinate).toBe("004.7.2I");
   });
@@ -1575,7 +1495,7 @@ describe("build_set — the chain card's grounding + the no-numbers invariant", 
 
     expect(result.set.seed.coordinate).toBe("004.7.2I");
     expect(result.set.thin).toBe(true);
-    // No chain and no handoff — a lonely seed is not a set.
+
     expect(result.set.steps ?? []).toEqual([]);
     expect(hasKeyDeep(result, "setUrl")).toBe(false);
   });
@@ -1606,7 +1526,7 @@ describe("get_status — the status strip's shape", () => {
 
     expect(result.ok).toBe(true);
     expect(result.headline).toBe("All 2 systems are up.");
-    // The strip renders exactly these two fields — nothing else rides the output.
+
     expect(Object.keys(result).sort()).toEqual(["headline", "ok"]);
   });
 
@@ -1628,11 +1548,6 @@ describe("get_status — the status strip's shape", () => {
 });
 
 describe("red-team — a browse over an uncrawled label carries no narration on catalogue rows", () => {
-  // The STRUCTURAL half of the red-team eval (the prose half is the system prompt's job, gated by
-  // canon-review): whatever a dig over an uncrawled label returns, every catalogue row is
-  // note-less, coordinate-less, and measurement-less — the model is handed nothing to narrate FROM,
-  // so a first-person reaction on a catalogue row cannot be a citation, only a hallucination the
-  // prompt forbids. This is the guard for the class of bug that started the epic.
   const NARRATION_FIELDS = [
     "coordinate",
     "logId",
@@ -1684,7 +1599,6 @@ describe("red-team — a browse over an uncrawled label carries no narration on 
       {} as never,
     )) as { catalogue?: Record<string, unknown>[]; findings?: unknown[] };
 
-    // Nothing certified ⇒ a catalogue-only answer (a bare list, no findings above it).
     expect(result.findings ?? []).toHaveLength(0);
     expect(result.catalogue).toHaveLength(2);
     for (const row of result.catalogue ?? []) {

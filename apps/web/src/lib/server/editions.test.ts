@@ -8,32 +8,20 @@ import {
   updateEdition,
 } from "./editions";
 
-// The editions choreography backed by a single mutable row, answered by SQL shape —
-// enough to prove the mint-on-send number assignment, the sent-only reads, and the
-// draft/sent guards without a real libsql instance. The Resend send is mocked so no
-// real broadcast goes out.
-
 type Row = Record<string, unknown>;
 
 const state = vi.hoisted(() => ({ maxNumber: 0, row: {} as Row }));
 
 const execute = vi.hoisted(() =>
   vi.fn(async (query: { args: unknown[]; sql: string }) => {
-    // The insert (create) / update (patch) writes — return nothing; the readback
-    // SELECT returns the current row state below.
     if (query.sql.startsWith("insert into editions") || query.sql.startsWith("update editions")) {
       return { rows: [] };
     }
 
-    // The hard delete — `returning id`. A present row yields its id (no status
-    // filter: delete reaches sent editions too); an absent one yields nothing so
-    // the server throws not-found.
     if (query.sql.startsWith("delete from editions")) {
       return { rows: state.row.id ? [{ id: state.row.id }] : [] };
     }
 
-    // A read (EDITION_SELECT). For the sent-only filter, return nothing if the row
-    // is a draft; otherwise return the row.
     const wantsSentOnly = query.sql.includes("status = 'sent'");
 
     if (wantsSentOnly && state.row.status !== "sent") {
@@ -46,7 +34,6 @@ const execute = vi.hoisted(() =>
 
 const batch = vi.hoisted(() =>
   vi.fn(async () => {
-    // The mint-on-send batch: assign max(number)+1, flip to sent, stamp provenance.
     state.row.number = state.maxNumber + 1;
     state.row.status = "sent";
     state.row.send_provider = "resend";
@@ -64,8 +51,7 @@ vi.mock("./db", () => ({
 
 const createBroadcast = vi.hoisted(() => vi.fn(async () => ({ id: "bc_test_123" })));
 const sendBroadcast = vi.hoisted(() => vi.fn(async () => undefined));
-// COST-01: the send path now reads the segment size for the Resend cost row. 0 →
-// the best-effort capture is skipped, so these mint/broadcast tests are unchanged.
+
 const countSegmentRecipients = vi.hoisted(() => vi.fn(async () => 0));
 
 vi.mock("./resend", () => ({
@@ -191,8 +177,6 @@ describe("sendEdition — mint-on-send + Resend broadcast", () => {
   });
 
   it("refuses to send a hollow edition (no findings, no mixtape)", async () => {
-    // The Jun-27 incident: the agent dropped the `galaxies` array, so the email
-    // went out with only the intro. The guard must reject it before any broadcast.
     seedDraft({ content_json: JSON.stringify({ intro: "Ten finds this week." }) });
 
     await expect(sendEdition("edition-id")).rejects.toThrow(/finding|mixtape/i);

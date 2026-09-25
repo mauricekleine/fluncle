@@ -11,11 +11,6 @@ vi.mock("@sentry/cloudflare", async (importOriginal) => ({
   captureException: vi.fn(),
 }));
 
-// Regression pins for the unexpected-500 branch: a deliberate `ApiError` keeps
-// its precise status/code/message (a client contract the CLI renders), while an
-// *unexpected* fault answers generically and its raw detail goes to the server
-// log — never onto the wire to an unauthenticated caller.
-
 afterEach(() => {
   vi.restoreAllMocks();
 });
@@ -50,8 +45,7 @@ describe("apiFault — the oRPC catch converter", () => {
     expect(isApiFaultData(data)).toBe(true);
     expect(data).toEqual({ apiCode: "error", apiMessage: "Internal error" });
     expect(JSON.stringify(fault)).not.toContain("secret-internal-detail");
-    // The raw detail was logged server-side — one structured JSON line carrying the
-    // serialized error (message + stack) under the `api.unexpected-fault` event.
+
     expect(errSpy).toHaveBeenCalledTimes(1);
     const logged = JSON.parse(errSpy.mock.calls[0]?.[0] as string) as {
       error: { message: string; stack: string };
@@ -72,7 +66,7 @@ describe("apiFault — the oRPC catch converter", () => {
       apiCode: "rate_limited",
       apiMessage: "Slow down there, traveler",
     });
-    // The deliberate branch does not log — nothing unexpected happened.
+
     expect(errSpy).not.toHaveBeenCalled();
   });
 });

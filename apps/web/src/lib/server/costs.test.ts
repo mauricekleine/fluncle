@@ -1,12 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { type CostEventInput } from "@fluncle/contracts/orpc";
 
-// COST-01 ledger write + read. The db is mocked: the insert path EMULATES an
-// append-only table with a UNIQUE id (ON CONFLICT(id) DO NOTHING) so idempotency is
-// exercised for real, and the read path returns canned GROUP BY rows so the cash /
-// subsidized split + unpriced accounting can be asserted precisely.
-
-// The emulated table's id-set + a hook to force a write failure (best-effort test).
 const insertedIds = new Set<string>();
 let failInsert = false;
 
@@ -47,8 +41,6 @@ beforeEach(() => {
         throw new Error("simulated turso failure");
       }
 
-      // Emulate ON CONFLICT(id) DO NOTHING: the id is the first column of each
-      // 13-wide value tuple. Count only the ids not already present.
       const args = query.args ?? [];
       let affected = 0;
 
@@ -78,7 +70,6 @@ describe("resolveEstimatedUsd", () => {
   });
 
   it("prices a cash single-count row from the rate map", () => {
-    // firecrawl requests × 1 = 0.0016.
     expect(resolveEstimatedUsd(event({ id: "b", quantity: 1, vendor: "firecrawl" }))).toBeCloseTo(
       0.0016,
       10,
@@ -95,9 +86,9 @@ describe("insertCostEvents idempotency", () => {
     const batch = [event({ id: "e1" }), event({ id: "e2" })];
 
     expect(await insertCostEvents(batch)).toBe(2);
-    // The retry: same ids → ON CONFLICT DO NOTHING → zero inserted.
+
     expect(await insertCostEvents(batch)).toBe(0);
-    // A partial overlap only inserts the new one.
+
     expect(await insertCostEvents([event({ id: "e2" }), event({ id: "e3" })])).toBe(1);
   });
 
@@ -119,8 +110,6 @@ describe("captureCostEvents (best-effort)", () => {
     failInsert = true;
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
 
-    // The guarantee: a ledger failure resolves quietly, so the caller's real work
-    // (the note / observation / email) is unaffected.
     await expect(captureCostEvents([event({ id: "boom" })])).resolves.toBeUndefined();
     expect(spy).toHaveBeenCalled();
 
@@ -140,7 +129,6 @@ describe("costEventId", () => {
     });
     expect(key).toBe("observe:004.7.2I:cartesia:characters:t");
 
-    // No logId → trackId scope; no finding at all → "global".
     expect(
       costEventId({ occurredAt: "t", step: "newsletter", unitType: "emails", vendor: "resend" }),
     ).toBe("newsletter:global:resend:emails:t");
@@ -175,8 +163,6 @@ describe("getCostInsights aggregation", () => {
               unpriced_count: 1,
             },
             {
-              // The entity-bio authoring spend — a subsidized anthropic step, same
-              // family as note/observe, rolled up on its own `bio` row.
               cash_usd: 0,
               event_count: 1,
               step: "bio",
@@ -208,11 +194,10 @@ describe("getCostInsights aggregation", () => {
 
     const insights = await getCostInsights();
 
-    // The totals: cash = Σ cash only; subsidized = Σ subsidized only; NEVER blended.
-    expect(insights.totals.cashUsd).toBeCloseTo(0.07, 10); // 0.05 + 0 + 0.02 + 0
-    expect(insights.totals.subsidizedUsd).toBeCloseTo(1.53, 10); // 0 + 0 + 1.5 + 0.03
-    expect(insights.totals.unpricedCount).toBe(4); // 0 + 3 + 1 + 0
-    // The load-bearing invariant: the two are not added into one number anywhere.
+    expect(insights.totals.cashUsd).toBeCloseTo(0.07, 10);
+    expect(insights.totals.subsidizedUsd).toBeCloseTo(1.53, 10);
+    expect(insights.totals.unpricedCount).toBe(4);
+
     expect(insights.totals.cashUsd).not.toBeCloseTo(
       insights.totals.cashUsd + insights.totals.subsidizedUsd,
       10,
@@ -223,12 +208,10 @@ describe("getCostInsights aggregation", () => {
     expect(observe?.subsidizedUsd).toBeCloseTo(1.5, 10);
     expect(observe?.unpricedCount).toBe(1);
 
-    // The entity-bio authoring spend rolls up on its own subsidized `bio` row.
     const bio = insights.steps.find((step) => step.step === "bio");
     expect(bio?.cashUsd).toBeCloseTo(0, 10);
     expect(bio?.subsidizedUsd).toBeCloseTo(0.03, 10);
 
-    // The per-finding rollup joins tracks + parses the artists JSON.
     expect(insights.topFindings).toHaveLength(1);
     expect(insights.topFindings[0]).toMatchObject({
       artists: ["Calibre"],

@@ -5,7 +5,6 @@ import { dueWorkNowIso } from "./due-work-time";
 
 export { LONG_FORM_MS };
 
-/** The recurring queue names exposed by `listTrackWork`. */
 export type DueWorkKind =
   | "analyze"
   | "anchor"
@@ -17,11 +16,6 @@ export type DueWorkKind =
 
 export type DueWorkScope = "catalogue" | "findings";
 
-/**
- * A physical queue is deliberately narrower than a `listTrackWork` kind. Keeping the two
- * certification halves distinct lets a writer answer both scope and capture-budget questions
- * from the due row itself, without looking up the source table again.
- */
 export type DueWorkQueueKind =
   | "analyze-catalogue"
   | "analyze-findings"
@@ -36,10 +30,6 @@ export type DueWorkQueueKind =
   | "youtube-reverdict-catalogue"
   | "youtube-reverdict-findings";
 
-/**
- * The writer/rebuild contract. `usesCatalogueCaptureBudget` is intentionally explicit: a consumer
- * must not infer metering from a source-table join or from a queue-name convention.
- */
 export const DUE_WORK_TRACK_WORK_KIND_INVENTORY = [
   {
     kind: "analyze",
@@ -147,17 +137,12 @@ export const DUE_WORK_TRACK_SOURCE_COLUMNS = [
   "nearestFindingScore",
 ] as const;
 
-/** Columns carried to a worker but not used to select or order a queue. */
 export const DUE_WORK_TRACK_PAYLOAD_ONLY_SOURCE_COLUMNS = ["isrc", "title"] as const;
 
 export type DueWorkTrackSourceColumn =
   | (typeof DUE_WORK_TRACK_SOURCE_COLUMNS)[number]
   | (typeof DUE_WORK_TRACK_PAYLOAD_ONLY_SOURCE_COLUMNS)[number];
 
-/**
- * One bounded, pre-joined source snapshot. `certified` is the finding-row existence test and
- * `labelSeedState` is the already-resolved label ruling; neither requires evaluator DB access.
- */
 export type DueWorkTrackSource = {
   analyzedAt: string | null;
   analyzedFrom: "full" | "preview" | null;
@@ -228,7 +213,6 @@ export type DueWorkTrackRow = {
 };
 
 export type DueWorkEvaluationOptions = {
-  /** The evaluator never reads the clock; callers freeze this for a reproducible snapshot. */
   now: Date | string;
   sources: readonly DueWorkTrackSource[];
 };
@@ -242,8 +226,6 @@ function addMilliseconds(iso: string, milliseconds: number): string {
 }
 
 function scheduledAt(attemptedAt: string | null, delayMs: number, now: string): string {
-  // Every legacy timestamp window uses `attempted_at < cutoff`, not `<=`. ISO timestamps are
-  // millisecond-precision, so equality remains ineligible until the following millisecond.
   return attemptedAt === null ? now : addMilliseconds(attemptedAt, delayMs + 1);
 }
 
@@ -269,19 +251,6 @@ function usesCatalogueCaptureBudget(workKind: DueWorkQueueKind): boolean {
   throw new RangeError(`No due-work queue inventory entry for ${workKind}`);
 }
 
-/**
- * The shared ladder's key, component for component with the legacy selector's ORDER BY
- * (track-work.ts § `workOrder`).
- *
- * The ANCHORED component belongs to the catalogue capture queue alone and sits between the ladder
- * tier and the demand reorder, exactly where the selector spells it: capture is the metered queue,
- * and audio bought for a row with no Spotify anchor cannot become recommendable until a separate
- * billed search gives it one (`REC_ELIGIBLE_WHERE`, lib/catalogue-eligibility.ts). Tier order stays
- * dominant, so the preference only ever reorders rows within one tier. `spotifyUri` is already part
- * of the source-column contract and therefore of `dueWorkTrackSourceVersion`, so anchoring a row
- * later changes its source version, and the ordinary marker repair recomputes this key with the row
- * in its new place.
- */
 function sharedOrder(source: DueWorkTrackSource, kind: DueWorkKind): string {
   const anchoredFirst = kind === "capture" && !source.certified;
   const components: DueWorkOrderComponent[] = [
@@ -313,7 +282,6 @@ function reverdictOrder(source: DueWorkTrackSource): string {
   ]);
 }
 
-/** A stable FNV-1a token over the explicit source-column contract. */
 export function dueWorkTrackSourceVersion(source: DueWorkTrackSource): string {
   const input = [...DUE_WORK_TRACK_SOURCE_COLUMNS, ...DUE_WORK_TRACK_PAYLOAD_ONLY_SOURCE_COLUMNS]
     .map((column) => `${column}:${JSON.stringify(source[column])}`)
@@ -457,12 +425,6 @@ function orderFor(kind: DueWorkKind, source: DueWorkTrackSource): string {
   return kind === "youtube-reverdict" ? reverdictOrder(source) : sharedOrder(source, kind);
 }
 
-/**
- * The eligibility-and-order decision for one source, with no source-version hash and no sort.
- * This is the exact pair of pure functions that decide whether a row is in a queue and where it
- * sits in it, so a definition fingerprint taken over it moves whenever either one moves
- * (`due-work-definition-version.ts`).
- */
 export function describeDueWorkTrackDecision(
   kind: DueWorkKind,
   source: DueWorkTrackSource,
@@ -484,10 +446,6 @@ function compareRows(left: DueWorkTrackRow, right: DueWorkTrackRow): number {
   return left.trackId.localeCompare(right.trackId);
 }
 
-/**
- * Evaluate exactly one legacy queue over a bounded source snapshot. Scheduled rows remain present
- * until their `nextDueAt`, while terminal vetoes and retry caps yield no row at all.
- */
 export function evaluateDueWorkQueue(
   options: DueWorkEvaluationOptions & { kind: DueWorkKind; scope?: DueWorkScope },
 ): DueWorkTrackRow[] {
@@ -517,15 +475,12 @@ export function evaluateDueWorkQueue(
         workKind: queueKind(options.kind, scope),
       });
     }
-    // Legacy `listTrackWork({scope:"all"})` concatenates findings before catalogue rather than
-    // sorting a joined result on certification. Preserve that outer ordering exactly.
+
     if (options.scope === undefined && scope === "findings") {
       rows.sort(compareRows);
     }
   }
-  // The legacy re-verdict selector is one specialist read over both certification halves, ordered
-  // only by the verdict timestamp and track id. Unlike the shared ladder, it does not put findings
-  // ahead of catalogue rows, so the two physical projections must merge into one global order.
+
   if (options.scope === undefined && options.kind === "youtube-reverdict") {
     return rows.sort(compareRows);
   }
@@ -543,7 +498,6 @@ export function evaluateDueWorkQueue(
   return rows;
 }
 
-/** Evaluate every recurring queue; use `evaluateDueWorkQueue` where legacy per-kind order matters. */
 export function evaluateDueWork(options: DueWorkEvaluationOptions): DueWorkTrackRow[] {
   const kinds: readonly DueWorkKind[] = [
     "analyze",

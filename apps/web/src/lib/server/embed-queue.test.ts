@@ -10,19 +10,6 @@ vi.mock("./db", () => ({
 
 import { listTracks } from "./tracks";
 
-// The MuQ embed worklist (RFC full-audio § Unit 3): `hasEmbedding=false` lists findings
-// still needing an embedding — but ONLY the CAPTURED full songs, never a preview or the
-// unmatched tail. So the queue is `has_embedding = 0 AND source_audio_key IS NOT NULL`:
-// a keyless finding is excluded (there is no captured song to embed from); a keyed but
-// still-unembedded one is in. `hasEmbedding=true` stays a pure presence check (no key gate).
-//
-// THE PREDICATE'S SPELLING IS PART OF THE TEST. The vector itself lives in `track_embeddings`
-// now, but this queue reads the stored `has_embedding` mirror instead of anti-joining the
-// satellite, because `tracks_embed_queue_idx` is PARTIAL on exactly these two clauses and
-// SQLite will not match a partial index against a cross-table `not exists` (schema.ts). The
-// assertions below pin the literal, so a "tidying" rewrite fails here rather than turning the
-// 5-minute box tick into a full scan in production.
-
 type StoredTrack = {
   added_at: string;
   has_embedding: number;
@@ -31,21 +18,20 @@ type StoredTrack = {
 };
 
 const archive: StoredTrack[] = [
-  // IN the queue: captured (has a source key) but not yet embedded.
   {
     added_at: "2026-06-03T00:00:00.000Z",
     has_embedding: 0,
     source_audio_key: "003.1.1A/abc.m4a",
     track_id: "t-keyed-unembedded",
   },
-  // EXCLUDED: no captured song → nothing to embed from.
+
   {
     added_at: "2026-06-02T00:00:00.000Z",
     has_embedding: 0,
     source_audio_key: null,
     track_id: "t-keyless",
   },
-  // EXCLUDED: already carries a vector.
+
   {
     added_at: "2026-06-01T00:00:00.000Z",
     has_embedding: 1,
@@ -54,8 +40,6 @@ const archive: StoredTrack[] = [
   },
 ];
 
-// A complete-enough TrackRow for toTrackListItem (listTracks does no schema validation;
-// the DTO shape is validated at the oRPC boundary, not here).
 function fullRow(stored: StoredTrack) {
   return {
     ...stored,
@@ -98,7 +82,6 @@ function fullRow(stored: StoredTrack) {
   };
 }
 
-// The JS mirror of the embed key-gate: unembedded AND captured.
 function matchesEmbedQueue(t: StoredTrack): boolean {
   return t.has_embedding === 0 && t.source_audio_key !== null;
 }
@@ -107,7 +90,7 @@ beforeEach(() => {
   execute.mockReset();
   execute.mockImplementation(async (query: { args: unknown[]; sql: string }) => {
     const isCount = query.sql.includes("count(*)");
-    // The embed key-gate emits BOTH predicates; model the archive filter off them.
+
     const wantsEmbedQueue =
       query.sql.includes("has_embedding = 0") && query.sql.includes("source_audio_key is not null");
     const matched = archive
@@ -149,8 +132,8 @@ describe("listTracks hasEmbedding=false — the MuQ embed key-gate", () => {
     const ids = tracks.map((t) => t.trackId);
 
     expect(ids).toContain("t-keyed-unembedded");
-    expect(ids).not.toContain("t-keyless"); // no captured song → nothing to embed from
-    expect(ids).not.toContain("t-embedded"); // already carries a vector
+    expect(ids).not.toContain("t-keyless");
+    expect(ids).not.toContain("t-embedded");
     expect(ids).toEqual(["t-keyed-unembedded"]);
   });
 
@@ -166,8 +149,7 @@ describe("listTracks hasEmbedding=false — the MuQ embed key-gate", () => {
     const sql = lastListSql();
 
     expect(sql).toContain("has_embedding = 1");
-    // `source_audio_key` rides in the SELECT list (a surfaced DTO column); what must be
-    // absent is the WHERE-clause key GATE — hasEmbedding=true never filters on capture.
+
     expect(sql).not.toContain("source_audio_key is not null");
   });
 });

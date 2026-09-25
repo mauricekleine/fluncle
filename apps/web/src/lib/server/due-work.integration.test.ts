@@ -1216,8 +1216,6 @@ describe("due-work rebuild", () => {
         }
         sourceReads += 1;
 
-        // The rebuild captured v1. Before its guarded write begins, a transactionally repaired v2
-        // projection lands. The older generation must neither overwrite nor prune that winner.
         if (sourceReads === 1) {
           await upsertDueWork(
             db,
@@ -1317,7 +1315,6 @@ describe("servable ready pages", () => {
   }
 
   it("bounds its scan window and keeps room to see past a full page of withheld rows", () => {
-    // A window no wider than the page would hide every servable row behind one burst of markers.
     expect(DUE_WORK_READY_SCAN_MULTIPLE).toBeGreaterThanOrEqual(2);
     expect(dueWorkReadyScanWindow(10)).toBe(41);
     expect(dueWorkReadyScanWindow(MAX_DUE_WORK_CHUNK_SIZE)).toBe(DUE_WORK_READY_SCAN_CAP);
@@ -1342,7 +1339,6 @@ describe("servable ready pages", () => {
     expect(page.withheld).toBe(2);
     expect(page.hasMore).toBe(false);
 
-    // A marker on another subject type never withholds a track row.
     await db.execute(
       markDueWorkSourceRepairsStatement([{ subjectId: "subject-0", subjectType: "label" }], {
         now: T0,

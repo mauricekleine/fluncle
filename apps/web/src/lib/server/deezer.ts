@@ -1,44 +1,3 @@
-// Worker-safe (HTTP-only) enrichment from Deezer, keyed by ISRC for determinism.
-//
-// Deezer's track-by-ISRC endpoint returns the album id and a 30s preview; the
-// album endpoint then exposes the record label that Spotify's track API omits.
-// Best-effort: any failure resolves to an empty result so it never blocks a
-// publish. The backfill can retry later.
-//
-// ── WHAT WE KEEP (operator ruling) ─────────────────────────────────────────────────────────────
-// All three of this file's Deezer reads have always come back carrying Deezer's own TRACK ID, and
-// all three retain it (`tracks.deezer_track_id`, schema.ts), so
-// `/identity` can serve `https://www.deezer.com/track/<id>` and Deezer joins the covered set. This
-// costs no extra request anywhere: the id was already in the response that was already being read.
-// Every one of them is GATED — an id is only ever handed back off an answer that passed a match
-// check, because an unverified id becomes a wrong link on a public page under a recording's name.
-//
-// ── THE ISRC-RECOVERY RUNG (`searchDeezerCandidates`) ───────────────────────────────────────────
-// Deezer is a FREE, no-auth ISRC ORACLE. Its `GET /search/track?q=…` returns each hit already
-// carrying the recording's real `isrc`, its `duration`, its `title`, and its billed `artist.name` —
-// so ONE search request recovers the ISRC our own row lacks (the crawler's ISRC comes from
-// MusicBrainz, whose ISRC coverage of underground DnB is sparse, so ~60% of catalogue rows arrive
-// ISRC-less even though the track genuinely HAS one). No second by-id read is needed: the search hit
-// is the whole answer. Deezer's search is FUZZY (it will happily return a remix for the original), so
-// the CALLER re-verifies every hit against the row to the SAME bar the anchor gate uses — the folded
-// artist-set + base-title identity (`matchKey`) AND a duration within the ratified ±3s window — before
-// it trusts an ISRC (`anchor.ts`, the recovery step). A wrong ISRC seeds a wrong exact-ISRC anchor, so
-// a miss is always preferred to a guess: this client just fetches and normalizes; anchor.ts rules.
-//
-// ── WHO RUNS THE SEARCH: THE BOX, NOT THE EDGE ───────────────────────────────────────────────────
-// Deezer's public search takes no token, so its quota is purely PER-IP — and the Worker egresses from
-// Cloudflare's SHARED edge IPs, where that quota is spent by the whole platform rather than by Fluncle.
-// Measured in production: the recovery rung recovered 0 ISRCs out of 5,133 ISRC-less rows over 3 days,
-// while the SAME code answered 25/25 clean from the rave-02 box on its own dedicated IP. So the anchor
-// sweep now runs the FETCH on the box (docs/agents/hermes/scripts/anchor-sweep.ts) and POSTs the hits
-// to `resolve_anchor`; the VERIFICATION and the ISRC write never moved — they are still `anchor.ts`'s,
-// exactly as they were, which is the Apify precedent (the box fetches, the Worker rules).
-//
-// This client stays, and stays the ONE spelling of the query ({@link deezerSearchQuery}, which the
-// anchor worklist hands the box so the sweep never invents one). It still serves the two callers that
-// have no box in front of them: the certify path's ISRC pre-flight (`publish.ts`) and any
-// `resolve_anchor` call that supplies no box-fetched hits.
-
 import { DEEZER_CANDIDATE_LIMIT } from "@fluncle/contracts/orpc";
 
 import { logEvent } from "./log";
@@ -46,7 +5,7 @@ import { canonicalizeSearchTitle, matchKey } from "./track-match";
 
 type DeezerTrack = {
   album?: { id?: number };
-  /** Deezer bills a track's length in SECONDS — the guard below promotes it to ms to compare. */
+
   duration?: number;
   error?: unknown;
   id?: number;
@@ -60,12 +19,6 @@ type DeezerAlbum = {
 };
 
 export type DeezerEnrichment = {
-  /**
-   * Deezer's own track id for this ISRC — kept ONLY when the returned track's duration confirms it
-   * (see {@link enrichFromDeezer}). Absent when the caller supplied no duration to check against or
-   * the check failed: `/track/isrc:` PICKS a recording, with a measured ~7% silent title mismatch,
-   * and an unconfirmed id would become a link on a public page. Nothing is the honest answer.
-   */
   deezerTrackId?: string;
   label?: string;
   previewUrl?: string;
@@ -84,123 +37,27 @@ type DeezerSearchResult = {
   error?: unknown;
 };
 
-/**
- * One Deezer search hit, normalized to exactly the fields the anchor recovery step verifies against
- * a catalogue row. `artistName` is Deezer's BILLED string (e.g. `"Fred V & Grafix"`) — the caller
- * folds it into an artist SET via `matchKey`, so a combined billing splits correctly. `durationMs`
- * is Deezer's seconds promoted to ms so the ±3s anchor window compares in the same unit. `isrc` is
- * guaranteed non-blank (a hit without one is dropped).
- */
 export type DeezerIsrcCandidate = {
   artistName: string;
-  /**
-   * Deezer's own track id for the hit, when it carried one. OPTIONAL on purpose: it is NOT part of
-   * the ISRC-recovery gate, and a hit without it still recovers its ISRC exactly as before. It rides
-   * along so the verified hit's id can be kept (`tracks.deezer_track_id`) instead of thrown away,
-   * and so a box running a build that predates the field degrades to "no id kept", never to a
-   * refused recovery.
-   */
+
   deezerTrackId?: string;
   durationMs: number;
   isrc: string;
   title: string;
 };
 
-/** The identifiable User-Agent Fluncle presents across the web — one honest identity. */
 const DEEZER_USER_AGENT = "Fluncle/1.0 (+https://www.fluncle.com)";
 
-/**
- * Per-request wall-clock deadline. Deezer answers a title+artist search well under a second; anything
- * past this is a stalled socket, and a stall is just a miss (the row stays ISRC-less and falls to the
- * fuzzy anchor rung, exactly as before this rung existed). Bounded so the box sweep's per-row
- * `resolve_anchor` call can never wedge the tick.
- */
 const DEEZER_TIMEOUT_MS = 10_000;
 
-/**
- * How many search hits to consider. Deezer's fuzzy search can return a near-miss (a remix, a re-edit)
- * ahead of the exact recording, so we read a small handful and let the caller's fold+duration gate
- * pick the one that truly matches — never blindly the first.
- *
- * The number lives in the CONTRACT (`DEEZER_CANDIDATE_LIMIT`) because both ends must agree on it: it
- * is what this request asks Deezer for AND the cap `resolve_anchor` accepts back from the box, which
- * runs this same search from its own IP. One constant, so the ask and the wire cap cannot drift apart.
- */
 const DEEZER_SEARCH_LIMIT = DEEZER_CANDIDATE_LIMIT;
 
-/**
- * THE QUOTA TRAP. Deezer does
- * NOT signal a throttle with a 429, or with any non-2xx at all: it answers **HTTP 200** carrying an
- * ERROR BODY instead of a result set —
- * `{"error":{"type":"Exception","message":"Quota limit exceeded","code":4}}` — reproduced live by
- * bursting the real endpoint (120 requests: every one a 200, the 93rd onward quota errors).
- *
- * That shape walks straight past `response.ok`, parses as valid JSON, and lands on a `data` that is
- * simply absent — so a client that only asks "is `data` an array?" reads a THROTTLE as a clean MISS
- * and returns `[]`. Indistinguishable from "Deezer has never heard of this track", and silent. The
- * Worker egresses from Cloudflare's SHARED edge IPs, where Deezer's per-IP quota is saturated by the
- * whole platform rather than by Fluncle's own one-request-per-row cadence, so in production that
- * branch was taken on EVERY call while the same code recovers ~19% of ISRC-less rows off-edge.
- *
- * So the error body is now read FIRST and treated as a FAILURE, never as a miss — and a quota answer
- * is RETRIED against Deezer's short window rather than being written off. A miss stays a miss.
- */
 const DEEZER_QUOTA_ERROR_CODE = 4;
 
-/**
- * Deezer's "there is no such row" answer — a `DataException` (`{"error":{"type":"DataException",
- * "message":"no data","code":800}}`), delivered in the same HTTP-200 envelope as the quota error
- * above. It is the ONLY error code that settles a question: it says Deezer looked this ISRC up and
- * carries no recording for it, which is a real, stampable MISS.
- *
- * Every OTHER code is deliberately NOT absence — a quota (4, handled above), a service-busy, a
- * malformed query, an auth exception. Those say something went wrong on the way to the answer, so
- * the ledger records a transport failure and the row stays eligible. The asymmetry is the point:
- * absence is the only negative Fluncle ever writes down, so it is the only one that gets a
- * whitelist rather than a catch-all.
- */
 const DEEZER_DATA_EXCEPTION_CODE = 800;
 
-/**
- * Backoff between quota retries. Deezer's quota window is a few seconds wide, so a short wait lands in
- * a FRESH window — the point is to outlast a neighbour's burst on the shared egress IP, not to grind.
- * Two retries, ≤4s added and ONLY on the throttled path: bounded well inside the box sweep's 30s
- * per-row `resolve_anchor` deadline, with the ListenBrainz and Spotify rungs still to run after it.
- */
 const DEEZER_QUOTA_RETRY_DELAYS_MS = [1_200, 2_500];
 
-/**
- * THE QUERY SPELLING — FREE TEXT (the row's artists joined onto its canonicalized title), and the ONE
- * place it is written.
- *
- * NEVER Deezer's `artist:"…" track:"…"` field syntax. A COMBINED field ask answers `{"data":[],
- * "total":0}` for every input, which walks past every error check this client has — the body is
- * well-formed, `data` is a real array, there is no error code — and lands as a clean "Deezer has
- * never heard of this recording". A single field still answers, and so does plain relevance search,
- * so the failure is specific to the combined form. Both halves are re-checkable in one request each:
- *
- *   curl -sG --data-urlencode 'q=artist:"Noisia" track:"Stigma"' https://api.deezer.com/search/track
- *   curl -sG --data-urlencode 'q=Noisia Stigma'                  https://api.deezer.com/search/track
- *
- * PRECISION IS NOT THIS FUNCTION'S JOB. Free text is LOOSER than a fielded ask — it returns other
- * acts' same-titled recordings — and that is safe because retrieval never authorises an ISRC:
- * `recoverIsrcViaDeezer` re-runs every hit through the anchor's own gate (`verifySearchCandidate` —
- * the folded artist SET, base title, and version descriptor, plus a duration inside ±3s). A wrong
- * act fails artist-set equality; a wrong version fails the descriptor. A looser ask can only add
- * candidates the gate then refuses, never widen what it accepts. The one caller that judges on
- * duration alone ({@link lookupIsrcFromDeezer}) carries its own identity check for this reason.
- *
- * The title is canonicalized (`canonicalizeSearchTitle` in ./track-match: `rmx` → `Remix`, a redundant
- * trailing `mix` dropped — the retrieval twin of the `canonicalizeDescriptor` fold the CALLER verifies
- * with, kept in lockstep there). Deezer's index carries the canonical spelling, so a row asking in its
- * own returns nothing at all and can never recover its ISRC. The caller still verifies against the
- * row's RAW title. Double quotes are stripped: Deezer reads them as a phrase operator, and an odd one
- * left in a title opens a phrase the query never closes.
- *
- * ONE owner, every rung: this is what {@link searchDeezerCandidates} sends, and what `list_track_work`
- * hands the box's anchor sweep as an ISRC-less row's ready-made `deezerQuery` (the sweep never builds
- * one). `undefined` when the row has no usable artist or title to ask with.
- */
 export function deezerSearchQuery(artists: string[], title: string): string | undefined {
   const collapse = (text: string) => text.replaceAll('"', " ").replace(/\s+/g, " ").trim();
   const names = artists.map(collapse).filter((artist) => artist.length > 0);
@@ -213,38 +70,11 @@ export function deezerSearchQuery(artists: string[], title: string): string | un
   return [...names, canonical].join(" ");
 }
 
-/** One attempt's outcome: candidates, or the reason there are none (so the caller can retry a throttle). */
 type DeezerSearchAttempt =
   | { candidates: DeezerIsrcCandidate[]; outcome: "ok" }
   | { outcome: "quota" }
   | { outcome: "failed" };
 
-/**
- * Recover ISRC CANDIDATES for a catalogue row from Deezer's free search — the pre-anchor ISRC-recovery
- * rung (`anchor.ts`), from WHEREVER this code is running. On the shared Cloudflare edge that is now the
- * fallback path only (see the header): the anchor sweep runs this same search from the box's own IP and
- * hands `resolve_anchor` the hits, so the Worker fetches nothing for those rows. It still runs here for
- * the certify path's ISRC pre-flight and for any `resolve_anchor` call that supplies no hits.
- *
- * Queries the one shared free-text spelling ({@link deezerSearchQuery}) and returns each
- * hit that carries a usable `isrc` + numeric `duration` + `title` + `artist.name`, normalized to
- * {@link DeezerIsrcCandidate}. It VERIFIES NOTHING — the caller re-runs the row against the same fold +
- * ±3s duration gate the anchor uses, and trusts an ISRC only on a hard match (a wrong ISRC would seed a
- * wrong exact-ISRC anchor). Best-effort and NEVER throws: a bad artist/title, a network error, a
- * timeout, a non-2xx, an error body, or a malformed shape all resolve to `[]`.
- *
- * An empty list is a first-class "no recovery, fall to fuzzy" — but it is no longer SILENT. Every way
- * of arriving at `[]` OTHER than a genuine empty result set now logs, because the failure this client
- * was invisible precisely for want of one log line (see {@link DEEZER_QUOTA_ERROR_CODE}).
- *
- * Politeness: IDENTIFIED (the honest Fluncle User-Agent) and BOUNDED (a per-request deadline). Like the
- * sibling ListenBrainz rung it carries NO module-level pacing gate: the anchor waterfall makes exactly
- * ONE Deezer search per `resolve_anchor` request and the box sweep issues those one-at-a-time down its
- * worklist, so the request cadence — never a burst — is what keeps us under Deezer's own limit. The
- * retries exist for the SHARED egress IP, where the quota is not ours to pace.
- *
- * `retryDelaysMs` is injected for deterministic tests; production uses the calibrated backoff.
- */
 export async function searchDeezerCandidates(
   input: {
     artists: string[];
@@ -267,9 +97,6 @@ export async function searchDeezerCandidates(
 
     const delay = result.outcome === "quota" ? retryDelaysMs[attempt] : undefined;
 
-    // A hard failure never retries (it is not going to un-fail), and a quota retry stops once the
-    // bounded budget is spent — at which point we say so, loudly: a persistent quota on the egress IP
-    // is an infrastructure fact the operator must see, not a per-row miss to shrug off.
     if (delay === undefined) {
       if (result.outcome === "quota") {
         logEvent("warn", "deezer.search-quota-exhausted", { attempts: attempt + 1, query });
@@ -282,7 +109,6 @@ export async function searchDeezerCandidates(
   }
 }
 
-/** ONE Deezer search request, mapped to {@link DeezerSearchAttempt}. Never throws. */
 async function attemptDeezerSearch(query: string): Promise<DeezerSearchAttempt> {
   let response: Response;
 
@@ -295,7 +121,6 @@ async function attemptDeezerSearch(query: string): Promise<DeezerSearchAttempt> 
       },
     );
   } catch (error) {
-    // A network error OR a timeout abort — both mean this lookup yielded nothing.
     logEvent("warn", "deezer.search-threw", { error });
 
     return { outcome: "failed" };
@@ -317,8 +142,6 @@ async function attemptDeezerSearch(query: string): Promise<DeezerSearchAttempt> 
     return { outcome: "failed" };
   }
 
-  // THE ERROR BODY, read BEFORE `data` — a 200 is not a result. A quota answer is transient and gets
-  // its retry; any other Deezer-side exception is a hard failure for this row.
   const error = (body as DeezerSearchResult).error;
 
   if (error) {
@@ -360,8 +183,7 @@ async function attemptDeezerSearch(query: string): Promise<DeezerSearchAttempt> 
 
     candidates.push({
       artistName,
-      // Kept, not required: a hit with no id is still a perfectly good ISRC recovery, so the id
-      // rides along as evidence for the id-write and never as a reason to drop the hit.
+
       ...(typeof hit.id === "number" ? { deezerTrackId: String(hit.id) } : {}),
       durationMs: Math.round(hit.duration * 1000),
       isrc,
@@ -377,29 +199,8 @@ type DeezerTrackDetail = {
   isrc?: string;
 };
 
-// Accept a Deezer answer as "the same recording" only when its duration agrees
-// with the row's within a few seconds; a wrong ISRC would seed a wrong (and
-// permanent) Log ID, so a miss is better than a guess. The same window guards
-// the id kept off the by-ISRC endpoint, whose pick is right about 93% of the time.
 const DURATION_TOLERANCE_S = 4;
 
-/**
- * Look up a recording's ISRC on Deezer when Spotify omits it (the track-add
- * ISRC fallback): search by artist + title, take the first
- * duration-confirmed hit, and read the ISRC from its track detail. Best-effort:
- * any failure resolves to undefined and the Log ID falls back to the Spotify id.
- *
- * RETURNS THE WHOLE HIT, not just the ISRC — the ISRC behaviour is unchanged (read `.isrc`), and
- * the rest is what the caller needs to decide whether the hit's Deezer id is worth KEEPING.
- *
- * ITS BAR IS IDENTITY **AND** DURATION. The `matchKey` fold (folded artist set + base title + version
- * descriptor) must agree, and the duration must land within ±{@link DURATION_TOLERANCE_S}s. The
- * identity half is load-bearing precisely because {@link deezerSearchQuery} is free text: Deezer's
- * relevance search will hand back another act's recording of the same title, and duration alone
- * cannot tell two three-minute tracks apart. A recovered ISRC mints a Log ID, so a miss beats a
- * guess. A public link is a stronger claim still, so `publish.ts` additionally runs the hit through
- * the anchor's own gate before persisting the id, and records which rung cleared.
- */
 export async function lookupIsrcFromDeezer(input: {
   artists: string[];
   durationMs: number;
@@ -464,20 +265,6 @@ export async function lookupIsrcFromDeezer(input: {
   }
 }
 
-/**
- * The label + preview enrichment, keyed by ISRC — and, when the caller can vouch for it, the Deezer
- * track id that read was already standing on.
- *
- * THE ID GUARD. `/track/isrc:<isrc>` does not answer "here are the recordings under this ISRC"; it
- * PICKS one, and it picks wrong about 7% of the time (measured — the same vendor behaviour the
- * identity envelope's `ambiguous` relation exists to not repeat). The label and the preview have
- * always ridden that pick, and a mismatched 30s clip is a small wrong; a Deezer LINK rendered on a
- * public page under a recording's name is a bigger one. So the id is kept only when
- * `expectedDurationMs` is supplied AND Deezer's returned duration agrees within
- * {@link DURATION_TOLERANCE_S}s — the same window the sibling by-name lookup above confirms with.
- * No duration to check against, or a disagreement, and no id comes back. The label and preview are
- * untouched by the guard: their behaviour is exactly what it was.
- */
 export async function enrichFromDeezer(
   isrc: string | null | undefined,
   expectedDurationMs?: number,
@@ -527,26 +314,6 @@ export async function enrichFromDeezer(
   }
 }
 
-/**
- * One by-ISRC lookup's outcome, and the whole reason this function exists beside {@link
- * enrichFromDeezer}: that one collapses a miss, a throttle, a network error and a duration
- * disagreement into the SAME empty return, which is exactly why publish stamps nothing (schema.ts §
- * `backfill_deezer_*` records the reasoning). The forward-accretion sweep has to write a ledger, so
- * it needs those four told apart — a stamp nobody can stand behind is worse than no stamp.
- *
- *   · `matched`     — Deezer carries this recording AND its duration vouches for the pick. The id
- *                     is safe to render as a public link.
- *   · `absent`      — Deezer answered `DataException` (see {@link DEEZER_DATA_EXCEPTION_CODE}): it
- *                     looked and carries nothing. The one negative worth writing down.
- *   · `unvouchable` — Deezer PICKED something, but its duration disagrees (or it sent none, or the
- *                     row has none to compare). `/track/isrc:` picks wrong ~7% of the time, so this
- *                     is "found it, will not vouch for it" — neither a hit nor a miss, and the
- *                     caller stamps NOTHING.
- *   · `quota`       — the HTTP-200 quota body (code 4). A throttle is not an answer; it ends the
- *                     pass and stamps nothing.
- *   · `failed`      — transport: a thrown request, a timeout, a non-2xx, an unparseable body, an
- *                     unrecognized error code, or a 200 carrying no id at all. Nothing was learned.
- */
 export type DeezerIsrcLookup =
   | { deezerTrackId: string; outcome: "matched" }
   | { error: string; outcome: "failed" }
@@ -554,34 +321,12 @@ export type DeezerIsrcLookup =
   | { outcome: "quota" }
   | { outcome: "unvouchable" };
 
-/**
- * Resolve a recording's Deezer track id from its ISRC — the read behind the forward-accretion
- * `backfill_deezer` sweep (lib/server/backfill.ts).
- *
- * KEYLESS, ONE REQUEST. `GET /track/isrc:<isrc>` takes no token and answers with the track itself,
- * so a row costs exactly one request; the album read `enrichFromDeezer` makes for its label is
- * deliberately NOT made here, because the sweep wants the id and nothing else.
- *
- * THE GATE IS THE DURATION, and it is not optional. The endpoint does not answer "here are the
- * recordings under this ISRC", it PICKS one, and it picks wrong about 7% of the time — measured,
- * and the same vendor behaviour the identity envelope's `ambiguous` relation exists for. A wrong id
- * becomes a wrong Deezer link on a public page under a real recording's name, so the returned
- * track's duration must agree with the row's within ±{@link DURATION_TOLERANCE_S}s or the answer
- * comes back `unvouchable` and the caller writes nothing. `expectedDurationMs` that is absent or
- * non-positive fails the gate for the same reason — there is nothing to check against.
- *
- * NEVER THROWS. Every failure path is mapped onto {@link DeezerIsrcLookup} so the sweep's ledger
- * always has an outcome to reason about. Politeness matches the sibling reads: the identified
- * Fluncle User-Agent and the shared per-request deadline.
- */
 export async function lookupDeezerTrackByIsrc(
   isrc: string,
   expectedDurationMs: number,
 ): Promise<DeezerIsrcLookup> {
   const trimmed = isrc.trim();
 
-  // Nothing to ask with, or nothing to vouch with. Both are `unvouchable` rather than `failed`:
-  // no request was made, so no conclusion was reached and the ledger must stay silent.
   if (!trimmed || !(expectedDurationMs > 0)) {
     return { outcome: "unvouchable" };
   }
@@ -594,7 +339,6 @@ export async function lookupDeezerTrackByIsrc(
       signal: AbortSignal.timeout(DEEZER_TIMEOUT_MS),
     });
   } catch (error) {
-    // A network error OR a timeout abort — nothing was learned either way.
     logEvent("warn", "deezer.isrc-lookup-threw", { error });
 
     return { error: error instanceof Error ? error.message : String(error), outcome: "failed" };
@@ -616,9 +360,6 @@ export async function lookupDeezerTrackByIsrc(
     return { error: "Deezer sent an unparseable body", outcome: "failed" };
   }
 
-  // THE ERROR BODY, READ BEFORE THE TRACK — a 200 is not a result (see the quota note above). This
-  // is the branch the search client needs, and its absence made a platform-wide throttle
-  // read as a per-row miss for a week.
   const error = (body as DeezerTrack).error;
 
   if (error) {
@@ -629,7 +370,6 @@ export async function lookupDeezerTrackByIsrc(
     }
 
     if (code === DEEZER_DATA_EXCEPTION_CODE) {
-      // The one stampable negative: Deezer looked and carries no recording under this ISRC.
       return { outcome: "absent" };
     }
 
@@ -641,7 +381,6 @@ export async function lookupDeezerTrackByIsrc(
   const track = body as DeezerTrack;
 
   if (typeof track.id !== "number") {
-    // A 200 with neither an error nor an id is a shape we do not understand — not an absence.
     logEvent("warn", "deezer.isrc-lookup-unexpected-shape", {});
 
     return { error: "Deezer sent no track id", outcome: "failed" };
@@ -653,9 +392,6 @@ export async function lookupDeezerTrackByIsrc(
     Math.abs(track.duration - expectedDurationMs / 1000) <= DURATION_TOLERANCE_S;
 
   if (!durationConfirmed) {
-    // Found, but not vouched for. Distinct from `absent` on purpose: Deezer demonstrably carries
-    // SOMETHING here, so recording "not found" would misstate it, while keeping the id would
-    // render a link we cannot stand behind. Neither state fits, so none is claimed.
     return { outcome: "unvouchable" };
   }
 

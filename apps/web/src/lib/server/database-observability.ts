@@ -1,12 +1,5 @@
 import { fnv1a32 } from "@fluncle/contracts/util/hash";
 
-/**
- * Public-safe vocabulary shared by database spans, the recurring-operation
- * registry, and fleet run telemetry.
- *
- * Keep these fields low-cardinality and payload-free. They identify the kind
- * of work, never the row, SQL arguments, a remote endpoint, or an operator.
- */
 export const DATABASE_ACCESS_CLASSES = ["read", "write", "heavy-read"] as const;
 export type DatabaseAccessClass = (typeof DATABASE_ACCESS_CLASSES)[number];
 
@@ -33,10 +26,6 @@ export function isDatabaseOperationId(value: unknown): value is string {
   );
 }
 
-/**
- * Collapse literals and comments before deriving an identifier. The resulting
- * shape is used only as hash input; it is never emitted to telemetry.
- */
 export function canonicalSqlShape(sql: string): string {
   return sql
     .replace(/\/\*[\s\S]*?\*\//g, " ")
@@ -49,15 +38,10 @@ export function canonicalSqlShape(sql: string): string {
     .toLowerCase();
 }
 
-/** FNV-1a expressed as an unsigned, fixed-width base36 token. */
 function stableToken(value: string): string {
   return fnv1a32(value).toString(36).padStart(7, "0");
 }
 
-/**
- * Validate a caller-supplied stable ID. Missing or unsafe values collapse to a
- * deterministic, bounded fallback derived from a redacted statement shape.
- */
 export function normalizeDatabaseOperationId(
   candidate: unknown,
   fallbackShape: string,
@@ -70,7 +54,6 @@ export function normalizeDatabaseOperationId(
   return `db.${accessClass}.${stableToken(fallbackShape)}`;
 }
 
-/** A release is a public build identifier, normally a commit SHA. */
 export function normalizeDatabaseRelease(candidate: unknown): string {
   if (
     typeof candidate === "string" &&
@@ -86,10 +69,6 @@ export function normalizeDatabaseRelease(candidate: unknown): string {
 const LEADING_SQL_NOISE = /^(?:\s|--[^\n]*|\/\*[\s\S]*?\*\/)+/;
 const SQL_WRITE_VERB = /\b(?:insert|update|delete|replace)\b/;
 
-/**
- * Conservative access classification. Unknown statements are writes because
- * understating write pressure is worse than overstating it.
- */
 export function classifyDatabaseAccess(sql: string): Exclude<DatabaseAccessClass, "heavy-read"> {
   const normalized = sql.replace(LEADING_SQL_NOISE, "").toLowerCase();
 
@@ -106,10 +85,6 @@ export function classifyDatabaseAccess(sql: string): Exclude<DatabaseAccessClass
 
 const HEAVY_READ_SQL_FUNCTION = /\bvector_distance_cos\s*\(/i;
 
-/**
- * Identify request-time scans whose cost grows with the vector corpus. The ordinary read/write
- * classifier stays separate because retry safety depends only on mutation semantics.
- */
 export function classifyDatabaseOperationAccess(sql: string): DatabaseAccessClass {
   const accessClass = classifyDatabaseAccess(sql);
 

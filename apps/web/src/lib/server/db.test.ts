@@ -1,25 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// The underlying libsql client is faked so the focus is the instrumenting Proxy
-// getDb() wraps it in: it must be TRANSPARENT (return exactly what the client
-// returns, for every call form) and open one `db.query` span per query.
 const execute = vi.fn();
 const batch = vi.fn();
 const close = vi.fn();
 const transaction = vi.fn();
 const createClient = vi.fn(() => ({ batch, close, execute, transaction }));
 
-// Capture each span context and run its callback straight through — this mirrors
-// `@sentry/core`'s real `startSpan` passthrough when no client is active (the
-// node-script / test / dev case), so the mock also proves transparency.
 const spanContexts: Array<{
   attributes?: Record<string, unknown>;
   name: string;
   op?: string;
 }> = [];
 
-// Attributes set on the span DURING the callback (the retry counter), one
-// record per span, index-aligned with `spanContexts`.
 const spanAttributes: Array<Record<string, unknown>> = [];
 const spanEnds: Array<ReturnType<typeof vi.fn>> = [];
 
@@ -58,9 +50,6 @@ vi.mock("./env", () => ({
 const { DB_MAX_RETRIES, databaseOperationStatement, getDb } = await import("./db");
 const { runWithDatabaseRequestScope } = await import("./database-request-scope");
 
-// Shaped like a real `LibsqlError` from a gateway blip: `mapHranaError` hands
-// the hrana `HttpServerError` (which carries the numeric `status`) through as
-// the thrown error's `cause`.
 function gatewayError(status: number) {
   return new Error(`SERVER_ERROR: Server returned HTTP status ${status}`, {
     cause: Object.assign(new Error(`server returned HTTP status ${status}`), { status }),
@@ -564,7 +553,6 @@ describe("getDb instrumentation", () => {
   });
 });
 
-// The safety contract: reads retry a transient gateway 5xx, writes NEVER do.
 describe("getDb transient-gateway retry", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -574,18 +562,11 @@ describe("getDb transient-gateway retry", () => {
     vi.useRealTimers();
   });
 
-  // The backoff is a real timer created inside the request path, so the fake
-  // clock has to be driven for a retry to land.
   async function flushBackoff() {
     await Promise.resolve();
     await vi.runAllTimersAsync();
   }
 
-  // Runs a failing query to completion WHILE draining the fake clock, and hands
-  // back what it threw. Draining matters even where no retry is expected: if a
-  // regression ever made one of those statements retryable, its backoff timers
-  // fire and the call-count assertion fails cleanly instead of the test hanging
-  // on a timer nothing advances.
   const RESOLVED = Symbol("resolved");
 
   async function rejectionAfterTimers(pending: Promise<unknown>): Promise<unknown> {
@@ -611,8 +592,6 @@ describe("getDb transient-gateway retry", () => {
     expect(execute).toHaveBeenCalledTimes(2);
   });
 
-  // The regression test for the reported bug: the failing statement was a CTE,
-  // so a classifier that only matched `select` would not have covered it.
   it("retries a `with … select` CTE", async () => {
     const result = { rows: [] };
     execute.mockRejectedValueOnce(gatewayError(502)).mockResolvedValue(result);
@@ -689,8 +668,6 @@ describe("getDb transient-gateway retry", () => {
     expect(execute).toHaveBeenCalledTimes(2);
   });
 
-  // 530 is the edge reporting it could not reach the origin AT ALL, so the
-  // statement never arrived at the database and a read may be re-sent.
   it("retries a read that fails once with a 530 unreachable-origin error", async () => {
     const result = { rows: [{ slug: "an-album" }] };
     execute.mockRejectedValueOnce(gatewayError(530)).mockResolvedValue(result);
@@ -738,7 +715,7 @@ describe("getDb transient-gateway retry", () => {
     ["replace into tracks (id) values (1)"],
     ["pragma foreign_keys = on"],
     ["begin"],
-    // SQLite allows a CTE in front of a write — the write verb is what counts.
+
     ["with doomed as (select id from tracks) delete from tracks"],
     ["with fresh as (select 1) update tracks set bpm = 1"],
     ["with rows as (select 1) insert into tracks (id) select 1 from rows"],
@@ -752,8 +729,6 @@ describe("getDb transient-gateway retry", () => {
     expect(execute).toHaveBeenCalledTimes(1);
   });
 
-  // Eligibility is the status set; safety is `isRetryableRead`. A 5xx on a
-  // write is ambiguous about whether it applied, so no status admits one.
   it.each([
     ["insert into tracks (id) values (1)"],
     ["update tracks set bpm = 1"],
@@ -818,8 +793,6 @@ describe("getDb transient-gateway retry", () => {
     expect(execute).toHaveBeenCalledTimes(1);
   });
 
-  // 524 means the gateway already timed out ON this query — re-running it just
-  // doubles the load for a near-certain second timeout.
   it("does not retry a 524 gateway timeout", async () => {
     const error = gatewayError(524);
     execute.mockRejectedValue(error);
@@ -830,9 +803,6 @@ describe("getDb transient-gateway retry", () => {
     expect(execute).toHaveBeenCalledTimes(1);
   });
 
-  // The boundary the status set draws, on one identical read: a connection-level
-  // failure never reached the origin and is re-sent, an origin timeout may
-  // already have executed and is not.
   it("retries the did-not-complete class and never the may-have-executed one", async () => {
     execute.mockRejectedValue(gatewayError(524));
 

@@ -1,11 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-// The clip drip-feed schedule store (lib/server/clip-social.ts). Two halves:
-//   - `computeNextDripSlot` — PURE, DB-free: base = max(now, queue tail ahead of now) +
-//     a jittered gap in [23h, 25h]. Tested against stubbed random + clocks, no mock.
-//   - the DB-facing helpers (dueClipPosts / countRecentPostedInWindow / the kill switch)
-//     — tested over a mocked `getDb().execute`, the `mixtape-social.test.ts` precedent.
-
 const execute = vi.fn();
 
 vi.mock("./db", () => ({
@@ -33,7 +27,6 @@ describe("computeNextDripSlot", () => {
   const NOW = Date.parse("2026-07-05T12:00:00.000Z");
 
   it("bases off now when the queue is empty (no tail)", () => {
-    // randomFn = 0 → the minimum 23h gap.
     const slot = computeNextDripSlot(undefined, NOW, () => 0);
 
     expect(Date.parse(slot) - NOW).toBe(DRIP_MIN_GAP_MS);
@@ -47,7 +40,6 @@ describe("computeNextDripSlot", () => {
       expect(gap).toBeLessThanOrEqual(DRIP_MAX_GAP_MS);
     }
 
-    // The exact bounds at the extremes + the midpoint.
     expect(Date.parse(computeNextDripSlot(undefined, NOW, () => 0)) - NOW).toBe(DRIP_MIN_GAP_MS);
     expect(Date.parse(computeNextDripSlot(undefined, NOW, () => 1)) - NOW).toBe(DRIP_MAX_GAP_MS);
     expect(Date.parse(computeNextDripSlot(undefined, NOW, () => 0.5)) - NOW).toBe(
@@ -56,15 +48,14 @@ describe("computeNextDripSlot", () => {
   });
 
   it("chains off a FUTURE tail (the queue extends), not off now", () => {
-    const tail = new Date(NOW + 40 * 60 * 60 * 1000).toISOString(); // 40h ahead
+    const tail = new Date(NOW + 40 * 60 * 60 * 1000).toISOString();
     const slot = computeNextDripSlot(tail, NOW, () => 0);
 
-    // Base is the tail (ahead of now), not now → tail + 23h.
     expect(Date.parse(slot) - Date.parse(tail)).toBe(DRIP_MIN_GAP_MS);
   });
 
   it("bases off now when the tail is in the PAST (queue drained)", () => {
-    const pastTail = new Date(NOW - 5 * 60 * 60 * 1000).toISOString(); // 5h ago
+    const pastTail = new Date(NOW - 5 * 60 * 60 * 1000).toISOString();
     const slot = computeNextDripSlot(pastTail, NOW, () => 0);
 
     expect(Date.parse(slot) - NOW).toBe(DRIP_MIN_GAP_MS);
@@ -87,7 +78,7 @@ describe("the kill switch (settings KV)", () => {
   });
 
   it("reads PAUSED when the row is absent, empty, or unrecognised", async () => {
-    execute.mockResolvedValueOnce({ rows: [] }); // unset ⇒ paused
+    execute.mockResolvedValueOnce({ rows: [] });
     expect(await isDripPaused()).toBe(true);
 
     execute.mockResolvedValueOnce({ rows: [{ value: "" }] });
@@ -96,7 +87,7 @@ describe("the kill switch (settings KV)", () => {
     execute.mockResolvedValueOnce({ rows: [{ value: "no" }] });
     expect(await isDripPaused()).toBe(true);
 
-    execute.mockResolvedValueOnce({ rows: [{ value: "False" }] }); // case-sensitive
+    execute.mockResolvedValueOnce({ rows: [{ value: "False" }] });
     expect(await isDripPaused()).toBe(true);
   });
 
@@ -130,14 +121,13 @@ describe("dueClipPosts", () => {
 
     expect(due).toEqual([{ clipId: "c1", scheduledFor: "2026-07-05T00:00:00.000Z" }]);
 
-    // The SQL joins clips (status='done') and filters scheduled + scheduled_for <= now.
     const call = execute.mock.calls[0]?.[0] as { args: unknown[]; sql: string };
     expect(call.sql).toContain("status = 'scheduled'");
-    // The row's caption snapshot is NOT read — the drip tick rebuilds it at fire time.
+
     expect(call.sql).not.toContain("p.caption");
     expect(call.sql).toContain("c.status = 'done'");
     expect(call.sql).toContain("scheduled_for <= ?");
-    // The last bound arg is the limit.
+
     expect(call.args[call.args.length - 1]).toBe(3);
   });
 });
@@ -164,7 +154,7 @@ describe("deleteClipPost (unschedule)", () => {
     const call = execute.mock.calls[0]?.[0] as { args: unknown[]; sql: string };
     expect(call.sql).toContain("delete from mixtape_clip_social_posts");
     expect(call.sql).toContain("clip_id = ?");
-    // A posted clip keeps its permalink record — only un-posted rows are pruned.
+
     expect(call.sql).toContain("status <> 'posted'");
     expect(call.args).toEqual(["c1", "instagram"]);
   });

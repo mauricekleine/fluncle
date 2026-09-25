@@ -1,15 +1,3 @@
-// The galaxy map's backing functions (docs/agents/cluster-engine.md) — the `artists.ts`
-// twin, consumed by BOTH the oRPC handlers (`./orpc/galaxies.ts`, `./orpc/admin-galaxies.ts`)
-// and the public route loaders (Slice 4). The filename dodged the then-existing
-// `lib/galaxies.ts` (the four vibe-quadrant constants, since retired).
-//
-// Identity is minted HERE, server-side: a new cluster's stable `id` (`gal_<uuid>`,
-// never recycled) and its permanent machine `handle` (`galaxySlug(id, attempt)`,
-// collision-salted) are stamped inside `updateGalaxyMap` — the box never mints
-// identity, because `galaxy-slug.ts` is a workspace package the standalone baked
-// sweep scripts can't import. Member counts are DERIVED (`COUNT(*) GROUP BY
-// galaxy_id`), never stored — the denormalization-drift class is deleted outright.
-
 import { randomUUID } from "node:crypto";
 import {
   type GalaxyAdminItem,
@@ -27,7 +15,6 @@ import {
   toPublicTrackListItem,
 } from "./tracks";
 
-// A row from the `galaxies` table (snake_case columns).
 type GalaxyRow = {
   centroid_json: string;
   created_at: string;
@@ -40,30 +27,15 @@ type GalaxyRow = {
   updated_at: string;
 };
 
-/** A galaxy row with its derived member count, the shape both cron + admin read. */
 export class GalaxyNotFoundError extends Error {}
 
-/**
- * The naming view's per-galaxy shape (Slice 3): the full admin row plus a capped,
- * core-first sample of its member findings so the operator can SEE the covers and
- * AUDITION them (via `/api/preview`) before naming the cluster. `members` are ranked
- * by centroid-distance ascending (the core of the galaxy first), the same order the
- * public `get_galaxy` uses; `memberCount` on the admin row stays the true (uncapped)
- * total. `members` ride the LEAN board projection (`getGalaxyAuditionMembers`): the
- * naming audition renders only a cover + title/artists + Log ID, so a member never
- * carries the graph/discovery fields (compile-enforced by `BoardTrackListItem`).
- */
 export type GalaxyAdminWithMembers = GalaxyAdminItem & { members: BoardTrackListItem[] };
 
 const GALAXY_COLUMNS =
   "id, handle, name, slug, centroid_json, retired_at, split_requested_at, created_at, updated_at";
 
-// The thin-content floor lives in the client-safe `lib/galaxies.ts` (the galaxy lens page's
-// `head` reads it, and a `head` is eagerly bundled) and is re-exported here so every server
-// caller keeps reading it from this module.
 export { GALAXY_INDEX_MIN_FINDINGS } from "../galaxies";
 
-/** Parse a stored centroid (JSON float array); a malformed value degrades to `[]`. */
 function parseCentroid(json: string): number[] {
   try {
     const raw = JSON.parse(json) as unknown;
@@ -76,7 +48,6 @@ function parseCentroid(json: string): number[] {
   }
 }
 
-/** Map a galaxy row + its derived member count to the full admin DTO. */
 function toAdminItem(row: GalaxyRow, memberCount: number): GalaxyAdminItem {
   return {
     centroid: parseCentroid(row.centroid_json),
@@ -86,8 +57,7 @@ function toAdminItem(row: GalaxyRow, memberCount: number): GalaxyAdminItem {
     memberCount,
     name: row.name,
     retiredAt: row.retired_at,
-    // The per-cluster coherence evidence (mean silhouette) is display-only and O(N²);
-    // the cluster engine (Slice 2) computes it for the naming view (Slice 3). Null here.
+
     silhouette: null,
     slug: row.slug,
     splitRequestedAt: row.split_requested_at,
@@ -95,7 +65,6 @@ function toAdminItem(row: GalaxyRow, memberCount: number): GalaxyAdminItem {
   };
 }
 
-/** The derived member count per galaxy — `COUNT(*) GROUP BY galaxy_id`, one query. */
 async function memberCounts(db: Awaited<ReturnType<typeof getDb>>): Promise<Map<string, number>> {
   const result = await db.execute(
     "select galaxy_id, count(*) as c from findings where galaxy_id is not null group by galaxy_id",
@@ -109,11 +78,6 @@ async function memberCounts(db: Awaited<ReturnType<typeof getDb>>): Promise<Map<
   return counts;
 }
 
-/**
- * The FULL galaxy map — named, unnamed, and retired, each with its centroid + derived
- * member count. Serves `list_galaxies_admin` (the naming view + the cron's map read).
- * Ordered oldest-first (stable) so the cron sees a deterministic map.
- */
 export async function listGalaxiesAdmin(): Promise<GalaxyAdminItem[]> {
   const db = await getDb();
   const [result, counts] = await Promise.all([
@@ -124,22 +88,11 @@ export async function listGalaxiesAdmin(): Promise<GalaxyAdminItem[]> {
   return typedRows<GalaxyRow>(result.rows).map((row) => toAdminItem(row, counts.get(row.id) ?? 0));
 }
 
-/**
- * The naming view's read (Slice 3): the FULL map (named + unnamed + retired) with each
- * galaxy's capped, core-first member sample attached. The naming view partitions this
- * into the naming queue (unnamed), the named map, and the retired tail client-side.
- * `memberCap` bounds the covers shown per galaxy (the audition needs a representative
- * handful, not the whole cluster); the row's `memberCount` stays the uncapped total.
- */
 export async function listGalaxiesAdminWithMembers(
   memberCap: number,
 ): Promise<GalaxyAdminWithMembers[]> {
   const galaxies = await listGalaxiesAdmin();
 
-  // One ranked read per galaxy (k is ~9, so a bounded fan-out, not an N+1 concern):
-  // core-first, capped, from the offset-0 head, hydrated LEAN (the audition shows a cover +
-  // identity, never the fat read's graph/JSON columns). A retired galaxy has no members, so
-  // its ranked read is a cheap empty.
   return Promise.all(
     galaxies.map(async (galaxy) => ({
       ...galaxy,
@@ -148,11 +101,6 @@ export async function listGalaxiesAdminWithMembers(
   );
 }
 
-/**
- * The named map — every operator-NAMED, non-retired galaxy with its derived member
- * count. Serves the public `list_galaxies`. Ordered by member count descending
- * (the most-represented galaxies first), then name.
- */
 export async function listNamedGalaxies(): Promise<GalaxyListItem[]> {
   const db = await getDb();
   const [result, counts] = await Promise.all([
@@ -167,22 +115,10 @@ export async function listNamedGalaxies(): Promise<GalaxyListItem[]> {
     .sort((a, b) => b.memberCount - a.memberCount || a.name.localeCompare(b.name));
 }
 
-/**
- * The named galaxies' display names in the public list order — the newsletter section
- * matcher (`lib/editions.ts`) ranks an edition's authored galaxy labels against these
- * live names instead of the four dead vibe constants. Empty until the first galaxy is
- * named (Slice 3), in which case the matcher keeps authored order — benign by design.
- */
 export async function listGalaxyNames(): Promise<string[]> {
   return (await listNamedGalaxies()).map((galaxy) => galaxy.name);
 }
 
-/**
- * One named galaxy by slug + its findings, ordered core-first and paginated. A slug
- * that names no galaxy, or an unnamed/retired one, throws `GalaxyNotFoundError` (the
- * handler maps it to a 404, so list + get agree on which galaxies exist). The findings
- * are public-stripped.
- */
 export async function getNamedGalaxyBySlug(
   slug: string,
   limit: number,
@@ -214,24 +150,6 @@ export async function getNamedGalaxyBySlug(
   };
 }
 
-// ── The public launch gate (browse-by-feel RFC, decision 5 — ratified) ─────────
-//
-// The whole lens ships dark until the operator has named the ENTIRE initial map in
-// one sitting: NOTHING public renders a galaxy until every non-retired galaxy is
-// named. This is a RUNTIME check, not a build flag — so this code can merge while
-// the operator is still naming, and every public surface (the `/galaxies` lens, the
-// `list_galaxies`/`get_galaxy` API + CLI, the sitemap, the `/log` prose clause + the
-// OG card line) lights up once every name exists. A partial map — one or more
-// non-retired galaxies still unnamed — reads exactly like the pre-launch dark state.
-// Machine handles never render publicly regardless (they are not a name).
-
-/**
- * Is the sonic-galaxy map FULLY NAMED — every non-retired galaxy carrying a `name` +
- * `slug`? The single runtime gate behind every public galaxy surface. False when the
- * map is empty (nothing to show) or any non-retired galaxy is still unnamed (a partial
- * map stays dark). Retired galaxies are excluded — an emptied cluster never blocks the
- * launch. One `COUNT` query.
- */
 export async function isGalaxyMapFullyNamed(): Promise<boolean> {
   const db = await getDb();
   const result = await db.execute(
@@ -252,22 +170,10 @@ export async function isGalaxyMapFullyNamed(): Promise<boolean> {
   return total > 0 && unnamed === 0;
 }
 
-/**
- * The PUBLIC named map — `listNamedGalaxies`, but held behind the launch gate: an
- * empty list until the whole map is named. Backs the public `list_galaxies` op (+ the
- * CLI) and the sitemap. `listNamedGalaxies` stays the raw reader (the newsletter's
- * section matcher reads it un-gated via `listGalaxyNames`).
- */
 export async function listPublicGalaxies(): Promise<GalaxyListItem[]> {
   return (await isGalaxyMapFullyNamed()) ? listNamedGalaxies() : [];
 }
 
-/**
- * The sitemap index only needs the number of public galaxies which clear its thin-content floor;
- * loading the public galaxy DTOs merely to discard them would make that aggregate read the whole
- * `findings` galaxy map. This scalar keeps the public launch gate exact while counting each live
- * galaxy through `findings_galaxy_id_idx`, and returns no member rows to the Worker.
- */
 export async function countPublicIndexableGalaxies(minFindings: number): Promise<number> {
   const db = await getDb();
   const result = await db.execute({
@@ -296,11 +202,6 @@ export async function countPublicIndexableGalaxies(minFindings: number): Promise
   return Number(row?.n ?? 0);
 }
 
-/**
- * The PUBLIC by-slug read — `getNamedGalaxyBySlug` behind the launch gate: a
- * `GalaxyNotFoundError` (→ 404) while the map is only partially named, so no single
- * galaxy leaks before the whole map ships. Backs the public `get_galaxy` op.
- */
 export async function getPublicGalaxyBySlug(
   slug: string,
   limit: number,
@@ -313,13 +214,6 @@ export async function getPublicGalaxyBySlug(
   return getNamedGalaxyBySlug(slug, limit, offset);
 }
 
-/**
- * One named galaxy's full lens page (the `/galaxies/<slug>` route loader): the galaxy
- * itself, its findings (core-first, paginated), and the adjacency strip — the other
- * named galaxies ranked by centroid cosine ("Close in sound" applied to galaxies
- * themselves). Returns `null` (→ `notFound()`) when the map is not yet fully named OR
- * the slug names no named galaxy. The findings are public-stripped.
- */
 export async function getGalaxyLensPage(
   slug: string,
   limit: number,
@@ -329,10 +223,6 @@ export async function getGalaxyLensPage(
   findings: TrackListItem[];
   galaxy: GalaxyListItem;
 } | null> {
-  // ONE read carries both the launch gate and the named rows (they interrogate the same table),
-  // so the page is two hops — load-rows-with-gate, then the ranked member scan — not three. A
-  // partial map comes back `fullyNamed: false` and the page stays dark, exactly as the separate
-  // leading `isGalaxyMapFullyNamed` gate did.
   const named = await loadNamedGalaxyRows();
 
   if (!named.fullyNamed) {
@@ -360,19 +250,9 @@ export async function getGalaxyLensPage(
   };
 }
 
-/** One galaxy pane on the `/galaxies` index: the public item plus a core-first cover sample. */
 export type GalaxyPane = GalaxyListItem & { covers: string[] };
 
-/**
- * The `/galaxies` INDEX loader — every named galaxy as a cover-led pane, gated on the
- * fully-named map (an empty list keeps the index dark pre-launch). Each pane carries a
- * capped, core-first sample of member cover URLs (`albumImageUrl`) so the index reads
- * as a map of places, not a list of names. Ordered by member count descending, then
- * name (the `listNamedGalaxies` order).
- */
 export async function listGalaxyPanes(coverCap: number): Promise<GalaxyPane[]> {
-  // The gate rides the same read as the rows (see `loadNamedGalaxyRows`), so a partial map
-  // returns an empty index in one hop instead of a separate leading gate query.
   const named = await loadNamedGalaxyRows();
 
   if (!named.fullyNamed) {
@@ -381,8 +261,6 @@ export async function listGalaxyPanes(coverCap: number): Promise<GalaxyPane[]> {
 
   const panes = await Promise.all(
     named.rows.map(async (row) => {
-      // Named rows are guaranteed name+slug here (loadNamedGalaxyRows filters), but the
-      // column types are nullable — narrow so the pane's fields are non-null strings.
       const name = row.name;
       const slug = row.slug;
 
@@ -411,16 +289,6 @@ export async function listGalaxyPanes(coverCap: number): Promise<GalaxyPane[]> {
     .sort((a, b) => b.memberCount - a.memberCount || a.name.localeCompare(b.name));
 }
 
-/**
- * The named, non-retired galaxy rows, the shared derived-count map, AND the launch gate —
- * all in ONE parallel read. The gate (is the WHOLE non-retired map named?) is near-redundant
- * with the named-row read: both interrogate the `galaxies` table's named/unnamed state. Folding
- * the `isGalaxyMapFullyNamed` count into this same round trip lets the public lens loaders
- * (`getGalaxyLensPage`, `listGalaxyPanes`) drop their separate leading gate query — the gate
- * comes back alongside the rows they were going to load anyway, collapsing a 3-hop chain to 2.
- * `fullyNamed` is computed exactly as `isGalaxyMapFullyNamed` does (total > 0 and no unnamed
- * non-retired galaxy), so the two agree by construction.
- */
 async function loadNamedGalaxyRows(): Promise<{
   counts: Map<string, number>;
   fullyNamed: boolean;
@@ -446,7 +314,6 @@ async function loadNamedGalaxyRows(): Promise<{
   return { counts, fullyNamed, rows: typedRows<GalaxyRow>(result.rows) };
 }
 
-/** The four nearest OTHER named galaxies by centroid cosine — the adjacency strip. */
 function rankAdjacent(
   target: GalaxyRow,
   targetCentroid: number[],
@@ -465,13 +332,6 @@ function rankAdjacent(
     .map(({ memberCount, name, slug }) => ({ memberCount, name, slug }));
 }
 
-/**
- * The operator's editorial write on one galaxy (`update_galaxy`): set `name` + `slug`
- * (naming mints the public URL), rename, and/or request a split (`requestSplit` stamps
- * `split_requested_at`; the nightly tick consumes it). At least one of the three must
- * be present. Returns the updated admin row. Throws `GalaxyNotFoundError` for an
- * unknown id.
- */
 export async function updateGalaxyFields(
   id: string,
   fields: { name?: string; requestSplit?: boolean; slug?: string },
@@ -517,7 +377,6 @@ export async function updateGalaxyFields(
   return item;
 }
 
-/** One galaxy's full admin row by id (with derived member count), or undefined. */
 async function getGalaxyAdminById(id: string): Promise<GalaxyAdminItem | undefined> {
   const db = await getDb();
   const result = await db.execute({
@@ -535,15 +394,6 @@ async function getGalaxyAdminById(id: string): Promise<GalaxyAdminItem | undefin
   return toAdminItem(row, counts.get(row.id) ?? 0);
 }
 
-/**
- * The cron's transactional map write (`update_galaxy_map`). One `db.batch(_, "write")`
- * (libSQL's one-implicit-transaction batch, the `push.ts` precedent), so a crash can
- * never half-apply the map. Each cluster row either upserts an existing centroid,
- * retires it (`retire: true`), or — for `id: null` — mints a NEW cluster: a stable
- * `gal_<uuid>` id + a collision-salted `galaxySlug(id, attempt)` handle, stamped
- * server-side. Returns the full resulting map (with the minted ids) so the box can
- * then write per-finding assignments that point at real ids.
- */
 export async function updateGalaxyMap(
   clusters: Array<{
     centroid: number[];
@@ -555,8 +405,6 @@ export async function updateGalaxyMap(
   const db = await getDb();
   const now = new Date().toISOString();
 
-  // The handles already taken — seed the collision-salt loop so a fresh mint never
-  // clashes with a stored handle OR another cluster minted in this same batch.
   const takenResult = await db.execute("select handle from galaxies");
   const takenHandles = new Set(
     typedRows<{ handle: string }>(takenResult.rows).map((row) => row.handle),
@@ -587,9 +435,6 @@ export async function updateGalaxyMap(
       continue;
     }
 
-    // Consuming a split: upsert the parent's centroid AND clear its split flag in one
-    // statement, so the next tick never re-runs the same split. Otherwise a plain
-    // centroid upsert (the every-night mean refresh) leaves the flag untouched.
     if (cluster.clearSplitRequest) {
       statements.push({
         args: [centroidJson, now, cluster.id],
@@ -611,10 +456,6 @@ export async function updateGalaxyMap(
   return listGalaxiesAdmin();
 }
 
-/**
- * Mint a permanent, unique machine handle for a new galaxy: `galaxySlug(id, attempt)`,
- * salted-re-rolled on collision against the taken set (the plan-handle precedent).
- */
 function mintHandle(id: string, taken: ReadonlySet<string>): string {
   for (let attempt = 0; attempt < 10000; attempt += 1) {
     const candidate = galaxySlug(id, attempt);
@@ -624,17 +465,9 @@ function mintHandle(id: string, taken: ReadonlySet<string>): string {
     }
   }
 
-  // Unreachable at any realistic galaxy count (the pool is ~3k combinations and
-  // `galaxySlug` appends a numeric suffix past exhaustion), but never return a clash.
   return galaxySlug(id, Date.now());
 }
 
-/**
- * A cursor page of the embedded corpus (`list_track_embeddings`) — the cluster
- * engine's input. Keyed on a stable `track_id` (the `list_tracks_admin` cursor
- * precedent): limit/offset over a table the embed cron mutates every 5 minutes would
- * skip/duplicate rows. Only coordinate-bearing, embedded findings are returned.
- */
 export async function listTrackEmbeddingsPage(
   cursor: string | undefined,
   limit: number,
@@ -642,8 +475,7 @@ export async function listTrackEmbeddingsPage(
   const db = await getDb();
   const after = decodeCursor(cursor);
   const args: Array<number | string> = [];
-  // The `track_embeddings` join is INNER, so membership in the satellite IS the old
-  // `embedding_blob is not null` filter — an un-embedded finding is simply not a row here.
+
   let where = "findings.log_id is not null";
 
   if (after) {
@@ -689,12 +521,10 @@ export async function listTrackEmbeddingsPage(
   };
 }
 
-/** Encode a `track_id` cursor (opaque base64url, the `encodeTrackCursor` habit). */
 function encodeCursor(trackId: string): string {
   return Buffer.from(trackId, "utf8").toString("base64url");
 }
 
-/** Decode a `track_id` cursor; a malformed value degrades to undefined (page from top). */
 function decodeCursor(cursor: string | undefined): string | undefined {
   if (!cursor) {
     return undefined;

@@ -6,7 +6,6 @@ import {
   SEED_REARM_SCHEDULE,
 } from "./crawl-rearm-schedule";
 
-/** The boundary for an instant, as an ISO string — the shape `rearmSeedLabels` actually binds. */
 function boundaryOf(iso: string): string {
   return mostRecentSeedRearmBoundary(new Date(iso)).toISOString();
 }
@@ -33,9 +32,6 @@ describe("the release-week schedule", () => {
 });
 
 describe("mostRecentSeedRearmBoundary", () => {
-  // A fixed reference week, so every case reads as a calendar rather than an offset:
-  // 2026-09-14 is a Monday, so Tue 15th, Fri 18th, Sun 20th, Tue 22nd, Fri 25th.
-
   it("returns the boundary itself when now is exactly on one", () => {
     expect(boundaryOf("2026-09-18T12:00:00.000Z")).toBe("2026-09-18T12:00:00.000Z");
     expect(boundaryOf("2026-09-20T00:00:00.000Z")).toBe("2026-09-20T00:00:00.000Z");
@@ -43,11 +39,10 @@ describe("mostRecentSeedRearmBoundary", () => {
   });
 
   it("holds the previous boundary one millisecond before a new one opens", () => {
-    // A hair before Friday noon still belongs to Tuesday's pass.
     expect(boundaryOf("2026-09-18T11:59:59.999Z")).toBe("2026-09-15T00:00:00.000Z");
-    // A hair before Sunday midnight still belongs to Friday's.
+
     expect(boundaryOf("2026-09-19T23:59:59.999Z")).toBe("2026-09-18T12:00:00.000Z");
-    // A hair before Tuesday midnight still belongs to Sunday's.
+
     expect(boundaryOf("2026-09-21T23:59:59.999Z")).toBe("2026-09-20T00:00:00.000Z");
   });
 
@@ -58,14 +53,13 @@ describe("mostRecentSeedRearmBoundary", () => {
   });
 
   it("wraps across the week's longest gap (Tuesday → Friday)", () => {
-    // The 3.5-day stretch: Tuesday's pass holds all the way to Friday noon, weekday by weekday.
     for (const iso of [
-      "2026-09-15T00:00:00.000Z", // Tue, on the boundary
-      "2026-09-15T23:00:00.000Z", // Tue night
-      "2026-09-16T08:30:00.000Z", // Wed
-      "2026-09-17T19:45:00.000Z", // Thu
-      "2026-09-18T00:00:00.000Z", // Fri midnight — the weekday has arrived, the hour has not
-      "2026-09-18T11:00:00.000Z", // Fri morning
+      "2026-09-15T00:00:00.000Z",
+      "2026-09-15T23:00:00.000Z",
+      "2026-09-16T08:30:00.000Z",
+      "2026-09-17T19:45:00.000Z",
+      "2026-09-18T00:00:00.000Z",
+      "2026-09-18T11:00:00.000Z",
     ]) {
       expect(boundaryOf(iso)).toBe("2026-09-15T00:00:00.000Z");
     }
@@ -79,21 +73,18 @@ describe("mostRecentSeedRearmBoundary", () => {
   });
 
   it("crosses a month and a year boundary without a special case", () => {
-    // 2026-10-01 is a Thursday: the previous pass is Tuesday the 29th of September.
     expect(boundaryOf("2026-10-01T06:00:00.000Z")).toBe("2026-09-29T00:00:00.000Z");
-    // 2027-01-01 is a Friday: before noon, the pass is Tuesday 2026-12-29.
+
     expect(boundaryOf("2027-01-01T09:00:00.000Z")).toBe("2026-12-29T00:00:00.000Z");
     expect(boundaryOf("2027-01-01T12:00:00.000Z")).toBe("2027-01-01T12:00:00.000Z");
   });
 
   it("is UTC only, so a DST shift in any local zone moves nothing", () => {
-    // Europe/Amsterdam ends summer time on 2026-10-25, a Sunday, at 03:00 local. The Sunday pass
-    // sits at 00:00 UTC either side of it and the whole week reads identically in UTC.
     expect(boundaryOf("2026-10-25T00:00:00.000Z")).toBe("2026-10-25T00:00:00.000Z");
     expect(boundaryOf("2026-10-25T01:30:00.000Z")).toBe("2026-10-25T00:00:00.000Z");
-    // The same instant expressed with a local offset resolves to the same boundary.
+
     expect(boundaryOf("2026-10-25T03:30:00.000+02:00")).toBe("2026-10-25T00:00:00.000Z");
-    // And the spring shift (2026-03-29, also a Sunday) behaves the same.
+
     expect(boundaryOf("2026-03-29T02:00:00.000Z")).toBe("2026-03-29T00:00:00.000Z");
   });
 
@@ -103,7 +94,7 @@ describe("mostRecentSeedRearmBoundary", () => {
       const now = new Date(start + minute * 60_000);
       const boundary = mostRecentSeedRearmBoundary(now);
       expect(boundary.getTime()).toBeLessThanOrEqual(now.getTime());
-      // And never further back than the widest gap in the schedule (Tue 00:00 → Fri 12:00).
+
       expect(now.getTime() - boundary.getTime()).toBeLessThan(3.5 * 24 * 60 * 60 * 1000 + 60_000);
     }
   });
@@ -127,7 +118,7 @@ describe("mostRecentSeedRearmBoundary", () => {
     expect(mostRecentSeedRearmBoundary(new Date("2026-09-18T12:00:00Z"), wednesdayOnly)).toEqual(
       new Date("2026-09-16T06:00:00Z"),
     );
-    // Its own weekday before its hour still falls back a full week.
+
     expect(mostRecentSeedRearmBoundary(new Date("2026-09-16T05:00:00Z"), wednesdayOnly)).toEqual(
       new Date("2026-09-09T06:00:00Z"),
     );
@@ -135,7 +126,6 @@ describe("mostRecentSeedRearmBoundary", () => {
 });
 
 describe("the due rule the re-arm binds", () => {
-  /** `rearmSeedLabels`' predicate, verbatim: `done_at < <the most recent boundary>`. */
   function isDue(doneAt: string, now: string): boolean {
     return doneAt < mostRecentSeedRearmBoundary(new Date(now)).toISOString();
   }

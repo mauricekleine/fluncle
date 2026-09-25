@@ -1,11 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// The owned-cover-master resolve sweep (RFC U3b): give every album/artist its OWN ≤1200²-capped
-// cover in our R2, up the ladder Apple template → Cover Art Archive → Spotify (albums) / Spotify
-// (artists). The DB, the env, and `fetch` are mocked; `appleArtworkUrl` + `albumCoverAtSize` stay
-// REAL (pure). The load-bearing acceptance is the CAP: every stored master ≤1200 on its longest
-// side, and NO code path writes an un-downscaled original to R2.
-
 const execute = vi.fn();
 
 vi.mock("./db", async () => {
@@ -34,37 +28,34 @@ vi.mock("./log", () => ({ logEvent: vi.fn() }));
 const { coverMasterKey, downloadCappedImage, readImageSize, resolveCoverMasters } =
   await import("./cover-masters");
 
-/** A minimal PNG whose IHDR carries `w`×`h` — the readImageSize path the cap guard reads. */
 function pngBytes(w: number, h: number): ArrayBuffer {
   const buf = new ArrayBuffer(24);
   const view = new DataView(buf);
   view.setUint32(0, 0x89504e47);
   view.setUint32(4, 0x0d0a1a0a);
   view.setUint32(8, 13);
-  view.setUint32(12, 0x49484452); // "IHDR"
+  view.setUint32(12, 0x49484452);
   view.setUint32(16, w);
   view.setUint32(20, h);
 
   return buf;
 }
 
-/** A minimal baseline JPEG (SOI + a SOF0 marker carrying `h`×`w`). */
 function jpegBytes(w: number, h: number): ArrayBuffer {
   const bytes = new Uint8Array(24);
   const view = new DataView(bytes.buffer);
   bytes[0] = 0xff;
-  bytes[1] = 0xd8; // SOI
+  bytes[1] = 0xd8;
   bytes[2] = 0xff;
-  bytes[3] = 0xc0; // SOF0
-  view.setUint16(4, 17); // segment length
-  bytes[6] = 8; // precision
+  bytes[3] = 0xc0;
+  view.setUint16(4, 17);
+  bytes[6] = 8;
   view.setUint16(7, h);
   view.setUint16(9, w);
 
   return bytes.buffer;
 }
 
-/** A fake R2 bucket that records its `put`s (call[i][0] = key, [1] = bytes, [2] = options). */
 function fakeBucket() {
   const put = vi.fn(
     (_key: string, _value: ArrayBuffer | string, _options?: unknown): Promise<undefined> =>
@@ -74,13 +65,11 @@ function fakeBucket() {
   return { bucket: { put } as unknown as Pick<R2Bucket, "put">, put };
 }
 
-/** The worklist SELECT returns these rows; every later write returns empty. */
 function seedWorklist(rows: unknown[]): void {
   execute.mockResolvedValueOnce({ rows });
   execute.mockResolvedValue({ rows: [] });
 }
 
-/** A PNG-returning fetch stub, recording the URLs it was asked for. */
 function stubImageFetch(png: ArrayBuffer, contentType = "image/png") {
   const fetchMock = vi.fn(
     async (_url: string) =>
@@ -91,7 +80,6 @@ function stubImageFetch(png: ArrayBuffer, contentType = "image/png") {
   return fetchMock;
 }
 
-/** The args of every write the pass issued (skipping the leading worklist SELECT). */
 function writtenCalls(): Array<{ args: unknown[]; sql: string }> {
   return execute.mock.calls.slice(1).map((call) => ({
     args: (call[0]?.args ?? []) as unknown[],
@@ -154,8 +142,6 @@ describe("downloadCappedImage — the ≤1200 cap", () => {
   });
 
   it("a 503 THROWS (transient outage → the row lands failed + cooldown, never terminal none)", async () => {
-    // A retryable archive.org status must never read as
-    // "this source has no cover" — that converted a CAA outage into permanent give-ups.
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => new Response("bad gateway", { status: 503 })),
@@ -185,7 +171,7 @@ describe("resolveCoverMasters — the album ladder", () => {
     const result = await resolveCoverMasters(bucket, "album", 50, false);
 
     expect(result.resolved).toEqual(["some-album"]);
-    // The requested Apple URL is the ≤1200 substitution — never the 3000² original.
+
     expect(fetchMock.mock.calls[0]?.[0]).toBe(
       "https://is1-ssl.mzstatic.com/image/thumb/abc/1200x1200bb.jpg",
     );
@@ -237,7 +223,7 @@ describe("resolveCoverMasters — the album ladder", () => {
     const result = await resolveCoverMasters(bucket, "album", 50, false);
 
     expect(result.resolved).toEqual(["spotify-album"]);
-    // The largest (640) Spotify prefix — ab67616d0000b273.
+
     expect(fetchMock.mock.calls[0]?.[0]).toBe("https://i.scdn.co/image/ab67616d0000b273deadbeef");
     const resolvedWrite = writtenCalls().find((c) => c.sql.includes("image_state = 'resolved'"));
     expect(resolvedWrite?.args).toContain("spotify");
@@ -254,8 +240,7 @@ describe("resolveCoverMasters — the album ladder", () => {
         slug: "rogue-album",
       },
     ]);
-    // Every source returns a 3000² image regardless of what we asked — the guard must reject all,
-    // so no rung stores anything and the album floors to the raw URL. NOTHING un-downscaled hits R2.
+
     stubImageFetch(pngBytes(3000, 3000));
 
     const { bucket, put } = fakeBucket();
@@ -330,7 +315,7 @@ describe("resolveCoverMasters — the artist floor + the shared cap", () => {
 
     expect(result.resolved).toEqual(["some-artist"]);
     expect(put.mock.calls[0]?.[0]).toBe("artists/some-artist.jpg");
-    // Non-album Spotify avatar id → passed through untouched by albumCoverAtSize, fetched as-is.
+
     expect(fetchMock.mock.calls[0]?.[0]).toBe("https://i.scdn.co/image/ab6761610000e5ebcafe");
     const resolvedWrite = writtenCalls().find((c) => c.sql.includes("image_state = 'resolved'"));
     expect(resolvedWrite?.sql).toContain("update artists");
@@ -378,7 +363,7 @@ describe("resolveCoverMasters — sweep discipline", () => {
     expect(result.resolved).toEqual(["dry-album"]);
     expect(fetchMock).not.toHaveBeenCalled();
     expect(put).not.toHaveBeenCalled();
-    expect(execute).toHaveBeenCalledTimes(1); // only the worklist SELECT
+    expect(execute).toHaveBeenCalledTimes(1);
   });
 
   it("is idempotent: a drained worklist fetches nothing and writes nothing", async () => {

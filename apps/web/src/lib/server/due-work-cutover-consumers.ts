@@ -37,7 +37,6 @@ export type DueWorkCutoverConsumer<WorkKind extends PhysicalDueWorkKind> =
   | RecurringCutoverConsumer<WorkKind>
   | OnDemandCutoverConsumer<WorkKind>;
 
-/** Operator-targeted modes that intentionally never enter the physical recurring inventory. */
 export const DUE_WORK_LEGACY_ONLY_NONPHYSICAL_MODES = {
   "cover-masters.retryNone": {
     consumerId: "cover-masters.resolveCoverMasters.retryNone",
@@ -50,21 +49,12 @@ export const DUE_WORK_LEGACY_ONLY_NONPHYSICAL_MODES = {
   [WorkKind in "cover-masters.retryNone"]: LegacyOnlyCutoverConsumer<WorkKind>;
 };
 
-/**
- * The source-of-truth physical inventory assembled without restating any queue names. Consumers
- * can use this alongside the map below to machine-check Goal C coverage as definitions evolve.
- */
 export const PHYSICAL_DUE_WORK_KINDS: readonly PhysicalDueWorkKind[] = [
   ...DUE_WORK_TRACK_WORK_KIND_INVENTORY.map((entry) => entry.workKind),
   ...DUE_WORK_KINDS,
   ...DUE_WORK_VENDOR_WORK_KIND_INVENTORY.map((entry) => entry.workKind),
 ];
 
-/**
- * One cutover consumer per physical due-work kind. The list-track-work rows deliberately name a
- * consumer family: one endpoint serves multiple physical scope halves, and the fleet registry
- * records the scheduled phase rather than every accepted request parameter.
- */
 export const DUE_WORK_CUTOVER_CONSUMERS = {
   "album.bio": {
     consumerId: "albums.listAlbumsMissingBio",
@@ -321,7 +311,6 @@ export const DUE_WORK_CUTOVER_CONSUMERS = {
   [WorkKind in PhysicalDueWorkKind]: DueWorkCutoverConsumer<WorkKind>;
 };
 
-/** The registry import is intentionally live: this module is the machine-readable join. */
 export const RECURRING_DUE_WORK_TRIGGER_OPERATION_IDS = new Set(
   DATABASE_OPERATION_REGISTRY.flatMap((operation) =>
     operation.triggers.map((trigger) => trigger.operationId),
