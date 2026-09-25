@@ -86,7 +86,6 @@ describe("the address bucket sees through mailbox aliases", () => {
 
     expect(await bucketFor("victim+1@gmail.com")).toBe(base);
     expect(await bucketFor("victim+anything@gmail.com")).toBe(base);
-    expect(await bucketFor("dave+news@example.org")).toBe(await bucketFor("dave@example.org"));
   });
 
   it("folds Gmail dots and googlemail into one bucket", async () => {
@@ -98,5 +97,26 @@ describe("the address bucket sees through mailbox aliases", () => {
 
   it("keeps dots meaningful outside Gmail", async () => {
     expect(await bucketFor("d.ave@example.org")).not.toBe(await bucketFor("dave@example.org"));
+  });
+
+  it("folds plus-tags only for providers that ignore them", async () => {
+    for (const domain of [
+      "outlook.com",
+      "hotmail.com",
+      "live.com",
+      "icloud.com",
+      "me.com",
+      "fastmail.com",
+      "proton.me",
+      "protonmail.com",
+    ]) {
+      expect(await bucketFor(`dave+news@${domain}`), domain).toBe(
+        await bucketFor(`dave@${domain}`),
+      );
+    }
+  });
+
+  it("keeps a plus-tag meaningful on domains that may route it elsewhere", async () => {
+    expect(await bucketFor("dave+news@example.org")).not.toBe(await bucketFor("dave@example.org"));
   });
 });

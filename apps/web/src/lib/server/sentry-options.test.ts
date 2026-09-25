@@ -101,7 +101,7 @@ describe("auth tokens never leave the Worker in a Sentry payload", () => {
     });
 
     expect(JSON.stringify(event)).not.toContain(MAGIC_TOKEN);
-    expect(event.request?.url).toContain("/api/auth/magic-link/verify?token=");
+    expect(event.request?.url).toBe("https://www.fluncle.com/api/auth/magic-link/verify?[Filtered]");
   });
 
   it("scrubs a string query_string too", () => {
@@ -160,5 +160,31 @@ describe("the Worker's Sentry hooks", () => {
         serverSentryScrubHooks.beforeBreadcrumb({ data: { url: `/x?token=${MAGIC_TOKEN}` } }),
       ),
     ).not.toContain(MAGIC_TOKEN);
+  });
+});
+
+describe("the Worker scrub sees through encodings", () => {
+  it("scrubs encoded names and nested urls in spans and events", () => {
+    const secret = "zzWorkerEncodedSecret77";
+    const span = scrubServerSentrySpan({
+      data: {
+        "http.query": `?%74oken=${secret}`,
+        "url.full": `https://www.fluncle.com/go?next=${encodeURIComponent(encodeURIComponent(`/x?token=${secret}`))}`,
+      },
+      description: `GET /api/auth/magic-link/verify?%2574oken=${secret}`,
+      span_id: "1",
+      start_timestamp: 1,
+      trace_id: "1",
+    });
+    const event = scrubServerSentryEvent({
+      request: {
+        query_string: `%74oken=${secret}`,
+        url: `https://www.fluncle.com/follows?t=${secret}`,
+      },
+      type: undefined,
+    });
+
+    expect(JSON.stringify(span)).not.toContain(secret);
+    expect(JSON.stringify(event)).not.toContain(secret);
   });
 });

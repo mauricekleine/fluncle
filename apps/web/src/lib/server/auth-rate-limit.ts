@@ -9,6 +9,22 @@ export const MAGIC_LINK_LIMIT_PER_EMAIL = 5;
 
 const GMAIL_DOMAINS = new Set(["gmail.com", "googlemail.com"]);
 
+const PLUS_IGNORING_DOMAINS = new Set([
+  ...GMAIL_DOMAINS,
+  "outlook.com",
+  "hotmail.com",
+  "live.com",
+  "msn.com",
+  "icloud.com",
+  "me.com",
+  "mac.com",
+  "fastmail.com",
+  "fastmail.fm",
+  "proton.me",
+  "protonmail.com",
+  "pm.me",
+]);
+
 export function mailboxAbuseKey(email: string): string {
   const normalized = email.trim().toLowerCase();
   const at = normalized.lastIndexOf("@");
@@ -18,7 +34,8 @@ export function mailboxAbuseKey(email: string): string {
   }
 
   const domain = normalized.slice(at + 1);
-  const local = normalized.slice(0, at).split("+")[0] ?? "";
+  const rawLocal = normalized.slice(0, at);
+  const local = PLUS_IGNORING_DOMAINS.has(domain) ? (rawLocal.split("+")[0] ?? "") : rawLocal;
 
   if (GMAIL_DOMAINS.has(domain)) {
     return `${local.replaceAll(".", "")}@gmail.com`;
