@@ -1,5 +1,6 @@
 import { type Client } from "@libsql/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { LONG_FORM_MS } from "../catalogue-eligibility";
 
 const holder = vi.hoisted(() => ({ db: undefined as Client | undefined }));
 const translateQuery = vi.hoisted(() => vi.fn<(q: string) => Promise<unknown>>());
@@ -194,22 +195,23 @@ describe("the MCP browse + the API list ops read the same two columns", () => {
     expect((await listArtistsApiPage(1)).items[0]).toMatchObject({ findingCount: 1 });
   });
 
-  it("GET stays wider than the list and reports both columns verbatim", async () => {
+  it("GET resolves visible edges below the hub count floor and excludes counted entities with no edges", async () => {
     expect(await getLabelDetail("uncounted-imprint")).toMatchObject({
       certified: false,
       findingCount: 0,
       trackCount: 0,
     });
-    expect(await getAlbumDetail("stored-record")).toMatchObject({
-      certified: true,
-      findingCount: 1,
-      trackCount: FLOOR,
+    expect(await getAlbumDetail("stored-record")).toBeUndefined();
+    expect(await getArtistListItemBySlug("stored-artist")).toBeUndefined();
+  });
+
+  it("GET excludes a label whose only edges are hidden long catalogue tracks", async () => {
+    await db.execute({
+      args: [LONG_FORM_MS, "L_edges"],
+      sql: "update tracks set duration_ms = ? where label_id = ?",
     });
-    expect(await getArtistListItemBySlug("stored-artist")).toMatchObject({
-      certified: true,
-      findingCount: 1,
-      trackCount: FLOOR,
-    });
+
+    expect(await getLabelDetail("uncounted-imprint")).toBeUndefined();
   });
 });
 

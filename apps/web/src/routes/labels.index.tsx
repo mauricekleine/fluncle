@@ -73,9 +73,9 @@ const fetchLabelsPage = createServerFn({ method: "GET" })
       resolveLabelsPage(data.page, data.q, data.order ?? "most"),
   );
 
-const title = "Every drum & bass record label · Fluncle";
+const title = "Drum & bass record labels · Fluncle";
 const description =
-  "Every drum & bass record label Fluncle holds, with the founding facts and lineage that link them.";
+  "Drum & bass record labels in Fluncle's public archive, with the founding facts and lineage that link them.";
 
 function pagedMeta(page: number): { description: string; title: string } {
   if (page <= 1) {
@@ -83,8 +83,8 @@ function pagedMeta(page: number): { description: string; title: string } {
   }
 
   return {
-    description: `Page ${page} of every drum & bass record label Fluncle holds.`,
-    title: `Every drum & bass record label, page ${page} · Fluncle`,
+    description: `Page ${page} of drum & bass record labels in Fluncle's public archive.`,
+    title: `Drum & bass record labels, page ${page} · Fluncle`,
   };
 }
 
@@ -137,7 +137,7 @@ function labelsHead(loaderData: LabelsPageData | undefined) {
       })),
       numberOfItems: loaderData.hub.total,
     },
-    name: "Every drum & bass record label Fluncle holds",
+    name: "Drum & bass record labels in Fluncle's public archive",
     url: `${siteUrl}/labels`,
   };
 

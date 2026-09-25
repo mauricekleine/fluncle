@@ -2,7 +2,7 @@ import { oc } from "@orpc/contract";
 import * as z from "zod";
 
 export const CatalogueLensSchema = z
-  .enum(["capture", "dismissed", "ear", "failed", "quarantine", "unmatched"])
+  .enum(["capture", "dismissed", "ear", "failed", "long", "quarantine", "unmatched"])
   .meta({ id: "CatalogueLens" });
 
 export const CapturePriorityReasonSchema = z
@@ -26,9 +26,13 @@ export const CatalogueTrackItemSchema = z
     albumImageUrl: z.string().nullable(),
 
     appleMusicUrl: z.string().nullable(),
+
     artists: z.array(z.string()),
+
     bpm: z.number().nullable(),
+
     capturePriority: z.number().nullable(),
+
     captureReason: CapturePriorityReasonSchema.nullable(),
 
     captureStatus: z.string().nullable(),
@@ -42,17 +46,29 @@ export const CatalogueTrackItemSchema = z
     hasCapturedAudio: z.boolean(),
 
     hasPreview: z.boolean(),
+
+    hiddenFromPublic: z.boolean(),
+
     isrc: z.string().nullable(),
+
     key: z.string().nullable(),
+
     label: z.string().nullable(),
+
     nearestFinding: CatalogueMatchSchema.nullable(),
+
     nearestFindingScore: z.number().nullable(),
+
     rankedAt: z.string().nullable(),
+
     releaseDate: z.string().nullable(),
 
     sourceAudioAttemptedAt: z.string().nullable().optional(),
+
     spotifyUrl: z.string().nullable(),
+
     title: z.string(),
+
     trackId: z.string(),
   })
   .meta({ id: "CatalogueTrackItem" });

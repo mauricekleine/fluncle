@@ -256,7 +256,7 @@ describe("the states that are not an answer", () => {
 
     expect(html).toContain("Nothing out here for “zzzqqx”.");
     expect(html).toContain("Try a different name, or ");
-    expect(html).toContain("dig through every track I hold");
+    expect(html).toContain("dig through my tracks");
     expect(html).toContain('href="/tracks"');
     expect(html.match(/Nothing out here for/g)).toHaveLength(1);
     expect(html).toMatch(/<output[^>]*>Nothing out here for “zzzqqx”\.<\/output>/);

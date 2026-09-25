@@ -113,9 +113,9 @@ const fetchSimilarArtists = createServerFn({ method: "GET" })
     return { names, results };
   });
 
-const title = "Every drum & bass artist · Fluncle";
+const title = "Drum & bass artists · Fluncle";
 const description =
-  "Every drum & bass artist Fluncle holds, with the labels that pressed their records.";
+  "Drum & bass artists in Fluncle's public archive, with the labels that pressed their records.";
 
 function pagedMeta(page: number): { description: string; title: string } {
   if (page <= 1) {
@@ -123,8 +123,8 @@ function pagedMeta(page: number): { description: string; title: string } {
   }
 
   return {
-    description: `Page ${page} of every drum & bass artist Fluncle holds.`,
-    title: `Every drum & bass artist, page ${page} · Fluncle`,
+    description: `Page ${page} of drum & bass artists in Fluncle's public archive.`,
+    title: `Drum & bass artists, page ${page} · Fluncle`,
   };
 }
 
@@ -188,7 +188,7 @@ function artistsHead(loaderData: ArtistsPageData | undefined) {
       })),
       numberOfItems: loaderData.hub.total,
     },
-    name: "Every drum & bass artist Fluncle holds",
+    name: "Drum & bass artists in Fluncle's public archive",
     url: `${siteUrl}/artists`,
   };
 

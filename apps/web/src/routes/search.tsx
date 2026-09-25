@@ -271,7 +271,7 @@ function SearchEmpty({ coordinate, q }: { coordinate: boolean; q: string }): Rea
 
       <p className="search-page-way-back">
         {coordinate ? "Nothing logged there yet. " : "Try a different name, or "}
-        <Link to="/tracks">dig through every track I hold</Link>.
+        <Link to="/tracks">dig through my tracks</Link>.
       </p>
       {nearest || coordinate ? undefined : (
         <StyleChips
@@ -304,7 +304,7 @@ function SearchFailed({ said = false }: { said?: boolean }): ReactNode {
         >
           Try that search again
         </button>
-        , or <Link to="/tracks">dig through every track I hold</Link>.
+        , or <Link to="/tracks">dig through my tracks</Link>.
       </p>
     </div>
   );
@@ -436,7 +436,7 @@ export function SearchAnswer({
         {data.status === "limited" ? (
           <div className="search-page-state">
             <p className="search-page-way-back">
-              Till then, <Link to="/tracks">dig through every track I hold</Link>.
+              Till then, <Link to="/tracks">dig through my tracks</Link>.
             </p>
           </div>
         ) : undefined}

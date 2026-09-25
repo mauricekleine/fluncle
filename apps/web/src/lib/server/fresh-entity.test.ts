@@ -12,6 +12,7 @@ vi.mock("./db", async (importOriginal) => {
 import { createIntegrationDb } from "./integration-db";
 import { listFreshTracks } from "./fresh";
 import { listArtistFreshTracks, listLabelFreshTracks } from "./fresh-entity";
+import { LONG_FORM_MS } from "../catalogue-eligibility";
 
 const NOW = new Date("2026-07-17T12:00:00.000Z");
 
@@ -188,6 +189,22 @@ describe("listArtistFreshTracks", () => {
 });
 
 describe("listLabelFreshTracks", () => {
+  it("does not expose a label supported only by a long catalogue recording", async () => {
+    await seedLabel("long-label", "Long Label", "long-label");
+    await seedTrack({
+      artists: ["Artist"],
+      labelId: "long-label",
+      releaseDate: "2026-07-15",
+      trackId: "long-track",
+    });
+    await db.execute({
+      args: [LONG_FORM_MS, "long-track"],
+      sql: `update tracks set duration_ms = ? where track_id = ?`,
+    });
+
+    expect(await listLabelFreshTracks("long-label", { now: NOW })).toBeUndefined();
+  });
+
   it("returns only the label's own fresh tracks via label_id, split lit/unlit", async () => {
     await seedLabel("lab_a", "Hospital Records", "hospital-records");
     await seedLabel("lab_b", "Other Label", "other-label");

@@ -11,6 +11,7 @@ vi.mock("./db", async (importOriginal) => {
 
 import { createIntegrationDb, seedLabel } from "./integration-db";
 import { listLabelFreshTracks } from "./fresh-entity";
+import { LONG_FORM_MS } from "../catalogue-eligibility";
 import {
   FRESH_FINDINGS_LIMIT,
   FRESH_WINDOW_DAYS,
@@ -108,6 +109,32 @@ beforeEach(async () => {
 });
 
 describe("listFreshReleases", () => {
+  it("keeps long findings while omitting long catalogue releases and records", async () => {
+    await seedAlbumTrack({
+      albumId: "long-album",
+      albumName: "Long Album",
+      albumSlug: "long-album",
+      artists: ["Artist"],
+      releaseDate: "2026-07-15",
+      trackId: "long-catalogue",
+    });
+    await seedFinding({
+      artists: ["Artist"],
+      logId: "001.1.1",
+      releaseDate: "2026-07-15",
+      trackId: "long-finding",
+    });
+    await db.execute({
+      args: [LONG_FORM_MS],
+      sql: `update tracks set duration_ms = ? where track_id in ('long-catalogue', 'long-finding')`,
+    });
+
+    const releases = await listFreshReleases(NOW);
+    expect(releases.catalogue).toEqual([]);
+    expect(releases.findings.map((finding) => finding.trackId)).toEqual(["long-finding"]);
+    expect(await listFreshRecords(NOW)).toEqual([]);
+  });
+
   it("splits the window into lit findings and unlit catalogue, each newest release first", async () => {
     await seedFinding({
       artists: ["Dimension"],

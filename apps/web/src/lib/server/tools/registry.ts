@@ -22,6 +22,7 @@ import {
   listLabelCatalogue,
 } from "../catalogue-groups";
 import { type FreshRecord, type FreshTrack, listFreshTracks } from "../fresh";
+import { hasPublicGraphTracks } from "../hub-counts";
 import {
   type CatalogueBrowsePage,
   CatalogueHubPageOutOfRangeError,
@@ -839,7 +840,7 @@ const getLabelTool = {
     const slug = name ? labelSlug(name) : undefined;
     const label = slug ? await getLabelBySlug(slug) : undefined;
 
-    if (!label) {
+    if (!label || !(await hasPublicGraphTracks("labels", label.id))) {
       return { found: false, ok: true };
     }
 
@@ -968,7 +969,7 @@ const listAlbumCatalogueTool = {
     const slug = name ? albumSlug(name) : undefined;
     const album = slug ? await getAlbumBySlug(slug) : undefined;
 
-    if (!album) {
+    if (!album || !(await hasPublicGraphTracks("albums", album.id))) {
       return projectCatalogueBrowse([], { page, pageCount: 1, total: 0 }, ctx);
     }
 
@@ -1016,7 +1017,7 @@ const listLabelCatalogueTool = {
     const slug = name ? labelSlug(name) : undefined;
     const label = slug ? await getLabelBySlug(slug) : undefined;
 
-    if (!label) {
+    if (!label || !(await hasPublicGraphTracks("labels", label.id))) {
       return projectCatalogueBrowse([], { page, pageCount: 1, total: 0 }, ctx);
     }
 

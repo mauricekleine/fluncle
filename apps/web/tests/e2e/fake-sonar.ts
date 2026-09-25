@@ -3,9 +3,31 @@ import { EMBEDDING_DIMS } from "../../src/lib/server/embedding";
 import { SONAR_PORT } from "./stack";
 
 const SECRET = "e2e-fake-sonar-secret";
-const SUPPORTED_FILTERS = new Set(["bpm_min", "bpm_max", "key_in"]);
+const SUPPORTED_FILTERS = new Set([
+  "anchored",
+  "bpm_min",
+  "bpm_max",
+  "certified",
+  "dismissed",
+  "duration_ms_max",
+  "has_finding",
+  "is_duplicate",
+  "key_in",
+  "nearest_finding_score_max",
+]);
 
-type Filter = { bpm_max?: number; bpm_min?: number; key_in?: string[] };
+type Filter = {
+  anchored?: boolean;
+  bpm_max?: number;
+  bpm_min?: number;
+  certified?: boolean;
+  dismissed?: boolean;
+  duration_ms_max?: number;
+  has_finding?: boolean;
+  is_duplicate?: boolean;
+  key_in?: string[];
+  nearest_finding_score_max?: number;
+};
 type SearchBody = {
   exclude_ids: string[];
   filter: Filter;
@@ -13,7 +35,19 @@ type SearchBody = {
   probes: number[][];
   top_k: number;
 };
-type Candidate = { bpm: number | null; id: string; key: string | null; vector: number[] };
+type Candidate = {
+  anchored: boolean;
+  bpm: number | null;
+  certified: boolean;
+  dismissed: boolean;
+  durationMs: number | null;
+  hasFinding: boolean;
+  id: string;
+  isDuplicate: boolean;
+  key: string | null;
+  nearestFindingScore: number | null;
+  vector: number[];
+};
 
 function json(body: unknown, status = 200): Response {
   return Response.json(body, { status });
@@ -24,6 +58,26 @@ function validVector(value: unknown): value is number[] {
     Array.isArray(value) &&
     value.length === EMBEDDING_DIMS &&
     value.every((entry) => typeof entry === "number" && Number.isFinite(entry))
+  );
+}
+
+function validFilter(fields: Record<string, unknown>): boolean {
+  return (
+    !Object.keys(fields).some((field) => !SUPPORTED_FILTERS.has(field)) &&
+    !(["anchored", "certified", "dismissed", "has_finding", "is_duplicate"] as const).some(
+      (key) => fields[key] !== undefined && typeof fields[key] !== "boolean",
+    ) &&
+    !(["duration_ms_max", "nearest_finding_score_max"] as const).some(
+      (key) =>
+        fields[key] !== undefined &&
+        (typeof fields[key] !== "number" || !Number.isFinite(fields[key])),
+    ) &&
+    (fields.bpm_min === undefined ||
+      (typeof fields.bpm_min === "number" && Number.isFinite(fields.bpm_min))) &&
+    (fields.bpm_max === undefined ||
+      (typeof fields.bpm_max === "number" && Number.isFinite(fields.bpm_max))) &&
+    (fields.key_in === undefined ||
+      (Array.isArray(fields.key_in) && fields.key_in.every((key) => typeof key === "string")))
   );
 }
 
@@ -41,17 +95,8 @@ function parseBody(value: unknown): SearchBody | null {
 
   const fields = filter as Record<string, unknown>;
 
-  if (Object.keys(fields).some((field) => !SUPPORTED_FILTERS.has(field))) {
-    return null;
-  }
-
   if (
-    (fields.bpm_min !== undefined &&
-      (typeof fields.bpm_min !== "number" || !Number.isFinite(fields.bpm_min))) ||
-    (fields.bpm_max !== undefined &&
-      (typeof fields.bpm_max !== "number" || !Number.isFinite(fields.bpm_max))) ||
-    (fields.key_in !== undefined &&
-      (!Array.isArray(fields.key_in) || !fields.key_in.every((key) => typeof key === "string"))) ||
+    !validFilter(fields) ||
     (body.index !== "tracks" && body.index !== "centroids") ||
     !Array.isArray(body.probes) ||
     body.probes.length === 0 ||
@@ -101,8 +146,15 @@ function cosine(left: number[], right: number[]): number {
 async function candidates(client: Client, index: SearchBody["index"]): Promise<Candidate[]> {
   const result = await client.execute(
     index === "tracks"
-      ? `select t.track_id as id, vector_extract(e.embedding_blob) as v, t.bpm, t.key
-         from track_embeddings e join tracks t on t.track_id = e.track_id`
+      ? `select t.track_id as id, vector_extract(e.embedding_blob) as v, t.bpm, t.key,
+                (t.spotify_uri is not null) as anchored,
+                (f.log_id is not null) as certified,
+                (f.track_id is not null) as has_finding,
+                (t.dismissed_at is not null) as dismissed,
+                (t.duplicate_of_track_id is not null) as is_duplicate,
+                t.nearest_finding_score, t.duration_ms
+         from track_embeddings e join tracks t on t.track_id = e.track_id
+         left join findings f on f.track_id = t.track_id`
       : `select artist_id as id, vector_extract(centroid_blob) as v from artist_centroids`,
   );
 
@@ -112,9 +164,17 @@ async function candidates(client: Client, index: SearchBody["index"]): Promise<C
     }
 
     return {
+      anchored: Number(row.anchored) === 1,
       bpm: typeof row.bpm === "number" ? row.bpm : null,
+      certified: Number(row.certified) === 1,
+      dismissed: Number(row.dismissed) === 1,
+      durationMs: typeof row.duration_ms === "number" ? row.duration_ms : null,
+      hasFinding: Number(row.has_finding) === 1,
       id: row.id,
+      isDuplicate: Number(row.is_duplicate) === 1,
       key: typeof row.key === "string" ? row.key : null,
+      nearestFindingScore:
+        typeof row.nearest_finding_score === "number" ? row.nearest_finding_score : null,
       vector: readVector(row.v),
     };
   });
@@ -128,11 +188,32 @@ async function search(client: Client, body: SearchBody): Promise<Response> {
         return false;
       }
 
-      const { bpm_min: min, bpm_max: max, key_in: keys } = body.filter;
+      const {
+        anchored,
+        bpm_min: min,
+        bpm_max: max,
+        certified,
+        dismissed,
+        duration_ms_max: durationMax,
+        has_finding: hasFinding,
+        is_duplicate: isDuplicate,
+        key_in: keys,
+        nearest_finding_score_max: nearestScoreMax,
+      } = body.filter;
 
       return (
+        (anchored === undefined || candidate.anchored === anchored) &&
         (min === undefined || (candidate.bpm !== null && candidate.bpm >= min)) &&
         (max === undefined || (candidate.bpm !== null && candidate.bpm <= max)) &&
+        (certified === undefined || candidate.certified === certified) &&
+        (dismissed === undefined || candidate.dismissed === dismissed) &&
+        (durationMax === undefined ||
+          (candidate.durationMs !== null && candidate.durationMs < durationMax)) &&
+        (hasFinding === undefined || candidate.hasFinding === hasFinding) &&
+        (isDuplicate === undefined || candidate.isDuplicate === isDuplicate) &&
+        (nearestScoreMax === undefined ||
+          candidate.nearestFindingScore === null ||
+          candidate.nearestFindingScore < nearestScoreMax) &&
         (keys === undefined || (candidate.key !== null && keys.includes(candidate.key)))
       );
     })

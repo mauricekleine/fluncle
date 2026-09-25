@@ -73,9 +73,9 @@ const fetchAlbumsPage = createServerFn({ method: "GET" })
       resolveAlbumsPage(data.page, data.q, data.order ?? "most"),
   );
 
-const title = "Every drum & bass album · Fluncle";
+const title = "Drum & bass albums · Fluncle";
 const description =
-  "Every drum & bass album, EP and single Fluncle holds, with the artists and labels behind them.";
+  "Drum & bass albums, EPs and singles in Fluncle's public archive, with the artists and labels behind them.";
 
 function pagedMeta(page: number): { description: string; title: string } {
   if (page <= 1) {
@@ -83,8 +83,8 @@ function pagedMeta(page: number): { description: string; title: string } {
   }
 
   return {
-    description: `Page ${page} of every drum & bass album, EP and single Fluncle holds, with the artists and labels behind them.`,
-    title: `Every drum & bass album, page ${page} · Fluncle`,
+    description: `Page ${page} of drum & bass albums, EPs and singles in Fluncle's public archive, with the artists and labels behind them.`,
+    title: `Drum & bass albums, page ${page} · Fluncle`,
   };
 }
 
@@ -137,7 +137,7 @@ function albumsHead(loaderData: AlbumsPageData | undefined) {
       })),
       numberOfItems: loaderData.hub.total,
     },
-    name: "Every drum & bass album Fluncle holds",
+    name: "Drum & bass albums in Fluncle's public archive",
     url: `${siteUrl}/albums`,
   };
 

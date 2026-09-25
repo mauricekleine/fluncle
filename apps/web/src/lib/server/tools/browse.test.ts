@@ -10,6 +10,7 @@ const getLabelBySlugMock = vi.hoisted(() => vi.fn());
 const listArtistCatalogueMock = vi.hoisted(() => vi.fn());
 const listLabelCatalogueMock = vi.hoisted(() => vi.fn());
 const listCatalogueTracksByAlbumMock = vi.hoisted(() => vi.fn());
+const hasPublicGraphTracksMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../artists", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../artists")>()),
@@ -38,6 +39,7 @@ vi.mock("../tracks", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../tracks")>()),
   listCatalogueTracksByAlbum: listCatalogueTracksByAlbumMock,
 }));
+vi.mock("../hub-counts", () => ({ hasPublicGraphTracks: hasPublicGraphTracksMock }));
 
 const { SHARED_TOOLS } = await import("./registry");
 
@@ -64,6 +66,8 @@ function catTrack(id: string) {
 }
 
 beforeEach(() => {
+  hasPublicGraphTracksMock.mockReset();
+  hasPublicGraphTracksMock.mockResolvedValue(true);
   for (const m of [
     listArtistsBrowsePageMock,
     getPublicArtistBySlugMock,

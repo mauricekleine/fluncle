@@ -19,7 +19,7 @@ export function parseSearchPageSearch(search: Record<string, unknown>): SearchPa
 
 export const searchPageTitle = "Search the drum & bass archive · Fluncle";
 export const searchPageDescription =
-  "Search every drum & bass track Fluncle holds, by name, coordinate, artist, label, or the sound of a track you already know.";
+  "Find drum & bass in Fluncle's public archive by name, coordinate, artist, label, or the sound of a track you already know.";
 
 export function searchPageMetaTitle(query: string | undefined): string {
   return query === undefined ? searchPageTitle : `Search: ${query} · Fluncle`;

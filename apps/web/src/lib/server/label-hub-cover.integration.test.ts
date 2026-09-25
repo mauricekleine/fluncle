@@ -416,7 +416,7 @@ describe("the label tile cover pick", () => {
     expect(expected("no-tracks")).toBeUndefined();
   });
 
-  it("picks from covering index entries alone, then reads the one cover by primary key", async () => {
+  it("picks from indexed label entries and probes findings before reading the cover", async () => {
     const { labels, tracks } = world();
     await seed(labels, tracks);
     execute.mockClear();
@@ -451,11 +451,9 @@ describe("the label tile cover pick", () => {
       expect(details.filter((detail) => /TEMP B-TREE/.test(detail))).toEqual([]);
       expect(details.filter((detail) => detail.startsWith("SCAN "))).toEqual([]);
 
+      expect(details).toContainEqual("SEARCH t3 USING INDEX tracks_label_cover_idx (label_id=?)");
       expect(details).toContainEqual(
-        "SEARCH t3 USING COVERING INDEX tracks_label_cover_idx (label_id=?)",
-      );
-      expect(details).toContainEqual(
-        "SEARCH t2 USING COVERING INDEX tracks_label_cover_idx (label_id=? AND release_date=?)",
+        "SEARCH t2 USING INDEX tracks_label_cover_idx (label_id=? AND release_date=?)",
       );
 
       const pickScope = scopeOf(/^SEARCH t2 /);
@@ -467,10 +465,12 @@ describe("the label tile cover pick", () => {
         .map((node) => node.detail)
         .filter((detail) => detail.startsWith("SEARCH ") || detail.startsWith("SCAN "));
 
-      expect(pickReads).toHaveLength(2);
-      for (const detail of pickReads) {
-        expect(detail).toContain(" USING COVERING INDEX tracks_label_cover_idx ");
-      }
+      expect(
+        pickReads.filter((detail) => detail.includes(" USING INDEX tracks_label_cover_idx ")),
+      ).toHaveLength(2);
+      expect(
+        details.filter((detail) => detail.includes("SEARCH findings USING COVERING INDEX")),
+      ).toHaveLength(2);
       expect(inCover).toContainEqual(
         expect.stringMatching(/^SEARCH c USING INDEX \S+ \(track_id=\?\)$/),
       );

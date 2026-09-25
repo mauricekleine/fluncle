@@ -47,6 +47,10 @@ export async function resolveAlbumPageData(slug: string): Promise<AlbumPageData>
     getLabelForAlbum(album.id),
   ]);
 
+  if (findings.length === 0 && catalogue.total === 0) {
+    return { status: "missing" };
+  }
+
   return {
     artists,
     bio: album.bio,

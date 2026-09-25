@@ -13,7 +13,10 @@ import {
   readProjectionAuditEvidence,
   type ProjectionAuditTarget,
 } from "./projection-audit";
-import { readCurrentProjectedTrackHubAnchors } from "./public-projection-cutover";
+import {
+  PUBLIC_AGGREGATE_DURATION_GENERATION_KEY,
+  readCurrentProjectedTrackHubAnchors,
+} from "./public-projection-cutover";
 import {
   markPublicTrackSourceChangedStatements,
   publicTrackSourceVersion,
@@ -111,6 +114,7 @@ describe("projection production operations", () => {
         on projection_repairs(projection, source_epoch, subject_type, subject_id);
       create table tracks (
         track_id text primary key, release_date text, key text, label_id text,
+        duration_ms integer not null default 210000,
         has_embedding integer not null default 0
       );
       create index tracks_release_date_track_id_idx on tracks(release_date desc, track_id desc);
@@ -192,8 +196,13 @@ describe("projection production operations", () => {
       args: [EMPTY_DIGEST, EMPTY_DIGEST],
       sql: `insert into public_aggregate_state
         (scope, state, scanned_count, projected_entry_count, source_digest, projected_digest,
-         source_epoch, aggregate_epoch, default_track_total, release_hub_order_epoch, generation)
-        values ('tracks', 'complete', 0, 0, ?, ?, 0, 0, 0, 0, 'agg')`,
+         source_epoch, aggregate_epoch, default_track_total, release_hub_order_epoch,
+         generation, completed_at)
+        values ('tracks', 'complete', 0, 0, ?, ?, 0, 0, 0, 0, 'agg', '2026-01-01')`,
+    });
+    await db.execute({
+      args: [PUBLIC_AGGREGATE_DURATION_GENERATION_KEY, "agg:2026-01-01"],
+      sql: `insert into settings (key, value) values (?, ?)`,
     });
     await db.execute({
       args: [EMPTY_DIGEST, EMPTY_DIGEST],

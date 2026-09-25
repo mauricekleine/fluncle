@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { typedRows } from "./db";
+import { LONG_FORM_MS } from "../catalogue-eligibility";
 import {
   createIntegrationDb,
   seedAlbum,
@@ -26,7 +27,8 @@ vi.mock("./db", async (importOriginal) => {
 const { linkTrackToLabel, mergeLabel } = await import("./labels");
 const { linkTrackToAlbum } = await import("./albums");
 const { linkTracksToArtistEntities, upsertTrackArtists } = await import("./artists");
-const { hubCountMoveStatements, hubCountArtistEdgeStatements } = await import("./hub-counts");
+const { hasPublicGraphTracks, hubCountMoveStatements, hubCountArtistEdgeStatements } =
+  await import("./hub-counts");
 
 type Counts = { certified: number; renderable: number };
 
@@ -72,6 +74,41 @@ afterEach(async () => {
   }
 });
 
+describe("public graph membership", () => {
+  it("hides an artist with only a long catalogue track and keeps a long finding", async () => {
+    await seedArtist(db, { id: "art-long", name: "Long Artist", slug: "long-artist" });
+    await seedCatalogueTrack(db, { trackId: "t-cat-long-artist" });
+    await db.batch(
+      [
+        {
+          args: [LONG_FORM_MS],
+          sql: `update tracks set duration_ms = ? where track_id = 't-cat-long-artist'`,
+        },
+        `insert into track_artists (track_id, artist_id, position)
+         values ('t-cat-long-artist', 'art-long', 1)`,
+      ],
+      "write",
+    );
+
+    expect(await hasPublicGraphTracks("artists", "art-long")).toBe(false);
+
+    await seedTrack(db, { logId: "004.7.2B", trackId: "t-finding-long-artist" });
+    await db.batch(
+      [
+        {
+          args: [LONG_FORM_MS],
+          sql: `update tracks set duration_ms = ? where track_id = 't-finding-long-artist'`,
+        },
+        `insert into track_artists (track_id, artist_id, position)
+         values ('t-finding-long-artist', 'art-long', 1)`,
+      ],
+      "write",
+    );
+
+    expect(await hasPublicGraphTracks("artists", "art-long")).toBe(true);
+  });
+});
+
 describe("linkTrackToLabel / linkTrackToAlbum — the per-track link", () => {
   it("credits the label for a CERTIFIED track: renderable and certified both move", async () => {
     await seedLabel(db, { id: "lab-hospital", name: "Hospital Records", slug: "hospital-records" });
@@ -89,6 +126,22 @@ describe("linkTrackToLabel / linkTrackToAlbum — the per-track link", () => {
     await linkTrackToLabel("t-cat-00000000000000a", "Hospital Records");
 
     expect(await counts("labels", "lab-hospital")).toEqual({ certified: 0, renderable: 1 });
+  });
+
+  it("keeps a long catalogue track out of the label and album counts", async () => {
+    await seedLabel(db, { id: "lab-long", name: "Long Label", slug: "long-label" });
+    await seedAlbum(db, { id: "alb-long", name: "Long Album", slug: "long-album" });
+    await seedCatalogueTrack(db, { trackId: "t-cat-long-count" });
+    await db.execute({
+      args: [LONG_FORM_MS],
+      sql: `update tracks set duration_ms = ? where track_id = 't-cat-long-count'`,
+    });
+
+    await linkTrackToLabel("t-cat-long-count", "Long Label");
+    await linkTrackToAlbum("t-cat-long-count", "Long Album");
+
+    expect(await counts("labels", "lab-long")).toEqual({ certified: 0, renderable: 0 });
+    expect(await counts("albums", "alb-long")).toEqual({ certified: 0, renderable: 0 });
   });
 
   it("RE-POINTS a track: the source label is debited and the destination credited", async () => {
@@ -368,8 +421,8 @@ describe("the arithmetic", () => {
     ]);
 
     expect(statements).toHaveLength(2);
-    expect(statements[0]?.args).toEqual([2, 1, 1, "art-a"]);
-    expect(statements[1]?.args).toEqual([1, 1, 1, "art-b"]);
+    expect(statements[0]?.args).toEqual(["t1", "t2", 1, 1, "art-a"]);
+    expect(statements[1]?.args).toEqual(["t1", 1, 1, "art-b"]);
   });
 
   it("a counter never reads negative — the clamp holds", async () => {

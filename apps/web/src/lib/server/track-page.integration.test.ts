@@ -20,6 +20,7 @@ import {
 import { sameAsUrls } from "../track-page";
 import { optionalSonicNeighbours, resolveTrackPageData } from "../../routes/-track-page-data";
 import { bestAlbumCoverUrl } from "../media";
+import { LONG_FORM_MS } from "../catalogue-eligibility";
 
 const isSonarTrackEnabled = vi.hoisted(() => vi.fn<() => Promise<boolean>>());
 const searchSonar = vi.hoisted(() => vi.fn());
@@ -110,6 +111,18 @@ beforeEach(async () => {
 });
 
 describe("the certified track (shape 1)", () => {
+  it("keeps a long finding at its coordinate", async () => {
+    await db.execute({
+      args: [LONG_FORM_MS, CERTIFIED],
+      sql: `update tracks set duration_ms = ? where track_id = ?`,
+    });
+
+    expect(await resolveTrackPageData(CERTIFIED)).toStrictEqual({
+      logId: "701.1.0A",
+      status: "redirect",
+    });
+  });
+
   it("resolves to its coordinate, and never to a page of its own", async () => {
     const data = await resolveTrackPageData(CERTIFIED);
 
@@ -124,6 +137,23 @@ describe("the certified track (shape 1)", () => {
 });
 
 describe("the evidence-rich uncertified track (shape 2)", () => {
+  it("hides a long catalogue row from its destination and the track sitemap", async () => {
+    await db.execute({
+      args: [LONG_FORM_MS, RICH],
+      sql: `update tracks set duration_ms = ? where track_id = ?`,
+    });
+
+    const [data, stats, bag] = await Promise.all([
+      resolveTrackPageData(RICH),
+      collectSitemapIndexStats(),
+      collectSitemapBag("tracks"),
+    ]);
+
+    expect(data).toStrictEqual({ status: "missing" });
+    expect(bag.tracks.map((entry) => entry.trackId)).not.toContain(RICH);
+    expect(stats.tracks.count).toBe(bag.tracks.length);
+  });
+
   it("serves a page carrying every fact the archive holds for it", async () => {
     const data = await resolveTrackPageData(RICH);
 

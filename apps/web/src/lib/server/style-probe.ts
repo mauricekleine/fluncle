@@ -1,4 +1,5 @@
 import { type SearchStyle } from "../search-styles";
+import { LONG_FORM_MS } from "../catalogue-eligibility";
 import { meanEmbedding } from "./artist-dossier";
 import { listedArtistWhere } from "./artist-visibility";
 import { getDb, typedRows } from "./db";
@@ -98,6 +99,7 @@ export async function rankTrackIdsByProbe(
     depth: number;
     excludeTrackId?: string;
     from?: string;
+    publicDuration?: boolean;
     releasedBy?: string;
     sonarFilter?: StyleRankFilters;
   },
@@ -125,13 +127,39 @@ export async function rankTrackIdsByProbe(
       filter.bpm_max = options.sonarFilter.bpmMax;
     }
 
-    const matches = await searchSonar({
+    const request = {
       excludeIds: [...(options.excludeTrackId ? [options.excludeTrackId] : []), ...future],
-      filter,
-      index: "tracks",
+      index: "tracks" as const,
       probes: [probe],
       topK: depth,
-    });
+    };
+
+    if (options.publicDuration) {
+      const [findings, catalogue] = await Promise.all([
+        searchSonar({ ...request, filter: { ...filter, has_finding: true } }),
+        searchSonar({
+          ...request,
+          filter: { ...filter, duration_ms_max: LONG_FORM_MS, has_finding: false },
+        }),
+      ]);
+      if (findings === null || catalogue === null) {
+        return null;
+      }
+      const seen = new Set<string>();
+      return [...findings, ...catalogue]
+        .sort((left, right) => right.score - left.score || left.id.localeCompare(right.id))
+        .filter((match) => {
+          if (seen.has(match.id)) {
+            return false;
+          }
+          seen.add(match.id);
+          return true;
+        })
+        .slice(0, depth)
+        .map((match) => match.id);
+    }
+
+    const matches = await searchSonar({ ...request, filter });
 
     return matches === null ? null : matches.map((match) => match.id);
   }

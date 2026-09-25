@@ -1,7 +1,10 @@
 import { type Client } from "@libsql/client";
+import { publicTrackDurationWhere } from "../../db/public-track-visibility";
 
 import { getDb, typedRows } from "./db";
+import { artistCandidateIdsSql } from "./artist-membership";
 import { markDueWorkSourceMaintenanceStatements } from "./due-work";
+import { releaseTodayUtc } from "./release-day";
 
 export type HubCountEntity = "albums" | "artists" | "labels";
 
@@ -148,7 +151,8 @@ export function hubCountCensusQuery(
 
   return {
     args: [...trackIds],
-    sql: `select ${foreignKey} as from_id, count(*) as renderable,
+    sql: `select ${foreignKey} as from_id,
+                 sum(case when ${publicTrackDurationWhere("tracks")} then 1 else 0 end) as renderable,
                  sum(case when is_catalogue = 0 then 1 else 0 end) as certified
           from tracks
           where track_id in (${placeholders})
@@ -183,7 +187,7 @@ export function hubCountArtistEdgeStatements(
   edges: readonly HubCountArtistEdge[],
 ): HubCountStatement[] {
   const seen = new Set<string>();
-  const byArtist = new Map<string, HubCountArtistDelta>();
+  const byArtist = new Map<string, { certified: number; rankable: number; trackIds: string[] }>();
 
   for (const edge of edges) {
     const key = JSON.stringify([edge.trackId, edge.artistId]);
@@ -193,8 +197,8 @@ export function hubCountArtistEdgeStatements(
     }
 
     seen.add(key);
-    const delta = byArtist.get(edge.artistId) ?? { certified: 0, rankable: 0, renderable: 0 };
-    delta.renderable += 1;
+    const delta = byArtist.get(edge.artistId) ?? { certified: 0, rankable: 0, trackIds: [] };
+    delta.trackIds.push(edge.trackId);
 
     if (edge.certified) {
       delta.certified += 1;
@@ -207,13 +211,53 @@ export function hubCountArtistEdgeStatements(
     byArtist.set(edge.artistId, delta);
   }
 
-  return [...byArtist].map(([artistId, delta]) => hubCountArtistDeltaStatement(artistId, delta));
+  return [...byArtist].map(([artistId, delta]) => ({
+    args: [...delta.trackIds, delta.certified, delta.rankable, artistId],
+    sql: `update artists
+            set renderable_track_count = renderable_track_count + (
+                  select count(*) from tracks
+                  where track_id in (${delta.trackIds.map(() => "?").join(", ")})
+                    and ${publicTrackDurationWhere("tracks")}
+                ),
+                certified_finding_count = certified_finding_count + ?,
+                rankable_track_count = rankable_track_count + ?
+          where id = ?`,
+  }));
 }
 
 const FOREIGN_KEY: Record<"albums" | "labels", HubCountForeignKey> = {
   albums: "album_id",
   labels: "label_id",
 };
+
+export async function hasPublicGraphTracks(
+  entity: HubCountEntity,
+  entityId: string,
+): Promise<boolean> {
+  const db = await getDb();
+  const artistCandidate = artistCandidateIdsSql(
+    "?",
+    "(select name from artists where id = ?)",
+    "?",
+  );
+  const from =
+    entity === "artists"
+      ? `(${artistCandidate}) artist_tracks
+         join tracks on tracks.track_id = artist_tracks.track_id`
+      : "tracks";
+  const seek = entity === "artists" ? "1 = 1" : `tracks.${FOREIGN_KEY[entity]} = ?`;
+  const result = await db.execute({
+    args:
+      entity === "artists"
+        ? [entityId, entityId, releaseTodayUtc(new Date()), entityId]
+        : [entityId],
+    sql: `select 1 from ${from}
+          where ${seek} and ${publicTrackDurationWhere("tracks")}
+          limit 1`,
+  });
+
+  return result.rows.length > 0;
+}
 
 export async function relinkTracksToEntity(
   entity: "albums" | "labels",

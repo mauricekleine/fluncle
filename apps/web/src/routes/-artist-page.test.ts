@@ -39,6 +39,12 @@ vi.mock("@/lib/server/catalogue-groups", async (importOriginal) => ({
 }));
 
 const NO_CATALOGUE = { groups: [], page: 1, pageCount: 1, totalGroups: 0, totalTracks: 0 };
+const THIN_CATALOGUE = {
+  ...NO_CATALOGUE,
+  groups: [{ name: "A record", tracks: [{ artists: ["Drift"], title: "One", trackId: "one" }] }],
+  totalGroups: 1,
+  totalTracks: 1,
+};
 
 vi.mock("@/lib/server/artist-dossier", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/server/artist-dossier")>()),
@@ -157,15 +163,14 @@ describe("resolveArtistPageData (the artist page indexability gate)", () => {
     ).toEqual(["future"]);
   });
 
-  it("renders (noindex) a findings-free artist with no catalogue — a thin crawl-minted page", async () => {
+  it("hides a findings-free artist with no visible tracks", async () => {
     getPublicArtistBySlug.mockResolvedValue(ARTIST);
     getFindingsByArtist.mockResolvedValue([]);
     countArtistFindings.mockResolvedValue(0);
 
     const data = await resolveArtistPageData("drift", "name", 1);
 
-    expect(data).toMatchObject({ indexable: false, status: "found" });
-    expect(robotsMeta(data)).toBe("noindex, follow");
+    expect(data).toEqual({ status: "missing" });
   });
 
   it("indexes a findings-free artist once its CATALOGUE clears the floor", async () => {
@@ -445,7 +450,7 @@ it("renders a findings-free artist masthead without a findings band or apology",
   getArtistNeighbours.mockResolvedValue([]);
   getFindingsByArtist.mockResolvedValue([]);
   countArtistFindings.mockResolvedValue(0);
-  listArtistCatalogue.mockResolvedValue(NO_CATALOGUE);
+  listArtistCatalogue.mockResolvedValue(THIN_CATALOGUE);
   const data = await resolveArtistPageData("drift", "recent", 1);
   const rootRoute = createRootRoute();
   const artistRoute = createRoute({
@@ -481,7 +486,7 @@ describe("the artist page spends high fetch priority on one image", () => {
     getArtistNeighbours.mockResolvedValue([]);
     getFindingsByArtist.mockResolvedValue(findings);
     countArtistFindings.mockResolvedValue(findings.length);
-    listArtistCatalogue.mockResolvedValue(NO_CATALOGUE);
+    listArtistCatalogue.mockResolvedValue(findings.length === 0 ? THIN_CATALOGUE : NO_CATALOGUE);
 
     const data = await resolveArtistPageData("drift", "recent", 1);
     const rootRoute = createRootRoute();

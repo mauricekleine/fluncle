@@ -39,10 +39,10 @@ function PrivacyPage() {
         <section aria-label="Overview" className="log-about-story">
           <p>
             Fluncle is a one-person drum & bass archive, and this page is the plain version of how
-            it treats your data. The short of it: you can read the whole archive without an account,
-            nothing tracks you across the web, there are no ads, and no data is ever sold. When you
-            do sign in or sign up for the newsletter, only what is described below is kept, and you
-            can export or delete it whenever you want.
+            it treats your data. The short of it: you can read the public archive without an
+            account, nothing tracks you across the web, there are no ads, and no data is ever sold.
+            When you do sign in or sign up for the newsletter, only what is described below is kept,
+            and you can export or delete it whenever you want.
           </p>
           <p>Last updated: {lastUpdated}.</p>
         </section>

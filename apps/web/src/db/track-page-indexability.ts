@@ -1,3 +1,5 @@
+import { catalogueTrackDurationWhere } from "./public-track-visibility";
+
 export const TRACK_PAGE_INDEXABLE_LEGACY_COUNT_INDEX = "tracks_sitemap_indexable_track_id_idx";
 
 export const TRACK_PAGE_INDEXABLE_COVER_COUNT_INDEX = "tracks_sitemap_indexable_cover_idx";
@@ -31,6 +33,7 @@ export function trackPageIndexableCoverIndexWhere(table?: string): string {
 
 export function trackPageIndexableWhere(table?: string): string {
   return `${column(table, "is_catalogue")} = 1
+      and ${catalogueTrackDurationWhere(table)}
       and ${column(table, "duplicate_of_track_id")} is null
       and ${trackPageIdentityWhere(table)}
       and ${column(table, "album_id")} is not null

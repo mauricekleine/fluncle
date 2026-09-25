@@ -101,6 +101,10 @@ export async function resolveArtistPageData(
     return { status: "missing" };
   }
 
+  if (catalogue.totalTracks === 0 && findings.length === 0 && upcoming.total === 0) {
+    return { status: "missing" };
+  }
+
   const gridFindings = findings.filter((finding) => finding.logId);
   const signature = summarizeArtistSignature(
     gridFindings.map((finding) => ({ addedAt: finding.addedAt })),

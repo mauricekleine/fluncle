@@ -4,6 +4,7 @@ import { copyFile, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { LOCAL_DB_CONCURRENCY } from "../database-concurrency";
+import { LONG_FORM_MS } from "../catalogue-eligibility";
 import { linkTrackToAlbum } from "./albums";
 import { linkTracksToArtistEntities } from "./artists";
 import { createIntegrationDb } from "./integration-db";
@@ -347,6 +348,29 @@ describe("tier 1½ — a pasted Spotify link", () => {
     expect(result.results.map((hit) => hit.trackId)).toEqual(["uncertified-netsky"]);
     expect(result.results[0]?.certified).toBe(false);
     expect(result.results[0]?.logId).toBeUndefined();
+  });
+});
+
+describe("public search duration boundary", () => {
+  it("hides a long catalogue recording from text, filters, links, and sonic seeds while retaining a long finding", async () => {
+    const hiddenUri = "spotify:track:9Z8y7X6w5V4u3T2s1R0qPo";
+    await db.execute({
+      args: [LONG_FORM_MS, hiddenUri, "uncertified-netsky"],
+      sql: "update tracks set duration_ms = ?, spotify_uri = ? where track_id = ?",
+    });
+    await db.execute({
+      args: [LONG_FORM_MS, "certified-1991"],
+      sql: "update tracks set duration_ms = ? where track_id = ?",
+    });
+
+    expect((await searchArchive({ q: "Rio" })).results).toEqual([]);
+    expect((await searchArchive({ q: hiddenUri })).results).toEqual([]);
+    expect((await searchArchive({ q: "Netsky" })).results.map((hit) => hit.trackId)).toEqual([
+      "certified-netsky",
+    ]);
+    expect(await searchLikeTrack({ trackId: "uncertified-netsky" })).toBeNull();
+    expect((await searchArchive({ q: "024.7.2R" })).results[0]?.trackId).toBe("certified-1991");
+    expect((await searchArchive({ q: "clouds" })).results[0]?.trackId).toBe("certified-1991");
   });
 });
 

@@ -7,9 +7,9 @@ import { styleBySlug } from "./search-styles";
 
 export type TracksSearch = TracksHubFilters;
 
-export const tracksHubTitle = "Every drum & bass track, newest first · Fluncle";
+export const tracksHubTitle = "Drum & bass tracks, newest first · Fluncle";
 export const tracksHubDescription =
-  "Every drum & bass track Fluncle holds, newest release first. Filter the whole list by release year, key, and label, or jump straight to a year.";
+  "Drum & bass tracks in Fluncle's public archive, newest release first. Filter by release year, key, and label, or jump straight to a year.";
 
 export function tracksPagedMeta(page: number): { description: string; title: string } {
   if (page <= 1) {
@@ -17,8 +17,8 @@ export function tracksPagedMeta(page: number): { description: string; title: str
   }
 
   return {
-    description: `Page ${page} of every drum & bass track Fluncle holds, newest release first. Filter by release year, key, and label, or jump to a year.`,
-    title: `Every drum & bass track, page ${page} · Fluncle`,
+    description: `Page ${page} of the drum & bass tracks in Fluncle's public archive, newest release first. Filter by release year, key, and label, or jump to a year.`,
+    title: `Drum & bass tracks, page ${page} · Fluncle`,
   };
 }
 
@@ -267,7 +267,7 @@ export function tracksHead(search: TracksSearch, data: TracksHeadData | undefine
             })),
             numberOfItems: data?.total ?? findings.length,
           },
-          name: "Every drum & bass track Fluncle holds",
+          name: "Drum & bass tracks in Fluncle's archive",
           url: canonical,
         }),
       ];

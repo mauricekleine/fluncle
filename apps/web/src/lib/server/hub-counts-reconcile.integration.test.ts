@@ -10,6 +10,7 @@ import {
   seedTrack,
 } from "./integration-db";
 import { DUE_WORK_SOURCE_REPAIR_KIND, MAX_DUE_WORK_CHUNK_SIZE } from "./due-work";
+import { LONG_FORM_MS } from "../catalogue-eligibility";
 import { hubCountDeltaStatement } from "./hub-counts";
 
 let db: Client;
@@ -76,6 +77,24 @@ beforeEach(async () => {
 });
 
 describe("reconcileHubCounts — the grouped correction", () => {
+  it("counts a long finding but excludes a long catalogue row on every graph entity", async () => {
+    await db.execute({
+      args: [LONG_FORM_MS],
+      sql: `update tracks set duration_ms = ?
+            where track_id in ('t-cat-00000000000000a', 't-cert-0000000000000a')`,
+    });
+
+    await reconcileHubCounts();
+
+    for (const [table, id] of [
+      ["labels", "lab-1"],
+      ["albums", "alb-1"],
+      ["artists", "art-1"],
+    ] as const) {
+      expect(await counts(table, id)).toEqual({ certified: 2, renderable: 2 });
+    }
+  });
+
   it("repairs the artist-grain rankable-track projection", async () => {
     await reconcileHubCounts();
     let row = await db.execute(`select rankable_track_count as n from artists where id = 'art-1'`);

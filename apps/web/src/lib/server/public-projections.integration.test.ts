@@ -34,6 +34,8 @@ import {
   TRACKS_HUB_PAGE_SIZE,
 } from "./tracks-hub";
 import { QUALIFIED_ARTISTS_SQL } from "./catalogue";
+import { LONG_FORM_MS } from "../catalogue-eligibility";
+import { PUBLIC_AGGREGATE_DURATION_GENERATION_KEY } from "./public-projection-cutover";
 
 const OLD = "2026-01-01T00:00:00.000Z";
 const NOW = new Date("2026-01-10T12:00:00.000Z");
@@ -274,6 +276,80 @@ async function drainRepairs(limit = 2): Promise<void> {
 }
 
 describe("public shadow projections", () => {
+  it("projects visible catalogue tracks and long findings into matching totals and buckets", async () => {
+    await seedProjectedTrack({ key: "Am", releaseDate: "2024-01-01", trackId: "short" });
+    await seedProjectedTrack({ key: "Dm", releaseDate: "2025-01-01", trackId: "long-cat" });
+    await seedProjectedTrack({
+      certified: true,
+      key: "F#m",
+      releaseDate: "2026-01-01",
+      trackId: "long-finding",
+    });
+    await db.execute({
+      args: [LONG_FORM_MS],
+      sql: `update tracks set duration_ms = ? where track_id in ('long-cat', 'long-finding')`,
+    });
+
+    await rebuildAll();
+    await setCutover("true");
+
+    expect(await readProjectedDefaultTrackTotal(db)).toBe(2);
+    expect(await readProjectedAggregateBuckets(db, "key")).toEqual([
+      { bucket: "Am", count: 1 },
+      { bucket: "F#m", count: 1 },
+    ]);
+    const members = await db.execute(
+      `select track_id from public_aggregate_membership order by track_id`,
+    );
+    expect(members.rows.map((row) => row.track_id)).toEqual(["long-finding", "short"]);
+    expect((await shadowPublicProjections(db)).aggregateBucketsMatched).toBe(true);
+  });
+
+  it("uses live reads until a duration-aware aggregate rebuild is complete", async () => {
+    await seedProjectedTrack({ key: "Am", releaseDate: "2024-01-01", trackId: "short" });
+    await rebuildAll();
+    await setCutover("true");
+    expect(await readProjectedDefaultTrackTotal(db)).toBe(1);
+
+    await db.execute({
+      args: [PUBLIC_AGGREGATE_DURATION_GENERATION_KEY],
+      sql: `delete from settings where key = ?`,
+    });
+    expect(await readProjectedDefaultTrackTotal(db)).toBeUndefined();
+    expect(await readProjectedAggregateBuckets(db, "key")).toBeUndefined();
+    expect(
+      await readProjectedTrackHubPageStart(db, TRACKS_HUB_ANCHOR_ADDRESS, TRACKS_HUB_PAGE_SIZE, 1),
+    ).toBeUndefined();
+  });
+
+  it("does not qualify an artist from long catalogue credits", async () => {
+    await seedLabel("enabled", true);
+    await seedArtist("long-only");
+    for (const trackId of ["long-1", "long-2", "long-3"]) {
+      await seedProjectedTrack({
+        artistIds: [{ id: "long-only" }],
+        key: null,
+        labelId: "enabled",
+        releaseDate: "2024-01-01",
+        trackId,
+      });
+    }
+    await db.execute({
+      args: [LONG_FORM_MS],
+      sql: `update tracks set duration_ms = ? where track_id like 'long-%'`,
+    });
+    await rebuildAll();
+    await setCutover("true");
+
+    expect(await readQualifiedArtistIds(db, QUALIFIED_ARTISTS_SQL)).toEqual([]);
+    expect(
+      (
+        await db.execute(`select * from artist_qualification
+      where artist_id = 'long-only'`)
+      ).rows,
+    ).toHaveLength(0);
+  });
+
   it("seeks projected hub pages through composite ranges, including the NULL transition", async () => {
     await seedProjectedTrack({
       key: null,
@@ -363,7 +439,7 @@ describe("public shadow projections", () => {
       .map((row) => (typeof row.detail === "string" ? row.detail : ""))
       .join("\n");
     expect(details).toMatch(
-      /SEARCH tracks USING COVERING INDEX tracks_release_date_track_id_idx \(\(release_date,track_id\)<\(\?,\?\)\)/,
+      /SEARCH tracks USING INDEX tracks_release_date_track_id_idx \(\(release_date,track_id\)<\(\?,\?\)\)/,
     );
     expect(details).not.toContain("USE TEMP B-TREE");
   });
@@ -436,13 +512,20 @@ describe("public shadow projections", () => {
       set source_epoch = aggregate_epoch + 1, default_track_total = 99
       where scope = 'tracks'`);
     expect(await readProjectedDefaultTrackTotal(db)).toBeUndefined();
-    expect(await readQualifiedArtistIds(db, QUALIFIED_ARTISTS_SQL)).toEqual(["certified"]);
+    expect(await readQualifiedArtistIds(db, QUALIFIED_ARTISTS_SQL)).toEqual([
+      "certified",
+      "primary",
+    ]);
   });
 
   it("falls back on running, epoch-stale, repair-marked, and malformed-anchor states", async () => {
     await seedProjectionWorld();
     await rebuildAll();
     await setCutover("true");
+    const completed = (
+      await db.execute(`select completed_at, source_digest
+      from public_aggregate_state where scope = 'tracks'`)
+    ).rows[0];
 
     await db.execute(`update public_aggregate_state
       set state = 'running', completed_at = null, source_digest = null, projected_digest = null
@@ -463,6 +546,16 @@ describe("public shadow projections", () => {
     expect(await readProjectedDefaultTrackTotal(db)).toBeUndefined();
 
     await db.execute(`delete from projection_repairs where projection = 'public_aggregates'`);
+    await db.execute({
+      args: [
+        completed?.completed_at ?? null,
+        completed?.source_digest ?? null,
+        completed?.source_digest ?? null,
+      ],
+      sql: `update public_aggregate_state
+        set completed_at = ?, source_digest = ?, projected_digest = ?
+        where scope = 'tracks'`,
+    });
     await db.execute({
       args: [TRACKS_HUB_ANCHOR_ADDRESS.hub, TRACKS_HUB_ANCHOR_ADDRESS.clauseHash],
       sql: `delete from hub_page_anchor_validity where hub = ? and clause_hash = ?`,

@@ -10,8 +10,13 @@ import {
 } from "./hub-page-anchors";
 import { getSetting } from "./settings";
 import { upcomingAfterTodaySql } from "./release-day";
+import { publicTrackDurationWhere } from "../../db/public-track-visibility";
 
 export const PUBLIC_PROJECTION_CUTOVER_ENABLED_KEY = "public_projection_cutover_enabled";
+
+export const PUBLIC_AGGREGATE_DURATION_GENERATION_KEY = "public_aggregate_duration_generation";
+
+export const PUBLIC_ARTIST_DURATION_GENERATION_KEY = "public_artist_duration_generation";
 
 export const PUBLIC_ANCHOR_FORMAT_VERSION = 1;
 
@@ -182,8 +187,24 @@ const AGGREGATE_READY = `aggregate.state = 'complete'
     where projection = 'public_aggregates'
   )`;
 
+const PUBLIC_AGGREGATE_DURATION_READY = `${AGGREGATE_READY}
+  and aggregate.source_digest = aggregate.projected_digest
+  and exists (select 1 from settings visibility
+    where visibility.key = '${PUBLIC_AGGREGATE_DURATION_GENERATION_KEY}'
+      and visibility.value = aggregate.generation || ':' || aggregate.completed_at)`;
+
+async function isAggregateDurationReady(client: PublicProjectionReadClient): Promise<boolean> {
+  const result = await client.execute(`select 1 from public_aggregate_state aggregate
+    where aggregate.scope = 'tracks' and ${PUBLIC_AGGREGATE_DURATION_READY} limit 1`);
+  return result.rows.length > 0;
+}
+
 const ARTIST_READY = `artist_state.state = 'complete'
   and artist_state.projection_epoch = artist_state.source_epoch
+  and artist_state.source_digest = artist_state.projected_digest
+  and exists (select 1 from settings visibility
+    where visibility.key = '${PUBLIC_ARTIST_DURATION_GENERATION_KEY}'
+      and visibility.value = artist_state.generation || ':' || artist_state.completed_at)
   and not exists (
     select 1 from projection_repairs indexed by projection_repairs_order_idx
     where projection = 'artist_qualification'
@@ -199,7 +220,7 @@ export async function readProjectedDefaultTrackTotal(
   try {
     const result = await client.execute(`select aggregate.default_track_total as total
       from public_aggregate_state as aggregate
-      where aggregate.scope = 'tracks' and ${AGGREGATE_READY}
+      where aggregate.scope = 'tracks' and ${PUBLIC_AGGREGATE_DURATION_READY}
       limit 1`);
     return nonNegativeInteger(result.rows[0]?.total);
   } catch {
@@ -222,6 +243,7 @@ export async function readProjectedAggregateBuckets(
       kind === "release_date_bucket" && today !== undefined
         ? ` - (select count(*) from tracks indexed by tracks_release_date_track_id_idx
             where ${upcomingAfterTodaySql("tracks.release_date")}
+              and ${publicTrackDurationWhere("tracks")}
               and tracks.release_date >= counts.bucket
               and tracks.release_date < counts.bucket || '~')`
         : "";
@@ -231,7 +253,7 @@ export async function readProjectedAggregateBuckets(
         from public_aggregate_state as aggregate
         left join public_aggregate_counts as counts
           on counts.aggregate_kind = ?
-        where aggregate.scope = 'tracks' and ${AGGREGATE_READY}
+        where aggregate.scope = 'tracks' and ${PUBLIC_AGGREGATE_DURATION_READY}
         order by counts.bucket ${order}`,
     });
     if (result.rows.length === 0) {
@@ -436,6 +458,9 @@ export async function readProjectedTrackHubPageStart(
     return undefined;
   }
   try {
+    if (!(await isAggregateDurationReady(client))) {
+      return undefined;
+    }
     const head = await readProjectedAnchorDocumentHead(client, address);
     if (head === undefined) {
       return undefined;

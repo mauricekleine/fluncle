@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { LONG_FORM_MS } from "../../src/lib/catalogue-eligibility";
 import { SEARCH_STYLES } from "../../src/lib/search-styles";
 import { SEEDED_DESTINATION_NEIGHBOUR, SEEDED_DESTINATION_TRACK, SEEDED_STYLE } from "./seed";
 import { SONAR_URL } from "./stack";
@@ -51,7 +52,13 @@ test("fake Sonar authenticates and ranks the live seed with exact supported filt
     data: {
       ...rankedBody,
       exclude_ids: [SEEDED_DESTINATION_TRACK.trackId],
-      filter: { bpm_max: 174, bpm_min: 174, key_in: ["F minor"] },
+      filter: {
+        bpm_max: 174,
+        bpm_min: 174,
+        duration_ms_max: LONG_FORM_MS,
+        has_finding: false,
+        key_in: ["F minor"],
+      },
       probes: [axisProbe(6)],
       top_k: 1,
     },
@@ -63,7 +70,7 @@ test("fake Sonar authenticates and ranks the live seed with exact supported filt
   });
 
   const unsupported = await request.post(`${SONAR_URL}/search`, {
-    data: { ...rankedBody, filter: { certified: true } },
+    data: { ...rankedBody, filter: { unknown_filter: true } },
     headers: { "x-sonar-secret": SECRET },
   });
   expect(unsupported.status()).toBe(400);

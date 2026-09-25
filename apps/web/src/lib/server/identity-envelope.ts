@@ -3,6 +3,7 @@ import { getDb, typedRows } from "./db";
 import { parseArtistsJson } from "./artists";
 import { siteUrl } from "../fluncle-links";
 import { ALL_TRACK_OR_LOG_ID_MATCHES_CTE } from "./track-id-resolver";
+import { publicTrackDurationWhere } from "../../db/public-track-visibility";
 
 export const IDENTITY_CONTACT = "hey@fluncle.com";
 
@@ -517,7 +518,7 @@ export async function readIdentity(
                  left join findings f on f.track_id = t.track_id`
               : IDENTITY_FROM
           }
-          where ${query.where}
+          where ${query.where} and ${publicTrackDurationWhere("t", "f")}
           ${referenceLookup ? "" : "order by t.track_id asc"}
           limit ?`,
   });
@@ -547,7 +548,8 @@ export async function readSpotifyHopTarget(trackId: string): Promise<string | un
   const db = await getDb();
   const result = await db.execute({
     args: [trackId],
-    sql: `select spotify_url from tracks where track_id = ? limit 1`,
+    sql: `select spotify_url from tracks
+          where track_id = ? and ${publicTrackDurationWhere("tracks")} limit 1`,
   });
 
   const url = typedRows<{ spotify_url: null | string }>(result.rows)[0]?.spotify_url?.trim();

@@ -2,6 +2,7 @@ import { type Client } from "@libsql/client";
 import { randomUUID } from "node:crypto";
 import { type AlbumDetail, type AlbumListItem } from "@fluncle/contracts";
 import { slugify } from "@fluncle/contracts/util/galaxy-slug";
+import { publicTrackDurationWhere } from "../../db/public-track-visibility";
 import { bestAlbumCoverUrl } from "../media";
 import { parseArtistsJson } from "./artist-names";
 import { bioBypassColumns } from "./bio-review";
@@ -11,7 +12,7 @@ import {
   markDueWorkSourceMaintenanceStatements,
 } from "./due-work";
 import { isDueWorkCutoverEnabled, readPromotedDueWorkPage } from "./due-work-cutover";
-import { relinkTracksToEntity } from "./hub-counts";
+import { hasPublicGraphTracks, relinkTracksToEntity } from "./hub-counts";
 import { validReleaseDateSql } from "./release-day";
 import {
   type CatalogueBrowsePage,
@@ -163,7 +164,8 @@ export async function getAlbumBySlug(slug: string): Promise<AlbumRecord | undefi
     args: [slug],
     sql: `select ${ALBUM_COLUMNS}, bio, release_group_mbid, upc, discogs_catno,
                  (select min(t.release_date) from tracks t
-                    where t.album_id = albums.id and t.release_date is not null) as release_date
+                    where t.album_id = albums.id and t.release_date is not null
+                      and ${publicTrackDurationWhere("t")}) as release_date
           from albums where slug = ? limit 1`,
   });
 
@@ -465,14 +467,16 @@ export const ALBUMS_HUB_QUERY: CatalogueHubQuery<AlbumHubEntry> = {
            (select max(t2.release_date) from tracks t2
               where t2.album_id = albums.id
                 and t2.dismissed_at is null and t2.duplicate_of_track_id is null
+                and ${publicTrackDurationWhere("t2")}
                 and ${validReleaseDateSql("t2.release_date")}
                 and t2.release_date <= strftime('%Y-%m-%d', 'now')) as latest_release_date,
            (select t2.artists_json from tracks t2
-              where t2.album_id = albums.id
+              where t2.album_id = albums.id and ${publicTrackDurationWhere("t2")}
               order by t2.release_date is null asc, t2.release_date desc, t2.track_id asc
               limit 1) as artists_json,
            (select t2.album_image_url from tracks t2
               where t2.album_id = albums.id and t2.album_image_url is not null
+                and ${publicTrackDurationWhere("t2")}
               order by t2.release_date is null asc, t2.release_date desc, t2.track_id asc
               limit 1) as cover_url`,
   slugExpr: "albums.slug",
@@ -515,6 +519,7 @@ export function listAlbumsBrowsePage(page: number): Promise<CatalogueBrowsePage>
 const ALBUM_COVER_JSON = `${ALBUM_COVER_SELECT},
            (select t2.album_image_url from tracks t2
               where t2.album_id = albums.id and t2.album_image_url is not null
+                and ${publicTrackDurationWhere("t2")}
               order by t2.release_date is null asc, t2.release_date desc, t2.track_id asc
               limit 1) as cover_url`;
 
@@ -555,6 +560,10 @@ export async function getAlbumDetail(slug: string): Promise<AlbumDetail | undefi
   const record = await getAlbumBySlug(slug);
 
   if (!record) {
+    return undefined;
+  }
+
+  if (!(await hasPublicGraphTracks("albums", record.id))) {
     return undefined;
   }
 

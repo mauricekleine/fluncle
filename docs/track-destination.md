@@ -35,6 +35,8 @@ They live together in [`apps/web/src/lib/server/track-page.ts`](../apps/web/src/
 
 **Sufficient identity** (`TRACK_PAGE_IDENTITY_WHERE`) decides whether the page **exists**: the archive can name the recording (a title and at least one artist credit) and no operator stamp has retired it (`dismissed_at`). Below it the route 404s. It is deliberately the lowest honest bar — a page for a row with no name is a page about nothing, and everything richer is evidence.
 
+A catalogue recording lasting 15 minutes or more is a continuous mix rather than a public track. It also returns 404, even when it clears the identity test. The row remains in the archive for record completeness; a certified finding always keeps its `/log` destination regardless of duration. The shared duration rule lives in `src/db/public-track-visibility.ts` and uses the existing `LONG_FORM_MS` capture boundary.
+
 Its client-side twin, `hasTrackPageIdentity`, is what a rendered LIST row calls before it decides whether to link into the destination at all, so a row the destination would refuse never gets a link.
 
 **Evidence** (`TRACK_PAGE_INDEXABLE_WHERE`) decides whether the page is **indexed**. Four terms, and each is something a reader needs for the page to be worth landing on:
@@ -47,6 +49,8 @@ Its client-side twin, `hasTrackPageIdentity`, is what a rendered LIST row calls 
 | `spotify_url is not null or apple_music_url is not null` | it can send you somewhere to hear it, which is the whole errand      |
 
 plus `is_catalogue = 1` (a certified row's destination is `/log`, and a 301 must never be submitted for indexing) and `duplicate_of_track_id is null` (so is a stamped twin's).
+
+The indexability predicate also applies the shared catalogue duration rule. The track sitemap count index covers `duration_ms`, so its count stays an index read, and the child window uses the same predicate as the page.
 
 Tempo, key, ISRC, label, the preview and the neighbours are **not** gates. They are enrichment, and gating on them would make indexability oscillate with a sweep's backlog.
 

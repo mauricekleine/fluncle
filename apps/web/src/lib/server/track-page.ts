@@ -1,6 +1,6 @@
 import { readEmbeddingBlob, toVectorProbe } from "./embedding";
 import { getDb, typedRow, typedRows } from "./db";
-import { isSonarTrackEnabled, searchSonar, type SonarMatch } from "./sonar";
+import { isSonarTrackEnabled, searchSonar, type SonarFilter, type SonarMatch } from "./sonar";
 import { hydrateRankedSonarMatches } from "./sonar-hydration";
 import { executeVectorFallback, vectorFallbackCandidateLimitSql } from "./vector-fallback";
 import { bestAlbumCoverUrl } from "../media";
@@ -15,6 +15,8 @@ import {
   trackPageIndexableCountQueryWhere,
   trackPageIndexableWhere,
 } from "../../db/track-page-indexability";
+import { publicTrackDurationOk, publicTrackDurationWhere } from "../../db/public-track-visibility";
+import { LONG_FORM_MS } from "../catalogue-eligibility";
 
 export const TRACK_PAGE_IDENTITY_WHERE = trackPageIdentityWhere("tracks");
 
@@ -208,6 +210,10 @@ export async function readTrackDestination(trackId: string): Promise<TrackPageRo
     return { kind: "certified", logId: row.log_id };
   }
 
+  if (!publicTrackDurationOk(row.duration_ms, false)) {
+    return { kind: "missing" };
+  }
+
   if (row.duplicate_of_track_id) {
     return row.principal_log_id
       ? { kind: "certified", logId: row.principal_log_id }
@@ -285,7 +291,7 @@ const NEIGHBOUR_SELECT = `tracks.track_id, tracks.title, tracks.artists_json, tr
   (select image_updated_at from albums where albums.id = tracks.album_id) as album_image_updated_at,
   findings.log_id`;
 
-const NEIGHBOUR_WHERE = `${TRACK_PAGE_IDENTITY_WHERE} and tracks.duplicate_of_track_id is null`;
+const NEIGHBOUR_WHERE = `${TRACK_PAGE_IDENTITY_WHERE} and tracks.duplicate_of_track_id is null and ${publicTrackDurationWhere("tracks", "findings")}`;
 
 function toNeighbour(row: NeighbourRow): SonicNeighbour {
   return {
@@ -396,6 +402,7 @@ export function sonicNeighbourScanStatement(
               select tracks.track_id
               from tracks${bpmWindow ? " indexed by tracks_bpm_idx" : ""}
               join track_embeddings emb on emb.track_id = tracks.track_id
+              left join findings on findings.track_id = tracks.track_id
               where tracks.track_id != ? and ${NEIGHBOUR_WHERE}
                     ${bpmWindow ? "and tracks.bpm between ? and ?" : ""}
               order by tracks.track_id
@@ -422,17 +429,9 @@ async function sonarNeighbours(
   limit: number,
 ): Promise<SonarMatch[] | null> {
   if (targetBpm) {
-    const windowed = await searchSonar({
-      excludeIds: [trackId],
-      filter: {
-        bpm_max: targetBpm * (1 + NEIGHBOUR_BPM_TOLERANCE),
-        bpm_min: targetBpm * (1 - NEIGHBOUR_BPM_TOLERANCE),
-        dismissed: false,
-        is_duplicate: false,
-      },
-      index: "tracks",
-      probes: [target],
-      topK: limit,
+    const windowed = await searchPublicSonarNeighbours(target, trackId, limit, {
+      bpm_max: targetBpm * (1 + NEIGHBOUR_BPM_TOLERANCE),
+      bpm_min: targetBpm * (1 - NEIGHBOUR_BPM_TOLERANCE),
     });
 
     if (windowed === null) {
@@ -444,15 +443,47 @@ async function sonarNeighbours(
     }
   }
 
-  const widened = await searchSonar({
+  return searchPublicSonarNeighbours(target, trackId, limit, {});
+}
+
+async function searchPublicSonarNeighbours(
+  target: number[],
+  trackId: string,
+  limit: number,
+  filter: SonarFilter,
+): Promise<SonarMatch[] | null> {
+  const request = {
     excludeIds: [trackId],
-    filter: { dismissed: false, is_duplicate: false },
-    index: "tracks",
+    index: "tracks" as const,
     probes: [target],
     topK: limit,
-  });
+  };
+  const baseFilter = { ...filter, dismissed: false, is_duplicate: false };
+  const [findings, catalogue] = await Promise.all([
+    searchSonar({ ...request, filter: { ...baseFilter, has_finding: true } }),
+    searchSonar({
+      ...request,
+      filter: { ...baseFilter, duration_ms_max: LONG_FORM_MS, has_finding: false },
+    }),
+  ]);
 
-  return widened;
+  if (findings === null || catalogue === null) {
+    return null;
+  }
+
+  const seen = new Set<string>();
+
+  return [...findings, ...catalogue]
+    .sort((left, right) => right.score - left.score || left.id.localeCompare(right.id))
+    .filter((match) => {
+      if (seen.has(match.id)) {
+        return false;
+      }
+
+      seen.add(match.id);
+      return true;
+    })
+    .slice(0, limit);
 }
 
 async function hydrateNeighbours(matches: SonarMatch[]): Promise<SonicNeighbour[]> {

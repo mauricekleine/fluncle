@@ -18,6 +18,7 @@ vi.mock("./sonar", async (importOriginal) => {
 });
 
 import { SEARCH_STYLES } from "../search-styles";
+import { LONG_FORM_MS } from "../catalogue-eligibility";
 import { createIntegrationDb } from "./integration-db";
 import { CatalogueHubPageOutOfRangeError } from "./labels";
 import { resetStyleProbeCache } from "./style-probe";
@@ -149,9 +150,14 @@ describe("listTracksHubSoundPage — a style re-ranks, the filters pre-filter", 
     expect(searchSonar).toHaveBeenCalledWith(
       expect.objectContaining({
         excludeIds: ["a-future"],
-        filter: { bpm_min: 170 },
+        filter: { bpm_min: 170, has_finding: true },
         index: "tracks",
         topK: TRACKS_SOUND_DEPTH,
+      }),
+    );
+    expect(searchSonar).toHaveBeenCalledWith(
+      expect.objectContaining({
+        filter: { bpm_min: 170, duration_ms_max: LONG_FORM_MS, has_finding: false },
       }),
     );
     expect(ids(page.hub.items)).toEqual(["f-exact", "a-near", "a-mid"]);
