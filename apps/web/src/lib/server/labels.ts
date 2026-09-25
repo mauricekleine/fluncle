@@ -1033,6 +1033,17 @@ async function hubTiles<Entry>(
   });
 }
 
+export async function hubHasRecentActivity(query: CatalogueEntityPageQuery): Promise<boolean> {
+  const db = await getDb();
+  const result = await db.execute(
+    `select exists(select 1 from ${query.entity}
+                    where ${entityGateWhere(query)}
+                      and ${query.alias}.latest_release_date is not null) as ready`,
+  );
+
+  return Number(typedRows<{ ready: number }>(result.rows)[0]?.ready ?? 0) === 1;
+}
+
 export async function listHubThisMonth<Entry>(
   query: CatalogueHubQuery<Entry>,
   now = new Date(),
@@ -1169,6 +1180,10 @@ export function listLabelsHubPage(
   order: HubOrder = "az",
 ): Promise<CatalogueHubNumberedPage<LabelHubEntry>> {
   return listHubPage(LABELS_HUB_QUERY, page, !nameFilter, nameFilter, order);
+}
+
+export function labelsHaveRecentActivity(): Promise<boolean> {
+  return hubHasRecentActivity(LABELS_HUB_QUERY);
 }
 
 export function listLabelsThisMonth(now?: Date, limit?: number): Promise<LabelHubEntry[]> {

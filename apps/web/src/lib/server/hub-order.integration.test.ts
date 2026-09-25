@@ -10,8 +10,13 @@ vi.mock("./db", async (importOriginal) => {
 const { hubClauseHash } = await import("./hub-page-anchors");
 const { ALBUMS_HUB_QUERY, listAlbumsHubPage, listAlbumsThisMonth } = await import("./albums");
 const { ARTISTS_HUB_QUERY, listArtistsHubPage, listArtistsThisMonth } = await import("./artists");
-const { LABELS_HUB_QUERY, catalogueEntityOffsetPageQuery, listLabelsHubPage, listLabelsThisMonth } =
-  await import("./labels");
+const {
+  LABELS_HUB_QUERY,
+  catalogueEntityOffsetPageQuery,
+  hubHasRecentActivity,
+  listLabelsHubPage,
+  listLabelsThisMonth,
+} = await import("./labels");
 
 beforeEach(async () => {
   db = await createIntegrationDb();
@@ -159,14 +164,29 @@ describe.each(hubs)("$table hub orders", ({ table, query, list, strip }) => {
   });
 });
 
-it("maps an album tile's lead credits and released year", async () => {
+it("dates an album tile from its own live released tracks, before any nightly pass", async () => {
   await seed("albums", 1);
-  await db.execute("update albums set latest_release_date = '2026-09-20' where id = 'id-0'");
+  await db.execute("update albums set latest_release_date = null where id = 'id-0'");
   await seedCatalogueTrack(db, { artists: ["Lead", "Guest"], trackId: "tile-track" });
-  await db.execute(
-    "update tracks set album_id = 'id-0', release_date = '2026-09-20' where track_id = 'tile-track'",
+  await seedCatalogueTrack(db, { artists: ["Lead", "Guest"], trackId: "tile-future" });
+  await seedCatalogueTrack(db, { artists: ["Lead", "Guest"], trackId: "tile-dismissed" });
+  await db.batch(
+    [
+      "update tracks set album_id = 'id-0', release_date = '2024-03-01' where track_id = 'tile-track'",
+      "update tracks set album_id = 'id-0', release_date = '2999-01-01' where track_id = 'tile-future'",
+      "update tracks set album_id = 'id-0', release_date = '2025-06-01', dismissed_at = '2025-06-02' where track_id = 'tile-dismissed'",
+    ],
+    "write",
   );
   const tile = (await listAlbumsHubPage(1)).items[0];
   expect(tile?.artists).toEqual(["Lead", "Guest"]);
-  expect(tile?.year).toBe("2026");
+  expect(tile?.year).toBe("2024");
+});
+
+it("reports a hub as ready for Recently active only once a release date is stored", async () => {
+  await seed("labels", 3);
+  await db.execute("update labels set latest_release_date = null");
+  expect(await hubHasRecentActivity(LABELS_HUB_QUERY)).toBe(false);
+  await db.execute("update labels set latest_release_date = '2026-09-01' where id = 'id-1'");
+  expect(await hubHasRecentActivity(LABELS_HUB_QUERY)).toBe(true);
 });

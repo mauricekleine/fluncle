@@ -330,6 +330,16 @@ Literal terminal content in a quiet box: mono text (0.82rem) on Tape Black with 
 
 The page itself: a recovered logbook plate, one printed document per surface (the front door, the archive at `/findings`, a `/log/<id>` entry, the log index, About). Its grammar: a **masthead** — on a LORE page with the stamped nameplate (Oxanium caps, the brand-mark plate; the nameplate is lore-area-only per the Three Areas Rule) and a quiet tagline, elsewhere the title alone; a rotated gold **FOUND stamp** carrying the archive count; **crop-mark corner brackets** and a **register cross** printed just inside the edge (pure background gradients — zero DOM); a **double-rule frame** (border + offset outline, the printed edge); and **pane-tooth grain** on the surface, under the content. Fields on the plate (the list, the nerd box) are flat translucent panels, not nested glass. Four surfaces are sanctioned to float above a plate: the dialog (Stories), the Browse sheet on a phone (Browse Menu, above), the behind-the-scenes drawer (The Behind-the-Scenes Drawer, below), and the Player Bar (near-opaque, so the plate under it never reads as a second pane).
 
+### Hub Tile and the Hub Band
+
+The three entity hubs (`/artists`, `/albums`, `/labels`) are cover-led grids that open on **Most tracks**, the entity's weight in the archive, never the alphabet's long tail.
+
+- **The order:** the app's one segmented control offers Most tracks · Recently active · A–Z. The order rides the URL; a non-default order is a view of the hub, never a second indexable page. Only A–Z carries the letter lane. The order names no register (The Unlit Rule).
+- **This month:** page 1 of the default view opens with one scrollable row of the entities with a record out inside Fresh's window, headed by the time it names and one literal way on to Fresh. It renders nothing when the month is empty.
+- **The tile:** a cover (a round portrait for an artist) over its name, its size, and on an album its credit and year. The certified name takes the certification light; nothing else on the tile names the register.
+- **The tile plays:** a round control pinned over the cover's lower corner, a sibling of the tile's link and never inside it, hands the player the entity's list (an album's tracklist; an artist's or label's findings first, then newest). A 44px target around a 2rem disc; hidden until hover or focus on a pointer screen, always shown on touch, held while its list plays. An unlit tile's disc heats to cream; a certified tile's catches the Gold Veil with an Eclipse Glow glyph, never a gold fill (The Ignition Rule, One Sun).
+- **The hub footer:** every hub closes on the five hubs in one row, Stardust with a dotted underline at rest and heating like a Graph Link; the hub the reader is on sits in cream.
+
 ### Cover Frame (signature component)
 
 The identity anchor: the cover art mounted flat on the plate, wrapped in a frame whose edge is LIT from the sun side (top/left border heated toward gold) over a bent warm gradient (a radial falloff from the sun corner, gold into Re-entry Red) with grain blended in. The eclipse colors bleed into the frame; the artwork stays untouched. No glass of its own (One Pane).

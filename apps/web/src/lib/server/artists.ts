@@ -39,6 +39,7 @@ import {
   hubInclusionWhere,
   listCatalogueBrowsePage,
   listHubPage,
+  hubHasRecentActivity,
   listHubThisMonth,
 } from "./labels";
 import { logEvent } from "./log";
@@ -440,6 +441,10 @@ export function listArtistsHubPage(
   order: HubOrder = "az",
 ): Promise<CatalogueHubNumberedPage<ArtistHubEntry>> {
   return listHubPage(ARTISTS_HUB_QUERY, page, !nameFilter, nameFilter, order);
+}
+
+export function artistsHaveRecentActivity(): Promise<boolean> {
+  return hubHasRecentActivity(ARTISTS_HUB_QUERY);
 }
 
 export function listArtistsThisMonth(now?: Date, limit?: number): Promise<ArtistHubEntry[]> {

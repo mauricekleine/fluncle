@@ -64,9 +64,9 @@ describe("the hub OG card", () => {
   });
 
   it.each([
-    ["artists", countIndexableArtists, "1,234 drum & bass artists, A to Z."],
-    ["albums", countIndexableAlbums, "1,234 drum & bass records, A to Z."],
-    ["labels", countIndexableLabels, "1,234 drum & bass labels, A to Z."],
+    ["artists", countIndexableArtists, "1,234 drum & bass artists."],
+    ["albums", countIndexableAlbums, "1,234 drum & bass records."],
+    ["labels", countIndexableLabels, "1,234 drum & bass labels."],
     ["tracks", countAllTracks, "1,234 drum & bass tracks, newest first."],
   ])("renders %s from its own count read", async (hub, count, line) => {
     count.mockResolvedValue(1234);
@@ -92,7 +92,7 @@ describe("the hub OG card", () => {
 
     const res = await getCard("?hub=artists");
 
-    expect(res.html).toContain("Drum & bass artists, A to Z.");
+    expect(res.html).toContain("Drum & bass artists.");
     expect(res.html).not.toContain("1 drum");
   });
 });
