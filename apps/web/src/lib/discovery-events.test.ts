@@ -96,6 +96,20 @@ describe("classifyDiscoveryHref — resolved destination, not the English on the
     });
   });
 
+  it('counts a rail-marked "Similar tracks" into the sonic view as a similar hop', () => {
+    const href =
+      "/search?q=tracks%20that%20sound%20like%20Cobalt%20Mirage%20%E2%80%94%20Night%20Bus";
+
+    expect(classifyDiscoveryHref(href, { similar: true })).toEqual({
+      event: "discovery_similar",
+      metadata: { kind: "track" },
+    });
+    expect(classifyDiscoveryHref(href)).toEqual({
+      event: "discovery_search",
+      metadata: { kind: "sonic" },
+    });
+  });
+
   it("ignores hubs, chrome, and non-listening outbound", () => {
     expect(classifyDiscoveryHref("/findings")).toBeUndefined();
     expect(classifyDiscoveryHref("/tracks")).toBeUndefined();

@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import { ArrowRightIcon, PauseIcon, PlayIcon } from "@phosphor-icons/react";
 import { Link } from "@tanstack/react-router";
 import { type ChatFinding, FindingCard } from "@/components/chat/finding-card";
@@ -5,6 +6,7 @@ import { SpotifyIcon } from "@/components/platform-icons";
 import { TrackArtwork } from "@/components/track-artwork";
 import { formatKey, type KeyNotation } from "@/lib/key-notation";
 import { albumCoverAtSize } from "@/lib/media";
+import { toQueueTrack } from "@/lib/player-tracks";
 import { usePreviewPlayer } from "@/lib/preview-player";
 import { Badge } from "@fluncle/ui/components/badge";
 
@@ -121,7 +123,23 @@ function ChainStep({
   // hook is called unconditionally with a stable key ("" never matches an active track) so hooks
   // stay unconditional even when this step is not playable.
   const playable = Boolean(step.hasPreview && logId);
-  const { isActive, isLoading, toggle } = usePreviewPlayer(logId ?? "", { publicPreview: true });
+  // The relay is keyed by the coordinate here, so the queued track is too.
+  const queued = useMemo(
+    () =>
+      toQueueTrack({
+        albumImageUrl: step.albumImageUrl,
+        artists: step.artists ?? [],
+        logId,
+        spotifyUrl: step.spotifyUrl,
+        title,
+        trackId: logId ?? "",
+      }),
+    [step.albumImageUrl, step.artists, step.spotifyUrl, logId, title],
+  );
+  const { isActive, isLoading, toggle } = usePreviewPlayer(logId ?? "", {
+    publicPreview: true,
+    track: queued,
+  });
 
   const artwork = <TrackArtwork alt={`${trackLine} cover art`} src={coverSrc} />;
 

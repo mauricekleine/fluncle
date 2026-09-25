@@ -14,6 +14,7 @@
 import { PauseIcon, PlayIcon } from "@phosphor-icons/react";
 import { useMemo, useState } from "react";
 import { type KeyNotation, useKeyNotation } from "@/lib/key-notation";
+import { toQueueTrack } from "@/lib/player-tracks";
 import { usePreviewPlayer } from "@/lib/preview-player";
 import { cn } from "@/lib/utils";
 import { AddPill, RecCover, RecImprint, RecSeal, TrackReadout } from "./rec-rows";
@@ -156,7 +157,11 @@ function FindingRow({
   onPick: () => void;
   picked: boolean;
 }) {
-  const preview = usePreviewPlayer(finding.trackId, { publicPreview: true });
+  const queued = useMemo(
+    () => toQueueTrack({ ...finding, albumImageUrl: finding.imageUrl }),
+    [finding],
+  );
+  const preview = usePreviewPlayer(finding.trackId, { publicPreview: true, track: queued });
   const trackLine = `${finding.artists.join(", ")} — ${finding.title}`;
 
   return (

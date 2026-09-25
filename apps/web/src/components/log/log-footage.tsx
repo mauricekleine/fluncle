@@ -1,5 +1,5 @@
 import { PauseIcon, PlayIcon } from "@phosphor-icons/react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@fluncle/ui/components/button";
 import {
   type CropOrientation,
@@ -12,6 +12,7 @@ import {
   videoRendition,
   videoVersion,
 } from "@/lib/media";
+import { toQueueTrack } from "@/lib/player-tracks";
 import { usePreviewPlayer } from "@/lib/preview-player";
 import { type Track } from "@/lib/tracks";
 import { useInViewport } from "@/lib/use-in-viewport";
@@ -98,7 +99,10 @@ export function LogFootage({ track }: { track: Track }) {
   // `false` until mounted, so SSR/first paint is the mobile-first portrait pane.
   const isDesktop = useMediaQuery(DESKTOP_QUERY);
   const videoRef = useRef<HTMLVideoElement | null>(null);
-  const preview = usePreviewPlayer(track.trackId, { publicPreview: true });
+  // The finding's sound is its preview, and it joins the player like any other: the bar shows it
+  // and carries it off this page.
+  const queued = useMemo(() => toQueueTrack(track), [track]);
+  const preview = usePreviewPlayer(track.trackId, { publicPreview: true, track: queued });
 
   // Lazy gate: a clip below the fold fetches nothing (preload="none" + no
   // rendition) until the reader is about to reach it, then arms in one step.
@@ -340,7 +344,7 @@ export function LogFootage({ track }: { track: Track }) {
 
       {track.previewUrl ? (
         <Button
-          aria-label={preview.isActive ? "Stop the preview" : "Play the preview"}
+          aria-label={preview.isActive ? "Pause the preview" : "Play the preview"}
           aria-pressed={preview.isActive}
           className="log-footage-preview"
           onClick={preview.toggle}

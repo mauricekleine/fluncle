@@ -23,6 +23,7 @@
 
 import { CaretRightIcon, PauseIcon, PlayIcon } from "@phosphor-icons/react";
 import { Link } from "@tanstack/react-router";
+import { useMemo } from "react";
 import { siApplemusic, siBeatport, siDeezer, siSpotify, siYoutube } from "simple-icons";
 import { type SimpleIcon } from "simple-icons";
 import { Button, buttonVariants } from "@fluncle/ui/components/button";
@@ -33,6 +34,7 @@ import { formatDuration, formatReleaseDate } from "@/lib/format";
 import { formatKey, useKeyNotation } from "@/lib/key-notation";
 import { artistTitleLine } from "@/lib/log-prose";
 import { albumCoverAtSize } from "@/lib/media";
+import { toQueueTrack } from "@/lib/player-tracks";
 import { usePreviewPlayer } from "@/lib/preview-player";
 import { cn } from "@/lib/utils";
 import {
@@ -70,8 +72,21 @@ const LISTEN_META: Record<ListenDestination["kind"], { icon: SimpleIcon; label: 
  * `play()` rejection returns it to idle, so a dead preview stops rather than erroring, and the page
  * is otherwise untouched.
  */
-function TrackPreviewButton({ trackId }: { trackId: string }) {
-  const preview = usePreviewPlayer(trackId, { publicPreview: true });
+function TrackPreviewButton({ track }: { track: TrackDestination }) {
+  // The page names its track, so the preview joins the player: the bar shows it and carries it
+  // across the visit, and a second tap pauses in place.
+  const queued = useMemo(
+    () =>
+      toQueueTrack({
+        albumImageUrl: track.albumImageUrl,
+        artists: track.artists.map((artist) => artist.name),
+        spotifyUrl: track.listen.find((destination) => destination.kind === "spotify")?.href,
+        title: track.title,
+        trackId: track.trackId,
+      }),
+    [track.albumImageUrl, track.artists, track.listen, track.title, track.trackId],
+  );
+  const preview = usePreviewPlayer(track.trackId, { publicPreview: true, track: queued });
 
   return (
     <Button aria-pressed={preview.isActive} onClick={preview.toggle} size="lg" variant="outline">
@@ -80,7 +95,7 @@ function TrackPreviewButton({ trackId }: { trackId: string }) {
       ) : (
         <PlayIcon aria-hidden="true" weight="fill" />
       )}
-      {preview.isActive ? "Stop the preview" : "Play the preview"}
+      {preview.isActive ? "Pause the preview" : "Play the preview"}
     </Button>
   );
 }
@@ -98,7 +113,7 @@ export function TrackListenBand({ track }: { track: TrackDestination }) {
 
   return (
     <div className="log-actions">
-      {track.previewable ? <TrackPreviewButton trackId={track.trackId} /> : undefined}
+      {track.previewable ? <TrackPreviewButton track={track} /> : undefined}
       {track.listen.map((destination) => {
         const meta = LISTEN_META[destination.kind];
 
