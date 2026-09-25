@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { blockedReason, recordBoxAttempt } from "./crawl-sweep";
 
 const SWEEP = resolve(import.meta.dirname, "crawl-sweep.ts");
 const REAL_PHASE_RUNNER = resolve(import.meta.dirname, "database-admission-runner.sh");
@@ -10,6 +11,74 @@ const PROCESS_TIMEOUT_MS = 8_000;
 
 const CHOREOGRAPHY_TEST_TIMEOUT_MS = 45_000;
 const temporaryDirectories: string[] = [];
+
+test("request kinds count every box attempt, including retries, and identify a label-only block", () => {
+  const requestsByKind = {
+    artist_browse: 0,
+    label_browse: 0,
+    rearm_probe: 0,
+    release_detail: 0,
+    seed_search: 0,
+  };
+  const tally = { boxFetched: 0, requestsByKind };
+  const browse = { kind: "single" as const, url: "https://musicbrainz.org/ws/2/release?artist=a" };
+  const detail = { kind: "single" as const, url: "https://musicbrainz.org/ws/2/release/r" };
+  const stderr = console.error;
+  console.error = () => {};
+  try {
+    recordBoxAttempt(tally, browse, "artist", { outcome: "retry_503", url: browse.url });
+    recordBoxAttempt(tally, browse, "artist", { outcome: "body", url: browse.url });
+    recordBoxAttempt(tally, detail, "release", { outcome: "body", url: detail.url });
+  } finally {
+    console.error = stderr;
+  }
+  expect(tally.requestsByKind).toMatchObject({ artist_browse: 2, release_detail: 1 });
+  expect(Object.values(tally.requestsByKind).reduce((sum, count) => sum + count, 0)).toBe(
+    tally.boxFetched,
+  );
+  expect(
+    blockedReason({
+      error: null,
+      failed: 0,
+      ok: true,
+      pending: 0,
+      reason: null,
+      storableReady: false,
+      throttled: false,
+      tracksFound: 4,
+      tracksSkippedLabelGate: 4,
+      tracksWritten: 0,
+    }),
+  ).toBe("label_gate");
+  expect(
+    blockedReason({
+      error: "MusicBrainz request failed",
+      failed: 1,
+      ok: false,
+      pending: 1,
+      reason: null,
+      storableReady: true,
+      throttled: false,
+      tracksFound: 0,
+      tracksSkippedLabelGate: 0,
+      tracksWritten: 0,
+    }),
+  ).toBeNull();
+  expect(
+    blockedReason({
+      error: null,
+      failed: 0,
+      ok: true,
+      pending: 1,
+      reason: null,
+      storableReady: true,
+      throttled: false,
+      tracksFound: 0,
+      tracksSkippedLabelGate: 0,
+      tracksWritten: 0,
+    }),
+  ).toBeNull();
+});
 
 const COMMIT_BATCH_ALL_COMMITTED =
   '{"ok":true,"deferred":0,"receipts":[{"operationKey":"crawl-key","outcome":"committed","replayed":false,"state":"committed","result":{"expanded":1,"failed":0,"tracksFound":3,"tracksWritten":3,"tracksSkipped":0,"rateLimited":false}},{"operationKey":"crawl-key","outcome":"committed","replayed":false,"state":"committed","result":{"expanded":1,"failed":0,"tracksFound":3,"tracksWritten":3,"tracksSkipped":0,"rateLimited":false}}]}';

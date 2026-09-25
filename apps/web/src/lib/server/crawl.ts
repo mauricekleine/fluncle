@@ -51,7 +51,12 @@ import {
   listLabels,
 } from "./labels";
 import { logEvent } from "./log";
-import { MUSICBRAINZ_API_HOST, mbFetch, musicbrainzUrl } from "./musicbrainz";
+import {
+  type MbRequestContext,
+  MUSICBRAINZ_API_HOST,
+  mbFetch,
+  musicbrainzUrl,
+} from "./musicbrainz";
 import {
   canonicalOperationJson,
   digestOperationRequest,
@@ -148,6 +153,7 @@ type FrontierRow = {
   id: string;
   kind: CrawlNodeKind;
   label_slug: string | null;
+  release_label_slug?: string | null;
   source: CrawlNodeSource;
 };
 
@@ -183,6 +189,8 @@ export type CrawlPass = {
   nodesEnqueued: number;
 
   rateLimited: boolean;
+
+  releaseDetailsStored: number;
 
   releasesRearmed: number;
 
@@ -386,6 +394,7 @@ async function pickNodes(limit: number): Promise<FrontierRow[]> {
   const releases = await db.execute({
     args: [...cutoffs, releaseShare],
     sql: `select crawl_frontier.id, kind, source, external_id, hop, cursor, failures, label_slug,
+                release_label_slug,
                 crawl_frontier.done_at,
                 case
                   when provenance_label.seed_state = 'enabled' then 1
@@ -413,7 +422,8 @@ async function pickNodes(limit: number): Promise<FrontierRow[]> {
   const placeholders = releaseRows.map(() => "?").join(", ");
   const rest = await db.execute({
     args: [...cutoffs, ...releaseRows.map((row) => row.id), remainder],
-    sql: `select id, kind, source, external_id, hop, cursor, failures, label_slug, done_at
+    sql: `select id, kind, source, external_id, hop, cursor, failures, label_slug,
+                 release_label_slug, done_at
           from crawl_frontier
           where ${eligible}
             ${releaseRows.length > 0 ? `and id not in (${placeholders})` : ""}
@@ -586,6 +596,61 @@ async function rearmScopedLabelReleases(): Promise<number> {
   }
 
   return rearmed;
+}
+
+async function rearmSkippedDisabledReleases(maxHop: number): Promise<number> {
+  const db = await getDb();
+  const now = new Date().toISOString();
+  const globalAllow = await db.execute({
+    args: [],
+    sql: `select 1 from artist_rules where verdict = 'allow' and label_id is null limit 1`,
+  });
+  const rearmAll = maxHop > 2 || globalAllow.rows.length > 0;
+  const selected = await db.execute({
+    args: [REARM_SCOPED_BATCH],
+    sql: `select node.id from crawl_frontier as node indexed by crawl_frontier_disabled_skip_idx
+          where node.state = 'skipped' and node.kind = 'release'
+            and node.note = 'disabled own label at terminal hop'
+            ${
+              rearmAll
+                ? ""
+                : `and node.release_label_slug in (
+                    select label.slug from labels as label
+                    where label.seed_state = 'enabled'
+                      or exists (select 1 from artist_rules as rule
+                        where rule.label_id = label.id and rule.verdict = 'allow')
+                    union
+                    select alias.alias_slug from label_aliases as alias
+                    join labels as label on label.id = alias.label_id
+                    where alias.status = 'confirmed'
+                      and (label.seed_state = 'enabled'
+                        or exists (select 1 from artist_rules as rule
+                          where rule.label_id = label.id and rule.verdict = 'allow'))
+                  )`
+            }
+          order by node.release_label_slug, node.id limit ?`,
+  });
+  const ids = typedRows<{ id: string }>(selected.rows).map((row) => row.id);
+  if (ids.length === 0) {
+    return 0;
+  }
+  const result = await db.batch(
+    [
+      {
+        args: [now, ...ids],
+        sql: `update crawl_frontier set state = 'pending', cursor = 0, note = null,
+                updated_at = ? where id in (${ids.map(() => "?").join(", ")})
+                and state = 'skipped' and note = 'disabled own label at terminal hop'`,
+      },
+      markCrawlNodeRepairsByUpdatedAtStatement(
+        ids,
+        `crawl-disabled-rearm:${crypto.randomUUID()}`,
+        now,
+      ),
+    ],
+    "write",
+  );
+  return result[0]?.rowsAffected ?? 0;
 }
 
 async function rearmAllowedArtists(): Promise<number> {
@@ -973,6 +1038,7 @@ type CrawlProviderPlan =
   | { kind: "browse-forward"; childHop: number; key: "artist" | "label" }
   | { kind: "browse-rearmed"; childHop: number; key: "artist" | "label" }
   | { kind: "release" }
+  | { kind: "skip-disabled" }
   | {
       kind: "seed";
       label: null | { mbLabelId: string | null; name: string; slug: string };
@@ -998,10 +1064,13 @@ type CrawlProviderOutcome =
 
 class ThrottledError extends Error {}
 
-export type CrawlProviderTransport = <T>(path: string) => Promise<T | null>;
+export type CrawlProviderTransport = <T>(
+  path: string,
+  context?: MbRequestContext,
+) => Promise<T | null>;
 
-async function mb<T>(path: string): Promise<T | null> {
-  const { data, rateLimited } = await mbFetch<T>(path);
+async function mb<T>(path: string, context?: MbRequestContext): Promise<T | null> {
+  const { data, rateLimited } = await mbFetch<T>(path, context);
 
   if (rateLimited) {
     throw new ThrottledError(`MusicBrainz is rate-limiting (${path})`);
@@ -1034,6 +1103,9 @@ async function planCrawlNode(
   client?: Pick<Client, "execute">,
 ): Promise<CrawlProviderPlan> {
   if (node.kind === "release") {
+    if (node.hop === 2 && maxHop <= 2 && (await disabledTerminalRelease(node, client))) {
+      return { kind: "skip-disabled" };
+    }
     return { kind: "release" };
   }
   if (node.kind === "label" && node.source === "fluncle") {
@@ -1063,18 +1135,40 @@ async function planCrawlNode(
     : { childHop, key, kind: "browse-forward" };
 }
 
+async function disabledTerminalRelease(
+  node: FrontierRow,
+  client?: Pick<Client, "execute">,
+): Promise<boolean> {
+  if (!node.release_label_slug) {
+    return false;
+  }
+  const db = client ?? (await getDb());
+  const result = await db.execute({
+    args: [node.release_label_slug],
+    sql: `select 1 from labels as label
+          where label.slug = ? and label.seed_state = 'disabled'
+            and not exists (select 1 from artist_rules as rule
+              where rule.verdict = 'allow'
+                and (rule.label_id = label.id or rule.label_id is null))
+          limit 1`,
+  });
+  return result.rows.length > 0;
+}
+
 async function fetchCrawlProvider(
   plan: CrawlProviderPlan,
   node: FrontierRow,
   read: CrawlProviderTransport = mb,
 ): Promise<CrawlProviderData> {
-  if (plan.kind === "terminal") {
+  const request = <T>(path: string, requestKind: MbRequestContext["requestKind"]) =>
+    read<T>(path, { nodeKind: node.kind, requestKind });
+  if (plan.kind === "terminal" || plan.kind === "skip-disabled") {
     return { kind: "terminal" };
   }
   if (plan.kind === "release") {
     return {
       kind: "release",
-      release: await read<MbReleaseDetail>(releasePath(node.external_id)),
+      release: await request<MbReleaseDetail>(releasePath(node.external_id), "release_detail"),
     };
   }
   if (plan.kind === "seed") {
@@ -1083,24 +1177,29 @@ async function fetchCrawlProvider(
     }
     return {
       kind: "seed",
-      search: await read<MbLabelSearch>(seedSearchPath(plan.label.name)),
+      search: await request<MbLabelSearch>(seedSearchPath(plan.label.name), "seed_search"),
     };
   }
   if (plan.kind === "browse-forward") {
     return {
-      browse: await read<MbReleaseBrowse>(
+      browse: await request<MbReleaseBrowse>(
         browsePath(plan.key, node.external_id, BROWSE_PAGE_SIZE, node.cursor),
+        plan.key === "artist" ? "artist_browse" : "label_browse",
       ),
       kind: "browse-forward",
     };
   }
 
-  const browse = (offset: number, limit: number): Promise<MbReleaseBrowse | null> =>
-    read<MbReleaseBrowse>(browsePath(plan.key, node.external_id, limit, offset));
+  const browse = (
+    offset: number,
+    limit: number,
+    requestKind: MbRequestContext["requestKind"],
+  ): Promise<MbReleaseBrowse | null> =>
+    request<MbReleaseBrowse>(browsePath(plan.key, node.external_id, limit, offset), requestKind);
   let offset: number;
   let staleTotal: null | number = null;
   if (node.cursor === REARM_TAIL) {
-    const probe = await browse(0, 1);
+    const probe = await browse(0, 1, "rearm_probe");
     staleTotal = probe?.["release-count"] ?? 0;
     if (staleTotal <= 0) {
       return {
@@ -1113,7 +1212,15 @@ async function fetchCrawlProvider(
     offset = descendOffset(node.cursor);
   }
   return {
-    browse: { offset, page: await browse(offset, BROWSE_PAGE_SIZE), staleTotal },
+    browse: {
+      offset,
+      page: await browse(
+        offset,
+        BROWSE_PAGE_SIZE,
+        plan.key === "artist" ? "artist_browse" : "label_browse",
+      ),
+      staleTotal,
+    },
     kind: "browse-rearmed",
   };
 }
@@ -1132,7 +1239,7 @@ export type CrawlFetchPlan =
 export const CRAWL_FETCH_OFFSET_SLOT = "{offset}";
 
 export function crawlFetchPlan(plan: CrawlProviderPlan, node: FrontierRow): CrawlFetchPlan {
-  if (plan.kind === "terminal") {
+  if (plan.kind === "terminal" || plan.kind === "skip-disabled") {
     return { kind: "none" };
   }
   if (plan.kind === "release") {
@@ -1245,10 +1352,10 @@ function suppliedCrawlProviderTransport(
   supplied: Map<string, SuppliedCrawlBody>,
   live: CrawlProviderTransport,
 ): CrawlProviderTransport {
-  return async <T>(path: string): Promise<T | null> => {
+  return async <T>(path: string, context?: MbRequestContext): Promise<T | null> => {
     const entry = supplied.get(musicbrainzUrl(path));
     if (entry === undefined) {
-      return live<T>(path);
+      return live<T>(path, context);
     }
     if (entry.outcome === "throttled") {
       throw new ThrottledError(`MusicBrainz is rate-limiting (${path})`);
@@ -2009,6 +2116,14 @@ async function applyCrawlProvider(
   if (plan.kind === "terminal" && outcome.data.kind === "terminal") {
     return plan.expansion;
   }
+  if (plan.kind === "skip-disabled" && outcome.data.kind === "terminal") {
+    return (await disabledTerminalRelease(node, client))
+      ? {
+          ...EMPTY,
+          next: { cursor: 0, note: "disabled own label at terminal hop", state: "skipped" },
+        }
+      : { ...EMPTY, next: { cursor: 0, note: "scope changed before skip", state: "pending" } };
+  }
   if (plan.kind === "seed" && outcome.data.kind === "seed") {
     return applySeedLabel(node, plan, outcome.data.search, client);
   }
@@ -2064,8 +2179,14 @@ export type CrawlPhasePrepareResult = {
   capabilities?: CrawlPhaseCapabilities;
   frontierPending: number;
   initialization: CrawlPhaseInitialization;
-  items: { fetchPlan: CrawlFetchPlan; nodeId: string; preparedToken: string }[];
+  items: {
+    fetchPlan: CrawlFetchPlan;
+    nodeId: string;
+    nodeKind: CrawlNodeKind;
+    preparedToken: string;
+  }[];
   kind: "drained" | "prepared" | "unavailable";
+  storableReady: boolean | null;
 };
 
 export const CRAWL_PHASE_CAPABILITIES: CrawlPhaseCapabilities = {
@@ -2228,6 +2349,13 @@ export async function initializeCrawlPhase(): Promise<
   return { ...(await initializeCrawlPhaseState(true)), kind: "initialized" };
 }
 
+async function storableReleaseReady(db: Pick<Client, "execute">): Promise<boolean> {
+  const result = await db.execute(`select 1 from crawl_due_work
+    indexed by crawl_due_work_release_ready_idx
+    where state = 'ready' and node_kind = 'release' and storable_rank = 0 limit 1`);
+  return result.rows.length > 0;
+}
+
 export async function prepareCrawlPhase({
   limit = 2,
   maxHop = DEFAULT_MAX_HOP,
@@ -2248,8 +2376,11 @@ export async function prepareCrawlPhase({
       initialization: emptyCrawlPhaseInitialization(),
       items: [],
       kind: "unavailable",
+      storableReady: null,
     };
   }
+
+  await rearmSkippedDisabledReleases(maxHop);
 
   const db = await getDb();
   const claimed = await claimCrawlFrontierRows(db, {
@@ -2268,6 +2399,7 @@ export async function prepareCrawlPhase({
       },
       items: [],
       kind: "drained",
+      storableReady: false,
     };
   }
 
@@ -2278,6 +2410,7 @@ export async function prepareCrawlPhase({
     items.push({
       fetchPlan: crawlFetchPlan(plan, claimedNode),
       nodeId: claimedNode.id,
+      nodeKind: claimedNode.kind,
       preparedToken: await signCrawlPhaseToken({
         claimToken: claimed.claimToken,
         expiresAt: Date.parse(claimedNode.claim_expires_at),
@@ -2299,6 +2432,7 @@ export async function prepareCrawlPhase({
     },
     items,
     kind: "prepared",
+    storableReady: await storableReleaseReady(db),
   };
 }
 
@@ -2369,13 +2503,14 @@ export async function fetchCrawlPhase(
   };
 }
 
-function expansionResult(expansion: Expansion): JsonValue {
+function expansionResult(expansion: Expansion, plan: CrawlProviderPlan): JsonValue {
   return {
     expanded: 1,
     failed: 0,
     labelsDiscovered: expansion.labelsDiscovered,
     nodesEnqueued: expansion.enqueued,
     rateLimited: false,
+    releaseDetailsStored: plan.kind === "release" && expansion.tracksWritten > 0 ? 1 : 0,
     tracksAllowedIn: expansion.tracksAllowedIn,
     tracksFound: expansion.tracksFound,
     tracksSkipped: expansion.tracksSkipped,
@@ -2473,7 +2608,7 @@ export async function commitCrawlPhase(
         throw new Error("crawl claim changed while its provider result was settling");
       }
       return {
-        result: expansionResult(expansion),
+        result: expansionResult(expansion, fetched.plan),
         resultIdentity: fetched.node.id,
         state: "committed",
       };
@@ -2591,6 +2726,7 @@ export async function crawlCatalogue({
     maxHop: hopLimit,
     nodesEnqueued: 0,
     rateLimited: false,
+    releaseDetailsStored: 0,
     releasesRearmed: 0,
     seeded: 0,
     seedsRearmed: 0,
@@ -2611,6 +2747,7 @@ export async function crawlCatalogue({
 
   const cutoverEnabled = await isCrawlDueCutoverEnabled();
   const initialization = await initializeCrawlPhaseState(cutoverEnabled);
+  await rearmSkippedDisabledReleases(hopLimit);
   pass.seeded = initialization.seeded;
   pass.releasesRearmed = initialization.releasesRearmed;
   pass.artistsRearmed = initialization.artistsRearmed;
@@ -2693,6 +2830,9 @@ export async function crawlCatalogue({
     pass.tracksAllowedIn += expansion.tracksAllowedIn;
     pass.tracksFound += expansion.tracksFound;
     pass.tracksWritten += expansion.tracksWritten;
+    if (node.kind === "release" && expansion.tracksWritten > 0) {
+      pass.releaseDetailsStored += 1;
+    }
     pass.tracksSkippedArtistRule += expansion.tracksSkippedArtistRule;
     pass.tracksSkippedHeld += expansion.tracksSkippedHeld;
     pass.tracksSkippedLabelGate += expansion.tracksSkippedLabelGate;

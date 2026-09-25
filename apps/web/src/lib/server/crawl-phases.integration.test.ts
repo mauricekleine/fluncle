@@ -18,6 +18,7 @@ import {
 } from "./crawl";
 import { CRAWL_BOX_FETCH_ENABLED_KEY, CRAWL_DUE_CUTOVER_ENABLED_KEY } from "./crawl-cutover";
 import { setMusicbrainzRateLimitForTests } from "./musicbrainz";
+import { mergeLabel } from "./labels";
 
 let db: Client;
 let fixtureDirectory: string | undefined;
@@ -176,6 +177,140 @@ afterEach(async () => {
 });
 
 describe("crawl admission phases", () => {
+  it("settles a terminal known-disabled release without a MusicBrainz call and re-arms after enable", async () => {
+    await db.execute("delete from crawl_due_work");
+    await db.execute("delete from crawl_frontier");
+    await db.execute("update labels set seed_state = 'disabled' where id = 'label-phase'");
+    await db.execute({
+      args: [timestamp, timestamp],
+      sql: `insert into crawl_frontier
+        (id, kind, source, external_id, hop, label_slug, release_label_slug,
+         created_at, updated_at)
+        values ('musicbrainz:release:release-phase', 'release', 'musicbrainz',
+          'release-phase', 2, 'phase-label', 'phase-label', ?, ?)`,
+    });
+    await rebuildCrawlDueWork(db, { generation: crypto.randomUUID(), limit: 10 });
+    await db.batch(
+      [markCrawlNodeRepairStatement("musicbrainz:release:release-phase", crypto.randomUUID())],
+      "write",
+    );
+    const fetchMock = vi.fn(() =>
+      Promise.resolve(new Response(JSON.stringify(providerRelease(1)))),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const prepared = await prepareCrawlPhase({ limit: 1, maxHop: 2 });
+    expect(prepared.items[0]?.fetchPlan).toEqual({ kind: "none" });
+    const fetched = await fetchCrawlPhase(prepared.items[0]?.preparedToken ?? "");
+    expect(fetchMock).toHaveBeenCalledTimes(0);
+    expect(await commitCrawlPhase(fetched)).toMatchObject({
+      outcome: "committed",
+      result: { releaseDetailsStored: 0, tracksWritten: 0 },
+    });
+    expect(
+      (await db.execute("select state from crawl_frontier where external_id = 'release-phase'"))
+        .rows[0]?.state,
+    ).toBe("skipped");
+
+    await db.execute("update labels set seed_state = 'enabled' where id = 'label-phase'");
+    const rearmed = await prepareCrawlPhase({ limit: 1, maxHop: 2 });
+    expect(rearmed.items[0]?.fetchPlan.kind).toBe("single");
+    const stored = await commitCrawlPhase(
+      await fetchCrawlPhase(rearmed.items[0]?.preparedToken ?? ""),
+    );
+    expect(stored).toMatchObject({ result: { releaseDetailsStored: 1, tracksWritten: 1 } });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("still fetches an undecided-label terminal release", async () => {
+    await db.execute("update labels set seed_state = 'undecided' where id = 'label-phase'");
+    await db.execute(`update crawl_frontier set hop = 2, release_label_slug = 'phase-label'
+      where external_id = 'release-phase'`);
+    const fetchMock = vi.fn(() =>
+      Promise.resolve(new Response(JSON.stringify(providerRelease(1)))),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const prepared = await prepareCrawlPhase({ limit: 1, maxHop: 2 });
+    expect(prepared.items[0]?.fetchPlan.kind).toBe("single");
+    await fetchCrawlPhase(prepared.items[0]?.preparedToken ?? "");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("re-arms a skipped disabled release after a scoped artist allow", async () => {
+    await db.execute("delete from crawl_due_work");
+    await db.execute("delete from crawl_frontier");
+    await db.execute("update labels set seed_state = 'disabled' where id = 'label-phase'");
+    await db.execute({
+      args: [timestamp, timestamp],
+      sql: `insert into crawl_frontier
+        (id, kind, source, external_id, hop, label_slug, release_label_slug, state, note,
+         created_at, updated_at)
+        values ('musicbrainz:release:release-phase', 'release', 'musicbrainz',
+          'release-phase', 2, 'phase-label', 'phase-label', 'skipped',
+          'disabled own label at terminal hop', ?, ?)`,
+    });
+    await db.execute({
+      args: [timestamp, timestamp],
+      sql: `insert into artist_rules
+        (id, artist_mbid, artist_name, label_id, source, verdict, created_at, updated_at)
+        values ('rule-phase', 'artist-0', 'Artist 0', 'label-phase', 'operator', 'allow', ?, ?)`,
+    });
+    const fetchMock = vi.fn(() =>
+      Promise.resolve(new Response(JSON.stringify(providerRelease(1)))),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const prepared = await prepareCrawlPhase({ limit: 1, maxHop: 2 });
+    expect(prepared.items[0]?.fetchPlan.kind).toBe("single");
+    const receipt = await commitCrawlPhase(
+      await fetchCrawlPhase(prepared.items[0]?.preparedToken ?? ""),
+    );
+    expect(receipt).toMatchObject({ result: { releaseDetailsStored: 1, tracksWritten: 1 } });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("re-arms a disabled terminal release after its label merges into an enabled label", async () => {
+    await db.execute("delete from crawl_due_work");
+    await db.execute("delete from crawl_frontier");
+    await db.execute({
+      args: [timestamp, timestamp],
+      sql: `insert into labels (id, name, slug, seed_state, created_at, updated_at)
+        values ('label-loser', 'Losing Label', 'losing-label', 'disabled', ?, ?)`,
+    });
+    await db.execute({
+      args: [timestamp, timestamp],
+      sql: `insert into crawl_frontier
+        (id, kind, source, external_id, hop, label_slug, release_label_slug, state, note,
+         created_at, updated_at)
+        values ('musicbrainz:release:release-phase', 'release', 'musicbrainz',
+          'release-phase', 2, 'losing-label', 'losing-label', 'skipped',
+          'disabled own label at terminal hop', ?, ?)`,
+    });
+    await mergeLabel("losing-label", "phase-label");
+    const prepared = await prepareCrawlPhase({ limit: 1, maxHop: 2 });
+    expect(prepared.items[0]?.fetchPlan.kind).toBe("single");
+    expect(
+      (await db.execute("select state from crawl_frontier where external_id = 'release-phase'"))
+        .rows[0]?.state,
+    ).toBe("pending");
+  });
+
+  it("re-arms a disabled terminal release when the hop limit widens", async () => {
+    await db.execute("delete from crawl_due_work");
+    await db.execute("delete from crawl_frontier");
+    await db.execute("update labels set seed_state = 'disabled' where id = 'label-phase'");
+    await db.execute({
+      args: [timestamp, timestamp],
+      sql: `insert into crawl_frontier
+        (id, kind, source, external_id, hop, label_slug, release_label_slug, state, note,
+         created_at, updated_at)
+        values ('musicbrainz:release:release-phase', 'release', 'musicbrainz',
+          'release-phase', 2, 'phase-label', 'phase-label', 'skipped',
+          'disabled own label at terminal hop', ?, ?)`,
+    });
+    const prepared = await prepareCrawlPhase({ limit: 1, maxHop: 3 });
+    expect(prepared.items[0]?.fetchPlan.kind).toBe("single");
+  });
+
   it("claims at most two nearby nodes while preserving release and discovery progress", async () => {
     await db.execute({
       args: [timestamp, timestamp],

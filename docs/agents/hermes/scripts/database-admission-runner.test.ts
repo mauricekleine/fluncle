@@ -1087,8 +1087,9 @@ esac`);
       expect(result.status).toBe(0);
       expect(result.stdout).toBe("complete");
       const calls = readFileSync(curlLog, "utf8");
-      expect(calls.match(/"action":"release"/g)).toHaveLength(2);
-      expect(calls.match(/"fencingToken":7/g)).toHaveLength(2);
+      const releaseCalls = calls.split("\n").filter((call) => call.includes('"action":"release"'));
+      expect(releaseCalls).toHaveLength(2);
+      expect(releaseCalls.every((call) => call.includes('"fencingToken":7'))).toBe(true);
       expect(result.stderr).toContain('"outcome":"released"');
     },
   );

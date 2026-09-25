@@ -59,8 +59,18 @@ function noop(): void {}
 
 export type MbResult<T> = { data: T | null; rateLimited: boolean };
 
-export function mbFetch<T>(path: string): Promise<MbResult<T>> {
+export type MbRequestContext = {
+  nodeKind: "artist" | "label" | "release";
+  requestKind: "artist_browse" | "label_browse" | "rearm_probe" | "release_detail" | "seed_search";
+};
+
+export function mbFetch<T>(path: string, context?: MbRequestContext): Promise<MbResult<T>> {
   const url = musicbrainzUrl(path);
+  const record = (outcome: string): void => {
+    if (context) {
+      logEvent("info", "crawl.musicbrainz-request", { ...context, outcome, source: "worker" });
+    }
+  };
 
   return throttle(async () => {
     for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -72,12 +82,14 @@ export function mbFetch<T>(path: string): Promise<MbResult<T>> {
           signal: AbortSignal.timeout(MB_REQUEST_TIMEOUT_MS),
         });
       } catch (error) {
+        record("network_error");
         logEvent("warn", "musicbrainz.request-threw", { error, path });
 
         return { data: null, rateLimited: false };
       }
 
       if (response.status === 503 && attempt < 2) {
+        record("retry_503");
         const retryAfter = Number(response.headers.get("Retry-After")) || 2;
         logEvent("warn", "musicbrainz.retry", {
           attempt: attempt + 1,
@@ -95,10 +107,12 @@ export function mbFetch<T>(path: string): Promise<MbResult<T>> {
       }
 
       if (response.status === 503) {
+        record("throttled");
         return { data: null, rateLimited: true };
       }
 
       if (!response.ok) {
+        record(`http_${response.status}`);
         logEvent("warn", "musicbrainz.request-failed", {
           path,
           status: response.status,
@@ -108,7 +122,14 @@ export function mbFetch<T>(path: string): Promise<MbResult<T>> {
         return { data: null, rateLimited: false };
       }
 
-      return { data: (await response.json()) as T, rateLimited: false };
+      try {
+        const data = (await response.json()) as T;
+        record("body");
+        return { data, rateLimited: false };
+      } catch (error) {
+        record("invalid");
+        throw error;
+      }
     }
 
     return { data: null, rateLimited: false };

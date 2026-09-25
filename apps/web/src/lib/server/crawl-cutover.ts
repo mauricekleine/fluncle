@@ -36,6 +36,7 @@ export type ClaimedCrawlFrontierRow = {
   id: string;
   kind: "artist" | "label" | "release";
   label_slug: string | null;
+  release_label_slug: string | null;
   source: "fluncle" | "musicbrainz";
   source_version: string;
   updated_at: string;
@@ -105,6 +106,7 @@ function frontierRow(row: Record<string, unknown>): ClaimedCrawlFrontierRow | un
     id: row["id"],
     kind: row["kind"],
     label_slug: (row["label_slug"] as null | string) ?? null,
+    release_label_slug: (row["release_label_slug"] as null | string) ?? null,
     source: row["source"],
     source_version: row["source_version"],
     updated_at: row["updated_at"],
@@ -198,7 +200,8 @@ export async function claimCrawlFrontierRows(
   const hydrated = await client.execute({
     args: [...ids, claim.claimToken],
     sql: `select frontier.id, frontier.kind, frontier.source, frontier.external_id, frontier.hop,
-        frontier.cursor, frontier.failures, frontier.label_slug, frontier.done_at,
+        frontier.cursor, frontier.failures, frontier.label_slug, frontier.release_label_slug,
+        frontier.done_at,
         frontier.updated_at, due.source_version, due.claim_expires_at
       from crawl_frontier frontier
       join crawl_due_work due on due.node_id = frontier.id
