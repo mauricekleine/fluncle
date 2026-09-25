@@ -1,21 +1,3 @@
-// The PALETTE gate — the axis judge-diversity is deliberately blind to. The diversity
-// metric is STRUCTURE-dominant (edge 0.60, colour 0.20) by design, so a shared-palette
-// pair passes it whenever the two primitives differ (docs/planning/homogenisation-
-// evidence.md: consecutive amber/halftone renders can all be structurally distinct enough to
-// clear the poster gate). This gate covers that axis: it
-// compares ONLY the fresh poster's HSV colour histogram against the last three published
-// posters and FAILS when the palette is too close to ANY of them — the same
-// laundering-by-recolor law the diversity metric enforces, run the other way round.
-//
-// It reuses judge-diversity's histogram (`featureOf(...).colorHist`, a 12×4×4 HSV
-// histogram) and its Bhattacharyya distance — no duplicated colour code. The pure
-// decision (`evaluatePaletteGate`) takes histograms and a threshold, so it is fully
-// tested without fs or network; the CLI wraps it with poster decoding.
-//
-// CLI: bun src/pipeline/judge-palette.ts <posterPathOrLogId> [--neighbours N]
-//      [--threshold T] [--json]  (exits non-zero on FAIL). ship.ts runs the same gate on
-//      the poster it cuts and refuses on a FAIL (ship-gates.ts); this CLI is the manual read.
-
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -26,23 +8,6 @@ import { bhattacharyya, featureOf, fetchRecentVideoLogIds } from "./judge-divers
 const DECODE_SIZE = 160;
 const DEFAULT_NEIGHBOURS = 3;
 
-// The FAIL floor: the palette must sit at least this far (12×4×4 HSV Bhattacharyya) from
-// EVERY one of the last three posters. This gate is a NEAR-DUPLICATE BACKSTOP, and the
-// threshold is set from measured reality, not aspiration, using real posters at 160²:
-//   - the amber-strip "twins" the operator flagged by eye read 0.358–0.929 apart
-//     on this histogram (the halftone texture + background move the fine bins a lot even
-//     when a human reads "same amber");
-//   - a DELIBERATE recolor (same primitive, new palette — the GOOD outcome) reads 0.359;
-//   - live consecutive neighbours read ≥ 0.51 (min over 28 pairs).
-// So the histogram CANNOT cleanly separate an amber twin (0.358, bad) from a recolor
-// (0.359, good) — they overlap. Setting the floor to catch 0.36 would false-fail
-// legitimate recolors and block ships in an unattended pipeline. The honest role of this
-// gate is therefore to catch a TRUE near-duplicate palette (distance → ~0), and the AMBER
-// BASIN (structurally varied but one warm cast) is the axis assigner's job — it steers the
-// next render off the worn COARSE hue bucket (palette-summary.ts) proactively. 0.18 sits
-// at half the legitimate-recolor floor: no observed legit pair fails, an exact palette
-// clone does. Tune up only with fresh measurement; raising it toward 0.36 re-introduces
-// the false-fail overlap. See the PR's calibration note.
 export const PALETTE_MIN = 0.18;
 
 const posterUrl = (logId: string): string => `https://found.fluncle.com/${logId}/poster.jpg`;
@@ -59,22 +24,15 @@ export type PaletteGate = {
   subject: string;
   threshold: number;
   neighbours: PaletteNeighbourDistance[];
-  /** The SMALLEST distance to any neighbour — the one that decides the gate. Null when
-   *  there is no neighbour to compare against. */
+
   nearestDistance: number | null;
-  /** Index (0 = immediate) of the nearest (most-similar) neighbour, or null. */
+
   nearestAt: number | null;
   status: PaletteGateStatus;
   pass: boolean;
   verdict: string;
 };
 
-/**
- * The PURE palette decision: given the subject's colour histogram and the ordered
- * (newest-first) neighbour histograms, FAIL when the closest neighbour sits under the
- * threshold, else pass. No neighbours → skipped (pass): a first render has nothing to
- * clash with. No fs, no network — this is the tested core.
- */
 export function evaluatePaletteGate(
   subject: string,
   subjectHist: Float32Array,
@@ -124,7 +82,6 @@ export function evaluatePaletteGate(
   };
 }
 
-/** Decode a poster given a local path or a logId (fetched from the public host). */
 function decodePoster(pathOrLogId: string, scratchDir: string): Float32Array {
   const isLocal =
     pathOrLogId.endsWith(".jpg") || pathOrLogId.endsWith(".png") || existsSync(pathOrLogId);
@@ -132,7 +89,7 @@ function decodePoster(pathOrLogId: string, scratchDir: string): Float32Array {
     return featureOf(decodeImageRgb(pathOrLogId, { height: DECODE_SIZE, width: DECODE_SIZE }))
       .colorHist;
   }
-  // Resolved synchronously by the caller after fetching bytes to a temp file.
+
   const tmp = path.join(scratchDir, `${pathOrLogId.replace(/[^\w.-]/g, "_")}.jpg`);
   return featureOf(decodeImageRgb(tmp, { height: DECODE_SIZE, width: DECODE_SIZE })).colorHist;
 }
@@ -146,9 +103,6 @@ async function fetchPosterTo(logId: string, scratchDir: string): Promise<void> {
   writeFileSync(path.join(scratchDir, `${logId.replace(/[^\w.-]/g, "_")}.jpg`), bytes);
 }
 
-/** Judge the subject poster's palette against the recent published neighbours.
- *  `excludeLogId` keeps a finding's own published poster out of its neighbours when the
- *  subject is a local poster path (ship re-shipping a finding that already has a video). */
 export async function judgePalette(
   subject: string,
   opts: { excludeLogId?: string; neighbours?: number; threshold?: number } = {},
@@ -215,6 +169,6 @@ if (import.meta.main) {
     }
     console.log(`${gate.pass ? "✓" : "✗"} ${gate.verdict}`);
   }
-  // A FAIL exits non-zero; ship runs this gate itself and refuses on the same FAIL.
+
   process.exit(gate.status === "fail" ? 1 : 0);
 }

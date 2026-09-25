@@ -149,6 +149,8 @@ A night-sky palette lit by one sun: warm blacks, sleeve-paper cream, and a singl
 - **Dust Veil** (#d0b9901a): 10% cream-dust tint for muted fills and artwork fallbacks.
 - **Dust Line** (#d0b99029): 16% cream-dust borders and dividers; the only edge treatment in the system.
 
+`tokens.ruleDark` (`#3a342a`) is the opaque separator colour for renderers that cannot composite Dust Line, including terminal, mobile, extension, and video surfaces. It is a separate token; compositing Dust Line over Deep Field produces a darker colour.
+
 ### Tertiary
 
 - **Re-entry Red** (#ff6b57): Errors and destructive actions only; the heat of coming back down. Also blended at low opacity into the cover-frame gradient.

@@ -1,9 +1,5 @@
-// Fetch a single track's public metadata from the Fluncle API and map it onto
-// the CosmosTrack shape used by the "NostalgicCosmos" composition.
-
 import { type CosmosTrack } from "../remotion/types";
 
-// The versioned oRPC path: the bare `/api/tracks` alias no longer answers (`apps/web/src/routes/api/-alias.ts`).
 const TRACK_ENDPOINT = "https://www.fluncle.com/api/v1/tracks";
 
 type ApiTrack = {
@@ -12,10 +8,7 @@ type ApiTrack = {
   artists: string[];
   album?: string;
   albumImageUrl?: string;
-  // A ≥1920 render source the DTO composes server-side from Apple's stored artwork facts
-  // (RFC musickit-second-authority U3a). Present only when the album carries Apple artwork;
-  // we prefer it over the 640² `albumImageUrl` so the composition samples a native-res cover
-  // instead of upscaling the Spotify thumbnail. RENDER-TIME ONLY — never persisted.
+
   artworkMaxUrl?: string;
   note?: string;
   addedAt: string;
@@ -36,12 +29,6 @@ type ApiTrack = {
   };
 };
 
-/**
- * Fetch a track by its Spotify trackId OR its Log ID and map it onto CosmosTrack.
- * Uses the single-track endpoint, so it resolves any finding in the archive — not
- * just the recent discovery window — which is what lets the pipeline re-render an
- * older clip (pass its Log ID, e.g. "004.6.0K"). Throws clearly on 404.
- */
 export async function fetchTrack(idOrLogId: string): Promise<CosmosTrack> {
   const url = `${TRACK_ENDPOINT}/${encodeURIComponent(idOrLogId)}`;
   const res = await fetch(url, {

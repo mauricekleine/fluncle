@@ -1,32 +1,21 @@
-// Download a preview mp3, loudness-normalize to -14 LUFS (two-pass, so the same
-// input always produces the same output level — see normalizeAndEncode below),
-// transcode to an AAC .m4a in public/ (staticFile-servable), and emit a mono
-// 22050Hz PCM wav in a tmp dir for offline analysis. Also owns the bounded
-// preview-audio cache in public/: a per-track delete after a successful ship,
-// plus an opportunistic keep-the-N-most-recent sweep.
-
 import { spawn } from "node:child_process";
 import { mkdtemp, readdir, rm, stat, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-// The ffmpeg binary: PATH by default (Homebrew on macOS, /usr/bin on Linux), with
-// an explicit override for hosts where it lives elsewhere. Mirrors FLUNCLE_BIN.
 const FFMPEG = process.env.FLUNCLE_FFMPEG ?? "ffmpeg";
 
 const PUBLIC_DIR = path.resolve(import.meta.dirname, "../../public");
 
-// The two-pass loudnorm target — matches the single-pass value this replaced.
 const LOUDNORM_TARGET = "I=-14:TP=-1.5:LRA=11";
 
 export type DownloadedPreview = {
-  /** Absolute path to the AAC .m4a inside public/. */
   m4aPath: string;
-  /** Filename only, for staticFile() inside the composition. */
+
   file: string;
-  /** Absolute path to the mono 22050Hz PCM wav (in a tmp dir). */
+
   wavPath: string;
-  /** The tmp dir holding the wav; caller may clean it up. */
+
   tmpDir: string;
 };
 
@@ -64,11 +53,6 @@ type LoudnormMeasurement = {
   target_offset: string;
 };
 
-/**
- * Pass 1 of the two-pass loudnorm: a measure-only run (`print_format=json`,
- * output discarded via `-f null -`) that reports the source's actual loudness
- * stats. ffmpeg prints the JSON block as the tail of stderr.
- */
 async function measureLoudness(srcPath: string): Promise<LoudnormMeasurement> {
   const { stderr } = await runCapture(FFMPEG, [
     "-i",
@@ -88,15 +72,6 @@ async function measureLoudness(srcPath: string): Promise<LoudnormMeasurement> {
   return JSON.parse(match[0]) as LoudnormMeasurement;
 }
 
-/**
- * Two-pass loudnorm: measure the source (pass 1), then re-encode with the
- * measured stats fed back in via `measured_*` + `linear=true` (pass 2). Single-
- * pass dynamic loudnorm re-measures a short internal window on the fly and can
- * pump/adjust gain mid-clip; the two-pass linear form applies one fixed gain
- * derived from the whole file, so the same input always produces the same
- * output level. Exported standalone (not just via downloadPreview) so it can be
- * exercised directly against a local file in tests, without a network fetch.
- */
 export async function normalizeAndEncode(srcPath: string, m4aPath: string): Promise<void> {
   const measured = await measureLoudness(srcPath);
   await run(FFMPEG, [
@@ -115,12 +90,6 @@ export async function normalizeAndEncode(srcPath: string, m4aPath: string): Prom
   ]);
 }
 
-/**
- * Download `url`, normalize loudness (two-pass), and produce both the
- * deliverable m4a and an analysis wav. The m4a lands at public/<trackId>.m4a.
- * `headers` are forwarded to the fetch — the authenticated archive route needs
- * the agent-tier bearer; the public live-preview path passes none.
- */
 export async function downloadPreview(
   url: string,
   trackId: string,
@@ -142,7 +111,6 @@ export async function downloadPreview(
 
   await normalizeAndEncode(srcPath, m4aPath);
 
-  // Mono 22050Hz signed-16 PCM wav for analysis (small, deterministic to read).
   await run(FFMPEG, [
     "-y",
     "-i",
@@ -159,13 +127,6 @@ export async function downloadPreview(
   return { file: `${trackId}.m4a`, m4aPath, tmpDir, wavPath };
 }
 
-/**
- * Delete the shipped track's cached preview audio (public/<trackId>.m4a), if
- * present. Called after a successful ship — the analysis pass that needed it
- * is done, and R2 now holds the durable copy inside the video bundle. Never
- * throws: a missing file, or a delete failure, is not a ship blocker. `dir`
- * defaults to the real public/ dir; overridable for tests.
- */
 export async function deletePreviewAudio(trackId: string, dir = PUBLIC_DIR): Promise<boolean> {
   const m4aPath = path.join(dir, `${trackId}.m4a`);
   try {
@@ -176,15 +137,6 @@ export async function deletePreviewAudio(trackId: string, dir = PUBLIC_DIR): Pro
   }
 }
 
-/**
- * Opportunistic bounded cache: keep only the `keep` most-recently-modified
- * `*.m4a` files directly under public/ (the preview cache downloadPreview
- * writes to), deleting the rest. Only ever touches `*.m4a` files in the public/
- * ROOT — never fonts/ or any other tracked asset. Best-effort: any per-file
- * stat/unlink failure is swallowed so a sweep never breaks the calling script.
- * Returns the filenames it deleted. `dir` defaults to the real public/ dir;
- * overridable for tests.
- */
 export async function sweepPreviewAudioCache(keep = 8, dir = PUBLIC_DIR): Promise<string[]> {
   let entries: string[];
   try {
@@ -215,9 +167,7 @@ export async function sweepPreviewAudioCache(keep = 8, dir = PUBLIC_DIR): Promis
     try {
       await unlink(path.join(dir, entry.name));
       deleted.push(entry.name);
-    } catch {
-      // best-effort — a stale/locked file doesn't block the caller.
-    }
+    } catch {}
   }
   return deleted;
 }

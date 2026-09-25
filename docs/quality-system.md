@@ -2,6 +2,8 @@
 
 Fluncle validates the minimum sufficient evidence for a change's dependency closure, then escalates conservatively. This policy is shared by local agents and GitHub Actions through `scripts/quality/classifier.mjs`; there is no second hand-maintained path table for CI. A selected lane is mandatory, an unknown path is a full-matrix change, and the stable protected check `Lint, Format, and Typecheck` cannot pass when either the core or public-flow job fails.
 
+Package `bun test` suites load `@fluncle/test-support/preload` through their `bunfig.toml`; it blocks outbound network calls while permitting loopback fixture and libSQL servers. Each package’s `no-network.test.ts` checks that the preload is armed, so a missing preload fails the suite before network-dependent tests can reach external services.
+
 ## Closure contract
 
 `bun run quality:classify -- --base <base-sha> --head <head-sha>` prints the plan. Add `--output <file>` for `run-lane.mjs`, `--github-output <file>` in Actions, or `--force-full` for a backstop.

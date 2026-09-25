@@ -1,14 +1,3 @@
-// Self-running checks for the diversity metric. Uses the committed calibration
-// posters (packages/video/calibration/posters/) so the anchors are re-verifiable
-// offline — NO network. Locks the two ground-truth pairs from the audit:
-//   - 027.5.4D vs 025.5.5T : the SAME primitive recolored → must read LOW (too
-//     similar). This is the laundering-by-recolor guard: a colour-only metric would
-//     read them as very different; the structure-dominant distance must not.
-//   - 032.0.4L vs 032.0.6R : genuinely distinct → must read HIGH.
-// If the posters are absent (a shallow checkout) or ffmpeg is not on PATH (the
-// decode shells out to it; CI without ffmpeg stays green — the analyze-set
-// convention), the check no-ops with a note.
-
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
@@ -32,7 +21,6 @@ const POSTERS = path.resolve(import.meta.dirname, "..", "..", "calibration", "po
 const poster = (id: string): string => path.join(POSTERS, `${id}.jpg`);
 const ids = ["027.5.4D", "025.5.5T", "032.0.4L", "032.0.6R"];
 
-// decodeImageRgb spawns the bare `ffmpeg` binary, so probe exactly that.
 const hasFfmpeg = spawnSync("ffmpeg", ["-version"], { stdio: "ignore" }).status === 0;
 
 if (!hasFfmpeg) {
@@ -56,7 +44,7 @@ if (!hasFfmpeg) {
     diff.combined >= DIVERSITY_MIN,
     `a genuinely distinct pair must read distinct (>= ${DIVERSITY_MIN}); got ${diff.combined.toFixed(3)}`,
   );
-  // The structural fingerprint is what discriminates: the recolored pair shares edges.
+
   assert.ok(
     same.edgeOrient < diff.edgeOrient,
     "the recolored pair must have a smaller edge-orientation distance than the distinct pair",
@@ -71,10 +59,6 @@ if (!hasFfmpeg) {
   );
 }
 
-// The PURE structural gate — no network, no fs. The heart of the new axis: a repeat of
-// the subject's dominant family inside the hard window (the last 4) FAILS; inside the
-// wider window (5–8) WARNS; beyond it, or when absent, PASSES; an unresolved subject
-// family SKIPS (never fails a ship because a body couldn't be classified).
 describe("evaluateStructureGate", () => {
   const n = (
     family: StructureFamily | null,
@@ -154,14 +138,7 @@ describe("evaluateStructureGate", () => {
     expect(atFour.repeatAt).toBe(4);
   });
 
-  // ── the all-representational feed: register no longer softens the gate ──────
-  // The automated feed is all-representational (see assign-video-axes.ts), so representational
-  // is a PREREQUISITE, not a rare register whose repeats deserve a pass. A
-  // same-family repeat inside the FAIL window is a hard FAIL regardless of register — the
-  // subject-KIND rotation the fingerprint can't see is the plate-subject gate's job.
   test("a representational-pair same-family repeat inside the FAIL window FAILS (no demotion)", () => {
-    // metaball is the family every raymarched/SDF representational subject classifies as;
-    // under the all-representational feed this must hard-FAIL, never soften to a rhyme.
     const gate = evaluateStructureGate(
       "metaball",
       window(["metaball", "flow", "caustic", "filament"]),
@@ -188,10 +165,6 @@ describe("evaluateStructureGate", () => {
   });
 });
 
-// The PURE plate-subject gate — the subject-kind rotation the structural fingerprint
-// can't see (a hull, a ruin, and a creature all classify by their treatment family's
-// marks). Advisory by design: a same-kind repeat inside the window WARNS, never fails;
-// a plate-less render (null subject) skips.
 describe("evaluatePlateSubjectGate", () => {
   const n = (plateSubject: string | null, i: number): PlateSubjectNeighbour => ({
     logId: `03${i}.0.0X`,

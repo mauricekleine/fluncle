@@ -1,14 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { assertRailArmed, installNoNetworkRail, isRailArmed } from "./no-network";
 
-// The rail's own mechanics, proven behaviourally ONCE here. Every package then carries a
-// one-line proof that its runner actually ARMED the rail (see e.g.
-// apps/cli/src/no-network.test.ts) — a safety mechanism nobody tests is one that silently
-// rots.
-
-/** The message a fetch rejected with, or "" when it resolved. Explicit rather than
- *  `expect(...).rejects`, whose bun typing is not thenable (the type-aware lint flags
- *  awaiting it), and clearer about which of the two outcomes actually happened. */
 async function failureOf(request: Promise<Response>): Promise<string> {
   try {
     await request;
@@ -55,8 +47,6 @@ describe("the no-network rail", () => {
   });
 
   test("lets loopback through (a local libSQL server or fixture server is legitimate)", async () => {
-    // Port 1 is closed, so this fails at the TRANSPORT — the point is that it is NOT
-    // refused by the rail, proving loopback is exempt.
     expect(await failureOf(fetch("http://127.0.0.1:1/health"))).not.toMatch(
       /Blocked outbound request/,
     );

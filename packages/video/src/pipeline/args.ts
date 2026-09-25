@@ -1,20 +1,3 @@
-// A minimal typed CLI flag parser shared by the pipeline entrypoints
-// (ship.ts, social-preview.ts) so `--flag <value>` handling can't drift between
-// them. No dependency — the flag surface here is small enough to own directly.
-//
-// Usage:
-//   const { flags, positionals } = parseArgs(process.argv.slice(2), {
-//     "skip-render": "boolean",
-//     "duration-ms": "number",
-//     composition: "string",
-//   });
-//
-// Boolean flags are present/absent (`--draft` -> true, absent -> false).
-// Number/string flags consume the NEXT token as their value
-// (`--duration-ms 20000`); absent -> undefined. An unrecognized `--flag` or a
-// value-flag missing its value both throw — a typo should fail loudly, not
-// silently no-op.
-
 export type FlagKind = "boolean" | "number" | "string";
 
 export type FlagSchema = Record<string, FlagKind>;
@@ -30,16 +13,10 @@ export type ParsedFlags<S extends FlagSchema> = {
 };
 
 export type ParsedArgs<S extends FlagSchema> = {
-  /** Positional arguments, in order, with recognized flags + their values removed. */
   positionals: string[];
   flags: ParsedFlags<S>;
 };
 
-/**
- * Parse `argv` (already sliced past the script name, i.e. `process.argv.slice(2)`)
- * against `schema`. Throws on an unrecognized `--flag` or a value-flag with no
- * following token.
- */
 export function parseArgs<S extends FlagSchema>(argv: string[], schema: S): ParsedArgs<S> {
   const flags: Record<string, boolean | number | string | undefined> = {};
   for (const [name, kind] of Object.entries(schema)) {

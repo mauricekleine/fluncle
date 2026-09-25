@@ -1,28 +1,3 @@
-// The COVER metric — the family the homogenisation ledger had nothing for. A finding's
-// `cover.jpg` is a SEPARATELY rendered artifact (render-cover.ts composes the <Cover>
-// still over a late footage frame), and both shipped image judges hard-code
-// `poster.jpg`, so no gate and no measurement has ever looked at a cover.
-//
-// This harness is deliberately the OTHER shape from those judges:
-//   - WHOLE-CORPUS, not subject-vs-neighbours. Every cover against every other cover,
-//     so the question is "does the cover corpus have a mean it drifts toward", not
-//     "may this one ship".
-//   - GATE-FREE. It exits 0 always, writes nothing, and touches no generation path. A
-//     ledger entry wants a number, not a verdict.
-//
-// It reuses the poster metric's primitives unchanged — `featureOf` + `diversityDistance`
-// (edge 0.60 / colour 0.20 / luma 0.20, structure-dominant so a recolor cannot launder a
-// reused primitive) and palette-summary's closed hue-bucket vocabulary — so a cover
-// number is comparable with a poster number rather than living in its own units.
-//
-// THE 0.35 REFERENCE LINE: `DIVERSITY_MIN` was calibrated on POSTERS (a same-primitive
-// recolored pair vs a genuinely distinct pair, both posters). Covers carry type, a
-// different crop, and a frame drawn from the drop window, so that calibration does not
-// transfer. Pairs under it are reported as "echoing pairs" — an advisory count against a
-// borrowed reference line, never a verdict about a cover.
-//
-// CLI: bun src/pipeline/measure-cover-diversity.ts [--limit N] [--top K] [--out <path>]
-
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -49,34 +24,21 @@ const DECODE_SIZE = 160;
 const DEFAULT_LIMIT = 40;
 const DEFAULT_TOP = 10;
 
-/** Dominant swatches per cover — three, matching palette-summary's recorded receipt. */
 const SWATCHES_PER_COVER = 3;
 
-/** Levels per channel when quantizing a cover into colour bins (8³ = 512 bins). Coarse
- *  on purpose: the question is which palette basin a cover sits in, not its fine hues. */
 const SWATCH_LEVELS = 8;
 
 const OUT_DIR = path.resolve(import.meta.dirname, "../../out");
 const coverUrl = (logId: string): string => `https://found.fluncle.com/${logId}/cover.jpg`;
 
-// ---------------------------------------------------------------------------
-// Palette (pure over a decoded RgbImage)
-// ---------------------------------------------------------------------------
-
 export type CoverPalette = {
-  /** The dominant hex swatches, most-frequent first. */
   swatches: string[];
-  /** The cover's DEFINING bucket: the hue bucket of its most chromatic dominant swatch. */
+
   bucket: PaletteBucket;
 };
 
 const toHex = (v: number): string => Math.round(v).toString(16).padStart(2, "0");
 
-/**
- * The most-frequent colours in an image, quantized onto a coarse `SWATCH_LEVELS³` grid
- * and returned as the MEAN colour of each winning bin. Ties break on bin index so the
- * same image always yields the same swatches in the same order.
- */
 export function dominantSwatches(img: RgbImage, count: number = SWATCHES_PER_COVER): string[] {
   const bins = SWATCH_LEVELS ** 3;
   const tally = new Float64Array(bins);
@@ -114,7 +76,6 @@ export function dominantSwatches(img: RgbImage, count: number = SWATCHES_PER_COV
   });
 }
 
-/** Saturation×value of a hex swatch — its perceptual chroma; 0 when unparseable. */
 function chromaOf(hex: string): number {
   const rgb = parseHex(hex);
   if (!rgb) {
@@ -124,13 +85,6 @@ function chromaOf(hex: string): number {
   return s * v;
 }
 
-/**
- * A cover's palette record. The DEFINING bucket is the hue bucket of the most chromatic
- * dominant swatch, mirroring `summarizePalette`'s "defining heat stop" rule: the
- * near-black cosmos field a cover is mostly made of is the most FREQUENT colour but says
- * nothing about which basin the cover sits in. An all-neutral cover buckets neutral-mono.
- * Ties keep the earlier (more frequent) swatch, so the choice never wobbles.
- */
 export function coverPaletteOf(img: RgbImage): CoverPalette {
   const swatches = dominantSwatches(img);
   let defining: string | null = null;
@@ -145,8 +99,6 @@ export function coverPaletteOf(img: RgbImage): CoverPalette {
   return { bucket: defining ? hueBucketOf(defining) : "neutral-mono", swatches };
 }
 
-/** Count buckets across the corpus, in the closed vocabulary's own order (zeros kept —
- *  an empty bucket is the shape of the spread, not missing data). */
 export function bucketHistogram(buckets: PaletteBucket[]): { bucket: PaletteBucket; n: number }[] {
   const counts = new Map<PaletteBucket, number>();
   for (const bucket of buckets) {
@@ -154,10 +106,6 @@ export function bucketHistogram(buckets: PaletteBucket[]): { bucket: PaletteBuck
   }
   return PALETTE_BUCKETS.map((bucket) => ({ bucket, n: counts.get(bucket) ?? 0 }));
 }
-
-// ---------------------------------------------------------------------------
-// Pair enumeration + corpus summary (pure)
-// ---------------------------------------------------------------------------
 
 export type CoverSample = {
   logId: string;
@@ -171,7 +119,6 @@ export type CoverPair = {
   distance: DiversityDistance;
 };
 
-/** Every unordered pair (i < j), in stable corpus order. n samples → n(n−1)/2 pairs. */
 export function coverPairs(samples: CoverSample[]): CoverPair[] {
   const pairs: CoverPair[] = [];
   for (let i = 0; i < samples.length; i++) {
@@ -186,41 +133,34 @@ export function coverPairs(samples: CoverSample[]): CoverPair[] {
   return pairs;
 }
 
-/** How many pairs sit under the reference line — the advisory "echoing pairs" count. */
 export function countEchoingPairs(pairs: CoverPair[], threshold: number = DIVERSITY_MIN): number {
   return pairs.filter((p) => p.distance.combined < threshold).length;
 }
 
 export type CoverCorpusReport = {
-  /** Covers that decoded — the corpus the numbers describe. */
   measured: number;
-  /** Findings the feed offered before resolution. */
+
   offered: number;
-  /** Coordinates whose cover could not be resolved locally or over the network. */
+
   unreachable: string[];
   pairs: number;
   meanDistance: number | null;
   minDistance: number | null;
   maxDistance: number | null;
-  /** Mean of each weighted component across all pairs — which view the corpus varies on. */
+
   meanEdge: number | null;
   meanColor: number | null;
   meanLuma: number | null;
-  /** The most-similar pairs, closest first. */
+
   worst: CoverPair[];
   echoThreshold: number;
   echoingPairs: number;
-  /** The defining-bucket spread: one bucket per cover. */
+
   buckets: { bucket: PaletteBucket; n: number }[];
-  /** The raw spread over every dominant swatch of every cover. */
+
   swatchBuckets: { bucket: PaletteBucket; n: number }[];
 };
 
-/**
- * The whole-corpus summary: all-pairs distance, its mean/min/max, the K most-similar
- * pairs, the advisory echoing count, and the palette spread. Pure — no fs, no network,
- * no threshold that decides anything.
- */
 export function summarizeCoverCorpus(
   samples: CoverSample[],
   opts: {
@@ -270,14 +210,9 @@ export function summarizeCoverCorpus(
   };
 }
 
-// ---------------------------------------------------------------------------
-// Report formatting (pure)
-// ---------------------------------------------------------------------------
-
 const num = (value: number | null, digits = 3): string =>
   value === null ? "n/a" : value.toFixed(digits);
 
-/** The Markdown report. Pure over a summary, so the wording is pinned by tests. */
 export function formatCoverReport(report: CoverCorpusReport): string {
   const lines: string[] = [];
   lines.push("# Cover diversity — whole-corpus measurement");
@@ -342,21 +277,12 @@ export function formatCoverReport(report: CoverCorpusReport): string {
   return lines.join("\n");
 }
 
-// ---------------------------------------------------------------------------
-// Resolution + the run (impure)
-// ---------------------------------------------------------------------------
-
-/** Decode a cover LOCAL-FIRST (a shipped bundle under out/) then from the public host.
- *  Returns null (never throws) when neither is reachable — one missing cover must not
- *  cost the corpus its numbers. */
 export async function resolveCover(logId: string, scratchDir: string): Promise<RgbImage | null> {
   const local = path.join(OUT_DIR, logId, "cover.jpg");
   if (existsSync(local)) {
     try {
       return decodeImageRgb(local, { height: DECODE_SIZE, width: DECODE_SIZE });
-    } catch {
-      // fall through to the network copy
-    }
+    } catch {}
   }
   try {
     const res = await fetch(coverUrl(logId));
@@ -372,8 +298,6 @@ export async function resolveCover(logId: string, scratchDir: string): Promise<R
   }
 }
 
-/** Measure the cover corpus: resolve up to `limit` published findings' covers, then
- *  summarize. Read-only against the public host. */
 export async function measureCoverDiversity(
   opts: { limit?: number; top?: number } = {},
 ): Promise<CoverCorpusReport> {
@@ -419,6 +343,6 @@ if (import.meta.main) {
     writeFileSync(flags.out, markdown);
     console.error(`[covers] wrote ${flags.out}`);
   }
-  // Measurement, never a ship gate.
+
   process.exit(0);
 }

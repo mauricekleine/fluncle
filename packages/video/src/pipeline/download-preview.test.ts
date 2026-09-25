@@ -1,9 +1,3 @@
-// Verifies the two-pass loudnorm (normalizeAndEncode) and the bounded
-// preview-audio cache helpers. The loudnorm tests synthesize a local test tone
-// with ffmpeg rather than fetching a real preview, so they run offline and
-// fast; they self-skip if ffmpeg isn't on PATH (this package always needs
-// ffmpeg for real use, but a bare `bun test` sandbox may not have it).
-
 import { spawnSync } from "node:child_process";
 import { mkdtemp, readdir, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -21,7 +15,6 @@ import {
 const FFMPEG = process.env.FLUNCLE_FFMPEG ?? "ffmpeg";
 const hasFfmpeg = spawnSync(FFMPEG, ["-version"]).status === 0;
 
-/** Re-measure a file's integrated loudness with a single loudnorm measure-only pass. */
 function measureIntegratedLoudness(file: string): number {
   const probe = spawnSync(
     FFMPEG,
@@ -42,8 +35,7 @@ describe.skipIf(!hasFfmpeg)("normalizeAndEncode (two-pass loudnorm)", () => {
     try {
       const src = path.join(dir, "tone.wav");
       const out = path.join(dir, "tone.m4a");
-      // A -20 dBFS sine tone: quiet enough that the -1.5 dBTP ceiling never
-      // engages, so the two-pass gain lands on the -14 LUFS integrated target.
+
       const gen = spawnSync(FFMPEG, [
         "-y",
         "-f",
@@ -102,12 +94,11 @@ describe("sweepPreviewAudioCache", () => {
   test("keeps only the N most-recently-modified .m4a files and never touches other files", async () => {
     const dir = await mkdtemp(path.join(tmpdir(), "fluncle-sweep-"));
     try {
-      // 5 previews, ages oldest -> newest, plus a non-preview file that must survive.
       const names = ["a.m4a", "b.m4a", "c.m4a", "d.m4a", "e.m4a"];
       const now = Date.now() / 1000;
       for (const [index, name] of names.entries()) {
         await writeFile(path.join(dir, name), "x");
-        // Stagger mtimes so sort order is deterministic: a oldest, e newest.
+
         const mtime = now - (names.length - index) * 60;
         await utimes(path.join(dir, name), mtime, mtime);
       }
@@ -151,9 +142,6 @@ describe("downloadPreview (fetch headers)", () => {
     globalThis.fetch = realFetch;
   });
 
-  // Drive downloadPreview through a swapped fetch that captures the request init
-  // and returns a non-ok response, so it throws before any ffmpeg work — enough
-  // to assert the auth headers reach the fetch (or are absent on the live path).
   function installCapturingFetch(): { calls: { init: RequestInit | undefined; url: string }[] } {
     const calls: { init: RequestInit | undefined; url: string }[] = [];
     globalThis.fetch = (async (

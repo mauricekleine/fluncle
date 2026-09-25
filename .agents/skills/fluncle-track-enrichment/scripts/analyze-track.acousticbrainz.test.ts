@@ -1,16 +1,7 @@
-// Focused test for the AcousticBrainz-by-ISRC BPM fallback in analyze-track.ts.
-//
-// Tests ONLY `acousticBrainzBpmByIsrc` in isolation, with an injected mock fetch
-// so it never touches the network. Importing analyze-track.ts is safe because the
-// CLI pipeline is guarded by `if (import.meta.main)` — the import does not run it.
-
 import { describe, expect, test } from "bun:test";
 
 import { acousticBrainzBpmByIsrc } from "./analyze-track.ts";
 
-// A mock fetch that maps URL substrings → responses, and records every call so a
-// test can assert it was (or was not) invoked. Anything unmatched throws, which
-// would surface as a test failure rather than a silent real network call.
 function mockFetch(
   routes: Array<{ body: unknown; match: string; ok?: boolean; status?: number }>,
 ): { calls: string[]; fetch: typeof fetch } {
@@ -59,7 +50,6 @@ describe("acousticBrainzBpmByIsrc", () => {
       { body: { rhythm: { bpm: 87 } }, match: "acousticbrainz.org" },
     ]);
 
-    // 87 × 2 = 174, which lands in [160,185].
     expect(await acousticBrainzBpmByIsrc("ISRC0001", fetch)).toBe(174);
   });
 
@@ -109,7 +99,7 @@ describe("acousticBrainzBpmByIsrc", () => {
   test("BPM that cannot octave-fold into the D&B band → null (in-band discipline)", async () => {
     const { fetch } = mockFetch([
       { body: { recordings: [{ id: MBID }] }, match: "musicbrainz.org" },
-      // 100 → ×2=200 (over), ×1=100, ×0.5=50: nothing lands in [160,185].
+
       { body: { rhythm: { bpm: 100 } }, match: "acousticbrainz.org" },
     ]);
 

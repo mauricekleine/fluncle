@@ -1,14 +1,5 @@
 #!/usr/bin/env bun
-// Apply operator label rulings: enable the clearly-DnB, disable the clearly-not-DnB. Matches
-// labels by exact NAME. Dry-run by default; --confirm writes. Writes a rollback of prior states.
-//
-//   bun run rule-labels.ts --enable "Kos.Mos.Music|Syncopix Records" --disable "Paradoxx Music|Carbon Music"
-//   bun run rule-labels.ts --disable "Paradoxx Music" --confirm
-//
-// Only pass labels you are SURE about — a wrong disable makes an artist's tracks purge-eligible,
-// a wrong enable pulls its releases into the catalogue on the next crawl. Leave anything you can't
-// identify UNDECIDED (it stays in the /admin/labels review queue). Disabling is reversible; the
-// rollback file restores the prior seed_state.
+
 import { writeFileSync } from "node:fs";
 import { getDb, rowString } from "./lib";
 

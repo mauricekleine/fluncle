@@ -9,12 +9,6 @@ import { type Client } from "@libsql/client/web";
 import { type Catalogue } from "./lib";
 import { main, mintSlug, planSplit } from "./split-artist";
 
-// The conflation repair TOUCHES PRODUCTION — a strip deletes rows and a split re-points edges — so
-// nothing here may reach a real database. These drive a recording stub of the libSQL `Client` and
-// pin the rails that decide whether the tool can do damage: the SHARED-CREDIT hold-back, the
-// FINDINGS abort, the NOT-ACTUALLY-CONFLATED abort, the ENTANGLEMENT abort, and that a dry-run
-// performs ZERO writes.
-
 type Row = Record<string, unknown>;
 type Statement = { args?: unknown; sql: string };
 
@@ -24,11 +18,8 @@ type Stub = {
   executed: string[];
 };
 
-/** Every statement that could change the database. A dry-run must issue none of these. */
 const isWrite = (sql: string): boolean => /^\s*(delete|insert|replace|update)\b/i.test(sql);
 
-// Redirect the rollback snapshot before ANY test runs — in a real run that file is verbatim
-// production rows, and the script defaults `PRUNE_OUT_DIR` to `.`.
 const PRUNE_OUT_DIR = mkdtempSync(join(tmpdir(), "split-artist-"));
 process.env.PRUNE_OUT_DIR = PRUNE_OUT_DIR;
 
@@ -87,11 +78,6 @@ function catalogue(spec: Spec): Catalogue {
   };
 }
 
-/**
- * The live conflation, in miniature. `K` holds a J-pop act's Cutting Edge tracks AND its real drum
- * & bass Audio Couture tracks; `t_shared` is a Cutting Edge track co-credited to another artist, so
- * it must never move or die.
- */
 const conflated = (db: Client, opts: { findingTrackIds?: string[] } = {}) =>
   catalogue({
     artists: [
@@ -147,7 +133,7 @@ describe("planSplit", () => {
 
     expect(plan.sharedTrackIds).toEqual(["t_shared"]);
     expect(plan.impostorTrackIds).not.toContain("t_shared");
-    // Held back means kept, so the artist does not silently lose it either.
+
     expect(plan.keptTrackIds).toContain("t_shared");
   });
 
@@ -165,7 +151,6 @@ describe("planSplit", () => {
   test("an album losing every track is orphaned; a half-emptied one is not", () => {
     const plan = planSplit(conflated(stub().client), "A_K", new Set(["cutting-edge"]));
 
-    // al_jpop loses both its tracks; al_mix keeps the shared one.
     expect(plan.albumIds).toEqual(["al_jpop"]);
   });
 });
@@ -228,7 +213,6 @@ describe("the not-actually-conflated abort", () => {
 
 describe("the findings abort", () => {
   test("a finding among the movable tracks aborts the whole run", async () => {
-    // Every impostor-side track is a finding, so the movable set is empty AND findings are present.
     const s = stub();
     const cat = conflated(s.client, { findingTrackIds: ["t_jpop1", "t_jpop2"] });
     const { code } = await run(
@@ -291,7 +275,7 @@ describe("the dry run", () => {
 
     expect(code).toBe(0);
     expect(out).toContain("new artist row");
-    // `k` is taken by the conflated row itself, so the salt lands on `k-2`.
+
     expect(out).toContain("k-2");
     expect(s.executed.filter(isWrite)).toEqual([]);
   });
@@ -351,7 +335,7 @@ describe("--confirm", () => {
       "insert into artists (id, name, slug, mbid, created_at, updated_at) values (?, ?, ?, ?, ?, ?)",
       "update track_artists set artist_id = ? where artist_id = ? and track_id in (?,?)",
     ]);
-    // Two ids bound, and they are the impostor pair — never the shared or the kept track.
+
     expect(s.executed.some((sql) => sql.includes("delete from tracks"))).toBe(false);
   });
 
@@ -370,8 +354,7 @@ describe("--confirm", () => {
       "delete from track_embeddings where track_id in (?,?)",
     );
     expect(s.batches[0]?.stmts[2]?.sql).toBe("delete from tracks where track_id in (?,?)");
-    // The artists row itself is NEVER deleted by this tool — that is the whole difference from
-    // purge-artists.ts, and the reason a conflated row is safe to repair.
+
     expect(s.executed.some((sql) => /delete from artists\b/.test(sql))).toBe(false);
   });
 

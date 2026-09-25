@@ -1,21 +1,3 @@
-// The palette provenance summary — the missing diversity axis (docs/planning/
-// homogenisation-evidence.md, 07-13 + 07-14): four of five consecutive renders shared
-// one amber/sepia palette, and palette was invisible to every stored column. This turns
-// a render's derived palette (social-preview's paletteMix, node-vibrant over the artwork)
-// into two compact, DETERMINISTIC provenance values recorded in render.json and on the
-// finding:
-//
-//   - a coarse HUE-BUCKET TAG (e.g. "amber-warm") — the string the render conductor's
-//     deterministic axis assigner reads to steer the NEXT render off the worn hue.
-//   - up to three dominant HEX swatches — the human-readable receipt in the bundle.
-//
-// The bucket is derived from HSV so it is stable and reproducible: the same palette
-// always tags the same bucket. It is intentionally COARSE — the goal is to catch a
-// palette basin (the whole feed sliding amber), not to grade fine hue differences.
-
-/** The coarse hue buckets. Warm buckets sit up front — the amber/sepia basin the
- *  evidence names is `amber-warm`. `neutral-mono` is the low-chroma escape (a warm-dark
- *  field with no defining hue). This list is the closed vocabulary the ledger records. */
 export const PALETTE_BUCKETS = [
   "red-hot",
   "amber-warm",
@@ -30,15 +12,11 @@ export const PALETTE_BUCKETS = [
 
 export type PaletteBucket = (typeof PALETTE_BUCKETS)[number];
 
-// Below this saturation OR value the swatch has no defining hue — it reads as a
-// warm-dark/neutral field, so it buckets `neutral-mono` rather than an arbitrary hue.
 const SAT_FLOOR = 0.15;
 const VAL_FLOOR = 0.1;
 
 export type Hsv = { h: number; s: number; v: number };
 
-/** Parse `#rrggbb` / `#rgb` (or the same without the hash) to [r,g,b] in 0..1. Null on
- *  anything unparseable — the caller treats an unparseable swatch as absent. */
 export function parseHex(hex: string): [number, number, number] | null {
   if (typeof hex !== "string") {
     return null;
@@ -59,7 +37,6 @@ export function parseHex(hex: string): [number, number, number] | null {
   return [r, g, b];
 }
 
-/** RGB (0..1) → HSV with hue in degrees [0,360). */
 export function rgbToHsv(r: number, g: number, b: number): Hsv {
   const max = Math.max(r, g, b);
   const min = Math.min(r, g, b);
@@ -81,7 +58,6 @@ export function rgbToHsv(r: number, g: number, b: number): Hsv {
   return { h, s: max > 1e-6 ? c / max : 0, v: max };
 }
 
-/** The coarse hue bucket of a single hex swatch. Unparseable/near-grey → neutral-mono. */
 export function hueBucketOf(hex: string): PaletteBucket {
   const rgb = parseHex(hex);
   if (!rgb) {
@@ -91,7 +67,7 @@ export function hueBucketOf(hex: string): PaletteBucket {
   if (s < SAT_FLOOR || v < VAL_FLOOR) {
     return "neutral-mono";
   }
-  // Hue → bucket. Wrap-around red spans the top and bottom of the wheel.
+
   if (h >= 345 || h < 15) {
     return "red-hot";
   }
@@ -116,9 +92,6 @@ export function hueBucketOf(hex: string): PaletteBucket {
   return "magenta-cool";
 }
 
-/** The palette shape social-preview's paletteMix produces (CosmosPalette): the four
- *  composition stops plus the raw artwork swatches. Only the fields this summary reads
- *  are required. */
 export type PaletteInput = {
   accent?: string | null;
   background?: string | null;
@@ -128,25 +101,16 @@ export type PaletteInput = {
 };
 
 export type PaletteSummary = {
-  /** The coarse hue-bucket tag recorded on the finding + read by the axis assigner. */
   bucket: PaletteBucket;
-  /** Up to three dominant hex swatches — the bundle's human-readable receipt. */
+
   swatches: string[];
 };
 
-/** Summarize a render's palette into its provenance record. The BUCKET is derived from
- *  the palette's defining HEAT stop — the more chromatic of accent/glow (the light
- *  material that carries the palette's hue; `background` is a warm-dark near-constant and
- *  `ink` is cream, so neither defines the basin). When neither accent nor glow clears the
- *  chroma floor the palette is a neutral warm-dark field → `neutral-mono`. The recorded
- *  swatches are accent/glow/background (deduped, hash-normalized), the three that read. */
 export function summarizePalette(palette: PaletteInput): PaletteSummary {
   const accent = normalizeHex(palette.accent);
   const glow = normalizeHex(palette.glow);
   const background = normalizeHex(palette.background);
 
-  // The defining stop: whichever of accent/glow is the more chromatic (highest
-  // saturation). Deterministic — accent wins an exact tie so the choice never wobbles.
   const accentChroma = chromaOf(accent);
   const glowChroma = chromaOf(glow);
   const defining = glowChroma > accentChroma ? glow : accent;
@@ -176,7 +140,6 @@ function normalizeHex(hex: string | null | undefined): string | null {
   return `#${toHex(rgb[0])}${toHex(rgb[1])}${toHex(rgb[2])}`;
 }
 
-/** Saturation×value of a swatch — its perceptual chroma; 0 when unparseable/null. */
 function chromaOf(hex: string | null): number {
   if (!hex) {
     return 0;

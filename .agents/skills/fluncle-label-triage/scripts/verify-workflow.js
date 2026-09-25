@@ -5,11 +5,6 @@ export const meta = {
   phases: [{ detail: "Refute-framed re-research, one agent per batch", title: "Verify" }],
 };
 
-// ── Output shape ─────────────────────────────────────────────────────────────────────────────
-// One entry per label. `agrees` is the load-bearing bit: the verifier reached the SAME bucket
-// independently. A promoted verdict needs agrees=true AND confidence=high; everything else stays
-// for the operator. The verifier may flip to `unclear` (conflation, too little evidence) — that
-// is a refutation, not a third opinion.
 const VERIFY_ITEM = {
   properties: {
     agrees: {
@@ -76,8 +71,7 @@ Read BOTH before judging. Majors, subsidiaries, distributors and aggregators are
 One entry per label via the structured schema. Do not write any files.`;
 
 phase("Verify");
-// Execution slices run on the Opus workhorse per the repo model policy (AGENTS.md: Fable
-// decides, Opus executes); cfg.model exists so a run can override without editing the script.
+
 const model = cfg.model || "opus";
 const results = await parallel(
   starts.map(

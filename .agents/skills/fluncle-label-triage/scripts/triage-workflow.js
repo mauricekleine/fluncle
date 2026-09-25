@@ -8,11 +8,6 @@ export const meta = {
   ],
 };
 
-// ── The rule shape the census returns ────────────────────────────────────────────────────────
-// A proposal is a FIRST-CREDIT exception to the label's seed state (docs/label-entity.md):
-// a `block` on an enabled label refuses that act's own records; an `allow` on a label that
-// stays disabled takes theirs and nobody else's. `firstCreditCount` is load-bearing — a rule with
-// zero first credits on the census is INERT (it can never fire) and is rejected downstream.
 const RULE_ITEM = {
   properties: {
     artistMbid: {
@@ -214,8 +209,6 @@ const results = await parallel(
 
 const all = results.filter(Boolean).flatMap((r) => r.verdicts || []);
 
-// The census runs ONLY for the labels phase 1 flagged as mixed — a plain enable or disable needs
-// no census, and the census is the expensive leg (paged MB reads at 1 req/s).
 const mixed = all.filter((v) => v.needsCensus === true);
 const censusStarts = [];
 for (let s = 0; s < mixed.length; s += CENSUS_BATCH) {
@@ -243,7 +236,6 @@ if (mixed.length > 0) {
   censused = censusResults.filter(Boolean).flatMap((r) => r.verdicts || []);
 }
 
-// The census verdict REPLACES phase 1's provisional read for that label.
 const censusedBySlug = new Map(censused.map((v) => [v.slug, v]));
 const final = all.map((v) => censusedBySlug.get(v.slug) ?? v);
 const by = (v) => final.filter((x) => x.verdict === v);

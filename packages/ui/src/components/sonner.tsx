@@ -7,8 +7,6 @@ import {
 } from "@phosphor-icons/react";
 import { Toaster as Sonner, type ToasterProps } from "sonner";
 
-// Dark-only, matching the app (no next-themes). Colors come from the design tokens
-// (packages/tokens) via the CSS vars below.
 const Toaster = ({ ...props }: ToasterProps) => {
   return (
     <Sonner

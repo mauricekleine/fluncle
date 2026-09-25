@@ -1,38 +1,3 @@
-// Self-running check for the deterministic motion-metrics MATH (analyze-motion.ts)
-// — no GPU, no ffmpeg, no test framework. Builds synthetic RGB frame strips +
-// synthetic 20Hz curves and asserts the locked behaviours of the three scorers:
-//
-//   FLASH SAFETY (C2 — the HARD epilepsy gate):
-//     - strobe (full-field 0.1↔0.9 >3Hz)                  → unsafe.
-//     - boiling grain over a static field                 → safe (the critical
-//                                                            false-positive guard).
-//     - fast coherent flash buried in grain               → unsafe (the NEW RFC P0
-//                                                            fixture: grain must not
-//                                                            hide a real flash).
-//     - localized-quadrant strobe (<25% of WHOLE frame    → unsafe (proves the
-//       but ≥25% of a 10° sub-window)                        sliding-window area rule).
-//     - red strobe (saturated-red alternation)            → red branch fires.
-//
-//   COUPLING (C3 — the anti-dead counter-gate, statistically valid):
-//     - drift + a curve it tracks                         → alive.
-//     - drift + FLAT curve                                → dead, attribution Layer-1.
-//     - drift + DYNAMIC curve the motion ignores          → dead, attribution Layer-2.
-//     - permutation-null FP rate on a NOISE fixture       → the corrected estimator
-//                                                            does NOT clear "alive"
-//                                                            above its defined FP rate
-//                                                            (the fatal-defect guard).
-//
-//   INTENT (C5):
-//     - drop + intent (spike in window)                   → drop.pass, small align.
-//     - mis-pinned drop                                   → large arcPeakAlignmentMs.
-//
-// Run: `bun src/pipeline/analyze-motion.test.ts` (exits non-zero on failure).
-//
-// Calibration note (mirrors detect-beat-pull's discipline): the coupling
-// dead/weak/alive cutoffs are derived from the per-clip permutation null
-// (provisional — alive = above the 95th null percentile). Real-clip cutoffs are a
-// documented follow-up over the operator-labelled set.
-
 import assert from "node:assert/strict";
 
 import { type CosmosAudio, type EnergySample } from "../remotion/types";
@@ -53,11 +18,6 @@ const FW = 64;
 const FH = 114;
 const PIX = FW * FH;
 
-// ---------------------------------------------------------------------------
-// Synthetic RGB frame builders (interleaved 0..255, 3 bytes/pixel)
-// ---------------------------------------------------------------------------
-
-/** A uniform full-field gray frame at 8-bit value v. */
 const grayFrame = (v: number): Float32Array => {
   const f = new Float32Array(PIX * 3);
   for (let p = 0; p < PIX; p++) {
@@ -68,7 +28,6 @@ const grayFrame = (v: number): Float32Array => {
   return f;
 };
 
-// Deterministic per-pixel speckle (mirrors detect-beat-pull.test.ts's hash grain).
 const speckle = (x: number, t: number, amp: number): number => {
   const h = ((x * 374761393) ^ (Math.floor(t / 1.25) * 668265263)) >>> 0;
   return ((h % 1000) / 1000 - 0.5) * amp;
@@ -76,7 +35,6 @@ const speckle = (x: number, t: number, amp: number): number => {
 
 const clamp8 = (v: number): number => Math.max(0, Math.min(255, v));
 
-/** A static field at base luma plus heavy per-pixel speckle (the grain guard). */
 const grainFrame = (base: number, t: number, amp: number): Float32Array => {
   const f = new Float32Array(PIX * 3);
   for (let p = 0; p < PIX; p++) {
@@ -88,7 +46,6 @@ const grainFrame = (base: number, t: number, amp: number): Float32Array => {
   return f;
 };
 
-/** A full-field gray flash at v, with grain on top. */
 const grainFlashFrame = (v: number, t: number, amp: number): Float32Array => {
   const f = new Float32Array(PIX * 3);
   for (let p = 0; p < PIX; p++) {
@@ -100,12 +57,11 @@ const grainFlashFrame = (v: number, t: number, amp: number): Float32Array => {
   return f;
 };
 
-/** A frame whose TOP-LEFT quadrant strobes (value vHot) over a static dark field. */
 const quadrantFrame = (vHot: number, vRest: number): Float32Array => {
   const f = new Float32Array(PIX * 3);
   for (let y = 0; y < FH; y++) {
     for (let x = 0; x < FW; x++) {
-      const inQuad = x < FW / 2 && y < FH / 2; // a quarter of the frame
+      const inQuad = x < FW / 2 && y < FH / 2;
       const v = inQuad ? vHot : vRest;
       const idx = (y * FW + x) * 3;
       f[idx] = v;
@@ -116,7 +72,6 @@ const quadrantFrame = (vHot: number, vRest: number): Float32Array => {
   return f;
 };
 
-/** A full-field RGB frame (for the red strobe). */
 const rgbFrame = (r: number, g: number, b: number): Float32Array => {
   const f = new Float32Array(PIX * 3);
   for (let p = 0; p < PIX; p++) {
@@ -134,17 +89,11 @@ const wrapRgb = (frames: Float32Array[]): RgbFrames => ({
   width: FW,
 });
 
-const FRAMES = 150; // 5s at 30fps — past the 10s-floor's structural minimums for flash rate
+const FRAMES = 150;
 
-// gray 90 → L≈0.102, gray 243 → L≈0.896 (ΔL≈0.79, darker 0.10 < 0.80) — a real flash.
 const HOT = 243;
 const COLD = 90;
 
-// ---------------------------------------------------------------------------
-// FLASH FIXTURES
-// ---------------------------------------------------------------------------
-
-// STROBE: full-field 0.1↔0.9 every 3 frames (5 Hz > 3 Hz) over the WHOLE frame.
 const strobe = wrapRgb(
   Array.from({ length: FRAMES }, (_, t) => grayFrame(Math.floor(t / 3) % 2 === 0 ? HOT : COLD)),
 );
@@ -153,14 +102,10 @@ assert.equal(strobeR.unsafe, true, "a full-field strobe must be UNSAFE");
 assert.equal(strobeR.verdict, "unsafe", "strobe verdict unsafe");
 assert.ok(strobeR.maxGeneralFlashesPerSec > 3, "strobe has >3 general flashes/sec");
 
-// BOILING GRAIN over a static dark field: heavy per-pixel speckle, no coherent
-// motion. The spatial mean barely moves → MUST be safe (the false-positive guard).
 const grain = wrapRgb(Array.from({ length: FRAMES }, (_, t) => grainFrame(60, t, 80)));
 const grainFlashResult = scoreFlashSafety(grain);
 assert.equal(grainFlashResult.unsafe, false, "boiling grain over a static field must be SAFE");
 
-// FAST FLASH IN GRAIN (the NEW RFC P0 fixture): a real coherent ≥0.10 full-field
-// flash >3/sec BURIED in grain. Grain must NOT hide the real flash.
 const fastFlashInGrain = wrapRgb(
   Array.from({ length: FRAMES }, (_, t) =>
     grainFlashFrame(Math.floor(t / 3) % 2 === 0 ? HOT : COLD, t, 40),
@@ -169,9 +114,6 @@ const fastFlashInGrain = wrapRgb(
 const fastFlashR = scoreFlashSafety(fastFlashInGrain);
 assert.equal(fastFlashR.unsafe, true, "a real coherent flash buried in grain must be UNSAFE");
 
-// LOCALIZED-QUADRANT STROBE: a coherent strobe over ~one quadrant (25% of the WHOLE
-// frame, but ≥25% of a 10° sub-window). The whole-frame rule would MISS this; the
-// sliding-window area rule must catch it.
 const quadStrobe = wrapRgb(
   Array.from({ length: FRAMES }, (_, t) =>
     Math.floor(t / 3) % 2 === 0 ? quadrantFrame(HOT, 30) : quadrantFrame(COLD, 30),
@@ -185,8 +127,6 @@ assert.equal(
 );
 assert.ok(quadR.worstWindowArea >= 0.25, "the quadrant fills ≥25% of a 10° window");
 
-// RED STROBE: saturated red (255,0,0) ↔ dark (20,20,20) every 3 frames. The red
-// branch must fire (>3 red flashes/sec, chroma change > 0.2).
 const redStrobe = wrapRgb(
   Array.from({ length: FRAMES }, (_, t) =>
     Math.floor(t / 3) % 2 === 0 ? rgbFrame(255, 0, 0) : rgbFrame(20, 20, 20),
@@ -200,14 +140,9 @@ console.log(
   `flash: strobe=${strobeR.verdict} grain=${grainFlashResult.verdict} fastInGrain=${fastFlashR.verdict} quad=${quadR.verdict}(area ${(quadR.worstWindowArea * 100).toFixed(0)}%) red=${redR.verdict}(red ${redR.maxRedFlashesPerSec}/s)`,
 );
 
-// ---------------------------------------------------------------------------
-// COUPLING FIXTURES — synthetic structural delta + audio curves (NO frames)
-// ---------------------------------------------------------------------------
-
-const N = 300; // 10s at 30fps — structural-delta samples
+const N = 300;
 const DELTA_LEN = N;
 
-// A 20Hz curve generator: `value(ms)` sampled every 50ms over the clip length.
 const makeCurve = (durationMs: number, value: (ms: number) => number): EnergySample[] => {
   const samples: EnergySample[] = [];
   for (let ms = 0; ms <= durationMs; ms += 50) {
@@ -218,11 +153,10 @@ const makeCurve = (durationMs: number, value: (ms: number) => number): EnergySam
 
 const clipMs = (DELTA_LEN / FPS) * 1000;
 
-// A pulsing energy curve (period ~1s) — clearly dynamic.
 const pulsingCurve = makeCurve(clipMs, (ms) => 0.5 + 0.5 * Math.sin((2 * Math.PI * ms) / 1000));
-// A flat curve.
+
 const flatCurve = makeCurve(clipMs, () => 0.5);
-// A loud, energetic, pulsing energy curve for dead-zone tests.
+
 const loudPulsing = makeCurve(clipMs, (ms) => 0.7 + 0.3 * Math.sin((2 * Math.PI * ms) / 1000));
 
 const audioFrom = (
@@ -243,13 +177,11 @@ const audioFrom = (
   trebleCurve: energy,
 });
 
-// A structural delta that TRACKS the energy curve (lagged by the EMA group delay):
-// motion-change rides the curve. The energy headline lag is ~4 frames.
 const trackingDelta = (curve: EnergySample[], lag: number): number[] => {
   const out: number[] = [];
   for (let f = 0; f < DELTA_LEN; f++) {
     const ms = ((f - lag) / FPS) * 1000;
-    // sample the curve at the lagged time
+
     let v = curve[0]?.energy ?? 0;
     if (ms > 0) {
       const idx = Math.min(curve.length - 1, Math.round(ms / 50));
@@ -260,7 +192,6 @@ const trackingDelta = (curve: EnergySample[], lag: number): number[] => {
   return out;
 };
 
-// 1) ONE-WAY DRIFT + a curve it tracks → coupling ALIVE.
 const aliveDelta = trackingDelta(pulsingCurve, 4);
 const aliveCoupling = scoreCoupling({
   audio: audioFrom(pulsingCurve, { raw: { bass: 3, mid: 3, treble: 3 } }),
@@ -272,10 +203,8 @@ assert.equal(aliveCoupling.verdict, "alive", "drift tracking a dynamic curve mus
 assert.ok(aliveCoupling.couplingPercentile >= 95, "alive coupling clears the 95th null percentile");
 assert.equal(aliveCoupling.intentDeclaredBand, null, "no intent → intentDeclaredBand null");
 
-// 2) DRIFT + FLAT curve → coupling DEAD, attribution Layer-1 (the track was flat).
-// rawDynamicsHint low crest → "the track was flat" (signal).
-const flatDelta = trackingDelta(pulsingCurve, 4); // picture moves dynamically...
-const flatAudio = audioFrom(flatCurve, { raw: { bass: 1.1, mid: 1.1, treble: 1.1 } }); // ...but the curve is flat
+const flatDelta = trackingDelta(pulsingCurve, 4);
+const flatAudio = audioFrom(flatCurve, { raw: { bass: 1.1, mid: 1.1, treble: 1.1 } });
 const flatCoupling = scoreCoupling({
   audio: flatAudio,
   delta: flatDelta,
@@ -285,11 +214,8 @@ const flatCoupling = scoreCoupling({
 assert.equal(flatCoupling.verdict, "dead", "drift against a flat curve must be DEAD");
 assert.equal(flatCoupling.attribution.attributedLayer, 1, "flat curve → Layer-1 attribution");
 
-// 3) DRIFT + DYNAMIC curve the motion IGNORES → coupling DEAD, attribution Layer-2.
-// A constant-velocity drift (constant delta) while the curve has big peaks; high
-// raw crest so the source is dynamic → the picture ignores it (binding fault).
 const constantDelta = Array.from({ length: DELTA_LEN }, () => 0.03);
-// add a tiny deterministic ripple so it isn't perfectly constant (avoids degenerate variance)
+
 for (let f = 0; f < DELTA_LEN; f++) {
   constantDelta[f] += (0.0001 * (((f * 2654435761) >>> 0) % 1000)) / 1000;
 }
@@ -306,11 +232,6 @@ assert.equal(
 );
 assert.equal(ignoreCoupling.attribution.attributedLayer, 2, "dynamic curve ignored → Layer-2");
 
-// 4) PERMUTATION-NULL FP RATE (the fatal-defect guard). On a NOISE fixture
-// (deterministic-seeded random delta vs random curve), the corrected null-based
-// estimator must NOT clear "alive" — its FP rate is bounded by the chosen
-// percentile (alive = above P95 → ~5% FP), where the naive max-Pearson's would be
-// 21–73%. We run several independent noise pairs and assert almost none read alive.
 const noiseRng = (seed: number): (() => number) => {
   let a = seed >>> 0;
   return () => {
@@ -348,8 +269,6 @@ console.log(
   `coupling: alive=${aliveCoupling.coupling.toFixed(2)}(P${aliveCoupling.couplingPercentile.toFixed(0)}) flat=${flatCoupling.verdict}(L${flatCoupling.attribution.attributedLayer}) ignore=${ignoreCoupling.verdict}(L${ignoreCoupling.attribution.attributedLayer}) noiseFP=${(fpRate * 100).toFixed(0)}%`,
 );
 
-// Dead-zone read: an energetic loud window with constant (uncorrelated) motion
-// surfaces a dead zone.
 const dzCoupling = scoreCoupling({
   audio: audioFrom(loudPulsing, { raw: { bass: 4, mid: 4, treble: 4 } }),
   delta: constantDelta,
@@ -360,10 +279,6 @@ assert.ok(
   dzCoupling.deadZones.length > 0,
   "energetic audio + flat motion must surface a dead zone",
 );
-
-// ---------------------------------------------------------------------------
-// INTENT FIXTURES
-// ---------------------------------------------------------------------------
 
 const intentAt = (dropMs: number): RenderIntent => ({
   arcSource: "energyCurve",
@@ -384,7 +299,6 @@ const intentAt = (dropMs: number): RenderIntent => ({
   vehicle: "voronoi",
 });
 
-// A delta that's flat then a structural burst at t=drop (frame = dropMs/1000*fps).
 const DROP_MS = 5000;
 const dropFrame = Math.round((DROP_MS / 1000) * FPS);
 const dropDelta = Array.from({ length: DELTA_LEN }, (_, f) => {
@@ -413,9 +327,6 @@ assert.ok(
 assert.equal(dropIntentR.translationTripwire.pass, true, "no translation binding → tripwire ok");
 assert.equal(dropIntentR.axisCoverage.pass, true, "structural+light+texture covered");
 
-// MIS-PINNED drop: the burst is at 5000ms but the intent claims the drop is at
-// 9000ms → drop.pass may still pass on the in-window check failing, but the
-// arcPeakAlignmentMs must be large (the scripted-clock anti-pattern).
 const misPinnedR = checkIntent({
   audio: dropAudio,
   delta: dropDelta,
@@ -428,8 +339,6 @@ assert.ok(
   `a mis-pinned drop must flag a large arc gap (got ${misPinnedR.arcPeakAlignmentMs}ms)`,
 );
 
-// TRANSLATION TRIPWIRE: a fast band on axis "translation" is a self-reported
-// beat-pull → tripwire fails.
 const tripwireIntent: RenderIntent = {
   ...intentAt(DROP_MS),
   bindings: [
@@ -462,20 +371,14 @@ console.log(
   "✓ analyze-motion: flash gate catches strobe/quadrant/red/flash-in-grain & spares grain; coupling alive/dead+attribution & null-bounded FP; intent drop/tripwire/coverage",
 );
 
-// ---------------------------------------------------------------------------
-// BEAT-GRID REACTIVITY + STRUCTURAL ARC (R3 rebuild — the anti-dead measure that
-// works on real-beat tracks, where legacy coupling collapses).
-// ---------------------------------------------------------------------------
-
 const beatGridMs: number[] = [];
 for (let ms = 0; ms < clipMs; ms += 343) {
-  beatGridMs.push(ms); // ~174 BPM
+  beatGridMs.push(ms);
 }
 const beatFrameSet = new Set(beatGridMs.map((ms) => Math.round((ms / 1000) * FPS)));
 const beatAudio = { ...audioFrom(flatCurve), beatGrid: beatGridMs };
 const flatMeanL = Array.from({ length: DELTA_LEN + 1 }, () => 0.5);
 
-// REACTIVE: the structural delta SPIKES on the beat frames, flat between.
 const reactiveDelta = Array.from({ length: DELTA_LEN }, (_, f) =>
   beatFrameSet.has(f) || beatFrameSet.has(f - 1) ? 0.25 : 0.02,
 );
@@ -490,7 +393,6 @@ assert.ok(reactiveR.beatGridCoupling > 0.2, "on-beat spikes must give positive b
 assert.ok(reactiveR.beatPercentile >= 80, "on-beat reactivity must clear the phase-shuffle null");
 assert.notEqual(reactiveR.verdict, "dead", "an on-beat-reacting clip must not read dead");
 
-// DEAD: a flat delta — no on-beat reactivity.
 const deadReactDelta = Array.from({ length: DELTA_LEN }, () => 0.05);
 const deadReactR = scoreBeatReactivity({
   audio: beatAudio,
@@ -502,7 +404,6 @@ const deadReactR = scoreBeatReactivity({
 assert.equal(deadReactR.verdict, "dead", "a flat delta must read dead");
 assert.ok(Math.abs(deadReactR.beatGridCoupling) < 0.05, "a flat delta has ~0 beat-grid coupling");
 
-// ARC: more activity + brightness AFTER the drop → a positive scene-change arc.
 const arcIntent: RenderIntent = {
   arcSource: "energyCurve",
   bindings: [],
@@ -536,17 +437,8 @@ console.log(
   "✓ beat-grid reactivity: on-beat spikes read reactive, flat reads dead, calm→vibrant scores an arc",
 );
 
-// ---------------------------------------------------------------------------
-// ARC / DEADNESS (C4 — the HARD long-timescale gate). Synthetic RGB strips whose
-// structure either reorganizes across the whole span (evolving) or is frozen under
-// grain/recolor (dead). Mirrors the real calibration anchors validated on
-// footage.social.mp4 (032.0.4L wholeClipChange=0.356 PASS / 032.0.6R=0.220 FAIL).
-// ---------------------------------------------------------------------------
-
 const ARC_FRAMES = 200;
 
-// EVOLVING: a bright horizontal band that sweeps top→bottom over the clip. Its
-// gross form + edges reorganize between every anchor → wholeClipChange >> floor.
 const arcBandFrame = (t: number): Float32Array => {
   const f = new Float32Array(PIX * 3);
   const bandY = Math.floor((t / ARC_FRAMES) * FH);
@@ -570,9 +462,6 @@ assert.ok(
   `evolving change must clear the floor (got ${evolvingArc.wholeClipChange.toFixed(3)} vs ${evolvingArc.floor})`,
 );
 
-// DEAD: fixed vertical bars that never move, with per-frame grain on top. The grain
-// (a recolor/noise trick) must NOT rescue the frozen structure → dead. This is the
-// laundering guard: the edge map is frozen even as grain churns.
 const arcStaticBars = (t: number): Float32Array => {
   const f = new Float32Array(PIX * 3);
   for (let y = 0; y < FH; y++) {
@@ -595,18 +484,12 @@ assert.ok(
   deadArc.wholeClipChange < deadArc.floor,
   `dead change must sit below the floor (got ${deadArc.wholeClipChange.toFixed(3)})`,
 );
-// A frozen frame changes nowhere: no subregion clears the higher regional floor
-// either — dead fails BOTH reads (the best-window carve-out cannot launder it).
+
 assert.ok(
   deadArc.bestWindowChange < deadArc.regionFloor,
   `a frozen clip must fail the best-window read too (got ${deadArc.bestWindowChange.toFixed(3)} vs region ${deadArc.regionFloor})`,
 );
 
-// BEST-WINDOW (subregion) PRESENCE READ: a subject that reveals/crosses in PART of
-// the frame. Most of the frame is a static dark field under faint grain (so the
-// whole-frame mean sits BELOW the arc floor — the texture-era gate would call it
-// dead), but a bright subject grows + slides across one bottom-right region, so a
-// coherent subregion reorganizes strongly and the best-window read rescues it.
 const arcRevealFrame = (t: number): Float32Array => {
   const f = new Float32Array(PIX * 3);
   const prog = t / ARC_FRAMES;
@@ -644,13 +527,6 @@ assert.equal(
 );
 assert.equal(revealArc.verdict, "evolving", "the reveal reads evolving via the subregion read");
 
-// PRESENCE-QUIET RELIEF: a quiet presence render whose whole-frame mean is far below
-// the floor (intentional dark sky) AND whose best subregion lands JUST under the
-// regional floor — in the striking-distance band [0.4, region). It is NOT rescued by
-// either arc read, so the pre-relief gate reads it DEAD. But when both HARD safety
-// gates passed (beat-pull flows, flash safe), the gate downgrades the dead-fail to an
-// ADVISORY inconclusive("presenceQuiet") — pass-with-note, eyeball the reveal. A dimmer
-// + wider subject than arcReveal (bright 125, half-width 4) lands the region read mid-band.
 const arcQuietRevealFrame = (t: number): Float32Array => {
   const f = new Float32Array(PIX * 3);
   const prog = t / ARC_FRAMES;
@@ -674,7 +550,7 @@ const arcQuietRevealFrame = (t: number): Float32Array => {
 const arcQuietReveal = wrapRgb(
   Array.from({ length: ARC_FRAMES }, (_, t) => arcQuietRevealFrame(t)),
 );
-// The band precondition: whole-frame below floor, region read in [striking, regionFloor).
+
 const quietBare = scoreArc({ fps: FPS, intent: null, rgb: arcQuietReveal });
 assert.ok(
   quietBare.wholeClipChange < quietBare.floor,
@@ -684,14 +560,14 @@ assert.ok(
   quietBare.bestWindowChange >= 0.4 && quietBare.bestWindowChange < quietBare.regionFloor,
   `presence-quiet: region read must land in the striking band [0.4, ${quietBare.regionFloor}) (got ${quietBare.bestWindowChange.toFixed(3)})`,
 );
-// A BARE scoreArc call (no gate flags) is unchanged — the relief never fires → DEAD.
+
 assert.equal(
   quietBare.verdict,
   "dead",
   "presence-quiet: no gate flags → the pre-relief dead read holds",
 );
 assert.equal(quietBare.dead, true, "presence-quiet: bare call still hard-fails as dead");
-// BOTH hard gates passed → the relief fires: advisory inconclusive, never dead.
+
 const quietRelieved = scoreArc({
   beatPullPass: true,
   flashPass: true,
@@ -710,7 +586,7 @@ assert.equal(
   "presence-quiet: the reason is presenceQuiet",
 );
 assert.equal(quietRelieved.dead, false, "presence-quiet relief is an advisory PASS, never dead");
-// ONE gate failing (flash unsafe here) → no relief, back to DEAD. The relief needs BOTH.
+
 const quietOneGate = scoreArc({
   beatPullPass: true,
   flashPass: false,
@@ -720,14 +596,11 @@ const quietOneGate = scoreArc({
 });
 assert.equal(quietOneGate.verdict, "dead", "presence-quiet: one gate failing → no relief, dead");
 
-// SHORT clip → inconclusive, never a false dead-fail.
 const arcShort = wrapRgb(Array.from({ length: 4 }, () => grayFrame(120)));
 const shortArc = scoreArc({ fps: FPS, intent: null, rgb: arcShort });
 assert.equal(shortArc.verdict, "inconclusive", "too few frames → inconclusive");
 assert.equal(shortArc.dead, false, "a too-short clip never hard-fails as dead");
 
-// INTENT ARC FOLD: a uniform sweep with a drop declared mid-clip → the climax
-// segment carries at least the clip mean → meetsArc true.
 const arcWithIntent = scoreArc({
   fps: FPS,
   intent: intentAt(Math.round(((ARC_FRAMES / 2 / FPS) * 1000) / 1) - 100),
@@ -743,23 +616,16 @@ console.log(
   "✓ arc/deadness: a sweeping structure reads evolving, frozen bars under grain read DEAD (laundering guard), a concentrated subject-reveal is rescued by the best-window read, short is inconclusive, intent arc folds",
 );
 
-// ---------------------------------------------------------------------------
-// SPATIAL SEAM (WARN — the atan branch-cut tell)
-// ---------------------------------------------------------------------------
-
 const SEAM_FRAMES = 40;
-const SEAM_ROW = 57; // the vertical centre — where a negative-x-ray cut sits
+const SEAM_ROW = 57;
 const SEAM_COL = 22;
 
-// A full-width horizontal discontinuity at SEAM_ROW: a gentle vertical gradient
-// (no spike) with a hard luma jump across one row-pair, plus light grain. This is
-// the branch-cut seam a shader draws when a raw atan angle feeds noise/warp.
 const seamRowFrame = (t: number): Float32Array => {
   const f = new Float32Array(PIX * 3);
   for (let y = 0; y < FH; y++) {
     for (let x = 0; x < FW; x++) {
-      const base = 40 + (y / FH) * 40; // gentle gradient — tiny row-to-row change
-      const jump = y > SEAM_ROW ? 120 : 0; // the hard discontinuity
+      const base = 40 + (y / FH) * 40;
+      const jump = y > SEAM_ROW ? 120 : 0;
       const v = clamp8(base + jump + speckle(y * FW + x, t, 8));
       const p = (y * FW + x) * 3;
       f[p] = v;
@@ -770,9 +636,6 @@ const seamRowFrame = (t: number): Float32Array => {
   return f;
 };
 
-// The REALISTIC negative-x-ray seam: the discontinuity paints only the LEFT half
-// (x < FW/2), exactly like an atan(y,x) ±π cut, so the full-width row diff is
-// diluted ~½ — the detector must still catch it (mirrors 032.0.4L on the live site).
 const seamHalfRowFrame = (t: number): Float32Array => {
   const f = new Float32Array(PIX * 3);
   for (let y = 0; y < FH; y++) {
@@ -789,7 +652,6 @@ const seamHalfRowFrame = (t: number): Float32Array => {
   return f;
 };
 
-// A full-height vertical discontinuity at SEAM_COL (the column-axis twin).
 const seamColFrame = (t: number): Float32Array => {
   const f = new Float32Array(PIX * 3);
   for (let y = 0; y < FH; y++) {
@@ -806,9 +668,6 @@ const seamColFrame = (t: number): Float32Array => {
   return f;
 };
 
-// A CLEAN field: a smooth 2-D gradient with NO discontinuity, plus heavier grain.
-// Adjacent-line diffs are uniform everywhere, so no line spikes above its
-// neighbours — the detector must NOT warn (the false-positive guard, like 027.9.5H).
 const cleanFrame = (t: number): Float32Array => {
   const f = new Float32Array(PIX * 3);
   for (let y = 0; y < FH; y++) {
@@ -827,7 +686,6 @@ const cleanFrame = (t: number): Float32Array => {
   return f;
 };
 
-// 1) A full-width horizontal seam → detected, row axis, position ≈ SEAM_ROW.
 const seamRow = scoreSeam(wrapRgb(Array.from({ length: SEAM_FRAMES }, (_, t) => seamRowFrame(t))));
 assert.equal(seamRow.detected, true, "a hard horizontal discontinuity must be detected as a seam");
 assert.equal(seamRow.seam?.axis, "row", "a horizontal seam is a ROW-axis discontinuity");
@@ -840,8 +698,6 @@ assert.ok(
   "a baked-in seam persists across (nearly) every sampled frame",
 );
 
-// 2) The realistic HALF-WIDTH negative-x-ray seam → still detected (the ~½ dilution
-//    must not hide it) — the direct de-risk of the real-artifact check.
 const seamHalf = scoreSeam(
   wrapRgb(Array.from({ length: SEAM_FRAMES }, (_, t) => seamHalfRowFrame(t))),
 );
@@ -856,7 +712,6 @@ assert.equal(
   "the half-width negative-x-ray seam is a row discontinuity",
 );
 
-// 3) A vertical seam → detected, column axis, position ≈ SEAM_COL.
 const seamCol = scoreSeam(wrapRgb(Array.from({ length: SEAM_FRAMES }, (_, t) => seamColFrame(t))));
 assert.equal(seamCol.detected, true, "a hard vertical discontinuity must be detected as a seam");
 assert.equal(seamCol.seam?.axis, "column", "a vertical seam is a COLUMN-axis discontinuity");
@@ -865,7 +720,6 @@ assert.ok(
   `the column seam must sit at the discontinuity (~${((SEAM_COL / FW) * 100).toFixed(0)}%, got ${((seamCol.seam?.positionPct ?? 0) * 100).toFixed(0)}%)`,
 );
 
-// 4) A clean smooth field under grain → NOT detected (the false-positive guard).
 const clean = scoreSeam(wrapRgb(Array.from({ length: SEAM_FRAMES }, (_, t) => cleanFrame(t))));
 assert.equal(
   clean.detected,
@@ -874,8 +728,6 @@ assert.equal(
 );
 assert.equal(clean.seam, null, "a clean field reports no seam");
 
-// 5) A TRANSIENT seam (only the first 2 frames) → NOT detected (persistence guard:
-//    a real branch cut is baked into geometry and holds for the whole clip).
 const transient = scoreSeam(
   wrapRgb(Array.from({ length: SEAM_FRAMES }, (_, t) => (t < 2 ? seamRowFrame(t) : cleanFrame(t)))),
 );
