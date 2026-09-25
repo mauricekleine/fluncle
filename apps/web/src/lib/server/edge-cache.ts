@@ -580,16 +580,6 @@ function logPathsToPurge(logId: string): string[] {
 }
 
 /**
- * The full canonical purge URLs for a finding's change — its own `/log/<id>` page
- * and the `/log` index — keyed off the canonical origin the read path stored under.
- * The global zone purge sends exactly these; exported so the URL shape is unit-pinned
- * (a drifted origin or a dropped index would silently leave a stale page served).
- */
-export function logPurgeUrls(logId: string): string[] {
-  return logPathsToPurge(logId).map((path) => `${CANONICAL_ORIGIN}${path}`);
-}
-
-/**
  * Purge a finding's cached log surfaces after a write. Fire-and-extend via
  * `waitUntil` so callers (the write paths) don't await network I/O; safe to call
  * with a missing/blank logId (no-op).

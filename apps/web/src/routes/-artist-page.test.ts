@@ -499,3 +499,35 @@ describe("FindingsGrid render contract (the band the artist page delegates to)",
     expect(follower.toLowerCase()).not.toContain("fetchpriority");
   });
 });
+
+it("renders a findings-free artist masthead without a findings band or apology", async () => {
+  getPublicArtistBySlug.mockResolvedValue(ARTIST);
+  getPublicArtistSocials.mockResolvedValue([]);
+  getPublicArtistAliasNames.mockResolvedValue([]);
+  getArtistNeighbours.mockResolvedValue([]);
+  getFindingsByArtist.mockResolvedValue([]);
+  countArtistFindings.mockResolvedValue(0);
+  listArtistCatalogue.mockResolvedValue(NO_CATALOGUE);
+  const data = await resolveArtistPageData("drift", "recent", 1);
+  const rootRoute = createRootRoute();
+  const artistRoute = createRoute({
+    component: Route.options.component,
+    getParentRoute: () => rootRoute,
+    loader: () => data,
+    path: "/artist/$slug",
+  });
+  const artistsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/artists" });
+  const homeRoute = createRoute({ getParentRoute: () => rootRoute, path: "/" });
+  const router = createRouter({
+    history: createMemoryHistory({ initialEntries: ["/artist/drift"] }),
+    routeTree: rootRoute.addChildren([artistRoute, artistsRoute, homeRoute]),
+  });
+  await router.load();
+
+  const html = renderToString(createElement(RouterProvider, { router } as never));
+  expect(html).toContain('class="log-masthead"');
+  expect(html).toContain('class="log-coordinate log-index-title artist-name">Drift</h1>');
+  expect(html).not.toContain("Recommended by Fluncle");
+  expect(html).not.toContain('class="artist-grid"');
+  expect(html).not.toContain("Quiet sector");
+});

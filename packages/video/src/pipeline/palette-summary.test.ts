@@ -51,9 +51,6 @@ describe("hueBucketOf", () => {
   test("cream/near-white is neutral-mono (below the chroma floor)", () => {
     expect(hueBucketOf("#f4ead7")).toBe("neutral-mono");
   });
-  test("is deterministic", () => {
-    expect(hueBucketOf("#e8a94b")).toBe(hueBucketOf("#e8a94b"));
-  });
 });
 
 describe("summarizePalette", () => {

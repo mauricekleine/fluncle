@@ -1097,18 +1097,6 @@ function isDiscogsImageUri(value: string): boolean {
   }
 }
 
-/**
- * Verify box-fetched label detail + bytes without trusting its selected image. The Worker repeats
- * Discogs's primary-else-first choice, requires the downloaded URI to be that exact choice, and
- * accepts only nonempty image bytes inside the same 5 MB ceiling as the legacy fetcher.
- */
-export function discogsLabelImageFromEvidence(
-  evidence: DiscogsLabelCandidate,
-): DiscogsLabelImage | undefined {
-  const result = verifyDiscogsLabelEvidence(evidence);
-  return result.kind === "image" ? result.image : undefined;
-}
-
 /** Distinguish a verified no-image detail from malformed or cross-wired supplied evidence. */
 export function verifyDiscogsLabelEvidence(
   evidence: DiscogsLabelCandidate,
