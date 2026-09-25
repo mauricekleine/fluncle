@@ -2,61 +2,18 @@ import { readdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
-// The DB query-shape GUARDRAIL (docs/db-scale-backlog.md § Guardrail, mechanism A).
-//
-// The scale audit's whole thesis is that this debt accrues SILENTLY: a query that
-// full-scans a growing table is not an error, it is a query that gets slower every
-// week. So the excluded shapes are made STRUCTURALLY un-reintroducible here,
-// exactly the way orpc-coverage.test.ts makes an uncovered public route
-// un-mergeable. This file is executed by `bun run test`, which `deploy:gate` runs in
-// the Cloudflare build — a violation ABORTS the prod deploy.
-//
-// It statically scans the SQL-bearing server surface (`src/lib/server/**`, `src/db/**`,
-// tests excluded) as TEXT for a small set of forbidden shapes on the growing tables
-// (`tracks`, `track_artists`, `crawl_frontier`, and `findings`-as-anti-join), and
-// compares each file's occurrence count against an explicit ALLOWLIST.
-//
-// Enforcement runs BOTH directions, which is the whole design:
-//   - actual > allowed  ⇒ a NEW forbidden shape landed. Fix it, or consciously extend
-//                         the allowlist with a reason.
-//   - actual < allowed  ⇒ the entry is STALE. Shrink it (or delete it) so the list
-//                         keeps shrinking as the backlog retires.
-// The list can therefore only move by deliberate edit — nobody drifts past it.
-//
-// WHAT THIS IS NOT: a proof of scale. It is a tripwire on shapes we have already paid
-// for. A grep cannot see a recompute-by-scan reached through a helper, and it cannot
-// see whether an index is actually picked — the nightly `db-query-shape` audit domain
-// (mechanism B) is the judgment half, and any index still carrying "needs hosted proof"
-// must be validated against a scratch HOSTED Turso DB (`scripts/bench-db-scale.ts`),
-// never local green, before its allowlist entry comes off.
-
-// ── The scanner ────────────────────────────────────────────────────────────────────
-//
-// Comments are BLANKED before matching. Half of these files document the very shapes
-// they avoid ("the anti-join `findings.track_id is null` is the catalogue's
-// definition"), so scanning raw text would count prose, and a doc reword would then
-// fail the deploy. Blanking preserves offsets so reported line numbers stay true.
-
 type SqlRegion = { readonly start: number; readonly text: string };
 
 type ScannedSource = {
-  /** The source with every comment blanked out (newlines preserved). */
   readonly code: string;
-  /** Every string / template literal in the file — the "statement" unit. */
+
   readonly regions: readonly SqlRegion[];
 };
 
-/**
- * One pass that both blanks comments and collects string/template literals. A literal is
- * the closest thing to a "statement" a text scan gets: the SQL in this codebase lives in
- * `db.execute({ sql: \`…\` })` template literals, so a region is what a predicate's
- * accompanying clauses can be looked for in.
- */
 function scanSource(source: string): ScannedSource {
   const chars = source.split("");
   const regions: SqlRegion[] = [];
-  // A stack so `${…}` inside a template literal is scanned as code again (and a nested
-  // template inside a substitution still terminates correctly).
+
   const stack: Array<{ braces: number; kind: "code" | "template"; start: number }> = [
     { braces: 0, kind: "code", start: 0 },
   ];
@@ -175,8 +132,6 @@ function scanSource(source: string): ScannedSource {
   return { code: chars.join(""), regions };
 }
 
-// Words that can follow a table name without being an alias. Without this,
-// `from tracks where …` would register `where` as an alias for `tracks`.
 const SQL_KEYWORDS = new Set([
   "and",
   "as",
@@ -224,21 +179,6 @@ const SQL_KEYWORDS = new Set([
 const looksLikeSql = (text: string): boolean =>
   /\b(?:select|from|join|update|insert\s+into|delete\s+from)\b/i.test(text);
 
-/**
- * Every identifier a table is reachable by in this file — the table name plus each alias
- * bound to it in a SQL literal (`from tracks t`, `left join findings cf on …`).
- *
- * This is what keeps the anti-join pattern honest in BOTH directions: it catches the
- * aliased spellings the codebase actually uses (`f.track_id is null` in funnel.ts,
- * `cf.track_id is null` in catalogue.ts) while leaving `ta.track_id is null` — the
- * `track_artists` edge-less-track worklists in the backfill sweeps — alone, because `ta`
- * is never bound to `findings`. Add `left join findings ff` tomorrow and
- * `ff.track_id is null` is caught with no edit here.
- *
- * File-scoped on purpose: fragments are assembled from module constants
- * (`REC_ELIGIBLE_WHERE`, `ANCHOR_BACKOFF_WHERE`) that hold the predicate while the join
- * that binds the alias lives in a different literal.
- */
 function tableAliases(scanned: ScannedSource, table: string): ReadonlySet<string> {
   const aliases = new Set([table]);
   const pattern = new RegExp(`\\b${table}\\s+(?:as\\s+)?([a-z][a-z0-9_]*)\\b`, "gi");
@@ -260,9 +200,6 @@ function tableAliases(scanned: ScannedSource, table: string): ReadonlySet<string
   return aliases;
 }
 
-// ── The forbidden shapes ───────────────────────────────────────────────────────────
-
-/** A pattern's id — the allowlist key, and what a failure message names. */
 type PatternId =
   | "anti-join:findings-is-null"
   | "anti-join:not-exists-findings"
@@ -287,7 +224,6 @@ const lineAt = (code: string, index: number): number => {
   return line;
 };
 
-/** The literal a match sits inside — the innermost enclosing one wins. */
 function enclosingRegion(scanned: ScannedSource, index: number): string {
   let best = "";
 
@@ -302,13 +238,6 @@ function enclosingRegion(scanned: ScannedSource, index: number): string {
   return best;
 }
 
-/**
- * Every forbidden shape in one file.
- *
- * Each pattern is anchored to a table name (directly or through {@link tableAliases}) so
- * it cannot fire on an unrelated string — the cost of a false positive here is a blocked
- * deploy for everyone, so precision beats reach every time.
- */
 function findOccurrences(source: string): readonly Occurrence[] {
   const scanned = scanSource(source);
   const { code } = scanned;
@@ -318,13 +247,6 @@ function findOccurrences(source: string): readonly Occurrence[] {
     found.push({ line: lineAt(code, index), pattern, snippet: snippet.replace(/\s+/g, " ") });
   };
 
-  // (1) THE UNMATERIALIZED CATALOGUE ANTI-JOIN — the audit's single most-repeated shape,
-  // and the reason Keystone 1 exists (#859). `findings` is a strict 1:1 subtype of
-  // `tracks`, so `findings.track_id is null` means "a catalogue row", and asking it as an
-  // anti-join forces a full left-join scan of the growing table. The maintained
-  // `is_catalogue` discriminator answers it as a seek — so a statement that also names
-  // `is_catalogue` is EXEMPT (it has already been converted; the residual join is there
-  // for other columns).
   for (const alias of tableAliases(scanned, "findings")) {
     const pattern = new RegExp(`\\b${alias}\\.track_id\\s+is\\s+null\\b`, "gi");
 
@@ -335,11 +257,6 @@ function findOccurrences(source: string): readonly Occurrence[] {
     }
   }
 
-  // The shared eligibility fragment (lib/catalogue-eligibility.ts) carries this anti-join
-  // as text with NO alias context this scanner can derive, so the shape would otherwise
-  // vanish from the guardrail while still executing — instead, every INTERPOLATION of the
-  // named fragment counts as one occurrence at the site that runs it. Matched against the
-  // raw source so imports/re-exports of the identifier do not inflate the count.
   for (const match of source.matchAll(/\$\{REC_ELIGIBLE_WHERE\}/g)) {
     push("anti-join:findings-is-null", match.index, match[0]);
   }
@@ -355,10 +272,6 @@ function findOccurrences(source: string): readonly Occurrence[] {
     ...tableAliases(scanned, "track_artists"),
   ];
 
-  // (2) FUNCTION-WRAPPED FILTER COLUMNS — wrapping a column in `lower()` / `substr()`, or
-  // matching it with a leading-wildcard LIKE, means no btree can ever be seeked: the
-  // predicate becomes a residual over every row. `lower(tracks.label)` and
-  // `substr(tracks.release_date, 1, 4)` each have an index sitting right there, unused.
   for (const alias of trackTables) {
     for (const match of code.matchAll(new RegExp(`\\blower\\s*\\(\\s*${alias}\\.`, "gi"))) {
       push("fn-wrapped:lower-tracks", match.index, match[0]);
@@ -370,9 +283,6 @@ function findOccurrences(source: string): readonly Occurrence[] {
       push("fn-wrapped:substr-release-date", match.index, match[0]);
     }
 
-    // A leading `%` makes the LIKE unsargable no matter what index exists. Anchored to a
-    // qualified growing-table column, so a LIKE over `labels.name` (a small table) is not
-    // this shape. The optional `)` absorbs the common `lower(tracks.x) like '%…'` nesting.
     for (const match of code.matchAll(
       new RegExp(`\\b${alias}\\.[a-z_]+\\s*\\)?\\s*(?:not\\s+)?like\\s+'%`, "gi"),
     )) {
@@ -380,21 +290,10 @@ function findOccurrences(source: string): readonly Occurrence[] {
     }
   }
 
-  // (3) THE ANN-INDEX WEDGE (docs/local-database.md). `create index … libsql_vector_idx`
-  // against a populated table errored `database is locked` and wedged hosted Turso's WRITE
-  // path for 20+ minutes; locally it silently builds an EMPTY index, so dev never warns
-  // you. The ratified vector shape is an exact `vector_distance_cos` scan behind a btree
-  // pre-filter. Never in app code, in any form.
   for (const match of code.matchAll(/libsql_vector_idx/gi)) {
     push("vector-index:libsql_vector_idx", match.index, match[0]);
   }
 
-  // (4) THE ENTITY-HUB GROUP-BY — the shape excluded by Keystone 2's stored
-  // `renderable_track_count` / `certified_finding_count` (#880/#886). Its signature is a
-  // grouped scan of the growing tables whose INCLUSION decision is an aggregate in a
-  // `having`, which is what makes the cost O(tracks) per hub page. Deliberately narrow:
-  // the sitemap readers still `group by` an entity id over the same join for `lastmod` +
-  // cover, and that is fine — their gate is now a stored-column `where`, no `having`.
   for (const region of scanned.regions) {
     const sql = region.text.toLowerCase();
     const isHubGroupBy =
@@ -409,12 +308,6 @@ function findOccurrences(source: string): readonly Occurrence[] {
     }
   }
 
-  // (5) `select *` FROM THE FAT TABLE. `tracks` is 91 columns wide and carries
-  // `features_json`; a star select drags all of it into a 128MB Worker isolate for every
-  // row. Column lists only (`LEAN_TRACK_SELECT` is the shape). The 4 KB MuQ vector is no
-  // longer among them — it lives in the `track_embeddings` satellite, which a star select
-  // of `tracks` cannot reach — but the rule is unchanged: the table is still the fattest
-  // one here, and it is the one that grows.
   for (const match of code.matchAll(/select\s+\*\s+from\s+tracks\b/gi)) {
     push("select-star:tracks", match.index, match[0]);
   }
@@ -422,26 +315,15 @@ function findOccurrences(source: string): readonly Occurrence[] {
   return found;
 }
 
-// ── The allowlist ──────────────────────────────────────────────────────────────────
-//
-// Seeded from the tree as it stands, one justification per survivor. Every entry is a
-// shape that is either DELIBERATE (bounded by a seek, or reading truth on purpose) or
-// OWNED by a named backlog item. Nothing here is "we did not get to it".
-//
-// To remove an entry: retire the shape, drop the count. To add one: say why, in a line
-// the next person can argue with.
-
 type AllowlistEntry = {
-  /** Exact number of occurrences expected. Enforced as equality, both directions. */
   readonly count: number;
-  /** Path relative to `apps/web/src`. */
+
   readonly file: string;
   readonly pattern: PatternId;
   readonly reason: string;
 };
 
 const ALLOWLIST: readonly AllowlistEntry[] = [
-  // ── the catalogue anti-join, `<findings alias>.track_id is null` ────────────────
   {
     count: 1,
     file: "lib/server/capture-budget.ts",
@@ -520,7 +402,6 @@ const ALLOWLIST: readonly AllowlistEntry[] = [
       "The artist-qualification shadow projection. One occurrence is a track-id-seeked repair and one bulk-rebuild source read is fenced by a `selected(track_id) as (values …)` page capped at 50 tracks. Two are the exact source digest and bounded drift scheduler used by the local-only audit/backfill command, never a public request path. The operator audit lane is primary-key keyset paged on `(track_id, artist_id)` and capped at 100 rows, with its indexed SEARCH plan pinned in projection-cleanup-plans.integration.test.ts. All five compute a contribution bit from a left join rather than filter the catalogue through an anti-join.",
   },
 
-  // ── the catalogue anti-join, `not exists (select 1 from findings …)` ────────────
   {
     count: 4,
     file: "lib/server/catalogue.ts",
@@ -536,7 +417,6 @@ const ALLOWLIST: readonly AllowlistEntry[] = [
       "The anchor gauge in getCrawlStatus. Deliberately kept on the `tracks_anchor_queue_idx` PARTIAL index (`isrc is not null and spotify_uri is null`) so it stays cheap as the table grows; the `not exists` is a residual on that indexed slice. Documented in-file as an indexed lower-bound gauge, not the full drain set.",
   },
 
-  // ── function-wrapped filter columns ────────────────────────────────────────────
   {
     count: 3,
     file: "lib/server/search.ts",
@@ -587,7 +467,6 @@ const ALLOWLIST: readonly AllowlistEntry[] = [
       "The FINDINGS-pinned reads again (title / track_id / artists_json needles). Bounded by the certified corpus via FINDINGS_FROM, so the leading wildcard costs a scan of the small table.",
   },
 
-  // ── the entity-hub grouped `having` ────────────────────────────────────────────
   {
     count: 1,
     file: "lib/server/catalogue.ts",
@@ -597,19 +476,11 @@ const ALLOWLIST: readonly AllowlistEntry[] = [
   },
 ];
 
-// ── The scan surface ───────────────────────────────────────────────────────────────
-
 const SRC_DIR = fileURLToPath(new URL("../..", import.meta.url));
 const SCAN_ROOTS = ["lib/server", "db"];
 
-// Individual files OUTSIDE the roots whose SQL text is executed by lib/server consumers.
-// lib/catalogue-eligibility.ts is the client-safe home of REC_ELIGIBLE_WHERE (extracted
-// for the device-mirror sweep): the anti-join's TEXT lives here while every
-// query that runs it stays in lib/server — scanning the file keeps the tracked Wave 3-1
-// debt visible instead of letting an extraction silently launder it out of this guardrail.
 const SCAN_FILES = ["lib/catalogue-eligibility.ts"];
 
-/** Every non-test `.ts` file under a scan root, as a path relative to `src`. */
 function listSourceFiles(root: string, prefix = root): string[] {
   const out: string[] = [];
 
@@ -621,7 +492,6 @@ function listSourceFiles(root: string, prefix = root): string[] {
       continue;
     }
 
-    // `*.integration.test.ts` ends in `.test.ts`, so one suffix covers both.
     if (!entry.name.endsWith(".ts") || entry.name.endsWith(".test.ts")) {
       continue;
     }
@@ -650,8 +520,6 @@ describe("DB query-shape guardrail (growing tables)", () => {
   );
 
   it("scans a real surface (the scan roots resolve)", () => {
-    // A path typo would make every other assertion vacuously pass, so pin the shape of
-    // the surface itself: both roots present, and the known SQL-heavy files reached.
     expect(scans.length).toBeGreaterThan(100);
     expect(scans.map((scan) => scan.file)).toContain("lib/server/artifact-changes.ts");
     expect(scans.map((scan) => scan.file)).toContain("lib/server/catalogue.ts");
@@ -716,13 +584,6 @@ describe("DB query-shape guardrail (growing tables)", () => {
   });
 });
 
-// ── The detector's own proof ───────────────────────────────────────────────────────
-//
-// A guardrail nobody has watched fail is not a guardrail. These pin the behaviour that
-// makes the scan trustworthy: it fires on the real shapes, and it does NOT fire on the
-// three things that would make it a nuisance (prose, a materialized query, and the
-// `track_artists` anti-join that shares the `.track_id is null` spelling).
-
 const patternsIn = (source: string): PatternId[] =>
   findOccurrences(source).map((occurrence) => occurrence.pattern);
 
@@ -784,7 +645,7 @@ describe("DB query-shape guardrail — detector", () => {
     expect(
       patternsIn("const q = `select 1 from tracks where tracks.title like '%' || ? || '%'`;"),
     ).toEqual(["fn-wrapped:leading-wildcard-like"]);
-    // A LIKE over a small table's column is not this shape.
+
     expect(
       patternsIn("const q = `select 1 from labels where labels.name like '%' || ? || '%'`;"),
     ).toEqual([]);

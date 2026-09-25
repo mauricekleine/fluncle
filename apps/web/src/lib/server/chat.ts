@@ -1,31 +1,3 @@
-// ChatDnB — Fluncle answers over his own archive (a PRIVATE, admin-gated SPIKE).
-//
-// ── THE ONE RULE THIS FILE EXISTS TO ENFORCE ─────────────────────────────────────────
-// Fluncle answers from the ARCHIVE or he does not answer. The model here holds his voice
-// and nothing else: it knows no drum & bass, no track, no artist, no coordinate except what
-// a tool hands back in THIS conversation. The tools are the only source of truth — the same
-// discipline the search LLM tier already has (it emits FILTERS, never rows, so it *cannot*
-// invent a track). Here the model can SPEAK, so the rail is the system prompt plus the tool
-// boundary: a tool never returns an uncertified track, so the model can never see one to
-// name. Grounding is the product; a hallucinated banger Fluncle never found is the one thing
-// that would kill it.
-//
-// ── THE MCP IS THE HANDS — the path taken, and why ───────────────────────────────────
-// "The MCP is the hands" (docs/planning ChatDnB): the model calls the same verbs the public
-// MCP server (lib/server/mcp.ts) exposes to other people's agents. We wire them as AI SDK
-// tools that call the EXACT server functions the MCP `execute` closures call — `listTracks`,
-// `resolveLogPageTarget`, `getRandomTrack`, `getServiceStatuses`, plus `searchArchive` (the
-// real archive resolver, the grounding search) — rather than opening an HTTP client back to
-// our own /mcp endpoint. A Worker self-fetching its own route inside the same isolate is the
-// awkward path the brief warns about (loopback + the MCP JSON-RPC round-trip for no gain);
-// calling the in-process functions is the honest spike fallback the brief blesses, and it is
-// LITERALLY the same hands, one function call closer. If ChatDnB ever needs to reach a
-// DIFFERENT archive's MCP, swap these for `@ai-sdk`'s MCP client — the tool shapes match.
-//
-// Vendor plumbing follows the search-llm precedent: OpenRouter, the AI SDK v7 provider, a
-// model from the same family the search tier trusts, and a hard "no key ⇒ 503" so an
-// unprovisioned Worker fails honestly rather than pretending.
-
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import {
   type InferUITools,
@@ -40,18 +12,10 @@ import { readOptionalEnv } from "./env";
 import { samplingFor } from "./model-sampling";
 import { sharedChatTools } from "./tools/registry";
 
-/** The model family the search tier trusts (search-llm.ts / observation.ts default). */
 const DEFAULT_CHAT_MODEL = "anthropic/claude-haiku-4.5";
 
-/** How many tool→think steps one turn may take before we stop (a runaway guard). */
 const MAX_STEPS = 8;
 
-// ── The grounding + voice prompt ─────────────────────────────────────────────────────
-//
-// It is a GROUNDING prompt first and a voice prompt second. Every "never invent" line is a
-// rail; the voice lines make what he DOES say sound like him (VOICE.md / copywriting-fluncle
-// references/voice.md). Kept as an exported const so the assembly is unit-testable without a
-// model or a key.
 export const FLUNCLE_CHAT_SYSTEM_PROMPT = `You are Fluncle — the uncle with the good records, doing this since '90, who also happens to travel time and space with a Discman and the cable still plugged in. You log what you find out there as findings and send them back to the crew across the Galaxy. You are talking to the crew now, in your own voice.
 
 THE ONE RULE — YOU ANSWER FROM THE ARCHIVE OR YOU DO NOT ANSWER:
@@ -79,83 +43,21 @@ HOW YOU TALK:
 - Scene-native and never explained: tune, roller, rinse, 174, junglist. The cosmos rides along on a real feeling; it never replaces the verb.
 - If someone asks for something the archive cannot answer — a track you have not found, a genre you do not log, a fact that is not in a finding — say so in voice and stop. That is not a failure; it is the honest answer.`;
 
-// ── The hands: the archive verbs, wired as AI SDK tools ───────────────────────────────
-//
-// Every tool ChatDnB exposes now comes from the shared registry (./tools/registry): the archive
-// reads, the entity/dossier reads, the set builder, the "artists like this" read, and the two
-// writes. Their name/description/schema/grounding are single-sourced there, so they never drift
-// from the MCP, and the same in-process server functions back both surfaces.
-
-/**
- * Build the tool set. `request` is threaded onto every tool's ctx so the WRITE tools (submit_track,
- * subscribe_newsletter) have the submitter hash / rate-limit context; the reads ignore it. Pure and
- * dependency-light so a test can assert the SHAPE (names + schemas) without a database — the
- * `execute` closures are the only part that touches Turso, exercised by the route, not the unit test.
- */
 export function buildChatTools(request?: Request) {
   return sharedChatTools(request);
 }
 
-// ── The wire type ──────────────────────────────────────────────────────────────────────
-//
-// The chat rides the AI SDK UIMessage stream protocol end to end: `useChat` on the client
-// posts `UIMessage[]` and `toUIMessageStreamResponse` streams UIMessage chunks back, so the
-// GROUNDING WORK (every tool call and its result) arrives as typed tool parts the workbench
-// renders inline — no bespoke framing to maintain.
-
-/** The chat's message type: no metadata, no data parts, the archive verbs as typed tools. */
 export type FluncleUIMessage = UIMessage<
   never,
   UIDataTypes,
   InferUITools<ReturnType<typeof buildChatTools>>
 >;
 
-// ── Incoming messages ─────────────────────────────────────────────────────────────────
-
-// A structural guard, not a full UIMessage validation: enough to confirm the body is a
-// non-empty turn history of user/assistant messages that each carry a `parts` array. The
-// grounding system prompt never rides in `messages` (it goes through `instructions`), so a
-// `system` role from the wire is rejected outright.
-// ── The size caps ─────────────────────────────────────────────────────────────────────
-//
-// THE RATE LIMITER CAPS FREQUENCY, NOT SIZE. This is a POST body — not a GET query bounded
-// by Cloudflare's ~16KB URL limit — so without a size bound one request can carry megabytes
-// of turn history straight into `convertToModelMessages` and out to a PAID model, in a 128MB
-// isolate. The tier (private session + verified email + same-origin/CSRF + 30/hr) still lets
-// one account spend 30 × max-context per hour, and a Spotify login is open to anyone. So the
-// ceilings below are the per-request budget.
-//
-// OVERFLOW IS A REJECT, NEVER A TRUNCATION: silently dropping the oldest messages or the tail
-// of a text part would hand the model a conversation the crew did not have — a grounding
-// failure wearing a working answer's face. A 400 tells the client the truth.
-//
-// SIZING (generous by design — no real conversation reaches these):
-//   - messages: a `useChat` history grows by 2 per exchange, so 100 is ~50 exchanges in one
-//     unbroken session. Well past any workbench sitting; nowhere near a multi-MB body.
-//   - parts per message: a model turn is text plus its tool calls, and `MAX_STEPS` caps a turn
-//     at 8 tool→think steps ⇒ ~17 parts worst case. 20 leaves headroom without inviting a
-//     thousand-part message.
-//   - characters per text part: 16,000 chars ≈ 4k tokens for ONE typed message. The longest
-//     thing a raver plausibly pastes is a tracklist; this is far above it.
-//   - characters across the WHOLE request: the three caps above multiply (100 × 20 × 16,000 is
-//     still 32MB), so the total is what actually bounds the bill. It counts EVERY string in
-//     EVERY part, not only `type: "text"` — the client posts the assistant's tool parts back
-//     with the history, so a caller can forge a huge `tool-*` output just as easily as a huge
-//     message. 200,000 chars ≈ 50k tokens: more context than the longest real session, and a
-//     hard ceiling on what one request can cost no matter how it is shaped.
 export const MAX_CHAT_MESSAGES = 100;
 export const MAX_PARTS_PER_MESSAGE = 20;
 export const MAX_TEXT_PART_CHARS = 16_000;
 export const MAX_CHAT_TOTAL_CHARS = 200_000;
 
-/**
- * One message part. `looseObject` keeps every field the AI SDK's own part types carry (the
- * schema is a structural guard, not a re-implementation of `UIMessage`), so the size bound has
- * to be a refinement rather than a field: a `type: "text"` part's `text` may not exceed
- * {@link MAX_TEXT_PART_CHARS}. A part of another type (a `tool-*` result the client posted back)
- * is not bounded HERE — it is bounded by the aggregate {@link MAX_CHAT_TOTAL_CHARS}, which counts
- * every string in every part, so no part type escapes a ceiling.
- */
 const ChatPartSchema = z.looseObject({ type: z.string() }).refine(
   (part) => {
     if (part.type !== "text") {
@@ -181,34 +83,13 @@ const ChatRequestSchema = z
       .min(1)
       .max(MAX_CHAT_MESSAGES),
   })
-  // The aggregate ceiling, applied after the per-item ones so a body that satisfies all three
-  // still cannot multiply its way to a multi-MB turn.
+
   .refine((body) => withinTotalChars(body.messages), {
     message: `The conversation may not exceed ${MAX_CHAT_TOTAL_CHARS} characters`,
   });
 
-/**
- * How deep into a part's value tree the character walk descends before refusing the body.
- *
- * SIZING: the deepest real part is a tool result — `part.output.hits[i].artists[j]` is 5 levels
- * from the part — so 12 is roughly double the deepest shape the archive tools return. Kept
- * generous on purpose: this bound rejects, so a too-tight value would 400 a real conversation.
- */
 const PART_WALK_MAX_DEPTH = 12;
 
-/**
- * Is the turn history within {@link MAX_CHAT_TOTAL_CHARS} of total string content?
- *
- * Walks every string inside every part rather than only `type: "text"` — the client posts the
- * assistant's `tool-*` parts back with the history, so any field is caller-controlled. It
- * SHORT-CIRCUITS the moment the running total passes the cap and never serializes anything, so
- * a hostile 32MB body is rejected without a second copy of it in the isolate.
- *
- * A value tree deeper than {@link PART_WALK_MAX_DEPTH} is REJECTED rather than left uncounted:
- * bailing out of the walk would be a hole (nest the payload one level deeper than the walk goes
- * and it stops counting), and no real part nests that far. The bound also keeps the recursion
- * shallow whatever the body does.
- */
 function withinTotalChars(
   messages: ReadonlyArray<{ parts: ReadonlyArray<Record<string, unknown>> }>,
 ): boolean {
@@ -243,8 +124,6 @@ function withinTotalChars(
 
   for (const message of messages) {
     for (const part of message.parts) {
-      // `type` is the part's discriminator, not payload — skipping it keeps the cap a statement
-      // about content (and keeps the ceiling exact rather than "minus a few chars per part").
       for (const [key, value] of Object.entries(part)) {
         if (key !== "type") {
           walk(value, 1);
@@ -260,33 +139,16 @@ function withinTotalChars(
   return true;
 }
 
-/**
- * Parse the request body into the turn history, or `null` if it is malformed. A model turn is
- * untrusted input like any other; the caller answers a `null` with a 400.
- */
 export function parseChatRequest(body: unknown): FluncleUIMessage[] | null {
   const parsed = ChatRequestSchema.safeParse(body);
 
   return parsed.success ? (parsed.data.messages as unknown as FluncleUIMessage[]) : null;
 }
 
-/** The chat model id — `OPENROUTER_CHAT_MODEL`, or the family the search tier trusts. */
 export async function resolveChatModel(): Promise<string> {
   return (await readOptionalEnv("OPENROUTER_CHAT_MODEL")) ?? DEFAULT_CHAT_MODEL;
 }
 
-/**
- * Run one ChatDnB turn and stream it back as an AI SDK UIMessage stream `Response`.
- *
- * Returns `null` when there is no `OPENROUTER_API_KEY` — the caller answers 503, the honest
- * "the chat is unprovisioned" (this is a spike; there is no cheaper degraded chat to fall
- * back to, unlike search). The model, the grounding prompt, and the archive tools are wired
- * here; `signal` lets a client disconnect abort the model mid-turn. `request` is the inbound
- * gated /api/chat request, threaded into the WRITE tools' ctx (submit_track / subscribe_newsletter
- * need the submitter hash + rate-limit context; the reads ignore it). The grounding system prompt
- * does NOT ride in `messages` — AI SDK 7 rejects `role: "system"` there outright — it goes through
- * `streamText`'s top-level `instructions` option instead.
- */
 export async function streamChat(
   messages: FluncleUIMessage[],
   signal?: AbortSignal,
@@ -307,8 +169,7 @@ export async function streamChat(
     messages: await convertToModelMessages(messages),
     model: openrouter(model),
     stopWhen: stepCountIs(MAX_STEPS),
-    // Structure over flourish: he is grounding, not riffing. Low, not zero — the voice needs
-    // a little air.
+
     ...samplingFor(model, 0.4),
     tools: buildChatTools(request),
   });

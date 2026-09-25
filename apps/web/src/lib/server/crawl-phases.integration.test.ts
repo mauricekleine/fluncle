@@ -209,8 +209,7 @@ describe("crawl admission phases", () => {
 
     const prepared = await prepareCrawlPhase({ limit: MAX_CRAWL_PREPARE_LIMIT, maxHop: 2 });
     expect(prepared.items).toHaveLength(MAX_CRAWL_PREPARE_LIMIT);
-    // Every node of one claim carries the SAME lease instant, which is the whole reason the bound
-    // exists: the last node of a batch has to reach its commit before that instant passes.
+
     await expect(
       prepareCrawlPhase({ limit: MAX_CRAWL_PREPARE_LIMIT + 1, maxHop: 2 }),
     ).rejects.toThrow(/crawl prepare limit/);
@@ -230,8 +229,6 @@ describe("crawl admission phases", () => {
       result: { failed: 1, rateLimited: true },
     });
 
-    // A vendor wall is not this node's fault: it keeps its turn, its cursor, and its unspent
-    // failure count, so five throttles can never abandon a node that never misbehaved.
     const row = await db.execute(
       "select state, failures, note from crawl_frontier where id = 'musicbrainz:release:release-phase'",
     );
@@ -261,8 +258,6 @@ describe("crawl admission phases", () => {
   });
 
   it("issues no per-label write when every enabled seed already holds its frontier node", async () => {
-    // Seeding runs at the head of every tick inside the exclusive writer admission, so a no-op
-    // seed has to cost reads and nothing else.
     const first = await initializeCrawlPhase();
     expect(first.kind).toBe("initialized");
     expect(first.seeded).toBe(1);
@@ -625,12 +620,6 @@ describe("crawl admission phases", () => {
   });
 });
 
-// ── THE BOX-FETCHED PROVIDER BODY ────────────────────────────────────────────────────────────────
-//
-// MusicBrainz rate-limits per source IP and a Worker's egress address is shared with strangers, so
-// the crawl's provider reads are made from the box's own address and the bytes are handed to the
-// Worker. What makes that safe is not trust in the box: it is that the Worker issues the url, reads
-// a body only under a url it itself asks for, and parses it with the parser its own fetch feeds.
 describe("crawl provider bodies fetched by the box", () => {
   const RELEASE_URL =
     "https://musicbrainz.org/ws/2/release/release-phase" +
@@ -674,8 +663,6 @@ describe("crawl provider bodies fetched by the box", () => {
   });
 
   it("yields a receipt identical to the Worker's own fetch of the same bytes", async () => {
-    // Parser parity is the whole safety argument for moving the request: the body reaches exactly
-    // the same `applyCrawlProvider` branch either way, so the two paths cannot disagree on meaning.
     const fixture = providerRelease(9);
 
     vi.stubGlobal(
@@ -749,8 +736,6 @@ describe("crawl provider bodies fetched by the box", () => {
     }
     const foreignUrl = second.fetchPlan.kind === "single" ? second.fetchPlan.url : "";
 
-    // The claim is the binding: the plan and node inside the SIGNED token decide which urls exist,
-    // so a sibling node's body is unreachable rather than merely unwelcome.
     await expect(
       fetchCrawlPhase(first.preparedToken, [
         { body: providerRelease(1), outcome: "body", url: foreignUrl },
@@ -830,8 +815,6 @@ describe("crawl provider bodies fetched by the box", () => {
     vi.stubGlobal("fetch", spy);
     const item = await prepareOne();
 
-    // An old pinned sweep supplies nothing, and a new one that guessed a tail offset wrong supplies
-    // the wrong url. Both cost one Worker request, never a wrong answer.
     const receipt = await commitCrawlPhase(await fetchCrawlPhase(item.preparedToken, []));
     expect(receipt).toMatchObject({ outcome: "committed", result: { tracksWritten: 3 } });
     expect(spy).toHaveBeenCalledTimes(1);
@@ -848,7 +831,7 @@ describe("crawl provider bodies fetched by the box", () => {
     vi.stubGlobal("fetch", spy);
 
     const prepared = await prepareCrawlPhase({ limit: 1, maxHop: 2 });
-    // The box asks BEFORE it spends a request, so the rollback costs the vendor nothing.
+
     expect(prepared.boxFetch).toBe(false);
     const item = prepared.items[0];
     if (!item) {

@@ -1,18 +1,3 @@
-// The demand signal, proven against the REAL migrated schema on an in-memory libSQL engine (the
-// fresh-entity.test.ts harness). What is easy to get wrong and impossible to see without a DB:
-//
-//   1. PATH EXTRACTION is literal — only `/artist/<slug>` and `/label/<slug>` count; `/admin*`, a
-//      nested path, the homepage, and a `?query` tail are all dropped.
-//   2. SLUG → ENTITY resolution skips an unknown slug silently, and `demand_score` is the SUMMED
-//      pageviews of everything a track hangs off (an artist on it + its label accumulate).
-//   3. THE REWRITE IS IDEMPOTENT — each run CLEARS every prior value then re-sets, so a
-//      de-trending entity falls back to NULL.
-//   4. THE VETO IS NEVER RESURRECTED — a demanded row on a `capture_priority < 0` label gets a
-//      `demand_score` but the capture queue still excludes it, and demand only reorders WITHIN a
-//      tier (a demanded row is captured before an undemanded sibling AT ITS TIER, never lifted).
-//   5. THE FRONTIER REORDER stays WITHIN A HOP and only touches PENDING nodes.
-//   6. NO KEY = A CLEAN NO-OP — the columns are left untouched (never wiped on a missing key).
-
 import { type Client } from "@libsql/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -98,7 +83,7 @@ async function seedFrontier(options: {
       options.hop,
       options.labelSlug ?? null,
       options.state ?? "pending",
-      // created_at ordered so id-independent order is checkable.
+
       `2026-07-01T00:00:0${options.id.length % 10}.000Z`,
     ],
     sql: `insert into crawl_frontier
@@ -107,7 +92,6 @@ async function seedFrontier(options: {
   });
 }
 
-/** A fetch stub that returns the given SA `pages` as a version-5 response. */
 function saFetch(pages: { pageviews?: number; value: string }[]): typeof fetch {
   return (async () =>
     new Response(JSON.stringify({ pages }), { status: 200 })) as unknown as typeof fetch;
@@ -149,10 +133,9 @@ describe("path extraction", () => {
       kind: "label",
       slug: "critical-music",
     });
-    // A query tail is stripped before the match.
+
     expect(extractEntityPath("/artist/noisia?ref=x")).toEqual({ kind: "artist", slug: "noisia" });
 
-    // Everything that is NOT an entity page is dropped.
     expect(extractEntityPath("/admin/catalogue")).toBeUndefined();
     expect(extractEntityPath("/artist/x/releases")).toBeUndefined();
     expect(extractEntityPath("/log/200.7.abc")).toBeUndefined();
@@ -177,8 +160,7 @@ describe("recordDemand — the rewrite", () => {
   it("scores tracks by their demanded entities, skips unknown slugs, and sums across entities", async () => {
     await seedArtist("art_a", "artist-a", "mb_a");
     await seedLabel("lab_l", "label-l");
-    // t1: only the demanded artist. t2: only the demanded label. t3: BOTH (sums).
-    // t4: unrelated (stays null).
+
     await seedTrack({ artistIds: ["art_a"], trackId: "t1" });
     await seedTrack({ labelId: "lab_l", trackId: "t2" });
     await seedTrack({ artistIds: ["art_a"], labelId: "lab_l", trackId: "t3" });
@@ -188,8 +170,8 @@ describe("recordDemand — the rewrite", () => {
       fetchImpl: saFetch([
         { pageviews: 10, value: "/artist/artist-a" },
         { pageviews: 4, value: "/label/label-l" },
-        { pageviews: 999, value: "/artist/nobody" }, // unknown slug — skipped
-        { pageviews: 500, value: "/admin/catalogue" }, // not an entity page — dropped
+        { pageviews: 999, value: "/artist/nobody" },
+        { pageviews: 500, value: "/admin/catalogue" },
       ]),
       now: NOW,
     });
@@ -203,7 +185,7 @@ describe("recordDemand — the rewrite", () => {
 
     expect(await demandScore("t1")).toBe(10);
     expect(await demandScore("t2")).toBe(4);
-    expect(await demandScore("t3")).toBe(14); // 10 (artist) + 4 (label)
+    expect(await demandScore("t3")).toBe(14);
     expect(await demandScore("t4")).toBeNull();
   });
 
@@ -217,7 +199,6 @@ describe("recordDemand — the rewrite", () => {
     });
     expect(await demandScore("t1")).toBe(10);
 
-    // A second run where the artist no longer trends: its score must fall back to NULL.
     await recordDemand({
       fetchImpl: saFetch([{ pageviews: 3, value: "/label/nobody" }]),
       now: NOW,
@@ -227,9 +208,9 @@ describe("recordDemand — the rewrite", () => {
 
   it("scores a vetoed row but the capture queue still excludes it, and demand only reorders within a tier", async () => {
     await seedArtist("art_a", "artist-a", null);
-    // A demanded ruled-out-label row (capture_priority −1) — it gets a demand_score, but the veto holds.
+
     await seedTrack({ artistIds: ["art_a"], capturePriority: -1, trackId: "t_veto" });
-    // Two same-tier catalogue rows: t_hi is demanded, t_lo is not — demand breaks the tie.
+
     await seedTrack({ artistIds: ["art_a"], capturePriority: 3, trackId: "t_hi" });
     await seedTrack({ capturePriority: 3, trackId: "t_lo" });
 
@@ -238,18 +219,16 @@ describe("recordDemand — the rewrite", () => {
       now: NOW,
     });
 
-    expect(await demandScore("t_veto")).toBe(10); // the score IS written
+    expect(await demandScore("t_veto")).toBe(10);
     expect(await demandScore("t_hi")).toBe(10);
     expect(await demandScore("t_lo")).toBeNull();
 
-    // Open the (default-deny) capture budget so the catalogue queue hands rows out.
     await setCatalogueCapturePaused(false);
     const queue = await listTrackWork({ kind: "capture", scope: "catalogue" });
     const ids = queue.map((item) => item.trackId);
 
-    // THE VETO: the −1 row is excluded regardless of its demand_score.
     expect(ids).not.toContain("t_veto");
-    // WITHIN-TIER: both cp=3 rows are present, demanded first.
+
     expect(ids.indexOf("t_hi")).toBeGreaterThanOrEqual(0);
     expect(ids.indexOf("t_hi")).toBeLessThan(ids.indexOf("t_lo"));
   });
@@ -258,7 +237,6 @@ describe("recordDemand — the rewrite", () => {
     await seedArtist("art_a", "artist-a", "mb_artist_a");
     await seedLabel("lab_l", "label-l");
 
-    // Same hop: a demanded label's subtree node, a demanded artist node, and an undemanded sibling.
     await seedFrontier({
       externalId: "rel1",
       hop: 1,
@@ -266,8 +244,7 @@ describe("recordDemand — the rewrite", () => {
       kind: "release",
       labelSlug: "label-l",
     });
-    // A real artist node's id is the deterministic `<source>:<kind>:<externalId>` (crawl.ts
-    // `frontierId`) — the invariant the PK-keyed demand promotion seeks on.
+
     await seedFrontier({
       externalId: "mb_artist_a",
       hop: 1,
@@ -281,7 +258,7 @@ describe("recordDemand — the rewrite", () => {
       kind: "release",
       labelSlug: "other",
     });
-    // An ALREADY-EXPANDED node of the demanded label — never promoted.
+
     await seedFrontier({
       externalId: "rel0",
       hop: 0,
@@ -299,10 +276,10 @@ describe("recordDemand — the rewrite", () => {
       now: NOW,
     });
 
-    expect(await demandRank("n_label")).toBe(0); // demanded label subtree
-    expect(await demandRank("musicbrainz:artist:mb_artist_a")).toBe(0); // demanded artist by MBID
-    expect(await demandRank("n_other")).toBe(1); // undemanded sibling
-    expect(await demandRank("n_done")).toBe(1); // not pending — untouched
+    expect(await demandRank("n_label")).toBe(0);
+    expect(await demandRank("musicbrainz:artist:mb_artist_a")).toBe(0);
+    expect(await demandRank("n_other")).toBe(1);
+    expect(await demandRank("n_done")).toBe(1);
     expect(summary.frontierPromoted).toBe(2);
   });
 
@@ -311,7 +288,7 @@ describe("recordDemand — the rewrite", () => {
 
     await seedArtist("art_a", "artist-a", null);
     await seedTrack({ artistIds: ["art_a"], trackId: "t1" });
-    // Pre-seed a demand_score — a missing key must NOT wipe it.
+
     await db.execute({
       args: [],
       sql: `update tracks set demand_score = 42 where track_id = 't1'`,
@@ -321,7 +298,7 @@ describe("recordDemand — the rewrite", () => {
 
     expect(summary.configured).toBe(false);
     expect(summary.tracksScored).toBe(0);
-    expect(await demandScore("t1")).toBe(42); // untouched
+    expect(await demandScore("t1")).toBe(42);
   });
 
   it("seeks demanded artist edges and adds every demanded artist credit", async () => {
@@ -332,7 +309,6 @@ describe("recordDemand — the rewrite", () => {
     const issued: string[] = [];
     const real = db;
 
-    // Use a plain wrapper because libSQL client methods rely on their original receiver.
     holder.db = {
       ...real,
       batch: async (statements: { sql: string }[], mode?: string) => {
@@ -377,11 +353,6 @@ describe("recordDemand — the rewrite", () => {
   });
 });
 
-// ── The social referrers read (Part 3 — the site-side half of reach) ─────────────────────────────
-// `classifySocialReferrer` / `summarizeReferrers` are pure; `readSocialReferrers` folds an SA
-// `fields=referrers` response into per-platform social→site arrivals (unprovisioned → clean no-op).
-
-/** A fetch stub returning the given SA `referrers` as a version-5 response. */
 function saReferrersFetch(referrers: { pageviews?: number; value: string }[]): typeof fetch {
   return (async () =>
     new Response(JSON.stringify({ referrers }), { status: 200 })) as unknown as typeof fetch;
@@ -407,8 +378,8 @@ describe("summarizeReferrers", () => {
       { pageviews: 10, value: "t.co" },
       { pageviews: 5, value: "twitter.com" },
       { pageviews: 40, value: "www.tiktok.com" },
-      { pageviews: 100, value: "google.com" }, // non-social → dropped
-      { pageviews: 0, value: "youtube.com" }, // zero → dropped
+      { pageviews: 100, value: "google.com" },
+      { pageviews: 0, value: "youtube.com" },
     ]);
 
     expect(arrivals).toEqual([

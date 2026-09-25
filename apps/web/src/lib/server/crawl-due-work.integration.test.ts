@@ -551,8 +551,7 @@ describe("crawl due-work shadow runtime", () => {
     expect(rearm).toBeDefined();
     const sql = typeof rearm === "string" ? rearm : (rearm?.sql ?? "");
     const args = typeof rearm === "string" || rearm === undefined ? [] : rearm.args;
-    // The in-memory schema carries no `sqlite_stat1`, exactly like hosted Turso, so it reproduces
-    // the statistics-free choice between the id list and `crawl_frontier_pick_idx (state=?)`.
+
     const details = planDetails(
       (await db.execute({ args, sql: `explain query plan ${sql}` })).rows,
     ).join("\n");
@@ -650,7 +649,7 @@ describe("crawl due-work shadow runtime", () => {
   it("ranks a release on its own label, never on the seed label an artist walk inherited", async () => {
     await label("home", "enabled");
     await label("elsewhere", "disabled");
-    // An artist found on the enabled label: its discography mostly lives on other labels.
+
     const artistParent = "musicbrainz:artist:found-on-home";
     await node({
       externalId: "inherited",
@@ -700,8 +699,6 @@ describe("crawl due-work shadow runtime", () => {
       { label_slug: "home", node_id: "release:own-enabled", storable_rank: 0 },
     ]);
 
-    // Ruling the release's own label reaches it through the label fan-out, since the row is filed
-    // under the label the storage gate will judge.
     await db.batch(
       [
         {
@@ -768,8 +765,6 @@ describe("crawl due-work shadow runtime", () => {
   });
 
   it("clears a run of empty source markers in one call and reports them as work", async () => {
-    // A marker whose rows are already `repair` fans out nothing, which is the shape every re-arm
-    // mints. One call clears the whole run, so a caller's page budget is never a marker budget.
     const slugs = ["empty-a", "empty-b", "empty-c", "empty-d", "empty-e"];
     for (const slug of slugs) {
       await label(slug, "enabled");
@@ -790,8 +785,6 @@ describe("crawl due-work shadow runtime", () => {
       (await db.execute("select count(*) as n from crawl_projection_repairs")).rows[0]?.n,
     ).toBe(0);
 
-    // The advance step reports that clearing as work, so the maintenance sweep reads a run of empty
-    // markers as progress rather than `no_progress`.
     for (const slug of slugs) {
       await db.execute(
         markCrawlProjectionRepairStatement("label", slug, {

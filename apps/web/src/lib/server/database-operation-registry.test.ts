@@ -1025,17 +1025,11 @@ describe("database operation registry", () => {
     const script = readFileSync(join(REPO_ROOT, SCRIPTS, "rank-sweep.ts"), "utf8");
     const guard = /^export const SOURCE_REPAIRS_PER_RANK_GUARD = (\d+);$/m.exec(script);
 
-    // The baked box script lags the Worker. It divides `rankPhaseCap`, so a value under the
-    // server's page grants extra phases the wall budget bounds, while a value over it would cap the
-    // tick below the phases its own drain needs.
     expect(Number(guard?.[1])).toBeGreaterThan(0);
     expect(Number(guard?.[1])).toBeLessThanOrEqual(SOURCE_REPAIR_LIMIT);
   });
 
   it("keeps the maintenance sweep's step ceiling inside the CLI's own bound", () => {
-    // The sweep mirrors the CLI's `--max-steps` bound as a literal, because a baked box script
-    // cannot import the workspace. Asking for more than the CLI accepts would make every family's
-    // advance fail validation instead of draining anything, so the mirror is pinned here.
     const script = readFileSync(
       join(REPO_ROOT, SCRIPTS, "projection-maintenance-sweep.ts"),
       "utf8",

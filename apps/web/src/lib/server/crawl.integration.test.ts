@@ -8,24 +8,9 @@ import { mostRecentSeedRearmBoundary, setSeedRearmClockForTests } from "./crawl-
 import { createIntegrationDb, seedTrack } from "./integration-db";
 import { setMusicbrainzRateLimitForTests } from "./musicbrainz";
 
-// THE CATALOGUE CRAWLER, against the REAL schema and a REAL (stubbed) MusicBrainz.
-//
-// The crawler's guarantees are all statements about SQL and about a graph walk, so a
-// mocked database would prove none of them. These cases run the actual walk against the
-// file-backed libSQL database built from the generated migrations, with MusicBrainz stubbed
-// at the `fetch` boundary — so the frontier, the dedupe, the hop limit, the label mint and
-// the certification firewall are exercised exactly as they run in production.
-
 let db: Client;
 let fixtureDirectory: string | undefined;
 
-/**
- * A `done_at` that is DUE under the seed re-arm's release-week schedule, whenever the suite runs.
- *
- * The rule is `done_at < <the most recent pass boundary>`, so "N days ago" is not a fixture: at the
- * wrong minute of the week a three-day-old node sits on the right side of the boundary. Anchoring
- * one second BEFORE the boundary itself is due by construction, on every day of every week.
- */
 function drainedBeforeLastPass(): string {
   return new Date(mostRecentSeedRearmBoundary(new Date()).getTime() - 1000).toISOString();
 }
@@ -36,14 +21,8 @@ vi.mock("./db", async (importOriginal) => {
   return { ...actual, getDb: () => Promise.resolve(db) };
 });
 
-// ── The stub graph ───────────────────────────────────────────────────────────
-// Med School (the seed) presses one release by Etherwood. Etherwood ALSO released on
-// Hospital (an unruled label). That second release is hop 2 — in lane by graph distance,
-// which is the whole gate — and its label is the one the operator must rule on next.
-
 const LABEL_MBID = "label-medschool";
-// Hospital carries its OWN MBID — the discovered-label fold key is real now, so two different
-// labels must NOT share one MBID (that would fold them to one row). Keyed by name below.
+
 const HOSPITAL_MBID = "label-hospital";
 const LABEL_MBIDS: Record<string, string> = {
   "Hospital Records": HOSPITAL_MBID,
@@ -61,9 +40,7 @@ function release(
   label: string,
   releaseGroup: null | string,
   tracks: { id: string; isrc?: string; title: string }[],
-  // MusicBrainz does not carry a `discogs` url-rel for every release. The crawler's Discogs ids
-  // come from that relation, so its absence is the "looked, nothing there" case the attempt record
-  // has to be able to say — modelled on the hop-2 release below.
+
   withDiscogs = true,
 ) {
   return {
@@ -72,8 +49,7 @@ function release(
     date: "2013-06-10",
     id,
     "label-info": [{ label: { id: LABEL_MBIDS[label] ?? LABEL_MBID, name: label } }],
-    // The album fold key MusicBrainz returns under `inc=release-groups` — a singular object.
-    // Null models a release MusicBrainz has no release group for (the crawler's slug fallback).
+
     ...(releaseGroup ? { "release-group": { id: releaseGroup } } : {}),
     media: [
       {
@@ -81,8 +57,7 @@ function release(
           recording: {
             "artist-credit": [
               { artist: { id: ARTIST_MBID, name: "Etherwood" } },
-              // Various Artists must NEVER become a hop — it is credited on every
-              // compilation ever pressed, so following it walks straight out of the genre.
+
               { artist: { id: "89ad4ac3-39f7-470e-963a-56509c546377", name: "Various Artists" } },
             ],
             id: track.id,
@@ -100,16 +75,14 @@ function release(
   };
 }
 
-/** MusicBrainz, stubbed at the fetch boundary. Every response is a real MB shape. */
 function stubMusicbrainz(): void {
   vi.stubGlobal(
     "fetch",
-    // `mbFetch` always calls fetch with a plain URL string, so the stub takes one.
+
     vi.fn((url: string) => {
       const json = (body: unknown) =>
         Promise.resolve(new Response(JSON.stringify(body), { status: 200 }));
 
-      // The label name→MBID resolve (a free-text query; MB spells it "Med School").
       if (url.includes("/label?query=")) {
         return json({ labels: [{ id: LABEL_MBID, name: "Med School", score: 100 }] });
       }
@@ -155,11 +128,6 @@ function stubMusicbrainz(): void {
   );
 }
 
-/**
- * The same graph, except the hop-2 release's `label-info` names its label and carries NO
- * `label.id`. MusicBrainz returns this shape for a label string it has not linked to an entity,
- * and it is the one the crawler's discovery path must decline: a name identifies nothing.
- */
 function stubMusicbrainzWithUnidentifiedHop2Label(): void {
   stubMusicbrainz();
   const inner = globalThis.fetch as unknown as (url: string) => Promise<Response>;
@@ -181,7 +149,6 @@ function stubMusicbrainzWithUnidentifiedHop2Label(): void {
   );
 }
 
-/** Drain the frontier — the sweep's job, compressed into a loop. */
 async function drain(maxHop = 2): Promise<{
   labelsDiscovered: string[];
   tracksSkipped: number;
@@ -206,10 +173,8 @@ async function drain(maxHop = 2): Promise<{
 
 const NOW = "2026-07-11T00:00:00.000Z";
 
-/** A locale-independent string comparator (oxlint requires `sort` take one). */
 const compare = (left: string, right: string): number => (left < right ? -1 : left > right ? 1 : 0);
 
-/** Narrow a libSQL cell to a string (its value type is a union, so `String()` won't do). */
 const text = (value: unknown): string => (typeof value === "string" ? value : "");
 
 async function seedLabel(name: string, slug: string, seedState: string): Promise<void> {
@@ -363,7 +328,7 @@ beforeEach(async () => {
   db = await createIntegrationDb({ url: `file:${join(fixtureDirectory, "fixture.db")}` });
   setMusicbrainzRateLimitForTests(0);
   stubMusicbrainz();
-  // The operator's ruling: Medschool is in. Nothing else is.
+
   await seedLabel("Medschool", "medschool", "enabled");
   await seedLabel("Anjunabeats", "anjunabeats", "disabled");
 });
@@ -381,9 +346,6 @@ describe("the catalogue crawler", () => {
   it("walks label → release → artist → release and stores the ENABLED-label tracks, never findings", async () => {
     const totals = await drain();
 
-    // The seed release is on Med School (enabled) → its two tracks are stored. The hop-2 release
-    // is on Hospital Records (unruled) → the walk still REACHES it (that is discovery), but the
-    // STORAGE GATE drops its track: storage is enabled-label-only, hop distance bounds discovery.
     expect(totals.tracksWritten).toBe(2);
 
     const tracks = await db.execute("select track_id, title, label, isrc from tracks");
@@ -391,23 +353,17 @@ describe("the catalogue crawler", () => {
       "Begin by Letting Go",
       "Weightless",
     ]);
-    // The hop-2 Hospital track was walked but never stored.
+
     expect(tracks.rows.map((row) => text(row.title))).not.toContain("A Hop-2 Track");
 
-    // THE FIREWALL. The crawler cannot certify: not one `findings` row exists.
     const findings = await db.execute("select count(*) as n from findings");
     expect(Number(findings.rows[0]?.n)).toBe(0);
 
-    // The track_id is minted from the MB recording id — the identity that actually
-    // exists for a track with no Spotify presence.
     expect(tracks.rows.map((row) => text(row.track_id)).sort(compare)).toEqual([
       "mb_rec-1",
       "mb_rec-2",
     ]);
 
-    // MINT-TIME MBID (the MusicBrainz identity layer, path b): every crawled row carries its
-    // recording MBID in `mb_recording_id` off the bat — the bare id, not the `mb_`-prefixed PK —
-    // so it is graph-joinable without waiting on the prefix-strip backfill.
     const mbids = await db.execute(
       "select track_id, mb_recording_id from tracks where track_id like 'mb\\_%' escape '\\'",
     );
@@ -426,8 +382,6 @@ describe("the catalogue crawler", () => {
     );
 
     for (const row of rows.rows) {
-      // The crawler acquires METADATA. It never captures audio, and the capture sweep's
-      // predicate (`findings.log_id is not null`) cannot reach a row with no finding.
       expect(row.capture_status).toBe("pending");
       expect(row.source_audio_key).toBeNull();
       expect(row.embedding_blob).toBeNull();
@@ -447,26 +401,21 @@ describe("the catalogue crawler", () => {
     expect(rows.rows).toHaveLength(2);
 
     for (const row of rows.rows) {
-      // The release read carried BOTH answers, so both looks concluded here. The ISRC-LESS row
-      // (rec-2) is the one that matters: it is stamped too, so it reads "MusicBrainz has none"
-      // rather than ambiguous silence that is indistinguishable from "nobody looked".
       expect(row.isrc_attempted_at).not.toBeNull();
       expect(row.backfill_discogs_attempted_at).not.toBeNull();
       expect(Number(row.backfill_discogs_attempts)).toBe(1);
       expect(Number(row.backfill_discogs_failures)).toBe(0);
-      // This release DOES carry a discogs url-rel, so the look concluded successfully.
+
       expect(row.in_release_id).toBe(6414598);
       expect(row.backfill_discogs_done_at).not.toBeNull();
     }
 
-    // rec-2 has no ISRC at all — stamped all the same.
     const isrcless = rows.rows.find((row) => row.track_id === "mb_rec-2");
     expect(isrcless?.isrc).toBeNull();
     expect(isrcless?.isrc_attempted_at).not.toBeNull();
   });
 
   it("records a Discogs look that found NOTHING as attempted-but-not-done", async () => {
-    // The hop-2 release carries no `discogs` url-rel. Rule its label in so the row is stored.
     await seedLabel("Hospital Records", "hospital-records", "enabled");
 
     await drain();
@@ -479,7 +428,7 @@ describe("the catalogue crawler", () => {
 
     expect(row.rows[0]?.in_release_id).toBeNull();
     expect(row.rows[0]?.in_master_id).toBeNull();
-    // Looked, not there — the honest negative, and the state the ledger serves as `absent`.
+
     expect(row.rows[0]?.backfill_discogs_attempted_at).not.toBeNull();
     expect(Number(row.rows[0]?.backfill_discogs_attempts)).toBe(1);
     expect(row.rows[0]?.backfill_discogs_done_at).toBeNull();
@@ -487,15 +436,14 @@ describe("the catalogue crawler", () => {
 
   it("is IDEMPOTENT — a second crawl of the same graph writes zero new rows", async () => {
     const first = await drain();
-    expect(first.tracksWritten).toBe(2); // both Med School tracks; the Hospital hop-2 track is gated out
+    expect(first.tracksWritten).toBe(2);
 
-    // Re-open the frontier: the same graph, walked again from scratch.
     await db.execute("update crawl_frontier set state = 'pending', cursor = 0");
 
     const second = await drain();
 
     expect(second.tracksWritten).toBe(0);
-    // 2 Med School tracks fold to a dedupe skip + the 1 Hospital hop-2 track the storage gate skips.
+
     expect(second.tracksSkipped).toBe(3);
 
     const count = await db.execute("select count(*) as n from tracks");
@@ -503,9 +451,6 @@ describe("the catalogue crawler", () => {
   });
 
   it("never mints a second row for a track Fluncle already CERTIFIED (the ISRC dedupe)", async () => {
-    // The sharpest idempotence case. A finding's `track_id` is a Spotify id, so the
-    // minted `mb_…` id would NOT collide — only the ISRC can recognise it. Without that
-    // check the crawler would quietly shadow a finding with an uncertified twin.
     await seedTrack(db, {
       logId: "004.7.2I",
       title: "Weightless",
@@ -520,7 +465,6 @@ describe("the catalogue crawler", () => {
     const shadow = await db.execute("select track_id from tracks where isrc = 'GBCJY1300173'");
     expect(shadow.rows.map((row) => row.track_id)).toEqual(["spotifyid2222222222222"]);
 
-    // The finding is untouched and still certified.
     const findings = await db.execute("select count(*) as n from findings");
     expect(Number(findings.rows[0]?.n)).toBe(1);
   });
@@ -528,11 +472,10 @@ describe("the catalogue crawler", () => {
   it("STOPS at the hop limit — maxHop 0 never leaves the seed label's own releases", async () => {
     const totals = await drain(0);
 
-    expect(totals.tracksWritten).toBe(2); // the seed release only; no artist hop
+    expect(totals.tracksWritten).toBe(2);
     const titles = await db.execute("select title from tracks");
     expect(titles.rows.map((row) => row.title)).not.toContain("A Hop-2 Track");
 
-    // And no artist node was ever enqueued, so the walk cannot resume outward later.
     const artists = await db.execute(
       "select count(*) as n from crawl_frontier where kind = 'artist'",
     );
@@ -548,23 +491,18 @@ describe("the catalogue crawler", () => {
       "select seed_state, ruled_at, mb_label_id from labels where slug = 'hospital-records'",
     );
     expect(label.rows[0]?.seed_state).toBe("undecided");
-    // No human has ruled — which is exactly what puts it in the attention queue.
+
     expect(label.rows[0]?.ruled_at).toBeNull();
-    // The discovered label folds on its MusicBrainz MBID — stamped inline at discovery, so a
-    // spelling that slugifies apart later collapses onto this row instead of duplicating.
+
     expect(label.rows[0]?.mb_label_id).toBe(HOSPITAL_MBID);
 
-    // It is NOT a seed. The crawler proposes; the operator rules.
     const seeds = await db.execute(
       "select count(*) as n from crawl_frontier where source = 'fluncle'",
     );
-    expect(Number(seeds.rows[0]?.n)).toBe(1); // medschool, and only medschool
+    expect(Number(seeds.rows[0]?.n)).toBe(1);
   });
 
   it("ADOPTS the release's label MBID onto a label the archive already knows without one", async () => {
-    // The publish path mints a label off Deezer's bare string, so a `labels` row can legitimately
-    // carry no `mb_label_id` (docs/label-entity.md). A release is MusicBrainz STATING which label
-    // this is, so the crawler hands that identity over instead of dropping it on the floor.
     await seedLabel("Hospital Records", "hospital-records", "undecided");
 
     const totals = await drain();
@@ -573,9 +511,9 @@ describe("the catalogue crawler", () => {
       "select mb_label_id, seed_state from labels where slug = 'hospital-records'",
     );
     expect(label.rows[0]?.mb_label_id).toBe(HOSPITAL_MBID);
-    // Adoption is not discovery: the operator is not asked to rule on a label he already has.
+
     expect(totals.labelsDiscovered).toEqual([]);
-    // And it is an identity write, never a ruling — the seed state is untouched.
+
     expect(label.rows[0]?.seed_state).toBe("undecided");
   });
 
@@ -595,10 +533,6 @@ describe("the catalogue crawler", () => {
   });
 
   it("REFUSES to discover a label the release names but does not identify", async () => {
-    // A `label-info` entry with a name and no `label.id` identifies NOTHING, and the crawler walks
-    // by identity — proposing a row whose MusicBrainz entity nobody can name is the namesake class
-    // (packages/skills/fluncle-catalogue-prune, references/traps.md). Publish mints on a string
-    // because a certified finding must have its label page; the crawler does not.
     stubMusicbrainzWithUnidentifiedHop2Label();
 
     const totals = await drain();
@@ -609,8 +543,6 @@ describe("the catalogue crawler", () => {
   });
 
   it("does not re-ask the operator to rule on a label he has already ruled on, under MB's spelling", async () => {
-    // The pilot found this live: he spells it "Medschool", MusicBrainz spells it
-    // "Med School". A slug check would mint a second row and put it back in his queue.
     await drain();
 
     const rows = await db.execute("select slug from labels where slug like '%med%'");
@@ -618,27 +550,14 @@ describe("the catalogue crawler", () => {
   });
 
   it("writes the ARCHIVE's label spelling, so The Ear's capture ladder can actually fire", async () => {
-    // THE CROSS-PR BUG, pinned. The Ear (docs/the-ear.md) keys every rung of the
-    // capture-priority ladder — including the `skipped-label` VETO that keeps the metered
-    // capture budget off a label the operator ruled OUT — on `slugify(tracks.label) =
-    // labels.slug`. He spells it "Medschool"; MusicBrainz spells it "Med School", which
-    // slugifies to `med-school` and matches NO label. So a crawler that wrote the vendor's
-    // spelling would leave every label rung silently dead on every crawled row.
-    //
-    // Measured before the fix, on a real Medschool crawl: 223 rows at tier 3 (the artist
-    // rung, which does not touch the label) and 512 at tier 0 — and NOTHING at tiers 1 or 2.
     await drain();
 
     const rows = await db.execute("select distinct label from tracks where label is not null");
     const labels = rows.rows.map((row) => text(row.label)).sort(compare);
 
-    // "Med School" was folded back to the spelling the archive already uses.
     expect(labels).toContain("Medschool");
     expect(labels).not.toContain("Med School");
 
-    // The invariant the whole label graph assumes: every crawled row's label slugifies onto
-    // a real `labels` row. (Only Med School rows are stored now — Hospital Records is DISCOVERED
-    // but gated out of storage, so it never appears as a `tracks.label`.)
     const { labelSlug } = await import("./labels");
     const known = await db.execute("select slug from labels");
     const slugs = new Set(known.rows.map((row) => text(row.slug)));
@@ -661,19 +580,17 @@ describe("the catalogue crawler", () => {
   it("is RESUMABLE — a pass that dies leaves the frontier where the next one picks up", async () => {
     const { crawlCatalogue, getCrawlStatus } = await import("./crawl");
 
-    // One node only: the seed resolve. Everything else must still be waiting.
     await crawlCatalogue({ limit: 1, maxHop: 2 });
     const mid = await getCrawlStatus();
 
     expect(mid.frontier.done).toBe(1);
-    expect(mid.frontier.pending).toBe(1); // the MB label node, minted, untouched
+    expect(mid.frontier.pending).toBe(1);
     expect(mid.catalogueTracks).toBe(0);
 
-    // A brand-new pass (a fresh isolate, a fresh cron tick) continues rather than restarts.
     await drain();
     const end = await getCrawlStatus();
 
-    expect(end.catalogueTracks).toBe(2); // both Med School tracks; the Hospital hop-2 track is gated out
+    expect(end.catalogueTracks).toBe(2);
     expect(end.frontier.pending).toBe(0);
   });
 
@@ -691,7 +608,6 @@ describe("the catalogue crawler", () => {
   it("stops the pass on the MusicBrainz circuit breaker instead of storming it", async () => {
     const { crawlCatalogue } = await import("./crawl");
 
-    // MB actively throttling: a 503 that survives its Retry-After retries.
     vi.stubGlobal(
       "fetch",
       vi.fn(() => Promise.resolve(new Response("", { status: 503 }))),
@@ -700,10 +616,8 @@ describe("the catalogue crawler", () => {
     const result = await crawlCatalogue({ limit: 10, maxHop: 2 });
 
     expect(result.rateLimited).toBe(true);
-    expect(result.failed).toBe(1); // it stopped after ONE failure, it did not grind ten
+    expect(result.failed).toBe(1);
 
-    // The node keeps its turn: a throttle is the vendor's state, never this node's fault, so it
-    // returns claimable with its failure count unspent rather than backed off toward abandonment.
     const row = await db.execute(
       "select state, failures, note from crawl_frontier where id = 'fluncle:label:medschool'",
     );
@@ -713,11 +627,6 @@ describe("the catalogue crawler", () => {
   });
 
   it("stamps `label_id` so a crawled track lands on the public /label/<slug> page", async () => {
-    // The graph pages (docs/label-entity.md) read `tracks.label_id` — the indexed edge, not
-    // the raw string — and they show every track on a label, certified or not. The deploy
-    // backfill self-heals any writer that does not know the column, this crawler included;
-    // but a crawl ticks every ten minutes and a deploy does not, so the crawler stamps the
-    // pointer itself and lets the backfill stay the backstop.
     await drain();
 
     const rows = await db.execute(`
@@ -726,19 +635,11 @@ describe("the catalogue crawler", () => {
       where tracks.track_id like 'mb_%'
     `);
 
-    // Both stored tracks are linked, and to the RIGHT label — which only works because the row
-    // carries the archive's spelling (`Medschool`), not MusicBrainz's (`Med School`). The Hospital
-    // hop-2 track is gated out of storage, so `hospital-records` has no linked track here.
     expect(rows.rows.length).toBe(2);
     expect(new Set(rows.rows.map((row) => text(row.slug)))).toEqual(new Set(["medschool"]));
   });
 
   it("links the artist edge by IDENTITY, refusing a same-named row that is somebody else", async () => {
-    // THE HOMONYM SEAL, through the real crawler (artists.ts § THE HOMONYM SEAL). The credits'
-    // MB artist ids ride from the release parse to the link step positionally aligned with
-    // `artists_json`, so this also pins that ALIGNMENT: the fixture credits Etherwood AND Various
-    // Artists, and VA must occupy its own slot as a null rather than shifting Etherwood's id onto
-    // the wrong name. A row named `Etherwood` that is a DIFFERENT MusicBrainz artist gets no edge.
     const now = new Date().toISOString();
     await db.execute({
       args: ["art-impostor", "Etherwood", "etherwood", OTHER_ARTIST_MBID, now, now],
@@ -755,7 +656,6 @@ describe("the catalogue crawler", () => {
   });
 
   it("links the artist edge when the credit's mbid IS that row's identity", async () => {
-    // The other half of the rail: the seal must not cost the crawler its real links.
     const now = new Date().toISOString();
     await db.execute({
       args: ["art-etherwood", "Etherwood", "etherwood", ARTIST_MBID, now, now],
@@ -768,25 +668,20 @@ describe("the catalogue crawler", () => {
     const edges = await db.execute(
       `select count(*) as n from track_artists where artist_id = 'art-etherwood'`,
     );
-    // Both stored (enabled-label) tracks credit Etherwood; the Hospital hop-2 track is gated out.
+
     expect(Number(edges.rows[0]?.n)).toBe(2);
   });
 
   it("mints + links the ALBUM inline, folded on the release-group MBID", async () => {
-    // The album edge is now written INLINE at crawl time (no deferred deploy backfill),
-    // folded on MusicBrainz's release-group MBID (`inc=release-groups`). Only the ENABLED-label
-    // release is stored, so exactly ONE album row is minted (the Hospital hop-2 release is gated
-    // out of storage — no childless `hospital-records-sampler` album is left behind).
     await drain();
 
     const albums = await db.execute("select slug, release_group_mbid from albums order by slug");
     expect(albums.rows.map((row) => text(row.slug))).toEqual(["med-school-sampler"]);
-    // The album carries its fold key — the identity a re-crawl or a second pressing folds on.
+
     expect(new Set(albums.rows.map((row) => text(row.release_group_mbid)))).toEqual(
       new Set([SEED_RELEASE_GROUP]),
     );
 
-    // Both stored tracks are linked to an album (the indexed edge the /album page reads by).
     const linked = await db.execute(`
       select tracks.track_id, albums.slug
       from tracks join albums on albums.id = tracks.album_id
@@ -797,14 +692,11 @@ describe("the catalogue crawler", () => {
       new Set(["med-school-sampler"]),
     );
 
-    // The raw `tracks.album` string is preserved alongside the pointer (audit trail).
     const titles = await db.execute("select album from tracks where track_id like 'mb_%'");
     expect(titles.rows.every((row) => text(row.album).length > 0)).toBe(true);
   });
 
   it("FALLBACK: a release with NO release group still links its album by the slug path", async () => {
-    // The load-bearing fallback — nothing hard-requires the mbid. A release MusicBrainz has no
-    // release group for must still land its album edge, folded on the title slug, mbid NULL.
     vi.stubGlobal(
       "fetch",
       vi.fn((url: string) => {
@@ -824,7 +716,6 @@ describe("the catalogue crawler", () => {
         }
 
         if (url.includes(`/release/${SEED_RELEASE}`)) {
-          // No release group — MusicBrainz genuinely omits it for some releases.
           return json(
             release(SEED_RELEASE, "Med School", null, [{ id: "rec-1", title: "Weightless" }]),
           );
@@ -842,7 +733,7 @@ describe("the catalogue crawler", () => {
       where tracks.track_id = 'mb_rec-1'
     `);
     expect(text(linked.rows[0]?.slug)).toBe("med-school-sampler");
-    // Linked by slug, with no fold key — exactly the null-tolerant fallback path.
+
     expect(linked.rows[0]?.release_group_mbid).toBeNull();
   });
   it("reports the seed plan and writes NOTHING on a dry run", async () => {
@@ -861,27 +752,18 @@ describe("the catalogue crawler", () => {
 });
 
 describe("the STORAGE GATE — a track is stored only when its release's label is ENABLED", () => {
-  // The whitelist (`labels.seed_state = 'enabled'`) gates STORAGE, not only seeding. The 2-hop walk
-  // is a label-DISCOVERY mechanism; storage is enabled-label-only. Hop distance bounds discovery,
-  // never storage — the gate keys on the LABEL, not the hop.
-
   it("stores ZERO tracks for a release on a non-enabled label, but STILL surfaces that label for ruling", async () => {
     await drain();
 
-    // The hop-2 release is on Hospital Records — a label nobody has ruled on. Its track is NOT
-    // stored (the storage gate), so no `mb_rec-3` row exists.
     const hop2 = await db.execute("select track_id from tracks where title = 'A Hop-2 Track'");
     expect(hop2.rows).toHaveLength(0);
 
-    // …yet the walk still DISCOVERED the label: `ensureLabel` ran, so Hospital Records is minted
-    // `undecided` and lands in the operator's ruling queue. The widening loop keeps working.
     const label = await db.execute(
       "select seed_state, ruled_at from labels where slug = 'hospital-records'",
     );
     expect(label.rows[0]?.seed_state).toBe("undecided");
     expect(label.rows[0]?.ruled_at).toBeNull();
 
-    // Storage-gated means storage-gated all the way down: no album row, no label_id edge for it.
     const album = await db.execute(
       "select slug from albums where slug = 'hospital-records-sampler'",
     );
@@ -889,8 +771,6 @@ describe("the STORAGE GATE — a track is stored only when its release's label i
   });
 
   it("stores a release's tracks once its label is ENABLED — the gate keys on the LABEL, not the hop", async () => {
-    // Rule Hospital Records IN. Now the SAME hop-2 release stores its track — proving storage
-    // follows the label ruling, not graph distance (this release is still reached at hop 2).
     await seedLabel("Hospital Records", "hospital-records", "enabled");
 
     await drain();
@@ -898,7 +778,6 @@ describe("the STORAGE GATE — a track is stored only when its release's label i
     const hop2 = await db.execute("select track_id from tracks where title = 'A Hop-2 Track'");
     expect(hop2.rows.map((row) => text(row.track_id))).toEqual(["mb_rec-3"]);
 
-    // And the enabled seed release stores its tracks exactly as before — three in all now.
     const all = await db.execute("select count(*) as n from tracks");
     expect(Number(all.rows[0]?.n)).toBe(3);
   });
@@ -1042,8 +921,7 @@ describe("the artist exception gate", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     await prepareRuleRelease({
       labelId: "lbl_radar_two",
-      // The payload identity matches neither namesake, forcing the name-fold fallback to confront
-      // the collision. Its per-label rule must not leak; enabled default is the only safe verdict.
+
       labelMbid: "label-radar-unknown",
       labelName: "Radar-Records",
       labelSlug: "radar-records-two",
@@ -1286,9 +1164,6 @@ describe("the artist exception gate", () => {
     ]);
   });
 
-  // The `unlisted` verdict is a VISIBILITY ruling. At the storage gate it must be indistinguishable
-  // from no rule at all, on both sides of the label default — that is the whole point of the remix
-  // disposition: the record stays in the archive, only the artist's page goes.
   it("an unlisted first credit stores from an ENABLED label exactly as an unruled one does", async () => {
     await prepareRuleRelease({
       labelId: "lbl_scope",
@@ -1319,9 +1194,6 @@ describe("the artist exception gate", () => {
     expect(tracks.rows.map((row) => text(row.title))).toEqual(["Remix billed to the original"]);
   });
 
-  // The two axes live in different slots: the global one holds the visibility ruling, a per-label
-  // one holds acquisition. So an act can be off the site AND still have its records taken from a
-  // label the operator carved for it — the gate reads the per-label allow and never sees the other.
   it("a global unlisted and a PER-LABEL allow coexist: the record stores, the page is another axis", async () => {
     await prepareRuleRelease({
       labelId: "lbl_scope",
@@ -1779,7 +1651,7 @@ describe("an artist browse records each release's own label", () => {
       kind: "artist",
       labelSlug: "medschool",
     });
-    // A release another walk queued before its label was known: waiting, and not yet claimable.
+
     await seedFrontierNode({
       createdAt: "2026-07-09T00:00:00.000Z",
       externalId: "release-already-queued",
@@ -1902,8 +1774,6 @@ describe("the scoped label re-arm — a widened ruling replays refused releases"
     });
     stubScopedLabel([{ id: SCOPED_RELEASE }]);
 
-    // A real two-node walk while the label is undecided: browse enqueues the release, then the
-    // release detail reaches the storage gate and settles done with nothing written.
     await crawlCatalogue({ limit: 1, maxHop: 0 });
     await crawlCatalogue({ limit: 1, maxHop: 0 });
 
@@ -1915,8 +1785,6 @@ describe("the scoped label re-arm — a widened ruling replays refused releases"
     const tracks = await db.execute("select count(*) as n from tracks");
     expect(Number(tracks.rows[0]?.n)).toBe(0);
 
-    // Keep the genuine terminal states, but make their watermark ordering deterministic even on
-    // a sub-millisecond test run: the actual server write below supplies the newer scope stamp.
     await db.execute({
       args: [BEFORE_SCOPE, SCOPED_LABEL_NODE, SCOPED_RELEASE_NODE],
       sql: `update crawl_frontier set done_at = ? where id in (?, ?)`,
@@ -1955,11 +1823,6 @@ describe("the scoped label re-arm — a widened ruling replays refused releases"
     const { crawlCatalogue } = await import("./crawl");
     await prepareRefusedRelease();
 
-    // The exact row the revived release would re-store (`catalogueTrackId(recordingId)`), already
-    // present with a live anchor backoff and NO ISRC. The re-arm replays crawl SCOPE only — the
-    // storage insert is `on conflict (track_id) do nothing` — so the whole replay must leave the
-    // row's re-ask stamp and retry-cap counter standing: a label-scope re-arm is never a bulk
-    // anchor requeue, and an ISRC-less row especially must not re-enter the paid anchor queue.
     await db.execute(
       `insert into tracks (track_id, title, artists_json, duration_ms, isrc, has_isrc,
          spotify_anchor_attempted_at, spotify_anchor_attempts)
@@ -1970,7 +1833,7 @@ describe("the scoped label re-arm — a widened ruling replays refused releases"
 
     const rearm = await crawlCatalogue({ limit: 1, maxHop: 0 });
     expect(rearm.releasesRearmed).toBe(1);
-    // The revived release settles: its store pass skips the held row rather than rewriting it.
+
     await crawlCatalogue({ limit: 1, maxHop: 0 });
     const settled = await db.execute({
       args: [SCOPED_RELEASE_NODE],
@@ -2119,8 +1982,6 @@ describe("the scoped label re-arm — a widened ruling replays refused releases"
     expect(paginating.rows[0]?.done_at).toBe(BEFORE_SCOPE);
     expect(paginating.rows[0]?.state).toBe("pending");
 
-    // Let the next tick pick the still-paginating label node; these release nodes model pages the
-    // deep walk drained in between browse ticks. The label's retained `done_at` is untouched.
     await db.execute({
       args: [BEFORE_SCOPE],
       sql: `update crawl_frontier
@@ -2280,8 +2141,6 @@ describe("the frontier drain — releases never starve behind a discovery wave",
   it("leaves the discovery half ordered independently of release provenance", async () => {
     const { crawlCatalogue } = await import("./crawl");
 
-    // Keep seeding idempotent without adding a second pending discovery node: this is the exact
-    // deterministic id `seedFromEnabledLabels` would try to enqueue for Medschool.
     await seedFrontierNode({
       createdAt: "2026-07-09T00:00:00.000Z",
       externalId: "medschool",
@@ -2338,14 +2197,8 @@ describe("the frontier drain — releases never starve behind a discovery wave",
   it("guarantees release nodes half the batch even when older, lower-hop artist nodes crowd the head", async () => {
     const { crawlCatalogue } = await import("./crawl");
 
-    // Only Med School is enabled: its seed adds one quiet hop-0 node, and — since the STORAGE
-    // GATE — the planted release must be on an enabled label for its tracks to land, which the
-    // "Med School" release is. Every other label is disabled so the frontier stays the shape below.
     await db.execute("update labels set seed_state = 'disabled' where slug != 'medschool'");
 
-    // THE STARVATION SHAPE: a wave of hop-1 artist nodes, all OLDER
-    // than the hop-2 release, so a pure `hop asc, created_at asc` drain would spend the
-    // entire batch expanding artists (which write no tracks) and the catalogue flatlines.
     const old = new Date(Date.now() - 60_000).toISOString();
     const newer = new Date().toISOString();
 
@@ -2362,9 +2215,6 @@ describe("the frontier drain — releases never starve behind a discovery wave",
             values (?, 'release', 'musicbrainz', ?, 2, null, 'medschool', ?, ?)`,
     });
 
-    // A batch smaller than the artist wave: without the split, all 4 slots go to
-    // artists and tracksWritten is 0. With the split, releases get ceil(4/2) = 2
-    // slots, the one pending release expands, and its tracks land.
     const pass = await crawlCatalogue({ limit: 4, maxHop: 2 });
 
     expect(pass.tracksWritten).toBeGreaterThan(0);
@@ -2377,14 +2227,8 @@ describe("the frontier drain — releases never starve behind a discovery wave",
 });
 
 describe("the seed re-arm (release freshness) — an enabled label is a subscription", () => {
-  // A done seed-label browse node is otherwise TERMINAL, so a label's LATER releases (a Friday
-  // drop) would never surface. The re-arm flips a stale enabled label's MusicBrainz browse node
-  // back to pending with the TAIL-FIRST cursor (REARM_TAIL) so it re-reads the END of the release
-  // list (where MB's unsorted browse appends new pressings): a genuinely new release mints rows, a
-  // known one is a cheap on-conflict no-op, and the two-layer idempotence folds any re-pressed track.
   const NEW_RELEASE = "release-new";
 
-  /** Re-point the Med School browse at a wider release list to model a later drop. */
   function stubMedschool(releaseIds: string[]): void {
     vi.stubGlobal(
       "fetch",
@@ -2412,8 +2256,6 @@ describe("the seed re-arm (release freshness) — an enabled label is a subscrip
           );
         }
 
-        // The NEWLY-pressed release: one genuinely new recording, PLUS rec-1 which the archive
-        // already holds (a re-press) — the two-layer idempotence must fold the known one to a skip.
         if (url.includes(`/release/${NEW_RELEASE}`)) {
           return json(
             release(NEW_RELEASE, "Med School", "rg-new-drop", [
@@ -2428,7 +2270,6 @@ describe("the seed re-arm (release freshness) — an enabled label is a subscrip
     );
   }
 
-  /** Age every done MB-label browse node back past the most recent pass boundary. */
   async function ageSeedLabelNodes(): Promise<void> {
     const old = drainedBeforeLastPass();
 
@@ -2442,7 +2283,6 @@ describe("the seed re-arm (release freshness) — an enabled label is a subscrip
   it("re-arms a stale enabled label, discovers its NEW release, and re-walks the known one for nothing", async () => {
     const { crawlCatalogue } = await import("./crawl");
 
-    // First drain (hop 0 keeps it to the seed label's own releases): rec-1 + rec-2 land.
     stubMedschool([SEED_RELEASE]);
     await drain(0);
     const before = await db.execute("select track_id from tracks");
@@ -2451,27 +2291,22 @@ describe("the seed re-arm (release freshness) — an enabled label is a subscrip
       "mb_rec-2",
     ]);
 
-    // Time passes; the label drops a new release. Its done browse node now predates the last pass.
     stubMedschool([SEED_RELEASE, NEW_RELEASE]);
     await ageSeedLabelNodes();
 
-    // The re-arm rides this pass: it flips the MB label browse node back to pending (REARM_TAIL).
     const rearmPass = await crawlCatalogue({ limit: 10, maxHop: 0 });
     expect(rearmPass.seedsRearmed).toBe(1);
 
-    // Drain the rest: the tail-first re-read re-lists SEED_RELEASE (a done node → on-conflict
-    // no-op, never re-walked) AND NEW_RELEASE (a fresh node → walked, mints rec-new).
     await drain(0);
 
     const after = await db.execute("select track_id from tracks");
-    // rec-new appeared; rec-1 (on the new release, but already held) wrote nothing — the idempotence.
+
     expect(after.rows.map((row) => text(row.track_id)).sort(compare)).toEqual([
       "mb_rec-1",
       "mb_rec-2",
       "mb_rec-new",
     ]);
 
-    // A re-armed subscription certifies nothing either — the firewall still holds.
     const findings = await db.execute("select count(*) as n from findings");
     expect(Number(findings.rows[0]?.n)).toBe(0);
   });
@@ -2482,7 +2317,6 @@ describe("the seed re-arm (release freshness) — an enabled label is a subscrip
     stubMedschool([SEED_RELEASE]);
     await drain(0);
 
-    // done_at is just now, which is at or after the most recent boundary. No re-arm until the next.
     const pass = await crawlCatalogue({ limit: 10, maxHop: 0 });
     expect(pass.seedsRearmed).toBe(0);
 
@@ -2495,12 +2329,9 @@ describe("the seed re-arm (release freshness) — an enabled label is a subscrip
   it("never re-arms a DISABLED label's done node, nor a FAILED node", async () => {
     const { crawlCatalogue } = await import("./crawl");
 
-    // Silence the walk itself (nothing enabled to seed), then plant two aged nodes by hand.
     await db.execute("update labels set seed_state = 'disabled'");
     const old = drainedBeforeLastPass();
 
-    // A DISABLED label's done browse node, well past the boundary — re-arm is crawl SCOPE, so it
-    // must stay done: a label the operator ruled OUT is not re-subscribed.
     await db.execute({
       args: ["musicbrainz:label:mb-anjuna", "mb-anjuna", old, old, old],
       sql: `insert into crawl_frontier
@@ -2508,8 +2339,6 @@ describe("the seed re-arm (release freshness) — an enabled label is a subscrip
             values (?, 'label', 'musicbrainz', ?, 0, null, 'anjunabeats', 'done', ?, ?, ?)`,
     });
 
-    // A FAILED node whose label IS enabled and IS past the boundary — the exponential backoff
-    // owns a failed node, so the re-arm must never disturb it.
     await db.execute("update labels set seed_state = 'enabled' where slug = 'medschool'");
     await db.execute({
       args: ["musicbrainz:label:mb-failed", "mb-failed", old, old, old],
@@ -2535,9 +2364,7 @@ describe("the seed re-arm (release freshness) — an enabled label is a subscrip
   it("re-arms at most REARM_BATCH per pass (oldest-done-first), spreading a mass re-arm over ticks", async () => {
     const { REARM_BATCH, crawlCatalogue } = await import("./crawl");
 
-    // The 'every enabled label comes due on the same boundary' shape, shrunk to REARM_BATCH + 2.
-    // Every node is a done, aged, enabled-label browse node — so all are re-arm-eligible.
-    await db.execute("update labels set seed_state = 'disabled'"); // silence the seed walk
+    await db.execute("update labels set seed_state = 'disabled'");
     const old = drainedBeforeLastPass();
     const cohort = REARM_BATCH + 2;
 
@@ -2553,11 +2380,9 @@ describe("the seed re-arm (release freshness) — an enabled label is a subscrip
       });
     }
 
-    // Pass one re-arms exactly REARM_BATCH — the bound holds even though all cohort+2 are eligible.
     const first = await crawlCatalogue({ limit: 1, maxHop: 0 });
     expect(first.seedsRearmed).toBe(REARM_BATCH);
 
-    // The remaining 2 were not dropped — the next tick re-arms them (the spread), and no more.
     const second = await crawlCatalogue({ limit: 1, maxHop: 0 });
     expect(second.seedsRearmed).toBe(cohort - REARM_BATCH);
   });
@@ -2565,12 +2390,8 @@ describe("the seed re-arm (release freshness) — an enabled label is a subscrip
   it("comes due ON a pass boundary and not again until the next one", async () => {
     const { crawlCatalogue } = await import("./crawl");
 
-    // The clock moves through one release week on the RE-ARM'S OWN seam, never globally: the
-    // crawl's claim measures its wall budget with `Date.now()`, so a faked global clock strands it
-    // with zero elapsed time forever. 2026-09-17 is a Thursday, 09-18 the Friday, 09-20 the Sunday.
     const MB_NODE = `musicbrainz:label:${LABEL_MBID}`;
 
-    /** Put the seed label's browse node back to drained, with a chosen `done_at`. */
     async function drainedAt(doneAt: string): Promise<void> {
       await db.execute({
         args: [doneAt, doneAt, MB_NODE],
@@ -2579,7 +2400,6 @@ describe("the seed re-arm (release freshness) — an enabled label is a subscrip
       });
     }
 
-    /** One tick with the re-arm's clock parked on `instant`; answers how many seeds it re-armed. */
     async function passAt(instant: string): Promise<number> {
       setSeedRearmClockForTests(new Date(instant));
       return (await crawlCatalogue({ limit: 1, maxHop: 0 })).seedsRearmed;
@@ -2589,18 +2409,12 @@ describe("the seed re-arm (release freshness) — an enabled label is a subscrip
       stubMedschool([SEED_RELEASE]);
       await drain(0);
 
-      // The label last drained on the Thursday — after Tuesday's pass, before Friday's. A minute
-      // short of Friday noon the most recent boundary is still Tuesday's, and the Thursday drain
-      // is NEWER than it. Not due.
       await drainedAt("2026-09-17T09:00:00.000Z");
       expect(await passAt("2026-09-18T11:59:00.000Z")).toBe(0);
 
-      // Friday noon opens the release-day pass and the Thursday drain falls behind it. Due.
       await drainedAt("2026-09-17T09:00:00.000Z");
       expect(await passAt("2026-09-18T12:00:00.000Z")).toBe(1);
 
-      // Served: the node is walked and drains again, inside Friday's pass. The rest of Friday and
-      // all of Saturday belong to that same pass, so it is never due twice for one boundary.
       for (const instant of [
         "2026-09-18T12:05:01.000Z",
         "2026-09-18T23:59:59.000Z",
@@ -2611,7 +2425,6 @@ describe("the seed re-arm (release freshness) — an enabled label is a subscrip
         expect(await passAt(instant)).toBe(0);
       }
 
-      // Sunday midnight opens the weekend's late-entry pass. Due again.
       await drainedAt("2026-09-18T12:05:00.000Z");
       expect(await passAt("2026-09-20T00:00:00.000Z")).toBe(1);
     } finally {
@@ -2620,23 +2433,10 @@ describe("the seed re-arm (release freshness) — an enabled label is a subscrip
   });
 });
 
-// ── THE NAMESAKE SEAL: a ruled identity beats a name ────────────────────────────────────────────
-//
-// A label NAME is not an identity. When the operator enables the Belgian drum
-// & bass "Radar Records"; the seed resolver's free-text search returned the 1978 UK PUNK namesake
-// first (MB score 100 vs 85), both names fold identically, so the crawl walked the punk label and
-// minted 303 new-wave tracks under his enabled ruling. And because the re-arm joined its nodes to
-// the seed set on `label_slug` ALONE, that wrong-namesake node kept re-arming forever (7 attempts).
-// Six enabled seeds were resolved this way. These are the two tripwires that close it.
-
 describe("the namesake seal — the ruled mb_label_id is the resolver's authority", () => {
   const RIGHT_MBID = "label-radar-dnb";
   const WRONG_MBID = "label-radar-punk";
 
-  /**
-   * MusicBrainz over a namesake pair, with the search calls COUNTED. The punk label outranks the
-   * DnB one on exactly the same name — the live shape. `labels` may hold either or none.
-   */
   function stubNamesakes(candidates: { id: string; name: string; score: number }[]): {
     searchCalls: () => number;
   } {
@@ -2654,7 +2454,6 @@ describe("the namesake seal — the ruled mb_label_id is the resolver's authorit
           return json({ labels: candidates });
         }
 
-        // Either namesake's browse answers empty — this block is about IDENTITY, not the walk.
         if (url.includes("/release?label=")) {
           return json({ "release-count": 0, releases: [] });
         }
@@ -2666,9 +2465,8 @@ describe("the namesake seal — the ruled mb_label_id is the resolver's authorit
     return { searchCalls: () => searches };
   }
 
-  /** The operator's enabled Radar Records, with (or without) its ruled MusicBrainz identity. */
   async function seedRadar(mbLabelId: null | string): Promise<void> {
-    await db.execute("update labels set seed_state = 'disabled'"); // silence the Medschool walk
+    await db.execute("update labels set seed_state = 'disabled'");
     await seedLabel("Radar Records", "radar-records", "enabled");
 
     if (mbLabelId) {
@@ -2680,7 +2478,6 @@ describe("the namesake seal — the ruled mb_label_id is the resolver's authorit
   }
 
   it("enqueues the RULED mbid and never asks MusicBrainz to guess from the name", async () => {
-    // The punk namesake would win the search. The ruling says otherwise, so the search never runs.
     const mb = stubNamesakes([
       { id: WRONG_MBID, name: "Radar Records", score: 100 },
       { id: RIGHT_MBID, name: "Radar Records", score: 85 },
@@ -2689,7 +2486,6 @@ describe("the namesake seal — the ruled mb_label_id is the resolver's authorit
     await seedRadar(RIGHT_MBID);
     await drain(0);
 
-    // ZERO name lookups: a ruled identity cannot be improved on by a search, only contradicted.
     expect(mb.searchCalls()).toBe(0);
 
     const nodes = await db.execute(
@@ -2697,7 +2493,6 @@ describe("the namesake seal — the ruled mb_label_id is the resolver's authorit
     );
     expect(nodes.rows.map((row) => text(row.external_id))).toEqual([RIGHT_MBID]);
 
-    // The seed node resolved cleanly — no skip, no failure.
     const seed = await db.execute(
       "select state, note from crawl_frontier where id = 'fluncle:label:radar-records'",
     );
@@ -2711,7 +2506,6 @@ describe("the namesake seal — the ruled mb_label_id is the resolver's authorit
       { id: RIGHT_MBID, name: "Radar Records", score: 85 },
     ]);
 
-    // No ruling on this row — so the fallback search runs, and finds two exact folds.
     await seedRadar(null);
     await drain(0);
 
@@ -2721,12 +2515,10 @@ describe("the namesake seal — the ruled mb_label_id is the resolver's authorit
       "select state, note from crawl_frontier where id = 'fluncle:label:radar-records'",
     );
     expect(seed.rows[0]?.state).toBe("skipped");
-    // Both candidates are named, so the ruling is a copy-paste rather than a re-investigation.
+
     expect(text(seed.rows[0]?.note)).toContain(WRONG_MBID);
     expect(text(seed.rows[0]?.note)).toContain(RIGHT_MBID);
 
-    // NOTHING was walked and nothing was written: no MB label node, and no guessed identity
-    // persisted onto the operator's row (the seal's whole point — a coin-flip is not a ruling).
     const nodes = await db.execute(
       "select count(*) as n from crawl_frontier where source = 'musicbrainz'",
     );
@@ -2737,8 +2529,6 @@ describe("the namesake seal — the ruled mb_label_id is the resolver's authorit
   });
 
   it("still resolves a SINGLE exact match by name, and persists it as the ruling", async () => {
-    // One exact fold plus a near-miss that does not fold ("Radar" ≠ "Radar Records") — the
-    // unambiguous case must keep working, or the guard has quietly disabled seed resolution.
     const mb = stubNamesakes([
       { id: RIGHT_MBID, name: "Radar Records", score: 100 },
       { id: "label-radar-other", name: "Radar", score: 70 },
@@ -2754,18 +2544,16 @@ describe("the namesake seal — the ruled mb_label_id is the resolver's authorit
     );
     expect(nodes.rows.map((row) => text(row.external_id))).toEqual([RIGHT_MBID]);
 
-    // Persisted, so every later tick resolves off the ruling and makes no search at all.
     const label = await db.execute("select mb_label_id from labels where slug = 'radar-records'");
     expect(label.rows[0]?.mb_label_id).toBe(RIGHT_MBID);
   });
 
   it("re-arms a node that IS the ruled identity, never a namesake node wearing the right slug", async () => {
     const { crawlCatalogue } = await import("./crawl");
-    await db.execute("update labels set seed_state = 'disabled'"); // silence the Medschool walk
+    await db.execute("update labels set seed_state = 'disabled'");
 
     const old = drainedBeforeLastPass();
 
-    /** An aged, drained MusicBrainz label browse node under one seed slug. */
     const plantNode = async (slug: string, mbid: string): Promise<void> => {
       await db.execute({
         args: [`musicbrainz:label:${mbid}`, mbid, slug, old, old, old],
@@ -2775,7 +2563,6 @@ describe("the namesake seal — the ruled mb_label_id is the resolver's authorit
       });
     };
 
-    /** An enabled seed label, optionally carrying the operator's identity ruling. */
     const plantLabel = async (slug: string, mbLabelId: null | string): Promise<void> => {
       await seedLabel(slug, slug, "enabled");
 
@@ -2787,20 +2574,15 @@ describe("the namesake seal — the ruled mb_label_id is the resolver's authorit
       }
     };
 
-    // 1. RULED AND MATCHING — the node IS the label's identity. Re-arms (the subscription).
     await plantLabel("ruled-match", "mb-ruled-match");
     await plantNode("ruled-match", "mb-ruled-match");
 
-    // 2. RULED AND MISMATCHED — the live bug. Right slug, WRONG label. Must never re-arm again.
     await plantLabel("ruled-namesake", "mb-the-real-one");
     await plantNode("ruled-namesake", "mb-the-namesake");
 
-    // 3. UNRULED — no `mb_label_id` to contradict, so it re-arms exactly as it always did.
     await plantLabel("unruled", null);
     await plantNode("unruled", "mb-unruled");
 
-    // `limit: 0` re-arms and picks NOTHING, so these assertions read the re-arm's own effect
-    // rather than the browse expansion that would otherwise consume it in the same pass.
     const pass = await crawlCatalogue({ limit: 0, maxHop: 0 });
     expect(pass.seedsRearmed).toBe(2);
     expect(pass.expanded).toBe(0);
@@ -2815,17 +2597,6 @@ describe("the namesake seal — the ruled mb_label_id is the resolver's authorit
   });
 });
 
-// ── THE DEDUPE CONTRACT: MB-walk-later convergence with a tap-first row (D8) ─────────────────────
-//
-// The freshness tap (label-releases.ts) mints `sp_<spotify-track-id>` rows for day-one releases.
-// When the MB crawl later walks the SAME release, its `writeCatalogueTracks` must recognise the
-// tap-first row instead of minting an `mb_` twin — by ISRC (layer 1) OR, when the ISRC is missing /
-// divergent, by an EXACT title fold within the same album (layer 2). The convergence is
-// namespace-agnostic (it folds on ISRC + album/title, never the id prefix). The seed release
-// (release-seed) presses "Weightless" (ISRC GBCJY1300173) and "Begin by Letting Go" (no ISRC) on
-// release-group rg-medschool-sampler → album slug "med-school-sampler".
-
-/** Mint an `albums` row the crawl will resolve the seed release onto (it adopts the RG onto it). */
 async function seedAlbumRow(id: string, name: string, slug: string): Promise<void> {
   await db.execute({
     args: [id, name, slug, NOW, NOW],
@@ -2833,7 +2604,6 @@ async function seedAlbumRow(id: string, name: string, slug: string): Promise<voi
   });
 }
 
-/** Seed a tap-first catalogue row (`sp_<id>`) with an album link — the shape the tap mints. */
 async function seedTapRow(row: {
   albumId: string;
   isrc: null | string;
@@ -2850,7 +2620,7 @@ async function seedTapRow(row: {
 describe("the crawl converges onto a tap-first row instead of minting a twin", () => {
   it("folds a later MB walk to a skip when the ISRC matches (no mb_ twin)", async () => {
     await seedAlbumRow("alb_seed", "Med School sampler", "med-school-sampler");
-    // The tap already minted "Weightless" with the shared ISRC.
+
     await seedTapRow({
       albumId: "alb_seed",
       isrc: "GBCJY1300173",
@@ -2860,26 +2630,25 @@ describe("the crawl converges onto a tap-first row instead of minting a twin", (
 
     await drain();
 
-    // No `mb_rec-1` twin — the crawl recognised the sp_ row by ISRC.
     const weightless = await db.execute(
       "select track_id from tracks where title = 'Weightless' order by track_id",
     );
     expect(weightless.rows.map((row) => text(row.track_id))).toEqual(["sp_weightless"]);
-    // The other seed track still mints as normal; the Hospital hop-2 track is gated out of storage.
+
     const all = await db.execute("select count(*) as n from tracks");
-    expect(Number(all.rows[0]?.n)).toBe(2); // sp_weightless + mb_rec-2
+    expect(Number(all.rows[0]?.n)).toBe(2);
   });
 
   it("folds a later MB walk to a skip via same-album title fold when the ISRC is missing/divergent", async () => {
     await seedAlbumRow("alb_seed", "Med School sampler", "med-school-sampler");
-    // "Weightless" tapped with a DIVERGENT ISRC (Spotify/MB disagree) — layer 1 misses it.
+
     await seedTapRow({
       albumId: "alb_seed",
       isrc: "XXDIVERGENT01",
       title: "Weightless",
       trackId: "sp_weightless",
     });
-    // "Begin by Letting Go" tapped with NO ISRC — layer 1 has nothing to match.
+
     await seedTapRow({
       albumId: "alb_seed",
       isrc: null,
@@ -2889,21 +2658,16 @@ describe("the crawl converges onto a tap-first row instead of minting a twin", (
 
     await drain();
 
-    // Neither seed-release track minted an `mb_` twin — both converged on the sp_ row by the
-    // same-album exact title fold.
     const twins = await db.execute(
       "select track_id from tracks where track_id like 'mb\\_rec-1' escape '\\' or track_id like 'mb\\_rec-2' escape '\\'",
     );
     expect(twins.rows).toHaveLength(0);
-    // The hop-2 track is on Hospital Records (unruled), so the STORAGE GATE drops it — it is
-    // never stored regardless of the fold, which the convergence above is entirely separate from.
+
     const hop2 = await db.execute("select track_id from tracks where title = 'A Hop-2 Track'");
     expect(hop2.rows).toHaveLength(0);
   });
 
   it("does NOT merge a same-titled track on a DIFFERENT album (the fold is album-scoped)", async () => {
-    // A tap row titled "Weightless" but on an UNRELATED album — the crawl must still mint its own
-    // "Weightless" for the seed release (different album_id ⇒ not a convergence).
     await seedAlbumRow("alb_other", "Some Other Record", "some-other-record");
     await seedTapRow({
       albumId: "alb_other",
@@ -2917,35 +2681,23 @@ describe("the crawl converges onto a tap-first row instead of minting a twin", (
     const weightless = await db.execute(
       "select track_id from tracks where title = 'Weightless' order by track_id",
     );
-    // Both exist — the album-scoped fold did not merge across albums. (`mb_` sorts before `sp_`.)
+
     expect(weightless.rows.map((row) => text(row.track_id))).toEqual(["mb_rec-1", "sp_unrelated"]);
   });
 });
 
 describe("the tail-first re-arm — a subscription reads only the NEW end of the list", () => {
-  // MusicBrainz's release browse has NO date sort: its order is append-ish, so a label's NEWEST
-  // pressings sit at the TAIL. A re-arm therefore reads the list END-first and stops at the first
-  // all-known page — it never re-walks the whole thing forward. These cases pin that mechanic:
-  // the multi-page early stop, the < 100-release label, the probe→tail count-grew race, and the
-  // guarantee that a COLD (never-drained) label still full-walks FORWARD from the head.
   const DAY_MS = 24 * 60 * 60 * 1000;
   const MB_LABEL_NODE = `musicbrainz:label:${LABEL_MBID}`;
   const AGED = new Date(Date.now() - 5 * DAY_MS).toISOString();
 
   const releaseId = (index: number): string => `r${String(index).padStart(3, "0")}`;
 
-  /** The offset+limit MusicBrainz was browsed at, in call order — how we prove which pages ran. */
   function recordBrowseOffsets(): string[] {
     return browseOffsets;
   }
   let browseOffsets: string[] = [];
 
-  /**
-   * A Med School release browse that RESPECTS offset+limit (the real endpoint's contract) so the
-   * tail-first walk's paging is exercised for real. `list()` returns the CURRENT `{ count, ids }`,
-   * and may key off the requested `limit` to model a count that grew between the probe (limit 1)
-   * and the tail read (limit 100). Every unknown release id resolves to one fresh recording.
-   */
   function stubPaginated(list: (limit: number) => { count: number; ids: string[] }): void {
     browseOffsets = [];
     vi.stubGlobal(
@@ -2984,7 +2736,6 @@ describe("the tail-first re-arm — a subscription reads only the NEW end of the
     );
   }
 
-  /** Plant a DONE MB-label browse node (drained before the last pass) plus its walked releases. */
   async function planDrainedLabel(knownCount: number): Promise<void> {
     await db.execute({
       args: [MB_LABEL_NODE, LABEL_MBID, "medschool", AGED, AGED, AGED],
@@ -3007,8 +2758,6 @@ describe("the tail-first re-arm — a subscription reads only the NEW end of the
   it("pages the TAIL backward and EARLY-STOPS mid-list — the head pages are never re-read", async () => {
     const { crawlCatalogue } = await import("./crawl");
 
-    // 250 releases already walked; a 251st (rNEW) appears at the tail. The re-arm should read the
-    // last page, find rNEW, step back ONE page (all-known), and stop — never touching the head.
     const known = Array.from({ length: 250 }, (_, i) => releaseId(i));
     const fresh = [...known, "rNEW"];
     await planDrainedLabel(250);
@@ -3017,16 +2766,12 @@ describe("the tail-first re-arm — a subscription reads only the NEW end of the
     const rearm = await crawlCatalogue({ limit: 10, maxHop: 0 });
     expect(rearm.seedsRearmed).toBe(1);
 
-    // Drain the frontier the re-arm opened.
     await drain(0);
 
-    // The tail-first paging: probe (offset 0, limit 1), the tail page (offset 151), then ONE page
-    // back (offset 51) which is all-known → STOP. Offset 0 (the head) is NEVER browsed at limit 100.
     const pages = recordBrowseOffsets();
     expect(pages).toEqual(["0:1", "151:100", "51:100"]);
     expect(pages).not.toContain("0:100");
 
-    // The genuinely new release was walked and its track minted; the 250 known nodes never re-ran.
     const fresh_track = await db.execute(
       "select track_id from tracks where track_id = 'mb_rec-rNEW'",
     );
@@ -3034,14 +2779,13 @@ describe("the tail-first re-arm — a subscription reads only the NEW end of the
     const known_state = await db.execute(
       "select count(*) as n from crawl_frontier where kind = 'release' and attempts > 0",
     );
-    // Only rNEW's release node was ever expanded (attempts > 0); the 250 planted ones stayed at rest.
+
     expect(Number(known_state.rows[0]?.n)).toBe(1);
   });
 
   it("a label with < 100 releases has its tail at page 0 — one page, then done", async () => {
     const { crawlCatalogue } = await import("./crawl");
 
-    // 3 known releases + 1 fresh = 4 total, all inside a single page. The tail IS page 0.
     const fresh = ["r000", "r001", "r002", "rNEW"];
     await planDrainedLabel(3);
     stubPaginated(() => ({ count: fresh.length, ids: fresh }));
@@ -3049,8 +2793,6 @@ describe("the tail-first re-arm — a subscription reads only the NEW end of the
     await crawlCatalogue({ limit: 10, maxHop: 0 });
     await drain(0);
 
-    // Probe (offset 0, limit 1) then the single page at offset 0 — no descent, because offset 0 is
-    // both the tail and the floor. The MB label node is done again.
     expect(recordBrowseOffsets()).toEqual(["0:1", "0:100"]);
     const node = await db.execute(
       `select state, cursor from crawl_frontier where id = '${MB_LABEL_NODE}'`,
@@ -3067,11 +2809,8 @@ describe("the tail-first re-arm — a subscription reads only the NEW end of the
   it("does NOT skip the newest rows when the count GREW between the probe and the tail read", async () => {
     const { crawlCatalogue } = await import("./crawl");
 
-    // The race: the probe (limit 1) sees 150; by the tail read (limit 100) five more have landed
-    // (155). Aimed at the OLD tail (offset 50), the tail page is all-known — a naive early-stop
-    // there would MISS r150..r154. The grow-guard must re-aim at the fresh tail and cover them.
-    const known = Array.from({ length: 150 }, (_, i) => releaseId(i)); // r000..r149
-    const grown = Array.from({ length: 155 }, (_, i) => releaseId(i)); // + r150..r154 (the newest)
+    const known = Array.from({ length: 150 }, (_, i) => releaseId(i));
+    const grown = Array.from({ length: 155 }, (_, i) => releaseId(i));
     await planDrainedLabel(150);
     stubPaginated((limit) =>
       limit === 1 ? { count: 150, ids: known } : { count: 155, ids: grown },
@@ -3080,7 +2819,6 @@ describe("the tail-first re-arm — a subscription reads only the NEW end of the
     await crawlCatalogue({ limit: 10, maxHop: 0 });
     await drain(0);
 
-    // All five newest releases were walked and minted — none lost to the race.
     const newest = await db.execute(
       "select track_id from tracks where track_id in ('mb_rec-r150','mb_rec-r151','mb_rec-r152','mb_rec-r153','mb_rec-r154') order by track_id",
     );
@@ -3096,7 +2834,6 @@ describe("the tail-first re-arm — a subscription reads only the NEW end of the
   it("a re-arm that finds NOTHING new stops in one tick — the cheap steady state", async () => {
     const { crawlCatalogue } = await import("./crawl");
 
-    // 120 releases, all already walked, nothing new. The tail page mints zero → immediate done.
     const known = Array.from({ length: 120 }, (_, i) => releaseId(i));
     await planDrainedLabel(120);
     stubPaginated(() => ({ count: known.length, ids: known }));
@@ -3104,7 +2841,6 @@ describe("the tail-first re-arm — a subscription reads only the NEW end of the
     await crawlCatalogue({ limit: 10, maxHop: 0 });
     await drain(0);
 
-    // Probe + one tail page (offset 20), all-known → STOP. No descent, no track written.
     expect(recordBrowseOffsets()).toEqual(["0:1", "20:100"]);
     const written = await db.execute("select count(*) as n from tracks");
     expect(Number(written.rows[0]?.n)).toBe(0);
@@ -3115,9 +2851,6 @@ describe("the tail-first re-arm — a subscription reads only the NEW end of the
   it("a COLD (never-drained) label still full-walks FORWARD from the head", async () => {
     const { crawlCatalogue } = await import("./crawl");
 
-    // A cold MB-label node (cursor 0, pending) with 250 releases. The forward drain must start at
-    // the HEAD (offset 0) and advance ASCENDING — never the tail-first cursor a re-arm uses.
-    // Silence the seed walk so the planted node is the only thing pending to pick.
     await db.execute("update labels set seed_state = 'disabled'");
     const all = Array.from({ length: 250 }, (_, i) => releaseId(i));
     stubPaginated(() => ({ count: all.length, ids: all }));
@@ -3128,11 +2861,8 @@ describe("the tail-first re-arm — a subscription reads only the NEW end of the
             values (?, 'label', 'musicbrainz', ?, 0, null, ?, 'pending', 0, ?, ?)`,
     });
 
-    // One pass expands the label node (no release nodes pending yet, so it is picked).
     await crawlCatalogue({ limit: 1, maxHop: 0 });
 
-    // Forward: browsed at offset 0 (the head), and the node advanced to a POSITIVE cursor (100),
-    // still pending — the opposite of the tail-first re-arm's negative cursor.
     expect(recordBrowseOffsets()).toEqual(["0:100"]);
     const node = await db.execute(
       `select state, cursor from crawl_frontier where id = '${MB_LABEL_NODE}'`,

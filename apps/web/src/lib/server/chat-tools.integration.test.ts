@@ -1,16 +1,3 @@
-// ChatDnB's tools against a REAL libSQL database — the half `chat.test.ts` cannot reach.
-//
-// `chat.test.ts` proves the tool SHAPE and the register-split MAPPING with every DB module mocked;
-// this proves the `execute` CLOSURES — the only DB-touching part, the part that actually answers a
-// raver — by running each one against the migrated schema (the finding inner-join, the FTS5 index,
-// the label/album graph pointers, the mix engine's key pre-filter + `vector_distance_cos`, the
-// artist-similarity precompute). A broken archive lookup inside chat ships green without this.
-//
-// Only true externals are mocked: the search LLM tier (`./search-llm`), Spotify (`./spotify`), and
-// Resend (`./resend`). The DB and every query module run for real. Each tool's `execute` is invoked
-// exactly as the chat surface invokes it (`buildChatTools(request)[name].execute(args, options)` —
-// `transport: "chat"` is baked in by the adapter).
-
 import { type Client } from "@libsql/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { linkTrackToAlbum } from "./albums";
@@ -24,17 +11,10 @@ import {
 } from "./integration-db";
 import { linkTrackToLabel } from "./labels";
 
-// ── The mocked externals ───────────────────────────────────────────────────────────────
-
-// The search LLM tier is a network call. Stubbed to `null` (unprovisioned) so search_archive stays
-// on its deterministic tiers — the ones that read the real DB — exactly as `search.integration.test`.
 const translateQuery = vi.hoisted(() => vi.fn<(q: string) => Promise<unknown>>());
 
 vi.mock("./search-llm", () => ({ translateQuery }));
 
-// Spotify is a network call. `submit_track` reads `searchTrackCandidates`; `createSubmission`
-// downstream reads `fetchTrackMetadata`. Both stubbed; `ApiError` (which the tools throw and the
-// dispatcher `instanceof`-checks) stays REAL.
 const searchTrackCandidates = vi.hoisted(() => vi.fn<(query: string) => Promise<unknown[]>>());
 const fetchTrackMetadata = vi.hoisted(() => vi.fn<(trackId: string) => Promise<unknown>>());
 
@@ -44,7 +24,6 @@ vi.mock("./spotify", async (importOriginal) => ({
   searchTrackCandidates,
 }));
 
-// Resend is a network + env call. `subscribe_newsletter` → `subscribeToNewsletter` → this.
 const addContactToSegment = vi.hoisted(() => vi.fn<(email: string) => Promise<void>>());
 
 vi.mock("./resend", async (importOriginal) => ({
@@ -52,10 +31,6 @@ vi.mock("./resend", async (importOriginal) => ({
   addContactToSegment,
 }));
 
-// The one live database, swapped in fresh per test. `getDb` closes over it, so the REAL query
-// modules run REAL SQL against the REAL migrated schema (+ FTS index). `getDrizzleDb` is overridden
-// too: it calls db.ts's MODULE-INTERNAL `getDb` (which the export mock cannot reach), so the write
-// tools' `getPublicSession` (better-auth over drizzle) would otherwise fall through to real Turso.
 let db: Client;
 
 vi.mock("./db", async (importOriginal) => {
@@ -72,17 +47,11 @@ vi.mock("./db", async (importOriginal) => {
 
 import { buildChatTools } from "./chat";
 
-// The write tools resolve a public session (better-auth over the mocked drizzle db). Better-auth
-// refuses to construct without a base URL + secret; these are config, not a session (the test
-// requests carry no cookie, so the resolved session is always null). Set only when absent.
 process.env.BETTER_AUTH_URL ??= "http://localhost:3000";
 process.env.BETTER_AUTH_SECRET ??= "test-secret-chat-tools-integration";
 
-// ── Helpers ────────────────────────────────────────────────────────────────────────────
-
 type ToolName = keyof ReturnType<typeof buildChatTools>;
 
-/** The chat tool's `execute`, invoked as the AI-SDK surface invokes it (options carry no signal). */
 function toolExecute(name: ToolName, request?: Request) {
   const tool = buildChatTools(request)[name];
   const execute = tool?.execute;
@@ -95,7 +64,6 @@ function toolExecute(name: ToolName, request?: Request) {
     execute(args as never, {} as never) as Promise<unknown>;
 }
 
-/** Stamp a track's musical key + BPM (seedTrack leaves both NULL; the mix engine needs the key). */
 async function setKeyBpm(trackId: string, key: string, bpm: number): Promise<void> {
   await db.execute({
     args: [key, bpm, trackId],
@@ -103,7 +71,6 @@ async function setKeyBpm(trackId: string, key: string, bpm: number): Promise<voi
   });
 }
 
-/** Stamp a track's release date (seedTrack leaves it NULL; list_fresh's window needs it). */
 async function setReleaseDate(trackId: string, date: string): Promise<void> {
   await db.execute({
     args: [date, trackId],
@@ -111,7 +78,6 @@ async function setReleaseDate(trackId: string, date: string): Promise<void> {
   });
 }
 
-/** Stamp a track's raw album string (catalogue-groups groups by it). */
 async function setAlbum(trackId: string, album: string): Promise<void> {
   await db.execute({
     args: [album, trackId],
@@ -119,7 +85,6 @@ async function setAlbum(trackId: string, album: string): Promise<void> {
   });
 }
 
-/** Link a track to an artist entity (the `track_artists` graph edge; lead = position 1). */
 async function linkArtist(trackId: string, artistId: string): Promise<void> {
   await db.execute({
     args: [trackId, artistId],
@@ -129,7 +94,6 @@ async function linkArtist(trackId: string, artistId: string): Promise<void> {
 
 const DIMS = 1024;
 
-/** A unit vector along one axis — an "artificial genre" a track can be aimed at. */
 function axis(index: number): number[] {
   const vector = Array.from<number>({ length: DIMS }).fill(0);
   vector[index] = 1;
@@ -137,24 +101,20 @@ function axis(index: number): number[] {
   return vector;
 }
 
-/** Normalize to unit length (a real MuQ vector is unit-length). */
 function unit(vector: number[]): number[] {
   const norm = Math.sqrt(vector.reduce((sum, value) => sum + value * value, 0));
 
   return vector.map((value) => value / norm);
 }
 
-/** A vector `weight` of the way from `from` toward `toward` — a controlled near-neighbour. */
 function blend(from: number[], toward: number[], weight: number): number[] {
   return unit(from.map((value, index) => value * (1 - weight) + (toward[index] ?? 0) * weight));
 }
 
-/** The write the embed pipeline performs: validated JSON → ranked F32_BLOB. */
 async function embed(trackId: string, vector: number[]): Promise<void> {
   await seedEmbedding(db, trackId, vector);
 }
 
-/** A request carrying an IP, so the write tools' rate-limit key resolves (no session needed). */
 function ipRequest(): Request {
   return new Request("https://fluncle.com/api/chat", {
     headers: { "cf-connecting-ip": "203.0.113.7" },
@@ -175,13 +135,11 @@ afterEach(() => {
   db.close();
 });
 
-// ── list_findings ─────────────────────────────────────────────────────────────────────
-
 describe("list_findings — the recent findings feed read", () => {
   it("returns the certified findings newest-first, as compact cards", async () => {
     await seedTrack(db, { logId: "001.1.1A", title: "First", trackId: "t-1" });
     await seedTrack(db, { logId: "002.1.1A", title: "Second", trackId: "t-2" });
-    // A catalogue track (no findings row) must never surface on this findings-only read.
+
     await seedCatalogueTrack(db, { title: "Uncertified", trackId: "cat-1" });
 
     const result = (await toolExecute("list_findings")({ limit: 10 })) as {
@@ -203,8 +161,6 @@ describe("list_findings — the recent findings feed read", () => {
   });
 });
 
-// ── list_tracks (the reborn browse enumerator) ──────────────────────────────────────────
-
 describe("list_tracks — the whole-archive browse enumerator", () => {
   it("returns both registers as flat certified-tagged rows (the Unlit Rule in the row)", async () => {
     await seedTrack(db, { logId: "001.1.1A", title: "Certified", trackId: "t-1" });
@@ -223,7 +179,7 @@ describe("list_tracks — the whole-archive browse enumerator", () => {
     const uncertified = result.tracks.find((row) => row.title === "Uncertified");
     expect(certified?.certified).toBe(true);
     expect(certified?.logId).toBeTruthy();
-    // The Unlit Rule: an uncertified row carries no coordinate.
+
     expect(uncertified?.certified).toBe(false);
     expect(uncertified?.logId).toBeUndefined();
   });
@@ -239,8 +195,6 @@ describe("list_tracks — the whole-archive browse enumerator", () => {
     expect(result.tracks.map((row) => row.title)).toEqual(["Certified"]);
   });
 });
-
-// ── list_fresh ─────────────────────────────────────────────────────────────────────────
 
 describe("list_fresh — what just came out", () => {
   const today = new Date().toISOString().slice(0, 10);
@@ -266,7 +220,7 @@ describe("list_fresh — what just came out", () => {
     expect(result.findings[0]?.releaseDate).toBe(today);
 
     expect(result.catalogue.map((row) => row.title)).toEqual(["Fresh Catalogue"]);
-    // An unlit catalogue row carries a title + artists + a way out, never a coordinate.
+
     expect(result.catalogue[0]?.coordinate).toBeUndefined();
   });
 
@@ -278,13 +232,11 @@ describe("list_fresh — what just came out", () => {
     };
 
     expect(result.ok).toBe(true);
-    // dropEmpty strips both empty buckets — the honest "nothing landed".
+
     expect(result.findings ?? []).toEqual([]);
     expect(result.catalogue ?? []).toEqual([]);
   });
 });
-
-// ── get_track ──────────────────────────────────────────────────────────────────────────
 
 describe("get_track — resolve one coordinate", () => {
   it("resolves a finding by its Log ID to a compact card", async () => {
@@ -317,8 +269,6 @@ describe("get_track — resolve one coordinate", () => {
   });
 });
 
-// ── get_random_track ───────────────────────────────────────────────────────────────────
-
 describe("get_random_track", () => {
   it("pulls a certified finding from a non-empty archive", async () => {
     await seedTrack(db, { logId: "006.2.4C", title: "Only One", trackId: "t-only" });
@@ -339,8 +289,6 @@ describe("get_random_track", () => {
     expect(result).toEqual({ found: false, ok: true });
   });
 });
-
-// ── get_status ─────────────────────────────────────────────────────────────────────────
 
 describe("get_status — the systems check", () => {
   async function seedService(service: string, status: string): Promise<void> {
@@ -379,8 +327,6 @@ describe("get_status — the systems check", () => {
     expect(result.headline).toContain("api down");
   });
 });
-
-// ── search_archive ─────────────────────────────────────────────────────────────────────
 
 describe("search_archive — the dig, over the real FTS index", () => {
   beforeEach(async () => {
@@ -431,8 +377,6 @@ describe("search_archive — the dig, over the real FTS index", () => {
   });
 });
 
-// ── get_artist ─────────────────────────────────────────────────────────────────────────
-
 describe("get_artist — the artist dossier's grounding", () => {
   it("returns a certified artist's findings, resolved name → slug → id", async () => {
     await seedArtist(db, { id: "art-net", name: "Netsky", slug: "netsky" });
@@ -465,7 +409,7 @@ describe("get_artist — the artist dossier's grounding", () => {
     expect(result.artist.name).toBe("Quiet One");
     expect(result.artist.catalogue?.map((row) => row.title)).toEqual(["Drift"]);
     expect(result.artist.catalogue?.[0]?.release).toBe("Far Sectors EP");
-    // dropEmpty strips the empty findings array — the entity is named, never presented as found.
+
     expect(result.artist.findings ?? []).toEqual([]);
     expect(result.artist.catalogue?.[0]).not.toHaveProperty("coordinate");
   });
@@ -477,8 +421,6 @@ describe("get_artist — the artist dossier's grounding", () => {
   });
 });
 
-// ── get_label ──────────────────────────────────────────────────────────────────────────
-
 describe("get_label — the label dossier's grounding", () => {
   it("returns a certified label's findings, resolved name → slug → id", async () => {
     await seedTrack(db, {
@@ -487,7 +429,7 @@ describe("get_label — the label dossier's grounding", () => {
       title: "Better Places",
       trackId: "t-bp",
     });
-    // The REAL publish-path minting, so the labels row + tracks.label_id edge are production's.
+
     await linkTrackToLabel("t-bp", "Hospital Records");
 
     const result = (await toolExecute("get_label")({ name: "Hospital Records" })) as {
@@ -524,11 +466,8 @@ describe("get_label — the label dossier's grounding", () => {
   });
 });
 
-// ── build_set ──────────────────────────────────────────────────────────────────────────
-
 describe("build_set — the mix chain, ranked by the real engine", () => {
   it("says the archive is thin when a lonely seed has nothing to chain", async () => {
-    // Seed FIRST so the depth gate (memoized per isolate) reads this sparse archive fresh.
     await seedTrack(db, { logId: "050.1.1A", title: "Lonely", trackId: "lonely" });
     await setKeyBpm("lonely", "A minor", 174);
 
@@ -558,14 +497,14 @@ describe("build_set — the mix chain, ranked by the real engine", () => {
     };
 
     expect(result.set.seed.coordinate).toBe("040.1.1A");
-    // Both same-key findings mix cleanly out of the seed (the real engine ranked them).
+
     expect(result.set.steps.length).toBeGreaterThanOrEqual(1);
     expect(
       result.set.steps
         .map((step) => step.coordinate)
         .sort((a, b) => (a ?? "").localeCompare(b ?? "")),
     ).toEqual(["041.1.1A", "042.1.1A"]);
-    // Every reason is a worded string (mixReasonLabel), never a numeric score.
+
     for (const step of result.set.steps) {
       expect(typeof step.reason).toBe("string");
       expect((step.reason as string).length).toBeGreaterThan(0);
@@ -580,12 +519,8 @@ describe("build_set — the mix chain, ranked by the real engine", () => {
   });
 });
 
-// ── list_similar_artists ────────────────────────────────────────────────────────────────
-
 describe("list_similar_artists — the neighbours read, over the real precompute", () => {
   it("returns the nearest artist after the similarity sweep runs", async () => {
-    // Two artists with embedded certified findings; their vectors are close, so each is the other's
-    // neighbour once rankArtists precomputes the edges (the real vector path, not a mock).
     await seedArtist(db, { id: "sa-1", name: "Koven", slug: "koven" });
     await seedTrack(db, { artists: ["Koven"], logId: "060.1.1A", title: "K", trackId: "k-t" });
     await linkArtist("k-t", "sa-1");
@@ -627,8 +562,6 @@ describe("list_similar_artists — the neighbours read, over the real precompute
     expect(result.similar).toEqual([]);
   });
 });
-
-// ── the catalogue browse tools ───────────────────────────────────────────────────────────
 
 describe("list_album_catalogue / list_artist_catalogue / list_label_catalogue", () => {
   it("list_album_catalogue lists an album's uncertified tracks, catalogue-only", async () => {
@@ -695,8 +628,6 @@ describe("list_album_catalogue / list_artist_catalogue / list_label_catalogue", 
   });
 });
 
-// ── submit_track (a write) ───────────────────────────────────────────────────────────────
-
 describe("submit_track — the queue write", () => {
   const TRACK_ID = "4cOdK2wGLETKBW3PvgPWqT";
   const SPOTIFY_URL = `https://open.spotify.com/track/${TRACK_ID}`;
@@ -740,7 +671,7 @@ describe("submit_track — the queue write", () => {
 
     expect(result.ok).toBe(true);
     expect(result.submission.title).toBe("Submitted Banger");
-    // The row is present in the submissions table (the DB half really ran).
+
     const rows = await db.execute("select spotify_track_id, status from submissions");
     expect(rows.rows).toHaveLength(1);
     expect(rows.rows[0]?.spotify_track_id).toBe(TRACK_ID);
@@ -767,8 +698,6 @@ describe("submit_track — the queue write", () => {
     );
   });
 });
-
-// ── subscribe_newsletter (a write) ───────────────────────────────────────────────────────
 
 describe("subscribe_newsletter — the newsletter write", () => {
   it("boards a valid email onto the segment", async () => {
