@@ -1,16 +1,3 @@
-// The global artist-rule admin surface. `allow`/`block` are acquisition scope: they change
-// what a future crawl takes and never mutate tracks already in the archive. `unlisted` is the
-// one visibility verdict: it hides the artist ENTITY's public page and is inert at crawl time.
-//
-//   - `list_artist_rules` — admin tier (agent-allowed read).
-//   - `add_artist_rule` — operator tier: add one global allow/block/unlisted exception.
-//   - `update_artist_rule` — operator tier: stamp drift-audit bookkeeping by global id.
-//   - `remove_artist_rule` — operator tier: remove one global exception.
-
-// Per-label rules live beside their label in `./admin-labels.ts`; both surfaces share the
-// exact rule and input schemas below so their wire vocabulary cannot drift — except the
-// verdict, which is deliberately narrower per label (see `LabelArtistRuleVerdictSchema`).
-
 import { oc } from "@orpc/contract";
 import * as z from "zod";
 
@@ -18,11 +5,6 @@ export const ArtistRuleVerdictSchema = z
   .enum(["allow", "block", "unlisted"])
   .meta({ id: "ArtistRuleVerdict" });
 
-/**
- * The verdicts a PER-LABEL rule may carry. `unlisted` is absent by construction: it hides one
- * public artist page, and a page is not per-label, so a label-scoped `unlisted` could only ever
- * be a silent no-op. The whole-set PUT rejects it at this boundary.
- */
 export const LabelArtistRuleVerdictSchema = z
   .enum(["allow", "block"])
   .meta({ id: "LabelArtistRuleVerdict" });
@@ -33,7 +15,6 @@ export const ArtistRuleSourceSchema = z
 const ArtistMbidSchema = z.string().uuid();
 const ArtistNameSchema = z.string().trim().min(1, "Artist name cannot be blank");
 
-/** One artist rule as exposed to admin clients. Internal scope/re-arm fields stay private. */
 export const ArtistRuleSchema = z
   .object({
     artistMbid: ArtistMbidSchema,
@@ -49,10 +30,6 @@ export const ArtistRuleSchema = z
   })
   .meta({ id: "ArtistRule" });
 
-/**
- * A per-label whole-set member. Bare MBIDs and blank names are rejected at the boundary, and so
- * is `unlisted` — a per-label rule carries acquisition scope only.
- */
 export const ArtistRuleInputSchema = z
   .object({
     artistMbid: ArtistMbidSchema,
@@ -61,18 +38,11 @@ export const ArtistRuleInputSchema = z
   })
   .meta({ id: "ArtistRuleInput" });
 
-/**
- * A global add accepts an omitted name so the server may fill it from the local artist row or
- * MusicBrainz payload. When supplied, it is still required to contain non-whitespace text. This
- * is the one write path that accepts `unlisted`, because a global rule is the only scope that
- * can carry it.
- */
 export const AddArtistRuleInputSchema = ArtistRuleInputSchema.extend({
   artistName: ArtistNameSchema.optional(),
   verdict: ArtistRuleVerdictSchema,
 }).meta({ id: "AddArtistRuleInput" });
 
-/** `list_artist_rules` → `GET /admin/artist-rules` (operationId `listArtistRules`). */
 export const listArtistRules = oc
   .route({
     method: "GET",
@@ -84,7 +54,6 @@ export const listArtistRules = oc
   .input(z.object({}))
   .output(z.object({ ok: z.literal(true), rules: z.array(ArtistRuleSchema) }));
 
-/** `add_artist_rule` → `POST /admin/artist-rules` (operationId `addArtistRule`). */
 export const addArtistRule = oc
   .route({
     method: "POST",
@@ -96,12 +65,6 @@ export const addArtistRule = oc
   .input(AddArtistRuleInputSchema)
   .output(z.object({ ok: z.literal(true), rule: ArtistRuleSchema }));
 
-/**
- * `update_artist_rule` → `PATCH /admin/artist-rules/{id}` (operationId `updateArtistRule`).
- *
- * Drift-audit bookkeeping only: this may stamp the identity MusicBrainz currently resolves and
- * when the check ran. It cannot edit the rule's scope, verdict, original identity, or re-arm state.
- */
 export const updateArtistRule = oc
   .route({
     method: "PATCH",
@@ -128,7 +91,6 @@ export const updateArtistRule = oc
   )
   .output(z.object({ ok: z.literal(true), rule: ArtistRuleSchema }));
 
-/** `remove_artist_rule` → `DELETE /admin/artist-rules/{id}` (operationId `removeArtistRule`). */
 export const removeArtistRule = oc
   .route({
     method: "DELETE",

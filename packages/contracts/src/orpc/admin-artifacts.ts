@@ -1,10 +1,3 @@
-// The artifact-change domain: a versioned producer log and fenced source snapshots for
-// filesystemful consumers such as Sonar and the local public-device artifact builder.
-//
-// Every operation is private and excluded from the public OpenAPI document by the existing
-// `/admin/*` filter. Registration, bootstrap, reads, checkpoints, activation, and inactivation are
-// agent tier; compaction is operator tier because it irreversibly deletes an acknowledged prefix.
-
 import { oc } from "@orpc/contract";
 import * as z from "zod";
 
@@ -98,8 +91,7 @@ export const ArtifactChangeEventSchema = z.strictObject({
   producer: z.string(),
   revision: z.number().int().positive(),
   seq: SequenceSchema,
-  // A deliberately open string: a consumer must be able to SEE and reject an event written by a
-  // future/unknown producer version instead of failing response decoding before it sees metadata.
+
   stream: z.string().min(1).max(128),
   streamVersion: z.number().int().positive(),
   subjectId: z.string().min(1).max(1_024),

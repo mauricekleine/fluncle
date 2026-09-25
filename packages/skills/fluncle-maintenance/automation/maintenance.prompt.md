@@ -25,7 +25,7 @@ Run from the root of a Fluncle repo checkout on a clean, up-to-date `main`.
 
 ### 1. Read every pin
 
-Walk `references/version-inventory.md` and record the **current** pin for each inventory item (use the `grep`/marker one-liners — line numbers drift, the comment markers don't). For bun, read both places (the `FROM oven/bun:` tag and `package.json` `packageManager`) and note if they already disagree.
+Walk `references/version-inventory.md` and record the **current** pin for each inventory item (use the inventory's `grep` one-liners — line numbers drift, the command and config keys do not). For bun, read both places (the `FROM oven/bun:` tag and `package.json` `packageManager`) and note if they already disagree.
 
 ### 2. Check latest for each
 

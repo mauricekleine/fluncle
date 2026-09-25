@@ -8,6 +8,8 @@ The runtime and fail-closed registry live in [`apps/web/src/lib/server/artifact-
 
 A contract is the exact tuple `(stream, streamVersion, formatVersion)`. Version `1/1` is the only accepted tuple for every registered stream; an unknown stream or either unknown version fails at producer validation, consumer registration, snapshot reads, and acknowledgement. Adding a field, changing field semantics, or changing vector bytes requires a new registered format or stream version rather than a permissive decoder.
 
+The transport keeps the event's stream identifier readable as a string so a consumer can inspect and reject unknown producer metadata explicitly; validation of the supported tuple remains strict at the protocol boundary.
+
 | Stream                | Subject                                  | Version | Upsert payload                                                                                                                                                                                              |
 | --------------------- | ---------------------------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `sonar.track`         | `track` / `track_id`                     | `1/1`   | Canonical JSON with exactly `anchored`, `bpm`, `certified`, `dismissed`, `durationMs`, `hasFinding`, `isDuplicate`, `key`, and `nearestFindingScore`, plus the exact 4,096-byte `F32_BLOB(1024)` MuQ vector |

@@ -65,6 +65,10 @@ Hand-maintained against the `SURFACES` catalog — nothing generates these table
 
 All `application/json`; the OpenAPI document at `/api/v1/openapi.json` advertises them.
 
+The oRPC Zod schemas in `packages/contracts/src/orpc` own wire response shapes; `packages/contracts/src/index.ts` derives response DTOs from them with type-only imports so the CLI and Raycast do not load Zod. Request DTOs remain typed send shapes because some boundary schemas deliberately accept `unknown` before server validation. The Go SSH app cannot import the TypeScript package: keep its `submissionRequest` and `newsletterRequest` structs in step when those request shapes change.
+
+Backfill query controls stay optional strings in the contracts because their handlers parse and clamp malformed values without returning 400. Ops that also accept box-supplied evidence use oRPC's detailed input structure to carry query controls and a bounded body together.
+
 | Surface                 | Route                       | Exposes                                                                                                                                        | Weight    |
 | ----------------------- | --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- | --------- |
 | `api.findings`          | `/api/v1/findings`          | the feed as JSON — findings and published mixtapes, newest found first, cursor-paginated (limit max 48, cursor)                                | primary   |
@@ -140,6 +144,8 @@ The `/mcp` endpoint speaks the full protocol, not just tools: **tools** (verbs),
 | `ssh.rave` | `ssh rave.fluncle.com` | the rave terminal TUI (Latest findings, Fresh releases, Artist archive, Sonic galaxies, Mixtape archive, Random banger, Submit a track, Subscribe, Install CLI, System status, About, Quit), plus the deep-register one-shots `ssh rave.fluncle.com latest\|fresh\|random` | primary |
 
 `ssh-menu.test.ts` requires every SSH-weighted surface to resolve to a terminal menu item, deep link, or About-screen link.
+
+The SSH Log ID pre-filter in `apps/ssh/main.go` mirrors the canonical grammar in `packages/contracts/src/log-id.ts`; the Chrome extension keeps a byte-checked copy because its bundle ships without workspace dependencies. Update their shared test vectors when changing the coordinate shape.
 
 ### CLI — the `fluncle` thin client
 

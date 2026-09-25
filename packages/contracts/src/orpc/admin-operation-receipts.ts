@@ -34,7 +34,6 @@ const OperationReceiptSummarySchema = z
   })
   .meta({ id: "OperationReceiptSummary" });
 
-/** Read one receipt outcome without returning its request digest or stored result payload. */
 export const getOperationReceipt = oc
   .route({
     method: "POST",
@@ -54,7 +53,6 @@ export const getOperationReceipt = oc
   )
   .output(z.object({ ok: z.literal(true), receipt: OperationReceiptSummarySchema }));
 
-/** Digest-bound read-only reconciliation. The bounded coordinates travel in a POST body. */
 export const resolveOperationReceipt = oc
   .route({
     method: "POST",
@@ -79,7 +77,6 @@ export const resolveOperationReceipt = oc
   )
   .output(z.object({ ok: z.literal(true), receipt: OperationReceiptSummarySchema }));
 
-/** Reject a bounded page of accepted receipts that are strictly older than the supplied fence. */
 export const reconcileOperationReceipts = oc
   .route({
     method: "POST",

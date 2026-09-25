@@ -54,9 +54,13 @@ The read-only stations (Funnel, Usage & cost) render operational metrics, and tw
 
 ## Data loading
 
+The `list_tracks_admin` contract keeps the paginated list arm before its narrower search arm in the Zod output union. A list response also matches the search shape; reversing the arms would strip its cursor and total count during parsing.
+
 Every admin route uses the loader-seeded react-query hybrid from AGENTS.md — a `createServerFn` GET the route's `loader` calls, seeded into a `useQuery`/`useInfiniteQuery` as `initialData`, with `refetchOnWindowFocus: true` so an alt-tab back to a live board shows the current truth (exemplar `admin/labels.tsx`). **One documented deviation:** `admin/galaxies.tsx` sets `refetchOnWindowFocus: false` (plus a `staleTime` floor), because the galaxy map only changes on the nightly cluster sweep or an operator edit, and every edit already invalidates the query in its `onSuccess` — a focus refetch would re-run the k-vector scan on every alt-tab for byte-identical data. The reason is written at the call site; read it as the exception the rule allows, not a violation to fix. A new deviation earns the same treatment: justify it in code or inherit the default.
 
 ## Auth
+
+The `/me` session's `PublicUser` may carry the requester's own email for settings and export. Public routes never serialize that private DTO; email stays absent from public surfaces. Email verification can gate later features but does not gate sign-in.
 
 **Two admin ROLES, three carriers** (`adminRole` in `env.ts` is the single source of truth both `requireAdmin` and `requireOperator` read from):
 

@@ -1,30 +1,3 @@
-// The Fluncle API contract — the shapes the web app emits and the CLI, Raycast,
-// and external agents consume. Pure types (no runtime): the web stays the source
-// of truth for logic + the drizzle schema; this package is the single place the
-// public DTOs + response envelopes are defined, so the CLI/Raycast mirrors can't
-// drift (they did before — CLI `RecentTrack` was missing 7 fields, `PublishTrackResult`
-// carried a dead `tags`, `MixtapeMemberItem` was a subset).
-//
-// Web routes import these to type `Response.json<…>(…)`; the CLI imports them for
-// `publicApiGet<T>`/`adminApiPost<T>`; Raycast imports them for CLI-stdout parsing.
-// Request DTOs are the clean typed bodies the CLI sends — the web keeps its own
-// `unknown`-typed validators that narrow untrusted input at the boundary.
-//
-// Caveat: the Go SSH app (apps/ssh) is outside this single source of truth — it
-// hand-mirrors the request DTOs (`submissionRequest`, `newsletterRequest` in
-// main.go) because Go can't import a TS types package. If a request DTO here
-// changes shape, update the Go structs to match (a code-gen step could close
-// this gap later).
-//
-// SINGLE DEFINITION: the response DTOs below are `z.infer`'d from the Zod schemas
-// in `./orpc/_shared.ts` (the live wire authority since the oRPC migration), so a
-// hand-written mirror can never drift from the schema a route validates against.
-// The schemas are pulled with `import type` — a TYPE-ONLY import — so this `.`
-// entry stays runtime-free (no zod in the CLI/extension bundle); only `z.infer`,
-// which erases at compile, reads them. Request DTOs and response ENVELOPES stay
-// hand-written here: the request bodies' contract schemas are deliberately LOOSE
-// (`z.unknown()`), so inferring them would erase the CLI's typed send shape.
-
 import { type z } from "zod";
 import { type AlbumDetailSchema, type AlbumListItemSchema } from "./orpc/albums.js";
 import { type ArtistListItemSchema } from "./orpc/artists.js";
@@ -98,403 +71,179 @@ import {
   type TrackFeaturesSchema,
   type TrackListItemSchema,
   type TrackSearchResultSchema,
-  // `.js` extension: the `.` entry is consumed by NodeNext typecheckers (Raycast),
-  // which require explicit extensions on relative imports; Bundler resolvers (web,
-  // CLI) + vite/esbuild resolve it back to the `.ts` source. Type-only import, so
-  // no zod runtime reaches the zod-free `.` bundle.
 } from "./orpc/_shared.js";
 
 export type { SearchEntity, SearchFilters, SearchHit, SearchKind } from "./orpc/search.js";
 export type { VectorServingReason, VectorServingStatus } from "./orpc/admin-vectors.js";
 export type { ClipDTO, RecordingDTO, RecordingTracklistItem };
 
-// ── Common ───────────────────────────────────────────────────────────────────
-
-/** The success envelope: `{ ok: true } & T`. The web spreads the payload (`{ ok: true, ...result }`). */
 export type Ok<T> = { ok: true } & T;
 
-/** The failure envelope every error response shares (`jsonError`/`apiErrorResponse`). */
 export type ApiFailure = {
   ok: false;
   code: string;
   message: string;
 };
 
-// ── Pagination ─────────────────────────────────────────────────────────────
-
-/** The page metadata every catalogue list op returns alongside its rows. */
 export type CataloguePage = { page: number; pageCount: number; total: number };
 
-// ── Artist ───────────────────────────────────────────────────────────────────
-
-/**
- * A public artist list item, as `GET /api/v1/artists` and `GET /api/v1/artists/:slug`
- * emit it. Inferred from `ArtistListItemSchema` (./orpc/artists.ts) — the minimal
- * identity shape (name, slug, finding count, certified flag, track count, optional
- * Spotify URL) shared by the list and get ops.
- */
 export type ArtistListItem = z.infer<typeof ArtistListItemSchema>;
 
-/** `GET /api/v1/artists` response — one page of catalogue artists, alphabetical. */
 export type ArtistsResponse = Ok<{ artists: ArtistListItem[] } & CataloguePage>;
 
-/** `GET /api/v1/artists/:slug` response — one artist by slug. */
 export type ArtistGetResponse = Ok<{ artist: ArtistListItem }>;
 
-// ── Album ──────────────────────────────────────────────────────────────────
-
-/** A public album list item, as `GET /api/v1/albums` emits it. */
 export type AlbumListItem = z.infer<typeof AlbumListItemSchema>;
 
-/** A single album's full read, as `GET /api/v1/albums/:slug` emits it. */
 export type AlbumDetail = z.infer<typeof AlbumDetailSchema>;
 
-/** `GET /api/v1/albums` response — one page of catalogue albums, alphabetical. */
 export type AlbumsResponse = Ok<{ albums: AlbumListItem[] } & CataloguePage>;
 
-/** `GET /api/v1/albums/:slug` response — one album by slug. */
 export type AlbumGetResponse = Ok<{ album: AlbumDetail }>;
 
-// ── Label (public) ───────────────────────────────────────────────────────────
-
-/** A public label list item, as `GET /api/v1/labels` emits it. */
 export type LabelListItem = z.infer<typeof LabelListItemSchema>;
 
-/** A single label's full read, as `GET /api/v1/labels/:slug` emits it. */
 export type LabelDetail = z.infer<typeof LabelDetailSchema>;
 
-/** `GET /api/v1/labels` response — one page of catalogue labels, alphabetical. */
 export type LabelsResponse = Ok<{ labels: LabelListItem[] } & CataloguePage>;
 
-/** `GET /api/v1/labels/:slug` response — one label by slug. */
 export type LabelGetResponse = Ok<{ label: LabelDetail }>;
 
-// ── Galaxy (the sonic map) ───────────────────────────────────────────────────
-
-/**
- * A public galaxy list item, as `GET /api/v1/galaxies` and `GET /api/v1/galaxies/:slug`
- * emit it (browse-by-feel RFC). Inferred from `GalaxyListItemSchema` (./orpc/galaxies.ts)
- * — the operator-authored public identity (name, slug) + the derived member count.
- */
 export type GalaxyListItem = z.infer<typeof GalaxyListItemSchema>;
 
-/** `GET /api/v1/galaxies` response — every named, non-retired galaxy. */
 export type GalaxiesResponse = Ok<{ galaxies: GalaxyListItem[] }>;
 
-/** `GET /api/v1/galaxies/:slug` response — one galaxy + its findings (core-first). */
 export type GalaxyResponse = Ok<{ findings: TrackListItem[]; galaxy: GalaxyListItem }>;
 
-/**
- * One galaxy in the FULL admin shape (`GET /api/v1/admin/galaxies`, the map writes).
- * Inferred from `GalaxyAdminItemSchema` (./orpc/admin-galaxies.ts) — every column the
- * naming view + the `fluncle-cluster` cron read (centroid, handle, name/slug, evidence).
- */
 export type GalaxyAdminItem = z.infer<typeof GalaxyAdminItemSchema>;
 
-/** `GET /api/v1/admin/galaxies` response — the full map (named + unnamed + retired). */
 export type GalaxiesAdminResponse = Ok<{ galaxies: GalaxyAdminItem[] }>;
 
-/** `PUT /api/v1/admin/galaxies/map` response — the full resulting map (with minted ids). */
 export type GalaxyMapUpdateResponse = Ok<{ galaxies: GalaxyAdminItem[] }>;
 
-// ── Labels (the entity + the operator's crawl-seed control) ──────────────────
-
-/**
- * A label's crawl-seed state — CRAWL SCOPE, NEVER STORAGE. It says whether the
- * catalogue crawler may seed from this label, and nothing else: `disabled` removes the
- * label from the NEXT crawl's seeds and touches nothing already stored. A brand-new
- * label enters `undecided` (never silently crawled, never silently dropped).
- */
 export type LabelSeedState = z.infer<typeof LabelSeedStateSchema>;
 
-/**
- * One label in the admin shape (`GET /api/v1/admin/labels`). Inferred from
- * `LabelAdminItemSchema` (./orpc/admin-labels.ts). `slug` is the identity + the join key
- * back to the raw `tracks.label` string; `findingCount` is derived, never stored.
- */
 export type LabelAdminItem = z.infer<typeof LabelAdminItemSchema>;
 
-/**
- * An exact-MBID rule on one artist: `allow`/`block` control what a future crawl may acquire,
- * `unlisted` (global scope only) hides the artist's public page.
- */
 export type ArtistRule = z.infer<typeof ArtistRuleSchema>;
 
-/** One member of a per-label whole-set replacement; a nonblank artist name is required. */
 export type ArtistRuleInput = z.infer<typeof ArtistRuleInputSchema>;
 
-/** One global rule add; the server may resolve an omitted artist name from known metadata. */
 export type AddArtistRuleInput = z.infer<typeof AddArtistRuleInputSchema>;
 
 export type ArtistRuleVerdict = z.infer<typeof ArtistRuleVerdictSchema>;
 
-/** The narrower verdict set a per-label rule may carry: acquisition scope, never visibility. */
 export type LabelArtistRuleVerdict = z.infer<typeof LabelArtistRuleVerdictSchema>;
 
-/** Which actor authored an artist-acquisition rule. */
 export type ArtistRuleSource = z.infer<typeof ArtistRuleSourceSchema>;
 
-/** List or whole-set replacement response for label-scoped and global artist rules. */
 export type ArtistRulesResponse = Ok<{ rules: ArtistRule[] }>;
 
-/** Response after adding one global artist rule. */
 export type ArtistRuleAddResponse = Ok<{ rule: ArtistRule }>;
 
-/**
- * The label-merge summary (`POST /api/v1/admin/labels/:slug/merge`, RFC musickit-second-authority U2b).
- * Inferred from `MergeLabelResultSchema` (./orpc/admin-labels.ts): what re-pointed, the canonical
- * fields filled from the loser, the alias written, and the resolved crawl-seed state.
- */
 export type MergeLabelResult = z.infer<typeof MergeLabelResultSchema>;
 
-/**
- * What `mint_label` (`POST /api/v1/admin/labels`) did with the MusicBrainz identity it was handed:
- * `minted` a new row, `adopted` the MBID onto a row that already carried the spelling, found the
- * MBID already `known`, or `taken_over` — re-pointed the conflicting row's identity onto the minted
- * entity, which happens only on the operator's explicit `takeOverSlug`. Inferred from
- * `MintLabelOutcomeSchema` (./orpc/admin-labels.ts).
- */
 export type MintLabelOutcome = z.infer<typeof MintLabelOutcomeSchema>;
 
-/**
- * What a `mint_label` TAKE-OVER moved: the replaced MBID, the identity-derived facts cleared off the
- * row, the label-scoped artist rules dropped, and the crawl-frontier nodes retired or re-armed.
- * Inferred from `LabelTakeOverResultSchema` (./orpc/admin-labels.ts).
- */
 export type LabelTakeOverResult = z.infer<typeof LabelTakeOverResultSchema>;
 
-// ── Users (the account roster — the operator's read-only rollout window) ───────
-
-/** A user account's lifecycle status (`active` / `suspended` / `deleted`). */
 export type UserStatus = z.infer<typeof UserStatusSchema>;
 
-/**
- * One account in the admin roster shape (`GET /api/v1/admin/users`). Inferred from
- * `UserAdminItemSchema` (./orpc/admin-users.ts) — the verified/status flags plus the
- * per-user artifact counts (saved findings, saved sets, whether Galaxy progress exists),
- * every count DERIVED, never stored.
- */
 export type UserAdminItem = z.infer<typeof UserAdminItemSchema>;
 
-/** Where a label-alias spelling came from (RFC musickit-second-authority, U2a). */
 export type LabelAliasSource = z.infer<typeof LabelAliasSourceSchema>;
 
-/** A label alias's confidence: `name` (corroborated spelling) or `hint` (a weaker lead). */
 export type LabelAliasKind = z.infer<typeof LabelAliasKindSchema>;
 
-/** One open label-alias candidate in the `/admin/labels` review shape. */
 export type LabelAliasCandidate = z.infer<typeof LabelAliasCandidateSchema>;
 
-// ── The auto-note echo gate's ledger (docs/agents/note-agent.md) ─────────────────
-// The gate refuses to STORE an auto-note that echoes a sonic neighbour. It always did,
-// and it still does. What it no longer does is refuse SILENTLY: the line the model wrote
-// is kept here with the reason, and it raises a row in the /admin attention queue, so the
-// operator can read it and rule. A gate whose rejections nobody can see is a gate nobody
-// can supervise — and, crucially, one whose thresholds nobody can ever prove wrong.
-
-/**
- * The echo gate's two dials, as they currently stand. Operator-tunable at runtime (they
- * live in the `settings` KV), so a retune is a flip rather than a deploy.
- */
 export type NoteGate = z.infer<typeof NoteGateSchema>;
 
-/**
- * One HELD auto-note — a line the echo gate refused to store, kept whole with the neighbour
- * it echoed, that neighbour's note, the lifted phrase, the score, and the thresholds that
- * were in force AT REJECTION TIME (snapshotted, so retuning the gate can never rewrite the
- * meaning of a past rejection).
- */
 export type NoteRejection = z.infer<typeof NoteRejectionSchema>;
 
-/** `GET /api/v1/admin/note-rejections` response — the held notes + the gate's dials. */
 export type NoteRejectionsResponse = Ok<{ gate: NoteGate; rejections: NoteRejection[] }>;
 
-/** The observation echo gate's dials — the spoken sibling of `NoteGate`, same KV pattern. */
 export type ObservationGate = z.infer<typeof ObservationGateSchema>;
 
-/**
- * One HELD observation — a spoken script the echo gate refused to RENDER, kept whole with the
- * neighbour script it echoed, the lifted phrase, the score, and the thresholds in force at
- * rejection time. Held BEFORE the Cartesia render, so it never cost a cent.
- */
 export type ObservationRejection = z.infer<typeof ObservationRejectionSchema>;
 
-/** `GET /api/v1/admin/observation-rejections` response — the held scripts + the gate's dials. */
 export type ObservationRejectionsResponse = Ok<{
   gate: ObservationGate;
   rejections: ObservationRejection[];
 }>;
 
-// ── The catalogue (The Ear — docs/the-ear.md) ────────────────────────────────────
-// A CATALOGUE TRACK is a `tracks` row with NO `findings` row: a track Fluncle knows
-// about and has not certified. Nothing here carries a certification field — no Log ID,
-// no note, no video — because those live on `findings`, and these rows have none.
-
-/** Which question `/admin/catalogue` asks: the telescope (`ear`) or the capture queue. */
 export type CatalogueLens = z.infer<typeof CatalogueLensSchema>;
 
-/** Why a not-yet-captured track sits where it does in the capture queue. */
 export type CapturePriorityReason = z.infer<typeof CapturePriorityReasonSchema>;
 
-/** The finding a catalogue row matched — the row's WHY, hydrated. */
 export type CatalogueMatch = z.infer<typeof CatalogueMatchSchema>;
 
-/** One catalogue track, ranked. Inferred from `CatalogueTrackItemSchema`. */
 export type CatalogueTrackItem = z.infer<typeof CatalogueTrackItemSchema>;
 
-/** The catalogue's shape in four scoped counts. */
 export type CatalogueSummary = z.infer<typeof CatalogueSummarySchema>;
 
-/** `GET /api/v1/admin/catalogue` response — one lens's page, plus the summary. */
 export type CatalogueResponse = Ok<{ summary: CatalogueSummary; tracks: CatalogueTrackItem[] }>;
 
-/**
- * The capture budget's readout — the kill switch, the two rolling-24h caps, the spend against
- * them, and the verdict the capture queue obeys. The brake on the only thing in Fluncle that
- * bills per unit of work (docs/the-ear.md § The capture budget).
- */
 export type CaptureBudgetState = z.infer<typeof CaptureBudgetStateSchema>;
 
-/** `GET`/`PUT /api/v1/admin/catalogue/capture-budget` response — the full state, either way. */
 export type CaptureBudgetResponse = Ok<CaptureBudgetState>;
 
-// ── The audio pipeline's work queues (docs/gpu-batch-embed.md) ───────────────────
-// capture → analyze → embed, over `tracks` rather than `findings`: BPM, key, features,
-// the MuQ vector and the captured audio are all true of the RECORDING, so their queues
-// cover a catalogue track exactly as they cover a finding. What Fluncle SAYS about a
-// track (the note, the observation, the video, the publish) stays findings-only.
-
-/** Which stage of the audio pipeline a worklist is for. */
 export type TrackWorkKind = z.infer<typeof TrackWorkKindSchema>;
 
-/** Which half of the archive a worklist covers. */
 export type TrackWorkScope = z.infer<typeof TrackWorkScopeSchema>;
 
-/** One row of pipeline work. `certified` is the rail's flag: false = never write a note. */
 export type TrackWorkItem = z.infer<typeof TrackWorkItemSchema>;
 
-/** One embedded finding — the cluster engine's input row (`{ trackId, embedding }`). */
 export type TrackEmbedding = z.infer<typeof TrackEmbeddingSchema>;
 
-/** `GET /api/v1/admin/tracks/embeddings` response — a cursor page of the embedded corpus. */
 export type TrackEmbeddingsResponse = Ok<{
   embeddings: TrackEmbedding[];
   nextCursor: string | null;
 }>;
 
-// ── Me (the private user tier) ───────────────────────────────────────────────
-
-/**
- * A signed-in public user as the `/me` private tier returns it. Inferred from
- * `PublicUserSchema` (./orpc/_shared.ts) — the cookie-session identity, distinct
- * from the admin grant. `username`/`displayUsername` are absent until claimed.
- */
 export type PublicUser = z.infer<typeof PublicUserSchema>;
 
-/**
- * `GET /me` (`get_current_private_user`): `{ ok: true, googleEnabled, user }` where
- * `user` is the signed-in `PublicUser` or `null` when there is no session, and
- * `googleEnabled` reports whether "Continue with Google" is live server-side (so the
- * account UI never renders a dead button). The hand-written envelope over the
- * inferred `PublicUser`, matching `getCurrentPrivateUser.output`.
- */
 export type MeResponse = Ok<{ googleEnabled: boolean; user: PublicUser | null }>;
 
-/**
- * A user's Galaxy progress (the game's cross-device save) as
- * `GET/PUT /me/galaxy-progress` returns it. Inferred from `GalaxyProgressSchema`
- * (./orpc/me-galaxy.ts); carries its own `ok: true` (the live helper's object is
- * returned verbatim). `lastPlayedAt`/`updatedAt` are absent until the first play.
- */
 export type GalaxyProgress = z.infer<typeof GalaxyProgressSchema>;
 
-// ── Service health (the public /status dashboard) ────────────────────────────
-
-/**
- * The three-state service-health enum the status surfaces emit. Inferred from
- * `ServiceHealthStatusSchema` (./orpc/admin-health.ts), the `admin-health`
- * contract's shared enum.
- */
 export type ServiceHealthStatus = z.infer<typeof ServiceHealthStatusSchema>;
 
-/** A notification category a registered device can mute. */
 export type PushCategory = z.infer<typeof PushCategorySchema>;
 
-// ── Track ────────────────────────────────────────────────────────────────────
-
-/**
- * Enrichment's track-level spectral summary (from `features_json`); absent until
- * enriched. Inferred from `TrackFeaturesSchema` (./orpc/_shared.ts).
- */
 export type TrackFeatures = z.infer<typeof TrackFeaturesSchema>;
 
-/**
- * A finding as the feed/log/admin board renders it; emitted by `/api/v1/findings` and
- * `/api/v1/tracks/:id`. Inferred from `TrackListItemSchema` (./orpc/_shared.ts), the
- * schema the route validates its body against — so this DTO cannot drift from the
- * wire. Field docs live on the schema.
- */
 export type TrackListItem = z.infer<typeof TrackListItemSchema>;
 
-/** One track on the flat `/fresh` list — unlit-safe (logId/cover present iff `certified`). */
 export type FreshTrack = z.infer<typeof FreshTrackSchema>;
 
-/** An album entity a fresh release sits on. */
 export type FreshAlbum = z.infer<typeof FreshAlbumSchema>;
 
-/** The `list_fresh` response body: newest RELEASES first, plus the records they sit on. */
 export type FreshTracksResponse = {
   albums: FreshAlbum[];
   tracks: FreshTrack[];
   windowDays: number;
 };
 
-/**
- * Why one finding mixes out of another — a `/mix` candidate's reason chip. Inferred
- * from `MixReasonSchema` (./orpc/_shared.ts). No numeric score (§3.0 invariant).
- */
 export type MixReason = z.infer<typeof MixReasonSchema>;
 
-/**
- * One track as `/mix` renders it — certified (a finding, with its coordinate) or not.
- * Inferred from `MixTrackSchema` (./orpc/_shared.ts).
- */
 export type MixTrack = z.infer<typeof MixTrackSchema>;
 
-/**
- * A `/mix` candidate: a track + its reason chip, in rail order. Inferred from
- * `MixCandidateSchema` (./orpc/_shared.ts).
- */
 export type MixCandidate = z.infer<typeof MixCandidateSchema>;
 
-/**
- * An artist a mix can be seeded from — the taste picker's row. Inferred from
- * `MixArtistSchema` (./orpc/mix.ts).
- */
 export type MixArtist = z.infer<typeof MixArtistSchema>;
 
-/** The cursor for feed pagination (base64'd `addedAt` + `trackId`). */
 export type TrackCursor = {
   addedAt: string;
   trackId: string;
 };
 
-/** A findings-only page (the admin board's default view). */
 export type TrackListPage = {
   nextCursor?: string;
   totalCount: number;
   tracks: TrackListItem[];
 };
 
-// ── Mixtape ──────────────────────────────────────────────────────────────────
-
-// "distributing" = minted (Log ID + title committed, cover renders) but assets are
-// still uploading to the platforms; not yet public. The first successful platform
-// link flips it to "published". So a published mixtape always has ≥1 listen link.
-// There is no "draft": a mixtape is only ever BORN via `promote_recording` (RFC
-// plan→recording→mixtape) — pre-publish authoring lives on PLANS (`recordings`
-// kind=plan), and the promote claim inserts straight into `distributing`
-// (unminted while `logId` is still null, minted within the same promote).
 export type MixtapeStatus = "distributing" | "published";
 
 export type MixtapeExternalUrls = {
@@ -503,68 +252,32 @@ export type MixtapeExternalUrls = {
   youtube?: string;
 };
 
-/** A mixtape member is a finding with an optional cue offset. */
 export type MixtapeMember = TrackListItem & {
   startMs?: number;
 };
 
-/**
- * A mixtape as the `/mixtapes` surface + `/api/v1/mixtapes` emit it. `status` is
- * always present (NOT NULL column). Inferred from `MixtapeDTOSchema`
- * (./orpc/_shared.ts) — its `members` is the `MixtapeMember` shape (a finding +
- * optional cue) and its `externalUrls` the `MixtapeExternalUrls` shape.
- */
 export type MixtapeDTO = z.infer<typeof MixtapeDTOSchema>;
 
-// ── Feed (findings + mixtapes merged) ────────────────────────────────────────
-
-/** A feed item: a finding or a mixtape. */
 export type FeedItem = MixtapeDTO | TrackListItem;
 
-/** The merged feed page (findings + mixtapes); emitted by `/api/v1/findings` when unwindowed. */
 export type FeedListPage = Omit<TrackListPage, "tracks"> & {
   tracks: FeedItem[];
 };
 
-/** `/api/v1/findings` response (the merged feed page; no `ok` envelope — the page is the body). */
 export type TracksResponse = FeedListPage;
 
-/** `/api/v1/tracks/random` response. */
 export type RandomTrackResponse = Ok<{ track: TrackListItem }>;
 
-/** `/api/v1/tracks/:idOrLogId` response: a finding or a mixtape. */
 export type TrackGetResponse = Ok<{ track: TrackListItem }> | Ok<{ mixtape: MixtapeDTO }>;
 
-// ── Radio (the shared broadcast clock) ───────────────────────────────────────
-
-/**
- * The radio.fluncle.com now-playing slot on the shared loop (the
- * radio-broadcast RFC, Unit A). Inferred from `RadioNowPlayingSchema`
- * (./orpc/_shared.ts) — the schema the `/radio/now-playing` op validates against.
- */
 export type RadioNowPlaying = z.infer<typeof RadioNowPlayingSchema>;
 
-/** `/api/v1/radio/now-playing` response. */
 export type RadioNowPlayingResponse = Ok<{ nowPlaying: RadioNowPlaying }>;
-
-// ── Mixtape API envelopes ────────────────────────────────────────────────────
 
 export type MixtapesResponse = Ok<{ mixtapes: MixtapeDTO[] }>;
 
-// ── Mixtape clips (Fluncle Studio Unit C/D/G) ────────────────────────────────
-// A clip is a lightweight 9:16 derivative cut from a mixtape's set video — many per
-// set, NOT a spine object (no Log ID). Inferred from `ClipDTOSchema` (./orpc/_shared)
-// so the wire shape cannot drift. The CLI (`fluncle admin clips list|cut`) + the box
-// clip-cut cron read these.
-
-/** `GET /api/v1/admin/clips` response: every clip (optionally filtered by mixtape/status). */
 export type ClipsResponse = Ok<{ clips: ClipDTO[] }>;
 
-/**
- * `POST /api/v1/admin/clips/:clipId/cut/presign` response (Unit C): the single presigned
- * PUT URL the box streams `<clipId>/footage.mp4` to, plus the exact `contentType`
- * it MUST replay on the PUT (baked into the signature).
- */
 export type ClipPresignResponse = Ok<{
   clipId: string;
   contentType: string;
@@ -572,14 +285,8 @@ export type ClipPresignResponse = Ok<{
   url: string;
 }>;
 
-/** `POST /api/v1/admin/clips/:clipId/cut/finalize` response (Unit C): the clip, marked done. */
 export type ClipCutFinalizeResponse = Ok<{ clip: ClipDTO }>;
 
-// ── Clip drip-feed (clip-drip-feed RFC) ──────────────────────────────────────
-// One clip's Instagram drip-feed schedule + status (the `mixtape_clip_social_posts`
-// row). The CLI (`fluncle admin clips list|schedule|drip-pause|drip-resume`) reads these.
-
-/** A clip's Instagram drip-feed state. */
 export type ClipSocialPost = {
   caption?: string;
   clipId: string;
@@ -594,37 +301,24 @@ export type ClipSocialPost = {
 
 export type ClipSocialStatus = ClipSocialPost["status"];
 
-/** `GET /api/v1/admin/clips/social` response: every clip's drip-feed row. */
 export type ClipSocialPostsResponse = Ok<{ posts: ClipSocialPost[] }>;
 
-/** `PATCH /api/v1/admin/clips/:clipId/schedule` response: the (re)scheduled clip post. */
 export type ClipScheduleResponse = Ok<{ post: ClipSocialPost }>;
 
-/** `PUT /api/v1/admin/clips/drip/state` response: the resulting paused state. */
 export type ClipDripStateResponse = Ok<{ paused: boolean }>;
 
-// ── Recordings (RFC recording-primitive, Design B) ───────────────────────────
-// A recording is a captured DJ set that is NOT (yet) a published mixtape — it OWNS its
-// R2 key, carries an optional cue tracklist, and is coordinate-less until `promote`.
-// Inferred from the Zod schemas (./orpc/_shared) so the wire shape cannot drift. The
-// CLI (`fluncle admin recordings …`) + the box clip-cut cron read these.
-
-/** `GET /api/v1/admin/recordings` response: every recording, newest first. */
 export type RecordingsResponse = Ok<{ recordings: RecordingDTO[] }>;
 
-/** The `{ recording }` envelope create/get/update/promote return. */
 export type RecordingResponse = Ok<{ recording: RecordingDTO }>;
 
 export type MixtapeUpdateResponse = Ok<{ mixtape: MixtapeDTO }>;
 
-/** A loudness-rise candidate in the Studio analysis artifact. */
 export type StudioPeak = {
   atMs: number;
   kind: "drop";
   score: number;
 };
 
-/** A vettable clip window around a Studio analysis peak. */
 export type StudioSuggestion = {
   anchorMs: number;
   durationMs: number;
@@ -632,7 +326,6 @@ export type StudioSuggestion = {
   startMs: number;
 };
 
-/** The set-analysis artifact shared by the video producer and Studio editor. */
 export type StudioEnvelope = {
   bass: number[];
   bpm: number | null;
@@ -644,46 +337,21 @@ export type StudioEnvelope = {
   suggestions: StudioSuggestion[];
 };
 
-// ── Attention (the /admin queue digest) ──────────────────────────────────────
-
-/** One of the attention queue's seven sources. */
 export type AttentionSource = z.infer<typeof AttentionSourceSchema>;
 
-/** One waiting row — the source, the object line, and the `/admin/…` deep-link path. */
 export type AttentionRow = z.infer<typeof AttentionRowSchema>;
 
-/** One source's waiting count (non-zero), in priority order. */
 export type AttentionSourceCount = z.infer<typeof AttentionSourceCountSchema>;
 
-/** The menu-bar digest of the attention snapshot (`get_attention`). */
 export type AttentionQueue = z.infer<typeof AttentionQueueSchema>;
 
-/** `GET /api/v1/admin/attention` response — the queue digest + the day's dispatch. */
 export type AttentionResponse = Ok<{ attention: AttentionQueue }>;
 
-// ── Edition (the newsletter archive) ─────────────────────────────────────────
-
-/**
- * A newsletter edition as the `/newsletter` archive + `/api/v1/newsletter/editions`
- * emit it. NOT a collectible — a plain
- * integer `number` (minted on send), no Log ID, no coordinate. Inferred from
- * `EditionDTOSchema` (./orpc/_shared.ts), so this DTO cannot drift from the wire.
- */
 export type EditionDTO = z.infer<typeof EditionDTOSchema>;
 
 export type EditionsResponse = Ok<{ editions: EditionDTO[] }>;
 export type EditionResponse = Ok<{ edition: EditionDTO }>;
 
-// ── Logbook (Fluncle's Logbook — one travelogue entry per sector-day) ─────────
-
-/**
- * One Logbook entry as the public `/logbook` index + `/logbook/<sector>` page (and
- * the admin `create_logbook_entry` / `update_logbook_entry` ops) emit it. `sector`
- * is the days-since-epoch coordinate (sectorDay()); `body` is markdown with
- * `[[<logId>]]` figure tokens. Plain TS type (the wire is a flat row); a zod schema
- * would add nothing the row shape doesn't already pin. `generatedBy` is `agent` for
- * a cron-authored entry, `operator` once a human has edited it.
- */
 export type LogbookEntryDTO = {
   body: string;
   generatedAt: string;
@@ -692,36 +360,26 @@ export type LogbookEntryDTO = {
   title: string;
 };
 
-/** One eligible sector-day the logbook sweep can author — the day + its findings' material. */
 export type LogbookGap = {
-  /** ISO date (UTC midnight) of the sector-day, for the authoring prompt's dateline. */
   date: string;
   findings: LogbookGapFinding[];
   sector: number;
 };
 
-/** A day's finding as the sweep gathers it (admin-tier read — includes the internal fuel). */
 export type LogbookGapFinding = {
   artists: string[];
-  /** The internal firecrawl-derived facts (never public) — authoring fuel only. */
+
   contextNote?: string;
   logId: string;
-  /** The public editorial note (the `/log` "why"), when present. */
+
   note?: string;
-  /** The spoken observation transcript (internal), when present — authoring fuel. */
+
   observationScript?: string;
-  /** The finding's poster "photo" URL on found.fluncle.com — the figure token target. */
+
   posterUrl: string;
   title: string;
 };
 
-/**
- * One already-authored entry, distilled to its SPENT moves — the anti-sameness fuel the
- * sweep hands the author so it never re-uses a title or an opening/closing move. `opener`
- * is the entry's first sentence, `closer` its last (both with the `[[logId]]` figure
- * tokens stripped). Carried as ONE top-level list on the gaps response (not per-gap), most
- * recent sector first. See docs/agents/logbook-agent.md.
- */
 export type LogbookSpentEntry = {
   closer: string;
   opener: string;
@@ -732,102 +390,42 @@ export type LogbookSpentEntry = {
 export type LogbookEntryResponse = Ok<{ entry: LogbookEntryDTO; skipped?: boolean }>;
 export type LogbookGapsResponse = Ok<{ gaps: LogbookGap[]; spent: LogbookSpentEntry[] }>;
 
-// ── Subscription (the operator's private cost ledger, COST-02) ───────────────
-
-/**
- * One line in the operator's private cost ledger — a recurring or one-off Fluncle
- * spend. Operator-tier only (never a public route). Inferred from
- * `SubscriptionDTOSchema` (./orpc/_shared.ts), so this DTO cannot drift from the wire.
- */
 export type SubscriptionDTO = z.infer<typeof SubscriptionDTOSchema>;
 
-// ── Mixtape distribution (audio→Mixcloud, video→YouTube) ─────────────────────
-// One CLI command mints a mixtape into `distributing`, moves the local bytes to
-// each platform, and records the outcome here. `platform` is a plain string so
-// "soundcloud" can join later with no contract churn.
-
-/**
- * A per-platform distribution row (the `mixtape_social_posts` table). Inferred
- * from `MixtapeSocialPostItemSchema` (./orpc/_shared.ts).
- */
 export type MixtapeSocialPostItem = z.infer<typeof MixtapeSocialPostItemSchema>;
 
-/** `/api/v1/admin/mixtapes/:id/social` response: the mixtape's per-platform distribution rows. */
 export type MixtapeSocialShowResponse = Ok<{ mixtapeId: string; posts: MixtapeSocialPostItem[] }>;
 
-/** A distribution finalize (any platform): the mixtape after the link was recorded. */
 export type MixtapeDistributeFinalizeResponse = Ok<{ mixtape: MixtapeDTO; platform: string }>;
 
-/** `/api/v1/admin/youtube/auth/start` response (mirrors the Spotify shape). */
 export type YouTubeAuthStartResponse = Ok<{ authUrl: string }>;
 
-/**
- * `/api/v1/admin/auth/revoke-grants` response: the grant epoch AFTER the bump. Every
- * admin browser grant cookie minted under a lower epoch stops verifying immediately;
- * the Bearer carriers (the operator's CLI, the agent box) are not epoch-scoped and are
- * untouched.
- */
 export type RevokeAdminGrantsResponse = Ok<{ epoch: number }>;
 
-/** `/api/v1/admin/mixcloud/auth/start` response. */
 export type MixcloudAuthStartResponse = Ok<{ authUrl: string }>;
 
-/** `/api/v1/admin/tiktok/auth/start` response (mirrors the YouTube shape). */
 export type TikTokAuthStartResponse = Ok<{ authUrl: string }>;
 
-/**
- * `/api/v1/admin/lastfm/auth/start` response: the Last.fm desktop-auth request token
- * plus the authorize URL to approve it in-browser (logged in as `fluncle`). The
- * token is then handed to `/api/v1/admin/lastfm/auth/session` to mint the session key.
- */
 export type LastfmAuthStartResponse = Ok<{ authUrl: string; token: string }>;
 
-/**
- * `/api/v1/admin/lastfm/auth/session` response: the durable (non-expiring) session
- * key Maurice sets as the LASTFM_SESSION_KEY Worker secret, plus the authenticated
- * Last.fm username.
- */
 export type LastfmAuthSessionResponse = Ok<{ name: string; sessionKey: string }>;
 
-/** `/api/v1/admin/mixcloud/token` response: the access token for the CLI-direct upload. */
 export type MixcloudTokenResponse = Ok<{ accessToken: string }>;
 
-/**
- * `/api/v1/admin/mixtapes/:id/youtube/initiate` response: the resumable session URI
- * AND a short-lived access token — the YouTube data PUT is NOT self-authorizing,
- * so the CLI needs the Bearer token alongside the URI.
- */
 export type MixtapeYouTubeInitiateResponse = Ok<{ accessToken: string; sessionUri: string }>;
 
-/**
- * `/api/v1/admin/mixtapes/:id/youtube/resync` response: the live video URL + id after
- * its description + chapters were re-derived from the current cues and pushed via
- * `videos.update` (no re-upload).
- */
 export type MixtapeYouTubeResyncResponse = Ok<{ url: string; videoId: string }>;
 
-/**
- * `/api/v1/admin/mixtapes/:id/mixcloud/resync` response: the live cloudcast URL after
- * its `sections[]` tracklist was re-derived from the current cues and pushed via the
- * Mixcloud edit endpoint (sections-only, no audio re-upload). Server-side (the Worker
- * holds the `mixcloud_auth` token), the parity twin of the YouTube leg.
- */
 export type MixtapeMixcloudResyncResponse = Ok<{ url: string }>;
-
-// ── Submission ───────────────────────────────────────────────────────────────
 
 export type SubmissionSource = "web" | "cli" | "ssh";
 export type SubmissionStatus = "pending" | "approved" | "rejected";
 
-/** A finding submission as `/api/v1/submissions` records it. Inferred from `SubmissionSchema` (./orpc/_shared.ts). */
 export type Submission = z.infer<typeof SubmissionSchema>;
 
 export type SubmissionsResponse = Ok<{ submissions: Submission[] }>;
 export type SubmissionResponse = Ok<{ submission: Submission }>;
 
-// ── Social ───────────────────────────────────────────────────────────────────
-
-/** A per-platform post row (the `social_posts` table). Inferred from `SocialPostItemSchema` (./orpc/_shared.ts). */
 export type SocialPostItem = z.infer<typeof SocialPostItemSchema>;
 
 export type SocialStatusUpdate = {
@@ -836,7 +434,6 @@ export type SocialStatusUpdate = {
   url?: string;
 };
 
-/** One platform the render → publish auto-advance actually pushed this tick. */
 export type PublishAdvancePush = {
   externalId: string;
   logId: string;
@@ -845,18 +442,13 @@ export type PublishAdvancePush = {
   trackId: string;
 };
 
-/** One platform the auto-advance HELD BACK this tick, and why — so a stuck advance says
- *  so out loud instead of looking like an empty queue. */
 export type PublishAdvanceHeld = {
-  /** The bundle files still missing (only on `bundle_incomplete`). */
   missing?: string[];
   platform: string;
   reason: string;
   trackId: string;
 };
 
-/** `POST /api/v1/admin/social/publish/advance` response: one bounded tick of the render →
- *  publish auto-advance. `paused: true` ⇒ the kill switch was on and nothing was pushed. */
 export type PublishAdvanceResponse = Ok<{
   candidates: number;
   failed: Array<{ platform: string; trackId: string }>;
@@ -865,26 +457,16 @@ export type PublishAdvanceResponse = Ok<{
   pushed: PublishAdvancePush[];
 }>;
 
-/** `PUT /api/v1/admin/social/publish/advance/state` response: the resulting paused state
- *  (the auto-advance's kill switch). */
 export type PublishAdvanceStateResponse = Ok<{ paused: boolean }>;
 
-/** `/api/v1/admin/tracks/:id/social` response. */
 export type TrackSocialShowResponse = Ok<{ posts: SocialPostItem[]; trackId: string }>;
 
-/** `/api/v1/admin/tracks/:id/social/:platform` PATCH response. */
 export type TrackSocialUpdateResponse = Ok<{ platform: string; status: string; trackId: string }>;
 
-// ── Search ───────────────────────────────────────────────────────────────────
-
-/** A Spotify search candidate (`/api/v1/search`). Inferred from `TrackSearchResultSchema` (./orpc/_shared.ts). */
 export type TrackSearchResult = z.infer<typeof TrackSearchResultSchema>;
 
 export type SearchResponse = Ok<{ results: TrackSearchResult[] }>;
 
-// ── Add / publish ────────────────────────────────────────────────────────────
-
-/** `/api/v1/admin/tracks` POST response (the add-track result). */
 export type PublishTrackResult = {
   addedToSpotify: boolean;
   dryRun: boolean;
@@ -909,8 +491,6 @@ export type PublishTrackResult = {
 
 export type PublishTrackResponse = Ok<PublishTrackResult>;
 
-// ── Video bundle (presigned direct-to-R2) ────────────────────────────────────
-
 export type PresignedUpload = {
   contentType: string;
   field: string;
@@ -918,31 +498,19 @@ export type PresignedUpload = {
   url: string;
 };
 
-/** `/api/v1/admin/tracks/:id/video/uploads` response. */
 export type PresignResponse = Ok<{ logId: string; trackId: string; uploads: PresignedUpload[] }>;
 
-/** `/api/v1/admin/tracks/:id/video/finalize` response. */
 export type FinalizeResponse = Ok<{ logId: string; trackId: string; videoUrl: string }>;
-
-// ── Newsletter ───────────────────────────────────────────────────────────────
 
 export type SubscribeResponse = Ok<{}>;
 
-// ── Auth ─────────────────────────────────────────────────────────────────────
-
-/** `/api/v1/admin/spotify/auth/start` response. */
 export type SpotifyAuthStartResponse = Ok<{ authUrl: string }>;
 
-// ── Track update ─────────────────────────────────────────────────────────────
-
-/** `/api/v1/admin/tracks/:id` PATCH response. */
 export type TrackUpdateResult = {
   fields: string[];
   trackId: string;
 };
 export type TrackUpdateResponse = Ok<TrackUpdateResult>;
-
-// ── Request DTOs (typed bodies the CLI sends; the web validates `unknown` separately) ──
 
 export type NewsletterRequest = {
   email: string;
@@ -966,7 +534,6 @@ export type MixtapeRequestBody = {
   durationMs?: number;
   note?: string;
   recordedAt?: string;
-  // YouTube + Mixcloud links come from `distribute` (mixtape_social_posts); only the
-  // manual SoundCloud link is settable here (it too becomes a distribution row).
+
   soundcloudUrl?: string;
 };

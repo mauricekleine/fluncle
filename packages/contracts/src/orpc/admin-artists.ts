@@ -1,26 +1,6 @@
-// The `admin-artists` domain contract module — artist entity operations (artist-
-// relationship RFC). Follows the `admin-backfills` pattern for backfill; the
-// `resolve_artist` op adds the social-identity resolution surface.
-//
-//   - `backfill_artists` — agent tier (`adminAuth`): re-fetches `/tracks/{trackId}`
-//     for existing findings that predate the artists/track_artists tables and upserts
-//     the entity rows. Idempotent: findings that already have a track_artists row are
-//     skipped. The CLI loops the cursor until null.
-//
-//   - `resolve_artist` — agent tier (`adminAuth`): triggers MB url-rels walk +
-//     Firecrawl /v2/extract gap-fill for one artist. MB rows → status=auto (trusted);
-//     Firecrawl rows → status=candidate (operator-confirm before public). The on-box
-//     `fluncle-artist-sweep` cron drives this in bulk.
-//
-// Input params are tolerant optional strings (the live route convention for
-// `limit`/`dryRun`/`cursor`): the handler parses + clamps them, never 400s on a
-// malformed value. `inputStructure: "detailed"` exposes the query string so the
-// params reach the handler from a bodyless POST.
-
 import { oc } from "@orpc/contract";
 import * as z from "zod";
 
-/** A failed-artist row (`{ logId, error }`). */
 const ArtistsBackfillFailedSchema = z
   .object({
     error: z.string(),
@@ -28,15 +8,6 @@ const ArtistsBackfillFailedSchema = z
   })
   .meta({ id: "ArtistsBackfillFailed" });
 
-/**
- * `backfill_artists` → `POST /admin/backfill/artists` (operationId
- * `backfillArtists`).
- *
- * Agent tier (`adminAuth`). One bounded, cursor-resumable pass over published
- * findings missing a `track_artists` row. For each, re-fetches the Spotify track
- * metadata and upserts `artists` + `track_artists`. Returns `{ ok, dryRun, upserted,
- * upsertedCount, skipped, skippedCount, failed, failedCount, nextCursor }`.
- */
 export const backfillArtists = oc
   .route({
     inputStructure: "detailed",
@@ -69,7 +40,6 @@ export const backfillArtists = oc
     }),
   );
 
-/** A failed artist-image row (`{ artistId, error }`). */
 const ArtistImagesBackfillFailedSchema = z
   .object({
     artistId: z.string(),
@@ -77,17 +47,6 @@ const ArtistImagesBackfillFailedSchema = z
   })
   .meta({ id: "ArtistImagesBackfillFailed" });
 
-/**
- * `backfill_artist_images` → `POST /admin/backfill/artist-images` (operationId
- * `backfillArtistImages`).
- *
- * Agent tier (`adminAuth`). One bounded, cursor-resumable pass over artists still
- * missing a Spotify avatar (`image_url IS NULL`, `image_state='pending'`, and a
- * Spotify id to look up). Each pass fetches the largest Spotify profile image via
- * the per-id endpoint. A matching 200 with no usable image is terminal `none`;
- * transient failures and shared-budget deferrals remain pending. `queueDepth` is
- * the exact eligible count after the pass.
- */
 export const backfillArtistImages = oc
   .route({
     inputStructure: "detailed",
@@ -124,12 +83,6 @@ export const backfillArtistImages = oc
     }),
   );
 
-// The platform + source enums MUST stay in lockstep with the resolver's
-// `ArtistSocialPlatform` + `ResolvedSocial.source` in
-// `apps/web/src/lib/server/artist-resolution.ts` — the resolver is the source of
-// truth for the shape this op returns. (`wikidata` is classified during the MB
-// walk but routed to the `wikidataQid` KG anchor, not into `socials`.)
-/** A resolved social from the MB url-rels walk or the Firecrawl gap-fill. */
 export const ResolvedSocialSchema = z
   .object({
     platform: z.enum([
@@ -152,15 +105,6 @@ export const ResolvedSocialSchema = z
   })
   .meta({ id: "ResolvedSocial" });
 
-/**
- * `resolve_artist` → `POST /admin/artists/{artistId}/resolve` (operationId
- * `resolveArtist`).
- *
- * Agent tier (`adminAuth`). Triggers the MB url-rels walk + Firecrawl gap-fill
- * for one artist. Returns the resolved socials, mbid, wikidata QID, and a
- * `rateLimited` flag if MB throttled mid-walk. The on-box cron calls this in a
- * loop; the CLI exposes it for ad-hoc resolution.
- */
 export const resolveArtist = oc
   .route({
     method: "POST",
@@ -186,18 +130,6 @@ export const resolveArtist = oc
     }),
   );
 
-/**
- * `list_unresolved_artists` → `GET /admin/artists` (operationId `listUnresolvedArtists`).
- *
- * Agent tier (`adminAuth`). The artist-sweep worklist: a bounded, cursor-paged
- * page of artists still awaiting social resolution (`resolved_at IS NULL`),
- * oldest-first by id. The on-box `fluncle-artist-sweep` cron reads this to pick
- * the next batch, then calls `resolve_artist` per row. Returns `{ ok, artists:
- * [{ id, name }], nextCursor }` (`nextCursor` is null when the queue is drained).
- *
- * Named `list_unresolved_artists` (not `list_artists`) to avoid a Convention-B
- * collision with the public `list_artists` op.
- */
 export const listUnresolvedArtists = oc
   .route({
     method: "GET",
@@ -220,19 +152,13 @@ export const listUnresolvedArtists = oc
     }),
   );
 
-// ── The identity graph: artist_socials (Unit 5) ──────────────────────────────
-// The `/admin/artists` review queue + the per-social operator writes. `artist_socials`
-// is the identity-graph store; these ops read the queue and confirm / add / remove the
-// links that feed the public artist page + `sameAs` JSON-LD.
-
-/** One `artist_socials` row, in the shape the admin surfaces read. */
 const ArtistSocialSchema = z
   .object({
     artistId: z.string(),
     createdAt: z.string(),
     id: z.string(),
     platform: z.string(),
-    /** When the operator last acknowledged this link, or null when it's still fresh (unreviewed). */
+
     reviewedAt: z.string().nullable(),
     source: z.string(),
     status: z.string(),
@@ -240,10 +166,8 @@ const ArtistSocialSchema = z
   })
   .meta({ id: "ArtistSocial" });
 
-/** The `{ ok, social }` envelope every single-social operator write returns. */
 const ArtistSocialEnvelope = z.object({ ok: z.literal(true), social: ArtistSocialSchema });
 
-/** One artist in the review queue, carrying all its socials. */
 const ArtistSocialsQueueItemSchema = z
   .object({
     id: z.string(),
@@ -254,16 +178,6 @@ const ArtistSocialsQueueItemSchema = z
   })
   .meta({ id: "ArtistSocialsQueueItem" });
 
-/**
- * `list_artist_socials` → `GET /admin/artists/socials` (operationId `listArtistSocials`).
- *
- * Admin tier (agent-allowed read). The `/admin/artists` review queue: every artist with
- * a `candidate` social to confirm, each carrying ALL its socials. Returns `{ ok, artists }`.
- *
- * `fresh=true` widens the queue to the board's fresh-links rule: every artist carrying an
- * UNREVIEWED link (`reviewed_at IS NULL`) — which includes fresh `auto` links on artists
- * with no candidate at all, invisible to the default candidate-only narrowing.
- */
 export const listArtistSocials = oc
   .route({
     method: "GET",
@@ -275,11 +189,6 @@ export const listArtistSocials = oc
   .input(z.object({ fresh: z.string().optional(), limit: z.string().optional() }))
   .output(z.object({ artists: z.array(ArtistSocialsQueueItemSchema), ok: z.literal(true) }));
 
-/**
- * `confirm_artist_social` → `POST /admin/artists/socials/{socialId}/confirm`
- * (operationId `confirmArtistSocial`). Operator tier. Promote a `candidate` social to
- * `confirmed` (the one-tap glance that lets it onto the public page). `{ ok, social }`.
- */
 export const confirmArtistSocial = oc
   .route({
     method: "POST",
@@ -291,12 +200,6 @@ export const confirmArtistSocial = oc
   .input(z.object({ socialId: z.string() }))
   .output(ArtistSocialEnvelope);
 
-/**
- * `add_artist_social` → `POST /admin/artists/{artistId}/socials` (operationId
- * `addArtistSocial`). Operator tier. Add/replace an artist's social by platform
- * (`source=operator`, `status=confirmed`). LOOSE body — the handler validates the
- * platform + URL. `{ ok, social }`.
- */
 export const addArtistSocial = oc
   .route({
     method: "POST",
@@ -308,12 +211,6 @@ export const addArtistSocial = oc
   .input(z.looseObject({ artistId: z.string() }))
   .output(ArtistSocialEnvelope);
 
-/**
- * `review_artist_social` → `POST /admin/artists/socials/{socialId}/review` (operationId
- * `reviewArtistSocial`). Operator tier. Approve ONE fresh link in the board's fresh-links
- * section: stamp `reviewed_at = now` (it leaves the fresh-links queue) and promote a `candidate`
- * to `confirmed` (onto the public page). Idempotent. `{ ok, social }`.
- */
 export const reviewArtistSocial = oc
   .route({
     method: "POST",
@@ -325,14 +222,6 @@ export const reviewArtistSocial = oc
   .input(z.object({ socialId: z.string() }))
   .output(ArtistSocialEnvelope);
 
-/**
- * `review_artist` → `POST /admin/artists/{artistId}/review` (operationId `reviewArtist`).
- * Operator tier. Mark an artist's link list as reviewed — the "Looks good" acknowledgment.
- * Stamps `reviewed_at = now` (clears needs-a-look until a NEW link is discovered) and promotes
- * any surviving `candidate` links to `confirmed` (reviewing the list is the trust gate; a wrong
- * candidate is deleted in Manage links first). Idempotent. `{ ok, confirmed }` — how many
- * candidates were promoted.
- */
 export const reviewArtist = oc
   .route({
     method: "POST",
@@ -344,10 +233,6 @@ export const reviewArtist = oc
   .input(z.object({ artistId: z.string() }))
   .output(z.object({ confirmed: z.number(), ok: z.literal(true) }));
 
-/**
- * `remove_artist_social` → `DELETE /admin/artists/socials/{socialId}` (operationId
- * `removeArtistSocial`). Operator tier. Remove one artist social. Idempotent. `{ ok }`.
- */
 export const removeArtistSocial = oc
   .route({
     method: "DELETE",
@@ -359,14 +244,6 @@ export const removeArtistSocial = oc
   .input(z.object({ socialId: z.string() }))
   .output(z.object({ ok: z.literal(true) }));
 
-/**
- * `update_artist_social` → `PATCH /admin/artists/socials/{socialId}` (operationId
- * `updateArtistSocial`). Operator tier. Correct a social's URL AND approve it in one act —
- * the board's fresh-links INLINE EDIT (fixing a resolver miss without leaving the row). LOOSE
- * body — the handler validates + normalizes the `url` against the row's platform through the
- * resolver's `classifyMbUrl` + `normalizeProfileUrl`, then stores it operator-owned + confirmed
- * + reviewed. `{ ok, social }`.
- */
 export const updateArtistSocial = oc
   .route({
     method: "PATCH",
@@ -378,22 +255,6 @@ export const updateArtistSocial = oc
   .input(z.looseObject({ socialId: z.string() }))
   .output(ArtistSocialEnvelope);
 
-// ── The voiced bio: the entity-bio engine (agent-tier author + its worklist) ──────────
-// `describe_artist` is the entity sibling of `note_track`: the on-box sweep authors the
-// artist's short Fluncle-voiced bio (grounded in Firecrawl facts + the tracks Fluncle has
-// logged), and this step VOICE-GATES it and writes it FILL-EMPTY-ONLY — an operator bio is
-// never clobbered. `list_artists_missing_bio` is its worklist. Both agent tier: the box's
-// agent token drives them, the `note_track` / `list_unresolved_artists` precedent.
-
-/**
- * The describe body (POST /admin/artists/{slug}/bio). LOOSE: the live route voice-gates
- * `bio` itself and length-bounds it, so the contract stays permissive. `promptVersion` is
- * the bio's provenance (0 = the registry's baked default, N = operator override N); the
- * sweep sends it, an operator-typed bio sends nothing (the column stays NULL). `dryRun`
- * runs the voice gate and stores nothing.
- *
- * `finalAttempt` is the on-box sweep's THIRD and last authoring pass (see `describeArtist`).
- */
 const DescribeEntityBodySchema = z.looseObject({
   bio: z.unknown().optional(),
   dryRun: z.unknown().optional(),
@@ -401,30 +262,6 @@ const DescribeEntityBodySchema = z.looseObject({
   promptVersion: z.number().int().min(0).optional(),
 });
 
-/**
- * `describe_artist` → `POST /admin/artists/{slug}/bio` (operationId `describeArtist`).
- *
- * Agent tier (`adminAuth`), the `note_track` precedent: the on-box sweep has authored the
- * artist's bio in Fluncle's voice (grounded in the gathered facts + the tracks Fluncle has
- * logged); this VOICE-GATES it (the banned-word / earthly-geography / exclamation /
- * "we"-as-company scan shared with the note gate, plus the bio's own length ceiling) and
- * stores it into the `bio` field with its `bio_prompt_version` provenance + `bio_status =
- * 'resolved'`, all atomically.
- *
- * SAFETY (the cardinal guarantee): it fills an EMPTY bio ONLY. An artist that already
- * carries a bio — operator-written OR previously auto-authored — is a no-op (`skipped:
- * true`); the agent NEVER clobbers an existing bio. `dryRun` runs the gate and stores
- * nothing. Codes: `not_found`/404, `no_bio`/400, `bio_too_short`/422, `bio_too_long`/422,
- * `voice_gate`/422.
- *
- * THE FINAL-ATTEMPT ACCEPTANCE (`finalAttempt: true`). The operator's ruling: an entity gets at
- * most three authoring attempts and the THIRD draft LANDS rather than being discarded, because a
- * bio must name its entity and a banned name can never be rewritten past the scan. On that one
- * pass the voice SCAN is accepted rather than fatal — the length bounds and the fill-empty-only
- * guarantee still hold — and the response carries `gateBypassed: true` plus the accepted
- * `voiceViolations` so the operator can find and review every bio that landed this way. Only the
- * on-box `entity-bio-sweep` sends it, and only on its third and last pass over one entity.
- */
 export const describeArtist = oc
   .route({
     method: "POST",
@@ -437,35 +274,19 @@ export const describeArtist = oc
   .output(
     z.object({
       bio: z.string(),
-      // `true` when `dryRun` was set: the voice gate ran, NOTHING was stored.
+
       dryRun: z.literal(true).optional(),
-      // `true` when the FINAL-ATTEMPT ACCEPTANCE let a bio through that the voice scan would
-      // otherwise have refused. THE OPERATOR REVIEW FLAG — absent on every normal write.
+
       gateBypassed: z.literal(true).optional(),
       ok: z.literal(true),
-      // `true` when a bio already existed and the fill-empty-only guard refused to
-      // clobber it; absent on a fresh fill.
+
       skipped: z.boolean().optional(),
       slug: z.string(),
-      // The voice-gate reasons that were ACCEPTED, verbatim. Present only with `gateBypassed`.
+
       voiceViolations: z.array(z.string()).optional(),
     }),
   );
 
-/**
- * `draft_artist_bio` → `GET /admin/artists/{slug}/bio-draft` (operationId `draftArtistBio`).
- *
- * Agent tier (`adminAuth`), the `describe_artist` sibling: the Worker-paced grounding seam.
- * The box holds no Firecrawl key and cannot enumerate an artist's finding TITLES; this READ
- * runs the Firecrawl gather (with the Worker's key) + pulls the logged finding titles (with
- * the Worker's DB) and assembles the registered bio prompt, handing the box a ready-to-author
- * PROMPT. The box then runs `claude -p` on it and writes back via `describe_artist`. A pure
- * read — it publishes nothing, and it returns only public facts (web snippets + finding
- * titles), never a secret or an internal id beyond the slug/name/count.
- *
- * `found:false` when the slug does not resolve (it never throws on a missing entity).
- * `hasFacts` reports whether Firecrawl returned any facts (false = the prompt's no-facts arm).
- */
 export const draftArtistBio = oc
   .route({
     method: "GET",
@@ -486,19 +307,10 @@ export const draftArtistBio = oc
     }),
   );
 
-/** One row of the bio worklist: an artist with findings but no bio yet. */
 const ArtistBioWorkItemSchema = z
   .object({ id: z.string(), name: z.string(), slug: z.string() })
   .meta({ id: "ArtistBioWorkItem" });
 
-/**
- * `list_artists_missing_bio` → `GET /admin/artists/bio-queue` (operationId
- * `listArtistsMissingBio`).
- *
- * Agent tier (`adminAuth`), the `list_unresolved_artists` precedent. The bio worklist:
- * artists with at least one coordinate-bearing finding but no bio yet, oldest-first — the
- * worklist the future `describe_artist` cron drains. A pure read; it publishes nothing.
- */
 export const listArtistsMissingBio = oc
   .route({
     method: "GET",
@@ -510,27 +322,6 @@ export const listArtistsMissingBio = oc
   .input(z.object({ limit: z.string().optional() }))
   .output(z.object({ artists: z.array(ArtistBioWorkItemSchema), ok: z.literal(true) }));
 
-// ── The similar-artists precompute sweep (artist-relationship doc, D6) ─────────────────
-// `rank_artists` is the artist-graph sibling of `rank_catalogue`: one bounded, self-healing
-// tick that recomputes stale artist centroids + their top-K sonic edges (the `/artist/<slug>`
-// "similar artists" rail reads the edges). Agent tier, the `rank_catalogue` precedent — it
-// writes only DERIVED artist-graph artifacts and certifies nothing.
-
-/**
- * `rank_artists` → `POST /admin/artists/rank` (operationId `rankArtists`).
- *
- * Admin tier (AGENT-allowed): one tick of the similar-artists precompute sweep, the job a
- * periodic `--no-agent` cron drives. It recomputes up to `limit` stale artist centroids (the
- * mean over EVERY embedded track that credits the artist — findings AND catalogue) and re-ranks
- * each one's top-K sonically-nearest neighbours entirely in SQL, then purges any orphan centroid
- * whose artist lost every embedded track.
- *
- * SELF-HEALING. Staleness is a PER-ARTIST fingerprint (`"<version>:<the artist's embedded-track
- * count>"`) stored on each centroid, so embedding a track or repointing a link re-stales only the
- * few artists it credits — not the whole archive — and those re-rank on later ticks. No
- * invalidation call from the publish/embed/crawl paths, and a no-op on an unchanged graph.
- * `remaining` is the "run me again" signal (a cold whole-archive drain is many ticks). `{ ok, summary }`.
- */
 export const rankArtists = oc
   .route({
     method: "POST",
@@ -541,15 +332,6 @@ export const rankArtists = oc
   })
   .input(
     z.object({
-      /**
-       * Whether to return `remaining` as a real live COUNT of the still-stale backlog, or the fast
-       * fullness SENTINEL — the `rank_catalogue` knob, for the same reason (docs/db-scale-backlog
-       * Wave 1 #1). DEFAULT false = the sentinel: a full batch reports "> 0, run me again" without
-       * a second pass over `track_artists ⋈ track_embeddings`, which is the extra scan a cold
-       * drain otherwise pays on every one of its ticks. The human-facing CLI readout opts IN
-       * (`true`) so a deliberate manual `artists rank` still shows the true backlog size; the
-       * `--json`/automation path keeps the sentinel, which is all it ever tests.
-       */
       countRemaining: z.coerce.boolean().default(false),
       limit: z.coerce.number().int().min(1).max(1000).default(50),
     }),
@@ -567,7 +349,6 @@ export const rankArtists = oc
     }),
   );
 
-/** The `admin-artists` domain's ops, merged into the root contract by `./index.ts`. */
 export const adminArtistsContract = {
   add_artist_social: addArtistSocial,
   backfill_artist_images: backfillArtistImages,

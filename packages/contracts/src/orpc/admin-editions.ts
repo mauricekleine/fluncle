@@ -1,35 +1,9 @@
-// The `admin-editions` domain contract module — the newsletter edition authoring +
-// send control plane. Built on the
-// `admin-mixtapes` pattern. Everything nests under `/admin/newsletter/editions`.
-//
-// VERIFIED auth tiers (enforced in the handlers, not the contract):
-//   - `create_edition` / `update_edition` — admin tier (`adminAuth`): drafting is
-//     AGENT-ALLOWED. The Friday agent authors + persists the draft.
-//   - `send_edition` — operator tier (`adminAuth` + `operatorGuard`): the send is
-//     the human gate. A valid agent token gets a 403.
-//   - `delete_edition` — operator tier (same tier as send): a HARD delete that
-//     reaches a SENT edition too (the one case that needs pulling from the public
-//     archive). A valid agent token gets a 403.
-//
-// Mutating bodies stay LOOSE/passthrough — the server `editions` module validates
-// and throws its own codes, so the contract must not pre-reject.
-
 import { oc } from "@orpc/contract";
 import * as z from "zod";
 import { EditionDTOSchema } from "./_shared";
 
-/** The `{ edition, ok }` envelope every admin edition op returns. */
 const EditionEnvelope = z.object({ edition: EditionDTOSchema, ok: z.literal(true) });
 
-/**
- * `list_editions_admin` → `GET /admin/newsletter/editions` (operationId
- * `listEditionsAdmin`).
- *
- * Admin tier — agent-allowed. The full edition list INCLUDING drafts (distinct from
- * the public `list_editions`, which is sent-only). The Friday cron reads this from a
- * fresh session to find an unsent draft to re-offer before authoring a new one, and
- * to read the last sent edition's `windowUntil` cutoff. Preserves `{ editions, ok }`.
- */
 export const listEditionsAdmin = oc
   .route({
     method: "GET",
@@ -40,12 +14,6 @@ export const listEditionsAdmin = oc
   })
   .output(z.object({ editions: z.array(EditionDTOSchema), ok: z.literal(true) }));
 
-/**
- * `create_edition` → `POST /admin/newsletter/editions` (operationId `createEdition`).
- *
- * Admin tier — drafting is agent-allowed. LOOSE body — `createEdition` validates.
- * Creates a DRAFT (no number yet). Preserves `{ edition, ok }`.
- */
 export const createEdition = oc
   .route({
     method: "POST",
@@ -56,22 +24,11 @@ export const createEdition = oc
   })
   .input(
     z.looseObject({
-      // PROVENANCE — the prompt-registry version this edition was authored under (0 = the
-      // baked default, N = override N). The on-box `fluncle-newsletter` sweep sends it;
-      // omitted when it fell back to its inlined prompt, so the column stays NULL.
-      // See docs/agents/prompt-registry.md.
       promptVersion: z.number().int().min(0).optional(),
     }),
   )
   .output(EditionEnvelope);
 
-/**
- * `update_edition` → `PATCH /admin/newsletter/editions/{id}` (operationId
- * `updateEdition`).
- *
- * Admin tier — editing a draft is agent-allowed. LOOSE body — `updateEdition`
- * validates (and 409s on a sent edition). Preserves `{ edition, ok }`.
- */
 export const updateEdition = oc
   .route({
     method: "PATCH",
@@ -83,14 +40,6 @@ export const updateEdition = oc
   .input(z.looseObject({ id: z.string() }))
   .output(EditionEnvelope);
 
-/**
- * `send_edition` → `POST /admin/newsletter/editions/{id}/send` (operationId
- * `sendEdition`).
- *
- * OPERATOR tier — the explicit human gate. Renders the email HTML from the stored
- * payload, creates + sends the Resend broadcast, and mints the sequential number.
- * Optional `scheduledAt` defers the send. LOOSE body. Preserves `{ edition, ok }`.
- */
 export const sendEdition = oc
   .route({
     method: "POST",
@@ -102,15 +51,6 @@ export const sendEdition = oc
   .input(z.looseObject({ id: z.string(), scheduledAt: z.unknown().optional() }))
   .output(EditionEnvelope);
 
-/**
- * `delete_edition` → `DELETE /admin/newsletter/editions/{id}` (operationId
- * `deleteEdition`).
- *
- * OPERATOR tier (same as `send_edition`) — a valid agent token gets a 403. A HARD
- * delete that reaches ANY status INCLUDING `sent`: pulling a sent test edition from
- * the public archive is the whole point. Removes only the DB row (the already-sent
- * Resend broadcast is untouched). Returns the deleted id in `{ id, ok }`.
- */
 export const deleteEdition = oc
   .route({
     method: "DELETE",
@@ -122,7 +62,6 @@ export const deleteEdition = oc
   .input(z.object({ id: z.string() }))
   .output(z.object({ id: z.string(), ok: z.literal(true) }));
 
-/** The `admin-editions` domain's ops, merged into the root contract by `./index.ts`. */
 export const adminEditionsContract = {
   create_edition: createEdition,
   delete_edition: deleteEdition,

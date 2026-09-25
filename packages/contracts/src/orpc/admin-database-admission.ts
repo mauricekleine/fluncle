@@ -59,7 +59,6 @@ export const DatabaseAdmissionResponseSchema = z.object({
 
 export type DatabaseAdmissionResponse = z.infer<typeof DatabaseAdmissionResponseSchema>;
 
-/** Agent-tier coordination endpoint used only by committed recurring units. */
 export const coordinateDatabaseAdmission = oc
   .route({
     method: "POST",
