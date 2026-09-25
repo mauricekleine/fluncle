@@ -1,12 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { coerceEmbedding, cosineSimilarity, EMBEDDING_DIMS, rankBySimilarity } from "./embedding";
 
-// The pure core of the MuQ audio-embedding pipeline (docs/track-lifecycle.md):
-// the shape gate the embed step's write-back leans on (coerce) and the cosine
-// ranking the public `list_similar_tracks` op + the `/log` "more like this" row read.
-// Fixture vectors only — no DB, no network.
-
-/** A dense 1024-d vector, each slot from `fill(index)` (defaults to 0). */
 function vec(fill: (index: number) => number = () => 0): number[] {
   return Array.from({ length: EMBEDDING_DIMS }, (_unused, index) => fill(index));
 }
@@ -56,7 +50,6 @@ describe("cosineSimilarity", () => {
   });
 
   it("is scale-invariant (unnormalized vectors rank the same)", () => {
-    // A vector and its 5× scaling point the same way → similarity 1.
     expect(cosineSimilarity([2, 1], [10, 5])).toBeCloseTo(1, 10);
   });
 
@@ -96,7 +89,7 @@ describe("rankBySimilarity — the more-like-this ordering", () => {
   it("breaks ties deterministically toward the earlier candidate", () => {
     const tied = [
       { embedding: [1, 0], item: "first" },
-      { embedding: [2, 0], item: "second" }, // same direction as `first` → equal cosine
+      { embedding: [2, 0], item: "second" },
     ];
     expect(rankBySimilarity(target, tied, 2)).toEqual(["first", "second"]);
   });

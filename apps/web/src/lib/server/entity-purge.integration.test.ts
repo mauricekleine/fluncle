@@ -2,20 +2,8 @@ import { type Client } from "@libsql/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createIntegrationDb, seedCatalogueTrack } from "./integration-db";
-// `vi.mock` is hoisted above this import, so `getTrackEntityPurgeTargets` resolves its `getDb`
-// through the mock below (the catalogue.integration.test.ts pattern) — a static import keeps
-// vite's `cloudflare:workers` alias applied to the module graph.
-import { getTrackEntityPurgeTargets } from "./entity-cache-purge";
 
-// THE ENTITY-PURGE FAN-OUT, PROVEN — against the REAL schema.
-//
-// A write to a track must drop the cached `/artist|/album|/label/<slug>` pages that render
-// it. `getTrackEntityPurgeTargets` is the join that decides WHICH pages — resolving a track's
-// linked entity slugs through `track_artists→artists.slug`, `tracks.album_id→albums.slug`, and
-// `tracks.label_id→labels.slug` (the exact graph the pages read). A wrong join here silently
-// leaves a stale page served, or purges the wrong one, so the resolution is pinned against a
-// real libSQL engine + the generated DDL — not a mock. The unit-level cache/predicate logic
-// lives in `edge-cache.test.ts`; this file proves only the SQL resolution.
+import { getTrackEntityPurgeTargets } from "./entity-cache-purge";
 
 let db: Client;
 
@@ -80,8 +68,6 @@ describe("getTrackEntityPurgeTargets", () => {
 
     expect(targets).toEqual(
       expect.arrayContaining([
-        // The track's own `/track/<trackId>` destination, so its detail-tier cache is explicitly
-        // purged on every write rather than merely waiting out its fresh window.
         { kind: "track", slug: "t1" },
         { kind: "artist", slug: "sub-focus" },
         { kind: "album", slug: "all-that-jazz" },
@@ -111,9 +97,6 @@ describe("getTrackEntityPurgeTargets", () => {
   });
 
   it("returns ONLY the track's own destination when it links to no entity", async () => {
-    // A bare catalogue track with no artist join, album_id, or label_id renders on no ENTITY page,
-    // so it purges none of them (never a spurious global purge) — but it still has a destination
-    // of its own, and that page is exactly what the write just staled.
     await seedCatalogueTrack(db, { trackId: "t3" });
 
     expect(await getTrackEntityPurgeTargets("t3")).toEqual([{ kind: "track", slug: "t3" }]);

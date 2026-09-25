@@ -53,7 +53,6 @@ afterEach(() => {
 
 const BURST_NOW = "2026-01-01T00:00:00.000Z";
 
-/** Seed `count` catalogue tracks, half with captured audio, and mark them in one source burst. */
 async function markTrackBurst(client: Client, prefix: string, count: number): Promise<string[]> {
   const trackIds = Array.from(
     { length: count },
@@ -393,17 +392,11 @@ describe("transactionally coupled due-work source repair", () => {
       hasMore: true,
       scanned: SOURCE_REPAIR_LIMIT,
     });
-    // A missing rank-state cache pays one bounded read plus one fill before later pages become
-    // cache-only. The source page itself stays capped at the derived marker bound whatever limit
-    // the operator supplies.
+
     expect(executeCalls).toBeLessThanOrEqual(10);
     expect(batchCalls).toBe(1);
     expect(maximumBatchStatements).toBeLessThanOrEqual(4);
-    // THE PAGE BOUND. One marker multiplies into every registered physical queue, so the batch is
-    // bounded in ROWS — not in markers, and not in the statements asserted just above: the page is
-    // always the same handful of set-based statements, and widening it adds rows and bound
-    // parameters to those rather than more statements. The widest page stays inside the shared
-    // projection chunk bound.
+
     const pageRows = SOURCE_REPAIR_LIMIT * TRACK_SOURCE_REPAIR_FANOUT;
     expect(pageRows).toBeLessThanOrEqual(MAX_DUE_WORK_CHUNK_SIZE);
     expect(maximumStatementArgs).toBeLessThanOrEqual(pageRows * 12);
@@ -771,7 +764,7 @@ describe("transactionally coupled due-work source repair", () => {
         values ${ordinary.map(() => "(?, ?, ?, ?, ?)").join(", ")}`,
     });
     await seedCatalogueTrack(db, { trackId: "fair-physical" });
-    // Unmarked rows past the marked prefix hold the first rank page at its full 500-row bound.
+
     const rankOnly = Array.from(
       { length: 300 },
       (_, index) => `fair-rank-${String(index).padStart(3, "0")}`,
@@ -882,14 +875,9 @@ describe("transactionally coupled due-work source repair", () => {
           where work_kind = 'catalogue-rank' and subject_type = 'track'`)
       ).rows[0],
     ).toMatchObject({ scanned_count: 500 });
-    // limit=500 performs exactly one ordinary source page + 500 rank + 1 physical units here, and
-    // one repair-index read locates the physical definition however late it is registered. The
-    // round trips are a property of the page, not of its width, so raising the marker bound widens
-    // only the write batch — and that batch stays inside the shared projection chunk bound. The
-    // last read is the stale-definition probe: one scan of the 41-row checkpoint table, which every
-    // repair step pays so a definition change re-projects without an operator.
+
     expect(batchCalls + executeCalls).toBe(29);
-    // These fixture tracks reach 16 of the registered physical queues, at 12 bound values each.
+
     const projectedRowsPerMarker = 16;
     expect({
       batchCalls,
@@ -970,7 +958,7 @@ describe("transactionally coupled due-work source repair", () => {
       subjectId: `continuous-physical-${String(index).padStart(3, "0")}`,
       subjectType: "track" as const,
     }));
-    // Unmarked rows past the marked subjects hold the first rank page at its full 500-row bound.
+
     const rankOnly = Array.from({ length: 300 }, (_, index) => ({
       subjectId: `continuous-rank-${String(index).padStart(3, "0")}`,
       subjectType: "track" as const,
@@ -1209,8 +1197,6 @@ describe("transactionally coupled due-work source repair", () => {
     const firstGeneration = running?.generation;
     expect(typeof firstGeneration).toBe("string");
 
-    // A newer marker with an unchanged corpus definition lands while the generation is running:
-    // the next page reads from the durable cursor, never from page zero.
     await db.execute(rankMarker("resume-v2-same-corpus"));
     expect(await fanOutDueWorkSourceRepairs(traced, { limit: 2 })).toMatchObject({
       deferred: 1,
@@ -1695,7 +1681,7 @@ describe("transactionally coupled due-work source repair", () => {
     await expect(repairDueWorkBeforeRead(db, "artist-edges")).rejects.toBeInstanceOf(
       DueWorkMaintenancePendingError,
     );
-    // The refused read converged every budgeted page; only the burst's last marker remains.
+
     expect(await countPendingTrackSourceMarkers(db)).toBe(1);
 
     await expect(repairDueWorkBeforeRead(db, "artist-edges")).resolves.toBeUndefined();
@@ -1735,8 +1721,6 @@ describe("transactionally coupled due-work source repair", () => {
         }),
       ).rejects.toBeInstanceOf(DueWorkMaintenancePendingError);
 
-      // With 700 ms writes, pages start at 0, 700, and 1,400 ms and a fourth would start at
-      // 2,100 ms. A 10-second write leaves only the first page.
       expect(await countPendingTrackSourceMarkers(db)).toBe(remaining);
       const physical = await db.execute(`select state from due_work
         where work_kind = 'artist-edges' and subject_id = 'slow-physical'`);
@@ -1746,15 +1730,14 @@ describe("transactionally coupled due-work source repair", () => {
 
   it("shares one drain budget across every guarded read in a Worker request", async () => {
     const pages = DUE_WORK_READ_DRAIN_BUDGET.sourcePages;
-    // A frozen clock isolates the page count from the wall bound, which is the other half of the
-    // same shared budget and is exercised by the slow-write cases above.
+
     const unspent = { now: () => 0 };
     await markTrackBurst(db, "shared-first", SOURCE_REPAIR_LIMIT * (pages - 4));
 
     await runWithDatabaseRequestScope(async () => {
       await expect(repairDueWorkBeforeRead(db, "artist-edges", unspent)).resolves.toBeUndefined();
       await markTrackBurst(db, "shared-second", SOURCE_REPAIR_LIMIT * 8);
-      // The first read started all but four of the request's pages.
+
       await expect(repairDueWorkBeforeRead(db, "embed-catalogue", unspent)).rejects.toBeInstanceOf(
         DueWorkMaintenancePendingError,
       );

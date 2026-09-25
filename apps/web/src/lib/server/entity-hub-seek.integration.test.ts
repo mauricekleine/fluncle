@@ -3,16 +3,6 @@ import { beforeEach, describe, expect, it, type MockInstance, vi } from "vitest"
 
 import { createIntegrationDb } from "./integration-db";
 
-// THE ENTITY HUBS ON THEIR LISTING INDEX, against the real migrated schema.
-//
-// A numbered `/albums` · `/labels` · `/artists` page past the shallow offset threshold (and the MCP
-// browse twin) is served off persisted boundaries, and every unfiltered page, shallow or deep, reads
-// the entity's hub listing index (`<entity>_hub_listing_idx`, keyed on slug and partial on exactly
-// the hub gate) plus the table rows it returns. These tests pin that contract: every page is exactly
-// the slice of the unified alphabetical order the materialized gated CTE computes (with the same
-// total and A–Z lane), and the statements take the listing index with no temp b-tree, count without
-// reading a table row, and read the table only for the rows a page returns.
-
 let db: Client;
 let execute: MockInstance<Client["execute"]>;
 let batch: MockInstance<Client["batch"]>;
@@ -36,29 +26,24 @@ function statementText(statement: unknown): string {
     : "";
 }
 
-/** The SQL of every statement the reads under test have executed since the last reset. */
 function executedSql(): string[] {
   return execute.mock.calls.map((call) => statementText(call[0]));
 }
 
-/** The SQL of every `"read"` batch since the last reset, one array per batch. */
 function readBatches(): string[][] {
   return batch.mock.calls
     .filter((call) => call[1] === "read")
     .map((call) => call[0].map((statement) => statementText(statement)));
 }
 
-/** Every statement the reads issued since the last reset, executed or batched. */
 function allSql(): string[] {
   return [...executedSql(), ...readBatches().flat()];
 }
 
-/** A statement that reads through the hub gate (the floor comparison is its signature). */
 function carriesGate(sql: string): boolean {
   return sql.includes("renderable_track_count >= ");
 }
 
-// Imported AFTER the mock so each module's `getDb` reads the fixture database.
 const { ALBUMS_HUB_QUERY, ALBUM_INDEX_MIN_TRACKS, listAlbumsHubPage } = await import("./albums");
 const { ARTISTS_HUB_QUERY, ARTIST_INDEX_MIN_FINDINGS, listArtistsHubPage } =
   await import("./artists");
@@ -83,12 +68,6 @@ type SeededEntity = { certified: number; id: string; renderable: number; slug: s
 
 const NOW = "2026-07-01T00:00:00.000Z";
 
-/**
- * A deterministic entity world whose slug order, id order, and insertion order all disagree. Three
- * rows in five clear the gate (a floor-clearing catalogue row, or a CERTIFIED sub-floor row); the
- * other two are sub-floor catalogue rows that must never appear. Some slugs lead with a digit, so
- * the A–Z lane carries its `#` bucket.
- */
 function entityWorld(count: number, prefix = ""): SeededEntity[] {
   return Array.from({ length: count }, (_, index) => {
     const band = index % 5;
@@ -116,7 +95,6 @@ async function seedEntities(table: EntityTable, rows: SeededEntity[]): Promise<v
   );
 }
 
-/** The unified hub order over the gated set, computed independently of any SQL under test. */
 function gatedOrder(rows: SeededEntity[]): string[] {
   return rows
     .filter((row) => row.certified > 0 || row.renderable >= 3)
@@ -155,11 +133,6 @@ type ReferenceRow = {
   track_count: number;
 };
 
-/**
- * One unfiltered hub page as the materialized gated CTE computes it: the gate spelled with a BOUND
- * floor over a `not indexed` table scan, the total, the slice, and the A–Z lane all read off one
- * copy of the gated rows.
- */
 async function referenceHubPage(
   table: EntityTable,
   page: number,
@@ -211,7 +184,6 @@ async function referenceHubPage(
   };
 }
 
-/** One MCP browse page as the materialized gated CTE computes it, with the name riding the row. */
 async function referenceBrowsePage(table: EntityTable, page: number, pageSize: number) {
   const result = await db.execute({
     args: [3, pageSize, (page - 1) * pageSize],
@@ -255,12 +227,6 @@ beforeEach(async () => {
   batch = vi.spyOn(db, "batch");
 });
 
-/**
- * Arm one write that moves `slug` OUT of the hub gate at the most damaging moment each read shape
- * allows: just before the SECOND gate-bearing statement issued through `execute`, so two independent
- * reads straddle it, or just after a `"read"` batch resolves, since nothing can land inside one
- * read-only transaction. Returns whether the write has landed.
- */
 function armGateCrossingWrite(table: EntityTable, slug: string): () => boolean {
   const prototype = Object.getPrototypeOf(db) as Client;
   const realExecute = prototype.execute.bind(db);
@@ -302,7 +268,6 @@ function armGateCrossingWrite(table: EntityTable, slug: string): () => boolean {
   return () => landed;
 }
 
-/** A served page is whole when its rows are exactly what its own total says that page holds. */
 function expectWholePage(
   served: { items: unknown[]; total: number },
   page: number,
@@ -341,8 +306,6 @@ describe.each(HUBS)("the $name hub on its listing index", (hub) => {
 
     await seedEntities(hub.table, rows);
 
-    // Pages 1–10 are shallow; page 11 is the first deep page, served directly while no boundaries
-    // are stored yet.
     for (let page = 1; page <= 11; page += 1) {
       const expected = await referenceHubPage(hub.table, page, pageSize, hub.withLetters);
 
@@ -364,7 +327,6 @@ describe.each(HUBS)("the $name hub on its listing index", (hub) => {
       expect(allSql().some((sql) => sql.includes("materialized"))).toBe(false);
     }
 
-    // Let the boundary build page 11 scheduled finish against this test's database.
     await vi.waitFor(async () => expect(await storedFingerprint(`${hub.name}-hub`)).toBeDefined());
   });
 
@@ -442,7 +404,7 @@ describe.each(HUBS)("the $name hub on its listing index", (hub) => {
     await seedEntities(hub.table, rows);
 
     const shallow = await hub.list(1);
-    // No boundaries yet: the direct slice answers, and a build is scheduled behind it.
+
     const unanchored = await hub.list(11);
 
     expect(pageCount).toBeGreaterThan(11);
@@ -458,7 +420,7 @@ describe.each(HUBS)("the $name hub on its listing index", (hub) => {
       expect(served.total).toBe(order.length);
       expect(served.pageCount).toBe(pageCount);
       expect(served.letters).toEqual(shallow.letters);
-      // The boundary path answered, and no statement on it materialized the whole gated set.
+
       expect(executedSql().some((sql) => sql.includes("from hub_page_anchors"))).toBe(true);
       expect(allSql().some((sql) => sql.includes("materialized"))).toBe(false);
     }
@@ -473,7 +435,7 @@ describe.each(HUBS)("the $name hub on its listing index", (hub) => {
     await vi.waitFor(async () => expect(await storedFingerprint(`${hub.name}-hub`)).toBeDefined());
 
     const builtFingerprint = await storedFingerprint(`${hub.name}-hub`);
-    // Forty more entities sorting ahead of every boundary: the total and the first row both move.
+
     const grown = entityWorld(40, "0-new-");
 
     await seedEntities(hub.table, grown);
@@ -481,7 +443,6 @@ describe.each(HUBS)("the $name hub on its listing index", (hub) => {
     const order = gatedOrder([...rows, ...grown]);
     const stale = await hub.list(12);
 
-    // The total is always read live, whatever the boundaries say.
     expect(stale.total).toBe(order.length);
     await vi.waitFor(async () =>
       expect(await storedFingerprint(`${hub.name}-hub`)).not.toBe(builtFingerprint),
@@ -599,10 +560,6 @@ describe("the hub listing index on the real schema", () => {
     return plan.rows.map((row) => (typeof row.detail === "string" ? row.detail : "")).join("\n");
   }
 
-  /**
-   * The statement's bytecode, plus the position of every opcode that reads a column off the entity
-   * TABLE's cursor (never an index cursor). An empty `reads` list means no table row is ever read.
-   */
   async function tableColumnReads(table: EntityTable, statement: Statement) {
     const root = await db.execute({
       args: [table],
@@ -637,7 +594,6 @@ describe("the hub listing index on the real schema", () => {
       const normalize = (value: unknown) =>
         String(value).replaceAll(/["`]/g, "").replaceAll(/\s+/g, " ").toLowerCase();
 
-      // A floor constant that drifts from the index literal leaves every hub read on a table scan.
       expect(normalize(ddl.rows[0]?.sql)).toContain(
         `where ${normalize(hubInclusionWhere(table, floor))}`,
       );
@@ -692,7 +648,7 @@ describe("the hub listing index on the real schema", () => {
       expect(details).not.toContain("USE TEMP B-TREE");
       expect(offsetCheck).toBeGreaterThanOrEqual(0);
       expect(reads.length).toBeGreaterThan(0);
-      // Every table read sits past the offset check, so a skipped row never reads the table.
+
       expect(Math.min(...reads)).toBeGreaterThan(offsetCheck);
     },
   );

@@ -1,55 +1,3 @@
-// THE CATALOGUE FUNNEL — the catalogue pipeline (crawl → anchor → capture → analyze/embed →
-// rec-eligible → certified) as numbers on one page (docs/admin-shell.md).
-//
-// ── ONE SOURCE OF TRUTH FOR THE COUNTS ───────────────────────────────────────────────
-// This module records nothing new. Every number it computes is READ THROUGH THE SAME
-// PREDICATE THE PRODUCT ALREADY RUNS, so the funnel can never tell the operator a different
-// story than the machine obeys:
-//
-//   - the queue depths reuse `countTrackWork` / `kindClause` (track-work.ts) — the exact
-//     worklists the capture/analyze/embed/anchor sweeps drain, brake and all;
-//   - the rec-eligibility count folds in `REC_ELIGIBLE_WHERE` (recommendations.ts) — the
-//     exact gate `listRecommendations` scans by, extracted to a shared fragment so the two
-//     can never drift (the eligibility-agreement test proves it on shared fixtures);
-//   - the frontier counts come from `getFrontierCounts` (crawl.ts) — the crawler's own lean read;
-//   - the capture-budget meter comes from `getCatalogueCaptureState` (capture-budget.ts) —
-//     the same readout `/admin/catalogue` renders and the brake obeys.
-//
-// ── TWO OPS ────────────────────────────────────────────────────────────────────────────
-//   - `recordCatalogueSnapshot` (AGENT tier) — compute the live counts and UPSERT one row per
-//     UTC day (`on conflict(day) do update`), so a re-fired daily tick overwrites rather than
-//     doubles a bar. The on-box `fluncle-funnel-snapshot` timer fires it once a day; the row it
-//     writes is the day-point the growth SERIES reads back — nothing on the read path depends on it.
-//   - `getFunnel` (admin tier) — the live stages + queues + meters computed NOW (one
-//     `gatherLiveFunnel` pass, every read run exactly once), plus the bounded day-by-day series
-//     read back from the ledger (cut in SQL, plain ASC index walk on `day`).
-//
-// ── SCALE NOTE ────────────────────────────────────────────────────────────────────────
-// The stage scan + anchor split + re-ask bench are ONE single-pass conditional aggregate (never
-// `union all` over a CTE — trap #4, docs/local-database.md), and it is a full scan of a growing
-// table by construction: twelve `SUM(CASE)` arms over the whole catalogue, with no WHERE to seek on.
-// So the only lever is HOW MANY BYTES the scan touches, and the fold reads every arm out of the
-// covering `tracks_funnel_scan_idx` rather than out of table rows (see `runFoldedFunnelScan`).
-//
-// That distinction is the whole story, and it is worth stating plainly because the obvious reading
-// is wrong: it is NOT enough that no vector crosses the wire. These numbers were measured when the
-// vector was a ~4 KB `F32_BLOB(1024)` INLINE on `tracks`, spilling to overflow pages SQLite must
-// WALK to reach any column stored after it — so arms reading `dismissed_at` /
-// `nearest_finding_score` / `spotify_anchor_attempted_at` / `isrc` dragged every vector in the
-// archive to count null flags. The satellite split has since taken the blob out of the record, so
-// the uncovered case is no longer this bad; the covering scan is still what the fold is built for,
-// because the arms themselves are unchanged and the table only grows. At 52k, this was 9.5s cold,
-// 0.38s warm, and a 15.08s span in
-// Sentry when the page cache had been evicted by a concurrent sweep; on a fresh 54,860-row prod
-// clone — the honest cold case — 12.6-19.9s. Covered, the same twelve arms read a 5 MB index instead
-// of a 125 MB table and land at 1.70s first-touch, 0.30s after. Live-on-every-load is affordable BECAUSE of that, not in
-// spite of it — this admin page (a single operator, low QPS) pays an index scan honestly rather
-// than serving a snapshot up to a day stale.
-//
-// Every other read here is either bounded (the queue counts ride their partial indexes), a stored
-// count (the public-surfaces card reads the maintained `renderable_track_count` — Wave 2 #2), or on
-// the small `crawl_frontier` / `catalogue_snapshots` tables.
-
 import { countIndexableAlbums } from "./albums";
 import { countIndexableArtists } from "./artists";
 import { REC_ELIGIBLE_WHERE } from "../catalogue-eligibility";
@@ -61,122 +9,67 @@ import { clampSnapshotWindow } from "./snapshot-window";
 import { ANCHOR_REASK_AFTER_DAYS, countTrackWork, kindClause, workHalfClause } from "./track-work";
 import { readDefaultTracksHubTotal } from "./tracks-hub";
 
-/** The funnel's stage totals — cumulative counts of rows that have reached each stage. */
 export type FunnelStages = {
-  /** Uncertified catalogue rows carrying full-song analysis (bpm/key from the captured audio). */
   analyzed: number;
-  /** Uncertified catalogue rows that have gained a Spotify anchor (`spotify_uri`). */
+
   anchored: number;
-  /** Uncertified catalogue rows whose full-song audio has been captured. */
+
   captured: number;
-  /** CERTIFIED tracks (a `findings` row exists) — the funnel's right edge, the archive exit. */
+
   certified: number;
-  /** CRAWLED / uncertified: every catalogue track (a `tracks` row with no `findings` row). */
+
   crawled: number;
-  /** Uncertified catalogue rows carrying a MuQ embedding vector. */
+
   embedded: number;
-  /** The rec-eligibility pool — rows clearing the exact `REC_ELIGIBLE_WHERE` gate. */
+
   recEligible: number;
 };
 
-/** The funnel's queue depths — how much is waiting behind each stage. */
 export type FunnelQueues = {
-  /** The `analyze` worklist backlog (catalogue half). */
   analyzeQueue: number;
-  /** The anchor re-ask BENCH: rows attempted inside the 14-day window, sitting out (not re-billed). */
+
   anchorBackoff: number;
-  /** Anchor worklist rows WITH an ISRC (the exact-ISRC anchor path). */
+
   anchorQueueIsrc: number;
-  /** Anchor worklist rows with NO ISRC (the search-triple anchor path). */
+
   anchorQueueNoIsrc: number;
-  /** The `capture` worklist backlog (catalogue half). Reflects the capture brake (shut ⇒ 0). */
+
   captureQueue: number;
-  /** The `embed` worklist backlog (catalogue half). */
+
   embedQueue: number;
 };
 
-/**
- * The LIVE queue depths — the persisted `FunnelQueues` plus the anchor worklist split by whether the
- * row already carries a MuQ embedding. This split is a live-read refinement only (never persisted),
- * so it lives here and not on `FunnelQueues` / the snapshot row: `anchorQueueReady` is the embedded
- * head the hourly anchor sweep actually works (the actionable number); `anchorQueueAwaitingAudio` is
- * crawler metadata still waiting on capture/embed (it costs nothing until the audio pipeline reaches
- * it). Both derive from the SAME anchor worklist predicate, so they sum to `anchorQueueIsrc +
- * anchorQueueNoIsrc`.
- */
 export type FunnelLiveQueues = FunnelQueues & {
   anchorQueueAwaitingAudio: number;
   anchorQueueReady: number;
 };
 
-/** One pre-audio tier of the authorized capture backlog, split by whether the row has an anchor. */
 export type CaptureBacklogTier = {
-  /** Rows carrying a `spotify_uri` — the half whose audio can become rec-eligible. */
   anchored: number;
-  /** The Ear's pre-audio tier (`tracks.capture_priority`): 3 artist, 2 label, 1 seed-label, 0 none. */
+
   tier: number;
-  /** Rows with no `spotify_uri` yet — audio bought here cannot reach the rec pool until anchored. */
+
   unanchored: number;
 };
 
-/**
- * THE AUTHORIZED CAPTURE BACKLOG — what the metered queue would hand out if the budget window were
- * open, and the two facts the operator needs before he spends it.
- *
- * WHY THIS EXISTS. `queues.captureQueue` is the product's own `countTrackWork` reading, brake and
- * all: the capture worklist NARROWS ITSELF TO THE FINDINGS when the budget is shut (track-work.ts §
- * THE BRAKE), so the catalogue-scoped count is 0 for as long as the window is closed and the whole
- * backlog the moment it opens. As a QUEUE DEPTH that is correct — it is what the sweep would be
- * served. As a BACKLOG GAUGE it reports budget state rather than work, and an operator reading it
- * on a shut day sees an empty pipeline that is in fact tens of thousands of rows deep.
- *
- * So the gauge is stated separately from the brake: `authorized` is the same predicate with the
- * BUDGET DROPPED and nothing else (the ladder veto, the dismissal, the duration gate, the failure
- * cap and the cooldown all still bind — an unauthorized row is not backlog), and `budgetOpen` says
- * whether the window is letting any of it through right now. `queues.captureQueue` keeps its exact
- * old meaning and is DERIVED from this read, so the two can never disagree.
- *
- * AND THE SPLIT IS THE SAME READ. The tier × anchored breakdown is that scan with a `group by`,
- * and `authorized` is the sum of its buckets — the operator is about to spend a metered budget and
- * rec-eligibility requires `spotify_uri` (`REC_ELIGIBLE_WHERE`), so "which tier, and is it
- * anchored" is the shape of the question, not a second one. `queues.captureQueue` stays its own
- * `countTrackWork` call rather than being derived from `authorized`, because that function routes
- * to the `due_work` projection under the track-work cutover flag and a derived depth would
- * silently stop matching the worklist the sweep is served.
- */
 export type CaptureBacklog = {
-  /** Every uncaptured authorized catalogue row, INDEPENDENT of the budget window. */
   authorized: number;
-  /** Of `authorized`, the rows already carrying a `spotify_uri`. */
+
   authorizedAnchored: number;
-  /** Whether the capture budget window is open right now (the brake, stated as its own fact). */
+
   budgetOpen: boolean;
-  /** The backlog by pre-audio tier, highest tier first. Sums to `authorized`. */
+
   tiers: CaptureBacklogTier[];
 };
 
-/** Every integer the daily snapshot persists — the stages, the queues, and the frontier. */
 export type CatalogueSnapshotCounts = FunnelStages &
   FunnelQueues & { frontierDone: number; frontierPending: number };
 
-/** One persisted snapshot row (the counts + its day + when it was written). */
 export type CatalogueSnapshotRow = CatalogueSnapshotCounts & {
   createdAt: string;
   day: string;
 };
 
-/**
- * How much of the archive is LIVE ON THE PUBLIC WEB right now — each number read through the SAME
- * predicate its public surface already obeys, so the card can never disagree with what a visitor or
- * a crawler actually sees:
- *   - `tracks` is the `/tracks` hub's own total (`countTracksHub({})` — every publicly-rendered row,
- *     findings + catalogue), so it matches the hub's masthead by construction.
- *   - `artists`/`albums`/`labels` are the INDEXABLE sets — entities whose page clears the
- *     thin-content floor (the maintained `renderable_track_count >= ARTIST/ALBUM/LABEL_INDEX_MIN…`),
- *     the exact rows the sitemap exposes (`countIndexableHubEntities`, reusing each hub's own table +
- *     floor, so the card and the sitemap read the same stored column).
- * Live-only, like the stages/queues: computed on every load, never persisted to the snapshot series.
- */
 export type PublicSurfaceCounts = {
   albums: number;
   artists: number;
@@ -184,11 +77,9 @@ export type PublicSurfaceCounts = {
   tracks: number;
 };
 
-/** The operator's spend levers, surfaced as gauges (docs/admin-shell.md, the `/admin/funnel` station). */
 export type FunnelMeters = {
-  /** The anchor re-ask bench size (mirrors `queues.anchorBackoff` — a lever, called out here). */
   anchorBackoff: number;
-  /** The capture budget's live readout — the metered-spend gauge. */
+
   captureBudget: {
     dailyBytes: number;
     dailyTracks: number;
@@ -198,11 +89,10 @@ export type FunnelMeters = {
     remainingTracks: number;
     windowHours: number;
   };
-  /** Crawl frontier still to drain — how much metadata acquisition is left in flight. */
+
   frontierPending: number;
 };
 
-/** The one-call read behind `/admin/funnel`: everything live now, plus the history. */
 export type FunnelView = {
   live: {
     captureBacklog: CaptureBacklog;
@@ -231,11 +121,6 @@ type AnchorSplitRow = {
   no_isrc_ready: number | null;
 };
 
-/**
- * The drainable anchor worklist, partitioned BOTH ways from ONE pass: by ISRC (the two verification
- * paths — feeds the persisted `anchorQueueIsrc/NoIsrc`) and by embedding (ready vs awaiting audio —
- * the live-only refinement). The two partitions total the same whole queue by construction.
- */
 type AnchorSplit = {
   awaitingAudio: number;
   ready: number;
@@ -243,7 +128,6 @@ type AnchorSplit = {
   withoutIsrc: number;
 };
 
-/** The seven stage counters — the funnel's stage totals in the shape the scans produce. */
 type StageScanCounts = {
   analyzed: number;
   anchored: number;
@@ -254,43 +138,12 @@ type StageScanCounts = {
   recEligible: number;
 };
 
-/** All three `tracks left join findings` scans folded into one row (docs/db-scale-backlog Wave 1 #5). */
 type FoldedFunnelScan = {
   anchorBackoff: number;
   anchorSplit: AnchorSplit;
   stages: StageScanCounts;
 };
 
-/**
- * THE MIRROR REWRITE — take a shared `t`/`f`-aliased predicate and read it off the two MATERIALIZED
- * mirrors instead: the catalogue discriminator (`f.track_id is null` ⇒ `t.is_catalogue = 1`,
- * keystone 1) and the embedding-presence flag (`emb.track_id is not null` ⇒
- * `t.has_embedding = 1`, Wave 2 #4). Both are equivalences the SCHEMA maintains on every write, so
- * the rewritten predicate selects exactly the same rows — and it selects them without the `findings`
- * join and without the `track_embeddings` join, which is what lets the folded pass ride
- * `tracks_funnel_scan_idx` as a COVERING scan (schema.ts § `tracks_funnel_scan_idx`).
- *
- * WHY REWRITE RATHER THAN FORK. This module's whole contract is that it counts THE PRODUCT'S OWN
- * predicates — `kindClause("anchor")`, `REC_ELIGIBLE_WHERE` — never a copy that can drift from them.
- * A hand-written mirror-form of each would be exactly that copy. So the one canonical text stays
- * where it lives and this narrows it to the two atoms.
- *
- * THE GUARD MAKES DIVERGENCE UNSHIPPABLE. If a shared fragment is ever respelled — an
- * `exists (select …)` anti-join in place of `f.track_id is null`, say — the substitutions stop
- * matching, and rather than silently building a wrong or uncoverable query this THROWS at
- * construction. The fold-equivalence test drives every fragment through here, so a respelling fails
- * the suite rather than production.
- */
-/**
- * The rewrite table, each rule `<canonical> => <mirrored>` in ONE string literal. That is deliberate
- * on two counts, so please do not "tidy" it into chained `.replaceAll(a, b)` calls:
- *   - it keeps a rule's two halves in one place, where neither can be edited without the other;
- *   - it keeps the db-query-shape guardrail HONEST. That scanner counts `f.track_id is null` as
- *     catalogue-anti-join debt unless the enclosing literal also mentions `is_catalogue` — its
- *     signal that the occurrence is a materialized-mirror conversion rather than a scan anyone
- *     executes. Split across two arguments, this table reads as a seventh anti-join and inflates
- *     funnel.ts's debt ceiling; written as one string per rule it is exempt for the right reason.
- */
 const MIRROR_REWRITES = [
   "f.track_id is not null => t.is_catalogue = 0",
   "f.track_id is null => t.is_catalogue = 1",
@@ -320,13 +173,6 @@ function onMirrors(fragment: string): string {
   return rewritten;
 }
 
-/**
- * The seven stage `SUM(CASE)` columns in the folded pass (`runFoldedFunnelScan`). `rec_eligible`
- * folds in the SHARED `REC_ELIGIBLE_WHERE` (lib/catalogue-eligibility.ts): the funnel's eligibility
- * count is, by construction, the same gate `listRecommendations` scans by. Aliased `t` = `tracks`,
- * `f` = the LEFT-joined `findings`, `emb` = the LEFT-joined `track_embeddings`. Carries NO bind
- * params (the fragments it interpolates carry none).
- */
 const STAGE_SCAN_SELECT = `sum(case when f.track_id is null then 1 else 0 end) as crawled,
             sum(case when f.track_id is null and t.spotify_uri is not null then 1 else 0 end) as anchored,
             sum(case when f.track_id is null and t.source_audio_key is not null then 1 else 0 end) as captured,
@@ -335,18 +181,6 @@ const STAGE_SCAN_SELECT = `sum(case when f.track_id is null then 1 else 0 end) a
             sum(case when ${REC_ELIGIBLE_WHERE} then 1 else 0 end) as rec_eligible,
             sum(case when f.track_id is not null then 1 else 0 end) as certified`;
 
-/**
- * The anchor RE-ASK BENCH predicate — the exact COMPLEMENT of `kindClause("anchor")`'s window guard:
- * the same base guards (un-anchored, measurable length, not dismissed, not a known duplicate), and
- * attempted INSIDE the re-ask window rather than before it. A shared fragment (a `?` for the window
- * cutoff) for the folded scan's backoff column. Aliased `t` = `tracks`, `f` = the LEFT-joined `findings`.
- *
- * It complements the WINDOW guard specifically, not the whole worklist: a row RETIRED by the retry cap
- * or the unanchorable-credit filter (track-work.ts) still counts here for as long as its last stamp
- * sits inside the window, then ages out of the bench without ever re-entering the queue. That is the
- * intended reading — a retired row is RESTING, neither queued nor benched — and it is why the bench is
- * a "not re-billed yet" gauge rather than a promise that every benched row comes back.
- */
 const ANCHOR_BACKOFF_WHERE = `f.track_id is null
             and t.spotify_uri is null
             and t.duration_ms > 0
@@ -355,12 +189,10 @@ const ANCHOR_BACKOFF_WHERE = `f.track_id is null
             and t.spotify_anchor_attempted_at is not null
             and t.spotify_anchor_attempted_at >= ?`;
 
-/** The re-ask window cutoff (the shared `ANCHOR_REASK_AFTER_DAYS` clock), bound by the bench + fold. */
 function anchorBackoffCutoff(): string {
   return new Date(Date.now() - ANCHOR_REASK_AFTER_DAYS * 24 * 60 * 60 * 1000).toISOString();
 }
 
-/** Map the seven stage columns of a scan row onto `StageScanCounts`. */
 function mapStageRow(row: StageRow | undefined): StageScanCounts {
   return {
     analyzed: Number(row?.analyzed ?? 0),
@@ -373,7 +205,6 @@ function mapStageRow(row: StageRow | undefined): StageScanCounts {
   };
 }
 
-/** The four raw anchor-split columns → the derived `AnchorSplit` (both partitions total the queue). */
 function anchorSplitFromRow(row: AnchorSplitRow | undefined): AnchorSplit {
   const isrcReady = Number(row?.isrc_ready ?? 0);
   const isrcAwaiting = Number(row?.isrc_awaiting ?? 0);
@@ -388,33 +219,6 @@ function anchorSplitFromRow(row: AnchorSplitRow | undefined): AnchorSplit {
   };
 }
 
-/**
- * THE ONE PASS, as a statement — the stage 7-col aggregate, the anchor-split 4-col, and the
- * anchor-backoff count folded into a SINGLE conditional-aggregate scan of `tracks`
- * (docs/db-scale-backlog Wave 1 #5, covered by Wave 2 #7). Each query's
- * WHERE moves into its own `SUM(CASE WHEN …)` over the
- * unfiltered superset — a conditional sum over the whole table equals `COUNT(*) … WHERE P` for any
- * predicate P, so the numbers are identical BY CONSTRUCTION, in one scan instead of three (the fold
- * lands on every `/admin/funnel` load AND the daily snapshot). The `?` order is: the four anchor
- * columns (each embeds `kindClause("anchor")`'s own binds — the window cutoff plus the unanchorable
- * credits — spread verbatim, so the count and the order follow the clause without a hand-kept list)
- * then the backoff cutoff.
- *
- * AND IT IS COVERED. The select list is assembled in the CANONICAL spelling — the very
- * `f.track_id` / `emb.track_id` fragments the three reference queries below run — and then
- * rewritten onto the stored mirrors in ONE pass ({@link onMirrors}), which drops BOTH joins — the
- * `findings` one and the `track_embeddings` one. That is what turns this from a full table scan into
- * `SCAN tracks USING COVERING INDEX tracks_funnel_scan_idx`: reaching `dismissed_at`,
- * `nearest_finding_score`, `spotify_anchor_attempted_at` and `isrc` in a table ROW is what the
- * covering index avoids, and it avoids a b-tree probe per row into the satellite besides. On a
- * 54,860-row clone of production (measured when the vector was still inline on `tracks`, so the
- * uncovered number was at its worst): 12.6-19.9s cold before, 1.70s first-touch and 0.30s after,
- * off a 5 MB index rather than a 125 MB table, every count identical. Writing the canonical form
- * and rewriting it — rather than hand-writing the mirror form — is what keeps this the SAME
- * predicate as the sweeps, not a copy.
- *
- * Exported so the integration test can inspect the exact query plan of the production scan.
- */
 export function foldedFunnelScanStatement(): { args: string[]; sql: string } {
   const anchor = kindClause("anchor");
   const selectList = `${STAGE_SCAN_SELECT},
@@ -431,12 +235,6 @@ export function foldedFunnelScanStatement(): { args: string[]; sql: string } {
   };
 }
 
-/**
- * THE ONE PASS, executed. Split from {@link foldedFunnelScanStatement} so the coverage test can
- * `EXPLAIN QUERY PLAN` the REAL statement rather than a hand-copied lookalike — the plan is the only
- * thing that proves the arms still fit inside `tracks_funnel_scan_idx`, and a thirteenth arm reading
- * a column the index does not carry would silently drop the scan back onto table rows.
- */
 export async function runFoldedFunnelScan(): Promise<FoldedFunnelScan> {
   const db = await getDb();
   const result = await db.execute(foldedFunnelScanStatement());
@@ -449,28 +247,6 @@ export async function runFoldedFunnelScan(): Promise<FoldedFunnelScan> {
   };
 }
 
-/**
- * THE AUTHORIZED CAPTURE BACKLOG, as a statement — the catalogue capture worklist counted with the
- * BUDGET DROPPED and every other guard intact, grouped by pre-audio tier and split by anchor.
- *
- * SAME PREDICATE, NOT A COPY. The `where` is the product's own pair: `workHalfClause("capture",
- * "catalogue")` (the catalogue half, with the `(is_catalogue, dismissed_at, capture_priority)` seek
- * terms lifted to the top level exactly as the page read lifts them) and `kindClause("capture")`
- * (the capture state machine — the failure cap, the cooldown, the `wrong-audio` re-capture trigger,
- * the duration gates). The ONLY thing this drops is `countTrackWork`'s brake consult, which is the
- * whole point: the brake is a spend decision, not a statement about how much work exists.
- *
- * THE PLAN IS THE SAME PLAN the open-budget count already runs — this adds a `group by` on
- * `capture_priority` and two `sum(case)` columns to it. `tracks_catalogue_capture_idx`
- * (`is_catalogue, dismissed_at, capture_priority, track_id`) serves the seek AND the grouping key in
- * index order, so the `group by` needs no temp b-tree; the plan is pinned by an
- * `explain query plan` assertion on THIS statement in funnel.integration.test.ts, not on a copy.
- * The tier band is tiny and bounded by construction (lib/capture-tier.ts `CAPTURE_TIER`: 3 artist, 2
- * label, 1 seed-label, 0 none — every negative tier is excluded by `capture_priority >= 0`), so the
- * grouped read returns at most four rows however far the catalogue grows.
- *
- * Exported so the equivalence test can pin it against `countTrackWork` on the same database.
- */
 export function catalogueCaptureBacklogStatement(): { args: string[]; sql: string } {
   const capture = kindClause("capture");
 
@@ -492,11 +268,6 @@ type CaptureBacklogDbRow = {
   unanchored: number | null;
 };
 
-/**
- * The authorized capture backlog, executed. Split from {@link catalogueCaptureBacklogStatement} so
- * the coverage test can `EXPLAIN QUERY PLAN` the REAL statement rather than a hand-copied lookalike.
- * Buckets come back highest tier first — the order the metered queue drains them in.
- */
 export async function readCatalogueCaptureBacklog(
   captureState: CatalogueCaptureState,
 ): Promise<CaptureBacklog> {
@@ -518,56 +289,33 @@ export async function readCatalogueCaptureBacklog(
   };
 }
 
-/**
- * The count of every publicly-rendered `/tracks` row — findings + catalogue — computed LIVE through
- * the `/tracks` hub's OWN count SQL (`tracksHubCountQuery({})`, no filter). Reusing the hub's exact
- * query builder means the card reports the same set the hub's masthead pages by, and — like the rest
- * of the funnel's live block — it is recomputed on every load rather than served from the hub's TTL
- * memo, so it never lags. `{}` compiles to a bare `select count(*) from tracks` (no join, no blob).
- */
 async function countPublicTracks(): Promise<number> {
   const db = await getDb();
   return readDefaultTracksHubTotal(db);
 }
 
-/** The full live computation, and the two live-only extras the persisted `counts` cannot carry. */
 type LiveFunnelData = {
-  /** The anchor worklist's embedding split (live-only; never persisted on the snapshot row). */
   anchorAwaitingAudio: number;
   anchorReady: number;
-  /** The budget-independent capture backlog + its tier × anchor split (live-only). */
+
   captureBacklog: CaptureBacklog;
-  /** The capture budget state, read ONCE here and threaded into the capture count + the meters. */
+
   captureState: CatalogueCaptureState;
   counts: CatalogueSnapshotCounts;
-  /** How much is live on the public web now — live-only, never persisted to the snapshot series. */
+
   publicSurfaces: PublicSurfaceCounts;
 };
 
-/**
- * The reads the persisted snapshot row is made of, and nothing else: the stage scan, the anchor
- * split (one pass, both partitions), the re-ask bench, the three audio-queue counts, and the
- * frontier group-bys. The daily cron runs exactly this, so it never pays for a live-only read whose
- * answer the snapshot row has no column for.
- *
- * `captureState` is threaded into the capture count when the caller already holds it (the page read
- * does, for its meters). Omitted, the count consults the brake itself, which skips the spend read
- * while catalogue capture is paused.
- */
 async function gatherSnapshotReads(captureState?: CatalogueCaptureState): Promise<{
   anchorSplit: AnchorSplit;
   counts: CatalogueSnapshotCounts;
 }> {
   const [scan, captureQueue, analyzeQueue, embedQueue, frontier] = await Promise.all([
-    // THE ONE PASS — the stage 7-col aggregate, the anchor-split 4-col, and the anchor-backoff count
-    // folded into a SINGLE conditional-aggregate scan of `tracks left join findings` (was three
-    // independent full scans fired in parallel — docs/db-scale-backlog Wave 1 #5). Same numbers by
-    // construction (each query's WHERE becomes its own CASE arm over the superset), one scan not three.
     runFoldedFunnelScan(),
     countTrackWork({ captureState, kind: "capture", scope: "catalogue" }),
     countTrackWork({ kind: "analyze", scope: "catalogue" }),
     countTrackWork({ kind: "embed", scope: "catalogue" }),
-    // The crawler's own frontier read — the lean by-state group-by variant (no growing-table scans).
+
     getFrontierCounts(),
   ]);
 
@@ -595,32 +343,15 @@ async function gatherSnapshotReads(captureState?: CatalogueCaptureState): Promis
   };
 }
 
-/**
- * ONE full live computation for `/admin/funnel` — the snapshot reads, every one run exactly once,
- * plus the live-only extras the snapshot row cannot carry (the capture backlog and the public
- * surfaces). The capture budget state is read once up front and threaded into the capture count
- * (so `getCatalogueCaptureState` is never read twice per request) and returned for the meters.
- */
 async function gatherLiveFunnel(): Promise<LiveFunnelData> {
   const state = await getCatalogueCaptureState();
 
   const [snapshot, captureBacklog, publicTracks, publicArtists, publicAlbums, publicLabels] =
     await Promise.all([
       gatherSnapshotReads(state),
-      // THE CAPTURE BACKLOG — the same catalogue capture predicate, with the BRAKE DROPPED and
-      // grouped by tier × anchor in one pass. It is a SEPARATE read from the queue depth rather
-      // than a substitute for it, and the reason is the due-work cutover: `countTrackWork` routes
-      // to the `due_work` projection when that flag is on, so a queue depth DERIVED from this
-      // source-table read would silently diverge from the worklist the sweep is actually served.
-      // The funnel's whole contract is that it reports the product's own numbers, so the queue
-      // keeps asking the product. On a shut-budget day the queue count short-circuits without a
-      // round trip and this is the only capture read; with the window open it is a range walk of
-      // `tracks_catalogue_capture_idx` over the authorized catalogue rows, so it grows with them.
+
       readCatalogueCaptureBacklog(state),
-      // PUBLIC SURFACES — how much of the archive is live on the public web now, each through the
-      // SAME predicate its surface already obeys. `tracks` is the `/tracks` hub's own count (`{}` =
-      // no filter = every publicly-rendered row); the three entity counts are the sitemap's
-      // INDEXABLE sets (the stored `renderable_track_count` against each hub's floor).
+
       countPublicTracks(),
       countIndexableArtists(),
       countIndexableAlbums(),
@@ -642,15 +373,10 @@ async function gatherLiveFunnel(): Promise<LiveFunnelData> {
   };
 }
 
-/**
- * The whole set of catalogue counts, each through the product's own predicate. The result is
- * exactly the row `recordCatalogueSnapshot` persists, computed by the snapshot reads alone.
- */
 export async function computeCatalogueSnapshotCounts(): Promise<CatalogueSnapshotCounts> {
   return (await gatherSnapshotReads()).counts;
 }
 
-/** The full ordered arg list for one snapshot upsert — the counts in a fixed column order. */
 function snapshotArgs(row: CatalogueSnapshotRow): (number | string)[] {
   return [
     row.day,
@@ -673,27 +399,8 @@ function snapshotArgs(row: CatalogueSnapshotRow): (number | string)[] {
   ];
 }
 
-/**
- * THE CATCH-UP GRACE WINDOW — how far into a UTC day a run may still stand in for the day BEFORE it.
- *
- * The snapshot is a "where the day closed" reading, taken at 23:45 UTC. When that firing never
- * happens — the admission runner yields, the Worker 500s, the box was asleep and systemd's
- * `Persistent=true` catches up after midnight — the day is simply absent, and an absent day is a
- * HOLE in every growth chart that reads the series. There is no ledger to recompute it from: these
- * are cumulative live counts, and the columns carry no per-day timestamps to reconstruct.
- *
- * What DOES still exist, for a few hours, is the reading itself. A catalogue that gained ~5k rows a
- * day moves by tens of rows in the small hours, so a run at 02:00 UTC is a truthful answer to "where
- * did yesterday close" in every way the charts use it. Six hours is the limit of that claim, and the
- * backfilled row carries the run's real `created_at`, so its lateness stays visible rather than
- * being laundered into an on-time reading.
- *
- * Past the window the day stays missing, deliberately. Carrying a number forward to paper over a
- * hole would invent growth that did not happen, which is the one thing a growth chart must not do.
- */
 const SNAPSHOT_CATCHUP_GRACE_HOURS = 6;
 
-/** The UTC day before `day` (a `YYYY-MM-DD` string), on the same lexicographic-equals-chronological key. */
 function previousDay(day: string): string {
   const midnight = new Date(`${day}T00:00:00.000Z`).valueOf();
 
@@ -704,14 +411,11 @@ function previousDay(day: string): string {
   return new Date(midnight - 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
 }
 
-/** The result of one snapshot tick: the row for its own day, plus any day it healed on the way. */
 export type CatalogueSnapshotWrite = {
-  /** UTC days this tick filled that had no row — empty on a healthy day. */
   backfilledDays: string[];
   snapshot: CatalogueSnapshotRow;
 };
 
-/** One idempotent-per-day upsert of a computed snapshot row. */
 async function upsertSnapshot(row: CatalogueSnapshotRow): Promise<void> {
   const db = await getDb();
 
@@ -742,7 +446,6 @@ async function upsertSnapshot(row: CatalogueSnapshotRow): Promise<void> {
   });
 }
 
-/** Whether the ledger already holds a row for this UTC day — a PK point lookup. */
 async function snapshotExists(day: string): Promise<boolean> {
   const db = await getDb();
   const result = await db.execute({
@@ -753,24 +456,6 @@ async function snapshotExists(day: string): Promise<boolean> {
   return typedRows<{ n: number }>(result.rows).length > 0;
 }
 
-/**
- * Compute the live counts and UPSERT one row for the UTC day. Idempotent per day: a second call
- * the same day OVERWRITES the row with fresh counts (the daily snapshot never doubles a bar).
- *
- * SELF-HEALING, TWO WAYS, because the daily tick has three ways to miss a day — the Worker faults,
- * the database-admission runner yields before the payload starts, or the box is asleep:
- *
- *   1. WITHIN THE DAY, by idempotence. Every extra firing the same UTC day overwrites its own row
- *      with fresher counts, so a second timer firing after a skipped first one costs nothing and
- *      fills the day. That is why the `fluncle-funnel-snapshot` timer carries a retry firing.
- *   2. ACROSS MIDNIGHT, by the grace window. A run inside the first
- *      {@link SNAPSHOT_CATCHUP_GRACE_HOURS} of a UTC day whose PREVIOUS day has no row fills that
- *      day too, from the same computed counts (`on conflict do nothing`, so a racing real tick
- *      always wins). Past the window the hole stays a hole — see the constant for why inventing one
- *      is worse than admitting one.
- *
- * Returns the row written plus any day it healed. AGENT-tier op body.
- */
 export async function recordCatalogueSnapshot(
   options: { day?: string; now?: Date } = {},
 ): Promise<CatalogueSnapshotWrite> {
@@ -795,8 +480,6 @@ export async function recordCatalogueSnapshot(
   ) {
     const db = await getDb();
 
-    // `do nothing`, not `do update`: this row is a stand-in for a reading nobody took, so it must
-    // never overwrite a real one — a concurrent on-time tick for the same day always wins.
     await db.execute({
       args: snapshotArgs({ ...counts, createdAt, day: gap }),
       sql: `insert into catalogue_snapshots
@@ -832,7 +515,6 @@ type SnapshotDbRow = {
   rec_eligible: number;
 };
 
-/** One DB row → the typed snapshot row. Shared by the series walk and the latest-row read. */
 function mapSnapshotRow(row: SnapshotDbRow): CatalogueSnapshotRow {
   return {
     analyzeQueue: Number(row.analyze_queue),
@@ -859,11 +541,6 @@ const SNAPSHOT_COLUMNS = `day, crawled, anchored, captured, analyzed, embedded, 
   anchor_queue_isrc, anchor_queue_no_isrc, anchor_backoff,
   capture_queue, analyze_queue, embed_queue, frontier_done, frontier_pending, created_at`;
 
-/**
- * The bounded snapshot series, oldest-first. A plain ASC index walk on the `day` PK
- * (`where day >= ? order by day asc`) — `day` is lexicographic-equals-chronological, so the
- * range seek is the window and no `desc()` index is needed (the ratified trap). Cut in SQL.
- */
 async function readSnapshotSeries(windowDays: number): Promise<CatalogueSnapshotRow[]> {
   const cutoff = new Date(Date.now() - (windowDays - 1) * 24 * 60 * 60 * 1000)
     .toISOString()
@@ -880,7 +557,6 @@ async function readSnapshotSeries(windowDays: number): Promise<CatalogueSnapshot
   return typedRows<SnapshotDbRow>(result.rows).map(mapSnapshotRow);
 }
 
-/** The capture-budget meter — the live readout the meters band renders. */
 function captureBudgetMeter(state: CatalogueCaptureState): FunnelMeters["captureBudget"] {
   return {
     dailyBytes: state.budget.dailyBytes,
@@ -893,7 +569,6 @@ function captureBudgetMeter(state: CatalogueCaptureState): FunnelMeters["capture
   };
 }
 
-/** Project a stages-bearing row onto the bare `FunnelStages` shape (drops the queue/frontier cols). */
 function stagesFrom(source: FunnelStages): FunnelStages {
   return {
     analyzed: source.analyzed,
@@ -906,7 +581,6 @@ function stagesFrom(source: FunnelStages): FunnelStages {
   };
 }
 
-/** The live block — the freshly-computed counts, plus the live-only anchor embedding split. */
 function buildLiveBlock(data: LiveFunnelData): FunnelView["live"] {
   const { counts } = data;
 
@@ -932,15 +606,6 @@ function buildLiveBlock(data: LiveFunnelData): FunnelView["live"] {
   };
 }
 
-/**
- * The one-call read behind `/admin/funnel`: the live stages + queues + meters computed NOW (one
- * `gatherLiveFunnel` pass — every scan run exactly once), plus the bounded day-by-day series read
- * back from the ledger. The live block is always fresh: this is a single-operator admin page at low
- * QPS, and the block is a handful of sub-second COUNT scans, so it is computed on every load rather
- * than served from a stale daily snapshot. The series still comes from `catalogue_snapshots` (the
- * daily cron's row per UTC day) — that is the only thing the snapshot ledger backs. `get_funnel`
- * handler body.
- */
 export async function getFunnel(windowDays?: number): Promise<FunnelView> {
   const window = clampSnapshotWindow(windowDays);
   const [data, series] = await Promise.all([gatherLiveFunnel(), readSnapshotSeries(window)]);

@@ -1,12 +1,6 @@
 import { decode as decodeJpeg } from "jpeg-js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-// The in-Worker Frontier-cover orchestration (E2): raster → jpeg-js encode → assert the Spotify
-// byte ceiling → upload. The raster seam is INJECTED (the workers-og + resvg wasm legs cannot
-// load under vitest), but the JPEG encode is the REAL jpeg-js — pure JS — so the encode leg,
-// the quality ladder, and the ceiling gate are all proven here, not just mocked around. Only
-// the satori/resvg raster itself remains prod-only.
-
 vi.mock("./log", () => ({ logEvent: vi.fn() }));
 vi.mock("./frontier-playlist", () => ({
   listFrontierCoverTargets: vi.fn(),
@@ -17,7 +11,6 @@ const { listFrontierCoverTargets, putFrontierCover } = await import("./frontier-
 const { renderFrontierCoverJpeg, uploadFrontierCoverForUser, uploadFrontierCovers } =
   await import("./frontier-cover");
 
-/** Synthetic RGBA pixels: a flat dark field (compresses tiny — the happy path). */
 function darkRaster(size: number) {
   const pixels = new Uint8Array(size * size * 4);
 
@@ -31,7 +24,6 @@ function darkRaster(size: number) {
   return { height: size, pixels, width: size };
 }
 
-/** Deterministic noise (an LCG): JPEG's worst case, to blow the byte ceiling in the ladder test. */
 function noiseRaster(size: number) {
   const pixels = new Uint8Array(size * size * 4);
   let seed = 0x2f6e2b1;
@@ -65,18 +57,16 @@ describe("renderFrontierCoverJpeg", () => {
       throw new Error("unreachable");
     }
 
-    // The Base64 decodes to real JPEG bytes (SOI marker) at the raster's dimensions.
     const bytes = Buffer.from(result.jpegBase64, "base64");
     expect(bytes[0]).toBe(0xff);
     expect(bytes[1]).toBe(0xd8);
     const decoded = decodeJpeg(bytes);
     expect({ height: decoded.height, width: decoded.width }).toEqual({ height: 64, width: 64 });
-    // The markup fed to the raster is the Satori twin.
+
     expect(rasterize.mock.calls[0]?.[0]).toContain("FRONTIER");
   });
 
   it("refuses when even the quality ladder's floor blows the 192KB Spotify ceiling (loud)", async () => {
-    // 1024² full-spectrum noise stays far above 192KB even at quality 60.
     const rasterize = vi.fn(async () => noiseRaster(1024));
 
     const result = await renderFrontierCoverJpeg({ crewNumber: 1, rasterize });

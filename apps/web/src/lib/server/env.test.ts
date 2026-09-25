@@ -2,12 +2,6 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { adminRole, constantTimeEqual } from "./env";
 
-// constantTimeEqual guards the admin Bearer comparison (adminRole, line ~190/196)
-// and the OAuth-state signature check (verifySignedState, line ~299). Node's
-// crypto.timingSafeEqual THROWS when the two buffers differ in length — a classic
-// footgun that would turn an intended 401 into an unhandled 500. The wrapper's
-// length guard must make every length-mismatch a clean `false`, never a throw and
-// never a bypass.
 describe("constantTimeEqual — length-mismatch safety", () => {
   const expected = "the-real-operator-token";
 
@@ -47,21 +41,11 @@ describe("constantTimeEqual — length-mismatch safety", () => {
   });
 
   it("handles multibyte tokens whose char-length matches but byte-length differs", () => {
-    // "é" is 2 bytes in UTF-8; "ee" is 2 bytes. A naive String.length guard would
-    // see equal lengths and hand mismatched-byte-length buffers to timingSafeEqual
-    // (a throw). The byte-buffer guard keeps it a clean false.
     expect(() => constantTimeEqual("é", "ee")).not.toThrow();
     expect(constantTimeEqual("é", "ee")).toBe(false);
   });
 });
 
-// adminRole is the ONE gate every /api/admin/* route reads (requireAdmin and
-// requireOperator both call it). It reads the two Bearer carriers out of the env, and an
-// UNPROVISIONED deployment must still answer unauthorized — not throw. A Bearer request against a
-// Worker with no FLUNCLE_API_TOKEN (a preview branch, a half-configured deploy) must not raise
-// `Missing FLUNCLE_API_TOKEN` out of the auth check as an unhandled 500: that would be an
-// availability bug that also named the missing secret. Pin the graceful shape: an absent
-// secret means that carrier simply cannot authenticate, and the request falls through.
 describe("adminRole — an unprovisioned deployment answers unauthorized, never throws", () => {
   const guarded = ["ADMIN_SESSION_SECRET", "FLUNCLE_AGENT_TOKEN", "FLUNCLE_API_TOKEN"] as const;
   const saved = new Map<string, string | undefined>();

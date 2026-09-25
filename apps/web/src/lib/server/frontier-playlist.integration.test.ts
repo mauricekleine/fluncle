@@ -4,25 +4,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createIntegrationDb, rowCount, seedUser } from "./integration-db";
 import { type PublicUser } from "./public-auth";
 
-// FLUNCLE'S FRONTIER — the per-user machinery, PROVEN against the REAL generated schema
-// (the editions integration discipline). This covers the draft-then-checkpoint model
-// (the shelf-from-editions RFC is pruned; see git history):
-//
-//   - D1 DECOUPLE: the edition (the internal cache, the shelf's source of truth) is written
-//     ALWAYS; the Spotify mirror is the only thing the kill switch gates.
-//   - D2 TRIGGERS: "Get playlist" births edition #1 even with minting dark (status
-//     `edition_only`); the weekly sweep writes the next edition for every user WITH an
-//     edition regardless of the switch, and SKIPS a draft-phase (zero-edition) user; the
-//     identical-desired-list hash-skip survives (no new edition, no Spotify write).
-//
-// The engine (`listRecommendations`) and Spotify are MOCKED so the test controls the desired
-// list and pins BEHAVIOUR, not the vendor; the DATABASE is real, so the edition idempotence,
-// the freeze/read of similarity + seeds meta, and the sweep's edition-scoped walk run through
-// real SQL on a real libSQL engine built from the generated migrations.
-
 let db: Client;
 
-/** A rec row rich enough to freeze — desiredUrisFor reads the whole thing. */
 type RecRow = {
   artists: string[];
   bpm?: number;
@@ -79,7 +62,6 @@ vi.mock("./spotify", () => ({
       return Promise.reject(new Error("spotify down"));
     }
 
-    // The create — `POST /me/playlists` (the Feb-2026 migration endpoint).
     if (path === "/me/playlists") {
       return Promise.resolve(new Response(JSON.stringify({ id: "pl-new" })));
     }
@@ -88,7 +70,6 @@ vi.mock("./spotify", () => ({
   }),
 }));
 
-/** A recommended FINDING row — realistic defaults (artists is always present in prod). */
 function find(id: string, extra: Partial<RecRow> = {}): RecRow {
   return {
     artists: ["Finding Artist"],
@@ -101,7 +82,6 @@ function find(id: string, extra: Partial<RecRow> = {}): RecRow {
   };
 }
 
-/** A recommended CATALOGUE row — realistic defaults; coordinate-less. */
 function cat(id: string, extra: Partial<RecRow> = {}): RecRow {
   return {
     artists: ["Catalogue Artist"],
@@ -113,7 +93,6 @@ function cat(id: string, extra: Partial<RecRow> = {}): RecRow {
   };
 }
 
-/** Build the engine result, defaulting the seed accounting to something honest. */
 function result(parts: Partial<RecResult>): RecResult {
   const findings = parts.findings ?? [];
   const catalogue = parts.catalogue ?? [];
@@ -140,18 +119,13 @@ function uri(id: string): string {
   return `spotify:track:${id}`;
 }
 
-/** Longer than the ~6-day paced-drain due-gate — advance `now` by this so a just-processed
- * user is DUE again for the sweep (the drain otherwise rotates past a fresh stamp). */
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 
-/** Exhaust the shared Spotify budget window at `nowMs` — the meter's KV keys, pre-filled to
- * the ceiling so `isSpotifyCallBudgetAvailable(nowMs)` reads false (a spent window). */
 function exhaustSpotifyBudget(nowMs: number): void {
   settings.set("spotify_calls_window_start", new Date(nowMs).toISOString());
   settings.set("spotify_calls_window_count", "24");
 }
 
-/** The live Spotify-call count in the meter's current window (0 when the window rolled). */
 function spotifyBudgetCount(nowMs: number): number {
   const start = settings.get("spotify_calls_window_start");
   const startMs = start ? Date.parse(start) : Number.NaN;
@@ -163,7 +137,6 @@ function spotifyBudgetCount(nowMs: number): number {
   return Number(settings.get("spotify_calls_window_count") ?? "0");
 }
 
-/** Whether the user has a paced-drain cursor row (they have been processed at least once). */
 async function hasRefreshCursor(userId: string): Promise<boolean> {
   const query = await db.execute({
     args: [userId],
@@ -173,7 +146,6 @@ async function hasRefreshCursor(userId: string): Promise<boolean> {
   return query.rows.length > 0;
 }
 
-/** How many editions a user has (the edition ledger, read directly). */
 async function editionCount(userId: string): Promise<number> {
   const query = await db.execute({
     args: [userId],
@@ -183,7 +155,6 @@ async function editionCount(userId: string): Promise<number> {
   return Number(query.rows[0]?.n ?? 0);
 }
 
-/** Whether the user has a Spotify playlist row (the mirror's record). */
 async function hasPlaylistRow(userId: string): Promise<boolean> {
   const query = await db.execute({
     args: [userId],
@@ -236,16 +207,14 @@ describe("the kill switch (default-deny) — D1: the edition is never gated", ()
   it("a dark switch still BIRTHS edition #1 (status edition_only, NO Spotify call)", async () => {
     const { mintOrRefreshFrontierPlaylist } = await import("./frontier-playlist");
 
-    // Minting unset ⇒ default-deny closed.
     recs = result({ findings: [find("f1")] });
 
     const synced = await mintOrRefreshFrontierPlaylist(makeUser({ id: "u1" }));
 
-    // The user's explicit act checkpoints an edition — no longer a silent no-op.
     expect(synced).toEqual({ ok: true, status: "edition_only" });
     expect(spotifyCalls).toEqual([]);
     expect(await editionCount("u1")).toBe(1);
-    // No Spotify playlist row: the mirror was skipped, only the internal cache landed.
+
     expect(await hasPlaylistRow("u1")).toBe(false);
   });
 
@@ -254,9 +223,8 @@ describe("the kill switch (default-deny) — D1: the edition is never gated", ()
 
     recs = result({ findings: [find("f1")] });
 
-    // Birth #1.
     await mintOrRefreshFrontierPlaylist(makeUser({ id: "u1" }));
-    // Same list again — the internal hash-skip fires.
+
     const second = await mintOrRefreshFrontierPlaylist(makeUser({ id: "u1" }));
 
     expect(second).toEqual({ ok: true, status: "unchanged" });
@@ -284,7 +252,6 @@ describe("mint (minting open) — create-once + the URI order", () => {
   it("creates a PUBLIC playlist once, findings first then catalogue, de-duped, and is idempotent", async () => {
     const { mintOrRefreshFrontierPlaylist } = await import("./frontier-playlist");
 
-    // `dup` appears in BOTH registers → must be de-duped, keeping the findings slot.
     recs = result({
       catalogue: [cat("cat1"), cat("dup")],
       findings: [find("find1"), find("dup")],
@@ -308,7 +275,6 @@ describe("mint (minting open) — create-once + the URI order", () => {
       uri("cat1"),
     ]);
 
-    // A second mint with the SAME recs is a no-op — one create total, no new edition.
     spotifyCalls.length = 0;
     const second = await mintOrRefreshFrontierPlaylist(makeUser({ id: "u1", username: "alice" }));
 
@@ -336,7 +302,7 @@ describe("refresh (the mirror guard, minting open)", () => {
     const { mintOrRefreshFrontierPlaylist } = await import("./frontier-playlist");
 
     recs = result({ catalogue: [cat("cat1")], findings: [find("find1")] });
-    // Mint first, then re-run with the identical list.
+
     await mintOrRefreshFrontierPlaylist(makeUser({ id: "u1", username: "bob" }));
     spotifyCalls.length = 0;
 
@@ -376,8 +342,7 @@ describe("refresh (the mirror guard, minting open)", () => {
     const synced = await mintOrRefreshFrontierPlaylist(makeUser({ id: "u1" }));
 
     expect(synced).toMatchObject({ ok: false });
-    // The edition (the shelf's source of truth) is persisted BEFORE the mirror is attempted, so a
-    // Spotify hiccup never costs the shelf its data. No playlist row, though.
+
     expect(await editionCount("u1")).toBe(1);
     expect(await hasPlaylistRow("u1")).toBe(false);
   });
@@ -402,7 +367,7 @@ describe("the edition freeze — similarity + seeds meta (D4)", () => {
     const edition = await getFrontierEdition("u1", 1);
     expect(edition?.summary.seedsUsed).toBe(2);
     expect(edition?.summary.seedsSkipped).toEqual(["seed-x"]);
-    // Position order: the finding slot first, then catalogue.
+
     expect(edition?.tracks[0]?.similarity).toBeCloseTo(0.94, 4);
     expect(edition?.tracks[1]?.similarity).toBeCloseTo(0.77, 4);
   });
@@ -426,7 +391,7 @@ describe("the rolling daily mint cap", () => {
 
     expect(synced).toEqual({ ok: false, reason: "mint_cap_reached" });
     expect(spotifyCalls.some((call) => call.path === "/me/playlists")).toBe(false);
-    // The edition still landed — the cap gates only the EXTERNAL mirror, never the cache.
+
     expect(await editionCount("new-user")).toBe(1);
   });
 });
@@ -441,26 +406,18 @@ describe("refreshAllFrontierPlaylists (the weekly sweep) — D2", () => {
 
     const now = Date.parse("2026-07-01T00:00:00.000Z");
 
-    // u-has commits an edition (dark). u-draft never does — pure draft phase.
     recs = result({ findings: [find("f1")] });
     await mintOrRefreshFrontierPlaylist(makeUser({ id: "u-has" }), now);
 
-    // A new desired list, so the walked user writes a fresh edition. The drain gates on the
-    // ~6-day cursor, so it only re-processes u-has a week on.
     recs = result({ findings: [find("f2")] });
     const swept = await refreshAllFrontierPlaylists(5, now + WEEK_MS);
 
-    // Only the user with an edition is walked; the draft user is invisible to the sweep.
     expect(swept.total).toBe(1);
     expect(await editionCount("u-has")).toBe(2);
     expect(await editionCount("u-draft")).toBe(0);
   });
 
   it("sweeps a PRE-LEDGER minter — a playlist row + zero editions gains edition #1", async () => {
-    // The exact prod shape: the operator minted before editions existed, so there is a
-    // user_frontier_playlists row but no frontier_editions row. Walking by editions ALONE
-    // would drop him from the weekly refresh forever; the union over playlist rows catches
-    // him and the sweep writes his edition #1.
     const { refreshAllFrontierPlaylists } = await import("./frontier-playlist");
 
     await seedUser(db, { email: "op@fluncle.com", id: "u-preledger" });
@@ -470,7 +427,6 @@ describe("refreshAllFrontierPlaylists (the weekly sweep) — D2", () => {
     recs = result({ findings: [find("f1")] });
     const swept = await refreshAllFrontierPlaylists(500);
 
-    // Minting is dark, so the edition is written (internal cache) and Spotify is skipped.
     expect(swept).toMatchObject({ editionOnly: 1, ok: true, switchOff: true, total: 1 });
     expect(await editionCount("u-preledger")).toBe(1);
     expect(spotifyCalls).toEqual([]);
@@ -486,8 +442,6 @@ describe("refreshAllFrontierPlaylists (the weekly sweep) — D2", () => {
     await mintOrRefreshFrontierPlaylist(makeUser({ id: "u1" }), now);
     spotifyCalls.length = 0;
 
-    // A changed list → the sweep writes edition #2, mirror skipped (dark). A week on, so the
-    // ~6-day cursor gate lets the drain re-process u1.
     recs = result({ findings: [find("f2")] });
     const swept = await refreshAllFrontierPlaylists(5, now + WEEK_MS);
 
@@ -505,7 +459,6 @@ describe("refreshAllFrontierPlaylists (the weekly sweep) — D2", () => {
     recs = result({ findings: [find("f1")] });
     await mintOrRefreshFrontierPlaylist(makeUser({ id: "u1" }), now);
 
-    // The SAME list a week on — the sweep's per-user hash-skip fires.
     const swept = await refreshAllFrontierPlaylists(5, now + WEEK_MS);
 
     expect(swept).toMatchObject({ editionOnly: 0, total: 1, unchanged: 1 });
@@ -544,9 +497,9 @@ describe("the shared Spotify budget — the mint defers instead of 429-ing (Slic
 
     expect(synced).toMatchObject({ status: "minted" });
     expect(await hasPlaylistRow("u1")).toBe(true);
-    // Two Spotify writes fired (the create POST + the items PUT) — both recorded in the meter.
+
     expect(spotifyBudgetCount(now)).toBe(2);
-    // A settled outcome stamps the paced-drain cursor, so the sweep rotates past this user.
+
     expect(await hasRefreshCursor("u1")).toBe(true);
   });
 
@@ -559,14 +512,13 @@ describe("the shared Spotify budget — the mint defers instead of 429-ing (Slic
 
     const synced = await mintOrRefreshFrontierPlaylist(makeUser({ id: "u1" }), now);
 
-    // A distinct SUCCESS state, never a fault — the user never sees a 429.
     expect(synced).toEqual({ ok: true, status: "building" });
-    // The edition (the shelf's source of truth) is still persisted synchronously.
+
     expect(await editionCount("u1")).toBe(1);
-    // No Spotify write fired on the hot path, and no playlist row was created.
+
     expect(spotifyCalls.some((call) => call.path === "/me/playlists")).toBe(false);
     expect(await hasPlaylistRow("u1")).toBe(false);
-    // A deferred mint leaves the cursor UNSET so the user stays DUE for the paced drain.
+
     expect(await hasRefreshCursor("u1")).toBe(false);
   });
 
@@ -579,13 +531,10 @@ describe("the shared Spotify budget — the mint defers instead of 429-ing (Slic
     exhaustSpotifyBudget(now);
     recs = result({ findings: [find("f1")] });
 
-    // Hot budget → deferred (building), edition written, no playlist yet.
     const deferred = await mintOrRefreshFrontierPlaylist(makeUser({ id: "u1" }), now);
     expect(deferred).toMatchObject({ status: "building" });
     expect(await hasPlaylistRow("u1")).toBe(false);
 
-    // A later tick with a fresh budget window (rolled past the 30s window) — the drain finds
-    // the pending mint (no cursor ⇒ DUE) and completes the create.
     const swept = await refreshAllFrontierPlaylists(5, now + 60_000);
 
     expect(swept).toMatchObject({ budgetPaused: false, minted: 1, ok: true, total: 1 });
@@ -603,8 +552,6 @@ describe("the shared Spotify budget — the mint defers instead of 429-ing (Slic
 
     const synced = await mintOrRefreshFrontierPlaylist(makeUser({ id: "u1" }), now);
 
-    // Dark minting returns edition_only (never building) — the budget gate sits BELOW the
-    // kill-switch gate, so a closed switch is still the honest dark outcome.
     expect(synced).toEqual({ ok: true, status: "edition_only" });
     expect(spotifyCalls).toEqual([]);
   });
@@ -614,12 +561,10 @@ describe("the shared Spotify budget — the mint defers instead of 429-ing (Slic
 
     const now = Date.parse("2026-07-01T00:00:00.000Z");
     recs = result({ findings: [find("f1")] });
-    // Mint first (fresh budget) so the mirror hash is stored.
+
     await mintOrRefreshFrontierPlaylist(makeUser({ id: "u1" }), now);
     spotifyCalls.length = 0;
 
-    // Now spend the budget and re-run the SAME list — the mirror guard returns before the
-    // budget gate, so an unchanged week never needlessly defers.
     exhaustSpotifyBudget(now);
     const synced = await mintOrRefreshFrontierPlaylist(makeUser({ id: "u1" }), now);
 
@@ -636,7 +581,7 @@ describe("the paced drain — batches, stamps, resumes, pending-mints first (Sli
       await import("./frontier-playlist");
 
     const t0 = Date.parse("2026-07-01T00:00:00.000Z");
-    // Three users, each minted at t0 (cursor stamped at t0) → all DUE a week on.
+
     for (const id of ["u1", "u2", "u3"]) {
       await seedUser(db, { email: `${id}@fluncle.com`, id });
       recs = result({ findings: [find(`${id}-a`)] });
@@ -644,18 +589,15 @@ describe("the paced drain — batches, stamps, resumes, pending-mints first (Sli
     }
 
     const later = t0 + WEEK_MS;
-    // A changed list forces a real refresh for each.
+
     recs = result({ findings: [find("shared-b")] });
 
-    // Batch of 2 → two refreshed, one still due.
     const first = await refreshAllFrontierPlaylists(2, later);
     expect(first).toMatchObject({ refreshed: 2, total: 2 });
 
-    // The next tick picks up exactly the remaining one (the first two are stamped `later`).
     const second = await refreshAllFrontierPlaylists(2, later);
     expect(second).toMatchObject({ refreshed: 1, total: 1 });
 
-    // A third tick finds nothing due — every user is now stamped `later`.
     const third = await refreshAllFrontierPlaylists(2, later);
     expect(third).toMatchObject({ refreshed: 0, total: 0 });
   });
@@ -675,13 +617,11 @@ describe("the paced drain — batches, stamps, resumes, pending-mints first (Sli
     recs = result({ findings: [find("shared-b")] });
     spotifyCalls.length = 0;
 
-    // Budget already spent at `later` → the pass stops before any user, processing none.
     exhaustSpotifyBudget(later);
     const paused = await refreshAllFrontierPlaylists(5, later);
     expect(paused).toMatchObject({ budgetPaused: true, refreshed: 0, total: 2 });
     expect(spotifyCalls).toEqual([]);
 
-    // A later tick with a fresh window drains both — the durable cursors resumed the work.
     const resumed = await refreshAllFrontierPlaylists(5, later + 60_000);
     expect(resumed).toMatchObject({ budgetPaused: false, refreshed: 2, total: 2 });
   });
@@ -692,27 +632,21 @@ describe("the paced drain — batches, stamps, resumes, pending-mints first (Sli
 
     const t0 = Date.parse("2026-07-01T00:00:00.000Z");
 
-    // A: minted at t0 (has a playlist row + a cursor) → a DUE refresher a week on.
     await seedUser(db, { email: "a@fluncle.com", id: "u-refresh" });
     recs = result({ findings: [find("a-1")] });
     await mintOrRefreshFrontierPlaylist(makeUser({ id: "u-refresh" }), t0);
 
-    // B: a pending mint — deferred under a spent budget, so it has an edition but NO playlist
-    // row and NO cursor.
     await seedUser(db, { email: "b@fluncle.com", id: "u-pending" });
     exhaustSpotifyBudget(t0);
     recs = result({ findings: [find("b-1")] });
     const deferred = await mintOrRefreshFrontierPlaylist(makeUser({ id: "u-pending" }), t0);
     expect(deferred).toMatchObject({ status: "building" });
 
-    // A batch of ONE, a week on with a fresh budget: the pending mint (B) must be picked first.
     recs = result({ findings: [find("shared-b")] });
     const swept = await refreshAllFrontierPlaylists(1, t0 + WEEK_MS);
 
     expect(swept).toMatchObject({ minted: 1, total: 1 });
-    // B got its first playlist. A was NOT reached this tick — had it been refreshed with the
-    // changed list it would have written a second edition, so its edition count proves it stayed
-    // put (its own mint wrote #1 only).
+
     expect(await hasPlaylistRow("u-pending")).toBe(true);
     expect(await editionCount("u-refresh")).toBe(1);
   });
@@ -722,19 +656,16 @@ describe("edition_only user opens minting — the mirror catches up without a ne
   it("creates the Spotify playlist from an UNCHANGED latest edition (status minted, no new edition)", async () => {
     const { mintOrRefreshFrontierPlaylist } = await import("./frontier-playlist");
 
-    // Dark: births edition #1, no playlist.
     recs = result({ findings: [find("f1")] });
     await mintOrRefreshFrontierPlaylist(makeUser({ id: "u1" }));
     expect(await hasPlaylistRow("u1")).toBe(false);
 
-    // Operator opens minting; the SAME desired list. The edition is unchanged, but the
-    // mirror must still create the Spotify playlist.
     settings.set("frontier.minting", "true");
     const synced = await mintOrRefreshFrontierPlaylist(makeUser({ id: "u1" }));
 
     expect(synced).toMatchObject({ status: "minted" });
     expect(await hasPlaylistRow("u1")).toBe(true);
-    // No new edition was written — the mirror caught up to the existing one.
+
     expect(await editionCount("u1")).toBe(1);
   });
 });

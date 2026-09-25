@@ -42,7 +42,7 @@ The tick computes, for reporting only, each galaxy's **mean cosine silhouette** 
 
 - Each new galaxy is born with a permanent **machine handle** minted server-side inside `update_galaxy_map` (`galaxySlug(id, attempt)`, collision-salted). The handle is the admin/CLI identity — **it never renders publicly**, and the machine never proposes a name.
 - The operator names a galaxy in `/admin/galaxies` (`update_galaxy`, OPERATOR tier — an agent token 403s), which mints its public URL. Naming is an editorial act after listening; a re-run may move findings but **never renames a galaxy** (the minted-once law).
-- An unnamed or retired galaxy is invisible on every public surface and queued in admin.
+- The public map opens only when every non-retired galaxy has both a name and slug. One unnamed active galaxy keeps the entire map dark across public routes, API reads, and discovery surfaces; machine handles never substitute for names. Unnamed and retired rows remain available in admin.
 
 ## The commands (what the sweep drives; all admin-tier)
 

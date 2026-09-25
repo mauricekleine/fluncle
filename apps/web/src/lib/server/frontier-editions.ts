@@ -1,57 +1,34 @@
-// FRONTIER EDITIONS — the read store + the reusable INSERT builder for a user's
-// frozen weekly-refresh snapshots (the frontier-editions RFC is pruned; see git history).
-//
-// ONE LEDGER, READ TWO WAYS. Each real Frontier refresh writes one `frontier_editions`
-// parent row + its `frontier_edition_tracks` children (the de-duped PUT order the
-// playlist actually sent). That snapshot is both (a) the NOVELTY ledger the engine
-// re-derives its exclusion set from (recommendations.ts `excludeRecent`) and (b) the
-// HISTORY the "past editions" dropdown/dialog reads for track recovery (Unit B consumes
-// the two read functions below).
-//
-// DELIBERATELY SEPARATE from `frontier-playlist.ts`: Unit A2 edits that file next (it
-// folds `frontierEditionInsertStatements` into its `db.batch([...], "write")`), so the
-// store lives here to avoid a merge collision. This module NEVER wires itself into the
-// mint/refresh flow — it only provides the reusable builder and the reads.
-
 import { type InValue } from "@libsql/client/web";
 import { parseArtistsJson } from "./artists";
 import { getDb, typedRow, typedRows } from "./db";
 
-/** One statement in a `db.batch(...)` — the frozen-snapshot inserts A2 folds into its write. */
 type SqlStatement = {
   args: InValue[];
   sql: string;
 };
 
-/** A frozen edition's summary — one dropdown row and the last-N novelty window's unit. */
 export type FrontierEditionSummary = {
-  /** Per-user monotonic edition number (the ONE name — column, DTO, path param). */
   number: number;
-  /** The edition's `created_at` — when this refresh froze (the date label derives from it). */
+
   refreshedAt: string;
-  /**
-   * Seeds whose track had no embedding when this edition froze — named honestly so the
-   * shelf can say "these two picks aren't steering yet". `undefined` on a pre-migration
-   * edition that cannot back it (the Readout Rule's honest absence).
-   */
+
   seedsSkipped?: string[];
-  /** How many seed vectors actually steered this edition. `undefined` pre-migration. */
+
   seedsUsed?: number;
-  /** How many tracks the frozen playlist carried. */
+
   trackCount: number;
 };
 
-/** One frozen track in an edition — everything the dialog renders without a JOIN. */
 export type FrontierEditionTrack = {
   artists: string[];
   bpm?: number;
   durationMs?: number;
-  /** The frozen cover URL (already a resolved display URL when the snapshot was written). */
+
   imageUrl?: string;
   key?: string;
-  /** Present only for a certified-finding slot; a catalogue row stays coordinate-less. */
+
   logId?: string;
-  /** The frozen max-similarity the engine gave this row. `undefined` pre-migration. */
+
   similarity?: number;
   slot: "catalogue" | "finding";
   spotifyUrl?: string;
@@ -59,7 +36,6 @@ export type FrontierEditionTrack = {
   trackId: string;
 };
 
-/** The frozen shape one edition row carries — what A2 hands the insert builder per track. */
 export type FrontierEditionTrackInput = {
   artists: string[];
   bpm?: number;
@@ -67,9 +43,9 @@ export type FrontierEditionTrackInput = {
   imageUrl?: string;
   key?: string;
   logId?: string;
-  /** 1-based, the de-duped PUT order. */
+
   position: number;
-  /** The engine's honest max-similarity for the row; omitted freezes as NULL. */
+
   similarity?: number;
   slot: "catalogue" | "finding";
   spotifyUri?: string;
@@ -108,11 +84,6 @@ type TrackRow = {
   track_id: string;
 };
 
-/**
- * Parse a frozen `seeds_skipped_json` cell back to a string array. A pre-migration edition
- * stores NULL (→ undefined, the honest absence); a corrupt cell degrades to undefined
- * rather than throwing on a read.
- */
 function parseSeedsSkipped(value: null | string): string[] | undefined {
   if (value === null) {
     return undefined;
@@ -127,11 +98,6 @@ function parseSeedsSkipped(value: null | string): string[] | undefined {
   }
 }
 
-/**
- * A user's frontier editions, NEWEST FIRST (`number desc`) — the dropdown's list and
- * the history read. Scoped to the user; the `trackCount` is a grouped count over the
- * child rows so the summary needs no second read.
- */
 export async function getFrontierEditions(userId: string): Promise<FrontierEditionSummary[]> {
   const result = await (
     await getDb()
@@ -153,11 +119,6 @@ export async function getFrontierEditions(userId: string): Promise<FrontierEditi
   }));
 }
 
-/**
- * One frontier edition + its frozen tracklist, scoped by user_id (NEVER trust the number
- * alone — the number is per-user, so the user_id predicate is what makes it that user's
- * edition). Returns undefined when the user has no edition with that number.
- */
 export async function getFrontierEdition(
   userId: string,
   number: number,
@@ -212,26 +173,6 @@ export async function getFrontierEdition(
   };
 }
 
-/**
- * Build the parent + child INSERT statements for one frozen edition, for A2 to FOLD into
- * its `db.batch([...], "write")` alongside the playlist write (so the edition and the
- * `last_uri_hash` update commit as one atomic unit). This module does NOT execute them —
- * it only assembles the reusable statements.
- *
- * The edition NUMBER is derived INLINE with `coalesce(max(number),0)+1` scoped to the
- * user, so it is monotonic-by-construction inside the batch's transaction (a genuine
- * first mint has `max` = null → 1). `artists_text` is stored as a JSON array (the
- * `getFrontierEdition` read parses it back with `parseArtistsJson`), matching the
- * `mixtape_tracks.artists_text` column type + naming.
- *
- * @param editionId a caller-generated `randomUUID()`, used as the parent id AND the
- *   children's `edition_id` (there is no monotonic id to read back mid-batch).
- *
- * `seedsUsed`/`seedsSkipped` FREEZE the engine's seed accounting onto the parent (both
- * optional — a novelty-only test fixture that does not care about the honesty strings
- * omits them and they store NULL, exactly like a pre-migration row). `similarity` freezes
- * per-row; omitted → NULL.
- */
 export function frontierEditionInsertStatements(params: {
   createdAt: string;
   editionId: string;

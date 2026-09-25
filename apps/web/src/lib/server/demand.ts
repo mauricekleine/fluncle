@@ -1,35 +1,3 @@
-// THE DEMAND SIGNAL — demand-driven crawl/capture priority (docs/catalogue-crawler.md § Demand).
-//
-// The catalogue crawler and The Ear decide WHAT the archive knows and, within the operator's
-// rulings, the order it is captured in. But the order is a machine's guess about taste; it has
-// no idea which of those thousands of catalogue rows a real human actually came looking for.
-// This module closes that gap with the one signal the site already collects: Simple Analytics
-// pageviews. A nightly tick reads which `/artist/<slug>` and `/label/<slug>` pages people
-// looked at over the trailing window and REORDERS the crawl frontier and the capture queue
-// toward those entities' tracks.
-//
-// ── THE RATIFIED CONSTRAINTS (do not deviate) ────────────────────────────────────────────────
-//   · RANK-ORDER ONLY, never magnitude, never an override. Demand reorders WITHIN an existing
-//     tier; it never lifts a row across the `capture_priority` ladder, and the
-//     `capture_priority >= 0` veto (a ruled-out label, a duplicate) still wins — a demanded row
-//     on a disabled label is never resurrected. The seed-allowlist crawl gate is untouched: a
-//     demanded label that is not a seed has no pending frontier nodes, so bumping it does nothing.
-//   · TWO DEDICATED COLUMNS the derived sweeps never touch — `tracks.demand_score` (the capture
-//     queue's SECONDARY sort, after `capture_priority`) and `crawl_frontier.demand_rank` (the
-//     frontier pick's within-hop tiebreak). `rank_catalogue` overwrites `capture_priority` every
-//     tick and the crawl orders purely by `(state, hop, …)`; demand lives beside both so neither
-//     clobbers it.
-//   · A BOUNDED, IDEMPOTENT, DETERMINISTIC REWRITE. Each run CLEARS every previous score/rank,
-//     then re-sets from the fresh SA read. Re-running with the same analytics produces the same
-//     columns; the window sliding is the only thing that moves them.
-//
-// ── THE SHAPE (the reach / funnel-snapshot precedent) ────────────────────────────────────────
-// The WORKER holds the SA key and does the fetch; the box cron is a bare nightly trigger (no new
-// box secret). Unprovisioned (no `SIMPLE_ANALYTICS_API_KEY`), the op is a CLEAN NO-OP — it writes
-// nothing at all, so a transient missing key never wipes the demand columns. It certifies nothing
-// and writes only two derived reorder columns on `tracks`/`crawl_frontier`, so it is AGENT tier
-// (the `rank_catalogue` / `record_platform_stats` precedent).
-
 import { type FetchImpl, readOptionalEnv } from "./env";
 import { getDb, typedRows } from "./db";
 import {
@@ -38,19 +6,14 @@ import {
 } from "./due-work";
 import { markCrawlProjectionRepairsFromSelectStatement } from "./crawl-due-work";
 
-/** How far back the demand window looks. Sustained interest, not a single spike. */
 export const DEMAND_WINDOW_DAYS = 30;
 
-/** The SA page cap. Demand is the HEAD of the distribution; the long tail contributes nothing. */
 export const DEMAND_PAGE_LIMIT = 1000;
 
-/** The registered Simple Analytics hostname is the APEX (www 404s "View not found"). */
 const SA_HOSTNAME = "fluncle.com";
 
-/** A few seconds is plenty for one stats read; a slow SA must not hang the nightly tick. */
 const SA_TIMEOUT_MS = 20_000;
 
-/** One `pages` row from the SA `version=5&fields=pages` response. */
 type SimpleAnalyticsPage = {
   pageviews?: number;
   value?: string;
@@ -59,19 +22,12 @@ type SimpleAnalyticsPage = {
 
 type SimpleAnalyticsResponse = { pages?: SimpleAnalyticsPage[] };
 
-/** One `referrers` row from the SA `version=5&fields=referrers` response — a referring host
- *  (`value`, e.g. `t.co`, `www.tiktok.com`) with its trailing-window pageviews/visitors. */
 type SimpleAnalyticsReferrer = {
   pageviews?: number;
   value?: string;
   visitors?: number;
 };
 
-/** The social platforms whose referral host we count as a social→site arrival. Keyed by a stable
- *  slug (the platform the visitor came FROM); each value is the substrings that mark that host in
- *  SA's `referrers[].value` (a hostname or short-link domain). Matched by substring so `t.co`,
- *  `www.tiktok.com`, and `l.instagram.com` all resolve. Kept small + explicit — an unknown referrer
- *  is simply not a social arrival, never a wrong one (the demand-read discipline). */
 const SOCIAL_REFERRER_HOSTS: Record<string, string[]> = {
   bluesky: ["bsky.app", "bsky.social"],
   facebook: ["facebook.com", "fb.com", "fb.me"],
@@ -82,61 +38,48 @@ const SOCIAL_REFERRER_HOSTS: Record<string, string[]> = {
   youtube: ["youtube.com", "youtu.be"],
 };
 
-/** One social platform's arrivals to the site over the window (pageviews from its referral host). */
 export type SocialReferralArrival = { pageviews: number; platform: string };
 
-/** The `readSocialReferrers` outcome — the site-side half of the reach picture (who clicked THROUGH
- *  from a social post to the site), the counterpart to the post-side Postiz per-post metrics. */
 export type SocialReferralsResult = {
-  /** Per-platform arrivals, highest-first; only platforms with a non-zero count are present. */
   arrivals: SocialReferralArrival[];
-  /** True when the SA key is set and the read ran; false = a clean no-op (unprovisioned). */
+
   configured: boolean;
-  /** Total social→site arrivals across every known social host this window. */
+
   total: number;
-  /** The trailing window queried, inclusive `YYYY-MM-DD` bounds. */
+
   window: { end: string; start: string };
 };
 
-/** The op's honest per-run summary — what the CLI prints and the /status marker carries. */
 export type RecordDemandSummary = {
-  /** True when `SIMPLE_ANALYTICS_API_KEY` is set and the fetch ran; false = a clean no-op. */
   configured: boolean;
-  /** Distinct demanded ARTISTS resolved to an `artists` row this run. */
+
   demandedArtists: number;
-  /** Distinct demanded LABELS resolved to a `labels` row this run. */
+
   demandedLabels: number;
-  /** Pending frontier nodes promoted to `demand_rank = 0` (a demanded entity's crawl subtree). */
+
   frontierPromoted: number;
-  /** SA `pages` rows read (before the artist/label path filter). */
+
   pagesRead: number;
-  /** The trailing window queried, inclusive `YYYY-MM-DD` bounds. */
+
   window: { end: string; start: string };
-  /** Total pageviews across the demanded (resolved) entities — the reorder's fuel, for observability. */
+
   totalPageviews: number;
-  /** Catalogue/finding tracks that received a `demand_score` this run (distinct). */
+
   tracksScored: number;
-  /** Artist/label slugs seen in analytics that resolve to no entity — skipped silently. */
+
   unknownSlugs: number;
 };
 
 export type RecordDemandOptions = {
-  /** Injected for tests; defaults to the global `fetch`. */
   fetchImpl?: FetchImpl;
-  /** Injected for tests; defaults to `new Date()` — anchors the trailing window. */
+
   now?: Date;
 };
 
-/** `YYYY-MM-DD` in UTC — the date format the SA `start`/`end` params take. */
 function isoDate(date: Date): string {
   return date.toISOString().slice(0, 10);
 }
 
-/**
- * Pull the `<kind>`/`<slug>` out of a path IFF it is exactly `/artist/<slug>` or `/label/<slug>`.
- * Everything else — `/admin*`, `/log/*`, a nested `/artist/<slug>/…`, the homepage — returns
- * undefined and is dropped. Query string and hash are stripped first; the slug is URL-decoded.
- */
 export function extractEntityPath(
   rawValue: string,
 ): { kind: "artist" | "label"; slug: string } | undefined {
@@ -159,7 +102,6 @@ export function extractEntityPath(
   return slug ? { kind, slug } : undefined;
 }
 
-/** Sum SA pageviews per slug for each entity kind (a slug can recur across paginated rows). */
 export function summarizeDemand(pages: SimpleAnalyticsPage[]): {
   artists: Map<string, number>;
   labels: Map<string, number>;
@@ -188,7 +130,6 @@ export function summarizeDemand(pages: SimpleAnalyticsPage[]): {
   return { artists, labels };
 }
 
-/** The SA read leg — the Worker's own fetch (the box never holds the key). */
 async function fetchDemandPages(
   key: string,
   window: { end: string; start: string },
@@ -214,20 +155,10 @@ async function fetchDemandPages(
   return Array.isArray(body.pages) ? body.pages : [];
 }
 
-/** `IN (?, ?, …)` placeholders for a bound list. */
 function placeholders(count: number): string {
   return Array.from({ length: count }, () => "?").join(", ");
 }
 
-/**
- * One demand tick: read Simple Analytics, resolve the looked-at artist/label slugs to entities,
- * and REWRITE `tracks.demand_score` + `crawl_frontier.demand_rank` in one atomic pass. Clears
- * every prior value first, so the write is idempotent and a de-trending entity falls back to
- * baseline. Returns the run's honest summary.
- *
- * Unprovisioned (no key) it is a clean no-op — it does NOT clear the columns, because a missing
- * key is a config gap, not a signal that demand vanished.
- */
 export async function recordDemand(
   options: RecordDemandOptions = {},
 ): Promise<RecordDemandSummary> {
@@ -258,9 +189,6 @@ export async function recordDemand(
 
   const db = await getDb();
 
-  // Resolve the looked-at slugs to real entities — one indexed read per kind (the `slug` unique
-  // indexes carry it). An unknown slug (a deleted entity, a stale bookmark) simply isn't returned
-  // and is skipped silently.
   const artistDemandById = new Map<string, { mbid: null | string; pageviews: number }>();
   const labelDemandBySlugResolved = new Map<string, number>();
   const demandedArtistMbids: string[] = [];
@@ -303,13 +231,6 @@ export async function recordDemand(
     }
   }
 
-  // ── THE REWRITE, in one transaction ──────────────────────────────────────────────────────
-  // 1. Clear every prior demand value (both columns) so the write is a full, idempotent reset.
-  // 2. Additive per-entity bumps — a track on TWO demanded entities (an artist + its label)
-  //    accumulates BOTH, so `demand_score` is the summed pageviews of everything it hangs off.
-  // 3. Promote the demanded entities' PENDING frontier nodes to `demand_rank = 0` (a label's whole
-  //    seed subtree via `label_slug`; an artist node matched by MBID). `state = 'pending'` keeps
-  //    the promotion off already-expanded nodes.
   const demandedArtistIds = [...artistDemandById.keys()];
   const demandedLabelSlugs = [...labelDemandBySlugResolved.keys()];
   const writeTime = now.toISOString();
@@ -374,8 +295,7 @@ export async function recordDemand(
 
     writes.push({
       args: demandRows.flatMap(([artistId, demand]) => [artistId, demand.pageviews]),
-      // Drive the demanded artist set through its track edge index, then seek each track by key.
-      // The correlated score expression still sums every demanded artist credited on that track.
+
       sql: `with demand(artist_id, score) as
               (values ${demandRows.map(() => "(?, ?)").join(", ")})
             update tracks set demand_score = coalesce(demand_score, 0) + (
@@ -430,8 +350,7 @@ export async function recordDemand(
   if (demandedArtistMbids.length > 0) {
     writes.push({
       args: demandedArtistMbids,
-      // PK point lookup, not an `external_id` scan: the frontier id is deterministic
-      // `<source>:<kind>:<externalId>` = `musicbrainz:artist:<mbid>` (crawl.ts `frontierId`).
+
       sql: `with demand(artist_mbid) as
               (values ${demandedArtistMbids.map(() => "(?)").join(", ")})
             update crawl_frontier set demand_rank = 0
@@ -458,9 +377,6 @@ export async function recordDemand(
 
   await db.batch(writes, "write");
 
-  // ── The summary counts — bounded, index-driven, never a full-table scan ────────────────────
-  // `tracksScored` counts DISTINCT tracks the bumps touched, driven by `track_artists_artist_id_idx`
-  // + `tracks_label_id_idx` over the (small) demanded sets — not a scan of the growing `tracks`.
   let tracksScored = 0;
 
   if (demandedArtistIds.length > 0 || demandedLabelSlugs.length > 0) {
@@ -478,8 +394,6 @@ export async function recordDemand(
     tracksScored = Number(typedRows<{ n: number }>(scoredResult.rows)[0]?.n ?? 0);
   }
 
-  // `state = 'pending'` is the leading edge of `crawl_frontier_pick_idx`, so this count reads the
-  // pending head, not the whole frontier.
   const promotedResult = await db.execute({
     args: [],
     sql: `select count(*) as n from crawl_frontier where state = 'pending' and demand_rank = 0`,
@@ -505,9 +419,6 @@ export async function recordDemand(
   };
 }
 
-/** Which social platform (if any) an SA referral host belongs to — the first `SOCIAL_REFERRER_HOSTS`
- *  entry whose substrings the host contains. `undefined` for a non-social referrer (a search engine,
- *  a blog, direct). Pure. */
 export function classifySocialReferrer(rawValue: string): string | undefined {
   const host = rawValue.trim().toLowerCase();
 
@@ -524,9 +435,6 @@ export function classifySocialReferrer(rawValue: string): string | undefined {
   return undefined;
 }
 
-/** Sum SA referrer pageviews per social platform (a platform can appear under several hosts —
- *  `t.co` + `twitter.com` + `x.com` all fold into `x`). Highest-first; zero-count platforms are
- *  dropped. Pure — unit-testable with no network. */
 export function summarizeReferrers(referrers: SimpleAnalyticsReferrer[]): SocialReferralArrival[] {
   const byPlatform = new Map<string, number>();
 
@@ -553,15 +461,6 @@ export function summarizeReferrers(referrers: SimpleAnalyticsReferrer[]): Social
     .sort((a, b) => b.pageviews - a.pageviews);
 }
 
-/**
- * Read Simple Analytics REFERRERS for the trailing window and fold them into per-platform
- * social→site arrivals — the site-side half of reach (who clicked THROUGH from a social post),
- * the counterpart to the post-side Postiz per-post metrics. Same SA v5 shape + key + hostname as
- * the demand `pages` read, just `fields=referrers`. Best-effort by contract: unprovisioned (no
- * `SIMPLE_ANALYTICS_API_KEY`) it is a clean no-op (`configured: false`, empty arrivals), and it
- * never throws on a slow/failed SA read — a null arrivals block never fails the sweep that carries
- * it. Aggregate-only (SA has no per-user tracking); it stores nothing.
- */
 export async function readSocialReferrers(
   options: RecordDemandOptions = {},
 ): Promise<SocialReferralsResult> {

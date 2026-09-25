@@ -1,12 +1,3 @@
-// The DEFINITION version of every `due_work` family: track queues, vendor queues, and the finding
-// and entity queues. The crawl frontier family owns the same mechanism inside `crawl-due-work.ts`,
-// because its projector lives there; `due-work-definition-fingerprint.ts` holds the shared probe
-// harness and states why a definition version exists at all.
-//
-// `due-work-definition-version.test.ts` pins each family's value, so a definition edit fails the
-// build until the fixture is updated too — which is the point at which a reviewer sees that the
-// deploy will re-project that queue.
-
 import {
   definitionFingerprint,
   memoizedDefinitionVersion,
@@ -62,14 +53,6 @@ import {
 
 const PROBE_RANK_CORPUS = "rank-corpus-probe";
 
-/**
- * Every constant these evaluators COMPARE a source value against. The ladder straddles each one, so
- * retuning any of them moves a probe answer and therefore that family's version. A constant that is
- * ADDED to a timestamp is deliberately absent: it reaches the transcript through the `nextDueAt` it
- * computes, and what it needs instead is a base that carries the companion stamp.
- * `due-work-definition-version.test.ts` holds both halves of that contract and fails when a new
- * exported constant joins either module without being classified.
- */
 export const DUE_WORK_PROBE_THRESHOLDS: readonly number[] = [
   ANCHOR_MAX_ATTEMPTS,
   BIO_INDEX_FLOOR,
@@ -80,7 +63,6 @@ export const DUE_WORK_PROBE_THRESHOLDS: readonly number[] = [
   YOUTUBE_PROVENANCE_MAX_FAILURES,
 ];
 
-/** The shared ladder for the three `due_work` source shapes. */
 export const DUE_WORK_PROBE_LADDER = probeLadderCrossing(DUE_WORK_PROBE_THRESHOLDS);
 
 const TRACK_PROBE_COLUMNS = [
@@ -88,10 +70,6 @@ const TRACK_PROBE_COLUMNS = [
   ...DUE_WORK_TRACK_PAYLOAD_ONLY_SOURCE_COLUMNS,
 ] as const;
 
-/**
- * A catalogue row before any audio is bought: eligible for the metered capture queue and for both
- * identity queues, which is where the ordering that meters spend is decided.
- */
 const TRACK_PROBE_CATALOGUE_PRE_CAPTURE: DueWorkTrackSource = {
   analyzedAt: null,
   analyzedFrom: null,
@@ -126,7 +104,6 @@ const TRACK_PROBE_CATALOGUE_PRE_CAPTURE: DueWorkTrackSource = {
   youtubeVideoOfficial: null,
 };
 
-/** The same row once its audio is held: the analyze, embed, and provenance queues open here. */
 const TRACK_PROBE_CATALOGUE_CAPTURED: DueWorkTrackSource = {
   ...TRACK_PROBE_CATALOGUE_PRE_CAPTURE,
   captureStatus: "complete",
@@ -135,7 +112,6 @@ const TRACK_PROBE_CATALOGUE_CAPTURED: DueWorkTrackSource = {
   youtubeVideoOfficial: false,
 };
 
-/** A certified row: the findings half of every scoped queue. */
 const TRACK_PROBE_FINDING_PRE_CAPTURE: DueWorkTrackSource = {
   ...TRACK_PROBE_CATALOGUE_PRE_CAPTURE,
   certified: true,
@@ -151,12 +127,6 @@ const TRACK_PROBE_FINDING_CAPTURED: DueWorkTrackSource = {
   youtubeVideoOfficial: false,
 };
 
-/**
- * A catalogue row mid-retry. `isCaptureEligible`'s `failed` branch reads the cooldown off
- * `sourceAudioAttemptedAt`, so the companion column has to be set on a BASE — varying
- * `captureStatus` alone off a base whose attempt stamp is null reaches the branch with nothing for
- * `CAPTURE_FAILED_COOLDOWN_MS` to act on, and the constant never enters a probe answer.
- */
 const TRACK_PROBE_CATALOGUE_FAILED: DueWorkTrackSource = {
   ...TRACK_PROBE_CATALOGUE_PRE_CAPTURE,
   captureStatus: "failed",
@@ -166,7 +136,6 @@ const TRACK_PROBE_CATALOGUE_FAILED: DueWorkTrackSource = {
   spotifyAnchorAttempts: 2,
 };
 
-/** The other cooldown arm: a cleared duplicate with no audio key, same companion-column rule. */
 const TRACK_PROBE_CATALOGUE_DUPLICATE_CLEARED: DueWorkTrackSource = {
   ...TRACK_PROBE_CATALOGUE_PRE_CAPTURE,
   captureStatus: "duplicate-cleared",
@@ -176,7 +145,6 @@ const TRACK_PROBE_CATALOGUE_DUPLICATE_CLEARED: DueWorkTrackSource = {
   sourceAudioKey: null,
 };
 
-/** A captured row already carrying a provenance verdict, so its re-ask window is live. */
 const TRACK_PROBE_CATALOGUE_VERDICTED: DueWorkTrackSource = {
   ...TRACK_PROBE_CATALOGUE_CAPTURED,
   youtubeProvenanceFailures: 2,
@@ -249,12 +217,6 @@ const VENDOR_PROBE_FINDING: DueWorkVendorSource = {
   postedToTelegram: true,
 };
 
-/**
- * Every vendor leg mid-retry. `reliabilityDueAt` returns `now` while `*AttemptedAt` is null, so a
- * base with every attempt stamp unset makes `VENDOR_COOLDOWN_BASE_MS`, the `2 ** failures` ladder
- * and `VENDOR_COOLDOWN_MAX_MS` unreachable for discogs, lastfm, apple, beatport and deezer alike.
- * The failure counts straddle `DEEZER_MAX_FAILURES` and the cooldown's own `min(count, 10)` clamp.
- */
 const VENDOR_PROBE_RETRYING: DueWorkVendorSource = {
   ...VENDOR_PROBE_FINDING,
   appleMusicAttemptedAt: PROBE_BEFORE,
@@ -272,14 +234,13 @@ const VENDOR_PROBE_RETRYING: DueWorkVendorSource = {
   mbRecordingIdAttemptedAt: PROBE_BEFORE,
 };
 
-/** The catalogue half of the same retry shape, for the `*-catalogue` legs' own scope test. */
 const VENDOR_PROBE_CATALOGUE_RETRYING: DueWorkVendorSource = {
   ...VENDOR_PROBE_RETRYING,
   addedToSpotify: false,
   certified: false,
   findingAddedAt: null,
   isCatalogue: true,
-  // No ISRC, so `mbid-isrc-refresh` is live and `MBID_ISRC_REFRESH_AFTER_MS` reaches a decision.
+
   isrc: null,
   postedToTelegram: false,
 };
@@ -313,7 +274,6 @@ const ENTITY_EVALUATORS: Record<
 
 const matrices = new Map<string, unknown>();
 
-/** The probe matrix every track family shares; built once, because it is pure and large. */
 export function trackProbeMatrix(): readonly DueWorkTrackSource[] {
   return memoizedProbeMatrix(matrices, "track", () =>
     probeMatrix(
@@ -324,7 +284,6 @@ export function trackProbeMatrix(): readonly DueWorkTrackSource[] {
   ) as unknown as DueWorkTrackSource[];
 }
 
-/** The probe matrix every vendor family shares. */
 export function vendorProbeMatrix(): readonly DueWorkVendorSource[] {
   return memoizedProbeMatrix(matrices, "vendor", () =>
     probeMatrix(
@@ -343,7 +302,6 @@ function trackDefinitionVersion(workKind: DueWorkQueueKind): string {
   const probes = trackProbeMatrix();
   const transcript = probes.map((source, index) =>
     probeAnswer(() => {
-      // A physical queue owns one certification half; the other half's probes are inert for it.
       const scope = source.certified === true ? "findings" : "catalogue";
       return scope === entry.scope
         ? `${index}:${describeDueWorkTrackDecision(entry.kind, source, PROBE_NOW)}`
@@ -364,12 +322,6 @@ function vendorDefinitionVersion(workKind: DueWorkVendorKind): string {
   return definitionFingerprint(workKind, transcript);
 }
 
-/**
- * Per-kind base overrides. A generic "every column gets a string" base is ELIGIBLE FOR NOTHING —
- * `finding.render` needs `context_note` set and `video_url` null together, and the matrix moves one
- * column at a time, so neither probe alone reaches the branch. Each kind's base therefore starts
- * INSIDE its own queue, and the ladder probes it back out.
- */
 const ENTITY_PROBE_BASE_OVERRIDES: Record<DueWorkEntityKind, Record<string, unknown>> = {
   "album.bio": { bio: null, certified_finding_count: 0, renderable_track_count: 5 },
   "album.cover-master": { image_state: "pending" },
@@ -417,10 +369,6 @@ function entityDefinitionVersion(kind: DueWorkEntityKind): string {
 
 const cache = new Map<string, string>();
 
-/**
- * The running code's definition version for one `due_work` family. Computed on first use (a rebuild
- * step), then memoized for the isolate.
- */
 export function dueWorkDefinitionVersion(workKind: string): string {
   return memoizedDefinitionVersion(cache, workKind, () => {
     if (DUE_WORK_TRACK_WORK_KIND_INVENTORY.some((entry) => entry.workKind === workKind)) {

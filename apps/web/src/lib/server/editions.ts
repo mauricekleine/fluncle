@@ -28,35 +28,21 @@ type SendRow = {
   number: number;
 };
 
-// The columns every read selects — the editions table is flat (no joins, unlike
-// MIXTAPE_SELECT), so this is the plain projection.
 const EDITION_SELECT = `select
   id, number, status, subject, content_json,
   window_since, window_until, send_provider, send_external_id,
   sent_at, added_at, created_at, updated_at
   from editions`;
 
-// ── The agent-authored draft input ───────────────────────────────────────────
-
 export type EditionInput = {
   contentJson?: unknown;
-  /**
-   * PROVENANCE — the `newsletter_edition` prompt version this draft was authored under
-   * (0 = the registry's baked default, N = override N; NULL when the sweep fell back to
-   * its baked-in prompt, or when an operator wrote the draft by hand). Set on CREATE
-   * only: a later edit does not change who drafted it.
-   * See docs/agents/prompt-registry.md.
-   */
+
   promptVersion?: number | null;
   subject?: unknown;
   windowSince?: unknown;
   windowUntil?: unknown;
 };
 
-// A real edition carries at least one finding or a mixtape — never a hollow,
-// intro-only shell (the doctrine's zero-find rule). Shared by the create fail-fast
-// and the send gate. Kept structural so it accepts both the parsed DTO content and a
-// freshly-parsed JSON payload.
 type FindingShape = { galaxies?: Array<{ findings?: unknown[] }>; mixtapeRef?: unknown };
 
 function editionHasFindings(content: FindingShape): boolean {
@@ -78,22 +64,13 @@ function parseEditionContent(contentJson: string): FindingShape {
   }
 }
 
-/**
- * Create a DRAFT edition (no number yet — the archive's source of truth, persisted
- * at author time). Mirrors `createMixtape`: a `randomUUID` id, the operator/agent's
- * authored payload, status `draft`. The number is minted only on send.
- */
 export async function createEdition(input: EditionInput): Promise<EditionDTO> {
   const fields = validateEditionInput(input, { requireContent: true });
 
-  // `requireContent` guarantees a non-undefined payload; assert it for the type.
   if (fields.contentJson === undefined) {
     throw new ApiError("invalid_content", "An edition needs a content payload", 400);
   }
 
-  // Fail fast on a hollow draft: the newsletter cron authors a full edition in one
-  // shot, so a payload with no findings (the agent dropping `galaxies`) is a bug —
-  // reject it here so the cron errors immediately, not silently at the send gate.
   if (!editionHasFindings(parseEditionContent(fields.contentJson))) {
     throw new ApiError("empty_edition", "An edition needs at least one finding or a mixtape", 400);
   }
@@ -102,9 +79,6 @@ export async function createEdition(input: EditionInput): Promise<EditionDTO> {
   const id = randomUUID();
   const db = await getDb();
 
-  // The edition and its PROVENANCE land in the same insert — the prompt version that
-  // authored it, or NULL when no registry prompt did (the sweep's baked-in fallback, or
-  // an operator-written draft).
   await db.execute({
     args: [
       id,
@@ -126,7 +100,6 @@ export async function createEdition(input: EditionInput): Promise<EditionDTO> {
   return getEditionById(id, { includeDrafts: true });
 }
 
-/** Edit a draft's payload/subject/window before send. Sent editions are frozen. */
 export async function updateEdition(id: string, input: EditionInput): Promise<EditionDTO> {
   const current = await getEditionById(id, { includeDrafts: true });
 
@@ -167,20 +140,6 @@ export async function updateEdition(id: string, input: EditionInput): Promise<Ed
   return getEditionById(id, { includeDrafts: true });
 }
 
-/**
- * Send a draft as a Resend broadcast and, on success, MINT the sequential number.
- * The send is the operator's explicit human gate.
- *
- *   1. render the email HTML from the stored `contentJson` (one source → two
- *      renders, the archive page being the other),
- *   2. create the broadcast to the Fluncle segment (a draft on Resend's side),
- *   3. send it (or schedule via `scheduledAt`),
- *   4. atomically mint `number = max(number)+1`, flip to `sent`, record provenance.
- *
- * The mint-on-send keeps numbering honest — a drafted-but-never-sent edition never
- * claims a number. The Resend key is the Worker's; the agent only reaches this via
- * the operator-tier admin op.
- */
 export async function sendEdition(
   id: string,
   options: { scheduledAt?: string } = {},
@@ -199,10 +158,6 @@ export async function sendEdition(
     throw new ApiError("missing_subject", "An edition needs a subject before it can be sent", 409);
   }
 
-  // A real edition carries at least one finding or a mixtape — never a hollow,
-  // intro-only shell. (The agent once authored editions with the `galaxies` array
-  // dropped, and a find-less edition mailed out empty; this is the server-side
-  // backstop so it can't happen again, matching the doctrine's zero-find rule.)
   if (!editionHasFindings(draft.content)) {
     throw new ApiError(
       "empty_edition",
@@ -222,8 +177,6 @@ export async function sendEdition(
 
   await sendBroadcast(broadcast.id, options);
 
-  // Mint atomically: `max(number)+1`, guarded on `status='draft'` so a concurrent
-  // double-send can't mint twice. A null row means the guard failed (already sent).
   const now = new Date().toISOString();
   const db = await getDb();
   const [result] = await db.batch(
@@ -260,11 +213,6 @@ export async function sendEdition(
     throw new ApiError("send_failed", "Edition could not be marked sent", 409);
   }
 
-  // Cost capture (COST-01, Path A — `cash`): the broadcast mailed the whole
-  // segment, so the billable quantity is the recipient count (best-effort — Resend
-  // exposes no count, so we read the segment; a miss emits no row). A non-finding
-  // `newsletter` step (trackId/logId null). BEST-EFFORT throughout: this runs AFTER
-  // the send is durable and never throws, so it can't affect the mail-out.
   const recipients = options.scheduledAt ? null : await countSegmentRecipients();
 
   if (typeof recipients === "number" && recipients > 0) {
@@ -292,15 +240,6 @@ export async function sendEdition(
   return getEditionById(id, { includeDrafts: true });
 }
 
-/**
- * HARD-delete an edition row by id, at ANY status — drafts AND sent. Unlike
- * `updateEdition` (which freezes a sent back-issue), delete must reach a sent
- * edition: a test edition that already went out is exactly what the operator needs
- * to pull from the public archive. This removes ONLY the DB row — the Resend
- * broadcast it sent is already gone and is not touched. A deleted `number` leaves
- * a gap in the sequence; that's fine (the public archive reads by number, and a
- * missing one 404s gracefully via `getEditionByNumber`). Operator-tier only.
- */
 export async function deleteEdition(id: string): Promise<{ id: string }> {
   const db = await getDb();
   const result = await db.execute({
@@ -317,9 +256,6 @@ export async function deleteEdition(id: string): Promise<{ id: string }> {
   return { id: row.id };
 }
 
-// ── Reads ─────────────────────────────────────────────────────────────────────
-
-/** The public archive list: sent editions, newest first. */
 export async function listEditions({
   includeDrafts = false,
   limit = 100,
@@ -336,7 +272,6 @@ export async function listEditions({
   return typedRows<EditionRow>(result.rows).map((row) => rowToEdition(row));
 }
 
-/** A single sent edition by its integer number (the public `/newsletter/<id>` read). */
 export async function getEditionByNumber(number: number): Promise<EditionDTO | undefined> {
   const db = await getDb();
   const result = await db.execute({
@@ -348,7 +283,6 @@ export async function getEditionByNumber(number: number): Promise<EditionDTO | u
   return row ? rowToEdition(row) : undefined;
 }
 
-/** A single edition by its uuid (admin path — drafts inclusive when asked). */
 async function getEditionById(
   id: string,
   options: { includeDrafts?: boolean } = {},
@@ -367,8 +301,6 @@ async function getEditionById(
   return rowToEdition(row);
 }
 
-// ── Validation ────────────────────────────────────────────────────────────────
-
 function validateEditionInput(
   input: EditionInput,
   options: { requireContent: boolean },
@@ -386,10 +318,6 @@ function validateEditionInput(
   };
 }
 
-// The content payload is stored as JSON TEXT. Accept either a pre-serialized JSON
-// string or a structured object (the agent may send either); always store a
-// canonical JSON string. A missing payload is allowed on update (a metadata-only
-// edit) but required on create.
 function validateContent(value: unknown, required: boolean): string | undefined {
   if (value === undefined || value === null) {
     if (required) {

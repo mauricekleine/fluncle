@@ -24,11 +24,6 @@ function physicalKinds(kind: DueWorkKind, scope: "all" | DueWorkScope): string[]
   );
 }
 
-/**
- * Read the maintained worklist in the legacy outer order: findings first, then catalogue.
- * Each physical half promotes only a bounded due-time page, then seeks the same ready index used
- * by empty probes and claims.
- */
 export async function readProjectedTrackWorkIds(
   client: DueWorkClient,
   options: {

@@ -31,7 +31,6 @@ function captureDefinition(): DueWorkRebuildDefinition<string, never> {
   return definition as unknown as DueWorkRebuildDefinition<string, never>;
 }
 
-/** Seed `count` catalogue rows the capture queue accepts, alternating the Spotify anchor. */
 async function seedCaptureQueue(count: number): Promise<string[]> {
   const trackIds: string[] = [];
   for (let index = 0; index < count; index += 1) {
@@ -87,15 +86,12 @@ describe("a due-work queue whose order definition changed", () => {
 
     const rebuilt = await readCheckpoint();
     expect(rebuilt?.state).toBe("complete");
-    // The only checkpoint this fixture rebuilds is capture-catalogue's, so it is the one the
-    // family status can count.
+
     expect((await getProjectionStatusFor(db)).projections.trackDueWork.rebuild.completed).toBe(1);
     expect(rebuilt?.definition_version).toBe(captureDefinition().definitionVersion);
     const currentKeys = await readSortKeys();
     expect(currentKeys.size).toBe(4);
 
-    // Stand in for a deploy that changed this queue's order: the stored definition version is an
-    // older one, and the projected rows carry that older definition's keys.
     await db.execute({
       args: [CAPTURE_CATALOGUE],
       sql: `update due_work_rebuilds set definition_version = 'dv1-previous'
@@ -106,12 +102,10 @@ describe("a due-work queue whose order definition changed", () => {
       sql: `update due_work set sort_key = 'stale' where work_kind = ? and subject_type = 'track'`,
     });
 
-    // The family is not complete, though every checkpoint row still says `complete`.
     const status = await getProjectionStatusFor(db);
     expect(status.projections.trackDueWork.rebuild.complete).toBe(false);
     expect(status.projections.trackDueWork.rebuild.completed).toBe(0);
 
-    // The ordinary rebuild step — no audit evidence, no `newGeneration`, no cutover flip.
     const staleGeneration = String(rebuilt?.generation);
     const restarted = await runDueWorkRebuildChunk(db, captureDefinition(), { limit: 100 });
     expect(restarted.noOp).toBe(false);
@@ -132,8 +126,6 @@ describe("a due-work queue whose order definition changed", () => {
     const before = await readSortKeys();
     const staleGeneration = String((await readCheckpoint())?.generation);
 
-    // A deploy that changed this queue's order: the stored version is older and the projected
-    // rows carry the older definition's keys.
     await db.execute({
       args: [CAPTURE_CATALOGUE],
       sql: `update due_work_rebuilds set definition_version = 'dv1-previous'
@@ -144,8 +136,6 @@ describe("a due-work queue whose order definition changed", () => {
       sql: `update due_work set sort_key = 'stale' where work_kind = ? and subject_type = 'track'`,
     });
 
-    // `--action repair` is the ONLY action the box's agent token may invoke. Nothing here asks for
-    // a rebuild, opens a cutover, or writes audit evidence.
     let reportedStale = 0;
     let reportedRows = 0;
     let complete = false;
@@ -176,8 +166,6 @@ describe("a due-work queue whose order definition changed", () => {
     await rebuildCaptureQueue();
     const before = await readCheckpoint();
 
-    // Drive the repair path to convergence, then prove this family's generation never moved: the
-    // conditional upsert in `startDueWorkRebuild` refuses to restart a current checkpoint at all.
     for (let step = 0; step < 400; step += 1) {
       const outcome = await advanceProjectionFor(db, {
         action: "repair",

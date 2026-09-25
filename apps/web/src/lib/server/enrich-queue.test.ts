@@ -20,10 +20,6 @@ type StoredTrack = {
 
 const NOW = Date.parse("2026-06-20T12:00:00.000Z");
 
-// A tiny archive spanning every queue case: pending, failed, done (excluded),
-// fresh processing (excluded — still in-flight), STALE processing (included —
-// the box-rebooted case), and a null-updated_at processing row (included —
-// predates the column, so we can't prove it's fresh).
 const archive: StoredTrack[] = [
   {
     added_at: "2026-06-01T00:00:00.000Z",
@@ -50,14 +46,14 @@ const archive: StoredTrack[] = [
     added_at: "2026-06-04T00:00:00.000Z",
     enrichment_status: "processing",
     log_id: "004.1.1A",
-    // Bumped one minute ago — well inside the staleness window, still in-flight.
+
     track_id: "t-processing-fresh",
     updated_at: new Date(NOW - 60 * 1000).toISOString(),
   },
   {
     added_at: "2026-06-05T00:00:00.000Z",
     enrichment_status: "processing",
-    // Bumped two hours ago — past the threshold, so presumed stuck.
+
     log_id: "005.1.1A",
     track_id: "t-processing-stale",
     updated_at: new Date(NOW - 2 * 60 * 60 * 1000).toISOString(),
@@ -65,7 +61,7 @@ const archive: StoredTrack[] = [
   {
     added_at: "2026-06-06T00:00:00.000Z",
     enrichment_status: "processing",
-    // No updated_at (predates the column) — treated as stale.
+
     log_id: "006.1.1A",
     track_id: "t-processing-null",
     updated_at: null,
@@ -107,7 +103,6 @@ function fullRow(stored: StoredTrack) {
   };
 }
 
-// The JS mirror of the "queue" SQL clause: pending ∪ failed ∪ stale processing.
 function matchesQueue(t: StoredTrack, staleCutoffMs: number): boolean {
   if (t.enrichment_status === "pending" || t.enrichment_status === "failed") {
     return true;
@@ -125,9 +120,8 @@ beforeEach(() => {
   vi.setSystemTime(NOW);
   execute.mockReset();
   execute.mockImplementation(async (query: { args: unknown[]; sql: string }) => {
-    // The count query selects count(*); the list query selects the columns.
     const isCount = query.sql.includes("count(*)");
-    // listTracks binds the queue's stale cutoff as the first filter arg.
+
     const staleCutoff = Date.parse(String(query.args[0]));
     const matched = archive
       .filter((t) => matchesQueue(t, staleCutoff))
@@ -160,7 +154,7 @@ describe('listTracks status: "queue" (the self-healing filter)', () => {
 
     expect(listCall.sql).toContain("enrichment_status");
     expect(listCall.sql).toContain("processing");
-    // The cutoff is bound, not concatenated.
+
     const expectedCutoff = new Date(NOW - ENRICH_STALE_PROCESSING_MS).toISOString();
     expect(listCall.args[0]).toBe(expectedCutoff);
     expect(listCall.sql).not.toContain(expectedCutoff);
@@ -170,13 +164,11 @@ describe('listTracks status: "queue" (the self-healing filter)', () => {
     const { tracks } = await listTracks({ limit: 50, order: "asc", status: "queue" });
     const ids = tracks.map((t) => t.trackId);
 
-    // The whole point of the fix: a box-rebooted `processing` track is re-picked.
     expect(ids).toContain("t-processing-stale");
     expect(ids).toContain("t-processing-null");
     expect(ids).toContain("t-pending");
     expect(ids).toContain("t-failed");
 
-    // A done track and a still-in-flight (fresh) processing track are NOT in the queue.
     expect(ids).not.toContain("t-done");
     expect(ids).not.toContain("t-processing-fresh");
   });
@@ -193,9 +185,6 @@ describe('listTracks status: "queue" (the self-healing filter)', () => {
   });
 });
 
-// The observation-pipeline queues (Build order #3): hasContext / hasObservation
-// gate which findings the context + observation crons pull. They are pure WHERE
-// clauses, so assert the generated SQL (the archive mock above ignores them).
 describe("listTracks hasContext / hasObservation filters (the observation queues)", () => {
   function lastListSql(): string {
     const listCall = execute.mock.calls.find((c) =>
@@ -208,8 +197,7 @@ describe("listTracks hasContext / hasObservation filters (the observation queues
   it("the context queue (hasContext=false) is status-aware: no note + pending/failed/NULL, not empty", async () => {
     await listTracks({ hasContext: false, limit: 50 });
     const sql = lastListSql();
-    // No note yet AND never-attempted (NULL, predating the column) ∪ pending ∪ failed
-    // — a confirmed `empty` find is excluded so the cron does not re-burn it every tick.
+
     expect(sql).toContain(
       "findings.context_note is null and (findings.context_status is null or findings.context_status in ('pending', 'failed'))",
     );

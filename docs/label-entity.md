@@ -135,6 +135,8 @@ Every label carries its own image lifecycle on the `labels` row. Public and admi
 
 **Discogs is the source.** Labels are first-class on Discogs and `GET /labels/{id}` returns an `images[]` array with the real logo. The identity is reached the way `discogs.ts` already reaches releases — through **MusicBrainz's curated `url-rels`**, never through Discogs search — so the resolve walks: the label name → its MBID (`/label?query=`, exact-fold match, the crawler's `fold`) → `/label/<mbid>?inc=url-rels` → the Discogs (and Wikidata) relation. The logo is **downloaded once and stored in our own R2** (`env.VIDEOS`, behind `found.fluncle.com`) — Discogs is **never hotlinked**: their ToS forbids it and image requests need the authed token.
 
+A supplied Discogs logo is stored only when its bytes match an allowed raster signature; the sniffed type becomes the public R2 `contentType`. The caller's MIME label and URL cannot make SVG markup or a non-image RIFF payload safe, and a benign `image/jpg` spelling does not reject genuine JPEG bytes.
+
 **The fallback ladder** (explicit, tested in `label-images.test.ts`):
 
 1. **Discogs label image** — the primary source (`discogs.ts::fetchDiscogsLabelImage`, both calls authed + on the shared Discogs rate-limit gate).

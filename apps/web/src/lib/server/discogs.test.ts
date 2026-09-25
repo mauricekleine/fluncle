@@ -16,9 +16,6 @@ describe("discogsReleaseUrl", () => {
   });
 });
 
-// A tiny URL-routing fetch mock: map a substring of the request URL to a JSON
-// body (or a Response). Anything unmatched 404s, which the resolver treats as a
-// miss. Keeps each test declarative about exactly which endpoints it stubs.
 function mockFetch(routes: Array<{ match: string; body?: unknown; response?: Response }>) {
   const calls: string[] = [];
 
@@ -152,10 +149,6 @@ describe("box-fetched Discogs evidence", () => {
     ).toEqual({ kind: "invalid" });
   });
 
-  // The URI allowlist checks a string the SAME caller supplies, so on its own it proves nothing
-  // about the bytes — every payload below carries a perfectly well-formed discogs.com URI. What
-  // stops them is the content itself, because the stored MIME becomes the object's contentType
-  // in public R2 and therefore decides how a browser will later interpret what it downloads.
   it("stores the type the bytes ARE, never the type the box claims", () => {
     const candidate = {
       detail: {
@@ -173,15 +166,13 @@ describe("box-fetched Discogs evidence", () => {
         image: { ...candidate.image, bytesBase64, mime },
       });
 
-    // An SVG is a script-bearing document, not a raster. Discogs never serves one for a logo, and
-    // storing it would put caller-authored markup behind Fluncle's own hostname.
     expect(
       withBytes(
         "PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciPjxzY3JpcHQ+YWxlcnQoMSk8L3NjcmlwdD48L3N2Zz4=",
         "image/svg+xml",
       ),
     ).toEqual({ kind: "invalid" });
-    // …and relabelling that same SVG as a JPEG does not launder it.
+
     expect(
       withBytes(
         "PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciPjxzY3JpcHQ+YWxlcnQoMSk8L3NjcmlwdD48L3N2Zz4=",
@@ -191,7 +182,6 @@ describe("box-fetched Discogs evidence", () => {
     expect(withBytes("AQID")).toEqual({ kind: "invalid" });
     expect(withBytes("")).toEqual({ kind: "invalid" });
 
-    // RIFF alone is a container family; a WAV wearing an image MIME is not a WEBP.
     expect(withBytes("UklGRiQAAABXQVZF", "image/webp")).toEqual({ kind: "invalid" });
     expect(withBytes("UklGRiQAAABXRUJQ", "image/webp")).toMatchObject({
       image: { mime: "image/webp" },
@@ -207,9 +197,6 @@ describe("box-fetched Discogs evidence", () => {
       kind: "image",
     });
 
-    // A benign header/content spelling mismatch is defused by storing the sniffed type rather
-    // than by failing the label closed — a strict equality here would resolve nothing at all the
-    // first time a vendor spelled it `image/jpg`.
     expect(withBytes("iVBORw0KGgoAAA==", "image/jpg")).toMatchObject({
       image: { mime: "image/png" },
       kind: "image",
@@ -222,7 +209,7 @@ describe("discogsResolveRelease (scored cascade + tracklist gate)", () => {
 
   beforeEach(() => {
     process.env.DISCOGS_USER_TOKEN = "test-token";
-    // Run the rate limiter + retry backoff with zero real waits.
+
     __setRateLimitForTests(0);
   });
 
@@ -236,8 +223,6 @@ describe("discogsResolveRelease (scored cascade + tracklist gate)", () => {
       process.env.DISCOGS_USER_TOKEN = ORIGINAL_TOKEN;
     }
   });
-
-  // ─────────────── MusicBrainz bridge (primary) ───────────────
 
   it("bridges via a human-verified MusicBrainz Discogs relation when the title matches", async () => {
     mockFetch([
@@ -263,7 +248,6 @@ describe("discogsResolveRelease (scored cascade + tracklist gate)", () => {
       title: "Do U?",
     });
 
-    // Accepted directly from MB — no Discogs search needed.
     expect(result).toEqual({ releaseId: 16449783 });
   });
 
@@ -276,12 +260,10 @@ describe("discogsResolveRelease (scored cascade + tracklist gate)", () => {
         match: MB_ISRC,
       },
       {
-        // Release detail carries no Discogs relation but points at a release-group.
         body: { id: "rel-1", relations: [], "release-group": { id: "rg-1" } },
         match: "/ws/2/release/rel-1",
       },
       {
-        // The release-group holds the curated Discogs master link.
         body: {
           id: "rg-1",
           relations: [
@@ -299,14 +281,11 @@ describe("discogsResolveRelease (scored cascade + tracklist gate)", () => {
     });
 
     expect(result).toEqual({ masterId: 99887 });
-    // MusicBrainz requires an identifiable User-Agent.
+
     expect(calls.some((url) => url.includes("musicbrainz.org"))).toBe(true);
   });
 
   it("never bridges a mismatched recording title (bad/shared ISRC)", async () => {
-    // MB returns a recording for the ISRC, but its title is a different track —
-    // the bridge must refuse and fall through to the Discogs search (which here
-    // finds nothing), so the finding stays unresolved.
     mockFetch([
       {
         body: {
@@ -334,11 +313,9 @@ describe("discogsResolveRelease (scored cascade + tracklist gate)", () => {
     ).toEqual({});
   });
 
-  // ─────────────── Discogs search fallback + tracklist gate ───────────────
-
   it("stores the release on a confident, tracklist-confirmed Discogs match", async () => {
     mockFetch([
-      { body: { recordings: [] }, match: MB_ISRC }, // MB has nothing → fall through
+      { body: { recordings: [] }, match: MB_ISRC },
       { body: { results: [{ id: 555, master_id: 42 }] }, match: DISCOGS_SEARCH },
       {
         body: {
@@ -363,8 +340,6 @@ describe("discogsResolveRelease (scored cascade + tracklist gate)", () => {
       title: "Do U?",
     });
 
-    // CAPTURE ON RESOLVE: the catno + styles come back off the SAME payload the scoring fetched,
-    // so the caller can store them without spending a second request.
     expect(result).toEqual({
       catno: "VPR079",
       masterId: 42,
@@ -376,8 +351,7 @@ describe("discogsResolveRelease (scored cascade + tracklist gate)", () => {
   it("THE GATE: rejects a top hit whose tracklist does not contain the title (VA-comp false match)", async () => {
     mockFetch([
       { body: { recordings: [] }, match: MB_ISRC },
-      // Discogs' top hit is a wrong release — a compilation/edit that does NOT
-      // contain the actual track. Old code stored this blindly; the gate kills it.
+
       { body: { results: [{ id: 777, master_id: 0 }] }, match: DISCOGS_SEARCH },
       {
         body: {
@@ -391,8 +365,6 @@ describe("discogsResolveRelease (scored cascade + tracklist gate)", () => {
       },
     ]);
 
-    // Wrong artist + the title "Revolution" is not a tracklist entry → unresolved,
-    // NOT the wrong release.
     expect(
       await discogsResolveRelease({
         artists: ["Dimension"],
@@ -408,8 +380,6 @@ describe("discogsResolveRelease (scored cascade + tracklist gate)", () => {
       { body: { results: [{ id: 888, master_id: 0 }] }, match: DISCOGS_SEARCH },
       {
         body: {
-          // Title token matches a track, but a different artist and no other
-          // corroboration keeps the score under CONFIDENCE_THRESHOLD.
           artists: [{ name: "Someone Else Entirely" }],
           id: 888,
           title: "Various",
@@ -453,12 +423,8 @@ describe("discogsResolveRelease (scored cascade + tracklist gate)", () => {
         releaseDate: "2020",
         title: "Title",
       }),
-      // The styles ride along: they cost nothing (the scoring already fetched this payload) and a
-      // 0 master_id still normalizes away.
     ).toEqual({ releaseId: 7, styles: ["Drum n Bass"] });
   });
-
-  // ─────────────── degradation / safety ───────────────
 
   it("no-ops without a token once MB has nothing (the column stays inert)", async () => {
     delete process.env.DISCOGS_USER_TOKEN;
@@ -467,7 +433,7 @@ describe("discogsResolveRelease (scored cascade + tracklist gate)", () => {
     expect(
       await discogsResolveRelease({ artists: ["Artist"], isrc: "GB000ABC0001", title: "Title" }),
     ).toEqual({});
-    // It may probe MB (no token needed) but must not hit the token-gated Discogs API.
+
     expect(fetchMock.mock.calls.every(([url]) => !String(url).includes("api.discogs.com"))).toBe(
       true,
     );
@@ -490,9 +456,6 @@ describe("discogsResolveRelease (scored cascade + tracklist gate)", () => {
   });
 
   it("flags `rateLimited` when the vendor exhausts the 429 retries (backoff signal)", async () => {
-    // Every call 429s past its in-slot retries → the resolution is unresolved
-    // BECAUSE we were throttled, not because there's no match. The backfill reads
-    // this to back the finding off hard instead of re-storming it next tick.
     mockFetch([
       { match: MB_ISRC, response: new Response("rate limited", { status: 429 }) },
       { match: DISCOGS_SEARCH, response: new Response("rate limited", { status: 429 }) },
@@ -547,7 +510,6 @@ describe("discogsResolveRelease (scored cascade + tracklist gate)", () => {
       },
     ]);
 
-    // Without an ISRC, skip the MusicBrainz bridge and search Discogs.
     expect(await discogsResolveRelease({ artists: ["Teddy Killerz"], title: "Gate" })).toEqual({
       releaseId: 7,
       styles: ["Drum n Bass"],
@@ -565,9 +527,6 @@ describe("discogsResolveRelease (scored cascade + tracklist gate)", () => {
       },
     ]);
 
-    // Budget spent → reported throttled (not a clean miss), so the backfill's
-    // circuit breaker stops the run instead of storming; the search is not re-fired
-    // across the other query variants.
     expect(await discogsResolveRelease({ artists: ["IYRE"], title: "Glowing Embers" })).toEqual({
       rateLimited: true,
       rateLimitedBy: "discogs",
@@ -576,11 +535,6 @@ describe("discogsResolveRelease (scored cascade + tracklist gate)", () => {
   });
 });
 
-// THE RELEASE FACTS — catalogue number + styles retained from the resolver payload, and the
-// backfill leg that reads them for a release Fluncle already resolved. The claims on trial: the
-// facts come off the payload the resolver already holds, Discogs' literal "none" is DROPPED rather
-// than stored, a multi-label release takes the first real number, and the three outcomes the ledger
-// branches on (found / not found / throttled) stay distinguishable.
 describe("fetchDiscogsReleaseFacts", () => {
   const ORIGINAL_TOKEN = process.env.DISCOGS_USER_TOKEN;
 
@@ -621,9 +575,6 @@ describe("fetchDiscogsReleaseFacts", () => {
   });
 
   it("DROPS Discogs' literal 'none' rather than storing it as a number", async () => {
-    // A white label with no number reads `catno: "none"` on Discogs. Storing that string would put
-    // the word "none" on the record's page dressed as a fact, so it must resolve to an ABSENCE —
-    // which the sweep then rules terminal, having genuinely learned there is no number.
     mockFetch([
       {
         body: { id: 42, labels: [{ catno: "none", name: "Not On Label" }], styles: ["Jungle"] },
@@ -727,7 +678,7 @@ describe("fetchDiscogsLabelImage (the label logo download)", () => {
     expect(result.rateLimited).toBe(false);
     expect(result.image?.mime).toBe("image/jpeg");
     expect(result.image?.bytes.byteLength).toBe(64);
-    // The primary image (not the first) was chosen, and its bytes downloaded directly.
+
     expect(calls.some((url) => url.includes("i.discogs.com/primary.jpg"))).toBe(true);
   });
 

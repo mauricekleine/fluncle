@@ -2,28 +2,6 @@ import { waitUntil } from "cloudflare:workers";
 import { getDb, typedRows } from "./db";
 import { type EntityCacheKind, purgeEntityCachesNow } from "./edge-cache";
 
-// The track → entity-page cache purge, kept in a SERVER-ONLY module.
-//
-// `edge-cache.ts` (and the `cloudflare:workers` runtime it imports) must never enter the
-// client bundle. The write modules that trigger this (`track-update.ts`, `publish.ts`) are
-// server-only, but `tracks.ts` — where a track's slugs are otherwise resolved — is reachable
-// from the client graph (it exports DTO shapes/helpers), so a `cloudflare:workers` import
-// there breaks the browser build. This module isolates the Worker-only purge so only
-// server-only callers ever pull it in.
-
-/**
- * The public detail pages a single track renders on — its OWN `/track/<trackId>` destination,
- * plus its artist(s), its album, and its label by their CURRENT stored slug. The three entity
- * branches are resolved in one query (a `union` over the same join graph the pages read:
- * `track_artists→artists.slug`, `tracks.album_id→albums.slug`, `tracks.label_id→labels.slug`); a
- * track links to several artists, so this can return several `artist` targets. Reading the real
- * stored slug — never re-slugifying a name — keeps the purge key byte-identical to the read key.
- *
- * The track's own page needs NO query: its id is the argument, and the id IS the address (it is a
- * primary key, so unlike a slug it cannot have moved since the write). It is prepended
- * unconditionally, which is what makes `/track/<trackId>`'s detail-tier cache an explicitly
- * purged one rather than one that merely waits out its 300s window.
- */
 export async function getTrackEntityPurgeTargets(
   trackId: string,
 ): Promise<{ kind: EntityCacheKind; slug: string }[]> {
@@ -59,14 +37,6 @@ export async function getTrackEntityPurgeTargets(
   return targets;
 }
 
-/**
- * Purge the cached detail pages a track change can stale — its own destination, plus its
- * artist(s), album, and label pages — after a write to that track/finding (a note/cover/
- * enrichment edit, a publish).
- * Fire-and-forget: the slug resolution + purge ride a single `waitUntil`, so the write path
- * never awaits either. Mirrors `purgeLogCache` (the same write already purges `/log/<id>`),
- * covering the OTHER surfaces that render the finding. No-op on a blank trackId.
- */
 export function purgeTrackEntityPages(trackId: string | null | undefined): void {
   if (!trackId?.trim()) {
     return;
