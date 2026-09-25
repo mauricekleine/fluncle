@@ -1,27 +1,10 @@
 name: Hermes Pin Drift
 
-# The server-side drift sweep for the box's baked supply chain — the missing
-# bump-PR half of fluncle-maintenance (the rave-02 fluncle-pin-watch timer is the
-# DEPLOY half; this is what feeds it). It checks the `fluncle` CLI, the Claude
-# Code CLI, bun (the `oven/bun` base image tag + digest), and yt-dlp against their
-# registries and, for a clearly-safe bump, opens a PR; a major bump (a bun major is
-# a base-image change) is reported as an issue, never auto-bumped. On merge of a
-# Dockerfile pin, rave-02 self-deploys it.
-#
-# Auth: PIN_DRIFT_TOKEN (a fine-scoped PAT: Contents + Pull requests read/write)
-# is effectively REQUIRED — this repo blocks the default GITHUB_TOKEN from creating
-# PRs ("Allow GitHub Actions to create PRs" is off), so the github.token fallback
-# below only covers read paths and fails loudly at `gh pr create`. With the PAT the
-# run is fully hands-off: the PR triggers CI and auto-merges on green.
-
 on:
   schedule:
-    - cron: "17 * * * *" # hourly at :17 — the backstop (external pins: claude-code, bun; or a missed release)
+    - cron: "17 * * * *"
   workflow_dispatch:
   workflow_run:
-    # The moment a fluncle release publishes, sweep so the box gets it within minutes,
-    # not up to an hour. The hourly cron above is the backstop: npm CDN propagation can
-    # lag a publish by a few seconds, in which case this tick no-ops and the next cron catches it.
     workflows: ["Releases"]
     types: [completed]
 
@@ -39,8 +22,6 @@ jobs:
     name: Check + bump baked Hermes pins
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    # On a workflow_run trigger, only act when the release actually succeeded (a failed
-    # release published nothing). schedule/dispatch always run.
     if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     steps:
       - name: Checkout main
@@ -63,11 +44,6 @@ jobs:
           open_pr="$(gh pr list --state open --json number,headRefName \
             --jq '[.[] | select(.headRefName | startswith("hermes-pin-drift/"))][0].number')"
           if [ -n "$open_pr" ]; then
-            # Branch protection requires the branch to be UP TO DATE (strict checks), and
-            # GitHub's auto-merge never updates the branch itself — on a fast-moving main an
-            # auto-merge-armed PR starves forever (observed: #529 sat green-but-stale for 12h
-            # while main advanced ~15 times). So each run NUDGES the open PR current; CI
-            # re-runs on the fresh base and the already-armed auto-merge completes.
             echo "pin-drift PR #$open_pr is still open — updating its branch so auto-merge can land."
             gh pr update-branch "$open_pr" \
               || echo "update-branch unavailable (conflict or already current) — leaving it for review."
@@ -98,7 +74,6 @@ jobs:
           existing="$(gh issue list --state open --search "$title in:title" \
             --json number --jq '.[0].number')"
           if [ -n "$existing" ]; then
-            # The sweep runs hourly; a brake that has not changed is already on the issue.
             latest="$(gh issue view "$existing" --json body,comments \
               --jq 'if (.comments | length) > 0 then .comments[-1].body else .body end')"
             if grep -qF "brake-signature: $BRAKE_SIGNATURE" <<<"$latest"; then

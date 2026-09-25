@@ -1,7 +1,3 @@
-// `/fresh`'s fold, as pure logic: the window's two newest-first halves (lit findings, unlit
-// catalogue rows) become RELEASES (one entry per record), and releases become rolling WEEKS back
-// from today. No DB and no clock: the rows and `today` are the whole input.
-
 import { describe, expect, it } from "vitest";
 import {
   FRESH_STANDOUT_LIMIT,
@@ -25,7 +21,6 @@ import {
 const TODAY = "2026-09-25";
 const WINDOW_DAYS = 30;
 
-/** The locale's range joiner: a thin space, an en dash, a thin space. */
 const RANGE = " – ";
 
 type RowOptions = {
@@ -41,7 +36,6 @@ type RowOptions = {
   trackId: string;
 };
 
-/** A certified finding row, as `listFreshReleases` hands it over. */
 function finding(options: RowOptions): FreshFinding {
   return {
     addedAt: "2026-01-01T00:00:00.000Z",
@@ -64,7 +58,6 @@ function finding(options: RowOptions): FreshFinding {
   };
 }
 
-/** An uncertified catalogue row, as `listFreshReleases` hands it over. */
 function catalogue(options: RowOptions): FreshCatalogueItem {
   return {
     album: options.album,
@@ -99,7 +92,6 @@ function releaseByKey(page: FreshPage, key: string): FreshRelease | undefined {
   return allReleases(page).find((release) => release.key === key);
 }
 
-/** `count` lone catalogue releases on one day, each its own release. */
 function loneReleases(prefix: string, releaseDate: string, count: number): FreshCatalogueItem[] {
   return Array.from({ length: count }, (_, index) =>
     catalogue({ releaseDate, trackId: `${prefix}${index + 1}` }),
@@ -210,7 +202,6 @@ describe("groupFreshReleases — the release fold", () => {
       TODAY,
     );
 
-    // One release, in the two weeks its tracks came out in: the same rule as a linked album.
     expect(page.releaseCount).toBe(1);
     expect(page.weeks.map((week) => week.releases.map((release) => release.key))).toEqual([
       ["record:remixes|quiet artist"],
@@ -278,7 +269,7 @@ describe("groupFreshReleases — the release fold", () => {
     );
 
     const tracks = releaseByKey(page, "album:ep")?.tracks ?? [];
-    // A finding holds no lead inside its release: the record's own order does.
+
     expect(tracks.map((track) => track.title)).toEqual(["Delta", "Alpha", "alpha two", "Bravo"]);
     expect(tracks.map((track) => track.lit)).toEqual([false, false, false, true]);
   });
@@ -358,7 +349,7 @@ describe("groupFreshReleases — the release fold", () => {
 
     expect(release?.coverUrl).toBe("https://img/cover-a");
     expect(release?.avatarUrl).toBe("https://img/face-a");
-    // A cover equal to the release's is dropped from the track; a different one stays.
+
     expect(release?.tracks.map((track) => track.coverUrl)).toEqual([
       undefined,
       undefined,
@@ -422,11 +413,10 @@ describe("groupFreshReleases — rolling weeks back from today", () => {
   });
 
   it("folds the window's tail into its last full week, never a stub bucket of a few days", () => {
-    // A 30-day window holds four full weeks (0..3); ages 21 through 30 all land in week 3.
     expect(freshWeekIndex("2026-09-04", TODAY, WINDOW_DAYS)).toBe(3);
     expect(freshWeekIndex("2026-08-28", TODAY, WINDOW_DAYS)).toBe(3);
     expect(freshWeekIndex("2026-08-26", TODAY, WINDOW_DAYS)).toBe(3);
-    // A window shorter than a week is one bucket.
+
     expect(freshWeekIndex("2026-09-20", TODAY, 5)).toBe(0);
   });
 
@@ -544,7 +534,6 @@ describe("groupFreshReleases — coverage", () => {
 });
 
 describe("groupFreshReleases — the week rule: a track sits in the week it came out", () => {
-  // An album whose single came out two weeks before the rest of it.
   const page = groupFreshReleases(
     windowOf(
       [],
@@ -564,7 +553,7 @@ describe("groupFreshReleases — the week rule: a track sits in the week it came
       "lp3",
     ]);
     expect(page.weeks[1]?.releases[0]?.tracks.map((track) => track.trackId)).toEqual(["lp1"]);
-    // Still one release on the page.
+
     expect(page.releaseCount).toBe(1);
   });
 
@@ -579,7 +568,7 @@ describe("groupFreshReleases — the week rule: a track sits in the week it came
 
   it("dates and titles each week's share of the record by its own tracks", () => {
     expect(page.weeks[0]?.releases[0]?.releaseDate).toBe("2026-09-24");
-    // The single alone in its week reads as the single, not the record.
+
     expect(page.weeks[1]?.releases[0]?.title).toBe("Title lp1");
   });
 
@@ -630,7 +619,6 @@ describe("groupFreshReleases — the standouts", () => {
       TODAY,
     );
 
-    // Six releases this week: a selection of three.
     expect(page.standouts?.span).toBe("this-week");
     expect(page.standouts?.keys).toHaveLength(3);
     expect(page.standouts?.keys[0]).toBe("track:lit");
@@ -664,7 +652,6 @@ describe("groupFreshReleases — the standouts", () => {
   });
 
   it("tops a thin week up from last week, up to half of both, and says it spans two weeks", () => {
-    // Three this week make room for one; eight across both weeks make room for four.
     const picked = standouts(
       loneReleases("now", "2026-09-24", 3),
       loneReleases("prior", "2026-09-15", 5),
@@ -685,7 +672,6 @@ describe("groupFreshReleases — the standouts", () => {
   });
 
   it("leads a thin week's top-up with this week's own release", () => {
-    // Half of one is none, but the week's only release still heads the strip.
     const onePlusFour = standouts(
       loneReleases("now", "2026-09-24", 1),
       loneReleases("prior", "2026-09-15", 4),
@@ -740,7 +726,7 @@ describe("freshViewWeeks and newestFreshReleases", () => {
 
     expect(weeks.map((week) => week.index)).toEqual([0]);
     expect(weeks[0]?.releases.map((release) => release.key)).toEqual(["album:ep"]);
-    // The page itself is untouched.
+
     expect(page.weeks.map((week) => week.index)).toEqual([0, 1]);
   });
 
@@ -750,14 +736,13 @@ describe("freshViewWeeks and newestFreshReleases", () => {
         windowOf(
           [],
           [
-            // A ten-track album with one track in the window is still an album.
             catalogue({
               albumSlug: "lp",
               albumTrackCount: 10,
               releaseDate: "2026-09-24",
               trackId: "lp1",
             }),
-            // A single the archive holds once is a single, whatever the window holds of it.
+
             catalogue({
               albumSlug: "single",
               albumTrackCount: 1,

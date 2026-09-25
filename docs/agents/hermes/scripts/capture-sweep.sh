@@ -1,96 +1,21 @@
 #!/usr/bin/env bash
-# capture-sweep.sh — the full-song CAPTURE sweep's job ENTRY (`fluncle-capture`).
-#
-# SCHEDULED BY A HOST SYSTEMD TIMER: a proxied yt-dlp fetch has an unbounded tail, so it
-# runs on its own timer and never delays the latency-sensitive 5-min sweeps. The rave-02
-# host timer `docker exec`s this script inside the container every 5m — see
-# ../capture-timer/README.md for the unit files + install. The unit runs `bash <sweep>.sh`,
-# and a manual `bash /opt/hermes-scripts/capture-sweep.sh` runs it the same way, so this
-# thin bash wrapper is the entry; all the
-# work lives in the bun orchestrator beside it (capture-sweep.ts). Its stdout is the run
-# output the /status prober reads.
-#
-# LIVE-INTENT. Version-controlled source; the repo is canonical and the box is a deploy
-# target (fluncle-hermes-operator skill). This pair is BAKED into the image at
-# /opt/hermes-scripts/ and auto-updates from main via the hourly pin-watch rebuild; a rave-02
-# HOST systemd timer docker-execs it — no docker cp. See ../cron/README.md § The full-song
-# capture sweep + ../capture-timer/.
-#
-# WHAT IT DOES: for each finding still needing a capture (newest-first, backoff-aware),
-# downloads the full song ONCE via yt-dlp through a residential proxy on a per-track STICKY
-# session, duration-guards the YouTube match against the finding's Spotify length, stores
-# the bytes in the PRIVATE fluncle-source-audio R2 bucket (never fluncle-videos — that is
-# world-served at found.fluncle.com), and reconciles the key + status through an agent-tier
-# prepare/commit receipt seam. A NON-BLOCKING side-channel: it never gates the enrich/embed queues.
-#
-# PRODUCTION PRE-REQS (see ../capture-timer/README.md for the full runbook):
-#   - yt-dlp BAKED PINNED at /opt/hermes-scripts/yt-dlp (on this wrapper's PATH) + ffprobe in the image — both ride the image (see capture-timer/README).
-#   - Secrets in the shared 0600 ${HOME}/.fluncle-secrets.env (op-injected by
-#     fluncle-secrets-sync), sourced below:
-#       FLUNCLE_API_TOKEN — the box's AGENT-scoped token (queue + capture receipts).
-#       FLUNCLE_YTDLP_PROXY_HOST / _PORT / _USERNAME / _PASSWORD — the residential proxy.
-#       FLUNCLE_SOURCE_AUDIO_R2_ACCESS_KEY_ID / _SECRET_ACCESS_KEY — an R2 token scoped
-#         Object Read & Write on fluncle-source-audio ONLY (never fluncle-videos).
-#       R2_ACCOUNT_ID — the (non-secret) Cloudflare account id (also in wrangler.jsonc).
-#       optional: FLUNCLE_API_BASE_URL (default https://www.fluncle.com),
-#         FLUNCLE_SOURCE_AUDIO_R2_BUCKET (default fluncle-source-audio),
-#         FLUNCLE_CAPTURE_BATCH_CAP (4) / _QUEUE_LIMIT (8) / _TOLERANCE_SEC (3) / _TOLERANCE_PCT (0.03).
-#         THE PROVENANCE BACKFILL's budget (a phase inside this same tick, not a timer of its own):
-#         FLUNCLE_CAPTURE_PROVENANCE_LIMIT (2) — FINDINGS rows a tick, each a FULL metered download;
-#         FLUNCLE_CAPTURE_PROVENANCE_CATALOGUE_LIMIT (0) — how many of those may be catalogue rows,
-#           a SUB-cap that redirects unused budget and can never raise the tick's total. Raise it
-#           only alongside the server-side catalogue capture budget, which gates this queue too.
-#           A catalogue row rides the CHEAP THREE-RUNG LADDER, so this number now meters SEGMENT
-#           downloads (~1.5MB each) rather than full songs, and rows concluded on metadata alone
-#           cost only a search;
-#         FLUNCLE_CAPTURE_PROVENANCE_SEARCH_FACTOR (5) — how many catalogue rows the ladder may READ
-#           per segment it may BUY. Searches are ~139KB, so they are budgeted generously;
-#         FLUNCLE_CAPTURE_PROVENANCE_SEGMENT_ATTEMPTS (2) — segments one row may spend before it
-#           gives up; FLUNCLE_CAPTURE_SEGMENT_RANGE (*00:30-01:00) — the slice it fingerprints;
-#         FLUNCLE_CAPTURE_METADATA_TOLERANCE_SEC (3) — the metadata rung's flat length tolerance;
-#         FLUNCLE_CAPTURE_FLAT_SEARCH (1) — flat search extraction (1/7th the bytes). Set 0 to
-#           restore the historic resolving search byte-for-byte, with no re-bake;
-#         FLUNCLE_CAPTURE_REVERDICT_LIMIT (5) — officialness re-asks a tick. Keyless oEmbed, free.
-#         FLUNCLE_CAPTURE_PROGRESS_DIR — durable per-item journals; defaults beneath HOME on the
-#           persistent /opt/data mount, so a container restart cannot repeat a paid download.
-#   - The private bucket must exist (operator step; done 2026-07-07).
-#
-# Operator install (host timer — full runbook in ../capture-timer/README.md): the sweep + the
-# pinned yt-dlp bake to /opt/hermes-scripts/ (auto-update from main via pin-watch — no docker
-# cp); install fluncle-capture.{service,timer} into /etc/systemd/system/ + `systemctl enable
-# --now fluncle-capture.timer`. The job needs the AGENT token but no operator token — it only
-# writes analysis fields. Smoke-test as the cron user:
-# `docker exec -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/capture-sweep.sh`.
+
 set -euo pipefail
 
-# A caller or docker-exec may hand this a minimal PATH, so a bare `bun`/`yt-dlp`/`ffprobe`
-# is "not found" → exit 127. Prepend the known install dirs so this wrapper's tools resolve
-# regardless: /opt/hermes-scripts holds the BAKED yt-dlp (Unit A/D — pinned into the image,
-# see capture-timer/README), /usr/local/bin the bun symlink.
 export PATH="/opt/hermes-scripts:/usr/local/bin:/root/.bun/bin:${PATH:-/usr/bin:/bin}"
 
-# Belt-and-suspenders: pin the absolute interpreter path too (an exec context can lose
-# the PATH export above).
 export BUN_BIN="${BUN_BIN:-/usr/local/bin/bun}"
 
-# Source the shared 0600 secrets file (the same single source every other sweep reads;
-# the container env carries only the agent token and the alert webhook, so the proxy/R2/API
-# creds arrive via this file).
 CAPTURE_ENV_FILE="${CAPTURE_ENV_FILE:-${HOME:-/opt/data/home}/.fluncle-secrets.env}"
 if [ -r "${CAPTURE_ENV_FILE}" ]; then
-  set -a
-  # shellcheck source=/dev/null
-  . "${CAPTURE_ENV_FILE}"
-  set +a
+	set -a
+	# shellcheck source=/dev/null
+	. "${CAPTURE_ENV_FILE}"
+	set +a
 fi
 
-# Resolve the orchestrator next to this wrapper so it runs regardless of CWD.
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
-# Host timers write no per-run output file, so self-report the
-# /status freshness marker the fluncle-healthcheck prober reads (see cron-output.sh) —
-# WRAP the payload (never `exec`) so the marker is written even on a nonzero run. Before
-# this, capture (a host timer since day one) never wrote a marker → cron.capture was cosmetic.
 # shellcheck source=./cron-output.sh
 . "${SCRIPT_DIR}/cron-output.sh"
 emit_cron_output capture -- "${BUN_BIN}" "${SCRIPT_DIR}/capture-sweep.ts" "$@"

@@ -1,18 +1,5 @@
 name: gitleaks
 
-# The leak-prevention backstop for the open-source repo. Two checks on every PR +
-# push to main: (1) gitleaks scans the FULL git history for accidentally-committed
-# secret VALUES (tokens, keys); config + allowlist in .gitleaks.toml. (2) a working-
-# TREE grep keeps the current tree free of concrete op:// 1Password paths (references,
-# not secrets — history can't be un-leaked, so this is tree-only; placeholders pass).
-# See AGENTS.md "Public Repo".
-#
-# We run the gitleaks CLI directly (the official digest-pinned image) rather than the
-# gitleaks-action wrapper: the CLI is unconditionally free (the action gates some
-# features behind GITLEAKS_LICENSE), the digest pin is reproducible (a bare tag is
-# re-pushable), and it is the exact invocation validated locally. Bump the pin via
-# the fluncle-maintenance skill (new digest with each version).
-
 on:
   pull_request:
     types: [opened, reopened, synchronize, ready_for_review, converted_to_draft]
@@ -36,9 +23,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
-          fetch-depth: 0 # full history — gitleaks `git` mode scans every commit
-          # The workspace (.git included) is bind-mounted into a third-party container
-          # below — don't leave the checkout token sitting in .git/config for it.
+          fetch-depth: 0
           persist-credentials: false
 
       - name: gitleaks
@@ -48,9 +33,6 @@ jobs:
             git /repo --config=/repo/.gitleaks.toml --redact --exit-code 1 --no-banner # v8.30.1
 
       - name: op:// path hygiene (working tree)
-        # History can't be un-leaked; this keeps the CURRENT tree free of concrete
-        # op:// 1Password paths. Placeholders (op://$VAR/... or op://<vault>/...) pass.
-        # See AGENTS.md "Public Repo".
         run: |
           if git grep -nE 'op://[A-Za-z0-9]'; then
             echo "::error::Concrete op:// 1Password path in a committed file — use a placeholder (op://\$FLUNCLE_1PASSWORD_ENV_ITEM/...). See AGENTS.md 'Public Repo'."
@@ -58,10 +40,6 @@ jobs:
           fi
 
       - name: local-path hygiene (working tree)
-        # The public-repo topology rule (AGENTS.md "Public Repo"): no operator-machine
-        # /Users/... paths in committed files. Carve-outs: the rule's own statements in
-        # AGENTS.md + the maintenance skill (both copies), and the deliberately fabricated
-        # fixture path in the skills-install test.
         run: |
           if git grep -nE '/Users/[a-z]' -- . \
             ':!AGENTS.md' \

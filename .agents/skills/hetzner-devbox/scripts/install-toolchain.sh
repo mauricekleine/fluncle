@@ -4,57 +4,38 @@ set -Eeuo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 SKILL_DIR="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 if [[ -z "${ENV_FILE:-}" ]]; then
-  if [[ -f "${SKILL_DIR}/.env" ]]; then
-    ENV_FILE="${SKILL_DIR}/.env"
-  elif [[ -f ".env" ]]; then
-    ENV_FILE=".env"
-  else
-    ENV_FILE="${SKILL_DIR}/.env"
-  fi
+	if [[ -f "${SKILL_DIR}/.env" ]]; then
+		ENV_FILE="${SKILL_DIR}/.env"
+	elif [[ -f ".env" ]]; then
+		ENV_FILE=".env"
+	else
+		ENV_FILE="${SKILL_DIR}/.env"
+	fi
 fi
 
 if [[ -f "${ENV_FILE}" ]]; then
-  set -a
-  # shellcheck disable=SC1090
-  source "${ENV_FILE}"
-  set +a
+	set -a
+	# shellcheck disable=SC1090
+	source "${ENV_FILE}"
+	set +a
 fi
 
 SERVER_NAME="${SERVER_NAME:-agent-devbox-01}"
 USERNAME="${USERNAME:-admin}"
-# Admin sshd listens on this port over the tailnet (see bootstrap-*-vps.sh). Plain
-# OpenSSH on :2222, NOT Tailscale SSH on :22, so headless installs never hit a
-# Tailscale-SSH "check" re-auth prompt.
+
 ADMIN_SSH_PORT="${ADMIN_SSH_PORT:-2222}"
 BUN_VERSION="${BUN_VERSION:-1.4.0}"
 
-# TOOLCHAIN_PROFILE sets the DEFAULTS below; an explicitly-set INSTALL_* always wins.
-#
-#   devbox  (default) — the interactive private devbox: a full dev machine (git, tmux,
-#                       zsh, build-essential, python3, Node, npm) plus Docker, gh, Bun,
-#                       uv, Node LTS, the Codex CLI and Claude Code.
-#
-#   agent-box         — a box that only RUNS containers and is administered from
-#                       elsewhere. Docker plus a thin floor (git/curl/gnupg/jq, what the
-#                       self-deploy and the apt repos need) and nothing else. This is the
-#                       posture the Hermes agent box is documented to have — "Docker only,
-#                       deliberately no general dev tooling, for a small blast radius".
-#                       A `devbox` run on such a host silently contradicts that doc, so
-#                       the posture is a flag here rather than a sentence in a runbook.
-#
-# `op` is NOT one of these groups on purpose: it is a base prerequisite installed by
-# bootstrap-private-vps.sh, so a minimal toolchain run can never strand the secret layer.
 TOOLCHAIN_PROFILE="${TOOLCHAIN_PROFILE:-devbox}"
 case "${TOOLCHAIN_PROFILE}" in
-  devbox) optional_default=1 ;;
-  agent-box) optional_default=0 ;;
-  *)
-    printf 'Unknown TOOLCHAIN_PROFILE: %s. Expected devbox or agent-box.\n' "${TOOLCHAIN_PROFILE}" >&2
-    exit 1
-    ;;
+devbox) optional_default=1 ;;
+agent-box) optional_default=0 ;;
+*)
+	printf 'Unknown TOOLCHAIN_PROFILE: %s. Expected devbox or agent-box.\n' "${TOOLCHAIN_PROFILE}" >&2
+	exit 1
+	;;
 esac
 
-# Docker is the one group both profiles want: it is the whole point of an agent box.
 INSTALL_DOCKER="${INSTALL_DOCKER:-1}"
 INSTALL_GH="${INSTALL_GH:-${optional_default}}"
 INSTALL_BUN="${INSTALL_BUN:-${optional_default}}"
@@ -65,16 +46,16 @@ INSTALL_CLAUDE="${INSTALL_CLAUDE:-${optional_default}}"
 INSTALL_REMOTION_LIBS="${INSTALL_REMOTION_LIBS:-0}"
 
 remote_env=$(printf 'TOOLCHAIN_PROFILE=%q BUN_VERSION=%q INSTALL_DOCKER=%q INSTALL_GH=%q INSTALL_BUN=%q INSTALL_UV=%q INSTALL_NODE_LTS=%q INSTALL_CODEX=%q INSTALL_CLAUDE=%q INSTALL_REMOTION_LIBS=%q' \
-  "${TOOLCHAIN_PROFILE}" \
-  "${BUN_VERSION}" \
-  "${INSTALL_DOCKER}" \
-  "${INSTALL_GH}" \
-  "${INSTALL_BUN}" \
-  "${INSTALL_UV}" \
-  "${INSTALL_NODE_LTS}" \
-  "${INSTALL_CODEX}" \
-  "${INSTALL_CLAUDE}" \
-  "${INSTALL_REMOTION_LIBS}")
+	"${TOOLCHAIN_PROFILE}" \
+	"${BUN_VERSION}" \
+	"${INSTALL_DOCKER}" \
+	"${INSTALL_GH}" \
+	"${INSTALL_BUN}" \
+	"${INSTALL_UV}" \
+	"${INSTALL_NODE_LTS}" \
+	"${INSTALL_CODEX}" \
+	"${INSTALL_CLAUDE}" \
+	"${INSTALL_REMOTION_LIBS}")
 
 ssh -o BatchMode=yes -o ConnectTimeout=30 -p "${ADMIN_SSH_PORT}" "${USERNAME}@${SERVER_NAME}" "${remote_env} bash -s" <<'REMOTE'
 set -Eeuo pipefail
@@ -195,4 +176,3 @@ fi
 log "Versions (${TOOLCHAIN_PROFILE} profile)"
 bash -lc 'node --version || true; npm --version || true; git --version || true; tmux -V || true; zsh --version || true; jq --version || true; rg --version | head -n 1 || true; fd --version || true; docker --version || true; docker compose version || true; gh --version | head -n 1 || true; bun --version || true; uv --version || true; codex --version || true; claude --version || true; op --version || true'
 REMOTE
-

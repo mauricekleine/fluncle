@@ -42,7 +42,7 @@ describe("hermes-pin-drift parses every pin it claims to watch", () => {
   }
 
   it("guards every parsed pin, so a new one cannot skip the FATAL check", () => {
-    const guard = /\[ -n "\$CUR_[\s\S]*?exit 1; \}/.exec(script)?.[0] ?? "";
+    const guard = /\[ -n "\$CUR_[\s\S]*?exit 1\s*\n\s*\}/.exec(script)?.[0] ?? "";
 
     for (const { variable } of PINS) {
       expect(guard).toContain(`$${variable}`);

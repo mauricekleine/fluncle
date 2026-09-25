@@ -6,13 +6,20 @@
   "compatibility_flags": ["nodejs_compat"],
   "observability": {
     "enabled": true,
-    "logs": { "enabled": true, "head_sampling_rate": 1, "invocation_logs": true },
-    "traces": { "enabled": true, "head_sampling_rate": 0.01 },
+    "logs": {
+      "enabled": true,
+      "head_sampling_rate": 1,
+      "invocation_logs": true
+    },
+    "traces": {
+      "enabled": true,
+      "head_sampling_rate": 0.01
+    }
   },
   "vars": {
     "EXPECTED_BRANCH": "main",
     "EXPECTED_WORKER": "fluncle-web",
-    "GITHUB_REPOSITORY": "mauricekleine/fluncle",
+    "GITHUB_REPOSITORY": "mauricekleine/fluncle"
   },
   "queues": {
     "consumers": [
@@ -22,8 +29,8 @@
         "max_batch_size": 10,
         "max_batch_timeout": 5,
         "max_retries": 5,
-        "retry_delay": 30,
-      },
-    ],
-  },
+        "retry_delay": 30
+      }
+    ]
+  }
 }

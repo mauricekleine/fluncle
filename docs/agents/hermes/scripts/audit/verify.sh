@@ -1,59 +1,19 @@
 #!/usr/bin/env bash
-# verify.sh — the box-sized verification ladder for the nightly audit's own edits.
-#
-# Run it from the root of the audit workspace checkout, after the edits are made:
-#     bash docs/agents/hermes/scripts/audit/verify.sh
-# It prints a human line per step and writes the machine record to `.audit/verify.json`, which the
-# driver folds into the sweep's summary line — so "which checks ran" is a fact in the run ledger
-# rather than a claim in a report.
-#
-# WHY THIS EXISTS, AND WHY IT DELIBERATELY RUNS LESS THAN `bun run check`.
-#
-# The box's memory cap is shared by ~40 sweeps, a paid capture lane, and an embedding trickle that
-# holds torch resident. The repo's whole-repo passes do not fit in what is left, and no knob makes
-# them fit, because the peak is one TypeScript program graph rather than parallelism:
-#
-#   whole-repo type-aware lint   3.34 GB peak   (and 3.55 GB at `--threads=2` — capping the thread
-#                                                pool does not lower it; tsgolint is a Go binary,
-#                                                so a Node heap cap does not reach it either)
-#   whole-repo typecheck         2.81 GB peak   (2.91 GB at `--concurrency=1` — serializing does
-#                                                not lower it either; one package IS the peak)
-#   apps/web typecheck alone     2.80 GB peak   ← that one package is the whole figure
-#   apps/cli typecheck           0.36 GB peak
-#   PATH-SCOPED type-aware lint  1.50 GB peak at first measurement, 3.0 GB once the program grew:
-#                                                the path list scopes the DIAGNOSTICS, not the
-#                                                program tsgolint loads — so this script lints
-#                                                WITHOUT the type-aware rules (derived config)
-#   one file, type-aware ON        1.44 GB peak  ← the whole-program load, on a single path
-#   one file, type-aware OFF       0.14 GB peak  ← what the derived config buys
-#
-# So the whole-repo passes are not run here. They are not skipped work: every one of them runs on
-# the PR this audit opens (the `quality-checks` action) and again in `deploy:gate` before anything
-# reaches Cloudflare, and the reviewer merges on green required checks. Running them a third time
-# on the smallest machine in the chain bought no gate and cost the night — measured as 116 of the
-# container's 145 OOM kills over two weeks, all `tsgolint`, plus 12 `tsc`.
-#
-# What this ladder is for is the fast, local, path-scoped signal the agent needs to not push
-# obvious breakage: formatting, the lint rules over the files it touched, and the changed
-# package's own typecheck and tests when that package fits. Everything it cannot run, it RECORDS
-# as skipped with a reason. A skip is an honest outcome to report, never something to work around.
+
 set -uo pipefail
 
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 cd "${ROOT}" || exit 1
 OUT="${AUDIT_VERIFY_OUTPUT:-${ROOT}/.audit/verify.json}"
 
-# Packages whose own whole-program pass does not fit the box (see the table above). Their
-# typecheck and test are CI's, by measurement, not by preference.
 AUDIT_VERIFY_CI_ONLY_PACKAGES="${AUDIT_VERIFY_CI_ONLY_PACKAGES:-apps/web}"
-# Per-step wall budgets. A check that wedges must cost one step, never the night.
+
 AUDIT_VERIFY_STEP_BUDGET_SECS="${AUDIT_VERIFY_STEP_BUDGET_SECS:-600}"
-# Free memory a step must see before it is allowed to start, in MiB. Under this the step is
-# SKIPPED rather than started into an OOM kill — a recorded skip beats a silent death.
+
 AUDIT_VERIFY_LINT_HEADROOM_MB="${AUDIT_VERIFY_LINT_HEADROOM_MB:-1792}"
 AUDIT_VERIFY_TYPECHECK_HEADROOM_MB="${AUDIT_VERIFY_TYPECHECK_HEADROOM_MB:-1024}"
 AUDIT_VERIFY_TEST_HEADROOM_MB="${AUDIT_VERIFY_TEST_HEADROOM_MB:-768}"
-# cgroup v2 memory accounting; overridable so the tests can drive fixture files.
+
 AUDIT_VERIFY_CGROUP_MAX="${AUDIT_VERIFY_CGROUP_MAX:-/sys/fs/cgroup/memory.max}"
 AUDIT_VERIFY_CGROUP_CURRENT="${AUDIT_VERIFY_CGROUP_CURRENT:-/sys/fs/cgroup/memory.current}"
 
@@ -65,166 +25,138 @@ FAILED=0
 RECORDS=""
 
 record() {
-  local step="$1" state="$2" reason="$3"
-  local entry
-  entry="$(printf '{"step":"%s","state":"%s","reason":"%s"}' "${step}" "${state}" "${reason}")"
-  if [ -z "${RECORDS}" ]; then RECORDS="${entry}"; else RECORDS="${RECORDS},${entry}"; fi
-  case "${state}" in
-    ran) RAN=$((RAN + 1)); log "${step} → ok" ;;
-    skipped) SKIPPED=$((SKIPPED + 1)); log "${step} → skipped (${reason})" ;;
-    failed) FAILED=$((FAILED + 1)); log "${step} → FAILED (${reason})" ;;
-  esac
+	local step="$1" state="$2" reason="$3"
+	local entry
+	entry="$(printf '{"step":"%s","state":"%s","reason":"%s"}' "${step}" "${state}" "${reason}")"
+	if [ -z "${RECORDS}" ]; then RECORDS="${entry}"; else RECORDS="${RECORDS},${entry}"; fi
+	case "${state}" in
+	ran)
+		RAN=$((RAN + 1))
+		log "${step} → ok"
+		;;
+	skipped)
+		SKIPPED=$((SKIPPED + 1))
+		log "${step} → skipped (${reason})"
+		;;
+	failed)
+		FAILED=$((FAILED + 1))
+		log "${step} → FAILED (${reason})"
+		;;
+	esac
 }
 
-# Free MiB inside the cgroup, or empty when the accounting is unreadable (off-box, cgroup v1).
-# Empty means "unknown", and an unknown headroom never blocks a step — this script must stay
-# runnable on a workstation.
 headroom_mb() {
-  local max current
-  [ -r "${AUDIT_VERIFY_CGROUP_MAX}" ] && [ -r "${AUDIT_VERIFY_CGROUP_CURRENT}" ] || return 0
-  max="$(cat "${AUDIT_VERIFY_CGROUP_MAX}" 2>/dev/null)"
-  current="$(cat "${AUDIT_VERIFY_CGROUP_CURRENT}" 2>/dev/null)"
-  # "max" means no cap on this cgroup.
-  case "${max}" in '' | *[!0-9]*) return 0 ;; esac
-  case "${current}" in '' | *[!0-9]*) return 0 ;; esac
-  printf '%s' $(((max - current) / 1048576))
+	local max current
+	[ -r "${AUDIT_VERIFY_CGROUP_MAX}" ] && [ -r "${AUDIT_VERIFY_CGROUP_CURRENT}" ] || return 0
+	max="$(cat "${AUDIT_VERIFY_CGROUP_MAX}" 2>/dev/null)"
+	current="$(cat "${AUDIT_VERIFY_CGROUP_CURRENT}" 2>/dev/null)"
+
+	case "${max}" in '' | *[!0-9]*) return 0 ;; esac
+	case "${current}" in '' | *[!0-9]*) return 0 ;; esac
+	printf '%s' $(((max - current) / 1048576))
 }
 
-# step <name> <required MiB> -- <command…>
 step() {
-  local name="$1" need="$2"
-  shift 2
-  [ "${1:-}" = "--" ] && shift
-  local free
-  free="$(headroom_mb)"
-  if [ -n "${free}" ] && [ "${free}" -lt "${need}" ]; then
-    record "${name}" skipped "no-headroom"
-    return 0
-  fi
-  local status=0
-  timeout -k 30 "${AUDIT_VERIFY_STEP_BUDGET_SECS}" "$@" >&2 || status=$?
-  if [ "${status}" = "0" ]; then
-    record "${name}" ran ""
-  elif [ "${status}" = "124" ] || [ "${status}" = "137" ]; then
-    record "${name}" failed "budget-exceeded"
-  else
-    record "${name}" failed "exit-${status}"
-  fi
+	local name="$1" need="$2"
+	shift 2
+	[ "${1:-}" = "--" ] && shift
+	local free
+	free="$(headroom_mb)"
+	if [ -n "${free}" ] && [ "${free}" -lt "${need}" ]; then
+		record "${name}" skipped "no-headroom"
+		return 0
+	fi
+	local status=0
+	timeout -k 30 "${AUDIT_VERIFY_STEP_BUDGET_SECS}" "$@" >&2 || status=$?
+	if [ "${status}" = "0" ]; then
+		record "${name}" ran ""
+	elif [ "${status}" = "124" ] || [ "${status}" = "137" ]; then
+		record "${name}" failed "budget-exceeded"
+	else
+		record "${name}" failed "exit-${status}"
+	fi
 }
 
 is_ci_only() {
-  local candidate="$1" entry
-  for entry in ${AUDIT_VERIFY_CI_ONLY_PACKAGES}; do
-    [ "${entry}" = "${candidate}" ] && return 0
-  done
-  return 1
+	local candidate="$1" entry
+	for entry in ${AUDIT_VERIFY_CI_ONLY_PACKAGES}; do
+		[ "${entry}" = "${candidate}" ] && return 0
+	done
+	return 1
 }
 
 has_script() {
-  local dir="$1" script="$2"
-  [ -r "${dir}/package.json" ] || return 1
-  # `bun`, not `node`: bun is the repo's interpreter and the one this ladder already shells out to
-  # for every package step, so the probe adds no second runtime assumption.
-  AUDIT_VERIFY_PKG="${dir}/package.json" AUDIT_VERIFY_SCRIPT="${script}" bun -e '
+	local dir="$1" script="$2"
+	[ -r "${dir}/package.json" ] || return 1
+
+	AUDIT_VERIFY_PKG="${dir}/package.json" AUDIT_VERIFY_SCRIPT="${script}" bun -e '
     const fs = require("node:fs");
     const pkg = JSON.parse(fs.readFileSync(process.env.AUDIT_VERIFY_PKG, "utf8"));
     process.exit(pkg.scripts?.[process.env.AUDIT_VERIFY_SCRIPT] ? 0 : 1);
   ' 2>/dev/null
 }
 
-# ── 1. What changed ────────────────────────────────────────────────────────────────────────────
-# Both the working tree and anything already committed on this branch, so the ladder covers the
-# whole night whether or not the agent has committed yet.
-# `while read` rather than `mapfile`, so this stays runnable under the bash 3.2 a macOS checkout
-# has as well as the box's bash 5.
 CHANGED=()
 while IFS= read -r changed_path; do
-  [ -n "${changed_path}" ] && CHANGED+=("${changed_path}")
+	[ -n "${changed_path}" ] && CHANGED+=("${changed_path}")
 done < <(
-  {
-    # `--untracked-files=all`, because the default collapses a wholly-new directory to one `dir/`
-    # entry — a night that added a file in a new folder would otherwise verify nothing it wrote.
-    git status --porcelain --untracked-files=all 2>/dev/null | sed 's/^...//'
-    git diff --name-only origin/main...HEAD 2>/dev/null
-  } | grep -v '^\.audit/' | sort -u
+	{
+
+		git status --porcelain --untracked-files=all 2>/dev/null | sed 's/^...//'
+		git diff --name-only origin/main...HEAD 2>/dev/null
+	} | grep -v '^\.audit/' | sort -u
 )
 
 mkdir -p "$(dirname -- "${OUT}")" 2>/dev/null || true
 
 if [ -z "${CHANGED[*]+set}" ]; then
-  record "changes" skipped "no-changed-paths"
+	record "changes" skipped "no-changed-paths"
 else
-  log "${#CHANGED[@]} changed path(s)"
+	log "${#CHANGED[@]} changed path(s)"
 
-  # ── 2. Formatting, then the lint rules, both scoped to the changed paths ─────────────────────
-  # Path-scoped, and without the type-aware rules (see the header): every line this night wrote
-  # is still checked by the rules that do not need the whole program.
-  # `bunx` is a SEPARATE binary the bun installer symlinks beside `bun`, and a container that
-  # copied only `bun` onto its PATH has one and not the other — where this read `bunx` outright,
-  # both steps died `exit-126` (permission denied) and the night's record said FAILED about two
-  # checks that never ran. `bun x` is the same dispatcher spelled as a subcommand, so it is there
-  # whenever `bun` is; prefer the binary when it exists and fall back to the subcommand.
-  if command -v bunx >/dev/null 2>&1; then
-    BUNX=(bunx)
-  else
-    BUNX=(bun x)
-  fi
+	if command -v bunx >/dev/null 2>&1; then
+		BUNX=(bunx)
+	else
+		BUNX=(bun x)
+	fi
 
-  step format 256 -- "${BUNX[@]}" oxfmt --check "${CHANGED[@]}"
-  # The repo's `.oxlintrc.json` turns type-aware rules on, and a type-aware pass loads the WHOLE
-  # TypeScript program through tsgolint no matter how few paths it is given — the path list scopes
-  # the diagnostics, not the memory. That is the 3 GB peak the container's cap kills. So the box
-  # lints with the same rules minus the type-aware ones, from a derived config; the type-aware
-  # rules run on the PR in CI, where they belong.
-  # THE DERIVED CONFIG IS A TEXT EDIT, AT THE REPO ROOT, AND IT ASSERTS.
-  #   · TEXT, not `JSON.parse`: `.oxlintrc.json` carries `//` comments (oxlint reads JSONC), so a
-  #     JSON parse throws, the redirect leaves an EMPTY file, and oxlint rejects it — a lint leg
-  #     that never ran while the ladder reported a failure about the branch.
-  #   · REPO ROOT, not `mktemp`: a config resolves its relative `ignorePatterns` and `overrides`
-  #     against its OWN directory, so a config in /tmp silently lints with neither.
-  #   · `options.typeAware`, not a top-level key: the flag lives under `options`, and oxlint
-  #     ignores an unknown top-level one without complaint.
-  # The substitution is verified before the config is used: if the key ever moves or is renamed,
-  # this fails loudly rather than handing the box a config that quietly loads the whole program.
-  BOX_OXLINTRC=".oxlintrc.box.jsonc"
-  sed -E 's/("typeAware"[[:space:]]*:[[:space:]]*)true/\1false/' .oxlintrc.json >"${BOX_OXLINTRC}"
-  if grep -q '"typeAware"[[:space:]]*:[[:space:]]*false' "${BOX_OXLINTRC}"; then
-    step lint "${AUDIT_VERIFY_LINT_HEADROOM_MB}" -- "${BUNX[@]}" oxlint -c "${BOX_OXLINTRC}" "${CHANGED[@]}"
-  else
-    # The lint leg is SKIPPED rather than run against the repo's own config: a type-aware pass
-    # loads the whole TypeScript program and the container's cap kills it. The record carries the
-    # reason, so the night reports a check that did not run instead of a check that failed, and
-    # the remaining legs still run.
-    record "lint" failed "type-aware-override-missing"
-  fi
-  rm -f "${BOX_OXLINTRC}"
+	step format 256 -- "${BUNX[@]}" oxfmt --check "${CHANGED[@]}"
 
-  # ── 3. The changed packages' own typecheck + tests ───────────────────────────────────────────
-  PACKAGES=()
-  while IFS= read -r package_dir; do
-    [ -n "${package_dir}" ] && PACKAGES+=("${package_dir}")
-  done < <(
-    printf '%s\n' "${CHANGED[@]}" |
-      sed -n 's|^\(apps/[^/]*\)/.*|\1|p;s|^\(packages/[^/]*\)/.*|\1|p' | sort -u
-  )
-  for package in ${PACKAGES[@]+"${PACKAGES[@]}"}; do
-    [ -r "${package}/package.json" ] || continue
-    if is_ci_only "${package}"; then
-      record "typecheck:${package}" skipped "ci-only"
-      record "test:${package}" skipped "ci-only"
-      continue
-    fi
-    if has_script "${package}" typecheck; then
-      step "typecheck:${package}" "${AUDIT_VERIFY_TYPECHECK_HEADROOM_MB}" -- bun run --cwd "${package}" typecheck
-    else
-      record "typecheck:${package}" skipped "no-script"
-    fi
-    if has_script "${package}" test; then
-      step "test:${package}" "${AUDIT_VERIFY_TEST_HEADROOM_MB}" -- bun run --cwd "${package}" test
-    else
-      record "test:${package}" skipped "no-script"
-    fi
-  done
+	BOX_OXLINTRC=".oxlintrc.box.jsonc"
+	sed -E 's/("typeAware"[[:space:]]*:[[:space:]]*)true/\1false/' .oxlintrc.json >"${BOX_OXLINTRC}"
+	if grep -q '"typeAware"[[:space:]]*:[[:space:]]*false' "${BOX_OXLINTRC}"; then
+		step lint "${AUDIT_VERIFY_LINT_HEADROOM_MB}" -- "${BUNX[@]}" oxlint -c "${BOX_OXLINTRC}" "${CHANGED[@]}"
+	else
+
+		record "lint" failed "type-aware-override-missing"
+	fi
+	rm -f "${BOX_OXLINTRC}"
+
+	PACKAGES=()
+	while IFS= read -r package_dir; do
+		[ -n "${package_dir}" ] && PACKAGES+=("${package_dir}")
+	done < <(
+		printf '%s\n' "${CHANGED[@]}" |
+			sed -n 's|^\(apps/[^/]*\)/.*|\1|p;s|^\(packages/[^/]*\)/.*|\1|p' | sort -u
+	)
+	for package in ${PACKAGES[@]+"${PACKAGES[@]}"}; do
+		[ -r "${package}/package.json" ] || continue
+		if is_ci_only "${package}"; then
+			record "typecheck:${package}" skipped "ci-only"
+			record "test:${package}" skipped "ci-only"
+			continue
+		fi
+		if has_script "${package}" typecheck; then
+			step "typecheck:${package}" "${AUDIT_VERIFY_TYPECHECK_HEADROOM_MB}" -- bun run --cwd "${package}" typecheck
+		else
+			record "typecheck:${package}" skipped "no-script"
+		fi
+		if has_script "${package}" test; then
+			step "test:${package}" "${AUDIT_VERIFY_TEST_HEADROOM_MB}" -- bun run --cwd "${package}" test
+		else
+			record "test:${package}" skipped "no-script"
+		fi
+	done
 fi
 
 printf '{"ran":%s,"skipped":%s,"failed":%s,"steps":[%s]}\n' "${RAN}" "${SKIPPED}" "${FAILED}" "${RECORDS}" >"${OUT}"

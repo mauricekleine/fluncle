@@ -1,16 +1,9 @@
 {
   "$schema": "https://turbo.build/schema.json",
-  // patches/ + bunfig.toml shape what an install actually produces, so they are part of every
-  // task hash — editing a patch file without this would let turbo serve stale cached output.
   "globalDependencies": ["tsconfig.json", "bunfig.toml", "patches/**"],
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
-      // turbo's default envMode is strict: a task sees ONLY the vars declared here. The web
-      // build reads these for the Sentry release + source-map upload (vite.config.ts) —
-      // undeclared, `turbo run build` silently drops the upload and caches a tokenless
-      // artifact. (The Cloudflare Build command invokes the web build directly, outside
-      // turbo, so prod never depended on this — local `bun run check` does.)
       "env": [
         "SENTRY_AUTH_TOKEN",
         "SENTRY_ORG",

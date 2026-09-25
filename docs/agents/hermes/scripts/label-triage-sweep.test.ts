@@ -1,19 +1,3 @@
-// Unit tests for label-triage-sweep.ts — the label-triage GATE cron's orchestrator.
-//
-// The gate is a PURE trigger (zero model tokens), so the contract worth pinning is the decision
-// itself: WHEN does enough work exist to be worth a round, and in what order does the round read
-// it. Both answers are load-bearing in a way a wrong one hides:
-//
-//   - Counting the whole undecided pile instead of the never-looked slice would fire every firing
-//     forever, because the stuck core never shrinks. That is the expensive failure.
-//   - Never re-reading a stuck label would forfeit the self-healing the round depends on — a
-//     conflation fixed upstream resolves on its own only if something looks again. That is the
-//     silent one.
-//
-// The box-script sweeps are self-contained (they cannot import the workspace) and live outside any
-// package's test runner, so this file uses `bun:test` and is run directly:
-//
-//   bun test docs/agents/hermes/scripts/label-triage-sweep.test.ts
 import { describe, expect, test } from "bun:test";
 
 import { decide, summarize, type TriageLabel } from "./label-triage-sweep";
@@ -50,8 +34,6 @@ describe("the gate decision", () => {
   });
 
   test("counts ONLY never-looked labels toward the threshold", () => {
-    // The stuck core never shrinks, so counting the whole pile would fire forever. This is the
-    // expensive failure the gate exists to avoid.
     const pile = [
       ...neverLooked(5),
       ...Array.from({ length: 100 }, (_, i) => label(`old-${i}`, 1)),
@@ -73,8 +55,6 @@ describe("the gate decision", () => {
   });
 
   test("a label past the staleness window rides along once a round fires", () => {
-    // Self-healing depends on this: a conflation fixed upstream resolves only if something looks
-    // again, and nothing else ever will.
     const pile = [...neverLooked(40), label("stale", 31), label("fresh", 2)];
     const verdict = decide(pile, { now: NOW, staleDays: 30, threshold: 40 });
 
@@ -99,7 +79,6 @@ describe("the gate decision", () => {
   });
 
   test("treats an unparseable cursor as never-looked rather than skipping the label", () => {
-    // Fail toward looking again: a corrupt stamp must not strand a label forever.
     const pile: TriageLabel[] = [{ ...label("broken"), triageCheckedAt: "not-a-date" }];
     const verdict = decide(pile, { now: NOW, threshold: 1 });
 

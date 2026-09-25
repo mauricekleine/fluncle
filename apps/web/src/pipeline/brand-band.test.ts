@@ -2,11 +2,6 @@ import { describe, expect, it } from "vitest";
 import { fillFor, inVioletBand } from "./create-pipeline";
 import { LOGOS } from "./logos";
 
-// `/pipeline` paints each service chip's brand mark in the brand's own colour (lore art, exempt
-// from the One Sun Rule), but the exemption still reserves Nebula Violet's BAND for the live
-// callout (DESIGN.md §2, The Lore-Art Paint Exemption): a violet node would read as live. Several
-// real brand colours land in that band, so every rendered fill is checked, not the source hex.
-
 function channels(fill: string): [number, number, number] {
   const rgb = /^rgb\((\d+),(\d+),(\d+)\)$/.exec(fill);
   if (rgb) {
