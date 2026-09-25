@@ -1,37 +1,39 @@
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
-import { FreshEmpty, FreshFooter, FreshMarquee } from "@/components/fresh";
-import { type FreshView } from "@/components/fresh/data";
+import { FreshPageView } from "@/components/fresh";
+import { freshIntro } from "@/components/fresh/copy";
 import { siteUrl } from "@/lib/fluncle-links";
+import {
+  type FreshPage,
+  type FreshView,
+  groupFreshReleases,
+  releaseTrack,
+} from "@/lib/fresh-releases";
 import { jsonLdScript } from "@/lib/json-ld";
 import { logPageUrl } from "@/lib/log-schema";
-import {
-  FRESH_RECORDS_WINDOW_DAYS,
-  type FreshReleases,
-  listFreshReleases,
-} from "@/lib/server/fresh";
+import { listFreshReleases } from "@/lib/server/fresh";
+import { releaseTodayUtc } from "@/lib/server/release-day";
 
-// `/fresh` — WHAT JUST CAME OUT, across the whole archive.
+// `/fresh` — WHAT JUST CAME OUT, across the whole archive: a FINITE WEEK.
 //
-// The page answers one query ("new drum & bass releases") the way a crate digger asks it: newest
-// first, the whole frontier, over a trailing 30-day window. It is a HUB, not a detail page — always
-// indexable, like /albums or /artists; SEO is the whole point. Unlike the wiki-style graph pages
-// (artist/label/album), which sit on the reading plate, /fresh is always-evolving and gets its own
-// full-bleed treatment — the MARQUEE (components/fresh/): a billboard of the newest drops.
+// The page answers one query ("new drum & bass releases") the way a weekly listener asks it: what
+// came out this week, then last week, back to the end of a trailing 30-day window, and then it says
+// so. It is a CATALOGUE page (DESIGN.md's Three Areas Rule): the shared plate, the title alone, one
+// factual intro line. Always indexable, like /albums or /artists; SEO is the whole point.
 //
-// A finding leads in full voice (avatar + Log ID coordinate, gold heat); an uncertified row follows
-// in the unlit register — a dimmed avatar, no coordinate (DESIGN.md's Unlit Rule); an album record
-// leads with its cover and links to its page. The copy is careful never to claim Fluncle FOUND
-// these: these are RELEASE dates, and the two are unrelated (lib/server/fresh.ts; VOICE.md's Found
-// Rule).
+// The unit is the RELEASE, not the track: one EP is one entry whose tracks fold out beneath it, and
+// the releases sit in rolling week buckets with their counts (`lib/fresh-releases.ts`, folded on the
+// server so the payload carries each record's cover once). A finding is lit and an uncertified row
+// unlit, by the light alone (the Unlit Rule). The copy never claims Fluncle FOUND these: these are
+// RELEASE dates, and the two are unrelated (lib/server/fresh.ts; VOICE.md's Found Rule).
 
-// The page reaches the WIDER records window (90 days) so its "Albums & EPs" view has a full album
-// cut; the track stream inside stays on the 30-day window, and every feed is untouched (they call
-// `listFreshTracks`, which reads the default window). The "All" view's rail narrows the records back
-// to the 30-day cut client-side, so the default layout is unchanged.
-const fetchFresh = createServerFn({ method: "GET" }).handler(
-  (): Promise<FreshReleases> => listFreshReleases(new Date(), FRESH_RECORDS_WINDOW_DAYS),
-);
+// The same read the feeds make (`listFreshTracks` folds the same rows), so /fresh.xml and
+// /fresh.json can never list a track the page does not.
+const fetchFresh = createServerFn({ method: "GET" }).handler(async (): Promise<FreshPage> => {
+  const now = new Date();
+
+  return groupFreshReleases(await listFreshReleases(now), releaseTodayUtc(now));
+});
 
 const title = "New drum & bass releases · Fluncle";
 const description =
@@ -39,42 +41,27 @@ const description =
 
 /**
  * The page's JSON-LD: an `ItemList` of the rendered tracks as `MusicRecording`s, bounded to what
- * the page actually shows (the loader is already capped). A finding resolves to its `/log`
+ * the page actually shows (the read is already capped). A finding resolves to its `/log`
  * coordinate; an uncertified row to its off-site URL, or to none — only a finding is ever given a
  * fluncle.com URL, so the structured data never claims a certification that does not exist. The
  * whole payload is HTML-escaped by `jsonLdScript` before it reaches the inline <script> (a
  * `</script>` in a Spotify-sourced title can't break out — the stored-XSS sink).
  *
  * THE VIEW-PILL CHOICE: this list is STABLE across the `?view=` pills. The canonical URL is bare
- * `/fresh` for every view, and its default ("All") renders exactly this 30-day track stream — so the
- * structured data describes the canonical page a crawler sees, never a client-side filter of it. It
- * lists the track stream only (never the wider 90-day album cut), so it can never claim more than the
- * canonical page shows; the album records carry their own `/album/<slug>` schema elsewhere.
+ * `/fresh` for every view, and its default ("All") holds every track of every release in the window,
+ * so the structured data describes the canonical page a crawler sees, never a client-side filter.
  */
-function freshItemList(data: FreshReleases): Record<string, unknown> {
-  type Entry = { artists: string[]; releaseDate?: string; title: string; url?: string };
-  const entries: Entry[] = data.sections.flatMap((section) => [
-    ...section.findings.flatMap((finding) =>
-      finding.logId
-        ? [
-            {
-              artists: finding.artists,
-              releaseDate: finding.releaseDate,
-              title: finding.title,
-              url: logPageUrl(finding.logId),
-            },
-          ]
-        : [],
+function freshItemList(page: FreshPage): Record<string, unknown> {
+  const entries = page.weeks.flatMap((week) =>
+    week.releases.flatMap((release) =>
+      release.tracks.map((track) => ({
+        artists: releaseTrack(release, track).artists.map((artist) => artist.name),
+        releaseDate: release.releaseDate,
+        title: track.title,
+        url: track.lit && track.logId ? logPageUrl(track.logId) : track.spotifyUrl,
+      })),
     ),
-    ...section.catalogue.map((track) => ({
-      artists: track.artists,
-      // The unlit row's own release date — the whole page is ordered by it, so the structured
-      // data carries it too (this IS "what just came out").
-      releaseDate: track.releaseDate,
-      title: track.title,
-      url: track.spotifyUrl,
-    })),
-  ]);
+  );
 
   // The rendered tracks as an ItemList, riding as the `mainEntity` of a `CollectionPage` (the hub
   // shape the graph indexes now use) with `numberOfItems` so the list's size is machine-readable.
@@ -86,7 +73,7 @@ function freshItemList(data: FreshReleases): Record<string, unknown> {
         "@type": "MusicRecording",
         byArtist: entry.artists.map((name) => ({ "@type": "MusicGroup", name })),
         // The release date — the one fact this page is sorted by — as each recording's
-        // `datePublished`. Present on every row (both halves carry a release_date).
+        // `datePublished`.
         ...(entry.releaseDate ? { datePublished: entry.releaseDate } : {}),
         genre: "Drum and Bass",
         name: entry.title,
@@ -106,7 +93,7 @@ function freshItemList(data: FreshReleases): Record<string, unknown> {
   };
 }
 
-function freshHead(loaderData: FreshReleases | undefined) {
+function freshHead(loaderData: FreshPage | undefined) {
   const pageUrl = `${siteUrl}/fresh`;
 
   return {
@@ -138,18 +125,17 @@ export const Route = createFileRoute("/fresh")({
   validateSearch: (search: Record<string, unknown>): FreshSearch => ({
     view: search.view === "tracks" || search.view === "albums" ? search.view : undefined,
   }),
-  loader: (): Promise<FreshReleases> => fetchFresh(),
-  head: ({ loaderData }: { loaderData?: FreshReleases }) => freshHead(loaderData),
-  component: FreshPage,
+  loader: (): Promise<FreshPage> => fetchFresh(),
+  head: ({ loaderData }: { loaderData?: FreshPage }) => freshHead(loaderData),
+  component: FreshRoute,
 });
 
-function FreshPage() {
-  const data = Route.useLoaderData();
+function FreshRoute() {
+  const page = Route.useLoaderData();
   const { view: viewParam } = Route.useSearch();
   const navigate = useNavigate();
 
   const view: FreshView = viewParam ?? "all";
-  const empty = data.sections.length === 0 && data.records.length === 0;
 
   // The pill writes the view to `?view=`; "all" clears the param, so the default view keeps the URL
   // bare. `replace` keeps a run of pill clicks out of the back-stack; a shared link still deep-links.
@@ -163,13 +149,22 @@ function FreshPage() {
   };
 
   return (
-    <main className="fresh-page">
-      {empty ? (
-        <FreshEmpty windowDays={data.windowDays} />
-      ) : (
-        <FreshMarquee data={data} onViewChange={onViewChange} view={view} />
-      )}
-      <FreshFooter />
+    <main className="log-plate-stage">
+      <article className="log-plate log-index fresh-plate">
+        <header className="log-masthead">
+          <h1 className="log-coordinate log-index-title">Fresh</h1>
+          {/* Catalogue register (VOICE.md's Three Areas): one factual line, the release count and
+              the stretch it covers. ONE composed string, so SSR never splits it into text nodes. */}
+          <p className="log-index-intro">{freshIntro(page)}</p>
+        </header>
+
+        <FreshPageView onViewChange={onViewChange} page={page} view={view} />
+
+        <footer className="log-plate-footer">
+          <Link to="/findings">Back to the archive</Link>
+          <Link to="/tracks">Tracks</Link>
+        </footer>
+      </article>
     </main>
   );
 }

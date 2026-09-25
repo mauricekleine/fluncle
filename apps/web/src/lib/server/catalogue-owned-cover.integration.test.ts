@@ -54,9 +54,7 @@ describe("catalogue rows carry the album's owned cover master", () => {
     expect(OWNED).toBeDefined();
 
     const fresh = await listFreshReleases(NOW);
-    const row = fresh.sections
-      .flatMap((section) => section.catalogue)
-      .find((item) => item.trackId === "owned-cover-1");
+    const row = fresh.catalogue.find((item) => item.trackId === "owned-cover-1");
 
     expect(row?.albumImageUrl).toBe(OWNED);
   });

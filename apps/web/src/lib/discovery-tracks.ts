@@ -1,5 +1,5 @@
 import { type TrackListItem } from "@fluncle/contracts";
-import { type FreshStreamEntry } from "@/components/fresh/data";
+import { type FreshEntry } from "./fresh-releases";
 import { type QueueTrack } from "./preview-player";
 import { type SearchHit } from "./search-results";
 import { type SonicNeighbour } from "./server/track-page";
@@ -119,7 +119,7 @@ export function hubEntryToDiscoveryTrack(entry: TracksHubEntry): DiscoveryTrack 
   };
 }
 
-export function freshEntryToDiscoveryTrack(entry: FreshStreamEntry): DiscoveryTrack {
+export function freshEntryToDiscoveryTrack(entry: FreshEntry): DiscoveryTrack {
   if (entry.kind === "finding") {
     return { ...findingToDiscoveryTrack(entry.finding), avatarUrl: entry.finding.artistAvatarUrl };
   }
