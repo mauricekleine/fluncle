@@ -16,7 +16,10 @@ import {
   labelNameProbeStatement,
   resolveFilterEntities,
   searchArchive as searchArchiveLive,
+  searchLikeTrack,
 } from "./search";
+import { SEARCH_STYLES } from "../search-styles";
+import { resetStyleProbeCache } from "./style-probe";
 
 const translateQuery = vi.hoisted(() => vi.fn<(q: string) => Promise<unknown>>());
 
@@ -1724,5 +1727,185 @@ describe("the LLM is down — search degrades, it never breaks", () => {
     expect((await searchArchive({ q: "Netsky" })).redirect).toBe("/artist/netsky");
     expect((await searchArchive({ q: "clouds" })).results).toHaveLength(1);
     expect((await searchArchive({ q: "sounds like Nine Clouds" })).kind).toBe("sonic");
+  });
+});
+
+describe("the style tier — a style word ranks by sound, ahead of a namesake", () => {
+  const liquid = SEARCH_STYLES[0];
+
+  async function seedAnchor(slug: string, angle: number): Promise<void> {
+    const id = `anchor-${slug}`;
+
+    await db.execute({
+      args: [id, slug.replace(/-/g, " "), slug],
+      sql: `insert into artists (id, name, slug, created_at, updated_at)
+            values (?, ?, ?, '2026-07-01', '2026-07-01')`,
+    });
+    await db.execute({
+      args: [id, new Uint8Array(angleVector(angle).buffer)],
+      sql: `insert into artist_centroids (artist_id, centroid_blob, computed_at, rank_corpus, vector_count)
+            values (?, ?, '2026-07-01', 'corpus-1', 4)`,
+    });
+  }
+
+  beforeEach(() => {
+    resetStyleProbeCache();
+  });
+
+  it("ranks the archive by the anchors' mean probe and echoes the anchors that weighed in", async () => {
+    const [first, second] = liquid.anchors;
+    await seedAnchor(first ?? "", 0.25);
+    await seedAnchor(second ?? "", 0.35);
+
+    const result = await searchArchive({ q: "liquid" });
+
+    expect(result.kind).toBe("sonic");
+    expect(result.degraded).toBe(false);
+    expect(result.redirect).toBeUndefined();
+    expect(result.filters?.sound).toBe("liquid");
+    expect(result.filters?.soundsLikeArtists).toEqual([
+      (first ?? "").replace(/-/g, " "),
+      (second ?? "").replace(/-/g, " "),
+    ]);
+    expect(result.results.map((hit) => hit.trackId)).toEqual([
+      "uncertified-netsky",
+      "certified-netsky",
+      "certified-1991",
+      "certified-andromedik",
+    ]);
+    expect(translateQuery).not.toHaveBeenCalled();
+  });
+
+  it("reads the filler around a style word, and keeps a namesake as an entity row", async () => {
+    await seedAnchor(liquid.anchors[0] ?? "", 0.3);
+    await db.execute({
+      args: [],
+      sql: `insert into artists (id, name, slug, created_at, updated_at)
+            values ('a-liquid', 'Liquid', 'liquid-artist', '2026-07-01', '2026-07-01')`,
+    });
+
+    const result = await searchArchive({ q: "some liquid dnb" });
+
+    expect(result.kind).toBe("sonic");
+    expect(result.filters?.sound).toBe("liquid");
+
+    const named = await searchArchive({ q: "Liquid" });
+
+    expect(named.kind).toBe("sonic");
+    expect(named.redirect).toBeUndefined();
+    expect(named.entities.map((entity) => `${entity.kind}:${entity.name}`)).toEqual([
+      "artist:Liquid",
+    ]);
+  });
+
+  it("resolves every anchor in ONE slug-keyed statement, never one read per anchor", async () => {
+    for (const [index, slug] of liquid.anchors.entries()) {
+      await seedAnchor(slug, 0.2 + index * 0.01);
+    }
+    const spy = vi.spyOn(db, "execute");
+
+    await searchArchive({ q: "liquid" });
+
+    const anchorReads = spy.mock.calls
+      .map((call) => call[0])
+      .filter(
+        (arg) =>
+          typeof arg === "object" &&
+          arg !== null &&
+          typeof (arg as { sql?: unknown }).sql === "string" &&
+          (arg as { sql: string }).sql.includes("artist_centroids ac") &&
+          (arg as { sql: string }).sql.includes("artists.slug in"),
+      );
+
+    expect(anchorReads).toHaveLength(1);
+  });
+
+  it("DECLINES when no anchor has a centroid, and the query falls through to the name tiers", async () => {
+    const result = await searchArchive({ q: "liquid" });
+
+    expect(result.kind).not.toBe("sonic");
+    expect(result.filters?.sound).toBeUndefined();
+  });
+
+  it("leaves a sentence with a style word inside it to the tiers that read sentences", async () => {
+    await seedAnchor(liquid.anchors[0] ?? "", 0.3);
+
+    const result = await searchArchive({ q: "dark liquid with vocals" });
+
+    expect(result.filters?.sound).toBeUndefined();
+    expect(translateQuery).toHaveBeenCalled();
+  });
+});
+
+describe("the sonic view of one track — its own sound, else its lead artist's", () => {
+  it("ranks by the track's own vector and leaves the seed out of its own list", async () => {
+    const result = await searchLikeTrack({
+      allowBoundedSonicForDiagnostics: true,
+      trackId: "certified-1991",
+    });
+
+    expect(result?.anchor?.trackId).toBe("certified-1991");
+    expect(result?.filters).toBeUndefined();
+    expect(result?.results.map((hit) => hit.trackId)).toEqual([
+      "certified-netsky",
+      "uncertified-netsky",
+      "certified-andromedik",
+    ]);
+  });
+
+  it("falls back to the lead artist's centroid for a track with no embedding, and says so", async () => {
+    await db.execute({
+      args: [],
+      sql: `insert into tracks (track_id, title, artists_json, spotify_url, duration_ms, has_embedding)
+            values ('unembedded', 'Quiet One', '["Koven"]', null, 180000, 0)`,
+    });
+    await db.execute({
+      args: [],
+      sql: `insert into artists (id, name, slug, created_at, updated_at)
+            values ('a-koven', 'Koven', 'koven', '2026-07-01', '2026-07-01')`,
+    });
+    await db.execute({
+      args: [new Uint8Array(angleVector(1.15).buffer)],
+      sql: `insert into artist_centroids (artist_id, centroid_blob, computed_at, rank_corpus, vector_count)
+            values ('a-koven', ?, '2026-07-01', 'corpus-1', 4)`,
+    });
+    await db.execute({
+      args: [],
+      sql: `insert into track_artists (track_id, artist_id, position) values ('unembedded', 'a-koven', 1)`,
+    });
+
+    const result = await searchLikeTrack({
+      allowBoundedSonicForDiagnostics: true,
+      trackId: "unembedded",
+    });
+
+    expect(result?.anchor?.similar).toBe(true);
+    expect(result?.filters?.soundsLikeArtists).toEqual(["Koven"]);
+    expect(result?.results[0]?.trackId).toBe("certified-andromedik");
+  });
+
+  it("answers the seed alone when the track has neither, and nothing for an unknown id", async () => {
+    await db.execute({
+      args: [],
+      sql: `insert into tracks (track_id, title, artists_json, spotify_url, duration_ms, has_embedding)
+            values ('silent', 'No Read', '["Nobody"]', null, 180000, 0)`,
+    });
+
+    const alone = await searchLikeTrack({
+      allowBoundedSonicForDiagnostics: true,
+      trackId: "silent",
+    });
+
+    expect(alone?.anchor?.trackId).toBe("silent");
+    expect(alone?.anchor?.similar).toBe(false);
+    expect(alone?.results).toEqual([]);
+    expect(await searchLikeTrack({ trackId: "no-such-track" })).toBeNull();
+  });
+
+  it("degrades honestly when the ranking engine is off (the public default without Sonar)", async () => {
+    const result = await searchLikeTrack({ trackId: "certified-1991" });
+
+    expect(result?.degraded).toBe(true);
+    expect(result?.results).toEqual([]);
   });
 });

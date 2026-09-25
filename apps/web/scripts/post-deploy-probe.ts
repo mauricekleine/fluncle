@@ -4,7 +4,7 @@ import { contract } from "@fluncle/contracts/orpc";
 import { liveSurfaces, statusProbes, type Surface } from "@fluncle/registry";
 
 import { SEARCH_EXAMPLES } from "../src/lib/search-results";
-
+import { SEARCH_STYLES } from "../src/lib/search-styles";
 import { VECTOR_ENDPOINT_PROBE_TIMEOUT_MS } from "../src/lib/vector-budget";
 
 const PROD_BASE_URL = "https://www.fluncle.com";
@@ -38,7 +38,8 @@ type Expectation =
   | { kind: "served"; content: ContentKind }
   | { kind: "auth-gate" }
   | { kind: "dark-or-served"; content: ContentKind; darkStatus: number; darkCode: string }
-  | { kind: "search-example" };
+  | { kind: "search-example" }
+  | { anchors: number; kind: "search-style"; slug: string };
 
 type TargetClass = "api-auth" | "api-public" | "discovery" | "feed" | "subdomain" | "web";
 
@@ -277,6 +278,17 @@ export function buildTargets(): { targets: Target[]; skipped: SkippedTarget[] } 
     });
   }
 
+  for (const style of SEARCH_STYLES) {
+    targets.push({
+      className: "api-public",
+      expect: { anchors: style.anchors.length, kind: "search-style", slug: style.slug },
+      name: `search style · ${style.label}`,
+      rewritable: true,
+      url: `${PROD_BASE_URL}${API_PREFIX}/search/archive?q=${encodeURIComponent(style.aliases[0] ?? style.slug)}`,
+      ...vectorLane("search_archive"),
+    });
+  }
+
   return { skipped, targets };
 }
 
@@ -396,6 +408,52 @@ export function judgeSearchExample(body: string): { verdict: Verdict; detail: st
   return { detail: `200 ok (${results + entities})`, verdict: "PASS" };
 }
 
+export function judgeSearchStyle(
+  body: string,
+  expected: { anchors: number; slug: string },
+): { verdict: Verdict; detail: string } {
+  let payload: {
+    degraded?: unknown;
+    filters?: { sound?: unknown; soundsLikeArtists?: unknown };
+    kind?: unknown;
+    results?: unknown;
+  };
+
+  try {
+    payload = JSON.parse(body) as typeof payload;
+  } catch {
+    return { detail: "200 but unparseable JSON", verdict: "FAIL" };
+  }
+
+  if (payload.degraded === true) {
+    return { detail: "200 but DEGRADED — the sound ranking did not run", verdict: "FAIL" };
+  }
+
+  if (payload.kind !== "sonic" || payload.filters?.sound !== expected.slug) {
+    return {
+      detail: `200 but answered as ${String(payload.kind)}, not the ${expected.slug} sound`,
+      verdict: "FAIL",
+    };
+  }
+
+  const anchors = Array.isArray(payload.filters.soundsLikeArtists)
+    ? payload.filters.soundsLikeArtists.length
+    : 0;
+
+  if (anchors !== expected.anchors) {
+    return {
+      detail: `200 but only ${anchors}/${expected.anchors} anchors resolved to a centroid`,
+      verdict: "FAIL",
+    };
+  }
+
+  const results = Array.isArray(payload.results) ? payload.results.length : 0;
+
+  return results > 0
+    ? { detail: `200 ok (${results}, ${anchors} anchors)`, verdict: "PASS" }
+    : { detail: "200 but NO results", verdict: "FAIL" };
+}
+
 export function judge(
   expect: Expectation,
   status: number,
@@ -433,6 +491,14 @@ export function judge(
     }
 
     return judgeSearchExample(body);
+  }
+
+  if (expect.kind === "search-style") {
+    if (status < 200 || status >= 300) {
+      return { detail: `${status} (expected 2xx)`, verdict: "FAIL" };
+    }
+
+    return judgeSearchStyle(body, expect);
   }
 
   if (status >= 200 && status < 300) {

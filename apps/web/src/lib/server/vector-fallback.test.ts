@@ -26,6 +26,13 @@ describe("Sonar's Turso fallback cost contract", () => {
     { file: "tracks.ts", name: "log", operationIds: ["sonar.fallback.log"] },
     { file: "search.ts", name: "sonic search", operationIds: ["sonar.fallback.search"] },
     {
+      // The style scan runs behind a narrower pre-filter bound of its own, and says when it hits it.
+      bound: "vectorFallbackCandidateLimitSql(STYLE_PREFILTER_CAP)",
+      file: "style-probe.ts",
+      name: "style ranking",
+      operationIds: ["sonar.fallback.style"],
+    },
+    {
       file: "recommendations.ts",
       name: "recommendations",
       operationIds: [
@@ -177,6 +184,7 @@ describe("Sonar's Turso fallback cost contract", () => {
       "artist-dossier.ts",
       "recommendations.ts",
       "search.ts",
+      "style-probe.ts",
       "track-page.ts",
       "tracks.ts",
     ].map((file) => readFileSync(new URL(file, import.meta.url), "utf8"));
@@ -196,6 +204,7 @@ describe("Sonar's Turso fallback cost contract", () => {
       "track page",
       "log",
       "sonic search",
+      "style ranking",
       "recommendations",
     ]);
 
@@ -207,7 +216,7 @@ describe("Sonar's Turso fallback cost contract", () => {
           new RegExp(`executeVectorFallback\\(\\s*db,\\s*"${operationId}"`),
         );
         expect(source, `${consumer.name}: ${operationId}`).toContain(
-          "vectorFallbackCandidateLimitSql()",
+          "bound" in consumer ? consumer.bound : "vectorFallbackCandidateLimitSql()",
         );
 
         await expect(

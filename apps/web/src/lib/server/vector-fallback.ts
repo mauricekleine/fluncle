@@ -25,6 +25,7 @@ export const VECTOR_FALLBACK_OPERATION_IDS = [
   "sonar.fallback.recommendations-catalogue",
   "sonar.fallback.recommendations-findings",
   "sonar.fallback.search",
+  "sonar.fallback.style",
   "sonar.fallback.track",
 ] as const;
 

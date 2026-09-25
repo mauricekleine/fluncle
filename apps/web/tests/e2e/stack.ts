@@ -48,16 +48,16 @@ import { LOCAL_DB_CONCURRENCY } from "../../src/lib/database-concurrency";
 /** apps/web — every path below is resolved against it, so the stack works from any cwd. */
 export const WEB_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
-// Dedicated, distinctive ports — and one PAIR PER CHECKOUT.
+// Dedicated, distinctive ports — and one trio per checkout.
 //
-// The base pair is the documented one, chosen to collide with nothing else in the repo: not dev
+// The base ports are chosen to collide with nothing else in the repo: not dev
 // (:3000), not the smoke routine (:3120/:8899), not the per-worktree libSQL range (:8100–:8999).
 // But one Mac runs several worktrees at once, and this stack REFUSES rather than clobbers when a
-// port is taken — so a single fixed pair means the second worktree to start its suite simply
+// port is taken — so a single fixed trio means the second worktree to start its suite simply
 // cannot run, and two agents fail each other's preflight for no reason of their own.
 //
 // So each checkout takes a deterministic slot above the base, derived from its own absolute path.
-// Deterministic matters twice over: the same worktree always lands on the same pair (a straggler
+// Deterministic matters twice over: the same worktree always lands on the same ports (a straggler
 // listening there is recognisably ours, and `reapPorts` still finds it), and `playwright.config.ts`
 // — a separate Node process — derives the identical `BASE_URL` without anything being passed
 // between them. CI checks out one copy per runner and has no neighbours to avoid, so it stays on
@@ -65,6 +65,7 @@ export const WEB_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", ".."
 // the same honest refusal below, naming the port.
 const VITE_PORT_BASE = 3140;
 const LIBSQL_PORT_BASE = 9440;
+const SONAR_PORT_BASE = 9640;
 const PORT_SLOTS = 200;
 
 function portSlot(): number {
@@ -81,8 +82,10 @@ const PORT_SLOT = portSlot();
 // `playwright.config.ts` (which waits on Vite here).
 export const VITE_PORT = VITE_PORT_BASE + PORT_SLOT;
 export const LIBSQL_PORT = LIBSQL_PORT_BASE + PORT_SLOT;
+export const SONAR_PORT = SONAR_PORT_BASE + PORT_SLOT;
 export const BASE_URL = `http://127.0.0.1:${VITE_PORT}`;
 export const LIBSQL_URL = `http://127.0.0.1:${LIBSQL_PORT}`;
+export const SONAR_URL = `http://127.0.0.1:${SONAR_PORT}`;
 
 const DEV_VARS = join(WEB_ROOT, ".dev.vars");
 const DEV_VARS_TEMPLATE = join(WEB_ROOT, ".dev.vars.e2e.tpl");
@@ -148,7 +151,8 @@ export function materializeDevVars(): void {
 function renderDevVarsTemplate(): string {
   const rendered = readFileSync(DEV_VARS_TEMPLATE, "utf8")
     .replaceAll("__E2E_VITE_PORT__", String(VITE_PORT))
-    .replaceAll("__E2E_LIBSQL_PORT__", String(LIBSQL_PORT));
+    .replaceAll("__E2E_LIBSQL_PORT__", String(LIBSQL_PORT))
+    .replaceAll("__E2E_SONAR_PORT__", String(SONAR_PORT));
   const unresolved = rendered.match(/__E2E_[A-Z_]+__/g);
 
   if (unresolved) {
@@ -282,7 +286,7 @@ export function killProc(proc: Subprocess | undefined): void {
 
 /** SIGKILL anything still bound to one of OUR dedicated ports. Best effort. */
 export async function reapPorts(): Promise<void> {
-  for (const port of [LIBSQL_PORT, VITE_PORT]) {
+  for (const port of [LIBSQL_PORT, SONAR_PORT, VITE_PORT]) {
     if (!(await isPortListening(port))) {
       continue;
     }

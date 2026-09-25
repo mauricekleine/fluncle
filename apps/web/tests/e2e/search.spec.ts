@@ -34,7 +34,7 @@
 //   - a BARE TOKEN (`Aurora`, `zzzqqx`) — tier 3, returns even with zero rows,
 //     which is what makes `zzzqqx` a deterministic way to reach the empty state;
 //   - a SONIC phrase (`tracks that sound like Synthetic Aurora`) — tier 3½,
-//     honestly degrading to full text while the local Sonar flag is off;
+//     ranked by the isolated fake Sonar;
 //   - a STRUCTURED sentence — tier 4, unprovisioned, degrading to full text.
 
 import { expect, test, type ConsoleMessage, type Page } from "@playwright/test";
@@ -46,6 +46,8 @@ import {
   SEEDED_FUTURE_RELEASE,
   SEEDED_PARTIAL_RELEASE,
   SEEDED_SONIC_ANCHOR,
+  SEEDED_SONIC_NEIGHBOUR,
+  SEEDED_STYLE,
 } from "./seed";
 
 // The graph entity seeded in `seed.ts` and wired to the first finding — the
@@ -249,7 +251,7 @@ const QUERY_KINDS = [
     query: `${SEEDED_ARTIST_NAME} tracks in A minor`,
   },
   {
-    expected: ["Reading by name only right now.", SEEDED_SONIC_ANCHOR.title],
+    expected: [SEEDED_SONIC_NEIGHBOUR.title],
     kind: "sonic",
     query: `tracks that sound like ${SEEDED_SONIC_ANCHOR.title}`,
   },
@@ -294,6 +296,24 @@ test("the whole query state lives in the URL, for every kind of query", async ({
   }
 
   expect(problems, `expected a clean console, saw:\n${problems.join("\n")}`).toEqual([]);
+});
+
+test("a style ranks the seeded catalogue by its anchor artists' sound", async ({ page }) => {
+  await blockExternalRequests(page);
+
+  const queryUrl = `/search?q=${SEEDED_STYLE.slug}`;
+  const rawHtml = await (await page.request.get(queryUrl)).text();
+  let prior = -1;
+
+  for (const title of SEEDED_STYLE.rankedTitles) {
+    const position = rawHtml.indexOf(title);
+    expect(position, `${title} must follow the preceding style track in SSR`).toBeGreaterThan(
+      prior,
+    );
+    prior = position;
+  }
+
+  expect(rawHtml).not.toContain("Reading by name only right now.");
 });
 
 test("a coordinate resolves on the page WITHOUT bouncing the URL away", async ({ page }) => {
