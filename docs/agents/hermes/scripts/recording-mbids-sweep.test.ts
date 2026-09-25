@@ -1,28 +1,8 @@
-// Unit tests for recording-mbids-sweep.ts — the `--no-agent` recording-MBID fill cron's
-// orchestrator (the MusicBrainz identity layer).
-//
-// The sweep is a PURE trigger (zero LLM tokens): it drives ONE bounded `fluncle admin backfills
-// recording-mbids` pass and reports it. So the contract worth pinning is exactly the label-images
-// sweep's — parse-first, so a pass that stopped on the vendor circuit breaker is RECORDED with its
-// real counts rather than discarded as a crash — plus the summary the cron output (and the /status
-// marker) is read from.
-//
-// The box-script sweeps are self-contained (they cannot import the workspace) and live outside any
-// package's test runner, so this file uses `bun:test` and is run directly:
-//
-//   bun test docs/agents/hermes/scripts/recording-mbids-sweep.test.ts
-//
-// `main()` is guarded behind `import.meta.main` in the sweep, so importing it here is side-effect
-// free (no fluncle spawn, no network). The fluncle CLI itself is stubbed with a tiny executable
-// selected via FLUNCLE_BIN (read at module load, hence the dynamic import in beforeAll).
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-// The stub fluncle: a mode FILE beside it selects the response shape. (The sweep builds its own
-// argv, so the mode cannot ride on an arg — and Bun's spawnSync snapshots the environment, so it
-// cannot ride on an env var either.)
 const STUB = `#!/bin/bash
 case "$(cat "$(dirname "$0")/mode")" in
   throttled) printf '{"ok":true,"dryRun":false,"prefixStripped":3,"resolved":["4aBcD"],"resolvedCount":1,"missed":[],"missedCount":0,"failed":[],"failedCount":0,"rateLimited":true}\\n' ;;
@@ -37,7 +17,6 @@ let dir: string;
 let fluncleJson: typeof import("./recording-mbids-sweep").fluncleJson;
 let runRecordingMbidsSweep: typeof import("./recording-mbids-sweep").runRecordingMbidsSweep;
 
-/** Point the stub at one of its canned responses. */
 function mode(name: string): void {
   writeFileSync(join(dir, "mode"), name);
 }
@@ -79,9 +58,6 @@ describe("recording-mbids-sweep's fluncleJson", () => {
   });
 
   test("RECORDS a pass that stopped on a vendor circuit breaker", () => {
-    // The pass did real work (one MBID resolved) and then MusicBrainz throttled us. That is a
-    // throttled tick, not a crash: its counts must survive, and `rateLimited` must reach the cron
-    // output so a "1 resolved" tick does not read as a drained worklist.
     mode("throttled");
     const pass = fluncleJson<Pass>(["admin", "backfills", "recording-mbids"]);
 
@@ -91,8 +67,6 @@ describe("recording-mbids-sweep's fluncleJson", () => {
   });
 
   test("RECORDS a partial batch (per-row failure, exit 1) rather than discarding it", () => {
-    // The CLI exits 1 when any row failed, but still prints its full summary. That partial summary
-    // must be RECORDED (some resolved, some missed, some failed), not thrown as a crash.
     mode("partial");
     const pass = fluncleJson<Pass>(["admin", "backfills", "recording-mbids"]);
 
@@ -122,8 +96,7 @@ describe("recording-mbids-sweep's fluncleJson", () => {
     const summary = runRecordingMbidsSweep();
 
     expect(summary).toMatchObject({ checked: 8, errors: 0, produced: 8 });
-    // The response only carries this bounded pass's outcomes. Its limit is not a remaining
-    // backlog, and the sweep must not add a count call merely to manufacture queue_depth.
+
     expect(summary).not.toHaveProperty("queue_depth");
     expect(summary).not.toHaveProperty("expected_interval_ms");
   });

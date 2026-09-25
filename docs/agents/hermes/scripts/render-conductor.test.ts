@@ -1,26 +1,3 @@
-// THE CONDUCTOR'S TRANSPORT CONTRACT — driven through the REAL script against a stubbed CLI.
-//
-// WHY THIS TEST EXISTS. The render conductor talks to its render box through one vendor CLI,
-// and three of its rails live entirely inside that conversation:
-//
-//   1. THE RESTORING WINDOW. A resume can report success while the box spends the next
-//      seconds restoring, and every call in that window fails with a typed restoring code —
-//      the freshen ssh, both scp refreshes, and the render trigger. `await_box_ready` waits
-//      that window out before the launch-line check can judge the box. The code is emitted by
-//      the API, not the CLI, so it is matched in all three spellings the platform has used
-//      (`box_restoring`, `boat_restoring`, `sandbox_restoring`).
-//   2. THE BOUNDED RESUME. The CLI's resume blocks on readiness for up to half an hour, well
-//      past the host unit's kill. It is bounded, and a resume that does not finish holds the
-//      sandbox id instead of reprovisioning on top of a live box.
-//   3. THE PIN. Every CLI call carries `--no-update`, or the checksum-pinned binary replaces
-//      itself and the verb contract moves.
-//
-// A gate like that is unproven until a synthetic failure makes it fire, so every case runs
-// `render-conductor.sh` itself against a stubbed `boat`/`fluncle` in a temp HOME — no network,
-// no sandbox — and asserts on what the tick DID.
-//
-//   bun test docs/agents/hermes/scripts/render-conductor.test.ts
-
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
@@ -40,16 +17,10 @@ const BOX_ID = "bx_under_test";
 const ORPHAN_ID = "bx_condemned";
 const QUEUE_HEAD = "001.1.1A";
 const ORPHAN_ALERT_AFTER_S = 21_600;
-// The fixture exercises a real shell lifecycle; these process budgets cover harness overhead,
-// not an assertion about the conductor's production performance SLA. Since they assert nothing,
-// they are sized for the worst machine this runs on rather than the best: every wait inside a
-// tick is a stubbed `sleep`, so the wall clock here is spawn cost, and spawn cost is exactly what
-// the rest of the lane running beside this file inflates. A budget that only fits an idle machine
-// turns that contention into a red that says nothing about the conductor.
+
 const SUBPROCESS_TIMEOUT_MS = 40_000;
 const PROCESS_FIXTURE_TIMEOUT_MS = 60_000;
 
-/** `-1` means "restoring forever"; any other count is how many calls fail before the box answers. */
 type Tick = {
   args?: readonly string[];
   boxNow?: number;
@@ -62,12 +33,12 @@ type Tick = {
   listHasOrphan?: boolean;
   logMtime?: number;
   logTail?: string;
-  /** What the one remote probe answers: the marker word, or a transport failure. */
+
   markerState?: "absent" | "present" | "transport";
   nowSequence?: readonly number[];
-  /** Raw `orphan-boxes` ledger content: `boxId<TAB>firstFiledEpoch<TAB>alerted` lines. */
+
   orphanLedger?: string;
-  /** Consecutive probe transport failures already on the ledger when the tick starts. */
+
   probeFailures?: number;
   queueExitCode?: number;
   queueResponse?: string;
@@ -97,11 +68,6 @@ type TickResult = {
   stdout: string;
 };
 
-// The stub CLI. It answers the read-only verbs the tick needs (`login`, `list`, `resume`,
-// `stop`, `extend`) and fails `ssh`/`scp` with the platform's real restoring body until the
-// countdown runs out — the same shape the conductor greps for. It also records every call and
-// flags any that arrived WITHOUT the global `--no-update`, which is what keeps the pinned
-// binary pinned.
 const BOAT_STUB = `#!/usr/bin/env bash
 printf '%s\\n' "$*" >>"$STUB_DIR/calls"
 if [ "\${1:-}" = "--no-update" ]; then
@@ -192,8 +158,6 @@ case "$*" in
 esac
 `;
 
-// The box runs GNU date (`-d`); the test host is macOS. Preserve every ordinary call and supply
-// the one marker parse the conductor needs so completion-state tests exercise the real branch.
 const DATE_STUB = `#!/usr/bin/env bash
 if [ "\${1:-}" = "-u" ] && [ "\${2:-}" = "-d" ]; then
   printf '4070908800\\n'
@@ -210,15 +174,10 @@ fi
 exec /bin/date "$@"
 `;
 
-// Readiness waits are driven by DATE_STUB's scripted clock. Record the requested intervals
-// without delaying the test process, so the harness still proves the production sleep calls.
 const SLEEP_STUB = `#!/usr/bin/env bash
 printf '%s\n' "$*" >>"$STUB_DIR/sleep-calls"
 `;
 
-// `timeout` is coreutils and not on every macOS host, so the fixture supplies its own: it runs
-// the bounded command normally, or reports the given exit code WITHOUT running it, which is how
-// a resume that outlives its budget is exercised.
 const TIMEOUT_STUB = `#!/usr/bin/env bash
 secs="\${1:-}"; shift || true
 if [ -n "\${STUB_TIMEOUT_EXIT:-}" ]; then
@@ -228,14 +187,10 @@ fi
 exec "$@"
 `;
 
-// A provision that always fails: most ticks must never reach for a fresh box, and if they do the
-// assertions see "provision failed" rather than a silently different path.
 const PROVISION_STUB = `#!/usr/bin/env bash
 exit 1
 `;
 
-// `curl` is how the conductor reaches Discord and the cost ledger. The fixture stubs it so no
-// tick makes a real request and so the orphan alert is observable as a recorded call.
 const CURL_STUB = `#!/usr/bin/env bash
 printf '%s\\n' "$*" >>"$STUB_DIR/curl-calls"
 exit 0
@@ -246,10 +201,7 @@ function write(path: string, body: string) {
   chmodSync(path, 0o755);
 }
 
-/** The stub-driving half of the environment: everything the fixture varies per case. */
 function stubEnv(tick: Tick, home: string, stub: string): Record<string, string> {
-  // The conductor prefers the BOAT_* names and falls back to the pre-rename BOX_* ones, so a
-  // secrets template or operator command cut before the CLI rename keeps working.
   const binAndKey = tick.legacyEnvNames
     ? { BOX_API_KEY: "stub-key", BOX_BIN: join(stub, "boat") }
     : { BOAT_API_KEY: "stub-key", BOAT_BIN: join(stub, "boat") };
@@ -311,8 +263,7 @@ function runTick(tick: Tick): TickResult {
     write(join(stub, "timeout"), TIMEOUT_STUB);
     write(join(stub, "fluncle"), FLUNCLE_STUB);
     write(join(stub, "provision.sh"), PROVISION_STUB);
-    // idle, with a box parked from the last render and no start on the clock — the state a
-    // chaining tick lands in right after it parked the box it is about to resume.
+
     writeFileSync(join(stateDir, "state"), initialState);
     writeFileSync(join(stateDir, "box-id"), BOX_ID);
     if (tick.orphanLedger !== undefined) {
@@ -407,14 +358,12 @@ describe("await_box_ready", () => {
         failed: 0,
         produced: 1,
       });
-      // The queue read is capped at 25; that page length is not the whole remaining backlog.
+
       expect("queue_depth" in lastJsonLine(tick.stdout)).toBe(false);
       expect("expected_interval_ms" in lastJsonLine(tick.stdout)).toBe(false);
     },
   );
 
-  // The restoring code is the API's, not the CLI's, so the gate must not be tied to one
-  // spelling of it. Each of the three the platform has used has to drive the same wait.
   for (const restoringCode of ["box_restoring", "boat_restoring", "sandbox_restoring"]) {
     test(
       `a box restoring with ${restoringCode} is waited out, not condemned`,
@@ -532,10 +481,6 @@ describe("the CLI contract", () => {
   );
 });
 
-// A condemn parks a box and puts it on a reclamation clock; it never deletes. The reap rail's
-// whole job is to keep watching a condemned id until the platform has actually taken it, so the
-// "is it gone?" read has to span STOPPED — a running-only list calls every parked box reclaimed
-// the instant it is condemned, drains the ledger, and leaves the box standing unwatched.
 describe("the reap rail", () => {
   const EMPTY_QUEUE = '{"ok":true,"tracks":[]}';
   const nowSeconds = () => Math.floor(Date.now() / 1000);
@@ -553,12 +498,12 @@ describe("the reap rail", () => {
 
       expect(tick.log).not.toContain("reclaimed — dropping from the ledger");
       expect(tick.orphans).toContain(ORPHAN_ID);
-      // The TTL is re-issued every tick, which is what keeps a lingering box on a clock.
+
       expect(tick.calls).toContain(`--no-update stop ${ORPHAN_ID}`);
       expect(tick.calls).toContain(`--no-update extend ${ORPHAN_ID} --ttl 60`);
-      // Still inside the alert window: watching is silent until a box is genuinely stuck.
+
       expect(tick.curlCalls).toEqual([]);
-      // Never destructive, whatever the platform offers.
+
       expect(tick.calls.join("\n")).not.toContain("delete");
     },
   );
@@ -596,9 +541,9 @@ describe("the reap rail", () => {
       expect(tick.curlCalls.join("\n")).toContain(
         `render conductor: render box ${ORPHAN_ID} has not been reclaimed since it was condemned`,
       );
-      // The alert is stamped, so the next tick watches on in silence rather than paging again.
+
       expect(tick.orphans).toContain(`${ORPHAN_ID}\t${filed}\t1`);
-      // An alert is the whole response. The box is re-parked and re-clocked, never removed.
+
       expect(tick.calls).toContain(`--no-update stop ${ORPHAN_ID}`);
       expect(tick.calls).toContain(`--no-update extend ${ORPHAN_ID} --ttl 60`);
       expect(tick.calls.join("\n")).not.toContain("delete");
@@ -629,8 +574,6 @@ describe("the bounded resume", () => {
     "a resume that outlives its budget holds the sandbox id instead of reprovisioning",
     { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
     () => {
-      // 124 is what `timeout` reports when it kills the command. The sandbox is still listed,
-      // so the resume is converging server-side and abandoning the id would strand it.
       const tick = runTick({ listHasBox: true, restoringCalls: 0, timeoutExitCode: 124 });
 
       expect(tick.exitCode).toBe(0);
@@ -651,8 +594,7 @@ describe("the bounded resume", () => {
 
       expect(tick.log).toContain(`resume of ${BOX_ID} failed (rc=1)`);
       expect(tick.log).toContain("no usable box — reprovisioning");
-      // The provision stub always fails, so the tick ends as a run error rather than silently
-      // taking some other path.
+
       expect(tick.exitCode).toBe(1);
       expect(tick.stdout).toContain("render-conductor: provision failed");
     },
@@ -674,8 +616,6 @@ describe("--preflight", () => {
       );
       expect(tick.stdout).toContain("would do:    nothing");
 
-      // The whole point: read-only. Login and an --all list are the only calls allowed, and the
-      // state machine has not moved.
       expect(tick.calls).toEqual([
         "--no-update login --key-stdin --json",
         "--no-update --version",
@@ -757,7 +697,7 @@ describe("queue read", () => {
     () => {
       const tick = runTick({
         queueExitCode: 1,
-        // The CLI pretty-prints its `--json` failure payload.
+
         queueResponse: JSON.stringify(
           {
             code: "due_work_maintenance_pending",
@@ -868,11 +808,6 @@ describe("render state counters", () => {
   );
 });
 
-// A render whose process group dies writes NO done-marker — render-detached.sh writes the
-// marker after `claude -p` returns, whatever the exit code — so the marker poll alone reads a
-// corpse exactly like a healthy render and bills the box until MAX_RENDER. The probe therefore
-// answers the marker question as a WORD and carries the liveness evidence in the same command,
-// and a lost window has to end loudly: parked, paged, and an honest ledger row.
 describe("the done-marker probe and the liveness verdict", () => {
   const EMPTY_QUEUE = '{"ok":true,"tracks":[]}';
   const ALIVE_AT = 4_070_908_800;
@@ -894,7 +829,7 @@ describe("the done-marker probe and the liveness verdict", () => {
       expect(tick.stdout).toContain("render finished");
       expect(tick.calls).toContain(`--no-update stop ${BOX_ID}`);
       expect(tick.state).toBe("idle");
-      // One probe answers both questions; the old test-then-cat pair is gone.
+
       expect(tick.calls.filter((call) => call.includes("conductor-run.done"))).toEqual([]);
     },
   );
@@ -936,19 +871,18 @@ describe("the done-marker probe and the liveness verdict", () => {
         markerState: "absent",
         restoringCalls: 0,
         sessionMtime: ALIVE_AT - 7000,
-        // Well inside MAX_RENDER: the verdict is what ends this render, not the outer cap.
+
         startedAt: Math.floor(Date.now() / 1000) - 600,
       });
 
       expect(tick.log).toContain(`liveness on ${BOX_ID}: claude=0 idle=7000s`);
       expect(tick.log).toContain("is DEAD");
-      // The box is still up at force-park time, so the run log is pulled before the stop —
-      // the next incident is diagnosable without a paid wake.
+
       expect(tick.log).toContain("conductor-run.log tail from");
       expect(tick.log).toContain("Cannot find module 'browserslist'");
       expect(tick.calls).toContain(`--no-update stop ${BOX_ID}`);
       expect(tick.state).toBe("idle");
-      // A lost window PAGES and says so on the ledger row.
+
       expect(tick.curlCalls.join("\n")).toContain("is DEAD");
       expect(tick.exitCode).toBe(1);
       expect(lastJsonLine(tick.stdout)).toMatchObject({
@@ -966,7 +900,7 @@ describe("the done-marker probe and the liveness verdict", () => {
     () => {
       const tick = runTick({
         boxNow: ALIVE_AT,
-        // Still holding a process, so it is stuck rather than dead — the outer cap ends it.
+
         claudeProcs: 1,
         initialState: "rendering",
         logMtime: ALIVE_AT - 10,
@@ -1035,8 +969,6 @@ describe("the done-marker probe and the liveness verdict", () => {
   );
 });
 
-// The render box is the only thing awake at render time, so whatever it is short of, the agent
-// is the one that improvises around it. Both of these end the window before that can happen.
 describe("the wake-time preconditions", () => {
   test(
     "a failed dependency install parks the box and refuses to render into it",
@@ -1049,7 +981,7 @@ describe("the wake-time preconditions", () => {
 
       expect(tick.log).toContain(`dependency install failed on ${BOX_ID}`);
       expect(tick.calls).toContain(`--no-update stop ${BOX_ID}`);
-      // Parked, not condemned: the box is fine, the install was not.
+
       expect(tick.log).not.toContain("condemned");
       expect(tick.boxIdFile).toBe(BOX_ID);
       expect(tick.state).toBe("idle");
@@ -1104,10 +1036,6 @@ describe("the wake-time preconditions", () => {
 });
 
 describe("the provision parser", () => {
-  // `boat new --json` is JSONL: `created`, zero or more `state`, then `ready` or `error`
-  // (docs.boat.dev/use-in-code). provision-rave-03.sh prefers the `ready` line's id and
-  // refuses a run whose last line is an error, so a half-born sandbox is never provisioned
-  // against. These fixtures are the documented shapes, verbatim.
   const PROVISION = join(import.meta.dir, "provision-rave-03.sh");
 
   function parseId(newJson: string): string {
@@ -1115,9 +1043,7 @@ describe("the provision parser", () => {
     try {
       const stub = join(root, "stub");
       mkdirSync(stub, { recursive: true });
-      // A `new` that replays the fixture; every other verb succeeds without doing anything, so
-      // the script runs to its end and its stdout is exactly the id it resolved — empty when
-      // the parse refused the run, because the script then exits before printing anything.
+
       write(
         join(stub, "boat"),
         `#!/usr/bin/env bash\n[ "\${1:-}" = "--no-update" ] && shift\ncase "\${1:-}" in\n  new) cat "$STUB_DIR/new-json"; exit 0 ;;\n  *) cat >/dev/null 2>&1 || true; exit 0 ;;\nesac\n`,
@@ -1163,8 +1089,6 @@ describe("the provision parser", () => {
   });
 });
 
-// The conductor is the only consumer of these scripts, and both must stay executable and
-// syntactically valid — a bake copies them verbatim to the box.
 describe("the scripts themselves", () => {
   for (const script of ["render-conductor.sh", "provision-rave-03.sh", "render-detached.sh"]) {
     test(`${script} parses`, () => {

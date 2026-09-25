@@ -3,21 +3,6 @@ import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-// ---------------------------------------------------------------------------
-// The pin-drift script parses the baked Hermes pins OUT OF the Dockerfile with sed
-// programs that live in a different file from the text they read. Nothing but this test
-// holds the two in lockstep, and the failure mode is silent in the direction that costs
-// the most: a pin whose parser stops matching does not error, it simply stops being
-// watched, and the binary behind it rots until something downstream breaks.
-//
-// That is not hypothetical. yt-dlp was pinned and never watched at all; YouTube moved its
-// player, the pinned binary could no longer follow, and `fluncle-capture` failed every
-// download for 13 days while reporting a green tick each time (the failure is item-level
-// `ytDlpFailures`, so the run-level verdict stayed true). This file is the guard: it reads
-// the script's own expressions and runs them against the real Dockerfile, so a reformat
-// that breaks a parser fails at PR time instead of going quiet for a fortnight.
-// ---------------------------------------------------------------------------
-
 const REPO_ROOT = join(import.meta.dir, "..", "..", "..", "..");
 const SCRIPT = join(REPO_ROOT, ".github", "scripts", "hermes-pin-drift.sh");
 const DOCKERFILE = join(REPO_ROOT, "docs", "agents", "hermes", "Dockerfile");
@@ -25,7 +10,6 @@ const DOCKERFILE = join(REPO_ROOT, "docs", "agents", "hermes", "Dockerfile");
 const script = readFileSync(SCRIPT, "utf8");
 const dockerfile = readFileSync(DOCKERFILE, "utf8");
 
-/** Run one of the script's own `CUR_*` assignments and return what it resolved to. */
 function resolvePin(variable: string): string {
   const assignment = new RegExp(`^${variable}="\\$\\((.+)\\)"$`, "m").exec(script);
 
@@ -40,8 +24,6 @@ function resolvePin(variable: string): string {
 }
 
 describe("hermes-pin-drift parses every pin it claims to watch", () => {
-  // Each entry is a pin the script reads and a shape its value must have. A pin added to
-  // the script without a line here is caught by the roster test below, not by silence.
   const PINS: readonly { pattern: RegExp; variable: string }[] = [
     { pattern: /^\d+\.\d+\.\d+$/, variable: "CUR_FLUNCLE" },
     { pattern: /^\d+\.\d+\.\d+$/, variable: "CUR_CLAUDE" },
@@ -60,8 +42,6 @@ describe("hermes-pin-drift parses every pin it claims to watch", () => {
   }
 
   it("guards every parsed pin, so a new one cannot skip the FATAL check", () => {
-    // The guard is what turns an unparseable pin into a loud exit instead of an empty
-    // string that quietly classifies as `unknown` forever.
     const guard = /\[ -n "\$CUR_[\s\S]*?exit 1; \}/.exec(script)?.[0] ?? "";
 
     for (const { variable } of PINS) {
@@ -72,10 +52,6 @@ describe("hermes-pin-drift parses every pin it claims to watch", () => {
 
 describe("the yt-dlp pin can actually be rewritten", () => {
   it("the literal `inplace` searches for is present in the Dockerfile", () => {
-    // A parser that reads the version and a marker that does not match the file would
-    // apply nothing at all — the drift table would say SAFE and the PR would be empty.
-    // Asserted against the ONE download line rather than the whole file, so a failure
-    // prints that line instead of every byte of the Dockerfile.
     const current = resolvePin("CUR_YTDLP");
     const downloadLine = dockerfile.split("\n").find((line) => line.includes("yt-dlp_linux")) ?? "";
 
@@ -90,7 +66,6 @@ describe("the yt-dlp pin can actually be rewritten", () => {
 });
 
 describe("yt-dlp is assessed as a calendar version", () => {
-  /** Source only the script's semver helpers, without executing the network checks. */
   function helper(expression: string): string {
     const helpers = /^ver_gt\(\).+?\n^major\(\).+?\n/ms.exec(script)?.[0] ?? "";
 
@@ -104,9 +79,6 @@ describe("yt-dlp is assessed as a calendar version", () => {
   });
 
   it("would be held by the major brake, which is why the calendar flag exists", () => {
-    // The brake asks whether the leading component changed. For a date that is January,
-    // not a breaking change — so without the flag every new year's first release would
-    // sit in the report-only pile, which is the exact stall this watch exists to prevent.
     expect(
       helper('[ "$(major 2027.01.01)" = "$(major 2026.12.31)" ] && echo same || echo differs'),
     ).toBe("differs");
@@ -127,7 +99,6 @@ describe("yt-dlp is assessed as a calendar version", () => {
 });
 
 describe("bun is the base image", () => {
-  /** Source one of the script's shell functions by name and run an expression after it. */
   function withFunction(name: string, expression: string, input: string): string {
     const body = new RegExp(`^${name}\\(\\) \\{[\\s\\S]+?^\\}$`, "m").exec(script)?.[0] ?? "";
 
@@ -140,8 +111,6 @@ describe("bun is the base image", () => {
   }
 
   it("the FROM line carries the tag and digest the apply branch rewrites together", () => {
-    // Rewriting the tag without its digest would keep building the old image under a new
-    // name; the marker below is the exact string `inplace` searches for.
     const from = dockerfile.split("\n").find((line) => line.startsWith("FROM ")) ?? "";
 
     expect(from).toBe(
@@ -159,8 +128,6 @@ describe("bun is the base image", () => {
   });
 
   it("reads nothing for a tag Docker Hub does not carry yet", () => {
-    // A bun release lands on GitHub before its image; an empty digest holds the bump for
-    // the next run instead of writing a FROM line no build can pull.
     expect(
       withFunction("bun_image_digest", "bun_image_digest", '{"message":"tag not found"}'),
     ).toBe("");
@@ -169,7 +136,6 @@ describe("bun is the base image", () => {
 });
 
 describe("the brake report", () => {
-  /** Source one of the script's shell functions by name and run an expression after it. */
   function withFunction(name: string, expression: string, input: string): string {
     const body = new RegExp(`^${name}\\(\\) \\{[\\s\\S]+?^\\}$`, "m").exec(script)?.[0] ?? "";
 

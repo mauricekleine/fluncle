@@ -1,13 +1,3 @@
-// Unit tests for funnel-snapshot-sweep.ts — the catalogue-funnel snapshot cron's orchestrator.
-//
-// The box only fires a bare trigger; the Worker computes + persists. So the contract worth
-// pinning here is the tick's outcome mapping (the op response → the /status JSON summary) and its
-// fault handling — the summary line the healthcheck prober reads must be honest on success AND
-// failure.
-//
-// Runs outside any package's test runner (bun:test), like anchor-sweep.test.ts:
-//   bun test docs/agents/hermes/scripts/funnel-snapshot-sweep.test.ts
-
 import { describe, expect, test } from "bun:test";
 import {
   type FunnelSnapshotDeps,
@@ -26,8 +16,6 @@ const SNAPSHOT: RecordSnapshotResponse = {
   },
 };
 
-// The retry ladder's wait is INJECTED so the failure tests prove the ladder without spending its
-// real backoff — the sleep is what the tick does between attempts, never what a test must endure.
 function deps(overrides: Partial<FunnelSnapshotDeps> = {}): FunnelSnapshotDeps {
   return {
     log: () => {},
@@ -82,9 +70,6 @@ describe("runFunnelSnapshotTick", () => {
     expect(summary).toMatchObject({ checked: null, errors: 1, produced: null });
   });
 
-  // A MISSED DAY IS PERMANENT — this cron fires for a UTC day it can never re-take, so a single
-  // transient fault would be a hole in the growth series forever. The ladder is the first of the
-  // three defences (the timer's retry firing and the Worker's grace window are the others).
   test("retries a transient fault inside the tick and reports the recovered run as ok", async () => {
     let attempts = 0;
     const summary = await runFunnelSnapshotTick(
@@ -102,7 +87,7 @@ describe("runFunnelSnapshotTick", () => {
     expect(attempts).toBe(2);
     expect(summary.ok).toBe(true);
     expect(summary.day).toBe("2026-07-18");
-    // A recovered run carries no residue of the attempt that failed: the run itself succeeded.
+
     expect(summary).toMatchObject({ checked: 1, error: null, errors: 0, produced: 1 });
   });
 
@@ -155,8 +140,6 @@ describe("runFunnelSnapshotTick", () => {
   test("omits queue depth because this periodic snapshot has no outstanding snapshot backlog", async () => {
     const summary = await runFunnelSnapshotTick(deps());
 
-    // Funnel stage/queue totals are facts being snapshotted, not work remaining for this daily
-    // idempotent trigger. The response has no backlog of snapshot writes to report.
     expect(summary).not.toHaveProperty("queue_depth");
     expect(summary).not.toHaveProperty("expected_interval_ms");
   });

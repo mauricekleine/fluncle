@@ -1,48 +1,4 @@
 #!/usr/bin/env bun
-// logbook-sweep.ts — the bun orchestrator behind the `--no-agent` Logbook cron
-// (`fluncle-logbook`), the nightly author of Fluncle's Logbook.
-//
-// Version-controlled source; the repo is canonical and the box is a deploy target
-// (fluncle-hermes-operator skill). Invoked by the bash wrapper (logbook-sweep.sh)
-// the host timer execs once a day — see that file's header for the wire-up and
-// ../logbook-timer/README.md for the full runbook. Box activation is OPERATOR-GATED.
-//
-// THE HYBRID MODEL (the sibling of note-sweep / observe-sweep). One agentic step in
-// the middle; everything around it is deterministic:
-//
-//   1. QUEUE + GATHER (deterministic): `fluncle admin logbook gaps --json` → the
-//      SELF-HEALING WINDOW: every past sector-day (before today, ≥1 published finding,
-//      no entry), OLDEST FIRST, each bundled with its findings' material (title,
-//      artists, logId, the public note, the internal context_note, the observation
-//      transcript, the poster URL). Empty → fast no-op, exit. This ONE call is both the
-//      worklist AND the fuel, so there is no per-finding round-trip.
-//   2. per DAY (bounded batch, BATCH_CAP=4, and the tick's wall-clock budget below is
-//      what actually stops it — one entry is the steady state, the ceiling is what
-//      lets a backlog close):
-//      a. AUTHOR (the ONE agentic step): build the authoring prompt (the logbook voice
-//         rails + the day's findings interpolated inline, each with its `[[logId]]`
-//         figure token) and run `claude -p` — Claude Code, SUBSCRIPTION auth, NOT
-//         OpenRouter — with READ-ONLY tools (`Read,Glob,Grep`) so it can load the
-//         installed `copywriting-fluncle` skill for the voice. The model returns a
-//         `TITLE: …` first line + a blank line + the body markdown.
-//      b. DELIVER (deterministic): write the body to a temp file, then
-//         `fluncle admin logbook create <sector> --title <title> --body-file <tmp>
-//         --json` → the Worker VOICE-GATES the title + body and FILLS AN EMPTY SECTOR
-//         ONLY. The SCRIPT posts it, never claude. A `skipped:true` (an entry already
-//         stands — operator- or previously-agent-authored) is a clean no-op; the
-//         operator override always wins. A gate 4xx → log which day failed, skip it
-//         (it stays in the gap list), continue. The temp file is cleaned up either way.
-//
-// IMAGES: the box `claude -p` sweeps are TEXT-ONLY (the sweep grants `claude -p`
-// Read/Glob/Grep, no multimodal image input), so each finding's poster is passed to the
-// model as a URL in the prompt, NOT as an image the model sees. The model places the
-// `[[logId]]` token; the PAGE renders the real poster. Revisit if the box gains image input.
-//
-// AUTH-FAILURE PING: identical to note-sweep — an auth/quota signature in a non-zero
-// `claude -p` STOPS the batch, leaves the gap list intact (no data lost), emits a loud
-// `{ ok:false, reason:"claude_auth" }` line + (if DISCORD_ALERT_WEBHOOK is set) a Discord ping.
-//
-// stdout: ONE JSON summary line (the cron run output). Diagnostics → stderr.
 
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -63,91 +19,28 @@ import {
 } from "./attempt-ledger";
 import { resolveSweepPrompt } from "./prompt-fetch";
 
-// A WALL-CLOCK budget, not a fixed count. One day per tick is the steady state and always
-// will be — a caught-up logbook has exactly one gap per night — but a fixed cap of one made a
-// gap PERMANENT: it fills one old day per night while a new day arrives, so the gap count
-// never falls. Six days of lost ticks therefore meant the logbook ran a week behind forever
-// rather than catching up, which is the failure this budget exists to end.
-//
-// A count cannot be the lever here because the passes are not uniform. Measured across a month
-// of healthy authoring ticks: 98s to 763s, median ~250s. A cap of three is comfortable on a
-// median night and two and a half times over budget on a slow one, so the tick asks the clock
-// instead: keep authoring while there is room for another WORST-CASE pass, then stop cleanly.
-// Once caught up this changes nothing at all — there is only ever one day to write.
-const BATCH_CAP = 4; // hard ceiling; the clock below is what actually stops a tick
-const GAP_LIMIT = 10; // hard ceiling on the gap read (we only act on BATCH_CAP)
+const BATCH_CAP = 4;
+const GAP_LIMIT = 10;
 
-// The tick's authoring budget, and the reservation it keeps for the pass it is about to start.
-// The reservation is the point: checking "am I still inside the budget?" AFTER a pass would
-// let a tick start a 763s pass at 890s and blow straight through the unit's TimeoutStartSec,
-// which SIGKILLs the run mid-authoring and leaves no summary — a red `no-summary` verdict for
-// a sweep that was working. So the question asked before each pass is "is there room for the
-// slowest pass I have ever measured?", and the unit's timeout sits above budget + reservation
-// with margin (see logbook-timer/fluncle-logbook.service).
 const BUDGET_MS = Number(process.env.LOGBOOK_BUDGET_MS ?? "") || 15 * 60_000;
 const SLOWEST_PASS_MS = Number(process.env.LOGBOOK_SLOWEST_PASS_MS ?? "") || 13 * 60_000;
 
-// The re-author budget when the Worker's anti-sameness rails reject an entry (a title
-// collision or a body echo). ONE retry: the second attempt is handed the offending
-// title/phrase, so it knows exactly which move is spent. A second echo means the model has
-// nothing fresh for this day — leave it a gap (silence beats a repeated day) and let the
-// next tick try. Mirrors note-sweep's ECHO_RETRIES.
 const ECHO_RETRIES = 1;
-
-// ---------------------------------------------------------------------------
-// THE ATTEMPT BUDGET — the end of the retry-forever loop.
-//
-// A sector-day gets THREE REFUSED PASSES at an entry, ever, and then this sweep never authors for
-// it again. A "pass" is one trip through `authorOne`: an authoring, a delivery, and (on an echo or
-// a title collision) the one in-tick re-author `ECHO_RETRIES` already allows. What spends the
-// budget is the WORKER REFUSING the draft — the voice gate, the length bounds, the title-collision
-// guard, or the body echo gate. A transport or model failure spends nothing: there is no draft to
-// have judged (see `recordAttempt` in ./attempt-ledger.ts).
-//
-// WHY. A rejection was a plain skip that left the day in the gap list with nothing counting the
-// tries, so "retry" meant "forever" — and the list is OLDEST FIRST, so an unwritable
-// day blocked every later day behind it and the logbook simply stopped backfilling. The gate could
-// genuinely be UNSATISFIABLE: the sweep hands the author each finding's artist and title as its
-// material, and the scan read those names too, so a day that logged a track by "Future Signal"
-// could never be written up however it was rewritten. THE NAME EXEMPTION
-// (apps/web/src/lib/server/observation.ts) fixes that at the source; this bounds whatever is next.
-//
-// NO BYPASS. An entry is optional editorial and a gap is a good
-// state, so an exhausted day simply STAYS A GAP. Gate-failed copy is never published to close a
-// queue.
-//
-// A hard constant, not an env knob: the number is a product decision, and a box env that could
-// quietly raise it is how a bounded loop becomes an unbounded one again.
-// ---------------------------------------------------------------------------
 
 export const MAX_LOGBOOK_ATTEMPTS = 3;
 
-// `LOGBOOK_STATE_DIR` overrides the ledger's home for tests and for an operator move.
 const STATE_DIR = process.env.LOGBOOK_STATE_DIR ?? defaultStateDir("logbook-sweep");
 
-// Read at CALL time, never captured at module load. A module-scope const freezes whichever
-// environment existed when this file was FIRST evaluated, and with one shared module cache that
-// moment is decided by whoever imported it first — a sibling test's STATIC import evaluates this
-// module before any later dynamic import can set the stub, and the winner of that race is
-// directory read order, which is alphabetical on APFS and hash-ordered on ext4. Reading the
-// variable where it is used removes the ordering dependency instead of documenting it.
 const fluncleBin = (): string => process.env.FLUNCLE_BIN ?? "fluncle";
 const claudeBin = (): string => process.env.CLAUDE_BIN ?? "claude";
-// Headless `claude -p` kills backgrounded Bash ~5s after the final result; a sweep that
-// backgrounds work and ends its turn loses it silently. Force it off for the spawned claude.
+
 process.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS = "1";
 
-// The authoring model + optional reasoning effort. Env-configurable; default the
-// current Sonnet tier (the note/observe-sweep precedent).
 const LOGBOOK_CLAUDE_MODEL = process.env.LOGBOOK_CLAUDE_MODEL ?? "claude-sonnet-5";
 const LOGBOOK_CLAUDE_EFFORT = process.env.LOGBOOK_CLAUDE_EFFORT;
 const DISCORD_ALERT_WEBHOOK = process.env.DISCORD_ALERT_WEBHOOK;
 
 const log = (message: string) => console.error(`[logbook-sweep] ${message}`);
-
-// ---------------------------------------------------------------------------
-// Types — only the fields we consume.
-// ---------------------------------------------------------------------------
 
 type GapFinding = {
   artists?: string[];
@@ -165,9 +58,6 @@ type Gap = {
   sector?: number;
 };
 
-// One already-authored entry distilled to its SPENT moves — the anti-sameness fuel. Every
-// listed title/opener/closer is taken; the author writes AGAINST them. Carried as ONE
-// top-level list on the gaps response (not per-gap).
 export type Spent = {
   closer?: string;
   opener?: string;
@@ -181,9 +71,6 @@ type ClaudeReply = {
   subtype?: string;
 };
 
-// `exhausted` is the ONE terminal outcome: the day spent all `MAX_LOGBOOK_ATTEMPTS` refused passes
-// and this sweep will never author for it again. Distinct from `gateSkipped`/`echoSkipped`, which
-// are refusals with budget left. An exhausted day STAYS A GAP — it never carries refused copy.
 type Outcome =
   | "authored"
   | "alreadyAuthored"
@@ -192,12 +79,10 @@ type Outcome =
   | "gateSkipped"
   | "skipped";
 
-/** The ledger key for one gap: its sector number, the day's stable identity. */
 export function logbookKey(gap: Gap): string | null {
   return typeof gap.sector === "number" ? String(gap.sector) : null;
 }
 
-/** One tick's domain detail plus the run-ledger counters shared by every final summary path. */
 export type LogbookSummary = {
   alreadyAuthored: number;
   authored: number;
@@ -211,7 +96,6 @@ export type LogbookSummary = {
   produced: number;
 };
 
-/** The gap read is capped, so `gapsRemaining` stays domain evidence and is never queue depth. */
 export function createLogbookSummary(gapsRemaining: number): LogbookSummary {
   return {
     alreadyAuthored: 0,
@@ -227,38 +111,14 @@ export function createLogbookSummary(gapsRemaining: number): LogbookSummary {
   };
 }
 
-/** The budget's read/write handle for one tick. */
 type Budget = { ledger: AttemptLedger; ledgerPath: string };
 
-// What the Worker made of a delivered entry. `echoedMove` carries the offending title or
-// lifted phrase the anti-sameness rails caught, so the re-author pass can route around it.
-//
-// `charged` is the ONE input to the attempt budget, and it is deliberately NOT the same question as
-// the outcome. See `WORKER_REJECTION_CODES`.
 type Delivery = { charged: boolean; echoedMove?: string; outcome: Outcome };
 
-// ---------------------------------------------------------------------------
-// WHAT MAY SPEND THE BUDGET — an EXACT Worker rejection code, never a loose HTTP substring.
-//
-// The skip CLASSIFIER below is deliberately loose: a bare "403"/"422"/"forbidden" anywhere in the
-// output means "do not treat this as a hard error, leave the item queued", and that behaviour is
-// exactly right and unchanged. But CHARGING the budget on the same loose match would be a bug with
-// teeth: an expired or re-scoped agent token returns 403 on EVERY call, so a healthy draft the
-// Worker never even read would be classified as a gate rejection and cost the item an attempt.
-// With exhausted rows filtered out before the cap, a sustained 403 would march down the queue
-// writing items off a few ticks at a time — each needing a hand-edit of the box's attempts
-// file to recover.
-//
-// That is precisely what ./attempt-ledger.ts's `recordAttempt` promises cannot happen ("if flaky
-// infrastructure could spend the budget, three bad minutes would write an item off permanently").
-// So the budget keys on these EXACT codes — every one of them a verdict the Worker reached by
-// READING THE DRAFT — and on nothing else.
-// ---------------------------------------------------------------------------
-
 const WORKER_REJECTION_CODES = [
-  "voice_gate", // the banned-word / geography / Dry-Rule scan refused the prose
-  "title_echoes_logbook", // the deterministic title-collision guard
-  "body_echoes_logbook", // the scored body echo gate
+  "voice_gate",
+  "title_echoes_logbook",
+  "body_echoes_logbook",
   "no_title",
   "no_body",
   "title_too_long",
@@ -266,17 +126,11 @@ const WORKER_REJECTION_CODES = [
   "body_too_long",
 ] as const;
 
-/** True only when the CLI output carries a code the Worker emits after judging the draft itself. */
 function isWorkerRejection(detail: string): boolean {
   return WORKER_REJECTION_CODES.some((code) => detail.includes(code));
 }
 
-// A narrow sentinel the loop throws to abort the batch on a claude auth failure.
 class ClaudeAuthError extends Error {}
-
-// ---------------------------------------------------------------------------
-// Shell helpers.
-// ---------------------------------------------------------------------------
 
 function run(
   bin: string,
@@ -314,10 +168,6 @@ function fluncleJson<T>(args: string[]): T {
   }
 }
 
-// ---------------------------------------------------------------------------
-// claude-auth detection — narrow on purpose (shared shape with note-sweep).
-// ---------------------------------------------------------------------------
-
 const AUTH_SIGNATURES = [
   "invalid api key",
   "authentication_error",
@@ -338,15 +188,6 @@ function looksLikeAuthFailure(text: string): boolean {
 
   return AUTH_SIGNATURES.some((signature) => haystack.includes(signature));
 }
-
-// ---------------------------------------------------------------------------
-// The day's material — one block per finding, each carrying its `[[logId]]` figure
-// token and whatever the archive already knows about it (the public note, the internal
-// context facts, Fluncle's own spoken take). Shared by BOTH prompt paths: the registry
-// template takes it pre-joined as the `{{findings}}` variable (the renderer has no
-// loops, so a list is just a string), and the baked-in fallback splices the same lines
-// inline. One definition, so the two paths cannot drift.
-// ---------------------------------------------------------------------------
 
 function buildFindingBlocks(findings: GapFinding[]): string[] {
   return findings.flatMap((finding, index) => {
@@ -380,14 +221,6 @@ function buildFindingBlocks(findings: GapFinding[]): string[] {
     return lines;
   });
 }
-
-// ---------------------------------------------------------------------------
-// THE SPENT MOVES — the recent authored entries' titles + opener/closer moves, handed to
-// the author as a list of what is already TAKEN (the anti-sameness rail's fuel, the sibling
-// of note-sweep's neighbour block). Two pre-joined strings: the titles, and the moves.
-// Shared by BOTH prompt paths (the registry `{{spentTitles}}`/`{{spentMoves}}` variables and
-// the baked-in fallback), so the two paths cannot drift.
-// ---------------------------------------------------------------------------
 
 function buildSpentTitles(spent: Spent[]): string {
   return spent
@@ -424,13 +257,6 @@ function buildSpentMoves(spent: Spent[]): string {
     .join("\n");
 }
 
-// ---------------------------------------------------------------------------
-// THE PROMPT VARIABLES — facts supplied to the REGISTRY template. The prose lives in the template
-// so the operator can tune every rail, including the figure-token contract, and the sweep
-// supplies only the data. These names MUST match the `variables` array of the
-// `logbook_entry` registry entry exactly, or the template renders holes.
-// ---------------------------------------------------------------------------
-
 function promptVariables(
   gap: Gap,
   spent: Spent[],
@@ -446,18 +272,6 @@ function promptVariables(
   };
 }
 
-// ---------------------------------------------------------------------------
-// The authoring prompt — the logbook voice rails + the day's findings inline. The
-// model loads the `copywriting-fluncle` skill for the full voice canon; we restate
-// only the hard, gate-enforced constraints + the token contract so the output is
-// gate-safe and the figures land.
-//
-// THIS IS THE FLOOR, NOT DEAD CODE. The live prompt comes from the registry over the
-// API (see `authorEntry`); this builder is what runs when that fetch fails for ANY
-// reason. Keep it in lockstep with the `logbook_entry` default body in
-// apps/web/src/lib/server/prompts.ts.
-// ---------------------------------------------------------------------------
-
 export function buildAuthoringPrompt(gap: Gap, spent: Spent[] = [], echoedMove?: string): string {
   const sector = gap.sector ?? 0;
   const date = gap.date ? gap.date.slice(0, 10) : "unknown";
@@ -465,8 +279,6 @@ export function buildAuthoringPrompt(gap: Gap, spent: Spent[] = [], echoedMove?:
   const spentTitles = buildSpentTitles(spent);
   const spentMoves = buildSpentMoves(spent);
 
-  // The re-author pass: the model's own echo (a colliding title or lifted phrase), handed
-  // back as the thing to route around (the note-sweep echoBlock precedent).
   const echoBlock = echoedMove
     ? [
         `YOUR LAST ATTEMPT WAS REJECTED: it echoed an entry already in the logbook ("${echoedMove}"). That title/move is spent. Come at this day from somewhere else entirely — a different title, a different opening image, a different close.`,
@@ -474,8 +286,6 @@ export function buildAuthoringPrompt(gap: Gap, spent: Spent[] = [], echoedMove?:
       ]
     : [];
 
-  // THE SPENT LOG — the recent entries' titles + opener/closer moves as a list of what is
-  // TAKEN. Present only when there is history to write against (the first entries have none).
   const spentBlock = spentTitles
     ? [
         "THE SPENT LOG (the entries already written — read this as a list of what is TAKEN):",
@@ -523,22 +333,6 @@ export function buildAuthoringPrompt(gap: Gap, spent: Spent[] = [], echoedMove?:
   ].join("\n");
 }
 
-// ---------------------------------------------------------------------------
-// Author one day via `claude -p`. Throws ClaudeAuthError on an auth/quota failure
-// (abort the batch); returns null on any other failure (leave the day queued);
-// returns the parsed { title, body } + the prompt's provenance on success.
-//
-// THE PROMPT comes from the REGISTRY over the agent-tier API (`get_prompt`), so the
-// operator can retune the travelogue voice from /admin with no deploy and no rebake. If
-// that fetch fails for any reason, `resolveSweepPrompt` falls back to
-// `buildAuthoringPrompt` above and the sweep authors EXACTLY as it did before the
-// registry existed. A prompt store that blinks must never be able to stop the pipeline.
-// ---------------------------------------------------------------------------
-
-// PROVENANCE — the prompt version this entry was authored under: N = the operator's
-// live override, 0 = the registry's baked default, NULL = the registry was unreachable
-// and the inlined `buildAuthoringPrompt` wrote it. Rides out to the Worker on
-// `--prompt-version`.
 type AuthoredEntry = { body: string; promptVersion: number | null; title: string };
 
 async function authorEntry(
@@ -621,8 +415,6 @@ async function authorEntry(
   return parsed ? { ...parsed, promptVersion } : null;
 }
 
-// Parse the `TITLE: …` first line + body. A missing TITLE line degrades to null
-// (leave the day queued rather than store a title-less entry).
 function parseAuthoredEntry(text: string): { body: string; title: string } | null {
   const newline = text.indexOf("\n");
   const firstLine = (newline === -1 ? text : text.slice(0, newline)).trim();
@@ -645,14 +437,6 @@ function parseAuthoredEntry(text: string): { body: string; title: string } | nul
   return { body, title: match[1].trim() };
 }
 
-/**
- * Pull the offending move out of the Worker's anti-sameness rejection so the re-author pass
- * can name the spent move back to the model. Two shapes, both quoted (raw from a
- * human-readable error, BACKSLASH-escaped from a `--json` one):
- *   - a body echo: `it lifts "…" straight from sector NNN` (the note-sweep phrasing).
- *   - a title collision: `The title "…" repeats sector NNN's …`.
- * Best-effort — a miss just means a less pointed retry.
- */
 export function readEchoedMove(output: string): string | undefined {
   const lifted = /it lifts \\?"([^"\\]+)\\?"/.exec(output);
 
@@ -664,11 +448,6 @@ export function readEchoedMove(output: string): string | undefined {
 
   return title?.[1];
 }
-
-// ---------------------------------------------------------------------------
-// Deliver one entry: write the body to a temp file, post via the CLI (the Worker
-// voice-gates + anti-sameness-gates + fills-empty-only + stores), clean up.
-// ---------------------------------------------------------------------------
 
 function deliverEntry(
   sector: number,
@@ -691,9 +470,7 @@ function deliverEntry(
       title,
       "--body-file",
       bodyPath,
-      // PROVENANCE. Omitted entirely when the registry was unreachable, so the column
-      // stays NULL and the entry is honest about having been written by the baked-in
-      // fallback rather than by a version it never saw.
+
       ...(promptVersion === null ? [] : ["--prompt-version", String(promptVersion)]),
       "--json",
     ]);
@@ -702,9 +479,6 @@ function deliverEntry(
       const combined = `${stdout}\n${stderr}`;
       const detail = combined.toLowerCase();
 
-      // THE ANTI-SAMENESS RAILS: a colliding title or an echoed body. Distinct from the
-      // voice gate because it is RECOVERABLE — the model gets one more pass, told exactly
-      // which title/move it spent.
       if (detail.includes("title_echoes_logbook") || detail.includes("body_echoes_logbook")) {
         const echoedMove = readEchoedMove(combined);
 
@@ -717,10 +491,6 @@ function deliverEntry(
         return { charged: true, echoedMove, outcome: "echoSkipped" };
       }
 
-      // The loose HTTP substrings stay in the SKIP test — an infra 4xx must still leave the day in
-      // the gap list rather than read as a hard error — but only an EXACT Worker code charges the
-      // budget. `invalid_sector` is deliberately absent from the charged set: it is a bad path
-      // param, not a verdict on the draft.
       if (
         isWorkerRejection(detail) ||
         detail.includes("422") ||
@@ -752,9 +522,7 @@ function deliverEntry(
 
         return { charged: false, outcome: "alreadyAuthored" };
       }
-    } catch {
-      // Non-JSON success is unexpected but harmless; treat as an authored fill.
-    }
+    } catch {}
 
     log(`sector ${sector}: entry authored`);
 
@@ -764,32 +532,12 @@ function deliverEntry(
   }
 }
 
-// ---------------------------------------------------------------------------
-// Per-day: author → deliver.
-// ---------------------------------------------------------------------------
-
-/**
- * THE STRAIN VOCABULARY (the /status sweep-strain detector, fluncle-healthcheck.ts). This sweep's
- * stderr is captured into its cron marker and scored, so the WORDING here is load-bearing:
- * exhausting a day is a permanent write-off and must read as distress ("giving up"), said ONCE on
- * the tick it happens — the per-tick recap (`exhaustedRecapLine`) deliberately does not.
- */
 function logExhausted(sector: number): void {
   log(
     `sector ${sector}: EXHAUSTED — ${MAX_LOGBOOK_ATTEMPTS} drafts were refused by the gates, giving up on this day; it stays a gap (delete its line from ${attemptLedgerPath(STATE_DIR)} to re-arm)`,
   );
 }
 
-/**
- * Charge or clear one day's budget after a pass, and report the ONE outcome that overrides what the
- * delivery said: a refusal that spent the last attempt becomes `exhausted`, because the day is now
- * permanently out of this sweep's reach and the summary has to say so. Returns null when the caller
- * should keep the delivery's own outcome.
- *
- * There is no publish-anyway branch here, on purpose. The last
- * refused draft is discarded exactly like the first two: a gate-failed entry never reaches
- * /logbook.
- */
 function settleBudget(
   sector: number,
   outcome: Outcome,
@@ -809,9 +557,6 @@ function settleBudget(
     return null;
   }
 
-  // The budget keys on `charged`, NOT on the outcome: a `gateSkipped` caused by an infra 4xx (an
-  // expired token, a re-scoped one) never had a draft judged, so it costs nothing. Only a verdict
-  // the Worker reached by reading the prose spends an attempt.
   if (!charged) {
     return null;
   }
@@ -828,11 +573,6 @@ function settleBudget(
   return "exhausted";
 }
 
-/**
- * Exported so the unit test can drive the REAL loop against stub `fluncle`/`claude` binaries rather
- * than re-implementing the budget arithmetic beside it — "authored for at most three refused
- * passes, ever, and never published against the gate" is a claim about the code that runs.
- */
 export async function authorOne(gap: Gap, spent: Spent[], budget?: Budget): Promise<Outcome> {
   const sector = gap.sector;
 
@@ -842,19 +582,12 @@ export async function authorOne(gap: Gap, spent: Spent[], budget?: Budget): Prom
     return "skipped";
   }
 
-  // Belt-and-braces: `selectWork` already keeps exhausted days out of the batch, so reaching here
-  // means the budget ran out mid-tick. Either way no model is called — an exhausted day costs
-  // nothing at all.
   if (budget && planAttempt(budget.ledger, String(sector), MAX_LOGBOOK_ATTEMPTS).exhausted) {
     logExhausted(sector);
 
     return "exhausted";
   }
 
-  // Author → deliver, with ONE re-author if the Worker's anti-sameness rails reject the
-  // entry (a title collision or a body echo). The retry is handed the offending title/phrase,
-  // so the second pass knows exactly which move is spent. Two echoes and we stop: the day
-  // stays a gap, because a day that reads like one already in the log is worse than a gap.
   let delivery: Delivery = { charged: false, outcome: "skipped" };
   let echoedMove: string | undefined;
 
@@ -880,16 +613,8 @@ export async function authorOne(gap: Gap, spent: Spent[], budget?: Budget): Prom
     }
   }
 
-  // SETTLE THE BUDGET. A pass the Worker REFUSED (voice/length, the title guard, or the body echo
-  // gate after its one in-tick re-author) burns one; an entry that landed — or one that already
-  // stood — clears the day's line so a future re-queue starts fresh. A transport/model failure
-  // returned above and reaches neither branch: no draft was judged, so nothing is charged.
   return settleBudget(sector, delivery.outcome, delivery.charged, budget) ?? delivery.outcome;
 }
-
-// ---------------------------------------------------------------------------
-// The claude-auth alert (shared shape with note-sweep). Never throws.
-// ---------------------------------------------------------------------------
 
 function pingClaudeAuthFailure(detail: string): void {
   if (!DISCORD_ALERT_WEBHOOK) {
@@ -925,10 +650,6 @@ function pingClaudeAuthFailure(detail: string): void {
   log(`claude auth failure detail (tail): ${detail}`);
 }
 
-// ---------------------------------------------------------------------------
-// Main — drain a bounded batch off the gap list (oldest first).
-// ---------------------------------------------------------------------------
-
 async function main(): Promise<void> {
   const response = fluncleJson<{ gaps?: Gap[]; spent?: Spent[] }>([
     "admin",
@@ -938,8 +659,7 @@ async function main(): Promise<void> {
     String(GAP_LIMIT),
   ]);
   const gaps = response.gaps ?? [];
-  // The anti-sameness fuel: the recent entries' spent titles + opener/closer moves. The same
-  // list the author writes against and the Worker's rails enforce. Empty on a fresh logbook.
+
   const spent = response.spent ?? [];
 
   const summary = createLogbookSummary(gaps.length);
@@ -947,16 +667,13 @@ async function main(): Promise<void> {
   if (gaps.length === 0) {
     console.log(JSON.stringify({ ok: true, ...summary }));
 
-    return; // fast no-op
+    return;
   }
 
-  // The attempt budgets, loaded once per tick and written through as they are spent.
   const ledgerPath = attemptLedgerPath(STATE_DIR);
   const ledger = readAttemptLedger(ledgerPath);
   const budget: Budget = { ledger, ledgerPath };
 
-  // Exhausted days are dropped BEFORE the cap: the gap list is OLDEST FIRST, so one unwritable
-  // day would otherwise stop the logbook backfilling anything newer, forever.
   const { exhausted, work } = selectWork(gaps, ledger, logbookKey, BATCH_CAP, MAX_LOGBOOK_ATTEMPTS);
 
   summary.exhausted = exhausted.length;
@@ -978,9 +695,6 @@ async function main(): Promise<void> {
   const startedAt = Date.now();
 
   for (const gap of work) {
-    // The clock, asked BEFORE the pass rather than after it (see BUDGET_MS). Stopping here is a
-    // clean, ordinary outcome: the remaining days keep their place at the head of the gap list
-    // and the next tick opens on them, so a budgeted stop costs nothing but a night.
     const elapsedMs = Date.now() - startedAt;
 
     if (summary.checked > 0 && elapsedMs + SLOWEST_PASS_MS > BUDGET_MS) {
@@ -990,8 +704,6 @@ async function main(): Promise<void> {
       break;
     }
 
-    // Exhausted rows were filtered without a call. A checked row is one this tick actually
-    // attempted, regardless of whether it authored, was refused, or failed as an item.
     summary.checked += 1;
 
     try {
@@ -1027,9 +739,6 @@ async function main(): Promise<void> {
     }
   }
 
-  // gapsRemaining = the WORKABLE gap depth at read time minus what we authored/no-op'd this tick
-  // and minus the EXHAUSTED days, which are still gaps but are no longer work this sweep will ever
-  // do. Gate-skips + failures keep their remaining budget and stay counted.
   summary.gapsRemaining = remainingQueueDepth(
     gaps.length,
     summary.authored + summary.alreadyAuthored,
@@ -1039,8 +748,6 @@ async function main(): Promise<void> {
   console.log(JSON.stringify({ ok: true, ...summary }));
 }
 
-// `import.meta.main` so the pure helper (the fallback authoring prompt) can be imported
-// by a unit test without the sweep firing (the note-sweep / triage-sweep pattern).
 if (import.meta.main) {
   main().catch((error) => {
     log(`fatal: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`);

@@ -33,10 +33,6 @@ function extractFunction(source: string, functionName: string): string {
   throw new Error(`unterminated ${functionName}`);
 }
 
-/**
- * Drive the checked-in ceiling resolution + the checked-in `run_container` against a fake
- * docker, and return the `docker run` argv the swap (or the rollback) would issue.
- */
 function runCeilingScenario(options: {
   readonly env?: Readonly<Record<string, string>>;
   readonly liveMemory?: string;
@@ -198,7 +194,7 @@ describe("pin-watch container resource ceiling", () => {
     expect(runContainer).toContain('--memory="${CEILING_MEMORY_BYTES}b"');
     expect(runContainer).toContain('--memory-swap="${CEILING_MEMORY_BYTES}b"');
     expect(runContainer).not.toMatch(/--(?:cpus|memory)=[0-9]/);
-    // The live ceiling is read while the old container still exists — before the swap.
+
     expect(source.indexOf("\npreserve_live_ceiling\n")).toBeGreaterThan(0);
     expect(source.indexOf("\npreserve_live_ceiling\n")).toBeLessThan(
       source.indexOf('log "swapping $CONTAINER'),

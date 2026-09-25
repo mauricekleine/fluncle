@@ -1,26 +1,9 @@
-// Unit tests for the pure helpers in logbook-sweep.ts — the authoring PROMPT (where the
-// anti-sameness SPENT block lives) and the `readEchoedMove` parser that drives the one
-// re-author pass. The box scripts are self-contained (they cannot import the workspace) and
-// live outside any package's test runner, so this file uses `bun:test` and is run directly:
-//
-//   bun test docs/agents/hermes/scripts/logbook-sweep.test.ts
-//
-// The rail's RISK is the spent moves getting templated instead of informing, so the prompt's
-// anti-sameness instruction is load-bearing product behaviour — asserted here, and enforced
-// for real by the Worker's title/body gates (logbook.ts + logbook-echo.ts, their own tests
-// in apps/web/src/lib/server/logbook.server.test.ts).
-
 import { afterAll, beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readAttemptLedger, selectWork } from "./attempt-ledger";
-
-// ── THE STUB RIG ───────────────────────────────────────────────────────────────────────
-//
-// On disk and pointed at by env BEFORE the sweep module is evaluated: FLUNCLE_BIN / CLAUDE_BIN /
-// LOGBOOK_STATE_DIR are read at module load, which is why the sweep is imported dynamically below.
 
 const RIG = mkdtempSync(join(tmpdir(), "logbook-sweep-test-"));
 const STATE_DIR = join(RIG, "state");
@@ -45,8 +28,6 @@ printf '{"result":"TITLE: Future Signal, twice over\\\\n\\\\nThe day opened pati
   { mode: 0o755 },
 );
 
-// `stores` records only the entries the Worker ACCEPTED. It must stay EMPTY for a day whose
-// drafts the gates refused.
 writeFileSync(
   FLUNCLE_STUB,
   `#!/usr/bin/env bash
@@ -84,7 +65,7 @@ chmodSync(FLUNCLE_STUB, 0o755);
 process.env["CLAUDE_BIN"] = CLAUDE_STUB;
 process.env["FLUNCLE_BIN"] = FLUNCLE_STUB;
 process.env["LOGBOOK_STATE_DIR"] = STATE_DIR;
-// No agent token, so `resolveSweepPrompt` falls back to the baked builder and reaches no network.
+
 delete process.env["FLUNCLE_API_TOKEN"];
 
 const {
@@ -140,8 +121,6 @@ describe("buildAuthoringPrompt", () => {
     expect(prompt).toContain("Enjoy, cosmonauts.");
   });
 
-  // THE GUARDRAIL. The spent moves are shown as a list of what is TAKEN, never a template,
-  // and the worn moves are named explicitly. If this softens, the rail stops working.
   test("names the worn moves and frames the log as SPENT, not a template", () => {
     const prompt = buildAuthoringPrompt(GAP, SPENT);
 
@@ -151,7 +130,7 @@ describe("buildAuthoringPrompt", () => {
     expect(prompt).toContain("quiet-sector opener");
     expect(prompt).toContain("body-clock");
     expect(prompt).toContain("Enjoy, cosmonauts.");
-    // It tells the model the rejection is real, so the constraint has teeth.
+
     expect(prompt).toContain("REJECTS a title that matches a past one");
   });
 
@@ -159,7 +138,7 @@ describe("buildAuthoringPrompt", () => {
     const prompt = buildAuthoringPrompt(GAP, []);
 
     expect(prompt).not.toContain("THE SPENT LOG");
-    // …and it is still a complete, authorable prompt.
+
     expect(prompt).toContain("[[036.7.2I]]");
     expect(prompt).toContain("OUTPUT FORMAT (exactly):");
   });
@@ -218,23 +197,13 @@ describe("run-ledger summary counters", () => {
       gapsRemaining: 0,
       produced: 1,
     });
-    // The gaps endpoint is read with `--limit 10`; that page length is not the total backlog.
+
     expect("queueDepth" in summary).toBe(false);
     expect("queue_depth" in summary).toBe(false);
     expect("expectedIntervalMs" in summary).toBe(false);
     expect("expected_interval_ms" in summary).toBe(false);
   });
 });
-
-// ── THE ATTEMPT BUDGET, END TO END ─────────────────────────────────────────────────────
-//
-// `authorOne` driven against the stub binaries, with the ledger on disk. Each `tick()` is a
-// separate call that reads the ledger back off disk — what a real cron tick is.
-//
-// This sweep's queue is the worst of the three: the gap list is OLDEST FIRST, so one
-// unwritable day stopped the logbook backfilling ANYTHING newer, forever. And the day could be
-// genuinely unwritable: the sweep hands the author each finding's artist and title as its material
-// while the gate scanned those same names. THE NAME EXEMPTION fixes that; this bounds the rest.
 
 function verdict(value: "pass" | "voice" | "echo" | "infra403"): void {
   writeFileSync(join(CONTROL, "verdict"), value, "utf8");
@@ -253,7 +222,7 @@ function readLines(file: string): string[] {
 }
 
 const authorings = () => readLines("authorings").length;
-/** The entries that were actually STORED — must stay empty for a refused day. */
+
 const stores = () => readLines("stores");
 const ledgerPath = () => join(STATE_DIR, "attempts");
 
@@ -306,8 +275,6 @@ describe("authorOne (the bounded re-author, across ticks)", () => {
     expect(authorings()).toBe(MAX_LOGBOOK_ATTEMPTS);
   });
 
-  // THE OPERATOR'S RULING: no final-attempt bypass. A gap is a perfectly good state,
-  // so an exhausted day simply stays one rather than publishing copy the gates refused.
   test("NOTHING is ever stored for a day whose drafts the gates refused", async () => {
     verdict("voice");
 
@@ -326,8 +293,6 @@ describe("authorOne (the bounded re-author, across ticks)", () => {
     expect(readAttemptLedger(ledgerPath()).get("36")?.attempts).toBe(1);
   });
 
-  // An expired agent token returns 403 on every delivery. It must leave the day in the gap list (it
-  // does) WITHOUT charging the budget — the Worker never read these drafts.
   test("an infra 403 leaves the day a gap and spends NOTHING", async () => {
     verdict("infra403");
 
@@ -367,7 +332,7 @@ describe("authorOne (the bounded re-author, across ticks)", () => {
     const { exhausted, work } = selectWork(gaps, ledger, logbookKey, 1, MAX_LOGBOOK_ATTEMPTS);
 
     expect(exhausted.map((gap) => gap.sector)).toEqual([12]);
-    // Without this the logbook would stall on sector 12 forever and never backfill a later day.
+
     expect(work.map((gap) => gap.sector)).toEqual([13]);
 
     verdict("pass");

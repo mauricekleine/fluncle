@@ -1,16 +1,3 @@
-// Unit tests for reconcile-hub-counts.ts — the hub-counts reconciliation cron's orchestrator.
-//
-// The box walks bounded windows; the Worker recomputes + corrects. So the contract worth pinning
-// here is the window chain (cursor hand-off, per-table accumulation, backpressure and budgets),
-// the tick's outcome mapping (the op responses → the /status JSON summary), its fault handling,
-// and — the reason this cron exists at all — the AUDIT LINE: the corrected-row numbers must reach
-// the journal on EVERY tick, because a run of zeroes is the evidence the counters are healthy and a
-// non-zero reading is the evidence a write path is leaking. A response without `next` is the
-// whole-pass answer of a Worker without windows, so the first suite's single responses still map.
-//
-// Runs outside any package's test runner (bun:test), like funnel-snapshot-sweep.test.ts:
-//   bun test docs/agents/hermes/scripts/reconcile-hub-counts.test.ts
-
 import { describe, expect, test } from "bun:test";
 import {
   MAX_WINDOWS,
@@ -25,7 +12,6 @@ import {
   windowBody,
 } from "./reconcile-hub-counts";
 
-/** The slice-A rollout-day drift, as the op would report it (44 artists / 3 albums / 1 label). */
 const DRIFTED: ReconcileHubCountsResponse = {
   albums: { corrected: 3 },
   artists: { corrected: 44 },
@@ -34,7 +20,6 @@ const DRIFTED: ReconcileHubCountsResponse = {
   tookMs: 1150,
 };
 
-/** The healthy steady state — nothing to correct. */
 const CLEAN: ReconcileHubCountsResponse = {
   albums: { corrected: 0 },
   artists: { corrected: 0 },
@@ -51,7 +36,6 @@ function deps(overrides: Partial<ReconcileHubCountsDeps> = {}): ReconcileHubCoun
   };
 }
 
-/** Collect the tick's log lines so the audit line can be asserted. */
 function capturing(response: ReconcileHubCountsResponse): {
   deps: ReconcileHubCountsDeps;
   lines: string[];
@@ -81,7 +65,7 @@ describe("runReconcileHubCountsTick", () => {
     expect(summary.errors).toBe(0);
     expect(summary.tookMs).toBe(1150);
     expect(summary.error).toBeNull();
-    // Corrected rows describe this pass; the endpoint does not measure drift remaining afterward.
+
     expect("queue_depth" in summary).toBe(false);
     expect("expected_interval_ms" in summary).toBe(false);
   });
@@ -154,7 +138,7 @@ describe("runReconcileHubCountsTick", () => {
     expect(summary.labels).toBe(1);
     expect(summary.albums).toBe(3);
     expect(summary.artists).toBeNull();
-    // A partial read must NOT be summed into a confident-looking total.
+
     expect(summary.corrected).toBeNull();
     expect(summary).toMatchObject({ checked: 2, errors: 0, produced: null });
   });
@@ -187,11 +171,8 @@ describe("runReconcileHubCountsTick", () => {
   });
 });
 
-// ── The window chain ─────────────────────────────────────────────────────────────────────────
-
 const ZERO = { corrected: 0, deferred: 0 };
 
-/** A scripted Worker: each call returns the next response and records the cursor it was sent. */
 function scripted(responses: Array<ReconcileHubCountsResponse | undefined>): {
   cursors: Array<ReconcileCursor | null>;
   lines: string[];

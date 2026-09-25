@@ -334,7 +334,7 @@ The capture budget (the brake):
 
 The verification gate (§ Wrong audio · the gate + the backfill):
 
-- `docs/agents/hermes/scripts/fingerprint-match.ts` — the shared Chromaprint matcher (the threshold + its reasoning), the fpcalc/preview I/O, and the rejection-memory helpers; `fingerprint-match.test.ts` proves the sliding-window match on synthetic fingerprints.
+- `docs/agents/hermes/scripts/fingerprint-match.ts` — the shared Chromaprint matcher, the fpcalc/preview I/O, and the rejection-memory helpers; `fingerprint-match.test.ts` proves the sliding-window match on synthetic fingerprints. Invalid or out-of-range `FLUNCLE_VERIFY_MAX_BER` values use the default threshold, and a preview with fewer than `MIN_OVERLAP_FRAMES` fingerprint frames produces an inconclusive verdict rather than a match.
 - `docs/agents/hermes/scripts/capture-sweep.ts` — the ingest gate (verify → store/reject/abstain) + the demoted channel trust; `capture-sweep.test.ts` encodes the no-waiver rule.
 - `docs/agents/hermes/scripts/verify-captures.ts` + `.sh` + `docs/agents/hermes/verify-captures-timer/` — the historic backfill (measure on the box, route on the Worker); `verify-captures.test.ts` proves the tick's skip-not-stamp discipline.
 - `apps/web/src/lib/server/capture-verify.integration.test.ts` — **the routing proof** (catalogue mismatch quarantines; a finding mismatch is only stamped; a stamped row leaves the worklist).

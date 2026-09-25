@@ -1,36 +1,8 @@
 #!/usr/bin/env bun
-// fluncle-live.ts — the bun orchestrator behind the `fluncle-live` host-timer
-// sweep. The poller for Fluncle's cross-surface live-set callout.
-//
-// Version-controlled source; the repo is canonical and the box is a deploy target
-// (fluncle-hermes-operator skill). Invoked by the bash wrapper (fluncle-live.sh) the
-// host timer execs every ~1m — see that file's header for the env keys + the
-// `host-timer` wire-up, and ../cron/README.md § The live cron.
-//
-// THE TICK (all deterministic — no model time):
-//   1. TOKEN: mint a Twitch client-credentials app token (public Helix reads, no app
-//      review), cached to ${HOME}/.fluncle-live/token.json by its expiry so we don't
-//      mint on every tick (app tokens last ~60 days).
-//   2. POLL: GET https://api.twitch.tv/helix/streams?user_login=<login> with the
-//      Client-Id + Bearer headers. A non-empty `data[]` ⇒ live (read `title` +
-//      `started_at`); empty ⇒ offline.
-//   3. POST the raw live state to ${LIVE_WORKER_URL}/api/v1/admin/twitch/live
-//      (record_live_state, Authorization: Bearer ${FLUNCLE_API_TOKEN}). The Worker
-//      stores it, detects the transition, and owns the crew Telegram callout. This
-//      poller is intentionally dumb: it reports state every minute, idempotently.
-//
-// stdout: ONE JSON summary line (the cron run output). Diagnostics → stderr.
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-
-// ---------------------------------------------------------------------------
-// Config — the Twitch credentials come from the shared op-injected secrets file
-// (the .sh sources ${HOME}/.fluncle-secrets.env before exec'ing us); FLUNCLE_API_TOKEN
-// rides the container env. The Worker origin defaults to prod (override via LIVE_WORKER_URL
-// only for testing). NO tokens are hard-coded — public-safe by construction.
-// ---------------------------------------------------------------------------
 
 const HOME = process.env.HOME ?? homedir() ?? "/opt/data/home";
 
@@ -40,26 +12,19 @@ const TWITCH_CLIENT_SECRET = process.env.TWITCH_CLIENT_SECRET ?? "";
 const TWITCH_USER_LOGIN = process.env.TWITCH_USER_LOGIN ?? "flunclelive";
 const FLUNCLE_API_TOKEN = process.env.FLUNCLE_API_TOKEN ?? "";
 
-// Per-request network timeout. Short on purpose: a hung Twitch endpoint degrades to
-// a clean failure well inside the unit's TimeoutStartSec.
 const REQUEST_TIMEOUT_MS = Number.parseInt(process.env.LIVE_TIMEOUT_MS ?? "", 10) || 5000;
 
-// The app token is cached in the mounted, writable HOME so we don't mint per tick.
 const TOKEN_DIR = join(HOME, ".fluncle-live");
 const TOKEN_FILE = join(TOKEN_DIR, "token.json");
 
-// Re-mint when the cached token has less than this left, so a tick never races the
-// expiry. App tokens last ~60 days, so this is generous.
 const TOKEN_REFRESH_MARGIN_MS = 60 * 60 * 1000;
 
 type CachedToken = { accessToken: string; expiresAtMs: number };
 
-/** Diagnostics go to stderr so stdout stays the single JSON summary line. */
 function log(message: string): void {
   process.stderr.write(`[fluncle-live] ${message}\n`);
 }
 
-/** A `fetch` with a hard AbortController timeout — resolves or throws, never hangs. */
 async function fetchWithTimeout(url: string, init: RequestInit): Promise<Response> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
@@ -71,7 +36,6 @@ async function fetchWithTimeout(url: string, init: RequestInit): Promise<Respons
   }
 }
 
-/** Read the cached app token if present and still comfortably valid. */
 function readCachedToken(): CachedToken | null {
   if (!existsSync(TOKEN_FILE)) {
     return null;
@@ -96,7 +60,6 @@ function readCachedToken(): CachedToken | null {
   return null;
 }
 
-/** Persist the freshly-minted token for the next tick (best-effort). */
 function writeCachedToken(token: CachedToken): void {
   try {
     mkdirSync(TOKEN_DIR, { recursive: true });
@@ -108,7 +71,6 @@ function writeCachedToken(token: CachedToken): void {
   }
 }
 
-/** Mint a client-credentials app token from Twitch (public-read scope, no review). */
 async function mintToken(): Promise<CachedToken> {
   const body = new URLSearchParams({
     client_id: TWITCH_CLIENT_ID,
@@ -132,13 +94,11 @@ async function mintToken(): Promise<CachedToken> {
     throw new Error("Twitch token mint response had no access_token");
   }
 
-  // expires_in is seconds; fall back to a conservative hour if absent.
   const expiresAtMs = Date.now() + (payload.expires_in ?? 3600) * 1000;
 
   return { accessToken: payload.access_token, expiresAtMs };
 }
 
-/** A valid app token: the cached one when fresh, otherwise a freshly minted one. */
 async function getToken(): Promise<string> {
   const cached = readCachedToken();
 
@@ -175,7 +135,7 @@ export function buildLiveSummary(options: { at: string; poll: LivePoll; posted: 
     ok: true,
     posted: options.posted,
     produced: options.posted ? 1 : 0,
-    // This poller has no durable queue: every tick observes the one current channel state.
+
     queue_depth: 0,
     title: options.poll.title,
   };
@@ -201,7 +161,6 @@ export function buildLiveFailureSummary(): {
   };
 }
 
-/** One Helix `Get Streams` read for the channel. Retries once on a 401 (stale token). */
 async function pollTwitch(): Promise<LivePoll> {
   const url = `https://api.twitch.tv/helix/streams?user_login=${encodeURIComponent(TWITCH_USER_LOGIN)}`;
 
@@ -214,8 +173,6 @@ async function pollTwitch(): Promise<LivePoll> {
   let token = await getToken();
   let response = await read(token);
 
-  // A 401 means the cached token went stale (revoked/expired early) — mint a fresh
-  // one once and retry, so a single bad token never wedges the poller.
   if (response.status === 401) {
     log("Twitch returned 401 — re-minting the app token and retrying");
     const minted = await mintToken();
@@ -234,7 +191,6 @@ async function pollTwitch(): Promise<LivePoll> {
 
   const stream = payload.data?.[0];
 
-  // A populated `data[]` with type "live" is the live signal; empty ⇒ offline.
   if (!stream || (stream.type && stream.type !== "live")) {
     return { live: false, startedAt: null, title: null };
   }
@@ -242,7 +198,6 @@ async function pollTwitch(): Promise<LivePoll> {
   return { live: true, startedAt: stream.started_at ?? null, title: stream.title ?? null };
 }
 
-/** POST the raw live state to the Worker (record_live_state). Returns whether it landed. */
 async function postLiveState(at: string, poll: LivePoll): Promise<boolean> {
   if (!WORKER_URL) {
     log("no LIVE_WORKER_URL — cannot POST the live state");
@@ -279,10 +234,6 @@ async function postLiveState(at: string, poll: LivePoll): Promise<boolean> {
   return true;
 }
 
-// ---------------------------------------------------------------------------
-// Main — mint/reuse the token, poll Twitch, POST the state.
-// ---------------------------------------------------------------------------
-
 export async function main(): Promise<void> {
   const at = new Date().toISOString();
 
@@ -295,13 +246,9 @@ export async function main(): Promise<void> {
   const poll = await pollTwitch();
   const posted = await postLiveState(at, poll);
 
-  // One JSON summary line — the cron run output. `ok` reflects the POLLER run, not
-  // whether Fluncle is live (an offline channel is a normal, successful tick).
   console.log(JSON.stringify(buildLiveSummary({ at, poll, posted })));
 }
 
-// ONE bounded retry absorbs a transient upstream blip. A persistent failure still exits 1 and
-// alerts after the in-tick retry misses too.
 if (import.meta.main) {
   main().catch(async (error) => {
     log(`poll failed, retrying once: ${error instanceof Error ? error.message : String(error)}`);
