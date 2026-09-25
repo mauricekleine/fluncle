@@ -13,6 +13,10 @@
 TURSO_DATABASE_URL=http://127.0.0.1:__E2E_LIBSQL_PORT__
 TURSO_AUTH_TOKEN=e2e-local-token
 
+# In-process fake Sonar, bound to this checkout's isolated port.
+SONAR_BASE_URL=http://127.0.0.1:__E2E_SONAR_PORT__
+SONAR_SECRET=e2e-fake-sonar-secret
+
 # Admin identity + signing. Fake — the e2e suite exercises PUBLIC surfaces, and the
 # browser-fixture admin grant (tests/browser/admin.ts) mints against whatever secret
 # is here, so a fake one is self-consistent.

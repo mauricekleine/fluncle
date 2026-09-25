@@ -11,6 +11,7 @@ import {
   tokenize,
 } from "../search-query";
 import { bestArtistAvatarUrl, labelLogoUrl } from "../media";
+import { parseStyleQuery, type SearchStyle } from "../search-styles";
 import { hasPreviewSource } from "../track-preview";
 import { ALBUM_INDEX_MIN_TRACKS } from "./albums";
 import { MAX_SIMILAR_ARTISTS_INPUT, meanEmbedding } from "./artist-dossier";
@@ -21,6 +22,8 @@ import { hubInclusionWhere, LABEL_INDEX_MIN_TRACKS, resolveConfirmedAliasLabelId
 import { translateQuery } from "./search-llm";
 import { isSonarSonicEnabled, searchSonar, type SonarFilter, type SonarMatch } from "./sonar";
 import { hydrateRankedSonarMatches } from "./sonar-hydration";
+import { leadCentroidArtistSql, SONIC_SEED_SELECT, sonicSeedFlag } from "./sonic-seed";
+import { resolveStyleProbe } from "./style-probe";
 import {
   executeVectorFallback,
   VECTOR_FALLBACK_DEADLINE_MS,
@@ -39,6 +42,7 @@ export type SearchResult = {
   entities: SearchEntity[];
   filters?: SearchFilters;
   kind: "coordinate" | "empty" | "entity" | "filters" | "sonic" | "token";
+  modelDeferred?: boolean;
   redirect?: string;
   results: SearchHit[];
 };
@@ -56,6 +60,7 @@ type SearchRow = {
   isrc: string | null;
   preview_url: string | null;
   release_date: string | null;
+  sonic_seed?: number | null;
   spotify_url: string | null;
   title: string;
   track_id: string;
@@ -63,7 +68,8 @@ type SearchRow = {
 
 const SEARCH_SELECT = `tracks.track_id, tracks.title, tracks.artists_json, tracks.album, tracks.album_image_url,
   tracks.bpm, tracks.duration_ms, tracks.isrc, tracks.preview_url, tracks.key, tracks.label, tracks.release_date, tracks.spotify_url, findings.log_id,
-  (select name from galaxies where galaxies.id = findings.galaxy_id) as galaxy_name`;
+  (select name from galaxies where galaxies.id = findings.galaxy_id) as galaxy_name,
+  ${SONIC_SEED_SELECT}`;
 
 const SEARCH_FROM = `tracks left join findings on findings.track_id = tracks.track_id`;
 
@@ -93,6 +99,7 @@ function toHit(row: SearchRow): SearchHit {
     logId: row.log_id ?? undefined,
     previewable: hasPreviewSource({ isrc: row.isrc, previewUrl: row.preview_url }),
     releaseDate: row.release_date ?? undefined,
+    similar: sonicSeedFlag(row.sonic_seed),
     spotifyUrl: row.spotify_url ?? undefined,
     title: row.title,
     trackId: row.track_id,
@@ -645,13 +652,17 @@ async function resolveAnchor(
   return vector ? { hit: toHit(row), vector } : null;
 }
 
+export type VectorGate = { allowBoundedSql?: boolean; beforeVector?: () => Promise<void> };
+
 export async function rankTracksByVector(
   probe: number[],
   columnFilters: SearchFilters,
   excludeTrackId: string | undefined,
   limit: number,
-  options: { allowBoundedSql?: boolean } = {},
+  options: VectorGate = {},
 ): Promise<SearchHit[] | null> {
+  await options.beforeVector?.();
+
   if (await isSonarSonicEnabled()) {
     const filter = sonarTrackFilter(columnFilters);
 
@@ -763,7 +774,7 @@ type SonicResolution = SearchResult | null | typeof SONIC_UNAVAILABLE;
 async function runSonic(
   filters: SearchFilters,
   limit: number,
-  allowBoundedSql: boolean,
+  gate: VectorGate,
 ): Promise<SonicResolution> {
   const reference = filters.soundsLike;
 
@@ -788,9 +799,7 @@ async function runSonic(
     columnFilters,
     anchor.hit.trackId,
     limit,
-    {
-      allowBoundedSql,
-    },
+    gate,
   );
 
   if (results === null) {
@@ -875,7 +884,7 @@ async function resolveArtistCentroids(
 async function runArtistSonic(
   filters: SearchFilters,
   limit: number,
-  allowBoundedSql: boolean,
+  gate: VectorGate,
 ): Promise<SonicResolution> {
   const inputs = filters.soundsLikeArtists;
 
@@ -896,9 +905,7 @@ async function runArtistSonic(
     text: _words,
     ...columnFilters
   } = filters;
-  const results = await rankTracksByVector(probe, columnFilters, undefined, limit, {
-    allowBoundedSql,
-  });
+  const results = await rankTracksByVector(probe, columnFilters, undefined, limit, gate);
 
   if (results === null) {
     return SONIC_UNAVAILABLE;
@@ -908,6 +915,110 @@ async function runArtistSonic(
     degraded: false,
     entities: [],
     filters: { ...filters, soundsLikeArtists: resolved.names },
+    kind: "sonic",
+    results,
+  };
+}
+
+async function exactNamesakes(query: string): Promise<SearchEntity[]> {
+  const needle = query.trim().toLowerCase();
+  const groups = await Promise.all(
+    (["artist", "label", "album", "galaxy", "mixtape"] as const).map((kind) =>
+      matchEntities(kind, needle, "exact", 1),
+    ),
+  );
+
+  return groups.flat();
+}
+
+async function runStyle(
+  style: SearchStyle,
+  q: string,
+  limit: number,
+  gate: VectorGate,
+): Promise<SonicResolution> {
+  const probe = await resolveStyleProbe(style);
+
+  if (probe.status !== "ready") {
+    return SONIC_UNAVAILABLE;
+  }
+
+  const [results, entities] = await Promise.all([
+    rankTracksByVector(probe.probe, {}, undefined, limit, gate),
+    exactNamesakes(q),
+  ]);
+
+  if (results === null) {
+    return SONIC_UNAVAILABLE;
+  }
+
+  return {
+    degraded: false,
+    entities,
+    filters: { sound: style.slug, soundsLikeArtists: probe.anchors },
+    kind: "sonic",
+    results,
+  };
+}
+
+type LikeSeedRow = SearchRow & {
+  embedding_blob: unknown;
+  lead_centroid_blob: unknown;
+  lead_name: string | null;
+};
+
+export async function searchLikeTrack(options: {
+  allowBoundedSonicForDiagnostics?: boolean;
+  beforeVector?: () => Promise<void>;
+  limit?: number;
+  trackId: string;
+}): Promise<SearchResult | null> {
+  const limit = Math.min(Math.max(Math.trunc(options.limit ?? SONIC_LIMIT) || SONIC_LIMIT, 1), 50);
+  const db = await getDb();
+  const seed = typedRow<LikeSeedRow>(
+    (
+      await db.execute({
+        args: [options.trackId],
+        sql: `select ${SEARCH_SELECT}, emb.embedding_blob as embedding_blob,
+                     lead_artist.name as lead_name, lead_ac.centroid_blob as lead_centroid_blob
+              from ${SEARCH_FROM}
+              left join track_embeddings emb on emb.track_id = tracks.track_id
+              left join artists lead_artist
+                on lead_artist.id = ${leadCentroidArtistSql("tracks.track_id")}
+              left join artist_centroids lead_ac on lead_ac.artist_id = lead_artist.id
+              where tracks.track_id = ?
+              limit 1`,
+      })
+    ).rows,
+  );
+
+  if (!seed) {
+    return null;
+  }
+
+  const anchor = toHit(seed);
+  const own = readEmbeddingBlob(seed.embedding_blob);
+  const lead = own ? null : readEmbeddingBlob(seed.lead_centroid_blob);
+  const probe = own ?? lead;
+
+  if (!probe) {
+    return { anchor, degraded: false, entities: [], kind: "sonic", results: [] };
+  }
+
+  const results = await rankTracksByVector(probe, {}, anchor.trackId, limit, {
+    allowBoundedSql: options.allowBoundedSonicForDiagnostics === true,
+    beforeVector: options.beforeVector,
+  });
+
+  if (results === null) {
+    return { anchor, degraded: true, entities: [], kind: "sonic", results: [] };
+  }
+
+  return {
+    anchor,
+    degraded: false,
+    entities: [],
+    filters: lead && seed.lead_name ? { soundsLikeArtists: [seed.lead_name] } : undefined,
     kind: "sonic",
     results,
   };
@@ -933,10 +1044,16 @@ async function textFallback(q: string, limit: number, degraded: boolean): Promis
 export async function searchArchive(options: {
   allowBoundedSonicForDiagnostics?: boolean;
   beforeModel?: () => Promise<void>;
+  beforeVector?: () => Promise<void>;
+  deferModel?: boolean;
   limit?: number;
   q: string;
 }): Promise<SearchResult> {
   const q = options.q.trim();
+  const gate: VectorGate = {
+    allowBoundedSql: options.allowBoundedSonicForDiagnostics === true,
+    beforeVector: options.beforeVector,
+  };
   const limit = Math.min(
     Math.max(Math.trunc(options.limit ?? DEFAULT_LIMIT) || DEFAULT_LIMIT, 1),
     50,
@@ -988,6 +1105,20 @@ export async function searchArchive(options: {
     }
   }
 
+  const style = parseStyleQuery(q);
+
+  if (style) {
+    const styled = await runStyle(style, q, limit, gate);
+
+    if (styled === SONIC_UNAVAILABLE) {
+      return textFallback(q, limit, true);
+    }
+
+    if (styled) {
+      return styled;
+    }
+  }
+
   const entity = await resolveEntity(q);
 
   if (entity) {
@@ -1007,11 +1138,7 @@ export async function searchArchive(options: {
   const sonicPhrase = parseSonicPhrase(q);
 
   if (sonicPhrase) {
-    const sonic = await runSonic(
-      { soundsLike: sonicPhrase },
-      Math.min(limit, SONIC_LIMIT),
-      options.allowBoundedSonicForDiagnostics === true,
-    );
+    const sonic = await runSonic({ soundsLike: sonicPhrase }, Math.min(limit, SONIC_LIMIT), gate);
 
     if (sonic === SONIC_UNAVAILABLE) {
       return textFallback(q, limit, true);
@@ -1022,15 +1149,15 @@ export async function searchArchive(options: {
     }
   }
 
+  if (options.deferModel === true) {
+    return { ...(await textFallback(q, limit, false)), modelDeferred: true };
+  }
+
   await options.beforeModel?.();
   const filters = await translateQuery(q);
 
   if (filters) {
-    const artistSonic = await runArtistSonic(
-      filters,
-      Math.min(limit, SONIC_LIMIT),
-      options.allowBoundedSonicForDiagnostics === true,
-    );
+    const artistSonic = await runArtistSonic(filters, Math.min(limit, SONIC_LIMIT), gate);
 
     if (artistSonic === SONIC_UNAVAILABLE) {
       return textFallback(q, limit, true);
@@ -1040,11 +1167,7 @@ export async function searchArchive(options: {
       return artistSonic;
     }
 
-    const sonic = await runSonic(
-      filters,
-      Math.min(limit, SONIC_LIMIT),
-      options.allowBoundedSonicForDiagnostics === true,
-    );
+    const sonic = await runSonic(filters, Math.min(limit, SONIC_LIMIT), gate);
 
     if (sonic === SONIC_UNAVAILABLE) {
       return textFallback(q, limit, true);
