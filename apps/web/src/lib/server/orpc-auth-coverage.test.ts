@@ -384,7 +384,7 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   record_demand: "admin",
 
   record_health: "admin",
-
+  record_label_triage: "admin",
   record_live_state: "admin",
 
   record_platform_stats: "admin",

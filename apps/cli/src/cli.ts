@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 
 import { existsSync, readFileSync } from "node:fs";
-import { type ArtistRule } from "@fluncle/contracts";
+import { type ArtistRule, type RecordLabelTriageBody } from "@fluncle/contracts";
 import path from "node:path";
 import { Command, CommanderError, Option } from "commander";
 import { fluncleAsciiLogo, fluncleTagline } from "./brand";
@@ -3706,6 +3706,62 @@ JSON field reference:
         }
       },
     );
+
+  labels
+    .command("list")
+    .description("List labels with their crawl-seed state and triage cursor")
+    .option("--seed-state <state>", "Only this state: enabled, disabled, or undecided")
+    .option("--json", "Print JSON", false)
+    .action(async (options: { json: boolean; seedState?: string }) => {
+      const seedState = options.seedState;
+
+      if (
+        seedState !== undefined &&
+        seedState !== "enabled" &&
+        seedState !== "disabled" &&
+        seedState !== "undecided"
+      ) {
+        throw new Error("Pass --seed-state enabled|disabled|undecided");
+      }
+
+      const { listLabelsAdminCommand } = await import("./commands/admin-labels");
+      const labels = await listLabelsAdminCommand(seedState);
+
+      if (options.json) {
+        console.log(JSON.stringify({ labels }, null, 2));
+
+        return;
+      }
+
+      for (const label of labels) {
+        const looked = label.triageCheckedAt ? label.triageVerdict : "never looked";
+        console.log(`${label.slug}  ${label.seedState}  ${looked ?? ""}`.trimEnd());
+      }
+    });
+
+  labels
+    .command("triage")
+    .description("Record what a triage round found for a label (agent; never rules)")
+    .argument("<slug>", "The label slug")
+    .requiredOption("--payload <file>", "JSON file holding the round's finding for this label")
+    .option("--json", "Print JSON", false)
+    .action(async (slug: string, options: { json: boolean; payload: string }) => {
+      const payload = JSON.parse(readFileSync(options.payload, "utf8")) as RecordLabelTriageBody;
+      const { recordLabelTriageCommand } = await import("./commands/admin-labels");
+      const result = await recordLabelTriageCommand(slug, payload);
+
+      if (options.json) {
+        console.log(JSON.stringify(result, null, 2));
+
+        return;
+      }
+
+      const dropped =
+        result.droppedInertRules > 0 ? ` — dropped ${result.droppedInertRules} inert` : "";
+      console.log(
+        `${slug} → ${payload.verdict}${dropped}${result.superseded ? " (superseded)" : ""}`,
+      );
+    });
 
   labels
     .command("mint")
@@ -8439,6 +8495,7 @@ const stringOptions = new Set([
   "--page-digest",
   "--page-limit",
   "--parent-id",
+  "--payload",
   "--plate",
   "--plate-background",
   "--platform",

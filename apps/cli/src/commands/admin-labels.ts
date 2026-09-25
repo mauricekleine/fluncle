@@ -7,6 +7,7 @@ import {
   type LabelTakeOverResult,
   type MergeLabelResult,
   type MintLabelOutcome,
+  type RecordLabelTriageBody,
 } from "@fluncle/contracts";
 import { adminApiGet, adminApiPatch, adminApiPost, adminApiPut } from "../api";
 import {
@@ -165,6 +166,35 @@ export async function mintLabelCommand(
   });
 
   return { label: response.label, outcome: response.outcome, takenOver: response.takenOver };
+}
+
+export async function listLabelsAdminCommand(
+  seedState?: LabelSeedState,
+): Promise<LabelAdminItem[]> {
+  const query = seedState === undefined ? "" : `?seedState=${encodeURIComponent(seedState)}`;
+  const response = await adminApiGet<{ labels: LabelAdminItem[]; ok: boolean }>(
+    `/api/v1/admin/labels${query}`,
+  );
+
+  return response.labels;
+}
+
+export async function recordLabelTriageCommand(
+  slug: string,
+  payload: RecordLabelTriageBody,
+): Promise<{ droppedInertRules: number; superseded: boolean; triageCheckedAt: string }> {
+  const response = await adminApiPost<{
+    droppedInertRules: number;
+    ok: boolean;
+    superseded: boolean;
+    triageCheckedAt: string;
+  }>(`/api/v1/admin/labels/${encodeURIComponent(slug.trim().toLowerCase())}/triage`, payload);
+
+  return {
+    droppedInertRules: response.droppedInertRules,
+    superseded: response.superseded,
+    triageCheckedAt: response.triageCheckedAt,
+  };
 }
 
 export async function describeLabelCommand(

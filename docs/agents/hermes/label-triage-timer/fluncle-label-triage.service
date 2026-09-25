@@ -1,0 +1,24 @@
+[Unit]
+Description=fluncle-label-triage — rave-02 host trigger for the label-triage gate
+Documentation=https://github.com/mauricekleine/fluncle/blob/main/docs/agents/hermes/label-triage-timer/README.md
+Wants=network-online.target docker.service
+After=network-online.target docker.service
+# If this unit dies before writing its own /status marker (OOM, missing binary, a crash before the
+# sweep catch runs), the healthcheck prober never sees a failure. This catch-all posts a minimal
+# Discord alert; %n is this unit's full name.
+OnFailure=fluncle-sweep-failure@%n.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/fluncle/database-admission.env
+# Root drives the Docker daemon; `docker exec -u hermes` runs the WORK as the unprivileged hermes
+# user. The .sh/.ts pair is BAKED at /opt/hermes-scripts/ (auto-updates from main via pin-watch);
+# this host unit only TRIGGERS it, and the sweep self-writes its /status marker (cron-output.sh) so
+# the prober stays honest.
+ExecStart=/usr/bin/docker exec -e DATABASE_ADMISSION_FAIL_CLOSED -e DATABASE_ADMISSION_POLL_SECS=2 -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/label-triage-sweep.sh
+# A PURE trigger — one countless admin read and a sort. It spends no model tokens, so it needs
+# none of the headroom the hybrid authoring sweeps take.
+TimeoutStartSec=120
+# Modest hardening for a root docker-driving oneshot.
+NoNewPrivileges=true
+ProtectControlGroups=true

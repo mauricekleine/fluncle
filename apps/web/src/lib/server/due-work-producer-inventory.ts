@@ -461,8 +461,9 @@ export const DUE_WORK_REVIEWED_NONPRODUCER_WRITERS = [
     disposition: "non-eligibility",
     file: "labels.ts",
     rationale:
-      "Writes label MB identity and alias review state outside label bio/image predicates.",
+      "Writes label MB identity and alias review state outside label bio/image predicates, plus the triage cursor — what a round LOOKED at, which touches no bio, image or seed-state predicate.",
     sites: [
+      "labels.ts:update:labels:a6f98a95",
       "labels.ts:update:labels:7120eabc",
       "labels.ts:update:label_aliases:22525227",
       "labels.ts:delete:label_aliases:a75be81b",
@@ -841,6 +842,13 @@ export const GOAL_D_REVIEWED_NONPROJECTION_WRITERS = [
     file: "labels.ts",
     rationale: "Adopts label MusicBrainz identity without changing seed state or crawl scope.",
     sites: ["labels.ts:update:labels:7120eabc"],
+  },
+  {
+    disposition: "non-projection-fact",
+    file: "labels.ts",
+    rationale:
+      "Stamps the triage cursor — what a round LOOKED at — without touching seed state, crawl scope, or any bio/image predicate. Looking is not ruling.",
+    sites: ["labels.ts:update:labels:a6f98a95"],
   },
   {
     disposition: "test-fixture",

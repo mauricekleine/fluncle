@@ -24,7 +24,8 @@ The ruling itself is an OPERATOR act (`update_label` is operator-tier — crawl 
 
 A round has two shapes beyond the plain buckets, and both change what the NEXT crawl takes while touching nothing already stored:
 
-- **enable + blocks** — a mainly-DnB label with a recurring off-lane act. Only when the off-lane FIRST-credit share is **≤ 15 %**; above that the label is not mainly DnB and stays `unclear` for the operator.
+- **enable + blocks** — a mainly-DnB label with a recurring off-lane act. Only when the off-lane FIRST-credit share is **≤ 15 %**, measured RAW over every off-lane credit; above that the label is not mainly DnB and stays `unclear` for the operator. Raw is the rail because enabling a label is a standing commitment to what it releases NEXT, which no existing rule covers. The census ALSO reports a **residual** share — the same fraction dropping credits whose artist already carries a global rule — and when the two straddle the threshold the label is shown to the operator by name instead of being buried in `unclear`. The residual never changes a verdict. Measured type specimen: 0.205 raw against 0.147 residual, the gap being two already-globally-blocked acts.
+- **The share is over RECORDINGS, never releases.** That is what the crawl stores: one various-artists compilation of 19 off-lane tracks imports 19 off-lane tracks, however in-lane the other releases look. A release-level reading of the same label can look twice as clean and is the wrong measure (measured: a label reading 10-of-12 releases in lane on Discogs was 43–58 % off-lane by credit).
 - **`dnb_partial`: stay out of the seed set + allows** — a minority-DnB label whose DnB acts deserve the archive (the YUKU / Crucast shape). The label is left exactly as it is (undecided stays undecided); only the allow rules are written.
 
 Four rails hold in every round:
@@ -93,6 +94,24 @@ The method the briefs enforce, and why:
 - Return `unclear` and name the conflation when one MBID contains releases from distinct labels; enabling crawls by MBID, so split the upstream entity before enabling.
 - On a partial failure (an agent dies mid-run), **resume with `resumeFromRunId`** — completed batches replay from cache, only the dead slice re-runs.
 
+### 2b · Verify the judgment calls
+
+The verify pass is a second opinion that tries to REFUTE each verdict with evidence the first pass did not cite, and it is the round's only defence against a confident wrong call — it has refuted roughly a fifth of what it read, including enables that would have stored off-genre catalogue and one label whose central cited claim turned out to be false. Build its input from the staged round, then run `verify-workflow.js` over it:
+
+```bash
+python3 <skill>/scripts/build-verify-input.py \
+  --triage label-triage.json --pile undecided.json \
+  --prior <previous round>/label-triage.json      # optional: enables the contested check
+```
+
+It selects three populations, and the second and third exist because confidence alone misses them:
+
+- **Every medium/low-confidence `dnb` and `not_dnb`.**
+- **A deterministic 10 % sample of HIGH-confidence `not_dnb`.** A disable is terminal — the pull reads only `undecided`, so a disabled label never returns to the pile and a wrong disable silently loses good music forever. High-confidence disables have never been checked, so their error rate is unmeasured rather than low. Three clean sampled rounds retire the sample (`--disable-sample 0`); one wrong disable justifies it permanently.
+- **Contested reversals** — a verdict that flipped against the previous round, flagged separately when a previous verify pass had refuted it.
+
+Merge the verifier's answers back into `label-triage.json` before rendering: a refutation moves the row to the verifier's bucket (dropping any rules it carried), an `agrees` + `high` promotes the row's confidence, and anything else is left for the operator. A refuted row keeps both readings in its evidence.
+
 ### 3 · Present for ratification
 
 Stage the workflow's result object as `label-triage.json`, then render the review page and hand over its path:
@@ -104,6 +123,14 @@ python3 <skill>/scripts/render-ratification.py   # prints the local HTML path
 A local file, never a hosted artifact. The page **leads with the rule proposals** — per artist: the evidence, the census first-credit count, tap-bridge status (a TAP-BLIND rule is enforced by the crawler but invisible to the freshness tap), and the census's would-take / would-drop summary — then the plain buckets with the judgment calls first (every `unclear` and every non-`high` confidence verdict). An inert proposal is flagged on the page as one that will be dropped. Global suggestions render as prose for the operator to author himself.
 
 **Do not apply anything the operator has not ratified.**
+
+A round's conflations get their own artefact, because they are never ruled here — they are fixed upstream and picked up clean by a later round:
+
+```bash
+python3 <skill>/scripts/render-conflation-brief.py   # writes mb-split-brief.md
+```
+
+The brief is self-contained for an editing agent driving musicbrainz.org, and it bakes in the two rules that decided real outcomes. **Group A before Group B**: a conflation with a drum & bass catalogue trapped inside unblocks a crawl seed, while one where no strand is in lane is correct MusicBrainz hygiene that earns Fluncle nothing — so the brief orders A first and says to stop rather than spend the account's standing on B. And **the notes are a hypothesis**, confirmed against the live catalogue rather than taken as fact, with an ambiguous release left in place and reported. Both earned their place: a measured round was 10-of-23 pure hygiene, and three premises in a hand-written brief were wrong and were caught only because the editor was told to doubt them.
 
 ### 4 · Apply
 

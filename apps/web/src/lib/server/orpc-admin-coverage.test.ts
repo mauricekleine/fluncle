@@ -255,6 +255,7 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   "POST /admin/labels/{slug}/bio": "describe_label",
 
   "POST /admin/labels/{slug}/merge": "merge_label",
+  "POST /admin/labels/{slug}/triage": "record_label_triage",
   "POST /admin/lastfm/auth/session": "exchange_lastfm_session",
 
   "POST /admin/logbook/{sector}": "create_logbook_entry",

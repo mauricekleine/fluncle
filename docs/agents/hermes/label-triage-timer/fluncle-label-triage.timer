@@ -1,0 +1,18 @@
+[Unit]
+Description=fluncle-label-triage timer — read the undecided pile and report whether a round is due
+
+[Timer]
+# Per-firing jitter dissolves timer-phase alignment: mass timer restarts, including a pin-watch
+# rebake's quiesce/restore, can re-align every sweep to fire the same second, and the synchronized
+# write bursts convoy on libSQL's single writer. Re-rolled each firing, so no restart can re-align
+# the roster.
+RandomizedDelaySec=90
+# Once a day is the right cadence for a gate over a pile that refills at single digits a day: the
+# depth reading is only interesting when it crosses a threshold, and a daily reading finds that
+# within a day of it happening. Persistent catches up a tick missed across a box reboot; the gate
+# is a pure read, so a deferred tick costs nothing and reports the same thing later.
+OnCalendar=*-*-* 06:40:00 Europe/Amsterdam
+Persistent=true
+
+[Install]
+WantedBy=timers.target

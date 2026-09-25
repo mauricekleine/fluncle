@@ -2369,6 +2369,11 @@ export const labels = sqliteTable(
       .notNull()
       .default("undecided"),
     slug: text("slug").notNull().unique(),
+    triageCheckedAt: text("triage_checked_at"),
+    triageReason: text("triage_reason"),
+    triageVerdict: text("triage_verdict", {
+      enum: ["dnb", "dnb_partial", "not_dnb", "unclear"],
+    }),
     updatedAt: text("updated_at").notNull(),
   },
   (table) => [
@@ -2387,7 +2392,9 @@ export const labels = sqliteTable(
     index("labels_undecided_queue_idx")
       .on(table.createdAt)
       .where(sql`${table.seedState} = 'undecided'`),
-
+    index("labels_triage_queue_idx")
+      .on(table.triageCheckedAt)
+      .where(sql`${table.seedState} = 'undecided'`),
     index("labels_seed_state_name_idx").on(table.seedState, sql`${table.name} collate nocase`),
 
     index("labels_renderable_count_idx").on(table.renderableTrackCount),
@@ -2436,6 +2443,50 @@ export const artistRules = sqliteTable(
       .where(sql`${table.labelId} is null`),
     index("artist_rules_label_id_idx").on(table.labelId),
     index("artist_rules_crawl_lookup_idx").on(table.artistMbid, table.verdict, table.rearmedAt),
+  ],
+);
+
+export const labelTriageProposals = sqliteTable(
+  "label_triage_proposals",
+  {
+    censusSummary: text("census_summary"),
+    confidence: text("confidence", { enum: ["high", "medium", "low"] }).notNull(),
+    createdAt: text("created_at").notNull(),
+    evidence: text("evidence").notNull(),
+    id: text("id").primaryKey(),
+    labelId: text("label_id").notNull(),
+    offLaneShare: real("off_lane_share"),
+    reason: text("reason"),
+    residualOffLaneShare: real("residual_off_lane_share"),
+    roundId: text("round_id").notNull(),
+    updatedAt: text("updated_at").notNull(),
+    verdict: text("verdict", {
+      enum: ["dnb", "dnb_partial", "not_dnb", "unclear"],
+    }).notNull(),
+    verifyAgrees: integer("verify_agrees", { mode: "boolean" }),
+    verifyEvidence: text("verify_evidence"),
+  },
+  (table) => [
+    uniqueIndex("label_triage_proposals_label_idx").on(table.labelId),
+    index("label_triage_proposals_round_idx").on(table.roundId),
+  ],
+);
+
+export const labelTriageRuleProposals = sqliteTable(
+  "label_triage_rule_proposals",
+  {
+    artistMbid: text("artist_mbid").notNull(),
+    artistName: text("artist_name").notNull(),
+    createdAt: text("created_at").notNull(),
+    evidence: text("evidence"),
+    firstCreditCount: integer("first_credit_count").notNull().default(0),
+    id: text("id").primaryKey(),
+    proposalId: text("proposal_id").notNull(),
+    verdict: text("verdict", { enum: ["allow", "block"] }).notNull(),
+  },
+  (table) => [
+    index("label_triage_rule_proposals_proposal_idx").on(table.proposalId),
+    uniqueIndex("label_triage_rule_proposals_artist_idx").on(table.proposalId, table.artistMbid),
   ],
 );
 

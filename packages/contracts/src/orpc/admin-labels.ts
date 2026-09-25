@@ -10,6 +10,10 @@ export const LabelSeedStateSchema = z
   .enum(["disabled", "enabled", "undecided"])
   .meta({ id: "LabelSeedState" });
 
+export const LabelTriageVerdictSchema = z
+  .enum(["dnb", "dnb_partial", "not_dnb", "unclear"])
+  .meta({ id: "LabelTriageVerdict" });
+
 export const LabelAdminItemSchema = z
   .object({
     createdAt: z.string(),
@@ -30,6 +34,9 @@ export const LabelAdminItemSchema = z
     scopeChangedAt: z.string().nullable().optional(),
     seedState: LabelSeedStateSchema,
     slug: z.string(),
+    triageCheckedAt: z.string().nullable().optional(),
+    triageReason: z.string().nullable().optional(),
+    triageVerdict: LabelTriageVerdictSchema.nullable().optional(),
     updatedAt: z.string(),
   })
   .meta({ id: "LabelAdminItem" });
@@ -313,6 +320,48 @@ export const listLabelsMissingBio = oc
   .input(z.object({ limit: z.string().optional() }))
   .output(z.object({ labels: z.array(LabelBioWorkItemSchema), ok: z.literal(true) }));
 
+const TriageRuleProposalSchema = z.object({
+  artistMbid: z.string(),
+  artistName: z.string(),
+  evidence: z.string().optional(),
+  firstCreditCount: z.number().int().min(0),
+  verdict: z.enum(["allow", "block"]),
+});
+
+export const RecordLabelTriageBodySchema = z
+  .object({
+    censusSummary: z.string().optional(),
+    confidence: z.enum(["high", "medium", "low"]),
+    evidence: z.string(),
+    offLaneShare: z.number().min(0).max(1).optional(),
+    reason: z.string().optional(),
+    residualOffLaneShare: z.number().min(0).max(1).optional(),
+    roundId: z.string(),
+    rules: z.array(TriageRuleProposalSchema).optional(),
+    verdict: LabelTriageVerdictSchema,
+    verifyAgrees: z.boolean().optional(),
+    verifyEvidence: z.string().optional(),
+  })
+  .meta({ id: "RecordLabelTriageBody" });
+
+export const recordLabelTriage = oc
+  .route({
+    method: "POST",
+    operationId: "recordLabelTriage",
+    path: "/admin/labels/{slug}/triage",
+    summary: "Record what a triage round found (stamps the cursor; never rules)",
+    tags: ["Admin"],
+  })
+  .input(RecordLabelTriageBodySchema.extend({ slug: z.string() }))
+  .output(
+    z.object({
+      droppedInertRules: z.number().int(),
+      ok: z.literal(true),
+      superseded: z.boolean(),
+      triageCheckedAt: z.string(),
+    }),
+  );
+
 export const adminLabelsContract = {
   confirm_label_alias: confirmLabelAlias,
   describe_label: describeLabel,
@@ -323,6 +372,7 @@ export const adminLabelsContract = {
   list_labels_missing_bio: listLabelsMissingBio,
   merge_label: mergeLabel,
   mint_label: mintLabel,
+  record_label_triage: recordLabelTriage,
   reject_label_alias: rejectLabelAlias,
   replace_label_artist_rules: replaceLabelArtistRules,
   update_label: updateLabel,
