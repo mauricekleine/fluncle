@@ -5853,6 +5853,12 @@ a.catalogue-letter:focus-visible {
   margin-left: 0;
 }
 
+/* Only the trail's tail may shrink. With Browse in the bar a phone's trail is tight, and a crumb
+   that shrank before the tail would slide its text over the next crumb's separator. */
+.nav-breadcrumb li:not(:last-child) {
+  flex: none;
+}
+
 /* The front door has no breadcrumb and no search glyph, so its wordmark already takes the slack;
    a second auto margin here would split it and float Browse mid-bar. */
 .nav-shell[data-front-door] .browse-trigger {
