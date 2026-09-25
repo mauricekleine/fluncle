@@ -3,12 +3,6 @@ import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-// The stub models the two server scopes the driver meets. `other` holds markers of other subjects,
-// which the shared repair step pages first; `track` holds track source markers, the only markers
-// the rank guard and the post-page drain wait for. `orphan` is repair debt no registered definition
-// converges, so the shared step never reports complete. The guard clears five track markers per
-// call and refuses with the typed pending answer while more remain; every ranked page appends one
-// marker per moved row. `repair-unreported` models a Worker that omits track source-marker state.
 const STUB = `#!/bin/bash
 DIR="$(dirname "$0")"
 ARGS="$*"
@@ -106,8 +100,6 @@ shift
 exec "$@"
 `;
 
-// Every phase spawns the admission runner, a bun child, and up to two CLI stubs; the longest drains
-// run up to the phase cap, so they need more than the default per-test deadline.
 const PHASE_DRAIN_TIMEOUT_MS = 60_000;
 
 let dir: string;
@@ -290,12 +282,9 @@ describe("rank-sweep phased drain", () => {
   test(
     "the worst clean tick and its drain fit inside the cap when repair spends pages elsewhere",
     () => {
-      // Exactly enough other-subject markers to absorb every ride-along step until page eight.
       mode("endless", { other: 75 });
       const summary = run();
 
-      // Page one, two phases per later page (the guard clears five markers and refuses, then clears
-      // the last five and reads), then two drain phases.
       expect(count("rank")).toBe(15);
       expect(count("repair")).toBe(17);
       expect(summary).toMatchObject({
@@ -338,7 +327,7 @@ describe("rank-sweep phased drain", () => {
     "a drain cut by the wall budget reports a partial tick",
     () => {
       mode("drain", { other: 1000 });
-      // The clock reaches the budget once two drain phases have run after the three rank pages.
+
       const now = spyOn(performance, "now").mockImplementation(() =>
         count("repair") >= 7 ? 600_000 : 0,
       );
@@ -416,7 +405,7 @@ describe("rank-sweep phased drain", () => {
     "a guard that never clears ends on the wall budget before another phase starts",
     () => {
       mode("pending");
-      // Each completed phase advances the monotonic clock by a third of the budget.
+
       const now = spyOn(performance, "now").mockImplementation(() => count("repair") * 200_000);
 
       try {

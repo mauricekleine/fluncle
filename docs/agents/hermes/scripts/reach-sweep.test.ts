@@ -1,19 +1,3 @@
-// Unit tests for reach-sweep.ts — the `--no-agent` daily /reach snapshot cron.
-//
-// The contract worth pinning is the SINGLE COLLECT: unlike rank (which loops while a backlog
-// drains), a daily snapshot is one idempotent `fluncle admin reach collect` call. So the sweep
-// makes exactly one call, folds the wrapper into a one-line JSON summary (inserted / landed /
-// skipped / failed), stays `ok` when individual platforms fault or cleanly skip,
-// and reports `ok:false` when the collect genuinely fails.
-//
-// The box-script sweeps are self-contained (they cannot import the workspace) and live outside
-// any package's test runner, so this file uses `bun:test` and is run directly:
-//
-//   bun test docs/agents/hermes/scripts/reach-sweep.test.ts
-//
-// The fluncle CLI is stubbed with a tiny executable selected via FLUNCLE_BIN. A mode FILE beside
-// it selects the response shape (Bun's spawnSync snapshots the environment, so the mode cannot
-// ride on an env var), and a COUNTER file proves the sweep makes exactly one call.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -57,7 +41,6 @@ function calls(): number {
   return Number(readFileSync(join(dir, "count"), "utf8").trim());
 }
 
-/** Capture the sweep's one JSON summary line. */
 function run(): Record<string, unknown> {
   const lines: string[] = [];
   const log = console.log;
@@ -92,7 +75,7 @@ describe("reach-sweep takes ONE daily snapshot", () => {
     mode("full");
     const summary = run();
 
-    expect(calls()).toBe(1); // a snapshot is a single call, never a drain loop
+    expect(calls()).toBe(1);
     expect(summary.inserted).toBe(4);
     expect(summary.landed).toBe(2);
     expect(summary.skipped).toBe(1);
@@ -111,8 +94,7 @@ describe("reach-sweep takes ONE daily snapshot", () => {
 
     expect(calls()).toBe(1);
     expect(summary.inserted).toBe(0);
-    // Platforms, not inserted metric rows, are the work unit: the idempotent collect still
-    // checked and successfully handled Mixcloud.
+
     expect(summary.checked).toBe(1);
     expect(summary.produced).toBe(1);
     expect(summary.ok).toBe(true);
@@ -129,7 +111,7 @@ describe("reach-sweep takes ONE daily snapshot", () => {
     expect(summary.failed).toBe(0);
     expect(summary.checked).toBe(2);
     expect(summary.produced).toBe(0);
-    // A held-back key is not a fault — the tick succeeded, it just had nothing to write.
+
     expect(summary.ok).toBe(true);
   });
 
@@ -171,8 +153,6 @@ describe("reach-sweep takes ONE daily snapshot", () => {
     mode("full");
     const summary = run();
 
-    // The collect is a periodic whole-platform snapshot, not a capped queue walk. A platform
-    // count is work checked, not work remaining, so there is no honest queue_depth to emit.
     expect(summary).not.toHaveProperty("queue_depth");
     expect(summary).not.toHaveProperty("expected_interval_ms");
   });
@@ -184,7 +164,7 @@ describe("reach-sweep fails honestly", () => {
     const summary = run();
 
     expect(summary.ok).toBe(false);
-    // Absent outcome arrays mean every domain counter is unknown, never fabricated zero.
+
     expect(summary).toMatchObject({
       checked: null,
       empty: null,

@@ -1,7 +1,4 @@
 #!/usr/bin/env bun
-// Box driver for the label-logo resolver. The Worker prepares trusted label identities, this box
-// performs only paced Discogs reads, and the same Worker operation re-verifies the returned evidence
-// before any R2 or DB write. MusicBrainz, Wikidata fallback, matching, and persistence never move.
 
 import {
   createDiscogsFetcher,
@@ -68,7 +65,6 @@ function emptySummary() {
   };
 }
 
-/** Run one bounded prepare → vendor fetch → Worker verdict pass. */
 export async function runLabelImagesSweep(effects: LabelImagesSweepEffects = {}) {
   const summary = emptySummary();
   const env = effects.env ?? process.env;
@@ -119,8 +115,6 @@ export async function runLabelImagesSweep(effects: LabelImagesSweepEffects = {})
     }
   } catch (error) {
     if (isDueWorkRepairPending(error)) {
-      // The Worker deferred the label worklist while due-work repair converges: the pass pauses and
-      // keeps whatever the prepare call already settled; the next tick reads again.
       repairPending = true;
       log(error.message);
     } else {

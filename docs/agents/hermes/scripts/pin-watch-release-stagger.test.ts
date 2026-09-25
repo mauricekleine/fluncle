@@ -33,7 +33,6 @@ function extractFunction(source: string, functionName: string): string {
   throw new Error(`unterminated ${functionName}`);
 }
 
-/** The RELEASE_* configuration block, taken verbatim so a test can never restate a default. */
 function releaseConfig(source: string): string {
   const start = source.indexOf('RELEASE_STAGGER_SECS="${PINWATCH_RELEASE_STAGGER_SECS');
   const end = source.indexOf("\n)\n", source.indexOf("RELEASE_HEAVY_TIMERS=("));
@@ -45,7 +44,6 @@ function releaseConfig(source: string): string {
   return source.slice(start, end + 3);
 }
 
-/** Every `fluncle-*.timer` this repo holds, minus the two the quiesce deliberately excludes. */
 function repoSweepTimers(): readonly string[] {
   const timers: string[] = [];
 
@@ -74,10 +72,6 @@ type ReleaseRun = {
   readonly stderr: string;
 };
 
-/**
- * Drive the checked-in release path against a fake `systemctl` and a fake `sleep`, and report
- * the order the timers were started in plus every spacing the run would have slept.
- */
 function runRelease(options: {
   readonly env?: Readonly<Record<string, string>>;
   readonly mode: "immediate" | "staggered";
@@ -172,7 +166,7 @@ describe("pin-watch releases the sweep roster over a window", () => {
     expect(result.status, result.stderr).toBe(0);
     expect(result.order.length).toBe(roster.length);
     expect([...result.order].sort()).toEqual([...roster].sort());
-    // One spacing between each pair — the first timer starts immediately.
+
     expect(result.sleeps.length).toBe(roster.length - 1);
     for (const spacing of result.sleeps) {
       expect(spacing).toBeGreaterThanOrEqual(8);
@@ -278,7 +272,6 @@ describe("pin-watch stagger wiring", () => {
     const deployed = source.indexOf('log "post-swap smoke passed — deployed $NEW_IMAGE"');
     const rollback = source.indexOf('log "new image did not come up healthy');
 
-    // Exactly two: the dry-run exit and the deployed exit. Nothing on a failure path.
     expect(staggered.length).toBe(2);
     expect(staggered[0]?.index ?? -1).toBeGreaterThan(dryRun);
     expect(staggered[0]?.index ?? -1).toBeLessThan(deployed);

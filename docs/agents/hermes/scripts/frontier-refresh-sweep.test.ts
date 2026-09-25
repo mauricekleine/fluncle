@@ -1,21 +1,3 @@
-// Unit tests for frontier-refresh-sweep.ts — the weekly Frontier-refresh `--no-agent`
-// cron (E2, the public recommendation machine).
-//
-// The contract worth pinning is that the sweep is a PURE TRIGGER: it fires ONE
-// `fluncle admin frontier refresh`, surfaces the op's counts on its own summary line, and
-// (1) surfaces `switchOff` + the `editionOnly` count honestly when the kill switch is closed
-// (dark still writes editions, only Spotify is skipped), (2) stays `ok` when the
-// op reports per-user failures (best-effort; retried next week), and (3) reports
-// `ok: false` on a CLI error without throwing.
-//
-// The box-script sweeps are self-contained (they cannot import the workspace) and live
-// outside any package's test runner, so this file uses `bun:test` and is run directly:
-//
-//   bun test docs/agents/hermes/scripts/frontier-refresh-sweep.test.ts
-//
-// The fluncle CLI is stubbed with a tiny executable selected via FLUNCLE_BIN; a mode FILE
-// beside it selects the response shape (Bun's spawnSync snapshots the environment, so the
-// mode cannot ride on an env var).
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -52,7 +34,6 @@ function calls(): number {
   return Number(readFileSync(join(dir, "count"), "utf8").trim());
 }
 
-/** Capture the sweep's one JSON summary line. */
 function run(): Record<string, unknown> {
   const lines: string[] = [];
   const log = console.log;
@@ -109,7 +90,7 @@ describe("frontier-refresh-sweep is a pure weekly trigger", () => {
     expect(calls()).toBe(1);
     expect(summary.switchOff).toBe(true);
     expect(summary.ok).toBe(true);
-    // Dark ⇒ the sweep still writes editions (the internal cache); Spotify is skipped.
+
     expect(summary.editionOnly).toBe(2);
     expect(summary.checked).toBe(2);
     expect(summary.produced).toBe(2);

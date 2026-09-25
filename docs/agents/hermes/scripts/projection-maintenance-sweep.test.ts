@@ -10,11 +10,6 @@ import {
   runProjectionMaintenanceTick,
 } from "./projection-maintenance-sweep";
 
-/**
- * A tick against a CLI that accepts `--wall-ms`, which is the ordinary steady state. The capability
- * probe is stubbed rather than spawned so these cases exercise the tick and not the binary; the
- * probe itself, and the fallback it selects, have their own cases against a real stub CLI below.
- */
 const runTick = (
   run: Parameters<typeof runProjectionMaintenanceTick>[0],
   options: Parameters<typeof runProjectionMaintenanceTick>[1] = {},
@@ -85,7 +80,6 @@ describe("the stale-definition re-projection the repair path carries", () => {
       };
     });
 
-    // The rebuild arm prevents a definition change from remaining un-projected behind `no_debt`.
     expect(calls.some((args) => args.includes("advance"))).toBe(true);
     expect(summary.trackDueWork).toMatchObject({
       attempted: true,
@@ -401,9 +395,6 @@ describe("projection maintenance bounded family repair", () => {
       );
     });
 
-    // One measured marker per family buys one step for it and one for what lands during the tick;
-    // the public families keep their floor, because their epoch and anchor work is not measured in
-    // markers at all.
     expect(calls.slice(1)).toEqual(
       (
         [
@@ -549,7 +540,7 @@ describe("projection maintenance bounded family repair", () => {
         tick += 1;
         return status({ trackDueWork: true }, { track: debt });
       }
-      // Six measured markers buy two steps: one page of five plus the headroom step.
+
       return advance("track_due_work", tick > 1, tick > 1 ? 1 : 100, tick > 1 ? 1 : 2);
     };
 
@@ -627,13 +618,12 @@ describe("projection maintenance bounded family repair", () => {
         : advance("track_due_work", true, 40, 9);
     });
 
-    // Forty markers are eight pages of five, plus the headroom step.
     expect(calls[1]?.[calls[1].indexOf("--max-steps") + 1]).toBe("9");
   });
 
   test("a public family with an unmatched epoch and no markers still gets its floor", () => {
     const calls: string[][] = [];
-    // Zero repair markers, so the count measures none of the work: the epoch mismatch IS the work.
+
     const epochOnly = family({ convergence: { epochMatched: false } });
     const summary = runTick((args) => {
       calls.push(args);
@@ -651,9 +641,6 @@ describe("projection maintenance bounded family repair", () => {
     expect(summary.artistQualification.attempted).toBe(true);
   });
 
-  // THE WRITE-LANE SHARE, measured rather than assumed. The adaptive budget moved the worst case
-  // per family from 100 markers to 1,400, all inside one whole-lifetime lease, so the ledger needs
-  // to be able to answer what share of the write lane maintenance actually takes.
   test("reports the wall time each family's advance held, and the tick's total", () => {
     const debt = family({
       repairs: {
@@ -677,7 +664,7 @@ describe("projection maintenance bounded family repair", () => {
 
     expect(summary.trackDueWork.leaseHoldMs).toBe(4_000);
     expect(summary.crawlDueWork.leaseHoldMs).toBe(1_500);
-    // A family that needed no advance held nothing, and contributes nothing to the total.
+
     expect(summary.publicAggregates.leaseHoldMs).toBeNull();
     expect(summary.totalLeaseHoldMs).toBe(5_500);
   });
@@ -761,7 +748,7 @@ describe("projection maintenance bounded family repair", () => {
       },
     });
     const targets: FamilyName[] = [];
-    // The clock jumps past the run's wall budget the moment the first family's advance returns.
+
     let clock = 0;
     const summary = runTick(
       (args) => {
@@ -780,15 +767,12 @@ describe("projection maintenance bounded family repair", () => {
     expect(summary.wallDeferredFamilies).toEqual(["crawl_due_work"]);
     expect(summary.crawlDueWork).toMatchObject({ attempted: false, complete: false });
     expect(summary.converged).toBe(false);
-    // The deferred family's debt age still reaches the health bar that watches it.
+
     expect(summary.oldestDebtAgeMs).toBe(30_000);
     expect(summary.errors).toBe(0);
     expect(summary.ok).toBe(true);
   });
 
-  // A KILLED CHILD IS ITS OWN OUTCOME. It reported nothing at all — not a step, not a processed
-  // page — while holding the tick's write lease for the whole deadline, so it must not read as the
-  // measured zero that `no_progress` means, and it must not take the rest of the tick down with it.
   test("a CLI that runs past its deadline is a timeout, and the other families still report", () => {
     const debt = (ageMs: number) =>
       family({
@@ -802,7 +786,7 @@ describe("projection maintenance bounded family repair", () => {
     const directory = mkdtempSync(join(tmpdir(), "projection-maintenance-timeout-"));
     const executable = join(directory, "fluncle");
     const previous = process.env.FLUNCLE_BIN;
-    // A stub that answers status instantly and then sleeps past the child deadline on any advance.
+
     writeFileSync(
       executable,
       `#!/bin/sh
@@ -819,13 +803,9 @@ esac
     );
     try {
       const summary = runTick((args) =>
-        // Only the crawl family reaches the real stub; the track family is answered in-process, so
-        // one test proves both halves: a timeout stays contained and its neighbour still reports.
         args[args.indexOf("--target") + 1] === "track_due_work"
           ? advance("track_due_work", true, 7, 2)
-          : // A one-second deadline against a stub that sleeps five reaches the real kill path in
-            // bounded time; the production deadline is the module constant.
-            fluncleJson(args, 1_000),
+          : fluncleJson(args, 1_000),
       );
 
       expect(summary.crawlDueWork).toMatchObject({
@@ -843,7 +823,7 @@ esac
         outcome: "useful_completion",
         processed: 7,
       });
-      // The worst outcome is the loud one, and the run is a failure for the ledger.
+
       expect(summary.outcome).toBe("timeout");
       expect(summary.errors).toBe(1);
       expect(summary.ok).toBe(false);
@@ -880,18 +860,16 @@ esac
             { crawl: debt(10_000), track: debt(600_000) },
           );
         }
-        // The first family spends all but four seconds of the run budget.
+
         clock += 116_000;
         return advance("track_due_work", false, 1, 100);
       },
       { now: () => clock },
     );
 
-    // The escalated family still asks for the hard step ceiling, but its call is bounded by time.
     expect(calls[1]?.[calls[1].indexOf("--max-steps") + 1]).toBe("100");
     expect(calls[1]?.[calls[1].indexOf("--wall-ms") + 1]).toBe("30000");
-    // Four seconds buys roughly one round trip, so the second family waits for the next tick
-    // rather than spending the tail on a call that cannot finish a page.
+
     expect(calls).toHaveLength(2);
     expect(summary.wallDeferredFamilies).toEqual(["crawl_due_work"]);
   });
@@ -924,15 +902,12 @@ esac
       steps: 2,
       wallStopped: true,
     });
-    // A spent budget is a healthy incomplete tick, not an execution error.
+
     expect(summary.errors).toBe(0);
     expect(summary.ok).toBe(true);
     expect(summary.budgetExhaustedFamilies).toEqual(["track_due_work"]);
   });
 
-  // The catalogue-rank corpus marker is a resumable REBUILD checkpoint wearing a source-marker row.
-  // It can be hours old while every ordinary marker drains, so the server reports it apart from
-  // `oldestOutstandingMarkerAge` and the sweep carries it into the ledger under its own name.
   test("the catalogue-rank rebuild marker's age is reported, never folded into debt age", () => {
     const track = family({
       catalogueRankMarkerAgeMs: 14_217_575,
@@ -952,8 +927,7 @@ esac
     });
 
     expect(summary.catalogueRankMarkerAgeMs).toBe(14_217_575);
-    // A four-hour rebuild checkpoint is not four-hour-old debt, so it neither escalates the step
-    // ask to the ceiling nor reads as debt the tick failed to drain.
+
     expect(calls[1]?.[calls[1].indexOf("--max-steps") + 1]).toBe("2");
     expect(summary.oldestDebtAgeMs).toBeNull();
   });
@@ -965,13 +939,8 @@ esac
     expect(summary.errors).toBe(0);
   });
 
-  // THE PIN WINDOW IS REAL. This script and the `fluncle` CLI are baked into the same image, but
-  // their pins do not move together: a change here rebakes within the hour, while the CLI pin only
-  // moves once the release is cut and the pin-drift bump merges. Sending an unknown flag to the old
-  // CLI in that window would fail every family — an outage on the drain the flag exists to protect.
   describe("against the CLI pin it is actually bundled with", () => {
     const debt = family({
-      // Escalated: an age-driven ask would reach for the 100-step ceiling.
       oldestOutstandingMarkerAge: { ageMs: 10 * 60 * 60_000, reason: null, truncated: false },
       repairs: {
         direct: { count: 0, truncated: true },
@@ -980,7 +949,6 @@ esac
       },
     });
 
-    /** Run one real tick against a stub binary whose help page decides the mode. */
     const withStubCli = <Result>(
       help: string,
       body: (readArgv: () => string[]) => Result,
@@ -1058,21 +1026,19 @@ printf '%s\\n' "$FLUNCLE_STUB_ADVANCE"
 
         const issued = readArgv();
         expect(issued).toHaveLength(1);
-        // The unknown flag would have failed the family outright.
+
         expect(issued[0]).not.toContain("--wall-ms");
-        // Escalation still applies, but to a ceiling that cannot reach the child deadline: 30
-        // steps is roughly 36s at the hosted round trip against a 60s deadline.
+
         expect(issued[0]).toContain("--max-steps 30");
         expect(summary.trackDueWork).toMatchObject({
           attempted: true,
           processed: 12,
           steps: 2,
           wallBound: "steps",
-          // An old CLI honours no budget, so this is unknown rather than a false that would read
-          // as "the budget was not reached".
+
           wallStopped: null,
         });
-        // The fallback is a slower drain, never an error.
+
         expect(summary.errors).toBe(0);
         expect(summary.ok).toBe(true);
       });
@@ -1114,11 +1080,11 @@ printf '%s\\n' "$FLUNCLE_STUB_ADVANCE"
           : advance(args[args.indexOf("--target") + 1] as FamilyName, true, 1),
       { acceptsWallMs },
     );
-    // Two families advanced; the answer cannot change mid-run, so one probe covers both.
+
     expect(probes).toBe(1);
 
     runProjectionMaintenanceTick(() => status({ trackDueWork: true }), { acceptsWallMs });
-    // A debt-free tick issues no advance, so it must spawn nothing at all.
+
     expect(probes).toBe(1);
   });
 

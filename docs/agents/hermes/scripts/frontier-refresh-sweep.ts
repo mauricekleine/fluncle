@@ -1,28 +1,4 @@
 #!/usr/bin/env bun
-// frontier-refresh-sweep.ts — the bun orchestrator behind the `--no-agent` Frontier-refresh
-// cron (`fluncle-frontier-refresh`). E2, the public recommendation machine
-// (docs/planning/ROADMAP.md § the public recommendation machine).
-//
-// Version-controlled source; the repo is canonical and the box is a deploy target
-// (fluncle-hermes-operator skill). Invoked by the bash wrapper (frontier-refresh-sweep.sh)
-// the host timer execs every ~15 min — see that file's header for the wire-up and
-// ../cron/README.md for the cron model.
-//
-// WHAT IT DOES. One tick of the PACED DRAIN — it re-mirrors a BATCH of DUE crew members'
-// "Fluncle's Frontier" playlists from their CURRENT recommendations, spreading the weekly
-// refresh across ticks instead of bursting every playlist at once (which 429'd Spotify's
-// shared per-app budget). The CLI holds no sync logic; this driver holds even less. It fires
-// ONE `fluncle admin frontier refresh` (the `refresh_frontier_playlists` op), which processes
-// one batch inside the Worker (pending mints first, then oldest-refreshed), respects the
-// DEFAULT-DENY kill switch, consults the shared Spotify budget and stops cleanly when it is
-// spent (`budgetPaused`), and full-replaces each playlist whose recommendation set changed
-// (skipping the unchanged ones via the per-row mirror hash). It prints one JSON summary line.
-//
-// It certifies nothing and creates no new public authority: every playlist it touches
-// already exists, minted by its own owner. `refresh_frontier_playlists` is AGENT tier,
-// so the box's existing agent-scoped token drives it — NO new secret. Zero LLM tokens.
-//
-// stdout: one JSON summary line (the cron run output). Diagnostics → stderr.
 
 import { spawnSync } from "node:child_process";
 
@@ -30,7 +6,6 @@ const FLUNCLE_BIN = process.env.FLUNCLE_BIN ?? "fluncle";
 
 const log = (message: string) => console.error(`[frontier-refresh-sweep] ${message}`);
 
-/** The refresh op's summary — the fields we surface. */
 type FrontierRefreshSummary = {
   budgetPaused?: boolean;
   building?: number;
@@ -99,7 +74,7 @@ export function buildFrontierSummary(tick: FrontierRefreshSummary): Record<strin
   return {
     budgetPaused: tick.budgetPaused ?? false,
     building,
-    // `total` is the Worker's capped candidate page, not the number actually attempted.
+
     checked: failed + building + minted + refreshed + editionOnly + unchanged + skipped,
     editionOnly,
     error: null,
@@ -113,7 +88,6 @@ export function buildFrontierSummary(tick: FrontierRefreshSummary): Record<strin
     switchOff: tick.switchOff ?? false,
     total: tick.total ?? 0,
     unchanged,
-    // Deliberately no `queue_depth`: `total` is capped and is not a remaining-backlog count.
   };
 }
 
@@ -137,8 +111,6 @@ export function buildFrontierFailureSummary(error: unknown): Record<string, unkn
   };
 }
 
-// `main` RETURNS its summary and never exits: the process-level exit code is the
-// entrypoint's job below. That keeps the sweep importable (frontier-refresh-sweep.test.ts).
 export function main(): { ok: boolean } & Record<string, unknown> {
   try {
     const tick = fluncleJson<FrontierRefreshSummary>(["admin", "frontier", "refresh"]);

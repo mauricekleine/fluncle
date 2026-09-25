@@ -1,26 +1,7 @@
-// Unit tests for the box's shared prompt reader — the seam every on-box authoring sweep
-// pulls its prompt through. The box scripts are self-contained (they cannot import the
-// workspace) and live outside any package's test runner, so this file uses `bun:test`
-// and is run directly:
-//
-//   bun test docs/agents/hermes/scripts/prompt-fetch.test.ts
-//
-// WHAT IS ACTUALLY BEING PINNED HERE IS THE CARDINAL GUARANTEE: a sweep must never break
-// because a prompt could not be fetched. So the interesting tests are all FAILURE tests —
-// no token, a non-2xx, a network throw, a timeout, an empty body, malformed JSON — and
-// every one of them must come back `null` (never a throw), because `null` is what tells
-// the sweep to author from its own baked-in builder exactly as it did before the registry
-// existed. `renderPrompt` is pinned for the same reason: it is TOTAL, so an operator's
-// typo in the /admin editor (an unknown variable, a missing one) renders a hole, never an
-// exception.
-
 import { describe, expect, test } from "bun:test";
 
 import { fetchPrompt, renderPrompt, resolveSweepPrompt } from "./prompt-fetch";
 
-// A fetch stub returning a canned response. Mirrors cost-emit.test.ts's shape (the box's
-// other injectable-fetch helper), recording the call as flat strings so an assertion
-// never optional-chains into an untyped RequestInit.
 type RecordedCall = { auth: string; method: string; url: string };
 
 function stubFetch(response: { json?: () => Promise<unknown>; ok: boolean; status?: number }): {
@@ -46,10 +27,6 @@ function stubFetch(response: { json?: () => Promise<unknown>; ok: boolean; statu
   return { calls, fetchImpl };
 }
 
-// ---------------------------------------------------------------------------
-// renderPrompt — two constructs, and it can never throw.
-// ---------------------------------------------------------------------------
-
 describe("renderPrompt", () => {
   test("substitutes {{var}} (tolerating inner whitespace)", () => {
     expect(
@@ -68,8 +45,6 @@ describe("renderPrompt", () => {
     );
   });
 
-  // A dropped block leaves a clean paragraph break behind, never a hole and never the
-  // variable that lived inside it.
   test("drops an {{#if}} block when the variable is absent, empty, or whitespace", () => {
     const body = "head\n{{#if contextNote}}\nCONTEXT: {{contextNote}}\n{{/if}}\ntail";
 
@@ -81,9 +56,6 @@ describe("renderPrompt", () => {
     }
   });
 
-  // The renderer has no `else`, on purpose — so a two-armed branch is TWO flags, and the
-  // sweeps set the inverse one (`noContextNote`) only when the primary is missing. This
-  // pins that the pattern actually works end to end.
   test("expresses a two-armed branch as two flags (the no-`else` contract)", () => {
     const body = "{{#if contextNote}}NOTE: {{contextNote}}{{/if}}{{#if noContextNote}}NONE{{/if}}";
 
@@ -91,8 +63,6 @@ describe("renderPrompt", () => {
     expect(renderPrompt(body, { contextNote: "", noContextNote: "yes" })).toBe("NONE");
   });
 
-  // TOTALITY. An operator typing `{{artits}}` in the /admin editor must get a hole, not a
-  // stopped sweep.
   test("renders an unknown variable empty and never throws", () => {
     expect(() => renderPrompt("a {{nope}} b")).not.toThrow();
     expect(renderPrompt("a {{nope}} b")).toBe("a  b");
@@ -103,10 +73,6 @@ describe("renderPrompt", () => {
     expect(renderPrompt("a\n\n{{#if x}}\nb\n{{/if}}\n\nc")).toBe("a\n\nc");
   });
 });
-
-// ---------------------------------------------------------------------------
-// fetchPrompt — EVERY failure path returns null, and none of them throw.
-// ---------------------------------------------------------------------------
 
 describe("fetchPrompt best-effort contract", () => {
   test("happy path returns the body/version/source and GETs with the bearer", async () => {
@@ -166,8 +132,6 @@ describe("fetchPrompt best-effort contract", () => {
   });
 
   test("a timeout → null, never thrown (the hard budget fires)", async () => {
-    // Honour the AbortSignal the fetcher passes, so this exercises the real
-    // `AbortSignal.timeout` path rather than a stand-in rejection.
     const fetchImpl = ((_url: string, init: RequestInit) =>
       new Promise((_resolve, reject) => {
         init.signal?.addEventListener("abort", () => reject(new Error("The operation timed out.")));
@@ -196,16 +160,6 @@ describe("fetchPrompt best-effort contract", () => {
     expect(await fetchPrompt("note_author", { fetchImpl, token: "t" })).toBeNull();
   });
 });
-
-// ---------------------------------------------------------------------------
-// resolveSweepPrompt — the fallback thunk runs EXACTLY when the fetch came back null,
-// and a fallback-authored artifact reports `promptVersion: null` so it is legible
-// forever as "the registry never wrote this".
-//
-// `resolveSweepPrompt` reads the token/base from the environment (the box's real
-// conditions), so these drive it by swapping FLUNCLE_API_TOKEN and the global fetch,
-// and put both back afterwards.
-// ---------------------------------------------------------------------------
 
 describe("resolveSweepPrompt", () => {
   async function withEnv<T>(
@@ -271,8 +225,6 @@ describe("resolveSweepPrompt", () => {
     expect(fallbacks).toBe(0);
   });
 
-  // THE FLOOR. The registry is unreachable, so the sweep's own builder writes the prompt
-  // — and the artifact records `null`, the honest "no registry prompt wrote this".
   test("falls back exactly once, with promptVersion null, when the fetch returns null", async () => {
     let fallbacks = 0;
 
@@ -306,8 +258,6 @@ describe("resolveSweepPrompt", () => {
     expect(resolved).toEqual({ prompt: "the baked-in prompt", promptVersion: null });
   });
 
-  // A registry default (no operator override on file) is version 0 — distinct from the
-  // `null` that means the registry was never reached at all.
   test("the registry's baked default reports version 0, not null", async () => {
     const { fetchImpl } = stubFetch({
       json: () => Promise.resolve({ body: "the registry default", source: "default", version: 0 }),

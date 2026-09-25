@@ -1,50 +1,4 @@
 #!/usr/bin/env bun
-// newsletter-sweep.ts — the bun orchestrator behind the `--no-agent` weekly
-// newsletter cron (`fluncle-newsletter`).
-//
-// LIVE. Version-controlled source; the repo is canonical and the box is a deploy
-// target (fluncle-hermes-operator skill). Invoked by the bash wrapper
-// (newsletter-sweep.sh) its host timer execs Fridays 15:00 Amsterdam — see that
-// file's header for the `host-timer` wire-up and ../cron/README.md.
-//
-// This sweep uses the same hybrid `--no-agent` pattern as note/observe: everything deterministic
-// except ONE bounded `claude -p` authoring call. The single-call limit bounds cost. Authoring runs on the Claude
-// subscription (CLAUDE_CODE_OAUTH_TOKEN), not OpenRouter, so it uses no per-token credit.
-//
-// THE JOB, in order:
-//   1. MISS-RECOVERY (deterministic): `fluncle admin newsletter list --json`. If an
-//      unsent draft already exists (status `draft`, no number), DO NOT author a new
-//      one — re-offer THAT draft (re-emit the operator summary) and exit. Its finds
-//      were never delivered; re-offering is correct.
-//   2. WINDOW (deterministic): UNTIL = now (ISO). SINCE = the most recent SENT
-//      edition's `windowUntil`, or now-7d if none. The window self-heals: only SENT
-//      editions anchor it, so a skipped week widens the next window instead of
-//      dropping finds.
-//   3. FETCH (deterministic): `/api/v1/findings?since&until&limit=48` (paged via
-//      nextCursor) for findings + `/api/v1/mixtapes` filtered to the window. Public reads,
-//      no auth. Findings are capped (FIND_CAP, newest-first) to keep the one authoring
-//      call inside a bounded time budget; a cap hit is logged.
-//   4. ZERO-FIND RULE (deterministic): no findings AND no mixtapes → author nothing,
-//      exit. A missed Friday is quieter than a hollow one.
-//   5. AUTHOR (the ONE agentic step): build the prompt (the voice + the verbatim
-//      content shape, with the finds/mixtapes interpolated) and run `claude -p`
-//      (subscription auth, READ-ONLY tools so it can load `copywriting-fluncle`).
-//      Output is the structured `{subject, content}` JSON. We validate it carries at
-//      least one finding or a mixtape (the same zero-find rule the server guard
-//      enforces) before persisting — a hollow author result is dropped, never drafted.
-//   6. PERSIST (deterministic): write `content` to a temp file, then
-//      `fluncle admin newsletter draft --content-file … --subject … --window-since …
-//      --window-until … --json` (admin tier — the agent token drafts; it can't send).
-//   7. OFFER (deterministic): a one-line operator summary + the exact send command. It
-//      reaches Discord TWO ways: stdout (captured by the host-timer /status marker +
-//      journald) AND a direct best-effort POST to DISCORD_ALERT_WEBHOOK — the sweep
-//      SELF-DELIVERS, so the offer reaches the operator with no delivery layer in
-//      between. The operator runs `fluncle admin newsletter send <id>`
-//      (operator tier — silence is never consent for a send). The draft persists regardless;
-//      next Friday's miss-recovery re-offers an un-sent one.
-//
-// stdout: the ONE operator-facing line (the summary + the send command); also self-POSTed to
-// the ops-alert Discord webhook. All diagnostics + the machine summary → stderr.
 
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -53,46 +7,27 @@ import { join } from "node:path";
 import { type BoxCostEvent, emitCost, parseAuthoringSpend } from "./cost-emit";
 import { resolveSweepPrompt } from "./prompt-fetch";
 
-// ---------------------------------------------------------------------------
-// Config
-// ---------------------------------------------------------------------------
-
 const FLUNCLE_BIN = process.env.FLUNCLE_BIN ?? "fluncle";
 const CLAUDE_BIN = process.env.CLAUDE_BIN ?? "claude";
-// Headless `claude -p` kills backgrounded Bash ~5s after the final result; a sweep that
-// backgrounds work and ends its turn loses it silently. Force it off for the spawned claude.
+
 process.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS = "1";
 const SITE = process.env.FLUNCLE_SITE_URL ?? "https://www.fluncle.com";
 
-// The authoring model + optional effort, env-overridable (defaults match note-sweep).
 const NEWSLETTER_CLAUDE_MODEL = process.env.NEWSLETTER_CLAUDE_MODEL ?? "claude-sonnet-5";
 const NEWSLETTER_CLAUDE_EFFORT = process.env.NEWSLETTER_CLAUDE_EFFORT;
 
-// Cap the findings handed to the one authoring call so it stays inside a bounded
-// time budget (a normal week is well under this; a huge self-healed backlog
-// window is the only case that hits it — newest-first, the rest roll to next week).
 const FIND_CAP = Number(process.env.NEWSLETTER_FIND_CAP ?? "50");
-const PAGE_LIMIT = 48; // /api/v1/findings page size (matches the doctrine)
-const PAGE_CAP = 12; // hard ceiling on pages fetched (backstop against a cursor loop)
+const PAGE_LIMIT = 48;
+const PAGE_CAP = 12;
 
-// The anti-sameness rail (the light half — the ledger holds the heavy rail until ≥4
-// editions): how many of the most-recent SENT editions to mine for already-sent why-lines,
-// and how many of those lines to hand the author as SPENT moves. Small on purpose — the
-// moves worth writing past are the recent ones, and the corpus is n=1 sent edition today.
 const PRIOR_EDITION_CAP = 4;
 const PRIOR_WHY_CAP = 12;
 
 const DISCORD_ALERT_WEBHOOK = process.env.DISCORD_ALERT_WEBHOOK;
 
-// --dry-run: do everything EXCEPT persist + deliver — print what WOULD be drafted.
-// Used to validate a run safely (one claude call, no draft, no Discord).
 const DRY_RUN = process.argv.includes("--dry-run");
 
 const log = (message: string) => console.error(`[newsletter-sweep] ${message}`);
-
-// ---------------------------------------------------------------------------
-// Types — only the fields we consume.
-// ---------------------------------------------------------------------------
 
 type Edition = {
   content?: { galaxies?: Array<{ findings?: Array<{ why?: unknown }> }>; mixtapeRef?: unknown };
@@ -115,23 +50,19 @@ type Mixtape = {
   note?: string;
 };
 
-// The `claude -p --output-format json` reply. `usage` / `total_cost_usd` /
-// `modelUsage` carry the authoring spend — read after the parse and emitted as one
-// `subsidized` anthropic row (COST-01 §5), zero new claude flags.
 type ClaudeUsage = { input_tokens?: number; output_tokens?: number };
 
 type ClaudeReply = {
   is_error?: boolean;
   modelUsage?: Record<string, unknown>;
   result?: string;
-  /** The schema-validated payload when the CLI ran with `--json-schema`. */
+
   structured_output?: unknown;
   subtype?: string;
   total_cost_usd?: number;
   usage?: ClaudeUsage;
 };
 
-// The authored payload claude returns: a subject + the content shape the renders read.
 type AuthoredContent = {
   galaxies?: Array<{ findings?: Array<{ logId?: string; why?: string }>; galaxy?: string }>;
   intro?: string;
@@ -140,26 +71,15 @@ type AuthoredContent = {
 };
 type Authored = { content?: AuthoredContent; subject?: string };
 
-// The authored edition plus its MEASURED authoring spend (the COST-01 §5 `newsletter`
-// row): the total_cost_usd the CLI computed, the model, and the token count. `usd` is
-// null only if the reply carried no `total_cost_usd` (then the row is unpriced,
-// never $0). The newsletter is a non-finding, so its ledger row is `global`-scoped.
 type AuthoredEdition = Authored & {
   model: string;
-  // PROVENANCE — the prompt version this edition was authored under: N = the operator's
-  // live override, 0 = the registry's baked default, NULL = the registry was unreachable
-  // and the inlined `buildAuthoringPrompt` wrote it. Rides out to the Worker on
-  // `--prompt-version` when the draft is persisted.
+
   promptVersion: number | null;
   tokens: number;
   usd: number | null;
 };
 
 class ClaudeAuthError extends Error {}
-
-// ---------------------------------------------------------------------------
-// Shell + fetch helpers
-// ---------------------------------------------------------------------------
 
 function run(
   bin: string,
@@ -203,11 +123,6 @@ function curlJson<T>(url: string): T {
   }
 }
 
-// ---------------------------------------------------------------------------
-// claude-auth detection — narrow, mirrors note-sweep: only an explicit re-auth /
-// quota signature counts so a transient model hiccup doesn't false-alarm.
-// ---------------------------------------------------------------------------
-
 const AUTH_SIGNATURES = [
   "invalid api key",
   "authentication_error",
@@ -228,24 +143,18 @@ function looksLikeAuthFailure(text: string): boolean {
   return AUTH_SIGNATURES.some((signature) => haystack.includes(signature));
 }
 
-// ---------------------------------------------------------------------------
-// Window + fetch (all deterministic)
-// ---------------------------------------------------------------------------
-
 function listEditions(): Edition[] {
   const response = fluncleJson<{ editions?: Edition[] }>(["admin", "newsletter", "list"]);
 
   return response.editions ?? [];
 }
 
-/** The unsent draft to re-offer (miss-recovery), if any. */
 function findUnsentDraft(editions: Edition[]): Edition | undefined {
   return editions.find(
     (e) => e.status === "draft" && (e.number === null || e.number === undefined),
   );
 }
 
-/** SINCE = the most recent SENT edition's windowUntil, else now-7d. */
 function computeSince(editions: Edition[], nowIso: string): string {
   const sent = editions
     .filter((e) => e.status === "sent")
@@ -261,15 +170,6 @@ function computeSince(editions: Edition[], nowIso: string): string {
   return weekAgo.toISOString();
 }
 
-/**
- * The why-lines already sent, mined from the most-recent SENT editions' content — handed
- * to the author as SPENT moves (the sibling of the logbook sweep's spent titles/openers).
- * A why that has already gone out to the list is a move to write past, not repeat.
- *
- * Best-effort by construction: only sent editions count, newest first; an edition whose
- * content is missing or malformed contributes nothing and never throws. Empty on a fresh
- * list (no sent edition yet), which the template reads as absent.
- */
 export function collectPriorWhys(editions: Edition[]): string[] {
   const sent = editions
     .filter((e) => e.status === "sent")
@@ -354,19 +254,6 @@ function fetchMixtapes(since: string, until: string): Mixtape[] {
   });
 }
 
-// ---------------------------------------------------------------------------
-// The authoring prompt — the doctrine (verbatim content shape + voice rails) with
-// this window's findings + mixtapes interpolated. The model loads the
-// `copywriting-fluncle` skill for the full voice canon; we restate the hard,
-// gate-relevant rules so the output is safe.
-// ---------------------------------------------------------------------------
-
-// The week's material, as the model reads it: one line per finding/mixtape, each
-// carrying its logId and the note that is the PRIMARY fuel for its `why`. Shared by BOTH
-// prompt paths — the registry template takes each list PRE-JOINED as one string variable
-// (the renderer has no loops), and the baked-in fallback splices the same lines inline.
-// One definition, so the two cannot drift.
-
 function findingBlock(findings: Finding[]): string {
   const lines = findings.map((f) => {
     const note = f.note?.trim() ? f.note.trim() : "(no note — OMIT the why for this finding)";
@@ -385,20 +272,9 @@ function mixtapeBlock(mixtapes: Mixtape[]): string {
   return lines.length ? lines.join("\n") : "(none)";
 }
 
-// The already-sent why-lines as the author reads them: one bullet per line. Empty string
-// when there is no history (the template's `{{#if priorWhys}}` then drops the whole block).
-// Shared by BOTH prompt paths so the registry template and the baked fallback cannot drift.
-
 function priorWhysBlock(priorWhys: string[]): string {
   return priorWhys.map((why) => `- ${why}`).join("\n");
 }
-
-// ---------------------------------------------------------------------------
-// THE PROMPT VARIABLES — facts handed to the REGISTRY template. The prose (the JSON shape, the
-// voice rails, the single-list rule) lives in the template, and the sweep supplies only the
-// data. These names MUST match the `variables` array of the `newsletter_edition` registry
-// entry exactly, or the template renders holes.
-// ---------------------------------------------------------------------------
 
 export function promptVariables(
   findings: Finding[],
@@ -414,17 +290,11 @@ export function promptVariables(
   };
 }
 
-// THIS IS THE FLOOR, NOT DEAD CODE. The live prompt comes from the registry over the API
-// (see `authorEdition`); this builder is what runs when that fetch fails for ANY reason.
-// Keep it in lockstep with the `newsletter_edition` default body in
-// apps/web/src/lib/server/prompts.ts.
 export function buildAuthoringPrompt(
   findings: Finding[],
   mixtapes: Mixtape[],
   priorWhys: string[] = [],
 ): string {
-  // The already-sent why-lines as a list of what the list has read (present only when there
-  // is history — the first edition has none). Mirrors the `{{#if priorWhys}}` template block.
   const priorBlock = priorWhys.length
     ? [
         "ALREADY SENT (the whys from recent editions — the list has already read every one; write past them, never echo a move):",
@@ -465,11 +335,6 @@ export function buildAuthoringPrompt(
   ].join("\n");
 }
 
-// The authored shape, enforced by the CLI (`--json-schema`): the reply's `structured_output` is
-// validated against it before it reaches us, so the fence/brace scraper below is only the floor
-// for a CLI that returns no structured output. `additionalProperties` stays open on purpose —
-// the prompt (operator-editable) may grow a field before this schema does, and a stricter
-// schema would turn that into a dropped edition.
 const AUTHORED_SCHEMA = JSON.stringify({
   properties: {
     content: {
@@ -511,7 +376,6 @@ const AUTHORED_SCHEMA = JSON.stringify({
   type: "object",
 });
 
-/** Pull a JSON object out of the model result (tolerate stray fences/preamble). */
 function extractJson(result: string): string {
   const fenced = result.match(/```(?:json)?\s*([\s\S]*?)```/);
   const body = fenced ? fenced[1] : result;
@@ -521,26 +385,10 @@ function extractJson(result: string): string {
   return start >= 0 && end > start ? body.slice(start, end + 1) : body;
 }
 
-// Counts the findings across all galaxy blocks. Typed to only what it reads (each
-// block's `findings` length) so it accepts BOTH the authored `AuthoredContent` and the
-// stored `Edition.content` (whose `findings` are `unknown[]`) — the miss-recovery path
-// counts a persisted draft, the author path counts a fresh one.
 function countFindings(content: { galaxies?: Array<{ findings?: unknown[] }> }): number {
   return (content.galaxies ?? []).reduce((sum, block) => sum + (block.findings?.length ?? 0), 0);
 }
 
-/**
- * Author the edition via one `claude -p` call (subscription auth, read-only tools).
- * Throws ClaudeAuthError on an auth/quota failure; returns null on any other failure
- * or a result that fails validation (so we never persist junk); returns {subject,
- * content} + the prompt's provenance on success.
- *
- * THE PROMPT comes from the REGISTRY over the agent-tier API (`get_prompt`), so the
- * operator can retune the Email register — and the JSON shape — from /admin with no
- * deploy and no rebake. If that fetch fails for any reason, `resolveSweepPrompt` falls
- * back to `buildAuthoringPrompt` above and the sweep authors EXACTLY as it did before
- * the registry existed. A prompt store that blinks must never cost a Friday.
- */
 async function authorEdition(
   findings: Finding[],
   mixtapes: Mixtape[],
@@ -556,10 +404,6 @@ async function authorEdition(
     log("the prompt registry was unreachable — authoring from the baked-in default");
   }
 
-  // READ-ONLY tools so the authoring loads + applies the baked `copywriting-fluncle`
-  // skill (the canonical voice — never inlined/forked). The skill read pushes a run to
-  // ~2m12s, so the cron's script_timeout_seconds is raised to 300 in config.yaml (the
-  // newsletter's voice quality is worth the extra minute; same pattern as note/observe).
   const args = [
     "-p",
     "--model",
@@ -617,7 +461,6 @@ async function authorEdition(
   const raw = typeof reply.result === "string" ? reply.result : "";
   let authored: Authored;
 
-  // The schema-validated payload first; the scraped `result` text is the floor.
   if (reply.structured_output && typeof reply.structured_output === "object") {
     authored = reply.structured_output as Authored;
   } else {
@@ -639,16 +482,12 @@ async function authorEdition(
     return null;
   }
 
-  // The same zero-find rule the server guard enforces — never persist a hollow author.
   if (countFindings(content) === 0 && !content.mixtapeRef?.trim()) {
     log("authored content has no findings and no mixtape — dropping (would be hollow)");
 
     return null;
   }
 
-  // The measured authoring spend (shared parse — the CLI's own total_cost_usd is
-  // authoritative, the token count is the informational quantity, the model comes off
-  // modelUsage else the one we asked for).
   return {
     content,
     promptVersion,
@@ -656,10 +495,6 @@ async function authorEdition(
     ...parseAuthoringSpend(reply, NEWSLETTER_CLAUDE_MODEL),
   };
 }
-
-// ---------------------------------------------------------------------------
-// Persist (deterministic): write content to a temp file, draft via the CLI.
-// ---------------------------------------------------------------------------
 
 function persistDraft(
   authored: Authored,
@@ -685,9 +520,7 @@ function persistDraft(
       since,
       "--window-until",
       until,
-      // PROVENANCE. Omitted entirely when the registry was unreachable, so the column
-      // stays NULL and the edition is honest about having been written by the baked-in
-      // fallback rather than by a version it never saw.
+
       ...(promptVersion === null ? [] : ["--prompt-version", String(promptVersion)]),
       "--json",
     ]);
@@ -712,10 +545,6 @@ function persistDraft(
   }
 }
 
-// ---------------------------------------------------------------------------
-// Auth-failure alert (best-effort Discord ping; loud stderr is the floor).
-// ---------------------------------------------------------------------------
-
 function pingClaudeAuthFailure(detail: string): void {
   log(`claude auth failure (tail): ${detail}`);
 
@@ -736,15 +565,8 @@ function pingClaudeAuthFailure(detail: string): void {
       "10",
       DISCORD_ALERT_WEBHOOK,
     ]);
-  } catch {
-    // best-effort
-  }
+  } catch {}
 }
-
-// ---------------------------------------------------------------------------
-// The operator-facing line (stdout → Discord). The send is operator-tier, so we
-// hand over the exact command rather than an (agent-only) interactive button.
-// ---------------------------------------------------------------------------
 
 function offerLine(subject: string, id: string, finds: number, mixes: number): string {
   return [
@@ -753,11 +575,6 @@ function offerLine(subject: string, id: string, finds: number, mixes: number): s
   ].join("\n");
 }
 
-// Self-deliver the operator offer line to Discord. A host timer delivers nothing on its
-// own, so the sweep POSTs the line to the ops-alert webhook itself (the same
-// DISCORD_ALERT_WEBHOOK pingClaudeAuthFailure uses, sourced from the 0600 secrets file by the
-// .sh). Best-effort: the stdout line is the floor (it still lands in the /status marker +
-// journald), so a missing webhook or a failed POST never fails the run.
 function deliverOffer(line: string): void {
   if (!DISCORD_ALERT_WEBHOOK) {
     log("no DISCORD_ALERT_WEBHOOK — offer not posted to Discord (stdout marker is the floor)");
@@ -778,21 +595,13 @@ function deliverOffer(line: string): void {
       "10",
       DISCORD_ALERT_WEBHOOK,
     ]);
-  } catch {
-    // best-effort — stdout already carries the offer
-  }
+  } catch {}
 }
-
-// ---------------------------------------------------------------------------
-// Main
-// ---------------------------------------------------------------------------
 
 async function main(): Promise<void> {
   const nowIso = new Date().toISOString();
   const editions = listEditions();
 
-  // 1. MISS-RECOVERY: an unsent draft already stands → re-offer it, author nothing.
-  // (--dry-run skips this so a fresh authoring can be validated without disturbing it.)
   const existing = findUnsentDraft(editions);
 
   if (existing?.id && !DRY_RUN) {
@@ -802,24 +611,20 @@ async function main(): Promise<void> {
     const offer = offerLine(existing.subject ?? "(untitled)", existing.id, finds, mixes);
     console.log(offer);
     deliverOffer(offer);
-    // The contracted JSON summary (fluncle-healthcheck findJsonSummary, hardened by #892):
-    // without a trailing object line, a healthy re-offer reads as "died mid-flight" on /status.
+
     console.log(JSON.stringify({ edition: existing.id, ok: true, reason: "reoffered" }));
 
     return;
   }
 
-  // 2. WINDOW
   const since = computeSince(editions, nowIso);
   const until = nowIso;
   log(`window ${since} .. ${until}`);
 
-  // 3. FETCH
   const findings = fetchFindings(since, until);
   const mixtapes = fetchMixtapes(since, until);
   log(`fetched ${findings.length} finding(s) + ${mixtapes.length} mixtape(s)`);
 
-  // 4. ZERO-FIND RULE
   if (findings.length === 0 && mixtapes.length === 0) {
     log("no finds this window — skipping (a missed Friday is quieter than a hollow one)");
     console.log(JSON.stringify({ ok: true, reason: "no_finds", skipped: true }));
@@ -827,8 +632,6 @@ async function main(): Promise<void> {
     return;
   }
 
-  // 5. AUTHOR (the one agentic step). The already-sent why-lines ride in as SPENT moves —
-  // derived here from the sent editions `listEditions` already read, no extra round-trip.
   const priorWhys = collectPriorWhys(editions);
   let authored: AuthoredEdition | null;
 
@@ -866,7 +669,6 @@ async function main(): Promise<void> {
     return;
   }
 
-  // 6. PERSIST
   const id = persistDraft(authored, since, until, authored.promptVersion);
 
   if (!id) {
@@ -885,17 +687,10 @@ async function main(): Promise<void> {
     }`,
   );
 
-  // 7. OFFER — stdout (→ the host-timer /status marker + journald) AND a direct self-POST to
-  // the ops-alert Discord webhook (a host timer delivers nothing on its own); the
-  // operator runs the send.
   const offer = offerLine(authored.subject, id, finds, mixes);
   console.log(offer);
   deliverOffer(offer);
 
-  // 8. COST — record the one authoring spend, best-effort, only now that the draft is
-  // durable. The newsletter is a non-finding, so the row is `global`-scoped (logId +
-  // trackId null); occurredAt is the window's `until` (this run). Cannot throw; a hard
-  // 15s cap keeps it well inside the unit's time budget. Rejected rows stay visible.
   const cost: BoxCostEvent = {
     costBasis: "subsidized",
     logId: null,
@@ -911,14 +706,9 @@ async function main(): Promise<void> {
   };
   const costWriteFailures = (await emitCost([cost])).failed;
 
-  // The contracted JSON summary — LAST stdout line on purpose (findJsonSummary scans
-  // backwards). The failure paths already emit theirs; without this, the one path that
-  // WORKED (a drafted edition) was the one reading as "died mid-flight" on /status.
   console.log(JSON.stringify({ costWriteFailures, edition: id, finds, mixes, ok: true }));
 }
 
-// `import.meta.main` so the pure helper (the fallback authoring prompt) can be imported
-// by a unit test without the sweep firing (the note-sweep / triage-sweep pattern).
 if (import.meta.main) {
   main().catch((error) => {
     log(`fatal: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`);

@@ -1,10 +1,4 @@
 #!/usr/bin/env bun
-// The Ear's bounded catalogue-ranking cron. Every database-critical phase advances one bounded
-// track due-work repair step and then attempts one guarded rank page inside the same lease. The
-// rank read's own guard decides whether the page may be read; a typed maintenance-pending answer
-// sends the driver to the next phase and is never retried inside the phase. After the tick's last
-// ranked page, repair-only phases drain that page's track source markers so other track readers
-// are not left refusing behind them.
 
 import { spawnSync } from "node:child_process";
 
@@ -13,30 +7,13 @@ import { DUE_WORK_REPAIR_PENDING_REASON } from "./due-work-repair-pending";
 
 const BATCH = Number(process.env.FLUNCLE_RANK_BATCH ?? "250");
 const MAX_CALLS = Number(process.env.FLUNCLE_RANK_MAX_CALLS ?? "8");
-// Every guarded rank read converges at least this many track source markers before it can answer
-// `due_work_maintenance_pending`; the Worker's read-drain budget may converge more pages in the
-// same call. It is a FLOOR under the server's `SOURCE_REPAIR_LIMIT`
-// (apps/web/src/lib/server/due-work-source-repair.ts), never an equality: this script is baked into
-// the box image and lags the Worker, and it only divides `rankPhaseCap`, so understating the
-// server's page grants extra phases the wall budget still bounds, while overstating it would cap
-// the tick below the phases its own drain needs. database-operation-registry.test.ts pins that
-// direction.
+
 export const SOURCE_REPAIRS_PER_RANK_GUARD = 5;
 const PHASE_START_BUDGET_MS = 600_000;
 const CLI_CHILD_TIMEOUT_MS = 120_000;
 const FLUNCLE_BIN = process.env.FLUNCLE_BIN ?? "fluncle";
 const ADMISSION_OWNER = "fluncle-rank";
 
-/**
- * The tick's hard phase bound. A ranked page leaves at most `batch` track source markers. The rank
- * guard alone clears at least five of them per phase, so the next page becomes readable within
- * `ceil(batch / 5)` phases even when the ride-along repair step spends its page on other subjects,
- * and the repair-only drain clears the last page within the same number of phases. A clean tick of
- * `maxCalls` pages plus its drain therefore needs at most `1 + maxCalls * ceil(batch / 5)` phases.
- * The cap grants `(maxCalls + 2) * ceil(batch / 5)`: two full drains of slack for markers that other
- * producers append during the tick. The monotonic wall budget bounds slow phases and a rank guard
- * that never clears.
- */
 export function rankPhaseCap(batch: number, maxCalls: number): number {
   return (maxCalls + 2) * Math.ceil(batch / SOURCE_REPAIRS_PER_RANK_GUARD);
 }
@@ -71,7 +48,7 @@ type RepairOutcome = {
   complete: boolean;
   processed: number;
   scheduled: number;
-  // Null when the Worker does not report track source-marker state.
+
   trackSourceMarkersPending: boolean | null;
 };
 
@@ -88,7 +65,7 @@ type SweepSummary = {
   catalogueDuplicates: number;
   checked: number;
   corpus: string | null;
-  // Null when the tick ended without a ranked page that moved rows, so nothing needed draining.
+
   drainComplete: boolean | null;
   drainPhases: number;
   error: string | null;
@@ -107,9 +84,7 @@ type SweepSummary = {
   repairSteps: number;
   scored: number;
   throttled: boolean;
-  // The shared `track_due_work` repair step's own convergence flag from the latest completed
-  // phase. It covers every registered due-work kind and subject, so it is diagnostic only and
-  // never decides whether a rank page is attempted or a drain ends.
+
   trackRepairQueueComplete: boolean | null;
 };
 
@@ -256,12 +231,6 @@ function rankOnce(): RankSummary {
   );
 }
 
-/**
- * One admitted phase: a bounded shared repair step, then, outside a drain, exactly one rank
- * attempt. The rank guard repairs its own scope before it reads; its typed pending answer proves
- * no page was read, so the phase reports it instead of retrying. Every other rank failure,
- * including an unparseable or timed-out transport, fails the phase and is never replayed.
- */
 function runCriticalPhase(mode: PhaseMode): PhaseEnvelope {
   const repair = repairOnce();
   if (mode === "drain") {
@@ -341,7 +310,6 @@ function createSummary(): SweepSummary {
   };
 }
 
-/** Fold one ranked page into the summary and return how many rows it moved. */
 function applyRank(summary: SweepSummary, tick: RankSummary): number {
   const scored = normalizeCount(tick.scored, "scored");
   const prioritized = normalizeCount(tick.prioritized, "prioritized");
@@ -392,12 +360,6 @@ function runLegacy(summary: SweepSummary): void {
   }
 }
 
-/**
- * Repair-only phases after the tick's last ranked page; no rank call runs here. The drain ends once
- * a repair step reports no ordinary track source marker pending, which is exactly what another
- * track reader's guard waits for. A step that does not report that state cannot prove the drain,
- * so the tick stops and says so.
- */
 function drainLastPage(summary: SweepSummary, startedAt: number): void {
   summary.drainComplete = false;
 
@@ -430,7 +392,7 @@ function drainLastPage(summary: SweepSummary, startedAt: number): void {
 
 function runPhased(summary: SweepSummary): void {
   const startedAt = performance.now();
-  // A budget stop right after the guard refused is maintenance backpressure, not a page budget.
+
   let lastAttemptPending = false;
 
   while (summary.repairSteps < MAX_PHASES) {

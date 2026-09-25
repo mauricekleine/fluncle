@@ -1,27 +1,9 @@
-// Unit tests for the pure helpers in observe-sweep.ts — the authoring PROMPT (where the
-// vibe-neighbour layer + the closer-variation rails live) and the echo-move reader that
-// drives the re-author pass. The box scripts are self-contained (they cannot import the
-// workspace) and live outside any package's test runner, so this file uses `bun:test`:
-//
-//   bun test docs/agents/hermes/scripts/observe-sweep.test.ts
-//
-// The layer's RISK is that the neighbours get templated instead of informing, so the
-// prompt's anti-sameness instruction is load-bearing product behaviour, not prose — it is
-// asserted here, and enforced for real by the Worker's echo gate (its own tests in
-// apps/web/src/lib/server/observation-echo.test.ts). The registry-default lockstep is
-// pinned separately by prompt-drift.test.ts.
-
 import { afterAll, beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readAttemptLedger, selectWork } from "./attempt-ledger";
-
-// ── THE STUB RIG ───────────────────────────────────────────────────────────────────────
-//
-// On disk and pointed at by env BEFORE the sweep module is evaluated: FLUNCLE_BIN / CLAUDE_BIN /
-// OBSERVE_STATE_DIR are read at module load, which is why the sweep is imported dynamically below.
 
 const RIG = mkdtempSync(join(tmpdir(), "observe-sweep-test-"));
 const STATE_DIR = join(RIG, "state");
@@ -46,8 +28,6 @@ printf '{"result":"Future Signal built this one out of patience, fam.","total_co
   { mode: 0o755 },
 );
 
-// `stores` records only the deliveries the Worker ACCEPTED — i.e. the reads that were actually
-// rendered. It must stay EMPTY for a finding whose drafts the gate refused.
 writeFileSync(
   FLUNCLE_STUB,
   `#!/usr/bin/env bash
@@ -93,7 +73,7 @@ chmodSync(FLUNCLE_STUB, 0o755);
 process.env["CLAUDE_BIN"] = CLAUDE_STUB;
 process.env["FLUNCLE_BIN"] = FLUNCLE_STUB;
 process.env["OBSERVE_STATE_DIR"] = STATE_DIR;
-// No agent token, so the prompt fetch AND the neighbourhood read both fall back without a network.
+
 delete process.env["FLUNCLE_API_TOKEN"];
 
 const {
@@ -139,7 +119,7 @@ describe("buildAuthoringPrompt", () => {
     expect(prompt).toContain("THE SONIC NEIGHBOURHOOD");
     expect(prompt).toContain(`012.2.4L: "My shoulders went before I'd clocked the coordinate."`);
     expect(prompt).toContain(`012.1.0A: "The pads hang like weather over a patient half-step."`);
-    // The load-bearing half: the neighbourhood is a list of what is TAKEN, not a template.
+
     expect(prompt).toContain("ALREADY TAKEN");
     expect(prompt).toContain("SPENT");
   });
@@ -153,13 +133,11 @@ describe("buildAuthoringPrompt", () => {
   test("breaks the closer formula: the worn sign-off is named, the kin names rotate", () => {
     const prompt = buildAuthoringPrompt(FINDING, CONTEXT);
 
-    // The audit's 32/61 verbatim closer, named as worn through — with variation, not deletion:
-    // the crew turn stays required, the kin vocabulary rotates, no-sign-off is allowed.
     expect(prompt).toContain("enjoy, cosmonauts");
     expect(prompt).toContain("worn through");
     expect(prompt).toContain("junglist, raver, fam, cosmonaut");
     expect(prompt).toContain("no sign-off");
-    // The "hope" crutch (51/61) and the opener register (34/61 on "I…") are both addressed.
+
     expect(prompt).toContain('Drop "hope" as a reflex');
     expect(prompt).toContain("VARY THE OPENER");
   });
@@ -218,23 +196,13 @@ describe("run-ledger summary counters", () => {
       queueRemaining: 0,
       rendered: 1,
     });
-    // `observe --queue --limit 50` returns only a capped page. `queueRemaining` is retained as
-    // domain evidence, but the sweep cannot cheaply know the total outstanding backlog.
+
     expect("queueDepth" in summary).toBe(false);
     expect("queue_depth" in summary).toBe(false);
     expect("expectedIntervalMs" in summary).toBe(false);
     expect("expected_interval_ms" in summary).toBe(false);
   });
 });
-
-// ── THE ATTEMPT BUDGET, END TO END ─────────────────────────────────────────────────────
-//
-// `observeOne` driven against the stub binaries, with the ledger on disk. Each `tick()` is a
-// separate call that reads the ledger back off disk — what a real cron tick is.
-//
-// The bug: a voice-gate rejection left the finding queued with nothing counting the tries, so
-// "retry" meant "forever", and the rejection could be UNSATISFIABLE because the scan read the
-// finding's own artist name. THE NAME EXEMPTION fixes that case; this bounds every other one.
 
 function verdict(value: "pass" | "voice" | "echo" | "infra403"): void {
   writeFileSync(join(CONTROL, "verdict"), value, "utf8");
@@ -253,7 +221,7 @@ function readLines(file: string): string[] {
 }
 
 const authorings = () => readLines("authorings").length;
-/** The reads that were actually RENDERED — must stay empty for a refused finding. */
+
 const stores = () => readLines("stores");
 const ledgerPath = () => join(STATE_DIR, "attempts");
 
@@ -296,8 +264,6 @@ describe("observeOne (the bounded re-author, across ticks)", () => {
     expect(authorings()).toBe(MAX_OBSERVE_ATTEMPTS);
   });
 
-  // THE OPERATOR'S RULING: no final-attempt bypass. An observation is optional
-  // editorial, and rendering gate-failed copy would also spend Cartesia credits to publish it.
   test("NOTHING is ever rendered for a finding whose drafts the gate refused", async () => {
     verdict("voice");
 
@@ -315,8 +281,6 @@ describe("observeOne (the bounded re-author, across ticks)", () => {
     expect(readAttemptLedger(ledgerPath()).get("t-1")?.attempts).toBe(1);
   });
 
-  // An expired agent token returns 403 on every delivery. It must leave the finding queued (it
-  // does) WITHOUT charging the budget — the Worker never read these drafts.
   test("an infra 403 leaves the finding queued and spends NOTHING", async () => {
     verdict("infra403");
 
@@ -328,7 +292,7 @@ describe("observeOne (the bounded re-author, across ticks)", () => {
 
     verdict("pass");
     expect((await tick("t-1")).outcome).toBe("rendered");
-  }, 10_000); // Seven subprocess cycles assert semantics, not wall-clock latency.
+  }, 10_000);
 
   test("a transport/model failure never spends an attempt", async () => {
     verdict("pass");
@@ -362,5 +326,5 @@ describe("observeOne (the bounded re-author, across ticks)", () => {
     const result = await observeOne(work[0] ?? {}, { ledger, ledgerPath: ledgerPath() });
 
     expect(result.outcome).toBe("rendered");
-  }, 10_000); // Four subprocess cycles assert queue progress, not wall-clock latency.
+  }, 10_000);
 });

@@ -39,12 +39,6 @@ function requestBody(init?: RequestInit): string {
   return typeof init?.body === "string" ? init.body : "{}";
 }
 
-/**
- * The in-process stand-in for the admitted child phases. The `windows` seam is what production
- * fills with `admittedWindows()`, so a test that drives it drives the same boundary the runner
- * does — and `timeline` records every lease open and close plus every Deezer search, which is how
- * the ordering assertions below say something about admission rather than about call order.
- */
 function recordingWindows(
   base: IsrcRecoveryWindows,
   timeline: string[],
@@ -415,9 +409,6 @@ describe("isrc-recovery due-work repair pause", () => {
     expect(JSON.parse(harness.output[0] ?? "{}")).toMatchObject({ gateState: "paused", ok: true });
   });
 
-  // THE BLIND-SWEEP TRIPWIRE, proven from BOTH sides: it fires on the real shape (every searched
-  // row Deezer-empty over a meaningful sample), and it stays quiet when the same shape carries
-  // genuine signal. A detector that has never been watched fire is unproven by construction.
   const blindHarness = (rows: number, recoveries: number) => {
     const work = Array.from({ length: rows }, (_, index) => ({
       deezerQuery: `artist ${index}`,
@@ -467,17 +458,12 @@ describe("isrc-recovery due-work repair pause", () => {
     expect(summary).toMatchObject({ ok: true, reason: null, recovered: 3 });
   });
 
-  // THE PARTIAL-TICK CASES. Phased admission made a tick able to search far more rows than it
-  // settles, which opens two ways for a real blind sweep to go unreported: judging the empty share
-  // against everything SEARCHED, and letting the lane's own pause return before the verdict is
-  // read. Both are pinned here, because a detector that stops reaching its own signal is worse
-  // than no detector — it reports green.
   test("a tick that settles only part of its batch still reports what it judged", async () => {
     const searched = DEEZER_BLIND_MIN_SEARCHED * 2;
     const harness = blindHarness(searched, 0);
     const inner = harness.windows;
     let windows = 0;
-    // Three windows judge 30 rows — past the sample floor — and the fourth loses the lane.
+
     harness.effects.windows = {
       readQueue: (limit) => inner.readQueue(limit),
       settle: (items) => {
@@ -488,8 +474,6 @@ describe("isrc-recovery due-work repair pause", () => {
 
     const { exitCode, summary } = await runIsrcRecoveryCli([], harness.effects);
 
-    // Divided by the rows it SEARCHED this is 30/50 and silent; divided by the rows it JUDGED it
-    // is 30/30 and the alarm is correct.
     expect(summary).toMatchObject({
       deezerEmpty: SETTLE_WINDOW_ROWS * 3,
       ok: false,
@@ -512,7 +496,6 @@ describe("isrc-recovery due-work repair pause", () => {
 
     const { exitCode, summary } = await runIsrcRecoveryCli([], harness.effects);
 
-    // Ten judged rows are not evidence about the ask, so the lane's pause is the whole story.
     expect(summary).toMatchObject({ gateState: "paused", ok: true, reason: "database_admission" });
     expect(exitCode).toBe(0);
   });
@@ -565,12 +548,6 @@ describe("searchDeezerCandidates", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// PHASED ADMISSION. The defect this shape exists to prevent is one lease held across the paced
-// Deezer leg, so these assert the LEASE BOUNDARY rather than the call order: every search must
-// fall outside every window, and a row no window settled must stay eligible.
-// ---------------------------------------------------------------------------
-
 const workRows = (count: number) =>
   Array.from({ length: count }, (_, index) => ({
     deezerQuery: `artist ${index}`,
@@ -602,7 +579,7 @@ describe("isrc-recovery phase boundaries", () => {
     const { exitCode } = await runIsrcRecoveryCli([], harness.effects);
 
     expect(exitCode).toBe(0);
-    // One claim, then the whole paced provider leg unadmitted, then one bounded settle window.
+
     expect(harness.timeline).toEqual([
       "claim:open",
       "claim:close",
@@ -613,7 +590,6 @@ describe("isrc-recovery phase boundaries", () => {
       "settle:close",
     ]);
 
-    // Restated as the invariant rather than as a literal, so a window added later cannot slip past.
     let open = 0;
     for (const event of harness.timeline) {
       if (event.endsWith(":open")) {
@@ -656,8 +632,7 @@ describe("isrc-recovery phase boundaries", () => {
       readQueue: (limit) => inner.readQueue(limit),
       settle: async (items) => {
         windows += 1;
-        // The first window behaves as its own time budget would: it settles one row and defers
-        // the rest untouched.
+
         const scoped = windows === 1 ? items.slice(0, 1) : items;
         const settled = await inner.settle(scoped);
 
@@ -677,7 +652,7 @@ describe("isrc-recovery phase boundaries", () => {
     expect(exitCode).toBe(0);
     expect(windows).toBe(2);
     expect(summary).toMatchObject({ checked: 4, recovered: 1, unsettled: 0 });
-    // All four rows reached a verdict, so all four left the queue.
+
     expect(summary.queueDepth).toBe(0);
   });
 });
@@ -702,7 +677,7 @@ describe("isrc-recovery window yields", () => {
       throttled: true,
       unsettled: 3,
     });
-    // NOTHING WAS SETTLED, so nothing left the queue: the next tick sees the same three rows.
+
     expect(summary.queueDepth).toBe(3);
     expect(harness.calls.some((call) => call.url.endsWith("/anchor/resolve"))).toBe(false);
     expect(JSON.parse(harness.output[0] ?? "{}")).toEqual(summary);
@@ -733,7 +708,7 @@ describe("isrc-recovery window yields", () => {
 
     const summary = await runIsrcRecoverySweep(100, {
       log: () => undefined,
-      // The budget is read before every acquisition, so the first settle window never opens.
+
       now: () => {
         clock += ISRC_RECOVERY_WALL_BUDGET_MS;
         return clock;
@@ -754,12 +729,6 @@ describe("isrc-recovery window yields", () => {
     });
   });
 });
-
-// ---------------------------------------------------------------------------
-// THE SAME BOUNDARY, OUT OF PROCESS. The in-process seam above is the one production fills, but
-// only a real `database-admission-runner.sh` invocation shows that the Deezer leg runs with no
-// runner wrapped around it at all.
-// ---------------------------------------------------------------------------
 
 const temporaryDirectories: string[] = [];
 
@@ -801,10 +770,6 @@ function stubWorker(options: { paths: string[]; timeline?: string }) {
   });
 }
 
-/**
- * Spawn the sweep ASYNCHRONOUSLY. `Bun.spawnSync` would block this process's event loop, and this
- * process is the stub Worker the child is talking to.
- */
 async function spawnSweep(
   runner: string,
   origin: string,
@@ -864,8 +829,7 @@ exit "$status"`);
         "acquire settle",
         "release",
       ]);
-      // THE STANDING CONSTRAINT, read off the wire: the billed `anchor_track` search and Apify are
-      // not merely unreferenced, they are unreachable — these three paths are the whole sweep.
+
       expect([...new Set(paths)].sort((left, right) => left.localeCompare(right))).toEqual([
         "/api/v1/admin/catalogue/anchor/resolve",
         "/api/v1/admin/tracks/work",
