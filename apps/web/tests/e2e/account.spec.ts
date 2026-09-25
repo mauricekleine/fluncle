@@ -73,11 +73,12 @@ test("a new account joins by magic link, saves a finding, sees it on /account, a
 
   const link = await magicLinkFor(email);
 
-  expect(new URL(link).searchParams.get("callbackURL")).toBe("/account");
+  expect(new URL(link).searchParams.get("callbackURL")).toBe("/account?tab=saves");
 
   await page.goto(link, { waitUntil: "networkidle" });
 
   expect(new URL(page.url()).pathname).toBe("/account");
+  expect(new URL(page.url()).searchParams.get("tab")).toBe("saves");
 
   const claim = page.getByRole("dialog", { name: "Claim your username" });
 
@@ -86,7 +87,7 @@ test("a new account joins by magic link, saves a finding, sees it on /account, a
   await claim.getByRole("button", { name: "Claim username" }).click();
   await expect(claim).toBeHidden({ timeout: 30_000 });
 
-  await expect(page.getByRole("heading", { level: 1 })).toHaveText(/the galaxy/i, {
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText(/saves/i, {
     timeout: 30_000,
   });
 

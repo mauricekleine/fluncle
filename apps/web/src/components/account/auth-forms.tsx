@@ -103,7 +103,7 @@ export function AuthForms({
         </p>
       ) : null}
       <MagicLinkForm
-        callbackURL="/account"
+        callbackURL="/account?tab=saves"
         hint="No password needed. New here? Same link, and I'll set up your account."
       />
       {googleEnabled ? (
