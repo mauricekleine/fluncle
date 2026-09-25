@@ -40,9 +40,42 @@ const RULE_ITEM = {
   type: "object",
 };
 
+// A conflated MBID is always `unclear` (rail 5) — it is fixed upstream in MusicBrainz, never carved
+// with rules. These fields are what the split brief is generated from, so fill them whenever the
+// verdict is `unclear` BECAUSE of a conflation. `dnbStrandWorthRecovering` is the field that decides
+// work order: a split with a real drum & bass catalogue trapped inside unblocks a crawl seed, while
+// one where no strand is in lane is correct MusicBrainz hygiene that earns Fluncle nothing.
+const CONFLATION = {
+  properties: {
+    dnbStrandWorthRecovering: {
+      description:
+        "True when one of the conflated labels IS a drum & bass / jungle catalogue Fluncle would crawl once separated. False when the entity is broken but no strand is in lane.",
+      type: "boolean",
+    },
+    keep: {
+      description:
+        "The strand that should remain on this MBID: name it with its catalogue-number scheme and the evidence that ties it there.",
+      type: "string",
+    },
+    moveOut: {
+      description:
+        "The foreign release(s) to move, each with its catalogue number, artist, year and the evidence that it belongs elsewhere.",
+      type: "string",
+    },
+    trap: {
+      description:
+        "Optional: anything that makes the obvious move BACKWARDS — the entity's own metadata or Discogs url-rel describing the strand being moved out, a third same-named label, or a reverse split where the in-lane half is the one that must move.",
+      type: "string",
+    },
+  },
+  required: ["dnbStrandWorthRecovering", "keep", "moveOut"],
+  type: "object",
+};
+
 const VERDICT_ITEM = {
   properties: {
     confidence: { enum: ["high", "medium", "low"], type: "string" },
+    conflation: CONFLATION,
     evidence: {
       description:
         "One line: the concrete finding that decided it (artists seen, Discogs styles, release titles).",
@@ -92,7 +125,17 @@ const CENSUS_ITEM = {
     },
     offLaneFirstCreditShare: {
       description:
-        "Off-lane share of censused FIRST credits, 0–1. Above 0.15 the label is not mainly in lane: return unclear, not dnb.",
+        "RAW off-lane share of censused FIRST credits, 0–1 — every off-lane credit, whether or not a global rule already stops it. This is the rail: above 0.15 the label is not mainly in lane, so return unclear, not dnb.",
+      type: "number",
+    },
+    residualNote: {
+      description:
+        "Required when residualOffLaneShare ≤ 0.15 < offLaneFirstCreditShare: name the globally-ruled acts that account for the gap and their credit counts, so the operator can judge the split himself.",
+      type: "string",
+    },
+    residualOffLaneShare: {
+      description:
+        "Off-lane share counting ONLY credits that would still arrive — drop every credit whose artist already carries a GLOBAL rule in the calibration list. Equals the raw share when no off-lane act is globally ruled. Reported, never a rail.",
       type: "number",
     },
     rules: { items: RULE_ITEM, type: "array" },
@@ -173,10 +216,11 @@ Look each slug up in the JSON array at \`${file}\` for its \`mb_label_id\` (the 
 
 ## Non-negotiable rails
 1. **Imprint child first.** \`curl -sS -H "User-Agent: FluncleLabelTriage/1.0 ( https://www.fluncle.com )" "https://musicbrainz.org/ws/2/label/<MBID>?inc=label-rels&fmt=json"\`. If MusicBrainz already models the boundary as a child imprint / sub-label (a DnB imprint of a bigger house), say so in \`imprintChild\` and **propose no rules** — the right move is to rule that MB entity, not to hand-carve artists. Otherwise \`imprintChild: "none"\`.
-2. **The 15% share test.** Compute \`offLaneFirstCreditShare\` = off-lane FIRST credits ÷ censused recordings. **≤ 0.15 ⇒ \`dnb\` + block rules.** Above it the label is not mainly DnB: return \`unclear\` (the operator rules it himself) unless the mirror case holds — a mostly-off-lane label whose DnB acts are worth taking, which is \`dnb_partial\` + allow rules.
+2. **The 15% share test, measured RAW.** Compute \`offLaneFirstCreditShare\` = off-lane FIRST credits ÷ censused recordings, counting **every** off-lane credit. **≤ 0.15 ⇒ \`dnb\` + block rules.** Above it the label is not mainly DnB: return \`unclear\` (the operator rules it himself) unless the mirror case holds — a mostly-off-lane label whose DnB acts are worth taking, which is \`dnb_partial\` + allow rules. Raw is the rail because enabling a label is a standing commitment to what it releases NEXT, which no existing rule covers.
+2b. **Also report the RESIDUAL share, which is never a rail.** Recompute the same fraction dropping every off-lane credit whose artist already carries a **global** rule in the calibration list, and put it in \`residualOffLaneShare\`. When the two straddle the threshold (\`residual ≤ 0.15 < raw\`), the label is the operator's judgment call rather than a plain \`unclear\`: fill \`residualNote\` with the globally-ruled acts and their counts. Measured type specimen: a label at 0.205 raw and 0.147 residual, the gap being two acts already globally blocked. Do not let the residual change your verdict — it changes only whether he is shown the label by name.
 3. **No inert rules.** A proposed rule needs \`firstCreditCount > 0\` on YOUR census. An act you only ever see as a guest credit can never trigger a first-credit rule — leave it out and say so in the evidence if it matters. (Measured case: Maddslinky on Gutterfunk, 0 first credits, an intuitive block that would never have fired.)
 4. **One act is often several MBIDs.** Collaboration entities are separate MusicBrainz artists: "DJ Die" and "DieMantle" are different MBIDs, and on the measured census DJ Die alone was 44/130 first credits while DJ Die + DieMantle was 57/130. Expand every act you rule on into ALL the entities it is first-credited under, and give each its own rule row with its own count. A missed collaboration entity under-imports; it never mis-imports.
-5. **Conflation is still \`unclear\`.** If the MBID mixes two real labels, name the conflation and rule nothing — the fix is an upstream MusicBrainz entity split.
+5. **Conflation is still \`unclear\`.** If the MBID mixes two real labels, name the conflation and rule nothing — the fix is an upstream MusicBrainz entity split. Then FILL THE \`conflation\` OBJECT, because the split brief is generated from it: which strand stays (with its catalogue-number scheme), which releases move (with catalogue numbers, artists, years), whether a drum & bass catalogue is trapped inside worth recovering, and any \`trap\` that makes the obvious move backwards. Traps are common and each one has bitten a real edit: the entity's own area/url-rel can describe the strand being MOVED OUT rather than the one kept, a third same-named label can exist, and sometimes the in-lane half is the one that must move (a single DnB album sitting inside a foreign publisher's entity).
 6. **Globals are the operator's.** If an act deserves a rule EVERYWHERE (not just on this label), write it as prose in \`globalSuggestion\`. Never propose it as a rule row — global rules are authored by hand.
 7. **Same alias, different act.** Two acts can share a name. Verify each MBID's own release list before you rule it.
 
@@ -189,6 +233,7 @@ Page the label's releases WITH credits and recordings:
 - For each release, walk its media → tracks → recordings and take the **first** entry of the track's \`artist-credit\` array. That MBID is the one a rule matches. Count first credits per MBID across the whole census.
 - Judge each recurring first-credit act in or out of lane on its OWN catalogue (its MB releases, its Discogs styles), not on the label's average.
 - Report the totals in \`censusSummary\`: releases read, recordings counted, pages fetched, in-lane vs off-lane first credits, and what a rule set would take vs drop.
+- **Count credits, not releases.** The share is over censused RECORDINGS because that is what the crawl stores: one various-artists compilation of 19 off-lane tracks imports 19 off-lane tracks, however in-lane the other releases look. A release-level reading of the same label can look twice as clean and is the wrong measure. (Measured: a label reading 10-of-12 releases in lane on Discogs was 43–58% off-lane by credit.)
 
 ## Output
 One entry per label via the structured schema. \`rules\` is empty unless you are proposing exceptions, and every rule carries its own \`evidence\` + \`firstCreditCount\`. Check each proposed artist's MB entity for a Spotify url-rel (\`?inc=url-rels\`) and set \`tapBridge\` — \`no\` means the rule is tap-blind (the crawler still enforces it; the freshness tap cannot), which the operator wants to see. Do not write any files.`;
