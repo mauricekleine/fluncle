@@ -897,6 +897,9 @@ export async function listTracksHubSoundPage(
   style: SearchStyle,
   page: number,
   now: Date = new Date(),
+  options: {
+    beforeVector?: () => Promise<void>;
+  } = {},
 ): Promise<TracksHubSoundPage> {
   const { sound: _sound, ...plain } = filters;
   const probe = await resolveStyleProbe(style);
@@ -911,6 +914,9 @@ export async function listTracksHubSoundPage(
   }
 
   const resolved = await resolveTracksHubEntities(plain);
+
+  await options.beforeVector?.();
+
   const ids = await rankedSoundIds(style, probe.probe, plain, resolved, releaseTodayUtc(now));
 
   if (ids === null) {

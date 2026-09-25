@@ -799,7 +799,11 @@ describe("MCP — the archive-read tools PR-2 lifted out of ChatDnB", () => {
     );
 
     expect(searchArchiveMock).toHaveBeenCalledWith(
-      expect.objectContaining({ beforeModel: expect.any(Function), q: "nu:tone" }),
+      expect.objectContaining({
+        beforeModel: expect.any(Function),
+        beforeVector: expect.any(Function),
+        q: "nu:tone",
+      }),
     );
 
     const results = data.results as Array<Record<string, unknown>>;

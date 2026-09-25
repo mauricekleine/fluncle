@@ -763,6 +763,7 @@ const searchArchiveTool = {
       : undefined;
     const result = await searchArchive({
       beforeModel: charge?.requireAllowed,
+      beforeVector: charge?.requireAllowed,
       limit: MAX_SEARCH,
       q: query,
     });

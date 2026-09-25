@@ -187,6 +187,19 @@ describe("listTracksHubSoundPage — a style re-ranks, the filters pre-filter", 
     expect(page.anchors).toEqual([]);
   });
 
+  it("waits for the caller's budget verdict before any ranking work", async () => {
+    isSonarSonicEnabled.mockResolvedValue(true);
+
+    await expect(
+      listTracksHubSoundPage({}, liquid, 1, NOW, {
+        beforeVector: async () => {
+          throw new Error("over the per-IP budget");
+        },
+      }),
+    ).rejects.toThrow("over the per-IP budget");
+    expect(searchSonar).not.toHaveBeenCalled();
+  });
+
   it("404s a ranked page past the end rather than clamping it", async () => {
     await expect(listTracksHubSoundPage({ key: "A minor" }, liquid, 2, NOW)).rejects.toBeInstanceOf(
       CatalogueHubPageOutOfRangeError,

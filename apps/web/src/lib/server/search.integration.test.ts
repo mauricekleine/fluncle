@@ -44,7 +44,7 @@ vi.mock("./db", async () => {
   return { ...actual, getDb: async () => db };
 });
 
-function searchArchive(options: { limit?: number; q: string }) {
+function searchArchive(options: { beforeVector?: () => Promise<void>; limit?: number; q: string }) {
   return searchArchiveLive({ ...options, allowBoundedSonicForDiagnostics: true });
 }
 
@@ -1981,5 +1981,72 @@ describe("the sonic view of one track — its own sound, else its lead artist's"
 
     expect(result?.degraded).toBe(true);
     expect(result?.results).toEqual([]);
+  });
+});
+
+describe("the vector gate — no sonic work runs before the budget's verdict", () => {
+  const refused = async () => {
+    throw new Error("over the per-IP budget");
+  };
+
+  function vectorScans(spy: { mock: { calls: unknown[][] } }): number {
+    return spy.mock.calls.filter((call) => {
+      const arg = call[0];
+
+      const sql =
+        typeof arg === "object" && arg !== null ? (arg as { sql?: unknown }).sql : undefined;
+
+      return typeof sql === "string" && sql.includes("vector_distance_cos");
+    }).length;
+  }
+
+  it("refuses a style word before its ranking scan", async () => {
+    for (const slug of SEARCH_STYLES[0].anchors) {
+      await db.execute({
+        args: [`gate-${slug}`, slug, slug],
+        sql: `insert into artists (id, name, slug, created_at, updated_at)
+              values (?, ?, ?, '2026-07-01', '2026-07-01')`,
+      });
+      await db.execute({
+        args: [`gate-${slug}`, new Uint8Array(angleVector(0.3).buffer)],
+        sql: `insert into artist_centroids (artist_id, centroid_blob, computed_at, rank_corpus, vector_count)
+              values (?, ?, '2026-07-01', 'corpus-1', 4)`,
+      });
+    }
+    resetStyleProbeCache();
+    const spy = vi.spyOn(db, "execute");
+
+    await expect(searchArchive({ beforeVector: refused, q: "liquid" })).rejects.toThrow(
+      "over the per-IP budget",
+    );
+    expect(vectorScans(spy)).toBe(0);
+  });
+
+  it("refuses a sonic phrase before its ranking scan", async () => {
+    const spy = vi.spyOn(db, "execute");
+
+    await expect(
+      searchArchive({ beforeVector: refused, q: "tracks that sound like Nine Clouds" }),
+    ).rejects.toThrow("over the per-IP budget");
+    expect(vectorScans(spy)).toBe(0);
+  });
+
+  it("refuses the sonic view of one track before its ranking scan", async () => {
+    const spy = vi.spyOn(db, "execute");
+
+    await expect(
+      searchLikeTrack({
+        allowBoundedSonicForDiagnostics: true,
+        beforeVector: refused,
+        trackId: "certified-1991",
+      }),
+    ).rejects.toThrow("over the per-IP budget");
+    expect(vectorScans(spy)).toBe(0);
+  });
+
+  it("lets the cheap name tiers answer without waiting on it", async () => {
+    const result = await searchArchive({ beforeVector: refused, q: "Netsky" });
+
+    expect(result.kind).toBe("entity");
   });
 });
