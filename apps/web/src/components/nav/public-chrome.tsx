@@ -9,11 +9,13 @@
 // The cover stays the hero. Admin and the full-bleed immersive surfaces opt out.
 
 import { Link, useRouterState } from "@tanstack/react-router";
-import { type ReactNode } from "react";
+import { type ReactNode, useEffect } from "react";
 import { CrewSlot } from "@/components/nav/crew-slot";
 import { NavBreadcrumb } from "@/components/nav/nav-breadcrumb";
 import { NavFooter } from "@/components/nav/nav-footer";
+import { PlayerBar } from "@/components/player/player-bar";
 import { SearchProvider, SearchTrigger } from "@/components/search/search-command";
+import { expirePageContinuation, pausePreview } from "@/lib/preview-player";
 
 // Surfaces that render WITHOUT the public chrome:
 // - /admin: its own AdminShell workspace chrome (never touched here).
@@ -63,8 +65,26 @@ export function PublicChrome({
   // locks to the viewport (the transcript scrolls inside it) and the liner-notes
   // footer stays on the reading pages where a colophon belongs.
   const workbench = pathname === "/chat";
+  const chromeless = isChromeless(pathname);
 
-  if (isChromeless(pathname)) {
+  // One sound at a time: a surface that never shows the player (the radio, the Galaxy, the
+  // machinery map, admin) pauses the preview on the way in, so no sound plays without a control
+  // to stop it. The player keeps its place and docks again on the way back out.
+  useEffect(() => {
+    if (chromeless) {
+      pausePreview();
+    }
+  }, [chromeless]);
+
+  // A next-page hand-off belongs to the page it asked for; arriving anywhere else lapses it. (The
+  // asked-for page's list claims it first: child effects run before this one.)
+  const href = useRouterState({ select: (state) => state.location.href });
+
+  useEffect(() => {
+    expirePageContinuation(href);
+  }, [href]);
+
+  if (chromeless) {
     return <>{children}</>;
   }
 
@@ -117,6 +137,9 @@ export function PublicChrome({
         </div>
 
         {workbench ? undefined : <NavFooter galaxiesLive={galaxiesLive} />}
+        {/* The persistent preview player, hidden until the first play. `/mix` keeps its own bar
+            (its builder shows the transport a set needs), so this one stands down there. */}
+        {pathname === "/mix" ? undefined : <PlayerBar />}
       </div>
     </SearchProvider>
   );
