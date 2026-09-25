@@ -173,7 +173,6 @@ function insertTrack(database: Database, trackId: string, title: string): void {
 
 type TrackFixture = { id: string; title: string };
 
-/** A generation carrying exactly these tracks, so a test can state the drift it wants row by row. */
 function trackGenerationFixture(tracks: readonly TrackFixture[], name: string): DeviceGeneration {
   const directory = temporaryDirectory();
   const path = join(directory, `${name}.db`);
@@ -199,7 +198,6 @@ function sequentialTracks(count: number): TrackFixture[] {
   }));
 }
 
-/** The statements of the one write batch that carries the `device_sync_meta` cutover. */
 function recordCutoverBatch(client: LocalTargetClient): { statements: LibsqlStatement[] } {
   const record: { statements: LibsqlStatement[] } = { statements: [] };
   client.beforeBatch = (statements, mode) => {
@@ -828,7 +826,6 @@ describe("staged target publication", () => {
 describe("the diff-based publish", () => {
   const BASE = 100;
 
-  /** A target already carrying `generation`, published the only way a bootstrap can be: a rewrite. */
   async function publishedTarget(generation: DeviceGeneration): Promise<LocalTargetClient> {
     const { client } = targetFixture(false);
     const first = await publishDeviceGeneration(client, generation, 5);
@@ -862,7 +859,7 @@ describe("the diff-based publish", () => {
     const before = deviceRowDigest("tracks", row);
     expect(deviceRowDigest("tracks", { ...row, title: "Track 0" })).toBe(before);
     expect(deviceRowDigest("tracks", { ...row, title: "Track 0 (VIP)" })).not.toBe(before);
-    // Every allowlisted column is in the digest, not just the ones a fixture happens to set.
+
     for (const column of DEVICE_DB_COLUMNS.tracks) {
       expect(deviceRowDigest("tracks", { ...row, [column]: "moved" })).not.toBe(before);
     }
@@ -897,7 +894,7 @@ describe("the diff-based publish", () => {
     expect(result.rewriteReason).toBeNull();
     expect(result.deltaRows).toBe(3);
     expect(result.stagedRows).toBe(0);
-    // Three drifted rows: three upserts plus the one `device_sync_meta` cutover, nothing else.
+
     expect(cutover.statements).toHaveLength(4);
     expect(result.writtenRows).toBe(3);
     expect(liveTitle(client, "track-0000")).toBe("Track 0 (VIP)");
@@ -923,7 +920,7 @@ describe("the diff-based publish", () => {
     const result = await publishDeviceGeneration(client, next, 5);
     expect(result.publishPath).toBe("delta");
     expect(result.deltaRows).toBe(2);
-    // One delete, one insert, one cutover.
+
     expect(cutover.statements).toHaveLength(3);
     expect(liveTracks(client)).not.toContain("track-0000");
     expect(liveTracks(client)).toContain("track-9999");
@@ -935,7 +932,7 @@ describe("the diff-based publish", () => {
     const tracks = sequentialTracks(BASE);
     const generation = trackGenerationFixture(tracks, "idempotent");
     const client = await publishedTarget(generation);
-    // A watermark the target cannot recognise as this generation still must not rewrite 100 rows.
+
     const same = trackGenerationFixture(tracks, "idempotent-again");
     expect(same.fingerprint).toBe(generation.fingerprint);
     client.database.run("UPDATE device_sync_meta SET source_watermark = ?", [
@@ -954,8 +951,7 @@ describe("the diff-based publish", () => {
   test("a stale stage schema is an artifact-version change and forces a rewrite", async () => {
     const tracks = sequentialTracks(BASE);
     const client = await publishedTarget(trackGenerationFixture(tracks, "version-base"));
-    // What a `DEVICE_DB_COLUMNS` change looks like on a target: the baked stage shape no longer
-    // matches the shipped column list, so the live rows cannot be assumed to be of the new shape.
+
     client.database.run(`DROP TABLE "_device_mirror_stage_tracks"`);
     client.database.run(`CREATE TABLE "_device_mirror_stage_tracks" (stale TEXT)`);
 

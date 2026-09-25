@@ -1,16 +1,3 @@
-// Unit tests for demand-sweep.ts — the `--no-agent` nightly demand cron.
-//
-// Two contracts worth pinning. (1) THE SINGLE PASS WITH ONE RETRY: unlike rank (which loops while
-// a backlog drains), a demand tick is one `fluncle admin catalogue demand` call — but unlike reach,
-// it retries ONCE on a thrown fault (a cold Worker / an SA blip) so a nightly signal doesn't skip a
-// whole day on a transient. Never a loop. (2) THE HONEST no-op: an unprovisioned Worker returns
-// `configured: false`, which is a successful tick, not a failure. `runDemand` takes injected effects
-// so both are provable with a stub — no network, no real spawn.
-//
-// The box-script sweeps are self-contained (they cannot import the workspace) and live outside any
-// package's test runner, so this file uses `bun:test` and is run directly:
-//
-//   bun test docs/agents/hermes/scripts/demand-sweep.test.ts
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -18,11 +5,9 @@ import { join } from "node:path";
 
 import { fluncleJson, type DemandDeps, runDemand } from "./demand-sweep";
 
-/** A no-op sleep — the retry backoff must never actually block a test. */
 const noSleep = () => {};
 const quietLog = () => {};
 
-/** A configured tick that scored some rows. */
 const CONFIGURED = {
   ok: true,
   summary: {
@@ -50,7 +35,7 @@ describe("demand-sweep runs ONE tick, retrying once", () => {
       }),
     );
 
-    expect(calls).toBe(1); // one pass, no drain loop
+    expect(calls).toBe(1);
     expect(summary.attempts).toBe(1);
     expect(summary.ok).toBe(true);
     expect(summary.configured).toBe(true);
@@ -79,10 +64,10 @@ describe("demand-sweep runs ONE tick, retrying once", () => {
       })),
     );
 
-    expect(summary.ok).toBe(true); // a missing SA key is not a fault
+    expect(summary.ok).toBe(true);
     expect(summary.configured).toBe(false);
     expect(summary.tracksScored).toBe(0);
-    // This is a measured empty analytics read: numeric zero, never null or an absent field.
+
     expect(summary.checked).toBe(0);
     expect(summary.produced).toBe(0);
     expect(summary.errors).toBe(0);
@@ -102,7 +87,7 @@ describe("demand-sweep runs ONE tick, retrying once", () => {
       }),
     );
 
-    expect(calls).toBe(2); // first threw, retried once
+    expect(calls).toBe(2);
     expect(summary.attempts).toBe(2);
     expect(summary.ok).toBe(true);
     expect(summary.error).toBeNull();
@@ -119,7 +104,7 @@ describe("demand-sweep runs ONE tick, retrying once", () => {
       }),
     );
 
-    expect(calls).toBe(2); // exactly two attempts — one retry, then stop
+    expect(calls).toBe(2);
     expect(summary.ok).toBe(false);
     expect(summary.error).toContain("worker down");
     expect(summary).toMatchObject({ checked: null, errors: 1, produced: null });
@@ -128,8 +113,6 @@ describe("demand-sweep runs ONE tick, retrying once", () => {
   test("omits queue depth because demand is a full nightly rewrite, not a backlog walk", () => {
     const summary = runDemand(deps(() => CONFIGURED));
 
-    // Neither the trigger nor its response carries outstanding demand work. `pagesRead` is the
-    // measured input, not a remaining queue, and the sweep must not add a count call.
     expect(summary).not.toHaveProperty("queue_depth");
     expect(summary).not.toHaveProperty("expected_interval_ms");
   });

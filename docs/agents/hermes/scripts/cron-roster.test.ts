@@ -1,37 +1,3 @@
-// THE EXPECTED-WRITERS GUARD — the prober's `AUTOMATION_CRONS`, `@fluncle/registry`'s cron
-// probeConfigs, and the committed systemd timer units must all say the same thing.
-//
-// Three files state one fact — which sweeps run, and how often:
-//
-//   1. `docs/agents/hermes/*/*.timer`      — the SCHEDULE, and the only one that is true
-//                                            (systemd reads it; the others merely believe it)
-//   2. `@fluncle/registry`'s probeConfig   — what /status calls the cron and how often it ticks
-//   3. `AUTOMATION_CRONS` (the prober)     — the staleness budget a marker is judged against
-//
-// This test keeps the schedule, registry freshness budget, and prober roster synchronized.
-//
-// AGENTS.md flags this class explicitly for the Cloudflare watch-paths mirror: "the two lists
-// live in different places with NOTHING testing that they agree." This is that test, for these
-// three, and it fails the build rather than filing a note.
-//
-// HOW IT CHECKS. cron-roster.ts derives the roster from the units themselves — the paired
-// `.service`'s ExecStart, the `emit_cron_output <token>` it reaches, and the timer's own
-// `OnUnitActiveSec=`/`OnCalendar=` — and every assertion below diffs a hand-carried list
-// against that derivation. Both directions, every time: a missing entry and a phantom entry are
-// the same bug wearing different clothes.
-//
-// NOT A DUPLICATE OF ITS SIBLING, and the difference is the whole point.
-// apps/web/src/lib/server/hermes-healthcheck-coverage.test.ts already binds the registry to the
-// prober — but only on the SET of ids, and only to each other. Neither of them reads a timer
-// unit, so both pass happily while agreeing on a wrong number (the frontier-refresh cadence
-// survived that gate untouched) and both pass on a cron whose timer has been deleted. This test
-// adds the third corner: the units, plus cadence.
-//
-// The other sibling over this tree, install-host-timers.test.ts, asks whether the INSTALLER lays
-// every unit down. This one asks whether every unit it lays down is actually WATCHED.
-//
-//   bun test docs/agents/hermes/scripts/cron-roster.test.ts
-
 import { SURFACES } from "@fluncle/registry";
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -60,18 +26,8 @@ afterEach(() => {
 const HERMES_DIR = join(import.meta.dir, "..");
 const ROSTER = deriveTimerRoster(HERMES_DIR);
 
-/**
- * Registry cron surfaces that are probed WITHOUT a marker, so they are legitimately absent from
- * the prober's marker roster. `cron.healthcheck` is the prober itself: reaching the end of a
- * tick is the proof it ran, and reading a marker it wrote would be circular.
- */
 const SELF_EVIDENT_CRON_SURFACES = new Set(["cron.healthcheck"]);
 
-/**
- * Every registry surface that declares itself a probed cron, keyed by its `cron.<token>` name.
- * `cadenceMs` is OPTIONAL on `ProbeConfig`, so it is carried as possibly-absent and asserted
- * present below rather than coerced — an omitted cadence is its own drift, not a zero.
- */
 function registryCrons(): Map<string, number | undefined> {
   const crons = new Map<string, number | undefined>();
 
@@ -86,38 +42,26 @@ function registryCrons(): Map<string, number | undefined> {
 
 describe("the derivation itself", () => {
   test("reads every committed timer — nothing is left uninterpreted", () => {
-    // An unreadable unit is never rounded to something plausible: it lands here by name, and
-    // that is a build failure. A new `OnCalendar` shape, a `.timer` with no `.service`, or a
-    // sweep reaching two cron tokens all surface here rather than producing a wrong number.
     expect(ROSTER.unreadable).toEqual([]);
     expect(ROSTER.crons.length).toBeGreaterThan(0);
   });
 
   test("every timer is either an expected writer or a declared non-writer", () => {
-    // The one that catches a NEW timer: land a sweep whose script forgets `emit_cron_output`
-    // and it is silent on /status forever. Here it fails the build until someone rules on it —
-    // either wire the marker, or declare (with a reason) that this timer reports another way.
     const undeclared = ROSTER.nonWriters.filter((unit) => !(unit in NON_WRITER_TIMERS));
 
     expect(undeclared).toEqual([]);
   });
 
   test("no non-writer declaration outlives its reason", () => {
-    // The exemption list is itself hand-kept, so it gets its own tripwire in both directions:
-    // a declaration for a timer that has since gained a marker (it should be probed now), and
-    // a declaration for a timer that no longer exists (dead weight that hides the next one).
     const derivedNonWriters = new Set(ROSTER.nonWriters);
     const writerUnits = new Set(ROSTER.crons.map((cron) => cron.unit));
     const stale = Object.keys(NON_WRITER_TIMERS).filter((unit) => !derivedNonWriters.has(unit));
 
-    expect(stale.filter((unit) => writerUnits.has(unit))).toEqual([]); // now writes a marker
-    expect(stale.filter((unit) => !writerUnits.has(unit))).toEqual([]); // no such timer
+    expect(stale.filter((unit) => writerUnits.has(unit))).toEqual([]);
+    expect(stale.filter((unit) => !writerUnits.has(unit))).toEqual([]);
   });
 
   test("every declared non-writer says WHY in a sentence", () => {
-    // "It's fine" is not a reason. The list is the record of four deliberate silences, and two
-    // of them (secrets-sync, timer-watchdog) are recorded GAPS rather than settled decisions —
-    // that distinction only survives if the reason is written down.
     for (const [unit, reason] of Object.entries(NON_WRITER_TIMERS)) {
       expect(reason.length, `${unit} needs a real reason`).toBeGreaterThan(20);
     }
@@ -129,9 +73,6 @@ describe("AUTOMATION_CRONS agrees with the timer units", () => {
     const derived = ROSTER.crons.map((cron) => cron.service).sort();
     const handCarried = AUTOMATION_CRONS.map((cron) => cron.service).sort();
 
-    // A missing entry means a running sweep nobody watches; a phantom entry means a permanent
-    // "no runs yet" row for a job that does not exist (the `cron.clip-drip` shape that earned
-    // its place in RETIRED_SERVICE_IDS). Same assertion catches both.
     expect(handCarried).toEqual(derived);
   });
 
@@ -148,19 +89,12 @@ describe("AUTOMATION_CRONS agrees with the timer units", () => {
   });
 
   test("the match token is exactly the tail of the service id", () => {
-    // `service` is mechanically `cron.<match>` — the token cron-output.sh bakes into the
-    // marker header. A hand-written pair that breaks that shape would claim the wrong dir.
     for (const cron of AUTOMATION_CRONS) {
       expect(cron.service).toBe(`cron.${cron.match}`);
     }
   });
 
   test("longest-match-first claiming still resolves every token to one dir", () => {
-    // `claimCronDirs` walks the crons longest-`match`-first and lets each claim one output
-    // dir, which is what keeps `social-capture` from losing its dir to a bare `capture`. That
-    // only works while every SHORTER token that is a substring of a longer one is preceded by
-    // it in the sorted order — which sorting guarantees. What sorting does NOT guarantee is
-    // that two crons share a token, so pin the uniqueness the whole scheme rests on.
     const tokens = AUTOMATION_CRONS.map((cron) => cron.match);
 
     expect(new Set(tokens).size).toBe(tokens.length);
@@ -169,10 +103,6 @@ describe("AUTOMATION_CRONS agrees with the timer units", () => {
 
 describe("the registry agrees with the timer units", () => {
   test("every derived writer has a registry cron surface, and vice versa", () => {
-    // A registered cron with no timer is the `cron.clip-drip` failure verbatim: it reported
-    // "no runs yet" on the public board for days while the box had neither script nor timer.
-    // A timer with no registry surface is the `fluncle-live` failure: it ran for months with
-    // no /status row at all. Both directions, one assertion.
     const derived = ROSTER.crons.map((cron) => cron.service).sort();
     const registered = [...registryCrons().keys()]
       .filter((name) => !SELF_EVIDENT_CRON_SURFACES.has(name))
@@ -194,9 +124,6 @@ describe("the registry agrees with the timer units", () => {
   });
 
   test("every cron surface declares a cadence at all", () => {
-    // `ProbeConfig.cadenceMs` is optional, and an absent one is not a zero — it is a /status
-    // row with no freshness budget. Catch it here rather than letting the cadence diff below
-    // read `undefined` as "nothing to compare".
     const cadenceless = [...registryCrons()]
       .filter(([, cadenceMs]) => cadenceMs === undefined)
       .map(([name]) => name);
@@ -233,8 +160,6 @@ describe("systemd time spans", () => {
   });
 
   test("an unknown or ambiguous unit is refused, never guessed", () => {
-    // `month`/`year` are the ones that matter: systemd accepts them and their length varies,
-    // so a silent approximation would put a wrong number straight into a staleness budget.
     expect(parseTimeSpanMs("1month")).toBeNull();
     expect(parseTimeSpanMs("2 years")).toBeNull();
     expect(parseTimeSpanMs("soon")).toBeNull();
@@ -251,12 +176,10 @@ describe("OnCalendar periods", () => {
   });
 
   test("anything else is refused rather than approximated", () => {
-    // Each of these HAS a period; none of them has the period the nearest understood shape
-    // would give it. Refusing is the honest answer — the guard then names the unit.
-    expect(parseOnCalendarMs("Mon,Thu 15:00")).toBeNull(); // twice a week, not weekly
-    expect(parseOnCalendarMs("*:7/20")).toBeNull(); // does not divide the hour evenly
-    expect(parseOnCalendarMs("2026-01-01 00:00:00")).toBeNull(); // a single date, not a period
-    expect(parseOnCalendarMs("hourly")).toBeNull(); // a systemd alias this module has not learnt
+    expect(parseOnCalendarMs("Mon,Thu 15:00")).toBeNull();
+    expect(parseOnCalendarMs("*:7/20")).toBeNull();
+    expect(parseOnCalendarMs("2026-01-01 00:00:00")).toBeNull();
+    expect(parseOnCalendarMs("hourly")).toBeNull();
     expect(parseOnCalendarMs("")).toBeNull();
   });
 });
@@ -267,9 +190,6 @@ describe("reading a timer's cadence", () => {
   });
 
   test("OnBootSec is NEVER the period", () => {
-    // The trap this rules out: fluncle-live boots at 30s and then runs every minute. Reading
-    // the boot offset would hand the prober a 30-second cadence — a 90-second staleness budget
-    // on a sweep that legitimately answers every 60 seconds, i.e. permanent false alarms.
     expect(parseTimerCadenceMs("[Timer]\nOnBootSec=30s\n")).toBeNull();
   });
 
@@ -288,10 +208,6 @@ describe("reading a timer's cadence", () => {
   });
 
   test("a retry firing inside the same period keeps the period", () => {
-    // The funnel snapshot's shape: a nightly slot plus a second slot the same UTC day, so a
-    // skipped or failed run gets another shot before the day it is keyed on closes. The unit fires
-    // twice; the WINDOW still comes round daily, and the cadence is a staleness budget — the
-    // longest a marker may legitimately go unwritten — so it stays 24h.
     expect(
       parseTimerCadenceMs(
         "[Timer]\nOnCalendar=*-*-* 23:45:00 UTC\nOnCalendar=*-*-* 23:57:00 UTC\n",
@@ -308,9 +224,6 @@ describe("reading a timer's cadence", () => {
 
 describe("finding the emit_cron_output token", () => {
   test("a call is a call; a documented example is not", () => {
-    // cron-output.sh's own header carries `emit_cron_output enrich -- …` inside a comment
-    // block. Counting that as a call would give the helper a token and mis-resolve any unit
-    // that mentions it — which the render conductor's unit does, on the same ExecStart line.
     const body = [
       "# usage:",
       "#     emit_cron_output enrich -- bun enrich-sweep.ts",
@@ -326,7 +239,6 @@ describe("finding the emit_cron_output token", () => {
 });
 
 describe("the guard fires — a synthetic drift", () => {
-  /** A throwaway hermes dir holding one timer + service pair and one sweep script. */
   function fakeHermes(options: {
     script?: string;
     service: string;
@@ -370,9 +282,6 @@ describe("the guard fires — a synthetic drift", () => {
   });
 
   test("a cadence change in the unit alone moves the derived number", () => {
-    // THE REGRESSION THAT STARTED THIS. Edit only the timer — exactly what happened when the
-    // Frontier drain went from a weekly burst to a 15-minute drain — and the derivation follows
-    // it. A prober literal left on the old number then fails the set/cadence assertions above.
     const weekly = fakeHermes({
       script: "emit_cron_output made-up -- bun made-up-sweep.ts\n",
       service: `[Service]\n${EXEC}`,
@@ -392,7 +301,7 @@ describe("the guard fires — a synthetic drift", () => {
 
   test("a sweep that writes no marker is a non-writer, not a silent pass", () => {
     const root = fakeHermes({
-      script: "bun made-up-sweep.ts\n", // no emit_cron_output anywhere
+      script: "bun made-up-sweep.ts\n",
       service: `[Service]\n${EXEC}`,
       timer: "[Timer]\nOnUnitActiveSec=7min\n",
       unit: "fluncle-made-up",
@@ -404,9 +313,6 @@ describe("the guard fires — a synthetic drift", () => {
   });
 
   test("a timer whose script is missing is unreadable, not a non-writer", () => {
-    // The difference matters: "writes no marker" is a ruling someone can make, while "I could
-    // not find the script" is a broken repo. Collapsing the two would let a deleted sweep pass
-    // as a deliberate silence.
     const root = fakeHermes({
       service: `[Service]\n${EXEC}`,
       timer: "[Timer]\nOnUnitActiveSec=7min\n",
@@ -459,9 +365,6 @@ describe("the guard fires — a synthetic drift", () => {
   });
 
   test("an inline emit_cron_output in the unit wins over the scripts it names", () => {
-    // The render conductor's shape: the unit sources cron-output.sh and calls the helper
-    // itself, on the same line as the script it wraps. Resolving scripts first would have to
-    // choose between two candidates when the unit has already answered.
     const root = mkdtempSync(join(tmpdir(), "fluncle-roster-"));
     temporaryDirectories.push(root);
     const unitDir = join(root, "render-timer");
@@ -508,8 +411,6 @@ describe("readTimer on the real units", () => {
   });
 
   test("a sweep whose token differs from its script name still resolves", () => {
-    // `clip-sweep.sh` emits `studio-clip`, and `observe-sweep.sh` emits `observation`. Deriving
-    // the token from the FILENAME would have got both wrong; it comes from the call.
     const reading = readTimer(
       join(HERMES_DIR, "studio-clip-timer", "fluncle-studio-clip.timer"),
       join(HERMES_DIR, "scripts"),

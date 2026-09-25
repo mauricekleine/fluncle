@@ -1,12 +1,3 @@
-// Unit tests for the pure helpers in capture-sweep.ts — the box-script sweep is
-// self-contained (it can't import the workspace) and lives outside any package's
-// test runner, so this file uses `bun:test` and is run directly:
-//
-//   bun test docs/agents/hermes/scripts/capture-sweep.test.ts
-//
-// `main()` is guarded behind `import.meta.main` in the sweep, so importing it here is
-// side-effect free (no yt-dlp spawn, no R2, no network). Keep this green when touching
-// the sticky-proxy builder, the duration guard, the key builder, or the candidate ranker.
 import { afterAll, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import {
@@ -103,9 +94,7 @@ import {
   isPinnedDurationRefusal,
 } from "./capture-sweep";
 import { mutualWindowMatch } from "./fingerprint-match";
-// The REAL /status strain detector, imported rather than re-implemented: since #994 this
-// sweep's stderr is teed into the marker and scored by these two functions, so the only
-// honest way to pin the wording contract is to run the real lines through them.
+
 import { countDistressLines, countSummaryStrain } from "./fluncle-healthcheck";
 import {
   type CollectedCaptureCommit,
@@ -187,14 +176,13 @@ describe("capture sweep canonical counters", () => {
   test("counts a failed failure-recording write independently of the acquisition door", () => {
     const captureFindingSource = source.slice(
       source.indexOf("async function captureFinding"),
-      source.indexOf("// ── THE CATALOGUE PROVENANCE LADDER"),
+      source.indexOf("export type ProvenanceLadderCounts ="),
     );
 
     expect(captureFindingSource).toContain("noteCaptureFailure(failures, error);");
     expect(captureFindingSource).toContain('if (failureDisposition === "failed")');
     expect(captureFindingSource).toContain("failures.failureRecording += 1;");
-    // The verdict mapping is shared by all three of a capture's exits (`captureOutcomeFor`), so
-    // the unrecorded-failure branch is asserted where it now lives rather than inlined three times.
+
     expect(captureFindingSource).toContain('captureOutcomeFor(failureDisposition, "failed")');
     expect(source).toContain('return disposition === "failed" ? "unrecorded-failure" : "pending";');
   });
@@ -256,10 +244,6 @@ describe("capture sweep canonical counters", () => {
   });
 
   test("omits queue_depth rather than scanning the unindexed capture predicate every tick", () => {
-    // `countTrackWork(kind=capture)` scans the growing tracks table and pulls in findings via
-    // `f.log_id`; unlike embed, capture has no covering partial queue index. A hot-path scan is
-    // not an acceptable price for this gauge, so absence is the contract until an operator-owned
-    // index is proven on hosted Turso.
     const summary = buildCaptureSummary({
       batch: 1,
       botChallenges: 0,
@@ -1131,7 +1115,6 @@ describe("capture reconciliation durability and admission boundaries", () => {
     }
   });
 
-  /** The real contract schemas: the sweep's hand-built bodies are judged by what the Worker parses. */
   function captureContractSchemas() {
     const commitInput = commitTrackCapture["~orpc"].inputSchema;
     const authorizeOutput = authorizeTrackCapture["~orpc"].outputSchema;
@@ -1246,8 +1229,7 @@ describe("capture reconciliation durability and admission boundaries", () => {
         trackId: "track-1",
       });
       writeJsonAtomic(`${path}.commit`, { ...receipt, ok: true, trackId: "track-1" });
-      // The default ports throw on a snapshot refresh and on an R2 PUT, and the provider is not a
-      // port at all: settling this journal can only reconcile, re-authorize, and commit.
+
       const testPorts = ports(directory, {
         admittedPhase: (action, statePath) => {
           phases.push(action);
@@ -1385,8 +1367,6 @@ describe("buildStickyProxyUrl", () => {
       username: "user123",
     });
 
-    // The session suffix pins one exit IP for the whole download (a rotating session
-    // 403s the media bytes). logId chars (alnum + dot) survive encoding intact.
     expect(url).toBe("http://user123__sessid.004.7.2I:p%40ss%3Aw%2Frd@gw.example:823");
   });
 
@@ -1399,8 +1379,6 @@ describe("buildStickyProxyUrl", () => {
       username: "acct@corp",
     });
 
-    // The whole username+suffix is encoded as one unit, so the raw `@` cannot terminate
-    // the authority early.
     expect(url).toBe("http://acct%40corp__sessid.010.2.9Z:secret@gw.example:823");
   });
 
@@ -1413,9 +1391,6 @@ describe("buildStickyProxyUrl", () => {
       username: "user123",
     });
 
-    // `_` and `-` are stripped (the proxy vendor's session parser is only proven on the
-    // Log ID charset); the result stays deterministic per track, which is all
-    // stickiness needs.
     expect(url).toBe(
       "http://user123__sessid.mb1f2a3b4c5d6e7f809a0bc1d2e3f4a5b6:secret@gw.example:823",
     );
@@ -1434,7 +1409,6 @@ describe("durationWithinTolerance", () => {
   });
 
   test("accepts within the ±3% band for a long track (band > 3s)", () => {
-    // 400s target → 3% = 12s allowed, so 410s passes even though it's > 3s off.
     expect(durationWithinTolerance(410, 400_000, opts)).toBe(true);
   });
 
@@ -1474,7 +1448,7 @@ describe("buildSearchQuery", () => {
     expect(
       buildSearchQuery({ artists: ["Commix", "Nu:Tone", "Logistics"], title: "Coffee" }, 0),
     ).toBe("Commix Nu:Tone Logistics Coffee");
-    // Whitespace is collapsed but nothing is dropped — a currently-matching row cannot regress.
+
     expect(buildSearchQuery({ artists: ["Sub Focus"], title: "Scarecrow" }, 0)).toBe(
       "Sub Focus Scarecrow",
     );
@@ -1493,7 +1467,7 @@ describe("buildSearchQuery", () => {
     expect(buildSearchQuery({ artists: ["Artist"], title: "Song [VIP Mix]" }, 1)).toBe(
       "Artist Song",
     );
-    // A bare (non-parenthetical) version word like "VIP" is part of the real title — kept.
+
     expect(buildSearchQuery({ artists: ["Nu:Tone"], title: "Missing Link VIP" }, 1)).toBe(
       "Nu:Tone Missing Link VIP",
     );
@@ -1650,7 +1624,6 @@ describe("extractSourceAudioSha256 — the wrong-audio re-capture memory", () =>
   });
 
   test("rejects a basename that is not a 64-hex digest — no false bad-audio match", () => {
-    // A pre-hash legacy key, or any non-digest basename, must not read as a reject hash.
     expect(extractSourceAudioSha256("004.7.2I/notahash.webm")).toBeNull();
     expect(extractSourceAudioSha256("catalogue/x/deadbeef.opus")).toBeNull();
   });
@@ -1774,12 +1747,6 @@ describe("pickCandidate", () => {
   });
 
   test("TRUST NO LONGER WAIVES THE DURATION GUARD: a padded trusted upload is now REJECTED", () => {
-    // Demoted trust (docs/the-ear.md § Wrong audio): the old +60s trusted pad was the 005.9.9L
-    // hole, so it is gone. A trusted label upload 22s over the 191.7s master (which the removed pad
-    // once accepted) now fails the SYMMETRIC guard just like an untrusted one. When only padded
-    // uploads exist, `pickCandidate` returns null → the sweep lands `unmatched` rather than storing
-    // a possibly-wrong file; the fingerprint gate would have been the only thing standing between it
-    // and a bad capture, and correctness runs toward not downloading at all.
     const chosen = pickCandidate(
       [
         {
@@ -1805,9 +1772,6 @@ describe("pickCandidate", () => {
   });
 
   test("trust still RANKS equals: the trusted same-length master wins over an untrusted re-upload", () => {
-    // Trust survives as a ranking tiebreak among candidates that all pass the symmetric guard —
-    // the label upload beats a random re-host of the same-length master (identity safety), even
-    // though the fingerprint gate now backstops the identity check.
     const chosen = pickCandidate(
       [
         { channel: "randochan", durationSec: 192, id: "reupload", title: "1991 - If Only" },
@@ -1823,7 +1787,6 @@ describe("pickCandidate", () => {
   test("trust does NOT override a wrong-version title: an untrusted clean master beats a trusted remix", () => {
     const chosen = pickCandidate(
       [
-        // In-tolerance so it survives the guard — the sort (clean-title first) must still sink it.
         {
           channel: "UKF Drum & Bass",
           durationSec: 388,
@@ -1839,8 +1802,6 @@ describe("pickCandidate", () => {
   });
 
   test("prefers an <Artist> - Topic art-track over a curated-aggregator upload of the same length", () => {
-    // Both pass the guard and both are tier-2 trust; the Topic upload wins on the `official`
-    // tiebreak (the label-delivered master), which its bare title alone would never have earned.
     const chosen = pickCandidate(
       [
         {
@@ -1859,8 +1820,6 @@ describe("pickCandidate", () => {
   });
 
   test("a Topic art-track does NOT rescue a wrong-length upload — the guard still rejects it", () => {
-    // Topic recognition is a RANKING signal only; it never relaxes the duration guard. A Topic
-    // upload 100s off the master is filtered out exactly like any other candidate.
     const chosen = pickCandidate(
       [{ channel: "Cyantific - Topic", durationSec: 381, id: "topic", title: "Quiet Star" }],
       { durationMs: 281_213 },
@@ -1874,8 +1833,6 @@ describe("rankCandidates", () => {
   const opts = { tolerancePct: 0.03, toleranceSec: 3 };
 
   test("returns the full ordered list so the sweep can fall through a DRM/bot-walled top hit", () => {
-    // The top hit is a trusted exact-length master (e.g. DRM-locked at download time); the
-    // second is an untrusted-but-clean exact-length re-upload the sweep can fall through to.
     const ranked = rankCandidates(
       [
         { channel: "randochan", durationSec: 388, id: "reupload", title: "Some Song" },
@@ -1939,8 +1896,6 @@ describe("needsReenrichAfterCapture", () => {
   });
 
   test("re-queues a preview-grade (or legacy NULL) row even with a real BPM — closes the race", () => {
-    // The capture just landed; the row was enriched from the 30s preview before it. A real
-    // BPM alone must not stop the re-derive from the full song now on file.
     expect(needsReenrichAfterCapture(174, "preview")).toBe(true);
     expect(needsReenrichAfterCapture(160, undefined)).toBe(true);
   });
@@ -1953,8 +1908,6 @@ describe("needsReenrichAfterCapture", () => {
 
 describe("shouldReenrichAfterCapture — the certification gate on the re-derive", () => {
   test("a CERTIFIED finding behaves exactly like needsReenrichAfterCapture (today's behaviour)", () => {
-    // With the brake paused every queued row is a finding, so this is the ONLY path that runs —
-    // and it must be byte-identical to the old predicate for every input.
     for (const [bpm, from] of [
       [null, "full"],
       [undefined, "preview"],
@@ -1971,9 +1924,6 @@ describe("shouldReenrichAfterCapture — the certification gate on the re-derive
   });
 
   test("an UNCERTIFIED (catalogue) row is NEVER re-queued — enrichment_status is a certification field", () => {
-    // Even the inputs that would re-queue a finding must not, for a catalogue row: writing
-    // `enrichmentStatus` on an uncertified track is a 409 (the certification rail), and its
-    // enrichment is not a thing that exists.
     expect(shouldReenrichAfterCapture(false, null, "preview")).toBe(false);
     expect(shouldReenrichAfterCapture(false, undefined, undefined)).toBe(false);
     expect(shouldReenrichAfterCapture(false, 174, "full")).toBe(false);
@@ -1988,9 +1938,6 @@ describe("filterRejectedCandidates — the pre-download memory filter", () => {
   const entry = (id: string) => ({ candidate: { durationSec: 388, id, title: "T" }, trust: 0 });
 
   test("skips remembered video ids BEFORE spending the attempt budget", () => {
-    // v1 is in the bad-audio memory. With a budget of 2, the walk must get v2 + v3 — a budget cut
-    // FIRST would hand back [v1, v2], wasting an attempt slot on a candidate the memory already
-    // ruled out.
     const attempts = filterRejectedCandidates(
       [entry("v1"), entry("v2"), entry("v3")],
       new Set(["v1"]),
@@ -2019,15 +1966,10 @@ describe("filterRejectedCandidates — the pre-download memory filter", () => {
 
 describe("verifyCaptureFile", () => {
   test("ABSTAINS (no-reference) when there is no preview fingerprint to check against", () => {
-    // A track with no preview source ⇒ the gate never blocks; it stamps `unverified`. This is the
-    // one branch reachable without an fpcalc binary (CI has none); the match/mismatch verdicts ride
-    // `slidingWindowMatch`, unit-tested exhaustively in fingerprint-match.test.ts.
     expect(verifyCaptureFile(null, "/nonexistent/audio.webm")).toBe("no-reference");
   });
 
   test("ABSTAINS when the capture cannot be fingerprinted (fpcalc absent / bad decode)", () => {
-    // With a real preview fp but a file fpcalc cannot read, the verdict is `no-reference` (abstain),
-    // never a false `mismatch` — the gate degrades honestly.
     expect(verifyCaptureFile([1, 2, 3], "/nonexistent/audio.webm")).toBe("no-reference");
   });
 });
@@ -2074,8 +2016,6 @@ describe("classifyDownloadFailure — the flags the recovery decision runs on", 
   });
 
   test("a bare 403 ANYWHERE in stderr is no longer a 403 verdict", () => {
-    // The regression this fixes: `\b403\b` matched a video id, a byte count, a URL — and the
-    // download handler tested `is403` first, so such a line stole the branch.
     expect(
       classifyDownloadFailure("ERROR: [youtube] x403abc: This video is unavailable").is403,
     ).toBe(false);
@@ -2117,10 +2057,6 @@ describe("classifyDownloadFailure — the flags the recovery decision runs on", 
 });
 
 describe("chooseDownloadRecovery — the challenge is asked about BEFORE the 403", () => {
-  // THE COMBINED SHAPE, and the reason this slice exists. A missing PO token makes yt-dlp
-  // print the bot challenge AND a 403 in the same stderr (yt-dlp wiki). Under the old order
-  // the 403 branch won and spent the run on a player-client fallback that cannot clear an
-  // IP-reputation ruling — the re-roll went unused on exactly the runs that needed it.
   const COMBINED_STDERR = [
     "ERROR: [youtube] dQw4w9WgXcQ: Sign in to confirm you're not a bot. Use --cookies-from-browser",
     "ERROR: unable to download video data: HTTP Error 403: Forbidden",
@@ -2129,7 +2065,6 @@ describe("chooseDownloadRecovery — the challenge is asked about BEFORE the 403
   test("a combined challenge+403 stderr takes the RE-ROLL, not the player-client fallback", () => {
     const flags = classifyDownloadFailure(COMBINED_STDERR);
 
-    // Both markers really are present — the test would pass vacuously otherwise.
     expect(flags.isBotChallenge).toBe(true);
     expect(flags.is403).toBe(true);
 
@@ -2137,8 +2072,6 @@ describe("chooseDownloadRecovery — the challenge is asked about BEFORE the 403
   });
 
   test("with the run's one re-roll spent, the combined case falls back to the 403 branch", () => {
-    // Nothing better is left to try: the fallback is a worse answer than a fresh exit, not a
-    // wrong one, so it keeps its second chance rather than throwing the candidate away.
     expect(chooseDownloadRecovery(classifyDownloadFailure(COMBINED_STDERR), false)).toBe(
       "player-client-fallback",
     );
@@ -2175,21 +2108,6 @@ describe("chooseDownloadRecovery — the challenge is asked about BEFORE the 403
   });
 });
 
-// ── THE BOT-CHALLENGE METER + ITS STRAIN CONTRACT ────────────────────────────────────────
-//
-// Two claims are pinned here, and the second one is pinned with the REAL detector rather than
-// by reasoning about the vocabulary:
-//
-//   1. EVERY challenge is counted. The re-roll fires at most once per track-run, but logging only
-//      inside that guard would count runs that hit a first challenge rather than every challenge,
-//      hiding whether the challenge rate changed.
-//   2. The wording each line carries is what `countDistressLines` scores. A re-rolled
-//      challenge is recoverable friction on a healthy tick (~12% of runs) and must score
-//      ZERO — at that rate a scoring line means a `degraded` that can never clear. A challenge
-//      with the re-roll already spent is item-failure evidence and scores only at a high rate
-//      against the tick's real `checked` denominator.
-
-/** Run something that logs, and score its REAL stderr with the REAL /status detector. */
 function withCapturedStderr(
   run: () => void,
   checked: null | number = null,
@@ -2220,7 +2138,6 @@ describe("noteBotChallenge — the count", () => {
       noteBotChallenge(meter, "download", false);
     });
 
-    // The old shape would have recorded ONE of these three — only the line that re-rolled.
     expect(meter.total).toBe(3);
     expect(meter.uncleared).toBe(2);
   });
@@ -2262,9 +2179,6 @@ describe("noteBotChallenge — the count", () => {
 
 describe("what the sweep's challenge logs say to the /status strain detector", () => {
   test("a RE-ROLLED challenge reads as ZERO strain — recoverable friction on a healthy tick", () => {
-    // ~12% of runs hit one. If this line scored, capture would sit at roughly 76 noisy points
-    // every 6h: `degraded` forever, with no condition anyone could fix. The hyphen is the whole
-    // mechanism — "bot challenge", never the STRAIN_PHRASES entry "bot-challenged".
     const { lines, strain } = withCapturedStderr(() => {
       noteBotChallenge(createBotChallengeMeter(), "search", true);
       noteBotChallenge(createBotChallengeMeter(), "download", true);
@@ -2283,8 +2197,6 @@ describe("what the sweep's challenge logs say to the /status strain detector", (
   });
 
   test("a whole busy-but-healthy tick stays under the strain dial", () => {
-    // Twelve captures, every one of them challenged once and every challenge cleared, plus
-    // the recap. This is the steady state the two-day sample measured; it must read clean.
     const meter = createBotChallengeMeter();
     const { strain } = withCapturedStderr(() => {
       for (let i = 0; i < 12; i += 1) {
@@ -2298,9 +2210,6 @@ describe("what the sweep's challenge logs say to the /status strain detector", (
   });
 
   test("the per-tick recap never accrues strain, even reporting uncleared challenges", () => {
-    // The recap is present on every challenged tick. A recap that scored would turn a known
-    // steady state into a permanent `degraded`, and the per-line signal already counted the
-    // uncleared ones — scoring here would double-count them too.
     const meter = createBotChallengeMeter();
     meter.total = 40;
     meter.uncleared = 9;
@@ -2309,9 +2218,6 @@ describe("what the sweep's challenge logs say to the /status strain detector", (
   });
 
   test("the new summary counters are not strain counters either", () => {
-    // `countSummaryStrain` scores a marker's JSON summary. Publishing the challenge RATE must
-    // not be the same thing as reporting failure — the keys are deliberately outside
-    // STRAIN_COUNTER_KEYS (`errors` / `failed` / `gateSkipped`).
     expect(
       countSummaryStrain({
         batch: 4,
@@ -2330,9 +2236,6 @@ describe("rerollSessionId — one fresh sticky exit per run", () => {
 
     expect(rerolled).toBe("038.6.1J.r1");
 
-    // Composed through the real URL builder: the `.r1` marker must reach the proxy's
-    // username (the sanitizer keeps alnum + `.`), or the "fresh exit" is silently the
-    // same exit and the retry re-fails.
     const url = buildStickyProxyUrl({
       host: "proxy.example",
       password: "pw",
@@ -2364,7 +2267,6 @@ describe("captureSessionSeed — retry runs rotate off the flagged exit", () => 
   });
 
   test("the .a namespace never collides with the in-run .r1 re-roll sessions", () => {
-    // Run 0 burns <id> and (re-rolled) <id>.r1; run 1 must start on neither.
     const run0 = ["047.0.8M", rerollSessionId("047.0.8M")];
     const run1Base = captureSessionSeed("047.0.8M", 1);
 
@@ -2389,24 +2291,17 @@ describe("the accepted upload's id rides the successful reconciliation", () => {
   const source = readFileSync(new URL("./capture-sweep.ts", import.meta.url), "utf8");
 
   test("only a REAL match reports an id — the abstain path stays silent", () => {
-    // The verdict is `no-reference` when the track had no preview reference: the bytes were kept
-    // on duration and ranking alone and nothing was compared. The identity payload serves this id
-    // under `method: "fingerprint"`, so an id from the abstain path would put "matched by audio
-    // fingerprint" on a page under a match that never ran. The assignment is therefore gated on
-    // the verdict itself and on the winner being a YouTube source.
     expect(source).toMatch(
       /if \(accepted\.verdict === "match" && accepted\.source !== "soundcloud"\) \{\s*update\.youtubeVideoId = accepted\.videoId;/,
     );
     const captureFn = source.slice(
       source.indexOf("async function captureFinding("),
-      source.indexOf("// ── THE CATALOGUE PROVENANCE LADDER"),
+      source.indexOf("export type ProvenanceLadderCounts ="),
     );
     expect(captureFn.match(/update\.youtubeVideoId = accepted\.videoId;/g)).toHaveLength(1);
   });
 
   test("only the SUCCESS path reports an id — never unmatched or failed results", () => {
-    // An id is provenance for audio Fluncle actually kept. A walk that stored nothing has no
-    // upload to attribute, and a failed one never got that far.
     const unmatched = source.slice(source.indexOf('captureStatus: "unmatched"'));
     const failed = source.slice(source.indexOf('captureStatus: "failed"'));
 
@@ -2415,10 +2310,6 @@ describe("the accepted upload's id rides the successful reconciliation", () => {
   });
 
   test("the sweep never sends an officialness verdict — that is the server's call", () => {
-    // A box sweep reports what it captured; it never grants permission for a link to be shown. The
-    // oEmbed check lives in apps/web/src/lib/server/youtube-official.ts, behind the API boundary,
-    // so a compromised or stale box can never promote a rip onto the page. The RE-VERDICT phase
-    // does not weaken this: it sends a bare `youtubeReverdict: true` ask and carries no verdict.
     expect(source).not.toContain("youtubeVideoOfficial");
     expect(source).not.toContain("youtubeVerifiedAt");
     expect(source).not.toContain("oembed");
@@ -2427,12 +2318,10 @@ describe("the accepted upload's id rides the successful reconciliation", () => {
 
 describe("the PROVENANCE phase never touches a capture column", () => {
   const source = readFileSync(new URL("./capture-sweep.ts", import.meta.url), "utf8");
-  // The phase's own body — from its entry point to the re-verdict phase that follows it. Everything
-  // asserted below is about THIS slice, so a capture column elsewhere in the file cannot mask a
-  // regression and cannot cause a false alarm either.
+
   const phase = source.slice(
     source.indexOf("async function proveTrackProvenance("),
-    source.indexOf("// ── THE RE-VERDICT PHASE"),
+    source.indexOf("type ReverdictCounts ="),
   );
 
   test("the slice under test is real", () => {
@@ -2441,10 +2330,6 @@ describe("the PROVENANCE phase never touches a capture column", () => {
   });
 
   test("THE RAIL — no capture column can leave this phase, so no row can regress", () => {
-    // The pilot's verdict: a RE-CAPTURE replaced a finding's clean archived audio with a fan blend
-    // that legitimately passed the fingerprint gate (a blend contains the original's preview
-    // segment). The backfill is provenance-only for that reason, and this is the pin: not one of
-    // the capture columns may appear anywhere in the phase's body.
     for (const column of [
       "sourceAudioKey",
       "captureStatus",
@@ -2461,22 +2346,16 @@ describe("the PROVENANCE phase never touches a capture column", () => {
   });
 
   test("it never stores the candidate — no R2 put, and the file is deleted", () => {
-    // The bytes exist only to be fingerprinted. `r2Put` is the archive's only door and this phase
-    // does not go through it; cleanup waits until the durable result replaces the provider intent.
     expect(phase).not.toContain("r2Put");
     expect(phase).toContain("cleanupProviderWorkDirectory(attemptPath, workDirectory)");
   });
 
   test("it reports the id under its OWN verdict field, never capture's", () => {
-    // `youtubeVerification` is the honest field for a sweep that matched and then discarded:
-    // borrowing `captureVerification` would claim a capture that never happened.
     expect(phase).toContain('youtubeVerification: "preview-match"');
     expect(phase).toContain("youtubeVideoId: accepted.videoId");
   });
 
   test("a non-match is REPORTED, so the row is not re-bought every tick", () => {
-    // Without this the worklist hands the same row back on the next tick and spends the same
-    // download again, forever. The report stamps only `youtube_verified_at`, server-side.
     expect(phase).toContain('youtubeVerification: "no-match"');
     expect(phase).toMatch(/if \(!accepted \|\| accepted\.verdict !== "match"\)/);
   });
@@ -2484,7 +2363,7 @@ describe("the PROVENANCE phase never touches a capture column", () => {
   test("a SoundCloud preview match banks its own evidence and returns before YouTube writes", () => {
     const soundcloud = phase.slice(
       phase.indexOf('if (accepted.source === "soundcloud")'),
-      phase.indexOf("// ONLY the id and its proof"),
+      phase.indexOf('youtubeVerification: "preview-match"'),
     );
 
     expect(soundcloud).toContain('sourceVerification: "soundcloud-preview-match"');
@@ -2494,19 +2373,14 @@ describe("the PROVENANCE phase never touches a capture column", () => {
   });
 
   test("a known transient failure advances the bounded inconclusive streak", () => {
-    // The failure is not a no-match, but it must settle durably so a known failed provider call
-    // cannot leave an ambiguous intent holding the queue forever.
     const failurePath = phase.slice(phase.indexOf("} catch (error) {"));
 
     expect(failurePath).toContain('youtubeVerification: "inconclusive"');
   });
 
   test("it runs the SHARED ladder, never a second copy of it", () => {
-    // A parallel walk would drift, and the thing it would drift on is the identity gate that keeps
-    // wrong audio out of the archive. Exactly one implementation exists, and both callers use it.
     expect(source.match(/async function findVerifiedUpload\(/g)).toHaveLength(1);
-    // ONE gate call in the ladder walk (the pinned walk has its own, against a `file` it holds by a
-    // different name), fed by the same detailed matcher.
+
     expect(
       source.match(/const verified = verifyCaptureFileDetailed\(previewFp, captureFingerprint\)/g),
     ).toHaveLength(1);
@@ -2514,28 +2388,18 @@ describe("the PROVENANCE phase never touches a capture column", () => {
   });
 
   test("it never feeds its OWN archived sha to the known-bad backstop", () => {
-    // `source_audio_key` means opposite things to the two callers, and this is the trap. On a
-    // CAPTURE it appears only on a wrong-audio re-capture, so its embedded sha is known-BAD. On
-    // THIS queue every row has a key by definition and that sha is the GOOD audio the archive
-    // holds — the upload the original capture came from. Feeding it in would blacklist the single
-    // most likely correct candidate on nearly every row, silently, and the backfill would report
-    // `no-match` for recordings whose id was sitting right there. So the walk never reads the key
-    // itself: the CAPTURE caller passes it, and this one deliberately does not.
-    // The phase's CALL passes exactly four options, and `legacyRejectKey` is not among them.
     expect(phase).toContain(
       "findVerifiedUpload({ dir: directory, finding: row, memory, session })",
     );
     expect(phase).not.toContain("legacyRejectKey:");
-    // The capture path, which is where the key genuinely IS known-bad, still passes it.
+
     expect(source).toContain("legacyRejectKey: finding.sourceAudioKey");
-    // …and the walk reads it from the OPTIONS, never off the row.
+
     expect(source).toContain("extractSourceAudioSha256(options.legacyRejectKey)");
     expect(source).not.toContain("extractSourceAudioSha256(finding.sourceAudioKey)");
   });
 
   test("it reads the bad-audio memory and never writes it back", () => {
-    // Reading saves money (a known-bad candidate never costs proxy bytes twice); writing would be
-    // a capture column, so a rejection this phase pays for is deliberately not remembered.
     expect(phase).toContain("parseRejectedSources(row.sourceAudioRejected)");
     expect(phase).not.toContain("sourceAudioRejected:");
   });
@@ -2543,8 +2407,6 @@ describe("the PROVENANCE phase never touches a capture column", () => {
 
 describe("the provenance phase's tick budget", () => {
   test("the catalogue sub-cap can never RAISE the tick's total spend", () => {
-    // It redirects budget the findings did not use; it is not an extra allowance. A cap set above
-    // the total is clamped to it, so no combination of env values buys more than `total` rows.
     expect(splitProvenanceBudget(2, 0)).toEqual({ catalogue: 0, findings: 2 });
     expect(splitProvenanceBudget(2, 1)).toEqual({ catalogue: 1, findings: 2 });
     expect(splitProvenanceBudget(2, 99)).toEqual({ catalogue: 2, findings: 2 });
@@ -2570,7 +2432,7 @@ describe("the provenance and re-verdict phases ride the tick without distorting 
     const provenanceAt = main.indexOf("runProvenancePhase(botChallenges, protectedTrackIds)");
 
     expect(provenanceAt).toBeGreaterThan(batchEnd);
-    // Caught, not thrown: a backfill that could abort the tick could hide a capture that succeeded.
+
     expect(main).toContain("runProvenancePhase(botChallenges, protectedTrackIds).catch(");
     expect(main).toContain("runReverdictPhase(protectedTrackIds).catch(");
   });
@@ -2587,7 +2449,6 @@ describe("the provenance and re-verdict phases ride the tick without distorting 
       writes: { confirmed: 13, failed: 1, pending: 0 },
     });
 
-    // The capture gauges are untouched by a busy — or a failing — backfill.
     expect(summary).toMatchObject({ checked: 4, errors: 0, failed: 0, produced: 4 });
     expect(summary).toMatchObject({
       provenanceFailed: 2,
@@ -2611,50 +2472,35 @@ describe("flat search extraction — one seventh of the bytes, on every search t
   const source = readFileSync(new URL("./capture-sweep.ts", import.meta.url), "utf8");
 
   test("the search asks for the LISTING, not five resolutions of it", () => {
-    // `--flat-playlist` returns the search page's own entries. The measured cost is 139KB against
-    // 968KB for the resolving shape, and it applies to every capture and every provenance search.
     expect(source).toContain('...(FLAT_SEARCH ? ["--flat-playlist"] : [])');
-    // Behind an env knob so the operator can revert to the historic shape with no re-bake, and ON
-    // unless he says otherwise.
+
     expect(source).toContain(
       'const FLAT_SEARCH = (process.env.FLUNCLE_CAPTURE_FLAT_SEARCH ?? "1") !== "0"',
     );
   });
 
   test("the printed field set is UNCHANGED — a flat entry already carries all six", () => {
-    // The ranker reads duration, id, channel, channel_id, channel_is_verified and title. If flat
-    // extraction had cost any one of them this switch would have been a downgrade, not a saving.
     expect(source).toContain(
       "%(duration)s\\t%(id)s\\t%(channel)s\\t%(channel_id)s\\t%(channel_is_verified)s\\t%(title)s",
     );
   });
 
   test("THE CEIL IS ABSORBED — the guard is max(3s, 3%) and a flat duration rounds UP by at most 1s", () => {
-    // A listed duration is the CEIL of the rendered length, so it can add at most one second. The
-    // capture guard's floor is three whole seconds, so that ceil cannot move a candidate across
-    // the guard in either direction.
     const targetMs = 217_000;
 
-    // The exact length, and the same length ceiled — both still inside the guard.
     expect(durationWithinTolerance(217, targetMs)).toBe(true);
     expect(durationWithinTolerance(218, targetMs)).toBe(true);
-    // …and a candidate that was ALREADY near the edge is not tipped out by the ceil either, because
-    // 3% of a 217s track is 6.5s and the ceil spends one of them.
+
     expect(durationWithinTolerance(223, targetMs)).toBe(true);
-    // The guard still refuses a genuinely different length. The ceil buys no slack it should not.
+
     expect(durationWithinTolerance(260, targetMs)).toBe(false);
   });
 
   test("FULL RESOLUTION still happens, for the ONE candidate that wins", () => {
-    // Flat extraction changes what a SEARCH costs and nothing about what a download does: the
-    // download resolves the source-local id into an extractor URL, and the duration that decides
-    // anything is ffprobe'd off the real file rather than read from any listing. Both the full and
-    // section paths use the same source-aware helper.
     expect(
       source.match(/args\.push\(buildCaptureDownloadUrl\(source, candidate\.id\)\);/g),
     ).toHaveLength(2);
-    // The ladder walk and the pinned walk both ffprobe the REAL file through their injectable port,
-    // whose default is the ffprobe helper.
+
     expect(
       source.match(/const realDurationSec = ports\.probeDurationSec\(file\.path\)/g),
     ).toHaveLength(2);
@@ -2668,9 +2514,6 @@ describe("the metadata gate — artist, title and length, and nothing else", () 
   const row = { artists: ["Netsky"], durationMs: 217_000, title: "Rio" };
 
   test("the tolerance is a FLAT 3s, not the capture guard's max(3s, 3%)", () => {
-    // Nothing decides identity properly after this gate, so it is tighter than the pre-fingerprint
-    // filter: ±3s absolute, whatever the track's length. On a 217s track the capture guard would
-    // allow 6.5s, and this one does not.
     expect(METADATA_TOLERANCE_SEC).toBe(3);
     expect(metadataDurationAgrees(220, 217_000)).toBe(true);
     expect(metadataDurationAgrees(221, 217_000)).toBe(false);
@@ -2678,9 +2521,6 @@ describe("the metadata gate — artist, title and length, and nothing else", () 
   });
 
   test("±3s and NOT ±2s — the flat ceil and a whole-second length each want one", () => {
-    // ~70% of catalogue durations are whole-second MusicBrainz values, so the stored length is
-    // already ±1s of the master; the flat listing's ceil spends another. ±2s would leave nothing
-    // for the second of those and would refuse correct art tracks for arithmetic reasons.
     expect(metadataDurationAgrees(219, 217_000)).toBe(true);
     expect(metadataDurationAgrees(215, 217_000)).toBe(true);
   });
@@ -2710,8 +2550,6 @@ describe("the metadata gate — artist, title and length, and nothing else", () 
   });
 
   test("a trailing version parenthetical folds away on BOTH sides", () => {
-    // "Original Mix" is a neutral descriptor in the house fold, so it is not part of the identity
-    // and the two titles are the same recording with or without it.
     expect(
       metadataIdentityMatch(
         { channel: "Netsky - Topic", durationSec: 217, id: "c", title: "Rio (Original Mix)" },
@@ -2727,8 +2565,6 @@ describe("the metadata gate — artist, title and length, and nothing else", () 
   });
 
   test("A REMIX IS A DIFFERENT RECORDING — the descriptor must appear on both sides", () => {
-    // The whole reason the fold compares base AND descriptor. Serving the original under a remix's
-    // id (or the reverse) is exactly the wrong-version failure a duration guard cannot see.
     expect(
       metadataIdentityMatch(
         { channel: "Netsky - Topic", durationSec: 217, id: "e", title: "Rio (Calibre Remix)" },
@@ -2744,7 +2580,6 @@ describe("the metadata gate — artist, title and length, and nothing else", () 
   });
 
   test("a name the row is NOT credited to is refused, on either side", () => {
-    // The same title at the same length by somebody else is the case this gate exists to catch.
     expect(
       metadataIdentityMatch(
         { channel: "Camo & Krooked - Topic", durationSec: 217, id: "g", title: "Rio" },
@@ -2760,8 +2595,6 @@ describe("the metadata gate — artist, title and length, and nothing else", () 
   });
 
   test("the credit test is a SUBSET, so a split credit and an `&` name both pass", () => {
-    // A track credited to two artists lives on the primary's Topic channel, and "Chase & Status"
-    // folds into two names on BOTH sides at once. Equality would refuse each of those wrongly.
     expect(
       metadataIdentityMatch(
         { channel: "Netsky - Topic", durationSec: 217, id: "i", title: "Rio" },
@@ -2792,7 +2625,6 @@ describe("the metadata gate — artist, title and length, and nothing else", () 
   });
 
   test("a hyphen INSIDE a word is never mistaken for the artist separator", () => {
-    // "Nu:Tone" and "NC-17" are one token. The separator is spaced on both sides for that reason.
     expect(topicChannelArtist("Nu:Tone - Topic")).toBe("Nu:Tone");
     expect(
       metadataIdentityMatch(
@@ -2816,8 +2648,6 @@ describe("RUNG 1 — the Topic art track, served on metadata alone", () => {
   });
 
   test("a NON-Topic candidate is never served here, however well it folds", () => {
-    // There is no channel authority among fan re-ups, so metadata alone cannot settle one. That
-    // candidate belongs to rung 2, which buys 30 seconds and listens.
     expect(
       pickTopicCandidate(
         [{ channel: "DnB Uploads", durationSec: 217, id: "fan", title: "Netsky - Rio" }],
@@ -2836,8 +2666,6 @@ describe("RUNG 1 — the Topic art track, served on metadata alone", () => {
   });
 
   test("AMBIGUITY — the primary artist's channel wins a split credit", () => {
-    // A split credit puts the same delivered master on each credited artist's channel, so the
-    // preference is the row's PRIMARY artist.
     const pick = pickTopicCandidate(
       [
         { channel: "Metrik - Topic", durationSec: 217, id: "secondary", title: "Rio" },
@@ -2850,8 +2678,6 @@ describe("RUNG 1 — the Topic art track, served on metadata alone", () => {
   });
 
   test("a residual tie takes the closest length rather than refusing to answer", () => {
-    // The remaining candidates are the same recording; picking between two of the same recording
-    // is not a decision that can be got wrong, and abstaining would cost the row its id for nothing.
     const pick = pickTopicCandidate(
       [
         { channel: "Metrik - Topic", durationSec: 219, id: "far", title: "Rio" },
@@ -2896,10 +2722,10 @@ describe("RUNG 2 — the non-Topic candidates that have to be listened to", () =
 
 describe("THE CATALOGUE LADDER never buys a whole song", () => {
   const source = readFileSync(new URL("./capture-sweep.ts", import.meta.url), "utf8");
-  // The ladder's own body — from its section header to the provenance phase that follows it.
+
   const ladder = source.slice(
-    source.indexOf("// ── THE CATALOGUE PROVENANCE LADDER"),
-    source.indexOf("// ── THE PROVENANCE PHASE (operator ruling 2026-07-31)"),
+    source.indexOf("export type ProvenanceLadderCounts ="),
+    source.indexOf("async function proveTrackProvenance("),
   );
 
   test("the slice under test is real", () => {
@@ -2908,19 +2734,14 @@ describe("THE CATALOGUE LADDER never buys a whole song", () => {
   });
 
   test("THE RAIL — no full download is reachable from this tier", () => {
-    // The whole point of the cheap tier. A full download is ~6.5MB against a section's ~1.5MB, and
-    // 30,672 of them is ~200GB of metered residential proxy. Neither the full-song downloader nor
-    // the shared full-fingerprint walk may appear here.
     expect(ladder).not.toContain("runYtDownload");
     expect(ladder).not.toContain("findVerifiedUpload");
-    // …and every download it DOES make is a section.
+
     expect(ladder).toContain("runYtSection(");
     expect(source).toContain('"--download-sections"');
   });
 
   test("it inherits the provenance rail — not one capture column leaves it", () => {
-    // Same ruling as the phase below: a backfill that could move a capture column could replace a
-    // finding's clean archived audio, which is the trade the pilot rejected.
     for (const column of [
       "captureStatus",
       "captureVerification",
@@ -2933,7 +2754,7 @@ describe("THE CATALOGUE LADDER never buys a whole song", () => {
     ]) {
       expect(ladder).not.toContain(column);
     }
-    // `source_audio_key` is READ — it is where the archived reference lives — and never written.
+
     expect(ladder).toContain("row.sourceAudioKey");
     expect(ladder).not.toContain("sourceAudioKey:");
     expect(ladder).not.toContain("sourceAudioRejected:");
@@ -2941,11 +2762,10 @@ describe("THE CATALOGUE LADDER never buys a whole song", () => {
   });
 
   test("each rung reports its OWN verdict, so the receipt cannot overclaim", () => {
-    // The Topic rung compared no audio, so it says so and the server renders the weaker sentence.
     expect(ladder).toContain('youtubeVerification: "metadata-match"');
-    // The segment rung DID compare audio, against the archive rather than a preview.
+
     expect(ladder).toContain('youtubeVerification: "archive-match"');
-    // Neither borrows the capture sweep's field, and the sweep never rules on officialness.
+
     expect(ladder).not.toContain("captureVerification");
     expect(ladder).not.toContain("youtubeVideoOfficial");
   });
@@ -2969,21 +2789,15 @@ describe("THE CATALOGUE LADDER never buys a whole song", () => {
   });
 
   test("AN EXHAUSTED ROW MOVES THE STREAK — it is never re-served forever", () => {
-    // The ledger law. `no-match` stamps the re-ask window AND moves the can't-conclude streak;
-    // `inconclusive` moves the streak alone, because a CDN refusal is not an answer and must not
-    // burn the row's window — but a row that is refused forever must still stop being asked.
     expect(ladder).toContain('youtubeVerification: "no-match"');
     expect(ladder).toContain('youtubeVerification: "inconclusive"');
-    // …and neither carries an id. A row concludes nothing, or it concludes with proof.
+
     const exhausted = ladder.slice(ladder.indexOf('youtubeVerification: "no-match"'));
 
     expect(exhausted.slice(0, 200)).not.toContain("youtubeVideoId");
   });
 
   test("a TRANSIENT failure moves the streak too — a search that never answers is the loop", () => {
-    // The outcome most likely to repeat: a row whose query the proxy cannot answer gets no stamp,
-    // comes straight back next tick, and holds the head of the queue forever. Reported rather than
-    // swallowed, and the report is itself best-effort, because the thing that failed may be the API.
     const failurePath = ladder.slice(ladder.indexOf("} catch (error) {"));
 
     expect(failurePath).toContain('youtubeVerification: "inconclusive"');
@@ -2992,8 +2806,6 @@ describe("THE CATALOGUE LADDER never buys a whole song", () => {
   });
 
   test("a DEFERRED row is not written to at all", () => {
-    // The segment budget ran out under it. It concluded nothing, cost nothing, and is asked again
-    // next tick; stamping it would spend a 90-day window on a queue position.
     expect(ladder).toContain("deferred = true");
     expect(ladder).toMatch(
       /if \(deferred\) \{\s*counts\.deferred \+= 1;\s*\n\s*return "deferred";/,
@@ -3006,16 +2818,12 @@ describe("the catalogue tier's budget accounting", () => {
   const phase = source.slice(source.indexOf("async function runProvenancePhase("));
 
   test("SEGMENT DOWNLOADS respect the operator's limit strictly", () => {
-    // `PROVENANCE_CATALOGUE_LIMIT` is still THE knob and it now meters downloads: one shared
-    // counter, decremented per section, checked before every one.
     expect(phase).toContain("const segmentBudget = { segments: catalogueRoom }");
     expect(source).toContain("budget.segments -= 1");
     expect(source).toContain("if (budget.segments <= 0)");
   });
 
   test("SEARCHES are budgeted generously — they are 139KB, not the bandwidth", () => {
-    // Most rows conclude on rung 1 for the price of a search, so metering rows at the download's
-    // rate would throw the cheap tier's whole point away.
     expect(phase).toContain(
       "limit: catalogueRoom * Math.max(1, Math.trunc(PROVENANCE_SEARCH_FACTOR) || 1)",
     );
@@ -3023,7 +2831,6 @@ describe("the catalogue tier's budget accounting", () => {
   });
 
   test("the shipped default still keeps the catalogue DARK", () => {
-    // Unchanged: the ladder exists, and it spends nothing until the operator opens the sub-cap.
     expect(source).toContain('process.env.FLUNCLE_CAPTURE_PROVENANCE_CATALOGUE_LIMIT ?? "0"');
     expect(splitProvenanceBudget(2, 0).catalogue).toBe(0);
   });
@@ -3074,7 +2881,6 @@ describe("the catalogue tier's budget accounting", () => {
   });
 
   test("a tick with no ladder work reports zeroes, never absent keys", () => {
-    // The catalogue budget is shut by default, so this is the shape an operator reads every night.
     const summary = buildCaptureSummary({
       batch: 1,
       botChallenges: 0,
@@ -3090,14 +2896,6 @@ describe("the catalogue tier's budget accounting", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// THE DEAD-FETCHER TRIPWIRE, from both sides.
-//
-// It must fire on the wall — every attempt failing — and stay silent on the ordinary partial
-// batch this sweep produces all day, on a sample too small to mean anything, and on a tick whose
-// rows the server's budget refused rather than the fetcher.
-// ---------------------------------------------------------------------------
-
 const NO_FAILURES = {
   failureRecording: 0,
   proxy: 0,
@@ -3109,8 +2907,6 @@ const NO_FAILURES = {
 
 describe("captureBlindVerdict", () => {
   test("QUIET: the worst honest batch this sweep measures is still a pass", () => {
-    // The widest healthy failure share in a fortnight of attempting ticks was 55%, and the bulk
-    // sat at or under a third. Both are far under the bar.
     expect(
       captureBlindVerdict({
         attempts: 11,
@@ -3141,8 +2937,6 @@ describe("captureBlindVerdict", () => {
   });
 
   test("QUIET: an unmatched row proves the fetcher works, so it is never a failure", () => {
-    // Bytes arrived and the fingerprint refused them. Counting it as a failure would let a good
-    // fetcher on a bad-metadata day read as a dead one.
     expect(
       captureBlindVerdict({
         attempts: 10,
@@ -3170,8 +2964,7 @@ describe("captureBlindVerdict", () => {
         failures: { ...NO_FAILURES, proxy: 7, ytDlp: 1 },
       }),
     ).toBe("proxy_failing");
-    // An uncleared challenge also lands as a yt-dlp failure downstream, so naming the challenge
-    // is the more useful truth when every failure carried one.
+
     expect(
       captureBlindVerdict({
         attempts: 6,
@@ -3180,7 +2973,7 @@ describe("captureBlindVerdict", () => {
         failures: { ...NO_FAILURES, ytDlp: 6 },
       }),
     ).toBe("bot_challenged");
-    // Nothing recognisable dominating is still a wall; the reason says only that.
+
     expect(
       captureBlindVerdict({
         attempts: 5,
@@ -3210,7 +3003,6 @@ describe("the capture summary's added verdict", () => {
       failures: { ...NO_FAILURES, ytDlp: 12 },
     });
 
-    // The exact shape a dead fetcher wrote as a green row for thirteen days.
     expect(summary).toMatchObject({
       captureAttempts: 12,
       checked: 12,
@@ -3223,8 +3015,6 @@ describe("the capture summary's added verdict", () => {
   });
 
   test("QUIET: rows the server's budget refused are not attempts and cannot manufacture a wall", () => {
-    // Twelve rows in, eleven refused before any fetch, and the one real attempt failed. A share
-    // read off the BATCH would be a wall; read off attempts it is one unlucky row.
     const summary = buildCaptureSummary({
       ...base,
       batch: 12,
@@ -3255,10 +3045,6 @@ describe("the capture summary's added verdict", () => {
     expect(summary).not.toHaveProperty("reason");
   });
 });
-
-// ---------------------------------------------------------------------------
-// THE BATCHED COMMIT PHASE — one admitted lease per run of authorized rows.
-// ---------------------------------------------------------------------------
 
 describe("the batched capture commit", () => {
   const batchDirectory = mkdtempSync(join(tmpdir(), "fluncle-capture-batch-"));
@@ -3291,7 +3077,6 @@ describe("the batched capture commit", () => {
         : { attemptedAt: "2026-01-01T00:00:00.000Z", kind: "capture", outcome: "unmatched" },
   });
 
-  /** A fake admitted phase that writes the batch's response where the real child would. */
   function phaseWriting(receipts: (statePath: string) => unknown): {
     calls: string[];
     phase: (action: string, statePath: string) => "completed" | "yielded";
@@ -3330,7 +3115,6 @@ describe("the batched capture commit", () => {
 
     const dispositions = settleCollectedCommits(rows, 6, phase as never);
 
-    // ONE lease for six rows; the pre-batching shape was six.
     expect(calls).toEqual(["commit-batch"]);
     expect([...dispositions.values()]).toEqual(Array.from({ length: 6 }, () => "committed"));
   });
@@ -3400,7 +3184,7 @@ describe("the batched capture commit", () => {
     const dispositions = settleCollectedCommits(rows, 6, phase as never);
 
     expect(dispositions.get("track-a")).toBe("committed");
-    // The journal keeps its receipt, so the row is reconciled rather than re-written.
+
     expect(dispositions.get("track-b")).toBe("pending");
   });
 
@@ -3425,7 +3209,6 @@ describe("the batched capture commit", () => {
 
     settleCollectedCommits(rows, 6, phase as never);
 
-    // A twelve-row tick therefore commits in two phases, which is the K the watchdog window sets.
     expect(calls).toEqual(["commit-batch", "commit-batch"]);
   });
 
@@ -3446,7 +3229,7 @@ describe("the deferred outcome a batched commit resolves", () => {
     expect(resolveDeferredOutcome("deferred:unmatched", "committed")).toBe("unmatched");
     expect(resolveDeferredOutcome("deferred:failed", "committed")).toBe("failed");
     expect(resolveDeferredOutcome("deferred:done", "rejected")).toBe("rejected");
-    // Anything the batch could not settle is unproven, never a landed write.
+
     expect(resolveDeferredOutcome("deferred:done", "pending")).toBe("pending");
     expect(resolveDeferredOutcome("deferred:done", undefined)).toBe("pending");
   });
@@ -3454,8 +3237,6 @@ describe("the deferred outcome a batched commit resolves", () => {
 
 describe("the capture batch's version tolerance", () => {
   test("takes the per-row phases against a Worker that advertises no widths", () => {
-    // New sweep, OLD Worker: the missing op must never be discovered as a 404 halfway through a
-    // batch whose downloads are already paid for.
     expect(parseCaptureCapabilities(undefined)).toBeUndefined();
     expect(parseCaptureCapabilities({})).toBeUndefined();
     expect(parseCaptureCapabilities({ prepareTrackCaptures: 0 })).toBeUndefined();
@@ -3480,10 +3261,6 @@ describe("the capture batch's version tolerance", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// THE TICK'S BATCH CAP — a typo guard on the one knob that widens metered spend.
-// ---------------------------------------------------------------------------
-
 describe("the capture batch cap", () => {
   test("takes the default when unset or empty", () => {
     expect(resolveCaptureBatchCap(undefined)).toBe(DEFAULT_CAPTURE_BATCH_CAP);
@@ -3496,17 +3273,11 @@ describe("the capture batch cap", () => {
   });
 
   test("refuses anything that would widen the metered spend by accident", () => {
-    // A value the contract could never accept per request, a zero-width batch, a float, an
-    // exponent, and a word all fall back to the default rather than through.
     for (const raw of [String(MAX_CAPTURE_BATCH_CAP + 1), "0", "-3", "2.5", "1e3", "lots"]) {
       expect(resolveCaptureBatchCap(raw)).toBe(DEFAULT_CAPTURE_BATCH_CAP);
     }
   });
 });
-
-// ---------------------------------------------------------------------------
-// THE PER-ITEM TIMING the ledger publishes, so the batch width stops being a guess.
-// ---------------------------------------------------------------------------
 
 describe("the per-tick item timing", () => {
   test("publishes the max and the median of what the server measured", () => {
@@ -3518,22 +3289,10 @@ describe("the per-tick item timing", () => {
   });
 
   test("says nothing at all when no batched phase reported a reading", () => {
-    // An older Worker answers no `elapsedMs`, and a tick with no batched phase has no items. Either
-    // way the ledger gets an honest gap rather than a fabricated zero.
     expect(summariseItemTiming([])).toBeUndefined();
     expect(summariseItemTiming([Number.NaN, -1])).toBeUndefined();
   });
 });
-
-// ---------------------------------------------------------------------------
-// THE TICK'S SHARED RESERVATION — the count cap stays exact across several calls.
-//
-// The rolling-24h count ledger is charged at COMMIT, so every prepare inside a tick reads the same
-// pre-tick remaining count. One call can reserve against it; a SECOND call cannot, unless it is
-// told what the first already spent. A tick makes that second call whenever its batch is wider than
-// the op's advertised width, or whenever a call's wall budget deferred a tail. These cases are the
-// arithmetic of that, driven through the real chunking loop with a fake admitted phase.
-// ---------------------------------------------------------------------------
 
 describe("the tick's shared capture reservation", () => {
   const reservationDirectory = mkdtempSync(join(tmpdir(), "fluncle-capture-reserve-"));
@@ -3542,10 +3301,6 @@ describe("the tick's shared capture reservation", () => {
     rmSync(reservationDirectory, { force: true, recursive: true });
   });
 
-  /**
-   * A server that honours the contract: it authorizes at most `remaining - reservedThisTick`
-   * uncertified rows per call, defers anything past `answerLimit`, and records every call it saw.
-   */
   function fakeServer(options: {
     answerLimit?: number;
     certified?: (trackId: string) => boolean;
@@ -3571,7 +3326,7 @@ describe("the tick's shared capture reservation", () => {
           return { elapsedMs: 0, prepared: false, reason: "deferred", trackId: item.trackId };
         }
         const isCertified = certified(item.trackId);
-        // A certified finding is never gated and never consumes the catalogue's budget.
+
         if (!isCertified) {
           if (budget <= 0) {
             return { elapsedMs: 1, prepared: false, reason: "ineligible", trackId: item.trackId };
@@ -3606,8 +3361,6 @@ describe("the tick's shared capture reservation", () => {
   }
 
   test("authorizes exactly the remaining count when the tick is wider than the op", () => {
-    // Batch cap 20 against an advertised width of 12 and five downloads left: the tail takes a
-    // SECOND batched call, and the two calls share one budget rather than each seeing five.
     const ids = Array.from({ length: 20 }, (_, index) => `track-${index}`);
     const { calls, phase } = fakeServer({ remaining: 5 });
 
@@ -3615,23 +3368,22 @@ describe("the tick's shared capture reservation", () => {
 
     expect(calls).toHaveLength(2);
     expect(calls[0]?.reservedThisTick).toBe(0);
-    // The second call is told what the first spent, and spends the rest.
+
     expect(calls[1]?.reservedThisTick).toBe(5);
     expect(page?.reserved).toBe(5);
     const authorized = [...(page?.prepared.values() ?? [])].filter((entry) => entry.prepared);
     expect(authorized).toHaveLength(5);
-    // Every row got an answer; fifteen of them the refusal a closed budget gives.
+
     expect(page?.prepared.size).toBe(20);
   });
 
   test("a wall-budget deferred tail is re-asked in a batched call, never dropped to per-row", () => {
     const ids = Array.from({ length: 6 }, (_, index) => `track-${index}`);
-    // Each call answers only its first two rows; the rest come back `deferred`.
+
     const { calls, phase } = fakeServer({ answerLimit: 2, remaining: 3 });
 
     const page = prepareTickSnapshots(ids, "capture", 6, phase);
 
-    // Every call carries the running reservation, so the deferred tail cannot re-spend the cap.
     expect(calls.length).toBeGreaterThan(1);
     expect(calls.map((call) => call.reservedThisTick)).toEqual(
       calls.map((call) => call.reservedThisTick).sort((left, right) => left - right),
@@ -3649,7 +3401,6 @@ describe("the tick's shared capture reservation", () => {
 
     const page = prepareTickSnapshots(ids, "capture", 12, phase);
 
-    // One catalogue row rides the budget, the other is refused; both findings prepare regardless.
     expect(page?.reserved).toBe(1);
     expect(page?.prepared.get("cert-0")?.prepared).toBe(true);
     expect(page?.prepared.get("cert-1")?.prepared).toBe(true);
@@ -3659,7 +3410,7 @@ describe("the tick's shared capture reservation", () => {
 
   test("stops rather than spending another lease when a call answers nothing", () => {
     const ids = ["track-0", "track-1"];
-    // A server that defers everything makes no progress; the loop must not spin on it.
+
     const { calls, phase } = fakeServer({ answerLimit: 0, remaining: 5 });
 
     const page = prepareTickSnapshots(ids, "capture", 2, phase);
@@ -3675,7 +3426,6 @@ describe("the tick's shared capture reservation", () => {
     expect(page).toBeUndefined();
   });
 
-  /** A Worker newer than this bake: it puts a field on the prepared track the allow-list lacks. */
   function newerWorker(options: { extraFor: string; extra: Record<string, unknown> }) {
     const calls: string[][] = [];
     const phase = ((_action: string, statePath: string) => {
@@ -3702,9 +3452,6 @@ describe("the tick's shared capture reservation", () => {
   }
 
   test("a field this bake does not know leaves THAT row unreached — the rest of the tick proceeds", () => {
-    // A stale bake must degrade per row, never per tick: a throw here is a fatal summary before
-    // the worker pool starts, and one row a newer Worker described in words this box cannot read
-    // must not take the other rows with it.
     const ids = ["track-0", "track-newer", "track-2"];
     const { calls, phase } = newerWorker({
       extra: { fieldFromTheFuture: "x" },
@@ -3724,7 +3471,7 @@ describe("the tick's shared capture reservation", () => {
 
     expect([...(page?.prepared.keys() ?? [])].sort()).toEqual(["track-0", "track-2"]);
     expect(page?.unreached).toEqual(["track-newer"]);
-    // Answered for the tick: not frozen, and not asked again in a second call either.
+
     expect(calls).toHaveLength(1);
     const line = lines.find((entry) => entry.includes("this bake does not know"));
     expect(line).toContain("track-newer");
@@ -3732,8 +3479,6 @@ describe("the tick's shared capture reservation", () => {
   });
 
   test("a KNOWN key with a bad shape still fails closed", () => {
-    // The exact-key allow-list keeps its teeth for the shapes it knows: a `logId` that is not a
-    // string is a broken answer, not a newer vocabulary, and the tick refuses it as before.
     const { phase } = newerWorker({ extra: { logId: 42 }, extraFor: "track-bad" });
 
     expect(() => prepareTickSnapshots(["track-bad"], "capture", 12, phase)).toThrow(
@@ -3741,10 +3486,6 @@ describe("the tick's shared capture reservation", () => {
     );
   });
 });
-
-// ---------------------------------------------------------------------------
-// THE ANCHORED-FIRST ORDER'S RECEIPT — published, not assumed.
-// ---------------------------------------------------------------------------
 
 describe("the anchored split the tick publishes", () => {
   test("rides the summary beside the counts it explains", () => {
@@ -3769,16 +3510,15 @@ describe("the anchored split the tick publishes", () => {
       writes: { confirmed: 8, failed: 0, pending: 0 },
     });
 
-    // What the order handed out, and what the metered spend actually bought.
     expect(summary).toMatchObject({
       attemptsAnchored: 9,
       attemptsUnanchored: 3,
       doneAnchored: 7,
       doneUnanchored: 1,
     });
-    // The batch width's evidence rides the same line.
+
     expect(summary).toMatchObject({ itemMsMax: 12, itemMsP50: 8, itemSamples: 3 });
-    // The counts the tripwires read are untouched by either addition.
+
     expect(summary).toMatchObject({ checked: 12, done: 8, failed: 0 });
   });
 
@@ -3802,15 +3542,12 @@ describe("the anchored split the tick publishes", () => {
       writes: { confirmed: 1, failed: 0, pending: 0 },
     });
 
-    // An honest gap, never a fabricated zero.
     expect(summary.doneAnchored).toBeUndefined();
     expect(summary.itemMsMax).toBeUndefined();
   });
 });
 
 describe("the admitted phase child's argv guard", () => {
-  // The parent spawns `--admission-phase <action>` for every member of the action union; a guard
-  // that lags the union rejects the spawn and fails the WHOLE tick, so the guard reads the list.
   test("accepts every action the parent can spawn, and nothing else", () => {
     for (const action of CAPTURE_ADMISSION_ACTIONS) {
       expect(isCaptureAdmissionAction(action)).toBe(true);
@@ -3831,8 +3568,6 @@ describe("the admitted phase child's argv guard", () => {
   });
 
   test("the real child entrypoint accepts a batch action instead of throwing", () => {
-    // Drive the actual script the way `phaseCommand` spawns it. The state file is empty, so the
-    // child fails INSIDE the phase (a state-shape error), never at the argv guard.
     const dir = mkdtempSync(join(tmpdir(), "capture-argv-guard-"));
     try {
       const statePath = join(dir, "prepare-batch.json");
@@ -3856,21 +3591,15 @@ describe("the admitted phase child's argv guard", () => {
   });
 });
 
-// ── THE OPERATOR'S CAPTURE-SOURCE PIN (docs/the-ear.md § Wrong audio) ──────────────────────────
-//
-// The fingerprint gate is precision-over-recall by design; the pin is the one thing that outranks
-// it. These tests drive `findPinnedUpload` through its injected ports (no yt-dlp, no fpcalc, no
-// network) and pin the caller's wiring by reading the sweep's own source, the way the ladder's rails
-// are pinned above.
 describe("the operator's capture-source pin", () => {
   const source = readFileSync(new URL("./capture-sweep.ts", import.meta.url), "utf8");
   const pinnedWalk = source.slice(
-    source.indexOf("// ── THE PINNED SOURCE"),
-    source.indexOf("// ── Per-finding capture"),
+    source.indexOf("export type PinnedUploadPorts ="),
+    source.indexOf("type FindingOutcome ="),
   );
   const captureFn = source.slice(
     source.indexOf("async function captureFinding("),
-    source.indexOf("// ── THE CATALOGUE PROVENANCE LADDER"),
+    source.indexOf("export type ProvenanceLadderCounts ="),
   );
 
   const finding: CaptureFinding = {
@@ -3882,7 +3611,6 @@ describe("the operator's capture-source pin", () => {
     trackId: "track-pinned",
   };
 
-  /** A sticky session with one re-roll, exactly as `openProxySession` shapes it. */
   function fakeSession(): ProxySession & { rerolls: number } {
     const session = {
       reroll: () => {
@@ -3900,7 +3628,6 @@ describe("the operator's capture-source pin", () => {
     return session;
   }
 
-  /** Ports that download a real scratch file so the sha + cleanup paths run for real. */
   function fakePorts(
     dir: string,
     overrides: Partial<PinnedUploadPorts> = {},
@@ -3934,7 +3661,6 @@ describe("the operator's capture-source pin", () => {
     }
   });
 
-  /** Capture the sweep's stderr lines for one call. */
   async function withLog<T>(run: () => Promise<T>): Promise<{ lines: string[]; value: T }> {
     const lines: string[] = [];
     const original = console.error;
@@ -3955,14 +3681,13 @@ describe("the operator's capture-source pin", () => {
       findPinnedUpload({ dir, finding, ports, session: fakeSession(), videoId: "dQw4w9WgXcQ" }),
     );
 
-    // One download, of exactly the pin, from YouTube — no search preceded it.
     expect(ports.downloads.map((candidate) => candidate.id)).toEqual(["dQw4w9WgXcQ"]);
     expect(ports.downloads[0]?.source).toBe("youtube");
     expect(value.videoId).toBe("dQw4w9WgXcQ");
     expect(value.verdict).toBe("operator");
     expect(value.source).toBe("youtube");
     expect(value.digest).toBe(createHash("sha256").update("bytes of dQw4w9WgXcQ").digest("hex"));
-    // Exactly one line says the pin was honoured, naming the row and the id.
+
     const honoured = lines.filter((line) => line.includes("capture-source pin"));
     expect(honoured).toHaveLength(1);
     expect(honoured[0]).toContain("012.3.4A");
@@ -3984,10 +3709,6 @@ describe("the operator's capture-source pin", () => {
   });
 
   test("the pinned walk NEVER touches the rejection memory — it is not even handed it", () => {
-    // The memory describes the LADDER's rejections. A pinned mismatch is captured on the operator's
-    // authority and must not be remembered as wrong audio, or the very next re-capture would refuse
-    // the upload he chose. The function has no `memory` parameter at all, and the slice names none of
-    // the memory's helpers.
     for (const memoryTouch of [
       "memory.",
       "memory:",
@@ -4000,8 +3721,7 @@ describe("the operator's capture-source pin", () => {
     ]) {
       expect(pinnedWalk).not.toContain(memoryTouch);
     }
-    // …and the caller hands the memory ONLY to the ladder walk: the pinned call names exactly the
-    // override flag, the directory, the row, the session and the id.
+
     const pinnedCall = captureFn.slice(
       captureFn.indexOf("return findPinnedUpload({"),
       captureFn.indexOf("return findVerifiedUpload({"),
@@ -4021,7 +3741,7 @@ describe("the operator's capture-source pin", () => {
         fingerprinted += 1;
         return [1, 2, 3];
       },
-      // An hour-long set against a five-minute finding.
+
       probeDurationSec: () => 3_600,
     });
 
@@ -4044,17 +3764,12 @@ describe("the operator's capture-source pin", () => {
     expect(lines.some((line) => line.includes("pinned upload fails the duration guard ("))).toBe(
       true,
     );
-    // The bytes are gone and the gate was never even consulted for a file that fails the guard.
+
     expect(existsSync(join(dir, "audio.webm"))).toBe(false);
     expect(fingerprinted).toBe(0);
   });
 
   test("the DURATION OVERRIDE waives the guard for the pinned id only — a 233 s edit lands on a 365 s finding, logged, on operator authority", async () => {
-    // `allowDurationMismatch` is the operator saying, with the two lengths in front of him, that
-    // this different EDIT is the recording he wants captured. Without it the same upload is the
-    // duration refusal below (`failed`, retryable); with it the file is kept, fingerprinted for the
-    // record, and captured `operator`. The row's own `duration_ms` is never touched here — the
-    // returned upload carries bytes and a verdict, no length.
     const longFinding: CaptureFinding = { ...finding, durationMs: 365_000 };
     const refusedDir = workdir();
     const refused = await withLog(() =>
@@ -4102,11 +3817,11 @@ describe("the operator's capture-source pin", () => {
       ),
     ).toBe(true);
     expect(lines.some((line) => line.includes("fails the duration guard"))).toBe(false);
-    // The caller hands the override in from the prepared row's flag, and only ever as a boolean.
+
     expect(captureFn).toContain(
       "allowDurationMismatch: finding.captureSourcePinAllowDuration === true,",
     );
-    // …and the sweep's snapshot validator admits the flag as a boolean, nothing looser.
+
     expect(source).toContain('"captureSourcePinAllowDuration",');
     expect(source).toContain(
       'validOptionalPreparedBoolean(value, "captureSourcePinAllowDuration")',
@@ -4134,8 +3849,6 @@ describe("the operator's capture-source pin", () => {
   });
 
   test("the duration refusal is a THROW, so the caller lands `failed` (retryable), never `unmatched`", () => {
-    // `findPinnedUpload` returns `Promise<VerifiedUpload>` — never null — so the caller's `!accepted`
-    // (unmatched) branch is unreachable for a pinned row; every refusal is the catch's `failed`.
     expect(pinnedWalk).toContain("}): Promise<VerifiedUpload> {");
     expect(pinnedWalk).not.toContain("return null");
     expect(pinnedWalk).not.toContain('"unmatched"');
@@ -4144,8 +3857,7 @@ describe("the operator's capture-source pin", () => {
 
   test("a fingerprint MISMATCH is logged with its BER and captured anyway, as `operator-verified`", async () => {
     const dir = workdir();
-    // Two fingerprints long enough to compare (≥ MIN_OVERLAP_FRAMES) and bitwise opposite, so the
-    // sliding window reports a BER of 1.0 — the clearest mismatch there is.
+
     const reference = Array.from({ length: 40 }, () => 0);
     const opposite = Array.from({ length: 40 }, () => -1);
     const ports = fakePorts(dir, {
@@ -4161,14 +3873,13 @@ describe("the operator's capture-source pin", () => {
     const mismatchLine = lines.find((line) => line.includes("mismatches the store reference"));
     expect(mismatchLine).toContain("ber=1.000");
     expect(mismatchLine).toContain("capturing on operator authority");
-    // Captured regardless, with the operator's verdict — which maps to the stamp the backfill skips.
+
     expect(value.verdict).toBe("operator");
     expect(captureVerificationFor(value.verdict)).toBe("operator-verified");
     expect(existsSync(value.path)).toBe(true);
   });
 
   test("a MATCH on a pinned row is still recorded as `operator-verified`, never `preview-match`", async () => {
-    // The pin is the authority whatever the gate says: one provenance per row, honestly named.
     const dir = workdir();
     const same = Array.from({ length: 40 }, (_, index) => index);
     const ports = fakePorts(dir, {
@@ -4205,7 +3916,7 @@ describe("the operator's capture-source pin", () => {
 
     expect(error).toBeInstanceOf(Error);
     expect((error as Error).message).toContain("yt-dlp download failed");
-    // A plain 403 is not a duration refusal — it is the ladder's ordinary retryable failure.
+
     expect(isPinnedDurationRefusal(error)).toBe(false);
   });
 
@@ -4242,40 +3953,27 @@ describe("the operator's capture-source pin", () => {
   });
 
   test("the caller routes a pinned row to the pinned walk and the ladder otherwise", () => {
-    // The pin is read off the row the sweep already holds (the prepared snapshot carries it), and a
-    // blank pin is no pin.
     expect(captureFn).toContain("const pin = finding.captureSourcePin?.trim();");
     expect(captureFn).toMatch(/if \(pin\) \{\s*return findPinnedUpload\(/);
     expect(captureFn).toContain("return findVerifiedUpload({");
-    // …and the prepared-snapshot validator admits the pin, so a pinned row survives the freeze.
+
     expect(source).toContain('"captureSourcePin",');
     expect(source).toContain('validOptionalPreparedString(value, "captureSourcePin", 64)');
   });
 
   test("the journal replay stamps the same verification the inline path does", () => {
-    // Both exits map the verdict through ONE function, so a crash between download and commit
-    // cannot turn an operator-verified capture into a preview-match on replay.
     expect(source).toContain("const verification = captureVerificationFor(completion.verdict);");
     expect(source).toContain("const verification = captureVerificationFor(accepted.verdict);");
   });
 });
 
-// ── THE CONSENSUS CHECK (docs/the-ear.md § Wrong audio) ────────────────────────────────────────
-//
-// The preview gate's one blind spot: a store preview cut from a low-information section scores a BER
-// around 0.33 against EVERY genuine upload, while the genuine uploads agree with each other at
-// 0.02–0.04 and a wrong song agrees with nothing. These tests drive the ladder walk through its
-// injected ports (no yt-dlp, no fpcalc, no network) with fingerprints shaped to those measured
-// figures, and prove the walk's memory, its file handling, and its download budget around them.
 describe("the consensus check — independent uploads agreeing where the preview could not", () => {
   const source = readFileSync(new URL("./capture-sweep.ts", import.meta.url), "utf8");
   const FRAMES = 600;
 
-  /** A deterministic pseudo-random 32-bit fingerprint — one "recording" per seed. */
   function recording(seed: number, frames = FRAMES): number[] {
     let state = seed >>> 0 || 1;
     return Array.from({ length: frames }, () => {
-      // xorshift32
       state ^= state << 13;
       state >>>= 0;
       state ^= state >>> 17;
@@ -4285,12 +3983,6 @@ describe("the consensus check — independent uploads agreeing where the preview
     });
   }
 
-  /**
-   * Another upload of the SAME recording: flip `bitsPerFrame` bits in every `everyNth` frame — a
-   * BER of bitsPerFrame / (32 × everyNth). 1/1 ≈ 0.031 (UKF vs Topic), 1/2 ≈ 0.016 (UKF vs
-   * Sleepless), and 1/1 plus a second bit every third frame ≈ 0.042 (Sleepless vs Topic, UKF vs
-   * Flatch) — the measured spread of genuine mutual agreement.
-   */
   function reupload(base: readonly number[], bitsPerFrame: number, everyNth = 1): number[] {
     return base.map((frame, index) => {
       if (index % everyNth !== 0) {
@@ -4304,18 +3996,12 @@ describe("the consensus check — independent uploads agreeing where the preview
     });
   }
 
-  /** Flip one more bit in every third frame (offset `phase`) — a second, slightly farther upload. */
   function thirdFrameBit(base: readonly number[], phase: number, shift: number): number[] {
     return base.map((frame, index) =>
       index % 3 === phase ? (frame ^ (1 << ((index + shift) % 32))) | 0 : frame,
     );
   }
 
-  /**
-   * The LOW-INFORMATION store preview: the recording's own middle 240 frames with 11 of 32 bits
-   * disagreeing in every frame — BER 0.344, the measured "preview vs the distributor's own upload"
-   * figure that the gate (0.20) rightly refuses and that no threshold tweak should admit.
-   */
   function lowInformationPreview(base: readonly number[]): number[] {
     const start = Math.floor((base.length - 240) / 2);
     return base.slice(start, start + 240).map((frame) => (frame ^ 0x7ff) | 0);
@@ -4330,8 +4016,6 @@ describe("the consensus check — independent uploads agreeing where the preview
   const FLATCH = thirdFrameBit(reupload(RECORDING, 1), 1, 5);
 
   test("the fixtures sit where the box measured them", () => {
-    // Genuine uploads agree with each other well inside the gate's 0.20; the preview sits at 0.34
-    // against every one of them; the wrong song sits at ≈0.5 against everything.
     const ber = (a: readonly number[], b: readonly number[]) => mutualWindowMatch(a, b)?.ber ?? 1;
     expect(ber(UKF, TOPIC)).toBeGreaterThan(0.01);
     expect(ber(UKF, TOPIC)).toBeLessThan(0.05);
@@ -4396,14 +4080,6 @@ describe("the consensus check — independent uploads agreeing where the preview
     }
   }
 
-  /**
-   * Ports over a fixed candidate list, in SEARCH order. Every candidate carries the finding's own
-   * title and no trust, and its listed duration is `durationSec`, so the ranker orders them by
-   * closeness to the row's length — the fixtures below pick durations so rank == list order. The
-   * download writes `bytes of <id>` into the downloader's `audio.webm` slot exactly as yt-dlp does
-   * (so a held file MUST be moved off it or the next download clobbers it), the fingerprint port
-   * reads the id back out of the bytes, and ffprobe answers the listed duration.
-   */
   function fakePorts(uploads: readonly Upload[], overrides: Partial<LadderPorts> = {}) {
     const downloads: string[] = [];
     const byId = new Map(uploads.map((upload) => [upload.id, upload]));
@@ -4465,20 +4141,18 @@ describe("the consensus check — independent uploads agreeing where the preview
     expect(value?.verdict).toBe("consensus");
     expect(value?.videoId).toBe("ukf00000001");
     expect(captureVerificationFor("consensus")).toBe("consensus-verified");
-    // The accepted file sits back on the `audio.<ext>` slot — the ONE file name the journal's
-    // completion gate admits — with the bytes that were downloaded for it, and the walk reads them
-    // back for the caller; the work directory looks exactly like a preview-match capture's.
+
     expect(value?.path).toBe(join(dir, "audio.webm"));
     expect(existsSync(value?.path ?? "")).toBe(true);
     expect(Buffer.from(value?.bytes ?? []).toString("utf8")).toBe("bytes of ukf00000001");
     expect(value?.digest).toBe(createHash("sha256").update("bytes of ukf00000001").digest("hex"));
     expect(readdirSync(dir)).toEqual(["audio.webm"]);
-    // The agreeing upload is NOT remembered as wrong audio; the disagreeing one IS.
+
     expect(memory.dirty).toBe(true);
     expect(memory.sources.map((entry) => entry.videoId)).toEqual(["wrong0000001"]);
-    // Exactly the walk's three downloads — consensus adds none.
+
     expect(downloads).toEqual(["ukf00000001", "topic0000001", "wrong0000001"]);
-    // The one line that names the verdict, with the BER evidence.
+
     const line = lines.find((entry) => entry.includes("accepting ukf00000001 on consensus"));
     expect(line).toContain("preview gate rejected 3 duration-verified candidate(s)");
     expect(line).toContain("2 of them agree with each other (ber=0.0");
@@ -4493,7 +4167,7 @@ describe("the consensus check — independent uploads agreeing where the preview
     const { dir, memory, value } = await walk(uploads);
 
     expect(value).toBeNull();
-    // The plain preview-gate memory: every preview mismatch remembered, in walk order.
+
     expect(memory.sources.map((entry) => entry.videoId)).toEqual([
       "ukf00000001",
       "ukf00000002",
@@ -4513,8 +4187,6 @@ describe("the consensus check — independent uploads agreeing where the preview
     expect(value).toBeNull();
     expect(memory.sources.map((entry) => entry.videoId)).toEqual(["ukf00000001", "nochan00001"]);
 
-    // An EMPTY or blank channel string is no channel either — independent of what the search
-    // parser hands over, it can neither lead nor count toward independence.
     const blank = [
       {
         candidate: { channel: "", channelId: "", durationSec: 259, id: "a", title: "" },
@@ -4535,12 +4207,6 @@ describe("the consensus check — independent uploads agreeing where the preview
   });
 
   test("END TO END: a consensus acceptance passes the journal's completion gate and advances the journal", async () => {
-    // The journal (`runJournaledCaptureProvider`) admits exactly one completed file name,
-    // `audio.<ext>`, and its replay path reads that name out of the work directory. A consensus
-    // capture therefore has to leave the work directory looking exactly like a preview-match
-    // capture — otherwise every consensus acceptance would throw at the gate and land `failed`.
-    // This drives the real journal around the real walk, with the same completion the capture
-    // tick builds, and checks the journal's recorded completion names the slot file.
     const uploads: Upload[] = [
       { channelId: "UC-one", durationSec: 259, fingerprint: UKF, id: "ukf00000001" },
       { channelId: "UC-two", durationSec: 260, fingerprint: TOPIC, id: "topic0000001" },
@@ -4581,19 +4247,13 @@ describe("the consensus check — independent uploads agreeing where the preview
       verdict: "consensus",
       videoId: "ukf00000001",
     });
-    // The rejection memory rides the completion, so a replay after a crash persists it too.
+
     expect(JSON.parse(String(journal.attempt.completion?.rejectedSources))).toMatchObject([
       { videoId: "wrong0000001" },
     ]);
   });
 
   test("a provider throw settles as `failed` through the same journal path — the intent journal never wedges a row", async () => {
-    // A thrown provider error is caught in-process by the capture tick, which writes its `failed`
-    // result to the SAME journal path (`persistAndCommit` → `progressPath(trackId, "capture")`),
-    // replacing the provider-intent journal and committing it. So the next tick finds no journal
-    // and runs the provider again. Proven here with the real journal + the real persist path over
-    // fake reconciliation ports; the `provider-ambiguous` hold is reserved for a PROCESS DEATH
-    // mid-provider, which is the one case nothing in-process can rule on.
     const journalDir = workdir();
     const journalPath = join(journalDir, `${"d".repeat(64)}.json`);
     let providerCalls = 0;
@@ -4602,7 +4262,7 @@ describe("the consensus check — independent uploads agreeing where the preview
         completedAt: "2026-09-08T10:00:00.000Z",
         digest: "e".repeat(64),
         ext: "webm",
-        // The shape the gate refuses — a completed file off the slot.
+
         fileName: "held-x.webm",
         outcome: "accepted",
         source: "youtube",
@@ -4627,7 +4287,6 @@ describe("the consensus check — independent uploads agreeing where the preview
       attempt: { state: "provider-intent" },
     });
 
-    // The capture tick's catch: the `failed` result lands on the same path and commits.
     const progressPorts: CaptureProgressPorts = {
       admittedPhase: () => {
         throw new Error("unexpected admitted phase");
@@ -4664,11 +4323,7 @@ describe("the consensus check — independent uploads agreeing where the preview
       { attemptedAt: "2026-09-08T10:00:00.000Z", kind: "capture", outcome: "failed" },
       progressPorts,
     );
-    // The fake ports cannot commit (no admitted phase), so the persist reads `pending` — and what
-    // the journal now holds is the `failed` RESULT with its receipt, never the provider ATTEMPT.
-    // A result journal is what `recoverCaptureProgress` finishes at the head of the next tick (the
-    // server settles it, the file goes); an attempt journal is the one shape that is held as
-    // ambiguous forever. So a caught provider error can never leave a row wedged.
+
     expect(providerCalls).toBe(1);
     const settled = JSON.parse(readFileSync(journalPath, "utf8")) as Record<string, unknown>;
     expect(settled).not.toHaveProperty("attempt");
@@ -4676,10 +4331,10 @@ describe("the consensus check — independent uploads agreeing where the preview
       receipt: { operationId: "track.capture" },
       result: { kind: "capture", outcome: "failed" },
     });
-    // …and the capture tick's own catch is exactly this call: same track, same kind, same path.
+
     const captureFn = source.slice(
       source.indexOf("async function captureFinding("),
-      source.indexOf("// ── THE CATALOGUE PROVENANCE LADDER"),
+      source.indexOf("export type ProvenanceLadderCounts ="),
     );
     const failurePath = captureFn.slice(captureFn.indexOf("} catch (error) {"));
     expect(failurePath).toContain('outcome: "failed"');
@@ -4689,7 +4344,7 @@ describe("the consensus check — independent uploads agreeing where the preview
   test("an agreeing upload that FAILED the duration guard has no say — one held witness is no consensus", async () => {
     const uploads: Upload[] = [
       { channelId: "UC-one", durationSec: 259, fingerprint: UKF, id: "ukf00000001" },
-      // Listed at the row's length so the ranker admits it, but the REAL file is a 6-minute edit.
+
       { channelId: "UC-two", durationSec: 260, fingerprint: TOPIC, id: "topic0000001" },
     ];
     const { memory, value } = await walk(uploads, {
@@ -4697,14 +4352,11 @@ describe("the consensus check — independent uploads agreeing where the preview
     });
 
     expect(value).toBeNull();
-    // The wrong-length upload is skipped, not remembered (a plain miss); the held one is remembered.
+
     expect(memory.sources.map((entry) => entry.videoId)).toEqual(["ukf00000001"]);
   });
 
   test("a preview MATCH later in the walk wins over any consensus — the held pair is remembered as before", async () => {
-    // The third candidate carries the section the PREVIEW recognises, so the gate passes it; the
-    // two earlier uploads — which agree with each other — were still refused by the preview and
-    // are remembered as wrong audio, the plain preview-gate memory.
     const full = [...WRONG_SONG];
     full.splice(Math.floor((full.length - 240) / 2), 240, ...PREVIEW);
     const uploads: Upload[] = [
@@ -4723,9 +4375,6 @@ describe("the consensus check — independent uploads agreeing where the preview
   });
 
   test("no extra downloads: the held set is bounded by the walk's own attempt budget", async () => {
-    // Five ranked candidates; the walk downloads its DOWNLOAD_ATTEMPTS (3 by default) and no more —
-    // the two that would have agreed at ranks 4 and 5 are never fetched, and the walk lands where
-    // it always did. Consensus reads the files already on disk; it never widens the budget.
     const uploads: Upload[] = [
       { channelId: "UC-x", durationSec: 259, fingerprint: WRONG_SONG, id: "x0000000001" },
       { channelId: "UC-y", durationSec: 260, fingerprint: recording(5), id: "y0000000001" },
@@ -4785,9 +4434,6 @@ describe("the consensus check — independent uploads agreeing where the preview
   });
 
   test("findConsensus — every downloaded witness counts, the highest-ranked leads, no channel means no vote", () => {
-    // The measured case: four duration-verified uploads from four channels, all refused by the
-    // preview, all agreeing with each other — the fourth included, which is why the check runs
-    // over EVERY held candidate and not a top-N of them.
     const held = [
       {
         candidate: { channelId: "UC-ukf", durationSec: 259, id: "ukf", title: "" },
@@ -4816,14 +4462,12 @@ describe("the consensus check — independent uploads agreeing where the preview
     ]);
     expect(verdict?.bers.every((ber) => ber > 0 && ber < 0.1)).toBe(true);
 
-    // A leading candidate with no channel is skipped; the next independent pair still forms.
     const unnamedFirst = [
       { candidate: { durationSec: 259, id: "anon", title: "" }, fingerprint: UKF },
       ...held.slice(1),
     ];
     expect(findConsensus(unnamedFirst)?.accepted.candidate.id).toBe("sleepless");
 
-    // Two channels, two different recordings: nobody agrees, no consensus.
     expect(
       findConsensus([
         ...held.slice(0, 1),
@@ -4833,7 +4477,7 @@ describe("the consensus check — independent uploads agreeing where the preview
         },
       ]),
     ).toBeNull();
-    // Fewer than two held: never.
+
     expect(findConsensus(held.slice(0, 1))).toBeNull();
     expect(findConsensus([])).toBeNull();
   });
@@ -4841,7 +4485,7 @@ describe("the consensus check — independent uploads agreeing where the preview
   test("the journal replay and the inline path stamp `consensus-verified` through the ONE mapping", () => {
     expect(captureVerificationFor("consensus")).toBe("consensus-verified");
     expect(source).toContain('verdict: "consensus" | "match" | "no-reference" | "operator"');
-    // The commit types admit the verdict on both the box and the Worker side of the wire.
+
     expect(source).toContain('"consensus-verified"');
     const contract = readFileSync(
       new URL("../../../../packages/contracts/src/orpc/admin-tracks.ts", import.meta.url),

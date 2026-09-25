@@ -10,6 +10,12 @@ Capture's per-finding work has an **unbounded tail**: it spawns `yt-dlp` against
 
 ## What a run does
 
+The proxy session stays on one exit IP for each download because YouTube can bind media URLs to the IP that fetched the player response. A bot challenge is an exit-IP ruling: the sweep tries one fresh sticky session before considering a player-client fallback, even when the challenge output also contains a 403. A plain YouTube HTTP 403 can use that fallback. Every challenge is counted, but a challenge cleared by the re-roll is recoverable friction rather than `/status` strain.
+
+Capture accepts a public upload only after its duration guard and, when an official preview fingerprint exists, an audio match. Channel trust only ranks candidates; it never widens the duration guard. An absent or inconclusive fingerprint is recorded as unverified instead of claiming a match. The operator's source pin can override the fingerprint gate, but its duration guard remains unless the operator explicitly allows a duration mismatch.
+
+The catalogue provenance pass uses three bounded rungs: a matching artist Topic upload can establish metadata provenance, a non-Topic upload needs a short segment matched against audio already archived in private R2, and residual search variants feed those same gates. It never downloads a whole song or changes capture columns. A catalogue row's `source_audio_key` identifies the archived reference, so this pass must not feed its hash into capture's bad-audio rejection memory; on a wrong-audio recapture, that same key identifies the rejected prior capture. The catalogue sub-cap meters segment downloads rather than searches and cannot increase the tick's total provenance budget.
+
 Each tick is one `docker exec -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/capture-sweep.sh` (the in-container work runs as the unprivileged `hermes` user):
 
 1. The container's `capture-sweep.sh` sources the `0600` `${HOME}/.fluncle-secrets.env` (the AGENT `FLUNCLE_API_TOKEN`, the residential-proxy creds, the `fluncle-source-audio` R2 creds, `R2_ACCOUNT_ID`) and execs the bun orchestrator.

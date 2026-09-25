@@ -1,8 +1,3 @@
-// The shared recognizer for the Worker's typed due-work pending answer. Every sweep that reads a
-// guarded queue keys its paused outcome on these functions, so the boundary between "repair is
-// converging, try next tick" and "the Worker failed" is pinned here once:
-//
-//   bun test docs/agents/hermes/scripts/due-work-repair-pending.test.ts
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -20,14 +15,12 @@ import {
   throwIfPageRepairPending,
 } from "./due-work-repair-pending";
 
-/** The exact envelope the Worker's rails encoder emits for the typed pending fault. */
 const TYPED_PENDING_BODY = JSON.stringify({
   code: "due_work_maintenance_pending",
   message: "Due-work maintenance is still converging",
   ok: false,
 });
 
-/** The envelope an unexpected Worker fault emits. */
 const GENERIC_FAULT_BODY = JSON.stringify({
   code: "error",
   message: "Internal error",
@@ -76,7 +69,7 @@ describe("direct HTTP recognition", () => {
 describe("CLI recognition", () => {
   test("recognizes a failed command whose JSON payload carries the typed code", () => {
     expect(isDueWorkMaintenancePendingCliFailure(1, `${TYPED_PENDING_BODY}\n`)).toBe(true);
-    // The CLI pretty-prints its failure payload.
+
     expect(
       isDueWorkMaintenancePendingCliFailure(
         1,
@@ -156,10 +149,6 @@ describe("the paused outcome", () => {
   });
 });
 
-// THE GAUGE'S OK-RESPONSE TWIN. A `count=true` worklist read answers the backlog size while repair
-// converges and reports the withheld page as `debtPending`, so a sweep consuming the PAGE must
-// pause on that exactly as it paused on the typed 503 — otherwise it reports "no work" against a
-// real backlog, which is a detector that has gone blind.
 describe("a withheld page inside an OK response", () => {
   test("pauses on debtPending, whatever the count beside it says", () => {
     expect(() =>

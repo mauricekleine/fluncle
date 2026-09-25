@@ -1,8 +1,3 @@
-// Paced Discogs reads for the Hermes box. This module performs vendor I/O only: every candidate
-// remains untrusted evidence until an agent-tier Worker operation re-reads the DB row, applies the
-// existing match gate, and owns the write. It is self-contained because deployed box scripts do
-// not import the monorepo workspace.
-
 import { failureBodyUnlessRepairPending } from "./due-work-repair-pending";
 
 const DISCOGS_API_ROOT = "https://api.discogs.com";
@@ -191,7 +186,6 @@ function failure<T>(result: Exclude<RequestResult<T>, { kind: "ok" }>): DiscogsB
   };
 }
 
-/** Call an existing agent-tier operation directly; the baked CLI need not know the new body. */
 export async function postDiscogsAgentOperation<T>(
   path: string,
   apiToken: string,
@@ -394,8 +388,6 @@ export function createDiscogsFetcher(token: string, options: DiscogsFetcherOptio
         }
       }
 
-      // Empty is deliberately explicit: it proves this row completed cleanly. A failed batch
-      // returns no candidates at all, so the Worker cannot confuse an interrupted fetch with zero.
       candidates.push({ releases, trackId: row.trackId });
     }
 

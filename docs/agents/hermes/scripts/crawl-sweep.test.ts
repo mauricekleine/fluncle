@@ -1,6 +1,3 @@
-// Integration tests for crawl-sweep.ts. Fixtures exercise the phase protocol at the same process
-// boundary the Hermes timer uses: admission is supplied by the runner, while provider work goes
-// directly through the CLI's hidden --phase-file command.
 import { afterEach, describe, expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -10,20 +7,13 @@ const SWEEP = resolve(import.meta.dirname, "crawl-sweep.ts");
 const REAL_PHASE_RUNNER = resolve(import.meta.dirname, "database-admission-runner.sh");
 const TEST_TIMEOUT_MS = 20_000;
 const PROCESS_TIMEOUT_MS = 8_000;
-// One case is a CHOREOGRAPHY, not a sweep: it holds a sweep paused mid-fetch, drives a second
-// process through the real phase runner, then releases and drains the first. Three process waits
-// in series cannot each be given the budget a one-process case is sized for — three independent
-// `PROCESS_TIMEOUT_MS` deadlines sum past the harness limit, so the inner one stops being a guard
-// and merely fires before the budget the case actually has. It spends ONE budget across its three
-// waits instead, stated here because the choreography is what the number is sized for.
+
 const CHOREOGRAPHY_TEST_TIMEOUT_MS = 45_000;
 const temporaryDirectories: string[] = [];
 
-/** A batched commit in which BOTH nodes settled — the ordinary batched shape. */
 const COMMIT_BATCH_ALL_COMMITTED =
   '{"ok":true,"deferred":0,"receipts":[{"operationKey":"crawl-key","outcome":"committed","replayed":false,"state":"committed","result":{"expanded":1,"failed":0,"tracksFound":3,"tracksWritten":3,"tracksSkipped":0,"rateLimited":false}},{"operationKey":"crawl-key","outcome":"committed","replayed":false,"state":"committed","result":{"expanded":1,"failed":0,"tracksFound":3,"tracksWritten":3,"tracksSkipped":0,"rateLimited":false}}]}';
 
-/** A batched commit with a POISONED middle item: its neighbour still carries its own receipt. */
 const COMMIT_BATCH_POISONED =
   '{"ok":true,"deferred":0,"receipts":[{"operationKey":"crawl-key","outcome":"committed","replayed":false,"state":"committed","result":{"expanded":1,"failed":0,"tracksFound":3,"tracksWritten":3,"tracksSkipped":0,"rateLimited":false}},{"operationKey":"crawl-key","outcome":"failed","replayed":false,"error":"stale claim"}]}';
 
@@ -71,7 +61,6 @@ function fixture(): Fixture {
   };
   writeFileSync(data.mode, "normal");
 
-  // The test-only runner keeps the same phase argv boundary as the real runner.
   executable(
     data.runner,
     'if [ "$1" = phase ]; then shift; fi\n' +
@@ -237,16 +226,6 @@ async function collect(
   }
 }
 
-/**
- * ONE budget, shared, for a case that waits on several processes in SERIES.
- *
- * `PROCESS_TIMEOUT_MS` is sized for the shape almost every case here has: spawn one sweep, wait
- * for it. A case that waits on three processes cannot hand each of them that same budget — three
- * independent deadlines sum well past `TEST_TIMEOUT_MS`, so the inner deadline is not a guard at
- * all: it merely fires before the budget the case actually has, and under load turns "this took a
- * while" into a failure while the harness still had seconds in hand. A shared deadline spends the
- * case's real budget across its waits and leaves the harness as the outer bound it already is.
- */
 function sharedDeadline(budgetMs: number): () => number {
   const expiresAt = Date.now() + budgetMs;
   return () => Math.max(1, expiresAt - Date.now());
@@ -337,10 +316,6 @@ describe("crawl-sweep phase protocol", () => {
     TEST_TIMEOUT_MS,
   );
 
-  // ── THE BATCHED COMMIT ──────────────────────────────────────────────────────────────────────
-  // One claim requires TWO admitted phases: its prepare and its batched commit. The batch pays the
-  // ~15-30s lease toll once for all six nodes.
-
   test(
     "settles a whole claim in ONE admitted commit phase when the Worker advertises the batch",
     async () => {
@@ -358,12 +333,11 @@ describe("crawl-sweep phase protocol", () => {
       const summary = JSON.parse(result.stdout);
       expect(summary).toMatchObject({ checked: 2, expanded: 2, ok: true, tracksWritten: 6 });
       const calls = readFileSync(data.calls, "utf8");
-      // Both nodes fetched, ONE batched commit, and not a single per-node commit phase.
+
       expect(calls.match(/^fetch:/gm)).toHaveLength(2);
       expect(calls.match(/^commit-nodes$/gm)).toHaveLength(1);
       expect(calls.match(/^commit:/gm)).toBeNull();
-      // THE LEASES PER CLAIM. The ledger publishes the count so the effect is measurable rather
-      // than asserted: one initialize, one prepare, one batched commit.
+
       expect(summary.leases).toBe(3);
     },
     TEST_TIMEOUT_MS,
@@ -384,7 +358,7 @@ describe("crawl-sweep phase protocol", () => {
 
       expect(result.exitCode, result.stderr).toBe(0);
       const summary = JSON.parse(result.stdout);
-      // The neighbour committed inside the batch; only the poisoned node paid for its own commit.
+
       const calls = readFileSync(data.calls, "utf8");
       expect(calls.match(/^commit-nodes$/gm)).toHaveLength(1);
       expect(calls.match(/^commit:/gm)).toHaveLength(1);
@@ -396,9 +370,6 @@ describe("crawl-sweep phase protocol", () => {
   test(
     "commits node by node against a Worker that advertises no batch (new sweep, old Worker)",
     async () => {
-      // The pinned box CLI leads the Worker as often as it lags it. A prepare with no
-      // `capabilities` is an older Worker without `commit_crawl_nodes`, and the sweep must take the
-      // per-node path rather than discover the missing op as a 404 mid-claim.
       const data = fixture();
       const result = await collect(
         Bun.spawn([process.execPath, SWEEP], {
@@ -420,8 +391,6 @@ describe("crawl-sweep phase protocol", () => {
   test(
     "puts every node back on its own commit phase when the kill switch is set",
     async () => {
-      // `FLUNCLE_CRAWL_COMMIT_BATCH=0` is the operator's lever when the batched commit is the
-      // suspect: the Worker still advertises it, and the sweep still refuses it.
       const data = fixture();
       const result = await collect(
         Bun.spawn([process.execPath, SWEEP], {
@@ -488,7 +457,7 @@ describe("crawl-sweep phase protocol", () => {
         partial: false,
         throttled: true,
         throttles: 1,
-        // The summary preserves the receipt's skip breakdown.
+
         tracksSkippedArtistRule: 2,
         tracksSkippedHeld: 2,
         tracksSkippedLabelGate: 2,
@@ -804,12 +773,7 @@ describe("crawl-sweep phase protocol", () => {
           "      printf held > " + lock,
           '      printf \'%s\\n200\\n\' \'{"enforced":true,"fencingToken":7,"heartbeatAfterMs":1000,"lane":"write","operationId":"fixture","outcome":"acquired","queueAgeMs":0,"recovered":false,"waitMs":0,"yieldReason":null}\'',
           "    fi ;;",
-          // A HEARTBEAT IS PART OF THE PROTOCOL, NOT AN EXTRA. The runner starts heartbeating
-          // `heartbeatAfterMs` into the payload, and treats any answer that is not an enforced
-          // `acquired` as a lost fence — it yields the whole run. Falling through to `{}` below
-          // therefore made this fixture depend on the payload finishing inside one second: fine
-          // on an idle machine, and a fenced run at `initialize` (never reaching fetch at all)
-          // the moment anything else is competing for the CPU.
+
           '  *\'"action":"heartbeat"\'*)',
           '    printf \'%s\\n200\\n\' \'{"enforced":true,"fencingToken":7,"heartbeatAfterMs":1000,"lane":"write","operationId":"fixture","outcome":"acquired","queueAgeMs":0,"recovered":false,"waitMs":0,"yieldReason":null}\' ;;',
           '  *\'"action":"release"\'*) rm -f ' + lock + "; printf '%s\\n200\\n' '{\"ok\":true}' ;;",
@@ -837,7 +801,7 @@ describe("crawl-sweep phase protocol", () => {
         stderr: "pipe",
         stdout: "pipe",
       });
-      // Three waits, one budget: the paused provider, the unrelated writer, then the sweep.
+
       const remaining = sharedDeadline(CHOREOGRAPHY_TEST_TIMEOUT_MS - 5_000);
       let writer: Bun.Subprocess | undefined;
       try {
@@ -868,11 +832,6 @@ describe("crawl-sweep phase protocol", () => {
         expect(timeline).toContain("phase-lock:fetch:free");
         expect(timeline).toContain("phase-lock:commit:held");
       } catch (cause) {
-        // A WAIT THAT TIMES OUT SAYS ONLY THAT NOTHING ARRIVED, WHICH IS THE ONE THING ALREADY
-        // KNOWN. The sweep is a child process holding its own account of why — it yields with a
-        // reason on stderr — and without this that account is killed unread in the `finally`
-        // below, leaving a bare deadline to be misread as slowness. Release the paused provider
-        // first so the sweep can finish talking, then hand its own words to the failure.
         writeFileSync(data.fetchRelease, "release");
         const account = await Promise.race([
           Promise.all([new Response(sweep.stdout).text(), new Response(sweep.stderr).text()]),
@@ -1005,8 +964,6 @@ describe("crawl-sweep phase protocol", () => {
     TEST_TIMEOUT_MS,
   );
 
-  // MusicBrainz rate-limits per source IP, so the crawl's provider reads move to the box's own
-  // address. Both halves of the switch have to agree before a single request is spent.
   test(
     "reads the server's box-fetch answer and reports it, supplying nothing for a node with no url",
     async () => {
@@ -1026,19 +983,11 @@ describe("crawl-sweep phase protocol", () => {
         boxFetched: 0,
         ok: true,
       });
-      // A terminal node's provider leg reads nothing at all, so no MusicBrainz request exists to
-      // move anywhere and the fetch phase carries no bodies.
+
       expect(readFileSync(data.fetchBody, "utf8")).not.toContain('"supplied"');
     },
     TEST_TIMEOUT_MS,
   );
-
-  // ── THE TWO FEATURES COMPOSED ───────────────────────────────────────────────────────────────
-  // Box-fetch moves the MusicBrainz reads off Worker egress; batching moves the commits off one
-  // lease per node. They meet on the same claim and are deliberately independent: the prepare
-  // answers both questions in one response, the reads stay outside every lease either way, and
-  // each switch can be closed without the other noticing. All four combinations are covered —
-  // both on here, box-fetch on / batch off and box-fetch off / batch on below and above.
 
   test(
     "runs a whole claim with box-fetch ON and the batched commit ON",
@@ -1063,12 +1012,11 @@ describe("crawl-sweep phase protocol", () => {
         tracksWritten: 6,
       });
       const calls = readFileSync(data.calls, "utf8");
-      // Both nodes fetched unadmitted, ONE batched commit, no per-node commit phase.
+
       expect(calls.match(/^fetch:/gm)).toHaveLength(2);
       expect(calls.match(/^commit-nodes$/gm)).toHaveLength(1);
       expect(calls.match(/^commit:/gm)).toBeNull();
-      // Two leases for the claim plus the tick's one initialize — the batching holds with the
-      // provider reads on the box.
+
       expect(summary.leases).toBe(3);
     },
     TEST_TIMEOUT_MS,
@@ -1077,8 +1025,6 @@ describe("crawl-sweep phase protocol", () => {
   test(
     "commits node by node with box-fetch ON and the batched commit OFF",
     async () => {
-      // The mixed mode a rollback produces: the Worker still reads box-fetched bodies, but its
-      // prepare advertises no batch width, so every node pays its own commit lease.
       const data = fixture();
       const result = await collect(
         Bun.spawn([process.execPath, SWEEP], {
@@ -1101,8 +1047,6 @@ describe("crawl-sweep phase protocol", () => {
   test(
     "batches the commits with box-fetch OFF, leaving the reads on Worker egress",
     async () => {
-      // The other mixed mode: the batch is live and the provider reads are the Worker's, which is
-      // exactly what the `crawl_box_fetch_enabled` rollback leaves behind.
       const data = fixture();
       const result = await collect(
         Bun.spawn([process.execPath, SWEEP], {
@@ -1136,7 +1080,7 @@ describe("crawl-sweep phase protocol", () => {
       );
 
       expect(result.exitCode, result.stderr).toBe(0);
-      // The server said yes; this box said no. Either side is enough to put the reads back.
+
       expect(JSON.parse(result.stdout)).toMatchObject({ boxFetch: false, boxFetched: 0, ok: true });
       expect(readFileSync(data.fetchBody, "utf8")).not.toContain('"supplied"');
     },

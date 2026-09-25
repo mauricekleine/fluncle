@@ -1,11 +1,3 @@
-// Tests for source selection and run summaries in enrich-sweep.ts — the box-script
-// sweep is self-contained (it can't import the workspace) and lives outside any package's
-// test runner, so this file uses `bun:test` and is run directly:
-//
-//   bun test docs/agents/hermes/scripts/enrich-sweep.test.ts
-//
-// `main()` is guarded behind `import.meta.main` in the sweep, so helper imports are
-// side-effect free. Subprocess tests run the real entrypoint with a stub CLI and phase runner.
 import { describe, expect, test } from "bun:test";
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
