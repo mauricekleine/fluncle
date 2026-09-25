@@ -409,3 +409,110 @@ describe("weekly follow digest", () => {
     }
   });
 });
+
+describe("every send attempt re-checks the clock and the recipient", () => {
+  async function seedOne() {
+    await seedUser(db, { email: "one@example.com", emailVerified: true, id: "one" });
+    await seedArtist(db, { id: "artist-a", name: "Artist A", slug: "artist-a" });
+    await watch("one", "artist", "artist-a", "watch-a");
+    await track("release", "2026-09-24", { artistId: "artist-a" });
+  }
+
+  async function strandClaim(claimedAt: string, runAt: Date) {
+    const { sendFollowDigests } = await import("./follow-digest");
+    sendEmail.mockImplementationOnce(async () => {
+      throw new TypeError("network disconnected");
+    });
+    sendEmail.mockImplementationOnce(async () => {
+      throw new TypeError("network disconnected");
+    });
+    sendEmail.mockImplementationOnce(async () => {
+      throw new TypeError("network disconnected");
+    });
+    await sendFollowDigests({ now: runAt });
+    await db.execute({
+      args: [claimedAt],
+      sql: "update follow_digest_deliveries set status = 'claimed', attempts = 0, claimed_at = ? where user_id = 'one'",
+    });
+    sendEmail.mockClear();
+  }
+
+  it("never re-sends a claim whose idempotency window closes while the batch is running", async () => {
+    const { sendFollowDigests } = await import("./follow-digest");
+    await seedOne();
+    await strandClaim("2026-09-24T16:00:00.000Z", new Date("2026-09-24T16:00:00.000Z"));
+
+    const result = await sendFollowDigests({
+      clock: () => new Date("2026-09-25T15:30:00.000Z"),
+      now: new Date("2026-09-25T14:00:00.000Z"),
+    });
+
+    expect(sendEmail).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ sent: 0, unknown: 1 });
+  });
+
+  it("treats a claim within an hour of the 24 h window as already expired", async () => {
+    const { sendFollowDigests } = await import("./follow-digest");
+    await seedOne();
+    await strandClaim("2026-09-24T16:00:00.000Z", new Date("2026-09-24T16:00:00.000Z"));
+
+    const at = new Date("2026-09-25T15:10:00.000Z");
+    const result = await sendFollowDigests({ clock: () => at, now: at });
+
+    expect(sendEmail).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ sent: 0, unknown: 1 });
+  });
+
+  it("stops retrying the moment the recipient stops being eligible", async () => {
+    const { sendFollowDigests } = await import("./follow-digest");
+    const { ResendDeliveryError } = await import("./resend");
+    await seedOne();
+    sendEmail.mockImplementationOnce(async () => {
+      await db.execute("delete from user_watches where user_id = 'one'");
+      throw new ResendDeliveryError("rate limited", 429);
+    });
+
+    const result = await sendFollowDigests({ now: new Date("2026-09-25T15:00:00.000Z") });
+    const state = await db.execute(
+      "select status from follow_digest_deliveries where user_id = 'one'",
+    );
+
+    expect(sendEmail).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({ sent: 0 });
+    expect(state.rows[0]?.status).not.toBe("sent");
+    expect(state.rows[0]?.status).not.toBe("claimed");
+  });
+
+  it("stops retrying when the recipient unsubscribes between attempts", async () => {
+    const { sendFollowDigests } = await import("./follow-digest");
+    const { ResendDeliveryError } = await import("./resend");
+    await seedOne();
+    sendEmail.mockImplementationOnce(async () => {
+      await db.execute(
+        "insert into user_follow_digests (user_id, unsubscribed_at, updated_at) values ('one', '2026-09-25T15:00:00.000Z', '2026-09-25T15:00:00.000Z')",
+      );
+      throw new ResendDeliveryError("server error", 503);
+    });
+
+    await sendFollowDigests({ now: new Date("2026-09-25T15:00:00.000Z") });
+
+    expect(sendEmail).toHaveBeenCalledTimes(1);
+  });
+
+  it("reconciles an ambiguous claim left over from an earlier week", async () => {
+    const { sendFollowDigests } = await import("./follow-digest");
+    await seedOne();
+    await track("older", "2026-09-16", { artistId: "artist-a" });
+    await strandClaim("2026-09-18T15:00:00.000Z", new Date("2026-09-18T15:00:00.000Z"));
+    await db.execute("delete from user_watches where user_id = 'one'");
+
+    await sendFollowDigests({ now: new Date("2026-09-25T15:00:00.000Z") });
+
+    const prior = await db.execute(
+      "select status from follow_digest_deliveries where user_id = 'one' and week_key = '2026-W38'",
+    );
+
+    expect(prior.rows[0]?.status).toBe("unknown");
+    expect(sendEmail).not.toHaveBeenCalled();
+  });
+});

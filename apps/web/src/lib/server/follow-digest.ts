@@ -18,7 +18,7 @@ export const FOLLOW_DIGEST_MAX_ITEMS = 30;
 export const FOLLOW_DIGEST_MAX_FOLLOWS = 200;
 const FOLLOW_DIGEST_WINDOW_DAYS = 28;
 const CLAIM_GRACE_MS = 2 * 60_000;
-const RESEND_IDEMPOTENCY_MS = 24 * 60 * 60_000;
+const RESEND_IDEMPOTENCY_SAFE_MS = 23 * 60 * 60_000;
 const MAX_SEND_ATTEMPTS = 3;
 const SITE = "https://www.fluncle.com";
 
@@ -223,16 +223,42 @@ async function sendClaimedDelivery(
   delivery: DeliveryRow,
   userId: string,
   weekKey: string,
-  now: Date,
-  testRecipient: boolean,
-): Promise<"failed" | "sent" | "skipped"> {
+  clock: () => Date,
+  testRecipient: string | undefined,
+): Promise<"failed" | "sent" | "skipped" | "unknown"> {
   const payload = JSON.parse(delivery.payload_json) as DeliveryPayload;
   let attempts = delivery.attempts;
   const allowance = Math.max(1, MAX_SEND_ATTEMPTS - attempts);
   for (let retry = 0; retry < allowance; retry += 1) {
+    const attemptAt = clock();
+    if (
+      attemptAt.getTime() - new Date(delivery.claimed_at).getTime() >=
+      RESEND_IDEMPOTENCY_SAFE_MS
+    ) {
+      return setDeliveryStatus(
+        db,
+        delivery.id,
+        "unknown",
+        attemptAt,
+        "Resend idempotency window closing before the attempt",
+      );
+    }
+    if (await isFollowDigestPaused()) {
+      return "skipped";
+    }
+    const eligible = await eligibleSubscriber(db, userId, weekKey);
+    if (!eligible || payload.to !== (testRecipient ?? eligible.email)) {
+      return setDeliveryStatus(
+        db,
+        delivery.id,
+        attempts > 0 ? "unknown" : "failed",
+        attemptAt,
+        eligible ? "Recipient address changed after claim" : "Recipient is no longer eligible",
+      );
+    }
     attempts += 1;
     await db.execute({
-      args: [now.toISOString(), delivery.id],
+      args: [attemptAt.toISOString(), delivery.id],
       sql: `update follow_digest_deliveries set attempts = attempts + 1, updated_at = ?
         where id = ? and status = 'claimed'`,
     });
@@ -249,9 +275,9 @@ async function sendClaimedDelivery(
         await new Promise((resolve) => setTimeout(resolve, 250 * 2 ** retry));
         continue;
       }
-      return setDeliveryStatus(db, delivery.id, "failed", now, message);
+      return setDeliveryStatus(db, delivery.id, "failed", clock(), message);
     }
-    const sentAt = now.toISOString();
+    const sentAt = clock().toISOString();
     if (testRecipient) {
       const completed = await db.execute({
         args: [response.id, sentAt, sentAt, delivery.id],
@@ -297,35 +323,35 @@ async function recoverClaimedDelivery(
   delivery: DeliveryRow,
   userId: string,
   weekKey: string,
-  now: Date,
+  clock: () => Date,
   dryRun: boolean,
   testRecipient: string | undefined,
 ): Promise<"failed" | "sent" | "skipped" | "unknown"> {
   if (dryRun || delivery.status !== "claimed") {
     return "skipped";
   }
-  const eligible = await eligibleSubscriber(db, userId, weekKey);
-  if (!eligible) {
-    return setDeliveryStatus(db, delivery.id, "unknown", now, "Recipient is no longer eligible");
-  }
-  const age = now.getTime() - new Date(delivery.claimed_at).getTime();
-  if (age < CLAIM_GRACE_MS) {
+  if (clock().getTime() - new Date(delivery.claimed_at).getTime() < CLAIM_GRACE_MS) {
     return "skipped";
   }
-  if (age >= RESEND_IDEMPOTENCY_MS) {
-    return setDeliveryStatus(db, delivery.id, "unknown", now, "Resend idempotency window elapsed");
-  }
-  const payload = JSON.parse(delivery.payload_json) as DeliveryPayload;
-  if (payload.to !== (testRecipient ?? eligible.email)) {
-    return setDeliveryStatus(
-      db,
-      delivery.id,
-      "unknown",
-      now,
-      "Recipient address changed after claim",
-    );
-  }
-  return sendClaimedDelivery(db, delivery, userId, weekKey, now, Boolean(testRecipient));
+  return sendClaimedDelivery(db, delivery, userId, weekKey, clock, testRecipient);
+}
+
+export async function reconcileStaleDeliveryClaims(
+  db: Awaited<ReturnType<typeof getDb>>,
+  currentWeekKey: string,
+  now: Date,
+): Promise<number> {
+  const result = await db.execute({
+    args: [
+      "Resend idempotency window elapsed before recovery",
+      now.toISOString(),
+      currentWeekKey,
+      new Date(now.getTime() - RESEND_IDEMPOTENCY_SAFE_MS).toISOString(),
+    ],
+    sql: `update follow_digest_deliveries set status = 'unknown', last_error = ?, updated_at = ?
+      where status = 'claimed' and week_key <> ? and claimed_at <= ?`,
+  });
+  return result.rowsAffected;
 }
 
 async function recipientTokens(
@@ -349,11 +375,13 @@ export async function sendFollowDigests(
   options: {
     cursor?: string;
     dryRun?: boolean;
+    clock?: () => Date;
     limit?: number;
     now?: Date;
   } = {},
 ): Promise<FollowDigestSendResult> {
   const now = options.now ?? new Date();
+  const clock = options.clock ?? (() => new Date());
   const weekKey = digestWeekKey(now);
   const dryRun = options.dryRun ?? false;
   const testRecipient = await readOptionalEnv("FOLLOW_DIGEST_TEST_RECIPIENT");
@@ -379,6 +407,9 @@ export async function sendFollowDigests(
   );
   const db = await getDb();
   const deliveryWeekKey = testRecipient ? `test/${weekKey}` : weekKey;
+  if (!dryRun) {
+    base.unknown += await reconcileStaleDeliveryClaims(db, deliveryWeekKey, clock());
+  }
   const result = await db.execute({
     args: [deliveryWeekKey, options.cursor ?? "", weekKey, limit + 1],
     sql: `select u.id
@@ -405,7 +436,7 @@ export async function sendFollowDigests(
         existing,
         subscriber.id,
         weekKey,
-        now,
+        clock,
         dryRun,
         testRecipient,
       );
@@ -515,8 +546,8 @@ export async function sendFollowDigests(
       },
       subscriber.id,
       weekKey,
-      now,
-      Boolean(testRecipient),
+      clock,
+      testRecipient,
     );
     base[outcome] += 1;
     if (testRecipient && outcome === "sent") {
