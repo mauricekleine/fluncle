@@ -1078,6 +1078,15 @@ export async function exportAccountData(user: PublicUser): Promise<{
       unsubscribedAt: string | null;
       updatedAt: string;
     } | null;
+    followDigestDeliveries: {
+      attempts: number;
+      claimedAt: string;
+      id: string;
+      payloadJson: string;
+      sentAt: string | null;
+      status: string;
+      weekKey: string;
+    }[];
     id: string;
     preferences: UserPreferences;
     privacyNotes: string[];
@@ -1094,7 +1103,7 @@ export async function exportAccountData(user: PublicUser): Promise<{
   const requestedAt = new Date().toISOString();
   const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
   const exportId = randomUUID();
-  const [progress, saved, sets, submissions, preferences, recSeeds, follows, digest] =
+  const [progress, saved, sets, submissions, preferences, recSeeds, follows, digest, deliveries] =
     await Promise.all([
       getGalaxyProgress(user),
       listSavedFindings(user),
@@ -1107,6 +1116,11 @@ export async function exportAccountData(user: PublicUser): Promise<{
         args: [user.id],
         sql: `select last_release_count, last_sent_at, last_week_key, unsubscribed_at, updated_at
         from user_follow_digests where user_id = ? limit 1`,
+      }),
+      (await getDb()).execute({
+        args: [user.id],
+        sql: `select id, week_key, status, payload_json, attempts, claimed_at, sent_at
+          from follow_digest_deliveries where user_id = ? order by claimed_at desc`,
       }),
     ]);
 
@@ -1140,6 +1154,23 @@ export async function exportAccountData(user: PublicUser): Promise<{
             }
           : null;
       })(),
+      followDigestDeliveries: typedRows<{
+        attempts: number;
+        claimed_at: string;
+        id: string;
+        payload_json: string;
+        sent_at: string | null;
+        status: string;
+        week_key: string;
+      }>(deliveries.rows).map((row) => ({
+        attempts: row.attempts,
+        claimedAt: row.claimed_at,
+        id: row.id,
+        payloadJson: row.payload_json,
+        sentAt: row.sent_at,
+        status: row.status,
+        weekKey: row.week_key,
+      })),
       follows: follows.follows,
       generatedAt: requestedAt,
       id: exportId,
@@ -1299,6 +1330,10 @@ export function accountDeletionStatements({
     {
       args: [userId],
       sql: `delete from user_watches where user_id = ?`,
+    },
+    {
+      args: [userId],
+      sql: `delete from follow_digest_deliveries where user_id = ?`,
     },
     {
       args: [userId],

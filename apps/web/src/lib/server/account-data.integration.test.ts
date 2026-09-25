@@ -66,6 +66,22 @@ describe("deleteAccount (real SQL via accountDeletionStatements)", () => {
           values (?, ?, ?, ?, ?)`,
       },
       {
+        args: [
+          `digest-${userId}`,
+          userId,
+          "2026-W39",
+          "claimed",
+          `follow-digest/${userId}/2026-W39/digest-${userId}`,
+          "{}",
+          2,
+          now,
+          now,
+        ],
+        sql: `insert into follow_digest_deliveries
+          (id, user_id, week_key, status, idempotency_key, payload_json, release_count, claimed_at, updated_at)
+          values (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      },
+      {
         args: [`sess-${userId}`, userId, `tok-${userId}`, now, now, now],
         sql: `insert into session (id, user_id, token, expires_at, created_at, updated_at)
           values (?, ?, ?, ?, ?, ?)`,
@@ -152,6 +168,7 @@ describe("deleteAccount (real SQL via accountDeletionStatements)", () => {
       "user_saved_findings",
       "user_saved_sets",
       "user_watches",
+      "follow_digest_deliveries",
       "user_follow_digests",
       "user_preferences",
       "user_galaxy_collections",
@@ -221,6 +238,11 @@ describe("deleteAccount (real SQL via accountDeletionStatements)", () => {
       `select count(*) as n from user_follow_digests where user_id = 'user-B'`,
     );
     expect(Number(bDigest.rows[0]?.n)).toBe(1);
+
+    const bDelivery = await db.execute(
+      `select count(*) as n from follow_digest_deliveries where user_id = 'user-B'`,
+    );
+    expect(Number(bDelivery.rows[0]?.n)).toBe(1);
 
     const bEditions = await db.execute(
       `select count(*) as n from frontier_editions where user_id = 'user-B'`,
@@ -1016,6 +1038,23 @@ describe("follows (real SQL, owner-scoped — D2a)", () => {
         (user_id, last_week_key, last_sent_at, last_release_count, updated_at)
         values (?, ?, ?, ?, ?)`,
     });
+    await db.execute({
+      args: [
+        "delivery-a",
+        userA,
+        "2026-W39",
+        "sent",
+        "delivery-key-a",
+        '{"subject":"A tune"}',
+        2,
+        now,
+        now,
+        now,
+      ],
+      sql: `insert into follow_digest_deliveries
+        (id, user_id, week_key, status, idempotency_key, payload_json, release_count, claimed_at, sent_at, updated_at)
+        values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    });
     const result = await exportAccountData(publicUser(userA));
     expect(result.export.followDigest).toEqual({
       lastReleaseCount: 2,
@@ -1024,6 +1063,17 @@ describe("follows (real SQL, owner-scoped — D2a)", () => {
       unsubscribedAt: null,
       updatedAt: now,
     });
+    expect(result.export.followDigestDeliveries).toEqual([
+      {
+        attempts: 0,
+        claimedAt: now,
+        id: "delivery-a",
+        payloadJson: '{"subject":"A tune"}',
+        sentAt: now,
+        status: "sent",
+        weekKey: "2026-W39",
+      },
+    ]);
   });
 });
 

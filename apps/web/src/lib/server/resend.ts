@@ -5,6 +5,15 @@ const resendApiUrl = "https://api.resend.com";
 
 type ResendErrorBody = { message?: string; name?: string };
 
+export class ResendDeliveryError extends ApiError {
+  upstreamStatus: number;
+
+  constructor(message: string, upstreamStatus: number) {
+    super("email_send_failed", message, 502);
+    this.upstreamStatus = upstreamStatus;
+  }
+}
+
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]"]);
 
 export function resolveResendApiUrl({
@@ -193,14 +202,15 @@ export async function sendBroadcast(
 }
 
 async function sendTransactionalEmail(params: {
+  from?: string;
   headers?: Record<string, string>;
   html: string;
   idempotencyKey?: string;
   subject: string;
   text: string;
   to: string;
-}): Promise<void> {
-  const from = await readOptionalEnv("RESEND_FROM");
+}): Promise<{ id?: string }> {
+  const from = params.from ?? (await readOptionalEnv("RESEND_FROM"));
 
   if (!from) {
     throw new ApiError(
@@ -224,23 +234,38 @@ async function sendTransactionalEmail(params: {
   });
 
   if (!response.ok) {
-    throw new ApiError(
-      "email_send_failed",
+    throw new ResendDeliveryError(
       `Resend could not send the email (${await readError(response)})`,
-      502,
+      response.status,
     );
   }
+
+  const body = (await response.json().catch(() => undefined)) as { id?: string } | undefined;
+  return { id: body?.id };
 }
 
 export async function sendFollowDigestEmail(params: {
+  from: string;
   headers: Record<string, string>;
   html: string;
   idempotencyKey: string;
   subject: string;
   text: string;
   to: string;
-}): Promise<void> {
-  await sendTransactionalEmail(params);
+}): Promise<{ id: string }> {
+  const result = await sendTransactionalEmail(params);
+  if (!result.id) {
+    throw new ApiError("email_send_failed", "Resend did not return an email id", 502);
+  }
+  return { id: result.id };
+}
+
+export async function readResendSender(): Promise<string> {
+  const from = await readOptionalEnv("RESEND_FROM");
+  if (!from) {
+    throw new ApiError("send_misconfigured", "RESEND_FROM is not configured", 500);
+  }
+  return from;
 }
 
 export async function sendPasswordResetEmail(params: { to: string; url: string }): Promise<void> {

@@ -32,6 +32,17 @@ describe("the account export and delete contracts carry the follow data", () => 
           unsubscribedAt: null,
           updatedAt: "2026-09-25T15:00:00.000Z",
         },
+        followDigestDeliveries: [
+          {
+            attempts: 1,
+            claimedAt: "2026-09-25T15:00:00.000Z",
+            id: "delivery-1",
+            payloadJson: '{"subject":"A tune"}',
+            sentAt: "2026-09-25T15:00:01.000Z",
+            status: "sent",
+            weekKey: "2026-W39",
+          },
+        ],
         follows: [
           {
             createdAt: "2026-09-20T00:00:00.000Z",
@@ -57,6 +68,7 @@ describe("the account export and delete contracts carry the follow data", () => 
 
     expect(exported.follows).toHaveLength(1);
     expect(exported.followDigest).toMatchObject({ lastWeekKey: "2026-W39" });
+    expect(exported.followDigestDeliveries).toHaveLength(1);
   });
 
   it("keeps the follow lines in the deletion summary", async () => {

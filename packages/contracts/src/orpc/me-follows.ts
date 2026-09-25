@@ -67,8 +67,19 @@ export const deletePrivateFollow = oc
   .input(z.object({ id: z.string() }))
   .output(z.object({ ok: z.literal(true) }));
 
+export const revokePrivateFollowLinkAccess = oc
+  .route({
+    method: "POST",
+    operationId: "revokePrivateFollowLinkAccess",
+    path: "/me/follow-link-access/revoke",
+    summary: "Revoke emailed follows management links for the signed-in user",
+    tags: ["Me"],
+  })
+  .output(z.object({ ok: z.literal(true), token: z.string() }));
+
 export const meFollowsContract = {
   delete_private_follow: deletePrivateFollow,
   list_private_follows: listPrivateFollows,
+  revoke_private_follow_link_access: revokePrivateFollowLinkAccess,
   save_private_follow: savePrivateFollow,
 };

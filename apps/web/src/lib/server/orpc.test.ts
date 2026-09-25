@@ -681,8 +681,17 @@ type ErrorSchema = {
 };
 
 type Operation = {
+  deprecated?: boolean;
   operationId?: string;
-  responses?: Record<string, { content?: Record<string, { schema?: { $ref?: string } }> }>;
+  responses?: Record<
+    string,
+    {
+      content?: Record<
+        string,
+        { schema?: { $ref?: string; properties?: Record<string, unknown> } }
+      >;
+    }
+  >;
 };
 
 type GeneratedSpec = {
@@ -700,6 +709,7 @@ const PUBLIC_OPERATION_IDS = [
   "deletePrivateRecSeed",
   "deletePrivateSavedSet",
   "deletePrivateFollow",
+  "deletePrivateWatch",
   "deleteDigestFollow",
   "deregisterDevice",
   "exportPrivateAccountData",
@@ -749,6 +759,7 @@ const PUBLIC_OPERATION_IDS = [
   "listPrivateSavedSets",
   "listPrivateSubmissions",
   "listPrivateFollows",
+  "listPrivateWatches",
 
   "listSimilarArtists",
 
@@ -764,6 +775,8 @@ const PUBLIC_OPERATION_IDS = [
   "savePrivateRecSeed",
   "savePrivateSet",
   "savePrivateFollow",
+  "savePrivateWatch",
+  "revokePrivateFollowLinkAccess",
   "searchArchive",
   "searchTracks",
   "submitTrack",
@@ -795,6 +808,31 @@ function collectOperationIds(spec: GeneratedSpec): {
 }
 
 describe("oRPC OpenAPI generation — the public spec (the flip)", () => {
+  it("preserves deprecated watch aliases with legacy response keys", async () => {
+    const { generateOpenApiDocument } = await import("./orpc");
+    const document = (await generateOpenApiDocument()) as GeneratedSpec;
+
+    expect(document.paths["/me/watches"]?.get).toMatchObject({
+      deprecated: true,
+      operationId: "listPrivateWatches",
+    });
+    expect(document.paths["/me/watches"]?.post).toMatchObject({
+      deprecated: true,
+      operationId: "savePrivateWatch",
+    });
+    expect(document.paths["/me/watches/{id}"]?.delete).toMatchObject({
+      deprecated: true,
+      operationId: "deletePrivateWatch",
+    });
+    expect(
+      document.paths["/me/watches"]?.get?.responses?.["200"]?.content?.["application/json"]?.schema
+        ?.properties,
+    ).toHaveProperty("watches");
+    expect(
+      document.paths["/me/watches"]?.post?.responses?.["200"]?.content?.["application/json"]?.schema
+        ?.properties,
+    ).toHaveProperty("watch");
+  });
   it("generates a valid OpenAPI 3.1 document with the published info + server", async () => {
     const { generateOpenApiDocument } = await import("./orpc");
     const document = (await generateOpenApiDocument()) as GeneratedSpec;

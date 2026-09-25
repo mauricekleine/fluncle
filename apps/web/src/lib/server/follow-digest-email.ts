@@ -1,3 +1,4 @@
+import { POSTAL_ADDRESS } from "./edition-email";
 import { followDigestCopy } from "./follow-digest-copy";
 
 export type FollowDigestRelease = {
@@ -54,7 +55,7 @@ export function renderFollowDigestEmail(input: {
   const moreHtml = input.more
     ? `<p><a href="https://www.fluncle.com/fresh" style="color:#f5b800">${escapeFollowDigestHtml(followDigestCopy.more)}</a></p>`
     : "";
-  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="dark"><meta name="supported-color-schemes" content="dark"><title>${escapeFollowDigestHtml(followDigestCopy.subject)}</title></head><body style="margin:0;background:#090a0b;color:#f4ead7;font-family:Arial,sans-serif"><div style="display:none;max-height:0;overflow:hidden">${escapeFollowDigestHtml(followDigestCopy.preheader)}</div><table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#090a0b"><tr><td align="center" style="padding:24px 12px"><table role="presentation" width="560" cellpadding="0" cellspacing="0" style="width:100%;max-width:560px;background:#10100d"><tr><td style="padding:28px 20px"><p style="margin:0 0 20px;font-size:13px;font-weight:700;letter-spacing:0.12em;color:#f5b800">FLUNCLE</p><p>${escapeFollowDigestHtml(followDigestCopy.greeting)}</p><p>${escapeFollowDigestHtml(followDigestCopy.intro)}</p><table role="presentation" style="width:100%;border-collapse:collapse">${items.join("")}</table>${moreHtml}<p style="color:#f4ead7;font-size:13px;white-space:pre-line">${escapeFollowDigestHtml(followDigestCopy.footer)}</p><p style="font-size:13px;line-height:2"><a href="${manageUrl}" style="color:#f5b800;padding:6px 0">${escapeFollowDigestHtml(followDigestCopy.manage)}</a><br><a href="${unsubscribeUrl}" style="color:#f5b800;padding:6px 0">${escapeFollowDigestHtml(followDigestCopy.unsubscribe)}</a></p></td></tr></table></td></tr></table></body></html>`;
+  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="dark"><meta name="supported-color-schemes" content="dark"><title>${escapeFollowDigestHtml(followDigestCopy.subject)}</title></head><body style="margin:0;background:#090a0b;color:#f4ead7;font-family:Arial,sans-serif"><div style="display:none;max-height:0;overflow:hidden">${escapeFollowDigestHtml(followDigestCopy.preheader)}</div><table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#090a0b"><tr><td align="center" style="padding:24px 12px"><table role="presentation" width="560" cellpadding="0" cellspacing="0" style="width:100%;max-width:560px;background:#10100d"><tr><td style="padding:28px 20px"><p style="margin:0 0 20px;font-size:13px;font-weight:700;letter-spacing:0.12em;color:#f5b800">FLUNCLE</p><p>${escapeFollowDigestHtml(followDigestCopy.greeting)}</p><p>${escapeFollowDigestHtml(followDigestCopy.intro)}</p><table role="presentation" style="width:100%;border-collapse:collapse">${items.join("")}</table>${moreHtml}<p style="color:#f4ead7;font-size:13px;white-space:pre-line">${escapeFollowDigestHtml(followDigestCopy.footer)}</p><p style="font-size:13px;line-height:2"><a href="${manageUrl}" style="color:#f5b800;padding:6px 0">${escapeFollowDigestHtml(followDigestCopy.manage)}</a><br><a href="${unsubscribeUrl}" style="color:#f5b800;padding:6px 0">${escapeFollowDigestHtml(followDigestCopy.unsubscribe)}</a><br>${escapeFollowDigestHtml(POSTAL_ADDRESS)}</p></td></tr></table></td></tr></table></body></html>`;
   const text = [
     followDigestCopy.greeting,
     "",
@@ -70,6 +71,7 @@ export function renderFollowDigestEmail(input: {
     followDigestCopy.footer,
     `${followDigestCopy.manage}: ${input.manageUrl}`,
     `${followDigestCopy.unsubscribe}: ${input.unsubscribeUrl}`,
+    POSTAL_ADDRESS,
   ].join("\n");
   return { html, subject: followDigestCopy.subject, text };
 }

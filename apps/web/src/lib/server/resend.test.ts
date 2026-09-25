@@ -129,9 +129,26 @@ describe("createBroadcast + sendBroadcast", () => {
 });
 
 describe("sendFollowDigestEmail", () => {
+  it("preserves the upstream status for bounded retry decisions", async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify({ message: "slow down" }), { status: 429 }),
+    );
+    await expect(
+      sendFollowDigestEmail({
+        from: "Fluncle <fluncle@newsletter.fluncle.com>",
+        headers: {},
+        html: "<p>New releases</p>",
+        idempotencyKey: "follow-digest/user-1/2026-W39/claim",
+        subject: "Your follows",
+        text: "New releases",
+        to: "one@example.com",
+      }),
+    ).rejects.toMatchObject({ upstreamStatus: 429 });
+  });
   it("sends idempotently with one-click unsubscribe headers", async () => {
     fetchMock.mockResolvedValueOnce(ok({ id: "email_1" }));
-    await sendFollowDigestEmail({
+    const result = await sendFollowDigestEmail({
+      from: "Frozen Sender <frozen@example.com>",
       headers: {
         "List-Unsubscribe": "<https://www.fluncle.com/api/v1/follow-digest/unsubscribe?token=abc>",
         "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
@@ -148,6 +165,8 @@ describe("sendFollowDigestEmail", () => {
     expect(JSON.parse(init.body).headers["List-Unsubscribe-Post"]).toBe(
       "List-Unsubscribe=One-Click",
     );
+    expect(JSON.parse(init.body).from).toBe("Frozen Sender <frozen@example.com>");
+    expect(result.id).toBe("email_1");
   });
 });
 

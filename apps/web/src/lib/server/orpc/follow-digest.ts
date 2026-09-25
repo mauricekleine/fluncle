@@ -12,12 +12,14 @@ import { adminAuth, operatorGuard } from "../orpc-auth";
 import { assertRateLimit } from "../rate-limit";
 import { type Implementer, toFault } from "./_shared";
 
-function signedUser(
+async function signedUser(
   token: string | undefined,
   ...purposes: [FollowDigestPurpose, ...FollowDigestPurpose[]]
-): string {
+): Promise<string> {
   const userId = token
-    ? (purposes.map((purpose) => verifyFollowDigestToken(token, purpose)).find(Boolean) ?? null)
+    ? ((await Promise.all(purposes.map((purpose) => verifyFollowDigestToken(token, purpose)))).find(
+        Boolean,
+      ) ?? null)
     : null;
   if (!userId) {
     throw new ORPCError("UNAUTHORIZED", { message: "Invalid follow digest link" });
@@ -71,7 +73,11 @@ export function followDigestHandlers(os: Implementer) {
   const unsubscribeFollowDigestHandler = os.unsubscribe_follow_digest.handler(
     async ({ context, input }) => {
       try {
-        const userId = signedUser(input.query.token ?? input.body?.token, "unsubscribe", "manage");
+        const userId = await signedUser(
+          input.query.token ?? input.body?.token,
+          "unsubscribe",
+          "manage",
+        );
         await limitMutation(context.request, userId);
         await setFollowDigestSubscription(userId, false);
         return { ok: true as const, subscribed: false as const };
@@ -84,7 +90,7 @@ export function followDigestHandlers(os: Implementer) {
   const subscribeFollowDigestHandler = os.subscribe_follow_digest.handler(
     async ({ context, input }) => {
       try {
-        const userId = signedUser(input.query.token ?? input.body?.token, "manage");
+        const userId = await signedUser(input.query.token ?? input.body?.token, "manage");
         await limitMutation(context.request, userId);
         await setFollowDigestSubscription(userId, true);
         return { ok: true as const, subscribed: true as const };
@@ -96,7 +102,7 @@ export function followDigestHandlers(os: Implementer) {
 
   const listDigestFollowsHandler = os.list_digest_follows.handler(async ({ input }) => {
     try {
-      return await listDigestFollows(signedUser(input.token, "manage"));
+      return await listDigestFollows(await signedUser(input.token, "manage"));
     } catch (error) {
       throw toFault(error);
     }
@@ -104,7 +110,7 @@ export function followDigestHandlers(os: Implementer) {
 
   const deleteDigestFollowHandler = os.delete_digest_follow.handler(async ({ context, input }) => {
     try {
-      const userId = signedUser(input.query.token, "manage");
+      const userId = await signedUser(input.query.token, "manage");
       await limitMutation(context.request, userId);
       if (!(await deleteDigestFollow(userId, input.params.id))) {
         throw new ORPCError("NOT_FOUND", { message: "Follow not found" });

@@ -19,7 +19,7 @@ const loadFollowsPage = createServerFn({ method: "GET" })
     const { verifyFollowDigestToken } = await import("@/lib/server/follow-digest-tokens");
 
     if (data.token) {
-      const userId = verifyFollowDigestToken(data.token, "manage");
+      const userId = await verifyFollowDigestToken(data.token, "manage");
 
       if (userId) {
         const { listDigestFollows } = await import("@/lib/server/follow-digest");
@@ -29,7 +29,7 @@ const loadFollowsPage = createServerFn({ method: "GET" })
       }
     }
 
-    if (data.unsubscribe && verifyFollowDigestToken(data.unsubscribe, "unsubscribe")) {
+    if (data.unsubscribe && (await verifyFollowDigestToken(data.unsubscribe, "unsubscribe"))) {
       return { mode: "unsubscribe", token: data.unsubscribe };
     }
 
@@ -94,14 +94,7 @@ function FollowsPage() {
   return (
     <main className="min-h-screen overflow-x-hidden p-4 text-foreground sm:p-6 lg:p-8">
       <article className="home-plate account-plate mx-auto my-6 w-full max-w-2xl sm:my-8">
-        <header className="home-masthead">
-          <div>
-            <h1 className="home-nameplate">Your follows email</h1>
-            <p className="home-tagline">
-              New releases from the artists and labels you follow, every Friday.
-            </p>
-          </div>
-        </header>
+        <h1 className="mb-6 text-xl font-semibold">Your follows email</h1>
         {data.mode === "manage" ? (
           <ManageFollows follows={data.follows} subscribed={data.subscribed} token={data.token} />
         ) : data.mode === "unsubscribe" ? (

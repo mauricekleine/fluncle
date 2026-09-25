@@ -27,11 +27,17 @@ beforeEach(async () => {
 afterEach(() => db.close());
 
 describe("follow digest contract", () => {
+  it("routes the signed-in account action to revoke old manage links", async () => {
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(req("/me/follow-link-access/revoke", "POST", undefined, {}));
+    expect(response).toBeDefined();
+  });
+
   it("accepts the exact RFC 8058 form POST through the real oRPC handler", async () => {
     const { createFollowDigestToken } = await import("./follow-digest-tokens");
     const { handleOrpc } = await import("./orpc");
     await seedUser(db, { email: "one@example.com", id: "one" });
-    const token = createFollowDigestToken("one", "unsubscribe");
+    const token = await createFollowDigestToken("one", "unsubscribe");
     const response = await handleOrpc(
       new Request(`https://www.fluncle.com/api/v1/follow-digest/unsubscribe?token=${token}`, {
         body: "List-Unsubscribe=One-Click",

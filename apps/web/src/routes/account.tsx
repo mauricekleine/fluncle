@@ -57,7 +57,7 @@ const getAccountDoorData = createServerFn({ method: "GET" })
 
       return {
         follows: follows.follows,
-        followsEmail: { subscribed, token: createFollowDigestToken(user.id, "manage") },
+        followsEmail: { subscribed, token: await createFollowDigestToken(user.id, "manage") },
         saved: saved.savedFindings,
         sets: sets.savedSets,
         submissions: submissions.submissions,

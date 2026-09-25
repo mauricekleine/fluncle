@@ -1,22 +1,40 @@
 import { bestAlbumCoverUrl, trackMedia } from "../media";
+import { randomUUID } from "node:crypto";
 import { parseArtistsJson } from "./artists";
 import { listedArtistWhere } from "./artist-visibility";
 import { getDb, typedRow, typedRows } from "./db";
 import { readOptionalEnv } from "./env";
 import { renderFollowDigestEmail, type FollowDigestRelease } from "./follow-digest-email";
-import { createFollowDigestToken } from "./follow-digest-tokens";
-import { sendFollowDigestEmail } from "./resend";
+import {
+  createFollowDigestToken,
+  FollowDigestRecipientUnavailableError,
+} from "./follow-digest-tokens";
+import { readResendSender, ResendDeliveryError, sendFollowDigestEmail } from "./resend";
 import { getSetting, setSetting } from "./settings";
 
 export const FOLLOW_DIGEST_PAUSED_KEY = "follow_digest_paused";
 export const FOLLOW_DIGEST_MAX_SENDS = 50;
 export const FOLLOW_DIGEST_MAX_ITEMS = 30;
+export const FOLLOW_DIGEST_MAX_FOLLOWS = 200;
+const FOLLOW_DIGEST_WINDOW_DAYS = 28;
+const CLAIM_GRACE_MS = 2 * 60_000;
+const RESEND_IDEMPOTENCY_MS = 24 * 60 * 60_000;
+const MAX_SEND_ATTEMPTS = 3;
 const SITE = "https://www.fluncle.com";
 
 type SubscriberRow = {
-  email: string;
   id: string;
-  last_sent_at: string | null;
+};
+
+type DeliveryPayload = Parameters<typeof sendFollowDigestEmail>[0];
+
+type DeliveryRow = {
+  attempts: number;
+  claimed_at: string;
+  id: string;
+  payload_json: string;
+  release_count: number;
+  status: "claimed" | "failed" | "sent" | "unknown";
 };
 
 type ReleaseRow = {
@@ -50,25 +68,23 @@ export async function setFollowDigestPaused(paused: boolean): Promise<void> {
 
 export const FOLLOW_DIGEST_RELEASE_SQL = `with matched as (
   select tracks.track_id, tracks.title, tracks.artists_json, tracks.release_date,
-    tracks.album_id, tracks.album_image_url, followed.follow_name, followed.follow_rank
-  from (
-    select ta.track_id, a.name as follow_name, 0 as follow_rank
-    from user_watches w
-    join artists a on a.id = w.entity_id and ${listedArtistWhere("a")}
-    join track_artists ta on ta.artist_id = a.id
-    where w.user_id = ? and w.kind = 'artist'
-    union all
-    select label_tracks.track_id, l.name as follow_name, 1 as follow_rank
-    from user_watches w
-    join labels l on l.id = w.entity_id
-    join tracks label_tracks on label_tracks.label_id = l.id
-      and label_tracks.release_date > ? and label_tracks.release_date <= ?
-    where w.user_id = ? and w.kind = 'label'
-  ) followed
-  join tracks on tracks.track_id = followed.track_id
+    tracks.album_id, tracks.album_image_url, coalesce(a.name, l.name) as follow_name,
+    case when w.kind = 'artist' then 0 else 1 end as follow_rank
+  from tracks indexed by tracks_release_date_idx
+  cross join (
+    select kind, entity_id from user_watches
+    where user_id = ? order by created_at desc, id desc limit ${FOLLOW_DIGEST_MAX_FOLLOWS}
+  ) w
+  left join artists a on w.kind = 'artist' and a.id = w.entity_id and ${listedArtistWhere("a")}
+  left join labels l on w.kind = 'label' and l.id = w.entity_id
   left join findings on findings.track_id = tracks.track_id
   left join albums on albums.id = tracks.album_id
   where tracks.release_date > ? and tracks.release_date <= ?
+    and ((w.kind = 'label' and l.id is not null and tracks.label_id = l.id)
+      or (w.kind = 'artist' and a.id is not null and exists (
+        select 1 from track_artists ta
+        where ta.track_id = tracks.track_id and ta.artist_id = a.id
+      )))
     and (tracks.is_catalogue = 1 or findings.log_id is not null)
     and tracks.dismissed_at is null
     and tracks.duplicate_of_track_id is null
@@ -95,10 +111,14 @@ export async function listFollowDigestReleases(
   since: string,
   today: string,
 ): Promise<{ items: FollowDigestRelease[]; more: boolean }> {
+  const windowStart = new Date(`${today}T00:00:00.000Z`);
+  windowStart.setUTCDate(windowStart.getUTCDate() - FOLLOW_DIGEST_WINDOW_DAYS);
+  const boundedSince =
+    since > windowStart.toISOString().slice(0, 10) ? since : windowStart.toISOString().slice(0, 10);
   const result = await (
     await getDb()
   ).execute({
-    args: [userId, since, today, userId, since, today, FOLLOW_DIGEST_MAX_ITEMS + 1],
+    args: [userId, boundedSince, today, FOLLOW_DIGEST_MAX_ITEMS + 1],
     sql: FOLLOW_DIGEST_RELEASE_SQL,
   });
   const rows = typedRows<ReleaseRow>(result.rows);
@@ -127,13 +147,203 @@ export type FollowDigestSendResult = {
   considered: number;
   dryRun: boolean;
   empty: number;
+  failed: number;
   nextCursor?: string;
   ok: true;
   paused: boolean;
   sent: number;
   skipped: number;
+  unknown: number;
   weekKey: string;
 };
+
+async function eligibleSubscriber(
+  db: Awaited<ReturnType<typeof getDb>>,
+  userId: string,
+  weekKey: string,
+): Promise<{ email: string; last_sent_at: string | null } | undefined> {
+  const result = await db.execute({
+    args: [userId, weekKey],
+    sql: `select u.email, d.last_sent_at from "user" u
+      left join user_follow_digests d on d.user_id = u.id
+      where u.id = ? and u.status = 'active' and u.email_verified = 1
+        and trim(u.email) <> '' and d.unsubscribed_at is null
+        and (d.last_week_key is null or d.last_week_key <> ?)
+        and exists (select 1 from user_watches w where w.user_id = u.id)
+      limit 1`,
+  });
+  return typedRow<{ email: string; last_sent_at: string | null }>(result.rows);
+}
+
+async function deliveryFor(
+  db: Awaited<ReturnType<typeof getDb>>,
+  userId: string,
+  weekKey: string,
+): Promise<DeliveryRow | undefined> {
+  const result = await db.execute({
+    args: [userId, weekKey],
+    sql: `select id, status, payload_json, release_count, claimed_at, attempts
+      from follow_digest_deliveries where user_id = ? and week_key = ? limit 1`,
+  });
+  return typedRow<DeliveryRow>(result.rows);
+}
+
+async function setDeliveryStatus<Status extends "failed" | "unknown">(
+  db: Awaited<ReturnType<typeof getDb>>,
+  id: string,
+  status: Status,
+  now: Date,
+  error: string | null,
+): Promise<Status | "skipped"> {
+  const result = await db.execute({
+    args: [status, error, now.toISOString(), id, "claimed"],
+    sql: `update follow_digest_deliveries set status = ?, last_error = ?, updated_at = ?
+      where id = ? and status = ?`,
+  });
+  return result.rowsAffected > 0 ? status : "skipped";
+}
+
+async function completedDeliveryOutcome(
+  db: Awaited<ReturnType<typeof getDb>>,
+  id: string,
+  rowsAffected: number,
+): Promise<"sent" | "skipped"> {
+  if (rowsAffected > 0) {
+    return "sent";
+  }
+  const result = await db.execute({
+    args: [id],
+    sql: `select status from follow_digest_deliveries where id = ? limit 1`,
+  });
+  return result.rows.length === 0 ? "sent" : "skipped";
+}
+
+async function sendClaimedDelivery(
+  db: Awaited<ReturnType<typeof getDb>>,
+  delivery: DeliveryRow,
+  userId: string,
+  weekKey: string,
+  now: Date,
+  testRecipient: boolean,
+): Promise<"failed" | "sent" | "skipped"> {
+  const payload = JSON.parse(delivery.payload_json) as DeliveryPayload;
+  let attempts = delivery.attempts;
+  const allowance = Math.max(1, MAX_SEND_ATTEMPTS - attempts);
+  for (let retry = 0; retry < allowance; retry += 1) {
+    attempts += 1;
+    await db.execute({
+      args: [now.toISOString(), delivery.id],
+      sql: `update follow_digest_deliveries set attempts = attempts + 1, updated_at = ?
+        where id = ? and status = 'claimed'`,
+    });
+    let response: Awaited<ReturnType<typeof sendFollowDigestEmail>>;
+    try {
+      response = await sendFollowDigestEmail(payload);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const transient =
+        error instanceof TypeError ||
+        (error instanceof ResendDeliveryError &&
+          (error.upstreamStatus === 429 || error.upstreamStatus >= 500));
+      if (transient && retry + 1 < allowance) {
+        await new Promise((resolve) => setTimeout(resolve, 250 * 2 ** retry));
+        continue;
+      }
+      return setDeliveryStatus(db, delivery.id, "failed", now, message);
+    }
+    const sentAt = now.toISOString();
+    if (testRecipient) {
+      const completed = await db.execute({
+        args: [response.id, sentAt, sentAt, delivery.id],
+        sql: `update follow_digest_deliveries set status = 'sent', resend_id = ?, sent_at = ?, updated_at = ?
+          where id = ? and status <> 'sent'`,
+      });
+      return completedDeliveryOutcome(db, delivery.id, completed.rowsAffected);
+    } else {
+      const completed = await db.batch(
+        [
+          {
+            args: [response.id, sentAt, sentAt, delivery.id],
+            sql: `update follow_digest_deliveries set status = 'sent', resend_id = ?, sent_at = ?, updated_at = ?
+              where id = ? and status <> 'sent'`,
+          },
+          {
+            args: [weekKey, sentAt, delivery.release_count, sentAt, delivery.id, userId],
+            sql: `insert into user_follow_digests
+              (user_id, last_week_key, last_sent_at, last_release_count, updated_at)
+              select u.id, ?, ?, ?, ? from "user" u
+              join follow_digest_deliveries f on f.user_id = u.id and f.id = ? and f.status = 'sent'
+              where u.id = ? and u.status = 'active'
+              on conflict(user_id) do update set
+                last_week_key = excluded.last_week_key,
+                last_sent_at = excluded.last_sent_at,
+                last_release_count = excluded.last_release_count,
+                updated_at = excluded.updated_at
+              where user_follow_digests.unsubscribed_at is null
+                and (user_follow_digests.last_week_key is null
+                  or user_follow_digests.last_week_key <> excluded.last_week_key)`,
+          },
+        ],
+        "write",
+      );
+      return completedDeliveryOutcome(db, delivery.id, completed[0]?.rowsAffected ?? 0);
+    }
+  }
+  return "failed";
+}
+
+async function recoverClaimedDelivery(
+  db: Awaited<ReturnType<typeof getDb>>,
+  delivery: DeliveryRow,
+  userId: string,
+  weekKey: string,
+  now: Date,
+  dryRun: boolean,
+  testRecipient: string | undefined,
+): Promise<"failed" | "sent" | "skipped" | "unknown"> {
+  if (dryRun || delivery.status !== "claimed") {
+    return "skipped";
+  }
+  const eligible = await eligibleSubscriber(db, userId, weekKey);
+  if (!eligible) {
+    return setDeliveryStatus(db, delivery.id, "unknown", now, "Recipient is no longer eligible");
+  }
+  const age = now.getTime() - new Date(delivery.claimed_at).getTime();
+  if (age < CLAIM_GRACE_MS) {
+    return "skipped";
+  }
+  if (age >= RESEND_IDEMPOTENCY_MS) {
+    return setDeliveryStatus(db, delivery.id, "unknown", now, "Resend idempotency window elapsed");
+  }
+  const payload = JSON.parse(delivery.payload_json) as DeliveryPayload;
+  if (payload.to !== (testRecipient ?? eligible.email)) {
+    return setDeliveryStatus(
+      db,
+      delivery.id,
+      "unknown",
+      now,
+      "Recipient address changed after claim",
+    );
+  }
+  return sendClaimedDelivery(db, delivery, userId, weekKey, now, Boolean(testRecipient));
+}
+
+async function recipientTokens(
+  userId: string,
+): Promise<{ manage: string; unsubscribe: string } | undefined> {
+  try {
+    const [unsubscribe, manage] = await Promise.all([
+      createFollowDigestToken(userId, "unsubscribe"),
+      createFollowDigestToken(userId, "manage"),
+    ]);
+    return { manage, unsubscribe };
+  } catch (error) {
+    if (error instanceof FollowDigestRecipientUnavailableError) {
+      return undefined;
+    }
+    throw error;
+  }
+}
 
 export async function sendFollowDigests(
   options: {
@@ -152,10 +362,12 @@ export async function sendFollowDigests(
     considered: 0,
     dryRun,
     empty: 0,
+    failed: 0,
     ok: true,
     paused: false,
     sent: 0,
     skipped: 0,
+    unknown: 0,
     weekKey,
   };
   if (await isFollowDigestPaused()) {
@@ -166,21 +378,50 @@ export async function sendFollowDigests(
     FOLLOW_DIGEST_MAX_SENDS,
   );
   const db = await getDb();
+  const deliveryWeekKey = testRecipient ? `test/${weekKey}` : weekKey;
   const result = await db.execute({
-    args: [options.cursor ?? "", weekKey, limit + 1],
-    sql: `select u.id, u.email, d.last_sent_at
+    args: [deliveryWeekKey, options.cursor ?? "", weekKey, limit + 1],
+    sql: `select u.id
       from "user" u left join user_follow_digests d on d.user_id = u.id
-      where u.id > ? and u.status = 'active' and u.email_verified = 1 and trim(u.email) <> ''
+      left join follow_digest_deliveries f on f.user_id = u.id and f.week_key = ?
+      where u.id > ? and (f.status = 'claimed' or (
+        f.id is null and u.status = 'active' and u.email_verified = 1 and trim(u.email) <> ''
         and d.unsubscribed_at is null and (d.last_week_key is null or d.last_week_key <> ?)
-        and exists (select 1 from user_watches w where w.user_id = u.id)
+        and exists (select 1 from user_watches w where w.user_id = u.id)))
       order by u.id limit ?`,
   });
   const subscribers = typedRows<SubscriberRow>(result.rows);
   const selected = subscribers.slice(0, limit);
   for (const subscriber of selected) {
     base.considered += 1;
-    const since = subscriber.last_sent_at
-      ? subscriber.last_sent_at.slice(0, 10)
+    if (await isFollowDigestPaused()) {
+      base.paused = true;
+      break;
+    }
+    const existing = await deliveryFor(db, subscriber.id, deliveryWeekKey);
+    if (existing) {
+      const outcome = await recoverClaimedDelivery(
+        db,
+        existing,
+        subscriber.id,
+        weekKey,
+        now,
+        dryRun,
+        testRecipient,
+      );
+      base[outcome] += 1;
+      if (testRecipient && outcome === "sent") {
+        break;
+      }
+      continue;
+    }
+    const eligible = await eligibleSubscriber(db, subscriber.id, weekKey);
+    if (!eligible) {
+      base.skipped += 1;
+      continue;
+    }
+    const since = eligible.last_sent_at
+      ? eligible.last_sent_at.slice(0, 10)
       : new Date(now.getTime() - 7 * 86400000).toISOString().slice(0, 10);
     const releases = await listFollowDigestReleases(
       subscriber.id,
@@ -199,54 +440,86 @@ export async function sendFollowDigests(
       base.paused = true;
       break;
     }
-    const currentState = await db.execute({
-      args: [subscriber.id],
-      sql: `select last_week_key, unsubscribed_at from user_follow_digests where user_id = ? limit 1`,
-    });
-    const state = typedRow<{ last_week_key: string | null; unsubscribed_at: string | null }>(
-      currentState.rows,
-    );
-    if (state?.unsubscribed_at || state?.last_week_key === weekKey) {
+    const fresh = await eligibleSubscriber(db, subscriber.id, weekKey);
+    if (!fresh) {
       base.skipped += 1;
       continue;
     }
     if (base.sent > 0) {
       await new Promise((resolve) => setTimeout(resolve, 600));
     }
-    const unsubscribeUrl = `${SITE}/api/v1/follow-digest/unsubscribe?token=${encodeURIComponent(createFollowDigestToken(subscriber.id, "unsubscribe"))}`;
-    const manageUrl = `${SITE}/follows?token=${encodeURIComponent(createFollowDigestToken(subscriber.id, "manage"))}`;
+    const tokens = await recipientTokens(subscriber.id);
+    if (!tokens) {
+      base.skipped += 1;
+      continue;
+    }
+    const unsubscribeUrl = `${SITE}/api/v1/follow-digest/unsubscribe?token=${encodeURIComponent(tokens.unsubscribe)}`;
+    const manageUrl = `${SITE}/follows?token=${encodeURIComponent(tokens.manage)}`;
     const email = renderFollowDigestEmail({
       items: releases.items,
       manageUrl,
       more: releases.more,
       unsubscribeUrl,
     });
-    await sendFollowDigestEmail({
+    const id = randomUUID();
+    const idempotencyKey = `follow-digest/${testRecipient ? "test/" : ""}${subscriber.id}/${weekKey}/${id}`;
+    const payload: DeliveryPayload = {
       ...email,
+      from: await readResendSender(),
       headers: {
         "List-Unsubscribe": `<${unsubscribeUrl}>`,
         "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
       },
-      idempotencyKey: `follow-digest/${testRecipient ? "test/" : ""}${subscriber.id}/${weekKey}`,
-      to: testRecipient ?? subscriber.email,
+      idempotencyKey,
+      to: testRecipient ?? fresh.email,
+    };
+    const claimedAt = now.toISOString();
+    const claim = await db.execute({
+      args: [
+        id,
+        deliveryWeekKey,
+        idempotencyKey,
+        JSON.stringify(payload),
+        releases.items.length,
+        claimedAt,
+        claimedAt,
+        subscriber.id,
+        fresh.email,
+        weekKey,
+        deliveryWeekKey,
+      ],
+      sql: `insert into follow_digest_deliveries
+        (id, user_id, week_key, status, idempotency_key, payload_json, release_count, claimed_at, updated_at)
+        select ?, u.id, ?, 'claimed', ?, ?, ?, ?, ?
+        from "user" u left join user_follow_digests d on d.user_id = u.id
+        where u.id = ? and u.email = ? and u.status = 'active' and u.email_verified = 1
+          and trim(u.email) <> '' and d.unsubscribed_at is null
+          and (d.last_week_key is null or d.last_week_key <> ?)
+          and exists (select 1 from user_watches w where w.user_id = u.id)
+          and not exists (select 1 from follow_digest_deliveries f where f.user_id = u.id and f.week_key = ?)
+        on conflict(user_id, week_key) do nothing`,
     });
-    if (!testRecipient) {
-      const sentAt = now.toISOString();
-      await db.execute({
-        args: [subscriber.id, weekKey, sentAt, releases.items.length, sentAt],
-        sql: `insert into user_follow_digests
-        (user_id, last_week_key, last_sent_at, last_release_count, updated_at)
-        values (?, ?, ?, ?, ?)
-        on conflict(user_id) do update set
-          last_week_key = excluded.last_week_key,
-          last_sent_at = excluded.last_sent_at,
-          last_release_count = excluded.last_release_count,
-          updated_at = excluded.updated_at
-        where user_follow_digests.unsubscribed_at is null`,
-      });
+    if (claim.rowsAffected === 0) {
+      base.skipped += 1;
+      continue;
     }
-    base.sent += 1;
-    if (testRecipient) {
+    const outcome = await sendClaimedDelivery(
+      db,
+      {
+        attempts: 0,
+        claimed_at: claimedAt,
+        id,
+        payload_json: JSON.stringify(payload),
+        release_count: releases.items.length,
+        status: "claimed",
+      },
+      subscriber.id,
+      weekKey,
+      now,
+      Boolean(testRecipient),
+    );
+    base[outcome] += 1;
+    if (testRecipient && outcome === "sent") {
       break;
     }
   }

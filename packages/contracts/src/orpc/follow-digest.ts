@@ -24,11 +24,13 @@ export const sendFollowDigests = oc
       considered: z.number(),
       dryRun: z.boolean(),
       empty: z.number(),
+      failed: z.number(),
       nextCursor: z.string().optional(),
       ok: z.literal(true),
       paused: z.boolean(),
       sent: z.number(),
       skipped: z.number(),
+      unknown: z.number(),
       weekKey: z.string(),
     }),
   );

@@ -2,6 +2,16 @@ import { describe, expect, it } from "vitest";
 import { renderFollowDigestEmail } from "./follow-digest-email";
 
 describe("follow digest email", () => {
+  it("reuses the newsletter postal footer in HTML and text", () => {
+    const email = renderFollowDigestEmail({
+      items: [],
+      manageUrl: "https://www.fluncle.com/follows?token=abc",
+      more: false,
+      unsubscribeUrl: "https://www.fluncle.com/api/v1/follow-digest/unsubscribe?token=def",
+    });
+    expect(email.html).toContain("With love, from somewhere deep in the Galaxy, Fluncle");
+    expect(email.text).toContain("With love, from somewhere deep in the Galaxy, Fluncle");
+  });
   it("escapes catalogue text and includes both signed links in HTML and text", () => {
     const result = renderFollowDigestEmail({
       items: [

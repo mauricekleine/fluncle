@@ -118,6 +118,19 @@ export const exportPrivateAccountData = oc
           })
           .nullable()
           .optional(),
+        followDigestDeliveries: z
+          .array(
+            z.object({
+              attempts: z.number(),
+              claimedAt: z.string(),
+              id: z.string(),
+              payloadJson: z.string(),
+              sentAt: z.string().nullable(),
+              status: z.string(),
+              weekKey: z.string(),
+            }),
+          )
+          .optional(),
         follows: z.array(FollowSchema).optional(),
         generatedAt: z.string(),
         id: z.string(),

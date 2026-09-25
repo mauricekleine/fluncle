@@ -8,11 +8,13 @@ type SendResult = {
   considered: number;
   dryRun: boolean;
   empty: number;
+  failed: number;
   nextCursor?: string;
   ok: boolean;
   paused: boolean;
   sent: number;
   skipped: number;
+  unknown: number;
   weekKey: string;
 };
 
@@ -22,6 +24,7 @@ export type FollowDigestSweepSummary = {
   empty: number;
   error: null | string;
   errors: number;
+  failed: number;
   gateState: "active" | "paused";
   nextCursor: null | string;
   ok: boolean;
@@ -29,6 +32,7 @@ export type FollowDigestSweepSummary = {
   produced: number;
   sent: number;
   skipped: number;
+  unknown: number;
   weekKey: null | string;
 };
 
@@ -41,6 +45,7 @@ export async function runFollowDigestSweep(
     empty: 0,
     error: null,
     errors: 0,
+    failed: 0,
     gateState: "active",
     nextCursor: null,
     ok: true,
@@ -48,6 +53,7 @@ export async function runFollowDigestSweep(
     produced: 0,
     sent: 0,
     skipped: 0,
+    unknown: 0,
     weekKey: null,
   };
   let cursor: string | undefined;
@@ -61,9 +67,11 @@ export async function runFollowDigestSweep(
       summary.passes += 1;
       summary.checked += result.considered;
       summary.empty += result.empty;
+      summary.failed += result.failed;
       summary.sent += result.sent;
       summary.produced += result.sent;
       summary.skipped += result.skipped;
+      summary.unknown += result.unknown;
       summary.weekKey = result.weekKey;
       summary.nextCursor = result.nextCursor ?? null;
       if (result.paused) {
