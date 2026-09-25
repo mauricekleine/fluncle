@@ -11,9 +11,31 @@ export const SEARCH_LIMIT = 30;
 export const SEARCH_WINDOW_MS = 60 * 1000;
 
 export async function searchArchiveRateLimit(): Promise<number> {
-  const raw = Number(await readOptionalEnv("SEARCH_ARCHIVE_RATE_LIMIT"));
+  const [flag, databaseUrl, override] = await Promise.all([
+    readOptionalEnv("FLUNCLE_E2E"),
+    readOptionalEnv("TURSO_DATABASE_URL"),
+    readOptionalEnv("SEARCH_ARCHIVE_RATE_LIMIT"),
+  ]);
+
+  if (flag !== "1" || !isLoopbackDatabase(databaseUrl)) {
+    return SEARCH_LIMIT;
+  }
+
+  const raw = Number(override);
 
   return Number.isSafeInteger(raw) && raw > 0 ? raw : SEARCH_LIMIT;
+}
+
+function isLoopbackDatabase(url: string | undefined): boolean {
+  if (url === undefined) {
+    return false;
+  }
+
+  try {
+    return ["127.0.0.1", "localhost", "[::1]"].includes(new URL(url).hostname);
+  } catch {
+    return false;
+  }
 }
 
 export function searchHandlers(os: Implementer) {

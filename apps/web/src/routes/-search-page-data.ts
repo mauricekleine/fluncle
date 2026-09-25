@@ -55,7 +55,11 @@ export async function resolveSearchPageData(
       : undefined;
 
     if (options.like !== undefined) {
-      const liked = await searchLikeTrack({ limit: SEARCH_PAGE_LIMIT, trackId: options.like });
+      const liked = await searchLikeTrack({
+        beforeVector: charge?.requireAllowed,
+        limit: SEARCH_PAGE_LIMIT,
+        trackId: options.like,
+      });
 
       charge?.throwIfLimited();
 
@@ -69,6 +73,7 @@ export async function resolveSearchPageData(
 
     const response = await searchArchive({
       beforeModel: charge?.requireAllowed,
+      beforeVector: charge?.requireAllowed,
       deferModel: options.live,
       limit: SEARCH_PAGE_LIMIT,
       q,

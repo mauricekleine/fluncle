@@ -71,7 +71,7 @@ import {
 
 /** How a `?sound=` page was ordered: the anchors its sound came from, and whether it ranked at all
     (false when the ranking could not run and the page fell back to newest first). */
-type TracksSoundState = { anchors: string[]; ranked: boolean; slug: string };
+type TracksSoundState = { anchors: string[]; limited?: boolean; ranked: boolean; slug: string };
 
 /** The serverFn payload: a page of the hub (or "missing" for a page past the end), the year lane, the
     whole held count, the label options for the filter control, and the sound state when ranked. */
@@ -137,7 +137,9 @@ const fetchTracksHubPage = createServerFn({ method: "GET" })
       if (style) {
         const [labelOptions, reads] = await Promise.all([
           labelOptionsPromise,
-          readTracksHubSoundAtOneTime(filters, style, data.page),
+          import("@tanstack/react-start/server").then(({ getRequest }) =>
+            readTracksHubSoundAtOneTime(filters, style, data.page, { request: getRequest() }),
+          ),
         ]);
         const [soundPage, heldTotal] = reads;
 
@@ -145,7 +147,12 @@ const fetchTracksHubPage = createServerFn({ method: "GET" })
           heldTotal,
           hub: soundPage.hub,
           labelOptions,
-          sound: { anchors: soundPage.anchors, ranked: soundPage.ranked, slug: style.slug },
+          sound: {
+            anchors: soundPage.anchors,
+            ...(soundPage.limited ? { limited: true } : {}),
+            ranked: soundPage.ranked,
+            slug: style.slug,
+          },
           status: "found",
           // The newest-first year lane maps onto the fallback order only.
           years: [],
@@ -580,6 +587,10 @@ function tracksMatchline(total: number, sound: TracksSoundState | undefined): st
 
   // Two different facts: the style has no anchors with a sound yet (a data gap), or the ranking
   // engine could not answer just now (an outage). Neither is dressed up as the other.
+  if (sound.limited) {
+    return `${tracks}, newest first. That’s a lot of searching from one place in one go. Give it a minute, then reload for the ${style.label} order.`;
+  }
+
   if (!sound.ranked) {
     return sound.anchors.length === 0
       ? `${tracks}, newest first. The ${style.label} order isn’t ready yet.`

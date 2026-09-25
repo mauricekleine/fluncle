@@ -52,7 +52,23 @@ describe("resolveSearchPageData charges the search_archive budget on every page 
     await resolveSearchPageData(undefined, { like: "t1", request });
 
     expect(chargeRateLimit).toHaveBeenCalledOnce();
+    expect(searchLikeTrack).toHaveBeenCalledWith(
+      expect.objectContaining({ beforeVector: charge.requireAllowed }),
+    );
     expect(charge.throwIfLimited).toHaveBeenCalled();
+  });
+
+  it("holds every vector pass of a typed query for the budget's verdict", async () => {
+    const charge = allowed();
+
+    await resolveSearchPageData("liquid", { live: true, request });
+
+    expect(searchArchive).toHaveBeenCalledWith(
+      expect.objectContaining({
+        beforeModel: charge.requireAllowed,
+        beforeVector: charge.requireAllowed,
+      }),
+    );
   });
 
   it("gates a committed sentence's model tier on the budget's verdict", async () => {

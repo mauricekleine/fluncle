@@ -18,6 +18,7 @@ SONAR_BASE_URL=http://127.0.0.1:__E2E_SONAR_PORT__
 SONAR_SECRET=e2e-fake-sonar-secret
 
 # Every spec shares one local address, so the per-IP search budget is raised for the suite.
+FLUNCLE_E2E=1
 SEARCH_ARCHIVE_RATE_LIMIT=100000
 
 # Admin identity + signing. Fake — the e2e suite exercises PUBLIC surfaces, and the
