@@ -12,9 +12,11 @@ import {
   CataloguePageOutOfRangeError,
   type CatalogueGroupPage,
   type CatalogueSort,
+  type UpcomingTrackPage,
 } from "@/lib/catalogue";
 import { type ArtistChip, listArtistsByLabel } from "@/lib/server/artists";
-import { listLabelCatalogue } from "@/lib/server/catalogue-groups";
+import { listLabelCatalogue, listLabelUpcoming } from "@/lib/server/catalogue-groups";
+import { releaseTodayUtc } from "@/lib/server/release-day";
 import {
   getConfirmedAliasNames,
   getLabelBySlug,
@@ -39,6 +41,7 @@ export type LabelPageData =
       /** The Discogs label id → the Organization JSON-LD's `sameAs` (`discogs.com/label/<id>`). */
       discogsLabelId: number | undefined;
       findings: TrackListItem[];
+      upcoming: UpcomingTrackPage;
       /** The label's founding place (MusicBrainz `area.name`) — the dateline + Organization `location`. */
       foundedLocation: string | undefined;
       /** The label's founding date (MusicBrainz `life-span.begin`) — the dateline + `foundingDate`. */
@@ -77,9 +80,9 @@ export type LabelPageData =
  * point of having crawled it. The HOLLOW RENDERING was the doorway-page bug, never the page's
  * existence, and conditional sections (graph-sections.tsx) fixed that at the source.
  *
- * What stops a 2-row stub from being indexed is the thin-content gate below, and it counts
- * TOTAL content rather than findings — the findings plus the entity's TRUE uncertified total
- * (`catalogue.totalTracks`, counted in SQL over the whole label, never the rendered page).
+ * What stops a 2-row stub from being indexed is the thin-content gate over the maintained
+ * `renderable_track_count`, the same stored gate the sitemap reads. Upcoming rows count because
+ * they are content on the page.
  *
  * A slug with no `labels` row at all is still MISSING, and still 404s.
  */
@@ -87,7 +90,9 @@ export async function resolveLabelPageData(
   slug: string,
   sort: CatalogueSort,
   page: number,
+  upcomingPage = 1,
 ): Promise<LabelPageData> {
+  const today = releaseTodayUtc(new Date());
   const label = await getLabelBySlug(slug);
 
   if (!label) {
@@ -107,7 +112,7 @@ export async function resolveLabelPageData(
   // all four key only off `label.id` and are mutually independent. A page past the end of the
   // pager throws `CataloguePageOutOfRangeError`; map ONLY that to null here so it no longer
   // blocks the batch, and 404 once the wave settles. Any other error still throws.
-  const cataloguePromise = listLabelCatalogue(label.id, sort, page).catch(
+  const cataloguePromise = listLabelCatalogue(label.id, sort, page, today).catch(
     (error: unknown): CatalogueGroupPage<CatalogueArtistGroup> | null => {
       if (error instanceof CataloguePageOutOfRangeError) {
         return null;
@@ -117,14 +122,22 @@ export async function resolveLabelPageData(
     },
   );
 
-  const [catalogue, findings, artists, alternateNames] = await Promise.all([
+  const [catalogue, findings, artists, alternateNames, upcoming] = await Promise.all([
     cataloguePromise,
-    getFindingsByLabel(label.id),
+    getFindingsByLabel(label.id, today),
     listArtistsByLabel(label.id),
     getConfirmedAliasNames(label.id),
+    listLabelUpcoming(label.id, today, upcomingPage).catch(
+      (error: unknown): UpcomingTrackPage | null => {
+        if (error instanceof CataloguePageOutOfRangeError) {
+          return null;
+        }
+        throw error;
+      },
+    ),
   ]);
 
-  if (catalogue === null) {
+  if (catalogue === null || upcoming === null) {
     // A page past the end of the pager is genuinely not-found, not a 500 — a crawler or a
     // hand-typed `?page=99` gets an honest 404, never a duplicate of page 1 under a new URL.
     return { status: "missing" };
@@ -140,13 +153,9 @@ export async function resolveLabelPageData(
     foundedLocation: label.foundedLocation,
     foundingDate: label.foundingDate,
     id: label.id,
-    // Thin-content gate: index only past LABEL_INDEX_MIN_TRACKS RENDERABLE tracks — the
-    // findings PLUS the quieter rows, because both are real content on the page, and a page is
-    // thin or not thin on what it renders, never on who wrote it. Below the floor the page
-    // still serves 200 (deep links, link equity) but is noindex + out of the sitemap; the
-    // sitemap keys off the same sum, so the two can never disagree. It counts the entity's TRUE
-    // total, never the rendered page.
-    indexable: findings.length + catalogue.totalTracks >= LABEL_INDEX_MIN_TRACKS,
+    // Thin-content gate: the maintained `renderable_track_count` against the floor — the same
+    // stored gate `listLabelSitemapRows` keys off, so the page and the sitemap can never disagree.
+    indexable: (label.renderableTrackCount ?? 0) >= LABEL_INDEX_MIN_TRACKS,
     logoImageUrl: label.logoImageUrl,
     mbLabelId: label.mbLabelId,
     name: label.name,
@@ -155,5 +164,6 @@ export async function resolveLabelPageData(
     sort,
     status: "found",
     subLabels: label.subLabels ?? [],
+    upcoming,
   };
 }

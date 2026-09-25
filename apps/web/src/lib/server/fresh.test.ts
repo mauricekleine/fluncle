@@ -157,6 +157,16 @@ describe("listFreshReleases", () => {
       releaseDate: "2026-08-01", // future — not out yet
       trackId: "c_future",
     });
+    await seedCatalogueTrack({
+      artists: ["Preorder"],
+      releaseDate: "2026-08",
+      trackId: "c_future_month",
+    });
+    await seedCatalogueTrack({
+      artists: ["Released"],
+      releaseDate: "2026-07",
+      trackId: "c_current_month",
+    });
     await seedFinding({
       artists: ["Fresh"],
       logId: "202.7.3C",
@@ -170,7 +180,20 @@ describe("listFreshReleases", () => {
       ...section.catalogue.map((track) => track.trackId),
     ]);
 
-    expect(trackIds).toEqual(["f_in"]);
+    expect(trackIds).toEqual(["f_in", "c_current_month"]);
+  });
+
+  it("keeps a partial date on the first day of the release window", async () => {
+    await seedCatalogueTrack({
+      artists: ["Month"],
+      releaseDate: "2026-10",
+      trackId: "month_boundary",
+    });
+    const now = new Date("2026-10-31T12:00:00Z");
+    const { sections } = await listFreshReleases(now);
+    expect(sections.flatMap((section) => section.catalogue.map((track) => track.trackId))).toEqual([
+      "month_boundary",
+    ]);
   });
 
   it("renders nothing for a window with no releases (no empty sections)", async () => {

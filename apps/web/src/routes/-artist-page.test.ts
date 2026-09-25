@@ -16,11 +16,9 @@ import { FindingsGrid } from "@/components/graph-sections";
 //   · REACHABILITY: any artist ROW renders 200 (a crawl-minted, findings-free artist has a public
 //     catalogue page); only a slug with no row 404s.
 //   · INDEXABILITY: the page is `noindex` (and out of the sitemap) below ARTIST_INDEX_MIN_FINDINGS
-//     RENDERABLE tracks — the certified findings (`countArtistFindings`, the canonical
-//     `track_artists` join) PLUS the quieter catalogue rows (the catalogue's SQL-counted
-//     `totalTracks`). Both read through the canonical join, the same source the sitemap keys off, so
-//     an indexable page is never an orphan. The `artists_json` completeness fallback in the grid is
-//     deliberately NOT part of the gate.
+//     linked tracks, read off the maintained `renderable_track_count` — the same stored gate the
+//     sitemap keys off, so an indexable page is never an orphan. Upcoming rows are linked tracks and
+//     count; the `artists_json` completeness fallback in the grid is deliberately NOT part of it.
 //
 // These tests pin that contract.
 
@@ -31,6 +29,7 @@ const countArtistFindings = vi.hoisted(() => vi.fn());
 const getFindingsByArtist = vi.hoisted(() => vi.fn());
 const getArtistNeighbours = vi.hoisted(() => vi.fn());
 const listArtistCatalogue = vi.hoisted(() => vi.fn());
+const listArtistUpcoming = vi.hoisted(() => vi.fn());
 
 vi.mock("@/lib/server/artists", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/server/artists")>()),
@@ -50,6 +49,7 @@ vi.mock("@/lib/server/tracks", async (importOriginal) => ({
 vi.mock("@/lib/server/catalogue-groups", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/server/catalogue-groups")>()),
   listArtistCatalogue,
+  listArtistUpcoming,
 }));
 
 /** The empty grouped catalogue — an artist the crawler has not touched. */
@@ -73,6 +73,7 @@ const ARTIST = {
   lastfmUrl: undefined,
   mbid: undefined,
   name: "Drift",
+  renderableTrackCount: 0,
   slug: "drift",
   spotifyUrl: undefined,
   wikidataQid: undefined,
@@ -156,11 +157,36 @@ describe("resolveArtistPageData (the artist page indexability gate)", () => {
     getFindingsByArtist.mockReset();
     getArtistNeighbours.mockReset();
     listArtistCatalogue.mockReset();
+    listArtistUpcoming.mockReset();
     getPublicArtistSocials.mockResolvedValue([]);
     getPublicArtistAliasNames.mockResolvedValue([]);
     getArtistNeighbours.mockResolvedValue([]);
     listArtistCatalogue.mockResolvedValue(NO_CATALOGUE);
+    listArtistUpcoming.mockResolvedValue({
+      findings: [],
+      page: 1,
+      pageCount: 1,
+      total: 0,
+      tracks: [],
+    });
     getPublicArtistBySlug.mockResolvedValue(ARTIST);
+  });
+
+  it("passes upcoming rows into their own page block", async () => {
+    getFindingsByArtist.mockResolvedValue([]);
+    countArtistFindings.mockResolvedValue(0);
+    listArtistUpcoming.mockResolvedValue({
+      findings: [],
+      page: 1,
+      pageCount: 1,
+      total: 1,
+      tracks: [{ artists: ["Drift"], title: "Next", trackId: "future" }],
+    });
+
+    const data = await resolveArtistPageData("drift", "name", 1);
+    expect(
+      data.status === "found" ? data.upcoming.tracks.map((track) => track.trackId) : [],
+    ).toEqual(["future"]);
   });
 
   it("renders (noindex) a findings-free artist with no catalogue — a thin crawl-minted page", async () => {
@@ -178,9 +204,8 @@ describe("resolveArtistPageData (the artist page indexability gate)", () => {
   });
 
   it("indexes a findings-free artist once its CATALOGUE clears the floor", async () => {
-    // No certified finding, but the crawl has filled enough of its catalogue: canonical count 0 +
-    // catalogue totalTracks 5 = 5 >= ARTIST_INDEX_MIN_FINDINGS. It is a real page and indexes,
-    // exactly as a findings-free label/album with enough tracks does.
+    // The stored counter the sitemap gate reads.
+    getPublicArtistBySlug.mockResolvedValue({ ...ARTIST, renderableTrackCount: 5 });
     getFindingsByArtist.mockResolvedValue([]);
     countArtistFindings.mockResolvedValue(0);
     listArtistCatalogue.mockResolvedValue({ ...NO_CATALOGUE, totalTracks: 5 });
@@ -192,9 +217,9 @@ describe("resolveArtistPageData (the artist page indexability gate)", () => {
   });
 
   it("keeps the gate off the artists_json fallback — grid covers alone do not index a page", async () => {
-    // The completeness fallback (`getFindingsByArtist` reads `artists_json`) could show covers, but
-    // the `indexable` gate keys off the canonical count + catalogue total alone — both zero here.
-    // So a page with three fallback covers still renders noindex (never an orphaned indexable page).
+    // The completeness fallback (`getFindingsByArtist` reads `artists_json`) can show covers, but
+    // the gate reads the stored counter the sitemap reads, zero here, so the page stays noindex
+    // exactly as its sitemap entry stays absent.
     getFindingsByArtist.mockResolvedValue([
       finding("001.1.1A"),
       finding("002.1.1A"),
@@ -224,7 +249,8 @@ describe("resolveArtistPageData (the artist page indexability gate)", () => {
     expect(robotsMeta(data)).toBe("noindex, follow");
   });
 
-  it("indexes a page once the canonical join count clears the threshold", async () => {
+  it("indexes a page once the stored counter clears the threshold", async () => {
+    getPublicArtistBySlug.mockResolvedValue({ ...ARTIST, renderableTrackCount: 3 });
     getFindingsByArtist.mockResolvedValue([
       finding("001.1.1A"),
       finding("002.1.1A"),

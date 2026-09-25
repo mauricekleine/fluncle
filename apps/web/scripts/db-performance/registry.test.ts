@@ -7,6 +7,7 @@ import { CONTRACT_D_CONTRACT_IDS } from "./contract-d";
 import { applyFixtureSchema, writeFixture } from "./fixture";
 import { createCiFixtureCounts } from "./manifest";
 import { ISOLATED_LOCAL_LIBSQL_RESOURCE_SOURCE } from "./local-sidecar";
+import { analyzeExplainPlan } from "./plan";
 import {
   PerformanceRegistry,
   executePerformanceBatch,
@@ -29,6 +30,26 @@ function transportTimeout(secretDetail = "sensitive transport detail"): Error {
 }
 
 describe("performance registry", () => {
+  it("rejects the corpus-ranking deep-page shape under the release contract", async () => {
+    const contract = selectPerformanceContracts(["release.hub-deep-page"])[0];
+    if (contract?.plan === undefined) {
+      throw new Error("release deep-page plan contract missing");
+    }
+    const client = createClient({ concurrency: LOCAL_DB_CONCURRENCY, url: ":memory:" });
+    try {
+      await applyFixtureSchema(client);
+      const old = await client.execute(`explain query plan select id from (
+        select id, row_number() over (order by release_date desc, id desc) as rank
+        from perf_tracks) where rank between 96 and 143`);
+      const details = old.rows.map((row) => (typeof row.detail === "string" ? row.detail : ""));
+      expect(analyzeExplainPlan(details, contract.plan.policy).violations.length).toBeGreaterThan(
+        0,
+      );
+    } finally {
+      client.close();
+    }
+  });
+
   it("requires one explicit write batch for transactional contract transport", async () => {
     const calls: { mode: string; statementCount: number }[] = [];
     const client: PerformanceClient = {

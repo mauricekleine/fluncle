@@ -14,7 +14,7 @@
 // `lib/server/catalogue-groups.ts` re-exports all of it, so every server caller and test keeps
 // importing from the same place it always did; the SQL and the reads stay there.
 
-import { type CatalogueTrackItem } from "./server/tracks";
+import { type CatalogueTrackItem, type TrackListItem } from "./server/tracks";
 
 /** How the reader may order the groups. */
 export const CATALOGUE_SORTS = ["name", "recent"] as const;
@@ -77,6 +77,21 @@ export function cataloguePageHref(
   return query ? `${base}?${query}` : base;
 }
 
+/** Preserve the independent upcoming lane when either entity pager moves. */
+export function entityPageHref(
+  base: string,
+  page: number,
+  sort: CatalogueSort,
+  defaultSort: CatalogueSort,
+  upcomingPage: number,
+): string {
+  const href = cataloguePageHref(base, page, sort, defaultSort);
+  if (upcomingPage <= 1) {
+    return href;
+  }
+  return `${href}${href.includes("?") ? "&" : "?"}upcomingPage=${upcomingPage}`;
+}
+
 /**
  * The most rows any ONE group may contribute. Capped in SQL with a `row_number()` window, so
  * one prolific artist cannot blow the page's budget. A group that hits it says so and links to
@@ -90,6 +105,15 @@ export const GRAPH_GROUP_TRACK_LIMIT = 20;
  * a 4 MB dump, and `catalogue-scale.integration.test.ts` asserts a real page never exceeds it.
  */
 export const GRAPH_GROUP_ROW_CEILING = GRAPH_GROUP_PAGE_SIZE * GRAPH_GROUP_TRACK_LIMIT;
+
+/** A bounded release-day lane, paged independently from the grouped catalogue. */
+export type UpcomingTrackPage = {
+  findings: TrackListItem[];
+  page: number;
+  pageCount: number;
+  total: number;
+  tracks: CatalogueTrackItem[];
+};
 
 /** One record (album / EP / single) and the uncertified tracks on it that the page renders. */
 export type CatalogueRecord = {

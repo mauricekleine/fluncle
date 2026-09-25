@@ -41,7 +41,12 @@ import { expect, test, type ConsoleMessage, type Page } from "@playwright/test";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { blockExternalRequests } from "./browser";
-import { SEEDED_FINDING_TITLES, SEEDED_SONIC_ANCHOR } from "./seed";
+import {
+  SEEDED_FINDING_TITLES,
+  SEEDED_FUTURE_RELEASE,
+  SEEDED_PARTIAL_RELEASE,
+  SEEDED_SONIC_ANCHOR,
+} from "./seed";
 
 // The graph entity seeded in `seed.ts` and wired to the first finding — the
 // exact-entity (tier 2) target, and the label filter's value on the hub.
@@ -152,6 +157,8 @@ test("tracks hub SSRs the archive and round-trips its filters through the URL", 
   for (const title of SEEDED_FINDING_TITLES) {
     expect(rawHtml, `SSR HTML should contain "${title}"`).toContain(title);
   }
+  expect(rawHtml).not.toContain(SEEDED_FUTURE_RELEASE.title);
+  expect(rawHtml).toContain(SEEDED_PARTIAL_RELEASE.title);
 
   const response = await page.goto("/tracks", { waitUntil: "networkidle" });
   expect(response?.status()).toBe(200);

@@ -532,9 +532,12 @@ export const PERFORMANCE_FIXTURE_SCHEMA = [
     log_id text not null,
     galaxy_id text,
     added_at text not null,
+    note text,
     updated_at text,
     video_squared_at text
   )`,
+  `create index if not exists perf_findings_added_at_track_id_idx
+    on perf_findings(added_at, track_id)`,
   `create unique index if not exists perf_findings_log_id_unique on perf_findings(log_id)`,
   `create table if not exists perf_galaxies (
     id text primary key,
@@ -1418,12 +1421,15 @@ export async function* generateFixture(
             syntheticTrackId(index),
             `synthetic-log-${padded(Math.floor((index * counts.findings) / counts.tracks))}`,
             syntheticTimestamp(index),
+            Math.floor((index * counts.findings) / counts.tracks) % 2 === 0
+              ? "Synthetic editorial note"
+              : null,
             index % 5 === 0 ? syntheticTimestamp(index, 31) : null,
             index % 7 === 0 ? syntheticTimestamp(index, 62) : null,
           ],
           sql: `insert or ignore into perf_findings
-                  (track_id, log_id, added_at, updated_at, video_squared_at)
-                values (?, ?, ?, ?, ?)`,
+                  (track_id, log_id, added_at, note, updated_at, video_squared_at)
+                values (?, ?, ?, ?, ?, ?)`,
         }
       : null,
   );

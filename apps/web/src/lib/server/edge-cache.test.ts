@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   edgeCachePolicyFor,
   entityPurgeUrl,
@@ -16,6 +16,7 @@ import {
   purgeEntityCache,
   purgeEntityCaches,
   purgeLogCache,
+  releaseBoundFeedCacheControl,
   SITEMAP_CACHE_POLICY,
   SITEMAP_FRESH_SECONDS,
   SITEMAP_SWR_SECONDS,
@@ -244,6 +245,37 @@ describe("isCacheableHubRequest", () => {
 });
 
 describe("edgeCachePolicyFor", () => {
+  // The release-sensitive pages bound their lifetime by the next UTC midnight, so the exact
+  // policies below hold only away from it: the clock sits at midday, whatever time the suite runs.
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-07-20T12:00:00.000Z"));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("ends release-sensitive fresh and stale windows at the next UTC midnight", () => {
+    const before = new Date("2026-10-31T23:59:30.000Z");
+    const after = new Date("2026-11-01T00:00:01.000Z");
+    for (const path of [
+      "/",
+      "/tracks",
+      "/tracks/",
+      "/fresh",
+      "/fresh/",
+      "/artist/drift",
+      "/label/hospital",
+    ]) {
+      expect(edgeCachePolicyFor(path, "", before)?.storedMaxAge).toBeLessThanOrEqual(30);
+      expect(edgeCachePolicyFor(path, "", after)?.storedMaxAge).toBeGreaterThan(30);
+    }
+    expect(edgeCachePolicyFor("/album/drift", "", before)).toBe(PAGE_CACHE_POLICY);
+    expect(releaseBoundFeedCacheControl(before)).toContain("s-maxage=30");
+    expect(releaseBoundFeedCacheControl(after)).toBe(PAGE_CACHE_POLICY.cacheControl);
+  });
+
   it("routes each cacheable surface to its policy", () => {
     expect(edgeCachePolicyFor("/log", "")).toBe(PAGE_CACHE_POLICY);
     expect(edgeCachePolicyFor("/log/2026.A.7Q", "")).toBe(PAGE_CACHE_POLICY);
@@ -426,6 +458,56 @@ describe("withEdgeCache", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it("keeps a release-day entry until its stored midnight expiry", async () => {
+    const fake = installFakeCache();
+    const request = new Request("https://www.fluncle.com/artist/drift");
+    const render = vi.fn(async () => html("artist"));
+    try {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-07-20T23:58:00.000Z"));
+      await withEdgeCache(
+        request,
+        render,
+        edgeCachePolicyFor("/artist/drift", "") ?? PAGE_CACHE_POLICY,
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      vi.setSystemTime(new Date("2026-07-20T23:59:30.000Z"));
+      expect(
+        (
+          await withEdgeCache(
+            request,
+            render,
+            edgeCachePolicyFor("/artist/drift", "") ?? PAGE_CACHE_POLICY,
+          )
+        ).headers.get("x-edge-cache"),
+      ).toBe("fresh");
+      expect(render).toHaveBeenCalledTimes(1);
+      vi.setSystemTime(new Date("2026-07-21T00:00:00.000Z"));
+      expect(
+        (
+          await withEdgeCache(
+            request,
+            render,
+            edgeCachePolicyFor("/artist/drift", "") ?? PAGE_CACHE_POLICY,
+          )
+        ).headers.get("x-edge-cache"),
+      ).toBe("miss");
+      await vi.advanceTimersByTimeAsync(0);
+      vi.setSystemTime(new Date("2026-07-21T00:00:01.000Z"));
+      expect(
+        (
+          await withEdgeCache(
+            request,
+            render,
+            edgeCachePolicyFor("/artist/drift", "") ?? PAGE_CACHE_POLICY,
+          )
+        ).headers.get("x-edge-cache"),
+      ).toBe("fresh");
+    } finally {
+      fake.restore();
+    }
   });
 
   it("stores under the CANONICAL origin + path, dropping the incoming host", async () => {

@@ -196,6 +196,18 @@ export const SEEDED_CATALOGUE_RELEASE = {
   trackId: "e2e-track-catalogue-1",
 };
 
+export const SEEDED_FUTURE_RELEASE = {
+  artist: "Ashen Relay",
+  title: "Tomorrow's Ledger",
+  trackId: "e2e-track-future",
+} as const;
+
+export const SEEDED_PARTIAL_RELEASE = {
+  artist: "Ashen Relay",
+  title: "This Year Ledger",
+  trackId: "e2e-track-year",
+} as const;
+
 /**
  * The release dates the front door's window reads. They are a fixed offset back from the seed's own
  * epoch rather than from the clock, so a run is identical every time — but the WINDOW is measured
@@ -516,6 +528,28 @@ async function seedFrontDoorFixtures(client: Client): Promise<void> {
   });
   await client.execute({
     args: [daysAgo(3), SEEDED_CATALOGUE_RELEASE.trackId],
+    sql: `update tracks set release_date = ? where track_id = ?`,
+  });
+
+  await seedCatalogueTrack(client, {
+    artists: [SEEDED_FUTURE_RELEASE.artist],
+    label: LABEL.name,
+    title: SEEDED_FUTURE_RELEASE.title,
+    trackId: SEEDED_FUTURE_RELEASE.trackId,
+  });
+  await client.execute({
+    args: [daysAgo(-1), SEEDED_FUTURE_RELEASE.trackId],
+    sql: `update tracks set release_date = ? where track_id = ?`,
+  });
+
+  await seedCatalogueTrack(client, {
+    artists: [SEEDED_PARTIAL_RELEASE.artist],
+    label: LABEL.name,
+    title: SEEDED_PARTIAL_RELEASE.title,
+    trackId: SEEDED_PARTIAL_RELEASE.trackId,
+  });
+  await client.execute({
+    args: [new Date().getUTCFullYear().toString(), SEEDED_PARTIAL_RELEASE.trackId],
     sql: `update tracks set release_date = ? where track_id = ?`,
   });
 }

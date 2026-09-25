@@ -32,6 +32,7 @@ import {
 import { CataloguePager } from "@/components/catalogue-groups";
 import { HubYearLane } from "@/components/catalogue-hub-section";
 import { StoryNotFoundState } from "@/components/stories/stories-states";
+import { readTracksHubAtOneTime } from "./-tracks-hub-reads";
 import { TracksHubRow } from "@/components/tracks-hub-row";
 import { isGalaxyMapFullyNamed, listPublicGalaxies } from "@/lib/server/galaxies-map";
 import {
@@ -43,9 +44,6 @@ import {
   type TracksHubEntry,
   type TracksHubFilters,
   type TracksHubYearLaneEntry,
-  countAllTracks,
-  listTracksHubPage,
-  listTracksHubYearLane,
 } from "@/lib/server/tracks-hub";
 import {
   KEY_FILTER_OPTIONS,
@@ -152,14 +150,12 @@ const fetchTracksHubPage = createServerFn({ method: "GET" })
     const yearFiltered = filters.yearMin !== undefined || filters.yearMax !== undefined;
 
     try {
-      const [[galaxies, labelOptions], hub, years, heldTotal] = await Promise.all([
+      const [options, reads] = await Promise.all([
         optionsPromise,
-        listTracksHubPage(filters, data.page),
-        yearFiltered ? Promise.resolve([]) : listTracksHubYearLane(filters),
-        // On an unfiltered view the page read's own total already IS the held count; only a filtered
-        // view needs the extra bare count so the masthead still names the archive's true size.
-        hasFilters ? countAllTracks() : Promise.resolve(-1),
+        readTracksHubAtOneTime(filters, data.page, yearFiltered, hasFilters),
       ]);
+      const [galaxies, labelOptions] = options;
+      const [hub, years, heldTotal] = reads;
 
       return {
         galaxyOptions: galaxies.map((galaxy) => ({ name: galaxy.name, slug: galaxy.slug })),

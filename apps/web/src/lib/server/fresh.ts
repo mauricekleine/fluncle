@@ -31,6 +31,7 @@ import { bestAlbumCoverUrl, bestArtistAvatarUrl } from "../media";
 import { parseArtistsJson } from "./artists";
 import { listedArtistWhere } from "./artist-visibility";
 import { getDb, typedRows } from "./db";
+import { datedReleaseByTodaySql, releaseTodayUtc, releaseWindowLowerBound } from "./release-day";
 import {
   type CatalogueTrackItem,
   FINDINGS_FROM,
@@ -171,7 +172,7 @@ type FreshRecordRow = {
   track_count: number;
 };
 
-/** A `YYYY-MM-DD` day, `daysAgo` days before `now` (UTC) — the release_date column's own precision. */
+/** A `YYYY-MM-DD` day, `daysAgo` days before `now` (UTC). */
 function dayString(now: Date, daysAgo: number): string {
   return new Date(now.getTime() - daysAgo * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
 }
@@ -194,12 +195,14 @@ export async function listFreshReleases(
   const db = await getDb();
   // `<= today` drops future-dated pre-orders: a record that has not come out yet has not "just
   // come out". `>= windowStart` is the trailing edge. Both bind against the release_date index.
-  const windowStart = dayString(now, FRESH_WINDOW_DAYS);
+  const windowStart = releaseWindowLowerBound(dayString(now, FRESH_WINDOW_DAYS));
   // The album cut's own trailing edge — never narrower than the track window (a longer window can
   // only reach further back), so a record inside the track window is always inside this one too.
-  const recordsWindowStart = dayString(now, Math.max(recordsWindowDays, FRESH_WINDOW_DAYS));
-  const weekStart = dayString(now, FRESH_WEEK_DAYS);
-  const today = dayString(now, 0);
+  const recordsWindowStart = releaseWindowLowerBound(
+    dayString(now, Math.max(recordsWindowDays, FRESH_WINDOW_DAYS)),
+  );
+  const weekStart = releaseWindowLowerBound(dayString(now, FRESH_WEEK_DAYS));
+  const today = releaseTodayUtc(now);
 
   const [findingsResult, catalogueResult, recordsResult] = await Promise.all([
     // The lit half: findings whose track was RELEASED in the window. Drives through the finding
@@ -213,7 +216,7 @@ export async function listFreshReleases(
       args: [windowStart, today, FRESH_FINDINGS_LIMIT],
       sql: `select ${LEAN_TRACK_SELECT}, ${LEAD_ARTIST_SELECT} from ${FINDINGS_FROM}
             ${LEAD_ARTIST_JOIN}
-            where tracks.release_date >= ? and tracks.release_date <= ?
+            where tracks.release_date >= ? and ${datedReleaseByTodaySql("tracks.release_date")}
             order by tracks.release_date desc, tracks.track_id desc
             limit ?`,
     }),
@@ -229,7 +232,7 @@ export async function listFreshReleases(
             from tracks
             ${LEAD_ARTIST_JOIN}
             where tracks.is_catalogue = 1
-              and tracks.release_date >= ? and tracks.release_date <= ?
+              and tracks.release_date >= ? and ${datedReleaseByTodaySql("tracks.release_date")}
             order by tracks.release_date desc, tracks.track_id desc
             limit ?`,
     }),
@@ -264,7 +267,7 @@ export async function listFreshReleases(
             from tracks
             join albums al on al.id = tracks.album_id
             join json_each(tracks.artists_json) credit
-            where tracks.release_date >= ? and tracks.release_date <= ?
+            where tracks.release_date >= ? and ${datedReleaseByTodaySql("tracks.release_date")}
             group by al.id
             order by max(tracks.release_date) desc, min(al.name) collate nocase asc
             limit ?`,

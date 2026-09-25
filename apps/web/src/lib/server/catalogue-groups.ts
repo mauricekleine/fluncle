@@ -96,22 +96,27 @@
 // once, so there is no CTE-flattening re-execution to guard against and no copy of a growing
 // row set into temp storage (the trap docs/local-database.md records).
 
+import { type Client } from "@libsql/client";
 import {
   type CatalogueArtistGroup,
   type CatalogueGroupPage,
   CataloguePageOutOfRangeError,
   type CatalogueRecord,
   type CatalogueSort,
+  type UpcomingTrackPage,
   flattenArtistGroups,
   flattenRecords,
   GRAPH_GROUP_PAGE_SIZE,
+  GRAPH_GROUP_ROW_CEILING,
   GRAPH_GROUP_TRACK_LIMIT,
 } from "../catalogue";
 import { parseArtistsJson } from "./artists";
 import { listedArtistWhere } from "./artist-visibility";
 import { getDb, typedRows } from "./db";
 import { dedupeByRecordingIdentity, type RecordingIdentity } from "./track-match";
-import { type CatalogueTrackItem } from "./tracks";
+import { type CatalogueTrackItem, getGraphFindingsByIds } from "./tracks";
+import { artistCandidateIdsSql } from "./artist-membership";
+import { releasedByTodaySql, upcomingAfterTodaySql } from "./release-day";
 
 // The sort vocabulary, the page bounds, the group SHAPES and the pure helpers live in the
 // client-safe `lib/catalogue.ts` and are re-exported here, so every server caller and test
@@ -228,12 +233,105 @@ function trackOrderSql(sort: CatalogueSort, prefix: string): string {
        ${prefix}title collate nocase asc`;
 }
 
-function toTrack(row: GroupTrackRow): CatalogueTrackItem {
+function toTrack(
+  row: Pick<GroupTrackRow, "artists_json" | "spotify_url" | "title" | "track_id">,
+): CatalogueTrackItem {
   return {
     artists: parseArtistsJson(row.artists_json),
     spotifyUrl: row.spotify_url ?? undefined,
     title: row.title,
     trackId: row.track_id,
+  };
+}
+
+/** The next release-date rows use each entity's existing ordered index and the page's row DTO. */
+export async function listArtistUpcoming(
+  artistId: string,
+  today: string,
+  page = 1,
+): Promise<UpcomingTrackPage> {
+  const db = await getDb();
+  const predicate = `${upcomingAfterTodaySql("tracks.release_date")}
+            and tracks.duplicate_of_track_id is null and tracks.dismissed_at is null`;
+  const candidate = artistCandidateIdsSql("?", "(select name from artists where id = ?)", "?");
+  const [result, count] = await Promise.all([
+    db.execute({
+      args: [
+        artistId,
+        artistId,
+        today,
+        artistId,
+        today,
+        GRAPH_GROUP_ROW_CEILING,
+        (page - 1) * GRAPH_GROUP_ROW_CEILING,
+      ],
+      sql: `select tracks.track_id, tracks.title, tracks.artists_json, tracks.spotify_url, findings.log_id
+          from (${candidate}) artist_tracks
+          join tracks on tracks.track_id = artist_tracks.track_id
+          left join findings on findings.track_id = tracks.track_id
+          where ${predicate}
+          order by tracks.release_date asc, tracks.track_id asc
+          limit ? offset ?`,
+    }),
+    db.execute({
+      args: [artistId, artistId, today, artistId, today],
+      sql: `select count(*) as total from (${candidate}) artist_tracks
+          join tracks on tracks.track_id = artist_tracks.track_id where ${predicate}`,
+    }),
+  ]);
+  return upcomingPageFromRows(result.rows, count.rows, page);
+}
+
+export async function listLabelUpcoming(
+  labelId: string,
+  today: string,
+  page = 1,
+): Promise<UpcomingTrackPage> {
+  const db = await getDb();
+  const predicate = `tracks.label_id = ? and ${upcomingAfterTodaySql("tracks.release_date")}
+            and tracks.duplicate_of_track_id is null and tracks.dismissed_at is null`;
+  const [result, count] = await Promise.all([
+    db.execute({
+      args: [labelId, today, GRAPH_GROUP_ROW_CEILING, (page - 1) * GRAPH_GROUP_ROW_CEILING],
+      sql: `select tracks.track_id, tracks.title, tracks.artists_json, tracks.spotify_url, findings.log_id
+          from tracks indexed by tracks_label_cover_idx
+          left join findings on findings.track_id = tracks.track_id
+          where ${predicate}
+          order by tracks.release_date asc, tracks.track_id asc
+          limit ? offset ?`,
+    }),
+    db.execute({
+      args: [labelId, today],
+      sql: `select count(*) as total from tracks indexed by tracks_label_cover_idx where ${predicate}`,
+    }),
+  ]);
+  return upcomingPageFromRows(result.rows, count.rows, page);
+}
+
+async function upcomingPageFromRows(
+  rows: Awaited<ReturnType<Client["execute"]>>["rows"],
+  countRows: Awaited<ReturnType<Client["execute"]>>["rows"],
+  page: number,
+): Promise<UpcomingTrackPage> {
+  const total = Number(typedRows<{ total: number }>(countRows)[0]?.total ?? 0);
+  const pageCount = Math.max(Math.ceil(total / GRAPH_GROUP_ROW_CEILING), 1);
+  if (page > pageCount) {
+    throw new CataloguePageOutOfRangeError();
+  }
+  const pageRows = typedRows<
+    Pick<GroupTrackRow, "artists_json" | "spotify_url" | "title" | "track_id"> & {
+      log_id: string | null;
+    }
+  >(rows);
+  const findings = await getGraphFindingsByIds(
+    pageRows.filter((row) => row.log_id !== null).map((row) => row.track_id),
+  );
+  return {
+    findings,
+    page,
+    pageCount,
+    total,
+    tracks: pageRows.filter((row) => row.log_id === null).map(toTrack),
   };
 }
 
@@ -250,6 +348,7 @@ export async function listArtistCatalogue(
   artistId: string,
   sort: CatalogueSort,
   page: number,
+  today?: string,
 ): Promise<CatalogueGroupPage<CatalogueRecord>> {
   const db = await getDb();
   const offset = (page - 1) * GRAPH_GROUP_PAGE_SIZE;
@@ -261,7 +360,13 @@ export async function listArtistCatalogue(
   // at once — the page of records AND the per-record cap — so nothing past either crosses the
   // wire. `count(*) over ()` in `ranked` runs over the walk, so it is the honest TRACK total.
   const result = await db.execute({
-    args: [artistId, GRAPH_GROUP_TRACK_LIMIT, offset, offset + GRAPH_GROUP_PAGE_SIZE],
+    args: [
+      artistId,
+      ...(today === undefined ? [] : [today]),
+      GRAPH_GROUP_TRACK_LIMIT,
+      offset,
+      offset + GRAPH_GROUP_PAGE_SIZE,
+    ],
     sql: `with base as (
             select tracks.track_id as track_id, tracks.title as title,
                    tracks.artists_json as artists_json, tracks.spotify_url as spotify_url,
@@ -274,6 +379,7 @@ export async function listArtistCatalogue(
             left join albums al on al.id = tracks.album_id
             where ta.artist_id = ? and findings.track_id is null
                   and tracks.duplicate_of_track_id is null and tracks.dismissed_at is null
+                  ${today === undefined ? "" : `and ${releasedByTodaySql("tracks.release_date")}`}
           ),
           ranked as (
             select base.*,
@@ -370,6 +476,7 @@ export async function listLabelCatalogue(
   labelId: string,
   sort: CatalogueSort,
   page: number,
+  today?: string,
 ): Promise<CatalogueGroupPage<CatalogueArtistGroup>> {
   const db = await getDb();
   const offset = (page - 1) * GRAPH_GROUP_PAGE_SIZE;
@@ -398,8 +505,11 @@ export async function listLabelCatalogue(
   const result = await db.execute({
     args: [
       labelId,
+      ...(today === undefined ? [] : [today]),
       labelId,
+      ...(today === undefined ? [] : [today]),
       labelId,
+      ...(today === undefined ? [] : [today]),
       GRAPH_GROUP_TRACK_LIMIT,
       offset,
       offset + GRAPH_GROUP_PAGE_SIZE,
@@ -417,6 +527,7 @@ export async function listLabelCatalogue(
             from tracks
             join json_each(tracks.artists_json) credit
             where tracks.label_id = ?
+              ${today === undefined ? "" : `and ${releasedByTodaySql("tracks.release_date")}`}
           ),
           artist_slugs as (
             select lc.name as name, min(a.slug) as slug
@@ -439,6 +550,7 @@ export async function listLabelCatalogue(
             left join albums al on al.id = tracks.album_id
             where tracks.label_id = ? and findings.track_id is null
                   and tracks.duplicate_of_track_id is null and tracks.dismissed_at is null
+                  ${today === undefined ? "" : `and ${releasedByTodaySql("tracks.release_date")}`}
           ),
           ranked as (
             select base.*,
@@ -474,7 +586,8 @@ export async function listLabelCatalogue(
                   left join findings on findings.track_id = tracks.track_id
                   where tracks.label_id = ? and findings.track_id is null
                         and tracks.duplicate_of_track_id is null
-                        and tracks.dismissed_at is null) as total_tracks
+                        and tracks.dismissed_at is null
+                        ${today === undefined ? "" : `and ${releasedByTodaySql("tracks.release_date")}`}) as total_tracks
           from counted
           where rn <= ? and group_rn > ? and group_rn <= ?
           order by group_rn asc, rn asc`,

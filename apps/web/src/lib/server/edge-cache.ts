@@ -137,6 +137,8 @@ export const PUBLIC_CACHE_CONTROL = PAGE_CACHE_POLICY.cacheControl;
 
 // Our own freshness stamp (epoch ms at store time); read back to compute age.
 const STAMP_HEADER = "x-edge-cached-at";
+const FRESH_UNTIL_HEADER = "x-edge-fresh-until";
+const EXPIRES_AT_HEADER = "x-edge-expires-at";
 
 /** True for the public log surfaces we edge-cache: `/log` and `/log/<id>`. */
 export function isCacheableLogPath(pathname: string): boolean {
@@ -358,16 +360,57 @@ export function isPublicHtmlPagePath(pathname: string): boolean {
  * admin cookie, and — for the HTML tiers ONLY — an HTML-accepting client (see server.ts, which
  * reads `contentType` off the returned policy to decide).
  */
-export function edgeCachePolicyFor(pathname: string, search: string): EdgeCachePolicy | undefined {
+function releaseSensitivePath(pathname: string): boolean {
+  const path = pathname.length > 1 ? pathname.replace(/\/$/, "") : pathname;
+  return (
+    path === "/" ||
+    path === "/tracks" ||
+    path === "/fresh" ||
+    /^\/(?:artist|label)\/[^/]+$/.test(path)
+  );
+}
+
+function secondsUntilNextUtcMidnight(now: Date): number {
+  const next = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1);
+  return Math.max(0, Math.floor((next - now.getTime()) / 1000));
+}
+
+/** The next UTC day changes release membership without a write, so both cache windows end there. */
+export function releaseBoundPolicy(base: EdgeCachePolicy, now: Date): EdgeCachePolicy {
+  const remaining = secondsUntilNextUtcMidnight(now);
+  if (base.storedMaxAge <= remaining) {
+    return base;
+  }
+  const fresh = Math.min(base.freshSeconds, remaining);
+  const stale = Math.min(base.swrSeconds, remaining - fresh);
+  return policy(fresh, stale, base.contentType);
+}
+
+/** Feed responses use the same release-day lifetime rule as the pages they describe. */
+export function releaseBoundFeedCacheControl(now: Date = new Date()): string {
+  return releaseBoundPolicy(PAGE_CACHE_POLICY, now).cacheControl;
+}
+
+export function edgeCachePolicyFor(
+  pathname: string,
+  search: string,
+  now: Date = new Date(),
+): EdgeCachePolicy | undefined {
   if (isCacheableLogPath(pathname) || isCacheableEntityRequest(pathname, search)) {
-    return PAGE_CACHE_POLICY;
+    return releaseSensitivePath(pathname)
+      ? releaseBoundPolicy(PAGE_CACHE_POLICY, now)
+      : PAGE_CACHE_POLICY;
   }
 
   if (isCacheableSitemapRequest(pathname, search)) {
     return SITEMAP_CACHE_POLICY;
   }
 
-  return isCacheableHubRequest(pathname, search) ? HUB_CACHE_POLICY : undefined;
+  return isCacheableHubRequest(pathname, search)
+    ? releaseSensitivePath(pathname)
+      ? releaseBoundPolicy(HUB_CACHE_POLICY, now)
+      : HUB_CACHE_POLICY
+    : undefined;
 }
 
 // The canonical origin for cache keys. Storing and purging both key off THIS origin
@@ -418,10 +461,16 @@ export async function withEdgeCache(
   const cacheKey = cacheKeyRequest(url.pathname, url.search);
   const hit = await cache.match(cacheKey);
 
-  if (hit) {
-    const ageSeconds = cacheAgeSeconds(hit);
+  const storedAt = Number(hit?.headers.get(STAMP_HEADER));
+  const crossesReleaseDay =
+    releaseSensitivePath(url.pathname) &&
+    Number.isFinite(storedAt) &&
+    new Date(storedAt).toISOString().slice(0, 10) !== new Date().toISOString().slice(0, 10);
+  const expiresAt = Number(hit?.headers.get(EXPIRES_AT_HEADER));
+  if (hit && !crossesReleaseDay && Number.isFinite(expiresAt) && Date.now() < expiresAt) {
+    const freshUntil = Number(hit.headers.get(FRESH_UNTIL_HEADER));
 
-    if (ageSeconds < cachePolicy.freshSeconds) {
+    if (Number.isFinite(freshUntil) && Date.now() < freshUntil) {
       return tagHit(hit, "fresh", cachePolicy);
     }
 
@@ -429,6 +478,10 @@ export async function withEdgeCache(
     waitUntil(refresh(cache, cacheKey, render, cachePolicy));
 
     return tagHit(hit, "stale", cachePolicy);
+  }
+
+  if (hit) {
+    await cache.delete(cacheKey);
   }
 
   // Cold miss: render, store (if cacheable), and serve.
@@ -471,20 +524,13 @@ function isStorable(response: Response, cachePolicy: EdgeCachePolicy): boolean {
 // Re-wrap with the public Cache-Control, our freshness stamp, and a stored hard TTL.
 function toStoredResponse(response: Response, cachePolicy: EdgeCachePolicy): Response {
   const stored = new Response(response.body, response);
+  const storedAt = Date.now();
   stored.headers.set("Cache-Control", `public, s-maxage=${cachePolicy.storedMaxAge}`);
-  stored.headers.set(STAMP_HEADER, String(Date.now()));
+  stored.headers.set(STAMP_HEADER, String(storedAt));
+  stored.headers.set(FRESH_UNTIL_HEADER, String(storedAt + cachePolicy.freshSeconds * 1_000));
+  stored.headers.set(EXPIRES_AT_HEADER, String(storedAt + cachePolicy.storedMaxAge * 1_000));
 
   return stored;
-}
-
-function cacheAgeSeconds(response: Response): number {
-  const stamp = Number(response.headers.get(STAMP_HEADER));
-
-  if (!Number.isFinite(stamp)) {
-    return Number.POSITIVE_INFINITY;
-  }
-
-  return (Date.now() - stamp) / 1000;
 }
 
 // On the way out to the client, present the real SWR directive (not the long stored
@@ -497,6 +543,8 @@ function tagHit(
   const out = new Response(response.body, response);
   out.headers.set("Cache-Control", cachePolicy.cacheControl);
   out.headers.delete(STAMP_HEADER);
+  out.headers.delete(FRESH_UNTIL_HEADER);
+  out.headers.delete(EXPIRES_AT_HEADER);
   out.headers.set("x-edge-cache", status);
 
   return out;

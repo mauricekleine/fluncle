@@ -2,6 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { siteUrl } from "../lib/fluncle-links";
 import { itemId, itemLink, itemTitle, releaseInstant } from "../lib/fresh-feed-item";
 import { listFreshTracks } from "../lib/server/fresh";
+import { releaseBoundFeedCacheControl } from "../lib/server/edge-cache";
 
 // The release-date sibling of /feed.json. That feed keys on findings.added_at — WHEN Fluncle
 // found a tune. This one keys on tracks.release_date — when the tune came OUT — so its dates
@@ -27,7 +28,8 @@ export const Route = createFileRoute("/fresh.json")({
   server: {
     handlers: {
       GET: async () => {
-        const { tracks } = await listFreshTracks({ limit: 50 });
+        const now = new Date();
+        const { tracks } = await listFreshTracks({ limit: 50, now });
 
         const items = tracks.map((track) => {
           const title = itemTitle(track);
@@ -78,7 +80,7 @@ export const Route = createFileRoute("/fresh.json")({
           headers: {
             // Readers get a short max-age; the CDN holds s-maxage; SWR keeps
             // every repeat poll free while a background refresh runs.
-            "Cache-Control": "public, max-age=300, s-maxage=3600, stale-while-revalidate=86400",
+            "Cache-Control": releaseBoundFeedCacheControl(now),
             "Content-Type": "application/feed+json; charset=utf-8",
           },
         });

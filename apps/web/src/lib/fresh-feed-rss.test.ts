@@ -151,15 +151,15 @@ describe("renderEntityFreshFeed", () => {
 
 describe("freshFeedResponse", () => {
   it("serves RSS with the shared cache ladder", () => {
-    const response = freshFeedResponse("<rss/>");
+    const response = freshFeedResponse("<rss/>", "public, max-age=0, s-maxage=300");
 
     expect(response.headers.get("Content-Type")).toBe("application/rss+xml; charset=utf-8");
-    expect(response.headers.get("Cache-Control")).toBe(
-      "public, max-age=300, s-maxage=3600, stale-while-revalidate=86400",
-    );
+    expect(response.headers.get("Cache-Control")).toBe("public, max-age=0, s-maxage=300");
   });
 
   it("keeps a feed out of the index — thousands of them are advertised via rel=alternate", () => {
-    expect(freshFeedResponse("<rss/>").headers.get("X-Robots-Tag")).toBe("noindex");
+    expect(freshFeedResponse("<rss/>", "public, max-age=0").headers.get("X-Robots-Tag")).toBe(
+      "noindex",
+    );
   });
 });

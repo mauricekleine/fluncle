@@ -37,6 +37,43 @@ async function fixedClaimCount(client: PerformanceClient): Promise<number> {
 }
 
 describe("database performance contracts", () => {
+  it("rejects corpus-driven artist findings and Upcoming plans", async () => {
+    const client = createClient({ concurrency: LOCAL_DB_CONCURRENCY, url: ":memory:" });
+    try {
+      await applyFixtureSchema(client);
+      for (const [id, sql, args] of [
+        [
+          "artist.findings",
+          `select f.track_id from perf_findings f
+          join perf_tracks t on t.id = f.track_id
+          where exists (select 1 from perf_track_artists ta
+            where ta.track_id = t.id and ta.artist_id = ?)
+            or exists (select 1 from json_each(t.artists_json) credit where lower(credit.value) = ?)`,
+          ["synthetic-artist-000000055", "synthetic artist 000000055"],
+        ],
+        [
+          "artist.upcoming",
+          `select t.id from perf_tracks t indexed by perf_tracks_release_date_track_id_idx
+          where t.release_date > ? and (exists (select 1 from perf_track_artists ta
+            where ta.track_id = t.id and ta.artist_id = ?)
+            or exists (select 1 from json_each(t.artists_json) credit where lower(credit.value) = ?))`,
+          ["0000", "synthetic-artist-000000055", "synthetic artist 000000055"],
+        ],
+      ] as const) {
+        const contract = selectPerformanceContracts([id])[0];
+        if (!contract?.plan) {
+          throw new Error(`${id} has no plan`);
+        }
+        const result = await client.execute({ args: [...args], sql: `explain query plan ${sql}` });
+        const details = result.rows.map((row) =>
+          typeof row.detail === "string" ? row.detail : "",
+        );
+        expect(analyzeExplainPlan(details, contract.plan.policy).violations, id).not.toEqual([]);
+      }
+    } finally {
+      client.close();
+    }
+  });
   it("measures every generic comparison with only its final production statement", async () => {
     const comparisons = selectPerformanceContracts([]).filter(
       (contract) =>

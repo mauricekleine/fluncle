@@ -26,6 +26,7 @@ import { getPublicArtistBySlug, parseArtistsJson } from "./artists";
 import { getDb, typedRows } from "./db";
 import { clampFreshLimit, FRESH_WINDOW_DAYS, type FreshTrack } from "./fresh";
 import { getLabelBySlug } from "./labels";
+import { releaseWindowLowerBound } from "./release-day";
 import {
   FINDINGS_FROM,
   TRACK_SELECT,
@@ -83,7 +84,7 @@ async function listEntityFreshTracks(
   const now = options?.now ?? new Date();
   // `<= today` drops future-dated pre-orders; `>= windowStart` is the trailing edge. Both bind
   // against the release_date index.
-  const windowStart = dayString(now, FRESH_WINDOW_DAYS);
+  const windowStart = releaseWindowLowerBound(dayString(now, FRESH_WINDOW_DAYS));
   const today = dayString(now, 0);
   const { join, where } = ENTITY_NARROWING[kind];
 

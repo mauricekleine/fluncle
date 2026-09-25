@@ -376,6 +376,10 @@ bun run --cwd apps/web db:performance --profile 1x --hosted --operator-approved 
 
 The presence of credentials alone does nothing on normal/local/CI paths, and approval alone is rejected. Never use a production or shared development URL, never run the gate unattended, and never treat local timings as a substitute when the hosted confirmation remains pending. The public command above is only the post-import verification/proof step; it does not authorize or describe the authenticated import itself.
 
+### Read-only production substitute
+
+When the operator rules a scratch import out (for example while the write quota is in overage), the hosted confirmation may be SUBSTITUTED by a read-only pass against production, and only on that explicit ruling. The harness never runs there; an attended session issues `EXPLAIN QUERY PLAN` and plain `SELECT`s only (zero writes, zero DDL), with realistic bound values and reads bounded by their own `LIMIT` or wrapped in `count(*)`. For each changed statement, record the hosted plan and several timed runs against a `select 1` round-trip baseline, and keep the FIRST run apart. Production's page cache goes cold within the hour, so the first run is the cold cost a cached document pays on revalidation and the later runs are the warm cost. The PR records the evidence and states that the hosted replay was substituted by operator ruling; the database name, row ids, and topology stay out of it. The substitute proves plan shape and real-scale latency. It does not replace the harness's correctness hooks or its mutating contracts, which the local 1×/2× runs still gate.
+
 The older per-item `apps/web/scripts/bench-db-scale.ts` proof engine also mutates its supplied database by applying migrations, seeding synthetic rows, and trial-dropping indexes. Before that script constructs a client, `SCRATCH_TURSO_DATABASE_IDENTITY` must exactly match the canonical host parsed from `SCRATCH_TURSO_DATABASE_URL`; a production/development/local denylist remains defense in depth rather than the authority. Use placeholders in shared instructions and supply the real scratch identity only in the attended shell:
 
 ```bash
