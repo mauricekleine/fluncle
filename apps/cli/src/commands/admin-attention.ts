@@ -12,6 +12,7 @@ export async function attentionQueueCommand(): Promise<AttentionQueue> {
 }
 
 const SOURCE_LABELS: Record<AttentionSource, string> = {
+  "anchor-failure": "anchor failure",
   "anchor-review": "version check",
   "artist-review": "artist links",
   "attach-cues": "cues",

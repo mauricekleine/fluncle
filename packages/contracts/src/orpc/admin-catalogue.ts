@@ -192,7 +192,7 @@ export const requeueAnchor = oc
     method: "POST",
     operationId: "requeueAnchor",
     path: "/admin/catalogue/anchor/requeue",
-    summary: "Clear named rows' anchor re-ask backoff so the next tick retries them (operator)",
+    summary: "Clear named rows' anchor re-ask backoff or terminal validation error (operator)",
     tags: ["Admin"],
   })
   .input(z.object({ trackIds: z.array(z.string().min(1)).min(1).max(250) }))
@@ -671,6 +671,19 @@ export const anchorTrack = oc
     }),
   );
 
+export const recordAnchorFailure = oc
+  .route({
+    method: "POST",
+    operationId: "recordAnchorFailure",
+    path: "/admin/catalogue/anchor/failure",
+    summary: "Record a deterministic anchor candidate rejection",
+    tags: ["Admin"],
+  })
+  .input(
+    z.object({ status: z.union([z.literal(400), z.literal(422)]), trackId: z.string().min(1) }),
+  )
+  .output(z.object({ attempts: z.number().int(), ok: z.literal(true), terminal: z.boolean() }));
+
 export const DEEZER_CANDIDATE_LIMIT = 5;
 
 const DEEZER_TEXT_MAX = 300;
@@ -902,6 +915,17 @@ export const AnchorRungFlagsSchema = z
 
     apifyEnabled: z.boolean(),
 
+    gateReason: z.enum([
+      "friday_window",
+      "flag_off",
+      "breaker_quota",
+      "breaker_throttle",
+      "shared_meter",
+      "open",
+    ]),
+
+    nextEligibleAt: z.string().nullable(),
+
     spotifySearchEnabled: z.boolean(),
   })
   .meta({ id: "AnchorRungFlags" });
@@ -969,6 +993,7 @@ export const adminCatalogueContract = {
   list_catalogue_tracks: listCatalogueTracks,
   list_unverified_captures: listUnverifiedCaptures,
   rank_catalogue: rankCatalogue,
+  record_anchor_failure: recordAnchorFailure,
   record_demand: recordDemand,
   requeue_anchor: requeueAnchor,
   requeue_isrc_recovery: requeueIsrcRecovery,

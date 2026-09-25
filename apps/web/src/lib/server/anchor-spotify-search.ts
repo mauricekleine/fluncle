@@ -1,5 +1,5 @@
 import { logEvent } from "./log";
-import { spotifyAnchorSearchBreakerTripped } from "./spotify-anchor-breaker";
+import { getSpotifyAnchorBreakerState, getSpotifyAnchorQuotaUntil } from "./spotify-anchor-breaker";
 import { getSetting, setSetting } from "./settings";
 import { isSpotifyCallBudgetAvailable, recordSpotifyCall } from "./spotify-budget";
 
@@ -39,24 +39,67 @@ export function isWithinFrontierRefreshWindow(now: Date): boolean {
   return hour >= FRONTIER_REFRESH_GATE_START_HOUR && hour < FRONTIER_REFRESH_GATE_END_HOUR;
 }
 
-export async function anchorSpotifySearchAllowed(now: Date): Promise<boolean> {
+export type AnchorSpotifyGateReason =
+  | "breaker_quota"
+  | "breaker_throttle"
+  | "flag_off"
+  | "friday_window"
+  | "open"
+  | "shared_meter";
+
+export type AnchorSpotifyGate = { nextEligibleAt: null | string; reason: AnchorSpotifyGateReason };
+
+export async function anchorSpotifySearchGate(now: Date): Promise<AnchorSpotifyGate> {
   if (isWithinFrontierRefreshWindow(now)) {
-    return false;
+    const next = new Date(now);
+    while (isWithinFrontierRefreshWindow(next)) {
+      next.setTime(next.getTime() + 60_000);
+    }
+    return { nextEligibleAt: next.toISOString(), reason: "friday_window" };
   }
 
   if (!(await isAnchorSpotifySearchEnabled())) {
-    return false;
+    return { nextEligibleAt: null, reason: "flag_off" };
   }
 
-  if (!(await anchorSpotifyBreakerAllows(now))) {
-    return false;
+  try {
+    const breaker = await getSpotifyAnchorBreakerState(now.getTime());
+    const validTrip = breaker.trippedAt !== null && !Number.isNaN(Date.parse(breaker.trippedAt));
+    if (breaker.tripped && !validTrip) {
+      return { nextEligibleAt: null, reason: "breaker_throttle" };
+    }
+    const quotaUntil = await getSpotifyAnchorQuotaUntil(now.getTime());
+    if (quotaUntil) {
+      return { nextEligibleAt: quotaUntil, reason: "breaker_quota" };
+    }
+    if (breaker.tripped) {
+      return {
+        nextEligibleAt: validTrip
+          ? new Date(now.getTime() + breaker.cooldownRemainingMs).toISOString()
+          : null,
+        reason: "breaker_throttle",
+      };
+    }
+  } catch (error) {
+    logEvent("warn", "spotify.anchor-breaker-read-failed", { error });
+    return { nextEligibleAt: null, reason: "breaker_throttle" };
   }
 
-  return isSpotifyCallBudgetAvailable(now.getTime());
+  return (await isSpotifyCallBudgetAvailable(now.getTime()))
+    ? { nextEligibleAt: null, reason: "open" }
+    : { nextEligibleAt: null, reason: "shared_meter" };
+}
+
+export async function anchorSpotifySearchAllowed(now: Date): Promise<boolean> {
+  return (await anchorSpotifySearchGate(now)).reason === "open";
 }
 
 export async function anchorSpotifyBreakerAllows(now: Date): Promise<boolean> {
-  return !(await spotifyAnchorSearchBreakerTripped(now.getTime()));
+  try {
+    return !(await getSpotifyAnchorBreakerState(now.getTime())).tripped;
+  } catch {
+    return false;
+  }
 }
 
 export async function recordAnchorSpotifyCall(now: Date): Promise<void> {

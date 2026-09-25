@@ -138,6 +138,15 @@ export type AnchorReviewInput = {
   trackId: string;
 };
 
+export type AnchorFailureInput = {
+  anchorAt: string;
+  artists: string[];
+  error: string;
+  mbRecordingId?: string;
+  title: string;
+  trackId: string;
+};
+
 export type SubmissionInput = {
   artUrl?: string;
   artists: string[];
@@ -197,6 +206,7 @@ export type NewsletterInput = {
 };
 
 export type AttentionInputs = {
+  anchorFailures?: AnchorFailureInput[];
   anchorReviews: AnchorReviewInput[];
   artistReviews: ArtistReviewInput[];
   bioReviews: BioReviewInput[];
@@ -322,6 +332,19 @@ function appendMixtapeAttentionItems(
 
 export function deriveAttentionItems(inputs: AttentionInputs, now: number): AttentionItem[] {
   const items: AttentionItem[] = [];
+
+  for (const failure of inputs.anchorFailures ?? []) {
+    items.push({
+      anchorAt: failure.anchorAt,
+      href: failure.mbRecordingId
+        ? `https://musicbrainz.org/recording/${failure.mbRecordingId.replace(/^mb_/, "")}`
+        : "/admin/catalogue",
+      id: `anchor-failure:${failure.trackId}`,
+      source: "anchor-failure",
+      title: `${trackLabel(failure.artists, failure.title)} · ${failure.error}`,
+      trackId: failure.trackId,
+    });
+  }
 
   appendClipAttentionItems(items, inputs.clips);
 
@@ -617,6 +640,8 @@ export function primaryFor(item: AttentionItem, now: number): PrimaryAction {
       return item.candidate?.spotifyTrackId
         ? { kind: "accept-anchor", label: "Use this match" }
         : { href: item.mbUrl ?? "/admin/catalogue", kind: "open", label: "Open in MusicBrainz" };
+    case "anchor-failure":
+      return { href: item.href ?? "/admin/catalogue", kind: "open", label: "Inspect row" };
     case "artist-review":
       return { href: item.href ?? "/admin/artists", kind: "open", label: "Review" };
     case "attach-cues":
@@ -654,6 +679,7 @@ export function primaryFor(item: AttentionItem, now: number): PrimaryAction {
 }
 
 const SOURCE_ORDER: AttentionSource[] = [
+  "anchor-failure",
   "tiktok-draft",
   "post-tiktok",
   "post-youtube",
@@ -713,6 +739,10 @@ function briefPhrase(source: AttentionSource, rows: AttentionItem[]): string {
   const n = rows.length;
 
   switch (source) {
+    case "anchor-failure":
+      return n === 1
+        ? "an anchor request held for review"
+        : `${countWord(n)} anchor requests held for review`;
     case "anchor-review":
       return n === 1
         ? "a track that may be the wrong version"

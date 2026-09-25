@@ -2,6 +2,8 @@ import { chargeAnchorApifyRow, getAnchorApifyBudget, isAnchorApifyEnabled } from
 import {
   anchorSpotifyBreakerAllows,
   anchorSpotifySearchAllowed,
+  anchorSpotifySearchGate,
+  type AnchorSpotifyGateReason,
   isAnchorSpotifySearchEnabled,
   recordAnchorSpotifyCall,
 } from "./anchor-spotify-search";
@@ -16,6 +18,7 @@ import { FILL_ISRC_SQL } from "./isrc";
 import { lookupSpotifyIdsByMbid } from "./listenbrainz";
 import { logEvent } from "./log";
 import { updateTrackDuplicateIsrcStatement } from "./track-duplicate-keys";
+import { ANCHOR_MAX_ATTEMPTS } from "./track-work";
 import {
   fetchTrackMetadata,
   findSpotifyTrackByIsrc,
@@ -217,6 +220,7 @@ type AnchorRow = {
   certified: number;
   duration_ms: number;
   isrc: null | string;
+  spotify_anchor_quota_admitted_at: null | string;
   spotify_isrc_asked_at: null | string;
   spotify_uri: null | string;
   title: string;
@@ -242,6 +246,87 @@ export class AnchorTrackError extends Error {
   }
 }
 
+export const ANCHOR_INVALID_FAILURE_LIMIT = 3;
+export const ANCHOR_QUOTA_ADMISSION_MAX_AGE_MS = 2 * 60 * 60 * 1000;
+
+async function assertPaidAnchorAdmission(
+  row: AnchorRow,
+  trackId: string,
+  source: AnchorReviewSource,
+): Promise<void> {
+  if (source !== "apify") {
+    return;
+  }
+  const gateReason = (await anchorSpotifySearchGate(new Date())).reason;
+  if (gateReason === "friday_window") {
+    throw new AnchorTrackError("awaiting_free_ask", `Track ${trackId} waits for the Friday window`);
+  }
+  if (gateReason === "breaker_quota" && !row.isrc?.trim()) {
+    throw new AnchorTrackError(
+      "awaiting_free_ask",
+      `Track ${trackId} has no ISRC for the quota exception`,
+    );
+  }
+  const quotaAdmittedAt = Date.parse(row.spotify_anchor_quota_admitted_at ?? "");
+  const quotaAdmissionLive =
+    Number.isFinite(quotaAdmittedAt) &&
+    Date.now() >= quotaAdmittedAt &&
+    Date.now() - quotaAdmittedAt <= ANCHOR_QUOTA_ADMISSION_MAX_AGE_MS;
+  if (
+    row.isrc?.trim() &&
+    !row.spotify_isrc_asked_at &&
+    (await isAnchorSpotifySearchEnabled()) &&
+    gateReason !== "breaker_quota" &&
+    !quotaAdmissionLive
+  ) {
+    throw new AnchorTrackError(
+      "awaiting_free_ask",
+      `Track ${trackId} has not been asked of the free exact-ISRC rung yet — the paid rung is not eligible for it`,
+    );
+  }
+}
+
+export async function recordAnchorValidationFailure(
+  trackId: string,
+  status: number,
+  now: Date = new Date(),
+): Promise<{ attempts: number; terminal: boolean }> {
+  if (status !== 400 && status !== 422) {
+    throw new Error("Only deterministic 4xx anchor failures can be recorded");
+  }
+  const db = await getDb();
+  await batchDueWorkSourceMutation(
+    db,
+    [
+      {
+        args: [status, now.toISOString(), trackId],
+        sql: `update tracks
+            set spotify_anchor_invalid_attempts = spotify_anchor_invalid_attempts + 1,
+                spotify_anchor_attempts = case
+                  when spotify_anchor_invalid_attempts + 1 >= ${ANCHOR_INVALID_FAILURE_LIMIT} then ${ANCHOR_MAX_ATTEMPTS}
+                  else spotify_anchor_attempts end,
+                spotify_anchor_terminal_error = case
+                  when spotify_anchor_invalid_attempts + 1 >= ${ANCHOR_INVALID_FAILURE_LIMIT} then 'http_' || cast(? as integer)
+                  else spotify_anchor_terminal_error end,
+                spotify_anchor_attempted_at = case
+                  when spotify_anchor_invalid_attempts + 1 >= ${ANCHOR_INVALID_FAILURE_LIMIT} then ?
+                  else spotify_anchor_attempted_at end
+            where track_id = ? and spotify_uri is null and spotify_anchor_terminal_error is null`,
+      },
+    ],
+    [{ subjectId: trackId, subjectType: "track" }],
+    { producer: "anchor-stamp" },
+  );
+  const result = await db.execute({
+    args: [trackId],
+    sql: `select spotify_anchor_invalid_attempts as attempts,
+                 spotify_anchor_terminal_error as terminal_error
+          from tracks where track_id = ? limit 1`,
+  });
+  const row = typedRows<{ attempts: number; terminal_error: null | string }>(result.rows)[0];
+  return { attempts: Number(row?.attempts ?? 0), terminal: Boolean(row?.terminal_error) };
+}
+
 export async function anchorTrack(
   trackId: string,
   candidates: AnchorCandidate[],
@@ -253,7 +338,7 @@ export async function anchorTrack(
   const found = await db.execute({
     args: [trackId],
     sql: `select t.isrc, t.title, t.artists_json, t.duration_ms, t.spotify_uri,
-                 t.spotify_isrc_asked_at,
+                 t.spotify_isrc_asked_at, t.spotify_anchor_quota_admitted_at,
                  (f.track_id is not null) as certified
           from tracks t
           left join findings f on f.track_id = t.track_id
@@ -281,17 +366,7 @@ export async function anchorTrack(
     );
   }
 
-  if (
-    source === "apify" &&
-    row.isrc?.trim() &&
-    !row.spotify_isrc_asked_at &&
-    (await isAnchorSpotifySearchEnabled())
-  ) {
-    throw new AnchorTrackError(
-      "awaiting_free_ask",
-      `Track ${trackId} has not been asked of the free exact-ISRC rung yet — the paid rung is not eligible for it`,
-    );
-  }
+  await assertPaidAnchorAdmission(row, trackId, source);
 
   const rowArtists = parseArtistsJson(row.artists_json);
   const durationMs = Number(row.duration_ms);
@@ -879,7 +954,12 @@ export async function requeueAnchorStamps(trackIds: string[]): Promise<number> {
       {
         args: trackIds,
         sql: `update tracks
-              set spotify_anchor_attempted_at = null
+              set spotify_anchor_attempted_at = null,
+                  spotify_anchor_attempts = case
+                    when spotify_anchor_terminal_error is not null then 0
+                    else spotify_anchor_attempts end,
+                  spotify_anchor_invalid_attempts = 0,
+                  spotify_anchor_terminal_error = null
               where track_id in (${placeholders})
                 and spotify_uri is null
                 and spotify_anchor_attempted_at is not null
@@ -960,6 +1040,7 @@ type ApifyAdmissionInput = {
   apifyEnabled: boolean;
 
   hasIsrc: boolean;
+  gateReason: AnchorSpotifyGateReason;
 
   priorAsk: boolean;
 
@@ -1001,7 +1082,12 @@ async function admitToApifyRung(
     ? input.priorAsk || input.spotifyIsrcCleanMiss
     : input.spotifySearchSettled;
 
-  if (input.spotifySearchEnabled && !asked) {
+  if (
+    input.gateReason === "friday_window" ||
+    (input.spotifySearchEnabled &&
+      !asked &&
+      !(input.hasIsrc && input.gateReason === "breaker_quota"))
+  ) {
     return withBudget(false, "awaiting_free_ask");
   }
 
@@ -1010,6 +1096,12 @@ async function admitToApifyRung(
   }
 
   const { budget, charged } = await chargeAnchorApifyRow(now);
+  if (charged && input.hasIsrc && input.gateReason === "breaker_quota") {
+    await db.execute({
+      args: [now.toISOString(), trackId],
+      sql: "update tracks set spotify_anchor_quota_admitted_at = ? where track_id = ?",
+    });
+  }
 
   return {
     apifyBudgetRemaining: budget.remainingRows,
@@ -1028,6 +1120,7 @@ export async function resolveAnchorFree(
   const apifyEnabled = await isAnchorApifyEnabled();
 
   const spotifySearchEnabled = await isAnchorSpotifySearchEnabled();
+  const gateReason = (await anchorSpotifySearchGate(now)).reason;
 
   const found = await db.execute({
     args: [trackId],
@@ -1094,6 +1187,7 @@ export async function resolveAnchorFree(
       ...(await admitToApifyRung(db, trackId, now, {
         anchored: true,
         apifyEnabled,
+        gateReason,
         hasIsrc: Boolean(isrc?.trim()),
         priorAsk,
         spotifyIsrcCleanMiss: false,
@@ -1130,6 +1224,7 @@ export async function resolveAnchorFree(
       ...(await admitToApifyRung(db, trackId, now, {
         anchored: false,
         apifyEnabled,
+        gateReason,
         hasIsrc: Boolean(isrc?.trim()),
         priorAsk,
         spotifyIsrcCleanMiss: false,
@@ -1170,6 +1265,7 @@ export async function resolveAnchorFree(
     ...(await admitToApifyRung(db, trackId, now, {
       anchored: searchOutcome.anchored,
       apifyEnabled,
+      gateReason,
       hasIsrc: Boolean(isrc?.trim()),
       priorAsk,
       spotifyIsrcCleanMiss,

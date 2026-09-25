@@ -7,6 +7,7 @@ const SITE = "https://www.fluncle.com";
 type Source = AttentionQueue["rows"][number]["source"];
 
 const SOURCE_META: Record<Source, { icon: Icon; title: string }> = {
+  "anchor-failure": { icon: Icon.Warning, title: "Anchor failures" },
   "anchor-review": { icon: Icon.QuestionMark, title: "Version checks" },
   "artist-review": { icon: Icon.Person, title: "Artist links" },
   "attach-cues": { icon: Icon.BulletPoints, title: "Attach cues" },
@@ -76,7 +77,13 @@ export default function Command() {
                   <MenuBarExtra.Item
                     icon={SOURCE_META[source].icon}
                     key={`${source}-${index}`}
-                    onAction={() => open(`${SITE}${row.path}`)}
+                    onAction={() =>
+                      open(
+                        row.path.startsWith("https://")
+                          ? row.path
+                          : `${SITE}${row.path}`,
+                      )
+                    }
                     title={row.title}
                   />
                 ))}

@@ -1,4 +1,5 @@
 import { isContractProcedure } from "@orpc/contract";
+export { AnchorCandidateSchema } from "./admin-catalogue";
 import { adminAlbumsContract } from "./admin-albums";
 import { adminArtifactsContract } from "./admin-artifacts";
 import { adminArtistRulesContract } from "./admin-artist-rules";

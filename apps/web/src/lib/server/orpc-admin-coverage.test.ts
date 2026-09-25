@@ -197,6 +197,8 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
 
   "POST /admin/catalogue/anchor/breaker/reset": "reset_spotify_anchor_breaker",
 
+  "POST /admin/catalogue/anchor/failure": "record_anchor_failure",
+
   "POST /admin/catalogue/anchor/requeue": "requeue_anchor",
 
   "POST /admin/catalogue/anchor/resolve": "resolve_anchor",

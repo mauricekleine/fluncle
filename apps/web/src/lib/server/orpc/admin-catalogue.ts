@@ -3,6 +3,7 @@ import {
   type AnchorCandidate,
   anchorTrack,
   AnchorTrackError,
+  recordAnchorValidationFailure,
   requeueAnchorStamps,
   requeueIsrcRecoveryStamps,
   resolveAnchorFree,
@@ -15,6 +16,7 @@ import {
   setAnchorApifyEnabled,
 } from "../anchor-apify";
 import {
+  anchorSpotifySearchGate,
   isAnchorSpotifySearchEnabled,
   setAnchorSpotifySearchEnabled,
 } from "../anchor-spotify-search";
@@ -356,6 +358,19 @@ export function adminCatalogueHandlers(os: Implementer) {
     }
   });
 
+  const recordAnchorFailureHandler = os.record_anchor_failure
+    .use(adminAuth)
+    .handler(async ({ input }) => {
+      try {
+        return {
+          ...(await recordAnchorValidationFailure(input.trackId, input.status)),
+          ok: true as const,
+        };
+      } catch (error) {
+        throw apiFault(error);
+      }
+    });
+
   const resolveAnchorHandler = os.resolve_anchor.use(adminAuth).handler(async ({ input }) => {
     try {
       const result = await resolveAnchorFree(input.trackId, new Date(), {
@@ -492,17 +507,24 @@ export function adminCatalogueHandlers(os: Implementer) {
     .use(adminAuth)
     .handler(async () => {
       try {
-        const [breaker, apifyBudget, apifyEnabled, spotifySearchEnabled] = await Promise.all([
+        const [breaker, apifyBudget, apifyEnabled, spotifySearchEnabled, gate] = await Promise.all([
           getSpotifyAnchorBreakerState(),
           getAnchorApifyBudget(),
           isAnchorApifyEnabled(),
           isAnchorSpotifySearchEnabled(),
+          anchorSpotifySearchGate(new Date()),
         ]);
 
         return {
           ...breaker,
           ok: true as const,
-          rungs: { apifyBudget, apifyEnabled, spotifySearchEnabled },
+          rungs: {
+            apifyBudget,
+            apifyEnabled,
+            gateReason: gate.reason,
+            nextEligibleAt: gate.nextEligibleAt,
+            spotifySearchEnabled,
+          },
         };
       } catch (error) {
         throw apiFault(error);
@@ -546,6 +568,7 @@ export function adminCatalogueHandlers(os: Implementer) {
     list_catalogue_tracks: listCatalogueTracksHandler,
     list_unverified_captures: listUnverifiedCapturesHandler,
     rank_catalogue: rankCatalogueHandler,
+    record_anchor_failure: recordAnchorFailureHandler,
     record_demand: recordDemandHandler,
     requeue_anchor: requeueAnchorHandler,
     requeue_isrc_recovery: requeueIsrcRecoveryHandler,

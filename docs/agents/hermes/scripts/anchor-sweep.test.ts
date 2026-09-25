@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import {
   type AnchorDeps,
   anchorFiringDeferral,
+  AnchorReportError,
   type AnchorPreflight,
   type ApifyResultItem,
   chunk,
@@ -73,6 +74,55 @@ const APIFY_SAMPLE: ApifyResultItem[] = [
     ],
   },
 ];
+
+test("deterministic anchor 400s send row receipts, while 503 stays retryable", async () => {
+  let receipts = 0;
+  const deps: AnchorDeps = {
+    fetchQueue: () => Promise.resolve([{ anchorQuery: "Azuro Hold Tight", trackId: "mb_poison" }]),
+    log: () => {},
+    now: () => 0,
+    recordInvalidFailure: () => {
+      receipts += 1;
+      return Promise.resolve({ terminal: receipts === 3 });
+    },
+    report: () => Promise.reject(new AnchorReportError("invalid_request", 400)),
+    resolveFree: () => Promise.resolve({ anchored: false, apifyEligible: true, verifiedBy: null }),
+    runActor: () => Promise.resolve(APIFY_SAMPLE),
+    searchDeezer: () => Promise.resolve([]),
+    sleep: () => Promise.resolve(),
+  };
+  await runAnchorTick(1, deps);
+  await runAnchorTick(1, deps);
+  const retired = await runAnchorTick(1, deps);
+  expect(receipts).toBe(3);
+  expect(retired.queueDepth).toBe(0);
+
+  const retryable = await runAnchorTick(1, {
+    ...deps,
+    report: () => Promise.reject(new AnchorReportError("service unavailable", 503)),
+  });
+  expect(receipts).toBe(3);
+  expect(retryable.queueDepth).toBe(1);
+});
+
+test("actor fields outside the anchor contract do not become a 400 payload", () => {
+  const malformed = {
+    artists: [{ artist_id: 123, artist_name: "DJ Chef" }],
+    success: true,
+    tracks: [{ track_id: "validId", track_isrc: 123, track_name: "The Streets" }],
+  } as unknown as ApifyResultItem;
+  expect(itemToCandidate(malformed)).toMatchObject({
+    artists: [{ id: null, name: "DJ Chef" }],
+    isrc: null,
+    title: "The Streets",
+  });
+  expect(
+    itemToCandidate({
+      success: true,
+      tracks: [{ track_id: "validId", track_name: "x".repeat(301) }],
+    }),
+  ).toBeNull();
+});
 
 describe("itemToCandidate", () => {
   test("maps a good item (id, isrc, duration, title, artists, cover)", () => {
@@ -1347,6 +1397,26 @@ describe("runAnchorSweep (paging past the worklist cap)", () => {
     expect(summary.ok).toBe(true);
   });
 
+  test("one win among mostly deferred rows still reports a block", async () => {
+    const summary = await runAnchorSweep(5, {
+      ...pagedDeps([rows("mb", 5)]),
+      resolveFree: (trackId) =>
+        Promise.resolve(
+          trackId === "mb_0"
+            ? { anchored: true, verifiedBy: "isrc" }
+            : {
+                anchored: false,
+                apifyEligible: false,
+                apifyIneligibleReason: "awaiting_free_ask",
+                verifiedBy: null,
+              },
+        ),
+    });
+    expect(summary.produced).toBe(1);
+    expect(summary.deferred).toBe(4);
+    expect(summary.blockedReason).toBe("awaiting_free_ask");
+  });
+
   test("a short page means the queue ran dry — no further fetches", async () => {
     const summary = await runAnchorSweep(10, pagedDeps([rows("a", 2), [], []]), 2);
 
@@ -1559,6 +1629,16 @@ describe("anchorFiringDeferral", () => {
     ).toBeNull();
   });
 
+  test("a closed Spotify gate names a disabled paid rung accurately", () => {
+    expect(
+      anchorFiringDeferral(
+        { ...OPEN, apifyEnabled: false, gateReason: "breaker_quota" },
+        NIGHT,
+        OUT_OF_WINDOW,
+      ),
+    ).toBe("apify_disabled");
+  });
+
   test('an empty window ("always") never defers on the clock', () => {
     expect(anchorFiringDeferral(OPEN, parseIsrcAskWindow(""), OUT_OF_WINDOW)).toBeNull();
   });
@@ -1732,6 +1812,53 @@ describe("runAnchorSweep — the firing preflight", () => {
     expect(summary.queueDepth).toBeNull();
     expect(summary.apifyBudgetRemaining).toBe(300);
     expect(summary.ok).toBe(true);
+  });
+
+  test("the Friday gate reads no rows and reports a watchdog block", async () => {
+    let fetched = 0;
+    const summary = await runAnchorSweep(
+      100,
+      preflightDeps(
+        {
+          apifyBudgetRemaining: 300,
+          apifyBudgetSpent: false,
+          apifyEnabled: true,
+          gateReason: "friday_window",
+          nextEligibleAt: "2026-09-25T07:00:00.000Z",
+          spotifySearchEnabled: true,
+        },
+        () => {
+          fetched += 1;
+        },
+      ),
+    );
+    expect(fetched).toBe(0);
+    expect(summary.blockedReason).toBe("awaiting_free_ask");
+    expect(summary.gateReason).toBe("friday_window");
+    expect(summary.nextEligibleAt).toBe("2026-09-25T07:00:00.000Z");
+  });
+
+  test("a closed quota gate reads only the paid ISRC worklist", async () => {
+    const modes: (string | undefined)[] = [];
+    const summary = await runAnchorSweep(100, {
+      ...preflightDeps(
+        {
+          apifyBudgetRemaining: 294,
+          apifyBudgetSpent: false,
+          apifyEnabled: true,
+          gateReason: "breaker_quota",
+          spotifySearchEnabled: true,
+        },
+        () => {},
+      ),
+      fetchQueue: (_limit, mode) => {
+        modes.push(mode);
+        return Promise.resolve({ queueDepth: 0, rows: [] });
+      },
+    });
+    expect(modes).toEqual(["quota"]);
+    expect(summary.checked).toBe(0);
+    expect(summary.blockedReason).toBe("breaker_quota");
   });
 
   test("a spent cap defers the firing with its own reason", async () => {

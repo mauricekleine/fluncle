@@ -376,6 +376,8 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
 
   reconcile_operation_receipts: "operator",
 
+  record_anchor_failure: "admin",
+
   record_catalogue_snapshot: "admin",
   record_cost: "admin",
 

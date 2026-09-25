@@ -6,6 +6,7 @@ const breakerStateMock = vi.fn();
 const apifyBudgetMock = vi.fn();
 const apifyEnabledMock = vi.fn();
 const spotifySearchEnabledMock = vi.fn();
+const gateMock = vi.fn();
 
 vi.mock("./spotify-anchor-breaker", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./spotify-anchor-breaker")>();
@@ -26,7 +27,11 @@ vi.mock("./anchor-apify", async (importOriginal) => {
 vi.mock("./anchor-spotify-search", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./anchor-spotify-search")>();
 
-  return { ...actual, isAnchorSpotifySearchEnabled: () => spotifySearchEnabledMock() };
+  return {
+    ...actual,
+    anchorSpotifySearchGate: () => gateMock(),
+    isAnchorSpotifySearchEnabled: () => spotifySearchEnabledMock(),
+  };
 });
 
 const PATH = "/admin/catalogue/anchor/breaker";
@@ -58,10 +63,12 @@ beforeEach(() => {
   apifyBudgetMock.mockReset();
   apifyEnabledMock.mockReset();
   spotifySearchEnabledMock.mockReset();
+  gateMock.mockReset();
   breakerStateMock.mockResolvedValue(CLEAR);
   apifyBudgetMock.mockResolvedValue(BUDGET_OPEN);
   apifyEnabledMock.mockResolvedValue(true);
   spotifySearchEnabledMock.mockResolvedValue(false);
+  gateMock.mockResolvedValue({ nextEligibleAt: null, reason: "flag_off" });
 });
 
 describe("oRPC get_spotify_anchor_breaker (GET /admin/catalogue/anchor/breaker)", () => {
@@ -81,7 +88,13 @@ describe("oRPC get_spotify_anchor_breaker (GET /admin/catalogue/anchor/breaker)"
     expect(await readJson(response)).toEqual({
       ...CLEAR,
       ok: true,
-      rungs: { apifyBudget: BUDGET_OPEN, apifyEnabled: true, spotifySearchEnabled: false },
+      rungs: {
+        apifyBudget: BUDGET_OPEN,
+        apifyEnabled: true,
+        gateReason: "flag_off",
+        nextEligibleAt: null,
+        spotifySearchEnabled: false,
+      },
     });
   });
 

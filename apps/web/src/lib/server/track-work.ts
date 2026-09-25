@@ -303,9 +303,10 @@ async function hydrateWorkRows(db: DueWorkClient, trackIds: readonly string[]): 
 export async function listTrackWork(options: {
   kind: TrackWorkKind;
   limit?: number;
+  paidMode?: "prior" | "quota";
   scope?: TrackWorkScope;
 }): Promise<TrackWorkItem[]> {
-  const { kind, limit = 50, scope = "all" } = options;
+  const { kind, limit = 50, paidMode, scope = "all" } = options;
   const page = Math.min(Math.max(1, Math.trunc(limit)), MAX_WORK_LIMIT);
 
   const catalogueShut = METERED_KINDS.has(kind) ? !(await isCatalogueCaptureOpen()) : false;
@@ -321,7 +322,23 @@ export async function listTrackWork(options: {
 
   let rows: WorkRow[];
 
-  if (dueCutoverEnabled) {
+  if (kind === "anchor" && paidMode) {
+    const kindWhere = kindClause(kind);
+    const result = await db.execute({
+      args: [...kindWhere.args, page],
+      sql: `select t.track_id from tracks t indexed by ${paidMode === "prior" ? "tracks_anchor_prior_order_idx" : "tracks_anchor_order_idx"}
+            left join findings f on f.track_id = t.track_id
+            where ${scopeClause(effectiveScope)} and ${kindWhere.sql}
+              and t.has_isrc = 1
+              ${paidMode === "prior" ? "and t.spotify_isrc_asked_at is not null" : ""}
+            ${ANCHOR_ORDER}
+            limit ?`,
+    });
+    rows = await hydrateWorkRows(
+      db,
+      typedRows<{ track_id: string }>(result.rows).map((row) => row.track_id),
+    );
+  } else if (dueCutoverEnabled) {
     const selectedIds = await readTrackWorkDueIds(db, {
       kind,
       limit: page,
@@ -458,9 +475,10 @@ export async function listTrackWork(options: {
 export async function countTrackWork(options: {
   captureState?: CatalogueCaptureState;
   kind: TrackWorkKind;
+  paidMode?: "prior" | "quota";
   scope?: TrackWorkScope;
 }): Promise<number> {
-  const { captureState, kind, scope = "all" } = options;
+  const { captureState, kind, paidMode, scope = "all" } = options;
 
   const catalogueShut = METERED_KINDS.has(kind)
     ? !(captureState ? captureState.open : await isCatalogueCaptureOpen())
@@ -472,6 +490,19 @@ export async function countTrackWork(options: {
 
   const effectiveScope: TrackWorkScope = catalogueShut ? "findings" : scope;
   const db = await getDb();
+
+  if (kind === "anchor" && paidMode) {
+    const kindWhere = kindClause(kind);
+    const result = await db.execute({
+      args: kindWhere.args,
+      sql: `select count(*) as queued from tracks t indexed by ${paidMode === "prior" ? "tracks_anchor_prior_order_idx" : "tracks_anchor_order_idx"}
+            left join findings f on f.track_id = t.track_id
+            where ${scopeClause(effectiveScope)} and ${kindWhere.sql}
+              and t.has_isrc = 1
+              ${paidMode === "prior" ? "and t.spotify_isrc_asked_at is not null" : ""}`,
+    });
+    return Number(typedRows<{ queued: number }>(result.rows)[0]?.queued ?? 0);
+  }
 
   if (await isTrackWorkDueCutoverEnabled()) {
     return countTrackWorkDue(db, { kind, scope: effectiveScope });

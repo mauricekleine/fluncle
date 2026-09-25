@@ -1,5 +1,6 @@
 import {
   type AttentionItem,
+  type AnchorFailureInput,
   type CaptureSuspectInput,
   type ClipInput,
   deriveAttentionItems,
@@ -41,6 +42,36 @@ type ClipRow = {
 };
 
 export const CLIP_QUEUE_LIMIT = 50;
+
+async function listAnchorFailureRows(): Promise<AnchorFailureInput[]> {
+  const db = await getDb();
+  const result = await db.execute({
+    args: [50],
+    sql: `select track_id, title, artists_json, mb_recording_id,
+                 spotify_anchor_attempted_at, spotify_anchor_terminal_error
+          from tracks indexed by tracks_anchor_terminal_idx
+          where spotify_anchor_terminal_error is not null
+            and spotify_uri is null
+            and dismissed_at is null
+            and duplicate_of_track_id is null
+          order by track_id limit ?`,
+  });
+  return typedRows<{
+    artists_json: string;
+    mb_recording_id: null | string;
+    spotify_anchor_attempted_at: null | string;
+    spotify_anchor_terminal_error: string;
+    title: string;
+    track_id: string;
+  }>(result.rows).map((row) => ({
+    anchorAt: row.spotify_anchor_attempted_at ?? new Date(0).toISOString(),
+    artists: parseArtistsJson(row.artists_json),
+    error: row.spotify_anchor_terminal_error,
+    ...(row.mb_recording_id ? { mbRecordingId: row.mb_recording_id } : {}),
+    title: row.title,
+    trackId: row.track_id,
+  }));
+}
 
 async function listClipRows(): Promise<ClipInput[]> {
   const db = await getDb();
@@ -198,6 +229,7 @@ export async function readAttentionSnapshot(now: number = Date.now()): Promise<A
     mixtapes,
     clipPosts,
     anchorReviews,
+    anchorFailures,
     artistReviews,
     bioReviews,
     captureSuspects,
@@ -215,6 +247,7 @@ export async function readAttentionSnapshot(now: number = Date.now()): Promise<A
     listClipPosts(),
 
     listAnchorReviewRows(),
+    listAnchorFailureRows(),
     listArtistReviewRows(),
 
     listBioReviewRows(),
@@ -236,6 +269,7 @@ export async function readAttentionSnapshot(now: number = Date.now()): Promise<A
 
   const items = deriveAttentionItems(
     {
+      anchorFailures,
       anchorReviews,
       artistReviews,
       bioReviews,

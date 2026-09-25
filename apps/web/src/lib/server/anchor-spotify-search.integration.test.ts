@@ -133,6 +133,68 @@ beforeEach(async () => {
   searchDeezerCandidates.mockResolvedValue([]);
 });
 
+describe("quota-aware paid admission", () => {
+  it("admits only an ISRC row on a quota trip, within the paid cap", async () => {
+    const { resolveAnchorFree } = await import("./anchor");
+    const { setAnchorSpotifySearchEnabled } = await import("./anchor-spotify-search");
+    const { recordSpotifyThrottle } = await import("./spotify-anchor-breaker");
+    await setAnchorSpotifySearchEnabled(true);
+    for (let i = 0; i < 5; i += 1) {
+      await recordSpotifyThrottle(NON_FRIDAY.getTime(), true);
+    }
+    await seedCatalogue({ isrc: "ROWISRC0001", trackId: "mb_quota_isrc" });
+    await seedCatalogue({ isrc: null, trackId: "mb_quota_no_isrc" });
+
+    const isrc = await resolveAnchorFree("mb_quota_isrc", NON_FRIDAY);
+    const noIsrc = await resolveAnchorFree("mb_quota_no_isrc", NON_FRIDAY);
+
+    expect(isrc.apifyEligible).toBe(true);
+    expect(isrc.apifyBudgetRemaining).toBe(299);
+    expect(noIsrc.apifyEligible).toBe(false);
+    expect(noIsrc.apifyIneligibleReason).toBe("awaiting_free_ask");
+    expect(findSpotifyTrackByIsrc).not.toHaveBeenCalled();
+
+    const { setAnchorApifyDailyRows } = await import("./anchor-apify");
+    await setAnchorApifyDailyRows(1, NON_FRIDAY);
+    await seedCatalogue({ isrc: "ROWISRC0002", trackId: "mb_quota_capped" });
+    const capped = await resolveAnchorFree("mb_quota_capped", NON_FRIDAY);
+    expect(capped.apifyEligible).toBe(false);
+    expect(capped.apifyIneligibleReason).toBe("apify_budget_spent");
+
+    const { anchorSpotifySearchGate } = await import("./anchor-spotify-search");
+    expect(
+      (await anchorSpotifySearchGate(new Date(NON_FRIDAY.getTime() + 2 * 60 * 60 * 1000))).reason,
+    ).toBe("breaker_quota");
+    expect(
+      (await anchorSpotifySearchGate(new Date(NON_FRIDAY.getTime() + 24 * 60 * 60 * 1000))).reason,
+    ).toBe("open");
+  });
+
+  it("keeps an unasked ISRC row off Apify after a throttle trip", async () => {
+    const { resolveAnchorFree } = await import("./anchor");
+    const { setAnchorSpotifySearchEnabled } = await import("./anchor-spotify-search");
+    const { recordSpotifyThrottle } = await import("./spotify-anchor-breaker");
+    await setAnchorSpotifySearchEnabled(true);
+    for (let i = 0; i < 5; i += 1) {
+      await recordSpotifyThrottle(NON_FRIDAY.getTime());
+    }
+    await seedCatalogue({ isrc: "ROWISRC0001", trackId: "mb_throttle_isrc" });
+    const result = await resolveAnchorFree("mb_throttle_isrc", NON_FRIDAY);
+    expect(result.apifyEligible).toBe(false);
+    expect(result.apifyIneligibleReason).toBe("awaiting_free_ask");
+  });
+
+  it("keeps both rungs closed in the Friday window", async () => {
+    const { resolveAnchorFree } = await import("./anchor");
+    const { setAnchorSpotifySearchEnabled } = await import("./anchor-spotify-search");
+    await setAnchorSpotifySearchEnabled(true);
+    await seedCatalogue({ isrc: "ROWISRC0001", trackId: "mb_friday_paid" });
+    const result = await resolveAnchorFree("mb_friday_paid", FRIDAY_WINDOW);
+    expect(result.apifyEligible).toBe(false);
+    expect(findSpotifyTrackByIsrc).not.toHaveBeenCalled();
+  });
+});
+
 describe("resolveAnchorFree — the dark flag is the load-bearing gate", () => {
   it("flag OFF (default) ⇒ ZERO Spotify search calls, a clean un-stamped miss", async () => {
     const { resolveAnchorFree } = await import("./anchor");
@@ -877,6 +939,49 @@ describe("anchorTrack — the admission rule is re-checked at the write boundary
     spotifyTrackId: "spPaid",
     title: "Weightless",
   };
+
+  it("honours a charged quota admission when the UTC day changes before the report", async () => {
+    const { anchorTrack, resolveAnchorFree } = await import("./anchor");
+    const { setAnchorSpotifySearchEnabled } = await import("./anchor-spotify-search");
+    const { recordSpotifyThrottle } = await import("./spotify-anchor-breaker");
+    const beforeReset = new Date("2026-07-22T23:59:00.000Z");
+    await setAnchorSpotifySearchEnabled(true);
+    await seedCatalogue({ isrc: "ROWISRC0001", trackId: "mb_quota_boundary" });
+    for (let i = 0; i < 5; i += 1) {
+      await recordSpotifyThrottle(beforeReset.getTime(), true);
+    }
+    expect((await resolveAnchorFree("mb_quota_boundary", beforeReset)).apifyEligible).toBe(true);
+
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-07-23T00:01:00.000Z"));
+    try {
+      expect((await anchorTrack("mb_quota_boundary", [candidate])).anchored).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("rejects a no-ISRC paid report during a quota trip", async () => {
+    const { anchorTrack } = await import("./anchor");
+    const { setAnchorSpotifySearchEnabled } = await import("./anchor-spotify-search");
+    const { recordSpotifyThrottle } = await import("./spotify-anchor-breaker");
+    await setAnchorSpotifySearchEnabled(true);
+    await seedCatalogue({ isrc: null, trackId: "mb_quota_direct_no_isrc" });
+    for (let i = 0; i < 5; i += 1) {
+      await recordSpotifyThrottle(NON_FRIDAY.getTime(), true);
+    }
+
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NON_FRIDAY);
+    try {
+      await expect(anchorTrack("mb_quota_direct_no_isrc", [candidate])).rejects.toMatchObject({
+        reason: "awaiting_free_ask",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+    expect((await anchorState("mb_quota_direct_no_isrc")).uri).toBeNull();
+  });
 
   it("refuses a never-asked ISRC row with `awaiting_free_ask`, touching nothing", async () => {
     const { AnchorTrackError, anchorTrack } = await import("./anchor");

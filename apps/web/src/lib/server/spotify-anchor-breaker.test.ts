@@ -156,6 +156,15 @@ describe("recordSpotifyThrottle — the trip and the release", () => {
     expect(state.throttlesInWindow).toBe(0);
   });
 
+  it("persists quota as the trip cause when a 429 body reported QUOTA_EXCEEDED", async () => {
+    const { getSpotifyAnchorBreakerState, recordSpotifyThrottle } =
+      await import("./spotify-anchor-breaker");
+    const now = 10_000_000;
+    await recordSpotifyThrottle(now, true);
+    await throttle(4, now);
+    expect((await getSpotifyAnchorBreakerState(now)).reason).toBe("quota_exceeded");
+  });
+
   it("does NOT trip on throttles spread beyond the failure window", async () => {
     const {
       spotifyAnchorSearchBreakerTripped,

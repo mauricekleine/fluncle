@@ -3,6 +3,7 @@ import * as z from "zod";
 
 export const AttentionSourceSchema = z
   .enum([
+    "anchor-failure",
     "anchor-review",
     "artist-review",
     "attach-cues",
