@@ -2,11 +2,6 @@ import { getApiBaseUrl, loadEnv } from "./env";
 import { CliError, isJsonFailure } from "./output";
 import { readUserToken } from "./user-token";
 
-// The USER tier (`fluncle login`). Reads the signed-in user's own `/me` resources
-// by presenting the stored USER session token as a Bearer header — resolved by the
-// Worker's better-auth `bearer` plugin. This is HARD-SEPARATE from `adminHeaders()`:
-// it never reads `FLUNCLE_API_TOKEN`, and the user token store (./user-token.ts)
-// is never read by the admin env-loader, so the two carriers can never cross.
 export async function userApiGet<T>(path: string): Promise<T> {
   return apiRequest<T>(path, {
     headers: userHeaders(),
@@ -49,11 +44,6 @@ export async function adminApiGet<T>(path: string): Promise<T> {
 }
 
 export async function adminApiPost<T>(path: string, body?: unknown): Promise<T> {
-  // A bodyless POST (the query-only admin ops: backfills, enrich-sweep, the token
-  // mints, publish) must NOT claim a JSON content-type — an empty body with
-  // `Content-Type: application/json` is malformed, and the oRPC handler rejects it
-  // as `invalid_request` (it tries to JSON-parse the empty body). Send the header
-  // only when there is a body to type.
   return apiRequest<T>(path, {
     body: body === undefined ? undefined : JSON.stringify(body),
     headers: {
@@ -66,7 +56,6 @@ export async function adminApiPost<T>(path: string, body?: unknown): Promise<T> 
 
 export async function adminApiPostForm<T>(path: string, form: FormData): Promise<T> {
   return apiRequest<T>(path, {
-    // No Content-Type header: fetch sets multipart/form-data with the boundary.
     body: form,
     headers: adminHeaders(),
     method: "POST",
@@ -116,8 +105,6 @@ async function apiRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
   const data = parseJson(text);
 
   if (!response.ok) {
-    // Validate the error arm before reading it: a malformed/shapeless error body
-    // degrades to the HTTP status line instead of surfacing `undefined`.
     const failure = isJsonFailure(data) ? data : undefined;
     throw new CliError(
       failure?.code ?? `http_${response.status}`,
@@ -125,9 +112,6 @@ async function apiRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
     );
   }
 
-  // The caller supplies `T` from the contract response types (`@fluncle/contracts`);
-  // this is the boundary cast over the JSON-parsed body (the one documented escape
-  // hatch in the thin HTTP client).
   return data as T;
 }
 

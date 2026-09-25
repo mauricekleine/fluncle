@@ -1,9 +1,5 @@
 import { CliError } from "./output";
 
-// Open a URL/URI in the user's default handler (macOS `open`, Linux `xdg-open`).
-// Shared by `fluncle open` (Spotify/Telegram/track) and `fluncle login` (the
-// device-approval page). On an unsupported platform it prints the target and
-// throws so the caller can fall back to "open this manually".
 export async function openExternal(target: string): Promise<void> {
   const command = platformOpenCommand();
 

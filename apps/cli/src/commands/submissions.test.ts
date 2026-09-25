@@ -2,7 +2,6 @@ import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import * as realApi from "../api";
 import { CliError } from "../output";
 
-// A submission the mocked admin API returns for the approve path.
 const fakeSubmission = {
   artists: ["Artist"],
   contact: undefined,
@@ -18,8 +17,6 @@ const fakeSubmission = {
 let published = false;
 let approved = false;
 
-// Override only the two api functions the approve path uses; spread the rest so
-// the global mock.module replacement doesn't strip exports other test files need.
 await mock.module("../api", () => ({
   ...realApi,
   adminApiGet: async () => ({ submission: fakeSubmission }),
@@ -32,8 +29,6 @@ await mock.module("../api", () => ({
 }));
 
 await mock.module("./add", () => ({
-  // The approve flow calls add twice: a dry-run preview, then the real publish.
-  // Only the real publish (no dryRun) counts as "published".
   addCommand: async (_url: string, options: { dryRun?: boolean }) => {
     if (!options.dryRun) {
       published = true;
@@ -68,7 +63,7 @@ describe("approveSubmissionCommand non-interactive", () => {
 
     expect(thrown).toBeInstanceOf(CliError);
     expect((thrown as CliError).code).toBe("not_interactive");
-    // It must NOT have published behind a silent cancel.
+
     expect(published).toBe(false);
     expect(approved).toBe(false);
   });

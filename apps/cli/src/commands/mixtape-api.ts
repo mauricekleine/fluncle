@@ -1,8 +1,3 @@
-// The shared mixtape read helpers, split out of `mixtapes.ts` so the value imports
-// `mixtape-mixcloud.ts` needs (`mixtapeGetCommand` + the `MixtapeListItem` type) live in
-// a leaf module. `mixtapes.ts` dynamically imports `mixtape-mixcloud.ts` for distribution;
-// keeping these here breaks the static value-import cycle between the two.
-
 import { type MixtapeDTO, type MixtapesResponse } from "@fluncle/contracts";
 import { adminApiGet } from "../api";
 import { CliError } from "../output";

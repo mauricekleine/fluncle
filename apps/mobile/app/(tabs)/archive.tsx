@@ -26,15 +26,6 @@ import { useSavedFindings } from "@/lib/saved";
 import { partitionEntities, partitionTracks, searchView } from "@/lib/search-state";
 import { color, font } from "@/theme/tokens";
 
-// The archive (RFC Unit 3): browse + a device-local Saved view + SEARCH (the catalogue
-// sprint's public `search_archive` op). The filter row is limited to All and Saved so it does not
-// crowd the device edge. Galaxy names still
-// render in each finding row's meta line; only the chip lens is gone. Search is a quiet
-// magnifier in the header, mirroring the web palette's stance: the quietest surface
-// doesn't get a permanent form field, it gets a glyph that opens one. Searching REPLACES
-// the browse list; closing it restores the filter exactly where it was.
-
-/** What the browse list is filtered to when NOT searching. */
 type Browse = { kind: "all" } | { kind: "saved" };
 
 export default function ArchiveScreen() {
@@ -57,8 +48,6 @@ export default function ArchiveScreen() {
   const [query, setQuery] = useState("");
   const [debounced, setDebounced] = useState("");
 
-  // A keystroke is not a query. The debounce (matching the web palette) keeps a typed
-  // word from firing a round trip per character on its way to being one.
   useEffect(() => {
     const timer = setTimeout(() => setDebounced(query.trim()), 180);
     return () => clearTimeout(timer);
@@ -66,12 +55,8 @@ export default function ArchiveScreen() {
 
   const saved = useSavedFindings();
 
-  // No client-side filter any more (the galaxy lens is gone); the browse list is the
-  // whole feed, paginated by `onEndReached` below.
   const shown = all;
 
-  // Stable renderItem so the list bails out of rebuilding every visible row on
-  // each screen redraw; only re-created when the row count (last-row flag) shifts.
   const renderItem = useCallback<ListRenderItem<(typeof shown)[number]>>(
     ({ index, item }) => <FindingRow finding={item} isLast={index === shown.length - 1} />,
     [shown.length],
@@ -104,21 +89,12 @@ export default function ArchiveScreen() {
 
   const view = archiveView({ count: shown.length, isError, isPaused, isPending });
 
-  // The offline browse (offline-first slice 2). When the feed has nothing AND the device is
-  // off the map, the archive reads the local replica instead of stopping at the offline line.
-  // It is LAYERED: a build without the libSQL engine, a device that has never pulled, or a
-  // dark token endpoint all answer an empty list, and the shipped offline state stands
-  // exactly as it was written. Online behaviour is untouched — the read only runs here.
   const replica = useReplicaFindings(view === "offline");
 
   return (
     <View style={{ flex: 1 }}>
       <CosmosBackdrop />
       <SafeAreaView style={{ flex: 1 }} edges={["top"]}>
-        {/* Header + lens sit transparently on the cosmos gradient so it flows unbroken
-            from the top of the screen down through the list — no separate pane band
-            (the operator's ruling). The header is a flex block above the list (not an
-            overlay), so rows still rest below the chips; nothing scrolls under it. */}
         <View>
           {searching ? (
             <SearchField query={query} onChangeQuery={setQuery} onClose={closeSearch} />
@@ -134,7 +110,7 @@ export default function ArchiveScreen() {
                   <HeaderPill label="Submit a track" onPress={() => router.push("/submit")} />
                 </View>
               </View>
-              {/* Two chips, All and Saved — a quiet filter pair, not a scrolling lens. */}
+
               <View style={styles.chipRow}>
                 <FilterChip
                   label="All"
@@ -157,8 +133,6 @@ export default function ArchiveScreen() {
           <SavedList list={saved.list} ready={saved.ready} renderItem={renderSaved} />
         ) : view === "offline" ? (
           !replica.ready ? (
-            // The local read has not answered yet. Skeletons rather than the offline line, so
-            // a device that HAS a replica never flashes "off the map" on its way to the list.
             <LoadingRows count={7} />
           ) : replica.findings.length > 0 ? (
             <ReplicaList findings={replica.findings} onOpen={(id) => router.push(`/log/${id}`)} />
@@ -174,10 +148,7 @@ export default function ArchiveScreen() {
             data={shown}
             keyExtractor={(f) => f.logId ?? f.trackId}
             renderItem={renderItem}
-            // iOS NativeTabs floats a pill over the content; the sanctioned clearance is
-            // the native scroll-edge adjustment — let iOS inset this (the first vertical
-            // scroll view) by the real tab-bar height, then add ~20pt breathing room. A
-            // hardcoded guess buried the tail under the pill (B1).
+
             contentInsetAdjustmentBehavior="automatic"
             contentContainerStyle={styles.listContent}
             refreshControl={
@@ -207,9 +178,6 @@ export default function ArchiveScreen() {
   );
 }
 
-// A certified finding taps through to its coordinate (the detail modal). A track
-// Fluncle never certified has no /log page, so it links OUT to Spotify — the Unlit
-// Rule the search rows already render.
 function pickHit(hit: SearchHit, router: ReturnType<typeof useRouter>): void {
   if (hit.certified && hit.logId) {
     router.push(`/log/${hit.logId}`);
@@ -220,13 +188,6 @@ function pickHit(hit: SearchHit, router: ReturnType<typeof useRouter>): void {
   }
 }
 
-// The search pane: one `search_archive` op behind a debounced query, rendered in the
-// archive row idiom. Results render in three heading groups:
-// entity jump targets first (Artists / Labels / Albums, opened on the web — the app has
-// no such page), then the tracks split into "Fluncle's Findings" (certified, coordinate
-// rows) ALWAYS before "Tracks" (uncertified, link-out rows). Empty/error states are
-// honest and voiced; the two notes (sonic anchor, degraded fallback) mirror the web
-// palette's ratified lines.
 function SearchResults({
   onPickHit,
   query,
@@ -324,9 +285,6 @@ function SearchResults({
   );
 }
 
-// The device-local Saved view. Rows render from the stored snapshot, so a saved
-// finding shows even if the archive later moves — and a coordinate that no longer
-// resolves lands on the detail screen's honest "Finding not found." when tapped.
 function SavedList({
   list,
   ready,
@@ -355,14 +313,6 @@ function SavedList({
   );
 }
 
-// The offline browse list (offline-first slice 2): findings read straight off the device's
-// local replica of the anchored catalogue cut, newest first, in the same row idiom the Saved
-// view uses. It renders ONLY when the device is offline and the feed came back empty, so it
-// never competes with the live list — and it introduces no state of its own: an empty replica
-// falls through to the shipped offline line above.
-//
-// A replica row carries no galaxy name (the cut has no such column), and the meta line drops
-// empty fields — so the row is quieter offline rather than inventing anything.
 function ReplicaList({
   findings,
   onOpen,
@@ -394,8 +344,6 @@ function ReplicaList({
   );
 }
 
-// The loading state (B2) and the drain state (P4): a quiet column of placeholder rows —
-// artwork square + two text bars in the Dust Veil tone, no spinner.
 function LoadingRows({ count }: { count: number }) {
   return (
     <View accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
@@ -406,10 +354,6 @@ function LoadingRows({ count }: { count: number }) {
   );
 }
 
-// The device has no connection, so the feed query is PARKED rather than failed — a
-// different fact from ArchiveError below, and it gets a different answer. No "Try again":
-// the query resumes on its own the moment the device is back, so the control would only
-// ever work once it was already unnecessary.
 function ArchiveOffline() {
   return (
     <View style={styles.errorState}>
@@ -420,8 +364,6 @@ function ArchiveOffline() {
   );
 }
 
-// The honest network-failure state (B2): plain prose (the written voice — no em dash,
-// no exclamation) plus a literal "Try again" control (the Chrome Rule) wired to refetch.
 function ArchiveError({ onRetry }: { onRetry: () => void }) {
   return (
     <View style={styles.errorState}>
@@ -441,9 +383,6 @@ function ArchiveError({ onRetry }: { onRetry: () => void }) {
   );
 }
 
-// The search field that replaces the header title while searching: a bordered outline
-// input carrying the ratified web placeholder, and a quiet X to close (which restores
-// the browse list). Icon-only chrome carries its literal in the a11y label.
 function SearchField({
   onChangeQuery,
   onClose,
@@ -483,8 +422,6 @@ function SearchField({
   );
 }
 
-// A header action pill (the quiet outline the notifications entry used): "Submit a
-// track" (the ratified functional label; the Chrome Rule keeps controls literal).
 function HeaderPill({ label, onPress }: { label: string; onPress: () => void }) {
   return (
     <Pressable
@@ -504,8 +441,6 @@ function HeaderPill({ label, onPress }: { label: string; onPress: () => void }) 
   );
 }
 
-// The quiet magnifier that opens search — a glyph, not a field, in the quietest
-// surface (the web palette's stance). The padding + hitSlop lift it past the 44pt floor.
 function SearchIconButton({ onPress }: { onPress: () => void }) {
   return (
     <Pressable
@@ -520,9 +455,6 @@ function SearchIconButton({ onPress }: { onPress: () => void }) {
   );
 }
 
-// The quiet account entry — a person glyph beside the search magnifier, opening the
-// /account modal (never a tab; nothing gates on an account). Icon-only chrome carries its
-// literal in the a11y label (the Chrome Rule). Padding + hitSlop lift it past the 44pt floor.
 function AccountIconButton({ onPress }: { onPress: () => void }) {
   return (
     <Pressable
@@ -551,8 +483,7 @@ function FilterChip({
       accessibilityRole="button"
       accessibilityState={{ selected: active }}
       onPress={onPress}
-      // The chip is ~29pt tall; the vertical hitSlop lifts the effective target past
-      // the 44pt floor without changing the visual size (H4).
+
       hitSlop={{ bottom: 8, left: 4, right: 4, top: 8 }}
       style={{
         backgroundColor: active ? color.goldVeil : "transparent",

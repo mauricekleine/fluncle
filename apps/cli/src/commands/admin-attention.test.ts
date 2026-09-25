@@ -2,10 +2,6 @@ import { type AttentionQueue } from "@fluncle/contracts";
 import { describe, expect, test } from "bun:test";
 import { attentionQueueLines } from "./admin-attention";
 
-// `attentionQueueLines` is the deadpan CLI board render — pure, no network. The
-// `admin queue` read itself is a thin `adminApiGet` call proven by the oRPC
-// contract/coverage tests; here we pin the human output shape.
-
 const CLEAR: AttentionQueue = {
   brief: "All clear. Quiet sector.",
   counts: [],
@@ -39,7 +35,7 @@ describe("attentionQueueLines", () => {
 
     expect(lines[0]).toBe("Two TikTok drafts to finish, a mixtape waiting on Mixcloud.");
     expect(lines[1]).toBe("");
-    // The source tags are padded to a shared width (parseable columns).
+
     expect(lines[2]).toBe("  tiktok draft  IYRE — Glowing Embers");
     expect(lines[4]).toBe("  distribute    Mixtape 12");
   });

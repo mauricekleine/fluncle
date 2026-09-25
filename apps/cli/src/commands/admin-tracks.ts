@@ -3,9 +3,6 @@ import { adminApiGet, adminApiPost } from "../api";
 import { mapTrack, type RecentTrack, type TracksResponse } from "./recent";
 import { trackUpdateCommand } from "./track";
 
-// Mirrors the /api/v1/admin/tracks page cap. The order + hasVideo + hasContext +
-// hasObservation + status filters are applied in SQL by listTracks; the CLI just
-// pages through the matching rows.
 const pageSize = 48;
 
 async function fetchAdminTracks(options: {
@@ -52,9 +49,6 @@ async function fetchAdminTracks(options: {
       params.set("hasEmbedding", String(hasEmbedding));
     }
 
-    // `captureQueue` is a boolean-ish flag (emit only when set, like
-    // `retryEmptyContext`): true = the full-song capture worklist (`capture_status`
-    // pending ∪ failed ∪ NULL). Server honours it as a SEPARATE queue.
     if (captureQueue) {
       params.set("captureQueue", "true");
     }
@@ -63,10 +57,6 @@ async function fetchAdminTracks(options: {
       params.set("hasContext", String(hasContext));
     }
 
-    // `retryEmptyContext` widens the `hasContext=false` context queue to also
-    // re-pick CONFIRMED-EMPTY finds (`context_status = 'empty'`). Honoured
-    // server-side only alongside `hasContext=false`; emit it only when set so the
-    // routine queue read stays byte-identical to before.
     if (retryEmptyContext) {
       params.set("retryEmptyContext", "true");
     }
@@ -109,11 +99,6 @@ async function fetchAdminTracks(options: {
   return results;
 }
 
-// A filterable admin listing of findings. Currently the missing-musical-key
-// backlog the Rekordbox sync targets: `hasKey=false` lists findings whose
-// stored `key` is null, `hasKey=true` those that already carry one, absent = all.
-// This is what makes the backlog COUNTABLE + TARGETABLE — the sync script reads
-// `list --all --json` as its input query.
 export async function listCommand(options: {
   hasKey?: boolean;
   limit: number;
@@ -130,20 +115,6 @@ export type QueueFilters = {
   hasObservation?: boolean;
 };
 
-// The render queue: findings with no video yet, oldest first. The first row is
-// the next finding to film (oldest-first is how the backlog is worked down).
-//
-// HARD-GATED on `hasContext=true`: the queue only ever surfaces findings that
-// already carry a stored `context_note`. The video render reads that note (the
-// `Texture:` line) as creative fuel via `tracks context <id>`, and that read —
-// on a note-less finding — would TRIGGER a Firecrawl+distil (a read that writes).
-// Filming only context'd findings makes the render's context read a guaranteed
-// cached no-op, the same safety the observation queues already have. A finding's
-// video therefore waits until it's context-noted — fine: the context cron runs
-// every ~5 min, and a render with the Texture fuel is the one worth filming.
-//
-// `hasContext=true` is hard-set here (not overridable). The optional `hasObservation`
-// filter still narrows it (so a cron can ask "what's context'd but still needs a voice?").
 export async function queueCommand(
   limit: number,
   filters: QueueFilters = {},
@@ -157,54 +128,24 @@ export async function queueCommand(
   });
 }
 
-// The ENRICHMENT queue (distinct from the VIDEO queue above): findings needing
-// (re-)enrichment — pending ∪ failed ∪ stale processing — oldest first. The
-// sweep re-fires these; this read just surfaces what's stuck.
 export async function enrichQueueCommand(limit: number): Promise<RecentTrack[]> {
   return fetchAdminTracks({ max: limit, order: "asc", status: "queue" });
 }
 
-// The EMBED queue: findings with no MuQ audio embedding yet (`hasEmbedding=false`),
-// oldest first — the on-box `fluncle-embed` cron's worklist (each row is a finding to
-// embed on the box, then write back via `tracks update <id> --embedding-file`). See
-// docs/track-lifecycle.md.
 export async function embedQueueCommand(limit: number): Promise<RecentTrack[]> {
   return fetchAdminTracks({ hasEmbedding: false, max: limit, order: "asc" });
 }
 
-// The CAPTURE queue: findings still needing a full-song capture (`capture_status`
-// pending ∪ failed ∪ NULL) — the on-box `fluncle-capture` cron's worklist. NEWEST
-// FIRST (`order: "desc"`), unlike enrich/embed: a fresh add must jump ahead of the
-// whole-archive backfill instead of waiting behind it (RFC full-audio § Unit 1 / 5a).
-// The cron itself reads the queue via direct HTTP (pin-independent); this CLI view is
-// the operator/inspection surface. See docs/agents/hermes/scripts/capture-sweep.*.
 export async function captureQueueCommand(limit: number): Promise<RecentTrack[]> {
   return fetchAdminTracks({ captureQueue: true, max: limit, order: "desc" });
 }
 
-// ── The CATALOGUE-AWARE pipeline worklist (`list_track_work`) ────────────────────────
-//
-// The three queues above all read `list_tracks_admin`, which drives through the FINDING
-// JOIN — so every one of them is blind to a CATALOGUE track (a `tracks` row with no
-// `findings` row). That is right for a feed and wrong for a pipeline: BPM, key, features
-// and the MuQ vector are measurements of a RECORDING, so they apply to any track with
-// captured audio, certified or not (docs/gpu-batch-embed.md).
-//
-// `list_track_work` is the queue that sees both halves, and it hands them back in the
-// order the METERED capture budget should be spent: certified first, then the Ear's
-// pre-audio `capture_priority` ladder, then newest-first. A ruled-out label is vetoed out
-// of the `capture` worklist entirely. The three sweeps read it; this is the CLI mirror
-// (the CLI holds no queue logic of its own).
 export type TrackWorkKind = "analyze" | "capture" | "embed";
 export type TrackWorkPage = {
-  /**
-   * The page was withheld because due-work repair is still converging, so `tracks` is empty and
-   * says nothing about the backlog. Only ever set on a `--count` read.
-   */
   debtPending?: boolean;
-  /** The WHOLE backlog for this kind+scope — only when `--count` was asked for. */
+
   queued?: number;
-  /** The page, capped at 200 by the server. Never "how much is left". */
+
   tracks: TrackWorkItem[];
 };
 
@@ -220,13 +161,6 @@ export async function trackWorkCommand(options: {
     scope: options.scope,
   });
 
-  // `--count` asks for the backlog SIZE alongside the page. Opt-in: a page read is capped at
-  // 200 rows, so counting rows in the page answers "how many did I get", never "how much is
-  // left" — and at catalogue scale those differ by orders of magnitude. Emitted only when set,
-  // so page-only readers stay byte-identical and never pay for the count.
-  // `debtAware` rides with `--count`: an operator asking how big the backlog is wants the number,
-  // not a refusal, when due-work repair is mid-convergence. The page is still withheld — the
-  // answer carries `debtPending` and an empty page — so no row is handed out either way.
   if (options.count) {
     params.set("count", "true");
     params.set("debtAware", "true");
@@ -243,9 +177,6 @@ export async function trackWorkCommand(options: {
   };
 }
 
-// One stale finding in the analysis-provenance requeue (RFC bpm-key-accuracy): its
-// coordinate, its stored BPM/key, the audio class it was last analyzed from, and whether a
-// captured full song is on file (so a re-derive would upgrade from full audio, not a preview).
 export type RequeueAnalysisRow = {
   analyzedFrom?: string;
   bpm?: number;
@@ -257,42 +188,25 @@ export type RequeueAnalysisRow = {
 };
 
 export type RequeueAnalysisResult = {
-  // Whether statuses were actually flipped (`--apply`) or this was a dry-run preview.
   applied: boolean;
-  // Findings whose flip to `enrichment_status = pending` failed (only populated with --apply).
+
   failed: Array<{ error: string; trackId: string }>;
-  // trackIds actually re-queued (empty on a dry-run).
+
   requeued: string[];
-  // The archive walk cap that bounded this pass (so the caller can warn if it was hit).
+
   scanned: number;
-  // Stale findings WITH a captured full song — a re-enrich re-derives from full audio (a
-  // strict upgrade over the preview-grade value).
+
   withSourceAudio: RequeueAnalysisRow[];
-  // Stale findings WITHOUT a captured full song — a re-enrich re-derives from the 30s preview
-  // (still an upgrade with the fixed estimator, but called out; capture may land later and
-  // re-queue them again for the full-audio pass).
+
   withoutSourceAudio: RequeueAnalysisRow[];
 };
 
-// The archive-wide analysis-provenance repair (RFC bpm-key-accuracy): find every finding
-// whose BPM/key are preview-grade (`analyzedFrom != "full"` — NULL legacy rows included) and
-// re-queue it (`enrichment_status = pending`) so the on-box `fluncle-enrich` sweep re-derives
-// it deterministically. PURE CLI orchestration over the existing admin ops — it walks the
-// `admin tracks list` cursor chain (which surfaces `analyzedFrom`/`sourceAudioKey`) and flips
-// each stale row via the existing `update_track` op; it adds no new API surface.
-//
-// DRY-RUN by default (`apply: false`): it only reports the would-be-requeued set. `apply:
-// true` flips the statuses. Findings without a captured full song are reported SEPARATELY —
-// re-queueing them re-derives from a preview (an upgrade, but not the full-audio pass) — never
-// silently skipped.
 export async function requeueAnalysisCommand(options: {
   apply: boolean;
   max: number;
 }): Promise<RequeueAnalysisResult> {
   const findings = await fetchAdminTracks({ max: options.max, order: "asc" });
 
-  // Stale = not confirmed full-audio: NULL/undefined legacy rows ("assume preview-grade") and
-  // explicit "preview" rows. A finding already analyzed from full audio is left alone.
   const stale = findings.filter((track) => track.analyzedFrom !== "full");
 
   const rows: RequeueAnalysisRow[] = stale.map((track) => ({
@@ -335,15 +249,6 @@ export async function requeueAnalysisCommand(options: {
   };
 }
 
-// The CONTEXT queue: findings whose factual field notes haven't been gathered yet
-// (`hasContext=false`), oldest first — the `context` cron's worklist (each row is a
-// `tracks context <id>` to run).
-//
-// `retryEmptyContext` (the CLI's `--retry-empty`) WIDENS the queue to also re-pick
-// finds the prior pass confirmed empty (`context_status = 'empty'`) — the
-// widen-the-net occasional pass, off by default so the every-tick routine sweep
-// never re-burns Firecrawl + the distil LLM on a hopeless find. The server honours
-// it only because this queue is `hasContext=false`.
 export async function contextQueueCommand(
   limit: number,
   retryEmptyContext = false,
@@ -351,9 +256,6 @@ export async function contextQueueCommand(
   return fetchAdminTracks({ hasContext: false, max: limit, order: "asc", retryEmptyContext });
 }
 
-// The OBSERVATION queue: findings with field notes on file but no spoken
-// observation yet (`hasContext=true AND hasObservation=false`), oldest first — the
-// `observe` cron's worklist (each row is a `tracks observe <id>` to run).
 export async function observeQueueCommand(limit: number): Promise<RecentTrack[]> {
   return fetchAdminTracks({
     hasContext: true,
@@ -363,9 +265,6 @@ export async function observeQueueCommand(limit: number): Promise<RecentTrack[]>
   });
 }
 
-// The AUTO-NOTE queue: findings with the context_note fuel on file but no editorial
-// note yet (`hasContext=true AND hasNote=false`), oldest first — the `note` cron's
-// worklist (each row is a `tracks note <id> --script-file <path>` to author + post).
 export async function noteQueueCommand(limit: number): Promise<RecentTrack[]> {
   return fetchAdminTracks({
     hasContext: true,
@@ -381,26 +280,16 @@ export type LastfmBackfillResult = {
   failedCount: number;
   loved: string[];
   lovedCount: number;
-  // The feed cursor to resume from on the next pass, or null when the archive is
-  // drained. The endpoint handles only a bounded pass per request (each love runs
-  // under a rate limiter), so the CLI loops this until null.
+
   nextCursor: string | null;
   ok: boolean;
-  // True when the pass STOPPED on the Last.fm rate-limit circuit breaker: the CLI
-  // must stop looping the cursor (the next tick resumes with a fresh window) rather
-  // than re-firing into the same wall until the cron's 120s timeout kills it.
+
   rateLimited: boolean;
-  // Findings the per-finding reliability gate held back this pass (already loved,
-  // or cooling down after a recent attempt/failure). They didn't burn the batch.
+
   skipped: string[];
   skippedCount: number;
 };
 
-// One bounded pass of the Last.fm love backfill via the admin API — the Worker
-// holds the LASTFM_* secrets and makes every signed call; the CLI stays a thin
-// client. Idempotent (loving twice is a no-op) and a safe no-op until the session
-// key is provisioned. `--dry-run` reports the set without firing. Pass the prior
-// pass's `nextCursor` to resume; the CLI loops until it comes back null.
 export async function backfillLastfmCommand(
   limit: number,
   dryRun: boolean,
@@ -417,33 +306,22 @@ export async function backfillLastfmCommand(
 
 export type DiscogsBackfillResult = {
   dryRun: boolean;
-  // The feed cursor to resume from on the next pass, or null when the archive is
-  // drained. The endpoint handles only a bounded pass per request (each resolve
-  // runs under a rate limiter), so the CLI loops this until null.
+
   nextCursor: string | null;
   ok: boolean;
-  // True when the pass STOPPED on the Discogs rate-limit circuit breaker: the CLI
-  // must stop looping the cursor (the next tick resumes with a fresh window) rather
-  // than re-firing into the same 429 wall until the cron's 120s timeout kills it.
+
   rateLimited: boolean;
-  // The resolver calls MusicBrainz before Discogs; this names the actual vendor
-  // whose rate-limit brake stopped the pass.
+
   rateLimitedBy: "discogs" | "musicbrainz" | null;
   resolved: Array<{ logId: string; masterId?: number; releaseId: number; source: string }>;
   resolvedCount: number;
-  // Findings the per-finding reliability gate held back this pass (already
-  // resolved, or cooling down after a recent attempt/failure). Didn't burn budget.
+
   skipped: string[];
   skippedCount: number;
   unresolved: string[];
   unresolvedCount: number;
 };
 
-// One bounded pass of the Discogs release-id backfill via the admin API — the
-// Worker resolves (MB bridge + gated search) and writes in_release_id /
-// in_master_id server-side. Rows that already have an id are skipped (idempotent).
-// `--dry-run` resolves but writes nothing. Pass the prior pass's `nextCursor` to
-// resume; the CLI loops until it comes back null.
 export async function backfillDiscogsCommand(
   limit: number,
   dryRun: boolean,
@@ -459,43 +337,29 @@ export async function backfillDiscogsCommand(
 }
 
 export type AppleMusicBackfillResult = {
-  // Album-fact rows written once this pass (recordLabel/upc/artwork/palette) off the
-  // single-ISRC oracle's canonical album — the second half of the Apple read (RFC U1).
   albumFactsWritten: number;
-  // True when the pass STOPPED on the cross-cutting Apple breaker (a suspended token / a spent
-  // call budget) rather than a 429.
+
   breakerTripped: boolean;
-  // False when the Worker's MusicKit secrets are unset — the leg is a no-op this tick.
+
   configured: boolean;
   dryRun: boolean;
   failed: Array<{ error: string; logId: string }>;
   failedCount: number;
-  // The feed cursor to resume from on the next pass, or null when the archive is
-  // drained (or the leg is unconfigured / throttled). The endpoint handles only a
-  // bounded pass per request (each resolve runs under a rate limiter), so the CLI
-  // loops this until null.
+
   nextCursor: string | null;
   ok: boolean;
-  // True when the pass STOPPED on the Apple Music rate-limit circuit breaker: the CLI
-  // must stop looping the cursor (the next tick resumes with a fresh window).
+
   rateLimited: boolean;
   resolved: Array<{ logId: string; url: string }>;
   resolvedCount: number;
-  // Findings the per-finding reliability gate held back this pass (already resolved,
-  // or cooling down after a recent attempt/failure). Didn't burn budget.
+
   skipped: string[];
   skippedCount: number;
-  // Findings whose ISRC Apple has no song for (a clean no-match, re-checkable later).
+
   unresolved: string[];
   unresolvedCount: number;
 };
 
-// One bounded pass of the Apple Music URL backfill via the admin API — the Worker holds
-// the MusicKit secrets, mints the developer token, and resolves each finding EXACTLY by
-// ISRC, writing apple_music_url server-side. Rows that already have a URL are skipped
-// (idempotent). A safe no-op until the secrets are provisioned. `--dry-run` reports the
-// eligible set without resolving. Pass the prior pass's `nextCursor` to resume; the CLI
-// loops until it comes back null.
 export async function backfillAppleMusicCommand(
   limit: number,
   dryRun: boolean,
@@ -513,26 +377,20 @@ export async function backfillAppleMusicCommand(
 }
 
 export type DiscogsFactsBackfillResult = {
-  // False when the Worker's DISCOGS_USER_TOKEN is unset — the leg was a no-op this tick.
   configured: boolean;
   dryRun: boolean;
-  // Albums whose release lookup ERRORED — nothing was learned, so they back off and are retried.
+
   failed: Array<{ error: string; slug: string }>;
   failedCount: number;
-  // Albums whose release genuinely carries no catalogue number — terminal, never re-read.
+
   none: string[];
   noneCount: number;
-  // True when the pass STOPPED on the Discogs rate-limit circuit breaker; nothing was stamped.
+
   rateLimited: boolean;
   resolved: Array<{ catno: string; slug: string }>;
   resolvedCount: number;
 };
 
-// One bounded pass of the Discogs release-FACTS drain — the sibling of `backfillDiscogsCommand`.
-// That one resolves a finding to a release id; this takes the id and reads the album's catalogue
-// number + styles off the release, onto the `albums` row. ALBUM-GRAINED and self-draining, so there
-// is NO cursor: an album leaves the worklist the moment it is ruled, and the CLI loops until a pass
-// rules nothing. A safe no-op until the Worker's DISCOGS_USER_TOKEN is provisioned.
 export async function backfillDiscogsFactsCommand(
   limit: number,
   dryRun: boolean,
@@ -545,8 +403,6 @@ export async function backfillDiscogsFactsCommand(
 }
 
 export type BeatportBackfillResult = {
-  // The CATALOGUE tier's own counters — an uncertified row has no Log ID, and its spend is metered
-  // separately (each row is one Firecrawl credit against a five-figure catalogue).
   catalogueFailed: Array<{ error: string; trackId: string }>;
   catalogueFailedCount: number;
   catalogueResolved: Array<{ trackId: string; url: string }>;
@@ -555,8 +411,7 @@ export type BeatportBackfillResult = {
   catalogueUnresolvedCount: number;
   configured: boolean;
   dryRun: boolean;
-  // Findings whose resolve errored (a scrape failure/timeout) — nothing was learned, so they back
-  // off and are retried. Distinct from `unresolved`, which is a concluded no-match.
+
   failed: Array<{ error: string; logId: string }>;
   failedCount: number;
   nextCursor: null | string;
@@ -564,34 +419,28 @@ export type BeatportBackfillResult = {
   resolvedCount: number;
   skipped: string[];
   skippedCount: number;
-  // Findings Beatport ran a search for and does not carry (a clean no-match).
+
   unresolved: string[];
   unresolvedCount: number;
 };
 
 export type DeezerBackfillResult = {
   dryRun: boolean;
-  // Rows whose lookup errored in transport — nothing learned, so they retry until a failure cap.
+
   failed: Array<{ error: string; trackId: string }>;
   failedCount: number;
-  // True when the pass STOPPED on Deezer's quota answer (an HTTP-200 error body): nothing was
-  // stamped, so the CLI stops looping and the next tick resumes with a fresh window.
+
   rateLimited: boolean;
   resolved: Array<{ trackId: string; url: string }>;
   resolvedCount: number;
-  // ISRCs Deezer concluded it carries no recording for — stamped, a real negative.
+
   unresolved: string[];
   unresolvedCount: number;
-  // Rows Deezer picked a track for whose duration did not vouch — stamped nothing, still eligible.
+
   unvouchable: string[];
   unvouchableCount: number;
 };
 
-// One bounded pass of the forward-accretion Deezer backfill — the Worker resolves each row's Deezer
-// track id EXACTLY by ISRC through the keyless public endpoint (no key to provision anywhere), keeps
-// it only when the returned track's duration vouches for the pick, and writes the id + provenance
-// server-side. Certified rows drain first, then the Ear-ranked catalogue. NO cursor: the worklist is
-// a fresh ledger-gated read each tick, so the CLI loops until a pass does nothing.
 export async function backfillDeezerCommand(
   limit: number,
   dryRun: boolean,
@@ -601,10 +450,6 @@ export async function backfillDeezerCommand(
   return adminApiPost<DeezerBackfillResult>(`/api/v1/admin/backfill/deezer?${params.toString()}`);
 }
 
-// One bounded pass of the Beatport store-link backfill. The Worker holds the Firecrawl key, scrapes
-// Beatport's public search (no Beatport API key is used), and keeps a link ONLY where a result's
-// ISRC exactly equals the finding's. A safe no-op until FIRECRAWL_API_KEY is provisioned. Pass the
-// prior pass's `nextCursor` to resume; the CLI loops until it comes back null.
 export async function backfillBeatportCommand(
   limit: number,
   dryRun: boolean,
@@ -623,25 +468,21 @@ export async function backfillBeatportCommand(
 
 export type AppleCatalogueBackfillResult = {
   albumFactsWritten: number;
-  // True when the pass STOPPED on the cross-cutting Apple breaker (suspended token / spent budget).
+
   breakerTripped: boolean;
   configured: boolean;
   dryRun: boolean;
   failed: Array<{ error: string; trackId: string }>;
   failedCount: number;
-  // True when the pass STOPPED on the Apple 429 rate-limit circuit breaker.
+
   rateLimited: boolean;
   resolved: Array<{ trackId: string; url: string }>;
   resolvedCount: number;
-  // Catalogue ISRCs Apple has no song for (a clean no-match, re-checkable later).
+
   unresolved: string[];
   unresolvedCount: number;
 };
 
-// One bounded pass of the Apple CATALOGUE drain (RFC U1) — the catalogue sibling of
-// `backfillAppleMusicCommand`. The Worker batches uncertified rows' ISRCs (≤25/request) into the
-// catalog oracle for the URL, and resolves each NEW album's facts once. No cursor: the worklist is
-// a fresh reliability-gated anti-join each tick, so the CLI loops until a pass resolves nothing.
 export async function backfillAppleCatalogueCommand(
   limit: number,
   dryRun: boolean,
@@ -653,39 +494,29 @@ export async function backfillAppleCatalogueCommand(
   );
 }
 
-// The freshness tap (D8) has no CLI helper: its box sweep POSTs the agent-tier
-// `backfill_label_releases` op over HTTP directly, avoiding the pinned-CLI version coupling that
-// broke an earlier run. See docs/agents/hermes/scripts/label-releases-sweep.ts.
-
 export type RecordingMbidsBackfillResult = {
   dryRun: boolean;
   failed: Array<{ error: string; trackId: string }>;
   failedCount: number;
-  // Track ids re-read whose recording MusicBrainz still holds no ISRC for — stamped so they drain.
+
   isrcRefreshMissed: string[];
   isrcRefreshMissedCount: number;
-  // Track ids the ISRC-REFRESH leg gave an ISRC this pass (MBID → `?inc=isrcs` → fill-empty-only).
+
   isrcRefreshed: string[];
   isrcRefreshedCount: number;
-  // Track ids whose ISRC MusicBrainz has no recording for — attempt-stamped so they drain.
+
   missed: string[];
   missedCount: number;
-  // The track-id cursor to resume the ISRC drain from, or null when it is drained (or a throttle).
+
   nextCursor: string | null;
   ok: boolean;
-  // Crawler-history rows filled from their PK this pass (the free no-vendor strip).
+
   prefixStripped: number;
   rateLimited: boolean;
   resolved: string[];
   resolvedCount: number;
 };
 
-// One bounded pass of the recording-MBID fill sweep (the MusicBrainz identity layer) via the admin
-// API. The Worker fills crawler-born rows from their PK for free, then resolves findings/Spotify-born
-// rows' MBID by ISRC through the shared MusicBrainz client (1 req/s, circuit-broken on a throttle).
-// `--dry-run` reports both worklists without a vendor call or write. Pass the prior `nextCursor` to
-// resume the ISRC drain; the CLI loops until it comes back null. `isrcRefreshLimit` caps the RETURN
-// trip (MBID → `?inc=isrcs`), which the Worker runs only on a tick whose ISRC drain was idle.
 export async function backfillRecordingMbidsCommand(
   limit: number,
   dryRun: boolean,
@@ -709,33 +540,28 @@ export async function backfillRecordingMbidsCommand(
 
 export type ArtistEdgesBackfillResult = {
   dryRun: boolean;
-  // `track_artists` edges written this pass (or, in a dry run, the count that WOULD be written).
+
   edgesWritten: number;
-  // Track ids where EVERY credited name matched an existing identity.
+
   fullyMatched: string[];
   fullyMatchedCount: number;
-  // The track-id cursor to resume from, or null once the worklist is drained.
+
   nextCursor: string | null;
   ok: boolean;
-  // Track ids where SOME names matched and some did not (their unmatched names feed the residual).
+
   partiallyMatched: string[];
   partiallyMatchedCount: number;
-  // Authoritative rows still in the worklist after this pass.
+
   queueDepth: number;
-  // Tracks VISITED this pass (fully + partially + zero) — the loop's cap unit.
+
   scanned: number;
-  // Total credited names across the batch that matched NO identity — the future MB-sweep residual.
+
   unmatchedNames: number;
-  // Track ids where NO credited name matched an identity.
+
   zeroMatched: string[];
   zeroMatchedCount: number;
 };
 
-// One bounded pass of the track_artists graph backfill (RFC artist-primary-capture, slice 0) via the
-// admin API. The Worker folds each edge-less track's `artists_json` names onto EXISTING artist
-// identities (exact fold + `artist_aliases`) and writes the edges — no vendor call, mints nothing,
-// stamps every visited track so the worklist drains. `--dry-run` reports the classification without
-// any write. Pass the prior `nextCursor` to resume; the CLI loops until it comes back null.
 export async function backfillArtistEdgesCommand(
   limit: number,
   dryRun: boolean,
@@ -753,33 +579,25 @@ export async function backfillArtistEdgesCommand(
 }
 
 export type ArtistCreditsBackfillResult = {
-  // EXISTING artists that had no mbid and gained one via an unambiguous name fold this pass — the
-  // duplicate-prevention rung (a Spotify-keyed row slice 0 could not match, now MB-identified).
   adoptedArtists: number;
   dryRun: boolean;
-  // `track_artists` edges written this pass (or, in a dry run, 0 — unknowable without the vendor calls).
+
   edgesWritten: number;
-  // Credited artists matched to an EXISTING artists row by exact MB artist id this pass.
+
   matchedArtists: number;
-  // NEW artists rows minted by MB artist id this pass (identity-true — a real MBID backs each).
+
   mintedArtists: number;
-  // The track-id cursor to resume from, or null once the worklist is drained (or a throttle-stop).
+
   nextCursor: string | null;
   ok: boolean;
-  // True when the pass STOPPED on the MusicBrainz rate-limit circuit breaker.
+
   rateLimited: boolean;
-  // Worklist rows VISITED this pass (edged + skipped) — the loop's cap unit.
+
   scanned: number;
-  // Zero-matched rows carrying NO MB recording identity — terminally skipped (stamped, never retried).
+
   skippedNoIdentity: number;
 };
 
-// One bounded pass of the MB credit sweep (RFC artist-primary-capture, slice 1b) via the admin API.
-// Completes slice 0's zero-matched residual: for each zero-matched track carrying a MusicBrainz
-// recording identity, the Worker fetches its artist-credits through the shared MB client (1 req/s,
-// circuit-broken on a throttle) and mints/matches artists BY MB id, then writes the edges. `--dry-run`
-// reports the eligible worklist without any vendor call or write. Pass the prior `nextCursor` to
-// resume; the CLI loops until it comes back null.
 export async function backfillArtistCreditsCommand(
   limit: number,
   dryRun: boolean,
@@ -802,15 +620,12 @@ export type VehicleEntry = {
   logId?: string;
   grain?: string;
   register?: string;
-  // The coarse palette hue-bucket tag (palette ledger) — the axis assigner reads it to
-  // steer the next render off a worn hue. Absent on rows shipped before palette provenance.
+
   palette?: string;
   title: string;
   vehicle?: string;
 };
 
-// Recent video vehicles, newest first — the style ledger a video agent reads to
-// keep the next render from repeating a recently-used vehicle.
 export async function vehiclesCommand(limit: number): Promise<VehicleEntry[]> {
   const tracks = await fetchAdminTracks({ hasVideo: true, max: limit, order: "desc" });
 
@@ -826,11 +641,6 @@ export async function vehiclesCommand(limit: number): Promise<VehicleEntry[]> {
   }));
 }
 
-// `fluncle admin tracks mixable-order <logId...> [--seed <logId>]` — the dream-weaver
-// (RFC mixability-engine). Orders a pool of findings into a smooth PROPOSED mix the
-// operator copy-pastes into Rekordbox; a pure admin read (it never writes — the mint
-// stays `recordings promote`). The Worker runs Held-Karp exact for ≤16, greedy + 2-opt
-// to 64. A smoothness-optimized chain, NOT an energy-shaped set — stated honestly.
 export type MixOrderStop = {
   artists: string[];
   bpm?: number;
@@ -862,21 +672,14 @@ export async function mixableOrderCommand(
   return adminApiGet<MixableOrderResult>(`/api/v1/admin/tracks/mixable-order?${params.toString()}`);
 }
 
-// ── The batched pipeline phases ──────────────────────────────────────────────
-// Thin HTTP over the three batched ops. Each takes ONE admitted database lease for a whole batch
-// instead of one per row, and answers per item so a poisoned row never costs its neighbours theirs.
-
-/** Freeze a batch of capture reconciliation snapshots in one admitted phase. */
 export async function prepareTrackCapturesCommand<T>(body: unknown): Promise<T> {
   return adminApiPost<T>("/api/v1/admin/tracks/captures/prepare", body);
 }
 
-/** Commit a batch of prepared capture results in one admitted phase. */
 export async function commitTrackCapturesCommand<T>(body: unknown): Promise<T> {
   return adminApiPost<T>("/api/v1/admin/tracks/captures/commit", body);
 }
 
-/** Write a batch of MuQ audio embeddings in one admitted phase. */
 export async function updateTrackEmbeddingsCommand<T>(body: unknown): Promise<T> {
   return adminApiPost<T>("/api/v1/admin/tracks/embeddings", body);
 }

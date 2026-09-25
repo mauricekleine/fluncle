@@ -160,8 +160,6 @@ describe("fluncle CLI parsing and JSON output", () => {
   });
 
   test("admin labels mint names the identity a take-over replaced and what it dropped", () => {
-    // The replaced MBID and the dropped roster are the part the operator cannot read off the row
-    // afterwards, so the line has to say them.
     expect(
       labelMintLine(
         {
@@ -185,7 +183,6 @@ describe("fluncle CLI parsing and JSON output", () => {
         "  replaced MusicBrainz 9f1d3c7e-2b1a-4d5f-8c6e-0a1b2c3d4e5f · 1 artist rule dropped · cleared discogsLabelId, imageKey · retired the old crawl node · re-armed the seed.",
     );
 
-    // A row the frontier never held reports nothing about crawl state rather than pretending.
     expect(
       labelMintLine(
         {
@@ -227,9 +224,6 @@ describe("fluncle CLI parsing and JSON output", () => {
   });
 
   testCli("admin labels mint takes --take-over as a value option, not a positional", async () => {
-    // A value-taking flag missing from `stringOptions` leaks its VALUE into the positionals; here
-    // that would put a slug where the MBID belongs. Reaching the blank-slug refusal proves the
-    // MBID argument still parsed as the MBID, with the flag's value attached to the flag.
     const result = await runCli([
       "admin",
       "labels",
@@ -340,7 +334,6 @@ describe("fluncle CLI parsing and JSON output", () => {
   });
 
   test("an unmatched row an older server sends without the stamp still renders honestly", () => {
-    // The contract field is additive-optional, so the line must survive its absence AND a null.
     const absent = unmatchedRowLine({
       artists: ["Test Artist"],
       captureStatus: "unmatched",
@@ -588,12 +581,9 @@ describe("fluncle CLI parsing and JSON output", () => {
     const tracksHelp = await runCli(["admin", "tracks", "--help"]);
 
     expect(tracksHelp.exitCode).toBe(0);
-    // The worklist views are `--queue` flags on the verbs (Convention B §6.4 — no
-    // dash-compound `*-queue` commands). The enrichment sweep itself is the on-box
-    // `fluncle-enrich` cron, which reads `tracks enrich --queue` to drain the queue.
+
     expect(tracksHelp.stdout).toContain("enrich");
-    // The full-song capture worklist verb (named `capture-audio`, not `capture`, to avoid
-    // colliding with `social --capture` / `cron.social-capture`).
+
     expect(tracksHelp.stdout).toContain("capture-audio");
     expect(tracksHelp.stdout).not.toContain("enrich-queue");
     expect(tracksHelp.stdout).not.toContain("enrich-sweep");
@@ -602,15 +592,12 @@ describe("fluncle CLI parsing and JSON output", () => {
     expect(tracksHelp.stdout).toContain("queue");
     expect(tracksHelp.stdout).toContain("publish");
     expect(tracksHelp.stdout).toContain("vehicles");
-    // The observation-pipeline surface: the context + observe verbs (each with a
-    // `--queue` worklist view).
+
     expect(tracksHelp.stdout).toContain("context");
     expect(tracksHelp.stdout).toContain("observe");
   });
 
   testCli("admin tracks video requires a footage cut before any upload", async () => {
-    // A --dir with no footage.mp4 fails the local validation before the presign
-    // request, so this runs without a server or admin token.
     const result = await runCli([
       "admin",
       "tracks",
@@ -642,15 +629,11 @@ describe("fluncle CLI parsing and JSON output", () => {
       "--json",
     ]);
 
-    // The back-compat singular group was removed: `admin track` no longer resolves to
-    // the canonical `admin tracks` handler.
     expect(result.exitCode).not.toBe(0);
     expect(result.stdout).not.toContain("A footage cut is required");
   });
 
   testCli("admin tracks observe requires a script before any render", async () => {
-    // No --script / --script-file fails local validation before the API call,
-    // so this runs without a server or admin token (and never spends a render).
     const result = await runCli(["admin", "tracks", "observe", "004.7.2I", "--json"]);
 
     expect(result.exitCode).toBe(1);
@@ -659,8 +642,6 @@ describe("fluncle CLI parsing and JSON output", () => {
   });
 
   testCli("admin tracks context requires an id before any fetch", async () => {
-    // No id fails local validation before the API call, so this runs without a
-    // server or admin token (and never spends a Firecrawl fetch).
     const result = await runCli(["admin", "tracks", "context", "--json"]);
 
     expect(result.exitCode).toBe(1);
@@ -669,8 +650,6 @@ describe("fluncle CLI parsing and JSON output", () => {
   });
 
   testCli("admin tracks get requires an id before any lookup", async () => {
-    // No id fails local validation before the API call, so this runs without a
-    // server or admin token. The usage names the admin `get`, not the public one.
     const result = await runCli(["admin", "tracks", "get", "--json"]);
 
     expect(result.exitCode).toBe(1);
@@ -684,8 +663,6 @@ describe("fluncle CLI parsing and JSON output", () => {
   });
 
   testCli("admin tracks requeue-video requires an id before any clear", async () => {
-    // No id fails local validation before the API call, so this runs without a
-    // server or admin token (and never clears a live video).
     const result = await runCli(["admin", "tracks", "requeue-video", "--json"]);
 
     expect(result.exitCode).toBe(1);
@@ -694,8 +671,6 @@ describe("fluncle CLI parsing and JSON output", () => {
   });
 
   testCli("admin tracks pin-source requires an id before any pin", async () => {
-    // No id fails local validation before the API call, so this runs without a server or an
-    // operator token (and never pins a live row).
     const result = await runCli([
       "admin",
       "tracks",
@@ -732,8 +707,6 @@ describe("fluncle CLI parsing and JSON output", () => {
   testCli(
     "admin tracks pin-source --allow-duration-mismatch is a boolean flag that rides a pin only",
     async () => {
-      // A BOOLEAN flag: the token after it is the next option, never its value — so `--json` here is
-      // still parsed as --json (the id check runs first, and prints the usage line as JSON-mode text).
       const noId = await runCli([
         "admin",
         "tracks",
@@ -747,8 +720,6 @@ describe("fluncle CLI parsing and JSON output", () => {
       expect(noId.stdout).toContain("Missing id");
       expect(noId.stdout).toContain("[--allow-duration-mismatch]");
 
-      // The waiver has no meaning beside --clear (there is no pin for it to ride), so it is refused
-      // locally before any API call.
       const withClear = await runCli([
         "admin",
         "tracks",
@@ -796,7 +767,6 @@ describe("fluncle CLI parsing and JSON output", () => {
   });
 
   testCli("admin tracks queue accepts the --has-observation filter", async () => {
-    // The boolean filter parses cleanly; --limit still validates first.
     const result = await runCli([
       "admin",
       "tracks",
@@ -813,8 +783,6 @@ describe("fluncle CLI parsing and JSON output", () => {
   });
 
   testCli("the --has-context no-op flag is gone from admin tracks queue", async () => {
-    // The render queue is always context-gated, so the no-op flag was removed:
-    // commander now rejects it as an unknown option (surfaced as a JSON error).
     const result = await runCli(["admin", "tracks", "queue", "--has-context", "--json"]);
 
     expect(result.exitCode).not.toBe(0);
@@ -827,8 +795,7 @@ describe("fluncle CLI parsing and JSON output", () => {
 
     expect(canonical.exitCode).toBe(1);
     expect(canonical.stdout).toContain("Missing Spotify track URL");
-    // The back-compat flat alias was removed: `admin add` no longer reaches the
-    // publish handler.
+
     expect(removed.exitCode).not.toBe(0);
     expect(removed.stdout).not.toContain("Missing Spotify track URL");
   });
@@ -839,9 +806,7 @@ describe("fluncle CLI parsing and JSON output", () => {
 
     expect(canonical.exitCode).toBe(1);
     expect(canonical.stdout).toContain("Usage: fluncle admin tracks preview");
-    // The dash-compound alias was dropped (admin surface, no-alias policy): the old
-    // name no longer resolves to the command — it errors instead of printing the
-    // `preview` usage.
+
     expect(removed.exitCode).toBe(1);
     expect(removed.stdout).not.toContain("Usage: fluncle admin tracks preview");
   });
@@ -871,9 +836,9 @@ describe("fluncle CLI parsing and JSON output", () => {
     expect(result.stdout).toContain(fluncleAsciiLogo);
     expect(result.stdout).toContain("Drum & bass bangers from another dimension");
     expect(result.stdout).toContain("I'm Fluncle.");
-    // No exclamation marks anywhere (VOICE.md's Dry Rule).
+
     expect(result.stdout).not.toContain("!");
-    // The grouped link map, verbatim canonical URLs.
+
     expect(result.stdout).toContain("Where to listen:");
     expect(result.stdout).toContain("Follow the crew:");
     expect(result.stdout).toContain("The mothership:");
@@ -886,8 +851,6 @@ describe("fluncle CLI parsing and JSON output", () => {
   });
 
   testCli("admin newsletter draft requires a content payload before any API call", async () => {
-    // No --content-file fails local validation (CliError) before the API call, so
-    // this runs without a server or admin token.
     const result = await runCli(["admin", "newsletter", "draft", "--json"]);
 
     expect(result.exitCode).toBe(1);
@@ -904,8 +867,6 @@ describe("fluncle CLI parsing and JSON output", () => {
   });
 
   testCli("admin newsletter send requires an id before any API call", async () => {
-    // Send is operator-gated server-side; the missing-id guard fails first, so this
-    // runs without a server or token (and never reaches the Resend broadcast).
     const result = await runCli(["admin", "newsletter", "send", "--json"]);
 
     expect(result.exitCode).toBe(1);
@@ -922,7 +883,6 @@ describe("fluncle CLI parsing and JSON output", () => {
   });
 
   testCli("admin newsletter delete requires --yes to confirm the hard delete", async () => {
-    // The id is present, so the --yes guard fails first — no server or token needed.
     const result = await runCli(["admin", "newsletter", "delete", "some-id", "--json"]);
 
     expect(result.exitCode).toBe(1);
@@ -933,7 +893,6 @@ describe("fluncle CLI parsing and JSON output", () => {
   testCli(
     "admin newsletter group lists its draft/update/send/list/delete subcommands",
     async () => {
-      // The group's default action prints its own help (no subcommand given).
       const help = await runCli(["admin", "newsletter"]);
 
       expect(help.exitCode).toBe(0);
@@ -971,11 +930,11 @@ describe("fluncle CLI parsing and JSON output", () => {
     expect(adminHelp.stderr).toBe("");
     expect(adminHelp.stdout).not.toContain(fluncleAsciiLogo);
     expect(adminHelp.stdout).toContain("Usage: fluncle admin [options] [command]");
-    // The canonical Convention B groups show in the operator help.
+
     expect(adminHelp.stdout).toContain("tracks");
     expect(adminHelp.stdout).toContain("submissions");
     expect(adminHelp.stdout).toContain("backfills");
-    // The catalogue crawler's group (`crawl_catalogue` + `get_crawl_status`).
+
     expect(adminHelp.stdout).toContain("catalogue");
   });
 
@@ -1334,8 +1293,7 @@ describe("fluncle CLI parsing and JSON output", () => {
               "500",
               "--max-steps",
               maxSteps,
-              // Exactly what the box maintenance sweep sends: the wall budget is a value flag, so
-              // it must also be declared in the parser's string-option set to bind its argument.
+
               "--wall-ms",
               "30000",
               "--no-terminal-status",
@@ -1508,15 +1466,6 @@ describe("fluncle CLI parsing and JSON output", () => {
 });
 
 describe("sweep commands surface partial failure", () => {
-  // A batch/sweep command that collected per-item failures must NOT report
-  // `ok: true` + exit 0 — the on-box crons run these unattended with `--json` and
-  // gate on exactly those two signals, so a green partial failure silently loses
-  // the failed items. `printSweepJson` defines the semantics once: `ok` is true
-  // only when nothing failed, any failure sets exit code 1, and `failedCount`
-  // stays in the payload. These tests drive the real CLI subprocess against a
-  // stub admin API (FLUNCLE_API_BASE_URL) so exit code + stdout JSON are the
-  // actual contract automation sees.
-
   const oneFinding = {
     analyzedFrom: "preview",
     artists: ["Test Artist"],
@@ -1594,8 +1543,7 @@ describe("sweep commands surface partial failure", () => {
           const payload = JSON.parse(result.stdout) as Record<string, unknown>;
           expect(payload.ok).toBe(false);
           expect(payload.failedCount).toBe(1);
-          // The full failed array survives in the payload so automation can see WHICH
-          // items were lost, not just that some were.
+
           expect(payload.failed).toEqual([{ error: "update exploded", trackId: "t1" }]);
           expect(payload.applied).toBe(true);
         },
@@ -1674,7 +1622,7 @@ describe("sweep commands surface partial failure", () => {
           expect(payload.ok).toBe(false);
           expect(payload.failedCount).toBe(1);
           expect(payload.failed).toEqual([{ error: "vendor 500", logId: "001.1.AA" }]);
-          // The successes of the same batch survive alongside the failures.
+
           expect(payload.loved).toEqual(["002.2.BB"]);
           expect(payload.lovedCount).toBe(1);
         },
@@ -1900,9 +1848,6 @@ describe("sweep commands surface partial failure", () => {
   });
 });
 
-// Serve a stub admin API on an ephemeral port for one test body. The CLI
-// subprocess is pointed at it via FLUNCLE_API_BASE_URL (process env beats the
-// dotenv profile file, so no operator config can leak in).
 async function withStubApi(
   handler: (req: Request, url: URL) => Promise<Response> | Response,
   fn: (baseUrl: string) => Promise<void>,
@@ -1928,13 +1873,6 @@ async function runCli(
   stderr: string;
   stdout: string;
 }> {
-  // A spawned CLI is its OWN process: the in-process no-network rail (bunfig's
-  // `[test] preload`) does not reach it, and neither does a stubbed `globalThis.fetch`.
-  // So the subprocess gets its own two rails — NODE_ENV=test, which stops `loadEnv`
-  // reading the operator's real production token (src/env.ts), and a base URL pointed at
-  // a closed loopback port, so a command that slips past its validation gate dies on
-  // ECONNREFUSED instead of reaching the live archive. A test that wants a real fixture
-  // server still overrides FLUNCLE_API_BASE_URL through `env`, which wins on the spread.
   const proc = Bun.spawn([process.execPath, cliPath, ...args], {
     env: {
       ...process.env,
@@ -1968,9 +1906,6 @@ async function runCli(
   }
 }
 
-// Every non-test source file under apps/cli/src, as [repo-relative-ish path, source].
-// The option scans below read the WHOLE tree, not just cli.ts: a future god-module split
-// that moves a command's `.option()` out of cli.ts must not silently escape the net.
 async function readSourceFiles(): Promise<Array<[string, string]>> {
   const srcDir = new URL("./", import.meta.url).pathname;
   const glob = new Bun.Glob("**/*.ts");
@@ -1987,13 +1922,6 @@ async function readSourceFiles(): Promise<Array<[string, string]>> {
 }
 
 describe("the stringOptions invariant", () => {
-  // positionalArgs() derives raw positionals by skipping every option in the
-  // `stringOptions` set together with its value. A value-taking option declared
-  // on a command but absent from that set leaks its VALUE into the positionals
-  // and trips the argument validators (`--verdict-file <path>` broke the
-  // fluncle-triage sweep exactly this way). This test scans EVERY source file for
-  // every declared value-taking option and fails when one is missing from the
-  // set, so the two can never drift again.
   test("every declared value-taking option is in stringOptions", async () => {
     const source = await Bun.file(cliPath).text();
 
@@ -2004,7 +1932,7 @@ describe("the stringOptions invariant", () => {
       )) {
         const flag = match[1];
         if (flag !== undefined && flag !== "--env") {
-          declared.add(flag); // --env is special-cased inline in positionalArgs()
+          declared.add(flag);
         }
       }
     }
@@ -2015,18 +1943,12 @@ describe("the stringOptions invariant", () => {
       [...(setSource?.[1] ?? "").matchAll(/"(--[a-z-]+)"/g)].map((m) => m[1]),
     );
 
-    // Sanity: the scan found a realistic surface (guards against a regex rot
-    // that silently matches nothing).
     expect(declared.size).toBeGreaterThan(30);
 
     const missing = [...declared].filter((flag) => !allowed.has(flag)).sort();
     expect(missing).toEqual([]);
   });
 
-  // The mirror image: `stringOptions` is one GLOBAL set, so a value-taking `--flag <x>` on one
-  // command and a boolean `--flag` on another cannot coexist — the parser would swallow the
-  // token after the boolean (`admin mixtapes resync <id> --youtube --json` would read `--json` as
-  // the value). A new value option must take a name no boolean flag already uses.
   test("no boolean flag shares its name with a stringOptions entry", async () => {
     const source = await Bun.file(cliPath).text();
     const setSource = source.match(/const stringOptions = new Set\(\[(.*?)\]\)/s);
@@ -2050,11 +1972,6 @@ describe("the stringOptions invariant", () => {
     expect([...booleans].filter((flag) => allowed.has(flag)).sort()).toEqual([]);
   });
 
-  // The scan above now reads the whole tree, but `stringOptions` itself lives in cli.ts,
-  // so the net only holds while the DECLARATIONS live there too. This is the intended
-  // rule stated out loud: cli.ts owns every Commander option. Move options elsewhere in a
-  // module split and this fails — the fix is to keep the invariant scan and the set
-  // together with whatever declares the flags, not to delete this test.
   test("no Commander option is declared outside cli.ts", async () => {
     const offenders = (await readSourceFiles())
       .filter(([relativePath, source]) => {
@@ -2068,10 +1985,6 @@ describe("the stringOptions invariant", () => {
   testCli(
     "a value option's value never leaks into the positionals (the triage shape)",
     async () => {
-      // Without --verdict-file in stringOptions this invocation mis-parsed as five
-      // positionals ("Unknown submissions arguments"); with it, the parse succeeds
-      // and the command proceeds (failing later on auth/network, which exits
-      // non-zero but with the triage command's own JSON error, never the parser's).
       const result = await runCli([
         "admin",
         "submissions",
@@ -2084,8 +1997,7 @@ describe("the stringOptions invariant", () => {
 
       expect(result.stdout).not.toContain("Unknown submissions arguments");
       expect(result.stderr).not.toContain("Unknown submissions arguments");
-      // The second hand-mirror: the subcommand whitelist in the same validator
-      // (it shipped without "triage" too — the sweep found both layers in one night).
+
       expect(result.stdout).not.toContain("Unknown submissions command");
       expect(result.stderr).not.toContain("Unknown submissions command");
     },

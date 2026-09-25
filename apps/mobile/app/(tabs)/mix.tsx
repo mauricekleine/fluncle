@@ -1,22 +1,3 @@
-// The Mix tab — the set builder in the pocket, a port of the web `/mix` "Chain a set" tool.
-// The app's standalone TOOL and its one surface built for a stranger rather than the crew: a
-// free drum & bass mixing tool with no account (operator law — an account never gates or
-// touches this feature). Name a few artists you like, pick something to open with, and the
-// engine ranks what mixes in clean after it; the rail re-ranks after every add.
-//
-// A STEPPED FLOW separates the choices so the artist grid cannot bury the openers on a phone. It
-// is driven by the chain plus one step flag:
-//   1 taste   → the artist grid, with one footer CTA onward ("Pick an opener" — picking
-//               zero artists is the sanctioned skip; step 2 still has search)
-//   2 opener  → what to open with: the seeded artists' own tracks, and an archive search
-//               ("Search tracks") for the reader who skipped or wasn't offered the right one
-//   3 builder → the chain (numbered, last-item undo) + the rail ranked off its tail;
-//               Share (the web URL — the link IS the state) + Start over
-//
-// The chain + taste persist device-local (mix.ts) and hydrate on mount; a cold start with a
-// saved chain lands straight in the builder. The web route is gated by a self-lifting
-// archive-depth check; the app deliberately does not check it (the mix ops are public + open
-// in prod, and App Review must reach the tool) — see mix.ts.
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Modal,
@@ -75,9 +56,7 @@ export default function MixScreen() {
     sourceSetName,
     taste,
   } = useMixChain();
-  // The pre-chain step. Deliberately NOT persisted: a cold start always begins at taste
-  // (or, with a saved chain, straight in the builder); after an undo-to-empty the reader
-  // lands back on the opener step they came from.
+
   const [step, setStep] = useState<"opener" | "taste">("taste");
   const [confirmingClear, setConfirmingClear] = useState(false);
 
@@ -89,23 +68,13 @@ export default function MixScreen() {
     taste,
   });
 
-  // Open-a-saved-set hydration: account.tsx hands the stored `?set=`/`?taste=` in as route
-  // params (router.dismissTo → this tab). We resolve the tokens to chain snapshots and load
-  // them, then CONSUME the params once so a later manual return to the tab never re-clobbers a
-  // chain the reader has since built. See useSavedSetHydration.
   useSavedSetHydration(load);
 
-  // The Save-set pill is shown ONLY to a signed-in reader (the never-gates law: a signed-out
-  // Decks is byte-for-byte unchanged — no button, no upsell). Confirmed via `/api/v1/me`, exactly
-  // as the web ShareSetButton does, so a lapsed cookie never shows a broken control.
   const signedIn = useIsSignedIn();
-  // A brief inline confirmation, the account modal's live-region grammar. Cleared on the next
-  // save attempt so a stale line never lingers over a fresh action.
+
   const [saving, setSaving] = useState(false);
   const [saveNotice, setSaveNotice] = useState("");
-  // The Save-set dialog follows the one save-set contract on web AND mobile: the pill opens a
-  // small overlay with a name field + Save/Cancel, rather than
-  // saving straight away. The name prefills with the stable reference's name when editing.
+
   const [saveOpen, setSaveOpen] = useState(false);
   const [saveName, setSaveName] = useState("");
 
@@ -121,11 +90,7 @@ export default function MixScreen() {
     try {
       const bodyPayload = buildSaveSetBody(name, serializeSet(tokens), serializeTaste(taste));
       const savedName = name.trim();
-      // A chain opened from (or already saved to) an account set UPDATES that set in
-      // place — Save set never mints siblings of the set you are editing. A fresh chain POSTs once,
-      // then adopts the returned id + name so every
-      // save after the first is also an update. A 404 on the PATCH (the set was deleted
-      // on another device) falls back to creating anew and adopting THAT.
+
       let response: Response;
       if (sourceSetId) {
         response = await meFetch(`${SAVED_SETS_PATH}/${sourceSetId}`, {
@@ -141,7 +106,6 @@ export default function MixScreen() {
             await adoptFromResponse(response, savedName);
           }
         } else if (response.ok) {
-          // Keep the id, adopt the (possibly renamed) name.
           adoptSourceSet({ id: sourceSetId, name: savedName });
         }
       } else {
@@ -153,9 +117,7 @@ export default function MixScreen() {
           await adoptFromResponse(response, savedName);
         }
       }
-      // On mobile a saved set lands under "Saved sets" on /account, NOT under findings — so the
-      // web toast's locator clause ("Find it under your findings.") would be false here. Drop it:
-      // literal and true beats verbatim-but-wrong (the Chrome Rule serves accuracy, not echo).
+
       setSaveNotice(response.ok ? "Saved to your account." : "Couldn't save that set.");
       if (response.ok) {
         setSaveOpen(false);
@@ -167,7 +129,6 @@ export default function MixScreen() {
     }
   }
 
-  // Adopt the id a fresh POST returned (+ the entered name), so the next save is an update.
   async function adoptFromResponse(response: Response, savedName: string) {
     const body = (await response.json()) as { savedSet?: { id?: string } };
     if (typeof body.savedSet?.id === "string") {
@@ -175,8 +136,6 @@ export default function MixScreen() {
     }
   }
 
-  // Live multi-select into the device seed (no commit step — the phone-native move), capped
-  // at the same MAX_TASTE_ARTISTS the URL carries so a seed stays a seed, not a library.
   const toggleTaste = (slug: string) => {
     if (taste.includes(slug)) {
       setTaste(taste.filter((existing) => existing !== slug));
@@ -185,13 +144,10 @@ export default function MixScreen() {
     }
   };
 
-  // Share the set as its web URL (the link IS the state), handed to the native share sheet.
   const onShare = () => {
     void Share.share({ url: buildMixShareUrl(tokens, taste) });
   };
 
-  // "Start over" clears the set — a two-tap inline confirm (no alert dialog): the first tap
-  // arms it, the second clears and returns to the taste step.
   const onStartOver = () => {
     if (confirmingClear) {
       clear();
@@ -258,11 +214,6 @@ export default function MixScreen() {
   );
 }
 
-// The Save-set dialog — the same small overlay the web renders:
-// a name field, a Save button, a Cancel button. A React Native `Modal` over a transparent
-// scrim, a small centered card in the app's dark, quiet register (the account modal's field
-// styles are the sibling). Save is disabled while the live chain is empty or the name is blank
-// — the empty chain is blocked HERE, never by a server error after the fact.
 function SaveSetModal({
   busy,
   chainLength,
@@ -285,7 +236,6 @@ function SaveSetModal({
   return (
     <Modal animationType="fade" onRequestClose={onCancel} transparent visible={visible}>
       <Pressable accessibilityLabel="Close" onPress={onCancel} style={styles.saveBackdrop}>
-        {/* Stop a tap on the card from bubbling to the backdrop's dismiss. */}
         <Pressable onPress={() => undefined} style={styles.saveCard}>
           <Text style={[font.display, styles.saveTitle]}>Save set</Text>
           <Text style={[font.label, styles.saveFieldLabel]}>Set name</Text>
@@ -339,9 +289,6 @@ function SaveSetModal({
   );
 }
 
-// STEP 1 — the taste seed: the artist grid with one CTA onward. The grid gets the whole
-// screen (the openers no longer hide below its fold); the footer pill floats above the tab
-// bar. Picking nothing and moving on is the sanctioned skip — step 2 always carries search.
 function TasteStep({
   onNext,
   onToggle,
@@ -352,9 +299,7 @@ function TasteStep({
   taste: string[];
 }) {
   const insets = useSafeAreaInsets();
-  // The iOS 26 floating pill hugs the bottom tighter than inset + bar-height implies (it
-  // overlaps the home-indicator zone), so the naive sum leaves a dead band — the -24 was
-  // eyeballed on-device against the pill's real top edge.
+
   const footerClearance = insets.bottom + NATIVE_TAB_BAR_HEIGHT - 24;
 
   return (
@@ -370,12 +315,8 @@ function TasteStep({
         <Text style={[font.body, styles.tagline]}>{TAGLINE}</Text>
         <MixTastePicker onToggle={onToggle} selected={taste} />
       </ScrollView>
-      {/* The step CTA: a compact centered chip riding a fade-to-opaque warm-black band (the
-          feed scrim's grammar), so it reads grounded to the bottom edge rather than a naked
-          banner floating over the grid. The gradient is not pressable; the chip is. */}
+
       <LinearGradient
-        // deepField (#090a0b) with alpha ramping in, so the band lands exactly on the
-        // screen's own background and the grid fades out under the chip.
         colors={["rgba(9, 10, 11, 0)", "rgba(9, 10, 11, 0.92)", "rgba(9, 10, 11, 1)"]}
         locations={[0, 0.55, 1]}
         pointerEvents="box-none"
@@ -395,10 +336,6 @@ function TasteStep({
   );
 }
 
-// STEP 2 — what to open with. The seeded artists' own tracks lead (exact, verifiable — the
-// list a stranger can trust at a glance); the archive search sits above them for the reader
-// who skipped seeding or wasn't offered the right opener. While a query is live, results
-// replace the openers; clearing it brings them back.
 function OpenerStep({
   onBack,
   onPick,
@@ -412,7 +349,6 @@ function OpenerStep({
   const [debounced, setDebounced] = useState("");
   const { data: openers = [], isPending: openersPending } = useMixOpeners(taste);
 
-  // A keystroke is not a query (the archive screen's 180ms idiom).
   useEffect(() => {
     const timer = setTimeout(() => setDebounced(query.trim()), 180);
     return () => clearTimeout(timer);
@@ -498,8 +434,6 @@ function OpenerStep({
         ) : openersPending ? (
           <PendingRows />
         ) : (
-          // Trimmed from the web's line (which offers "or search for a track yourself" — here
-          // the search field sits right above). The honest half is kept.
           <Text style={[font.body, styles.stateText]}>
             I have nothing on those artists I can place yet. Pick another few.
           </Text>
@@ -509,10 +443,6 @@ function OpenerStep({
   );
 }
 
-// STEP 3's chain: the set so far, cover-led and NUMBERED (a set is a sequence — the position
-// column makes it read as a tracklist, distinct from the `+` candidate rows below). Last-item
-// undo — only the final row carries a remove control (v1 is tight: no drag-reorder), so the
-// reader peels the set back one at a time.
 function ChainList({ chain, onRemove }: { chain: MixTrack[]; onRemove: (token: string) => void }) {
   return (
     <View style={styles.section}>
@@ -545,11 +475,6 @@ function ChainList({ chain, onRemove }: { chain: MixTrack[]; onRemove: (token: s
   );
 }
 
-// The rail off the chain's tail, tilted by taste, excluding the whole chain server-side. Each
-// row carries its reason chip (the whole explanation — no number ever). Copy reused verbatim.
-// Loading rows for the pending lists (the rail re-ranking, openers, live search): the
-// same quiet skeletons as the cold start. An empty-state line during a fetch is a false
-// claim, so pending ALWAYS reads as skeletons, never as an answer.
 function PendingRows({ count = 3 }: { count?: number }) {
   return (
     <View accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
@@ -598,9 +523,6 @@ function Rail({
   );
 }
 
-// A quiet outline pill (the archive HeaderPill idiom). `danger` turns it Re-entry Red while
-// the destructive "Start over" is armed for its second tap; `disabled` greys it while a save
-// is in flight.
 function HeaderAction({
   danger,
   disabled,
@@ -638,15 +560,9 @@ function HeaderAction({
   );
 }
 
-// A one-shot `/api/v1/me` probe — true once the server confirms a session. Mirrors the web
-// ShareSetButton's gate exactly: a failed check leaves it false, so a signed-out (or
-// lapsed-cookie) reader never sees the Save-set pill (the never-gates law).
 function useIsSignedIn(): boolean {
   const [signedIn, setSignedIn] = useState(false);
 
-  // Re-probe on every FOCUS, not once on mount: the tab stays mounted for the app's whole
-  // life, so a mount-only probe never learns about a sign-in that happened on the account modal.
-  // Returning to the Decks after the modal closes is a focus event, so the pill catches up.
   useFocusEffect(
     useCallback(() => {
       let active = true;
@@ -667,16 +583,6 @@ function useIsSignedIn(): boolean {
   return signedIn;
 }
 
-// Open-a-saved-set hydration. account.tsx hands the stored `?set=`/`?taste=` in as route
-// params (router.dismissTo → this tab); we hand the whole `?set=` string to the public
-// `list_set_tracks` op (GET /mix/set-tracks — the server twin of the web loader's
-// `getMixTracksByTokens`), which resolves BOTH certified findings and uncertified catalogue
-// tracks in one order-preserving read, load the resulting chain, then CONSUME the params once so
-// a later manual return to the tab never re-clobbers a chain the reader has since built.
-//
-// This is the fix for the accounts-arc gap: the old per-token `get_track` walk resolved only
-// certified findings, so a saved set's uncertified tokens (the ones the Decks rail actively
-// serves) silently dropped. `list_set_tracks` resolves both, so a set opens whole.
 function useSavedSetHydration(
   load: (chain: MixTrack[], taste: string[], sourceSetId?: string, sourceSetName?: string) => void,
 ): void {
@@ -692,7 +598,7 @@ function useSavedSetHydration(
 
   const setParam = typeof params.set === "string" ? params.set : "";
   const savedSetId = typeof params.savedSetId === "string" ? params.savedSetId : undefined;
-  // The set's NAME rides in so the Save-set dialog prefills with it (the stable reference).
+
   const savedSetName =
     typeof params.savedSetName === "string" && params.savedSetName
       ? params.savedSetName
@@ -715,7 +621,7 @@ function useSavedSetHydration(
         return res.tracks;
       });
       load(resolved, tasteSlugs, savedSetId, savedSetName);
-      // Consume the params so re-focusing the tab later doesn't re-hydrate over a fresh chain.
+
       router.setParams({ savedSetId: "", savedSetName: "", set: "", taste: "" });
     })();
   }, [setParam, tasteParam, savedSetId, savedSetName, load, queryClient, router]);
@@ -742,8 +648,7 @@ const styles = StyleSheet.create({
   ctaPressed: { backgroundColor: color.eclipseGlow },
   ctaText: { color: color.inkOnGold },
   flex: { flex: 1 },
-  // The step CTA's bottom band: pinned to the screen edge, content fades out under it (One
-  // Sun: the chip is the screen's single gold action).
+
   footer: {
     alignItems: "center",
     bottom: 0,
@@ -778,13 +683,12 @@ const styles = StyleSheet.create({
     paddingBottom: 8,
     paddingHorizontal: 16,
   },
-  // Extra clearance over a plain section: the seam between "the set so far" and the
-  // suggestions below it is the screen's most load-bearing boundary.
+
   railSection: { paddingTop: 28 },
   removeBtn: { alignItems: "center", height: 32, justifyContent: "center", width: 32 },
   rows: { paddingTop: 12 },
   saveActions: { flexDirection: "row", gap: 8, justifyContent: "flex-end", marginTop: 20 },
-  // A tap-scrim over a darkened field; the card floats centered on it.
+
   saveBackdrop: {
     alignItems: "center",
     backgroundColor: "rgba(9, 10, 11, 0.72)",

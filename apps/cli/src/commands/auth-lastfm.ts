@@ -1,18 +1,3 @@
-// Last.fm desktop-auth, the two-step CLI flow (mirrors `auth youtube`/`mixcloud` as
-// a thin trigger, but Last.fm has no provider→callback redirect, so step 3 is a
-// second CLI call rather than a server-side callback):
-//
-//   1. `fluncle admin auth lastfm` → the Worker runs auth.getToken and returns an
-//      authorize URL. Maurice opens it (logged in as `fluncle`) and clicks
-//      "Yes, allow access".
-//   2. `fluncle admin auth lastfm --token <token>` → the Worker runs auth.getSession
-//      and returns the durable session key. Maurice sets it as the
-//      LASTFM_SESSION_KEY Worker secret.
-//
-// The CLI never holds the API key or shared secret — those live as Worker secrets;
-// the signed calls happen server-side. The session key is printed once so Maurice
-// can provision the secret (it's not persisted server-side — no schema change).
-
 import { type LastfmAuthSessionResponse, type LastfmAuthStartResponse } from "@fluncle/contracts";
 import { adminApiGet, adminApiPost } from "../api";
 

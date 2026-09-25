@@ -1,10 +1,3 @@
-// YouTube distribution (mixtape video). Mirrors the track-video R2 flow: the
-// Worker mints a capability (a resumable session URI + a short-lived access token —
-// the YouTube data PUT is NOT self-authorizing), the CLI streams the local bytes
-// straight to YouTube (the Worker can't proxy multi-GB media), then the Worker
-// records the result. The unlisted→public flip is a separate server-side call (the
-// Worker holds the refresh token).
-
 import { statSync } from "node:fs";
 import {
   type MixtapeDistributeFinalizeResponse,
@@ -19,8 +12,6 @@ import { CliError } from "../output";
 export type YoutubeDistributeResult = { url: string; videoId: string };
 export type YoutubeResyncResult = { url: string; videoId: string };
 
-// YouTube's resumable session can outlive the access token on a multi-GB upload; a
-// fresh token is re-minted on 401 and the upload resumes at the recorded offset.
 const MAX_UPLOAD_ATTEMPTS = 6;
 
 type YoutubeVideoResource = { id?: string };
@@ -76,17 +67,12 @@ export async function distributeYoutube(
     }
 
     if (result.kind === "reauth") {
-      // Token expired mid-upload (likely on a slow multi-GB upload that outlived the
-      // ~1h token). Re-mint ONLY the access token and KEEP the same session URI — it
-      // stays valid for days — then resume at the offset the session already holds.
-      // Re-initiating here would open a fresh 0-byte session and waste the upload.
       onProgress?.("Access token expired, re-minting and resuming");
       session = { accessToken: await mintToken(), sessionUri: session.sessionUri };
       offset = await queryOffset(session.sessionUri, session.accessToken, contentLength);
       continue;
     }
 
-    // reinit (410/404): the session is gone — open a brand-new one from the start.
     onProgress?.("Upload session expired, re-initiating");
     session = await initiate(mixtapeId, contentLength, contentType);
     offset = 0;
@@ -110,12 +96,6 @@ export async function publishYoutubeCommand(idOrLogId: string): Promise<{ url: s
   return { url: response.url };
 }
 
-/**
- * Re-sync the live YouTube video's description + chapters from the mixtape's CURRENT
- * cues — no re-upload. Fully server-side (the Worker holds the refresh token +
- * runs videos.list/videos.update); the CLI just triggers it and reports the link.
- * The `mixtapeId` is already resolved by the orchestrating resync command.
- */
 export async function resyncYoutube(mixtapeId: string): Promise<YoutubeResyncResult> {
   const response = await adminApiPost<MixtapeYouTubeResyncResponse>(
     `/api/v1/admin/mixtapes/${encodeURIComponent(mixtapeId)}/youtube/resync`,
@@ -124,9 +104,6 @@ export async function resyncYoutube(mixtapeId: string): Promise<YoutubeResyncRes
   return { url: response.url, videoId: response.videoId };
 }
 
-// The URL this prints is a FLUNCLE link, not Google's: a Bearer-carried start hands
-// back a short-lived handoff ticket instead of an authorize URL, and the browser that
-// opens it is where the OAuth state is minted and pinned (docs/admin-shell.md § Auth).
 export async function authYoutubeCommand(): Promise<void> {
   const response = await adminApiGet<YouTubeAuthStartResponse>("/api/v1/admin/youtube/auth/start");
 
@@ -152,7 +129,6 @@ async function initiate(
   return { accessToken: response.accessToken, sessionUri: response.sessionUri };
 }
 
-// Re-mint a fresh access token without opening a new session (for resume-on-401).
 async function mintToken(): Promise<string> {
   const response = await adminApiPost<{ accessToken: string; ok: true }>(
     "/api/v1/admin/youtube/token",
@@ -176,7 +152,7 @@ async function putChunk(args: {
   videoPath: string;
 }): Promise<PutResult> {
   const { accessToken, contentLength, contentType, offset, sessionUri, videoPath } = args;
-  // Stream from the offset so a resume never rebuffers the whole file.
+
   const body = offset > 0 ? Bun.file(videoPath).slice(offset) : Bun.file(videoPath);
   const headers: Record<string, string> = {
     Authorization: `Bearer ${accessToken}`,
@@ -189,7 +165,6 @@ async function putChunk(args: {
 
   const response = await fetch(sessionUri, { body, headers, method: "PUT" });
 
-  // The terminal response IS the Video resource JSON (incl. id) — no videos.list.
   if (response.status === 200 || response.status === 201) {
     const video = (await response.json().catch(() => ({}))) as YoutubeVideoResource;
 
@@ -203,7 +178,6 @@ async function putChunk(args: {
     return { kind: "done", videoId: video.id };
   }
 
-  // 308 Resume Incomplete: continue from the next byte after the confirmed Range.
   if (response.status === 308) {
     return { kind: "incomplete", offset: nextOffset(response.headers.get("Range"), offset) };
   }
@@ -223,9 +197,6 @@ async function putChunk(args: {
   );
 }
 
-// Query how many bytes the session already holds by PUTting an empty body with a
-// Content-Range of `bytes */total`. A 308 carries the confirmed Range; a 200/201
-// means the upload already completed.
 async function queryOffset(
   sessionUri: string,
   accessToken: string,
@@ -247,13 +218,9 @@ async function queryOffset(
     return nextOffset(response.headers.get("Range"), 0);
   }
 
-  // Anything else (e.g. the session is gone): restart from 0.
   return 0;
 }
 
-// A resumable Range header is `bytes=0-<lastByte>`; the next offset is lastByte+1.
-// Falls back to the prior offset when the header is missing/unparseable. Exported
-// for unit testing the resume-offset math.
 export function nextOffset(rangeHeader: string | null, fallback: number): number {
   if (!rangeHeader) {
     return fallback;

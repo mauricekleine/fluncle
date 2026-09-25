@@ -2,11 +2,6 @@ import { beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 
 import * as realApi from "../api";
 
-// The `artists` command is a thin HTTP client over `list_artists` / `get_artist`.
-// The mock keys off the request path: the by-slug detail path returns one artist,
-// the list path returns the paginated envelope. Assertions ride on how each cut
-// shapes the output — plain track counts on list rows (the Unlit Rule), the
-// dossier on a detail read.
 let apiResponse: unknown = {};
 let lastPath = "";
 
@@ -75,7 +70,7 @@ describe("artistsCommand (list)", () => {
     expect(text).toContain("47 tracks");
     expect(text).toContain("Quiet One");
     expect(text).toContain("3 tracks");
-    // No certified / finding label leaks onto a list row.
+
     expect(text).not.toContain("certified");
     expect(text).not.toContain("finding");
   });

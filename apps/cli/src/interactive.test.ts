@@ -156,11 +156,6 @@ describe("paginateWithKeyboard", () => {
   });
 
   test("holds the footer total to PAGE 1, ignoring a cursor page's own row count", async () => {
-    // The findings feed runs the archive count(*) only on page 1; cursor pages skip it
-    // and report their own row count instead. The pager must read the whole-set total off
-    // the FIRST cached page, never the currently-shown one — otherwise paging forward
-    // would collapse "of 26" to "of 2". This pins that: page 2 reports total: 2 (its rows),
-    // yet the footer still reads "3–4 of 26".
     const input = new FakeInput();
     const output = new FakeOutput();
 
@@ -168,8 +163,8 @@ describe("paginateWithKeyboard", () => {
       emptyMessage: "empty",
       fetchPage: async (cursor) =>
         cursor === "c1"
-          ? { lines: ["b1", "b2"], total: 2 } // a cursor page's degraded, own-row count
-          : { lines: ["a1", "a2"], nextCursor: "c1", total: 26 }, // page 1's real total
+          ? { lines: ["b1", "b2"], total: 2 }
+          : { lines: ["a1", "a2"], nextCursor: "c1", total: 26 },
       input,
       nonInteractiveMessage: "nope",
       output,

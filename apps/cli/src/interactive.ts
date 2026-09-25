@@ -138,13 +138,6 @@ type PaginateOptions = {
   output?: KeyboardOutput;
 };
 
-/**
- * A keyboard-driven pager: shows one page of pre-rendered lines, then →/l/space
- * load the next page (fetched on demand via the cursor, then cached so ←/h is
- * instant), and q/Esc/Ctrl-C quit — leaving the last page on screen. Lines are
- * truncated to the terminal width so the in-place redraw never miscounts. Throws
- * `not_interactive` off a TTY; callers fall back to a plain print there.
- */
 export async function paginateWithKeyboard(options: PaginateOptions): Promise<void> {
   const stdin = options.input ?? process.stdin;
   const stdout = options.output ?? process.stdout;
@@ -199,11 +192,7 @@ export async function paginateWithKeyboard(options: PaginateOptions): Promise<vo
       const start = before + 1;
       const end = before + page.lines.length;
       const loading = busy ? "  ·  loading…" : "";
-      // Read the whole-set total off the FIRST cached page, never the currently-shown
-      // one: the total is invariant across a scroll, and the findings feed now runs the
-      // `count(*)` only on page 1 (cursor pages report their own row count). Symmetric to
-      // the web home feed's page-1 read; falls back to the current page for any pager
-      // whose first page hasn't settled.
+
       const footer = `${start}–${end} of ${pages[0]?.total ?? page.total}   ←/→ page · q quit${loading}`;
       const lines = [...page.lines, "", footer].map((line) => truncateTerminalLine(line, columns));
 

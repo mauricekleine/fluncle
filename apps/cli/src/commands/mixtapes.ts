@@ -10,8 +10,6 @@ import { adminApiGet, adminApiPatch, publicApiGet } from "../api";
 import { type MixtapeListItem, mixtapeGetCommand, mixtapeListCommand } from "./mixtape-api";
 import { CliError } from "../output";
 
-// Re-exported from the leaf `mixtape-api` module so existing CLI import sites keep
-// resolving these from `./mixtapes` (the cycle-breaking split in section D).
 export { mixtapeGetCommand, mixtapeListCommand };
 export type { MixtapeListItem };
 
@@ -56,15 +54,6 @@ export type MixtapeDistributeResult = {
   results: { platform: string; url: string }[];
 };
 
-/**
- * Distribute a promoted mixtape to YouTube (video) and Mixcloud (audio). This is
- * push-only — it operates on an already-minted mixtape (`distributing` or `published`).
- * The mint path is `promote_recording` (`fluncle admin recordings promote <recordingId>`),
- * which also stages the set video to R2 at `<logId>/set.mp4`. With no platform selector,
- * does YouTube + Mixcloud. The first successful platform link flips `distributing →
- * published` (server-side). Idempotent: re-running a `distributing` or `published`
- * mixtape reuses its Log ID.
- */
 export async function mixtapeDistributeCommand(
   idOrLogId: string,
   options: MixtapeDistributeOptions,
@@ -76,7 +65,6 @@ export async function mixtapeDistributeCommand(
     throw new CliError("mixtape_not_found", `No mixtape with id or log id ${idOrLogId}`);
   }
 
-  // No platform selector → default (YouTube + Mixcloud).
   const both = !options.youtube && !options.mixcloud;
   const doYoutube = both || Boolean(options.youtube);
   const doMixcloud = both || Boolean(options.mixcloud);
@@ -91,9 +79,6 @@ export async function mixtapeDistributeCommand(
   const mixtapeId = mixtape.id;
   const logId = mixtape.logId;
 
-  // Distribute is push-only: no coordinate means the recording was never promoted
-  // (or a promote crashed mid-mint). `fluncle admin recordings promote
-  // <recordingId>` mints the coordinate and stages the set video; then come back.
   if (!logId) {
     throw new CliError(
       "mixtape_not_promoted",
@@ -102,8 +87,6 @@ export async function mixtapeDistributeCommand(
     );
   }
 
-  // Derive the run-time from the upload if the mixtape has no duration.
-  // Display-only, best-effort (skipped if ffprobe isn't on PATH).
   if (!mixtape.durationMs) {
     const source = options.audio ?? options.video;
     const durationMs = source ? await probeDurationMs(source) : undefined;
@@ -159,20 +142,6 @@ export type MixtapeResyncResult = {
   results: { platform: string; url: string }[];
 };
 
-/**
- * Re-sync a PUBLISHED mixtape's distribution metadata from its current cues — WITHOUT
- * re-uploading the audio: regenerate the YouTube chapter description + the Mixcloud
- * `sections[]` and push them to the live video + cloudcast. With no platform selector,
- * does both. BOTH legs are now server-side ops (YouTube `videos.update`; Mixcloud the
- * sections-only edit) — the CLI is a thin trigger through the same server path the
- * Studio button uses. Idempotent per platform (a re-run pushes the same fresh metadata
- * again).
- *
- * In the no-selector default it re-syncs only the platforms the mixtape is actually
- * distributed to (a set on Mixcloud only isn't failed by a missing YouTube video); an
- * EXPLICIT `--youtube`/`--mixcloud` attempts that platform and surfaces its own
- * `*_not_distributed` error if the link isn't there.
- */
 export async function mixtapeResyncCommand(
   idOrLogId: string,
   options: MixtapeResyncOptions,
@@ -196,7 +165,6 @@ export async function mixtapeResyncCommand(
   let doYoutube = Boolean(options.youtube);
   let doMixcloud = Boolean(options.mixcloud);
 
-  // No selector → re-sync every platform the mixtape is actually distributed to.
   if (!explicit) {
     const social = await adminApiGet<MixtapeSocialShowResponse>(
       `/api/v1/admin/mixtapes/${encodeURIComponent(mixtapeId)}/social`,
@@ -234,7 +202,6 @@ export async function mixtapeResyncCommand(
   return { logId: mixtape.logId, mixtapeId, results };
 }
 
-// The media run-time in ms via ffprobe, or undefined if it isn't available/parseable.
 async function probeDurationMs(filePath: string): Promise<number | undefined> {
   try {
     const proc = Bun.spawn(

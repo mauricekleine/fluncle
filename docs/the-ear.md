@@ -143,6 +143,8 @@ Rank `<Artist> - Topic` channels as strong candidates. When the primary search r
 
 `fluncle-verify-captures` processes captures whose verification is null. Use ISRC-resolved previews for match or mismatch verdicts. For ISRC-less rows, a title-and-artist reference may confirm a match only after identity, duration, and ambiguity guards; it may never issue a mismatch.
 
+The backfill skips a row when its captured bytes cannot be read or fingerprinted; neither failure is a verdict. Its queue count is opt-in because this worklist has a covering verification index, a guarantee other hot-path queues may lack. An operator-pinned source remains the operator's ruling even if the backfill measures a different result.
+
 ## The capture budget — the brake
 
 The ladder above decides **what** the metered GB buy. It has nothing to say about **how much**, and at catalogue scale that gap is the one that costs real money.

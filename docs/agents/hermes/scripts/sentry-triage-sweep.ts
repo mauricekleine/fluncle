@@ -1,57 +1,7 @@
 #!/usr/bin/env bun
-// sentry-triage-sweep.ts — the DETERMINISTIC half of the nightly Sentry-triage cron.
-//
-// The cron is a HYBRID, exactly like note/observe/audit: the mechanics are deterministic and
-// exactly ONE `claude -p` call owns the code judgment. This module is the deterministic half —
-// it owns EVERY Sentry API call (fetch + resolve + comment) plus the GitHub reads it needs, so the
-// claude process never NEEDS a Sentry credential. Until 2026-07-31 this header claimed it never
-// HELD one either — which was false: the driver sources the shared secrets file with `set -a`, so
-// the whole box credential set was exported into claude's environment regardless of what any
-// argument list said. The driver now scrubs it (`agent-env.sh`), which is what makes the claim
-// true; the claim itself was never a control. The driver calls the subcommands below around the
-// one claude call.
-//
-// SUBCOMMANDS
-//   fetch <ledgerPath> <outFile>   Pull unresolved issues from every project, EXCLUDE the ones
-//                                  already covered (an open triage PR, or a row already in the
-//                                  ledger), enrich the survivors with the latest event's top
-//                                  in-app frames, and write a compact JSON worklist to <outFile>.
-//                                  Prints a one-line JSON summary whose `ok` is DERIVED from the
-//                                  per-project failure count — a project that threw makes the line
-//                                  say `ok:false`, and the driver folds that into the /status
-//                                  marker. Never throws on a bad/absent token — it records the
-//                                  per-project error and writes an empty worklist, so the driver
-//                                  degrades to a clean SKIP.
-//   reconcile                      For each triage PR merged in the last ~48h, resolve the Sentry
-//                                  issue(s) its body references with `Sentry-Issue:`. This is the
-//                                  ONLY path that resolves an issue: we resolve a fix that actually
-//                                  landed on `main`, never a blanket sweep. The 48h WINDOW is what
-//                                  makes it safe over time — resolving is not a true no-op, because
-//                                  a resolved issue that later REGRESSES is auto-unresolved by
-//                                  Sentry; an unbounded reconcile would silently re-close it every
-//                                  night, masking the regression. Bounded, each fix is resolved once
-//                                  and a later regression correctly re-enters the worklist (merged
-//                                  PRs are not in the fetch dedupe set). A FILED issue (a
-//                                  `Sentry-Filed:` ref on the ledger PR) is deliberately left alone.
-//   comment <dateTag>              For each OPEN fix PR opened by tonight's run (head
-//                                  `sentry-triage/<dateTag>-…`), post one note on the Sentry issue
-//                                  linking the PR. Best-effort + idempotent (skips if a prior note
-//                                  already links that PR). Only runs when the token grants writes.
-//
-// The PR-body contract (the single source of truth, so this stays stateless — GitHub IS the store):
-//   • a FIX PR body carries one `Sentry-Issue: <numericId>` line per issue it fixes → resolved on merge.
-//   • the LEDGER PR body carries one `Sentry-Filed: <numericId>` line per filed issue → NEVER resolved.
-//   • a filed ledger ROW also carries an invisible `<!-- sentry_id:<numericId> -->` marker, so once
-//     the ledger PR merges to `main` the fetch dedupe reads the id straight from `docs/sentry-backlog.md`.
-//
-// Self-contained box script (it cannot import the workspace) — pure helpers are unit-tested in
-// sentry-triage-sweep.test.ts (`bun test docs/agents/hermes/scripts/sentry-triage-sweep.test.ts`).
-// The network + gh functions take an injectable dep so the tests never touch the real API.
+
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 
-// ── config (env-overridable, public-safe defaults) ──────────────────────────────────────────
-// EU region ⇒ the API base is de.sentry.io (docs/error-tracking.md). Org + projects match the
-// two Sentry projects the web app reports to. None of these are secrets.
 const API_BASE = (process.env.SENTRY_TRIAGE_API_BASE ?? "https://de.sentry.io").replace(/\/$/, "");
 const ORG = process.env.SENTRY_TRIAGE_ORG ?? process.env.SENTRY_ORG ?? "fluncle";
 const PROJECTS = (process.env.SENTRY_TRIAGE_PROJECTS ?? "fluncle-web,fluncle-worker")
@@ -60,17 +10,15 @@ const PROJECTS = (process.env.SENTRY_TRIAGE_PROJECTS ?? "fluncle-web,fluncle-wor
   .filter(Boolean);
 const REPO = process.env.SENTRY_TRIAGE_REPO ?? "mauricekleine/fluncle";
 const BRANCH_PREFIX = "sentry-triage/";
-// The two PR/ledger markers that make the loop stateless (see the header contract).
+
 export const FIX_MARKER = "Sentry-Issue";
 export const FILE_MARKER = "Sentry-Filed";
-// Bound the nightly worklist so one bad night can't hand claude 200 issues (cost + review load).
-// Most-frequent-first, so the cap keeps the highest-impact issues. Overridable for a pilot.
+
 const MAX_TRIAGE = Number(process.env.SENTRY_TRIAGE_MAX ?? "12");
-const MAX_PAGES = 5; // paginate defensively, never unbounded.
+const MAX_PAGES = 5;
 
 const log = (m: string) => console.error(`[sentry-triage] ${m}`);
 
-// ── types ────────────────────────────────────────────────────────────────────────────────────
 type StackFrame = { file: string; function: string; line: number | null };
 export type CompactIssue = {
   count: number;
@@ -91,12 +39,6 @@ export type CompactIssue = {
 type FetchDeps = { fetchFn: typeof fetch };
 const defaultFetchDeps = (): FetchDeps => ({ fetchFn: fetch });
 
-// ── pure helpers (unit-tested) ─────────────────────────────────────────────────────────────
-
-/**
- * Read every `<marker>: <id>` reference out of a block of text (a PR body, or a `git`/`gh`
- * payload). Case-insensitive on the marker, tolerant of leading whitespace, deduped, order-preserving.
- */
 export function parseMarkerIds(text: string, marker: string): string[] {
   const re = new RegExp(`^\\s*${marker}:\\s*#?([\\w-]+)`, "gim");
   const out: string[] = [];
@@ -109,7 +51,6 @@ export function parseMarkerIds(text: string, marker: string): string[] {
   return out;
 }
 
-/** Read the invisible `<!-- sentry_id:<id> -->` markers a filed ledger row carries. */
 export function parseLedgerIds(ledger: string): string[] {
   const re = /<!--\s*sentry_id:\s*([\w-]+)\s*-->/gi;
   const out: string[] = [];
@@ -122,25 +63,6 @@ export function parseLedgerIds(ledger: string): string[] {
   return out;
 }
 
-/**
- * Bound one ATTACKER-WRITABLE string before it is forwarded into an agent's prompt.
- *
- * Every field this sweep takes off an issue's `title`, `culprit`, `metadata`, or stack frames is
- * written by whoever sent the event, and the ingest DSN that lets them send it is a PUBLIC
- * identifier committed in `apps/web/src/lib/sentry-config.ts`. That is the Agentjacking shape
- * (Tenet Security, disclosed to Sentry 2026-06-03, declined at the root as "technically not
- * defensible"), so the untrusted text is a permanent property of this input, not a bug to fix
- * upstream.
- *
- * Be honest about what this can and cannot do. It CANNOT make the text safe: an imperative
- * sentence is just as legible to a model after the control characters are gone, so nothing here
- * substitutes for the framing in `sentry-triage-prompt.md` or for the env scrub in `agent-env.sh`.
- * What it does is remove the cheap structural tricks and the unbounded case:
- *   • strip C0/C1 controls, so a payload cannot smuggle ANSI escapes or forge line structure;
- *   • collapse whitespace runs, so a wall of newlines cannot push the operating contract out of
- *     the model's attention;
- *   • cap the length, so one crafted issue cannot spend the whole context window.
- */
 export function sanitizeUntrusted(value: unknown, max = 300): string {
   if (typeof value !== "string") {
     return "";
@@ -153,14 +75,6 @@ export function sanitizeUntrusted(value: unknown, max = 300): string {
   return stripped.length <= max ? stripped : `${stripped.slice(0, max)}… [truncated]`;
 }
 
-/**
- * Normalize one raw Sentry issue (the list endpoint's shape) into the compact worklist record.
- *
- * The split below is deliberate: `id`, `shortId`, `permalink`, and the two timestamps are assigned
- * by Sentry and are the fields the loop's correctness depends on, so they keep a plain type check.
- * Everything a reporter writes goes through `sanitizeUntrusted` with a cap sized to how much of it
- * is ever useful for locating a bug.
- */
 export function compactIssue(raw: Record<string, unknown>, project: string): CompactIssue {
   const meta = (raw.metadata ?? {}) as Record<string, unknown>;
   const asStr = (v: unknown, fallback = ""): string => (typeof v === "string" ? v : fallback);
@@ -180,16 +94,10 @@ export function compactIssue(raw: Record<string, unknown>, project: string): Com
   };
 }
 
-/** Drop issues already covered by an open triage PR or an existing ledger row. */
 export function filterNewIssues(all: CompactIssue[], covered: Set<string>): CompactIssue[] {
   return all.filter((i) => !covered.has(i.id));
 }
 
-/**
- * The Sentry `Link` header drives cursor pagination: the `rel="next"` segment carries
- * `results="true"` when another page exists, plus its `cursor="…"`. Return that cursor, else
- * undefined (last page).
- */
 export function parseNextCursor(linkHeader: string | null): string | undefined {
   if (!linkHeader) {
     return undefined;
@@ -207,7 +115,6 @@ export function parseNextCursor(linkHeader: string | null): string | undefined {
   return undefined;
 }
 
-/** Extract the top in-app stack frames from a Sentry "latest event" payload (best-effort). */
 export function extractFrames(event: Record<string, unknown>, limit = 6): StackFrame[] {
   const entries = (event.entries ?? []) as Array<Record<string, unknown>>;
   const exception = entries.find((e) => e.type === "exception");
@@ -230,16 +137,14 @@ export function extractFrames(event: Record<string, unknown>, limit = 6): StackF
       });
     }
   }
-  // Sentry lists frames oldest→newest; the crash site is last. Keep the deepest `limit`.
+
   return frames.slice(-limit);
 }
 
-// ── Sentry API (impure; deps injectable for the tests) ───────────────────────────────────────
 function sentryHeaders(token: string): HeadersInit {
   return { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
 }
 
-/** Page through a project's unresolved issues (bounded). Throws on a non-OK first response. */
 export async function listUnresolvedIssues(
   project: string,
   token: string,
@@ -249,12 +154,7 @@ export async function listUnresolvedIssues(
   let cursor: string | undefined;
   for (let page = 0; page < MAX_PAGES; page += 1) {
     const url = new URL(`${API_BASE}/api/0/projects/${ORG}/${project}/issues/`);
-    // NO `statsPeriod`. This endpoint accepts only '', '24h' and '14d' — anything else is a 400
-    // (`Invalid stats_period. Valid choices are '', '24h', and '14d'`), which is exactly how this
-    // sweep fetched ZERO issues for 11 nights while reporting itself healthy. Leaving it unset
-    // sends the valid empty period. It is NOT the issue filter either way: on the project-issues
-    // endpoint `statsPeriod` picks the stats GRAPH returned per row, so no value here would ever
-    // have widened the window. A real time bound needs `start`/`end`, or date syntax inside `query`.
+
     url.searchParams.set("query", "is:unresolved");
     url.searchParams.set("limit", "100");
     if (cursor) {
@@ -276,7 +176,6 @@ export async function listUnresolvedIssues(
   return out;
 }
 
-/** Best-effort: attach the latest event's top in-app frames to an issue (never throws). */
 async function enrichWithFrames(
   issue: CompactIssue,
   token: string,
@@ -297,7 +196,6 @@ async function enrichWithFrames(
   }
 }
 
-/** Resolve one issue. Returns true on success; idempotent (re-resolving is a no-op on Sentry). */
 export async function resolveIssue(
   issueId: string,
   token: string,
@@ -315,7 +213,6 @@ export async function resolveIssue(
   return res.ok;
 }
 
-/** List an issue's notes/comments (best-effort; empty on any failure). */
 async function listIssueComments(
   issueId: string,
   token: string,
@@ -337,7 +234,6 @@ async function listIssueComments(
   }
 }
 
-/** Post one note on an issue, unless a prior note already contains `mustNotContain` (the PR URL). */
 async function commentIssue(
   issueId: string,
   text: string,
@@ -348,7 +244,7 @@ async function commentIssue(
   const existing = await listIssueComments(issueId, token, deps);
   if (existing.some((c) => c.includes(mustNotContain))) {
     return false;
-  } // already linked
+  }
   const url = `${API_BASE}/api/0/organizations/${ORG}/issues/${issueId}/comments/`;
   const res = await deps.fetchFn(url, {
     body: JSON.stringify({ text }),
@@ -361,7 +257,6 @@ async function commentIssue(
   return res.ok;
 }
 
-// ── GitHub reads (via the baked `gh`; GH_TOKEN is exported by the driver) ─────────────────────
 export type TriagePr = {
   body: string;
   headRefName: string;
@@ -377,17 +272,8 @@ export type LedgerBranchResolution = {
   prNumber: number | null;
 };
 
-// A merged fix is reconciled only within this window of its merge — see filterRecentlyMerged.
-const RECONCILE_WINDOW_MS = 48 * 60 * 60_000; // 48h ≈ 2 nightly runs of slack for a missed tick.
+const RECONCILE_WINDOW_MS = 48 * 60 * 60_000;
 
-/**
- * Keep only PRs merged within `windowMs` of `now`. This bounds `reconcile` so a fix's Sentry issue
- * is resolved ONCE, shortly after its merge — never re-resolved forever. That matters because a
- * resolved issue that REGRESSES is auto-unresolved by Sentry; an unbounded reconcile would silently
- * re-resolve it every night, masking the regression (and suppressing its re-alert). A regressed
- * issue's id still lives in its long-merged PR body, but merged PRs are NOT in the fetch dedupe set
- * (only OPEN PRs + the ledger are), so the regression correctly re-enters the nightly worklist.
- */
 export function filterRecentlyMerged(prs: TriagePr[], now: number, windowMs: number): TriagePr[] {
   return prs.filter((p) => {
     if (!p.mergedAt) {
@@ -403,7 +289,6 @@ const defaultGh: GhRunner = (args) => {
   return { ok: p.exitCode === 0, stdout: p.stdout.toString() };
 };
 
-/** Open or merged triage PRs (head starts with the triage prefix). */
 function readTriagePrs(
   state: "open" | "merged",
   gh: GhRunner = defaultGh,
@@ -438,7 +323,6 @@ export function listTriagePrs(state: "open" | "merged", gh: GhRunner = defaultGh
   return readTriagePrs(state, gh).rows;
 }
 
-/** Branch discovery must distinguish a failed GitHub read from a confirmed empty PR list. */
 export function listTriagePrsOrThrow(
   state: "open" | "merged",
   gh: GhRunner = defaultGh,
@@ -450,13 +334,6 @@ export function listTriagePrsOrThrow(
   return result.rows;
 }
 
-/**
- * Resolve the one ledger branch the agent may use tonight.
- *
- * The fetch dedupe already covers an open ledger PR's rows via its `Sentry-Filed:` markers, so
- * continuing that branch does not change which issues are considered new. Keep this pure: the
- * caller owns the GitHub read and must fail closed when that read fails instead of passing `[]`.
- */
 export function resolveLedgerBranch(prs: TriagePr[], dateTag: string): LedgerBranchResolution {
   const datedBranch = `${BRANCH_PREFIX}${dateTag}-ledger`;
   const openLedgerPrs = prs.filter((pr) => /^sentry-triage\/[^/]+-ledger$/.test(pr.headRefName));
@@ -470,7 +347,6 @@ export function resolveLedgerBranch(prs: TriagePr[], dateTag: string): LedgerBra
   return { branch: existing.headRefName, continued: true, prNumber: existing.number };
 }
 
-// ── subcommands ────────────────────────────────────────────────────────────────────────────
 function requireToken(): string {
   const token = process.env.SENTRY_TRIAGE_TOKEN ?? "";
   if (!token) {
@@ -484,7 +360,6 @@ async function runFetch(ledgerPath: string, outFile: string): Promise<void> {
   try {
     token = requireToken();
   } catch {
-    // Never crash on a missing token: write an empty worklist and let the driver SKIP cleanly.
     writeFileSync(outFile, JSON.stringify({ error: "no SENTRY_TRIAGE_TOKEN", issues: [] }));
     console.log(
       JSON.stringify({
@@ -499,7 +374,6 @@ async function runFetch(ledgerPath: string, outFile: string): Promise<void> {
     return;
   }
 
-  // What's already covered: any open triage PR's referenced ids, plus every id already in the ledger.
   const covered = new Set<string>();
   for (const pr of listTriagePrs("open")) {
     for (const id of parseMarkerIds(pr.body ?? "", FIX_MARKER)) {
@@ -554,12 +428,7 @@ async function runFetch(ledgerPath: string, outFile: string): Promise<void> {
       2,
     ),
   );
-  // `ok` is DERIVED from the failure count, never asserted. A literal `ok: true` sat on this line
-  // directly beside `errors: errors.length` and printed `{"errors":2,"ok":true,…}` every night for
-  // 11 nights while BOTH projects' fetches threw. A summary that cannot say "no" is not a summary.
-  //
-  // Deliberately no `queue_depth`: both the Sentry pagination and tonight's worklist are bounded,
-  // so neither `all.length` nor MAX_TRIAGE is a trustworthy whole-backlog measurement.
+
   const checkedCounter = { checked };
   console.log(
     JSON.stringify({
@@ -576,10 +445,7 @@ async function runFetch(ledgerPath: string, outFile: string): Promise<void> {
 async function runReconcile(): Promise<void> {
   const token = requireToken();
   const deps = defaultFetchDeps();
-  // Only RECENTLY-merged fix PRs — resolve each fix's issue once, shortly after its merge, never
-  // forever. A later regression auto-unresolves the issue in Sentry and re-enters the worklist
-  // (merged PRs are not in the fetch dedupe set), so an unbounded reconcile would silently re-close
-  // it every night. See filterRecentlyMerged.
+
   const recent = filterRecentlyMerged(listTriagePrs("merged"), Date.now(), RECONCILE_WINDOW_MS);
   const ids = new Set<string>();
   for (const pr of recent) {
@@ -620,7 +486,6 @@ function runLedgerBranch(dateTag: string): void {
   console.log(JSON.stringify({ ok: true, ...resolution }));
 }
 
-// ── entry ─────────────────────────────────────────────────────────────────────────────────
 export async function main(argv: string[]): Promise<void> {
   const [cmd, a, b] = argv;
   switch (cmd) {
@@ -644,7 +509,6 @@ export async function main(argv: string[]): Promise<void> {
 
 if (import.meta.main) {
   main(process.argv.slice(2)).catch((e: Error) => {
-    // Fail visible, never crash the marker: emit the ok:false summary line the prober reads.
     console.log(JSON.stringify({ error: e.message, ok: false }));
     process.exitCode = 1;
   });
