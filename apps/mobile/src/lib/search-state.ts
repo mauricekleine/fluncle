@@ -1,32 +1,13 @@
-// Pure, React-Native-free helpers for the archive search affordance, so the search
-// state machine and the entity partitioning can be unit-tested in the repo's
-// framework-free harness (see submit-fault.test.ts) without mounting an RN tree.
-//
-// Mirrors the web palette (apps/web/src/components/search/search-command.tsx): the
-// same 2-char floor the server also enforces, and the same entity groups in the same
-// order. The archive is one more SURFACE over the one `search_archive` op.
-
 import { type SearchEntity, type SearchHit } from "@fluncle/contracts/orpc";
 
-/** The floor the server also enforces — below it there is nothing to go on yet. */
 export const MIN_QUERY_LENGTH = 2;
 
-/** Trim a raw input to the query the server actually sees. */
 export function normalizeQuery(raw: string): string {
   return raw.trim();
 }
 
-/** The mutually-exclusive views the search pane resolves before it renders. */
 export type SearchView = "idle" | "tooShort" | "loading" | "results" | "empty" | "error";
 
-/**
- * The honest search-state branch. An empty field is `idle` (the pane shows its quiet
- * prompt, never an empty state), a one-character query is `tooShort` (the server has
- * nothing to go on), a settled query with rows is `results`, an in-flight first query
- * is `loading`, a settled failure is `error`, and only a settled query that genuinely
- * found nothing is `empty`. Results win over a later refetch so a background refresh
- * never nukes rows already on screen — the same rule archiveView uses for the feed.
- */
 export function searchView({
   hasResults,
   isError,
@@ -57,17 +38,8 @@ export function searchView({
   return "empty";
 }
 
-/** One entity group as it renders: a heading naming the KIND, and its rows. */
 export type EntityGroup = { entities: SearchEntity[]; heading: string; kind: SearchEntity["kind"] };
 
-/**
- * The graph nodes that HAVE a page, in the order they render — the same order and the
- * same headings the web palette uses (a name is most often a person, so artists lead,
- * then the imprint/record it came off, then the wider structures). A group with no
- * entities drops out entirely. The heading is allowed to name the kind because all of
- * them are named objects in Fluncle's world (the Unlit Rule: only the uncertified tracks
- * below get no heading).
- */
 export function partitionEntities(entities: SearchEntity[]): EntityGroup[] {
   const order: EntityGroup[] = [
     { entities: [], heading: "Artists", kind: "artist" },
@@ -85,30 +57,12 @@ export function partitionEntities(entities: SearchEntity[]): EntityGroup[] {
   return order.filter((g) => g.entities.length > 0);
 }
 
-/**
- * The public path a jump-target entity opens on the web (the app has no such page). The row's
- * own `url` when it carries one (a galaxy's plural segment, a mixtape's log page), else the
- * `/<kind>/<slug>` default.
- */
 export function entityWebPath(entity: Pick<SearchEntity, "kind" | "slug" | "url">): string {
   return entity.url ?? `/${entity.kind}/${entity.slug}`;
 }
 
-/** One track group as it renders: a heading, its rows, and whether they are certified. */
 export type TrackGroup = { certified: boolean; heading: string; hits: SearchHit[] };
 
-/**
- * Split the track results into the mobile archive's two named groups: "Fluncle's Findings"
- * (certified, coordinate rows) ALWAYS before
- * "Tracks" (uncertified, link-out rows). This differs from the web palette, which heads
- * neither track group — the operator asked for the split on mobile so the two registers
- * read as two lists, not one interleaved run.
- *
- * The order WITHIN each group is preserved (the server's relevance order), and an empty
- * group drops out. The Unlit Rule stays intact: "Tracks" is a neutral heading for the
- * link-out rows, never a NAME for the tier — "Finding" is still the only named object,
- * and each row keeps its own certified/unlit treatment.
- */
 export function partitionTracks(results: SearchHit[]): TrackGroup[] {
   const certified: SearchHit[] = [];
   const uncertified: SearchHit[] = [];

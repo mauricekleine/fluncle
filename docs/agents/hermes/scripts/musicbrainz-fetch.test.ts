@@ -23,7 +23,6 @@ const WORKER_CLIENT = resolve(
 
 let stateDir: string;
 
-/** The message a rejected call carried, asserted directly so no matcher has to be thenable. */
 async function rejection(promise: Promise<unknown>): Promise<string> {
   try {
     await promise;
@@ -33,7 +32,6 @@ async function rejection(promise: Promise<unknown>): Promise<string> {
   throw new Error("expected the call to reject");
 }
 
-/** The url a stubbed fetch was called with, whatever shape the caller passed it in. */
 function askedUrl(input: Request | URL | string): string {
   return typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
 }
@@ -52,8 +50,6 @@ afterEach(() => {
 
 describe("the box's MusicBrainz identity", () => {
   it("sends the same User-Agent the Worker sends", () => {
-    // MusicBrainz identifies a CLIENT, not a process. Two spellings of Fluncle are two clients to
-    // the vendor, which is precisely the thing one shared budget exists to prevent.
     const worker = readFileSync(WORKER_CLIENT, "utf8");
     expect(worker).toContain(`export const MB_USER_AGENT = "${MB_USER_AGENT}";`);
   });
@@ -73,8 +69,6 @@ describe("the box's MusicBrainz identity", () => {
   });
 
   it("refuses a url outside MusicBrainz", async () => {
-    // The box never composes a MusicBrainz url; it fetches one the Worker issued. This guard catches
-    // a drifted caller before the request, not the vendor.
     expect(
       await rejection(
         fetchMusicbrainz("https://example.com/ws/2/release/x", { intervalMs: 0, stateDir }),
@@ -96,8 +90,6 @@ describe("the one shared rate budget", () => {
   });
 
   it("paces reservations taken by CONCURRENT PROCESSES", async () => {
-    // The whole point of a file-backed bucket: each sweep is its own process, so an in-process
-    // pacer would let five sweeps make five requests in the same second from one IP.
     const interval = 120;
     const runner = join(stateDir, "reserve.ts");
     writeFileSync(
@@ -158,8 +150,7 @@ describe("the one shared rate budget", () => {
       intervalMs: 0,
       stateDir,
     });
-    // A throttle is the VENDOR's mood, never the node's fault — the Worker settles it as a node
-    // that keeps its turn, so the box has to report it as its own outcome rather than an error.
+
     expect(result).toEqual({ outcome: "throttled", url: expect.any(String) });
     expect(calls).toBe(3);
   });
@@ -203,9 +194,6 @@ describe("what one read comes back as", () => {
   });
 
   it("never follows a redirect off the pinned host", async () => {
-    // The host guard runs once, on the url the Worker issued. A followed 3xx would walk straight
-    // past it from a machine whose network reach is not the public internet's, so a redirect is an
-    // answer this read did not get rather than a hop to take.
     const inits: (RequestInit | undefined)[] = [];
     for (const status of [301, 302, 307, 308]) {
       const result = await fetchMusicbrainz("https://musicbrainz.org/ws/2/release/x?fmt=json", {

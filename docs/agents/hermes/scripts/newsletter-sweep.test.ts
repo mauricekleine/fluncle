@@ -1,24 +1,6 @@
-// Unit tests for the pure helpers in newsletter-sweep.ts — the anti-sameness rail's two
-// light pieces (the ledger holds the heavy rail until ≥4 editions):
-//   1. `collectPriorWhys` — the already-sent why-lines mined from the sent editions
-//      `listEditions` already reads, handed to the author as SPENT moves. Its whole job is
-//      to be best-effort: an edition with no/malformed content contributes nothing, never
-//      throws, and a fresh list yields none.
-//   2. the `promptVariables` / `buildAuthoringPrompt` threading — the intra-edition
-//      diversity rule (always on) plus the spent-whys block (present only with history).
-//
-// The box scripts are self-contained (they cannot import the workspace) and live outside any
-// package's test runner, so this file uses `bun:test` and is run directly:
-//
-//   bun test docs/agents/hermes/scripts/newsletter-sweep.test.ts
-//
-// The byte-equality between the fallback here and the registry default is pinned separately
-// by prompt-drift.test.ts; this file is about the sweep's own logic.
-
 import { describe, expect, test } from "bun:test";
 import { buildAuthoringPrompt, collectPriorWhys, promptVariables } from "./newsletter-sweep";
 
-// A minimal Edition-shaped row as `admin newsletter list --json` returns it (parsed content).
 type EditionRow = {
   content?: { galaxies?: Array<{ findings?: Array<{ why?: unknown }> }>; mixtapeRef?: unknown };
   number?: number | null;
@@ -74,8 +56,6 @@ describe("collectPriorWhys", () => {
 
   test("skips malformed content without throwing", () => {
     const malformed: EditionRow[] = [
-      // The good line lives in the NEWEST edition so it survives the recent-editions cap; a
-      // non-string why and a blank why beside it must both be dropped.
       {
         content: { galaxies: [{ findings: [{ why: 42 }, { why: "  " }, { why: "good one" }] }] },
         number: 5,
@@ -83,7 +63,7 @@ describe("collectPriorWhys", () => {
       },
       { content: undefined, number: 4, status: "sent" },
       { content: { galaxies: undefined }, number: 3, status: "sent" },
-      // galaxies not an array, then findings not an array.
+
       { content: { galaxies: "nope" as unknown as [] }, number: 2, status: "sent" },
       { content: { galaxies: [{ findings: "nope" as unknown as [] }] }, number: 1, status: "sent" },
     ];
@@ -142,7 +122,7 @@ describe("buildAuthoringPrompt anti-sameness rails", () => {
     const prompt = buildAuthoringPrompt(findings, []);
 
     expect(prompt).not.toContain("ALREADY SENT");
-    // …and it is still a complete, authorable prompt.
+
     expect(prompt).toContain("THIS WEEK'S MIXTAPES");
   });
 });

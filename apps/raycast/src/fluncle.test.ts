@@ -1,20 +1,9 @@
-// Self-running checks for parseSpotifyTrackInput — no framework, mirroring the
-// repo's node:assert test style (packages/contracts/src/orpc/feed-item.test.ts).
-// Run via `bun test` (reports "0 pass" — no describe/it blocks — but throws and
-// fails the process on a failed assertion) or `bun src/fluncle.test.ts`.
-//
-// parseSpotifyTrackInput guards what reaches the CLI: it accepts only a Spotify
-// track URI or an open.spotify.com /track/ URL with a 22-char base62 id, and
-// rejects everything else (wrong host, the wrong kind, a short id, junk). This is
-// the only real logic in the Raycast extension, so pin both arms.
-
 import assert from "node:assert/strict";
 
 import { parseSpotifyTrackInput } from "./fluncle";
 
-const TRACK_ID = "4cOdK2wGLETKBW3PvgPWqT"; // a real 22-char base62 Spotify id
+const TRACK_ID = "4cOdK2wGLETKBW3PvgPWqT";
 
-// Accepted: the spotify:track:<22> URI, returned verbatim.
 {
   const uri = `spotify:track:${TRACK_ID}`;
   assert.equal(
@@ -24,7 +13,6 @@ const TRACK_ID = "4cOdK2wGLETKBW3PvgPWqT"; // a real 22-char base62 Spotify id
   );
 }
 
-// Accepted: the open.spotify.com /track/<22> URL, returned verbatim.
 {
   const url = `https://open.spotify.com/track/${TRACK_ID}`;
   assert.equal(
@@ -34,7 +22,6 @@ const TRACK_ID = "4cOdK2wGLETKBW3PvgPWqT"; // a real 22-char base62 Spotify id
   );
 }
 
-// Surrounding whitespace is trimmed before matching.
 {
   const uri = `spotify:track:${TRACK_ID}`;
   assert.equal(
@@ -44,7 +31,6 @@ const TRACK_ID = "4cOdK2wGLETKBW3PvgPWqT"; // a real 22-char base62 Spotify id
   );
 }
 
-// A /track/ URL with query params is still accepted (returned as the trimmed input).
 {
   const url = `https://open.spotify.com/track/${TRACK_ID}?si=abcdef`;
   assert.equal(
@@ -54,7 +40,6 @@ const TRACK_ID = "4cOdK2wGLETKBW3PvgPWqT"; // a real 22-char base62 Spotify id
   );
 }
 
-// Rejected: the wrong host.
 {
   assert.equal(
     parseSpotifyTrackInput(`https://spotify.com/track/${TRACK_ID}`),
@@ -68,7 +53,6 @@ const TRACK_ID = "4cOdK2wGLETKBW3PvgPWqT"; // a real 22-char base62 Spotify id
   );
 }
 
-// Rejected: a non-track Spotify resource (album/playlist).
 {
   assert.equal(
     parseSpotifyTrackInput(`https://open.spotify.com/album/${TRACK_ID}`),
@@ -82,7 +66,6 @@ const TRACK_ID = "4cOdK2wGLETKBW3PvgPWqT"; // a real 22-char base62 Spotify id
   );
 }
 
-// Rejected: a too-short track id (both forms).
 {
   assert.equal(
     parseSpotifyTrackInput("spotify:track:abc"),
@@ -96,7 +79,6 @@ const TRACK_ID = "4cOdK2wGLETKBW3PvgPWqT"; // a real 22-char base62 Spotify id
   );
 }
 
-// Rejected: a too-long track id (both forms).
 {
   const tooLong = `${TRACK_ID}EXTRA`;
   assert.equal(
@@ -111,7 +93,6 @@ const TRACK_ID = "4cOdK2wGLETKBW3PvgPWqT"; // a real 22-char base62 Spotify id
   );
 }
 
-// Rejected: non-URL junk and empties.
 {
   assert.equal(
     parseSpotifyTrackInput("not a url at all"),

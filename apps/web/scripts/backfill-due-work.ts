@@ -1,10 +1,5 @@
 #!/usr/bin/env bun
-/**
- * Resume the registered due-work projection rebuilds against the configured local database.
- *
- * Importing this module does nothing; direct invocation also refuses every remote database URL
- * before opening the normal application client.
- */
+
 import { getDb } from "../src/lib/server/db";
 import {
   runDueWorkRebuildToCompletion,

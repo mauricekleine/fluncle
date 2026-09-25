@@ -1,9 +1,3 @@
-// The native Nostalgic Cosmos token adapter (RFC Unit 4).
-// @fluncle/tokens is the canon (mirrors DESIGN.md). Web units don't port:
-// - alpha-baked hex (#RRGGBBAA) → rgba() (RN cross-platform parsing is unreliable)
-// - rem → px (×16); "Npx" passes through
-// NativeWind classes read the hardcoded mirror in tailwind.config.js; inline +
-// Reanimated styles read this typed adapter. Keep the two in sync.
 import { colors as raw, radii as rawRadii, typography } from "@fluncle/tokens";
 import { type TextStyle } from "react-native";
 
@@ -13,7 +7,6 @@ function size(value: string): number {
   return value.endsWith("px") ? parseFloat(value) : Math.round(parseFloat(value) * REM);
 }
 
-/** #RRGGBBAA → "rgba(r, g, b, a)"; plain #RRGGBB passes through. */
 function toRgba(hex: string): string {
   const h = hex.replace("#", "");
   if (h.length !== 8) {
@@ -40,8 +33,7 @@ export const color = {
   stardust: raw.stardust,
   starlightCream: raw.starlightCream,
   tapeBlack: raw.tapeBlack,
-  // Translucent Tape Black at 30% — DESIGN.md's Outline-button fill (the web canon
-  // bakes it as #1716114d). Derived from the canonical tapeBlack so it can't drift.
+
   tapeBlackFill: toRgba(`${raw.tapeBlack}4d`),
 } as const;
 
@@ -52,17 +44,6 @@ export const radius = {
   sm: size(rawRadii.sm),
 } as const;
 
-// Oxanium speaks for the brand + numerals; Space Grotesk does the reading
-// (DESIGN.md: "Oxanium speaks for the brand (numerals, marks); Space Grotesk does
-// the reading"). RN synthesizes NO weights — each weight is its own family name, so
-// the reading roles name their exact cut. 700 is Space Grotesk's ceiling: title and
-// label ask for 700, never 800 (a system-font 800 was fine when it synthesized; the
-// real face has no 800, so 700 IS its heaviest — DESIGN.md's Title rule). No
-// fontWeight is set on a custom-family role: the family name carries the weight,
-// matching display/numeric above.
-// NOTE (RFC Unit 0): fontVariant:['tabular-nums'] is a no-op on custom fonts on
-// iOS (expo/expo#20048) — the Tabular Rule's real fix is a tnum-baked Oxanium
-// subset. Until then, Android gets tabular figures; iOS falls back to default.
 export const font = {
   body: {
     fontFamily: "SpaceGrotesk_400Regular",

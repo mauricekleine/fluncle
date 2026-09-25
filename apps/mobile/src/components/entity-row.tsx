@@ -8,14 +8,6 @@ import { entityWebPath } from "@/lib/search-state";
 import { API_BASE } from "@/config";
 import { color, font, radius } from "@/theme/tokens";
 
-// A search entity (an artist, a label, an album, a galaxy, a mixtape) as a jump row.
-// These pages live on the web, not in the app — so, exactly like a mixtape deep-link
-// (log/[id].tsx), the row opens fluncle.com rather than pretending the app has a page it
-// doesn't. The arrow reads "leaves the app"; the a11y label says where it goes.
-//
-// The heading over these rows names the KIND ("Artists"/"Labels"/"Albums"/"Galaxies"/
-// "Mixtapes"), which it is allowed to do because all of them are named objects in Fluncle's world.
-
 const KIND_NOUN: Record<SearchEntity["kind"], string> = {
   album: "album",
   artist: "artist",

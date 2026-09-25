@@ -1,55 +1,4 @@
 #!/usr/bin/env bun
-// fluncle-healthcheck.ts — the bun orchestrator behind `fluncle-healthcheck`, the
-// prober for Fluncle's public /status dashboard.
-//
-// Version-controlled source; the repo is canonical and the box is a deploy target
-// (fluncle-hermes-operator skill). Invoked by the bash wrapper (fluncle-healthcheck.sh)
-// which its own rave-02 HOST systemd timer `docker exec`s every ~10m, so no long sweep
-// it monitors can delay or starve it; see ../healthcheck-timer/README.md (the units + the
-// one-time deploy) and that .sh's header for the env keys.
-//
-// THE TICK (all deterministic — no model time):
-//   1. PROBE each service in parallel, each with a short timeout (3–5s) so one hung
-//      target can't stall the tick:
-//        web         — GET ${HEALTHCHECK_WORKER_URL}/api/v1/health, timed.
-//        r2          — HEAD ${HEALTHCHECK_R2_PROBE_URL}.
-//        sonar       — GET ${HEALTHCHECK_SONAR_URL}/health; ok ONLY when the body
-//                      parses and says `ok: true` (the similarity engine holds its
-//                      corpus in memory and answers nothing until it is built).
-//        dns         — dig +short ${HEALTHCHECK_DNS_QUERY} (non-empty answer = ok).
-//        ssh         — TCP-connect ${HEALTHCHECK_SSH_HOST}:${HEALTHCHECK_SSH_PORT}.
-//        disk        — `df` the box's root fs (via the /opt/data mount); degraded
-//                      past ~85% full, down past ~93% — catches a filling disk
-//                      before it strands the next pin-watch rebuild.
-//        cron.*      — read ~/.hermes/cron/output/<job>/ per box cron: newest *.md,
-//                      fresh within ~3× the cron's cadence, AND carrying the sweep's
-//                      contracted JSON summary with `.ok !== false`. A marker with NO
-//                      summary is a run that was KILLED before it could speak → down (see
-//                      judgeCron). Emitted as ONE service PER cron (service id = the
-//                      registry surface name, e.g. `cron.enrich`), so /status shows every
-//                      humming system on its own row — not one aggregate.
-//        render-box  — read ${HOME}/.render-conductor/state (idle|rendering both ok;
-//                      missing = "not yet provisioned", ok). NEVER wakes the box.
-//        hermes      — self-evident: this prober runs ON the box, so ok.
-//        cron.healthcheck — self-evident: this IS the prober; reaching here means its
-//                      host timer fired → ok (it writes no cron output dir to read).
-//      (onion — OUT OF SCOPE for v1; see the TODO below.)
-//   2. TRANSITIONS + STREAKS: load ${HOME}/.healthcheck/state.json (service → last
-//      status + how many consecutive ticks it has been down); a probe `transitioned`
-//      when prev !== current. Write the new map back.
-//   3. ALERT: if any service transitioned to `down`, OR any recovered (down → ok/
-//      degraded), Discord-ping once (best-effort) naming what changed. Nothing
-//      changed → no ping (no spam). PLUS: a service that stays down long enough
-//      escalates on a doubling ladder (see ESCALATE_AFTER_TICKS) so a sustained
-//      outage keeps speaking instead of going quiet after its one edge-triggered ping.
-//   4. PING the external dead-man's-switch beacon. It follows the essential probes,
-//      transition state, and alerts, but precedes optional database telemetry so a
-//      primary-database outage can never suppress the completed-tick signal.
-//   5. POST the snapshot to ${HEALTHCHECK_WORKER_URL}/api/v1/admin/health (record_health,
-//      Authorization: Bearer ${FLUNCLE_API_TOKEN}). Best-effort: the alert and beacon
-//      already fired, so a failed POST is logged, never thrown.
-//
-// stdout: ONE JSON summary line (the cron run output). Diagnostics → stderr.
 
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
@@ -57,18 +6,11 @@ import { connect } from "node:net";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
-// ---------------------------------------------------------------------------
-// Config — every probe target comes from the file-sourced env (the .sh sources
-// ${HOME}/.healthcheck.env before exec'ing us); FLUNCLE_API_TOKEN rides the cron
-// env. NO hostnames/ports/paths are hard-coded — public-safe by construction.
-// ---------------------------------------------------------------------------
-
 const HOME = process.env.HOME ?? homedir() ?? "/opt/data/home";
 
 const WORKER_URL = (process.env.HEALTHCHECK_WORKER_URL ?? "").replace(/\/+$/, "");
 const R2_PROBE_URL = process.env.HEALTHCHECK_R2_PROBE_URL ?? "";
-// The sonic-similarity engine's health origin — deliberately its PUBLIC URL, not the
-// origin behind it (see probeSonar). Unset ⇒ the row reports "not configured".
+
 const SONAR_URL = (process.env.HEALTHCHECK_SONAR_URL ?? "").replace(/\/+$/, "");
 const DNS_QUERY = process.env.HEALTHCHECK_DNS_QUERY ?? "";
 const SSH_HOST = process.env.HEALTHCHECK_SSH_HOST ?? "";
@@ -76,83 +18,34 @@ const SSH_PORT = Number.parseInt(process.env.HEALTHCHECK_SSH_PORT ?? "", 10);
 const DISCORD_ALERT_WEBHOOK = process.env.DISCORD_ALERT_WEBHOOK ?? "";
 const FLUNCLE_API_TOKEN = process.env.FLUNCLE_API_TOKEN ?? "";
 
-// OPTIONAL external dead-man's-switch beacon. A completed tick means "the prober
-// ran", so we ping this URL at the end of every tick; an external service
-// (healthchecks.io / BetterUptime / a self-hosted instance — provider-agnostic)
-// alerts when the pings STOP, which is the only signal that catches THIS box going
-// dark (a dead prober can't alert about itself). Unset ⇒ skipped silently.
 const BEACON_URL = process.env.HEALTHCHECK_BEACON_URL ?? "";
 
-// Per-probe network timeout. Short on purpose: a hung target degrades to a clean
-// "down" well inside the unit timeout rather than starving the tick budget.
 const PROBE_TIMEOUT_MS = Number.parseInt(process.env.HEALTHCHECK_TIMEOUT_MS ?? "", 10) || 4000;
 
-// The snapshot POST is a Turso WRITE through the Worker, not a cheap probe GET, so it
-// needs a far longer budget than PROBE_TIMEOUT_MS — a cold Worker + DB write under box
-// load runs many seconds. Sharing the 4s probe timeout was aborting the vast majority
-// of posts, starving /status and flapping the rave-01 watchdog. It also retries a
-// transient abort before giving up (best-effort delivery of an already-computed
-// snapshot; a lost tick simply goes stale on /status). Both env-overridable.
 const POST_TIMEOUT_MS = Number.parseInt(process.env.HEALTHCHECK_POST_TIMEOUT_MS ?? "", 10) || 20000;
 const POST_ATTEMPTS = Number.parseInt(process.env.HEALTHCHECK_POST_ATTEMPTS ?? "", 10) || 3;
 
-// ESCALATION — the counterpart to edge-triggered alerting. The transition alert fires
-// ONCE, when a service flips to down; a service that then STAYS down is silent forever
-// after by construction. The prober also counts CONSECUTIVE down
-// ticks per service and speaks again once that count crosses a threshold — which turns
-// DURATION into its own signal, the one thing neither notification path could express.
-//
-// The default of 6 ticks reads off the prober's own cadence: the host timer fires every
-// ~10m (OnUnitActiveSec in ../healthcheck-timer/fluncle-healthcheck.timer), so 6
-// consecutive down ticks ≈ 1 hour of unbroken failure — long enough that every
-// self-healing sweep has had several retries and a flap has resolved, short enough that a
-// terminal condition (a depleted budget, a revoked credential) is heard the same hour.
-//
-// DEAD-MAN'S CAVEAT: this escalates only for surfaces the prober probes WHILE IT IS
-// ALIVE. A prober that dies escalates nothing about anything — that case is covered by
-// the separate external dead-man's-switch beacon (pingBeacon below), which alerts when
-// the ticks STOP. Out of scope here; noted so this is never mistaken for full coverage.
 const ESCALATE_AFTER_TICKS = Number.parseInt(process.env.HEALTHCHECK_ESCALATE_AFTER ?? "", 10) || 6;
 
-// The tick cadence, used ONLY to turn a streak into the approximate wall-clock duration
-// the escalation text carries. Mirrors the timer unit's OnUnitActiveSec; if that ever
-// changes, change this with it (or set HEALTHCHECK_TICK_MS in the box env).
 const TICK_INTERVAL_MS = Number.parseInt(process.env.HEALTHCHECK_TICK_MS ?? "", 10) || 10 * 60_000;
 
-// State (the transition + streak memory) lives in the mounted, writable HOME.
 const STATE_DIR = join(HOME, ".healthcheck");
 const STATE_FILE = join(STATE_DIR, "state.json");
 
-// Where each sweep's per-run output lands (cron-output.sh writes it).
-// Per-run cron output lives at <data-root>/cron/output/<job-dir>/.
-// The data root is the parent of the cron user's HOME (HOME=/opt/data/home → the
-// /opt/data mount); operator-overridable via HEALTHCHECK_CRON_OUTPUT_DIR for a
-// non-standard layout.
 const CRON_OUTPUT_DIR =
   process.env.HEALTHCHECK_CRON_OUTPUT_DIR ?? join(dirname(HOME), "cron", "output");
-// The render conductor's state file (idle | rendering).
+
 const RENDER_STATE_FILE = join(HOME, ".render-conductor", "state");
 
-// The boat.dev CLI (render-box plan usage is a best-effort extra). Resolved via
-// PATH with an absolute fallback, like the other sweeps' bins. `BOX_BIN` stays an
-// accepted alias so a box env written against the pre-rename binary keeps working.
 const BOAT_BIN = process.env.BOAT_BIN ?? process.env.BOX_BIN ?? "boat";
 
-// onion — OUT OF SCOPE for v1: Tor reachability needs a SOCKS proxy the box may not
-// have, so the status page simply won't show the onion until a later pass.
-// TODO(onion): probe the .onion via a SOCKS5 proxy once the box has a Tor client.
-
 const log = (message: string) => console.error(`[fluncle-healthcheck] ${message}`);
-
-// ---------------------------------------------------------------------------
-// Types.
-// ---------------------------------------------------------------------------
 
 type Status = "ok" | "degraded" | "down";
 
 type Check = {
   latencyMs: number | null;
-  // Public-safe, ≤120 chars, NEVER an IP / host / path.
+
   message: string | null;
   service: string;
   status: Status;
@@ -160,23 +53,12 @@ type Check = {
 
 type CheckWithTransition = Check & { transitioned: boolean };
 
-/**
- * What the prober remembers about one service between ticks: its last status, how many
- * CONSECUTIVE ticks it has read `down` (0 whenever it isn't), and the streak at which it
- * was last escalated (0 = never, which re-arms the ladder on every recovery).
- */
 export type ServiceState = { downStreak: number; escalatedStreak: number; status: Status };
 
 type StateMap = Record<string, ServiceState>;
 
-/** One service due an escalation this tick. */
 export type Escalation = { service: string; streak: number };
 
-// ---------------------------------------------------------------------------
-// Shared helpers.
-// ---------------------------------------------------------------------------
-
-/** Cap a message to a public-safe length; an empty string degrades to null. */
 function msg(text: string): string | null {
   const trimmed = text.replace(/\s+/g, " ").trim();
 
@@ -187,7 +69,6 @@ function msg(text: string): string | null {
   return trimmed.length > 120 ? `${trimmed.slice(0, 119)}…` : trimmed;
 }
 
-/** A `fetch` with a hard AbortController timeout — resolves or throws, never hangs. */
 async function fetchWithTimeout(
   url: string,
   init: RequestInit,
@@ -203,7 +84,6 @@ async function fetchWithTimeout(
   }
 }
 
-/** Run a command with a hard timeout; returns code + captured streams (never throws). */
 function runQuiet(
   bin: string,
   args: string[],
@@ -222,19 +102,6 @@ function runQuiet(
   };
 }
 
-// ---------------------------------------------------------------------------
-// PROBE: web — GET ${WORKER_URL}/api/v1/health, timed. ok on a 200; down otherwise.
-// The message reports the code + elapsed ms (no host).
-//
-// THE RECORDED LATENCY GATES EVERY BOX WRITER. The database admission coordinator closes the write
-// lane while this probe's last `latency_ms` is over its public-latency limit, and the reading stands
-// until the next tick. So one sample that landed on a Worker cold start (the handler itself answers
-// in milliseconds; the isolate's start-up is what is slow) would pause the whole write fleet for a
-// full tick. A 200 over the limit is therefore sampled once more and the faster reading recorded: a
-// cold start does not repeat on the warmed isolate, while genuine slowness reads slow twice.
-// ---------------------------------------------------------------------------
-
-/** The coordinator's public-latency limit (`DATABASE_ADMISSION_PUBLIC_LATENCY_LIMIT_MS`). */
 export const WEB_RESAMPLE_OVER_MS = 500;
 
 type WebSample = { latencyMs: number; status: number } | { error: unknown; latencyMs: number };
@@ -291,15 +158,6 @@ function probeWeb(): Promise<Check> {
   return probeWebWith(WORKER_URL);
 }
 
-// ---------------------------------------------------------------------------
-// PROBE: db — GET ${WORKER_URL}/api/v1/status and read `dbProbe.roundTripMs`, the WORKER's own
-// `select 1` round-trip to the Turso primary (aws-eu-west-1, Dublin). That is the path a
-// visitor's page load pays (edge Worker → Dublin), NOT this box's path — the honest read on
-// Turso latency + jitter over time. ok when snappy, degraded when it drags, down when the
-// Worker could not reach Turso (the field is null) or /api/v1/status is unreachable. Recording
-// it as its own service feeds the sample into the existing `service_check_samples` uptime bar.
-// ---------------------------------------------------------------------------
-
 const DB_OK_MS = Number.parseInt(process.env.HEALTHCHECK_DB_OK_MS ?? "", 10) || 250;
 const DB_DEGRADED_MS = Number.parseInt(process.env.HEALTHCHECK_DB_DEGRADED_MS ?? "", 10) || 1500;
 
@@ -351,10 +209,6 @@ async function probeDb(): Promise<Check> {
   }
 }
 
-// ---------------------------------------------------------------------------
-// PROBE: r2 — HEAD ${R2_PROBE_URL}. ok on any 2xx.
-// ---------------------------------------------------------------------------
-
 async function probeR2(): Promise<Check> {
   const service = "r2";
 
@@ -392,21 +246,6 @@ async function probeR2(): Promise<Check> {
   }
 }
 
-// ---------------------------------------------------------------------------
-// PROBE: sonar — GET ${SONAR_URL}/health. The similarity engine holds its whole
-// corpus in memory and only starts answering once both indexes are built, so a
-// reachable-but-unbuilt engine is exactly the state worth catching: ok ONLY when the
-// response is 2xx AND the body parses AND `ok` is true. A non-2xx, an unreadable
-// body, or a timeout is an honest down.
-//
-// SONAR_URL is deliberately the engine's PUBLIC URL rather than its origin: the
-// origin's firewall admits only the CDN, so the origin isn't reachable from here
-// anyway — and probing the path a visitor's search actually travels catches a
-// CDN-side misconfiguration too, not just a dead engine.
-//
-// The message reports the code + elapsed ms, never a host.
-// ---------------------------------------------------------------------------
-
 async function probeSonar(): Promise<Check> {
   const service = "sonar";
 
@@ -429,8 +268,6 @@ async function probeSonar(): Promise<Check> {
       };
     }
 
-    // The body parse is its own try so a 200 carrying junk reads as "unreadable",
-    // not as the outer catch's misleading "unreachable".
     let ready = false;
 
     try {
@@ -455,12 +292,6 @@ async function probeSonar(): Promise<Check> {
   }
 }
 
-// ---------------------------------------------------------------------------
-// PROBE: dns — `dig +short +time=3 +tries=1 ${DNS_QUERY}`. ok on a non-empty
-// answer; down on empty / timeout. The message reports the answer COUNT, never an
-// address (public-safe).
-// ---------------------------------------------------------------------------
-
 function probeDns(): Check {
   const service = "dns";
 
@@ -469,10 +300,7 @@ function probeDns(): Check {
   }
 
   const started = Date.now();
-  // Split DNS_QUERY into argv so the query can carry a record TYPE, e.g.
-  // "random.dig.fluncle.com TXT" → ["random.dig.fluncle.com", "TXT"]. Fluncle's
-  // own nameserver (fluncle-dns) serves TXT records, so a bare name (default A)
-  // would get NODATA and read as a false "down"; the type is required.
+
   const { code, stdout } = runQuiet(
     "dig",
     ["+short", "+time=3", "+tries=1", ...DNS_QUERY.trim().split(/\s+/)],
@@ -500,12 +328,6 @@ function probeDns(): Check {
     status: "down",
   };
 }
-
-// ---------------------------------------------------------------------------
-// PROBE: ssh — a TCP-connect to ${SSH_HOST}:${SSH_PORT} (node:net, hard timeout).
-// ok if it connects. We never speak the SSH protocol — a successful TCP handshake
-// is liveness enough. The message reports latency only (no host/port).
-// ---------------------------------------------------------------------------
 
 function probeSsh(): Promise<Check> {
   const service = "ssh";
@@ -542,18 +364,6 @@ function probeSsh(): Promise<Check> {
   });
 }
 
-// ---------------------------------------------------------------------------
-// PROBE: disk — the agent box's root-filesystem headroom. This prober runs INSIDE
-// the hermes container, whose HOME (/opt/data/home) sits under the /opt/data bind
-// mount from the host's root fs, so `df` there reports the SAME disk the host fills.
-// Each fluncle-hermes image is large and a pin-watch rebuild transiently needs a
-// second one, so a quietly filling disk is the recurring failure that strands the
-// next rebuild with "no space left on device". Surfacing it here catches it BEFORE
-// a rebuild fails: degraded past DISK_DEGRADED_PCT, down past DISK_DOWN_PCT. The
-// message reports the percent used only — never a host, mount, or path (public-safe).
-// A missing/unparsable `df` degrades to ok, never a false alarm. All env-overridable.
-// ---------------------------------------------------------------------------
-
 const DISK_PROBE_PATH = process.env.HEALTHCHECK_DISK_PATH ?? HOME;
 const DISK_DEGRADED_PCT =
   Number.parseInt(process.env.HEALTHCHECK_DISK_DEGRADED_PCT ?? "", 10) || 85;
@@ -562,8 +372,6 @@ const DISK_DOWN_PCT = Number.parseInt(process.env.HEALTHCHECK_DISK_DOWN_PCT ?? "
 function probeDisk(): Check {
   const service = "disk";
 
-  // `df -P -k <path>`: POSIX-portable, one filesystem row after the header; the
-  // "Use%" column carries the integer percentage we key off.
   const { code, stdout } = runQuiet("df", ["-P", "-k", DISK_PROBE_PATH], PROBE_TIMEOUT_MS);
 
   if (code !== 0) {
@@ -589,155 +397,75 @@ function probeDisk(): Check {
   return { latencyMs: null, message: msg(`${usedPct}% used`), service, status: "ok" };
 }
 
-// ---------------------------------------------------------------------------
-// PROBE: crons — the on-box sweep crons, ONE service row PER cron (not one
-// aggregate). For each known cron, find its output dir (dirs are named by job id,
-// so each is resolved to its cron via the run-file's `# Cron Job:` header), take the
-// newest *.md, parse its LAST content line as JSON and check `.ok !== false`, AND
-// require the file mtime within ~3× the cron's cadence. Per cron: ok if fresh+healthy,
-// degraded if lagging, down if its last run failed (`{ ok: false }`). A cron with NO
-// output dir yet is "no data" — emitted as ok with a "no runs yet" note, NEVER down
-// (a freshly-rebuilt box hasn't ticked). The service id is the cron's @fluncle/registry
-// surface name (e.g. `cron.enrich`) so the box prober and the Worker /status page share
-// one vocabulary; this file is deployed standalone to the box (no workspace resolution),
-// so the list is mirrored inline here — keep it in lockstep with the registry's
-// cronSurfaces().
-// ---------------------------------------------------------------------------
-
-// Each cron's registry surface name (the emitted service id) + the bare token its
-// output-dir `# Cron Job:` header contains (e.g. the dir for `fluncle-context-note`
-// matches "context-note") + its cadence in ms. The staleness budget is 3× the
-// cadence: a job that hasn't produced output in three of its own cycles is genuinely
-// lagging.
-//
-// THIS LIST IS NO LONGER HAND-KEPT — it is hand-CARRIED, and asserted.
-// cron-roster.ts DERIVES the same roster from the committed systemd timer units
-// (docs/agents/hermes/*/*.timer → the paired .service's ExecStart → the
-// `emit_cron_output <token>` it reaches → the timer's own OnUnitActiveSec/OnCalendar),
-// and cron-roster.test.ts fails the build when this literal and that derivation
-// disagree, in either direction, on either the token set or the cadence. It binds
-// @fluncle/registry's cron surfaces to the same units in the same pass, so all three
-// statements of one fact move together.
-//
-// It stays a literal here because the prober is deployed standalone: the image bakes
-// docs/agents/hermes/scripts/ and nothing else, while the timer units are laid down on
-// the HOST by install-host-timers.sh and never enter the container — so the box cannot
-// read a unit at tick time. The comments below (the claim-collision notes) are the part
-// no derivation can produce; keep writing them.
-//
-// The largest `RandomizedDelaySec` any committed sweep timer carries, in ms. Every timer
-// under docs/agents/hermes/*-timer/ jitters each firing so that a mass restart (a pin-watch
-// quiesce/restore) cannot re-align the roster onto libSQL's single writer — so an observed
-// gap is ALWAYS the cadence plus up to this much, and any freshness budget that omits it is
-// judging the fleet against a period no timer was ever going to hit.
-//
-// One constant rather than a per-cron mirror of the unit files, because a hand-kept mirror
-// drifts and this is the conservative direction: taking the maximum can only ever make a
-// budget more forgiving, never wrongly strict. `fluncle-healthcheck.test.ts` reads every
-// committed .timer and fails the build if one ever exceeds this, so the constant cannot
-// silently fall behind the units it stands for.
 export const MAX_TIMER_JITTER_MS = 90_000;
 
-// One known cron: the registry surface id we emit, the bare token its output-dir
-// header carries, and its cadence.
 export type CronDef = { cadenceMs: number; match: string; service: string };
 
 export const AUTOMATION_CRONS: CronDef[] = [
   { cadenceMs: 5 * 60_000, match: "enrich", service: "cron.enrich" },
   { cadenceMs: 5 * 60_000, match: "embed", service: "cron.embed" },
-  { cadenceMs: 24 * 60 * 60_000, match: "cluster", service: "cron.cluster" }, // nightly sonic-galaxy assignment
-  // NB: `social-capture` (a longer match) claims the fluncle-social-capture dir FIRST
-  // (claimCronDirs is longest-match-first), so a bare `capture` never mis-claims it —
-  // it resolves to the fluncle-capture dir. Keep both entries.
+  { cadenceMs: 24 * 60 * 60_000, match: "cluster", service: "cron.cluster" },
+
   { cadenceMs: 5 * 60_000, match: "capture", service: "cron.capture" },
   { cadenceMs: 5 * 60_000, match: "context-note", service: "cron.context-note" },
   { cadenceMs: 10 * 60_000, match: "note", service: "cron.note" },
-  { cadenceMs: 30 * 60_000, match: "artist-bio", service: "cron.artist-bio" }, // artist voiced-bio author — every 30m
-  { cadenceMs: 30 * 60_000, match: "label-bio", service: "cron.label-bio" }, // label voiced-bio author — every 30m
-  { cadenceMs: 30 * 60_000, match: "album-bio", service: "cron.album-bio" }, // album voiced-bio author — every 30m
-  { cadenceMs: 15 * 60_000, match: "triage", service: "cron.triage" }, // submission pre-chew — every 15m
+  { cadenceMs: 30 * 60_000, match: "artist-bio", service: "cron.artist-bio" },
+  { cadenceMs: 30 * 60_000, match: "label-bio", service: "cron.label-bio" },
+  { cadenceMs: 30 * 60_000, match: "album-bio", service: "cron.album-bio" },
+  { cadenceMs: 15 * 60_000, match: "triage", service: "cron.triage" },
   { cadenceMs: 60 * 60_000, match: "observation", service: "cron.observation" },
   { cadenceMs: 30 * 60_000, match: "backfill", service: "cron.backfill" },
-  { cadenceMs: 10 * 60_000, match: "crawl", service: "cron.crawl" }, // catalogue crawl — one bounded MusicBrainz pass per tick
-  { cadenceMs: 24 * 60 * 60_000, match: "label-releases", service: "cron.label-releases" }, // freshness tap — day-one Spotify releases for enabled seed labels
-  { cadenceMs: 30 * 60_000, match: "rank", service: "cron.rank" }, // The Ear's ranking — drains the stale catalogue
+  { cadenceMs: 10 * 60_000, match: "crawl", service: "cron.crawl" },
+  { cadenceMs: 24 * 60 * 60_000, match: "label-releases", service: "cron.label-releases" },
+  { cadenceMs: 30 * 60_000, match: "rank", service: "cron.rank" },
   {
     cadenceMs: 5 * 60_000,
     match: "projection-maintenance",
     service: "cron.projection-maintenance",
   },
-  { cadenceMs: 60 * 60_000, match: "anchor", service: "cron.anchor" }, // catalogue Spotify anchors via Apify — one bounded batch per hour
-  { cadenceMs: 10 * 60_000, match: "isrc-recovery", service: "cron.isrc-recovery" }, // free Deezer ISRC recovery — one paced batch per hour
-  { cadenceMs: 60 * 60_000, match: "device-mirror", service: "cron.device-mirror" }, // shared anchored-cut device replica — full diff, in-place writes
-  { cadenceMs: 60 * 60_000, match: "label-images", service: "cron.label-images" }, // label logos — resolve one bounded batch of pending labels per tick
-  { cadenceMs: 60 * 60_000, match: "recording-mbids", service: "cron.recording-mbids" }, // MusicBrainz recording MBIDs — crawler PK strip + ISRC resolve, one bounded batch per tick
-  { cadenceMs: 60 * 60_000, match: "artist-edges", service: "cron.artist-edges" }, // track_artists graph backfill — fold artists_json names onto existing artist identities, one bounded batch per tick
-  { cadenceMs: 5 * 60_000, match: "artist-credits", service: "cron.artist-credits" }, // MB credit sweep — mint identity-true artists from MusicBrainz credits for slice 0's zero-matched residual, one bounded batch per tick
-  { cadenceMs: 60 * 60_000, match: "label-lineage", service: "cron.label-lineage" }, // label founding + parent imprint from MusicBrainz — one bounded batch per tick
-  { cadenceMs: 60 * 60_000, match: "cover-masters", service: "cron.cover-masters" }, // owned album/artist cover masters — one bounded batch per tick
+  { cadenceMs: 60 * 60_000, match: "anchor", service: "cron.anchor" },
+  { cadenceMs: 10 * 60_000, match: "isrc-recovery", service: "cron.isrc-recovery" },
+  { cadenceMs: 60 * 60_000, match: "device-mirror", service: "cron.device-mirror" },
+  { cadenceMs: 60 * 60_000, match: "label-images", service: "cron.label-images" },
+  { cadenceMs: 60 * 60_000, match: "recording-mbids", service: "cron.recording-mbids" },
+  { cadenceMs: 60 * 60_000, match: "artist-edges", service: "cron.artist-edges" },
+  { cadenceMs: 5 * 60_000, match: "artist-credits", service: "cron.artist-credits" },
+  { cadenceMs: 60 * 60_000, match: "label-lineage", service: "cron.label-lineage" },
+  { cadenceMs: 60 * 60_000, match: "cover-masters", service: "cron.cover-masters" },
   { cadenceMs: 60 * 60_000, match: "artist-sweep", service: "cron.artist-sweep" },
   { cadenceMs: 10 * 60_000, match: "social-capture", service: "cron.social-capture" },
-  // `verify-captures` (a longer match) claims the fluncle-verify-captures dir before the bare
-  // `capture` token can (claimCronDirs is longest-match-first), exactly like social-capture.
+
   { cadenceMs: 30 * 60_000, match: "verify-captures", service: "cron.verify-captures" },
   { cadenceMs: 15 * 60_000, match: "studio-clip", service: "cron.studio-clip" },
-  // The Twitch live-set poller — every 1m. `live` is not a substring of any other cron's
-  // `fluncle-…` header, so it claims fluncle-live cleanly. It ran unregistered for months
-  // (no registry surface, no row here), which is why a dead poller was invisible on /status.
+
   { cadenceMs: 60_000, match: "live", service: "cron.live" },
   { cadenceMs: 60 * 60_000, match: "render", service: "cron.render" },
-  // The render → publish auto-advance — every 30m. It is the LAST link of the chain, so a
-  // silent stop is exactly the failure worth seeing: a stalled tick lands here as `lagging`
-  // on /status. (A tick that RUNS but pushes nothing is honest and stays `fresh-ok` — the
-  // kill switch or an unready queue; the findings themselves stay in the /admin attention
-  // queue, which is where a HELD finding is visible.)
+
   { cadenceMs: 30 * 60_000, match: "publish-advance", service: "cron.publish-advance" },
-  // NB: cron.healthcheck is NOT here — this prober IS that cron, run by its own host
-  // systemd timer (../healthcheck-timer/), so it writes no cron output dir to read and
-  // a self-read would be circular. Its /status row is emitted self-evidently by
-  // probeHealthcheck() below instead.
-  { cadenceMs: 7 * 24 * 60 * 60_000, match: "newsletter", service: "cron.newsletter" }, // weekly — a generous floor
-  // The Frontier playlist drain (E2) runs every 15m. cron-roster.test.ts binds this cadence and
-  // @fluncle/registry's probeConfig to the timer unit. The crew still sees a ~weekly refresh — the
-  // pacing is in the sweep's due-gate, never in the cadence here.
-  // No token collision: no other cron token contains "frontier-refresh".
+
+  { cadenceMs: 7 * 24 * 60 * 60_000, match: "newsletter", service: "cron.newsletter" },
+
   { cadenceMs: 15 * 60_000, match: "frontier-refresh", service: "cron.frontier-refresh" },
-  { cadenceMs: 24 * 60 * 60_000, match: "backup", service: "cron.backup" }, // daily DB backup → private R2
-  // The nightly hub-counts reconciliation (docs/db-scale-backlog Wave 2 keystone 2, slice C).
-  // `reconcile-hub-counts` is the longest token here and no other cron's `fluncle-…` dir header is a
-  // substring of it (nor it of theirs), so claimCronDirs' longest-match-first pass claims
-  // fluncle-reconcile-hub-counts cleanly.
+  { cadenceMs: 24 * 60 * 60_000, match: "backup", service: "cron.backup" },
+
   {
     cadenceMs: 24 * 60 * 60_000,
     match: "reconcile-hub-counts",
     service: "cron.reconcile-hub-counts",
   },
-  { cadenceMs: 24 * 60 * 60_000, match: "logbook", service: "cron.logbook" }, // daily Logbook author — a generous floor
-  // The daily /reach snapshot. `reach` is a substring of no other cron's fluncle-<token> dir
-  // header (and no other token is a substring of "reach"), so claimCronDirs' longest-match-first
-  // pass gives it its own fluncle-reach dir cleanly — no collision guard needed.
+  { cadenceMs: 24 * 60 * 60_000, match: "logbook", service: "cron.logbook" },
+
   { cadenceMs: 24 * 60 * 60_000, match: "reach", service: "cron.reach" },
-  // The nightly demand reorder (docs/catalogue-crawler.md § Demand). `demand` is a substring of no
-  // other cron's fluncle-<token> dir header (and vice versa), so claimCronDirs' longest-match-first
-  // pass claims fluncle-demand cleanly.
+
   { cadenceMs: 24 * 60 * 60_000, match: "demand", service: "cron.demand" },
-  // The daily catalogue-funnel snapshot (docs/admin-shell.md). `funnel-snapshot`
-  // is a substring of no other cron's fluncle-<token> dir header (and vice versa), so
-  // claimCronDirs' longest-match-first pass claims fluncle-funnel-snapshot cleanly.
+
   { cadenceMs: 24 * 60 * 60_000, match: "funnel-snapshot", service: "cron.funnel-snapshot" },
-  // The daily per-post social-metrics snapshot. `social-metrics` and `social-capture` are the same
-  // length and neither is a substring of the other's `fluncle-…` dir header, so claimCronDirs'
-  // longest-match-first pass gives each its own dir cleanly (the social-capture/verify-captures
-  // pattern). Keep both entries.
+
   { cadenceMs: 24 * 60 * 60_000, match: "social-metrics", service: "cron.social-metrics" },
-  // The two nightly-audit crons: `audit-review` (12 chars) is claimed before `audit` (5) by
-  // longest-match-first, and neither is a substring of the other's `fluncle-…` dir header, so
-  // each claims its own dir cleanly (same pattern as social-capture/capture). Both daily.
+
   { cadenceMs: 24 * 60 * 60_000, match: "audit-review", service: "cron.audit-review" },
   { cadenceMs: 24 * 60 * 60_000, match: "audit", service: "cron.audit" },
-  // Nightly Sentry triage. `sentry-triage` (13 chars) is claimed before the submission-triage
-  // `triage` (6) by longest-match-first, and "sentry-triage" is not a substring of "fluncle-triage"
-  // (nor vice versa), so each claims its own dir cleanly (same pattern as audit-review/audit). Daily.
+
   { cadenceMs: 24 * 60 * 60_000, match: "sentry-triage", service: "cron.sentry-triage" },
 ];
 
@@ -764,28 +492,14 @@ const PROJECTION_MAINTENANCE_OUTCOMES = new Set<unknown>([
 
 export type ProjectionMaintenanceState = {
   converged: boolean | null;
-  /**
-   * Milliseconds since the governing marker, the newest retained one carrying a convergence
-   * judgement, was written; null when no retained marker carries one.
-   */
+
   judgementAgeMs: number | null;
   oldestDebtAgeMs: number | null;
   outcome: ProjectionMaintenanceOutcome | null;
 };
 
-/**
- * How many retained markers the projection row searches for a convergence judgement: every marker
- * cron-output.sh keeps, since it prunes each output dir to the newest 20.
- */
 export const PROJECTION_JUDGEMENT_LOOKBACK_MARKERS = 20;
 
-/**
- * The cron NAME a given output dir belongs to (from the newest run-file's
- * `# Cron Job: <name>` header, e.g. `fluncle-enrich`), plus that file's mtime. The
- * dir name need not match the cron, so the header is the only link to the cron; the mtime
- * lets a recreated cron's CURRENT dir outrank a stale leftover with the same name.
- * jobName is "" if the dir has no readable run file.
- */
 function dirInfo(dir: string): { jobName: string; mtimeMs: number } {
   try {
     const newest = readdirSync(dir)
@@ -808,17 +522,8 @@ function dirInfo(dir: string): { jobName: string; mtimeMs: number } {
   }
 }
 
-/**
- * Map each cron to the output dir it OWNS, keyed by the cron's registry `service` id.
- * Dirs are named by job id, so resolve each dir to its recorded cron name (the run-file
- * header), FRESHEST dir first (so a recreated cron's current dir wins over a stale
- * leftover), then claim longest-MATCH first so the most-specific cron wins each dir
- * exclusively. This is the fix for the "note" ⊂ "context-note" overlap: the
- * `fluncle-context-note` header contains both substrings, so `context-note` claims its
- * dir before a bare `note` can.
- */
 function claimCronDirs(crons: CronDef[]): Map<string, string> {
-  const claimed = new Map<string, string>(); // service id -> dir path
+  const claimed = new Map<string, string>();
 
   if (!existsSync(CRON_OUTPUT_DIR)) {
     return claimed;
@@ -843,7 +548,7 @@ function claimCronDirs(crons: CronDef[]): Map<string, string> {
     return claimed;
   }
 
-  const used = new Set<string>(); // dir paths already claimed
+  const used = new Set<string>();
   const byLongest = [...crons].sort((a, b) => b.match.length - a.match.length);
 
   for (const cron of byLongest) {
@@ -860,27 +565,7 @@ function claimCronDirs(crons: CronDef[]): Map<string, string> {
   return claimed;
 }
 
-/**
- * The JSON summary line a marker carries, or null when it carries none.
- *
- * EVERY sweep is contracted to end its stdout with one JSON summary line — that is the whole
- * point of `cron-output.sh`'s "the LAST line is the sweep's JSON summary". But the marker is
- * WRITTEN BY THE WRAPPER, not by the sweep: `emit_cron_output` runs the payload, captures its
- * stdout, and writes the header + whatever it captured. So a sweep that is SIGKILLed (an OOM,
- * the unit's TimeoutStartSec) still leaves a marker — a 28-byte file whose only line is the
- * `# Cron Job: …` header. Reading just the LAST non-empty line and shrugging when it isn't
- * JSON therefore grades a dead run as healthy.
- *
- * So: scan UPWARDS for the last line that parses as a JSON object. That keeps the two
- * legitimate shapes healthy — a clean summary on the last line, and a summary followed by
- * trailing log noise — while a marker with no summary at all is what it looks like: a run
- * that never got to speak.
- */
 export function findJsonSummary(body: string): Record<string, unknown> | null {
-  // Only ever scan the STDOUT region. cron-output.sh appends a delimited stderr tail below it
-  // (see STDERR_DELIMITER), and the summary lives in the sweep's stdout by contract — reading
-  // past the delimiter would let a stderr line that happens to be a JSON object impersonate
-  // the summary. An old-shaped marker has no delimiter and is unaffected.
   const lines = splitMarker(body)
     .stdout.split("\n")
     .map((line) => line.trim())
@@ -889,7 +574,6 @@ export function findJsonSummary(body: string): Record<string, unknown> | null {
   for (let index = lines.length - 1; index >= 0; index -= 1) {
     const line = lines[index] ?? "";
 
-    // Cheap gate before the parse: only an object literal can be a summary.
     if (!line.startsWith("{")) {
       continue;
     }
@@ -900,33 +584,16 @@ export function findJsonSummary(body: string): Record<string, unknown> | null {
       if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
         return parsed as Record<string, unknown>;
       }
-    } catch {
-      // Not this line — keep walking up.
-    }
+    } catch {}
   }
 
   return null;
 }
 
-/**
- * Does a projection-maintenance summary judge convergence? An active tick reports a boolean
- * `converged`; a tick with every cutover dark reports `gateState: "disabled"`, where nothing is
- * owed. A firing that never read status (an `admission-skipped` handoff, a failed status read)
- * carries neither and says nothing about debt.
- */
 function carriesConvergenceJudgement(summary: Record<string, unknown>): boolean {
   return typeof summary.converged === "boolean" || summary.gateState === "disabled";
 }
 
-/**
- * Read the projection sweep's convergence facts for its public status-row message.
- *
- * The facts come from the newest retained marker that carries a convergence judgement, not simply
- * the newest marker: an admission-skipped firing writes a marker without debt fields, and reading
- * only that marker would report a healthy row while earlier debt still stands. `judgementAgeMs`
- * travels with the facts so cronCheck can age the observed debt and refuse a stale judgement.
- * Null when the dir holds no marker at all, which judgeCron already grades.
- */
 export function readProjectionMaintenanceState(
   dir: string | undefined,
   nowMs: number = Date.now(),
@@ -977,7 +644,6 @@ export function readProjectionMaintenanceState(
   return { converged: null, judgementAgeMs: null, oldestDebtAgeMs: null, outcome: null };
 }
 
-/** One standing window governs both missing ticks and repair debt that survives healthy ticks. */
 export function cronStaleBudgetMs(cron: CronDef): number {
   return Math.max(cron.cadenceMs * 3, 90_000) + MAX_TIMER_JITTER_MS;
 }
@@ -995,11 +661,6 @@ function formatElapsed(elapsedMs: number): string {
   return remainingMinutes === 0 ? `${hours}h` : `${hours}h ${remainingMinutes}m`;
 }
 
-/**
- * How long this box has been up, in ms — or null where that can't be known (no procfs).
- * Ages a never-ran cron out of "no runs yet": on a box that has been up for days, a
- * cron with no output has not "not started yet", it has never fired.
- */
 export function boxUptimeMs(): number | null {
   try {
     const seconds = Number.parseFloat(readFileSync("/proc/uptime", "utf8").split(/\s+/)[0] ?? "");
@@ -1010,33 +671,13 @@ export function boxUptimeMs(): number | null {
   }
 }
 
-/**
- * Judge one cron's claimed dir: the newest *.md must be fresh enough AND carry a JSON summary
- * that doesn't say `ok: false`.
- *
- * `uptimeMs` is the box's uptime (null = unknown). It only matters for the no-runs-at-all
- * case: once the box has been up longer than this cron's stale budget, "no runs yet" is the same
- * signal as a stale marker — `lagging`.
- */
 export function judgeCron(
   cron: CronDef,
   dir: string | undefined,
   uptimeMs: number | null = null,
 ): CronVerdict {
-  // The stale budget: a run within 3× the cadence, PLUS the per-firing jitter every sweep
-  // timer carries. The jitter term is not decoration — `cadenceMs` describes what the unit
-  // asks for (`OnUnitActiveSec`), while the gap actually observed is that plus a fresh
-  // `RandomizedDelaySec` roll on every firing. For the slow crons the two are the same
-  // number to within rounding, but the faster the cron the more the jitter dominates, and
-  // at the fleet's fastest cadence it stops being a rounding error: `cron.live` asks for 60s
-  // and rolls up to 90s on top, so its real period is 60–150s against a 3× budget of 180s.
-  // Measured across its last 100 ticks: mean 114s, max 188s — over the budget, on a timer
-  // behaving exactly as configured. Without this term the board reports a healthy sweep as
-  // `lagging`, which is the flap that teaches an operator to stop reading the row.
   const staleBudgetMs = cronStaleBudgetMs(cron);
 
-  // No output dir at all, or an unreadable one. Fresh box ⇒ genuinely "no runs yet"; a box
-  // that has been up past this cron's whole stale budget ⇒ it should have produced something.
   const noData = (): CronVerdict =>
     uptimeMs !== null && uptimeMs > staleBudgetMs ? "lagging" : "no-data";
 
@@ -1059,10 +700,9 @@ export function judgeCron(
   const newest = runFiles[0];
 
   if (!newest) {
-    return noData(); // dir exists but no runs yet
+    return noData();
   }
 
-  // Freshness first — a stale marker is "behind schedule" whatever it says.
   if (Date.now() - newest.mtimeMs > staleBudgetMs) {
     return "lagging";
   }
@@ -1072,38 +712,22 @@ export function judgeCron(
   try {
     body = readFileSync(newest.path, "utf8");
   } catch {
-    return "fresh-ok"; // unreadable body but fresh file — don't false-alarm
+    return "fresh-ok";
   }
 
   const summary = findJsonSummary(body);
 
   if (!summary) {
-    // NO SUMMARY AT ALL. The wrapper wrote a marker but the sweep never emitted its
-    // contracted JSON line — the signature of a run that was KILLED mid-flight (OOM, the
-    // unit timeout). Unlike `ok: false` (a sweep reporting a handled, usually transient
-    // failure and retrying on its own cadence) this is the process dying, so it does NOT get
-    // the one-miss grace: it is a failure the first time it is seen. Three OOM-killed backup
-    // nights read green under the old lenience; never again.
     return "no-summary";
   }
 
   if (summary.ok === false) {
-    // ONE failed run is not an outage — every sweep retries on its own cadence, and a
-    // transient (a MusicBrainz slow day timing out one crawl tick) self-heals on the next
-    // tick. The newest run failed AND the one before it also failed ⇒ the job
-    // is genuinely stuck ⇒ "failed" (down). A lone failure ⇒ "failed-once" (degraded,
-    // "watching the retry") — visible, never silent, but not a page.
     return runFailed(runFiles[1]?.path) ? "failed" : "failed-once";
   }
 
   return "fresh-ok";
 }
 
-/**
- * Did a (previous) run file fail? `ok: false` counts, and so does a marker with NO summary —
- * a killed run is a failed run, so two killed nights escalate the same way two reported
- * failures do. Unreadable/absent ⇒ no (never invent a failure).
- */
 function runFailed(path: string | undefined): boolean {
   if (!path) {
     return false;
@@ -1118,7 +742,6 @@ function runFailed(path: string | undefined): boolean {
   }
 }
 
-/** Map one cron's verdict to its public Check (status + a short, public-safe note). */
 export function cronCheck(
   cron: CronDef,
   verdict: CronVerdict,
@@ -1126,9 +749,7 @@ export function cronCheck(
 ): Check {
   const base = { latencyMs: null, service: cron.service };
   const staleBudgetMs = cronStaleBudgetMs(cron);
-  // The observed debt's age now: its opening age plus the time since its marker was written. Debt
-  // still outstanding when that marker was written has aged at least that long, so this is a
-  // lower bound, never an invented age.
+
   const debtAgeMs =
     projection?.converged === false &&
     projection.oldestDebtAgeMs !== null &&
@@ -1151,34 +772,22 @@ export function cronCheck(
   };
 
   if (verdict === "no-summary") {
-    // The marker exists but the sweep never emitted its summary — it was killed mid-run.
-    // Down on the first sighting: a process that died is not a job "watching its retry".
     return { ...base, message: outcomeMessage("last run died mid-flight"), status: "down" };
   }
 
   if (verdict === "failed") {
-    // Two consecutive failed runs — the job is stuck, not unlucky. A real outage.
     return { ...base, message: outcomeMessage("last runs failed"), status: "down" };
   }
 
   if (debtAgeMs !== null && debtAgeMs > staleBudgetMs) {
-    // Known debt older than the maintenance window is down whatever the newest marker says: a
-    // skipped, failed, or late firing repairs nothing.
     return { ...base, message: outcomeMessage("debt persists"), status: "down" };
   }
 
   if (projection !== null && projection.judgementAgeMs === null) {
-    // None of the retained markers judges convergence: a five-minute loop has gone its whole
-    // retained history without measuring its debt, which is an outage. A dark gate is itself a
-    // judgement, so this never fires while one is retained. It outranks a late or once-failed
-    // firing because the row then leaves `down` only on a real judgement, never when the last
-    // judging marker ages out of retention.
     return { ...base, message: outcomeMessage("behind schedule"), status: "down" };
   }
 
   if (verdict === "failed-once") {
-    // A single failed run with a healthy one before it — the sweep's own retry is the
-    // remediation, so this surfaces as degraded and resolves (or escalates) on the next tick.
     return {
       ...base,
       message: outcomeMessage("last run failed; watching the retry"),
@@ -1187,12 +796,10 @@ export function cronCheck(
   }
 
   if (verdict === "lagging") {
-    // Healthy-looking output, but stale beyond 3× the cadence — the job is behind.
     return { ...base, message: outcomeMessage("behind schedule"), status: "degraded" };
   }
 
   if (verdict === "no-data") {
-    // No output dir / no runs yet — a freshly-rebuilt box, not a fault. ok-unknown.
     return { ...base, message: outcomeMessage("no runs yet"), status: "ok" };
   }
 
@@ -1201,21 +808,12 @@ export function cronCheck(
     projection.judgementAgeMs !== null &&
     projection.judgementAgeMs > staleBudgetMs
   ) {
-    // Fresh markers over an older judgement, such as a short run of admission-skipped firings,
-    // mean the loop has not measured its debt within its window: behind schedule, never fresh.
     return { ...base, message: outcomeMessage("behind schedule"), status: "degraded" };
   }
 
   return { ...base, message: outcomeMessage("fresh"), status: "ok" };
 }
 
-/**
- * Probe every known box cron and emit ONE Check PER cron (service id = its registry
- * surface name, e.g. `cron.enrich`). Claim each output dir to its most-specific cron
- * first (handles "note" ⊂ "context-note"), then judge each cron against the dir it
- * actually owns. Each cron stands or falls on its own row — "look how many systems are
- * humming" — instead of collapsing into a single aggregate.
- */
 function probeCrons(claimed: Map<string, string>): Check[] {
   const uptimeMs = boxUptimeMs();
 
@@ -1227,58 +825,8 @@ function probeCrons(claimed: Map<string, string>): Check[] {
   });
 }
 
-// ---------------------------------------------------------------------------
-// PROBE: sweep-errors — the SECOND signal over the same markers, and a deliberately
-// SEPARATE one.
-//
-// THE HOLE THIS FILLS. `judgeCron` above reads exactly one thing out of a marker: the
-// sweep's own `{ ok }` verdict. That verdict is the sweep's opinion of its TICK, not of its
-// WORK — a sweep that walks a batch of 10, fails all 10 for the same reason, and returns
-// `{"ok":true,"failed":10}` is telling the truth (the tick ran, the queue is intact, it will
-// retry) and reads perfectly green. Two days of real box output, aggregated: 610 capture
-// bot-challenges, and three entity slugs each rejected ~90 times by the bio voice gate — the
-// SAME three, over and over, a queue that could not drain. Every one of those ticks was
-// `ok: true`, and `/status` was right to say so. Nothing anywhere was reading the rest.
-//
-// THE RULE, in one sentence: count the evidence a sweep leaves that WORK DID NOT GET DONE,
-// sum it over a rolling window, and say so when it crosses a threshold — without ever
-// touching the sweep's own verdict.
-//
-// The evidence is two explicit, reviewable lists and nothing else:
-//   • STRAIN_PHRASES — classified stderr substrings. A run-level line scores directly. An
-//     item-level line supplies a `failed`-shaped numerator and only scores as a rate against the
-//     marker's `checked` denominator. Empirically tuned against the sweeps' actual `log()` lines,
-//     not guessed: there is deliberately no /error/i catch-all.
-//   • STRAIN_COUNTER_KEYS + the nullable `error` field — run-level failures and stuck-loop
-//     counters the sweeps ALREADY put in their JSON summaries (`errors`, `gateSkipped`, `error`).
-//   • STRAIN_RATE_COUNTERS — item-level `failed` is ordinary batch fallout unless its rate against
-//     `checked` is high. With no denominator it says nothing; the detector never assumes the worst.
-//     `skipped` and `unmatched` are likewise ordinary outcomes here, not failures.
-//
-// Designed vendor backpressure is counted separately. A sweep that says `throttled: true`
-// stopped cleanly and will resume next tick, so it stays visible on the healthy sweep-errors
-// row but can never contribute to an alarm.
-//
-// WHY IT IS ITS OWN ROW. The sweep's `{ ok }` contract stays exactly as it was, and this
-// never edits, wraps, or overrides it: `cron.capture` still reads whatever capture said about
-// itself. Strain lands on ONE separate `sweep-errors` row instead of ~35 per-sweep rows,
-// because `service_status` rows are upserted and never deleted — a row minted for a
-// one-afternoon condition would sit on the public board forever (`RETIRED_SERVICE_IDS` in
-// apps/web/src/lib/server/status.ts is the hand-curated cost of exactly that mistake).
-// The row carries the count; the Discord line names the sweeps.
-// ---------------------------------------------------------------------------
-
-/**
- * The line cron-output.sh writes between a marker's captured stdout and its captured stderr
- * tail. MIRRORED there as CRON_OUTPUT_STDERR_DELIMITER — change one, change the other; a test
- * pins the pair in lockstep by reading the shell source.
- */
 export const STDERR_DELIMITER = "<!-- fluncle-cron-output: stderr tail -->";
 
-/**
- * Split a marker into its stdout region (the summary lives here) and its stderr tail (the
- * errors live here). A marker with no delimiter is an older compatible shape containing stdout.
- */
 export function splitMarker(body: string): { stderr: string; stdout: string } {
   const index = body.indexOf(STDERR_DELIMITER);
 
@@ -1289,31 +837,20 @@ export function splitMarker(body: string): { stderr: string; stdout: string } {
   return { stderr: body.slice(index + STDERR_DELIMITER.length), stdout: body.slice(0, index) };
 }
 
-/**
- * THE VOCABULARY — the whole stderr detector's false-positive surface, kept classified at the
- * source so prose and counters cannot disagree about `errors` (the RUN failed) versus `failed`
- * (ITEMS failed and the run continued). A line matching both levels is run-level: the explicit
- * `fatal:` / batch-abort wrapper is the stronger statement.
- */
 export const STRAIN_PHRASES = [
-  // Every producer follows these with a non-zero exit: the auth branches stop the batch and the
-  // top-level catches print `fatal:` before their failed summary.
   { level: "run", phrase: "aborting the batch" },
   { level: "run", phrase: "fatal:" },
-  // Capture's spent re-roll loses one track, then the batch continues.
+
   { level: "item", phrase: "bot-challenged" },
-  // Ambiguous English, therefore not safe as a run verdict. Actual producers use it for optional
-  // context fallbacks, best-effort state writes, and individual unavailable resources; a fatal
-  // wrapper still wins when one really ends the run.
+
   { level: "item", phrase: "could not" },
-  // The shared per-row catch in the batch sweeps. The trailing space is load-bearing: it matches
-  // `error on <id>` / `unexpected error on <id>`, not the word "error" loose in prose.
+
   { level: "item", phrase: "error on " },
-  // One entity/finding/day exhausted its authoring budget; the sweep moves to the next item.
+
   { level: "item", phrase: "giving up" },
-  // Claude's error reply leaves one authoring target queued; it does not abort the sweep.
+
   { level: "item", phrase: "is_error" },
-  // These are all continuation/backoff or per-item rejection diagnostics in their producers.
+
   { level: "item", phrase: "rate-limited" },
   { level: "item", phrase: "rejected the" },
   { level: "item", phrase: "retrying" },
@@ -1324,27 +861,12 @@ export const STRAIN_PHRASES = [
   { level: "item", phrase: "unavailable" },
 ] as const satisfies readonly { level: "item" | "run"; phrase: string }[];
 
-/**
- * Summary fields that COUNT run-level failures or a stuck loop. Each unit is one point — these
- * are the sweeps' own numbers, so there is nothing to interpret. Item-level `failed` is handled
- * separately as a rate. Deliberately excluded: `skipped` and `unmatched`, both of which are
- * ordinary outcomes (an already-noted finding, a capture whose fingerprint did not match).
- */
 export const STRAIN_COUNTER_KEYS: readonly string[] = ["errors", "gateSkipped"];
 
-/** Item-failure counters that need a real work denominator before they can say anything. */
 export const STRAIN_RATE_COUNTERS = [{ denominator: "checked", numerator: "failed" }] as const;
 
-/** Summary fields that record designed backpressure, not failed work. One yielded tick each. */
 export const BACKPRESSURE_FLAG_KEYS: readonly string[] = ["throttled"];
 
-/**
- * The reason a yielded tick names for itself, when it names one. Reported, never scored.
- *
- * A database-admission yield also carries the runner's own finer word (`queue`, `public-latency`,
- * `database-health`), and that is the one an operator can act on — so it rides along behind the
- * axis it qualifies rather than replacing it.
- */
 export function summaryBackpressureReason(summary: Record<string, unknown> | null): string | null {
   const reason = summary?.reason;
 
@@ -1359,12 +881,10 @@ export function summaryBackpressureReason(summary: Record<string, unknown> | nul
 
 type DistressEvidence = { itemFailures: number; runFailures: number };
 
-/** Classified evidence from a marker's stderr tail: at most one observation per line. */
 function countDistressEvidence(stderrRegion: string): DistressEvidence {
   const evidence: DistressEvidence = { itemFailures: 0, runFailures: 0 };
 
   for (const raw of stderrRegion.split("\n")) {
-    // Strip the blockquote prefix cron-output.sh writes, then normalise for matching.
     const line = raw
       .replace(/^\s*>\s?/, "")
       .trim()
@@ -1386,7 +906,6 @@ function countDistressEvidence(stderrRegion: string): DistressEvidence {
   return evidence;
 }
 
-/** A summary counter's non-negative integer value; arrays use their item count. */
 function summaryCount(value: unknown): number {
   if (Array.isArray(value)) {
     return value.length;
@@ -1395,7 +914,6 @@ function summaryCount(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
 }
 
-/** One rate-gated point from item failures, shared by structured counters and stderr prose. */
 function countItemFailureRateStrain(failedValue: unknown, checkedValue: unknown): number {
   const checked =
     typeof checkedValue === "number" && Number.isFinite(checkedValue) && checkedValue > 0
@@ -1406,17 +924,12 @@ function countItemFailureRateStrain(failedValue: unknown, checkedValue: unknown)
   return checked > 0 && failed / checked >= STRAIN_ITEM_FAILURE_RATE ? 1 : 0;
 }
 
-/**
- * Strain points from stderr alone. Run failures score directly; item failures use the same rate
- * gate as structured `failed`, and therefore say nothing without a `checked` denominator.
- */
 export function countDistressLines(stderrRegion: string, checked: unknown = null): number {
   const evidence = countDistressEvidence(stderrRegion);
 
   return evidence.runFailures + countItemFailureRateStrain(evidence.itemFailures, checked);
 }
 
-/** Strain points from a marker's JSON summary: direct counters, high item-failure rate, and error. */
 export function countSummaryStrain(summary: Record<string, unknown> | null): number {
   if (!summary) {
     return 0;
@@ -1439,7 +952,6 @@ export function countSummaryStrain(summary: Record<string, unknown> | null): num
   return points;
 }
 
-/** Designed-backpressure ticks from a marker summary. These are observable but never strain. */
 export function countSummaryBackpressure(summary: Record<string, unknown> | null): number {
   if (!summary) {
     return 0;
@@ -1456,12 +968,6 @@ export function countSummaryBackpressure(summary: Record<string, unknown> | null
   return points;
 }
 
-/**
- * The two signals one marker (one tick) contributes. Structured `failed` owns the item-failure
- * numerator when present; otherwise classified item prose supplies it. Both use the SAME rate
- * scorer and the summary's `checked` denominator. Run-level prose always scores directly.
- * Designed backpressure has its own axis and cannot leak into `strain`.
- */
 export function markerSignals(body: string): {
   backpressure: number;
   backpressureReason: string | null;
@@ -1493,17 +999,6 @@ export function markerBackpressure(body: string): number {
   return markerSignals(body).backpressure;
 }
 
-// ── THE STRAIN DIAL — the ONE place these numbers are tuned. ──────────────────
-// Every threshold is env-overridable on the box, so tuning after a day of real data needs no
-// rebake: set it in the box env, restart the timer, done.
-//
-// ITEM FAILURE RATE (50%, per tick). Structured `failed` and classified item-failure prose share
-// this scorer; an occurrence count without `checked` has no denominator and contributes nothing.
-// At least half of checked work must fail before the tick earns ONE strain point; a capture-shaped
-// 4/12 tick is ordinary, while 6/12 is signal. The
-// outer cadence gate still applies: the fastest cron needs 90 such ticks out of 360 scheduled
-// in 6h; the slowest needs all three scheduled ticks in its 21d window. One point per high-rate
-// tick prevents a large batch from overpowering that cadence-relative gate.
 const CONFIGURED_ITEM_FAILURE_RATE = Number.parseFloat(
   process.env.HEALTHCHECK_STRAIN_ITEM_FAILURE_RATE ?? "",
 );
@@ -1513,27 +1008,7 @@ export const STRAIN_ITEM_FAILURE_RATE =
   CONFIGURED_ITEM_FAILURE_RATE <= 1
     ? CONFIGURED_ITEM_FAILURE_RATE
     : 0.5;
-//
-// WINDOW (max(6h, 3 × cadence)). Fast crons clear a fixed condition the same morning. Daily and
-// weekly crons get exactly the three scheduled opportunities required by the repeated-tick gate;
-// no cron in AUTOMATION_CRONS is silently too slow to be judged.
-//
-// REPEATED-TICK RATE (25%). The point bar scales with scheduled ticks in that cron's window
-// instead of making a fast cron buy the same 12 points as a slow one. At the fleet's fastest cadence,
-// `live` gets 360 scheduled ticks in 6h and needs 90 points: 0.25 failure points/tick. At the
-// slowest cadence, `newsletter` gets three scheduled ticks in 21d; rounding makes the rate gate
-// one point (0.33/tick), while the three-distinct-error-ticks gate below makes the effective
-// minimum three points across three ticks (1.0/tick). That stricter slow-cron result is
-// deliberate: with only three observations, all three must show failed work before this
-// standing-condition row speaks.
-//
-// TICKS (3). The spread requirement, and the reason one catastrophic tick does NOT land here:
-// that case is already `judgeCron`'s (`ok:false`, or a killed run with no summary). This row
-// is only ever about a condition that KEEPS happening.
-//
-// The window is measured with a per-cron rolling state (hourly buckets in the prober's state
-// file) rather than by re-reading the marker dir, because cron-output.sh prunes to ~20 markers
-// — for the 1-minute `live` cron that is 20 minutes of history, far short of any useful window.
+
 const STRAIN_WINDOW_FLOOR_MS =
   Number.parseInt(process.env.HEALTHCHECK_STRAIN_WINDOW_MS ?? "", 10) || 6 * 60 * 60_000;
 const STRAIN_WINDOW_CADENCES = 3;
@@ -1541,7 +1016,6 @@ const STRAIN_FAILURE_RATE =
   Number.parseFloat(process.env.HEALTHCHECK_STRAIN_FAILURE_RATE ?? "") || 0.25;
 const STRAIN_MIN_TICKS = Number.parseInt(process.env.HEALTHCHECK_STRAIN_TICKS ?? "", 10) || 3;
 
-/** This cron's rolling evidence window. Every known cadence can contribute three ticks. */
 export function strainWindowMs(
   cadenceMs: number,
   floorMs: number = STRAIN_WINDOW_FLOOR_MS,
@@ -1549,7 +1023,6 @@ export function strainWindowMs(
   return Math.max(floorMs, cadenceMs * STRAIN_WINDOW_CADENCES);
 }
 
-/** Rate-relative point gate for the scheduled ticks in one cron's own rolling window. */
 export function strainMinimumPoints(
   cadenceMs: number,
   windowMs: number = strainWindowMs(cadenceMs),
@@ -1558,26 +1031,11 @@ export function strainMinimumPoints(
   return Math.max(1, Math.ceil((windowMs / cadenceMs) * failureRate));
 }
 
-// ── THE STALL BAR — when designed backpressure stops being designed. ──────────
-//
-// A `throttled` tick is correct behaviour: the Worker deferred a guarded read, the sweep paused
-// cleanly, and the next tick reads again. Exactly one tick of it says nothing is wrong. An
-// INDEFINITE run of them is a different claim — the sweep is alive, green, and doing no work —
-// and it is indistinguishable from health in every signal the box publishes, because a paused
-// tick has its work counters nulled and `errors: 0`. So the rate is measured on its own axis and
-// gets its own bar, here.
-//
-// The bar is TIME, expressed in that cron's own ticks: roughly an hour of pausing for the fast
-// sweeps, and never fewer than three ticks for the slow ones (an hourly sweep needs three hours;
-// a daily one, three days). An hour was chosen because it is longer than any single deferral this
-// backpressure is designed for and short enough that a stalled pipeline is found the same
-// morning. Both numbers are env-overridable on the box, like every other dial here.
 const BACKPRESSURE_STALL_FLOOR_MS =
   Number.parseInt(process.env.HEALTHCHECK_BACKPRESSURE_STALL_MS ?? "", 10) || 60 * 60_000;
 const BACKPRESSURE_STALL_MIN_TICKS =
   Number.parseInt(process.env.HEALTHCHECK_BACKPRESSURE_STALL_TICKS ?? "", 10) || 3;
 
-/** How many yielded ticks of this cron's own cadence amount to a stall. */
 export function backpressureStallTicks(
   cadenceMs: number,
   floorMs: number = BACKPRESSURE_STALL_FLOOR_MS,
@@ -1590,25 +1048,16 @@ export function backpressureStallTicks(
   return Math.max(minTicks, Math.ceil(floorMs / cadenceMs));
 }
 
-/** Bucket granularity for the rolling window. Sparse buckets keep slow-cron windows tiny too. */
 const STRAIN_BUCKET_MS = 60 * 60_000;
 
-/** One hour of accrued strain for one cron. */
 export type StrainBucket = { backpressure?: number; points: number; ticks: number };
 
-/** A sweep that has been yielding cleanly for long enough that "cleanly" stopped being true. */
 export type StalledSweep = { reason: string; service: string; ticks: number };
 
-/**
- * What the prober remembers about one cron's strain between ticks: the hourly buckets inside
- * the window, whether it was already reported strained (so the Discord line is edge-triggered),
- * and the newest marker mtime already folded in (so no marker is ever counted twice).
- */
 export type StrainState = {
-  /** The reason the newest yielded tick named, carried so the alarm can say WHY it is stalled. */
   backpressureReason?: string;
   buckets: Record<string, StrainBucket>;
-  /** Whether it was already reported stalled, so that line is edge-triggered too. */
+
   stalled?: boolean;
   strained: boolean;
   watermarkMs: number;
@@ -1616,14 +1065,6 @@ export type StrainState = {
 
 type StrainMap = Record<string, StrainState>;
 
-/**
- * Fold this tick's new markers into a cron's rolling window: accrue each sample into its own
- * hour bucket, advance the watermark past everything seen, and drop whatever has aged out.
- *
- * The watermark is what makes this exact rather than approximate — the prober ticks every
- * ~10m and every marker written since the last tick is still on disk (the pruner keeps ~20),
- * so every tick of every cron is counted once and only once.
- */
 export function foldStrain(
   prev: StrainState | undefined,
   samples: {
@@ -1643,12 +1084,11 @@ export function foldStrain(
     watermarkMs = Math.max(watermarkMs, sample.atMs);
 
     if ((sample.backpressure ?? 0) > 0 && sample.backpressureReason) {
-      // The NEWEST yielded tick's own word, so the alarm names the cause rather than the axis.
       backpressureReason = sample.backpressureReason;
     }
 
     if (sample.points <= 0 && (sample.backpressure ?? 0) <= 0) {
-      continue; // An entirely clean tick advances the watermark and nothing else.
+      continue;
     }
 
     const key = String(Math.floor(sample.atMs / STRAIN_BUCKET_MS) * STRAIN_BUCKET_MS);
@@ -1682,7 +1122,6 @@ export function foldStrain(
   };
 }
 
-/** A cron's totals across the buckets still inside the window. */
 export function strainTotals(
   state: StrainState | undefined,
   now: number,
@@ -1703,7 +1142,6 @@ export function strainTotals(
   return totals;
 }
 
-/** Designed-backpressure ticks across the same cron-relative rolling window. Never an alarm. */
 export function backpressureTotal(
   state: StrainState | undefined,
   now: number,
@@ -1723,7 +1161,6 @@ export function backpressureTotal(
   return total;
 }
 
-/** Both gates: enough evidence, AND spread across enough separate ticks to be standing. */
 export function isStrained(
   totals: StrainBucket,
   minPoints: number,
@@ -1732,11 +1169,6 @@ export function isStrained(
   return totals.points >= minPoints && totals.ticks >= minTicks;
 }
 
-/**
- * The `sweep-errors` row. `degraded`, never `down`: every one of these sweeps is RUNNING and
- * reporting for itself on its own row, so calling the box down would be a lie the /status
- * headline would then repeat. The operator's loud channel is the Discord line below.
- */
 export function sweepStrainCheck(
   strained: string[],
   backpressured: string[] = [],
@@ -1764,8 +1196,6 @@ export function sweepStrainCheck(
   }
 
   if (stalled.length > 0) {
-    // The streak and the reason travel WITH the name: "paused" alone would send an operator to
-    // the ledger to find out how long and why, which is the trip this row exists to save.
     parts.push(
       `${stalled.length} sweep${stalled.length === 1 ? "" : "s"} paused without working: ${stalled
         .map((sweep) => `${bare(sweep.service)} (${sweep.reason} ×${sweep.ticks})`)
@@ -1776,15 +1206,6 @@ export function sweepStrainCheck(
   return { latencyMs: null, message: msg(parts.join("; ")), service, status: "degraded" };
 }
 
-/**
- * The strain markers a cron has written since the prober last looked, each scored. Newly-seen
- * only — the watermark is what keeps a marker from being counted on every tick for as long as
- * it survives the pruner.
- *
- * The comparison is strictly `>`, so the one thing it can lose is a marker written in the SAME
- * MILLISECOND as the newest one the prober already folded in. That costs a few points out of a
- * six-hour window and can never invent strain, which is the direction that matters.
- */
 function readStrainSamples(
   dir: string | undefined,
   watermarkMs: number,
@@ -1810,15 +1231,10 @@ function readStrainSamples(
         };
       });
   } catch {
-    return []; // An unreadable dir is judgeCron's problem to report, never a strain alarm.
+    return [];
   }
 }
 
-/**
- * Score every cron's new markers, roll the window forward, and report which sweeps are now in
- * a standing error condition — plus which just entered or left it, so the Discord line can be
- * edge-triggered exactly like the service transitions are.
- */
 export function probeSweepStrain(
   claimed: Map<string, string>,
   prev: StrainMap,
@@ -1885,8 +1301,6 @@ export function probeSweepStrain(
       cleared.push(cron.service);
     }
 
-    // `stalled` is recorded only while true, so a state file that has never stalled keeps the
-    // exact shape it had before this flag existed.
     const { stalled: _wasStalled, ...carried } = state;
 
     next[cron.service] = {
@@ -1909,14 +1323,6 @@ export function probeSweepStrain(
   };
 }
 
-// ---------------------------------------------------------------------------
-// PROBE: render-box — read the render conductor's state file (idle | rendering,
-// both ok). A missing file = "not yet provisioned" (ok — the conductor simply
-// hasn't run). We NEVER wake/ssh the box (it's scale-to-zero). Optionally append
-// boat.dev plan usage if `boat limits --json` returns it (best-effort; `boat status`
-// exits 0 even unauthed, so we don't trust an exit code — only parse JSON usage).
-// ---------------------------------------------------------------------------
-
 function probeRenderBox(): Check {
   const service = "render-box";
 
@@ -1937,11 +1343,6 @@ function probeRenderBox(): Check {
         ? "unknown state"
         : "not yet provisioned";
 
-  // Best-effort plan usage. `boat limits --json` is the documented command. We DON'T gate
-  // on `boat status` (it exits 0 even unauthed); we only enrich the message if limits
-  // returns parseable usage. A missing CLI / non-JSON output is silently skipped.
-  // `--no-update` because the binary is a checksum-pinned release: a health probe must
-  // never be the thing that swaps the render conductor's transport out from under it.
   let usageSuffix = "";
 
   const limits = runQuiet(BOAT_BIN, ["--no-update", "limits", "--json"], PROBE_TIMEOUT_MS);
@@ -1952,18 +1353,13 @@ function probeRenderBox(): Check {
       const used = parsed.used ?? parsed.hoursUsed ?? parsed.usage;
       const cap = parsed.limit ?? parsed.hours ?? parsed.cap;
 
-      // Only format genuine primitive usage values — narrowing to number|string
-      // both satisfies no-base-to-string and skips any object/array shape that
-      // would otherwise stringify to "[object Object]".
       const isPrimitive = (value: unknown): value is number | string =>
         typeof value === "number" || typeof value === "string";
 
       if (isPrimitive(used) && isPrimitive(cap)) {
         usageSuffix = `, plan ${used}/${cap}`;
       }
-    } catch {
-      // Not parseable usage — skip; the state alone is the health signal.
-    }
+    } catch {}
   }
 
   return {
@@ -1974,11 +1370,6 @@ function probeRenderBox(): Check {
   };
 }
 
-// ---------------------------------------------------------------------------
-// PROBE: hermes — this cron runs ON the Hermes box, so reaching this line is
-// self-evident liveness. Always ok.
-// ---------------------------------------------------------------------------
-
 function probeHermes(): Check {
   return {
     latencyMs: null,
@@ -1987,15 +1378,6 @@ function probeHermes(): Check {
     status: "ok",
   };
 }
-
-// ---------------------------------------------------------------------------
-// PROBE: cron.healthcheck — this prober IS the healthcheck cron, run by its own
-// rave-02 host systemd timer (../healthcheck-timer/). Reaching this line means the
-// timer fired and the tick is executing, so its liveness is self-evident → ok. It is
-// deliberately NOT in AUTOMATION_CRONS: the prober writes no cron output dir of its
-// own, and reading its own would be circular. Emitting the row here keeps the
-// `cron.healthcheck` line populated on /status without a cron-dir read.
-// ---------------------------------------------------------------------------
 
 function probeHealthcheck(): Check {
   return {
@@ -2006,42 +1388,16 @@ function probeHealthcheck(): Check {
   };
 }
 
-// ---------------------------------------------------------------------------
-// State: the transition + streak memory. Load the prior map, compute `transitioned`
-// and the consecutive-down streak per check, write the new map back. A read/parse
-// failure starts from an empty map (so the FIRST tick after a state loss reports every
-// service as a fresh transition — acceptable, it just re-baselines).
-//
-// TWO SHAPES ON DISK. v1 was a flat `service → status` map; v2 wraps richer per-service
-// entries under `services`. `normalizeState` reads BOTH, because the box is running a
-// v1 file right now and a prober that throws on it would take the dead-man's beacon down
-// with it. Anything unreadable — a v1 status string, a truncated write, a stray key —
-// degrades to a fresh entry, never an exception.
-// ---------------------------------------------------------------------------
-
-// v3 added the `strain` section (the per-cron rolling error window). v4 reset v3's buckets when
-// structured item counters moved to a rate; v5 resets v4 because item-level prose now uses that
-// same rate instead of direct occurrence points. `services` remains untouched. Older files still
-// load defensively and simply start their strain windows empty.
 const STATE_VERSION = 5;
 
 function isStatus(value: unknown): value is Status {
   return value === "ok" || value === "degraded" || value === "down";
 }
 
-/** A non-negative integer count from anything; junk (or a negative) reads as 0. */
 function asCount(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
 }
 
-/**
- * Read whatever is in the state file into the current shape.
- *
- * Accepts the v2 `{ version, services: { <id>: { status, downStreak, escalatedStreak } } }`
- * and the legacy v1 flat `{ <id>: "ok" }` alike — a v1 entry simply arrives with its
- * counters at zero, i.e. its ladder restarts from this tick. Entries whose status can't be
- * resolved (including v2's own `version` scalar when the file is read flat) are dropped.
- */
 export function normalizeState(parsed: unknown): StateMap {
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     return {};
@@ -2058,7 +1414,6 @@ export function normalizeState(parsed: unknown): StateMap {
 
   for (const [service, value] of Object.entries(entries)) {
     if (isStatus(value)) {
-      // v1: the value IS the status. Counters start fresh.
       state[service] = { downStreak: 0, escalatedStreak: 0, status: value };
 
       continue;
@@ -2084,14 +1439,6 @@ export function normalizeState(parsed: unknown): StateMap {
   return state;
 }
 
-/**
- * Read the v5 `strain` section: per-cron hourly buckets + watermark + the reported flag.
- * A v3/v4 section carries points scored under an older item-count rule, so its buckets and
- * watermarks are deliberately reset while its `strained` flags survive long enough to emit the
- * edge-triggered recovery alert. Retained markers are then re-read under v5. A v1/v2 file (no
- * section), a truncated write, or junk yields an empty map. It must never throw: this is the same
- * read that carries the transition baseline.
- */
 export function normalizeStrain(parsed: unknown): StrainMap {
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     return {};
@@ -2183,14 +1530,12 @@ function loadState(): { services: StateMap; strain: StrainMap } {
   return { services: {}, strain: {} };
 }
 
-/** Exactly what goes on disk — exported so the round-trip is tested through the real shape. */
 export function serializeState(next: StateMap, strain: StrainMap = {}): string {
   return `${JSON.stringify({ services: next, strain, version: STATE_VERSION }, null, 2)}\n`;
 }
 
 function writeState(next: StateMap, strain: StrainMap): void {
   try {
-    // mkdir -p the state dir (recursive is a no-op when it already exists).
     mkdirSync(STATE_DIR, { recursive: true });
     writeFileSync(STATE_FILE, serializeState(next, strain), "utf8");
   } catch (error) {
@@ -2198,18 +1543,11 @@ function writeState(next: StateMap, strain: StrainMap): void {
   }
 }
 
-/**
- * This tick's memory for one service: carry the consecutive-down streak forward, or reset
- * it (and the escalation ladder) the moment the service reads anything other than `down`.
- * A recovery therefore re-arms escalation from scratch — a service that flaps down/up/down
- * never accumulates its way to an escalation.
- */
 export function nextServiceState(prev: ServiceState | undefined, status: Status): ServiceState {
   if (status !== "down") {
     return { downStreak: 0, escalatedStreak: 0, status };
   }
 
-  // Only a run of `down` carries forward; anything else is a fresh streak of one.
   const running = prev?.status === "down" ? prev : undefined;
 
   return {
@@ -2219,14 +1557,6 @@ export function nextServiceState(prev: ServiceState | undefined, status: Status)
   };
 }
 
-/**
- * Is this service due an escalation on this tick?
- *
- * The first one fires at `threshold` consecutive down ticks; each one after that waits for
- * the streak to DOUBLE (6, 12, 24, 48 …). That keeps a sustained outage visible for as long
- * as it lasts while the alerts themselves thin out — an escalation that repeated every tick
- * would just become the noise the transition-only rule was protecting against.
- */
 export function escalationDue(state: ServiceState, threshold = ESCALATE_AFTER_TICKS): boolean {
   if (state.status !== "down") {
     return false;
@@ -2236,15 +1566,6 @@ export function escalationDue(state: ServiceState, threshold = ESCALATE_AFTER_TI
 
   return state.downStreak >= due;
 }
-
-// ---------------------------------------------------------------------------
-// ALERT: Discord-ping on a transition — a service going down, or recovering (down →
-// ok/degraded) — and on PERSISTENCE, once a down service has held the state for
-// ESCALATE_AFTER_TICKS consecutive checks and then on a doubling ladder. A steady OK
-// pings nothing, and a steady DOWN pings on the ladder rather than every tick (no spam,
-// but never silence either). Best-effort; never throws. Reuses observe-sweep's
-// curl-webhook shape.
-// ---------------------------------------------------------------------------
 
 function pingDiscord(content: string): void {
   if (!DISCORD_ALERT_WEBHOOK) {
@@ -2282,20 +1603,9 @@ function pingDiscord(content: string): void {
   }
 }
 
-// ---------------------------------------------------------------------------
-// BEACON: the external dead-man's-switch ping. A completed tick = "the prober
-// ran", so we curl the operator-set ${BEACON_URL} at the end of every tick. The
-// external service (healthchecks.io / BetterUptime / self-hosted) flips when the
-// pings STOP — the only signal that catches THIS box (the prober) going dark,
-// since a dead prober can't alert about itself. Provider-agnostic (just a URL),
-// OPTIONAL (unset ⇒ skipped), and strictly best-effort: a short --max-time curl
-// that never throws and only logs to stderr on failure. A failed beacon must never
-// affect the tick's exit status. The snapshot write deliberately follows this ping.
-// ---------------------------------------------------------------------------
-
 function pingBeacon(): void {
   if (!BEACON_URL) {
-    return; // No beacon configured — skip silently (it's optional).
+    return;
   }
 
   try {
@@ -2315,7 +1625,6 @@ function pingBeacon(): void {
   }
 }
 
-/** Build the alert text from the transitions; returns null when nothing alert-worthy. */
 function buildAlert(checks: CheckWithTransition[], prev: StateMap): string | null {
   const nowDown: string[] = [];
   const recovered: string[] = [];
@@ -2328,7 +1637,6 @@ function buildAlert(checks: CheckWithTransition[], prev: StateMap): string | nul
     if (check.status === "down") {
       nowDown.push(check.service);
     } else if (prev[check.service]?.status === "down") {
-      // A flip OUT of `down` (→ ok or degraded) is a recovery worth announcing.
       recovered.push(check.service);
     }
   }
@@ -2350,10 +1658,6 @@ function buildAlert(checks: CheckWithTransition[], prev: StateMap): string | nul
   return `Fluncle status: ${parts.join(" — ")}`;
 }
 
-/**
- * A streak rendered as the rough wall-clock time it represents. Approximate on purpose —
- * the operator needs "an hour" vs "most of a day", not a stopwatch.
- */
 export function formatStreakDuration(streak: number, tickMs = TICK_INTERVAL_MS): string {
   const minutes = Math.round((streak * tickMs) / 60_000);
 
@@ -2370,18 +1674,8 @@ export function formatStreakDuration(streak: number, tickMs = TICK_INTERVAL_MS):
   return `~${Math.round((hours / 24) * 10) / 10}d`;
 }
 
-// Past this many services escalating on the SAME tick, the alert collapses to one summary
-// line. That case is a box-wide outage (every cron row escalating together), where ~45
-// per-service lines would blow Discord's 2,000-character message cap and get the whole post
-// rejected — the one failure mode that would turn the loudest alert into silence.
 const ESCALATION_LINE_LIMIT = 8;
 
-/**
- * The escalation text: one line per service that has now been down long enough to stop
- * being plausibly transient. Deliberately louder than the transition line (🚨 vs 🔴) and
- * deliberately carrying the two facts the transition line can't — how many checks, and how
- * long. Plain operator voice; an ops alert is not a place for the Fluncle register.
- */
 export function buildEscalationAlert(
   escalations: Escalation[],
   tickMs = TICK_INTERVAL_MS,
@@ -2397,7 +1691,6 @@ export function buildEscalationAlert(
     return escalations.map(line).join("\n");
   }
 
-  // Non-empty by the guard above, so the bare reduce is safe.
   const longest = escalations.reduce((worst, next) => (next.streak > worst.streak ? next : worst));
   const named = escalations
     .slice(0, ESCALATION_LINE_LIMIT)
@@ -2407,17 +1700,6 @@ export function buildEscalationAlert(
   return `🚨 ${escalations.length} services STILL DOWN — longest ${longest.streak} consecutive checks (${formatStreakDuration(longest.streak, tickMs)}): ${named}, +${escalations.length - ESCALATION_LINE_LIMIT} more. This is not a transient.`;
 }
 
-/**
- * The strain line — the one that actually NAMES the sweeps, which the aggregate `sweep-errors`
- * row cannot.
- *
- * EDGE-TRIGGERED, exactly like `buildAlert`: it speaks when a sweep ENTERS the condition and
- * when it LEAVES, never on the ticks in between. There is no escalation ladder here on
- * purpose — each window spans at least three of that cron's own cadences, so "still strained"
- * is the default state of a real condition and a per-tick reminder would be the noise this
- * detector exists to avoid. The standing visibility is the /status row, which stays degraded
- * for as long as it is true.
- */
 export function buildStrainAlert(
   newly: string[],
   cleared: string[],
@@ -2442,7 +1724,6 @@ export function buildStrainAlert(
   }
 
   if (newlyStalled.length > 0) {
-    // The other half of the same claim: nothing failed, and nothing is getting done either.
     parts.push(
       `⏸️ paused long enough to stop counting as backpressure: ${newlyStalled
         .map((sweep) => `${sweep.service} (${sweep.reason} ×${sweep.ticks})`)
@@ -2460,12 +1741,6 @@ export function buildStrainAlert(
 
   return parts.join("\n");
 }
-
-// ---------------------------------------------------------------------------
-// POST: send the snapshot to the agent-tier record_health endpoint. Best-effort —
-// the alert already fired, so a failed POST is logged, never thrown. Returns true
-// on a 2xx ack.
-// ---------------------------------------------------------------------------
 
 const HEALTH_SNAPSHOT_PRODUCER = "hermes-healthcheck";
 
@@ -2573,9 +1848,6 @@ export async function postSnapshot(
         return true;
       }
 
-      // A client rejection is definitive. A gateway/server failure (including Cloudflare's
-      // 524) is ambiguous: the Worker may have committed before the response was lost, so it
-      // must take the same digest-bound reconciliation path as a thrown transport timeout.
       if (response.status < 500) {
         log(`record_health POST returned HTTP ${response.status} (best-effort, ignored)`);
         return false;
@@ -2633,16 +1905,9 @@ export async function postSnapshot(
   return false;
 }
 
-// ---------------------------------------------------------------------------
-// Main — probe everything (parallel), compute transitions, alert + POST.
-// ---------------------------------------------------------------------------
-
 async function main(): Promise<void> {
   const at = new Date().toISOString();
 
-  // Network probes run concurrently; the file/state probes are synchronous and
-  // cheap. All probes are individually timeout-bounded, so the whole tick stays
-  // well under the unit's TimeoutStartSec.
   const [web, db, r2, sonar, ssh] = await Promise.all([
     probeWeb(),
     probeDb(),
@@ -2652,26 +1917,16 @@ async function main(): Promise<void> {
   ]);
   const dns = probeDns();
   const disk = probeDisk();
-  // The cron output dirs are claimed ONCE and read by both consumers: judgeCron for each
-  // sweep's own `{ ok }` verdict, and the strain detector for what the marker bodies say.
+
   const claimed = claimCronDirs(AUTOMATION_CRONS);
   const crons = probeCrons(claimed);
   const renderBox = probeRenderBox();
   const hermes = probeHermes();
-  // The prober's own row — self-evident (it's run by its own host timer and writes
-  // no cron output dir for probeCrons() to read).
+
   const healthcheck = probeHealthcheck();
 
-  // One row per cron (cron.*) instead of a single `automation` aggregate, so /status
-  // shows every humming system on its own line. Transitions still fire per-service
-  // (the state map is keyed by service id), so a single cron going down/recovering
-  // pings on its own. cron.healthcheck rides alongside the sweep crons even though
-  // it's emitted self-evidently.
-  // Transitions + strain both read the same state file.
   const { services: prev, strain: prevStrain } = loadState();
 
-  // The second read of the same markers: what the sweeps LOGGED, as opposed to what they
-  // reported about themselves. One aggregate row; the sweeps are named in the Discord line.
   const sweepStrain = probeSweepStrain(claimed, prevStrain);
 
   const checks: Check[] = [
@@ -2694,9 +1949,6 @@ async function main(): Promise<void> {
     transitioned: prev[check.service] !== undefined && prev[check.service]?.status !== check.status,
   }));
 
-  // Carry each service's consecutive-down streak forward and collect whoever crossed an
-  // escalation rung this tick (stamping the streak we escalated at, so the next rung is a
-  // doubling away rather than the very next tick).
   const next: StateMap = {};
   const escalations: Escalation[] = [];
 
@@ -2711,29 +1963,20 @@ async function main(): Promise<void> {
     next[check.service] = escalate ? { ...state, escalatedStreak: state.downStreak } : state;
   }
 
-  // Persist the new map for the next tick BEFORE the network POST (so a POST failure
-  // never loses the transition baseline, the streaks, or the strain windows).
   writeState(next, sweepStrain.next);
 
-  // Alert on a transition to down or a recovery from down …
   const alert = buildAlert(withTransition, prev);
 
   if (alert) {
     pingDiscord(alert);
   }
 
-  // … and, separately, on persistence: a service still down after ESCALATE_AFTER_TICKS
-  // consecutive checks, then again on the doubling ladder. Its own post so it reads as the
-  // different, louder thing it is rather than blending into the transition line.
   const escalationAlert = buildEscalationAlert(escalations);
 
   if (escalationAlert) {
     pingDiscord(escalationAlert);
   }
 
-  // … and, separately again, on STRAIN: a sweep whose own summary still says ok but whose
-  // marker body has been carrying errors for hours. Its own post because it is a different
-  // claim — nothing is down, something is not getting done.
   const strainAlert = buildStrainAlert(
     sweepStrain.newly,
     sweepStrain.cleared,
@@ -2745,27 +1988,17 @@ async function main(): Promise<void> {
     pingDiscord(strainAlert);
   }
 
-  // The essential probe/transition/alert payload completed — ping the external dead-man's-switch
-  // beacon so an outside service can alert if THIS box (the prober) ever stops
-  // ticking. This deliberately precedes the optional primary-database write so an admission or
-  // database outage cannot suppress liveness. Best-effort + optional; never affects exit status.
   pingBeacon();
 
-  // Persist the snapshot to the page (best-effort). This is receipt-backed control-plane
-  // telemetry, not a prerequisite for the probes, alerts, or dead-man's-switch signal above.
   const posted = await postSnapshot(at, withTransition);
 
-  // One JSON summary line — the cron run output. `ok` reflects the PROBE run, not the
-  // services' health (the snapshot carries that); a down service is a normal,
-  // successful tick. `ok:false` would only mean the prober itself couldn't run.
   const summary = {
     alerted: alert !== null || escalationAlert !== null || strainAlert !== null,
     at,
-    // Designed backpressure stays visible without joining `strained` or changing any status.
+
     backpressured: sweepStrain.backpressured,
     down: withTransition.filter((c) => c.status === "down").map((c) => c.service),
-    // The services that crossed an escalation rung this tick, with the streak that did it —
-    // so a forensic read of the markers can see WHEN a sustained outage was escalated.
+
     escalated: escalations,
     ok: true as const,
     posted,
@@ -2774,11 +2007,9 @@ async function main(): Promise<void> {
       status: c.status,
       transitioned: c.transitioned,
     })),
-    // The sweeps whose clean yields have become a standing stall, each with the reason it named
-    // and how many ticks it has now spent paused.
+
     stalled: sweepStrain.stalled,
-    // The sweeps whose marker bodies are carrying repeat errors — separate from `down` by
-    // construction, since every one of them is reporting itself healthy.
+
     strained: sweepStrain.strained,
     transitions: withTransition.filter((c) => c.transitioned).map((c) => c.service),
   };
@@ -2786,10 +2017,8 @@ async function main(): Promise<void> {
   console.log(JSON.stringify(summary));
 }
 
-// Guarded so the unit tests can import `judgeCron` / `findJsonSummary` without firing a tick.
 if (import.meta.main) {
   main().catch((error) => {
-    // A truly unexpected failure (not a probe failure — those are caught per-probe).
     log(`fatal: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`);
     console.log(JSON.stringify({ ok: false, reason: "prober_error" }));
     process.exit(1);

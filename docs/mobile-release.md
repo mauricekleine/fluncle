@@ -93,9 +93,19 @@ The App Store Connect listing values, ratified by the operator — paste these w
 
 Feed videos are muted first-party visuals. Audible music comes only from official platform preview clips; full playback opens Spotify or Apple Music externally. `CardMedia.hasAudio` must remain `false`, and `media.test.ts` enforces the invariant.
 
+The native feed plays the raw square master because iOS AVPlayer needs HTTP Range support that Media Transformations crops do not provide; its poster may use a transformed first frame. Radio plays only Fluncle's spoken observation, resyncs to the shared server clock after foregrounding because iOS throttles background JavaScript timers, and stops audio on tab blur. Background audio entitlements from the Expo audio plugin require a native rebuild.
+
+React Native's URL implementation differs from WHATWG parsing. The outbound-link resolver accepts only Fluncle's apex or www Spotify hop paths, follows the hop with GET, and opens the final HTTPS destination so iOS can hand it to the Spotify app. It treats other URLs as passthrough and falls back to the original hop if native fetch cannot report the final URL; the device check below verifies that behavior.
+
+The optional local catalogue replica is keyed to its remote database and checked against the cut's identity stamp before display. It serves only previously downloaded findings when the API feed is empty and the device is offline. Bootstrap waits until first interaction settles, and pulls are single-flight; a missing libSQL build stays quiet for the launch, while an unavailable token endpoint is retried on the next foreground transition. Keep an expired cached credential for opening an existing offline file: only sync validates it. A credential-shaped sync failure permits one fresh token and a reopened handle, while a stale file with a mismatched stamp is discarded without a retry loop. In libSQL mode, bind query parameters positionally.
+
 ## Account submission requirements
 
 Declare Email Address, User Content, and Identifiers as linked for signed-in users. Use each only for app functionality and never for tracking; everything else remains Data Not Collected.
+
+Account access remains optional. Native `/me` writes carry the session cookie, Origin, and a freshly fetched CSRF token; a missing token is left for the server to reject. Password-reset requests return the same confirmation whether the address exists or the send fails, so the screen does not enumerate accounts.
+
+The app wires TanStack Query's online and focus managers to native network and AppState signals. Unknown reachability stays online until the device reports an actual disconnection; a failed request alone is not proof of being offline. Persisted mutation functions are registered before cache restoration, and replay starts only after restoration has finished so queued submissions cannot be lost.
 
 Append these account notes to the existing review-notes block:
 

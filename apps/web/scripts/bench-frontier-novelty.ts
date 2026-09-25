@@ -1,60 +1,5 @@
 #!/usr/bin/env bun
-/**
- * THROWAWAY HOSTED-SCALE BENCH — the ship gate for Frontier novelty (the frontier-editions
- * RFC is pruned; see git history. The shipped novelty path is `FRONTIER_NOVELTY_WINDOW` +
- * `excludeRecent` in src/lib/server/recommendations.ts). NOT a test, NOT wired into CI.
- *
- * ── WHO RUNS THIS, AND WHEN ───────────────────────────────────────────────────
- * THE OPERATOR runs it ONCE, by hand, against a SCRATCH hosted Turso Cloud DB, as the
- * PRE-ACTIVATION GATE before novelty is turned on (before A2's refresh path passes
- * `excludeRecent: true` for real). It CANNOT run in this repo's CI or an agent's Bash
- * session: it needs Turso Cloud credentials for a throwaway database, which are
- * operator-only. `turso dev` is NOT evidence here — docs/local-database.md "Local is not
- * production": the exact behaviours that decide whether a growing-table scan survives
- * (the blob-vs-text probe cliff, the index-vs-scan plan, a correlated re-scan) diverge
- * between sqld and hosted, and the local one is misleading in the DANGEROUS direction.
- * An agent may (and this build did) self-check the SQL shapes against local `turso dev`
- * for CORRECTNESS only — never for a performance number.
- *
- * ── WHAT IT MEASURES (the RFC's ship gate) ────────────────────────────────────
- *   1. A CANDIDATE-count sweep — 5k / 10k / 25k EMBEDDED, Spotify-anchored catalogue
- *      candidates (the WHERE decides candidates, NOT the raw `tracks` count), the
- *      big-catalogue regime A1 designs for.
- *   2. An ABSOLUTE p50 budget: the full refresh (derive + catalogue-scan-with-exclusion
- *      + findings-scan-with-exclusion) must come in UNDER 800 ms hosted. A ratio is
- *      worthless if the baseline is already over budget past the ~5–10k tripwire.
- *   3. A MULTI-USER seed (default 10k users × 8 editions) so `EXPLAIN QUERY PLAN` on the
- *      recent-set derive shows a `user_id`-INDEX path, never `SCAN frontier_editions` —
- *      a one-user seed would hide a cross-user scan.
- *   4. The 264-id `NOT IN` did NOT become a correlated re-scan: `EXPLAIN` still shows one
- *      pass over `tracks`.
- *
- * ── THE PROBE-BINDING DISCIPLINE (do not "fix" this) ──────────────────────────
- * Every query vector is bound as a raw float32 BLOB (`toVectorProbe`), never text — the
- * 14× hosted cliff (docs/local-database.md trap #1). The scan is the ratified one-pass
- * folded-`min` shape from recommendations.ts, verbatim, with the novelty `NOT IN` added.
- *
- * ── FOLLOW-ON THE CACHE WORK MUST HONOR (recorded here per RFC §A1.3) ──────────
- * The engine's planned per-user cache is keyed by (seed set, corpus fingerprint). The
- * novelty set rotates per-refresh and is per-user — NOT in that key. The refresh path's
- * cache key MUST fold in the edition-window hash, or novelty serves stale results / busts
- * the cache every refresh. A1 is scoped to the PRE-cache regime; this is the named
- * follow-on, not something this bench fixes.
- *
- * ── USAGE ─────────────────────────────────────────────────────────────────────
- *   SCRATCH_TURSO_DATABASE_URL=libsql://<scratch>.turso.io \
- *   SCRATCH_TURSO_AUTH_TOKEN=<token> \
- *   bun run apps/web/scripts/bench-frontier-novelty.ts
- *
- * Optional env (seed volumes — dial down for a faster smoke, up for the real gate):
- *   BENCH_CANDIDATE_COUNTS=5000,10000,25000   BENCH_FINDINGS=5000
- *   BENCH_USERS=10000   BENCH_EDITIONS_PER_USER=8   BENCH_TRACKS_PER_EDITION=33
- *   BENCH_ITERATIONS=10
- *
- * The operator CREATES the scratch DB before, and DESTROYS it after — this script only
- * measures. It NEVER points at `fluncle` or `fluncle-dev` (it refuses a URL containing
- * either name as a guard).
- */
+
 import { createClient } from "@libsql/client/web";
 import { REMOTE_DB_CONCURRENCY } from "../src/lib/database-concurrency";
 import { drizzle } from "drizzle-orm/libsql";
@@ -72,7 +17,7 @@ import {
 } from "../src/lib/server/recommendations";
 
 const DIMS = 1024;
-/** The absolute ship-gate budget — the full refresh's p50 must be under this, hosted. */
+
 const BUDGET_MS = 800;
 
 function fail(message: string): never {
@@ -109,7 +54,6 @@ const iterations = envInt("BENCH_ITERATIONS", 10);
 const client = createClient({ authToken, concurrency: REMOTE_DB_CONCURRENCY, url });
 const migrationsFolder = fileURLToPath(new URL("../drizzle", import.meta.url));
 
-/** A random unit vector — a synthetic embedding (values, not realism, are what a scan costs). */
 function randomUnitVector(): number[] {
   const vector = Array.from({ length: DIMS }, () => Math.random() - 0.5);
   const norm = Math.sqrt(vector.reduce((sum, value) => sum + value * value, 0)) || 1;
@@ -117,7 +61,6 @@ function randomUnitVector(): number[] {
   return vector.map((value) => value / norm);
 }
 
-/** The raw-BLOB embedding write (NOT `vector32(text)`) — the fast, hosted-honest form. */
 function blobArg(vector: number[]): Uint8Array {
   return toVectorProbe(vector);
 }
@@ -137,7 +80,6 @@ async function timeIt(run: () => Promise<unknown>): Promise<number> {
   return performance.now() - start;
 }
 
-/** Insert `count` embedded catalogue candidates (a `tracks` row, no `findings` row). */
 async function seedCandidates(from: number, count: number): Promise<void> {
   const chunk = 400;
 
@@ -176,7 +118,6 @@ async function seedCandidates(from: number, count: number): Promise<void> {
   process.stdout.write("\n");
 }
 
-/** Insert `count` embedded certified findings (a `tracks` row + its `findings` row). */
 async function seedFindings(count: number): Promise<void> {
   const chunk = 400;
 
@@ -219,12 +160,6 @@ async function seedFindings(count: number): Promise<void> {
   process.stdout.write("\n");
 }
 
-/**
- * Seed `userCount` users' editions (each with `editionsPerUser` × `tracksPerEdition`
- * frozen rows) so `frontier_editions` is BIG — the only way the derive's `EXPLAIN` can
- * prove a `user_id`-index path rather than a cross-user table scan. Returns the id of the
- * user whose window we measure (a full `editionsPerUser`-deep window).
- */
 async function seedEditions(): Promise<string> {
   let targetUserId = "";
 
@@ -246,8 +181,6 @@ async function seedEditions(): Promise<string> {
       });
 
       for (let position = 1; position <= tracksPerEdition; position += 1) {
-        // The TARGET user's frozen rows point at REAL candidate ids so the exclusion has
-        // teeth; other users' rows can be arbitrary (they never enter the measured scan).
         const trackId =
           user === 0
             ? `cand-${(edition - 1) * tracksPerEdition + position}`
@@ -274,7 +207,6 @@ async function seedEditions(): Promise<string> {
   return targetUserId;
 }
 
-/** The exact recent-set derive from recommendations.ts (the outer user_id predicate is load-bearing). */
 const DERIVE_SQL = `select fet.track_id
   from frontier_editions fe
   join frontier_edition_tracks fet on fet.edition_id = fe.id
@@ -282,7 +214,6 @@ const DERIVE_SQL = `select fet.track_id
     and fe.id in (select id from frontier_editions where user_id = ? order by number desc limit ?)
   group by fet.track_id`;
 
-/** Build the catalogue scan-with-exclusion, mirroring recommendations.ts verbatim. */
 function catalogueScan(probes: Uint8Array[], excludedIds: string[]) {
   const distanceTerms = probes.map(() => "vector_distance_cos(emb.embedding_blob, ?)");
   const bestDistance =
@@ -314,7 +245,6 @@ function catalogueScan(probes: Uint8Array[], excludedIds: string[]) {
   };
 }
 
-/** Build the findings scan-with-exclusion, mirroring recommendations.ts verbatim. */
 function findingsScan(probes: Uint8Array[], excludedIds: string[]) {
   const distanceTerms = probes.map(() => "vector_distance_cos(emb.embedding_blob, ?)");
   const bestDistance =
@@ -340,7 +270,6 @@ function findingsScan(probes: Uint8Array[], excludedIds: string[]) {
   };
 }
 
-/** A libSQL cell → string, without tripping no-base-to-string (a raw `Value` may be an object). */
 function cell(value: unknown): string {
   return typeof value === "string" ? value : value == null ? "" : JSON.stringify(value);
 }
@@ -363,10 +292,8 @@ async function main(): Promise<void> {
   );
   const targetUserId = await seedEditions();
 
-  // The 12-probe worst case (MAX_REC_SEEDS), each bound as a raw BLOB.
   const probes = Array.from({ length: MAX_REC_SEEDS }, () => toVectorProbe(randomUnitVector()));
 
-  // The recent set the engine would derive for the target user — the real exclusion input.
   const derived = await client.execute({
     args: [targetUserId, targetUserId, FRONTIER_NOVELTY_WINDOW],
     sql: DERIVE_SQL,
@@ -377,7 +304,6 @@ async function main(): Promise<void> {
   let allWithinBudget = true;
 
   for (const count of candidateCounts) {
-    // Grow the candidate pool up to `count` (idempotent across the ascending sweep).
     const existing = Number(
       (
         await client.execute(`select count(*) as n from tracks t
@@ -393,8 +319,7 @@ async function main(): Promise<void> {
     const catalogueSamples: number[] = [];
     const findingsSamples: number[] = [];
     const refreshSamples: number[] = [];
-    // BASELINE — the SAME scans with NO recent-set exclusion, so the added cost of novelty
-    // (the `not in (…264 ids)`) is isolable from the base vector scan's own cost.
+
     const baseCatalogueSamples: number[] = [];
     const baseFindingsSamples: number[] = [];
 
@@ -461,7 +386,7 @@ async function main(): Promise<void> {
   const catalogueStatement = catalogueScan(probes, excludedIds);
   const cataloguePlan = await explain(catalogueStatement.sql, catalogueStatement.args);
   console.log(`  catalogue scan:\n      ${cataloguePlan}`);
-  // One pass over `tracks`: the plan must not show the scan more than once (a correlated re-scan).
+
   const trackScans = (cataloguePlan.match(/\btracks\b/g) ?? []).length;
   console.log(
     `  → tracks referenced ${trackScans}× in the plan (expect 1 — a single pass, no correlated re-scan)\n`,

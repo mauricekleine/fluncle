@@ -1,13 +1,3 @@
-// Unit tests for the pure CAPTURE-VERIFICATION matcher (fingerprint-match.ts). The box script
-// is self-contained (it can't import the workspace) and lives outside any package's runner, so
-// this uses `bun:test` and is run directly:
-//
-//   bun test docs/agents/hermes/scripts/fingerprint-match.test.ts
-//
-// CI has NO fpcalc binary, so the pure matcher takes fingerprint ARRAYS (never a path) and the
-// subprocess/fetch helpers are exercised only through their PARSE seams (`parseFpcalcJson`,
-// `parseRejectedSources`). Keep this green when touching the sliding-window match, the threshold,
-// or the rejection-memory helpers.
 import { describe, expect, test } from "bun:test";
 import {
   appendRejectedSource,
@@ -38,13 +28,11 @@ describe("popcount32", () => {
   });
 });
 
-// A deterministic pseudo-random uint32 stream — a stand-in for a real fpcalc fingerprint.
 function randomFingerprint(length: number, seed: number): number[] {
   const out: number[] = [];
   let state = seed >>> 0;
 
   for (let i = 0; i < length; i += 1) {
-    // xorshift32
     state ^= state << 13;
     state ^= state >>> 17;
     state ^= state << 5;
@@ -54,8 +42,6 @@ function randomFingerprint(length: number, seed: number): number[] {
   return out;
 }
 
-// Flip `bitsPerFrame` random bits in each frame — models cross-source encoding noise on a true
-// match (BER ≈ bitsPerFrame / 32).
 function addNoise(fp: readonly number[], bitsPerFrame: number, seed: number): number[] {
   let state = seed >>> 0;
   const nextBit = (): number => {
@@ -86,7 +72,7 @@ function addNoise(fp: readonly number[], bitsPerFrame: number, seed: number): nu
 describe("slidingWindowMatch", () => {
   test("a CONTAINED match: the preview appears verbatim inside the capture → BER 0, match", () => {
     const capture = randomFingerprint(2000, 42);
-    // A 240-frame excerpt taken from the middle of the capture — a verbatim preview.
+
     const preview = capture.slice(800, 1040);
 
     const result = slidingWindowMatch(preview, capture, DEFAULT_MAX_BER);
@@ -99,7 +85,7 @@ describe("slidingWindowMatch", () => {
 
   test("an OFFSET match at a different position still finds the alignment", () => {
     const capture = randomFingerprint(2400, 7);
-    // The excerpt starts near the END — the min must scan every offset to find it.
+
     const preview = capture.slice(2100, 2340);
 
     const result = slidingWindowMatch(preview, capture, DEFAULT_MAX_BER);
@@ -115,15 +101,14 @@ describe("slidingWindowMatch", () => {
     const result = slidingWindowMatch(preview, capture, DEFAULT_MAX_BER);
 
     expect(result).not.toBeNull();
-    // Two unrelated uint32 streams XOR to ~half the bits set. Comfortably above the 0.20 line.
+
     expect(result?.ber).toBeGreaterThan(0.4);
     expect(result?.match).toBe(false);
   });
 
   test("a cross-source match with encoding noise still lands under the threshold", () => {
     const capture = randomFingerprint(2000, 314);
-    // A true excerpt, but every frame carries ~4 flipped bits (BER ≈ 4/32 = 0.125) — the
-    // different-codec case the 0.20 threshold is widened for.
+
     const preview = addNoise(capture.slice(600, 840), 4, 55);
 
     const result = slidingWindowMatch(preview, capture, DEFAULT_MAX_BER);
@@ -134,11 +119,9 @@ describe("slidingWindowMatch", () => {
   });
 
   test("THE THRESHOLD BOUNDARY: match is `ber <= threshold`, inclusive", () => {
-    // Two 40-frame fingerprints differing by EXACTLY one bit per frame → BER = 1/32 = 0.03125.
     const base = randomFingerprint(40, 3);
     const noisy = addNoise(base, 1, 9);
 
-    // A threshold set exactly at the BER matches (inclusive); a hair below does not.
     expect(slidingWindowMatch(noisy, base, 1 / 32)?.match).toBe(true);
     expect(slidingWindowMatch(noisy, base, 1 / 32 - 1e-9)?.match).toBe(false);
   });
@@ -166,8 +149,7 @@ describe("slidingWindowMatch", () => {
 describe("mutualWindowMatch (two full songs against EACH OTHER — the consensus comparison)", () => {
   test("two uploads of one recording agree at the genuine level, through a 30 s window from the middle", () => {
     const recording = randomFingerprint(2400, 21);
-    // A different-codec re-upload: one flipped bit per frame, BER ≈ 0.031 — the measured
-    // agreement between independent genuine uploads (0.02–0.04).
+
     const reupload = addNoise(recording, 1, 4);
 
     const result = mutualWindowMatch(recording, reupload, DEFAULT_MAX_BER);
@@ -180,8 +162,7 @@ describe("mutualWindowMatch (two full songs against EACH OTHER — the consensus
 
   test("a different EDIT of the same recording (a longer intro) still aligns — the window slides over the whole longer one", () => {
     const recording = randomFingerprint(2000, 22);
-    // The same song with 300 frames of extra intro on the front: the middle of the shorter one
-    // sits at a different offset inside the longer one.
+
     const extended = [...randomFingerprint(300, 23), ...recording];
 
     const result = mutualWindowMatch(recording, extended, DEFAULT_MAX_BER);
@@ -213,8 +194,6 @@ describe("mutualWindowMatch (two full songs against EACH OTHER — the consensus
   });
 
   test("the window is ~30 s of Chromaprint frames, the preview gate's own scale", () => {
-    // ~0.1238 s per frame → 240 frames ≈ 29.7 s, so a mutual BER and a preview BER read on one
-    // scale and the one `maxBer()` threshold applies to both.
     expect(CONSENSUS_WINDOW_FRAMES).toBe(240);
     expect(CONSENSUS_WINDOW_FRAMES * 0.1238).toBeGreaterThan(29);
     expect(CONSENSUS_WINDOW_FRAMES * 0.1238).toBeLessThan(31);
@@ -250,7 +229,7 @@ describe("the bad-audio memory (appendRejectedSource / parse / sets)", () => {
     }
 
     expect(memory).toHaveLength(REJECTED_MEMORY_CAP);
-    // The oldest five are gone; the newest survives.
+
     expect(memory[0]?.sha256).toBe("sha5");
     expect(memory.at(-1)?.sha256).toBe(`sha${REJECTED_MEMORY_CAP + 4}`);
   });
@@ -282,11 +261,8 @@ describe("the bad-audio memory (appendRejectedSource / parse / sets)", () => {
   });
 });
 
-// ── The second reference rung's precision guards (docs/the-ear.md § Wrong audio) ─────────────
-
 describe("durationAgrees (the replicated capture tolerance)", () => {
   test("accepts within max(3s, 3%) and rejects beyond it", () => {
-    // 200s target ⇒ allowed = max(3, 6) = 6s.
     expect(durationAgrees(201, 200_000)).toBe(true);
     expect(durationAgrees(206, 200_000)).toBe(true);
     expect(durationAgrees(207, 200_000)).toBe(false);
@@ -351,8 +327,6 @@ describe("pickSearchReference (the precision heart — resolve one confident ref
   });
 
   test("survivors that disagree on length with each other → conflict (never guess which recording)", () => {
-    // Both within 6s of the 200s target, but 10s apart from each other → two different recordings
-    // sharing the title+artist. Abstain.
     const a = hit({ durationSec: 195, previewUrl: "https://itunes/preview/a.m4a" });
     const b = hit({ durationSec: 205, previewUrl: "https://itunes/preview/b.m4a" });
 

@@ -13,13 +13,8 @@ import { type SavableFinding } from "@/lib/saved-store";
 import { useSavedFindings } from "@/lib/saved";
 import { color, font, radius } from "@/theme/tokens";
 
-// The finding screen + deep-link target (RFC Unit 3). Coordinates are uppercased
-// before resolving (the /log lookup is case-sensitive).
-// The fluncle.com home for a mixtape (it lives on the web, not in the app).
 const MIXTAPE_WEB_BASE = "https://www.fluncle.com/log";
 
-// The labelled Found date (the Found Rule, VOICE.md): the finding's log page is
-// where the Found date carries its label. Mirrors the feed card's "Found Jul 8".
 function foundLabel(iso: string): string {
   const d = new Date(iso);
   return `Found ${d.toLocaleDateString("en-US", { day: "numeric", month: "short" })}`;
@@ -31,10 +26,6 @@ export default function LogScreen() {
   const { data: resolution, isLoading } = useFinding((id ?? "").toUpperCase());
   const finding = resolution?.kind === "finding" ? resolution.finding : undefined;
 
-  // Device-local saves (the ungated variant): the bookmark stores a snapshot of the
-  // finding so the Saved view renders it even if the archive later moves. Only a
-  // finding can be saved — a mixtape lives on the web, and a dead coordinate is nothing
-  // to hold onto.
   const { isSaved, toggle } = useSavedFindings();
   const savable: SavableFinding | undefined = finding
     ? {
@@ -51,10 +42,6 @@ export default function LogScreen() {
     : undefined;
   const saved = savable ? isSaved(savable) : false;
 
-  // The archive row's meta idiom (finding-row.tsx): a quiet middot-joined line,
-  // each segment present only when the finding carries it (key can be null — then
-  // it simply says nothing). The BPM value rides font.numeric for tabular figures
-  // (the Tabular Rule), the coordinate's own numeral treatment.
   const metaParts: ReactNode[] = [];
   if (finding) {
     if (finding.bpm != null) {
@@ -76,11 +63,7 @@ export default function LogScreen() {
     <View style={{ flex: 1 }}>
       <CosmosBackdrop />
       <SafeAreaView style={{ flex: 1 }}>
-        {/* The top chrome: the save toggle on the left (only where there is a finding
-            to hold onto), the shared dismiss on the right. The X is a quiet stardust
-            X — no gold (a dismiss is not a sun); the bookmark is the one control here
-            that lights gold, when saved. Both carry their literal in an a11y label
-            (the Chrome Rule); padding + hitSlop lift each target past the 44pt floor. */}
+        {}
         <View
           style={{
             alignItems: "center",
@@ -100,8 +83,6 @@ export default function LogScreen() {
           </Pressable>
         </View>
         {finding ? (
-          // The reachable bottom owns the one action (thumb-zone); the cover stays
-          // the hero and the meta carries the middle (cover-led, One Sun).
           <View style={{ flex: 1 }}>
             <ScrollView contentContainerStyle={{ gap: 12, padding: 16 }}>
               {finding.logId ? (
@@ -137,10 +118,7 @@ export default function LogScreen() {
                 label="Listen on Spotify"
                 onPress={() => openExternalUrl(finding.spotifyUrl)}
               />
-              {/* The second listen destination, present only once the exact-ISRC resolve
-                  landed one. Outline (Spotify stays the single primary), text-only — the
-                  Apple Music brand mark waits on the parked brand-icon dependency (a text
-                  label breaks no icon idiom), so this is detail-screen-only for now. */}
+              {}
               {finding.appleMusicUrl ? (
                 <HeatButton
                   label="Listen on Apple Music"
@@ -151,8 +129,6 @@ export default function LogScreen() {
             </View>
           </View>
         ) : resolution?.kind === "mixtape" ? (
-          // A mixtape is Fluncle dreaming, a long recording that lives on the web.
-          // Point the crew there instead of a flat "not found".
           <View style={{ gap: 12, padding: 16 }}>
             {resolution.logId ? (
               <Text style={[font.numeric, { color: color.eclipseGlow }]}>{resolution.logId}</Text>

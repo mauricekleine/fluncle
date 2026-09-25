@@ -1,7 +1,3 @@
-// The toolbar popup: asks the active tab's content script what it found and lists
-// each finding with its open/copy actions. No network of its own — the content
-// script already holds the (locally detected, optionally enriched) registry.
-
 import { digCommand, safeHref, sshCommand } from "./coordinate";
 import { COPY } from "./copy";
 import { type DetectedFinding, type FindingsResponse, type GetFindingsMessage } from "./types";
@@ -14,7 +10,6 @@ optionsButton.addEventListener("click", () => {
   void chrome.runtime.openOptionsPage();
 });
 
-/** Copies `value` to the clipboard and flashes the button label. */
 function wireCopy(button: HTMLButtonElement, value: string): void {
   const label = button.textContent;
 
@@ -54,7 +49,6 @@ function linkButton(label: string, href: string): HTMLAnchorElement {
   return link;
 }
 
-/** The secondary line under a coordinate: artist — title, or the load state. */
 function metaLine(finding: DetectedFinding): string {
   if (finding.state === "loading") {
     return COPY.metaLoading;
@@ -146,7 +140,6 @@ async function load(): Promise<void> {
 
     render(response?.findings ?? []);
   } catch {
-    // No content script on this page (e.g. chrome:// or the web store) — quiet sector.
     render([]);
   }
 }

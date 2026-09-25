@@ -7,10 +7,6 @@ import {
   statusForKey,
 } from "./backfill-artist-socials-from-mb-dump";
 
-// PURE coverage for the MB-dump backfill's join/plan logic. The dump stream + prod write
-// are exercised by running the script; this pins the trust rule (which key → which status)
-// and the net-new planner (never re-inserts a platform the artist already has).
-
 describe("statusForKey — ID-exact match is public, wikidata-only is a candidate", () => {
   it("spotify and mbid matches are born auto", () => {
     expect(statusForKey("spotify")).toBe("auto");
@@ -82,6 +78,6 @@ describe("planInserts — net-new only, correct status", () => {
     const plan = planInserts(matches, new Map(), seq);
     expect(plan).toHaveLength(2);
     expect(plan.every((p) => p.status === "candidate")).toBe(true);
-    expect(new Set(plan.map((p) => p.id)).size).toBe(2); // unique ids
+    expect(new Set(plan.map((p) => p.id)).size).toBe(2);
   });
 });

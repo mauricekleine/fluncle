@@ -1,25 +1,8 @@
-// Unit tests for the /status prober (fluncle-healthcheck.ts): the layer that decides whether a
-// cron reads green, and the layer that decides whether the operator ever hears about it twice.
-//
-// The cron-verdict cases use real marker files because the marker's shape determines the verdict:
-//
-//   `cron-output.sh` WRAPS the sweep rather than exec'ing it, so a SIGKILLed run still leaves
-//   a marker whose only line is the `# Cron Job: …` header. The last non-empty line may therefore
-//   be a non-JSON header; freshness alone cannot make that marker green.
-//
-// The escalation cases guard the second half of that lesson: the prober can be RIGHT and still
-// say nothing. These tests pin the streak ladder that
-// turns duration into a signal — and, just as importantly, pin that it stays a LADDER (6, 12,
-// 24 …) rather than becoming a per-tick siren.
-//
-//   bun test docs/agents/hermes/scripts/fluncle-healthcheck.test.ts
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-// `main()` is guarded behind `import.meta.main` in the prober, so importing it here is
-// side-effect free — no probes, no Discord, no POST.
 import {
   backpressureStallTicks,
   backpressureTotal,
@@ -64,9 +47,7 @@ import {
 } from "./fluncle-healthcheck";
 
 const CRON: CronDef = { cadenceMs: 24 * 60 * 60_000, match: "backup", service: "cron.backup" };
-// Mirrors judgeCron's own budget INCLUDING the jitter allowance — these cases mean "just
-// past the budget", so a mirror that omits a term silently starts asserting "comfortably
-// inside it" instead, which is the opposite test.
+
 const STALE_BUDGET_MS = CRON.cadenceMs * 3 + MAX_TIMER_JITTER_MS;
 const temporaryDirectories: string[] = [];
 
@@ -76,7 +57,6 @@ afterEach(() => {
   }
 });
 
-/** A marker dir holding the given run bodies, newest LAST, each aged `ageMs` apart. */
 function markerDir(runs: { ageMs: number; body: string }[]): string {
   const dir = mkdtempSync(join(tmpdir(), "fluncle-cron-"));
   temporaryDirectories.push(dir);
@@ -92,16 +72,13 @@ function markerDir(runs: { ageMs: number; body: string }[]): string {
   return dir;
 }
 
-/** What `emit_cron_output` writes: the header, a blank line, then the captured stdout. */
 function marker(stdout: string): string {
   return `# Cron Job: fluncle-backup\n\n${stdout}`;
 }
 
-/** What it writes when the payload is SIGKILLed before printing anything — the incident. */
 const KILLED_MARKER = "# Cron Job: fluncle-backup\n\n";
 
 describe("probeWebWith — the latency that gates the write lane", () => {
-  /** A transport answering each call with the next status, and a clock stepping by each latency. */
   function scripted(samples: { latencyMs: number; status: number }[]) {
     let clock = 0;
     let call = 0;
@@ -114,7 +91,7 @@ describe("probeWebWith — the latency that gates the write lane", () => {
       pending.push(sample.latencyMs);
       return new Response(null, { status: sample.status });
     };
-    // `now()` is read once before and once after each call; the after-read adds that call's latency.
+
     let reads = 0;
     const now = (): number => {
       reads += 1;
@@ -158,7 +135,6 @@ describe("probeWebWith — the latency that gates the write lane", () => {
   });
 
   test("resamples at exactly the limit the admission coordinator gates on", () => {
-    // Read from source: the coordinator module pulls in the Worker's database client.
     const source = readFileSync(
       join(import.meta.dir, "../../../../apps/web/src/lib/server/database-admission.ts"),
       "utf8",
@@ -351,8 +327,7 @@ describe("judgeCron — the marker's body", () => {
     service: "cron.projection-maintenance",
   };
   const PROJECTION_BUDGET_MS = cronStaleBudgetMs(PROJECTION_CRON);
-  // The marker database-admission-runner.sh hands cron-output.sh when a firing yields before its
-  // payload: it never read projection status, so it carries no debt fields.
+
   const ADMISSION_SKIPPED_MARKER = marker(
     '{"admissionOutcome":"acquisition-unavailable","admissionWaitMs":120000,"admissionYieldReason":"coordinator-unavailable","checked":null,"errors":0,"expectedIntervalMs":null,"gateState":"admission-skipped","payloadStarted":false,"produced":null,"queueDepth":null}\n',
   );
@@ -377,7 +352,7 @@ describe("judgeCron — the marker's body", () => {
     });
     expect(projection?.judgementAgeMs).toBeGreaterThanOrEqual(59_000);
     expect(projection?.judgementAgeMs).toBeLessThan(120_000);
-    // The observed two minutes of debt have aged another minute since the marker was written.
+
     expect(cronCheck(PROJECTION_CRON, judgeCron(PROJECTION_CRON, dir), projection)).toMatchObject({
       message: "fresh; partial_progress; oldest observed debt 3m",
       status: "ok",
@@ -413,7 +388,6 @@ describe("judgeCron — the marker's body", () => {
   });
 
   test("an admission-skipped newest marker never hides earlier debt past the maintenance window", () => {
-    // Debt already past the window when observed, and debt that crosses it while firings skip.
     for (const oldestDebtAgeMs of [PROJECTION_BUDGET_MS + 1, PROJECTION_BUDGET_MS - 60_000]) {
       const dir = markerDir([
         {
@@ -488,7 +462,7 @@ describe("judgeCron — the marker's body", () => {
       { ageMs: 6 * 60_000, body: ADMISSION_SKIPPED_MARKER },
       { ageMs: 60_000, body: ADMISSION_SKIPPED_MARKER },
     ]);
-    // A judgement inside the time window but older than every marker the lookback reads.
+
     const beyondLookback = markerDir([
       {
         ageMs: 11 * 60_000,
@@ -539,14 +513,13 @@ describe("judgeCron — the marker's body", () => {
     expect(judgedCheck.status).toBe("down");
     const prior = nextServiceState(undefined, judgedCheck.status);
 
-    // The retained markers after a skip streak outlasts retention: every judging marker is gone.
     const skipStreak = (offsetMs: number) =>
       Array.from({ length: lookback }, (_, index) => ({
         ageMs: (lookback - index) * 5 * 60_000 + offsetMs,
         body: ADMISSION_SKIPPED_MARKER,
       }));
     const evicted = markerDir(skipStreak(0));
-    // The same streak whose newest firing failed its status read.
+
     const failedRead = markerDir([
       ...skipStreak(5 * 60_000).slice(1),
       {
@@ -562,7 +535,7 @@ describe("judgeCron — the marker's body", () => {
         }),
       },
     ]);
-    // The same streak after the timer stops firing altogether.
+
     const stopped = markerDir(skipStreak(PROJECTION_BUDGET_MS));
 
     for (const [dir, verdict] of [
@@ -574,7 +547,7 @@ describe("judgeCron — the marker's body", () => {
       expect(judgeCron(PROJECTION_CRON, dir)).toBe(verdict);
       const check = cronCheck(PROJECTION_CRON, verdict, readProjectionMaintenanceState(dir));
       expect(check).toMatchObject({ message: "behind schedule", status: "down" });
-      // No transition out of `down`, so no recovery alert.
+
       expect(nextServiceState(prior, check.status)).toEqual({
         downStreak: 2,
         escalatedStreak: 0,
@@ -652,8 +625,6 @@ describe("judgeCron — no runs at all", () => {
   });
 
   test("past the cron's own stale budget, a never-fired timer is lagging", () => {
-    // Once the box has been up longer than the cron's whole stale budget, it hasn't
-    // "not started yet" — it has never fired.
     expect(judgeCron(CRON, undefined, STALE_BUDGET_MS + 60_000)).toBe("lagging");
     expect(cronCheck(CRON, "lagging").status).toBe("degraded");
   });
@@ -667,19 +638,10 @@ describe("judgeCron — no runs at all", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// Escalation on persistence — the streak ladder.
-// ---------------------------------------------------------------------------
-
 type ProbeStatus = "degraded" | "down" | "ok";
 
-/** The prober's default ESCALATE_AFTER_TICKS (≈1h at the timer's ~10m cadence). */
 const THRESHOLD = 6;
 
-/**
- * Replay a run of ticks exactly as `main()` does — advance the state, escalate when due,
- * stamp the streak we escalated at — and report the streaks that fired an escalation.
- */
 function replay(statuses: readonly ProbeStatus[]): { escalatedAt: number[]; state: ServiceState } {
   let state: ServiceState | undefined;
   const escalatedAt: number[] = [];
@@ -714,7 +676,7 @@ describe("nextServiceState — the consecutive-down streak", () => {
 
     expect(state.downStreak).toBe(2);
     expect(state.escalatedStreak).toBe(0);
-    // The pre-recovery run escalated once; the new run has to earn its own.
+
     expect(escalatedAt).toEqual([THRESHOLD]);
   });
 
@@ -740,8 +702,6 @@ describe("escalationDue — the doubling ladder", () => {
   });
 
   test("re-escalates on 6/12/24, not on every tick after 6", () => {
-    // The whole point: 20 hours of hourly failure should read as a handful of louder
-    // lines, not 120 identical ones.
     expect(replay(downs(30)).escalatedAt).toEqual([6, 12, 24]);
     expect(replay(downs(100)).escalatedAt).toEqual([6, 12, 24, 48, 96]);
   });
@@ -756,8 +716,6 @@ describe("escalationDue — the doubling ladder", () => {
   });
 
   test("a streak that jumps a rung (a skipped tick) still escalates once, then doubles", () => {
-    // downStreak 20 with the last escalation at 6 is past the 12 rung — it escalates now and
-    // the next rung becomes 40, never a burst of catch-up alerts for 12 and 24.
     const jumped: ServiceState = { downStreak: 20, escalatedStreak: 6, status: "down" };
 
     expect(escalationDue(jumped, THRESHOLD)).toBe(true);
@@ -769,7 +727,7 @@ describe("escalationDue — the doubling ladder", () => {
 });
 
 describe("buildEscalationAlert", () => {
-  const TICK_MS = 10 * 60_000; // the timer's ~10m cadence
+  const TICK_MS = 10 * 60_000;
 
   test("carries the service, the streak, and the wall-clock duration", () => {
     const alert = buildEscalationAlert([{ service: "cron.render", streak: 6 }], TICK_MS);
@@ -799,8 +757,6 @@ describe("buildEscalationAlert", () => {
   });
 
   test("a box-wide outage collapses to ONE line instead of blowing Discord's cap", () => {
-    // ~45 services escalating together (the whole cron roster) would exceed the 2,000-char
-    // message limit and get the entire post rejected — the loudest alert falling silent.
     const many = Array.from({ length: 45 }, (_, index) => ({
       service: `cron.job-${index}`,
       streak: index === 3 ? 24 : 6,
@@ -817,14 +773,13 @@ describe("buildEscalationAlert", () => {
   test("the duration scales with the streak, and reads in days once it is one", () => {
     expect(formatStreakDuration(3, TICK_MS)).toBe("~30m");
     expect(formatStreakDuration(24, TICK_MS)).toBe("~4h");
-    // The incident that motivated all this: ~20h of hourly failure.
+
     expect(formatStreakDuration(120, TICK_MS)).toBe("~20h");
     expect(formatStreakDuration(192, TICK_MS)).toBe("~1.3d");
   });
 });
 
 describe("normalizeState — the state file round-trip", () => {
-  /** Read back exactly the bytes `writeState` puts on disk. */
   const reload = (services: Record<string, ServiceState>) =>
     normalizeState(JSON.parse(serializeState(services)) as unknown);
 
@@ -838,8 +793,6 @@ describe("normalizeState — the state file round-trip", () => {
   });
 
   test("a streak survives the disk hop, so the ladder keeps counting across ticks", () => {
-    // The whole mechanism depends on this: escalate at 6, persist, and the NEXT rung must
-    // still be 12 after the state has been through the file.
     let state: ServiceState = { downStreak: 6, escalatedStreak: 6, status: "down" };
 
     for (let tick = 7; tick <= 12; tick += 1) {
@@ -852,7 +805,6 @@ describe("normalizeState — the state file round-trip", () => {
   });
 
   test("the LEGACY flat map still parses — it just restarts the counters", () => {
-    // Existing flat-map state must degrade safely instead of taking the dead-man's beacon down.
     expect(normalizeState({ "cron.render": "down", web: "ok" })).toEqual({
       "cron.render": { downStreak: 0, escalatedStreak: 0, status: "down" },
       web: { downStreak: 0, escalatedStreak: 0, status: "ok" },
@@ -871,8 +823,7 @@ describe("normalizeState — the state file round-trip", () => {
     expect(normalizeState(null)).toEqual({});
     expect(normalizeState("not a map")).toEqual({});
     expect(normalizeState([1, 2, 3])).toEqual({});
-    // Unknown statuses, wrong-typed counters, and v2's own scalar keys are all dropped or
-    // floored rather than trusted.
+
     expect(normalizeState({ ghost: "sideways", version: 2 })).toEqual({});
     expect(
       normalizeState({
@@ -886,29 +837,11 @@ describe("boxUptimeMs", () => {
   test("reads a positive uptime on procfs, and null where there is none", () => {
     const uptime = boxUptimeMs();
 
-    // The box is Linux (procfs); a dev Mac is not. Both answers are valid — what must never
-    // happen is a wrong number, since it decides whether silence means "booting" or "dead".
     expect(uptime === null || uptime > 0).toBe(true);
   });
 });
 
-// ---------------------------------------------------------------------------
-// THE STRAIN DETECTOR — the second read of the same marker.
-//
-// The two fixtures below ARE the specification. They are real box output, aggregated over two
-// days and sorted by frequency; the split between them is the operator's own judgement about
-// which lines are a problem. A detector is only as good as its behaviour on this exact table,
-// in BOTH directions — the errors have to fire it, and the 1,200-a-day success chatter must
-// not. (The plumbing that carries these lines from a sweep's stderr to the marker on disk is
-// proven separately, against the real bash, in cron-output.test.ts.)
-// ---------------------------------------------------------------------------
-
-/** Real observed problem prose on the rate-gated path. Every line must remain recognizable. */
 const REAL_PROBLEMS: readonly { count: number; line: string }[] = [
-  // The UNCLEARED challenge — the run's one re-roll is already spent, so the track is lost.
-  // Its cleared sibling lives in BENIGN_CHATTER below: a challenge that re-rolls to a fresh
-  // exit and then succeeds is recovered friction on a healthy tick, and at ~12% of runs it
-  // would hold capture at `degraded` forever if it scored (#996).
   {
     count: 43,
     line: "[capture-sweep] bot-challenged at download (rerolled=false) — the run's one re-roll is already spent",
@@ -932,17 +865,12 @@ const REAL_PROBLEMS: readonly { count: number; line: string }[] = [
   },
 ];
 
-/** Designed backpressure. It remains measured, but it is not failed work. */
 const DESIGNED_BACKPRESSURE = {
   count: 76,
   line: "[crawl-sweep] MusicBrainz throttled the pass — stopped clean; the next tick resumes.",
 };
 
-/** Benign high-volume chatter. NONE of it may score — this is the false-positive gate. */
 const BENIGN_CHATTER: readonly { count: number; line: string }[] = [
-  // The CLEARED challenge and the per-tick recap (#996). One hyphen separates this from the
-  // uncleared line above: "bot challenge" (a space) is not the `bot-challenged` STRAIN_PHRASES
-  // entry, so recovered friction stays silent while a lost track still scores.
   {
     count: 567,
     line: "[capture-sweep] bot challenge at search (rerolled=true) — moving to a fresh residential exit",
@@ -964,7 +892,6 @@ const BENIGN_CHATTER: readonly { count: number; line: string }[] = [
   },
 ];
 
-/** A marker carrying a summary plus the given stderr lines, in the wrapper's exact shape. */
 function strainMarker(summary: string, stderrLines: readonly string[]): string {
   const tail =
     stderrLines.length === 0
@@ -1046,20 +973,12 @@ describe("the strain vocabulary against the real box output", () => {
   });
 
   test("the busiest benign line cannot trip the detector at ANY volume", () => {
-    // 471 embed successes in two days is the highest-frequency line on the box. Feed one tick
-    // 500 of them: still zero. This is the whole reason the rule is a named-phrase list rather
-    // than something like /error/i.
     const flood = Array.from({ length: 500 }, () => BENIGN_CHATTER[0]?.line ?? "");
 
     expect(markerStrain(strainMarker('{"ok":true,"embedded":500}', flood))).toBe(0);
   });
 
   test("the per-row catch line every sweep shares is caught", () => {
-    // `error on <id>: …` and `unexpected error on <id>: …` are the shared per-item catch in
-    // ~10 sweeps — the single most common way a sweep says "this one did not get done". They
-    // were MISSED by the first draft of the vocabulary; an audit over all 238 `log()` string
-    // literals in this directory is what surfaced them. Same for claude's own error reply,
-    // which is the signature of an authoring tick that left its item queued.
     expect(countDistressLines("> [note-sweep] error on 241.7.3A: Firecrawl 502", 1)).toBe(1);
     expect(countDistressLines("> [capture-sweep] unexpected error on mb_x: socket closed", 1)).toBe(
       1,
@@ -1085,14 +1004,13 @@ describe("the strain vocabulary against the real box output", () => {
 
 describe("the summary half — the sweeps' own counters", () => {
   test("direct failure counters score; designed backpressure and success counters do not", () => {
-    // entity-bio's real summary shape: the gate skips ARE the stuck loop, in its own numbers.
     expect(countSummaryStrain({ authored: 0, gateSkipped: 3, ok: true, queueRemaining: 40 })).toBe(
       3,
     );
-    // crawl's real summary shape: designed backpressure is visible on its separate axis.
+
     expect(countSummaryStrain({ ok: true, throttled: true, tracksWritten: 120 })).toBe(0);
     expect(countSummaryBackpressure({ ok: true, throttled: true, tracksWritten: 120 })).toBe(1);
-    // A clean tick scores nothing at all, whatever else it reports.
+
     expect(countSummaryStrain({ done: 10, embedded: 471, ok: true })).toBe(0);
     expect(countSummaryStrain(null)).toBe(0);
   });
@@ -1105,7 +1023,7 @@ describe("the summary half — the sweeps' own counters", () => {
     );
 
     expect(countSummaryStrain(summary)).toBe(0);
-    // Structured `failed` owns this marker, so duplicate prose cannot restore occurrence counting.
+
     expect(markerStrain(strainMarker(JSON.stringify(summary), stderr))).toBe(0);
   });
 
@@ -1146,8 +1064,6 @@ describe("the summary half — the sweeps' own counters", () => {
   });
 
   test("a sweep's own `{ ok }` verdict is NEVER touched by any of this", () => {
-    // THE FIRST CONSTRAINT: strain must not falsify a sweep's report. A marker with 200 error
-    // lines still reads `fresh-ok` to judgeCron, because that is what the sweep actually said.
     const body = strainMarker(
       '{"ok":true,"checked":10,"failed":10}',
       Array.from({ length: 200 }, () => REAL_PROBLEMS[0]?.line ?? ""),
@@ -1158,7 +1074,6 @@ describe("the summary half — the sweeps' own counters", () => {
     expect(judgeCron(CRON, dir)).toBe("fresh-ok");
     expect(cronCheck(CRON, judgeCron(CRON, dir)).status).toBe("ok");
 
-    // …and yet the high item-failure rate is visible as ONE tick, without 210× double-counting.
     expect(markerStrain(body)).toBe(1);
   });
 });
@@ -1186,7 +1101,7 @@ describe("the rolling window", () => {
 
   test("samples accrue into hourly buckets and age out of the window", () => {
     const now = 10 * HOUR;
-    // Two heavy ticks 7 hours ago (outside the default 6h window) and two light ones just now.
+
     const state = foldStrain(
       undefined,
       [
@@ -1207,8 +1122,6 @@ describe("the rolling window", () => {
 
     expect(first.watermarkMs).toBe(now - 1000);
 
-    // The next tick re-reads the dir; readStrainSamples filters by this watermark, so only
-    // genuinely new markers fold in.
     const second = foldStrain(first, [{ atMs: now - 500, points: 6 }], now);
 
     expect(strainTotals(second, now)).toEqual({ points: 12, ticks: 2 });
@@ -1386,9 +1299,6 @@ describe("normalizeStrain — the v5 state section", () => {
 });
 
 describe("the stale budget covers the jitter every timer actually rolls", () => {
-  // `cadenceMs` is what a unit ASKS for (`OnUnitActiveSec`); the gap observed is that plus a
-  // fresh `RandomizedDelaySec` on every firing. Judging the fleet against the bare cadence
-  // marks a correctly-behaving fast cron `lagging`, and a row that flaps is a row nobody reads.
   const MINUTE = 60_000;
   const dirFor = (ageMs: number) => {
     const dir = mkdtempSync(join(tmpdir(), "jitter-"));
@@ -1402,8 +1312,6 @@ describe("the stale budget covers the jitter every timer actually rolls", () => 
   };
 
   test("the fleet's fastest cron survives its own worst legitimate gap", () => {
-    // cron.live: OnUnitActiveSec=1min + RandomizedDelaySec=90 ⇒ a real period up to 150s.
-    // Measured over its last 100 ticks: mean 114s, max 188s. All of that must read fresh.
     const live = { cadenceMs: MINUTE, match: "live", service: "cron.live" };
 
     for (const observedMs of [114_000, 150_000, 188_000]) {
@@ -1412,24 +1320,18 @@ describe("the stale budget covers the jitter every timer actually rolls", () => 
   });
 
   test("a genuinely stalled fast cron is still caught", () => {
-    // The budget must not go so slack that it stops meaning anything: well past cadence plus
-    // jitter is still `lagging`.
     const live = { cadenceMs: MINUTE, match: "live", service: "cron.live" };
 
     expect(judgeCron(live, dirFor(15 * MINUTE))).toBe("lagging");
   });
 
   test("the allowance is noise for a slow cron, not a licence to sleep", () => {
-    // A daily cron's budget moves by 90s out of three days — the jitter term is only ever
-    // decisive where it is a real fraction of the period.
     const daily = { cadenceMs: 24 * 60 * MINUTE, match: "logbook", service: "cron.logbook" };
 
     expect(judgeCron(daily, dirFor(4 * 24 * 60 * MINUTE))).toBe("lagging");
   });
 
   test("no committed timer jitters harder than the constant claims", () => {
-    // The drift guard. One constant stands in for every unit file, so it has to be checked
-    // against them — otherwise a new timer with a wider roll silently reopens the flap.
     const repoRoot = join(import.meta.dir, "..", "..", "..", "..");
     const timers = [...new Bun.Glob("docs/agents/hermes/*/*.timer").scanSync(repoRoot)];
 
@@ -1440,22 +1342,13 @@ describe("the stale budget covers the jitter every timer actually rolls", () => 
       const rolled = /^RandomizedDelaySec=(\d+)$/m.exec(unit);
 
       if (!rolled?.[1]) {
-        continue; // a timer with no jitter can never exceed the allowance
+        continue;
       }
 
       expect(Number(rolled[1]) * 1_000).toBeLessThanOrEqual(MAX_TIMER_JITTER_MS);
     }
   });
 });
-
-// ---------------------------------------------------------------------------
-// THE STALL BAR — when designed backpressure stops being designed.
-//
-// A paused tick exits 0 with its work counters nulled, so it is invisible in every failure
-// signal: `errors: 0`, `ok: true`, nothing distressed in the body. One of them is correct
-// behaviour. A standing run of them is a sweep that is alive and doing nothing, and that is what
-// this bar exists to say out loud. Both sides are driven here — a short pause must stay quiet.
-// ---------------------------------------------------------------------------
 
 const PAUSED_SUMMARY =
   '{"checked":0,"errors":0,"failed":0,"gateState":"paused","ok":true,"produced":0,"queueDepth":null,"reason":"due_work_repair_pending","throttled":true}';
@@ -1468,8 +1361,7 @@ describe("the stall bar", () => {
     expect(backpressureStallTicks(10 * MINUTE)).toBe(6);
     expect(backpressureStallTicks(60 * MINUTE)).toBe(3);
     expect(backpressureStallTicks(24 * 60 * MINUTE)).toBe(3);
-    // An unusable cadence falls back to the tick floor rather than to zero, which would make
-    // every quiet sweep stalled on its first yield.
+
     expect(backpressureStallTicks(0)).toBe(3);
   });
 
@@ -1503,7 +1395,7 @@ describe("the stall bar", () => {
 
     expect(state.backpressureReason).toBe("due_work_repair_pending");
     expect(backpressureTotal(state, now)).toBe(2);
-    // And it is still not strain: the axes never cross.
+
     expect(strainTotals(state, now)).toEqual({ points: 0, ticks: 0 });
   });
 
@@ -1535,7 +1427,7 @@ describe("the stall bar", () => {
     expect(result.check.message).toBe(
       "1 sweep paused without working: backup (due_work_repair_pending ×3)",
     );
-    // Edge-triggered, like every other line this prober sends.
+
     expect(result.newlyStalled).toEqual(result.stalled);
     expect(result.next[CRON.service]?.stalled).toBe(true);
     expect(buildStrainAlert([], [], result.newlyStalled, [])).toContain("due_work_repair_pending");
@@ -1554,7 +1446,6 @@ describe("the stall bar", () => {
       `working again: ${CRON.service}`,
     );
 
-    // The next tick has nothing left to announce.
     const quiet = probeSweepStrain(new Map([[CRON.service, markerDir([])]]), result.next);
 
     expect(quiet.clearedStall).toEqual([]);

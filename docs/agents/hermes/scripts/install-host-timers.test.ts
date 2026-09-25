@@ -1,24 +1,3 @@
-// THE INSTALLER-COMPLETENESS GUARD — every unit dir, timer, and host script this repo holds
-// must be covered by `docs/agents/hermes/install-host-timers.sh`.
-//
-// Every unit directory, including `secrets/`, and every host script referenced by `ExecStart=`
-// must be installed. A partial install can still exit 0 and leave timers enabled, so this test
-// makes an incomplete rebuild fail before deployment.
-//
-// HOW IT CHECKS. The installer grew a `--dry-run` mode that prints its derived plan and exits
-// without touching the host. This test runs that REAL selection code and diffs the plan against
-// an independent walk of the repo, so the assertion binds three sets together:
-//
-//   1. every directory holding a `.service`/`.timer` is a unit dir in the plan;
-//   2. every non-template `.timer` is enabled by the plan;
-//   3. every host path an `ExecStart=` points at is laid down by the plan — and every
-//      IN-CONTAINER `/opt/hermes-scripts/*.sh` a sweep unit execs exists under `scripts/`.
-//
-// Plus the honesty contract: an unresolvable `ExecStart` must abort with a non-zero exit rather
-// than install a half-working schedule.
-//
-// If this test fails, the installer would have skipped something on the next box rebuild.
-
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
@@ -47,11 +26,10 @@ afterEach(() => {
   }
 });
 
-/** The distro bindirs a unit may exec straight out of — the installer never lays these down. */
 const SYSTEM_BINDIRS = ["/bin/", "/sbin/", "/usr/bin/", "/usr/sbin/"];
 
 type Plan = {
-  hostScripts: Map<string, string>; // absolute destination -> repo-relative source
+  hostScripts: Map<string, string>;
   skippedDirs: Set<string>;
   timers: Set<string>;
   unitDirs: Set<string>;
@@ -234,7 +212,6 @@ function parsePlan(stdout: string): Plan {
   return plan;
 }
 
-/** Directories beside the installer, with the unit files each one holds. */
 function walkUnitDirs(): { dir: string; services: string[]; timers: string[] }[] {
   return readdirSync(HERMES_DIR)
     .filter((entry) => statSync(join(HERMES_DIR, entry)).isDirectory())
@@ -250,7 +227,6 @@ function walkUnitDirs(): { dir: string; services: string[]; timers: string[] }[]
     });
 }
 
-/** The executable of every `ExecStart=` in a unit file, systemd's `-@+!:` prefixes stripped. */
 function execStartExecutables(unitPath: string): string[] {
   return readFileSync(unitPath, "utf8")
     .split("\n")
@@ -265,7 +241,6 @@ function execStartExecutables(unitPath: string): string[] {
     .filter((executable) => executable.length > 0);
 }
 
-/** Every whitespace-separated token of every `ExecStart=` — arguments included. */
 function execStartTokens(unitPath: string): string[] {
   return readFileSync(unitPath, "utf8")
     .split("\n")
@@ -282,10 +257,6 @@ const unitDirs = walkUnitDirs();
 const result = runInstaller(HERMES_DIR, INSTALLER);
 const plan = parsePlan(result.stdout);
 
-// Two explicit current exceptions to the fleet-wide failure hook:
-// - the notifier template must not recurse when notification itself fails;
-// - pin-watch is a pre-existing gap outside this slice, kept visible here rather than silently
-//   treated as compliant. Removing its exemption is part of fixing that unit, not this one.
 const ON_FAILURE_EXEMPTIONS = new Set([
   "pin-watch/pin-watch.service",
   "sweep-failure/fluncle-sweep-failure@.service",
@@ -300,8 +271,6 @@ describe("install-host-timers.sh --dry-run", () => {
 });
 
 describe("the installer covers every unit directory in the repo", () => {
-  // THE assertion that catches the original bug on its own: `secrets/` holds a .timer, so it
-  // must be a unit dir. The hardcoded `*-timer` + pin-watch + sweep-failure list fails here.
   test("every directory holding a .timer is a unit dir in the plan", () => {
     const dirsWithTimers = unitDirs.filter((entry) => entry.timers.length > 0).map((e) => e.dir);
 
@@ -422,8 +391,6 @@ describe("the installer lays down every host script a unit ExecStart points at",
     }
   });
 
-  // These host scripts have no in-container bake to fall back to. The generic assertions above
-  // already cover them; these name them so a regression reads as itself in the failure output.
   test("the secrets sync and pin-watch host scripts are laid down", () => {
     expect(
       plan.hostScripts.has("/opt/fluncle-database-admission/database-admission-runner.sh"),
@@ -440,10 +407,6 @@ describe("the installer lays down every host script a unit ExecStart points at",
 });
 
 describe("every in-container script a unit execs is baked from scripts/", () => {
-  // The `docker exec … bash /opt/hermes-scripts/<x>.sh` half: those are NOT installed by this
-  // script (the image bakes them, pin-watch refreshes them), so what has to hold is that the
-  // repo actually ships the file the unit names. A renamed sweep script with a stale unit is
-  // a box that fails every tick with "No such file or directory".
   test("every /opt/hermes-scripts/*.sh named by a unit exists under scripts/", () => {
     const missing: string[] = [];
 
@@ -598,12 +561,7 @@ describe("the installer refreshes an authorized unit subset without activation",
 });
 
 describe("the installer refuses to half-install", () => {
-  // The honesty contract: a unit pointing at a host path with no source in the repo must abort
-  // with a non-zero exit, not install everything else and print a success line.
   test("an ExecStart with no source aborts the whole run", () => {
-    // A throwaway hermes dir: the installer alongside ONE unit dir whose service points at a
-    // host script nobody shipped. Built under the OS temp dir so a crashed run can never leave
-    // a stray directory inside `scripts/` (the Dockerfile copies that whole dir into the image).
     const fixture = mkdtempSync(join(tmpdir(), "fluncle-install-host-timers-"));
 
     try {

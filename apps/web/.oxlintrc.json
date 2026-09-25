@@ -8,5 +8,53 @@
         "ignore": ["(^\\$.+\\.(j|t)sx?$)|(routeTree.*.ts)"]
       }
     ]
-  }
+  },
+  "overrides": [
+    {
+      "files": [
+        "doctor.config.ts",
+        "drizzle-telemetry.config.ts",
+        "playwright.config.ts",
+        "scripts/backfill-album-graph.ts",
+        "scripts/backfill-anchor-reviews.test.ts",
+        "scripts/backfill-anchor-reviews.ts",
+        "scripts/backfill-artist-graph.ts",
+        "scripts/backfill-artist-links.ts",
+        "scripts/backfill-artist-social-reviews.ts",
+        "scripts/backfill-artist-socials-from-mb-dump.test.ts",
+        "scripts/backfill-artist-socials-from-mb-dump.ts",
+        "scripts/backfill-cost-history.ts",
+        "scripts/backfill-crew-numbers.ts",
+        "scripts/backfill-due-work.ts",
+        "scripts/backfill-has-embedding.test.ts",
+        "scripts/backfill-has-embedding.ts",
+        "scripts/backfill-has-isrc.test.ts",
+        "scripts/backfill-has-isrc.ts",
+        "scripts/backfill-hub-counts.test.ts",
+        "scripts/backfill-hub-counts.ts",
+        "scripts/backfill-identity-ledger.ts",
+        "scripts/backfill-is-catalogue.test.ts",
+        "scripts/backfill-is-catalogue.ts",
+        "scripts/backfill-label-aliases.ts",
+        "scripts/backfill-label-mbid.ts",
+        "scripts/backfill-labels.ts",
+        "scripts/backfill-mixable-artists-projection.ts",
+        "scripts/backfill-plan-recording-mixtape.ts",
+        "scripts/backfill-remixer-roles.ts",
+        "scripts/backfill-shadow-projections.ts",
+        "scripts/backfill-track-duplicate-keys.ts",
+        "scripts/backfill-track-embeddings.test.ts",
+        "scripts/backfill-track-embeddings.ts",
+        "scripts/bench-artist-rank.ts",
+        "scripts/bench-context-distil.ts",
+        "scripts/bench-db-scale-target.ts",
+        "scripts/bench-db-scale.ts",
+        "scripts/bench-frontier-novelty.ts",
+        "scripts/bench-search-filter.ts"
+      ],
+      "rules": {
+        "no-comments/no-comments": "error"
+      }
+    }
+  ]
 }

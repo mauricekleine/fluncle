@@ -1,9 +1,3 @@
-/** @type {import('tailwindcss').Config} */
-// Mirror of @fluncle/tokens (DESIGN.md canon). tailwind.config.js runs in plain
-// Node and can't import the raw-TS token package, so the palette is hardcoded
-// here; the alpha-baked tokens (#RRGGBBAA, unreliable on RN) become rgba().
-// Keep in sync with packages/tokens/src/index.ts. Runtime styles read the typed
-// adapter in src/theme/tokens.ts instead.
 module.exports = {
   content: ["./app/**/*.{ts,tsx}", "./src/**/*.{ts,tsx}"],
   plugins: [],
@@ -16,7 +10,7 @@ module.exports = {
         md: "8px",
         sm: "6px",
       },
-      // palette + semantic aliases (keys sorted per repo lint). Mirror of @fluncle/tokens.
+
       colors: {
         background: "#090a0b",
         border: "rgba(208, 185, 144, 0.161)",
@@ -39,9 +33,7 @@ module.exports = {
         "starlight-cream": "#f4ead7",
         "tape-black": "#171611",
       },
-      // Oxanium for the brand (display) + numerals (numeric); Space Grotesk is the
-      // reading face (body/title/label). RN synthesizes no weights, so each cut is a
-      // distinct family — title/label ask for 700 (Space Grotesk's ceiling), never 800.
+
       fontFamily: {
         body: ["SpaceGrotesk_400Regular"],
         display: ["Oxanium_800ExtraBold"],

@@ -7,26 +7,11 @@ import { findingMetaSegments } from "@/lib/archive-state";
 import { formatKey, useKeyNotation } from "@/lib/key-notation";
 import { color, font, radius } from "@/theme/tokens";
 
-// A set-builder row — the archive-row twin for the Mix tab: cover, then the music with its
-// coordinate leading the content and a quiet key·BPM meta line. Serves three jobs with one
-// shape: an OPENER / CANDIDATE (the whole row presses to add — `onPress`), each candidate
-// carrying its reason chip; and a CHAIN row (no `onPress`, a trailing remove control).
-//
-// THE UNLIT RULE (DESIGN.md), mirrored from the web mix-builder: a certified finding carries
-// its Log ID in Oxanium gold and heats to Eclipse Glow on press; a track Fluncle never
-// certified carries no coordinate and rests in the cold Dust Veil register (its title +
-// artists dimmed to Stardust) — never labelled, never introduced, never given a noun. The
-// register is the whole statement; there is no badge and no heading naming the tier.
-//
-// Layout is a plain inner View with a static StyleSheet style: a Pressable style FUNCTION
-// drops flexDirection under NativeWind (see finding-row.tsx), so all layout is static and
-// only the pressed/heat conditionals ride the children-as-function `pressed` param.
-
 export type MixRowProps = {
   accessibilityLabel: string;
   isLast?: boolean;
   onPress?: () => void;
-  /** 1-based slot in the chain — set on chain rows only, so the set reads as a tracklist. */
+
   position?: number;
   reasonLabel?: string;
   track: MixTrack;
@@ -112,7 +97,6 @@ export const MixRow = memo(function MixRow({
     <View style={isLast ? styles.lastWrap : styles.wrap}>{node}</View>
   );
 
-  // An add row (opener / candidate): the whole row presses to add, with a quiet "+" affordance.
   if (onPress) {
     return withBorder(
       <Pressable
@@ -141,7 +125,6 @@ export const MixRow = memo(function MixRow({
     );
   }
 
-  // A chain row: not pressable itself; the caller supplies a trailing control (the remove ✕).
   return withBorder(
     <RowBody
       position={position}
@@ -155,7 +138,6 @@ export const MixRow = memo(function MixRow({
 
 const styles = StyleSheet.create({
   art: {
-    // The fill keeps a missing cover reading as a deliberate blank sleeve, not a broken box.
     backgroundColor: color.tapeBlackFill,
     borderColor: color.dustLine,
     borderRadius: radius.artwork,

@@ -1,7 +1,3 @@
-// Fluncle Lens build: bundle the TypeScript entry points into plain MV3 assets and
-// copy the static files (manifest, HTML, CSS, icons) into dist/. Zero runtime deps,
-// matching the CLI's `bun build` approach. `--watch` rebuilds on change for dev.
-
 import { watch } from "node:fs";
 import { cp, mkdir, readdir, rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
@@ -10,8 +6,6 @@ const ROOT = dirname(import.meta.dirname);
 const SRC = join(ROOT, "src");
 const DIST = join(ROOT, "dist");
 
-// Each entry becomes a top-level bundle Chrome loads by the filename the manifest
-// (content.js), popup.html, options.html, and the service worker reference.
 const ENTRIES = [
   join(SRC, "content.ts"),
   join(SRC, "popup.ts"),
@@ -19,7 +13,6 @@ const ENTRIES = [
   join(SRC, "background.ts"),
 ];
 
-// Static assets copied verbatim into dist/. Icons are copied as a directory.
 const STATIC_FILES = [
   "manifest.json",
   "src/popup.html",
@@ -54,7 +47,7 @@ async function copyStatic(): Promise<void> {
   }
 
   await cp(join(ROOT, "icons"), join(DIST, "icons"), { recursive: true });
-  // The bundled Oxanium woff2 (the brand display face), referenced by ui.css.
+
   await cp(join(ROOT, "src/fonts"), join(DIST, "fonts"), { recursive: true });
 }
 

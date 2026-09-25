@@ -4,25 +4,10 @@ import { fileURLToPath } from "node:url";
 
 import { COPY } from "./copy";
 
-// ./copy.ts opens "Every human-facing string in Fluncle Lens, in one place so the voice
-// stays consistent and reviewable" — and for the strings the scripts render, that holds
-// (options.ts hydrates its six labels from COPY). It did NOT hold for the ones a reader
-// meets before any script runs: the extension's NAME and one-line DESCRIPTION in
-// manifest.json (the listing a stranger reads on the Chrome Web Store), the wordmark and
-// titles in the two static HTML screens, the options tagline, and the pre-hydration
-// labels the script later overwrites — which is what shows if the script ever fails.
-//
-// Those files are also outside the repo's static voice lint, which parses JavaScript and
-// so cannot see an .html or a .json (apps/web/src/lib/server/voice-lint.test.ts). So the
-// copy a stranger meets first was the copy nothing checked. This is that check, in the
-// shape identity.test.ts already uses for llms.txt and the web manifest: equality, never
-// containment, because a paraphrase is exactly what the one-place rule exists to prevent.
-
 function readAsset(name: string): string {
   return readFileSync(fileURLToPath(new URL(name, import.meta.url)), "utf8");
 }
 
-/** The text of the first element matching `<tag …>text</tag>` (attributes and all). */
 function elementText(html: string, pattern: RegExp): string | undefined {
   return pattern.exec(html)?.[1]?.trim();
 }

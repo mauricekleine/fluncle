@@ -1,19 +1,3 @@
-// The Radio tab — a lean-back "one continuous run" surface, the app's face of
-// radio.fluncle.com. Cover-led and audio-only: the ONLY sound is Fluncle's spoken
-// observation (never the commercial track), the finding's cover art is the hero, and a
-// shared server clock decides what's playing and how far in — so a fresh join drops in
-// mid-flight exactly where every other listener is. The web plays the same observation
-// over a silent looping video; here the video is dropped for the cover, which keeps the
-// App-Store 5.2 posture clean (bounded brand assets + the spoken note, nothing full-
-// length) and sidesteps the iOS AVPlayer range constraint on transformed video URLs.
-//
-// BACKGROUND AUDIO: this screen takes the radio session (doNotMix + play-in-background)
-// and drives the lock-screen now-playing controls, so the observation keeps going when
-// the phone locks. The shared-clock CONTROLLER runs off a JS timer, which iOS throttles
-// in the background — so a backgrounded run plays the current observation and, on
-// return to the foreground, resyncs to the live slot (an AppState listener). The
-// UIBackgroundModes entitlement that makes this work is added by the expo-audio config
-// plugin (app.config.js) and needs a NATIVE REBUILD, not a JS reload.
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AppState, StyleSheet, Text, View } from "react-native";
 import Animated, {
@@ -46,41 +30,31 @@ import {
 } from "@/lib/radio-schedule";
 import { color, font, radius } from "@/theme/tokens";
 
-// Fluncle's voice, recovered-log register — reused VERBATIM from the web radio's
-// ratified copy (apps/web/src/routes/radio.tsx COPY), so the one surface speaks in one
-// voice. In-fiction, no banned identity words (NEVER broadcast / station / tune in /
-// live — the retired radio-operator metaphor); warm, dry, no exclamation marks.
 const COPY = {
-  // The begin-gate subtitle: what this is — one continuous run you drop into mid-flight.
   beginSubtitle: "One continuous run of findings. You drop in mid-flight, wherever I've got to.",
-  // Nothing radio-eligible yet (or the run gave out).
+
   empty: "Nothing logged out here yet. Quiet sector tonight.",
-  // Catching up to the run (buffering / resyncing) — the web's loading register.
+
   loading: "Catching up to the run…",
-  // The now-playing indicator while an observation is on air.
+
   observing: "Observing",
-  // The gate + screen heading (the page's own name for itself).
+
   title: "Fluncle, observing",
 } as const;
 
-// The shared-clock controller tick. Findings advance from the CLOCK (not the audio
-// element's end): each tick recomputes the boundary decision off the segment's anchor.
 const CONTROLLER_TICK_MS = 250;
-// Poll the server between segments to refresh skew and catch a rolled catalogue.
+
 const SKEW_POLL_MS = 45_000;
 
 type Playhead = {
-  // The scheduled START of this segment in the (skew-corrected) SERVER clock — the one
-  // anchor the controller derives its hold/advance/resync decision from.
   segmentStartServerMs: number;
-  // ms into the observation this client was placed at (mid-flight join, or 0 from head).
+
   offsetMs: number;
   track: TrackListItem;
 };
 
 type Phase = "idle" | "playing" | "tuning";
 
-/** The lock-screen now-playing card for a finding (title / artist / coordinate / cover). */
 function lockMeta(track: TrackListItem): AudioMetadata {
   return {
     albumTitle: track.logId,
@@ -97,58 +71,38 @@ export default function RadioScreen() {
   const [playhead, setPlayhead] = useState<Playhead | undefined>(undefined);
   const [exhausted, setExhausted] = useState(false);
 
-  // The clock skew (server − client, smoothed): the client computes its own expected
-  // offset from `Date.now() + skew` between polls.
   const skewRef = useRef(0);
-  // The preloaded NEXT finding (always plays from its head), read without re-subscribing.
+
   const nextRef = useRef<TrackListItem | undefined>(undefined);
-  // The on-screen playhead, read inside the controller tick without re-subscribing.
+
   const playheadRef = useRef<Playhead | undefined>(undefined);
-  // The current phase, read inside the focus effect without re-subscribing it.
+
   const phaseRef = useRef<Phase>(phase);
-  // Mirror the two into refs AFTER commit (never during render) so the interval ticks
-  // and the focus callback read the latest values without those effects re-subscribing.
+
   useEffect(() => {
     playheadRef.current = playhead;
   }, [playhead]);
   useEffect(() => {
     phaseRef.current = phase;
   }, [phase]);
-  // One re-entrancy guard so an in-flight advance/resync can't fire twice.
+
   const busyRef = useRef(false);
-  // Whether the CURRENT segment's audio has been started (seeked + played) — reset on
-  // every new playhead so each segment (and each focus return) re-arms exactly once.
+
   const startedSegRef = useRef(false);
 
-  // The client's server-clock now: Date.now() corrected by the smoothed skew. The one
-  // source of truth the controller reads — so findings advance from the schedule clock.
   const serverNow = useCallback(() => Date.now() + skewRef.current, []);
 
-  // The observation audio — the ONLY sound on this surface. `useAudioPlayer` builds a
-  // FRESH player each time the source changes (it releases the old one), so `player` is
-  // NOT stable across segments. That has two consequences handled below: (1) anything
-  // that must survive a segment (the blur cleanup, `stop`) reads `playerRef`, never
-  // `player` directly, so those effects don't re-subscribe every segment; (2) the start
-  // effect keys ON `player` precisely because a new segment IS a new player to start.
   const observationUrl = playhead?.track.observationAudioUrl ?? null;
   const player = useAudioPlayer(observationUrl);
   const status = useAudioPlayerStatus(player);
-  // The current segment's player, mirrored so stable effects can pause/clear it without
-  // depending on the churning `player` identity.
+
   const playerRef = useRef(player);
   useEffect(() => {
     playerRef.current = player;
   }, [player]);
-  // Whether the Radio tab is on screen. The controller keeps the SCHEDULE moving even
-  // while blurred (so the shared clock stays honest), but audio must never sound off-
-  // screen — the start effect gates `play()` on this, so a segment that advances while
-  // we're on another tab stays silent until we return. Defaults true (mounted = focused).
+
   const focusedRef = useRef(true);
 
-  // Resolve the authoritative now-playing slot, refresh the clock skew (NTP-lite), and
-  // place the playhead at the returned offset — anchoring the segment's shared-clock
-  // start. `fromHead` forces a head-start (a scheduled roll onto the next segment),
-  // overriding the server's mid-segment offset for an already-listening client.
   const resolveSlot = useCallback(
     async (fromHead = false): Promise<void> => {
       const { receivedAt, sentAt, slot } = await fetchSlot();
@@ -171,11 +125,6 @@ export default function RadioScreen() {
     [fetchSlot],
   );
 
-  // Advance to the NEXT finding at a segment boundary (driven by the controller, NOT the
-  // audio's end). Roll onto the preloaded next if it's ready (the smooth transition),
-  // else re-resolve from the server. The next segment's shared-clock start is the
-  // previous start + the previous observation length — deterministic, so every client
-  // lands the boundary at the same instant. NEVER a random skip; on trouble, resync.
   const advance = useCallback(async () => {
     const current = playheadRef.current;
     const preloaded = nextRef.current;
@@ -190,10 +139,8 @@ export default function RadioScreen() {
           current.segmentStartServerMs + segmentMs(current.track.observationDurationMs),
         track: preloaded,
       });
-      // Refresh the next preload + skew in the background; keep the head-start we painted.
-      void resolveSlot(true).catch(() => {
-        // Harmless — the controller re-evaluates and the poll re-syncs.
-      });
+
+      void resolveSlot(true).catch(() => {});
 
       return;
     }
@@ -205,8 +152,6 @@ export default function RadioScreen() {
     }
   }, [resolveSlot]);
 
-  // Begin: take the audio floor (stop any feed audio), switch to the background-capable
-  // radio session, and resolve the synced slot — a fresh joiner lands mid-flight.
   const begin = useCallback(() => {
     claimAudioFocus();
     configureRadioAudioSession();
@@ -219,8 +164,6 @@ export default function RadioScreen() {
       });
   }, [resolveSlot]);
 
-  // Stop the run: pause the observation, drop the lock-screen controls, restore the
-  // app's foreground-only session, and return to the gate.
   const stop = useCallback(() => {
     playerRef.current.pause();
     playerRef.current.setActiveForLockScreen(false);
@@ -232,13 +175,7 @@ export default function RadioScreen() {
     setPhase("idle");
   }, []);
 
-  // Start the CURRENT segment's audio exactly once it's loaded: seek to the shared-clock
-  // offset and play, and bind the lock-screen now-playing card. Re-arms per segment via
-  // startedSegRef (reset in resolveSlot/advance), so an advance or a focus-return replays
-  // the fresh element at the right offset without double-firing.
   useEffect(() => {
-    // Never sound off-screen: a segment that advances while the tab is blurred updates
-    // the schedule but must not play until we return (the focus effect re-arms it then).
     if (
       !focusedRef.current ||
       !playhead ||
@@ -256,14 +193,10 @@ export default function RadioScreen() {
 
     void player.seekTo(Math.max(0, Math.min(expected, seg)) / 1000);
     player.play();
-    // A continuous run has no scrubbable timeline — mark it live so the lock screen
-    // hides the scrub bar and seek controls.
+
     player.setActiveForLockScreen(true, lockMeta(playhead.track), { isLiveStream: true });
   }, [playhead, observationUrl, status.isLoaded, player, serverNow]);
 
-  // THE SCHEDULE-CLOCK CONTROLLER. Each tick computes the boundary decision off the
-  // segment anchor and either holds, advances to the preloaded next, or resyncs. One
-  // busy guard keeps an in-flight advance/resync from firing twice.
   useEffect(() => {
     if (phase !== "playing" || !playhead) {
       return;
@@ -272,8 +205,6 @@ export default function RadioScreen() {
     const tick = () => {
       const head = playheadRef.current;
 
-      // Off-screen: don't advance (which would build+load a new player per segment for
-      // nothing) or resync. Re-focusing resyncs to the live slot; until then, hold.
       if (!focusedRef.current || !head || busyRef.current) {
         return;
       }
@@ -305,8 +236,6 @@ export default function RadioScreen() {
     return () => clearInterval(id);
   }, [phase, playhead, advance, resolveSlot, serverNow]);
 
-  // Poll the server between segments to refresh skew and catch a rolled catalogue (the
-  // schedule advancing to a finding neither we nor our preload expect → hard-resync).
   useEffect(() => {
     if (phase !== "playing" || !playhead) {
       return;
@@ -335,16 +264,12 @@ export default function RadioScreen() {
               });
           }
         })
-        .catch(() => {
-          // Transient — the next poll or the controller re-syncs.
-        });
+        .catch(() => {});
     }, SKEW_POLL_MS);
 
     return () => clearInterval(id);
   }, [phase, playhead, fetchSlot, resolveSlot]);
 
-  // Returning from the background (the timers were throttled while away): resync to the
-  // live slot so the run catches back up to where everyone else is.
   useEffect(() => {
     if (phase !== "playing") {
       return;
@@ -364,13 +289,6 @@ export default function RadioScreen() {
     return () => sub.remove();
   }, [phase, resolveSlot]);
 
-  // Leaving the Radio tab (blur) MUST stop the run — this is half of the no-overlap
-  // guarantee (the other half: begin() calls claimAudioFocus() to stop the feed). On
-  // blur: mark unfocused (silences any advance), pause the current player, drop the
-  // lock-screen controls, restore the foreground session. On a later focus, if a run was
-  // going, re-take the floor + session and resync. Deps are STABLE (`resolveSlot` only),
-  // never the churning `player` — so this fires on real focus/blur, not every segment;
-  // it reaches the live player through `playerRef`.
   useFocusEffect(
     useCallback(() => {
       focusedRef.current = true;
@@ -406,8 +324,6 @@ export default function RadioScreen() {
   return <NowPlaying observing={status.playing} onStop={stop} track={playhead.track} />;
 }
 
-// The begin-gate: the run's name + what it is + the one control. `loading` holds the
-// gate with a disabled catching-up button while the first slot resolves.
 function RadioGate({ loading = false, onBegin }: { loading?: boolean; onBegin: () => void }) {
   return (
     <View style={styles.screen}>
@@ -427,8 +343,6 @@ function RadioGate({ loading = false, onBegin }: { loading?: boolean; onBegin: (
   );
 }
 
-// The quiet-sector state: nothing to play. Offers a Begin to try again (the run may
-// have simply not started yet).
 function RadioMessage({ children, onBegin }: { children: string; onBegin: () => void }) {
   return (
     <View style={styles.screen}>
@@ -445,9 +359,6 @@ function RadioMessage({ children, onBegin }: { children: string; onBegin: () => 
   );
 }
 
-// The now-playing card: the finding's cover as the hero (a slow eclipse drift, static
-// under reduced motion), the coordinate above it, artist — title below, the observation
-// indicator, and the one Stop control in the thumb zone (cover-led, One Sun).
 function NowPlaying({
   observing,
   onStop,
@@ -502,9 +413,6 @@ function NowPlaying({
   );
 }
 
-// The observation indicator: a gold pulse + "Observing" while the note is on air, a
-// quiet "Catching up to the run…" while it buffers. The pulse is decorative (the label
-// carries the meaning), so it's aria-hidden and static under reduced motion.
 function ObservationIndicator({ observing, reduced }: { observing: boolean; reduced: boolean }) {
   const pulse = useSharedValue(0);
   useEffect(() => {

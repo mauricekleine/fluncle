@@ -1,11 +1,3 @@
-// Self-running checks for the replica's read — no framework (see replica-identity.test.ts on
-// the style). No database: the mapper is fed raw row objects of exactly the shape SQLite hands
-// back, and the SQL is checked as text.
-//
-// Two things are pinned here that a device would otherwise have to teach: the query obeys
-// libSQL mode's positional-only parameter binding, and a single unrenderable row costs that
-// row rather than the whole offline list.
-
 import {
   type ReplicaFindingRow,
   REPLICA_FINDINGS_LIMIT,
@@ -27,8 +19,6 @@ function assertTrue(value: boolean, message: string): void {
   }
 }
 
-// 1. The query's load-bearing properties. libSQL mode rejects NAMED parameters (the spike
-//    measured it), so exactly one positional `?` and no `:name` / `$name` / `@name` anywhere.
 assertEqual((REPLICA_FINDINGS_SQL.match(/\?/g) ?? []).length, 1, "one bound parameter: the limit");
 assertTrue(
   !/[:$@][a-z_]/i.test(REPLICA_FINDINGS_SQL),
@@ -44,14 +34,10 @@ assertTrue(
 );
 assertEqual(REPLICA_FINDINGS_LIMIT, 200, "deep enough to browse, small enough to be instant");
 
-// 2. Every column the query names must be one the deriving side lets across the device
-//    boundary (apps/web/scripts/lib/device-db-schema.ts). Nothing here may reach for a source
-//    column the cut deliberately withholds.
 for (const banned of ["embedding", "vector", "token", "secret", "email"]) {
   assertTrue(!REPLICA_FINDINGS_SQL.includes(banned), `the read never names a ${banned} column`);
 }
 
-// 3. The artist list, tolerant of everything the column can hold.
 assertEqual(parseArtists('["Netsky","Metrik"]').join("|"), "Netsky|Metrik", "the happy shape");
 assertEqual(parseArtists("[]").length, 0, "an empty list");
 assertEqual(parseArtists("not json").length, 0, "malformed JSON");
@@ -72,7 +58,6 @@ const row = (overrides: Partial<ReplicaFindingRow> = {}): ReplicaFindingRow => (
   ...overrides,
 });
 
-// 4. The happy mapping lands on exactly the fields ArchiveRow already takes.
 const mapped = toReplicaFinding(row());
 assertEqual(mapped?.logId, "042.A.07");
 assertEqual(mapped?.trackId, "spotify-track-1");
@@ -82,15 +67,11 @@ assertEqual(mapped?.bpm, 174);
 assertEqual(mapped?.key, "G# minor");
 assertEqual(mapped?.albumImageUrl, "https://i.example/cover.jpg");
 
-// 5. A row missing anything a row must be RENDERED by is dropped, never rendered blank: there
-//    would be nothing to name it by and nowhere to send a tap.
 assertEqual(toReplicaFinding(row({ log_id: null })), undefined, "no coordinate");
 assertEqual(toReplicaFinding(row({ log_id: "" })), undefined, "an empty coordinate");
 assertEqual(toReplicaFinding(row({ track_id: undefined })), undefined, "no track id");
 assertEqual(toReplicaFinding(row({ title: null })), undefined, "no title");
 
-// 6. The optional fields simply drop out; the meta line renders what is there and says nothing
-//    about what is not. A replica row carries no galaxy at all — the cut has no such column.
 const sparse = toReplicaFinding(
   row({ album_image_url: null, artists_json: null, bpm: null, musical_key: null }),
 );
@@ -100,12 +81,10 @@ assertEqual(sparse?.albumImageUrl, undefined, "no cover");
 assertEqual(sparse?.artists.length, 0, "no artists");
 assertEqual(sparse?.title, "Escape", "still renders");
 
-// 7. A bpm stored as text still reads as a figure; a bpm that is not a number does not.
 assertEqual(toReplicaFinding(row({ bpm: "174" }))?.bpm, 174, "a TEXT-declared bpm column");
 assertEqual(toReplicaFinding(row({ bpm: "n/a" }))?.bpm, undefined, "junk is not a figure");
 assertEqual(toReplicaFinding(row({ bpm: Number.NaN }))?.bpm, undefined, "NaN is not a figure");
 
-// 8. Over a result set: order is preserved, and one bad row costs that row alone.
 const list = toReplicaFindings([
   row({ log_id: "042.A.07" }),
   row({ log_id: null }),

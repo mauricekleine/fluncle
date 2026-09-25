@@ -12,9 +12,6 @@ import {
 } from "./coordinate";
 
 describe("canonical grammar drift tripwire", () => {
-  // The Lens runtime bundle ships zero workspace deps, so it keeps a local COPY of the
-  // `fluncle://` scheme pattern rather than importing the shared one. This test (never
-  // bundled) pins the copy to its canonical home — a divergence fails here loudly.
   test("the local scanner is byte-identical to @fluncle/contracts/log-id", () => {
     expect(COORDINATE_PATTERN.source).toBe(CANONICAL_COORDINATE_PATTERN.source);
     expect(COORDINATE_PATTERN.flags).toBe(CANONICAL_COORDINATE_PATTERN.flags);
@@ -55,9 +52,6 @@ describe("findCoordinates", () => {
   });
 
   test("rejects a run-on mark (the mark is exactly digit + one letter)", () => {
-    // The canon mark is `\d[A-Z]` — two characters. The old `[0-9A-Z]+` greedily
-    // swallowed the trailing letters; the tightened pattern must match nothing here
-    // (no clean coordinate ⇒ no dead link, no wasted 404).
     expect(findCoordinates("fluncle://007.0.0Zzz")).toEqual([]);
   });
 
