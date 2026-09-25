@@ -24,6 +24,7 @@ const envKeys = [
   "RESEND_API_KEY",
   "RESEND_SEGMENT_ID",
   "RESEND_FROM",
+  "RESEND_API_URL",
   "POSTIZ_API_KEY",
   "POSTIZ_API_URL",
 

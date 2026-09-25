@@ -18,6 +18,7 @@ export const WEB_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", ".."
 const VITE_PORT_BASE = 3140;
 const LIBSQL_PORT_BASE = 9440;
 const SONAR_PORT_BASE = 9640;
+const MAIL_PORT_BASE = 9840;
 const PORT_SLOTS = 200;
 
 function portSlot(): number {
@@ -33,9 +34,11 @@ const PORT_SLOT = portSlot();
 export const VITE_PORT = VITE_PORT_BASE + PORT_SLOT;
 export const LIBSQL_PORT = LIBSQL_PORT_BASE + PORT_SLOT;
 export const SONAR_PORT = SONAR_PORT_BASE + PORT_SLOT;
+export const MAIL_PORT = MAIL_PORT_BASE + PORT_SLOT;
 export const BASE_URL = `http://127.0.0.1:${VITE_PORT}`;
 export const LIBSQL_URL = `http://127.0.0.1:${LIBSQL_PORT}`;
 export const SONAR_URL = `http://127.0.0.1:${SONAR_PORT}`;
+export const MAIL_URL = `http://127.0.0.1:${MAIL_PORT}`;
 
 const DEV_VARS = join(WEB_ROOT, ".dev.vars");
 const DEV_VARS_TEMPLATE = join(WEB_ROOT, ".dev.vars.e2e.tpl");
@@ -88,7 +91,8 @@ function renderDevVarsTemplate(): string {
   const rendered = readFileSync(DEV_VARS_TEMPLATE, "utf8")
     .replaceAll("__E2E_VITE_PORT__", String(VITE_PORT))
     .replaceAll("__E2E_LIBSQL_PORT__", String(LIBSQL_PORT))
-    .replaceAll("__E2E_SONAR_PORT__", String(SONAR_PORT));
+    .replaceAll("__E2E_SONAR_PORT__", String(SONAR_PORT))
+    .replaceAll("__E2E_MAIL_PORT__", String(MAIL_PORT));
   const unresolved = rendered.match(/__E2E_[A-Z_]+__/g);
 
   if (unresolved) {
@@ -206,7 +210,7 @@ export function killProc(proc: Subprocess | undefined): void {
 }
 
 export async function reapPorts(): Promise<void> {
-  for (const port of [LIBSQL_PORT, SONAR_PORT, VITE_PORT]) {
+  for (const port of [LIBSQL_PORT, SONAR_PORT, MAIL_PORT, VITE_PORT]) {
     if (!(await isPortListening(port))) {
       continue;
     }

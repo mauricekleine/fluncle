@@ -5,11 +5,28 @@ const resendApiUrl = "https://api.resend.com";
 
 type ResendErrorBody = { message?: string; name?: string };
 
+export function resolveResendApiUrl(override: string | undefined): string {
+  if (!override) {
+    return resendApiUrl;
+  }
+
+  try {
+    const url = new URL(override);
+
+    return ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname)
+      ? override.replace(/\/$/, "")
+      : resendApiUrl;
+  } catch {
+    return resendApiUrl;
+  }
+}
+
 async function resendFetch(
   path: string,
   init: { body?: unknown; idempotencyKey?: string; method: "GET" | "POST" },
 ): Promise<Response> {
   const apiKey = await readEnv("RESEND_API_KEY");
+  const baseUrl = resolveResendApiUrl(await readOptionalEnv("RESEND_API_URL"));
   const headers: Record<string, string> = {
     Authorization: `Bearer ${apiKey}`,
     "Content-Type": "application/json",
@@ -19,7 +36,7 @@ async function resendFetch(
     headers["Idempotency-Key"] = init.idempotencyKey;
   }
 
-  return fetch(`${resendApiUrl}${path}`, {
+  return fetch(`${baseUrl}${path}`, {
     body: init.body === undefined ? undefined : JSON.stringify(init.body),
     headers,
     method: init.method,
@@ -249,4 +266,38 @@ export async function sendVerificationEmail(params: { to: string; url: string })
     text,
     to: params.to,
   });
+}
+
+export async function sendMagicLinkEmail(params: { to: string; url: string }): Promise<void> {
+  const text = [
+    "Here's your way into Fluncle. Open this link and you're signed in:",
+    "",
+    params.url,
+    "",
+    "It works once, for the next 15 minutes. If you didn't ask for it, ignore this and nothing happens.",
+    "",
+    "Fluncle",
+  ].join("\n");
+
+  const html = [
+    "<p>Here&rsquo;s your way into Fluncle. Open this link and you&rsquo;re signed in:</p>",
+    `<p><a href="${escapeHtmlAttribute(params.url)}">Sign in to Fluncle</a></p>`,
+    "<p>It works once, for the next 15 minutes. If you didn&rsquo;t ask for it, ignore this and nothing happens.</p>",
+    "<p>Fluncle</p>",
+  ].join("\n");
+
+  await sendTransactionalEmail({
+    html,
+    subject: "Your Fluncle sign-in link",
+    text,
+    to: params.to,
+  });
+}
+
+function escapeHtmlAttribute(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
 }
