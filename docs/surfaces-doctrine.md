@@ -69,6 +69,8 @@ All `application/json`; the OpenAPI document at `/api/v1/openapi.json` advertise
 
 The oRPC Zod schemas in `packages/contracts/src/orpc` own wire response shapes; `packages/contracts/src/index.ts` derives response DTOs from them with type-only imports so the CLI and Raycast do not load Zod. Request DTOs remain typed send shapes because some boundary schemas deliberately accept `unknown` before server validation. The Go SSH app cannot import the TypeScript package: keep its `submissionRequest` and `newsletterRequest` structs in step when those request shapes change.
 
+The shared oRPC mount preserves the API's `{ code, message, ok: false }` error body and excludes `/admin/*` from the public OpenAPI document. Its cross-origin allowance comes from public read contracts; authenticated responses and live or principal-specific reads use `no-store`. Unexpected server faults go to private diagnostics while anonymous callers receive a generic error. The CLI device grant accepts only Fluncle's first-party client id and mints a normal user session, separate from both admin bearer tokens. Browser session-cookie caching lasts at most 60 seconds; authorization still reads the user's current status and verified-email state from the database on each request.
+
 Backfill query controls stay optional strings in the contracts because their handlers parse and clamp malformed values without returning 400. Ops that also accept box-supplied evidence use oRPC's detailed input structure to carry query controls and a bounded body together.
 
 | Surface                 | Route                       | Exposes                                                                                                                                        | Weight    |

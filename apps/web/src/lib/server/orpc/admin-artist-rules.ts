@@ -1,6 +1,3 @@
-// Global artist-rule handlers. Artist rules govern what future crawls acquire; they do not
-// delete, hide, or rewrite anything already stored.
-
 import { ORPCError } from "@orpc/server";
 import {
   addArtistRule,
@@ -19,25 +16,15 @@ import { purgeArtistSitemapCachesNow } from "../sitemap-data";
 import { adminAuth, operatorGuard } from "../orpc-auth";
 import { apiFault, type Implementer } from "./_shared";
 
-/**
- * A VISIBILITY ruling changes what `/artist/<slug>` serves, so the edge-cached page has to be
- * dropped — the same purge a bio write or a label merge performs. Acquisition verdicts change
- * nothing a reader can see, so they purge nothing. Best-effort, exactly like every other purge:
- * the hub indexes are not purged at all (they ride a 60s freshness window by design).
- */
 async function purgeArtistVisibility(verdict: ArtistRuleVerdict, artistMbid: string) {
   if (verdict !== "unlisted") {
     return;
   }
 
-  // Never fatal: the ruling is already written and correct at the origin, and a cache that is one
-  // freshness window behind is not a reason to fail the operator's write.
   try {
     const slugs = await artistSlugsForMbid(artistMbid);
     purgeEntityCaches(slugs.map((slug) => ({ kind: "artist" as const, slug })));
-    // The pages AND the documents that advertise them: a sitemap child outlives a detail page in
-    // cache by an order of magnitude, so without this the archive keeps submitting a URL that now
-    // 404s for the rest of that window.
+
     await purgeArtistSitemapCachesNow();
   } catch (error) {
     logEvent("warn", "artist-rule.visibility-purge-failed", {
@@ -48,7 +35,6 @@ async function purgeArtistVisibility(verdict: ArtistRuleVerdict, artistMbid: str
 }
 
 export function adminArtistRulesHandlers(os: Implementer) {
-  // GET /admin/artist-rules — ADMIN tier: a pure read for the board and operator scripts.
   const listArtistRulesHandler = os.list_artist_rules.use(adminAuth).handler(async () => {
     try {
       return { ok: true as const, rules: await listArtistRules() };
@@ -57,7 +43,6 @@ export function adminArtistRulesHandlers(os: Implementer) {
     }
   });
 
-  // POST /admin/artist-rules — OPERATOR tier: add one global allow/block exception.
   const addArtistRuleHandler = os.add_artist_rule
     .use(adminAuth)
     .use(operatorGuard)
@@ -88,8 +73,6 @@ export function adminArtistRulesHandlers(os: Implementer) {
       }
     });
 
-  // DELETE /admin/artist-rules/{id} — OPERATOR tier: remove one global exception.
-  // The delete is idempotent; an already-absent id still returns success.
   const removeArtistRuleHandler = os.remove_artist_rule
     .use(adminAuth)
     .use(operatorGuard)
@@ -107,8 +90,6 @@ export function adminArtistRulesHandlers(os: Implementer) {
       }
     });
 
-  // PATCH /admin/artist-rules/{id} — OPERATOR tier: drift-audit bookkeeping for either
-  // global or per-label rules. This stamps no acquisition scope and performs no re-arm.
   const updateArtistRuleHandler = os.update_artist_rule
     .use(adminAuth)
     .use(operatorGuard)

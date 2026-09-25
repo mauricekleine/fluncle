@@ -1,10 +1,3 @@
-// The `me-frontier` domain router module — a signed-in user's ONE public Spotify
-// playlist, "Fluncle's Frontier" (E2). The GET read is on `privateUserAuth` (401
-// without a session); the mint is on `privateUserMutation` (CSRF + a 4/h rate limit)
-// PLUS an in-handler verified-email gate (403 `email_unverified`) — the mint creates a
-// real, public artifact on the operator's Spotify account, so it is held to the same
-// verified-email bar the recommendation engine is.
-
 import { waitUntil } from "cloudflare:workers";
 import { ORPCError } from "@orpc/server";
 import { getFrontierEdition, getFrontierEditions } from "../frontier-editions";
@@ -17,18 +10,6 @@ import { logEvent } from "../log";
 import { privateUserAuth, privateUserMutation } from "../orpc-auth";
 import { apiFault, type Implementer } from "./_shared";
 
-/**
- * Build the `me-frontier` domain's handlers.
- *
- *   - `get_private_frontier_playlist` — the Frontier state (playlist URL + last sync +
- *     the kill-switch state). Session read.
- *   - `mint_private_frontier_playlist` — mint or refresh. CSRF + the
- *     `account.frontier.mint`/4-per-hour rate limit, and a verified-email gate in the
- *     handler (a mint creates a public playlist; an unverified account 403s). The edition
- *     (the internal cache) is always written; a closed kill switch is a clean
- *     `{ ok: true, status: "edition_only" }` (the edition was born, the Spotify half
- *     skipped), never a fault.
- */
 export function meFrontierHandlers(os: Implementer) {
   const getFrontier = os.get_private_frontier_playlist
     .use(privateUserAuth)
@@ -48,8 +29,6 @@ export function meFrontierHandlers(os: Implementer) {
     .use(privateUserMutation({ action: "account.frontier.mint", limit: FRONTIER_MINT_RATE_LIMIT }))
     .handler(async ({ context }) => {
       try {
-        // The verified-email gate, on TOP of the session/CSRF/rate-limit tier. A mint
-        // creates a public playlist, so it is held to the same bar the rec engine is.
         if (!context.user.emailVerified) {
           throw new ORPCError("FORBIDDEN", {
             data: {
@@ -64,8 +43,6 @@ export function meFrontierHandlers(os: Implementer) {
         const result = await mintOrRefreshFrontierPlaylist(context.user);
 
         if (!result.ok) {
-          // A best-effort fault (a Spotify hiccup, or the daily mint cap) surfaces as a
-          // 503 the page can retry — the mint is idempotent, so a retry is safe.
           throw new ORPCError("SERVICE_UNAVAILABLE", {
             data: {
               apiCode:
@@ -80,11 +57,6 @@ export function meFrontierHandlers(os: Implementer) {
           });
         }
 
-        // THE COVER LANDS WITH THE MINT. On a fresh CREATE only (a refresh already has its
-        // cover), fire the in-Worker Satori render + Spotify upload on `waitUntil` so it runs
-        // after the response — the mint never waits on it, and a cover failure never fails the
-        // mint (the row keeps its NULL stamp and the `upload_frontier_covers` backfill retries).
-        // The lazy `import` keeps `workers-og` out of the `./orpc` module graph (frontier-cover.ts).
         if (result.status === "minted" && result.playlistId) {
           const playlistId = result.playlistId;
           const crewNumber = context.user.crewNumber ?? null;
@@ -117,7 +89,6 @@ export function meFrontierHandlers(os: Implementer) {
     .use(privateUserAuth)
     .handler(async ({ context }) => {
       try {
-        // Scope to the session user; zero editions is a clean empty array, never a 404.
         return { editions: await getFrontierEditions(context.user.id), ok: true as const };
       } catch (error) {
         if (error instanceof ORPCError) {
@@ -132,9 +103,6 @@ export function meFrontierHandlers(os: Implementer) {
     .use(privateUserAuth)
     .handler(async ({ context, input }) => {
       try {
-        // The path number is raw (the rails keep params as strings). Parse it, and
-        // scope the read by the session user — the number is per-user, so the user_id
-        // predicate is what makes it THIS user's edition. A bad or missing number 404s.
         const number = Number.parseInt(input.number, 10);
 
         if (!Number.isInteger(number) || number < 1) {

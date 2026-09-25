@@ -1,17 +1,3 @@
-// The `admin-labels` domain router module — the label entity's admin surface and the
-// operator's crawl-seed control. Two ops, on the `admin-galaxies` pattern:
-//
-//   - `list_labels_admin` — `adminAuth` (agent-allowed read): every label with its seed
-//     state + finding count. `?seedState=enabled` is the seed-set read the catalogue
-//     crawler makes with its agent token.
-//   - `update_label` — `adminAuth` + `operatorGuard` (OPERATOR): the ruling. Steering what
-//     Fluncle crawls next is an editorial act, so the box's agent token 403s — the
-//     `update_galaxy` precedent.
-//
-// The ruling is CRAWL SCOPE, NEVER STORAGE: it changes the NEXT crawl's seed set and
-// touches nothing already stored. Neither handler reads or writes a track, a finding, or
-// anything a crawl brought in — and neither ever should. See docs/label-entity.md.
-
 import { buildEntityBioPrompt, fetchEntityFacts, gateOrAcceptBio } from "../bio";
 import { purgeEntityCache } from "../edge-cache";
 import {
@@ -46,17 +32,7 @@ import { getFindingsByLabel } from "../tracks";
 import { ORPCError } from "@orpc/server";
 import { apiFault, type Implementer, parseLimit, toFault } from "./_shared";
 
-/** Build the `admin-labels` domain's handlers. */
 export function adminLabelsHandlers(os: Implementer) {
-  // GET /admin/labels — `adminAuth` (operator OR agent): every label, optionally scoped
-  // to one seed state (the crawler's `?seedState=enabled` read). This is the SEED-SET read:
-  // it is deliberately COUNTLESS — `listLabels` no longer pays the whole-corpus finding
-  // aggregate the crawler never used. `findingCount` rides out as 0 here; the counts a human
-  // sees live on the `/admin/labels` station, computed per-page over the indexed `label_id`
-  // edge (`listLabelsPage`), never on this hot seed read. `mbLabelId` is included here because
-  // because the contract shape had no field for it; `LabelAdminItem` now carries the identity
-  // fields (the ruling needs to know WHICH label it is), so the seed read passes them straight
-  // through and the wire shape is still exactly `LabelAdminItem`.
   const listLabelsAdminHandler = os.list_labels_admin.use(adminAuth).handler(async ({ input }) => {
     try {
       const labels = (await listLabels(input.seedState)).map((label) => ({
@@ -70,8 +46,6 @@ export function adminLabelsHandlers(os: Implementer) {
     }
   });
 
-  // PATCH /admin/labels/{id} — OPERATOR tier: rule on a label's crawl-seed state. An
-  // agent token 403s at `operatorGuard`.
   const updateLabelHandler = os.update_label
     .use(adminAuth)
     .use(operatorGuard)
@@ -89,8 +63,6 @@ export function adminLabelsHandlers(os: Implementer) {
       }
     });
 
-  // GET /admin/labels/{id}/artists — ADMIN tier: read one label's exact-MBID acquisition
-  // exceptions. Reading scope changes nothing, so the box's agent token may inspect it.
   const listLabelArtistRulesHandler = os.list_label_artist_rules
     .use(adminAuth)
     .handler(async ({ input }) => {
@@ -107,8 +79,6 @@ export function adminLabelsHandlers(os: Implementer) {
       }
     });
 
-  // PUT /admin/labels/{id}/artists — OPERATOR tier: replace the complete per-label set
-  // transactionally and re-arm that acquisition scope. Existing stored rows stay untouched.
   const replaceLabelArtistRulesHandler = os.replace_label_artist_rules
     .use(adminAuth)
     .use(operatorGuard)
@@ -134,10 +104,6 @@ export function adminLabelsHandlers(os: Implementer) {
       }
     });
 
-  // POST /admin/labels/{slug}/merge — OPERATOR tier: fold a slug-split label into its canonical
-  // row. Re-points every FK, reconciles canonical-wins, writes the losing name as a confirmed
-  // alias, deletes the loser. Purges BOTH slugs' edge-cached pages so the merge (and the new 301
-  // on the losing slug) surfaces. A ruled-vs-ruled seed disagreement 409s (stop-and-ask).
   const mergeLabelHandler = os.merge_label
     .use(adminAuth)
     .use(operatorGuard)
@@ -145,7 +111,6 @@ export function adminLabelsHandlers(os: Implementer) {
       try {
         const result = await mergeLabel(input.slug, input.canonicalSlug);
 
-        // Drop both cached pages: the canonical (its content changed) and the loser (now a 301).
         purgeEntityCache("label", result.losingSlug);
         purgeEntityCache("label", result.canonicalSlug);
 
@@ -175,13 +140,6 @@ export function adminLabelsHandlers(os: Implementer) {
       }
     });
 
-  // POST /admin/labels — OPERATOR tier: mint a label from its MusicBrainz identity, the one door
-  // beside the publish path and a crawl discovery. Connect-or-create through the SAME `ensureLabel`
-  // MBID fold the crawler uses, facts carried fill-empty-only, idempotent on a second call. An
-  // optional `seedState` rules through the SAME `update_label` write, so the stamps match. Purges the
-  // label's cached page because filled founding facts are visible on it. `takeOverSlug` is the
-  // operator's explicit way through the identity conflict: it re-points that exact row's MBID onto
-  // the minted entity, and only ever for a trackless, non-enabled row.
   const mintLabelHandler = os.mint_label
     .use(adminAuth)
     .use(operatorGuard)
@@ -221,8 +179,6 @@ export function adminLabelsHandlers(os: Implementer) {
           });
         }
 
-        // The operator named a row that is not the one the mint collided with — a BAD REQUEST,
-        // because the instruction itself is wrong, and the message names the row that conflicts.
         if (error instanceof LabelTakeOverSlugMismatchError) {
           throw new ORPCError("BAD_REQUEST", {
             data: { apiCode: "take_over_slug_mismatch", apiMessage: error.message },
@@ -231,9 +187,6 @@ export function adminLabelsHandlers(os: Implementer) {
           });
         }
 
-        // The named row cannot give up its identity (it holds tracks, or it is a live crawl seed).
-        // A CONFLICT, the `merge_seed_conflict` class: the state of the archive refuses, not the
-        // request shape.
         if (error instanceof LabelTakeOverNotEmptyError) {
           throw new ORPCError("CONFLICT", {
             data: { apiCode: "take_over_not_empty", apiMessage: error.message },
@@ -246,7 +199,6 @@ export function adminLabelsHandlers(os: Implementer) {
       }
     });
 
-  // GET /admin/labels/aliases — `adminAuth`: the open alias candidates the review section reads.
   const listLabelAliasesHandler = os.list_label_aliases.use(adminAuth).handler(async () => {
     try {
       return { aliases: await listLabelAliasCandidates(), ok: true } as const;
@@ -255,7 +207,6 @@ export function adminLabelsHandlers(os: Implementer) {
     }
   });
 
-  // POST /admin/labels/aliases/{id}/confirm — OPERATOR tier: rule two spellings one label.
   const confirmLabelAliasHandler = os.confirm_label_alias
     .use(adminAuth)
     .use(operatorGuard)
@@ -269,7 +220,6 @@ export function adminLabelsHandlers(os: Implementer) {
       }
     });
 
-  // DELETE /admin/labels/aliases/{id} — OPERATOR tier: discard a proposed spelling.
   const rejectLabelAliasHandler = os.reject_label_alias
     .use(adminAuth)
     .use(operatorGuard)
@@ -283,14 +233,8 @@ export function adminLabelsHandlers(os: Implementer) {
       }
     });
 
-  // POST /admin/labels/{slug}/bio — agent tier (`adminAuth`), the note_track precedent:
-  // the on-box sweep authored the label's bio; this VOICE-GATES it and stores it
-  // FILL-EMPTY-ONLY. A bio already on file (operator OR previously auto-authored) is a
-  // skipped no-op. Deliberately AGENT tier (unlike the operator-tier `update_label`
-  // crawl-seed ruling): authoring a bio is enrichment, not an editorial crawl ruling.
   const describeLabelHandler = os.describe_label.use(adminAuth).handler(async ({ input }) => {
     try {
-      // `dryRun` runs the voice gate and stores nothing (the sweep's pre-check).
       const dryRun = input.dryRun === true;
       const label = await getLabelBySlug(input.slug);
 
@@ -302,14 +246,10 @@ export function adminLabelsHandlers(os: Implementer) {
         });
       }
 
-      // Fast-path skip; the real guarantee is the DB predicate in `fillEmptyLabelBio`.
       if (!dryRun && label.bio?.trim()) {
         return { bio: label.bio, ok: true as const, skipped: true as const, slug: label.slug };
       }
 
-      // Voice-gate the agent-authored bio (defence in depth, re-scanned server-side) — UNLESS
-      // this is the sweep's third and last authoring pass, where the draft lands and the
-      // acceptance is logged + flagged instead (see `gateOrAcceptBio`).
       const gated = gateOrAcceptBio({
         bio: input.bio,
         finalAttempt: input.finalAttempt === true,
@@ -317,17 +257,13 @@ export function adminLabelsHandlers(os: Implementer) {
         name: label.name,
         slug: label.slug,
       });
-      // Only `bio` is destructured; the acceptance's own fields ride out via the spreads below,
-      // so removing them from `gateOrAcceptBio` needs no edit here (see bio.ts, "SEVERABLE").
+
       const { bio } = gated;
 
       if (dryRun) {
         return { ...gated, dryRun: true as const, ok: true as const, slug: label.slug };
       }
 
-      // Fill the empty bio ATOMICALLY — the fill-empty-only predicate lives in the SQL. The
-      // accepted violations ride the SAME statement, so a bypassed bio raises its `bio-review`
-      // queue row the moment it lands (see lib/server/bio-review.ts).
       const filled = await fillEmptyLabelBio(
         label.slug,
         bio,
@@ -346,8 +282,6 @@ export function adminLabelsHandlers(os: Implementer) {
         };
       }
 
-      // The bio is a primary rendered block on `/label/<slug>`; drop its cached page so the
-      // new bio surfaces. Only on an actual write (fill-empty may have no-op'd above).
       purgeEntityCache("label", label.slug);
 
       return { ...gated, ok: true as const, slug: label.slug };
@@ -356,13 +290,6 @@ export function adminLabelsHandlers(os: Implementer) {
     }
   });
 
-  // GET /admin/labels/{slug}/bio-draft — agent tier (`adminAuth`): the Worker-paced grounding
-  // seam (the describe_label sibling). The box cannot gather Firecrawl facts (no key) or
-  // enumerate the tracks it has logged on a label (not on the wire), so it triggers this READ:
-  // the Worker runs the Firecrawl gather with ITS key + pulls the logged finding titles from
-  // ITS DB, assembles the registered bio prompt, and returns the ready-to-author prompt + its
-  // provenance version. The box then authors with `claude -p` and writes back via
-  // `describe_label`. Publishes nothing. A missing slug returns `found:false` (never throws).
   const draftLabelBioHandler = os.draft_label_bio.use(adminAuth).handler(async ({ input }) => {
     try {
       const label = await getLabelBySlug(input.slug);
@@ -378,8 +305,6 @@ export function adminLabelsHandlers(os: Implementer) {
         };
       }
 
-      // Gather Worker-side: Firecrawl facts (with the Worker's key) + the logged finding
-      // titles (with the Worker's DB) — the two the box cannot reach. Both best-effort.
       const facts = await fetchEntityFacts({ kind: "label", name: label.name });
       const findings = await getFindingsByLabel(label.id);
       const findingTitles = findings.map((finding) => finding.title);
@@ -404,8 +329,6 @@ export function adminLabelsHandlers(os: Implementer) {
     }
   });
 
-  // GET /admin/labels/bio-queue — agent tier (`adminAuth`), the list_labels_admin
-  // precedent: the bio worklist (labels with findings but no bio yet), oldest-first.
   const listLabelsMissingBioHandler = os.list_labels_missing_bio
     .use(adminAuth)
     .handler(async ({ input }) => {

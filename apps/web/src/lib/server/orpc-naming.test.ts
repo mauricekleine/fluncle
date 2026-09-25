@@ -1,210 +1,89 @@
 import { describe, expect, it } from "vitest";
 import { CONTRACT_OPERATION_NAMES, CONTRACT_OPERATION_ROUTES } from "@fluncle/contracts/orpc";
 
-// Turns the ratified `verb_noun` cross-surface naming convention from a
-// review-only rule into a BUILD-FAIL check. The contract registry
-// (`@fluncle/contracts/orpc`) is the
-// source of truth for every machine-facing op name, and every key in it is
-// the canonical op the rest of the surfaces (CLI/API/MCP/SSH) derive from. So
-// asserting the registry keys all obey the convention enforces it everywhere a
-// name is derived from.
-//
-// The sibling coverage tests (orpc-coverage.test.ts / orpc-admin-coverage.test.ts)
-// pin the exact SET of ops a route maps to. This test is the complement: it does
-// NOT pin the full list (that would duplicate them and rot), it pins the SHAPE +
-// the verb each op name must take. An op added in camelCase, as a single word, or
-// with an unapproved verb fails the build here, before it can leak a fifth
-// spelling of an operation onto a public surface.
-
-// The canonical op-name shape: `verb_noun`, lowercase `snake_case`, at least two
-// segments, each segment a run of [a-z0-9] (digits allowed only after the first
-// letter of a segment). Catches camelCase (`getTrack`), a bare single word
-// (`enrich`), SCREAMING_CASE, and leading/trailing/double underscores.
 const VERB_NOUN_SHAPE = /^[a-z]+(?:_[a-z0-9]+)+$/;
 
-// The approved leading verbs. The convention names a small closed set
-// (`list`, `get`, `search`, `submit`, `subscribe`, `create`, `update`, `delete`,
-// `publish`) plus a named non-CRUD action set (`enrich`, `observe`, `render`,
-// `draft`, `distribute`, `backfill`, `authorize`, `finalize`). The live registry
-// also already uses a handful of additional concrete actions the doc's prose set
-// doesn't enumerate verbatim (e.g. `add`, `approve`, `mint`). To enforce the
-// VERB without pinning the full op list (the coverage tests already pin that),
-// this set is the doc's closed set UNIONED with the verbs the registry uses
-// today. The point it guards: a NEW op must reuse one of these verbs — an
-// off-convention coinage (`fetch_track`, `grab_track`) fails here, forcing it
-// back to the registry vocabulary or a deliberate edit of this set with a reason.
 const APPROVED_VERBS = new Set<string>([
-  // The convention's closed CRUD-ish verb set.
   "create",
   "delete",
   "get",
   "list",
   "publish",
-  // `read` (return a composite diagnostic view rather than enumerate one entity kind) — added
-  // deliberately with `read_run_ledger`, whose response pairs raw run rows with whole-window
-  // per-unit aggregates. `list` would name only the paged rows and hide the second half of the
-  // operation; `get` would imply one ledger entity. The verb says the resource is evidence.
+
   "read",
   "search",
   "submit",
   "subscribe",
   "update",
-  // The convention's named non-CRUD action set.
-  // `advance` (move a finding one step further along the pipeline it is already in —
-  // render → publish) — added deliberately with the `advance_publish_queue` auto-advance
-  // tick. Not `publish` (that names the one-shot act, and the tick may push nothing) and
-  // not `drip` (that is the clip-feed's paced, jittered cadence). This names the CHAINING:
-  // the step that stops a finished stage from waiting on a human tap.
+
   "advance",
-  // `acknowledge` (durably accept the exact ordered event batch just served) and `checkpoint`
-  // (durably accept one re-read snapshot page) name two distinct consumer proofs. Neither is a
-  // generic update: both are monotonic protocol transitions guarded by digests and fences.
+
   "acknowledge",
-  // `activate` moves a fully rebuilt consumer onto its fenced incremental checkpoint; `inactivate`
-  // retires one and deliberately discards that checkpoint so reuse requires a fresh bootstrap.
+
   "activate",
-  // `anchor` (verify box-supplied Spotify candidates against a catalogue row and, on a hit, write
-  // its `spotify_uri`/`spotify_url` anchor) — added deliberately with the `anchor_track` op
-  // (docs/catalogue-crawler.md § the anchor). Distinct from every verb here: not `resolve` (fix a
-  // known entity's external identity — an artist's socials), not `verify` (check a stored artifact
-  // against a reference and record a verdict), not `update` (a generic patch); it CHECKS candidates
-  // and, only on a hard match, binds the row to its Spotify identity.
+
   "anchor",
   "authorize",
   "backfill",
   "checkpoint",
-  // `compact` removes only a bounded, transactionally proven log prefix below every live consumer
-  // barrier. It is not `delete`: the caller cannot name rows and no live interval may be removed.
+
   "compact",
-  // `coordinate` advances one contender through a fenced admission protocol. It is not a generic
-  // update: the database decides queue order, ownership, renewal, release, and cancellation.
+
   "coordinate",
-  // `resolve` — walk an external authority to fix an entity's cross-platform identity. `resolve_artist`
-  // resolves an artist's social profiles from MB + Firecrawl (the artist-relationship epic);
-  // `resolve_anchor` resolves a catalogue row's Spotify anchor from ListenBrainz (the anchor waterfall's
-  // free rung). Distinct from `anchor` (verify box-supplied candidates) — this FETCHES them itself.
+
   "resolve",
-  // `capture` (recover the public YouTube/TikTok post URLs Postiz withholds on
-  // create, building each from the platform's native content id) — added
-  // deliberately with the `capture_post_urls` sweep.
+
   "capture",
-  // `commit` settles an already-prepared, receipt-bound reconciliation result atomically. It is
-  // distinct from `update`: the caller cannot patch arbitrary fields, and stale snapshots reject.
+
   "commit",
   "distribute",
   "draft",
-  // `drip` (post one bounded tick of due clips to Instagram) — added deliberately with
-  // the clip-drip-feed `drip_clips` op. The drip-feed's own verb: neither `publish` (a
-  // one-shot direct post) nor `distribute` (the multi-GB mixtape byte-move) fits the
-  // paced, kill-switch-aware, capped queue-drain this names.
+
   "drip",
   "enrich",
   "finalize",
-  // `migrate` (move data between stores as a one-off operator-run migration) — added
-  // deliberately with the REF-05 `migrate_preview_archive` op, which relocates the
-  // archived 30s previews from the public bucket to the private one. Distinct from
-  // `backfill` (fill missing data) — this MOVES existing data + rewrites pointers.
+
   "migrate",
-  // `prepare` freezes the current eligible state before external work. It is distinct from `get`:
-  // the snapshot becomes the authority checked by the later receipt-bound commit.
+
   "prepare",
-  // `note` (auto-author a finding's editorial note) — the written-note sibling of
-  // `observe`/`context`, same verb-as-action shape ("note this finding").
+
   "note",
   "observe",
-  // `pin` (fix the one external source a sweep must use for a row, overriding the search the
-  // sweep would otherwise run) — added deliberately with `pin_capture_source` (docs/the-ear.md §
-  // Wrong audio). Genuinely new: not `force` (overrule a machine VETO so the machine may act —
-  // the row still walks the ladder), not `set` (write a value the row displays), not `update`
-  // (a generic patch), not `anchor` (bind a row to its store identity) — it NAMES THE SOURCE the
-  // acquisition must come from, on the operator's authority, and `clear` is its counterpart.
+
   "pin",
-  // `purge` (evict a finding's stale Cloudflare video renditions from the edge) —
-  // ratified into the action set with the `purge_video` re-render cache command.
-  // The sibling of `requeue` on the video lifecycle:
-  // `requeue_video` clears the render gates, `purge_video` clears the edge cache.
+
   "purge",
-  // `rekey` (recompute the projected ORDER KEY of every row in one due-work queue, because the
-  // definition that decides that key changed) — added deliberately with `rekey_due_work_queue`.
-  // Distinct from every verb here: not `rebuild` (that is the whole-family generation walk this
-  // one deliberately narrows to a single queue), not `reconcile` (compare a derived value against
-  // source truth and correct the disagreements — here nothing disagrees, the definition moved
-  // under rows that are all individually consistent), and not `requeue` (put one subject back on a
-  // queue). It re-derives a queue's POSITIONS.
+
   "rekey",
-  // `rank` (precompute each catalogue track's nearest finding + its capture priority) —
-  // added deliberately with The Ear's `rank_catalogue` sweep. Distinct from every verb
-  // already here: it neither fills missing data (`backfill`) nor moves it (`migrate`) nor
-  // measures it (`enrich`) — it ORDERS an existing corpus against Fluncle's taste, and the
-  // ordering IS the product.
+
   "rank",
-  // `reconcile` (recompute a maintained/derived value from its source of truth and CORRECT the
-  // rows that disagree) — added deliberately with `reconcile_hub_counts`, the drift backstop under
-  // keystone 2's maintained hub counts. Genuinely new: not `backfill` (fill data that was never
-  // there — the one-time seed), not `rank` (order a corpus against taste), not `update` (accept a
-  // client body), not `verify` (adjudicate an artifact and record a verdict without fixing it),
-  // and not `resync` (push internal truth OUT to an external platform). This one compares an
-  // internal derived value against internal truth and REPAIRS the disagreement in place.
+
   "reconcile",
   "render",
-  // `requeue` (put a finding's video back on the render queue) — ratified into the
-  // action set with the `requeue_video` re-render command.
+
   "requeue",
-  // `resync` (re-derive a published mixtape's distribution metadata from its current
-  // cues and push it to the live platform — no re-upload) — added deliberately with the
-  // `resync_mixtape_youtube` + `resync_mixtape_mixcloud` ops (both server-side).
+
   "resync",
-  // `revoke` (withdraw a credential that was already issued, so it stops being honoured) —
-  // added deliberately with `revoke_admin_grants`, the admin-session kill switch that bumps
-  // the grant epoch and invalidates every outstanding browser grant cookie. Genuinely new:
-  // not `delete` (drop an entity — the grants are stateless, there is no row to remove), not
-  // `reset` (restore an initial state), not `clear` (lift a flag on a row we keep), and the
-  // opposite of `mint`/`authorize` — it UN-ISSUES what was issued.
+
   "revoke",
-  // `verify` (check a stored artifact against a REFERENCE and record the verdict) — added
-  // deliberately with the capture-verification `verify_capture` op (docs/the-ear.md § Wrong
-  // audio): the captured full song is fingerprinted against the track's ISRC-resolved official
-  // preview to catch wrong-audio captures. Genuinely new: not `enrich` (derive an entity's own
-  // attributes from its own audio/facts), not `rank` (order a corpus against taste), not `resolve`
-  // (fix an external identity) — it ADJUDICATES a captured artifact against ground truth.
+
   "verify",
-  // Concrete actions already in the live registry the prose set doesn't spell out
-  // verbatim. Adding a genuinely new verb is a deliberate edit here (with a reason),
-  // which is exactly the gate this test exists to enforce.
+
   "add",
-  // `build` (chain a mixable set from a seed finding — the `build_set` tool, tools/specs.ts) —
-  // added deliberately when `build_set` moved into the shared tool registry and came under the
-  // `verb_noun` naming test. The sibling of `anchor` / `drip`: a concrete non-CRUD action verb.
-  // Distinct from `create`/`mint` (make a new persisted entity) — `build_set` mints nothing; it
-  // ASSEMBLES an ordered set from findings the archive already holds and hands back a `/mix` link.
+
   "build",
-  // `announce` (post a published mixtape's crew callout to the Telegram crew channel) —
-  // added deliberately with the `announce_mixtape` op. The last lifecycle step; neither
-  // `publish` (mint/flip) nor `distribute` (the byte-move) names the act of telling the crew.
+
   "announce",
   "approve",
-  // `certify` (turn an existing catalogue row into a finding in place — mint its certification
-  // half, without creating a new track) — added deliberately with The Ear's `certify_track` op.
-  // It names the exact act the catalogue domain otherwise forbids: `publish` is the Spotify add
-  // (it inserts a new track), while this certifies a row the archive ALREADY holds. It is the one
-  // catalogue act reserved for the operator.
+
   "certify",
   "collect",
-  // `confirm` (promote a candidate artist social to `confirmed`, letting it onto the
-  // public artist page) — added deliberately with the artist-relationship `confirm_artist_social`
-  // op. The operator's one-tap trust gate; distinct from `update` (edit a field).
+
   "confirm",
   "context",
-  // `describe` (auto-author an artist's/label's voiced public bio — the entity sibling of
-  // `note`) — added deliberately with the `describe_artist` / `describe_label` bio-engine
-  // ops. Distinct from `note` (that names ONE finding's editorial line): this describes a
-  // whole ENTITY (an artist, a label) in a short grounded paragraph.
+
   "describe",
-  // `crawl` (walk the MusicBrainz release graph outward from the operator's enabled seed
-  // labels and write catalogue rows into `tracks`) — added deliberately with the
-  // `crawl_catalogue` op. A genuinely new action: neither `backfill` (fill missing data on
-  // rows we already hold) nor `resolve` (fix a known entity's external identity) names the
-  // act of DISCOVERING tracks the archive has never heard of. It certifies nothing.
+
   "crawl",
   "deregister",
   "exchange",
@@ -214,68 +93,36 @@ const APPROVED_VERBS = new Set<string>([
   "merge",
   "mint",
   "presign",
-  // `promote` (turn a captured recording into a full published mixtape — mint-or-reuse a
-  // coordinate) — added deliberately with the RFC recording-primitive `promote_recording` op.
+
   "promote",
-  // `record` (persist a service-health snapshot for the public /status dashboard) —
-  // the agent-tier write the box's status cron drives. "Record this snapshot": a
-  // genuinely new action verb, added deliberately with the `record_health` op.
+
   "record",
-  // `refresh` (re-mirror every crew member's Frontier playlist from their current
-  // recommendations — E2, the public recommendation machine) — added deliberately with
-  // the `refresh_frontier_playlists` weekly sweep. The word the roadmap + the mint's own
-  // "refreshed" status use for the act: distinct from `resync` (re-derive a published
-  // mixtape's metadata and push it, no re-upload) and `rank` (order a corpus) — this
-  // RE-COMPUTES a per-user recommendation set and full-replaces the playlist that mirrors it.
+
   "refresh",
   "register",
   "reject",
-  // `remove` (drop one of an artist's social links inline in the review queue) — added
-  // deliberately with the artist-relationship `remove_artist_social` op. The delete-a-
-  // sub-row sibling of `add_artist_social`; distinct from `delete` (drop a whole entity).
+
   "remove",
-  // `replace` (transactionally swap a recording's WHOLE cue set for a new ordered one)
-  // — added deliberately with the `replace_recording_cues` op (the Wave-3 Rekordbox
-  // derivation write target). Distinct from `set_*` (re-time an existing set) and
-  // `update_*` (edit fields): this REPLACES all the rows.
+
   "replace",
   "reset",
-  // `clear` (lift the wrong-audio quarantine on one catalogue row — the operator's override on
-  // The Ear's wrong-audio verdict) — added deliberately with `clear_wrong_audio` (docs/the-ear.md
-  // § Wrong audio). Distinct from `reset` (restore an initial state) and `delete` (drop a row): it
-  // CLEARS a flag/verdict, keeping the row and its captured audio.
+
   "clear",
-  // `flag` (mark a finding's captured audio as the wrong recording — the operator's counterpart
-  // to `clear`) — added deliberately with `flag_wrong_audio` (docs/the-ear.md § Wrong audio). It
-  // RAISES the verdict the sweep can only raise against the catalogue side; `clear` lifts one.
+
   "flag",
-  // `force` (overrule a WRONG duplicate veto so a catalogue row can be captured — the dupe-veto
-  // escape hatch) — added deliberately with `force_capture` (docs/the-ear.md § Duplicates). It
-  // names OVERRIDING a self-sealing machine gate to make an acquisition happen: distinct from
-  // `clear` (lift a wrong-audio flag on an already-captured row) and `rank`/`crawl`/`capture` —
-  // it is the operator forcing an action past a verdict the sweep would otherwise re-apply forever.
+
   "force",
-  // `review` (mark an artist's link list as reviewed — the "Looks good" acknowledgment that
-  // stamps reviewed_at and promotes surviving candidates) — added deliberately with
-  // `review_artist`. A single per-artist ack, distinct from `confirm` (one link) and `approve`
-  // (a submission).
+
   "review",
   "save",
   "send",
   "set",
   "start",
   "sweep",
-  // `triage` (write the pre-chew advisory verdict onto a pending submission) — added
-  // deliberately with the `triage_submission` op. The written-verdict sibling of
-  // `note` (author the finding's note): the on-box `fluncle-triage` sweep pre-chews a
-  // crew submission so it lands in the operator's queue already assessed. Advisory
-  // only; distinct from `approve`/`reject` (the operator's publishing decision).
+
   "triage",
   "unsave",
-  // `upload` (render + push a Frontier playlist cover onto Spotify) — added deliberately with the
-  // `upload_frontier_covers` mint-cover retry drain (E2). The act of putting a rendered artifact
-  // onto an external platform: distinct from `distribute` (the multi-GB mixtape byte-move),
-  // `publish` (a one-shot social post), and `render` (make the artifact) — this UPLOADS it.
+
   "upload",
 ]);
 
@@ -283,7 +130,6 @@ describe("oRPC op-name naming convention (verb_noun, Convention B)", () => {
   const opNames = [...CONTRACT_OPERATION_NAMES] as string[];
 
   it("has ops to check (registry is not empty)", () => {
-    // A guard so a broken import can't make the assertions below pass vacuously.
     expect(opNames.length).toBeGreaterThan(0);
   });
 
@@ -307,11 +153,6 @@ describe("oRPC op-name naming convention (verb_noun, Convention B)", () => {
     }
   });
 
-  // The second half of the convention: a canonical op name is not just well-shaped, it DERIVES
-  // the other surfaces' spellings by a fixed rule. `operationId` is the one derivation that lives
-  // inside the contract itself (docs/naming-conventions.md § "Pick the canonical op"), and it is
-  // hand-written per op — so nothing but this stops a new op from shipping a spelling a generated
-  // client would mint a differently-named method from.
   it("every contract op derives its operationId as the camelCase spelling of its name", () => {
     for (const op of opNames) {
       const route = CONTRACT_OPERATION_ROUTES[op];

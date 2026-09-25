@@ -1,11 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// The Instagram Reel push (lib/server/postiz.ts `pushInstagramReel`). Verifies the
-// three-call request shape against a mocked fetch: resolve the connected IG integration
-// → upload-from-url (Postiz pulls the public clip MP4) → POST /posts with the Reel
-// settings (`__type` = the matched integration identifier, `post_type: "post"`, `type:
-// "now"`). `./env` is mocked so no real key/URL is read.
-
 vi.mock("./env", () => ({
   readEnv: async () => "test-key",
   readOptionalEnv: async () => undefined,
@@ -15,7 +9,6 @@ import { parsePostAnalytics, pushInstagramReel, resolveSocialUrl } from "./posti
 
 const BASE = "https://api.postiz.com/public/v1";
 
-// A fetch double that routes by path to the three staged responses.
 function stubFetch(overrides: {
   integrations?: Array<{ disabled?: boolean; id: string; identifier: string }>;
   postId?: string;
@@ -72,17 +65,14 @@ describe("pushInstagramReel", () => {
 
     expect(result).toEqual({ postId: "post-9" });
 
-    // 1) GET /integrations, 2) POST /upload-from-url, 3) POST /posts.
     expect(calls.map((c) => c.url)).toEqual([
       `${BASE}/integrations`,
       `${BASE}/upload-from-url`,
       `${BASE}/posts`,
     ]);
 
-    // upload-from-url pulls the public clip MP4.
     expect(calls[1]?.body).toEqual({ url: "https://found.fluncle.com/clip-1/footage.mp4" });
 
-    // The post: a single video + Reel settings, sent NOW.
     const post = calls[2]?.body as {
       posts: Array<{
         integration: { id: string };
@@ -120,10 +110,6 @@ describe("pushInstagramReel", () => {
   });
 });
 
-// The Instagram permalink capture (`resolveSocialUrl(postId, "instagram")`): once the Reel
-// publishes, Postiz auto-populates the real Graph-API permalink onto the post object in the
-// dated `/posts` list. We capture it VERBATIM (a Reel shortcode can't be rebuilt from the
-// numeric media id). `./env` is mocked, so `getDatedPosts` reads from the fetch double.
 function stubDatedPosts(posts: unknown[]) {
   const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
     if ((init?.method ?? "GET") === "GET" && url.startsWith(`${BASE}/posts`)) {
@@ -188,11 +174,6 @@ describe("resolveSocialUrl (instagram)", () => {
   });
 });
 
-// The per-post analytics parser (`parsePostAnalytics`) — the pure label-mapping half of the
-// social-metrics snapshot. Postiz returns the SAME shape as the channel endpoint (an array of
-// `{ label, data: [{ total, date }] }`) or the object `{ missing: true }`. Label matching is
-// keyword-based + ordered (the more specific label wins), the latest daily point is taken, an
-// unrecognised label is ignored, and a `{ missing: true }` post reads as MISSING.
 describe("parsePostAnalytics", () => {
   const series = (label: string, ...totals: string[]) => ({
     data: totals.map((total, i) => ({ date: `2026-07-0${i + 1}`, total })),
@@ -217,7 +198,7 @@ describe("parsePostAnalytics", () => {
     expect(result.metrics.likes).toBe(55);
     expect(result.metrics.comments).toBe(4);
     expect(result.metrics.shares).toBe(2);
-    // An unreported metric stays null (never zero).
+
     expect(result.metrics.impressions).toBeNull();
     expect(result.metrics.saves).toBeNull();
   });
@@ -238,21 +219,20 @@ describe("parsePostAnalytics", () => {
       throw new Error("expected metrics");
     }
 
-    // "average"/"percentage" beats a bare "view" and keeps its fraction.
     expect(result.metrics.averageViewPercentage).toBeCloseTo(42.7);
-    // "watch" is a count (whole seconds), and beats "view".
+
     expect(result.metrics.watchTimeSeconds).toBe(12_345);
     expect(result.metrics.impressions).toBe(9000);
     expect(result.metrics.saves).toBe(12);
-    // No bare "Views" label present → views stays null.
+
     expect(result.metrics.views).toBeNull();
   });
 
   it("ignores an unrecognised label and an empty series (degrades to a missing metric, never wrong)", () => {
     const result = parsePostAnalytics([
-      series("Engagement rate score"), // no data points
+      series("Engagement rate score"),
       { data: [], label: "Views" },
-      series("Reactions", "7"), // unrecognised → ignored
+      series("Reactions", "7"),
     ]);
 
     if (result.kind !== "metrics") {

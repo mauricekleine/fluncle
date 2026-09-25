@@ -4,8 +4,6 @@ export const PUBLIC_PROJECTION_LIVE_GENERATION = "live";
 export const PUBLIC_PROJECTION_SYNTHETIC_TRACK_SUBJECT_ID = "@catalogue-rank-corpus";
 export const PUBLIC_PROJECTION_TARGETS = ["public_aggregates", "artist_qualification"] as const;
 
-// SHA-256 of an empty byte sequence. This is a fixed sentinel, so computing it at module load
-// only introduces a server-only runtime dependency into otherwise declarative SQL builders.
 const EMPTY_DIGEST = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
 
 export type PublicProjectionStatement = Exclude<InStatement, string>;
@@ -253,7 +251,6 @@ function insertProjectionRepairsFromSelectionStatement(
   };
 }
 
-/** Build the explicitly targeted public shadow markers for one bounded source subject set. */
 export function markPublicProjectionSourceChangedStatements(
   subjects: readonly PublicProjectionSourceSubject[],
   sourceVersion: string,
@@ -308,11 +305,6 @@ export function markPublicProjectionSourceChangedStatements(
   return statements;
 }
 
-/**
- * Build public shadow markers after a bounded selection marker. Epoch admission is deliberately
- * non-configurable at this API boundary: every epoch statement checks `changes()` from the marker
- * immediately before it, so an empty selection cannot initialize or advance public state.
- */
 export function markPublicProjectionSourceChangedFromSelectStatements(
   subjectType: PublicProjectionSourceSubject["subjectType"],
   selection: PublicProjectionSourceSelection,

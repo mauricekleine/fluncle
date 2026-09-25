@@ -1,7 +1,3 @@
-// The artifact-log transport. Every lifecycle/read operation is agent tier so a filesystemful
-// consumer can bootstrap and advance with its scoped token. Compaction alone is operator tier:
-// it irreversibly removes the prefix that every live consumer has already fenced or acknowledged.
-
 import {
   acknowledgeArtifactChangesLive,
   activateArtifactConsumerLive,
