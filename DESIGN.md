@@ -287,6 +287,14 @@ The persistent preview player of the public chrome: the object the cover's figur
 - **Keyboard:** while the bar is docked, Space or K plays and pauses and J and L step back and forward through the playing list, whenever focus is not in a field, a dialog or a menu and no modifier is held; Space toggles only from the page itself and leaves every focused control to do its own job. **Lock screen:** Media Session metadata and play, pause, next and previous, so a phone in a pocket keeps its transport; the preview holds the session only while it is the live sound, handing it over when other audio starts and taking it back when the listener resumes.
 - **Reduced motion:** the progress hairline steps instead of easing and every control changes colour only.
 
+### Browse Menu
+
+The top bar's one route between the five catalogue hubs (Tracks, Artists, Albums, Labels, Fresh), on every public page the chrome wraps, the front door included. It is **archive only**: the lore pages stay in the colophon and on the front door, and the colophon stays the site's whole navigation and its crawl backbone.
+
+- **One control:** a quiet trigger that leads the bar's right-hand cluster (Browse, Search, the crew door) and dresses like the search trigger and the signed-in crew door: a Phosphor glyph, the word on a wide bar, a caret for the menu it opens, the Gold Veil heat on hover and while open (the Ignition Rule). No gold at rest.
+- **Two presentations, one list:** from 40rem up a Shadcn dropdown under the trigger, an opaque Sleeve Black card with no shadow (ink on paper, like the Graph Link card); below it a bottom sheet in the drawer's glass cut denser (the card at 72% under the same blur, 86% without it) so its rows hold AA over the brightest sky, with rows, a trigger and a close control of at least 44px. Each hub reads its colophon label over its colophon blurb, verbatim (VOICE.md's Chrome Rule, one action, one label). The current hub takes the account menu's quiet cream tint and `aria-current`, never gold.
+- **The shortcut seam:** an optional second group under the hubs, a heading over a wrapping row of Stardust chips in both presentations; with nothing passed, nothing renders.
+
 ### Graph Link (signature component)
 
 The archive is a **graph** — log ↔ artist ↔ label ↔ album ↔ galaxy — and every node has a page. Render every named graph entity through the shared `@/components/graph-link` component, with one style and one behaviour everywhere.
@@ -320,7 +328,7 @@ Literal terminal content in a quiet box: mono text (0.82rem) on Tape Black with 
 
 ### The Plate (signature surface)
 
-The page itself: a recovered logbook plate, one printed document per surface (the front door, the archive at `/findings`, a `/log/<id>` entry, the log index, About). Its grammar: a **masthead** — on a LORE page with the stamped nameplate (Oxanium caps, the brand-mark plate; the nameplate is lore-area-only per the Three Areas Rule) and a quiet tagline, elsewhere the title alone; a rotated gold **FOUND stamp** carrying the archive count; **crop-mark corner brackets** and a **register cross** printed just inside the edge (pure background gradients — zero DOM); a **double-rule frame** (border + offset outline, the printed edge); and **pane-tooth grain** on the surface, under the content. Fields on the plate (the list, the nerd box) are flat translucent panels, not nested glass. Three surfaces are sanctioned to float above a plate: the dialog (Stories), the behind-the-scenes drawer (The Behind-the-Scenes Drawer, below), and the Player Bar (near-opaque, so the plate under it never reads as a second pane).
+The page itself: a recovered logbook plate, one printed document per surface (the front door, the archive at `/findings`, a `/log/<id>` entry, the log index, About). Its grammar: a **masthead** — on a LORE page with the stamped nameplate (Oxanium caps, the brand-mark plate; the nameplate is lore-area-only per the Three Areas Rule) and a quiet tagline, elsewhere the title alone; a rotated gold **FOUND stamp** carrying the archive count; **crop-mark corner brackets** and a **register cross** printed just inside the edge (pure background gradients — zero DOM); a **double-rule frame** (border + offset outline, the printed edge); and **pane-tooth grain** on the surface, under the content. Fields on the plate (the list, the nerd box) are flat translucent panels, not nested glass. Four surfaces are sanctioned to float above a plate: the dialog (Stories), the Browse sheet on a phone (Browse Menu, above), the behind-the-scenes drawer (The Behind-the-Scenes Drawer, below), and the Player Bar (near-opaque, so the plate under it never reads as a second pane).
 
 ### Cover Frame (signature component)
 
