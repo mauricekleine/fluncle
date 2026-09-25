@@ -7,6 +7,7 @@ import {
   type LabelTakeOverResult,
   type MergeLabelResult,
   type MintLabelOutcome,
+  type RecordLabelTriageBody,
 } from "@fluncle/contracts";
 import { adminApiGet, adminApiPatch, adminApiPost, adminApiPut } from "../api";
 import {
@@ -167,6 +168,38 @@ export async function mintLabelCommand(
   return { label: response.label, outcome: response.outcome, takenOver: response.takenOver };
 }
 
+// ── The triage cursor: record what a round FOUND, without ruling ─────────────
+// Thin HTTP client over the AGENT-tier `record_label_triage` op. The box's unattended sweep drives
+// this, which is exactly why it is a different command from `update`: recording a finding is not
+// ruling on a label, and the token the sweep holds cannot do the latter. The payload rides as the
+// round produced it; the server drops rules that could never fire and supersedes the label's
+// previous proposal. See docs/label-entity.md and the fluncle-label-triage skill.
+export async function recordLabelTriageCommand(
+  slug: string,
+  payload: RecordLabelTriageBody,
+): Promise<{ droppedInertRules: number; superseded: boolean; triageCheckedAt: string }> {
+  const response = await adminApiPost<{
+    droppedInertRules: number;
+    ok: boolean;
+    superseded: boolean;
+    triageCheckedAt: string;
+  }>(`/api/v1/admin/labels/${encodeURIComponent(slug.trim().toLowerCase())}/triage`, payload);
+
+  return {
+    droppedInertRules: response.droppedInertRules,
+    superseded: response.superseded,
+    triageCheckedAt: response.triageCheckedAt,
+  };
+}
+
+// ── The voiced bio: the entity-bio engine (thin HTTP client) ──────────────────
+// The label sibling of `admin artists describe`: author the label's bio through the
+// agent-tier `describe_label` route. Fills an empty bio only; an operator bio is never
+// clobbered. Shares the body builder + result types with the artist command.
+
+// Author + store one label's bio (the voice-gated, fill-empty-only write). `--dry-run`
+// runs the voice gate and reports the verdict without storing anything.
+>>>>>>> 81c432b7f (feat(cli): carry a triage round's finding to the archive)
 export async function describeLabelCommand(
   slug: string,
   options: { bio: string; dryRun?: boolean; finalAttempt?: boolean; promptVersion?: number },

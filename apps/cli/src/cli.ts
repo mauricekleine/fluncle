@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 
 import { existsSync, readFileSync } from "node:fs";
-import { type ArtistRule } from "@fluncle/contracts";
+import { type ArtistRule, type RecordLabelTriageBody } from "@fluncle/contracts";
 import path from "node:path";
 import { Command, CommanderError, Option } from "commander";
 import { fluncleAsciiLogo, fluncleTagline } from "./brand";
@@ -3707,6 +3707,45 @@ JSON field reference:
       },
     );
 
+  // `mint_label` → `admin labels mint <mbid> [--seed-state <state>]` (operator). Bring a label into
+  // the archive BY ITS MUSICBRAINZ IDENTITY — the operator's own door beside the publish path and a
+  // crawl discovery, for a label no walk will reach (the half an upstream MusicBrainz split moved onto a
+  // new entity). Idempotent; without `--seed-state` a new row lands `undecided` and an existing
+  // row's ruling is left exactly as it was.
+  //
+  // `--take-over <slug>` is the explicit way through the identity conflict a MusicBrainz split
+  // leaves behind: the drum & bass half moves to a NEW entity carrying the SAME name, and the
+  // archive's row for that name still points at the original. It re-points THAT row's identity —
+  // the server honours it only for the exact conflicting row, only when it holds no tracks, and
+  // only when it is not an enabled seed (a row with tracks is `admin labels merge`).
+  // `record_label_triage` → `admin labels triage <slug> --payload <file>` (AGENT tier). The box's
+  // unattended sweep records what a round FOUND; it is a different command from `update` because
+  // recording a finding is not ruling, and the agent token the sweep holds cannot rule.
+  labels
+    .command("triage")
+    .description("Record what a triage round found for a label (agent; never rules)")
+    .argument("<slug>", "The label slug")
+    .requiredOption("--payload <file>", "JSON file holding the round's finding for this label")
+    .option("--json", "Print JSON", false)
+    .action(async (slug: string, options: { json: boolean; payload: string }) => {
+      const payload = JSON.parse(readFileSync(options.payload, "utf8")) as RecordLabelTriageBody;
+      const { recordLabelTriageCommand } = await import("./commands/admin-labels");
+      const result = await recordLabelTriageCommand(slug, payload);
+
+      if (options.json) {
+        console.log(JSON.stringify(result, null, 2));
+
+        return;
+      }
+
+      const dropped =
+        result.droppedInertRules > 0 ? ` — dropped ${result.droppedInertRules} inert` : "";
+      console.log(
+        `${slug} → ${payload.verdict}${dropped}${result.superseded ? " (superseded)" : ""}`,
+      );
+    });
+
+>>>>>>> 81c432b7f (feat(cli): carry a triage round's finding to the archive)
   labels
     .command("mint")
     .description("Mint a label from its MusicBrainz MBID (operator; idempotent)")
@@ -8439,6 +8478,7 @@ const stringOptions = new Set([
   "--page-digest",
   "--page-limit",
   "--parent-id",
+  "--payload",
   "--plate",
   "--plate-background",
   "--platform",

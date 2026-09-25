@@ -382,6 +382,29 @@ const TriageRuleProposalSchema = z.object({
 });
 
 /**
+ * What a round reports about ONE label. Named and exported so the CLI and the box sweep carry the
+ * round's payload without re-spelling its shape; the op adds the path `slug` on top.
+ */
+export const RecordLabelTriageBodySchema = z
+  .object({
+    censusSummary: z.string().optional(),
+    confidence: z.enum(["high", "medium", "low"]),
+    evidence: z.string(),
+    /** The RAW rail: every off-lane first credit, whether or not a global rule already stops it. */
+    offLaneShare: z.number().min(0).max(1).optional(),
+    /** Free text: the taxonomy of why a label could not be ruled belongs to the round. */
+    reason: z.string().optional(),
+    /** The same fraction ignoring credits an existing global rule stops. Reported, never a rail. */
+    residualOffLaneShare: z.number().min(0).max(1).optional(),
+    roundId: z.string(),
+    rules: z.array(TriageRuleProposalSchema).optional(),
+    verdict: LabelTriageVerdictSchema,
+    verifyAgrees: z.boolean().optional(),
+    verifyEvidence: z.string().optional(),
+  })
+  .meta({ id: "RecordLabelTriageBody" });
+
+/**
  * `record_label_triage` → `POST /admin/labels/{slug}/triage` (operationId `recordLabelTriage`).
  *
  * Agent tier (`adminAuth`), the `describe_label` precedent. Stamps the triage cursor and stores the
@@ -402,23 +425,7 @@ export const recordLabelTriage = oc
     summary: "Record what a triage round found (stamps the cursor; never rules)",
     tags: ["Admin"],
   })
-  .input(
-    z.object({
-      censusSummary: z.string().optional(),
-      confidence: z.enum(["high", "medium", "low"]),
-      evidence: z.string(),
-      offLaneShare: z.number().min(0).max(1).optional(),
-      /** Free text: the taxonomy of why a label could not be ruled belongs to the round. */
-      reason: z.string().optional(),
-      residualOffLaneShare: z.number().min(0).max(1).optional(),
-      roundId: z.string(),
-      rules: z.array(TriageRuleProposalSchema).optional(),
-      slug: z.string(),
-      verdict: LabelTriageVerdictSchema,
-      verifyAgrees: z.boolean().optional(),
-      verifyEvidence: z.string().optional(),
-    }),
-  )
+  .input(RecordLabelTriageBodySchema.extend({ slug: z.string() }))
   .output(
     z.object({
       /** Rules dropped for having zero first credits — they could never fire. */
