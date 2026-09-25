@@ -2,6 +2,8 @@ import { useSyncExternalStore } from "react";
 
 export const SAVED_TRACKS_KEY = "fluncle-saved-tracks";
 
+export const MAX_SAVED_TRACKS = 500;
+
 export type SavedTrackSync = "local" | "refused" | "synced";
 
 export type SavedTrack = {
@@ -17,6 +19,11 @@ export type SavedTrack = {
 };
 
 export type SavableTrack = Omit<SavedTrack, "savedAt" | "sync">;
+
+export type SaveResult =
+  | { outcome: "full" }
+  | { outcome: "saved"; track: SavedTrack }
+  | { outcome: "unpersisted"; track: SavedTrack };
 
 export type RemoteSavedTrack = {
   artists: string[];
@@ -115,8 +122,16 @@ function storage(): Storage | undefined {
   }
 }
 
-function readStored(): readonly SavedTrack[] {
-  const rows = parseSavedTracks(storage()?.getItem(SAVED_TRACKS_KEY) ?? null);
+function readStored(): readonly SavedTrack[] | undefined {
+  let raw: null | string;
+
+  try {
+    raw = storage()?.getItem(SAVED_TRACKS_KEY) ?? null;
+  } catch {
+    return undefined;
+  }
+
+  const rows = parseSavedTracks(raw);
 
   return rows.length === 0 ? EMPTY : rows;
 }
@@ -127,7 +142,7 @@ function load(): void {
   }
 
   loaded = true;
-  tracks = readStored();
+  tracks = readStored() ?? EMPTY;
 }
 
 function notify(): void {
@@ -136,20 +151,34 @@ function notify(): void {
   }
 }
 
-function commit(next: readonly SavedTrack[]): void {
-  tracks = next.length === 0 ? EMPTY : next;
-
+function persist(rows: readonly SavedTrack[]): boolean {
   try {
     const store = storage();
 
-    if (tracks.length === 0) {
-      store?.removeItem(SAVED_TRACKS_KEY);
-    } else {
-      store?.setItem(SAVED_TRACKS_KEY, JSON.stringify(tracks));
+    if (!store) {
+      return false;
     }
-  } catch {}
+
+    if (rows.length === 0) {
+      store.removeItem(SAVED_TRACKS_KEY);
+    } else {
+      store.setItem(SAVED_TRACKS_KEY, JSON.stringify(rows));
+    }
+
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function commit(next: readonly SavedTrack[]): boolean {
+  tracks = next.length === 0 ? EMPTY : next;
+
+  const persisted = persist(tracks);
 
   notify();
+
+  return persisted;
 }
 
 function onStorage(event: StorageEvent): void {
@@ -157,7 +186,13 @@ function onStorage(event: StorageEvent): void {
     return;
   }
 
-  tracks = readStored();
+  const stored = readStored();
+
+  if (!stored) {
+    return;
+  }
+
+  tracks = stored;
   notify();
 }
 
@@ -197,7 +232,17 @@ export function isSaved(trackId: string): boolean {
   return snapshot().some((track) => track.trackId === trackId);
 }
 
-export function saveTrack(track: SavableTrack, now: Date = new Date()): SavedTrack {
+export function saveTrack(
+  track: SavableTrack,
+  { limit = MAX_SAVED_TRACKS, now = new Date() }: { limit?: number; now?: Date } = {},
+): SaveResult {
+  const current = snapshot();
+  const others = current.filter((row) => row.trackId !== track.trackId);
+
+  if (others.length === current.length && current.length >= limit) {
+    return { outcome: "full" };
+  }
+
   const saved: SavedTrack = {
     artists: track.artists,
     coverUrl: track.coverUrl,
@@ -210,17 +255,35 @@ export function saveTrack(track: SavableTrack, now: Date = new Date()): SavedTra
     trackId: track.trackId,
   };
 
-  commit([saved, ...snapshot().filter((row) => row.trackId !== track.trackId)]);
+  const persisted = commit([saved, ...others]);
 
-  return saved;
+  return persisted ? { outcome: "saved", track: saved } : { outcome: "unpersisted", track: saved };
 }
 
-export function unsaveTrack(trackId: string): void {
+export function restoreSavedTrack(track: SavedTrack, index: number): void {
   const current = snapshot();
 
-  if (current.some((row) => row.trackId === trackId)) {
-    commit(current.filter((row) => row.trackId !== trackId));
+  if (current.some((row) => row.trackId === track.trackId)) {
+    return;
   }
+
+  const at = Math.max(0, Math.min(index, current.length));
+
+  commit([...current.slice(0, at), track, ...current.slice(at)]);
+}
+
+export function unsaveTrack(trackId: string): boolean {
+  const current = snapshot();
+
+  if (!current.some((row) => row.trackId === trackId)) {
+    return true;
+  }
+
+  if (commit(current.filter((row) => row.trackId !== trackId))) {
+    return true;
+  }
+
+  return !readStored()?.some((row) => row.trackId === trackId);
 }
 
 export function markSavedTrack(trackId: string, sync: SavedTrackSync): void {

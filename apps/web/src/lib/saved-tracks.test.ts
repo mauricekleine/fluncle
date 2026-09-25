@@ -58,10 +58,12 @@ describe("the saved-tracks store", () => {
   it("saves a catalogue track and a finding, newest first, and persists them", async () => {
     const store = await import("./saved-tracks");
 
-    store.saveTrack(
+    const first = store.saveTrack(
       { artists: ["Ashen Relay"], href: "/track/cat-1", title: "Undertow", trackId: "cat-1" },
-      new Date("2026-09-20T10:00:00.000Z"),
+      { now: new Date("2026-09-20T10:00:00.000Z") },
     );
+
+    expect(first.outcome).toBe("saved");
     store.saveTrack(
       {
         artists: ["Cinder Vane"],
@@ -70,7 +72,7 @@ describe("the saved-tracks store", () => {
         title: "Halide",
         trackId: "find-1",
       },
-      new Date("2026-09-21T10:00:00.000Z"),
+      { now: new Date("2026-09-21T10:00:00.000Z") },
     );
 
     expect(store.savedTracks().map((track) => track.trackId)).toEqual(["find-1", "cat-1"]);
@@ -85,9 +87,18 @@ describe("the saved-tracks store", () => {
   it("re-saving a track moves it to the top instead of duplicating it", async () => {
     const store = await import("./saved-tracks");
 
-    store.saveTrack({ artists: [], title: "A", trackId: "a" }, new Date("2026-09-20T00:00:00Z"));
-    store.saveTrack({ artists: [], title: "B", trackId: "b" }, new Date("2026-09-21T00:00:00Z"));
-    store.saveTrack({ artists: [], title: "A", trackId: "a" }, new Date("2026-09-22T00:00:00Z"));
+    store.saveTrack(
+      { artists: [], title: "A", trackId: "a" },
+      { now: new Date("2026-09-20T00:00:00Z") },
+    );
+    store.saveTrack(
+      { artists: [], title: "B", trackId: "b" },
+      { now: new Date("2026-09-21T00:00:00Z") },
+    );
+    store.saveTrack(
+      { artists: [], title: "A", trackId: "a" },
+      { now: new Date("2026-09-22T00:00:00Z") },
+    );
 
     expect(store.savedTracks().map((track) => track.trackId)).toEqual(["a", "b"]);
   });
@@ -139,6 +150,119 @@ describe("the saved-tracks store", () => {
     store.markSavedTrack("a", "synced");
 
     expect(store.savedTracks()[0]?.sync).toBe("synced");
+  });
+});
+
+describe("the saved-tracks store when the browser refuses storage", () => {
+  it("starts empty and keeps saving in memory when reading storage throws", async () => {
+    win.localStorage.getItem = () => {
+      throw new Error("SecurityError");
+    };
+    const store = await import("./saved-tracks");
+
+    expect(store.savedTracks()).toEqual([]);
+
+    const result = store.saveTrack({ artists: [], title: "A", trackId: "a" });
+
+    expect(result.outcome).toBe("saved");
+    expect(store.isSaved("a")).toBe(true);
+  });
+
+  it("keeps a save it could not write for this page and says the device did not keep it", async () => {
+    win.localStorage.setItem = () => {
+      throw new Error("QuotaExceededError");
+    };
+    const store = await import("./saved-tracks");
+
+    const result = store.saveTrack({ artists: [], title: "A", trackId: "a" });
+
+    expect(result.outcome).toBe("unpersisted");
+    expect(store.isSaved("a")).toBe(true);
+    expect(win.store.has(KEY)).toBe(false);
+  });
+
+  it("ignores a storage event whose read throws instead of dropping the page's saves", async () => {
+    const store = await import("./saved-tracks");
+    const unsubscribe = store.subscribeSavedTracks(() => {});
+
+    store.saveTrack({ artists: [], title: "A", trackId: "a" });
+    win.localStorage.getItem = () => {
+      throw new Error("SecurityError");
+    };
+    win.fireStorage(KEY);
+
+    expect(store.isSaved("a")).toBe(true);
+    unsubscribe();
+  });
+});
+
+describe("the saved-tracks store bound", () => {
+  it("refuses a new save once the device holds the maximum, and never evicts an old one", async () => {
+    const store = await import("./saved-tracks");
+    const full = Array.from({ length: store.MAX_SAVED_TRACKS }, (_unused, index) =>
+      saved({
+        savedAt: new Date(Date.UTC(2026, 0, 1, 0, 0, index)).toISOString(),
+        trackId: `t${index}`,
+      }),
+    );
+    store.replaceSavedTracks(full);
+
+    const result = store.saveTrack({ artists: [], title: "New", trackId: "new" });
+
+    expect(result.outcome).toBe("full");
+    expect(store.isSaved("new")).toBe(false);
+    expect(store.savedTracks()).toHaveLength(store.MAX_SAVED_TRACKS);
+    expect(store.isSaved("t0")).toBe(true);
+  });
+
+  it("still lets a full device re-save a track it already holds, and lets an unbounded caller past the bound", async () => {
+    const store = await import("./saved-tracks");
+    store.replaceSavedTracks(
+      Array.from({ length: store.MAX_SAVED_TRACKS }, (_unused, index) =>
+        saved({ trackId: `t${index}` }),
+      ),
+    );
+
+    expect(store.saveTrack({ artists: [], title: "Again", trackId: "t3" }).outcome).toBe("saved");
+    expect(store.savedTracks()[0]?.trackId).toBe("t3");
+    expect(
+      store.saveTrack({ artists: [], title: "Account", trackId: "acct" }, { limit: Infinity })
+        .outcome,
+    ).toBe("saved");
+  });
+});
+
+describe("restoreSavedTrack", () => {
+  it("puts a removed save back at its old position with its old savedAt", async () => {
+    const store = await import("./saved-tracks");
+    store.replaceSavedTracks([
+      saved({ trackId: "a" }),
+      saved({ trackId: "b" }),
+      saved({ trackId: "c" }),
+    ]);
+    const removed = store.savedTracks()[1];
+
+    store.unsaveTrack("b");
+    if (removed) {
+      store.restoreSavedTrack(removed, 1);
+    }
+
+    expect(store.savedTracks().map((track) => track.trackId)).toEqual(["a", "b", "c"]);
+    expect(store.savedTracks()[1]).toEqual(removed);
+  });
+
+  it("leaves a track alone when it was saved again before the restore", async () => {
+    const store = await import("./saved-tracks");
+    store.replaceSavedTracks([saved({ trackId: "a" })]);
+    const removed = store.savedTracks()[0];
+
+    store.unsaveTrack("a");
+    store.saveTrack({ artists: [], title: "A again", trackId: "a" });
+    if (removed) {
+      store.restoreSavedTrack(removed, 0);
+    }
+
+    expect(store.savedTracks().map((track) => track.title)).toEqual(["A again"]);
   });
 });
 

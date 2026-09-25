@@ -15,10 +15,15 @@ export function SavedTracksSync(): null {
       setSavedTracksUser(userId);
 
       let current = true;
-
-      void mergeOnSignIn(userId).then((result) => {
-        if (current && result.outcome === "merged") {
+      const refreshAccount = () => {
+        if (current) {
           void queryClient.invalidateQueries({ queryKey: ["account"] });
+        }
+      };
+
+      void mergeOnSignIn(userId, fetch, { onBatch: refreshAccount }).then((result) => {
+        if (result.outcome === "merged") {
+          refreshAccount();
         }
       });
 

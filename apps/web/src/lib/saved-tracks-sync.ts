@@ -5,6 +5,7 @@ import {
   mergeSavedTracks,
   type RemoteSavedTrack,
   replaceSavedTracks,
+  restoreSavedTrack,
   type SavableTrack,
   savedTracks,
   type SavedTrack,
@@ -16,24 +17,34 @@ export const SAVED_TRACKS_PATH = "/api/v1/me/saved-findings";
 
 export const MERGE_PUSH_BATCH = 30;
 
-export type SaveWrite = "failed" | "refused" | "saved";
+export const MERGE_BATCH_PAUSE_MS = 30 * 60 * 1000;
 
-export type ToggleOutcome = { kept: "account" | "device"; outcome: "removed" | "saved" };
+export const MERGE_LIMITED_BACKOFF_MS = 15 * 60 * 1000;
+
+export type SaveWrite = "failed" | "limited" | "refused" | "saved";
+
+export type ToggleOutcome =
+  | { kept: "account" | "device" | "page"; outcome: "removed" | "saved" }
+  | { kept: "device"; outcome: "full" };
 
 export type MergeOutcome =
-  | { outcome: "merged"; deferred: number; pulled: number; pushed: number }
+  | { outcome: "merged"; pulled: number; pushed: number }
   | { outcome: "skipped" }
+  | { outcome: "stopped"; pulled: number; pushed: number; remaining: number }
   | { outcome: "unavailable" };
 
 type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
 
 let signedInUser: string | undefined;
+let session = 0;
 let csrf: Promise<string | undefined> | undefined;
 const mergedUsers = new Set<string>();
 
 export function setSavedTracksUser(userId: string | undefined): void {
   if (userId !== signedInUser) {
     csrf = undefined;
+    session += 1;
+    mergedUsers.clear();
   }
 
   signedInUser = userId;
@@ -45,6 +56,7 @@ export function savedTracksUser(): string | undefined {
 
 export function resetSavedTracksSync(): void {
   signedInUser = undefined;
+  session += 1;
   csrf = undefined;
   mergedUsers.clear();
 }
@@ -120,6 +132,10 @@ export async function writeSave(
     return "refused";
   }
 
+  if (response.status === 429) {
+    return "limited";
+  }
+
   if (response.status === 403) {
     csrf = undefined;
   }
@@ -140,7 +156,11 @@ export async function writeUnsave(trackId: string, fetchImpl: FetchLike = fetch)
     method: "DELETE",
   }).catch(() => undefined);
 
-  return response?.ok === true;
+  if (response?.status === 403) {
+    csrf = undefined;
+  }
+
+  return response?.ok === true || response?.status === 404;
 }
 
 function settle(trackId: string, write: SaveWrite): void {
@@ -151,31 +171,65 @@ function settle(trackId: string, write: SaveWrite): void {
   }
 }
 
-export function toggleSavedTrack(track: SavableTrack, fetchImpl: FetchLike = fetch): ToggleOutcome {
-  const kept = signedInUser ? "account" : "device";
+export function toggleSavedTrack(
+  track: SavableTrack,
+  fetchImpl: FetchLike = fetch,
+  { onUnsaveFailed }: { onUnsaveFailed?: () => void } = {},
+): ToggleOutcome {
+  const account = signedInUser !== undefined;
 
   if (isSaved(track.trackId)) {
-    unsaveTrack(track.trackId);
+    const current = savedTracks();
+    const index = current.findIndex((row) => row.trackId === track.trackId);
+    const removed = current[index];
 
-    if (signedInUser) {
-      void writeUnsave(track.trackId, fetchImpl);
+    const persisted = unsaveTrack(track.trackId);
+
+    if (account && removed) {
+      void writeUnsave(track.trackId, fetchImpl).then((ok) => {
+        if (!ok) {
+          restoreSavedTrack(removed, index);
+          onUnsaveFailed?.();
+        }
+      });
     }
 
-    return { kept, outcome: "removed" };
+    if (account) {
+      return { kept: "account", outcome: "removed" };
+    }
+
+    return { kept: persisted ? "device" : "page", outcome: "removed" };
   }
 
-  saveTrack(track);
+  const result = saveTrack(track, account ? { limit: Number.POSITIVE_INFINITY } : {});
 
-  if (signedInUser) {
+  if (result.outcome === "full") {
+    return { kept: "device", outcome: "full" };
+  }
+
+  if (account) {
     void writeSave(track, fetchImpl).then((write) => settle(track.trackId, write));
+
+    return { kept: "account", outcome: "saved" };
   }
 
-  return { kept, outcome: "saved" };
+  return { kept: result.outcome === "saved" ? "device" : "page", outcome: "saved" };
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+function unpushed(skip: ReadonlySet<string>): SavedTrack[] {
+  return savedTracks().filter((row) => row.sync === "local" && !skip.has(row.trackId));
 }
 
 export async function mergeOnSignIn(
   userId: string,
   fetchImpl: FetchLike = fetch,
+  { onBatch }: { onBatch?: () => void } = {},
 ): Promise<MergeOutcome> {
   if (mergedUsers.has(userId)) {
     return { outcome: "skipped" };
@@ -183,6 +237,8 @@ export async function mergeOnSignIn(
 
   mergedUsers.add(userId);
 
+  const run = session;
+  const current = () => session === run && signedInUser === userId;
   const since = new Date().toISOString();
   const response = await fetchImpl(SAVED_TRACKS_PATH).catch(() => undefined);
   const remote = response?.ok
@@ -190,37 +246,68 @@ export async function mergeOnSignIn(
     : undefined;
 
   if (!remote) {
-    mergedUsers.delete(userId);
+    if (session === run) {
+      mergedUsers.delete(userId);
+    }
 
     return { outcome: "unavailable" };
   }
 
   const before = new Set(savedTracks().map((track) => track.trackId));
-  const { next, pending } = mergeSavedTracks(savedTracks(), remote, since);
+  const { next } = mergeSavedTracks(savedTracks(), remote, since);
 
   replaceSavedTracks(next);
 
-  const batch = pending.slice(0, MERGE_PUSH_BATCH);
+  const pulled = next.filter((track) => !before.has(track.trackId)).length;
+  const skip = new Set<string>();
   let pushed = 0;
 
-  for (const track of batch) {
-    if (signedInUser !== userId) {
+  while (current()) {
+    const batch = unpushed(skip).slice(0, MERGE_PUSH_BATCH);
+
+    if (batch.length === 0) {
+      return { outcome: "merged", pulled, pushed };
+    }
+
+    let limited = false;
+
+    for (const track of batch) {
+      if (!current()) {
+        break;
+      }
+
+      if (!savedTracks().some((row) => row.trackId === track.trackId && row.sync === "local")) {
+        continue;
+      }
+
+      const write = await writeSave(track, fetchImpl);
+
+      if (write === "limited") {
+        limited = true;
+        break;
+      }
+
+      settle(track.trackId, write);
+
+      if (write === "saved") {
+        pushed += 1;
+      } else if (write === "failed") {
+        skip.add(track.trackId);
+      }
+    }
+
+    if (!current()) {
       break;
     }
 
-    const write = await writeSave(track, fetchImpl);
+    onBatch?.();
 
-    settle(track.trackId, write);
-
-    if (write === "saved") {
-      pushed += 1;
+    if (!limited && unpushed(skip).length === 0) {
+      return { outcome: "merged", pulled, pushed };
     }
+
+    await sleep(limited ? MERGE_LIMITED_BACKOFF_MS : MERGE_BATCH_PAUSE_MS);
   }
 
-  return {
-    deferred: pending.length - batch.length,
-    outcome: "merged",
-    pulled: next.filter((track) => !before.has(track.trackId)).length,
-    pushed,
-  };
+  return { outcome: "stopped", pulled, pushed, remaining: unpushed(skip).length };
 }
