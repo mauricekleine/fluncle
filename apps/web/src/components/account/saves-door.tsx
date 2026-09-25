@@ -541,22 +541,24 @@ function FollowingSection({
           />
         ))}
       </ListEmpty>
-      <div className="account-row">
-        <p className="account-muted">
-          {subscribed
-            ? "I email you their new releases every Friday, and skip the weeks with nothing new."
-            : "Your follows email is off. Switch it on and I'll send their new releases every Friday."}
-        </p>
-        <Button
-          aria-disabled={busy}
-          onClick={() => void toggleEmail()}
-          size="sm"
-          type="button"
-          variant="outline"
-        >
-          {subscribed ? "Stop the follows email" : "Start the follows email"}
-        </Button>
-      </div>
+      {follows.length > 0 || !subscribed ? (
+        <div className="account-row">
+          <p className="account-muted">
+            {subscribed
+              ? "I email you their new releases every Friday, and skip the weeks with nothing new."
+              : "Your follows email is off. Switch it on and I'll send their new releases every Friday."}
+          </p>
+          <Button
+            aria-disabled={busy}
+            onClick={() => void toggleEmail()}
+            size="sm"
+            type="button"
+            variant="outline"
+          >
+            {subscribed ? "Stop the follows email" : "Start the follows email"}
+          </Button>
+        </div>
+      ) : null}
       <p aria-live="polite" className="account-muted">
         {message}
       </p>

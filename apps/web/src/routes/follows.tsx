@@ -82,7 +82,8 @@ const COPY = {
   failed: "I couldn't change that just now. Try again in a moment.",
   invalid:
     "That link doesn't work anymore. Sign in and you can change who you follow from your account.",
-  prompt: "I'll stop sending your follows email. You keep following everyone.",
+  prompt:
+    "Stop your follows email? You keep following everyone, and I stop the Friday roundup of their new releases.",
   start: "Start the follows email",
   stop: "Stop the follows email",
 } as const;
@@ -111,7 +112,7 @@ function FollowsPage() {
             <Button
               className="self-start"
               nativeButton={false}
-              render={<Link to="/account" />}
+              render={<Link search={{ tab: "saves" }} to="/account" />}
               variant="outline"
             >
               Go to your account
@@ -152,7 +153,7 @@ function StopEmail({ token }: { token: string }) {
         <Button
           className="self-start"
           nativeButton={false}
-          render={<Link to="/account" />}
+          render={<Link search={{ tab: "saves" }} to="/account" />}
           variant="outline"
         >
           Go to your account
