@@ -142,6 +142,63 @@ describe("real box journal summary replay", () => {
     expect(planIncidents({}, [verdict], first + 3 * 60 * 60_000).alerts).toEqual([]);
   });
 
+  test("a held tick beside a briefly open zero-output tick is still the planned pause", () => {
+    const first = Date.parse("2026-09-24T00:30:00.000Z");
+    const markers = [
+      { at: first, summary: { gateReason: "quota_hold", produced: 0, queueDepth: 2000 } },
+      {
+        at: first + 60 * 60_000,
+        summary: {
+          blockedReason: "mostly_deferred",
+          gateReason: "open",
+          produced: 0,
+          queueDepth: 2000,
+        },
+      },
+    ];
+    const verdict = evaluate("anchor", markers);
+    expect(verdict.state).toBe("scheduled_pause");
+    expect(planIncidents({}, [verdict], first + 2 * 60 * 60_000).alerts).toEqual([]);
+  });
+
+  test("a held window that still produced its minimum is judged on output", () => {
+    const first = Date.parse("2026-09-24T00:30:00.000Z");
+    const markers = [0, 1].map((hour) => ({
+      at: first + hour * 60 * 60_000,
+      summary: { gateReason: "quota_hold", produced: 15, queueDepth: 2000 },
+    }));
+    expect(evaluate("anchor", markers).state).toBe("healthy");
+  });
+
+  test("a crawler still writing tracks is not a supply stall while its ready lane reads zero", () => {
+    const first = Date.parse("2026-09-25T18:45:00.000Z");
+    const markers = Array.from({ length: 12 }, (_, index) => ({
+      at: first + index * 10 * 60_000,
+      summary: { tracksWritten: index % 3 === 0 ? 10 : 3 },
+    }));
+    const verdict = evaluate("crawl", markers, {
+      crawl: { frontier: 180000, storable: 0, unstorable: 174000 },
+      crawlZeroChecks: 2,
+    });
+    expect(verdict.state).not.toBe("stalled");
+  });
+
+  test("a spent Apify budget is a closed budget, never a page", () => {
+    const first = Date.parse("2026-09-25T16:39:00.000Z");
+    const markers = [0, 1].map((hour) => ({
+      at: first + hour * 60 * 60_000,
+      summary: {
+        blockedReason: "apify_budget_spent",
+        checked: 0,
+        gateReason: "breaker_quota",
+        produced: 0,
+      },
+    }));
+    const verdict = evaluate("anchor", markers);
+    expect(verdict.state).toBe("budget_closed");
+    expect(planIncidents({}, [verdict], first + 3 * 60 * 60_000).alerts).toEqual([]);
+  });
+
   test("enrich repair pending remains a stall with a counted backlog", () => {
     const verdict = evaluate("analyze", asMarkers(fixtures.enrichRepair), {
       queues: { analyze: 100, capture: 5, embed: 5 },
