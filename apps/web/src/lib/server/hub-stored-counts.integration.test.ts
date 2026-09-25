@@ -1,25 +1,3 @@
-// THE READ SWAP, PROVEN — every entity-hub consumer reads the MAINTAINED counters
-// (`renderable_track_count` / `certified_finding_count` on labels/albums/artists, keystone 2)
-// instead of grouping `tracks` / `track_artists` / `findings` on each request.
-//
-// Behaviour is proven, not SQL text, and the fixture is what makes it a proof: each case seeds a
-// world where the COLUMNS and the EDGES disagree, and asserts the reads follow the columns.
-//
-//   - COUNTERS, NO EDGES: an entity whose counters clear the floor with ZERO linked tracks is
-//     listed. A read that still grouped the join could not possibly return it — an inner join to
-//     `tracks` has nothing to group — so this is the structural pin that the join is gone.
-//   - EDGES, NO COUNTERS: an entity with three real linked tracks and counters at the DDL default
-//     of 0 is NOT listed. A read that still grouped the join would list it.
-//
-// That second case is also the honest statement of the tradeoff the swap accepts: the stored pair is
-// the gate's source of truth, so a drifted counter shows. Keeping it true is the write side's job
-// (lib/server/hub-counts.ts) with the deploy backfill + the reconciliation sweep behind it.
-//
-// The SITEMAP ROW readers are the one deliberate half-conversion and are pinned separately below:
-// their GATE is the stored column, but they keep the `tracks ⋈ findings` join for the two per-row
-// columns a `<url>` needs (`lastmod`, the cover), so they still require a linked track to emit a row
-// — exactly as they did before.
-
 import { type Client } from "@libsql/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -64,12 +42,10 @@ import {
 } from "./labels";
 import { searchArchive } from "./search";
 
-/** Every floor in play is 3 renderable tracks (LABEL/ALBUM/ARTIST_INDEX_MIN_*). */
 const FLOOR = 3;
 
 let db: Client;
 
-/** An entity row with its counters stated OUTRIGHT — the state the delta writers would have left. */
 async function seedEntity(
   table: "albums" | "artists" | "labels",
   options: { certified?: number; id: string; name: string; renderable?: number; slug: string },
@@ -84,14 +60,13 @@ async function seedEntity(
       "2026-07-01T00:00:00.000Z",
       "2026-07-01T00:00:00.000Z",
     ],
-    // `table` is one of three literals from the call sites, never input.
+
     sql: `insert into ${table}
             (id, name, slug, renderable_track_count, certified_finding_count, created_at, updated_at)
           values (?, ?, ?, ?, ?, ?, ?)`,
   });
 }
 
-/** A CATALOGUE track (no `findings` row) pointed at every entity kind — a real, countable edge. */
 async function seedLinkedTrack(options: {
   albumId: string;
   artistId: string;
@@ -115,8 +90,6 @@ beforeEach(async () => {
   translateQuery.mockReset();
   translateQuery.mockResolvedValue(null);
 
-  // COUNTERS, NO EDGES — three entities whose stored counters clear the floor while `tracks` and
-  // `track_artists` hold nothing at all for them.
   await seedEntity("labels", {
     certified: 1,
     id: "L_stored",
@@ -139,7 +112,6 @@ beforeEach(async () => {
     slug: "stored-artist",
   });
 
-  // EDGES, NO COUNTERS — three entities with FLOOR real linked catalogue tracks and counters at 0.
   await seedEntity("labels", {
     id: "L_edges",
     name: "Uncounted Imprint",
@@ -168,7 +140,7 @@ describe("the hub `?page=N` index reads the stored counters", () => {
 
     expect(page.items.map((item) => item.slug)).toEqual(["stored-imprint"]);
     expect(page.total).toBe(1);
-    // The tile's two displayed values ARE the two columns.
+
     expect(page.items[0]).toMatchObject({ certified: true, trackCount: FLOOR });
   });
 
@@ -193,8 +165,6 @@ describe("the hub `?page=N` index reads the stored counters", () => {
   });
 
   it("narrows by the name filter without widening the gate", async () => {
-    // The uncounted label matches the needle by name and is still out — the `or` inside the gate
-    // cannot escape the filter's `and`.
     expect((await listLabelsHubPage(1, "imprint")).items.map((item) => item.slug)).toEqual([
       "stored-imprint",
     ]);
@@ -225,8 +195,6 @@ describe("the MCP browse + the API list ops read the same two columns", () => {
   });
 
   it("GET stays wider than the list and reports both columns verbatim", async () => {
-    // The edged-but-uncounted entity has no place in the index, yet its page resolves — and its
-    // counts read 0/0, because the columns say so.
     expect(await getLabelDetail("uncounted-imprint")).toMatchObject({
       certified: false,
       findingCount: 0,
@@ -253,8 +221,6 @@ describe("search's entity gate reads the stored counters", () => {
       { kind: "label", name: "Stored Imprint", slug: "stored-imprint" },
     ]);
 
-    // Below the gate: the name resolves nothing to jump to, so search falls back to the filter it
-    // always was — never a dead link.
     expect((await searchArchive({ q: "Uncounted Imprint" })).entities).toEqual([]);
   });
 
@@ -297,7 +263,6 @@ describe("the indexable count reads the stored renderable column alone", () => {
   });
 
   it("applies `renderable >= floor` ALONE — a sub-floor CERTIFIED entity is NOT indexable", async () => {
-    // The browsable index admits it (the gate's first arm); the sitemap's narrower floor does not.
     await seedEntity("labels", {
       certified: 1,
       id: "L_thin",
@@ -313,16 +278,12 @@ describe("the indexable count reads the stored renderable column alone", () => {
 
 describe("the sitemap row readers gate on the column and keep the join for lastmod", () => {
   beforeEach(async () => {
-    // Give the EDGED entities their honest counters, so they clear the floor on both halves and the
-    // join has rows to fold. The counted-but-edgeless entities keep their zero edges.
     for (const table of ["albums", "artists", "labels"] as const) {
       await db.execute(`update ${table} set renderable_track_count = ${FLOOR}`);
     }
   });
 
   it("emits a row for the entity whose column clears the floor AND whose edges exist", async () => {
-    // Both halves now read `renderable = 3`, and only the edged entity has tracks to join — so the
-    // gate admits both while the join yields exactly one row per kind.
     expect((await listLabelSitemapRows(FLOOR)).map((row) => row.slug)).toEqual([
       "uncounted-imprint",
     ]);

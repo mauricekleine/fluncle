@@ -1,13 +1,3 @@
-// The GRAPH surfaces — the album entity, the two entity pointers on `tracks`, and the reads
-// the public /label/<slug> + /album/<slug> pages are built on. Proven against the REAL
-// migrated schema on an in-memory libSQL engine (the labels.test.ts harness), so the real
-// SQL runs against the real DDL.
-//
-// The load-bearing guarantee under test is the one the catalogue tier rests on: A CATALOGUE
-// TRACK CAN NEVER LEAK INTO A FINDING SURFACE. `getFindingsBy*` drives through the
-// `findings` inner join and must return ONLY certified tracks; `listCatalogueTracksBy*` is
-// the exact complement and must return ONLY uncertified ones. There are tests that assert
-// precisely that, with both kinds of track sitting on the same album and the same label.
 import { type Client } from "@libsql/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -47,12 +37,6 @@ import { getFindingsByAlbum, getFindingsByLabel, listCatalogueTracksByAlbum } fr
 
 let db: Client;
 
-/**
- * A track in the universal music object. `logId` present ⇒ it is also a CERTIFIED finding. The
- * stamping columns (`duplicateOfTrackId` / `dismissedAt`) and the anchors (`spotifyUrl` / `isrc`)
- * are optional — pass a shared `title` (artists are fixed to `["Artist"]`) to seed an unstamped
- * TWIN, two rows sharing one recording identity.
- */
 async function seedTrack(options: {
   album: null | string;
   dismissedAt?: string;
@@ -89,10 +73,7 @@ async function seedTrack(options: {
               (track_id, log_id, added_at, added_to_spotify, posted_to_telegram)
             values (?, ?, ?, 0, 0)`,
     });
-    // A certified track HAS a findings row, so keystone 1's maintained discriminator is 0 — the flip
-    // `publishTrack` / `certifyExistingTrack` perform. It is what the maintained hub counters read
-    // `certified` off (hub-counts.ts), so without it a linked finding would count as catalogue and
-    // its entity would read UNLIT on the hub.
+
     await db.execute({
       args: [options.trackId],
       sql: `update tracks set is_catalogue = 0 where track_id = ?`,
@@ -100,12 +81,6 @@ async function seedTrack(options: {
   }
 }
 
-/**
- * Run the reconciles: the labels deploy backfill, then the one-off album-graph catch-up, then the
- * hub-counts seed — the same order `db:backfill` runs them in on a deploy. Both link steps now
- * credit the maintained counters themselves (see the census-then-batch block below), so the counts
- * pass is a no-op recompute here; it stays because these tests also seed edges by raw SQL.
- */
 async function reconcile(): Promise<void> {
   await backfillLabels(db);
   await backfillAlbums(db);
@@ -170,8 +145,7 @@ describe("ensureAlbum — the release-group MBID fold (the catalogue inline path
 
   it("folds two pressings of ONE release group onto a single album row", async () => {
     const first = await ensureAlbum("Wormhole", RG_MBID);
-    // A different pressing title (a DIFFERENT slug) in the SAME release group reuses the row —
-    // the whole point of folding on the mbid instead of the slug.
+
     const second = await ensureAlbum("Wormhole (Remastered)", RG_MBID);
 
     expect(second).toBe(first);
@@ -188,16 +162,14 @@ describe("ensureAlbum — the release-group MBID fold (the catalogue inline path
   });
 
   it("ADOPTS the mbid onto a finding-minted album that had none, then folds on it", async () => {
-    // A finding minted the album first, by slug, with no mbid (the publish path passes none).
     const bySlug = await ensureAlbum("Wormhole");
-    // The crawler reaches the same record: mbid miss → slug hit → adopt the mbid onto the row.
+
     const byMbid = await ensureAlbum("Wormhole", RG_MBID);
     expect(byMbid).toBe(bySlug);
 
     const row = await db.execute(`select release_group_mbid from albums where slug = 'wormhole'`);
     expect(row.rows[0]?.release_group_mbid).toBe(RG_MBID);
 
-    // A later pressing with a DIFFERENT slug now folds on the adopted mbid — no second row.
     const third = await ensureAlbum("Wormhole (Deluxe)", RG_MBID);
     expect(third).toBe(bySlug);
 
@@ -242,8 +214,7 @@ describe("the reconcile (scripts/backfill-album-graph.ts + backfill-labels.ts)",
       title: "Certified",
       trackId: "t1",
     });
-    // A catalogue track on a record Fluncle has never certified anything on: it must mint
-    // NO entity of its own, or the /albums index would balloon to catalogue size.
+
     await seedTrack({
       album: "Some Other Record",
       label: "Some Other Imprint",
@@ -267,8 +238,7 @@ describe("the reconcile (scripts/backfill-album-graph.ts + backfill-labels.ts)",
       title: "Certified",
       trackId: "t1",
     });
-    // Same record, same imprint, never certified — this is exactly the row the catalogue
-    // crawler will land, and it must attach to the entity the finding already minted.
+
     await seedTrack({
       album: "Wormhole",
       label: "Hospital Records",
@@ -304,15 +274,6 @@ describe("the reconcile (scripts/backfill-album-graph.ts + backfill-labels.ts)",
   });
 });
 
-// THE DEPLOY-TIME BULK STAMPS AND THE MAINTAINED COUNTERS (docs/db-scale-backlog Wave 2 keystone 2).
-// `labels` / `albums` carry `renderable_track_count` + `certified_finding_count`, delta-written by
-// every runtime link path (hub-counts.ts). These two bulk stamps are the DEPLOY's link path and were
-// the last known leak: they moved the edge and left the counters behind, so the nightly
-// `reconcile_hub_counts` sweep spent its audit correcting rows the deploy dirtied. With them
-// crediting, a non-zero nightly audit is a REAL signal again.
-//
-// Every test here runs the backfill ALONE — never through `reconcile()`, whose `syncHubCounts` pass
-// recomputes from truth and would mask exactly the bug under test.
 describe("the deploy-time bulk stamps credit the maintained hub counters", () => {
   async function counts(
     table: "albums" | "labels",
@@ -330,7 +291,6 @@ describe("the deploy-time bulk stamps credit the maintained hub counters", () =>
 
   type BatchCall = { mode: unknown; statements: { args?: unknown; sql?: string }[] };
 
-  /** A client that records every `batch` call, so the atomicity SHAPE can be asserted. */
   function recording(calls: BatchCall[]): Client {
     return new Proxy(db, {
       get(target, prop) {
@@ -351,7 +311,6 @@ describe("the deploy-time bulk stamps credit the maintained hub counters", () =>
   }
 
   it("LABELS: credits the stamped set — every linked track, and the certified subset", async () => {
-    // One finding plus two quieter catalogue rows on the same imprint: renderable 3, certified 1.
     await seedTrack({
       album: null,
       label: "Hospital Records",
@@ -361,7 +320,7 @@ describe("the deploy-time bulk stamps credit the maintained hub counters", () =>
     });
     await seedTrack({ album: null, label: "Hospital Records", title: "Deep", trackId: "hc-lbl-2" });
     await seedTrack({ album: null, label: "Hospital Records", title: "Cut", trackId: "hc-lbl-3" });
-    // A second imprint proves the credit lands on the RIGHT row, not on whichever came first.
+
     await seedTrack({
       album: null,
       label: "Metalheadz",
@@ -393,9 +352,6 @@ describe("the deploy-time bulk stamps credit the maintained hub counters", () =>
   });
 
   it("credits ONCE when two spellings trim to the same string — the zero-row census skips", async () => {
-    // `group by label` yields two rows here, but both trim to "Hospital Records", so the FIRST
-    // iteration's `trim(label) = ?` stamps both. The second iteration's census must read zero and
-    // skip the credit — without it the counters would double to 4/2.
     await seedTrack({
       album: null,
       label: "Hospital Records",
@@ -432,7 +388,7 @@ describe("the deploy-time bulk stamps credit the maintained hub counters", () =>
 
     await backfillLabels(db);
     await backfillAlbums(db);
-    // Every deploy runs both again; the pointers are stamped, so nothing matches and nothing moves.
+
     await backfillLabels(db);
     await backfillAlbums(db);
 
@@ -471,7 +427,7 @@ describe("the deploy-time bulk stamps credit the maintained hub counters", () =>
 
       expect(call?.mode).toBe("write");
       expect(call?.statements).toHaveLength(targetsArtistQualification ? 5 : 3);
-      // The dependency-scoped repair rail, the edge write, and the counter move share one batch.
+
       expect(call?.statements[0]?.sql).toContain("insert into due_work");
       expect(
         call?.statements.some(
@@ -482,8 +438,7 @@ describe("the deploy-time bulk stamps credit the maintained hub counters", () =>
       expect(call?.statements.at(-1)?.sql).toContain(`update ${table}`);
       expect(call?.statements.at(-1)?.sql).toContain("renderable_track_count");
       expect(call?.statements.at(-1)?.sql).toContain("certified_finding_count");
-      // The credit is a PURE credit (+1 renderable / +1 certified) — a fill-null-only WHERE has
-      // no old entity to debit, so no debit statement is in the batch at all.
+
       expect(call?.statements.at(-1)?.args).toEqual([1, 1, expect.any(String)]);
     }
   });
@@ -543,11 +498,10 @@ describe("the finding reads vs the anti-join (the safety property)", () => {
 
     expect(albumCatalogue.tracks.map((track) => track.trackId)).toEqual(["t2"]);
     expect(labelTracks.map((track) => track.trackId)).toEqual(["t2"]);
-    // The total is counted in SQL, not by handing the rows to the isolate to length-check.
+
     expect(albumCatalogue.total).toBe(1);
     expect(labelCatalogue.totalTracks).toBe(1);
-    // The type carries no logId at all — the row has nowhere on fluncle.com to link to, so
-    // it links OUT. This is what keeps it structurally unable to pose as a finding.
+
     expect(albumCatalogue.tracks[0]).not.toHaveProperty("logId");
     expect(albumCatalogue.tracks[0]?.spotifyUrl).toContain("open.spotify.com");
     expect(albumCatalogue.tracks[0]).toMatchObject({
@@ -565,9 +519,6 @@ describe("the finding reads vs the anti-join (the safety property)", () => {
     const albums = await listAlbumsHubPage(1);
     const labels = await listLabelsHubPage(1);
 
-    // The unified index lists every entity Fluncle holds. Wormhole / Hospital each carry a finding,
-    // so they read CERTIFIED (the certification light), and the tile counts RENDERABLE tracks — the
-    // finding plus the quieter catalogue row beneath it (t1 + t2 = 2), the superset noun.
     expect(albums.items[0]).toMatchObject({
       certified: true,
       name: "Wormhole",
@@ -599,8 +550,6 @@ describe("the finding reads vs the anti-join (the safety property)", () => {
 
 describe("the album page renders a recording once (the duplicate defence)", () => {
   beforeEach(async () => {
-    // The twin: same title + artist ⇒ one recording identity, reissued under a second barcode.
-    // Only one row carries the Spotify anchor, so the fold must keep THAT one.
     await seedTrack({
       album: "Rudeboy",
       label: "Hospital Records",
@@ -615,8 +564,7 @@ describe("the album page renders a recording once (the duplicate defence)", () =
       title: "20 Man Down",
       trackId: "t_bare",
     });
-    // Operator-stamped duplicate + a dismissed row — both vetoed in SQL, out of the slice AND
-    // the total.
+
     await seedTrack({
       album: "Rudeboy",
       duplicateOfTrackId: "t_anchored",
@@ -631,7 +579,7 @@ describe("the album page renders a recording once (the duplicate defence)", () =
       title: "On the Block",
       trackId: "t_dismissed",
     });
-    // Two genuinely distinct recordings (a remix is a distinct descriptor) survive.
+
     await seedTrack({
       album: "Rudeboy",
       label: "Hospital Records",
@@ -644,9 +592,7 @@ describe("the album page renders a recording once (the duplicate defence)", () =
       title: "Baddadan (Kanine Remix)",
       trackId: "t_remix",
     });
-    // Mint the (findings-free) album entity inline and stamp `album_id` on every row, exactly as
-    // the crawler does — the album page reads by that pointer. `reconcile()` would not, because it
-    // only mints entities a CERTIFIED finding carries, and none of these rows is certified.
+
     for (const trackId of [
       "t_anchored",
       "t_bare",
@@ -669,10 +615,8 @@ describe("the album page renders a recording once (the duplicate defence)", () =
     const catalogue = await listCatalogueTracksByAlbum(album.id);
     const rendered = catalogue.tracks.map((track) => track.trackId);
 
-    // One row per recording: the anchored twin kept, the bare twin folded away, the stamped and
-    // dismissed rows vetoed, the two genuine recordings kept.
     expect(rendered.sort()).toEqual(["t_anchored", "t_orig", "t_remix"]);
-    // The thin-content total reflects the deduped, un-vetoed set — never the six seeded rows.
+
     expect(catalogue.total).toBe(3);
   });
 });
@@ -688,20 +632,16 @@ describe("the graph hover-card preview carries the entity's bio", () => {
     });
     await reconcile();
 
-    // No bio yet ⇒ the preview carries none (the card renders no bio row, no gap).
     const withoutBio = await getGraphPreview("label", "hospital-records");
     expect(withoutBio.bio).toBeUndefined();
-    // No signature line on a catalogue entity — excluded by the Three Areas Rule; the card
-    // mirrors the page, and the page opens on the name (and the bio, once authored).
+
     expect(withoutBio.line).toBeUndefined();
 
-    // Author a bio (the entity-bio engine's write) …
     await db.execute({
       args: ["London's liquid drum and bass home since 1996.", "hospital-records"],
       sql: `update labels set bio = ? where slug = ?`,
     });
 
-    // … and it flows straight onto the preview, the same paragraph the page prints.
     const withBio = await getGraphPreview("label", "hospital-records");
     expect(withBio.bio).toBe("London's liquid drum and bass home since 1996.");
   });
@@ -709,8 +649,6 @@ describe("the graph hover-card preview carries the entity's bio", () => {
 
 describe("the album sitemap is catalogue-aware: a findings-free album with enough tracks is IN", () => {
   it("sitemaps a crawl-minted, findings-free album past the floor, alongside a certified one", async () => {
-    // A CERTIFIED album with 3 renderable tracks (>= ALBUM_INDEX_MIN_TRACKS): one finding + two
-    // quieter rows. Publicly reachable and in the sitemap.
     await seedTrack({
       album: "Wormhole",
       label: null,
@@ -721,9 +659,6 @@ describe("the album sitemap is catalogue-aware: a findings-free album with enoug
     await seedTrack({ album: "Wormhole", label: null, title: "B", trackId: "t2" });
     await seedTrack({ album: "Wormhole", label: null, title: "C", trackId: "t3" });
 
-    // A CATALOGUE-ONLY album, minted INLINE like the crawler does (an `albums` row folded on a
-    // release group + `album_id` stamped) — three tracks, never a finding. It has a public page now
-    // (a tracklist), clears the renderable-track floor, and so belongs in the sitemap too.
     const catalogueAlbumId = await ensureAlbum("Dark Matter", "rg-dark-matter");
     await seedTrack({ album: "Dark Matter", label: null, title: "D", trackId: "t4" });
     await seedTrack({ album: "Dark Matter", label: null, title: "E", trackId: "t5" });
@@ -735,15 +670,11 @@ describe("the album sitemap is catalogue-aware: a findings-free album with enoug
 
     await reconcile();
 
-    // Both clear the renderable-track floor, and both are publicly reachable now.
     const sitemap = await listAlbumSitemapRows(ALBUM_INDEX_MIN_TRACKS);
     expect(sitemap.map((row) => row.slug).sort()).toEqual(["dark-matter", "wormhole"]);
   });
 
   it("keeps a THIN findings-free album (1-2 tracks) OUT of the sitemap, though its page renders", async () => {
-    // A crawl-minted album with a single catalogue track: below ALBUM_INDEX_MIN_TRACKS, so it is a
-    // thin page — it still serves 200 (the resolver renders it, noindex) but stays out of the
-    // sitemap. Thin is still thin, findings or not.
     const thinAlbumId = await ensureAlbum("Faint Signal", "rg-faint-signal");
     await seedTrack({ album: "Faint Signal", label: null, title: "One", trackId: "t7" });
     await db.execute({
@@ -753,9 +684,8 @@ describe("the album sitemap is catalogue-aware: a findings-free album with enoug
 
     await reconcile();
 
-    // The row exists (a real internal entity) …
     expect(await getAlbumBySlug("faint-signal")).toBeDefined();
-    // … but the single-track album is below the floor, so the sitemap omits it.
+
     const sitemap = await listAlbumSitemapRows(ALBUM_INDEX_MIN_TRACKS);
     expect(sitemap.map((row) => row.slug)).not.toContain("faint-signal");
   });
@@ -763,8 +693,6 @@ describe("the album sitemap is catalogue-aware: a findings-free album with enoug
 
 describe("the unified album index: certified + floor-clearing catalogue, one A–Z list", () => {
   it("lists a certified album (lit) and a floor-clearing catalogue album (unlit), alphabetically", async () => {
-    // A CERTIFIED album: one finding, below the ≥3 floor, but a finding is always in — the light is
-    // its certification, not its size.
     await seedTrack({
       album: "Wormhole",
       label: null,
@@ -773,8 +701,6 @@ describe("the unified album index: certified + floor-clearing catalogue, one A�
       trackId: "t1",
     });
 
-    // A CATALOGUE-only album that clears the renderable floor (3 tracks, no finding): minted inline
-    // like the crawler does. It joins the SAME index, unlit.
     const deepId = await ensureAlbum("Deep Space", "rg-deep-space");
     for (const trackId of ["d1", "d2", "d3"]) {
       await seedTrack({ album: "Deep Space", label: null, title: trackId, trackId });
@@ -784,7 +710,6 @@ describe("the unified album index: certified + floor-clearing catalogue, one A�
       sql: `update tracks set album_id = ? where track_id in (?, ?, ?)`,
     });
 
-    // A THIN catalogue album (1 track, below the floor): out of the index, though its page renders.
     const faintId = await ensureAlbum("Faint", "rg-faint");
     await seedTrack({ album: "Faint", label: null, title: "one", trackId: "f1" });
     await db.execute({
@@ -796,27 +721,19 @@ describe("the unified album index: certified + floor-clearing catalogue, one A�
 
     const page = await listAlbumsHubPage(1);
 
-    // Alphabetical, both registers in one list; the thin catalogue album is absent.
     expect(page.items.map((album) => album.slug)).toEqual(["deep-space", "wormhole"]);
     expect(page.total).toBe(2);
-    // The certification light rides the flag: Deep Space unlit, Wormhole lit.
+
     expect(page.items.map((album) => ({ certified: album.certified, slug: album.slug }))).toEqual([
       { certified: false, slug: "deep-space" },
       { certified: true, slug: "wormhole" },
     ]);
-    // The tile counts RENDERABLE tracks (the superset noun), never findings.
+
     expect(page.items.find((album) => album.slug === "deep-space")?.trackCount).toBe(3);
   });
 });
 
-// The unified hub, served as a numbered `?page=N` surface (listXxxHubPage) with an A–Z lane. The
-// load-bearing contract: (1) EVERY entity Fluncle holds is here — certified findings AND the wider
-// catalogue, in one alphabetical list, each row carrying its `certified` flag; (2) the ≥3
-// renderable-track floor gates a thin UNCERTIFIED entity out (a certified one is always in); (3) the
-// right disjoint slice per page with an honest total + pageCount; and (4) a page past the end
-// returns an honest empty page (so the ROUTE 404s off page > pageCount) rather than clamping to page 1.
 describe("the unified hub ?page=N index", () => {
-  /** Seed N findings-free catalogue tracks on one LABEL, stamping the label_id pointer. */
   async function seedCatalogueLabel(label: string, count: number): Promise<void> {
     for (let track = 0; track < count; track++) {
       const trackId = `${label}-${track}`;
@@ -827,8 +744,6 @@ describe("the unified hub ?page=N index", () => {
   }
 
   it("LABELS: pages the findings-free set at the 48-tile window, disjoint, with an honest total", async () => {
-    // 49 findings-free labels at the floor (3 tracks each) → two pages: 48 + 1. Zero-padded names so
-    // the slug order (imprint-00 … imprint-48) is deterministic across the page boundary.
     for (let label = 0; label < 49; label++) {
       await seedCatalogueLabel(`Imprint ${String(label).padStart(2, "0")}`, 3);
     }
@@ -848,12 +763,9 @@ describe("the unified hub ?page=N index", () => {
     expect(two.pageCount).toBe(2);
     expect(two.items[0]?.slug).toBe("imprint-48");
 
-    // The pager is a window over ONE ordered set: page 2 is disjoint from page 1, never a re-slice.
     const onePage = new Set(one.items.map((entry) => entry.slug));
     expect(two.items.some((entry) => onePage.has(entry.slug))).toBe(false);
 
-    // A page past the end is an honest empty page with the real total, never a clamp to page 1
-    // (which would duplicate its URL); the route turns "past the end of every section" into a 404.
     expect(await listLabelsHubPage(3)).toMatchObject({
       items: [],
       page: 3,
@@ -872,12 +784,11 @@ describe("the unified hub ?page=N index", () => {
     await seedCatalogueLabel("Alpha Imprint", 3);
     await seedCatalogueLabel("Bravo Imprint", 3);
     await seedCatalogueLabel("9 Imprint", 3);
-    // A thin label (below the floor) is absent from the lane, exactly as it is from the page.
+
     await seedCatalogueLabel("Thin Imprint", 2);
 
     const letters = (await listLabelsHubPage(1)).letters ?? [];
 
-    // Everything fits on page 1 here; the digit-led "9 imprint" folds into the "#" bucket.
     expect(letters).toEqual(
       expect.arrayContaining([
         { letter: "#", page: 1 },
@@ -885,7 +796,7 @@ describe("the unified hub ?page=N index", () => {
         { letter: "b", page: 1 },
       ]),
     );
-    expect(letters.map((entry) => entry.letter)).not.toContain("t"); // the thin one never appears
+    expect(letters.map((entry) => entry.letter)).not.toContain("t");
   });
 
   it("ARTISTS: pages, and 404s past the end", async () => {
@@ -901,8 +812,6 @@ describe("the unified hub ?page=N index", () => {
 
     expect(page.letters).toEqual([{ letter: "d", page: 1 }]);
 
-    // A page past the end is an honest EMPTY page carrying the real total — the route decides the
-    // 404 off `page > pageCount`. Nothing is ever clamped to page 1.
     const past = await listArtistsHubPage(2);
     expect(past).toMatchObject({ items: [], page: 2, pageCount: 1, total: 1 });
   });
@@ -912,7 +821,7 @@ describe("the unified hub ?page=N index", () => {
       await seedTrack({ album: "Deep Record", label: null, title: trackId, trackId });
       await linkTrackToAlbum(trackId, "Deep Record");
     }
-    // A thin record (below the floor) is excluded from the page and its total.
+
     for (const trackId of ["tr-1", "tr-2"]) {
       await seedTrack({ album: "Thin Record", label: null, title: trackId, trackId });
       await linkTrackToAlbum(trackId, "Thin Record");
@@ -927,7 +836,6 @@ describe("the unified hub ?page=N index", () => {
   });
 
   it("LABELS: a findings-bearing label is LIT and a findings-free floor-clearing one is UNLIT, both in one list", async () => {
-    // A findings-BEARING label (1 finding + 2 catalogue): certified, so it reads LIT and is always in.
     await seedTrack({
       album: null,
       label: "Certified Imprint",
@@ -941,27 +849,21 @@ describe("the unified hub ?page=N index", () => {
       await linkTrackToLabel(trackId, "Certified Imprint");
     }
 
-    // A findings-FREE label with 3 catalogue tracks clears the floor: UNLIT, and in the same list.
     await seedCatalogueLabel("Deep Catalogue", 3);
 
     const page = await listLabelsHubPage(1);
-    // Both, alphabetical; the certification light rides the `certified` flag, never a heading.
+
     expect(page.items.map((entry) => ({ certified: entry.certified, slug: entry.slug }))).toEqual([
       { certified: true, slug: "certified-imprint" },
       { certified: false, slug: "deep-catalogue" },
     ]);
     expect(page.total).toBe(2);
-    // The tile counts RENDERABLE tracks (findings + the quieter rows), the superset noun.
+
     expect(page.items.find((entry) => entry.slug === "certified-imprint")?.trackCount).toBe(3);
   });
 });
 
-// The COVER a hub tile renders, and the WINDOW the unified index is served through. Two things the
-// hubs can get wrong at once: every cover was hotlinked raw off whichever provider captured it
-// (the album's OWNED master on Fluncle's R2 was never consulted, though the sweep had resolved one),
-// and the list SSR'd whole — every entity, on every page, forever.
 describe("the hub tiles: the owned cover master + the 48-tile window", () => {
-  /** Point a track at a raw provider cover (what the capture stored on the track row). */
   async function setTrackCover(trackId: string, url: string): Promise<void> {
     await db.execute({
       args: [url, trackId],
@@ -969,7 +871,6 @@ describe("the hub tiles: the owned cover master + the 48-tile window", () => {
     });
   }
 
-  /** Resolve an album's OWNED master, exactly as the cover-masters sweep marks it. */
   async function resolveAlbumMaster(slug: string, key: string): Promise<void> {
     await db.execute({
       args: [key, "2026-07-20T00:00:00.000Z", slug],
@@ -997,8 +898,6 @@ describe("the hub tiles: the owned cover master + the 48-tile window", () => {
       "https://found.fluncle.com/cdn-cgi/image/width=640,format=auto/https://found.fluncle.com/albums/wormhole.jpg?v=1784505600000",
     );
 
-    // The LABEL borrows that same record's cover, and must borrow the owned master with it — the
-    // four columns have to come off ONE picked track, never a mix of two.
     const [label] = (await listLabelsHubPage(1)).items;
 
     expect(label?.coverImageUrl).toBe(album?.coverImageUrl);
@@ -1037,8 +936,6 @@ describe("the hub tiles: the owned cover master + the 48-tile window", () => {
   });
 
   it("windows the unified index at 48, with an honest total on every page", async () => {
-    // 50 certified records → two pages: 48 + 2. Zero-padded names so the alphabetical order is
-    // deterministic across the page boundary.
     for (let album = 0; album < 50; album++) {
       const name = `Record ${String(album).padStart(2, "0")}`;
       const trackId = `rec-${album}`;
@@ -1056,30 +953,17 @@ describe("the hub tiles: the owned cover master + the 48-tile window", () => {
     expect(one.items[0]?.name).toBe("Record 00");
 
     expect(two.items.map((entry) => entry.name)).toEqual(["Record 48", "Record 49"]);
-    // The total is a SEPARATE read precisely so it stays honest past the window's end — the
-    // masthead count and the pager's reach both key off it.
+
     expect(two.total).toBe(50);
     expect((await listAlbumsHubPage(3)).total).toBe(50);
 
-    // The window is disjoint: page 2 is never a re-slice of page 1.
     const onPageOne = new Set(one.items.map((entry) => entry.slug));
     expect(two.items.some((entry) => onPageOne.has(entry.slug))).toBe(false);
   });
 });
 
-// The bio worklist reads (listArtistsMissingBio / listLabelsMissingBio / listAlbumsMissingBio): a
-// bio-empty entity earns a bio the moment its page is INDEXABLE, matching the two ways an entity
-// page renders. Four load-bearing cases per kind:
-//   (a) a findings-free CATALOGUE entity at the floor (≥3 renderable, 0 certified) is NOW queued
-//       (the widening that gives a crawl-minted page a dossier instead of a bare tracklist);
-//   (b) a CERTIFIED-but-thin entity (1 finding, below the floor) is STILL queued — NO regression
-//       of the original certified-finding gate;
-//   (c) a THIN findings-free entity (<3 renderable) is NOT queued (the floor caps Firecrawl +
-//       claude -p cost against the wide crawl's stub rows);
-//   (d) an entity that already carries a bio is NEVER queued (the fill-empty-only guarantee).
 describe("the bio worklist is catalogue-aware (indexable findings-free entities join the queue)", () => {
   it("ARTISTS: queues certified-thin + findings-free-indexable, not the thin or the already-bio'd", async () => {
-    // (b) certified but THIN — 1 finding, 0 catalogue, below the ≥3 floor. Still queued.
     await seedTrack({
       album: null,
       label: null,
@@ -1089,13 +973,11 @@ describe("the bio worklist is catalogue-aware (indexable findings-free entities 
     });
     await upsertTrackArtists("bq-art-cert-1", ["Certified Artist"], [], { fillImages: false });
 
-    // (a) findings-free but INDEXABLE — 3 catalogue tracks, 0 findings. Now queued.
     for (const trackId of ["bq-art-deep-1", "bq-art-deep-2", "bq-art-deep-3"]) {
       await seedTrack({ album: null, label: null, title: trackId, trackId });
       await upsertTrackArtists(trackId, ["Deep Artist"], [], { fillImages: false });
     }
 
-    // (c) findings-free and THIN — 2 catalogue tracks. Never queued.
     for (const trackId of ["bq-art-thin-1", "bq-art-thin-2"]) {
       await seedTrack({ album: null, label: null, title: trackId, trackId });
       await upsertTrackArtists(trackId, ["Thin Artist"], [], { fillImages: false });
@@ -1104,7 +986,6 @@ describe("the bio worklist is catalogue-aware (indexable findings-free entities 
     const queued = await listArtistsMissingBio(100);
     expect(queued.map((entry) => entry.name).sort()).toEqual(["Certified Artist", "Deep Artist"]);
 
-    // (d) author a bio on the indexable one → it drops out of the queue.
     const deep = queued.find((entry) => entry.name === "Deep Artist");
     expect(deep).toBeDefined();
     await db.execute({
@@ -1117,7 +998,6 @@ describe("the bio worklist is catalogue-aware (indexable findings-free entities 
   });
 
   it("LABELS: queues certified-thin + findings-free-indexable, not the thin or the already-bio'd", async () => {
-    // (b) certified but THIN — 1 finding on the label, below the floor. Still queued.
     await seedTrack({
       album: null,
       label: "Certified Imprint",
@@ -1127,13 +1007,11 @@ describe("the bio worklist is catalogue-aware (indexable findings-free entities 
     });
     await linkTrackToLabel("bq-lbl-cert-1", "Certified Imprint");
 
-    // (a) findings-free but INDEXABLE — 3 catalogue tracks. Now queued.
     for (const trackId of ["bq-lbl-deep-1", "bq-lbl-deep-2", "bq-lbl-deep-3"]) {
       await seedTrack({ album: null, label: "Deep Catalogue", title: trackId, trackId });
       await linkTrackToLabel(trackId, "Deep Catalogue");
     }
 
-    // (c) findings-free and THIN — 2 catalogue tracks. Never queued.
     for (const trackId of ["bq-lbl-thin-1", "bq-lbl-thin-2"]) {
       await seedTrack({ album: null, label: "Thin Imprint", title: trackId, trackId });
       await linkTrackToLabel(trackId, "Thin Imprint");
@@ -1145,7 +1023,6 @@ describe("the bio worklist is catalogue-aware (indexable findings-free entities 
       "Deep Catalogue",
     ]);
 
-    // (d) author a bio on the indexable one → it drops out of the queue.
     const deep = queued.find((entry) => entry.name === "Deep Catalogue");
     expect(deep).toBeDefined();
     await db.execute({
@@ -1158,7 +1035,6 @@ describe("the bio worklist is catalogue-aware (indexable findings-free entities 
   });
 
   it("ALBUMS: queues certified-thin + findings-free-indexable, not the thin or the already-bio'd", async () => {
-    // (b) certified but THIN — 1 finding on the record, below the floor. Still queued.
     await seedTrack({
       album: "Certified Record",
       label: null,
@@ -1168,13 +1044,11 @@ describe("the bio worklist is catalogue-aware (indexable findings-free entities 
     });
     await linkTrackToAlbum("bq-alb-cert-1", "Certified Record");
 
-    // (a) findings-free but INDEXABLE — 3 catalogue tracks. Now queued.
     for (const trackId of ["bq-alb-deep-1", "bq-alb-deep-2", "bq-alb-deep-3"]) {
       await seedTrack({ album: "Deep Record", label: null, title: trackId, trackId });
       await linkTrackToAlbum(trackId, "Deep Record");
     }
 
-    // (c) findings-free and THIN — 2 catalogue tracks. Never queued.
     for (const trackId of ["bq-alb-thin-1", "bq-alb-thin-2"]) {
       await seedTrack({ album: "Thin Record", label: null, title: trackId, trackId });
       await linkTrackToAlbum(trackId, "Thin Record");
@@ -1183,7 +1057,6 @@ describe("the bio worklist is catalogue-aware (indexable findings-free entities 
     const queued = await listAlbumsMissingBio(100);
     expect(queued.map((entry) => entry.name).sort()).toEqual(["Certified Record", "Deep Record"]);
 
-    // (d) author a bio on the indexable one → it drops out of the queue.
     const deep = queued.find((entry) => entry.name === "Deep Record");
     expect(deep).toBeDefined();
     await db.execute({

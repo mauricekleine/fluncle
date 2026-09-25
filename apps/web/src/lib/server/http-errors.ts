@@ -8,22 +8,14 @@ export function apiErrorResponse(error: unknown): Response {
     return jsonError(error.status, error.code, error.message);
   }
 
-  // An unexpected fault: log the raw detail server-side, answer generically.
   logEvent("error", "api.unexpected-fault", { error });
   return jsonError(500, "error", "Internal error");
 }
 
-/** The canonical 404 for a track lookup by id or Log ID. */
 export function trackNotFoundResponse(id: string): Response {
   return jsonError(404, "not_found", `No track with id ${id}`);
 }
 
-/**
- * Narrow a route path parameter to a non-undefined string. TanStack only invokes
- * a handler once its route matched, so a declared `$param` is always present;
- * this throws a clean 400 (via `apiErrorResponse`) only if that invariant is ever
- * violated, instead of passing `undefined` downstream.
- */
 export function requireParam(value: string | undefined, name: string): string {
   if (value === undefined) {
     throw new ApiError("invalid_request", `Missing path parameter '${name}'`, 400);
@@ -32,12 +24,6 @@ export function requireParam(value: string | undefined, name: string): string {
   return value;
 }
 
-/**
- * Parse a request body as JSON, returning a 400 `invalid_request` Response when
- * the body is malformed (so a bad body becomes a clean 400, not an uncaught
- * throw). On success returns `{ json }` — callers narrow the `unknown` themselves
- * (these are untrusted inputs).
- */
 export async function parseJsonBody(request: Request): Promise<Response | { json: unknown }> {
   try {
     return { json: await request.json() };
@@ -46,17 +32,6 @@ export async function parseJsonBody(request: Request): Promise<Response | { json
   }
 }
 
-/**
- * Parse + validate an editorial note from an untrusted request body. Returns the
- * trimmed note (including `""`, which means "clear the note"); returns `undefined`
- * only when the field is absent (not a string). Throws `ApiError("note_too_long",
- * …, 422)` when it exceeds the budget. Call inside a try block whose catch uses
- * `apiErrorResponse` so the throw becomes a clean 422.
- *
- * Semantics differ by caller: the add path treats `""` as "no note" (omit it);
- * the PATCH path treats `""` as "clear the stored note" (set it). Gate on
- * `typeof value === "string"` at the call site to distinguish present-from-absent.
- */
 export function parseEditorialNote(value: unknown): string | undefined {
   if (typeof value !== "string") {
     return undefined;
