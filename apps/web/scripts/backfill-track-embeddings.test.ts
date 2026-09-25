@@ -5,18 +5,8 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { createIntegrationDb, seedCatalogueTrack } from "../src/lib/server/integration-db";
 import { backfillTrackEmbeddings } from "./backfill-track-embeddings";
 
-// THE VECTOR SATELLITE BACKFILL — the data move behind the `track_embeddings` split
-// (schema.ts § `trackEmbeddings`). Every vector still in the legacy `tracks.embedding_blob` column
-// must end up in the satellite, and the run must be able to SAY so: the Worker ships after this
-// step in `deploy:cf` and reads the satellite as the sole source of truth, so a vector left behind
-// is a track that silently stops being recommendable, mixable and searchable-by-sound.
-//
-// Driven against the real migrated schema so the SQL under test is byte-identical to production's —
-// including `vector32()`, which only a real libSQL has.
-
 let db: Client;
 
-/** Seed a catalogue row carrying a LEGACY vector — the pre-split state history is in. */
 async function seedLegacy(trackId: string, first: number): Promise<void> {
   await seedCatalogueTrack(db, { title: `Track ${trackId}`, trackId });
   await db.execute({
@@ -43,8 +33,6 @@ describe("backfillTrackEmbeddings", () => {
 
     const result = await backfillTrackEmbeddings(db, { chunkSize: 1 });
 
-    // THE COUNT ASSERTION, both directions: nothing left behind, and the destination holds
-    // exactly the source's rows on a first run (a bare row contributes to neither).
     expect(result.remaining).toBe(0);
     expect(result.source).toBe(2);
     expect(result.destination).toBe(2);
@@ -66,9 +54,6 @@ describe("backfillTrackEmbeddings", () => {
   });
 
   it("walks past the chunk boundary rather than stopping at it", async () => {
-    // The cursor is the previous page's last id, so a corpus several chunks deep must drain
-    // completely. A run that silently stopped at the first page would still report `remaining > 0`,
-    // which is the belt; this is the braces.
     for (let index = 0; index < 7; index += 1) {
       await seedLegacy(`leg00000000000000000${index}a`, 0.1 * (index + 1));
     }
@@ -95,8 +80,6 @@ describe("backfillTrackEmbeddings", () => {
     const { readEmbeddingBlob } = await import("../src/lib/server/embedding");
     const { seedEmbedding } = await import("../src/lib/server/integration-db");
 
-    // The row was re-embedded after the split: the satellite holds the new vector while the legacy
-    // column still holds the old one. `insert or ignore` is what keeps the re-run from rewinding it.
     await seedLegacy("leg000000000000000001a", 1);
     await seedEmbedding(db, "leg000000000000000001a", [
       0.25,
@@ -127,8 +110,6 @@ describe("backfillTrackEmbeddings", () => {
 
     const result = await backfillTrackEmbeddings(db);
 
-    // Equality holds only on the FIRST run, which is why the pass verifies `remaining === 0`
-    // instead: a vector born in the satellite has no legacy row to be counted against.
     expect(result.source).toBe(1);
     expect(result.destination).toBe(2);
     expect(result.remaining).toBe(0);

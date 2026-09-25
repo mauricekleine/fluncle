@@ -1,32 +1,5 @@
 #!/usr/bin/env bun
-/**
- * THROWAWAY OFFLINE A/B BENCH — compares search-filter translation through OpenRouter and
- * Cloudflare Workers AI. NOT a test, NOT wired into CI; the operator runs it by hand.
- *
- * This grades the LIVE `search_filter` prompt resolved through the prompt registry when the normal
- * Turso env is available. Without it, the bench loudly falls back to the registry's baked default.
- * It only reads `prompt_versions`; it performs no DB writes and has no cost-ledger integration.
- *
- * Usage:
- *   OPENROUTER_API_KEY=<token> \
- *   CLOUDFLARE_ACCOUNT_ID=<account-id> \
- *   WORKERS_AI_API_TOKEN=<token> \
- *   bun run apps/web/scripts/bench-search-filter.ts --out /tmp/search-filter-bench.json
- *
- * Optional:
- *   OPENROUTER_SEARCH_MODEL=anthropic/claude-haiku-4.5
- *   WORKERS_AI_MODEL=@cf/meta/llama-3.3-70b-instruct-fp8-fast
- *   --timeout-ms 3000
- *
- * A provider whose required env is absent is SKIPPED, so either side can run alone. The timeout
- * defaults to production's 3 s deadline; deadline misses become result rows and never stop the run.
- * Requests are sequential (concurrency 1 per provider): this is a quality bench, not a load test.
- *
- * Workers AI's model is deliberately configurable because model choice is part of the experiment.
- * The default is a current open 70B instruct model that supports Workers AI JSON mode. The account
- * id comes only from `CLOUDFLARE_ACCOUNT_ID` (operators may use the same public value exposed as the
- * app's `R2_ACCOUNT_ID`); no account id is baked into this public script.
- */
+
 import { type SearchFilters, SearchFiltersSchema } from "@fluncle/contracts/orpc";
 import { writeFile } from "node:fs/promises";
 
@@ -105,8 +78,6 @@ const FILTER_KEYS = [
   "yearMin",
 ] as const satisfies readonly (keyof SearchFilters)[];
 
-// Golden query/filter pairs harvested from search.integration.test.ts:590–759, 820–950,
-// 980–1025, and 1198–1275. These are the model outputs those integration cases execute.
 const GOLDEN: GoldenCase[] = [
   { expected: { label: "Med School" }, kind: "golden", query: "anything on Med School" },
   {
@@ -619,9 +590,7 @@ function configuredProviders(): { providers: Provider[]; skipped: string[] } {
     skipped.push("OpenRouter — missing OPENROUTER_API_KEY");
   } else {
     const model = process.env.OPENROUTER_SEARCH_MODEL ?? DEFAULT_OPENROUTER_MODEL;
-    // OPENROUTER_REASONING_EFFORT is passed through verbatim (e.g. low/medium/high/xhigh/max) so a
-    // reasoning model can be benched at each of its effort levels; the API rejects what it doesn't
-    // support, and that rejection surfaces per-case as an error row rather than aborting the run.
+
     const reasoningEffort = process.env.OPENROUTER_REASONING_EFFORT;
 
     providers.push({

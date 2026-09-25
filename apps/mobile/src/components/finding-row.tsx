@@ -6,17 +6,6 @@ import { type TrackListItem } from "@fluncle/contracts";
 import { findingLineParts, findingMetaSegments } from "@/lib/archive-state";
 import { color, font, radius } from "@/theme/tokens";
 
-// A finding as an archive row (RFC Unit 3): artwork, then the music with its Log
-// ID coordinate leading the content and a quiet meta line. The whole row links to
-// /log/<id>. Press HEATS the row (The Ignition Rule): the Gold Veil washes the row
-// and the coordinate ignites from its resting Stardust to Eclipse Glow — the web
-// track-row idiom (styles.css: the Log ID rests muted, heats to accent on hover),
-// and the One Sun Rule keeps the coordinate unlit at rest so nothing competes.
-//
-// The horizontal layout lives on a plain inner View with a STATIC StyleSheet style
-// (the most robust path): a Pressable style FUNCTION dropped flexDirection under
-// NativeWind, and FlashList v2 mishandled flex-row item roots — so the row layout
-// is a plain View and the archive list uses FlatList (see archive.tsx).
 export const FindingRow = memo(function FindingRow({
   finding,
   isLast,
@@ -58,8 +47,7 @@ export const FindingRow = memo(function FindingRow({
                 {finding.logId}
               </Text>
             ) : null}
-            {/* The title never shrinks; the artist list is the shrinkable half, so a
-                long artist list ellipsizes rather than deleting the title (H3). */}
+
             <View style={styles.titleLine}>
               <Text style={[font.title, styles.artists]} numberOfLines={1} ellipsizeMode="tail">
                 {line.artists}
@@ -85,9 +73,6 @@ export const FindingRow = memo(function FindingRow({
   );
 });
 
-// A quiet placeholder row for the loading state (B2) and the load-more footer (P3):
-// the artwork square and two text bars in the Dust Veil tone, no spinner. It mirrors
-// the real row's geometry so the list doesn't jump when the findings arrive.
 export function FindingRowSkeleton({ isLast }: { isLast?: boolean }) {
   return (
     <View

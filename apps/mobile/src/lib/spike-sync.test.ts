@@ -1,14 +1,3 @@
-// Self-running checks for the spike sequencer — no framework, mirroring
-// submit-fault.test.ts's node:assert-free style (the Expo tsconfig has no @types/node).
-// Run via `bun test` (reports "0 pass" — no describe/it blocks — but throws and fails the
-// process on any failed assertion) or `bun src/lib/spike-sync.test.ts`.
-//
-// What this pins is the part of the spike a simulator screen CANNOT prove: that the steps
-// run in order, that one failure does not swallow the legs after it, that a `fatal`
-// failure DOES stop the run, and that the verdict names the first failure. The native
-// libSQL calls are deliberately not faked — the screen owns those, and a fake would only
-// test the fake.
-
 import {
   describeError,
   describeSyncTarget,
@@ -25,8 +14,6 @@ import {
   type SpikeStep,
 } from "@/lib/spike-sync";
 
-// A tiny strict-equality assertion (see submit-fault.test.ts): framework- and
-// dependency-free, still throws (and fails the `bun test` process) on a mismatch.
 function assertEqual<T>(actual: T, expected: T, message = "assertion failed"): void {
   if (actual !== expected) {
     throw new Error(`${message}: expected ${String(expected)}, got ${String(actual)}`);
@@ -41,7 +28,6 @@ function assertIncludes(haystack: string, needle: string, message: string): void
   }
 }
 
-// A clock that advances a fixed tick on every read, so step durations are deterministic.
 function tickingClock(step = 10): () => number {
   let now = 1_000;
   return () => {
@@ -64,7 +50,6 @@ function step(id: string, behaviour: "fail" | "pass", fatal = false): SpikeStep 
   };
 }
 
-// 1. The happy path: every step runs, in order, and the verdict passes.
 {
   const ran: string[] = [];
   const record = (id: string): SpikeStep => ({
@@ -80,14 +65,12 @@ function step(id: string, behaviour: "fail" | "pass", fatal = false): SpikeStep 
   assertEqual(ran.join(","), "open,sync-1,close", "steps run in declaration order");
   assertEqual(result.verdict, SPIKE_PASS, "all steps ok → pass");
   assertEqual(result.failedStepId, undefined, "no failed step on a clean run");
-  // Three step lines plus the verdict.
+
   assertEqual(result.lines.length, 4, "one line per step plus the verdict");
   assertEqual(result.lines[3]?.kind, "verdict", "the last line is the verdict");
   assertEqual(result.lines[3]?.text, SPIKE_PASS, "the verdict line carries the verdict");
 }
 
-// 2. A NON-fatal failure is recorded and the run continues — the whole point of the
-//    harness is that one dead leg does not hide the legs behind it.
 {
   const ran: string[] = [];
   const steps: SpikeStep[] = [
@@ -122,7 +105,6 @@ function step(id: string, behaviour: "fail" | "pass", fatal = false): SpikeStep 
   assertEqual(result.lines.filter((line) => line.kind === "skipped").length, 0, "nothing skipped");
 }
 
-// 3. A FATAL failure skips the rest — no handle means no meaningful later step.
 {
   const ran: string[] = [];
   const steps: SpikeStep[] = [
@@ -157,7 +139,6 @@ function step(id: string, behaviour: "fail" | "pass", fatal = false): SpikeStep 
   assertEqual(skipped[0]?.text, "sync-1: skipped", "a skipped step is named");
 }
 
-// 4. The verdict names the FIRST failure, not the last.
 {
   const result = await runSpike([step("a", "pass"), step("b", "fail"), step("c", "fail")], {
     clock: tickingClock(),
@@ -165,12 +146,11 @@ function step(id: string, behaviour: "fail" | "pass", fatal = false): SpikeStep 
   assertEqual(result.verdict, spikeFailVerdict("b"), "the first failure owns the verdict");
 }
 
-// 5. Each step is timed on its own clock, and the log lines are stamped from the run start.
 {
   const result = await runSpike([step("open", "pass"), step("sync", "pass")], {
     clock: tickingClock(10),
   });
-  // Reads: run start (1000), step start (1010), step end (1020) → 10 ms, line stamp 1030.
+
   assertIncludes(
     result.lines[0]?.text ?? "",
     "open: ok (10 ms)",
@@ -184,7 +164,6 @@ function step(id: string, behaviour: "fail" | "pass", fatal = false): SpikeStep 
   );
 }
 
-// 6. onLine streams the lines live, in the same order as the returned log.
 {
   const streamed: string[] = [];
   const result = await runSpike([step("a", "pass"), step("b", "fail")], {
@@ -195,14 +174,12 @@ function step(id: string, behaviour: "fail" | "pass", fatal = false): SpikeStep 
   assertEqual(streamed.join("|"), result.lines.map((line) => line.text).join("|"), "same order");
 }
 
-// 7. An empty step list still produces a verdict rather than nothing.
 {
   const result = await runSpike([], { clock: tickingClock() });
   assertEqual(result.verdict, SPIKE_PASS, "no steps → nothing failed");
   assertEqual(result.lines.length, 1, "just the verdict line");
 }
 
-// 8. describeError carries the message plus the top stack frame, and survives non-Errors.
 {
   assertIncludes(describeError(new Error("boom")), "boom", "Error message");
   assertIncludes(describeError(new Error("boom")), "[at ", "top stack frame is bracketed");
@@ -215,7 +192,6 @@ function step(id: string, behaviour: "fail" | "pass", fatal = false): SpikeStep 
   assertEqual(describeError(undefined), "undefined", "a thrown undefined never crashes the log");
 }
 
-// 9. The three named diagnoses — each raw native message maps to its real fix.
 {
   const noBuild = diagnoseSpikeError(
     new Error("syncLibSQL is not supported in the current environment"),
@@ -248,7 +224,6 @@ function step(id: string, behaviour: "fail" | "pass", fatal = false): SpikeStep 
   );
 }
 
-// 10. Config reading: absent and blank both count as missing, and both names are reported.
 {
   const none = readSpikeConfig({ syncUrl: undefined, token: undefined });
   assertEqual(none.kind, "missing", "no env → missing");
@@ -274,8 +249,6 @@ function step(id: string, behaviour: "fail" | "pass", fatal = false): SpikeStep 
   assertEqual(ready.kind === "ready" ? ready.config.token : "", "tok", "trimmed token");
 }
 
-// 11. The log never carries the host or the token — it gets shared off the device, and
-//     this repo is public.
 {
   const masked = describeSyncTarget("libsql://example-org.turso.io");
   assertIncludes(masked, "libsql://", "the scheme survives, so the operator can spot a typo");
@@ -294,7 +267,6 @@ function step(id: string, behaviour: "fail" | "pass", fatal = false): SpikeStep 
   );
 }
 
-// 12. formatSpikeLog joins the stamped lines, which is what the Share sheet hands over.
 {
   const log = formatSpikeLog([
     { elapsedMs: 0, kind: "info", text: "start" },

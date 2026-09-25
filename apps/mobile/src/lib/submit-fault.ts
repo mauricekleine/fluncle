@@ -1,20 +1,5 @@
-// The honest result states for the submit flow, and the pure mapping from a thrown
-// server fault to one of them. Kept out of the screen (no React Native imports) so
-// it's unit-testable — the states are the whole point of the feature (a submission
-// is a message in a bottle; the server owns status, the client just renders it
-// truthfully).
-
-/**
- * How a submit fault reads to the crew. The public `submit_track` op faults with a
- * 429 (`rate_limited`) or a validation/Spotify `ApiError`; it has NO dedupe today,
- * so `already_logged` is wired but dormant — gated on a real server conflict signal
- * (a 409 or an `already`/`duplicate`-flavoured code) so it can never misfire, ready
- * if the server ever grows dedupe. `offline` is a transport failure that never
- * reached the server (no HTTP status on the error).
- */
 export type SubmitOutcome = "already_logged" | "failed" | "offline" | "rate_limited";
 
-/** Read the server fault's HTTP status + `apiCode` off an unknown thrown error, defensively. */
 export function faultInfo(error: unknown): { apiCode?: string; status?: number } {
   if (typeof error !== "object" || error === null) {
     return {};
@@ -24,10 +9,6 @@ export function faultInfo(error: unknown): { apiCode?: string; status?: number }
   const status = typeof fault.status === "number" ? fault.status : undefined;
   let apiCode: string | undefined;
 
-  // The oRPC OpenAPILink client wraps the HTTP response on the thrown ORPCError:
-  // the server's legacy `{ code, message, ok }` body sits at `data.body`, so the
-  // apiCode (e.g. "rate_limited") is `data.body.code` (verified against the live
-  // server). A flatter `data.apiCode` is kept as a defensive fallback.
   if (typeof fault.data === "object" && fault.data !== null) {
     const data = fault.data as { apiCode?: unknown; body?: unknown };
 
@@ -44,7 +25,6 @@ export function faultInfo(error: unknown): { apiCode?: string; status?: number }
   return { apiCode, status };
 }
 
-/** Map a submit fault to the honest result state the screen renders. */
 export function classifySubmit(error: unknown): SubmitOutcome {
   const { apiCode, status } = faultInfo(error);
 
@@ -59,8 +39,6 @@ export function classifySubmit(error: unknown): SubmitOutcome {
     return "already_logged";
   }
 
-  // No HTTP status means the request never reached the server (a dropped
-  // connection), not a fault it sent back.
   if (status === undefined) {
     return "offline";
   }
@@ -68,20 +46,6 @@ export function classifySubmit(error: unknown): SubmitOutcome {
   return "failed";
 }
 
-/**
- * The submit screen's PAUSED copy — what the two controls say while the device has no
- * connection, and the line that explains the queued send.
- *
- * Offline a mutation does not fail, it PAUSES (`status: 'pending'` with
- * `fetchStatus: 'paused'`), so a control keyed on isPending alone reads "Sending…"
- * forever in a tunnel. The two labels stay literal (the Chrome Rule); the voice lives in
- * the prose line beneath them.
- *
- * The asymmetry in the copy is real, not decorative: a submission IS written to storage
- * and replayed after a restart (see persist-config.ts), which is what earns the promise
- * in `queuedLine`. A Spotify search is not persisted, so its label only reports the wait
- * and promises nothing.
- */
 export const submitPausedCopy = {
   queuedLine:
     "You're offline. I'm holding your track here, and I'll send it for review the moment you're back.",
@@ -89,7 +53,6 @@ export const submitPausedCopy = {
   sendLabel: "Waiting to send",
 } as const;
 
-/** The in-voice line each outcome shows (crew register, VOICE.md). */
 export const submitOutcomeCopy: Record<SubmitOutcome, string> = {
   already_logged: "Already in the log, good ear. Great minds and all that.",
   failed: "That one didn't make it back to me. Give it another go in a moment.",

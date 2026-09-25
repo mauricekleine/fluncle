@@ -70,9 +70,6 @@ export async function getRecentTracks(limit = 20): Promise<RecentTrack[]> {
   return result.tracks;
 }
 
-// The `/admin` attention queue + the day's dispatch, read through the CLI's admin-tier
-// `admin queue` command (the operator's FLUNCLE_API_TOKEN carries it) — Raycast never
-// talks to the API itself.
 export async function getAttentionQueue(): Promise<AttentionQueue> {
   const result = await runFluncleJson<AttentionResponse>([
     "admin",

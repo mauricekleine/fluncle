@@ -6,20 +6,8 @@ import { type MixArtist } from "@fluncle/contracts";
 import { useMixableArtists } from "@/api/hooks";
 import { color, font } from "@/theme/tokens";
 
-// The taste seed — the reader's first move on the Mix tab, and why the tool works for
-// someone who has never heard of Fluncle. They can't name a track in an archive they've
-// never seen, but they can always name artists they like; those artists carry vectors, so a
-// handful of names is a taste. A GRID OF FACES TO TAP, not a box to type into (recognition
-// beats recall — the web taste-picker's stance): the grid shows the archive's best-
-// represented artists and lets them point; the search is there for the one they didn't see.
-//
-// Multi-select writes straight to the device store's taste seed (mix.ts) — no commit step,
-// which is the phone-native move — so the openers below refetch as the reader points. Copy
-// is reused verbatim from the web TastePicker (VOICE.md).
-
 const MAX_NAME_LINES = 1;
 
-/** One artist as a toggle tile: a circular face, the name, and a check when seeded. */
 function ArtistTile({
   artist,
   onToggle,
@@ -75,9 +63,8 @@ export function MixTastePicker({
   onToggle,
   selected,
 }: {
-  /** Flip an artist slug in/out of the taste seed (the screen enforces the cap). */
   onToggle: (slug: string) => void;
-  /** The slugs currently seeded, so the grid shows them selected. */
+
   selected: string[];
 }) {
   const [q, setQ] = useState("");
@@ -126,10 +113,6 @@ export function MixTastePicker({
   );
 }
 
-// Three columns, flush to the screen's 16pt content inset: the tile width is computed from
-// the window so the grid balances instead of leaving a dead gutter on the right (a fixed
-// 104pt tile left ~22pt spare at 390pt). Read once at module load — this layout doesn't
-// rotate, and a size-class change reloads the JS anyway.
 const GRID_PADDING = 16;
 const GRID_GAP = 12;
 const TILE_WIDTH = Math.floor(
@@ -148,8 +131,7 @@ const styles = StyleSheet.create({
     right: 0,
     width: 20,
   },
-  // The picker owns its inset (the screen's ScrollView content is edge-to-edge for the
-  // row lists) and its clearance from the tagline above it.
+
   container: { gap: 16, paddingHorizontal: GRID_PADDING, paddingTop: 24 },
   empty: { color: color.stardust },
   face: {

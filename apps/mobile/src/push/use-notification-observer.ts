@@ -1,6 +1,3 @@
-// Tap a push → deep-link to its target (RFC Unit 5 client). The server sends
-// data.url = "/log/<logId>" (finding) or "/mixtapes/<logId>". Handles both the
-// cold-start tap (getLastNotificationResponseAsync) and warm taps (listener).
 import { useEffect } from "react";
 import * as Notifications from "expo-notifications";
 import { useRouter } from "expo-router";

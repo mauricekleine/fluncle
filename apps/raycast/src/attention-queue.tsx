@@ -2,19 +2,10 @@ import { Color, Icon, MenuBarExtra, open } from "@raycast/api";
 import { useEffect, useState } from "react";
 import { type AttentionQueue, getAttentionQueue } from "./fluncle";
 
-// The operator's `/admin` attention queue, in the menu bar. The title shows the
-// waiting count (quiet — just an icon — when zero); the dropdown leads with the day's
-// dispatch, then the waiting rows grouped by source, each opening its exact
-// fluncle.com/admin deep link. It polls the CLI in the background (the `interval` in
-// package.json) and on the manual Refresh action. Every count comes from the same
-// `admin queue` read the CLI prints — Raycast never talks to the API itself.
-
 const SITE = "https://www.fluncle.com";
 
 type Source = AttentionQueue["rows"][number]["source"];
 
-// A section header + a row glyph per source, in the same priority order the digest
-// emits its counts. Interface glyphs only (the Raycast set) — no brand marks.
 const SOURCE_META: Record<Source, { icon: Icon; title: string }> = {
   "anchor-review": { icon: Icon.QuestionMark, title: "Version checks" },
   "artist-review": { icon: Icon.Person, title: "Artist links" },
@@ -110,12 +101,6 @@ export default function Command() {
   );
 }
 
-// Quiet when zero (a muted tray icon, no number); a tinted tray once something waits;
-// a warning glyph when the read failed.
-// The dropdown-header dispatch, compacted: the full brief is a whole sentence of
-// phrases and reads hella long as a menu item, so show the first phrase plus a
-// count and keep the full dispatch in the item tooltip. "All clear. Quiet sector."
-// has no comma-joined phrases and passes through untouched.
 function compactBrief(brief: string): string {
   const phrases = brief.replace(/\.$/, "").split(", ");
 

@@ -5,11 +5,6 @@ import { createIntegrationDb, seedTrack } from "../src/lib/server/integration-db
 import { parseAnchorReview } from "../src/lib/server/anchor";
 import { type AnchorReviewSeed, backfillAnchorReviews } from "./backfill-anchor-reviews";
 
-// The one-off seed for rows the live gate will never revisit (they already hit the retry cap). It
-// writes ONE column, so the tests that matter are the SKIPS: a row it must not touch, and the
-// idempotence guard that makes a second run a no-op. Driven against the real migrated schema so the
-// SQL is byte-identical to production.
-
 let db: Client;
 
 const seed = (trackId: string, overrides: Partial<AnchorReviewSeed["candidate"]> = {}) => ({
@@ -118,7 +113,7 @@ describe("backfillAnchorReviews", () => {
     );
 
     const written = await review("mb_loose");
-    // A blank name is dropped; a bare string keeps its name and loses only the stable-id link.
+
     expect(written?.candidate.artists).toEqual([{ id: null, name: "Calibre" }]);
     expect(written?.candidate.spotifyTrackId).toBeNull();
   });

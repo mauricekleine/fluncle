@@ -1,12 +1,3 @@
-// Self-running checks for the archive search's pure helpers — no framework, mirroring
-// the repo's node:assert-free style (submit-fault.test.ts / archive-state.test.ts).
-// Run via `bun test` (reports "0 pass" — no describe/it blocks — but throws and fails
-// the process on any failed assertion) or `bun src/lib/search-state.test.ts`.
-//
-// These pin the two things the search pane must not get wrong: the honest state branch
-// (so a cold field never flashes an empty state, and a one-char query never fires the
-// server), and the entity partitioning (canonical order, empty groups dropped).
-
 import { type SearchEntity, type SearchHit } from "@fluncle/contracts/orpc";
 
 import {
@@ -18,19 +9,15 @@ import {
   searchView,
 } from "@/lib/search-state";
 
-// A tiny strict-equality assertion (see submit-fault.test.ts): framework- and
-// dependency-free, still throws (and fails the `bun test` process) on a mismatch.
 function assertEqual<T>(actual: T, expected: T, message = "assertion failed"): void {
   if (actual !== expected) {
     throw new Error(`${message}: expected ${String(expected)}, got ${String(actual)}`);
   }
 }
 
-// 1. normalizeQuery trims to what the server sees.
 assertEqual(normalizeQuery("  netsky  "), "netsky", "trims surrounding whitespace");
 assertEqual(normalizeQuery("   "), "", "all whitespace → empty");
 
-// 2. The state branch. An empty field is idle, never empty.
 assertEqual(
   searchView({ hasResults: false, isError: false, isFetching: false, query: "" }),
   "idle",
@@ -42,7 +29,6 @@ assertEqual(
   "whitespace-only field → idle",
 );
 
-// 3. A one-character query is below the floor — the server has nothing to go on.
 assertEqual(
   searchView({ hasResults: false, isError: false, isFetching: true, query: "n" }),
   "tooShort",
@@ -50,35 +36,30 @@ assertEqual(
 );
 assertEqual(MIN_QUERY_LENGTH, 2, "the floor is two, matching the server + web");
 
-// 4. A first in-flight query with nothing yet is loading.
 assertEqual(
   searchView({ hasResults: false, isError: false, isFetching: true, query: "netsky" }),
   "loading",
   "in-flight, no rows yet → loading",
 );
 
-// 5. Rows win over a background refetch (results never nuked by a refresh).
 assertEqual(
   searchView({ hasResults: true, isError: false, isFetching: true, query: "netsky" }),
   "results",
   "rows present while refetching → results, not loading",
 );
 
-// 6. A settled failure with nothing to show is an honest error, not empty.
 assertEqual(
   searchView({ hasResults: false, isError: true, isFetching: false, query: "netsky" }),
   "error",
   "settled failure, no rows → error",
 );
 
-// 7. A settled query that genuinely found nothing is the only empty state.
 assertEqual(
   searchView({ hasResults: false, isError: false, isFetching: false, query: "zzzzz" }),
   "empty",
   "settled, no rows, no error → empty",
 );
 
-// 8. Entity partitioning: canonical order (artists, labels, albums), empty groups dropped.
 const entities: SearchEntity[] = [
   { kind: "album", name: "Colours in Rhythm", slug: "colours-in-rhythm" },
   { kind: "artist", name: "Netsky", slug: "netsky" },
@@ -93,7 +74,6 @@ assertEqual(groups[1]?.kind, "album", "albums follow (labels dropped, none prese
 
 assertEqual(partitionEntities([]).length, 0, "no entities → no groups");
 
-// 8b. The galaxy + mixtape kinds render in their own groups, after albums.
 const withGalaxyAndMixtape = partitionEntities([
   { kind: "mixtape", name: "Summer Voyage", slug: "005.F.03", url: "/log/005.F.03" },
   { kind: "galaxy", name: "Amber Drift", slug: "amber-drift", url: "/galaxies/amber-drift" },
@@ -103,8 +83,6 @@ assertEqual(withGalaxyAndMixtape.length, 3, "artist, galaxy, and mixtape groups 
 assertEqual(withGalaxyAndMixtape[1]?.heading, "Galaxies", "galaxies follow albums");
 assertEqual(withGalaxyAndMixtape[2]?.heading, "Mixtapes", "mixtapes come last");
 
-// 9. Track partitioning: certified "Fluncle's Findings"
-//    ALWAYS before uncertified "Tracks", order preserved within each, empty groups dropped.
 function hit(trackId: string, certified: boolean): SearchHit {
   return { artists: ["Netsky"], certified, title: trackId, trackId };
 }
@@ -123,19 +101,16 @@ assertEqual(mixed[1]?.heading, "Tracks", "uncertified group is headed 'Tracks'")
 assertEqual(mixed[1]?.certified, false, "the second group is the uncertified one");
 assertEqual(mixed[1]?.hits[0]?.trackId, "uncert-1", "uncertified order preserved");
 
-// Only certified present → a single "Fluncle's Findings" group, no empty "Tracks".
 const onlyCert = partitionTracks([hit("c", true)]);
 assertEqual(onlyCert.length, 1, "no uncertified hits → only the findings group");
 assertEqual(onlyCert[0]?.heading, "Fluncle's Findings", "the sole group is the findings one");
 
-// Only uncertified present → a single "Tracks" group, no empty findings group.
 const onlyUncert = partitionTracks([hit("u", false)]);
 assertEqual(onlyUncert.length, 1, "no certified hits → only the tracks group");
 assertEqual(onlyUncert[0]?.heading, "Tracks", "the sole group is the tracks one");
 
 assertEqual(partitionTracks([]).length, 0, "no results → no track groups");
 
-// 10. Entity web path: kind decides the route, nothing else.
 assertEqual(
   entityWebPath({ kind: "artist", slug: "netsky" }),
   "/artist/netsky",

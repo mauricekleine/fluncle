@@ -1,8 +1,3 @@
-// The Nostalgic Cosmos backdrop for the no-video screens (RFC Unit 4 / D5):
-// a thin Skia layer — warm-dark base + the off-center Eclipse-Gold bloom (One Sun,
-// ≤~13% alpha) that BREATHES (~48s, The Ignition Rule) + procedural grain under
-// content (Light-Years Rule). Kept OUT of the feed (the brand videos carry the
-// aliveness there). Reduced motion cancels the breath loop (static, no idle work).
 import { useEffect } from "react";
 import { StyleSheet, View, useWindowDimensions } from "react-native";
 import {
@@ -37,7 +32,7 @@ export function CosmosBackdrop() {
       phase.value = 0.5;
       return;
     }
-    // 24s each way → ~48s breath
+
     phase.value = withRepeat(
       withTiming(1, { duration: 24000, easing: Easing.inOut(Easing.ease) }),
       -1,

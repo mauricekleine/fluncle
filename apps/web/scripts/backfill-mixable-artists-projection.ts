@@ -1,10 +1,5 @@
 #!/usr/bin/env bun
-/**
- * Bounded, restart-safe initialization for `artists.rankable_track_count`. The migration only adds
- * an empty defaulted column and index; this deploy backfill keyset-pages the small artist table and
- * recomputes each page through `track_artists_artist_id_idx`. Every page update and cursor advance
- * is one write transaction, so a retry either resumes after a complete page or safely repeats it.
- */
+
 import { type Client, type ResultSet, createClient } from "@libsql/client";
 import { randomUUID } from "node:crypto";
 import { config } from "dotenv";
@@ -78,12 +73,9 @@ export async function backfillMixableArtistsProjection(
     return { artists: 0, pages: 0, passes: 0, skipped: true };
   }
   const runId = randomUUID();
-  // Production writers maintain the projection transactionally, while an out-of-band source
-  // repair explicitly marks this state dirty. A complete fence therefore makes an ordinary deploy
-  // a true no-op; absent, dirty, and interrupted states still reconcile before activation.
+
   const resumed = options.resume === true ? parseRunningState(observed) : null;
-  // Resume restarts the interrupted pass from its beginning. That repeats bounded idempotent pages,
-  // but preserves the pass-wide "zero corrections" proof that a mid-pass cursor alone cannot.
+
   let cursor: null | string = null;
   let pass = resumed?.pass ?? 1;
   let passCorrections = 0;

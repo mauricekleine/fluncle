@@ -10,11 +10,6 @@ import {
 } from "./lib/public-projection-test-state";
 import { backfillHasIsrc } from "./backfill-has-isrc";
 
-// The `has_isrc` backfill (schema.ts § `has_isrc`): the migration adds the column DEFAULT 0, so
-// every EXISTING row lands ISRC-less — wrong for every row carrying one. This flips exactly those,
-// and only those, and mirrors an empty-string legacy ISRC to 0. Driven against the real migrated
-// schema so the SQL under test is byte-identical to production.
-
 let db: Client;
 
 async function mirror(trackId: string): Promise<number> {
@@ -32,10 +27,7 @@ beforeEach(async () => {
   await seedCatalogueTrack(db, { title: "Keyed", trackId: "isrc00000000000000000a" });
   await seedCatalogueTrack(db, { title: "Bare", trackId: "bare00000000000000000a" });
   await seedCatalogueTrack(db, { title: "Empty", trackId: "empty0000000000000000a" });
-  // Recreate the pre-backfill state the migration leaves behind: rows written raw, deliberately
-  // bypassing the paired write sites, because that unpaired state is exactly what history looks
-  // like and what the backfill must heal. The empty-string ISRC is the legacy shape the trim()
-  // in the predicate exists for — present, but not an ISRC.
+
   await db.execute(
     "update tracks set isrc = 'GBTST2600001' where track_id = 'isrc00000000000000000a'",
   );
@@ -74,13 +66,11 @@ describe("backfillHasIsrc", () => {
   });
 
   it("corrects drift in BOTH directions in one pass", async () => {
-    // A row FLAGGED with no ISRC (a console edit, a restored backup) would drain the anchor
-    // budget's head on asks that cannot conclude — the exact inversion the mirror exists to end.
     await db.execute("update tracks set has_isrc = 1 where track_id = 'bare00000000000000000a'");
 
     const { flipped } = await backfillHasIsrc(db);
 
-    expect(flipped).toBe(2); // the un-flagged keyed row AND the flagged bare one
+    expect(flipped).toBe(2);
     expect(await mirror("isrc00000000000000000a")).toBe(1);
     expect(await mirror("bare00000000000000000a")).toBe(0);
   });

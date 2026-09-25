@@ -21,19 +21,6 @@ import { HeatButton } from "@/components/heat-button";
 import { classifySubmit, submitOutcomeCopy, submitPausedCopy } from "@/lib/submit-fault";
 import { color, font, radius } from "@/theme/tokens";
 
-// The submit flow (roadmap: the app becomes a funnel, not a mirror). A crew member
-// hands Fluncle a tune the same way the web dialog does: search Spotify → pick the
-// match → send it for review, anonymous by design. It rides the SAME public
-// `submit_track` contract the web posts; the server owns validation, the hourly
-// rate limit, and status (a submission is a message in a bottle — no drafts, no
-// history view). Presented as a modal off the archive header (the app's one place
-// for global actions, next to Notifications). The honest result-state mapping is the pure,
-// tested @/lib/submit-fault.
-
-// Chrome converged with the web dialog (apps/web submit-track-dialog): the results
-// heading, the note/contact labels, and the empty-query answer read identically
-// across surfaces. Placeholder is a DELIBERATE divergence — the web's full-URL
-// example truncates mid-URL in a 390px input, so the app keeps its shorter form.
 const RESULTS_HEADING = "Select a match";
 const SHORT_QUERY_HINT = "Enter a Spotify URL or track search.";
 const SEARCH_FAILED_LINE = "Couldn't run that search. Give it another go in a sec.";
@@ -54,11 +41,6 @@ export default function SubmitScreen() {
   const searchFailed = search.isError;
   const noMatches = search.isSuccess && results.length === 0;
 
-  // One live announcement for the transient result-states so VoiceOver/TalkBack speak
-  // them as they mount. Android reads the `accessibilityLiveRegion="polite"` nodes
-  // below on its own; iOS has no live-region prop, so announce imperatively when the
-  // spoken line changes. A parked send wins outright, then `submit.isError` — once a send
-  // has been attempted it is the most recent event over a still-visible result list.
   const announcement = submit.isPaused
     ? submitPausedCopy.queuedLine
     : submit.isError
@@ -82,8 +64,6 @@ export default function SubmitScreen() {
   function runSearch() {
     const trimmed = query.trim();
 
-    // A too-short query ANSWERS (the web's model) rather than a silent no-op: the
-    // Search control stays live and the empty-query line lands in the result slot.
     if (trimmed.length < 2) {
       setShortQueryHint(true);
       return;
@@ -106,8 +86,7 @@ export default function SubmitScreen() {
       artworkUrl: selected.artworkUrl,
       contact: contact.trim() || undefined,
       note: note.trim() || undefined,
-      // The submission source enum is web | cli | ssh — no `mobile` value yet, so
-      // the app rides `web` (a follow-up can add `mobile` server-side).
+
       source: "web",
       spotifyTrackId: selected.id,
       spotifyUrl: selected.spotifyUrl,
@@ -115,7 +94,6 @@ export default function SubmitScreen() {
     });
   }
 
-  // Sent for review — the message is in the bottle. A quiet confirmation and a way out.
   if (submit.isSuccess) {
     return (
       <View style={{ flex: 1 }}>
@@ -142,9 +120,6 @@ export default function SubmitScreen() {
           behavior={Platform.OS === "ios" ? "padding" : undefined}
           style={{ flex: 1 }}
         >
-          {/* The modal dismisses by swipe; this fixed top-right control (Chrome Rule)
-              keeps that dismissal discoverable and gives an explicit target for
-              VoiceOver/TalkBack, never buried at the scroll tail. */}
           <View style={styles.topBar}>
             <Pressable
               accessibilityLabel="Cancel"
@@ -312,8 +287,6 @@ export default function SubmitScreen() {
   );
 }
 
-// One Spotify candidate as a selectable row: artwork + Artist — Title. Selecting it
-// washes the border Eclipse Gold (Ignition), the same tell the archive galaxy chips use.
 function CandidateRow({
   onPress,
   result,
@@ -323,10 +296,6 @@ function CandidateRow({
   result: TrackSearchResult;
   selected: boolean;
 }) {
-  // The row layout lives on a plain inner View with a STATIC StyleSheet style,
-  // mirroring finding-row.tsx: a Pressable style FUNCTION dropped flexDirection
-  // under NativeWind in this app, so the Pressable stays layout-free and only the
-  // heat/selection wash rides the pressed/selected conditionals.
   return (
     <Pressable accessibilityRole="button" accessibilityState={{ selected }} onPress={onPress}>
       {({ pressed }) => (

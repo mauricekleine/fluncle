@@ -1,6 +1,3 @@
-// The options page: three toggles persisted to chrome.storage.sync. The content
-// script reacts live (onSettingsChanged), so nothing here needs a reload.
-
 import { COPY } from "./copy";
 import { type LinkTarget, loadSettings, saveSettings } from "./settings";
 
@@ -15,7 +12,6 @@ const scanLabel = document.getElementById("scan-label") as HTMLDivElement;
 const cardsLabel = document.getElementById("cards-label") as HTMLDivElement;
 const targetLabel = document.getElementById("target-label") as HTMLDivElement;
 
-// Hydrate the copy from the single source so the strings stay reviewable in copy.ts.
 scanLabel.textContent = COPY.options.scanLabel;
 cardsLabel.textContent = COPY.options.showCardsLabel;
 targetLabel.textContent = COPY.options.linkTargetLabel;
@@ -39,8 +35,6 @@ async function init(): Promise<void> {
   });
 
   target.addEventListener("change", () => {
-    // Only "web" ships today, but persist the control's actual value so adding an
-    // option to the <select> needs no second change here.
     saveSettings({ linkTarget: target.value as LinkTarget }).catch(() => {});
   });
 }

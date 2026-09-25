@@ -19,6 +19,8 @@ GET https://www.fluncle.com/api/v1/tracks/<id>
 
 That is the sole entry in `host_permissions`. Page scanning is granted declaratively by the content script's `<all_urls>` match, so no broad host permission is requested for it — which keeps the install warning light. (The brief's fallback to optional host permissions isn't needed with this split.)
 
+The content script excludes editable, code, and its own injected nodes. It prunes detached links after SPA navigation so the badge and popup reflect the current page, and it deduplicates metadata reads by Log ID. Metadata requests send only the normalized Log ID, time out to a recoverable card state, and never send page text. API-provided action URLs must be absolute HTTPS URLs; an invalid destination falls back to the finding's log page.
+
 ## Layout
 
 ```text

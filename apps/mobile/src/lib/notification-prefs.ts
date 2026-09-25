@@ -1,7 +1,3 @@
-// The push category preferences — persistence + the React hook. Which categories the
-// crew wants on this device, stored locally and read back on mount. The pure mapping
-// to the contract's `mutedCategories` array is ./push-prefs.ts; this file is only the
-// AsyncStorage I/O and the hook the notifications screen drives.
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
@@ -14,9 +10,6 @@ import {
 
 const STORAGE_KEY = "fluncle.push-prefs.v1";
 
-/** The push prefs as a hook: the current toggles, a readiness flag (so the screen can
- * hold the switches until the disk read lands), and a setter that persists and returns
- * the NEXT prefs so the caller can re-register the device with the fresh muted set. */
 export function useNotificationPrefs(): {
   prefs: PushPrefs;
   ready: boolean;
@@ -24,8 +17,7 @@ export function useNotificationPrefs(): {
 } {
   const [prefs, setPrefs] = useState<PushPrefs>(DEFAULT_PUSH_PREFS);
   const [ready, setReady] = useState(false);
-  // The latest prefs, readable synchronously inside setCategory (so a fast double-tap
-  // composes off the newest value, not a stale render's closure).
+
   const latest = useRef<PushPrefs>(DEFAULT_PUSH_PREFS);
 
   useEffect(() => {

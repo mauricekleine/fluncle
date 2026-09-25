@@ -1,10 +1,5 @@
 #!/usr/bin/env bun
-/**
- * Frozen-corpus context-distil bench. One invocation evaluates one OpenRouter
- * model/effort pair, with three samples per track at production temperature.
- * It imports only pure graders and request-content builders; the OpenRouter fetch
- * is implemented here so no production cost event can be emitted.
- */
+
 import { readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -292,11 +287,6 @@ function normalizeText(value: string): string {
     .replace(/\s+/g, " ");
 }
 
-/**
- * Tolerant fact heuristic: a fact matches on a normalized substring, or when at
- * least 70% of its unique alphanumeric tokens occur anywhere in the note. One-token
- * facts require that exact token; longer facts require at least two matching tokens.
- */
 function gradeFact(note: string, fact: string): FactGrade {
   const normalizedNote = normalizeText(note);
   const normalizedFact = normalizeText(fact);
