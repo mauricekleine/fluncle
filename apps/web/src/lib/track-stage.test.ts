@@ -2,18 +2,12 @@ import { describe, expect, it } from "vitest";
 import { type SocialPostItem } from "./server/social";
 import { type StageInput, STAGE_ORDER, trackStage } from "./track-stage";
 
-// A fully-added finding: on Spotify + Telegram, nothing else. The lifecycle
-// checks layer enrichment / placement / video / posts on top of this base.
 const added: StageInput = {
   addedToSpotify: true,
   enrichmentStatus: "pending",
   postedToTelegram: true,
 };
 
-// A fixed clock for the publishing-stage cases, where the TikTok stale-draft
-// cutoff makes `trackStage` clock-dependent. `updatedAt` defaults FRESH (2h before
-// NOW) so a draft reads as still in the inbox; pass an older stamp to exercise the
-// bounced-draft path.
 const NOW = Date.parse("2026-07-06T20:00:00.000Z");
 
 function post(
@@ -92,9 +86,6 @@ describe("trackStage — publishing stages", () => {
   });
 
   it("a STALE TikTok draft (past 24h, likely bounced) re-opens the finding as ready for TikTok", () => {
-    // The live bug: TikTok async-bounces the draft, Postiz still reports success, the
-    // row stays `draft` — so a bounced draft can otherwise read as posted forever. Past 24h
-    // it must re-surface in the "ready for TikTok" worklist.
     expect(
       trackStage(
         {

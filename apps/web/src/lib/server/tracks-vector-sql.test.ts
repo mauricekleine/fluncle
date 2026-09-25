@@ -10,7 +10,6 @@ import {
 import { resetKeyHistogramCache } from "./key-histogram";
 import { VectorDeadlineExpired } from "./vector-fallback";
 
-/** The SQL text of a statement in either `execute` call form (a bare string or `{ sql, args }`). */
 function sqlOf(statement: unknown): string {
   if (typeof statement === "string") {
     return statement;
@@ -21,11 +20,6 @@ function sqlOf(statement: unknown): string {
   return typeof sql === "string" ? sql : "";
 }
 
-/**
- * The operation metadata `databaseOperationStatement` pins to a statement. It rides on a private
- * symbol so nothing can collide with a real SQL field; reading it back by symbol is how a test
- * asserts a statement was sent through the bounded executor rather than plain `execute`.
- */
 function metadataOf(statement: Record<string | symbol, unknown> | undefined): unknown {
   const symbol = statement ? Object.getOwnPropertySymbols(statement)[0] : undefined;
 
@@ -44,16 +38,6 @@ import {
 } from "./mixability";
 import { getFindingsByGalaxyRanked, getGalaxyAuditionMembers, getMixableTracks } from "./tracks";
 
-// The other two readers rank every vector IN SQL rather than pulling vectors into the isolate
-// (lib/server/embedding.ts, docs/local-database.md "Local is not production"): the `/mix` rail
-// (`getMixableTracks` — the DB computes each candidate's cosine to the target) and a
-// galaxy's core-first order (`getFindingsByGalaxyRanked` — a `galaxy_id`-pre-filtered
-// exact scan, paged in SQL). Real libSQL, real migrations, real vector functions — a mock
-// could not exercise any of it.
-//
-// Each has a PIN: the same findings in the same order as an equivalent in-isolate ranking, so
-// the claim under test is always "the SQL cosine equals the JS cosine", never "the SQL is fast".
-
 const execute = vi.hoisted(() => vi.fn());
 let db: Client;
 
@@ -63,7 +47,6 @@ vi.mock("./db", async (importOriginal) => {
   return { ...actual, getDb: async () => ({ execute }) };
 });
 
-/** A deterministic pseudo-random L2-normalized vector — a realistic dense MuQ shape. */
 function pseudoVector(seed: number): number[] {
   let state = seed * 2654435761;
   const values: number[] = [];
@@ -88,7 +71,6 @@ type MixSeed = {
   trackId: string;
 };
 
-/** The pin's corpus: 30 findings with real keys, in-band BPMs, features and vectors. */
 function corpus(): MixSeed[] {
   return Array.from({ length: 30 }, (_, index) => ({
     bpm: 170 + (index % 8),
@@ -101,16 +83,12 @@ function corpus(): MixSeed[] {
 
 async function seed(rows: MixSeed[]): Promise<void> {
   for (const [index, row] of rows.entries()) {
-    // A VALID finding coordinate per `isLogId` (`\d{3,4}\.\d\.\d[A-Z]`): a unique 3-digit
-    // sector, a single-digit middle, a digit+letter tail. The rail now routes an exclusion
-    // token by `isLogId` (a chain holds catalogue tracks too, keyed by Spotify id), so a
-    // malformed fixture coordinate would misroute as a track id and silently not exclude.
     await seedTrack(db, { logId: `${100 + index}.${index % 10}.1A`, trackId: row.trackId });
     await db.execute({
       args: [
         row.key,
         row.bpm,
-        // A distinct, deterministic texture vector per finding (the plateau tiebreak).
+
         JSON.stringify({ centroidHz: 1000 + index, highRatio: index / 100, onsetRate: index }),
         row.trackId,
       ],
@@ -118,8 +96,7 @@ async function seed(rows: MixSeed[]): Promise<void> {
             set key = ?1, bpm = ?2, features_json = ?3
             where track_id = ?4`,
     });
-    // The vector goes through the pipeline's own write (satellite row + `has_embedding`), so
-    // the fixture cannot seed a state production never reaches. `null` = an un-embedded row.
+
     await seedEmbedding(db, row.trackId, row.embedding ?? null);
     await db.execute({
       args: [row.galaxyId ?? null, row.trackId],
@@ -128,22 +105,6 @@ async function seed(rows: MixSeed[]): Promise<void> {
   }
 }
 
-/**
- * The reference ranking for `/mix`: score from vectors held in memory, over the SAME
- * candidate pool the SQL path scans. That pool is now the NAMED-MOVE neighbourhood, not the
- * whole archive — `getMixableTracks` pre-filters `key in (…)` to the ~8 Camelot classes a
- * named harmonic move can reach (a distant-key pair is not a move a DJ makes, and the depth
- * gate guarantees the neighbourhood is deep enough to fill the rail). So the reference
- * applies the same filter before ranking; the pin is still "the SQL cosine equals the JS
- * cosine, in the same order", which is what this test exists to prove.
- *
- * SINGLE-PROBE-ON-LAST: the rail is re-ranked by mixability × the candidate's calibrated
- * cosine to the TARGET (the chain's last track), so the reference runs the same two stages —
- * `shortlistMixable` then `applyTaste` — over cosines computed here in the isolate. When the
- * target has no vector, or the archive has not cleared the sonic gate, taste is not live and
- * the reference is the plain mixability order (which `applyTaste` over an all-null taste
- * reproduces exactly, ties falling back to the shortlist's own order).
- */
 function rankInIsolate(rows: MixSeed[], targetId: string, limit: number): string[] {
   const target = rows.find((row) => row.trackId === targetId);
   const targetKey = target ? parseKey(target.key) : null;
@@ -216,8 +177,6 @@ describe("getMixableTracks", () => {
 
     await seed(rows);
 
-    // The sonic gate is OPEN at 30 embedded findings (435 pairs ≥ 50), so the MuQ term is
-    // live and this really is pinning the SQL-computed cosine against the JS-computed one.
     expect(sonicGateOpen(30)).toBe(true);
 
     for (const limit of [1, 5, 12]) {
@@ -231,11 +190,6 @@ describe("getMixableTracks", () => {
   });
 
   it("bounds the candidate scan whether or not the target carries a vector", async () => {
-    // THE DEADLINE BELONGS TO THE SCAN, NOT TO THE COSINE. Both branches read the same rows — the
-    // whole key-compatible archive up to the candidate bound — so both must arrive under the same
-    // deadline, the same one-at-a-time `heavy-read` seat, and the same cost span. A target with no
-    // vector is a property of ONE row; it says nothing about how much work the scan is, and it
-    // must not be what decides whether the scan is bounded at all.
     await seed(corpus());
 
     for (const targetHasVector of [true, false]) {
@@ -257,10 +211,6 @@ describe("getMixableTracks", () => {
   });
 
   it("serves an empty rail when the scan blows its deadline, and never a fault", async () => {
-    // The public contract is "returns [] (never throws)". A deadline is the database taking too
-    // long, not the query being wrong, so it degrades to the empty rail the callers already handle
-    // — no retry, because libSQL cannot cancel the remote work and a second attempt would stack a
-    // second scan on the database that is already the reason we are here.
     await seed(corpus());
 
     const realExecute = execute.getMockImplementation();
@@ -287,18 +237,12 @@ describe("getMixableTracks", () => {
   });
 
   it("answers identically whether or not the candidate scan joins findings", async () => {
-    // THE CONDITIONAL `FROM`, PINNED. The candidate CTE joins `findings` only to evaluate the
-    // Log ID exclusion clause; with nothing to exclude by coordinate it drives straight off
-    // `tracks`. `findings.track_id` is that table's primary key, so the LEFT JOIN can neither
-    // duplicate a candidate nor drop one — and the rail must be the same rail either way, down to
-    // each row's certification, which is read off the hydrating join that is always present.
     const rows = corpus();
 
     await seed(rows);
 
     const withoutJoin = await getMixableTracks("t_00", { limit: 12 });
-    // A real, well-formed coordinate that matches nothing in the fixture: the exclusion clause —
-    // and with it the findings join — is compiled into the scan, and removes no candidate.
+
     const withJoin = await getMixableTracks("t_00", { exclude: ["999.9.9Z"], limit: 12 });
 
     expect(withJoin).toEqual(withoutJoin);
@@ -307,9 +251,6 @@ describe("getMixableTracks", () => {
   });
 
   it("keeps an uncertified candidate on the rail on both sides of that branch", async () => {
-    // The unlit register is the half most easily broken by touching the candidate scan's FROM: a
-    // catalogue row has NO findings row at all, so an inner join (or a dropped one) would silently
-    // change who is eligible. It is the same rail with and without the exclusion clause.
     await seed(corpus());
     await seedCatalogueTrack(db, { trackId: "t_unlit" });
     await db.execute({
@@ -330,9 +271,6 @@ describe("getMixableTracks", () => {
   });
 
   it("starts the archive's key-spelling read without waiting for the target row", async () => {
-    // THE COLD PATH IS A CHAIN OF ROUND TRIPS. The histogram read depends on nothing the target
-    // read returns, so it must be in flight while the target read is outstanding — on a cold
-    // isolate that is a whole round trip removed from the rail rather than queued behind it.
     await seed(corpus());
     resetKeyHistogramCache();
 
@@ -370,9 +308,6 @@ describe("getMixableTracks", () => {
   });
 
   it("scores a candidate with no vector as vector-less", async () => {
-    // The scan LEFT JOINs `track_embeddings` and the DB does the cosine in SQL. A candidate with
-    // no satellite row keeps its place on the rail (key+BPM still mix) but its sonic term goes
-    // null. This is the real un-embedded state, reached the way the quarantine paths reach it.
     const rows = corpus();
 
     await seed(rows);
@@ -383,7 +318,6 @@ describe("getMixableTracks", () => {
       (candidate) => candidate.trackId,
     );
 
-    // The reference treats the two blob-less rows as vector-less, and the SQL ranking agrees.
     const asSeen = rows.map((row) =>
       row.trackId === "t_01" || row.trackId === "t_02" ? { ...row, embedding: null } : row,
     );
@@ -468,12 +402,6 @@ describe("getFindingsByGalaxyRanked", () => {
   });
 });
 
-// The `/admin/galaxies` naming audition reads members through the LEAN board projection
-// (`getGalaxyAuditionMembers`) — the same core-first ranking, hydrated without the fat read's
-// graph/discovery subqueries + heavy JSON columns none of the audition cards render. It must
-// still carry the audition-critical identity fields (title, artists, Log ID) in the same
-// order, or a cover shows blank; and it must NOT carry the graph fields the board projection
-// drops (a silent field is what the split guards against).
 describe("getGalaxyAuditionMembers", () => {
   it("hydrates the same core-first order with the audition fields, minus the graph fields", async () => {
     const rows = corpus();
@@ -484,16 +412,15 @@ describe("getGalaxyAuditionMembers", () => {
     const fat = await getFindingsByGalaxyRanked("galaxy-0", centroid, 8, 0);
     const lean = await getGalaxyAuditionMembers("galaxy-0", centroid, 8, 0);
 
-    // Same ranking, same page — the two share `rankGalaxyMemberIds`.
     expect(lean.map((item) => item.trackId)).toEqual(fat.map((item) => item.trackId));
 
     const first = lean[0];
     expect(first).toBeDefined();
-    // The audition renders these; a dropped one is a blank cover, not a win.
+
     expect(first?.title).toBe("Test Track");
     expect(first?.artists).toEqual(["Test Artist"]);
     expect(first?.logId).toBeDefined();
-    // The board projection drops the graph/discovery fields the audition never reads.
+
     expect(first).not.toHaveProperty("galaxy");
     expect(first).not.toHaveProperty("albumSlug");
     expect(first).not.toHaveProperty("labelSlug");
@@ -513,8 +440,7 @@ describe("the seeded vector round-trips through vector32/readEmbeddingBlob", () 
     const row = await db.execute(
       `select embedding_blob from track_embeddings where track_id = 't_00'`,
     );
-    // The driver hands a blob back as an ArrayBuffer, NOT a Uint8Array — the quirk
-    // `readEmbeddingBlob` exists to absorb.
+
     expect(Object.prototype.toString.call(row.rows[0]?.embedding_blob)).toBe(
       "[object ArrayBuffer]",
     );
@@ -523,19 +449,11 @@ describe("the seeded vector round-trips through vector32/readEmbeddingBlob", () 
     const original = pseudoVector(1);
 
     expect(decoded).not.toBeNull();
-    // float32 storage, so compare at float32 precision, not bit-for-bit against a float64.
+
     expect(cosineSimilarity(decoded ?? [], original)).toBeCloseTo(1, 6);
   });
 });
 
-// ── SINGLE-PROBE-ON-LAST: the ratified `/mix` taste model ─────────────────────────────────
-//
-// The rail's taste probe is ONE vector — the LAST track of the chain, which is the target
-// `getMixableTracks` is called with — and the rail is re-ranked by mixability × the calibrated
-// cosine to it. These fixtures hold key and BPM flat wherever adjacency is the thing under
-// test, so nothing but the vector can move the order.
-
-/** A unit vector whose cosine to `axis(0)` is exactly `cos`, the remainder on `spread`. */
 function atCosine(cos: number, spread: number): number[] {
   const values = Array.from({ length: EMBEDDING_DIMS }, () => 0);
 
@@ -545,7 +463,6 @@ function atCosine(cos: number, spread: number): number[] {
   return values;
 }
 
-/** The unit basis vector on `index`. */
 function axis(index: number): number[] {
   const values = Array.from({ length: EMBEDDING_DIMS }, () => 0);
 
@@ -554,15 +471,10 @@ function axis(index: number): number[] {
   return values;
 }
 
-/** `seed()`'s deterministic coordinate for the row at `index` — the chain's exclusion token. */
 function logIdFor(index: number): string {
   return `${100 + index}.${index % 10}.1A`;
 }
 
-/**
- * Enough same-key, far-away rows to open the sonic coverage gate (11 embedded tracks in play).
- * Their cosine to the target is 0, so they calibrate to 0 and settle at the foot of the rail.
- */
 function gateFillers(key: string): MixSeed[] {
   return Array.from({ length: 10 }, (_, index) => ({
     bpm: 172,
@@ -574,22 +486,17 @@ function gateFillers(key: string): MixSeed[] {
 
 describe("the /mix rail ranks by adjacency to the chain's LAST track", () => {
   it("re-ranks by mixability × adjacency, flipping a pair plain mixability ordered the other way", async () => {
-    // t_same_far is the cleaner MIX (same key), t_energy_near the nearer SOUND (a whole-tone
-    // energy move). Plain mixability prefers the first; single-probe-on-last prefers the second,
-    // because what follows a tune is a question about that tune's sound.
     const rows: MixSeed[] = [
       { bpm: 172, embedding: axis(0), key: "A minor", trackId: "t_target" },
-      // calibrate(0.635) = 0.3 → mix 0.755, rail 0.227
+
       { bpm: 172, embedding: atCosine(0.635, 1), key: "A minor", trackId: "t_same_far" },
-      // calibrate(0.77) = 0.6 → mix 0.66, rail 0.396
+
       { bpm: 172, embedding: atCosine(0.77, 2), key: "B minor", trackId: "t_energy_near" },
       ...gateFillers("A minor"),
     ];
 
     await seed(rows);
 
-    // The fixture's premise: B minor really is a NAMED move off A minor (an energy boost), so
-    // both candidates survive the `key in (…)` pre-filter and the comparison is about sound.
     const targetKey = parseKey("A minor");
     const energyKey = parseKey("B minor");
     expect(targetKey).not.toBeNull();
@@ -605,16 +512,11 @@ describe("the /mix rail ranks by adjacency to the chain's LAST track", () => {
     expect(rail[0]).toBe("t_energy_near");
     expect(rail.indexOf("t_energy_near")).toBeLessThan(rail.indexOf("t_same_far"));
 
-    // …and the model really did change: plain mixability over the same pool orders them the
-    // other way round. This is the RANKING CHANGE that lands on merge, pinned.
     const plain = rankInIsolatePlainMixability(rows, "t_target", 12);
     expect(plain.indexOf("t_same_far")).toBeLessThan(plain.indexOf("t_energy_near"));
   });
 
   it("takes the LAST track as the probe, never the chain's centroid", async () => {
-    // A two-track chain pointing at two orthogonal places. `t_centroid` sits EXACTLY on their
-    // mean — the row a fold over the chain would crown — while `t_near_tail` sits close to the
-    // tail alone. The tail wins: the probe is the last track, and it is never averaged.
     const rows: MixSeed[] = [
       { bpm: 172, embedding: axis(0), key: "A minor", trackId: "t_head" },
       { bpm: 172, embedding: axis(1), key: "A minor", trackId: "t_tail" },
@@ -637,14 +539,13 @@ describe("the /mix rail ranks by adjacency to the chain's LAST track", () => {
 
     const rail = (
       await getMixableTracks("t_tail", {
-        // The chain, as the builder sends it: both already-picked tracks, by coordinate.
         exclude: [logIdFor(0), logIdFor(1)],
         limit: 12,
       })
     ).map((candidate) => candidate.trackId);
 
     expect(rail.indexOf("t_near_tail")).toBeLessThan(rail.indexOf("t_centroid"));
-    // The chain stays off its own rail, whichever token kind named it.
+
     expect(rail).not.toContain("t_head");
     expect(rail).not.toContain("t_tail");
   });
@@ -663,12 +564,10 @@ describe("the /mix rail ranks by adjacency to the chain's LAST track", () => {
       (candidate) => candidate.trackId,
     );
 
-    // No probe ⇒ no adjacency to multiply by ⇒ today's un-seeded rail, unchanged.
     expect(rail).toEqual(rankInIsolatePlainMixability(rows, "t_target", 12));
   });
 });
 
-/** The OLD model's order: mixability alone, over the same named-move pool. */
 function rankInIsolatePlainMixability(rows: MixSeed[], targetId: string, limit: number): string[] {
   const target = rows.find((row) => row.trackId === targetId);
   const targetKey = target ? parseKey(target.key) : null;

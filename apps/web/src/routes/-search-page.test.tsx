@@ -11,21 +11,6 @@ import { SearchAnswer } from "./search";
 import { type SearchPageData } from "./-search-page-data";
 import { SEARCH_EXAMPLES, type SearchHit, type SearchResponse } from "@/lib/search-results";
 
-// `/search`, rendered through a router (TanStack `<Link>` needs one) so every assertion runs over
-// the REAL server HTML a crawler and a JS-blind reader receive — which is the whole claim of the
-// persistent surface. Four contracts, each the point of the page rather than a detail of it:
-//
-//   1. THE ANSWER IS IN THE HTML. No client fetch, no hydration gate: the rows, the coordinates,
-//      and the links out are all in the server response, so a crawler with no JS walks them.
-//   2. THE UNLIT RULE SURVIVES THE MOVE. A finding is lit and links to its coordinate; a track
-//      Fluncle never certified links OUT and is never named, badged, or given a noun — no heading
-//      over a bare unlit list, ever (DESIGN.md).
-//   3. EMPTY AND FAILED ARE DIFFERENT FACTS, SAID DIFFERENTLY. "Nothing out here" is a lie about an
-//      archive nobody managed to look inside, so the fault has its own copy, and both carry a way
-//      onward rather than a dead end.
-//   4. THE ZERO STATE TEACHES. The four worked example queries render as REAL links to the surface
-//      they answer on — followable, shareable, crawlable — not as buttons that fill a field.
-
 const ROUTE_PATHS = ["/", "/search", "/tracks", "/findings", "/log/$logId", "/artist/$slug"];
 
 async function renderPage(data: SearchPageData, q?: string): Promise<string> {
@@ -74,7 +59,7 @@ describe("the answered surface", () => {
     expect(html).toContain("701.1.0A");
     expect(html).toContain('href="/log/701.1.0A"');
     expect(html).toContain('href="/artist/nova-kestrel"');
-    // The count is announced, and it counts the entity jump alongside the row.
+
     expect(html).toContain("2 matches");
   });
 
@@ -88,9 +73,6 @@ describe("the answered surface", () => {
     expect(html).not.toContain("1 matches");
   });
 
-  // THE UNLIT RULE. An uncertified row links to its own `/track/<trackId>` destination — there is
-  // still no `/log` page for somewhere Fluncle has not been, and that destination is not one: it
-  // carries no coordinate. The tier it belongs to is never given a name anywhere on the page.
   it("links an uncertified track to its destination, and never names the tier it belongs to", async () => {
     const html = await renderPage(
       answered({
@@ -100,21 +82,18 @@ describe("the answered surface", () => {
     );
 
     expect(html).toContain('href="/track/t1"');
-    // No coordinate, and no Spotify mark standing over a page that is not Spotify's.
+
     expect(html).not.toContain("search-row-coordinate");
     expect(html).not.toContain("https://open.spotify.com/track/x");
-    // The unlit register: a discovery row with no `data-lit`.
+
     expect(html).toContain('<li class="discovery-row">');
-    // Alone on the page, the unlit rows stand BARE: a heading over the only content would exist
-    // purely to name the tier.
+
     expect(html).not.toContain("Tracks</h2>");
     for (const forbidden of ["catalogue", "Catalogue", "uncertified", "Uncertified"]) {
       expect(html).not.toContain(forbidden);
     }
   });
 
-  // The off-site anchor is the FALLBACK, for a row the destination refuses — one the archive
-  // cannot name — never the default for every uncertified row.
   it("links a row the destination refuses out to its off-site anchor", async () => {
     const html = await renderPage(
       answered({
@@ -128,7 +107,6 @@ describe("the answered surface", () => {
     expect(html).toContain('<li class="discovery-row">');
   });
 
-  // The superset heading earns its place only when something NAMED renders above it.
   it("names the superset only when a named group renders above it", async () => {
     const html = await renderPage(
       answered({
@@ -140,15 +118,11 @@ describe("the answered surface", () => {
       "aurora",
     );
 
-    // The NAMED OBJECT, never the collection's nameplate: DESIGN.md's Unlit Rule reserves
-    // "Fluncle's Findings" for lore-area surfaces, and this is not one.
     expect(html).toContain("Findings</h2>");
     expect(html).not.toContain("Fluncle&#x27;s Findings");
     expect(html).toContain("Tracks</h2>");
   });
 
-  // The honesty line: the language tier was wanted and could not run, so these are text hits and
-  // the page says so rather than passing one off as the filters that were asked for.
   it("admits a degraded answer instead of dressing text hits up as filters", async () => {
     const html = await renderPage(answered({ degraded: true, results: [hit({})] }), "quiet ones");
 
@@ -175,8 +149,6 @@ describe("the answered surface", () => {
       "tracks that sound like Synthetic Aurora",
     );
 
-    // `Artist — Title`, the one sanctioned em dash (VOICE.md §6). Inverted it would be an em dash
-    // in prose, which the same rule bans.
     expect(html).toContain("Near ");
     expect(html).toContain("Nova Kestrel — Synthetic Aurora");
   });
@@ -188,8 +160,6 @@ describe("the states that are not an answer", () => {
 
     expect(html).toContain("Give me a name, a coordinate, or the sound of a track.");
     for (const example of SEARCH_EXAMPLES) {
-      // A link, not a button: an example query is the best thing on this page for a crawler to
-      // follow and for a reader to open in a new tab.
       expect(html).toContain(`q=${encodeURIComponent(example.query)}`);
     }
     expect(html).toContain('href="/search?q=netsky"');
@@ -209,25 +179,20 @@ describe("the states that are not an answer", () => {
     expect(html).toContain("Try a different name, or ");
     expect(html).toContain("dig through every track I hold");
     expect(html).toContain('href="/tracks"');
-    // The live region speaks in every committed state, so a submit that finds nothing still
-    // announces its outcome to a reader whose focus went back to the field.
+
     expect(html).toContain("No matches for “zzzqqx”.");
   });
 
-  // A coordinate that names no finding is a different fact from a name the archive does not hold,
-  // and collapsing the two would throw away the only useful thing the resolver learned.
   it("tells a coordinate miss apart from a name miss", async () => {
     const html = await renderPage(answered({ kind: "coordinate" }), "999.9.9Z");
 
     expect(html).toContain("No finding at that coordinate.");
     expect(html).not.toContain("Nothing out here for");
-    // "Try a different name" is wrong advice for a reader who typed a coordinate.
+
     expect(html).toContain("Nothing logged there yet.");
     expect(html).not.toContain("Try a different name");
   });
 
-  // THE THIRD STATE. "Nothing out here" would be a lie about an archive nobody managed to look
-  // inside, so a fault is named as a fault — with a way to retry and a way onward.
   it("names a fault as a fault, never as an empty result", async () => {
     const html = await renderPage({ status: "failed" }, "netsky");
 
@@ -240,8 +205,6 @@ describe("the states that are not an answer", () => {
 });
 
 describe("the field", () => {
-  // The no-JS contract: the browser's own submit builds exactly the URL the route reads, so search
-  // works before (and without) hydration.
   it("is a real GET form to the surface's own URL, seeded from the committed query", async () => {
     const html = await renderPage(answered({ results: [hit({})] }), "netsky");
 
@@ -251,8 +214,6 @@ describe("the field", () => {
     expect(html).toContain('value="netsky"');
   });
 
-  // The visible label is absent, so the accessible name comes from a real `<label>` rather than an
-  // aria-label that could disagree with what a voice-control reader sees.
   it("names the field for assistive technology", async () => {
     const html = await renderPage({ status: "blank" });
 

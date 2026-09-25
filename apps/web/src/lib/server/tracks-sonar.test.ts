@@ -4,12 +4,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EMBEDDING_DIMS } from "./embedding";
 import { createIntegrationDb, seedEmbedding, seedTrack } from "./integration-db";
 
-// The `/log` "more like this" surface's SONAR route, against REAL libSQL. The one thing a mocked
-// `execute` could not prove is the load-bearing property here: with the flag ON, a finding whose
-// `log_id` is NULL must NEVER reach `/log`, even if a stale sonar returns it. `findings.log_id` is
-// nullable, and sonar's `certified` predates the tightening, so the hydrator re-asserts
-// `log_id is not null` as defense-in-depth — proven here on real rows, not a mock of itself.
-
 const isSonarArtistsEnabled = vi.hoisted(() => vi.fn<() => Promise<boolean>>());
 const isSonarLogEnabled = vi.hoisted(() => vi.fn<() => Promise<boolean>>());
 const isSonarMixEnabled = vi.hoisted(() => vi.fn<() => Promise<boolean>>());
@@ -36,7 +30,6 @@ vi.mock("./db", async () => {
 import { TASTE_SHORTLIST } from "./mixability";
 import { getMixableTracks, getSimilarFindings } from "./tracks";
 
-/** A 1024-d MuQ-shaped vector pointing along axis 0 (the rest zero). */
 function vector(a: number): number[] {
   const values = Array.from({ length: EMBEDDING_DIMS }, () => 0);
   values[0] = a;
@@ -82,7 +75,7 @@ describe("getSimilarFindings — the /log sonar route (dark)", () => {
       { embedding: vector(1), logId: "004.1.1A", trackId: "t_a" },
       { embedding: vector(1), logId: "004.2.2B", trackId: "t_b" },
     ]);
-    // sonar ranks t_b above t_a; the output must follow sonar, not the DB's insertion order.
+
     searchSonar.mockResolvedValue([
       { id: "t_b", score: 0.9 },
       { id: "t_a", score: 0.8 },
@@ -105,8 +98,7 @@ describe("getSimilarFindings — the /log sonar route (dark)", () => {
     await seed([
       { embedding: vector(1), logId: "004.0.0A", trackId: "t_self" },
       { embedding: vector(1), logId: "004.1.1A", trackId: "t_good" },
-      // A findings row WITHOUT a coordinate — the exact row the OFF path's `log_id is not null`
-      // excludes. A sonar built before the turso.rs tightening could still rank it.
+
       { embedding: vector(1), logId: null, trackId: "t_nolog" },
     ]);
     searchSonar.mockResolvedValue([
@@ -174,17 +166,6 @@ describe("getSimilarFindings — the /log sonar route (dark)", () => {
   );
 });
 
-// ── The `/mix` rail's SONAR route (dark) ──────────────────────────────────────────────────
-//
-// The rail's expensive half is the whole-archive `vector_distance_cos` candidate scan, and that
-// is the ONLY half sonar replaces: it answers "the nearest key-compatible tracks to the chain's
-// last one", and the same mixability engine ranks what comes back. These prove three things
-// against real rows — that the request reproduces BOTH Turso predicates exactly (the named-move
-// key spellings, and the chain exclusions with Log IDs resolved to the track ids sonar is keyed
-// by), that the rail is RANKED rather than taken verbatim, and that every not-perfectly-well
-// answer falls back to the Turso scan the flag-OFF path runs today.
-
-/** A 1024-d vector whose cosine to `mixAxis(0)` is `cos`, the remainder on `spread`. */
 function atCosine(cos: number, spread: number): number[] {
   const values = Array.from({ length: EMBEDDING_DIMS }, () => 0);
 
@@ -194,7 +175,6 @@ function atCosine(cos: number, spread: number): number[] {
   return values;
 }
 
-/** The unit basis vector on `index`. */
 function mixAxis(index: number): number[] {
   const values = Array.from({ length: EMBEDDING_DIMS }, () => 0);
 
@@ -218,11 +198,6 @@ async function seedMix(rows: MixSeed[]): Promise<void> {
   }
 }
 
-/**
- * The rail's fixture: one target, two same-key candidates at different distances, one already
- * on the chain — plus ten far-away rows, because the sonic coverage gate wants eleven embedded
- * tracks in play before it trusts a cosine at all (`sonicGateOpen`).
- */
 const MIX_ROWS: MixSeed[] = [
   { embedding: mixAxis(0), key: "A minor", logId: "300.1.1A", trackId: "t_tail" },
   { embedding: atCosine(0.9, 1), key: "A minor", logId: "301.1.1A", trackId: "t_near" },
@@ -236,7 +211,6 @@ const MIX_ROWS: MixSeed[] = [
   })),
 ];
 
-/** What sonar answers with, once the two candidates under test are placed: the gate's fillers. */
 const MIX_FILLER_MATCHES = Array.from({ length: 10 }, (_, index) => ({
   id: `t_fill_${index}`,
   score: 0,
@@ -273,12 +247,9 @@ describe("getMixableTracks — the /mix sonar route (dark)", () => {
     expect(request.index).toBe("tracks");
     expect(request.topK).toBe(TASTE_SHORTLIST);
     expect(request.probes).toHaveLength(1);
-    // The archive's stored key SPELLINGS, exactly as the Turso `key in (…)` pre-filter binds
-    // them — sonar holds the same `tracks.key` string and compares it by equality.
+
     expect(request.filter.key_in).toEqual(["A minor"]);
-    // The target, plus the chain — and the chain arrived as a COORDINATE, which sonar cannot
-    // match, so it had to be resolved to its track id or the exclusion would have silently
-    // evaporated.
+
     expect(request.excludeIds).toContain("t_tail");
     expect(request.excludeIds).toContain("t_chained");
     expect(request.excludeIds).not.toContain("303.1.1A");
@@ -287,7 +258,7 @@ describe("getMixableTracks — the /mix sonar route (dark)", () => {
   it("ranks what sonar returned through the mixability engine, keeping the reason chip", async () => {
     await seedMix(MIX_ROWS);
     isSonarMixEnabled.mockResolvedValue(true);
-    // Handed back in the WRONG order on purpose: the rail is ranked, never taken verbatim.
+
     searchSonar.mockResolvedValue([
       { id: "t_far", score: 0.6 },
       { id: "t_near", score: 0.9 },
@@ -298,7 +269,7 @@ describe("getMixableTracks — the /mix sonar route (dark)", () => {
 
     expect(rail.map((candidate) => candidate.trackId).slice(0, 2)).toEqual(["t_near", "t_far"]);
     expect(rail[0]?.reason).toMatchObject({ kind: expect.any(String) });
-    // The DTO is the Turso path's, hydrated through the same select and mapper.
+
     expect(rail[0]?.certified).toBe(true);
     expect(rail[0]?.logId).toBe("301.1.1A");
   });

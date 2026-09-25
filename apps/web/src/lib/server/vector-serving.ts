@@ -33,7 +33,6 @@ function add(reasons: VectorServingReason[], reason: VectorServingReason): void 
   }
 }
 
-/** Derive first-open and steady-state readiness from bounded control-plane evidence. */
 export function assessVectorServing(input: AssessmentInput): VectorServingStatus {
   const health = input.health;
   const consumer = input.consumer;

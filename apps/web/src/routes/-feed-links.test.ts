@@ -1,13 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-// The feeds' top audit bug: a finding item linked to Spotify, not to its own /log
-// page — the archive gave away its citation surface. These tests pin the fix: a
-// finding item links to its /log home, a coordinate-less finding falls back to
-// Spotify, and the Spotify URL stays reachable in the item body. Plus the light
-// enrichment (per-item cover, feed-level icon).
-
-// One row set shared by all three feeds: a certified finding (has a coordinate), a
-// coordinate-less finding straggler (the fallback case), and a published mixtape.
 const FINDING = {
   added_at: "2026-06-15T20:00:00.000Z",
   album_image_url: "https://i.scdn.co/image/cover.jpg",
@@ -80,13 +72,13 @@ describe("rss.xml — findings link home", () => {
     const xml = await (await handler()).text();
 
     expect(xml).toContain(`<link>${FINDING_LOG}</link>`);
-    // The Spotify URL is preserved in the body, no longer the link.
+
     expect(xml).toContain("https://open.spotify.com/track/abc");
-    // The per-item album cover rides along as media:content.
+
     expect(xml).toContain(
       '<media:content url="https://i.scdn.co/image/cover.jpg" medium="image"/>',
     );
-    // The feed-level image.
+
     expect(xml).toContain("https://www.fluncle.com/fluncle-cover.png");
   });
 
@@ -112,9 +104,9 @@ describe("atom.xml — findings link home", () => {
 
     expect(xml).toContain(`<link rel="alternate" href="${FINDING_LOG}"/>`);
     expect(xml).toContain("https://open.spotify.com/track/abc");
-    // Per-entry content carries the cover image (escaped HTML).
+
     expect(xml).toContain("&lt;img src=&quot;https://i.scdn.co/image/cover.jpg&quot;");
-    // Feed-level logo.
+
     expect(xml).toContain("<logo>https://www.fluncle.com/fluncle-cover.png</logo>");
   });
 
@@ -144,11 +136,11 @@ describe("feed.json — findings link home", () => {
 
     const item = feed.items[0];
     expect(item?.url).toBe(FINDING_LOG);
-    // JSON Feed 1.1: the id is the permalink URL.
+
     expect(item?.id).toBe(FINDING_LOG);
-    // Spotify kept in the body.
+
     expect(item?.content_text).toContain("https://open.spotify.com/track/abc");
-    // Per-item image + feed-level icon/favicon.
+
     expect(item?.image).toBe("https://i.scdn.co/image/cover.jpg");
     expect(feed.icon).toBe("https://www.fluncle.com/fluncle-cover.png");
     expect(feed.favicon).toBe("https://www.fluncle.com/favicon.png");

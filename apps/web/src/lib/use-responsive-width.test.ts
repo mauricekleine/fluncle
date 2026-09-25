@@ -5,11 +5,6 @@ import {
   stepDownRenditionWidth,
 } from "./use-responsive-width";
 
-// The ladder is walked in BOTH directions: up to the pane's rung on measure, and
-// down a rung per stall (the /log watchdog's recovery — a wedged load wants FEWER
-// bytes, never the heavier master). The step-down is the pure half of that, so it
-// is tested here; the measuring half needs a DOM and a ResizeObserver.
-
 describe("stepDownRenditionWidth", () => {
   it("is the identity at zero steps (the measured pane's own rung)", () => {
     for (const rung of RENDITION_LADDER) {
