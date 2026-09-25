@@ -1,18 +1,3 @@
-// THE BRIDGE PROCESS (`bun run --cwd packages/live bridge`, :4180). One
-// stateless-restartable Bun process that:
-//   * serves the enriched /plan (the glass loads it on boot; same shape the glass
-//     seed served, now bridge-owned — the glass's standalone /plan on :4173 stays
-//     for bridge-less mode, so :4180 takes precedence when the bridge is up),
-//   * serves the phone remote at /remote (canon surface, LAN),
-//   * streams ShowState over ws://:4180/state at 30Hz with seq/t + per-channel
-//     staleness, and ingests ShowCommands (mel frames, nudges, blackout, intensity,
-//     heartbeats) on the same socket,
-//   * runs the fingerprint matcher (fed by the glass's 10Hz mel frames) and the
-//     out-of-process supervisor (relaunches a wedged glass).
-//
-// Boot: build the plan, fingerprint every planned preview, then open the socket.
-// The matcher never touches the network again — the never-crash rail.
-
 import {
   BRIDGE_PORT,
   BRIDGE_REMOTE_PATH,
@@ -36,18 +21,10 @@ import {
   type VjTransition,
 } from "./vj";
 
-/** State-stream cadence (30Hz — the low end of the RFC's 30-60Hz). */
 const BROADCAST_HZ = 30;
 
 type Boot = { plan: PlanEntry[]; fingerprints: Fingerprint[] };
 
-/**
- * Resolve the requested plan ref from the bridge's argv, honouring BOTH `--plan <ref>`
- * (the shape `run show` passes) and a bare positional ref, with `FLUNCLE_PLAN_MIXTAPE`
- * as the fallback. The ref is a mixtape logId OR a plan handle — `buildPlan` decides by
- * shape. Returns undefined when nothing is requested — `buildPlan` then builds the default
- * plan (fixture floor). Pure so the arg contract is unit-testable.
- */
 export function parsePlanArg(
   argv: string[],
   env = process.env.FLUNCLE_PLAN_MIXTAPE,
@@ -59,24 +36,15 @@ export function parsePlanArg(
       if (next !== undefined && !next.startsWith("--")) {
         return next;
       }
-      continue; // a dangling `--plan` with no value falls through to the env/default
+      continue;
     }
     if (!arg.startsWith("--")) {
-      return arg; // a bare positional id
+      return arg;
     }
   }
   return env;
 }
 
-/**
- * The Tier-A full-song swap is GATED, default OFF: the bridge fingerprints the full
- * song only when BOTH an admin token is present (the operator machine) AND
- * `FLUNCLE_FULL_SONG_FINGERPRINT` is explicitly enabled ("1"/"true", case-insensitive).
- * Until the operator flips the flag AFTER the M5 accuracy re-tune, the bridge stays on
- * preview references with the preview-calibrated thresholds — so merging Tier-A is a
- * live-path NO-OP (the swap ships only when the flag is on). Additive: a token alone
- * never flips it. Pure, so it is unit-tested.
- */
 export function shouldFingerprintFullSong(
   auth: AdminAuth | null,
   flagEnv = process.env.FLUNCLE_FULL_SONG_FINGERPRINT,
@@ -88,23 +56,6 @@ export function shouldFingerprintFullSong(
   return flag === "1" || flag === "true";
 }
 
-/**
- * The RANDOM-VJ transition decision — the ONE code path that CLOSES the live-visuals loop.
- * A transition datagram either carries the IDENTITY of the track that just went live or it
- * doesn't; either way this returns the plan index to `goto`:
- *
- *   * identity present + resolves to a finding in the pool → its `index` (the canonical case:
- *     the wall shows THAT finding). The matched index is `take`n from the bag so a later random
- *     draw won't re-show it this cycle.
- *   * no identity, or identity that resolves to nothing (OCR noise, or the DJ played a track
- *     that simply isn't a finding) → the next shuffle-bag draw (graceful degradation — a
- *     generic beautiful thing, never the WRONG specific finding).
- *
- * Pure (the resolver + bag are injected/deterministic), so the match-vs-fallback decision is
- * unit-tested against a small fake plan without a socket. `plan` is a `Finding[]` structurally
- * (`PlanEntry` carries the resolver's `bpm`/`key` guards), so `resolveDeck` aligns its returned
- * `index` exactly with the plan index `goto` expects.
- */
 export type VjSelection =
   | { index: number; via: "match"; logId: string; score: number; reason: string }
   | { index: number; via: "fallback"; reason: string };
@@ -136,17 +87,6 @@ export function selectVjIndex(
   };
 }
 
-/**
- * Structurally validate one raw WS message into a ShowCommand, or `null` when it is not a
- * well-formed command — a non-object, an unknown `cmd`, or a required field of the wrong
- * type / a non-finite number. This is the WS half of the bridge's never-crash rail, the
- * sibling of vj.ts's `parseTransition` on the UDP side: the socket carries arbitrary bytes,
- * so a malformed frame is DROPPED here, never cast blindly and fed to the state machine.
- * SEMANTIC ranges — the intensity clamp, the mel-frame length + per-bin finiteness — are the
- * state machine's job (`state.ts` owns the dials + the matcher feed); this gate only proves
- * the SHAPE so `state.ingest` can trust the discriminant and field types. Pure, total, and
- * never throws — cheap enough for the 10Hz mel hot path (a discriminant switch + typeof).
- */
 export function parseCommand(raw: unknown): ShowCommand | null {
   if (typeof raw !== "object" || raw === null) {
     return null;
@@ -180,8 +120,6 @@ export function parseCommand(raw: unknown): ShowCommand | null {
         ? { cmd: "heartbeat", renderFrame: msg.renderFrame }
         : null;
     case "mel":
-      // The frame's length + per-bin finiteness are enforced by state.ts (the matcher feed);
-      // here it need only be a numeric-array shape with a finite timestamp.
       return typeof msg.t === "number" && Number.isFinite(msg.t) && Array.isArray(msg.frame)
         ? { cmd: "mel", frame: msg.frame as number[], t: msg.t }
         : null;
@@ -190,14 +128,9 @@ export function parseCommand(raw: unknown): ShowCommand | null {
   }
 }
 
-/** Build the plan (mixtape logId or plan handle) and fingerprint each planned finding. */
 async function boot(planRef?: string): Promise<Boot> {
   const plan = await buildPlan(planRef);
-  // RANDOM-VJ MODE (`--plan all`): the WHOLE archive as an unordered pool, driven by the
-  // shuffle-bag director's transition datagrams (`vj.ts`) — there is no identity to match, so
-  // skip fingerprinting entirely. Returning `frames: null` for EVERY entry means the matcher
-  // never advances (it only ever advances on a fingerprint hit), so the director owns the
-  // pointer via `goto`. Every OTHER plan ref stays exactly as before (still fingerprints).
+
   if (isAllPlan(planRef)) {
     console.error(
       `bridge: RANDOM-VJ pool — ${plan.length} findings, no fingerprinting (director shuffles)`,
@@ -206,13 +139,7 @@ async function boot(planRef?: string): Promise<Boot> {
   }
   const logIds = plan.map((p) => p.logId);
   const suffix = planRef ? ` (${planRef})` : "";
-  // Tier-A full-song references are GATED (default OFF): fingerprint the full song from
-  // the private R2 via the operator-token `get_source_audio` endpoint ONLY when a token
-  // is present AND FLUNCLE_FULL_SONG_FINGERPRINT is on — the operator flips it AFTER the
-  // M5 accuracy re-tune. Otherwise stay on the 30s preview relay (today's behavior, even
-  // when a token exists), so merging Tier-A is a live-path no-op. Either path pulls the
-  // fingerprints ONCE at boot (bounded concurrency) and holds them for the whole show —
-  // the matcher never touches the network again (the never-crash rail).
+
   const auth = await loadAdminAuth();
   const fullSong = shouldFingerprintFullSong(auth);
   const source = fullSong
@@ -233,14 +160,6 @@ async function main(): Promise<void> {
   const { plan, fingerprints } = await boot(planRef);
   const state = createShowState(plan, fingerprints);
 
-  // RANDOM-VJ MODE (`--plan all`): bind the UDP transition channel and let the shuffle-bag
-  // director drive the pointer. Bound ONLY in VJ mode — every other plan ref never opens the
-  // socket. Each valid `{"type":"transition","deck":1|2}` datagram pulls the next unique
-  // finding from the bag and drives the show through the SAME `goto` command path the phone
-  // remote uses. LAN-local by design (bound on all interfaces so the DJ-mixer sender on the
-  // other machine can reach it). The port is injectable via `FLUNCLE_VJ_TRANSITION_PORT`.
-  // `buildAllFindingsPlan` throws on a failed archive fetch OR an empty pool, so reaching here
-  // in VJ mode guarantees a non-empty plan (createShuffleBag needs size ≥ 1) — no dead show.
   let vjListener: Awaited<ReturnType<typeof startVjTransitionListener>> | null = null;
   if (isAllPlan(planRef)) {
     const bag = createShuffleBag(plan.length, mulberry32(Date.now()));
@@ -268,7 +187,6 @@ async function main(): Promise<void> {
     );
   }
 
-  // The set of connected sockets (glass + any phone remotes).
   const sockets = new Set<import("bun").ServerWebSocket<unknown>>();
 
   const supervisor = startSupervisor(
@@ -321,8 +239,6 @@ async function main(): Promise<void> {
         sockets.delete(ws);
       },
       message(_ws, raw) {
-        // The never-crash rail (mirrors vj.ts's UDP listener): parse, structurally validate,
-        // then ingest inside a guard so a malformed frame is dropped and NEVER fatal.
         let parsed: unknown;
         try {
           parsed = JSON.parse(String(raw));
@@ -345,7 +261,6 @@ async function main(): Promise<void> {
     },
   });
 
-  // 30Hz broadcast loop — one ShowState snapshot to every connected socket.
   const interval = setInterval(
     () => {
       if (sockets.size === 0) {

@@ -20,10 +20,6 @@ import {
   verdictFor,
 } from "./find-conflated-artists";
 
-// The detector is READ-ONLY, and these tests hold it to that: the stub records every statement, and
-// the run must issue nothing but `select`s. The rest pins the classification — which is the part
-// that must never guess, because its output is the input to a destructive repair.
-
 const PRUNE_OUT_DIR = mkdtempSync(join(tmpdir(), "find-conflated-"));
 process.env.PRUNE_OUT_DIR = PRUNE_OUT_DIR;
 
@@ -53,7 +49,6 @@ const LABELS: LabelRow[] = [
 
 const ARTISTS: ArtistRow[] = [{ id: "A_K", mbid: MB_DNB, name: "K", slug: "k" }];
 
-/** The live shape: a J-pop act credited `K.` on Cutting Edge beside the DnB act `K`. */
 const conflated = () => ({
   artists: ARTISTS,
   edges: [

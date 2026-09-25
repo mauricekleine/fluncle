@@ -34,6 +34,8 @@ It answers seven questions: are the runbook's assets still in the repo; does the
 
 **Its `unknown` is not a pass.** A check it cannot run — no bucket credentials, no `op`, no labs checkout — reports "could not verify" and the run exits **2**, distinct from a clean **0** and a failing **1**. Each non-passing check prints what to do about it. Env it reads (never prints): `FLUNCLE_BOXSTATE_KEY`, `R2_ACCOUNT_ID`, `FLUNCLE_BACKUP_R2_ACCESS_KEY_ID`, `FLUNCLE_BACKUP_R2_SECRET_ACCESS_KEY`, plus `FLUNCLE_LABS_DIR` or `--labs <dir>` for the companion checkout.
 
+Child diagnostics may contain concrete vault paths or URLs. The preflight redacts those before reporting errors; preserve that boundary when adding checks or surfacing stderr.
+
 `--drill` runs [`box-state-restore-drill.ts`](../../../docs/agents/hermes/scripts/box-state-restore-drill.ts) for real: fetch, verify against the manifest, decrypt, prove the tamper-detection bites, unpack, confirm the load-bearing set came back. Slower, still read-only, and the only thing that turns a believed backup into a proven one.
 
 ## Is the box actually gone?

@@ -26,12 +26,12 @@
     "fluncle-box-restore": {
       "source": "packages/skills/fluncle-box-restore",
       "sourceType": "local",
-      "computedHash": "e3e29985ffbd815df5efe07aad1406882ec067736e5cd130f27ba206de3f9507"
+      "computedHash": "7090632542a21b4bc67d059e2f5592eae6cf10afc4dae92e107721f8c6b65864"
     },
     "fluncle-catalogue-prune": {
       "source": "packages/skills/fluncle-catalogue-prune",
       "sourceType": "local",
-      "computedHash": "7745c2525897ae13eff05702508550e7211976777f3d776769a3bc5e54d5ee62"
+      "computedHash": "4c62904106b19b810012976c99d6598db61bd3a994a6bc7ce4d750963f543023"
     },
     "fluncle-embed-batch": {
       "source": "packages/skills/fluncle-embed-batch",

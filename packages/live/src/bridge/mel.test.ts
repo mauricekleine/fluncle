@@ -1,13 +1,8 @@
-// Pure log-mel feature tests — the filterbank shape, per-frame L2-normalization,
-// and framing. No ffmpeg (synthetic PCM); the real-audio path is exercised by the
-// fixture accuracy run (accuracy.ts, excluded from `bun test`).
-
 import { describe, expect, test } from "bun:test";
 
 import { MEL_BINS } from "../contract";
 import { l2Normalize, MEL_FFT_SIZE, MEL_HOP, MEL_SAMPLE_RATE, melFrameAt, melFrames } from "./mel";
 
-/** A pure sine tone of `freqHz` at the mel sample rate. */
 function tone(freqHz: number, samples: number): Float32Array {
   const s = new Float32Array(samples);
   for (let i = 0; i < samples; i++) {
@@ -31,7 +26,7 @@ describe("l2Normalize", () => {
 
 describe("melFrames framing", () => {
   test("emits the expected frame count for a signal length", () => {
-    const sig = tone(440, MEL_FFT_SIZE + MEL_HOP * 9); // exactly 10 frames
+    const sig = tone(440, MEL_FFT_SIZE + MEL_HOP * 9);
     expect(melFrames(sig).length).toBe(10);
   });
 
@@ -56,7 +51,7 @@ describe("mel is frequency-discriminative", () => {
   test("a low tone concentrates energy in low bins; a high tone in high bins", () => {
     const low = melFrameAt(tone(200, MEL_FFT_SIZE), 0);
     const high = melFrameAt(tone(6000, MEL_FFT_SIZE), 0);
-    // argmax bin of each
+
     const argmax = (v: Float32Array): number => {
       let best = 0;
       for (let i = 1; i < v.length; i++) {

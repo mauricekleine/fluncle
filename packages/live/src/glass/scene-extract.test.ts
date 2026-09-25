@@ -1,9 +1,3 @@
-// Scene-extraction proof. Synthetic compositions exercise every replay path:
-// single-layer, the two closed gaps (multi-layer composite + velocity-pair
-// integration), and the four rejections (lone vec2 motion, texture, non-GLSL
-// interpolation, DOM-only). The real 011.9.8I / 011.1.3X bodies are validated
-// out-of-band (see the PR notes); these keep the classifier honest deterministically.
-
 import { describe, expect, test } from "bun:test";
 import {
   extractScene,
@@ -79,10 +73,6 @@ export const C = () => (<ShaderLayer fragmentShader={F} />);
 
 const domOnly = `export const C = () => (<AbsoluteFill><Starfield /></AbsoluteFill>);`;
 
-// A real plate-lane composition: the body SAMPLES u_plate / u_plateBackground /
-// u_plateAspectRatio but never DECLARES them (the offline ShaderLayer injects the
-// header pair); the samplers are supplied through the `textures=` prop. The old
-// extractor marked this replayable but the glass never bound the images.
 const plate = `
 const FRAGMENT = /* glsl */ \`
 \${GLSL.fbm}
@@ -102,7 +92,6 @@ export const C = () => (
 );
 `;
 
-// A single artwork sampler (any name that is not a plate slot → the finding's cover).
 const artwork = `
 const F = /* glsl */ \`
 void main() { gl_FragColor = texture2D(u_art, gl_FragCoord.xy / u_res); }\`;
@@ -119,7 +108,7 @@ describe("single-layer extraction", () => {
   });
   test("resolves GLSL.* deps into the body (no unresolved template holes)", () => {
     expect(s.body).not.toContain("${");
-    expect(s.body).toContain("fbm"); // GLSL.fbm inlined
+    expect(s.body).toContain("fbm");
   });
   test("classifies rise / audio / colour customs", () => {
     const by = Object.fromEntries(s.customUniforms.map((c) => [c.name, c.class]));
@@ -176,7 +165,7 @@ describe("plate-lane textures (the closed gap: samplers supplied via the texture
     const by = Object.fromEntries(s.layers[0].textures.map((t) => [t.name, t.source]));
     expect(by.u_plate).toBe("plate");
     expect(by.u_plateBackground).toBe("plate-background");
-    expect(s.textures).toHaveLength(2); // scene-level roster (the boot-table count)
+    expect(s.textures).toHaveLength(2);
   });
   test("the header uniform u_audioSwell is NOT mistaken for a custom uniform", () => {
     expect(s.customUniforms).toHaveLength(0);

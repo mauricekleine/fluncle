@@ -2,6 +2,8 @@
 
 The **submission-triage sweep** adds a one-line advisory verdict to each pending submission before it reaches the operator's attention queue. It runs as a deterministic box sweep with one agentic authoring step, following the auto-note runtime pattern. The Worker owns the store + the length gate; the agent holds only its `FLUNCLE_API_TOKEN` and calls one CLI command.
 
+The public `submit_track` contract accepts a loose body of optional unknown fields, including the honeypot. `createSubmission` performs the checks so valid JSON reaches its `invalid_request` and `rate_limited` responses rather than failing in oRPC input parsing.
+
 It is the **queue-legwork** sibling of the auto-note: where `note_track` voice-gates a public editorial note and stores it onto a finding, `triage_submission` length-gates an operator-internal advisory verdict and stores it onto a pending submission. Both are AGENT tier so the on-box cron drives them.
 
 ## Verdict and decision

@@ -1,18 +1,5 @@
 #!/usr/bin/env bun
-// One-time cleanup: delete `track_artists` edges whose track no longer exists.
-//
-// An ORPHANED EDGE is a row in `track_artists` pointing at a `tracks` row that has been deleted.
-// Production carried 62 of them across 36 artists (measured 2026-07-26), left by out-of-band track
-// deletion — a purge that removed the track and not its edge. The purge no longer leaves them
-// (`deleteTracksWithEdges` in lib.ts kills both in one transaction); this sweeps up what is
-// already there. It is safe to re-run: once clean it finds nothing.
-//
-// Dry-run by default — prints the count and the per-artist breakdown. `--apply` captures a full
-// rollback JSON, deletes, and re-counts.
-//
-//   bun run packages/skills/fluncle-catalogue-prune/scripts/clean-orphan-edges.ts [--apply]
-//
-// Run from the REPO ROOT with prod creds (see lib.ts / SKILL.md § Setup).
+
 import { writeFileSync } from "node:fs";
 
 import { type Client, type Row, type Value } from "@libsql/client/web";
@@ -27,17 +14,14 @@ import {
 
 export type OrphanByArtist = { artist_id: string; name: string; slug: string; edges: number };
 
-/** A libSQL cell is a union (text/blob/number/null); take it as text only when it IS text. */
 const text = (v: Value): string => (typeof v === "string" ? v : "");
 
-/** How many `track_artists` rows point at a track that no longer exists. */
 export async function countOrphanEdges(db: Client): Promise<number> {
   const result = await db.execute(ORPHAN_EDGE_COUNT_SQL);
 
   return Number(result.rows[0]?.n ?? 0);
 }
 
-/** The same orphans, grouped by the artist still holding them — heaviest first. */
 export async function orphanEdgesByArtist(db: Client): Promise<OrphanByArtist[]> {
   const result = await db.execute(ORPHAN_EDGE_BY_ARTIST_SQL);
 
@@ -49,12 +33,10 @@ export async function orphanEdgesByArtist(db: Client): Promise<OrphanByArtist[]>
   }));
 }
 
-/** The full orphaned rows, for the rollback snapshot. */
 export async function orphanEdgeRows(db: Client): Promise<Row[]> {
   return (await db.execute(ORPHAN_EDGE_ROWS_SQL)).rows;
 }
 
-/** Delete every orphaned edge. Returns the rows removed. */
 export async function deleteOrphanEdges(db: Client): Promise<number> {
   return Number((await db.execute(ORPHAN_EDGE_DELETE_SQL)).rowsAffected);
 }
@@ -102,9 +84,6 @@ export async function main(): Promise<void> {
       ? `DONE. Rollback: ${path}`
       : `WARNING — ${after} orphans remain. Re-run; if the number holds, something is writing them.`,
   );
-  // HUB COUNTS: an orphaned edge never counted toward `renderable_track_count` in the first place
-  // (the reconcile sweep's artists source joins `tracks`), so this cleanup moves no counter. The
-  // PURGE does — see the note at the end of purge.ts.
 }
 
 if (import.meta.main) {

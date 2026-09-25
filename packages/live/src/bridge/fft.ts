@@ -1,11 +1,3 @@
-// Dependency-free radix-2 Cooley-Tukey FFT — a byte-for-byte vendored copy of
-// packages/video/src/pipeline/fft.ts. Vendored (not imported) on purpose: the
-// bridge is local-only and self-contained by the RFC's failure-matrix floor, and
-// @fluncle/video carries no exports map (and is out of scope to change). This
-// primitive is pure and deterministic — no Math.random / clock — so a fingerprint
-// reproduces exactly. If the render path's copy changes, mirror it here.
-
-/** Smallest power of two >= n (n >= 1). */
 export function nextPow2(n: number): number {
   let p = 1;
   while (p < n) {
@@ -14,7 +6,6 @@ export function nextPow2(n: number): number {
   return p;
 }
 
-/** Periodic Hann window coefficients of length n (reduces spectral leakage). */
 export function hannWindow(n: number): Float64Array {
   const w = new Float64Array(n);
   for (let i = 0; i < n; i++) {
@@ -23,18 +14,12 @@ export function hannWindow(n: number): Float64Array {
   return w;
 }
 
-/**
- * In-place radix-2 forward FFT. `re`/`im` are length N (a power of two); on
- * return they hold the complex spectrum. Standard bit-reversal + Danielson-
- * Lanczos butterflies with an incremental twiddle.
- */
 export function fftInPlace(re: Float64Array, im: Float64Array): void {
   const n = re.length;
   if (n <= 1) {
     return;
   }
 
-  // Bit-reversal permutation.
   for (let i = 1, j = 0; i < n; i++) {
     let bit = n >> 1;
     for (; j & bit; bit >>= 1) {
@@ -51,7 +36,6 @@ export function fftInPlace(re: Float64Array, im: Float64Array): void {
     }
   }
 
-  // Butterflies, doubling the transform length each stage.
   for (let len = 2; len <= n; len <<= 1) {
     const half = len >> 1;
     const ang = (-2 * Math.PI) / len;

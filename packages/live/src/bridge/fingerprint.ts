@@ -1,46 +1,19 @@
-// Server-side fingerprinting: decode a preview (or, in the accuracy harness, a
-// whole set) to mono PCM at MEL_SAMPLE_RATE via ffmpeg, then compute its log-mel
-// frames (`mel.ts`). The decode mirrors packages/video/src/pipeline/analyze-set.ts:
-// a STREAMING s16le pipe converted chunk-by-chunk into one pre-sized Float32Array,
-// so a multi-GB byte buffer is never materialized. Previews are tiny (30s); the
-// stream path matters only for the offline set replay.
-//
-// At show start the bridge fingerprints each planned finding's official 30s
-// preview — the SAME source the de-risk spike used
-// (https://www.fluncle.com/api/preview/<logId>, open CORS). The result is the
-// tiny (~17-candidate) search space the matcher scores the live feed against.
-//
-// `fingerprintSourceAudio` / `fingerprintPlanFullSong` are the FULL-SONG siblings
-// (RFC full-audio, Tier-A): the same decode + never-crash rail, but pulling each
-// finding's captured full master from the authorized private `get_source_audio`
-// endpoint (operator-token auth) instead of the open preview relay — so a DJ mixing
-// in a section outside the 30s preview window can still match. A full song is ~10×
-// a preview, so the matcher budget-caps its offset step (see matcher.ts).
-
 import { spawn } from "node:child_process";
 
 import { type Fingerprint } from "./matcher";
 import { MEL_SAMPLE_RATE, melFrames } from "./mel";
 import { type AdminAuth } from "./plan";
 
-/** The streaming s16le reassembler: bytes in (at any chunk boundary), mono PCM out. */
 export type S16leSink = {
-  /** The samples pushed so far — a view, valid until the next `push`. */
   finish: () => Float32Array;
-  /** Feed one raw s16le chunk; an odd trailing byte is carried into the next call. */
+
   push: (chunk: Uint8Array) => void;
 };
 
-/**
- * The chunk-boundary-safe half of `decodeMono`, lifted out so it can be tested without
- * ffmpeg: ffmpeg's stdout arrives in arbitrary chunks, so a sample's two bytes can land
- * in different ones. Holds the odd low byte across the boundary and grows the pre-sized
- * buffer (1.5× + one second of headroom) when the seed runs out.
- */
 export function createS16leSink(seed = MEL_SAMPLE_RATE * 40): S16leSink {
   let samples = new Float32Array(seed);
   let count = 0;
-  let leftover = -1; // a low byte carried across a chunk boundary, or -1
+  let leftover = -1;
 
   const push = (v: number): void => {
     if (count >= samples.length) {
@@ -51,7 +24,6 @@ export function createS16leSink(seed = MEL_SAMPLE_RATE * 40): S16leSink {
     samples[count++] = v;
   };
 
-  /** Little-endian signed 16-bit → [-1, 1). */
   const pushSample = (lo: number, hi: number): void => {
     const raw = lo | (hi << 8);
     push((raw >= 0x8000 ? raw - 0x10000 : raw) / 32768);
@@ -77,14 +49,7 @@ export function createS16leSink(seed = MEL_SAMPLE_RATE * 40): S16leSink {
   };
 }
 
-/**
- * Decode audio to mono Float32 PCM at MEL_SAMPLE_RATE, streaming ffmpeg's raw
- * s16le stdout. `input` is either a file path / URL (passed to `-i`) or raw
- * container bytes piped to stdin. Pre-sizes when possible, grows if needed.
- */
 async function decodeMono(input: string | Uint8Array): Promise<Float32Array> {
-  // ffmpeg on PATH by default (mirrors download-preview.ts's FLUNCLE_FFMPEG). Resolved per
-  // call, not at import, so a test can point it at a binary that is not there.
   const ffmpeg = process.env.FLUNCLE_FFMPEG ?? "ffmpeg";
   const fromStdin = typeof input !== "string";
   const args = [
@@ -108,7 +73,7 @@ async function decodeMono(input: string | Uint8Array): Promise<Float32Array> {
       stdio: [fromStdin ? "pipe" : "ignore", "pipe", "pipe"],
     });
 
-    const sink = createS16leSink(MEL_SAMPLE_RATE * 40); // ~40s seed; grows as needed
+    const sink = createS16leSink(MEL_SAMPLE_RATE * 40);
     let stderr = "";
 
     if (!child.stdout) {
@@ -137,26 +102,18 @@ async function decodeMono(input: string | Uint8Array): Promise<Float32Array> {
   });
 }
 
-/** Decode a local audio file to mono Float32 PCM at MEL_SAMPLE_RATE (accuracy harness). */
 export async function decodeMonoFile(path: string): Promise<Float32Array> {
   return await decodeMono(path);
 }
 
-/** Fingerprint a local audio file (used by the offline accuracy harness). */
 export async function fingerprintFile(logId: string, path: string): Promise<Fingerprint> {
   return { frames: melFrames(await decodeMono(path)), logId };
 }
 
-/** Fingerprint raw container bytes (a fetched preview held in memory). */
 async function fingerprintBytes(logId: string, bytes: Uint8Array): Promise<Fingerprint> {
   return { frames: melFrames(await decodeMono(bytes)), logId };
 }
 
-/**
- * Fetch a finding's official 30s preview and fingerprint it. Returns a
- * null-`frames` fingerprint (matcher skips it) when the finding has no preview or
- * the fetch fails — the show goes on; the operator nudges past an unmatched track.
- */
 export async function fingerprintPreview(
   logId: string,
   baseUrl = "https://www.fluncle.com",
@@ -172,11 +129,6 @@ export async function fingerprintPreview(
   }
 }
 
-/**
- * Fingerprint a whole plan's previews concurrently (bounded) at show start. The
- * bridge holds the result for the entire show — the matcher never touches the
- * network again (the never-crash rail).
- */
 export async function fingerprintPlan(
   logIds: string[],
   baseUrl?: string,
@@ -197,14 +149,6 @@ export async function fingerprintPlan(
   return out;
 }
 
-/**
- * Fetch a finding's captured FULL SONG from the authorized private endpoint and
- * fingerprint it (RFC full-audio Tier-A). Mirrors `fingerprintPreview`'s never-crash
- * rail EXACTLY: any non-OK / miss / uncaptured / decode failure returns a
- * null-`frames` fingerprint (the matcher skips it, the operator nudges past) — the
- * show never crashes on a capture gap. The bearer is sent the SAME way `plan.ts`'s
- * `adminJson` sends it; `auth` is the operator token the bridge already resolves.
- */
 export async function fingerprintSourceAudio(logId: string, auth: AdminAuth): Promise<Fingerprint> {
   try {
     const res = await fetch(`${auth.base}/api/v1/admin/tracks/${logId}/source-audio`, {
@@ -219,13 +163,6 @@ export async function fingerprintSourceAudio(logId: string, auth: AdminAuth): Pr
   }
 }
 
-/**
- * Fingerprint a whole plan's FULL SONGS concurrently (bounded) at show start — the
- * full-song sibling of `fingerprintPlan`. Same fetch-at-boot + bounded-concurrency +
- * hold-in-memory contract (the matcher never touches the network again during the
- * show), pulling each captured master through the authorized `get_source_audio`
- * endpoint instead of the open 30s preview relay.
- */
 export async function fingerprintPlanFullSong(
   logIds: string[],
   auth: AdminAuth,

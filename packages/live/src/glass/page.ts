@@ -1,9 +1,3 @@
-// The page shell — the self-contained HTML the glass serves. The client is a
-// Bun-built browser bundle injected inline (one <script>), so the page has ZERO
-// runtime module/network dependencies of its own (the never-crash rail): fonts are
-// the only external, and the render survives without them. Single canvas now — the
-// v0.6 two-canvas crossfade folded into the GlassPipeline's shared FBO chain.
-
 const STYLE = `
   html,body{margin:0;height:100%;background:#090a0b;overflow:hidden;font:12px/1.5 ui-monospace,Menlo,monospace;color:#f4ead7}
   canvas{display:block;position:fixed;inset:0;width:100vw;height:100vh}

@@ -1,14 +1,3 @@
-// The fingerprint module's two untestable-by-eye halves: the s16le chunk-boundary
-// reassembly (a sample's two bytes can land in different ffmpeg stdout chunks) and the
-// four never-crash fetch rails (a fetch/decode miss must yield null frames, never throw —
-// the show goes on and the operator nudges past an unmatched track).
-//
-// No ffmpeg (synthetic bytes; the decode tests point FLUNCLE_FFMPEG at a binary that is
-// not there) and no network (globalThis.fetch is mocked, as plan.test.ts does, over the
-// package's no-network preload). Deliberately NOT covered: the bytes → real mel frames
-// success path, which needs a decoder — that stays proven by the fixture accuracy run
-// (accuracy.ts, excluded from `bun test`).
-
 import { afterEach, describe, expect, mock, test } from "bun:test";
 
 import {
@@ -20,7 +9,6 @@ import {
   fingerprintSourceAudio,
 } from "./fingerprint";
 
-/** Encode signed 16-bit samples little-endian, the way ffmpeg's `-f s16le` pipe does. */
 function encodeS16le(values: number[]): Uint8Array {
   const out = new Uint8Array(values.length * 2);
   for (let i = 0; i < values.length; i++) {
@@ -31,7 +19,6 @@ function encodeS16le(values: number[]): Uint8Array {
   return out;
 }
 
-/** Feed a byte stream to a fresh sink in the given cuts and read the samples back. */
 function drain(bytes: Uint8Array, cuts: number[], seed?: number): number[] {
   const sink = createS16leSink(seed);
   let at = 0;
@@ -52,7 +39,7 @@ describe("createS16leSink", () => {
 
   test("reassembles identically no matter where the chunk boundary falls", () => {
     const bytes = encodeS16le(signal);
-    // Every cut, so every odd (mid-sample) boundary is exercised, not just the even ones.
+
     for (let cut = 1; cut < bytes.length; cut++) {
       expect(drain(bytes, [cut])).toEqual(expected);
     }
@@ -60,8 +47,8 @@ describe("createS16leSink", () => {
 
   test("carries the low byte of a straddling sample across the boundary", () => {
     const sink = createS16leSink();
-    sink.push(Uint8Array.from([0x00])); // low byte of -32768, alone at the chunk edge
-    expect(Array.from(sink.finish())).toEqual([]); // nothing emitted yet
+    sink.push(Uint8Array.from([0x00]));
+    expect(Array.from(sink.finish())).toEqual([]);
     sink.push(Uint8Array.from([0x80]));
     expect(Array.from(sink.finish())).toEqual([-1]);
   });
@@ -69,7 +56,7 @@ describe("createS16leSink", () => {
   test("an empty chunk with a leftover pending is a no-op, not a dropped sample", () => {
     const bytes = encodeS16le(signal);
     const sink = createS16leSink();
-    sink.push(bytes.subarray(0, 3)); // odd cut → one byte held
+    sink.push(bytes.subarray(0, 3));
     sink.push(new Uint8Array(0));
     sink.push(new Uint8Array(0));
     sink.push(bytes.subarray(3));
@@ -77,14 +64,14 @@ describe("createS16leSink", () => {
   });
 
   test("round-trips the sign extremes", () => {
-    expect(drain(Uint8Array.from([0x00, 0x80]), [])).toEqual([-1]); // 0x8000 → -1.0
-    expect(drain(Uint8Array.from([0xff, 0x7f]), [])[0]).toBeCloseTo(0.99997, 5); // 0x7FFF
+    expect(drain(Uint8Array.from([0x00, 0x80]), [])).toEqual([-1]);
+    expect(drain(Uint8Array.from([0xff, 0x7f]), [])[0]).toBeCloseTo(0.99997, 5);
     expect(drain(Uint8Array.from([0x00, 0x00]), [])).toEqual([0]);
   });
 
   test("holds a dangling final byte instead of emitting a half sample", () => {
     const samples = drain(Uint8Array.from([0x00, 0x80, 0x2a]), []);
-    expect(samples).toEqual([-1]); // the odd trailing byte never becomes a sample
+    expect(samples).toEqual([-1]);
   });
 
   test("an empty stream finishes empty", () => {
@@ -93,9 +80,9 @@ describe("createS16leSink", () => {
   });
 
   test("grows past its seed, preserving every earlier sample", () => {
-    const ramp = Array.from({ length: 500 }, (_, i) => i - 250); // 500 ≫ the 4-sample seed
+    const ramp = Array.from({ length: 500 }, (_, i) => i - 250);
     const samples = drain(encodeS16le(ramp), [], 4);
-    expect(samples.length).toBe(ramp.length); // finish() trims to the sample count
+    expect(samples.length).toBe(ramp.length);
     expect(samples).toEqual(ramp.map((v) => v / 32768));
   });
 });
@@ -113,8 +100,6 @@ describe("fingerprint fetch rails", () => {
     }
   });
 
-  /** Await a call and return whatever it throws (or null) — bun's `.rejects` matcher reads
-   * as a non-thenable to the type-aware linter, so capture the error directly. */
   const capture = async (run: () => Promise<unknown>): Promise<unknown> => {
     try {
       await run();
@@ -205,7 +190,6 @@ describe("fingerprint fetch rails", () => {
     const auth = { base: "http://127.0.0.1:4180", token: "operator-token" };
     const logIds = ["011.9.8I", "039.2.2E", "007.8.1B", "019.1.7X", "042.3.9Z", "003.5.4Q"];
 
-    /** A mock that answers out of INPUT order (later ids first) and counts in-flight calls. */
     const staggered = (): { fetch: typeof fetch; peak: () => number } => {
       let inFlight = 0;
       let peak = 0;
@@ -213,7 +197,7 @@ describe("fingerprint fetch rails", () => {
         inFlight++;
         peak = Math.max(peak, inFlight);
         const index = logIds.findIndex((id) => url.includes(id));
-        // Earlier ids wait longest, so every response lands out of order.
+
         await new Promise((r) => setTimeout(r, (logIds.length - index) * 5));
         inFlight--;
         return missing();
@@ -230,7 +214,7 @@ describe("fingerprint fetch rails", () => {
       expect(out.map((f) => f.logId)).toEqual(logIds);
       expect(out.every((f) => f.frames === null)).toBe(true);
       expect(peak()).toBeLessThanOrEqual(2);
-      expect(peak()).toBeGreaterThan(1); // the pool really does run in parallel
+      expect(peak()).toBeGreaterThan(1);
     });
 
     test("fingerprintPlanFullSong keeps results in input order and honours the bound", async () => {

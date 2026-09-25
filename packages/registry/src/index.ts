@@ -1,50 +1,3 @@
-// The Fluncle surfaces registry — the single, in-code source of truth for every
-// place Fluncle is reachable across the Galaxy: web routes, subdomains, the public
-// API, the feeds, the agent-discovery surfaces, the delegated DNS zone, the SSH
-// terminal, the MCP server, the CLI, and the on-box Hermes crons.
-//
-// It is PURE DATA (no runtime side effects, no I/O): just a typed catalog plus a
-// few selectors over it. Two kinds of consumer read it, and the difference matters
-// when you add a surface:
-//
-// AUTOMATIC — reads the catalog at runtime, so a new entry needs no second edit:
-// the `/status` health board (`cronSurfaces()`), the box-side per-cron freshness
-// prober (a mirror of it, gated by a coverage test), the MCP `get_status` tool and
-// the CLI `status` command (`liveSurfaces()`), and the post-deploy probe.
-//
-// HAND-HONOURED — this catalog states the intent, a human still wires the consumer:
-// the surfaces-doctrine doc's tables (guarded by a parity test over this catalog),
-// the rave terminal menu (a hand-written Go slice in apps/ssh/main.go, now guarded by
-// ssh-menu.test.ts — an `ssh` weight with no screen behind it build-fails), the CLI help
-// surface (apps/cli/src/cli.ts), the homepage nav + dev-row (its own nav-model.ts),
-// llms.txt (agent-discovery.ts), and the sitemap (sitemap-data.ts). The
-// `surfacesForContext` / `surfacesByWeight` / `surfacesByKind` selectors exist for
-// exactly those and have no consumer outside this package yet — so a `web`/`ssh`/`cli`
-// weight is a declaration of prominence, not wiring.
-//
-// Scope discipline: this catalogs PUBLIC-facing and operator-known surfaces — the
-// reach of Fluncle's tentacles across the web. It is NOT a route table (the web app
-// owns its own routing) and NOT a secrets/infra inventory. Internal IPs, hostnames,
-// op-paths, and credentials never belong here.
-
-// ── Kinds ──────────────────────────────────────────────────────────────────────
-
-/**
- * What FAMILY a surface belongs to. Drives how a consumer renders/probes it:
- * - `web_route`  a page on www.fluncle.com (the archive, /log, /about, …)
- * - `subdomain`  a sibling host on the same Worker (galaxy., radio., found., dig.)
- * - `api`        a JSON HTTP endpoint (the public /api/v1 surface)
- * - `feed`       a subscribable syndication document (RSS/Atom/JSON Feed/podcast/ICS)
- * - `discovery`  a machine-fetched map or script, never a browsable page (sitemap,
- *                robots, llms.txt, well-known, the CLI installer)
- * - `dns`        the delegated authoritative DNS zone (dig.fluncle.com)
- * - `ssh`        the rave terminal (ssh rave.fluncle.com)
- * - `mcp`        the Model Context Protocol server (/mcp)
- * - `cli`        a `fluncle` CLI command (the thin HTTP client)
- * - `cron`       an on-box Hermes scheduled job (enrichment + the newsletter)
- * - `extension`  a browser extension on a vendor store (Fluncle Lens, Chrome Web Store)
- * - `app`        a native mobile app on a vendor store (Fluncle for iOS, the App Store)
- */
 export type SurfaceKind =
   | "web_route"
   | "subdomain"
@@ -59,176 +12,77 @@ export type SurfaceKind =
   | "extension"
   | "app";
 
-/**
- * How loudly a surface is presented IN A GIVEN CONTEXT. `primary` surfaces lead
- * that context's menu/nav; `hidden` ones are real and registered but deliberately
- * not advertised there (operator/agent-only or a low-level discovery detail).
- *
- * Weight is per-display-context, not global: a surface can be `primary` on the web
- * homepage yet `secondary` in the SSH terminal, or absent from one context while
- * loud in another (see `SurfaceContext` and `Surface.weights`).
- */
 export type SurfaceWeight = "primary" | "secondary" | "tertiary" | "hidden";
 
-/**
- * A DISPLAY CONTEXT: one of the surfaces that itself acts as a menu / nav / entry
- * point ranking OTHER surfaces. A surface's prominence is relative to where it is
- * shown, so weight is keyed by context. The same finding-archive route can lead the
- * web homepage while sitting mid-menu in the SSH terminal.
- *
- * - `web`     the www.fluncle.com homepage nav + dev-row — the browser front door.
- *             Ranks the human-web surfaces a visitor browses to (routes, the Galaxy,
- *             radio, the feeds/discovery a curious dev would notice).
- * - `ssh`     the rave terminal menu (ssh rave.fluncle.com) — the keyboard front
- *             door. Ranks what the TUI offers (Latest, Mixtapes, Submit,
- *             Subscribe, Install CLI, About) and the deep-link one-shots.
- * - `cli`     the `fluncle` CLI's own command surface — how loudly each verb is
- *             presented in `fluncle --help` / the about screen. Ranks the CLI verbs
- *             against each other (`recent` leads; `admin` is hidden).
- * - `status`  the `/status` health dashboard + the MCP `get_status` summary. Ranks
- *             the probed services by how prominently they head the board (the core
- *             web/db/media services lead; the quiet crons trail).
- */
 export type SurfaceContext = "web" | "ssh" | "cli" | "status";
 
-/**
- * The per-context presentation of one surface: its weight in each context that
- * displays it. SPARSE — an absent key means the surface is NOT displayed in that
- * context (e.g. an on-box cron has no `web`/`ssh`/`cli` entry; a CLI verb has no
- * `web` entry). At least one key should be present for any surface meant to surface
- * somewhere; a wholly-internal surface may legitimately carry an empty matrix.
- */
 export type SurfaceWeights = Partial<Record<SurfaceContext, SurfaceWeight>>;
 
-/**
- * A wall-clock cron schedule in a named IANA timezone — mirrors a systemd `OnCalendar`
- * for the crons that fire at a FIXED local time (the 01:00 audit, the Friday newsletter)
- * rather than on a rolling interval. It lets `/status` compute the TRUE next fire, DST
- * and all, instead of the coarse `lastProbe + cadence` estimate an interval cron gets.
- * Keep it in lockstep with the unit file's `OnCalendar` (the source of truth is the box).
- */
 export type CronSchedule = {
-  /** Local fire time as `HH:MM`, 24h, in `tz` — e.g. "01:00", "15:00". */
   time: string;
-  /** The IANA timezone the wall-clock `time` is expressed in, e.g. "Europe/Amsterdam". */
+
   tz: string;
-  /** Weekday for a weekly schedule (0=Sun … 6=Sat, matching cron/systemd Fri=5); omit for daily. */
+
   weekday?: number;
 };
 
-/**
- * How a `/status` prober should check a surface, when it is probeable. `cron`
- * surfaces are checked by freshness of their last on-box run, not an HTTP hit, so
- * they carry the cron name + cadence instead of a URL probe target.
- */
 export type ProbeConfig = {
-  /** `http` GETs the surface's URL; `cron` checks the named job's last-run freshness. */
   kind: "http" | "cron";
-  /** The Hermes job name (kind `cron` only), e.g. "fluncle-enrich". */
+
   cronName?: string;
-  /** Expected interval between runs/checks, in ms (a probe cadence or a cron interval). */
+
   cadenceMs?: number;
-  /**
-   * A fixed wall-clock schedule (kind `cron` only), for a cron that fires at a set local
-   * time rather than on an interval — so `/status` shows the real next fire, not a cadence
-   * estimate. Omit for interval crons (every-5m etc.); their estimate is honest.
-   */
+
   schedule?: CronSchedule;
-  /** How long the prober waits before calling a check failed, in ms. */
+
   timeoutMs?: number;
 };
 
-/** One unit expected to append sweep ticks to the run ledger. */
 export type RunLedgerWriter = {
-  /** The expected interval between ledger rows, in milliseconds. */
   expectedIntervalMs: number;
-  /** The systemd unit name stored in `run_events.unit`. */
+
   unit: string;
 };
 
-/** One Fluncle surface. URL/route/command/subdomain are populated per `kind`. */
 export type Surface = {
-  /** A stable, human-readable id, unique across the catalog (e.g. "web.log", "api.tracks"). */
   name: string;
   kind: SurfaceKind;
-  /**
-   * The human display NAME for this surface on the `/status` health board (e.g.
-   * "Audio enrichment", "Weekly newsletter"). REQUIRED for a status-visible surface
-   * (every `cron` surface `cronSurfaces()`/`statusProbes()` yields), enforced by the
-   * registry test — so a cron added here can never render as a raw `cron.<slug>`.
-   * Absent for a surface that never reaches `/status` (a CLI verb, a plain web route).
-   */
+
   title?: string;
-  /**
-   * A quiet one-line subtitle for this surface's `/status` row — a plain, PUBLIC-safe
-   * description of what it does (the register of "writes each finding's editorial
-   * note"). REQUIRED alongside `title` for a status-visible surface (enforced by the
-   * registry test). PUBLIC: it shows on the page, so it names no internal host, IP, or
-   * op-path. Absent for a surface that never reaches `/status`.
-   */
+
   statusDescription?: string;
-  /**
-   * How loudly this surface is presented, PER DISPLAY CONTEXT. Sparse: a key is
-   * present only for a context that displays the surface; an absent key means
-   * "not shown there". See `SurfaceContext` and `surfacesForContext`.
-   */
+
   weights: SurfaceWeights;
-  /** The canonical absolute URL, when the surface lives at a fixed address. */
+
   url?: string;
-  /** The host for a `subdomain`/`dns`/`ssh` surface (e.g. "galaxy.fluncle.com"). */
+
   subdomain?: string;
-  /** The www.fluncle.com path for a `web_route`/`feed`/`discovery`/`api` surface. */
+
   route?: string;
-  /** The shell invocation for a `cli`/`ssh` surface (e.g. "fluncle recent"). */
+
   command?: string;
-  /** What this surface exposes, in plain words — the payload, the page, the tools. */
+
   exposedContent: string[];
-  /** The wire format an `api`/`feed`/`discovery` surface emits (e.g. "application/json"). */
+
   apiFormat?: string;
-  /** How `/status` should probe this surface, when it is probeable. */
+
   probeConfig?: ProbeConfig;
-  /** A discovery/advertisement URL that points AT this surface (a card, a linkset entry). */
+
   discoveryUrl?: string;
-  /**
-   * PRE-STAGED but not yet live: registered in the catalog (so it is reviewed and
-   * one field-flip away) yet DARK everywhere. A `pending` surface is excluded from
-   * every selector — `surfacesForContext`, `surfacesByWeight`, `surfacesByKind`,
-   * `statusProbes`, `cronSurfaces` — so it appears on no context menu, no `/status`
-   * probe, the dev-row, llms.txt, or the sitemap, and the raw `SURFACES`-iterating
-   * consumers (the MCP `get_status` labels, the CLI status labels) skip it too via
-   * `liveSurfaces()`. Delete the flag (or set it false) the moment the surface goes
-   * live and every consumer picks it up at once. Used to land a surface ahead of an
-   * external gate (e.g. a Chrome Web Store review) so the fan-out is a single,
-   * reviewed, no-other-edits flip on approval.
-   */
+
   pending?: boolean;
-  /** Operator-only context: tier, caveats, where the source lives. Never secrets. */
+
   operatorNotes?: string;
 };
 
-// ── Constants ────────────────────────────────────────────────────────────────
-
-/** Home base. Every www route + feed + discovery doc hangs off this origin. */
 const SITE = "https://www.fluncle.com";
 
-// Probe cadences, named so they read at the call site. The HTTP surfaces are
-// probed by the `fluncle-healthcheck` cron every ~10m; the crons themselves are
-// checked by their own interval (see each cron surface's probeConfig).
-const PROBE_CADENCE_MS = 10 * 60 * 1000; // 10m — the healthcheck cron's tick.
-const PROBE_TIMEOUT_MS = 10 * 1000; // 10s — a generous ceiling for a cold Worker.
+const PROBE_CADENCE_MS = 10 * 60 * 1000;
+const PROBE_TIMEOUT_MS = 10 * 1000;
 
 const MINUTE_MS = 60 * 1000;
 
-// ── The catalog ────────────────────────────────────────────────────────────────
-
-/**
- * Every Fluncle surface, inventoried from the codebase (apps/web routes + router
- * rewrites, apps/dns, apps/ssh, apps/cli, the /api/v1 tree, the agent-discovery +
- * MCP libs, and the docs/agents/hermes/cron jobs). Append a surface here when it
- * ships; keep `name` unique.
- */
 export const SURFACES: readonly Surface[] = [
-  // ── Web routes (www.fluncle.com) ──────────────────────────────────────────
   {
     exposedContent: [
       "the front door — search with real example queries, one edited lead finding, the newest findings, what just came out, and the four routes into the wider archive",
@@ -272,12 +126,7 @@ export const SURFACES: readonly Surface[] = [
     ],
     kind: "web_route",
     name: "web.logbook",
-    // No `ssh` weight: the rave terminal has NO Logbook screen. It carried `ssh: "tertiary"`
-    // from the day the Logbook shipped, but `menuItems()` in apps/ssh/main.go never gained an
-    // entry for it — a weight is a claim that a context DISPLAYS the surface, and that one was
-    // false for a year of commits. Dropped to match the terminal; the ssh-menu parity test
-    // (./ssh-menu.test.ts) now build-fails the next surface that claims an ssh weight with
-    // nowhere in the TUI to land. Building the screen is the other, larger fix.
+
     probeConfig: { cadenceMs: PROBE_CADENCE_MS, kind: "http", timeoutMs: PROBE_TIMEOUT_MS },
     route: "/logbook",
     url: `${SITE}/logbook`,
@@ -305,19 +154,7 @@ export const SURFACES: readonly Surface[] = [
     url: `${SITE}/mix`,
     weights: { web: "secondary" },
   },
-  // NB: there is deliberately NO `web.stories` surface any more. `/stories` and
-  // `/stories/:logId` are LEGACY 301 stubs (apps/web/src/routes/stories.index.tsx +
-  // stories.$logId.tsx, both a bare `throw redirect({ statusCode: 301 })` to /log) — the
-  // web-overhaul RFC §8 decision 5 folded the standalone Stories surface into the home feed,
-  // where a story now opens as a MASKED dialog whose displayed URL is `/log/<id>`
-  // (src/route-masking.test.ts pins that contract). So no reader ever sees a `/stories` URL,
-  // and the surface `web.stories` described — "the feed-first Stories surface", probed for a
-  // 200 — has not existed for the life of those redirects: the probe followed the 301 to /log
-  // and reported a healthy `/stories`, and its `web: "secondary"` weight claimed a homepage
-  // prominence the nav model never carried. A 301 is not a surface; the destination is, and
-  // `web.log` already catalogs it. The FEED behind the dialog is still registered, as
-  // `api.stories` (`GET /api/v1/stories`) — that op is live and the mobile Stories pager reads
-  // it. Same carve-out shape as the `/device` and `/embed` notes below.
+
   {
     exposedContent: ["who Fluncle is, what the Galaxy is, how to read a Log ID"],
     kind: "web_route",
@@ -532,16 +369,7 @@ export const SURFACES: readonly Surface[] = [
     ],
     kind: "web_route",
     name: "web.chat",
-    // DARK while the ChatDnB rollout is gated to the VERIFIED crew (the learning cohort). The
-    // door is live and answers 200 to anyone, but signed-out and unverified callers get a
-    // pointer rather than the chat, and the page is deliberately unannounced + `noindex` — so
-    // registering it LIVE would advertise a surface most readers cannot use yet. Pre-staged
-    // instead (the extension.lens / web.mix flow) so opening the rollout is one field-flip:
-    //   1. drop `pending: true`,
-    //   2. drop the route's `noindex` meta,
-    //   3. add the §2/§3 doctrine rows.
-    // The web weight + probeConfig are pre-set, so the flip needs no other registry change.
-    // Source: apps/web/src/routes/chat.tsx + components/chat.
+
     operatorNotes:
       "The public face of ChatDnB. Gated to verified-email accounts (the rollout cohort); the server route re-checks the session, the verification, the origin/CSRF, and the rate dials on every turn. PENDING = registered but dark until the rollout opens to everyone.",
     pending: true,
@@ -556,11 +384,7 @@ export const SURFACES: readonly Surface[] = [
     ],
     kind: "web_route",
     name: "web.recommendations",
-    // DARK for the same reason as web.chat: the door is live and 200s for anyone, but it is
-    // gated to the verified crew, unannounced, and `noindex` while the recommendation machine
-    // is in its rollout. Same one-field flip when it opens (drop `pending`, drop the route's
-    // `noindex`, add the §2/§3 rows). Source: apps/web/src/routes/recommendations.tsx +
-    // components/recommendations + src/lib/server/{recommendations,recs-gate}.ts.
+
     operatorNotes:
       "E1/E2, the recommendation machine's public door. Three states off the session (anonymous pitch, unverified pointer, verified surface); the DRAFT read is the one place the live vector scan sits on a read path, rate-limited per user and degrading to empty rather than blocking the door. PENDING = registered but dark until the rollout opens.",
     pending: true,
@@ -569,18 +393,7 @@ export const SURFACES: readonly Surface[] = [
     url: `${SITE}/recommendations`,
     weights: { web: "secondary" },
   },
-  // NB: there is deliberately NO `web.device` surface. `/device` (apps/web/src/routes/device.tsx)
-  // is a LEG of the `fluncle login` device-authorization flow (RFC 8628), not a destination: it
-  // is meaningless without the one-time `?user_code=…` the terminal prints, and it is `noindex`
-  // for exactly that reason. The registry catalogs the flow at its front door (`cli.login`), the
-  // same carve-out the oRPC coverage tests make for auth/OAuth redirect legs. A probe against it
-  // would only prove that a confirmation screen renders with no code to confirm.
-  //
-  // NB: there is deliberately NO `web.embed` surface either. `/embed/<logId>` is the oEmbed
-  // provider's `rich` payload — the card `discovery.oembed` frames — and it is catalogued THERE,
-  // in that surface's exposedContent + operatorNotes. It is also slug-parameterized, so there is
-  // no fixed address to GET-probe (the web.artist precedent), and registering it separately
-  // would double-count one surface under two names.
+
   {
     exposedContent: [
       "the Galaxy factory — a draggable map of a finding's whole life, from the first CMD+F through the enrichment sweeps to the launch into the Galaxy",
@@ -611,7 +424,6 @@ export const SURFACES: readonly Surface[] = [
     weights: { web: "tertiary" },
   },
 
-  // ── Subdomains (sibling hosts on the same Worker) ──────────────────────────
   {
     exposedContent: ["the Galaxy game's front door (root rewrites to /galaxy)"],
     kind: "subdomain",
@@ -679,7 +491,6 @@ export const SURFACES: readonly Surface[] = [
     weights: { status: "tertiary", web: "tertiary" },
   },
 
-  // ── Public API (the /api/v1 surface) ───────────────────────────────────────
   {
     apiFormat: "application/json",
     discoveryUrl: `${SITE}/api/v1/openapi.json`,
@@ -729,8 +540,7 @@ export const SURFACES: readonly Surface[] = [
   {
     apiFormat: "application/json",
     discoveryUrl: `${SITE}/api/v1/openapi.json`,
-    // Ordered by tracks.release_date, NOT findings.added_at — "what just came OUT", the release-date
-    // twin of the found-date /api/v1/findings feed. Uncertified rows carry no coordinate (Unlit Rule).
+
     exposedContent: [
       "what just came out — newest drum & bass releases over a 30-day window, flat (limit max 100)",
     ],
@@ -887,7 +697,6 @@ export const SURFACES: readonly Surface[] = [
     weights: { status: "tertiary", web: "tertiary" },
   },
 
-  // ── Feeds (subscribable syndication documents) ─────────────────────────────
   {
     apiFormat: "application/rss+xml",
     exposedContent: ["the 25 most recent findings and mixtapes"],
@@ -917,8 +726,6 @@ export const SURFACES: readonly Surface[] = [
     weights: { web: "secondary" },
   },
   {
-    // The RELEASE-date syndication twins — what just came OUT (not what Fluncle found). Uncertified
-    // catalogue rows ride along linking out to Spotify only, no coordinate (the Unlit Rule).
     apiFormat: "application/rss+xml",
     exposedContent: [
       "the newest drum & bass releases over a 30-day window, as RSS (release-dated, not found-dated)",
@@ -942,11 +749,6 @@ export const SURFACES: readonly Surface[] = [
     weights: { web: "secondary" },
   },
   {
-    // The per-ENTITY release feeds — /fresh.xml narrowed to one artist / one label: what just came
-    // OUT from that entity, over the same 30-day window. LITERAL (only the entity's own tracks,
-    // never a widening to similar artists); uncertified catalogue rows ride along linking out to
-    // Spotify only, no coordinate (the Unlit Rule). Advertised via a <link rel="alternate"> on the
-    // entity page head, not a site-wide feed — a quiet per-entity affordance (web: tertiary).
     apiFormat: "application/rss+xml",
     exposedContent: [
       "one artist's newest releases over a 30-day window, as RSS (release-dated, that artist only)",
@@ -991,7 +793,6 @@ export const SURFACES: readonly Surface[] = [
     weights: { web: "tertiary" },
   },
 
-  // ── Discovery (machine-/crawler-facing maps) ──────────────────────────────
   {
     apiFormat: "application/xml",
     exposedContent: ["the XML sitemap index of every public page"],
@@ -1011,9 +812,7 @@ export const SURFACES: readonly Surface[] = [
     ],
     kind: "discovery",
     name: "discovery.sitemap-shard",
-    // The probe targets a child that always exists: `pages-1` is the static hubs, which are
-    // never empty. A kind with no rows is simply not listed in the index (and 404s here),
-    // which would read as a false "down".
+
     probeConfig: { cadenceMs: PROBE_CADENCE_MS, kind: "http", timeoutMs: PROBE_TIMEOUT_MS },
     route: "/sitemap/$shard",
     url: `${SITE}/sitemap/pages-1.xml`,
@@ -1166,7 +965,6 @@ export const SURFACES: readonly Surface[] = [
     weights: { web: "tertiary" },
   },
 
-  // ── MCP server ────────────────────────────────────────────────────────────
   {
     apiFormat: "application/json",
     discoveryUrl: `${SITE}/.well-known/mcp/server-card.json`,
@@ -1183,7 +981,6 @@ export const SURFACES: readonly Surface[] = [
     weights: { web: "primary" },
   },
 
-  // ── DNS (the delegated authoritative zone) ─────────────────────────────────
   {
     command: "dig TXT 004.7.2I.dig.fluncle.com",
     exposedContent: [
@@ -1199,7 +996,6 @@ export const SURFACES: readonly Surface[] = [
     weights: { status: "tertiary", web: "tertiary" },
   },
 
-  // ── SSH (the rave terminal) ────────────────────────────────────────────────
   {
     command: "ssh rave.fluncle.com",
     exposedContent: [
@@ -1214,7 +1010,6 @@ export const SURFACES: readonly Surface[] = [
     weights: { ssh: "primary", status: "secondary", web: "primary" },
   },
 
-  // ── CLI (the `fluncle` thin client) ────────────────────────────────────────
   {
     command: "fluncle recent",
     exposedContent: ["the latest bangers, newest first (alias `list`)"],
@@ -1224,7 +1019,7 @@ export const SURFACES: readonly Surface[] = [
   },
   {
     command: "fluncle fresh",
-    // Release-date axis, distinct from `recent`'s found-date: what just CAME OUT, not what he found.
+
     exposedContent: ["the newest drum & bass releases, newest out first"],
     kind: "cli",
     name: "cli.fresh",
@@ -1302,10 +1097,7 @@ export const SURFACES: readonly Surface[] = [
     name: "cli.submit",
     weights: { cli: "secondary" },
   },
-  // The ACCOUNT tier: a listener links this device to their OWN Fluncle account (the RFC 8628
-  // device-authorization flow through /device) so their Galaxy progress and saves sync. The
-  // minted user token is stored HARD-SEPARATE from the admin FLUNCLE_API_TOKEN (apps/cli/src/
-  // user-token.ts); these three verbs never read or write the admin grant.
+
   {
     command: "fluncle login",
     exposedContent: ["link this device to your Fluncle account, so your Galaxy progress syncs"],
@@ -1377,50 +1169,32 @@ export const SURFACES: readonly Surface[] = [
     weights: { cli: "hidden" },
   },
 
-  // ── Browser extensions (vendor-store surfaces) ─────────────────────────────
   {
     exposedContent: [
       "Fluncle Lens — the browser extension that finds fluncle:// coordinates on any page and links each to its /log/<coord> finding (with a hover card from the public API)",
     ],
     kind: "extension",
     name: "extension.lens",
-    // LIVE on the Chrome Web Store. A `secondary` web surface: advertised on
-    // the homepage dev-row and the /about page, not a homepage headline. No
-    // probeConfig — a vendor store listing is not one of our own health-probeable
-    // endpoints (the on-box healthcheck walks web/r2/dns/ssh + the crons, never an
-    // external GET), and Google's store would bot-block / redirect a bare GET and
-    // read back as a false "down". Source: apps/extension.
+
     operatorNotes:
       "Fluncle Lens (apps/extension), MV3, LIVE on the Chrome Web Store (published 2026-06-29). Store listing reachability is Google's, not ours, so it is not on the /status board.",
     url: "https://chromewebstore.google.com/detail/efkkceaofendabikblfjhoepgejfpakk",
     weights: { web: "secondary" },
   },
 
-  // ── Native apps (vendor-store surfaces) ────────────────────────────────────
   {
     exposedContent: [
       "Fluncle for iOS — the archive as a native app: the Feed, the Archive, the Decks, the Radio, and the Mixtapes, each finding opening its own /log screen, plus a submit door and push when a new banger lands",
     ],
     kind: "app",
     name: "app.ios",
-    // LIVE on the App Store. No probeConfig: a vendor store listing is not one of our own
-    // health-probeable endpoints
-    // (the extension.lens ruling). Source: apps/mobile (Expo / expo-router, bundle id
-    // com.fluncle.app, ascAppId 6790080540 in apps/mobile/eas.json).
+
     operatorNotes:
       "Fluncle for iOS (apps/mobile), LIVE on the App Store (approved 2026-07-29). Store listing reachability is Apple's, not ours, so it is not on the /status board — the extension.lens ruling: a vendor store would bot-block or redirect a bare GET and read back as a false 'down'.",
     url: "https://apps.apple.com/app/id6790080540",
     weights: { web: "secondary" },
   },
-  // NB: there is deliberately NO surface for the Raycast extension (apps/raycast). Unlike
-  // Fluncle Lens it is not published on a vendor store and it is not crew-facing: it is the
-  // OPERATOR's launcher — Quick Add, Add Track, Recent Bangers, and the /admin attention queue,
-  // four commands that shell out to the admin `fluncle` CLI — installed locally on his own two
-  // machines and pointed at a binary by absolute path. There is no address the registry could
-  // point a reader at, and the authority behind it is already catalogued as `cli.admin`
-  // (`weights: { cli: "hidden" }`). Register it the day it is published to the Raycast Store.
 
-  // ── Crons (the on-box Hermes scheduled jobs) ───────────────────────────────
   {
     command: "fluncle admin tracks enrich --queue",
     exposedContent: [
@@ -1869,13 +1643,7 @@ export const SURFACES: readonly Surface[] = [
     title: "Studio clips",
     weights: { status: "hidden" },
   },
-  // NB: there is deliberately NO `cron.clip-drip` surface. The clip→Instagram drip-feed
-  // (docs/agents/hermes/scripts/clip-drip-sweep.sh) is UN-DEPLOYED: the Dockerfile strips it
-  // from the bake, no `<job>-timer/` dir exists, and no timer runs on rave-02. It was
-  // registered anyway, so /status carried a row that could never report — and because the
-  // box prober emits "no runs yet" as ok, that row sat permanently GREEN for a job that does
-  // not exist (the failure that motivated status.ts's NO_RUNS_GRACE_MS). Registering a cron
-  // is a claim that it RUNS; register this one when it gets a timer, not before.
+
   {
     command: "fluncle admin publish pause",
     exposedContent: [
@@ -2121,9 +1889,6 @@ export const SURFACES: readonly Surface[] = [
   },
 ];
 
-// ── Selectors ────────────────────────────────────────────────────────────────
-
-/** The weight ladder, loudest first — the sort order for a context's menu. */
 const WEIGHT_ORDER: Record<SurfaceWeight, number> = {
   hidden: 3,
   primary: 0,
@@ -2131,55 +1896,29 @@ const WEIGHT_ORDER: Record<SurfaceWeight, number> = {
   tertiary: 2,
 };
 
-/**
- * The LIVE catalog — every surface except the `pending` (pre-staged, dark) ones.
- * Every selector reads through this, so a `pending` surface never reaches a menu, a
- * probe, the dev-row, llms.txt, or the sitemap. A raw `SURFACES`-iterating consumer
- * (the MCP `get_status` labels, the CLI status labels) should iterate this instead.
- * Flip a surface's `pending` off and it appears in all of them at once.
- */
 export function liveSurfaces(): Surface[] {
   return SURFACES.filter((surface) => surface.pending !== true);
 }
 
-/**
- * Every surface DISPLAYED IN `ctx` (i.e. carrying a weight for that context),
- * sorted loudest-first (primary → hidden), ties broken by catalog order. This is
- * the per-context menu/nav builder: `surfacesForContext("web")` is the homepage's
- * ranked surface list; `surfacesForContext("ssh")` is the rave terminal's. `pending`
- * surfaces are excluded (see `liveSurfaces`).
- */
 export function surfacesForContext(ctx: SurfaceContext): Surface[] {
   return liveSurfaces()
     .filter((surface) => surface.weights[ctx] !== undefined)
     .sort((a, b) => {
       const wa = a.weights[ctx];
       const wb = b.weights[ctx];
-      // Both are defined (the filter guaranteed it); fall back keeps TS happy.
+
       return (wa ? WEIGHT_ORDER[wa] : 0) - (wb ? WEIGHT_ORDER[wb] : 0);
     });
 }
 
-/**
- * Every surface at the given weight IN A CONTEXT, in catalog order. The per-context
- * successor to the old global `surfacesByWeight`: name the context you are ranking
- * for. `surfacesByWeight("web", "primary")` is the web homepage's loud front doors.
- * `pending` surfaces are excluded (see `liveSurfaces`).
- */
 export function surfacesByWeight(ctx: SurfaceContext, weight: SurfaceWeight): Surface[] {
   return liveSurfaces().filter((surface) => surface.weights[ctx] === weight);
 }
 
-/** Every LIVE surface at the given kind, in catalog order (`pending` excluded). */
 export function surfacesByKind(kind: SurfaceKind): Surface[] {
   return liveSurfaces().filter((surface) => surface.kind === kind);
 }
 
-/**
- * Every LIVE surface that carries a `probeConfig` — the set a `/status` prober walks
- * (`pending` excluded, so a pre-staged surface is not probed until it goes live).
- * Narrows the type so a consumer can read `surface.probeConfig` without a guard.
- */
 export function statusProbes(): Array<Surface & { probeConfig: ProbeConfig }> {
   return liveSurfaces().filter(
     (surface): surface is Surface & { probeConfig: ProbeConfig } =>
@@ -2187,19 +1926,10 @@ export function statusProbes(): Array<Surface & { probeConfig: ProbeConfig }> {
   );
 }
 
-/** Every on-box Hermes cron surface, in catalog order. */
 export function cronSurfaces(): Surface[] {
   return surfacesByKind("cron");
 }
 
-/**
- * Every unit expected to append to the run ledger, with its authoritative cadence.
- *
- * Most writers are registry crons. `fluncle-healthcheck` is deliberately absent: it
- * writes health snapshots to the separate health ledger and never sources the shared
- * run-event emitter. Four host units also write run events without being public
- * surfaces, so they are declared here rather than disappearing from an absence diff.
- */
 export function runLedgerWriters(): RunLedgerWriter[] {
   const registered = cronSurfaces().flatMap((surface): RunLedgerWriter[] => {
     const probe = surface.probeConfig;

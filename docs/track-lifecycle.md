@@ -36,6 +36,8 @@ Two consequences worth stating plainly:
 - **`spotify_uri`/`spotify_url` are NULLABLE** on `tracks`. A catalogue track resolved from MusicBrainz/Discogs may have no Spotify presence at all. `track_id` remains the opaque PK — today it happens to be the Spotify id; a catalogue-only track will get a minted one — so the five tables keyed on `track_id` (`track_artists`, `mixtape_tracks`, `social_posts`, `user_saved_findings`, `user_galaxy_collections`) are untouched by the split.
 - **`log_id` is nullable _within_ `findings`.** "Is a finding" = a `findings` row exists; "has a coordinate" = `findings.log_id IS NOT NULL`. A certified straggler can briefly sit without one (the one-time `logId: "auto"` backfill mints it), and the `/log` surfaces skip it — the same two-step every surface already performed, now honest about it.
 
+The public `get_track` identity read accepts one lookup key at a time: the path id or one ISRC, MusicBrainz recording id, Spotify link, or Deezer link. A single `-` path segment makes room for a query key. ISRC batches use the same response shape, cap at 20 keys, and spend rate-limit allowance per key; invalid or conflicting keys receive the handler's 422. Beatport links are excluded because the archive stores a URL but no seekable Beatport id, and a suffix scan would grow with the catalogue.
+
 A **write** that spans both halves (the add; `update_track`; the Discogs resolve, whose release ids are catalogue identity but whose lastmod is the finding's) issues **one libSQL batch of two statements**, so the pair can never half-land.
 
 ## Why two phases

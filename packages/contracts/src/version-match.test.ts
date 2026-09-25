@@ -1,10 +1,3 @@
-// The preview-archive backfill writes to R2 and is then served as confidence-1
-// "exact" to every future render — the worst blast radius for a wrong recording.
-// Its fuzzy Deezer/iTunes fallbacks are now gated by these helpers: a REMIX finding
-// must never archive the ORIGINAL's preview (and vice-versa).
-//
-// The gate lives beside the helpers it pins so every consumer shares the same rule.
-
 import { describe, expect, test } from "bun:test";
 
 import { baseTitleMatches, isRemix, stripVersionSuffix, versionMatches } from "./util";

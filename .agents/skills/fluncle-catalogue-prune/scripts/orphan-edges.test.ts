@@ -11,11 +11,6 @@ import {
   orphanEdgeWhere,
 } from "./lib";
 
-// The prune scripts talk to PRODUCTION, so nothing here may touch a real database. These tests
-// drive a recording stub of the libSQL `Client` and assert the two things that actually decide
-// whether an edge can be stranded: the ORDER + ATOMICITY of the purge's delete pair, and the
-// orphan predicate the cleanup command scans and deletes by.
-
 type Statement = { args?: unknown; sql: string };
 
 type Stub = {
@@ -52,13 +47,11 @@ describe("deleteTracksWithEdges", () => {
     const [batch] = s.batches;
     expect(batch?.mode).toBe("write");
     expect(batch?.stmts).toHaveLength(3);
-    // Dependants FIRST — there must never be a window where the track is gone and a row keyed on
-    // it remains. The vector's own `on delete cascade` would cover it when `PRAGMA foreign_keys`
-    // is on; this delete is what makes it true either way.
+
     expect(batch?.stmts[0]?.sql).toBe("delete from track_artists where track_id in (?,?)");
     expect(batch?.stmts[1]?.sql).toBe("delete from track_embeddings where track_id in (?,?)");
     expect(batch?.stmts[2]?.sql).toBe("delete from tracks where track_id in (?,?)");
-    // Same id set, bound as args (never interpolated).
+
     expect(batch?.stmts[0]?.args).toEqual(["t1", "t2"]);
     expect(batch?.stmts[1]?.args).toEqual(["t1", "t2"]);
     expect(batch?.stmts[2]?.args).toEqual(["t1", "t2"]);
@@ -81,7 +74,7 @@ describe("deleteTracksWithEdges", () => {
     expect(s.batches[1]?.stmts).toHaveLength(3);
     expect(s.batches[0]?.stmts[0]?.args).toHaveLength(200);
     expect(s.batches[1]?.stmts[0]?.args).toHaveLength(50);
-    // Each chunk deletes the edges, the vectors and the tracks for the SAME ids.
+
     expect(s.batches[1]?.stmts[0]?.args).toEqual(s.batches[1]?.stmts[1]?.args);
     expect(s.batches[1]?.stmts[0]?.args).toEqual(s.batches[1]?.stmts[2]?.args);
   });
@@ -90,9 +83,6 @@ describe("deleteTracksWithEdges", () => {
     const s = stub();
     const removed = await deleteTracksWithEdges(s.client, ["t1"]);
 
-    // The stub returns `(index + 1) * 10` per statement, so the counts must be read off the
-    // RIGHT statements: edges is the first, tracks the third (the vector delete is unreported —
-    // it is a cascade, not a number the operator is deciding anything from).
     expect(removed).toEqual({ edges: 10, tracks: 30 });
   });
 

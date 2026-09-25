@@ -1,20 +1,8 @@
-// The bridge client — the glass's HALF of the contract.ts boundary (Unit B owns
-// the other). Connects to ws://localhost:4180/state WHEN AVAILABLE and:
-//   • consumes ShowState — a plan.pointer advance (fingerprint match) drives an arrival;
-//   • sends ShowCommand heartbeats {cmd:"heartbeat",renderFrame} at ~1Hz (the watchdog feed);
-//   • forwards manual keys as commands (advance/rewind/goto/blackout/intensity);
-//   • streams compact mel frames {cmd:"mel", t, frame:number[40]} at 10Hz for the matcher.
-//
-// FULLY optional: with no bridge the glass runs the v0.6 standalone behavior (the
-// failure floor). Reconnect is a gentle backoff so a bridge that starts late — or
-// restarts mid-show (it is stateless-restartable) — simply re-attaches.
 import { BRIDGE_PORT, BRIDGE_WS_PATH } from "../../contract.ts";
 import { type ShowCommand, type ShowState } from "../../contract.ts";
 
 export type BridgeStatus = "off" | "connecting" | "live";
 
-// The mel channel is an agreed extension to the command stream (not in the typed
-// ShowCommand union): the exact shape Unit B's matcher consumes.
 type MelCommand = { cmd: "mel"; t: number; frame: number[] };
 type OutboundCommand = ShowCommand | MelCommand;
 
@@ -62,9 +50,7 @@ export class BridgeClient {
       try {
         const s = JSON.parse(String(ev.data)) as ShowState;
         this.onState?.(s);
-      } catch {
-        // ignore malformed frames — the failure floor is renderer-local
-      }
+      } catch {}
     };
     ws.onclose = () => {
       this.ws = null;
@@ -74,9 +60,7 @@ export class BridgeClient {
     ws.onerror = () => {
       try {
         ws.close();
-      } catch {
-        // onclose handles the rest
-      }
+      } catch {}
     };
   }
 
@@ -98,7 +82,6 @@ export class BridgeClient {
     this.sendRaw(cmd);
   }
 
-  /** ~1Hz watchdog heartbeat carrying the render frame counter. */
   heartbeat(nowMs: number, renderFrame: number): void {
     if (nowMs - this.lastHeartbeatMs >= 1000) {
       this.lastHeartbeatMs = nowMs;
@@ -106,7 +89,6 @@ export class BridgeClient {
     }
   }
 
-  /** 10Hz compact mel stream for the fingerprint matcher. */
   mel(nowMs: number, frame: number[]): void {
     if (nowMs - this.lastMelMs >= 100) {
       this.lastMelMs = nowMs;
@@ -118,8 +100,6 @@ export class BridgeClient {
     this.closed = true;
     try {
       this.ws?.close();
-    } catch {
-      // best effort
-    }
+    } catch {}
   }
 }

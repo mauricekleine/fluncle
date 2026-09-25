@@ -1,13 +1,7 @@
-// The bridge-first plan precedence (the first-set debrief fix): the glass cycled its own
-// 5-entry demo fixture while the bridge held the real 17-finding plan. `choosePlanSource`
-// is the pure rule the glass server + client both narrate — a non-empty bridge plan wins,
-// else the local fixture floor — so it tests directly, no server needed.
-
 import { describe, expect, test } from "bun:test";
 
 import { choosePlanSource } from "./plan.ts";
 
-// Stand-ins shaped like the real entries (the rule only reads `.length`).
 const bridge17 = Array.from({ length: 17 }, (_, i) => ({ logId: `b${i}` }));
 const local5 = Array.from({ length: 5 }, (_, i) => ({ logId: `l${i}` }));
 
@@ -40,8 +34,6 @@ describe("choosePlanSource", () => {
   });
 
   test("the pointer contract: the winning list is what the glass indexes end-to-end", () => {
-    // A bridge pointer of 12 must resolve inside the served list — the debrief bug was the
-    // glass indexing its own 5-entry list against a 17-deep bridge pointer.
     const picked = choosePlanSource(bridge17, local5);
     expect(picked.plan[12]).toEqual({ logId: "b12" });
   });

@@ -1,18 +1,3 @@
-// The glass render pipeline — ONE WebGL2 context, one shared FBO chain (RFC §3's
-// "one shared post-pass FBO"). Productionizes the seed's two-canvas crossfade into
-// a single-context graph so the constructive rails, bloom, and the OUTPUT-side flash
-// monitor all read the SAME rendered pixels:
-//
-//   base vehicle ─▶ fboBase ─┐
-//                            ├─▶ crossfade + Warm-Dark/grain rails ─▶ fboComposite
-//   replay layers ─▶ fboReplay┘         (multi-layer: layer0 opaque, later over)
-//                            │
-//   fboComposite ─▶ [bloom bright▶blur▶composite | blit] ─▶ fboFinal ─▶ screen
-//                            └─▶ downsample ─▶ 16×16 ─▶ ASYNC PBO readback ─▶ mean colour
-//
-// build() compiles every static program + allocates the FBOs; it is the ONE code
-// path shared by cold boot AND webglcontextrestored (RFC §4). setReplay() compiles
-// the matched finding's own layer program(s) and arms the JS velocity integrator.
 import { type BloomConfig } from "../glsl-runtime.ts";
 import {
   assignTextureUnits,
@@ -28,7 +13,6 @@ import {
 } from "../glsl-runtime.ts";
 import { type CustomU, type SceneLayer } from "../scene-extract.ts";
 
-/** Load an image cross-origin (R2 serves the plate PNGs ACAO:*), rejecting on any failure. */
 function loadImage(url: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const img = new Image();
@@ -39,8 +23,6 @@ function loadImage(url: string): Promise<HTMLImageElement> {
   });
 }
 
-// The crossfade + shared rails: mix the base and replay fields, clamp to the Warm
-// Dark ceiling, and keep a grain floor so the frame is never a dead flat black.
 const CROSSFADE_FRAG = `precision highp float;
 uniform sampler2D u_base;
 uniform sampler2D u_replay;
@@ -69,7 +51,6 @@ type Program = {
 type Target = { tex: WebGLTexture; fbo: WebGLFramebuffer; w: number; h: number };
 
 export type ReplayFrameInputs = {
-  // header uniforms (already scalar-limited by the source-side FlashLimiter)
   time: number;
   progress: number;
   bass: number;
@@ -77,8 +58,7 @@ export type ReplayFrameInputs = {
   treble: number;
   energy: number;
   kick: number;
-  // The transient-class low-latency siblings (1024-FFT when low-latency DSP is on,
-  // else a mirror of the slow bands) — feed ONLY the *Fast / onset / snare uniforms.
+
   bassFast: number;
   midFast: number;
   trebleFast: number;
@@ -86,7 +66,7 @@ export type ReplayFrameInputs = {
   swell: number;
   drop: number;
   seedRaw: number;
-  palette: Float32Array; // 12 floats
+  palette: Float32Array;
   dwellSec: number;
 };
 
@@ -111,7 +91,7 @@ type VelEntry = {
   dir: [number, number];
   x: number;
   y: number;
-  /** Magnitude of this frame's position advance — read by the arrival trace. */
+
   step: number;
 };
 
@@ -120,7 +100,6 @@ export class GlassPipeline {
   private gl: WebGL2RenderingContext;
   private quad!: WebGLBuffer;
 
-  // static programs
   private pBase!: Program;
   private pCross!: Program;
   private pBlit!: Program;
@@ -128,7 +107,6 @@ export class GlassPipeline {
   private pBlur!: Program;
   private pBloomComposite!: Program;
 
-  // targets (allocated in build/resize)
   private fboBase!: Target;
   private fboReplay!: Target;
   private fboComposite!: Target;
@@ -137,23 +115,16 @@ export class GlassPipeline {
   private fboBloomB!: Target;
   private fboSmall!: Target;
 
-  // replay (per-arrival) state
   private replayLayers: Array<{
     prog: Program;
     customs: CustomU[];
     blend: "opaque" | "over";
-    /** The sampler names THIS layer's body reads (bound before its draw). */
+
     textureNames: string[];
   }> = [];
   private integrators: VelEntry[] = [];
   private lastMs = performance.now();
 
-  // ---- plate/artwork textures ----
-  // The current arrival's loaded, bound samplers (name -> GPU texture + aspect), the
-  // scene-wide deterministic unit map, and the URLs to (re)load — a plate scene binds
-  // these before every replay-layer draw. A small LRU cache keeps a few findings' plates
-  // resident (plates are multi-MB) without hoarding the whole plan in VRAM; loads dedupe
-  // in-flight so an arrival + a neighbour prefetch never fetch the same URL twice.
   private activeTextures = new Map<string, { tex: WebGLTexture; aspect: number }>();
   private replayUnits: Record<string, number> = {};
   private replayTextureUrls: Array<{ name: string; url: string }> = [];
@@ -162,7 +133,6 @@ export class GlassPipeline {
   private texClock = 0;
   private static readonly TEX_CACHE_CAP = 8;
 
-  // async readback
   private pbo: WebGLBuffer | null = null;
   private fence: WebGLSync | null = null;
   private readbackData = new Uint8Array(16 * 16 * 4);
@@ -170,11 +140,9 @@ export class GlassPipeline {
 
   private w = 2;
   private h = 2;
-  // Cached at construction — getExtension() returns null on an already-lost context,
-  // so the smoke must hold the reference from before the loss.
+
   private loseCtxExt: WEBGL_lose_context | null = null;
-  // True during a post-restore rebuild: the old GL objects are gone with the dead
-  // context, so allocTargets must NOT try to delete them.
+
   private freshContext = false;
 
   constructor(canvas: HTMLCanvasElement) {
@@ -192,7 +160,6 @@ export class GlassPipeline {
     this.build();
   }
 
-  // ---- program + target helpers ----
   private compile(type: number, src: string, tag: string): WebGLShader {
     const gl = this.gl;
     const s = gl.createShader(type);
@@ -269,11 +236,9 @@ export class GlassPipeline {
     this.gl.deleteFramebuffer(t.fbo);
   }
 
-  // ---- build (cold boot AND context restore share this ONE path) ----
   build(): void {
     const gl = this.gl;
-    // Re-query the lose-context ext each build so a repeated smoke works after a
-    // restore (extension objects from before a loss are invalidated by the restore).
+
     this.loseCtxExt = gl.getExtension("WEBGL_lose_context");
     this.quad = gl.createBuffer() as WebGLBuffer;
     gl.bindBuffer(gl.ARRAY_BUFFER, this.quad);
@@ -295,8 +260,6 @@ export class GlassPipeline {
   }
 
   private allocTargets(w: number, h: number): void {
-    // After a context RESTORE the old targets belong to the dead context — deleting
-    // them throws INVALID_OPERATION. freshContext skips the (unnecessary) cleanup.
     if (!this.freshContext) {
       this.deleteTarget(this.fboBase);
       this.deleteTarget(this.fboReplay);
@@ -329,15 +292,9 @@ export class GlassPipeline {
     this.allocTargets(w, h);
   }
 
-  // ---- replay: compile the matched finding's own layer program(s) ----
-  // A plate layer's body reads samplers the offline ShaderLayer injected but never
-  // declared; the reconstruction prepends the SAME `sampler2D <name>;` + `float
-  // <name>AspectRatio;` pair (textureUniformDecls) so the archived body compiles verbatim.
-  // Compiling is synchronous; the images load asynchronously (loadReplayTextures) — the
-  // caller holds the default vehicle until they are ready so a plate never flashes black.
   setReplay(layers: SceneLayer[]): void {
     this.disposeReplay();
-    // The scene-wide texture roster (union by name) + deterministic units (render-aligned).
+
     const urlByName = new Map<string, string>();
     for (const layer of layers) {
       for (const t of layer.textures) {
@@ -357,7 +314,7 @@ export class GlassPipeline {
       const names = layer.textures.filter((t) => t.url).map((t) => t.name);
       const declaredInBody = new Set(names.filter((n) => bodyDeclaresSampler(layer.body, n)));
       const decls = textureUniformDecls(names, declaredInBody);
-      const prog = this.link(REPLAY_HEADER + decls + layer.body, "replay"); // throws -> caller frees
+      const prog = this.link(REPLAY_HEADER + decls + layer.body, "replay");
       this.replayLayers.push({
         blend: layer.blend,
         customs: layer.customUniforms,
@@ -365,7 +322,7 @@ export class GlassPipeline {
         textureNames: names,
       });
     }
-    // Arm the velocity integrator: each velocityPos + its …Vel sibling.
+
     this.integrators = [];
     for (const layer of layers) {
       for (const c of layer.customUniforms) {
@@ -373,7 +330,7 @@ export class GlassPipeline {
           continue;
         }
         const type = c.type === "vec2" ? "vec2" : "float";
-        // seeded diagonal so a vec2 glide streams a consistent one-way direction.
+
         const a = (Math.abs(this.hashName(c.name)) % 360) * (Math.PI / 180);
         this.integrators.push({
           dir: [Math.cos(a), Math.sin(a)],
@@ -388,17 +345,10 @@ export class GlassPipeline {
     }
   }
 
-  /** Does the current replay need images loaded before it can paint its subject? */
   get replayNeedsTextures(): boolean {
     return this.replayTextureUrls.length > 0;
   }
 
-  /**
-   * Load (or reuse from the LRU cache) every texture the current replay declares and arm
-   * them for binding. Resolves true when all are resident; REJECTS on any load failure so
-   * the caller falls back to the default vehicle (never a black show). Loads run in
-   * parallel and dedupe against in-flight fetches + the cache.
-   */
   async loadReplayTextures(): Promise<void> {
     const wanted = this.replayTextureUrls;
     if (wanted.length === 0) {
@@ -414,10 +364,6 @@ export class GlassPipeline {
     this.activeTextures = map;
   }
 
-  /**
-   * Warm the LRU cache with a neighbour's textures (fire-and-forget, errors swallowed) so
-   * the next arrival binds instantly. Cheap: an already-cached / in-flight URL is a no-op.
-   */
   prefetchTextures(urls: readonly string[]): void {
     for (const url of urls) {
       void this.loadTexture(url).catch(() => undefined);
@@ -448,7 +394,6 @@ export class GlassPipeline {
     return { aspect, tex };
   }
 
-  /** Upload an image as an NPOT-safe, UPRIGHT sampler2D (flip-Y, LINEAR, clamp) — as offline. */
   private uploadTexture(img: HTMLImageElement): WebGLTexture {
     const gl = this.gl;
     const tex = gl.createTexture();
@@ -466,7 +411,6 @@ export class GlassPipeline {
     return tex;
   }
 
-  /** Evict the least-recently-used cached textures over the cap, never the current arrival's. */
   private evictTextures(): void {
     const pinned = new Set(this.replayTextureUrls.map((u) => u.url));
     while (this.texCache.size > GlassPipeline.TEX_CACHE_CAP) {
@@ -482,7 +426,7 @@ export class GlassPipeline {
         }
       }
       if (victim === null) {
-        break; // everything left is pinned
+        break;
       }
       const v = this.texCache.get(victim);
       if (v) {
@@ -528,7 +472,7 @@ export class GlassPipeline {
     }
     this.replayLayers = [];
     this.integrators = [];
-    // Drop the per-arrival binding; the LRU cache persists (the next arrival may reuse it).
+
     this.activeTextures = new Map();
     this.replayUnits = {};
     this.replayTextureUrls = [];
@@ -538,7 +482,6 @@ export class GlassPipeline {
     return this.replayLayers.length;
   }
 
-  /** The velocity integrators' current position magnitude + last per-frame step (trace). */
   debugIntegrators(): Array<{ pos: number; step: number }> {
     return this.integrators.map((it) => ({
       pos: it.type === "vec2" ? Math.hypot(it.x, it.y) : it.x,
@@ -546,7 +489,6 @@ export class GlassPipeline {
     }));
   }
 
-  // ---- a fullscreen-triangle pass ----
   private pass(p: Program, target: Target | null, vw: number, vh: number, setup: () => void): void {
     const gl = this.gl;
     gl.bindFramebuffer(gl.FRAMEBUFFER, target ? target.fbo : null);
@@ -567,7 +509,6 @@ export class GlassPipeline {
     gl.uniform1i(this.u(p, sampler), unit);
   }
 
-  // ---- the frame ----
   render(
     base: BaseFrameInputs,
     replay: { active: boolean; fade: number; inputs: ReplayFrameInputs } | null,
@@ -579,7 +520,6 @@ export class GlassPipeline {
     this.lastMs = now;
     this.frameCount++;
 
-    // 1. base vehicle -> fboBase
     this.pass(this.pBase, this.fboBase, this.w, this.h, () => {
       gl.uniform2f(this.u(this.pBase, "u_res"), this.w, this.h);
       gl.uniform1f(this.u(this.pBase, "u_time"), base.time);
@@ -595,7 +535,6 @@ export class GlassPipeline {
       gl.uniform3fv(this.u(this.pBase, "u_palette[0]"), base.palette);
     });
 
-    // 2. replay layers -> fboReplay (opaque layer0, alpha-over the rest)
     const replayActive = replay?.active && this.replayLayers.length > 0;
     if (replayActive && replay) {
       gl.bindFramebuffer(gl.FRAMEBUFFER, this.fboReplay.fbo);
@@ -618,7 +557,6 @@ export class GlassPipeline {
       gl.disable(gl.BLEND);
     }
 
-    // 3. crossfade + rails -> fboComposite
     const fade = replayActive && replay ? replay.fade : 0;
     this.pass(this.pCross, this.fboComposite, this.w, this.h, () => {
       this.bindTex(0, this.fboBase, this.pCross, "u_base");
@@ -628,7 +566,6 @@ export class GlassPipeline {
       gl.uniform1f(this.u(this.pCross, "u_time"), base.time);
     });
 
-    // 4. bloom (optional) or blit -> fboFinal
     if (bloom) {
       this.runBloom(this.fboComposite, bloom);
     } else {
@@ -638,13 +575,11 @@ export class GlassPipeline {
       });
     }
 
-    // 5. fboFinal -> screen
     this.pass(this.pBlit, null, this.w, this.h, () => {
       this.bindTex(0, this.fboFinal, this.pBlit, "u_tex");
       gl.uniform2f(this.u(this.pBlit, "u_res"), this.w, this.h);
     });
 
-    // 6. downsample fboFinal -> 16x16 for the output-side readback (kick every 3rd frame)
     if (this.frameCount % 3 === 0) {
       this.pass(this.pBlit, this.fboSmall, 16, 16, () => {
         this.bindTex(0, this.fboFinal, this.pBlit, "u_tex");
@@ -677,7 +612,7 @@ export class GlassPipeline {
       this.u(p, "u_audioDisturbance"),
       Math.min(inp.kick * 0.5 + inp.swell * 0.3 + inp.drop * 0.5, 1.2),
     );
-    // transient class → the low-latency (fast) siblings.
+
     gl.uniform1f(this.u(p, "u_energyFast"), inp.energyFast);
     gl.uniform1f(this.u(p, "u_bassFast"), inp.bassFast);
     gl.uniform1f(this.u(p, "u_midFast"), inp.midFast);
@@ -691,7 +626,6 @@ export class GlassPipeline {
     gl.uniform1f(this.u(p, "u_seed"), inp.seedRaw);
     gl.uniform3fv(this.u(p, "u_palette[0]"), inp.palette);
 
-    // journey-helper customs, per their classified role
     for (const c of customs) {
       const l = this.u(p, c.name);
       if (l === null) {
@@ -726,10 +660,8 @@ export class GlassPipeline {
                     : inp.swell;
         gl.uniform1f(l, v);
       }
-      // velocityPos / velocity are set by the integrator below.
     }
 
-    // velocity integrator: advance each position at frame rate, set pos + its Vel.
     for (const it of this.integrators) {
       const speed =
         it.type === "vec2" ? 0.1 * (1 + 0.25 * inp.swell) : 0.3 * (1 + 0.25 * inp.swell);
@@ -764,13 +696,13 @@ export class GlassPipeline {
     const gl = this.gl;
     const hw = this.fboBloomA.w;
     const hh = this.fboBloomA.h;
-    // bright: scene(full) -> bloomA(half)
+
     this.pass(this.pBright, this.fboBloomA, hw, hh, () => {
       this.bindTex(0, scene, this.pBright, "u_tex");
       gl.uniform2f(this.u(this.pBright, "u_res"), hw, hh);
       gl.uniform1f(this.u(this.pBright, "u_threshold"), cfg.threshold);
     });
-    // separable blur, a few iterations (A -H-> B -V-> A)
+
     for (let i = 0; i < 4; i++) {
       this.pass(this.pBlur, this.fboBloomB, hw, hh, () => {
         this.bindTex(0, this.fboBloomA, this.pBlur, "u_tex");
@@ -783,7 +715,7 @@ export class GlassPipeline {
         gl.uniform2f(this.u(this.pBlur, "u_dir"), 0, cfg.radius);
       });
     }
-    // composite scene + bloom -> fboFinal
+
     this.pass(this.pBloomComposite, this.fboFinal, this.w, this.h, () => {
       this.bindTex(0, scene, this.pBloomComposite, "u_scene");
       this.bindTex(1, this.fboBloomA, this.pBloomComposite, "u_bloom");
@@ -792,11 +724,10 @@ export class GlassPipeline {
     });
   }
 
-  // ---- async output readback (WebGL2 PBO + fence; never a per-frame sync stall) ----
   private startReadback(): void {
     const gl = this.gl;
     if (this.fence || !this.pbo) {
-      return; // one in flight
+      return;
     }
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.fboSmall.fbo);
     gl.bindBuffer(gl.PIXEL_PACK_BUFFER, this.pbo);
@@ -807,7 +738,6 @@ export class GlassPipeline {
     gl.flush();
   }
 
-  /** Poll the in-flight readback; returns the frame's mean colour when ready, else null. */
   pollReadback(): [number, number, number] | null {
     const gl = this.gl;
     if (!this.fence || !this.pbo) {
@@ -838,7 +768,6 @@ export class GlassPipeline {
     return this.gl.isContextLost();
   }
 
-  /** Debug: force a context loss to smoke-test the rebuild path. */
   loseContextForSmoke(): void {
     this.loseCtxExt?.loseContext();
   }
@@ -846,12 +775,10 @@ export class GlassPipeline {
     this.loseCtxExt?.restoreContext();
   }
 
-  /** Rebuild after webglcontextrestored — the SAME path as cold boot. Replay is dropped. */
   rebuild(): void {
     this.replayLayers = [];
     this.integrators = [];
-    // Every cached GPU texture died with the lost context — drop the cache (re-arrival
-    // re-loads); never deleteTexture here (the handles belong to the dead context).
+
     this.activeTextures = new Map();
     this.replayUnits = {};
     this.replayTextureUrls = [];
@@ -859,7 +786,7 @@ export class GlassPipeline {
     this.texLoading = new Map();
     this.fence = null;
     this.pbo = null;
-    this.freshContext = true; // the old GL objects died with the lost context
+    this.freshContext = true;
     this.build();
   }
 

@@ -1,8 +1,3 @@
-// The plan-ref routing: `--plan` takes a mixtape COORDINATE (`NNN.G.CC`) OR a plan HANDLE
-// (a galaxy slug — the normal live flow). The shape decides which resolver runs; the
-// wrong call silently loads the wrong set, so the shape-detection + candidate selection is
-// pure and tested directly (no network / no admin token).
-
 import { afterEach, describe, expect, mock, test } from "bun:test";
 
 import {
@@ -18,7 +13,7 @@ import {
 describe("isLogId", () => {
   test("real Fluncle coordinates match (findings + a mixtape)", () => {
     expect(isLogId("011.9.8I")).toBe(true);
-    expect(isLogId("019.F.1A")).toBe(true); // a mixtape logId (F galaxy)
+    expect(isLogId("019.F.1A")).toBe(true);
     expect(isLogId("007.8.1B")).toBe(true);
     expect(isLogId("032.0.4L")).toBe(true);
   });
@@ -29,8 +24,8 @@ describe("isLogId", () => {
   });
 
   test("near-misses and junk are not coordinates", () => {
-    expect(isLogId("12.3.45")).toBe(false); // two leading digits
-    expect(isLogId("011.9.8")).toBe(false); // one-char cell
+    expect(isLogId("12.3.45")).toBe(false);
+    expect(isLogId("011.9.8")).toBe(false);
     expect(isLogId("")).toBe(false);
     expect(isLogId("abc")).toBe(false);
   });
@@ -112,14 +107,14 @@ describe("isAllPlan", () => {
   test("everything else (a coordinate, a handle, nothing) is not VJ mode", () => {
     expect(isAllPlan("019.F.1A")).toBe(false);
     expect(isAllPlan("dark-aurora-roller")).toBe(false);
-    expect(isAllPlan("allnighter")).toBe(false); // not the bare sentinel
+    expect(isAllPlan("allnighter")).toBe(false);
     expect(isAllPlan(undefined)).toBe(false);
   });
 });
 
 describe("isMixtapeCoordinate", () => {
   test("the `F`-galaxy coordinate is a mixtape; a numeric galaxy is a finding", () => {
-    expect(isMixtapeCoordinate("019.F.1A")).toBe(true); // Fluncle's own mixtape
+    expect(isMixtapeCoordinate("019.F.1A")).toBe(true);
     expect(isMixtapeCoordinate("019.1.7X")).toBe(false);
     expect(isMixtapeCoordinate("011.9.8I")).toBe(false);
   });
@@ -141,8 +136,6 @@ describe("buildAllFindingsPlan", () => {
     new Response(JSON.stringify(body), { headers: { "content-type": "application/json" } });
   const notFound = (): Response => new Response("no", { status: 404 });
 
-  // Await a call and return whatever it throws (or null) — bun's `.rejects` matcher reads as a
-  // non-thenable to the type-aware linter, so capture the error directly (as track.test.ts does).
   const capture = async (run: () => Promise<unknown>): Promise<unknown> => {
     try {
       await run();
@@ -155,7 +148,6 @@ describe("buildAllFindingsPlan", () => {
   type TrackFeedRowBody = { logId: string; title: string; artists: string[]; durationMs: number };
   type TrackFeedPageBody = { tracks: TrackFeedRowBody[]; nextCursor?: string };
 
-  /** A mock that serves the paginated feed from a cursor→page map, plus the R2 enrich fetches. */
   const feedMock = (
     pages: Record<string, TrackFeedPageBody>,
   ): ((url: string) => Promise<Response>) => {
@@ -169,17 +161,16 @@ describe("buildAllFindingsPlan", () => {
       if (u.pathname.endsWith("/props.json")) {
         return json({ palette: { accent: "#abcdef" }, seed: 7, track: {} });
       }
-      // scene.json + composition.tsx absent → enrich marks the entry non-replayable.
+
       return notFound();
     };
   };
 
   test("drains the feed across pages, excludes the mixtape, and enriches each finding", async () => {
-    // Page 1 (no cursor) carries the `F`-galaxy MIXTAPE + one finding, then points to page 2.
     globalThis.fetch = mock(
       feedMock({
         "": {
-          nextCursor: "cursor==2", // base64-ish, contains `=` → must survive URL-encoding
+          nextCursor: "cursor==2",
           tracks: [
             { artists: ["Fluncle"], durationMs: 500, logId: "019.F.1A", title: "Mixtape" },
             { artists: ["A1"], durationMs: 1000, logId: "039.2.2E", title: "T1" },
@@ -193,18 +184,16 @@ describe("buildAllFindingsPlan", () => {
 
     const plan = await buildAllFindingsPlan();
 
-    // Both findings ride; the mixtape (019.F.1A) is filtered out of the VJ pool.
     expect(plan.map((p) => p.logId).sort()).toEqual(["011.9.8I", "039.2.2E"]);
     const first = plan.find((p) => p.logId === "039.2.2E");
     expect(first?.title).toBe("T1");
     expect(first?.artists).toEqual(["A1"]);
-    expect(first?.palette?.accent).toBe("#abcdef"); // enrich still hits found.fluncle.com
+    expect(first?.palette?.accent).toBe("#abcdef");
     expect(first?.seed).toBe(7);
-    expect(first?.replay?.replayable).toBe(false); // no composition.tsx on R2
+    expect(first?.replay?.replayable).toBe(false);
   });
 
   test("a repeating cursor bails instead of paging forever", async () => {
-    // The server keeps handing back the same cursor — the safety rail must break the loop.
     globalThis.fetch = mock(
       feedMock({
         "": {

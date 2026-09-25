@@ -1,18 +1,3 @@
-// THE PHONE REMOTE — a CANON surface (DESIGN.md tokens, VOICE recovered-terminal
-// register) the bridge serves on the LAN at http://<lan-ip>:4180/remote. Plain
-// HTML/CSS/JS, no build step, no framework; it opens a WebSocket to the SAME /state
-// stream the glass reads and sends ShowCommands back. It is the operator's one
-// earned second tier for the two-machine rig (RFC §3): big NEXT / PREV, the current
-// + next finding (Log ID + title), hold-to-engage blackout mirroring the glass,
-// intensity, and channel health — in canon colours (Eclipse Gold the one accent, no
-// traffic-light green; problems in Re-entry Red, everything else warm-neutral).
-//
-// Design law honoured: dark-only (Deep Field ground), Oxanium tabular for the Log
-// ID coordinate and numerals, Starlight Cream ink, Stardust muted, the One Sun Rule
-// (gold reserved for identity + the active edge). Every string is sentence-case,
-// deadpan, in-fiction; no exclamation marks; no cosmos garnish inside the controls.
-
-/** The remote page. Self-contained; connects to /state on its own origin. */
 export const REMOTE_HTML = `<!doctype html><html lang="en"><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">

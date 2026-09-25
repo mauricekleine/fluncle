@@ -1,8 +1,3 @@
-// The flash-limiter proof. The math is pure, so it is exhaustively testable with
-// synthetic luminance/colour sequences — this suite is the crown's certificate:
-// WCAG 2.3.1 general flashes (3 pass, 4 fail), the independent saturated-red net,
-// and the 174 BPM = 2.9 Hz boundary that must PASS while a faster strobe trips.
-
 import { describe, expect, test } from "bun:test";
 import {
   DARK_CEILING,
@@ -18,9 +13,6 @@ import {
   relativeLuminance,
 } from "./flash-limiter.ts";
 
-// ---------------------------------------------------------------------------
-// Pure colour math
-// ---------------------------------------------------------------------------
 describe("relative-luminance math (WCAG, linearized sRGB)", () => {
   test("black is 0, white is 1", () => {
     expect(relativeLuminance(0, 0, 0)).toBeCloseTo(0, 6);
@@ -37,7 +29,7 @@ describe("relative-luminance math (WCAG, linearized sRGB)", () => {
     expect(linearizeChannel(0.04045)).toBeCloseTo(0.04045 / 12.92, 8);
     expect(linearizeChannel(0)).toBe(0);
     expect(linearizeChannel(1)).toBe(1);
-    // linear is below gamma for mid values (the curve dips)
+
     expect(linearizeChannel(0.5)).toBeLessThan(0.5);
   });
 });
@@ -51,8 +43,8 @@ describe("saturated-red gate (WCAG red-flash test)", () => {
   });
 
   test("the 0.8 boundary", () => {
-    expect(isSaturatedRed(0.8, 0.1, 0.1)).toBe(true); // 0.8 / 1.0 = 0.8
-    expect(isSaturatedRed(0.7, 0.2, 0.1)).toBe(false); // 0.7 / 1.0 = 0.7
+    expect(isSaturatedRed(0.8, 0.1, 0.1)).toBe(true);
+    expect(isSaturatedRed(0.7, 0.2, 0.1)).toBe(false);
   });
 
   test("R-G-B is the XAG-118 signal", () => {
@@ -62,11 +54,6 @@ describe("saturated-red gate (WCAG red-flash test)", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// Helpers: drive a counter/monitor with a square wave of opposing pairs
-// ---------------------------------------------------------------------------
-
-/** A grayscale square wave alternating two luminance levels, one sample per half-period. */
 function graySquare(low: number, high: number, halfPeriodMs: number, samples: number) {
   const seq: Array<{ t: number; r: number; g: number; b: number }> = [];
   for (let i = 0; i < samples; i++) {
@@ -76,18 +63,14 @@ function graySquare(low: number, high: number, halfPeriodMs: number, samples: nu
   return seq;
 }
 
-// ---------------------------------------------------------------------------
-// General flashes — 3 pass, 4 fail
-// ---------------------------------------------------------------------------
 describe("general-flash counting — the 3-pass / 4-fail law", () => {
-  // low=0.2 -> L≈0.033, high=0.6 -> L≈0.318: swing ≈0.285 (>0.10), darker <0.80.
   const LOW = 0.033;
   const HIGH = 0.318;
 
   test("a square wave completes one flash per full period", () => {
     const c = new OpposingPairCounter({ deltaThreshold: GENERAL_DELTA, qualifyMode: "darker" });
     let flashes = 0;
-    // samples s0..s7 at 100ms -> flashes land on s3,s5,s7 (see algorithm trace).
+
     const seq = [LOW, HIGH, LOW, HIGH, LOW, HIGH, LOW, HIGH];
     seq.forEach((v, i) => {
       const o = c.observe(i * 100, v, v < DARK_CEILING);
@@ -102,7 +85,7 @@ describe("general-flash counting — the 3-pass / 4-fail law", () => {
   test("3 flashes in a trailing second PASS (no trip)", () => {
     const m = new FlashMonitor();
     let tripped = false;
-    // 8 samples @100ms -> 3 flashes at t=300,500,700, all inside [0,700].
+
     graySquare(0.2, 0.6, 100, 8).forEach((s) => {
       if (m.push(s.t, s.r, s.g, s.b).tripped) {
         tripped = true;
@@ -115,7 +98,7 @@ describe("general-flash counting — the 3-pass / 4-fail law", () => {
   test("a 4th flash in the same second TRIPS", () => {
     const m = new FlashMonitor();
     let tripped = false;
-    // 10 samples @100ms -> 4th flash at t=900, still inside a 1s window.
+
     graySquare(0.2, 0.6, 100, 10).forEach((s) => {
       if (m.push(s.t, s.r, s.g, s.b).tripped) {
         tripped = true;
@@ -128,9 +111,9 @@ describe("general-flash counting — the 3-pass / 4-fail law", () => {
   test("sub-threshold luminance swings never count", () => {
     const c = new OpposingPairCounter({ deltaThreshold: GENERAL_DELTA, qualifyMode: "darker" });
     let flashes = 0;
-    // 0.30 <-> 0.34 in luminance: L swing well under 0.10.
+
     for (let i = 0; i < 40; i++) {
-      const v = i % 2 === 0 ? 0.6 : 0.62; // luminances ~0.318 vs ~0.342, delta ~0.024
+      const v = i % 2 === 0 ? 0.6 : 0.62;
       if (c.observe(i * 100, relativeLuminance(v, v, v), true).flashCompleted) {
         flashes++;
       }
@@ -141,7 +124,7 @@ describe("general-flash counting — the 3-pass / 4-fail law", () => {
   test("the darker endpoint must be below 0.80 (bright pairs are exempt)", () => {
     const c = new OpposingPairCounter({ deltaThreshold: GENERAL_DELTA, qualifyMode: "darker" });
     let flashes = 0;
-    // Both endpoints bright: 0.85 <-> 0.98 -> darker 0.85 >= 0.80, exempt.
+
     for (let i = 0; i < 20; i++) {
       const v = i % 2 === 0 ? 0.85 : 0.98;
       if (c.observe(i * 100, v, v < DARK_CEILING).flashCompleted) {
@@ -152,13 +135,10 @@ describe("general-flash counting — the 3-pass / 4-fail law", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// The 2.9 Hz (174 BPM) boundary
-// ---------------------------------------------------------------------------
 describe("the 174 BPM = 2.9 Hz boundary case", () => {
   test("2.9 Hz opposing pairs stay under the ceiling (kick brightness passes)", () => {
     const m = new FlashMonitor();
-    const halfPeriod = 1000 / 2.9 / 2; // ms per half-period at 2.9 Hz
+    const halfPeriod = 1000 / 2.9 / 2;
     let tripped = false;
     let maxCount = 0;
     graySquare(0.2, 0.6, halfPeriod, 60).forEach((s) => {
@@ -174,7 +154,7 @@ describe("the 174 BPM = 2.9 Hz boundary case", () => {
 
   test("a 4 Hz strobe trips (over the ceiling)", () => {
     const m = new FlashMonitor();
-    const halfPeriod = 1000 / 4 / 2; // 125ms
+    const halfPeriod = 1000 / 4 / 2;
     let tripped = false;
     graySquare(0.2, 0.6, halfPeriod, 40).forEach((s) => {
       if (m.push(s.t, s.r, s.g, s.b).tripped) {
@@ -185,12 +165,7 @@ describe("the 174 BPM = 2.9 Hz boundary case", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// Red-flash independence
-// ---------------------------------------------------------------------------
 describe("saturated-red limiter is independent of the general net", () => {
-  // Equal-luminance red<->green swing: red signal swings hard, general luminance flat.
-  // (1,0,0) L≈0.2126; (0,0.545,0) L≈0.7152*linear(0.545)≈0.2126.
   const RED = { b: 0, g: 0, r: 1 };
   const GREEN = { b: 0, g: 0.545, r: 0 };
 
@@ -200,14 +175,14 @@ describe("saturated-red limiter is independent of the general net", () => {
     let generalMax = 0;
     for (let i = 0; i < 40; i++) {
       const c = i % 2 === 0 ? RED : GREEN;
-      const r = m.push((i * 1000) / 4 / 2, c.r, c.g, c.b); // 4 Hz
+      const r = m.push((i * 1000) / 4 / 2, c.r, c.g, c.b);
       generalMax = Math.max(generalMax, r.general);
       if (r.tripped && r.red > MAX_FLASHES_PER_SECOND) {
         redTrip = true;
       }
     }
     expect(redTrip).toBe(true);
-    // The two endpoints are near-equal luminance -> the general net stays quiet.
+
     expect(generalMax).toBeLessThanOrEqual(MAX_FLASHES_PER_SECOND);
   });
 
@@ -227,19 +202,16 @@ describe("saturated-red limiter is independent of the general net", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// The source-side limiter — easing behaviour
-// ---------------------------------------------------------------------------
 describe("FlashLimiter (source-side) eases the 4th flash instead of emitting it", () => {
   test("a runaway strobe gets eased and the emitted stream stops tripping", () => {
     const limiter = new FlashLimiter();
-    const monitor = new FlashMonitor(); // watches the EMITTED (post-scalar) luminance
+    const monitor = new FlashMonitor();
     let easedFrames = 0;
     let emittedTrips = 0;
-    // Drive a hard 6 Hz luminance strobe for 3 seconds at 60fps.
+
     for (let f = 0; f < 180; f++) {
       const t = f * (1000 / 60);
-      const phase = Math.floor((t / (1000 / 6 / 2)) % 2); // 6 Hz square
+      const phase = Math.floor((t / (1000 / 6 / 2)) % 2);
       const intended = phase === 0 ? 0.05 : 0.7;
       const res = limiter.push(t, intended);
       if (res.eased) {
@@ -252,7 +224,7 @@ describe("FlashLimiter (source-side) eases the 4th flash instead of emitting it"
       }
     }
     expect(easedFrames).toBeGreaterThan(0);
-    // The whole point: after easing, the emitted signal never sustains a trip.
+
     expect(emittedTrips).toBe(0);
     expect(limiter.trips).toBeGreaterThan(0);
   });
@@ -262,7 +234,7 @@ describe("FlashLimiter (source-side) eases the 4th flash instead of emitting it"
     let anyEase = false;
     for (let f = 0; f < 180; f++) {
       const t = f * (1000 / 60);
-      // A gentle 0.5 Hz breathe well under the flash rate.
+
       const intended = 0.3 + 0.2 * Math.sin((t / 1000) * Math.PI);
       const res = limiter.push(t, intended);
       if (res.eased || res.scalar < 0.999) {
