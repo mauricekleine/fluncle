@@ -38,6 +38,7 @@ import {
   type LabelAliasKindSchema,
   type LabelAliasSourceSchema,
   type LabelSeedStateSchema,
+  type LabelTriageVerdictSchema,
   type LabelTakeOverResultSchema,
   type MergeLabelResultSchema,
   type MintLabelOutcomeSchema,
@@ -122,6 +123,8 @@ export type GalaxiesAdminResponse = Ok<{ galaxies: GalaxyAdminItem[] }>;
 export type GalaxyMapUpdateResponse = Ok<{ galaxies: GalaxyAdminItem[] }>;
 
 export type LabelSeedState = z.infer<typeof LabelSeedStateSchema>;
+/** What a triage ROUND concluded — never a ruling. See `LabelTriageVerdictSchema`. */
+export type LabelTriageVerdict = z.infer<typeof LabelTriageVerdictSchema>;
 
 export type LabelAdminItem = z.infer<typeof LabelAdminItemSchema>;
 

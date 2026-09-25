@@ -6,6 +6,7 @@ import {
   type LabelDetail,
   type LabelListItem,
   type LabelSeedState,
+  type LabelTriageVerdict,
   type MergeLabelResult,
 } from "@fluncle/contracts";
 import { labelFold, slugify } from "@fluncle/contracts/util/galaxy-slug";
@@ -68,6 +69,9 @@ type LabelRow = {
   scope_changed_at: string | null;
   seed_state: LabelSeedState;
   slug: string;
+  triage_checked_at: string | null;
+  triage_reason: string | null;
+  triage_verdict: LabelTriageVerdict | null;
   updated_at: string;
 };
 
@@ -98,12 +102,19 @@ function toLabelItem(row: LabelRow, findingCount: number): LabelAdminItem {
     scopeChangedAt: row.scope_changed_at,
     seedState: row.seed_state,
     slug: row.slug,
+    // The triage cursor: what a ROUND looked at, beside `ruledAt`, which is what HE ruled. A label
+    // reading `unclear` with a reason is not an unread row — it is a researched one the round could
+    // not settle, and the station says which.
+    triageCheckedAt: row.triage_checked_at,
+    triageReason: row.triage_reason,
+    triageVerdict: row.triage_verdict,
     updatedAt: row.updated_at,
   };
 }
 
 const LABEL_COLUMNS = `id, name, slug, seed_state, ruled_at, scope_changed_at, created_at, updated_at,
-   image_key, image_updated_at, mb_label_id, disambiguation, founding_date, founded_location`;
+   image_key, image_updated_at, mb_label_id, disambiguation, founding_date, founded_location,
+   triage_checked_at, triage_verdict, triage_reason`;
 
 export const LABELS_ADMIN_PAGE_SIZE = 50;
 
@@ -2233,4 +2244,118 @@ export async function recordLabelTriage(
     superseded,
     triageCheckedAt: now,
   };
+}
+
+/** One label's staged triage proposal, with the rules it would write. Undefined = no round has one. */
+export type LabelTriageProposal = {
+  censusSummary: string | null;
+  confidence: string;
+  evidence: string;
+  offLaneShare: number | null;
+  reason: string | null;
+  residualOffLaneShare: number | null;
+  roundId: string;
+  rules: {
+    artistMbid: string;
+    artistName: string;
+    evidence: string | null;
+    firstCreditCount: number;
+    verdict: string;
+  }[];
+  verdict: string;
+  verifyAgrees: boolean | null;
+  verifyEvidence: string | null;
+};
+
+/**
+ * The staged proposals for the labels ON ONE PAGE — the ratification read.
+ *
+ * Bounded to the ids the station already holds, never a whole-table fold: two indexed reads (the
+ * unique `label_id` seek per proposal, then its rules by `proposal_id`) and one grouping in the
+ * isolate over at most a page's worth of rows. A label with no proposal is simply absent from the
+ * map, which is what "no round has looked at this" means on the read side.
+ */
+export async function labelTriageProposalsByIds(
+  labelIds: string[],
+): Promise<Map<string, LabelTriageProposal>> {
+  const out = new Map<string, LabelTriageProposal>();
+  if (labelIds.length === 0) {
+    return out;
+  }
+
+  const db = await getDb();
+  const placeholders = labelIds.map(() => "?").join(", ");
+  const proposals = await db.execute({
+    args: labelIds,
+    sql: `select id, label_id, round_id, verdict, confidence, evidence, reason, census_summary,
+                 off_lane_share, residual_off_lane_share, verify_agrees, verify_evidence
+          from label_triage_proposals
+          where label_id in (${placeholders})`,
+  });
+
+  const rows = typedRows<{
+    census_summary: string | null;
+    confidence: string;
+    evidence: string;
+    id: string;
+    label_id: string;
+    off_lane_share: number | null;
+    reason: string | null;
+    residual_off_lane_share: number | null;
+    round_id: string;
+    verdict: string;
+    verify_agrees: number | null;
+    verify_evidence: string | null;
+  }>(proposals.rows);
+
+  if (rows.length === 0) {
+    return out;
+  }
+
+  const byProposal = new Map<string, LabelTriageProposal>();
+  for (const row of rows) {
+    const proposal: LabelTriageProposal = {
+      censusSummary: row.census_summary,
+      confidence: row.confidence,
+      evidence: row.evidence,
+      offLaneShare: row.off_lane_share,
+      reason: row.reason,
+      residualOffLaneShare: row.residual_off_lane_share,
+      roundId: row.round_id,
+      rules: [],
+      verdict: row.verdict,
+      verifyAgrees: row.verify_agrees === null ? null : row.verify_agrees === 1,
+      verifyEvidence: row.verify_evidence,
+    };
+    byProposal.set(row.id, proposal);
+    out.set(row.label_id, proposal);
+  }
+
+  const rulePlaceholders = rows.map(() => "?").join(", ");
+  const ruleRows = await db.execute({
+    args: rows.map((row) => row.id),
+    sql: `select proposal_id, artist_mbid, artist_name, verdict, first_credit_count, evidence
+          from label_triage_rule_proposals
+          where proposal_id in (${rulePlaceholders})
+          order by first_credit_count desc, artist_name collate nocase`,
+  });
+
+  for (const rule of typedRows<{
+    artist_mbid: string;
+    artist_name: string;
+    evidence: string | null;
+    first_credit_count: number;
+    proposal_id: string;
+    verdict: string;
+  }>(ruleRows.rows)) {
+    byProposal.get(rule.proposal_id)?.rules.push({
+      artistMbid: rule.artist_mbid,
+      artistName: rule.artist_name,
+      evidence: rule.evidence,
+      firstCreditCount: rule.first_credit_count,
+      verdict: rule.verdict,
+    });
+  }
+
+  return out;
 }

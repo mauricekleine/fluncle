@@ -62,6 +62,17 @@ export const LabelAdminItemSchema = z
     scopeChangedAt: z.string().nullable().optional(),
     seedState: LabelSeedStateSchema,
     slug: z.string(),
+    /**
+     * THE TRIAGE CURSOR — what a ROUND looked at, beside `ruledAt`, which is what HE ruled.
+     *
+     * A label reading `unclear` with a reason is not an unread row; it is a researched one the round
+     * could not settle, and the station can say which. All three are ADDITIVE-OPTIONAL, so an older
+     * client and the CLI keep working unchanged, and a label no round has seen simply carries none.
+     */
+    triageCheckedAt: z.string().nullable().optional(),
+    /** Why it could not be ruled ("conflation", "thin", "mixed"). The round owns this taxonomy. */
+    triageReason: z.string().nullable().optional(),
+    triageVerdict: LabelTriageVerdictSchema.nullable().optional(),
     updatedAt: z.string(),
   })
   .meta({ id: "LabelAdminItem" });

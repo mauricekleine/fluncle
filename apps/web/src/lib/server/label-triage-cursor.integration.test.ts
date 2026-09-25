@@ -20,7 +20,7 @@ vi.mock("./db", async (importOriginal) => {
 });
 
 import { createIntegrationDb } from "./integration-db";
-import { recordLabelTriage } from "./labels";
+import { labelTriageProposalsByIds, recordLabelTriage } from "./labels";
 
 let db: Client;
 
@@ -81,6 +81,13 @@ async function seedLabel(slug: string, seedState = "undecided") {
     sql: `insert into labels (id, name, slug, seed_state, created_at, updated_at)
           values (?, ?, ?, ?, ?, ?)`,
   });
+}
+
+/** A label's id, typed — the raw libsql row value is a union that does not stringify cleanly. */
+async function labelId(slug: string): Promise<string> {
+  const result = await db.execute({ args: [slug], sql: `select id from labels where slug = ?` });
+
+  return (result.rows[0] as unknown as { id: string }).id;
 }
 
 const BASE = {
@@ -216,5 +223,77 @@ describe("the triage cursor", () => {
     const row = await labelRow("untouched");
     expect(row?.triage_checked_at).toBeNull();
     expect(row?.triage_verdict).toBeNull();
+  });
+});
+
+describe("the ratification read", () => {
+  it("returns nothing for an empty id list, without touching the database", async () => {
+    expect(await labelTriageProposalsByIds([])).toEqual(new Map());
+  });
+
+  it("omits a label no round has looked at, rather than returning an empty shell", async () => {
+    await seedLabel("unseen");
+    const map = await labelTriageProposalsByIds([await labelId("unseen")]);
+    expect(map.size).toBe(0);
+  });
+
+  it("carries the census arithmetic and the second opinion back to the station", async () => {
+    await seedLabel("acme");
+    await recordLabelTriage("acme", {
+      ...BASE,
+      censusSummary: "9 releases, 74 recordings",
+      offLaneShare: 0.59,
+      residualOffLaneShare: 0.42,
+      verifyAgrees: false,
+      verifyEvidence: "Discogs styles contradict the first pass",
+    });
+
+    const id = await labelId("acme");
+    const proposal = (await labelTriageProposalsByIds([id])).get(id);
+
+    expect(proposal?.censusSummary).toBe("9 releases, 74 recordings");
+    expect(proposal?.offLaneShare).toBeCloseTo(0.59);
+    expect(proposal?.residualOffLaneShare).toBeCloseTo(0.42);
+    expect(proposal?.verifyAgrees).toBe(false);
+    expect(proposal?.verifyEvidence).toBe("Discogs styles contradict the first pass");
+  });
+
+  it("orders a proposal's rules by first-credit weight, so the load-bearing act reads first", async () => {
+    await seedLabel("acme");
+    await recordLabelTriage("acme", {
+      ...BASE,
+      rules: [
+        { artistMbid: "mbid-a", artistName: "Minor", firstCreditCount: 1, verdict: "allow" },
+        { artistMbid: "mbid-b", artistName: "Major", firstCreditCount: 12, verdict: "allow" },
+      ],
+    });
+
+    const id = await labelId("acme");
+    const proposal = (await labelTriageProposalsByIds([id])).get(id);
+
+    expect(proposal?.rules.map((rule) => rule.artistName)).toEqual(["Major", "Minor"]);
+  });
+
+  it("keeps each label's rules with its own proposal when several are read at once", async () => {
+    await seedLabel("one");
+    await seedLabel("two");
+    await recordLabelTriage("one", {
+      ...BASE,
+      rules: [{ artistMbid: "mbid-a", artistName: "First", firstCreditCount: 3, verdict: "allow" }],
+    });
+    await recordLabelTriage("two", {
+      ...BASE,
+      rules: [
+        { artistMbid: "mbid-b", artistName: "Second", firstCreditCount: 4, verdict: "block" },
+      ],
+    });
+
+    const map = await labelTriageProposalsByIds([await labelId("one"), await labelId("two")]);
+
+    expect(map.size).toBe(2);
+    const names = [...map.values()].flatMap((proposal) =>
+      proposal.rules.map((rule) => rule.artistName),
+    );
+    expect(names.sort()).toEqual(["First", "Second"]);
   });
 });

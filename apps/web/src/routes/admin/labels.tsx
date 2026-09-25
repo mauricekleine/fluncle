@@ -453,6 +453,7 @@ function LabelRow({
       ref={rowRef}
       trailing={
         <>
+          <TriageChip label={label} />
           <RuleChip ruleCounts={ruleCounts} section={section} seedState={label.seedState} />
           <span className="text-xs text-muted-foreground tabular-nums">
             {findingsCount(label.findingCount)}
@@ -563,6 +564,46 @@ function labelIdentity(label: LabelAdminItem, queued: number): ReactNode | undef
   );
 }
 
+// WHAT A ROUND ALREADY FOUND — the difference between an unread row and a researched one.
+//
+// A triage round reads every waiting label and frequently cannot rule it: a MusicBrainz entity
+// holding two real labels, a catalogue too thin to read, a genuinely mixed one. Without this the
+// station says only "nobody has ruled yet" for all of them, which is true and useless — it cannot
+// tell a label waiting on an upstream MusicBrainz split from one waiting on him.
+//
+// A label no round has seen renders nothing, which is what NEVER LOOKED means. A round that DID
+// rule it is not shown either: the row has already left the waiting section by then, and repeating
+// the verdict beside the seed state would just say the same thing twice.
+function TriageChip({ label }: { label: LabelAdminItem }) {
+  if (!label.triageCheckedAt || label.triageVerdict !== "unclear") {
+    return null;
+  }
+
+  return (
+    <span
+      className="rounded-sm bg-muted px-1.5 py-0.5 font-mono text-[0.65rem] text-muted-foreground uppercase"
+      title={
+        label.triageReason
+          ? `A triage round looked at this and could not rule it — ${label.triageReason}`
+          : "A triage round looked at this and could not rule it"
+      }
+    >
+      {label.triageReason ?? "unclear"}
+    </span>
+  );
+}
+
+// The exception chip — quiet data beside the seed state, and MODE-DISTINCT, because the same
+// table means opposite things on the two sides of a ruling: on a seeded label a rule SUBTRACTS
+// ("Except 2 artists"), on a skipped one it ADDS ("Only 3 artists"). Only the live half counts;
+// a block on a skipped label changes nothing, so it is not advertised as if it did.
+//
+// An UNDECIDED label reads exactly as a skipped one: the crawl takes nothing off it by default, so
+// the ALLOW half is the live one (an allow admits that artist's billed records on a non-enabled
+// label, crawl.ts). That is what makes the chip the settled-partial row's state — a waiting row
+// carries no rules, so it renders nothing and the promise is never made for a crawl that is not
+// happening.
+>>>>>>> ea49e4b4f (feat(admin-labels): say why a waiting label is still waiting)
 function RuleChip({
   ruleCounts,
   section,
