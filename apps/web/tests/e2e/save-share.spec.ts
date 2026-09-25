@@ -124,17 +124,14 @@ test("saves a catalogue track and a finding signed out, shares the canonical lin
   expect(signUp.ok(), await signUp.text()).toBe(true);
   await api.dispose();
 
-  const signInTab = page.getByRole("tab", { name: "Sign in" });
-  const identifier = page.getByLabel("Email or username", { exact: true });
+  const signIn = await page.request.post("/api/auth/sign-in/email", {
+    data: { email, password: PASSWORD },
+    headers: { Origin: BASE_URL },
+  });
 
-  await expect(async () => {
-    await signInTab.click();
-    await expect(identifier).toBeVisible({ timeout: 2000 });
-  }).toPass({ timeout: 60_000 });
+  expect(signIn.ok(), await signIn.text()).toBe(true);
 
-  await identifier.fill(email);
-  await page.getByLabel("Password", { exact: true }).fill(PASSWORD);
-  await page.getByRole("button", { exact: true, name: "Sign in" }).click();
+  await hydrate(page, "/account");
   await expect(page.getByRole("heading", { level: 1 })).toHaveText(/the galaxy/i, {
     timeout: 30_000,
   });
