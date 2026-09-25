@@ -1,29 +1,14 @@
 import { getApiBaseUrl } from "./env";
 
-// The CLI's live-set callout: one quiet Nebula-Violet line at the top of every
-// non-admin, human command while Fluncle is on the decks (the cross-surface
-// live-on-Twitch beat). Read best-effort off /api/v1/status — it never blocks, never
-// fails a command, and never prints when piped or in --json (TTY-gated), so it
-// can't pollute scriptable output. Offline almost always, so it usually prints
-// nothing at all.
-
-// Nebula Violet (#ab7bff) as a 24-bit ANSI foreground — DESIGN.md "The Live
-// Exception", the one sanctioned second light.
 const NEBULA_VIOLET = "\x1b[38;2;171;123;255m";
 const RESET = "\x1b[0m";
 
-// How long to wait on /api/v1/status before giving up — short, since this is a
-// best-effort flourish on top of the real command, not the command itself.
 const TIMEOUT_MS = 1500;
 
 type LiveStatus = {
   live?: { on: boolean; title: string | null; url: string } | null;
 };
 
-// Commands that should NOT carry the callout: the explicit opt-out and CI (a build
-// log or a scripted rig never wants the flourish — the same two gates the sibling
-// update notifier carries), the admin group (operator output), help, and the
-// version/help flags. The callout rides human commands only.
 export function shouldSkip(args: string[]): boolean {
   if (process.env.FLUNCLE_NO_LIVE_CALLOUT === "1") {
     return true;
@@ -49,16 +34,10 @@ export function shouldSkip(args: string[]): boolean {
   );
 }
 
-/** Strip the scheme + leading www. for a clean terminal readout. */
 function displayUrl(url: string): string {
   return url.replace(/^https?:\/\/(www\.)?/, "");
 }
 
-/**
- * Print the live-set callout above a command's output when Fluncle is on the decks.
- * Best-effort and TTY-only: any failure (offline, timeout, non-TTY, admin/json)
- * silently prints nothing, so a command's behaviour is never affected.
- */
 export async function maybePrintLiveCallout(args: string[]): Promise<void> {
   if (shouldSkip(args) || process.stdout.isTTY !== true) {
     return;
@@ -92,9 +71,6 @@ export async function maybePrintLiveCallout(args: string[]): Promise<void> {
     const text = `On the decks, live now: ${displayUrl(live.url)}`;
     const line = process.env.NO_COLOR ? text : `${NEBULA_VIOLET}${text}${RESET}`;
 
-    // A trailing blank line separates the callout from the command's own output.
     console.log(`${line}\n`);
-  } catch {
-    // Best-effort — the callout never blocks or fails a command.
-  }
+  } catch {}
 }

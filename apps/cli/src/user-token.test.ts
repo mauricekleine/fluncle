@@ -3,13 +3,6 @@ import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync }
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-// The store resolves the config dir from `homedir()` + `FLUNCLE_ENV` at call time.
-// `homedir()` is cached by the runtime, so we mock `node:os` to return a throwaway
-// dir per test (the bun-test idiom). The whole point of these tests is the HARD
-// boundary between the user token (this store) and the admin `FLUNCLE_API_TOKEN`
-// (an env var the admin path reads) — they must never share a file, a reader, or
-// a name.
-
 let home: string;
 
 await mock.module("node:os", () => ({
@@ -51,12 +44,9 @@ describe("user-token store", () => {
 
     const location = userTokenLocation();
 
-    // The user token lives at `user.<profile>.json` — NOT the `.env.<profile>` file
-    // the admin env-loader (env.ts) reads for FLUNCLE_API_TOKEN.
     expect(location).toContain("user.production.json");
     expect(location).not.toContain(".env.");
 
-    // And the admin env file must not exist as a side effect of writing the user token.
     const adminEnvPath = join(home, ".config", "fluncle", ".env.production");
     expect(() => readFileSync(adminEnvPath, "utf8")).toThrow();
   });
@@ -67,13 +57,11 @@ describe("user-token store", () => {
 
     process.env.FLUNCLE_ENV = "local";
 
-    // The local profile sees no token (its file is separate)…
     expect(readUserToken()).toBeUndefined();
     writeUserToken({ baseUrl: "http://localhost:3000", token: "local-token" });
     expect(userTokenLocation()).toContain("user.local.json");
     expect(readUserToken()?.token).toBe("local-token");
 
-    // …and the production token is still intact and distinct.
     delete process.env.FLUNCLE_ENV;
     expect(readUserToken()?.token).toBe("prod-token");
   });
@@ -81,15 +69,12 @@ describe("user-token store", () => {
   test("never reads or writes FLUNCLE_API_TOKEN (the admin grant)", () => {
     process.env.FLUNCLE_API_TOKEN = "admin-secret-token";
 
-    // Reading the user token must not surface the admin token…
     expect(readUserToken()).toBeUndefined();
 
     writeUserToken({ baseUrl: "https://www.fluncle.com", token: "user-tok" });
 
-    // …and writing the user token must not touch the admin env var.
     expect(process.env.FLUNCLE_API_TOKEN).toBe("admin-secret-token");
 
-    // The persisted file must contain only the user token, never the admin one.
     const persisted = readFileSync(userTokenLocation(), "utf8");
     expect(persisted).toContain("user-tok");
     expect(persisted).not.toContain("admin-secret-token");
@@ -103,9 +88,6 @@ describe("user-token store", () => {
   });
 
   test("tightens an ALREADY-LOOSE token file back to 0600 on re-login", () => {
-    // `writeFileSync`'s `mode` only applies on create, so a file left
-    // world-readable by an older CLI (or a stray `chmod`) would otherwise keep
-    // handing a live session token to every local account.
     writeUserToken({ baseUrl: "https://www.fluncle.com", token: "first" });
     chmodSync(userTokenLocation(), 0o644);
     expect(statSync(userTokenLocation()).mode & 0o777).toBe(0o644);
@@ -113,7 +95,7 @@ describe("user-token store", () => {
     writeUserToken({ baseUrl: "https://www.fluncle.com", token: "second" });
 
     expect(statSync(userTokenLocation()).mode & 0o777).toBe(0o600);
-    // …and the write still landed.
+
     expect(readUserToken()?.token).toBe("second");
   });
 

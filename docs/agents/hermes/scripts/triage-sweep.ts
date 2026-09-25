@@ -1,44 +1,4 @@
 #!/usr/bin/env bun
-// triage-sweep.ts — the bun orchestrator behind the `--no-agent` submission-triage
-// cron (`fluncle-triage`).
-//
-// Version-controlled source; the repo is canonical and the box is a deploy target
-// (fluncle-hermes-operator skill). Invoked by the bash wrapper (triage-sweep.sh) a
-// rave-02 HOST systemd timer `docker exec`s — see that file's header and
-// ../triage-timer/README.md for the wire-up. Box install is OPERATOR-GATED (the repo
-// half ships here; the timer is enabled by hand once).
-//
-// THE HYBRID MODEL (the submission sibling of note-sweep). A pending crew submission
-// arrives at the operator's attention queue unassessed; this sweep pre-chews it so it
-// lands with a draft verdict. Everything is deterministic except ONE agentic step:
-//
-//   1. QUEUE (deterministic): `fluncle admin submissions --json` → the pending
-//      review queue, then FILTER to the ones with no `triageVerdict` yet. Empty →
-//      fast no-op, exit.
-//   2. per submission (bounded batch, BATCH_CAP small — authoring spends subscription
-//      quota):
-//      a. DEDUPE (deterministic): a submission's `spotifyTrackId` is the archive's
-//         `track_id` (approveSubmission keys off exactly that), so
-//         `fluncle admin tracks get <spotifyTrackId> --json` resolving a finding means
-//         the banger is ALREADY LOGGED. A `not_found` means it is new.
-//      b. ASSESS (deterministic + pure): `assessSubmission(...)` scores a cheap DnB
-//         plausibility from the metadata keywords + the dedupe result. Pure, unit-tested
-//         (triage-sweep.test.ts).
-//      c. AUTHOR (the ONE agentic step): build the prompt (the verdict register, with
-//         the assessment interpolated) and run `claude -p` — Claude Code, SUBSCRIPTION
-//         auth, NOT OpenRouter — with READ-ONLY tools so it can load the installed
-//         `copywriting-fluncle` skill for the voice. `.result` is the one-line verdict.
-//      d. DELIVER (deterministic): write the verdict to a temp file, then
-//         `fluncle admin submissions triage <id> --verdict-file <tmp> --json` → the
-//         Worker length-gates it (advisory only, no public voice gate) + stores it onto
-//         the PENDING submission. Approve/reject authority NEVER moves — the sweep only
-//         does legwork.
-//
-// AUTH-FAILURE PING. Identical to note-sweep: a `claude -p` AUTH error stops the batch,
-// leaves the queue intact, emits a LOUD `{ ok:false, reason:"claude_auth" }` summary
-// line, and (if DISCORD_ALERT_WEBHOOK is set) a best-effort Discord ping.
-//
-// stdout: ONE JSON summary line (the cron run output). Diagnostics → stderr.
 
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -46,33 +6,21 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolveSweepPrompt } from "./prompt-fetch";
 
-// ---------------------------------------------------------------------------
-// Config — a SMALL bounded batch: each verdict burns claude subscription quota, so
-// keep ticks cheap. The queue is the durable worklist; anything not reached this tick
-// is picked up on the next.
-// ---------------------------------------------------------------------------
-
-const BATCH_CAP = 3; // triage is cheaper than note authoring (short verdict, small prompt).
-const QUEUE_LIMIT = 100; // preserve the work ceiling; count the full queue before slicing
+const BATCH_CAP = 3;
+const QUEUE_LIMIT = 100;
 
 const FLUNCLE_BIN = process.env.FLUNCLE_BIN ?? "fluncle";
 const CLAUDE_BIN = process.env.CLAUDE_BIN ?? "claude";
-// Headless `claude -p` kills backgrounded Bash ~5s after the final result; a sweep that
-// backgrounds work and ends its turn loses it silently. Force it off for the spawned claude.
+
 process.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS = "1";
 
-// The authoring model. Env-configurable; default the current Sonnet tier (the note-sweep precedent).
 const TRIAGE_CLAUDE_MODEL = process.env.TRIAGE_CLAUDE_MODEL ?? "claude-sonnet-5";
-// Optional reasoning effort, passed through to `claude -p --effort` when set.
+
 const TRIAGE_CLAUDE_EFFORT = process.env.TRIAGE_CLAUDE_EFFORT;
-// Optional Discord webhook for the claude-auth-failed alert (best-effort).
+
 const DISCORD_ALERT_WEBHOOK = process.env.DISCORD_ALERT_WEBHOOK;
 
 const log = (message: string) => console.error(`[triage-sweep] ${message}`);
-
-// ---------------------------------------------------------------------------
-// Types — only the fields we consume from each surface.
-// ---------------------------------------------------------------------------
 
 type PendingSubmission = {
   album?: string;
@@ -83,11 +31,8 @@ type PendingSubmission = {
   triageVerdict?: string;
 };
 
-// The `admin submissions --json` reply.
 type SubmissionsResponse = { submissions?: PendingSubmission[] };
 
-// A `tracks get` can resolve to a finding OR a mixtape; either presence means the
-// spotify id already maps to something in the archive → already logged.
 type TrackGetResponse = { mixtape?: unknown; track?: unknown };
 
 type ClaudeReply = {
@@ -111,7 +56,6 @@ export type TriageSweepSummary = {
   triaged: number;
 };
 
-/** The API returns the full pending queue, so this is a real outstanding count. */
 export function createTriageSummary(untriaged: number): TriageSweepSummary {
   return {
     alreadyReviewed: 0,
@@ -127,7 +71,6 @@ export function createTriageSummary(untriaged: number): TriageSweepSummary {
   };
 }
 
-/** Record one completed attempt while preserving the existing skipped/gateSkipped detail. */
 export function recordTriageOutcome(summary: TriageSweepSummary, outcome: TriageOutcome): void {
   summary.checked += 1;
 
@@ -162,30 +105,18 @@ export function buildTriageFatalSummary(): Record<string, unknown> {
   };
 }
 
-// A narrow sentinel the loop throws to abort the batch on a claude auth failure.
 class ClaudeAuthError extends Error {}
-
-// ---------------------------------------------------------------------------
-// THE PURE HEURISTIC — the cheap DnB plausibility read from a submission's metadata
-// plus its dedupe result. Pure + exported so triage-sweep.test.ts can pin it without
-// a network or a claude spawn. The verdict phrasing (claude) reads this; the decision
-// stays the operator's.
-// ---------------------------------------------------------------------------
 
 export type Plausibility = "likely" | "unclear" | "unlikely";
 
 export type SubmissionAssessment = {
-  /** The banger's spotify id already maps to a finding/mixtape — "already logged". */
   archived: boolean;
-  /** The cheap metadata read: does this look like Fluncle's lane (drum & bass)? */
+
   plausibility: Plausibility;
-  /** The human-readable signals that drove the score (fuel for the phrasing step). */
+
   signals: string[];
 };
 
-// DnB-positive keywords that commonly ride in a title/album/version tag. Lowercase,
-// matched as substrings (so "vip" catches "Mr Right On VIP"). Deliberately small +
-// high-precision — a cheap prior, not a genre classifier.
 const DNB_POSITIVE = [
   "drum & bass",
   "drum and bass",
@@ -204,8 +135,6 @@ const DNB_POSITIVE = [
   "174",
 ];
 
-// Signals that a submission is plainly NOT the lane (a different genre named in the
-// text). Weak on their own; they only tip an otherwise-blank read to "unlikely".
 const OFF_LANE = [
   "acoustic",
   "orchestral",
@@ -222,23 +151,11 @@ function hits(haystack: string, needles: string[]): string[] {
   return needles.filter((needle) => lower.includes(needle));
 }
 
-/**
- * Score a submission's DnB plausibility from its metadata + dedupe result. Pure.
- *
- *   - archived (spotify id already in the archive)         → the dominant fact; the
- *                                                             verdict is "already logged"
- *                                                             regardless of plausibility.
- *   - a known archive artist (a prior Fluncle find)        → strong "our lane" prior.
- *   - a DnB-positive keyword in the title/album            → "likely".
- *   - only an off-lane keyword, nothing positive           → "unlikely".
- *   - nothing either way                                   → "unclear" (the honest default —
- *                                                             most DnB carries no genre tag).
- */
 export function assessSubmission(input: {
   album?: string;
   archived: boolean;
   artists: string[];
-  /** Lowercased artist names already in the archive — a strong same-lane prior (optional). */
+
   knownArtists?: string[];
   title: string;
 }): SubmissionAssessment {
@@ -278,10 +195,6 @@ export function assessSubmission(input: {
   return { archived, plausibility, signals };
 }
 
-// ---------------------------------------------------------------------------
-// Shell helpers — synchronous, fail-loud where it matters.
-// ---------------------------------------------------------------------------
-
 function run(
   bin: string,
   args: string[],
@@ -318,11 +231,6 @@ function fluncleJson<T>(args: string[]): T {
   }
 }
 
-// ---------------------------------------------------------------------------
-// claude-auth detection — narrow on purpose (shared with note-sweep): only an explicit
-// re-auth/login/quota signature counts, so a transient model error does not false-alarm.
-// ---------------------------------------------------------------------------
-
 const AUTH_SIGNATURES = [
   "invalid api key",
   "authentication_error",
@@ -344,16 +252,6 @@ function looksLikeAuthFailure(text: string): boolean {
   return AUTH_SIGNATURES.some((signature) => haystack.includes(signature));
 }
 
-// ---------------------------------------------------------------------------
-// The authoring prompt — the verdict register (a short operator-internal one-liner,
-// NOT a public /log note), with this submission's assessment interpolated. The model
-// loads `copywriting-fluncle` for the voice; the hard constraint is that the line reads
-// as one of three verdicts: "looks like a find", "already logged", or "not our lane".
-// ---------------------------------------------------------------------------
-
-// The deterministic assessment, rendered as the one line the model must not contradict.
-// Shared by BOTH prompt paths (the registry template's `{{lean}}` variable and the
-// baked-in fallback below), so the two cannot drift.
 function leanLine(assessment: SubmissionAssessment): string {
   if (assessment.archived) {
     return "ALREADY LOGGED: the spotify id already maps to a finding in the archive.";
@@ -370,14 +268,6 @@ function leanLine(assessment: SubmissionAssessment): string {
   return "UNCLEAR: the metadata carries no genre tell (most DnB doesn't).";
 }
 
-// ---------------------------------------------------------------------------
-// THE PROMPT VARIABLES — facts handed to the REGISTRY template. The prose lives in the template so
-// operator can tune the verdict register), and the sweep supplies only the data. The
-// signals arrive PRE-JOINED as one string (the renderer has no loops). These names MUST
-// match the `variables` array of the `triage_verdict` registry entry exactly, or the
-// template renders holes.
-// ---------------------------------------------------------------------------
-
 function promptVariables(
   submission: { album?: string; artists: string[]; title: string },
   assessment: SubmissionAssessment,
@@ -391,10 +281,6 @@ function promptVariables(
   };
 }
 
-// THIS IS THE FLOOR, NOT DEAD CODE. The live prompt comes from the registry over the API
-// (see `authorVerdict`); this builder is what runs when that fetch fails for ANY reason.
-// Keep it in lockstep with the `triage_verdict` default body in
-// apps/web/src/lib/server/prompts.ts.
 export function buildTriagePrompt(
   submission: { album?: string; artists: string[]; title: string },
   assessment: SubmissionAssessment,
@@ -430,22 +316,6 @@ export function buildTriagePrompt(
   ].join("\n");
 }
 
-// ---------------------------------------------------------------------------
-// Author one verdict via `claude -p` (subscription auth, read-only tools). Throws
-// ClaudeAuthError on an auth/quota failure (abort the batch); returns null on any other
-// failure (leave the submission un-triaged); returns the verdict + its provenance on
-// success.
-//
-// THE PROMPT comes from the REGISTRY over the agent-tier API (`get_prompt`), so the
-// operator can retune the verdict register from /admin with no deploy and no rebake. If
-// that fetch fails for any reason, `resolveSweepPrompt` falls back to `buildTriagePrompt`
-// above and the sweep authors EXACTLY as it did before the registry existed. A prompt
-// store that blinks must never be able to stop the pipeline.
-// ---------------------------------------------------------------------------
-
-// PROVENANCE — the prompt version this verdict was authored under: N = the operator's
-// live override, 0 = the registry's baked default, NULL = the registry was unreachable
-// and the inlined `buildTriagePrompt` wrote it. Rides out on `--prompt-version`.
 type AuthoredVerdict = { promptVersion: number | null; verdict: string };
 
 async function authorVerdict(
@@ -525,17 +395,11 @@ async function authorVerdict(
   return { promptVersion, verdict };
 }
 
-// ---------------------------------------------------------------------------
-// Dedupe: is the submission's spotify id already a finding in the archive? A submission's
-// `spotifyTrackId` IS the archive's `track_id`, so `admin tracks get` resolving it means
-// already logged. A `not_found` (non-zero exit) is a clean "new" — swallowed here.
-// ---------------------------------------------------------------------------
-
 function isArchived(spotifyTrackId: string): boolean {
   const { code, stdout } = run(FLUNCLE_BIN, ["admin", "tracks", "get", spotifyTrackId, "--json"]);
 
   if (code !== 0) {
-    return false; // not_found / any lookup miss ⇒ treat as new.
+    return false;
   }
 
   try {
@@ -546,12 +410,6 @@ function isArchived(spotifyTrackId: string): boolean {
     return false;
   }
 }
-
-// ---------------------------------------------------------------------------
-// Deliver one verdict: write it to a temp file, post via the CLI (the Worker
-// length-gates + stores onto the PENDING submission), clean up. A gate rejection
-// (400/422) is a `gateSkipped`; a 409 (already reviewed) is a `skipped` no-op.
-// ---------------------------------------------------------------------------
 
 export function classifyTriageDeliveryFailure(detail: string): Exclude<TriageOutcome, "triaged"> {
   const normalized = detail.toLowerCase();
@@ -587,9 +445,7 @@ function deliverVerdict(id: string, verdict: string, promptVersion: number | nul
       id,
       "--verdict-file",
       verdictPath,
-      // PROVENANCE. Omitted entirely when the registry was unreachable, so the column
-      // stays NULL and the verdict is honest about having been written by the baked-in
-      // fallback rather than by a version it never saw.
+
       ...(promptVersion === null ? [] : ["--prompt-version", String(promptVersion)]),
       "--json",
     ]);
@@ -604,8 +460,6 @@ function deliverVerdict(id: string, verdict: string, promptVersion: number | nul
         return "gateSkipped";
       }
 
-      // A 409 means the submission was approved/rejected between the queue read and now
-      // — a clean no-op (the operator already decided), not a failure.
       if (outcome === "alreadyReviewed") {
         log(`${id}: already reviewed — nothing to triage`);
 
@@ -625,10 +479,6 @@ function deliverVerdict(id: string, verdict: string, promptVersion: number | nul
   }
 }
 
-// ---------------------------------------------------------------------------
-// Per-submission: dedupe → assess → author → deliver.
-// ---------------------------------------------------------------------------
-
 async function triageOne(submission: PendingSubmission): Promise<TriageOutcome> {
   const id = submission.id;
   const spotifyTrackId = submission.spotifyTrackId;
@@ -639,10 +489,8 @@ async function triageOne(submission: PendingSubmission): Promise<TriageOutcome> 
     return "failed";
   }
 
-  // (a) DEDUPE against the archive by spotify id (= track_id).
   const archived = isArchived(spotifyTrackId);
 
-  // (b) ASSESS — the cheap, pure DnB plausibility read.
   const assessment = assessSubmission({
     ...(submission.album ? { album: submission.album } : {}),
     archived,
@@ -650,8 +498,6 @@ async function triageOne(submission: PendingSubmission): Promise<TriageOutcome> 
     title: submission.title,
   });
 
-  // (c) AUTHOR the one-line verdict (the one agentic step). Throws ClaudeAuthError to
-  // abort the whole batch; returns null to leave THIS submission un-triaged.
   const authored = await authorVerdict(
     {
       ...(submission.album ? { album: submission.album } : {}),
@@ -665,14 +511,8 @@ async function triageOne(submission: PendingSubmission): Promise<TriageOutcome> 
     return "failed";
   }
 
-  // (d) DELIVER: the CLI posts it; the Worker length-gates + stores onto the pending row.
   return deliverVerdict(id, authored.verdict, authored.promptVersion);
 }
-
-// ---------------------------------------------------------------------------
-// The claude-auth alert — loud summary line is the floor; the Discord ping is a
-// best-effort extra when DISCORD_ALERT_WEBHOOK is set. Never throws.
-// ---------------------------------------------------------------------------
 
 function pingClaudeAuthFailure(detail: string): void {
   if (!DISCORD_ALERT_WEBHOOK) {
@@ -708,16 +548,10 @@ function pingClaudeAuthFailure(detail: string): void {
   log(`claude auth failure detail (tail): ${detail}`);
 }
 
-// ---------------------------------------------------------------------------
-// Main — drain a bounded batch off the un-triaged pending submissions.
-// ---------------------------------------------------------------------------
-
 async function main(): Promise<void> {
-  // `admin submissions --json` returns `{ ok: true, submissions: [...] }`.
   const response = fluncleJson<SubmissionsResponse>(["admin", "submissions"]);
   const pending = response.submissions ?? [];
-  // Only the ones the sweep hasn't voiced yet (fill-empty-first; the sweep may refresh
-  // its own prior verdict on a later manual re-run, but the cron acts on blanks).
+
   const untriaged = pending.filter((submission) => !submission.triageVerdict?.trim());
   const queue = untriaged.slice(0, QUEUE_LIMIT);
 
@@ -726,7 +560,7 @@ async function main(): Promise<void> {
   if (queue.length === 0) {
     console.log(JSON.stringify({ ok: true, ...summary }));
 
-    return; // fast no-op
+    return;
   }
 
   for (const submission of queue.slice(0, BATCH_CAP)) {
@@ -750,8 +584,6 @@ async function main(): Promise<void> {
         process.exit(1);
       }
 
-      // One submission's failure must not abort the sweep — log it and move on; it
-      // stays un-triaged for the next tick.
       recordTriageOutcome(summary, "failed");
       log(
         `error on ${submission.id ?? "?"}: ${error instanceof Error ? error.message : String(error)}`,
@@ -762,8 +594,6 @@ async function main(): Promise<void> {
   console.log(JSON.stringify({ ok: true, ...summary }));
 }
 
-// `import.meta.main` guards the entrypoint so the test can import the pure helpers
-// (assessSubmission, buildTriagePrompt) without spawning fluncle/claude.
 if (import.meta.main) {
   main().catch((error) => {
     log(`fatal: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`);

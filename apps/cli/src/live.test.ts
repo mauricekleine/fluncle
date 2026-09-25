@@ -1,10 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { maybePrintLiveCallout, shouldSkip } from "./live";
 
-// This suite never touches the network: every case replaces `globalThis.fetch`
-// wholesale, which is the no-network rail's sanctioned test seam (see
-// packages/test-support/src/no-network.ts). The rail's wrapper is captured before
-// the first swap and put back after each case, so it stays armed for every other file.
 const originalFetch = globalThis.fetch;
 const originalIsTty = process.stdout.isTTY;
 const originalLog = console.log;
@@ -14,7 +10,6 @@ const originalEnv = {
   NO_COLOR: process.env.NO_COLOR,
 };
 
-// Nebula Violet (#ab7bff), the one sanctioned second light — DESIGN.md "The Live Exception".
 const NEBULA_VIOLET = "\x1b[38;2;171;123;255m";
 
 const LIVE_URL = "https://www.twitch.tv/fluncle";
@@ -36,7 +31,6 @@ function stubFetch(respond: () => Promise<Response>): void {
   }) as typeof globalThis.fetch;
 }
 
-/** Answer the status read with a body, as the Worker's /api/v1/status would. */
 function stubStatus(body: unknown, init?: ResponseInit): void {
   stubFetch(() => Promise.resolve(new Response(JSON.stringify(body), init)));
 }
@@ -44,8 +38,7 @@ function stubStatus(body: unknown, init?: ResponseInit): void {
 beforeEach(() => {
   logged = [];
   fetchedUrls = [];
-  // The CI runner sets CI=true ambiently; clear it (and the opt-out) so a case
-  // controls its own environment. The gate cases set the vars themselves.
+
   delete process.env.CI;
   delete process.env.FLUNCLE_NO_LIVE_CALLOUT;
   delete process.env.NO_COLOR;
@@ -110,10 +103,9 @@ describe("maybePrintLiveCallout", () => {
     await maybePrintLiveCallout(["recent"]);
 
     expect(logged).toHaveLength(1);
-    // The ratified cross-surface phrasing — it mirrors the SSH terminal's live line
-    // (apps/ssh/main.go). Changing it here alone would split the two surfaces.
+
     expect(logged[0]).toContain("On the decks, live now");
-    // The scheme and leading www. are stripped for a clean terminal readout.
+
     expect(logged[0]).toContain("twitch.tv/fluncle");
     expect(fetchedUrls[0]).toContain("/api/v1/status");
   });
@@ -179,7 +171,6 @@ describe("maybePrintLiveCallout", () => {
     setTty(true);
     stubFetch(() => Promise.reject(new Error("offline")));
 
-    // Resolving (rather than rejecting) is the whole guarantee: main() awaits this.
     expect(await maybePrintLiveCallout(["recent"])).toBeUndefined();
     expect(logged).toEqual([]);
   });

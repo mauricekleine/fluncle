@@ -2,10 +2,6 @@ import { beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 
 import * as realApi from "../api";
 
-// The `labels` command is a thin HTTP client over `list_labels` / `get_label`,
-// sharing the entity-index rendering with `artists`. These tests cover the
-// label-specific bits: the request paths and the home + imprint lines on the
-// dossier (the one register where earthly geography is named plainly).
 let apiResponse: unknown = {};
 let lastPath = "";
 

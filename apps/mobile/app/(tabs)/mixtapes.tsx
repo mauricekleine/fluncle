@@ -1,9 +1,3 @@
-// The Mixtapes tab — Fluncle's own DJ sets, the app's face of /mixtapes. A cover-led
-// list of checkpoints (each a long dream mixed from the findings); tapping one opens the
-// native detail (mixtape/[logId]) with its tracklist and the links out to YouTube /
-// Mixcloud. The set VIDEO itself lives on the web + the streaming platforms — an
-// hour-long, multi-GB master is not honest to stream in-app, so v1 is cover + tracklist
-// + link out (see the detail screen).
 import { FlatList, Pressable, StyleSheet, Text, View } from "react-native";
 import { useRouter } from "expo-router";
 import { Image } from "expo-image";
@@ -13,8 +7,6 @@ import { CosmosBackdrop } from "@/components/cosmos-backdrop";
 import { mixtapeCoverUrl } from "@/lib/media";
 import { color, font, radius } from "@/theme/tokens";
 
-// Copy reused from the web /mixtapes surface so the one object reads the same
-// everywhere (VOICE.md; in-fiction, warm, dry).
 const COPY = {
   empty: "No mixtapes logged yet. Quiet deck tonight.",
   error: "Couldn't reach the mixtapes. Pull to try again.",
@@ -23,12 +15,10 @@ const COPY = {
   title: "Mixtapes",
 } as const;
 
-/** The canonical title minus its " | <coordinate>" suffix (mirrors web mixtapeDisplayTitle). */
 function displayTitle(title: string): string {
   return title.split(" | ")[0] ?? title;
 }
 
-/** "N bangers · X min" — the row's quiet meta line (mirrors the web /mixtapes row). */
 function metaLine(mixtape: MixtapeDTO): string {
   const bangers = `${mixtape.memberCount} bangers`;
   const minutes = mixtape.durationMs
@@ -74,13 +64,6 @@ export default function MixtapesScreen() {
   );
 }
 
-// One mixtape as a cover-led row: a generous leading artwork, then the coordinate,
-// title, and quiet meta line (the finding-row / archive-row idiom). The whole row is the
-// pressable — it opens the native detail — so there is NO trailing chevron (an archive
-// row carries one only to signal a link OUT of the app; this navigates in-app). The
-// horizontal layout lives on a plain inner View with a static StyleSheet style: a
-// Pressable style FUNCTION drops flexDirection under NativeWind (see finding-row.tsx),
-// which is what stacked the cover, body, and chevron onto their own lines.
 function MixtapeRow({ mixtape, onPress }: { mixtape: MixtapeDTO; onPress: () => void }) {
   return (
     <Pressable accessibilityRole="button" onPress={onPress}>
@@ -120,14 +103,12 @@ const styles = StyleSheet.create({
     width: 72,
   },
   coverEmpty: { backgroundColor: color.tapeBlack },
-  // Header + rows share a left edge: list padding (10) + inner padding (10) = 20, so the
-  // nameplate/title align with each row's cover.
+
   header: { gap: 8, marginBottom: 8, paddingHorizontal: 10 },
   intro: { color: color.stardust, maxWidth: 340 },
   list: { gap: 4, padding: 10, paddingTop: 72 },
   nameplate: { color: color.stardust, fontSize: 12, letterSpacing: 0.5 },
-  // The pressable card: a generous leading cover beside the coordinate/title/meta column,
-  // padded + rounded so the press wash reads as a card highlight (The Ignition Rule).
+
   row: {
     alignItems: "center",
     borderRadius: radius.md,
@@ -138,8 +119,7 @@ const styles = StyleSheet.create({
   },
   rowBody: { flex: 1, gap: 3 },
   rowId: { color: color.eclipseGold, fontSize: 13 },
-  // Press ignites the coordinate from its resting identity gold to Eclipse Glow (mirrors
-  // finding-row / archive-row), under the Gold Veil wash.
+
   rowIdHot: { color: color.eclipseGlow },
   rowMeta: { color: color.stardust, fontSize: 13 },
   rowPressed: { backgroundColor: color.goldVeil },

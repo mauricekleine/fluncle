@@ -22,14 +22,10 @@ export async function addCommand(
   if (!options.json) {
     console.log(result.message);
 
-    // The success message ("Banger logged") omits the coordinate; surface it so
-    // the operator always leaves with the finding's Log ID. The dry-run message
-    // already carries its own `Log ID:` line, so don't double-print.
     if (result.track.logId && !result.message.includes("Log ID:")) {
       console.log(`Log ID: fluncle://${result.track.logId}`);
     }
 
-    // The finding's permanent home, alongside the coordinate.
     if (result.track.logPageUrl) {
       console.log(`Log: ${result.track.logPageUrl}`);
     }

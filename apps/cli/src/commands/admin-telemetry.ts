@@ -1,7 +1,3 @@
-// `fluncle admin telemetry read` — the operator's thin HTTP reader for the SECOND
-// `fluncle-telemetry` database. The Worker owns filtering, pagination, and aggregates;
-// the CLI only serializes query options and renders the returned evidence.
-
 import { type RunLedgerPage } from "@fluncle/contracts/orpc";
 import { adminApiGet } from "../api";
 
@@ -25,7 +21,6 @@ export type TelemetryReadOptions = {
   until?: string;
 };
 
-/** Read one page. The response is a passthrough; no client-side verdict is computed. */
 export async function telemetryCommand(options: TelemetryReadOptions): Promise<RunLedgerPage> {
   const params = new URLSearchParams({ limit: String(options.limit) });
 
@@ -112,7 +107,6 @@ type TelemetryRenderOptions = {
   missing?: boolean;
 };
 
-/** Terse operator rendering. `--json` remains the lossless run-ledger read. */
 export function telemetryLines(
   page: RunLedgerPage,
   options: TelemetryRenderOptions = {},

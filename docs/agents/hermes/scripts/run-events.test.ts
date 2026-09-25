@@ -1,21 +1,3 @@
-// Tests for the run ledger's THREE HOST UNITS — timer-watchdog, secrets-sync, and the sonar
-// self-deploy freshen — plus the mirrored `record_run_event` block they carry.
-//
-//   bun test docs/agents/hermes/scripts/run-events.test.ts
-//
-// WHY THESE THREE HAVE A TEST AT ALL. They are the units that reported NOTHING: no /status
-// marker, no ledger row, nothing but a journald line nobody reads. Two of them are exactly
-// the shape that hides worst — a detector (the watchdog) and a self-deploy (sonar), both of
-// which legitimately produce zero forever, so `produced == 0` says nothing about their health
-// and only the DENOMINATOR does. A watchdog that examined ZERO timers while reporting a clean
-// pass is not hypothetical: 897 consecutive runs, zero checks, green throughout.
-//
-// So every test here drives the REAL script — real bash, real exit paths, a real loopback
-// ledger — and asserts on the bytes that actually left the box. `systemctl`, `docker`, `op` and
-// `flock` are PATH stubs, and so is `curl`: `loopbackCurlRail` passes a loopback URL through to
-// the real binary and REFUSES anything else, so "nothing touches the network" is enforced here
-// rather than merely asserted. It had to be — that sentence was false until the rail existed.
-
 import { afterEach, describe, expect, test } from "bun:test";
 import {
   chmodSync,
@@ -55,7 +37,7 @@ const PIN_WATCH = join(REPO, "docs/agents/hermes/pin-watch/rebuild-hermes.sh");
 const PIN_WATCH_TIMER = join(REPO, "docs/agents/hermes/pin-watch/pin-watch.timer");
 const temporaryDirectories: string[] = [];
 const SCRIPT_CHILD_EXIT_TIMEOUT_MS = 30_000;
-// Outer process-test budgets include the bounded child work plus time to reap its fixture group.
+
 const SCRIPT_TEST_TIMEOUT_MS = SCRIPT_CHILD_EXIT_TIMEOUT_MS + 5_000;
 const TWO_SCRIPT_TEST_TIMEOUT_MS = SCRIPT_CHILD_EXIT_TIMEOUT_MS * 2 + 5_000;
 const activeHostScripts = new Set<Bun.Subprocess>();
@@ -76,8 +58,6 @@ function stopHostScript(proc: Bun.Subprocess): Promise<void> {
     }
   };
   const cleanup = (async () => {
-    // The shell may have exited while a descendant retains its pipes, so kill the disposable
-    // fixture group itself and wait for the direct child before removing its tree.
     stopGroup("SIGKILL");
     await proc.exited;
   })();
@@ -95,14 +75,6 @@ afterEach(async () => {
 
 const BEGIN = ">>> BEGIN MIRRORED BLOCK: record_run_event";
 const END = "<<< END MIRRORED BLOCK: record_run_event <<<";
-
-// ---------------------------------------------------------------------------
-// THE MIRROR.
-//
-// The four scripts run on two different boxes with no shared bash library between them, so
-// the emitter is carried verbatim in each. That is only safe if a drift FAILS A BUILD — the
-// same bargain cost-emit.ts strikes with the cost ledger's id scheme.
-// ---------------------------------------------------------------------------
 
 function mirroredBlock(path: string): string {
   const lines = readFileSync(path, "utf8").split("\n");
@@ -129,26 +101,17 @@ describe("record_run_event is mirrored, not re-implemented", () => {
   });
 
   test("the block pins the endpoint and the five body fields", () => {
-    // The contract the parallel `record_run` oRPC op owns. A change on either side has to be
-    // made on both, and this is the line that says so out loud. The constant is shared with
-    // cron-output.test.ts and CHECKED AGAINST THE WORKSPACE below — on its own, a pin here is
-    // the same closed loop that let `/api/v1/admin/runs/events` ship against a Worker serving
-    // `/api/v1/admin/telemetry/runs`.
     expect(canonical).toContain(`RUN_EVENT_PATH='${RUN_EVENT_ENDPOINT}'`);
     expect(canonical).toContain(
       '{"unit":"%s","started_at":"%s","ended_at":"%s","exit_code":%s,"summary_raw":"%s"}',
     );
     expect(canonical).toContain('-H "Authorization: Bearer ${token}"');
-    // Bounded, always — an unbounded POST would hold a sweep open to its unit's timeout.
+
     expect(canonical).toContain('--max-time "$RUN_EVENT_TIMEOUT_SECS"');
-    // HTTP and transport failures both reach the caller; only the caller may decide that a
-    // best-effort receipt failure leaves its primary job successful.
+
     expect(canonical).toContain('RUN_EVENT_FAILURE_REASON="post-failed"');
     expect(canonical).toContain("curl -fsS");
 
-    // And no `ok` in the CODE at all: the Worker derives it, so there is nowhere for a
-    // self-reported one to creep back in. (The prose above the code quotes the bug it exists
-    // to prevent, so the comments are excluded rather than the point being weakened.)
     const code = canonical
       .split("\n")
       .filter((line) => !line.trimStart().startsWith("#"))
@@ -170,36 +133,19 @@ describe("record_run_event is mirrored, not re-implemented", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// THE OTHER SIDE OF THE WIRE.
-//
-// The mirror test above is a CLOSED LOOP and this is what it cost: all four copies agreed on
-// `/api/v1/admin/runs/events`, the contract declared `/admin/telemetry/runs`, so every POST
-// 404'd, the `|| true` swallowed it, the ledger would have stayed permanently empty — and both
-// suites were green, because each only ever tested its own half.
-//
-// Byte-equality between four copies of a constant says nothing about whether the constant is
-// RIGHT. So these resolve what the box puts on the wire against what the workspace declares —
-// the assertion that crosses the boundary.
-// ---------------------------------------------------------------------------
-
 describe("every path a box script hardcodes is a path the Worker serves", () => {
   const literals = boxScriptApiPaths();
 
-  // The mechanism's own tripwire. A resolver that silently stopped finding anything would make
-  // every assertion below pass vacuously, which is the failure mode of this whole file's
-  // subject matter. Ten-odd real literals resolve today; this fails the moment none do.
   test("the resolver is not a no-op — real paths really resolve", () => {
     const resolved = literals.filter(({ literal }) => resolveApiPath(literal).kind === "contract");
 
     expect(resolved.length).toBeGreaterThan(4);
-    // The cost ledger's emitter — the same mirror-a-constant pattern this one copied, and proof
-    // the resolver reaches oRPC contract ops rather than only file routes.
+
     expect(resolveApiPath("/api/v1/admin/costs/events")).toEqual({
       kind: "contract",
       source: "packages/contracts/src/orpc/admin-costs.ts",
     });
-    // And a file-route carve-out, so the second half of the resolver is proven too.
+
     expect(resolveApiPath("/api/v1/status").kind).toBe("file-route");
   });
 
@@ -211,8 +157,6 @@ describe("every path a box script hardcodes is a path the Worker serves", () => 
     expect(orphans).toEqual([]);
   });
 
-  // The one hand-kept list in api-surface.ts, held to its own rule: an entry is a DATED absence
-  // (a sibling PR's contract), never a standing exemption, so it names the PR that closes it.
   test("every pending path names the PR that closes it", () => {
     expect(PENDING_WORKSPACE_PATHS.size).toBeLessThanOrEqual(1);
 
@@ -222,10 +166,6 @@ describe("every path a box script hardcodes is a path the Worker serves", () => 
     }
   });
 
-  // THE ASSERTION THAT WOULD HAVE CAUGHT IT. The run-ledger contract module is found BY FILENAME
-  // — never by the path under test, which would prove nothing — and the four bash copies must
-  // POST at one of the paths it declares. Until that module is on this branch there is nothing to
-  // compare against, and the pending entry is the visible record of why.
   test("the run-ledger endpoint is the contract's own path, not a guess", () => {
     const declared = runLedgerContractPaths();
 
@@ -239,15 +179,6 @@ describe("every path a box script hardcodes is a path the Worker serves", () => 
   });
 });
 
-// ---------------------------------------------------------------------------
-// THE SUMMARY LINE STATES FACTS, NOT A VERDICT.
-//
-// Same failure class as the endpoint, one field in: the summary is bash's half of a contract the
-// Worker owns, and a value only bash knows about is REJECTED at the edge — leaving no row, which
-// reads as a missed run. Two vocabularies are pinned here: `ok` (which the emitter must not
-// state at all) and `gateState` (which must be one of the ledger's seven words).
-// ---------------------------------------------------------------------------
-
 const EMITTERS: [string, string][] = [
   ["timer-watchdog.sh", WATCHDOG],
   ["fluncle-secrets-sync.sh", SECRETS_SYNC],
@@ -255,11 +186,6 @@ const EMITTERS: [string, string][] = [
   ["rebuild-hermes.sh", PIN_WATCH],
 ];
 
-/**
- * The gate word a script assigns inside its `--dry-run` branch, read out of the branch itself
- * rather than named here — the point being to catch the script reaching for the wrong word, which
- * a constant repeated in this file could not see.
- */
 function dryRunGateState(path: string): string {
   const body = readFileSync(path, "utf8");
   const branch = /^\s*elif \[ "\$MODE" = "--dry-run" \]; then\n([\s\S]*?)^\s*elif /m.exec(body);
@@ -277,7 +203,6 @@ function dryRunGateState(path: string): string {
   return gate[1];
 }
 
-/** The literal JSON format string a script builds its summary line from. */
 function summaryFormat(path: string): string {
   const match = /summary="\$\(printf '(\{[^']*})'/.exec(readFileSync(path, "utf8"));
 
@@ -290,12 +215,8 @@ function summaryFormat(path: string): string {
 
 describe("the summary line states facts, never a verdict", () => {
   test.each(EMITTERS)("%s prints no `ok` of its own", (_name, path) => {
-    // Asserted on the FORMAT STRING rather than on a run's output, so it holds for every exit
-    // path at once — including the ones no fixture reaches — and cannot be loosened by a test
-    // that swaps an exact `toEqual` for a forgiving `toMatchObject`.
     expect(summaryFormat(path)).not.toContain('"ok"');
-    // The counters it does print are the ledger's mandatory set, so `missing_fields` comes back
-    // empty for these three and the upgrade queue names only sweeps that really owe something.
+
     for (const field of ["checked", "produced", "errors"]) {
       expect(summaryFormat(path)).toContain(`"${field}"`);
     }
@@ -307,7 +228,6 @@ describe("the summary line states facts, never a verdict", () => {
   test("every gate value a script can emit is in the ledger's closed vocabulary", () => {
     const emitted = emittedGateStates(EMITTERS.map(([, path]) => path));
 
-    // Non-empty, or this proves nothing: the extractor has to be finding the assignments.
     expect(emitted.length).toBeGreaterThan(0);
 
     for (const state of emitted) {
@@ -315,12 +235,6 @@ describe("the summary line states facts, never a verdict", () => {
     }
   });
 
-  // MEMBERSHIP IS NOT ENOUGH, and this is the failure the closed vocabulary actually cost.
-  // `paused` and `dry-run` are both legal words, so the assertion above is green either way —
-  // but the Worker nulls a `paused` run's work counters and keeps a `dry-run`'s, so a script
-  // that reaches for the wrong legal word silently destroys its own `checked`. The rule is the
-  // Worker's, read from the Worker: a gate a script uses for a tick that LOOKED must not be one
-  // of the never-looked words.
   test("a gate a looking tick emits is not one of the Worker's never-looked words", () => {
     const neverLooked = workspaceNeverLookedGateStates();
 
@@ -330,17 +244,12 @@ describe("the summary line states facts, never a verdict", () => {
       return;
     }
 
-    // The premise: the Worker really does suppress for some words and not others.
     expect(neverLooked.length).toBeGreaterThan(0);
     expect(neverLooked).not.toContain("dry-run");
 
-    // The sonar freshen is the one emitter with a gate, and its `--dry-run` tick reads the
-    // release feed before declining to deploy — so its word has to be a keeping one.
     expect(neverLooked).not.toContain(dryRunGateState(SONAR_FRESHEN));
   });
 
-  // And the vocabulary itself is checked against the Worker, the same way the endpoint is —
-  // otherwise `LEDGER_GATE_STATES` is one more constant agreeing only with itself.
   test("that vocabulary is the Worker's own, whenever the Worker is here to ask", () => {
     const declared = workspaceGateStates();
 
@@ -354,14 +263,6 @@ describe("the summary line states facts, never a verdict", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// AND NOBODY GETS TO CALL THEM SILENT.
-//
-// The claim is derived from the SCRIPTS: a unit that carries the emitter and calls it is a
-// reporting unit, and no doc beside it may say otherwise. Prose cannot go stale against a build.
-// ---------------------------------------------------------------------------
-
-/** The systemd unit each host emitter reports as — read from the script, never listed here. */
 function reportingUnits(): string[] {
   return EMITTERS.map(([name, path]) => {
     const match = /^RUN_EVENT_UNIT="([^"]+)"$/m.exec(readFileSync(path, "utf8"));
@@ -374,7 +275,6 @@ function reportingUnits(): string[] {
   });
 }
 
-/** Claims that are false for a reporting unit. */
 const SILENCE_CLAIMS = [
   /reports nowhere/i,
   /reports to nothing/i,
@@ -384,7 +284,6 @@ const SILENCE_CLAIMS = [
 
 describe("no doc calls a reporting unit silent", () => {
   test("the three units really are reporting units", () => {
-    // The premise, checked first: without this the assertions below are about nothing.
     expect(reportingUnits().sort()).toEqual([
       "fluncle-pin-watch",
       "fluncle-secrets-sync",
@@ -405,16 +304,10 @@ describe("no doc calls a reporting unit silent", () => {
     }
   });
 
-  // The expected-writers roster (PR #1005) declares the units it does NOT expect a /status
-  // marker from, with a reason each. A missing MARKER is still true for these three — they run
-  // outside the container. "And reports nowhere" is not: they POST to the run ledger. When that
-  // file arrives, its reasons are held to the same rule as the prose above.
   test("the expected-writers roster does not call them silent either", () => {
     const roster = join(REPO, "docs/agents/hermes/scripts/cron-roster.ts");
 
     if (!existsSync(roster)) {
-      // Nothing to contradict yet. Recorded rather than skipped silently: the file lands with
-      // PR #1005, the same slice as this one, and the check arms itself the moment it does.
       expect(PENDING_WORKSPACE_PATHS.has(RUN_EVENT_ENDPOINT)).toBe(true);
 
       return;
@@ -434,15 +327,6 @@ describe("no doc calls a reporting unit silent", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// THE DECLARED CADENCE.
-//
-// `expected_interval_ms` exists so freshness is judged against what actually runs. A constant
-// in a script beside a period in a .timer file is a drift waiting to happen, so the pair is
-// pinned: change the schedule without changing the constant and this goes red.
-// ---------------------------------------------------------------------------
-
-/** The cadence a systemd .timer really fires at, in ms, for the three forms this repo uses. */
 function timerIntervalMs(path: string): number {
   const body = readFileSync(path, "utf8");
   const calendar = /^OnCalendar=\*:0\/(\d+)$/m.exec(body);
@@ -486,10 +370,6 @@ describe("each unit's declared interval matches its own .timer", () => {
     expect(rosterCadence?.expectedIntervalMs).toBe(declaredIntervalMs(script));
   });
 });
-
-// ---------------------------------------------------------------------------
-// THE LOOPBACK LEDGER + the PATH stubs.
-// ---------------------------------------------------------------------------
 
 type LedgerCall = { auth: string; body: string; path: string };
 type PostedRun = {
@@ -536,17 +416,8 @@ async function withLedger<T>(
   }
 }
 
-/**
- * Just the ledger POSTs. The fixture stands in for the whole Worker, and sonar-freshen also
- * posts its /status row there, so filtering by path is what keeps the two apart.
- *
- * It filters on the SHARED endpoint constant, so a wrong path is not merely mismatched here —
- * every assertion below stops seeing any call at all, which is exactly what a 404 in production
- * would have looked like if anything had been watching.
- */
 const runEvents = (calls: LedgerCall[]) => calls.filter((call) => call.path === RUN_EVENT_ENDPOINT);
 
-/** The one run record the ledger received, plus its `summary_raw` parsed back into an object. */
 function received(calls: LedgerCall[]): { posted: PostedRun; summary: Summary } {
   const call = runEvents(calls)[0];
 
@@ -566,19 +437,6 @@ function writeStub(dir: string, name: string, body: string): void {
   chmodSync(path, 0o755);
 }
 
-/**
- * THE LOOPBACK RAIL — `curl` is a PATH stub, exactly like `systemctl`, `docker` and `flock`.
- *
- * The header of this file says nothing here touches the network. Until this existed that was a
- * CLAIM, not a mechanism, and it was false: an unset `FLUNCLE_API_BASE_URL` is documented to
- * fall back to the emitter's box default — production — and a script can resolve its own token
- * independently of the test runner's environment. That once sent no-ledger fixtures off-box.
- *
- * So the rail: a loopback URL passes through to the real binary, anything else is REFUSED and
- * recorded, and `runScript` throws on a recorded refusal. Refusing is not enough on its own:
- * three callers still deliberately discard the emitter's best-effort return, so the recording
- * turns a leak into a named test failure instead of a silent one.
- */
 function loopbackCurlRail(): { dir: string; refusals: string } {
   const dir = mkdtempSync(join(tmpdir(), "fluncle-loopback-rail-"));
   temporaryDirectories.push(dir);
@@ -589,8 +447,6 @@ function loopbackCurlRail(): { dir: string; refusals: string } {
     throw new Error("no curl on PATH — the loopback rail has nothing to pass through to");
   }
 
-  // Only args that START with a scheme are inspected: a `--data-binary '{…}'` body is not a URL
-  // and must never be read as one.
   writeStub(
     dir,
     "curl",
@@ -611,14 +467,6 @@ function loopbackCurlRail(): { dir: string; refusals: string } {
   return { dir, refusals };
 }
 
-/**
- * Run a host script with an EXPLICIT env — never the ambient one. Two reasons, both
- * load-bearing: the ledger POST is a `curl` in a child process, so the repo's no-network rail
- * (which wraps `globalThis.fetch`) cannot see it, and an operator's real FLUNCLE_API_TOKEN
- * sitting in the environment is the one way this suite could reach production. The caller's PATH
- * is prefixed with the loopback rail above, which closes the other way in: a token the SCRIPT
- * itself materializes, which no amount of env hygiene here can withhold.
- */
 async function runScript(
   script: string,
   env: Record<string, string>,
@@ -628,16 +476,13 @@ async function runScript(
   const rail = loopbackCurlRail();
   const merged = { PATH: "/usr/bin:/bin:/usr/sbin:/sbin", ...env };
   const proc = Bun.spawn(["bash", script, ...args], {
-    // The rail goes on LAST and FIRST: after the spread so a fixture's own PATH cannot displace
-    // it, and at the head of the list so its `curl` is the one every run finds.
     detached: true,
     env: { ...merged, PATH: `${rail.dir}:${merged.PATH}` },
     stderr: "pipe",
     stdout: "pipe",
   });
   activeHostScripts.add(proc);
-  // Drain both pipes before waiting for exit: a verbose child otherwise blocks on a full pipe
-  // while this fixture waits for the exit that cannot happen.
+
   const stdoutPromise = new Response(proc.stdout).text();
   const stderrPromise = new Response(proc.stderr).text();
   let timeout: ReturnType<typeof setTimeout> | undefined;
@@ -671,14 +516,6 @@ async function runScript(
   }
 }
 
-/**
- * THE VERDICT, DERIVED — never read off the line.
- *
- * None of these three units prints `ok`, and that is the point: the rule is the WORKER's
- * (`exit_code === 0 && (errors ?? 0) === 0`) and a summary that grades itself is rejected at the
- * edge. So a test that wants to assert a run's health asserts it from the two facts the run
- * actually reports, which is exactly what the ledger will do with them.
- */
 function derivedOk(exitCode: number, errors: Summary[string] | undefined): boolean {
   return exitCode === 0 && (errors ?? 0) === 0;
 }
@@ -756,14 +593,12 @@ describe("host-script fixture lifecycle", () => {
     const childState = new TextDecoder()
       .decode(Bun.spawnSync(["ps", "-o", "stat=", "-p", String(childPid)]).stdout)
       .trim();
-    // A short-lived zombie can await the system reaper, but no runnable/sleeping orphan may
-    // remain in the fixture group after cleanup.
+
     expect(childState === "" || childState.startsWith("Z")).toBe(true);
     expect(activeHostScripts.size).toBe(0);
   });
 });
 
-/** The LAST non-empty stdout line, parsed — the same line the wrapper sends as summary_raw. */
 function lastJsonLine(stdout: string): Summary {
   const line = stdout
     .split("\n")
@@ -773,20 +608,15 @@ function lastJsonLine(stdout: string): Summary {
   return JSON.parse(line ?? "{}") as Summary;
 }
 
-// ---------------------------------------------------------------------------
-// timer-watchdog — the detector whose only honest health signal is `checked`.
-// ---------------------------------------------------------------------------
-
 type WatchdogFixture = {
-  /** Services whose ActiveState is `active` (a oneshot mid-tick — never a suspect). */
   busy?: string[];
-  /** Timers reporting NO next elapse — the stranded shape. */
+
   infinity?: string[];
-  /** Services whose `systemctl start` fails. */
+
   startFails?: string[];
-  /** Every active timer `systemctl list-units` reports. */
+
   timers: string[];
-  /** Env pairs the live container exposes (the credential-free token read). */
+
   containerEnv?: Record<string, string>;
 };
 
@@ -794,8 +624,7 @@ function watchdogStubs(root: string, fixture: WatchdogFixture): string {
   const bin = join(root, "bin");
 
   mkdirSync(bin, { recursive: true });
-  // A systemctl that answers exactly the four questions the watchdog asks, from a fixture in
-  // the environment. Anything else is a hard failure rather than a quiet zero.
+
   writeStub(
     bin,
     "systemctl",
@@ -834,8 +663,7 @@ function watchdogStubs(root: string, fixture: WatchdogFixture): string {
       "esac",
     ].join("\n"),
   );
-  // `docker inspect --format '{{range .Config.Env}}…'` — the watchdog reads the agent token
-  // and the Discord webhook off the LIVE container, so it holds no config file of its own.
+
   const envFile = join(root, "container-env");
 
   writeFileSync(
@@ -858,12 +686,10 @@ async function runWatchdog(
   temporaryDirectories.push(root);
   const bin = watchdogStubs(root, fixture);
   const run = await runScript(WATCHDOG, {
-    // Empty, not absent, with no ledger fixture — see runSecretsSync below for what an absent
-    // base costs. This unit is token-gated as well, so it is belt and braces here.
     FLUNCLE_API_BASE_URL: base ?? "",
     HOME: root,
     PATH: `${bin}:/usr/bin:/bin`,
-    // No re-check pause: the confirming sample is behavioural, not temporal.
+
     TIMER_WATCHDOG_RECHECK_DELAY: "0",
     WD_BUSY: (fixture.busy ?? []).join(" "),
     WD_INFINITY: (fixture.infinity ?? []).join(" "),
@@ -883,8 +709,7 @@ describe("timer-watchdog reports a run", () => {
       const { code, summary } = await runWatchdog({ timers: HEALTHY });
 
       expect(code).toBe(0);
-      // An EXACT shape, so a stray key cannot creep in: the ledger rejects a summary carrying
-      // `ok`, and `toMatchObject` would have let one ride along unnoticed.
+
       expect(summary).toEqual({
         checked: 3,
         errors: 0,
@@ -898,9 +723,6 @@ describe("timer-watchdog reports a run", () => {
     SCRIPT_TEST_TIMEOUT_MS,
   );
 
-  // THE ONE THIS UNIT EXISTS FOR. A watchdog that enumerates nothing must fail locally rather
-  // than rely on a future reader to notice the denominator. `produced:0` and `queue_depth:0`
-  // otherwise look identical to the healthy run above.
   test(
     "checked == 0 exits non-zero",
     async () => {
@@ -931,9 +753,6 @@ describe("timer-watchdog reports a run", () => {
     SCRIPT_TEST_TIMEOUT_MS,
   );
 
-  // The ledger's alarm conjunction, from the real script: stranded timers found, none
-  // re-armed. `produced == 0 AND queue_depth > 0` — and the derived verdict is false because
-  // the errors are COUNTED.
   test(
     "ALARM SHAPE: found stranded, re-armed none",
     async () => {
@@ -955,7 +774,6 @@ describe("timer-watchdog reports a run", () => {
     const alertAttempt = body.indexOf('webhook="$(container_env DISCORD_ALERT_WEBHOOK)"');
     const failedRearmExit = body.indexOf('[ "${#healed[@]}" -gt 0 ] || exit 1');
 
-    // Assert both markers first so two missing lines cannot satisfy the ordering by accident.
     expect(alertAttempt).toBeGreaterThan(-1);
     expect(failedRearmExit).toBeGreaterThan(-1);
     expect(alertAttempt).toBeLessThan(failedRearmExit);
@@ -1037,16 +855,11 @@ describe("timer-watchdog reports a run", () => {
   );
 });
 
-// ---------------------------------------------------------------------------
-// secrets-sync — the unit every other sweep depends on, which reported nothing.
-// ---------------------------------------------------------------------------
-
 type SecretsFixture = {
-  /** Agent token exposed by the container configuration this host unit inspects. */
   containerToken?: string;
-  /** Fail the `op inject` of the sweep secrets (the real-world op outage). */
+
   injectFails?: boolean;
-  /** Configure the optional GSC key, and whether `op read` for it succeeds. */
+
   gsc?: "ok" | "fails";
 };
 
@@ -1065,8 +878,6 @@ async function runSecretsSync(
   writeFileSync(join(tpl, "hermes.env.tpl"), "FLUNCLE_API_TOKEN={{op}}\n", "utf8");
   writeFileSync(join(tpl, "fluncle-secrets.env.tpl"), "CLAUDE_CODE_OAUTH_TOKEN={{op}}\n", "utf8");
 
-  // An `op` that materializes exactly what the real one does: the container env, the sweep env
-  // (which deliberately does NOT carry FLUNCLE_API_TOKEN), and the GSC service-account json.
   writeStub(
     bin,
     "op",
@@ -1090,8 +901,6 @@ async function runSecretsSync(
     ].join("\n"),
   );
 
-  // The host unit's credential-free source: `docker inspect` of the container configuration.
-  // The stub ignores inspect's formatting arguments and emits the same KEY=value lines.
   const containerEnv = join(root, "container-env");
 
   writeFileSync(
@@ -1107,19 +916,13 @@ async function runSecretsSync(
     bootstrap,
     [
       "OP_SERVICE_ACCOUNT_TOKEN=stub",
-      // A PLACEHOLDER ref, never a concrete one (the CI working-tree grep rejects any
-      // `op://` path starting with an alphanumeric — AGENTS.md "Public Repo"), and SINGLE
-      // QUOTED because the script sources this file: an unquoted `<vault>` would be read as
-      // a redirection. The stub `op` ignores the argument anyway.
+
       ...(fixture.gsc ? ["FLUNCLE_GSC_OP_REF='op://<vault>/<gsc-item>'"] : []),
     ].join("\n") + "\n",
     "utf8",
   );
 
   const run = await runScript(SECRETS_SYNC, {
-    // EXPLICITLY EMPTY, never absent, when there is no ledger fixture. An ABSENT base is
-    // documented to fall back to the box's production default; an empty one means THERE IS NO
-    // LEDGER HERE and reaches the emitter's own guard, which is the line that says so.
     FLUNCLE_API_BASE_URL: base ?? "",
     HOME: root,
     OP_GSC: fixture.gsc === "fails" ? "fails" : "ok",
@@ -1158,7 +961,7 @@ describe("secrets-sync reports a run", () => {
         runLedgerReceipt: false,
       });
       expect(derivedOk(code, summary.errors)).toBe(true);
-      // The real work still happened — the summary is a report, not a replacement.
+
       expect(readFileSync(join(root, "hermes.env"), "utf8")).toContain("FLUNCLE_API_TOKEN");
       expect(readFileSync(join(root, "state/home/.fluncle-secrets.env"), "utf8")).toContain(
         "CLAUDE_CODE_OAUTH_TOKEN",
@@ -1188,8 +991,6 @@ describe("secrets-sync reports a run", () => {
     SCRIPT_TEST_TIMEOUT_MS,
   );
 
-  // The container source is independent of the files this script rewrites, so an op outage is
-  // still reportable even though no fresh sweep-secrets file exists.
   test(
     "a failed op inject still reports with the container token",
     async () => {
@@ -1208,8 +1009,7 @@ describe("secrets-sync reports a run", () => {
       const { posted, summary } = received(calls);
 
       expect(posted.exit_code).not.toBe(0);
-      // Two targets promised, none written: the shortfall is the backlog, and the exit code the
-      // posted carries is what the ledger derives a false verdict from.
+
       expect(summary).toMatchObject({ checked: 2, produced: 0, queue_depth: 2 });
       expect(derivedOk(posted.exit_code, summary.errors)).toBe(false);
     },
@@ -1270,9 +1070,7 @@ describe("secrets-sync reports a run", () => {
       const bin = join(root, "bin");
       const dockerCalled = join(root, "docker-called");
       mkdirSync(bin, { recursive: true });
-      // EXIT reporting still looks for a ledger token in the container configuration. Keep this
-      // failure fixture independent of a CI host's real Docker CLI or daemon, just like every
-      // `runSecretsSync` fixture above; an absent container is a fast, expected empty lookup.
+
       writeStub(bin, "docker", `: >${JSON.stringify(dockerCalled)}\nexit 1`);
       const run = await runScript(SECRETS_SYNC, {
         FLUNCLE_API_BASE_URL: "",
@@ -1302,8 +1100,6 @@ describe("secrets-sync reports a run", () => {
       expect(clean.summary).toMatchObject({ checked: 3, errors: 0, produced: 3 });
       expect(derivedOk(clean.code, clean.summary.errors)).toBe(true);
 
-      // Exits 0 on purpose (the audit degrades), which is exactly why the error is COUNTED:
-      // a green exit code beside a nonzero error count must not read green.
       const degraded = await runSecretsSync({ gsc: "fails" });
 
       expect(degraded.code).toBe(0);
@@ -1313,104 +1109,78 @@ describe("secrets-sync reports a run", () => {
         produced: 2,
         queue_depth: 1,
       });
-      // Exit code 0, one counted error — so the DERIVED verdict is false where a self-reported one
-      // would have been true. This single line is the whole argument for deriving it.
+
       expect(derivedOk(degraded.code, degraded.summary.errors)).toBe(false);
     },
     TWO_SCRIPT_TEST_TIMEOUT_MS,
   );
 });
 
-// ---------------------------------------------------------------------------
-// sonar-freshen — the self-deploy on the other box. Same problem as the watchdog: it
-// legitimately deploys nothing for weeks, so only `checked` says whether it LOOKED.
-// ---------------------------------------------------------------------------
-
 type SonarFixture = {
-  /** What the rolling release's `sonar.commit` asset answers, if anything. */
   commit?: string;
-  /** The SHA already recorded on the box. */
+
   deployed?: string;
-  /** Pretend another run holds the single-flight lock. */
+
   locked?: boolean;
-  /** Point the asset base at a dead port. */
+
   unreachable?: boolean;
-  /** Exercise the predecessor's remote-query environment during an upgrade. */
+
   runtimeContract?: "current" | "legacy";
-  /** Omit the current contract's durable state to exercise the first bootstrap bridge. */
+
   stateInitialized?: boolean;
-  /** Fail once after creating partial state, then retry after rollback restores the absent state. */
+
   retryAfterBootstrapFailure?: boolean;
-  /** Pretend a prior post-swap acceptance recorded the authoritative marker. */
+
   bootstrapMarked?: boolean;
-  /** Override the durable-state fixture body. */
+
   stateContents?: string;
-  /** Terminate the deploy shell during the first candidate restart. */
+
   interruptAfterSwap?: boolean;
-  /** Hard-kill the deploy shell after swap so EXIT cannot run. */
+
   crashAfterSwap?: boolean;
-  /** Override the commit baked into the downloaded artifact's health response. */
+
   artifactCommit?: string;
-  /** Override the complete health body served by the downloaded artifact. */
+
   artifactHealthBody?: string;
-  /** Make this many isolated child boots lose the free-port probe-to-bind race. */
+
   presmokeBindCollisions?: number;
-  /** Override the commit returned by the restarted live service. */
+
   liveCommit?: string;
-  /** Override the commit served by the pre-swap binary independently of deployed-sha. */
+
   priorLiveCommit?: string;
-  /** Mutate durable state in the candidate, fail, and require rollback bytes before old health. */
+
   mutateStateThenFail?: boolean;
-  /** Fail only the post-rollback backup cleanup sync after old health is established. */
+
   rollbackCleanupFails?: boolean;
-  /** Leave an old rollback WAL that the next snapshot must remove. */
+
   staleRollbackWal?: boolean;
-  /** Refuse removal of candidate state during rollback. */
+
   rollbackStateRemovalFails?: boolean;
-  /** Hard-kill immediately after accepted intent removal. */
+
   crashAfterAcceptanceIntentRemoval?: boolean;
-  /** Fail accepted rollback-file cleanup once, then retry on the next no-op. */
+
   acceptanceCleanupFails?: boolean;
-  /** Fail the first accepted SHA durability sync after the bootstrap marker exists. */
+
   acceptedShaWriteFails?: boolean;
-  /** Fail bootstrap-marker unlink once while rollback is already healthy. */
+
   bootstrapMarkerRemovalFails?: boolean;
-  /** Keep refusing bootstrap-marker unlink across the recovery tick. */
+
   bootstrapMarkerRemovalPersists?: boolean;
 };
 
 const SHA_A = "a".repeat(40);
-// Concurrent script-test processes share the fixed smoke-port candidates. A process-unique
-// commit keeps one fixture's healthy listener from satisfying another fixture's identity check.
+
 const SHA_B = new Bun.CryptoHasher("sha1").update(`run-events:${process.pid}`).digest("hex");
 
-// THE BOOT BUDGET IS A FIXTURE KNOB, AND THE PATHS THAT EXPIRE IT PAY IT IN REAL SECONDS.
-//
-// Every stub here answers instantly, so a large budget buys a case nothing — except on the paths
-// that are SUPPOSED to run it out (a live listener that never reports the expected commit, a
-// candidate that never serves /health), where the script spends the whole budget in `sleep 1`.
-// A budget close to the harness limit below therefore makes a deliberate-failure case fail for
-// the wrong reason as soon as anything else is running on the machine. Small keeps the expiry
-// exercised and the wait honest.
-//
-// The bounded port walk is the one scenario that needs room INSIDE the budget rather than at the
-// end of it: it confirms a collision per candidate across five candidates, and a budget that
-// expires mid-confirmation leaves the run looking like an ordinary unhealthy boot instead of the
-// infrastructure failure it is. It states the larger number it actually needs.
 const BOOT_BUDGET_SECS = 6;
 const PORT_WALK_BOOT_BUDGET_SECS = 25;
 
-// The pre-smoke's five candidate ports are the one resource in this file that belongs to the
-// MACHINE rather than to a run — a second process running these same cases walks the same five
-// and can find none free, which reads as an infrastructure failure the case never staged. Each
-// process takes its own five-port window instead, the same reason `SHA_B` is process-unique.
 const SMOKE_PORT_BASE = String(42_480 + (process.pid % 100) * 5);
 
 function bootBudgetSecs(fixture: SonarFixture): string {
   return String(fixture.presmokeBindCollisions ? PORT_WALK_BOOT_BUDGET_SECS : BOOT_BUDGET_SECS);
 }
 
-/** A stand-in `sonar` binary: boots on SONAR_PORT and serves the one thing the smoke reads. */
 const SONAR_STUB = [
   "#!/usr/bin/env bash",
   'if [ "${SONAR_VALIDATE_ONLY:-}" = "true" ] && grep -q "^partial$" "$SONAR_STATE_PATH" 2>/dev/null; then echo "state has no completed manifest" >&2; exit 2; fi',
@@ -1496,8 +1266,6 @@ async function runSonar(
   writeFileSync(join(appDir, "sonar"), "#!/usr/bin/env bash\n# old-sonar\nexit 0\n", "utf8");
   chmodSync(join(appDir, "sonar"), 0o755);
 
-  // `flock` is util-linux — it does not exist on macOS at all, so without this stub EVERY run
-  // here would take the lock-held branch and quietly test nothing.
   writeStub(bin, "flock", '[ "${SF_LOCKED:-0}" = "1" ] && exit 1\nexit 0');
   writeStub(
     bin,
@@ -1536,9 +1304,7 @@ async function runSonar(
       'exec /bin/rm "$@"',
     ].join("\n"),
   );
-  // A systemctl that normally reports the service up. The retry fixture makes the first
-  // candidate start create incomplete state and fail; rollback succeeds on the recognisable
-  // old binary, then the next candidate start completes that same state in place.
+
   writeStub(
     bin,
     "systemctl",
@@ -1606,7 +1372,7 @@ async function runSonar(
     },
     port: 0,
   });
-  // The "already restarted" live service the post-swap smoke curls.
+
   const live = Bun.serve({
     fetch: () => {
       const runningOld = readFileSync(join(appDir, "sonar"), "utf8").includes("old-sonar");
@@ -1777,10 +1543,6 @@ describe("sonar-freshen reports a run", () => {
     SCRIPT_TEST_TIMEOUT_MS,
   );
 
-  // A dead release feed exits 0 BY DESIGN (leave the box alone). Before this, that was
-  // indistinguishable from a healthy no-op — which is the seven-days-invisible failure shape
-  // in miniature. `checked:0` is what makes it legible, and the counted error is what stops
-  // the row reading green.
   test(
     "BLINDNESS: an unreachable release feed is `checked:0`, never a quiet success",
     async () => {
@@ -1805,14 +1567,6 @@ describe("sonar-freshen reports a run", () => {
     SCRIPT_TEST_TIMEOUT_MS,
   );
 
-  // The third state. A lock-skipped tick measured NOTHING, so its counters are `null` rather
-  // than `0` — `0` is reserved for "I tried and found nothing", and conflating the two would
-  // make a wedged predecessor look like a healthy idle box forever.
-  //
-  // `locked` is the ledger's OWN word for precisely this tick, and it is one of the Worker's
-  // never-looked gates — which is what makes the `null` counters correct rather than laundered.
-  // A gate value of this script's invention is rejected by the Worker, and a rejected POST leaves
-  // NO ROW: the same silent-empty-ledger failure as a wrong endpoint, one field further in.
   test(
     "GATED: a lock-held tick reports null counters, not zeros",
     async () => {
@@ -1839,8 +1593,7 @@ describe("sonar-freshen reports a run", () => {
     });
 
     expect(code).toBe(0);
-    // NO gate on a real deploy, forced or not: the ledger nulls a gated run's work counters, so
-    // gating this would erase the `produced:1` that proves the swap happened.
+
     expect(summary).toMatchObject({
       checked: 1,
       errors: 0,
@@ -2306,14 +2059,6 @@ describe("sonar-freshen reports a run", () => {
     SCRIPT_TEST_TIMEOUT_MS,
   );
 
-  // The ledger's alarm conjunction on this unit: a build is published, the box did not take
-  // it. `--dry-run` produces the same counters on purpose, and carries a `gateState` so an
-  // operator preview is never mistaken for a stalled deploy.
-  //
-  // AND THE WORD IS `dry-run`, NOT `paused` — the two are both legal and they are not
-  // interchangeable. `paused` is one of the Worker's never-looked gates, so it would null the
-  // `checked: 1` asserted here: the reading that proves this tick really read the release feed
-  // before declining to deploy. That is why these gate words have distinct semantics.
   test("GATED: a dry run leaves the backlog standing but flags itself", async () => {
     const { code, summary } = await runSonar({ commit: SHA_B, deployed: SHA_A }, undefined, [
       "--dry-run",
@@ -2331,23 +2076,11 @@ describe("sonar-freshen reports a run", () => {
   }, 60_000);
 });
 
-// ---------------------------------------------------------------------------
-// pin-watch — the self-deploy that alerted and still left no record.
-//
-// Same shape as the watchdog and the sonar freshen: it legitimately deploys NOTHING for weeks, so
-// `produced` says nothing about its health, and the failure it hides is the opposite of loud — a
-// build that fails on every hourly tick. Its Discord line and its `self-deploy` /status row are
-// both moment-in-time signals; the ledger row is the durable one. These tests drive the REAL
-// script through three shapes: a clean no-op, a failed build, and a tick that died before it
-// could compare anything at all.
-// ---------------------------------------------------------------------------
-
 type PinWatchFixture = {
-  /** Non-zero makes `docker build` fail, taking the script down its BUILD FAILED path. */
   buildExit?: number;
-  /** False makes `docker inspect <container>` fail — the die before any version is read. */
+
   containerRunning?: boolean;
-  /** False makes the running image's baked fingerprint stale, which is drift. */
+
   fingerprintCurrent?: boolean;
 };
 
@@ -2384,14 +2117,12 @@ async function runPinWatch(
     "utf8",
   );
 
-  // `flock` is util-linux and absent on macOS: without the stub every run would take the
-  // lock-held branch, exit 0 before arming anything, and prove nothing.
   writeStub(bin, "flock", "exit 0");
-  // BSD `mktemp` has no `-p`, and the captured env file must land where the fixture can see it.
+
   writeStub(bin, "mktemp", 'printf "%s\\n" "$PW_ENVTMP"\n: >"$PW_ENVTMP"');
-  // `sha256sum` is GNU; the fingerprint only has to be STABLE, and both sides use this one.
+
   writeStub(bin, "sha256sum", 'exec shasum -a 256 "$@"');
-  // No sweep timers to quiesce keeps the run on the path under test.
+
   writeStub(bin, "systemctl", "exit 0");
   writeStub(
     bin,
@@ -2484,8 +2215,7 @@ describe("pin-watch reports a run", () => {
       expect(code).toBe(0);
       expect(posted.unit).toBe("fluncle-pin-watch");
       expect(posted.exit_code).toBe(0);
-      // It LOOKED (checked) and had nothing to do (produced 0, no backlog). The three facts
-      // together are what separate a healthy idle self-deploy from a blind one.
+
       expect(summary).toMatchObject({
         checked: 1,
         errors: 0,
@@ -2510,8 +2240,7 @@ describe("pin-watch reports a run", () => {
       expect(stderr).toContain("FATAL: build failed");
       expect(code).toBe(1);
       expect(posted.exit_code).toBe(1);
-      // The shape an unwatched run of hourly build failures would have written: it looked, it
-      // deployed nothing, and the drift it found is still standing.
+
       expect(summary).toMatchObject({ checked: 1, errors: 1, produced: 0, queue_depth: 1 });
       expect(derivedOk(code, summary.errors)).toBe(false);
     },
@@ -2526,8 +2255,7 @@ describe("pin-watch reports a run", () => {
 
       expect(code).toBe(1);
       expect(posted.exit_code).toBe(1);
-      // `checked: 0` is the point. A run that never reached the comparison must not be able to
-      // report one, and the denominator is the only field that can say so.
+
       expect(summary).toMatchObject({ checked: 0, errors: 1, produced: 0, queue_depth: 0 });
       expect(derivedOk(code, summary.errors)).toBe(false);
     },

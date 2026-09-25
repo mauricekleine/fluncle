@@ -1,62 +1,4 @@
 #!/usr/bin/env bun
-// verify-captures.ts — the bun orchestrator behind the CAPTURE-VERIFICATION backfill
-// (`fluncle-verify-captures`), scheduled by a rave-02 HOST systemd timer (../verify-captures-timer/).
-// THE HISTORIC HALF of the verification gate (docs/the-ear.md § Wrong audio): the capture sweep's
-// ingest gate verifies every NEW download, and this sweep walks every capture that landed BEFORE
-// the gate existed (~590 rows: findings + catalogue) and gives each the same fingerprint check.
-//
-// LIVE-INTENT. Version-controlled source; the repo is canonical and the box is a deploy target
-// (fluncle-hermes-operator skill). Invoked by the bash wrapper (verify-captures.sh) the host timer
-// docker-execs — see that file's header for the wire-up and ../verify-captures-timer/README.md for
-// the operator runbook.
-//
-// ── TWO RUNGS FOR THE REFERENCE (docs/the-ear.md § Wrong audio) ─────────────────────────────
-// A row's verification REFERENCE is resolved by one of two rungs, by trust:
-//   - ISRC row → the ISRC-resolved official preview through `/api/preview` (the trusted rung). A
-//     mismatch against it is trustworthy, so the server may rewind on it.
-//   - ISRC-NULL row → a TITLE + ARTIST search reference (the second rung, resolveSearchPreview-
-//     Fingerprint), for the ~221 rows that can never reach an ISRC preview. It is LOWER trust
-//     (folded-identity + duration guarded, but not byte-exact), so it may only ever CONFIRM a
-//     capture: a mismatch against it is mapped to the honest abstain (`unverified`), NEVER a
-//     `mismatch` verdict. A wrong reference can leave a row unverified; it can never quarantine
-//     good audio. Precision over recall.
-//
-// ── WHAT ONE ROW COSTS, AND WHO DECIDES WHAT HAPPENS ────────────────────────────────────
-// Per row: one private-R2 GET (the captured bytes — the same read + creds embed-batch.ts uses,
-// which is what the box's AGENT-scoped R2 token can already do), one reference fetch (the ISRC
-// preview, or — for the second rung — one 1 req/s iTunes search + one preview fetch), two
-// `fpcalc -raw -json` runs, one sliding-window match (fingerprint-match.ts — the SAME matcher the
-// ingest gate uses, so the two cannot drift), and one agent-tier `verify_capture` POST. The box
-// only MEASURES and reports a plain verdict (match | mismatch | no-preview); the WORKER routes it
-// (apps/web/src/lib/server/catalogue.ts):
-//   - match      → `capture_verification = 'preview-match'`.
-//   - no-preview → `'unverified'` (the honest abstain — no reference exists).
-//   - mismatch on a CATALOGUE row → the wrong-audio quarantine rewind (vector dropped, re-queued
-//     for capture, sha remembered in the bad-audio memory).
-//   - mismatch on a FINDING → `'mismatch'` stamped ONLY: a machine never rewinds a public finding.
-//     It raises the `capture-suspect` /admin attention item; the operator rules with
-//     `flag_wrong_audio` (or `fluncle admin catalogue flag-wrong-audio <trackId>`).
-// Keeping the routing server-side means the doctrine has ONE authority, integration-tested, and a
-// re-baked box script can never invent a new policy.
-//
-// ── BOUNDED, RESUMABLE, IDEMPOTENT ───────────────────────────────────────────────────────
-// The worklist is `list_unverified_captures` — captured rows with `capture_verification IS NULL`.
-// A verdict stamps the column, so a verified row LEAVES the set: re-running after a crash simply
-// picks up what is left (the embed-queue pattern; no cursor to persist), a stamped row is never
-// re-verified, and a drained backlog makes the tick a single empty read. Each tick takes at most
-// `FLUNCLE_VERIFY_BATCH` rows (default 20) — ~590 historic rows drain in ~30 ticks.
-//
-// ── DEGRADES HONESTLY WITHOUT fpcalc ─────────────────────────────────────────────────────
-// fpcalc (chromaprint) joins the Hermes image in the same PR that ships this sweep, but the image
-// needs a REBAKE to pick it up. Until then — or on any box without the binary — the probe below
-// detects its absence and the tick exits cleanly with `reason: "fpcalc_missing"` WITHOUT stamping
-// anything: rows stay unverified (still queued) rather than being wrongly marked, and nothing
-// crashes. The repo half is safe to merge before the rebake.
-//
-// FULL-AUDIO-ONLY is untouched: the preview is fetched as a verification REFERENCE, fingerprinted,
-// and deleted — it never feeds a vector and is never stored as analysis input.
-//
-// stdout: one JSON summary line (the cron run output). Diagnostics → stderr.
 
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -76,12 +18,9 @@ import {
   slidingWindowMatch,
 } from "./fingerprint-match";
 
-// ── Config (env; the shared ~/.fluncle-secrets.env supplies the secrets on the box) ──
-
 const API_BASE_URL = process.env.FLUNCLE_API_BASE_URL ?? "https://www.fluncle.com";
 const API_TOKEN = process.env.FLUNCLE_API_TOKEN ?? "";
 
-// The PRIVATE source-audio bucket — READ-ONLY here (the same credential capture writes with).
 const R2_ACCOUNT_ID = process.env.R2_ACCOUNT_ID ?? "";
 const R2_ACCESS_KEY_ID = process.env.FLUNCLE_SOURCE_AUDIO_R2_ACCESS_KEY_ID ?? "";
 const R2_SECRET_ACCESS_KEY = process.env.FLUNCLE_SOURCE_AUDIO_R2_SECRET_ACCESS_KEY ?? "";
@@ -89,19 +28,16 @@ const R2_BUCKET = process.env.FLUNCLE_SOURCE_AUDIO_R2_BUCKET ?? "fluncle-source-
 
 const FPCALC_BIN = process.env.FPCALC_BIN ?? "fpcalc";
 
-/** Rows per tick. ~590 historic captures drain in ~30 ticks at the default. */
 const BATCH = Number(process.env.FLUNCLE_VERIFY_BATCH ?? "20");
 
 const log = (message: string) => console.error(`[verify-captures] ${message}`);
 
-// ── Types (the two ops' payloads — only the fields consumed) ────────────────
-
 export type VerifyWorkItem = {
   artists?: string[];
   certified?: boolean;
-  /** The row's stored length — the TITLE+ARTIST rung's duration guard reads it. */
+
   durationMs?: number;
-  /** Null on the 221 rows this rung exists for: they resolve a reference by title+artist, not ISRC. */
+
   isrc?: null | string;
   logId?: null | string;
   sourceAudioKey?: string;
@@ -112,12 +48,10 @@ export type VerifyWorkItem = {
 export type Verdict = "match" | "mismatch" | "no-preview";
 
 export type VerifyQueue = {
-  /** Authoritative worklist size before this tick; absent when the caller deliberately skipped it. */
   queued?: number;
   tracks: VerifyWorkItem[];
 };
 
-/** One tick's honest tally — the JSON summary line. */
 export type VerifySummary = {
   checked: number;
   error: null | string;
@@ -128,51 +62,33 @@ export type VerifySummary = {
   ok: boolean;
   produced: number;
   quarantinedCatalogue: number;
-  /** Real outstanding rows after this tick, derived from the indexed pre-count when present. */
+
   queue_depth?: number;
-  /** ISRC-null rows CONFIRMED by a title+artist reference (a subset of `matched`). */
+
   searchMatched: number;
-  /** ISRC-null rows whose title+artist reference MISMATCHED — abstained (unverified), NEVER condemned. */
+
   searchMismatch: number;
-  /** Rows this tick could not settle (a failed R2 read / fpcalc decode) — retried next tick. */
+
   skipped: number;
   unverified: number;
   verified: number;
 } & Partial<DueWorkRepairPendingGate>;
 
-/**
- * Everything the drain loop touches that is not pure — injected so the verdict derivation and the
- * routing calls are provable with stubs (verify-captures.test.ts): no R2, no fpcalc, no network.
- */
 export type VerifyDeps = {
-  /** Fingerprint one downloaded capture file; null = fpcalc absent / bad decode. */
   fingerprintFile: (path: string) => number[] | null;
-  /** Fetch + fingerprint the track's ISRC-resolved official preview; null = no preview source. */
+
   fetchPreviewFp: (trackId: string) => Promise<number[] | null>;
   fetchQueue: (limit: number) => Promise<VerifyQueue>;
-  /** Pull the captured bytes from the private bucket into a scratch file; null = R2 read failed. */
+
   fetchCapture: (key: string, dir: string) => Promise<null | string>;
   log: (message: string) => void;
   mkWorkdir: () => string;
   report: (trackId: string, verdict: Verdict) => Promise<string>;
-  /**
-   * Resolve a LOWER-TRUST reference fingerprint for an ISRC-null row by TITLE + ARTIST search
-   * (the second rung). Returns a fingerprint on a confident single hit, else an abstain reason.
-   */
+
   resolveSearchFp: (item: VerifyWorkItem) => Promise<SearchReferenceResult>;
   rmWorkdir: (dir: string) => void;
 };
 
-/**
- * Derive one row's verdict from the two fingerprints. PURE — the whole doctrine of "who is
- * inconclusive" lives here, unit-tested:
- *   - no preview fp        → `no-preview` (the track has no reference; the server stamps
- *                            `unverified`, the honest abstain).
- *   - no capture fp        → null (fpcalc failed on OUR OWN bytes — a decode problem, not a
- *                            verdict; the row is SKIPPED and retried, never mis-stamped).
- *   - inconclusive window  → `no-preview` (a degenerate/too-short fingerprint cannot accuse).
- *   - match / mismatch     → the sliding-window BER against the shared threshold.
- */
 export function deriveVerdict(
   previewFp: number[] | null,
   captureFp: number[] | null,
@@ -194,7 +110,6 @@ export function deriveVerdict(
   return result.match ? "match" : "mismatch";
 }
 
-/** One tick: read the worklist, verify each row, report each verdict. Injected effects. */
 export async function runVerifyTick(batch: number, deps: VerifyDeps): Promise<VerifySummary> {
   const summary: VerifySummary = {
     checked: 0,
@@ -219,8 +134,6 @@ export async function runVerifyTick(batch: number, deps: VerifyDeps): Promise<Ve
     queue = await deps.fetchQueue(batch);
   } catch (error) {
     if (isDueWorkRepairPending(error)) {
-      // The Worker deferred the read while due-work repair converges: nothing was read, so the tick
-      // pauses cleanly and the next tick reads again.
       deps.log(error.message);
 
       return { ...summary, ...dueWorkRepairPendingGate(summary) };
@@ -244,16 +157,6 @@ export async function runVerifyTick(batch: number, deps: VerifyDeps): Promise<Ve
     const dir = deps.mkWorkdir();
 
     try {
-      // The REFERENCE first: no reference means no R2 GET is needed at all — the verdict is
-      // already `no-preview`, and the captured bytes would be pulled for nothing.
-      //
-      // TWO RUNGS, TWO TRUST LEVELS (docs/the-ear.md § Wrong audio):
-      //   - an ISRC row resolves the ISRC-exact preview (the trusted rung) — a mismatch against it
-      //     is trustworthy and the server may rewind on it;
-      //   - an ISRC-NULL row resolves a TITLE+ARTIST reference (the second rung) — LOWER trust, so
-      //     it may only ever CONFIRM the capture. A mismatch against it is mapped to the honest
-      //     abstain (`no-preview` → `unverified`), NEVER a `mismatch` verdict, so a wrong reference
-      //     can never quarantine good audio. Precision over recall.
       const trusted = Boolean(item.isrc);
       let referenceFp: number[] | null;
 
@@ -277,8 +180,6 @@ export async function runVerifyTick(batch: number, deps: VerifyDeps): Promise<Ve
         const capturePath = await deps.fetchCapture(sourceAudioKey, dir);
 
         if (capturePath === null) {
-          // The R2 read failed (a dead object, a transient error). Not a verdict — skip, and the
-          // row stays queued for the next tick.
           deps.log(`${trackId}: capture read failed — skipped`);
           summary.skipped += 1;
           continue;
@@ -287,15 +188,12 @@ export async function runVerifyTick(batch: number, deps: VerifyDeps): Promise<Ve
         const raw = deriveVerdict(referenceFp, deps.fingerprintFile(capturePath));
 
         if (raw === null) {
-          // fpcalc failed on the captured bytes — a decode problem, never a stamp.
           deps.log(`${trackId}: capture fingerprint failed — skipped`);
           summary.skipped += 1;
           continue;
         }
 
         if (raw === "mismatch" && !trusted) {
-          // A LOW-TRUST reference never condemns good audio: record the fuzzy mismatch distinctly
-          // and abstain. Left `unverified`, terminally stamped, never re-tried, never quarantined.
           deps.log(
             `${trackId}: title+artist reference MISMATCH — abstaining (unverified), not condemning`,
           );
@@ -327,18 +225,13 @@ export async function runVerifyTick(batch: number, deps: VerifyDeps): Promise<Ve
         );
         summary.flaggedFindings += 1;
       } else if (action === "operator-verified") {
-        // The row's capture came from the operator's PINNED source (docs/the-ear.md § Wrong audio)
-        // and the server stepped aside — nothing stamped, nothing quarantined, nothing flagged. The
-        // box never gets to second-guess what the operator chose; its verdict was for the record.
         deps.log(
           `${trackId}: capture is operator-verified (pinned source) — the server stepped aside; verdict ${verdict} not applied`,
         );
       } else {
-        // `not-captured` (a race — the row changed under us). Counted as verified work either way.
         deps.log(`${trackId}: nothing to verify anymore (${action})`);
       }
     } catch (error) {
-      // One row's failure never aborts the tick (the capture-sweep discipline).
       deps.log(`${trackId}: ${error instanceof Error ? error.message : String(error)}`);
       summary.skipped += 1;
     } finally {
@@ -351,20 +244,14 @@ export async function runVerifyTick(batch: number, deps: VerifyDeps): Promise<Ve
   summary.failed = summary.skipped;
 
   if (queue.queued !== undefined) {
-    // `queued` is the authoritative PRE-pass count. Every successfully reported row leaves the
-    // worklist, while skipped rows remain, so subtraction yields the real post-pass backlog.
     summary.queue_depth = Math.max(0, queue.queued - summary.verified);
   }
 
   return summary;
 }
 
-// ── MIRROR of the S3 GET signer in embed-batch.ts (box scripts can't import the workspace;
-// keep in step with apps/web/src/lib/server/aws-sigv4.ts) ─────────────────────────────────
-
 const encoder = new TextEncoder();
 
-/** Copy a view's exact byte window into an ArrayBuffer-backed WebCrypto input. */
 function webCryptoBytes(bytes: Uint8Array): Uint8Array<ArrayBuffer> {
   return new Uint8Array(bytes);
 }
@@ -450,14 +337,9 @@ function encodeKey(key: string): string {
   return key.split("/").map(encodeURIComponent).join("/");
 }
 
-// ── The real (box-side) effects ───────────────────────────────────────────────
-
 const R2_ENDPOINT = `https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com`;
 
 async function fetchVerifyQueue(limit: number): Promise<VerifyQueue> {
-  // `count=true` is deliberately opt-in. This worklist is index-backed by
-  // `tracks_capture_verification_verified_at_idx`; other hot-path queues without a covering
-  // predicate must never copy this count call.
   const url = `${API_BASE_URL}/api/v1/admin/catalogue/captures/unverified?limit=${limit}&count=true`;
   const res = await fetch(url, {
     headers: { Authorization: `Bearer ${API_TOKEN}` },
@@ -481,7 +363,6 @@ async function fetchVerifyQueue(limit: number): Promise<VerifyQueue> {
   };
 }
 
-/** GET the captured full song from the private bucket into a scratch file (key used AS STORED). */
 async function fetchCaptureFile(key: string, dir: string): Promise<null | string> {
   const url = `${R2_ENDPOINT}/${R2_BUCKET}/${encodeKey(key)}`;
 
@@ -527,7 +408,6 @@ async function reportVerdict(trackId: string, verdict: Verdict): Promise<string>
   return body.action ?? "unknown";
 }
 
-/** Probe for the fpcalc binary — the honest-degrade gate (see the header). */
 export function fpcalcAvailable(bin: string = FPCALC_BIN): boolean {
   try {
     const result = spawnSync(bin, ["-version"], { encoding: "utf8", timeout: 10_000 });
@@ -538,9 +418,6 @@ export function fpcalcAvailable(bin: string = FPCALC_BIN): boolean {
   }
 }
 
-// ── Main ──────────────────────────────────────────────────────────────────────
-
-/** The measured no-work summary when the image lacks fpcalc. It deliberately does not read queue. */
 export function fpcalcMissingSummary(): VerifySummary & { reason: "fpcalc_missing" } {
   return {
     checked: 0,
@@ -591,9 +468,6 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  // DEGRADE HONESTLY: no fpcalc → no stamps, no crash. The rows stay queued for the tick after
-  // the rebake lands the binary. `ok: true` — an absent prerequisite is a known state, not a
-  // failure the /status prober should page on.
   if (!fpcalcAvailable()) {
     log("fpcalc is not on PATH — the image needs the chromaprint rebake; nothing verified");
     console.log(JSON.stringify(fpcalcMissingSummary()));

@@ -8,6 +8,8 @@ Every step is labelled `[operator]` (a human action behind an Apple login, a pay
 
 The app uses `apps/mobile/app.config.js`. Keep it in CommonJS because the supported Expo and TypeScript toolchain requires the synchronous `require()` path for the current config imports.
 
+Keep `expo-video`'s `supportsBackgroundPlayback` enabled alongside `expo-audio` background playback: disabling it removes the iOS audio background mode that Radio needs, while the feed's pause behavior is controlled in JavaScript. Radio requests no microphone or recording permission. The `expo-sqlite` libSQL switch affects every SQLite store in the native app; changing it requires `pod install` after prebuild because the Podfile checksum alone does not detect the engine swap. These config changes require a native rebuild rather than a JavaScript reload.
+
 - **Bundle identifier — SET.** `com.fluncle.app` for both iOS and Android (`apps/mobile/app.config.js`). Not an open decision; do not change it once a build has shipped under it.
 - **Marketing version:** `1.1.0`; EAS owns and increments build numbers.
 - **Production submit profile:** `ascAppId` `6790080540`.

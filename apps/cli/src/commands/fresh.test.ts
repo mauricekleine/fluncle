@@ -2,10 +2,6 @@ import { beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 
 import * as realApi from "../api";
 
-// The `fresh` command is a thin HTTP client: it GETs the flat `/tracks/fresh` payload
-// (already carrying both `tracks` and `albums`) and CUTS it by `--view`. So the mock
-// serves one fixed payload and the assertions ride on how each view shapes the output —
-// no grouping is re-done here (the server owns it).
 let apiResponse: unknown = { albums: [], tracks: [], windowDays: 30 };
 
 await mock.module("../api", () => ({
@@ -72,7 +68,7 @@ describe("freshCommand --view (human table)", () => {
     expect(text).toContain("050.7.0A");
     expect(text).toContain("Lit One");
     expect(text).toContain("Quiet One");
-    // A single view names itself via the flag — no section heading, and no records leak in.
+
     expect(text).not.toContain("Albums & EPs");
     expect(text).not.toContain("Simpler Times");
   });
@@ -84,7 +80,7 @@ describe("freshCommand --view (human table)", () => {
     const text = output();
     expect(text).toContain("Simpler Times");
     expect(text).toContain("Break, Kyo");
-    // No coordinate on a record, and the track stream is dropped.
+
     expect(text).not.toContain("050.7.0A");
     expect(text).not.toContain("Lit One");
   });

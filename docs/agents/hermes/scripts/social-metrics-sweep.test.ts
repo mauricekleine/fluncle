@@ -1,13 +1,3 @@
-// Unit tests for social-metrics-sweep.ts — the social-metrics snapshot cron's orchestrator.
-//
-// The box only fires a bare trigger; the Worker selects, reads Postiz, and appends. So the contract
-// worth pinning here is the tick's outcome mapping (the op response → the /status JSON summary) and
-// its fault handling — the summary line the healthcheck prober reads must be honest on success AND
-// failure.
-//
-// Runs outside any package's test runner (bun:test), like funnel-snapshot-sweep.test.ts:
-//   bun test docs/agents/hermes/scripts/social-metrics-sweep.test.ts
-
 import { describe, expect, test } from "bun:test";
 import {
   type RecordSocialMetricsResponse,
@@ -64,8 +54,7 @@ describe("runSocialMetricsTick", () => {
     expect(summary.youtubeInserted).toBe(6);
     expect(summary.youtubeMatched).toBe(8);
     expect(summary.error).toBeNull();
-    // `eligible - polled` is a recurring rotation pool, not a drain backlog: same-day re-runs can
-    // revisit it, and the independent TikTok/YouTube arms have no common outstanding-work total.
+
     expect("queueDepth" in summary).toBe(false);
     expect("queue_depth" in summary).toBe(false);
     expect("expectedIntervalMs" in summary).toBe(false);

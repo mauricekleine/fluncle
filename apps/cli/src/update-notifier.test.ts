@@ -72,9 +72,6 @@ describe("shouldNotify", () => {
   }
 
   beforeEach(() => {
-    // The CI runner sets CI=true in the ambient env; clear it (and the opt-out var)
-    // before each case so a test controls its own environment and the TTY-true
-    // assertions hold. Cases that test the CI/opt-out paths set the var themselves.
     delete process.env.CI;
     delete process.env.FLUNCLE_NO_UPDATE_NOTIFIER;
   });

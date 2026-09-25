@@ -5,10 +5,6 @@ import { join } from "node:path";
 import * as realApi from "../api";
 import { CliError } from "../output";
 
-// The registry as the server hands it back: one prompt with a two-version history whose
-// live body has drifted from the repo's baked default, and one that has never been
-// touched (source "default", version 0, no history at all). Between them they cover every
-// branch the composed commands take.
 const NOTE_DEFAULT = "You are Fluncle.\nWrite the note.\nNo em dashes.";
 const NOTE_V1 = "You are Fluncle.\nWrite the note.\nOne sentence.";
 const NOTE_V2 = "You are Fluncle.\nWrite the note.\nOne sentence.\nLead with the feel.";
@@ -57,8 +53,6 @@ const registry = [
   },
 ];
 
-// Every write the CLI makes, captured: the append-only API takes exactly one shape, so a
-// rollback, a reset, and an edit are all a POST here and the body is the only tell.
 let posts: Array<{ body: { body?: string; note?: string }; path: string }> = [];
 let gets: string[] = [];
 
@@ -120,9 +114,6 @@ describe("the line diff (a dependency-free LCS)", () => {
   });
 
   test("keeps the common run rather than rewriting the whole body (that is the LCS)", () => {
-    // A naive line-by-line compare would call every line changed. The LCS keeps the two
-    // shared lines as context and reports the insertion alone, which is what makes a
-    // one-line prompt tweak read as a one-line diff.
     const lines = diffLines(["a", "b"], ["a", "new", "b"]);
 
     expect(lines).toEqual([
@@ -219,7 +210,7 @@ describe("diff — the live body against a version, or against the repo", () => 
     expect(result.live.version).toBe(2);
     expect(result.added).toBe(2);
     expect(result.removed).toBe(1);
-    // No write on a read.
+
     expect(posts).toEqual([]);
   });
 
@@ -313,8 +304,6 @@ describe("rollback and reset — the safety net, composed over the same one writ
   test("rollback re-appends the old version's body with an auto-note, minting a NEW version", async () => {
     const result = await promptRollbackCommand("note_author", 1);
 
-    // The history is append-only: v1's body comes back as v3 rather than v2 being erased,
-    // which is what makes the rollback itself rollback-able.
     expect(posts).toEqual([
       {
         body: { body: NOTE_V1, note: "rolled back to v1" },

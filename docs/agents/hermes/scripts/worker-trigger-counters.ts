@@ -1,11 +1,4 @@
 #!/usr/bin/env bun
-// worker-trigger-counters.ts — turn the two curl-driven Worker tick responses into
-// run-ledger summaries without changing the HTTP request either sweep makes.
-//
-// social-capture-sweep.sh and publish-advance-sweep.sh still own their curl, timeout,
-// auth header, and endpoint. They pipe the successful JSON response through this tiny
-// formatter so the last stdout line keeps every domain field and adds the canonical
-// checked/produced/errors/failed counters.
 
 type SocialCaptureResponse = {
   captured: Array<{ platform: string; trackId: string; url: string }>;
@@ -28,7 +21,6 @@ function countDistinctTrackIds(items: ReadonlyArray<{ trackId: string }>): numbe
   return new Set(items.map((item) => item.trackId)).size;
 }
 
-/** `polled` is the exact number of posts inspected; each captured URL is one successful action. */
 export function summarizeSocialCapture(response: SocialCaptureResponse) {
   return {
     ...response,
@@ -39,16 +31,6 @@ export function summarizeSocialCapture(response: SocialCaptureResponse) {
   };
 }
 
-/**
- * The endpoint's denominator is FINDINGS (`candidates`), while its pushed/failed arrays
- * are platform legs. Keep the canonical counters in finding units by de-duplicating
- * track ids. Preserve the original failure array as `failedPushes` before numeric
- * `failed` takes the canonical key.
- *
- * A paused tick deliberately does not inspect the queue. NULL says that explicitly;
- * zero would claim a measured empty queue and would be suppressed by the ledger's
- * paused-gate normalization anyway.
- */
 export function summarizePublishAdvance(response: PublishAdvanceResponse) {
   const paused = response.paused === true;
   const { failed: failedPushes, ...domain } = response;

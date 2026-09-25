@@ -117,17 +117,12 @@ type AdminArtifactCheckpointOptions = JsonOptions & {
   throughSeq: string;
 };
 
-// `admin tracks requeue-analysis` — the archive-wide BPM/key provenance repair. Dry-run
-// unless `--apply`; `--limit` caps the archive walk (absent ⇒ the whole archive).
 type AdminRequeueAnalysisOptions = {
   apply?: boolean;
   json: boolean;
   limit?: string;
 };
 
-// `admin tracks list` filters. `--no-key` is Commander's negation of a `key`
-// boolean (default true), so `key === false` means the flag was passed; `--has-key
-// <bool>` is the explicit tri-state form. Absent both ⇒ no key filter (list all).
 type AdminTracksListOptions = AdminListOptions & {
   all?: boolean;
   hasKey?: string;
@@ -135,26 +130,20 @@ type AdminTracksListOptions = AdminListOptions & {
   order?: string;
 };
 
-// A verb whose worklist is a `--queue` view flag (`tracks enrich|observe|context|
-// note --queue`): the worklist runners read `json`/`limit` off it (AdminListOptions).
 type AdminQueueViewOptions = AdminListOptions & {
   queue?: boolean;
 };
 
-// One row of any `--queue` worklist view. Written as a `typeof import(...)` lookup so it
-// stays in type space — cli.ts imports its command modules lazily to keep startup fast.
 type QueueViewTrack = Awaited<
   ReturnType<typeof import("./commands/admin-tracks").enrichQueueCommand>
 >[number];
 
-// The Fluncle Studio clip-library list filter (`admin clips list`).
 type ClipListOptions = {
   json: boolean;
   recording?: string;
   status?: string;
 };
 
-// The Fluncle Studio recording admin options (`admin recordings create|update`).
 type RecordingCreateOptions = {
   json: boolean;
   plan?: boolean;
@@ -181,7 +170,6 @@ type JsonOptions = {
   json: boolean;
 };
 
-/** Human lines for one operator label-scope update. JSON output bypasses this entirely. */
 export function labelUpdateLines(
   label: { name: string; seedState: string; slug: string },
   options: { rewalk: boolean; seedState?: string },
@@ -205,7 +193,6 @@ export function labelUpdateLines(
   return lines;
 }
 
-/** The status word for each mint outcome, in the operator register's terse ALL-CAPS. */
 const LABEL_MINT_WORDS: Record<string, string> = {
   adopted: "ADOPTED",
   known: "ALREADY KNOWN",
@@ -213,12 +200,6 @@ const LABEL_MINT_WORDS: Record<string, string> = {
   taken_over: "TAKEN OVER",
 };
 
-/**
- * The one human line for a label mint: what happened, which label, which MusicBrainz identity, and
- * the ruling it now carries. A TAKE-OVER names the identity it replaced and what could not travel
- * with the name, because that is the part the operator cannot see on the row afterwards. JSON
- * output bypasses this entirely.
- */
 export function labelMintLine(
   label: { mbLabelId?: null | string; name: string; seedState: string; slug: string },
   outcome: string,
@@ -251,15 +232,11 @@ export function labelMintLine(
   return `${line}\n  ${dropped}.`;
 }
 
-// The catalogue-index browse commands (`artists`, `albums`, `labels`): a JSON
-// toggle plus the 1-based `--page` cursor over the A-to-Z list.
 type BrowseOptions = {
   json: boolean;
   page?: string;
 };
 
-// `search` over the archive: a JSON toggle plus an optional result cap (1-50,
-// the `search_archive` op's ceiling).
 type SearchOptions = {
   json: boolean;
   limit?: string;
@@ -430,7 +407,6 @@ type BackfillSyncOptions = {
   limit?: string;
 };
 
-/** `admin backfills recording-mbids` — the fill pass plus the ISRC-refresh leg's own cap. */
 type RecordingMbidsOptions = BackfillSyncOptions & {
   isrcRefreshLimit?: string;
 };
@@ -477,7 +453,6 @@ type LabelArtistsOptions = {
 export const ARTIST_RULE_BOUNDARY =
   "Rules change what the next crawl takes. Everything already here stays.";
 
-/** The visibility verdict moves no acquisition scope, so it states the other boundary. */
 export const UNLISTED_RULE_BOUNDARY =
   "Unlisted takes the artist page down. The crawl and everything already here stay.";
 
@@ -485,7 +460,6 @@ function artistRuleWriteLine(prefix: string, boundary = ARTIST_RULE_BOUNDARY): s
   return `${prefix} — ${boundary.charAt(0).toLowerCase()}${boundary.slice(1)}`;
 }
 
-/** A compact fixed-width table shared by the global and per-label artist-rule reads. */
 export function artistRuleLines(rules: ArtistRule[]): string[] {
   if (rules.length === 0) {
     return ["No artist rules."];
@@ -511,14 +485,11 @@ export function artistRuleLines(rules: ArtistRule[]): string[] {
   return [line(headings), line(widths.map((width) => "-".repeat(width))), ...rows.map(line)];
 }
 
-// `admin artists|labels|albums describe` — the voiced-bio author (the entity-bio engine). Mirrors
-// `admin tracks note`: `--bio`/`--bio-file` carry the gated text, `--queue` shows the
-// worklist, `--dry-run` runs the voice gate without storing.
 type BioDescribeOptions = {
   bio?: string;
   bioFile?: string;
   dryRun?: boolean;
-  /** The sweep's THIRD and last authoring pass: store the draft even if the voice scan refuses it. */
+
   finalAttempt?: boolean;
   json: boolean;
   limit?: string;
@@ -552,14 +523,13 @@ type MixtapeResyncOptions = {
 type NewsletterDraftOptions = {
   contentFile?: string;
   json: boolean;
-  /** PROVENANCE — parsed from `--prompt-version`; only the DRAFT (create) carries one. */
+
   promptVersion?: number;
   subject?: string;
   windowSince?: string;
   windowUntil?: string;
 };
 
-/** The raw commander shape for the draft: `--prompt-version` arrives as a string. */
 type NewsletterDraftCliOptions = Omit<NewsletterDraftOptions, "promptVersion"> & {
   promptVersion?: string;
 };
@@ -598,8 +568,6 @@ async function main(args = process.argv.slice(2)): Promise<void> {
     return;
   }
 
-  // The live-set callout, above the command's output while Fluncle is on the decks
-  // (non-admin human commands only). Best-effort — awaited but it never throws.
   await maybePrintLiveCallout(args);
 
   try {
@@ -622,9 +590,6 @@ async function main(args = process.argv.slice(2)): Promise<void> {
     process.exit(1);
   }
 
-  // Fire-and-forget update hint, printed to stderr AFTER the command's output.
-  // It can never throw, change the exit code, or touch stdout (see
-  // update-notifier.ts). Reached only on success — failed commands skip it.
   const { notifyIfUpdateAvailable } = await import("./update-notifier");
   await notifyIfUpdateAvailable(args);
 }
@@ -778,11 +743,6 @@ function addShareCommands(program: Command): void {
     });
 }
 
-// The cross-surface ACCOUNT tier (`fluncle login`). A signed-in listener links
-// this device to their OWN Fluncle account (the device-authorization flow) to sync
-// their Galaxy progress + saved findings. The minted user token is stored
-// HARD-SEPARATE from the admin FLUNCLE_API_TOKEN (see user-token.ts); these
-// commands never read or write the admin grant.
 function addAccountCommands(program: Command): void {
   program
     .command("login")
@@ -843,8 +803,6 @@ function addMetaCommands(program: Command): void {
 }
 
 function addTrackCommands(program: Command): void {
-  // Convention B: public CLI groups are PLURAL. The canonical public lookup group is
-  // `tracks`.
   const tracks = configureCommand(
     program.command("tracks", { hidden: true }).description("Public track lookups"),
   );
@@ -860,10 +818,6 @@ function addTrackCommands(program: Command): void {
       await runTrackGet(idOrLogId, options, trackGetCommand);
     });
 
-  // `list_similar_tracks` → `tracks similar` (Convention B). The finding's sonic
-  // neighbours, off the MuQ embedding — the same "more like this" cluster the /log page
-  // shows, with each neighbour's editorial note. The auto-note sweep reads this to hear
-  // the region of the archive a finding lands in before it writes about it.
   tracks
     .command("similar")
     .description("The findings that sound nearest to one (the sonic neighbourhood)")
@@ -893,10 +847,6 @@ function addAdminCommands(program: Command): void {
       admin.outputHelp();
     });
 
-  // `get_attention` → `admin queue` (Convention B: a bare admin verb for the operator's
-  // own read). The `/admin` attention queue + the day's dispatch, off the Worker — the
-  // same digest the Raycast menu-bar command reads. Distinct from `admin tracks queue`
-  // (the video render queue).
   admin
     .command("queue")
     .description("The attention queue: what's waiting, and the day's dispatch")
@@ -906,8 +856,6 @@ function addAdminCommands(program: Command): void {
       await runAdminAttention(options, attentionQueueCommand);
     });
 
-  // `read_run_ledger` → `admin telemetry read` (Convention B: group noun-verb).
-  // Raw run rows plus per-unit rollups, operator-only.
   const adminTelemetry = configureCommand(
     admin.command("telemetry").description("Run-ledger telemetry"),
   );
@@ -1191,8 +1139,6 @@ JSON field reference:
       console.log(vectors.vectorServingStatusLines(result.status).join("\n"));
     });
 
-  // The versioned artifact-log transport. These are deliberately literal operator controls: the
-  // filesystemful consumer applies the JSON bytes, while the Worker owns ordering and checkpoints.
   const adminArtifacts = configureCommand(
     admin.command("artifacts").description("Versioned derived-artifact change log"),
   );
@@ -1435,19 +1381,12 @@ JSON field reference:
       );
     });
 
-  // Convention B: the admin CLI is `group noun-verb` with PLURAL groups. The canonical
-  // track group is `tracks`. A verb's worklist is a `--queue` view flag on the verb
-  // itself (`tracks enrich --queue`, `tracks observe --queue`, `tracks context
-  // --queue`), not a dash-compound command (§6.4) — the box `fluncle-enrich` cron reads
-  // `tracks enrich --queue` to drain the queue (the Worker no longer re-fires
-  // enrichment itself).
   const adminTracks = configureCommand(admin.command("tracks").description("Track admin commands"));
 
   adminTracks.action(() => {
     adminTracks.outputHelp();
   });
 
-  // `publish_track` → `admin tracks publish` (canonical).
   adminTracks
     .command("publish")
     .description("Publish a Spotify track")
@@ -1461,10 +1400,6 @@ JSON field reference:
       await runAdd(spotifyUrl, options, addCommand);
     });
 
-  // The video render queue. It is HARD-GATED on `hasContext=true`: it only ever
-  // surfaces findings that already carry a stored context note, so the render's
-  // context read is a guaranteed cached no-op (never a Firecrawl trigger).
-  // `--has-observation` narrows it to the already-voiced subset.
   adminTracks
     .command("queue")
     .description("Findings awaiting a video, oldest first (the next to film is first)")
@@ -1476,11 +1411,6 @@ JSON field reference:
       await runAdminQueue(options, queueCommand);
     });
 
-  // A filterable listing of findings. Primary use: `--no-key` surfaces the
-  // missing-musical-key backlog (findings the DSP left key-null below its
-  // confidence floor) so it's countable + targetable — the input query for the
-  // Rekordbox key/BPM sync (fluncle-rekordbox-sync skill). `--has-key <bool>` is the
-  // explicit tri-state (list only those WITH, or only those WITHOUT, a key).
   adminTracks
     .command("list")
     .description("List findings, filterable by musical-key presence (--no-key / --has-key)")
@@ -1499,11 +1429,6 @@ JSON field reference:
       await runAdminTracksList(options, listCommand);
     });
 
-  // The enrichment verb. Enrichment itself runs as the on-box `fluncle-enrich`
-  // `--no-agent` cron (it analyzes on-box and writes back via `tracks update`), so
-  // the CLI surface is the worklist view: `--queue` shows findings needing
-  // (re-)enrichment — pending ∪ failed ∪ stuck processing. The box cron reads this
-  // to drain the queue.
   adminTracks
     .command("enrich")
     .description("Enrichment worklist (pending, failed, or stuck processing). Use --queue")
@@ -1511,10 +1436,6 @@ JSON field reference:
     .option("--limit <limit>", "Number of findings to show with --queue", "10")
     .option("--json", "Print JSON", false)
     .action(async (options: AdminQueueViewOptions) => {
-      // `--queue` is the worklist view — the on-box `fluncle-enrich` cron's
-      // worklist. Enrichment has no single-track CLI form (it runs on the box), so
-      // without `--queue` there's nothing to act on; require it, mirroring how
-      // `observe`/`context` gate their worklist view on `--queue`.
       if (!options.queue) {
         console.error(
           "`tracks enrich` is a worklist view. Enrichment runs on the on-box `fluncle-enrich` cron.\nUse `tracks enrich --queue` to see findings needing (re-)enrichment.",
@@ -1527,11 +1448,6 @@ JSON field reference:
       await runAdminEnrichQueue(options, enrichQueueCommand);
     });
 
-  // The audio-embedding verb. The MuQ embedding runs as the on-box `fluncle-embed`
-  // `--no-agent` cron (it embeds on-box with torch and writes the vector back via
-  // `tracks update <id> --embedding-file`), so the CLI surface is the worklist view:
-  // `--queue` shows findings with no embedding yet. The box cron reads this to drain
-  // the queue. See docs/track-lifecycle.md.
   adminTracks
     .command("embed")
     .description("Audio-embedding worklist (findings with no MuQ vector yet). Use --queue")
@@ -1539,9 +1455,6 @@ JSON field reference:
     .option("--limit <limit>", "Number of findings to show with --queue", "10")
     .option("--json", "Print JSON", false)
     .action(async (options: AdminQueueViewOptions) => {
-      // `--queue` is the worklist view — the on-box `fluncle-embed` cron's worklist.
-      // Embedding has no single-track CLI form (it runs on the box), so without
-      // `--queue` there's nothing to act on; require it, mirroring `enrich`.
       if (!options.queue) {
         console.error(
           "`tracks embed` is a worklist view. Embedding runs on the on-box `fluncle-embed` cron.\nUse `tracks embed --queue` to see findings needing an audio embedding.",
@@ -1554,13 +1467,6 @@ JSON field reference:
       await runAdminEmbedQueue(options, embedQueueCommand);
     });
 
-  // The full-song capture verb. Capture runs as the on-box `fluncle-capture`
-  // `--no-agent` host-timer cron (it runs yt-dlp through a residential proxy, stores
-  // the song in the private `fluncle-source-audio` R2 bucket, and writes back via
-  // `tracks update`), so the CLI surface is the worklist view: `--queue` shows findings
-  // still needing a capture, NEWEST FIRST (a fresh add jumps ahead of the backfill).
-  // Named `capture-audio` (not `capture`) to avoid colliding with `social --capture` /
-  // `cron.social-capture`. See docs/agents/hermes/scripts/capture-sweep.*.
   adminTracks
     .command("capture-audio")
     .description("Full-song capture worklist (findings with no source audio yet). Use --queue")
@@ -1568,9 +1474,6 @@ JSON field reference:
     .option("--limit <limit>", "Number of findings to show with --queue", "10")
     .option("--json", "Print JSON", false)
     .action(async (options: AdminQueueViewOptions) => {
-      // `--queue` is the worklist view — the on-box `fluncle-capture` cron's worklist.
-      // Capture has no single-track CLI form (it runs on the box), so without `--queue`
-      // there's nothing to act on; require it, mirroring `enrich`/`embed`.
       if (!options.queue) {
         console.error(
           "`tracks capture-audio` is a worklist view. Capture runs on the on-box `fluncle-capture` cron.\nUse `tracks capture-audio --queue` to see findings needing a full-song capture.",
@@ -1583,24 +1486,13 @@ JSON field reference:
       await runAdminCaptureQueue(options, captureQueueCommand);
     });
 
-  // `list_track_work` → `admin tracks work` (Convention B). THE CATALOGUE-AWARE worklist,
-  // and the one the three sweeps actually drain. The `enrich`/`embed`/`capture-audio` views
-  // above read `list_tracks_admin`, which joins through the certification and is therefore
-  // blind to a CATALOGUE track — right for a feed, fatal for a pipeline, since BPM/key/the
-  // MuQ vector are measurements of a RECORDING and apply to any track with captured audio.
-  //
-  // Rows come back in the order the METERED capture budget should be spent: certified first,
-  // then the Ear's `capture_priority` ladder, then newest-first. A ruled-out label is vetoed
-  // out of the `capture` worklist. See docs/gpu-batch-embed.md + docs/the-ear.md.
   adminTracks
     .command("work")
     .description("The audio pipeline's worklist for one stage, in capture-priority order")
     .requiredOption("--kind <kind>", "Pipeline stage: analyze | capture | embed")
     .option("--scope <scope>", "Which half of the archive: all | catalogue | findings", "all")
     .option("--limit <limit>", "Rows to show", "10")
-    // The page is capped at 200, so counting its rows answers "how many did I get" and never
-    // "how much is left". `--count` asks the server for the whole backlog — the number that
-    // sizes a GPU-batch rental (docs/gpu-batch-embed.md).
+
     .option("--count", "Also report the size of the whole backlog, not just this page", false)
     .option("--json", "Print JSON", false)
     .action(async (options: TrackWorkOptions) => {
@@ -1608,10 +1500,6 @@ JSON field reference:
       await runAdminTrackWork(options, trackWorkCommand);
     });
 
-  // THE BATCHED PIPELINE PHASES. Each of these is ONE admitted database lease for a whole batch
-  // instead of one per row (docs/database-performance.md). The body is a file because a batch
-  // carries per-item snapshot and commit tokens; the response carries one verdict per item, so a
-  // poisoned row never costs its neighbours theirs.
   adminTracks
     .command("prepare-captures")
     .description("Freeze a batch of capture snapshots in one admitted phase")
@@ -1651,13 +1539,6 @@ JSON field reference:
       );
     });
 
-  // `requeue_analysis` → `admin tracks requeue-analysis` (Convention B; the `requeue` verb is
-  // shared with `requeue_video`). The archive-wide analysis-provenance repair (RFC
-  // bpm-key-accuracy): re-queue every finding whose BPM/key are preview-grade (`analyzedFrom
-  // != full` — NULL legacy rows included) so the on-box `fluncle-enrich` sweep re-derives
-  // them. PURE CLI orchestration over the existing `list_tracks_admin` + `update_track` ops.
-  // DRY-RUN by default; `--apply` flips the statuses. Rows with no captured full song are
-  // reported separately (they re-derive from a preview). Operator-authenticated.
   adminTracks
     .command("requeue-analysis")
     .description("Re-queue findings whose BPM/key are preview-grade (dry-run; --apply to flip)")
@@ -1681,10 +1562,6 @@ JSON field reference:
 
   const adminTrack = adminTracks;
 
-  // `get_track_admin` → `admin tracks get` (Convention B). The authoritative
-  // single-finding lookup with FULL admin fields (vibe coords, the video ledger, the
-  // observation, the note) — so a lookup never has to scan a list (and can't misread a
-  // live finding as nonexistent). Accepts a Spotify id OR a Log ID. Agent-allowed read.
   adminTrack
     .command("get")
     .description("Look up one finding by id or Log ID, with full admin fields")
@@ -1696,11 +1573,6 @@ JSON field reference:
       await runTrackGetAdmin(idOrLogId, options, trackGetAdminCommand);
     });
 
-  // `get_mixable_order` → `admin tracks mixable-order` (Convention B). The dream-weaver:
-  // order a pool of findings (by Log ID) into a smooth PROPOSED mix to copy-paste into
-  // Rekordbox. A pure admin read — it proposes, never publishes (the mint stays
-  // `recordings promote`). `--seed` pins the first stop. Held-Karp exact for ≤16 stops,
-  // greedy + 2-opt to 64. A smoothness-optimized chain, NOT an energy-shaped set.
   adminTrack
     .command("mixable-order")
     .description("Order findings into a smooth proposed mix (2–64 Log IDs)")
@@ -1806,7 +1678,7 @@ JSON field reference:
       "Pin the YouTube upload the capture sweep must download for a track (operator); --clear withdraws it",
     )
     .argument("[idOrLogId]")
-    // A BOOLEAN flag (no value), so it must never join `stringOptions` — the tripwire test pins it.
+
     .option(
       "--allow-duration-mismatch",
       "Waive the duration guard for this pin: a deliberately chosen different edit of the same recording (the finding keeps its store length)",
@@ -1818,8 +1690,7 @@ JSON field reference:
       false,
     )
     .option("--json", "Print JSON", false)
-    // `--upload`, not `--youtube`: the option parser's value-taking set is GLOBAL, and `--youtube`
-    // is already a boolean flag on `admin mixtapes distribute` / `resync`.
+
     .option(
       "--upload <url|id>",
       "The YouTube upload: a bare 11-char video id or a youtube.com / youtu.be URL",
@@ -1863,8 +1734,6 @@ JSON field reference:
     .option("--url <url>", "Published post URL")
     .allowExcessArguments()
     .action(async (idOrLogId: string | undefined, options: TrackSocialOptions) => {
-      // `--capture` is the collection-level sweep (no track id) — the box capture
-      // cron's worklist. Otherwise show/update one track's per-platform state.
       if (options.capture) {
         const { trackSocialCaptureCommand } = await import("./commands/track");
         await runTrackSocialCapture(options, trackSocialCaptureCommand);
@@ -1920,8 +1789,6 @@ JSON field reference:
     .option("--json", "Print JSON", false)
     .allowExcessArguments()
     .action(async (idOrLogId: string | undefined, options: TrackObserveOptions) => {
-      // `--queue` is the observe worklist view (findings with notes but no
-      // observation yet) — the observe cron's worklist. Otherwise observe one track.
       if (options.queue) {
         const { observeQueueCommand } = await import("./commands/admin-tracks");
         await runAdminObserveQueue(options, observeQueueCommand);
@@ -1932,8 +1799,6 @@ JSON field reference:
       await runTrackObserve(idOrLogId, options, trackObserveCommand);
     });
 
-  // `context_track` → `admin tracks context` (Convention B). Fetch the field notes
-  // (the facts) before Fluncle speaks; `observe` reads them as fuel. Idempotent.
   adminTrack
     .command("context")
     .description("Gather the field notes for a finding (facts only; observe speaks from them)")
@@ -1954,9 +1819,6 @@ JSON field reference:
     .option("--json", "Print JSON", false)
     .allowExcessArguments()
     .action(async (idOrLogId: string | undefined, options: TrackContextOptions) => {
-      // `--queue` is the context worklist view (findings missing field notes) — the
-      // context cron's worklist. `--retry-empty` widens it to also re-pick finds the
-      // prior pass confirmed empty. Otherwise gather one finding's field notes.
       if (options.queue) {
         const { contextQueueCommand } = await import("./commands/admin-tracks");
         await runAdminContextQueue(options, contextQueueCommand);
@@ -1967,9 +1829,6 @@ JSON field reference:
       await runTrackContext(idOrLogId, options, trackContextCommand);
     });
 
-  // `note_track` → `admin tracks note` (Convention B). Author + store the finding's
-  // editorial note (the written-note sibling of `observe`). Fills an EMPTY note only;
-  // an operator note is never clobbered. `--queue` is the note cron's worklist.
   adminTrack
     .command("note")
     .description("Author the editorial note for a finding (fills an empty note only)")
@@ -1994,8 +1853,6 @@ JSON field reference:
     .option("--json", "Print JSON", false)
     .allowExcessArguments()
     .action(async (idOrLogId: string | undefined, options: TrackNoteOptions) => {
-      // `--queue` is the note worklist view (context'd findings with no note yet) —
-      // the note cron's worklist. Otherwise author one finding's note.
       if (options.queue) {
         const { noteQueueCommand } = await import("./commands/admin-tracks");
         await runAdminNoteQueue(options, noteQueueCommand);
@@ -2100,10 +1957,6 @@ JSON field reference:
       await runMixtapeResync(idOrLogId, options, mixtapeResyncCommand);
     });
 
-  // The render → publish auto-advance. `advance` is the tick the on-box
-  // `fluncle-publish-advance` cron drives (admin tier — the box's agent token); `pause` /
-  // `resume` are the operator's KILL SWITCH over every future auto-publish, one flip, no
-  // deploy. (`admin tracks publish` is a different thing entirely — that ADDS a finding.)
   const adminPublish = configureCommand(
     admin.command("publish").description("Render → publish auto-advance commands"),
   );
@@ -2142,9 +1995,6 @@ JSON field reference:
       await runPublishAdvancePause(false, options, publishAdvancePauseCommand);
     });
 
-  // THE CAPTURE BUDGET — the brake on the metered per-GB audio capture (docs/the-ear.md).
-  // `budget` is the spend readout (agent-allowed); `pause` / `resume` / `set` are the
-  // OPERATOR's controls over how much of his money the machine may spend. One flip, no deploy.
   const adminCapture = configureCommand(
     admin.command("capture").description("The metered audio-capture budget and its kill switch"),
   );
@@ -2195,10 +2045,6 @@ JSON field reference:
       await runSetCaptureCaps(options, setCaptureBudgetCommand);
     });
 
-  // Fluncle Studio clips. `list` is the agent-allowed read;
-  // `cut` is the box's footage cut — the `fluncle-studio-clip` cron
-  // calls `admin clips cut <clipId>` per pending clip (presign + ffmpeg + ship +
-  // finalize, all behind the agent token).
   const adminClips = configureCommand(
     admin.command("clips").description("Mixtape clip (Fluncle Studio) commands"),
   );
@@ -2262,9 +2108,6 @@ JSON field reference:
       await runClipsCut(clipId, options, clipCutCommand);
     });
 
-  // Fluncle Studio recordings (RFC recording-primitive, Design B). A recording is a
-  // captured set clipped WITHOUT minting a coordinate; `promote` turns it into a full
-  // published mixtape later (reusing the already-staged video, no re-upload).
   const adminRecordings = configureCommand(
     admin.command("recordings").description("Recording (unpublished set) commands"),
   );
@@ -2367,9 +2210,6 @@ JSON field reference:
     adminNewsletter.outputHelp();
   });
 
-  // `create_edition` → `admin newsletter draft`. The Friday cron persists the
-  // authored edition here FIRST (persist-then-offer), then offers the Discord send
-  // button. Agent-allowed (admin tier). Re-run updates the stale draft, never dupes.
   adminNewsletter
     .command("draft")
     .description("Persist a newsletter edition draft (the agent authors it, you send it)")
@@ -2391,8 +2231,6 @@ JSON field reference:
       );
     });
 
-  // `update_edition` → `admin newsletter update`. Edit a draft's payload/subject/
-  // window before send. Sent editions are frozen (409). Agent-allowed (admin tier).
   adminNewsletter
     .command("update")
     .description("Update a draft edition's payload, subject, or window")
@@ -2408,9 +2246,6 @@ JSON field reference:
       await runNewsletterUpdate(id, options, newsletterUpdateCommand);
     });
 
-  // `send_edition` → `admin newsletter send`. OPERATOR ONLY — the human send gate.
-  // The Worker creates + sends the Resend broadcast and mints the number. A valid
-  // AGENT token gets a 403, so the cron can't send.
   adminNewsletter
     .command("send")
     .description("Send an edition, OPERATOR only (Resend broadcast + mint the number)")
@@ -2422,9 +2257,6 @@ JSON field reference:
       await runNewsletterSend(id, options, newsletterSendCommand);
     });
 
-  // `list_editions_admin` → `admin newsletter list`. Every edition INCLUDING drafts
-  // (the public archive is sent-only). The cron reads this from a fresh session to
-  // find an unsent draft + the last sent edition's window cutoff.
   adminNewsletter
     .command("list")
     .description("List every edition including drafts (the cron's miss-recovery read)")
@@ -2435,9 +2267,6 @@ JSON field reference:
       await runNewsletterList(options, newsletterListCommand);
     });
 
-  // `delete_edition` → `admin newsletter delete`. OPERATOR ONLY — the hard delete that
-  // pulls an edition (draft OR sent back-issue) from the archive. Deleting a sent one
-  // reopens the self-healing window so its finds re-enter the next edition. --yes guards.
   adminNewsletter
     .command("delete")
     .description("Delete an edition (draft or sent). OPERATOR only; reopens the send window")
@@ -2458,9 +2287,6 @@ JSON field reference:
     adminLogbook.outputHelp();
   });
 
-  // `list_logbook_gaps` → `admin logbook gaps`. The nightly sweep's queue + material:
-  // sector-days with findings but no entry, oldest first, each with its findings'
-  // authoring fuel. Agent-allowed (admin tier).
   adminLogbook
     .command("gaps")
     .description("List sector-days with findings but no logbook entry (the sweep's worklist)")
@@ -2472,9 +2298,6 @@ JSON field reference:
       await runLogbookGaps(options, logbookGapsCommand);
     });
 
-  // `create_logbook_entry` → `admin logbook create`. The FILL-EMPTY-ONLY author the
-  // on-box `fluncle-logbook` sweep drives with its agent token. A sector that already
-  // has an entry is a no-op (`skipped: true`) — never a clobber. Agent-allowed (admin tier).
   adminLogbook
     .command("create")
     .description("Author a sector-day's entry (fills an empty sector only)")
@@ -2493,9 +2316,6 @@ JSON field reference:
       await runLogbookWrite(sector, options, logbookCreateCommand);
     });
 
-  // `update_logbook_entry` → `admin logbook update`. OPERATOR ONLY — the overwrite/edit
-  // path that CAN replace a cron-authored entry (and stamps it operator-authored, so
-  // the agent create thereafter treats it as sacred). A valid AGENT token gets a 403.
   adminLogbook
     .command("update")
     .description("Create or overwrite a sector-day's entry. OPERATOR only")
@@ -2510,13 +2330,6 @@ JSON field reference:
       await runLogbookWrite(sector, options, logbookUpdateCommand);
     });
 
-  // THE PROMPT REGISTRY — what Fluncle tells the models, in the database, versioned, and
-  // editable with no deploy. The API is two reads and ONE write (`list_prompts`,
-  // `get_prompt`, `update_prompt`); `history`, `diff`, `rollback`, and `reset` add no verb
-  // to it — they are client-side compositions over the same calls, which is what an
-  // append-only history buys. A rollback is an update whose body came from the history; a
-  // reset is an update whose body came from the repo. Nothing rewinds and nothing is
-  // deleted, so both are themselves undoable.
   const adminPrompts = configureCommand(
     admin.command("prompts").description("The prompt registry: what Fluncle tells the models"),
   );
@@ -2525,7 +2338,6 @@ JSON field reference:
     adminPrompts.outputHelp();
   });
 
-  // `list_prompts` → `admin prompts list`. OPERATOR tier. The whole station in one read.
   adminPrompts
     .command("list")
     .description("Every prompt: where it runs, and whether the repo default or an edit is live")
@@ -2536,8 +2348,6 @@ JSON field reference:
       await runPromptsList(options, promptsListCommand);
     });
 
-  // `get_prompt` → `admin prompts get`. The lean resolve the on-box sweeps make each tick:
-  // the body running right now, its version, and where it came from. Agent-allowed.
   adminPrompts
     .command("get")
     .description("The body running right now, with its version and source")
@@ -2549,8 +2359,6 @@ JSON field reference:
       await runPromptGet(slug, options, promptGetCommand);
     });
 
-  // Every version of a prompt, newest first — the answer to "the notes got worse last week,
-  // what changed?". Composed off `list_prompts`; no verb of its own.
   adminPrompts
     .command("history")
     .description("Every version of a prompt, newest first: when, who, and the why")
@@ -2562,7 +2370,6 @@ JSON field reference:
       await runPromptHistory(slug, options, promptDetailCommand);
     });
 
-  // The live body against the repo's baked default, or against any stored version.
   adminPrompts
     .command("diff")
     .description("Line diff: the live body against the repo default, or against a version")
@@ -2575,8 +2382,6 @@ JSON field reference:
       await runPromptDiff(slug, options, { parseAgainst, promptDiffCommand });
     });
 
-  // `update_prompt` → `admin prompts update`. OPERATOR only (an agent token 403s: editing
-  // what Fluncle says is publish-class). Appends a version; nothing is overwritten.
   adminPrompts
     .command("update")
     .description("Append an edited body as a new version. OPERATOR only")
@@ -2590,8 +2395,6 @@ JSON field reference:
       await runPromptUpdate(slug, options, promptUpdateCommand);
     });
 
-  // The safety net, half one: put version N's body back. It is re-APPENDED, never rewound,
-  // so the rollback is itself rollback-able. OPERATOR only.
   adminPrompts
     .command("rollback")
     .description("Put an old version's body back, as a new version. OPERATOR only")
@@ -2604,8 +2407,6 @@ JSON field reference:
       await runPromptRollback(slug, version, options, { parseVersion, promptRollbackCommand });
     });
 
-  // The safety net, half two: put the repo's baked default back — the body every failure
-  // path already falls back to, restored on purpose. OPERATOR only.
   adminPrompts
     .command("reset")
     .description("Put the repo's baked default back, as a new version. OPERATOR only")
@@ -2668,10 +2469,6 @@ JSON field reference:
       await approveSubmissionCommand(submissionId, options);
     });
 
-  // `triage_submission` → `admin submissions triage` (Convention B). Write the pre-chew
-  // advisory verdict onto a PENDING submission (the on-box `fluncle-triage` sweep's
-  // delivery step). AGENT tier: moves no approve/reject authority. `--verdict-file` is
-  // the sweep's path (a claude-authored line, no shell-escaping); `--verdict` is inline.
   submissions
     .command("triage")
     .description("Write the pre-chew triage verdict onto a pending submission")
@@ -2769,9 +2566,6 @@ JSON field reference:
       await authLastfmCommand(options);
     });
 
-  // `backfill_*` ops → plural `backfills` group (Convention B).
-  // `admin artists` — the artist-relationship epic's agent-tier commands: the social-identity
-  // resolution sweep (`resolve`), driven by the on-box `fluncle-artist-sweep` cron.
   const artists = configureCommand(
     admin.command("artists").description("Artist entity + resolution commands"),
   );
@@ -2780,9 +2574,6 @@ JSON field reference:
     artists.outputHelp();
   });
 
-  // The sonic galaxy map's admin sweep subcommands (browse-by-feel RFC) — the thin HTTP
-  // client the on-box `fluncle-cluster` cron drives: read the map, read the embedded
-  // corpus (cursor-paged), write the map (the Worker mints ids + handles server-side).
   const galaxies = configureCommand(
     admin.command("galaxies").description("Sonic galaxy map (cluster sweep) commands"),
   );
@@ -2824,11 +2615,6 @@ JSON field reference:
       await runGalaxyMapWrite(options, galaxyMapWriteCommand);
     });
 
-  // THE ECHO GATE'S LEDGER — the auto-notes the gate refused to store, kept rather than
-  // binned (docs/agents/note-agent.md). Rejections remain readable so the operator can tell a good
-  // rejection from a badly-tuned one. `held` reads them; `gate` reads or retunes the dials (a `settings` KV
-  // flip the next sweep tick picks up — never a deploy). Ruling on a held note (keep it / bin
-  // it) is OPERATOR-tier and lives on the web admin, per the persona law.
   const notes = configureCommand(
     admin.command("notes").description("The auto-note echo gate: held notes + its dials"),
   );
@@ -2861,10 +2647,6 @@ JSON field reference:
       await runNoteGate(options, noteGateCommand);
     });
 
-  // THE OBSERVATION ECHO GATE'S LEDGER — the spoken sibling of `admin notes`, same two verbs.
-  // The gate refuses to RENDER a script that echoes a sonic neighbour's (before the Cartesia
-  // spend), and every rejection is HELD, never binned. Ruling on one (render it / bin it) is
-  // OPERATOR-tier and lives on the web admin (the observation dialog's held panel).
   const observations = configureCommand(
     admin.command("observations").description("The observation echo gate: held scripts + dials"),
   );
@@ -2897,23 +2679,6 @@ JSON field reference:
       await runObservationGate(options, observationGateCommand);
     });
 
-  // THE CATALOGUE — every track the archive knows and Fluncle never certified (a `tracks`
-  // row with no `findings` row). Two halves, four commands:
-  //
-  //   THE CRAWLER (docs/catalogue-crawler.md) — what makes the rows exist. `crawl` walks the
-  //   MusicBrainz release graph outward from the labels the OPERATOR enabled, one bounded,
-  //   resumable pass per invocation; `status` reads the crawl frontier back. It certifies
-  //   nothing — a crawled track has no Log ID, no note, no video, no public surface.
-  //
-  //   THE EAR (docs/the-ear.md) — what makes the pile useful. `rank` is the precompute sweep
-  //   a periodic `--no-agent` cron drives; `list` reads the ranking back.
-  //
-  // The CLI holds no crawl and no ranking logic — the walk and all of the vector arithmetic
-  // happen inside the Worker. This is a pacer, not an engine.
-  // `admin frontier` — the public recommendation machine's playlists (E2). One verb:
-  // `refresh` re-mirrors every crew member's "Fluncle's Frontier" playlist from their
-  // current recommendations. Admin tier (agent-allowed); the on-box weekly cron drives
-  // it. The CLI holds no sync logic — the mirror + the Spotify writes are in the Worker.
   const frontier = configureCommand(
     admin.command("frontier").description("The Frontier playlists (per-user recommendations)"),
   );
@@ -3080,9 +2845,6 @@ JSON field reference:
       );
     });
 
-  // `requeue_anchor` → `admin catalogue requeue-anchor <trackId...>` (operator). Clear the named
-  // rows' anchor re-ask backoff so the next `fluncle-anchor` tick retries them now — the lever
-  // for "the resolver just got better" (a matcher fix, a recovered ISRC, a reviewed candidate).
   catalogue
     .command("requeue-anchor")
     .description("Clear rows' anchor re-ask backoff so the next tick retries them (operator)")
@@ -3102,11 +2864,6 @@ JSON field reference:
       );
     });
 
-  // `get_spotify_anchor_breaker` → `admin catalogue anchor-breaker`. Why the anchor waterfall is
-  // quiet. Two causes look identical from outside — the shared-app throttle breaker PAUSING the
-  // Spotify search rungs, and the operator flags leaving the rungs DISARMED — so this reads both at
-  // once. Both flags off means nothing in the waterfall can conclude about a catalogue row: the free
-  // ListenBrainz rung still runs and can win, but its miss is not a verdict.
   catalogue
     .command("anchor-breaker")
     .description("Why the anchor rungs are quiet: the throttle breaker, and which rungs are armed")
@@ -3148,10 +2905,6 @@ JSON field reference:
       }
     });
 
-  // `get_anchor_apify_budget` / `set_anchor_apify_budget` → `admin catalogue anchor-apify-budget`.
-  // THE DAILY ROW BRAKE on the one anchor rung that costs money. The kill-flag beside it is a
-  // switch; this is the number between its two states, so "Apify runs" stops meaning "Apify runs
-  // without a limit". The bare command is the agent-allowed readout; `set` is the operator's.
   const anchorApifyBudget = catalogue
     .command("anchor-apify-budget")
     .description("The paid Apify anchor rung's daily row cap, today's spend, and what is left")
@@ -3177,10 +2930,6 @@ JSON field reference:
       printAnchorApifyBudget(await setAnchorApifyBudgetCommand(dailyRows), options);
     });
 
-  // `requeue_isrc_recovery` → `admin catalogue requeue-isrc-recovery --since <iso>` (operator).
-  // Clear the free Deezer pass's clean-miss watermark on rows it retired at or after `--since`, so
-  // they re-enter the isrc-recovery worklist now. The lever for a window where the ASK came back
-  // empty rather than the catalogue. DRY-RUN by default; `--apply` takes it.
   catalogue
     .command("requeue-isrc-recovery")
     .description("Clear Deezer-empty ISRC-recovery stamps from a window (dry-run; --apply to take)")
@@ -3268,10 +3017,6 @@ JSON field reference:
       );
     });
 
-  // Capture verification (docs/the-ear.md § Wrong audio) — the backfill's CLI face. The worklist
-  // is a `--queue` view on the verb (never a *-queue command, docs/naming-conventions.md §6.4);
-  // the verdict write takes the trackId + --verdict the box's fpcalc run produced. The CLI holds
-  // no fingerprinting — the box measures, the Worker routes, this paces.
   catalogue
     .command("verify")
     .description("Capture verification: the unverified worklist (--queue), or record one verdict")
@@ -3417,9 +3162,6 @@ JSON field reference:
       await runCrawlCatalogue(options, crawlCatalogueCommand);
     });
 
-  // One claim's fetched nodes, settled in ONE admitted database phase instead of one per node.
-  // The body is a file because a node's signed MusicBrainz envelope is measured in megabytes; the
-  // response carries one receipt per item, so the caller maps verdicts back node by node.
   catalogue
     .command("commit-nodes")
     .description("Commit one claim's fetched crawl nodes in a single admitted phase")
@@ -3441,11 +3183,6 @@ JSON field reference:
       await runCrawlStatus(options, crawlStatusCommand);
     });
 
-  // REACH — how far Fluncle's tentacles stretch across the web: the follower /
-  // subscriber / play / star counts on every platform, snapshotted daily. `collect`
-  // is a bare trigger the on-box `fluncle-reach` `--no-agent` cron drives (the Worker
-  // owns every platform credential and does all the fetching), exactly like
-  // `catalogue rank`. A pacer, not an engine.
   const reach = configureCommand(
     admin.command("reach").description("The public /reach numbers: collect a daily snapshot"),
   );
@@ -3529,10 +3266,6 @@ JSON field reference:
       await runBackfillDiscogs(options, backfillDiscogsCommand);
     });
 
-  // `backfill_discogs_facts` → `admin backfills discogs-facts`. The FACTS sibling of the leg
-  // above: it takes a release id that sweep already resolved and reads the album's catalogue
-  // number + styles off the release. Album-grained, so no cursor. A no-op until the Worker's
-  // Discogs token is provisioned.
   backfill
     .command("discogs-facts")
     .description("Read album catalogue numbers + styles from already-resolved Discogs releases")
@@ -3544,9 +3277,6 @@ JSON field reference:
       await runBackfillDiscogsFacts(options, backfillDiscogsFactsCommand);
     });
 
-  // `backfill_apple_music` → `admin backfills apple-music`. Resolves each finding's
-  // Apple Music URL EXACTLY by ISRC and stores it. A no-op until the Worker's MusicKit
-  // secrets are provisioned.
   backfill
     .command("apple-music")
     .description("Resolve missing Apple Music URLs for published findings (exact ISRC match)")
@@ -3558,8 +3288,6 @@ JSON field reference:
       await runBackfillAppleMusic(options, backfillAppleMusicCommand);
     });
 
-  // `backfill_apple_catalogue` → `admin backfills apple-catalogue`. The catalogue sibling:
-  // batched Apple URL drain over uncertified rows + single-ISRC album facts (RFC musickit U1).
   backfill
     .command("apple-catalogue")
     .description("Resolve Apple URLs + album facts for catalogue tracks (batched exact ISRC)")
@@ -3571,9 +3299,6 @@ JSON field reference:
       await runBackfillAppleCatalogue(options, backfillAppleCatalogueCommand);
     });
 
-  // `backfill_beatport` → `admin backfills beatport`. Resolves each finding's Beatport store URL
-  // by exact ISRC equality against Beatport's public search. Keyless — no Beatport API key is used.
-  // A no-op until the Worker's Firecrawl key is provisioned.
   backfill
     .command("beatport")
     .description("Resolve missing Beatport URLs for published findings (exact ISRC match)")
@@ -3585,11 +3310,6 @@ JSON field reference:
       await runBackfillBeatport(options, backfillBeatportCommand);
     });
 
-  // `backfill_deezer` → `admin backfills deezer`. The forward-accretion leg: resolves each
-  // ISRC-bearing row's Deezer track id through the keyless public endpoint, gated on duration
-  // agreement, certified rows first then the Ear-ranked catalogue. No key anywhere, so nothing to
-  // configure — but Deezer's quota is per-IP and the Worker shares Cloudflare's egress, so a
-  // throttled pass ends early and the next tick resumes.
   backfill
     .command("deezer")
     .description("Resolve missing Deezer track ids for certified + catalogue rows (exact ISRC)")
@@ -3601,14 +3321,6 @@ JSON field reference:
       await runBackfillDeezer(options, backfillDeezerCommand);
     });
 
-  // The freshness tap (D8) has NO operator CLI command, deliberately. Its box sweep POSTs the
-  // agent-tier `backfill_label_releases` op over HTTP rather than shelling out here, because the
-  // baked box CLI is a PINNED release and a pin predating a flag fails the run outright (`Unknown
-  // option '--limit'`, seen live). Adding a command back would re-create that coupling for no gain.
-  // Operate it via the box sweep (docs/agents/hermes/scripts/label-releases-sweep.sh).
-
-  // `backfill_artists` → `admin backfills artists`. Back-fills the artist entity
-  // tables (artists + track_artists) for existing findings that predate Unit 1.
   backfill
     .command("artists")
     .description("Back-fill the artist entity (artists + track_artists) for existing findings")
@@ -3620,8 +3332,6 @@ JSON field reference:
       await runBackfillArtists(options, backfillArtistsCommand);
     });
 
-  // `backfill_artist_images` → `admin backfills artist-images`. Fills each existing
-  // artist's Spotify avatar (`artists.image_url`) — the ~70 minted before the column.
   backfill
     .command("artist-images")
     .description("Back-fill artist Spotify avatars (image_url) for existing artists")
@@ -3633,8 +3343,6 @@ JSON field reference:
       await runBackfillArtistImages(options, backfillArtistImagesCommand);
     });
 
-  // `backfill_label_images` → `admin backfills label-images`. Gives each label its OWN logo
-  // (resolved Discogs → Wikidata, downloaded once into R2) instead of a borrowed album cover.
   backfill
     .command("label-images")
     .description("Resolve label logos (Discogs → Wikidata) into R2 for existing labels")
@@ -3646,9 +3354,6 @@ JSON field reference:
       await runBackfillLabelImages(options, backfillLabelImagesCommand);
     });
 
-  // `backfill_label_lineage` → `admin backfills label-lineage`. Gives each label its founding facts
-  // (date, place) + its parent imprint from MusicBrainz (life-span + area + label-rels), matched to
-  // an existing label — never minting one.
   backfill
     .command("label-lineage")
     .description("Resolve label lineage (founding date, place, parent imprint) from MusicBrainz")
@@ -3660,16 +3365,12 @@ JSON field reference:
       await runBackfillLabelLineage(options, backfillLabelLineageCommand);
     });
 
-  // `backfill_recording_mbids` → `admin backfills recording-mbids`. The MusicBrainz identity layer:
-  // gives each track its canonical MusicBrainz recording MBID (a free PK strip of crawler-born rows,
-  // then an ISRC→recording resolve of findings/Spotify-born rows through the shared MB client).
   backfill
     .command("recording-mbids")
     .description("Fill MusicBrainz recording MBIDs (crawler PK strip + ISRC resolve) over tracks")
     .option("--dry-run", "Report the eligible worklist without any vendor call or write", false)
     .option("--limit <limit>", "Max ISRC lookups to process", "50")
-    // The RETURN trip's cap (MBID → `?inc=isrcs`), which the Worker runs only on a tick whose ISRC
-    // drain was idle. Server-clamped to 25 — the knob is there to spend less, never more.
+
     .option("--isrc-refresh-limit <limit>", "Max MusicBrainz ISRC re-reads to process", "25")
     .option("--json", "Print JSON", false)
     .action(async (options: RecordingMbidsOptions) => {
@@ -3677,11 +3378,6 @@ JSON field reference:
       await runBackfillRecordingMbids(options, backfillRecordingMbidsCommand);
     });
 
-  // `backfill_artist_edges` → `admin backfills artist-edges`. The track_artists graph backfill (RFC
-  // artist-primary-capture, slice 0): folds each edge-less track's artists_json NAMES onto EXISTING
-  // artist identities (exact fold + artist_aliases) and writes the edges. No vendor call, mints
-  // nothing. Default `--limit` EQUALS the op's server MAX_BATCH (200) so the cursor loop fires one
-  // HTTP request per tick.
   backfill
     .command("artist-edges")
     .description("Fold artists_json names onto existing artist identities → track_artists")
@@ -3693,12 +3389,6 @@ JSON field reference:
       await runBackfillArtistEdges(options, backfillArtistEdgesCommand);
     });
 
-  // `backfill_artist_credits` → `admin backfills artist-credits`. The MB credit sweep (RFC
-  // artist-primary-capture, slice 1b): completes slice 0's zero-matched residual — for each
-  // zero-matched track with a MusicBrainz recording identity, one paced `inc=artist-credits` lookup
-  // through the shared MB client mints/matches artists BY MB id and writes the edges. Default `--limit`
-  // EQUALS the op's server MAX_BATCH (40 — each row is one paced MB call) so the cursor loop fires one
-  // HTTP request per tick.
   backfill
     .command("artist-credits")
     .description(
@@ -3712,9 +3402,6 @@ JSON field reference:
       await runBackfillArtistCredits(options, backfillArtistCreditsCommand);
     });
 
-  // `backfill_cover_masters` → `admin backfills cover-masters --kind album|artist`. Gives each
-  // album/artist its OWN ≤1200²-capped cover master (best source wins), downloaded once into R2,
-  // instead of hotlinking a third party. The box cron runs both kinds per tick.
   backfill
     .command("cover-masters")
     .description("Resolve owned ≤1200² cover masters (album/artist) into R2")
@@ -3732,10 +3419,6 @@ JSON field reference:
       await runBackfillCoverMasters(options, backfillCoverMastersCommand);
     });
 
-  // `list_artists` + `resolve_artist` → `admin artists resolve` (Convention B). The
-  // on-box `fluncle-artist-sweep` cron drives BOTH modes: `--queue` reads the resolve
-  // worklist (artists awaiting resolution), and `resolve <artistId>` triggers the
-  // Worker's MB url-rels walk + Firecrawl /v2/extract gap-fill for one artist.
   artists
     .command("resolve")
     .description("Resolve an artist's social identity (MB url-rels + Firecrawl gap-fill)")
@@ -3749,8 +3432,6 @@ JSON field reference:
     .option("--json", "Print JSON", false)
     .allowExcessArguments()
     .action(async (artistId: string | undefined, options: ArtistResolveOptions) => {
-      // `--queue` is the resolve worklist view (artists awaiting resolution) — the
-      // sweep's worklist. Otherwise resolve one artist's social identity.
       if (options.queue) {
         const { listArtistsCommand } = await import("./commands/admin-artists");
         await runArtistResolveQueue(options, listArtistsCommand);
@@ -3761,9 +3442,6 @@ JSON field reference:
       await runArtistResolve(artistId, options, resolveArtistCommand);
     });
 
-  // `describe_artist` → `admin artists describe` (Convention B). Author + store the
-  // artist's voiced bio (the entity sibling of `admin tracks note`). Fills an empty bio
-  // only; an operator bio is never clobbered. `--queue` is the future bio cron's worklist.
   artists
     .command("describe")
     .description("Author the voiced bio for an artist (fills an empty bio only)")
@@ -3803,9 +3481,6 @@ JSON field reference:
       await runEntityDescribe("artist", slug, options, describeArtistCommand);
     });
 
-  // `rank_artists` → `admin artists rank`. One tick of the similar-artists precompute sweep
-  // (artist centroids + top-K edges) — the artist-graph sibling of `admin catalogue rank`. The
-  // periodic `--no-agent` cron drives it with the box's agent token; `remaining > 0` = run again.
   artists
     .command("rank")
     .description(
@@ -3880,9 +3555,6 @@ JSON field reference:
       console.log(artistRuleWriteLine(`Rule removed: ${id}`));
     });
 
-  // `draft_artist_bio` → `admin artists draft-bio <slug>`. The box's bio sweep's TRIGGER: the
-  // Worker gathers the grounding (Firecrawl facts + finding titles) and returns a
-  // ready-to-author prompt + its provenance version. Prints the JSON the sweep consumes.
   artists
     .command("draft-bio")
     .description("Assemble the Worker-grounded bio prompt for an artist (the sweep's trigger)")
@@ -3894,8 +3566,6 @@ JSON field reference:
       await runEntityBioDraft("artist", slug, options, draftArtistBioCommand);
     });
 
-  // `describe_label` + the crawl-seed reads → `admin labels` group (Convention B). The
-  // voiced-bio author is the label sibling of `admin artists describe`.
   const labels = configureCommand(
     admin
       .command("labels")
@@ -3945,8 +3615,6 @@ JSON field reference:
       await runEntityDescribe("label", slug, options, describeLabelCommand);
     });
 
-  // `draft_label_bio` → `admin labels draft-bio <slug>`. The label sibling of the artist
-  // draft: the box's bio sweep TRIGGER that returns the Worker-grounded, ready-to-author prompt.
   labels
     .command("draft-bio")
     .description("Assemble the Worker-grounded bio prompt for a label (the sweep's trigger)")
@@ -4001,8 +3669,6 @@ JSON field reference:
       console.log(artistRuleLines(result.rules).join("\n"));
     });
 
-  // `update_label` → `admin labels update <slug> [--seed-state <state>] [--rewalk]` (operator).
-  // The ruling changes crawl scope; the bare re-walk re-arms the label without changing its ruling.
   labels
     .command("update")
     .description("Rule on a label's crawl scope or arm a scoped re-walk (operator)")
@@ -4041,17 +3707,6 @@ JSON field reference:
       },
     );
 
-  // `mint_label` → `admin labels mint <mbid> [--seed-state <state>]` (operator). Bring a label into
-  // the archive BY ITS MUSICBRAINZ IDENTITY — the operator's own door beside the publish path and a
-  // crawl discovery, for a label no walk will reach (the half an upstream MusicBrainz split moved onto a
-  // new entity). Idempotent; without `--seed-state` a new row lands `undecided` and an existing
-  // row's ruling is left exactly as it was.
-  //
-  // `--take-over <slug>` is the explicit way through the identity conflict a MusicBrainz split
-  // leaves behind: the drum & bass half moves to a NEW entity carrying the SAME name, and the
-  // archive's row for that name still points at the original. It re-points THAT row's identity —
-  // the server honours it only for the exact conflicting row, only when it holds no tracks, and
-  // only when it is not an enabled seed (a row with tracks is `admin labels merge`).
   labels
     .command("mint")
     .description("Mint a label from its MusicBrainz MBID (operator; idempotent)")
@@ -4090,10 +3745,6 @@ JSON field reference:
       },
     );
 
-  // `merge_label` → `admin labels merge <losingSlug> <canonicalSlug>` (operator). Fold a slug-split
-  // twin (the Med School / Medschool class) into its canonical row: re-point every FK, reconcile
-  // identity/facts canonical-wins, write the losing name as a confirmed alias, delete the loser —
-  // and the losing slug then 301s to the canonical page.
   labels
     .command("merge")
     .description(
@@ -4137,9 +3788,6 @@ JSON field reference:
       console.log(`  /label/${loser} now 301s to /label/${canon}.`);
     });
 
-  // `describe_album` → `admin albums` group (Convention B). The voiced-bio author is the
-  // album sibling of `admin artists describe` / `admin labels describe`. An album carries no
-  // operator control, so this group is the bio engine and nothing else.
   const albums = configureCommand(
     admin.command("albums").description("Album entity commands (the voiced bio)"),
   );
@@ -4187,8 +3835,6 @@ JSON field reference:
       await runEntityDescribe("album", slug, options, describeAlbumCommand);
     });
 
-  // `draft_album_bio` → `admin albums draft-bio <slug>`. The album sibling of the artist/label
-  // draft: the box's bio sweep TRIGGER that returns the Worker-grounded, ready-to-author prompt.
   albums
     .command("draft-bio")
     .description("Assemble the Worker-grounded bio prompt for an album (the sweep's trigger)")
@@ -4200,14 +3846,6 @@ JSON field reference:
       await runEntityBioDraft("album", slug, options, draftAlbumBioCommand);
     });
 
-  // `migrate_*` ops → `admin migrations` group (Convention B). One-off, operator-run
-  // data migrations. REF-05: move the archived 30s previews off the PUBLIC bucket
-  // (a copyright exposure) into the PRIVATE one. Three modes, DRY-RUN BY DEFAULT:
-  // (default) copy public → private; `--delete-public` sweeps the whole public
-  // `analysis/previews/` prefix (incl. orphans no DB row points at) — run only after
-  // a full copy; `--verify` is a read-only count of what remains under the prefix
-  // (the operator's proof before/after the CDN purge). `--execute` performs a mutating
-  // mode. Never copies and deletes in one pass.
   const migrations = configureCommand(
     admin.command("migrations").description("One-off operator data migrations"),
   );
@@ -4358,16 +3996,6 @@ async function runTrackContext(
   }
 }
 
-/**
- * The PROVENANCE stamp (`--prompt-version`): which prompt-registry version authored the
- * artifact being written (0 = the repo's baked default, N = operator override N). The
- * on-box sweeps pass it; an operator writing by hand does not, and the column stays NULL
- * — which is the honest record, because no prompt wrote it.
- *
- * A malformed value is DROPPED rather than guessed at. A wrong version is worse than no
- * version: it points the operator at prose that did not write this artifact, which is
- * exactly the question the column exists to answer. See docs/agents/prompt-registry.md.
- */
 function parsePromptVersion(raw: string | undefined): number | undefined {
   if (raw === undefined) {
     return undefined;
@@ -4407,8 +4035,6 @@ async function runTrackNote(
     return;
   }
 
-  // The dry run stores nothing — it reports what the two gates made of the line, so the
-  // operator can read the echo before the note goes anywhere near /log.
   if (result.dryRun) {
     console.log(`Both gates passed for ${result.logId}. Nothing was stored (dry run).`);
     console.log(`  ${result.note}`);
@@ -4427,9 +4053,6 @@ async function runTrackNote(
   console.log(`  ${result.note}`);
 }
 
-// `admin artists|labels|albums describe <slug>` — author + store an entity's voiced bio (the
-// entity-bio engine). The MODEL authors the bio in the box cron; the CLI posts the gated
-// text. Fills an empty bio only; an operator bio is never clobbered.
 async function runEntityDescribe(
   kind: "artist" | "label" | "album",
   slug: string | undefined,
@@ -4473,7 +4096,6 @@ async function runEntityDescribe(
   console.log(`Authored the bio for ${result.slug}:`);
   console.log(`  ${result.bio}`);
 
-  // The final-attempt acceptance is never quiet: say what was let through, and what it broke.
   if (result.gateBypassed) {
     console.log("  FINAL ATTEMPT — the voice gate refused this bio and it was stored anyway:");
 
@@ -4483,8 +4105,6 @@ async function runEntityDescribe(
   }
 }
 
-// `admin artists|labels|albums describe --queue` — the bio worklist (entities with findings but
-// no bio yet), oldest first: the worklist the future bio cron drains.
 async function runEntityBioQueue(
   kind: "artist" | "label" | "album",
   options: BioDescribeOptions,
@@ -4511,10 +4131,6 @@ async function runEntityBioQueue(
   }
 }
 
-// `admin artists|labels|albums draft-bio <slug>` — the box bio sweep's TRIGGER: the Worker gathers
-// the grounding (Firecrawl facts + logged finding titles) and assembles the registered bio
-// prompt, returning it ready-to-author. The sweep reads `--json`, runs `claude -p` on the
-// prompt, then writes the bio back via `describe`.
 async function runEntityBioDraft(
   kind: "artist" | "label" | "album",
   slug: string,
@@ -4540,9 +4156,6 @@ async function runEntityBioDraft(
   );
 }
 
-// `fluncle tracks similar <id|logId>` — the sonic neighbourhood off the MuQ embedding.
-// Each row carries the neighbour's own editorial note, which is what the auto-note
-// sweep reads: the region's register, and the moves already spent in it.
 async function runTrackSimilar(
   idOrLogId: string | undefined,
   options: TrackSimilarOptions,
@@ -4579,12 +4192,6 @@ async function runTrackSimilar(
   }
 }
 
-// REF-05 — drive the public → private preview-bucket migration. Three modes:
-// Report a sweep result that may carry per-item failures. Partial failure is NOT
-// success: `ok` is true only when nothing failed, and any failure sets exit code 1
-// so an unattended cron surfaces it instead of silently losing the failed items.
-// `failedCount` stays in the payload so automation can distinguish "all failed"
-// from "some failed" without re-deriving it.
 function printSweepJson(payload: Record<string, unknown>, failedCount: number): void {
   printJson({ ...payload, failedCount, ok: failedCount === 0 });
 
@@ -4593,10 +4200,6 @@ function printSweepJson(payload: Record<string, unknown>, failedCount: number): 
   }
 }
 
-// `--verify` (read-only count under the public prefix), `--delete-public` (the
-// prefix sweep), else copy. `--limit` is the per-pass batch; the CLI loops the
-// returned cursor until the phase's set is drained (nextCursor null), aggregating
-// per-pass results. Dry-run unless `--execute` (ignored by the read-only verify).
 async function runMigratePreviewArchive(
   options: MigratePreviewArchiveOptions,
   migratePreviewArchiveCommand: typeof import("./commands/preview-migration").migratePreviewArchiveCommand,
@@ -4607,12 +4210,9 @@ async function runMigratePreviewArchive(
     throw new Error("Limit must be a positive integer");
   }
 
-  // Verify wins over delete (it is read-only and safe); delete wins over the copy
-  // default. `--execute` only matters for the mutating modes.
   const mode = options.verify ? "verify" : options.deletePublic ? "delete" : "copy";
   const dryRun = mode === "verify" ? true : !options.execute;
 
-  // Verify is a single read-only pass: no cursor loop, no mutation.
   if (mode === "verify") {
     const result = await migratePreviewArchiveCommand({ dryRun: true, limit, mode });
 
@@ -4638,12 +4238,9 @@ async function runMigratePreviewArchive(
   let remaining = 0;
   let blocked: string | null = null;
 
-  // Loop the cursor until the phase is drained. The cursor advances monotonically
-  // (DB track_id for copy, R2 list cursor for delete), so the loop always terminates.
   for (;;) {
     const result = await migratePreviewArchiveCommand({ cursor, dryRun, limit, mode });
 
-    // A refusal (e.g. the delete sweep with legacy rows still uncopied) stops here.
     if (result.blocked) {
       blocked = result.blocked;
       remaining = result.remaining;
@@ -4751,11 +4348,6 @@ async function runPreviewArchiveBackfill(
   }
 }
 
-// `--limit` caps the TOTAL findings processed across the whole loop (a bounded
-// probe), not a single request. Each endpoint pass is server-clamped to a small
-// batch (so it stays inside the Worker budget) and returns a resume cursor; the
-// CLI loops the cursor — stopping when the archive is drained (cursor null) or
-// the total cap is reached — aggregating the per-pass results.
 async function runBackfillLastfm(
   options: BackfillSyncOptions,
   backfillLastfmCommand: typeof import("./commands/admin-tracks").backfillLastfmCommand,
@@ -4768,9 +4360,6 @@ async function runBackfillLastfm(
   let dryRun = options.dryRun;
   let throttled = false;
 
-  // The cap is on findings actually HANDLED (loved + failed); skips don't count, so
-  // the loop keeps draining cursors past cooling-down findings until the cap is met
-  // or the archive is exhausted (nextCursor null).
   while (loved.length + failed.length < limit) {
     const remaining = limit - (loved.length + failed.length);
     const result = await backfillLastfmCommand(remaining, options.dryRun, cursor);
@@ -4787,9 +4376,6 @@ async function runBackfillLastfm(
     }
 
     if (result.rateLimited) {
-      // Last.fm circuit breaker tripped (active rate-limiting). Stop looping the
-      // cursor — re-firing it just grinds into the same wall until the cron's 120s
-      // timeout; the next tick resumes from a fresh rate-limit window.
       throttled = true;
       break;
     }
@@ -4835,12 +4421,6 @@ async function runBackfillLastfm(
   }
 }
 
-// ONE bounded crawl pass. Deliberately NOT a loop: the crawl is a marathon paced by a
-// cron, not a sprint paced by a CLI, and every scrap of its state is durable — so "run
-// again" and "resume" are the same command. (`--limit` sizes the pass; the sweep sets the
-// cadence.) A pass that stops on the rate-limit breaker exits 1 so the cron sees it. The
-// Spotify anchor is filled off this path entirely — the box's Apify anchor sweep, not
-// the crawl (docs/catalogue-crawler.md § the anchor).
 async function runCrawlCatalogue(
   options: CrawlOptions,
   crawlCatalogueCommand: typeof import("./commands/admin-catalogue").crawlCatalogueCommand,
@@ -4936,9 +4516,6 @@ async function runBackfillDiscogs(
   let throttled = false;
   let rateLimitedBy: "discogs" | "musicbrainz" | null = null;
 
-  // The cap is on findings actually HANDLED (resolved + unresolved); skips don't
-  // count, so the loop keeps draining cursors past cooling-down/done findings until
-  // the cap is met or the archive is exhausted (nextCursor null).
   while (resolved.length + unresolved.length < limit) {
     const remaining = limit - (resolved.length + unresolved.length);
     const result = await backfillDiscogsCommand(remaining, options.dryRun, cursor);
@@ -4955,8 +4532,6 @@ async function runBackfillDiscogs(
     }
 
     if (result.rateLimited) {
-      // The resolver walks MusicBrainz before Discogs. Stop on either brake and
-      // preserve the actual vendor for the box summary.
       throttled = true;
       rateLimitedBy = result.rateLimitedBy;
       break;
@@ -5012,9 +4587,6 @@ async function runBackfillAppleMusic(
   let configured = true;
   let albumFactsWritten = 0;
 
-  // The cap is on findings actually HANDLED (resolved + unresolved + failed); skips
-  // don't count, so the loop keeps draining cursors past cooling-down/done findings
-  // until the cap is met or the archive is exhausted (nextCursor null).
   while (resolved.length + unresolved.length + failed.length < limit) {
     const remaining = limit - (resolved.length + unresolved.length + failed.length);
     const result = await backfillAppleMusicCommand(remaining, options.dryRun, cursor);
@@ -5034,21 +4606,15 @@ async function runBackfillAppleMusic(
     }
 
     if (!result.configured) {
-      // The Worker's MusicKit secrets are unset — the leg is a no-op. Stop looping; the
-      // server already stopped the pass and nulled the cursor.
       break;
     }
 
     if (result.breakerTripped) {
-      // The cross-cutting Apple breaker is tripped (a suspended token) or its call budget is
-      // spent. Stop looping — the next tick resumes once it cools down / the operator resets it.
       breakerTripped = true;
       break;
     }
 
     if (result.rateLimited) {
-      // Apple Music circuit breaker tripped. Stop looping the cursor — the next tick
-      // resumes from a fresh rate-limit window.
       throttled = true;
       break;
     }
@@ -5115,8 +4681,7 @@ async function runBackfillBeatport(
   const unresolved: string[] = [];
   const failed: Array<{ error: string; logId: string }> = [];
   const skipped: string[] = [];
-  // The CATALOGUE tier's rows, accumulated separately: the server runs that tier once the certified
-  // feed is drained, so at most one pass of this loop contributes to them.
+
   const catalogueResolved: Array<{ trackId: string; url: string }> = [];
   const catalogueUnresolved: string[] = [];
   const catalogueFailed: Array<{ error: string; trackId: string }> = [];
@@ -5124,9 +4689,6 @@ async function runBackfillBeatport(
   let dryRun = options.dryRun;
   let configured = true;
 
-  // The cap is on findings actually HANDLED (resolved + unresolved + failed); skips don't count, so
-  // the loop keeps draining cursors past cooling-down/done findings until the cap is met or the
-  // archive is exhausted (nextCursor null).
   while (resolved.length + unresolved.length + failed.length < limit) {
     const remaining = limit - (resolved.length + unresolved.length + failed.length);
     const result = await backfillBeatportCommand(remaining, options.dryRun, cursor);
@@ -5148,8 +4710,6 @@ async function runBackfillBeatport(
     }
 
     if (!result.configured) {
-      // The Worker's Firecrawl key is unset — the leg is a no-op. Stop looping; the server already
-      // stopped the pass without recording anything.
       break;
     }
 
@@ -5232,8 +4792,6 @@ async function runBackfillDeezer(
   let dryRun = options.dryRun;
   let throttled = false;
 
-  // No cursor: the worklist self-drains by the ledger, so the CLI loops until a pass concludes
-  // nothing (the eligible set is empty) or Deezer's quota stops it.
   while (resolved.length + unresolved.length + unvouchable.length + failed.length < limit) {
     const handled = resolved.length + unresolved.length + unvouchable.length + failed.length;
     const result = await backfillDeezerCommand(limit - handled, options.dryRun);
@@ -5255,7 +4813,6 @@ async function runBackfillDeezer(
       break;
     }
 
-    // A pass that concluded nothing drained the eligible worklist this window.
     if (
       result.resolvedCount === 0 &&
       result.unresolvedCount === 0 &&
@@ -5320,8 +4877,6 @@ async function runBackfillAppleCatalogue(
   let configured = true;
   let albumFactsWritten = 0;
 
-  // No cursor: the catalogue worklist self-drains by reliability, so the CLI loops until a pass
-  // resolves nothing (the worklist is empty this window) or a breaker stops it.
   while (resolved.length + unresolved.length + failed.length < limit) {
     const remaining = limit - (resolved.length + unresolved.length + failed.length);
     const result = await backfillAppleCatalogueCommand(remaining, options.dryRun);
@@ -5353,7 +4908,6 @@ async function runBackfillAppleCatalogue(
       break;
     }
 
-    // A pass that resolved nothing (and hit no error) drained the eligible worklist this window.
     if (result.resolvedCount === 0 && result.unresolvedCount === 0 && result.failedCount === 0) {
       break;
     }
@@ -5411,8 +4965,6 @@ async function runBackfillDiscogsFacts(
   let throttled = false;
   let configured = true;
 
-  // No cursor: the worklist is album-grained and self-draining (an album leaves it the moment it is
-  // ruled `resolved` or `none`), so the CLI loops until a pass rules nothing or a throttle stops it.
   while (resolved.length + none.length + failed.length < limit) {
     const remaining = limit - (resolved.length + none.length + failed.length);
     const result = await backfillDiscogsFactsCommand(remaining, options.dryRun);
@@ -5438,7 +4990,6 @@ async function runBackfillDiscogsFacts(
       break;
     }
 
-    // A pass that ruled nothing drained the eligible worklist this window.
     if (result.resolvedCount === 0 && result.noneCount === 0 && result.failedCount === 0) {
       break;
     }
@@ -5640,12 +5191,9 @@ async function runBackfillCoverMasters(
   let cursor: string | undefined;
   let dryRun = options.dryRun;
 
-  // The cap is on entities actually HANDLED (resolved + none + failed); the loop drains cursors
-  // until the cap is met or the worklist is exhausted (nextCursor null).
   while (resolved.length + none.length + failed.length < limit) {
     const remaining = limit - (resolved.length + none.length + failed.length);
-    // Re-queue only on the FIRST call (no cursor yet); a cursored continuation is draining the
-    // pass worklist and must not re-flip the head of the `none` list again each iteration.
+
     const result = await backfillCoverMastersCommand(
       kind,
       remaining,
@@ -5730,8 +5278,6 @@ async function runBackfillLabelLineage(
   let throttled = false;
   let unmatchedParents = 0;
 
-  // The cap is on labels actually HANDLED (resolved + none + failed); the loop drains cursors until
-  // the cap is met, the worklist is exhausted (nextCursor null), or MusicBrainz throttles.
   while (resolved.length + none.length + failed.length < limit) {
     const remaining = limit - (resolved.length + none.length + failed.length);
     const result = await backfillLabelLineageCommand(remaining, options.dryRun, cursor);
@@ -5749,7 +5295,6 @@ async function runBackfillLabelLineage(
     }
 
     if (result.rateLimited) {
-      // MusicBrainz circuit breaker tripped. Stop looping the cursor — the next tick resumes fresh.
       throttled = true;
       break;
     }
@@ -5812,8 +5357,6 @@ async function runBackfillLabelImages(
   let dryRun = options.dryRun;
   let throttled = false;
 
-  // The cap is on labels actually HANDLED (resolved + none + failed); the loop drains cursors
-  // until the cap is met, the worklist is exhausted (nextCursor null), or a vendor throttles.
   while (resolved.length + none.length + failed.length < limit) {
     const remaining = limit - (resolved.length + none.length + failed.length);
     const result = await backfillLabelImagesCommand(remaining, options.dryRun, cursor);
@@ -5830,8 +5373,6 @@ async function runBackfillLabelImages(
     }
 
     if (result.rateLimited) {
-      // Vendor circuit breaker tripped (MB/Discogs throttling). Stop looping the cursor — the
-      // next tick resumes from a fresh rate-limit window.
       throttled = true;
       break;
     }
@@ -5878,11 +5419,6 @@ async function runBackfillLabelImages(
   }
 }
 
-// `admin backfills recording-mbids`: one bounded pass of the recording-MBID fill sweep (the
-// MusicBrainz identity layer). The Worker fills crawler-born rows from their PK for free, then
-// resolves findings/Spotify-born rows' MBID by ISRC (1 req/s, circuit-broken). The cap is on ISRC
-// lookups actually HANDLED (resolved + missed + failed); the loop drains the track-id cursor until
-// the cap is met, the worklist is exhausted, or MusicBrainz throttles.
 async function runBackfillRecordingMbids(
   options: RecordingMbidsOptions,
   backfillRecordingMbidsCommand: typeof import("./commands/admin-tracks").backfillRecordingMbidsCommand,
@@ -5912,9 +5448,7 @@ async function runBackfillRecordingMbids(
     resolved.push(...result.resolved);
     missed.push(...result.missed);
     failed.push(...result.failed);
-    // The refresh leg runs on the FIRST page only (it has no cursor of its own — its stamps advance
-    // it), so these accumulate at most one page's worth. Pushed rather than assigned anyway, so a
-    // future paged refresh needs no change here.
+
     isrcRefreshed.push(...(result.isrcRefreshed ?? []));
     isrcRefreshMissed.push(...(result.isrcRefreshMissed ?? []));
 
@@ -5926,7 +5460,6 @@ async function runBackfillRecordingMbids(
     }
 
     if (result.rateLimited) {
-      // MusicBrainz circuit breaker tripped. Stop looping the cursor — the next tick resumes fresh.
       throttled = true;
       break;
     }
@@ -5980,12 +5513,6 @@ async function runBackfillRecordingMbids(
   }
 }
 
-// `admin backfills artist-edges`: one bounded pass of the track_artists graph backfill (RFC
-// artist-primary-capture, slice 0). The Worker folds each edge-less track's artists_json names onto
-// EXISTING artist identities (exact fold + artist_aliases) and writes the edges — no vendor call,
-// mints nothing. The cap is on tracks VISITED; the loop drains the track-id cursor until the cap is
-// met or the worklist is exhausted. `--limit` defaults to the op's server MAX_BATCH (200), so a full
-// first page equals the limit and the loop stops after ONE HTTP request.
 async function runBackfillArtistEdges(
   options: BackfillSyncOptions,
   backfillArtistEdgesCommand: typeof import("./commands/admin-tracks").backfillArtistEdgesCommand,
@@ -6052,13 +5579,6 @@ async function runBackfillArtistEdges(
   );
 }
 
-// `admin backfills artist-credits`: one bounded pass of the MB credit sweep (RFC
-// artist-primary-capture, slice 1b). Completes slice 0's zero-matched residual — for each zero-matched
-// track carrying a MusicBrainz recording identity, the Worker fetches its artist-credits (1 req/s,
-// circuit-broken), mints/matches artists BY MB id, and writes the edges. The cap is on rows VISITED;
-// the loop drains the track-id cursor until the cap is met, the worklist is exhausted, or MusicBrainz
-// throttles. `--limit` defaults to the op's server MAX_BATCH (40), so a full first page equals the
-// limit and the loop stops after ONE HTTP request (a budget pause resumes on the next request).
 async function runBackfillArtistCredits(
   options: BackfillSyncOptions,
   backfillArtistCreditsCommand: typeof import("./commands/admin-tracks").backfillArtistCreditsCommand,
@@ -6093,7 +5613,6 @@ async function runBackfillArtistCredits(
     }
 
     if (result.rateLimited) {
-      // MusicBrainz circuit breaker tripped. Stop looping the cursor — the next tick resumes fresh.
       throttled = true;
       break;
     }
@@ -6127,9 +5646,6 @@ async function runBackfillArtistCredits(
   );
 }
 
-// `admin artists resolve --queue`: the resolve worklist (artists awaiting social
-// resolution, oldest first). One bounded page — the sweep reads this, then resolves
-// each row. `--limit` caps the page (server-clamped to 50).
 async function runArtistResolveQueue(
   options: ArtistResolveOptions,
   listArtistsCommand: typeof import("./commands/admin-artists").listArtistsCommand,
@@ -6155,8 +5671,6 @@ async function runArtistResolveQueue(
   }
 }
 
-// `admin artists resolve <artistId>`: trigger the Worker's social resolution for one
-// artist (MB url-rels walk + Firecrawl gap-fill). The sweep loops this over the queue.
 async function runArtistResolve(
   artistId: string | undefined,
   options: ArtistResolveOptions,
@@ -6204,9 +5718,6 @@ async function runTrackVideo(
     );
   }
 
-  // --dir resolves the conventional bundle names; explicit flags override.
-  // Resolve against process.cwd() up front so a relative --dir (e.g. out/<id>)
-  // becomes an absolute path — Bun.file then never depends on the cwd at PUT time.
   const dir = options.dir ? path.resolve(process.cwd(), options.dir) : undefined;
   const fromDir = (name: string): string | undefined => {
     if (!dir) {
@@ -6250,10 +5761,6 @@ async function runTrackVideo(
     scene: resolveFile(options.scene, "scene.json"),
   };
 
-  // A footage cut is required for the normal (full-bundle) upload; --allow-partial
-  // lifts that for a deliberate partial refresh (e.g. poster-only). The plate-lane
-  // PRE-upload (plates and nothing else — the upload-first order, before the
-  // composition exists) is sanctioned as-is: no footage, no --allow-partial needed.
   const { isPlatesOnlyUpload } = await import("./commands/track");
   if (!files.footage && !options.allowPartial && !isPlatesOnlyUpload(files)) {
     throw new Error(
@@ -6261,8 +5768,6 @@ async function runTrackVideo(
     );
   }
 
-  // Progress per file as the bytes go straight to R2 (suppressed under --json so
-  // the output stays a single parseable object).
   const onProgress = options.json ? undefined : (message: string) => console.log(message);
   const result = await trackVideoCommand(idOrLogId, files, onProgress, {
     allowPartial: options.allowPartial,
@@ -6314,7 +5819,6 @@ async function runTrackSocial(
     );
   }
 
-  // No --status: show the track's per-platform state.
   if (!options.status) {
     const result = await trackSocialShowCommand(idOrLogId);
 
@@ -6507,10 +6011,6 @@ async function runTrackGetAdmin(
       .join(" · "),
   );
 
-  // The admin-only state a public list row hides — the reason this read exists over
-  // `fluncle tracks get`: which sonic galaxy it landed in, whether it's filmed and
-  // voiced. The galaxy is the `fluncle-cluster` assignment (present once the finding
-  // is placed AND its galaxy is operator-named); the retired vibe coordinates are gone.
   console.log(`Galaxy: ${t.galaxy ? t.galaxy.name : "unplaced"}`);
   console.log(
     `Video: ${
@@ -6536,10 +6036,6 @@ async function runTrackGetAdmin(
   }
 }
 
-// Parse a `--embedding` / `--embedding-file` value into a MuQ vector. `undefined`
-// (the flag absent) stays undefined; anything present must be a JSON array of finite
-// numbers (the server enforces the exact 1024-d width). Fails fast so a truncated
-// on-box MuQ run errors locally instead of round-tripping to a 400.
 function parseEmbeddingArg(raw: string | undefined): number[] | undefined {
   if (raw === undefined) {
     return undefined;
@@ -6578,9 +6074,6 @@ async function runTrackUpdate(
     throw new Error(`Invalid --bpm: ${options.bpm}`);
   }
 
-  // BPM/key analysis provenance (RFC bpm-key-accuracy). The confidences parse to numbers
-  // (fail fast on garbage); analyzedFrom is validated to the two-value enum so a typo can't
-  // silently poison the capture re-derive predicate; the sources + analyzedAt pass through.
   const bpmConfidence =
     options.bpmConfidence === undefined ? undefined : Number(options.bpmConfidence);
 
@@ -6603,9 +6096,6 @@ async function runTrackUpdate(
     throw new Error(`Invalid --analyzed-from: ${options.analyzedFrom} (expected full or preview)`);
   }
 
-  // The MuQ embedding: read from a file (--embedding-file, the box orchestrator's
-  // path — a 1024-float array is large) or inline (--embedding), parse to a number
-  // array, and let the server validate the 1024-d shape. An empty string clears it.
   const embeddingRaw = options.embeddingFile
     ? readFileSync(options.embeddingFile, "utf8")
     : options.embedding;
@@ -6849,8 +6339,7 @@ async function runClipsList(
 ): Promise<void> {
   const [clips, posts] = await Promise.all([
     clipsListCommand({ recordingId: options.recording, status: options.status }),
-    // The drip-feed rows, merged onto each clip below. Best-effort — a read failure must
-    // not blank the clip list; fall back to no drip column.
+
     clipPostsListCommand().catch(() => [] as Awaited<ReturnType<typeof clipPostsListCommand>>),
   ]);
   const dripByClip = new Map(posts.map((post) => [post.clipId, post]));
@@ -6871,8 +6360,7 @@ async function runClipsList(
   for (const clip of clips) {
     const source = clip.recordingId ?? "—";
     const post = dripByClip.get(clip.id);
-    // The drip column: e.g. `scheduled 2026-07-06T…` / `posted` / `failed`, or `—` when a
-    // clip has no drip row (never auto-queued, or unscheduled).
+
     const drip = post ? `${post.status} ${post.scheduledFor}` : "—";
     console.log(
       `${clip.id}\t${clip.status}\t${source}\t${clip.inMs}-${clip.outMs}ms\tx=${clip.xOffset}\t${drip}`,
@@ -6971,13 +6459,6 @@ async function runPublishAdvance(
   }
 }
 
-// ── The Apify anchor brake (the metered per-row spend) ───────────────────────────────
-
-/**
- * The paid anchor rung's brake, in one block — the cap, what the day has spent, and what is left.
- * The same four facts the capture budget prints, for the same reason: a metered thing you cannot see
- * is a thing you cannot control.
- */
 function printAnchorApifyBudget(
   state: import("./commands/admin-catalogue").AnchorApifyBudgetState,
   options: { json: boolean },
@@ -6996,20 +6477,12 @@ function printAnchorApifyBudget(
   console.log(`  Left:    ${state.remainingRows} row(s)`);
 }
 
-// ── The capture budget (the metered per-GB spend) ────────────────────────────────────
-
 const GB = 1024 * 1024 * 1024;
 
-/** Bytes as GB, to two places — the unit he is billed in, never a raw byte count. */
 function formatGb(bytes: number): string {
   return `${(bytes / GB).toFixed(2)} GB`;
 }
 
-/**
- * The readout, in one block. It always says the same four things — the state, what it spent,
- * what is left, and WHY it is shut when it is — because a metered thing you cannot see is a
- * thing you cannot control.
- */
 function printCaptureBudget(state: import("@fluncle/contracts").CaptureBudgetState): void {
   const reason =
     state.closedReason === "paused"
@@ -7069,11 +6542,6 @@ async function runSetCaptureBudget(
   printCaptureBudget(state);
 }
 
-/**
- * `--tracks` / `--gb` → the two caps. A malformed value is a hard EXIT, never a silent
- * fallback: on every other command a bad flag is an annoyance, and here it would be a budget
- * the operator believes he set and did not.
- */
 async function runSetCaptureCaps(
   options: { gb?: string; json: boolean; tracks?: string },
   setCaptureBudgetCommand: typeof import("./commands/capture").setCaptureBudgetCommand,
@@ -7284,7 +6752,7 @@ type LogbookWriteCliOptions = {
   body?: string;
   bodyFile?: string;
   json: boolean;
-  /** PROVENANCE — set by the `fluncle-logbook` sweep; the operator overwrite ignores it. */
+
   promptVersion?: string;
   title?: string;
 };
@@ -7299,8 +6767,6 @@ async function runLogbookGaps(
   );
 
   if (options.json) {
-    // `spent` (the anti-sameness fuel) rides through so the on-box sweep can hand it to
-    // the author; the human table below shows only the worklist.
     printJson({ gaps, ok: true, spent });
     return;
   }
@@ -7329,8 +6795,7 @@ async function runLogbookWrite(
   const result = await writeCommand(sector, {
     body: options.body,
     bodyFile: options.bodyFile,
-    // Only the agent CREATE carries a prompt version; the operator overwrite drops it on
-    // the floor server-side (no prompt wrote a hand-typed entry).
+
     promptVersion: parsePromptVersion(options.promptVersion),
     title: options.title,
   });
@@ -7348,12 +6813,9 @@ async function runLogbookWrite(
   );
 }
 
-// ── The prompt registry (`admin prompts`) ───────────────────────────────────
-
 type PromptDiffCliOptions = JsonOptions & { against?: string };
 type PromptUpdateCliOptions = JsonOptions & { bodyFile?: string; note?: string };
 
-/** Every command in the group takes a slug; a bare one prints the registry instead. */
 function requirePromptSlug(slug: string | undefined): string {
   if (!slug) {
     throw new Error("Missing prompt slug. `fluncle admin prompts list` names them all.");
@@ -7568,9 +7030,6 @@ async function runRecent(
   options: RecentOptions,
   recentCommand: typeof import("./commands/recent").recentCommand,
 ): Promise<void> {
-  // Bare `recent` in a terminal is an interactive ←/→ pager (10 at a time).
-  // `--json`, an explicit `--limit`, or a non-TTY (piped) fall through to a plain
-  // newest-first print, so every scripted consumer is untouched.
   if (
     options.limit === undefined &&
     !options.json &&
@@ -7667,9 +7126,6 @@ async function runArtistsRank(
   options: CatalogueRankOptions,
   rankArtistsCommand: typeof import("./commands/admin-artists").rankArtistsCommand,
 ): Promise<void> {
-  // The human readout shows the true "N still stale" backlog, so it opts into the real COUNT; the
-  // `--json` path (automation, the drain loop) keeps the fast fullness sentinel — its `remaining`
-  // is only ever tested `> 0` / `=== 0`, so it never needs (or pays for) the second stale-set scan.
   const { summary } = await rankArtistsCommand({
     countRemaining: !options.json,
     limit: options.limit,
@@ -7692,9 +7148,6 @@ async function runCatalogueRank(
   options: CatalogueRankOptions,
   catalogueRankCommand: typeof import("./commands/admin-catalogue").catalogueRankCommand,
 ): Promise<void> {
-  // The human readout shows the true "N still stale" backlog, so it opts into the real COUNT; the
-  // `--json` path (the box sweep, other automation) keeps the fast fullness sentinel — its `remaining`
-  // is only ever tested `> 0` / `=== 0`, so it never needs (or pays for) the ~19s count.
   const { summary, telescope } = await catalogueRankCommand({
     countRemaining: !options.json,
     limit: options.limit,
@@ -7716,7 +7169,6 @@ async function runCatalogueRank(
     `Ranked ${summary.scored} against ${summary.embeddedFindings} embedded findings; prioritized ${summary.prioritized} for capture.${quarantine}${deduped} ${summary.remaining} still stale.`,
   );
 
-  // The Telescope mirror's outcome — the one window onto a silent Spotify failure.
   if (telescope) {
     console.log(
       telescope.ok
@@ -7726,10 +7178,6 @@ async function runCatalogueRank(
   }
 }
 
-/**
- * The unmatched observability row: the verdict and when the capture last tried, so the lens's
- * order (newest attempt first) is readable off the line. JSON output bypasses this entirely.
- */
 export function unmatchedRowLine(track: {
   artists: string[];
   captureStatus: null | string;
@@ -7768,7 +7216,6 @@ async function runCatalogueList(
   for (const track of tracks) {
     const identity = `${track.artists.join(", ")} — ${track.title}`;
 
-    // The wrong-audio holding pen: the WHY names the finding the capture was mistaken FOR.
     if (options.lens === "quarantine") {
       const collided = track.nearestFinding;
       const why = collided
@@ -7779,21 +7226,17 @@ async function runCatalogueList(
       continue;
     }
 
-    // The observability window: the verdict + the attempt instant ARE the row's WHY.
     if (options.lens === "unmatched") {
       console.log(unmatchedRowLine(track));
       continue;
     }
 
-    // The DUPLICATE WHY wins on either lens: this row is the same recording as a finding, so it
-    // is "already in the archive" and (on capture) never bought. It names the finding it matched.
     const dup = track.duplicateOf;
     const dupWhy = dup
       ? `already in the archive — ${dup.logId ? `${dup.logId} ` : ""}${dup.artists.join(", ")} — ${dup.title}`
       : null;
 
     if (options.lens === "capture") {
-      // The WHY, on a catalogue row that has never been heard: what ties it to the archive.
       const reason = track.captureReason;
       const why =
         dupWhy ??
@@ -7813,7 +7256,6 @@ async function runCatalogueList(
       continue;
     }
 
-    // The WHY on a ranked row: never a bare score. It names the finding it matched.
     const match = track.nearestFinding;
     const score = track.nearestFindingScore?.toFixed(2) ?? "—";
     const why =
@@ -7829,9 +7271,6 @@ async function runCatalogueList(
 type NoteHeldOptions = JsonOptions & { settled?: boolean };
 type NoteGateOptions = JsonOptions & { maxOverlap?: string; minPhraseWords?: string };
 
-// The held notes as a deadpan board (the CLI register). Each one prints the line the model
-// wrote, the neighbour it echoed, and the score NEXT TO the threshold it was judged against —
-// a score with no threshold beside it is a number, not evidence.
 async function runNoteHeld(
   options: NoteHeldOptions,
   noteHeldCommand: typeof import("./commands/admin-notes").noteHeldCommand,
@@ -7873,7 +7312,6 @@ async function runNoteHeld(
   }
 }
 
-// Read or retune the gate. A bare `gate` reports; a dial sets it.
 async function runNoteGate(
   options: NoteGateOptions,
   noteGateCommand: typeof import("./commands/admin-notes").noteGateCommand,
@@ -7897,9 +7335,6 @@ async function runNoteGate(
   );
 }
 
-// The held observations as a deadpan board — the runNoteHeld shape, on the spoken ledger.
-// Each prints the SCRIPT the model wrote, the neighbour script it echoed, and the score next
-// to the threshold it was judged against.
 async function runObservationHeld(
   options: NoteHeldOptions,
   observationHeldCommand: typeof import("./commands/admin-observations").observationHeldCommand,
@@ -7941,7 +7376,6 @@ async function runObservationHeld(
   }
 }
 
-// Read or retune the observation gate. A bare `gate` reports; a dial sets it.
 async function runObservationGate(
   options: NoteGateOptions,
   observationGateCommand: typeof import("./commands/admin-observations").observationGateCommand,
@@ -8011,7 +7445,7 @@ async function runGalaxyMapWrite(
   galaxyMapWriteCommand: typeof import("./commands/galaxies").galaxyMapWriteCommand,
 ): Promise<void> {
   const raw = JSON.parse(readFileSync(options.file, "utf8")) as unknown;
-  // Accept either `{ clusters: [...] }` or a bare array of cluster rows.
+
   const clusters =
     Array.isArray(raw) || raw === null ? raw : (raw as { clusters?: unknown }).clusters;
 
@@ -8058,8 +7492,6 @@ async function runMixtapes(
   console.log(trackRows(mixtapes).join("\n"));
 }
 
-// Shared limit parse for the listing commands (recent, admin queue, admin
-// vehicles): 1-100, default 10. Throws a CLI-friendly error before any fetch.
 function parseListLimit(value: string | undefined): number {
   const limit = Number.parseInt(value ?? "10", 10);
 
@@ -8175,8 +7607,6 @@ export function parseTelemetryTimestamp(
       throw new Error("--since relative age must not exceed 3650d");
     }
 
-    // Keep the relative expression on the wire. The Worker resolves its reference
-    // instant once, beside the matching `until` validation and database query.
     return value;
   }
 
@@ -8193,8 +7623,6 @@ export function parseTelemetryTimestamp(
   return timestamp.toISOString();
 }
 
-// The 1-based `--page` cursor for the catalogue-index commands. Absent ⇒ page 1;
-// the server clamps a page past the end (an empty page renders its own line).
 function parsePage(value: string | undefined): number {
   const page = Number.parseInt(value ?? "1", 10);
 
@@ -8205,9 +7633,6 @@ function parsePage(value: string | undefined): number {
   return page;
 }
 
-// `search --limit`. Optional (absent ⇒ the server's default); capped at the
-// `search_archive` op's ceiling of 50 so an over-cap value fails here with a
-// clear message rather than as an opaque schema rejection over the wire.
 function parseSearchLimit(value: string | undefined): number | undefined {
   if (value === undefined) {
     return undefined;
@@ -8232,9 +7657,6 @@ function parseFreshView(value: string | undefined): FreshView {
   return view;
 }
 
-// Resolve the tri-state key filter from the two accepted forms: `--no-key`
-// (Commander sets `key === false`) or `--has-key true|false`. Absent both ⇒
-// undefined (no filter — list everything). `--no-key` wins if both are given.
 function resolveHasKey(options: AdminTracksListOptions): boolean | undefined {
   if (options.key === false) {
     return false;
@@ -8255,9 +7677,6 @@ async function runAdminTracksList(
   options: AdminTracksListOptions,
   listCommand: typeof import("./commands/admin-tracks").listCommand,
 ): Promise<void> {
-  // `--all` fetches the entire catalogue by paging past the per-request 100-row cap
-  // (listCommand pages via cursor until the archive is exhausted); otherwise the
-  // explicit `--limit` is parsed and clamped to 1-100.
   const limit = options.all ? Number.POSITIVE_INFINITY : parseListLimit(options.limit);
   const order = options.order === "asc" ? "asc" : "desc";
   const hasKey = resolveHasKey(options);
@@ -8373,10 +7792,6 @@ async function runAdminQueue(
   console.log(trackRows(tracks).join("\n"));
 }
 
-// Every `--queue` worklist view prints the same three shapes — a JSON envelope, one
-// empty-state line, or a count heading over `trackRows` — and differs ONLY in its copy
-// and which queue command it reads. So the plumbing lives here once and each caller
-// brings its own three strings: the fetch, the empty line, and the heading.
 async function runQueueView({
   emptyMessage,
   fetch,
@@ -8414,8 +7829,6 @@ async function runAdminContextQueue(
   options: AdminListOptions & { retryEmpty?: boolean },
   contextQueueCommand: typeof import("./commands/admin-tracks").contextQueueCommand,
 ): Promise<void> {
-  // `--retry-empty` widens the worklist to also re-pick CONFIRMED-EMPTY finds (the
-  // occasional widen-the-net pass); off by default keeps the routine sweep narrow.
   const retryEmpty = options.retryEmpty === true;
   const scope = retryEmpty ? " (incl. empty retries)" : "";
 
@@ -8490,9 +7903,6 @@ async function runAdminCaptureQueue(
 const TRACK_WORK_KINDS = new Set(["analyze", "capture", "embed"]);
 const TRACK_WORK_SCOPES = new Set(["all", "catalogue", "findings"]);
 
-// The catalogue-aware pipeline worklist. Renders each row with the two things the queue's
-// ORDER turns on: whether the track is certified, and its capture-priority rung. An
-// uncertified row has no coordinate to print — it has no finding — so it shows its trackId.
 async function runAdminTrackWork(
   options: TrackWorkOptions,
   trackWorkCommand: typeof import("./commands/admin-tracks").trackWorkCommand,
@@ -8524,7 +7934,6 @@ async function runAdminTrackWork(
     return;
   }
 
-  // The page was withheld, not drained. Say so, and still report the backlog the count measured.
   if (debtPending === true) {
     console.log(
       `${queued ?? 0} queued to ${kind} (${scope}) — page held back, due-work repair is still converging.`,
@@ -8538,8 +7947,7 @@ async function runAdminTrackWork(
   }
 
   const noun = tracks.length === 1 ? "track" : "tracks";
-  // With `--count`, lead with the BACKLOG and say the page is a page — the two numbers are
-  // different questions and only one of them sizes a GPU rental.
+
   const head =
     queued === undefined
       ? `${tracks.length} ${noun} to ${kind} (${scope}), in drain order:`
@@ -8554,10 +7962,6 @@ async function runAdminTrackWork(
   }
 }
 
-// The whole-archive walk cap. Absent `--limit` drains the entire archive (the repair is
-// meant to sweep everything); an explicit `--limit` (any positive integer) bounds a
-// pilot/test pass. Distinct from `parseListLimit`'s 1..100 worklist clamp — this walks the
-// cursor chain to the end.
 const REQUEUE_ANALYSIS_ARCHIVE_CAP = 1_000_000;
 
 function parseRequeueAnalysisLimit(value: string | undefined): number {
@@ -8620,9 +8024,6 @@ async function runAdminRequeueAnalysis(
     console.log(result.withoutSourceAudio.map(describe).join("\n"));
   }
 
-  // The gate: the dry-run diff review. Keys with no provenance may come from the operator's
-  // Rekordbox sync (analyzedFrom NULL),
-  // so they read as preview-grade here and a re-enrich MAY overwrite them. Eyeball the list.
   console.log(
     "\nCaveat: keys backfilled from Rekordbox are indistinguishable from DSP keys (no legacy" +
       " provenance) and a re-enrichment may overwrite them. This dry-run diff is the gate —" +
@@ -8968,13 +8369,6 @@ function normalizeCommanderError(error: unknown): unknown {
   return new Error(message);
 }
 
-// Every option that CONSUMES the next token as its value. positionalArgs()
-// skips a listed option plus its value when deriving raw positionals; an option
-// missing here leaks its value into the positionals and trips the argument
-// validators (the fluncle-triage sweep found this the hard way when
-// `--verdict-file <path>` pushed a fifth positional into `admin submissions`).
-// cli.test.ts scans the source and build-fails when a declared `<value>` option
-// is absent from this set — add every new value-taking option here.
 const stringOptions = new Set([
   "--isrc-refresh-limit",
   "--action",
@@ -9049,8 +8443,7 @@ const stringOptions = new Set([
   "--plate-background",
   "--platform",
   "--poster",
-  // The PROVENANCE stamp the on-box sweeps pass on every authored artifact — which
-  // prompt-registry version wrote it (docs/agents/prompt-registry.md).
+
   "--prompt-version",
   "--props",
   "--query",

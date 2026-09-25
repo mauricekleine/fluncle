@@ -3,17 +3,6 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-// The credential half of the no-network rail (the transport half is packages/test-support).
-//
-// `loadEnv` reads `~/.config/fluncle/.env.<profile>`, and the operator's `production`
-// profile holds a real ADMIN token against www.fluncle.com. A test run must never see it:
-// one validation regression, or a new test that forgets to point at a fixture server, and
-// the suite fires a real admin command at the live archive.
-//
-// Proven in a subprocess with a SYNTHETIC $HOME, so this exercises the real file-reading
-// path (and asserts the load still works when it should) without ever touching the
-// operator's own config.
-
 const envModule = new URL("./env.ts", import.meta.url).pathname;
 
 async function fakeHomeWithProfile(): Promise<string> {

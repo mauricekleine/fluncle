@@ -3,10 +3,6 @@ import { type TrackListItem, type TracksResponse } from "@fluncle/contracts";
 import { baseTitleMatches, stripVersionSuffix, versionMatches } from "@fluncle/contracts/util";
 import { adminApiGet, adminApiPostForm, publicApiGet } from "../api";
 
-// Accept a fuzzy search hit as "the same recording" only when its duration agrees
-// with the finding within a few seconds — the same discipline apps/web's
-// lookupIsrcFromDeezer uses. A version + title match plus a duration match is a far
-// stronger "this is the right recording" signal than the first hit with a preview.
 const DURATION_TOLERANCE_S = 5;
 
 type PreviewArchiveResult = {
@@ -26,10 +22,6 @@ type PreviewArchiveStatus = {
   trackId: string;
 };
 
-// The `/api/v1/findings` feed items this command works over — a finding (`TrackListItem`),
-// imported from the contract so the shape can't drift from the wire (Finding B20). The
-// backfill loop skips the feed's mixtape arm (`type === "mixtape"`), which carries no
-// preview, so every item it resolves is a finding.
 type Track = TrackListItem;
 
 type ResolvedPreview = {
@@ -92,8 +84,6 @@ export async function previewArchiveBackfillCommand(
         break;
       }
 
-      // The public feed interleaves published mixtapes; they carry no preview, so skip
-      // them and narrow `track` to a finding (`TrackListItem`) for the rest of the loop.
       if (track.type === "mixtape") {
         continue;
       }
@@ -198,9 +188,6 @@ async function resolveDeezerByIsrc(isrc: string | undefined): Promise<ResolvedPr
   }
 }
 
-// A search hit's duration agrees with the finding (within tolerance), or one side
-// is unknown (don't reject on a missing field — duration is a corroborator, not a
-// gate when absent).
 function durationAgrees(
   findingMs: number | undefined,
   candidateSeconds: number | undefined,
@@ -220,14 +207,6 @@ async function resolveDeezerSearch(track: Track): Promise<ResolvedPreview | unde
   }
 
   try {
-    // FREE TEXT, never Deezer's `artist:"…" track:"…"` field syntax: a combined field ask
-    // answers `{"data":[],"total":0}` for every input, which reads as a clean miss forever.
-    // The bare title is asked (a version suffix returns nothing) and every hit is gated the
-    // same way the iTunes arm below gates its own — the ARTIST is checked here rather than
-    // left to retrieval, same VERSION as the finding (a remix finding never takes the
-    // original), the base title actually matches, and the duration agrees. The first
-    // hit with a preview is NOT trusted — a wrong recording archived here is served
-    // as confidence-1 "exact" to every future render. A miss → no archive is better.
     const query = `${artist} ${stripVersionSuffix(track.title.trim())}`;
     const response = await fetch(`https://api.deezer.com/search?q=${encodeURIComponent(query)}`);
     const body = (await response.json()) as {
@@ -272,10 +251,7 @@ async function resolveItunes(track: Track): Promise<ResolvedPreview | undefined>
         trackTimeMillis?: number;
       }>;
     };
-    // Same gate: artist contains, VERSION matches (no remix→original), the base title
-    // matches, and the duration agrees. iTunes exposes only "trackName" with no clean
-    // version field, so the version + base-title check is what keeps a remix finding
-    // off the original's preview.
+
     const hit = (body.results ?? []).find(
       (item) =>
         item.previewUrl &&

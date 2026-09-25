@@ -11,12 +11,6 @@ type LinkGroup = {
   links: Link[];
 };
 
-/**
- * The canonical link map (docs/socials/). Grouped the way the crew reaches for
- * them: where to listen, where to follow, the mothership, and the nerdier
- * corners. URLs are verbatim — the handle is lowercase `fluncle` everywhere
- * (VOICE.md §6).
- */
 export const linkGroups: LinkGroup[] = [
   {
     heading: "Where to listen",
@@ -41,9 +35,7 @@ export const linkGroups: LinkGroup[] = [
     heading: "The mothership",
     links: [
       { label: "Web: the archive", url: "https://www.fluncle.com" },
-      // The mothership's canonical descriptor, verbatim (VOICE.md §3), and the canon verb
-      // for joining it: you BOARD the mothership. The SSH About screen says the same thing
-      // the same way (apps/ssh/main.go, aboutContent).
+
       {
         label: "Newsletter",
         url: "Fresh bangers, every Friday, from Fluncle. Board it at www.fluncle.com",
@@ -61,14 +53,6 @@ export const linkGroups: LinkGroup[] = [
   },
 ];
 
-/**
- * `fluncle about` — Fluncle introduces himself and points at where to find him
- * across the Galaxy. Read-only, no network, no auth: the wordmark, a short
- * first-person line (the About surface is one of the long-form registers where
- * the cosmos may drive the verb, per VOICE.md's Garnish Rule), then the links
- * grouped the way the crew uses them. Typographically clean — no emoji (CLI
- * register).
- */
 export function aboutLines(): string[] {
   const lines: string[] = [
     "",

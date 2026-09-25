@@ -30,8 +30,6 @@ function snapshot(
   };
 }
 
-// Capture every public API path the command requests so the test can prove it
-// reads the public, non-oRPC /api/v1/status resource (not an admin path).
 let requestedPaths: string[] = [];
 
 await mock.module("../api", () => ({
@@ -72,7 +70,7 @@ describe("statusLines — the terse board", () => {
     );
 
     expect(lines[0]).toBe("1 service down.");
-    // The down row carries the x mark and the service's own message.
+
     const r2Row = lines.find((line) => line.includes("r2"));
     expect(r2Row).toContain("x");
     expect(r2Row).toContain("no answer");
@@ -86,8 +84,6 @@ describe("statusLines — the terse board", () => {
   });
 
   test("falls back to the registry label when a service has no message", () => {
-    // `dns` carries no message, so the row borrows the registry surface's own
-    // plain-words description (the catalog stays the single source of the label).
     const lines = statusLines(snapshot([service("dns", "ok")], 30));
     const dnsRow = lines.find((line) => line.includes("dns"));
 

@@ -1,7 +1,3 @@
-// `fluncle admin artifacts` is the thin authenticated transport for filesystemful derived-artifact
-// consumers. The Worker owns registry validation, source snapshots, fences, ordering, digests,
-// lifecycle, and compaction; this module only serializes the exact protocol messages.
-
 import {
   ARTIFACT_CHANGE_API_MAX_LIMIT,
   ARTIFACT_COMPACTION_API_MAX_LIMIT,

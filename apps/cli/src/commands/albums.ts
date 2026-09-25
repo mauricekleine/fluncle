@@ -1,9 +1,3 @@
-// The `albums` CLI command — a thin `publicApiGet` read over the public
-// `list_albums` / `get_album` oRPC ops, mirroring `artists`. Catalogue reference
-// register (plain, no cosmos): the bare list is every album Fluncle holds, A to
-// Z, one page at a time (`--page`); a bare `slug` reads one album's dossier. The
-// Unlit Rule keeps the certified marker off a list row; `--json` carries it.
-
 import { type AlbumGetResponse, type AlbumsResponse } from "@fluncle/contracts";
 import { publicApiGet } from "../api";
 import { printJson } from "../output";

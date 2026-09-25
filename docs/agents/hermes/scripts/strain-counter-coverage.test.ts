@@ -1,8 +1,3 @@
-// CI guard for the healthcheck's hand-written summary counter vocabulary.
-//
-// A guessed key is worse than dead code here: it makes the detector look broader than it is
-// while matching no sweep output. Keep one source-verified proof emitter per counter. Adding a
-// detector key without a proof fails; renaming or removing the emitter's summary field fails too.
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -19,15 +14,8 @@ const COUNTER_EMITTER_PROOFS: Readonly<Record<string, EmitterProof>> = {
   gateSkipped: {
     file: "entity-bio-sweep.ts",
     patterns: [
-      // Deliberately NOT anchored to `const summary = {` plus a character distance. That form
-      // broke twice on legitimate edits — a longer comment, then this sweep's move to a
-      // `createBioSweepSummary` factory — each time reporting a missing emitter that was never
-      // missing. Assert the initializer exists; deleting the counter still fails this.
       /\bgateSkipped:\s*0,/,
-      // The `ok` VALUE is left unpinned for the same reason: this proof is that the summary
-      // reaches an emitted line, not that the sweep asserts a particular verdict. Pinning the
-      // literal `ok: true` broke this a third time when that literal became the derived
-      // `bioSweepOk(summary)` — the shape a summary is supposed to have.
+
       /JSON\.stringify\(\{\s*ok:[^,]+,\s*\.\.\.summary\s*\}\)/,
     ],
   },

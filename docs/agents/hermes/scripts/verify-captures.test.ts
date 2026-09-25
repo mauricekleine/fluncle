@@ -1,8 +1,3 @@
-// Unit tests for the verify-captures backfill's drain loop (verify-captures.ts). Every effect is
-// injected (VerifyDeps) — no R2, no fpcalc, no network — so the verdict derivation, the routing
-// tally, the skip-not-stamp discipline, and the per-row isolation are proven with stubs:
-//
-//   bun test docs/agents/hermes/scripts/verify-captures.test.ts
 import { describe, expect, mock, test } from "bun:test";
 import {
   deriveVerdict,
@@ -12,8 +7,6 @@ import {
   type VerifyWorkItem,
 } from "./verify-captures";
 
-// A contained-match pair (preview excerpt inside the capture) and an unrelated pair, built the
-// same way fingerprint-match.test.ts builds them.
 function randomFingerprint(length: number, seed: number): number[] {
   const out: number[] = [];
   let state = seed >>> 0;
@@ -29,8 +22,8 @@ function randomFingerprint(length: number, seed: number): number[] {
 }
 
 const CAPTURE_FP = randomFingerprint(2000, 42);
-const PREVIEW_FP = CAPTURE_FP.slice(800, 1040); // a true 30s excerpt
-const WRONG_FP = randomFingerprint(240, 999); // a different recording's preview
+const PREVIEW_FP = CAPTURE_FP.slice(800, 1040);
+const WRONG_FP = randomFingerprint(240, 999);
 
 describe("deriveVerdict", () => {
   test("no preview fingerprint → no-preview (the abstain)", () => {
@@ -53,8 +46,6 @@ describe("deriveVerdict", () => {
 
 type DepsOverrides = Partial<VerifyDeps> & { queue?: VerifyWorkItem[]; queued?: number };
 
-// The server's routing, mirrored for the stub: match/no-preview stamp, a catalogue mismatch
-// quarantines, a finding mismatch raises the attention item. `certifiedIds` marks the findings.
 function stubDeps(overrides: DepsOverrides, certifiedIds: Set<string> = new Set()): VerifyDeps {
   const queue = overrides.queue ?? [];
 
@@ -86,8 +77,6 @@ function stubDeps(overrides: DepsOverrides, certifiedIds: Set<string> = new Set(
   };
 }
 
-// The routing tests default to a TRUSTED (ISRC) row so a mismatch stays on the condemning path.
-// The second-rung tests below pass `isrc: null` explicitly to exercise the abstain-only path.
 const row = (trackId: string, extra: Partial<VerifyWorkItem> = {}): VerifyWorkItem => ({
   artists: ["A"],
   durationMs: 200_000,
@@ -265,7 +254,6 @@ describe("runVerifyTick — the second rung (ISRC-null, title+artist reference)"
       stubDeps({ fetchPreviewFp, queue: [row("s1", { isrc: null })], report, resolveSearchFp }),
     );
 
-    // The ISRC rung is skipped entirely; the title+artist rung answered.
     expect(fetchPreviewFp).not.toHaveBeenCalled();
     expect(resolveSearchFp).toHaveBeenCalledTimes(1);
     expect(report).toHaveBeenCalledWith("s1", "match");
@@ -296,15 +284,12 @@ describe("runVerifyTick — the second rung (ISRC-null, title+artist reference)"
     const summary = await runVerifyTick(
       20,
       stubDeps({
-        // A confident-but-WRONG reference: its fingerprint does not appear in the capture.
         queue: [row("s3", { certified: false, isrc: null })],
         report,
         resolveSearchFp: async () => ({ fingerprint: WRONG_FP }),
       }),
     );
 
-    // The capture is NOT condemned: no `mismatch` verdict, no quarantine — just the honest abstain,
-    // recorded distinctly as a search mismatch.
     expect(report).toHaveBeenCalledWith("s3", "no-preview");
     expect(summary.searchMismatch).toBe(1);
     expect(summary.quarantinedCatalogue).toBe(0);
