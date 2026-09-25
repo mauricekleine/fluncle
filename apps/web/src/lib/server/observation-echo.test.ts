@@ -16,7 +16,6 @@ describe("scoreObservationEcho", () => {
   });
 
   it("catches a lifted phrase across two scripts (the cross-script verbatim the audit flagged)", () => {
-    // An 8-word run surviving in two scripts clears the 4-word phrase threshold.
     const candidate =
       "My shoulders went before I'd clocked the coordinate on this one, pure rolling menace.";
     const neighbor = {

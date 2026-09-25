@@ -1,28 +1,3 @@
-// The `admin-tracks` domain router module — the admin wave's pilot (every admin
-// pattern the fan-out reuses). Each handler reuses the live `/api/v1/admin/tracks/*`
-// route logic verbatim; the auth tier moves from the per-handler `requireAdmin` /
-// `requireOperator` to the oRPC procedure middleware (../orpc-auth), and the
-// field-level role check reads `context.role` in-handler.
-//
-//   - `update_track` — port of PATCH /admin/tracks/{trackId}. On `adminAuth` (the
-//     live `requireAdmin`: operator OR agent). The FIELD-LEVEL guard reads
-//     `context.role`: the agent may write ONLY analysis fields; an operator-only
-//     field written by the agent is a 403 `forbidden` (rejected, not dropped). The
-//     operator may write anything.
-//   - `observe_track` — POST /admin/tracks/{trackId}/observe. FLIPPED to the
-//     agent tier (`adminAuth` only) so the Hermes observation cron can drive it.
-//     Idempotent per finding (an
-//     existing observation is a no-op). It no longer holds Firecrawl — it reads the
-//     stored `context_note` (written by `context_track`) as fuel; the voice gate
-//     still hard-fails any banned-identity-word / earthly-geography violation.
-//   - `context_track` — POST /admin/tracks/{trackId}/context. The split-out
-//     context half (agent tier): fetch the Firecrawl FACTS and write `context_note`
-//     ONLY, quietly (no updated_at bump). Idempotent per finding. Firecrawl output
-//     is untrusted web content treated strictly as DATA.
-//   - `presign_track_video_uploads` / `finalize_track_video` — ports of the JSON
-//     video control-plane (`…/video/uploads`, `…/video/finalize`). Both live routes
-//     are `requireOperator`, so both are on the operator tier.
-
 import { env } from "cloudflare:workers";
 import { type InferContractRouterInputs } from "@orpc/contract";
 import { ORPCError } from "@orpc/server";
@@ -87,52 +62,18 @@ import { isLogId } from "../../log-id";
 import { type VideoArtifact, artifactByField, readRenderManifestStamps } from "../video-bundle";
 import { type Implementer, parseLimit, requireTrack, toFault } from "./_shared";
 
-// Fields only the operator may write: editorial voice (note), the vehicle/video
-// (videoUrl), and the immutable identity fields (isrc/logId). The agent role is
-// limited to machine-measured analysis (bpm, key, features, enrichmentStatus) —
-// overwritable, internal, no public footprint. (`vibeX`/`vibeY` are not writable — the sonic galaxy is now the automatic
-// `fluncle-cluster` assignment over the MuQ embedding, not an operator write.)
 const OPERATOR_ONLY_FIELDS: (keyof TrackUpdate)[] = ["isrc", "logId", "note", "videoUrl"];
 
-// The handler input shapes come straight from the contract (the single source of
-// truth): `InferContractRouterInputs<typeof contract>` projects each op's Zod
-// `.input(...)` to its TS type, so a `PatchBody`/`ObserveBody` hand-mirror can't
-// drift from the schema the route validates. The contract inputs are LOOSE (each
-// field `?: unknown`) by design — the handler narrows them itself — so these are
-// `{ …?: unknown; trackId: string }`, matching the handler's narrowed contract input.
 type AdminTrackInputs = InferContractRouterInputs<typeof contract>;
 type PatchBody = AdminTrackInputs["update_track"];
 type ObserveBody = AdminTrackInputs["observe_track"];
 type NoteBody = AdminTrackInputs["note_track"];
 
-// Admin board list page-size bounds, ported verbatim from the live GET route.
 const ADMIN_LIST_DEFAULT_LIMIT = 16;
 const ADMIN_LIST_MAX_LIMIT = 48;
 
-// ── The vibe neighbourhood (the auto-note's second fuel) ──────────────────────────
-//
-// How many sonic neighbours the note reads. Six is the same window the `/log` "more
-// like this" row shows: wide enough to describe a region of the archive, tight enough
-// that every one of them genuinely sounds like the finding. The neighbours come from
-// the MuQ audio EMBEDDING (`list_similar_tracks` — an exact cosine scan in SQL, the
-// probe bound as a raw blob), never from `features_json`: the note encodes a
-// subjective read of how a finding FEELS, and two tracks can measure nearly identical
-// yet sit nowhere near each other by feel. The embedding is the space the note's
-// neighbours live in.
 const NOTE_NEIGHBOR_LIMIT = 6;
 
-/**
- * The notes of a finding's sonic neighbours — the fuel the auto-note is authored
- * against AND the corpus its echo gate measures it against (one read, one definition
- * of "the neighbourhood", so the gate can never judge against notes the agent never
- * saw). Only NOTED neighbours count: an un-noted one teaches nothing and cannot be
- * echoed. Every candidate is a certified finding (`getSimilarFindings` drives through
- * the findings join), so a catalogue track can never enter the neighbourhood.
- *
- * Best-effort by design: a finding with no embedding yet, or one whose neighbours are
- * all note-less, comes back `[]` — the note is then authored (and gated) exactly as it
- * was before the layer existed.
- */
 async function noteNeighbors(trackId: string): Promise<NoteNeighbor[]> {
   const findings = await getSimilarFindings(trackId, NOTE_NEIGHBOR_LIMIT);
 
@@ -143,9 +84,6 @@ async function noteNeighbors(trackId: string): Promise<NoteNeighbor[]> {
   );
 }
 
-// Tri-state boolean query params ("true"/"false"/absent → true/false/undefined),
-// ported verbatim from the live `hasVideo` route. `hasContext`/`hasObservation`/
-// `hasNote` reuse it to drive the context, observation, and auto-note queues.
 function parseTriStateBool(value: string | undefined): boolean | undefined {
   if (value === "true") {
     return true;
@@ -180,28 +118,14 @@ function resolveDurationTargetSec(value: unknown): number {
   return 30;
 }
 
-/**
- * WHAT THIS WORKER OFFERS THE PIPELINE SWEEPS, answered on the worklist read they already run first.
- *
- * The box CLI is a pinned release and lags the Worker in both directions, so a NEW sweep must never
- * discover a missing batched op by catching a 404 halfway through a batch. It reads these numbers
- * off the queue; an absent field is an OLD Worker and the per-item path is taken instead. An OLD
- * sweep ignores the field entirely, which is why the per-item ops remain.
- */
 const TRACK_WORK_CAPABILITIES = {
   commitTrackCaptures: MAX_CAPTURE_COMMIT_BATCH,
   prepareTrackCaptures: MAX_CAPTURE_PREPARE_BATCH,
   updateTrackEmbeddings: MAX_EMBEDDING_WRITE_BATCH,
 } as const;
 
-/**
- * The batched embedding write's wall budget, the counterpart of
- * `CAPTURE_BATCH_WALL_BUDGET_MS`: an admitted phase's watchdog window is ~75s, so the request stops
- * itself and reports the tail rather than running long and losing its fence mid-write.
- */
 const EMBEDDING_BATCH_WALL_BUDGET_MS = 45_000;
 
-/** JSON.parse that returns `null` instead of throwing — for the embedding string form. */
 function safeJsonParse(value: string): unknown {
   try {
     return JSON.parse(value);
@@ -248,10 +172,6 @@ function isCaptureRejectedResult(value: unknown): value is { applied: false; rea
   );
 }
 
-/**
- * Build the `admin-tracks` domain's handlers. Each reuses the live route logic
- * verbatim; only the auth gate is relocated to the procedure middleware.
- */
 export function adminTracksHandlers(os: Implementer) {
   const prepareTrackCaptureHandler = os.prepare_track_capture
     .use(adminAuth)
@@ -283,8 +203,6 @@ export function adminTracksHandlers(os: Implementer) {
       }
     });
 
-  // POST /admin/tracks/captures/prepare — a whole batch frozen in ONE admitted phase, with the
-  // catalogue capture budget consumed cumulatively across the batch in request order.
   const prepareTrackCapturesHandler = os.prepare_track_captures
     .use(adminAuth)
     .handler(async ({ input }) => {
@@ -297,7 +215,7 @@ export function adminTracksHandlers(os: Implementer) {
               : { priorSnapshotToken: item.priorSnapshotToken }),
             trackId: item.trackId,
           })),
-          // Only ever subtracts from the remaining count — never adds. See the op's contract.
+
           { reservedThisTick: input.reservedThisTick ?? 0 },
         );
 
@@ -307,8 +225,6 @@ export function adminTracksHandlers(os: Implementer) {
       }
     });
 
-  // POST /admin/tracks/captures/commit — a batch settled in ONE admitted phase, one receipt per
-  // item. A stale or poisoned row rejects alone; the wall-budgeted tail reads `safely-retryable`.
   const commitTrackCapturesHandler = os.commit_track_captures
     .use(adminAuth)
     .handler(async ({ input }) => {
@@ -334,9 +250,6 @@ export function adminTracksHandlers(os: Implementer) {
       }
     });
 
-  // POST /admin/tracks/embeddings — a tick's MuQ vectors written in ONE admitted phase. Each item
-  // takes the same `updateTrack` path (certification rail included) and keeps its own verdict:
-  // `track.embed` is non-replayable, so a failure is reported rather than retried here.
   const updateTrackEmbeddingsHandler = os.update_track_embeddings
     .use(adminAuth)
     .handler(async ({ context, input }) => {
@@ -447,8 +360,6 @@ export function adminTracksHandlers(os: Implementer) {
       }
     });
 
-  // PATCH /admin/tracks/{trackId} — on `adminAuth` (operator OR agent). The
-  // field-level guard reads `context.role`.
   const updateTrackHandler = os.update_track.use(adminAuth).handler(async ({ context, input }) => {
     try {
       const body: PatchBody = input;
@@ -464,10 +375,6 @@ export function adminTracksHandlers(os: Implementer) {
           update.key = body.key;
         }
 
-        // BPM/key analysis provenance (RFC bpm-key-accuracy) — agent-writable analysis
-        // metadata, like features/embedding, so NOT in OPERATOR_ONLY_FIELDS. Narrow each:
-        // analyzedFrom to the preview|full enum, the sources to non-empty strings, the
-        // confidences to finite numbers, analyzedAt to a non-empty ISO string.
         if (typeof body.bpmSource === "string" && body.bpmSource.trim()) {
           update.bpmSource = body.bpmSource;
         }
@@ -496,12 +403,6 @@ export function adminTracksHandlers(os: Implementer) {
           update.features = body.features;
         }
 
-        // The MuQ embedding: an analysis field the agent may write. Accept the vector
-        // as a real JSON array (the CLI parses `--embedding`/`--embedding-file` into
-        // one) or, defensively, a JSON-string of one; validate the 1024-d shape and
-        // store the canonical serialization. `""` clears it (re-embed on the next tick).
-        // A malformed vector is a 400 `invalid_embedding`, never a silent drop, so a
-        // truncated MuQ run can't poison the similarity space.
         if (body.embedding !== undefined) {
           if (body.embedding === "") {
             update.embedding = "";
@@ -533,10 +434,6 @@ export function adminTracksHandlers(os: Implementer) {
           update.videoUrl = body.videoUrl;
         }
 
-        // The sonic galaxy assignment (browse-by-feel RFC) — agent-writable, like
-        // embedding, so NOT in OPERATOR_ONLY_FIELDS: the on-box `fluncle-cluster` cron
-        // sets it with the box's agent token. A string sets it (including "" which clears
-        // the assignment); anything else leaves it untouched.
         if (typeof body.galaxyId === "string") {
           update.galaxyId = body.galaxyId;
         }
@@ -549,18 +446,10 @@ export function adminTracksHandlers(os: Implementer) {
           update.enrichmentStatus = body.enrichmentStatus;
         }
 
-        // A present note sets it (including "" which clears the stored note); an
-        // absent note leaves it untouched. parseEditorialNote throws on too-long.
         if (typeof body.note === "string") {
           update.note = parseEditorialNote(body.note);
         }
 
-        // The render's diversity-ledger stamps (vehicle/grain/register). Normally the
-        // video FINALIZE writes them from the bundle's render.json, but a bundle can be missing
-        // them, and the correction path is this
-        // generic update — the operator watches the video and stamps what is on screen.
-        // Same trim/length discipline as the finalize mapping; the certification rail in
-        // updateTrack still 409s them on an uncertified row (they are findings columns).
         if (typeof body.videoVehicle === "string" && body.videoVehicle.trim()) {
           update.videoVehicle = body.videoVehicle.trim().slice(0, 120);
         }
@@ -585,8 +474,6 @@ export function adminTracksHandlers(os: Implementer) {
           update.videoStructure = body.videoStructure.trim().slice(0, 120);
         }
 
-        // Straggler repair: one-time backfill of identity fields into null slots
-        // (updateTrack enforces immutability once set).
         if (typeof body.isrc === "string") {
           update.isrc = body.isrc;
         }
@@ -599,10 +486,6 @@ export function adminTracksHandlers(os: Implementer) {
       parseFindingFields();
 
       const parseCaptureFields = (): void => {
-        // The full-song capture side-channel fields (RFC full-audio) — agent-writable
-        // analysis, like enrichmentStatus/embedding, so NOT in OPERATOR_ONLY_FIELDS.
-        // Narrow each: the status to the 4-value enum, the key/timestamps to non-empty
-        // strings, the failure count to a finite number.
         if (
           body.captureStatus === "pending" ||
           body.captureStatus === "done" ||
@@ -631,9 +514,6 @@ export function adminTracksHandlers(os: Implementer) {
           update.sourceAudioFailures = body.sourceAudioFailures;
         }
 
-        // The capture BYTE meter (the budget's byte cap reads it — lib/server/capture-budget.ts).
-        // A non-integer or negative size is not a measurement, so it is dropped rather than
-        // stored: a corrupt byte count would silently mis-state the spend the operator reads.
         if (
           typeof body.sourceAudioBytes === "number" &&
           Number.isInteger(body.sourceAudioBytes) &&
@@ -642,12 +522,6 @@ export function adminTracksHandlers(os: Implementer) {
           update.sourceAudioBytes = body.sourceAudioBytes;
         }
 
-        // THE CAPTURE VERIFICATION provenance (docs/the-ear.md § Wrong audio) — the ingest gate's
-        // verdict + its stamp + the bad-audio memory. Agent-writable analysis fields (internal, no
-        // public surface). The verdict is narrowed to the 3-value enum; the memory is a JSON string
-        // ("" clears it, handled in updateTrack). `operator-verified` is DELIBERATELY not admitted
-        // here: it is the operator's authority, stamped only by the receipt-bound capture commit of a
-        // row whose pin he set — a generic agent PATCH must never be able to claim it.
         if (
           body.captureVerification === "preview-match" ||
           body.captureVerification === "unverified" ||
@@ -664,8 +538,6 @@ export function adminTracksHandlers(os: Implementer) {
           update.sourceAudioRejected = body.sourceAudioRejected;
         }
 
-        // SoundCloud provenance is banked beside the YouTube-only trio, never inside it. These are
-        // the only two claims the sweep can make; any other shape is an additive no-op.
         if (
           body.sourceVerification === "soundcloud-preview-match" ||
           body.sourceVerification === "soundcloud-archive-match"
@@ -673,24 +545,14 @@ export function adminTracksHandlers(os: Implementer) {
           update.sourceVerification = body.sourceVerification;
         }
 
-        // The accepted upload's id, from a fingerprint gate. Trimmed and only taken when non-empty —
-        // there is no "clear it" semantic here, because a sweep only ever reports an id it PROVED,
-        // and an empty string would be a claim about nothing.
         if (typeof body.youtubeVideoId === "string" && body.youtubeVideoId.trim()) {
           update.youtubeVideoId = body.youtubeVideoId.trim();
         }
 
-        // The PROVENANCE backfill's verdict — the alternative proof for the id above, from a sweep
-        // that fingerprinted or metadata-matched a candidate and then discarded it rather than
-        // storing it. The domain-owned guard keeps this boundary on the complete sweep vocabulary;
-        // `updateTrack` decides what each verdict is allowed to move, and neither one moves a
-        // capture column.
         if (isYoutubeVerification(body.youtubeVerification)) {
           update.youtubeVerification = body.youtubeVerification;
         }
 
-        // The re-verdict ask. A pure `true` and nothing else: it carries no verdict of its own, so
-        // there is no value here for a caller to get wrong, and any other shape is simply not the ask.
         if (body.youtubeReverdict === true) {
           update.youtubeReverdict = true;
         }
@@ -698,9 +560,6 @@ export function adminTracksHandlers(os: Implementer) {
 
       parseCaptureFields();
 
-      // The agent role may only touch analysis fields. Reject (not silently drop)
-      // an attempt at an operator-only field — a 403 the gate can voice. The role
-      // is read from the oRPC context (lifted by `adminAuth`), not re-derived.
       if (context.role === "agent") {
         const blocked = OPERATOR_ONLY_FIELDS.filter((field) => field in update);
 
@@ -716,10 +575,6 @@ export function adminTracksHandlers(os: Implementer) {
         }
       }
 
-      // Pass the AUTHENTICATED tier (from the oRPC context, never the body) so
-      // updateTrack can apply the source hierarchy: an agent write never downgrades
-      // a rekordbox/operator-graded bpm/key; an operator's hand-set value is stamped
-      // `operator` and durably protected from later DSP passes.
       const result = await updateTrack(trackId, update, { writer: context.role });
 
       return { ok: true as const, ...result };
@@ -728,13 +583,6 @@ export function adminTracksHandlers(os: Implementer) {
     }
   });
 
-  // GET /admin/tracks/{trackId} — admin tier (live `requireAdmin`, agent-allowed).
-  // The single-finding by-coordinate lookup: fetch ONE finding with its full
-  // admin-tier fields (vibe coords, the video ledger, the observation, the note), or
-  // the canonical 404. Distinct from list_tracks_admin — a single authoritative read,
-  // so an ad-hoc list-scan can't misread a live finding as nonexistent. `requireTrack`
-  // resolves by Spotify trackId OR Log ID and raises the shared `not_found`/404,
-  // DISTINCT from the procedure's auth 401/403.
   const getTrackAdminHandler = os.get_track_admin.use(adminAuth).handler(async ({ input }) => {
     try {
       const track = await requireTrack(input.trackId);
@@ -745,9 +593,6 @@ export function adminTracksHandlers(os: Implementer) {
     }
   });
 
-  // GET /admin/tracks — admin tier (live `requireAdmin`). The admin board query:
-  // a `?q=` free-text search (flat `{ tracks }`) OR the paginated list page (the
-  // page body itself, filtered by order/hasVideo/status). Both shapes preserved.
   const listTracksAdminHandler = os.list_tracks_admin.use(adminAuth).handler(async ({ input }) => {
     try {
       const q = input.q?.trim();
@@ -780,28 +625,10 @@ export function adminTracksHandlers(os: Implementer) {
     }
   });
 
-  // GET /admin/tracks/work — admin tier (agent-allowed read). THE CATALOGUE-AWARE PIPELINE
-  // QUEUE. `list_tracks_admin`'s queue filters all drive through the finding join, so they
-  // are structurally blind to a catalogue track; analysis and embedding are measurements of
-  // a RECORDING and apply to any track with captured audio, certified or not. This reads
-  // `tracks` outer-joined to the certification, and hands the rows back in the order the
-  // metered capture budget should be spent (docs/gpu-batch-embed.md, docs/the-ear.md).
   const listTrackWorkHandler = os.list_track_work.use(adminAuth).handler(async ({ input }) => {
     try {
       const counting = input.count === "true";
-      // THE GAUGE READING IS OPT-IN, and the caller is the one who opts in.
-      //
-      // A COUNT IS A GAUGE, NOT A WORK HANDOUT: a page the due-work drain withheld is never
-      // served, so `tracks` stays empty and no row reaches a metered budget, while the backlog
-      // SIZE is a different question answered from the projection's own counters. Refusing that
-      // number blinds the operator exactly when debt is what they need to see.
-      //
-      // But the box CLI is a pinned release that lags this Worker. An OLD sweep has no
-      // `debtPending` in its vocabulary, and several of them size PAID capture and GPU rental off
-      // this read — handed a 200 with an empty page it would report "no work" against a real
-      // backlog until its next rebake. So the new shape is spoken only to a caller that asked for
-      // it by name. Without `debtAware`, this stays the typed 503 every existing consumer already
-      // pauses on.
+
       const debtAware = counting && input.debtAware === "true";
       let tracks: Awaited<ReturnType<typeof listTrackWork>> = [];
       let debtPending = false;
@@ -812,17 +639,12 @@ export function adminTracksHandlers(os: Implementer) {
           scope: input.scope,
         });
       } catch (error) {
-        // A page-only read keeps refusing whatever the flag says: there the page is the answer.
         if (!debtAware || !isDueWorkMaintenancePending(error)) {
           throw error;
         }
         debtPending = true;
       }
 
-      // `count=true` → the size of the WHOLE backlog, not the page. Opt-in: a page read is
-      // capped at 200 rows, so `tracks.length` cannot answer "how much is left", and that is
-      // the number the GPU batch reports at the end (rent another hour, or not). Opt-in keeps
-      // page-only readers cheap; a sweep must ask for it before publishing a backlog gauge.
       const queued = counting
         ? await countTrackWork({ kind: input.kind, scope: input.scope })
         : undefined;
@@ -839,8 +661,6 @@ export function adminTracksHandlers(os: Implementer) {
     }
   });
 
-  // POST /admin/tracks — operator tier (live `requireOperator`). Publish a finding
-  // from a Spotify URL, then kick off async enrichment.
   const publishTrackHandler = os.publish_track
     .use(adminAuth)
     .use(operatorGuard)
@@ -856,8 +676,6 @@ export function adminTracksHandlers(os: Implementer) {
           });
         }
 
-        // The note rides into the Telegram post AND the stored editorial note, so
-        // cap it on the add path too. On add, an empty note means "no note".
         const note = parseEditorialNote(body.note);
 
         const result = await publishTrack(body.spotifyUrl, {
@@ -865,20 +683,12 @@ export function adminTracksHandlers(os: Implementer) {
           note: note || undefined,
         });
 
-        // No on-add enrichment push: the add leaves the track at the schema
-        // default `enrichment_status = "pending"`, which is queue-eligible. The
-        // on-box `fluncle-enrich` `--no-agent` cron drains the enrich-queue every
-        // ~5 min, analyzes on-box (ffmpeg + bun), and writes back via
-        // `fluncle admin tracks update`.
-
         return { ok: true as const, ...result };
       } catch (error) {
         throw toFault(error);
       }
     });
 
-  // POST /admin/tracks/{trackId}/observe — agent tier (`adminAuth` only). FLIPPED
-  // from the operator tier so the Hermes observation cron drives it.
   const observeTrackHandler = os.observe_track.use(adminAuth).handler(async ({ input }) => {
     try {
       const body: ObserveBody = input;
@@ -897,12 +707,6 @@ export function adminTracksHandlers(os: Implementer) {
         });
       }
 
-      // Idempotency (`observe:${logId}`): a finding that already has an observation
-      // is a no-op, so re-pulling an in-flight item — or an external cron firing on
-      // a fixed interval — never spends a second Cartesia render or overwrites the
-      // existing artifact. The versioned playback URL on the row is already keyed by
-      // the prior render; report it back unchanged. `force` bypasses this for a
-      // deliberate operator re-render (voice re-tune / fixing a degenerate render).
       const force = body.force === true;
 
       if (track.observationAudioUrl && !force) {
@@ -922,19 +726,10 @@ export function adminTracksHandlers(os: Implementer) {
         };
       }
 
-      // The agent authors + voice-gates the script; the Worker re-runs the
-      // mechanical scan (defence in depth) and hard-fails on any violation. The finding's own
-      // artists + title are exempt from that scan (THE NAME EXEMPTION, lib/server/observation.ts):
-      // the read is ABOUT this record, so it must be able to name it — otherwise a finding by an
-      // artist called "Future Signal" can never be voiced at all, however it is rewritten.
       const script = gateObservationScript(body.script, [...track.artists, track.title]);
       const durationTargetSec = resolveDurationTargetSec(body.durationTargetSec);
       let promptVersion = typeof body.promptVersion === "number" ? body.promptVersion : null;
 
-      // A force re-render of the UNCHANGED script (a voice/delivery re-tune) is not a
-      // re-author: the stored prompt-version provenance describes who wrote the SCRIPT,
-      // so it survives the render. Only an explicit --prompt-version, or a genuinely new
-      // script, moves it — and an honest pre-registry null stays null.
       if (force && typeof body.promptVersion !== "number") {
         const stored = await getObservationProvenance(track.trackId);
 
@@ -943,24 +738,12 @@ export function adminTracksHandlers(os: Implementer) {
         }
       }
 
-      // THE ECHO GATE — the anti-sameness rail, run BEFORE the paid Cartesia render so a
-      // bounced draft costs nothing. Score the script against the finding's sonic
-      // neighbourhood (the SAME neighbour scripts the box author was handed as spent moves,
-      // `observationNeighbours` → `getSimilarFindings`), and a lifted phrase or wholesale word
-      // overlap hard-fails with `observation_echoes_neighbours`/422 — so observations cannot
-      // longer quietly flatten a region into one voice. A finding with no embedding yet, or the
-      // first observation in an empty neighbourhood, has nothing to echo and passes untouched.
-      // A rejected script is HELD in the `observation_rejections` ledger + raised in the
-      // attention queue, never binned. `force` (a deliberate operator re-render) skips the gate —
-      // he is overruling it, the same way accepting a held rejection does.
       if (!force) {
         const neighbors = await observationNeighbours(track.trackId);
         const thresholds = await getObservationEchoThresholds();
         const echo = scoreObservationEcho(script, neighbors, thresholds);
 
         if (echo.echoes) {
-          // Best-effort: the ledger must never turn a clean 422 into a 500. Losing one
-          // bounce's evidence is bad; failing the gate open would be worse.
           try {
             await recordObservationRejection(track.trackId, script, echo, thresholds);
           } catch (ledgerError) {
@@ -971,7 +754,6 @@ export function adminTracksHandlers(os: Implementer) {
         }
       }
 
-      // Render + upload + persist through the shared path (also the ledger's accept ruling).
       const result = await renderAndStoreObservation(track, script, {
         ...(typeof body.contextNote === "string" && body.contextNote.trim()
           ? { contextNote: body.contextNote }
@@ -988,11 +770,6 @@ export function adminTracksHandlers(os: Implementer) {
     }
   });
 
-  // POST /admin/tracks/{trackId}/context — agent tier (`adminAuth` only).
-  // The split-out context half: fetch the Firecrawl FACTS and write `context_note`
-  // ONLY, quietly (track-update.ts does not bump updated_at for contextNote). The
-  // Firecrawl output is UNTRUSTED web content treated strictly as DATA — assembled
-  // into the note, stored as fuel, never executed as instructions.
   const contextTrackHandler = os.context_track.use(adminAuth).handler(async ({ input }) => {
     try {
       const idOrLogId = input.trackId;
@@ -1010,15 +787,6 @@ export function adminTracksHandlers(os: Implementer) {
         });
       }
 
-      // Idempotency (`context:${logId}`): a finding that already has a
-      // context note is a no-op, so an external cron firing on a fixed interval
-      // never re-burns the Firecrawl budget or overwrites the stored facts.
-      //
-      // `refresh` (the CLI's `--refresh`) RE-RUNS the fetch+distil even when a note
-      // already exists — the deliberate operator action to backfill/sharpen an old
-      // context note (the auto-note's primary fuel). It costs a Firecrawl + distil
-      // pass per call, so it is opt-in; the default stays the short-circuit so the
-      // every-tick context cron never re-burns the budget on an already-noted find.
       const refresh = input.refresh === true || input.refresh === "true";
       const existing = await getTrackContextNote(track.trackId);
 
@@ -1033,8 +801,6 @@ export function adminTracksHandlers(os: Implementer) {
         };
       }
 
-      // Fetch the FACTS (Firecrawl) and DISTIL them into a clean note (OpenRouter).
-      // The agent may override the search query; the result is internal DATA.
       const query =
         typeof input.query === "string" && input.query.trim()
           ? input.query.trim()
@@ -1045,38 +811,22 @@ export function adminTracksHandlers(os: Implementer) {
           logId: track.logId,
           trackId: track.trackId,
         },
-        // Apple editorial notes as extra fuel when the finding carries an ISRC (RFC U5);
-        // folded into the same untrusted snippets and held behind the mechanical echo gate.
+
         { isrc: track.isrc },
       );
 
-      // Persist the reliability marker alongside the note. The `context_status`
-      // column makes a confirmed-empty fetch (`empty`) distinct from never-attempted
-      // (NULL/`pending`), so the queue does not re-burn Firecrawl + the distil LLM on
-      // a hopeless find every tick (`--retry-empty` re-picks `empty`; `failed` is a
-      // vendor-down miss the next tick retries). All quiet: contextNote/contextStatus
-      // are internal, so track-update.ts does NOT bump updated_at (no public surface
-      // moves; the enrich-sweep stale clock and the sitemap lastmod stay untouched).
       if (fetched.status === "resolved" && fetched.contextNote.trim()) {
         await updateTrack(track.trackId, {
           contextNote: fetched.contextNote,
-          // PROVENANCE, written in the same statement as the note it describes: the
-          // `context_distil` version that distilled it, or NULL when the distil failed
-          // and the cleaned raw snippets were stored instead (no prompt wrote those).
+
           contextPromptVersion: fetched.promptVersion,
           contextStatus: "resolved",
         });
       } else if (refresh && existing?.trim()) {
-        // A `--refresh` that re-fetched nothing usable must NOT downgrade a finding
-        // that already had a good note: keep the prior note + its `resolved` status
-        // rather than blanking the status to `empty`/`failed` and losing the fuel.
-        // (No write at all — the row is already resolved.)
       } else {
         await updateTrack(track.trackId, { contextStatus: fetched.status });
       }
 
-      // On a `--refresh` no-op (re-fetch found nothing usable but a note already
-      // existed), report the PRESERVED note, not the empty re-fetch result.
       const contextNote =
         fetched.status === "resolved" && fetched.contextNote.trim()
           ? fetched.contextNote
@@ -1096,36 +846,11 @@ export function adminTracksHandlers(os: Implementer) {
     }
   });
 
-  // POST /admin/tracks/{trackId}/note — agent tier (`adminAuth` only). The
-  // written-note sibling of observe_track: the agent authored the editorial note in
-  // Fluncle's voice; this step VOICE-GATES it and stores it into the `note` field.
-  // CARDINAL SAFETY: fills an EMPTY note ONLY — a finding with a note already
-  // (operator-written OR previously auto-authored) is a no-op (`skipped: true`); the
-  // operator override always wins, enforced here, server-side.
-  //
-  // TWO GATES, both server-side (the agent gates as it writes; the Worker re-runs both
-  // — the note lands straight on the public /log surface):
-  //   1. the VOICE gate (`gateNoteText`) — the banned-word / geography / Dry-Rule scan.
-  //   2. the ECHO gate (`scoreNoteEcho` + `noteEchoError`) — the anti-sameness rail on
-  //      the vibe-neighbour layer. The authoring prompt now shows the agent the notes of
-  //      the finding's SONIC NEIGHBOURS so it can hear the region's register; this
-  //      re-reads those same notes and hard-fails a line that lifts from one. The
-  //      neighbours inform, they never template. A rejected note is NOT STORED on the
-  //      finding — but it is HELD in the `note_rejections` ledger and raised as a row in
-  //      the operator's attention queue, so he can read what the model wrote and overrule
-  //      the gate. The thresholds are operator-tunable at runtime (the `settings` KV).
-  //
-  // A CATALOGUE track can never reach either gate: `requireTrack` reads through the
-  // `findings ⋈ tracks` join, so an uncertified track is a 404 before a note is even
-  // parsed. Fluncle does not speak about a track he has not certified.
   const noteTrackHandler = os.note_track.use(adminAuth).handler(async ({ input }) => {
     try {
       const body: NoteBody = input;
       const idOrLogId = body.trackId;
-      // `dryRun` authors nothing and stores nothing: it runs BOTH gates and reports the
-      // verdict + the measured echo. It is how the sweep pre-checks a line before
-      // spending a write, and how the neighbour layer is A/B-measured without touching
-      // the archive.
+
       const dryRun = body.dryRun === true;
       const track = await requireTrack(idOrLogId);
 
@@ -1141,19 +866,6 @@ export function adminTracksHandlers(os: Implementer) {
         });
       }
 
-      // FAST-PATH short-circuit for the fill-empty-only guarantee. `track.note` is
-      // `undefined` only when the stored note is empty/whitespace (toTrackListItem
-      // trims it); a note already present here short-circuits to a no-op, which saves
-      // a voice-gate run + a write. This is an OPTIMISATION, not the guarantee: the
-      // cardinal guard — the agent NEVER overwrites an existing note — is now enforced
-      // atomically at the DB by `fillEmptyNote`'s `and (note is null or trim(note) =
-      // '')` predicate below, so a note that lands AFTER this read still can't be
-      // clobbered. We still stamp the "ran" state (the workflow ran; it correctly
-      // found nothing to do) so the board doesn't keep re-queuing a hand-noted finding.
-      //
-      // A DRY RUN skips the short-circuit (it stores nothing, so there is nothing to
-      // protect) — that is what lets the operator hold a candidate line up against an
-      // already-noted finding's neighbourhood and read the verdict.
       if (!dryRun && track.note?.trim()) {
         await recordNoteAttempt(track.trackId, false);
 
@@ -1166,42 +878,14 @@ export function adminTracksHandlers(os: Implementer) {
         };
       }
 
-      // Voice-gate the agent-authored note (defence in depth: the agent gates as it
-      // writes; the Worker re-scans and hard-fails any violation before it is stored
-      // — the note lands straight on the public /log surface). The finding's own artists + title
-      // are exempt from that scan (THE NAME EXEMPTION, lib/server/observation.ts): the authoring
-      // prompt invites naming the artist or the title, so scanning them would reject the very
-      // name it asked for and leave a finding by "Future Signal" permanently un-noteable.
       const note = gateNoteText(body.note, [...track.artists, track.title]);
 
-      // Echo-gate it against the finding's sonic neighbourhood — the SAME notes the
-      // authoring prompt showed the agent (`list_similar_tracks`, the MuQ nearest
-      // neighbours, ranked in SQL). A lifted phrase or wholesale word overlap hard-fails
-      // here with `note_echoes_neighbours`/422, so the vibe-neighbour layer can never
-      // quietly flatten a region into one voice. A finding with no embedding yet, or the
-      // first note in an empty neighbourhood, has nothing to echo and passes untouched.
-      //
-      // The thresholds are read from the `settings` KV on every run, so the operator can
-      // retune the gate without a deploy (`update_note_gate`).
       const neighbors = await noteNeighbors(track.trackId);
       const thresholds = await getNoteEchoThresholds();
       const echo = scoreNoteEcho(note, neighbors, thresholds);
 
       if (echo.echoes) {
-        // THE REJECTION IS HELD, NOT BINNED. The gate still refuses to STORE the line —
-        // that is unchanged, and the finding stays note-less. But the line is written to
-        // the ledger first, with the neighbour it echoed, the phrase, the score, and the
-        // thresholds in force, so the operator can read what the model wrote and rule on
-        // it from the `/admin` attention queue. A gate whose rejections nobody can see is
-        // a gate nobody can supervise.
-        //
-        // A DRY RUN holds nothing (it is a measurement harness — the A/B re-measurement
-        // runs it across the whole archive, and that must not fill the operator's queue
-        // with rows he never has to act on). It reports the echo and stores nothing, which
-        // is exactly its contract.
         if (!dryRun) {
-          // Best-effort: the ledger must never turn a clean 422 into a 500. Losing one
-          // bounce's evidence is bad; failing the gate open would be worse.
           try {
             await recordNoteRejection(track.trackId, note, echo, thresholds);
           } catch (ledgerError) {
@@ -1212,8 +896,6 @@ export function adminTracksHandlers(os: Implementer) {
         throw noteEchoError(echo);
       }
 
-      // The dry run stops here: both gates ran, nothing was written, and the caller gets
-      // the measured echo back. No `recordNoteAttempt` — no attempt was made.
       if (dryRun) {
         return {
           dryRun: true as const,
@@ -1226,14 +908,6 @@ export function adminTracksHandlers(os: Implementer) {
         };
       }
 
-      // Fill the empty note ATOMICALLY. The fill-empty-only guard is now a DB
-      // predicate inside `fillEmptyNote` (`and (note is null or trim(note) = '')`),
-      // not the check-then-act above — so an operator note (or a concurrent agent
-      // tick) that wins between our read and this write can NEVER be clobbered: the
-      // loser matches no row and reports `skipped`. `parseEditorialNote` re-validates
-      // the length against the public budget on the same path an operator note takes
-      // (it returns `undefined` only for a non-string input, which `gateNoteText`
-      // has already ruled out — the `?? note` narrows the type without an assertion).
       const filled = await fillEmptyNote(
         track.trackId,
         parseEditorialNote(note) ?? note,
@@ -1241,9 +915,6 @@ export function adminTracksHandlers(os: Implementer) {
       );
 
       if (!filled) {
-        // Lost the race: a concurrent note won between our read and this write. The guard held
-        // at the DB, so we wrote nothing — re-read the winner and report skipped,
-        // never clobber. `track.logId` is the immutable coordinate (guarded above).
         await recordNoteAttempt(track.trackId, false);
         const current = await requireTrack(idOrLogId);
 
@@ -1270,9 +941,6 @@ export function adminTracksHandlers(os: Implementer) {
     }
   });
 
-  // POST /admin/tracks/{trackId}/video/uploads — agent tier (any admin principal,
-  // operator OR agent): the autonomous render box publishes its own renders. The JSON
-  // control-plane: sign the direct-to-R2 PUT URLs.
   const presignVideoUploadsHandler = os.presign_track_video_uploads
     .use(adminAuth)
     .handler(async ({ input }) => {
@@ -1332,10 +1000,6 @@ export function adminTracksHandlers(os: Implementer) {
           artifacts.push(artifact);
         }
 
-        // The one sanctioned footage-less upload: the plate-lane PRE-upload. Plates
-        // (plate.png + plate.background.png) go up BEFORE the composition exists so
-        // the composition can reference the durable found.fluncle.com URL — the
-        // upload-first order. Any other footage-less set still 400s.
         const platesOnly =
           artifacts.length > 0 &&
           artifacts.every(
@@ -1381,9 +1045,6 @@ export function adminTracksHandlers(os: Implementer) {
       }
     });
 
-  // POST /admin/tracks/{trackId}/video/finalize — agent tier (any admin principal,
-  // operator OR agent): the autonomous render box links its own cut. Phase 2: link the
-  // canonical web cut (sets video_url).
   const finalizeVideoHandler = os.finalize_track_video.use(adminAuth).handler(async ({ input }) => {
     try {
       const body: AdminTrackInputs["finalize_track_video"] = input;
@@ -1411,18 +1072,6 @@ export function adminTracksHandlers(os: Implementer) {
       const bodyModel = normalizedVideoField(body.videoModel);
       const bodyReasoning = normalizedVideoField(body.videoModelReasoning);
 
-      // THE TRANSPORT-PROOF STAMP FALLBACK (the 044.1.3L lesson): when the body
-      // leaves any diversity-ledger stamp out — a crashed CLI's salvage ship, a
-      // partial upload, any caller that never read the manifest — read the bundle's
-      // own render.json from R2 and fill the gaps. The manifest was uploaded by the
-      // same ship this finalize completes, so it is the authority of record; a
-      // missing/corrupt manifest yields {} and the finalize lands exactly as before.
-      // `structure`/`plateSubject` are the two provenance fields render.json ALWAYS carried but the
-      // finalize path never persisted (Wave-1 C). No caller (the CLI, the render agent) sends them
-      // in the body, so they are read from the manifest — meaning the manifest read must run unless
-      // the body already supplied EVERY stamp. Adding them to the skip guard keeps the R2 read on
-      // for exactly the (near-universal) case where the two new stamps are absent from the body,
-      // without changing the render prompt or the CLI at all.
       const manifestStamps =
         bodyVehicle && bodyGrain && bodyRegister && bodyPalette && bodyStructure && bodyPlateSubject
           ? {}
@@ -1437,21 +1086,9 @@ export function adminTracksHandlers(os: Implementer) {
       const videoModelReasoning = bodyReasoning ?? manifestStamps.reasoning ?? "high";
 
       const videoUrl = trackMedia(track.logId).videoUrl;
-      // `squared` (the CLI sends it when it uploaded BOTH the square footage.mp4
-      // and the portrait footage.social.mp4) flips the two-master layout on:
-      // footage.mp4 is now the clean square crop source. Stamp the signal so the
-      // archive surfaces start MT-cropping this finding.
+
       const squared = body.squared === true;
 
-      // A RE-RENDER: this finding already had a `video_url` (the prior render),
-      // and finalize re-ships `footage.mp4` to the SAME R2 key. The bare master
-      // URL is byte-identical (the queue gates on presence, not content), so the
-      // DB write below is a no-op for `video_url` — but stale renditions live on.
-      // The NEW `videoSquaredAt` below is the vintage every surface rides as the
-      // transform `?v` token (media.ts `videoVersion`), which is what actually
-      // evicts MT's internally-cached renditions; the purge covers the bare R2
-      // objects + any zone-edge copies. Best-effort, fired off the request
-      // lifecycle (waitUntil) BELOW after the DB write commits.
       const squaredAt = squared ? new Date().toISOString() : undefined;
 
       await updateTrack(track.trackId, {
@@ -1467,13 +1104,6 @@ export function adminTracksHandlers(os: Implementer) {
         ...(videoStructure ? { videoStructure } : {}),
       });
 
-      // Drop stale edge entries on EVERY finalize, not just when track.videoUrl was
-      // already set: the requeue flow clears video_url to re-queue a finding, so a
-      // re-render's finalize sees no prior url and would otherwise skip the purge (the
-      // gap that a genuine first render does not have). On a genuine first render nothing is
-      // cached yet, so this is a harmless no-op. `squared` reflects the layout the
-      // finding now carries, so the purge set matches what the surfaces will request —
-      // built with the NEW vintage, the same `?v` the surfaces mint from now on.
       purgeVideoCache(
         track.logId,
         squared || Boolean(track.videoSquaredAt),
@@ -1486,23 +1116,6 @@ export function adminTracksHandlers(os: Implementer) {
     }
   });
 
-  // POST /admin/tracks/{trackId}/video/requeue — operator tier (live
-  // `requireOperator`). Clear a finding's video so it re-enters the render queue AND
-  // drops cleanly off radio until re-rendered. This removes a LIVE published video,
-  // so it is operator-only (NOT agent-tier — the box agent never clears videos).
-  //
-  // It clears BOTH display/queue gates, the minimal set that fully returns a finding
-  // to "no video": `video_url` (the render queue's gate — `hasVideo=false` is
-  // `video_url is null`) and `video_squared_at` (radio's eligibility gate). Clearing
-  // only `video_url` would re-queue it but leave it eligible-but-broken on radio (no
-  // playable square-master source). The ledger columns (videoVehicle/videoGrain/
-  // videoModel/videoModelReasoning) are LEFT INTACT on purpose — they describe the
-  // prior render and the next video agent reads them to diversify away from it.
-  //
-  // CACHE NOTE: re-shipping footage.mp4 to the same R2 key leaves Cloudflare
-  // Media-Transformation renditions cached separately (the player streams MT crops,
-  // not the master). finalize_track_video now purges them automatically on a
-  // re-render; purge_video (below) is the manual operator twin.
   const requeueVideoHandler = os.requeue_video
     .use(adminAuth)
     .use(operatorGuard)
@@ -1523,8 +1136,6 @@ export function adminTracksHandlers(os: Implementer) {
           });
         }
 
-        // Idempotent: a finding already at "no video" is a clean no-op — skip the
-        // write entirely (no needless updateTrack/cache purge), report alreadyClear.
         if (!track.videoUrl && !track.videoSquaredAt) {
           return {
             alreadyClear: true as const,
@@ -1534,10 +1145,6 @@ export function adminTracksHandlers(os: Implementer) {
           };
         }
 
-        // Clear both gates. updateTrack maps an empty string to NULL for each (the
-        // documented "remove an off-direction video" + re-render paths), so the
-        // `video_url is not null` queue filter and the `video_squared_at is not null`
-        // radio filter both drop this finding until it is re-rendered.
         await updateTrack(track.trackId, { videoSquaredAt: "", videoUrl: "" });
 
         return { logId: track.logId, ok: true as const, trackId: track.trackId };
@@ -1546,11 +1153,6 @@ export function adminTracksHandlers(os: Implementer) {
       }
     });
 
-  // POST /admin/tracks/{trackId}/video/purge — operator tier (live
-  // `requireOperator`). The manual twin of the automatic re-render purge in
-  // finalize: evict this finding's stale Cloudflare Media-Transformation renditions
-  // from the edge (the player streams MT crops, not the master, so a same-key
-  // re-upload leaves the renditions stale). Operator-only — it acts on a LIVE video.
   const purgeVideoHandler = os.purge_video
     .use(adminAuth)
     .use(operatorGuard)
@@ -1571,8 +1173,6 @@ export function adminTracksHandlers(os: Implementer) {
           });
         }
 
-        // No video → nothing cached to purge. Report the no-op rather than firing a
-        // pointless purge of URLs that resolve to a missing master.
         if (!track.videoUrl) {
           return {
             logId: track.logId,
@@ -1582,8 +1182,6 @@ export function adminTracksHandlers(os: Implementer) {
           };
         }
 
-        // Fire-and-forget (waitUntil inside). `squared` mirrors the finding's layout
-        // so the purge set matches the rendition family the surfaces actually serve.
         purgeVideoCache(
           track.logId,
           Boolean(track.videoSquaredAt),
@@ -1596,14 +1194,6 @@ export function adminTracksHandlers(os: Implementer) {
       }
     });
 
-  // PUT /admin/tracks/{trackId}/capture-source — operator tier. THE CAPTURE-SOURCE PIN
-  // (docs/the-ear.md § Wrong audio): "capture THIS upload". The fingerprint gate is
-  // precision-over-recall and the operator's ear is the only thing that outranks it, so the
-  // pin is his and never the box agent's — an agent token 403s. The body's `youtubeVideoId`
-  // is reduced to a bare id HERE (a bare id or a youtube.com / youtu.be / music.youtube.com
-  // URL; anything else is the typed `invalid_youtube_video_id`/400), and the write itself is
-  // lib/server/track-update.ts § pinCaptureSource: pin + re-queue + memory cleared + the
-  // `operator` provenance stamps, with not one `findings` column moved.
   const pinCaptureSourceHandler = os.pin_capture_source
     .use(adminAuth)
     .use(operatorGuard)
@@ -1622,9 +1212,7 @@ export function adminTracksHandlers(os: Implementer) {
 
       try {
         const track = await requireTrack(input.trackId);
-        // `allowDurationMismatch` is the guard's one waiver (a deliberately chosen different edit
-        // of the same recording); absent reads as false, and a re-pin without it withdraws a
-        // standing waiver.
+
         const result = await pinCaptureSource(track.trackId, videoId, {
           allowDurationMismatch: input.allowDurationMismatch === true,
         });
@@ -1635,10 +1223,6 @@ export function adminTracksHandlers(os: Implementer) {
       }
     });
 
-  // DELETE /admin/tracks/{trackId}/capture-source — operator tier, the pin's counterpart.
-  // Withdraws the standing instruction and the `operator` stamps it set; the capture status
-  // and any audio already captured stay untouched (rewinding a capture is `flag_wrong_audio`).
-  // Idempotent on an unpinned row.
   const clearCaptureSourceHandler = os.clear_capture_source
     .use(adminAuth)
     .use(operatorGuard)
@@ -1653,12 +1237,6 @@ export function adminTracksHandlers(os: Implementer) {
       }
     });
 
-  // GET /admin/tracks/mixable-order — admin tier (`adminAuth` only, agent-allowed like
-  // get_track_admin). A PURE read: it imports only the read path + the pure mixability
-  // core, never a write/publish surface (`promote_recording` remains the only mint).
-  // `ids` is the comma-separated pool (2..64 validated Log IDs; a 65-id / junk request
-  // 400s here — the contract's `ids: string` is validated in-handler like the other
-  // tolerant admin query strings). Orders the pool into a smooth proposed chain.
   const getMixableOrderHandler = os.get_mixable_order.use(adminAuth).handler(async ({ input }) => {
     const ids = input.ids
       .split(",")

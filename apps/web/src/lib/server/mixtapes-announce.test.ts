@@ -1,26 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-// announceMixtape's DB choreography: getMixtapeById (a MIXTAPE_SELECT execute) → the
-// atomic claim (`update … set announced_at = ? … where announced_at is null`, whose
-// rowsAffected is the single-owner signal) → postMixtapeToTelegram → a getMixtapeById
-// readback. A single mutable row backs it; each query is answered by its SQL shape —
-// enough to prove the gates, the no-double-post idempotency, and the release-on-failure
-// retry path without a real libsql instance or a real Telegram call.
-
 type Row = Record<string, unknown>;
 
 const state = vi.hoisted(() => ({ row: {} as Row }));
 
 const execute = vi.hoisted(() =>
   vi.fn(async (query: { args: unknown[]; sql: string }) => {
-    // The release update (a Telegram failure rolls the marker back to NULL).
     if (query.sql.includes("announced_at = null")) {
       state.row.announced_at = null;
       return { rowsAffected: 1 };
     }
 
-    // The atomic claim: flips announced_at NULL → now exactly once. rowsAffected is 1
-    // only for the call that wins the claim; a re-run (marker already set) gets 0.
     if (query.sql.includes("set announced_at = ?")) {
       if (state.row.announced_at == null) {
         const [announcedAt] = query.args as [string];
@@ -31,7 +21,6 @@ const execute = vi.hoisted(() =>
       return { rowsAffected: 0 };
     }
 
-    // getMixtapeById runs a MIXTAPE_SELECT — return the current row state.
     return { rows: [{ member_count: 3, ...state.row }] };
   }),
 );
@@ -57,7 +46,6 @@ vi.mock("./telegram", () => ({
 
 const { announceMixtape } = await import("./mixtapes");
 
-// A published, minted mixtape with a live listen link — the announceable state.
 function seed(overrides: Partial<Row> = {}): void {
   state.row = {
     announced_at: null,
@@ -88,7 +76,7 @@ describe("announceMixtape — post + mark", () => {
 
     expect(postMixtapeToTelegram).toHaveBeenCalledTimes(1);
     expect(result.message).toBe("🛸 Fresh mixtape\n\n…");
-    // The marker is set, and the returned DTO carries it (the Studio's done state).
+
     expect(state.row.announced_at).not.toBeNull();
     expect(result.mixtape.announcedAt).toBe(state.row.announced_at);
   });
@@ -109,7 +97,7 @@ describe("announceMixtape — idempotency (no double-post)", () => {
     expect(postMixtapeToTelegram).toHaveBeenCalledTimes(1);
 
     await expect(announceMixtape("mix-1")).rejects.toThrow(/already been announced/i);
-    // Still exactly one post — the second call lost the claim and never reached Telegram.
+
     expect(postMixtapeToTelegram).toHaveBeenCalledTimes(1);
   });
 });
@@ -136,10 +124,9 @@ describe("announceMixtape — Telegram failure releases the claim", () => {
     postMixtapeToTelegram.mockRejectedValueOnce(new Error("Telegram post failed: 502"));
 
     await expect(announceMixtape("mix-1")).rejects.toThrow(/Telegram post failed/i);
-    // The marker was released — the mixtape is announceable again.
+
     expect(state.row.announced_at).toBeNull();
 
-    // A retry (Telegram healthy) now succeeds and stamps the marker.
     postMixtapeToTelegram.mockResolvedValueOnce("🛸 Fresh mixtape\n\nretry");
     const result = await announceMixtape("mix-1");
 

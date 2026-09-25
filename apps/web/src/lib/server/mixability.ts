@@ -1,108 +1,31 @@
-// The mixability engine — one pure scoring core, three consumers (the public `/mix`
-// rail, the operator's path search, the diagnostics). Sibling of `embedding.ts`:
-// no I/O, deterministic, exhaustively unit-tested. It answers the question a working
-// junglist pays software to answer — "what mixes out of this?" — as a well-defined
-// DJ-doctrine objective (beatmatchable + harmonic-safe + sonically continuous), NOT
-// an imitation of how Fluncle himself sequences (see the ground-truth note below).
-//
-// THE GROUND TRUTH SAID NO TO A FIT. Over the real ordered transitions of mixtape
-// `019.F.1A`, the Camelot sub-score is AT CHANCE — statistically indistinguishable
-// from random key pairs (and if anything slightly below), including a literal tritone
-// move. Fluncle mixes liquid DnB on phrasing, intros/outros, and energy, not harmonic
-// adjacency. So the weights below are VERSIONED PRODUCT CONFIG, not a fitted model,
-// and validation (`scripts/mixability-diagnostics.ts` + the committed floor-check
-// test) is a characterization diagnostic, never a training target. Do not re-invent
-// the fit. DIAGNOSTIC (re-run to refresh):
-//   Floor check — real consecutive transitions n=14 mean≈0.30–0.34; all-pairs random
-//     baseline n=240 mean≈0.35–0.36 → verdict AT CHANCE (key does not predict him).
-//   Within-set successor rank — mean true-next rank ≈5.2 vs ~4.75 random (no signal).
-//   Coverage — 16/17 keyed, 17/17 features, 1/17 embedded (the sonic term dormant).
-//
-// THE SIGNAL REALITY. The embed corpus is DRAINED: all 60 findings
-// carry a MuQ embedding vector (every one is assigned to a sonic galaxy, which is
-// impossible without one), so `sonicGateOpen(60)` → 1770 pairs ≥ MIN_EMBEDDED_PAIRS
-// and THE SONIC TERM IS LIVE. It activated with zero code change, exactly as designed.
-// The other signals: `key` ~50/60 and discriminative; `bpm` ~53/60 but near-constant in
-// the folded 170–175 band (tiebreak-grade); `features_json` 60/60 (the dense texture
-// tiebreak, which now backs up the sonic term inside key plateaus rather than standing
-// in for it). Re-measure at build time rather than treating this diagnostic as immutable.
-
 import { type Camelot, parseKey, toCamelot } from "../key-camelot";
 import { cosineSimilarity, readEmbeddingBlob } from "./embedding";
 
-// ── Versioned product config ─────────────────────────────────────────────────
-
-/**
- * The combiner weights — a PRODUCT CHOICE, not a fitted model (the ground truth
- * makes a fit impossible and imitation the wrong target; see the module header).
- * `key` leads because it is the dense discriminative axis and the objective is
- * harmonic-clean mixability; `bpm` is low because the folded band makes it
- * near-constant (tiebreak-grade); `sonic` carries real weight for the day its gate
- * lifts. Bump `MIX_WEIGHTS_VERSION` on any change so a cache/version token can
- * invalidate.
- */
 export const MIX_WEIGHTS = { bpm: 0.15, key: 0.5, sonic: 0.35 } as const;
 export const MIX_WEIGHTS_VERSION = 1;
 
-/**
- * The DnB tempo band the archive folds every stored BPM into at write time
- * (`foldToBand`, analyze-track.ts). The core ASSERTS this as an input contract
- * rather than re-folding: an out-of-band value yields a `null` BPM sub-score plus a
- * raised `outOfBand` flag (never a silent mis-score). Cross-band/half-time scoring is
- * out of scope by construction of the archive.
- */
 export const BPM_BAND = { max: 185, min: 160 } as const;
 
-/**
- * The affine calibration mapping a MuQ cosine into a [0,1] sonic sub-score:
- * `clamp01((cos − LO) / (HI − LO))`. ONE fixed calibration for both products (a
- * per-query min-max is NaN-prone at n=1, a coin-flip at n=2, and demotes the few
- * embedded findings under renormalization). LO/HI are the archive's global
- * pairwise-cosine 5th/95th percentile, set once by a checked-in bootstrap the day the
- * gate lifts. PROVISIONAL until then — the gate keeps the sonic term `null`, so these
- * values are inert at launch; the bootstrap overwrites them (a logged one-time step).
- */
 export const SONIC_CALIBRATION = { hi: 0.95, lo: 0.5 } as const;
 
-/**
- * The sonic-term coverage gate. Until the archive holds at least this many embedded
- * PAIRS, the sonic sub-score is `null` for every pair (a percentile of 3 embedded
- * findings = 3 pairs is garbage), and renormalization carries key + BPM. The gate
- * lifts — and the bootstrap runs, once — when the embed cron gets there; no code
- * change before then. Pairs from `E` embedded findings = `E·(E−1)/2`.
- */
 export const MIN_EMBEDDED_PAIRS = 50;
 
-// ── The Camelot harmonic sub-score ───────────────────────────────────────────
-
-/**
- * The harmonic compatibility table, keyed by `(dn, letter-match)` — `dn` is the
- * circular distance on the number ring (0..6). Camelot is 24 genuinely discrete
- * classes, so a lookup is right and a continuous function would be false precision.
- * The ±2 (whole-tone "energy") move scores symmetrically; direction/energy is a
- * sequencing concern (the path search), not pairwise compatibility.
- */
 const HARMONIC_TABLE = {
-  0: { diff: 0.9, same: 1.0 }, // same key / relative major↔minor
-  1: { diff: 0.55, same: 0.85 }, // adjacent (perfect fifth) / diagonal
-  2: { diff: 0.35, same: 0.6 }, // energy boost/drop (whole tone) / 2-diff
+  0: { diff: 0.9, same: 1.0 },
+  1: { diff: 0.55, same: 0.85 },
+  2: { diff: 0.35, same: 0.6 },
   3: { diff: 0.25, same: 0.25 },
   4: { diff: 0.15, same: 0.15 },
   5: { diff: 0.1, same: 0.1 },
-  6: { diff: 0.05, same: 0.05 }, // tritone
+  6: { diff: 0.05, same: 0.05 },
 } as const;
 
-/** Circular distance on the 12-slot Camelot number ring (0..6). */
 function camelotDistance(a: Camelot, b: Camelot): number {
   const raw = Math.abs(a.number - b.number);
 
   return Math.min(raw, 12 - raw);
 }
 
-/**
- * The harmonic sub-score for two Camelot positions, in [0,1] (see `HARMONIC_TABLE`),
- * or `null` when either key is absent/unparseable — never 0 for missing data.
- */
 export function harmonicScore(a: Camelot | null, b: Camelot | null): number | null {
   if (!a || !b) {
     return null;
@@ -114,7 +37,6 @@ export function harmonicScore(a: Camelot | null, b: Camelot | null): number | nu
   return a.letter === b.letter ? row.same : row.diff;
 }
 
-/** The `key` sub-score's harmonic relationship, for the reason chip a surface renders. */
 export type KeyRelationship =
   | "same_key"
   | "relative"
@@ -123,7 +45,6 @@ export type KeyRelationship =
   | "diagonal"
   | "distant";
 
-/** Name the harmonic relationship between two Camelot positions (for the reason chip). */
 export function keyRelationship(a: Camelot, b: Camelot): KeyRelationship {
   const dn = camelotDistance(a, b);
   const same = a.letter === b.letter;
@@ -141,26 +62,10 @@ export function keyRelationship(a: Camelot, b: Camelot): KeyRelationship {
   return "distant";
 }
 
-/**
- * Is the move between two Camelot positions one the wheel gives a NAME to — same key,
- * relative, adjacent, diagonal, energy? Everything else is `distant`: playable, but not a
- * move a DJ makes on purpose.
- *
- * This is the archive's harmonic ADJACENCY, and it is load-bearing twice over. It bounds
- * the candidate scan (`getMixableTracks` pre-filters `key in (…)` to the classes a named
- * move can reach — the btree pre-filter ahead of the exact vector scan) and it defines the
- * neighbourhood the depth gate measures (`mixChainDepth`). Both need ONE answer to "which
- * tracks could plausibly follow this one", and this is it.
- */
 export function isNamedMove(a: Camelot, b: Camelot): boolean {
   return keyRelationship(a, b) !== "distant";
 }
 
-/**
- * Every Camelot class reachable from `from` by a named move — itself, its relative, the two
- * adjacent, the two diagonal, the two energy: 8 of the 24. The SQL pre-filter's source of
- * truth (a class the wheel cannot name a move to can never rank, so it is never scanned).
- */
 export function namedMoveClasses(from: Camelot): Camelot[] {
   const out: Camelot[] = [];
 
@@ -177,68 +82,23 @@ export function namedMoveClasses(from: Camelot): Camelot[] {
   return out;
 }
 
-// ── The depth gate (is the archive deep enough to chain a set?) ──────────────
-
-/**
- * How long a set IS, taken from the archive rather than picked: Fluncle's own published
- * mixtape runs 17 tracks. It is the only artifact in the product that answers "what counts
- * as a set", so it is what the gate holds the archive to. A mix of 2 tracks is not a set.
- */
 export const SET_FLOOR = 17;
 
-/**
- * How deep the rail is — the number of next-track candidates `/mix` offers at each step
- * (`list_mixable_tracks`' default limit, which imports this rather than re-declaring it, so
- * the gate and the rail cannot drift apart).
- */
 export const RAIL_DEPTH = 12;
 
-/**
- * THE GATE. The old floor was a finding COUNT (~250) — a proxy for "is there enough depth
- * to chain a set", and a number nobody could defend. This replaces it with the thing the
- * proxy was standing in for, measured directly against what the tool can actually do:
- *
- *   From the median track, can you chain a whole set and still be CHOOSING at the last
- *   transition, rather than accepting the only move left?
- *
- * A set is {@link SET_FLOOR} tracks; choosing means a full rail of {@link RAIL_DEPTH} at the
- * end of it. So the median track must sit within a NAMED HARMONIC MOVE of at least
- * `SET_FLOOR + RAIL_DEPTH` other rankable tracks. Neither number is invented: one is the
- * length of Fluncle's own set, the other is the rail this tool already ships.
- *
- * The gate is self-lifting — it is a measurement of the live archive, not a flag anybody has
- * to remember to flip. The catalogue is what dissolves it (a catalogue track is rankable the
- * moment it has a key), which is precisely the roadmap's claim that a catalogue IS depth.
- */
 export const MIX_PUBLIC_FLOOR = SET_FLOOR + RAIL_DEPTH;
 
-/** What the depth gate measured, and whether it opened. The `/mix` route's whole verdict. */
 export type MixChainDepth = {
-  /** The count-weighted median named-move neighbourhood over the archive's rankable tracks. */
   median: number;
-  /** True ⇔ `median >= MIX_PUBLIC_FLOOR`: the archive can carry a set from the middle of it. */
+
   open: boolean;
-  /** How many rankable (keyed) tracks the archive holds — the denominator, for the operator. */
+
   rankable: number;
 };
 
-/**
- * Measure the archive's chain depth from its KEY HISTOGRAM — `[{ key: "A minor", count: 7 }]`
- * — and decide the gate. One `group by key` over 24-ish distinct values answers it, so the
- * page pays an index read rather than a scan (see `tracks_key_idx`).
- *
- * For each rankable track: how many OTHER rankable tracks are a named move away. The median
- * over all of them is the archive's depth. The median, not the mean, because the mean is
- * flattered by the crowded keys — the question is what a TYPICAL starting point can do, and
- * half the archive does at least this well.
- *
- * An unparseable key is not rankable and is not counted (`scoreMix` would drop it anyway),
- * so the histogram may be fed the raw column verbatim.
- */
 export function mixChainDepth(
   histogram: readonly { count: number; key: string | null }[],
 ): MixChainDepth {
-  // Fold the raw spellings onto the wheel: 24 classes, however the archive spells them.
   const classes = new Map<string, { camelot: Camelot; count: number }>();
 
   for (const { count, key } of histogram) {
@@ -265,21 +125,17 @@ export function mixChainDepth(
     return { median: 0, open: false, rankable: 0 };
   }
 
-  // Every track in a class has the SAME neighbourhood size, so the per-track list is the
-  // class's neighbourhood repeated `count` times — no need to materialize a row per track.
   const neighbourhoods: { count: number; size: number }[] = entries.map((entry) => {
     const reachable = entries.reduce(
       (sum, other) => (isNamedMove(entry.camelot, other.camelot) ? sum + other.count : sum),
       0,
     );
 
-    // `reachable` counts the track itself (its own class is always a named move from itself).
     return { count: entry.count, size: reachable - 1 };
   });
 
   neighbourhoods.sort((left, right) => left.size - right.size);
 
-  // The count-weighted median: walk the sorted sizes until half the archive is behind us.
   const half = Math.floor(rankable / 2);
   let seen = 0;
   let median = 0;
@@ -296,19 +152,6 @@ export function mixChainDepth(
   return { median, open: median >= MIX_PUBLIC_FLOOR, rankable };
 }
 
-// ── The BPM sub-score (band-contract percent delta) ──────────────────────────
-
-/**
- * The BPM sub-score for two tempos, plus the band-contract flag. `outOfBand` is true
- * when a present tempo sits outside `BPM_BAND` (a data problem worth NAMING, e.g. a
- * stray half-time 87 vs 174 — the exact relationship a DJ wants surfaced, not erased
- * by a silent octave fold); such a pair scores `null`. A NULL tempo scores `null`
- * with `outOfBand` false (simply absent).
- *
- * For an in-band pair the delta is a percent against the SLOWER tempo (the beatmatch
- * window is a pitch-fader percentage, CDJ default ±6%). Piecewise-linear:
- * ≤1% → 1.00; 1–6% → 1.00→0.50; 6–10% → 0.50→0.00; >10% → 0.00.
- */
 export function bpmSubScore(
   a: number | null,
   b: number | null,
@@ -329,43 +172,29 @@ export function bpmSubScore(
     return { outOfBand: false, score: 1 };
   }
   if (pctDelta <= 0.06) {
-    // Linear 1.00 → 0.50 across the 1%–6% beatmatch window.
     return { outOfBand: false, score: 1 - (0.5 * (pctDelta - 0.01)) / 0.05 };
   }
   if (pctDelta <= 0.1) {
-    // Linear 0.50 → 0.00 across 6%–10%.
     return { outOfBand: false, score: 0.5 - (0.5 * (pctDelta - 0.06)) / 0.04 };
   }
 
   return { outOfBand: false, score: 0 };
 }
 
-// ── The sonic sub-score (MuQ cosine, gated + fixed calibration) ──────────────
-
-/** Whether the archive's embedded-finding count clears the sonic-term coverage gate. */
 export function sonicGateOpen(embeddedCount: number): boolean {
   const pairs = (embeddedCount * (embeddedCount - 1)) / 2;
 
   return pairs >= MIN_EMBEDDED_PAIRS;
 }
 
-/** Clamp to [0,1]. */
 function clamp01(value: number): number {
   return Math.min(1, Math.max(0, value));
 }
 
-/** The fixed affine calibration: a MuQ cosine → a [0,1] score. One curve, every consumer. */
 function calibrateCosine(cos: number): number {
   return clamp01((cos - SONIC_CALIBRATION.lo) / (SONIC_CALIBRATION.hi - SONIC_CALIBRATION.lo));
 }
 
-/**
- * The sonic sub-score from an ALREADY-COMPUTED cosine, in [0,1], or `null` when the
- * cosine is absent OR the coverage gate is closed. The `/mix` rail's candidate scan
- * gets its cosine from the DATABASE (`vector_distance_cos`, converted by
- * `cosineFromDistance`) rather than by pulling 21 KB of vector per candidate into the
- * isolate — the calibration below is the same either way, which is the point.
- */
 export function sonicSubScoreFromCosine(cos: number | null, gateOpen: boolean): number | null {
   if (!gateOpen || cos === null) {
     return null;
@@ -374,59 +203,14 @@ export function sonicSubScoreFromCosine(cos: number | null, gateOpen: boolean): 
   return calibrateCosine(cos);
 }
 
-// ── Taste (the seed) ─────────────────────────────────────────────────────────
-
-/**
- * A candidate's TASTE score: how close it sits to the LAST track of the chain. Same MuQ space
- * and same calibration as the sonic term — the same question ("how close do these two sound?")
- * put to the rail a second time, as the thing that decides among the clean mixes rather than
- * one weighted term inside them.
- *
- * SINGLE-PROBE-ON-LAST, the ratified model. Mixing a transition is a question about the track
- * you just played, so the probe is that track's vector and nothing else — not a fold over a
- * seeded artist list; the probe is the last track's vector (`tracks.ts`, "Taste: SINGLE-PROBE-ON-LAST").
- * The chain is still the EXCLUDE list, which is what lets a set drift as it goes: track 5 is
- * chosen next to track 4, which was chosen next to track 3.
- *
- * NEVER A CENTROID (docs/the-ear.md), now by construction rather than by care: one probe has
- * nothing to average. The Ear ruled a mean out because the operator's taste is multi-modal and
- * the mean of a liquid roller and a neuro stepper is a vector that sounds like neither; a chain
- * is multi-modal for the same reason, and the mean of where a set has BEEN is not where it is.
- *
- * `null` when the candidate has no vector, or when there is no probe to measure against.
- */
 export function tasteSubScore(cos: number | null): number | null {
   return cos === null ? null : calibrateCosine(cos);
 }
 
-/**
- * The RAIL score — what actually orders `/mix`: the product of how cleanly a candidate mixes
- * and how close it sounds to the track it would follow.
- *
- * A PRODUCT, so both have to be true. Mixability answers "can I play this next" (does it
- * beatmatch, does it key up — a fact the harmonic pre-filter already bounds); taste answers
- * "should I" (is this the same room). A sum would let a spotless-but-alien mix outrank a good
- * mix of the right thing; a product will not. It is also parameter-free — no weight to pick,
- * no new constant to defend — and it degrades to plain mixability the instant taste is absent
- * (`null`), which is exactly the rail a vectorless target still gets.
- *
- * WHY THE SONIC TERM IS NOT ENOUGH ON ITS OWN. `MIX_WEIGHTS.sonic` is 0.35 of a renormalized
- * sum, so inside `scoreMix` sound is one voice among three and the key dominates. That is the
- * right shape for "is this pair playable". It is the wrong shape for "which of these playable
- * pairs comes first", where — the ratified call — adjacency to the last track is the question.
- * Multiplying by it makes the ORDER about sound while the harmonic floor stays mandatory.
- */
 export function railScore(mix: number, taste: number | null): number {
   return taste === null ? mix : mix * taste;
 }
 
-/**
- * The sonic sub-score for two MuQ embeddings under the fixed affine calibration, in
- * [0,1], or `null` when either embedding is absent OR the coverage gate is closed
- * (`gateOpen === false`). Aesthetic continuity (liquid vs neuro at the same 8A/174) —
- * the term most likely to reflect how Fluncle actually sequences, which is why it
- * ships wired rather than cut.
- */
 export function sonicSubScore(
   a: number[] | null,
   b: number[] | null,
@@ -435,12 +219,6 @@ export function sonicSubScore(
   return sonicSubScoreFromCosine(a && b ? cosineSimilarity(a, b) : null, gateOpen);
 }
 
-// ── The texture tiebreak (`features_json`) ───────────────────────────────────
-
-// The DSP spectral fields, in a fixed canonical order — the tiebreak vector. Present
-// on 56/56 findings. Scale/semantics are DSP-internal and UNVALIDATED as a similarity
-// metric (Decision 3 sanctions it as a tiebreak ONLY, never a weighted term, never
-// surfaced in copy); determinism is the whole job here, not perceptual accuracy.
 const FEATURE_FIELDS = [
   "centroidHz",
   "highRatio",
@@ -449,11 +227,6 @@ const FEATURE_FIELDS = [
   "subBassRatio",
 ] as const;
 
-/**
- * Parse a stored `features_json` string into the fixed-order tiebreak vector, or
- * `null` when it is absent / not JSON / carries none of the known fields. A missing
- * individual field is 0 (the vector stays fixed-width so distances are comparable).
- */
 export function parseFeatureVector(json: string | null | undefined): number[] | null {
   if (!json) {
     return null;
@@ -483,7 +256,6 @@ export function parseFeatureVector(json: string | null | undefined): number[] | 
   return anyPresent ? vector : null;
 }
 
-/** Deterministic Euclidean distance between two feature vectors (∞ when either is absent). */
 export function featureDistance(a: number[] | null, b: number[] | null): number {
   if (!a || !b) {
     return Number.POSITIVE_INFINITY;
@@ -500,48 +272,32 @@ export function featureDistance(a: number[] | null, b: number[] | null): number 
   return Math.sqrt(sum);
 }
 
-// ── The combiner ─────────────────────────────────────────────────────────────
-
-/** A track's mixability-relevant inputs — parsed once, then scored pure. */
 export type MixTrack = {
   bpm: number | null;
-  /** The parsed MuQ embedding (or null). */
+
   embedding: number[] | null;
-  /** The parsed DSP feature vector for the tiebreak (or null). */
+
   features: number[] | null;
-  /** The scale-text key (`"A minor"`), parsed internally. */
+
   key: string | null;
 };
 
-/** The reason kinds + relationships a surface renders (mirrors `MixReasonSchema`). */
 export type MixReason = {
   kind: "key" | "bpm" | "sonic";
   relationship: KeyRelationship | "tempo_match" | "close_in_sound";
 };
 
-/** The full pairwise result: the combined score, each sub-score, the reason, the flag. */
 export type MixPairResult = {
   bpm: number | null;
-  /** True when an input was out-of-band (BPM) or the pair carried no scorable term. */
+
   flagged: boolean;
   key: number | null;
   reason: MixReason | null;
-  /** The combined, present-term-renormalized score in [0,1], or null (all terms absent). */
+
   score: number | null;
   sonic: number | null;
 };
 
-/**
- * Options for a scoring pass. `gateOpen` lifts the sonic term (default closed).
- *
- * `sonicCos` is the cosine between THE TWO TRACKS BEING SCORED, already computed —
- * the `/mix` rail's candidate scan has the database compute it (`vector_distance_cos`
- * against the target, one exact scan) instead of shipping every candidate's 21 KB
- * vector into the isolate. Supplied, it is used verbatim; omitted (`undefined`), the
- * cosine comes from the two `MixTrack.embedding`s as before. It is a PER-CALL option
- * precisely so it cannot be smuggled onto a `MixTrack` and silently mis-score the
- * pairwise path search, whose N² cosines are all different pairs.
- */
 export type MixOptions = { gateOpen?: boolean; sonicCos?: number | null };
 
 function camelotOf(key: string | null): Camelot | null {
@@ -550,12 +306,6 @@ function camelotOf(key: string | null): Camelot | null {
   return parsed ? toCamelot(parsed) : null;
 }
 
-/**
- * Pick the dominant PRESENT sub-score as a structured reason for the surfaces to
- * render. Argmax over present terms by raw value; ties break by a fixed priority
- * (key → sonic → bpm) so the harmonic/aesthetic reason is named over a bare tempo
- * match. Returns null when no term is present.
- */
 function selectReason(
   keyScore: number | null,
   bpmScore: number | null,
@@ -593,19 +343,12 @@ function selectReason(
     return { kind: "sonic", relationship: "close_in_sound" };
   }
 
-  // key — name the harmonic relationship (both camelots are present when keyScore is).
   return {
     kind: "key",
     relationship: camelotA && camelotB ? keyRelationship(camelotA, camelotB) : "distant",
   };
 }
 
-/**
- * Score how cleanly track `b` mixes out of track `a`. Symmetric in the pairwise sub-
- * scores (direction is a sequencing concern, handled by the path search). Present-term
- * renormalization: a finding scored on what it HAS, at full scale
- * (`Σ wᵢ·scoreᵢ / Σ wᵢ·[present]`); all-null ⇒ `score: null`, `flagged: true`.
- */
 export function scoreMix(a: MixTrack, b: MixTrack, options: MixOptions = {}): MixPairResult {
   const gateOpen = options.gateOpen ?? false;
 
@@ -616,8 +359,6 @@ export function scoreMix(a: MixTrack, b: MixTrack, options: MixOptions = {}): Mi
   const bpm = bpmSubScore(a.bpm, b.bpm);
   const bpmScore = bpm.score;
 
-  // The cosine either came from the database (the `/mix` candidate scan) or is computed
-  // here from the two vectors — same number, same calibration, same score.
   const sonicScore =
     options.sonicCos === undefined
       ? sonicSubScore(a.embedding, b.embedding, gateOpen)
@@ -639,13 +380,6 @@ export function scoreMix(a: MixTrack, b: MixTrack, options: MixOptions = {}): Mi
     denominator += MIX_WEIGHTS.sonic;
   }
 
-  // PRESENT-TERM RENORMALIZATION NEEDS A FLOOR. Renormalizing over only the terms a
-  // pair HAS means a data-poor row wins: with no key and no BPM, a strong embedding
-  // renormalizes over its own 0.35 weight alone and scores a perfect 1.00 — beating a
-  // fully-measured, genuinely good match at ~0.82. So the KEY IS MANDATORY to be
-  // rankable: harmonic compatibility is this tool's whole premise, and a pair whose key
-  // we do not know is a pair we cannot justify. Without it the score is null, and
-  // `rankMixable` drops the row rather than floating it to the top of the rail.
   const rankable = denominator >= MIX_WEIGHTS.key;
   const score = rankable && denominator > 0 ? numerator / denominator : null;
 
@@ -659,40 +393,12 @@ export function scoreMix(a: MixTrack, b: MixTrack, options: MixOptions = {}): Mi
   };
 }
 
-// ── Ranking (Product A) ──────────────────────────────────────────────────────
-
-/**
- * A ranking candidate: an opaque item paired with its mixability inputs, and
- * optionally the cosine to the TARGET already computed by the database (see
- * `MixOptions.sonicCos`). When `sonicCos` is set, `track.embedding` is not needed —
- * which is exactly how the `/mix` rail avoids loading the corpus's vectors.
- */
 export type MixCandidate<T> = { item: T; sonicCos?: number | null; track: MixTrack };
 
-/** A ranked candidate, score still attached — the internal shape taste re-ranks over. */
 export type MixScored<T> = { item: T; reason: MixReason; score: number };
 
-/**
- * How many of the cleanest mixes taste is allowed to choose among (`RAIL_DEPTH × 25`).
- *
- * Taste re-ranks a SHORTLIST rather than the whole archive, and that is what keeps the tool's
- * promise intact. The rail's claim is that EVERYTHING on it mixes clean; taste decides which of
- * the clean ones you see first, and can never reach outside them to offer you something you
- * would like but could not play. Cutting at 300 is what stops a merely-adjacent tune with a
- * mediocre key relationship from climbing the rail on sound alone.
- *
- * It is also the sonar route's `topK` (`mixRailFromSonar`, tracks.ts): the candidate set the
- * engine ranks is the same size whichever engine found it.
- */
 export const TASTE_SHORTLIST = RAIL_DEPTH * 25;
 
-/**
- * Rank `candidates` by descending mixability to `target`, breaking equal-score
- * plateaus by ASCENDING feature-vector distance (the texture tiebreak), then by index
- * (stable). Candidates whose combined score is `null` (no scorable term) are dropped —
- * the rail never shows a pair it cannot justify. Returns the top `limit` scored items.
- * A non-positive `limit` returns nothing.
- */
 export function shortlistMixable<T>(
   target: MixTrack,
   candidates: MixCandidate<T>[],
@@ -735,10 +441,6 @@ export function shortlistMixable<T>(
   return scored.slice(0, limit).map(({ item, reason, score }) => ({ item, reason, score }));
 }
 
-/**
- * Rank `candidates` by descending mixability to `target`, dropping the score. The un-seeded
- * rail, and the operator's path search — every consumer that has no taste to apply.
- */
 export function rankMixable<T>(
   target: MixTrack,
   candidates: MixCandidate<T>[],
@@ -751,13 +453,6 @@ export function rankMixable<T>(
   }));
 }
 
-/**
- * Re-rank a mixability shortlist by {@link railScore} — mixability × taste — and cut it to
- * `limit`. `tasteOf` returns a candidate's taste sub-score, or `null` when it has no vector
- * to compare (an un-embedded row keeps its mixability rank rather than being punished for a
- * missing measurement — the same "never 0 for absent data" rule the sub-scores follow).
- * Ties fall back to the shortlist's own order, so this is stable and deterministic.
- */
 export function applyTaste<T>(
   shortlist: MixScored<T>[],
   tasteOf: (item: T) => number | null,
@@ -778,24 +473,18 @@ export function applyTaste<T>(
   return rescored.slice(0, limit).map(({ entry }) => ({ item: entry.item, reason: entry.reason }));
 }
 
-// ── Path search (Product B) ──────────────────────────────────────────────────
-
-/** The largest pool the exact Held-Karp DP is used for; above it, greedy + 2-opt. */
 export const HELD_KARP_MAX = 16;
-/** The hard cap on a path-search request (the input schema enforces `.min(2).max(64)`). */
+
 export const PATH_MAX = 64;
 
-/** One ordered transition in a proposed path: from index → to index, its cost + flag. */
 export type MixTransition = { cost: number; flagged: boolean };
 
-/** A proposed order over the input tracks: the index order, the total cost, the algorithm. */
 export type MixOrder = {
   algorithm: "held-karp" | "greedy-2opt";
   order: number[];
   totalCost: number;
 };
 
-/** Build the symmetric N×N cost matrix (`1 − mixability`), null pairs at the neutral median. */
 function buildCostMatrix(
   tracks: MixTrack[],
   options: MixOptions,
@@ -805,7 +494,6 @@ function buildCostMatrix(
   const flagged: boolean[] = Array.from({ length: n * n }, () => false);
   const present: number[] = [];
 
-  // First pass: real costs where the pair is scorable; mark null pairs for the median.
   for (let i = 0; i < n; i += 1) {
     for (let j = i + 1; j < n; j += 1) {
       const trackI = tracks[i];
@@ -827,9 +515,6 @@ function buildCostMatrix(
     }
   }
 
-  // Neutral median for null pairs — max-cost would exile data-poor findings to the
-  // path ends, a data-availability artifact masquerading as musical judgment. Median
-  // of the present costs (0.5 when nothing is scorable at all).
   const median = present.length > 0 ? medianOf(present) : 0.5;
 
   for (let i = 0; i < n; i += 1) {
@@ -855,20 +540,11 @@ function medianOf(values: number[]): number {
   return ((sorted[mid - 1] ?? 0.5) + (sorted[mid] ?? 0.5)) / 2;
 }
 
-/**
- * Held-Karp exact shortest open Hamiltonian path over `n ≤ HELD_KARP_MAX` nodes, from
- * the precomputed `cost` matrix. Flat typed arrays indexed by an integer bitmask — the
- * mandated implementation (a string-keyed Map blows the Worker budget). `start`:
- * pin the first vertex (seed), or `null` for free-both-endpoints (every singleton is a
- * base case — equivalent to the zero-edge dummy-node collapsed to N nodes). Both take
- * the min over all end states. Fully deterministic (ties by cost then index).
- */
 function heldKarpPath(cost: Float64Array, n: number, start: number | null): number[] {
   const size = 1 << n;
   const dp = new Float64Array(size * n).fill(Number.POSITIVE_INFINITY);
   const parent = new Int32Array(size * n).fill(-1);
 
-  // Base cases: the pinned singleton, or every singleton when both ends are free.
   for (let j = 0; j < n; j += 1) {
     if (start === null || start === j) {
       dp[(1 << j) * n + j] = 0;
@@ -904,7 +580,6 @@ function heldKarpPath(cost: Float64Array, n: number, start: number | null): numb
     }
   }
 
-  // Best end state over the full set (ties by lowest end index for determinism).
   const full = size - 1;
   let bestEnd = -1;
   let bestCost = Number.POSITIVE_INFINITY;
@@ -918,7 +593,6 @@ function heldKarpPath(cost: Float64Array, n: number, start: number | null): numb
     }
   }
 
-  // Reconstruct backwards from the best end.
   const order: number[] = [];
   let mask = full;
   let end = bestEnd;
@@ -933,7 +607,6 @@ function heldKarpPath(cost: Float64Array, n: number, start: number | null): numb
   return order.reverse();
 }
 
-/** Total cost of an open path (sum of adjacent edges). */
 function pathCost(order: number[], cost: Float64Array, n: number): number {
   let total = 0;
 
@@ -949,10 +622,6 @@ function pathCost(order: number[], cost: Float64Array, n: number): number {
   return total;
 }
 
-/**
- * Greedy nearest-neighbor from `start` (ties by lowest index), returning the visiting
- * order. Deterministic.
- */
 function greedyFrom(start: number, cost: Float64Array, n: number): number[] {
   const visited = Array.from({ length: n }, () => false);
   const order: number[] = [start];
@@ -987,7 +656,6 @@ function greedyFrom(start: number, cost: Float64Array, n: number): number[] {
   return order;
 }
 
-/** 2-opt local search on an open path, capped at `n` passes. Deterministic; keeps improvements only. */
 function twoOpt(initial: number[], cost: Float64Array, n: number): number[] {
   const order = [...initial];
   const length = order.length;
@@ -1019,14 +687,6 @@ function twoOpt(initial: number[], cost: Float64Array, n: number): number[] {
   return order;
 }
 
-/**
- * Order a candidate pool into a smoothness-optimized chain (minimizing total adjacent
- * roughness `Σ 1 − mixability`). NOT an energy-shaped set (open → build → peak →
- * comedown) — a symmetric cost cannot express that; the admin copy says so, and the
- * asymmetric energy-arc term is the recorded extension. Exact Held-Karp for
- * `n ≤ HELD_KARP_MAX`, multi-start greedy + 2-opt above. `seedIndex` pins the first
- * vertex. Fully deterministic. Requires `2 ≤ n ≤ PATH_MAX`.
- */
 export function orderMixPath(
   tracks: MixTrack[],
   options: MixOptions & { seedIndex?: number } = {},
@@ -1046,8 +706,6 @@ export function orderMixPath(
     return { algorithm: "held-karp", order, totalCost: pathCost(order, cost, n) };
   }
 
-  // Multi-start greedy + 2-opt. Every start (index order) when free; only the seed
-  // when pinned. Keep the lowest-cost result (ties by the earliest start).
   const starts = seedIndex === undefined ? Array.from({ length: n }, (_, i) => i) : [seedIndex];
   let best: number[] | null = null;
   let bestCost = Number.POSITIVE_INFINITY;
@@ -1067,7 +725,6 @@ export function orderMixPath(
   return { algorithm: "greedy-2opt", order: best ?? starts, totalCost: bestCost };
 }
 
-/** 2-opt that never moves index 0 (the pinned seed stays first). Deterministic. */
 function twoOptPinned(initial: number[], cost: Float64Array, n: number): number[] {
   const order = [...initial];
   const length = order.length;
@@ -1075,7 +732,6 @@ function twoOptPinned(initial: number[], cost: Float64Array, n: number): number[
   for (let pass = 0; pass < n; pass += 1) {
     let improved = false;
 
-    // i starts at 1: never reverse across position 0, so the seed stays pinned.
     for (let i = 1; i < length - 1; i += 1) {
       for (let k = i + 1; k < length; k += 1) {
         const before = pathCost(order, cost, n);
@@ -1100,7 +756,6 @@ function twoOptPinned(initial: number[], cost: Float64Array, n: number): number[
   return order;
 }
 
-/** The per-transition costs + flags along a proposed order (for the admin output rows). */
 export function transitionsAlong(
   order: number[],
   tracks: MixTrack[],
@@ -1129,7 +784,6 @@ export function transitionsAlong(
   return transitions;
 }
 
-/** Read a stored embedding for a `MixTrack` from its native `F32_BLOB(1024)` bytes. */
 export function toMixTrack(row: {
   bpm: number | null;
   embedding_blob: unknown;

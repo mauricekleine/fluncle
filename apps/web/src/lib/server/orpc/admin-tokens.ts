@@ -1,9 +1,3 @@
-// The `admin-tokens` domain router module — the just-in-time credential reads
-// for CLI-direct uploads + the Last.fm desktop-auth JSON exchange. Each handler
-// reuses the live route logic verbatim; the auth tier moves to the oRPC procedure
-// middleware (../orpc-auth). ALL four are operator tier (live `requireOperator`):
-// `adminAuth` + `operatorGuard`.
-
 import { ORPCError } from "@orpc/server";
 import { revokeAdminGrants } from "../env";
 import { lastfmGetSession, lastfmGetToken } from "../lastfm";
@@ -12,12 +6,7 @@ import { adminAuth, operatorGuard } from "../orpc-auth";
 import { getYouTubeAccessToken } from "../youtube";
 import { apiFault, type Implementer, toFault } from "./_shared";
 
-/**
- * Build the `admin-tokens` domain's handlers. Each reuses the live route logic
- * verbatim; only the auth gate is relocated to the procedure middleware.
- */
 export function adminTokensHandlers(os: Implementer) {
-  // POST /admin/youtube/token — operator tier (live `requireOperator`).
   const mintYoutubeTokenHandler = os.mint_youtube_token
     .use(adminAuth)
     .use(operatorGuard)
@@ -31,7 +20,6 @@ export function adminTokensHandlers(os: Implementer) {
       }
     });
 
-  // POST /admin/mixcloud/token — operator tier (live `requireOperator`).
   const mintMixcloudTokenHandler = os.mint_mixcloud_token
     .use(adminAuth)
     .use(operatorGuard)
@@ -45,7 +33,6 @@ export function adminTokensHandlers(os: Implementer) {
       }
     });
 
-  // GET /admin/lastfm/auth/start — operator tier (live `requireOperator`).
   const startLastfmAuthHandler = os.start_lastfm_auth
     .use(adminAuth)
     .use(operatorGuard)
@@ -59,8 +46,6 @@ export function adminTokensHandlers(os: Implementer) {
       }
     });
 
-  // POST /admin/lastfm/auth/session — operator tier (live `requireOperator`). The
-  // live route validates `token` itself (`invalid_request`/400 on missing/blank).
   const exchangeLastfmSessionHandler = os.exchange_lastfm_session
     .use(adminAuth)
     .use(operatorGuard)
@@ -84,10 +69,6 @@ export function adminTokensHandlers(os: Implementer) {
       }
     });
 
-  // POST /admin/auth/revoke-grants — operator tier. The admin session kill switch:
-  // bump the grant epoch so every outstanding browser grant cookie stops verifying.
-  // Deliberately operator-only: the agent token must never be able to lock the
-  // operator out of his own board.
   const revokeAdminGrantsHandler = os.revoke_admin_grants
     .use(adminAuth)
     .use(operatorGuard)

@@ -28,7 +28,6 @@ import {
 
 const EMPTY_DIGEST = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
 
-/** The box sweep's per-family request budget for the public families. */
 const SWEEP_STEPS = 4;
 
 function releaseDateFor(index: number): null | string {
@@ -168,7 +167,6 @@ describe("page-local public anchor maintenance", () => {
     );
   }
 
-  /** The bounded repair action as the box sweep issues it, up to the sweep's step budget. */
   async function repairUntilComplete(maxSteps = SWEEP_STEPS): Promise<number> {
     for (let step = 1; step <= maxSteps; step += 1) {
       const result = await advanceProjectionFor(db, {
@@ -278,7 +276,6 @@ describe("page-local public anchor maintenance", () => {
     };
   }
 
-  /** Every numbered page the projected document serves equals the exact source order page. */
   async function expectServedPagesExact(): Promise<void> {
     const total = Number(
       (await db.execute(`select count(*) as total from tracks`)).rows[0]?.total ?? -1,
@@ -327,13 +324,12 @@ describe("page-local public anchor maintenance", () => {
   async function expectPublishedAtCurrentEpoch(): Promise<void> {
     const current = await epochs();
     expect(current.validity).toBe(current.aggregate);
-    // Servable means the pager resolves page one from the projected document, whatever its format.
+
     expect(
       await readProjectedTrackHubPageStart(db, TRACKS_HUB_ANCHOR_ADDRESS, TRACKS_HUB_PAGE_SIZE, 1),
     ).toMatchObject({ start: { after: null, offset: 0, phase: "non_null" } });
   }
 
-  /** Read the generation named by validity directly, even while the aggregate epoch is ahead. */
   async function expectStoredPublishedDocumentExact(): Promise<void> {
     const publication = await db.execute({
       args: [TRACKS_HUB_ANCHOR_ADDRESS.hub, TRACKS_HUB_ANCHOR_ADDRESS.clauseHash],
@@ -396,7 +392,6 @@ describe("page-local public anchor maintenance", () => {
     }
   }
 
-  /** The public route's fail-open source read keeps every page in the published range reachable. */
   async function expectPublishedRangeReachable(): Promise<void> {
     const total = Number((await db.execute(`select count(*) as total from tracks`)).rows[0]?.total);
     const pages = Math.max(Math.ceil(total / TRACKS_HUB_PAGE_SIZE), 1);
@@ -488,8 +483,7 @@ describe("page-local public anchor maintenance", () => {
     ];
     for (const [label, mutate] of subjects) {
       await mutate();
-      // A generous step budget lets a whole-document rebuild finish too, so the shard count below
-      // is what discriminates page-local maintenance from a rebuild.
+
       let steps = 0;
       const writes = await countCommittedAnchorShardWrites(async (observed) => {
         for (steps = 1; steps <= 50; steps += 1) {
@@ -547,7 +541,7 @@ describe("page-local public anchor maintenance", () => {
       await deleteTrack(`track-grow-${String(index).padStart(3, "0")}`);
       expect(await repairUntilComplete()).toBeLessThanOrEqual(SWEEP_STEPS);
     }
-    // Empty the second run entirely; the head run is the one run that is never dropped.
+
     const secondRun = (
       await db.execute(`select track_id from tracks
         order by release_date desc, track_id desc limit 100 offset 100`)
@@ -580,8 +574,6 @@ describe("page-local public anchor maintenance", () => {
     const builtBefore = await shardSnapshot();
     expect(builtBefore.size).toBe(2);
 
-    // One change behind the cursor and one ahead of it, both through the real repair path. The one
-    // repair request drains both markers and then amends the built prefix instead of restarting.
     await insertTrack("track-newest", "2999-01-01");
     await insertTrack("track-oldest", "1900-01-01");
     const repair = await advanceProjectionFor(db, {
@@ -605,8 +597,6 @@ describe("page-local public anchor maintenance", () => {
     expect(builtAfter.size).toBe(2);
     expect(shardWrites(builtBefore, builtAfter)).toBe(1);
 
-    // The remaining 301 rows take exactly four more bounded steps to publish; a restart would need
-    // two purge steps and six source pages before its publication.
     for (let step = 0; step < 4; step += 1) {
       expect((await epochs()).validity).toBeUndefined();
       expect((await advancePublicAnchors(db, 100)).complete).toBe(false);
@@ -622,8 +612,6 @@ describe("page-local public anchor maintenance", () => {
     await expectStoredPublishedDocumentExact();
     await expectPublishedRangeReachable();
 
-    // More than one amendment step can consume, all inside the head run so every intermediate
-    // publication can be checked whole against the source state at that exact commit.
     for (let index = 0; index < 12; index += 1) {
       await insertTrack(`track-pending-${String(index).padStart(2, "0")}`, "2999-01-01");
     }
@@ -744,7 +732,6 @@ describe("page-local public anchor maintenance", () => {
       await expectServedPagesExact();
     }
 
-    // The exact audit runs dark and re-derives the served boundaries of the amended leaf document.
     await db.execute({
       args: [PUBLIC_PROJECTION_CUTOVER_ENABLED_KEY],
       sql: `update settings set value = 'false' where key = ?`,

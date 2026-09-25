@@ -41,10 +41,6 @@ const mimeToExtension: Record<string, string> = {
   "audio/x-m4a": "m4a",
 };
 
-// Every extension the archive can write. When a re-archive changes the extension
-// (e.g. an mp3 replaced by an m4a), the `<logId>/preview.<ext>` key overwrites in
-// place for the SAME extension but strands the previous-extension sibling — so after a successful
-// put we sweep the other-extension siblings for this finding.
 const knownPreviewExtensions = ["aac", "bin", "m4a", "mp3"] as const;
 
 function normalizePreviewMime(value: string): string | undefined {
@@ -79,17 +75,8 @@ function previewExtensionForMime(mime: string): string {
   return mimeToExtension[normalized] ?? "bin";
 }
 
-/**
- * The ceiling for a preview-archive body. A 30s clip at a generous 320kbps is ~1.2MB; a full
- * song is 5-10MB+. 3MB cleanly separates them, so this rejects a full song without ever
- * rejecting a legitimate high-bitrate preview.
- */
 const PREVIEW_MAX_BYTES = 3_000_000;
 
-// The archived preview lives beside the finding's full song in the PRIVATE
-// source-audio bucket, at a stable per-finding key. `preview` cannot collide with
-// a full-song filename (a 64-hex sha256), and dropping the content hash means a
-// re-archive overwrites in place instead of orphaning the previous object.
 export function buildPreviewArchiveKey({ logId, mime }: { logId: string; mime: string }): string {
   const extension = previewExtensionForMime(mime);
 
@@ -127,13 +114,6 @@ export async function archivePreviewForTrack(
     throw new ApiError("empty_preview", "preview archive upload was empty", 400);
   }
 
-  // ENFORCE the rail rather than merely documenting it: this slot holds ONE official 30s
-  // preview, never a full song (audio-source policy — captured full audio is internal-only
-  // and lives in the private source-audio bucket under `source_audio_key`). A full song is
-  // an order of magnitude larger than any 30s clip: at a generous 320kbps a 30s preview is
-  // ~1.2MB, so anything past PREVIEW_MAX_BYTES is not a preview. Reject loudly — the analyzer
-  // that fed this was pointed at the wrong audio, and a silently-archived full song is
-  // indistinguishable from a real preview once it lands.
   if (input.bytes.byteLength > PREVIEW_MAX_BYTES) {
     throw new ApiError(
       "preview_too_large",
@@ -150,8 +130,6 @@ export async function archivePreviewForTrack(
     httpMetadata: { contentType: mime },
   });
 
-  // Operator-only archive metadata is internal analysis state. Do not bump
-  // updated_at: public sitemap/log lastmod should reflect visible content only.
   await client.execute({
     args: [key, source, mime, archivedAt, input.track.trackId],
     sql: `update tracks
@@ -162,12 +140,6 @@ export async function archivePreviewForTrack(
       where track_id = ?`,
   });
 
-  // Sweep stale siblings LAST — the DB must never point at an object we've deleted.
-  // The key no longer carries a content hash, so a same-extension re-archive overwrites
-  // in place, but a changed extension would strand the old `<logId>/preview.<other-ext>`
-  // object. Deleting only AFTER the DB commit means: a failed put/DB-write leaves the row
-  // pointing at an object that still exists (recoverable), and a failed sweep only leaves
-  // a harmless orphan the next archive cleans up. Never delete the extension we just wrote.
   const staleSiblings = knownPreviewExtensions
     .filter((ext) => ext !== extension)
     .map((ext) => `${logId}/preview.${ext}`);

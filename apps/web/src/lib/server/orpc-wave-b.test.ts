@@ -1,14 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { BASE, get, jsonRequest as body, readJson, warmOrpcRouter } from "./orpc-test-kit";
 
-// Wave B — the thirteen `/me` PRIVATE-SESSION ops fanned out off the user-auth
-// tier (orpc-auth.ts). As in orpc-wave-a.test.ts, the underlying server helpers
-// are mocked: each handler's job is the auth/CSRF framing + the contract response
-// shape, not to touch Turso. These assertions pin the body the live `/me` route
-// emitted, now served by oRPC — byte-for-byte — plus the 401-without-session and
-// CSRF-rejection cases the tier introduces.
-
-// ── account-data: the auth-tier resolvers + every business helper ────────────
 const requirePublicUser = vi.fn();
 const requireAccountMutation = vi.fn();
 const meResponse = vi.fn();
@@ -48,7 +40,6 @@ vi.mock("./account-data", () => ({
   updateSavedSet: (...a: unknown[]) => updateSavedSet(...a),
 }));
 
-// ── public-auth: the session resolver + the CSRF token issuer ────────────────
 const createCsrfToken = vi.fn();
 
 vi.mock("./public-auth", async (importOriginal) => {
@@ -64,8 +55,7 @@ vi.mock("./public-auth", async (importOriginal) => {
 const USER = {
   createdAt: "2026-01-01T00:00:00.000Z",
   displayUsername: "Fan",
-  // Required on the wire since #647 (the verified-email arc): PublicUserSchema
-  // carries the requester's own email + verified state.
+
   email: "fan@example.com",
   emailVerified: false,
   id: "user-1",
@@ -77,7 +67,6 @@ function jsonError(status: number, code: string, message: string): Response {
   return Response.json({ code, message, ok: false }, { status });
 }
 
-// A signed-in session for the read tier, and a passed CSRF guard for writes.
 function signIn(): void {
   requirePublicUser.mockResolvedValue(USER);
   requireAccountMutation.mockResolvedValue(USER);
@@ -111,8 +100,6 @@ beforeEach(() => {
   }
 });
 
-// ── get_current_private_user (GET /me) — never 401s; user-or-null ────────────
-
 describe("oRPC /me — GET /me (get_current_private_user)", () => {
   it("serves { ok: true, user } for a session", async () => {
     meResponse.mockResolvedValueOnce({ googleEnabled: false, ok: true, user: USER });
@@ -134,8 +121,6 @@ describe("oRPC /me — GET /me (get_current_private_user)", () => {
     expect(await readJson(response)).toEqual({ googleEnabled: false, ok: true, user: null });
   });
 });
-
-// ── get_private_mutation_token (GET /me/csrf) ────────────────────────────────
 
 describe("oRPC /me — GET /me/csrf (get_private_mutation_token)", () => {
   it("serves { csrfToken, ok: true } for a session", async () => {
@@ -166,8 +151,6 @@ describe("oRPC /me — GET /me/csrf (get_private_mutation_token)", () => {
     });
   });
 });
-
-// ── list_private_saved_findings (GET /me/saved-findings) ─────────────────────
 
 describe("oRPC /me — GET /me/saved-findings (list_private_saved_findings)", () => {
   it("serves { ok: true, savedFindings }", async () => {
@@ -206,8 +189,6 @@ describe("oRPC /me — GET /me/saved-findings (list_private_saved_findings)", ()
     });
   });
 });
-
-// ── save_private_finding (POST /me/saved-findings) ───────────────────────────
 
 describe("oRPC /me — POST /me/saved-findings (save_private_finding)", () => {
   it("serves { ok: true, savedFinding } on a valid save", async () => {
@@ -268,8 +249,6 @@ describe("oRPC /me — POST /me/saved-findings (save_private_finding)", () => {
   });
 });
 
-// ── unsave_private_finding (DELETE /me/saved-findings/{trackId}) ─────────────
-
 describe("oRPC /me — DELETE /me/saved-findings/{trackId} (unsave_private_finding)", () => {
   it("serves the bare { ok: true } on success", async () => {
     signIn();
@@ -288,8 +267,6 @@ describe("oRPC /me — DELETE /me/saved-findings/{trackId} (unsave_private_findi
     expect(deleteSavedFinding.mock.calls[0]?.[1]).toBe("abc");
   });
 });
-
-// ── list_private_saved_sets (GET /me/saved-sets) ─────────────────────────────
 
 const SAVED_SET = {
   createdAt: "2026-01-01T00:00:00.000Z",
@@ -322,8 +299,6 @@ describe("oRPC /me — GET /me/saved-sets (list_private_saved_sets)", () => {
     expect(response?.status).toBe(401);
   });
 });
-
-// ── save_private_set (POST /me/saved-sets) ───────────────────────────────────
 
 describe("oRPC /me — POST /me/saved-sets (save_private_set)", () => {
   it("serves { ok: true, savedSet } on a valid save", async () => {
@@ -370,8 +345,6 @@ describe("oRPC /me — POST /me/saved-sets (save_private_set)", () => {
   });
 });
 
-// ── update_private_saved_set (PATCH /me/saved-sets/{id}) ──────────────────────
-
 describe("oRPC /me — PATCH /me/saved-sets/{id} (update_private_saved_set)", () => {
   it("serves { ok: true, savedSet } and passes the path id + body to the helper", async () => {
     signIn();
@@ -398,8 +371,6 @@ describe("oRPC /me — PATCH /me/saved-sets/{id} (update_private_saved_set)", ()
   });
 });
 
-// ── delete_private_saved_set (DELETE /me/saved-sets/{id}) ─────────────────────
-
 describe("oRPC /me — DELETE /me/saved-sets/{id} (delete_private_saved_set)", () => {
   it("serves the bare { ok: true } and passes the path id", async () => {
     signIn();
@@ -418,8 +389,6 @@ describe("oRPC /me — DELETE /me/saved-sets/{id} (delete_private_saved_set)", (
     expect(deleteSavedSet.mock.calls[0]?.[1]).toBe("set-1");
   });
 });
-
-// ── get_private_galaxy_progress (GET /me/galaxy-progress) ────────────────────
 
 describe("oRPC /me — GET /me/galaxy-progress (get_private_galaxy_progress)", () => {
   it("serves the progress body verbatim (carries its own ok)", async () => {
@@ -441,8 +410,6 @@ describe("oRPC /me — GET /me/galaxy-progress (get_private_galaxy_progress)", (
   });
 });
 
-// ── merge_private_galaxy_progress (PUT /me/galaxy-progress) ──────────────────
-
 describe("oRPC /me — PUT /me/galaxy-progress (merge_private_galaxy_progress)", () => {
   it("serves the merged progress body", async () => {
     signIn();
@@ -459,8 +426,6 @@ describe("oRPC /me — PUT /me/galaxy-progress (merge_private_galaxy_progress)",
     expect(mergeGalaxyProgress.mock.calls[0]?.[1]).toEqual({ collectedLogIds: ["0001"] });
   });
 });
-
-// ── collect_private_galaxy_log (POST /me/galaxy-progress/logs) ───────────────
 
 describe("oRPC /me — POST /me/galaxy-progress/logs (collect_private_galaxy_log)", () => {
   it("serves { logId, ok: true } on a valid collect", async () => {
@@ -512,8 +477,6 @@ describe("oRPC /me — POST /me/galaxy-progress/logs (collect_private_galaxy_log
   });
 });
 
-// ── update_private_profile (PATCH /me/profile) ──────────────────────────────
-
 describe("oRPC /me — PATCH /me/profile (update_private_profile)", () => {
   it("serves { ok: true, user } on a valid update", async () => {
     signIn();
@@ -545,8 +508,6 @@ describe("oRPC /me — PATCH /me/profile (update_private_profile)", () => {
   });
 });
 
-// ── delete_private_account (POST /me/delete) ─────────────────────────────────
-
 describe("oRPC /me — POST /me/delete (delete_private_account)", () => {
   it("serves { ok: true, summary }", async () => {
     signIn();
@@ -568,8 +529,6 @@ describe("oRPC /me — POST /me/delete (delete_private_account)", () => {
     expect(await readJson(response)).toEqual({ ok: true, summary });
   });
 });
-
-// ── export_private_account_data (POST /me/export) ────────────────────────────
 
 describe("oRPC /me — POST /me/export (export_private_account_data)", () => {
   it("serves the { export, ok: true } envelope", async () => {
@@ -596,8 +555,6 @@ describe("oRPC /me — POST /me/export (export_private_account_data)", () => {
     expect(await readJson(response)).toEqual(payload);
   });
 });
-
-// ── get_private_account_export (GET /me/export/{exportId}) ───────────────────
 
 describe("oRPC /me — GET /me/export/{exportId} (get_private_account_export)", () => {
   it("serves the export-status envelope", async () => {
@@ -638,8 +595,6 @@ describe("oRPC /me — GET /me/export/{exportId} (get_private_account_export)", 
   });
 });
 
-// ── list_private_submissions (GET /me/submissions) ───────────────────────────
-
 describe("oRPC /me — GET /me/submissions (list_private_submissions)", () => {
   it("serves { ok: true, submissions }", async () => {
     signIn();
@@ -664,8 +619,6 @@ describe("oRPC /me — GET /me/submissions (list_private_submissions)", () => {
   });
 });
 
-// ── The /me tier ──
-
 describe("oRPC /me — get_current_private_user", () => {
   it("serves get_current_private_user on the canonical /api/v1/me mount", async () => {
     meResponse.mockResolvedValueOnce({ googleEnabled: false, ok: true, user: null });
@@ -677,8 +630,6 @@ describe("oRPC /me — get_current_private_user", () => {
     expect(await readJson(response)).toEqual({ googleEnabled: false, ok: true, user: null });
   });
 });
-
-// ── OpenAPI doc emits all thirteen operationIds ──────────────────────────────
 
 function operationId(
   paths: Record<string, Record<string, { operationId?: string }>>,

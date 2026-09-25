@@ -8,7 +8,6 @@ import { type Implementer, toFault } from "./_shared";
 
 type AdmissionInput = InferContractRouterInputs<typeof contract>["coordinate_database_admission"];
 
-/** Execute the agent endpoint against an injected client for compatibility tests. */
 async function coordinateDatabaseAdmissionRequestFor(
   client: Parameters<typeof coordinateDatabaseAdmissionFor>[0],
   input: AdmissionInput,
@@ -27,7 +26,6 @@ export function databaseAdmissionFault(error: unknown) {
   return toFault(error);
 }
 
-/** Build the agent-tier recurring-work admission handler. */
 export function adminDatabaseAdmissionHandlers(os: Implementer) {
   const coordinateHandler = os.coordinate_database_admission
     .use(adminAuth)

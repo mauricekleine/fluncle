@@ -12,14 +12,6 @@ import { notifyDiscordSignup } from "./discord-alert";
 import { jsonError, readOptionalEnv } from "./env";
 import { sendPasswordResetEmail, sendVerificationEmail } from "./resend";
 
-// The CLI's OAuth client id for the device-authorization grant (RFC 8628). The
-// `fluncle login` flow is a first-party, fully-trusted client — the CLI is ours,
-// it carries no client secret, and the device code is bound to the approving
-// user — so it is the only id we accept (`validateClient` below). The minted
-// access_token is a NORMAL better-auth session token (the same carrier the web
-// cookie wraps), resolved by the `bearer` plugin, and is HARD-SEPARATE from the
-// admin `FLUNCLE_API_TOKEN` grant (which `adminRole` in ./env.ts resolves by a
-// constant-time compare — a user session token can never match it).
 export const cliDeviceClientId = "fluncle-cli";
 
 type PublicAuth = Auth<BetterAuthOptions>;
@@ -42,18 +34,11 @@ type PublicUserRow = {
 
 let publicAuthPromise: Promise<PublicAuth> | undefined;
 const devAuthSecret = "fluncle-dev-auth-secret-change-before-production";
-// The local-only `baseURL` fallback. Pinned to :3000 because that is where the Vite dev
-// server (and the Spotify redirect) live; see docs/local-database.md.
+
 const devAuthBaseUrl = "http://localhost:3000";
 const csrfHeaderName = "x-fluncle-csrf";
 const csrfWindowMs = 24 * 60 * 60 * 1000;
 
-// Handles a user may never claim, because each collides with a top-level route
-// segment. NOTE on the coming `/crew/<username>` public-profile namespace (the
-// account-redesign brief, ruling #1): it does NOT need an entry here. Reserved
-// usernames guard the HANDLE, and `/crew/<username>` USES the handle as its slug —
-// the profile lives one segment DOWN from `/crew`, so no handle can shadow it and
-// nothing needs reserving. The crew NUMBER rides that profile; it is not a handle.
 const reservedUsernames = new Set([
   "account",
   "admin",
@@ -108,17 +93,6 @@ function publicAuthSecret(): string {
   return resolvePublicAuthSecret(process.env.BETTER_AUTH_SECRET, import.meta.env.DEV);
 }
 
-/**
- * The Better Auth `baseURL`, with the SAME hard-fail shape as the secret above.
- *
- * Outside dev/test, `BETTER_AUTH_URL` is REQUIRED. Better Auth derives
- * `useSecureCookies` from this URL's scheme, so a missing value must throw at auth
- * construction rather than minting cookies without `Secure` or emitting localhost links.
- *
- * Safe to demand — `BETTER_AUTH_URL` is provisioned for the production Worker, and the
- * dev/test path uses the localhost default. A whitespace-only value counts as absent, so a
- * blank secret cannot sneak past as a valid base URL the way `||` let it.
- */
 export function resolvePublicAuthBaseUrl(url: string | undefined, isDev: boolean): string {
   const trimmed = url?.trim();
 
@@ -136,25 +110,6 @@ export function resolvePublicAuthBaseUrl(url: string | undefined, isDev: boolean
 type DbClient = Awaited<ReturnType<typeof getDb>>;
 type CrewNumberRow = { crew_number: number };
 
-/**
- * Stamp the account's crew number — its enlistment ordinal on the manifest (the
- * account-redesign brief, ruling #1) — as `max(crew_number) + 1`, atomically.
- *
- * CONCURRENCY. The whole assignment is ONE `UPDATE … SET crew_number = (SELECT
- * MAX + 1)` statement. libSQL/Turso serializes writers (docs/local-database.md), so
- * two simultaneous sign-ups can never both read the same MAX: the first commits N+1,
- * the second's sub-select then sees N+1 and commits N+2. The `UNIQUE` index is the
- * backstop — should any layer ever race the sub-select, the loser hits a UNIQUE
- * violation and this retries (recomputing MAX) up to `maxAttempts`.
- *
- * IDEMPOTENT. `WHERE crew_number IS NULL` leaves an already-numbered row untouched
- * (0 rows updated ⇒ returns `undefined`), so a re-run — or the backfill visiting an
- * already-stamped user — is a safe no-op.
- *
- * Returns the number it assigned, or `undefined` when the user already had one (or
- * the row is gone). Accepts an explicit client so a test (and the backfill) can drive
- * it against a chosen DB; production passes none and it uses `getDb()`.
- */
 export async function assignCrewNumber(
   userId: string,
   client?: DbClient,
@@ -185,24 +140,12 @@ export async function assignCrewNumber(
   return undefined;
 }
 
-/** True when a libSQL error is a UNIQUE-constraint violation (the crew-number race backstop). */
 function isUniqueViolation(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
 
   return message.toUpperCase().includes("UNIQUE CONSTRAINT");
 }
 
-/**
- * Best-effort newsletter subscribe for a brand-new account (the account-redesign
- * brief, ruling #5): signing up puts your email on the Friday newsletter. Reuses the
- * public `subscribeToNewsletter` path (validation + the shared rate limiter + the
- * Resend segment write), imported DYNAMICALLY so the module graph stays acyclic
- * (`newsletter` already imports from here).
- *
- * A fault here NEVER fails the sign-up — a missing Resend env, a Resend outage, or a
- * rate-limit throw is caught and logged, exactly like `sendResetPassword` /
- * `sendVerificationEmail` below. The account is created either way.
- */
 async function autoSubscribeAtSignup(email: string, ctx: unknown): Promise<void> {
   try {
     const { subscribeToNewsletter } = await import("./newsletter");
@@ -213,13 +156,6 @@ async function autoSubscribeAtSignup(email: string, ctx: unknown): Promise<void>
   }
 }
 
-/**
- * The `Request` a better-auth database hook's context carries (the sign-up request —
- * POST for email/password, the OAuth callback GET for social), used for the newsletter
- * rate-limit bucket. The typed `GenericEndpointContext` under-declares the runtime
- * context, so read it defensively and fall back to a synthetic request when a creation
- * has no endpoint context (never at a real sign-up).
- */
 function requestFromHookContext(ctx: unknown): Request {
   const maybe = ctx as { headers?: HeadersInit; request?: unknown } | null;
 
@@ -232,25 +168,12 @@ function requestFromHookContext(ctx: unknown): Request {
   });
 }
 
-// Exported as a test seam: the device-auth suite builds a fresh, isolated auth
-// instance per test over an in-memory drizzle DB by passing it here, sidestepping
-// the module-level `getPublicAuth` memo. Production builds it once via `getPublicAuth`.
 export function createPublicAuthOptions(
   db: Awaited<ReturnType<typeof getDrizzleDb>>,
 ): BetterAuthOptions {
   const googleProvider = readGoogleProvider();
 
   return {
-    // "Continue with Google" account linking. `enabled` lets an OAuth sign-in link
-    // into an existing account carrying the same email; `trustedProviders` marks
-    // Google a trusted source. Kept SAFE by Better Auth's default
-    // `requireLocalEmailVerified` (left unset = true): a Google sign-in links into
-    // an existing email/password account ONLY when that account's email is already
-    // VERIFIED. A Google sign-in whose email collides with an UNVERIFIED local
-    // account is REFUSED ("account not linked"), never silently merged — the
-    // anti-takeover gate, since an unverified local row could have been created by
-    // anyone with the victim's address. Wholly inert until the Google provider is
-    // configured (env-gated `socialProviders` below).
     account: {
       accountLinking: {
         enabled: true,
@@ -266,15 +189,7 @@ export function createPublicAuthOptions(
       provider: "sqlite",
       schema,
     }),
-    // The enlistment side effects, fired ONCE per new account (the account-redesign
-    // brief). `user.create.after` runs for BOTH email/password sign-up AND social
-    // (Google) sign-up — the latter lands here via the OAuth `/callback/:id` create
-    // path, so both share this one seam. It (1) stamps the crew number (ruling #1),
-    // (2) auto-subscribes the email to the newsletter (ruling #5), and (3) tells the
-    // operator's Discord alert channel that the crew grew. Crew-number
-    // assignment is wrapped so a race it could not win never fails the sign-up — the
-    // one-time backfill recovers any unstamped row — and auto-subscribe is best-effort
-    // by construction (a Resend fault is swallowed, never rethrown).
+
     databaseHooks: {
       user: {
         create: {
@@ -301,14 +216,7 @@ export function createPublicAuthOptions(
       enabled: true,
       maxPasswordLength: 128,
       minPasswordLength: 10,
-      // The password-reset rail (web + mobile). Better Auth builds the tokenised
-      // `url` (it validates the token then redirects to the `/reset-password` page
-      // with the token in the query); we just deliver it. The token rides the
-      // existing `verification` table — no schema change. A Resend fault is caught
-      // and logged rather than rethrown, so the `/request-password-reset` response
-      // is uniform whether or not delivery succeeded — keeping it
-      // email-enumeration-safe (Better Auth already returns the same shape whether
-      // or not the address is on an account).
+
       sendResetPassword: async ({ url, user }) => {
         try {
           await sendPasswordResetEmail({ to: user.email, url });
@@ -317,16 +225,7 @@ export function createPublicAuthOptions(
         }
       },
     },
-    // Email verification on sign-up. `sendOnSignUp` mails the link the moment an
-    // account is created; `autoSignInAfterVerification` signs the user in the
-    // instant they click it. Delivery mirrors `sendResetPassword` exactly — a
-    // Resend fault is caught and logged, never rethrown — so sign-up is
-    // enumeration-safe AND never fails on an unprovisioned Resend (mobile +
-    // email/password sign-up keep working unverified). `requireEmailVerification`
-    // is DELIBERATELY ABSENT: sign-in never requires a verified email. Verification
-    // gates future features, not the session — a Google sign-in already arrives
-    // verified (Better Auth maps the provider's verified email → `emailVerified`),
-    // and this rail only ever fires for the email/password path.
+
     emailVerification: {
       autoSignInAfterVerification: true,
       sendOnSignUp: true,
@@ -350,70 +249,31 @@ export function createPublicAuthOptions(
           username: "post-normalization",
         },
       }),
-      // The OAuth 2.0 Device Authorization Grant (RFC 8628) — the framework-native
-      // engine behind `fluncle login`. The CLI requests a device+user code, the
-      // user approves at /device while signed in to their Fluncle account, and the
-      // CLI polls /api/auth/device/token to receive a session token. The verification
-      // surface is the `/device` route in this app.
+
       deviceAuthorization({
         expiresIn: "30m",
         interval: "5s",
-        // No model/field overrides — the drizzle adapter maps the `deviceCode`
-        // model to our `device_code` table via the schema object above. The key
-        // must still be present: this plugin version's options schema treats
-        // `schema` as non-optional.
+
         schema: {},
-        // First-party CLI only: the `fluncle-cli` client carries no secret and the
-        // device code is user-bound, so the id IS the trust boundary here.
+
         validateClient: (clientId) => clientId === cliDeviceClientId,
       }),
-      // Accept the device-minted session token as `Authorization: Bearer <token>`
-      // so the CLI (which has no cookie jar) can call `/me` reads. This resolves a
-      // USER session only; it never touches the admin grant — `adminRole`
-      // (./env.ts) compares the Bearer against `FLUNCLE_API_TOKEN`/`FLUNCLE_AGENT_TOKEN`
-      // by constant-time equality, which a random session token cannot satisfy.
+
       bearer(),
-      // The Expo native-client handshake for the mobile app. It only adds handling
-      // for requests carrying the `fluncle://` origin (the app scheme, allow-listed
-      // in `trustedOrigins` below) — cookie/session behaviour for browser clients is
-      // byte-for-byte unchanged. It lets the app complete the OAuth/deep-link round
-      // trip and read the session token from the response header (no cookie jar on
-      // native), the mobile analogue of the CLI's `bearer` path.
+
       expo(),
     ],
     secret: publicAuthSecret(),
-    // Cache the session in a signed cookie so `getSession` resolves the session + user
-    // from the cookie instead of TWO sequential DB reads on every authenticated BROWSER
-    // request. Safe here: `getPublicSession` reads only `.id` off the cached session and
-    // then does its OWN fresh full-user read for every gate (`status`, `email_verified`),
-    // so nothing we gate on is ever served stale (the custom fields are `returned: false`
-    // below, so the cached session never carried them anyway). The one tradeoff is
-    // session-token REVOCATION latency — a server-revoked session can stay valid on a
-    // client until the cookie's `maxAge` — bounded short (60 s); a deactivated/deleted user
-    // is still caught immediately by the fresh `status !== "active"` check. Bearer clients
-    // (CLI/mobile) carry no cookie, so they are unaffected and keep resolving on the DB.
+
     session: {
       cookieCache: {
         enabled: true,
         maxAge: 60,
       },
     },
-    // "Continue with Google" — spread in ONLY when both creds are present
-    // (`readGoogleProvider`), so an unprovisioned Worker (or the device-auth test)
-    // registers no provider and the whole leg is a no-op. A half-empty config
-    // (`{ clientId: "", clientSecret: "" }`) is treated as absent, so a stray empty
-    // string can never register a broken provider at auth startup.
+
     ...(googleProvider ? { socialProviders: { google: googleProvider } } : {}),
-    // The app scheme (`fluncle://`) is trusted so the Expo plugin accepts the native
-    // client's deep-link origin; the web origins are unchanged.
-    //
-    // The APEX (`https://fluncle.com`) is listed alongside `www` on purpose. Better Auth
-    // refuses a request whose Origin is not trusted, so an auth call that arrives on the
-    // apex — a hand-typed address, a shared link that skipped the redirect, a client that
-    // kept the apex Origin through it — would fail as an AUTH error ("invalid origin")
-    // rather than as the availability problem it actually is. Trusting the apex we own
-    // makes that case fail closed on availability instead: it is the same site, same
-    // scheme, same registrable domain. This widens nothing to a third party.
+
     trustedOrigins: [
       "http://localhost:3000",
       "http://127.0.0.1:3000",
@@ -431,14 +291,6 @@ export function createPublicAuthOptions(
   };
 }
 
-/**
- * The Google social-provider config, or `undefined` when either cred is missing.
- * Read SYNCHRONOUSLY from `process.env` (hoisted by `getPublicAuth` below, the same
- * pattern as `BETTER_AUTH_SECRET`) so `createPublicAuthOptions` stays sync and the
- * device-auth test can build the options with no Google leg. A blank value trims to
- * empty and reads as absent, so "Continue with Google" ships DARK until both the
- * `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` Worker secrets exist.
- */
 function readGoogleProvider(): { clientId: string; clientSecret: string } | undefined {
   const clientId = process.env.GOOGLE_CLIENT_ID?.trim();
   const clientSecret = process.env.GOOGLE_CLIENT_SECRET?.trim();
@@ -446,13 +298,6 @@ function readGoogleProvider(): { clientId: string; clientSecret: string } | unde
   return clientId && clientSecret ? { clientId, clientSecret } : undefined;
 }
 
-/**
- * Whether "Continue with Google" is live — both creds present. Read via
- * `readOptionalEnv` (async, `.dev.vars`-aware) so the `/me` response can expose a
- * `googleEnabled` flag the account UI gates the button on, without ever rendering a
- * dead button. Independent of the `process.env` hoist so it is correct even before
- * the auth instance is first built.
- */
 export async function isGoogleSignInEnabled(): Promise<boolean> {
   const [clientId, clientSecret] = await Promise.all([
     readOptionalEnv("GOOGLE_CLIENT_ID"),
@@ -468,9 +313,6 @@ export async function getPublicAuth(): Promise<PublicAuth> {
       process.env.BETTER_AUTH_SECRET ??= await readOptionalEnv("BETTER_AUTH_SECRET");
       process.env.BETTER_AUTH_URL ??= await readOptionalEnv("BETTER_AUTH_URL");
 
-      // Hoist the Google creds onto `process.env` for the sync `readGoogleProvider`.
-      // Assign only when defined — `process.env.X = undefined` would coerce to the
-      // string "undefined" and falsely register a broken provider.
       const googleClientId = await readOptionalEnv("GOOGLE_CLIENT_ID");
       const googleClientSecret = await readOptionalEnv("GOOGLE_CLIENT_SECRET");
 
@@ -489,19 +331,12 @@ export async function getPublicAuth(): Promise<PublicAuth> {
   return publicAuthPromise;
 }
 
-/** How stale the presence stamp may get before an authenticated request refreshes it. */
 export const LAST_SEEN_BUMP_MS = 60 * 60 * 1000;
 
-/**
- * Whether this request should refresh `last_seen_at` — NULL always does (the user has never
- * been stamped), otherwise only once the window has fully passed. Pure, so the throttle is
- * unit-pinned without a session harness.
- */
 export function shouldBumpLastSeen(lastSeenMs: number | null, now: number): boolean {
   return lastSeenMs == null || now - lastSeenMs > LAST_SEEN_BUMP_MS;
 }
 
-/** Best-effort presence write — never throws (the caller fire-and-forgets it). */
 async function bumpLastSeen(userId: string): Promise<void> {
   try {
     await (
@@ -510,9 +345,7 @@ async function bumpLastSeen(userId: string): Promise<void> {
       args: [Date.now(), userId],
       sql: `update "user" set last_seen_at = ? where id = ?`,
     });
-  } catch {
-    // Swallowed: a missed stamp self-heals on the next request past the window.
-  }
+  } catch {}
 }
 
 export async function getPublicSession(request: Request): Promise<PublicUser | undefined> {
@@ -540,18 +373,12 @@ export async function getPublicSession(request: Request): Promise<PublicUser | u
     return undefined;
   }
 
-  // The presence stamp the /admin/users board reads ("Not seen yet" ⇔ NULL). Written HERE —
-  // the one chokepoint every authenticated request resolves through. The column is populated
-  // here rather than in a scattered caller. Throttled to once per window so
-  // the auth hot path stays read-only almost always, and fire-and-forget so a failed stamp
-  // never touches the session (the submitFindingToIndexNow discipline).
   if (shouldBumpLastSeen(user.last_seen_at, Date.now())) {
     const bump = bumpLastSeen(user.id);
 
     try {
       waitUntil(bump);
     } catch {
-      // Outside a request context (vitest, scripts): let it run detached, still swallowed.
       bump.catch(() => undefined);
     }
   }

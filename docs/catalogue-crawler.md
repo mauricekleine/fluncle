@@ -147,6 +147,8 @@ Within the admitted commit, complete source-and-repair statement groups remain a
 
 **Polite, and polite from ONE address.** All MusicBrainz callers share `lib/server/musicbrainz.ts`, which serializes requests at approximately 1 req/s, identifies the client, honors `Retry-After`, and circuit-breaks an exhausted 503.
 
+The shared client bounds both each request and the wait behind an earlier caller: a stalled request must not wedge every MusicBrainz consumer, and an aborted socket is a network failure rather than evidence of throttling. The Worker constructs canonical MusicBrainz URLs so a box-supplied response can be matched to the exact requested URL.
+
 That gate is per ISOLATE, and MusicBrainz counts per SOURCE IP. Each crawl phase is its own Worker request, a Worker's egress address is shared with strangers, and several sibling sweeps draw on the same vendor — so a gate that spaces its own requests perfectly still sits behind an address whose real rate nobody can see. **The crawl's provider reads therefore happen on the box**, which has one stable address and runs every sweep, so one honest budget can exist there. This is the same move Deezer and the Discogs consumers make for the same per-IP reason: the box performs the vendor call and the Worker verifies and writes.
 
 The budget on the box is a FILE, not a variable, because each sweep is its own process: `docs/agents/hermes/scripts/musicbrainz-fetch.ts` holds a lock-guarded next-allowed instant under the sweep home, spaces every caller at 1.1 s, and pushes that instant forward for EVERY process when the vendor answers `Retry-After`. The crawl is its first tenant; the siblings adopt it without changing it, because the budget is per host rather than per sweep.

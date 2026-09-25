@@ -1,17 +1,3 @@
-// The `admin-health` domain router module — the agent-tier WRITE behind the
-// public /status dashboard.
-//
-//   - `record_health` — POST /admin/health on `adminAuth` ONLY (no
-//     `operatorGuard`): agent tier, like `context_track`/`note_track`. The box's
-//     health producers POST one snapshot. Default-off preserves the legacy writer;
-//     flag-on requires producer-scoped receipt metadata and commits the snapshot,
-//     pruning, and terminal receipt together before acknowledging it.
-//
-// The contract's Zod input has already validated the shape (an ISO `at` string +
-// a `checks` array of `{ service, status, message, latencyMs, transitioned }`),
-// The handler canonicalizes the timestamp and check fields before verifying the
-// caller's key and digest or persisting any effect.
-
 import { type InferContractRouterInputs } from "@orpc/contract";
 import { type Client } from "@libsql/client";
 import { type contract } from "@fluncle/contracts/orpc";
@@ -42,7 +28,6 @@ function normalizeCheck(check: RawCheck): HealthCheckInput {
   };
 }
 
-/** Execute the handler's cutover decision against an injected real libSQL client. */
 export async function recordHealthSnapshotRequestFor(
   db: Client,
   input: RecordHealthInput,
@@ -180,10 +165,7 @@ export async function recordHealthSnapshotRequestFor(
   );
 }
 
-/** Build the `admin-health` domain's handlers. */
 export function adminHealthHandlers(os: Implementer) {
-  // POST /admin/health — agent tier (`adminAuth` only). Persist one snapshot and
-  // ack. Internal write (service_status / status_events); no public lastmod moves.
   const recordHealthHandler = os.record_health.use(adminAuth).handler(async ({ input }) => {
     try {
       await recordHealthSnapshotRequestFor(await getDb(), input);

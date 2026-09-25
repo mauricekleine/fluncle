@@ -1,69 +1,25 @@
-// observation-echo.ts — the anti-sameness rail for the SPOKEN observation, the written
-// sibling of the note echo gate (note.ts). The rail rejects repeated phrases and wholesale
-// reuse across neighbouring scripts before a Cartesia render spends a cent.
-//
-// This ports the notes' PROVEN mechanism (which cut within-region overlap 0.041 → 0.015):
-//   1. the AUTHOR is handed its sonic neighbours' scripts as SPENT moves (the box
-//      observe-sweep's neighbour block — openers, closers, images already used nearby).
-//   2. the WORKER re-reads those same neighbours and mechanically REJECTS a draft that
-//      lifts a run of words from one or reuses its words wholesale, BEFORE the Cartesia
-//      render spends a cent (observe_track). A rejected script is HELD in the
-//      `observation_rejections` ledger, not binned.
-//
-// ONE DEFINITION OF "SAME". The scoring is the shared `scoreEcho` the note gate uses, over a
-// `{ logId, text }` neighbourhood — so a lifted phrase means exactly the same thing whether
-// the text is a one-line note or a 40-second spoken script. This module only renames the
-// generic `text` to `script` and carries the observation-specific error + defaults.
-//
-// PURE. No DB, no I/O — the neighbourhood is read elsewhere (observation-neighbours.ts) and
-// the thresholds are read from the KV elsewhere (observation-rejections.ts). This file is
-// just the measure, so the corpus harness and the Worker gate share one definition.
-
 import { type Echo, type NoteEchoThresholds, scoreEcho } from "./note";
 import { ApiError } from "./spotify";
 
-/**
- * The observation gate's two dials — the same shape as the note gate's, and calibrated to
- * the same starting values, because "a lifted phrase" and "the same words reshuffled" read
- * the same in a spoken script as in a written note. They are OPERATOR-TUNABLE at runtime
- * (their own `settings` KV keys — `getObservationEchoThresholds` in observation-rejections.ts),
- * because the observation corpus is longer prose than a note and the honest threshold will
- * move as the corpus grows; finding that out must never require a deploy.
- *
- * A four-word run with a content word ("shoulders went before i'd", "before the drop even
- * lands") is a borrowed move, not a coincidence; a content-word Jaccard at or above 0.3 is
- * the same observation wearing a new coat. The corpus mean is 0.0816, so 0.3 bites on the
- * genuine echoes and lets an honestly-different read through.
- */
 export const OBSERVATION_ECHO_DEFAULTS: NoteEchoThresholds = {
   maxOverlap: 0.3,
   minPhraseWords: 4,
 };
 
-/** One neighbour script the candidate is measured against (the scripts the agent was shown). */
 export type ObservationNeighbor = { logId: string; script: string };
 
-/** The worst echo a candidate observation script makes against its sonic neighbourhood. */
 export type ObservationEcho = {
-  /** True when the candidate crosses either threshold — it must not be rendered. */
   echoes: boolean;
-  /** The neighbour it echoes hardest (its Log ID), or null when there is nothing to echo. */
+
   logId: string | null;
-  /** The run of words lifted from that neighbour, or "" when none reaches the threshold. */
+
   phrase: string;
-  /** The measured content-word overlap with that neighbour (0..1). */
+
   overlap: number;
-  /** That neighbour's script, as it read at scoring time ("" when there is nothing to echo). */
+
   script: string;
 };
 
-/**
- * Score a candidate observation script against its sonic neighbours' scripts — the mechanical
- * anti-sameness measurement behind the observation echo gate. Delegates to the shared
- * `scoreEcho`, then renames the generic `text` back to `script`. An empty neighbourhood (a
- * finding with no embedding yet, or the first observation in a region) scores
- * `{ echoes: false, overlap: 0 }` — nothing to echo, so nothing to gate.
- */
 export function scoreObservationEcho(
   script: string,
   neighbors: readonly ObservationNeighbor[],
@@ -84,16 +40,6 @@ export function scoreObservationEcho(
   };
 }
 
-/**
- * Hard-fail an agent-authored observation script that ECHOES its sonic neighbourhood, throwing
- * a clean ApiError the handler turns into a 422. Names the neighbour and the lifted phrase, so
- * the sweep can re-author against it (the note gate's `note_echoes_neighbours` precedent).
- *
- * The rail: the neighbour scripts INFORM the authoring — they show the region's register and
- * the moves already spent — but they must never be templated. An observation whose only read
- * echoes its neighbours stays unwritten; silence beats a generic read, and this rejects BEFORE
- * the render so a bounced draft costs nothing.
- */
 export function observationEchoError(echo: ObservationEcho): ApiError {
   const detail = echo.phrase
     ? `it lifts "${echo.phrase}" straight from ${echo.logId}`

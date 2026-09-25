@@ -66,6 +66,8 @@ The governing principle: **Stories are a social-post format (text baked in); `/l
 | YouTube Shorts        | `footage.social.mp4`                                       | portrait, pushed as-is                               |
 | TikTok (via Postiz)   | `footage.social.mp4` + `mode=video,audio=false,width=1080` | portrait, silent so the operator adds TikTok audio   |
 
+Postiz's dated `/posts` read requires both ISO date bounds and can return unescaped control characters inside JSON strings, so social URL capture parses it leniently and treats an unreadable response as pending. Published YouTube posts provide a video id and watch URL; Fluncle stores the canonical Shorts URL. Finished TikTok inbox drafts keep a placeholder release URL, so capture reads the native id from Postiz's `/missing` endpoint and builds the permalink. Instagram Reels carry a Graph API permalink in `releaseURL`; their shortcode cannot be rebuilt from the numeric media id, so capture keeps that URL verbatim. Missing post data remains pending for the next sweep.
+
 Consequence to confirm in the UI slice: today `/log` plays the text portrait; under this model `/log` plays the **clean** crop (the page already shows the Log ID, prose, and metadata, so the overlay is redundant there). The desktop landscape is the deliberate "show off the asset" moment.
 
 ## The square-crop quality dial

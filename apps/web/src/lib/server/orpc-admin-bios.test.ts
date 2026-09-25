@@ -8,16 +8,6 @@ import {
   warmOrpcRouter,
 } from "./orpc-test-kit";
 
-// The entity-bio engine driven end-to-end through `handleOrpc` against
-// `/api/v1/admin/{artists,labels}/{slug}/bio`, so the REAL admin auth spine
-// (../orpc-auth: `adminAuth`) + the REAL voice gate (../bio: `gateBioText`) run; only the
-// entity data layer (Turso reads/writes) is mocked. This is the security-critical half:
-//   - the AGENT tier (adminAuth) authenticates the box sweep; no token = 401.
-//   - the VOICE gate re-scans server-side and 422s a violation before storing.
-//   - THE CARDINAL SAFETY GUARANTEE: an existing bio is NEVER overwritten — the agent
-//     fills an EMPTY bio only, enforced both by the fast-path skip and (race-safe) by the
-//     `fillEmpty*Bio` DB predicate, whose lost-race path reports `skipped`, never clobbers.
-
 const getArtistBySlug = vi.fn();
 const fillEmptyArtistBio = vi.fn();
 const listArtistsMissingBio = vi.fn();
@@ -34,12 +24,6 @@ const getFindingsByLabel = vi.fn();
 const getFindingsByAlbum = vi.fn();
 const resolveBioReview = vi.fn();
 
-// The router graph imports `env` from cloudflare:workers at module load; stub it so the
-// import resolves in the test runtime (this suite touches no Worker binding).
-// `waitUntil` is a no-op here: the describe_* handlers fire a fire-and-forget entity-page
-// cache purge (purgeEntityCache) after a bio write, and that rides `waitUntil`. The purge
-// itself no-ops in the test (no `caches` global, no zone token); we only need the call to
-// resolve rather than throw on a missing mock export.
 vi.mock("cloudflare:workers", () => ({ env: {}, waitUntil: () => undefined }));
 
 vi.mock("./artists", async (importOriginal) => {
@@ -75,8 +59,6 @@ vi.mock("./albums", async (importOriginal) => {
   };
 });
 
-// The bio-draft handler gathers Worker-side: keep the real `gateBioText` (the describe path
-// depends on it) but stub the Firecrawl gather + the prompt assembly the draft op drives.
 vi.mock("./bio", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./bio")>();
 
@@ -87,8 +69,6 @@ vi.mock("./bio", async (importOriginal) => {
   };
 });
 
-// The ruling's data layer. `bioBypassColumns` stays REAL (the entity modules build their write
-// args with it), so only the ledger write is stubbed.
 vi.mock("./bio-review", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./bio-review")>();
 
@@ -119,7 +99,6 @@ const ARTIST = { id: "artist-1", mbid: undefined, name: "Calibre", slug: "calibr
 const LABEL = { id: "label-1", logoImageUrl: undefined, name: "Signature", slug: "signature" };
 const ALBUM = { id: "album-1", name: "Second Sun", slug: "second-sun" };
 
-// A clean, dry, in-voice bio (clears the real voice gate + the length bounds).
 const GOOD_BIO =
   "One of the names I keep coming back to when the rollers need to breathe. The drums do the talking, and I have logged enough of them to trust the stamp.";
 
@@ -141,7 +120,6 @@ beforeEach(() => {
   resolveBioReview.mockReset();
 });
 
-// ── describe_artist ───────────────────────────────────────────────────────────
 describe("oRPC describe_artist (POST /admin/artists/{slug}/bio)", () => {
   it("401s with no admin token (the adminAuth tier)", async () => {
     const { handleOrpc } = await import("./orpc");
@@ -165,12 +143,10 @@ describe("oRPC describe_artist (POST /admin/artists/{slug}/bio)", () => {
     const data = (await readJson(response)) as { bio: string; ok: boolean; slug: string };
     expect(data.slug).toBe("calibre");
     expect(data.bio).toBe(GOOD_BIO);
-    // The fourth argument is the bio-review flag, and `null` is load-bearing: an ordinary bio
-    // must actively CLEAR the flag columns, not merely leave them unread (lib/server/bio-review.ts).
+
     expect(fillEmptyArtistBio).toHaveBeenCalledWith("calibre", GOOD_BIO, 3, null);
   });
 
-  // THE CARDINAL SAFETY GUARANTEE: an existing bio is NEVER clobbered.
   it("NEVER overwrites an existing bio — it is a skipped no-op", async () => {
     getArtistBySlug.mockResolvedValueOnce({ ...ARTIST, bio: "The operator's own bio." });
 
@@ -185,13 +161,11 @@ describe("oRPC describe_artist (POST /admin/artists/{slug}/bio)", () => {
     const data = (await readJson(response)) as { bio: string; skipped?: boolean };
     expect(data.skipped).toBe(true);
     expect(data.bio).toBe("The operator's own bio.");
-    // CRITICAL: the fill was never even attempted — the operator override wins.
+
     expect(fillEmptyArtistBio).not.toHaveBeenCalled();
   });
 
   it("reports skipped (never clobbers) when it LOSES the fill-empty race", async () => {
-    // The read saw an empty bio, but a concurrent bio write won before the atomic write: the predicate
-    // matched no row, so fillEmptyArtistBio returns false and we re-read the winner.
     getArtistBySlug
       .mockResolvedValueOnce(ARTIST)
       .mockResolvedValueOnce({ ...ARTIST, bio: "The bio that won the race." });
@@ -261,15 +235,7 @@ describe("oRPC describe_artist (POST /admin/artists/{slug}/bio)", () => {
   });
 });
 
-// ── THE FINAL-ATTEMPT ACCEPTANCE, and the review it now raises ──────────────────
-//
-// The sweep's third and last pass sends `finalAttempt`, and the draft LANDS even when the voice
-// scan refuses it. That ruling stands. What these pin is the half that was missing: the accepted
-// reasons reach the WRITE, so the bypass stamps the entity and raises a `bio-review` queue row
-// instead of only saying so in a cron log.
 describe("the final-attempt bypass reaches the store as a review flag", () => {
-  // Trips the REAL voice gate on a banned identity word, and is structurally storable — so the
-  // acceptance has something to accept.
   const REFUSED_BIO =
     "A clean transmission of rolling menace, and I have logged plenty of them here.";
 
@@ -294,8 +260,6 @@ describe("the final-attempt bypass reaches the store as a review flag", () => {
     expect(data.gateBypassed).toBe(true);
     expect(data.voiceViolations?.length ?? 0).toBeGreaterThan(0);
 
-    // The reasons the caller was told about are the SAME ones written to the row — a flag whose
-    // evidence disagreed with the response would be worse than no flag.
     expect(fillEmptyArtistBio).toHaveBeenCalledWith(
       "calibre",
       REFUSED_BIO,
@@ -332,8 +296,6 @@ describe("the final-attempt bypass reaches the store as a review flag", () => {
     );
   });
 
-  // THE FALSE-POSITIVE CASE at the handler seam: a final attempt whose draft is CLEAN is an
-  // ordinary write. It must raise no review, or the queue fills with rows nobody needs to read.
   it("raises no review when the final attempt's draft actually clears the gate", async () => {
     getArtistBySlug.mockResolvedValueOnce(ARTIST);
     fillEmptyArtistBio.mockResolvedValueOnce(true);
@@ -352,8 +314,6 @@ describe("the final-attempt bypass reaches the store as a review flag", () => {
     expect(fillEmptyArtistBio).toHaveBeenCalledWith("calibre", GOOD_BIO, undefined, null);
   });
 
-  // The acceptance is bounded to the VOICE scan. A final attempt that is not a storable paragraph
-  // still hard-fails, so the bypass can never become a way to publish a stub.
   it("still 422s a final attempt that is too short to be a paragraph", async () => {
     getArtistBySlug.mockResolvedValueOnce(ARTIST);
 
@@ -370,7 +330,6 @@ describe("the final-attempt bypass reaches the store as a review flag", () => {
   });
 });
 
-// ── describe_label (parity) ─────────────────────────────────────────────────────
 describe("oRPC describe_label (POST /admin/labels/{slug}/bio)", () => {
   it("fills an EMPTY label bio (agent), voice-gated", async () => {
     getLabelBySlug.mockResolvedValueOnce(LABEL);
@@ -403,7 +362,6 @@ describe("oRPC describe_label (POST /admin/labels/{slug}/bio)", () => {
   });
 });
 
-// ── describe_album (parity) ─────────────────────────────────────────────────────
 describe("oRPC describe_album (POST /admin/albums/{slug}/bio)", () => {
   it("fills an EMPTY album bio (agent), voice-gated", async () => {
     getAlbumBySlug.mockResolvedValueOnce(ALBUM);
@@ -447,7 +405,6 @@ describe("oRPC describe_album (POST /admin/albums/{slug}/bio)", () => {
   });
 });
 
-// ── the bio worklists ───────────────────────────────────────────────────────────
 describe("the bio worklists (agent-tier reads)", () => {
   it("list_artists_missing_bio returns the worklist rows", async () => {
     listArtistsMissingBio.mockResolvedValueOnce([{ id: "a1", name: "Calibre", slug: "calibre" }]);
@@ -487,10 +444,6 @@ describe("the bio worklists (agent-tier reads)", () => {
   });
 });
 
-// ── the Worker-paced bio DRAFTS (agent-tier grounding reads) ──────────────────────
-// The seam that closes the box's grounding gap: the Worker runs Firecrawl (its key) + pulls
-// the finding titles (its DB) and assembles the registered prompt, handing the box a
-// ready-to-author prompt. A pure read; publishes nothing; found:false on an unknown slug.
 type BioDraft = {
   findingCount: number;
   found: boolean;
@@ -525,7 +478,7 @@ describe("draft_artist_bio (GET /admin/artists/{slug}/bio-draft)", () => {
     expect(data.prompt).toBe("THE ASSEMBLED PROMPT");
     expect(data.promptVersion).toBe(3);
     expect(data.hasFacts).toBe(true);
-    // The finding TITLES the box cannot reach are gathered Worker-side and passed through.
+
     expect(buildEntityBioPrompt).toHaveBeenCalledWith({
       facts: "A producer on Signature.",
       findingTitles: ["Iron Heart", "Mr Right On"],
@@ -645,11 +598,6 @@ describe("draft_album_bio (GET /admin/albums/{slug}/bio-draft)", () => {
   });
 });
 
-// ── resolve_bio_review (the ruling on a bypassed bio) ───────────────────────────
-//
-// The operator tier is the point: `keep` blesses a public paragraph the voice gate refused and
-// `rewrite` un-publishes one, so the box's agent token — which is the thing that AUTHORED the
-// bio — must not be able to rule on its own work.
 describe("oRPC resolve_bio_review (POST /admin/bio-reviews/{kind}/{slug}/resolve)", () => {
   it("401s with no admin token", async () => {
     const { handleOrpc } = await import("./orpc");
@@ -713,8 +661,6 @@ describe("oRPC resolve_bio_review (POST /admin/bio-reviews/{kind}/{slug}/resolve
     });
   });
 
-  // Nothing under review must READ as nothing under review. A ruling that reports ok on a row it
-  // did not settle is exactly the kind of quiet lie this whole slice exists to remove.
   it("404s when nothing is under review for that entity", async () => {
     resolveBioReview.mockResolvedValueOnce(false);
 

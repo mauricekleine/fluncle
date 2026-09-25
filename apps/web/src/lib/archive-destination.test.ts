@@ -493,7 +493,7 @@ describe("every public findings/archive navigation control goes to the archive",
     expect(names).toContain("routes/device.tsx:Back to findings");
     expect(names).toContain("routes/mix.tsx:See the findings");
 
-    expect(names.filter((name) => name.endsWith(":Back to the archive"))).toHaveLength(18);
+    expect(names.filter((name) => name.endsWith(":Back to the archive"))).toHaveLength(19);
   });
 
   it("uses each control's own destination, rejecting wrong and unresolved expressions", () => {

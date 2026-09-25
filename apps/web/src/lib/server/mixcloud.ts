@@ -1,11 +1,3 @@
-// Our own Mixcloud OAuth, kept server-side like spotify.ts / youtube.ts — the CLI
-// stays a thin client. Mixcloud distribution uploads the bytes CLI-direct (the
-// Worker can't proxy a multi-GB master), but the CREDENTIAL lives here: the Worker
-// runs the OAuth code exchange, stores the durable access token in mixcloud_auth,
-// and hands it to the CLI just-in-time (the /mixcloud/token route) for the upload.
-// Mixcloud tokens don't expire and there's no refresh token, so this is simpler
-// than the Spotify/YouTube refresh dance.
-
 import { getDb, typedRow } from "./db";
 import { readEnvs } from "./env";
 import { ApiError } from "./spotify";
@@ -17,11 +9,6 @@ type MixcloudTokenResponse = { access_token?: string };
 
 type MixcloudAuthRow = { access_token: string };
 
-// Unlike Google (which requires a pre-registered, exact-match redirect URI),
-// Mixcloud takes the redirect_uri purely at runtime — it only has to match between
-// the authorize call and the token exchange. So we derive it from the request
-// origin (the start + callback routes share this), which needs no env var and works
-// for local (127.0.0.1:3000) and prod (www.fluncle.com) alike.
 export function mixcloudRedirectUri(origin: string): string {
   return `${origin}/api/admin/mixcloud/auth/callback`;
 }
@@ -49,7 +36,6 @@ export async function exchangeCodeForMixcloudToken(
     redirect_uri: redirectUri,
   });
 
-  // Mixcloud's token endpoint is a GET with query params, returning { access_token }.
   const response = await fetch(`${mixcloudTokenUrl}?${params.toString()}`);
 
   if (!response.ok) {
@@ -71,7 +57,6 @@ export async function exchangeCodeForMixcloudToken(
   await upsertMixcloudAuth(data.access_token);
 }
 
-/** The stored Mixcloud access token (handed to the CLI for the direct upload). */
 export async function getMixcloudAccessToken(): Promise<string> {
   const db = await getDb();
   const result = await db.execute({

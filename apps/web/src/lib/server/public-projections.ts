@@ -43,9 +43,9 @@ export {
 export { PUBLIC_ANCHOR_FORMAT_VERSION } from "./public-projection-cutover";
 
 export const MAX_PUBLIC_PROJECTION_CHUNK_SIZE = 500;
-/** A logical page may carry 500 tracks; each remote write transaction owns at most 50 plans. */
+
 export const PUBLIC_PROJECTION_WRITE_SUBPAGE_SIZE = 50;
-/** Leave headroom below the remote batch ceiling while never splitting one track's atomic plan. */
+
 export const PUBLIC_PROJECTION_WRITE_STATEMENT_LIMIT = 800;
 
 export type PublicProjectionClient = Pick<Client, "batch" | "execute">;
@@ -156,7 +156,6 @@ function assertLimit(limit: number): void {
   }
 }
 
-/** One exact indexed phase of the default release-hub source walk. */
 export function trackAnchorSourcePageQuery(
   cursor: TrackAnchorSourceCursor,
   limit: number,
@@ -197,7 +196,6 @@ export function trackAnchorSourcePageQuery(
   };
 }
 
-/** Fill at most one bounded page while durably exposing the non-NULL → NULL phase transition. */
 export async function readTrackAnchorSourcePage(
   client: Pick<Client, "execute">,
   cursor: TrackAnchorSourceCursor,
@@ -251,7 +249,6 @@ function digestRows(rows: readonly unknown[]): string {
   return hash.digest("hex");
 }
 
-/** Exact source token; JSON preserves the NULL/empty/malformed distinctions the projection keeps. */
 export function publicTrackSourceVersion(track: {
   key: null | string;
   releaseDate: null | string;
@@ -635,10 +632,6 @@ function anchorOrderChangeKind(
   return source === undefined ? "delete" : "move";
 }
 
-/**
- * The ledger row naming the epoch a subject-level repair mints, written in the repair's own
- * transaction so anchor maintenance can amend the affected runs instead of rebuilding the document.
- */
 function anchorOrderChangeLedgerStatement(
   trackId: string,
   old: { present: boolean; releaseDate: null | string | undefined },
@@ -680,8 +673,7 @@ function publicAggregateTrackProjectionStatements(
   if (preservesNewerAggregateWrite(old, options.preserveAfter)) {
     return undefined;
   }
-  // The snapshot check above avoids unnecessary work. This SQL guard is the correctness boundary:
-  // a live repair may commit after the bulk read and before this transaction begins.
+
   const guard = combineProjectionWriteGuards(
     options.guard,
     preserveAggregateLiveWriteGuard(trackId, options.preserveAfter),
@@ -1003,8 +995,7 @@ function artistContributionTrackProjectionStatements(
     return undefined;
   }
   const artistIds = [...new Set([...old, ...current].map((row) => row.artistId))].sort();
-  // Keep the live-generation test inside every statement. The bulk source/stored reads are not a
-  // transaction, so a repair that lands in their read-to-batch gap must make the stale plan inert.
+
   const guard = combineProjectionWriteGuards(
     options.guard,
     preserveArtistLiveWriteGuard(trackId, options.preserveAfter),
@@ -1224,7 +1215,6 @@ async function repairArtistQualificationById(
   return (results.at(-2)?.rowsAffected ?? 0) > 0;
 }
 
-/** Fan one label ruling out through the `tracks_label_id_idx` slice, never through all tracks. */
 export function artistQualificationLabelFanoutQuery(
   labelId: string,
   sourceEpoch: number,
@@ -1385,12 +1375,6 @@ async function readArtistQualificationLabelRepairPrefix(
   );
 }
 
-/**
- * Drain one bounded prefix of label markers that have no unvisited tracks. The primary key starts
- * with projection + subject type, so this read never walks unrelated track/artist repair debt.
- * Every delete repeats both the exact marker guard and the eligibility absence check because the
- * classification read can race a refreshed marker, a new track, or a new credit.
- */
 async function drainEmptyArtistQualificationLabelPrefix(
   client: PublicProjectionClient,
   limit: number,
@@ -1974,11 +1958,6 @@ function anchorSourceCursorFor(after: HubOrderKey | null): TrackAnchorSourceCurs
     : { id: after.id, key: after.key, phase: "non_null" };
 }
 
-/**
- * The rows of one run, read strictly behind `after` up to and including `end` (the next run's
- * `after`, or the corpus end when `end` is null). At most `bound` rows are read, so the run's exact
- * size is proven only when the read reaches `end` or the corpus end within the bound.
- */
 export async function readTrackAnchorLeafRows(
   client: Pick<Client, "execute">,
   after: HubOrderKey | null,
@@ -2029,12 +2008,6 @@ async function readProjectedAnchorLeafRows(
   );
 }
 
-/**
- * Verify one run of a leaf document against the source and emit the canonical page boundaries it
- * serves, in the same row shape as the source anchor lane. A run whose metadata, size, key phases,
- * or stored boundary rows disagree with the source emits a `leaf` row the source lane never emits,
- * so the lane digests cannot match. The final chunk also proves the runs cover the projected total.
- */
 export async function readProjectedAnchorLeafAuditChunk(
   client: Pick<Client, "execute">,
   generation: string,
@@ -2076,7 +2049,7 @@ export async function readProjectedAnchorLeafAuditChunk(
   if (afterClauseHash === "" && meta.after !== null) {
     mismatch("head");
   }
-  // One run is one bounded read whatever the audit page size: the run's own ceiling bounds it.
+
   const bound = meta.n + 1;
   if (bound > MAX_PUBLIC_PROJECTION_CHUNK_SIZE) {
     mismatch("oversized");
@@ -2117,7 +2090,6 @@ export async function readProjectedAnchorLeafAuditChunk(
   };
 }
 
-/** The verified served boundaries of the current leaf document, or undefined on any disagreement. */
 export async function readVerifiedProjectedAnchorLeaves(
   client: Pick<Client, "execute">,
   generation: string,
@@ -2184,7 +2156,6 @@ async function readCurrentLeafDocumentIdentity(
   return { generation: row.generation, total };
 }
 
-/** One bounded canonical audit page. The operator control plane owns durable cursors/digests. */
 export async function readPublicProjectionAuditChunk(
   client: PublicProjectionClient,
   lane: PublicProjectionAuditLane,
@@ -2200,7 +2171,6 @@ export async function readPublicProjectionAuditChunk(
   return readRemainingPublicProjectionAuditChunk(client, lane, options);
 }
 
-/** The projected anchor lane: a leaf document is verified run by run; older shards read flat. */
 async function readProjectedAnchorAuditChunk(
   client: PublicProjectionClient,
   options: { cursor: null | string; limit: number },
@@ -3158,9 +3128,6 @@ async function auditPublicProjectionState(
       }
     }
 
-    // Membership repairs run first because their old-to-new deltas assume the stored rollup still
-    // describes the old memberships. Once membership is exact, correct a bounded bucket page (and
-    // the singleton total) directly; replaying an unchanged track cannot repair a corrupted count.
     if (scheduledTrackRepairs.length === 0) {
       const [expectedCounts, actualCounts] = await Promise.all([
         client.execute(`select aggregate_kind, bucket, count(*) as track_count from (
@@ -3427,8 +3394,7 @@ export async function shadowPublicProjections(client: PublicProjectionClient): P
     "rd",
     TRACKS_HUB_PAGE_SIZE,
   );
-  // A leaf document stores runs rather than every canonical boundary, so its served boundaries are
-  // re-derived by verifying each run against the source before the comparison.
+
   const storedAnchorRows =
     storedAnchors === undefined
       ? null

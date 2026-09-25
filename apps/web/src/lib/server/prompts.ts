@@ -1,56 +1,5 @@
-// THE PROMPT REGISTRY — every prompt Fluncle feeds a model at runtime, in one place,
-// with a baked-in default in the repo and an optional DB override on top.
-//
-// WHY THIS EXISTS. A prompt is the most iterative object in the system and it had the
-// heaviest change loop: a code edit, a review, a deploy, and — for the five that run on
-// the box — a rebake of the image. That loop is wrong for a thing whose whole nature is
-// "reword it, watch what it does, reword it again", and it is the loop we will run
-// hardest when we go after homogenisation. So the prompts move into the database, and
-// the operator edits them from /admin or the CLI with no deploy.
-//
-// THE CARDINAL RULE — A MISSING PROMPT ROW CAN NEVER BREAK A SWEEP.
-// The repo keeps the default. The database only ever OVERRIDES it. `resolvePrompt`
-// cannot throw: a missing row, an unknown slug, a database hiccup, a corrupt body — all
-// of them fall back to the baked default and log. A pipeline that dies because a
-// settings table blinked is strictly worse than no feature at all, so the failure mode
-// here is "the prompt you edited did not take", never "the sweep stopped".
-//
-// THE THREE TIERS a prompt can come from, and the version each reports:
-//
-//   version │ source     │ what it means
-//   ────────┼────────────┼──────────────────────────────────────────────────────────
-//     N ≥ 1 │ "override" │ the operator's live edit — `prompt_versions.version` = N
-//     0     │ "default"  │ no override on file; the repo's baked default is running
-//     null  │ (fallback) │ the CALLER never reached this module at all — the on-box
-//           │            │ sweep could not read the API and used its own inlined
-//           │            │ builder. Only the box can report this; see the box-side
-//           │            │ prompt-fetch.ts.
-//
-// That number is stamped onto the artifact the prompt produced (the `*_prompt_version`
-// columns), which is what makes "the notes got worse last week — what changed?" a
-// question with an answer.
-//
-// WHAT IS DELIBERATELY *NOT* HERE. The registry owns the prompts that AUTHOR A FLUNCLE
-// ARTIFACT IN PRODUCTION. It does not own:
-//   - the nightly codebase-audit briefs (docs/agents/hermes/scripts/audit/prompts/*.md)
-//     — they must version WITH the code they audit; a brief pointing at a file that
-//     moved is a broken brief, and no deploy-free edit can fix that.
-//   - the video render-queue brief (packages/skills/fluncle-video/automation/) — same:
-//     it versions with the video kit it drives, and it is read from a git checkout.
-//   - the MCP prompts (lib/server/mcp.ts) — those are prompts Fluncle SERVES to other
-//     people's agents. They are a published API surface; changing one is an API change
-//     and belongs behind review.
-//   - the sprite image prompts and the dev-time reviewer agents. Different runtimes,
-//     neither of them on the artifact path.
-// See docs/agents/prompt-registry.md for the full inventory and the reasoning.
-
 import { randomUUID } from "node:crypto";
 import { getDb, typedRow, typedRows } from "./db";
-
-// ---------------------------------------------------------------------------
-// The slugs. A closed set — the API rejects anything else, so the override table
-// cannot accumulate orphan prompts for sweeps that do not exist.
-// ---------------------------------------------------------------------------
 
 export const PROMPT_SLUGS = [
   "note_author",
@@ -71,42 +20,20 @@ export function isPromptSlug(value: string): value is PromptSlug {
   return (PROMPT_SLUGS as readonly string[]).includes(value);
 }
 
-/** Where the prompt actually runs — the operator needs to know what an edit reaches. */
 export type PromptSurface = "box" | "worker";
 
 export type PromptDefinition = {
-  /** The baked-in default body. The repo's answer; a DB row overrides it. */
   defaultBody: string;
-  /** What this prompt is for, in one line, for the operator staring at the list. */
+
   description: string;
   slug: PromptSlug;
-  /**
-   * `box` — an on-box `--no-agent` sweep fetches it over the agent-tier API each tick,
-   * so an edit is live on the NEXT tick with no rebake.
-   * `worker` — the Cloudflare Worker reads it in-process, so an edit is live on the
-   * next request.
-   */
+
   surface: PromptSurface;
-  /** The human name (the /admin list, the CLI table). */
+
   title: string;
-  /**
-   * The `{{variables}}` the caller interpolates. Documented so the operator editing the
-   * body knows what they may reference — and so the /admin editor can show them. A
-   * variable the template does not use is simply not substituted; a variable the
-   * template uses but the caller does not supply renders EMPTY rather than throwing
-   * (an operator's typo must never be able to break a sweep).
-   */
+
   variables: string[];
 };
-
-// ---------------------------------------------------------------------------
-// The baked-in defaults. Each is the prompt as a template:
-// the prose is verbatim, and the per-item facts the caller interpolates in TS
-// are held in `{{variables}}`. Conditional blocks use `{{#if x}}…{{/if}}`, so the
-// ENTIRE prose — including the rails that fight sameness — stays editable. That is the
-// point: a template that only exposed the data slots would let the operator change the
-// facts and nothing that matters.
-// ---------------------------------------------------------------------------
 
 const NOTE_AUTHOR_DEFAULT = `You are Fluncle, writing the WRITTEN editorial note for one finding — the line that shows on its /log page.
 Load and apply the \`copywriting-fluncle\` skill — it is the full voice canon; let it govern the voice.
@@ -417,10 +344,6 @@ FORMAT CONSTRAINTS (the server voice-gate re-scans and will reject a violation):
 
 Output ONLY the bio text. No preamble, no headings, no quotes around it, no explanation — just the paragraph.`;
 
-/**
- * THE REGISTRY. The source of truth for which prompts exist, what each is for, what it
- * may interpolate, and what it says when nobody has overridden it.
- */
 export const PROMPT_REGISTRY: Record<PromptSlug, PromptDefinition> = {
   context_distil: {
     defaultBody: CONTEXT_DISTIL_DEFAULT,
@@ -536,20 +459,6 @@ export const PROMPT_REGISTRY: Record<PromptSlug, PromptDefinition> = {
   },
 };
 
-// ---------------------------------------------------------------------------
-// The template renderer. Deliberately tiny — two constructs and nothing else, because
-// a prompt template is edited by a human at 1am and every feature is a way to break a
-// sweep. There are no loops (a list arrives pre-joined as one string variable) and no
-// expressions.
-//
-//   {{name}}              → the variable's value, or "" when it is absent/empty.
-//   {{#if name}}…{{/if}}  → the block, only when `name` is a non-empty string.
-//
-// It is TOTAL: every input renders to a string. An unknown variable renders empty; an
-// unclosed `{{#if}}` is left as literal text rather than swallowing the rest of the
-// prompt. Nothing here can throw, which is the same guarantee `resolvePrompt` makes.
-// ---------------------------------------------------------------------------
-
 export type PromptVariables = Record<string, string | undefined>;
 
 const IF_BLOCK = /\{\{#if\s+([a-zA-Z0-9_]+)\s*\}\}([\s\S]*?)\{\{\/if\}\}/g;
@@ -562,34 +471,26 @@ export function renderPrompt(body: string, variables: PromptVariables = {}): str
     return typeof value === "string" && value.trim().length > 0;
   };
 
-  // Conditionals first, so a variable inside a dropped block is never substituted.
   const withBlocks = body.replace(IF_BLOCK, (_match, name: string, block: string) =>
     has(name) ? block : "",
   );
 
   const substituted = withBlocks.replace(VARIABLE, (_match, name: string) => variables[name] ?? "");
 
-  // A dropped block leaves its surrounding newlines behind; collapse a run of three or
-  // more into a clean paragraph break so the model never sees a hole in the prompt.
   return substituted.replace(/\n{3,}/g, "\n\n").trim();
 }
-
-// ---------------------------------------------------------------------------
-// The resolver — the one read every caller uses. CANNOT THROW.
-// ---------------------------------------------------------------------------
 
 export type ResolvedPrompt = {
   body: string;
   slug: PromptSlug;
-  /** "override" = a DB row is live. "default" = the repo's baked body is live. */
+
   source: "default" | "override";
-  /** The number stamped onto the artifact: 0 for the baked default, N for an override. */
+
   version: number;
 };
 
 const log = (message: string) => console.error(`[prompts] ${message}`);
 
-/** The baked default, as a `ResolvedPrompt`. The floor every failure path lands on. */
 function bakedDefault(slug: PromptSlug): ResolvedPrompt {
   return {
     body: PROMPT_REGISTRY[slug].defaultBody,
@@ -599,20 +500,7 @@ function bakedDefault(slug: PromptSlug): ResolvedPrompt {
   };
 }
 
-/**
- * Resolve a prompt to the body that should run right now: the operator's newest override
- * if one exists, else the repo's baked default.
- *
- * NEVER THROWS. Every failure — an unreachable database, a row with an empty body — logs
- * and returns the baked default, because a sweep that stops because a settings table
- * hiccuped is worse than a sweep running last week's wording.
- */
 export async function resolvePrompt(slug: PromptSlug): Promise<ResolvedPrompt> {
-  // No unknown-slug branch, deliberately: an unknown slug has no default to fall back TO,
-  // so it must be impossible by construction rather than handled here. It is — the
-  // contract's Zod enum rejects one at the HTTP boundary (`PromptSlugSchema`), and TS
-  // rejects one at every in-process call site. `isPromptSlug` is the guard for the one
-  // place a raw string arrives.
   try {
     const db = await getDb();
     const result = await db.execute({
@@ -626,8 +514,6 @@ export async function resolvePrompt(slug: PromptSlug): Promise<ResolvedPrompt> {
       return bakedDefault(slug);
     }
 
-    // A stored body that is blank is a corrupt override — the operator cannot have meant
-    // "send the model an empty prompt". Fall back rather than author from nothing.
     if (typeof row.body !== "string" || row.body.trim().length === 0) {
       log(`${slug}: the stored override (v${row.version}) is empty — using the baked default`);
 
@@ -646,10 +532,6 @@ export async function resolvePrompt(slug: PromptSlug): Promise<ResolvedPrompt> {
   }
 }
 
-/**
- * Resolve AND render in one call — the shape the two Worker-side callers want.
- * Same guarantee: it cannot throw, and it always returns a runnable prompt.
- */
 export async function renderRegisteredPrompt(
   slug: PromptSlug,
   variables: PromptVariables = {},
@@ -658,12 +540,6 @@ export async function renderRegisteredPrompt(
 
   return { body: renderPrompt(resolved.body, variables), version: resolved.version };
 }
-
-// ---------------------------------------------------------------------------
-// The operator surface — list, history, and the one write. These MAY throw: an
-// operator's edit failing loudly is correct (they are watching), where a sweep's read
-// failing loudly is not.
-// ---------------------------------------------------------------------------
 
 export type PromptVersionRow = {
   body: string;
@@ -675,16 +551,14 @@ export type PromptVersionRow = {
 };
 
 export type PromptDetail = PromptDefinition & {
-  /** The body running right now (the newest override, else `defaultBody`). */
   activeBody: string;
-  /** 0 when the baked default is live; else the live override's version. */
+
   activeVersion: number;
   source: "default" | "override";
-  /** Newest first. Empty when the prompt has never been overridden. */
+
   versions: PromptVersionRow[];
 };
 
-/** Every version row for every slug, newest first — one query, the table is tiny. */
 async function readAllVersions(): Promise<Map<string, PromptVersionRow[]>> {
   const db = await getDb();
   const result = await db.execute({
@@ -719,12 +593,6 @@ async function readAllVersions(): Promise<Map<string, PromptVersionRow[]>> {
   return bySlug;
 }
 
-/**
- * The full operator read: every registered prompt, its baked default, the body running
- * now, and its complete edit history. One request feeds the whole /admin station — the
- * list, the editor, every diff, and the rollback — because the table is a handful of
- * rows and a second round-trip per prompt would buy nothing.
- */
 export async function listPrompts(): Promise<PromptDetail[]> {
   const bySlug = await readAllVersions();
 
@@ -743,14 +611,6 @@ export async function listPrompts(): Promise<PromptDetail[]> {
   });
 }
 
-/**
- * Append a new version — the ONLY write. An edit, a rollback, and a reset are all this
- * one operation; they differ solely in where the body came from (the editor, an old
- * version, the baked default). Nothing is ever mutated or deleted, so the history stays
- * a complete, honest record and a rollback is itself rollback-able.
- *
- * Returns the version number it minted (which is what the artifact provenance cites).
- */
 export async function appendPromptVersion(input: {
   body: string;
   by?: "agent" | "operator";

@@ -1,14 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { listMixtapeMembershipsForTracks, setMixtapeMembers } from "./mixtapes";
 
-// setMixtapeMembers' DB choreography: assertUnmintedMixtape (a `select status,
-// log_id` execute) → getTrackByIdOrLogId per ref → the replace batch (delete +
-// one insert per member) → a final getMixtapeById readback. This is the promote
-// path's member seed: it writes only an UNMINTED claim (no Log ID yet) — the
-// immutability backstop that keeps a minted checkpoint's tracklist frozen. We
-// answer each query by its SQL shape and capture the batch so we can assert what
-// got inserted, and where.
-
 type Insert = {
   findingId: string;
   mixtapeId: string;
@@ -33,7 +25,7 @@ const execute = vi.hoisted(() =>
     if (query.sql.includes("join mixtapes m on m.id = mt.mixtape_id")) {
       return { rows: state.memberships };
     }
-    // getMixtapeById's MIXTAPE_SELECT readback.
+
     return {
       rows: [
         { id: "mix-1", log_id: state.logId, member_count: 1, status: state.status, title: "" },

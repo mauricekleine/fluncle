@@ -1,12 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { get, MIXTAPE, postJson, readJson, TRACK, warmOrpcRouter } from "./orpc-test-kit";
 
-// Wave A — the five public-unauthenticated ops fanned out off the pilot's
-// per-domain pattern. As in orpc.test.ts, the underlying server helpers are
-// mocked: each handler's job is to shape the contract response + the error
-// framing, not to touch Turso/Spotify/Resend. These assertions pin the body the
-// live route emitted, now served by oRPC — byte-for-byte.
-
 const listMixtapes = vi.fn();
 
 vi.mock("./mixtapes", () => ({
@@ -24,8 +18,6 @@ vi.mock("./spotify", async (importOriginal) => {
   };
 });
 
-// stories rides on listTracks (with hasVideo: true); decodeTrackCursor is the
-// real re-exported impl so the cursor decode behaves exactly as production.
 const listTracks = vi.fn();
 
 vi.mock("./tracks", async (importOriginal) => {
@@ -49,9 +41,6 @@ vi.mock("./newsletter", () => ({
   subscribeToNewsletter: (...args: unknown[]) => subscribeToNewsletter(...args),
 }));
 
-// The shared limiter touches Turso; these handler-shape tests don't (the limiter
-// has its own focused coverage in rate-limit.test.ts). No-op it so the response
-// framing is what's under test, not the rate-limit DB round-trip.
 vi.mock("./rate-limit", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./rate-limit")>();
 
@@ -69,13 +58,10 @@ beforeEach(async () => {
   listTracks.mockReset();
   createSubmission.mockReset();
   subscribeToNewsletter.mockReset();
-  // Clear the shared search_tracks recent-query cache so an entry from one test
-  // never serves another (the cache is exercised on its own elsewhere).
+
   const { __resetSearchCache } = await import("./track-search");
   __resetSearchCache();
 });
-
-// ── list_mixtapes ────────────────────────────────────────────────────────────
 
 describe("oRPC public read — GET /mixtapes (list_mixtapes)", () => {
   it("serves { ok: true, mixtapes } — the live envelope", async () => {
@@ -103,8 +89,6 @@ describe("oRPC public read — GET /mixtapes (list_mixtapes)", () => {
     errSpy.mockRestore();
   });
 });
-
-// ── search_tracks ────────────────────────────────────────────────────────────
 
 describe("oRPC public read — GET /search (search_tracks)", () => {
   const RESULT = {
@@ -139,8 +123,7 @@ describe("oRPC public read — GET /search (search_tracks)", () => {
     const response = await handleOrpc(get("https://www.fluncle.com/api/v1/search?q=a"));
 
     expect(response?.status).toBe(400);
-    // Parity with the live route's jsonError(400, "invalid_query", …) — the code
-    // is the custom `invalid_query`, NOT the rails' generic `invalid_request`.
+
     expect(await readJson(response)).toEqual({
       code: "invalid_query",
       message: "Search query must be at least 2 characters",
@@ -161,8 +144,6 @@ describe("oRPC public read — GET /search (search_tracks)", () => {
     });
   });
 });
-
-// ── list_stories ─────────────────────────────────────────────────────────────
 
 describe("oRPC public read — GET /stories (list_stories)", () => {
   const PAGE = {
@@ -227,8 +208,6 @@ describe("oRPC public read — GET /stories (list_stories)", () => {
   });
 });
 
-// ── submit_track ─────────────────────────────────────────────────────────────
-
 describe("oRPC public write — POST /submissions (submit_track)", () => {
   const SUBMISSION = {
     artists: ["Some Artist"],
@@ -257,8 +236,7 @@ describe("oRPC public write — POST /submissions (submit_track)", () => {
 
     expect(response?.status).toBe(200);
     expect(await readJson(response)).toEqual({ ok: true, submission: SUBMISSION });
-    // The parsed body is handed through to createSubmission untouched (the loose
-    // contract input preserves it field-for-field, including unknown keys).
+
     expect(createSubmission).toHaveBeenCalledTimes(1);
     expect(createSubmission.mock.calls[0]?.[0]).toEqual(BODY);
   });
@@ -315,8 +293,6 @@ describe("oRPC public write — POST /submissions (submit_track)", () => {
   });
 });
 
-// ── subscribe_newsletter ─────────────────────────────────────────────────────
-
 describe("oRPC public write — POST /newsletter (subscribe_newsletter)", () => {
   it("serves the bare { ok: true } envelope on success", async () => {
     subscribeToNewsletter.mockResolvedValueOnce(undefined);
@@ -350,8 +326,6 @@ describe("oRPC public write — POST /newsletter (subscribe_newsletter)", () => 
     });
   });
 });
-
-// ── OpenAPI doc emits the new operationIds ───────────────────────────────────
 
 describe("oRPC OpenAPI generation — Wave A operationIds", () => {
   it("emits all five Wave A operations", async () => {

@@ -13,7 +13,6 @@ vi.mock("./deezer", () => ({
   enrichFromDeezer: vi.fn(async () => ({ previewUrl: undefined })),
 }));
 
-// The U1 cross-cutting breaker + meter, mocked so each test drives the rung's guards.
 vi.mock("./apple-breaker", () => ({
   areAppleCallsAllowed: vi.fn(async () => true),
   isAppleCallBudgetAvailable: vi.fn(async () => true),
@@ -21,7 +20,6 @@ vi.mock("./apple-breaker", () => ({
   recordAppleCall: vi.fn(async () => undefined),
 }));
 
-// The U0 oracle's slim batched path, mocked so a test controls the exact-by-ISRC hit.
 vi.mock("./apple-music", () => ({
   appleCatalogLookupByIsrcs: vi.fn(async () => ({
     bundles: new Map(),
@@ -32,7 +30,6 @@ vi.mock("./apple-music", () => ({
 
 const APPLE_PREVIEW_URL = "https://audio-ssl.itunes.apple.com/mzaf_exact.m4a";
 
-/** A configurable global-fetch stub: `route(href, init)` returns the Response, or 500. */
 function stubFetch(route: (href: string, init?: RequestInit) => Response | undefined): void {
   vi.stubGlobal(
     "fetch",
@@ -44,7 +41,6 @@ function stubFetch(route: (href: string, init?: RequestInit) => Response | undef
   );
 }
 
-/** A single-ISRC hit bundle carrying an exact Apple preview URL. */
 function hitWith(previewUrl: string) {
   return {
     bundles: new Map([["GBXXX123", { preview: { url: previewUrl }, songId: "1", songUrl: "u" }]]),
@@ -122,8 +118,7 @@ describe("fetchLivePreview", () => {
 
     expect(response?.status).toBe(206);
     expect(await response?.text()).toBe("itunes");
-    // Rung 3 (exact Apple) was consulted but returned no hit (default empty bundles), so
-    // the chain correctly degraded to the fuzzy iTunes rung (rung 4).
+
     expect(appleCatalogLookupByIsrcs).toHaveBeenCalledWith(["GBXXX123"], expect.any(AbortSignal));
   });
 
@@ -146,7 +141,7 @@ describe("fetchLivePreview", () => {
 
     expect(response?.status).toBe(206);
     expect(await response?.text()).toBe("apple");
-    // The exact rung served, so the fuzzy iTunes rung was never reached.
+
     const fetchMock = vi.mocked(fetch);
     expect(
       fetchMock.mock.calls.some(
@@ -185,7 +180,7 @@ describe("fetchLivePreview", () => {
     );
 
     expect(await response?.text()).toBe("itunes");
-    // The breaker verdict came first: no Apple call at all, nothing recorded.
+
     expect(appleCatalogLookupByIsrcs).not.toHaveBeenCalled();
     expect(recordAppleCall).not.toHaveBeenCalled();
   });
@@ -222,7 +217,6 @@ describe("fetchLivePreview", () => {
       new Request("https://www.fluncle.com/api/preview/011.6.8K"),
     );
 
-    // No ISRC ⇒ the rung returns before consulting the breaker or the oracle.
     expect(areAppleCallsAllowed).not.toHaveBeenCalled();
     expect(appleCatalogLookupByIsrcs).not.toHaveBeenCalled();
   });
@@ -270,14 +264,12 @@ describe("resolveAppleExactPreviewUrl", () => {
     });
 
     expect(url).toBeUndefined();
-    // No real HTTP happened, so the shared budget is not charged.
+
     expect(recordAppleCall).not.toHaveBeenCalled();
     expect(recordAppleAuthOutcome).not.toHaveBeenCalled();
   });
 
   it("aborts on the per-request timeout and falls through (records the OTHER regime)", async () => {
-    // The oracle honours the AbortSignal exactly as a real fetch would: it hangs until
-    // the rung's timeout aborts the controller, then surfaces a plain non-ok outcome.
     vi.mocked(appleCatalogLookupByIsrcs).mockImplementation(
       (_isrcs: string[], signal?: AbortSignal) =>
         new Promise((resolve) => {
@@ -298,7 +290,7 @@ describe("resolveAppleExactPreviewUrl", () => {
     );
 
     expect(url).toBeUndefined();
-    // A timeout-abort is the OTHER regime — it must NOT advance the breaker's auth streak.
+
     expect(recordAppleAuthOutcome).toHaveBeenCalledWith("other", expect.any(Number));
   });
 

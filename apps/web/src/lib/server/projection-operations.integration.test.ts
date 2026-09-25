@@ -172,8 +172,7 @@ describe("projection production operations", () => {
         primary key (hub, clause_hash)
       );
     `);
-    // A complete checkpoint is complete only UNDER TODAY'S DEFINITION, so the fixture stores the
-    // running definition version alongside the state it claims.
+
     for (const definition of DUE_WORK_BACKFILLS) {
       await db.execute({
         args: [definition.workKind, definition.subjectType, definition.definitionVersion],
@@ -478,12 +477,6 @@ describe("projection production operations", () => {
     });
   });
 
-  // THE CATALOGUE-RANK CORPUS MARKER IS NOT DEBT AGE. It is a resumable rebuild checkpoint wearing
-  // a source-marker row: it clears only when a whole rank generation completes against a corpus
-  // proven unchanged, and any corpus mutation restarts that generation from page zero. Folding its
-  // age into `oldestOutstandingMarkerAge` reports a healthy long rebuild as debt that is not
-  // draining, which is what an age-driven escalation reads. It is reported under its own name so it
-  // can never age silently either.
   it("reports the catalogue-rank rebuild marker apart from outstanding track debt age", async () => {
     const rankCreatedAt = "2025-01-01T00:00:00.000Z";
     const ordinaryCreatedAt = "2025-01-01T06:00:00.000Z";
@@ -516,10 +509,9 @@ describe("projection production operations", () => {
       expect(ageMs).toBeLessThanOrEqual(readEndedAt - markerTime);
     };
 
-    // The older of the two rows is the rank marker, and the debt age must not be it.
     withinRead(track.oldestOutstandingMarkerAge.ageMs, ordinaryCreatedAt);
     withinRead(track.catalogueRankMarkerAgeMs, rankCreatedAt);
-    // It remains repair work the bounded repair action advances, so it stays in the counts.
+
     expect(track.repairs.fanout.count).toBe(2);
   });
 

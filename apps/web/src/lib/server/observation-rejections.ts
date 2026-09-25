@@ -1,16 +1,3 @@
-// THE OBSERVATION ECHO GATE'S LEDGER — the spoken sibling of note-rejections.ts. When the
-// observe_track gate refuses to RENDER a script because it echoes a sonic neighbour's script,
-// the script is not binned: it becomes a row here (the script, the neighbour it echoed, a
-// snapshot of that neighbour's script, the lifted phrase, the score, and the thresholds in
-// force) plus a row in the `/admin` attention queue. The operator reads what the model wrote
-// and rules — render it anyway (`accepted`), or agree with the gate (`discarded`).
-//
-// Same reasoning as the note ledger: a gate whose rejections nobody can see is a gate nobody
-// can supervise. The dials are tunable (the `settings` KV) precisely so that this evidence can
-// change them. The gate is NOT weakened — the observe render still refuses exactly what it
-// refused before; it simply no longer does it in the dark. And because the gate rejects BEFORE
-// the Cartesia render, a held rejection never cost a cent.
-
 import { parseArtistsJson } from "./artists";
 import { getDb, typedRow, typedRows } from "./db";
 import { type NoteEchoThresholds } from "./note";
@@ -20,18 +7,9 @@ import { getSetting, setSetting } from "./settings";
 import { ApiError } from "./spotify";
 import { FINDINGS_FROM, getTrackByIdOrLogId } from "./tracks";
 
-// ── The tunable dials (a flip, not a deploy) ─────────────────────────────────────
-//
-// Their OWN KV keys, independent of the note gate's: the observation corpus is longer prose
-// than a note, so the honest threshold can drift differently. Read once per gating run, so a
-// retune takes effect on the very next sweep tick with no deploy. Both are bounded on read as
-// well as write: a nonsense KV value degrades to the calibrated default rather than disabling
-// the gate outright (maxOverlap 0 would reject every script; minPhraseWords 1 every sentence).
-
 const MIN_PHRASE_WORDS_KEY = "observation_echo_min_phrase_words";
 const MAX_OVERLAP_KEY = "observation_echo_max_overlap";
 
-/** Parse a KV value into a finite number within bounds, else fall back to the default. */
 function parseDial(raw: string | undefined, fallback: number, min: number, max: number): number {
   const parsed = Number(raw);
 
@@ -40,10 +18,6 @@ function parseDial(raw: string | undefined, fallback: number, min: number, max: 
     : fallback;
 }
 
-/**
- * The observation gate's dials as they stand right now — the KV values, or the built-in
- * defaults when unset. Read once per gating run, so a retune takes effect on the next tick.
- */
 export async function getObservationEchoThresholds(): Promise<NoteEchoThresholds> {
   const [phrase, overlap] = await Promise.all([
     getSetting(MIN_PHRASE_WORDS_KEY),
@@ -56,11 +30,6 @@ export async function getObservationEchoThresholds(): Promise<NoteEchoThresholds
   };
 }
 
-/**
- * Retune the observation gate. Operator-tier: this changes what the archive will and won't say
- * (out loud) about itself, so it is publish-class. Each dial is independently settable (an
- * absent field leaves it alone) and validated against the same bounds the read enforces.
- */
 export async function setObservationEchoThresholds(
   next: Partial<NoteEchoThresholds>,
 ): Promise<NoteEchoThresholds> {
@@ -93,37 +62,34 @@ export async function setObservationEchoThresholds(
   return getObservationEchoThresholds();
 }
 
-// ── The ledger ───────────────────────────────────────────────────────────────────
-
-/** A held observation rejection, dressed with the finding it belongs to (the queue + dialog read). */
 export type ObservationRejection = {
   artUrl?: string;
   artists: string[];
-  /** How many times this finding's observation has bounced while this rejection stayed open. */
+
   attempts: number;
-  /** The FIRST hold — the queue's oldest-first anchor. Never moves on a re-bounce. */
+
   createdAt: string;
   id: string;
   logId?: string;
-  /** The overlap threshold in force when it was rejected (NOT necessarily today's). */
+
   maxOverlap: number;
-  /** The lifted-phrase threshold in force when it was rejected. */
+
   minPhraseWords: number;
-  /** The neighbour it echoed hardest. */
+
   neighborLogId?: string;
-  /** That neighbour's script as it read at rejection time — the other half of the pair. */
+
   neighborScript?: string;
-  /** The measured content-word overlap against that neighbour. */
+
   overlap: number;
-  /** The run of words lifted from it; "" when the rejection was overlap-only. */
+
   phrase: string;
   resolution?: "accepted" | "discarded";
   resolvedAt?: string;
-  /** THE EVIDENCE — the observation script the model wrote, verbatim. */
+
   script: string;
   title: string;
   trackId: string;
-  /** The LATEST bounce — the diagnostic, never the anchor. */
+
   updatedAt: string;
 };
 
@@ -171,19 +137,6 @@ function toRejection(row: RejectionRow, artists: string[]): ObservationRejection
   };
 }
 
-/**
- * Hold a rejected observation script. Called by the `observe_track` handler the instant the
- * echo gate decides against a script, BEFORE the 422 goes back to the sweep — so the evidence
- * is durable even though the request fails.
- *
- * UPSERT onto the finding's one OPEN row (the partial-unique index is the conflict target): a
- * re-author that echoes again REPLACES the held script with the fresher one and bumps
- * `attempts`, rather than appending. `created_at` is deliberately NOT updated — it is the
- * attention queue's oldest-first anchor, and the sweep re-authors an observation-less finding
- * every tick, so an anchor that moved with each bounce would never age into the working set.
- *
- * Best-effort by contract: this must never convert a gate rejection into a 500.
- */
 export async function recordObservationRejection(
   trackId: string,
   script: string,
@@ -225,17 +178,6 @@ export async function recordObservationRejection(
   });
 }
 
-/**
- * Read the ledger. `open: true` (the default) is the queue's read — every rejection still
- * waiting on the operator's eye, oldest first. `open: false` reads the settled ones (the
- * retune evidence). Drives through `FINDINGS_FROM` so a decertified finding stops being read
- * and a catalogue track can never surface here.
- *
- * A HELD REJECTION IS ONLY OPEN WHILE THE FINDING IS OBSERVATION-LESS: the open read carries
- * `findings.observation_audio_url is null` as a predicate, so the moment a fresh script clears
- * the gate (or the operator renders one), the held row is MOOT and drops out — the attention
- * queue's "never surface a row the system can't confirm is actionable" rule, enforced structurally.
- */
 export async function listObservationRejections(
   options: { id?: string; open?: boolean; trackId?: string } = {},
 ): Promise<ObservationRejection[]> {
@@ -275,13 +217,11 @@ export async function listObservationRejections(
   );
 }
 
-/** The `AttentionSource` row shape — one open rejection, trimmed to what the queue shows. */
 export type ObservationRejectionReviewRow = {
-  /** The oldest-first anchor — the FIRST hold, so a re-bouncing row still ages in. */
   anchorAt: string;
   artUrl?: string;
   artists: string[];
-  /** How many times it has bounced — the datum that says "this one is stuck". */
+
   attempts: number;
   id: string;
   logId?: string;
@@ -289,7 +229,6 @@ export type ObservationRejectionReviewRow = {
   trackId: string;
 };
 
-/** Every held rejection awaiting the operator's ruling — the attention queue's source read. */
 export async function listObservationRejectionReviewRows(): Promise<
   ObservationRejectionReviewRow[]
 > {
@@ -309,30 +248,12 @@ export async function listObservationRejectionReviewRows(): Promise<
 
 export type ResolveObservationResult = {
   rejection: ObservationRejection;
-  /** The render result when `accepted` actually rendered; absent otherwise. */
+
   rendered?: RenderObservationResult;
-  /**
-   * True when `accepted` did NOT render because the finding already carried an observation (a
-   * fresh script cleared the gate, or the operator rendered one, since the hold). The rejection
-   * resolves anyway — the held script is moot — but the standing observation is untouched. The
-   * spoken analogue of the note ledger's fill-empty-only rail.
-   */
+
   skipped: boolean;
 };
 
-/**
- * The operator's ruling on a held observation.
- *
- * `accepted` — he read the script and it is good. It is RENDERED to the finding through the
- * shared render path (`renderAndStoreObservation`), overruling the echo gate the way a human
- * reading both scripts side by side is the higher authority. A finding that already carries an
- * observation (a fresh script cleared the gate meanwhile) is left untouched and reported
- * `skipped` — the spoken analogue of fill-empty-only, so a render is never wasted overwriting
- * a good one.
- *
- * `discarded` — the gate was right. The finding stays observation-less and queued; the next
- * sweep tick is free to author a colder script. Binning a held observation blocks nothing.
- */
 export async function resolveObservationRejection(
   id: string,
   resolution: "accepted" | "discarded",
@@ -367,16 +288,9 @@ export async function resolveObservationRejection(
       throw new ApiError("not_found", `No finding with id ${row.track_id}`, 404);
     }
 
-    // Fill-empty-only, spoken: a fresh observation that cleared the gate (or an operator
-    // render) since the hold already stands, so accepting the held script would waste a render
-    // overwriting a good one. Skip it; the rejection resolves anyway (the held script is moot).
     if (track.observationAudioUrl) {
       skipped = true;
     } else {
-      // The held script was authored under whatever prompt version drafted it; the ledger does
-      // not store that, and this is an operator override, so the render is stamped as an
-      // operator write (null provenance) — the same honest "no registry prompt wrote THIS
-      // render decision" the generic update path uses.
       rendered = await renderAndStoreObservation(track, row.script, {
         durationTargetSec: 30,
         promptVersion: null,
@@ -384,7 +298,6 @@ export async function resolveObservationRejection(
     }
   }
 
-  // CLAIM the row (`and resolved_at is null`) so two rapid rulings can't both "win".
   const claimed = await db.execute({
     args: [resolution, new Date().toISOString(), id],
     sql: `update observation_rejections

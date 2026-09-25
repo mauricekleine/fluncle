@@ -4,23 +4,6 @@ import { sha256Hex } from "./hash";
 import { createIntegrationDb, seedTrack } from "./integration-db";
 import { migratePreviewArchive } from "./preview-bucket-migration";
 
-// REF-05 slice 4 — the public → private preview-bucket migration, driven against
-// the REAL migrated schema (the in-memory libSQL harness applies every generated
-// Drizzle migration, so `tracks.preview_archive_*` are byte-identical to prod) and
-// FAKE R2 buckets. Every assertion here is provable offline: no R2, no network, no
-// production. The load-bearing behaviours the task + review pin:
-//   COPY:   a hash mismatch is SKIPPED never copied; dry-run mutates nothing; a
-//           re-run is idempotent (a migrated row leaves the legacy set).
-//   DELETE: the sweep is PREFIX-driven — an orphan with no DB row IS deleted; an
-//           object whose logId has no private copy is SKIPPED not deleted; the
-//           phase REFUSES while any legacy-prefixed row is still uncopied.
-//   VERIFY: read-only — counts the prefix, mutates nothing.
-
-// A minimal in-memory R2 bucket: enough of the `get`/`put`/`delete`/`list` surface
-// the migration core uses. `get` returns objects with the `arrayBuffer()` + `size`
-// the read-back verification reads; `list` paginates keys under a prefix (the cursor
-// is the last key of the page, resumed with `key > cursor` — an opaque, monotonic
-// stand-in for R2's cursor).
 function fakeBucket() {
   const store = new Map<string, { body: ArrayBuffer; contentType?: string }>();
 
@@ -83,7 +66,6 @@ function bytesOf(text: string): ArrayBuffer {
   return new TextEncoder().encode(text).buffer as ArrayBuffer;
 }
 
-/** Set a track's archived-preview columns (seedTrack does not touch them). */
 async function setArchive(
   db: Client,
   trackId: string,
@@ -110,7 +92,6 @@ async function keyOf(db: Client, trackId: string): Promise<string | null> {
   return typeof value === "string" ? value : null;
 }
 
-/** Seed one legacy-archived finding: bytes in the public bucket at the hash key. */
 async function seedLegacy(
   db: Client,
   publicBucket: FakeBucket,
@@ -128,7 +109,6 @@ async function seedLegacy(
   return oldKey;
 }
 
-/** Put a public object at an arbitrary legacy key (to seed ORPHANS). */
 async function putPublicObject(
   publicBucket: FakeBucket,
   logId: string,
@@ -179,7 +159,7 @@ describe("migratePreviewArchive — copy mode", () => {
 
     expect(privateBucket.has("aaa.1A/preview.mp3")).toBe(true);
     expect(await keyOf(db, "t1")).toBe("aaa.1A/preview.mp3");
-    // Copy mode NEVER deletes — the public object is left for the delete sweep.
+
     expect(publicBucket.keys()).toHaveLength(1);
   });
 
@@ -348,7 +328,7 @@ describe("migratePreviewArchive — delete mode (prefix sweep)", () => {
     const hash = await sha256Hex(bytes);
     const oldKey = `analysis/previews/iii.8H/${hash}.mp3`;
     await seedTrack(db, { logId: "iii.8H", trackId: "t8" });
-    await setArchive(db, "t8", "iii.8H/preview.mp3"); // already migrated (private-scheme key)
+    await setArchive(db, "t8", "iii.8H/preview.mp3");
     await privateBucket.put("iii.8H/preview.mp3", bytes);
     await publicBucket.put(oldKey, bytes);
 
@@ -368,18 +348,16 @@ describe("migratePreviewArchive — delete mode (prefix sweep)", () => {
     expect(publicBucket.has(oldKey)).toBe(false);
     expect(privateBucket.has("iii.8H/preview.mp3")).toBe(true);
     expect(result.remaining).toBe(0);
-    // The DB key is unchanged — the delete sweep never touches the pointer.
+
     expect(await keyOf(db, "t8")).toBe("iii.8H/preview.mp3");
   });
 
   it("DELETES an ORPHAN with no DB row (the prefix sweep is authoritative)", async () => {
-    // A superseded hash: no `tracks` row points at this object, but the finding IS
-    // migrated (its current private copy is present), so the orphan must be dropped.
     const orphan = await putPublicObject(publicBucket, "orph.9J", "deadbeef".repeat(8));
     await privateBucket.put("orph.9J/preview.mp3", bytesOf("current-private"));
 
     const result = await migratePreviewArchive({
-      db, // empty DB — no rows at all
+      db,
       dryRun: false,
       limit: 50,
       mode: "delete",
@@ -395,7 +373,7 @@ describe("migratePreviewArchive — delete mode (prefix sweep)", () => {
 
   it("finds the private copy across a container change (orphan .mp3 → private .m4a)", async () => {
     const orphan = await putPublicObject(publicBucket, "fmt.1A", "a".repeat(64), "mp3");
-    await privateBucket.put("fmt.1A/preview.m4a", bytesOf("m4a-bytes")); // different ext
+    await privateBucket.put("fmt.1A/preview.m4a", bytesOf("m4a-bytes"));
 
     const result = await migratePreviewArchive({
       db,
@@ -413,7 +391,6 @@ describe("migratePreviewArchive — delete mode (prefix sweep)", () => {
 
   it("SKIPS (does not delete) an object whose logId has no private copy", async () => {
     const orphan = await putPublicObject(publicBucket, "nop.2B", "b".repeat(64));
-    // No private copy for nop.2B anywhere.
 
     const result = await migratePreviewArchive({
       db,
@@ -426,14 +403,13 @@ describe("migratePreviewArchive — delete mode (prefix sweep)", () => {
 
     expect(result.deletedCount).toBe(0);
     expect(result.skipped).toEqual([{ reason: "private_copy_absent", trackId: "nop.2B" }]);
-    expect(publicBucket.has(orphan)).toBe(true); // untouched — reported loudly instead
-    expect(result.remaining).toBe(1); // still under the prefix
+    expect(publicBucket.has(orphan)).toBe(true);
+    expect(result.remaining).toBe(1);
   });
 
   it("REFUSES to sweep while any legacy-prefixed DB row is still uncopied", async () => {
-    // A finding still on the legacy prefix (not yet copied) blocks the whole phase.
     await seedLegacy(db, publicBucket, { body: "uncopied", logId: "blk.3C", trackId: "t-blk" });
-    // And an unrelated migrated finding whose orphan would otherwise be swept.
+
     const orphan = await putPublicObject(publicBucket, "rdy.4D", "c".repeat(64));
     await privateBucket.put("rdy.4D/preview.mp3", bytesOf("ready"));
 
@@ -448,8 +424,8 @@ describe("migratePreviewArchive — delete mode (prefix sweep)", () => {
 
     expect(result.blocked).toBe("legacy_rows_uncopied");
     expect(result.deletedCount).toBe(0);
-    expect(result.remaining).toBe(1); // the one uncopied legacy row
-    // NOTHING was deleted — not even the ready finding's orphan.
+    expect(result.remaining).toBe(1);
+
     expect(publicBucket.has(orphan)).toBe(true);
   });
 
@@ -468,7 +444,7 @@ describe("migratePreviewArchive — delete mode (prefix sweep)", () => {
 
     expect(result.deletedCount).toBe(1);
     expect(result.deleted[0]).toMatchObject({ oldKey: orphan, trackId: "dry.5E" });
-    expect(publicBucket.has(orphan)).toBe(true); // dry-run: nothing removed
+    expect(publicBucket.has(orphan)).toBe(true);
   });
 
   it("is idempotent — a second sweep of an emptied prefix deletes nothing", async () => {
@@ -514,7 +490,7 @@ describe("migratePreviewArchive — delete mode (prefix sweep)", () => {
     });
     expect(first.deletedCount).toBe(2);
     expect(first.nextCursor).not.toBeNull();
-    expect(first.remaining).toBe(1); // one object still under the prefix
+    expect(first.remaining).toBe(1);
 
     const second = await migratePreviewArchive({
       cursor: first.nextCursor ?? undefined,
@@ -531,7 +507,6 @@ describe("migratePreviewArchive — delete mode (prefix sweep)", () => {
   });
 
   it("probes private-copy PRESENCE concurrently via head, never a body-reading get", async () => {
-    // Two migrated findings' orphans under the prefix; both have a private copy.
     await putPublicObject(publicBucket, "cc1.1A", "a".repeat(64));
     await putPublicObject(publicBucket, "cc2.2B", "b".repeat(64));
 
@@ -540,9 +515,6 @@ describe("migratePreviewArchive — delete mode (prefix sweep)", () => {
     let maxInFlight = 0;
     const present = new Set(["cc1.1A/preview.mp3", "cc2.2B/preview.mp3"]);
 
-    // A spy private bucket: `head` records its concurrent in-flight count (it yields a
-    // microtask so overlapping probes are observable); `get` records that it was
-    // called at all — the presence check must NEVER reach for the bytes.
     const spyPrivate = {
       get: (_key: string) => {
         calls.push("get");
@@ -571,15 +543,12 @@ describe("migratePreviewArchive — delete mode (prefix sweep)", () => {
     });
 
     expect(result.deletedCount).toBe(2);
-    expect(calls).not.toContain("get"); // presence uses head only, never the body
+    expect(calls).not.toContain("get");
     expect(calls.filter((call) => call === "head").length).toBeGreaterThan(1);
-    expect(maxInFlight).toBeGreaterThan(1); // the probes overlapped (ran in parallel)
+    expect(maxInFlight).toBeGreaterThan(1);
   });
 
   it("keeps results PAGE-ORDERED across the concurrency-chunk boundary", async () => {
-    // More objects than PRESENCE_CONCURRENCY (10), so the sweep runs multiple chunks.
-    // Every other finding has a private copy; the rest are skipped. The deleted/skipped
-    // arrays must come back in page (sorted-key) order regardless of chunking.
     const total = 25;
     const expectedDeleted: string[] = [];
     const expectedSkipped: string[] = [];
@@ -599,7 +568,7 @@ describe("migratePreviewArchive — delete mode (prefix sweep)", () => {
     const result = await migratePreviewArchive({
       db,
       dryRun: false,
-      limit: total, // one page holding every object
+      limit: total,
       mode: "delete",
       privateBucket,
       publicBucket,
@@ -626,7 +595,7 @@ describe("migratePreviewArchive — verify mode (read-only)", () => {
   it("counts the objects under the prefix and returns a sample, mutating nothing", async () => {
     await putPublicObject(publicBucket, "v1.1A", "1".repeat(64));
     await putPublicObject(publicBucket, "v2.2B", "2".repeat(64));
-    // A non-prefix object must NOT be counted.
+
     await publicBucket.put("019.F.1A/set.mp4", bytesOf("a video"));
 
     const result = await migratePreviewArchive({
@@ -642,7 +611,7 @@ describe("migratePreviewArchive — verify mode (read-only)", () => {
     expect(result.remaining).toBe(2);
     expect(result.sampleKeys).toHaveLength(2);
     expect(result.sampleKeys.every((key) => key.startsWith("analysis/previews/"))).toBe(true);
-    // Nothing mutated: the video + both previews are all still present.
+
     expect(publicBucket.keys()).toHaveLength(3);
     expect(result.deletedCount).toBe(0);
   });

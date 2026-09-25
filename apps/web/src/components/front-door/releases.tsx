@@ -1,17 +1,16 @@
 import { type ReactNode, useMemo } from "react";
 import { DiscoveryPlayableList } from "@/components/discovery-row";
-import { type FreshStreamEntry } from "@/components/fresh/data";
-import { FreshReleaseRows } from "@/components/fresh/shared";
-import { freshEntryToDiscoveryTrack } from "@/lib/discovery-tracks";
+import { FreshReleaseList } from "@/components/fresh/release-entry";
+import { type FreshRelease, releasesQueue } from "@/lib/fresh-releases";
 
 export function FrontDoorReleases({
   releases,
   windowDays,
 }: {
-  releases: FreshStreamEntry[];
+  releases: FreshRelease[];
   windowDays: number;
 }): ReactNode {
-  const tracks = useMemo(() => releases.map(freshEntryToDiscoveryTrack), [releases]);
+  const tracks = useMemo(() => releasesQueue(releases), [releases]);
 
   if (releases.length === 0) {
     return (
@@ -23,7 +22,7 @@ export function FrontDoorReleases({
 
   return (
     <DiscoveryPlayableList tracks={tracks}>
-      <FreshReleaseRows className="fd-releases" entries={releases} />
+      <FreshReleaseList className="fd-releases" releases={releases} />
     </DiscoveryPlayableList>
   );
 }

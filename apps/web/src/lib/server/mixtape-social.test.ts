@@ -1,13 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-// The mixtape per-platform double-fire guard (lib/server/mixtape-social.ts).
-// `finalizeMixtapeDistribution` is called ONCE PER
-// PLATFORM (YouTube + Mixcloud both finalize), so a naive "the mixtape is
-// published ⇒ notify" double-fires. The flip is a GUARDED
-// `update ... where status = 'distributing'`; only the call whose guard changed a
-// row (rowsAffected === 1) owns the transition and notifies. These tests pin that:
-// the OWNING call notifies once; the second platform (rowsAffected === 0) does not.
-
 const batch = vi.fn();
 const getMixtapeById = vi.fn();
 const purgeLogCache = vi.fn();
@@ -45,8 +37,6 @@ const MIXTAPE = {
   type: "mixtape" as const,
 };
 
-// The three batch ResultSets the impl reads: [insert, guarded-flip, touch]. Only
-// index [1] (the guarded flip) is read (`rowsAffected`), so set that one.
 function batchResult(flipRowsAffected: number) {
   return [{ rowsAffected: 0 }, { rowsAffected: flipRowsAffected }, { rowsAffected: 1 }];
 }
@@ -78,7 +68,6 @@ describe("finalizeMixtapeDistribution — single-owner notify", () => {
   });
 
   it("fires exactly once across both platform finalizations of one mixtape", async () => {
-    // First platform owns the flip (1), second sees it already done (0).
     batch.mockResolvedValueOnce(batchResult(1)).mockResolvedValueOnce(batchResult(0));
 
     await finalizeMixtapeDistribution("mix_1", "youtube", { url: "https://youtu.be/x" });

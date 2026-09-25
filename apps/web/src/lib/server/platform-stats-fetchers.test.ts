@@ -17,13 +17,6 @@ import {
   requireCount,
 } from "./platform-stats";
 
-// PER-FETCHER PARSING, with fetch INJECTED — no real network. Each collector is a
-// pure fetch+parse over the injected `fetchImpl`, so a canned response body exercises
-// the exact shape each platform's public API returns (and the string→int coercion the
-// counts need). The env-gated fetchers (lastfm/telegram/youtube) also read a key off
-// process.env, set + cleared per test.
-
-/** A fake `fetch` that answers by URL SUBSTRING with a JSON body + status. */
 function fakeFetch(routes: { body: unknown; match: string; status?: number }[]): FetchImpl {
   return ((input: URL | string) => {
     const url = typeof input === "string" ? input : input.href;
@@ -218,8 +211,6 @@ describe("collectYoutube", () => {
     await expect(collectYoutube(fakeFetch([]))).rejects.toThrow(/YOUTUBE_API_KEY is not set/);
   });
 });
-
-// ── Tier-2 PARSE halves (token + fetch injected, no DB) ──────────────────────
 
 describe("collectTwitchFollowers", () => {
   it("resolves the broadcaster id then parses the follower total", async () => {

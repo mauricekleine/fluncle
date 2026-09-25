@@ -1,8 +1,3 @@
-// The `radio` domain router module. Implements the cycling-station read op (RFC
-// Unit B) off the shared implementer the root (../orpc.ts) hands in. A future
-// wave adds an op here and one spread line in the root — no other domain's file
-// is touched.
-
 import { ORPCError } from "@orpc/server";
 import { type TrackListItem } from "@fluncle/contracts";
 import { resolveRadioSlot, totalLoopDurationMs } from "../../radio-schedule";
@@ -17,27 +12,6 @@ import {
 } from "../tracks";
 import { apiFault, type Implementer } from "./_shared";
 
-/**
- * Build the `radio` domain's handlers. `get_random_radio_track` returns one random
- * RADIO-ELIGIBLE finding (a squared master + an observation — the `getRandomRadioTrack`
- * SQL filter guarantees both), mapped like every other list item, in the
- * `{ ok: true, track }` envelope. An empty eligible set is a 404 carrying the same
- * custom `track_not_found` code/message the random-track read uses, so the rails
- * encoder reproduces the legacy `jsonError` body rather than the generic `not_found`.
- */
-// The public launch gate applies to the radio too (browse-by-feel decision 5): the
-// now-playing meta line renders the finding's galaxy name, so it must stay dark until
-// the operator has NAMED the whole map — a named galaxy leaking here before the lens
-// ships would break the "nothing public renders a galaxy until fully named" rail. When
-// the gate is closed the galaxy is stripped from the payload; the rest of the finding
-// is untouched.
-//
-// This is also the radio's public-strip choke point: every finding served by these public
-// ops passes through here, so it runs the `toPublicTrackListItem` public-strip (the same one
-// the `list_findings` feed runs) BEFORE the galaxy gate. The radio hydrates its slots from the
-// FAT DTO (`getRandomRadioTrack`/`getTrackByIdOrLogId` → `toTrackListItem`), which populates
-// `sourceAudioKey` + the internal provenance fields; without this the private R2 key of the
-// captured full song would world-serve on the radio.
 function gateGalaxy(track: TrackListItem, fullyNamed: boolean): TrackListItem {
   const publicTrack = toPublicTrackListItem(track);
 
@@ -72,13 +46,6 @@ export function radioHandlers(os: Implementer) {
       message: "No radio-eligible tracks found",
     });
 
-  // The server-authoritative now-playing slot on the shared loop. The eligible set
-  // is read deterministically (found-order); the stored epoch is read+rolled (a
-  // self-heal at the next boundary on a changed set); the modulo math resolves the
-  // current slot + offset. `currentTrack`/`nextTrack` are hydrated to full list
-  // items so the page renders identical metadata to the random read. The server
-  // timestamp rides along for the client's NTP-lite skew. An empty set is the
-  // same `track_not_found` 404 the random read uses (the page's quiet-sector copy).
   const getRadioNowPlayingHandler = os.get_radio_now_playing.handler(async () => {
     try {
       const entries = await getRadioEligibleTracks();
@@ -92,10 +59,6 @@ export function radioHandlers(os: Implementer) {
         throw notFound();
       }
 
-      // Hydrate the two scheduled slots to full list items (the lean schedule
-      // query carries only the clock fields). The eligibility predicate guarantees
-      // the rows still exist; a vanished row (a delete between reads) 404s rather
-      // than serving a partial slot — the client resyncs, it never random-skips.
       const [currentTrack, nextTrack] = await Promise.all([
         getTrackByIdOrLogId(slot.current.trackId),
         getTrackByIdOrLogId(slot.next.trackId),
@@ -110,8 +73,7 @@ export function radioHandlers(os: Implementer) {
       return {
         nowPlaying: {
           currentTrack: gateGalaxy(currentTrack, fullyNamed),
-          // Omit a self-referential next on a single-finding loop (it's the same
-          // finding looping; there is no distinct preload target).
+
           nextTrack:
             nextTrack && nextTrack.trackId !== currentTrack.trackId
               ? gateGalaxy(nextTrack, fullyNamed)

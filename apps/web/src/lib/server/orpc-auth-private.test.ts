@@ -1,16 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { call } from "@orpc/server";
 
-// The PRIVATE-USER auth tier — the `/me`
-// cookie-session spine, analogous to the admin spine's focused test. The tier
-// just delegates to the live `requirePublicUser` / `requireAccountMutation`
-// helpers (whose own checks are covered in public-auth.test.ts /
-// account-data.test.ts); here we assert the middleware LIFTS their outcome onto
-// the right oRPC tier: a session passes with `context.user` injected, and a
-// `jsonError` Response becomes an `ORPCError` carrying the SAME status + the
-// SAME `{ code, message }` (in ApiFaultData, which the rails encoder later
-// reshapes into the legacy body).
-
 const requirePublicUser = vi.fn();
 const requireAccountMutation = vi.fn();
 
@@ -38,7 +28,6 @@ const USER = {
   username: "fan",
 };
 
-// A jsonError-shaped Response, exactly as the live helpers emit on a guard fail.
 function jsonError(status: number, code: string, message: string): Response {
   return Response.json({ code, message, ok: false }, { status });
 }
@@ -47,16 +36,11 @@ function request(): Request {
   return new Request("https://www.fluncle.com/api/v1/me/saved-findings", { method: "GET" });
 }
 
-// The thrown fault's status + the legacy code/message it carries in ApiFaultData
-// (what the rails encoder reproduces on the wire).
 async function invoke(
   procedure: unknown,
   input: unknown = {},
 ): Promise<{ status?: number; code?: string; message?: string; user?: unknown }> {
   try {
-    // The inline test procedures are concretely typed per-test; `call`'s param is
-    // the generic `Procedure<Context, …>`, so cast at the boundary (as the admin
-    // spine test does with its concrete union) — the runtime call is unaffected.
     const result = (await call(procedure as Parameters<typeof call>[0], input, {
       context: { request: request() },
     })) as { user?: unknown };

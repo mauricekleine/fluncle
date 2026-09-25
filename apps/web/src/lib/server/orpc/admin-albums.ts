@@ -1,13 +1,3 @@
-// The `admin-albums` domain router module — the album entity's admin surface. An album
-// carries no operator control (no crawl-seed ruling, no alias review — docs/album-entity.md:
-// an album is not a crawl seed, so there is nothing to rule on), so this domain is the
-// voiced-bio engine and nothing else, on the `admin-labels` bio pattern.
-//
-// The three bio ops are all `adminAuth` (agent-allowed): the on-box sweep authors the album's
-// bio, this VOICE-GATES it and stores it FILL-EMPTY-ONLY (a bio already on file — operator OR
-// previously auto-authored — is a skipped no-op). Authoring a bio is enrichment, not an
-// editorial ruling, so there is no operator-tier op here. See docs/agents/bio-agent.md.
-
 import { getAlbumBySlug, fillEmptyAlbumBio, listAlbumsMissingBio } from "../albums";
 import { purgeEntityCache } from "../edge-cache";
 import { buildEntityBioPrompt, fetchEntityFacts, gateOrAcceptBio } from "../bio";
@@ -16,15 +6,9 @@ import { getFindingsByAlbum } from "../tracks";
 import { ORPCError } from "@orpc/server";
 import { apiFault, type Implementer, parseLimit, toFault } from "./_shared";
 
-/** Build the `admin-albums` domain's handlers. */
 export function adminAlbumsHandlers(os: Implementer) {
-  // POST /admin/albums/{slug}/bio — agent tier (`adminAuth`), the note_track precedent:
-  // the on-box sweep authored the album's bio; this VOICE-GATES it and stores it
-  // FILL-EMPTY-ONLY. A bio already on file (operator OR previously auto-authored) is a
-  // skipped no-op.
   const describeAlbumHandler = os.describe_album.use(adminAuth).handler(async ({ input }) => {
     try {
-      // `dryRun` runs the voice gate and stores nothing (the sweep's pre-check).
       const dryRun = input.dryRun === true;
       const album = await getAlbumBySlug(input.slug);
 
@@ -36,14 +20,10 @@ export function adminAlbumsHandlers(os: Implementer) {
         });
       }
 
-      // Fast-path skip; the real guarantee is the DB predicate in `fillEmptyAlbumBio`.
       if (!dryRun && album.bio?.trim()) {
         return { bio: album.bio, ok: true as const, skipped: true as const, slug: album.slug };
       }
 
-      // Voice-gate the agent-authored bio (defence in depth, re-scanned server-side) — UNLESS
-      // this is the sweep's third and last authoring pass, where the draft lands and the
-      // acceptance is logged + flagged instead (see `gateOrAcceptBio`).
       const gated = gateOrAcceptBio({
         bio: input.bio,
         finalAttempt: input.finalAttempt === true,
@@ -51,17 +31,13 @@ export function adminAlbumsHandlers(os: Implementer) {
         name: album.name,
         slug: album.slug,
       });
-      // Only `bio` is destructured; the acceptance's own fields ride out via the spreads below,
-      // so removing them from `gateOrAcceptBio` needs no edit here (see bio.ts, "SEVERABLE").
+
       const { bio } = gated;
 
       if (dryRun) {
         return { ...gated, dryRun: true as const, ok: true as const, slug: album.slug };
       }
 
-      // Fill the empty bio ATOMICALLY — the fill-empty-only predicate lives in the SQL. The
-      // accepted violations ride the SAME statement, so a bypassed bio raises its `bio-review`
-      // queue row the moment it lands (see lib/server/bio-review.ts).
       const filled = await fillEmptyAlbumBio(
         album.slug,
         bio,
@@ -80,8 +56,6 @@ export function adminAlbumsHandlers(os: Implementer) {
         };
       }
 
-      // The bio is a primary rendered block on `/album/<slug>`; drop its cached page so the
-      // new bio surfaces. Only on an actual write (fill-empty may have no-op'd above).
       purgeEntityCache("album", album.slug);
 
       return { ...gated, ok: true as const, slug: album.slug };
@@ -90,13 +64,6 @@ export function adminAlbumsHandlers(os: Implementer) {
     }
   });
 
-  // GET /admin/albums/{slug}/bio-draft — agent tier (`adminAuth`): the Worker-paced grounding
-  // seam (the describe_album sibling). The box cannot gather Firecrawl facts (no key) or
-  // enumerate the tracks it has logged off an album (not on the wire), so it triggers this
-  // READ: the Worker runs the Firecrawl gather with ITS key + pulls the logged finding titles
-  // from ITS DB, assembles the registered bio prompt, and returns the ready-to-author prompt +
-  // its provenance version. The box then authors with `claude -p` and writes back via
-  // `describe_album`. Publishes nothing. A missing slug returns `found:false` (never throws).
   const draftAlbumBioHandler = os.draft_album_bio.use(adminAuth).handler(async ({ input }) => {
     try {
       const album = await getAlbumBySlug(input.slug);
@@ -112,8 +79,6 @@ export function adminAlbumsHandlers(os: Implementer) {
         };
       }
 
-      // Gather Worker-side: Firecrawl facts (with the Worker's key) + the logged finding
-      // titles (with the Worker's DB) — the two the box cannot reach. Both best-effort.
       const facts = await fetchEntityFacts({ kind: "album", name: album.name });
       const findings = await getFindingsByAlbum(album.id);
       const findingTitles = findings.map((finding) => finding.title);
@@ -138,8 +103,6 @@ export function adminAlbumsHandlers(os: Implementer) {
     }
   });
 
-  // GET /admin/albums/bio-queue — agent tier (`adminAuth`), the list_labels_missing_bio
-  // precedent: the bio worklist (albums with findings but no bio yet), oldest-first.
   const listAlbumsMissingBioHandler = os.list_albums_missing_bio
     .use(adminAuth)
     .handler(async ({ input }) => {

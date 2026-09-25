@@ -13,8 +13,6 @@ import {
   shouldBumpLastSeen,
 } from "./public-auth";
 
-// The config builder only stores the db lazily (drizzleAdapter), so a stub is enough
-// to assert the shape of the options object it returns.
 const stubDb = {} as Parameters<typeof createPublicAuthOptions>[0];
 
 const user: PublicUser = {
@@ -37,12 +35,10 @@ describe("createPublicAuthOptions", () => {
   it("wires email verification without gating sign-in", () => {
     const options = createPublicAuthOptions(stubDb);
 
-    // Sends on sign-up, auto-signs-in after verifying, and delivers via a hook.
     expect(options.emailVerification?.sendOnSignUp).toBe(true);
     expect(options.emailVerification?.autoSignInAfterVerification).toBe(true);
     expect(typeof options.emailVerification?.sendVerificationEmail).toBe("function");
-    // The load-bearing negative: verification NEVER gates the session. If this ever
-    // becomes truthy, an unverified user (incl. every mobile sign-up) is locked out.
+
     expect(options.emailAndPassword?.requireEmailVerification).toBeUndefined();
   });
 
@@ -51,16 +47,13 @@ describe("createPublicAuthOptions", () => {
 
     expect(options.account?.accountLinking?.enabled).toBe(true);
     expect(options.account?.accountLinking?.trustedProviders).toContain("google");
-    // We rely on Better Auth's default requireLocalEmailVerified (true): a Google
-    // sign-in links into an existing account only when it is already verified. If we
-    // ever set this false, an unverified local row becomes linkable — account takeover.
+
     expect(options.account?.accountLinking?.requireLocalEmailVerified).toBeUndefined();
   });
 
   it("ships Google DARK until both creds exist (conditional spread)", () => {
     expect(createPublicAuthOptions(stubDb).socialProviders).toBeUndefined();
 
-    // Only one cred present is still dark — a half-empty config must never register.
     process.env.GOOGLE_CLIENT_ID = "google-client-id";
     expect(createPublicAuthOptions(stubDb).socialProviders).toBeUndefined();
 
@@ -110,31 +103,21 @@ describe("public auth hardening", () => {
     expect(() => resolvePublicAuthSecret(undefined, false)).toThrow(/BETTER_AUTH_SECRET/);
   });
 
-  // `baseURL` is what Better Auth derives `useSecureCookies` from, and what it stamps
-  // into every password-reset / verification link, so a silent localhost fallback in a
-  // deployed Worker is a degradation with no symptom. It now fails the same way the
-  // secret does. Both halves are pinned: the ALLOW path (dev keeps its default, and a
-  // provisioned value is honoured verbatim) and the BLOCK path (absent or blank outside
-  // dev throws rather than degrading).
   it("requires BETTER_AUTH_URL outside local development, and never falls back silently", () => {
     expect(resolvePublicAuthBaseUrl(undefined, true)).toBe("http://localhost:3000");
     expect(resolvePublicAuthBaseUrl("https://www.fluncle.com", false)).toBe(
       "https://www.fluncle.com",
     );
-    // A trimmable value is honoured (a trailing newline off a secret store is not a fault).
+
     expect(resolvePublicAuthBaseUrl("  https://www.fluncle.com\n", false)).toBe(
       "https://www.fluncle.com",
     );
     expect(() => resolvePublicAuthBaseUrl(undefined, false)).toThrow(/BETTER_AUTH_URL/);
-    // A blank/whitespace value is ABSENT, not a valid base URL — the old `||` fallback
-    // treated `""` as falsy but `" "` as a usable URL.
+
     expect(() => resolvePublicAuthBaseUrl("", false)).toThrow(/BETTER_AUTH_URL/);
     expect(() => resolvePublicAuthBaseUrl("   ", false)).toThrow(/BETTER_AUTH_URL/);
   });
 
-  // Better Auth refuses an untrusted Origin outright, so a request that legitimately
-  // arrives on the apex must not read as an auth failure. Both hosts we own are listed;
-  // the native scheme and the local dev origins are unchanged.
   it("trusts the apex alongside www so an apex-served auth call is not an auth error", () => {
     process.env.BETTER_AUTH_SECRET = "test-secret";
     const options = createPublicAuthOptions(stubDb);
@@ -142,7 +125,7 @@ describe("public auth hardening", () => {
     expect(options.trustedOrigins).toContain("https://fluncle.com");
     expect(options.trustedOrigins).toContain("https://www.fluncle.com");
     expect(options.trustedOrigins).toContain("fluncle://");
-    // And nothing beyond the origins we own / the native scheme / local dev.
+
     expect(options.trustedOrigins).toEqual([
       "http://localhost:3000",
       "http://127.0.0.1:3000",
@@ -186,11 +169,6 @@ describe("public auth hardening", () => {
     expect(requireJsonMutation(missingToken, user)?.status).toBe(403);
   });
 
-  // The CSRF signature check ends in timingSafeEqual, which THROWS when the two
-  // buffers differ in length. verifyCsrfToken wraps it in try/catch so a malformed
-  // (wrong-length) signature is a clean 403, never an unhandled 500 and never a
-  // bypass. These drive that path through the public requireJsonMutation surface;
-  // origin/bucket are kept valid so the request reaches the signature comparison.
   describe("the CSRF signature comparison (timingSafeEqual length-mismatch)", () => {
     const mutationRequest = (csrfToken: string): Request =>
       new Request("https://www.fluncle.com/api/me/profile", {
@@ -203,7 +181,6 @@ describe("public auth hardening", () => {
         method: "PATCH",
       });
 
-    // The body+bucket prefix of a freshly-minted token, with a swappable signature.
     const tokenWith = (signature: string): string => {
       process.env.BETTER_AUTH_SECRET = "test-secret";
       const validParts = createCsrfToken(user).split(".");
@@ -236,7 +213,7 @@ describe("public auth hardening", () => {
       process.env.BETTER_AUTH_SECRET = "test-secret";
       const validParts = createCsrfToken(user).split(".");
       const realSignature = validParts[2] ?? "";
-      // Flip the final character to keep the byte-length identical but the value wrong.
+
       const flipped = realSignature.slice(0, -1) + (realSignature.endsWith("A") ? "B" : "A");
       const request = mutationRequest(`${validParts[0]}.${validParts[1]}.${flipped}`);
 
