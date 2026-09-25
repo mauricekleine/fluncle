@@ -1,29 +1,13 @@
-// `/fresh`'s "new since your last visit": held in THIS browser, never on a server.
-//
-// Anonymous is first-class (PRODUCT.md, "The discovery funnel"): no account, no cookie, no beacon.
-// The browser keeps the keys of the releases it was shown last time, and a release is NEW when its
-// key was not among them. Keys, not dates: the crawl finds a release days after it came out, so a
-// release can land in an older week and still be new to this listener — a date line would miss it.
-//
-// A VISIT is a sitting, not a page load. A reload, or a trip to a track and back, less than
-// `FRESH_VISIT_SITTING_MS` after the last view keeps the same baseline, so the markers survive the
-// listener actually using them; after a longer gap the next sitting compares against everything
-// the last one showed.
-
 import { useEffect, useState } from "react";
 
 export const FRESH_VISIT_STORAGE_KEY = "fluncle:fresh-visit";
 
-/** How long one sitting lasts: inside it, the baseline holds still. */
 export const FRESH_VISIT_SITTING_MS = 30 * 60 * 1000;
 
-/** A generous ceiling on the keys kept, so a corrupted entry can never grow without bound. */
 const FRESH_VISIT_KEY_CEILING = 2000;
 
-/** What this browser stores. `baseline` is the previous sitting's keys, while a sitting lasts. */
 export type FreshVisitRecord = { at: number; baseline?: string[]; first?: boolean; seen: string[] };
 
-/** What the page shows: nothing on a first visit, else which releases are new. */
 export type FreshVisitState =
   | { kind: "first" }
   | { kind: "returning"; newKeys: ReadonlySet<string> };
@@ -34,7 +18,6 @@ function keyList(value: unknown): string[] | undefined {
     : undefined;
 }
 
-/** Read a stored record defensively: anything malformed is a first visit, never a crash. */
 export function parseFreshVisit(raw: string | null): FreshVisitRecord | undefined {
   if (!raw) {
     return undefined;
@@ -65,23 +48,14 @@ export function parseFreshVisit(raw: string | null): FreshVisitRecord | undefine
   }
 }
 
-/**
- * One page view's transition: what to show, and what to store. Inside a sitting the previous
- * baseline holds; a new sitting takes the last sitting's keys as its baseline. The keys stored are
- * the releases on the page now, so a release that aged out of the window is forgotten with it.
- */
 export function nextFreshVisit(
   stored: FreshVisitRecord | undefined,
   currentKeys: string[],
   now: number,
 ): { record: FreshVisitRecord; state: FreshVisitState } {
-  // A stored time in the future (a clock set back, a hand-edited entry) proves nothing about a
-  // sitting: it is never "the same sitting", so it can neither hold a baseline nor a first visit.
   const inSitting =
     stored !== undefined && stored.at <= now && now - stored.at < FRESH_VISIT_SITTING_MS;
 
-  // A first visit stays a first visit for its whole sitting: a reload a minute in has no "last
-  // visit" to compare against.
   if (!stored || (inSitting && stored.first)) {
     return {
       record: { at: now, first: true, seen: currentKeys.slice(0, FRESH_VISIT_KEY_CEILING) },
@@ -106,11 +80,6 @@ export function nextFreshVisit(
   };
 }
 
-/**
- * The page's hook: undefined through SSR and the first paint (the server cannot know this browser),
- * then the visit state once mounted. Storage that throws (a private window, a full quota) reads as
- * a first visit and stores nothing.
- */
 export function useFreshVisit(currentKeys: string[]): FreshVisitState | undefined {
   const [state, setState] = useState<FreshVisitState>();
   const signature = currentKeys.join("\n");
@@ -130,12 +99,10 @@ export function useFreshVisit(currentKeys: string[]): FreshVisitState | undefine
 
     try {
       window.localStorage.setItem(FRESH_VISIT_STORAGE_KEY, JSON.stringify(next.record));
-    } catch {
-      // Nothing to keep: this browser will read as a first visit next time too.
-    }
+    } catch {}
 
     setState(next.state);
-    // The key list is the input; `signature` is its stable identity across renders.
+
     // oxlint-disable-next-line react-hooks/exhaustive-deps
   }, [signature]);
 

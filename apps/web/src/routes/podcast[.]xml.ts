@@ -4,33 +4,13 @@ import { mixtapeDisplayTitle } from "../lib/mixtapes";
 import { mixtapeAudioUrl } from "../lib/media";
 import { listMixtapes } from "../lib/server/mixtapes";
 
-// A podcast-format RSS 2.0 feed where each published mixtape is one episode.
-//
-// A mixtape is Fluncle dreaming — a long recording that consolidates many
-// findings into one checkpoint. This feed hands those recordings to any podcast
-// app (Apple Podcasts, Overcast, …) as enclosures. The audio lives in R2 by the
-// same `<log-id>/<name>` convention the rest of the Galaxy uses (see
-// lib/media.ts): the episode audio is `<logId>/mixtape.m4a` on found.fluncle.com.
-// Future mixtapes must have that object uploaded for their episode to play.
-
 const SITE_URL = "https://www.fluncle.com";
 const SHOW_IMAGE = `${SITE_URL}/fluncle-cover.png`;
 const ITUNES_NS = "http://www.itunes.com/dtds/podcast-1.0.dtd";
 
-// In Fluncle's voice: the uncle who's been logging what he finds out there,
-// now and then settling those findings into one long dream you can play end to
-// end. Machine-facing channel copy stays honestly plain; the warmth rides the
-// per-episode notes.
 const SHOW_DESCRIPTION =
   "Fluncle's own DJ mixtapes: long drum & bass recordings where he settles a stretch of findings into one continuous dream. Each episode is a checkpoint from the archive, recorded across the Galaxy. fluncle.com is home base.";
 
-/**
- * The enclosure byte length in bytes, read from the R2 object's Content-Length
- * via a HEAD request. Returns null when there is no real audio behind the URL —
- * a failed HEAD (object not uploaded yet, edge error), a non-2xx response, or a
- * zero/absent length — so the caller can drop that episode rather than emit a
- * broken enclosure a podcast app can't play.
- */
 async function audioLength(url: string): Promise<number | null> {
   try {
     const res = await fetch(url, { method: "HEAD" });
@@ -48,7 +28,6 @@ async function audioLength(url: string): Promise<number | null> {
   }
 }
 
-/** Format a duration in milliseconds as the itunes:duration HH:MM:SS form. */
 function formatDuration(durationMs: number): string {
   const total = Math.max(0, Math.round(durationMs / 1000));
   const hours = Math.floor(total / 3600);
@@ -75,9 +54,6 @@ export const Route = createFileRoute("/podcast.xml")({
             const audioUrl = mixtapeAudioUrl(logId);
             const length = await audioLength(audioUrl);
 
-            // No real audio behind the enclosure (object not uploaded yet, or a
-            // zero-length object): drop the episode rather than hand a podcast
-            // app a broken file it can't play.
             if (length === null) {
               return undefined;
             }
@@ -111,8 +87,6 @@ export const Route = createFileRoute("/podcast.xml")({
           }),
         );
 
-        // Keep only the episodes that have real audio (audioLength returned a
-        // size). An empty feed is still valid — better than broken enclosures.
         const items = maybeItems.filter((item): item is string => item !== undefined);
 
         const newest = mixtapes[0];
@@ -145,8 +119,6 @@ ${items.join("\n")}
 
         return new Response(xml, {
           headers: {
-            // Readers get a short max-age; the CDN holds s-maxage; SWR keeps
-            // every repeat poll free while a background refresh runs.
             "Cache-Control": "public, max-age=300, s-maxage=3600, stale-while-revalidate=86400",
             "Content-Type": "application/rss+xml; charset=utf-8",
           },

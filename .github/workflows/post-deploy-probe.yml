@@ -1,9 +1,5 @@
-name: Post-deploy Probe
+name: Post-deploy Probe (event path and bounded polling fallback)
 
-# Cloudflare Workers Builds terminal events are the fast path. Until their external Queue,
-# subscription, relay Worker, and GitHub dispatch have been proven live, every deployable push also
-# starts the bounded polling fallback. Excluded pushes still enter this workflow, classify in a few
-# seconds from the same watch-path source as Cloudflare, and skip all setup and probing.
 on:
   push:
     branches: [main]
@@ -26,8 +22,6 @@ on:
         type: choice
 
 concurrency:
-  # Preserve one fallback per pushed commit: a later push (including an excluded one) must not
-  # cancel an earlier commit's deploy correlation. Event/manual retries still converge by build UUID.
   cancel-in-progress: true
   group: post-deploy-${{ github.event_name == 'push' && github.sha || github.event.client_payload.build_uuid || inputs.build_uuid || github.run_id }}
 
@@ -36,13 +30,11 @@ permissions:
 
 jobs:
   probe:
-    name: Correlate deploy, then sweep surfaces
+    name: Correlate deploys by commit or build UUID, then sweep surfaces
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      # Event payloads are data, not checkout authority. Resolve them with code from pushed main,
-      # validate the exact SHA against origin/main, and only then execute that commit's probe.
-      - name: Checkout trusted workflow code and full history
+      - name: Checkout trusted workflow code before resolving payload SHA
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           fetch-depth: 0

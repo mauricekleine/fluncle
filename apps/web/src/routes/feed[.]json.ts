@@ -12,8 +12,7 @@ type TrackRow = {
   album_image_url: string | null;
   artists_json: string;
   item_type: "finding" | "mixtape";
-  // The permanent coordinate: a finding's `findings.log_id` (its /log home), or a
-  // mixtape's own Log ID. NULL only for a coordinate-less finding straggler.
+
   log_id: string | null;
   note: string | null;
   added_at: string;
@@ -22,7 +21,6 @@ type TrackRow = {
   track_id: string;
 };
 
-// The feed-level icon (site cover) + favicon, the images other pages fall back to.
 const coverUrl = `${siteUrl}/fluncle-cover.png`;
 const faviconUrl = `${siteUrl}/favicon.png`;
 
@@ -75,18 +73,13 @@ export const Route = createFileRoute("/feed.json")({
           const artists = parseArtistsJson(row.artists_json);
           const title =
             row.item_type === "mixtape" ? row.title : `${artists.join(", ")} — ${row.title}`;
-          // Keep the Spotify link reachable from the item body now that the item URL
-          // points to the /log home.
+
           const contentText = [title, row.note?.trim() || undefined, row.spotify_url ?? undefined]
             .filter(Boolean)
             .join("\n\n");
-          // A finding's home is its own /log page (the citation surface the archive
-          // owns). Fall back to Spotify only when no coordinate has been minted yet.
+
           const url = row.log_id ? logPageUrl(row.log_id) : (row.spotify_url ?? siteUrl);
-          // A mixtape's cover renders on the fly from its Log ID; a finding carries
-          // its album cover — the OWNED master through Cloudflare Images where the album
-          // has resolved one, the stored Spotify URL as the floor (REF-05: this feed was
-          // the one surface still hotlinking Spotify unconditionally).
+
           const image =
             row.item_type === "mixtape"
               ? row.log_id
@@ -110,7 +103,7 @@ export const Route = createFileRoute("/feed.json")({
           } = {
             content_text: contentText,
             date_published: new Date(row.added_at).toISOString(),
-            // JSON Feed 1.1: `id` is unique and ideally the permalink URL.
+
             id: url,
             title,
             url,
@@ -137,8 +130,6 @@ export const Route = createFileRoute("/feed.json")({
 
         return new Response(JSON.stringify(feed), {
           headers: {
-            // Readers get a short max-age; the CDN holds s-maxage; SWR keeps
-            // every repeat poll free while a background refresh runs.
             "Cache-Control": "public, max-age=300, s-maxage=3600, stale-while-revalidate=86400",
             "Content-Type": "application/feed+json; charset=utf-8",
           },

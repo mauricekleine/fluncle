@@ -92,7 +92,7 @@ Writing alignment does **not** bump `updated_at` (it describes an existing artif
 - `CARTESIA_VOICE_ID` — non-secret var in `wrangler.jsonc` (the cloned Fluncle voice).
 - `FIRECRAWL_API_KEY` — already a declared Worker secret.
 - `OPENROUTER_API_KEY` — secret, drives the context-note distil pass. Read via `readOptionalEnv`: unset ⇒ the distil degrades gracefully to the cleaned raw snippets (never blocks a render).
-- `OPENROUTER_CONTEXT_MODEL` — OPTIONAL non-secret var overriding the distil model; absent, defaults to `anthropic/claude-haiku-4.5`.
+- `OPENROUTER_CONTEXT_MODEL` + `OPENROUTER_CONTEXT_EFFORT` — non-secret vars used as a pair. Production uses `openai/gpt-5.6-luna` at `medium`; the frozen corpus bench found fewer hallucination tripwires and worn-texture phrases at about 8× lower cost per note than Haiku. Removing both restores the baked non-reasoning Haiku default.
 - R2 (`R2_*`) — already present.
 
 ## The prompt lives in the DATABASE, not in the image

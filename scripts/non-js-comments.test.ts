@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { basename, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { Parser } from "yaml";
 import { noCommentsScope, trackedScopedFiles } from "./no-comments-scope.ts";
@@ -11,6 +11,18 @@ const scope = await noCommentsScope();
 const files = await trackedScopedFiles(scope);
 
 const SHFMT_INSTALL_TIMEOUT_MS = 120_000;
+
+const isShellFile = (path: string): boolean => {
+  if (path.endsWith(".sh")) {
+    return true;
+  }
+  if (basename(path).includes(".")) {
+    return false;
+  }
+  return /^#!.*(?:\/|env(?:\s+-S)?\s+)(?:bash|sh)(?:\s|$)/.test(
+    readFileSync(resolve(root, path), "utf8").split("\n", 1)[0] ?? "",
+  );
+};
 
 beforeAll(() => {
   const setup = spawnSync(resolve(root, ".claude/hooks/setup-shfmt-helper.sh"), [], {
@@ -45,36 +57,41 @@ const shellComments = (source: string, path: string): ShellComment[] => {
       return;
     }
     const record = value as Record<string, unknown>;
-    if (Array.isArray(record.Comments)) {
-      for (const valueComment of record.Comments) {
-        const comment = valueComment as {
-          Pos?: { Offset?: number; Line?: number };
-          End?: { Offset?: number };
-          Text?: string;
-        };
-        if (
-          typeof comment.Text !== "string" ||
-          typeof comment.Pos?.Offset !== "number" ||
-          typeof comment.Pos.Line !== "number" ||
-          typeof comment.End?.Offset !== "number"
-        ) {
-          continue;
-        }
-        if (comment.Text.startsWith("!") || /^\s*shellcheck\b/.test(comment.Text)) {
-          continue;
-        }
-        found.set(`${comment.Pos.Offset}:${comment.End.Offset}`, {
-          line: comment.Pos.Line,
-          text: comment.Text,
-        });
+    const comments = [
+      ...(Array.isArray(record.Comments) ? record.Comments : []),
+      ...(Array.isArray(record.Last) ? record.Last : []),
+    ];
+    for (const valueComment of comments) {
+      const comment = valueComment as {
+        Pos?: { Offset?: number; Line?: number };
+        End?: { Offset?: number };
+        Text?: string;
+      };
+      if (
+        typeof comment.Pos?.Offset !== "number" ||
+        typeof comment.Pos.Line !== "number" ||
+        typeof comment.End?.Offset !== "number"
+      ) {
+        continue;
       }
+      const commentText = comment.Text ?? "";
+      if (typeof commentText !== "string") {
+        continue;
+      }
+      if (commentText.startsWith("!") || /^\s*shellcheck\b/.test(commentText)) {
+        continue;
+      }
+      found.set(`${comment.Pos.Offset}:${comment.End.Offset}`, {
+        line: comment.Pos.Line,
+        text: commentText,
+      });
     }
     for (const child of Object.values(record)) {
       visit(child);
     }
   };
   visit(JSON.parse(result.stdout));
-  return [...found.values()];
+  return [...found.values()].sort((left, right) => left.line - right.line);
 };
 
 const ACTION_VERSION_COMMENT = /^#\s*v\d+(?:\.\d+)*(?:\s|$)/;
@@ -142,9 +159,9 @@ const yamlComments = (source: string, path: string): string[] => {
 };
 
 describe("non-JavaScript comments", () => {
-  test("tracked shell contains only shebangs and shellcheck directives", () => {
+  test("tracked shell scripts contain only shebangs and shellcheck directives", () => {
     const violations = files
-      .filter((path) => path.endsWith(".sh"))
+      .filter(isShellFile)
       .flatMap((path) =>
         shellComments(readFileSync(resolve(root, path), "utf8"), path).map(
           (comment) => `${path}:${comment.line}`,
@@ -161,8 +178,10 @@ describe("non-JavaScript comments", () => {
   });
 
   test("shell comments are identified without mistaking a shebang for prose", () => {
-    expect(shellComments("#!/bin/sh\necho ok # note\n", "fixture.sh")).toEqual([
-      { line: 2, text: " note" },
+    expect(shellComments("#!/bin/sh\n#\necho ok # note\n# trailing\n", "fixture.sh")).toEqual([
+      { line: 2, text: "" },
+      { line: 3, text: " note" },
+      { line: 4, text: " trailing" },
     ]);
   });
 

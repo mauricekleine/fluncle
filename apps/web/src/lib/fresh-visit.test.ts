@@ -1,6 +1,3 @@
-// "New since your last visit", as pure logic: what the stored record parses to, and one page view's
-// transition from the stored record to what the page shows and what it stores next.
-
 import { describe, expect, it } from "vitest";
 import {
   FRESH_VISIT_SITTING_MS,
@@ -173,7 +170,6 @@ describe("a stored time from the future", () => {
       now,
     );
 
-    // The last sitting's own keys are the baseline, not the one the future record carried.
     expect(baseline.state).toEqual({ kind: "returning", newKeys: new Set(["b", "c"]) });
   });
 });

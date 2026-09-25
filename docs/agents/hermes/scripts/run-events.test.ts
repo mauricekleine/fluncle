@@ -73,23 +73,26 @@ afterEach(async () => {
   }
 });
 
-const BEGIN = ">>> BEGIN MIRRORED BLOCK: record_run_event";
-const END = "<<< END MIRRORED BLOCK: record_run_event <<<";
-
-function mirroredBlock(path: string): string {
+function mirroredBlock(path: string): { after: string; block: string } {
   const lines = readFileSync(path, "utf8").split("\n");
-  const start = lines.findIndex((line) => line.includes(BEGIN));
-  const end = lines.findIndex((line) => line.includes(END));
+  const start = lines.findIndex((line) => line.startsWith("RUN_EVENT_PATH="));
+  const functionStart = lines.findIndex(
+    (line, index) => index > start && line === "record_run_event() {",
+  );
+  const end = lines.findIndex((line, index) => index > functionStart && line === "}");
 
-  if (start < 0 || end < 0 || end < start) {
-    throw new Error(`no mirrored record_run_event block in ${path}`);
+  if (start < 0 || functionStart < 0 || end < 0) {
+    throw new Error(`no record_run_event block in ${path}`);
   }
 
-  return lines.slice(start, end + 1).join("\n");
+  return {
+    after: lines.slice(end + 1).join("\n"),
+    block: lines.slice(start, end + 1).join("\n"),
+  };
 }
 
 describe("record_run_event is mirrored, not re-implemented", () => {
-  const canonical = mirroredBlock(CRON_OUTPUT);
+  const canonical = mirroredBlock(CRON_OUTPUT).block;
 
   test.each([
     ["timer-watchdog.sh", WATCHDOG],
@@ -97,7 +100,7 @@ describe("record_run_event is mirrored, not re-implemented", () => {
     ["fluncle-sonar-freshen.sh", SONAR_FRESHEN],
     ["rebuild-hermes.sh", PIN_WATCH],
   ])("%s carries the block byte for byte", (_name, path) => {
-    expect(mirroredBlock(path)).toBe(canonical);
+    expect(mirroredBlock(path).block).toBe(canonical);
   });
 
   test("the block pins the endpoint and the five body fields", () => {
@@ -112,12 +115,7 @@ describe("record_run_event is mirrored, not re-implemented", () => {
     expect(canonical).toContain('RUN_EVENT_FAILURE_REASON="post-failed"');
     expect(canonical).toContain("curl -fsS");
 
-    const code = canonical
-      .split("\n")
-      .filter((line) => !line.trimStart().startsWith("#"))
-      .join("\n");
-
-    expect(code).not.toContain('"ok"');
+    expect(canonical).not.toContain('"ok"');
   });
 
   test.each([
@@ -126,10 +124,7 @@ describe("record_run_event is mirrored, not re-implemented", () => {
     ["fluncle-sonar-freshen.sh", SONAR_FRESHEN],
     ["rebuild-hermes.sh", PIN_WATCH],
   ])("%s actually CALLS it — carrying the block is not the same as using it", (_name, path) => {
-    const body = readFileSync(path, "utf8");
-    const [, afterBlock = ""] = body.split(END);
-
-    expect(afterBlock).toContain('record_run_event "$RUN_EVENT_UNIT"');
+    expect(mirroredBlock(path).after).toContain('record_run_event "$RUN_EVENT_UNIT"');
   });
 });
 

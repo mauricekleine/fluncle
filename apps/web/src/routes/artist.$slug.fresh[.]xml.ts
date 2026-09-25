@@ -8,15 +8,6 @@ import { siteUrl } from "../lib/fluncle-links";
 import { listArtistFreshTracks } from "../lib/server/fresh-entity";
 import { releaseBoundFeedCacheControl } from "../lib/server/edge-cache";
 
-// The per-ARTIST sibling of /fresh.xml — the whole-archive release feed narrowed to one artist:
-// what just came OUT from this artist, over the same trailing 30-day release-date window. Only the
-// artist's OWN tracks ride it, never a widening to similar artists. The two
-// tiers + the release-framing live in ../lib/fresh-feed-rss. An unknown slug 404s; the feed is
-// anonymous + public (the never-gates law).
-//
-// The unknown-slug 404 is a bare `Response`, not `notFound()` — inside a server handler that router
-// throw serializes to a 200 (the sitemap/docs/embed handlers all take this shape for the reason).
-
 export const Route = createFileRoute("/artist/$slug/fresh.xml")({
   server: {
     handlers: {

@@ -4,18 +4,12 @@
   "compatibility_date": "2026-06-03",
   "compatibility_flags": ["nodejs_compat"],
   "main": "./src/server.ts",
-  // /llms.txt exists as a static file in public/ (the single source of truth), but Cloudflare's
-  // asset handler serves statics BEFORE the Worker, so the agent-discovery interceptor only runs
-  // when the path is listed here. This sends the one path through the Worker first; the static
-  // file stays as the fallback.
-  "assets": { "run_worker_first": ["/llms.txt"] },
-  // Placement Hints: the Worker runs in the data center nearest the Turso primary's cloud region
-  // (`turso db show fluncle` → Locations), because a request issues its database statements in
-  // sequence and each one pays the Worker↔primary round trip. This value names the primary's
-  // region; when the primary moves, it moves with it in the same change. Static assets are still
-  // served from the data center nearest the viewer; the Worker's Cache API store lives where the
-  // Worker runs (docs/database-performance.md § Worker placement).
-  "placement": { "region": "aws:eu-west-1" },
+  "assets": {
+    "run_worker_first": ["/llms.txt"]
+  },
+  "placement": {
+    "region": "aws:eu-west-1"
+  },
   "observability": {
     "enabled": true,
     "head_sampling_rate": 1,
@@ -23,72 +17,33 @@
       "enabled": true,
       "head_sampling_rate": 1,
       "persist": true,
-      "invocation_logs": true,
+      "invocation_logs": true
     },
     "traces": {
       "enabled": false,
       "persist": true,
-      "head_sampling_rate": 1,
-    },
+      "head_sampling_rate": 1
+    }
   },
   "vars": {
     "VITE_FLUNCLE_SPOTIFY_PLAYLIST_URL": "https://open.spotify.com/playlist/1m5LADqpLjiBERdtqrIiL0?si=054d3c6cbcf14a36",
     "VITE_FLUNCLE_TELEGRAM_URL": "https://t.me/fluncle",
-    // Non-secret Cloudflare account id: the S3 endpoint for presigned R2 uploads
-    // is https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com. The matching API
-    // token (R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY, Object Read & Write on
-    // fluncle-videos) is set as a secret, never checked in.
     "R2_ACCOUNT_ID": "0651fd3b33d9e0b2fe72a5f13e5cf65d",
-    // Non-secret fluncle.com Cloudflare zone id: the edge cache-purge calls POST to
-    // .../zones/${CF_CACHE_PURGE_ZONE_ID}/purge_cache to evict stale Media-Transformation
-    // renditions on a video re-render (lib/server/video-cache.ts) and the log page cache
-    // (lib/server/edge-cache.ts). The matching CF_CACHE_PURGE_TOKEN (a Cache-Purge-scoped
-    // API token) is a secret set with `wrangler secret put` — prod-only, so local dev,
-    // which carries no token, safely no-ops the purge.
     "CF_CACHE_PURGE_ZONE_ID": "93b403e3d6ed70d10cdd2890c557376f",
-    // Cartesia (Sonic) — the observation voice. CARTESIA_VOICE_ID is the cloned
-    // Fluncle voice (instant-clone of the bespoke read), a swappable config var. The
-    // matching CARTESIA_API_KEY is a secret set with `wrangler secret put`; Cartesia is the
-    // only voice provider and no provider switch is supported.)
     "CARTESIA_VOICE_ID": "ca8c023f-1901-40f7-be8c-faafd7a58139",
-    // The search-filter model (tier 4, lib/server/search-llm.ts), non-secret config.
-    // The effort pin is LOAD-BEARING for a reasoning model — higher efforts parse
-    // this task worse (scripts/bench-search-filter.ts grades any model × effort) —
-    // so the pair travels together: set both or delete both. Deleting both falls
-    // back to the code default, a non-reasoning model with no reasoning field.
     "OPENROUTER_SEARCH_MODEL": "openai/gpt-5.6-luna",
     "OPENROUTER_REASONING_EFFORT": "low",
-    // The context-distil model (lib/server/observation.ts distilContextNote), non-secret
-    // config. Benched on the frozen corpus (scripts/bench-context-distil.ts, k=3 at prod
-    // temperature): luna-medium beats the haiku code default on hallucination tripwires
-    // and worn-texture avoidance at ~8× less per note; haiku keeps a recall edge, ruled
-    // the lesser failure for internal fuel feeding voice surfaces. The pair travels
-    // together: set both or delete both — deleting both falls back to the code default,
-    // a non-reasoning model with no reasoning field.
     "OPENROUTER_CONTEXT_MODEL": "openai/gpt-5.6-luna",
-    "OPENROUTER_CONTEXT_EFFORT": "medium",
+    "OPENROUTER_CONTEXT_EFFORT": "medium"
   },
-  // Media Transformations (playback renditions): the web playback surfaces request
-  // same-zone /cdn-cgi/media renditions of each master (lib/media.ts). These require
-  // Transformations ENABLED on the zone (a one-time dashboard/API zone setting, no
-  // wrangler/binding switch); until it is on, the code's one-shot onError fallback
-  // plays the raw master. The operator enablement step is in the ops runbook note.
-
-  // R2 buckets. VIDEOS (fluncle-videos) holds per-track videos + public analysis
-  // artifacts, served world-readable from found.fluncle.com; the Worker owns the
-  // bucket (the agent uploads via the admin endpoint and never holds R2 creds).
-  // SOURCE_AUDIO (fluncle-source-audio) holds each finding's PRIVATE analysis audio
-  // (no public domain, no r2.dev): the captured FULL SONG at `<logId>/<sha256>.<ext>`,
-  // and — since REF-05 — the archived 30s PREVIEW beside it at `<logId>/preview.<ext>`
-  // (moved off the world-served VIDEOS bucket, which was a copyright exposure). The
-  // Worker reads it through TWO admin routes — the operator-tier `get_source_audio`
-  // (the M5 live-visuals bridge streams the full song) and the agent-tier
-  // `preview-audio` (the render box reads the archived preview) — and WRITES it (the
-  // preview archive writer + the operator-tier `migrate_preview_archive` op). The box
-  // capture/enrich/embed sweeps additionally read+write it via a direct-S3 credential.
-  // The bucket already exists (Unit 1 capture writes to it), so binding it is deploy-safe.
   "r2_buckets": [
-    { "binding": "VIDEOS", "bucket_name": "fluncle-videos" },
-    { "binding": "SOURCE_AUDIO", "bucket_name": "fluncle-source-audio" },
-  ],
+    {
+      "binding": "VIDEOS",
+      "bucket_name": "fluncle-videos"
+    },
+    {
+      "binding": "SOURCE_AUDIO",
+      "bucket_name": "fluncle-source-audio"
+    }
+  ]
 }

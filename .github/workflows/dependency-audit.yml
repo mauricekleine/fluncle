@@ -1,36 +1,12 @@
 name: Dependency Audit
 
-# Dependabot does not parse bun.lock, so its alert queue misses advisories that
-# Bun can see. This workflow closes that blind spot.
-#
-# This check is BLOCKING: a non-allowlisted advisory at or above `high` fails it.
-# Advisory drift can therefore redden a branch with no code change behind it —
-# that is the point, and the fix is a parent bump or a newly justified allowlist
-# entry, never a quiet threshold change. The `--ignore` allowlist lives in the
-# root `audit` script (package.json) so local runs and CI report the same set;
-# every entry's justification and the severity policy live in the
-# fluncle-maintenance skill (packages/skills/fluncle-maintenance, "Dependency
-# vulnerability posture"). Marking this check REQUIRED is a separate branch
-# protection setting, not a change to this file.
-#
-# `bun audit` reads bun.lock directly, so this job does not need an install step.
-#
-# The two steps below are deliberately two invocations, and they are not
-# interchangeable. `bun audit --json` silently ignores BOTH --audit-level and
-# --ignore: it dumps every advisory at every severity, allowlisted ones included,
-# and exits non-zero whenever it finds any. Its exit status therefore says
-# nothing about policy and must never be the gate. So the report step runs JSON
-# for its severity table, and the gate step runs the plain `audit` script that
-# actually carries the policy. Reporting goes first so a red gate always arrives
-# with its table already attached.
-
 on:
   pull_request:
     types: [opened, reopened, synchronize, ready_for_review, converted_to_draft]
   push:
     branches: [main]
   schedule:
-    - cron: "17 3 * * 1" # Monday ~04:17 CET / 05:17 CEST
+    - cron: "17 3 * * 1"
 
 permissions:
   contents: read
@@ -51,19 +27,16 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Setup Bun
+      - name: Setup Bun from packageManager
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version-file: package.json # single source: packageManager — pin-drift bumps that, every workflow follows
+          bun-version-file: package.json
 
-      - name: Report audit findings
+      - name: Report all advisories without gating
         env:
           AUDIT_ERROR: ${{ runner.temp }}/bun-audit.stderr
           AUDIT_OUTPUT: ${{ runner.temp }}/bun-audit.json
         run: |
-          # Reporting only — this step never gates, so its status is captured rather
-          # than raised. `bun audit --json` exits non-zero on any finding at any
-          # severity and honours neither the threshold nor the allowlist.
           json_status=0
           bun audit --json > "$AUDIT_OUTPUT" 2> "$AUDIT_ERROR" || json_status=$?
 
@@ -101,7 +74,5 @@ jobs:
             } >> "$GITHUB_STEP_SUMMARY"
           fi
 
-      # The gate. Its exit code is this check. Never add `--json` here — see the
-      # header comment: JSON mode discards the threshold and the allowlist.
-      - name: Audit dependencies
+      - name: Gate non-allowlisted high advisories
         run: bun run audit

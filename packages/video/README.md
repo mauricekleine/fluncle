@@ -42,6 +42,8 @@ Two hard rules guard the output:
 - **The journey clock** — `useJourney(options?)` (`journey/use-journey.ts`). The shared narrative timeline: returns `{ progress, phase, phaseProgress, arc }`, where `phase` is `"depart" | "travel" | "arrive"` and `arc` is the eased 0..1 a scene travels along. Pure and frame-derived.
 - **`@remotion/three` — escape hatch, not wired in.** `@remotion/three`, `@react-three/fiber`, and `three` are installed and available if a concept genuinely needs a full 3D / React-Three-Fiber scene, but **nothing in the core uses or enforces them** — the default surface is the raw-WebGL `ShaderLayer` above (leaner, deterministic, headless via ANGLE). Reach for R3F only when even `sdf3d`+`raymarch` inside `ShaderLayer` can't express the idea; you own the determinism + grain if you do.
 
+`noUncheckedIndexedAccess` stays off for the DSP and shader hot paths, where typed-array indexing is pervasive. A bad sample can degrade a render frame but cannot corrupt persisted data, so per-sample guards add noise without protecting durable state.
+
 ### The fixed layer + scene-led palette (rules that live in code)
 
 There is **no imposed look** here — no `Grain` overlay, no `Starfield`. Texture/grain (the Light-Years degradation) and any background (a star drift, motes) are the agent's own, baked into its shader via `GLSL.filmGrain`. What the code DOES enforce is the fixed information layer + the warm-dark/legibility/scene-led-palette guarantees:

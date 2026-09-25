@@ -1,74 +1,22 @@
 #!/usr/bin/env bash
-# note-sweep.sh — the `--no-agent` auto-note cron's job ENTRY.
-#
-# LIVE. Version-controlled source; the repo is canonical and the box is a
-# deploy target (fluncle-hermes-operator skill). This pair is BAKED into the image at
-# /opt/hermes-scripts/ and auto-updates from main via pin-watch; a rave-02 HOST systemd
-# timer docker-execs it — no docker cp. See ../cron/README.md.
-#
-# Why a .sh that execs a .ts: the host timer runs the sweep as `bash <sweep>.sh`,
-# so this thin wrapper is the bash entry; all the JSON work lives in the bun
-# orchestrator beside it. Its stdout is the cron's run output.
-#
-# THE HYBRID MODEL (same shape as observe-sweep): this is NOT a pure trigger like
-# enrich/context/backfill — it has ONE agentic step in the middle. The queue read,
-# the per-finding metadata + context-note gather, and the note delivery are all
-# DETERMINISTIC (the `fluncle` CLI). Only the creative authoring — turning a
-# finding's facts into a one-line editorial note in Fluncle's voice — runs `claude -p`
-# (Claude Code, SUBSCRIPTION auth via CLAUDE_CODE_OAUTH_TOKEN, NOT OpenRouter) with
-# READ-ONLY tools. The SCRIPT posts the authored note to the note endpoint; the Worker
-# re-scans (the voice gate) + FILLS AN EMPTY NOTE ONLY (an operator note is never
-# clobbered) + stores. This is the written-note sibling of the observation cron.
-#
-# PRODUCTION PRE-REQS (see ../cron/README.md):
-#   - `claude` (Claude Code CLI) — BAKED into the image; authed via subscription
-#     CLAUDE_CODE_OAUTH_TOKEN (zero OpenRouter tokens). The container env carries no provider
-#     secrets, so the token is read from a 0600 operator-placed file
-#     at ${HOME}/.fluncle-secrets.env (mounted ~/.hermes), sourced below.
-#   - the `copywriting-fluncle` skill — BAKED into the image at /opt/claude/skills/
-#     (discovered via CLAUDE_CONFIG_DIR=/opt/claude, readable by the non-root cron user).
-#   - optional DISCORD_ALERT_WEBHOOK for the claude-auth-failed ping (in the same file).
-#
-# Scheduled by a repo-checked-in HOST systemd timer (../note-timer/, installed by
-# ../install-host-timers.sh), which `docker exec`s it in the container. `note_track` is AGENT
-# tier, so the box's existing agent-scoped token drives it — no operator token needed.
-# Per-run output is a freshness marker the sweep self-writes via cron-output.sh under
-# ~/.hermes/cron/output/fluncle-note/ (read by the /status prober). See ../cron/README.md.
+
 set -euo pipefail
 
-# A caller may exec this with a minimal PATH that
-# omits /usr/local/bin (the bun + fluncle symlinks) and /root/.bun/bin, so a bare
-# `bun`/`fluncle` is "not found" → exit 127 (a
-# `docker exec` inherits the image's full PATH, so the prepend is a guard).
-# Prepend the known install dirs so this wrapper's `bun` AND the orchestrator's
-# `fluncle`/`bun`/`claude` spawns resolve regardless of the caller's PATH.
 export PATH="/usr/local/bin:/root/.bun/bin:${PATH:-/usr/bin:/bin}"
 
-# Belt-and-suspenders: an exec context can lose the PATH export above,
-# so pin ABSOLUTE paths for the interpreter + the CLI. The orchestrator reads
-# BUN_BIN/FLUNCLE_BIN, so its `bun`/`fluncle` spawns resolve with zero PATH
-# dependence; the wrapper itself execs bun by absolute path too.
 export BUN_BIN="${BUN_BIN:-/usr/local/bin/bun}"
 export FLUNCLE_BIN="${FLUNCLE_BIN:-/usr/local/bin/fluncle}"
 
-# The sweep's credentials (CLAUDE_CODE_OAUTH_TOKEN for `claude -p`, and the rest) live in a
-# file the operator places — sourced here: the shared 0600 ${HOME}/.fluncle-secrets.env (mounted
-# ~/.hermes) holding CLAUDE_CODE_OAUTH_TOKEN (required) + optionally DISCORD_ALERT_WEBHOOK /
-# NOTE_CLAUDE_MODEL. fluncle-secrets-sync writes it from 1Password.
 NOTE_ENV_FILE="${NOTE_ENV_FILE:-${HOME:-/opt/data/home}/.fluncle-secrets.env}"
 if [ -r "${NOTE_ENV_FILE}" ]; then
-  set -a
-  # shellcheck source=/dev/null
-  . "${NOTE_ENV_FILE}"
-  set +a
+	set -a
+	# shellcheck source=/dev/null
+	. "${NOTE_ENV_FILE}"
+	set +a
 fi
 
-# Resolve the orchestrator next to this wrapper so it runs regardless of CWD.
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
-# Host timers write no per-run output file, so self-report the
-# /status freshness marker the fluncle-healthcheck prober reads (see cron-output.sh) —
-# WRAP the payload (never `exec`) so the marker is written even on a nonzero run.
 # shellcheck source=./cron-output.sh
 . "${SCRIPT_DIR}/cron-output.sh"
 emit_cron_output note -- "${BUN_BIN}" "${SCRIPT_DIR}/note-sweep.ts" "$@"

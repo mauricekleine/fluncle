@@ -45,7 +45,6 @@ const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
 const MARKER_RUN_GRACE_MS = 5 * MINUTE;
 
-// The audit measured 72 zero-write crawl ticks, 99/100 anchor deferrals, 39–42 captures/hour, and 18–25 embeds/hour; these shorter zero-yield windows are the initial tripwire.
 export const PIPELINE_SLOS = {
   analyze: { windowMs: 45 * MINUTE },
   anchor: { minOutput: 20, ticks: 2, windowMs: 2 * HOUR },
@@ -54,8 +53,6 @@ export const PIPELINE_SLOS = {
   embed: { capacityWindowMs: 24 * HOUR, windowMs: 30 * MINUTE },
 } as const;
 
-// Below this many bytes left, the rolling capture budget cannot land another mean-size file
-// (~4.75 MiB measured), so capture is budget-bound even while the budget still reads open.
 export const BUDGET_EXHAUSTED_BYTES = 16 * 1024 * 1024;
 
 const CADENCE: Record<Stage, number> = {
@@ -144,10 +141,6 @@ const isLaneClosed = (summary: Record<string, unknown>): boolean =>
   summary.gateState === "paused" ||
   summary.gateState === "admission-skipped";
 
-// The label gate outranks every other cause: a window whose finds were all refused stores nothing
-// even once the lane reopens. Then a sweep's own named blocker, then repair debt and lane pauses,
-// and only then the vendor heuristics. Repair and yield summaries also carry `throttled: true`, so
-// those ticks are excluded before the vendor check reads it.
 function attributedCause(markers: Marker[]): string {
   const summaries = markers.map((marker) => marker.summary);
   const found = summaries.reduce((sum, summary) => sum + Number(summary.tracksFound ?? 0), 0);

@@ -1,14 +1,11 @@
 import { lstat, readFile } from "node:fs/promises";
 
 const REPOSITORY = Bun.fileURLToPath(new URL("../", import.meta.url));
-const CONFIGS = [
-  { path: "", required: true },
-  { path: "apps/web/", required: false },
-] as const;
+const CONFIGS = [{ path: "" }, { path: "apps/web/" }] as const;
 
 type Override = { files?: string[]; rules?: Record<string, string> };
 
-async function enabledPatterns(prefix: string, required: boolean): Promise<string[]> {
+async function enabledPatterns(prefix: string): Promise<string[]> {
   const config = Bun.JSONC.parse(
     await readFile(`${REPOSITORY}${prefix}.oxlintrc.json`, "utf8"),
   ) as {
@@ -17,21 +14,18 @@ async function enabledPatterns(prefix: string, required: boolean): Promise<strin
   const overrides = (config.overrides ?? []).filter(
     (entry) => entry.rules?.["no-comments/no-comments"] === "error",
   );
-  if (overrides.length === 0 && !required) {
-    return [];
+  if (
+    overrides.length !== 1 ||
+    overrides[0]?.files?.length !== 1 ||
+    overrides[0].files[0] !== "**"
+  ) {
+    throw new Error(`Expected global no-comments enforcement in ${prefix}.oxlintrc.json`);
   }
-  if (overrides.length !== 1 || !Array.isArray(overrides[0]?.files)) {
-    throw new Error(
-      `Expected one enabled no-comments override with a files list in ${prefix}.oxlintrc.json`,
-    );
-  }
-  return overrides[0].files.map((pattern) => `${prefix}${pattern}`);
+  return [`${prefix}**`];
 }
 
 export async function noCommentsScopePatterns(): Promise<readonly string[]> {
-  const lists = await Promise.all(
-    CONFIGS.map(({ path, required }) => enabledPatterns(path, required)),
-  );
+  const lists = await Promise.all(CONFIGS.map(({ path }) => enabledPatterns(path)));
   return lists.flat();
 }
 

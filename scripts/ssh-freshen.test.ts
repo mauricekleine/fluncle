@@ -180,7 +180,7 @@ describe("SSH freshen public-source fallback", () => {
     const script = readFileSync(SCRIPT, "utf8");
     const success = script.indexOf("if service_healthy; then");
     const manifestWrite = script.indexOf('>"$SOURCE_MANIFEST_FILE"');
-    const rollback = script.indexOf("# ── 7. ROLLBACK");
+    const rollback = script.indexOf('if [ -f "$PREV_BIN" ]; then', success);
 
     expect(success).toBeGreaterThan(-1);
     expect(manifestWrite).toBeGreaterThan(success);
