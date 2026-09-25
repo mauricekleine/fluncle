@@ -101,7 +101,9 @@ describe("auth tokens never leave the Worker in a Sentry payload", () => {
     });
 
     expect(JSON.stringify(event)).not.toContain(MAGIC_TOKEN);
-    expect(event.request?.url).toBe("https://www.fluncle.com/api/auth/magic-link/verify?[Filtered]");
+    expect(event.request?.url).toBe(
+      "https://www.fluncle.com/api/auth/magic-link/verify?[Filtered]",
+    );
   });
 
   it("scrubs a string query_string too", () => {

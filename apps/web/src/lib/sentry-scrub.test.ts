@@ -28,7 +28,10 @@ describe("browser Sentry scrub", () => {
 const SECRET = "zzEncodedSecret4242";
 
 function percentEncodeAll(value: string): string {
-  return [...value].map((char) => `%${char.charCodeAt(0).toString(16).padStart(2, "0")}`).join("");
+  return value
+    .split("")
+    .map((char) => `%${char.charCodeAt(0).toString(16).padStart(2, "0")}`)
+    .join("");
 }
 
 function encodeTimes(value: string, times: number): string {
