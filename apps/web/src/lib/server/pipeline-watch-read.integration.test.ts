@@ -1,6 +1,10 @@
 import { type Client } from "@libsql/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import {
+  evaluatePipeline,
+  type PipelineSnapshot,
+} from "../../../../../docs/agents/hermes/scripts/pipeline-watch-evaluate";
 import { createIntegrationDb, seedCatalogueTrack, seedTrack } from "./integration-db";
 import { upsertDueWork, type DueWorkProjection } from "./due-work";
 import { TRACK_WORK_DUE_CUTOVER_ENABLED_KEY } from "./due-work-cutover";
@@ -97,11 +101,16 @@ describe("pipeline watchdog bounded reads", () => {
     await setSetting(TRACK_WORK_DUE_CUTOVER_ENABLED_KEY, "true");
     await dueWork("capture-findings", "finding-one");
     await dueWork("capture-findings", "finding-two");
+    await dueWork("capture-findings", "finding-three");
     await repair("source-repair", "finding-one");
 
-    expect((await readPipelineWatch()).capture).toEqual({ atLeast: true, count: 1 });
+    expect((await readPipelineWatch()).capture).toEqual({ atLeast: true, count: 2 });
     await db.execute(
       "delete from due_work where work_kind = 'capture-findings' and subject_id = 'finding-two'",
+    );
+    expect((await readPipelineWatch()).capture).toEqual({ atLeast: true, count: 1 });
+    await db.execute(
+      "delete from due_work where work_kind = 'capture-findings' and subject_id = 'finding-three'",
     );
     expect((await readPipelineWatch()).capture).toBeNull();
   });
@@ -119,10 +128,10 @@ describe("pipeline watchdog bounded reads", () => {
     await setCatalogueCapturePaused(false);
     expect((await readPipelineWatch()).capture).toEqual({ atLeast: false, count: 2 });
     await repair("capture-catalogue", "catalogue-one");
-    expect((await readPipelineWatch()).capture).toBeNull();
+    expect((await readPipelineWatch()).capture).toEqual({ atLeast: true, count: 1 });
   });
 
-  it("treats a saturated physical repair probe as unknown", async () => {
+  it("keeps unrelated repair saturation out of the capture count", async () => {
     await setSetting(TRACK_WORK_DUE_CUTOVER_ENABLED_KEY, "true");
     await dueWork("capture-findings", "finding-one");
     await db.execute(`with recursive ids(n) as (
@@ -133,7 +142,71 @@ describe("pipeline watchdog bounded reads", () => {
       select 'analyze-catalogue', 'track', 'other:' || n, 'repair', '', '${NOW}',
         'test', 'test', '${NOW}' from ids`);
 
-    expect((await readPipelineWatch()).capture).toBeNull();
+    expect((await readPipelineWatch()).capture).toEqual({ atLeast: false, count: 1 });
+  });
+
+  it("labels the ready count as a lower bound when capture repairs saturate the probe", async () => {
+    await setSetting(TRACK_WORK_DUE_CUTOVER_ENABLED_KEY, "true");
+    await dueWork("capture-findings", "finding-one");
+    await db.execute(`with recursive ids(n) as (
+      select 1 union all select n + 1 from ids where n < 1000
+    ) insert into due_work
+      (work_kind, subject_type, subject_id, state, sort_key, next_due_at,
+       generation, source_version, updated_at)
+      select 'capture-findings', 'track', 'repair:' || n, 'repair', '', '${NOW}',
+        'test', 'test', '${NOW}' from ids`);
+
+    expect((await readPipelineWatch()).capture).toEqual({ atLeast: true, count: 1 });
+  });
+
+  it("replays capture repair debt as a stalled watchdog verdict", async () => {
+    await setSetting(TRACK_WORK_DUE_CUTOVER_ENABLED_KEY, "true");
+    await dueWork("capture-findings", "finding-one");
+    await dueWork("capture-findings", "finding-two");
+    await dueWork("capture-findings", "finding-three");
+    await repair("capture-findings", "repair-one");
+    await repair("source-repair", "finding-one");
+
+    const read = await readPipelineWatch();
+    const now = new Date("2026-09-25T02:00:00.000Z");
+    const marker = (at: string) => ({
+      at: Date.parse(at),
+      summary: { produced: 0, reason: "due_work_repair_pending" },
+    });
+    const snapshot: PipelineSnapshot = {
+      anchorQueue: read.anchors,
+      budget: {
+        closedReason: null,
+        open: true,
+        remainingBytes: 1_000_000_000,
+        remainingTracks: 800,
+      },
+      crawl: {
+        frontier: read.frontier,
+        storable: read.storable,
+        unstorable: read.unstorable,
+      },
+      crawlZeroChecks: 0,
+      embedOldCapture: false,
+      markers: {
+        analyze: null,
+        anchor: null,
+        capture: [marker("2026-09-25T01:05:00.000Z"), marker("2026-09-25T01:59:00.000Z")],
+        crawl: null,
+        embed: null,
+        "funnel-snapshot": null,
+        "isrc-recovery": null,
+      },
+      queues: { analyze: null, capture: read.capture, embed: null },
+    };
+    const verdict = evaluatePipeline(snapshot, now).find(({ stage }) => stage === "capture");
+
+    expect(read.capture).toEqual({ atLeast: true, count: 2 });
+    expect(verdict).toMatchObject({
+      backlog: { atLeast: true, count: 2 },
+      cause: "due_work_repair_pending",
+      state: "stalled",
+    });
   });
 
   it("caps frontier growth and reports the bound as a lower bound", async () => {

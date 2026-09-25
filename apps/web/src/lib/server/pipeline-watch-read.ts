@@ -44,22 +44,15 @@ export async function readPipelineWatch(): Promise<PipelineWatchRead> {
       ? ["capture-findings", "capture-catalogue"]
       : ["capture-findings"];
     const placeholders = kinds.map(() => "?").join(", ");
-    const repair = await db.execute({
-      args: [...kinds, PHYSICAL_REPAIR_PROBE_LIMIT],
-      sql: `select count(*) as scanned,
-          coalesce(sum(work_kind in (${placeholders})), 0) as capture_repairs
-        from (
-          select work_kind from due_work indexed by due_work_repair_idx
-          where state = 'repair' and subject_type = 'track'
-          limit ?)`,
-    });
-    const repairRow = typedRows<{ capture_repairs: number; scanned: number }>(repair.rows)[0];
-    if (
-      Number(repairRow?.scanned ?? 0) >= PHYSICAL_REPAIR_PROBE_LIMIT ||
-      Number(repairRow?.capture_repairs ?? 0) > 0
-    ) {
-      return null;
-    }
+    const captureRepairs = await bounded(
+      `select count(*) as n from (
+        select 1 from due_work indexed by due_work_repair_idx
+        where state = 'repair' and subject_type = 'track'
+          and work_kind in (${placeholders})
+        limit ?)`,
+      PHYSICAL_REPAIR_PROBE_LIMIT,
+      kinds,
+    );
     const raw = await bounded(
       `select count(*) as n from (
         select 1 from due_work where work_kind in (${placeholders}) and state = 'ready'
@@ -76,14 +69,12 @@ export async function readPipelineWatch(): Promise<PipelineWatchRead> {
         limit ?)`,
       PIPELINE_WATCH_LIMITS.capture,
     );
-    if (sourceRepairs.atLeast) {
-      return null;
-    }
     const count = Math.max(0, raw.count - sourceRepairs.count);
-    if (count === 0 && sourceRepairs.count > 0) {
+    const repairPending = captureRepairs.count > 0 || sourceRepairs.count > 0;
+    if (count === 0 && repairPending) {
       return null;
     }
-    return { atLeast: raw.atLeast || sourceRepairs.count > 0, count };
+    return { atLeast: raw.atLeast || repairPending, count };
   };
 
   const [frontier, anchors, storable, unstorable, captureCount] = await Promise.all([

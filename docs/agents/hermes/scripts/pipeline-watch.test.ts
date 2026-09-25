@@ -704,12 +704,26 @@ describe("bounded pipeline read", () => {
     expect(belowThreshold.message).toContain("999 queued");
   });
 
-  test("repair debt and malformed reads stay unavailable instead of becoming empty work", () => {
-    const parsed = parsePipelineWatchRead({ ...fixtures.pipelineRead, capture: null });
-    expect(parsed.capture).toBeNull();
+  test("repair debt stays stalled while malformed reads stay unavailable", () => {
+    const repaired = parsePipelineWatchRead({
+      ...fixtures.pipelineRead,
+      capture: { atLeast: true, count: 2 },
+    });
+    const markers = asMarkers(fixtures.captureBudget).map((marker) => ({
+      ...marker,
+      summary: { ...marker.summary, reason: "due_work_repair_pending" },
+    }));
+    const verdict = evaluate("capture", markers, {
+      queues: { analyze: 5, capture: repaired.capture, embed: 5 },
+    });
+    expect(repaired.capture).toEqual({ atLeast: true, count: 2 });
+    expect(verdict.state).toBe("stalled");
+    expect(verdict.cause).toBe("due_work_repair_pending");
+
+    const unavailable = parsePipelineWatchRead({ ...fixtures.pipelineRead, capture: null });
     expect(
-      evaluate("capture", asMarkers(fixtures.captureBudget), {
-        queues: { analyze: 5, capture: parsed.capture, embed: 5 },
+      evaluate("capture", markers, {
+        queues: { analyze: 5, capture: unavailable.capture, embed: 5 },
       }).state,
     ).toBe("measurement_unavailable");
     expect(
