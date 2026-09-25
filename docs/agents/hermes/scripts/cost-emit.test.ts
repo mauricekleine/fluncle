@@ -1,14 +1,3 @@
-// Unit tests for the box's cost-ledger emitter (COST-01 Path B). The box script is
-// self-contained (it can't import the workspace), so this file uses `bun:test` and
-// is run directly:
-//
-//   bun test docs/agents/hermes/scripts/cost-emit.test.ts
-//
-// Two things it pins: (1) the idempotency `id` scheme is a VERBATIM mirror of the
-// server's `costEventId` (apps/web/src/lib/server/costs.ts) — if the server scheme
-// drifts, this test's literal expectations fail loudly; (2) the best-effort
-// guarantee — `emitCost` never throws and returns a `{ posted: false, reason }` on
-// every failure path, so a ledger hiccup can't break the sweep's real work.
 import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -36,8 +25,6 @@ const anthropicRow: BoxCostEvent = {
 
 type RecordedCall = { auth: string; body: string; method: string; url: string };
 
-// A fetch stub that records the single call as flat strings (so the assertions
-// never optional-chain into an untyped RequestInit) and returns a canned response.
 function stubFetch(response: { json?: () => Promise<unknown>; ok: boolean; status?: number }): {
   calls: RecordedCall[];
   fetchImpl: typeof fetch;
@@ -139,7 +126,7 @@ describe("selfSecondsCost (the box-compute row shape)", () => {
     expect(row.quantity).toBe(0);
     expect(row.logId).toBeNull();
     expect(row.trackId).toBeNull();
-    // A scopeless self row falls back to the `global` id scope.
+
     expect(costEventId(row)).toBe("video:global:self:seconds:2026-07-08T12:00:00.000Z");
   });
 });

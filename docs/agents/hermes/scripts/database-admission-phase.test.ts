@@ -149,8 +149,7 @@ esac`,
     expect(marker).toContain('"admissionOutcome":"phase-yielded"');
     expect(marker).toContain('"gateState":"paused"');
     expect(marker).toContain('"produced":0');
-    // One yielded tick on the backpressure axis, never a strain point — and the marker now
-    // names the yield so a run of these can be read as a cause rather than a mood.
+
     expect(markerSignals(marker)).toEqual({
       backpressure: 1,
       backpressureReason: "database_admission",
@@ -254,14 +253,6 @@ exit 0`,
   });
 });
 
-// ---------------------------------------------------------------------------
-// WHICH WALL THE TICK HIT.
-//
-// A phase-scoped yield exits before the runner can write a summary, so `database_admission` has
-// been the whole story: an operator reading a paused row cannot tell a long queue from a sick
-// database. The runner already states its reason on stderr; this is the side that reads it.
-// ---------------------------------------------------------------------------
-
 describe("the admission yield reason", () => {
   const event = (reason: string) =>
     `{"event":"database.admission.runner","outcome":"wait-expired","yield_reason":"${reason}"}`;
@@ -273,12 +264,10 @@ describe("the admission yield reason", () => {
   });
 
   test("a word outside the runner's own vocabulary reads as unknown, never as a neighbour", () => {
-    // Fail closed: "we could not tell" has to stay distinguishable from "the queue was long",
-    // which is the whole reason this field is worth having.
     expect(parseAdmissionYieldReason(event("something-new"))).toBe(null);
     expect(parseAdmissionYieldReason(event(""))).toBe(null);
     expect(parseAdmissionYieldReason("")).toBe(null);
-    // A line that is not a runner event cannot supply one either.
+
     expect(parseAdmissionYieldReason('{"yield_reason":"public-latency"}')).toBe(null);
   });
 

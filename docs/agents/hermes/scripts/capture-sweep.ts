@@ -1,127 +1,4 @@
 #!/usr/bin/env bun
-// capture-sweep.ts — the bun orchestrator behind the full-song CAPTURE sweep
-// (`fluncle-capture`), scheduled by its own rave-02 HOST systemd timer (../capture-timer/),
-// because a proxied yt-dlp fetch has an unbounded tail that must never delay the 5-min sweeps. For each track still needing a capture — a certified FINDING or, once
-// the operator opens the budget, an uncertified CATALOGUE row — it downloads the full song
-// ONCE (yt-dlp → a duration-gated public-stream match, through a residential proxy on a per-track STICKY
-// session), duration-guards the match against the track's Spotify length, stores the
-// bytes in the PRIVATE `fluncle-source-audio` R2 bucket (a finding under `<logId>/…`, a
-// catalogue row under `catalogue/<trackId>/…`), and reconciles the result through the
-// agent-tier capture receipt seam. It is a NON-BLOCKING parallel side-channel: it never gates
-// the enrich/embed queues (docs/track-lifecycle.md).
-//
-// LIVE-INTENT. Version-controlled source; the repo is canonical and the box is a deploy
-// target (fluncle-hermes-operator skill). Invoked by the bash wrapper (capture-sweep.sh)
-// the host timer `docker exec`s on a schedule — see that file's header for the wire-up and
-// ../capture-timer/README.md for the operator runbook.
-//
-// ── THIS SWEEP HAS NO BUDGET OF ITS OWN, AND THAT IS DELIBERATE ──────────────────────
-// Capture is the one thing Fluncle does that bills per unit of work, so it has a BUDGET and a
-// KILL SWITCH — and both live on the SERVER, in the queue, not here (the capture budget:
-// apps/web/src/lib/server/capture-budget.ts, enforced in track-work.ts's `listTrackWork`).
-//
-// A brake in this file would be the wrong brake. This script is BAKED onto the box, so
-// changing it is a re-bake rather than a flip; and it is only one client of the queue — the
-// CLI is another, and the next sweep nobody has written yet is a third. Putting the brake at
-// the queue means every client obeys it, and the operator stops the spend with one settings
-// flip and no deploy. So this sweep's only budget duty is to be an HONEST METER: it stamps
-// `sourceAudioAttemptedAt` on EVERY terminal outcome (done | unmatched | failed — each one was
-// a billed proxy request) and `sourceAudioBytes` on a success, which is the only place a
-// file's real size is ever knowable. The server does the deciding; this reports the spending.
-//
-// THE QUEUE IT READS: `list_track_work?kind=capture&scope=all` (docs/gpu-batch-embed.md), the
-// CATALOGUE-AWARE worklist — NOT the old findings-only `captureQueue=true` admin list, which
-// drove through the FINDING JOIN and so was structurally blind to a catalogue row. `kind=capture`
-// serves both halves in the order the metered budget should be spent: certified findings FIRST
-// (the archive can never be starved), then `capture_priority` DESC (the Ear's ladder —
-// logged-artist > label-with-a-finding > enabled-seed-label; an operator-DISABLED label is
-// tier −1 and excluded by SQL predicate, never bought). Same URL trick embed-sweep.ts uses: a
-// DIRECT HTTP read (pin-independent), with prepare/commit reads and writes isolated into short
-// database-admitted child phases around the long provider and object-storage work.
-//
-// THE BRAKE IS AT THE QUEUE, NOT HERE (apps/web/src/lib/server/{track-work,capture-budget}.ts).
-// `list_track_work` consults the catalogue capture budget BEFORE it selects the worklist, and
-// when that budget is shut — its DEFAULT-DENY state, the shipped default — it NARROWS the
-// capture scope to the findings, never to empty. So with the brake paused this sweep sees EXACTLY
-// the findings it saw on the old queue, in newest-first order, and behaves byte-for-byte as it
-// did; the catalogue half lights up only once the operator opens the budget deliberately (one
-// `settings` flip, no re-bake). This sweep never re-implements the brake; a brake in a baked box
-// script would be re-bakeable, bypassable, and one `curl` away from irrelevant.
-//
-// CERTIFICATION RAIL (docs/gpu-batch-embed.md). A catalogue row is a MEASUREMENT target: the
-// capture side-channel columns (captureStatus, sourceAudio*) are accepted on it, but a
-// certification field is not. So the capture→enrich re-derive (`enrichmentStatus = 'pending'`)
-// is written for CERTIFIED findings ONLY — `enrichment_status` lives on the certification, and
-// the server would 409 an uncertified write of one. When the brake is paused every row is a
-// finding, so this gate changes nothing about today's behaviour.
-//
-// SELF-CONTAINED by necessity: box scripts can't import the workspace. The S3 signer
-// MIRRORS apps/web/src/lib/server/aws-sigv4.ts (unit-tested there via aws-sigv4.test.ts)
-// exactly like backup-sweep.ts — keep them in step. The pure helpers below
-// (buildStickyProxyUrl / durationWithinTolerance / buildSourceAudioKey / pickCandidate /
-// needsReenrichAfterCapture / buildSearchQuery / isTopicChannel / classifyDownloadFailure /
-// chooseDownloadRecovery) are exported + unit-tested in capture-sweep.test.ts, as are the
-// bot-challenge meter's two logging seams (noteBotChallenge / logBotChallengeRecap), whose
-// tests score their REAL stderr with the REAL /status strain detector; `main()` is
-// guarded behind `import.meta.main` so importing this module for the tests is side-effect
-// free (it does not spawn yt-dlp or touch R2).
-//
-// THE CAPTURE MECHANISM (validated end-to-end on rave-02, 2026-07-07):
-//   - rave-02 is a datacenter IP → YouTube bot-walls it; a DataImpulse residential proxy
-//     resolves it (the exit IP reads as a real ISP).
-//   - The proxy session must be STICKY per track: `__sessid.<logId>` on the username pins
-//     one exit IP for the whole download, or googlevideo 403s the media-bytes fetch (the
-//     CDN IP-locks the URL to the player-JSON IP). A rotating session fails.
-//   - The match is a title/artist public-stream result, NOT Spotify's master, so a wrong-VERSION
-//     match (remix/live/sped-up/nightcore/radio-edit) is the real failure mode — the
-//     DURATION GUARD (accept only within tolerance of the finding's durationMs) + a
-//     de-rank of remix/live markers catch it → `unmatched` on a mismatch.
-//   - FINDING the upload (the `unmatched`-rate fix, 2026-07-13). The primary search is
-//     `<artists> <title>`, and the ranker PREFERS a YouTube auto-generated `<Artist> - Topic`
-//     art-track: the label-delivered master, duration-exact and ISRC-tagged by construction, and
-//     recognized by CHANNEL name (its title is the bare song, so the title-only official marker
-//     misses it). And when the primary search returns ZERO RAW candidates — the over-constrained
-//     multi-artist credit or the odd-punctuation title that found nothing — ONE de-constrained
-//     fallback search (primary artist + a version-stripped title) is spent before declaring
-//     `unmatched`. The fallback fires ONLY on zero raw results, never when candidates came back
-//     and missed the guard (the song genuinely isn't there at that length, and a reshaped query
-//     cannot conjure it): the cost ceiling is `FLUNCLE_CAPTURE_QUERY_VARIANTS` billed searches per
-//     finding, and there is no loop. Neither change relaxes the duration guard or the gate below.
-//   - And a wrong-SONG match (same artist/label, right length, different track — the 005.9.9L
-//     defect) slips both, so every download passes THE FINGERPRINT GATE before storing: the
-//     captured bytes Chromaprint-matched against the track's ISRC-resolved official preview
-//     (docs/the-ear.md § Wrong audio; the matcher is fingerprint-match.ts, shared with the
-//     verify-captures backfill). Match → stored + `capture_verification = 'preview-match'`;
-//     mismatch → rejected + remembered in `source_audio_rejected`, next candidate; no
-//     preview / no fpcalc → stored + `'unverified'` (the honest abstain, never a block).
-//   - On a BOT CHALLENGE ("Sign in to confirm you're not a bot" — an IP-reputation verdict
-//     on the proxy exit, which no client fallback clears), re-roll the sticky session ONCE
-//     per run (`<id>.r1`, a fresh residential exit) and retry; search and download share
-//     the one re-roll, and a run challenged on both exits leaves the rest to backoff.
-//   - On a YouTube 403 that survives the sticky session, retry the download once with
-//     `--extractor-args youtube:player_client=tv,web_safari` before marking `failed`. The
-//     challenge is tested FIRST and the 403 match is ANCHORED (`HTTP Error 403` /
-//     `status code 403`, never a bare `403`): a challenge stderr that also carries a 403 —
-//     the missing-PO-token shape — belongs to the re-roll, not to a client fallback that
-//     cannot clear an IP ruling.
-//   - EVERY challenge is metered and logged, not just the one that triggers the re-roll, and
-//     the tick's totals ride out in the JSON summary. See THE BOT-CHALLENGE METER below for
-//     that and for the strain contract these lines owe /status.
-//   - EVERY SEARCH IS FLAT (2026-08-01). `--flat-playlist` returns the search page's own entries
-//     rather than resolving all five, which carries the entire field set the ranker reads at one
-//     seventh of the bytes. See FLAT SEARCH EXTRACTION below for the one loss and why the duration
-//     guard absorbs it.
-//
-// TWO PROVENANCE BACKFILLS RIDE THIS TICK, and they answer the same question at very different
-// prices because the two halves of the archive are worth very different amounts of bandwidth:
-//   - THE FINDINGS TIER runs capture's full ladder over a certified row and throws the audio away
-//     (THE PROVENANCE PHASE below). Small set, already mostly done, and the right trade.
-//   - THE CATALOGUE TIER runs a THREE-RUNG CHEAP LADDER — metadata-Topic acceptance, then a 30s
-//     segment fingerprinted against the row's own archived master, then the residual search
-//     variants — and never buys a whole song (THE CATALOGUE PROVENANCE LADDER below). At 30,672
-//     rows the full ladder would be ~200GB of metered proxy; this is a fraction of it.
-//
-// stdout: one JSON summary line (the cron run output). Diagnostics → stderr.
 
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -150,8 +27,7 @@ import {
   failureBodyUnlessRepairPending,
   isDueWorkRepairPending,
 } from "./due-work-repair-pending";
-// THE FINGERPRINT VERIFICATION GATE (docs/the-ear.md § Wrong audio) — the shared, pure matcher
-// (also used by the historic backfill, verify-captures.ts) + the fpcalc/preview I/O helpers.
+
 import {
   appendRejectedSource,
   fetchPreviewFingerprint,
@@ -168,26 +44,19 @@ import {
   splitTitle,
 } from "./fingerprint-match";
 
-// ── Config (env; the shared ~/.fluncle-secrets.env supplies the secrets on the box) ──
-
 const API_BASE_URL = process.env.FLUNCLE_API_BASE_URL ?? "https://www.fluncle.com";
 const API_TOKEN = process.env.FLUNCLE_API_TOKEN ?? "";
 
-// The residential proxy (DataImpulse in v1; the cron is proxy-agnostic — a swap touches
-// only these creds + the session-string builder). Read from env, never hardcoded.
 const PROXY_HOST = process.env.FLUNCLE_YTDLP_PROXY_HOST ?? "";
 const PROXY_PORT = process.env.FLUNCLE_YTDLP_PROXY_PORT ?? "";
 const PROXY_USERNAME = process.env.FLUNCLE_YTDLP_PROXY_USERNAME ?? "";
 const PROXY_PASSWORD = process.env.FLUNCLE_YTDLP_PROXY_PASSWORD ?? "";
 
-// A dedicated, least-privilege R2 token: Object Read & Write on the PRIVATE
-// fluncle-source-audio bucket ONLY (never fluncle-videos, which is world-served).
 const R2_ACCOUNT_ID = process.env.R2_ACCOUNT_ID ?? "";
 const R2_ACCESS_KEY_ID = process.env.FLUNCLE_SOURCE_AUDIO_R2_ACCESS_KEY_ID ?? "";
 const R2_SECRET_ACCESS_KEY = process.env.FLUNCLE_SOURCE_AUDIO_R2_SECRET_ACCESS_KEY ?? "";
 const R2_BUCKET = process.env.FLUNCLE_SOURCE_AUDIO_R2_BUCKET ?? "fluncle-source-audio";
 
-// yt-dlp / ffprobe from PATH (both are a box deploy prereq — see cron/README.md).
 const YT_DLP_BIN = process.env.YT_DLP_BIN ?? "yt-dlp";
 const FFPROBE_BIN = process.env.FFPROBE_BIN ?? "ffprobe";
 const BUN_BIN = process.env.BUN_BIN ?? "bun";
@@ -195,47 +64,13 @@ const CAPTURE_PROGRESS_DIR =
   process.env.FLUNCLE_CAPTURE_PROGRESS_DIR ??
   join(process.env.HOME ?? tmpdir(), ".fluncle-capture-progress");
 
-// ── FLAT SEARCH EXTRACTION (measured 2026-08-01, n=40) ───────────────────────
-//
-// A search used to RESOLVE every result it listed — five full extractor round-trips to answer a
-// question the listing itself already answers. `--flat-playlist` returns the search page's own
-// entries instead: id, title, channel, channel_id, channel_is_verified, duration — the ENTIRE field
-// set `rankCandidates` reads, at 139KB against 968KB for the resolved shape. One seventh of the
-// bytes, on every capture and every provenance search there will ever be.
-//
-// THE ONE LOSS, and why the guard absorbs it: a flat entry's `duration` is the CEIL of the rendered
-// length (+1s on ~47% of ids measured). The duration guard is `max(3s, 3% of the target)` — three
-// whole seconds at its very tightest — so a one-second ceil cannot move a candidate across it. The
-// stricter METADATA_TOLERANCE_SEC below is ±3s for the same reason, and the belt-and-suspenders
-// `probeDurationSec` re-check after a download reads the REAL file, never a listed number: no ceiled
-// value ever reaches a stored column or a verdict.
-//
-// FULL RESOLUTION STILL HAPPENS for the ONE candidate that wins — `runYtDownload` fetches
-// `watch?v=<id>` per id, exactly as it always did. Flat extraction changes what a SEARCH costs, and
-// nothing about what a download does.
-//
-// The knob is the operator's revert without a re-bake: `FLUNCLE_CAPTURE_FLAT_SEARCH=0` restores the
-// historic resolving search byte-for-byte.
 const FLAT_SEARCH = (process.env.FLUNCLE_CAPTURE_FLAT_SEARCH ?? "1") !== "0";
 
-// How many queue rows to read, and how many to actually process per tick. The queue is
-// newest-first, so a fresh add is always in the first page and jumps the backfill.
 const QUEUE_LIMIT = Number(process.env.FLUNCLE_CAPTURE_QUEUE_LIMIT ?? "8");
 export const DEFAULT_CAPTURE_BATCH_CAP = 4;
 
-/**
- * The widest tick this sweep will run, whatever the unit says. It is a TYPO GUARD, not a licence:
- * the batch is drained in calls of the width the Worker advertises, so a cap above that width costs
- * extra prepare calls rather than breaking the budget — but an unvalidated value could still hand
- * the tick an unbounded or zero-width batch, and the metered spend is the thing being bounded.
- */
 export const MAX_CAPTURE_BATCH_CAP = 24;
 
-/**
- * `FLUNCLE_CAPTURE_BATCH_CAP` — rows one tick attempts. Absent or empty takes the default; anything
- * that is not an integer within 1..{@link MAX_CAPTURE_BATCH_CAP} is refused loudly and the default
- * stands, so a mistyped unit env can never widen the metered capture spend by accident.
- */
 export const resolveCaptureBatchCap = (raw: string | undefined): number => {
   const trimmed = raw?.trim() ?? "";
 
@@ -257,100 +92,38 @@ export const resolveCaptureBatchCap = (raw: string | undefined): number => {
 };
 
 const BATCH_CAP = resolveCaptureBatchCap(process.env.FLUNCLE_CAPTURE_BATCH_CAP);
-// Bounded parallel captures within one tick. Each capture is dominated by the proxy download
-// (~25-30s wall-clock, near-zero CPU), so 2-3 workers nearly multiply throughput; the SPEND
-// governor stays the rolling-24h budget meter, which the sweep consults per row either way —
-// concurrency raises the ceiling the meter can spend up to, never the spend itself.
+
 const CONCURRENCY = Math.max(
   1,
   Math.trunc(Number(process.env.FLUNCLE_CAPTURE_CONCURRENCY ?? "1")) || 1,
 );
 
-// Duration guard: accept a candidate whose length is within max(±3s, ±3%) of the
-// finding's Spotify duration. Duration catches the gross mismatches (edits/speed changes);
-// a same-length remaster is fine (Unit 4's shape-normalized log-mel tolerates it).
 const TOLERANCE_SEC = Number(process.env.FLUNCLE_CAPTURE_TOLERANCE_SEC ?? "3");
 const TOLERANCE_PCT = Number(process.env.FLUNCLE_CAPTURE_TOLERANCE_PCT ?? "0.03");
-// CHANNEL TRUST NO LONGER WAIVES THE DURATION GUARD (docs/the-ear.md § Wrong audio). It once
-// widened the guard asymmetrically for a trusted channel (a +60s pad for a label/artist upload's
-// intro sting + outro card) — and that pad is exactly the hole 005.9.9L fell through: an Elevate
-// Records channel video whose AUDIO was a different song ran 48s over the master, inside the pad,
-// and was stored as the finding's capture. So the trusted pad is GONE: every candidate takes the
-// same symmetric guard, and trust now only helps RANK equals (below). The real identity check is
-// the fingerprint gate — a candidate's captured bytes are verified against the ISRC-resolved
-// official preview, whatever channel it came from. Nothing skips that gate.
-// How many ranked candidates to attempt per finding before giving up: the top hit is
-// sometimes DRM-locked or bot-walled, and a different upload of the same track downloads
-// fine, so walk down the ranked list (fast-failing errors keep the cost low).
+
 const DOWNLOAD_ATTEMPTS = Number(process.env.FLUNCLE_CAPTURE_DOWNLOAD_ATTEMPTS ?? "3");
 
-// How many differently-shaped SEARCHES to spend on a finding before declaring `unmatched`.
-// Each later rung is billed only when every earlier one produced ZERO RANKED SURVIVORS after the
-// duration gate. This is the ONLY per-search cost knob: the ceiling is exactly this many billed
-// proxy searches per finding, and the walk never loops. Set to 1 to keep only the historic raw
-// YouTube search.
-// 4 = the full search ladder (raw ytsearch → music search → normalized fallback on music →
-// duration-gated SoundCloud search).
 export const DEFAULT_QUERY_VARIANTS = 4;
 const QUERY_VARIANTS = Number(
   process.env.FLUNCLE_CAPTURE_QUERY_VARIANTS ?? String(DEFAULT_QUERY_VARIANTS),
 );
 
-// ── THE PROVENANCE PHASE'S BUDGET (see THE PROVENANCE PHASE below) ───────────────────
-//
-// How many already-captured rows the backfill re-derives a YouTube id for, per tick. It rides
-// this sweep's tick rather than a timer of its own because the alternative — a new host timer —
-// is an operator fan-out (a unit, an install, a runbook) for work that is the same work, through
-// the same proxy, under the same brake; a phase self-deploys with the next rebake.
-//
-// DEFAULT 2, and the smallness is the point: each row is a FULL candidate download through the
-// residential proxy, so this is real bandwidth money spent on provenance for audio Fluncle already
-// owns. It is a backlog to grind down over weeks, never a batch to blast through — 2 a tick is
-// ~576 rows a day, which clears the findings in an afternoon and the catalogue at a pace the
-// operator can watch. The row is ATTEMPTED, not necessarily concluded: a row whose download fails
-// transiently spends its slot and is retried on a later tick, which is what keeps the cost ceiling
-// per tick honest and readable.
 const PROVENANCE_LIMIT = Number(process.env.FLUNCLE_CAPTURE_PROVENANCE_LIMIT ?? "2");
 
-// How many of those rows may be UNCERTIFIED catalogue rows. DEFAULT 0 — the backfill spends the
-// whole budget on the findings and does not touch the catalogue until the operator says so, which
-// is one env flip on the box and no code change. It is a SUB-cap, not an extra allowance: the
-// catalogue can only ever use budget the findings did not, so opening it can never raise the tick's
-// total spend above `PROVENANCE_LIMIT`. (The server's catalogue capture brake gates this queue too,
-// so a shut budget serves no catalogue row regardless of what is set here.)
 const PROVENANCE_CATALOGUE_LIMIT = Number(
   process.env.FLUNCLE_CAPTURE_PROVENANCE_CATALOGUE_LIMIT ?? "0",
 );
 
-// ── THE CATALOGUE TIER'S THREE KNOBS (see THE CATALOGUE PROVENANCE LADDER below) ─────
-//
-// `PROVENANCE_CATALOGUE_LIMIT` above remains THE knob and the whole brake: it is the number of
-// SEGMENT DOWNLOADS a tick may buy for the catalogue, and it is still 0 by default, so the ladder is
-// dark until the operator opens it. The three below only shape how that budget is spent.
-//
-// SEARCHES ARE NOT THE BUDGET. A flat search is ~139KB — a rounding error against a segment's ~1.5MB
-// and a full download's ~6.5MB — and rung 1 concludes on a search alone, so metering searches at the
-// download's rate would throw away the cheap tier's entire point. The walk therefore reads
-// `limit × FACTOR` rows and spends the strict `limit` on downloads: a tick can serve many rows for
-// free and still buy no more bandwidth than the operator authorised.
 const PROVENANCE_SEARCH_FACTOR = Number(
   process.env.FLUNCLE_CAPTURE_PROVENANCE_SEARCH_FACTOR ?? "5",
 );
-// How many non-Topic candidates one row may spend a segment on before the row gives up. Two: the
-// ranked list's top hits are the plausible ones, and a third is money spent on a shape the first two
-// already argued against.
+
 const PROVENANCE_SEGMENT_ATTEMPTS = Number(
   process.env.FLUNCLE_CAPTURE_PROVENANCE_SEGMENT_ATTEMPTS ?? "2",
 );
-// The section yt-dlp pulls for a segment fingerprint. 0:30–1:00 is inside the intro on essentially
-// every DnB arrangement and is long enough to clear `MIN_OVERLAP_FRAMES` by an order of magnitude.
-// yt-dlp cuts on keyframes, so the delivered clip is ~40s and ~1.5MB on the wire.
+
 const PROVENANCE_SEGMENT_RANGE = process.env.FLUNCLE_CAPTURE_SEGMENT_RANGE ?? "*00:30-01:00";
 
-// How many rows the RE-VERDICT phase re-rules per tick. Higher than the provenance budget because
-// it costs nothing comparable: no download, no proxy, no bytes — the server answers each one with a
-// single keyless oEmbed read. 5 a tick drains a widened rule through the whole 0/NULL set quickly
-// and then keeps cycling (the queue is a round-robin by design — track-work.ts).
 const REVERDICT_LIMIT = Number(process.env.FLUNCLE_CAPTURE_REVERDICT_LIMIT ?? "5");
 
 const YT_SEARCH_TIMEOUT_MS = 60_000;
@@ -358,70 +131,29 @@ const YT_DOWNLOAD_TIMEOUT_MS = 180_000;
 
 const log = (message: string) => console.error(`[capture-sweep] ${message}`);
 
-// ── Pure helpers (exported for capture-sweep.test.ts) ─────────────────────────
-
-/** A row as the capture worklist (`GET /api/v1/admin/tracks/work?kind=capture`) returns it. */
 export type CaptureFinding = {
-  // Which audio class BPM/key were last analyzed from ("full" the captured song | "preview"
-  // a 30s preview). Absent = a legacy row analyzed before the provenance column (treated as
-  // preview-grade). The capture worklist surfaces it (RFC bpm-key-accuracy); the re-enrich
-  // predicate reads it to close the capture→enrich race — a finding whose enrich tick fired
-  // BEFORE its capture landed was analyzed from the preview, and this re-queues it.
   analyzedFrom?: "preview" | "full";
-  /**
-   * The row carried a Spotify anchor when the prepare froze it. Read-only here: the sweep never
-   * writes it and never gates on it, it only PUBLISHES the split, so the operator can see the
-   * anchored-first drain order taking effect rather than take it on trust. Absent on a Worker that
-   * does not answer it, which reads as an honest gap in the split rather than a false zero.
-   */
+
   anchored?: boolean;
   artists?: string[];
-  // The artist's own YouTube channel id(s), from `artist_socials` (attached by the capture
-  // worklist server-side). When a candidate is on one of these it is the artist's OWN upload →
-  // the strongest trust signal. Absent when the artists have no `/channel/UC…` link, in which
-  // case the label/allowlist signals carry the trust classification.
+
   artistYoutubeChannelIds?: string[];
   bpm?: number | null;
-  // THE OPERATOR'S CAPTURE-SOURCE PIN (docs/the-ear.md § Wrong audio) — the one YouTube video id
-  // this row must be captured FROM. Present ⇒ the search ladder is skipped entirely and
-  // `findPinnedUpload` downloads this id through the same sticky session: the duration guard still
-  // applies (a wrong paste must never land a live set), the fingerprint still RUNS, but its verdict
-  // is recorded as `operator-verified` — a mismatch is logged and captured on the operator's
-  // authority, never remembered as a rejection. A pinned row can land `done` or `failed`, never
-  // `unmatched`. Absent = no pin (the ladder walks as ever).
+
   captureSourcePin?: string;
-  // THE PIN'S DURATION OVERRIDE (`pin_capture_source … allowDurationMismatch`). True ⇒
-  // `findPinnedUpload` skips the duration guard for the pinned id, on the operator's authority: he
-  // has deliberately chosen a different EDIT of the same recording (a radio cut, an extended mix)
-  // because it is the one that exists. The row's own `duration_ms` is never overwritten — the
-  // finding keeps its store length. Absent/false = the guard applies as ever.
+
   captureSourcePinAllowDuration?: boolean;
-  // True when a `findings` row exists — the certification rail's flag. FALSE for a catalogue
-  // track (visible only once the operator opens the budget). The re-derive write-back gates on
-  // it: `enrichment_status` is a certification column and the server 409s an uncertified write.
+
   certified?: boolean;
   durationMs?: number;
-  // The release label (already on the admin list DTO). A YouTube candidate whose channel
-  // name equals the label is almost certainly the correct upload — a trust RANKING signal
-  // (it never relaxes the duration guard; that waiver was the 005.9.9L hole). For
-  // self-released tracks the label IS the artist name, so this doubles as an artist-channel
-  // signal before `artist_socials` lands.
+
   label?: string;
   logId?: string;
-  // The prior consecutive-failure count (the admin list DTO surfaces it when non-zero),
-  // read so the failure bump ACCUMULATES — the queue's failure-cap backoff depends on it.
+
   sourceAudioFailures?: number;
-  // The R2 key of the row's PRIOR capture (`<root>/<sha256>.<ext>`). Normally absent on a capture
-  // worklist row (nothing captured yet), but a WRONG-AUDIO re-capture (docs/the-ear.md § Wrong
-  // audio) KEEPS it: its embedded sha256 is the LEGACY single-sha memory (kept for backward compat
-  // with rows quarantined before the general memory shipped). Present ⇒ reject any candidate whose
-  // bytes hash to that sha256.
+
   sourceAudioKey?: string;
-  // THE GENERAL BAD-AUDIO MEMORY (docs/the-ear.md § Wrong audio) — the JSON array of sources this
-  // track's captures have been rejected from ({ videoId?, sha256, reason, at }, capped ~10). Two
-  // filters ride it: the `videoId` is the PRE-download filter (a known-bad candidate never costs
-  // proxy bytes again), the `sha256` the POST-download backstop (same audio, new id). Absent when
-  // the worklist DTO omitted it (nothing rejected yet). Surfaced by list_track_work?kind=capture.
+
   sourceAudioRejected?: unknown;
   title?: string;
   trackId: string;
@@ -478,7 +210,6 @@ export type ReceiptCoordinates = {
   requestDigest: string;
 };
 
-/** The strict `commitTrackCapture` request body: the receipt coordinates plus the track id. */
 export type CaptureCommitRequest = ReceiptCoordinates & { trackId: string };
 
 export type CaptureAttemptProgress = {
@@ -530,14 +261,6 @@ export type PreparedSnapshot =
   | { prepared: false; reason: "ineligible" | "not-found" | "stale" }
   | { prepared: true; snapshotToken: string; track: CaptureFinding };
 
-/**
- * One row's settlement.
- *
- * `deferred` is not a verdict. It says the row is AUTHORIZED and its commit was handed to the tick's
- * batched commit phase, which resolves it into `committed` / `rejected` / `pending` before the
- * tick's counters are built. The journal on disk still holds its receipt while it waits, so a crash
- * between the two leaves exactly the reconcilable state a per-row commit would have left.
- */
 export type ProgressDisposition = "committed" | "deferred" | "failed" | "pending" | "rejected";
 
 export function preparedCaptureFinding(
@@ -552,16 +275,6 @@ export function preparedCaptureFinding(
   };
 }
 
-/**
- * Build the STICKY residential-proxy URL for one track: append `__sessid.<sessionId>` to
- * the username (pins one exit IP for the whole download — a rotating session 403s the
- * media-bytes fetch), then url-encode the (username+suffix) and password so a credential
- * containing `@`/`:`/`/` can't corrupt the authority. The session id is the track's
- * identity — a finding's Log ID, or the raw `track_id` for a catalogue row — SANITIZED to
- * the alnum + `.` charset a Log ID already uses (a crawler-minted `mb_<uuid>` carries `_`
- * and `-`, which the proxy vendor's session parser has never been proven to accept).
- * Stickiness only needs determinism per track, so stripping is safe.
- */
 export function buildStickyProxyUrl(options: {
   host: string;
   password: string;
@@ -577,13 +290,6 @@ export function buildStickyProxyUrl(options: {
   return `http://${user}:${pass}@${options.host}:${options.port}`;
 }
 
-/**
- * A YouTube BOT-CHALLENGE verdict ("Sign in to confirm you're not a bot" and kin) is an
- * IP-REPUTATION ruling on the proxy exit, not on the video or the query — retrying through
- * the same flagged exit re-fails, and the player-client fallback can't clear it either.
- * Classified separately from DRM/403 so the caller can answer it with the one move that
- * works: a fresh sticky session (a new residential exit). Pure; pinned by tests.
- */
 export function isBotChallengeStderr(stderr: string): boolean {
   const soundCloudRateLimit =
     /soundcloud/i.test(stderr) &&
@@ -592,23 +298,12 @@ export function isBotChallengeStderr(stderr: string): boolean {
   return /Sign in to confirm|not a bot|Please sign in/i.test(stderr) || soundCloudRateLimit;
 }
 
-/** What a failed yt-dlp download's stderr says about WHY, and so about what to try next. */
 export type DownloadErrorFlags = {
   is403?: boolean;
   isBotChallenge?: boolean;
   isRecoverable?: boolean;
 };
 
-/**
- * Read a failed download's stderr into the three flags the recovery decision runs on.
- *
- * `is403` is ANCHORED to the two forms yt-dlp actually prints. It used to also accept a bare
- * `\b403\b`, which matches anywhere in stderr — a video id, a byte offset, a URL — and since
- * the caller tested it FIRST, a bot-challenge stderr carrying a loose 403 was routed to the
- * player-client fallback. That fallback cannot clear an IP-reputation ruling (module header),
- * so the run's one re-roll went unspent on exactly the runs that needed it. The combined shape
- * is not hypothetical: per the yt-dlp wiki it is what a missing PO token produces.
- */
 export function classifyDownloadFailure(stderr: string): DownloadErrorFlags {
   const soundCloudFailure = /soundcloud/i.test(stderr);
   const soundCloudCandidateFailure =
@@ -620,25 +315,14 @@ export function classifyDownloadFailure(stderr: string): DownloadErrorFlags {
   return {
     is403: /HTTP Error 403|status code 403/.test(stderr),
     isBotChallenge: isBotChallengeStderr(stderr),
-    // A source-specific dead candidate must not abort the whole ladder. A SoundCloud rate limit
-    // also stays retryable after the sticky-session re-roll has been spent.
+
     isRecoverable:
       /DRM protected|Sign in to confirm|not a bot/i.test(stderr) || soundCloudCandidateFailure,
   };
 }
 
-/** The three ways a failed download can be answered, in the order they are considered. */
 export type DownloadRecovery = "reroll" | "player-client-fallback" | "give-up";
 
-/**
- * THE RECOVERY DECISION, and the whole reason it is a function: the ORDER is the fix.
- *
- * A bot challenge is asked about FIRST, because both flags are read off the same stderr and a
- * challenge that also mentions a 403 is an IP-reputation verdict wearing a 403's clothes —
- * only a fresh residential exit clears it. The 403 branch keeps its second chance: it answers
- * a plain 403, and it still answers a challenge whose re-roll the run has already spent (there
- * is nothing better left to try). Anything else rethrows to the candidate walk.
- */
 export function chooseDownloadRecovery(
   flags: DownloadErrorFlags,
   canReroll: boolean,
@@ -653,37 +337,14 @@ export function chooseDownloadRecovery(
   return "give-up";
 }
 
-/**
- * The ONE re-rolled sticky session for a track: `<id>.r1`. The `.` survives the session
- * sanitizer (alnum + `.`), keeps determinism (same track, same re-roll), and stays sticky —
- * the re-roll changes WHICH exit, never the one-exit-per-download rule the media fetch needs.
- * Deliberately single (no .r2): a pool that challenges two distinct exits in one run is
- * cooling off, and the retry budget belongs to the next sweep tick.
- */
 export function rerollSessionId(sessionId: string): string {
   return `${sessionId}.r1`;
 }
 
-/**
- * The per-RUN sticky-session seed: `<id>` on a clean first run, `<id>.a<failures>` on a
- * retry. A bot-challenge flag is an IP-reputation ruling that outlives the run, and the
- * seed used to be the bare track id — so a `failed` row's next run landed on the exact
- * exit that just got flagged and burned a challenge (plus the run's one re-roll) before
- * seeing a fresh one. Folding the persisted failure count in rotates every retry run onto
- * an unburned exit for free, with no flagged-IP ledger to keep or expire (we never see
- * exit IPs — the provider maps session → exit; flags decay on their own). Within a run the
- * session stays sticky as before, and `.a<n>` never collides with the `.r1` re-roll
- * namespace (run N's re-roll is `<id>.a<n>.r1`). The `.` survives the session sanitizer.
- */
 export function captureSessionSeed(idOrLogId: string, priorFailures: number): string {
   return priorFailures > 0 ? `${idOrLogId}.a${priorFailures}` : idOrLogId;
 }
 
-/**
- * The duration match-guard: accept a candidate only if its length is within
- * max(toleranceSec, targetSec × tolerancePct) of the finding's Spotify duration. Returns
- * false for a missing/zero target (we can't guard without a reference length).
- */
 export function durationWithinTolerance(
   candidateSec: number,
   targetMs: number | undefined,
@@ -706,26 +367,12 @@ export function durationWithinTolerance(
   return Math.abs(candidateSec - targetSec) <= allowed;
 }
 
-/**
- * The R2 key for a captured full song. A FINDING keys under its coordinate,
- * `<logId>/<sha256>.<ext>`; a CATALOGUE row (no coordinate exists) under
- * `catalogue/<trackId>/<sha256>.<ext>` — a distinct, self-describing namespace that can
- * never collide with a Log ID. Certification later does NOT re-key: `source_audio_key`
- * is the pointer of record, wherever the object sits. (The bucket is dedicated to source
- * audio, so no further prefix.)
- */
 export function buildSourceAudioKey(keyRoot: string, sha256Hex: string, ext: string): string {
   const cleanExt = ext.replace(/^\./, "").toLowerCase();
 
   return `${keyRoot}/${sha256Hex}.${cleanExt}`;
 }
 
-/**
- * The sha256 embedded in a source-audio R2 key (`<root>/<sha256>.<ext>`), lowercased, or null if
- * the basename is not a 64-hex-char digest. The inverse of `buildSourceAudioKey`'s hash slot — it
- * is how a WRONG-AUDIO re-capture recovers the bad hash from the row's kept key (docs/the-ear.md
- * § Wrong audio) with NO new vendor data, then refuses a re-download whose bytes hash identical.
- */
 export function extractSourceAudioSha256(key: string | undefined): null | string {
   if (!key) {
     return null;
@@ -738,19 +385,9 @@ export function extractSourceAudioSha256(key: string | undefined): null | string
   return /^[0-9a-f]{64}$/.test(hash) ? hash : null;
 }
 
-// Title markers that signal a WRONG version (a same-length remix/edit slips the duration
-// guard, so de-rank these before the guard even runs). g-flagged so a title's markers can
-// be ENUMERATED and compared against the finding's own (`hasForeignVersionMarker`).
 const WRONG_VERSION_MARKERS_ALL =
   /\b(remix|bootleg|live|sped[\s-]?up|slowed|nightcore|8d audio|cover|karaoke|instrumental|mashup|edit|rework|vip mix)\b/gi;
 
-/**
- * Whether a candidate title carries a wrong-version marker THE FINDING ITSELF DOES NOT.
- * A finding whose own canonical title is "(Logistics remix)" must not have its correct
- * candidates de-ranked for saying "remix" — before this, any same-length non-remix upload
- * outranked the actual remix, a wrong-version-match risk (the 2026-07-14 unmatched audit,
- * class 4). A marker the finding does NOT carry still de-ranks exactly as before.
- */
 export function hasForeignVersionMarker(candidateTitle: string, findingTitle?: string): boolean {
   const candidateMarkers = candidateTitle.match(WRONG_VERSION_MARKERS_ALL);
 
@@ -766,41 +403,16 @@ export function hasForeignVersionMarker(candidateTitle: string, findingTitle?: s
 }
 const OFFICIAL_MARKERS = /(-\s*topic\b|official audio|official video|official music video)/i;
 
-// A YouTube auto-generated art-track lives on an "<Artist> - Topic" CHANNEL, generated per artist
-// from the label-delivered master: duration-exact, ISRC-tagged, the correct audio BY CONSTRUCTION.
-// The signal is the channel NAME (the video TITLE is the bare song), so `OFFICIAL_MARKERS` — which
-// tests the title — structurally misses it; this tests the channel. Recognizing it turns a Topic
-// upload into the top-ranked, safest candidate (a ranking tiebreak only; the fingerprint gate is
-// still the identity check, and the duration guard is untouched).
 const TOPIC_CHANNEL_MARKER = /-\s*topic\s*$/i;
 
-/** Whether a YouTube channel name is an auto-generated `<Artist> - Topic` art-track channel. */
 export function isTopicChannel(channel: string | undefined): boolean {
   return channel ? TOPIC_CHANNEL_MARKER.test(channel.trim()) : false;
 }
 
-// ── THE METADATA GATE (the catalogue ladder's rungs 1 and 2) ─────────────────────────────────
-//
-// A candidate that clears this gate has been matched on ARTIST, TITLE and LENGTH and on nothing
-// else. That is a real claim and a weaker one than the fingerprint's, which is why the two rungs
-// below treat it so differently: on a Topic channel it is enough to serve (rung 1), and on anybody
-// else it is only enough to justify buying 30 seconds of audio (rung 2).
-
-/**
- * The metadata tier's duration tolerance, in whole seconds, and DELIBERATELY not the capture guard.
- *
- * The capture guard is `max(3s, 3%)` — nine seconds on a five-minute track — because it is a
- * pre-filter in front of a fingerprint that will decide identity properly. Nothing decides identity
- * properly after this one, so it is a flat ±3s: tight enough that a different arrangement of the
- * same song fails it, wide enough to absorb the flat listing's +1s ceil on top of the ±1s rounding
- * a whole-second MusicBrainz length carries (~70% of catalogue durations are whole seconds). ±2s
- * would leave nothing for the second of those, which is why it is 3 and not 2.
- */
 export const METADATA_TOLERANCE_SEC = Number(
   process.env.FLUNCLE_CAPTURE_METADATA_TOLERANCE_SEC ?? "3",
 );
 
-/** Whether a candidate's listed length agrees with the row's, on the flat ±3s metadata tolerance. */
 export function metadataDurationAgrees(
   candidateSec: number,
   targetMs: number | undefined,
@@ -812,47 +424,18 @@ export function metadataDurationAgrees(
   return Math.abs(candidateSec - targetMs / 1000) <= METADATA_TOLERANCE_SEC;
 }
 
-/** `"Netsky - Topic"` → `"Netsky"`. The channel's artist credit, with the marker taken off. */
 export function topicChannelArtist(channel: string | undefined): string {
   return (channel ?? "").trim().replace(TOPIC_CHANNEL_MARKER, "").trim();
 }
 
-/**
- * Whether every name in `claimed` is one the row is credited to — a SUBSET test, not equality.
- *
- * Subset because the two sides are credited at different granularities and both directions of that
- * are normal: a track credited "Netsky & Metrik" lives on the `Netsky - Topic` channel (one name of
- * two), and "Chase & Status" splits into two names on both sides at once (the house fold's
- * `normalizeArtists` breaks on `&`). What subset REFUSES is the case that matters — a name the row
- * is not credited to at all, which is how a same-title different-artist upload gets in.
- */
 function creditedBy(claimed: ReadonlySet<string>, credited: ReadonlySet<string>): boolean {
   return claimed.size > 0 && [...claimed].every((name) => credited.has(name));
 }
 
-/** Which side of a candidate carried the artist agreement, or `null` when neither did. */
 export type MetadataSignal = "channel" | "title";
 
-// The `Artist - Title` separator YouTube uploads are named with. Spaced on both sides so a hyphen
-// inside a word ("Nu-Tone", "NC-17") is never mistaken for the split.
 const TITLE_ARTIST_SEPARATOR = /\s[-–—]\s/;
 
-/**
- * THE HOUSE FOLD, applied to one candidate against one row. Returns which side proved the artist, or
- * `null` when the candidate is not this recording under any of the accepted forms.
- *
- * The TITLE is compared through `splitTitle` on both sides, so the base and the VERSION DESCRIPTOR
- * are compared separately: a trailing version parenthetical is taken off both titles before the
- * bases meet, a neutral one ("Original Mix") folds away entirely, and a real one ("Calibre Remix")
- * must appear on BOTH sides or the candidate is a different recording. That is the same identity
- * rule `matchKey` uses everywhere else in the house, and it is what keeps a remix off an original.
- *
- * The ARTIST is proved one of two ways, which are the accepted upload shapes:
- *   · `channel` — the bare song title on an `<Artist> - Topic` channel, where the CHANNEL carries
- *     the credit. This is the art-track shape and the one rung 1 exists for.
- *   · `title`   — `Artist - Title` in the title itself, the shape every other upload uses. Every
- *     split point is tried, so `A - B - C` is offered as both `A | B - C` and `A - B | C`.
- */
 export function metadataIdentityMatch(
   candidate: YtCandidate,
   row: { artists?: readonly string[]; title?: string },
@@ -870,7 +453,6 @@ export function metadataIdentityMatch(
     return got.base === want.base && got.descriptor === want.descriptor;
   };
 
-  // FORM A — the art track: the channel is the artist, the title is the bare song.
   if (
     isTopicChannel(candidate.channel) &&
     titleAgrees(candidate.title) &&
@@ -879,8 +461,6 @@ export function metadataIdentityMatch(
     return "channel";
   }
 
-  // FORM B — the artist rides the title. Walk every separator, not just the first: a title can
-  // carry the version after a second dash, and the base/descriptor comparison sorts that out.
   const parts = candidate.title.split(TITLE_ARTIST_SEPARATOR);
 
   for (let cut = 1; cut < parts.length; cut += 1) {
@@ -895,7 +475,6 @@ export function metadataIdentityMatch(
   return null;
 }
 
-/** A candidate that cleared the metadata gate, with the delta the ambiguity rule breaks ties on. */
 type MetadataHit = { candidate: YtCandidate; delta: number; signal: MetadataSignal };
 
 function metadataHits(
@@ -920,15 +499,6 @@ function metadataHits(
   return hits.sort((a, b) => a.delta - b.delta);
 }
 
-/**
- * RUNG 1's pick: the `<Artist> - Topic` art track this row IS, or null.
- *
- * THE AMBIGUITY RULE. More than one Topic candidate can clear the gate — a split credit puts the
- * same delivered master on each credited artist's channel, and every tie the 2026-08-01 spike saw
- * was that. So the preference is the channel that folds to the row's PRIMARY artist, and a residual
- * tie takes the closest length: the candidates are the same recording, and picking between two of
- * the same recording is not a decision that can be got wrong.
- */
 export function pickTopicCandidate(
   candidates: readonly YtCandidate[],
   row: { artists?: readonly string[]; durationMs?: number; title?: string },
@@ -949,15 +519,6 @@ export function pickTopicCandidate(
   return (preferred ?? hits[0])?.candidate ?? null;
 }
 
-/**
- * RUNG 2's candidates: the NON-Topic uploads that cleared the same gate, closest length first and
- * capped at the row's attempt budget.
- *
- * They are deliberately NOT served on metadata. A fan re-up, a mix rip and a bootleg all name
- * themselves `Artist - Title` and all run the right length; there is no channel authority among them
- * to lean on, so the only thing that can settle it is the sound. Ids the bad-audio memory already
- * proved wrong are dropped here, before they cost a single byte.
- */
 export function pickSegmentCandidates(
   candidates: readonly YtCandidate[],
   row: { artists?: readonly string[]; durationMs?: number; title?: string },
@@ -970,24 +531,8 @@ export function pickSegmentCandidates(
     .map(({ candidate }) => candidate);
 }
 
-/**
- * A trailing version parenthetical/bracket — "(radio edit)", "[VIP Mix]", "(Original Mix)" — used
- * ONLY by the fallback query variant to de-noise a title. A DnB release nearly always carries the
- * version at the END; stripping mid-string tokens would corrupt real titles, so this is anchored.
- */
 const TRAILING_VERSION_PAREN = /\s*[([][^)\]]*[)\]]\s*$/;
 
-/**
- * Build the yt-dlp search query for a finding. Variant 0 is the PRIMARY shape — every credited
- * artist joined + the full title, whitespace-collapsed — kept byte-equivalent to the historic
- * query so a matching row never regresses. Variant 1 is the DE-CONSTRAINED FALLBACK the sweep
- * spends only when variant 0 found ZERO raw candidates: it drops the secondary artists (a
- * multi-credit like "Commix Nu:Tone Logistics Coffee" over-specifies the search and can return
- * nothing) and strips a trailing version parenthetical ("Technimatic Parallel (radio edit)" →
- * "Technimatic Parallel"), so the reshaped query reaches the upload the strict one missed. When a
- * single-artist clean title makes the two identical, the caller sees `variant1 === variant0` and
- * skips the pointless second billed search.
- */
 export function buildSearchQuery(
   finding: { artists?: readonly string[]; title?: string },
   variant: 0 | 1,
@@ -1006,15 +551,6 @@ export function buildSearchQuery(
   return collapse(`${primaryArtist} ${cleanedTitle}`);
 }
 
-/**
- * Fold a query to the ASCII shape YouTube uploads are actually typed in. MusicBrainz
- * canonical metadata carries typographic characters — U+2019 in "Won’t U", a real U+2010
- * hyphen in "NC‐17" — and intra-token punctuation ("S.P.Y", "Nu:Tone") that a literal
- * search can miss or down-rank. Measured on the 2026-07-14 unmatched spike (323 terminal
- * rows): the normalized primary-artist variant recovered 20 rows the raw query missed —
- * and the raw query found 11 the normalized one missed, so this is an ADDITIONAL search
- * step, never a replacement for the raw shape.
- */
 export function normalizeSearchQuery(value: string): string {
   return value
     .normalize("NFKC")
@@ -1034,11 +570,6 @@ export type CaptureSearchRung = {
   source: CaptureSearchSource;
 };
 
-/**
- * The one bounded search ladder used by capture and both provenance passes. SoundCloud is last:
- * every YouTube and YouTube Music shape gets first refusal, and the duration guard still decides
- * whether any search result is a survivor.
- */
 export function buildCaptureSearchLadder(
   finding: { artists?: readonly string[]; title?: string },
   queryVariants = QUERY_VARIANTS,
@@ -1056,7 +587,6 @@ export function buildCaptureSearchLadder(
   ].slice(0, Math.max(1, queryVariants));
 }
 
-/** The yt-dlp target for one ladder rung. */
 export function buildCaptureSearchTarget(source: CaptureSearchSource, query: string): string[] {
   if (source === "music") {
     return [
@@ -1069,19 +599,12 @@ export function buildCaptureSearchTarget(source: CaptureSearchSource, query: str
   return [`${source === "soundcloud" ? "scsearch5" : "ytsearch5"}:${query}`];
 }
 
-/** The stable extractor URL for a search result's source-local id. */
 export function buildCaptureDownloadUrl(source: CaptureSearchSource, id: string): string {
   return source === "soundcloud"
     ? `https://api.soundcloud.com/tracks/${encodeURIComponent(id)}`
     : `https://www.youtube.com/watch?v=${encodeURIComponent(id)}`;
 }
 
-/**
- * Normalize a YouTube channel name (or a release label) to a comparison key: lowercase, map
- * `&`→`and`, strip the boilerplate suffixes labels tack on (records/recordings/music/audio/
- * "drum & bass"/dnb/official/tv/…), then drop every non-alphanumeric. So "UKF Drum & Bass",
- * "Hospital Records" and a label field of "Hospital" all reduce to a stable comparable token.
- */
 export function normalizeChannelName(value: string): string {
   return value
     .toLowerCase()
@@ -1093,14 +616,6 @@ export function normalizeChannelName(value: string): string {
     .replace(/[^a-z0-9]+/g, "");
 }
 
-// Curated trusted D&B channels: labels + aggregators that release/host the real master and
-// do NOT upload a wrong VERSION under a bare "Artist - Title". A clean-title hit on one of
-// these (or on a channel named like the finding's label, or the artist's own channel) ranks
-// ABOVE an equal untrusted upload — a tiebreak only; the duration guard stays symmetric for
-// every tier (docs/the-ear.md § Wrong audio), and identity is the fingerprint gate's job now.
-// Matched by normalized
-// channel NAME (resilient to new uploads) OR stable channel_id where known. This is domain
-// curation — extend it with the labels/aggregators you trust (verified channels only).
 const TRUSTED_CHANNEL_NAMES = new Set(
   [
     "UKF",
@@ -1125,20 +640,10 @@ const TRUSTED_CHANNEL_NAMES = new Set(
     "Monstercat Uncaged",
   ].map(normalizeChannelName),
 );
-const TRUSTED_CHANNEL_IDS = new Set<string>([
-  "UCr8oc-LOaApCXWLjL7vdsgw", // UKF Drum & Bass (verified via box probe 2026-07-07)
-]);
+const TRUSTED_CHANNEL_IDS = new Set<string>(["UCr8oc-LOaApCXWLjL7vdsgw"]);
 
-// 0 = untrusted, 1 = verified-only, 2 = trusted (label match / curated allowlist / the artist's
-// own channel). ALL tiers are ranking tiebreaks only — no tier relaxes the duration guard.
 export type TrustTier = 0 | 1 | 2;
 
-/**
- * Classify how much a candidate's CHANNEL can be trusted for this finding. Tier 2 (trusted)
- * = the candidate is the artist's own upload (channel_id in `artistYoutubeChannelIds`), on a
- * curated aggregator/label, or on a channel whose name equals the finding's label. Tier 1 =
- * merely YouTube-verified (a weak corroborating signal). Tier 0 = anything else.
- */
 export function classifyChannelTrust(
   candidate: YtCandidate,
   context: { artistYoutubeChannelIds?: readonly string[]; label?: string },
@@ -1152,9 +657,7 @@ export function classifyChannelTrust(
   if (channelId && TRUSTED_CHANNEL_IDS.has(channelId)) {
     return 2;
   }
-  // An `<Artist> - Topic` art-track is the artist's own auto-generated official channel (the
-  // label-delivered master) — the strongest correctness signal after the artist's declared
-  // channel, and it needs no per-artist allowlist. A ranking tiebreak only, like every tier.
+
   if (isTopicChannel(candidate.channel)) {
     return 2;
   }
@@ -1173,23 +676,12 @@ export type YtCandidate = {
   channelId?: string;
   durationSec: number;
   id: string;
-  /** Absent only in pure-helper tests and legacy callers, where YouTube remains the default. */
+
   source?: CaptureSearchSource;
   title: string;
   verified?: boolean;
 };
 
-/**
- * Pick the best YouTube candidate for a finding. Keep only candidates whose duration passes the
- * SYMMETRIC guard (`durationWithinTolerance`) — trust no longer widens it (docs/the-ear.md § Wrong
- * audio; the removed +60s trusted pad was the 005.9.9L hole) — then rank: CLEAN titles before
- * wrong-version markers (a trusted remix never beats an untrusted clean master), then higher
- * channel trust (the label/artist upload over a random re-host, even when the re-host is closer in
- * length — identity safety beats a few seconds of fidelity), then official/`- Topic`, then
- * verified, then closest duration. Trust is a RANKING signal only now; the fingerprint gate is the
- * identity check. Returns the pick WITH its trust tier (a soft tiebreak the caller carries) or
- * null → `unmatched`.
- */
 export function rankCandidates(
   candidates: readonly YtCandidate[],
   context: {
@@ -1213,8 +705,7 @@ export function rankCandidates(
       candidate,
       clean: hasForeignVersionMarker(candidate.title, context.title) ? 0 : 1,
       delta: Math.abs(candidate.durationSec - targetSec),
-      // Title-borne official marker OR an `<Artist> - Topic` channel (the marker tests the title,
-      // which a Topic upload leaves bare) — so a Topic art-track ranks above a plain tier-2 upload.
+
       official: OFFICIAL_MARKERS.test(candidate.title) || isTopicChannel(candidate.channel) ? 1 : 0,
       trust,
       verified: candidate.verified ? 1 : 0,
@@ -1232,11 +723,6 @@ export function rankCandidates(
   return scored.map(({ candidate, trust }) => ({ candidate, trust }));
 }
 
-/**
- * Walk the bounded ladder until one rung produces duration-gated survivors. The callback keeps
- * subprocess and proxy-session policy outside this pure control-flow seam, while tests can prove
- * that a later source is never reached early.
- */
 export function findFirstRankedCaptureRung(
   rungs: readonly CaptureSearchRung[],
   context: Parameters<typeof rankCandidates>[1],
@@ -1252,11 +738,6 @@ export function findFirstRankedCaptureRung(
   return null;
 }
 
-/**
- * The single best candidate (rank 1) or null → `unmatched`. Thin wrapper over
- * `rankCandidates`; the sweep itself walks the ranked list so it can fall through a
- * DRM-locked or bot-walled top hit to the next-best downloadable one.
- */
 export function pickCandidate(
   candidates: readonly YtCandidate[],
   context: {
@@ -1270,22 +751,10 @@ export function pickCandidate(
   return rankCandidates(candidates, context, options)[0] ?? null;
 }
 
-/** Whether a stored BPM is genuinely missing (null/absent/non-finite/≤0). */
 export function bpmIsMissing(bpm: number | null | undefined): boolean {
   return bpm == null || !Number.isFinite(bpm) || bpm <= 0;
 }
 
-/**
- * Whether a just-landed capture should ALSO re-queue enrichment (clobber-safe): when the
- * BPM is genuinely missing, OR the row was NOT analyzed from FULL audio (`analyzedFrom !==
- * "full"`, which includes a NULL legacy row — treated as preview-grade). This closes the
- * capture→enrich RACE: capture and enrichment are independent self-healing queues, so a
- * finding whose enrich tick fired BEFORE its capture landed was analyzed from the 30s
- * preview, permanently — re-queueing it lets the next enrich tick re-derive BPM/key from the
- * full song now on file. Enrichment is itself clobber-safe (it re-writes, it doesn't corrupt
- * a good value), and a preview-grade row re-analyzed from full audio is a strict upgrade.
- * A REAL bpm on an already-full-analyzed row is left untouched (the predicate is false).
- */
 export function needsReenrichAfterCapture(
   bpm: number | null | undefined,
   analyzedFrom: "preview" | "full" | undefined,
@@ -1293,19 +762,6 @@ export function needsReenrichAfterCapture(
   return bpmIsMissing(bpm) || analyzedFrom !== "full";
 }
 
-/**
- * Whether a just-landed capture should re-queue enrichment, gated by CERTIFICATION. Re-queueing
- * writes `enrichmentStatus = "pending"`, and `enrichment_status` is a CERTIFICATION column: the
- * server accepts it only on a certified finding and 409s an uncertified (catalogue) write of one
- * (the certification rail, docs/gpu-batch-embed.md). So an uncertified row is NEVER re-queued
- * here — its enrichment is not a thing that exists. A certified finding falls through to
- * `needsReenrichAfterCapture`, unchanged. With the capture brake paused every row is a finding,
- * so this gate is a no-op against today's behaviour and only matters once the catalogue lights up.
- *
- * `certified === undefined` is treated as NOT certified: the worklist DTO always carries the
- * flag, so an absent value is a malformed row, and the safe reading of "is this a finding?" when
- * unsure is no — never write a certification field on a row you cannot confirm is certified.
- */
 export function shouldReenrichAfterCapture(
   certified: boolean | undefined,
   bpm: number | null | undefined,
@@ -1314,7 +770,6 @@ export function shouldReenrichAfterCapture(
   return certified === true && needsReenrichAfterCapture(bpm, analyzedFrom);
 }
 
-/** Map a file extension to an audio content-type for the R2 PUT. */
 export function contentTypeForExt(ext: string): string {
   const cleanExt = ext.replace(/^\./, "").toLowerCase();
   const map: Record<string, string> = {
@@ -1333,13 +788,6 @@ export function contentTypeForExt(ext: string): string {
   return map[cleanExt] ?? "application/octet-stream";
 }
 
-/**
- * THE PRE-DOWNLOAD FILTER (docs/the-ear.md § Wrong audio): drop every ranked candidate whose
- * video id is already in the bad-audio memory, THEN take the attempt budget — so a known-bad
- * candidate never costs proxy bytes again, and `DOWNLOAD_ATTEMPTS` is spent only on uploads that
- * could actually be new audio. Order is load-bearing: filter first, budget second (a budget cut
- * first would let remembered ids eat attempt slots).
- */
 export function filterRejectedCandidates<T extends { candidate: { id: string } }>(
   ranked: readonly T[],
   rejectedIds: ReadonlySet<string>,
@@ -1348,18 +796,8 @@ export function filterRejectedCandidates<T extends { candidate: { id: string } }
   return ranked.filter((entry) => !rejectedIds.has(entry.candidate.id)).slice(0, attempts);
 }
 
-/** The capture-verification verdict for one downloaded file against a preview fingerprint. */
 export type CaptureVerdict = "match" | "mismatch" | "no-reference";
 
-/**
- * Verify a downloaded capture against the track's official-preview fingerprint (docs/the-ear.md §
- * Wrong audio). `previewFp` is the ISRC-resolved reference, fingerprinted once per track; null when
- * the track has no preview source OR fpcalc is absent — in which case the gate ABSTAINS
- * (`no-reference`), never blocks. Otherwise the capture is fingerprinted and slid against the
- * preview: a contained match ⇒ `match`, a clear miss ⇒ `mismatch`, an inconclusive/too-short
- * comparison ⇒ `no-reference` (abstain, never a false accusation). The caller maps `match` →
- * `preview-match`, `no-reference` → `unverified`, and rejects the candidate on `mismatch`.
- */
 export function verifyCaptureFile(
   previewFp: number[] | null,
   captureFilePath: string,
@@ -1371,11 +809,6 @@ function captureFp(captureFilePath: string): null | number[] {
   return fpcalcFingerprint(captureFilePath);
 }
 
-/**
- * The same gate with its EVIDENCE attached: the bit-error rate at the best alignment, when a
- * comparison actually ran. The pinned-source walk logs it beside a mismatch it is about to capture
- * anyway, so the operator can read how far his pick sat from the store reference.
- */
 export function verifyCaptureFileDetailed(
   previewFp: readonly number[] | null,
   captureFingerprint: readonly number[] | null,
@@ -1393,10 +826,8 @@ export function verifyCaptureFileDetailed(
   return { ber: result.ber, verdict: result.match ? "match" : "mismatch" };
 }
 
-// ── MIRROR of apps/web/src/lib/server/aws-sigv4.ts — keep in step ────────────
-
 const encoder = new TextEncoder();
-/** Copy a view's exact byte window into an ArrayBuffer-backed WebCrypto input. */
+
 function webCryptoBytes(bytes: Uint8Array): Uint8Array<ArrayBuffer> {
   return new Uint8Array(bytes);
 }
@@ -1479,8 +910,6 @@ async function signS3Request(options: {
     authorization: `AWS4-HMAC-SHA256 Credential=${options.accessKeyId}/${scope}, SignedHeaders=${signedHeaders}, Signature=${signature}`,
   };
 }
-
-// ── R2 (S3 API) put ────────────────────────────────────────────────────────
 
 export type CaptureFailureKind = "proxy" | "r2" | "track-update" | "unknown" | "yt-dlp";
 
@@ -1611,18 +1040,6 @@ async function r2Exists(key: string, expectedBytes: number): Promise<boolean> {
   return true;
 }
 
-/**
- * Read one object back out of the private source-audio bucket.
- *
- * THE ARCHIVE IS THE REFERENCE for the catalogue ladder's rung 2 (see THE CATALOGUE PROVENANCE
- * LADDER below): the audio Fluncle already owns and already paid for, fingerprinted against a 30s
- * slice of the candidate. It costs no vendor bandwidth — it is our own bucket — which is the whole
- * reason the cheap tier can afford a fingerprint at all.
- *
- * `null` on a miss (a 404, or a key whose object has since gone) rather than a throw: a reference
- * that cannot be fetched is an ABSTAIN, exactly like a missing preview on the capture path, and it
- * must not turn into a failed tick.
- */
 async function r2Get(key: string): Promise<null | Uint8Array> {
   const url = `${R2_ENDPOINT}/${R2_BUCKET}/${encodeKey(key)}`;
   const headers = await signS3Request({
@@ -1645,26 +1062,17 @@ async function r2Get(key: string): Promise<null | Uint8Array> {
   return new Uint8Array(await res.arrayBuffer());
 }
 
-// ── Admin API (direct HTTP — pin-independent, not the baked CLI) ──────────────
-
-/**
- * Read one worklist. `kind` and `scope` are the server's enums (track-work.ts) — the ORDER and the
- * BRAKE are both decided there, so this is a dumb page read and deliberately has no opinion about
- * which rows it gets or how many are left behind.
- */
 async function fetchTrackWork(options: {
   kind: "capture" | "youtube-provenance" | "youtube-reverdict";
   limit: number;
   scope: "all" | "catalogue" | "findings";
-  /** Keep the response's `capabilities` — the caller is about to choose a per-row or batched path. */
+
   withCapabilities?: boolean;
 }): Promise<CaptureFinding[] | { capabilities?: unknown; tracks: CaptureFinding[] }> {
   const url = `${API_BASE_URL}/api/v1/admin/tracks/work?kind=${options.kind}&scope=${options.scope}&limit=${options.limit}`;
   const res = await fetch(url, {
     headers: { Authorization: `Bearer ${API_TOKEN}` },
-    // The Worker API worklist read (`list_track_work`), NOT a media download: ~10s p95 with a
-    // tail past 30s, so a 30s budget tripped a false failure alert on the slow-but-completing
-    // read. 60s clears the tail; the yt-dlp download/socket timeouts below are left untouched.
+
     signal: AbortSignal.timeout(60_000),
   });
   if (!res.ok) {
@@ -1676,14 +1084,6 @@ async function fetchTrackWork(options: {
   return options.withCapabilities === true ? { capabilities: body.capabilities, tracks } : tracks;
 }
 
-/**
- * The CAPTURE worklist (docs/gpu-batch-embed.md), NOT the old findings-only `captureQueue=true`
- * admin list. `kind=capture&scope=all` serves both halves in the metered-budget drain order
- * (certified first, then the Ear's capture-priority ladder); the budget's brake — consulted
- * server-side BEFORE the worklist is selected — narrows the scope to the findings while it is shut
- * (its default), so a paused brake reads exactly the findings the old queue did. No `order` param:
- * this queue's order is fixed by the budget.
- */
 async function fetchCaptureQueue(): Promise<CaptureFinding[]> {
   const page = await fetchTrackWork({ kind: "capture", limit: QUEUE_LIMIT, scope: "all" });
   return Array.isArray(page) ? page : page.tracks;
@@ -1746,11 +1146,6 @@ export type JournaledCaptureProviderResult<T> =
   | { disposition: "pending" }
   | { disposition: "completed"; value: T; workDirectory: string };
 
-/**
- * Put the conservative per-track intent on durable storage before invoking the provider seam.
- * The provider offers no request id or idempotency key, so an interrupted call is held for
- * inspection rather than replayed automatically.
- */
 export async function runJournaledCaptureProvider<T>(options: {
   afterProvider?: (value: T) => void | Promise<void>;
   beforeProvider?: () => void | Promise<void>;
@@ -1841,11 +1236,6 @@ type CaptureAdmissionAction =
   | "queue"
   | "reconcile";
 
-/**
- * Every admitted phase the parent can spawn. The child's argv guard reads THIS list, so adding an
- * action to {@link CaptureAdmissionAction} without listing it here fails the type check instead of
- * failing every tick at runtime with `invalid capture admission phase invocation`.
- */
 export const CAPTURE_ADMISSION_ACTIONS = [
   "commit",
   "commit-batch",
@@ -1863,11 +1253,6 @@ function phaseCommand(action: CaptureAdmissionAction, statePath: string): string
   return [BUN_BIN, import.meta.filename, "--admission-phase", action, "--phase-state", statePath];
 }
 
-/**
- * HOW MANY LEASES THIS TICK TOOK — the shared write lane's acquisitions, each one a coordinator
- * round trip and a process spawn of its own. It is a counter, never a model: every admitted phase
- * increments it here, so the ledger's `leases` measures the batching rather than asserting it.
- */
 let admittedPhaseCount = 0;
 
 function admittedPhase(action: CaptureAdmissionAction, statePath: string): "completed" | "yielded" {
@@ -1880,20 +1265,11 @@ function admittedPhase(action: CaptureAdmissionAction, statePath: string): "comp
   }).kind;
 }
 
-/**
- * WHAT THIS WORKER OFFERS, read off the worklist the sweep already asks for.
- *
- * The box CLI is a pinned release and lags the Worker in both directions, so the sweep must learn
- * whether the batched phases exist BEFORE it commits to a path — never by catching a 404 halfway
- * through a batch whose downloads are already paid for. An absent width is an older Worker and the
- * per-row phases are taken instead, which is why those are not going anywhere.
- */
 export type CaptureCapabilities = {
   commitTrackCaptures?: number;
   prepareTrackCaptures?: number;
 };
 
-/** The batched phases' kill switch: `FLUNCLE_CAPTURE_BATCH_PHASES=0` restores per-row leases. */
 export function captureBatchPhasesEnabled(): boolean {
   return (process.env.FLUNCLE_CAPTURE_BATCH_PHASES ?? "1") !== "0";
 }
@@ -1938,8 +1314,7 @@ async function runCaptureAdmissionChild(
       if (!isDueWorkRepairPending(error)) {
         throw error;
       }
-      // The deferral crosses the phase boundary as data: a non-zero child exit reads as a failed
-      // phase, while this result tells the parent the queue was deferred rather than empty.
+
       log(error.message);
       result = { dueWorkRepairPending: true };
     }
@@ -1954,9 +1329,6 @@ async function runCaptureAdmissionChild(
   } else if (action === "commit-batch") {
     result = await adminApiPost("/api/v1/admin/tracks/captures/commit", request);
   } else if (action === "commit") {
-    // The commit contract is a strict object, so the body is rebuilt field by field from the state
-    // file rather than forwarded: a state file carrying response-only keys still sends exactly the
-    // contract body.
     const body = captureCommitRequestFromState(request);
     if (!body) {
       throw new Error("capture commit phase state does not carry a valid receipt");
@@ -1985,7 +1357,6 @@ function validOptionalPreparedBoolean(track: Record<string, unknown>, key: strin
   return value === undefined || typeof value === "boolean";
 }
 
-/** The exact key allow-list of a prepared track: the snapshot the sweep captures FROM. */
 const PREPARED_TRACK_KEYS = new Set([
   "analyzedFrom",
   "anchored",
@@ -2004,14 +1375,6 @@ const PREPARED_TRACK_KEYS = new Set([
   "trackId",
 ]);
 
-/**
- * The keys a NEWER Worker put on a prepared track that this bake does not know. A non-empty answer
- * is the one shape of invalid answer that must degrade PER ROW rather than fail the tick: a field
- * the Worker added after this box was baked is a fact this sweep cannot honour (it would capture
- * without the instruction the field carries), so the row is left unreached for the next bake — but
- * the eleven other rows in the batch are not that row's problem. A KNOWN key with a bad shape still
- * fails closed through `validPreparedTrack`.
- */
 function unknownPreparedTrackKeys(track: unknown): string[] {
   return isRecord(track) ? Object.keys(track).filter((key) => !PREPARED_TRACK_KEYS.has(key)) : [];
 }
@@ -2116,29 +1479,12 @@ function prepareCurrentSnapshot(
   return response;
 }
 
-/**
- * Freeze a WHOLE BATCH of capture rows in ONE admitted phase.
- *
- * Twelve rows used to cost twelve prepare leases before a single byte moved. They now cost one, and
- * the batch is what makes the CATALOGUE CAPTURE BUDGET exact rather than approximate: the server
- * consumes its rolling count cap cumulatively in request order, so a batch can never authorize more
- * downloads than the budget has left (the per-row prepare could, because each row re-read a ledger
- * the batch had not yet spent).
- *
- * Returns `undefined` when the phase yielded — no row was frozen, and the tick pauses.
- */
-/** One batched prepare call's answer, with what it spent of the tick's rolling count cap. */
 export type CapturePrepareBatchPage = {
-  /** Server-measured per-item milliseconds, for the ledger's K evidence. */
   elapsedMs: number[];
   prepared: Map<string, PreparedSnapshot>;
-  /** UNCERTIFIED rows this call authorized. The caller carries the running total to the next call. */
+
   reserved: number;
-  /**
-   * Rows the Worker answered with a prepared track carrying a key this bake does not recognise
-   * (`unknownPreparedTrackKeys`). Not frozen here, not asked again this tick, not a tick failure:
-   * they wait for the bake that knows the key, while every other row proceeds.
-   */
+
   unreached: string[];
 };
 
@@ -2178,16 +1524,11 @@ function prepareBatchSnapshots(
     if (typeof itemMs === "number" && Number.isFinite(itemMs) && itemMs >= 0) {
       elapsedMs.push(itemMs);
     }
-    // `deferred` is the batch's own wall budget stopping before this row. Nothing was frozen and
-    // nothing was charged, so the row is NOT answered: the caller asks again, in another batched
-    // call that carries the tick's reservation, rather than dropping to the per-row path whose
-    // ledger read cannot see what this tick has already authorized.
+
     if (rest.prepared === false && rest.reason === "deferred") {
       continue;
     }
-    // A NEWER Worker's field on the prepared track — the one invalid shape that is this row's
-    // problem and nobody else's. Logged and left unreached rather than thrown: a throw here is a
-    // fatal tick, and one row a stale bake cannot honour must not take the other eleven with it.
+
     if (rest.prepared === true) {
       const unknown = unknownPreparedTrackKeys(rest.track);
       if (unknown.length > 0) {
@@ -2203,8 +1544,7 @@ function prepareBatchSnapshots(
     }
     prepared.set(trackId, rest);
   }
-  // An older Worker answers no `reserved`; deriving it from the rows is the same rule the server
-  // applies, so the two cannot disagree about what a call cost.
+
   const reserved =
     typeof response.reserved === "number" &&
     Number.isInteger(response.reserved) &&
@@ -2215,24 +1555,11 @@ function prepareBatchSnapshots(
   return { elapsedMs, prepared, reserved, unreached };
 }
 
-/**
- * THE TICK'S WHOLE PREPARE, in batched calls that share one reservation.
- *
- * The rolling-24h count cap is charged at COMMIT, so every prepare inside a tick reads the same
- * pre-tick remaining count. One call could reserve against it exactly; a SECOND call could not —
- * it would see the budget untouched and authorize the same rows over again. A tick makes that
- * second call whenever its batch is wider than the op's advertised width, or whenever the first
- * call's wall budget deferred a tail. So the tick carries its running total and the server
- * subtracts it, and the per-row prepare — whose ledger read has no way to know — is never used
- * while the Worker offers the batched op.
- *
- * Returns `undefined` when a call's admission phase yielded: nothing was frozen, and the tick pauses.
- */
 export function prepareTickSnapshots(
   trackIds: readonly string[],
   kind: CaptureReconciliationKind,
   width: number,
-  /** The admitted phase runner. Injectable so the reservation's arithmetic is testable in-process. */
+
   phase: typeof admittedPhase = admittedPhase,
 ): CapturePrepareBatchPage | undefined {
   const prepared = new Map<string, PreparedSnapshot>();
@@ -2240,8 +1567,7 @@ export function prepareTickSnapshots(
   const unreached: string[] = [];
   let reserved = 0;
   let outstanding = [...trackIds];
-  // Every call answers at least its first item, so the worklist strictly shrinks; the guard is the
-  // backstop for a server that answers nothing at all rather than the mechanism.
+
   const maxCalls = Math.ceil(trackIds.length / Math.max(1, width)) + 2;
 
   for (let call = 0; call < maxCalls && outstanding.length > 0; call += 1) {
@@ -2254,14 +1580,11 @@ export function prepareTickSnapshots(
     for (const [trackId, snapshot] of page.prepared) {
       prepared.set(trackId, snapshot);
     }
-    // An unreached row is answered for this tick — it leaves the worklist without being frozen, so
-    // the next call does not re-freeze (and re-reserve against) a row this bake cannot capture.
+
     unreached.push(...page.unreached);
     const settled = new Set([...prepared.keys(), ...unreached]);
     const next = outstanding.filter((trackId) => !settled.has(trackId));
     if (next.length === outstanding.length) {
-      // No progress at all. Stop rather than spend another lease on the same answer; the rows stay
-      // for the next tick, unfrozen and uncharged.
       break;
     }
     outstanding = next;
@@ -2295,8 +1618,7 @@ function admittedWorkList(options: {
   if (options.capabilities) {
     options.capabilities.value = parseCaptureCapabilities(response.capabilities);
   }
-  // The Worker deferred this worklist while due-work repair converges: the queue was not read, so it
-  // is neither empty nor a failure.
+
   if (response.dueWorkRepairPending === true) {
     return "due-work-repair-pending";
   }
@@ -2315,8 +1637,7 @@ async function authorizeProgress(progress: CaptureResultProgress): Promise<Captu
       trackId: progress.trackId,
     },
   );
-  // The authorize response wraps the coordinates in its `{ ok }` envelope. The journal keeps the
-  // coordinates alone, because they become a strict commit body.
+
   const receipt = receiptCoordinatesFrom(response);
   if (!receipt) {
     throw new Error(`capture authorize returned an invalid receipt for ${progress.trackId}`);
@@ -2324,7 +1645,6 @@ async function authorizeProgress(progress: CaptureResultProgress): Promise<Captu
   return { ...progress, receipt };
 }
 
-/** One authorized commit, waiting for the tick's batched commit phase. */
 export type CollectedCaptureCommit = {
   path: string;
   request: CaptureCommitRequest;
@@ -2333,12 +1653,7 @@ export type CollectedCaptureCommit = {
 
 export type CaptureProgressPorts = {
   admittedPhase: typeof admittedPhase;
-  /**
-   * Take one authorized commit for the tick's BATCHED commit phase. Returns true when it took it —
-   * `finishProgress` then stops at the authorized stage and answers `deferred`, and the batch
-   * resolves that row before the tick's counters are built. Returns false (or is absent) when the
-   * tick is committing per row, which is what an old Worker and the kill switch both produce.
-   */
+
   collectCommit?: (collected: CollectedCaptureCommit) => boolean;
   authorizeProgress: typeof authorizeProgress;
   prepareCurrentSnapshot: typeof prepareCurrentSnapshot;
@@ -2347,13 +1662,6 @@ export type CaptureProgressPorts = {
   r2Put: typeof r2Put;
 };
 
-/**
- * The tick's commit collector, set for exactly as long as the capture batch is downloading. It is a
- * module hook rather than a threaded parameter because `persistAndCommit` is reached from three
- * places inside one per-row capture and from the provenance and re-verdict phases beside it; making
- * every one of them carry a ports object would be a wider change than the batching it serves, and
- * the hook is set and cleared around one `await Promise.all` in `main()`.
- */
 let activeCommitCollector: ((collected: CollectedCaptureCommit) => void) | undefined;
 
 const CAPTURE_PROGRESS_PORTS: CaptureProgressPorts = {
@@ -2408,12 +1716,6 @@ function validReceiptCoordinates(receipt: ReceiptCoordinates): boolean {
   );
 }
 
-/**
- * The receipt coordinates carried by an authorize response or a journaled receipt, copied field by
- * field. Every other key, the response's `ok` envelope included, is dropped, so a receipt journaled
- * with its envelope still yields a body the strict commit contract accepts. Undefined when any
- * coordinate is missing or malformed.
- */
 export function receiptCoordinatesFrom(value: unknown): ReceiptCoordinates | undefined {
   if (!isRecord(value)) {
     return undefined;
@@ -2431,12 +1733,6 @@ export function receiptCoordinatesFrom(value: unknown): ReceiptCoordinates | und
   return validReceiptCoordinates(receipt) ? receipt : undefined;
 }
 
-/**
- * The exact `commitTrackCapture` body (packages/contracts/src/orpc/admin-tracks.ts), built from
- * named fields and never spread from a response or a journal: the contract is a strict object that
- * rejects any extra key. This box script cannot import the workspace, so capture-sweep.test.ts
- * parses this output with the real contract schema.
- */
 export function captureCommitRequest(
   receipt: ReceiptCoordinates,
   trackId: string,
@@ -2450,7 +1746,6 @@ export function captureCommitRequest(
   };
 }
 
-/** The commit body a commit phase state file describes; undefined without a valid receipt. */
 export function captureCommitRequestFromState(state: unknown): CaptureCommitRequest | undefined {
   const receipt = receiptCoordinatesFrom(state);
   if (
@@ -2798,10 +2093,7 @@ export async function finishProgress(
       }
       return reconciled;
     }
-    // The exact receipt coordinates were durably checked and do not exist. Discard the
-    // authorization before continuing so an expired commit token can be refreshed against the
-    // current row instead of being retried forever. A terminal or in-progress receipt returned
-    // above is never replaced.
+
     progress = { ...progress, receipt: undefined };
   }
   if (progress.result.kind === "capture" && progress.result.outcome === "done") {
@@ -2837,8 +2129,7 @@ export async function finishProgress(
       snapshotToken: refreshed.snapshotToken,
     });
   }
-  // The journal and the commit state keep only contract fields, whatever the authorization carried
-  // beside them.
+
   const receipt = receiptCoordinatesFrom(progress.receipt);
   progress = { ...progress, receipt };
   writeJsonAtomic(path, progress);
@@ -2846,8 +2137,7 @@ export async function finishProgress(
     return "pending";
   }
   const commitRequest = captureCommitRequest(receipt, progress.trackId);
-  // The journal already holds the receipt, so the row is reconcilable from disk whatever happens to
-  // the batch. Nothing is committed here.
+
   if (ports.collectCommit?.({ path, request: commitRequest, result: progress.result }) === true) {
     return "deferred";
   }
@@ -2871,25 +2161,12 @@ export async function finishProgress(
   return "pending";
 }
 
-/**
- * Settle a run of authorized rows in ONE admitted commit phase, then apply their receipts item by
- * item.
- *
- * PER-ITEM RECEIPTS ARE WHAT MAKE THIS SAFE. `track.capture` is deliberately non-replayable, and
- * batching does not change that: every item carries its own commit token and its own receipt
- * coordinates, gets its own verdict, and a stale row rejects alone while its neighbours commit.
- * `resolve_operation_receipt` can still be asked about exactly one row, which is what the recovery
- * path does on the next tick for anything this phase left `pending`.
- *
- * A yielded phase, a failed request, or an unrecognised item verdict all resolve to `pending`: the
- * journal keeps its receipt, so the next tick reconciles that row rather than re-issuing its write.
- */
 export function settleCollectedCommits(
   collected: readonly CollectedCaptureCommit[],
   width: number,
-  /** The admitted phase runner. Injectable so the batch's own contract is testable in-process. */
+
   phase: typeof admittedPhase = admittedPhase,
-  /** Server-measured per-item milliseconds are appended here for the tick's summary. */
+
   timing?: number[],
 ): Map<string, ProgressDisposition> {
   const dispositions = new Map<string, ProgressDisposition>();
@@ -3067,18 +2344,11 @@ class FailedCaptureCommitError extends Error {
   }
 }
 
-// ── yt-dlp + ffprobe (subprocess) ────────────────────────────────────────────
-
 function runYtSearch(
   proxyUrl: string,
   query: string,
   source: CaptureSearchSource = "youtube",
 ): YtCandidate[] {
-  // Every source returns the flat duration/id/title shape the ranker needs. "youtube" is the
-  // historic ytsearch5. "music" searches the SAME inventory
-  // through music.youtube.com, where the auto-generated `<Artist> - Topic` art-tracks
-  // that plain search buries rank first — measured 2026-07-14: it recovered 61% of the
-  // catalogue's terminal-unmatched rows, duration-verified.
   const target = buildCaptureSearchTarget(source, query);
   const result = spawnSync(
     YT_DLP_BIN,
@@ -3088,12 +2358,9 @@ function runYtSearch(
       "--socket-timeout",
       "30",
       "--no-warnings",
-      // THE LISTING, not five resolutions of it (see FLAT SEARCH EXTRACTION above). The printed
-      // field set below is unchanged, because a flat entry already carries all six.
+
       ...(FLAT_SEARCH ? ["--flat-playlist"] : []),
-      // Tab-separated so title (which may itself contain tabs) stays LAST. Channel name +
-      // id + verified flag drive the trust classification (channel-trust matching); yt-dlp
-      // prints "NA" for an absent field.
+
       "--print",
       "%(duration)s\t%(id)s\t%(channel)s\t%(channel_id)s\t%(channel_is_verified)s\t%(title)s",
       ...target,
@@ -3115,8 +2382,6 @@ function runYtSearch(
     const [durationRaw, id, channelRaw, channelIdRaw, verifiedRaw, ...titleParts] =
       line.split("\t");
     if (!id || seen.has(id)) {
-      // The music search page can list the same video twice (song + video shelf) — one
-      // candidate per id keeps the download-attempt budget honest.
       continue;
     }
     seen.add(id);
@@ -3133,7 +2398,6 @@ function runYtSearch(
   return candidates;
 }
 
-/** Download one candidate's best audio into `dir`. Returns the produced file path + ext. */
 function runYtDownload(
   proxyUrl: string,
   candidate: YtCandidate,
@@ -3180,20 +2444,6 @@ function runYtDownload(
   return { ext, path: join(dir, produced) };
 }
 
-/**
- * Download ONE 30-second section of a candidate — the catalogue ladder's probe, and the reason that
- * ladder is affordable at 30,672 rows.
- *
- * `--download-sections` makes yt-dlp spawn ffmpeg, which does the fetching itself and over-reads the
- * requested range by ~2.2× to land on keyframes. So the wire cost is ~1.5MB for a ~40s decodable
- * clip against ~6.5MB for the whole song: a quarter of the bytes for everything a fingerprint needs.
- * Measured 2026-08-01 on yt-dlp 2026.03.17.
- *
- * ~1 in 5 section fetches answer 403 — the same CDN IP-lock the full download hits, for the same
- * reason (the media URL is pinned to the player-JSON's exit IP). It is classified through the SAME
- * `classifyDownloadFailure`, so the caller answers it with the sticky session's re-roll exactly as
- * the full path does, and a 403 that outlives the re-roll is a transient the next tick retries.
- */
 function runYtSection(
   proxyUrl: string,
   candidate: YtCandidate,
@@ -3244,7 +2494,6 @@ function runYtSection(
   return { ext: produced.slice(produced.indexOf(".") + 1), path: join(dir, produced) };
 }
 
-/** ffprobe the file's real duration in seconds (belt-and-suspenders vs the search value). */
 function probeDurationSec(filePath: string): number {
   const result = spawnSync(
     FFPROBE_BIN,
@@ -3265,54 +2514,14 @@ function probeDurationSec(filePath: string): number {
   return Number((result.stdout || "").trim());
 }
 
-// ── THE BOT-CHALLENGE METER ──────────────────────────────────────────────────
-//
-// WHAT IT FIXES. The re-roll below fires at most ONCE per track-run (search and download
-// share the one re-roll), and the log line used to live INSIDE that guard — so a run's
-// second, third and fourth challenge were silent, and the number an operator could grep was
-// a FLOOR ("runs that hit their FIRST challenge"), never a rate. Nothing could tell him
-// whether a change to the proxy pool moved the challenge rate at all. Visibility and the
-// re-roll are now separate concerns: the guard still decides whether to RE-ROLL, this meter
-// always records. The tick's JSON summary carries the totals so the rate is readable without
-// grepping (`botChallenges` / `botChallengesUncleared`).
-//
-// ── THE STRAIN CONTRACT ──────────────────────────────────────────────────────
-// Since #994 `emit_cron_output` tees this sweep's STDERR into the /status marker, and
-// fluncle-healthcheck.ts's `countDistressLines` scores every line of it against
-// STRAIN_PHRASES. `log()` is `console.error`, so the WORDING below is load-bearing and the
-// split is deliberate:
-//
-//   • A challenge the re-roll CLEARS is recoverable friction on a healthy tick — the run
-//     moves to a fresh residential exit and usually completes. Measured over two days of box
-//     output: 610 such runs against 5,100 attempts, ~12%. At that rate a scoring line puts
-//     roughly 76 noisy points into every 6h window. The detector now ignores cleared challenges
-//     entirely and applies a cadence-relative rate to the genuinely uncleared failures. So this
-//     line carries NO strain phrase: it says "bot challenge" (a space) and never
-//     "bot-challenged" (the hyphenated STRAIN_PHRASES entry).
-//   • A challenge that arrives with the run's one re-roll already SPENT is the real thing:
-//     the exit is flagged and there is nothing left to swap onto. That line KEEPS the
-//     hyphenated "bot-challenged" and scores, exactly as before.
-//   • The per-tick recap carries no phrase either. It reports a steady-state number, and a
-//     number that is always present must never accrue strain.
-//
-// One hyphen is the entire difference, which is why both lines are built HERE, in one place,
-// and pinned in capture-sweep.test.ts by running the REAL captured stderr through the REAL
-// detector rather than by reasoning about the vocabulary.
-
-/** Where in a run a challenge landed — search and download share the single re-roll. */
 export type BotChallengeStage = "search" | "download";
 
-/** The tick-wide challenge tally: every challenge, and the subset no re-roll could clear. */
 export type BotChallengeMeter = { total: number; uncleared: number };
 
 export function createBotChallengeMeter(): BotChallengeMeter {
   return { total: 0, uncleared: 0 };
 }
 
-/**
- * Record ONE bot challenge — always, whether or not a re-roll was available. `rerolled` says
- * which happened, and decides the wording per the strain contract above.
- */
 export function noteBotChallenge(
   meter: BotChallengeMeter,
   stage: BotChallengeStage,
@@ -3321,7 +2530,6 @@ export function noteBotChallenge(
   meter.total += 1;
 
   if (rerolled) {
-    // Deliberately "bot challenge", never "bot-challenged" — see the strain contract above.
     log(`bot challenge at ${stage} (rerolled=true) — moving to a fresh residential exit`);
     return;
   }
@@ -3330,11 +2538,6 @@ export function noteBotChallenge(
   log(`bot-challenged at ${stage} (rerolled=false) — the run's one re-roll is already spent`);
 }
 
-/**
- * The tick's recap, emitted once at the end of a tick that saw any challenge. Strain-free by
- * contract: the per-line signal above already scored the uncleared ones, and a recap that
- * scored would double-count a steady state into a permanent `degraded`.
- */
 export function logBotChallengeRecap(meter: BotChallengeMeter): void {
   if (meter.total === 0) {
     return;
@@ -3347,26 +2550,9 @@ export function logBotChallengeRecap(meter: BotChallengeMeter): void {
   );
 }
 
-// ── THE SHARED YOUTUBE LADDER ───────────────────────────────────────────────
-//
-// Search → rank → download → duration re-check → FINGERPRINT GATE, extracted so the two sweeps
-// that need it run the SAME one. The capture sweep runs it to acquire audio it will STORE; the
-// provenance backfill (below) runs it to learn WHICH upload carries a recording whose audio is
-// already on file, and throws the bytes away. That difference is entirely in what the CALLER does
-// with the result — a parallel copy of this walk would drift within a release, and the thing it
-// would drift on is the identity gate that keeps wrong audio out of the archive.
-
-/**
- * ONE sticky residential-proxy session for one track's run, with its single bot-challenge re-roll.
- * `url` is what every yt-dlp call reads and `reroll` flips it exactly once (module header: a
- * challenge is an IP-reputation verdict on the exit, so the only answer is a different exit).
- * Every challenge is METERED whether or not a re-roll is left — the meter and the guard are
- * deliberately separate concerns (see THE BOT-CHALLENGE METER above).
- */
 export type ProxySession = {
-  /** Whether the run still has its one re-roll — read BEFORE `reroll` spends it. */
   rerollable: () => boolean;
-  /** Meter a challenge, and move to a fresh exit if the run has a re-roll left. */
+
   reroll: (stage: BotChallengeStage) => boolean;
   url: string;
 };
@@ -3405,35 +2591,19 @@ function openProxySession(sessionSeed: string, meter: BotChallengeMeter): ProxyS
   return session;
 }
 
-/** The bad-audio memory as the walk carries it: the sources, plus whether THIS run grew them. */
 export type RejectedMemory = { dirty: boolean; sources: RejectedSource[] };
 
-/** An upload the fingerprint gate accepted, with the downloaded file still on disk. */
 export type VerifiedUpload = {
   bytes: Uint8Array;
   digest: string;
   ext: string;
   path: string;
   source: CaptureSearchSource;
-  /**
-   * `match` = fingerprint-verified. `no-reference` = the honest abstain (nothing was compared).
-   * `operator` = the operator's pinned source: the gate ran, the pin outranks its verdict.
-   * `consensus` = the preview gate refused every duration-verified upload, but two or more of them
-   * from different channels carry the same recording as each other (the CONSENSUS check below):
-   * machine evidence, subordinate to a preview match, re-checkable.
-   */
+
   verdict: "consensus" | "match" | "no-reference" | "operator";
   videoId: string;
 };
 
-/**
- * ONE mapping from the walk's verdict to the `capture_verification` the row is stamped with, shared
- * by the inline success path and the journal-replay path so the two can never disagree. `match` →
- * `preview-match`; `operator` → `operator-verified` (the pinned source — the historic verification
- * backfill leaves it alone); `consensus` → `consensus-verified` (independent uploads agreeing with
- * each other — the server treats it like any other verified capture and MAY re-check it); anything
- * else is the honest `unverified` abstain.
- */
 export function captureVerificationFor(
   verdict: VerifiedUpload["verdict"],
 ): "consensus-verified" | "operator-verified" | "preview-match" | "unverified" {
@@ -3468,7 +2638,6 @@ export function captureProviderCompletion(
   };
 }
 
-/** The seams the ladder walk reaches the world through — injectable so the walk is provable. */
 export type LadderPorts = {
   download: (
     proxyUrl: string,
@@ -3482,13 +2651,6 @@ export type LadderPorts = {
   search: (proxyUrl: string, query: string, source: CaptureSearchSource) => YtCandidate[];
 };
 
-/**
- * A duration-verified candidate the PREVIEW gate refused, kept on disk (renamed off the downloader's
- * `audio.*` slot so the next download cannot overwrite it) with its fingerprint, for the consensus
- * check at the end of the walk. Bounded by construction: the walk downloads at most
- * `DOWNLOAD_ATTEMPTS` files, and a held one is one of those — nothing extra is ever downloaded.
- * Held in WALK order, which is rank order — the tiebreak inside an agreeing set.
- */
 type HeldCandidate = {
   candidate: YtCandidate;
   digest: string;
@@ -3497,39 +2659,20 @@ type HeldCandidate = {
   path: string;
 };
 
-/**
- * The independence key of a candidate for the consensus check: the upload's CHANNEL. Two uploads
- * from one channel are one uploader's word said twice, never two witnesses. A candidate whose
- * channel yt-dlp did not report cannot be shown independent of anyone and is never counted.
- */
 function consensusChannelKey(candidate: YtCandidate): string | undefined {
   const key = (candidate.channelId ?? candidate.channel)?.trim();
   return key ? key : undefined;
 }
 
-/** One agreeing set the consensus check found: the accepted candidate + who agrees with it. */
 export type ConsensusVerdict<T extends { candidate: YtCandidate; fingerprint: readonly number[] }> =
   {
     accepted: T;
-    /** Every held candidate that carries the same recording as `accepted` — any channel. */
+
     agreeing: T[];
-    /** The BER of each agreeing candidate against `accepted`, in `agreeing` order. */
+
     bers: number[];
   };
 
-/**
- * THE CONSENSUS CHECK (docs/the-ear.md § Wrong audio). The preview gate is precision-over-recall
- * and it has one blind spot: a store preview cut from a LOW-INFORMATION section of the recording (a
- * beatless intro) scores a BER around 0.33 against every genuine upload — including the
- * distributor's own `- Topic` art-track — while genuine uploads agree with EACH OTHER at 0.02–0.04
- * and wrong-song candidates do not agree with anything. So when the gate refused every
- * duration-verified upload the walk downloaded, ask the uploads about each other: walking the held
- * set in RANK order, the first candidate that agrees (`mutualWindowMatch`, the gate's own `maxBer()`)
- * with at least one candidate from a DIFFERENT channel is accepted, and every held candidate that
- * agrees with it — any channel — is its agreeing set. `null` when no two independent uploads agree;
- * the caller's behaviour is then exactly the terminal `unmatched` walk it always was. Pure, so the
- * test suite can drive it with fingerprints alone.
- */
 export function findConsensus<T extends { candidate: YtCandidate; fingerprint: readonly number[] }>(
   held: readonly T[],
   threshold: number = maxBer(),
@@ -3569,15 +2712,6 @@ export function findConsensus<T extends { candidate: YtCandidate; fingerprint: r
   return null;
 }
 
-/**
- * ONE download of a candidate, answered exactly as the ladder answers a challenge: decide the
- * recovery BEFORE the re-roll spends the session's one fresh exit (the re-roll is what spends
- * `canReroll`), meter a bot challenge whichever branch wins (a challenge the run cannot clear is
- * still a challenge, and its visibility must not ride on there being a re-roll left), then re-try
- * the SAME id once — on a fresh exit, or through the player-client fallback. Anything past that
- * throws to the caller: the ladder walk treats a recoverable one as "next candidate", the pinned
- * walk as its retryable `failed`.
- */
 function downloadWithRecovery(
   download: LadderPorts["download"],
   session: ProxySession,
@@ -3604,33 +2738,10 @@ function downloadWithRecovery(
   }
 }
 
-/**
- * Run the ladder for one track and return the first upload that clears the fingerprint gate, or
- * `null` when the walk DISPROVED every candidate it could reach.
- *
- * THROWS on a transient failure (a proxy error, a bot wall that outlived the re-roll, a DRM-locked
- * top hit with nothing usable behind it), exactly as the inline walk did — a recoverable skip
- * disproves nothing, so it must not be allowed to read as a terminal verdict (the 047.0.8M case).
- * `memory` is mutated in place, so a caller that persists it keeps every paid-for rejection.
- *
- * A candidate the PREVIEW gate refuses is not remembered on the spot: it is HELD (file + fingerprint,
- * no extra download) until the walk ends, because the gate's refusal is not the last word when the
- * refused uploads agree with each other (`findConsensus`). When the walk ends without a preview
- * match, a consensus among two or more independent held candidates accepts the highest-ranked of
- * them as `consensus`; the held candidates that DISAGREE with it are remembered as wrong audio, the
- * agreeing ones are not. With no consensus, every held candidate is remembered — the walk's memory
- * is then the plain preview-gate memory, every held candidate remembered. A match or a throw settles
- * the held set the same way (all remembered), so no paid-for rejection is ever dropped.
- */
 export async function findVerifiedUpload(options: {
   dir: string;
   finding: CaptureFinding;
-  /**
-   * A source-audio R2 key whose embedded sha256 is KNOWN-BAD for this track — the legacy
-   * single-sha memory a row quarantined before the general one shipped still carries. CALLER-
-   * SUPPLIED, never read off the row here, because `source_audio_key` means opposite things to
-   * the two callers (see the backstop below).
-   */
+
   legacyRejectKey?: string;
   memory: RejectedMemory;
   ports?: Partial<LadderPorts>;
@@ -3649,20 +2760,6 @@ export async function findVerifiedUpload(options: {
     search: options.ports?.search ?? runYtSearch,
   };
 
-  // THE SEARCH LADDER (bounded — QUERY_VARIANTS billed searches max, never a loop).
-  // Ranked ACCEPTANCE is the gate between steps, not raw-candidate count: the 2026-07-14
-  // unmatched audit showed an over-constrained multi-artist query routinely returns five
-  // WRONG candidates (live sets, shorts) that all miss the duration guard — under the old
-  // "zero raw candidates" trigger that suppressed the fallback exactly when it was needed.
-  // The rungs, in measured-yield order (the 323-row spike):
-  //   1. ytsearch5 with the historic raw query — byte-identical, no regression.
-  //   2. the SAME query against music.youtube.com — the auto-generated `<Artist> - Topic`
-  //      art-tracks rank first there; this step alone recovered 61% of the terminal-
-  //      unmatched set, duration-verified.
-  //   3. the normalized de-constrained variant (primary artist + version-stripped title,
-  //      typographic punctuation folded) on music — +20 rows the raw shape missed.
-  //   4. the raw query on SoundCloud, reached only after every YouTube rung produced zero
-  //      duration-gated survivors.
   const rankContext = {
     artistYoutubeChannelIds: finding.artistYoutubeChannelIds,
     durationMs: finding.durationMs,
@@ -3688,39 +2785,20 @@ export async function findVerifiedUpload(options: {
   });
   const ranked = found?.ranked ?? [];
 
-  // The ladder concluded and nothing survived the duration guard. The CALLER owns what that
-  // means and what it writes: for capture it is a terminal `unmatched`, for the provenance
-  // backfill it is a `no-match` report that moves no capture column at all.
   if (ranked.length === 0) {
     return null;
   }
 
-  // ── THE BAD-AUDIO MEMORY (docs/the-ear.md § Wrong audio) ──────────────────────────────────
-  // Two layers. The GENERAL memory (`source_audio_rejected`) drives a videoId PRE-download
-  // filter + a sha256 POST-download backstop. The LEGACY single-sha (embedded in a kept
-  // `source_audio_key`) is folded into the same backstop, so a row quarantined before the
-  // general memory shipped still refuses its known-bad bytes. `memoryDirty` tracks whether this
-  // run added a rejection, so the terminal write persists the grown memory exactly once.
   const rejectedIds = rejectedVideoIds(memory.sources);
   const knownBadShas = rejectedShas(memory.sources);
-  // …and the LEGACY single-sha, which the CALLER supplies rather than this function reading it off
-  // the row. That is not indirection for its own sake: `source_audio_key` means opposite things to
-  // the two callers. On a CAPTURE it is only ever present on a wrong-audio re-capture, so its sha
-  // is known-BAD. On the PROVENANCE backfill every row has a key by definition, and its sha is the
-  // GOOD audio the archive is holding — folding that in would blacklist the one upload most likely
-  // to be the right answer, which is exactly the upload the original capture came from.
+
   const legacyRejectHash = extractSourceAudioSha256(options.legacyRejectKey);
   if (legacyRejectHash) {
     knownBadShas.add(legacyRejectHash);
   }
 
-  // PRE-DOWNLOAD FILTER: a candidate whose video id is already remembered as bad never costs
-  // proxy bytes again. Applied before the attempt budget, so DOWNLOAD_ATTEMPTS is spent only on
-  // candidates that could actually be new audio.
   const attempts = filterRejectedCandidates(ranked, rejectedIds, DOWNLOAD_ATTEMPTS);
-  // Say what the memory took off the table. A row whose correct upload was once rejected by the
-  // fingerprint gate keeps skipping that upload silently on every later walk, and from the journal
-  // alone it reads as "no candidates" — the row lands `unmatched` with nothing to explain it.
+
   const preFiltered =
     ranked.length - ranked.filter((entry) => !rejectedIds.has(entry.candidate.id)).length;
   if (preFiltered > 0) {
@@ -3732,19 +2810,8 @@ export async function findVerifiedUpload(options: {
     );
   }
 
-  // ── THE REFERENCE ────────────────────────────────────────────────────────────────────────
-  // The ISRC-resolved official 30s preview, fingerprinted ONCE per track (not per candidate).
-  // null ⇒ the track has NO preview source, or fpcalc is absent — the gate then ABSTAINS on
-  // whatever downloads (stamped `unverified`), never blocking a track that has no reference.
-  // The preview is a verification REFERENCE only: never a vector, never a stored analysis input.
   const previewFp = await ports.referenceFingerprint(trackId);
 
-  // ── THE HELD SET ─────────────────────────────────────────────────────────────────────────
-  // Preview-refused, duration-verified candidates wait here for the consensus check. `settle`
-  // runs on EVERY exit: it remembers the held candidates NOT in `keep` (all of them, on a preview
-  // match / a terminal null / a throw — every preview refusal remembered) and deletes their files;
-  // a kept candidate is the consensus winner or one that agrees with it, and is neither remembered
-  // nor, for the winner, deleted.
   const held: HeldCandidate[] = [];
   const settle = (keep: ReadonlySet<HeldCandidate>, retainPath?: string): void => {
     for (const entry of held) {
@@ -3764,51 +2831,31 @@ export async function findVerifiedUpload(options: {
     held.length = 0;
   };
 
-  // Walk the (pre-filtered) candidates: download → known-bad sha backstop → real-duration
-  // re-check → THE FINGERPRINT GATE. A verified MATCH (or an abstain, when there is no
-  // reference) is RETURNED to the caller; a fingerprint MISMATCH holds the candidate for the
-  // consensus check and falls through to the next upload. A DRM/bot-walled hit is skipped
-  // (recoverable) but keeps the run off a terminal verdict (see below); a non-recoverable
-  // error aborts.
   let lastError: unknown;
   try {
     for (const candidate of attempts) {
       try {
-        // A fresh exit usually clears a challenge for the SAME candidate; if the retry throws
-        // again the catch below handles it as before (recoverable → next candidate, since the
-        // run's one re-roll is now spent).
         const file = downloadWithRecovery(ports.download, session, candidate.candidate, dir);
 
         const fileBytes = new Uint8Array(readFileSync(file.path));
         const fileDigest = createHash("sha256").update(fileBytes).digest("hex");
 
-        // KNOWN-BAD BYTES (the deep backstop): the same wrong audio re-uploaded under a new id.
         if (knownBadShas.has(fileDigest)) {
           log(`candidate ${candidate.candidate.id} is the known wrong audio — trying next`);
           rmSync(file.path, { force: true });
           continue;
         }
 
-        // Belt-and-suspenders: confirm the REAL downloaded duration passes the SYMMETRIC guard
-        // (the search value can lie / point at a different manifest). A wrong-LENGTH file is a
-        // plain miss, not a same-recording claim, so it is skipped but NOT remembered — and never
-        // held: a wrong-length upload has no say in the consensus.
         const realDurationSec = ports.probeDurationSec(file.path);
         if (!durationWithinTolerance(realDurationSec, finding.durationMs)) {
           rmSync(file.path, { force: true });
           continue;
         }
 
-        // ── THE FINGERPRINT GATE ──────────────────────────────────────────────────────────────
         const captureFingerprint = ports.fingerprint(file.path);
         const verified = verifyCaptureFileDetailed(previewFp, captureFingerprint);
 
         if (verified.verdict === "mismatch" && captureFingerprint !== null) {
-          // WRONG AUDIO by the preview's account (the 005.9.9L failure) — or the preview's blind
-          // spot. HELD, not yet remembered: the file moves off the downloader's `audio.*` slot so
-          // the next download cannot clobber it, and the consensus check at the end of the walk
-          // decides whether this is a rejection to remember or a genuine upload the preview could
-          // not see. The same bytes later in the walk are still refused as known-bad.
           log(
             `candidate ${candidate.candidate.id} failed fingerprint verification (ber=${(verified.ber ?? 0).toFixed(3)}) — holding for consensus, trying next`,
           );
@@ -3825,10 +2872,6 @@ export async function findVerifiedUpload(options: {
           continue;
         }
 
-        // ACCEPTED. The file is still on disk and the caller decides its fate: the capture sweep
-        // stores the bytes in R2, the provenance backfill deletes them and keeps only the id. A
-        // preview match outranks any consensus the held set could have reached: every held
-        // candidate is remembered, exactly as before.
         settle(new Set());
         return {
           bytes: fileBytes,
@@ -3849,27 +2892,15 @@ export async function findVerifiedUpload(options: {
       }
     }
 
-    // ── THE CONSENSUS CHECK ────────────────────────────────────────────────────────────────────
-    // No preview match. Before naming the verdict, ask the refused uploads about each other: two
-    // or more from DIFFERENT channels carrying the same recording is evidence the preview's
-    // refusal could not outweigh (its section was low-information; theirs agree end to end).
-    // Machine evidence, subordinate to a preview match (which returned above) and to the
-    // operator's pin (which never reaches this walk), and re-checkable by the server.
     const consensus = findConsensus(held);
     if (consensus) {
       const { accepted, agreeing, bers } = consensus;
       log(
         `preview gate rejected ${held.length} duration-verified candidate(s); ${agreeing.length + 1} of them agree with each other (ber=${bers.map((ber) => ber.toFixed(3)).join(",")}) — accepting ${accepted.candidate.id} on consensus`,
       );
-      // The winner and its agreeing set are NOT remembered as wrong audio — they are the
-      // recording, on each other's word. Everything else held is.
+
       settle(new Set([accepted, ...agreeing]), accepted.path);
-      // THE WINNER GOES BACK ONTO THE `audio.<ext>` SLOT. The journal's completion gate admits
-      // exactly that file name and nothing else (`runJournaledCaptureProvider`), and the replay
-      // path reads the completion's `fileName` out of the work directory — so a consensus capture
-      // must leave the work directory looking exactly like a preview-match capture does: one
-      // `audio.<ext>`, the accepted bytes. Every other download was deleted above; a stray slot
-      // file of another extension is cleared first so the rename can never land beside one.
+
       for (const stray of readdirSync(dir).filter((entry) => entry.startsWith("audio."))) {
         rmSync(join(dir, stray), { force: true });
       }
@@ -3887,20 +2918,9 @@ export async function findVerifiedUpload(options: {
       };
     }
   } finally {
-    // Every exit that did not settle explicitly — the terminal null or a thrown error (the match
-    // and consensus returns above already emptied the set, so this is a no-op for them) —
-    // remembers the whole held set: a paid-for preview rejection is never dropped, and a run
-    // that errored still persists it through the caller's `failed` patch.
     settle(new Set());
   }
 
-  // Nothing accepted. `null` — a terminal verdict for the caller to name — is returned ONLY when
-  // the walk actually DISPROVED every upload: each fresh candidate was WRONG AUDIO (known-bad or
-  // a fingerprint mismatch no other upload backed) or wrong-length, or the pre-filter left nothing
-  // to try. A recoverable skip (DRM/bot-wall) disproves nothing — the skipped upload can be the
-  // RIGHT audio (the 047.0.8M case: the correct art-track bot-walled, two wrong songs
-  // fingerprint-rejected, and the rejections masked the transient error into a terminal verdict)
-  // — so any `lastError` rethrows into the caller's retryable path.
   if (!lastError) {
     return null;
   }
@@ -3908,30 +2928,6 @@ export async function findVerifiedUpload(options: {
   throw lastError;
 }
 
-// ── THE PINNED SOURCE (docs/the-ear.md § Wrong audio) ──────────────────────────────────────────
-//
-// The fingerprint gate above is precision-over-recall BY DESIGN: a genuine match scores a bit-error
-// rate around 0.02–0.07 against the store preview, and the gate refuses anything past its threshold.
-// For some recordings the only uploads that exist are a different master or edit of the same release
-// — same length, wrong bits, BER 0.33–0.46 against BOTH store previews — so every walk lands a
-// terminal `unmatched` and the finding never gets full audio, never an embedding, and is absent from
-// similarity search. The operator's ear is the only thing that outranks the gate, and
-// `capture_source_pin` is how he says "capture THIS upload". This walk honours it.
-//
-// WHAT THE PIN CHANGES: the ladder is not searched (one download, no billed search), the bad-audio
-// memory is not consulted and NEVER grown (this function does not even receive it — a source-pinned
-// test proves the slice never touches `memory`), and the fingerprint's verdict is recorded as
-// `operator-verified` whatever it says — a mismatch is LOGGED with its BER, then captured on the
-// operator's authority.
-//
-// WHAT THE PIN DOES NOT CHANGE: the duration guard. A pasted id that points at a live set, a
-// continuous mix, or a wrong edit off by more than the tolerance is REFUSED — a `failed` outcome (the
-// retry path, so a later tick can see a corrected pin) and never `unmatched` (the terminal verdict
-// the pin exists to escape). Download failures — a bot wall, a 403, a timeout — take the normal
-// `failed` + cooldown path through the same sticky-session re-roll as the ladder, and retry on later
-// ticks. The commit path is unchanged, so analyze and embed pick a pinned capture up automatically.
-
-/** The seams `findPinnedUpload` reaches the world through — injectable so the walk is provable. */
 export type PinnedUploadPorts = {
   download: (
     proxyUrl: string,
@@ -3944,24 +2940,13 @@ export type PinnedUploadPorts = {
   referenceFingerprint: (idOrLogId: string) => Promise<null | number[]>;
 };
 
-/** The refusal a pinned upload earns when it fails the duration guard. Lands `failed`, retryable. */
 export type PinnedDurationRefusal = Error & { isPinnedDurationRefusal: true };
 
 export function isPinnedDurationRefusal(error: unknown): error is PinnedDurationRefusal {
   return (error as { isPinnedDurationRefusal?: boolean })?.isPinnedDurationRefusal === true;
 }
 
-/**
- * Download the operator's pinned upload for one row and hand it back ACCEPTED, or throw. It never
- * returns `null`: a pinned row has no ladder to exhaust, so there is no "disproved every candidate"
- * verdict for the caller to name — every failure here is the caller's retryable `failed` path.
- */
 export async function findPinnedUpload(options: {
-  /**
-   * The pin's DURATION OVERRIDE (`pin_capture_source … allowDurationMismatch`): the operator has
-   * deliberately pinned a different EDIT of the same recording, so the guard is waived for this
-   * one id on his authority. The row's `duration_ms` is never rewritten from the file.
-   */
   allowDurationMismatch?: boolean;
   dir: string;
   finding: CaptureFinding;
@@ -3980,24 +2965,13 @@ export async function findPinnedUpload(options: {
         fetchPreviewFingerprint({ apiBaseUrl: API_BASE_URL, apiToken: API_TOKEN, idOrLogId })),
   };
   const who = finding.logId ?? `catalogue (${finding.trackId})`;
-  // The pinned id as the downloader wants it. `durationSec` is unknown until the bytes are probed;
-  // the guard below reads the REAL file length, never a search value.
+
   const candidate: YtCandidate = { durationSec: 0, id: videoId, source: "youtube", title: "" };
 
   log(`honouring the operator's capture-source pin for ${who}: youtube ${videoId}`);
 
-  // ONE download, answered exactly as the ladder answers a challenge (the shared
-  // `downloadWithRecovery`): decide the recovery BEFORE the re-roll spends the session's one fresh
-  // exit, then re-try the same id once. Anything past that throws into the caller's `failed` path
-  // and a later tick retries it.
   const file = downloadWithRecovery(ports.download, session, candidate, dir);
 
-  // THE DURATION GUARD STILL APPLIES — unless the operator waived it FOR THIS PIN. A bare pin says
-  // which upload; it does not waive the one check that keeps a wrong paste from landing an
-  // hour-long set as a five-minute finding's full song. The override is the operator saying, with
-  // the lengths in front of him, that this different edit IS the recording he wants captured: the
-  // real length is logged beside the row's, and the row's own `duration_ms` stays what the store
-  // said (nothing in the commit path writes it).
   const realDurationSec = ports.probeDurationSec(file.path);
   const durationOk = durationWithinTolerance(realDurationSec, finding.durationMs);
   if (!durationOk && options.allowDurationMismatch === true) {
@@ -4017,8 +2991,6 @@ export async function findPinnedUpload(options: {
   const fileBytes = new Uint8Array(readFileSync(file.path));
   const fileDigest = createHash("sha256").update(fileBytes).digest("hex");
 
-  // THE GATE STILL RUNS — for the record, never for the verdict. The operator chose this upload
-  // with the gate's refusal in front of him; what he is owed is the number, not a second refusal.
   const previewFp = await ports.referenceFingerprint(finding.trackId);
   const verified = verifyCaptureFileDetailed(previewFp, ports.fingerprint(file.path));
 
@@ -4041,16 +3013,6 @@ export async function findPinnedUpload(options: {
   };
 }
 
-// ── Per-finding capture ────────────────────────────────────────────────────
-
-/**
- * What one row's capture came to.
- *
- * The three `deferred:*` variants are NOT verdicts. They say "this row is authorized and its commit
- * is in the tick's batch", and they carry the verdict the row earns IF that commit lands, so the
- * batched commit's per-item receipt resolves each one with exactly the mapping the per-row commit
- * applies. A row is counted once, after its receipt, never twice and never on a guess.
- */
 type FindingOutcome =
   | "deferred:done"
   | "deferred:failed"
@@ -4063,7 +3025,6 @@ type FindingOutcome =
   | "skipped"
   | "unrecorded-failure";
 
-/** The verdict a deferred row earns once its batched commit lands. */
 const DEFERRED_OUTCOMES = {
   "deferred:done": "done",
   "deferred:failed": "failed",
@@ -4076,12 +3037,6 @@ export function isDeferredOutcome(
   return outcome in DEFERRED_OUTCOMES;
 }
 
-/**
- * ONE mapping from a row's settlement to its verdict, shared by all three of a capture's exits.
- *
- * `committed` is the verdict the row earns when the write lands; `deferred` says the write is in
- * the tick's batch and carries that same verdict forward for the batch's receipt to confirm.
- */
 function captureOutcomeFor(
   disposition: ProgressDisposition,
   landed: "done" | "failed" | "unmatched",
@@ -4099,7 +3054,6 @@ function captureOutcomeFor(
   return disposition === "failed" ? "unrecorded-failure" : "pending";
 }
 
-/** Resolve a deferred row against its batched commit's own receipt. */
 export function resolveDeferredOutcome(
   outcome: keyof typeof DEFERRED_OUTCOMES,
   disposition: ProgressDisposition | undefined,
@@ -4119,23 +3073,12 @@ async function captureFinding(
 ): Promise<FindingOutcome> {
   const { logId, trackId } = finding;
 
-  // A CERTIFIED row with no coordinate is the impossible case (the queue requires
-  // `log_id` on the finding half) — defensive skip, exactly as before. An UNCERTIFIED
-  // (catalogue) row has no coordinate BY CONSTRUCTION and captures under its `track_id`
-  // instead: the queue serves it deliberately (the Ear's ladder, behind the budget brake),
-  // so skipping it here would silently defeat the whole catalogue half — which is exactly
-  // the bug this guard once was (every catalogue row skipped, unstamped, re-picked forever).
   if (!logId && finding.certified !== false) {
     return "skipped";
   }
 
-  // The track's identity for everything that needs one below: the sticky proxy session
-  // and the R2 key root. A finding is its coordinate; a catalogue row is its track id.
   const keyRoot = logId ?? `catalogue/${trackId}`;
 
-  // The persisted consecutive-failure count: drives the retry backoff bookkeeping in the
-  // catch below AND rotates the sticky session per retry run (captureSessionSeed) so a
-  // retry never re-lands on the exit whose flag just failed it.
   const priorFailures =
     typeof finding.sourceAudioFailures === "number" ? finding.sourceAudioFailures : 0;
   const session = openProxySession(
@@ -4146,26 +3089,19 @@ async function captureFinding(
   const attemptPath = progressPath(trackId, "capture");
   let workDirectory: string | undefined;
 
-  // The bad-audio memory lives OUTSIDE the try: a run that grew it and then errored still
-  // persists it on the `failed` patch in the catch, so a paid-for rejection is never lost.
   const memory: RejectedMemory = {
     dirty: false,
     sources: parseRejectedSources(finding.sourceAudioRejected),
   };
 
   try {
-    // A capture row carries `source_audio_key` ONLY on a wrong-audio re-capture, where its sha is
-    // the known-bad audio the walk must refuse. That is the legacy single-sha memory.
     const providerRun = await runJournaledCaptureProvider({
       completion: (accepted) => captureProviderCompletion(accepted, memory),
       finding,
       kind: "capture",
       provider: async (directory) => {
         workDirectory = directory;
-        // THE OPERATOR'S PIN OUTRANKS THE LADDER (docs/the-ear.md § Wrong audio). A pinned row
-        // downloads that one id — no search, no memory (the walk is not handed it), the gate for the
-        // record only — and can never land `unmatched`: `findPinnedUpload` returns an accepted
-        // upload or throws into the `failed` path below.
+
         const pin = finding.captureSourcePin?.trim();
         if (pin) {
           return findPinnedUpload({
@@ -4192,16 +3128,10 @@ async function captureFinding(
     const accepted = providerRun.value;
 
     if (!accepted) {
-      // The one line that names the row: every candidate verdict above is logged by video id
-      // only, so without this a finding that lands terminal reads as if it was never walked.
       log(
         `capture unmatched for ${logId ?? `catalogue (${trackId})`} — no candidate survived; ${memory.sources.length} rejected upload(s) remembered`,
       );
-      // `unmatched` is terminal — the queue never re-burns it; a fresh finding still jumps it
-      // newest-first. `sourceAudioAttemptedAt` is stamped here too: it was a billed proxy request,
-      // and the capture budget's ledger counts attempts rather than successes — a day of unmatched
-      // rows still spends money, and a meter that could not see that would read zero while the bill
-      // climbed. See apps/web/src/lib/server/capture-budget.ts.
+
       const update: Record<string, unknown> = {
         captureStatus: "unmatched",
         sourceAudioAttemptedAt: new Date().toISOString(),
@@ -4220,28 +3150,9 @@ async function captureFinding(
       return captureOutcomeFor(disposition, "unmatched");
     }
 
-    // MATCH → `preview-match`; NO-REFERENCE → `unverified` (the honest abstain); OPERATOR (the
-    // pinned source) → `operator-verified`; CONSENSUS (independent uploads agreeing with each
-    // other) → `consensus-verified`. Store the bytes + stamp the verdict provenance in the same
-    // write.
     const verification = captureVerificationFor(accepted.verdict);
     const key = buildSourceAudioKey(keyRoot, accepted.digest, accepted.ext);
 
-    // The key + done + the captured stamp + THE METER + THE VERIFICATION PROVENANCE.
-    // Clobber-safe enrichment trigger — for a CERTIFIED finding, re-queue when the BPM is
-    // missing OR the row was analyzed from a preview (closing the capture→enrich race; a
-    // catalogue row has no enrichment and is skipped). `sourceAudioBytes` is the billed size,
-    // knowable only HERE. `sourceAudioAttemptedAt` is stamped on success too (the budget's
-    // rolling-24h ledger is a range seek on it). If this run REJECTED an earlier candidate,
-    // the grown memory rides this write so it is never lost.
-    // THE ACCEPTED UPLOAD'S ID rides this write (operator ruling 2026-07-31). Until now the
-    // walk remembered only the ids it REJECTED (`sourceAudioRejected`) and threw the winner
-    // away at the moment it was most certain — this is the one place that knows which YouTube
-    // upload carries this recording, proven by the fingerprint gate. The server decides
-    // separately whether that upload may ever be SHOWN (a rip carries the same bytes as the
-    // master, so a fingerprint match is identity, never permission); the sweep's whole job is
-    // to report the id. Rows captured BEFORE this shipped are reached by the PROVENANCE PHASE
-    // below, which re-derives the id without touching a single capture column.
     const now = new Date().toISOString();
     const update: Record<string, unknown> = {
       captureStatus: "done",
@@ -4253,15 +3164,6 @@ async function captureFinding(
       sourceAudioKey: key,
     };
 
-    // ONLY A REAL MATCH REPORTS AN ID. `verification` is `unverified` on the abstain path —
-    // the track had no preview reference (or fpcalc was absent), so the bytes were accepted on
-    // duration and ranking alone and NOTHING was fingerprinted. The identity payload serves
-    // this id under `method: "fingerprint"`, so shipping one from the abstain path would put
-    // the words "matched by audio fingerprint" on a page under a match that never happened.
-    // The server re-checks this same condition (lib/server/track-update.ts) rather than
-    // trusting the box, but the honest source is here. A CONSENSUS capture ships no id either:
-    // the uploads proved they carry ONE recording, not that it is the recording the ISRC names,
-    // and `authorize_track_capture` 422s an id beside anything but `preview-match`.
     if (accepted.verdict === "match" && accepted.source !== "soundcloud") {
       update.youtubeVideoId = accepted.videoId;
     }
@@ -4292,12 +3194,6 @@ async function captureFinding(
 
     return captureOutcomeFor(disposition, "done");
   } catch (error) {
-    // A yt-dlp / proxy / R2 error → failed (retriable under backoff). ACCUMULATE the
-    // consecutive-failure count + stamp the attempt: the capture queue holds a `failed`
-    // row out until `source_audio_attempted_at` is past the cooldown, and drops it once
-    // the count hits the cap. The admin DTO surfaces the prior count (when non-zero), so
-    // absent → 0 → a first failure lands 1, a second lands 2, … up to the cap. The bumped
-    // count also rotates the NEXT run's session seed (captureSessionSeed above).
     const update: Record<string, unknown> = {
       captureStatus: "failed",
       sourceAudioAttemptedAt: new Date().toISOString(),
@@ -4331,46 +3227,6 @@ async function captureFinding(
   }
 }
 
-// ── THE CATALOGUE PROVENANCE LADDER (measured 2026-08-01, n=40) ─────────────
-//
-// WHAT IT IS FOR. The provenance phase below recovers a discarded video id by running capture's FULL
-// ladder again — a resolving search plus a whole-song download, ~7.5MB of billed residential proxy
-// per row. Across the 30,672-row catalogue backlog that is roughly 200GB, which is not a backfill,
-// it is a bill. This ladder answers the same question for the catalogue tier at a fraction of it, by
-// noticing that most rows do not need audio bought to be answered.
-//
-// THREE RUNGS, cheapest first, and each one only pays for what the one before it could not settle:
-//
-//   1. METADATA-TOPIC ACCEPTANCE — free beyond the flat search itself. A candidate on an
-//      `<Artist> - Topic` channel whose title clears the house fold and whose length agrees within
-//      ±3s is served on metadata alone. That is safe HERE and nowhere else: an art track is minted
-//      by YouTube from the rights-holder's own delivered master, so the channel is both the artist
-//      credit and the licence. The claim is stamped honestly as `metadata-match`, the server maps it
-//      to `method: "search"`, and the /identity page says "matched by artist, title, and length" —
-//      the Spotify anchor's exact claim class, never the fingerprint's.
-//
-//   2. SEGMENT FINGERPRINT — ~1.5MB. A NON-Topic candidate that clears the very same gate is NOT
-//      served on it: fan re-ups, mix rips and bootlegs all name themselves correctly and all run the
-//      right length, and there is no channel authority among them to break the tie. So 30 seconds of
-//      the candidate is bought and fingerprinted against the row's OWN ARCHIVED AUDIO, pulled back
-//      out of Fluncle's private R2 at no vendor cost. That is a strictly BETTER reference than the
-//      capture path's 30s preview — it is the full recording, and it is the recording Fluncle
-//      actually holds. Alignment needs no new machinery: `slidingWindowMatch` slides the SHORTER
-//      fingerprint across the LONGER one over every offset, so a clip taken from 0:30 of the
-//      candidate finds its place anywhere inside the archived master by construction.
-//
-//   3. THE RESIDUAL LADDER — the remaining search variants (music.youtube.com, the normalized
-//      de-constrained query, then SoundCloud), flat, feeding whatever they return back through rungs 1 and 2. The
-//      spike ran only variant 0 and the music rung rescued 2 of its 11 misses, so the variants earn
-//      their place; they cost a search each and nothing more.
-//
-// NO FULL AUDIO DOWNLOAD HAPPENS ANYWHERE IN THIS TIER. The full-song downloader and the shared
-// full-fingerprint walk are both unreachable from here, and a test pins that by NAME over this
-// section's own source — the same spirit as the rail on the phase below, which never moves a capture
-// column. This ladder inherits that rail whole: it reads `source_audio_key` to FETCH the archive and
-// writes not one capture field.
-
-/** The per-rung tally the tick summary publishes, so an operator can read the ladder working. */
 export type ProvenanceLadderCounts = {
   deferred: number;
   exhausted: number;
@@ -4393,10 +3249,6 @@ export function createLadderCounts(): ProvenanceLadderCounts {
   };
 }
 
-/**
- * Pull the row's archived master out of R2 and fingerprint it. `null` when the object is gone or
- * fpcalc is absent — rung 2's honest abstain, which skips the rung rather than failing the row.
- */
 async function loadArchiveFingerprint(key: string, dir: string): Promise<null | number[]> {
   const bytes = await r2Get(key);
 
@@ -4416,7 +3268,6 @@ async function loadArchiveFingerprint(key: string, dir: string): Promise<null | 
   return fingerprint;
 }
 
-/** Buy one candidate's 30s section, answering a challenge/403 the way the full download does. */
 function downloadSection(
   session: ProxySession,
   candidate: YtCandidate,
@@ -4427,8 +3278,7 @@ function downloadSection(
     return runYtSection(session.url, candidate, dir, false);
   } catch (error) {
     const flags = error as DownloadErrorFlags;
-    // Decided BEFORE the re-roll fires, since the re-roll is what spends `canReroll` — the same
-    // ordering trap `chooseDownloadRecovery` exists to settle on the capture path.
+
     const recovery = chooseDownloadRecovery(flags, session.rerollable(), source);
 
     if (flags.isBotChallenge) {
@@ -4447,14 +3297,6 @@ function downloadSection(
   }
 }
 
-/**
- * Run the three rungs for ONE catalogue row.
- *
- * `budget.segments` is the tick's REMAINING segment allowance and is decremented in place, so the
- * strict per-tick download cap holds across every row the walk touches. A row that reaches rung 2
- * with the allowance already spent is DEFERRED — untouched, unstamped, and simply asked again next
- * tick with a fresh allowance — which is the one outcome that must never be confused with an answer.
- */
 async function proveCatalogueProvenance(
   row: CaptureFinding,
   snapshotToken: string,
@@ -4465,21 +3307,15 @@ async function proveCatalogueProvenance(
 ): Promise<"deferred" | ProvenanceOutcome> {
   const { trackId } = row;
   const session = openProxySession(captureSessionSeed(trackId, 0), meter);
-  // READ-ONLY, exactly as the phase below reads it: a candidate an earlier capture proved wrong must
-  // not cost bytes again. This run's own rejections join the set IN MEMORY for the rest of the walk
-  // and are never written back — that would be a capture column.
+
   const rejectedIds = rejectedVideoIds(parseRejectedSources(row.sourceAudioRejected));
   const archiveKey = row.sourceAudioKey ?? "";
 
   const rungs = buildCaptureSearchLadder(row);
 
-  // `undefined` = not looked for yet, `null` = looked for and unavailable. Fetched at most ONCE per
-  // row, and only when a rung-2 candidate actually exists to compare against.
   let archiveFp: null | number[] | undefined;
   let deferred = false;
-  // A recoverable skip DISPROVES NOTHING (the 047.0.8M lesson): a candidate the CDN 403'd could be
-  // the right answer, so a row that saw one concludes `inconclusive` rather than `no-match` and
-  // keeps its 90-day window unburned.
+
   let transient: unknown;
 
   try {
@@ -4497,7 +3333,6 @@ async function proveCatalogueProvenance(
         candidates = runYtSearch(session.url, rung.query, rung.source);
       }
 
-      // ── RUNG 1 ────────────────────────────────────────────────────────────────────────────────
       const topic = rung.source === "soundcloud" ? null : pickTopicCandidate(candidates, row);
 
       if (topic) {
@@ -4514,7 +3349,6 @@ async function proveCatalogueProvenance(
         return "found";
       }
 
-      // ── RUNG 2 ────────────────────────────────────────────────────────────────────────────────
       for (const candidate of pickSegmentCandidates(
         candidates,
         row,
@@ -4531,8 +3365,6 @@ async function proveCatalogueProvenance(
         }
 
         if (archiveFp === null) {
-          // No reference exists for this row, so no amount of candidates can settle it. Rung 2 is
-          // over for the whole walk — leave the remaining rungs to look for a Topic upload.
           break;
         }
 
@@ -4557,9 +3389,6 @@ async function proveCatalogueProvenance(
 
         if (result?.match) {
           if (rung.source === "soundcloud") {
-            // The fingerprint proved the recording against its own archive. Bank that evidence
-            // beside the YouTube-only trio and stop: continuing would re-spend searches on a row
-            // whose audio provenance is already settled.
             await commitProvenanceUpdate(trackId, snapshotToken, {
               sourceVerification: "soundcloud-archive-match",
             });
@@ -4600,10 +3429,6 @@ async function proveCatalogueProvenance(
     }
 
     if (transient) {
-      // THE STREAK, and nothing else. The ladder ran and could not conclude, so it earns no 90-day
-      // stamp and no receipt — but it must still move something, or a row the CDN refuses forever is
-      // handed back every tick and starves everything queued behind it (the 2026-08-01 Deezer
-      // lesson). The server bumps `youtube_provenance_failures` and retires the row at the cap.
       await commitProvenanceUpdate(trackId, snapshotToken, {
         youtubeVerification: "inconclusive",
       });
@@ -4611,9 +3436,6 @@ async function proveCatalogueProvenance(
       return "failed-recorded";
     }
 
-    // EXHAUSTED — every rung concluded and nothing on YouTube is vouchable for this recording. The
-    // stamp is what puts the row inside the server's re-ask window instead of re-buying the same
-    // nothing next tick; the streak beside it is what retires a row that keeps coming back empty.
     await commitProvenanceUpdate(trackId, snapshotToken, { youtubeVerification: "no-match" });
     counts.exhausted += 1;
 
@@ -4629,12 +3451,6 @@ async function proveCatalogueProvenance(
       `catalogue provenance failed for ${trackId}: ${error instanceof Error ? error.message : String(error)}`,
     );
 
-    // THE SAME STREAK, for the same reason. A search that never returned is as unconcluded as a
-    // section the CDN refused, and it is the outcome most likely to REPEAT — a row whose query the
-    // proxy cannot get an answer for gets no stamp, comes straight back next tick, and holds the
-    // head of a 30,672-row queue forever. So the failure is reported rather than swallowed: no
-    // stamp, no receipt, one on the streak, and the worklist retires it at the cap. The report is
-    // itself best-effort, because the thing that just failed may be the API.
     try {
       await commitProvenanceUpdate(trackId, snapshotToken, {
         youtubeVerification: "inconclusive",
@@ -4650,36 +3466,6 @@ async function proveCatalogueProvenance(
   }
 }
 
-// ── THE PROVENANCE PHASE (operator ruling 2026-07-31) ───────────────────────
-//
-// WHAT IT IS FOR. The capture write above keeps the winning video id — but only from the moment it
-// shipped. Every row captured before that had its id discarded at the instant it was most certain,
-// and a discarded id cannot be recovered from the stored bytes: nothing in an R2 object says which
-// upload it came from. So the only honest way to fill those rows is to ask the question again, and
-// that means running the whole ladder again.
-//
-// ── AND IT THROWS THE AUDIO AWAY. THIS IS THE RULING, NOT AN OPTIMISATION ────────────────────
-// The obvious shape — just re-capture the row and let the normal write keep the id — was piloted
-// over three rows and REJECTED on what it did: a recapture REPLACED a finding's clean archived
-// audio with a fan BLEND that legitimately passed the fingerprint gate. It passed because a blend
-// CONTAINS the original's preview segment, so the gate is working exactly as designed and simply
-// cannot tell the two apart. The archive is the thing Fluncle is least willing to degrade, and a
-// backfill that trades good audio for a provenance link is a bad trade at any hit rate.
-//
-// So this phase is PROVENANCE-ONLY, and the rail is absolute: it never sends `sourceAudioKey`,
-// `captureStatus`, `captureVerification`, `sourceAudioBytes`, `sourceAudioRejected`, or any other
-// capture column. The candidate file is deleted the moment the verdict is read. A YouTube match
-// moves the YouTube trio through its OWN verdict field (`youtubeVerification`); a SoundCloud match
-// moves only the sibling `sourceVerification`. Neither can borrow capture's — sending
-// `captureVerification: "preview-match"` from a sweep that stored nothing would be a lie about the
-// archive, and the honest field costs one line.
-//
-// IT READS THE BAD-AUDIO MEMORY AND NEVER WRITES IT. Reading is free and saves money: a candidate a
-// previous capture already proved wrong is filtered out before it costs proxy bytes. Writing would
-// be a capture column, so a rejection this phase pays for is not remembered — the accepted cost of
-// a rail with no exceptions in it.
-
-/** What one provenance row cost and what it concluded. */
 type ProvenanceOutcome =
   | "failed"
   | "failed-recorded"
@@ -4688,41 +3474,23 @@ type ProvenanceOutcome =
   | "none"
   | "pending";
 
-/**
- * Re-derive one already-captured row's YouTube provenance: run the ladder, read the verdict, throw
- * the bytes away, report the id.
- *
- * A NON-MATCH IS REPORTED TOO (`no-match`), and it has to be. The ladder just spent a real download
- * on this row; without a record of that the worklist would hand the same row back on the next tick
- * and buy it again, forever. The report stamps `youtube_verified_at` and nothing else, which is
- * what puts the row inside the server's re-ask window (track-work.ts). It covers both ways of
- * concluding without a reportable id: nothing matched, and nothing could be COMPARED (a track with
- * no preview reference is the ladder's honest abstain — its id is unprovable, so it is unreportable,
- * and re-asking every tick would buy the same nothing).
- */
 async function proveTrackProvenance(
   row: CaptureFinding,
   snapshotToken: string,
   meter: BotChallengeMeter,
 ): Promise<ProvenanceOutcome> {
   const { logId, trackId } = row;
-  // The same sticky-session shape a clean capture run uses — determinism per track is all
-  // stickiness needs, and sharing the shape means sharing the behaviour that was tuned for it.
+
   const session = openProxySession(captureSessionSeed(logId ?? trackId, 0), meter);
   const attemptPath = progressPath(trackId, "youtube-provenance");
   let workDirectory: string | undefined;
-  // READ-ONLY (see the phase header): it feeds the pre-download filter and is never written back.
+
   const memory: RejectedMemory = {
     dirty: false,
     sources: parseRejectedSources(row.sourceAudioRejected),
   };
 
   try {
-    // NO `legacyRejectKey`. Every row here has a `source_audio_key` by definition — it is the
-    // queue's own predicate — and that key's sha is the GOOD audio the archive holds. Passing it
-    // as a known-bad hash, the way the capture path correctly does for a quarantined row, would
-    // blacklist the upload most likely to be the right answer: the one the original capture came
-    // from. Same field, opposite meaning, which is why the caller supplies it and the walk does not.
     const providerRun = await runJournaledCaptureProvider({
       completion: (accepted) => captureProviderCompletion(accepted, memory),
       finding: row,
@@ -4744,16 +3512,12 @@ async function proveTrackProvenance(
     }
 
     if (accepted.source === "soundcloud") {
-      // SoundCloud proved the audio, not a YouTube upload. Bank the proof in its sibling field and
-      // return before the YouTube no-match/id branches can mislabel or leak it.
       await commitProvenanceUpdate(trackId, snapshotToken, {
         sourceVerification: "soundcloud-preview-match",
       });
       return "found";
     }
 
-    // ONLY the id and its proof. No capture column appears in this body, by construction — the
-    // server accepts the pair and refuses a bare id exactly as it does on the capture path.
     await commitProvenanceUpdate(trackId, snapshotToken, {
       youtubeVerification: "preview-match",
       youtubeVideoId: accepted.videoId,
@@ -4787,7 +3551,6 @@ async function proveTrackProvenance(
   }
 }
 
-/** The provenance phase's tally for the tick summary. */
 export type ProvenanceCounts = {
   failed: number;
   found: number;
@@ -4815,13 +3578,6 @@ function noteProvenanceOutcome(counts: ProvenanceCounts, outcome: ProvenanceOutc
   }
 }
 
-/**
- * Split the tick's provenance budget between the two halves of the archive.
- *
- * FINDINGS FIRST and the catalogue only with what is left: the sub-cap can never RAISE the tick's
- * total spend, only redirect the part the findings did not need. With the shipped default of 0 the
- * catalogue read is skipped entirely — no request, no page, no possibility of spending.
- */
 export function splitProvenanceBudget(
   total: number,
   catalogueCap: number,
@@ -4851,13 +3607,6 @@ async function runProvenancePhase(
     return { counts, ladder };
   }
 
-  // The findings half fills the budget first. Asking for the whole budget from `scope=findings`
-  // rather than `scope=all` is what makes the catalogue sub-cap a real cap rather than a hope: a
-  // catalogue row cannot arrive in this page at all.
-  //
-  // THE FINDINGS TIER KEEPS THE FULL FINGERPRINT and is untouched by the cheap ladder. It is a small
-  // set, it is the archive, and it is already done — spending a whole download on a certified row is
-  // exactly the right trade, and changing it would buy nothing but risk.
   const queuedRows = admittedWorkList({
     kind: "youtube-provenance",
     limit: budget.findings,
@@ -4869,9 +3618,6 @@ async function runProvenancePhase(
   }
   const rows = withoutProtectedTracks(queuedRows, protectedTrackIds);
 
-  // SERIAL, not the capture batch's worker pool. The budget is two rows; a pool over two rows buys
-  // nothing and would only widen the concurrent proxy footprint of a tick that is already running
-  // its capture batch.
   for (const row of rows) {
     try {
       const prepared = prepareCurrentSnapshot(row.trackId, "youtube-provenance");
@@ -4897,18 +3643,12 @@ async function runProvenancePhase(
     }
   }
 
-  // …and only what the findings left over may go to the catalogue, up to the sub-cap.
   const catalogueRoom = Math.min(budget.catalogue, budget.findings - rows.length);
 
   if (catalogueRoom <= 0) {
     return { counts, ladder };
   }
 
-  // THE CATALOGUE TIER RIDES THE CHEAP LADDER. Its allowance is a SEGMENT-DOWNLOAD budget, so the
-  // walk is offered `FACTOR ×` as many rows as it may buy: most of them conclude on rung 1 for the
-  // price of a 139KB search, and the strict download cap is enforced by the shared counter below
-  // rather than by how many rows were read. A row that reaches rung 2 with the counter at zero is
-  // deferred, untouched, and asked again next tick.
   const segmentBudget = { segments: catalogueRoom };
   let queuedCatalogueRows: CaptureFinding[] | "due-work-repair-pending" | "yielded";
   try {
@@ -4974,9 +3714,6 @@ async function runProvenancePhase(
         }
       }
 
-      // A DEFERRAL IS NOT AN OUTCOME. It concluded nothing, wrote nothing and cost no download, so
-      // folding it into `found`/`none`/`failed` would make the phase's own gauges lie about what a
-      // tick achieved. It has its own counter, and that is the whole of its report.
       if (outcome !== "deferred") {
         noteProvenanceOutcome(counts, outcome);
       }
@@ -4995,14 +3732,6 @@ async function runProvenancePhase(
 
   return { counts, ladder };
 }
-
-// ── THE RE-VERDICT PHASE ────────────────────────────────────────────────────
-//
-// A row already HOLDS an id, and its officialness was ruled 0 or never concluded. The rule that
-// ruled it has since widened (a recording's own label channel now counts — youtube-official.ts), so
-// the question is asked again. The box's whole part in this is pacing: it reads the queue and sends
-// a `youtubeReverdict` ask per row. It never fetches the oEmbed, never sees a channel name, and
-// never carries a verdict — permission is decided server-side or it is not decided at all.
 
 type ReverdictCounts = {
   asked: number;
@@ -5029,8 +3758,6 @@ async function runReverdictPhase(
     };
   }
 
-  // `scope=all`: this phase spends no metered bandwidth, so there is no reason to hold the
-  // catalogue's rows back from a free re-ask.
   const queuedRows = admittedWorkList({ kind: "youtube-reverdict", limit, scope: "all" });
   if (queuedRows === "yielded" || queuedRows === "due-work-repair-pending") {
     return {
@@ -5087,8 +3814,6 @@ async function runReverdictPhase(
   return { asked, failed, pending, writesConfirmed, writesFailed, writesPending };
 }
 
-// ── Main ────────────────────────────────────────────────────────────────────
-
 type CaptureCounts = {
   done: number;
   failed: number;
@@ -5099,45 +3824,15 @@ type CaptureCounts = {
   unmatched: number;
 };
 
-// ---------------------------------------------------------------------------
-// THE DEAD-FETCHER TRIPWIRE.
-//
-// Capture's failures are ITEM-level by construction: a row that cannot be fetched is counted,
-// left queued, and the tick continues — so `errors` stays 0 and the run reads `ok: true` however
-// many rows failed. That is right for the ordinary partial batch (a bot challenge here, a missing
-// upload there) and wrong for a wall: a rotted fetcher pin, a dry proxy, or an exit that stopped
-// clearing challenges fails EVERY row the same way, and a tick of `checked: 12, failed: 12,
-// produced: 0` is a green row in the ledger. That shape once ran for thirteen days.
-//
-// So the RATE is the alarm, over a sample floor. Both numbers are read off the ledger's own
-// distribution: across a fortnight of attempting ticks the worst healthy tick failed 55% of its
-// attempts, and the bulk sat at or under a third, while the outage shape is 100%. The floor is
-// one full default batch ({@link BATCH_CAP}) so a one- or two-row tick cannot trip it by luck.
-//
-// THE DENOMINATOR IS ATTEMPTS THAT REACHED THE FETCHER, never the batch. A row the server's
-// capture budget REFUSED (`captureRejected`), a row whose write yielded (`capturePending`), and a
-// row skipped before any fetch are not attempts and must not dilute — or, worse, manufacture —
-// the share. A tick that never looked (an admission yield, a paused gate) has no attempts at all
-// and reaches this with nothing to judge.
 export const CAPTURE_BLIND_MIN_ATTEMPTS = 4;
 export const CAPTURE_BLIND_FAILURE_SHARE = 0.9;
 
-/** The tick's verdict reason, or null when there is nothing to say. */
 export type CaptureBlindVerdict =
   | "bot_challenged"
   | "capture_failing"
   | "proxy_failing"
   | "ytdlp_failing";
 
-/**
- * Judge one tick's capture attempts. `attempts` is done + failed + unmatched: an unmatched row
- * PROVES the fetcher works (bytes arrived; the fingerprint refused them), so it belongs in the
- * denominator and never in the numerator.
- *
- * The named reason is the dominant class, so the alert says which wall was hit. An uncleared bot
- * challenge is checked first because it also lands as a yt-dlp failure downstream — naming the
- * challenge is the more useful truth when every failure carried one.
- */
 export function captureBlindVerdict(options: {
   attempts: number;
   botChallengesUncleared: number;
@@ -5169,7 +3864,6 @@ export function captureBlindVerdict(options: {
   return "capture_failing";
 }
 
-/** The anchored-first order's receipt: what the tick tried, and what it captured, either side. */
 export type CaptureAnchoringCounts = {
   attemptsAnchored: number;
   attemptsUnanchored: number;
@@ -5177,14 +3871,6 @@ export type CaptureAnchoringCounts = {
   doneUnanchored: number;
 };
 
-/**
- * The per-tick shape of a batched phase's per-item server time. The wall budget is checked BETWEEN
- * items, so a batch's exposure to one slow item grows with K — and K was chosen from the natural
- * unit of work rather than from a measured p99. Publishing the max and the median per tick is what
- * turns that into evidence: a day of ordinary ticks yields the distribution the bound should be
- * re-derived from. `max` is the number that would blow a wall budget; `p50` is the one that says
- * whether the max was an outlier.
- */
 export function summariseItemTiming(
   samples: readonly number[],
 ): { itemMsMax: number; itemMsP50: number; itemSamples: number } | undefined {
@@ -5206,19 +3892,18 @@ export function summariseItemTiming(
 }
 
 export function buildCaptureSummary(options: {
-  /** The anchored-first order's receipt. Absent counts mean an older Worker answered no flag. */
   anchoring?: CaptureAnchoringCounts;
   batch: number;
   botChallenges: number;
   botChallengesUncleared: number;
   counts: CaptureCounts;
-  /** Server-measured per-item milliseconds from this tick's batched phases. */
+
   itemTiming?: readonly number[];
   elapsedMs: number;
   failures?: CaptureFailureMeter;
-  /** The catalogue ladder's per-rung tally. Absent on a tick whose catalogue budget was shut. */
+
   ladder?: ProvenanceLadderCounts;
-  /** Admitted database phases this tick took. A batched tick spends far fewer than its rows. */
+
   leases?: number;
   provenance: ProvenanceCounts;
   reverdict: ReverdictCounts;
@@ -5226,7 +3911,7 @@ export function buildCaptureSummary(options: {
 }): Record<string, unknown> {
   const { counts, ladder, provenance, reverdict } = options;
   const failures = options.failures ?? createCaptureFailureMeter();
-  // Attempts that reached the fetcher. Rejected, pending and skipped rows never did.
+
   const attempts = counts.done + counts.failed + counts.unmatched;
   const blind = captureBlindVerdict({
     attempts,
@@ -5242,8 +3927,7 @@ export function buildCaptureSummary(options: {
     batch: options.batch,
     botChallenges: options.botChallenges,
     botChallengesUncleared: options.botChallengesUncleared,
-    // Attempts that reached the fetcher — the tripwire's denominator, published so the verdict
-    // below can be re-derived from the row rather than taken on trust.
+
     captureAttempts: attempts,
     capturePending: counts.pending ?? 0,
     captureReconciled: counts.reconciled ?? 0,
@@ -5251,7 +3935,7 @@ export function buildCaptureSummary(options: {
     checked: options.batch,
     done: counts.done,
     elapsedMs: options.elapsedMs,
-    // The counts above are measured; only this verdict is judged (see captureBlindVerdict).
+
     errors: blind === null ? 0 : 1,
     failed: counts.failed,
     failureRecordingFailures: failures.failureRecording,
@@ -5259,17 +3943,10 @@ export function buildCaptureSummary(options: {
     ...(options.leases === undefined ? {} : { leases: options.leases }),
     ok: blind === null,
     produced: counts.done,
-    // THE PROVENANCE PHASE, reported separately from the capture batch it rides. Kept out of
-    // `checked`/`failed`/`produced` on purpose: those are the CAPTURE gauges the /status strain
-    // detector reads as a rate, and folding a different unit of work into them would move a
-    // published health number for a reason that has nothing to do with capture's health.
+
     provenanceFailed: provenance.failed,
     provenanceFound: provenance.found,
-    // THE CATALOGUE LADDER, rung by rung, so the ledger shows WHICH rung is doing the work rather
-    // than only that something happened. `topicServed` + `segmentVerified` are the two ways a row
-    // gets an id and both are already inside `provenanceFound`; `residualRescued` is a TAG on those
-    // (the pick came from a search variant past the first), never a fourth outcome. `deferred` is
-    // the row the segment budget ran out under — no answer, no cost, asked again next tick.
+
     provenanceLadderDeferred: ladder?.deferred ?? 0,
     provenanceLadderExhausted: ladder?.exhausted ?? 0,
     provenanceLadderResidualRescued: ladder?.residualRescued ?? 0,
@@ -5285,7 +3962,7 @@ export function buildCaptureSummary(options: {
     reverdictAsked: reverdict.asked,
     reverdictFailed: reverdict.failed,
     reverdictPending: reverdict.pending ?? 0,
-    // Deliberately no `queue_depth`: capture's whole-backlog count is an unindexed hot-path scan.
+
     skipped: counts.skipped,
     trackUpdateFailures: failures.trackUpdate,
     unknownFailures: failures.unknown,
@@ -5325,8 +4002,6 @@ function argumentValue(argv: readonly string[], name: string): string | undefine
   return index >= 0 ? argv[index + 1] : undefined;
 }
 
-// The entrypoint intentionally keeps the whole tick's ordered fail-soft orchestration visible: its
-// branches are the domain outcome accounting, while provider, journal, and phase work stay isolated.
 // oxlint-disable-next-line complexity
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
@@ -5421,8 +4096,6 @@ async function main(): Promise<void> {
     }
   }
 
-  // The worklist read answers WHAT this Worker can do beside what there is to do, so the tick
-  // chooses its prepare and commit paths before it spends a download.
   const capabilities: { value?: CaptureCapabilities } = {};
   const queue = admittedWorkList({
     capabilities,
@@ -5458,16 +4131,6 @@ async function main(): Promise<void> {
   }
   const batch = withoutProtectedTracks(queue, protectedTrackIds).slice(0, BATCH_CAP);
 
-  // ── THE TICK'S PREPARE: batched calls that SHARE ONE RESERVATION ───────────────────────────
-  // A yielded call froze nothing, so the tick pauses and the next one asks again. A Worker that
-  // advertises no width (or the `FLUNCLE_CAPTURE_BATCH_PHASES=0` kill switch) leaves this undefined
-  // and every row prepares on its own, exactly as it always did.
-  //
-  // WHY THE WHOLE TICK GOES THROUGH HERE, not just the first `width` rows. The rolling count cap is
-  // charged at COMMIT, so a per-row prepare run for the tail would read the same pre-tick remaining
-  // count this tick has already reserved against — and authorize those rows a second time. The tail
-  // therefore takes further BATCHED calls carrying the running reservation, and the per-row path
-  // stays reachable only when there is no batched op to carry it.
   const prepareWidth = capabilities.value?.prepareTrackCaptures;
   const prepareTiming: number[] = [];
   let batchPrepared: Map<string, PreparedSnapshot> | undefined;
@@ -5498,11 +4161,7 @@ async function main(): Promise<void> {
     failed: recoveredCapture.rejected,
     pending: recoveredCapture.pending,
   };
-  // THE ANCHORED-FIRST ORDER, MADE VISIBLE. The queue is meant to spend the metered budget on
-  // anchored rows first; until now nothing published whether it actually did. `attempts*` is what
-  // the tick froze and tried, `done*` what it captured, so the two together say both what the order
-  // handed out and what the spend bought. A row whose Worker did not answer `anchored` (an older
-  // one) lands in neither, which reads as an honest gap rather than a false zero.
+
   const anchoring = {
     attemptsAnchored: 0,
     attemptsUnanchored: 0,
@@ -5510,17 +4169,12 @@ async function main(): Promise<void> {
     doneUnanchored: 0,
   };
   const anchoredTracks = new Map<string, boolean | undefined>();
-  // Server-measured per-item milliseconds from every batched phase this tick ran.
+
   const itemTiming: number[] = [...prepareTiming];
-  // ONE meter for the whole tick, shared by every worker (each `+= 1` is synchronous, so the
-  // pool cannot lose a count). It rides into the summary below as the rate an operator can
-  // finally read per tick instead of grepping a floor out of the journal.
+
   const botChallenges = createBotChallengeMeter();
   const failures = createCaptureFailureMeter();
 
-  // ONE counting rule for a row's verdict, applied to a row that settled inside its worker AND to
-  // a row the batched commit resolved afterwards. Keeping it in one place is what stops the two
-  // paths from drifting on the denominators the loud-failure tripwires read.
   const countOutcome = (outcome: FindingOutcome, trackId: string): void => {
     if (outcome === "done") {
       const anchored = anchoredTracks.get(trackId);
@@ -5549,14 +4203,10 @@ async function main(): Promise<void> {
     }
   };
 
-  // Rows whose commit is riding the tick's batched commit phase, with the verdict each earns if it
-  // lands. They are counted after that phase's own per-item receipts, never before.
   const deferredRows: { outcome: keyof typeof DEFERRED_OUTCOMES; trackId: string }[] = [];
   const collected: CollectedCaptureCommit[] = [];
   const commitWidth = capabilities.value?.commitTrackCaptures;
 
-  // A fixed worker pool over the batch: `CONCURRENCY` workers each pull the next index. Catch
-  // per-finding inside the worker — one failure must never abort the tick or starve a worker.
   let cursor = 0;
   const worker = async (): Promise<void> => {
     while (cursor < batch.length) {
@@ -5568,10 +4218,6 @@ async function main(): Promise<void> {
       }
 
       try {
-        // THE ONE RULE THAT KEEPS THE COUNT CAP EXACT. Under a batched Worker every row's answer
-        // comes from the tick's shared reservation — including a row its calls could not reach,
-        // which is simply left unfrozen and unspent for the next tick. Only a Worker with no
-        // batched op reaches the per-row prepare, which is its pre-existing behaviour unchanged.
         const prepared =
           prepareWidth === undefined
             ? prepareCurrentSnapshot(finding.trackId, "capture")
@@ -5581,8 +4227,6 @@ async function main(): Promise<void> {
           continue;
         }
         if (prepared === "unreached") {
-          // The tick's prepare calls did not answer this row. Nothing was frozen and nothing was
-          // charged, so it is untouched work rather than a refusal.
           counts.pending += 1;
           continue;
         }
@@ -5617,9 +4261,6 @@ async function main(): Promise<void> {
     }
   };
 
-  // THE DOWNLOADS RUN UNLEASED, exactly as before, and their commits are collected instead of
-  // taken one lease at a time. The hook is live for precisely this stretch: the provenance and
-  // re-verdict phases below run after it is cleared, so their commits stay per row.
   if (commitWidth !== undefined) {
     activeCommitCollector = (entry) => {
       collected.push(entry);
@@ -5633,27 +4274,17 @@ async function main(): Promise<void> {
     activeCommitCollector = undefined;
   }
 
-  // ── THE BATCH COMMIT: ONE lease per `commitWidth` rows ─────────────────────────────────────
-  // Per-item receipts resolve each deferred row with the same mapping its own commit would have
-  // applied. Anything the batch could not settle reads `pending`, which leaves the row's journal —
-  // receipt included — for the next tick's recovery pass to reconcile.
   if (collected.length > 0 && commitWidth !== undefined) {
     const dispositions = settleCollectedCommits(collected, commitWidth, admittedPhase, itemTiming);
     for (const row of deferredRows) {
       countOutcome(resolveDeferredOutcome(row.outcome, dispositions.get(row.trackId)), row.trackId);
     }
   } else {
-    // The collector never ran, so a deferred row cannot exist. Count defensively as unproven.
     for (const row of deferredRows) {
       countOutcome("pending", row.trackId);
     }
   }
 
-  // ── THE PROVENANCE PHASE, after the capture batch and never instead of it ──────────────────
-  // Ordered last on purpose: acquisition is the sweep's job and a backfill must never be able to
-  // delay or starve it. Both phases are caught here rather than thrown, for the same reason the
-  // capture worker catches per row — a backfill that could abort the tick would be able to hide a
-  // capture that already succeeded.
   const currentProvenance = await runProvenancePhase(botChallenges, protectedTrackIds).catch(
     (error: unknown) => {
       log(`provenance phase failed: ${error instanceof Error ? error.message : String(error)}`);
@@ -5693,21 +4324,13 @@ async function main(): Promise<void> {
   const summary = buildCaptureSummary({
     anchoring,
     batch: batch.length,
-    // THE CHALLENGE RATE, per tick. Neither key is in the healthcheck's failure vocabulary,
-    // so publishing the number does not by itself make a steady state read as strain.
+
     botChallenges: botChallenges.total,
     botChallengesUncleared: botChallenges.uncleared,
     counts,
     elapsedMs: Date.now() - started,
     failures,
-    // Deliberately NO `queue_depth`. `queue.length` is only the bounded page, while the honest
-    // `count=true` capture predicate scans the growing tracks table plus its findings join on
-    // every hot-path tick (capture has no covering queue index). Until an operator-approved,
-    // hosted-Turso-proven index exists, omission is the only honest and affordable gauge.
-    //
-    // `checked` IS emitted, so item-level `failed` is now judged as a RATE against it rather
-    // than counted. A steady ~4-of-12 tick is ~33%, under the 50% bar, so this sweep's honest
-    // baseline against bot challenges no longer parks it on the public degraded row.
+
     itemTiming,
     ladder: currentProvenance.ladder,
     leases: admittedPhaseCount,
@@ -5731,8 +4354,6 @@ async function main(): Promise<void> {
   console.log(JSON.stringify(summary));
 
   if (summary.ok === false) {
-    // The dead-fetcher verdict. A non-zero exit is what the ledger derives `ok: false` from and
-    // what the unit's OnFailure notifier fires on; the summary line above is unchanged by it.
     process.exitCode = 1;
   }
 }

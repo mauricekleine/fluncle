@@ -1,40 +1,3 @@
-// cost-emit.ts — the box's shared, best-effort cost-ledger emitter (COST-01,
-// RFC §3 "Path B"). The DRY seam every on-box sweep imports to POST the numbers
-// only the box knows: the `claude -p` authoring tokens (note/observe/newsletter,
-// `subsidized`), and enrich/embed/render `self` seconds. Vendor calls that run
-// INSIDE the Worker (Cartesia/Firecrawl/OpenRouter/Resend) capture in-process
-// there (Path A) and never touch this file.
-//
-// Version-controlled source; the repo is canonical and the box is a deploy target
-// (fluncle-hermes-operator skill). Baked into /opt/hermes-scripts/ alongside the
-// sweeps by the Dockerfile's `COPY docs/agents/hermes/scripts/`, so a sibling
-// `./cost-emit` import resolves on the box; `*.test.ts` is stripped from the image.
-//
-// THE CONTRACT (mirrors, deliberately, three things that live in the workspace the
-// box CANNOT import — like fluncle-healthcheck.ts mirrors the cron list inline):
-//   1. the agent-tier endpoint `POST ${FLUNCLE_API_BASE_URL}/api/v1/admin/costs/events`
-//      (packages/contracts/src/orpc/admin-costs.ts), Bearer ${FLUNCLE_API_TOKEN};
-//   2. the `CostEventInput` shape + its closed enums (same file);
-//   3. the deterministic idempotency `id` scheme (apps/web/src/lib/server/costs.ts
-//      `costEventId`) — the server inserts ON CONFLICT(id) DO NOTHING, so a retried
-//      or double-emitted row collapses to one.
-// If any of the three changes in the workspace, change it here too (the cost-emit
-// test pins the id scheme so a silent drift fails a build).
-//
-// THE GUARANTEE (RFC §3): capture is best-effort and rides AFTER the real work is
-// already durable. `emitCost` cannot throw, cannot reject, and cannot block past a
-// hard 15s timeout — a dropped POST is a permanently-missing ledger row, which for
-// a spend ledger only ever UNDERSTATES and never corrupts the pipeline. The budget is
-// generous because the target `insert into settings` upsert runs ~8.9s p95 under load,
-// so a tight 2.5s guaranteed a timeout (a dropped row) on exactly the busy ticks; 15s
-// still sits well inside the 120s cron kill. Zero retries: the sweeps run at BATCH_CAP≈1
-// against that kill, so re-POSTing would spend the budget the real work needs; emit once
-// and move on.
-
-// The closed enums, mirrored from the `cost_events` typed columns / the
-// `CostEventInput` contract (packages/contracts/src/orpc/admin-costs.ts). Kept as
-// literal unions so a sweep can't hand `emitCost` a step/vendor the Worker would
-// 422 (a rejected batch is a silently-lost row).
 export type CostStep =
   | "enrich"
   | "embed"
@@ -61,17 +24,11 @@ export type CostUnitType = "tokens" | "characters" | "seconds" | "requests" | "e
 export type CostBasis = "cash" | "subsidized";
 export type CostSource = "measured" | "estimated";
 
-/**
- * The semantic facts a box sweep supplies — everything EXCEPT the `id` (this helper
- * derives it) and the Worker-set `createdAt` / priced `estimatedUsd`. `usd` is sent
- * only by `anthropic` rows (the `claude -p` reply's `total_cost_usd`); every
- * other vendor omits it and the Worker prices from `cost-rates.ts`.
- */
 export type BoxCostEvent = {
   costBasis: CostBasis;
   logId?: string | null;
   model?: string | null;
-  occurredAt: string; // ISO — when the work was spent
+  occurredAt: string;
   quantity: number;
   source: CostSource;
   step: CostStep;
@@ -81,19 +38,15 @@ export type BoxCostEvent = {
   vendor: CostVendor;
 };
 
-/** The full row the endpoint accepts (a `BoxCostEvent` plus its derived `id`). */
 export type CostEventPayload = BoxCostEvent & { id: string };
 
 export type EmitCostOptions = {
-  /** Override the Worker base (default: FLUNCLE_API_BASE_URL env, then prod). */
   baseUrl?: string;
-  /** Injected fetch for tests; defaults to the global. */
+
   fetchImpl?: typeof fetch;
-  /** Hard per-POST budget. Default 15000ms — long enough to outlast the ~8.9s p95 settings
-      upsert under load (a tight 2.5s guaranteed a dropped row on busy ticks), still well
-      inside the 120s cron kill. */
+
   timeoutMs?: number;
-  /** Override the agent token (default: FLUNCLE_API_TOKEN env). */
+
   token?: string;
 };
 
@@ -106,25 +59,12 @@ const DEFAULT_BASE_URL = "https://www.fluncle.com";
 
 const log = (message: string) => console.error(`[cost-emit] ${message}`);
 
-// The cost-bearing fields of a `claude -p --output-format json` reply (the three
-// authoring sweeps note/observe/newsletter each have a superset type; this is the
-// subset the spend is read from). `total_cost_usd` is the CLI's own figure at the
-// actual model's actual rate; `modelUsage` is keyed by model name; `usage` carries
-// the token split.
 export type ClaudeAuthoringReply = {
   modelUsage?: Record<string, unknown>;
   total_cost_usd?: number;
   usage?: { input_tokens?: number; output_tokens?: number };
 };
 
-/**
- * Pull the MEASURED authoring spend out of a `claude -p` reply for the
- * `subsidized` anthropic ledger row (COST-01 §5): the total token count (quantity),
- * the model (first `modelUsage` key, else the model we asked for), and the CLI's own
- * `total_cost_usd` (authoritative; `null` when the reply omits it → the row is
- * unpriced, never $0). Pure — one place the claude-reply shape is read, so the
- * three sweeps can't drift and one test covers them all.
- */
 export function parseAuthoringSpend(
   reply: ClaudeAuthoringReply,
   fallbackModel: string,
@@ -137,14 +77,6 @@ export function parseAuthoringSpend(
   return { model, tokens, usd };
 }
 
-/**
- * Build a `self` / `seconds` box-compute row (COST-01 §5): the shared shape the
- * enrich / embed / studio-clip / render sweeps all emit for on-box wall-clock. Always
- * `subsidized` (the box is flat-tier) · `measured` (a real start/stop duration) · no
- * `usd` (the Worker prices `self`-seconds from `cost-rates.ts`). `seconds` is rounded
- * to a whole number and floored at 0 (a clock hiccup can't write a negative quantity).
- * One place the shape lives so the four sites can't drift and one test covers them.
- */
 export function selfSecondsCost(input: {
   logId?: string | null;
   occurredAt: string;
@@ -165,27 +97,12 @@ export function selfSecondsCost(input: {
   };
 }
 
-/**
- * The deterministic idempotency `id` — a VERBATIM mirror of the server's
- * `costEventId` (apps/web/src/lib/server/costs.ts): `${step}:${scope}:${vendor}:
- * ${unitType}:${occurredAt}` where `scope = logId ?? trackId ?? "global"`. Two
- * identical captures of the same unit of work collapse to one row on insert.
- */
 export function costEventId(event: BoxCostEvent): string {
   const scope = event.logId ?? event.trackId ?? "global";
 
   return `${event.step}:${scope}:${event.vendor}:${event.unitType}:${event.occurredAt}`;
 }
 
-/**
- * POST a tick's cost rows to the agent-tier ledger endpoint, BEST-EFFORT. Builds
- * each row's stable `id`, sends the batch with the agent bearer under a hard
- * timeout, and NEVER throws — every failure path (no token, non-2xx, network error,
- * timeout, malformed response) returns a `{ failed, posted: false, reason }` and is
- * logged to stderr. `failed` is the number of rows the caller must expose in its
- * sweep summary; the ledger hiccup remains non-fatal, but it is no longer silent.
- * An empty batch is a no-op. No retries by design.
- */
 export async function emitCost(
   events: BoxCostEvent[],
   options: EmitCostOptions = {},
@@ -226,9 +143,6 @@ export async function emitCost(
       return { failed: events.length, posted: false, reason: `http-${response.status}` };
     }
 
-    // The endpoint returns `{ ok: true, inserted }`; surface the count so a caller
-    // (and a test) can see a retried batch land zero. A missing/odd body is fine —
-    // the write already succeeded (2xx); default the count to the batch size.
     let inserted = payload.length;
 
     try {
@@ -237,9 +151,7 @@ export async function emitCost(
       if (typeof body.inserted === "number") {
         inserted = body.inserted;
       }
-    } catch {
-      // Non-JSON 2xx — the write landed; keep the optimistic count.
-    }
+    } catch {}
 
     return { failed: 0, inserted, posted: true };
   } catch (error) {

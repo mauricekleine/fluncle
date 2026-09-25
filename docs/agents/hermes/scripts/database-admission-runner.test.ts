@@ -15,16 +15,14 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 const RUNNER = resolve(import.meta.dirname, "database-admission-runner.sh");
 const CRON_OUTPUT = resolve(import.meta.dirname, "cron-output.sh");
-// Shell startup and marker emission are integration work, not a five-second performance SLA.
-// Keep the inner deadlines below the outer test budget so failures retain their diagnostics
-// and cleanup can finish before the test runner abandons the fixture.
+
 const PROCESS_TEST_TIMEOUT_MS = 40_000;
 const RUN_TIMEOUT_MS = 20_000;
 const PROCESS_STATE_TIMEOUT_MS = 15_000;
 const PROCESS_EXIT_TIMEOUT_MS = 15_000;
 const PROCESS_CLEANUP_TIMEOUT_MS = 5_000;
 const PROCESS_TEST_OPTIONS = { timeout: PROCESS_TEST_TIMEOUT_MS };
-// Successful fixtures allow shell startup and acquisition within the bounded process deadline.
+
 const SUCCESS_MAX_WAIT_SECS = 5;
 let directory: string;
 let binDirectory: string;
@@ -139,7 +137,6 @@ async function run(
   });
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    // Wait for pipe closure too: a surviving fixture descendant must not hold up the suite.
     const outcome = await new Promise<ProcessOutcome>((resolvePromise, rejectPromise) => {
       child.once("error", rejectPromise);
       child.once("close", (code, signal) => resolvePromise({ code, signal }));
@@ -147,8 +144,6 @@ async function run(
     });
     return { signal: outcome.signal, status: outcome.code, stderr, stdout };
   } catch (error) {
-    // TERM is handled by the runner and can wait on the fake coordinator. Kill the isolated
-    // fixture group, including any coordinator child still holding stdout/stderr open.
     if (child.pid !== undefined) {
       await stopProcessGroup(child.pid);
     }
@@ -278,8 +273,6 @@ function processIsExecuting(pid: number): boolean {
       return true;
     }
 
-    // A container's PID 1 may leave a killed child as a zombie beyond this test's deadline.
-    // Signal zero still succeeds for that PID even though the payload cannot execute.
     const state = stat[stateOffset];
     return state !== "X" && state !== "Z";
   } catch {
@@ -305,9 +298,7 @@ function processGroupHasExecutingMembers(groupPid: number): boolean {
         if (processGroup === groupPid && state !== "X" && state !== "Z") {
           return true;
         }
-      } catch {
-        // The process exited between the directory and stat reads.
-      }
+      } catch {}
     }
     return false;
   }
@@ -423,8 +414,6 @@ describe("database admission unit runner", () => {
     "fails closed after the whole window when the locally armed coordinator never answers",
     PROCESS_TEST_OPTIONS,
     async () => {
-      // Every acquire outlives the one-second request ceiling and curl gives up (28). A silent
-      // coordinator is retried for the whole acquisition budget and only then read as an outage.
       fakeCurl(`
 if printf '%s' "$*" | grep -q '"action":"acquire"'; then
   sleep 1.1
@@ -458,8 +447,7 @@ printf '{}'
         queueDepth: null,
       });
       expect(summary.admissionWaitMs).toBeGreaterThanOrEqual(3_000);
-      // The same wrapper POSTs the marker's summary to the ledger; the fake coordinator lets
-      // that separate endpoint succeed, so this firing is evidence rather than journald-only.
+
       expect(calls).toContain('"summary_raw"');
     },
   );
@@ -641,12 +629,7 @@ else
 fi
 `);
       const payloadMarker = join(directory, "payload-started");
-      // The assertion is STICKINESS — that the second firing's shadow answer cannot undo the
-      // enforcement the first one established. Reaching that second firing costs one poll
-      // interval, so a two-second budget left the case racing its own wait: expire first and the
-      // run yields `wait-expired` and never forms an opinion about stickiness at all. The budget
-      // is not what is under test here (`maxWaitSecs: 0` and `1` above cover expiry), so it is
-      // sized to let the firing that IS under test happen.
+
       const result = await run(["bash", "-c", `printf started > "${payloadMarker}"`], {
         maxWaitSecs: 10,
       });
@@ -1090,7 +1073,7 @@ printf 'non-critical\\n' >> "$2"
     async () => {
       fakeExecutable("sleep", ":");
       const releaseAttempts = join(directory, "release-attempts");
-      // curl exit 28 is its own timeout: the first release outlives the ceiling, the second lands.
+
       fakeCurl(`case "$*" in
   *'"action":"release"'*)
     printf x >> "${releaseAttempts}"
@@ -1273,8 +1256,6 @@ ${ACQUIRED_RESPONSE}
     "keeps the payload running across one transient heartbeat failure",
     PROCESS_TEST_OPTIONS,
     async () => {
-      // The first heartbeat outlives the request ceiling; the second fails at the edge; every
-      // later one renews. The lease never lapses, so the payload finishes and releases normally.
       fakeCurl(`
 if printf '%s' "$*" | grep -q '"action":"heartbeat"'; then
   heartbeat_count="$(grep -c '"action":"heartbeat"' "${curlLog}")"
@@ -1307,9 +1288,6 @@ ${ACQUIRED_RESPONSE}
     "stops the payload when heartbeats keep failing past the local lease deadline",
     PROCESS_TEST_OPTIONS,
     async () => {
-      // Heartbeats never reach the coordinator. The first failure is retried because the lease
-      // deadline written at acquisition still stands; the clock then jumps past that deadline and
-      // the next failure is a lost lease, so the payload group is terminated and the run fences.
       const advanceClock = join(directory, "advance-heartbeat-clock");
       fakeExecutable(
         "date",

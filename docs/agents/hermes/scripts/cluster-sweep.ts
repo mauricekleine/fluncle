@@ -1,42 +1,4 @@
 #!/usr/bin/env bun
-// cluster-sweep.ts — the bun orchestrator behind the sonic-galaxy cluster engine
-// (`fluncle-cluster`), scheduled NIGHTLY by a rave-02 HOST systemd timer
-// (../cluster-timer/): a stateful batch job that reads the whole embedded corpus and
-// writes the map wants the box and its own timer.
-// See ../cluster-timer/README.md + docs/agents/cluster-engine.md.
-//
-// LIVE-INTENT. Version-controlled source; the repo is canonical and the box is a deploy
-// target (fluncle-hermes-operator skill). Invoked by the bash wrapper (cluster-sweep.sh) the
-// host timer `docker exec`s once a night — and, for the operator acts, by hand:
-//   bash /opt/hermes-scripts/cluster-sweep.sh                 # the nightly, assignment-only tick
-//   bash /opt/hermes-scripts/cluster-sweep.sh --cold-start    # run 1: the k=4 fit (map must be empty; FLUNCLE_CLUSTER_K overrides)
-//   bash /opt/hermes-scripts/cluster-sweep.sh --remint        # deliberate full redraw (retire all, refit)
-//
-// THE SHAPE (docs/agents/cluster-engine.md — the fixed-point-by-construction design):
-//   - The NIGHTLY tick is ASSIGNMENT-ONLY and PURE TS: assign each finding to its nearest
-//     STORED centroid (cosine), recompute each centroid as its members' L2-normalized mean,
-//     retire an emptied galaxy. No clustering fit runs — no relabeling step exists, so ids
-//     are stable by construction and a bookmarked galaxy can never teleport. On an unchanged
-//     corpus the tick is a no-op. It ALSO consumes an operator's `split_requested_at` (a k=2
-//     fit on that galaxy's members only — the one place the nightly tick spawns python).
-//   - A full k-means fit is an OPERATOR ACT ONLY (cold start, remint), never the timer's
-//     default: a warm-started full re-fit can relocate an emptied centroid across the map
-//     (sklearn `_relocate_empty_clusters`), the exact bookmark-breaking reshuffle the feature
-//     forbids. The fits (+ splits) go through cluster.py (sklearn); the nightly math is here.
-//
-// THE WRITE-ORDER CONTRACT (the run's consistency boundary, RFC Unit A): (1) upsert the map
-// FIRST for any minted/retired/reshaped clusters — the Worker mints ids + handles and returns
-// them, so every id a finding can point at exists BEFORE any assignment lands; (2) write the
-// CHANGED assignments (a handful per night — diffed against each finding's current galaxyId);
-// (3) refresh centroids + retire empties in a final map write. member_count is derived
-// server-side, never stored. A mid-run crash is resume-safe: re-running converges and no
-// assignment ever points at a missing map row.
-//
-// The pure helpers below are exported + unit-tested in cluster-sweep.test.ts; `main()` is
-// guarded behind `import.meta.main` so importing this module for the tests is side-effect free
-// (no fluncle spawn, no python, no network).
-//
-// stdout: one JSON summary line (the run output the /status prober reads). Diagnostics -> stderr.
 
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -44,66 +6,41 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type BoxCostEvent, emitCost, selfSecondsCost } from "./cost-emit";
 
-// ---------------------------------------------------------------------------
-// Config
-// ---------------------------------------------------------------------------
-
-// The operator-held fit k. The RFC's formula proposed 9, but the k=9 pilot spread a
-// 60-finding corpus thin (silhouette 0.044, three sliver clusters) and the operator
-// held it at 4 — the four canon galaxies, now data-real. Overridable per fit via
-// FLUNCLE_CLUSTER_K; only an operator cold-start / remint fits k, never the nightly tick.
 const COLD_START_K = readK(process.env.FLUNCLE_CLUSTER_K, 4);
 
-/** Parse an operator-supplied k override, falling back to the held default. */
 function readK(raw: string | undefined, fallback: number): number {
   const parsed = Number.parseInt(raw ?? "", 10);
 
   return Number.isInteger(parsed) && parsed >= 2 && parsed <= 24 ? parsed : fallback;
 }
 
-// A galaxy needs at least this many members to be splittable into two coherent children.
 const MIN_SPLIT_MEMBERS = 4;
 
-// Cursor-page size for the corpus read (clamped server-side to the embeddings max).
 const CORPUS_PAGE_LIMIT = 500;
 
-// A hard ceiling on how many corpus pages we page through — a guard against an unbounded
-// loop if the cursor ever failed to advance (each page is up to CORPUS_PAGE_LIMIT rows, so
-// this covers a corpus far larger than the archive will be for years).
 const MAX_CORPUS_PAGES = 1000;
 
 const FLUNCLE_BIN = process.env.FLUNCLE_BIN ?? "fluncle";
 const PYTHON_BIN = process.env.PYTHON_BIN ?? "python3";
-// The k-means fit helper — baked beside this orchestrator (/opt/hermes-scripts/).
+
 const CLUSTER_SCRIPT =
   process.env.FLUNCLE_CLUSTER_SCRIPT ?? new URL("cluster.py", import.meta.url).pathname;
 
 const log = (message: string) => console.error(`[cluster-sweep] ${message}`);
 
-// The entrypoint catch sits outside `main`, so retain only the canonical counters it can report
-// losslessly if a fatal exception interrupts the run after the corpus read or some assignment
-// writes. Null means the failure happened before that measurement existed.
 const fatalCounters: { checked: null | number; produced: null | number } = {
   checked: null,
   produced: null,
 };
 
-// ---------------------------------------------------------------------------
-// Types — only the fields we consume from each surface.
-// ---------------------------------------------------------------------------
-
 export type Vector = number[];
 
-/** A live map row (the non-retired galaxies the nightly tick assigns against). */
 export type Galaxy = { centroid: Vector; id: string };
 
-/** One embedded finding + its CURRENT assignment (null when unplaced). */
 export type Finding = { embedding: Vector; galaxyId: string | null; trackId: string };
 
-/** The nearest-centroid result for one finding: where it goes vs where it was. */
 export type Assignment = { galaxyId: string; previousGalaxyId: string | null; trackId: string };
 
-/** One row of the transactional map write (`update_galaxy_map`). */
 export type ClusterRow = {
   centroid: Vector;
   clearSplitRequest?: boolean;
@@ -111,7 +48,6 @@ export type ClusterRow = {
   retire?: boolean;
 };
 
-// A full galaxy row as the `admin galaxies map` read returns it (only the fields we read).
 type GalaxyMapRow = {
   centroid: Vector;
   id: string;
@@ -121,12 +57,6 @@ type GalaxyMapRow = {
 
 export type RunMode = "cold-start" | "nightly" | "remint";
 
-// ---------------------------------------------------------------------------
-// Pure vector helpers (exported for cluster-sweep.test.ts) — deterministic, no I/O.
-// MuQ vectors are L2-normalized, so cosine == dot product and Euclidean k-means == spherical.
-// ---------------------------------------------------------------------------
-
-/** Dot product; 0 when the vectors disagree in length (a defensive, never-crash floor). */
 export function dot(a: Vector, b: Vector): number {
   if (a.length !== b.length) {
     return 0;
@@ -141,7 +71,6 @@ export function dot(a: Vector, b: Vector): number {
   return sum;
 }
 
-/** L2-normalize a vector; an all-zero vector is returned unchanged (never divides by 0). */
 export function l2normalize(v: Vector): Vector {
   let sumSq = 0;
 
@@ -154,11 +83,6 @@ export function l2normalize(v: Vector): Vector {
   return norm === 0 ? [...v] : v.map((value) => value / norm);
 }
 
-/**
- * The L2-normalized elementwise mean of a set of vectors — a galaxy's centroid as the mean
- * of its members (the assignment-only tick's one bounded step). Null for an empty set (an
- * emptied galaxy, which the caller retires).
- */
 export function meanVector(vectors: Vector[]): Vector | null {
   if (vectors.length === 0) {
     return null;
@@ -176,11 +100,6 @@ export function meanVector(vectors: Vector[]): Vector | null {
   return l2normalize(sum.map((value) => value / vectors.length));
 }
 
-/**
- * The id of the nearest galaxy to `embedding` by cosine (max dot, since both are
- * L2-normalized). Null when there are no galaxies. Ties break on the earliest galaxy in the
- * list (stable), so the assignment is deterministic.
- */
 export function nearestGalaxyId(embedding: Vector, galaxies: Galaxy[]): string | null {
   let bestId: string | null = null;
   let bestScore = Number.NEGATIVE_INFINITY;
@@ -197,11 +116,6 @@ export function nearestGalaxyId(embedding: Vector, galaxies: Galaxy[]): string |
   return bestId;
 }
 
-/**
- * Assign every finding to its nearest galaxy (cosine), pairing the result with the finding's
- * current assignment so the caller can diff. A finding with no galaxy to go to (an empty map)
- * is dropped from the result — nothing to assign.
- */
 export function assignFindings(findings: Finding[], galaxies: Galaxy[]): Assignment[] {
   if (galaxies.length === 0) {
     return [];
@@ -220,17 +134,10 @@ export function assignFindings(findings: Finding[], galaxies: Galaxy[]): Assignm
   return assignments;
 }
 
-/** The assignments that actually MOVED — the write-order contract's "a handful per night". */
 export function changedAssignments(assignments: Assignment[]): Assignment[] {
   return assignments.filter((a) => a.galaxyId !== a.previousGalaxyId);
 }
 
-/**
- * Recompute each galaxy's centroid as the L2-normalized mean of the findings now assigned to
- * it, given the fresh assignment. A galaxy that ended the pass with zero members is `emptied`
- * (the caller retires it) — reachable precisely because no library relocation runs on the
- * nightly tick.
- */
 export function recomputeCentroids(
   findings: Finding[],
   assignedById: Map<string, string>,
@@ -267,13 +174,6 @@ export function recomputeCentroids(
   return { centroids, emptied };
 }
 
-/**
- * Mean cosine silhouette per galaxy + overall — the coherence evidence the operator's naming
- * view reads (RFC: "computed for display only"). O(N²), trivial at archive scale. A point's
- * silhouette is (b - a) / max(a, b) with a = its mean cosine DISTANCE (1 - dot) to its own
- * cluster, b = the smallest mean distance to any OTHER cluster. Needs ≥2 non-empty clusters;
- * fewer → all-null (undefined at k<2). A singleton cluster scores its lone member's a = 0.
- */
 export function cosineSilhouette(
   findings: Finding[],
   assignedById: Map<string, string>,
@@ -297,7 +197,6 @@ export function cosineSilhouette(
   const nonEmpty = galaxyIds.filter((id) => (byCluster.get(id)?.length ?? 0) > 0);
   const perCluster = new Map<string, number | null>();
 
-  // Silhouette is undefined below two clusters (there is no "other cluster" for b).
   if (nonEmpty.length < 2) {
     for (const id of galaxyIds) {
       perCluster.set(id, null);
@@ -360,12 +259,6 @@ export function cosineSilhouette(
   return { overall: overallCount === 0 ? null : overallSum / overallCount, perCluster };
 }
 
-/**
- * Split ONE galaxy's members into two children given the k=2 fit centroids: assign each
- * member to its nearer child, and return the two child centroids ordered LARGER-FIRST (so the
- * parent's id stays on the bigger child, the RFC's continuity rule). Null when the fit did not
- * return exactly two usable centroids (the caller then just clears the flag, no reshape).
- */
 export function planSplit(
   members: Finding[],
   childCentroids: Vector[],
@@ -398,10 +291,6 @@ export function planSplit(
   };
 }
 
-// ---------------------------------------------------------------------------
-// Shell + fit helpers — synchronous, fail-loud where it matters.
-// ---------------------------------------------------------------------------
-
 function run(
   bin: string,
   args: string[],
@@ -410,7 +299,7 @@ function run(
   const result = spawnSync(bin, args, {
     encoding: "utf8",
     input,
-    maxBuffer: 256 * 1024 * 1024, // the corpus of 1024-float vectors can be large
+    maxBuffer: 256 * 1024 * 1024,
   });
 
   if (result.error) {
@@ -434,7 +323,6 @@ function fluncleJson<T>(args: string[]): T {
   }
 }
 
-/** Run the k-means fit helper (cluster.py) over `vectors`, returning k L2-normalized centroids. */
 function fitCentroids(vectors: Vector[], k: number): Vector[] {
   const fit = run(PYTHON_BIN, [CLUSTER_SCRIPT], JSON.stringify({ k, vectors }));
 
@@ -451,15 +339,11 @@ function fitCentroids(vectors: Vector[], k: number): Vector[] {
   return parsed.centroids;
 }
 
-// ── the map + corpus reads, and the transactional map write ──────────────────
-
-/** The full galaxy map (named + unnamed + retired), via the box's admin token. */
 function readMap(): GalaxyMapRow[] {
   const response = fluncleJson<{ galaxies?: GalaxyMapRow[] }>(["admin", "galaxies", "map"]);
   return response.galaxies ?? [];
 }
 
-/** The whole embedded corpus, paged over the stable track_id cursor until drained. */
 function readCorpus(): Finding[] {
   const findings: Finding[] = [];
   let cursor: string | undefined;
@@ -492,11 +376,6 @@ function readCorpus(): Finding[] {
   return findings;
 }
 
-/**
- * Write the map transactionally (mint/retire/upsert) and return the resulting live map. The
- * clusters go through a temp file (`set-map --file`) — a 1024-float centroid array per row is
- * too large for an inline flag, the same file-arg habit embed-sweep uses for the vector write.
- */
 function writeMap(rows: ClusterRow[]): Galaxy[] {
   if (rows.length === 0) {
     return readMap()
@@ -526,11 +405,6 @@ function writeMap(rows: ClusterRow[]): Galaxy[] {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Main — one nightly assignment tick, or an operator cold-start / remint.
-// ---------------------------------------------------------------------------
-
-/** Parse the run mode from argv (the operator acts are explicit flags; default is nightly). */
 export function parseMode(argv: string[]): RunMode {
   if (argv.includes("--cold-start")) {
     return "cold-start";
@@ -578,7 +452,6 @@ async function main(): Promise<void> {
     return;
   }
 
-  // ── operator act: cold start (map must be empty) ──────────────────────────
   if (mode === "cold-start") {
     if (active.length > 0) {
       console.log(JSON.stringify({ ...summary, errors: 1, ok: false, reason: "map_not_empty" }));
@@ -592,10 +465,7 @@ async function main(): Promise<void> {
     );
     active = writeMap(centroids.map((centroid) => ({ centroid, id: null })));
     summary.minted = active.length;
-  }
-
-  // ── operator act: remint (retire every id, refit fresh) ───────────────────
-  else if (mode === "remint") {
+  } else if (mode === "remint") {
     const centroids = fitCentroids(
       corpus.map((f) => f.embedding),
       COLD_START_K,
@@ -607,10 +477,7 @@ async function main(): Promise<void> {
     summary.retired = active.length;
     active = writeMap(rows);
     summary.minted = active.length;
-  }
-
-  // ── nightly: consume any operator split request, then assign ──────────────
-  else {
+  } else {
     if (active.length === 0) {
       console.log(JSON.stringify({ ...summary, reason: "map_empty" }));
       return;
@@ -624,8 +491,6 @@ async function main(): Promise<void> {
       for (const parent of flagged) {
         const members = corpus.filter((f) => f.galaxyId === parent.id);
 
-        // Too few members to split into two coherent children: clear the flag (upsert the
-        // centroid unchanged) so a stuck request can never re-fire every night.
         if (members.length < MIN_SPLIT_MEMBERS) {
           structural.push({ centroid: parent.centroid, clearSplitRequest: true, id: parent.id });
           log(`${parent.id}: split requested but only ${members.length} members — clearing flag`);
@@ -644,8 +509,6 @@ async function main(): Promise<void> {
           continue;
         }
 
-        // Parent keeps its id on the larger child (+ the flag cleared); the smaller child is
-        // a NEW cluster the Worker mints an id + handle for.
         structural.push({ centroid: plan.parentChild, clearSplitRequest: true, id: parent.id });
         structural.push({ centroid: plan.newChild, id: null });
         summary.splits = (summary.splits as number) + 1;
@@ -657,7 +520,6 @@ async function main(): Promise<void> {
     }
   }
 
-  // ── assignment phase (shared by every mode): nearest centroid, diff, write ──
   const assignments = assignFindings(corpus, active);
   const changed = changedAssignments(assignments);
 
@@ -676,7 +538,6 @@ async function main(): Promise<void> {
 
   summary.reassigned = changed.length;
 
-  // ── centroid refresh + empty retire (the final map write) ─────────────────
   const assignedById = new Map(assignments.map((a) => [a.trackId, a.galaxyId]));
   const activeIds = active.map((g) => g.id);
   const { centroids, emptied } = recomputeCentroids(corpus, assignedById, activeIds);
@@ -691,7 +552,6 @@ async function main(): Promise<void> {
   summary.emptied = emptied.length;
   summary.retired = (summary.retired as number) + emptied.length;
 
-  // ── silhouette evidence (report-only; the operator's naming view reads it) ──
   const survivingIds = activeIds.filter((id) => !emptied.includes(id));
   const silhouette = cosineSilhouette(corpus, assignedById, survivingIds);
   summary.silhouette = {
@@ -700,8 +560,6 @@ async function main(): Promise<void> {
   };
   summary.galaxies = survivingIds.length;
 
-  // The tick's compute spend — one `self`/`seconds` row (global scope; not per-finding),
-  // best-effort and non-fatal, but any rejected rows remain visible in the summary.
   const costs: BoxCostEvent[] = [
     selfSecondsCost({
       occurredAt: new Date().toISOString(),
@@ -711,7 +569,6 @@ async function main(): Promise<void> {
   ];
   const costWriteFailures = (await emitCost(costs)).failed;
 
-  // The summary line the /status prober reads is the LAST stdout line.
   console.log(JSON.stringify({ costWriteFailures, ...summary }));
 }
 

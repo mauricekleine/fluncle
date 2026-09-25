@@ -1,14 +1,3 @@
-// Unit tests for the pure helpers in cluster-sweep.ts — the box-script sweep is
-// self-contained (it can't import the workspace) and lives outside any package's test
-// runner, so this file uses `bun:test` and is run directly:
-//
-//   bun test docs/agents/hermes/scripts/cluster-sweep.test.ts
-//
-// `main()` is guarded behind `import.meta.main` in the sweep, so importing it here is
-// side-effect free (no fluncle spawn, no python, no network). These cover the engine's
-// LOAD-BEARING math (the RFC acceptance criteria): nearest-centroid assignment, the
-// mean-centroid recompute, the FIXED-POINT invariant, the empty-retire path, the diff that
-// keeps a nightly write to "a handful", the split's larger-first continuity, and silhouette.
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -30,8 +19,6 @@ import {
   recomputeCentroids,
 } from "./cluster-sweep";
 
-// Two well-separated 2-D clusters: A hugs [1,0], B hugs [0,1] (all unit vectors, so cosine
-// == dot, the MuQ-space property the engine relies on).
 const A: Galaxy = { centroid: [1, 0], id: "gal_a" };
 const B: Galaxy = { centroid: [0, 1], id: "gal_b" };
 
@@ -80,7 +67,6 @@ describe("nearestGalaxyId", () => {
   });
 
   test("a tie breaks on the earliest galaxy (deterministic)", () => {
-    // Equidistant from both centroids -> the first one in the list wins.
     expect(nearestGalaxyId(unit(1, 1), [A, B])).toBe("gal_a");
     expect(nearestGalaxyId(unit(1, 1), [B, A])).toBe("gal_b");
   });
@@ -93,10 +79,8 @@ describe("assignFindings + changedAssignments", () => {
   });
 
   test("changedAssignments keeps only the findings that MOVED (a handful per night)", () => {
-    // Corpus already sits in its nearest galaxy -> nothing changed.
     expect(changedAssignments(assignFindings(corpus, [A, B]))).toHaveLength(0);
 
-    // A finding currently in B but nearest to A is the only move.
     const drifting: Finding[] = [{ embedding: unit(1, 0.05), galaxyId: "gal_b", trackId: "t5" }];
     const changed = changedAssignments(assignFindings(drifting, [A, B]));
     expect(changed).toHaveLength(1);
@@ -123,12 +107,11 @@ describe("recomputeCentroids", () => {
     const a = centroids.get("gal_a");
     expect(a).toBeDefined();
     expect(Math.hypot(a?.[0] ?? 0, a?.[1] ?? 0)).toBeCloseTo(1, 10);
-    // gal_a's members lean toward +x, so its x-component dominates.
+
     expect((a?.[0] ?? 0) > (a?.[1] ?? 0)).toBe(true);
   });
 
   test("a galaxy that ended with zero members is emptied (the retire path)", () => {
-    // Force everything into gal_a; gal_b keeps no members.
     const assignedById = new Map(corpus.map((f) => [f.trackId, "gal_a"]));
     const { centroids, emptied } = recomputeCentroids(corpus, assignedById, ["gal_a", "gal_b"]);
     expect(emptied).toEqual(["gal_b"]);
@@ -150,10 +133,8 @@ describe("the fixed-point invariant (RFC acceptance)", () => {
     ];
     const second = assignFindings(corpus, refit);
 
-    // Labels are identical (no reshuffle).
     expect(second.map((a) => a.galaxyId)).toEqual(first.map((a) => a.galaxyId));
 
-    // Recomputing again reproduces the same centroids within 1e-6 cosine (a converged map).
     const assignedAgain = new Map(second.map((a) => [a.trackId, a.galaxyId]));
     const again = recomputeCentroids(corpus, assignedAgain, ["gal_a", "gal_b"]);
     for (const id of ["gal_a", "gal_b"]) {
@@ -169,7 +150,7 @@ describe("the fixed-point invariant (RFC acceptance)", () => {
     const before = assignFindings(corpus, [A, B]);
     const withExtra = [...corpus, { embedding: unit(1, 0.15), galaxyId: null, trackId: "t7" }];
     const after = assignFindings(withExtra, [A, B]);
-    // Every original finding keeps its galaxy; only the new one is added.
+
     for (const original of before) {
       const match = after.find((a) => a.trackId === original.trackId);
       expect(match?.galaxyId).toBe(original.galaxyId);
@@ -200,7 +181,6 @@ describe("cosineSilhouette (report-only evidence)", () => {
 
 describe("planSplit (the parent keeps its id on the LARGER child)", () => {
   test("orders the child centroids larger-first by member count", () => {
-    // Three members hug +x, one hugs +y -> the +x child is larger and comes first.
     const members: Finding[] = [
       { embedding: unit(1, 0), galaxyId: "g", trackId: "m1" },
       { embedding: unit(1, 0.1), galaxyId: "g", trackId: "m2" },
@@ -212,7 +192,7 @@ describe("planSplit (the parent keeps its id on the LARGER child)", () => {
       [0, 1],
     ]);
     expect(plan).not.toBeNull();
-    // parentChild is the larger (+x) child; newChild is the smaller (+y) one.
+
     expect(plan?.parentChild).toEqual([1, 0]);
     expect(plan?.newChild).toEqual([0, 1]);
   });
@@ -227,7 +207,7 @@ describe("parseMode", () => {
     expect(parseMode([])).toBe("nightly");
     expect(parseMode(["--cold-start"])).toBe("cold-start");
     expect(parseMode(["--remint"])).toBe("remint");
-    // cold-start wins if both are (mistakenly) passed — a snap beats a redraw.
+
     expect(parseMode(["--cold-start", "--remint"])).toBe("cold-start");
   });
 });
@@ -260,7 +240,7 @@ esac
 
       expect(result.status).toBe(0);
       expect(summary).toMatchObject({ checked: 0, errors: 0, produced: 0 });
-      // Clustering reads the corpus itself. There is no outstanding work queue to count.
+
       expect("queueDepth" in summary).toBe(false);
       expect("queue_depth" in summary).toBe(false);
       expect("expectedIntervalMs" in summary).toBe(false);

@@ -1,17 +1,3 @@
-// Unit tests for cover-masters-sweep.ts — the `--no-agent` owned-cover-master resolve cron's
-// orchestrator (RFC musickit-second-authority U3b). A PURE trigger (zero LLM tokens): it drives ONE
-// bounded `fluncle admin backfills cover-masters` pass PER KIND and reports the merged counts. So
-// the contract worth pinning is exactly label-images-sweep's — parse-first, so a partial batch is
-// RECORDED with its real counts rather than discarded as a crash.
-//
-// The box-script sweeps are self-contained (they cannot import the workspace) and live outside any
-// package's test runner, so this file uses `bun:test` and is run directly:
-//
-//   bun test docs/agents/hermes/scripts/cover-masters-sweep.test.ts
-//
-// `main()` is guarded behind `import.meta.main` in the sweep, so importing it here is side-effect
-// free (no fluncle spawn, no network). The fluncle CLI itself is stubbed with a tiny executable
-// selected via FLUNCLE_BIN (read at module load, hence the dynamic import in beforeAll).
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -65,7 +51,6 @@ describe("cover-masters-sweep's canonical counters", () => {
   test("resolved + terminal-none are produced; per-entity failures remain failed", () => {
     mode("partial");
 
-    // The stub answers the same partial result for both album and artist passes.
     expect(run()).toMatchObject({
       checked: 6,
       errors: 0,
@@ -81,8 +66,7 @@ describe("cover-masters-sweep's canonical counters", () => {
     const summary = run();
 
     expect(summary).toMatchObject({ checked: 0, errors: 1, failed: 0, ok: false, produced: 0 });
-    // image_state + cooldown worklists have no covering index, so a per-tick count is deliberately
-    // omitted instead of taxing this hot path with a scan.
+
     expect(summary).not.toHaveProperty("queue_depth");
   });
 

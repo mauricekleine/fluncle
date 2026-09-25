@@ -1,14 +1,3 @@
-// Tests for embed-sweep.ts. The box-script sweep is self-contained (it can't import the workspace)
-// and lives outside any package's test runner, so this file uses `bun:test`. Run it from the
-// scripts directory so the shared no-network preload is armed:
-//
-//   bun test --cwd docs/agents/hermes/scripts embed-sweep.test.ts
-//
-// The pure helpers and the injectable `runEmbedSweep` driver run in-process. The phase protocol
-// runs the real script as a child process against a fake admission runner, a fake `fluncle`, a
-// fake embedder, and a loopback fixture serving the worklist, the R2 object, and the cost ledger.
-// `main()` is guarded behind `import.meta.main` in the sweep, so importing it here is side-effect
-// free (no R2 GET, no embedder spawn, no CLI).
 import { afterEach, describe, expect, test } from "bun:test";
 import {
   appendFileSync,
@@ -46,7 +35,7 @@ import {
 } from "./embed-sweep";
 
 const SWEEP = join(import.meta.dir, "embed-sweep.ts");
-// Each protocol test spawns the sweep, the fake runner, bun window children, and the fake embedder.
+
 const PROCESS_TEST_TIMEOUT_MS = 30_000;
 const temporaryDirectories: string[] = [];
 const servers: { stop: (closeActiveConnections?: boolean) => unknown }[] = [];
@@ -76,9 +65,6 @@ describe("the batch cap env knob", () => {
   });
 
   test("refuses a value that would unbound or empty the batch, keeping the default", () => {
-    // Each of these once reached the sweep as a silent `Number()`: a zero-width batch embeds
-    // nothing forever, and an unbounded one outruns the unit's derived TimeoutStartSec and is
-    // killed mid-forward.
     for (const raw of ["0", "-1", "7", "99", "2.5", "three", "1e3", "NaN", "Infinity"]) {
       expect(resolveEmbedBatchCap(raw), raw).toBe(DEFAULT_EMBED_BATCH_CAP);
     }
@@ -94,8 +80,6 @@ describe("the batch cap env knob", () => {
     expect(committed).toBeDefined();
     expect(resolveEmbedBatchCap(committed)).toBe(Number(committed));
 
-    // The timeout is the cap's other half: one 120s worklist window, then per track a 300s
-    // fetch-and-forward budget plus its own 120s write window, plus 30s of overhead.
     const timeout = Number(/^TimeoutStartSec=(\d+)$/m.exec(unit)?.[1]);
 
     expect(timeout).toBeGreaterThanOrEqual(120 + Number(committed) * (300 + 120) + 30);
@@ -103,8 +87,6 @@ describe("the batch cap env knob", () => {
 });
 
 describe("the inference script's cgroup-sized thread pool", () => {
-  // embed-track.py's module scope is import-safe (torch and muq are imported inside main), so the
-  // quota arithmetic can be read back through a real interpreter. Skipped where python3 is absent.
   const python = Bun.which("python3");
   const threadsFor = (cpuMax: string | null): number => {
     if (python === null) {
@@ -143,7 +125,7 @@ describe("the inference script's cgroup-sized thread pool", () => {
   test.skipIf(python === null)("floors a fractional quota into whole CPUs", () => {
     expect(threadsFor("250000 100000")).toBe(2);
     expect(threadsFor("300000 100000")).toBe(3);
-    // A sub-1.0 quota still gets one thread — there is no half a thread.
+
     expect(threadsFor("50000 100000")).toBe(1);
   });
 
@@ -151,7 +133,7 @@ describe("the inference script's cgroup-sized thread pool", () => {
     const hostThreads = threadsFor("max 100000");
 
     expect(hostThreads).toBeGreaterThanOrEqual(1);
-    // A missing file (a bare host, a GPU pod, macOS) reads the same as an uncapped one.
+
     expect(threadsFor(null)).toBe(hostThreads);
     expect(threadsFor("not-a-quota 100000")).toBe(hostThreads);
   });
@@ -246,8 +228,6 @@ describe("chooseEmbedSource", () => {
   });
 
   test("skips a finding with no captured full song — NEVER falls back to the preview", () => {
-    // The queue is key-gated upstream, so this is the defensive path: no source_audio_key →
-    // leave it queued, never preview-embed (the blind preview vectors are the thing we kill).
     const source = chooseEmbedSource({ logId: "004.7.2I", trackId: "track-1" });
 
     expect(source).toEqual({ kind: "skip", reason: "no_source_audio" });
@@ -291,14 +271,11 @@ describe("sourceAudioExt", () => {
   });
 
   test("falls back to .audio when the key has no usable extension", () => {
-    // ffmpeg decodes by content, so the extension is hygiene, not load-bearing.
     expect(sourceAudioExt("004.7.2I/noext")).toBe(".audio");
     expect(sourceAudioExt("004.7.2I/trailingdot.")).toBe(".audio");
   });
 
   test("does not mistake a dotted logId directory for the extension", () => {
-    // The logId "004.7.2I" carries dots, but the ext is parsed from the basename after the
-    // last slash, so those dots never leak into the extension.
     expect(sourceAudioExt("004.7.2I/abcdef.mp3")).toBe(".mp3");
   });
 });
@@ -337,33 +314,25 @@ describe("database window envelopes", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// The driver, in-process, with fake database windows.
-// ---------------------------------------------------------------------------
-
 type DriverOptions = {
   batchCap: number;
   embedCode?: number;
-  /** The message each failing track's embedder error carries; defaults to a decode failure. */
+
   embedErrorMessage?: string;
   embedErrors?: readonly string[];
-  /** The streak this tick INHERITS from earlier ticks (the dead-stage tripwire's memory). */
+
   failureStreak?: EmbedFailureStreak | null;
-  /** Failing tracks whose error is a DIFFERENT class from `embedErrorMessage`. */
+
   mixedErrorTrackIds?: readonly string[];
   queue?: "tracks" | "yield";
   queued?: number;
   trackIds: readonly string[];
   write: (item: EmbedWriteItem) => EmbedWriteWindow | undefined;
-  /**
-   * The BATCHED write window, and the width the Worker advertises for it. Absent is an older
-   * Worker: the sweep then takes the per-result windows, which is the version-tolerance contract.
-   */
+
   writeBatch?: (items: readonly EmbedWriteItem[]) => EmbedWriteBatchWindow | undefined;
   writeBatchWidth?: number;
 };
 
-/** An in-memory stand-in for the on-disk streak file, so the verdict is testable without a disk. */
 function memoryStreakStore(initial: EmbedFailureStreak | null = null): EmbedFailureStreakStore & {
   stored: () => EmbedFailureStreak | null;
 } {
@@ -462,8 +431,6 @@ describe("runEmbedSweep", () => {
         item.trackId === "track-a" ? { costWriteFailures: 0, written: true } : undefined,
     });
 
-    // Fetch and inference run between the two database windows; the yielded write for track-b is
-    // never re-issued and track-c's write never starts.
     expect(timeline).toEqual([
       "read",
       "audio:catalogue/track-a.webm",
@@ -564,10 +531,6 @@ describe("runEmbedSweep", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// The phase protocol, end to end, against a fake runner and a loopback fixture.
-// ---------------------------------------------------------------------------
-
 type ProtocolOptions = {
   fluncle?: "ok" | "timeout";
   inheritedRunner?: boolean;
@@ -636,8 +599,6 @@ async function runProtocol(options: ProtocolOptions = {}) {
   const base = `http://127.0.0.1:${server.port}`;
   const runnerMode = options.runner ?? "run";
 
-  // The fake runner records each lease around its command. `yield-write` exits 75 before a write
-  // window starts; `fence-write` runs the write command and then reports the lease as lost.
   const runner = executable(
     join(directory, "runner"),
     `[ "$1" = "phase" ] && shift
@@ -910,15 +871,6 @@ describe("embed-sweep phased admission protocol", () => {
   );
 });
 
-// ---------------------------------------------------------------------------
-// THE DEAD-STAGE TRIPWIRE, from both sides.
-//
-// The shape it exists for is an embedder that answers, refuses every item the same way, and exits
-// 0 — which reads `ok: true` forever. The shape it must NOT fire on is the ordinary bad file. So
-// both are driven here: the classifier, the fold that carries the streak, and the sweep itself
-// under a live streak and under a healthy one.
-// ---------------------------------------------------------------------------
-
 describe("classifyEmbedFailure", () => {
   test("a rotted inference dependency is the engine, not the audio", () => {
     expect(classifyEmbedFailure("No module named 'transformers.models.bert'")).toBe("engine");
@@ -928,8 +880,7 @@ describe("classifyEmbedFailure", () => {
     expect(classifyEmbedFailure("ffmpeg returned non-zero exit status 1")).toBe("decode");
     expect(classifyEmbedFailure("decoded audio is empty")).toBe("decode");
     expect(classifyEmbedFailure("expected 1024 finite dims, got 512")).toBe("vector");
-    // An unrecognised message is its OWN bucket. Folding it into a neighbour would let two
-    // unrelated failures look like one systemic class.
+
     expect(classifyEmbedFailure("something nobody has seen before")).toBe("other");
   });
 });
@@ -946,8 +897,7 @@ describe("nextEmbedFailureStreak", () => {
     expect(
       nextEmbedFailureStreak({ errors: ["ImportError: torch"], previous: first, results: 0 }),
     ).toEqual({ class: "engine", count: 2 });
-    // A different class is a different failure, so the count starts over rather than inheriting
-    // evidence it did not earn.
+
     expect(
       nextEmbedFailureStreak({ errors: ["decoded audio is empty"], previous: first, results: 0 }),
     ).toEqual({ class: "decode", count: 1 });
@@ -960,7 +910,7 @@ describe("nextEmbedFailureStreak", () => {
       null,
     );
     expect(nextEmbedFailureStreak({ errors: [], previous: live, results: 0 })).toEqual(live);
-    // Every attempt failed, but for unrelated reasons — a bad batch, not a dead engine.
+
     expect(
       nextEmbedFailureStreak({
         errors: ["ImportError: torch", "decoded audio is empty"],
@@ -985,8 +935,7 @@ describe("the embed dead-stage tripwire", () => {
     expect(outcome.exitCode).toBe(0);
     expect(outcome.summary).toMatchObject({ embedFailed: 1, errors: 0, failed: 1, ok: true });
     expect(outcome.summary).not.toHaveProperty("reason");
-    // The evidence is recorded even while the verdict is quiet — that is what makes the streak
-    // able to reach the bar at all.
+
     expect(streak).toEqual({ class: "decode", count: 1 });
   });
 
@@ -1017,7 +966,7 @@ describe("the embed dead-stage tripwire", () => {
     });
 
     expect(outcome.exitCode).toBe(1);
-    // The COUNTS are untouched — only the verdict is added.
+
     expect(outcome.summary).toMatchObject({
       checked: 1,
       embedFailed: 1,
@@ -1049,9 +998,6 @@ describe("the embed dead-stage tripwire", () => {
   });
 
   test("QUIET: one bad file inside a full batch cannot make an all-failed tick", async () => {
-    // The batch is what closes the tripwire's one false-positive mode. A single unreadable track
-    // rides with batchmates that embed, so the tick is never all-failed and the streak is cleared
-    // however long it was — the poison item can no longer wear a systemic costume.
     const { outcome, streak } = await driveSweep({
       batchCap: DEFAULT_EMBED_BATCH_CAP,
       embedErrorMessage: "No module named transformers",
@@ -1067,8 +1013,6 @@ describe("the embed dead-stage tripwire", () => {
   });
 
   test("a full batch failing as one is ONE tick of evidence, worth three attempts", async () => {
-    // The streak counts TICKS, not attempts, so the bar is unchanged by the batch — what changes
-    // is how much each tick on it is worth. Three ticks of a full batch is nine failed attempts.
     const { outcome, streak } = await driveSweep({
       batchCap: DEFAULT_EMBED_BATCH_CAP,
       embedErrorMessage: "No module named transformers",
@@ -1121,10 +1065,6 @@ describe("the embed dead-stage tripwire", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// THE BATCHED WRITE — one admitted lease for the tick's vectors, not one per result.
-// ---------------------------------------------------------------------------
-
 describe("the batched vector write", () => {
   test("writes the whole tick in ONE window when the Worker advertises the batch", async () => {
     const { outcome, timeline } = await driveSweep({
@@ -1140,12 +1080,12 @@ describe("the batched vector write", () => {
 
     expect(outcome.exitCode).toBe(0);
     expect(outcome.summary).toMatchObject({ checked: 3, done: 3, errors: 0, ok: true });
-    // ONE write window, and it is the batched one.
+
     expect(timeline.filter((entry) => entry.startsWith("write:"))).toEqual([]);
     expect(timeline.filter((entry) => entry.startsWith("write-batch:"))).toEqual([
       "write-batch:track-a,track-b,track-c",
     ]);
-    // THE LEASES PER TICK: the worklist read and the one write.
+
     expect(outcome.summary.leases).toBe(2);
   });
 
@@ -1169,8 +1109,6 @@ describe("the batched vector write", () => {
   });
 
   test("reports the Worker's deferred tail as unapplied rather than as a landed write", async () => {
-    // `deferred` is the Worker's own wall budget stopping inside the admission watchdog window.
-    // Those items never reached a write, so they stay queued and the tick reads as partial.
     const { outcome } = await driveSweep({
       batchCap: 3,
       trackIds: ["track-a", "track-b", "track-c"],
@@ -1190,20 +1128,17 @@ describe("the batched vector write", () => {
   });
 
   test("falls back to per-result windows against a Worker that advertises no batch", async () => {
-    // New sweep, OLD Worker: the pinned box CLI leads the Worker as often as it lags it, and the
-    // missing op must never be discovered as a 404 after the GPU work is already paid for.
     const { outcome, timeline } = await driveSweep({
       batchCap: 2,
       trackIds: ["track-a", "track-b"],
       write: () => ({ costWriteFailures: 0, written: true }),
       writeBatch: () => ({ costWriteFailures: 0, results: [] }),
-      // No advertised width.
     });
 
     expect(outcome.summary).toMatchObject({ done: 2, ok: true });
     expect(timeline.filter((entry) => entry.startsWith("write-batch:"))).toEqual([]);
     expect(timeline.filter((entry) => entry.startsWith("write:"))).toHaveLength(2);
-    // Two write leases plus the worklist read — the shape the batch exists to collapse.
+
     expect(outcome.summary.leases).toBe(3);
   });
 
