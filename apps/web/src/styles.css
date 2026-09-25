@@ -5976,6 +5976,19 @@ a.catalogue-letter:focus-visible {
   }
 }
 
+/* The sheet never outgrows the viewport (a phone on its side, enlarged text): its header and close
+   control stay put and the list scrolls inside. */
+.browse-sheet {
+  max-height: calc(100dvh - env(safe-area-inset-top));
+}
+
+.browse-sheet-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
 .browse-sheet-list {
   display: grid;
   list-style: none;

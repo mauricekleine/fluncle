@@ -1,28 +1,6 @@
-// THE BROWSE MENU — the one top-bar route between the catalogue hubs (DESIGN.md "Browse Menu").
-//
-// The colophon still carries the whole nav (the crawl backbone); this control exists because a
-// reader deep on a label page should not have to scroll to the liner notes to get to Artists. It is
-// ARCHIVE ONLY: the five hubs (Tracks, Artists, Albums, Labels, Fresh), read from the nav model so a
-// hub's label and blurb are the colophon's own. The lore pages stay in the colophon and on the front
-// door.
-//
-// ONE control, two presentations, chosen by CSS rather than by JS so the server and the client
-// render the same markup: from 40rem up a Shadcn dropdown anchored under the trigger; below it a
-// bottom sheet with thumb-sized rows. Both triggers render, and the one that does not fit the
-// viewport is `display: none`, which also takes it out of the accessibility tree. The dropdown is
-// Base UI's menu (arrow keys, Enter, Escape, focus back to the trigger); the sheet is a modal dialog
-// (focus trap, Escape, focus back).
-//
-// The current hub is marked the way the account menu marks its current door: `aria-current` for
-// assistive tech and a quiet cream tint for sight, never gold (a door is not a certification).
-//
-// THE SHORTCUT SEAM. `shortcuts` is an optional second group under the hubs, rendered as a wrapping
-// row of chips in both presentations. The style-chip row (the style lexicon's shortcuts into
-// `/tracks?sound=`) plugs in here from `PublicChrome`; with nothing passed, nothing renders.
-
 import { CaretDownIcon, SquaresFourIcon, XIcon } from "@phosphor-icons/react";
 import { Link, useRouterState } from "@tanstack/react-router";
-import { type ReactNode, useState } from "react";
+import { type ReactNode, type RefObject, useEffect, useRef, useState } from "react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -43,14 +21,12 @@ import {
 } from "@fluncle/ui/components/sheet";
 import { navBrowseHubs } from "@/lib/nav-model";
 
-/** One shortcut chip: a literal label and the in-app route (plus search params) it opens. */
 export type BrowseShortcut = {
   label: string;
   search?: Record<string, string>;
   to: string;
 };
 
-/** The optional shortcut group under the hubs: its heading and its chips. */
 export type BrowseShortcuts = {
   items: BrowseShortcut[];
   label: string;
@@ -58,11 +34,16 @@ export type BrowseShortcuts = {
 
 type Hub = { blurb?: string; id: string; label: string; to: string };
 
+type Presentation = "menu" | "sheet";
+
 const HUBS: Hub[] = navBrowseHubs.flatMap((item) =>
   item.kind === "route" ? [{ blurb: item.blurb, id: item.id, label: item.label, to: item.to }] : [],
 );
 
-/** The trigger's face, shared by both presentations so they read as one control. */
+export function isSearchShortcut(event: Pick<KeyboardEvent, "ctrlKey" | "key" | "metaKey">) {
+  return event.key.toLowerCase() === "k" && (event.metaKey || event.ctrlKey);
+}
+
 function TriggerFace(): ReactNode {
   return (
     <>
@@ -82,25 +63,37 @@ function HubText({ hub }: { hub: Hub }): ReactNode {
   );
 }
 
-/** The dropdown presentation (40rem and up). */
+type PresentationProps = {
+  current: string;
+  open: boolean;
+  returnFocus: () => boolean;
+  setOpen: (open: boolean) => void;
+  shortcuts?: BrowseShortcuts;
+  triggerRef: RefObject<HTMLButtonElement | null>;
+};
+
 function BrowseDropdown({
   current,
+  open,
+  returnFocus,
+  setOpen,
   shortcuts,
-}: {
-  current: string;
-  shortcuts?: BrowseShortcuts;
-}): ReactNode {
+  triggerRef,
+}: PresentationProps): ReactNode {
   return (
-    <DropdownMenu>
-      {/* The accessible name contains the visible word ("Browse"), so a voice-control user saying
-          what they see reaches it (WCAG 2.5.3, the search trigger's rule). */}
+    <DropdownMenu onOpenChange={setOpen} open={open}>
       <DropdownMenuTrigger
         aria-label="Browse the archive"
         className="browse-trigger browse-trigger--menu"
+        ref={triggerRef}
       >
         <TriggerFace />
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="browse-menu w-72 shadow-none">
+      <DropdownMenuContent
+        align="end"
+        className="browse-menu w-72 shadow-none"
+        finalFocus={returnFocus}
+      >
         <DropdownMenuGroup>
           {HUBS.map((hub) => {
             const active = hub.to === current;
@@ -119,7 +112,6 @@ function BrowseDropdown({
         {shortcuts && shortcuts.items.length > 0 ? (
           <>
             <DropdownMenuSeparator />
-            {/* Base UI requires a GroupLabel to live inside a Group (the account menu's note). */}
             <DropdownMenuGroup className="browse-shortcuts">
               <DropdownMenuLabel>{shortcuts.label}</DropdownMenuLabel>
               <div className="browse-shortcut-row">
@@ -141,17 +133,14 @@ function BrowseDropdown({
   );
 }
 
-/** The sheet presentation (below 40rem): the same list, with rows sized for a thumb. */
 function BrowseSheet({
   current,
+  open,
+  returnFocus,
+  setOpen,
   shortcuts,
-}: {
-  current: string;
-  shortcuts?: BrowseShortcuts;
-}): ReactNode {
-  // The chrome persists across navigation, so the sheet closes itself when a row is taken rather
-  // than staying open over the page it just opened.
-  const [open, setOpen] = useState(false);
+  triggerRef,
+}: PresentationProps): ReactNode {
   const close = () => setOpen(false);
 
   return (
@@ -159,18 +148,16 @@ function BrowseSheet({
       <SheetTrigger
         aria-label="Browse the archive"
         className="browse-trigger browse-trigger--sheet"
+        ref={triggerRef}
       >
         <TriggerFace />
       </SheetTrigger>
-      {/* The plate's glass instead of an opaque popover, no drop shadow (Through-the-Glass), and a
-          slide that stands still under reduced motion: the behind-the-scenes sheet's recipe. */}
       <SheetContent
         className="browse-sheet gap-0 shadow-none ring-1 ring-foreground/10 motion-reduce:transition-none motion-reduce:duration-0"
+        finalFocus={returnFocus}
         showCloseButton={false}
         side="bottom"
       >
-        {/* The close control is drawn here rather than by the generated sheet so it is thumb-sized
-            like every row under it. */}
         <SheetHeader className="flex-row items-center justify-between border-b border-border">
           <SheetTitle>Browse</SheetTitle>
           <SheetClose render={<Button className="size-11" size="icon" variant="ghost" />}>
@@ -178,7 +165,7 @@ function BrowseSheet({
             <span className="sr-only">Close</span>
           </SheetClose>
         </SheetHeader>
-        <nav aria-label="Browse the archive">
+        <nav aria-label="Browse the archive" className="browse-sheet-body">
           <ul className="browse-sheet-list">
             {HUBS.map((hub) => {
               const active = hub.to === current;
@@ -222,17 +209,61 @@ function BrowseSheet({
   );
 }
 
-/**
- * The Browse control for the top bar. Mounted once by `PublicChrome` on every public page, the
- * front door included. `shortcuts` is the seam for the style-chip row.
- */
 export function BrowseMenu({ shortcuts }: { shortcuts?: BrowseShortcuts }): ReactNode {
   const pathname = useRouterState({ select: (state) => state.location.pathname });
+  const [open, setOpen] = useState<Presentation | undefined>(undefined);
+  const yieldingToSearch = useRef(false);
+  const menuTrigger = useRef<HTMLButtonElement>(null);
+  const sheetTrigger = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    if (open === undefined) {
+      return;
+    }
+
+    const presentation = open;
+
+    function onKeyDown(event: KeyboardEvent): void {
+      if (!isSearchShortcut(event)) {
+        return;
+      }
+
+      yieldingToSearch.current = true;
+      setOpen(undefined);
+      (presentation === "menu" ? menuTrigger : sheetTrigger).current?.focus();
+    }
+
+    document.addEventListener("keydown", onKeyDown, { capture: true });
+
+    return () => document.removeEventListener("keydown", onKeyDown, { capture: true });
+  }, [open]);
+
+  const returnFocus = () => {
+    if (yieldingToSearch.current) {
+      yieldingToSearch.current = false;
+
+      return false;
+    }
+
+    return true;
+  };
+
+  const shared = { current: pathname, returnFocus, shortcuts };
 
   return (
     <>
-      <BrowseDropdown current={pathname} shortcuts={shortcuts} />
-      <BrowseSheet current={pathname} shortcuts={shortcuts} />
+      <BrowseDropdown
+        {...shared}
+        open={open === "menu"}
+        setOpen={(next) => setOpen(next ? "menu" : undefined)}
+        triggerRef={menuTrigger}
+      />
+      <BrowseSheet
+        {...shared}
+        open={open === "sheet"}
+        setOpen={(next) => setOpen(next ? "sheet" : undefined)}
+        triggerRef={sheetTrigger}
+      />
     </>
   );
 }

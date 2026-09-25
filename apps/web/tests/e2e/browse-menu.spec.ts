@@ -1,10 +1,3 @@
-// THE BROWSE MENU: the top bar's one route between the five catalogue hubs (DX-24).
-//
-// On every public page the chrome wraps, front door included, one "Browse the archive" control
-// opens Tracks, Artists, Albums, Labels and Fresh. From 40rem up it is a keyboard-operable menu that
-// marks the current hub and hands focus back to its trigger on Escape; on a phone it is a sheet whose
-// rows are thumb-sized and which closes itself once a row is taken.
-
 import { expect, test, type Page } from "@playwright/test";
 import { blockExternalRequests } from "./browser";
 
@@ -51,7 +44,6 @@ test.describe("browse menu — desktop", () => {
 
     await expect(current).toHaveText(/^Labels/);
 
-    // The current hub's resting tint must give way to the highlight when the keyboard reaches it.
     const resting = await current.evaluate((row) => getComputedStyle(row).backgroundColor);
 
     await current.focus();
@@ -113,5 +105,76 @@ test.describe("browse menu — phone", () => {
 
     await expect(page).toHaveURL(/\/artists$/);
     await expect(sheet).toHaveCount(0);
+  });
+});
+
+test.describe("browse menu — search takes over", () => {
+  for (const [name, viewport, mobile] of [
+    ["desktop", { height: 900, width: 1440 }, false],
+    ["phone", { height: 844, width: 390 }, true],
+  ] as const) {
+    test(`${name}: Ctrl+K closes Browse, opens one search dialog, and Escape lands on Browse`, async ({
+      browser,
+    }) => {
+      const context = await browser.newContext({ hasTouch: mobile, isMobile: mobile, viewport });
+      const page = await context.newPage();
+
+      await blockExternalRequests(page);
+      await hydrate(page, "/labels");
+
+      const trigger = page.getByRole("button", { name: "Browse the archive" });
+
+      await trigger.click();
+      if (mobile) {
+        await expect(page.getByRole("dialog", { name: "Browse" })).toBeVisible();
+      } else {
+        await expect(page.getByRole("menuitem").first()).toBeVisible();
+      }
+
+      await page.keyboard.press("Control+k");
+
+      await expect(page.getByRole("dialog")).toHaveCount(1);
+      await expect(page.getByRole("dialog", { name: "Browse" })).toHaveCount(0);
+      await expect(page.getByRole("menuitem")).toHaveCount(0);
+      const search = page.getByRole("dialog", { name: "Search the archive" });
+
+      await expect(search).toBeVisible();
+      await expect
+        .poll(() => search.evaluate((dialog) => dialog.contains(document.activeElement)))
+        .toBe(true);
+
+      await page.keyboard.press("Escape");
+      await expect(page.getByRole("dialog")).toHaveCount(0);
+      await expect(trigger).toBeFocused();
+      await context.close();
+    });
+  }
+});
+
+test.describe("browse menu — a short viewport", () => {
+  test.use({ hasTouch: true, isMobile: true, viewport: { height: 360, width: 740 } });
+
+  test("the sheet fits the screen and scrolls to its last row", async ({ page }) => {
+    await blockExternalRequests(page);
+    await page.setViewportSize({ height: 360, width: 600 });
+    await hydrate(page, "/labels");
+
+    await page.getByRole("button", { name: "Browse the archive" }).tap();
+
+    const sheet = page.getByRole("dialog", { name: "Browse" });
+
+    await expect
+      .poll(async () => {
+        const box = await sheet.boundingBox();
+
+        return box !== null && box.y >= 0 && box.y + box.height <= 360;
+      })
+      .toBe(true);
+    await expect(sheet.getByRole("button", { name: "Close" })).toBeInViewport();
+
+    const last = sheet.getByRole("link", { name: /Fresh/ });
+
+    await last.scrollIntoViewIfNeeded();
+    await expect(last).toBeInViewport();
   });
 });
