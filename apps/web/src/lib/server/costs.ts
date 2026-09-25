@@ -1,39 +1,11 @@
-// The cost ledger's server-side write + read (COST-01). Three seams live here:
-//
-//   - `insertCostEvents(events)` — the idempotent APPEND: one multi-row
-//     `insert … on conflict(id) do nothing`, returning the count actually written
-//     (a retried id lands zero). Used by BOTH write paths — the Worker-local
-//     capture sites in-process, and the agent-tier `record_cost` handler.
-//   - `captureCostEvents(events)` — the BEST-EFFORT wrapper the Worker-local
-//     capture sites use: it can NEVER throw and never rejects, so a cost-ledger
-//     failure can't break the real vendor operation it rides alongside (the
-//     note/observation/context/email still lands). A failure is logged, swallowed.
-//   - `getCostInsights({ windowDays, topFindings })` — the two GROUP BY reads
-//     behind `/admin/usage` (the `listHubPage` raw-SQL-aggregate
-//     precedent): a per-STEP rollup (cash | subsidized in SEPARATE columns) and a
-//     per-FINDING top-N (cash DESC), windowed by `occurred_at`. Unpriced
-//     (`estimated_usd IS NULL`) rows are COUNTED separately, NEVER summed as 0, and
-//     cash + subsidized are NEVER added together (the whole correctness story —
-//     RFC §0).
-
 import { type CostEventInput } from "@fluncle/contracts/orpc";
 import { parseArtistsJson } from "./artist-names";
 import { priceFromRates } from "./cost-rates";
 import { getDb } from "./db";
 import { logEvent } from "./log";
 
-/**
- * The finding attribution a Worker-local capture site threads to its vendor call
- * so the emitted row can be grouped per-finding. Both optional/nullable — a
- * non-finding step (a newsletter send) leaves them unset.
- */
 export type CostCaptureContext = { logId?: string | null; trackId?: string | null };
 
-/**
- * Build a deterministic idempotency `id` for a cost row (schema.ts `id` note):
- * `${step}:${logId ?? trackId ?? "global"}:${vendor}:${unitType}:${occurredAt}`.
- * Two identical captures of the same unit of work collapse to one row.
- */
 export function costEventId(parts: {
   logId?: string | null;
   occurredAt: string;
@@ -47,8 +19,6 @@ export function costEventId(parts: {
   return `${parts.step}:${scope}:${parts.vendor}:${parts.unitType}:${parts.occurredAt}`;
 }
 
-// The insert column order (matches the `cost_events` schema). One place so the
-// placeholder tuple and the arg push below cannot drift.
 const INSERT_COLUMNS = [
   "id",
   "cost_basis",
@@ -65,13 +35,6 @@ const INSERT_COLUMNS = [
   "vendor",
 ] as const;
 
-/**
- * The row's stored USD. The emitter's own `usd` wins (anthropic's envelope
- * `total_cost_usd`; the OpenRouter distil's token-priced figure) — it is the most
- * accurate number available; otherwise the single-count `priceFromRates`. A rate
- * MISS is `null` (UNPRICED — surfaced as "—", never laundered to $0). A row is
- * stored unpriced rather than as free.
- */
 export function resolveEstimatedUsd(event: CostEventInput): number | null {
   if (typeof event.usd === "number") {
     return event.usd;
@@ -80,14 +43,6 @@ export function resolveEstimatedUsd(event: CostEventInput): number | null {
   return priceFromRates(event.vendor, event.unitType, event.quantity);
 }
 
-/**
- * Append cost events to the ledger, IDEMPOTENTLY. One multi-row insert with
- * `on conflict(id) do nothing`, so a retried best-effort POST (same ids) is a
- * no-op — an append-only ledger double-counts a retry otherwise. Returns the
- * number of rows ACTUALLY inserted (`rowsAffected`); a fully-duplicate batch
- * returns 0. The Worker sets `created_at` and prices `estimated_usd` here, so the
- * emitter never has to.
- */
 export async function insertCostEvents(events: CostEventInput[]): Promise<number> {
   if (events.length === 0) {
     return 0;
@@ -127,34 +82,22 @@ export async function insertCostEvents(events: CostEventInput[]): Promise<number
   return result.rowsAffected;
 }
 
-/**
- * BEST-EFFORT capture — the guarantee the Worker-local sites depend on: it can
- * NEVER throw and never rejects past its own boundary, so a cost-ledger failure is
- * invisible to the vendor operation it rides alongside (the real note / observation
- * / email always proceeds). A failure is logged and swallowed. Returns nothing.
- */
 export async function captureCostEvents(events: CostEventInput[]): Promise<void> {
   try {
     await insertCostEvents(events);
   } catch (error) {
-    // A missing table during a deploy window, a Turso blip — the ledger is an
-    // enhancement, so a write failure here must never surface to the caller.
     logEvent("error", "costs.ledger-write-failed", { error });
   }
 }
 
-// ── The read surface (`/admin/usage`) ────────────────────────────────────────
-
-/** One step's rollup — cash + subsidized in SEPARATE fields (never summed). */
 export type CostStepRollup = {
-  cashUsd: number; // Σ estimated_usd WHERE cost_basis='cash' AND priced
+  cashUsd: number;
   eventCount: number;
   step: string;
-  subsidizedUsd: number; // Σ estimated_usd WHERE cost_basis='subsidized' AND priced
-  unpricedCount: number; // COUNT WHERE estimated_usd IS NULL (never summed as 0)
+  subsidizedUsd: number;
+  unpricedCount: number;
 };
 
-/** One finding's cash rollup — the per-finding top-N (cash DESC) list row. */
 export type CostFindingRollup = {
   albumImageUrl: string | null;
   artists: string[];
@@ -166,13 +109,13 @@ export type CostFindingRollup = {
 };
 
 export type CostInsights = {
-  since: string; // ISO window start
+  since: string;
   steps: CostStepRollup[];
   topFindings: CostFindingRollup[];
   totals: {
-    cashUsd: number; // Σ cash across steps — the headline "cost per finding" base
-    subsidizedUsd: number; // Σ subsidized — shown SEPARATELY, never added to cash
-    unpricedCount: number; // rows that couldn't be priced (surfaced, never $0)
+    cashUsd: number;
+    subsidizedUsd: number;
+    unpricedCount: number;
   };
   windowDays: number;
 };
@@ -188,14 +131,6 @@ function optionalText(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
-/**
- * The two aggregations behind `/admin/usage`, windowed by `occurred_at`:
- *   1. per-STEP rollup — cash and subsidized in separate columns + an unpriced
- *      count, so the split renders AS the split.
- *   2. per-FINDING top-N — the highest CASH-cost findings, joined to `tracks`.
- * Cash and subsidized are NEVER summed together; unpriced rows are counted, never
- * added as $0. Raw SQL (the `listHubPage` precedent).
- */
 export async function getCostInsights(
   options: { topFindings?: number; windowDays?: number } = {},
 ): Promise<CostInsights> {
@@ -204,9 +139,6 @@ export async function getCostInsights(
   const since = new Date(Date.now() - windowDays * 24 * 60 * 60 * 1000).toISOString();
   const db = await getDb();
 
-  // Per-step rollup. FILTER-style conditional SUM/COUNT so one pass yields the cash
-  // column, the subsidized column, and the unpriced count without ever blending
-  // them. A NULL estimated_usd contributes to `unpriced`, never to a $ sum.
   const stepResult = await db.execute({
     args: [since],
     sql: `select step,
@@ -252,9 +184,6 @@ export async function getCostInsights(
     totalUnpriced += unpricedCount;
   }
 
-  // Per-finding top-N by CASH cost. Joined to `tracks` for the identity block; only
-  // rows with a `track_id` (finding steps) participate. Cash only — the headline
-  // question is "what did this finding cost in real money".
   const findingResult = await db.execute({
     args: [since, topFindings],
     sql: `select ce.track_id as track_id,

@@ -24,17 +24,15 @@ export type DatabaseMutationTarget = "derived-local" | "derived-remote" | "prima
 export type DatabaseAdmissionMode = "control-plane-exempt" | "not-applicable" | "required";
 
 export type DatabaseAdmissionShape = Readonly<{
-  /** Checked-in payload source that invokes phase mode; absent for whole-lifetime units. */
   phaseSource?: string;
-  /** Why this operation owns this lease shape. */
+
   rationale: string;
   shape: "phased" | "whole-lifetime";
-  /** Bounded in-run retries after exit 75. Non-zero is legal only for replay-safe writes. */
+
   yieldRetries: 0 | 1;
 }>;
 
 export type OperationDatabaseProfile = Readonly<{
-  /** Access against the primary application database, independent of any derived target. */
   accessClass: DatabaseAccessClass | null;
   mutationDisposition: OperationMutationDisposition;
   mutationTarget: DatabaseMutationTarget | null;
@@ -53,16 +51,15 @@ export type OperationCadence = Readonly<{
 
 export type OperationTrigger = OperationDatabaseProfile &
   Readonly<{
-    /** The stable ID of this step. A scheduled run may contain several steps. */
     operationId: string;
-    /** The retained flag-off path when it differs from the final operation profile. */
+
     compatibility?: OperationDatabaseProfile;
-    /** Exact command template, HTTP method/path, or non-database action. */
+
     target: string;
     kind: OperationTriggerKind;
-    /** Commander route tokens, without arguments or options. */
+
     cliRoute?: readonly string[];
-    /** Checked-in implementation that issues this trigger. */
+
     source: string;
   }>;
 
@@ -76,15 +73,14 @@ export type IncidentOperation = Readonly<{
 
 export type RecurringDatabaseOperation = OperationDatabaseProfile &
   Readonly<{
-    /** Whether the recurring operation is subject to database admission. */
     admissionMode: DatabaseAdmissionMode;
-    /** Exact lease scope for admitted operations; null for exempt and database-light operations. */
+
     admissionShape: DatabaseAdmissionShape | null;
-    /** Stable run-level ID used by spans and fleet telemetry. */
+
     operationId: string;
     cadence: OperationCadence;
     cadenceSource: string;
-    /** The retained flag-off path when its aggregate profile differs from the final one. */
+
     compatibility?: OperationDatabaseProfile;
     heavy: boolean;
     incidents: readonly IncidentOperation[];
@@ -118,11 +114,6 @@ type OperationDefinition = Omit<
   | "serviceSource"
   | "timerSource"
 > & {
-  /**
-   * Monitoring and self-deploy control-plane payloads must run when the primary database is
-   * unavailable. Their optional health snapshot is receipt-backed telemetry, not authority to
-   * suppress the payload.
-   */
   admissionMode?: "control-plane-exempt";
   cadenceSource?: string;
   compatibility?: DatabaseProfileDefinition;
@@ -152,7 +143,6 @@ const phased = (
   yieldRetries: 0 | 1,
 ): DatabaseAdmissionShape => ({ phaseSource, rationale, shape: "phased", yieldRetries });
 
-/** Strict lease-shape roster for every operation whose admissionMode resolves to required. */
 export const DATABASE_ADMISSION_SHAPES: Readonly<Record<string, DatabaseAdmissionShape>> = {
   "analytics.funnel-snapshot": wholeLifetime(
     "One bounded database recompute is the payload; there is no external phase to release around.",
@@ -620,7 +610,6 @@ export const DATABASE_MUTATION_POLICIES = {
 
 export type MutationPolicyId = keyof typeof DATABASE_MUTATION_POLICIES;
 
-/** Every concrete recurring mutation trigger maps explicitly to its own mutation policy. */
 export const TRIGGER_MUTATION_POLICY_IDS = {
   "analytics.funnel-snapshot": "analytics.funnel-snapshot",
   "artist.resolve": "artist.resolve",
@@ -1061,12 +1050,6 @@ const HEALTH_RECEIPT_FLAG_OFF_COMPATIBILITY: DatabaseProfileDefinition = {
   mutationTarget: "primary",
 };
 
-/**
- * Complete roster of recurring database-touching timers and continuous daemons
- * across the Hermes and satellite deployment/watchdog roots. The classification
- * describes each operation's product-database effect; the standard run-ledger
- * receipt is telemetry and deliberately does not turn a no-database operation into a write.
- */
 export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] = [
   defineOperation({
     accessClass: "write",
@@ -2755,7 +2738,6 @@ export type ResolvedDatabaseOperationOwner = Readonly<{
   operationId: string;
 }>;
 
-/** Resolve an exact committed unit/timer alias. Unknown external values stay unknown. */
 export function resolveDatabaseOperationOwner(
   owner: string,
 ): ResolvedDatabaseOperationOwner | undefined {

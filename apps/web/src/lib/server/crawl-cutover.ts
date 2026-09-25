@@ -11,22 +11,8 @@ import {
 import { DueWorkMaintenancePendingError } from "./due-work";
 import { getSetting } from "./settings";
 
-/** The crawler's claiming-reader flag. Only the exact string `true` opens the cutover. */
 export const CRAWL_DUE_CUTOVER_ENABLED_KEY = "crawl_due_cutover_enabled";
 
-/**
- * THE BOX-FETCH ACCEPTANCE FLAG — whether the Worker will consume a MusicBrainz body the box
- * fetched from its own IP instead of making the request itself.
- *
- * It is the rollback lever, and it is a KV flip rather than a deploy because the thing it protects
- * against is a vendor- or trust-shaped surprise that wants answering in seconds. It reads
- * DEFAULT-ON and inert: a box that supplies nothing gets the Worker's own fetch either way, so an
- * old pinned sweep and a new Worker agree without anyone flipping anything. Flip it to the exact
- * string `false` and every crawl provider read goes back over Worker egress on the next tick.
- *
- * An unreadable setting reads as OFF. Being unable to decide is not a reason to start trusting a
- * submitted body, and the Worker's own fetch is always the correct answer.
- */
 export const CRAWL_BOX_FETCH_ENABLED_KEY = "crawl_box_fetch_enabled";
 
 export async function isCrawlBoxFetchEnabled(): Promise<boolean> {
@@ -37,7 +23,6 @@ export async function isCrawlBoxFetchEnabled(): Promise<boolean> {
   }
 }
 
-/** One pass is clamped to five minutes at the HTTP surface; the lease clears that whole window. */
 export const CRAWL_CATALOGUE_LEASE_MS = 10 * 60 * 1000;
 export const CRAWL_CATALOGUE_CLAIM_OWNER = "crawl-catalogue";
 
@@ -62,35 +47,22 @@ export type ClaimedCrawlFrontierPage = {
   rows: ClaimedCrawlFrontierRow[];
 };
 
-/** The queue name the crawl claim's typed pending answer carries into the server log. */
 const CRAWL_CLAIM_REPAIR_WORK_KIND = "crawl-due-work";
 
 export type CrawlClaimRepairDrainBudget = {
-  /** Repair markers one node chunk may repair. */
   nodeChunkRows: number;
-  /** Node repair chunks one claim may start. */
+
   nodeChunks: number;
-  /** Due rows one source-repair page may fan out. */
+
   sourcePageRows: number;
-  /** Source markers one source-repair page may clear while none of them expands a row. */
+
   sourcePageMarkers: number;
-  /** Source-repair pages one claim may start. */
+
   sourcePages: number;
-  /** Cumulative drain time after which no further page or chunk starts. */
+
   wallMs: number;
 };
 
-/**
- * The crawl repair one claim may drain before it answers `due_work_maintenance_pending` instead of
- * claiming. The first page and the first chunk always run, so a deferred claim has still converged
- * the repair its budget allowed and the next tick starts from that durable progress. The budget
- * multiplies bounded transactions and never enlarges one: a unit stays the chunk bound every other
- * crawl maintenance step already runs at, committing as its own guarded write batch. Hosted, a
- * page's write batch dominates its cost, so the wall bound is the one that binds and the unit caps
- * bound the transactions one claim can issue against a fast database. The claim runs inside an
- * admitted phase clamped to five minutes at the HTTP surface: the drain takes a small slice of that
- * window and leaves the rest for the paced provider work the phase was admitted for.
- */
 export const CRAWL_CLAIM_REPAIR_DRAIN_BUDGET: Readonly<CrawlClaimRepairDrainBudget> = {
   nodeChunkRows: MAX_CRAWL_DUE_CHUNK_SIZE,
   nodeChunks: 4,
@@ -100,15 +72,6 @@ export const CRAWL_CLAIM_REPAIR_DRAIN_BUDGET: Readonly<CrawlClaimRepairDrainBudg
   wallMs: 5_000,
 };
 
-/**
- * SOURCE MARKERS ONE CLAIM MAY CLEAR — the capacity side of the admission invariant.
- *
- * Every tick runs its admission phase and THEN this claim, and the admission phase mints source
- * repair markers of its own. A claim that cannot clear every marker its own tick minted defers with
- * `due_work_maintenance_pending` forever: the next tick mints the same number again, so the crawl
- * stops claiming rows entirely. The capacity therefore has to exceed the mint bound with margin,
- * and `crawl.ts` asserts exactly that against {@link CRAWL_ADMISSION_SOURCE_MARKER_MINT_BOUND}.
- */
 export const CRAWL_CLAIM_SOURCE_MARKER_DRAIN_CAPACITY =
   CRAWL_CLAIM_REPAIR_DRAIN_BUDGET.sourcePages * CRAWL_CLAIM_REPAIR_DRAIN_BUDGET.sourcePageMarkers;
 
@@ -148,14 +111,6 @@ function frontierRow(row: Record<string, unknown>): ClaimedCrawlFrontierRow | un
   };
 }
 
-/**
- * Repair only bounded marker pages, then claim and PK-hydrate exactly the ordered claimed IDs.
- * Both repair lanes drain under {@link CRAWL_CLAIM_REPAIR_DRAIN_BUDGET}: a source marker wider than
- * one page is the ordinary shape, not a fault, so the pages keep going until the markers are gone
- * or the budget stops them. Repair that outlasts the budget is designed backpressure — the claim
- * answers the typed `due_work_maintenance_pending` 503 that the crawl sweep reports as a paused
- * tick, never a fault that fails the sweep and leaves the frontier unclaimed.
- */
 export async function claimCrawlFrontierRows(
   client: CrawlDueClient,
   options: {
@@ -182,8 +137,7 @@ export async function claimCrawlFrontierRows(
   };
   const mayStart = (started: number, cap: number): boolean =>
     started < cap && spentMs < budget.wallMs;
-  // A page's own marker run is wall-bounded too: `spentMs` only advances once the page returns, so
-  // the page carries the remaining wall budget in with it and stops clearing markers when it is out.
+
   const drainSourcePage = () => {
     sourcePages += 1;
     const startedAt = now();
@@ -205,9 +159,7 @@ export async function claimCrawlFrontierRows(
   while (source.marker !== undefined && mayStart(sourcePages, budget.sourcePages)) {
     source = await drainSourcePage();
   }
-  // Node repair defers while any source marker still stands, so the node lane is also the source
-  // lane's convergence probe: its first chunk always runs, and further chunks start only once a page
-  // has found no marker left to fan out.
+
   const sourceConverged = source.marker === undefined;
   let nodes = await drainNodeChunk();
   while (sourceConverged && nodes.hasMore && mayStart(nodeChunks, budget.nodeChunks)) {
@@ -270,7 +222,6 @@ export async function claimCrawlFrontierRows(
   };
 }
 
-/** The exact durable claim + source snapshot fence checked before a provider result may write. */
 export async function isClaimedCrawlFrontierRowCurrent(
   client: CrawlDueClient,
   row: ClaimedCrawlFrontierRow,
@@ -306,11 +257,6 @@ export async function isClaimedCrawlFrontierRowCurrent(
   return result.rows.length === 1;
 }
 
-/**
- * Settle one claimed source row and replace only that exact lease with its repair marker. The
- * second statement's affected row is the ownership verdict; the final `changes()` guard makes a
- * stale token incapable of appending work.
- */
 export async function settleClaimedCrawlFrontierRow(
   client: CrawlDueClient,
   options: {

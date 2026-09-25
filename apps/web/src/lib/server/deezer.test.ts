@@ -8,16 +8,6 @@ import {
   searchDeezerCandidates,
 } from "./deezer";
 
-// The Deezer search client is a pure network→shape mapper for the pre-anchor ISRC-recovery rung. It
-// must NEVER throw: every unhappy path (a blank query, a non-2xx, an error body, a malformed shape, a
-// thrown/timed-out fetch) resolves to `[]`, because to the anchor waterfall those are all the same
-// answer — "no recovery, fall to fuzzy". It normalizes only the fields the caller re-verifies against
-// the row (isrc + duration promoted to ms + title + billed artist name), and DROPS any hit missing one.
-// The response shape is pinned against the live API: each search hit already
-// carries `isrc`, `duration` (seconds), `title`, and `artist.name`.
-
-// One search hit in the exact shape Deezer returns — the real ISRC lives ON the search result, so no
-// second by-id read is needed.
 const HIT = {
   artist: { id: 12199, name: "Calibre" },
   duration: 132,
@@ -32,10 +22,6 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-// The query spelling is now handed to the BOX (the anchor worklist's `deezerQuery`), because the
-// Deezer FETCH runs there — its tokenless quota is per-IP and the Worker's shared edge IPs are
-// saturated. So this builder has to be exactly one function, exported, with no second spelling
-// anywhere: a sweep that invented its own would silently ask a different question.
 describe("deezerSearchQuery — the one spelling, shared with the box", () => {
   it("asks in FREE TEXT — every credited artist, then the canonicalized title", () => {
     expect(deezerSearchQuery(["Calibre", "DRS"], "Mr Right On")).toBe("Calibre DRS Mr Right On");
@@ -93,8 +79,6 @@ describe("searchDeezerCandidates", () => {
       },
     ]);
 
-    // It GETs the identified User-Agent to Deezer's `/search/track` with the one free-text
-    // spelling, bounded by an abort signal.
     const [url, init] = fetchMock.mock.calls[0] ?? [];
     expect(String(url)).toContain("https://api.deezer.com/search/track?q=");
     expect(decodeURIComponent(String(url))).toContain("q=Calibre Mr Right On");
@@ -107,15 +91,17 @@ describe("searchDeezerCandidates", () => {
   it("keeps only hits carrying a usable isrc + numeric duration + title + artist name", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue(
-        body([
-          HIT,
-          { ...HIT, id: 2, isrc: "  " }, // blank ISRC → dropped
-          { ...HIT, duration: 0, id: 3 }, // no duration → dropped
-          { ...HIT, artist: { name: "" }, id: 4 }, // no artist → dropped
-          { ...HIT, id: 5, title: undefined }, // no title → dropped
-        ]),
-      ),
+      vi
+        .fn()
+        .mockResolvedValue(
+          body([
+            HIT,
+            { ...HIT, id: 2, isrc: "  " },
+            { ...HIT, duration: 0, id: 3 },
+            { ...HIT, artist: { name: "" }, id: 4 },
+            { ...HIT, id: 5, title: undefined },
+          ]),
+        ),
     );
 
     const candidates = await searchDeezerCandidates({ artists: ["Calibre"], title: "Mr Right On" });
@@ -132,7 +118,6 @@ describe("searchDeezerCandidates", () => {
       title: "Feels Like Before (Air.K & Cephei rmx)",
     });
 
-    // `rmx` → `Remix`: Deezer indexes the canonical spelling, so the raw one recovers no ISRC at all.
     const [url] = fetchMock.mock.calls[0] ?? [];
     expect(decodeURIComponent(String(url))).toContain(
       "q=Minos Feels Like Before (Air.K & Cephei Remix)",
@@ -187,24 +172,12 @@ describe("searchDeezerCandidates", () => {
   });
 });
 
-// ── THE QUOTA TRAP ───────────────────────────────────────────────────────────────────────────────
-// The regression that made this rung recover NOTHING in production for a week. Deezer answers a
-// throttle with **HTTP 200** and an error body instead of a result set — reproduced live against the
-// real endpoint (120 requests: all 200, the 93rd onward carrying
-// `{"error":{"type":"Exception","message":"Quota limit exceeded","code":4}}`). That walks past
-// `response.ok`, parses as valid JSON, and leaves `data` absent, so a client that only asks
-// "is `data` an array?" reads a THROTTLE as a clean MISS. The Worker egresses from Cloudflare's
-// SHARED edge IPs, where that quota is saturated by the whole platform, so the branch was taken on
-// every single call. A throttle must never again be indistinguishable from "no such track".
-
-/** Deezer's real quota answer, verbatim — a 200 with an error body and NO `data`. */
 const QUOTA_BODY = { error: { code: 4, message: "Quota limit exceeded", type: "Exception" } };
 
 const quotaResponse = () => Response.json(QUOTA_BODY);
 
 describe("searchDeezerCandidates — the Deezer quota answer (HTTP 200 + error body)", () => {
   it("does NOT treat a quota error as a miss: it retries and returns the recovered candidates", async () => {
-    // Throttled twice, then a real result set — exactly the shared-egress-IP shape.
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(quotaResponse())
@@ -217,7 +190,6 @@ describe("searchDeezerCandidates — the Deezer quota answer (HTTP 200 + error b
       [0, 0],
     );
 
-    // Before the fix this was `[]` — the ISRC was on the wire and thrown away.
     expect(candidates).toEqual([
       {
         artistName: "Calibre",
@@ -231,8 +203,6 @@ describe("searchDeezerCandidates — the Deezer quota answer (HTTP 200 + error b
   });
 
   it("gives up after the bounded retry budget rather than hammering a saturated quota", async () => {
-    // A FRESH Response per call — a body can only be read once, so a shared one would fail the
-    // second read for the wrong reason and hide whether the retry budget is really being spent.
     const fetchMock = vi.fn().mockImplementation(() => quotaResponse());
     vi.stubGlobal("fetch", fetchMock);
 
@@ -240,7 +210,6 @@ describe("searchDeezerCandidates — the Deezer quota answer (HTTP 200 + error b
       await searchDeezerCandidates({ artists: ["Calibre"], title: "Mr Right On" }, [0, 0]),
     ).toEqual([]);
 
-    // One initial attempt + exactly the two configured retries — never an unbounded loop.
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
@@ -252,7 +221,6 @@ describe("searchDeezerCandidates — the Deezer quota answer (HTTP 200 + error b
       [],
     );
 
-    // `data: []` is an ANSWER, not a throttle — retrying it would trade a free rung for wasted calls.
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
@@ -281,11 +249,6 @@ describe("searchDeezerCandidates — the Deezer quota answer (HTTP 200 + error b
   });
 });
 
-// ── THE TRACK ID, AND THE GATES ON KEEPING IT ────────────────────────────────────────────────────
-// Deezer's own track id has always been in these responses and was always dropped. It is kept now,
-// because a verified id becomes `https://www.deezer.com/track/<id>` on `/identity`. Which is exactly
-// why neither read hands one back bare: an unverified id is a wrong link on a public page under a
-// recording's name, and the honest answer to "not sure" is nothing at all.
 describe("lookupIsrcFromDeezer — the by-name ISRC fallback, and the hit it returns", () => {
   it("returns the duration-confirmed hit whole, id included, with the detail read's ISRC", async () => {
     const fetchMock = vi
@@ -308,7 +271,6 @@ describe("lookupIsrcFromDeezer — the by-name ISRC fallback, and the hit it ret
       title: "Mr Right On",
     });
 
-    // Unchanged: the search, then the by-id detail read that carries the ISRC.
     expect(String(fetchMock.mock.calls[1]?.[0])).toBe("https://api.deezer.com/track/3263968181");
   });
 
@@ -323,13 +285,10 @@ describe("lookupIsrcFromDeezer — the by-name ISRC fallback, and the hit it ret
         title: "Mr Right On",
       }),
     ).toBeUndefined();
-    // No detail read was even made.
+
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  // THE NAMESAKE. The free-text ask returns another act's recording of the same title, and a
-  // duration-only bar would accept it — the recovered ISRC then mints this finding's Log ID off a
-  // stranger's recording. Identity is checked here rather than left to Deezer's retrieval.
   it("refuses a same-title, same-duration hit billed to another act", async () => {
     const fetchMock = vi
       .fn()
@@ -346,8 +305,6 @@ describe("lookupIsrcFromDeezer — the by-name ISRC fallback, and the hit it ret
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  // The other half of the same rail: the right act, the WRONG version. The fold keeps a remix
-  // descriptor distinct, so the original can never recover the remix's ISRC.
   it("refuses the right act's REMIX when the row is the original", async () => {
     const fetchMock = vi
       .fn()
@@ -406,9 +363,6 @@ describe("enrichFromDeezer — the by-ISRC read, and the duration guard on its i
   });
 
   it("keeps NO id when the caller has no duration to vouch with", async () => {
-    // `/track/isrc:` PICKS a recording and picks wrong ~7% of the time. With nothing to check the
-    // pick against, the label and the preview still ride it (a mismatched 30s clip is a small
-    // wrong) and the LINK does not (a wrong link under a recording's name is not).
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValueOnce(isrcTrack()).mockResolvedValue(Response.json({})),
@@ -432,16 +386,11 @@ describe("enrichFromDeezer — the by-ISRC read, and the duration guard on its i
     const enrichment = await enrichFromDeezer("GBEXH1900314", 132_000);
 
     expect(enrichment.deezerTrackId).toBeUndefined();
-    // The label/preview behaviour is untouched by the guard — only the link is gated.
+
     expect(enrichment.previewUrl).toBe("https://cdn.deezer.com/p.mp3");
   });
 });
 
-// The forward-accretion sweep's read (lib/server/backfill.ts § backfill_deezer). It exists BESIDE
-// enrichFromDeezer rather than replacing it because the sweep writes a LEDGER, and a ledger needs
-// the four outcomes that one collapses into a single empty return told apart: a concluded miss, a
-// throttle, a transport failure, and a pick nobody can vouch for. Getting that split wrong is how a
-// platform-wide throttle ends up stamped across a tick's rows as "not on Deezer".
 describe("lookupDeezerTrackByIsrc — the ledger-grade by-ISRC read", () => {
   const track = (over: Record<string, unknown> = {}) =>
     Response.json({ duration: 300, id: 3263968181, title: "Mr Right On", ...over });
@@ -456,8 +405,6 @@ describe("lookupDeezerTrackByIsrc — the ledger-grade by-ISRC read", () => {
   });
 
   it("matches inside the ratified tolerance and refuses just outside it", async () => {
-    // The window is what stands between the ~7% silent mismatch and a wrong public link, so both
-    // sides of the boundary are pinned rather than just the happy middle.
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(track({ duration: 304 })));
     expect((await lookupDeezerTrackByIsrc("GBEXH1900314", 300_000)).outcome).toBe("matched");
 
@@ -469,7 +416,6 @@ describe("lookupDeezerTrackByIsrc — the ledger-grade by-ISRC read", () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(track({ duration: undefined })));
     expect((await lookupDeezerTrackByIsrc("GBEXH1900314", 300_000)).outcome).toBe("unvouchable");
 
-    // No duration on file: no request is made at all, so nothing can be concluded.
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
     expect((await lookupDeezerTrackByIsrc("GBEXH1900314", 0)).outcome).toBe("unvouchable");
@@ -477,8 +423,6 @@ describe("lookupDeezerTrackByIsrc — the ledger-grade by-ISRC read", () => {
   });
 
   it("reads the HTTP-200 QUOTA body as a throttle, never as a miss", async () => {
-    // The trap this whole type exists for: Deezer signals its quota with a 200 carrying an error
-    // body, so anything checking only `response.ok` reads a platform-wide throttle as absence.
     vi.stubGlobal(
       "fetch",
       vi
@@ -505,8 +449,6 @@ describe("lookupDeezerTrackByIsrc — the ledger-grade by-ISRC read", () => {
   });
 
   it("treats every OTHER error code as a transport failure, never as absence", async () => {
-    // Absence gets a whitelist, not a catch-all: a service-busy or auth exception says something
-    // went wrong on the way to the answer, and stamping it would put a lie on the receipt.
     vi.stubGlobal(
       "fetch",
       vi

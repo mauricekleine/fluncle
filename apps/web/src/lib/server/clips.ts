@@ -1,12 +1,3 @@
-// The clip data layer (Fluncle Studio). A clip is a lightweight 9:16 derivative cut
-// from a set video — many per set, NOT a spine object (no Log ID). A clip is cut from
-// a RECORDING (`recording_id`) — the legacy `mixtape_id` owner was dropped in the
-// plan→recording→mixtape Deploy-2 cutover (every legacy mixtape clip was repointed
-// onto its mixtape's recording first). This module owns the clip CRUD the
-// admin `list_clips`/`create_clip`/`update_clip`/`delete_clip` ops are thin wrappers over;
-// the cue backfill (`setMixtapeCues`) lives in `./mixtapes` (it re-times the
-// tracklist, not a clip). Mirrors the validate-and-throw style of `./mixtapes`.
-
 import { randomUUID } from "node:crypto";
 import { type ClipDTO } from "@fluncle/contracts/orpc";
 import { buildCaptionForClip } from "./clip-caption-builder";
@@ -30,10 +21,6 @@ type ClipRow = {
   x_offset: number;
 };
 
-// The operator/agent-authored fields a clip create accepts. The cut window
-// (`inMs`/`outMs`) + the 9:16 framing (`xOffset`) are required; the caption is
-// optional (authored later via copywriting-fluncle), and `status` defaults to
-// `pending` (the cut queue picks it up) but may be set explicitly.
 export type ClipInput = {
   caption?: unknown;
   inMs?: unknown;
@@ -102,7 +89,6 @@ function optionalStatus(value: unknown): "done" | "pending" | undefined {
   return value;
 }
 
-// A clip cut window must be ordered (out after in) — guard it once for create + update.
 function assertWindow(inMs: number, outMs: number): void {
   if (outMs <= inMs) {
     throw new ApiError("invalid_window", "A clip's out point must be after its in point", 400);
@@ -125,22 +111,15 @@ async function getClipRow(clipId: string): Promise<ClipRow> {
   return row;
 }
 
-// Fetch one clip by id (a clean 404 when it's gone). Exported so the agent-tier cut
-// ops (Unit C: `presign_clip_upload` / `finalize_clip_cut`) can confirm the clip
-// exists before signing its upload / marking it done.
 export async function getClip(clipId: string): Promise<ClipDTO> {
   return rowToClip(await getClipRow(clipId));
 }
 
-// Mark a clip's cut `done` (Unit C `finalize_clip_cut`). A thin wrapper over the
-// shared `updateClip` so the box's agent-tier finalize and the operator `update_clip`
-// write the SAME `status` column the same way.
 export async function markClipCutDone(clipId: string): Promise<ClipDTO> {
   return updateClip(clipId, { status: "done" });
 }
 
 export async function createClip(recordingId: string, input: ClipInput): Promise<ClipDTO> {
-  // The recording must exist. getRecording throws `recording_not_found`/404 if it doesn't.
   await getRecording(recordingId);
 
   const inMs = requireNonNegativeInteger(input.inMs, "inMs");
@@ -155,8 +134,6 @@ export async function createClip(recordingId: string, input: ClipInput): Promise
   const now = new Date().toISOString();
   const db = await getDb();
 
-  // A clip has ONE owner: `recording_id` (the legacy `mixtape_id` column was dropped
-  // in the plan→recording→mixtape Deploy-2 cutover).
   await db.execute({
     args: [id, recordingId, inMs, outMs, xOffset, caption, status, now, now],
     sql: `insert into mixtape_clips
@@ -164,10 +141,6 @@ export async function createClip(recordingId: string, input: ClipInput): Promise
           values (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   });
 
-  // Auto-queue the clip onto the Instagram drip-feed (clip-drip-feed RFC §3): every clip
-  // enters the queue at a jittered ~24h after the tail. Best-effort — the clip is already
-  // created, so a scheduling hiccup must not fail the create; the operator can re-schedule
-  // it from /admin/clips, and the drip cron never picks a clip that has no scheduled row.
   try {
     const built = await buildCaptionForClip(await getClip(id));
     await upsertClipPost({
@@ -191,7 +164,6 @@ export async function updateClip(clipId: string, input: ClipInput): Promise<Clip
   const caption = optionalCaption(input.caption);
   const status = optionalStatus(input.status);
 
-  // Validate the resulting window (the field given, or the stored one it keeps).
   assertWindow(inMs ?? current.in_ms, outMs ?? current.out_ms);
 
   const sets: string[] = [];
@@ -224,17 +196,12 @@ export async function updateClip(clipId: string, input: ClipInput): Promise<Clip
 }
 
 export async function deleteClip(clipId: string): Promise<void> {
-  // Confirm it exists for a clean 404 (a delete on a missing clip is an error, not
-  // a silent no-op — the operator expects the row to have been there).
   await getClipRow(clipId);
 
   const db = await getDb();
   await db.execute({ args: [clipId], sql: `delete from mixtape_clips where id = ?` });
 }
 
-// List clips, optionally narrowed by recording and/or status. Serves BOTH the per-set
-// editor (Unit E, `recordingId` set) and the cross-set clip library (Unit G, all sets).
-// Newest first, so the most recent cuts surface at the top of the library grid.
 export async function listClips(
   filter: { recordingId?: string; status?: string } = {},
 ): Promise<ClipDTO[]> {

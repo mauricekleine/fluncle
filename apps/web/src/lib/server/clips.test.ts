@@ -1,12 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-// The clip data layer's AUTO-QUEUE-ON-CREATE wiring (lib/server/clips.ts `createClip`).
-// After inserting the clip, createClip enrols it onto the Instagram drip-feed: build the
-// caption snapshot, roll the next jittered slot (`nextDripSlot`), and `upsertClipPost`.
-// The scheduling is BEST-EFFORT — a hiccup must not fail the create (the clip is already
-// made; the operator can re-schedule). The jitter math itself is unit-tested in
-// clip-social.test.ts; here we pin the wiring + the best-effort guard.
-
 const execute = vi.fn();
 
 vi.mock("./db", () => ({
@@ -37,8 +30,6 @@ vi.mock("./clip-social", () => ({
 
 import { createClip } from "./clips";
 
-// The `select … from mixtape_clips where id = ?` read createClip does twice (once to
-// return the created row). Return a plausible clip row shape.
 function clipRow(id: string) {
   return {
     caption: null,
@@ -56,7 +47,7 @@ function clipRow(id: string) {
 beforeEach(() => {
   vi.clearAllMocks();
   getRecording.mockResolvedValue({ id: "rec-1" });
-  // insert, then the read-back select → the created row.
+
   execute.mockImplementation(async (q: { sql: string }) => {
     if (q.sql.trim().startsWith("select")) {
       return { rows: [clipRow("generated-id")] };
@@ -82,7 +73,7 @@ describe("createClip auto-queue-on-create", () => {
     };
     expect(arg.caption).toBe("the caption");
     expect(arg.scheduledFor).toBe("2026-07-06T12:00:00.000Z");
-    // The clipId scheduled is the same id the insert used (createClip mints it).
+
     expect(typeof arg.clipId).toBe("string");
     expect(arg.clipId.length).toBeGreaterThan(0);
   });
@@ -90,7 +81,6 @@ describe("createClip auto-queue-on-create", () => {
   it("still returns the created clip when scheduling throws (best-effort)", async () => {
     upsertClipPost.mockRejectedValue(new Error("db down"));
 
-    // Must NOT throw — the clip is already created.
     const clip = await createClip("rec-1", { inMs: 0, outMs: 30_000, xOffset: 240 });
 
     expect(clip.id).toBe("generated-id");

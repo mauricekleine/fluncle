@@ -11,7 +11,6 @@ import {
 } from "./due-work-definition-fingerprint";
 import { advanceProjectionFenceStatement, CRAWL_DUE_AUDIT_FENCE_KEY } from "./projection-fences";
 
-/** The crawl frontier is one due-work family, named once for its checkpoint and its version. */
 export const CRAWL_DUE_WORK_FRONTIER = "crawl_due_work:frontier";
 export const CRAWL_DUE_LIVE_GENERATION = "live";
 export const CRAWL_REARM_TAIL_CURSOR = -1;
@@ -79,7 +78,7 @@ export type CrawlDueDriftAudit = {
 export type CrawlDueRebuildCheckpoint = {
   completedAt: null | string;
   cursor: null | string;
-  /** The definition version this generation was projected under; null predates the mechanism. */
+
   definitionVersion: null | string;
   generation: string;
   projectedCount: number;
@@ -147,15 +146,6 @@ const CRAWL_DUE_COLUMNS = `claim_expires_at, claim_position, claim_token, claime
   created_at, demand_rank, generation, hop, label_slug, next_due_at, node_id, node_kind,
   parent_id, source_version, state, storable_rank, updated_at`;
 
-/**
- * THE RANK LABEL — the one label whose ruling decides a node's storability, and so the label a
- * due-work row is filed under (the label repair fan-out and the undecided-label attribution both
- * read it). A release is judged by its OWN label: the one its browse listed, else the label it
- * descends from, which for a release a label browse listed IS its own. A release an ARTIST browse
- * reached with no own label on record has no rank label at all: the label it inherited is only the
- * seed its walk descends from, the storage gate never reads it, and an artist found on an enabled
- * label mostly releases elsewhere. Every other kind keeps its provenance label; nothing ranks on it.
- */
 export function crawlRankLabelSlugSql(prefix = ""): string {
   return `case when ${prefix}kind = 'release'
     then coalesce(${prefix}release_label_slug,
@@ -308,11 +298,6 @@ function projectCrawlSource(row: CrawlSourceSqlRow): CrawlDueProjection | null {
   };
 }
 
-/**
- * The membership-and-order decision for one frontier row, with no source-version hash. The crawl
- * definition version is a fingerprint over this, so it moves whenever this family's eligibility
- * predicate, retry ladder, or rank components move.
- */
 function describeCrawlDueDecision(row: Record<string, unknown>): string {
   const projection = projectCrawlSource(row as unknown as CrawlSourceSqlRow);
   return projection === null
@@ -329,7 +314,6 @@ function describeCrawlDueDecision(row: Record<string, unknown>): string {
       ].join("|");
 }
 
-/** One frontier row per state the projector branches on. */
 const CRAWL_PROBE_BASES: readonly Record<string, unknown>[] = [
   {
     attempted_at: null,
@@ -400,12 +384,10 @@ const CRAWL_PROBE_BASES: readonly Record<string, unknown>[] = [
 ];
 
 const CRAWL_PROBE_COLUMNS: readonly string[] = Object.keys(CRAWL_PROBE_BASES[0] ?? {}).sort();
-/** The one constant this projector COMPARES against; the retry windows it ADDS reach the
- * transcript through the `nextDueAt` they compute, which base 2 above makes reachable. */
+
 const CRAWL_PROBE_LADDER = probeLadderCrossing([MAX_FAILURES]);
 const crawlDefinitionVersionCache = new Map<string, string>();
 
-/** The crawl frontier family's definition version; see `due-work-definition-fingerprint.ts`. */
 export function crawlDueDefinitionVersion(): string {
   return memoizedDefinitionVersion(crawlDefinitionVersionCache, CRAWL_DUE_WORK_FRONTIER, () => {
     const probes = probeMatrix(CRAWL_PROBE_BASES, CRAWL_PROBE_COLUMNS, CRAWL_PROBE_LADDER);
@@ -507,7 +489,6 @@ export function markCrawlProjectionRepairStatement(
   };
 }
 
-/** Mark the bounded source identities returned as `source_id` without enumerating statements. */
 export function markCrawlProjectionRepairsFromSelectStatement(
   sourceType: "artist" | "label",
   selection: { args?: InValue[]; sql: string },
@@ -535,7 +516,6 @@ export function markCrawlProjectionRepairsFromSelectStatement(
   };
 }
 
-/** Mark one frontier node from a source write without having to precompute its projection facts. */
 export function markCrawlNodeRepairStatement(
   nodeId: string,
   sourceVersion: string,
@@ -601,10 +581,6 @@ export function markCrawlNodeRepairStatement(
   };
 }
 
-/**
- * Mark the exact bounded id set whose source rows received one transaction timestamp. Primary-key
- * probes plus the timestamp guard avoid a post-commit frontier scan and exclude a raced no-op row.
- */
 export function markCrawlNodeRepairsByUpdatedAtStatement(
   nodeIds: readonly string[],
   sourceVersion: string,
@@ -834,31 +810,8 @@ async function firstCrawlRepairMarker(
   };
 }
 
-/**
- * Source markers one fan-out call may clear when each of them expands NO rows.
- *
- * A marker whose rows are already `repair` — the shape every re-arm mints, because the re-arm sets
- * the row's state and the marker in the same write — costs one small guarded write batch to clear
- * and fans out nothing. Draining those one call at a time makes a caller's page budget a MARKER
- * budget, so an admission phase that mints more markers than the caller has pages can never
- * converge. This budget decouples the two: one call clears a run of empty markers, and stops the
- * moment a marker expands rows so the physical page bound still binds every row-moving marker.
- */
 export const CRAWL_REPAIR_MARKER_BUDGET = 25;
 
-/**
- * Expand source markers into bounded physical repair pages, oldest marker first.
- *
- * One marker that expands rows ends the call: rows already marked `repair` are the durable cursor,
- * they remain excluded until the source marker is cleared, and the direct repair pass then consumes
- * them. No unbounded source walk or extra cursor column is needed. A marker that clears WITHOUT
- * expanding a row moved no work, so the call continues to the next marker under
- * {@link CRAWL_REPAIR_MARKER_BUDGET} and `mayContinue`; every iteration is its own bounded batch,
- * so no transaction grows.
- *
- * `markersCleared` is the other half of the work this call did: a caller that reports only
- * `expanded` reads a run of cleared empty markers as no progress at all.
- */
 export async function fanOutCrawlProjectionRepairs(
   client: CrawlDueClient,
   options: { limit?: number; markerBudget?: number; mayContinue?: () => boolean } = {},
@@ -896,7 +849,6 @@ export async function fanOutCrawlProjectionRepairs(
     : { complete: false, expanded: 0, marker: remaining, markersCleared };
 }
 
-/** Expand the oldest source marker into ONE bounded physical repair page. */
 async function fanOutOneCrawlProjectionRepair(
   client: CrawlDueClient,
   limit: number,
@@ -1033,7 +985,6 @@ export function crawlGeneralReadyQuery(
   };
 }
 
-/** Promote a bounded due-time page and perform the stale allowed-artist tail re-arm atomically. */
 export type CrawlDuePromotion = {
   artistsRearmed: number;
   promoted: number;
@@ -1054,11 +1005,6 @@ export async function promoteCrawlDueWork(
     order by due.next_due_at, due.node_id limit ?`;
   const results = await client.batch(
     [
-      // The unary `+` on the outer `state` is load-bearing. Hosted Turso carries no
-      // `sqlite_stat1`, so the planner rates `state = 'done'` as selective and would walk every
-      // done frontier row through `crawl_frontier_pick_idx`, testing each against the bounded id
-      // list. The `+` removes `state` from index consideration, so the update probes the primary
-      // key once per listed id and `state` stays a residual filter on those rows.
       {
         args: [CRAWL_REARM_TAIL_CURSOR, now, now, CRAWL_STALE_ARTIST_REARM_LIMIT],
         sql: `update crawl_frontier
@@ -1299,7 +1245,6 @@ export async function readProjectedCrawlSelection(
   return [...releases, ...rest].map((row) => row.nodeId);
 }
 
-/** The legacy source-table answer, retained only for shadow comparison before cutover. */
 export async function readLegacyCrawlSelection(
   client: CrawlDueClient,
   options: { limit: number; now?: () => Date },
@@ -1430,10 +1375,6 @@ export async function startCrawlDueRebuild(
   const results = await client.batch(
     [
       {
-        // The restart is either asked for or FORCED by a definition change: a stored version that
-        // is not the running code's means this family's projected order was computed by an older
-        // definition. `is not` is the null-safe comparison, so a checkpoint written before this
-        // column existed is stale exactly once.
         args: [
           definitionVersion,
           generation,
@@ -1476,14 +1417,12 @@ async function resumeOrStartCrawlDueRebuild(
     return startCrawlDueRebuild(client, options);
   }
   const existing = await readCrawlDueRebuild(client);
-  // A stored definition version that is not the running code's re-opens the generation on the
-  // ordinary rebuild path — the resume would otherwise carry an older definition's order forward.
+
   return existing === undefined || existing.definitionVersion !== crawlDueDefinitionVersion()
     ? startCrawlDueRebuild(client, options)
     : existing;
 }
 
-/** Seek only rows a running rebuild may remove; current-generation rows never enter the page. */
 export function crawlDueCleanupPageStatement(
   checkpoint: CrawlDueRebuildCheckpoint,
   savedCursor: unknown,
@@ -1603,7 +1542,6 @@ function canonicalCrawlProjection(row: CrawlDueProjection | CrawlDueRow): unknow
   ];
 }
 
-/** One bounded canonical audit page. The caller persists cursors/digests between requests. */
 export async function readCrawlDueAuditChunk(
   client: CrawlDueClient,
   side: "projected" | "source",

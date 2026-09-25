@@ -20,11 +20,11 @@ describe("sqlLiteral", () => {
     expect(sqlLiteral(42)).toBe("42");
     expect(sqlLiteral(3.5)).toBe("3.5");
     expect(sqlLiteral(Number.POSITIVE_INFINITY)).toBe("NULL");
-    expect(sqlLiteral(9007199254740993n)).toBe("9007199254740993"); // exact past Number range
+    expect(sqlLiteral(9007199254740993n)).toBe("9007199254740993");
     expect(sqlLiteral(true)).toBe("1");
     expect(sqlLiteral(false)).toBe("0");
     expect(sqlLiteral("plain")).toBe("'plain'");
-    expect(sqlLiteral("O'Brien")).toBe("'O''Brien'"); // single-quote doubled
+    expect(sqlLiteral("O'Brien")).toBe("'O''Brien'");
     expect(sqlLiteral(new Uint8Array([0, 255, 16]))).toBe("X'00ff10'");
     expect(sqlLiteral(new Uint8Array())).toBe("X''");
   });
@@ -60,7 +60,7 @@ describe("buildDumpSql", () => {
     expect(lines[0]).toBe("-- header");
     expect(lines[1]).toBe("PRAGMA foreign_keys=OFF;");
     expect(lines[2]).toBe("BEGIN TRANSACTION;");
-    // table DDL comes before its INSERTs, index DDL after the rows, COMMIT last.
+
     const tableIdx = lines.findIndex((line) => line.startsWith("CREATE TABLE"));
     const insertIdx = lines.findIndex((line) => line.startsWith("INSERT INTO"));
     const indexIdx = lines.findIndex((line) => line.startsWith("CREATE INDEX"));
@@ -197,8 +197,6 @@ describe("selectExpiredBackupKeys", () => {
   });
 });
 
-// ── The real round trip: source → dump → restore → verify (the drill, in miniature) ──
-
 describe("dump/restore round trip", () => {
   it("restores a dump byte-faithfully and the manifest confirms it", async () => {
     const source = createClient({ concurrency: LOCAL_DB_CONCURRENCY, url: ":memory:" });
@@ -211,7 +209,6 @@ describe("dump/restore round trip", () => {
       CREATE INDEX tracks_title ON tracks (title);
     `);
 
-    // Simulate the box's dump: read schema + every table's rows.
     const schemaResult = await source.execute(
       `SELECT type, name, sql FROM sqlite_master
        WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%'
@@ -273,7 +270,6 @@ describe("dump/restore round trip", () => {
 
     const dumpSql = buildDumpSql(schema, tables);
 
-    // Restore into a fresh scratch database (the drill's core move).
     const restored = createClient({ concurrency: LOCAL_DB_CONCURRENCY, url: ":memory:" });
     await restored.executeMultiple(dumpSql);
 
@@ -304,14 +300,12 @@ describe("dump/restore round trip", () => {
 
     expect(verifyManifest(expected, actual)).toEqual({ ok: true, problems: [] });
 
-    // The blob and the escaped-quote string survived the round trip byte-for-byte.
     const check = await restored.execute(
       "SELECT title, hex(art) AS art FROM tracks WHERE track_id = 'a1'",
     );
     expect(check.rows[0]?.title).toBe("O'Brien's Anthem");
     expect(((check.rows[0]?.art ?? "") as string).toLowerCase()).toBe("00ff10");
 
-    // Tamper the restored data — the manifest must now reject it.
     await restored.execute("DELETE FROM tracks WHERE track_id = 'b2'");
     const tampered = await restored.execute(`SELECT count(*) AS c FROM tracks`);
     const failing = verifyManifest(expected, {
