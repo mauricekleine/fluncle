@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
@@ -115,10 +116,19 @@ const FILESYSTEM_RUNTIME: DetachedExecutionRuntime = {
   },
 };
 
+function isZombie(pid: number): boolean {
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+    return stat.slice(stat.lastIndexOf(")") + 2, stat.lastIndexOf(")") + 3) === "Z";
+  } catch {
+    return false;
+  }
+}
+
 function processExists(pid: number): boolean {
   try {
     process.kill(pid, 0);
-    return true;
+    return !isZombie(pid);
   } catch (error) {
     return !(
       typeof error === "object" &&
