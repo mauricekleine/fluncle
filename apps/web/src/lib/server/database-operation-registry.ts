@@ -1886,6 +1886,28 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     wrapperSource: `${SCRIPTS}/isrc-recovery-sweep.sh`,
   }),
   defineOperation({
+    accessClass: "read",
+    cadence: calendar("*-*-* 06:40:00 Europe/Amsterdam", "90"),
+    directory: "label-triage-timer",
+    heavy: false,
+    mutationTarget: null,
+    operationId: "triage.label-gate",
+    service: "fluncle-label-triage.service",
+    telemetryUnit: "label-triage",
+    timer: "fluncle-label-triage.timer",
+    triggers: [
+      cli(
+        "triage.label-gate",
+        "read",
+        ["admin", "labels", "list"],
+        "the undecided crawl-seed pile",
+        `${SCRIPTS}/label-triage-sweep.ts`,
+        { mutationTarget: null },
+      ),
+    ],
+    wrapperSource: `${SCRIPTS}/label-triage-sweep.sh`,
+  }),
+  defineOperation({
     accessClass: "write",
     cadence: every("7min", "30min"),
     directory: "label-bio-timer",

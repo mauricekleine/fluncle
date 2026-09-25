@@ -453,6 +453,7 @@ function LabelRow({
       ref={rowRef}
       trailing={
         <>
+          <TriageChip label={label} />
           <RuleChip ruleCounts={ruleCounts} section={section} seedState={label.seedState} />
           <span className="text-xs text-muted-foreground tabular-nums">
             {findingsCount(label.findingCount)}
@@ -560,6 +561,25 @@ function labelIdentity(label: LabelAdminItem, queued: number): ReactNode | undef
         </>
       ) : null}
     </>
+  );
+}
+
+function TriageChip({ label }: { label: LabelAdminItem }) {
+  if (!label.triageCheckedAt || label.triageVerdict !== "unclear") {
+    return null;
+  }
+
+  return (
+    <span
+      className="rounded-sm bg-muted px-1.5 py-0.5 font-mono text-[0.65rem] text-muted-foreground uppercase"
+      title={
+        label.triageReason
+          ? `A triage round looked at this and could not rule it — ${label.triageReason}`
+          : "A triage round looked at this and could not rule it"
+      }
+    >
+      {label.triageReason ?? "unclear"}
+    </span>
   );
 }
 

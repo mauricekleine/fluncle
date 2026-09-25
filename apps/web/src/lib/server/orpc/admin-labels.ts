@@ -24,6 +24,7 @@ import {
   listLabels,
   listLabelsMissingBio,
   mergeLabel,
+  recordLabelTriage,
   rejectLabelAlias,
   updateLabelSeedState,
 } from "../labels";
@@ -233,6 +234,29 @@ export function adminLabelsHandlers(os: Implementer) {
       }
     });
 
+  const recordLabelTriageHandler = os.record_label_triage
+    .use(adminAuth)
+    .handler(async ({ input }) => {
+      try {
+        const { slug, ...payload } = input;
+        const recorded = await recordLabelTriage(slug, payload);
+
+        if (!recorded) {
+          throw new ORPCError("NOT_FOUND", {
+            data: { apiCode: "not_found", apiMessage: `No label with slug ${slug}` },
+            message: `No label with slug ${slug}`,
+          });
+        }
+
+        return { ...recorded, ok: true as const };
+      } catch (error) {
+        if (error instanceof ORPCError) {
+          throw error;
+        }
+        throw apiFault(toFault(error));
+      }
+    });
+
   const describeLabelHandler = os.describe_label.use(adminAuth).handler(async ({ input }) => {
     try {
       const dryRun = input.dryRun === true;
@@ -351,6 +375,7 @@ export function adminLabelsHandlers(os: Implementer) {
     list_labels_missing_bio: listLabelsMissingBioHandler,
     merge_label: mergeLabelHandler,
     mint_label: mintLabelHandler,
+    record_label_triage: recordLabelTriageHandler,
     reject_label_alias: rejectLabelAliasHandler,
     replace_label_artist_rules: replaceLabelArtistRulesHandler,
     update_label: updateLabelHandler,
