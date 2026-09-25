@@ -1,13 +1,6 @@
 import { type MixtapeDTO, type RecordingDTO } from "@fluncle/contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-// The /calendar.ics route emits a hand-rolled VCALENDAR: future-planned PLANS
-// (a videoless recording with a future `plannedFor`) as upcoming live-on-Twitch
-// VEVENTs, published mixtapes as past /log events. We mock both server queries and
-// assert the .ics shape (escaping, CRLF, folding, the Twitch action, the plan teaser).
-// Upcoming sessions come from the PLAN side since the plan→recording→mixtape Deploy-2
-// cutover dropped `mixtapes.planned_for`.
-
 const listCalendarMixtapes = vi.hoisted(() => vi.fn<() => Promise<MixtapeDTO[]>>());
 const listUpcomingPlans = vi.hoisted(() => vi.fn<(now: string) => Promise<RecordingDTO[]>>());
 
@@ -79,7 +72,7 @@ describe("/calendar.ics", () => {
     expect(body).toContain("VERSION:2.0");
     expect(body).toContain("PRODID:");
     expect(body).toContain("END:VCALENDAR");
-    // CRLF, not bare LF.
+
     expect(body).toContain("\r\n");
     expect(body.split("\n").every((line) => line === "" || line.endsWith("\r"))).toBe(true);
   });
@@ -101,17 +94,17 @@ describe("/calendar.ics", () => {
 
     expect(body).toContain("BEGIN:VEVENT");
     expect(body).toContain("DTSTART:20990102T200000Z");
-    // The plan's internal handle never appears — the public SUMMARY is quiet.
+
     expect(body).toContain("SUMMARY:Fluncle live");
     expect(body).not.toContain("liquid-nebula-roller");
-    // The dated action is "tune in live on Twitch": URL + LOCATION are the channel.
+
     expect(body).toContain("URL:https://www.twitch.tv/flunclelive");
     expect(body).toContain("LOCATION:https://www.twitch.tv/flunclelive");
-    // The teaser exposes the queued tracklist (folded lines re-joined for the assertion).
+
     const unfolded = body.replaceAll("\r\n ", "");
     expect(unfolded).toContain("Artist A — Tune A");
     expect(unfolded).toContain("Artist B — Tune B");
-    // A future plan has a stable live UID keyed off its recording id.
+
     expect(body).toContain("UID:live-plan-1@fluncle.com");
   });
 
@@ -129,7 +122,7 @@ describe("/calendar.ics", () => {
 
     const unfolded = body.replaceAll("\r\n ", "");
     expect(body).toContain("DTSTART:20260618T000000Z");
-    // mixtapeDisplayTitle drops the " | <coordinate>" suffix for SUMMARY.
+
     expect(body).toContain("SUMMARY:Fluncle Drum & Bass Mixtape #1");
     expect(unfolded).toContain("https://www.fluncle.com/log/020.F.1A");
     expect(unfolded).toContain("A late checkpoint\\, dreamt.");
@@ -169,7 +162,7 @@ describe("/calendar.ics", () => {
     for (const line of body.split("\r\n")) {
       expect(new TextEncoder().encode(line).length).toBeLessThanOrEqual(75);
     }
-    // The folded note rejoins back to the original run of x's.
+
     expect(body.replaceAll("\r\n ", "")).toContain(longNote);
   });
 

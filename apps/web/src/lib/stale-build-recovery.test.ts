@@ -6,12 +6,6 @@ import {
   STALE_BUILD_RELOAD_KEY,
 } from "./stale-build-recovery";
 
-// The deploy-resilience rail. A deploy replaces every hashed asset, so a tab still holding
-// an older build 404s on its next lazy chunk and client-side navigation dies until a manual
-// reload. Two properties decide whether the remedy is safe: it must fire on a chunk-load
-// failure and ONLY on one (a real application error must still reach the error screen), and
-// it must never be able to loop. Both are pinned here.
-
 describe("isStaleBuildError", () => {
   it("matches the chunk-load failures each browser words differently", () => {
     for (const message of [
@@ -19,7 +13,7 @@ describe("isStaleBuildError", () => {
       "error loading dynamically imported module",
       "Importing a module script failed.",
       "Unable to preload CSS for /assets/index-DkgSNzy0.css",
-      // The shape this site produces: the 404 is answered with the SPA HTML document.
+
       'Failed to load module script: Expected a JavaScript module script but the server responded with a MIME type of "text/html".',
       "'text/html' is not a valid JavaScript MIME type",
     ]) {
@@ -28,8 +22,6 @@ describe("isStaleBuildError", () => {
   });
 
   it("does NOT match a genuine application error", () => {
-    // The reload is a data-losing action, so anything it cannot positively identify as a
-    // missing chunk must fall through to the error boundary instead.
     expect(isStaleBuildError(new Error("Cannot read properties of undefined"))).toBe(false);
     expect(isStaleBuildError(new Error("Turso read failed"))).toBe(false);
     expect(isStaleBuildError(new TypeError("Failed to fetch"))).toBe(false);
@@ -87,8 +79,6 @@ describe("recoverFromStaleBuild", () => {
   });
 
   it("does NOT loop: a second failure inside the cooldown is suppressed", () => {
-    // The failure mode that matters. If the new build is broken too (or the error was
-    // never about the build), the tab must settle on an error screen, not spin.
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-20T00:00:00.000Z"));
 
@@ -112,8 +102,6 @@ describe("recoverFromStaleBuild", () => {
   });
 
   it("does NOT reload when sessionStorage is unavailable", () => {
-    // Without storage we cannot prove this is the first attempt, and an unprovable
-    // first attempt is indistinguishable from a loop. Degrade to the error screen.
     throwOnAccess = true;
 
     recoverFromStaleBuild();

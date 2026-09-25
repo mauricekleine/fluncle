@@ -4,20 +4,6 @@ import { Route as FindingsRoute } from "./findings";
 import { Route as FrontDoorRoute } from "./index";
 import { Route as LogRoute } from "./log.$logId";
 
-// The stored-XSS regression guard for the JSON-LD emitters.
-//
-// JSON-LD blocks are emitted through a route `head().scripts` entry, whose
-// string `children` TanStack renders RAW via dangerouslySetInnerHTML. Plain
-// `JSON.stringify` does NOT neutralize `</script>`, so a `</script>` in a
-// Spotify-sourced title / artist / album, or the operator note woven into the
-// log description can break out of the inline <script> and execute (there
-// is no CSP). Every emitter now serializes through `jsonLdScript`, which escapes
-// `< > & U+2028 U+2029` to their `\uXXXX` JSON forms — neutralizing the breakout
-// while leaving the payload valid JSON-LD a parser still reads.
-//
-// We assert on the exact `children` string the route head produces (what reaches
-// the inline <script>), so the test mirrors the rendered SSR output.
-
 type HeadScript = { children: string; type: string };
 type HeadResult = { meta?: Array<Record<string, unknown>>; scripts?: Array<HeadScript> };
 
@@ -38,7 +24,7 @@ describe("jsonLdScript (serializeJsonLd)", () => {
     expect(rendered).not.toContain("<");
     expect(rendered).not.toContain(">");
     expect(rendered).toContain("\\u003c/script\\u003e");
-    // Still valid JSON-LD: it parses back to the identical object.
+
     expect(JSON.parse(rendered)).toEqual(jsonLd);
   });
 
@@ -71,10 +57,10 @@ describe("JSON-LD output encoding (stored-XSS guard)", () => {
     const playlist = ldChildren(head).find((c) => c.includes("MusicPlaylist"));
 
     expect(playlist).toBeDefined();
-    // No raw breakout survives into the inline <script>…
+
     expect(playlist).not.toContain("</script>");
     expect(playlist).toContain("\\u003c/script\\u003e");
-    // …but the data is intact: it parses back and carries the original payload.
+
     const parsed = JSON.parse(playlist as string) as {
       track: Array<{ inAlbum: { name: string }; name: string }>;
     };
@@ -87,8 +73,6 @@ describe("JSON-LD output encoding (stored-XSS guard)", () => {
   });
 
   it("the front door's CollectionPage ItemList neutralizes a </script> in a finding", () => {
-    // The front door describes only what it RENDERS — the lead plus the findings band — as an
-    // ItemList of MusicRecordings. Same sink, same escaping, different emitter.
     const loaderData = {
       counts: { albums: 0, artists: 0, labels: 0, tracks: 0 },
       findings: [{ artists: [PAYLOAD], logId: "004.7.2I", title: PAYLOAD }],
@@ -109,7 +93,6 @@ describe("JSON-LD output encoding (stored-XSS guard)", () => {
       mainEntity: { itemListElement: Array<{ item: { name: string } }>; numberOfItems: number };
     };
 
-    // The lead leads, then the band — exactly the set the page renders, never the whole archive.
     expect(parsed.mainEntity.numberOfItems).toBe(2);
     expect(parsed.mainEntity.itemListElement[0]?.item.name).toBe(PAYLOAD);
   });
@@ -137,8 +120,7 @@ describe("JSON-LD output encoding (stored-XSS guard)", () => {
     const recording = ldChildren(head).find((c) => c.includes("MusicRecording"));
 
     expect(recording).toBeDefined();
-    // Neither the title (name) nor the note (woven into the description) leaves a
-    // raw breakout in the rendered inline <script>.
+
     expect(recording).not.toContain("</script>");
     expect(recording).toContain("\\u003c/script\\u003e");
 
@@ -167,14 +149,12 @@ describe("JSON-LD output encoding (stored-XSS guard)", () => {
     const audio = ldChildren(head).find((c) => c.includes("AudioObject"));
 
     expect(audio).toBeDefined();
-    // The observation AudioObject rides the same jsonLdScript rail: no raw breakout
-    // survives into the inline <script>, and the payload round-trips intact.
+
     expect(audio).not.toContain("</script>");
     expect(audio).toContain("\\u003c/script\\u003e");
     const parsed = JSON.parse(audio as string) as { name: string };
     expect(parsed.name).toContain(PAYLOAD);
 
-    // A finding with no rendered observation emits no AudioObject at all.
     const bareHead = LogRoute.options.head?.({
       loaderData: {
         related: [],

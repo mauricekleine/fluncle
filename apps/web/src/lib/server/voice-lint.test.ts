@@ -1,94 +1,3 @@
-// The static VOICE LINT: a build-time scan of hand-written user-facing string
-// literals, on the deploy boundary (it runs in `apps/web`'s vitest suite, which
-// `deploy:gate` runs before `wrangler deploy`).
-//
-// WHY IT EXISTS. The Voice canon was enforced on AGENT-authored text at write
-// time and on nothing else: `gateVoice`/`gateNoteText`/`gateBioText`/
-// `gateLogbookBody` mean a model can never write "signal" onto a public surface,
-// while the thousands of HAND-WRITTEN literals across the web, mobile, extension,
-// and CLI surfaces had no check at all. Every canon ratification (the Chrome Rule,
-// the Engine-Room Rule) then needed a manual cross-surface sweep, and each sweep
-// demonstrably missed surfaces. This is the mechanical half of that sweep, run on
-// every build. The judgment half — is this line said, not written; does it turn to
-// the crew — stays with the `copywriting-fluncle` skill and the `canon-reviewer`.
-//
-// THE THREE RAILS. Only mechanically unambiguous rules land here.
-//   (a) BANNED WORDS — VOICE.md §3, whole-word and case-insensitive, from the ONE
-//       shared list in ./voice-words.ts (the runtime gates read the same array).
-//       PROSE ONLY: `Content-Type`, `AbortSignal`, `contentEditable` and friends
-//       are the large false-positive surface, so `isProse` below decides.
-//   (b) PROSE EM DASH — VOICE.md §6 sanctions exactly one em dash, the
-//       `Artist — Title` tracklist separator. That separator is always written as
-//       a literal that is ONLY the separator (`" — "`), so a literal matching
-//       `^\s*—\s*$` is allowed and every other `—` is prose. Applies to ALL
-//       literal kinds, not just prose (a title or an aria-label is copy too).
-//   (c) EXCLAMATION MARKS — the Dry Rule, prose only (`!` is everywhere in code).
-//
-// WHAT IS SCANNED. See SCAN_ROOTS: the public web, mobile, and extension
-// surfaces, the Galaxy game, the CLI and the npm packaging copy it publishes, and
-// the individually-named modules out of `apps/web/src/lib` whose strings reach a
-// PUBLIC audience (below).
-//
-// WHAT IS NOT, AND WHY. Every edge is a deliberate register or tooling boundary:
-//   - `/admin` under the web roots is skipped ENTIRELY (see SKIPPED_DIRECTORIES):
-//     the operator workstation is a different register, and it is where the
-//     engine-room vocabulary belongs.
-//   - THE ONE ASYMMETRY, stated on purpose: the web `/admin` tree is skipped
-//     outright, while the CLI's admin tree IS scanned for banned words and only
-//     exempted from the em-dash rail. They differ because the exemptions have
-//     different causes — the web `/admin` register is settled canon (operator
-//     chrome, engine-room words allowed), whereas the CLI em dash is an OPEN
-//     canon question with the banned-word list never in dispute on any surface.
-//     A banned identity word is wrong in operator CLI output too, so it stays
-//     caught there; if the CLI register is ever ruled full-voice, delete
-//     EM_DASH_EXEMPT_PREFIXES rather than widening the web skip.
-//   - `*.test.*` files are skipped — a test's fixtures deliberately contain the
-//     violations it asserts on (this file included).
-//   - `*.d.ts` files are skipped: declarations carry no copy.
-//   - TanStack's `-*` route-helper files ARE scanned. They are excluded from
-//     ROUTING, not from copy (`-docs-page.tsx` renders UI, `-findings-data.ts` carries
-//     page strings), and including them measured clean.
-//
-// OUT OF SCOPE — each a real boundary with a real cost, not a claim that nothing
-// there matters:
-//   - The REST of `apps/web/src/lib`. These are
-//     overwhelmingly operator/DB/API strings (status reasons, query builders,
-//     vendor payloads) where the register question is unsettled, so scanning the
-//     tree wholesale would bury the gate in a judgment call it cannot make. The
-//     modules whose strings reach a PUBLIC audience are pulled into SCAN_ROOTS
-//     individually instead — the MCP specs and agent-discovery, the entity strings (`identity.ts`), the log page's
-//     definitional prose (`log-prose.ts`), and the three CREW FEEDS (`telegram.ts`,
-//     `bluesky.ts`, `push.ts`), which carry the most voice-load-bearing hand-written copy in
-//     the repo and were outside the net only because of where they live, and the
-//     NEWSLETTER LETTER (`edition-email.ts`), the Email register of §5. Drawing
-//     the real `lib/**` boundary is a follow-up, and it is a canon question before
-//     it is a code one.
-//   - `apps/ssh/main.go` — Go, so oxc cannot parse it. Its em dashes are
-//     `Artist — Title` separators today; a Go-side scan is its own slice.
-//   - NON-JAVASCRIPT ASSETS, the whole class, because oxc parses JavaScript and
-//     nothing else. `apps/web/public/*.txt` (`llms.txt` and `humans.txt`) is the
-//     half this comment named first, but it is not the only half: `apps/extension`
-//     ships its Chrome Web Store listing in `manifest.json` and both of its screens
-//     as static `.html`, so the copy a stranger meets BEFORE any script runs is the
-//     copy no rail reaches. All of it is hand-written, voice-governed prose that DOES
-//     belong under these rails. Drift between those assets and `apps/extension/src/copy.ts`
-//     is pinned separately (`apps/extension/src/copy.test.ts`, the shape
-//     `apps/web/src/lib/identity.test.ts` uses for llms.txt), which keeps the copies
-//     honest to each other but still runs no rail over what they say. A scanner for
-//     plain text, HTML, and JSON is a separate, worthwhile slice.
-//   - `packages/**` as a SOURCE SCAN — a deliberate boundary, not an empty one: a
-//     literal in a package is never re-typed in the app, so e.g. `packages/registry`
-//     surface titles render on `/status`, the SSH menu, and MCP unchecked, and that
-//     the source boundary can otherwise leave public `fluncle status` strings unchecked.
-//     `packages/registry` is now covered instead by the "registry" describe below,
-//     which applies these same rails to the IMPORTED catalog rather than its source
-//     — a data check, so it can be scoped to the three fields a non-operator reads
-//     without dragging in a catalog whose bulk is operator notes. The rest of
-//     `packages/**` is still unscanned; extending the roots there is cheap and
-//     wanted.
-//
-// The single code-level em-dash exception is matched by file, rail, and literal below.
-
 import { liveSurfaces } from "@fluncle/registry";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
@@ -99,54 +8,34 @@ import { BANNED_WORDS } from "./voice-words";
 
 const REPO_ROOT = fileURLToPath(new URL("../../../../../", import.meta.url));
 
-/** Directories walked in full, plus two individually-named files (see header). */
 const SCAN_ROOTS = [
   "apps/web/src/routes",
   "apps/web/src/components",
   "apps/mobile/src",
-  // The Expo Router SCREENS. `apps/mobile/src` holds the app's components and state, but
-  // every routed screen — the feed, the archive, the decks, the radio, submit, account —
-  // lives here, so the mobile UI's own copy sat outside the net while its parts were in it.
+
   "apps/mobile/app",
   "apps/extension/src",
   "apps/cli/src",
-  // The npm PACKAGING copy. `build-npm.ts` authors the published package's `description`
-  // and its README, which is the listing a stranger reads on npmjs.com/package/fluncle —
-  // as public as the web, and outside the net purely because it sits beside `src/` rather
-  // than in it. (Its Homebrew twin is Ruby, so it stays out of an oxc scan.)
+
   "apps/cli/scripts",
-  // The Galaxy game. A public surface with its own copy (its gate screen, its empty
-  // state), sitting outside `routes/` + `components/` only because the canvas app is
-  // booted by a dynamic import from its route.
+
   "apps/web/src/game",
-  // The MCP tool descriptions: a PUBLIC agent surface — an assistant reads these
-  // strings out to a stranger, so they are copy even though they live in lib/.
+
   "apps/web/src/lib/tool-specs.ts",
-  // Renders the markdown home that agents and crawlers read.
+
   "apps/web/src/lib/server/agent-discovery.ts",
-  // The canonical entity strings, reused verbatim by every meta/OG/JSON-LD surface.
+
   "apps/web/src/lib/identity.ts",
-  // The log page's definitional prose — the visible block, the meta description, and
-  // the MusicRecording JSON-LD description all read from it.
+
   "apps/web/src/lib/log-prose.ts",
-  // The CREW FEEDS. These are the most voice-load-bearing hand-written strings
-  // Fluncle ships (a post lands in a stranger's Telegram, on Bluesky, and on a
-  // phone's lock screen), and they sat outside the net purely because they live
-  // under lib/. `push.ts` is the third of them: its `title`/`body` are the copy the
-  // mobile crew meets before they have opened anything.
+
   "apps/web/src/lib/server/telegram.ts",
   "apps/web/src/lib/server/bluesky.ts",
   "apps/web/src/lib/server/push.ts",
-  // The NEWSLETTER LETTER. `references/voice.md` §5 names Email as its own surface
-  // register ("a letter from the uncle to the crew"), and this module holds the
-  // hand-written half of it: the "Ahoy cosmonauts," greeting, the "Happy raving,
-  // Fluncle" sign-off, the Frontier teaser, and the compliance footer's sign-off
-  // line. It lands in a subscriber's inbox every Friday, so it belongs beside the
-  // crew feeds above rather than in the unscanned "rest of lib".
+
   "apps/web/src/lib/server/edition-email.ts",
 ];
 
-/** The operator workstation — a different register, out of the public net. */
 const SKIPPED_DIRECTORIES = [
   "apps/web/src/components/admin",
   "apps/web/src/routes/admin",
@@ -154,25 +43,8 @@ const SKIPPED_DIRECTORIES = [
   "apps/web/src/routes/api/v1/admin",
 ];
 
-/**
- * The em-dash rail (b) only. The operator-tier CLI uses `—` as a clause separator
- * as one systematic house style, and whether the prose discipline reaches operator
- * tool output is an OPEN CANON QUESTION — see the voice audit
- * row in docs/audit-backlog.md, which also blesses the `—` null-cell glyph. Scoped
- * to the ADMIN tree only: `cli.ts` (where every admin command's description is
- * registered, and where the ledger measured ~35 instances) and the `admin-*`
- * command modules. The PUBLIC CLI commands are held to the rail like any other
- * surface. Rails (a) and (c) apply everywhere; a banned identity word is never
- * in dispute.
- */
 const EM_DASH_EXEMPT_PREFIXES = ["apps/cli/src/cli.ts", "apps/cli/src/commands/admin-"];
 
-/**
- * Keys whose value is COPY by construction, so the four-word floor is waived for
- * them. Without this the gate misses exactly the violation that motivated it:
- * `title: "Lost the signal"` is three words, so the floor alone would let the
- * mobile Stories slip through again.
- */
 const COPY_KEYS = new Set([
   "alt",
   "aria-label",
@@ -187,24 +59,13 @@ const COPY_KEYS = new Set([
 
 const SCANNED_EXTENSIONS = [".js", ".jsx", ".ts", ".tsx"];
 
-/** VOICE.md §6: the `Artist — Title` separator is written as its own literal. */
 const TRACKLIST_SEPARATOR = /^\s*—\s*$/;
 
-/**
- * A real `Key: value` string ("Log ID: 241.7.3A", "Content-Type: text/calendar"):
- * at most two words before the colon. Deliberately NOT a bare `": "` test — a
- * colon is one of the canon's own prescribed replacements for a prose em dash, so
- * excluding every string containing one would blind the gate to the very copy the
- * em-dash rail pushes authors toward writing.
- */
 const KEY_VALUE_PREFIX = /^[A-Za-z][\w-]*(?: [\w-]+)?: /;
 
-/** A copy module, or an object named `…Copy` — every string inside is copy. */
 const COPY_MODULE = /(?:^|\/)(?:copy|[\w-]+-copy)\.tsx?$/;
 const COPY_IDENTIFIER = /copy$/i;
 
-// Whole-word so "signature"/"contention" don't false-positive, case-insensitive
-// because a banned word is banned in a heading too.
 const BANNED_WORD_MATCHERS = BANNED_WORDS.map((word) => new RegExp(`\\b${word}\\b`, "i"));
 
 type Rail = "banned-word" | "exclamation" | "prose-em-dash";
@@ -243,13 +104,6 @@ function collectFiles(root: string, files: string[]): void {
   }
 }
 
-/**
- * Every string the source ships: JSX text (whitespace-collapsed, the way a reader
- * sees it), string literals, and template chunks. Line numbers are the node's
- * START line, which is the line the escape hatch sits above. Each literal also
- * carries whether it sits in a COPY position — under a copy-shaped key, inside a
- * `…Copy` object, or in a copy module — which waives the word floor in `isProse`.
- */
 function sourceLineAt(lineStarts: number[], offset: number): number {
   let low = 0;
   let high = lineStarts.length - 1;
@@ -330,7 +184,6 @@ function collectLiterals(file: string, source: string): Literal[] {
       literals.push(literal);
     }
 
-    // `const feedCopy = { … }` — every string inside is copy, whatever its key.
     if (record.type === "VariableDeclarator") {
       const id = record.id as Record<string, unknown> | undefined;
       if (typeof id?.name === "string" && COPY_IDENTIFIER.test(id.name)) {
@@ -339,7 +192,6 @@ function collectLiterals(file: string, source: string): Literal[] {
       }
     }
 
-    // A copy-shaped key marks its whole value subtree as copy.
     if (record.type === "Property" || record.type === "PropertyDefinition") {
       const key = record.key as Record<string, unknown> | undefined;
       const name =
@@ -366,15 +218,6 @@ function collectLiterals(file: string, source: string): Literal[] {
   return literals;
 }
 
-/**
- * Is this literal PROSE a reader meets, rather than a class name, a header, a
- * selector, or a code fragment? Rendered JSX text always is. A quoted string
- * qualifies when it carries no markup/code punctuation, is not a `Key: value`
- * pair, holds no URL/comment `//`, and then either sits in a COPY position (a
- * copy-shaped key, a `…Copy` object, a copy module) or reads as a sentence at
- * four words or more. This keeps `Content-Type`, `AbortSignal`, and
- * `contentEditable` out of rail (a) without an allowlist per identifier.
- */
 function isProse(literal: Literal): boolean {
   if (literal.isJsxText) {
     return true;
@@ -460,8 +303,6 @@ describe("voice lint", () => {
     const { files } = scanEverything();
     const scanned = new Set(files);
 
-    // One real copy-carrying file per scanned root, so a root that quietly stops
-    // resolving fails loudly instead of passing with an empty file list.
     expect(scanned.has("apps/web/src/routes/privacy.tsx")).toBe(true);
     expect(scanned.has("apps/web/src/components/search/search-command.tsx")).toBe(true);
     expect(scanned.has("apps/mobile/src/lib/feed-state.ts")).toBe(true);
@@ -485,7 +326,6 @@ describe("voice lint", () => {
     );
     expect(strays).toEqual([]);
 
-    // The em-dash carve-out is the CLI ADMIN tree only, never a public surface.
     expect(emDashApplies("apps/cli/src/cli.ts")).toBe(false);
     expect(emDashApplies("apps/cli/src/commands/admin-tracks.ts")).toBe(false);
     expect(emDashApplies("apps/cli/src/commands/recent.ts")).toBe(true);
@@ -493,10 +333,6 @@ describe("voice lint", () => {
   });
 });
 
-// A detector is unproven until a synthetic failure makes it fire. This fixture
-// carries one violation per rail, the two copy positions that waive the word
-// floor, and everything that must NOT fire: the `Artist — Title` separator, a
-// real `Key: value` pair, and code strings.
 const FIXTURE_FILE = "fixture.tsx";
 
 const FIXTURE_SOURCE = `export function Fixture() {
@@ -532,14 +368,14 @@ describe("voice lint rails", () => {
   it("fires on a banned identity word in prose", () => {
     expect(textsFor("banned-word")).toEqual([
       "The signal came back clean from out there tonight",
-      // The colon is mid-sentence, so the `Key: value` exclusion must not swallow it.
+
       "Two things tonight: the curated shelf went quiet",
       "The curated selection landed on the log tonight",
       "A transmission arrived from out there tonight",
       "An anomaly landed on the log here tonight",
-      // Three words: caught only because `title` is a copy-shaped key.
+
       "Lost the signal",
-      // Three words under a NON-copy key: caught only because the object is `…Copy`.
+
       "Curated by hand",
     ]);
   });
@@ -570,26 +406,8 @@ describe("voice lint rails", () => {
   });
 });
 
-// The surfaces registry's PUBLIC-rendering strings, checked as DATA rather than
-// source. `packages/**` is outside SCAN_ROOTS (see the header), and scanning the
-// catalog's source would drag in operator notes and a hundred catalog descriptions
-// nobody outside the operator reads; importing it instead lets the rails land on
-// exactly the three fields a STRANGER meets:
-//
-//   - `title` + `statusDescription`  → the /status health board, a public console page.
-//   - `exposedContent[0]` of a surface whose `operatorNotes` names a /status service
-//     → the note column of the public `fluncle status` command
-//       (apps/cli/src/commands/status.ts) and the MCP `get_status` service labels
-//       (apps/web/src/lib/server/tools/registry.ts), both of which mine that marker.
-//
-// It lives here, not in packages/registry's own test, so BANNED_WORDS stays a single
-// array with a single reader — a second copy in a leaf package is the exact drift
-// ./voice-words.ts was created to prevent. The precedent for an apps/web test
-// guarding a registry field is already set (registry/src/index.test.ts notes the
-// /status infra aliases are "guarded there by the apps/web coverage test").
 const SERVICE_PROBE_MARKER = /service `([a-z0-9-]+)`/;
 
-/** Every registry string a non-operator reads, labelled by where it came from. */
 function publicRegistryStrings(): { text: string; where: string }[] {
   const strings: { text: string; where: string }[] = [];
 
@@ -612,8 +430,6 @@ function publicRegistryStrings(): { text: string; where: string }[] {
 }
 
 describe("voice lint over the surfaces registry", () => {
-  // No registry label is ever an `Artist — Title` line, so the tracklist carve-out
-  // does not apply here: every em dash in one of these strings is prose.
   it("finds no banned word, em dash, or exclamation mark in a public-rendering string", () => {
     const violations = publicRegistryStrings()
       .filter(
@@ -627,8 +443,6 @@ describe("voice lint over the surfaces registry", () => {
     expect(violations).toEqual([]);
   });
 
-  // A detector over live data is only proven if the data is actually there: an empty
-  // catalog read would pass the assertion above while checking nothing.
   it("reads a non-empty set of public strings, including the /status service notes", () => {
     const strings = publicRegistryStrings();
 

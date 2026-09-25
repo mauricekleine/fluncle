@@ -1,15 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// The per-entity fresh feeds' contract, pinned — the /fresh.xml two-tier contract narrowed to one
-// artist or one label. A CERTIFIED finding links to its /log home and shows its cover; an
-// UNCERTIFIED catalogue row links OUT to Spotify only, no /log and no cover (DESIGN.md's Unlit
-// Rule); a row with neither points nowhere. Every date is a RELEASE date, never a Found date
-// (VOICE.md's Found Rule). The feed is LITERAL — only the entity's own tracks, never a widening —
-// which the server read owns; here we pin the RSS body + the channel copy + the unknown-slug 404.
-
-// One track set shared by both feeds, in the order the feeds render them (newest release first):
-// a certified finding (coordinate + cover), a certified straggler with no coordinate yet, an
-// uncertified row with Spotify, and an uncertified row with nowhere to point.
 const CERTIFIED = {
   artists: ["Camo & Krooked"],
   certified: true,
@@ -41,9 +31,6 @@ const UNCERTIFIED_BARE = {
 };
 const TRACKS = [CERTIFIED, CERTIFIED_NO_COORD, UNCERTIFIED_SPOTIFY, UNCERTIFIED_BARE];
 
-// The server read resolves the slug → entity, then narrows. `undefined` = unknown slug (→ 404); a
-// resolved entity returns `{ name, tracks }`. We mock at that seam so these tests pin the RSS body,
-// not the DB narrowing (which fresh-entity.test.ts covers).
 const listArtistFreshTracks = vi.hoisted(() => vi.fn());
 const listLabelFreshTracks = vi.hoisted(() => vi.fn());
 
@@ -63,8 +50,6 @@ async function handlerFor(importer: Promise<{ Route: unknown }>): Promise<Handle
 
 const CERTIFIED_LOG = "https://www.fluncle.com/log/012.8.0A";
 
-// The release-sensitive pages bound their cache lifetime by the next UTC midnight, so these exact
-// directives hold only away from it: the clock sits at midday, whatever time the suite runs.
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(new Date("2026-07-20T12:00:00.000Z"));
@@ -87,7 +72,7 @@ describe("/artist/$slug/fresh.xml — release-framed, two tiers, one artist", ()
       '<media:content url="https://i.scdn.co/image/fresh-cover.jpg" medium="image"/>',
     );
     expect(xml).toContain("https://open.spotify.com/track/certified");
-    // The feed-level image.
+
     expect(xml).toContain("https://www.fluncle.com/fluncle-cover.png");
   });
 
@@ -96,12 +81,11 @@ describe("/artist/$slug/fresh.xml — release-framed, two tiers, one artist", ()
     const handler = await handlerFor(import("./artist.$slug.fresh[.]xml"));
     const xml = await (await handler({ params: { slug: "camo-and-krooked" } })).text();
 
-    // 2026-07-10 as a UTC day.
     expect(xml).toContain("<pubDate>Fri, 10 Jul 2026 00:00:00 GMT</pubDate>");
-    // Release-framed, scoped to the artist; the channel never claims Fluncle FOUND these.
+
     expect(xml).toContain("<title>New Camo &amp; Krooked releases · Fluncle</title>");
     expect(xml).toContain("The freshest from Camo &amp; Krooked, hot off the press.");
-    // The channel links to the artist page, not the whole-archive /fresh.
+
     expect(xml).toContain("<link>https://www.fluncle.com/artist/camo-and-krooked</link>");
     expect(xml).not.toMatch(/found/i);
   });
@@ -113,8 +97,7 @@ describe("/artist/$slug/fresh.xml — release-framed, two tiers, one artist", ()
 
     expect(xml).toContain("<link>https://open.spotify.com/track/straggler</link>");
     expect(xml).toContain("<link>https://open.spotify.com/track/unlit</link>");
-    // The only item linking to a /log home and the only cover in the whole feed belong to the one
-    // certified finding — the unlit tier never borrows a coordinate.
+
     expect((xml.match(/<link>[^<]*\/log\//g) ?? []).length).toBe(1);
     expect((xml.match(/media:content/g) ?? []).length).toBe(1);
   });
@@ -137,8 +120,7 @@ describe("/artist/$slug/fresh.xml — release-framed, two tiers, one artist", ()
     expect(res.headers.get("Cache-Control")).toBe(
       "public, max-age=0, s-maxage=300, stale-while-revalidate=3600",
     );
-    // Feeds are for readers, never search results — noindex keeps the thousands of
-    // rel=alternate-discovered entity feeds out of GSC's crawled-not-indexed churn.
+
     expect(res.headers.get("X-Robots-Tag")).toBe("noindex");
   });
 
@@ -171,7 +153,7 @@ describe("/label/$slug/fresh.xml — release-framed, two tiers, one label", () =
 
     expect(res.status).toBe(200);
     expect(xml).toContain(`<link>${CERTIFIED_LOG}</link>`);
-    // Label channel copy reads "on <name>", not "<name> releases".
+
     expect(xml).toContain("<title>New releases on Hospital Records · Fluncle</title>");
     expect(xml).toContain("The freshest on Hospital Records, hot off the press.");
     expect(xml).toContain("<link>https://www.fluncle.com/label/hospital-records</link>");

@@ -3,9 +3,6 @@ import { isLogPageParam } from "@/lib/log-page-param";
 import { Route as StoriesIndexRoute } from "./stories.index";
 import { Route as StoryRoute } from "./stories.$logId";
 
-// The /stories → /log moves: dumb 301 passthroughs. Normalization happens
-// once, at /log, so a canonical-coordinate link never chains 301→301.
-
 type ThrownRedirect = {
   options?: { params?: unknown; statusCode?: number; to?: string };
   params?: unknown;
@@ -47,9 +44,6 @@ describe("/stories/$logId → /log/$logId", () => {
     );
     const forwardedParam = (redirect.params as { logId: string }).logId;
 
-    // The /log guard admits the forwarded param without another redirect hop
-    // (only a legacy trackId pays one more hop, at /log, where normalization
-    // lives).
     expect(isLogPageParam(forwardedParam)).toBe(true);
   });
 

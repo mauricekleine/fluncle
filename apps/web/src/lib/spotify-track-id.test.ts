@@ -40,9 +40,6 @@ describe("parseSpotifyTrackId", () => {
     });
   });
 
-  // The server grammar (parseSpotifyTrackUrl) never accepted locale-prefixed
-  // paths; the shared parser must reject them identically so the client never
-  // green-lights a paste the server would 400.
   it("rejects a locale-prefixed track link, matching the server grammar", () => {
     expect(parseSpotifyTrackId(`https://open.spotify.com/intl-nl/track/${ID}`)).toEqual({
       ok: false,

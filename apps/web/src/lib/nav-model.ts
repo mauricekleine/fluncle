@@ -200,6 +200,8 @@ const crewItems: NavItem[] = [
   },
 ];
 
+export const navBrowseHubs: NavItem[] = browseItems.filter((item) => item.id !== "search");
+
 export const navSections: NavSection[] = [
   { id: "travel", items: travelItems, label: "Travel along" },
   { id: "browse", items: browseItems, label: "Browse" },

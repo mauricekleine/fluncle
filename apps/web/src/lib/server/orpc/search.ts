@@ -49,6 +49,7 @@ export function searchHandlers(os: Implementer) {
       });
       const result = await searchArchive({
         beforeModel: charge.requireAllowed,
+        beforeVector: charge.requireAllowed,
         limit: input.limit,
         q: query,
       });

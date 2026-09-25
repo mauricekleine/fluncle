@@ -312,3 +312,43 @@ describe("applySlowWarning", () => {
     expect(applySlowWarning("CRIT", "200 (auth gate open)", 30_000).verdict).toBe("CRIT");
   });
 });
+
+describe("the style lexicon's live guard", () => {
+  const style = { anchors: 3, kind: "search-style" as const, slug: "liquid" };
+  const answer = (patch: Record<string, unknown>) =>
+    JSON.stringify({
+      degraded: false,
+      entities: [],
+      filters: { sound: "liquid", soundsLikeArtists: ["A", "B", "C"] },
+      kind: "sonic",
+      ok: true,
+      results: [{ trackId: "t1" }],
+      ...patch,
+    });
+
+  it("derives one vector-lane target per style from the lexicon", () => {
+    const styles = buildTargets().targets.filter((target) =>
+      target.name.startsWith("search style"),
+    );
+
+    expect(styles.length).toBeGreaterThan(0);
+    expect(styles.every((target) => target.vectorCapable === true)).toBe(true);
+    expect(styles.every((target) => target.expect.kind === "search-style")).toBe(true);
+  });
+
+  it("passes only the sound tier, undegraded, with rows and every anchor in", () => {
+    expect(judge(style, 200, "application/json", answer({})).verdict).toBe("PASS");
+    expect(judge(style, 200, "application/json", answer({ degraded: true })).verdict).toBe("FAIL");
+    expect(judge(style, 200, "application/json", answer({ kind: "token" })).verdict).toBe("FAIL");
+    expect(judge(style, 200, "application/json", answer({ results: [] })).verdict).toBe("FAIL");
+    expect(
+      judge(
+        style,
+        200,
+        "application/json",
+        answer({ filters: { sound: "liquid", soundsLikeArtists: ["A", "B"] } }),
+      ).detail,
+    ).toContain("2/3 anchors");
+    expect(judge(style, 503, "text/html", "<html></html>").verdict).toBe("FAIL");
+  });
+});

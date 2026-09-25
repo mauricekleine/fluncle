@@ -1,19 +1,3 @@
-// Fluncle's /pipeline — the wide, draggable infographic canvas of a finding's whole
-// life: the instant find, the enrichment factory of background machines, distribution
-// out to the world, every surface it lands on, and the launch into the Galaxy (with the
-// mixtape dream-tail). A client-only DOM+SVG+canvas toy, mounted into a container the same way
-// the Galaxy/Earth games are: `createPipeline(container)` returns a `{ destroy }` handle.
-//
-// It is fully self-contained: it injects its own scoped stylesheet (every selector under
-// `.fpl`), builds all its DOM inside the container, and tears everything down on destroy.
-// Sprites are served from /pipeline/*.png; the live cron heartbeat reads /api/status.
-//
-// PAINT: the per-machine / per-surface tint palette below is lore art, exempt from the One
-// Sun Rule (DESIGN.md §2, The Lore-Art Paint Exemption). The exemption
-// buys hue diversity and nothing else, so three constraints still hold here: no hue may sit
-// in Nebula Violet's reserved BAND (#ab7bff is h262; the arc is roughly h240–h300 — blue the
-// top channel with red above green), every neutral leans warm, elevation stays shadow-free.
-
 import { LOGOS } from "./logos";
 
 type MachKey = "worker" | "rave02" | "rave03" | "vps01" | "m5" | "m2" | "browser";
@@ -47,11 +31,9 @@ const MACH: Record<MachKey, { c: string; label: string }> = {
   vps01: { c: "--m-vps01", label: "vps-01" },
   worker: { c: "--m-worker", label: "Workers" },
 };
-// display order for the hardware legend (vps-01 hosts the SSH terminal, dig, and
-// the onion service — all surfaces, so no station card carries its color yet)
+
 const LEGEND: MachKey[] = ["browser", "m2", "m5", "vps01", "rave02", "rave03", "worker"];
 
-// service display name → simple-icons/custom slug (for the brand-mark chips)
 const SLUG: Record<string, string> = {
   Box: "box",
   Cartesia: "cartesia",
@@ -79,9 +61,7 @@ const SLUG: Record<string, string> = {
   YouTube: "youtube",
 };
 
-// col = x grid, lane = y grid (0 = the centre spine)
 const S: Station[] = [
-  // Act 1 · the find
   {
     col: 0,
     id: "cmdf",
@@ -168,7 +148,6 @@ const S: Station[] = [
     wh: "pre-chew the queue",
   },
 
-  // Act 2 · enrichment floor (capture feeds analysis + embedding)
   {
     cad: "5m",
     col: 5.5,
@@ -277,7 +256,6 @@ const S: Station[] = [
     wh: "wakes the render box",
   },
 
-  // Act 3 · dispatch
   {
     col: 10,
     id: "yt",
@@ -305,8 +283,7 @@ const S: Station[] = [
     id: "logbook",
     img: "logbook",
     label: "Logbook entry",
-    // Above the YouTube Short card (lane -0.6): the note → logbook wire arrives from
-    // the left mid-column, so the top slot keeps it clear of the render → yt/tk wires.
+
     lane: -1.8,
     m: "rave02",
     svc: ["Claude"],
@@ -314,8 +291,6 @@ const S: Station[] = [
   },
 ];
 
-// the plaza · every surface — each cabinet links to its live home (or the /docs entry
-// that documents it); the Lens extension links out to the Chrome Web Store.
 const K: Kiosk[] = [
   { label: "web", tint: "#f0a24a", url: "https://www.fluncle.com/", wh: "the archive" },
   { label: "/log", tint: "#ffcf70", url: "https://www.fluncle.com/log", wh: "the coordinate" },
@@ -323,8 +298,7 @@ const K: Kiosk[] = [
   { label: "radio", tint: "#6f9bd6", url: "https://radio.fluncle.com", wh: "observations" },
   { label: "CLI", tint: "#4fb39a", url: "https://www.fluncle.com/docs", wh: "terminal" },
   { label: "SSH", tint: "#63d69a", url: "https://www.fluncle.com/docs", wh: "rave." },
-  // the mobile cabinet — it floats above the plaza with its cable dangling unplugged,
-  // but sits in the row like every other surface.
+
   { label: "mobile", tint: "#7bd0c0", url: "https://apps.apple.com/app/id6790080540", wh: "iOS" },
   {
     label: "MCP",
@@ -344,7 +318,6 @@ const K: Kiosk[] = [
   },
 ];
 
-// the mixtape dream-tail (Fluncle dreaming); +2 cols to sit in the shifted galaxy
 const D: Station[] = [
   { col: 13.5, id: "plan", label: "Plan", lane: 0, m: "m5", wh: "line up findings" },
   { col: 14.4, id: "rec", label: "Record set", lane: 0, m: "m2", wh: "OBS · decks" },
@@ -382,7 +355,6 @@ const D: Station[] = [
   },
 ];
 
-// [from, to, gold?]
 const LINKS: Array<[string, string, number?]> = [
   ["ear", "cmdf", 1],
   ["cmdf", "spot", 1],
@@ -416,7 +388,6 @@ const DLINKS: Array<[string, string]> = [
   ["setv", "drip"],
 ];
 
-// geometry — PADX leaves two columns of clear space left of col 0 for Act 0 (the listener)
 const COLW = 232,
   LANEH = 122,
   CY = 478,
@@ -586,15 +557,10 @@ const CHROME = `
 </div>
 `;
 
-// Nebula Violet's reserved BAND (DESIGN.md §2, The Lore-Art Paint Exemption): blue the top
-// channel with red above green, which is exactly the h240–h300 arc.
 export function inVioletBand(r: number, g: number, b: number): boolean {
   return b > r && b > g && r > g;
 }
 
-// keep vivid brand colours; lift only DESATURATED-dark marks toward warm cream so they read on near-black.
-// A brand whose own colour sits in the violet band (Twitch, Mixcloud, Deezer, …) drops to the chip's
-// ink instead — `currentColor`, the canon form of a brand mark — since a violet node reads as live.
 export function fillFor(hex: string): string {
   const r = parseInt(hex.slice(1, 3), 16),
     g = parseInt(hex.slice(3, 5), 16),
@@ -668,14 +634,12 @@ export function createPipeline(container: HTMLElement): { destroy: () => void } 
     const chips = (s.svc ?? []).map(svcChip).join("");
     const glyph = s.spr ?? "▦";
     const spr = `<img src="${SPRITE(s.img ?? s.id)}" alt="" onerror="this.outerHTML='<span>${glyph}</span>'">`;
-    // the chip row sits BELOW the text+sprite block at full card width, so service
-    // pills lay out horizontally instead of stacking in the narrow text column
+
     el.innerHTML =
       `<div class="main"><div class="body"><div class="lb">${s.label}</div>` +
       `<div class="wh">${s.wh}</div></div><div class="spr">${spr}</div></div>` +
       (chips ? `<div class="row">${chips}</div>` : "");
-    // the cadence/heartbeat pill lives on its own line, anchored to the card's
-    // bottom-right corner — never inline with the service pills
+
     if (s.cad) {
       el.insertAdjacentHTML(
         "beforeend",
@@ -719,9 +683,6 @@ export function createPipeline(container: HTMLElement): { destroy: () => void } 
   band(B(11.0), B(14.9), "every surface", "wherever you come looking, the banger's there", true);
   band(B(14.9), B(22.6), "the Galaxy · launch", "every banger is a place I've been", false);
 
-  // ── galaxy starfield — the same look as Fluncle's Galaxy game: a cream 1px twinkle field
-  // (creamDim/Muted/cream ramp, 0.7+0.3·sin twinkle) plus a scatter of pulsing gold "banger"
-  // diamonds — every banger is a star, and a banger is a (gold) record.
   const GX0 = B(14.6),
     GW = Math.round(B(22.9) + 140 - GX0),
     GH = 1000;
@@ -789,7 +750,6 @@ export function createPipeline(container: HTMLElement): { destroy: () => void } 
   };
   rafId = requestAnimationFrame(skyLoop);
 
-  // the One Sun — a bespoke pixel-art star, deep in the galaxy (the canvas's whole gold budget)
   const sun = document.createElement("img");
   sun.src = SPRITE("sun");
   sun.alt = "";
@@ -798,14 +758,9 @@ export function createPipeline(container: HTMLElement): { destroy: () => void } 
     `pointer-events:none;filter:drop-shadow(0 0 52px #ffd05740) drop-shadow(0 0 14px #f5b80040)`;
   world.appendChild(sun);
 
-  // stations + dream tail
   S.forEach(card);
   D.forEach((d) => card({ ...d, col: d.col + 2, dream: true }));
 
-  // ── Act 0 · the listener — the pipeline's input: a banger lands, headphones on,
-  // eyes closed, nodding at half-time 174. A 4-cell sprite strip (level → dip →
-  // down, eyes squeezed → dip) flips on background-position; the CSS pins the
-  // 704×237 sheet geometry. Sound waves ride in; the oof feeds CMD+F.
   const LX = B(-1.6),
     LW = 176,
     LTOP = CY - 118;
@@ -815,7 +770,7 @@ export function createPipeline(container: HTMLElement): { destroy: () => void } 
   listener.style.left = LX + "px";
   listener.style.top = LTOP + "px";
   world.appendChild(listener);
-  // three wavefronts arcing in toward the face, staggered on the nod's clock
+
   (
     [
       [18, 0],
@@ -831,10 +786,9 @@ export function createPipeline(container: HTMLElement): { destroy: () => void } 
     wv.style.animationDelay = delay + "s";
     world.appendChild(wv);
   });
-  // register the listener as a wire endpoint so the oof flows into CMD+F
+
   pos.ear = { w: LW, x: LX, y: CY };
 
-  // launching-finding rockets — an ascending trail off the galaxy mouth, climbing toward the sun
   (
     [
       [15.7, -80, 60],
@@ -851,8 +805,6 @@ export function createPipeline(container: HTMLElement): { destroy: () => void } 
     world.appendChild(im);
   });
 
-  // the lore — the payoff of the whole map, told below the launch scene in Fluncle's own
-  // words, centered exactly on the sun (left B(17.8) + 112 = the sun's midline; lore is 560 wide)
   const lore = document.createElement("div");
   lore.className = "lore";
   lore.style.left = B(17.8) + 112 - 280 + "px";
@@ -864,7 +816,6 @@ export function createPipeline(container: HTMLElement): { destroy: () => void } 
     "into long-term memory. A mix blends tracks the same way, so <b>I dream in mixtapes</b>.";
   world.appendChild(lore);
 
-  // wires
   function wirePath(a: string, b: string, gold?: number): string {
     const A = pos[a],
       B2 = pos[b];
@@ -892,7 +843,6 @@ export function createPipeline(container: HTMLElement): { destroy: () => void } 
   wires.setAttribute("width", String(B(22.5) + 200));
   wires.setAttribute("height", "980");
 
-  // ── the plaza · every surface (clickable arcade cabinets · 3 flow layouts) ──
   const plaza = document.createElement("div");
   plaza.className = "plaza";
   world.appendChild(plaza);
@@ -933,8 +883,7 @@ export function createPipeline(container: HTMLElement): { destroy: () => void } 
     const x0 = B(11.3),
       gapx = 128,
       off = [-132, 26];
-    // 13 cabinets: 7 up top (mobile joined the row on App Store approval), 6 below,
-    // the shorter row centered under the longer by half a gap.
+
     K.forEach((k, i) => {
       const col = i % 7,
         row = Math.floor(i / 7),
@@ -956,7 +905,6 @@ export function createPipeline(container: HTMLElement): { destroy: () => void } 
   }
   renderPlaza();
 
-  // ── pan + zoom — one pointer pans, two pinch-zoom (the touch path) ──
   let tx = 0,
     ty = 0,
     zoom = 1,
@@ -977,7 +925,7 @@ export function createPipeline(container: HTMLElement): { destroy: () => void } 
       vh = window.innerHeight,
       ww = WORLDW * zoom,
       wh = WORLDH * zoom;
-    // a world smaller than the viewport centers instead of pinning to an edge
+
     tx = ww < vw ? (vw - ww) / 2 : Math.min(0, Math.max(vw - ww, tx));
     ty = wh < vh ? Math.max(30, (vh - wh) / 2) : Math.min(30, Math.max(vh - wh, ty));
     world.style.transform = `translate(${tx}px,${ty}px) scale(${zoom})`;
@@ -1006,9 +954,7 @@ export function createPipeline(container: HTMLElement): { destroy: () => void } 
   stage.addEventListener("pointerdown", (e) => {
     try {
       stage.setPointerCapture(e.pointerId);
-    } catch {
-      // synthetic/stale pointers can't be captured; tracking them still works
-    }
+    } catch {}
     pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (pts.size === 1) {
       moved = false;
@@ -1041,7 +987,7 @@ export function createPipeline(container: HTMLElement): { destroy: () => void } 
       if (!a || !b || pinchD <= 0) {
         return;
       }
-      // the midpoint drags the world; the finger spread scales it around that point
+
       const mx = (a.x + b.x) / 2,
         my = (a.y + b.y) / 2;
       tx += mx - pmx;
@@ -1062,7 +1008,6 @@ export function createPipeline(container: HTMLElement): { destroy: () => void } 
   const endPointer = (e: PointerEvent): void => {
     pts.delete(e.pointerId);
     if (pts.size === 1) {
-      // pinch → pan handoff: rebase the drag anchor on the surviving finger
       const p = [...pts.values()][0];
       if (p) {
         sx = p.x;
@@ -1086,8 +1031,7 @@ export function createPipeline(container: HTMLElement): { destroy: () => void } 
   };
   stage.addEventListener("pointerup", endPointer);
   stage.addEventListener("pointercancel", endPointer);
-  // a drag that starts on a sprite/kiosk must pan the canvas, never lift the
-  // image (or link) into a native HTML drag
+
   const onDragStart = (e: Event): void => e.preventDefault();
   container.addEventListener("dragstart", onDragStart);
   stage.addEventListener(
@@ -1139,7 +1083,6 @@ export function createPipeline(container: HTMLElement): { destroy: () => void } 
   q<HTMLButtonElement>(".zout").addEventListener("click", () => setZoom(zoom / 1.2));
   zlabel.addEventListener("click", () => setZoom(1));
 
-  // hardware legend — swatches only at rest; hover/focus/tap reveals the machine names
   q<HTMLDivElement>(".legend").innerHTML = LEGEND.map((key) => MACH[key])
     .map(
       (m) =>
@@ -1149,7 +1092,6 @@ export function createPipeline(container: HTMLElement): { destroy: () => void } 
   const hw = q<HTMLDivElement>(".hw");
   hw.addEventListener("click", () => hw.classList.toggle("open"));
 
-  // ── the live cron heartbeat (reads the same-origin /api/status) ──
   const hbstat = q<HTMLDivElement>(".hbstat");
   let hbFresh = 0,
     hbTotal = 0,
@@ -1207,9 +1149,7 @@ export function createPipeline(container: HTMLElement): { destroy: () => void } 
       });
       hbSince = data.freshestReportAt ? new Date(data.freshestReportAt).getTime() : null;
       renderHbStat();
-    } catch {
-      // offline / transient — leave the last-known state up
-    }
+    } catch {}
   }
   void applyStatus();
   const statusInterval = window.setInterval(() => void applyStatus(), 30000);
