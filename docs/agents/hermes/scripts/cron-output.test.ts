@@ -1,17 +1,3 @@
-// Tests for cron-output.sh — the wrapper every host-timer sweep runs inside.
-//
-// THE POINT OF THIS FILE IS THE PLUMBING, NOT THE PARSER. The strain detector in
-// fluncle-healthcheck.ts has its own unit tests over hand-written marker strings, and those
-// tests would pass just as happily if the wrapper never wrote a stderr tail at all — which is
-// exactly the trap this suite exists to close. Before this change the marker held STDOUT ONLY,
-// so every error line a sweep logged (they all go through `log()` = `console.error`) was
-// absent from disk: a detector wired to the marker body would have been reading a source that
-// could not carry the signal, and it would have passed its own tests while doing it.
-//
-// So these tests run the REAL bash function, with a REAL payload that writes to both streams,
-// and then hand the resulting file to the REAL prober functions. Nothing is hand-written.
-//
-//   bun test docs/agents/hermes/scripts/cron-output.test.ts
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
@@ -50,16 +36,6 @@ afterEach(() => {
 type EmitOptions = { env?: Record<string, string>; sharedRoot?: string };
 type EmitResult = { code: number; dir: string; marker: string; stderr: string; stdout: string };
 
-/**
- * Write the runner that sources the REAL helper and wraps a REAL payload, and return its
- * path plus where the marker will land.
- *
- * `FLUNCLE_API_TOKEN` and `FLUNCLE_API_BASE_URL` are UNSET first, unconditionally. The
- * wrapper's ledger POST is a `curl` in a child process, which the repo's no-network rail
- * cannot see (it wraps `globalThis.fetch`), so an operator's real token sitting in the
- * environment is the one way this suite could reach production. Every test that wants a POST
- * sets both again, pointed at a loopback fixture.
- */
 function writeRunner(
   job: string,
   payload: string,
@@ -71,9 +47,7 @@ function writeRunner(
   }
   const outputDir = join(root, "output");
   const script = join(root, "run.sh");
-  // The payload gets its own file rather than riding a `bash -c "…"` argument: embedded in the
-  // runner's source it would be re-expanded by the outer shell, so a `$(seq …)` in a fixture
-  // would run at the wrong level. A file has no quoting hazard at all.
+
   const payloadPath = join(root, "payload.sh");
 
   writeFileSync(payloadPath, `#!/usr/bin/env bash\n${payload}\n`, "utf8");
@@ -81,15 +55,11 @@ function writeRunner(
     script,
     [
       "#!/usr/bin/env bash",
-      // `-e` ON PURPOSE: every real sweep wrapper sources this helper under
-      // `set -euo pipefail`, and the helper is full of pipelines whose failure is expected
-      // and swallowed (`grep` finding no summary line, the marker write, the prune). A
-      // harness running without `-e` would never see a missing `|| true`.
+
       "set -euo pipefail",
       "unset FLUNCLE_API_TOKEN FLUNCLE_API_BASE_URL",
       `export HEALTHCHECK_CRON_OUTPUT_DIR=${JSON.stringify(outputDir)}`,
-      // The rebake guard reads dirname($HOME)/rebake.lock; point HOME somewhere empty so the
-      // guard is a clean no-op instead of depending on the machine running the tests.
+
       `export HOME=${JSON.stringify(join(root, "home"))}`,
       ...Object.entries(options.env ?? {}).map(
         ([key, value]) => `export ${key}=${JSON.stringify(value)}`,
@@ -113,7 +83,6 @@ function readNewestMarker(outputDir: string, job: string): { dir: string; marker
   return { dir, marker: readFileSync(join(dir, newest), "utf8") };
 }
 
-/** Run `emit_cron_output <job> -- bash <payload>` for real; return the marker it wrote. */
 function emit(job: string, payload: string, options: EmitOptions = {}): EmitResult {
   const { outputDir, script } = writeRunner(job, payload, options);
   const run = spawnSync("bash", [script], { encoding: "utf8" });
@@ -126,12 +95,6 @@ function emit(job: string, payload: string, options: EmitOptions = {}): EmitResu
   };
 }
 
-/**
- * The same run, ASYNCHRONOUSLY. `spawnSync` blocks the event loop, so a loopback fixture
- * server could never answer the wrapper's POST — the request would sit unserved until the
- * spawn returned, and every ledger test would "prove" a timeout. Anything that involves the
- * fixture must go through here.
- */
 async function emitAsync(
   job: string,
   payload: string,
@@ -146,9 +109,6 @@ async function emitAsync(
   return { code, ...readNewestMarker(outputDir, job), stderr, stdout };
 }
 
-// The exact lines the box logged, from two days of real journal output. Sanitised already
-// (`mb_<id>` stands in for a real MusicBrainz id); kept verbatim otherwise, because the whole
-// question is whether THESE survive the wrapper.
 const REAL_ERROR_LINE =
   "[entity-bio-sweep] future-signal: the voice gate / length rejected the bio — skipping (stays queued)";
 const REAL_BENIGN_LINE = "[embed-sweep] mb_<id>: embedded + written";
@@ -192,15 +152,11 @@ describe("emit_cron_output — the marker's shape", () => {
       `echo ${JSON.stringify(REAL_ERROR_LINE)} >&2; echo '{"ok":true,"authored":0,"failed":0,"gateSkipped":1}'`,
     );
 
-    // The line is on disk (it was NOT, before this change — stderr was never captured).
     expect(marker).toContain(STDERR_DELIMITER);
     expect(marker).toContain(REAL_ERROR_LINE);
 
-    // The sweep's own verdict is untouched and still reads green.
     expect(findJsonSummary(marker)).toEqual({ authored: 0, failed: 0, gateSkipped: 1, ok: true });
 
-    // And the detector, reading the SAME bytes the wrapper wrote, scores the structured
-    // `gateSkipped` once; the summary's `failed` field prevents duplicate stderr counting.
     expect(markerStrain(marker)).toBe(1);
   });
 
@@ -217,8 +173,8 @@ describe("emit_cron_output — the marker's shape", () => {
   test("stderr still streams to journald as well as landing in the marker", () => {
     const { marker, stderr } = emit("crawl", `echo 'boom failed' >&2; echo '{"ok":true}'`);
 
-    expect(stderr).toContain("boom failed"); // the live journald copy
-    expect(marker).toContain("> boom failed"); // the captured tail
+    expect(stderr).toContain("boom failed");
+    expect(marker).toContain("> boom failed");
   });
 
   test("the tail is blockquoted so a stderr JSON line can never pose as the summary", () => {
@@ -227,9 +183,8 @@ describe("emit_cron_output — the marker's shape", () => {
       `echo '{"ok":false,"reason":"this is a log line, not the summary"}' >&2; echo '{"ok":true,"noted":2}'`,
     );
 
-    // Every captured line starts with `> `, so it cannot parse as an object literal …
     expect(marker).toContain('> {"ok":false');
-    // … and the summary lookup, which stops at the delimiter, reads the real one.
+
     expect(findJsonSummary(marker)).toEqual({ noted: 2, ok: true });
   });
 
@@ -242,17 +197,17 @@ describe("emit_cron_output — the marker's shape", () => {
     const quoted = marker.split("\n").filter((line) => line.startsWith("> "));
 
     expect(quoted).toHaveLength(200);
-    expect(quoted.at(-1)).toBe("> line 260 failed"); // newest kept
-    expect(marker).not.toContain("line 60 failed"); // oldest dropped
+    expect(quoted.at(-1)).toBe("> line 260 failed");
+    expect(marker).not.toContain("line 60 failed");
   });
 
   test("the payload's exit code survives the tee pipeline", () => {
     const { code, marker } = emit("crawl", `echo 'crawl pass failed' >&2; exit 17`);
 
     expect(code).toBe(17);
-    // A killed/failed run with no summary still reads as no-summary for judgeCron …
+
     expect(findJsonSummary(marker)).toBeNull();
-    // … while the reason it failed is now on disk instead of only in journald.
+
     expect(marker).toContain("crawl pass failed");
   });
 
@@ -262,18 +217,6 @@ describe("emit_cron_output — the marker's shape", () => {
     expect(shell).toContain(`CRON_OUTPUT_STDERR_DELIMITER='${STDERR_DELIMITER}'`);
   });
 });
-
-// ---------------------------------------------------------------------------
-// THE RUN LEDGER.
-//
-// Same principle as the suite above: drive the REAL bash against a REAL (loopback) server and
-// read what actually arrived on the wire. The whole point of the ledger is that a number
-// nobody consumes is a number nobody reads, so a test that asserts on a variable inside the
-// script rather than on the bytes it sent would repeat the original mistake.
-//
-// Nothing here touches the network. The runner unsets FLUNCLE_API_TOKEN before anything else,
-// and every POST is aimed at a fixture on 127.0.0.1.
-// ---------------------------------------------------------------------------
 
 type LedgerCall = { auth: string; body: string; method: string; path: string };
 type LedgerRecord = {
@@ -286,7 +229,6 @@ type LedgerRecord = {
 
 type LedgerMode = "accepts" | "hangs" | "notFound" | "rejects";
 
-/** Run `body` against a loopback ledger; hand back everything the ledger actually received. */
 async function withLedger<T>(
   mode: LedgerMode,
   body: (base: string, calls: LedgerCall[]) => Promise<T>,
@@ -302,8 +244,6 @@ async function withLedger<T>(
       });
 
       if (mode === "hangs") {
-        // Never answers. Proves the POST is bounded by its own timeout rather than by the
-        // server's good manners.
         await new Promise(() => {});
       }
 
@@ -311,7 +251,6 @@ async function withLedger<T>(
         return Response.json({ error: "nope" }, { status: 500 });
       }
 
-      // What a wrong endpoint really looked like: the Worker answers, and answers 404.
       if (mode === "notFound") {
         return Response.json({ error: "not found" }, { status: 404 });
       }
@@ -362,14 +301,12 @@ describe("emit_cron_output — the run-ledger POST", () => {
 
     const record = recordOf(calls);
 
-    // `unit` is the systemd unit stem, matching the marker's `# Cron Job:` header — one name
-    // for the job across both consumers.
     expect(record.unit).toBe("fluncle-backup");
     expect(record.exit_code).toBe(0);
     expect(record.summary_raw).toBe('{"ok":true,"tableCount":74}');
     expect(record.started_at).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
     expect(record.ended_at).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
-    // Box time, and there is exactly one field for it — the Worker stamps its own write time.
+
     expect(Object.keys(record).sort()).toEqual([
       "ended_at",
       "exit_code",
@@ -380,10 +317,6 @@ describe("emit_cron_output — the run-ledger POST", () => {
   });
 
   test("THE BODY CARRIES NO `ok` — the Worker derives it, and cannot be told otherwise", async () => {
-    // The sweep prints the exact line the Sentry triage cron printed for eleven nights: a
-    // hardcoded `ok:true` sitting beside the error count that contradicts it. It rides along
-    // verbatim inside `summary_raw` (that IS the evidence), and reaches the ledger as data —
-    // never as a field the row could be built from.
     const { calls } = await withLedger("accepts", async (base, calls) => {
       await emitAsync("sentry-triage", `echo '{"ok":true,"errors":2,"triaged":0}'`, {
         env: ledgerEnv(base),
@@ -449,17 +382,11 @@ describe("emit_cron_output — the run-ledger POST", () => {
     const record = recordOf(calls);
 
     expect(record.exit_code).toBe(17);
-    // The run printed no summary at all; the ledger records that honestly instead of inventing
-    // one — an empty `summary_raw` is what `missing_fields` is built from.
+
     expect(record.summary_raw).toBe("");
   });
 
   test("a summary carrying quotes, backslashes and a raw tab still arrives as valid JSON", async () => {
-    // Every character the escaper has to handle, as RAW BYTES on the sweep's stdout: a bare
-    // double quote (which would end the JSON string early), a bare backslash (which would eat
-    // the next character), and a raw tab (which JSON forbids inside a string outright). A
-    // quoted heredoc puts them on the wire verbatim — `printf '%s'` would not, because bash
-    // hands `\t` through as two characters and the fixture would silently be testing nothing.
     const messy = '{"ok":true,"note":"he said "go"","win":"C:\\tmp","tab":"a\tb"}';
     const { calls } = await withLedger("accepts", async (base, calls) => {
       await emitAsync("enrich", ["cat <<'PAYLOAD_EOF'", messy, "PAYLOAD_EOF"].join("\n"), {
@@ -469,11 +396,8 @@ describe("emit_cron_output — the run-ledger POST", () => {
       return { calls };
     });
 
-    // The record parses at all — it would not if any of the three leaked through unescaped,
-    // which is the actual assertion; `recordOf` does the JSON.parse.
     const record = recordOf(calls);
 
-    // And the line survives byte for byte, so the ledger holds what the sweep really said.
     expect(record.summary_raw).toBe(messy);
   });
 
@@ -490,15 +414,6 @@ describe("emit_cron_output — the run-ledger POST", () => {
     expect(code).toBe(0);
   });
 
-  // ── WHERE THE POST ACTUALLY WENT ────────────────────────────────────────────
-  // A loopback fixture can only report what it RECEIVED, and "received nothing" has two very
-  // different causes: the wrapper posted nowhere, or it posted somewhere else. That ambiguity
-  // hid a live defect — `${FLUNCLE_API_BASE_URL:-https://www.fluncle.com}` made an EMPTY base
-  // fall back to the production URL, so the guard below it was unreachable and every CI run of
-  // `bun run test:scripts` fired a real POST at www.fluncle.com while this very test passed.
-  //
-  // So these two drive the wrapper with `curl` itself replaced by a recorder, and assert on the
-  // URL the box would really have dialled.
   function withCurlRecorder(): { bin: string; log: string; urls: () => string[] } {
     const root = mkdtempSync(join(tmpdir(), "fluncle-curl-recorder-"));
     temporaryDirectories.push(root);
@@ -506,7 +421,7 @@ describe("emit_cron_output — the run-ledger POST", () => {
     const log = join(root, "urls.txt");
 
     mkdirSync(bin, { recursive: true });
-    // The URL is the LAST argument the emitter passes; everything else is headers and flags.
+
     writeFileSync(
       join(bin, "curl"),
       `#!/usr/bin/env bash\nprintf '%s\\n' "\${@: -1}" >>${JSON.stringify(log)}\nexit 0\n`,
@@ -549,10 +464,8 @@ describe("emit_cron_output — the run-ledger POST", () => {
       return { base, calls };
     });
 
-    // `curl` was never reached at all — the honest form of "posted nowhere".
     expect(recorder.urls()).toEqual([]);
-    // Stated separately because it is the consequence that mattered: the fallback URL is the
-    // live archive, and `bun run test:scripts` runs inside the deploy gate.
+
     expect(recorder.urls().join("\n")).not.toContain("fluncle.com");
     expect(calls).toHaveLength(0);
   });
@@ -567,9 +480,6 @@ describe("emit_cron_output — the run-ledger POST", () => {
     expect(stdout).toContain('{"ok":true,"crawled":1}');
   });
 
-  // The shipped bug's own failure mode, kept as a test: a 404 is swallowed exactly like a 500,
-  // which is WHY the wrong endpoint was invisible. The wrapper is right to swallow it (a sweep
-  // must not fail over telemetry) — so the guard has to be the path assertion above, not this.
   test("a 404 changes nothing about the run either — which is the whole reason it hid", async () => {
     const { code, marker, stdout } = await withLedger("notFound", async (base) =>
       emitAsync("crawl", `echo '{"ok":true,"crawled":2}'; exit 8`, { env: ledgerEnv(base) }),
@@ -581,8 +491,6 @@ describe("emit_cron_output — the run-ledger POST", () => {
   });
 
   test("an unreachable ledger changes nothing either", async () => {
-    // A port that was open just long enough to learn its number, then closed — so the connect
-    // is refused rather than timing out, and the test stays fast.
     const dead = Bun.serve({ fetch: () => new Response("x"), port: 0 });
     const base = `http://127.0.0.1:${dead.port}`;
     await dead.stop(true);
@@ -595,8 +503,6 @@ describe("emit_cron_output — the run-ledger POST", () => {
     expect(findJsonSummary(marker)).toEqual({ ok: true });
   });
 
-  // The fourth way a POST can fail, and the only one no fixture above reaches: `curl` simply is
-  // not there. The emitter guards on `command -v curl`, and a sweep must not care.
   test("no curl on PATH ⇒ the sweep runs, the marker lands, the exit code stands", async () => {
     const root = mkdtempSync(join(tmpdir(), "fluncle-no-curl-"));
     temporaryDirectories.push(root);
@@ -604,9 +510,6 @@ describe("emit_cron_output — the run-ledger POST", () => {
 
     mkdirSync(bin, { recursive: true });
 
-    // A PATH the wrapper can still work in, with curl deliberately absent: symlink exactly the
-    // tools cron-output.sh and the harness reach for, and nothing else. `Bun.which` resolves each
-    // from the real PATH, so the set is honest rather than guessed at a fixed prefix.
     for (const tool of [
       "bash",
       "cat",
@@ -650,23 +553,12 @@ describe("emit_cron_output — the run-ledger POST", () => {
     const elapsed = Date.now() - started;
 
     expect(code).toBe(5);
-    // Bounded by the 1s budget, not by the sweep hanging until systemd's TimeoutStartSec.
+
     expect(elapsed).toBeLessThan(5_000);
   });
 });
 
-// ---------------------------------------------------------------------------
-// THE WHOLE CHAIN, end to end.
-//
-// The suite above proves the wrapper writes the errors; the detector's own suite proves the
-// scoring. Neither proves they are CONNECTED — a detector can pass both halves and still be
-// wired to nothing, which is the failure this repo has been bitten by. So this drives the
-// REAL bash wrapper for several ticks and then hands the resulting directory to the REAL
-// probe, with nothing hand-written in between.
-// ---------------------------------------------------------------------------
-
 describe("end to end: real sweeps → real markers → the sweep-errors row", () => {
-  /** The real bio-gate line, run through the real wrapper N times into one output dir. */
   function runTicks(payload: string, ticks: number): string {
     const root = mkdtempSync(join(tmpdir(), "fluncle-cron-chain-"));
     temporaryDirectories.push(root);
@@ -692,8 +584,6 @@ describe("end to end: real sweeps → real markers → the sweep-errors row", ()
   ].join("\n");
 
   test("FIRES: the real stuck-queue condition reaches the row and names the sweep", () => {
-    // Four daily ticks, each with 2/2 item-failure lines collapsing to ONE rate-gated point → 4
-    // points over 4 ticks, past the cadence-relative rate gate and the 3-tick spread gate.
     const dir = runTicks(STUCK_TICK, 4);
     const result = probeSweepStrain(new Map([["cron.backup", dir]]), {});
 
@@ -712,7 +602,6 @@ describe("end to end: real sweeps → real markers → the sweep-errors row", ()
   });
 
   test("the sweep's own /status row stays exactly as green as the sweep reported", () => {
-    // The first constraint, proven through the real files: a strained sweep is still `ok`.
     const dir = runTicks(STUCK_TICK, 4);
     const cron = { cadenceMs: 24 * 60 * 60_000, match: "backup", service: "cron.backup" };
 
@@ -730,9 +619,8 @@ describe("end to end: real sweeps → real markers → the sweep-errors row", ()
       Object.values(map["cron.backup"]?.buckets ?? {}).reduce((sum, b) => sum + b.points, 0);
 
     expect(points(first.next)).toBe(4);
-    expect(points(second.next)).toBe(4); // unchanged — nothing new on disk
+    expect(points(second.next)).toBe(4);
 
-    // Already reported, so it is not announced a second time; the row stays degraded.
     expect(second.newly).toEqual([]);
     expect(second.strained).toEqual(["cron.backup"]);
   });

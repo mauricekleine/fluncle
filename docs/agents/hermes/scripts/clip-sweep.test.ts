@@ -1,7 +1,3 @@
-// Canonical counter tests for the `fluncle-studio-clip` sweep. The API returns the
-// full pending list, so queue depth is measured from that list while work stays
-// bounded by the batch cap.
-
 import { describe, expect, test } from "bun:test";
 
 import {

@@ -1,26 +1,4 @@
 #!/usr/bin/env bun
-// cover-masters-sweep.ts — the bun orchestrator behind the `--no-agent` owned-cover-master resolve
-// cron (`fluncle-cover-masters`), RFC musickit-second-authority U3b.
-//
-// Version-controlled source; the repo is canonical and the box is a deploy target
-// (fluncle-hermes-operator skill). Invoked by the bash wrapper (cover-masters-sweep.sh) the host
-// timer execs on a schedule — see that file's header for the wire-up and ../cron/README.md.
-//
-// THE DURABLE OTHER HALF OF THE ALBUM/ARTIST COVER. The publish path + the catalogue crawl MINT
-// albums and artists, each landing at `image_state='pending'`. Nothing owned their cover until
-// this sweep: it gives every pending album/artist its OWN ≤1200²-capped cover master in R2
-// (found.fluncle.com) instead of hotlinking a third party's bytes. One tick drains a bounded batch
-// of BOTH kinds — albums first (Apple template → Cover Art Archive → Spotify floor), then artists
-// (Spotify floor) — via the `fluncle` CLI. Same op, on a schedule.
-//
-// THE WORKER-PACED MODEL (the `fluncle-label-images` shape, verbatim). The Worker fetches each
-// source image and stores the ≤1200 master; this driver just PACES it, one small bounded batch per
-// kind per tick. The Worker carries the durable per-entity reliability state (`image_state` /
-// `image_attempted_at` / `image_failures`) and the ≤1200 cap. It resolves only a cover's IMAGE —
-// it certifies nothing and publishes nothing (agent tier, the `backfill_label_images` precedent).
-// Zero LLM tokens. Pure HTTP driving.
-//
-// stdout: one JSON summary line (the cron run output). Diagnostics → stderr.
 
 import { spawnSync } from "node:child_process";
 import {
@@ -29,10 +7,6 @@ import {
   throwIfCliRepairPending,
 } from "./due-work-repair-pending";
 
-// A small bounded batch per KIND per tick. The CLI loops the slug cursor internally up to this
-// cap (or until the worklist drains); each entity is a single image GET, so the batch can be
-// generous and still finish well inside the cron timeout. The publish path/crawl mint only a
-// handful of new albums/artists per tick, so an hourly cadence drains with room to spare.
 const BATCH_LIMIT = Number(process.env.FLUNCLE_COVER_MASTERS_LIMIT ?? "24");
 
 const FLUNCLE_BIN = process.env.FLUNCLE_BIN ?? "fluncle";
@@ -102,9 +76,6 @@ function drainKind(kind: "album" | "artist"): CoverMastersSummary {
   ]);
 }
 
-// ONE bounded batch of EACH kind. Deliberately not a loop over ticks: the `albums`/`artists`
-// worklists ARE the worklist and the timer is the loop. A tick that finds everything resolved/none
-// is a cheap no-op.
 export function main(): { ok: boolean } & Record<string, unknown> {
   const summary = {
     checked: 0,
@@ -128,8 +99,6 @@ export function main(): { ok: boolean } & Record<string, unknown> {
     }
   } catch (error) {
     if (isDueWorkRepairPending(error)) {
-      // The Worker deferred a kind's worklist while due-work repair converges: the pass stops there,
-      // keeps every kind it already drained, and the next tick reads again.
       repairPending = true;
       log(error.message);
     } else {
@@ -140,8 +109,6 @@ export function main(): { ok: boolean } & Record<string, unknown> {
     }
   }
 
-  // `none` is a successful terminal action: the entity was checked and durably retired from the
-  // worklist without a usable source image. Per-entity failures remain `failed`, not run errors.
   summary.checked = summary.resolved + summary.none + summary.failed;
   summary.produced = summary.resolved + summary.none;
 
@@ -151,8 +118,6 @@ export function main(): { ok: boolean } & Record<string, unknown> {
   return line;
 }
 
-// The cron runs this file directly; the guard keeps importing `fluncleJson` for the tests
-// (cover-masters-sweep.test.ts) side-effect free.
 if (import.meta.main) {
   if (!main().ok) {
     process.exit(1);

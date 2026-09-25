@@ -1,25 +1,3 @@
-// Unit tests for entity-bio-sweep.ts — the load-bearing seams the box scripts being
-// self-contained (they cannot import the workspace) let us pin without a live CLI/DB:
-//
-//   1. `isAuthorableDraft` — the Worker-draft GATE. The box triggers `draft-bio` (the
-//      Worker-paced grounding read) per queued entity; the sweep only authors when the
-//      Worker RESOLVED the entity and returned a non-empty prompt. A null draft (a failed
-//      call / gather) or a `found:false` (unresolved slug) is a clean skip — never an
-//      author. This is the Worker-paced parity with the context-note sweep.
-//   2. `bioCostEvent` — the COST-01 metering seam. The ledger tracks DELIVERED work: a `bio`
-//      authoring-spend row is recorded ONLY when a bio was actually authored AND stored this
-//      tick, NEVER on a dry-run, an operator-bio no-op, a gate rejection, or a failure. Its
-//      shape mirrors note-sweep's `note` row (subsidized/anthropic/tokens/measured), just
-//      with `step: "bio"` and the entity slug as the id scope.
-//   3. THE ATTEMPT BUDGET — the fix for the unbounded rewrite loop. The pure ledger seams
-//      (parse/format/plan/select), and then the REAL `describeOne` loop driven end to end
-//      against stub `fluncle`/`claude` binaries, because "authored at most three times, ever"
-//      is a claim about the code that runs, not about arithmetic re-implemented beside it.
-//
-// This file uses `bun:test` and is run directly:
-//
-//   bun test docs/agents/hermes/scripts/entity-bio-sweep.test.ts
-
 import { afterAll, beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -28,23 +6,16 @@ import { join } from "node:path";
 import { costEventId } from "./cost-emit";
 import { countDistressLines } from "./fluncle-healthcheck";
 
-// The stub rig has to be on disk and pointed at by env BEFORE the sweep module is evaluated:
-// FLUNCLE_BIN / CLAUDE_BIN / ENTITY_BIO_STATE_DIR are all read at module load.
 const RIG = mkdtempSync(join(tmpdir(), "entity-bio-sweep-test-"));
 const STATE_DIR = join(RIG, "state");
 const CONTROL = join(RIG, "control");
 const FLUNCLE_STUB = join(RIG, "fluncle");
 const CLAUDE_STUB = join(RIG, "claude");
-// These tests drive a real process fixture; the outer budget covers lifecycle overhead and is
-// not a performance SLA for the sweep itself.
+
 const PROCESS_FIXTURE_TIMEOUT_MS = 15_000;
 
 mkdirSync(CONTROL, { recursive: true });
 
-// A stub `claude -p`: consumes the prompt on stdin, records the invocation (and the prompt, so a
-// test can prove the rewrite feedback reached the model), and emits the real JSON reply shape.
-// `claude-verdict: down` makes it fail the way a flaky model does — a non-zero exit with no
-// draft, which must NOT cost the entity an attempt.
 writeFileSync(
   CLAUDE_STUB,
   `#!/usr/bin/env bash
@@ -62,9 +33,6 @@ printf '{"result":"A drum and bass producer with a long run behind them.","total
   { mode: 0o755 },
 );
 
-// A stub \`fluncle\`: answers \`draft-bio\` with a grounded draft, and \`describe\` according to the
-// verdict file — so a test can say "the gate refuses every draft" and watch what the sweep does.
-// It records whether each describe carried \`--final-attempt\`.
 writeFileSync(
   FLUNCLE_STUB,
   `#!/usr/bin/env bash
@@ -162,12 +130,9 @@ describe("isAuthorableDraft (the Worker-draft gate)", () => {
     expect(isAuthorableDraft({ ...DRAFT, prompt: undefined })).toBe(false);
   });
 
-  // The grounding rail (#643): a findings-free CATALOGUE entity Firecrawl knows nothing
-  // about arrives with a non-empty prompt (the template always renders) but NOTHING to
-  // ground on — refuse it, or the bio would be confabulated (VOICE.md).
   test("SKIPS on a groundless draft (no Firecrawl facts AND no finding titles)", () => {
     expect(isAuthorableDraft({ ...DRAFT, findingCount: 0, hasFacts: false })).toBe(false);
-    // …even though the Worker still handed us a resolved, non-empty prompt.
+
     expect(isAuthorableDraft({ ...DRAFT, findingCount: undefined, hasFacts: undefined })).toBe(
       false,
     );
@@ -261,12 +226,6 @@ describe("bioCostEvent (the COST-01 §5 `bio` row)", () => {
   });
 });
 
-// ── THE ATTEMPT BUDGET ─────────────────────────────────────────────────────────────────
-//
-// An entity gets THREE authoring attempts, ever — the initial draft plus two
-// rewrites — and the third draft LANDS rather than being discarded. The count persists across
-// ticks, because each tick is a fresh process with nothing in memory.
-
 describe("the attempt ledger (the count that survives a tick)", () => {
   test("round-trips through the on-disk TSV, so a fresh process reads what the last one spent", () => {
     const ledger = new Map();
@@ -343,8 +302,7 @@ describe("selectBioWork (an exhausted entity must not block the queue)", () => {
     const { exhausted, work } = selectBioWork(QUEUE, ledger, "artist", 1);
 
     expect(exhausted.map((row) => row.slug)).toEqual(["spent"]);
-    // Without this a cap-1 sweep would spend every tick refusing the same head forever —
-    // trading an infinite retry loop for a permanent stall, which is worse.
+
     expect(work.map((row) => row.slug)).toEqual(["fresh"]);
   });
 
@@ -375,7 +333,7 @@ describe("shared bio sweep canonical counters", () => {
         kind,
         produced: 1,
       });
-      // `describe --queue --limit 200` is capped, so its length is not a real backlog.
+
       expect(summary).not.toHaveProperty("queue_depth");
     },
   );
@@ -410,8 +368,6 @@ describe("shared bio sweep canonical counters", () => {
     expect(summary.produced).toBe(0);
   });
 
-  // The dry-run path increments `errors` on a ClaudeAuthError and then keeps going, so its
-  // summary line must derive `ok` from that counter.
   test("a tick that recorded an error reports ok:false", () => {
     const summary = createBioSweepSummary("artist");
 
@@ -471,8 +427,6 @@ describe("readBioRejection + buildRewriteBlock (why a rewrite is aimed, not blin
   });
 
   test("…and is told to hold the register, so it cannot dodge the word by going flat", () => {
-    // "Avoid this token" alone invites an expository paragraph that passes the scan and fails
-    // the Flat Copy Test. The counterweight has to be in the instruction.
     expect(buildRewriteBlock("anything", 2)).toContain("Keep the dossier register");
   });
 
@@ -481,27 +435,14 @@ describe("readBioRejection + buildRewriteBlock (why a rewrite is aimed, not blin
   });
 });
 
-// ── THE REAL LOOP, END TO END ──────────────────────────────────────────────────────────
-//
-// `describeOne` driven against the stub `fluncle` + `claude` binaries, with the ledger on disk.
-// Each `tick()` is a separate call that reads the ledger back off disk first — which is what a
-// real cron tick is: a fresh process that remembers nothing except what was written down.
-
 function verdict(value: "pass" | "reject" | "structural"): void {
   writeFileSync(join(CONTROL, "verdict"), value, "utf8");
 }
 
-/** `down` = `claude -p` exits non-zero with no draft, the flaky-model case. */
 function claudeVerdict(value: "up" | "down"): void {
   writeFileSync(join(CONTROL, "claude-verdict"), value, "utf8");
 }
 
-/**
- * Run one tick with the sweep's stderr captured, and score it with the REAL /status strain
- * detector (`countDistressLines`). This is what stops the log WORDING from drifting: since #994
- * these lines are scored, and a line that reads as distress when the sweep is behaving correctly
- * would push the cron to `degraded` for no reason.
- */
 async function tickWithStrain(slug: string): Promise<{ lines: string[]; strain: number }> {
   const lines: string[] = [];
   const original = console.error;
@@ -516,7 +457,6 @@ async function tickWithStrain(slug: string): Promise<{ lines: string[]; strain: 
     console.error = original;
   }
 
-  // This helper runs exactly one work item, so its real `checked` denominator is one.
   return { lines, strain: countDistressLines(lines.join("\n"), 1) };
 }
 
@@ -528,12 +468,10 @@ function readLines(file: string): string[] {
   }
 }
 
-/** How many times the model was actually called. */
 function authorings(): number {
   return readLines("authorings").length;
 }
 
-/** Every describe the stub saw, as "did it carry --final-attempt". */
 function describes(): boolean[] {
   return readLines("describes").map((line) => line === "1");
 }
@@ -554,7 +492,6 @@ function loadLedger() {
   }
 }
 
-/** One cron tick over one entity: reload the ledger off disk, run the REAL loop, persist. */
 async function tick(slug: string) {
   return describeOne("artist", { slug }, { ledger: loadLedger(), ledgerPath: attemptLedgerPath() });
 }
@@ -574,7 +511,6 @@ describe("describeOne (the bounded re-author, across ticks)", () => {
 
       const result = await tick("future-signal");
 
-      // A passing first draft needs one author, one describe, no --final-attempt, and no marker.
       expect(result.outcome).toBe("authored");
       expect(result.gateBypassed).toBe(false);
       expect(authorings()).toBe(1);
@@ -592,10 +528,10 @@ describe("describeOne (the bounded re-author, across ticks)", () => {
       const result = await tick("future-signal");
 
       expect(authorings()).toBe(MAX_BIO_ATTEMPTS);
-      // The third describe is the one that carried --final-attempt, and it landed.
+
       expect(describes()).toEqual([false, false, true]);
       expect(result.outcome).toBe("authored");
-      // …and the acceptance is reported, never silent.
+
       expect(result.gateBypassed).toBe(true);
     },
   );
@@ -619,9 +555,6 @@ describe("describeOne (the bounded re-author, across ticks)", () => {
     "a FOURTH authoring never happens on a later tick",
     { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
     async () => {
-      // The one way an entity survives its whole budget still bio-less: even the final draft is
-      // refused on a STRUCTURAL ground the acceptance keeps enforcing (here, too long). It stays
-      // queued, so the cron keeps meeting it — and must never author for it again.
       verdict("structural");
 
       expect((await tick("future-signal")).outcome).toBe("exhausted");
@@ -631,7 +564,6 @@ describe("describeOne (the bounded re-author, across ticks)", () => {
         expect((await tick("future-signal")).outcome).toBe("exhausted");
       }
 
-      // Five more ticks, zero more model calls. This is the whole point of the slice.
       expect(authorings()).toBe(MAX_BIO_ATTEMPTS);
     },
   );
@@ -658,28 +590,18 @@ describe("describeOne (the bounded re-author, across ticks)", () => {
     async () => {
       verdict("reject");
 
-      // One rejection already on the books, then the "process" ended without finishing the entity.
       const ledger = new Map();
 
       recordAttempt(ledger, "artist", "future-signal", 1);
       mkdirSync(STATE_DIR, { recursive: true });
       writeFileSync(attemptLedgerPath(), `${formatAttemptLedger(ledger)}\n`, "utf8");
 
-      // The next tick resumes with what is LEFT (2); it does not refund three fresh drafts.
       await tick("future-signal");
 
       expect(authorings()).toBe(MAX_BIO_ATTEMPTS - 1);
     },
   );
 });
-
-// ── ONLY A GATE REJECTION MAY SPEND THE BUDGET ─────────────────────────────────────────
-//
-// A gate rejection is deterministic evidence that THIS DRAFT was bad. A transport/model failure
-// is no evidence about the draft at all — there is no draft. If flaky infrastructure could spend
-// the budget, three bad minutes would write an entity off permanently: and if the THIRD call were
-// the flaky one there would be no draft to accept either, so the entity would end up with no bio
-// and no retry, forever, through no fault of its own.
 
 describe("the transport/model failure never spends an attempt", () => {
   beforeEach(() => {
@@ -700,7 +622,6 @@ describe("the transport/model failure never spends an attempt", () => {
         expect((await tick("future-signal")).outcome).toBe("skipped");
       }
 
-      // Four failed model calls, and the entity has still not spent a single attempt.
       expect(authorings()).toBe(4);
       expect(loadLedger().size).toBe(0);
     },
@@ -721,8 +642,6 @@ describe("the transport/model failure never spends an attempt", () => {
 
       const result = await tick("future-signal");
 
-      // The full three drafts, and the third still lands via the acceptance — nothing was eaten
-      // by the outage.
       expect(authorings() - wasted).toBe(MAX_BIO_ATTEMPTS);
       expect(describes()).toEqual([false, false, true]);
       expect(result.outcome).toBe("authored");
@@ -736,7 +655,6 @@ describe("the transport/model failure never spends an attempt", () => {
     async () => {
       verdict("reject");
 
-      // Burn the first two attempts on real rejections, so only the final one is left.
       claudeVerdict("up");
       const ledger = new Map();
 
@@ -745,12 +663,10 @@ describe("the transport/model failure never spends an attempt", () => {
       mkdirSync(STATE_DIR, { recursive: true });
       writeFileSync(attemptLedgerPath(), `${formatAttemptLedger(ledger)}\n`, "utf8");
 
-      // A model failure produces no draft, so it cannot spend the final attempt.
       claudeVerdict("down");
       expect((await tick("future-signal")).outcome).toBe("skipped");
       expect(loadLedger().get(attemptKey("artist", "future-signal"))?.attempts).toBe(2);
 
-      // The model recovers, the final attempt happens for real, and the bio lands.
       claudeVerdict("up");
       const result = await tick("future-signal");
 
@@ -759,12 +675,6 @@ describe("the transport/model failure never spends an attempt", () => {
     },
   );
 });
-
-// ── THE STRAIN VOCABULARY ──────────────────────────────────────────────────────────────
-//
-// Since #994 this sweep's stderr is captured into its cron marker and scored by the /status
-// detector. These tests run the REAL loop, capture the REAL log lines, and score them with the
-// REAL `countDistressLines`, so the wording cannot drift away from what it must mean.
 
 describe("what the sweep's logs say to the /status strain detector", () => {
   beforeEach(() => {
@@ -788,8 +698,6 @@ describe("what the sweep's logs say to the /status strain detector", () => {
     "rewriting and then LANDING reads as ZERO strain — it is a healthy tick",
     { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
     async () => {
-      // The whole false-positive risk: two rejected drafts, one accepted bio. A sweep that
-      // rewrites and succeeds must never push its cron toward `degraded`.
       verdict("reject");
 
       const { lines, strain } = await tickWithStrain("future-signal");
@@ -813,8 +721,6 @@ describe("what the sweep's logs say to the /status strain detector", () => {
     "a transport/model failure DOES read as strain — nothing else is watching it now",
     { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
     async () => {
-      // It no longer costs the entity any budget, so this line is the only signal that a sweep is
-      // grinding against a broken model.
       verdict("pass");
       claudeVerdict("down");
 
@@ -823,9 +729,6 @@ describe("what the sweep's logs say to the /status strain detector", () => {
   );
 
   test("the per-tick exhausted RECAP is silent — it would otherwise nag forever", () => {
-    // The line `main()` prints on every later tick for entities `selectBioWork` filtered out.
-    // Their exhaustion was already reported as distress on the tick it happened; repeating it
-    // hourly forever would be a `degraded` that can never clear.
     const recap = exhaustedRecapLine("artist", [{ slug: "future-signal" }, { slug: "other" }]);
 
     expect(recap).toContain("2 exhausted artist(s)");
@@ -842,7 +745,7 @@ describe("what the sweep's logs say to the /status strain detector", () => {
 
       expect(result.outcome).toBe("authored");
       expect(authorings()).toBe(1);
-      // No ledger was passed, so nothing was counted and nothing was written.
+
       expect(() => readFileSync(attemptLedgerPath(), "utf8")).toThrow();
     },
   );

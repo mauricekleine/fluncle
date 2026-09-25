@@ -1,55 +1,4 @@
 #!/usr/bin/env bun
-// enrich-sweep.ts — the bun orchestrator behind the `--no-agent` enrichment cron.
-//
-// LIVE. Version-controlled source; the repo is canonical and the box is a deploy
-// target (fluncle-hermes-operator skill). Invoked by the bash wrapper
-// (enrich-sweep.sh) its host timer execs every ~5m — see that file's header for
-// the `host-timer` wire-up and ../cron/README.md for the full cron model.
-//
-// This is the on-box enrichment path: it does the analysis ON the box (ffmpeg +
-// bun), so there is no Worker-side enrichment trigger. Pure compute, zero LLM
-// tokens.
-//
-// The loop, idempotent by construction (the queue is `status=queue`: pending ∪
-// failed ∪ stale processing, so a `done` finding is already out of it; re-running
-// never double-writes), fast no-op when the queue is empty:
-//
-//   1. `fluncle admin tracks enrich --queue --json`  → the worklist.
-//   2. per finding (bounded batch):
-//      a. `fluncle tracks get <id> --json`          → artists, title, isrc, trackId.
-//      b. `bun .../analyze-track.ts --artist <a> --title <t> [--isrc <i>]`
-//                                                    → { bpm, key|null, features }.
-//      c. `fluncle admin tracks update <trackId> --bpm <bpm> [--key "<key>"]
-//             --features '<json>' --status done`     — `--key` only when non-null;
-//         no preview (analyze exit 2) → `--status failed`.
-//
-// ── THE SECOND ARM: THE CATALOGUE (docs/gpu-batch-embed.md) ─────────────────
-//
-// The queue above is `status=queue`, which lives on `findings.enrichment_status` and is read
-// through the FINDING JOIN — so it is structurally blind to a CATALOGUE track (a `tracks` row
-// with no `findings` row). That is correct and it stays: it is the certification's own
-// state machine, it is capture-INDEPENDENT (it will analyse a preview when no full song
-// exists), and none of that translates to an uncertified row.
-//
-// But ANALYSIS ITSELF does. BPM, key and the spectral features are measurements of a
-// RECORDING — they live on `tracks` — so a catalogue track with captured audio is analysable,
-// and must be, or it will never carry the numbers the archive reasons with. So this sweep
-// grows a SECOND, additive arm, disjoint from the first by construction (`scope=catalogue`):
-//
-//   3. GET /api/v1/admin/tracks/work?kind=analyze&scope=catalogue → tracks with captured audio
-//      whose stored analysis did not come from it. DATA-derived, not status-derived: there is
-//      no `enrichment_status` on a catalogue row to drive a queue with.
-//   4. per track: S3-GET the captured song → analyze → `tracks update <id> --bpm … --key …
-//      --features … --analyzed-from full`. **NO `--status`**: `enrichment_status` is a
-//      CERTIFICATION column and the server 409s an uncertified write of one (the certification
-//      rail, track-update.ts). Fluncle measures the track; he does not speak about it.
-//
-// The catalogue arm is FULL-AUDIO ONLY — no preview fallback. The finding arm has one because
-// a certified finding must get its numbers somehow; a catalogue track has no such claim on us,
-// and a preview-grade vector/BPM is exactly the garbage the full-audio ruling exists to keep
-// out of the archive.
-//
-// stdout: one JSON summary line (the cron run output). Diagnostics → stderr.
 
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -68,32 +17,14 @@ import {
   throwIfCliRepairPending,
 } from "./due-work-repair-pending";
 
-// ---------------------------------------------------------------------------
-// Config — bounded batch so a tick stays cheap and a transient failure can't
-// stampede the whole queue. The queue itself is the durable worklist; anything
-// not reached this tick is picked up on the next (~5m later).
-// ---------------------------------------------------------------------------
+const BATCH_CAP = 4;
+const QUEUE_LIMIT = 50;
 
-const BATCH_CAP = 4; // findings analyzed per tick (sane small cap, 3–5 band)
-const QUEUE_LIMIT = 50; // hard ceiling on the queue read (we only act on BATCH_CAP)
-
-// The catalogue arm's own cap, spent only AFTER the findings arm has taken what it needs — a
-// speculative row never delays a certified one. Env-tunable (the FLUNCLE_LABEL_LINEAGE_LIMIT
-// precedent) so the catch-up pace is a unit-file knob, not a rebake: measured 2026-07-20, a
-// 2-row tick used 8–15s of its 5-minute window while capture ran ~2,200/day — the baked cap
-// was the pipeline's sandbag. The default stays the conservative 2; the enrich timer unit
-// passes the raised catch-up value, and saturation later means deleting one env line.
 const CATALOGUE_BATCH_CAP = Number(process.env.FLUNCLE_ENRICH_CATALOGUE_BATCH ?? "2");
 
-// The queue read for the catalogue arm goes over DIRECT HTTP, not the baked CLI: the box's
-// `fluncle` binary is a PINNED release, so a read through a new CLI command would gate this
-// sweep behind a pin bump. The write-back is the EXISTING `tracks update` command, unchanged.
 const API_BASE_URL = process.env.FLUNCLE_API_BASE_URL ?? "https://www.fluncle.com";
 const API_TOKEN = process.env.FLUNCLE_API_TOKEN ?? "";
 
-// On the box: the BAKED enrichment skill at /opt/hermes-skills (Unit A — the skill rides
-// the image and auto-updates from main via pin-watch; no hand-cp'd /opt/data/skills copy).
-// Overridable so a local dry-run can point at a repo checkout of the skill.
 const ANALYZE_SCRIPT =
   process.env.FLUNCLE_ANALYZE_SCRIPT ??
   "/opt/hermes-skills/fluncle-track-enrichment/scripts/analyze-track.ts";
@@ -101,11 +32,6 @@ const ANALYZE_SCRIPT =
 const FLUNCLE_BIN = process.env.FLUNCLE_BIN ?? "fluncle";
 const BUN_BIN = process.env.BUN_BIN ?? "bun";
 
-// R2 (S3 API) — the PRIVATE fluncle-source-audio bucket the capture sweep writes the
-// full song to (docs/track-lifecycle.md). A dedicated, least-privilege
-// token: Object Read on this bucket only. Creds come from the shared secrets file
-// (enrich-sweep.sh sources it, mirroring capture-sweep.sh); absent creds → a GET 403 →
-// the sweep falls back to the preview path (capture must never gate enrichment).
 const R2_ACCOUNT_ID = process.env.R2_ACCOUNT_ID ?? "";
 const R2_ACCESS_KEY_ID = process.env.FLUNCLE_SOURCE_AUDIO_R2_ACCESS_KEY_ID ?? "";
 const R2_SECRET_ACCESS_KEY = process.env.FLUNCLE_SOURCE_AUDIO_R2_SECRET_ACCESS_KEY ?? "";
@@ -114,18 +40,11 @@ const R2_ENDPOINT = `https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com`;
 
 const log = (message: string) => console.error(`[enrich-sweep] ${message}`);
 
-// ---------------------------------------------------------------------------
-// Types — only the fields we consume from each surface.
-// ---------------------------------------------------------------------------
-
 type QueueFinding = {
   artists?: string[];
   isrc?: string;
   logId?: string;
-  // The R2 key of the captured full song, once the capture side-channel has landed it
-  // (`<logId>/<sha256>.<ext>`, PRESENCE = captured). A separate slice surfaces it on the
-  // admin tracks DTO / `tracks get` payload; read defensively — absent means "no key",
-  // so the sweep enriches on the preview exactly as today.
+
   sourceAudioKey?: string;
   title?: string;
   trackId?: string;
@@ -149,7 +68,7 @@ type EnrichReadState = Readonly<{
   catalogue: CatalogueWorkItem[];
   findings: QueueFinding[];
   queued: number;
-  /** The guarded queue read the Worker deferred while due-work repair converges, if any. */
+
   repairPending: EnrichArm | null;
 }>;
 
@@ -167,10 +86,6 @@ type EnrichWriteResult = Readonly<{
     Readonly<{ arm: EnrichArm; outcome: Outcome; trackId: string; writeFailed: boolean }>
   >;
 }>;
-
-// ---------------------------------------------------------------------------
-// Shell helpers — synchronous, fail-loud where it matters.
-// ---------------------------------------------------------------------------
 
 function run(bin: string, args: string[]): { code: number; stderr: string; stdout: string } {
   const result = spawnSync(bin, args, { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
@@ -201,17 +116,6 @@ function fluncleJson<T>(args: string[]): T {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Pure source-selection helpers (exported for enrich-sweep.test.ts).
-// ---------------------------------------------------------------------------
-
-/**
- * Build the analyze-track argv. When `audioFilePath` is set (the captured full song was
- * fetched to a temp file), pass `--audio-file` so the analyzer reads the WHOLE song;
- * otherwise the analyzer resolves + reads the 30s preview itself (no URL passed). The
- * enrich queue is capture-INDEPENDENT — this selects the better SOURCE when it exists,
- * permanently (docs/track-lifecycle.md), it does not gate the queue.
- */
 export function buildAnalyzeArgs(
   script: string,
   fields: { artist: string; audioFilePath?: string; isrc?: string; title: string },
@@ -229,8 +133,6 @@ export function buildAnalyzeArgs(
   return args;
 }
 
-/** The file extension of an R2 source-audio key (`<logId>/<sha256>.<ext>`) → the temp
- * filename's extension. Cosmetic (ffmpeg probes the real container), `"bin"` when none. */
 export function extFromKey(key: string): string {
   const base = key.slice(key.lastIndexOf("/") + 1);
   const dot = base.lastIndexOf(".");
@@ -238,15 +140,8 @@ export function extFromKey(key: string): string {
   return dot >= 0 ? base.slice(dot + 1).toLowerCase() : "bin";
 }
 
-// ---------------------------------------------------------------------------
-// R2 (S3 API) GET — MIRROR of the signer in capture-sweep.ts (itself a mirror of
-// apps/web/src/lib/server/aws-sigv4.ts). Box scripts can't import the workspace, so
-// the self-contained copy is the norm; keep it in step with capture-sweep.ts.
-// ---------------------------------------------------------------------------
-
 const encoder = new TextEncoder();
 
-/** Copy a view's exact byte window into an ArrayBuffer-backed WebCrypto input. */
 function webCryptoBytes(bytes: Uint8Array): Uint8Array<ArrayBuffer> {
   return new Uint8Array(bytes);
 }
@@ -340,9 +235,6 @@ function encodeKey(key: string): string {
   return key.split("/").map(encodeURIComponent).join("/");
 }
 
-// GET the full song bytes from the private bucket. `key` is the full DTO string, so we
-// GET it as-is (never rebuild it). Any non-OK → throw, and the caller falls back to the
-// preview path — a missing/broken key must never block enrichment.
 async function r2Get(key: string): Promise<Uint8Array> {
   const url = `${R2_ENDPOINT}/${R2_BUCKET}/${encodeKey(key)}`;
   const headers = await signS3Request({
@@ -391,11 +283,6 @@ function findingUpdateArgs(parsed: AnalyzeOutput, analyzedFrom: "full" | "previe
   return updateArgs;
 }
 
-// ---------------------------------------------------------------------------
-// THE CATALOGUE ARM — analyse an uncertified track from its captured full song.
-// ---------------------------------------------------------------------------
-
-/** One row of the catalogue analyze worklist (`list_track_work`). */
 type CatalogueWorkItem = {
   artists?: string[];
   certified?: boolean;
@@ -405,18 +292,11 @@ type CatalogueWorkItem = {
   trackId?: string;
 };
 
-/**
- * The catalogue analyze worklist: tracks with captured audio whose stored analysis did not
- * come from it. `scope=catalogue` makes it DISJOINT from the findings queue above, so no
- * track is ever worked twice in a tick.
- */
 async function fetchCatalogueAnalyzeQueue(): Promise<CatalogueWorkItem[]> {
   const url = `${API_BASE_URL}/api/v1/admin/tracks/work?kind=analyze&scope=catalogue&limit=${QUEUE_LIMIT}`;
   const res = await fetch(url, {
     headers: { Authorization: `Bearer ${API_TOKEN}` },
-    // `list_track_work` is ~10s p95 with a tail past 30s, so a 30s budget tripped a false
-    // failure alert on the slow-but-completing read; 60s clears the tail (the cron's own kill
-    // is the real backstop). This is the Worker API worklist read, never a media download.
+
     signal: AbortSignal.timeout(60_000),
   });
 
@@ -429,10 +309,6 @@ async function fetchCatalogueAnalyzeQueue(): Promise<CatalogueWorkItem[]> {
 
   return Array.isArray(body.tracks) ? body.tracks : [];
 }
-
-// ---------------------------------------------------------------------------
-// Phased recurring run — one batched read, DSP outside admission, one batched write.
-// ---------------------------------------------------------------------------
 
 function argumentValue(argv: readonly string[], name: string): string | undefined {
   const index = argv.indexOf(name);
@@ -469,8 +345,7 @@ async function runEnrichReadPhase(statePath: string): Promise<void> {
     if (!isDueWorkRepairPending(error)) {
       throw error;
     }
-    // The deferral crosses the phase boundary as data, so the parent reports a paused tick rather
-    // than a failed phase. The catalogue arm is not read either: the tick stops at the deferral.
+
     log(error.message);
     const deferred: EnrichReadState = {
       catalogue: [],
@@ -767,7 +642,7 @@ async function runPhasedEnrichMain(): Promise<void> {
       );
       return;
     }
-    // A deferred catalogue arm pauses the tick; the findings arm's measured counts stay real.
+
     const withCatalogueDeferral = (line: Record<string, unknown>): Record<string, unknown> =>
       state.repairPending === "catalogue" ? { ...line, ...dueWorkRepairPendingGate(line) } : line;
     const summary = {
@@ -824,7 +699,7 @@ async function runPhasedEnrichMain(): Promise<void> {
     const writePhase = runDatabaseAdmissionPhase({
       command: phaseCommand("write", writeStatePath),
       owner: "fluncle-enrich",
-      // track.enrich is deliberately non-replayable in DATABASE_MUTATION_POLICIES.
+
       yieldRetries: 0,
     });
     if (writePhase.kind === "yielded") {
@@ -873,10 +748,6 @@ async function runPhasedEnrichMain(): Promise<void> {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Main — drain a bounded batch off the queue.
-// ---------------------------------------------------------------------------
-
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   const admissionPhase = argumentValue(argv, "--admission-phase");
@@ -897,15 +768,11 @@ async function main(): Promise<void> {
   await runPhasedEnrichMain();
 }
 
-// Guard the entrypoint so importing this module for tests is side-effect free (no
-// fluncle spawn, no R2, no network) — mirrors capture-sweep.ts. The bash wrapper execs
-// this file directly, so `import.meta.main` is true when the cron runs it.
 if (import.meta.main) {
   main().catch((error: unknown) => {
     const message = error instanceof Error ? error.message : String(error);
     log(`enrich sweep failed: ${message}`);
-    // Emit the `{ ok: false }` summary line to STDOUT so the /status marker (cron-output.sh
-    // captures stdout only) sees the failure — parity with the sibling sweeps' catch.
+
     console.log(JSON.stringify({ error: message, errors: 1, ok: false, reason: "enrich_failed" }));
     process.exit(1);
   });

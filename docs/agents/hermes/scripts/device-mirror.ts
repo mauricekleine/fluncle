@@ -1,17 +1,4 @@
 #!/usr/bin/env bun
-// device-mirror.ts — the hourly, generation-safe shared mobile-catalogue publisher.
-//
-// One explicit embedded-replica sync is the only production corpus read. The anchored selection,
-// artifact build, row counts, reachability checks, and fingerprint are all local after that sync.
-// The remote device database then receives ONLY the rows that drifted: the generation and the live
-// target are walked together by primary key and compared by row digest, and one target transaction
-// applies the resulting inserts/updates/deletes with the `device_sync_meta` cutover. The staged
-// whole-generation rewrite remains the fallback for a schema change, a bootstrap, an oversized
-// delta, or a delta whose own projected fingerprint disagrees with the generation. Either way one
-// transaction carries the cutover, so devices see the old complete generation or the new complete
-// generation and never a batch-wise hybrid.
-//
-// stdout: one bounded JSON ledger summary line. Diagnostics go to stderr.
 
 import { createClient, type Client, type Config, type Replicated } from "@libsql/client";
 import { Database } from "bun:sqlite";
@@ -66,10 +53,6 @@ export type StageMetrics = {
 
 export type DevicePublishPath = "delta" | "replay" | "rewrite";
 
-/**
- * Why a tick could not take the row-level delta path. Reported in the run summary so the ledger
- * shows delta-versus-rewrite without reading the target.
- */
 export type DeviceRewriteReason =
   | "delta_over_threshold"
   | "delta_validation_mismatch"
@@ -101,11 +84,6 @@ export type ReplicaSyncResult = {
   rebuildCause: string | null;
 };
 
-/**
- * A successful one-shot sync returns only after the local committed frame reaches the primary
- * frame observed during its handshake. The post-sync lag is therefore zero when the result is
- * measurable; `framesSynced` separately reports how much catch-up work the run performed.
- */
 export function calculateReplicaLagFrames(
   sync: Pick<ReplicaSyncResult, "frameNo" | "framesSynced">,
 ): number | null {
@@ -158,10 +136,7 @@ type WireStatementResult = {
 };
 
 const EXPECTED_INTERVAL_MS = 3_600_000;
-/**
- * Whether a tick may publish: forced, never published (no parseable `derived_at`), or the live
- * replica is at least the interval old. Pure, so the gate is testable without a target.
- */
+
 export function publishCadence(
   previousDerivedAt: string,
   nowMs: number,
@@ -176,24 +151,12 @@ export function publishCadence(
   return { ageMs, due: forced || ageMs >= intervalMs };
 }
 
-// Hourly: the device replica is what the live mobile app's offline-first store pulls, so freshness
-// is a product property, and the diff-based publish writes only the drifted rows — an hour of drift
-// costs a few hundred writes against the metered monthly quota rather than a whole generation.
 export const DEFAULT_PUBLISH_INTERVAL_MS = 60 * 60 * 1000;
-/**
- * The share of the generation's rows above which a delta stops being the cheaper shape.
- *
- * The delta lands in ONE target transaction with one statement per drifted row, and unlike the
- * staged rewrite it carries no restart checkpoint — so the ceiling bounds that transaction rather
- * than the write quota (the delta is always fewer writes). Above it the restartable, page-verified
- * rewrite is the safer publish. The scan abandons itself the moment the ceiling is crossed, so an
- * over-threshold tick pays a partial read and not a wasted full one.
- */
+
 export const DEVICE_DELTA_MAX_SHARE = 0.05;
-/** The absolute ceiling on statements in the single delta transaction, whatever the share allows. */
+
 export const DEVICE_DELTA_MAX_ROWS = 5000;
 
-/** How many drifted rows may still publish as a delta for a generation of `totalRows` rows. */
 export function deviceDeltaCeiling(totalRows: number): number {
   return Math.max(
     1,
@@ -201,24 +164,14 @@ export function deviceDeltaCeiling(totalRows: number): number {
   );
 }
 
-/** A published watermark is the previous generation's content fingerprint; anything else is a bootstrap. */
 export function isGenerationWatermark(watermark: string): boolean {
   return /^sha256:[0-9a-f]{64}$/.test(watermark);
 }
 const DEFAULT_PAGE_SIZE = 100;
 const MAX_PAGE_SIZE = 200;
-/**
- * How long a lock directory may go untouched before a later tick treats it as abandoned.
- *
- * A RUNNING publish keeps its own lock fresh (see `acquireLock`'s heartbeat), so this bounds how
- * long a lock left by a DEAD tick can block its successors rather than how long a publish may take.
- * The admission runner's containment kills the payload's whole process group when it fences a tick,
- * which is exactly the death that leaves a lock behind — and a window measured in hours then costs
- * a publish cycle. Fifteen minutes is comfortably above the heartbeat interval and well under the
- * tick cadence.
- */
+
 const DEFAULT_LOCK_STALE_MS = 15 * 60 * 1000;
-/** How often a running publish touches its lock so the window above can stay short. */
+
 const LOCK_HEARTBEAT_MS = 60 * 1000;
 const STAGE_CONTROL_TABLE = "_device_mirror_stage_control";
 const STAGE_CHECKPOINT_TABLE = "_device_mirror_stage_checkpoint";
@@ -283,14 +236,6 @@ function addRowToFingerprint(
   }
 }
 
-/**
- * A row's comparison digest, derived from the SAME column list the artifact ships and the same
- * canonical encoding the generation fingerprint uses.
- *
- * A column added to `DEVICE_DB_COLUMNS` therefore enters the digest automatically; a target whose
- * stored columns do not match that list is rejected outright by `validateLiveTargetSchema` and
- * `rowFromCells`. Neither half can silently omit a column and call two different rows equal.
- */
 export function deviceRowDigest(table: DeviceSourceTable, row: DeviceRow): string {
   const hash = createHash("sha256");
   addTableHeader(hash, table);
@@ -517,7 +462,6 @@ function conditionOk(step: number) {
   return { step, type: "ok" as const };
 }
 
-/** Dependency-free Hrana client for the one remote target transaction boundary. */
 export class LibsqlHttpClient implements DeviceTargetClient {
   readonly #authToken: string;
   readonly #baseUrl: string;
@@ -763,7 +707,6 @@ export async function syncSourceReplica(
   let sync: Replicated;
 
   try {
-    // This is deliberately the only sync call in a run. A failed transfer is resumed next tick.
     sync = await client.sync();
   } catch (error) {
     const message =
@@ -1461,7 +1404,6 @@ async function measureBacklog(
   return results.reduce((total, result) => total + Number(result.rows[0]?.[0] ?? 0), 0);
 }
 
-/** Children before parents, so a removal never strands an edge mid-transaction. */
 const DEVICE_DELETE_ORDER = [
   "track_artists",
   "findings",
@@ -1470,7 +1412,7 @@ const DEVICE_DELETE_ORDER = [
   "labels",
   "albums",
 ] as const satisfies readonly DeviceSourceTable[];
-/** Parents before children, so an edge is written only once its destination row exists. */
+
 const DEVICE_UPSERT_ORDER = [
   "albums",
   "artists",
@@ -1481,15 +1423,14 @@ const DEVICE_UPSERT_ORDER = [
 ] as const satisfies readonly DeviceSourceTable[];
 
 export type DeviceTableDelta = {
-  /** Primary-key objects of live rows the generation no longer carries. */
   deletes: DeviceRow[];
-  /** Complete rows to insert or overwrite. */
+
   upserts: DeviceRow[];
 };
 
 export type DeviceDelta = {
   deletes: number;
-  /** The fingerprint the target WILL carry once this delta is applied. */
+
   fingerprint: string;
   inserts: number;
   maxBufferedRows: number;
@@ -1502,11 +1443,6 @@ export type DeviceDeltaScan =
   | { delta: DeviceDelta; kind: "delta" }
   | { kind: "over-threshold"; maxBufferedRows: number };
 
-/**
- * Both sides are ordered by SQLite's BINARY collation, so the merge compares UTF-8 bytes rather
- * than UTF-16 code units — the two disagree above the basic multilingual plane and a disagreement
- * would make the walk emit a spurious insert/delete pair.
- */
 function compareKeyTuples(left: readonly string[], right: readonly string[]): number {
   for (let index = 0; index < left.length; index += 1) {
     const comparison = Buffer.compare(
@@ -1523,7 +1459,6 @@ function compareKeyTuples(left: readonly string[], right: readonly string[]): nu
 }
 
 function keyTuple(table: DeviceSourceTable, row: DeviceRow): string[] {
-  // `rowKeyObject` already rejects a non-text primary key, so every value here is a string.
   const key = rowKeyObject(table, row);
 
   return DEVICE_DB_PRIMARY_KEYS[table].map((column) => {
@@ -1560,18 +1495,6 @@ async function readLivePage(
   return (result?.rows ?? []).map((cells) => rowFromCells(table, cells));
 }
 
-/**
- * Walk the freshly derived generation and the live target together, by primary key, and emit the
- * row-level delta between them.
- *
- * Neither side is pulled into the process whole: the local generation streams off disk in key
- * order and the target is read one bounded keyset page at a time, so the peak buffer is one page.
- * Equality is decided by `deviceRowDigest`, and every local row also feeds the projected
- * fingerprint — the generation's own fingerprint recomputed from the rows the walk actually saw —
- * so a merge that skipped or double-counted a row fails its own check instead of shipping.
- *
- * The scan abandons itself as soon as the delta crosses `ceiling`; the caller then rewrites.
- */
 export async function computeDeviceDelta(
   target: DeviceTargetClient,
   generation: DeviceGeneration,
@@ -1718,13 +1641,6 @@ function upsertRowStatement(table: DeviceSourceTable, row: DeviceRow): LibsqlSta
   };
 }
 
-/**
- * The delta's statements: dependent-first deletes, parent-first upserts, then the same
- * `device_sync_meta` cutover the staged rewrite performs.
- *
- * One transaction, exactly as the rewrite's cutover is one transaction, so a reader sees the old
- * complete generation or the new complete generation and the watermark identifies which.
- */
 export function deviceDeltaStatements(
   generation: DeviceGeneration,
   delta: DeviceDelta,
@@ -1947,11 +1863,6 @@ export async function publishDeviceGeneration(
     };
   }
 
-  // THE PATH CHOICE. A publish writes only the rows that drifted. The staged whole-generation
-  // rewrite stays the fallback for the cases a row-level delta cannot express or cannot afford:
-  // the device column list changed since the last publish (so every live row is of the old shape),
-  // the target carries no prior generation to diff against, the delta is too large for one
-  // transaction, or the walk's own projected fingerprint disagrees with the generation it derived.
   let rewriteReason: DeviceRewriteReason | null = stageSchemaRebuilt
     ? "schema_change"
     : isGenerationWatermark(current.sourceWatermark)
@@ -2074,14 +1985,9 @@ async function acquireLock(): Promise<null | (() => Promise<void>)> {
     await mkdir(lockDir);
   }
 
-  // Keep the lock fresh while this tick works, so a short stale window never mistakes a long
-  // publish for an abandoned one. `unref` so the timer cannot hold the process open by itself.
   const heartbeat = setInterval(() => {
     const now = new Date();
-    utimes(lockDir, now, now).catch(() => {
-      // A lock we can no longer touch is a lock another tick may reclaim; the release below and the
-      // stale window are what recover from it, so a failed touch is not worth interrupting for.
-    });
+    utimes(lockDir, now, now).catch(() => {});
   }, LOCK_HEARTBEAT_MS);
   heartbeat.unref?.();
 
@@ -2101,10 +2007,6 @@ async function acquireLock(): Promise<null | (() => Promise<void>)> {
     }
   };
 
-  // THE FENCED KILL. The admission runner terminates the payload's process group when it withdraws
-  // a lease, and the tick's own `finally` never runs — so without this the lock outlives the tick
-  // and its successors read `locked` until the stale window passes. A handler per signal, removed
-  // on release so a later tick's handlers are not stacked on this one's.
   for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"] as const) {
     process.once(signal, () => {
       void release().finally(() => {
@@ -2207,11 +2109,6 @@ export async function main(): Promise<MirrorSummary> {
       throw new Error("Source and target database URLs must be different");
     }
 
-    // THE PUBLISH CADENCE GATE. A publication writes only the rows that drifted, so the cadence is
-    // no longer bought with write quota — but the derivation and the target diff still cost real
-    // work, so a tick publishes only once the live replica is older than the interval below and
-    // otherwise reports itself, costing no replica sync, no derivation and no writes.
-    // `DEVICE_MIRROR_FULL_REBUILD=true` still forces a publish.
     const target = new LibsqlHttpClient(targetUrl, targetToken);
     const publishIntervalMs = positiveIntegerEnv(
       "DEVICE_MIRROR_PUBLISH_INTERVAL_MS",

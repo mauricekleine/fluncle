@@ -60,7 +60,6 @@ describe("context-sweep canonical counters", () => {
 });
 
 describe("context-sweep queue read outcome", () => {
-  /** Run the real sweep against a stub CLI whose queue read fails with the given JSON payload. */
   function tick(queuePayload: string): {
     exitCode: null | number;
     summary: Record<string, unknown>;
