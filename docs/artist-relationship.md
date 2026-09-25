@@ -15,6 +15,8 @@ This doc covers the **identity graph** — how `artist_socials` is resolved, rev
 - `source` — `musicbrainz | firecrawl | operator`.
 - `reviewed_at` — Review state belongs to each `artist_socials` link through `reviewed_at`. New or changed links clear the stamp; operator-authored links are born reviewed.
 
+Keep the social `platform` and `source` enums in `packages/contracts/src/orpc/admin-artists.ts` aligned with `ArtistSocialPlatform` and `ResolvedSocial.source` in `apps/web/src/lib/server/artist-resolution.ts`; Wikidata remains a KG anchor outside `artist_socials`.
+
 There is no follow/champion state on the row — the graph is purely who the artist is, not what Fluncle did about it.
 
 ## The `track ↔ artist` edge (how a crawled track earns its artists)

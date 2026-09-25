@@ -1,89 +1,10 @@
-// The `admin-catalogue` domain contract module — THE CATALOGUE, both halves.
-//
-// A CATALOGUE TRACK is a row in `tracks` with NO row in `findings`: a track Fluncle knows
-// about and has not certified. The domain carries two complementary jobs, and they arrived as
-// two PRs. THE CRAWLER makes the rows exist; THE EAR makes the pile useful.
-//
-//   THE CRAWLER (docs/catalogue-crawler.md) — metadata acquisition, and nothing else:
-//   - `crawl_catalogue`  — admin tier (agent-allowed write): one bounded, resumable pass of the
-//     MusicBrainz walk outward from the labels the OPERATOR enabled. It writes catalogue rows
-//     and never a `findings` row, and it captures no audio.
-//   - `get_crawl_status` — admin tier (agent-allowed read): the crawl frontier's state.
-//
-//   THE EAR (docs/the-ear.md) — the ranked read over what the crawler brought back:
-//   - `list_catalogue_tracks` — admin tier (agent-allowed read): the ranked catalogue, through
-//     one of two lenses. `ear` is "closest to your findings, not yet logged"; `capture` is
-//     "whose audio should we buy next".
-//   - `rank_catalogue` — admin tier (AGENT-allowed write): one tick of the precompute sweep. It
-//     writes only derived ranking columns on catalogue rows — no coordinate, no note, no
-//     certification, and never a finding — so it is a machine job like `update_galaxy_map`,
-//     not an editorial act like `update_galaxy`.
-//
-//   THE CAPTURE BUDGET (docs/the-ear.md § The capture budget) — the brake on what the two
-//   above lead to. The crawler is free (it moves metadata) and the Ear is free (it moves
-//   vectors), but the audio CAPTURE those rows queue up for is metered: a residential proxy
-//   bills per GB, and the queue drains whatever it is given.
-//   - `get_capture_budget` — admin tier (agent-allowed read): the spend readout.
-//   - `set_capture_budget` — OPERATOR tier: the caps and the kill switch. The one op in this
-//     domain an agent may never call — a machine does not get to raise its own budget.
-//
-// Every op here EXCEPT `set_capture_budget` is agent-allowed, and that is not an oversight:
-// none of them can certify anything, and none of them spends money. The two acts that steer
-// the catalogue are the exceptions — RULING on a seed label (`update_label`, which decides
-// what may be crawled at all) and SETTING the capture budget (which decides what may be
-// bought) — and both stay OPERATOR tier.
-//
-// ── WHY THE TIER IS INTERNAL-ONLY ────────────────────────────────────────────────────
-// The catalogue tier has NO PUBLIC NAME (the-archive RFC, D4): it is never labelled,
-// introduced, or given a noun the crew could learn. `catalogue` is the INTERNAL word — code,
-// docs, `/admin` — and there is deliberately no public op here. "Finding" stays the only named
-// object in Fluncle's world.
-
 import { oc } from "@orpc/contract";
 import * as z from "zod";
 
-/**
- * Which question the page asks of the catalogue.
- *
- *   - `ear`        — ranked by similarity to the NEAREST finding. The telescope.
- *   - `capture`    — ranked by the pre-audio priority ladder. A track has no vector until its
- *                    audio is captured, and capture is metered, so this lens answers the one
- *                    question the `ear` lens structurally cannot: who gets captured next.
- *   - `quarantine` — the WRONG-AUDIO holding pen (docs/the-ear.md § Wrong audio): rows whose
- *                    capture landed the wrong master (a near-1.0 cross-title match), vetoed from
- *                    the ear lens and re-queued for a fresh download. Its own quiet section so a
- *                    bad capture never silently vanishes, each row force-clearable by the operator.
- *   - `dismissed`  — the operator's "not for me" restore pile (docs/the-ear.md § The operator's
- *                    actions): rows he took out of the telescope. A REVERSIBLE veto, its own quiet
- *                    lens so a dismissal is never a black hole — each row carries a Restore.
- *   - `unmatched`  — the terminal "no acceptable candidate" verdicts, most-recently attempted
- *                    first: the terminal-capture observability window. Read-only;
- *                    the rescue is `requeue_unmatched_captures`.
- *   - `failed`     — the download-failure pile (cooling toward retry or past the failure cap),
- *                    most-recently attempted first. `unmatched`'s sibling window.
- */
 export const CatalogueLensSchema = z
   .enum(["capture", "dismissed", "ear", "failed", "quarantine", "unmatched"])
   .meta({ id: "CatalogueLens" });
 
-/**
- * Why a not-yet-captured track sits where it does in the capture queue. Two questions live here,
- * cleanly separated (RFC artist-primary-capture): AUTHORIZATION (may we spend a metered per-GB
- * byte on it at all?) is artist-driven; PRIORITY (among the rows we may buy, who first?) keeps the
- * old explainable ladder as an ordering hint. Among AUTHORIZED rows, strongest first: `artist` (a
- * credited artist is qualified, or a name is already on a finding), `label` (its label carries a
- * finding — a hint only now), `seed-label` (its label is one the operator seeds from), `none`.
- *
- * The two negatives are excluded from the capture queue by the same `capture_priority >= 0` SQL
- * predicate — money withheld, metadata welcome, the row kept and shown ranked last:
- *  - `skipped-label` (−1) is the VETO: its label is one the operator ruled OUT ("not our lane").
- *    Not decoration — every one of the 8 disabled labels CARRIES a finding (each arrived on a
- *    crossover remix), so without the veto the `label` rung fires on all of them and the metered
- *    budget goes on trance.
- *  - `unauthorized` (−3) is the softer withholding: no credited artist is qualified and the label
- *    is not `enabled`. It flips to authorized the moment an artist qualifies or the label is
- *    enabled — the reason most likely to change as the artist graph fills.
- */
 export const CapturePriorityReasonSchema = z
   .object({
     kind: z.enum(["artist", "label", "none", "seed-label", "skipped-label", "unauthorized"]),
@@ -91,7 +12,6 @@ export const CapturePriorityReasonSchema = z
   })
   .meta({ id: "CapturePriorityReason" });
 
-/** The finding a catalogue row matched — the row's WHY, hydrated. */
 export const CatalogueMatchSchema = z
   .object({
     artists: z.array(z.string()),
@@ -101,53 +21,26 @@ export const CatalogueMatchSchema = z
   })
   .meta({ id: "CatalogueMatch" });
 
-/**
- * One catalogue track. It carries NO certification field by construction — no Log ID, no note,
- * no video, no galaxy — because those live on `findings` and this row has no `findings` row.
- * `nearestFinding` is the WHY: a bare score is not a reason, and an instrument the operator
- * cannot interrogate is one he stops trusting.
- */
 export const CatalogueTrackItemSchema = z
   .object({
     albumImageUrl: z.string().nullable(),
-    /** The Apple Music listen link, when the ISRC has resolved one — the Spotify twin. */
+
     appleMusicUrl: z.string().nullable(),
     artists: z.array(z.string()),
     bpm: z.number().nullable(),
     capturePriority: z.number().nullable(),
     captureReason: CapturePriorityReasonSchema.nullable(),
-    /**
-     * The capture state machine's verdict on this row (`pending` / `done` / `failed` /
-     * `unmatched` / `wrong-audio` / the sticky cleared states), or null (never attempted).
-     * With this observability field, "what is failing and why" is one filtered read.
-     */
+
     captureStatus: z.string().nullable(),
-    /**
-     * The capture-verification verdict (docs/the-ear.md § Wrong audio): `preview-match` /
-     * `unverified` / `mismatch` / `operator-verified` (the pinned source) / `consensus-verified`
-     * (independent uploads agreeing), or null (pre-gate legacy / no capture). A quiet honesty marker.
-     */
+
     captureVerification: z.string().nullable(),
-    /** ISO of when the operator dismissed this row ("not for me"); null on a live row. */
+
     dismissedAt: z.string().nullable(),
-    /**
-     * The certified finding this row is the SAME RECORDING as — "already in the archive". Set
-     * two ways (docs/the-ear.md § Duplicates): the CAPTURE lens from a pre-audio ISRC match
-     * (stored, and vetoed from ever being bought), the EAR lens from a near-1.0 cosine score
-     * (display-only). Null on an ordinary catalogue row — a real discovery.
-     */
+
     duplicateOf: CatalogueMatchSchema.nullable(),
-    /**
-     * Whether the private bucket holds this row's captured full song — the audition FALLBACK:
-     * a row with no resolvable store preview (no URL, no ISRC — the small-label case) can still
-     * play the bytes Fluncle owns, through the operator source-audio route.
-     */
+
     hasCapturedAudio: z.boolean(),
-    /**
-     * Whether an official 30s preview can be auditioned inline (docs/the-ear.md § The operator's
-     * actions) — true when the row carries a stored preview or an ISRC, so the artwork is a live
-     * play control rather than a dead one.
-     */
+
     hasPreview: z.boolean(),
     isrc: z.string().nullable(),
     key: z.string().nullable(),
@@ -156,12 +49,7 @@ export const CatalogueTrackItemSchema = z
     nearestFindingScore: z.number().nullable(),
     rankedAt: z.string().nullable(),
     releaseDate: z.string().nullable(),
-    /**
-     * ISO of the newest capture attempt — the instant the `unmatched`/`failed` lenses order by,
-     * or null (never attempted). ADDITIVE-OPTIONAL (the labels identity-fields pattern): nullable
-     * when a read carries it and absent from one that does not, so an older client and the
-     * pinned box CLI keep working unchanged.
-     */
+
     sourceAudioAttemptedAt: z.string().nullable().optional(),
     spotifyUrl: z.string().nullable(),
     title: z.string(),
@@ -169,30 +57,19 @@ export const CatalogueTrackItemSchema = z
   })
   .meta({ id: "CatalogueTrackItem" });
 
-/** The catalogue's shape in four scoped counts — what the operator reads above the rows. */
 export const CatalogueSummarySchema = z
   .object({
     awaitingCapture: z.number(),
     awaitingRank: z.number(),
-    /** Rows the operator dismissed ("not for me") — the restore pile's depth. */
+
     dismissed: z.number(),
-    /** Rows quarantined as wrong audio, awaiting a fresh capture (docs/the-ear.md § Wrong audio). */
+
     quarantined: z.number(),
     ranked: z.number(),
     total: z.number(),
   })
   .meta({ id: "CatalogueSummary" });
 
-/**
- * `list_catalogue_tracks` → `GET /admin/catalogue` (operationId `listCatalogueTracks`).
- *
- * Admin tier (agent-allowed read). The ranked catalogue through one lens, plus the summary.
- *
- * NO VECTOR MATH RUNS HERE. Both lenses are an ordered walk of a column the `rank_catalogue`
- * sweep precomputed, bounded by `limit` — the cost is the page, not the corpus. Ranking the
- * catalogue against the findings at request time would be a cross join (10k × 60 cosine ops
- * on 1024-d vectors, per page load), which is exactly what the sweep exists to prevent.
- */
 export const listCatalogueTracks = oc
   .route({
     method: "GET",
@@ -215,23 +92,6 @@ export const listCatalogueTracks = oc
     }),
   );
 
-/**
- * `rank_catalogue` → `POST /admin/catalogue/rank` (operationId `rankCatalogue`).
- *
- * Admin tier (AGENT-allowed): one tick of the precompute sweep, the job a periodic `--no-agent`
- * cron drives. It ranks up to `limit` stale catalogue rows — each against every embedded
- * finding, entirely in SQL — and stores each one's nearest finding, the cosine similarity to
- * it, and (for a row with no audio yet) its capture-priority tier.
- *
- * SELF-HEALING. Staleness is a fingerprint of the finding corpus (`"<findings>:<embedded>"`)
- * stored on each ranked row, so logging or embedding a finding makes every row disagree with it
- * and re-rank on later ticks. No invalidation call from the publish path, and a no-op on an
- * unchanged archive. `remaining` is the "run me again" signal.
- *
- * It writes DERIVED columns on catalogue rows only. It cannot mint a coordinate, write a note,
- * or touch a finding — which is why it is agent-allowed rather than operator-tier.
- * `{ ok, summary }`.
- */
 export const rankCatalogue = oc
   .route({
     method: "POST",
@@ -242,13 +102,6 @@ export const rankCatalogue = oc
   })
   .input(
     z.object({
-      /**
-       * Whether to return `remaining` as a real live COUNT of the still-stale backlog, or the fast
-       * fullness SENTINEL (docs/db-scale-backlog Wave 1 #1). DEFAULT false = the sentinel: a full
-       * batch reports "> 0, run me again" without the ~19s anti-join COUNT — the box sweep's 8×/tick
-       * win. The human-facing CLI readout opts IN (`true`) so a deliberate manual `catalogue rank`
-       * still shows the true backlog size; the `--json`/automation path keeps the sentinel.
-       */
       countRemaining: z.coerce.boolean().default(false),
       limit: z.coerce.number().int().min(1).max(1000).default(250),
     }),
@@ -257,29 +110,17 @@ export const rankCatalogue = oc
     z.object({
       ok: z.literal(true),
       summary: z.object({
-        /**
-         * Rows re-pointed at a canonical catalogue sibling this tick — the same master under a
-         * second MusicBrainz MBID (docs/the-ear.md § Duplicates). Missing from the schema when
-         * the server first shipped it, and zod STRIPPED it silently — the field must be pinned
-         * here or no client ever sees it.
-         */
         catalogueDuplicates: z.number(),
         corpus: z.string(),
         embeddedFindings: z.number(),
         findings: z.number(),
         prioritized: z.number(),
-        /** Rows quarantined as wrong audio this tick (docs/the-ear.md § Wrong audio). */
+
         quarantined: z.number(),
         remaining: z.number(),
         scored: z.number(),
       }),
-      /**
-       * What the Telescope playlist mirror did after this tick (docs/the-ear.md § Fluncle's
-       * Telescope). The sync is best-effort by design — it never fails the sweep — so this
-       * field is where its outcome becomes OBSERVABLE: `{ ok: false, reason }` is the only
-       * surface a silent Spotify failure (a stale grant, a missing scope) ever reaches.
-       * Optional: absent on responses from before the field shipped.
-       */
+
       telescope: z
         .union([
           z.object({ changed: z.boolean(), ok: z.literal(true), size: z.number() }),
@@ -289,26 +130,6 @@ export const rankCatalogue = oc
     }),
   );
 
-/**
- * `record_demand` → `POST /admin/catalogue/demand` (operationId `recordDemand`).
- *
- * Admin tier (AGENT-allowed): one demand tick (docs/catalogue-crawler.md § Demand), the job a
- * nightly `--no-agent` cron drives. The WORKER reads Simple Analytics (`Api-Key` header, its own
- * secret) for the `/artist/<slug>` + `/label/<slug>` pageviews over the trailing window, resolves
- * the looked-at slugs to entities, and REWRITES two derived reorder columns: `tracks.demand_score`
- * (the capture queue's within-tier secondary sort) and `crawl_frontier.demand_rank` (the frontier
- * pick's within-hop tiebreak). Each run CLEARS every prior value then re-sets — bounded, idempotent,
- * deterministic.
- *
- * RANK-ORDER ONLY. Demand reorders within an existing tier; it never overrides the `capture_priority`
- * ladder or its `>= 0` veto (a ruled-out label is never resurrected), and the seed-allowlist crawl
- * gate is untouched. It certifies nothing and writes only these two reorder columns — the
- * `rank_catalogue` / `record_platform_stats` class — so the box's agent token drives it.
- *
- * DEGRADES GRACEFULLY: with no `SIMPLE_ANALYTICS_API_KEY` the Worker returns a clean `configured:
- * false` no-op — it writes nothing (never wiping the demand columns on a transient missing key).
- * `{ ok, summary }`.
- */
 export const recordDemand = oc
   .route({
     method: "POST",
@@ -322,41 +143,27 @@ export const recordDemand = oc
     z.object({
       ok: z.literal(true),
       summary: z.object({
-        /** True when the SA key is set and the fetch ran; false = a clean no-op (unprovisioned). */
         configured: z.boolean(),
-        /** Distinct demanded artists resolved to an entity this run. */
+
         demandedArtists: z.number(),
-        /** Distinct demanded labels resolved to an entity this run. */
+
         demandedLabels: z.number(),
-        /** Pending frontier nodes promoted to `demand_rank = 0`. */
+
         frontierPromoted: z.number(),
-        /** SA `pages` rows read (before the artist/label path filter). */
+
         pagesRead: z.number(),
-        /** Total pageviews across the demanded (resolved) entities. */
+
         totalPageviews: z.number(),
-        /** Distinct tracks that received a `demand_score` this run. */
+
         tracksScored: z.number(),
-        /** Analytics slugs that resolve to no entity — skipped silently. */
+
         unknownSlugs: z.number(),
-        /** The trailing window queried, inclusive `YYYY-MM-DD` bounds. */
+
         window: z.object({ end: z.string(), start: z.string() }),
       }),
     }),
   );
 
-/**
- * `clear_wrong_audio` → `POST /admin/catalogue/wrong-audio/clear` (operationId `clearWrongAudio`).
- *
- * OPERATOR tier — the operator's override on the wrong-audio quarantine (docs/the-ear.md § Wrong
- * audio). "I disagree, this capture is fine, stop re-capturing it." It flips one quarantined row
- * from `wrong-audio` to the sticky `quarantine-cleared` state the sweep never re-quarantines, so
- * the kept audio re-embeds and re-ranks normally.
- *
- * Operator-only, not agent-allowed: overruling the machine's wrong-audio verdict is a judgement a
- * machine does not get to make about its own output — the same reasoning that keeps `update_label`
- * and `set_capture_budget` operator-tier. `{ ok, cleared }`; `cleared: false` when the row was not
- * actually quarantined (already handled, or a race).
- */
 export const clearWrongAudio = oc
   .route({
     method: "POST",
@@ -368,24 +175,6 @@ export const clearWrongAudio = oc
   .input(z.object({ trackId: z.string().min(1) }))
   .output(z.object({ cleared: z.boolean(), ok: z.literal(true) }));
 
-/**
- * `requeue_unmatched_captures` → `POST /admin/catalogue/captures/requeue-unmatched`
- * (operationId `requeueUnmatchedCaptures`).
- *
- * OPERATOR tier — the terminal-`unmatched` rescue. An
- * `unmatched` capture verdict is terminal by design so the metered budget never re-burns a
- * hopeless search — but when the SEARCH itself improves (the music-search ladder, the
- * normalized query variant), the old verdicts describe the old matcher, not the tracks: the
- * spike recovered 66% of the terminal set with the new ladder. This op flips every
- * catalogue row still marked `unmatched` back to `pending` in one deliberate act, EXCLUDING
- * the rows the duration vetoes would immediately re-refuse (missing/short/long — those stay
- * terminal; re-queueing them buys guaranteed-unmatched searches), and resets their failure
- * count so the re-attempt starts clean.
- *
- * Operator-only: it re-arms metered spend across hundreds of rows at once — the same
- * money-judgement tier as `set_capture_budget`. Idempotent: a second call finds zero
- * `unmatched` rows and returns `{ requeued: 0 }`.
- */
 export const requeueUnmatchedCaptures = oc
   .route({
     method: "POST",
@@ -398,22 +187,6 @@ export const requeueUnmatchedCaptures = oc
   .input(z.object({}))
   .output(z.object({ ok: z.literal(true), requeued: z.number(), skippedVetoed: z.number() }));
 
-/**
- * `requeue_anchor` → `POST /admin/catalogue/anchor/requeue` (operationId `requeueAnchor`).
- *
- * OPERATOR tier — clear the named rows' `spotify_anchor_attempted_at` re-ask stamp so the next
- * `fluncle-anchor` tick attempts them again NOW instead of after the 14-day backoff. The
- * operator's lever for "the resolver just got better, give these rows their shot" — a matcher
- * fix, a recovered ISRC, or a freshly reviewed candidate.
- *
- * Deliberately narrow: it clears ONLY the stamp — `spotify_anchor_attempts` (the lifetime cap,
- * #893) stays honest, so a requeue never resets a row's bounded spend; already-anchored rows are
- * skipped by the WHERE, and so are ISRC-LESS rows (`has_isrc = 1` — anchoring concludes off the
- * ISRC anchor in practice, so re-arming a row without one re-bills a search that cannot conclude;
- * a named ISRC-less row simply counts zero). Operator-only for the same reason as
- * `requeue_unmatched_captures`: each requeued row can re-arm metered Apify spend. Idempotent — a
- * second call affects zero rows.
- */
 export const requeueAnchor = oc
   .route({
     method: "POST",
@@ -425,30 +198,6 @@ export const requeueAnchor = oc
   .input(z.object({ trackIds: z.array(z.string().min(1)).min(1).max(250) }))
   .output(z.object({ ok: z.literal(true), requeued: z.number() }));
 
-/**
- * `requeue_isrc_recovery` → `POST /admin/catalogue/isrc-recovery/requeue` (operationId
- * `requeueIsrcRecovery`).
- *
- * OPERATOR tier — clear the free Deezer pass's `isrc_recovery_attempted_at` watermark on rows it
- * retired as a CLEAN MISS from a window the ask itself was broken in, so they re-enter the
- * `isrc-recovery` worklist now instead of waiting out `ISRC_RECOVERY_REASK_AFTER_DAYS`.
- *
- * The Deezer-empty arm is the only one this op undoes, and the WHERE says so precisely. That arm
- * writes `isrc_recovery_attempted_at` ALONE; the gate-refused arm writes it together with
- * `isrc_attempted_at` at the same instant, so `isrc_attempted_at <> isrc_recovery_attempted_at`
- * separates "Deezer answered nothing" from "Deezer answered and the identity gate refused". A gate
- * refusal is a real verdict about the row and is deliberately left standing.
- *
- * `since` is an inclusive lower bound on the stamp (an ISO date or instant — the column is ISO text,
- * so the comparison is lexicographic): the operator names the window the ask was broken in rather
- * than clearing the ledger wholesale. `dryRun` defaults TRUE, and the count comes back either way,
- * so the blast radius is always read before it is taken.
- *
- * It clears NOTHING else. In particular `spotify_anchor_attempted_at` stays untouched: the anchor
- * worklist is priority-ordered by sunk cost, so bulk-clearing anchor stamps on ISRC-LESS rows walls
- * the queue head with structurally-unanchorable work. A row whose ISRC this pass then recovers earns
- * its anchor turn through the ordinary queue.
- */
 export const requeueIsrcRecovery = oc
   .route({
     method: "POST",
@@ -477,22 +226,6 @@ export const requeueIsrcRecovery = oc
     }),
   );
 
-/**
- * `flag_wrong_audio` → `POST /admin/catalogue/wrong-audio/flag` (operationId `flagWrongAudio`).
- *
- * OPERATOR tier — `clear_wrong_audio`'s counterpart: "the FINDING's capture is the wrong one"
- * (docs/the-ear.md § Wrong audio). The auto-quarantine can only ever accuse the CATALOGUE side of
- * a cross-title collision, but six-nines cosine proves same-recording, not which title is lying.
- * When the operator auditions the catalogue row's captured bytes and hears the row's OWN song,
- * the poisoned capture is the finding's — this is how he says so. The finding's vector drops out
- * of the ranking corpus, its analysis provenance resets (bpm/key were measured off the wrong
- * song), and it re-enters the capture queue with the bad bytes hash-rejected.
- *
- * Operator-only, not agent-allowed: it rewinds a PUBLIC finding's enrichment on the strength of a
- * human listen — a judgement a machine does not get to make (the `clear_wrong_audio` reasoning).
- * `{ ok, flagged }`; `flagged: false` when the track is not a captured finding (or already
- * flagged), so a double-click reports honestly.
- */
 export const flagWrongAudio = oc
   .route({
     method: "POST",
@@ -504,24 +237,6 @@ export const flagWrongAudio = oc
   .input(z.object({ trackId: z.string().min(1) }))
   .output(z.object({ flagged: z.boolean(), ok: z.literal(true) }));
 
-/**
- * `force_capture` → `POST /admin/catalogue/force-capture` (operationId `forceCapture`).
- *
- * OPERATOR tier — the dupe-veto escape hatch (docs/the-ear.md § Duplicates). "This row is NOT the
- * duplicate the sweep thinks it is." A duplicate veto (`duplicate_of_track_id` + the −2 tier) can
- * be WRONG — a shared/mis-assigned ISRC, a `matchKey` collision on a genuinely different recording
- * — and it is self-sealing: an uncaptured vetoed row is excluded from capture forever, so the
- * post-audio check that would exonerate it never runs. This lifts the veto STICKILY (a
- * `capture_status` sentinel all three duplicate detectors respect before re-stamping) and puts the
- * row back on the pre-audio ladder at its honest tier; the next open-budget capture tick buys it.
- * It bypasses the DUPLICATE veto, never the VERIFICATION gate — a re-captured forced row still runs
- * the fingerprint gate at ingest.
- *
- * Operator-only, not agent-allowed: overruling the machine's duplicate verdict is a judgement a
- * machine does not get to make about its own output — the same reasoning that keeps `clear_wrong_audio`,
- * `update_label`, and `set_capture_budget` operator-tier. `{ ok, forced }`; `forced: false` when the
- * row was not actually vetoed as a duplicate (already handled, a non-duplicate, or a finding).
- */
 export const forceCapture = oc
   .route({
     method: "POST",
@@ -533,21 +248,6 @@ export const forceCapture = oc
   .input(z.object({ trackId: z.string().min(1) }))
   .output(z.object({ forced: z.boolean(), ok: z.literal(true) }));
 
-/**
- * `certify_track` → `POST /admin/catalogue/certify` (operationId `certifyTrack`).
- *
- * OPERATOR tier — the "Log it" the Ear's workstation fires (docs/the-ear.md § The operator's
- * actions). It turns an EXISTING catalogue row (a `tracks` row with no `findings` row) into a
- * finding by minting the certification half in place — the SAME coordinate mint the Spotify add
- * uses — and never creates a new track. The fresh finding enters the enrichment chain (its
- * `enrichment_status` defaults to `pending`), so the operator lands on it with the pipeline
- * already moving and finishes note / galaxy / publish from there.
- *
- * Operator-only, NOT agent-allowed: certifying is the one act the whole catalogue domain forbids a
- * machine — the agent-tier sweep is agent-allowed precisely BECAUSE it can never certify. Same rule
- * that keeps `update_label` and `set_capture_budget` operator-tier. Returns the minted `logId`.
- * 404 when the track does not exist; 409 when it is already certified.
- */
 export const certifyTrack = oc
   .route({
     method: "POST",
@@ -559,19 +259,6 @@ export const certifyTrack = oc
   .input(z.object({ note: z.string().optional(), trackId: z.string().min(1) }))
   .output(z.object({ logId: z.string(), ok: z.literal(true) }));
 
-/**
- * `set_track_dismissed` → `PUT /admin/catalogue/dismissed` (operationId `setTrackDismissed`).
- *
- * OPERATOR tier — the "not for me" / restore toggle (docs/the-ear.md § The operator's actions), the
- * `set_capture_budget` shape (one op, both directions). `dismissed: true` stamps `dismissed_at` so
- * the row drops out of the ear/capture reads AND the capture work queue (the ruled-out-label veto's
- * class — a metered download is never spent on a dismissed row); `dismissed: false` restores it, so
- * it re-enters the ranking on the next sweep tick.
- *
- * Operator-only for the same reason `update_label` is: steering what the telescope keeps pointing at
- * is a taste ruling, not a machine job. `changed: false` is an idempotent no-op (already in that
- * state, or a finding trackId — a finding is never dismissed).
- */
 export const setTrackDismissed = oc
   .route({
     method: "PUT",
@@ -583,11 +270,6 @@ export const setTrackDismissed = oc
   .input(z.object({ dismissed: z.boolean(), trackId: z.string().min(1) }))
   .output(z.object({ changed: z.boolean(), ok: z.literal(true) }));
 
-// ─────────────────────────────────────────────────────────────────────────────
-// CAPTURE VERIFICATION — the historic backfill's two ops. docs/the-ear.md § Wrong audio.
-// ─────────────────────────────────────────────────────────────────────────────
-
-/** One captured row the verification backfill still has to fingerprint-check. */
 export const CaptureVerifyItemSchema = z
   .object({
     artists: z.array(z.string()),
@@ -601,15 +283,6 @@ export const CaptureVerifyItemSchema = z
   })
   .meta({ id: "CaptureVerifyItem" });
 
-/**
- * `list_unverified_captures` → `GET /admin/catalogue/captures/unverified` (operationId
- * `listUnverifiedCaptures`).
- *
- * Admin tier (agent-allowed read), the `list_track_work` precedent. The verification backfill's
- * worklist: captured rows (findings + catalogue) whose bytes have never been checked against their
- * ISRC preview. Bounded + resumable — a verified row leaves the set, so re-running drains what is
- * left, no cursor. A pure read; it publishes nothing. The `fluncle-verify-captures` box cron drives it.
- */
 export const listUnverifiedCaptures = oc
   .route({
     method: "GET",
@@ -621,11 +294,6 @@ export const listUnverifiedCaptures = oc
   })
   .input(
     z.object({
-      /**
-       * Opt in to the authoritative worklist count. This queue's leading
-       * `capture_verification is null` predicate is index-backed; callers that only need a page
-       * keep the count off their hot path.
-       */
       count: z.coerce.boolean().default(false),
       limit: z.coerce.number().int().min(1).max(200).default(50),
     }),
@@ -633,28 +301,12 @@ export const listUnverifiedCaptures = oc
   .output(
     z.object({
       ok: z.literal(true),
-      /** Total rows in the worklist before this page is processed; present only with `count=true`. */
+
       queued: z.number().optional(),
       tracks: z.array(CaptureVerifyItemSchema),
     }),
   );
 
-/**
- * `verify_capture` → `POST /admin/catalogue/captures/verify` (operationId `verifyCapture`).
- *
- * Admin tier (AGENT-allowed WRITE), the `rank_catalogue` precedent. The box fingerprints a captured
- * file against the track's ISRC-resolved official preview and reports one of three verdicts; the
- * SERVER routes it (docs/the-ear.md § Wrong audio): `match` → stamp `preview-match`; `no-preview` →
- * stamp `unverified`; `mismatch` on a CATALOGUE row → quarantine it (drop the vector, re-queue for
- * capture, remember the bad sha); `mismatch` on a FINDING → stamp `mismatch` only, raising an
- * /admin attention item — a machine never rewinds a public finding, so the operator rules with
- * `flag_wrong_audio`. It writes only derived/measurement columns and never certifies, so the box's
- * agent token drives it. `{ ok, action }`.
- *
- * `verify` is a new verb, added deliberately (docs/naming-conventions.md): it is not `enrich`
- * (deriving an entity's own attributes), not `rank` (ordering a corpus), not `resolve` (fixing an
- * external identity) — it CHECKS a stored artifact against a reference and records the verdict.
- */
 export const verifyCapture = oc
   .route({
     method: "POST",
@@ -674,8 +326,7 @@ export const verifyCapture = oc
       action: z.enum([
         "flagged-finding",
         "not-captured",
-        // The row's capture was taken on the operator's pinned source (`operator-verified`), and
-        // the backfill steps aside: it never flags what the operator chose. A no-op, reported.
+
         "operator-verified",
         "preview-match",
         "quarantined-catalogue",
@@ -685,61 +336,43 @@ export const verifyCapture = oc
     }),
   );
 
-// ─────────────────────────────────────────────────────────────────────────────
-// THE CRAWLER — what makes the rows above exist. docs/catalogue-crawler.md.
-// ─────────────────────────────────────────────────────────────────────────────
-
-/** One bounded crawl pass's real numbers. Nothing here is an estimate. */
 export const CrawlPassSchema = z
   .object({
-    /** Artist-browse nodes re-armed from allow rules this pass. */
     artistsRearmed: z.number().optional(),
     dryRun: z.boolean(),
-    /** Frontier nodes expanded this pass. */
+
     expanded: z.number(),
-    /** Nodes that failed a vendor call and were backed off (retried by a later tick). */
+
     failed: z.number(),
-    /** Nodes still waiting. 0 means the reachable graph is drained. */
+
     frontierPending: z.number(),
-    /**
-     * Labels the walk DISCOVERED and minted as `undecided` — the operator's next
-     * rulings. A discovered label is never crawled until he enables it.
-     */
+
     labelsDiscovered: z.array(z.string()),
-    /** The graph-distance limit this pass honoured (hop 0 = a release on a seed label). */
+
     maxHop: z.number(),
-    /** New frontier nodes enqueued — the walk's outward edge. */
+
     nodesEnqueued: z.number(),
-    /**
-     * True when MusicBrainz actively throttled us and the pass STOPPED on its circuit
-     * breaker. The cron must not re-fire: the next tick resumes from durable state in a
-     * fresh rate window (the shipped `backfill_*` discipline).
-     */
+
     rateLimited: z.boolean(),
-    /** Scoped label-browse nodes re-armed from a newer label-scope watermark this pass. */
+
     releasesRearmed: z.number(),
-    /** Seed nodes minted from the operator's `enabled` labels this pass. */
+
     seeded: z.number(),
-    /**
-     * Due seed-label browse nodes re-armed this pass — an enabled label is a subscription,
-     * re-reading the TAIL of its release list on each release-week pass boundary so its later
-     * releases (a Friday drop, which lands at the unsorted list's end) surface. Bounded per pass
-     * so a mass re-arm spreads over ticks. See docs/catalogue-crawler.md § the re-arms.
-     */
+
     seedsRearmed: z.number(),
-    /** Tracks admitted by an artist allow rule over a non-enabled label default. */
+
     tracksAllowedIn: z.number().optional(),
-    /** Catalogue tracks the walk saw on the releases it expanded. */
+
     tracksFound: z.number(),
-    /** Exact sum of held/idempotent, label-default, and artist-rule skips. */
+
     tracksSkipped: z.number(),
-    /** Tracks kept out by an artist rule. */
+
     tracksSkippedArtistRule: z.number().optional(),
-    /** Candidate tracks already held by the archive and skipped by dedupe. */
+
     tracksSkippedHeld: z.number().optional(),
-    /** Tracks kept out by the label's seed-state gate. */
+
     tracksSkippedLabelGate: z.number().optional(),
-    /** Catalogue rows written into `tracks`. Never a `findings` row. */
+
     tracksWritten: z.number(),
   })
   .meta({ id: "CrawlPass" });
@@ -751,24 +384,8 @@ const CrawlPhaseInitializationSchema = z.object({
   seedsRearmed: z.number(),
 });
 
-/**
- * How many frontier nodes ONE crawl prepare may claim, and the wire bound on the items it hands
- * back. The number is set by the claim lease: every node of a batch is leased at the same instant
- * and a commit past its lease is fenced off, so the batch must be small enough that its last node
- * still reaches a commit. The reasoning, with the per-node costs it is derived from, lives beside
- * `prepareCrawlPhase` in `apps/web/src/lib/server/crawl.ts`.
- */
 export const MAX_CRAWL_PREPARE_LIMIT = 6;
 
-/**
- * WHAT THE BOX MAY FETCH FOR ONE NODE, issued by the prepare that claimed it.
- *
- * MusicBrainz rate-limits per source IP, and Cloudflare's egress is shared with strangers, so the
- * crawl's provider reads are made from the box's own address under one shared budget. The box never
- * composes a MusicBrainz URL: it receives the exact string(s) this claim allows. `tail` is the one
- * two-step read (locate a browse list's end, then page it), and its only free parameter is the
- * offset — which the Worker re-derives from the probe body before it will read the page.
- */
 const CrawlFetchPlanSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("none") }),
   z.object({ kind: z.literal("single"), url: z.string().max(2_048) }),
@@ -781,49 +398,16 @@ const CrawlFetchPlanSchema = z.discriminatedUnion("kind", [
   }),
 ]);
 
-/**
- * One MusicBrainz read the box already made. The outcomes mirror the Worker's own transport one for
- * one, so a box-fetched node settles exactly as a Worker-fetched one: `throttled` keeps the node's
- * turn, everything else settles as that node's own outcome. A url the claim did not issue is
- * refused, and a url the box omits is simply fetched by the Worker.
- *
- * The unit here is ONE NODE — its claim (carried by `preparedToken`), its urls, its bodies — so a
- * later batched phase is a list of these rather than a different shape.
- */
 const SuppliedCrawlBodySchema = z.object({
   body: z.json().optional(),
   outcome: z.enum(["body", "empty", "invalid", "oversize", "throttled"]),
   url: z.string().max(2_048),
 });
 
-/**
- * THE BATCHED COMMIT'S WIDTH. One claim, one commit phase: the batch is exactly the claim, so the
- * bound is {@link MAX_CRAWL_PREPARE_LIMIT} and cannot drift from it. Widening the claim widens this
- * with it, and both stay under the wall budget the server enforces per request
- * (`CRAWL_COMMIT_BATCH_WALL_BUDGET_MS` in `apps/web/src/lib/server/crawl.ts`).
- */
 export const MAX_CRAWL_COMMIT_BATCH = MAX_CRAWL_PREPARE_LIMIT;
 
-/** One signed provider envelope's wire cap, unchanged from the single-node commit. */
 export const CRAWL_COMMIT_TOKEN_MAX_BYTES = 2 * 1024 * 1024;
 
-/**
- * THE BATCH'S TOTAL WIRE CAP. A node's signed provider envelope is bounded at
- * {@link CRAWL_COMMIT_TOKEN_MAX_BYTES}, so six of them could in principle carry 12 MiB — a body the
- * Worker would have to hold in its 128 MiB isolate alongside everything the commit itself allocates.
- * The total is therefore capped well below that, and the sweep splits a claim whose envelopes do not
- * fit into consecutive batches rather than sending an oversized one. Ordinary MusicBrainz envelopes
- * are kilobytes, so the split is the pathological path, never the normal one.
- *
- * THE BOX-SUPPLIED BODIES DO NOT ENTER THIS BOUND, and the reason is which phase carries them. A
- * body the box fetched rides the `fetch` phase, which is UNADMITTED and still strictly ONE NODE per
- * request: {@link SuppliedCrawlBodySchema} is capped at two entries (a probe and its page), each
- * bounded by the box's own 2 MiB read cap, beside that node's ≤2 MiB `preparedToken` — so a fetch
- * request peaks near 6 MiB and batching multiplies none of it. What the batch aggregates is the
- * COMMIT token, whose 2 MiB bound is enforced where it is signed, on the parsed outcome, identically
- * for a Worker-fetched and a box-fetched body. The two phases are separate requests, so the largest
- * body one isolate ever holds is this cap rather than the sum of both.
- */
 export const CRAWL_COMMIT_BATCH_MAX_TOTAL_BYTES = 8 * 1024 * 1024;
 
 const CrawlCommitItemSchema = z.strictObject({
@@ -833,24 +417,10 @@ const CrawlCommitItemSchema = z.strictObject({
   requestDigest: z.string().regex(/^[0-9a-f]{64}$/),
 });
 
-/**
- * ONE ITEM'S RECEIPT inside a batched commit — never a collapsed verdict for the batch.
- *
- * `operationKey` echoes the item it answers, so the caller maps receipts back by identity rather
- * than by position alone. `failed` is this item's own error and says nothing about its neighbours;
- * `safely-retryable` is both the receipt rail's own verdict and what the unprocessed tail of a
- * wall-budgeted request carries, so a caller that retries or reconciles a tail item is doing exactly
- * what it already does for a single-node commit.
- */
 const CrawlCommitReceiptSchema = z
   .object({
-    /**
-     * How long this item took the server, in milliseconds. Additive, and its purpose is to make the
-     * batch width derivable instead of assumed: the wall budget is checked BETWEEN items, so a
-     * batch's exposure to one slow item grows with K. The sweep publishes per-tick max and median.
-     */
     elapsedMs: z.number().int().min(0).optional(),
-    /** This item's own failure message, bounded. Present only for `failed`. */
+
     error: z.string().max(500).optional(),
     operationKey: z.string().max(128),
     outcome: z.enum([
@@ -869,19 +439,9 @@ const CrawlCommitReceiptSchema = z
   })
   .meta({ id: "CrawlCommitReceipt" });
 
-/**
- * WHAT THIS WORKER CAN DO, answered inside a response the sweep already reads.
- *
- * The box CLI is a pinned release and lags the Worker in both directions. A NEW sweep must never
- * discover a missing batched op by catching a 404 halfway through a claim, so it feature-detects
- * here, on the prepare it runs before any commit: the field's absence is an OLD Worker and the
- * per-node commit path is taken. An OLD sweep ignores the field and keeps committing node by node,
- * which is why {@link crawlCatalogue}'s single-node `commit` phase is not going anywhere.
- */
 const CrawlPhaseCapabilitiesSchema = z.strictObject({
-  /** How many nodes one `commit_crawl_nodes` request accepts. Absent ⇒ the op does not exist. */
   commitBatchLimit: z.number().int().min(1).max(MAX_CRAWL_COMMIT_BATCH),
-  /** The batch's total signed-envelope budget, so the sweep splits at the same number the server does. */
+
   commitBatchMaxTotalBytes: z.number().int().min(1),
 });
 
@@ -895,7 +455,7 @@ const CrawlPhaseInputSchema = z.discriminatedUnion("phase", [
   z.object({
     phase: z.literal("fetch"),
     preparedToken: z.string().max(2 * 1024 * 1024),
-    /** At most the probe and its page: no node's provider leg reads more than two urls. */
+
     supplied: z.array(SuppliedCrawlBodySchema).max(2).optional(),
   }),
   z.object({
@@ -915,7 +475,6 @@ const CrawlPhaseOutputSchema = z.discriminatedUnion("phase", [
     phase: z.literal("initialize"),
   }),
   z.object({
-    /** Whether this Worker will read box-fetched bodies — asked before the box spends a request. */
     boxFetch: z.boolean(),
     capabilities: CrawlPhaseCapabilitiesSchema.optional(),
     frontierPending: z.number(),
@@ -939,12 +498,7 @@ const CrawlPhaseOutputSchema = z.discriminatedUnion("phase", [
     operationId: z.literal("catalogue.crawl"),
     operationKey: z.string(),
     phase: z.literal("fetch"),
-    /**
-     * The vendor pushed back on THIS node. It rides the fetch response, not only the signed
-     * envelope, because a caller that batches its commits has to decide whether to keep fetching
-     * the rest of its claim BEFORE it learns any commit's verdict. Absent on an older Worker,
-     * which is exactly the Worker whose commits are per node anyway.
-     */
+
     rateLimited: z.boolean().optional(),
     requestDigest: z.string(),
   }),
@@ -968,12 +522,10 @@ const CrawlPhaseOutputSchema = z.discriminatedUnion("phase", [
   }),
 ]);
 
-/** The frontier at rest. */
 export const CrawlStatusSchema = z
   .object({
-    /** Catalogue rows with an ISRC still awaiting their Spotify anchor (the derived queue). */
     anchorsPending: z.number(),
-    /** `tracks` rows with NO `findings` row — the catalogue, counted by its definition. */
+
     catalogueTracks: z.number(),
     frontier: z.object({
       done: z.number(),
@@ -986,28 +538,19 @@ export const CrawlStatusSchema = z
       label: z.number(),
       release: z.number(),
     }),
-    /** Labels the crawl has minted that nobody has ruled on yet. */
+
     labelsUndecided: z.number(),
-    /** What the NEXT crawl would seed from. */
+
     seedLabels: z.array(z.string()),
-    /** Claimable release nodes whose provenance is storable — the head of the claim's release lane. */
+
     storablePending: z.number(),
-    /** Undecided labels that already hold queued work — the rulings a round would actually move. */
+
     undecidedLabelsQueued: z.number(),
-    /** Claimable release nodes the STORAGE gate is holding — the lane a label round would unlock. */
+
     unstorablePending: z.number(),
   })
   .meta({ id: "CrawlStatus" });
 
-/**
- * `crawl_catalogue` → `POST /admin/catalogue/crawl` (operationId `crawlCatalogue`).
- *
- * Admin tier (agent-allowed). One bounded pass: seed from the enabled labels, expand
- * `limit` frontier nodes breadth-first, write what it finds, stop. Resumable by
- * construction — all walk state is durable, so the next tick continues the walk.
- *
- * `?dryRun=true` reports the seed plan and writes nothing at all.
- */
 export const crawlCatalogue = oc
   .route({
     inputStructure: "detailed",
@@ -1022,29 +565,15 @@ export const crawlCatalogue = oc
       body: CrawlPhaseInputSchema.optional(),
       query: z.object({
         dryRun: z.string().optional(),
-        /** Frontier nodes to expand this pass (default 10, clamped to 60). */
+
         limit: z.string().optional(),
-        /** Graph distance from a seed label (default 2, clamped to 3). */
+
         maxHop: z.string().optional(),
       }),
     }),
   )
   .output(z.union([CrawlPassSchema.extend({ ok: z.literal(true) }), CrawlPhaseOutputSchema]));
 
-/**
- * `commit_crawl_nodes` → `POST /admin/catalogue/crawl/commits` (operationId `commitCrawlNodes`).
- *
- * Admin tier (agent-allowed). ONE admitted database phase settles a whole claim's fetched nodes.
- * Each item carries exactly what the single-node `commit` phase carries — its own signed provider
- * envelope and its own receipt coordinates — and gets its own receipt back, so a poisoned node
- * rejects alone while its neighbours commit. Nothing is collapsed: there is no batch-wide operation
- * id, the receipt rail still keys on each item's own `operationKey`, and `catalogue.crawl` stays
- * non-replayable (`phased(…, 0)`).
- *
- * The request is wall-budgeted server side. When the budget is spent the unprocessed tail comes back
- * as `safely-retryable` rather than the request running past the admission watchdog window, and the
- * caller reissues exactly those items.
- */
 export const commitCrawlNodes = oc
   .route({
     method: "POST",
@@ -1060,21 +589,13 @@ export const commitCrawlNodes = oc
   )
   .output(
     z.strictObject({
-      /** How many trailing items the wall budget left unprocessed. They read `safely-retryable`. */
       deferred: z.number().int().min(0),
       ok: z.literal(true),
-      /** One receipt per request item, in request order. */
+
       receipts: z.array(CrawlCommitReceiptSchema).max(MAX_CRAWL_COMMIT_BATCH),
     }),
   );
 
-/**
- * `get_crawl_status` → `GET /admin/catalogue/crawl` (operationId `getCrawlStatus`).
- *
- * Admin tier (agent-allowed read). The frontier's shape at rest: node counts by state and
- * kind, how many catalogue tracks the archive holds, the enabled seed set, and how many
- * discovered labels are still waiting on the operator.
- */
 export const getCrawlStatus = oc
   .route({
     method: "GET",
@@ -1086,58 +607,22 @@ export const getCrawlStatus = oc
   .input(z.object({}))
   .output(CrawlStatusSchema.extend({ ok: z.literal(true) }));
 
-// ─────────────────────────────────────────────────────────────────────────────
-// THE SPOTIFY ANCHOR — the verify+write boundary. docs/catalogue-crawler.md § the anchor.
-// ─────────────────────────────────────────────────────────────────────────────
-
-/**
- * THE ANCHOR PAYLOAD'S WIRE CAPS. `anchor_track` takes its candidates from the box's Apify sweep,
- * and the box is a source this domain deliberately does NOT trust — the server re-runs the whole
- * verification on every hit. An untrusted source's payload is bounded at the contract edge so a
- * malformed one fails as a clean 400 instead of reaching the handler, exactly as the sibling
- * {@link DeezerIsrcCandidateSchema} already is. Bounds only; the gate is unchanged.
- *
- * The array cap is sized off what the real caller can produce. `docs/agents/hermes/scripts/anchor-sweep.ts`
- * asks the actor for `SEARCH_KEYWORD_LIMIT` candidates per query (3) and groups one actor run's items
- * by query string, so a row's list is 3 in the ordinary case and at most `APIFY_QUERY_CHUNK` ×
- * `SEARCH_KEYWORD_LIMIT` (15 × 3 = 45) in the pathological case where every row in a chunk folds to
- * the same query. 100 clears that with room, so the cap cannot bite a legitimate tick — and one past
- * it REJECTS rather than truncating, because a silently-trimmed candidate list reaches the gate as a
- * clean miss, indistinguishable from "Spotify has nothing".
- */
 export const ANCHOR_CANDIDATE_LIMIT = 100;
 
-/** Mirrors `DISCOGS_ARTIST_LIMIT` (admin-backfills.ts) — the same bound on the same box-supplied shape. */
 const ANCHOR_ARTIST_LIMIT = 20;
 
-/** Deliberately generous, like the Deezer text cap below: far above any real title or billing. */
 const ANCHOR_TEXT_MAX = 300;
 
-/** An ISRC is 12 characters; the headroom absorbs a hyphenated or padded variant and nothing more. */
 const ANCHOR_ISRC_MAX = 64;
 
-/** A Spotify id is 22 base62 chars; `spotify:track:<id>` is 36. The headroom is room to grow, nothing else. */
 const ANCHOR_ID_MAX = 64;
 
-/** A `?si=`-tailed open.spotify.com link, plus room — the `DISCOGS_URI_MAX` bound, one domain over. */
 const ANCHOR_URL_MAX = 2_048;
 
-/**
- * One Spotify candidate the box's Apify sweep found for a catalogue row. The server RE-RUNS
- * verification against it (never trusting the box's own match), so it carries every signal the
- * two rungs read: the id (as `spotifyTrackId`, or a `uri`/`url` the server parses one from), the
- * `isrc` for the exact rung, and `title`/`artists`/`durationMs` for the verified search triple.
- *
- * EVERY FIELD IS BOUNDED, for the reason spelled out on {@link ANCHOR_CANDIDATE_LIMIT}. `artists`
- * matters most: a verified candidate's artist list is WRITTEN — the handler links each entry to the
- * row by its stable Spotify id — so an unbounded one is a write amplifier into the artist graph, not
- * just a big body. Its cap mirrors `DISCOGS_ARTIST_LIMIT` (20), the same bound on the same shape.
- */
 export const AnchorCandidateSchema = z
   .object({
-    /** The album/track cover URL, coalesced onto the row when the row has none. */
     albumImageUrl: z.string().max(ANCHOR_URL_MAX).nullish(),
-    /** The candidate's Spotify artists — `name` verifies the triple, `id` links the entity by stable id. */
+
     artists: z
       .array(
         z.object({
@@ -1149,50 +634,20 @@ export const AnchorCandidateSchema = z
       .default([]),
     durationMs: z.number().nullish(),
     isrc: z.string().max(ANCHOR_ISRC_MAX).nullish(),
-    /** The bare Spotify track id. Provide this, OR `uri`/`url` for the server to parse one from. */
+
     spotifyTrackId: z.string().max(ANCHOR_ID_MAX).optional(),
     title: z.string().max(ANCHOR_TEXT_MAX).default(""),
-    /** `spotify:track:<id>` — an alternative to `spotifyTrackId`. */
+
     uri: z.string().max(ANCHOR_URL_MAX).optional(),
-    /** `https://open.spotify.com/track/<id>` — an alternative to `spotifyTrackId`. */
+
     url: z.string().max(ANCHOR_URL_MAX).optional(),
   })
-  // A candidate with NONE of the three id carriers cannot be anchored to — reject the malformed
-  // payload at the boundary rather than silently dropping it in the handler.
+
   .refine((candidate) => Boolean(candidate.spotifyTrackId ?? candidate.uri ?? candidate.url), {
     error: "a candidate must carry a spotifyTrackId, uri, or url",
   })
   .meta({ id: "AnchorCandidate" });
 
-/**
- * `anchor_track` → `POST /admin/catalogue/anchor` (operationId `anchorTrack`).
- *
- * Admin tier (AGENT-allowed WRITE), the `verify_capture` precedent. The box's Apify anchor sweep
- * (docs/catalogue-crawler.md § the anchor) fetches Spotify candidates for one un-anchored catalogue
- * row and POSTs them here; the SERVER re-runs the full verification (the box's verdict is never
- * trusted) and, on a hit, writes the `spotify_uri`/`spotify_url` anchor + links the candidate's
- * artists by their stable id. Two rungs, precision over recall: exact ISRC first (the actor returns
- * each candidate's ISRC), else the verified search triple (folded artist set + base title + version
- * descriptor + duration within ±3s). EVERY attempt stamps `spotify_anchor_attempted_at` and bumps
- * `spotify_anchor_attempts` — a hit AND a miss — so the worklist's re-ask backoff can fire and its
- * retry cap (`ANCHOR_MAX_ATTEMPTS`) can eventually retire a row that is simply not on Spotify.
- *
- * THE ADMISSION RAIL (409 `awaiting_free_ask`). The free exact-ISRC rung answers the same question
- * this paid one does, and cheaper, so an ISRC-bearing row is refused here unless the free rung has
- * actually asked Spotify about it and missed (`tracks.spotify_isrc_asked_at`) — the rule
- * `resolve_anchor` reports as `apifyEligible`, re-checked at the write boundary so a lagging box
- * cannot talk the Worker into an anchor it declined to authorise. It REFUSES rather than parks: a row
- * never asked is not a row that missed, so it stamps nothing and keeps its turn. The refusal does not
- * stop the spend (by the time candidates arrive they are bought) — the operator keeps the kill-flag
- * OFF across a box rebake for that, and the box already honours it.
- *
- * It writes only catalogue-identity columns and never certifies (the `rank_catalogue`/`verify_capture`
- * class), so the box's agent token drives it. 404 when the track does not exist; 409 when it is
- * certified (a finding's Spotify id is its identity, not an anchor to fill), already anchored (a
- * race with a user add), or not yet admitted to the paid rung. `{ ok, anchored, verifiedBy }` — `verifiedBy` is the rung that matched
- * (`isrc` | `search` | `search-subset` — the ±1s proper-subset fallback, a distinct confidence),
- * or null on a clean miss.
- */
 export const anchorTrack = oc
   .route({
     method: "POST",
@@ -1209,148 +664,34 @@ export const anchorTrack = oc
   )
   .output(
     z.object({
-      /** True when a candidate verified and the anchor was written. */
       anchored: z.boolean(),
       ok: z.literal(true),
-      /** Which rung matched (`isrc` | `search`), or null on a clean miss. */
+
       verifiedBy: z.enum(["isrc", "search", "search-subset"]).nullable(),
     }),
   );
 
-/**
- * THE DEEZER PAGE SIZE, and the wire cap that follows from it — one number, owned here because both
- * sides must agree: it is the `&limit=` the search asks Deezer for AND the most hits `resolve_anchor`
- * will accept back for a row. A payload carrying more than Deezer's own page size is already wrong,
- * whatever produced it, so it is refused at the edge rather than reasoned about in the handler.
- *
- * Deezer's search is FUZZY (it will lead with a remix), which is why we read a small handful and let
- * the Worker's gate pick — never blindly the first. Five is that handful.
- */
 export const DEEZER_CANDIDATE_LIMIT = 5;
 
-/**
- * Length caps for a Deezer hit's three strings. Deliberately GENEROUS — far above any real billing or
- * title, far below "unbounded" — because a cap that bites a legitimate hit turns a recoverable row
- * into a rejected `resolve_anchor` call, which is a worse failure than the one being defended against.
- */
 const DEEZER_TEXT_MAX = 300;
 
-/** An ISRC is 12 characters. The headroom absorbs a hyphenated or padded variant; nothing more. */
 const DEEZER_ISRC_MAX = 64;
 
-/**
- * A Deezer track id is a decimal integer, ten digits at today's catalogue size. The cap is room for
- * that to keep growing and nothing else: this string is pasted into a URL Fluncle serves publicly.
- */
 const DEEZER_TRACK_ID_MAX = 32;
 
-/**
- * One Deezer search hit the BOX fetched for an ISRC-less catalogue row (rung 0 of `resolve_anchor`).
- *
- * WHY THE BOX FETCHES IT. Deezer's public search takes no token, so its quota is purely PER-IP — and
- * the Worker egresses from Cloudflare's SHARED edge IPs, where that quota is spent by the whole
- * platform rather than by Fluncle's one-request-per-row cadence. Measured in production: the rung
- * recovered 0 ISRCs out of 5,133 ISRC-less rows over 3 days from the edge, while the same search
- * answered 25/25 clean from the box's own dedicated IP. So the anchor sweep runs the search (with the
- * ready-made `deezerQuery` the worklist hands it) and POSTs the hits here.
- *
- * WHAT DID NOT MOVE: the verification and the ISRC write. The server re-runs every hit through the
- * SAME `pickVerifiedCandidate` gate the anchor uses — the folded artist-set + base-title identity AND
- * the ratified duration window — against the row as the DATABASE holds it, then writes fill-empty-only.
- * The box's own verdict is neither sent nor read: these four fields are evidence, and a hit that fails
- * the gate is refused exactly as a Worker-fetched one is. The `anchor_track` precedent, unchanged.
- *
- * The fields are Deezer's, normalized: `artistName` is its BILLED string (`"Fred V & Grafix"`), folded
- * into an artist SET by the gate; `durationMs` is its seconds promoted to ms.
- *
- * EVERY FIELD IS BOUNDED, and that is the point. The box is a source this slice deliberately does NOT
- * trust — the whole design is "the box fetches, the Worker rules" — so its payload is bounded at the
- * contract edge and a violation fails as a clean 400, never as work the handler has to do. The bounds
- * are defence in depth (the box sends at most {@link DEEZER_CANDIDATE_LIMIT} hits and the gate refuses
- * a nonsense duration anyway), which is exactly the posture an untrusted source deserves.
- */
 export const DeezerIsrcCandidateSchema = z
   .object({
-    /** Deezer's billed artist string for the hit — folded into an artist set by the gate. */
     artistName: z.string().max(DEEZER_TEXT_MAX),
-    /**
-     * Deezer's own track id for the hit. OPTIONAL, and it is not evidence the gate reads: the ISRC
-     * decision does not consult it, so a box on a build that predates this field still recovers
-     * ISRCs exactly as before. What it buys is the link — a hit that CLEARS the gate is this
-     * recording on Deezer, so the server keeps the id (`tracks.deezer_track_id`) and `/identity`
-     * serves `https://www.deezer.com/track/<id>` off it. Bounded like every other field here,
-     * because it reaches a public page: the box remains a source that is checked, not trusted.
-     */
+
     deezerTrackId: z.string().max(DEEZER_TRACK_ID_MAX).optional(),
-    /**
-     * The hit's duration in MILLISECONDS (Deezer bills seconds; the box promotes them). POSITIVE and
-     * FINITE: a zero, negative, or non-finite duration is not a recording length, and the gate's
-     * `Math.abs(candidate - row) <= tolerance` would silently read it as a plain miss rather than as
-     * the malformed payload it is. (Zod 4's bare `z.number()` already rejects `NaN`/`Infinity`;
-     * `.finite()` says so out loud, `.positive()` is the part that is genuinely new.)
-     */
+
     durationMs: z.number().positive().finite(),
-    /** The recording's ISRC as Deezer holds it — the whole point of the rung, and never trusted unverified. */
+
     isrc: z.string().max(DEEZER_ISRC_MAX),
     title: z.string().max(DEEZER_TEXT_MAX),
   })
   .meta({ id: "DeezerIsrcCandidate" });
 
-/**
- * `resolve_anchor` → `POST /admin/catalogue/anchor/resolve` (operationId `resolveAnchor`).
- *
- * Admin tier (AGENT-allowed WRITE), the `anchor_track` sibling and precedent. The FREE first rung of
- * the resolver waterfall (docs/catalogue-crawler.md § the anchor): given only a catalogue row's id,
- * the SERVER resolves its Spotify anchor for free — it reads the row's MusicBrainz recording MBID,
- * asks ListenBrainz labs for the Spotify track ids of that recording (no auth, no spend), fetches the
- * first id's metadata with ONE by-id Spotify read (never a search), and runs that candidate through
- * the SAME verification gate `anchor_track` uses. Unlike `anchor_track`, the box supplies no
- * candidates — this rung fetches them itself, because ListenBrainz is free and the Spotify by-id read
- * needs the Worker's own token.
- *
- * The box's `fluncle-anchor` sweep calls this FIRST per worklist row and only spends the metered
- * Apify search (`anchor_track`) when this MISSES — so an Apify outage still leaves this rung anchoring
- * its share. A HIT stamps the anchor + the attempt exactly like `anchor_track`; a MISS leaves the row
- * UNSTAMPED so the Apify fallback (or the next tick) still runs on it. It writes only catalogue-
- * identity columns and never certifies, so the box's agent token drives it. 404 when the track does
- * not exist; 409 when it is certified or already anchored.
- *
- * RUNG 0 — DEEZER ISRC-RECOVERY. Before any anchor rung, and ONLY for an ISRC-less row, the recording's
- * real ISRC is recovered from Deezer's free, no-auth oracle (~60% of catalogue rows arrive ISRC-less
- * because our ISRC comes from MusicBrainz, whose underground-DnB ISRC coverage is sparse). Every Deezer
- * hit is re-verified against the row to the SAME fold + duration bar the anchor gate uses, then
- * persisted fill-empty-only — so anchoring runs through the high-precision exact-ISRC rungs instead of
- * fuzzy. `isrcRecoveredByDeezer` reports whether it fired (orthogonal to `anchored` — the recovered
- * ISRC is persisted even on a full miss). A Deezer outage degrades cleanly to no recovery.
- *
- * The SEARCH for that rung runs on the BOX ({@link DeezerIsrcCandidateSchema}): the sweep asks Deezer
- * with the worklist's ready-made `deezerQuery` from its own dedicated IP and POSTs the hits as
- * `deezerCandidates`, because Deezer's tokenless quota is per-IP and the Worker's shared edge IPs are
- * saturated (0 recoveries out of 5,133 rows over 3 days, measured). PRESENT (even as an empty array) ⇒
- * the Worker verifies exactly those and issues no Deezer request; ABSENT ⇒ the Worker searches itself,
- * the pre-box behaviour, which is what a caller with no box in front of it still gets. Either way the
- * VERIFICATION and the write are the server's alone — the box cannot authorise an ISRC, only offer one.
- *
- * SLICE 2 — the DARK Spotify SEARCH rungs (`anchor_spotify_search_enabled`, default OFF). When the
- * ListenBrainz rung misses AND the flag is on AND we are outside the Friday-refresh window, this also
- * resolves the row against the shared official Spotify app's SEARCH (exact ISRC, then fuzzy) before it
- * returns a miss — the ~75-85% Apify cost cut. `source` names which rung anchored (`listenbrainz` |
- * `spotify-isrc` | `spotify-search`), so the sweep can tally per rung. `spotifySearchDone` is true iff
- * this call issued a Spotify SEARCH — the signal the box's pacer throttles on to hold the 60/min
- * ceiling; when the flag is OFF it is always false and NO Spotify search ran (the load-bearing gate).
- *
- * SLICE 3 — the APIFY KILL-FLAG (`anchor_apify_enabled`, default ON, `set_anchor_apify`). `apifyEnabled`
- * reflects it for this call — a GLOBAL flag, so every verdict in a tick agrees. When FALSE (out of Apify
- * budget) the box SKIPS the whole Apify actor loop, and this call has already parked the row if no rung
- * could conclude about it (so it leaves the recirculating-stall behind for a clean self-managing state).
- * When TRUE (the default) a free-rung miss is NEVER stamped here — unchanged.
- *
- * THE TWO LEDGERS. `stamped` says the row was PARKED on its re-ask backoff; the lifetime retry cap
- * (`ANCHOR_MAX_ATTEMPTS`) is a separate charge, and it is spent only when a rung capable of CONCLUDING
- * — the Spotify SEARCH pair, or the paid Apify fallback — was actually asked and missed. ListenBrainz
- * is a positive-only oracle (a hit is proof, a miss only says its mapping table is silent), so a
- * ListenBrainz-only miss parks the row without spending one of its finite tries.
- */
 export const resolveAnchor = oc
   .route({
     method: "POST",
@@ -1362,75 +703,28 @@ export const resolveAnchor = oc
   })
   .input(
     z.object({
-      /**
-       * The Deezer hits the BOX fetched for this row (rung 0). Present — INCLUDING an empty array,
-       * which says "the box searched and found nothing usable" — ⇒ the server verifies exactly these
-       * and issues no Deezer request of its own. Absent ⇒ the server searches Deezer itself.
-       *
-       * Capped at {@link DEEZER_CANDIDATE_LIMIT}, which is the same number the search asks Deezer for:
-       * a caller offering more hits than Deezer's own page size is already wrong, so it is refused at
-       * the boundary (a clean 400) rather than trusted to be harmless. The `requeue_anchor` discipline.
-       */
       deezerCandidates: z.array(DeezerIsrcCandidateSchema).max(DEEZER_CANDIDATE_LIMIT).optional(),
-      /**
-       * THE CALLER'S DEFERRAL of the Spotify SEARCH rungs for this row — `false` means "not on this
-       * one". The box owns three guards the server cannot see because each is a property of a TICK
-       * rather than of a call: the per-tick exact-ISRC ask budget, the night window, and the yield
-       * law (any 429 ends the tick's remaining asks). It is ANDed with the server's own gate exactly
-       * like every clause there, so it can only ever SUBTRACT permission — no request can talk the
-       * rungs INTO running, and the dark flag stays the one thing that arms them. Omitted ⇒ true ⇒
-       * the pre-slice behaviour. A row deferred this way is NOT exhausted: it stamps nothing and
-       * keeps its turn for a later tick.
-       */
+
       spotifySearch: z.boolean().optional(),
       trackId: z.string().min(1),
     }),
   )
   .output(
     z.object({
-      /** True when a free rung verified a candidate and the anchor was written. */
       anchored: z.boolean(),
-      /**
-       * Rows the metered Apify rung may still be sent TODAY under the operator's daily cap
-       * (`get_anchor_apify_budget`), as it stands AFTER this call's own authorisation. The sweep
-       * reports it and stops pulling work at 0; the brake itself is server-side.
-       */
+
       apifyBudgetRemaining: z.number().int().nonnegative(),
-      /**
-       * THE PAID RUNG'S ADMISSION VERDICT for this row — the server telling the box whether it may
-       * spend Apify money on it. The free exact-ISRC rung and the paid Apify search answer the SAME
-       * question about an ISRC-bearing row, and the free one answers ~4 asks in 5, so the paid rung
-       * is admitted only once the free one actually ASKED Spotify about THIS row and got a clean miss
-       * (`tracks.spotify_isrc_asked_at`). A deferral, a 429, a dead grant, a tripped breaker and a
-       * failed metadata read all leave the row un-admitted and KEEPING ITS TURN — none of them put
-       * the question. An ISRC-LESS row is admitted once the free FUZZY rung ran un-throttled.
-       *
-       * THE EXEMPTION: when the free search rungs are DISARMED (`spotifySearchEnabled` false, the
-       * default) no receipt can ever be written, so the row is admitted immediately — otherwise the
-       * rule would close the only rung it has left.
-       *
-       * FALSE also when the row ANCHORED (nothing left to buy) or the daily cap has no room
-       * (`apifyIneligibleReason`). The box is TOLD, never trusted: `anchor_track` re-checks the rule
-       * at the write boundary and 409s (`awaiting_free_ask`) on a row that was never asked.
-       */
+
       apifyEligible: z.boolean(),
-      /**
-       * The `anchor_apify_enabled` kill-flag (default ON) as read this call. FALSE ⇒ the box skips the
-       * Apify actor loop this tick, and a genuinely-exhausted full miss was already stamped-and-backed-off.
-       */
+
       apifyEnabled: z.boolean(),
-      /** Why `apifyEligible` is false, or null (an anchor, or an admitted row). */
+
       apifyIneligibleReason: z.enum(["apify_budget_spent", "awaiting_free_ask"]).nullable(),
-      /** Free-rung candidates that arrived without a numeric duration; observation only. */
+
       freeDurationMsOmitted: z.number().int().nonnegative(),
-      /** True iff this call recovered a verified ISRC from Deezer into a previously ISRC-less row (orthogonal to `anchored`). */
+
       isrcRecoveredByDeezer: z.boolean(),
-      /**
-       * The ListenBrainz rung's exact terminal outcome, preserved so the box can count where
-       * candidates die. `yielded-on-breaker` is the rung declining to spend its ONE by-id Spotify
-       * read while the shared-app throttle breaker is tripped — distinct from `metadata-failed`,
-       * which is that read actually failing, because a yield is backpressure and a failure is a bug.
-       */
+
       listenbrainzOutcome: z.enum([
         "anchored",
         "empty-ids",
@@ -1443,76 +737,23 @@ export const resolveAnchor = oc
         "yielded-on-breaker",
       ]),
       ok: z.literal(true),
-      /** Which rung anchored, or null on a miss. `spotify-*` only ever when the dark flag is on. */
+
       source: z.enum(["listenbrainz", "spotify-isrc", "spotify-search"]).nullable(),
-      /** True iff an EXACT-ISRC search was spent this call — the unit the box's per-tick ask budget meters. */
+
       spotifyIsrcAsked: z.boolean(),
-      /** True iff a Spotify SEARCH was issued this call — the box's pacer signal. OFF flag ⇒ false. */
+
       spotifySearchDone: z.boolean(),
-      /**
-       * The `anchor_spotify_search_enabled` dark flag (default OFF) as read this call — the FLAG
-       * itself, never the window/breaker/meter gate around it. FALSE together with `apifyEnabled`
-       * false means NO rung in the waterfall can conclude about a row, which is what lets the tick
-       * summary say so instead of reading as a healthy empty run.
-       */
+
       spotifySearchEnabled: z.boolean(),
-      /**
-       * True iff a Spotify call in this call's anchor path came back 429 — the YIELD LAW's wire. A
-       * throttle is PASS-ENDING (the box stops asking for Spotify rungs for the rest of the tick) and
-       * never ROW-FAILING: the row stamps nothing and keeps its turn.
-       */
+
       spotifyThrottled: z.boolean(),
-      /**
-       * True iff this call wrote the row's re-ask backoff stamp, i.e. the row is parked and will not
-       * be re-offered until the backoff ages out. FALSE on an anchor (the row is done, not backed
-       * off) and FALSE whenever the row kept its turn, so `!anchored && !stamped` is the caller's one
-       * honest test for "this row is coming back" — the difference between a tick that retired rows
-       * and a tick that re-read the same queue head.
-       */
+
       stamped: z.boolean(),
-      /** Which gate rung matched (`isrc` | `search`), or null on a miss (no MBID / no map / no verify). */
+
       verifiedBy: z.enum(["isrc", "search", "search-subset"]).nullable(),
     }),
   );
 
-// ─────────────────────────────────────────────────────────────────────────────
-// THE ANCHOR REVIEW — the one anchor miss a human can act on.
-//
-// The gate refuses a candidate whose version descriptor differs from the row's, and it is right to:
-// the original of a logged VIP must never anchor to the VIP. But a measured class of rows carries
-// MusicBrainz metadata that OMITS the version — a comp track billed plain "Typical Description" at
-// 394s where streaming holds the plain mix at 313s and "(Calibre Remix)" at 394s — so the duration
-// says remix while the title says original. Those rows miss deterministically forever and now retire
-// under the retry cap, with nothing written down.
-//
-// So the gate records the near-match on the row (`tracks.anchor_review_json`) and the /admin
-// attention queue surfaces it as an `anchor-review` row. NOTHING auto-anchors: the never-wrong-stamp
-// rail is why the anchor module exists, and a heuristic strong enough to raise a question is not
-// strong enough to answer it. This op is the operator's answer.
-// ─────────────────────────────────────────────────────────────────────────────
-
-/**
- * `resolve_anchor_review` → `POST /admin/catalogue/anchor/reviews/{trackId}/resolve` (operationId
- * `resolveAnchorReview`).
- *
- * OPERATOR tier (`adminAuth` + `operatorGuard`) — the `resolve_note_rejection` shape and the
- * `set_capture_budget` rule. Both rulings are the operator's alone, because a `spotify_uri` is the
- * row's public identity: it feeds the private Telescope playlist and the certify path, and a wrong
- * one is permanent. The machine may hold up the evidence; only he decides.
- *
- * `accepted` — the candidate IS the row. The anchor is written exactly as a verified gate hit writes
- * it (uri + url, fill-empty-only cover + ISRC, the attempt stamp and its counter together) and the
- * artists link off the SAME stored candidate, so an accepted anchor is indistinguishable downstream.
- * `409 no_spotify_candidate` when the reviewed candidate carries no Spotify id — there is nothing to
- * anchor to, and such a row rides the queue as information (the MusicBrainz link) instead.
- *
- * `dismissed` — not a match. The review is cleared and the row keeps its normal lifecycle: same
- * stamp, same counter, same retry cap. Dismissing decides nothing except that this near-match wasn't it.
- *
- * Either way the review is GONE afterwards, so the queue row cannot come back for the same evidence.
- * Codes: `not_found`/404 (unknown track), `no_review`/404 (nothing to rule on — a concurrent anchor
- * cleared it), `certified`/409, `already_anchored`/409, `no_spotify_candidate`/409.
- */
 export const resolveAnchorReview = oc
   .route({
     method: "POST",
@@ -1529,29 +770,17 @@ export const resolveAnchorReview = oc
   )
   .output(
     z.object({
-      /** True when `accepted` wrote the anchor; false for a dismissal. */
       anchored: z.boolean(),
       ok: z.literal(true),
-      /** The candidate that was ruled on, echoed back so the caller can log what it decided. */
+
       review: z.object({
         candidateTitle: z.string(),
-        /** The Spotify id the row was anchored to; absent on a dismissal. */
+
         spotifyTrackId: z.string().optional(),
       }),
     }),
   );
 
-/**
- * `set_anchor_search` → `PUT /admin/catalogue/anchor/search` (operationId `setAnchorSearch`).
- *
- * OPERATOR tier — the DARK FLAG for slice 2's Spotify SEARCH rungs (`anchor_spotify_search_enabled`
- * on the shared `settings` KV, the `set_capture_budget` shape). The Spotify search rungs call the ONE
- * official app that also serves user-facing mints/publish, which STARVED under 429s at catalogue
- * scale — so they ship DEFAULT OFF and flip on only by a deliberate operator act (a machine does not
- * get to point the shared token at the catalogue). `enabled: true` writes `"true"`; anything else
- * leaves the rungs SKIPPED. Returns the flag as stored, so one call both writes and reads back. The
- * flip takes effect on the next `resolve_anchor` tick, with no deploy — the kill-switch discipline.
- */
 export const setAnchorSearch = oc
   .route({
     method: "PUT",
@@ -1563,36 +792,6 @@ export const setAnchorSearch = oc
   .input(z.object({ enabled: z.boolean() }))
   .output(z.object({ enabled: z.boolean(), ok: z.literal(true) }));
 
-/**
- * `set_anchor_apify` → `PUT /admin/catalogue/anchor/apify` (operationId `setAnchorApify`).
- *
- * OPERATOR tier — the APIFY KILL-FLAG (`anchor_apify_enabled` on the shared `settings` KV, the
- * `set_capture_budget` / `set_anchor_search` shape). It turns "out of Apify budget" from a STALL into a
- * clean, self-managing state. The anchor waterfall's PAID last resort is the Apify search; when Apify
- * hits its account cap it 403s, the box catches the failed run as a skipped chunk, and those rows are
- * never stamped — so they recirculate at the head of the worklist forever and the drain stalls. Flip
- * this OFF (out of budget) and the free rungs stamp-and-back-off their full misses while the box skips
- * the Apify actor loop entirely (docs/catalogue-crawler.md § the anchor).
- *
- * Unlike the DEFAULT-OFF dark flags, this is DEFAULT ON: the steady state is "Apify runs". `enabled:
- * false` writes `"false"` (the only value that disables it) AND records the off-window start; anything
- * else re-enables AND re-queues the off-window deferrals (see below). Returns the flag as stored, so one
- * call both writes and reads back. The flip takes effect on the next `resolve_anchor` tick, with no deploy
- * — the kill-switch discipline. Operator tier: a machine does not get to arm/disarm its own spend rail —
- * the `set_capture_budget` rule.
- *
- * `requeued` is how many catalogue rows the flip-ON re-queued. While the flag is OFF the free rungs
- * stamp-and-back-off their full misses, so the HIGHER-priority rows skipped during the outage would
- * otherwise wait out the full 14-day re-ask backoff while Apify works lower-priority rows first — a
- * priority inversion. Flipping back ON nulls the `spotify_anchor_attempted_at` stamp on exactly the
- * ISRC-BEARING off-window deferrals (every stamp written while the box made ZERO Apify attempts), so
- * they re-enter the priority-ordered worklist immediately; genuine prior backoffs, which all predate
- * the off-window, are untouched, and so are ISRC-less deferrals (`has_isrc = 1` — anchoring concludes
- * off the ISRC anchor in practice, so a bulk re-arm of rows without one re-bills asks that cannot
- * conclude). It moves the STAMP alone: an off-window deferral never charged the row's retry-cap
- * counter (an attempt is spent only for a real ask by a rung that could conclude), so there is
- * nothing to give back. `requeued` is `0` for a flip-OFF, or a flip-ON when no off-window was recorded.
- */
 export const setAnchorApify = oc
   .route({
     method: "PUT",
@@ -1604,26 +803,12 @@ export const setAnchorApify = oc
   .input(z.object({ enabled: z.boolean() }))
   .output(z.object({ enabled: z.boolean(), ok: z.literal(true), requeued: z.number() }));
 
-// ─────────────────────────────────────────────────────────────────────────────
-// THE CAPTURE BUDGET — the brake on what the two above cost. docs/the-ear.md.
-// ─────────────────────────────────────────────────────────────────────────────
-
-/**
- * The capture budget's whole readout: the kill switch, the two caps, what the catalogue has
- * actually spent in the rolling 24h, and the verdict the capture queue obeys.
- *
- * `spend.tracks` counts ATTEMPTS (done + unmatched + failed) — every one of them was a billed
- * proxy request, and a budget that only counted successes would let a day of failures spend
- * real money against a meter reading zero. `spend.bytes` sums only what LANDED: a failed
- * download's partial transfer is genuinely unknowable from the server, so it is under-counted
- * rather than guessed at.
- */
 export const CaptureBudgetStateSchema = z
   .object({
     budget: z.object({ dailyBytes: z.number(), dailyTracks: z.number() }),
-    /** Null exactly when `open`. `paused` (the kill switch) wins over either cap. */
+
     closedReason: z.enum(["bytes_spent", "paused", "tracks_spent"]).nullable(),
-    /** True ⇒ the capture queue may hand out catalogue rows right now. */
+
     open: z.boolean(),
     paused: z.boolean(),
     remainingBytes: z.number(),
@@ -1633,18 +818,6 @@ export const CaptureBudgetStateSchema = z
   })
   .meta({ id: "CaptureBudgetState" });
 
-/**
- * `get_capture_budget` → `GET /admin/catalogue/capture-budget` (operationId
- * `getCaptureBudget`).
- *
- * Admin tier (agent-allowed READ, the `get_crawl_status` precedent) — the spend readout.
- * A metered thing the operator cannot see is a thing he cannot control, so this is what
- * `/admin/catalogue` and `fluncle admin capture budget` render: what it captured in the last
- * 24h, how many GB that was, and how much budget is left.
- *
- * It is the SAME code path the capture queue's brake consults, deliberately — a budget
- * display that can disagree with the budget is worse than no display at all.
- */
 export const getCaptureBudget = oc
   .route({
     method: "GET",
@@ -1656,21 +829,6 @@ export const getCaptureBudget = oc
   .input(z.object({}))
   .output(CaptureBudgetStateSchema.extend({ ok: z.literal(true) }));
 
-/**
- * `set_capture_budget` → `PUT /admin/catalogue/capture-budget` (operationId
- * `setCaptureBudget`).
- *
- * OPERATOR tier — the `set_publish_advance` shape, on the same `settings` KV. This is the one
- * op in the domain the agent may never touch, and the reason is that every other op here is
- * free: the crawler moves metadata and the Ear moves vectors, while THIS decides how much of
- * the operator's money a residential proxy may spend on his behalf. A machine does not get to
- * raise its own budget.
- *
- * Every field is optional, so one call is either a flip of the switch, a change to a cap, or
- * both. `paused: true` is the KILL SWITCH and stops the spend on the next queue read, with no
- * deploy. Both caps are non-negative integers; `0` is legal and means "capture nothing", which
- * is a different statement from paused (the cap can be raised back without touching the switch).
- */
 export const setCaptureBudget = oc
   .route({
     method: "PUT",
@@ -1688,50 +846,20 @@ export const setCaptureBudget = oc
   )
   .output(CaptureBudgetStateSchema.extend({ ok: z.literal(true) }));
 
-// ─────────────────────────────────────────────────────────────────────────────
-// THE APPLE BREAKER — the operator's reset for the cross-cutting Apple failure-regime breaker
-// (RFC musickit-second-authority, Cross-cutting). docs/track-lifecycle.md.
-// ─────────────────────────────────────────────────────────────────────────────
-
-// ─────────────────────────────────────────────────────────────────────────────
-// THE APIFY ROW BRAKE — the daily cap under the kill-flag. docs/catalogue-crawler.md § the anchor.
-// ─────────────────────────────────────────────────────────────────────────────
-
-/**
- * The Apify row brake's whole readout: the operator's cap, the UTC day's spend, and what is left.
- *
- * `rowsSent` counts AUTHORISATIONS — the moments the server told the box a row was Apify-eligible,
- * which is the only point it is in the loop ahead of the money. A sweep that dies between the
- * authorisation and the actor over-counts by one row, the conservative direction: the brake reads
- * the spend it authorised, never less than what was billed.
- */
 export const AnchorApifyBudgetSchema = z
   .object({
-    /** The operator's cap on rows sent to the metered actor per UTC day. */
     dailyRows: z.number(),
-    /** The UTC calendar day the tally belongs to (`YYYY-MM-DD`); it rolls implicitly at midnight. */
+
     day: z.string(),
-    /** Rows left before the brake bites. Never negative. */
+
     remainingRows: z.number(),
-    /** Rows the server has authorised for the actor today. */
+
     rowsSent: z.number(),
-    /** True ⇒ the cap is reached and no further row may be sent to the actor today. */
+
     spent: z.boolean(),
   })
   .meta({ id: "AnchorApifyBudget" });
 
-/**
- * `get_anchor_apify_budget` → `GET /admin/catalogue/anchor/apify-budget` (operationId
- * `getAnchorApifyBudget`).
- *
- * Admin tier (AGENT-allowed READ, the `get_capture_budget` precedent) — the paid anchor rung's spend
- * readout. A metered thing the operator cannot see is a thing he cannot control, and the box's
- * `fluncle-anchor` sweep is entitled to know why it may not spend: it reads this in its preflight and
- * stops pulling rows it has no budget for, rather than pulling them and refusing them one at a time.
- *
- * It is the SAME state the resolver's own charge reads — a budget display that can disagree with the
- * budget is worse than no display at all.
- */
 export const getAnchorApifyBudget = oc
   .route({
     method: "GET",
@@ -1743,21 +871,6 @@ export const getAnchorApifyBudget = oc
   .input(z.object({}))
   .output(AnchorApifyBudgetSchema.extend({ ok: z.literal(true) }));
 
-/**
- * `set_anchor_apify_budget` → `PUT /admin/catalogue/anchor/apify-budget` (operationId
- * `setAnchorApifyBudget`).
- *
- * OPERATOR tier — the `set_capture_budget` rule, which is the reason this exists at all: a machine
- * does not get to raise its own spend cap. The kill-flag beside it is a switch, on or off; this is the
- * NUMBER between those two states, so "Apify runs" stops meaning "Apify runs without limit".
- *
- * `dailyRows` is a non-negative integer. `0` is legal and means "send nothing", which is a different
- * statement from the kill-flag being off — the cap can be raised back without touching the switch.
- * Returns the brake as stored, so one call both writes and reads back, and the day's tally is left
- * alone: raising the cap mid-day releases the rows it was holding rather than pretending the day
- * started over. The change takes effect on the next `resolve_anchor` — no deploy, the kill-switch
- * discipline.
- */
 export const setAnchorApifyBudget = oc
   .route({
     method: "PUT",
@@ -1769,68 +882,30 @@ export const setAnchorApifyBudget = oc
   .input(z.object({ dailyRows: z.number().int().min(0) }))
   .output(AnchorApifyBudgetSchema.extend({ ok: z.literal(true) }));
 
-/** The Spotify anchor breaker's readout — what both ops below return. */
 export const SpotifyAnchorBreakerStateSchema = z
   .object({
-    /** Milliseconds left on the pause while tripped; 0 when clear. */
     cooldownRemainingMs: z.number(),
-    /** Why it is paused (`"throttled"`), or null when clear. */
+
     reason: z.string().nullable(),
-    /** 429s counted inside the live failure window (0 once the window decays, or after a trip). */
+
     throttlesInWindow: z.number(),
-    /** True ⇒ the Spotify anchor SEARCH rungs are paused. NOTHING else is affected. */
+
     tripped: z.boolean(),
-    /** ISO of the live trip, or null when clear. */
+
     trippedAt: z.string().nullable(),
   })
   .meta({ id: "SpotifyAnchorBreakerState" });
 
-/**
- * WHICH ANCHOR RUNGS ARE ARMED AT ALL — the two operator flags the breaker readout carries alongside
- * its own pause, because the three questions an operator asks about a quiet anchor sweep are the same
- * question: can anything conclude right now?
- *
- * They are the FLAGS as stored (`set_anchor_search` / `set_anchor_apify`), never the window, breaker
- * or meter gates layered over them — so the pair answers "is the rung armed", and `tripped` above
- * answers "is the armed rung paused". Both false means no rung in the waterfall can conclude about a
- * catalogue row: the free ListenBrainz rung still runs and can WIN, but its miss is not a verdict, so
- * a tick in that state retires nothing and must not read as a healthy empty run.
- */
 export const AnchorRungFlagsSchema = z
   .object({
-    /**
-     * THE DAILY ROW BRAKE under the kill-flag — what the paid rung has spent today and what is left
-     * (`get_anchor_apify_budget`, the same state that op and the resolver's own charge read). It
-     * rides HERE because "why is the anchor sweep quiet" has a fourth answer beside a tripped
-     * breaker and two disarmed rungs: the day's rows are gone.
-     */
     apifyBudget: AnchorApifyBudgetSchema,
-    /** `anchor_apify_enabled` (DEFAULT ON) — the paid Apify search fallback. */
+
     apifyEnabled: z.boolean(),
-    /** `anchor_spotify_search_enabled` (DEFAULT OFF) — the dark Spotify exact-ISRC + fuzzy rungs. */
+
     spotifySearchEnabled: z.boolean(),
   })
   .meta({ id: "AnchorRungFlags" });
 
-/**
- * `get_spotify_anchor_breaker` → `GET /admin/catalogue/anchor/breaker` (operationId
- * `getSpotifyAnchorBreaker`).
- *
- * Admin tier (agent-allowed READ, the `get_capture_budget` precedent) — the anchor breaker's
- * readout. Sustained 429s on the ONE shared Spotify app (from ANY path — a mint, publish, the
- * Frontier refresh, or the anchor sweep itself) trip a circuit breaker that PAUSES the optional
- * Spotify anchor-search rungs and nothing else. A pause the operator cannot see is a pause he will
- * misdiagnose as a broken sweep, so this is what answers "why did the anchor rungs go quiet".
- *
- * The read is agent-allowed for the same reason the capture budget's is: the box's `fluncle-anchor`
- * sweep is entitled to know why its free rungs stopped resolving. It reads the SAME state the gate
- * consults — a breaker display that can disagree with the breaker would be worse than none.
- *
- * `rungs` rides along for the same reason (`AnchorRungFlagsSchema`): a paused breaker and a disarmed
- * rung look identical from outside — both are silence — and until this the two operator flags could
- * only be INFERRED from what the sweep failed to do. The reset op deliberately does NOT carry them:
- * it reports what it changed, and it changes no flag.
- */
 export const getSpotifyAnchorBreaker = oc
   .route({
     method: "GET",
@@ -1845,20 +920,6 @@ export const getSpotifyAnchorBreaker = oc
     SpotifyAnchorBreakerStateSchema.extend({ ok: z.literal(true), rungs: AnchorRungFlagsSchema }),
   );
 
-/**
- * `reset_spotify_anchor_breaker` → `POST /admin/catalogue/anchor/breaker/reset` (operationId
- * `resetSpotifyAnchorBreaker`).
- *
- * OPERATOR tier — the `reset_apple_breaker` shape. Lifts the pause on the Spotify anchor-search
- * rungs early and zeroes the throttle count, returning the breaker's state. The breaker already
- * self-heals on its cooldown, so this is for two cases: the operator has confirmed Spotify is
- * healthy and does not want to wait out the hour, or the stored state is unreadable (which reads as
- * PAUSED by the default-deny rule) and he wants it cleared now.
- *
- * Operator tier because it re-arms the one catalogue path that shares the official Spotify app with
- * user-facing mints and publish — the `set_anchor_search` rule. A machine does not get to un-brake
- * the thing that just starved the app it is pointed at.
- */
 export const resetSpotifyAnchorBreaker = oc
   .route({
     method: "POST",
@@ -1870,31 +931,18 @@ export const resetSpotifyAnchorBreaker = oc
   .input(z.object({}))
   .output(SpotifyAnchorBreakerStateSchema.extend({ ok: z.literal(true) }));
 
-/** The Apple breaker's readout — what the reset returns, and observability shows. */
 export const AppleBreakerStateSchema = z
   .object({
-    /** Consecutive 401/403 responses seen since the last success (0 after a reset / a success). */
     consecutiveAuthFailures: z.number(),
-    /** Milliseconds left on the cooldown while tripped; 0 when not tripped. */
+
     cooldownRemainingMs: z.number(),
-    /** True ⇒ every Apple-touching path short-circuits (no call) until the cooldown / a reset. */
+
     tripped: z.boolean(),
-    /** ISO of when it last tripped, or null when not tripped. */
+
     trippedAt: z.string().nullable(),
   })
   .meta({ id: "AppleBreakerState" });
 
-/**
- * `reset_apple_breaker` → `POST /admin/catalogue/apple-breaker/reset` (operationId
- * `resetAppleBreaker`).
- *
- * OPERATOR tier. Clears the cross-cutting Apple failure-regime breaker: K consecutive 401/403
- * responses (a suspended developer token) trip it, and while tripped EVERY Apple-touching path —
- * the two sweeps here, and later the live preview rung + editorial fuel — short-circuits until a
- * cooldown elapses. This lifts the trip early (once the token is fixed) and zeroes the streak,
- * returning the breaker's state. Operator tier because it re-arms a spend-adjacent external
- * integration a machine should not silently un-brake — the `set_capture_budget` neighbour's rule.
- */
 export const resetAppleBreaker = oc
   .route({
     method: "POST",
@@ -1906,7 +954,6 @@ export const resetAppleBreaker = oc
   .input(z.object({}))
   .output(AppleBreakerStateSchema.extend({ ok: z.literal(true) }));
 
-/** The `admin-catalogue` domain's ops, merged into the root contract by `./index.ts`. */
 export const adminCatalogueContract = {
   anchor_track: anchorTrack,
   certify_track: certifyTrack,

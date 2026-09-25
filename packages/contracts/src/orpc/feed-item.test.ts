@@ -1,14 +1,7 @@
-// Self-running check for the FeedItem union ordering — no framework. Load-bearing
-// invariant: the TrackListItem (finding) arm MUST stay first in the union so a
-// finding whose optional `type` is ABSENT still parses as a finding, while
-// `type: "mixtape"` takes the mixtape arm. Reorder the union and a typeless
-// finding silently mis-parses. Run: `bun src/orpc/feed-item.test.ts`.
-
 import assert from "node:assert/strict";
 
 import { FeedItemSchema } from "./_shared";
 
-// A minimal valid finding (TrackListItem) — note: NO `type` field.
 const finding = {
   addedAt: "2026-06-08T12:00:00Z",
   addedToSpotify: true,
@@ -21,22 +14,18 @@ const finding = {
   trackId: "abc",
 };
 
-// 1. A finding WITHOUT `type` parses, and lands on the finding arm (it has a
-//    `trackId`, which the mixtape arm does not).
 {
   const parsed = FeedItemSchema.parse(finding);
   assert.ok("trackId" in parsed, "a typeless finding must parse as the finding arm");
   assert.equal((parsed as { trackId: string }).trackId, "abc");
 }
 
-// 2. A finding WITH explicit `type: "finding"` still parses as the finding arm.
 {
   const parsed = FeedItemSchema.parse({ ...finding, type: "finding" });
   assert.equal((parsed as { type?: string }).type, "finding");
   assert.ok("trackId" in parsed, "explicit-finding stays on the finding arm");
 }
 
-// 3. A mixtape (`type: "mixtape"`) parses as the mixtape arm.
 {
   const mixtape = {
     artists: ["Fluncle"] as const,

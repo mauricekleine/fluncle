@@ -1,72 +1,24 @@
-// The `admin-tracks` domain contract module — the admin-gated track ops (the
-// enrichment/curation write path + the video control-plane). This is the ADMIN
-// wave's pattern-complete pilot: it exercises every admin pattern the
-// fan-out will reuse —
-//
-//   - the FIELD-LEVEL role guard: `update_track` is on `adminProcedure` (both the
-//     operator and the agent authenticate), and the handler reads `context.role`
-//     to bound the agent to analysis fields (an operator-only field written by the
-//     agent is a 403, not a silent drop);
-//   - an `operatorProcedure` mint: `observe_track` (the live route is
-//     `requireOperator`, so it stays operator-only — see the server module);
-//   - the JSON video CONTROL-PLANE: `presign_track_video_uploads` +
-//     `finalize_track_video` — the bytes go direct to R2 via the presigned URL, so
-//     the bodies oRPC sees are plain JSON (in scope per the brief).
-//
-// Inputs are LOOSE/passthrough by design: the live admin routes do NOT
-// schema-validate — they narrow `unknown` in-handler and emit their own codes
-// (`invalid_request`/`note_too_long`/`no_fields`/…). A permissive contract keeps
-// oRPC from pre-rejecting so that logic — and its exact codes — stays
-// byte-for-byte for the admin consumers (the `fluncle admin` CLI + the enrichment
-// agent). A future admin wave adds an op here and one import line in `./index.ts`,
-// touching no other domain's file.
-
 import { oc } from "@orpc/contract";
 import * as z from "zod";
-// `./_shared.js` (not `./_shared`): `index.ts` now re-exports this module's TrackWork types,
-// which pulls it into the node16-resolution consumers' graph (apps/raycast) — where an
-// extensionless relative import is an error. Same reason `galaxies.ts` carries the extension.
+
 import { FeedItemSchema, MixReasonSchema, TrackListItemSchema } from "./_shared.js";
 
-/**
- * The PATCH /admin/tracks/{trackId} body — the generic admin track update. LOOSE
- * + optional UNKNOWN: the live route narrows each field itself (number/string
- * guards, the `enrichmentStatus` enum, `parseEditorialNote`) and runs the
- * agent-role field guard, so the contract must not pre-reject. The handler reads
- * the raw input and reproduces that logic verbatim.
- */
 const UpdateTrackBodySchema = z.looseObject({
-  // BPM/key analysis provenance (RFC bpm-key-accuracy) — agent-writable analysis metadata
-  // like `features`/`embedding`. LOOSE like the rest: the handler narrows each (analyzedFrom
-  // to the preview|full enum, the sources to strings, the confidences to numbers). Internal —
-  // the handler keeps them out of VISIBLE_FIELDS so a provenance write moves no public lastmod.
   analyzedAt: z.unknown().optional(),
   analyzedFrom: z.unknown().optional(),
   bpm: z.unknown().optional(),
   bpmConfidence: z.unknown().optional(),
   bpmSource: z.unknown().optional(),
-  // The full-song capture side-channel state (RFC full-audio, the `fluncle-capture`
-  // cron) — all agent-writable analysis fields, like `embedding`. LOOSE like the rest:
-  // the handler narrows each (the captureStatus enum, the key/timestamps to strings,
-  // failures to a number). Internal — the handler keeps them out of VISIBLE_FIELDS so
-  // a capture write moves no public lastmod.
+
   captureStatus: z.unknown().optional(),
-  // The capture VERIFICATION provenance (docs/the-ear.md § Wrong audio) — the ingest gate's
-  // fingerprint verdict + its stamp + the bad-audio memory. Agent-writable analysis fields, LOOSE
-  // like the rest: the handler narrows the verdict to its 3-value enum and the memory to a string.
+
   captureVerification: z.unknown().optional(),
   captureVerifiedAt: z.unknown().optional(),
-  // The MuQ audio embedding (a JSON array of 1024 floats) — an agent-writable
-  // analysis field the on-box `fluncle-embed` cron sets. LOOSE like the rest: the
-  // handler validates the 1024-d shape itself and emits `invalid_embedding`/400.
+
   embedding: z.unknown().optional(),
   enrichmentStatus: z.unknown().optional(),
   features: z.unknown().optional(),
-  // The sonic galaxy assignment (browse-by-feel RFC) — an agent-writable grouping
-  // field the on-box `fluncle-cluster` cron sets (the nightly assignment step), like
-  // `embedding`. LOOSE like the rest: the handler narrows it to a string (the galaxy
-  // id, or "" to clear). Internal — kept out of VISIBLE_FIELDS so an assignment write
-  // moves no public lastmod.
+
   galaxyId: z.unknown().optional(),
   isrc: z.unknown().optional(),
   key: z.unknown().optional(),
@@ -79,152 +31,66 @@ const UpdateTrackBodySchema = z.looseObject({
   sourceAudioCapturedAt: z.unknown().optional(),
   sourceAudioFailures: z.unknown().optional(),
   sourceAudioKey: z.unknown().optional(),
-  // The bad-audio memory (docs/the-ear.md § Wrong audio) — a JSON array of rejected capture
-  // sources. Agent-writable; the handler narrows it to a string.
+
   sourceAudioRejected: z.unknown().optional(),
-  // Banked fingerprint evidence from the provenance sweep's SoundCloud rung. LOOSE like the
-  // other capture side-channels: the handler admits only the two known match kinds.
+
   sourceVerification: z.unknown().optional(),
   videoUrl: z.unknown().optional(),
-  // THE RE-VERDICT ASK — re-rule the officialness of the id this row
-  // ALREADY holds, under whatever the current rule is. Carries no verdict and no id: the server
-  // re-runs its own keyless oEmbed check. It can only PROMOTE a row off 0/NULL; a row already at 1
-  // is left alone, so a re-ask can never retract a link. ADDITIVE AND OPTIONAL like the rest.
+
   youtubeReverdict: z.unknown().optional(),
-  // THE PROVENANCE BACKFILL'S VERDICT — what the capture sweep's
-  // PROVENANCE phase found when it re-ran the ladder over an already-captured row and threw the
-  // candidate bytes away. Five values, and each one is a different claim:
-  //
-  //   · `preview-match`  — a fingerprint match against the ISRC-resolved preview. Beside
-  //     `youtubeVideoId` it authorizes that id exactly as `captureVerification` does for a capture.
-  //   · `archive-match`  — the same fingerprint proof from the catalogue ladder's segment rung,
-  //     where the reference was the row's own archived master. Identical claim class.
-  //   · `metadata-match` — the catalogue ladder's Topic rung: artist + title + length on an
-  //     `<Artist> - Topic` art-track channel, with NO AUDIO COMPARED. The server stores it as
-  //     `method: "search"`, so /identity says "matched by artist, title, and length" and never
-  //     "matched by audio fingerprint". A weaker claim, kept visibly weaker.
-  //   · `no-match`       — the ladder concluded and found nothing. NO id; stamps the re-ask window
-  //     and moves the can't-conclude streak.
-  //   · `inconclusive`   — the ladder ran and could not conclude. NO id, NO stamp; it moves the
-  //     streak alone, so a row that can never be bought stops being offered forever.
-  //
-  // ADDITIVE at every step: an old baked box that only ever sends `preview-match`/`no-match` keeps
-  // working byte-for-byte, and an unrecognised verdict proves nothing and is simply not stored.
-  //
-  // DELIBERATELY NOT `captureVerification`. That field is the STORED AUDIO's provenance and moves
-  // capture columns with it; this sweep stores no audio and must never move one, so borrowing the
-  // capture verdict would be a lie about the archive. ADDITIVE AND OPTIONAL on the Deezer/#1049
-  // precedent: an old baked box build that never sends it keeps working unchanged.
+
   youtubeVerification: z.unknown().optional(),
-  // THE CAPTURE'S YOUTUBE PROVENANCE — the id of the upload whose
-  // audio a fingerprint gate VERIFIED for this recording. ADDITIVE AND OPTIONAL, on the Deezer
-  // precedent: the baked box scripts freshen asynchronously after a deploy, so an old sweep that
-  // never sends this field must keep working unchanged, and it does. LOOSE like the rest: the
-  // handler narrows it to a string, decides officialness server-side, and fills it once — the box
-  // is never trusted to say whether an upload may be shown.
-  //
-  // IT ONLY COUNTS BESIDE A FINGERPRINT VERDICT in the SAME body — `captureVerification:
-  // "preview-match"` (the capture sweep, storing the bytes it matched) or `youtubeVerification:
-  // "preview-match"` (the provenance backfill, which matched and then discarded them). The envelope
-  // serves this id under `method: "fingerprint"`, so an id from either sweep's ABSTAIN path (a
-  // track with no preview reference, where nothing was compared) would publish a match that never
-  // ran. Sent alone or beside any other verdict, it is dropped — fail closed.
+
   youtubeVideoId: z.unknown().optional(),
 });
 
-/**
- * The observe body (POST /admin/tracks/{trackId}/observe). LOOSE: the live route
- * resolves the voice/duration defaults and voice-GATES the script itself (emitting
- * `no_script`/`voice_gate`), so the contract stays permissive to keep those codes
- * byte-for-byte.
- */
 const ObserveTrackBodySchema = z.looseObject({
   contextNote: z.unknown().optional(),
   durationMs: z.unknown().optional(),
   durationTargetSec: z.unknown().optional(),
-  // Re-render an existing observation instead of no-op'ing on it (operator-driven
-  // voice re-tunes / fixing a degenerate render). Default behaviour stays idempotent.
+
   force: z.unknown().optional(),
-  // PROVENANCE — the prompt-registry version this spoken script was authored under
-  // (0 = the baked default, N = override N). The on-box sweep sends it; omitted when the
-  // sweep fell back to its inlined prompt. See docs/agents/prompt-registry.md.
+
   promptVersion: z.number().int().min(0).optional(),
   script: z.unknown().optional(),
   voiceId: z.unknown().optional(),
 });
 
-/**
- * The context body (POST /admin/tracks/{trackId}/context). LOOSE: an agent-supplied
- * `query` override for the Firecrawl search, and `refresh` — re-run the fetch+distil
- * even when a note already exists (the default short-circuits on `skipped:true`).
- * The handler narrows both in-handler, so the contract stays permissive.
- */
 const ContextTrackBodySchema = z.looseObject({
   query: z.unknown().optional(),
   refresh: z.unknown().optional(),
 });
 
-/**
- * The note body (POST /admin/tracks/{trackId}/note). LOOSE: the live handler
- * voice-GATES the authored `note` itself (emitting `no_note`/`note_too_short`/
- * `note_too_long`/`voice_gate`/`note_echoes_neighbours`) and enforces the
- * fill-empty-only guard, so the contract stays permissive to keep those codes
- * byte-for-byte. `dryRun` runs both gates and reports the verdict WITHOUT storing
- * anything (the sweep's pre-check and the neighbour layer's measurement harness).
- */
 const NoteTrackBodySchema = z.looseObject({
   dryRun: z.unknown().optional(),
   note: z.unknown().optional(),
-  // PROVENANCE — the prompt version the note was authored under (0 = the registry's
-  // baked default, N = operator override N). The on-box sweep sends it; an operator
-  // typing a note by hand sends nothing and the column stays NULL, which is the honest
-  // reading (no prompt wrote it). See docs/agents/prompt-registry.md.
+
   promptVersion: z.number().int().min(0).optional(),
 });
 
-/**
- * The measured ECHO of a note against its sonic neighbourhood — the anti-sameness
- * rail's reading, returned on every note call (dry or real) so the sameness of the
- * corpus is observable, not assumed. `phrase` is the run of words lifted from the
- * `logId` neighbour ("" when none reaches the lift threshold); `overlap` is the
- * content-word Jaccard with it (0 when there was nothing to compare against).
- */
 const NoteEchoSchema = z.object({
   logId: z.string().nullable(),
   overlap: z.number(),
   phrase: z.string(),
 });
 
-/**
- * The presign body (POST /admin/tracks/{trackId}/video/uploads). LOOSE: the live
- * route validates `fields` itself (`no_fields`/`bad_field`/`unknown_field`/
- * `no_footage`), so the contract stays permissive.
- */
 const PresignVideoUploadsBodySchema = z.looseObject({
   fields: z.unknown().optional(),
 });
 
-/**
- * The finalize body (POST /admin/tracks/{trackId}/video/finalize). LOOSE: every
- * field is optional + normalized in-handler (trim/slice, the `squared` flag, the
- * model/reasoning defaults), so the contract stays permissive.
- */
 const FinalizeVideoBodySchema = z.looseObject({
   squared: z.unknown().optional(),
   videoGrain: z.unknown().optional(),
   videoModel: z.unknown().optional(),
   videoModelReasoning: z.unknown().optional(),
   videoPalette: z.unknown().optional(),
-  // The two provenance stamps render.json always carried but finalize never persisted (Wave-1 C).
-  // Optional like the rest — no caller sends them today; the handler reads them from the uploaded
-  // render.json when absent, so the render prompt + the CLI need no change.
+
   videoPlateSubject: z.unknown().optional(),
   videoRegister: z.unknown().optional(),
   videoStructure: z.unknown().optional(),
   videoVehicle: z.unknown().optional(),
 });
 
-/** A presigned-upload row as `presign_track_video_uploads` returns it. */
 const VideoUploadSchema = z
   .object({
     contentType: z.string(),
@@ -234,16 +100,6 @@ const VideoUploadSchema = z
   })
   .meta({ id: "VideoUpload" });
 
-/**
- * `update_track` → `PATCH /admin/tracks/{trackId}` (operationId `updateTrack`).
- *
- * The generic admin track update (BPM/key/features/status/video/note/vibe/identity
- * backfill). On `adminProcedure` — BOTH the operator and the agent authenticate;
- * the FIELD-LEVEL role guard runs in-handler (the agent may write only analysis
- * fields; an operator-only field → 403 `forbidden`). Reuses `updateTrack`,
- * preserving the `{ ok: true, fields, trackId }` envelope and the live
- * `note_too_long`/422, `not_found`/404 codes.
- */
 export const updateTrack = oc
   .route({
     method: "PATCH",
@@ -278,13 +134,7 @@ const CaptureExternalResultSchema = z.union([
     z.strictObject({
       attemptedAt: z.string().datetime({ offset: true }),
       bytes: z.number().int().min(1),
-      // `operator-verified` is the pinned-source capture: the fingerprint still RAN, but the
-      // operator's pin outranks its verdict (docs/the-ear.md § Wrong audio), so the row carries
-      // his authority rather than the gate's. The historic verification backfill leaves it alone.
-      // `consensus-verified` is the ladder's CONSENSUS capture: the preview refused every
-      // duration-verified upload, but two or more from different channels carry the same recording
-      // as each other. Machine evidence, subordinate to a preview match, and the server treats it
-      // like any other verified capture (re-checkable, never stepped aside from).
+
       captureVerification: z.enum([
         "consensus-verified",
         "operator-verified",
@@ -333,26 +183,13 @@ const CaptureReceiptCoordinatesSchema = z.strictObject({
 
 const CapturePreparedTrackSchema = z.strictObject({
   analyzedFrom: z.enum(["full", "preview"]).optional(),
-  /**
-   * The row carried a Spotify anchor when it was frozen. Additive and read straight off the
-   * snapshot the prepare already holds, so it costs nothing: it exists so the sweep can publish
-   * how much of a tick's capture spend went to ANCHORED rows, which is the only way to see the
-   * anchored-first drain order actually taking effect rather than assume it.
-   */
+
   anchored: z.boolean().optional(),
   artists: z.array(z.string().max(512)).max(64),
   bpm: z.number().optional(),
-  /**
-   * THE OPERATOR'S CAPTURE-SOURCE PIN — the one YouTube video id the sweep downloads INSTEAD of
-   * walking its ladder (docs/the-ear.md § Wrong audio). Frozen into the snapshot with the row, so
-   * a pin set or cleared mid-flight makes the in-flight commit stale rather than half-honoured.
-   */
+
   captureSourcePin: z.string().max(64).optional(),
-  /**
-   * The pin's DURATION OVERRIDE: the operator has deliberately pinned a different EDIT of the same
-   * recording, so the sweep waives the duration guard for that one id. Frozen with the pin for the
-   * same reason; only ever sent as `true`, and only beside a pin.
-   */
+
   captureSourcePinAllowDuration: z.boolean().optional(),
   certified: z.boolean(),
   durationMs: z.number().int().min(1).optional(),
@@ -388,7 +225,6 @@ const CaptureRejectedReceiptResultSchema = z.strictObject({
   reason: z.literal("stale"),
 });
 
-/** Freeze one currently eligible capture/provenance row before any provider work starts. */
 export const prepareTrackCapture = oc
   .route({
     method: "POST",
@@ -420,7 +256,6 @@ export const prepareTrackCapture = oc
     ]),
   );
 
-/** Resolve server-owned YouTube officialness without opening or holding a database transaction. */
 export const authorizeTrackCapture = oc
   .route({
     method: "POST",
@@ -443,7 +278,6 @@ export const authorizeTrackCapture = oc
     }),
   );
 
-/** Atomically commit a snapshot-bound capture result through the durable operation receipt rail. */
 export const commitTrackCapture = oc
   .route({
     method: "POST",
@@ -480,58 +314,20 @@ export const commitTrackCapture = oc
     ]),
   );
 
-// ─────────────────────────────────────────────────────────────────────────────
-// THE BATCHED PIPELINE PHASES — one admitted database lease per batch, not per row.
-//
-// Every database-touching phase a box sweep runs takes a lease on the single `write` lane
-// (docs/database-performance.md). A per-row phase pays that toll once per row, so a batch's lease
-// toll grew with the batch while the work it protected did not. These ops move the batch inside one
-// phase WITHOUT collapsing the rows: each item keeps its own snapshot token, its own receipt
-// coordinates and its own receipt, so `track.capture` and `track.embed` stay non-replayable and a
-// poisoned row can still be reconciled on its own.
-//
-// Each request is wall-budgeted server side. The unprocessed tail comes back as a retryable
-// per-item verdict rather than the request running past the admission watchdog window.
-// ─────────────────────────────────────────────────────────────────────────────
-
-/**
- * How many rows one `prepare_track_captures` request freezes. It matches the capture sweep's own
- * batch cap: the prepare is the whole batch, and every row it does NOT claim pays the per-row
- * admission toll again.
- */
 export const MAX_CAPTURE_PREPARE_BATCH = 12;
 
-/**
- * How many rows one `commit_track_captures` request settles, and it is deliberately NARROWER than
- * the prepare. A commit's per-item server time is a receipt-backed transaction against the live
- * snapshot, while a prepare's is one indexed read; the bound is what keeps K × p99(per-item) inside
- * the admission watchdog window, so a twelve-row tick commits in two phases rather than one.
- */
 export const MAX_CAPTURE_COMMIT_BATCH = 6;
 
-/** How many vectors one `update_track_embeddings` request writes — the embed sweep's batch cap. */
 export const MAX_EMBEDDING_WRITE_BATCH = 6;
 
-/** The MuQ vector's width. A batch of {@link MAX_EMBEDDING_WRITE_BATCH} is ~120 KB of JSON. */
 export const EMBEDDING_DIMENSIONS = 1024;
 
-/**
- * What a batched pipeline Worker accepts, surfaced on {@link listTrackWork}. A number is the batch
- * width that op takes; an absent key is a Worker that does not have the op at all.
- */
 const TrackWorkCapabilitiesSchema = z.strictObject({
   commitTrackCaptures: z.number().int().min(1).max(MAX_CAPTURE_COMMIT_BATCH).optional(),
   prepareTrackCaptures: z.number().int().min(1).max(MAX_CAPTURE_PREPARE_BATCH).optional(),
   updateTrackEmbeddings: z.number().int().min(1).max(MAX_EMBEDDING_WRITE_BATCH).optional(),
 });
 
-/**
- * HOW LONG THIS ITEM TOOK THE SERVER, in milliseconds. Additive on every batched response, and its
- * purpose is to make K derivable instead of assumed: the wall budget is checked BETWEEN items, so a
- * batch's exposure to one slow item grows with K, and only a measured per-item distribution can say
- * whether the chosen K is right. The sweeps publish per-tick max and median, so a day of ordinary
- * ticks yields the p99 the bound should be re-derived from.
- */
 const ItemElapsedMsSchema = z.number().int().min(0).optional();
 
 const CapturePreparedItemSchema = z.union([
@@ -550,26 +346,6 @@ const CapturePreparedItemSchema = z.union([
   }),
 ]);
 
-/**
- * `prepare_track_captures` → `POST /admin/tracks/captures/prepare`.
- *
- * Admin tier (agent-allowed). Freeze a whole batch of currently eligible capture/provenance rows in
- * ONE admitted phase, before any provider work starts. Each item gets the same answer the
- * single-row {@link prepareTrackCapture} gives it, plus one extra refusal reason:
- *
- * `deferred` — the request's wall budget was spent before this row was reached. Nothing was frozen
- * and nothing was charged; the caller reissues exactly those rows, or lets the next tick take them.
- *
- * THE BUDGET IS APPLIED CUMULATIVELY, IN REQUEST ORDER. The catalogue capture budget
- * (`apps/web/src/lib/server/capture-budget.ts`) is a rolling-24h count cap plus a byte backstop, and
- * the per-row prepare could only ever ask "is it open right now". A batch is different: it authorizes
- * N downloads before any of them lands, so the count cap is applied as a RESERVATION — the batch may
- * freeze at most `remainingTracks` uncertified rows, and every further uncertified row is refused
- * `ineligible` exactly as a closed budget refuses it. Certified findings are never gated, never
- * counted, and never displaced by an uncertified row ahead of them, which is the same guarantee the
- * per-row path gave. The byte cap stays a backstop and its overshoot bound is stated in
- * docs/track-lifecycle.md.
- */
 export const prepareTrackCaptures = oc
   .route({
     method: "POST",
@@ -590,35 +366,17 @@ export const prepareTrackCaptures = oc
         )
         .min(1)
         .max(MAX_CAPTURE_PREPARE_BATCH),
-      /**
-       * UNCERTIFIED ROWS THIS TICK HAS ALREADY AUTHORIZED, across its earlier prepare calls.
-       *
-       * The rolling-24h count ledger is charged at COMMIT (`tracks.source_audio_attempted_at`), so a
-       * second prepare call inside one tick would otherwise read the very same pre-tick remaining
-       * count the first call already reserved against — and a tick whose batch is wider than this
-       * op's width, or whose wall budget deferred a tail, makes exactly that second call. The caller
-       * carries its running total here and the server SUBTRACTS it.
-       *
-       * It can only ever shrink the budget: the server clamps `remainingTracks - reservedThisTick`
-       * at zero and never adds, so a caller that over-reports authorizes less and a caller that
-       * under-reports is bounded by the ledger it is spending against. A missing value is zero,
-       * which is exactly an older sweep's single-call behaviour.
-       */
+
       reservedThisTick: z.number().int().min(0).max(10_000).optional(),
     }),
   )
   .output(
     z.strictObject({
-      /** How many trailing items the wall budget left unprepared. They read `deferred`. */
       deferred: z.number().int().min(0),
       ok: z.literal(true),
-      /**
-       * How many UNCERTIFIED rows this call authorized — what it spent of the rolling count cap.
-       * The caller adds it to its running `reservedThisTick` rather than re-deriving the server's
-       * certification rule, so the two can never disagree about what a call cost.
-       */
+
       reserved: z.number().int().min(0),
-      /** One answer per request item, in request order. */
+
       results: z.array(CapturePreparedItemSchema).max(MAX_CAPTURE_PREPARE_BATCH),
     }),
   );
@@ -626,7 +384,7 @@ export const prepareTrackCaptures = oc
 const CaptureCommitReceiptSchema = z
   .object({
     elapsedMs: ItemElapsedMsSchema,
-    /** This item's own failure message, bounded. Present only for `failed`. */
+
     error: z.string().max(500).optional(),
     outcome: z.enum([
       "committed",
@@ -645,19 +403,6 @@ const CaptureCommitReceiptSchema = z
   })
   .meta({ id: "CaptureCommitReceipt" });
 
-/**
- * `commit_track_captures` → `POST /admin/tracks/captures/commit`.
- *
- * Admin tier (agent-allowed). Settle a batch of snapshot-bound capture results through the durable
- * operation-receipt rail in ONE admitted phase. Each item carries exactly what the single-row
- * {@link commitTrackCapture} carries — its own commit token and its own receipt coordinates — and
- * gets its own receipt back, so a stale row rejects alone while its neighbours commit and
- * `track.capture` stays non-replayable. Never a batch-wide operation id: the per-item coordinates
- * are what make a retry safe, and what lets `resolve_operation_receipt` still answer about one row.
- *
- * The unprocessed tail of a wall-budgeted request reads `safely-retryable`, which is the verdict the
- * caller already knows how to reconcile.
- */
 export const commitTrackCaptures = oc
   .route({
     method: "POST",
@@ -681,26 +426,13 @@ export const commitTrackCaptures = oc
   )
   .output(
     z.strictObject({
-      /** How many trailing items the wall budget left uncommitted. They read `safely-retryable`. */
       deferred: z.number().int().min(0),
       ok: z.literal(true),
-      /** One receipt per request item, in request order. */
+
       receipts: z.array(CaptureCommitReceiptSchema).max(MAX_CAPTURE_COMMIT_BATCH),
     }),
   );
 
-/**
- * `update_track_embeddings` → `POST /admin/tracks/embeddings`.
- *
- * Admin tier (agent-allowed). Write a tick's worth of MuQ vectors in ONE admitted phase. Each item
- * takes the same path a single `update_track` embedding write takes — the certification rail
- * included — and gets its own verdict, so a rejected row never costs its neighbours their write.
- *
- * `track.embed` is deliberately non-replayable: an accepted vector mints a fresh catalogue-rank
- * material revision and appends a Sonar artifact change, so a write is issued exactly once and an
- * item whose outcome is unknown is reported rather than retried. `deferred` is the one exception the
- * caller may reissue, because a deferred item never reached a write at all.
- */
 export const updateTrackEmbeddings = oc
   .route({
     method: "POST",
@@ -724,10 +456,9 @@ export const updateTrackEmbeddings = oc
   )
   .output(
     z.strictObject({
-      /** How many trailing items the wall budget left unwritten. They read `deferred`. */
       deferred: z.number().int().min(0),
       ok: z.literal(true),
-      /** One verdict per request item, in request order. */
+
       results: z
         .array(
           z.strictObject({
@@ -742,21 +473,6 @@ export const updateTrackEmbeddings = oc
     }),
   );
 
-/**
- * `observe_track` → `POST /admin/tracks/{trackId}/observe` (operationId
- * `observeTrack`).
- *
- * Mint the audio-observation artifact: author-time the agent has already written
- * the recovered-audio script, so this step VOICE-GATES it, renders it (Cartesia),
- * uploads the artifact to R2, and writes back. It no longer holds Firecrawl — it
- * reads the already-stored `context_note` (written by `context_track`) as its
- * fuel. On `adminProcedure` (agent-allowed): flipped from the operator tier so the
- * Hermes cron can drive it. Idempotent
- * per finding — an existing `observation_audio_url` is a no-op (`skipped: true`),
- * so re-pulling an in-flight item is safe (`observe:${logId}`). Preserves the
- * `{ ok: true, audioUrl, durationMs, … }` envelope and the `no_script`/400,
- * `voice_gate`/422, `no_log_id`/400 codes.
- */
 export const observeTrack = oc
   .route({
     method: "POST",
@@ -774,8 +490,7 @@ export const observeTrack = oc
       jsonUrl: z.string(),
       logId: z.string(),
       ok: z.literal(true),
-      // `true` when an observation already existed and the call was a no-op
-      // (idempotent re-pull); absent on a fresh mint.
+
       skipped: z.boolean().optional(),
       textUrl: z.string(),
       trackId: z.string(),
@@ -783,26 +498,6 @@ export const observeTrack = oc
     }),
   );
 
-/**
- * `context_track` → `POST /admin/tracks/{trackId}/context` (operationId
- * `contextTrack`).
- *
- * Fetch the track's FACTUAL context (Firecrawl: label/year/release) and write it
- * to the internal `context_note` column ONLY — no script authoring, no render.
- * This is the split-out context half of the observation pipeline:
- * `context_track` fills the note so `observe_track` can author + render from it
- * without holding Firecrawl.
- * The action segment is the single word `context` (Convention B §6: no dash-compound
- * action segments — the dash-compound `observe-context` is retired with no alias).
- *
- * On `adminProcedure` (agent-allowed). Writes `context_note` QUIETLY — it touches
- * only that internal column, so it does NOT bump `updated_at` (no public surface
- * moves; the feed/lastmod/enrich-sweep stale clock are undisturbed). Idempotent
- * per finding — an existing `context_note` is a no-op (`skipped: true`), keyed
- * `context:${logId}`, so an external cron can fire safely. The Firecrawl output is
- * UNTRUSTED web content treated strictly as DATA (stored as fuel, never executed).
- * Codes: `not_found`/404, `no_log_id`/400.
- */
 export const contextTrack = oc
   .route({
     method: "POST",
@@ -817,44 +512,13 @@ export const contextTrack = oc
       contextNote: z.string(),
       logId: z.string(),
       ok: z.literal(true),
-      // `true` when a context note already existed and the call was a no-op
-      // (idempotent re-pull); absent on a fresh fetch. `--refresh` forces a re-fetch,
-      // so it never short-circuits and `skipped` stays absent.
+
       skipped: z.boolean().optional(),
       sources: z.array(z.string()),
       trackId: z.string(),
     }),
   );
 
-/**
- * `note_track` → `POST /admin/tracks/{trackId}/note` (operationId `noteTrack`).
- *
- * AUTO-author a finding's editorial `note` (the written-note sibling of
- * `observe_track`): the agent has already authored the note in Fluncle's voice from
- * the `context_note` fuel + track metadata; this step VOICE-GATES it (the written
- * register's banned-word / earthly-geography / exclamation / "we"-as-company scan,
- * shared with the spoken gate) and stores it into the `note` field. On
- * `adminProcedure` (agent-allowed) so the on-box note cron can drive it — `observe`
- * is the precedent for the tier.
- *
- * SAFETY (the cardinal guarantee): it fills an EMPTY note ONLY. A finding that
- * already carries a note — operator-written OR previously auto-authored — is a no-op
- * (`skipped: true`); the agent NEVER clobbers an existing note. The operator override
- * always wins, enforced server-side. Every authoring attempt stamps the
- * `backfill_note_*` "ran" state (board done-when-ran semantics); a fill also stamps
- * `backfill_note_done_at`.
- *
- * TWO GATES: the VOICE gate (as above) and the ECHO gate — the anti-sameness rail on
- * the vibe-neighbour layer. The note is authored with the notes of the finding's SONIC
- * NEIGHBOURS in the prompt (the MuQ nearest neighbours, `list_similar_tracks`); the
- * Worker re-reads those same notes and hard-fails a line that lifts a phrase from one
- * or reuses its words wholesale (`note_echoes_neighbours`). The neighbourhood informs
- * the note; it never templates it. A rejected note is not stored — the note is optional
- * and silence beats a line that reads like every other note in its region.
- *
- * Codes: `not_found`/404, `no_log_id`/400, `no_note`/400, `note_too_short`/422,
- * `note_too_long`/422, `voice_gate`/422, `note_echoes_neighbours`/422.
- */
 export const noteTrack = oc
   .route({
     method: "POST",
@@ -866,33 +530,20 @@ export const noteTrack = oc
   .input(NoteTrackBodySchema.extend({ trackId: z.string() }))
   .output(
     z.object({
-      // `true` when `dryRun` was set: both gates ran, NOTHING was stored.
       dryRun: z.literal(true).optional(),
-      // The measured echo against the sonic neighbourhood (absent only on a skipped
-      // no-op, where no candidate note was gated).
+
       echo: NoteEchoSchema.optional(),
       logId: z.string(),
-      // The Log IDs of the neighbours the note was gated against (dry run only).
+
       neighbors: z.array(z.string()).optional(),
       note: z.string(),
       ok: z.literal(true),
-      // `true` when a note already existed and the call was a no-op (the
-      // fill-empty-only guard refused to clobber it); absent on a fresh fill.
+
       skipped: z.boolean().optional(),
       trackId: z.string(),
     }),
   );
 
-/**
- * `presign_track_video_uploads` → `POST /admin/tracks/{trackId}/video/uploads`
- * (operationId `presignTrackVideoUploads`).
- *
- * Phase 1 of the presigned direct-to-R2 upload flow — the JSON control-plane: the
- * caller lists the artifact `fields`, the Worker signs one PUT URL per field
- * (bytes go straight to R2, bypassing the edge body limit). On `operatorProcedure`
- * (live `requireOperator`). Preserves the `{ ok: true, logId, trackId, uploads }`
- * envelope and the `no_fields`/`bad_field`/`unknown_field`/`no_footage` 400 codes.
- */
 export const presignTrackVideoUploads = oc
   .route({
     method: "POST",
@@ -911,16 +562,6 @@ export const presignTrackVideoUploads = oc
     }),
   );
 
-/**
- * `finalize_track_video` → `POST /admin/tracks/{trackId}/video/finalize`
- * (operationId `finalizeTrackVideo`).
- *
- * Phase 2 of the presigned flow — links the canonical web cut (sets video_url to
- * <log-id>/footage.mp4 and stores the vehicle / model ledger; `squared` stamps the
- * two-master layout). On `operatorProcedure` (live `requireOperator`). Preserves
- * the `{ ok: true, logId, trackId, videoUrl }` envelope and the `not_found`/404,
- * `no_log_id`/400 codes.
- */
 export const finalizeTrackVideo = oc
   .route({
     method: "POST",
@@ -939,31 +580,6 @@ export const finalizeTrackVideo = oc
     }),
   );
 
-/**
- * `requeue_video` → `POST /admin/tracks/{trackId}/video/requeue` (operationId
- * `requeueVideo`).
- *
- * Clear a finding's video state so it RE-ENTERS the render queue AND drops cleanly
- * off radio until re-rendered (the render skill improved → re-film an already-filmed
- * finding). It clears BOTH display/queue gates: `video_url` (the render queue gates
- * on it — `hasVideo=false` is `video_url is null`) and `video_squared_at` (radio
- * eligibility gates on it). Clearing only `video_url` would re-queue the finding but
- * leave it eligible-but-broken on radio (radio plays the square master, keyed on
- * `video_squared_at`, with no playable source). The video LEDGER columns
- * (`video_vehicle`/`video_grain`/`video_model`/`video_model_reasoning`) are
- * deliberately LEFT INTACT — they describe the prior render and are read by the next
- * video agent to DIVERSIFY away from recent choices, so they help the re-render.
- *
- * OPERATOR tier (live `requireOperator`): this removes a LIVE published video, so it
- * must NOT be agent-tier — the box agent never clears videos. Idempotent: clearing an
- * already-clear finding is a clean no-op (NULL→NULL). Codes: `not_found`/404,
- * `no_log_id`/400. The body is empty (the trackId path param is the whole input).
- *
- * CACHE NOTE: re-shipping `footage.mp4` to the SAME R2 key leaves Cloudflare
- * Media-Transformation renditions cached separately (the web player streams MT
- * crops, not the master). The video ship's finalize step now purges them
- * automatically on a re-render; `purge_video` is the manual operator twin.
- */
 export const requeueVideo = oc
   .route({
     method: "POST",
@@ -975,8 +591,6 @@ export const requeueVideo = oc
   .input(z.object({ trackId: z.string() }))
   .output(
     z.object({
-      // `true` when the finding already had no video and the call was a no-op
-      // (idempotent re-requeue); absent when a live video was actually cleared.
       alreadyClear: z.boolean().optional(),
       logId: z.string(),
       ok: z.literal(true),
@@ -984,27 +598,6 @@ export const requeueVideo = oc
     }),
   );
 
-/**
- * `purge_video` → `POST /admin/tracks/{trackId}/video/purge` (operationId
- * `purgeVideo`).
- *
- * Purge a finding's Cloudflare Media-Transformation renditions from the edge — the
- * operator-tier manual twin of the automatic purge the video ship's finalize step
- * fires on a re-render. The player streams resized/cropped renditions DERIVED from
- * the master `footage.mp4` (each edge-cached under its own transform URL), so when
- * `footage.mp4` is re-shipped to the SAME R2 key, those renditions keep serving the
- * OLD clip until their TTL expires. This evicts that finding's exact rendition URLs
- * (the masters + every width/crop/poster/audio variant the surfaces request) so the
- * next request transcodes the fresh master. Run it after a manual R2 re-upload, or
- * to force-evict a finding whose automatic purge was skipped (no token at the time).
- *
- * OPERATOR tier (live `requireOperator`): it acts on a LIVE published video, so it
- * is NOT agent-tier. Best-effort: the actual purge fires on `waitUntil`, so the op
- * returns immediately whether or not the zone token is provisioned (it logs + no-ops
- * when unset). Codes: `not_found`/404, `no_log_id`/400. The body is empty (the
- * trackId path param is the whole input). `noVideo` reports the no-op case where the
- * finding has no video to purge.
- */
 export const purgeVideo = oc
   .route({
     method: "POST",
@@ -1017,64 +610,27 @@ export const purgeVideo = oc
   .output(
     z.object({
       logId: z.string(),
-      // `true` when the finding has no video — nothing to purge, a clean no-op.
+
       noVideo: z.boolean().optional(),
       ok: z.literal(true),
       trackId: z.string(),
     }),
   );
 
-/**
- * What the capture-source pin ops hand back: the row's identity, the pin as it now stands (null
- * once cleared), and the capture status the write left behind, so the CLI and the admin dialog can
- * say what happened without a second read.
- */
 const CaptureSourcePinResultSchema = z
   .object({
-    /** The pinned YouTube video id, or null when no pin stands. */
     captureSourcePin: z.string().nullable(),
-    /** Whether the standing pin waives the duration guard (`allowDurationMismatch`); false once cleared. */
+
     captureSourcePinAllowDuration: z.boolean(),
-    /** The row's `capture_status` after the write (`pending` after a pin; untouched by a clear). */
+
     captureStatus: z.string(),
-    /** The finding's coordinate; null on a catalogue row. */
+
     logId: z.string().nullable(),
     ok: z.literal(true),
     trackId: z.string(),
   })
   .meta({ id: "CaptureSourcePinResult" });
 
-/**
- * `pin_capture_source` → `PUT /admin/tracks/{trackId}/capture-source` (operationId
- * `pinCaptureSource`).
- *
- * OPERATOR tier. "Capture THIS upload." The capture sweep's fingerprint gate (docs/the-ear.md §
- * Wrong audio) is precision-over-recall by design: it refuses any upload whose bit-error rate
- * against the track's store preview clears the threshold, and for some recordings the only uploads
- * that exist are a different master or edit of the same release — same length, wrong bits — so the
- * sweep lands a terminal `unmatched` and the finding never gets full audio, never an embedding, and
- * is absent from similarity search. The operator's ear is the only thing that outranks the gate,
- * and this is how he says so.
- *
- * `youtubeVideoId` accepts a bare 11-character id or a `youtube.com` / `youtu.be` /
- * `music.youtube.com` URL; the SERVER reduces it to the id and rejects anything else with
- * `invalid_youtube_video_id`/400. The write (lib/server/track-update.ts § pinCaptureSource) sets
- * `capture_source_pin`, re-queues the row (`capture_status = 'pending'`), clears the bad-audio
- * memory (`source_audio_rejected = null` — the memory describes the ladder's rejections, and the
- * ladder is being bypassed), and stamps the id as the row's YouTube provenance with `operator` as
- * the method (`youtube_video_id`, `youtube_verified_by`, `source_verification`). It moves NO
- * `findings` column: a pin is a source hint, never a certification. The sweep then downloads that
- * one id instead of walking the ladder, STILL applies the duration guard (a wrong paste must never
- * land a live set), still runs the fingerprint, and records the capture `operator-verified` —
- * which the historic verification backfill leaves alone.
- *
- * `allowDurationMismatch` (default false) is the guard's one waiver, for the case where the operator
- * has deliberately chosen a different EDIT of the same recording (a radio cut, an extended mix)
- * because it is the one that exists: the sweep then skips the duration guard for the pinned id and
- * logs the two lengths, and the row's own `duration_ms` is never rewritten — the finding keeps its
- * store length. Stored on `tracks.capture_source_pin_allow_duration`; a clear resets it. Codes:
- * `not_found`/404.
- */
 export const pinCaptureSource = oc
   .route({
     method: "PUT",
@@ -1085,30 +641,14 @@ export const pinCaptureSource = oc
   })
   .input(
     z.object({
-      /** Waive the duration guard for this pin — a deliberately chosen different edit. */
       allowDurationMismatch: z.boolean().optional(),
       trackId: z.string(),
-      /** A bare 11-char YouTube video id, or a youtube.com / youtu.be / music.youtube.com URL. */
+
       youtubeVideoId: z.string().min(1).max(2_048),
     }),
   )
   .output(CaptureSourcePinResultSchema);
 
-/**
- * `clear_capture_source` → `DELETE /admin/tracks/{trackId}/capture-source` (operationId
- * `clearCaptureSource`).
- *
- * OPERATOR tier — `pin_capture_source`'s counterpart. Nulls the pin and withdraws the two
- * `operator` provenance stamps it set, and NOTHING else: the capture status and any audio already
- * captured under the pin stay exactly as they are — a clear withdraws the standing instruction to
- * the sweep, it does not rewind a capture (that is `flag_wrong_audio`, which also retires the pin).
- * The YouTube stamp is withdrawn as a TRIO-plus-method (`youtube_video_id`, `youtube_video_official`,
- * `youtube_verified_at`, `youtube_verified_by`), and only when `youtube_verified_by = 'operator'`:
- * the id had no proof beside it but the operator's word, and leaving it standing under a nulled
- * method would let /identity print "matched by audio fingerprint" over a match that never ran. An id
- * a fingerprint sweep earned is never touched. `source_verification` is nulled on the same
- * condition. Idempotent: clearing an unpinned row is a clean no-op. Codes: `not_found`/404.
- */
 export const clearCaptureSource = oc
   .route({
     method: "DELETE",
@@ -1120,10 +660,6 @@ export const clearCaptureSource = oc
   .input(z.object({ trackId: z.string() }))
   .output(CaptureSourcePinResultSchema);
 
-/**
- * The publish-track result (`PublishTrackResult` in ../index.ts). The
- * `POST /admin/tracks` body — `publishTrack`'s output envelope.
- */
 const PublishTrackResultSchema = z
   .object({
     addedToSpotify: z.boolean(),
@@ -1148,24 +684,6 @@ const PublishTrackResultSchema = z
   })
   .meta({ id: "PublishTrackResult" });
 
-/**
- * `get_track_admin` → `GET /admin/tracks/{trackId}` (operationId `getTrackAdmin`).
- *
- * The single-finding admin lookup by Spotify trackId OR Log ID — the authoritative
- * by-coordinate read the admin board + the `fluncle admin tracks get` CLI use so a
- * lookup never has to scan a list (the incident: an ad-hoc list-scan misread a live
- * finding as nonexistent). Returns the full admin-tier `TrackListItem` — the same
- * shape the board renders and `update_track` writes: the vibe coords, the video
- * ledger (url/vintage/vehicle/grain/model), the observation state, the editorial note.
- *
- * Named `get_track_admin` (not `get_track`) to disambiguate from the PUBLIC
- * `get_track` (`GET /tracks/{idOrLogId}`), mirroring `list_tracks` →
- * `list_tracks_admin`. On `adminProcedure` (live `requireAdmin` — a read,
- * agent-allowed). Reuses `requireTrack`, so a genuinely-missing coordinate is the
- * canonical `not_found`/404 — DISTINCT from the auth 401/403 the procedure raises and
- * from a validation error. Findings-only (the `tracks` table): a mixtape Log ID is a
- * 404 here (mixtapes have their own `get_mixtape*` reads).
- */
 export const getTrackAdmin = oc
   .route({
     method: "GET",
@@ -1177,19 +695,6 @@ export const getTrackAdmin = oc
   .input(z.object({ trackId: z.string() }))
   .output(z.object({ ok: z.literal(true), track: TrackListItemSchema }));
 
-/**
- * `list_tracks_admin` → `GET /admin/tracks` (operationId `listTracksAdmin`).
- *
- * The admin board's archive query (live `requireAdmin` — a read, agent-allowed).
- * Two shapes off one route, both preserved byte-for-byte:
- *   - the `?q=` free-text SEARCH branch returns a flat `{ tracks }` (no
- *     cursor/totalCount envelope);
- *   - otherwise the paginated LIST page (the `FeedListPage`/`TrackListPage` body
- *     itself, no `ok` envelope), filtered by `order`/`hasVideo`/`status`.
- * Every query param is a tolerant optional string — the live route parses + clamps
- * in-handler and never 400s — so the contract stays permissive. The output is the
- * union of the two live bodies.
- */
 export const listTracksAdmin = oc
   .route({
     method: "GET",
@@ -1200,25 +705,13 @@ export const listTracksAdmin = oc
   })
   .input(
     z.object({
-      // `captureQueue` powers the full-song capture queue: `captureQueue=true` lists
-      // findings still needing a capture (`capture_status` pending ∪ failed ∪ NULL — the
-      // `fluncle-capture` cron's worklist). Tolerant string ("true"/absent), parsed
-      // in-handler like `retryEmptyContext`. A SEPARATE queue — it never gates enrich/embed.
       captureQueue: z.string().optional(),
       cursor: z.string().optional(),
-      // `hasContext` / `hasObservation` / `hasNote` power the three agent queues (the
-      // context queue = `hasContext=false`; the observation queue = `hasContext=true`
-      // AND `hasObservation=false`; the auto-note queue = `hasContext=true` AND
-      // `hasNote=false`). Tri-state tolerant strings ("true"/"false"), parsed +
-      // clamped in-handler exactly like `hasVideo`.
+
       hasContext: z.string().optional(),
-      // `hasEmbedding` powers the MuQ embed queue: `hasEmbedding=false` lists findings
-      // with no `embedding_json` yet (the `fluncle-embed` cron's worklist). Tri-state
-      // tolerant string, parsed + clamped in-handler like `hasVideo`.
+
       hasEmbedding: z.string().optional(),
-      // `hasKey` powers the Rekordbox sync's queue: `hasKey=false` lists
-      // findings whose stored musical `key` is null (the missing-key backlog).
-      // Tri-state tolerant string, parsed + clamped in-handler like `hasVideo`.
+
       hasKey: z.string().optional(),
       hasNote: z.string().optional(),
       hasObservation: z.string().optional(),
@@ -1226,19 +719,12 @@ export const listTracksAdmin = oc
       limit: z.string().optional(),
       order: z.string().optional(),
       q: z.string().optional(),
-      // `--retry-empty`: widen the `hasContext=false` context queue to also re-pick
-      // CONFIRMED-EMPTY finds (`context_status = 'empty'`). Tri-state tolerant string,
-      // parsed in-handler like the other booleans; only honoured with `hasContext=false`.
+
       retryEmptyContext: z.string().optional(),
       status: z.string().optional(),
     }),
   )
   .output(
-    // The LIST page arm is FIRST: it carries the required `totalCount`, so a list
-    // response matches it (and keeps `nextCursor`/`totalCount`). The SEARCH arm is
-    // a strict subset (`{ tracks }` only); if it were first, Zod's union would
-    // match a list page against it and strip the cursor/count. A search response
-    // (no `totalCount`) falls through to the second arm.
     z.union([
       z.object({
         nextCursor: z.string().optional(),
@@ -1249,26 +735,6 @@ export const listTracksAdmin = oc
     ]),
   );
 
-// ── The audio pipeline's work queues (docs/gpu-batch-embed.md, docs/the-ear.md) ──────
-
-/**
- * Which stage of the audio pipeline a worklist is for: capture → analyze → embed. `anchor` is
- * the catalogue Spotify-anchor worklist (docs/catalogue-crawler.md § the anchor) — un-anchored
- * catalogue rows the box's Apify sweep fills via `anchor_track`; it carries no audio, so it is a
- * sibling of the three audio stages rather than one of them.
- * `isrc-recovery` is the free Deezer-only pass over un-anchored, ISRC-less catalogue rows. A
- * recovered ISRC makes the maintained `has_isrc` mirror true, which lets the row enter the billed
- * anchor queue through its exact-ISRC head without this pass ever spending Apify.
- *
- * The two `youtube-*` kinds are the PROVENANCE BACKFILL's queues, both drained by budgeted phases
- * inside the `fluncle-capture` tick rather than by a timer of their own:
- *
- *   · `youtube-provenance` — rows whose audio was captured before the winning video id was kept.
- *     Re-running the ladder costs a full candidate download, so it is METERED exactly like
- *     `capture`: the same catalogue brake gates it, and the sweep spends a tiny per-tick budget.
- *   · `youtube-reverdict` — rows that HOLD an id whose officialness is 0 or NULL, re-ruled under
- *     the widened heuristic. Keyless oEmbed only, so it costs nothing and carries no brake.
- */
 export const TrackWorkKindSchema = z
   .enum([
     "analyze",
@@ -1283,56 +749,25 @@ export const TrackWorkKindSchema = z
     id: "TrackWorkKind",
   });
 
-/** Which half of the archive a worklist covers: certified findings, the catalogue, or both. */
 export const TrackWorkScopeSchema = z.enum(["all", "catalogue", "findings"]).meta({
   id: "TrackWorkScope",
 });
 
-/**
- * One row of pipeline work.
- *
- * `certified` is on the DTO deliberately: it is what tells a sweep it must NOT write a
- * certification field back onto this row (no `--status`, no note, no video, no
- * `enrichment_status`). `logId` is null exactly when `certified` is false, because the
- * coordinate lives on the certification.
- *
- * The four optional `capture`-only fields (`bpm`, `analyzedFrom`, `sourceAudioFailures`,
- * `artistYoutubeChannelIds`) are the trust + re-derive signals the `fluncle-capture` sweep
- * reads: the artist-own-channel trust tier, the failure-count backoff, and the capture→enrich
- * re-derive predicate. They ride ONLY the `capture` worklist (absent for `analyze`/`embed`) and
- * are omitted when empty, so every sweep parses one exact capture-work shape.
- */
 export const TrackWorkItemSchema = z
   .object({
     analyzedFrom: z.enum(["full", "preview"]).optional(),
-    /**
-     * The ready-made Spotify search query for the ANCHOR worklist (the row's artists then its
-     * title), so the box's Apify sweep never builds it. Present ONLY on `anchor` rows.
-     */
+
     anchorQuery: z.string().optional(),
     artistYoutubeChannelIds: z.array(z.string()).optional(),
     artists: z.array(z.string()),
     bpm: z.number().optional(),
     capturePriority: z.number().nullable(),
-    /**
-     * THE OPERATOR'S CAPTURE-SOURCE PIN (docs/the-ear.md § Wrong audio) — the one YouTube video id
-     * the `fluncle-capture` sweep downloads INSTEAD of walking its search ladder. CAPTURE-only like
-     * the trust signals, and omitted when no pin stands, so the shape every other sweep parses is
-     * unchanged.
-     */
+
     captureSourcePin: z.string().optional(),
-    /** The pin's duration override — present (true) only beside a pin the operator waived the guard for. */
+
     captureSourcePinAllowDuration: z.boolean().optional(),
     certified: z.boolean(),
-    /**
-     * The ready-made DEEZER search query — Deezer's `artist:"…" track:"…"` FIELD syntax, a different
-     * spelling from `anchorQuery`'s free text. Present on an `isrc-recovery` row with a usable
-     * artist/title and on an `anchor` row that carries NO ISRC: those are the rows the pre-anchor
-     * ISRC-recovery rung acts on, and its presence is the server telling the box to run that search
-     * from its own IP (Deezer's tokenless quota is per-IP, and the Worker's shared Cloudflare edge
-     * IPs are saturated). The box hands the hits back as `resolve_anchor`'s `deezerCandidates`; the
-     * server still verifies and writes.
-     */
+
     deezerQuery: z.string().optional(),
     durationMs: z.number(),
     isrc: z.string().nullable(),
@@ -1340,58 +775,13 @@ export const TrackWorkItemSchema = z
     logId: z.string().nullable(),
     sourceAudioFailures: z.number().optional(),
     sourceAudioKey: z.string().nullable(),
-    // The bad-audio memory (docs/the-ear.md § Wrong audio) — the JSON array of rejected capture
-    // sources, CAPTURE-only like the trust signals above. The sweep's pre-download videoId filter
-    // + post-download sha backstop read it. Omitted when nothing has been rejected.
+
     sourceAudioRejected: z.string().optional(),
     title: z.string(),
     trackId: z.string(),
   })
   .meta({ id: "TrackWorkItem" });
 
-/**
- * `list_track_work` → `GET /admin/tracks/work` (operationId `listTrackWork`).
- *
- * Admin tier (agent-allowed read) — the worklist for one stage of the audio pipeline, in the
- * order the metered capture budget should be spent.
- *
- * THIS IS THE CATALOGUE-AWARE QUEUE. `list_tracks_admin`'s three queue filters (`captureQueue`,
- * `hasEmbedding=false`, `status=queue`) all drive through the FINDING JOIN, so they are blind
- * to a catalogue track by construction — which is correct for a feed and fatal for a pipeline:
- * analysis and embedding are measurements of a RECORDING and apply to any track with captured
- * audio, certified or not. This op reads `tracks` (outer-joined to the certification) and
- * serves all three stages.
- *
- * THE ORDER IS THE BUDGET. Audio capture bills per GB, so the drain order decides what the
- * money buys: certified work first (Fluncle already said yes to a finding), then
- * `capture_priority` DESC — the Ear's pre-audio ladder — then newest-first, then the id. Never
- * insertion order. A label the operator RULED OUT is tier −1 and is excluded from the `capture`
- * worklist outright: a veto that only sorts last is not a veto, because the queue drains.
- *
- * `count=true` adds `queued` — the size of the WHOLE backlog for this kind+scope, not the page.
- * The page is capped at 250, so `tracks.length` can never answer "how much is left", and at
- * catalogue scale that is the only number the operator actually wants: it is what tells the GPU
- * batch whether to rent another hour. Tolerant string ("true"; anything else is false), and
- * OPT-IN so page-only consumers do not pay for it; a consumer that publishes a backlog gauge
- * asks for the authoritative count explicitly.
- *
- * A COUNT IS A GAUGE, NOT A WORK HANDOUT — BUT THE CALLER ASKS FOR THAT READING. With
- * `count=true&debtAware=true`, a page the due-work drain withheld answers the count anyway, with an
- * EMPTY page and `debtPending: true`, instead of the typed `due_work_maintenance_pending` refusal.
- * The money rail is untouched: no row is handed out, so nothing downstream can spend a budget on an
- * ordering repair has not caught up with, and `debtPending` is what the caller keys its pause on.
- *
- * `debtAware` exists because the box CLI is a pinned release that lags the Worker, exactly as
- * `capabilities` does in the other direction. An OLD sweep does not know the flag, does not send
- * it, and keeps getting the typed 503 it already pauses on — it can never read a withheld page as
- * a drained queue and report "no work" against a real backlog, which matters most for the reads
- * that size PAID capture and GPU rental. A NEW caller opts in and gets the number. A new caller
- * against an OLD Worker sends a flag that Worker ignores, so it receives the 503 and pauses through
- * its existing path. Tolerant string ("true"; anything else is false), like `count`.
- *
- * A page-only read (no `count`) always refuses, whatever `debtAware` says, because there the page
- * IS the answer.
- */
 export const listTrackWork = oc
   .route({
     method: "GET",
@@ -1403,7 +793,7 @@ export const listTrackWork = oc
   .input(
     z.object({
       count: z.string().optional(),
-      /** Opt in to the gauge reading of a withheld page. Tolerant string, like `count`. */
+
       debtAware: z.string().optional(),
       kind: TrackWorkKindSchema,
       limit: z.coerce.number().int().min(1).max(250).default(50),
@@ -1412,40 +802,16 @@ export const listTrackWork = oc
   )
   .output(
     z.object({
-      /**
-       * WHAT THIS WORKER CAN DO, answered inside the response every pipeline sweep already reads.
-       *
-       * The box CLI is a pinned release and lags the Worker in both directions. A NEW sweep must
-       * never discover a missing batched op by catching a 404 halfway through a batch, so it
-       * feature-detects here, on the worklist read it runs first: an absent field is an OLD Worker
-       * and the per-item path is taken. An OLD sweep ignores the field entirely, which is why the
-       * per-item ops it calls are not going anywhere.
-       */
       capabilities: TrackWorkCapabilitiesSchema.optional(),
-      /**
-       * True when the page was withheld because due-work repair is still converging, so `tracks` is
-       * empty and says nothing about the backlog.
-       *
-       * Present on every `count=true&debtAware=true` read and on no other, so its PRESENCE is also
-       * the caller's proof that this Worker understood the flag: an older Worker omits it, which is
-       * how a new caller tells a genuinely complete page from a flag that was ignored.
-       */
+
       debtPending: z.boolean().optional(),
       ok: z.literal(true),
-      /** The whole backlog for this kind+scope. Present only when `count=true` was asked for. */
+
       queued: z.number().optional(),
       tracks: z.array(TrackWorkItemSchema),
     }),
   );
 
-/**
- * `publish_track` → `POST /admin/tracks` (operationId `publishTrack`).
- *
- * Publish a finding from a Spotify URL: certify it, post to Telegram, kick off
- * async enrichment. Operator tier (live `requireOperator`). LOOSE body — the live
- * route validates `spotifyUrl` itself (`invalid_request`/400) and caps the note
- * (`note_too_long`). Preserves the `{ ok: true, ...PublishTrackResult }` envelope.
- */
 export const publishTrack = oc
   .route({
     method: "POST",
@@ -1463,13 +829,6 @@ export const publishTrack = oc
   )
   .output(PublishTrackResultSchema.extend({ ok: z.literal(true) }));
 
-/**
- * One ordered stop in a proposed mix — the finding + the transition INTO it (the
- * `transitionScore`/`transitionReason` describe the edge from the previous stop, so
- * the first stop's are null). Admin-only, so the raw `transitionScore` is present here
- * (it never rides a crew-facing surface). `flagged` marks a null-pair transition
- * (costed at the neutral median, not a musical judgment).
- */
 const MixOrderStopSchema = z
   .object({
     artists: z.array(z.string()),
@@ -1483,21 +842,6 @@ const MixOrderStopSchema = z
   })
   .meta({ id: "MixOrderStop" });
 
-/**
- * `get_mixable_order` → `GET /admin/tracks/mixable-order` (operationId
- * `getMixableOrder`).
- *
- * The dream-weaver: order a candidate pool into a SMOOTHNESS-optimized chain
- * (minimizing total adjacent roughness), NOT an energy-shaped set — a proposed
- * tracklist the operator copy-pastes into Rekordbox. A PURE admin READ (no writes):
- * `promote_recording` remains the only way a mixtape exists. Admin tier
- * (agent-allowed, like `get_track_admin`), GET like every other `get_*` op (64 comma-
- * joined logIds fit a query param). Held-Karp exact for ≤16, greedy + 2-opt to 64.
- *
- * `ids` is a comma-separated Log ID list (2..64; a 65-id request 400s at validation);
- * `seed` optionally pins the first stop. Output is the ordered stops + the total cost
- * + which algorithm ran.
- */
 export const getMixableOrder = oc
   .route({
     method: "GET",
@@ -1516,7 +860,6 @@ export const getMixableOrder = oc
     }),
   );
 
-/** The `admin-tracks` domain's ops, merged into the root contract by `./index.ts`. */
 export const adminTracksContract = {
   authorize_track_capture: authorizeTrackCapture,
   clear_capture_source: clearCaptureSource,

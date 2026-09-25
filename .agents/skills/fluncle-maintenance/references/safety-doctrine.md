@@ -23,7 +23,7 @@ Edit the pin → open the PR → wait for CI green → merge. For a baked pin, t
 1. **A patch or minor bump of the `fluncle` CLI** (first-party; a stale CLI just lacks a recent command; a patch/minor never removes one). Baked → pin-watch pre-smoke validates it before the live container is touched.
 2. **A patch or minor bump of the Claude Code CLI** (the agent binary, not the model or the auth; a patch rarely changes the `claude -p` contract). Baked → pin-watch pre-smoke validated.
 3. **A patch or minor bump of bun**, edited in **both** places at once (the Dockerfile `FROM oven/bun:` tag + digest and `package.json` `packageManager`, which every workflow reads) — the CI runs on the new bun (the repo-side validation), and the box gets it via pin-watch on the same rebuild as any baked pin.
-4. **SHA-pinning a GitHub Action at its CURRENT major** (replace `@v6` with the commit SHA `v6` resolves to today, keeping `# v6` as a trailing comment). Changes **no behaviour** — pins the same commit — and the PR's CI run proves the workflow still parses and runs. Fully repo-side; ships on merge. It is the safest thing in the skill.
+4. **SHA-pinning a GitHub Action at its CURRENT major** (replace `@v6` with the commit SHA `v6` resolves to today, recording its major in `references/version-inventory.md`). Changes **no behaviour** — pins the same commit — and the PR's CI run proves the workflow still parses and runs. Fully repo-side; ships on merge. It is the safest thing in the skill.
 
 ## PULL THE BRAKE — report, never ship
 
