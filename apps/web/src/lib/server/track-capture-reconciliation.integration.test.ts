@@ -102,7 +102,7 @@ describe("capture reconciliation against the real schema", () => {
     if (!prepared.prepared) {
       return;
     }
-    // The sweep reads the pin off the frozen row — the same row it captures from.
+
     expect(prepared.track.captureSourcePin).toBe("dQw4w9WgXcQ");
 
     const digest = "b".repeat(64);
@@ -128,16 +128,14 @@ describe("capture reconciliation against the real schema", () => {
       sql: `select capture_status, capture_verification, capture_source_pin, source_audio_key
             from tracks where track_id = ?`,
     });
-    // The capture lands like any other — analyze and embed pick it up from `source_audio_key` —
-    // stamped with the operator's authority; the pin stands until he clears it.
+
     expect(state.rows[0]).toMatchObject({
       capture_source_pin: "dQw4w9WgXcQ",
       capture_status: "done",
       capture_verification: "operator-verified",
       source_audio_key: `${LOG_ID}/${digest}.webm`,
     });
-    // No officialness check ran: an operator-verified result carries no YouTube id (the pin op
-    // already stamped the row's provenance), so the server had nothing to rule on.
+
     expect(checkYoutubeOfficial).not.toHaveBeenCalled();
   });
 
@@ -161,7 +159,7 @@ describe("capture reconciliation against the real schema", () => {
       snapshotToken: prepared.snapshotToken,
       trackId: TRACK_ID,
     });
-    // The operator pins the row while the ladder walk is in flight.
+
     await db.execute({
       args: [TRACK_ID],
       sql: `update tracks set capture_source_pin = 'dQw4w9WgXcQ' where track_id = ?`,
@@ -169,7 +167,6 @@ describe("capture reconciliation against the real schema", () => {
 
     const outcome = await commitCaptureReconciliation({ ...receipt, trackId: TRACK_ID });
 
-    // The stale `unmatched` must not land on a row he just pinned — the pin exists to escape it.
     expect(outcome).toMatchObject({ outcome: "rejected", replayed: false });
     const state = await db.execute({
       args: [TRACK_ID],
@@ -310,10 +307,6 @@ describe("capture reconciliation against the real schema", () => {
   });
 
   it("commits a CONSENSUS-VERIFIED capture like any other verified capture — and refuses an id beside it", async () => {
-    // The ladder's consensus (docs/the-ear.md § Wrong audio): the preview refused every upload, but
-    // two independent uploads agreed with each other. Machine evidence — it lands, it is stamped
-    // honestly, and it earns NO YouTube id: the uploads proved they carry one recording, not that
-    // it is the recording the ISRC names, so an id beside it is the same 422 the abstain path gets.
     const {
       authorizeCaptureReconciliation,
       commitCaptureReconciliation,
@@ -378,7 +371,7 @@ describe("capture reconciliation against the real schema", () => {
 
   it("freezes the pin's duration override into the prepared track, only beside a pin and only when set", async () => {
     const { prepareCaptureReconciliation } = await import("./track-capture-reconciliation");
-    // Waived without a pin: the flag is meaningless alone and the prepared track does not carry it.
+
     await db.execute({
       args: [TRACK_ID],
       sql: `update tracks set capture_source_pin = null, capture_source_pin_allow_duration = 1,
@@ -393,7 +386,6 @@ describe("capture reconciliation against the real schema", () => {
     expect(orphan.track.captureSourcePin).toBeUndefined();
     expect(orphan.track.captureSourcePinAllowDuration).toBeUndefined();
 
-    // Pinned and waived: the sweep reads both off the frozen row.
     await db.execute({
       args: [TRACK_ID],
       sql: `update tracks set capture_source_pin = 'dQw4w9WgXcQ' where track_id = ?`,
@@ -406,8 +398,6 @@ describe("capture reconciliation against the real schema", () => {
     expect(waived.track.captureSourcePin).toBe("dQw4w9WgXcQ");
     expect(waived.track.captureSourcePinAllowDuration).toBe(true);
 
-    // Pinned, guard applies: the key is absent, so the box's exact-key allow-list sees the same
-    // shape it always has for a plain pin.
     await db.execute({
       args: [TRACK_ID],
       sql: `update tracks set capture_source_pin_allow_duration = 0 where track_id = ?`,

@@ -1,15 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-// The Spotify anchor breaker's DURABLE state machine (the apple-breaker.test.ts shape). The
-// `settings` KV is mocked with an in-memory map so the trip / count / window state is exercised
-// without a database, and `now` is injected so the cooldown and the failure window are deterministic.
-//
-// What is proven HERE: the pure verdict, the decaying-window count, the trip, the RELEASE, the
-// default-deny rule, the corrupt-stamp self-heal, the reset, the total-recorder contract, and the
-// production rows' behaviour on adoption. What is proven in `spotify-anchor-breaker.integration.test.ts`
-// is the other half and the one that matters more: that the REAL `spotifyFetch` 429 path drives all
-// of this, and that a tripped breaker leaves the user-facing Spotify paths completely alone.
-
 const store = new Map<string, string>();
 let getFails = false;
 let setFails = false;
@@ -38,7 +28,6 @@ beforeEach(() => {
   setFails = false;
 });
 
-/** Drive N 429s through the recorder at one instant — enough to trip at the default threshold. */
 async function throttle(times: number, now: number): Promise<void> {
   const { recordSpotifyThrottle } = await import("./spotify-anchor-breaker");
 
@@ -74,8 +63,6 @@ describe("spotifyAnchorBreakerVerdict (pure)", () => {
     const { spotifyAnchorBreakerVerdict, SPOTIFY_ANCHOR_BREAKER_COOLDOWN_MS } =
       await import("./spotify-anchor-breaker");
 
-    // The OPPOSITE of apple-breaker's "never wedge Apple": this breaker's only consumer is optional
-    // catalogue work, so ambiguity must fail toward "anchor search not allowed".
     expect(spotifyAnchorBreakerVerdict({ now: 1000, trippedAt: "not-a-date" })).toEqual({
       cooldownRemainingMs: SPOTIFY_ANCHOR_BREAKER_COOLDOWN_MS,
       corrupt: true,
@@ -135,12 +122,10 @@ describe("recordSpotifyThrottle — the trip and the release", () => {
     await throttle(SPOTIFY_ANCHOR_BREAKER_MAX_FAILURES, now);
     expect(await spotifyAnchorSearchBreakerTripped(now)).toBe(true);
 
-    // One millisecond before the cooldown ends it is still tripped…
     expect(
       await spotifyAnchorSearchBreakerTripped(now + SPOTIFY_ANCHOR_BREAKER_COOLDOWN_MS - 1),
     ).toBe(true);
 
-    // …and the moment it elapses the rungs are armed again, with no operator in the loop.
     const after = now + SPOTIFY_ANCHOR_BREAKER_COOLDOWN_MS + 1;
 
     expect(await spotifyAnchorSearchBreakerTripped(after)).toBe(false);
@@ -167,7 +152,7 @@ describe("recordSpotifyThrottle — the trip and the release", () => {
 
     expect(state.reason).toBe(SPOTIFY_ANCHOR_BREAKER_REASON_THROTTLED);
     expect(state.trippedAt).toBe(new Date(now).toISOString());
-    // Zeroed so a long storm cannot run the counter away while the breaker is already doing its job.
+
     expect(state.throttlesInWindow).toBe(0);
   });
 
@@ -179,8 +164,6 @@ describe("recordSpotifyThrottle — the trip and the release", () => {
     } = await import("./spotify-anchor-breaker");
     let now = 10_000_000;
 
-    // Twice the threshold's worth of 429s, each a full window apart: normal backpressure the
-    // per-call backoff already absorbed, never a regime.
     for (let i = 0; i < SPOTIFY_ANCHOR_BREAKER_MAX_FAILURES * 2; i += 1) {
       await throttle(1, now);
       now += SPOTIFY_ANCHOR_BREAKER_FAILURE_WINDOW_MS + 1;
@@ -197,7 +180,6 @@ describe("recordSpotifyThrottle — the trip and the release", () => {
     await throttle(SPOTIFY_ANCHOR_BREAKER_MAX_FAILURES, now);
     const trippedAt = (await getSpotifyAnchorBreakerState(now)).trippedAt;
 
-    // A storm continuing an hour's worth of throttles later must not move the stamp.
     await throttle(50, now + 60_000);
 
     expect((await getSpotifyAnchorBreakerState(now + 60_000)).trippedAt).toBe(trippedAt);
@@ -213,7 +195,7 @@ describe("recordSpotifyThrottle — the trip and the release", () => {
 
     store.set(SPOTIFY_ANCHOR_BREAKER_TRIPPED_AT_KEY, "¯\\_(ツ)_/¯");
     expect(await spotifyAnchorSearchBreakerTripped(now), "denied while unreadable").toBe(true);
-    // Unhealed, it would deny forever — the cooldown has nothing to measure from.
+
     expect(
       await spotifyAnchorSearchBreakerTripped(now + SPOTIFY_ANCHOR_BREAKER_COOLDOWN_MS * 10),
     ).toBe(true);
@@ -300,8 +282,6 @@ describe("resetSpotifyAnchorBreaker", () => {
 });
 
 describe("adopting the orphaned production rows", () => {
-  // The three keys are seeded with the production `settings` values. Adoption must be a no-op:
-  // a stale trip reads as EXPIRED (via the cooldown), not as a live one.
   const PROD_TRIPPED_AT = "2026-07-18T09:25:37.713Z";
   const PROD_REASON = "throttled";
   const PROD_FAILURES = "1";
@@ -316,7 +296,6 @@ describe("adopting the orphaned production rows", () => {
     store.set(SPOTIFY_ANCHOR_BREAKER_TRIPPED_AT_KEY, PROD_TRIPPED_AT);
     store.set(SPOTIFY_ANCHOR_BREAKER_REASON_KEY, PROD_REASON);
     store.set(SPOTIFY_ANCHOR_BREAKER_FAILURES_KEY, PROD_FAILURES);
-    // The one NEW key is absent, exactly as it is in production.
   }
 
   it("the stale trip reads as EXPIRED, not as permanently tripped", async () => {
@@ -325,7 +304,7 @@ describe("adopting the orphaned production rows", () => {
 
     await seedProductionRows();
 
-    const now = Date.parse("2026-07-29T12:00:00.000Z"); // eleven days later
+    const now = Date.parse("2026-07-29T12:00:00.000Z");
 
     expect(await spotifyAnchorSearchBreakerTripped(now)).toBe(false);
     expect(await getSpotifyAnchorBreakerState(now)).toEqual({
@@ -348,8 +327,6 @@ describe("adopting the orphaned production rows", () => {
 
     const now = Date.parse("2026-07-29T12:00:00.000Z");
 
-    // The missing failure-window stamp makes the orphaned count stale, so the first fresh 429
-    // restarts at 1 — the full threshold is still required, not one fewer.
     await throttle(SPOTIFY_ANCHOR_BREAKER_MAX_FAILURES - 1, now);
 
     expect(await spotifyAnchorSearchBreakerTripped(now)).toBe(false);

@@ -9,11 +9,6 @@ vi.mock("./db", () => ({
   typedRows: <T extends object>(rows: T[]) => rows,
 }));
 
-// A finding's two radio-eligibility signals: a clean SQUARE master
-// (`video_squared_at`, so the crop is clean / no baked text) and an OBSERVATION
-// (`observation_audio_url`, the only audio radio plays). The mocked DB applies
-// the SAME `is not null AND is not null` predicate the real SQL carries, so the
-// test proves an ineligible finding can never be returned.
 type StoredTrack = {
   observation_audio_url: string | null;
   title: string;
@@ -22,28 +17,27 @@ type StoredTrack = {
 };
 
 const archive: StoredTrack[] = [
-  // Eligible: squared + observed.
   {
     observation_audio_url: "https://found.fluncle.com/003.1.1A/observation.mp3",
     title: "Eligible",
     track_id: "track-eligible",
     video_squared_at: "2026-06-10T00:00:00.000Z",
   },
-  // Ineligible: squared but NO observation.
+
   {
     observation_audio_url: null,
     title: "No Observation",
     track_id: "track-no-observation",
     video_squared_at: "2026-06-09T00:00:00.000Z",
   },
-  // Ineligible: observed but NOT squared; the radio requires a squared video.
+
   {
     observation_audio_url: "https://found.fluncle.com/002.5.9Z/observation.mp3",
     title: "Not Squared",
     track_id: "track-not-squared",
     video_squared_at: null,
   },
-  // Ineligible: neither.
+
   {
     observation_audio_url: null,
     title: "Bare",
@@ -92,8 +86,6 @@ function baseRow(stored: StoredTrack) {
   };
 }
 
-// Apply the real eligibility predicates the SQL `where` clause carries, then take
-// one at random (the function's `order by random() limit 1`).
 function runEligibleQuery() {
   const eligible = archive.filter(
     (t) => t.video_squared_at !== null && t.observation_audio_url !== null,
@@ -109,18 +101,12 @@ function runEligibleQuery() {
   return [baseRow(picked)];
 }
 
-// The mock emulates the real `order by random() limit 1` with `Math.random()`.
-// Pin it so the pick is deterministic across runs — the eligibility invariant
-// below must hold for ANY draw, so we sweep the spy across the [0,1) range rather
-// than freezing a single index.
 const randomSpy = vi.spyOn(Math, "random");
 
 beforeEach(() => {
   execute.mockReset();
   randomSpy.mockReset().mockReturnValue(0);
   execute.mockImplementation(async (query: { sql: string }) => {
-    // Guard the predicate is actually in the SQL, not just emulated by the mock. The mock
-    // only ever runs inside a test body, so these are not standalone expects.
     // oxlint-disable-next-line vitest/no-standalone-expect
     expect(query.sql).toContain("video_squared_at is not null");
     // oxlint-disable-next-line vitest/no-standalone-expect
@@ -132,10 +118,6 @@ beforeEach(() => {
 
 describe("getRandomRadioTrack", () => {
   it("only ever returns a radio-eligible finding (squared + observed)", async () => {
-    // Sweep the pick across the whole [0,1) range: an ineligible finding
-    // (un-squared OR observation-less) must never surface, however the random
-    // pick lands. Deterministic now (the spy drives every draw) instead of
-    // hoping 50 real-random draws happen to cover the space.
     for (let i = 0; i < 50; i++) {
       randomSpy.mockReturnValue(i / 50);
 
@@ -149,12 +131,11 @@ describe("getRandomRadioTrack", () => {
     const track = await getRandomRadioTrack();
 
     expect(track?.logId).toBe("003.1.1A");
-    // The playback URL is versioned by the render timestamp (the today cache fix).
+
     expect(track?.observationAudioUrl).toContain("observation.mp3?v=");
-    // The square signal rides through so the page knows it can centre-crop.
+
     expect(track?.videoSquaredAt).toBe("2026-06-10T00:00:00.000Z");
-    // The sonic galaxy (browse-by-feel RFC) rides through as { name, slug } from the
-    // galaxy_id join (present because this fixture's galaxy is named).
+
     expect(track?.galaxy).toEqual({ name: "The Liquid Deep", slug: "the-liquid-deep" });
   });
 

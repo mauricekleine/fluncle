@@ -1,12 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { formatMixtapeAnnouncement } from "./telegram";
 
-// The crew announcement copy for a published mixtape (formatMixtapeAnnouncement). A
-// pure formatter — no transport, no env — so these pin the SHAPE + the voice: the 🛸
-// header, the dream note (or the default dream line) leading, the crew turn, the
-// display title + F-marked coordinate, the 🎧 listen links, and the /log line. The
-// live crew-facing copy still gets a canon (VOICE.md) review; this guards the machinery.
-
 const BASE = {
   externalUrls: {
     mixcloud: "https://www.mixcloud.com/fluncle/a-set/",
@@ -39,9 +33,9 @@ describe("formatMixtapeAnnouncement", () => {
     const text = formatMixtapeAnnouncement({ ...BASE, note: null });
 
     expect(text).toContain("checkpoint before the next sector");
-    // Still turns to the crew (the Selector's Rule).
+
     expect(text).toContain("Pull it up loud, cosmonauts.");
-    // The Dry Rule: no exclamation marks anywhere in the callout.
+
     expect(text).not.toContain("!");
   });
 
@@ -55,7 +49,7 @@ describe("formatMixtapeAnnouncement", () => {
     const text = formatMixtapeAnnouncement(BASE);
 
     expect(text).toContain("Fluncle Drum & Bass Mixtape #3 · fluncle://019.F.3A");
-    // The raw " | 019.F.3A" suffix never doubles up on the title line.
+
     expect(text).not.toContain("Mixtape #3 | 019.F.3A");
   });
 
@@ -74,9 +68,6 @@ describe("formatMixtapeAnnouncement", () => {
   });
 });
 
-// The per-finding crew post (formatTelegramMessage) — only the seam the certify fan-out bent:
-// a certified catalogue row can have NO Spotify presence, and the post must omit the line
-// rather than print a broken one. The Spotify-add path (URL always present) is unchanged.
 describe("formatTelegramMessage — the Spotify line is conditional on a presence", () => {
   const track = {
     artists: ["Artificial Intelligence"],

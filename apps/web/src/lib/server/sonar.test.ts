@@ -16,11 +16,6 @@ import {
   searchSonar,
 } from "./sonar";
 
-// The client is the load-bearing safety seam: it must return `null` (⇒ the caller falls back to
-// the Turso scan) on EVERY failure mode — unprovisioned env, non-2xx, timeout/throw, garbled body —
-// and only route to sonar when both env vars are present and the reply is well-formed. The flag
-// readers are default-DENY: only the literal "true" enables a surface.
-
 const readOptionalEnv = vi.hoisted(() => vi.fn<(name: string) => Promise<string | undefined>>());
 const getSetting = vi.hoisted(() => vi.fn<(key: string) => Promise<string | undefined>>());
 
@@ -51,7 +46,6 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-/** A well-formed `POST /search` reply. */
 function reply(matches: Array<{ id: string; score: number }>) {
   return { json: async () => ({ matches }), ok: true };
 }
@@ -207,11 +201,6 @@ describe("searchSonar — the triple-gated fallback client", () => {
     expect(await searchSonar(REQUEST)).toBeNull();
   });
 
-  // ── The request caps, at the boundary ──────────────────────────────────────────────────────
-  //
-  // The engine 400s an over-cap body (search.rs `cap_violation`); the client refuses to send one
-  // at all. Both sides of each boundary are asserted so a raised constant cannot slip past.
-
   it("sends a topK AT the cap", async () => {
     fetchMock.mockResolvedValue(reply([{ id: "t1", score: 0.9 }]));
 
@@ -243,8 +232,6 @@ describe("searchSonar — the triple-gated fallback client", () => {
   });
 
   it("leaves every live call shape inside the caps", () => {
-    // The widest legitimate calls in the tree: /mix's TASTE_SHORTLIST topK and
-    // /recommendations' MAX_REC_SEEDS-wide probe set.
     expect(TASTE_SHORTLIST).toBeLessThanOrEqual(SONAR_MAX_TOP_K);
     expect(RECOMMENDATIONS_POOL).toBeLessThanOrEqual(SONAR_MAX_TOP_K);
     expect(MAX_REC_SEEDS).toBeLessThanOrEqual(SONAR_MAX_PROBES);

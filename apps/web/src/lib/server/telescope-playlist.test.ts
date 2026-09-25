@@ -1,10 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-// Fluncle's Telescope — the mirror's contract: a pure, ordered, full-replace reflection
-// of the diversified ear top into the PRIVATE playlist; lazy one-time creation; one GET
-// when nothing changed; never a throw (the sync rides the rank sweep and the operator's
-// certify/dismiss acts, which must not fail on a Spotify hiccup).
-
 const settings = new Map<string, string>();
 const spotifyCalls: { init?: RequestInit; path: string }[] = [];
 let earRows: { spotifyUrl: null | string; trackId: string }[] = [];
@@ -157,7 +152,7 @@ describe("syncTelescopePlaylist", () => {
     const result = await syncTelescopePlaylist();
 
     expect(result).toMatchObject({ ok: false });
-    // The mirror state only advances AFTER a successful PUT — the next sync retries.
+
     expect(settings.get(TELESCOPE_MIRROR_SETTING)).toBeUndefined();
   });
 });

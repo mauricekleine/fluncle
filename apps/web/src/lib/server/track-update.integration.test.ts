@@ -3,12 +3,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createIntegrationDb, seedTrack } from "./integration-db";
 
-// `fillEmptyNote` is the AGENT-tier, race-safe note write: the fill-empty-only guard
-// is a DB predicate (`and (note is null or trim(note) = '')`), not a check-then-act
-// in JS. These cases run against the REAL in-memory libSQL schema so the predicate's
-// actual SQL semantics are proven — a mock could not prove SQLite's `trim()` matches
-// whitespace, nor that a populated `note` row is genuinely protected from a clobber.
-
 let db: Client;
 
 vi.mock("./db", async (importOriginal) => {
@@ -20,7 +14,7 @@ vi.mock("./db", async (importOriginal) => {
   };
 });
 
-const TRACK_ID = "abcdefghij0123456789AB"; // 22 chars, the tracks PK shape
+const TRACK_ID = "abcdefghij0123456789AB";
 
 async function noteOf(trackId: string): Promise<null | string> {
   const result = await db.execute({
@@ -53,8 +47,6 @@ describe("fillEmptyNote — the atomic fill-empty-only guard", () => {
     expect(await noteOf(TRACK_ID)).toBe("Pure rolling menace, patient and mean.");
   });
 
-  // THE PROVENANCE STAMP, at the row. A stamped fill writes the version in the column
-  // in the same atomic statement as the note.
   it("stamps note_prompt_version in the same statement as the note (and NULL when unstamped)", async () => {
     const { fillEmptyNote } = await import("./track-update");
 
@@ -67,7 +59,6 @@ describe("fillEmptyNote — the atomic fill-empty-only guard", () => {
     });
     expect(stamped.rows[0]?.note_prompt_version).toBe(5);
 
-    // An operator-typed fill (no version) reads honestly as "no registry prompt wrote this".
     await setNote(TRACK_ID, null);
     await fillEmptyNote(TRACK_ID, "An operator's line, typed by hand.");
     const unstamped = await db.execute({
@@ -78,9 +69,6 @@ describe("fillEmptyNote — the atomic fill-empty-only guard", () => {
   });
 
   it("fills a WHITESPACE-ONLY (spaces) note — trim() counts it as empty (returns true, stores)", async () => {
-    // SQLite's default `trim()` strips ASCII spaces, so a spaces-only note reads as
-    // empty and is filled — mirroring the fast-path JS `note?.trim()` guard for the
-    // common case. A real note (operator or agent) is always non-whitespace prose.
     const { fillEmptyNote } = await import("./track-update");
     await setNote(TRACK_ID, "     ");
 
@@ -92,27 +80,25 @@ describe("fillEmptyNote — the atomic fill-empty-only guard", () => {
 
   it("does NOT clobber an EXISTING note — returns false, the stored note is unchanged", async () => {
     const { fillEmptyNote } = await import("./track-update");
-    // Simulate the interleave: an operator note lands (via the update_track path)
-    // after the handler's read would have passed but before this write.
+
     await setNote(TRACK_ID, "An operator's hand-set note that must win.");
 
     const filled = await fillEmptyNote(TRACK_ID, "The agent's note that must lose the race.");
 
     expect(filled).toBe(false);
-    // The predicate matched no row — the operator's note is intact, never overwritten.
+
     expect(await noteOf(TRACK_ID)).toBe("An operator's hand-set note that must win.");
   });
 
   it("bumps updated_at when it fills, and NOT when it loses the race", async () => {
     const { fillEmptyNote } = await import("./track-update");
-    // Anchor a known-old updated_at so a real bump is observable.
+
     const OLD = "2000-01-01T00:00:00.000Z";
     await db.execute({
       args: [OLD, TRACK_ID],
       sql: "update findings set updated_at = ? where track_id = ?",
     });
 
-    // Fill an empty note → the write bumps updated_at (note is a VISIBLE field).
     const filled = await fillEmptyNote(TRACK_ID, "First light, and the drop just holds.");
     expect(filled).toBe(true);
 
@@ -123,7 +109,6 @@ describe("fillEmptyNote — the atomic fill-empty-only guard", () => {
     const bumped = afterFill.rows[0]?.updated_at as string;
     expect(bumped).not.toBe(OLD);
 
-    // Re-anchor, then a losing fill (note now present) must NOT touch updated_at.
     await db.execute({
       args: [OLD, TRACK_ID],
       sql: "update findings set updated_at = ? where track_id = ?",

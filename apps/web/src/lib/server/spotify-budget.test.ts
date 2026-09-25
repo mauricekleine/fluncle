@@ -1,9 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-// The shared Spotify per-app call meter (the Frontier-pacing keystone). The `settings` KV is mocked
-// with an in-memory map so the durable window state is exercised without a database, and `now` is
-// injected so the window rollover is deterministic. Mirrors ./apple-breaker.test.ts.
-
 const store = new Map<string, string>();
 let throwOnGet = false;
 
@@ -68,7 +64,6 @@ describe("the call meter", () => {
     await recordSpotifyCall(t0 + 1);
     expect(await readSpotifyCallCount(t0 + 2)).toBe(2);
 
-    // A read past the window elapse reads 0, and the next record opens a fresh window.
     expect(await readSpotifyCallCount(t0 + SPOTIFY_CALL_WINDOW_MS)).toBe(0);
     await recordSpotifyCall(t0 + SPOTIFY_CALL_WINDOW_MS);
     expect(await readSpotifyCallCount(t0 + SPOTIFY_CALL_WINDOW_MS)).toBe(1);
@@ -101,7 +96,6 @@ describe("the call meter", () => {
     }
     expect(await isSpotifyCallBudgetAvailable(t0)).toBe(false);
 
-    // The next window is fresh.
     expect(await isSpotifyCallBudgetAvailable(t0 + SPOTIFY_CALL_WINDOW_MS)).toBe(true);
   });
 });

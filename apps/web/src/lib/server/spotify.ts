@@ -11,13 +11,9 @@ import { isSpotifyCallBudgetAvailable, recordSpotifyCall } from "./spotify-budge
 
 const spotifyAccountsBaseUrl = "https://accounts.spotify.com";
 const spotifyApiBaseUrl = "https://api.spotify.com/v1";
-// The publish grant: it manages the Fluncle playlists (add a featured track; mint +
-// re-mirror the per-user Frontier playlists) and uploads their custom covers —
-// `ugc-image-upload` is what un-inerts the Frontier cover leg (frontier-playlist.ts's
-// `putFrontierCover`): without it Spotify 401/403s the image PUT and the leg abstains.
+
 const spotifyScopes = ["playlist-modify-public", "playlist-modify-private", "ugc-image-upload"];
-// Admin web login asks for identity only — never the playlist-write scopes the
-// publish flow uses. The login exchange reads /v1/me and discards the tokens.
+
 const spotifyLoginScopes = ["user-read-email"];
 
 type SpotifyTokenResponse = {
@@ -68,30 +64,18 @@ type SpotifyAuthRow = {
   expires_at: string;
 };
 
-// The ApiError code for "the stored Spotify authorization is gone — an operator
-// must reconnect". Callers (the search route, publish) branch on this to show the
-// reconnect affordance instead of a generic failure.
 export const SPOTIFY_REAUTH_REQUIRED = "spotify_reauth_required";
 
-// Spotify ages user refresh tokens out six months after issue. We flag a token as stale
-// well before that so the operator can
-// reconnect on their own schedule rather than mid-publish. The clock is the
-// stored row's last write — every successful refresh rewrites it, so this tracks
-// the freshest token Spotify has handed us, not necessarily its true issue date.
 const spotifyTokenStaleDays = 150;
 
 export type SpotifyAuthStatus = {
-  /** A row exists in spotify_auth (cleared the moment a refresh hits invalid_grant). */
   connected: boolean;
-  /** Days since the stored token was last written; undefined when disconnected. */
+
   ageDays?: number;
-  /** Connected but old enough to warrant a proactive reconnect. */
+
   stale: boolean;
 };
 
-// A typed token-endpoint failure carrying Spotify's machine-readable error code
-// (e.g. "invalid_grant" when a refresh token has expired or been revoked), so the
-// refresh path can tell "reconnect needed" apart from a transient outage.
 class SpotifyTokenError extends Error {
   spotifyError?: string;
 
@@ -108,9 +92,7 @@ export type TrackMetadata = {
   spotifyUri: string;
   title: string;
   artists: string[];
-  // Parallel to `artists`: the Spotify artist IDs in the same order. Populated
-  // at ingest from the Spotify `/tracks/{id}` response so the artist entity
-  // (artists + track_artists tables) can be upserted without an extra API call.
+
   spotifyArtistIds: string[];
   album?: string;
   albumImageUrl?: string;
@@ -124,8 +106,6 @@ export async function buildSpotifyAuthUrl(state: string): Promise<string> {
   return buildAuthorizeUrl(state, spotifyScopes);
 }
 
-// The admin-login authorize URL: identity scopes, the SAME registered redirect
-// URI as the publish flow (the shared callback branches on state.purpose).
 export async function buildSpotifyLoginUrl(state: string): Promise<string> {
   return buildAuthorizeUrl(state, spotifyLoginScopes);
 }
@@ -155,11 +135,6 @@ type SpotifyProfileResponse = {
   id: string;
 };
 
-/**
- * Exchange an admin-login auth code for the caller's Spotify identity and throw
- * the tokens away. This is the LOGIN path — it must never touch spotify_auth (the
- * publish refresh token lives there); it only proves who is at the browser.
- */
 export async function fetchSpotifyProfile(code: string): Promise<SpotifyProfile> {
   const env = await readEnvs(["SPOTIFY_REDIRECT_URI"]);
   const token = await requestToken({
@@ -177,10 +152,6 @@ export async function fetchSpotifyProfile(code: string): Promise<SpotifyProfile>
   };
 }
 
-// The grammar itself lives in the shared client-safe module (../spotify-track-id)
-// so the admin Add-finding dialog validates pastes with the SAME rules; this
-// wrapper maps each failure reason onto the exact legacy `invalid_spotify_url`
-// message the CLI and API consumers pin.
 export function parseSpotifyTrackUrl(input: string): string {
   const parsed = parseSpotifyTrackId(input);
 
@@ -261,14 +232,6 @@ export type ArtistImagesFetchResult = {
   rateLimited: boolean;
 };
 
-/**
- * Fetch each artist's largest Spotify profile image, keyed by Spotify artist id.
- * One `/v1/artists/{id}` call per artist: the batch endpoint (`/v1/artists?ids=`)
- * returns a bare 403 for this app's tier, so per-id is the only allowed path. The result keeps a genuine
- * 200-without-an-image separate from malformed responses, per-id failures, exhausted
- * 429 backoff, and proactive shared-budget deferral. The image is an `i.scdn.co` URL
- * — the same host/precedent as `tracks.album_image_url`, served attribution-by-link.
- */
 export async function fetchArtistImages(
   spotifyArtistIds: string[],
 ): Promise<ArtistImagesFetchResult> {
@@ -366,65 +329,29 @@ export async function searchTrackCandidates(query: string): Promise<TrackSearchR
     artworkUrl: selectAlbumImageUrl(track.album?.images),
     durationMs: track.duration_ms,
     id: track.id,
-    // Parallel to `artists`: the stable Spotify artist ids, carried so the crawler's verified-search
-    // anchor rung can connect the track's artist entities by stable id with no extra Spotify call.
+
     spotifyArtistIds: track.artists.map((artist) => artist.id),
     spotifyUrl: track.external_urls?.spotify ?? `https://open.spotify.com/track/${track.id}`,
     title: track.name,
   }));
 }
 
-/** What the catalogue crawler wants from Spotify: the anchor, plus the artists riding on it. */
 type SpotifyIsrcMatch = {
   albumImageUrl?: string;
-  /**
-   * The track's Spotify artists, each with its stable `id` — carried straight off the SAME
-   * `/search` response, so a caller can connect-or-create the track's artist entities by stable
-   * id with NO extra Spotify call.
-   */
+
   artists: Array<{ id: string; name: string }>;
   spotifyUri: string;
   spotifyUrl: string;
   trackId: string;
 };
 
-/**
- * One ISRC lookup's outcome. `rateLimited` is the load-bearing half: without it, "Spotify
- * is throttling us" and "this track is not on Spotify" are the same answer, and a caller
- * would keep hammering a 429 wall for every remaining track. Measured live during the
- * pilot crawl — a sustained by-ISRC sweep DOES earn a 429 — which is exactly why the
- * signal exists (and why catalogue anchor-filling moved off the official Spotify app onto
- * the box's Apify sweep entirely; see lib/server/anchor.ts).
- */
 export type SpotifyIsrcLookup = {
   match?: SpotifyIsrcMatch;
   rateLimited: boolean;
-  /**
-   * True when the lookup could not run because the stored Spotify grant is gone
-   * (`spotify_not_authenticated` / `spotify_reauth_required`). Distinct from `rateLimited`
-   * (a throttle) and from a clean no-match (`match` undefined, both flags false): the crawler's
-   * anchor breaker pauses on this so a dead grant is not re-poked every tick, and surfaces it so
-   * the operator knows to reconnect rather than wait out a throttle that will never lift.
-   */
+
   unauthorized?: boolean;
 };
 
-/**
- * Find a track's Spotify presence BY ISRC — the one job Spotify still does well, and now
- * the only one the catalogue asks of it.
- *
- * Spotify's February-2026 lockdown removed the batch track-fetch endpoint, capped
- * `/search` at 10 results, and stripped `genres`/`popularity`/`label` from the payloads.
- * So it cannot be the catalogue's identity spine or its traversal — MusicBrainz is both
- * (docs/catalogue-crawler.md). What survives is the `isrc:` search filter, which is an
- * exact key lookup: given the ISRC MusicBrainz already holds, it returns the Spotify id
- * for that exact recording, or nothing.
- *
- * `tracks.spotify_uri` / `spotify_url` are NULLABLE precisely so "nothing" is a valid,
- * unremarkable answer — a crawled track with no Spotify presence is still a real track.
- * Best-effort by construction: it never throws, so a Spotify outage (or an un-authorized
- * environment) degrades the caller to "no anchor written", never to a failure.
- */
 export async function findSpotifyTrackByIsrc(isrc: string): Promise<SpotifyIsrcLookup> {
   const clean = isrc.trim();
 
@@ -456,9 +383,6 @@ export async function findSpotifyTrackByIsrc(isrc: string): Promise<SpotifyIsrcL
   } catch (error) {
     logEvent("warn", "spotify.isrc-lookup-failed", { error, isrc: clean });
 
-    // The grant is gone (`getSpotifyAccessToken` throws an ApiError with these codes): every
-    // subsequent call will fail the same way until the operator reconnects, so this is NOT a
-    // "not on Spotify" answer and NOT a throttle — the caller must pause and surface it.
     if (
       error instanceof ApiError &&
       (error.code === "spotify_not_authenticated" || error.code === SPOTIFY_REAUTH_REQUIRED)
@@ -466,25 +390,12 @@ export async function findSpotifyTrackByIsrc(isrc: string): Promise<SpotifyIsrcL
       return { rateLimited: false, unauthorized: true };
     }
 
-    // `spotifyFetch` throws a plain Error whose message carries the upstream status. A 429
-    // means the vendor is throttling, not that the track is absent — the caller must stop.
     const rateLimited = error instanceof Error && error.message.includes("429");
 
     return { rateLimited };
   }
 }
 
-/**
- * The Fluncle playlist's saved/follower count — the one Spotify number that survived
- * the February-2026 API gutting (`GET /playlists/{id}?fields=followers.total`), and
- * the /reach collector's `spotify_playlist` metric. Reuses the same durable OAuth the
- * publish path holds (`getSpotifyAccessToken`) and the same `SPOTIFY_PLAYLIST_ID`
- * `addTrackToPlaylist` writes to, so it needs no new credential.
- *
- * NOT best-effort here — it throws on a missing playlist id, an unconnected
- * `spotify_auth` row, or a malformed response — because the collector wraps every
- * platform in its own try/catch and turns a throw into an honest per-platform skip.
- */
 export async function fetchPlaylistFollowerCount(): Promise<number> {
   const [env, accessToken] = await Promise.all([
     readEnvs(["SPOTIFY_PLAYLIST_ID"]),
@@ -545,10 +456,6 @@ function selectAlbumImageUrl(images: SpotifyImage[] | undefined): string | undef
   );
 }
 
-// The widest image Spotify carries — the artist-avatar counterpart to
-// selectAlbumImageUrl (which targets the 300²+ album rendition). Artist images
-// use a different id prefix than album art, so we pick the largest by width
-// rather than a fixed rendition and render it at the source size.
 function selectLargestImageUrl(images: SpotifyImage[] | undefined): string | undefined {
   if (!images?.length) {
     return undefined;
@@ -578,8 +485,6 @@ function toSearchResult(track: TrackMetadata): TrackSearchResult {
   };
 }
 
-// Read the single spotify_auth row. Shared by the token acquire path and the
-// invalid_grant re-read guard so both see the row through the same query.
 async function readSpotifyAuthRow(): Promise<SpotifyAuthRow | undefined> {
   const db = await getDb();
   const result = await db.execute({
@@ -615,30 +520,13 @@ export async function getSpotifyAccessToken(): Promise<string> {
       refresh_token: auth.refresh_token,
     });
   } catch (error) {
-    // A six-month-old refresh token ages out or is
-    // revoked: the token endpoint answers 400 invalid_grant. Spotify's guidance
-    // is to discard the dead token rather than retry it, then send the operator
-    // back through sign-in.
     if (error instanceof SpotifyTokenError && error.spotifyError === "invalid_grant") {
-      // Guard the shared row against a concurrent-refresh race. When Spotify
-      // hands out single-use refresh tokens, two operator actions (search +
-      // publish) that both find the token expired each fire a refresh with the
-      // same token; the winner rotates it and the LOSER's now-consumed token
-      // comes back invalid_grant — even though the connection is healthy. So
-      // re-read the row before nuking it: if the stored refresh token no longer
-      // matches the one we just failed with, a concurrent refresh already won,
-      // so return its fresh access token instead of clearing. (When Spotify does
-      // NOT rotate, a healthy refresh never yields invalid_grant, so the row is
-      // unchanged and we fall through to the genuine-death path below.)
       const current = await readSpotifyAuthRow();
 
       if (current && current.refresh_token !== auth.refresh_token) {
         return current.access_token;
       }
 
-      // The row still carries the token we failed with (or is already gone): the
-      // grant is genuinely dead. Drop the row and surface a reconnect signal; the
-      // next /admin focus reads "disconnected" and shows Reconnect Spotify.
       await clearSpotifyAuth();
 
       throw new ApiError(
@@ -657,9 +545,6 @@ export async function getSpotifyAccessToken(): Promise<string> {
   return data.access_token;
 }
 
-// The board's connection light — read-only, no refresh side effect. A missing row
-// means "reconnect" (we clear it on invalid_grant); a present row reports its age
-// so the operator gets a heads-up before the six-month expiry, not a surprise.
 export async function getSpotifyAuthStatus(): Promise<SpotifyAuthStatus> {
   const db = await getDb();
   const result = await db.execute({
@@ -713,8 +598,6 @@ async function requestToken(params: Record<string, string>): Promise<SpotifyToke
   return (await response.json()) as SpotifyTokenResponse;
 }
 
-// The token endpoint reports failures as { error: "invalid_grant", ... }. Pull
-// that machine-readable code out so the refresh path can act on it.
 function parseTokenError(body: string): string | undefined {
   if (!body) {
     return undefined;
@@ -758,32 +641,14 @@ async function upsertSpotifyAuth(
   });
 }
 
-// ── The 429 backoff ──────────────────────────────────────────────────────────
-// Spotify's rate limit is per-APP over a rolling ~30s window, and every subsystem
-// shares the one app — adds, publish, the crawler's anchor sweep, the Frontier rec
-// playlists, /reach, and search all draw on the same budget. So a burst (the operator
-// adding tracks one-by-one) can earn a 429. A 429 is a pure REJECTION — Spotify did
-// not run the request's side effect — and it carries a `Retry-After` (seconds). We
-// honour it: wait it out and retry. Operator-ratified: a throttled call may take a few
-// seconds longer; an unbounded hang is not acceptable inside a Worker request, so the
-// added wait is HARD-CAPPED.
-//
-// Retry is confined to IDEMPOTENT methods: GET/HEAD, plus the playlist PUTs, which are
-// full-ordered-replaces / detail-sets — replaying one yields the identical state. A
-// non-idempotent write (a playlist-create POST, a track-add POST) is NEVER auto-retried
-// here: it throws the exact 429 error today's callers do. The publish flow's own
-// `withRetries` (./retry) already owns the track-add retry, and that is safe precisely
-// because a 429 add never landed.
 const SPOTIFY_MAX_RETRIES = 2;
-// The ceiling on total added wait across all retries of one call. ~10s: enough to ride
-// out a short throttle, bounded so a throttled Worker request slows but never hangs.
+
 const SPOTIFY_RETRY_BUDGET_MS = 10_000;
-// The wait when Spotify omits `Retry-After` — a conservative floor for its 30s window.
+
 const SPOTIFY_DEFAULT_RETRY_MS = 1_000;
-// The HTTP methods whose replay is side-effect-free (so a 429 retry cannot double-write).
+
 const SPOTIFY_IDEMPOTENT_METHODS = new Set(["GET", "HEAD", "PUT"]);
 
-/** `Retry-After` (delta-seconds) → ms; the default floor when absent or unparseable. */
 function parseRetryAfterMs(header: null | string): number {
   const seconds = Number((header ?? "").trim());
 
@@ -813,34 +678,15 @@ export async function spotifyFetch(
     }
 
     if (response.status === 429) {
-      // THE ANCHOR BREAKER'S RECORD SIDE (./spotify-anchor-breaker.ts). Every throttled response on
-      // every path folds into one durable count, so "Spotify has been pushing back for ten minutes"
-      // becomes state the OPTIONAL anchor-search rungs can yield to. Recorded here rather than in
-      // the anchor rungs on purpose: the breaker protects the SHARED app, so pressure from a mint or
-      // the Frontier refresh must pause the optional work too.
-      //
-      // This is a RECORD, never a CONSULT: `spotifyFetch` does not read the breaker, so no
-      // user-facing Spotify call is ever gated by it. The recorder is total (it swallows its own
-      // faults), so this cannot change the outcome of the call it is observing — and it is awaited
-      // rather than floated because a Worker may cancel work left running past the response.
-      //
-      // It counts each 429 RESPONSE, including ones the retry below then waits out: a call that ate
-      // three throttles really is three units of pressure on the shared app.
       await recordSpotifyThrottle();
     }
 
-    // A 429 on an idempotent call is worth waiting out — but only while retries AND the
-    // wait budget both last. A non-idempotent write, an exhausted budget, an exhausted
-    // retry count, or any other status all fall through to the SAME error thrown today
-    // (the message carries "429" for a caller to sniff).
     if (response.status === 429 && retryable && attempt < SPOTIFY_MAX_RETRIES) {
       const waitMs = parseRetryAfterMs(response.headers.get("Retry-After"));
 
       if (spentMs + waitMs <= SPOTIFY_RETRY_BUDGET_MS) {
         spentMs += waitMs;
-        // "warn", not "error": a throttle is expected backpressure, visible in the logs
-        // without paging Sentry. The query string is dropped so a search term never lands
-        // in a log line.
+
         logEvent("warn", "spotify.rate-limited-retry", {
           attempt: attempt + 1,
           endpoint: path.split("?")[0] ?? path,

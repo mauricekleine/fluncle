@@ -9,7 +9,6 @@ export type TrackDuplicateIdentity = {
   trackId: string;
 };
 
-/** The exact materialized values for one track, through the read path's shared folds. */
 export function trackDuplicateKeyValues(identity: TrackDuplicateIdentity): {
   matchKey: string;
   normalizedIsrc: null | string;
@@ -20,10 +19,6 @@ export function trackDuplicateKeyValues(identity: TrackDuplicateIdentity): {
   };
 }
 
-/**
- * Upsert a track's complete identity projection after an existing row is intentionally re-keyed.
- * The caller places this beside the `tracks` mutation in one `db.batch(_, "write")`.
- */
 export function upsertTrackDuplicateKeyStatement(identity: TrackDuplicateIdentity): InStatement {
   const keys = trackDuplicateKeyValues(identity);
 
@@ -37,11 +32,6 @@ export function upsertTrackDuplicateKeyStatement(identity: TrackDuplicateIdentit
   };
 }
 
-/**
- * Materialize keys beside an `insert into tracks … on conflict do nothing` writer. The SELECT
- * guard is load-bearing: if the track insert lost a PK race or found an older row whose metadata
- * differs, candidate metadata must not overwrite that existing row's derived keys.
- */
 export function insertTrackDuplicateKeyStatement(identity: TrackDuplicateIdentity): InStatement {
   const keys = trackDuplicateKeyValues(identity);
 
@@ -65,11 +55,6 @@ export function insertTrackDuplicateKeyStatement(identity: TrackDuplicateIdentit
   };
 }
 
-/**
- * Move only the ISRC half after a fill-empty identity writer. The equality guard makes a stale
- * pre-write read harmless: if another writer filled a different ISRC first, this statement leaves
- * that writer's projection standing instead of replacing it with the losing candidate.
- */
 export function updateTrackDuplicateIsrcStatement(
   trackId: string,
   expectedIsrc: null | string,
