@@ -232,10 +232,9 @@ function encodeErrorBody(error: ORPCError<string, unknown>) {
   };
 }
 
-// One handler instance, reused across requests. Mounted at the single canonical
-// `/api/v1` prefix — the bare `/api/*` back-compat alias is GONE (the vocabulary
-// cut: no aliases, no shims). A bare `/api/*` oRPC path falls through to the
-// TanStack router (a 404), so every consumer reads the versioned surface.
+// One handler instance, reused across requests. Only `/api/v1` is an oRPC prefix.
+// Bare `/api/*` paths fall through to the TanStack router, so consumers use the
+// versioned surface.
 // `customErrorResponseBodyEncoder` rewrites every thrown error into the legacy
 // `jsonError` body (see above), so error-shape parity is a rails concern, not a
 // per-handler one.

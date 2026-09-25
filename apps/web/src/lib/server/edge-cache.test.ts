@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { env, takeWaitUntilPromises } from "../../test/cloudflare-workers-stub";
 import {
   edgeCachePolicyFor,
   entityPurgeUrl,
@@ -10,12 +11,12 @@ import {
   isCacheableHubRequest,
   isCacheableLogPath,
   isPublicHtmlPagePath,
-  logPurgeUrls,
   PAGE_CACHE_POLICY,
   PUBLIC_CACHE_CONTROL,
   purgeEntityCache,
   purgeEntityCaches,
   purgeLogCache,
+  purgePathsNow,
   releaseBoundFeedCacheControl,
   SITEMAP_CACHE_POLICY,
   SITEMAP_FRESH_SECONDS,
@@ -24,15 +25,9 @@ import {
   withEdgeCache,
 } from "./edge-cache";
 
-// Pure-logic coverage for the /log edge cache. The parts that only prod can prove —
-// that `caches.default` actually stores/serves/revalidates, and that the global
-// zone purge lands in every data center — are NOT exercised here (no Workers runtime
-// under Node; the `cloudflare:workers` stub gives an empty `env` and no `caches`
-// global, so the store/purge paths deliberately no-op). What IS pinned below is the
-// deterministic surface those paths are built from: which paths are cacheable, the
-// exact browser/edge directive, the exact purge-URL set, and the write-path no-op
-// guards. A regression in any of these silently breaks correctness in prod (a stale
-// page served forever, or the wrong surface cached), so they're worth pinning.
+// The Workers stub exposes purge bindings for request-body checks. Node cannot prove that
+// caches.default stores, serves, or evicts in a data center, or that a zone purge reaches every
+// data center. The tests pin cacheable paths, directives, and the outgoing purge request.
 
 describe("isCacheableLogPath", () => {
   it("matches the log index and a finding's log page", () => {
@@ -759,39 +754,59 @@ describe("withEdgeCache", () => {
   });
 });
 
-describe("logPurgeUrls", () => {
+describe("cache purge requests", () => {
   const CANONICAL = "https://www.fluncle.com";
 
-  it("purges the finding's own page AND the index off the canonical origin", () => {
-    // Both, always: an edited finding restates itself on its own page and in the
-    // index list. The origin is the canonical one the read path stored under, never
-    // the incoming host — so the delete lands on the entry a read created.
-    expect(logPurgeUrls("2026.A.7Q")).toEqual([`${CANONICAL}/log/2026.A.7Q`, `${CANONICAL}/log`]);
+  afterEach(() => {
+    delete env.CF_CACHE_PURGE_ZONE_ID;
+    delete env.CF_CACHE_PURGE_TOKEN;
+    vi.unstubAllGlobals();
+    void takeWaitUntilPromises();
   });
 
-  it("URL-encodes the coordinate into the path segment", () => {
-    // A coordinate is dot-delimited (unreserved, so it rides through verbatim), but
-    // anything needing encoding must be encoded so the purge URL matches the stored
-    // key exactly. A space would fragment the URL if left raw.
-    expect(logPurgeUrls("2026.F.01")).toEqual([`${CANONICAL}/log/2026.F.01`, `${CANONICAL}/log`]);
-    expect(logPurgeUrls("a b")[0]).toBe(`${CANONICAL}/log/a%20b`);
-  });
-});
+  it("sends canonical origin and paths in the global purge body", async () => {
+    env.CF_CACHE_PURGE_ZONE_ID = "test-zone";
+    env.CF_CACHE_PURGE_TOKEN = "test-token";
+    const fetchMock = vi.fn(async () => new Response(null, { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
 
-describe("purgeLogCache", () => {
-  it("is a safe no-op for a missing or blank logId", () => {
-    // The write paths call it with whatever log_id they have; an unminted claim (no
-    // coordinate yet) or a blank string must never throw or fire a purge.
-    expect(() => purgeLogCache(null)).not.toThrow();
-    expect(() => purgeLogCache(undefined)).not.toThrow();
-    expect(() => purgeLogCache("")).not.toThrow();
-    expect(() => purgeLogCache("   ")).not.toThrow();
+    await purgePathsNow(["/log/2026.A.7Q", "/log"]);
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("https://api.cloudflare.com/client/v4/zones/test-zone/purge_cache");
+    expect(JSON.parse(init.body as string)).toEqual({
+      files: [`${CANONICAL}/log/2026.A.7Q`, `${CANONICAL}/log`],
+    });
   });
 
-  it("does not throw for a real logId outside the Workers runtime", () => {
-    // Under Node (no `caches` global, empty `env`) the local delete + global purge
-    // both degrade to a no-op — the write path is never blocked and never errors.
-    expect(() => purgeLogCache("2026.A.7Q")).not.toThrow();
+  it("purges a finding's encoded page and the log index", async () => {
+    env.CF_CACHE_PURGE_ZONE_ID = "test-zone";
+    env.CF_CACHE_PURGE_TOKEN = "test-token";
+    const fetchMock = vi.fn(async () => new Response(null, { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    purgeLogCache("a b");
+    await Promise.all(takeWaitUntilPromises());
+
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(JSON.parse(init.body as string)).toEqual({
+      files: [`${CANONICAL}/log/a%20b`, `${CANONICAL}/log`],
+    });
+  });
+
+  it("does not schedule a purge for a missing or blank coordinate", () => {
+    env.CF_CACHE_PURGE_ZONE_ID = "test-zone";
+    env.CF_CACHE_PURGE_TOKEN = "test-token";
+    const fetchMock = vi.fn(async () => new Response(null, { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    for (const logId of [null, undefined, "", "   "]) {
+      purgeLogCache(logId);
+    }
+
+    expect(takeWaitUntilPromises()).toEqual([]);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });
 
@@ -874,7 +889,7 @@ describe("purge targets match the cached URL shapes", () => {
   // The correctness pin that matters most: a page the read path CACHES but the write
   // path fails to PURGE would serve stale content forever. Both derivations key off the
   // same canonical origin + path (edge-cache stores under cacheKeyForPath; the purges
-  // emit entityPurgeUrl/logPurgeUrls), and both drop the query string. Rather than trust
+  // emit entity purge URLs), and both drop the query string. Rather than trust
   // that by inspection, pin it: every purge URL must round-trip back to a CACHEABLE,
   // query-less path — i.e. the exact shape the read path is willing to store. If either
   // side ever drifts (origin, encoding, a stray query), the predicate rejects it here.
@@ -896,16 +911,6 @@ describe("purge targets match the cached URL shapes", () => {
       // The read path (server.ts) only stores a request isCacheableEntityRequest accepts;
       // the purge URL must be exactly such a request, or the delete misses the stored entry.
       expect(isCacheableEntityRequest(url.pathname, url.search)).toBe(true);
-    }
-  });
-
-  it("the finding's own page AND index purge URLs are cacheable, query-less log paths", () => {
-    for (const raw of logPurgeUrls("2026.A.7Q")) {
-      const url = new URL(raw);
-
-      expect(url.origin).toBe(CANONICAL);
-      expect(url.search).toBe("");
-      expect(isCacheableLogPath(url.pathname)).toBe(true);
     }
   });
 });

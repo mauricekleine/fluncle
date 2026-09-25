@@ -1,7 +1,10 @@
 import { type Client } from "@libsql/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { REC_ELIGIBLE_WHERE } from "../catalogue-eligibility";
+import { typedRow } from "./db";
 import { type PublicUser } from "./public-auth";
+import { ANCHOR_REASK_AFTER_DAYS, kindClause } from "./track-work";
 import {
   createIntegrationDb,
   rowCount,
@@ -511,12 +514,83 @@ describe("getFunnel publicSurfaces (real SQL)", () => {
   });
 });
 
+// Independent joined scans are the reference for the production scan over stored mirrors.
+export async function runStageScan() {
+  const result = await db.execute(`select
+    sum(case when f.track_id is null then 1 else 0 end) as crawled,
+    sum(case when f.track_id is null and t.spotify_uri is not null then 1 else 0 end) as anchored,
+    sum(case when f.track_id is null and t.source_audio_key is not null then 1 else 0 end) as captured,
+    sum(case when f.track_id is null and t.analyzed_from = 'full' then 1 else 0 end) as analyzed,
+    sum(case when f.track_id is null and emb.track_id is not null then 1 else 0 end) as embedded,
+    sum(case when ${REC_ELIGIBLE_WHERE} then 1 else 0 end) as rec_eligible,
+    sum(case when f.track_id is not null then 1 else 0 end) as certified
+    from tracks t
+    left join findings f on f.track_id = t.track_id
+    left join track_embeddings emb on emb.track_id = t.track_id`);
+  const row = typedRow<Record<string, number | null>>(result.rows);
+
+  return {
+    analyzed: Number(row?.analyzed ?? 0),
+    anchored: Number(row?.anchored ?? 0),
+    captured: Number(row?.captured ?? 0),
+    certified: Number(row?.certified ?? 0),
+    crawled: Number(row?.crawled ?? 0),
+    embedded: Number(row?.embedded ?? 0),
+    recEligible: Number(row?.rec_eligible ?? 0),
+  };
+}
+
+export async function countAnchorQueueSplit() {
+  const anchor = kindClause("anchor");
+  const result = await db.execute({
+    args: anchor.args,
+    sql: `select
+      sum(case when t.isrc is not null and emb.track_id is not null then 1 else 0 end) as isrc_ready,
+      sum(case when t.isrc is not null and emb.track_id is null then 1 else 0 end) as isrc_awaiting,
+      sum(case when t.isrc is null and emb.track_id is not null then 1 else 0 end) as no_isrc_ready,
+      sum(case when t.isrc is null and emb.track_id is null then 1 else 0 end) as no_isrc_awaiting
+      from tracks t
+      left join findings f on f.track_id = t.track_id
+      left join track_embeddings emb on emb.track_id = t.track_id
+      where ${anchor.sql}`,
+  });
+  const row = typedRow<Record<string, number | null>>(result.rows);
+  const isrcReady = Number(row?.isrc_ready ?? 0);
+  const isrcAwaiting = Number(row?.isrc_awaiting ?? 0);
+  const noIsrcReady = Number(row?.no_isrc_ready ?? 0);
+  const noIsrcAwaiting = Number(row?.no_isrc_awaiting ?? 0);
+
+  return {
+    awaitingAudio: isrcAwaiting + noIsrcAwaiting,
+    ready: isrcReady + noIsrcReady,
+    withIsrc: isrcReady + isrcAwaiting,
+    withoutIsrc: noIsrcReady + noIsrcAwaiting,
+  };
+}
+
+export async function countAnchorBackoff() {
+  const cutoff = new Date(Date.now() - ANCHOR_REASK_AFTER_DAYS * 24 * 60 * 60 * 1000).toISOString();
+  const result = await db.execute({
+    args: [cutoff],
+    sql: `select count(*) as n from tracks t
+      left join findings f on f.track_id = t.track_id
+      where f.track_id is null
+        and t.spotify_uri is null
+        and t.duration_ms > 0
+        and t.dismissed_at is null
+        and t.duplicate_of_track_id is null
+        and t.spotify_anchor_attempted_at is not null
+        and t.spotify_anchor_attempted_at >= ?`,
+  });
+
+  return Number(typedRow<{ n: number }>(result.rows)?.n ?? 0);
+}
+
 // ── The folded scan is numerically the three it replaced ─────────────────────
 
 describe("the folded funnel scan == its three standalone reference scans (real SQL)", () => {
   it("stages, anchor split, and backoff match the three separate queries on a mixed seed", async () => {
-    const { countAnchorBackoff, countAnchorQueueSplit, runFoldedFunnelScan, runStageScan } =
-      await import("./funnel");
+    const { runFoldedFunnelScan } = await import("./funnel");
 
     const now = Date.now();
     const recent = new Date(now - 2 * 24 * 60 * 60 * 1000).toISOString(); // inside the 14d re-ask window
