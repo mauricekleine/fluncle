@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { type AlbumDetail, type AlbumListItem } from "@fluncle/contracts";
 import { slugify } from "@fluncle/contracts/util/galaxy-slug";
 import { bestAlbumCoverUrl } from "../media";
+import { parseArtistsJson } from "./artist-names";
 import { bioBypassColumns } from "./bio-review";
 import { getDb, typedRows } from "./db";
 import {
@@ -11,11 +12,13 @@ import {
 } from "./due-work";
 import { isDueWorkCutoverEnabled, readPromotedDueWorkPage } from "./due-work-cutover";
 import { relinkTracksToEntity } from "./hub-counts";
+import { validReleaseDateSql } from "./release-day";
 import {
   type CatalogueBrowsePage,
   type CatalogueBrowseQuery,
   type CatalogueHubNumberedPage,
   type CatalogueHubQuery,
+  type HubOrder,
   type CatalogueListPage,
   countIndexableHubEntities,
   type EntitySitemapRow,
@@ -24,6 +27,8 @@ import {
   hubInclusionWhere,
   listCatalogueBrowsePage,
   listHubPage,
+  hubHasRecentActivity,
+  listHubThisMonth,
 } from "./labels";
 
 export const ALBUM_INDEX_MIN_TRACKS = 3;
@@ -424,6 +429,8 @@ export async function maxAlbumSitemapLastmod(minTracks: number): Promise<string 
 }
 
 export type AlbumHubEntry = {
+  artists: string[];
+  year?: string;
   certified: boolean;
 
   coverImageUrl: string | undefined;
@@ -440,14 +447,30 @@ export const ALBUMS_HUB_QUERY: CatalogueHubQuery<AlbumHubEntry> = {
   hub: "albums",
   idExpr: "albums.id",
   mapRow: (row) => ({
+    artists: row.artists_json
+      ? (() => {
+          const credits = parseArtistsJson(row.artists_json);
+          return credits.length <= 2 ? credits : credits.slice(0, 1);
+        })()
+      : [],
     certified: Boolean(row.certified),
     coverImageUrl: albumCover(row),
     name: row.name,
     slug: row.slug,
     trackCount: Number(row.track_count),
+    year: row.latest_release_date?.slice(0, 4) ?? undefined,
   }),
   nameExpr: "albums.name",
   select: `albums.name as name, ${ALBUM_COVER_SELECT},
+           (select max(t2.release_date) from tracks t2
+              where t2.album_id = albums.id
+                and t2.dismissed_at is null and t2.duplicate_of_track_id is null
+                and ${validReleaseDateSql("t2.release_date")}
+                and t2.release_date <= strftime('%Y-%m-%d', 'now')) as latest_release_date,
+           (select t2.artists_json from tracks t2
+              where t2.album_id = albums.id
+              order by t2.release_date is null asc, t2.release_date desc, t2.track_id asc
+              limit 1) as artists_json,
            (select t2.album_image_url from tracks t2
               where t2.album_id = albums.id and t2.album_image_url is not null
               order by t2.release_date is null asc, t2.release_date desc, t2.track_id asc
@@ -462,8 +485,17 @@ export function countIndexableAlbums(): Promise<number> {
 export function listAlbumsHubPage(
   page: number,
   nameFilter?: string,
+  order: HubOrder = "az",
 ): Promise<CatalogueHubNumberedPage<AlbumHubEntry>> {
-  return listHubPage(ALBUMS_HUB_QUERY, page, false, nameFilter);
+  return listHubPage(ALBUMS_HUB_QUERY, page, !nameFilter, nameFilter, order);
+}
+
+export function albumsHaveRecentActivity(): Promise<boolean> {
+  return hubHasRecentActivity(ALBUMS_HUB_QUERY);
+}
+
+export function listAlbumsThisMonth(now?: Date, limit?: number): Promise<AlbumHubEntry[]> {
+  return listHubThisMonth(ALBUMS_HUB_QUERY, now, limit);
 }
 
 const ALBUMS_BROWSE_QUERY: CatalogueBrowseQuery = {

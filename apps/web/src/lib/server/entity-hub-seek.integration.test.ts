@@ -283,7 +283,7 @@ const HUBS = [
     list: (page: number) => listAlbumsHubPage(page),
     name: "albums",
     table: "albums" as const,
-    withLetters: false,
+    withLetters: true,
   },
   {
     list: (page: number) => listLabelsHubPage(page),
@@ -601,13 +601,15 @@ describe("the hub listing index on the real schema", () => {
   );
 
   it.each(QUERIES)(
-    "counts the gated total and the A–Z lane off $index without reading a table row",
+    "counts the gated total and the A–Z lane off $index or a sibling gate-partial index without reading a table row",
     async ({ index, query, table }) => {
       for (const statement of [
         catalogueEntityCountQuery(query),
         catalogueEntityLetterCountsQuery(query),
       ]) {
-        expect(await planDetails(statement)).toContain(`INDEX ${index}`);
+        expect(await planDetails(statement)).toMatch(
+          new RegExp(`INDEX (${index}|${table}_hub_most_idx|${table}_hub_recent_idx)`),
+        );
         expect((await tableColumnReads(table, statement)).reads).toEqual([]);
       }
     },
@@ -615,7 +617,7 @@ describe("the hub listing index on the real schema", () => {
 
   it.each(QUERIES)(
     "reads a table row per entry when the floor is bound instead (the tripwire fires)",
-    async ({ floor, index, query, table }) => {
+    async ({ floor, query, table }) => {
       const bound = {
         args: [floor],
         sql: `select count(*) as total
@@ -624,7 +626,9 @@ describe("the hub listing index on the real schema", () => {
                      or ${query.alias}.renderable_track_count >= ?)`,
       };
 
-      expect(await planDetails(bound)).toContain(`INDEX ${index}`);
+      expect(await planDetails(bound)).toMatch(
+        new RegExp(`INDEX ${table}_hub_(listing|most|recent)_idx`),
+      );
       expect((await tableColumnReads(table, bound)).reads.length).toBeGreaterThan(0);
     },
   );
