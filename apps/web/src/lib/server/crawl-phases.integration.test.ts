@@ -6,12 +6,16 @@ import { join } from "node:path";
 
 import { createIntegrationDb } from "./integration-db";
 import { markCrawlNodeRepairStatement, rebuildCrawlDueWork } from "./crawl-due-work";
-import { MAX_CRAWL_PREPARE_LIMIT } from "@fluncle/contracts/orpc";
+import {
+  crawlCatalogue as crawlCatalogueContract,
+  MAX_CRAWL_PREPARE_LIMIT,
+} from "@fluncle/contracts/orpc";
 
 import {
   commitCrawlPhase,
   CRAWL_PHASE_TOKEN_MAX_BYTES,
   type CrawlPhasePrepareResult,
+  crawlCatalogue as runCrawlCatalogue,
   fetchCrawlPhase,
   initializeCrawlPhase,
   prepareCrawlPhase,
@@ -23,6 +27,10 @@ import { mergeLabel } from "./labels";
 let db: Client;
 let fixtureDirectory: string | undefined;
 const timestamp = "2026-08-01T00:00:00.000Z";
+const crawlOutputSchema = crawlCatalogueContract["~orpc"].outputSchema;
+if (!crawlOutputSchema) {
+  throw new Error("crawl catalogue output schema is missing");
+}
 
 type TransactionCounts = {
   batch: number;
@@ -177,6 +185,35 @@ afterEach(async () => {
 });
 
 describe("crawl admission phases", () => {
+  it("preserves prepare telemetry through the oRPC output contract", async () => {
+    const prepared = await prepareCrawlPhase({ limit: 1, maxHop: 2 });
+    const delivered = crawlOutputSchema.parse({
+      ...prepared,
+      ok: true,
+      phase: "prepare",
+    });
+    expect(delivered).toMatchObject({ items: [{ nodeKind: "release" }], storableReady: true });
+  });
+
+  it("preserves a positive legacy release numerator through the oRPC output contract", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(new Response(JSON.stringify(providerRelease(1))))),
+    );
+    const pass = await runCrawlCatalogue({ limit: 1, maxHop: 2 });
+    expect(pass.releaseDetailsStored).toBe(1);
+    const delivered = crawlOutputSchema.parse({ ...pass, ok: true });
+    expect(delivered).toHaveProperty("releaseDetailsStored", 1);
+  });
+
+  it("reports storable release work while its due-work row awaits repair", async () => {
+    await db.execute(`update crawl_due_work set state = 'repair', storable_rank = 1,
+      repair_entered_at = '2026-08-01T00:00:01.000Z'
+      where node_id = 'musicbrainz:release:release-phase'`);
+    const prepared = await prepareCrawlPhase({ limit: 1, maxHop: 2 });
+    expect(prepared.storableReady).toBe(true);
+  });
+
   it("settles a terminal known-disabled release without a MusicBrainz call and re-arms after enable", async () => {
     await db.execute("delete from crawl_due_work");
     await db.execute("delete from crawl_frontier");

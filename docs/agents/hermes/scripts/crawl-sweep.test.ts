@@ -29,10 +29,11 @@ test("request kinds count every box attempt, including retries, and identify a l
     recordBoxAttempt(tally, browse, "artist", { outcome: "retry_503", url: browse.url });
     recordBoxAttempt(tally, browse, "artist", { outcome: "body", url: browse.url });
     recordBoxAttempt(tally, detail, "release", { outcome: "body", url: detail.url });
+    recordBoxAttempt(tally, detail, undefined, { outcome: "body", url: detail.url });
   } finally {
     console.error = stderr;
   }
-  expect(tally.requestsByKind).toMatchObject({ artist_browse: 2, release_detail: 1 });
+  expect(tally.requestsByKind).toMatchObject({ artist_browse: 2, release_detail: 2 });
   expect(Object.values(tally.requestsByKind).reduce((sum, count) => sum + count, 0)).toBe(
     tally.boxFetched,
   );
@@ -177,6 +178,13 @@ function fixture(): Fixture {
     '      limit=$(sed -n \'s/.*"limit":\\([0-9]*\\).*/\\1/p\' "$phase_file")',
     "      printf 'prepare-limit:%s\\n' \"$limit\" >> " + data.calls,
     '      printf \'%s\\n\' \'{"ok":true,"phase":"prepare","kind":"prepared","items":[{"nodeId":"node-1","preparedToken":"prepared-token-1"},{"nodeId":"node-2","preparedToken":"prepared-token-2"}],"frontierPending":2}\' ;;',
+    "    prepare:storable-first)",
+    "      count=$(grep -c '^prepare:' " + data.calls + ")",
+    '      if [ "$count" -eq 1 ]; then',
+    '        printf \'%s\\n\' \'{"ok":true,"phase":"prepare","kind":"prepared","items":[{"nodeId":"node-1","preparedToken":"prepared-token-1"}],"frontierPending":1,"storableReady":true}\'',
+    "      else",
+    '        printf \'%s\\n\' \'{"ok":true,"phase":"prepare","kind":"drained","items":[],"frontierPending":0,"storableReady":false}\'',
+    "      fi ;;",
     "    prepare:repair-pending|fetch:repair-pending-fetch)",
     '      printf \'%s\\n\' \'{"code":"due_work_maintenance_pending","message":"Due-work maintenance is still converging","ok":false}\'',
     "      exit 1 ;;",
@@ -197,7 +205,7 @@ function fixture(): Fixture {
     "        while [ ! -e " + data.fetchRelease + " ]; do sleep 0.01; done",
     "      fi",
     '      printf \'%s\\n\' \'{"ok":true,"phase":"fetch","commitToken":"commit-token","operationId":"crawl-op","operationKey":"crawl-key","requestDigest":"digest"}\' ;;',
-    "    commit:normal|commit:batch|commit:provider-pause|commit:box-fetch|commit:box-fetch-off|commit:commit-batch|commit:commit-batch-poison|commit:box-fetch-batch)",
+    "    commit:normal|commit:batch|commit:storable-first|commit:provider-pause|commit:box-fetch|commit:box-fetch-off|commit:commit-batch|commit:commit-batch-poison|commit:box-fetch-batch)",
     '      printf \'%s\\n\' \'{"ok":true,"phase":"commit","receipt":{"outcome":"committed","state":"committed","result":{"expanded":1,"failed":0,"tracksFound":3,"tracksWritten":3,"tracksSkipped":0,"rateLimited":false}}}\' ;;',
     "    commit:throttle-then-work)",
     "      count=$(grep -c '^commit:' " + data.calls + ")",
@@ -381,6 +389,30 @@ describe("crawl-sweep phase protocol", () => {
       expect(calls).toContain("prepare-limit:2");
       expect(calls.match(/^fetch:/gm)).toHaveLength(2);
       expect(calls.match(/^commit:/gm)).toHaveLength(2);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "keeps tick-start storable work when a later prepare drains the lane",
+    async () => {
+      const data = fixture();
+      const result = await collect(
+        Bun.spawn([process.execPath, SWEEP], {
+          detached: true,
+          env: { ...sweepEnvironment(data, "storable-first"), FLUNCLE_CRAWL_NODES: "2" },
+          stderr: "pipe",
+          stdout: "pipe",
+        }),
+      );
+
+      expect(result.exitCode, result.stderr).toBe(0);
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        checked: 1,
+        storableReady: true,
+        tracksWritten: 3,
+      });
+      expect(readFileSync(data.calls, "utf8").match(/^prepare:/gm)).toHaveLength(2);
     },
     TEST_TIMEOUT_MS,
   );

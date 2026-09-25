@@ -1563,13 +1563,15 @@ async function enqueueReleaseNodes(
                 values (:id, :kind, :source, :externalId, :hop, :parentId, :labelSlug,
                         :releaseLabelSlug, :createdAt, :updatedAt)
                 on conflict (id) do update set
-                  state = 'pending', cursor = 0, hop = 0,
+                  state = 'pending', cursor = 0, hop = 0, note = null,
                   parent_id = excluded.parent_id, label_slug = excluded.label_slug,
                   release_label_slug = coalesce(excluded.release_label_slug,
                                                 crawl_frontier.release_label_slug),
                   updated_at = excluded.updated_at
                 where (crawl_frontier.state = 'done'
                        and crawl_frontier.done_at < :watermark)
+                   or (crawl_frontier.state = 'skipped'
+                       and crawl_frontier.note = 'disabled own label at terminal hop')
                    or (crawl_frontier.state = 'pending'
                        and (crawl_frontier.parent_id is not :parentId
                             or crawl_frontier.hop <> 0
@@ -2349,11 +2351,29 @@ export async function initializeCrawlPhase(): Promise<
   return { ...(await initializeCrawlPhaseState(true)), kind: "initialized" };
 }
 
-async function storableReleaseReady(db: Pick<Client, "execute">): Promise<boolean> {
-  const result = await db.execute(`select 1 from crawl_due_work
+async function storableReleaseExists(db: Pick<Client, "execute">): Promise<boolean> {
+  const ready = await db.execute(`select 1 from crawl_due_work
     indexed by crawl_due_work_release_ready_idx
     where state = 'ready' and node_kind = 'release' and storable_rank = 0 limit 1`);
-  return result.rows.length > 0;
+  if (ready.rows.length > 0) {
+    return true;
+  }
+  const repair = await db.execute(`select 1 from crawl_due_work as due
+    indexed by crawl_due_work_repair_idx
+    join crawl_frontier as node on node.id = due.node_id
+    where due.state = 'repair' and node.kind = 'release' and node.state = 'pending'
+      and (
+        exists (select 1 from labels as label
+          where label.slug = coalesce(node.release_label_slug,
+            case when substr(node.parent_id, 1, length('musicbrainz:artist:')) = 'musicbrainz:artist:'
+              then null else node.label_slug end)
+            and label.seed_state = 'enabled')
+        or exists (select 1 from artist_rules as parent_rule
+          where substr(node.parent_id, 1, length('musicbrainz:artist:')) = 'musicbrainz:artist:'
+            and parent_rule.artist_mbid = substr(node.parent_id, length('musicbrainz:artist:') + 1)
+            and parent_rule.verdict = 'allow')
+      ) limit 1`);
+  return repair.rows.length > 0;
 }
 
 export async function prepareCrawlPhase({
@@ -2383,6 +2403,7 @@ export async function prepareCrawlPhase({
   await rearmSkippedDisabledReleases(maxHop);
 
   const db = await getDb();
+  const storableReady = await storableReleaseExists(db);
   const claimed = await claimCrawlFrontierRows(db, {
     claimedBy: CRAWL_CATALOGUE_CLAIM_OWNER,
     leaseMs: CRAWL_CATALOGUE_LEASE_MS,
@@ -2399,7 +2420,7 @@ export async function prepareCrawlPhase({
       },
       items: [],
       kind: "drained",
-      storableReady: false,
+      storableReady,
     };
   }
 
@@ -2432,7 +2453,7 @@ export async function prepareCrawlPhase({
     },
     items,
     kind: "prepared",
-    storableReady: await storableReleaseReady(db),
+    storableReady,
   };
 }
 

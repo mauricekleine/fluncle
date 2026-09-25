@@ -449,7 +449,7 @@ export function recordBoxAttempt(
   const requestKind =
     plan.kind === "tail" && attempt.url === plan.probeUrl
       ? "rearm_probe"
-      : nodeKind === "release"
+      : nodeKind === "release" || /\/release\/[^/?]+(?:\?|$)/.test(attempt.url)
         ? "release_detail"
         : attempt.url.includes("/label?query=")
           ? "seed_search"
@@ -899,7 +899,9 @@ async function drainFrontier(directory: string, summary: SweepSummary): Promise<
     }
     summary.pending = prepared.frontierPending ?? summary.pending;
     summary.queueDepth = summary.pending;
-    summary.storableReady = prepared.storableReady ?? null;
+    if (summary.storableReady === null) {
+      summary.storableReady = prepared.storableReady ?? null;
+    }
 
     const boxFetch = BOX_FETCH && prepared.boxFetch === true;
     summary.boxFetch = boxFetch;
