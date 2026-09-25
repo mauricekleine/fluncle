@@ -20,7 +20,7 @@ export function saveAnnouncement(toggle: ToggleOutcome): string {
 
   if (toggle.outcome === "removed") {
     return toggle.kept === "page"
-      ? "Removed for now, but this browser won't forget that track after a reload."
+      ? "Removed for now, but that track comes back after a reload."
       : "Removed from saves.";
   }
 
