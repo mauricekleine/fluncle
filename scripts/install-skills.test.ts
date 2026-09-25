@@ -1,15 +1,3 @@
-// Unit tests for install-skills.ts — the skills install plumbing.
-//
-// Two things are worth pinning here, both because they fail SILENTLY otherwise:
-//   1. the lock-source normalizer (a machine-absolute /Users/… path in the committed
-//      lockfile is a topology leak AGENTS.md forbids, and nothing else catches it), and
-//   2. the reconciliation between skills-lock.json, .agents/skills, packages/skills, and
-//      the .claude/skills symlinks — the desync the skills-sync drift guard stays green
-//      through, where an edited skill is simply never read.
-//
-// Runs outside any package's test runner (bun:test), like the hermes script tests:
-//   bun test --cwd scripts
-
 import { describe, expect, test } from "bun:test";
 import { findSkillPlumbingProblems, rewriteLockSources, type SkillsLock } from "./install-skills";
 

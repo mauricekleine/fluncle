@@ -1,16 +1,3 @@
-// Strict Scene validator (schema `fluncle.scene/1`) with PRECISE per-field errors —
-// the authoring-time counterpart to scene.ts's defensive `validateScene` (which only
-// returns null/Scene and can't say WHY). Mirrors validate-intent.ts.
-//
-// It checks EVERY field (schema, id, kind, the glsl block, the four palette stops,
-// grain, the optional bloom/reactivity, the cleared stamp, liveReady) and reports
-// the exact path + reason for each violation. It ALSO runs the one load-time lint
-// (palette[0] under the Warm Dark ceiling) as a warning — a scene can be structurally
-// valid yet trip the ground-luminance check.
-//
-// CLI: bun src/pipeline/validate-scene.ts <scene.json> [--json]
-// Exit 0 = valid, 1 = invalid (errors printed), 2 = usage/read error.
-
 import { existsSync, readFileSync } from "node:fs";
 
 import {
@@ -26,9 +13,9 @@ export type SceneError = { path: string; message: string };
 export type ValidateSceneResult = {
   valid: boolean;
   errors: SceneError[];
-  /** Non-fatal warnings (the Warm Dark palette lint). */
+
   warnings: string[];
-  /** The parsed scene when valid, else null. */
+
   scene: Scene | null;
 };
 
@@ -115,7 +102,6 @@ function validateReactivity(
   }
 }
 
-/** Strict, error-collecting validation of an already-parsed value. */
 export function validateSceneStrict(raw: unknown): ValidateSceneResult {
   const errors: SceneError[] = [];
   const err = (path: string, message: string): void => {
@@ -144,7 +130,6 @@ export function validateSceneStrict(raw: unknown): ValidateSceneResult {
 
   validateGlsl(raw, err);
 
-  // palette
   if (
     !Array.isArray(raw.palette) ||
     raw.palette.length !== 4 ||
@@ -153,7 +138,6 @@ export function validateSceneStrict(raw: unknown): ValidateSceneResult {
     err("palette", "must be an array of exactly four non-empty hex strings (dark→light)");
   }
 
-  // grain
   if (!isRecord(raw.grain)) {
     err("grain", "must be an object { family, amount }");
   } else {
@@ -165,7 +149,6 @@ export function validateSceneStrict(raw: unknown): ValidateSceneResult {
     }
   }
 
-  // bloom (optional)
   if (raw.bloom !== undefined) {
     if (!isRecord(raw.bloom)) {
       err("bloom", "when present, must be an object { threshold, intensity, radius }");
@@ -180,7 +163,6 @@ export function validateSceneStrict(raw: unknown): ValidateSceneResult {
 
   validateReactivity(raw, err);
 
-  // cleared
   if (!isRecord(raw.cleared)) {
     err("cleared", "must be an object { beatPull, flash, arc, metricsVersion, at }");
   } else {
@@ -197,7 +179,6 @@ export function validateSceneStrict(raw: unknown): ValidateSceneResult {
     }
   }
 
-  // liveReady
   if (typeof raw.liveReady !== "boolean") {
     err("liveReady", "must be a boolean");
   }
@@ -214,7 +195,6 @@ export function validateSceneStrict(raw: unknown): ValidateSceneResult {
   return { errors, scene, valid, warnings };
 }
 
-/** Read + strict-validate a scene file. Read/parse failures surface as errors. */
 export function validateSceneFile(file: string): ValidateSceneResult {
   if (!existsSync(file)) {
     return {

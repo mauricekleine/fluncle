@@ -11,14 +11,6 @@ const SCRIPT = join(REPO, "apps/ssh/deploy/fluncle-ssh-freshen.sh");
 const PROCESS_TEST_TIMEOUT_MS = 20_000;
 const roots: string[] = [];
 
-// ONE Go cache for the whole file, warmed before the first case.
-//
-// The public-source fallback resolves the ref with a compiled Go parser. On a box that binary is
-// built once and reused forever, so its cost belongs to provisioning — but a fixture that handed
-// every case a fresh state dir made each case pay a full toolchain compile instead, and a run
-// under load then blew the per-run budget below before the script under test did anything at
-// all. Sharing the cache reproduces the box, and `beforeAll` moves the one compile out of any
-// case's budget, so what each `run()` measures is the script rather than the Go toolchain.
 const GO_CACHE = mkdtempSync(join(tmpdir(), "fluncle-ssh-freshen-gocache-"));
 const GO_CACHE_WARM_TIMEOUT_MS = 120_000;
 

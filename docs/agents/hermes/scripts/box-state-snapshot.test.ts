@@ -1,18 +1,3 @@
-// Unit tests for LEG 2 of the backup cron — the box-state snapshot (box-state-snapshot.ts).
-//
-// Three things have to hold or this leg is worse than not having it:
-//   1. The include list stays SMALL. The agent data dir is ~5.4 GB, of which ~5.3 GB is the
-//      audit/triage git checkouts — restorable with `git clone`. The exclusion rule is
-//      enforced in code, so a future edit to the include list can't quietly turn a few-MB
-//      nightly into a 5 GB one.
-//   2. The artifact is ENCRYPTED. It carries the 0600 credential-bearing env files, and the
-//      standing rule for the agent home is "an encrypted copy only — never a plaintext
-//      off-box tarball". With no key there must be NO artifact.
-//   3. What comes back out is what went in — including file modes, since `0600` on a
-//      restored secrets file is not cosmetic.
-//
-//   bun test docs/agents/hermes/scripts/box-state-snapshot.test.ts
-
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
@@ -40,7 +25,6 @@ afterEach(() => {
 
 const KEY = new Uint8Array(32).fill(9);
 
-/** The message a rejected promise carries — `expect().rejects` is not type-aware-lint clean. */
 async function rejectionMessage(promise: Promise<unknown>): Promise<string> {
   try {
     await promise;
@@ -51,7 +35,6 @@ async function rejectionMessage(promise: Promise<unknown>): Promise<string> {
   }
 }
 
-/** A miniature data root shaped like the box's: `<root>` with a `home` inside it. */
 function fakeDataRoot(): { home: string; root: string } {
   const root = mkdtempSync(join(tmpdir(), "fluncle-boxstate-"));
   temporaryDirectories.push(root);
@@ -84,12 +67,10 @@ describe("the include / exclude rule", () => {
       expect(candidates).toContain(expected);
     }
 
-    // Chat-agent runtime files are not state this box runs on.
     for (const retired of ["/opt/data/state.db", "/opt/data/config.yaml", "/opt/data/memories"]) {
       expect(candidates).not.toContain(retired);
     }
 
-    // The two multi-GB git checkouts are never even candidates.
     expect(candidates.some((path) => path.includes("audit-workspace"))).toBe(false);
     expect(candidates.some((path) => path.includes("sentry-triage-workspace"))).toBe(false);
   });
@@ -102,7 +83,7 @@ describe("the include / exclude rule", () => {
     expect(isBoxStateExcluded("/opt/data/skills", root)).toBe(true);
     expect(isBoxStateExcluded("/opt/data/logs", root)).toBe(true);
     expect(isBoxStateExcluded("/opt/data/home/.bun/install/cache", root)).toBe(true);
-    // …and a path outside the archive root, which the archive could not address anyway.
+
     expect(isBoxStateExcluded("/etc/shadow", root)).toBe(true);
 
     expect(isBoxStateExcluded("/opt/data/state.db", root)).toBe(false);
@@ -188,7 +169,7 @@ describe("buildBoxStateArchive", () => {
         join(root, "cron", "output"),
         join(home, ".render-conductor"),
         join(home, ".fluncle-secrets.env"),
-        join(home, "audit-workspace", "fluncle"), // must be dropped
+        join(home, "audit-workspace", "fluncle"),
       ],
       { root },
     );
@@ -208,10 +189,9 @@ describe("buildBoxStateArchive", () => {
     expect(manifest.entries.some((entry) => entry.path.includes("audit-workspace"))).toBe(false);
     expect(manifest.generatedAt).toBe("2026-07-26T02:00:00.000Z");
     expect(file.bytes).toBe(statSync(outPath).size);
-    // The artifact on disk is operator-only too.
+
     expect(statSync(outPath).mode & 0o777).toBe(0o600);
 
-    // The restore path: decrypt, verify the recorded hash, untar.
     const plaintext = await openBoxState(new Uint8Array(readFileSync(outPath)), KEY);
 
     expect(plaintext.byteLength).toBe(manifest.archiveBytes);
@@ -234,7 +214,7 @@ describe("buildBoxStateArchive", () => {
     expect(readFileSync(join(restored, "cron", "output", "fluncle-backup", "run.md"), "utf8")).toBe(
       "# Cron Job\n",
     );
-    // The 0600 on a credential-bearing file survives the round trip.
+
     expect(statSync(join(restored, "home", ".fluncle-secrets.env")).mode & 0o777).toBe(0o600);
   });
 

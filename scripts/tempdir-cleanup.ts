@@ -1,7 +1,5 @@
 import { join } from "node:path";
 
-// Scan canonical test sources only. Generated `.agents` copies are installed from
-// `packages/skills` and are checked by `skills:install`, not treated as another source.
 const TEST_ROOTS = ["packages", "apps", "docs/agents/hermes/scripts", "scripts", ".claude/hooks"];
 const MODULES = new Set(["node:fs", "node:fs/promises"]);
 

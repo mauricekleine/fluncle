@@ -1,11 +1,3 @@
-// Focused summary-contract tests for the two nightly audit shell drivers.
-//
-// These execute copies of the real scripts behind cron-output.sh. Every effectful command is a
-// temp-PATH stub, the workspace is synthetic, and FLUNCLE_API_BASE_URL is explicitly empty, so
-// the suite cannot reach git remotes, GitHub, Claude, a package registry, or the run ledger.
-//
-//   bun test docs/agents/hermes/scripts/audit-sweeps.test.ts
-
 import { afterEach, describe, expect, test as bunTest } from "bun:test";
 import { spawn } from "node:child_process";
 import {
@@ -31,7 +23,7 @@ const PROCESS_TEST_BUDGET_MS = 30_000;
 const PROCESS_CLEANUP_GRACE_MS = 1_000;
 const PROCESS_OUTPUT_TAIL_CHARS = 64 * 1024;
 const SCRIPT_PATH_EXPORT = 'export PATH="/usr/local/bin:/root/.bun/bin:${PATH:-/usr/bin:/bin}"';
-// The shape verify.sh writes to `.audit/verify.json` on a night whose checks all passed.
+
 const CLEAN_VERIFY = '{"ran":3,"skipped":1,"failed":0,"steps":[]}';
 const temporaryDirectories: string[] = [];
 
@@ -53,7 +45,6 @@ type Fixture = {
   ws: string;
 };
 
-/** Every argv the stubbed `git` / `gh` / `claude` received, one invocation per line. */
 function calls(box: Fixture, command: "claude" | "gh" | "git"): string {
   try {
     return readFileSync(join(box.root, `${command}.log`), "utf8");
@@ -91,9 +82,7 @@ function processGroupHasExecutingMembers(processGroupId: number): boolean {
         if (processGroup === processGroupId && state !== "X" && state !== "Z") {
           return true;
         }
-      } catch {
-        // The process exited between the directory and stat reads.
-      }
+      } catch {}
     }
     return false;
   }
@@ -172,10 +161,7 @@ function fixture(): Fixture {
   writeFileSync(join(prompts, "test.md"), "Inspect the fixture.\n", "utf8");
 
   executable(join(bin, "bun"), "#!/usr/bin/env bash\nexit 0\n");
-  // The stub stands in for the one bounded judgment call. STUB_CLAUDE_SLEEP drives the wall
-  // budget; STUB_OOM_KILLS rewrites the cgroup event counter the way the kernel would when a
-  // child of this pass is killed by the memory cap; STUB_REPORT is the `.audit/report.md` the
-  // agent hands the driver as the PR body.
+
   executable(
     join(bin, "claude"),
     `#!/usr/bin/env bash
@@ -497,10 +483,6 @@ describe("fluncle-audit canonical counters", () => {
     });
   });
 
-  // `ok` is DERIVED from the error count, never a literal — the ledger's own rule
-  // (exit 0 AND errors 0). These three pin every branch that carries a live `run_errors`, because
-  // the defect they exist to catch is per-branch: the sweep printed `{"ok":true,…,"errors":1}` on
-  // the `clean` branch on production while /status read the literal and called it healthy.
   test("a nonzero agent contradicts the literal: an errored clean night is ok:false", async () => {
     const box = fixture();
     const result = await run(box, "audit-sweep.sh", ["--domain", "test"], {
@@ -533,7 +515,7 @@ describe("fluncle-audit canonical counters", () => {
       produced: 0,
       reason: "nonzero-exit",
     });
-    // Work from a pass that did not choose its own ending is never committed, pushed, or PR'd.
+
     expect(calls(box, "git")).not.toMatch(/^(add|commit|push)\b/m);
     expect(calls(box, "gh")).not.toContain("pr create");
   });
@@ -557,9 +539,6 @@ describe("fluncle-audit canonical counters", () => {
   });
 });
 
-// A sweep that outlives its own supervisor, loses a child to the memory cap, or ships work nobody
-// checked must say so in the summary line the ledger reads. Each of these three was silent: the
-// unit failed on the host while the ledger recorded a healthy night.
 describe("fluncle-audit failure is loud", () => {
   test("a pass that outruns its wall budget is ok:false with the reason", async () => {
     const box = fixture();
@@ -656,8 +635,6 @@ describe("fluncle-audit failure is loud", () => {
   });
 });
 
-// Once the agent's edits and `.audit/report.md` exist, shipping them is fully determined, so the
-// DRIVER commits, pushes, and opens the PR. The agent never runs git writes or gh.
 describe("fluncle-audit ships the agent's working tree", () => {
   test("a dirty tree with a report is committed, pushed, and opened as the night's PR", async () => {
     const box = fixture();
@@ -671,12 +648,12 @@ describe("fluncle-audit ships the agent's working tree", () => {
     expect(result.summary).toMatchObject({ action: "opened", ok: true, produced: 1 });
     const git = calls(box, "git");
     expect(git).toMatch(/^add -A$/m);
-    // The hook runs unattended: its scoped steps stay, the preflight join skips itself.
+
     expect(git).toMatch(/^commit --quiet -m audit\(test\): 2 fixes, 1 filed$/m);
     expect(git).toMatch(/^env FLUNCLE_UNATTENDED=1$/m);
     expect(git).not.toContain("--no-verify");
     expect(git).toMatch(/^push --quiet -u origin HEAD$/m);
-    // The reviewer selects on the `audit/` head; the report is the PR body.
+
     expect(calls(box, "gh")).toMatch(
       /^pr create --base main --head audit\/\d{8}-test --title nightly audit — test --body-file \.audit\/report\.md$/m,
     );
@@ -789,8 +766,6 @@ describe("fluncle-audit ships the agent's working tree", () => {
   });
 });
 
-// The effort is pinned like the model, so a shifting CLI default never changes how deeply the
-// auditor or the reviewer reads.
 describe("fluncle-audit pins its reasoning effort", () => {
   test("both passes default to --effort high", async () => {
     const audit = fixture();

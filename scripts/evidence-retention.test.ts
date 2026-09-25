@@ -2,11 +2,6 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-// The retained-evidence CONTRACT: selected deterministic E2E retains named evidence for shipped
-// main commits for 30 days. The directories are gitignored on purpose
-// (apps/web/tests/e2e/README.md), so a missing artifact must fail instead of silently turning
-// evidence into a claim with nothing behind it.
-
 const root = join(import.meta.dir, "..");
 const workflowDir = join(root, ".github", "workflows");
 
@@ -26,7 +21,6 @@ type Upload = {
   retention?: number;
 };
 
-/** Every `upload-artifact` step in a workflow, read off the YAML text (the repo keeps no YAML parser). */
 function uploads(file: string): Upload[] {
   const text = readFileSync(join(workflowDir, file), "utf8");
   const steps = text.split(/\n\s*- name:/).slice(1);

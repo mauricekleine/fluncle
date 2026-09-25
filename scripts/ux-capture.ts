@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-/** Capture discovery pages against an explicitly supplied read-only base URL. */
+
 import {
   chromium,
   type Browser,

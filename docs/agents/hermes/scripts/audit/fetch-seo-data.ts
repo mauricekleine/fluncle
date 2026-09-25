@@ -1,19 +1,4 @@
 #!/usr/bin/env bun
-// fetch-seo-data.ts — pull the last ~28 days of real search data for the nightly audit's
-// Surfaces & SEO/AEO domain, so the auditor prioritizes from numbers instead of guessing.
-//
-// Two read-only sources, no third-party SDK (keeps this a single self-contained box script):
-//   • Google Search Console (Search Analytics) — auth is a service-account RS256 JWT signed
-//     with node crypto (no google-auth dependency), exchanged for a bearer token. Property:
-//     `sc-domain:fluncle.com` (a Domain property; the SA is granted siteFullUser on it).
-//   • Bing Webmaster Tools — a plain keyed GET (query + page stats).
-//
-// Writes a compact JSON bundle to the path in argv[2] (default `.audit/seo-data.json`) that the
-// surfaces-seo prompt reads. DEGRADES GRACEFULLY: any source that fails is recorded as an error
-// in the bundle and the rest still writes; the process exits 0 (a missing signal makes the
-// auditor fall back to the structural checks — never invent metrics). Secrets come from the
-// env the driver sources (GOOGLE_APPLICATION_CREDENTIALS → the 0600 SA-json file, or the raw
-// FLUNCLE_GSC_SERVICE_ACCOUNT json; FLUNCLE_BING_WEBMASTER_API_KEY). Diagnostics → stderr.
 
 import { createSign } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
@@ -25,11 +10,8 @@ const TOP_N = 100;
 
 const log = (m: string) => console.error(`[fetch-seo-data] ${m}`);
 
-// ── pure helpers (unit-tested in fetch-seo-data.test.ts) ────────────────────────────────────
-
 type ServiceAccount = { client_email: string; private_key: string; token_uri?: string };
 
-/** The 28-day GSC window, ending 3 days back (GSC data lags ~2–3d). Dates are UTC YYYY-MM-DD. */
 export function searchWindow(now: Date): { endDate: string; startDate: string } {
   const day = 86_400_000;
   const end = new Date(now.getTime() - 3 * day);
@@ -38,12 +20,10 @@ export function searchWindow(now: Date): { endDate: string; startDate: string } 
   return { endDate: iso(end), startDate: iso(start) };
 }
 
-/** base64url without padding (JWT + signature encoding). */
 export function b64url(input: Buffer | string): string {
   return Buffer.from(input).toString("base64url");
 }
 
-/** Build a signed RS256 service-account assertion for the OAuth2 JWT-bearer flow. */
 export function buildJwt(sa: ServiceAccount, now: Date): string {
   const iat = Math.floor(now.getTime() / 1000);
   const tokenUri = sa.token_uri ?? "https://oauth2.googleapis.com/token";
@@ -56,7 +36,6 @@ export function buildJwt(sa: ServiceAccount, now: Date): string {
   return `${signingInput}.${b64url(signature)}`;
 }
 
-/** Normalize GSC searchAnalytics rows (dimension = the single grouping key) → compact records. */
 export function normalizeGscRows(
   rows: Array<{
     clicks?: number;
@@ -76,7 +55,6 @@ export function normalizeGscRows(
   }));
 }
 
-/** Normalize a Bing stats array (its shape varies by endpoint) → compact {label,impressions,clicks}. */
 export function normalizeBing(
   rows: Array<{ Clicks?: number; Impressions?: number; Query?: string }> | undefined,
   labelKey: "Query",
@@ -87,8 +65,6 @@ export function normalizeBing(
     query: r[labelKey] ?? "",
   }));
 }
-
-// ── I/O (the main tick) ─────────────────────────────────────────────────────────────────────
 
 function loadServiceAccount(): ServiceAccount | { error: string } {
   const path = process.env.GOOGLE_APPLICATION_CREDENTIALS;
@@ -185,7 +161,6 @@ async function main() {
   const window = searchWindow(new Date());
   const bundle: Record<string, unknown> = { fetchedAt: new Date().toISOString(), window };
 
-  // GSC — queries + pages.
   const sa = loadServiceAccount();
   if ("error" in sa) {
     bundle.gsc = { error: sa.error };
@@ -205,7 +180,6 @@ async function main() {
     }
   }
 
-  // Bing — query stats.
   const bingKey = process.env.FLUNCLE_BING_WEBMASTER_API_KEY;
   if (!bingKey) {
     bundle.bing = { error: "no FLUNCLE_BING_WEBMASTER_API_KEY" };
@@ -227,16 +201,13 @@ async function main() {
 
 if (import.meta.main) {
   main().catch((e) => {
-    // A total failure still exits 0 with an error bundle — the auditor degrades to structural checks.
     log(`fatal (writing error bundle): ${(e as Error).message}`);
     try {
       writeFileSync(
         process.argv[2] ?? ".audit/seo-data.json",
         JSON.stringify({ error: (e as Error).message }),
       );
-    } catch {
-      /* best-effort */
-    }
+    } catch {}
     process.exit(0);
   });
 }

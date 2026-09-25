@@ -1,14 +1,3 @@
-// Unit tests for agent-env.sh — the per-caller credential scrub that stands between the box's
-// secrets and an agentic `claude -p` whose prompt may carry attacker-written text.
-//
-//   bun test docs/agents/hermes/scripts/agent-env.test.ts
-//
-// The scrub's whole value is that the DEFAULT IS DENY and that capability grows for one caller
-// without growing for its neighbours. Both of those are properties a test can pin, and both were
-// wrong in the first version of this file (one global allowlist shared by three sweeps), so they
-// are what this suite asserts. The end-to-end proof that the real driver actually applies this to a
-// real child process lives in sentry-triage-sweep.test.ts.
-
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -24,7 +13,6 @@ afterEach(() => {
   }
 });
 
-/** A secrets file shaped like the box's: `export`-prefixed and bare lines, comments, blanks. */
 function writeSecrets(keys: string[]): string {
   const dir = mkdtempSync(join(tmpdir(), "fluncle-agent-env-"));
   temporaryDirectories.push(dir);
@@ -42,10 +30,6 @@ function writeSecrets(keys: string[]): string {
   return file;
 }
 
-/**
- * Source the helper, call it with `args`, and report the resulting `env -u` list plus the log line.
- * Returning the flat argv is the honest assertion target — it is literally what reaches `env`.
- */
 function scrub(secretsFile: string, args: string): { argv: string[]; log: string } {
   const script = `
     . "${AGENT_ENV_SH}"
@@ -56,7 +40,6 @@ function scrub(secretsFile: string, args: string): { argv: string[]; log: string
   return { argv: (r.stdout ?? "").trim().split(/\s+/).filter(Boolean), log: r.stderr ?? "" };
 }
 
-/** The NAMES the helper decided to strip (drop the repeated `-u` flags). */
 function scrubbedNames(argv: string[]): string[] {
   return argv.filter((a) => a !== "-u").sort();
 }
@@ -90,7 +73,6 @@ describe("default is deny", () => {
   });
 
   test("a key added to the file later is scrubbed with no code change", () => {
-    // The reason the list is derived from the file rather than hardcoded.
     const names = scrubbedNames(
       scrub(writeSecrets([...BOX_KEYS, "SOME_FUTURE_API_KEY"]), "--allow GH_TOKEN").argv,
     );
@@ -100,7 +82,6 @@ describe("default is deny", () => {
 
 describe("the runtime's own auth is never scrubbed", () => {
   test("CLAUDE_CODE_OAUTH_TOKEN survives without being declared", () => {
-    // A sweep that scrubbed this could not start at all, so varying it per caller buys nothing.
     expect(scrubbedNames(scrub(writeSecrets(BOX_KEYS), "").argv)).not.toContain(
       "CLAUDE_CODE_OAUTH_TOKEN",
     );
@@ -109,8 +90,6 @@ describe("the runtime's own auth is never scrubbed", () => {
 
 describe("capability is per-caller — the footgun the first version had", () => {
   test("one caller declaring Turso does NOT grant it to a caller that did not", () => {
-    // This is the property that matters. If it ever fails, the allowlist has gone global again and
-    // widening it for the audit sweep silently arms the attacker-facing sentry-triage sweep.
     const file = writeSecrets(BOX_KEYS);
     const permissive = scrubbedNames(scrub(file, "--allow GH_TOKEN --allow TURSO_AUTH_TOKEN").argv);
     const strict = scrubbedNames(scrub(file, "--allow GH_TOKEN").argv);
@@ -130,7 +109,6 @@ describe("capability is per-caller — the footgun the first version had", () =>
 
 describe("--scrub covers what the file does not define", () => {
   test("a name absent from the secrets file is still stripped", () => {
-    // GOOGLE_APPLICATION_CREDENTIALS is exported by audit-sweep independently of the file.
     const names = scrubbedNames(
       scrub(writeSecrets(BOX_KEYS), "--scrub GOOGLE_APPLICATION_CREDENTIALS").argv,
     );
@@ -148,7 +126,6 @@ describe("it announces itself, so a 03:30 failure is diagnosable", () => {
   });
 
   test("it logs NAMES only — never a value", () => {
-    // The log line exists to make failures readable; it must not become a secret-disclosure path.
     const { log } = scrub(writeSecrets(BOX_KEYS), "--allow GH_TOKEN");
     expect(log).not.toContain("v-0");
     expect(log).not.toContain("v-2");

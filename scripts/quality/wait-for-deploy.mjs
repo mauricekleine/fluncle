@@ -58,9 +58,7 @@ export async function pollForDeployment({
           return { served: lastServed, waitSeconds: (now() - started) / 1000 };
         }
       }
-    } catch {
-      // The bounded loop is the availability retry. The final error carries the last observed SHA.
-    }
+    } catch {}
     await sleep(intervalSeconds * 1000);
   }
 

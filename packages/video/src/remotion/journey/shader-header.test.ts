@@ -1,6 +1,3 @@
-// Unit tests for the pure shader-source assembler. No WebGL/React needed — these
-// pin the header layout that the glsl3 / derivatives / texture features rely on.
-
 import { expect, test } from "bun:test";
 
 import {
@@ -38,7 +35,7 @@ test("derivatives adds the WebGL1 #extension line BEFORE precision", () => {
 test("glsl3 emits #version 300 es first, an out fragColor, and never the extension line", () => {
   const header = buildFragmentHeader({
     coreUniforms: CORE,
-    // derivatives is a WebGL1-only header line; glsl3 wins and suppresses it.
+
     derivatives: true,
     ditherHelpers: DITHER,
     glsl3: true,
@@ -57,7 +54,7 @@ test("each texture name yields a sorted sampler + AspectRatio pair", () => {
   expect(header).toContain("uniform sampler2D u_art;");
   expect(header).toContain("uniform float u_artAspectRatio;");
   expect(header).toContain("uniform sampler2D u_bg;");
-  // Sorted: u_art declared before u_bg regardless of input order.
+
   expect(header.indexOf("sampler2D u_art;")).toBeLessThan(header.indexOf("sampler2D u_bg;"));
 });
 

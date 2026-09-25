@@ -1,20 +1,8 @@
-// Unit tests for the `fluncleJson` shell helper in artist-sweep.ts — the same
-// parse-first contract as backfill-sweep.ts (the box scripts are deliberately
-// self-contained, so the helper is duplicated and pinned in both): a partial-failure
-// batch (`ok: false`, exit 1) is RETURNED with its counts intact; only a true crash
-// (no parseable JSON) or the CLI's own error payload throws. Run directly:
-//
-//   bun test docs/agents/hermes/scripts/artist-sweep.test.ts
-//
-// `main()` is guarded behind `import.meta.main` in the sweep, so importing it here is
-// side-effect free (no fluncle spawn, no network).
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-// The stub fluncle: the first arg selects the response shape; fluncleJson always
-// appends --json as the last arg.
 const STUB = `#!/bin/bash
 case "$1" in
   ok-json) printf '{"ok":true,"filledCount":3,"skippedCount":1}\\n' ;;

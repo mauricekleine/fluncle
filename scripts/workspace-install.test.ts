@@ -1,9 +1,3 @@
-// The guard against a worktree grading another checkout's code. A worktree lives under the main
-// checkout, so an uninstalled one resolves `@fluncle/*` upwards and every lane goes green about
-// code it does not contain — see scripts/quality/workspace-install.mjs.
-//
-//   bun test scripts/workspace-install.test.ts
-
 import { describe, expect, it } from "bun:test";
 import { resolve } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -19,8 +13,6 @@ describe("workspace install guard", () => {
   });
 
   it("names the escape when the package resolves outside the checkout it is asked about", () => {
-    // The probe still resolves — into THIS checkout — which is exactly the shape of the trap seen
-    // from the other side: a root whose install is not the one answering for it.
     const problem = workspaceInstallProblem(resolve(REPO, "apps/web"));
 
     expect(problem).toContain("OUTSIDE");
@@ -39,8 +31,6 @@ describe("workspace install guard", () => {
     expect(result.status).toBe(0);
   });
 
-  // Importing the predicate must never inherit the CLI's exit — `scripts/quality/preflight.mjs`
-  // does exactly that, and a module that exits on import would take the preflight down with it.
   it("does not act on import", () => {
     const probe = `import("${GUARD}").then(() => { process.stdout.write("imported"); });`;
     const result = spawnSync("node", ["--input-type=module", "-e", probe], {

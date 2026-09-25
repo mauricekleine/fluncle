@@ -1,20 +1,5 @@
 #!/usr/bin/env bun
-/**
- * Install every local Fluncle skill under packages/skills into the agent
- * toolchains, per AGENTS.md → "Agent Skills":
- *
- *   bunx skills add ./packages/skills/<skill-path> -y -a claude-code -a codex
- *
- * A directory counts as a skill when it contains a SKILL.md. Installs run
- * sequentially because `skills add` mutates the shared skills-lock.json, and
- * parallel writes would race on it.
- *
- * Usage:
- *   bun run skills:install               # install all local skills, then reconcile
- *   bun run skills:install --dry-run     # print the commands without running them
- *   bun run skills:install --check-only  # reconcile only (no install; seconds, not minutes)
- *   bun run skills:install --verify      # reconcile and compare source with installed copies
- */
+
 import {
   existsSync,
   lstatSync,
@@ -33,27 +18,12 @@ const lockPath = join(repoRoot, "skills-lock.json");
 const agentsSkillsDir = join(repoRoot, ".agents", "skills");
 const claudeSkillsDir = join(repoRoot, ".claude", "skills");
 const agents = ["claude-code", "codex"];
-// Pin the `skills` CLI version. The lockfile stores a per-skill `computedHash` the CLI
-// produces, so an unpinned `bunx skills` lets CI resolve a newer version than a dev ran
-// locally — a changed hash then makes the selected Skills quality lane fail
-// non-deterministically. Pinning makes `skills:install`
-// byte-identical everywhere (local, CI, every agent). Bump deliberately.
+
 const skillsCli = "skills@1.5.15";
 
 export type LockEntry = { source?: string; sourceType?: string };
 export type SkillsLock = { skills?: Record<string, LockEntry> };
 
-/**
- * Rewrite every LOCAL skill's `source` from a machine-absolute path
- * (…/Projects/fluncle/packages/skills/foo) to a repo-relative one
- * (packages/skills/foo). We hand `skills add` a relative path, but the CLI
- * absolutizes it into the lock — so without this the committed lockfile bakes in
- * one machine's home path, which AGENTS.md forbids ("NEVER commit … local
- * /Users/… paths").
- *
- * Pure and idempotent: it mutates the passed lock object and reports whether
- * anything moved, so the rewrite is unit-testable without touching disk.
- */
 export function rewriteLockSources(lock: SkillsLock, root: string): boolean {
   const prefix = root.endsWith("/") ? root : `${root}/`;
   let changed = false;
@@ -66,10 +36,6 @@ export function rewriteLockSources(lock: SkillsLock, root: string): boolean {
   return changed;
 }
 
-/**
- * Disk wrapper around `rewriteLockSources`. Runs after every install below, and
- * standalone via `bun run skills:install --normalize-only` to heal the committed file.
- */
 function normalizeLockSources(): void {
   if (!existsSync(lockPath)) {
     return;
@@ -82,29 +48,15 @@ function normalizeLockSources(): void {
 }
 
 export type ReconcileInput = {
-  /** Every key under `skills` in skills-lock.json, with its entry. */
   lockSkills: Record<string, LockEntry>;
-  /** Directory names under .agents/skills (the copies an agent actually reads). */
+
   installedSkills: string[];
-  /** Directory names under packages/skills that hold a SKILL.md (first-party sources). */
+
   packageSkills: string[];
-  /** .claude/skills entries: name → the symlink target, or null when it is a real directory. */
+
   claudeLinks: Record<string, string | null>;
 };
 
-/**
- * The reconciliation the skills-sync drift guard could not see. Its guard only asks
- * "did regenerating packages/skills move the working tree?", which stays green while
- * the three views of a skill disagree: a lock entry with no installed copy (the agent
- * silently never reads the skill), an installed copy with no lock entry (a vendored
- * copy nobody can trace to a source), a local lock entry pointing at a deleted
- * packages/skills directory, or a real directory under .claude/skills instead of the
- * symlink every other skill gets (two copies that drift apart — edit one, the other
- * agent reads the stale one).
- *
- * Pure: returns one human-readable problem per line so both the local run and the CI
- * job fail with the same actionable list.
- */
 export function findSkillPlumbingProblems({
   claudeLinks,
   installedSkills,
@@ -160,7 +112,6 @@ export function findSkillPlumbingProblems({
   return problems;
 }
 
-/** Read the four views off disk and fail loudly when they disagree. */
 function assertSkillPlumbingReconciles(): void {
   const lock = existsSync(lockPath)
     ? (JSON.parse(readFileSync(lockPath, "utf8")) as SkillsLock)
@@ -221,13 +172,6 @@ function assertInstalledContentMatches(): void {
   console.log("Installed skill content matches every canonical package source.");
 }
 
-/**
- * Strip run artifacts (Python bytecode, macOS Finder files) from the skill
- * sources before installing. The skills CLI hashes the whole directory into the
- * lock's `computedHash`, so a stray gitignored `__pycache__/` left behind by
- * running a skill script bakes in a hash that CI's clean checkout can never
- * reproduce — and the skills-sync drift guard fails on every push after.
- */
 function sweepJunk(dir: string): void {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const p = join(dir, entry.name);
@@ -321,8 +265,6 @@ function main(): void {
 
   console.log(`\nDone — installed ${skillDirs.length} skill(s).`);
 
-  // Last, so both this run and the CI job inherit the check: every skill the lock
-  // claims must actually be installed, and vice versa.
   assertSkillPlumbingReconciles();
 }
 
