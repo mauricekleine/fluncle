@@ -78,7 +78,7 @@ export type SavedSet = {
   updatedAt: string;
 };
 
-export type Watch = {
+export type Follow = {
   createdAt: string;
   entityId: string;
   id: string;
@@ -101,12 +101,15 @@ export type GalaxyDoorData = {
   tab: "galaxy";
 };
 
+export type FollowsEmail = { subscribed: boolean; token: string };
+
 export type SavesDoorData = {
+  follows: Follow[];
+  followsEmail: FollowsEmail;
   saved: SavedFinding[];
   sets: SavedSet[];
   submissions: Submission[];
   tab: "saves";
-  watches: Watch[];
 };
 
 export type SettingsDoorData = {

@@ -3,6 +3,7 @@ import { type Subprocess } from "bun";
 import { rmSync } from "node:fs";
 import { join } from "node:path";
 import { seedE2eData } from "../tests/e2e/seed";
+import { startFakeResend } from "../tests/e2e/fake-resend";
 import { startFakeSonar } from "../tests/e2e/fake-sonar";
 import { LOCAL_DB_CONCURRENCY } from "../src/lib/database-concurrency";
 import {
@@ -10,6 +11,7 @@ import {
   killProc,
   LIBSQL_PORT,
   LIBSQL_URL,
+  MAIL_PORT,
   materializeDevVars,
   reapPorts,
   restoreDevVars,
@@ -23,6 +25,7 @@ import {
 let turso: Subprocess | undefined;
 let vite: Subprocess | undefined;
 let sonar: ReturnType<typeof startFakeSonar> | undefined;
+let mail: ReturnType<typeof startFakeResend> | undefined;
 let cleanedUp = false;
 
 async function cleanup(): Promise<void> {
@@ -32,6 +35,7 @@ async function cleanup(): Promise<void> {
 
   cleanedUp = true;
   await sonar?.stop(true);
+  await mail?.stop(true);
   killProc(vite);
   killProc(turso);
 
@@ -47,7 +51,7 @@ for (const signal of ["SIGTERM", "SIGINT"] as const) {
 }
 
 async function main(): Promise<void> {
-  for (const port of [VITE_PORT, LIBSQL_PORT, SONAR_PORT]) {
+  for (const port of [VITE_PORT, LIBSQL_PORT, SONAR_PORT, MAIL_PORT]) {
     if (await isPortListening(port)) {
       throw new Error(
         `port ${port} is already in use — stop what's on it and retry the e2e suite.`,
@@ -76,6 +80,9 @@ async function main(): Promise<void> {
 
   console.log(`e2e-stack: starting fake Sonar on :${SONAR_PORT}…`);
   sonar = startFakeSonar(client);
+
+  console.log(`e2e-stack: starting fake Resend on :${MAIL_PORT}…`);
+  mail = startFakeResend();
 
   console.log(`e2e-stack: booting Vite on :${VITE_PORT}…`);
   vite = Bun.spawn(

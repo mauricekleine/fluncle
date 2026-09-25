@@ -22,6 +22,7 @@ const SaveWatchBodySchema = z.looseObject({
 
 export const listPrivateWatches = oc
   .route({
+    deprecated: true,
     method: "GET",
     operationId: "listPrivateWatches",
     path: "/me/watches",
@@ -32,6 +33,7 @@ export const listPrivateWatches = oc
 
 export const savePrivateWatch = oc
   .route({
+    deprecated: true,
     method: "POST",
     operationId: "savePrivateWatch",
     path: "/me/watches",
@@ -54,6 +56,7 @@ export const savePrivateWatch = oc
 
 export const deletePrivateWatch = oc
   .route({
+    deprecated: true,
     method: "DELETE",
     operationId: "deletePrivateWatch",
     path: "/me/watches/{id}",

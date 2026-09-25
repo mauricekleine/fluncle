@@ -122,6 +122,7 @@ const APPROVED_VERBS = new Set<string>([
 
   "triage",
   "unsave",
+  "unsubscribe",
 
   "upload",
 ]);
