@@ -484,7 +484,6 @@ export async function readProjectedTrackHubPageStart(
     if (!isLeafAnchorDocument(head)) {
       const document = await readProjectedTrackHubAnchorsSnapshot(client, address, pageSize, {
         allowLegacyDocument: true,
-        requireCutover: false,
       });
       if (document === undefined) {
         return undefined;
@@ -548,24 +547,6 @@ export async function isCurrentProjectedTrackHubAnchorDocumentUsable(
   }
 }
 
-/**
- * Read a complete, current default-hub anchor document whole. The state, repair, address, format,
- * order epoch, and generation predicates are one snapshot; malformed or incomplete JSON is unusable.
- * For a leaf document the returned anchors are the runs' stored boundary rows, whose page numbers
- * are exact only until page-local maintenance amends an earlier run; page serving resolves through
- * `readProjectedTrackHubPageStart` instead.
- */
-export async function readProjectedTrackHubAnchors(
-  client: PublicProjectionReadClient,
-  address: PublicProjectionAnchorAddress,
-  pageSize: number,
-): Promise<ProjectedTrackHubAnchors | undefined> {
-  return readProjectedTrackHubAnchorsSnapshot(client, address, pageSize, {
-    allowLegacyDocument: true,
-    requireCutover: true,
-  });
-}
-
 /** The exact runtime validator without the flag prerequisite, used by the atomic open gate. */
 export async function readCurrentProjectedTrackHubAnchors(
   client: PublicProjectionReadClient,
@@ -574,7 +555,6 @@ export async function readCurrentProjectedTrackHubAnchors(
 ): Promise<ProjectedTrackHubAnchors | undefined> {
   return readProjectedTrackHubAnchorsSnapshot(client, address, pageSize, {
     allowLegacyDocument: false,
-    requireCutover: false,
   });
 }
 
@@ -638,12 +618,8 @@ async function readProjectedTrackHubAnchorsSnapshot(
   client: PublicProjectionReadClient,
   address: PublicProjectionAnchorAddress,
   pageSize: number,
-  options: { allowLegacyDocument: boolean; requireCutover: boolean },
+  options: { allowLegacyDocument: boolean },
 ): Promise<ProjectedTrackHubAnchors | undefined> {
-  if (options.requireCutover && !(await isPublicProjectionCutoverEnabledFor(client))) {
-    return undefined;
-  }
-
   try {
     const head = await readProjectedAnchorDocumentHead(client, address);
     if (head === undefined) {

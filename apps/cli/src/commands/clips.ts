@@ -21,8 +21,8 @@
 // marks it done + purges the stale edge renditions server-side (a re-cut to the same
 // clipId must not keep serving the old cut — #152 lesson).
 //
-// CI HAS NO ffmpeg: every pure helper below (the ffmpeg arg shape, the footage key, the
-// crop filtergraph) is exported and unit-tested WITHOUT invoking ffmpeg (clips.test.ts).
+// CI HAS NO ffmpeg: the ffmpeg arg shape and crop filtergraph are unit-tested WITHOUT invoking
+// ffmpeg (clips.test.ts).
 // The one shell-out is skip-guarded on a `ffmpeg -version` probe.
 
 import {
@@ -61,16 +61,6 @@ export const CLIP_AUDIO_BITRATE = "192k";
 // Cloudflare MT rejects a source over 100 MB; the cut must clear it (the bitrate cap is
 // the primary guard, this is the backstop the cut command asserts on the rendered file).
 const MAX_CLIP_BYTES = 100 * 1024 * 1024;
-
-/** The clip's pseudo-finding master key on R2 — what every MT helper resolves against. */
-export function clipFootageKey(clipId: string): string {
-  return `${clipId}/footage.mp4`;
-}
-
-/** The landscape set rendition the cut reads from R2 (Unit A's `<logId>/set.mp4`). */
-export function setVideoUrl(logId: string): string {
-  return `${FOUND_BASE}/${encodeURIComponent(logId)}/set.mp4`;
-}
 
 export type ClipCutFilterOptions = {
   /** The 9:16 framing offset (px from the left of the landscape source). */
