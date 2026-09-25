@@ -26,7 +26,6 @@ describe("Sonar's Turso fallback cost contract", () => {
     { file: "tracks.ts", name: "log", operationIds: ["sonar.fallback.log"] },
     { file: "search.ts", name: "sonic search", operationIds: ["sonar.fallback.search"] },
     {
-      // The style scan runs behind a narrower pre-filter bound of its own, and says when it hits it.
       bound: "vectorFallbackCandidateLimitSql(STYLE_PREFILTER_CAP)",
       file: "style-probe.ts",
       name: "style ranking",
