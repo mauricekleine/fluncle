@@ -1,10 +1,3 @@
-// The label entity + the operator's crawl-seed control, proven against the REAL migrated
-// schema on an in-memory libSQL engine (vitest env = node). `getDb` is mocked to hand back
-// the per-test client, so the real SQL in labels.ts runs against the real DDL.
-//
-// The load-bearing guarantee under test is the one the whole design rests on: RULING IS
-// CRAWL SCOPE, NEVER STORAGE. Disabling a label must leave every track, every finding, and
-// every stored row exactly as it found them. There is a test that asserts precisely that.
 import { type Client } from "@libsql/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -53,10 +46,7 @@ import {
 
 let db: Client;
 
-/** A finding carrying a raw label string — the only way a label enters the archive. */
 async function seedFinding(trackId: string, label: null | string): Promise<void> {
-  // The label is the RECORDING's; the coordinate + found date are the CERTIFICATION's.
-  // Both halves, because `listLabels` counts FINDINGS on a label (it joins through).
   await db.execute({
     args: [trackId, "Tune", '["Artist"]', label],
     sql: `insert into tracks
@@ -185,20 +175,17 @@ describe("ensureLabel — the MusicBrainz label MBID fold (the discovered-label 
   });
 
   it("collapses two spellings that slugify apart onto ONE row when they share an MBID", async () => {
-    // "Med School" → med-school, "Medschool" → medschool: two distinct slugs, one label. The MBID
-    // is what folds them — without it these mint as two rows (the bug this slice fixes).
     const first = await ensureLabel("Med School", "mbid-medschool");
     const second = await ensureLabel("Medschool", "mbid-medschool");
 
     expect(second).toBe(first);
-    // Only the FIRST spelling's row exists; the second resolved to it by MBID and minted nothing.
+
     expect(await labelSlugs()).toEqual(["med-school"]);
   });
 
   it("resolves by MBID first — reusing the row whatever spelling the caller passes", async () => {
     const id = await ensureLabel("Med School", "mbid-medschool");
 
-    // A totally different display string, same MBID → the same row, no new mint.
     const again = await ensureLabel("MedSchool Recordings UK", "mbid-medschool");
 
     expect(again).toBe(id);
@@ -206,7 +193,6 @@ describe("ensureLabel — the MusicBrainz label MBID fold (the discovered-label 
   });
 
   it("ADOPTS the MBID onto a pre-existing slug row that has none (fill-empty-only)", async () => {
-    // A publish minted the label first, no MBID. The crawler later walks it and carries the MBID.
     const minted = await ensureLabel("Shogun Audio");
     expect(await mbLabelIdOf("shogun-audio")).toBeNull();
 
@@ -220,7 +206,6 @@ describe("ensureLabel — the MusicBrainz label MBID fold (the discovered-label 
   it("never rewrites an MBID already on the row (a different MBID for the same slug is ignored)", async () => {
     await ensureLabel("Critical Music", "mbid-critical");
 
-    // A second, conflicting MBID for the same slug must not clobber the first — fill-empty-only.
     await ensureLabel("Critical Music", "mbid-imposter");
 
     expect(await mbLabelIdOf("critical-music")).toBe("mbid-critical");
@@ -246,7 +231,6 @@ describe("ensureLabel — the MusicBrainz label MBID fold (the discovered-label 
       status: "confirmed",
     });
 
-    // No MBID passed — the alias path resolves the folded-away spelling to the canonical label.
     const id = await ensureLabel("Med School Recordings");
 
     expect(id).toBe("lbl_med");
@@ -263,16 +247,12 @@ describe("reconcileLabels (the deterministic backstop)", () => {
 
     expect(await reconcileLabels()).toBe(2);
 
-    // The count is DERIVED (never stored) and lives on the paged station read, over the indexed
-    // `label_id` edge. Reconcile mints; the deploy backfill's link step stamps the edge (the same
-    // split proven below in the merge re-mint trap), so run it before reading the count.
     await linkTracksToLabels(db);
 
-    // Both minted labels enter `undecided`.
     const page = await listLabelsPage("undecided", 1);
 
     expect(page.items.map((label) => label.slug).sort()).toEqual(["hospital-records", "pilot"]);
-    // Both spellings link to the one label, so both findings count toward it.
+
     expect(page.items.find((label) => label.slug === "pilot")?.findingCount).toBe(2);
     expect(page.items.find((label) => label.slug === "hospital-records")?.findingCount).toBe(1);
   });
@@ -421,14 +401,10 @@ describe("updateLabelSeedState (the operator's ruling)", () => {
     );
   });
 
-  // THE GUARANTEE. Crawl scope, never storage: ruling a label off changes the next crawl's
-  // seed set and touches NOTHING already stored. If this ever fails, the whole control is
-  // unsafe and the operator can no longer trust it.
   it("touches nothing already stored — the finding on a disabled label is untouched", async () => {
     await seedFinding("t1", "Anjunabeats");
     await reconcileLabels();
-    // Stamp the `label_id` edge the way a deploy does, BEFORE the byte-identical snapshot — so the
-    // count below reads the indexed edge and the ruling is still proven to touch nothing after it.
+
     await linkTracksToLabels(db);
     const [label] = await listLabels();
     expect(label).toBeDefined();
@@ -443,8 +419,7 @@ describe("updateLabelSeedState (the operator's ruling)", () => {
     const after = await db.execute(`select * from tracks order by track_id`);
 
     expect(after.rows).toEqual(before.rows);
-    // And the finding still counts toward its label: disabling hides nothing. The label is now in
-    // the "not seeding" section, so its count comes from that section's paged read.
+
     expect((await listLabelsPage("disabled", 1)).items[0]?.findingCount).toBe(1);
   });
 });
@@ -469,8 +444,6 @@ describe("listLabels (the read, and the crawler's seed set)", () => {
     expect((await listLabels("undecided")).map((label) => label.slug)).toEqual(["chelou"]);
   });
 
-  // The logo rides the shared owned-cover ladder: a `/cdn-cgi/image` rendition of the R2
-  // master with the `?v` vintage on the source, never the raw object.
   it("surfaces the label's own logo when a resolved image_key exists, undefined otherwise", async () => {
     await seedFinding("t1", "Hospital Records");
     await seedFinding("t2", "Anjunabeats");
@@ -491,16 +464,7 @@ describe("listLabels (the read, and the crawler's seed set)", () => {
   });
 });
 
-// ── The `/admin/labels` station's four sections ────────────────────────────────────────────────
-//
-// `undecided` is TWO sections, split on one exact fact: does the label carry a rule of its OWN?
-// Writing per-label allows and leaving the seed state alone IS the `dnb_partial` verdict, so such a
-// label has been ruled and is not waiting on anybody — and an undecided label has no other way to
-// acquire per-label rules. The triage pull partitions on the same check
-// (`packages/skills/fluncle-label-triage/scripts/partition-undecided.py`); these tests are what
-// keeps the station and the pull agreeing about what is still open.
 describe("listLabelsPage sections (the waiting queue vs the settled partials)", () => {
-  /** Write one artist rule. `labelId` null is the GLOBAL rule — the other axis entirely. */
   async function seedArtistRule(
     labelId: null | string,
     artistMbid: string,
@@ -538,12 +502,10 @@ describe("listLabelsPage sections (the waiting queue vs the settled partials)", 
 
     expect(waiting.items.map((label) => label.slug)).toEqual(["alpha-records"]);
     expect(settled.items.map((label) => label.slug)).toEqual(["beta-records"]);
-    // The rule count the settled row prints comes from the same rows the split read: two allows.
+
     expect(await labelRuleCounts([beta])).toEqual({ [beta]: { allow: 2, block: 0 } });
   });
 
-  // A global rule is the VISIBILITY/anywhere axis and says nothing about this label, so it can
-  // never move a label out of the operator's queue.
   it("leaves a label with only a GLOBAL rule on some artist in the waiting set", async () => {
     await ensureLabel("Alpha Records");
     await seedArtistRule(null, "mbid-global");
@@ -554,8 +516,6 @@ describe("listLabelsPage sections (the waiting queue vs the settled partials)", 
     expect((await listLabelsPage("partial", 1)).items).toEqual([]);
   });
 
-  // The split is the UNDECIDED pile's business. A ruled label's section is its ruling, rules or no
-  // rules — an enabled label with blocks is still "Seeding from".
   it("does not move a rule-carrying enabled or disabled label out of its own section", async () => {
     await ensureLabel("Alpha Records");
     await ensureLabel("Beta Records");
@@ -576,10 +536,6 @@ describe("listLabelsPage sections (the waiting queue vs the settled partials)", 
     expect((await listLabelsPage("partial", 1)).items).toEqual([]);
   });
 
-  // The split must stay a per-row check on the SAME index walk the station always had — the
-  // `(seed_state, name)` index for the range and the order, one indexed probe per candidate for
-  // the rule. If the term ever costs the read its access path, the station scans `labels` in a
-  // temp b-tree on every section load and focus refetch, and no assertion above would notice.
   it("still rides the (seed_state, name) index, with the rule probe on artist_rules_label_id_idx", async () => {
     await ensureLabel("Alpha Records");
 
@@ -622,8 +578,6 @@ describe("listLabelsPage sections (the waiting queue vs the settled partials)", 
     expect(details.filter((detail) => detail.startsWith("SCAN labels"))).toEqual([]);
   });
 
-  // The header count ("N waiting on a ruling") reads this total, so it is the number under test:
-  // the two sections are disjoint, and they sum to the seed state they split.
   it("counts only the unruled labels as waiting, and the two totals sum to the undecided pile", async () => {
     await ensureLabel("Alpha Records");
     await ensureLabel("Beta Records");
@@ -718,8 +672,6 @@ describe("the D7 bootstrap (scripts/backfill-labels.ts)", () => {
     expect(await seedStateOf("ukf")).toBe("undecided");
     expect(await seedStateOf("chelou")).toBe("undecided");
 
-    // The bootstrap is a ONE-TIME data step: a label added afterwards enters `undecided`
-    // and waits for a human, rather than being auto-enabled by the seed's "everything else".
     await seedFinding("t7", "Some New Imprint");
 
     const second = await backfillLabels(db);
@@ -737,7 +689,7 @@ describe("the D7 bootstrap (scripts/backfill-labels.ts)", () => {
     if (!label) {
       return;
     }
-    // The operator overrules the RFC's starting call BEFORE the bootstrap ever runs.
+
     await updateLabelSeedState(label.id, "enabled");
 
     await backfillLabels(db);
@@ -753,10 +705,6 @@ describe("the D7 bootstrap (scripts/backfill-labels.ts)", () => {
 
     const after = await db.execute(`select * from tracks order by track_id`);
 
-    // The backfill stamps ONE column on `tracks`: `label_id`, the indexed edge the public
-    // /label/<slug> page reads by (schema.ts). It is a POINTER, never a ruling — it says
-    // where this track sits in the graph, and nothing about what the crawler may seed from.
-    // Every other column, including the raw `label` audit string, comes out byte-identical.
     const strip = (rows: typeof before.rows) =>
       rows.map((row) => {
         const { label_id: _labelId, ...rest } = row as Record<string, unknown>;
@@ -768,15 +716,8 @@ describe("the D7 bootstrap (scripts/backfill-labels.ts)", () => {
     expect(before.rows[0]?.label_id).toBeNull();
     expect(after.rows[0]?.label_id).toEqual(expect.stringMatching(/^lbl_/));
   });
-
-  // The guarantee the whole design rests on is one line up (`updateLabelSeedState` → the
-  // tracks table byte-identical, line ~178). The backfill's pointer write does not touch it:
-  // a RULING still changes nothing that is stored.
 });
 
-// ── LABEL ALIASES: two spellings, one label (RFC musickit-second-authority, U2a) ────────────
-
-/** Insert a canonical `labels` row directly (the merge target an alias points at). */
 async function insertLabel(id: string, name: string, slug: string): Promise<void> {
   const now = new Date().toISOString();
   await db.execute({
@@ -785,7 +726,6 @@ async function insertLabel(id: string, name: string, slug: string): Promise<void
   });
 }
 
-/** Insert a `label_aliases` row (defaults: an Apple `name` candidate). */
 async function insertAlias(opts: {
   alias: string;
   aliasSlug: string;
@@ -820,7 +760,7 @@ async function labelSlugs(): Promise<string[]> {
 describe("isDistributorLabel (the panel's denylist guardrail)", () => {
   it("matches a seeded distributor by fold, and never a real imprint", () => {
     expect(isDistributorLabel("Believe")).toBe(true);
-    expect(isDistributorLabel("the orchard")).toBe(true); // folded, case-insensitive
+    expect(isDistributorLabel("the orchard")).toBe(true);
     expect(isDistributorLabel("Horus Music")).toBe(true);
     expect(isDistributorLabel("Medschool")).toBe(false);
     expect(isDistributorLabel("Hospital Records")).toBe(false);
@@ -829,10 +769,6 @@ describe("isDistributorLabel (the panel's denylist guardrail)", () => {
 });
 
 describe("the re-mint trap (a confirmed alias's raw string must not re-mint its slug)", () => {
-  // The trap, reproduced: the operator has folded "Med School Recordings" into "Medschool" via a
-  // CONFIRMED alias, but `tracks.label` is immutable and still carries the raw string. Without the
-  // guard, reconcile/ensureLabel would mint a fresh `med-school-recordings` label every deploy —
-  // re-opening the split forever.
   async function seedFoldedAwaySpelling(): Promise<void> {
     await insertLabel("lbl_med", "Medschool", "medschool");
     await insertAlias({
@@ -850,8 +786,6 @@ describe("the re-mint trap (a confirmed alias's raw string must not re-mint its 
 
     await reconcileLabels();
 
-    // No alias exists, so the raw string mints its own slug — this is exactly what a confirmed
-    // alias must prevent.
     expect(await labelSlugs()).toContain("med-school-recordings");
   });
 
@@ -861,15 +795,13 @@ describe("the re-mint trap (a confirmed alias's raw string must not re-mint its 
     const minted = await reconcileLabels();
 
     expect(minted).toBe(0);
-    // The only label is the canonical one; the folded-away slug was NOT re-minted.
+
     expect(await labelSlugs()).toEqual(["medschool"]);
   });
 
   it("ensureLabel resolves a confirmed alias's raw string to the canonical label, minting nothing", async () => {
     await seedFoldedAwaySpelling();
 
-    // This is ALSO the crawler's discovery choke point — `crawl.ts` calls `ensureLabel` on a
-    // discovered label, so the crawl path is covered by the same guard.
     const id = await ensureLabel("Med School Recordings");
 
     expect(id).toBe("lbl_med");
@@ -881,9 +813,8 @@ describe("the re-mint trap (a confirmed alias's raw string must not re-mint its 
 
     await backfillLabels(db);
 
-    // The canonical label is the only med* row.
     expect(await labelSlugs()).toEqual(["medschool"]);
-    // The track carrying the folded-away spelling points at the CANONICAL label, via the alias.
+
     const track = await db.execute(`select label_id from tracks where track_id = 't1'`);
     expect(track.rows[0]?.label_id).toBe("lbl_med");
   });
@@ -901,7 +832,6 @@ describe("the re-mint trap (a confirmed alias's raw string must not re-mint its 
 
     await reconcileLabels();
 
-    // Unconfirmed ⇒ no protection ⇒ the raw string mints (the operator hasn't ruled yet).
     expect(await labelSlugs()).toContain("med-school-recordings");
   });
 });
@@ -986,21 +916,18 @@ describe("the alias review reads + operator writes", () => {
     });
 
     expect(await confirmLabelAlias("lba_1")).toBe(true);
-    expect(await confirmLabelAlias("lba_1")).toBe(false); // already confirmed — no-op
+    expect(await confirmLabelAlias("lba_1")).toBe(false);
     expect(await getConfirmedAliasNames("lbl_med")).toEqual(["Med School Recordings"]);
 
     expect(await rejectLabelAlias("lba_2")).toBe(true);
-    expect(await rejectLabelAlias("lba_2")).toBe(false); // gone — no-op
-    // The confirmed one survives; only the rejected candidate is gone.
+    expect(await rejectLabelAlias("lba_2")).toBe(false);
+
     expect(await listLabelAliasCandidates()).toHaveLength(0);
   });
 });
 
-// The A–Z fast lane's page math: per-first-char counts (slug-ordered) fold to one page number per
-// DISPLAY letter, so a crawler clicking "M" lands on the page its first M-entity really is on.
 describe("letterPages (the A–Z lane's page math)", () => {
   it("maps each letter to the page its first entity lands on, at the given page size", () => {
-    // Page size 3: a(3) fills page 1, b(2)+c(1) fill page 2, d(3) fills page 3.
     const pages = letterPages(
       [
         { letter: "a", n: 3 },
@@ -1020,7 +947,6 @@ describe("letterPages (the A–Z lane's page math)", () => {
   });
 
   it("folds digit-led slugs into a single '#' bucket, keeping its earliest page", () => {
-    // Digits sort before letters, so the "#" bucket is contiguous at the front (rank 0 ⇒ page 1).
     const pages = letterPages(
       [
         { letter: "0", n: 1 },
@@ -1051,9 +977,6 @@ describe("coverFromJson (the borrowed-cover column shaper)", () => {
   });
 
   it("maps its abbreviated keys to the cover resolver (k→key, s→state, v→updatedAt, u→spotify)", () => {
-    // The shape the `coverJsonSelect` column emits for a RESOLVED owned master. Comparing to
-    // bestAlbumCoverUrl of the expanded object pins the key mapping — a transposition (say
-    // imageKey ← u) would diverge from this, and every borrowed cover would break.
     const raw = JSON.stringify({ k: "albums/hospital.jpg", s: "resolved", u: null, v: "42" });
 
     expect(coverFromJson(raw)).toBe(
@@ -1085,7 +1008,6 @@ describe("coverFromJson (the borrowed-cover column shaper)", () => {
 });
 
 describe("getLabelBySlug lineage edges (RFC label-lineage-remixer U1)", () => {
-  /** Seed a label row directly (the crawler/lineage-sweep write shape, minus the sweep). */
   async function seedLabelRow(opts: {
     foundedLocation?: string;
     foundingDate?: string;
@@ -1148,9 +1070,6 @@ describe("getLabelBySlug lineage edges (RFC label-lineage-remixer U1)", () => {
   });
 });
 
-// ── LABEL MERGE: fold a slug-split twin into its canonical row (RFC musickit-second-authority U2b) ──
-
-/** Insert a full `labels` row with any identity/fact/ruling column set (the merge's inputs). */
 async function insertFullLabel(opts: {
   discogsLabelId?: number;
   foundedLocation?: string;
@@ -1195,7 +1114,6 @@ async function insertFullLabel(opts: {
   });
 }
 
-/** A track hung directly off a label by its `label_id` graph pointer (the FK the merge re-points). */
 async function insertTrackWithLabelId(trackId: string, labelId: string): Promise<void> {
   await db.execute({
     args: [trackId, "Tune", '["Artist"]', labelId],
@@ -1295,7 +1213,6 @@ describe("mergeLabel (the operator's slug-split cleanup)", () => {
   });
 
   it("re-points every FK, reconciles canonical-wins, writes the alias, deletes the loser", async () => {
-    // Canonical carries the CORRECT identity (a right MBID) but is MISSING founding facts.
     await insertFullLabel({
       id: "lbl_canon",
       mbLabelId: "mb-correct",
@@ -1303,8 +1220,7 @@ describe("mergeLabel (the operator's slug-split cleanup)", () => {
       seedState: "enabled",
       slug: "med-school",
     });
-    // Loser is the slug-split twin: a WRONG MBID, but it does
-    // carry a founding date the canonical lacks.
+
     await insertFullLabel({
       foundingDate: "1996",
       id: "lbl_loser",
@@ -1312,17 +1228,17 @@ describe("mergeLabel (the operator's slug-split cleanup)", () => {
       name: "Medschool",
       slug: "medschool",
     });
-    // A child label parented on the LOSER (its parent_label_id must re-point to the canonical).
+
     await insertFullLabel({
       id: "lbl_child",
       name: "Sub Imprint",
       parentLabelId: "lbl_loser",
       slug: "sub-imprint",
     });
-    // A finding + a catalogue track, both hung off the loser by label_id.
+
     await insertTrackWithLabelId("t_find", "lbl_loser");
     await insertTrackWithLabelId("t_cat", "lbl_loser");
-    // An alias the loser already owned (must re-point onto the canonical).
+
     await insertAlias({
       alias: "Med-School",
       aliasSlug: "med-school-alt",
@@ -1338,7 +1254,6 @@ describe("mergeLabel (the operator's slug-split cleanup)", () => {
 
     const result = await mergeLabel("medschool", "med-school");
 
-    // FKs re-pointed.
     expect(await labelIdOfTrack("t_find")).toBe("lbl_canon");
     expect(await labelIdOfTrack("t_cat")).toBe("lbl_canon");
     expect(result.repointed.tracks).toBe(2);
@@ -1349,19 +1264,15 @@ describe("mergeLabel (the operator's slug-split cleanup)", () => {
     expect(result.repointed.childLabels).toBe(1);
     expect(result.repointed.aliases).toBe(1);
 
-    // Canonical-wins: the correct MBID stands, the loser's wrong one is DISCARDED; the empty
-    // founding_date fills from the loser.
     const canon = await getLabelBySlug("med-school");
     expect(canon?.mbLabelId).toBe("mb-correct");
     expect(canon?.foundingDate).toBe("1996");
     expect(result.reconciled).toContain("foundingDate");
     expect(result.reconciled).not.toContain("mbLabelId");
 
-    // The losing NAME is a confirmed alias on the canonical (so it can never re-mint).
     expect(await getConfirmedAliasNames("lbl_canon")).toContain("Medschool");
     expect(result.aliasWritten).toEqual({ alias: "Medschool", aliasSlug: "medschool" });
 
-    // The loser row is gone; the moved alias survives on the canonical.
     expect(await labelSlugs()).toEqual(["med-school", "sub-imprint"]);
     expect(await getConfirmedAliasNames("lbl_canon")).toContain("Med-School");
     expect(result.droppedRules).toBe(1);
@@ -1394,7 +1305,6 @@ describe("mergeLabel (the operator's slug-split cleanup)", () => {
 
     const result = await mergeLabel("loser", "canon");
 
-    // The loser is the only ruled row, so its ruling wins onto the canonical.
     expect(result.seedState).toBe("disabled");
     expect((await getLabelBySlug("canon"))?.id).toBe("lbl_canon");
     expect(await seedStateOf("canon")).toBe("disabled");
@@ -1453,7 +1363,6 @@ describe("mergeLabel (the operator's slug-split cleanup)", () => {
 
     await expect(mergeLabel("loser", "canon")).rejects.toBeInstanceOf(LabelMergeConflictError);
 
-    // Nothing moved — the loser row is untouched (the transaction never ran).
     expect(await labelSlugs()).toEqual(["canon", "loser"]);
   });
 
@@ -1463,14 +1372,12 @@ describe("mergeLabel (the operator's slug-split cleanup)", () => {
 
     await mergeLabel("medschool", "med-school");
 
-    // ensureLabel over the merged-away raw string resolves to the canonical, minting nothing.
     expect(await ensureLabel("Medschool")).toBe("lbl_canon");
     expect(await labelSlugs()).toEqual(["med-school"]);
 
-    // And a deploy reconcile over a finding still carrying the raw string never re-mints it.
     await seedFinding("t_remint", "Medschool");
     expect(await reconcileLabels()).toBe(0);
-    expect(await labelIdOfTrack("t_remint")).toBe(null); // reconcile mints, the backfill links
+    expect(await labelIdOfTrack("t_remint")).toBe(null);
     expect(await labelSlugs()).toEqual(["med-school"]);
   });
 
@@ -1481,7 +1388,7 @@ describe("mergeLabel (the operator's slug-split cleanup)", () => {
     await mergeLabel("medschool", "med-school");
 
     expect(await resolveLabelAliasRedirect("medschool")).toBe("med-school");
-    // A genuinely unknown slug resolves to nothing (the loader 404s it instead of redirecting).
+
     expect(await resolveLabelAliasRedirect("never-existed")).toBeUndefined();
   });
 
@@ -1495,9 +1402,6 @@ describe("mergeLabel (the operator's slug-split cleanup)", () => {
     await expect(mergeLabel("med-school", "ghost")).rejects.toBeInstanceOf(LabelNotFoundError);
   });
 
-  // THE ARITY GUARD (the label-lineage.test.ts pattern): every statement in the merge's atomic
-  // batch must bind exactly as many args as it declares placeholders. Real SQL execution already
-  // throws on a mismatch, but this pins it explicitly across a full wet merge.
   it("binds exactly its placeholders across the whole merge batch", async () => {
     await insertFullLabel({ id: "lbl_canon", name: "Med School", slug: "med-school" });
     await insertFullLabel({
@@ -1545,11 +1449,7 @@ describe("mergeLabel (the operator's slug-split cleanup)", () => {
   });
 });
 
-// ── THE /tracks LABEL FILTER POOL ───────────────────────────────────────────────────────────
-
 describe("listKnownLabelNames (the /tracks label filter typeahead pool)", () => {
-  /** Point a certified track at a label row — the `tracks.label_id → labels.id` join key the pool
-      reads by (seedFinding writes the raw string but not the graph pointer). */
   async function pointTrackAtLabel(trackId: string, labelId: string): Promise<void> {
     await db.execute({
       args: [labelId, trackId],
@@ -1570,7 +1470,6 @@ describe("listKnownLabelNames (the /tracks label filter typeahead pool)", () => 
 
     const names = await listKnownLabelNames();
 
-    // The real imprint is offered; neither the empty nor the whitespace-only name is.
     expect(names).toContain("Hospital Records");
     expect(names).not.toContain("");
     expect(names).not.toContain("   ");
@@ -1582,8 +1481,7 @@ describe("listKnownLabelNames (the /tracks label filter typeahead pool)", () => 
     await insertLabel("lbl_other", "Other Imprint", "other-imprint");
     await seedFinding("t-big-found", "Big Imprint");
     await pointTrackAtLabel("t-big-found", "lbl_big");
-    // Uncertified catalogue tracks on both labels: they fill `tracks_label_cover_idx`, and a label
-    // carrying only them is not offered.
+
     for (let index = 0; index < 40; index += 1) {
       await db.execute({
         args: [`t-cat-${index}`, index % 2 === 0 ? "lbl_big" : "lbl_other"],
@@ -1595,7 +1493,7 @@ describe("listKnownLabelNames (the /tracks label filter typeahead pool)", () => 
 
     const execute = vi.spyOn(db, "execute");
     const names = await listKnownLabelNames();
-    // A call's first argument is a SQL string or a `{ sql, args }` statement, whichever shape ran.
+
     const sqlOf = (statement: unknown): string => {
       if (typeof statement === "string") {
         return statement;

@@ -1,21 +1,3 @@
-// The label entity's two ruling-time halves, proven against the REAL migrated schema on an
-// in-memory libSQL engine: the logo's place on the owned-cover ladder, and the identity the
-// `/admin/labels` station reads while the operator rules.
-//
-// It is an INTEGRATION test because both halves are SQL, and a mocked-DB test would pass while
-// either was broken:
-//
-//   - the migration itself (`labels.image_updated_at` + `labels.disambiguation`) — if it did not
-//     apply, every statement below referencing those columns would throw here, which is exactly
-//     the guard we want, since `deploy:gate` runs this suite;
-//   - the resolve sweep's success WRITE — the `?v` bust is only real if `image_updated_at` is
-//     actually stamped by the same UPDATE that stores the key, and the served URL moves with it;
-//   - `listLabelsPage`'s projection — the four identity columns have to survive the round trip
-//     from the `labels` row to the `LabelAdminItem` the station renders.
-//
-// The vendors are mocked (there is no network): MusicBrainz answers "no match", Discogs hands back
-// one logo, and R2 is a fake bucket that records its `put`s.
-
 import { type Client, type InStatement } from "@libsql/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -53,7 +35,6 @@ import { getEnabledSeedLabel, listLabels, listLabelsPage } from "./labels";
 
 let db: Client;
 
-/** A fake world-served R2 that records its `put`s instead of storing anything. */
 function fakeBucket(): { bucket: Pick<R2Bucket, "put">; put: ReturnType<typeof vi.fn> } {
   const put = vi.fn(
     (_key: string, _value: ArrayBuffer | string, _options?: unknown): Promise<undefined> =>
@@ -63,7 +44,6 @@ function fakeBucket(): { bucket: Pick<R2Bucket, "put">; put: ReturnType<typeof v
   return { bucket: { put } as unknown as Pick<R2Bucket, "put">, put };
 }
 
-/** One `labels` row with whatever identity the test wants it to carry. */
 async function seedLabel(opts: {
   disambiguation?: string;
   discogsLabelId?: number;
@@ -109,7 +89,7 @@ beforeEach(async () => {
   holder.db = db;
 
   mbFetch.mockReset();
-  // MusicBrainz finds no matching label, so the sweep falls straight to the stored Discogs id.
+
   mbFetch.mockResolvedValue({ data: { labels: [] }, rateLimited: false });
 
   fetchDiscogsLabelImage.mockReset();
@@ -162,7 +142,6 @@ describe("the label-images resolve sweep stamps the serving vintage", () => {
     expect(imageKey).toBe("labels/hospital-records.jpg");
     expect(typeof vintage).toBe("string");
 
-    // The vintage is not bookkeeping: it IS the bust on the URL the station serves.
     const page = await listLabelsPage("undecided", 1);
     const served = page.items[0]?.logoImageUrl;
 
@@ -184,7 +163,6 @@ describe("the label-images resolve sweep stamps the serving vintage", () => {
 
     const before = (await listLabelsPage("undecided", 1)).items[0]?.logoImageUrl;
 
-    // A second resolve at the SAME key (a replaced logo) — only the vintage moves.
     await db.execute({
       args: ["2030-01-01T00:00:00.000Z", "hospital-records"],
       sql: `update labels set image_updated_at = ?, image_state = 'pending' where slug = ?`,
@@ -232,8 +210,6 @@ describe("listLabelsPage carries the ruling-time identity", () => {
     expect(item?.foundedLocation).toBe("London");
   });
 
-  // Most labels legitimately carry none of it — MusicBrainz only disambiguates a name that
-  // needed it. Those come back as nulls, and the station renders no identity line at all.
   it("returns nulls for a label MusicBrainz never had to disambiguate", async () => {
     await seedLabel({ name: "A Brand New Imprint", slug: "a-brand-new-imprint" });
 
@@ -247,9 +223,6 @@ describe("listLabelsPage carries the ruling-time identity", () => {
   });
 });
 
-// The crawler resolves a claimed seed node to its label once at prepare and once at commit. That
-// question names ONE label by its UNIQUE slug, so it is answered by one index seek, never by
-// reading the whole enabled seed set (thousands of rows) and searching it in the isolate.
 describe("getEnabledSeedLabel resolves one seed label by slug", () => {
   it("answers exactly what the enabled seed set would, for enabled, ruled-out and unknown slugs", async () => {
     await seedLabel({

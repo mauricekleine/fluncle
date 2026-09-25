@@ -23,6 +23,12 @@ What changed is one sentence in [album-entity.md](./album-entity.md): a crawled 
 
 The address is guessable only in the sense any primary key is — a stable opaque token, not a counter — and nothing behind it is private: every field the page prints is already public through `/api/v1`, the feeds, and the entity pages.
 
+## The identity answer
+
+The `get_track` identity projection resolves track IDs, Log IDs, ISRCs, and MusicBrainz recording IDs to arrays of recordings. ISRCs and recording IDs can name several archive rows, so the answer preserves every match and marks its relation as canonical, duplicate, or ambiguous; it never picks an unstamped winner. Each platform state and timestamp is backed by a stored fact, with `null` where the archive cannot support a stronger claim. The Spotify anchor-attempt counter is a spend budget that can decrease, so it is never presented as a count of completed looks. Certification appears only as `certified` and the separate nullable `logId`; uncertified rows expose recording metadata and links without Fluncle-authored findings.
+
+Apple Music links from MusicKit appear on Fluncle's own pages, but machine-served identity answers report that platform as unsupported under the Apple Developer Program License Agreement's MusicKit redistribution limits. Spotify follow links use `/out/spotify/<trackId>` so the redirect path does not expose the metered Spotify mapping; JSON-LD `sameAs` retains the raw identity URL. Identity lookup limits count keys, including every ISRC in a batch, against both a burst and a daily allowance. The limiter uses the edge-provided client IP or signed-in user ID, and its abuse alerts identify a hashed bucket rather than storing the IP address.
+
 ## The two predicates
 
 They live together in [`apps/web/src/lib/server/track-page.ts`](../apps/web/src/lib/server/track-page.ts) and answer different questions. Collapsing them would be a defect.

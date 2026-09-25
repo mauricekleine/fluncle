@@ -3,23 +3,15 @@ import { type MixtapeDTO } from "../mixtapes";
 import { type ServiceStatusRow } from "./status";
 import { type TrackListItem } from "./tracks";
 
-// `get_status` reads the status store; the resource + get_track paths read the log
-// resolver and the recent-tracks list. We mock exactly those three so the JSON-RPC
-// calls stay hermetic. The remaining tool dependencies (newsletter, submissions, and
-// the rest of ./tracks) are imported by mcp.ts but never invoked by these calls, so
-// they stay real (./tracks and ./spotify are partial-mocked: only listTracks and the
-// network-touching searchTrackCandidates swap, so ApiError stays the real class the
-// dispatcher instanceof-checks).
 const statuses = vi.hoisted(() => vi.fn<() => Promise<ServiceStatusRow[]>>());
 const resolveTarget = vi.hoisted(() => vi.fn());
 const listTracksMock = vi.hoisted(() => vi.fn());
 const listFreshMock = vi.hoisted(() => vi.fn());
-// The archive-read tools PR-2 lifted onto the MCP touch these — mocked so the JSON-RPC calls stay
-// hermetic (no DB, no network, no real rate-limit store).
+
 const searchArchiveMock = vi.hoisted(() => vi.fn());
 const assertRateLimitMock = vi.hoisted(() => vi.fn<() => Promise<void>>());
 const chargeRateLimitMock = vi.hoisted(() => vi.fn());
-// The MCP-only Spotify candidate search — the one tool that spends the operator's token.
+
 const searchTrackCandidatesMock = vi.hoisted(() => vi.fn());
 const getFindingsByArtistMock = vi.hoisted(() => vi.fn());
 const getFindingsByLabelMock = vi.hoisted(() => vi.fn());
@@ -32,14 +24,12 @@ const getPublicArtistSocialsMock = vi.hoisted(() => vi.fn());
 const getLabelBySlugMock = vi.hoisted(() => vi.fn());
 const getConfirmedAliasNamesMock = vi.hoisted(() => vi.fn());
 const getArtistNeighboursMock = vi.hoisted(() => vi.fn());
-// The PR-5 catalogue browse reads (list_album/artist/label_catalogue).
+
 const getAlbumBySlugMock = vi.hoisted(() => vi.fn());
 const listCatalogueTracksByAlbumMock = vi.hoisted(() => vi.fn());
 const listArtistCatalogueMock = vi.hoisted(() => vi.fn());
 const listLabelCatalogueMock = vi.hoisted(() => vi.fn());
 
-// A faithful stand-in for the deterministic slug helpers (their DB-touching sibling modules stay
-// mocked): "Netsky" → "netsky", "Hospital Records" → "hospital-records".
 const toSlug = (name: string): string =>
   name
     .toLowerCase()
@@ -80,8 +70,7 @@ vi.mock("./rate-limit", () => ({
   assertRateLimit: assertRateLimitMock,
   chargeRateLimit: chargeRateLimitMock,
 }));
-// Partial-mock ./spotify so `ApiError` stays the real class (the dispatcher renders a tool
-// error by instanceof) while the Spotify network call is stubbed for search_tracks.
+
 vi.mock("./spotify", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./spotify")>()),
   searchTrackCandidates: searchTrackCandidatesMock,
@@ -99,24 +88,19 @@ vi.mock("./labels", () => ({
 }));
 vi.mock("./artist-dossier", () => ({ getArtistNeighbours: getArtistNeighboursMock }));
 
-// Partial-mock ./fresh so the constants (FRESH_TRACKS_DEFAULT/MAX) stay real for the
-// list_fresh schema while its DB read is stubbed.
 vi.mock("./fresh", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./fresh")>()),
   listFreshTracks: listFreshMock,
 }));
 
 const { handleMcp } = await import("./mcp");
-// The real ApiError class (./spotify is only partial-mocked) and the shared search_tracks
-// cache's test seam, both imported after the mocks are registered like handleMcp above.
+
 const { ApiError } = await import("./spotify");
 const { __resetSearchCache } = await import("./track-search");
 
-// Aliased to the untyped hoisted mocks (mockResolvedValue takes the fixture as-is).
 const resolveTargetMock = resolveTarget;
 const recentTracksMock = listTracksMock;
 
-// A minimal public finding, the shape resolveLogPageTarget hands back for a track.
 function findingFixture(overrides: Partial<TrackListItem> = {}): TrackListItem {
   return {
     addedAt: "2026-06-15T20:00:00.000Z",
@@ -138,7 +122,6 @@ function findingFixture(overrides: Partial<TrackListItem> = {}): TrackListItem {
   };
 }
 
-// A minimal published mixtape, the shape resolveLogPageTarget hands back for the F form.
 function mixtapeFixture(overrides: Partial<MixtapeDTO> = {}): MixtapeDTO {
   return {
     externalUrls: { mixcloud: "https://www.mixcloud.com/fluncle/set" },
@@ -312,8 +295,7 @@ describe("MCP get_status tool", () => {
     const services = data.services as Array<{ label: string; name: string }>;
 
     expect(services[0]?.name).toBe("r2");
-    // The registry's media-zone surface (operatorNotes: "…as service `r2`") supplies
-    // the label, so it is never the bare id when the registry knows the service.
+
     expect(services[0]?.label).not.toBe("r2");
     expect(typeof services[0]?.label).toBe("string");
   });
@@ -429,8 +411,7 @@ describe("MCP list_fresh tool", () => {
 
     expect(tool).toBeDefined();
     expect(tool?.title).toBe("Fresh releases");
-    // The Found Rule: these are RELEASE dates, not found dates — the description says so
-    // and never tells an assistant Fluncle "found" them.
+
     expect(tool?.description).toMatch(/came out|release/i);
     expect(tool?.description.toLowerCase()).toContain("do not say fluncle found");
   });
@@ -460,7 +441,7 @@ describe("MCP list_fresh tool", () => {
     expect(data.windowDays).toBe(30);
     const tracks = data.tracks as Array<Record<string, unknown>>;
     expect(tracks).toHaveLength(2);
-    // The Unlit Rule is structural: the uncertified row carries no coordinate.
+
     expect(tracks[0]?.logId).toBe("050.7.0A");
     expect(tracks[1]?.logId).toBeUndefined();
     expect(data.albums).toHaveLength(1);
@@ -554,7 +535,7 @@ describe("MCP resources", () => {
       tracks: [
         findingFixture(),
         mixtapeFixture(),
-        // An uncoordinated finding is skipped — no coordinate, no resource URI.
+
         findingFixture({ logId: undefined, trackId: "nope" }),
       ],
     });
@@ -588,7 +569,7 @@ describe("MCP resources", () => {
     expect(content?.uri).toBe("fluncle://finding/012.8.0A");
     expect(content?.mimeType).toBe("application/json");
     expect(JSON.parse(content?.text ?? "{}")).toMatchObject({ coordinate: "012.8.0A" });
-    // The bare display form resolves to the same coordinate too.
+
     expect(resolveTargetMock).toHaveBeenCalledWith("012.8.0A");
   });
 
@@ -652,7 +633,7 @@ describe("MCP prompts", () => {
     expect(message?.role).toBe("user");
     expect(message?.content.type).toBe("text");
     expect(message?.content.text).toContain("3am, still driving");
-    // It steers the agent at the read tools/resources it should use.
+
     expect(message?.content.text).toContain("get_track");
   });
 
@@ -738,14 +719,14 @@ describe("MCP — the archive-read tools PR-2 lifted out of ChatDnB", () => {
       "get_label",
       "build_set",
       "list_similar_artists",
-      // The found-order feed + the reborn whole-archive enumerator (the vocabulary cut).
+
       "list_findings",
       "list_tracks",
-      // The three catalogue browse reads (PR-5).
+
       "list_album_catalogue",
       "list_artist_catalogue",
       "list_label_catalogue",
-      // The two writes moved onto the shared registry — still advertised on the MCP.
+
       "submit_track",
       "subscribe_newsletter",
     ]) {
@@ -771,8 +752,7 @@ describe("MCP — the archive-read tools PR-2 lifted out of ChatDnB", () => {
 
     expect(isError).toBe(false);
     expect(getAlbumBySlugMock).toHaveBeenCalledWith("colours");
-    // The MCP world-serves a FLAT catalogue list (never a findings bucket); every row is tagged
-    // certified:false and carries no coordinate — an agent reads them as records, not findings.
+
     const catalogue = data.catalogue as Array<Record<string, unknown>>;
     expect(catalogue).toHaveLength(1);
     expect(catalogue[0]).toMatchObject({
@@ -813,16 +793,15 @@ describe("MCP — the archive-read tools PR-2 lifted out of ChatDnB", () => {
     const { data, isError } = await callTool("search_archive", { query: "nu:tone" });
 
     expect(isError).toBe(false);
-    // 🔴 MANDATORY: the anonymous /mcp shares the public HTTP twin's per-IP budget.
+
     expect(chargeRateLimitMock).toHaveBeenCalledWith(
       expect.objectContaining({ action: "search_archive", limit: 30 }),
     );
-    // The model tier is gated on the same charge's verdict.
+
     expect(searchArchiveMock).toHaveBeenCalledWith(
       expect.objectContaining({ beforeModel: expect.any(Function), q: "nu:tone" }),
     );
-    // Unlike chat's findings-only filter, the MCP serves the WHOLE SearchResult — the uncertified
-    // row rides too, tagged certified:false (never findings-filtered).
+
     const results = data.results as Array<Record<string, unknown>>;
     expect(results).toHaveLength(2);
     expect(results[0]).toMatchObject({ certified: true, logId: "004.7.2I" });
@@ -907,18 +886,13 @@ describe("MCP — the archive-read tools PR-2 lifted out of ChatDnB", () => {
   });
 });
 
-// search_tracks is the ONE tool that spends the operator's shared Spotify token, on a public
-// unauthenticated endpoint. The HTTP twin has always guarded it; this mount called the vendor
-// directly until the guard moved into the shared capability (./track-search.ts), so these
-// assertions are the tripwire for that bypass coming back.
 describe("MCP search_tracks — the shared Spotify-token guard", () => {
   beforeEach(() => {
     assertRateLimitMock.mockReset();
     assertRateLimitMock.mockResolvedValue(undefined);
     searchTrackCandidatesMock.mockReset();
     searchTrackCandidatesMock.mockResolvedValue([]);
-    // A cached query from one test must not answer another — the limiter assertions below
-    // depend on knowing exactly when the vendor is reached.
+
     __resetSearchCache();
   });
 
@@ -937,8 +911,7 @@ describe("MCP search_tracks — the shared Spotify-token guard", () => {
     const { data, isError } = await callTool("search_tracks", { query: "netsky rio" });
 
     expect(isError).toBe(false);
-    // 🔴 MANDATORY: the same `action` + window as the public GET /api/v1/search op, so the
-    // two mounts share ONE per-IP budget rather than the MCP handing out a second one.
+
     expect(assertRateLimitMock).toHaveBeenCalledWith(
       expect.objectContaining({ action: "search_tracks", limit: 30, windowMs: 60_000 }),
     );
@@ -951,7 +924,7 @@ describe("MCP search_tracks — the shared Spotify-token guard", () => {
     await callTool("search_tracks", { query: "amen break" });
 
     expect(assertRateLimitMock).toHaveBeenCalledTimes(2);
-    // The second call is served from the shared recent-query cache — the token is spent once.
+
     expect(searchTrackCandidatesMock).toHaveBeenCalledTimes(1);
   });
 

@@ -2,13 +2,11 @@ import { type Client } from "@libsql/client";
 
 import { getSetting } from "./settings";
 
-/** The health snapshot receipt cutover is dark unless the stored value is exactly `true`. */
 export const HEALTH_SNAPSHOT_RECEIPTS_ENABLED_KEY = "health_snapshot_receipts_enabled";
 
 export type HealthReceiptCutoverClient = Pick<Client, "execute">;
 export type HealthReceiptCutoverDisposition = "disabled" | "enabled" | "unavailable";
 
-/** Distinguish an absent/default-off flag from a failed read before choosing a write path. */
 export async function getHealthSnapshotReceiptCutoverDisposition(): Promise<HealthReceiptCutoverDisposition> {
   try {
     return (await getSetting(HEALTH_SNAPSHOT_RECEIPTS_ENABLED_KEY)) === "true"
@@ -19,19 +17,16 @@ export async function getHealthSnapshotReceiptCutoverDisposition(): Promise<Heal
   }
 }
 
-/** A convenience boolean for callers that do not choose a write path from an unreadable flag. */
 export async function isHealthSnapshotReceiptCutoverEnabled(): Promise<boolean> {
   return (await getHealthSnapshotReceiptCutoverDisposition()) === "enabled";
 }
 
-/** Client-injected form for reconciliation and real-libSQL compatibility tests. */
 export async function isHealthSnapshotReceiptCutoverEnabledFor(
   client: HealthReceiptCutoverClient,
 ): Promise<boolean> {
   return (await getHealthSnapshotReceiptCutoverDispositionFor(client)) === "enabled";
 }
 
-/** Client-injected tri-state read used where a read failure must never choose the legacy writer. */
 export async function getHealthSnapshotReceiptCutoverDispositionFor(
   client: HealthReceiptCutoverClient,
 ): Promise<HealthReceiptCutoverDisposition> {

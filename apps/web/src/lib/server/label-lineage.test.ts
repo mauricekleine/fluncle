@@ -1,10 +1,3 @@
-// The label-lineage resolve sweep (RFC label-lineage-remixer U1), proven against the REAL migrated
-// schema on an in-memory libSQL engine (the labels.test.ts harness): `getDb` is mocked to hand back
-// a fresh `:memory:` client with every generated migration applied, so the REAL `label-lineage.ts`
-// SQL runs against the REAL schema — which also means a placeholder/arg MISMATCH throws for real
-// (the arity guard, stronger than a mock could give; the recording-wrapper test below pins it
-// explicitly too). The MusicBrainz client (`mbFetch`) is mocked, so no test hits the network.
-
 import { type Client } from "@libsql/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -29,8 +22,6 @@ import { resolveLabelLineage } from "./label-lineage";
 
 let db: Client;
 
-// Records every {sql, args} the sweep issues, so one test can pin placeholder-count == arg-count
-// across a full wet pass (the recording-mbids.test.ts arity guard, applied to real execution).
 const executeCalls: Array<{ argc: number; sql: string }> = [];
 
 async function seedLabel(opts: {
@@ -68,12 +59,10 @@ async function labelRow(slug: string): Promise<Record<string, unknown> | undefin
   return result.rows[0] as Record<string, unknown> | undefined;
 }
 
-/** A MusicBrainz label lookup response for one label (life-span + area + backward parent rels). */
 function lineageResponse(opts: {
   begin?: string;
   areaName?: string;
-  // MusicBrainz sends `""` for a label it never had to disambiguate, so the tests below can
-  // reproduce BOTH shapes — a real comment and the empty string that must not be stored.
+
   disambiguation?: string;
   parentMbids?: Array<{ id: string; type?: string; direction?: string }>;
 }) {
@@ -95,8 +84,6 @@ function lineageResponse(opts: {
 beforeEach(async () => {
   db = await createIntegrationDb();
 
-  // Wrap execute so the arity guard test can inspect every statement the sweep runs (real SQL still
-  // executes underneath, so a mismatch also throws for real).
   executeCalls.length = 0;
   const original = db.execute.bind(db);
   db.execute = ((stmt: unknown) => {
@@ -153,8 +140,6 @@ describe("resolveLabelLineage", () => {
     expect(row?.["lineage_state"]).toBe("resolved");
   });
 
-  // The disambiguation comment is what answers "WHICH label is this?" on the `/admin/labels`
-  // ruling row, and it rides the SAME lookup the founding facts do — no extra vendor call.
   it("persists the MusicBrainz disambiguation comment alongside the founding facts", async () => {
     await seedLabel({ mbLabelId: "mb-helix", name: "Helix", slug: "helix" });
     mbFetch.mockResolvedValue(
@@ -181,7 +166,6 @@ describe("resolveLabelLineage", () => {
     expect((await labelRow("plain-imprint"))?.["disambiguation"]).toBeNull();
   });
 
-  // The whole write is `coalesce(column, ?)`, so a re-walk can never clobber a stored fact.
   it("never clobbers a disambiguation already on the row", async () => {
     await seedLabel({ mbLabelId: "mb-kept", name: "Kept", slug: "kept" });
     await db.execute({
@@ -208,7 +192,7 @@ describe("resolveLabelLineage", () => {
 
     expect(result.unmatchedParents).toBe(1);
     expect((await labelRow("child-label"))?.["parent_label_id"]).toBeNull();
-    // Never minted a label for the unmatched parent.
+
     expect(after.rows[0]?.["n"]).toBe(before.rows[0]?.["n"]);
   });
 
@@ -233,7 +217,7 @@ describe("resolveLabelLineage", () => {
 
   it("marks a label with no MusicBrainz identity as terminal none", async () => {
     await seedLabel({ name: "Unknown Bedroom Imprint", slug: "unknown-bedroom-imprint" });
-    mbFetch.mockResolvedValue({ data: { labels: [] }, rateLimited: false }); // search miss
+    mbFetch.mockResolvedValue({ data: { labels: [] }, rateLimited: false });
 
     const result = await resolveLabelLineage(10, false);
 
@@ -249,7 +233,7 @@ describe("resolveLabelLineage", () => {
 
     expect(result.rateLimited).toBe(true);
     expect(result.resolvedCount).toBe(0);
-    // Untouched — still pending, so the next tick retries it fresh.
+
     expect((await labelRow("throttled"))?.["lineage_state"]).toBe("pending");
   });
 
@@ -266,10 +250,6 @@ describe("resolveLabelLineage", () => {
   });
 
   it("pauses on the spent response budget with a resume cursor, leaving the unwalked tail unstamped", async () => {
-    // Three eligible labels with stored MBIDs (one mbFetch each). The Date.now spy jumps 70s per
-    // vendor call — past the 60s response budget after the FIRST label — modelling the shared
-    // MusicBrainz chain congested by another sweep. The pass must hand back what it finished plus
-    // a cursor, never run the client into its fetch timeout.
     await seedLabel({ mbLabelId: "mb-a", name: "Alpha", slug: "alpha" });
     await seedLabel({ mbLabelId: "mb-b", name: "Bravo", slug: "bravo" });
     await seedLabel({ mbLabelId: "mb-c", name: "Charlie", slug: "charlie" });
@@ -288,10 +268,9 @@ describe("resolveLabelLineage", () => {
 
       expect(result.resolved).toEqual(["alpha"]);
       expect(result.rateLimited).toBe(false);
-      // Resume right after the last handled label — the CLI's drain loop re-requests from here.
+
       expect(result.nextCursor).toBe("alpha");
 
-      // The paused tail carries NO attempt stamp, so the resumed request is not cooldown-blocked.
       for (const slug of ["bravo", "charlie"]) {
         const row = await labelRow(slug);
         expect(row?.["lineage_state"]).toBe("pending");
@@ -314,10 +293,6 @@ describe("resolveLabelLineage", () => {
   });
 });
 
-// THE ARITY GUARD (the recording-mbids.test.ts pattern): every statement the sweep issues must bind
-// exactly as many args as it declares placeholders. Real SQL execution already throws on a
-// mismatch, but this pins it explicitly across a full wet pass (strip + worklist + resolved + none
-// + failure writes). None of the sweep's SQL carries a literal '?', so the count is exact.
 describe("every statement binds exactly its placeholders", () => {
   it("holds across a full wet pass (resolved + unmatched + none + failure)", async () => {
     await seedLabel({
@@ -327,18 +302,18 @@ describe("every statement binds exactly its placeholders", () => {
       slug: "parent",
     });
     await seedLabel({ mbLabelId: "mb-a", name: "Alpha", slug: "alpha" });
-    await seedLabel({ name: "Bravo", slug: "bravo" }); // no MBID → search
+    await seedLabel({ name: "Bravo", slug: "bravo" });
     await seedLabel({ mbLabelId: "mb-c", name: "Charlie", slug: "charlie" });
 
     mbFetch.mockImplementation(async (url: string) => {
       if (url.startsWith("/label?query=")) {
-        return { data: { labels: [] }, rateLimited: false }; // Bravo misses → none
+        return { data: { labels: [] }, rateLimited: false };
       }
       if (url.includes("mb-a")) {
-        return lineageResponse({ begin: "2001", parentMbids: [{ id: "mb-p" }] }); // matched parent
+        return lineageResponse({ begin: "2001", parentMbids: [{ id: "mb-p" }] });
       }
       if (url.includes("mb-c")) {
-        return lineageResponse({ begin: "2002", parentMbids: [{ id: "mb-none" }] }); // unmatched
+        return lineageResponse({ begin: "2002", parentMbids: [{ id: "mb-none" }] });
       }
 
       return { data: {}, rateLimited: false };
