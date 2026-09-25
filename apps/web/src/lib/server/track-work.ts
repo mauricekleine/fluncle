@@ -1018,6 +1018,22 @@ export async function listTrackWork(options: {
 }
 
 /**
+ * Whether any queued embed item was captured more than a day ago — the pipeline watchdog's
+ * capacity signal. A boolean, never an id: the agent tier reads it. A queued row with no capture
+ * stamp carries no age, so it cannot make the answer true.
+ */
+export async function oldestQueuedEmbedCaptureOver24h(): Promise<boolean> {
+  const db = await getDb();
+  const cutoff = new Date(Date.now() - 24 * 60 * 60_000).toISOString();
+  const clause = kindClause("embed");
+  const old = await db.execute({
+    args: [...clause.args, cutoff],
+    sql: `select 1 from tracks t indexed by tracks_embed_queue_idx where ${clause.sql} and t.source_audio_captured_at < ? limit 1`,
+  });
+  return old.rows.length > 0;
+}
+
+/**
  * HOW BIG IS THE BACKLOG — the whole queue, not the page.
  *
  * `listTrackWork` is capped at 200 rows, so `tracks.length` from a page read answers "how many
@@ -1035,24 +1051,6 @@ export async function listTrackWork(options: {
  * the backlog rather than the archive; `capture`/`analyze` have no such index and their counts
  * scan, which is why nothing on a hot path asks for one.
  */
-export async function oldestQueuedEmbedCaptureOver24h(): Promise<boolean | null> {
-  const db = await getDb();
-  const cutoff = new Date(Date.now() - 24 * 60 * 60_000).toISOString();
-  const clause = kindClause("embed");
-  const old = await db.execute({
-    args: [...clause.args, cutoff],
-    sql: `select 1 from tracks t indexed by tracks_embed_queue_idx where ${clause.sql} and t.source_audio_captured_at < ? limit 1`,
-  });
-  if (old.rows.length > 0) {
-    return true;
-  }
-  const unknown = await db.execute({
-    args: clause.args,
-    sql: `select 1 from tracks t indexed by tracks_embed_queue_idx where ${clause.sql} and t.source_audio_captured_at is null limit 1`,
-  });
-  return unknown.rows.length > 0 ? null : false;
-}
-
 export async function countTrackWork(options: {
   /**
    * An ALREADY-computed capture budget state, threaded in so the caller that also needs the state

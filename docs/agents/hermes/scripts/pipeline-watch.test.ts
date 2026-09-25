@@ -17,7 +17,7 @@ function snapshot(
   options: Partial<PipelineSnapshot> = {},
 ): PipelineSnapshot {
   return {
-    budget: { closedReason: null, open: true, remainingBytes: 1, remainingTracks: 1 },
+    budget: { closedReason: null, open: true, remainingBytes: 1_000_000_000, remainingTracks: 800 },
     crawl: { frontier: 2000, storable: 100, unstorable: 100 },
     embedOldCapture: false,
     markers: {
@@ -54,14 +54,29 @@ function evaluate(
 }
 
 describe("real box journal summary replay", () => {
-  test("crawl's green zero-write label gate becomes a conversion stall", () => {
+  test("crawl's green zero-write window is blamed on the label gate that refused every find", () => {
     const markers = asMarkers(fixtures.crawlLabel).filter(
       ({ summary }) => summary.gateState === "active",
     );
     const verdict = evaluate("crawl", markers);
     expect(verdict.state).toBe("stalled");
-    expect(verdict.cause).toBe("conversion_fault");
+    expect(verdict.cause).toBe("label_gate");
     expect(verdict.output).toBe(0);
+  });
+
+  test("a sweep that names its own blocker is believed over the counters", () => {
+    const markers = asMarkers(fixtures.anchorGate).map((marker) => ({
+      ...marker,
+      summary: { ...marker.summary, blockedReason: "breaker_quota" },
+    }));
+    expect(evaluate("anchor", markers).cause).toBe("breaker_quota");
+  });
+
+  test("a budget with less than one file left is budget-bound even while it reads open", () => {
+    const verdict = evaluate("capture", asMarkers(fixtures.captureBudget), {
+      budget: { closedReason: null, open: true, remainingBytes: 4_000_000, remainingTracks: 800 },
+    });
+    expect(verdict.state).toBe("budget_closed");
   });
 
   test("an empty storable head against the measured frontier is a supply stall", () => {
@@ -248,6 +263,60 @@ describe("tripwire boundaries", () => {
       twice.alerts[0] as NonNullable<(typeof twice.alerts)[0]>,
       start + 28 * 60 * 60_000 + 15 * 60_000,
     );
+    expect(twice.next).toEqual({});
+  });
+});
+
+describe("paging policy", () => {
+  const verdict = (state: StageVerdict["state"]): StageVerdict => ({
+    backlog: 100,
+    cause: state === "degraded" ? "capacity_below_intake" : "measurement_unavailable",
+    message: "m",
+    output: 0,
+    stage: "embed",
+    state,
+    windowMs: 0,
+  });
+
+  test("embed capacity below intake is reported, never paged", () => {
+    const start = Date.parse("2026-09-25T00:00:00Z");
+    let state = {};
+    for (let tick = 0; tick < 200; tick += 1) {
+      const planned = planIncidents(state, [verdict("degraded")], start + tick * 15 * 60_000);
+      expect(planned.alerts).toEqual([]);
+      state = planned.next;
+    }
+  });
+
+  test("a measurement gap stays quiet for its first hour, then pages", () => {
+    const start = Date.parse("2026-09-25T00:00:00Z");
+    const early = planIncidents({}, [verdict("measurement_unavailable")], start);
+    expect(early.alerts).toEqual([]);
+    const later = planIncidents(
+      early.next,
+      [verdict("measurement_unavailable")],
+      start + 45 * 60_000,
+    );
+    expect(later.alerts).toEqual([]);
+    const due = planIncidents(
+      later.next,
+      [verdict("measurement_unavailable")],
+      start + 60 * 60_000,
+    );
+    expect(due.alerts.map((alert) => alert.type)).toEqual(["OPEN"]);
+  });
+
+  test("a gap that clears inside its grace never posts a recovery", () => {
+    const start = Date.parse("2026-09-25T00:00:00Z");
+    const gap = planIncidents({}, [verdict("measurement_unavailable")], start);
+    const healthy = {
+      ...verdict("measurement_unavailable"),
+      cause: "none",
+      state: "healthy" as const,
+    };
+    const once = planIncidents(gap.next, [healthy], start + 15 * 60_000);
+    const twice = planIncidents(once.next, [healthy], start + 30 * 60_000);
+    expect([...once.alerts, ...twice.alerts]).toEqual([]);
     expect(twice.next).toEqual({});
   });
 });

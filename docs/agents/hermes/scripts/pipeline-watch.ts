@@ -44,6 +44,8 @@ const JOBS: Record<Stage, string> = {
   "isrc-recovery": "fluncle-isrc-recovery",
 };
 
+export const MEASUREMENT_GAP_GRACE_MS = 60 * 60_000;
+
 type Incident = { healthyChecks: number; openedAt: number; sentAt: number[] };
 export type IncidentState = Record<string, Incident>;
 export type Alert = { key: string; message: string; type: "OPEN" | "REMINDER" | "RECOVERED" };
@@ -57,10 +59,10 @@ export function planIncidents(
   const alerts: Alert[] = [];
   const active = new Set<string>();
   for (const verdict of verdicts) {
-    const incident =
-      verdict.state === "stalled" ||
-      verdict.state === "degraded" ||
-      verdict.state === "measurement_unavailable";
+    // `degraded` is reported, never paged: embed capacity below intake is drained by off-box
+    // batches. A measurement gap pages only once it has lasted an hour, so the partial window
+    // after an image swap stays quiet.
+    const incident = verdict.state === "stalled" || verdict.state === "measurement_unavailable";
     const key = `${verdict.stage}:${verdict.cause}`;
     if (incident) {
       active.add(key);
@@ -68,13 +70,15 @@ export function planIncidents(
       prior.healthyChecks = 0;
       next[key] = prior;
       const age = nowMs - prior.openedAt;
+      const quietFor = verdict.state === "measurement_unavailable" ? MEASUREMENT_GAP_GRACE_MS : 0;
       const due =
-        prior.sentAt.length === 0 ||
-        [60 * 60_000, 4 * 60 * 60_000].some(
-          (threshold) =>
-            age >= threshold && !prior.sentAt.some((sent) => sent - prior.openedAt >= threshold),
-        ) ||
-        (age >= 24 * 60 * 60_000 && nowMs - (prior.sentAt.at(-1) ?? 0) >= 24 * 60 * 60_000);
+        age >= quietFor &&
+        (prior.sentAt.length === 0 ||
+          [60 * 60_000, 4 * 60 * 60_000].some(
+            (threshold) =>
+              age >= threshold && !prior.sentAt.some((sent) => sent - prior.openedAt >= threshold),
+          ) ||
+          (age >= 24 * 60 * 60_000 && nowMs - (prior.sentAt.at(-1) ?? 0) >= 24 * 60 * 60_000));
       if (due) {
         alerts.push({
           key,
@@ -94,6 +98,11 @@ export function planIncidents(
       continue;
     }
     prior.healthyChecks += 1;
+    if (prior.healthyChecks >= 2 && prior.sentAt.length === 0) {
+      // Never announced (a measurement gap that cleared inside its grace), so nothing to recover.
+      delete next[key];
+      continue;
+    }
     if (prior.healthyChecks >= 2) {
       alerts.push({
         key,
@@ -313,7 +322,9 @@ async function main(): Promise<void> {
     JSON.stringify({
       checked: verdicts.length,
       deliveryFailures,
-      errors: verdicts.filter((verdict) => verdict.state === "measurement_unavailable").length,
+      errors: deliveryFailures,
+      measurementGaps: verdicts.filter((verdict) => verdict.state === "measurement_unavailable")
+        .length,
       ok: true,
       produced: Object.keys(next).length,
       stages,

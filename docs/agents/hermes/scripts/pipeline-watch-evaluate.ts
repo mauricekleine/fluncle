@@ -50,6 +50,10 @@ export const PIPELINE_SLOS = {
   embed: { capacityWindowMs: 24 * HOUR, windowMs: 30 * MINUTE },
 } as const;
 
+// Below this many bytes left, the rolling capture budget cannot land another mean-size file
+// (~4.75 MiB measured), so capture is budget-bound even while the budget still reads open.
+export const BUDGET_EXHAUSTED_BYTES = 16 * 1024 * 1024;
+
 const CADENCE: Record<Stage, number> = {
   analyze: 5 * MINUTE,
   anchor: HOUR,
@@ -101,22 +105,54 @@ function result(
   };
 }
 
+const BLOCKED_REASONS = new Set([
+  "database_admission",
+  "due_work_repair_pending",
+  "label_gate",
+  "no_storable_work",
+  "mb_throttled",
+  "breaker_quota",
+  "breaker_throttle",
+  "shared_meter",
+  "friday_window",
+]);
+
+function mostCommon(values: string[]): string | null {
+  const counts = new Map<string, number>();
+  for (const value of values) {
+    counts.set(value, (counts.get(value) ?? 0) + 1);
+  }
+  let best: string | null = null;
+  for (const [value, count] of counts) {
+    if (best === null || count > (counts.get(best) ?? 0)) {
+      best = value;
+    }
+  }
+  return best;
+}
+
+// A sweep that names its own blocker wins; otherwise the counters decide. A crawl window whose
+// every found candidate was refused by the label gate is a label-gate stall even when some of its
+// ticks also waited on the lane, because reopening the lane would store nothing.
 function attributedCause(markers: Marker[]): string {
   const summaries = markers.map((marker) => marker.summary);
-  if (
-    summaries.some(
-      (summary) =>
-        summary.reason === "database_admission" ||
-        (typeof summary.reason === "string" && summary.reason.includes("admission")),
-    )
-  ) {
-    return "admission_lane_closed";
+  const named = mostCommon(
+    summaries.flatMap((summary) =>
+      typeof summary.blockedReason === "string" && BLOCKED_REASONS.has(summary.blockedReason)
+        ? [summary.blockedReason]
+        : [],
+    ),
+  );
+  if (named) {
+    return named;
   }
-  if (summaries.some((summary) => summary.reason === "due_work_repair_pending")) {
-    return "due_work_repair_pending";
-  }
-  if (summaries.some((summary) => summary.gateState === "paused")) {
-    return "admission_lane_closed";
+  const found = summaries.reduce((sum, summary) => sum + Number(summary.tracksFound ?? 0), 0);
+  const gated = summaries.reduce(
+    (sum, summary) => sum + Number(summary.tracksSkippedLabelGate ?? 0),
+    0,
+  );
+  if (found > 0 && gated >= found) {
+    return "label_gate";
   }
   if (
     summaries.some(
@@ -129,6 +165,19 @@ function attributedCause(markers: Marker[]): string {
     )
   ) {
     return "vendor_gate";
+  }
+  if (summaries.some((summary) => summary.reason === "due_work_repair_pending")) {
+    return "due_work_repair_pending";
+  }
+  if (
+    summaries.some(
+      (summary) =>
+        summary.reason === "database_admission" ||
+        (typeof summary.reason === "string" && summary.reason.includes("admission")) ||
+        summary.gateState === "paused",
+    )
+  ) {
+    return "admission_lane_closed";
   }
   if (
     summaries.some(
@@ -282,7 +331,11 @@ function evaluateStage(snapshot: PipelineSnapshot, stage: Stage, now: Date): Sta
       "No storable releases queued; review label decisions.",
     );
   }
-  if (stage === "capture" && snapshot.budget?.open === false) {
+  if (
+    stage === "capture" &&
+    (snapshot.budget?.open === false ||
+      (snapshot.budget?.remainingBytes ?? Infinity) < BUDGET_EXHAUSTED_BYTES)
+  ) {
     return result(
       stage,
       "budget_closed",
@@ -422,7 +475,7 @@ function evaluateStage(snapshot: PipelineSnapshot, stage: Stage, now: Date): Sta
         output,
         backlog,
         PIPELINE_SLOS.embed.capacityWindowMs,
-        "Increase embed capacity or reduce intake.",
+        "Embedding is behind capture; run an off-box embed batch (M5 or RunPod) to drain it.",
       );
     }
   }

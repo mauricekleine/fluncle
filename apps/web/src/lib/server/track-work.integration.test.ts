@@ -207,7 +207,7 @@ describe("listTrackWork — the catalogue is workable", () => {
     const trackId = "cat0000000000000000000";
     await seedCatalogueTrack(db, { trackId });
     await withAudio(trackId);
-    expect(await oldestQueuedEmbedCaptureOver24h()).toBeNull();
+    expect(await oldestQueuedEmbedCaptureOver24h()).toBe(false);
     await db.execute({
       args: [new Date(Date.now() - 60 * 60_000).toISOString(), trackId],
       sql: "update tracks set source_audio_captured_at = ? where track_id = ?",

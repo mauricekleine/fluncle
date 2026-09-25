@@ -807,7 +807,7 @@ export const listTrackWork = oc
 
       debtPending: z.boolean().optional(),
       ok: z.literal(true),
-      oldestQueuedCaptureOver24h: z.boolean().nullable().optional(),
+      oldestQueuedCaptureOver24h: z.boolean().optional(),
 
       queued: z.number().optional(),
       tracks: z.array(TrackWorkItemSchema),
