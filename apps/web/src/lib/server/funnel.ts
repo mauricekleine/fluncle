@@ -321,8 +321,7 @@ function onMirrors(fragment: string): string {
 }
 
 /**
- * The SEVEN stage `SUM(CASE)` columns — the shared select fragment so the standalone reference scan
- * (`runStageScan`) and the folded pass (`runFoldedFunnelScan`) can only ever agree. `rec_eligible`
+ * The seven stage `SUM(CASE)` columns in the folded pass (`runFoldedFunnelScan`). `rec_eligible`
  * folds in the SHARED `REC_ELIGIBLE_WHERE` (lib/catalogue-eligibility.ts): the funnel's eligibility
  * count is, by construction, the same gate `listRecommendations` scans by. Aliased `t` = `tracks`,
  * `f` = the LEFT-joined `findings`, `emb` = the LEFT-joined `track_embeddings`. Carries NO bind
@@ -340,8 +339,7 @@ const STAGE_SCAN_SELECT = `sum(case when f.track_id is null then 1 else 0 end) a
  * The anchor RE-ASK BENCH predicate — the exact COMPLEMENT of `kindClause("anchor")`'s window guard:
  * the same base guards (un-anchored, measurable length, not dismissed, not a known duplicate), and
  * attempted INSIDE the re-ask window rather than before it. A shared fragment (a `?` for the window
- * cutoff) so the standalone bench count (`countAnchorBackoff`) and the folded scan's backoff column
- * can only ever agree. Aliased `t` = `tracks`, `f` = the LEFT-joined `findings`.
+ * cutoff) for the folded scan's backoff column. Aliased `t` = `tracks`, `f` = the LEFT-joined `findings`.
  *
  * It complements the WINDOW guard specifically, not the whole worklist: a row RETIRED by the retry cap
  * or the unanchorable-credit filter (track-work.ts) still counts here for as long as its last stamp
@@ -391,51 +389,6 @@ function anchorSplitFromRow(row: AnchorSplitRow | undefined): AnchorSplit {
 }
 
 /**
- * THE STAGE SCAN, standalone — one conditional aggregate over `tracks left join findings`, no where.
- * Kept as the pinned REFERENCE the fold-equivalence test compares against (the pattern
- * `computeCatalogueCounts` uses for its drift guard); `gatherSnapshotReads` reads the folded pass, not
- * this. Shares `STAGE_SCAN_SELECT` with the fold, so the two produce identical numbers by construction.
- */
-export async function runStageScan(): Promise<StageScanCounts> {
-  const db = await getDb();
-  const result = await db.execute(`select ${STAGE_SCAN_SELECT}
-          from tracks t
-          left join findings f on f.track_id = t.track_id
-          left join track_embeddings emb on emb.track_id = t.track_id`);
-
-  return mapStageRow(typedRow<StageRow>(result.rows));
-}
-
-/**
- * The drainable anchor worklist, partitioned ISRC × embedding in ONE pass — the pinned REFERENCE the
- * fold-equivalence test compares against (`gatherSnapshotReads` reads the folded pass). Reuses
- * `kindClause("anchor")` verbatim so the counts ARE the sweep's own worklist (docs/catalogue-crawler.md
- * § the anchor) — never a `union all` over a CTE (trap #4); four conditional sums over one scan.
- * `isrc is not null` gives the two verification paths (the persisted `anchorQueueIsrc/NoIsrc`);
- * `emb.track_id is not null` gives the ready/awaiting split (the live-only refinement). Both
- * partitions total the same whole queue by construction. The satellite is joined for its KEY, never
- * its `embedding_blob` — no vector crosses the wire.
- */
-export async function countAnchorQueueSplit(): Promise<AnchorSplit> {
-  const anchor = kindClause("anchor");
-  const db = await getDb();
-  const result = await db.execute({
-    args: anchor.args,
-    sql: `select
-            sum(case when t.isrc is not null and emb.track_id is not null then 1 else 0 end) as isrc_ready,
-            sum(case when t.isrc is not null and emb.track_id is null then 1 else 0 end) as isrc_awaiting,
-            sum(case when t.isrc is null and emb.track_id is not null then 1 else 0 end) as no_isrc_ready,
-            sum(case when t.isrc is null and emb.track_id is null then 1 else 0 end) as no_isrc_awaiting
-          from tracks t
-          left join findings f on f.track_id = t.track_id
-          left join track_embeddings emb on emb.track_id = t.track_id
-          where ${anchor.sql}`,
-  });
-
-  return anchorSplitFromRow(typedRow<AnchorSplitRow>(result.rows));
-}
-
-/**
  * THE ONE PASS, as a statement — the stage 7-col aggregate, the anchor-split 4-col, and the
  * anchor-backoff count folded into a SINGLE conditional-aggregate scan of `tracks`
  * (docs/db-scale-backlog Wave 1 #5, covered by Wave 2 #7). Each query's
@@ -460,9 +413,7 @@ export async function countAnchorQueueSplit(): Promise<AnchorSplit> {
  * and rewriting it — rather than hand-writing the mirror form — is what keeps this the SAME
  * predicate as the sweeps, not a copy.
  *
- * Exported for the fold-equivalence test, which pins it to the three standalone reference queries —
- * and so, since those still run the join-and-blob spelling, proves the two mirrors agree with the
- * predicates they mirror.
+ * Exported so the integration test can inspect the exact query plan of the production scan.
  */
 export function foldedFunnelScanStatement(): { args: string[]; sql: string } {
   const anchor = kindClause("anchor");
@@ -697,27 +648,6 @@ async function gatherLiveFunnel(): Promise<LiveFunnelData> {
  */
 export async function computeCatalogueSnapshotCounts(): Promise<CatalogueSnapshotCounts> {
   return (await gatherSnapshotReads()).counts;
-}
-
-/**
- * The anchor RE-ASK BENCH — rows that WOULD be anchorable but were attempted inside the re-ask
- * window, so the sweep is sitting them out (not re-billing them) for now. The pinned REFERENCE the
- * fold-equivalence test compares against (`gatherSnapshotReads` reads the folded pass). It counts the
- * shared `ANCHOR_BACKOFF_WHERE` fragment — the exact COMPLEMENT of `kindClause("anchor")`'s window
- * guard — on the same `ANCHOR_REASK_AFTER_DAYS` clock as the queue, so bench and queue can only ever
- * agree.
- */
-export async function countAnchorBackoff(): Promise<number> {
-  const db = await getDb();
-  const result = await db.execute({
-    args: [anchorBackoffCutoff()],
-    sql: `select count(*) as n
-          from tracks t
-          left join findings f on f.track_id = t.track_id
-          where ${ANCHOR_BACKOFF_WHERE}`,
-  });
-
-  return Number(typedRows<{ n: number }>(result.rows)[0]?.n ?? 0);
 }
 
 /** The full ordered arg list for one snapshot upsert — the counts in a fixed column order. */

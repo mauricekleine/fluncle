@@ -1,20 +1,14 @@
 // THE SPOTIFY SHARED-APP CALL METER (the Frontier-pacing keystone).
 //
-// ── THE FAILURE REGIME THAT MATTERS ──────────────────────────────────────────────────────────
-// Spotify rate-limits per-APP over a rolling ~30s window, and every subsystem shares the ONE app:
-// the new-user playlist mint, the Frontier refresh, publish, /reach, search, the crawler's anchor
-// sweep (the D8 tap) — all draw on the same budget with NO cross-path coordination. Today the only
-// governor is `spotifyFetch`'s per-call 429 backoff (./spotify.ts): each caller waits out its own
-// `Retry-After` in isolation. That is a backstop, not a plan — a bulk sweep can spend the whole
-// window a millisecond before a user's mint arrives, and the mint hard-fails a 429 in the user's
-// face. This meter is the missing shared view: a single fixed-window counter every Spotify caller
-// RECORDS into and CONSULTS before a call, so a background drain leaves headroom for the live
-// user-facing paths instead of colliding with them blind.
+// ── THE SHARED BUDGET ────────────────────────────────────────────────────────────────────────
+// Spotify rate-limits per app over a rolling ~30s window. Playlist minting, Frontier refreshes,
+// Spotify writes, and anchor searches consult one fixed-window meter in settings and record their
+// calls there. A spent window pauses paced work. Other Spotify paths still rely on `spotifyFetch`'s
+// per-call 429 backoff (./spotify.ts); it also remains the backstop for metered paths.
 //
 // It is the fixed-window CALL-METER half of the Apple pattern (./apple-breaker.ts), ported for
-// Spotify. Apple's module also carries an AUTH circuit-breaker (a suspended developer token that
-// must not be retried harder); Spotify has no such regime — its failure is 429 throttling, not
-// token suspension — so only the meter comes across. The two read as siblings on purpose.
+// Spotify. Apple's module also carries an auth circuit breaker for a suspended developer token;
+// Spotify's throttle is a 429, so this module only carries the call meter.
 //
 // It is a FIXED-WINDOW counter (a single KV bucket that resets when its window elapses), not a
 // per-call timestamp log: the `settings` KV holds flags, not a table, and a fixed window is the
@@ -26,9 +20,6 @@
 // store — and takes `now` as an injected arg (the apple-breaker precedent) so windows are
 // deterministic and the tests pin them.
 //
-// SHIPS INERT: nothing consults this yet. Wiring it into the mint + the Friday refresh + the tap is
-// the follow-up slice. This slice is the isolated, immediately-mergeable primitive.
-
 import { getSetting, setSetting } from "./settings";
 
 // ── Keys ──────────────────────────────────────────────────────────────────────────────────────
@@ -128,35 +119,11 @@ export async function readSpotifyCallCount(now: number = Date.now()): Promise<nu
  * hiccup — the per-call 429 backoff in `spotifyFetch` is the safety net, so on a store fault we
  * fall through to it rather than darkening every Spotify path.
  */
-export async function areSpotifyCallsAllowed(now: number = Date.now()): Promise<boolean> {
+export async function isSpotifyCallBudgetAvailable(now: number = Date.now()): Promise<boolean> {
   try {
     return (await readSpotifyCallWindow(now)).count < SPOTIFY_CALL_WINDOW_MAX;
   } catch {
     return true;
-  }
-}
-
-/**
- * The pre-batch alias of {@link areSpotifyCallsAllowed} — the sibling of Apple's
- * `isAppleCallBudgetAvailable`. Same fail-open budget check, named for the caller that consults it
- * before draining a batch. Kept parallel so the two meters read as siblings.
- */
-export async function isSpotifyCallBudgetAvailable(now: number = Date.now()): Promise<boolean> {
-  return areSpotifyCallsAllowed(now);
-}
-
-/**
- * Ms until the current window's budget frees up — a retry hint for a deferred caller that found the
- * budget spent. 0 when budget is available now (window fresh or not full). FAIL-OPEN: a KV throw
- * returns 0 (retry now; the 429 backoff covers a real throttle).
- */
-export async function spotifyBudgetResetMs(now: number = Date.now()): Promise<number> {
-  try {
-    const { count, msUntilReset } = await readSpotifyCallWindow(now);
-
-    return count < SPOTIFY_CALL_WINDOW_MAX ? 0 : msUntilReset;
-  } catch {
-    return 0;
   }
 }
 

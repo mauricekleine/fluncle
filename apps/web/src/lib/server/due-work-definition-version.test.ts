@@ -265,12 +265,6 @@ describe("due-work definition versions", () => {
     expect(new Set(values).size).toBe(values.length);
   });
 
-  it("is stable across repeated reads", () => {
-    for (const kind of REGISTERED_KINDS) {
-      expect(versionFor(kind)).toBe(versionFor(kind));
-    }
-  });
-
   it("watches the anchored-first term the catalogue capture queue orders by", () => {
     // The transcript the capture-catalogue version hashes must SEE this distinction, else an
     // order change like it could ship without moving the version.

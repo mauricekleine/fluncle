@@ -75,35 +75,21 @@ describe("the call meter", () => {
   });
 
   it("is allowed at max-1 and denied at the window max", async () => {
-    const { areSpotifyCallsAllowed, recordSpotifyCall, SPOTIFY_CALL_WINDOW_MAX } =
-      await import("./spotify-budget");
-    const now = 100_000;
-
-    for (let i = 0; i < SPOTIFY_CALL_WINDOW_MAX; i += 1) {
-      expect(await areSpotifyCallsAllowed(now), `allowed at ${i} (below max)`).toBe(true);
-      await recordSpotifyCall(now);
-    }
-
-    expect(await areSpotifyCallsAllowed(now), "denied at the max").toBe(false);
-  });
-
-  it("isSpotifyCallBudgetAvailable mirrors areSpotifyCallsAllowed", async () => {
     const { isSpotifyCallBudgetAvailable, recordSpotifyCall, SPOTIFY_CALL_WINDOW_MAX } =
       await import("./spotify-budget");
     const now = 100_000;
 
-    expect(await isSpotifyCallBudgetAvailable(now)).toBe(true);
-
     for (let i = 0; i < SPOTIFY_CALL_WINDOW_MAX; i += 1) {
+      expect(await isSpotifyCallBudgetAvailable(now), `allowed at ${i} (below max)`).toBe(true);
       await recordSpotifyCall(now);
     }
 
-    expect(await isSpotifyCallBudgetAvailable(now)).toBe(false);
+    expect(await isSpotifyCallBudgetAvailable(now), "denied at the max").toBe(false);
   });
 
   it("frees the budget when the window rolls over", async () => {
     const {
-      areSpotifyCallsAllowed,
+      isSpotifyCallBudgetAvailable,
       recordSpotifyCall,
       SPOTIFY_CALL_WINDOW_MS,
       SPOTIFY_CALL_WINDOW_MAX,
@@ -113,57 +99,19 @@ describe("the call meter", () => {
     for (let i = 0; i < SPOTIFY_CALL_WINDOW_MAX; i += 1) {
       await recordSpotifyCall(t0);
     }
-    expect(await areSpotifyCallsAllowed(t0)).toBe(false);
+    expect(await isSpotifyCallBudgetAvailable(t0)).toBe(false);
 
     // The next window is fresh.
-    expect(await areSpotifyCallsAllowed(t0 + SPOTIFY_CALL_WINDOW_MS)).toBe(true);
-  });
-});
-
-describe("spotifyBudgetResetMs (the retry hint)", () => {
-  it("is 0 while budget remains and the reset delta once spent", async () => {
-    const {
-      recordSpotifyCall,
-      spotifyBudgetResetMs,
-      SPOTIFY_CALL_WINDOW_MS,
-      SPOTIFY_CALL_WINDOW_MAX,
-    } = await import("./spotify-budget");
-    const t0 = 100_000;
-
-    await recordSpotifyCall(t0);
-    expect(await spotifyBudgetResetMs(t0 + 5_000), "budget still available → 0").toBe(0);
-
-    for (let i = 1; i < SPOTIFY_CALL_WINDOW_MAX; i += 1) {
-      await recordSpotifyCall(t0);
-    }
-
-    // Spent — the hint is the time left in the window opened at t0.
-    expect(await spotifyBudgetResetMs(t0 + 5_000)).toBe(SPOTIFY_CALL_WINDOW_MS - 5_000);
+    expect(await isSpotifyCallBudgetAvailable(t0 + SPOTIFY_CALL_WINDOW_MS)).toBe(true);
   });
 });
 
 describe("fail-open on a KV fault", () => {
-  it("areSpotifyCallsAllowed returns true when the settings read throws", async () => {
-    const { areSpotifyCallsAllowed } = await import("./spotify-budget");
-
-    throwOnGet = true;
-
-    expect(await areSpotifyCallsAllowed(100_000)).toBe(true);
-  });
-
   it("isSpotifyCallBudgetAvailable returns true when the settings read throws", async () => {
     const { isSpotifyCallBudgetAvailable } = await import("./spotify-budget");
 
     throwOnGet = true;
 
     expect(await isSpotifyCallBudgetAvailable(100_000)).toBe(true);
-  });
-
-  it("spotifyBudgetResetMs returns 0 (retry now) when the settings read throws", async () => {
-    const { spotifyBudgetResetMs } = await import("./spotify-budget");
-
-    throwOnGet = true;
-
-    expect(await spotifyBudgetResetMs(100_000)).toBe(0);
   });
 });

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   __setRateLimitForTests,
-  discogsLabelImageFromEvidence,
+  verifyDiscogsLabelEvidence,
   discogsReleaseUrl,
   discogsResolveRelease,
   fetchDiscogsLabelImage,
@@ -121,23 +121,27 @@ describe("box-fetched Discogs evidence", () => {
       slug: "hospital",
     };
 
-    const accepted = discogsLabelImageFromEvidence(candidate);
-    expect(accepted?.mime).toBe("image/jpeg");
-    expect(accepted?.bytes.byteLength).toBe(6);
+    const accepted = verifyDiscogsLabelEvidence(candidate);
+    expect(accepted.kind).toBe("image");
+    if (accepted.kind !== "image") {
+      throw new Error("expected a verified label image");
+    }
+    expect(accepted.image.mime).toBe("image/jpeg");
+    expect(accepted.image.bytes.byteLength).toBe(6);
     expect(
-      discogsLabelImageFromEvidence({
+      verifyDiscogsLabelEvidence({
         ...candidate,
         image: { ...candidate.image, uri: "https://i.discogs.com/secondary.jpg" },
       }),
-    ).toBeUndefined();
+    ).toEqual({ kind: "invalid" });
     expect(
-      discogsLabelImageFromEvidence({
+      verifyDiscogsLabelEvidence({
         ...candidate,
         detail: { ...candidate.detail, id: 12 },
       }),
-    ).toBeUndefined();
+    ).toEqual({ kind: "invalid" });
     expect(
-      discogsLabelImageFromEvidence({
+      verifyDiscogsLabelEvidence({
         ...candidate,
         detail: {
           ...candidate.detail,
@@ -145,7 +149,7 @@ describe("box-fetched Discogs evidence", () => {
         },
         image: { ...candidate.image, uri: "https://attacker.example/logo.jpg" },
       }),
-    ).toBeUndefined();
+    ).toEqual({ kind: "invalid" });
   });
 
   // The URI allowlist checks a string the SAME caller supplies, so on its own it proves nothing
@@ -164,7 +168,7 @@ describe("box-fetched Discogs evidence", () => {
     };
 
     const withBytes = (bytesBase64: string, mime = "image/jpeg") =>
-      discogsLabelImageFromEvidence({
+      verifyDiscogsLabelEvidence({
         ...candidate,
         image: { ...candidate.image, bytesBase64, mime },
       });
@@ -176,28 +180,40 @@ describe("box-fetched Discogs evidence", () => {
         "PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciPjxzY3JpcHQ+YWxlcnQoMSk8L3NjcmlwdD48L3N2Zz4=",
         "image/svg+xml",
       ),
-    ).toBeUndefined();
+    ).toEqual({ kind: "invalid" });
     // …and relabelling that same SVG as a JPEG does not launder it.
     expect(
       withBytes(
         "PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciPjxzY3JpcHQ+YWxlcnQoMSk8L3NjcmlwdD48L3N2Zz4=",
       ),
-    ).toBeUndefined();
+    ).toEqual({ kind: "invalid" });
 
-    expect(withBytes("AQID")).toBeUndefined();
-    expect(withBytes("")).toBeUndefined();
+    expect(withBytes("AQID")).toEqual({ kind: "invalid" });
+    expect(withBytes("")).toEqual({ kind: "invalid" });
 
     // RIFF alone is a container family; a WAV wearing an image MIME is not a WEBP.
-    expect(withBytes("UklGRiQAAABXQVZF", "image/webp")).toBeUndefined();
-    expect(withBytes("UklGRiQAAABXRUJQ", "image/webp")?.mime).toBe("image/webp");
+    expect(withBytes("UklGRiQAAABXQVZF", "image/webp")).toEqual({ kind: "invalid" });
+    expect(withBytes("UklGRiQAAABXRUJQ", "image/webp")).toMatchObject({
+      image: { mime: "image/webp" },
+      kind: "image",
+    });
 
-    expect(withBytes("iVBORw0KGgoAAA==", "image/png")?.mime).toBe("image/png");
-    expect(withBytes("R0lGODlh", "image/gif")?.mime).toBe("image/gif");
+    expect(withBytes("iVBORw0KGgoAAA==", "image/png")).toMatchObject({
+      image: { mime: "image/png" },
+      kind: "image",
+    });
+    expect(withBytes("R0lGODlh", "image/gif")).toMatchObject({
+      image: { mime: "image/gif" },
+      kind: "image",
+    });
 
     // A benign header/content spelling mismatch is defused by storing the sniffed type rather
     // than by failing the label closed — a strict equality here would resolve nothing at all the
     // first time a vendor spelled it `image/jpg`.
-    expect(withBytes("iVBORw0KGgoAAA==", "image/jpg")?.mime).toBe("image/png");
+    expect(withBytes("iVBORw0KGgoAAA==", "image/jpg")).toMatchObject({
+      image: { mime: "image/png" },
+      kind: "image",
+    });
   });
 });
 
