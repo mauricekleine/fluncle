@@ -120,7 +120,7 @@ export async function createBroadcast(params: {
   if (!from) {
     throw new ApiError(
       "send_misconfigured",
-      "RESEND_FROM is not configured — set the verified sender before sending an edition.",
+      "RESEND_FROM is not configured: set the verified sender before sending an edition.",
       500,
     );
   }
@@ -215,7 +215,7 @@ async function sendTransactionalEmail(params: {
   if (!from) {
     throw new ApiError(
       "send_misconfigured",
-      "RESEND_FROM is not configured — set the verified sender before sending.",
+      "RESEND_FROM is not configured: set the verified sender before sending.",
       500,
     );
   }

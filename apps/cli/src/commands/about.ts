@@ -47,7 +47,7 @@ export const linkGroups: LinkGroup[] = [
     heading: "For the nerds",
     links: [
       { label: "The Galaxy (game)", url: "https://galaxy.fluncle.com" },
-      { label: "SSH (this terminal)", url: "ssh rave.fluncle.com" },
+      { label: "SSH (the rave terminal)", url: "ssh rave.fluncle.com" },
       { label: "Source", url: "https://github.com/mauricekleine/fluncle" },
     ],
   },

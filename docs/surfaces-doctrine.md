@@ -181,7 +181,7 @@ The SSH Log ID pre-filter in `apps/ssh/main.go` mirrors the canonical grammar in
 | `cli.galaxies`       | `fluncle galaxies`       | wander the sonic galaxies, the browse-by-feel lens (a bare `slug` opens one)                                      | secondary |
 | `cli.search`         | `fluncle search`         | search the archive by coordinate, track, artist, label, or album (four-tier resolver)                             | secondary |
 | `cli.open`           | `fluncle open`           | pick a track, open it in Spotify                                                                                  | secondary |
-| `cli.random`         | `fluncle random`         | the archive throws one back                                                                                       | secondary |
+| `cli.random`         | `fluncle random`         | the archive throws a banger back                                                                                  | secondary |
 | `cli.subscribe`      | `fluncle subscribe`      | subscribe to the Friday newsletter                                                                                | secondary |
 | `cli.submit`         | `fluncle submit`         | send a track for review                                                                                           | secondary |
 | `cli.login`          | `fluncle login`          | link this device to your Fluncle account, so your Galaxy progress syncs (the RFC 8628 flow via `/device`)         | secondary |
