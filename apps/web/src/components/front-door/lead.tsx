@@ -14,6 +14,13 @@
 // then BPM, then key — and the release year on its metadata line beside the imprint, wherever the
 // data exists. A missing chip is a data gap upstream, never a layout choice.
 //
+// ── IT PLAYS WHERE IT SITS ─────────────────────────────────────────────────────────────────
+// The lead's primary action is its preview, and that play control is the band's ONE gold (The One
+// Sun Rule): the coordinate above steps back to cream so the light has one place to land. It plays
+// the lead and then the findings band beneath it, one list to the player, and nothing on the page
+// moves because it did: the scroll is never gated (PRODUCT.md "The front door"). "Read the log
+// entry" stays beside it as the way into the entry itself.
+//
 // ── LCP ──────────────────────────────────────────────────────────────────────────────────────
 // This cover is the front door's largest contentful element. It fetches EAGERLY at high priority
 // (`priority`, which `TrackArtwork` turns into `loading="eager" fetchpriority="high"`), and the route
@@ -28,9 +35,11 @@ import { Link } from "@tanstack/react-router";
 import { type ReactNode } from "react";
 import { type TrackListItem } from "@fluncle/contracts";
 import { GraphLink } from "@/components/graph-link";
+import { PlayButton, PlayCover } from "@/components/player/playable-list";
 import { TrackArtwork } from "@/components/track-artwork";
 import { TrackChips } from "@/components/track-row";
 import { formatDateLong } from "@/lib/format";
+import { discoveryQueueTrack, findingToDiscoveryTrack } from "@/lib/discovery-tracks";
 import { artistTitleLine } from "@/lib/log-prose";
 import { albumCoverAtSize } from "@/lib/media";
 
@@ -40,15 +49,28 @@ const LEAD_COVER_SIZE = "large" as const;
 export function FrontDoorLead({ lead }: { lead: TrackListItem }): ReactNode {
   const line = artistTitleLine(lead);
   const releaseYear = lead.releaseDate?.slice(0, 4);
+  const playable = findingToDiscoveryTrack(lead);
 
   return (
     <article className="fd-lead">
-      <TrackArtwork
-        alt=""
-        className="fd-lead-cover"
-        priority
-        src={albumCoverAtSize(lead.albumImageUrl, LEAD_COVER_SIZE)}
-      />
+      {/* The cover plays too: the biggest thing on the band is the sound, as on every row. */}
+      {playable.previewable ? (
+        <PlayCover className="fd-lead-cover-play" lit track={discoveryQueueTrack(playable)}>
+          <TrackArtwork
+            alt=""
+            className="fd-lead-cover"
+            priority
+            src={albumCoverAtSize(lead.albumImageUrl, LEAD_COVER_SIZE)}
+          />
+        </PlayCover>
+      ) : (
+        <TrackArtwork
+          alt=""
+          className="fd-lead-cover"
+          priority
+          src={albumCoverAtSize(lead.albumImageUrl, LEAD_COVER_SIZE)}
+        />
+      )}
       <div className="fd-lead-body">
         {lead.logId ? <p className="fd-lead-coordinate">{lead.logId}</p> : undefined}
         <p className="fd-lead-line">{line}</p>
@@ -78,28 +100,37 @@ export function FrontDoorLead({ lead }: { lead: TrackListItem }): ReactNode {
         <p className="fd-lead-found">
           Found <time dateTime={lead.addedAt}>{formatDateLong(lead.addedAt)}</time>
         </p>
-        {lead.logId ? (
-          <Link
-            aria-label={`Read the log entry for ${line}`}
-            className="fd-lead-open"
-            params={{ logId: lead.logId }}
-            to="/log/$logId"
-          >
-            Read the log entry
-          </Link>
-        ) : (
-          // A finding with no coordinate has no log page to open. It still leads honestly: the
-          // listen link is the only destination that exists, so that is the one offered.
-          <a
-            aria-label={`Listen to ${line} on Spotify`}
-            className="fd-lead-open"
-            href={lead.spotifyUrl}
-            rel="noreferrer"
-            target="_blank"
-          >
-            Listen on Spotify
-          </a>
-        )}
+        <div className="fd-lead-actions">
+          {playable.previewable ? (
+            <PlayButton
+              className="fd-lead-play"
+              labels={{ pause: "Pause the preview", play: "Play the preview" }}
+              track={discoveryQueueTrack(playable)}
+            />
+          ) : undefined}
+          {lead.logId ? (
+            <Link
+              aria-label={`Read the log entry for ${line}`}
+              className="fd-lead-open"
+              params={{ logId: lead.logId }}
+              to="/log/$logId"
+            >
+              Read the log entry
+            </Link>
+          ) : (
+            // A finding with no coordinate has no log page to open. It still leads honestly: the
+            // listen link is the only destination that exists, so that is the one offered.
+            <a
+              aria-label={`Listen to ${line} on Spotify`}
+              className="fd-lead-open"
+              href={lead.spotifyUrl}
+              rel="noreferrer"
+              target="_blank"
+            >
+              Listen on Spotify
+            </a>
+          )}
+        </div>
       </div>
     </article>
   );

@@ -1,14 +1,13 @@
 import { Link, createFileRoute, notFound } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { GraphLink } from "@/components/graph-link";
+import { FindingsGridList } from "@/components/graph-sections";
 import { galaxyIntroLine } from "@/lib/graph-prose";
 import { StoryNotFoundState } from "@/components/stories/stories-states";
-import { TrackArtwork } from "@/components/track-artwork";
 import { siteUrl } from "@/lib/fluncle-links";
 import { findingsCount } from "@/lib/format";
 import { jsonLdScript } from "@/lib/json-ld";
 import { galaxyBreadcrumbsJsonLd, musicPlaylistJsonLd } from "@/lib/log-schema";
-import { artistTitleLine } from "@/lib/log-prose";
 import { albumCoverAtSize } from "@/lib/media";
 import { GALAXY_INDEX_MIN_FINDINGS } from "@/lib/galaxies";
 import { type GalaxyListItem, type TrackListItem } from "@fluncle/contracts";
@@ -127,22 +126,13 @@ function GalaxyPage() {
             No findings logged yet. Quiet sector tonight.
           </p>
         ) : (
-          <ul aria-label={`Findings in the ${galaxy.name} galaxy`} className="artist-grid">
-            {grid.map((finding) =>
-              finding.logId ? (
-                <li key={finding.trackId}>
-                  <Link params={{ logId: finding.logId }} to="/log/$logId">
-                    <TrackArtwork
-                      alt=""
-                      className="artist-grid-cover"
-                      src={albumCoverAtSize(finding.albumImageUrl, "large")}
-                    />
-                    <span className="artist-grid-line">{artistTitleLine(finding)}</span>
-                  </Link>
-                </li>
-              ) : null,
-            )}
-          </ul>
+          <FindingsGridList
+            className="artist-grid"
+            findings={grid}
+            label={`Findings in the ${galaxy.name} galaxy`}
+            priorityFirst={false}
+            size="large"
+          />
         )}
 
         {adjacent.length > 0 ? (

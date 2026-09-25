@@ -1,6 +1,7 @@
 import { createFileRoute, redirect } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
+import { DiscoveryPlayableList } from "@/components/discovery-row";
 import { FrontDoorBrowse } from "@/components/front-door/browse";
 import { FrontDoorFindings } from "@/components/front-door/findings";
 import { FrontDoorLead } from "@/components/front-door/lead";
@@ -9,6 +10,7 @@ import { FrontDoorSearch } from "@/components/front-door/search-entry";
 import { FrontDoorSection } from "@/components/front-door/section";
 import { LiveBanner } from "@/components/home/live-banner";
 import { printConsoleGreeting } from "@/lib/console-greeting";
+import { findingToDiscoveryTrack } from "@/lib/discovery-tracks";
 import { fluncleEntityId, fluncleWebsiteId, siteUrl } from "@/lib/fluncle-links";
 import { frontDoorCount } from "@/lib/front-door";
 import { fluncleDescription } from "@/lib/identity";
@@ -175,6 +177,17 @@ function frontDoorFindings(
 function FrontDoorPage() {
   const { counts, findings, findingsTotal, lead, live, releaseWindowDays, releases } =
     Route.useLoaderData();
+  // The lead, then the band's tiles in their order (the lead once, even when it is also the newest).
+  const leadAndFindings = useMemo(
+    () =>
+      [...(lead ? [lead] : []), ...findings.filter((finding) => finding.logId)]
+        .filter(
+          (finding, index, all) =>
+            all.findIndex((other) => other.trackId === finding.trackId) === index,
+        )
+        .map((finding) => findingToDiscoveryTrack(finding)),
+    [findings, lead],
+  );
 
   useEffect(() => {
     // The wordmark + Telegram invite Fluncle prints for anyone who opens devtools.
@@ -205,27 +218,31 @@ function FrontDoorPage() {
           <FrontDoorSearch />
         </FrontDoorSection>
 
-        {lead ? (
-          <FrontDoorSection id="fd-lead" title="What I'm on right now">
-            <FrontDoorLead lead={lead} />
-          </FrontDoorSection>
-        ) : undefined}
+        {/* The lead and the findings band are one list to the player: the lead's play runs on into
+            the band's tiles. A provider, not a wrapper: it renders nothing of its own. */}
+        <DiscoveryPlayableList tracks={leadAndFindings}>
+          {lead ? (
+            <FrontDoorSection id="fd-lead" title="What I'm on right now">
+              <FrontDoorLead lead={lead} />
+            </FrontDoorSection>
+          ) : undefined}
 
-        <FrontDoorSection
-          id="fd-findings"
-          intro="I rewound every one of these before I logged it. Freshest at the front, so take your pick, fam."
-          link={
-            findingsTotal > 0
-              ? {
-                  label: `All ${frontDoorCount(findingsTotal, "finding", "findings")}`,
-                  to: "/findings",
-                }
-              : { label: "The whole log", to: "/findings" }
-          }
-          title="Latest findings"
-        >
-          <FrontDoorFindings findings={findings} />
-        </FrontDoorSection>
+          <FrontDoorSection
+            id="fd-findings"
+            intro="I rewound every one of these before I logged it. Freshest at the front, so take your pick, fam."
+            link={
+              findingsTotal > 0
+                ? {
+                    label: `All ${frontDoorCount(findingsTotal, "finding", "findings")}`,
+                    to: "/findings",
+                  }
+                : { label: "The whole log", to: "/findings" }
+            }
+            title="Latest findings"
+          >
+            <FrontDoorFindings findings={findings} />
+          </FrontDoorSection>
+        </DiscoveryPlayableList>
 
         <FrontDoorSection
           id="fd-fresh"

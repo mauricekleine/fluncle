@@ -7,11 +7,17 @@ import { cn } from "@/lib/utils";
 // `/artists` index cards and the artist page's "similar artists" chips.
 export function ArtistAvatar({
   className,
+  eager,
   name,
   priority,
   src,
 }: {
   className?: string;
+  /**
+   * Above the fold but not the page's lead image: fetched eagerly at the default priority, so it
+   * never competes with the one image that holds `fetchPriority="high"`.
+   */
+  eager?: boolean;
   name: string;
   /**
    * This avatar is the page's above-the-fold lead image (the entity masthead portrait) — fetch it
@@ -28,7 +34,7 @@ export function ArtistAvatar({
         className={cn("artist-avatar", className)}
         decoding="async"
         fetchPriority={priority ? "high" : undefined}
-        loading={priority ? "eager" : "lazy"}
+        loading={priority || eager ? "eager" : "lazy"}
         src={src}
       />
     );

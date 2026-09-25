@@ -32,8 +32,10 @@ import {
 import { CataloguePager } from "@/components/catalogue-groups";
 import { HubYearLane } from "@/components/catalogue-hub-section";
 import { StoryNotFoundState } from "@/components/stories/stories-states";
+import { DiscoveryPlayableList } from "@/components/discovery-row";
 import { readTracksHubAtOneTime } from "./-tracks-hub-reads";
 import { TracksHubRow } from "@/components/tracks-hub-row";
+import { hubEntryToDiscoveryTrack } from "@/lib/discovery-tracks";
 import { isGalaxyMapFullyNamed, listPublicGalaxies } from "@/lib/server/galaxies-map";
 import {
   type CatalogueHubNumberedPage,
@@ -587,6 +589,8 @@ function TracksPage() {
   const { filters, galaxyOptions, hasFilters, heldTotal, hub, labelOptions, years } =
     Route.useLoaderData();
   const buildHref = (page: number) => buildTracksHref(filters, page);
+  const nextPageHref = hub.page < hub.pageCount ? buildHref(hub.page + 1) : undefined;
+  const discoveryTracks = useMemo(() => hub.items.map(hubEntryToDiscoveryTrack), [hub.items]);
 
   return (
     <main className="log-plate-stage">
@@ -633,11 +637,15 @@ function TracksPage() {
               : "Nothing here yet. Quiet sector tonight."}
           </p>
         ) : (
-          <ol aria-label="Tracks" className="tracks-hub-rows">
-            {hub.items.map((entry) => (
-              <TracksHubRow entry={entry} key={entryKey(entry)} />
-            ))}
-          </ol>
+          // The page is one list to the player: play on any row queues this page from there, and
+          // at its end "keep going" walks to the next page.
+          <DiscoveryPlayableList nextPageHref={nextPageHref} tracks={discoveryTracks}>
+            <ol aria-label="Tracks" className="discovery-list tracks-hub-rows">
+              {hub.items.map((entry) => (
+                <TracksHubRow entry={entry} key={entryKey(entry)} />
+              ))}
+            </ol>
+          </DiscoveryPlayableList>
         )}
 
         <CataloguePager

@@ -2,7 +2,7 @@
 // same three bands, in the same order, and the order is the doctrine:
 //
 //   1. THE FINDINGS LEAD. Always, on every graph page, as findings: the cover grid, each
-//      cover a link to its `/log/<coordinate>` page. A finding is the only named object in
+//      cover its preview's play button and each caption a link to its `/log/<coordinate>` page. A finding is the only named object in
 //      Fluncle's world, and it is the only thing on these pages that is named.
 //   2. The artists, as chips back into the artist half of the graph.
 //   3. The quieter rows.
@@ -33,23 +33,29 @@
 //     superset name, so the heading outline runs H1 → H2 → H3 rather than jumping a
 //     level; it names the records or the artists the band belongs to, never the tier,
 //     and it is never visible.
-//   - IT CANNOT BE MISTAKEN FOR A FINDING. No coordinate (it has none), no cover-led gold,
-//     muted ink, a hairline rule above it. The resting and hover states carry NO Eclipse
-//     Gold, so a lit unlit row can never read as a focused one; `:focus-visible` still gets
-//     the canonical gold ring, because focus must stay legible and consistent (WCAG). The row
-//     now leads INTO the archive rather than straight out of it — `/track/<trackId>`, the
-//     recording's own destination — and that changes where it goes, never how it looks: a
-//     destination is not a name, and the tier is still never introduced (see UnlitTracks).
+//   - IT CANNOT BE MISTAKEN FOR A FINDING. It renders through the shared discovery row, in
+//     the unlit register: its real cover desaturated and dimmed, no coordinate (it has none),
+//     and NO Eclipse Gold at rest or on hover, so it can never read as a focused or certified
+//     row; `:focus-visible` still gets the canonical gold ring, because focus must stay legible
+//     and consistent (WCAG). The cover plays its preview, and the row leads INTO the archive —
+//     `/track/<trackId>`, the recording's own destination. A destination is not a name, and the
+//     tier is still never introduced (see UnlitTracks).
 //   - AN EMPTY SET RENDERS NOTHING AT ALL. Not an empty state, not a heading with no rows:
 //     the component returns undefined, so a page with no uncertified tracks reads as if
 //     the band had never existed.
 
 import { Link } from "@tanstack/react-router";
-import { siSpotify } from "simple-icons";
+import { useMemo } from "react";
 import { ArtistAvatar } from "@/components/artist-avatar";
-import { BrandIcon } from "@/components/brand-icon";
+import { DiscoveryList, DiscoveryPlayableList } from "@/components/discovery-row";
 import { GraphLink } from "@/components/graph-link";
+import { PlayCover } from "@/components/player/playable-list";
 import { TrackArtwork } from "@/components/track-artwork";
+import {
+  catalogueTrackToDiscoveryTrack,
+  discoveryQueueTrack,
+  findingToDiscoveryTrack,
+} from "@/lib/discovery-tracks";
 import { artistTitleLine } from "@/lib/log-prose";
 import { hasTrackPageIdentity } from "@/lib/track-page";
 import { albumCoverAtSize } from "@/lib/media";
@@ -103,6 +109,112 @@ export function graphPageTracks(
 }
 
 /**
+ * A cover grid of findings that plays as one list: each tile's cover is its play button (when the
+ * finding has a live preview) and its caption opens the log page. Shared by every graph page's
+ * findings band and the galaxy lens.
+ *
+ * The rung matches the SLOT, not the master: a `medium` tile renders around 104–120 CSS px and
+ * wants ~240 device px on a 2× screen. The FIRST tile is the band's lead cover, above the fold on
+ * every graph page and so the page's LCP candidate — it fetches eagerly at high priority, and the
+ * route preloads this exact URL from its head(). Tiles 2..n stay lazy: the whole point of the
+ * signal is that one image carries it.
+ */
+export function FindingsGridList({
+  className,
+  coverClassName = "artist-grid-cover",
+  findings,
+  label,
+  labelledBy,
+  lineClassName = "artist-grid-line",
+  priorityFirst = true,
+  size,
+}: {
+  className: string;
+  coverClassName?: string;
+  findings: TrackListItem[];
+  label?: string;
+  labelledBy?: string;
+  lineClassName?: string;
+  priorityFirst?: boolean;
+  size: TileSize;
+}) {
+  const tiles = useMemo(
+    () =>
+      findings
+        .filter((finding) => finding.logId)
+        .map((finding) => findingToDiscoveryTrack(finding)),
+    [findings],
+  );
+
+  return (
+    <DiscoveryPlayableList tracks={tiles}>
+      <ul aria-label={label} aria-labelledby={labelledBy} className={className}>
+        {findings.map((finding, index) =>
+          finding.logId ? (
+            <FindingGridTile
+              coverClassName={coverClassName}
+              finding={finding}
+              key={finding.trackId}
+              lineClassName={lineClassName}
+              logId={finding.logId}
+              priority={priorityFirst && index === 0}
+              size={size}
+            />
+          ) : null,
+        )}
+      </ul>
+    </DiscoveryPlayableList>
+  );
+}
+
+type TileSize = "large" | "medium" | "small";
+
+function FindingGridTile({
+  coverClassName,
+  finding,
+  lineClassName,
+  logId,
+  priority,
+  size,
+}: {
+  coverClassName: string;
+  finding: TrackListItem;
+  lineClassName: string;
+  logId: string;
+  priority: boolean;
+  size: TileSize;
+}) {
+  const track = findingToDiscoveryTrack(finding);
+  const cover = (
+    <TrackArtwork
+      alt=""
+      className={coverClassName}
+      priority={priority}
+      src={albumCoverAtSize(finding.albumImageUrl, size)}
+    />
+  );
+
+  return (
+    <li className="finding-grid-tile">
+      {track.previewable ? (
+        <PlayCover className="finding-grid-play" lit track={discoveryQueueTrack(track)}>
+          {cover}
+        </PlayCover>
+      ) : (
+        // No preview: the cover opens the log page, beside the caption (siblings, never nested),
+        // hidden from the keyboard and assistive tech so the one link is announced once.
+        <Link aria-hidden="true" params={{ logId }} tabIndex={-1} to="/log/$logId">
+          {cover}
+        </Link>
+      )}
+      <Link params={{ logId }} to="/log/$logId">
+        <span className={lineClassName}>{artistTitleLine(finding)}</span>
+      </Link>
+    </li>
+  );
+}
+
+/**
  * The catalogue-register curator heading over the findings block — fixed, and folded into the
  * component (not a prop) so no call site can reintroduce an entity-named title ("Findings on X").
  * The lore-area surfaces carry the archive's own cosmos name; a catalogue/entity page reads plainly
@@ -139,39 +251,16 @@ export function FindingsGrid({ findings, label }: { findings: TrackListItem[]; l
           {FINDINGS_HEADING}
         </h2>
       ) : undefined}
-      <ul
-        aria-label={label}
-        aria-labelledby={label === undefined ? "findings-grid-heading" : undefined}
+      {/* Only the lead band's first cover is the page's LCP candidate; an Upcoming grid sits below
+          the fold and stays lazy. */}
+      <FindingsGridList
         className="artist-grid"
-      >
-        {grid.map((finding, index) =>
-          finding.logId ? (
-            <li key={finding.trackId}>
-              <Link params={{ logId: finding.logId }} to="/log/$logId">
-                {/* The rung matches the SLOT, not the master: this grid's columns are
-                  `minmax(6.5rem, 1fr)` inside a 44rem plate, so a cover renders around 104–120 CSS
-                  px and wants ~240 device px on a 2× screen. The 300 rung covers that with room;
-                  the 640 one this used to ask for was ~8× the pixels a tile can show, on a page
-                  whose whole HTML is 11 KB (43 KB → 10 KB per cover, measured on /album/addicted).
-                  The `large` rung still rides og:image + the JSON-LD, where the consumer is a
-                  crawler's full-size card rather than a tile.
-
-                  The FIRST tile is also the band's lead cover, above the fold on every graph page
-                  and so the page's LCP candidate — it fetches eagerly at high priority, and the
-                  route preloads this exact URL from its head(). Tiles 2..n stay lazy: the whole
-                  point of the signal is that one image carries it. */}
-                <TrackArtwork
-                  alt=""
-                  className="artist-grid-cover"
-                  priority={index === 0}
-                  src={albumCoverAtSize(finding.albumImageUrl, "medium")}
-                />
-                <span className="artist-grid-line">{artistTitleLine(finding)}</span>
-              </Link>
-            </li>
-          ) : null,
-        )}
-      </ul>
+        findings={grid}
+        label={label}
+        labelledBy={label === undefined ? "findings-grid-heading" : undefined}
+        priorityFirst={label === undefined}
+        size="medium"
+      />
     </section>
   );
 }
@@ -223,19 +312,12 @@ export function ArtistChips({ artists, title }: { artists: ArtistChip[]; title: 
  * The quieter rows. Read the file header before changing anything here: no heading, no
  * noun, nothing rendered at all when the set is empty.
  *
- * ── THE ROW NOW GOES SOMEWHERE, AND THAT IS THE ONE THING THAT CHANGED ──────────────────
- * The old note here read "it links OUT, because a track with no Log ID has no page here to link
- * to". That premise is what `/track/<trackId>` retired: the recording has a destination of its
- * own, so the LINE leads there — where its record, its imprint, its tempo, every service that
- * carries it, and what sits close to it in sound all live together. The Spotify mark stays beside
- * it as a second, explicitly-labelled control, so the one-click way out is not taken away.
- *
- * Nothing about the REGISTER moved. There is still no heading, no noun, no coordinate, no cover,
- * and no gold at rest or on hover; a destination is not a name, and the tier stays unnamed.
- *
- * A row the destination would refuse (no title, or no artist credit — `hasTrackPageIdentity`)
- * keeps the old behaviour exactly: out to Spotify, or plain unlinked text when it has no
- * streaming presence either, because there is nowhere honest to send you.
+ * Each row is the shared discovery row (`components/discovery-row.tsx`) in the unlit register:
+ * the cover plays the list from that row, the row opens the recording's own `/track/<trackId>`
+ * destination, and the Spotify way out lives in the row's ⋮ menu. A row the destination would
+ * refuse (no title, or no artist credit — `hasTrackPageIdentity`) opens Spotify instead, or
+ * nothing when it has no streaming presence either, because there is nowhere honest to send you.
+ * The list plays as one: a record's tracklist is a queue in its own order.
  */
 export function UnlitTracks({
   label,
@@ -245,50 +327,11 @@ export function UnlitTracks({
   label: string;
   tracks: CatalogueTrackItem[];
 }) {
+  const rows = useMemo(() => tracks.map(catalogueTrackToDiscoveryTrack), [tracks]);
+
   if (tracks.length === 0) {
     return undefined;
   }
 
-  return (
-    <ul aria-label={label} className="unlit-list">
-      {tracks.map((track) => {
-        const line = artistTitleLine(track);
-        const destination = hasTrackPageIdentity(track);
-
-        return (
-          <li className="unlit-row" key={track.trackId}>
-            {destination ? (
-              <Link className="unlit-link" params={{ trackId: track.trackId }} to="/track/$trackId">
-                <span className="unlit-line">{line}</span>
-              </Link>
-            ) : track.spotifyUrl ? (
-              <a
-                aria-label={`${line} on Spotify`}
-                className="unlit-link"
-                href={track.spotifyUrl}
-                rel="noreferrer"
-                target="_blank"
-              >
-                <span className="unlit-line">{line}</span>
-                <BrandIcon className="unlit-mark" icon={siSpotify} />
-              </a>
-            ) : (
-              <span className="unlit-line">{line}</span>
-            )}
-            {destination && track.spotifyUrl ? (
-              <a
-                aria-label={`Listen to ${line} on Spotify`}
-                className="unlit-out"
-                href={track.spotifyUrl}
-                rel="noreferrer"
-                target="_blank"
-              >
-                <BrandIcon className="unlit-mark" icon={siSpotify} />
-              </a>
-            ) : undefined}
-          </li>
-        );
-      })}
-    </ul>
-  );
+  return <DiscoveryList className="unlit-tracks" label={label} tracks={rows} />;
 }

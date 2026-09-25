@@ -9,11 +9,13 @@ import {
   useRouter,
 } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import { FindingsLinkHub } from "@/components/home/link-hub";
 import { LiveBanner } from "@/components/home/live-banner";
 import { StoriesDialog } from "@/components/stories/stories-dialog";
+import { DiscoveryPlayableList } from "@/components/discovery-row";
 import { TrackRow } from "@/components/track-row";
+import { findingToDiscoveryTrack } from "@/lib/discovery-tracks";
 import { ScrollArea } from "@fluncle/ui/components/scroll-area";
 import { TooltipProvider } from "@fluncle/ui/components/tooltip";
 import { printConsoleGreeting } from "@/lib/console-greeting";
@@ -207,6 +209,13 @@ function FindingsPage() {
   });
 
   const tracks = data.pages.flatMap((page) => page.tracks);
+  const playableFeed = useMemo(
+    () =>
+      data.pages
+        .flatMap((page) => page.tracks)
+        .flatMap((item) => (item.type === "mixtape" ? [] : [findingToDiscoveryTrack(item)])),
+    [data.pages],
+  );
   // Read the archive total off PAGE 1 (`pages[0]`, the always-cursor-less first page),
   // never the newest fetched page. Only page 1 runs the `count(*)`; cursor pages skip it
   // (see `list_findings`) and report their own row count, which would collapse the
@@ -386,34 +395,40 @@ function FindingsPage() {
                   // its natural height. On mobile the rows are wider than the screen, so it also
                   // scrolls horizontally (see .track-row min-width).
                   <ScrollArea className="max-h-[min(32rem,60dvh)] lg:max-h-[max(calc(100dvh-24rem),39rem)]">
-                    <ol className="grid m-0 list-none p-0 [&>li:last-child.track-row]:border-b-0">
-                      {tracks.map((track, index) => (
-                        <TrackRow
-                          key={track.type === "mixtape" ? (track.logId ?? track.id) : track.trackId}
-                          track={track}
-                          trackNumber={fallbackFindingNumber(tracks, index, trackNumberBase)}
-                        />
-                      ))}
-                      {hasNextPage ? (
-                        <li ref={loadMoreSentinelRef}>
-                          <button
-                            className="flex min-h-14 w-full cursor-pointer items-center justify-center gap-2 text-sm font-bold text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:text-accent-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset disabled:cursor-default"
-                            disabled={isFetchingNextPage}
-                            onClick={() => void fetchNextPage()}
-                            type="button"
-                          >
-                            {isFetchingNextPage ? (
-                              <CircleNotchIcon
-                                aria-hidden="true"
-                                className="animate-spin"
-                                weight="bold"
-                              />
-                            ) : undefined}
-                            {isFetchingNextPage ? "Loading more tracks" : "Load more"}
-                          </button>
-                        </li>
-                      ) : undefined}
-                    </ol>
+                    {/* The feed is one list to the player: a cover plays the loaded findings from
+                        its own row, in the feed's order. */}
+                    <DiscoveryPlayableList tracks={playableFeed}>
+                      <ol className="grid m-0 list-none p-0 [&>li:last-child.track-row]:border-b-0">
+                        {tracks.map((track, index) => (
+                          <TrackRow
+                            key={
+                              track.type === "mixtape" ? (track.logId ?? track.id) : track.trackId
+                            }
+                            track={track}
+                            trackNumber={fallbackFindingNumber(tracks, index, trackNumberBase)}
+                          />
+                        ))}
+                        {hasNextPage ? (
+                          <li ref={loadMoreSentinelRef}>
+                            <button
+                              className="flex min-h-14 w-full cursor-pointer items-center justify-center gap-2 text-sm font-bold text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:text-accent-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset disabled:cursor-default"
+                              disabled={isFetchingNextPage}
+                              onClick={() => void fetchNextPage()}
+                              type="button"
+                            >
+                              {isFetchingNextPage ? (
+                                <CircleNotchIcon
+                                  aria-hidden="true"
+                                  className="animate-spin"
+                                  weight="bold"
+                                />
+                              ) : undefined}
+                              {isFetchingNextPage ? "Loading more tracks" : "Load more"}
+                            </button>
+                          </li>
+                        ) : undefined}
+                      </ol>
+                    </DiscoveryPlayableList>
                   </ScrollArea>
                 ) : undefined}
               </div>

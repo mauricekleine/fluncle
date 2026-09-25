@@ -87,10 +87,7 @@
 //     `packages/**` is still unscanned; extending the roots there is cheap and
 //     wanted.
 //
-// THE ESCAPE HATCH. Put `// voice-lint-allow: <reason>` (or, inside JSX,
-// `{/* voice-lint-allow: <reason> */}`) on the line DIRECTLY ABOVE the offending
-// line. The reason must be non-empty — a bare marker suppresses nothing, so an
-// exemption always says why it earned one.
+// The single code-level em-dash exception is matched by file, rail, and literal below.
 
 import { liveSurfaces } from "@fluncle/registry";
 import { readdirSync, readFileSync, statSync } from "node:fs";
@@ -205,8 +202,6 @@ const KEY_VALUE_PREFIX = /^[A-Za-z][\w-]*(?: [\w-]+)?: /;
 /** A copy module, or an object named `…Copy` — every string inside is copy. */
 const COPY_MODULE = /(?:^|\/)(?:copy|[\w-]+-copy)\.tsx?$/;
 const COPY_IDENTIFIER = /copy$/i;
-
-const ALLOW_MARKER = /voice-lint-allow:(.*)$/;
 
 // Whole-word so "signature"/"contention" don't false-positive, case-insensitive
 // because a banned word is banned in a heading too.
@@ -400,28 +395,19 @@ function isProse(literal: Literal): boolean {
   return literal.text.trim().split(/\s+/).filter(Boolean).length >= 4;
 }
 
-/** A `voice-lint-allow: <reason>` marker with a real reason on the line above. */
-function isExcused(sourceLines: string[], line: number): boolean {
-  const previous = sourceLines[line - 2];
-  if (previous === undefined) {
-    return false;
-  }
-
-  const marker = ALLOW_MARKER.exec(previous);
-  if (marker === null) {
-    return false;
-  }
-
-  // Trim the JSX comment's closing `*/}` so the reason is what the author wrote.
-  return (marker[1] ?? "").replace(/\*\/\s*\}?\s*$/, "").trim().length > 0;
+function isExcused(file: string, rail: Rail, literal: Literal): boolean {
+  return (
+    file === "apps/cli/src/commands/recordings.ts" &&
+    rail === "prose-em-dash" &&
+    literal.text === "— (no set video)"
+  );
 }
 
 function scanSource(file: string, source: string, options: { emDash: boolean }): Violation[] {
-  const sourceLines = source.split("\n");
   const violations: Violation[] = [];
 
   const report = (rail: Rail, literal: Literal): void => {
-    if (!isExcused(sourceLines, literal.line)) {
+    if (!isExcused(file, rail, literal)) {
       violations.push({ file, line: literal.line, rail, text: literal.text });
     }
   };
@@ -510,7 +496,7 @@ describe("voice lint", () => {
 // A detector is unproven until a synthetic failure makes it fire. This fixture
 // carries one violation per rail, the two copy positions that waive the word
 // floor, and everything that must NOT fire: the `Artist — Title` separator, a
-// real `Key: value` pair, code strings, and the escape hatch in both forms.
+// real `Key: value` pair, and code strings.
 const FIXTURE_FILE = "fixture.tsx";
 
 const FIXTURE_SOURCE = `export function Fixture() {
@@ -522,14 +508,11 @@ const FIXTURE_SOURCE = `export function Fixture() {
   const cssClass = "search-note search-note--degraded";
   const keyValue = "Curation: off";
   const midSentenceColon = "Two things tonight: the curated shelf went quiet";
-  // voice-lint-allow: proving the escape hatch suppresses a real hit
-  const excused = "The curated selection landed on the log tonight";
-  // voice-lint-allow:
-  const bareMarker = "A transmission arrived from out there tonight";
+  const curated = "The curated selection landed on the log tonight";
+  const transmission = "A transmission arrived from out there tonight";
   return (
     <p>
       Body text with a dash — right here
-      {/* voice-lint-allow: proving the JSX form of the escape hatch */}
       <span>An anomaly landed on the log here tonight</span>
     </p>
   );
@@ -551,7 +534,9 @@ describe("voice lint rails", () => {
       "The signal came back clean from out there tonight",
       // The colon is mid-sentence, so the `Key: value` exclusion must not swallow it.
       "Two things tonight: the curated shelf went quiet",
+      "The curated selection landed on the log tonight",
       "A transmission arrived from out there tonight",
+      "An anomaly landed on the log here tonight",
       // Three words: caught only because `title` is a copy-shaped key.
       "Lost the signal",
       // Three words under a NON-copy key: caught only because the object is `…Copy`.
@@ -570,14 +555,12 @@ describe("voice lint rails", () => {
     expect(textsFor("exclamation")).toEqual(["Three findings landed on the log tonight!"]);
   });
 
-  it("holds the separator, real `Key: value` pairs, code strings, and excused lines", () => {
+  it("holds the separator, real `Key: value` pairs, and code strings", () => {
     const texts = fired.map((violation) => violation.text);
     expect(texts).not.toContain(" — ");
     expect(texts).not.toContain("Curation: off");
     expect(texts).not.toContain("Content-Type");
     expect(texts).not.toContain("search-note search-note--degraded");
-    expect(texts).not.toContain("The curated selection landed on the log tonight");
-    expect(texts).not.toContain("An anomaly landed on the log here tonight");
   });
 
   it("holds every em dash when the file is in the CLI admin carve-out", () => {

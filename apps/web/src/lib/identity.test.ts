@@ -16,6 +16,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { parseSync } from "oxc-parser";
 import { describe, expect, it } from "vitest";
 import { fluncleDescription, fluncleMetaDescription, fluncleTagline } from "./identity";
 
@@ -84,7 +85,6 @@ const TAGLINE_SITES = [
   "apps/web/src/lib/identity.ts",
   "apps/web/src/lib/server/bluesky.ts",
   "apps/web/src/lib/server/orpc.ts",
-  "apps/web/src/routes/-docs-head.ts",
   "apps/web/src/routes/__root.tsx",
   "apps/web/src/routes/atom[.]xml.ts",
   "apps/web/src/routes/feed[.]json.ts",
@@ -174,6 +174,21 @@ function collectFiles(root: string, files: string[]): void {
   }
 }
 
+function codeWithoutComments(file: string, source: string): string {
+  if (!/\.[cm]?[jt]sx?$/.test(file)) {
+    return source;
+  }
+  const comments = parseSync(file, source).comments;
+  let code = "";
+  let cursor = 0;
+  for (const comment of comments) {
+    code += source.slice(cursor, comment.start);
+    code += " ".repeat(comment.end - comment.start);
+    cursor = comment.end;
+  }
+  return code + source.slice(cursor);
+}
+
 /** Every tagline-shaped match in the repo, un-escaped back to what a reader sees. */
 function taglineMatches(): { file: string; text: string }[] {
   const files: string[] = [];
@@ -183,7 +198,8 @@ function taglineMatches(): { file: string; text: string }[] {
 
   const matches: { file: string; text: string }[] = [];
   for (const file of files) {
-    for (const match of readFileSync(join(REPO_ROOT, file), "utf8").matchAll(looseTagline())) {
+    const source = readFileSync(join(REPO_ROOT, file), "utf8");
+    for (const match of codeWithoutComments(file, source).matchAll(looseTagline())) {
       matches.push({ file, text: match[0].replace(/&amp;/g, "&") });
     }
   }

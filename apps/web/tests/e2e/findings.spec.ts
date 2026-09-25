@@ -19,7 +19,7 @@ import { SEEDED_FINDING_TITLES, SEEDED_MIXTAPE_TITLE, SEEDED_STORY_FINDING } fro
 
 // The hydration target: a FINDING's links menu (its menu always carries Spotify),
 // not the mixtape's (whose menu carries Mixcloud/YouTube instead). Row triggers are
-// labelled "Links for <artists> — <title>", so match on a seeded finding title.
+// labelled "Actions for <artists> — <title>", so match on a seeded finding title.
 const HYDRATION_FINDING_TITLE = SEEDED_FINDING_TITLES[0];
 
 /** Collect every console error + page error for a fail-on-any assertion at the end. */
@@ -75,7 +75,7 @@ test("the archive page SSRs the seeded findings, hydrates, and logs no errors", 
   // CLOSED state (Escape) before clicking, so every attempt is "closed → click →
   // expect open" and the first hydrated attempt passes.
   const trigger = page
-    .getByRole("button", { name: new RegExp(`^Links for .*${HYDRATION_FINDING_TITLE}`) })
+    .getByRole("button", { name: new RegExp(`^Actions for .*${HYDRATION_FINDING_TITLE}`) })
     .first();
   const spotifyItem = page.getByRole("menuitem", { name: "Spotify" }).first();
 
@@ -115,8 +115,9 @@ test("a finding with footage opens its story OVER the feed, never navigating awa
   page,
 }) => {
   // The Stories affordance on this page has two openers — the cover ring and a row's
-  // artwork (`TrackRow`, whose only consumer is this route) — and both are gated on a
-  // finding carrying `video_url`, which `SEEDED_STORY_FINDING` is the fixture for.
+  // "Watch the story" entry in its ⋮ menu (`TrackRow`, whose only consumer is this route;
+  // the row's artwork is its preview's play button) — and both are gated on a finding
+  // carrying `video_url`, which `SEEDED_STORY_FINDING` is the fixture for.
   //
   // The regression this pins: the opener must target `/findings`, the route that owns
   // the `?story=` param and mounts the dialog. `/` is the front door and takes no
@@ -163,14 +164,20 @@ test("a finding with footage opens its story OVER the feed, never navigating awa
     "root hydration should attach the router handler before the story link is clicked",
   ).toBeAttached({ timeout: 30_000 });
 
-  // The fixture reaches the component: the row's artwork really is a play link.
-  const play = page.locator("a.track-play");
-  await expect(play, "the seeded finding with footage should render a play link").toHaveCount(1);
+  // The fixture reaches the component: the row's menu really carries the story.
+  const row = page.locator("li.track-row").filter({
+    has: page.locator(`a.track-log-id-link[href="/log/${SEEDED_STORY_FINDING.logId}"]`),
+  });
+
+  await row.getByRole("button", { name: /^Actions for / }).click();
+
+  const story = page.getByRole("menuitem", { name: "Watch the story" });
+  await expect(story, "the seeded finding with footage should offer its story").toHaveCount(1);
 
   const dialog = page.locator('[role="dialog"][aria-label="Stories"]');
   const feed = page.locator("a.cover-story");
 
-  await play.click();
+  await story.click();
   await expect(dialog).toBeVisible();
 
   // OVER the feed, not instead of it: the archive page is still mounted behind the

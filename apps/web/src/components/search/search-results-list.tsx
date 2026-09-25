@@ -19,22 +19,21 @@
 // because a heading over the only content would exist just to name the tier. The focus ring stays
 // Eclipse Gold either way: focus is an accessibility affordance, not a claim about the music.
 
-import { ArrowRightIcon, CaretRightIcon, WaveformIcon } from "@phosphor-icons/react";
+import { ArrowRightIcon, WaveformIcon } from "@phosphor-icons/react";
 import { Link } from "@tanstack/react-router";
-import { type ReactNode } from "react";
-import { SpotifyIcon } from "@/components/platform-icons";
+import { type ReactNode, useMemo } from "react";
+import { DiscoveryPlayableList, DiscoveryRow } from "@/components/discovery-row";
 import { SearchFilterChips } from "@/components/search/search-filter-chips";
+import { searchHitToDiscoveryTrack } from "@/lib/discovery-tracks";
 import { albumCoverAtSize } from "@/lib/media";
 import {
   ENTITY_GROUPS,
   entityHref,
-  hitHref,
   partitionHits,
   type SearchEntity,
   type SearchHit,
   type SearchResponse,
 } from "@/lib/search-results";
-import { cn } from "@/lib/utils";
 
 /** The cover, or the Dust-Veil square that stands in for one. Never a gold placeholder. */
 function Cover({ src }: { src?: string }): ReactNode {
@@ -50,72 +49,6 @@ function Cover({ src }: { src?: string }): ReactNode {
       loading="lazy"
       src={albumCoverAtSize(src, "small")}
     />
-  );
-}
-
-/**
- * One track row. The `certified` bit decides everything visible about it, and nothing is labelled —
- * the difference is the register, not a badge.
- *
- * A finding is an internal `Link` to its coordinate; an uncertified track is an internal `Link` to
- * its own destination. Only a row the destination would refuse leaves the origin, as a plain anchor
- * with `rel="noopener noreferrer"`; a row with no destination at all renders as text rather than a
- * dead link.
- *
- * THE TRAILING MARK NAMES WHERE THE ROW GOES. A coordinate for a finding, the Phosphor caret for a
- * row that opens a page here, and Spotify's own mark only where the row actually opens Spotify — a
- * platform's identity is its own (DESIGN.md §5), so a brand mark over a fluncle.com destination
- * would promise a tab that never opens.
- */
-function TrackRow({ hit }: { hit: SearchHit }): ReactNode {
-  const destination = hitHref(hit);
-  const className = cn("search-row search-page-row", !hit.certified && "search-row--unlit");
-  const body = (
-    <>
-      <Cover src={hit.albumImageUrl} />
-      <span className="search-row-text">
-        <span className="search-row-title">{hit.title}</span>
-        <span className="search-row-artists">{hit.artists.join(", ")}</span>
-      </span>
-      <span className="search-row-tail">
-        {hit.certified && hit.logId ? (
-          <span className="search-row-coordinate">{hit.logId}</span>
-        ) : destination?.external === false ? (
-          <CaretRightIcon aria-hidden="true" className="search-row-out" size={16} weight="bold" />
-        ) : (
-          <SpotifyIcon className="search-row-out" />
-        )}
-      </span>
-    </>
-  );
-
-  if (!destination) {
-    return (
-      <li>
-        <span className={className}>{body}</span>
-      </li>
-    );
-  }
-
-  if (destination.external) {
-    return (
-      <li>
-        <a className={className} href={destination.href} rel="noopener noreferrer" target="_blank">
-          {body}
-        </a>
-      </li>
-    );
-  }
-
-  return (
-    <li>
-      {/* The href is DATA (`/log/024.7.2R`), not a compile-time route literal, so the cast happens
-          at this one boundary exactly as `NavRouteLink` and the palette do it. TanStack builds the
-          real href from the string at runtime regardless of the compile-time union. */}
-      <Link className={className} to={destination.href as never}>
-        {body}
-      </Link>
-    </li>
   );
 }
 
@@ -141,14 +74,39 @@ function EntityRow({ entity }: { entity: SearchEntity }): ReactNode {
 }
 
 /** A titled block of rows. The heading is a real `<h2>`, so the page has an outline to jump by. */
-function ResultGroup({ children, heading }: { children: ReactNode; heading?: string }): ReactNode {
+function ResultGroup({
+  children,
+  className = "search-page-rows",
+  heading,
+}: {
+  children: ReactNode;
+  className?: string;
+  heading?: string;
+}): ReactNode {
   return (
     <section className="search-page-group">
       {heading === undefined ? undefined : <h2 className="search-page-group-heading">{heading}</h2>}
-      <ul aria-label={heading} className="search-page-rows">
+      <ul aria-label={heading} className={className}>
         {children}
       </ul>
     </section>
+  );
+}
+
+/**
+ * The track rows: the shared discovery row (`components/discovery-row.tsx`), the same row `/tracks`
+ * and `/fresh` render. The cover plays, the rest of the row opens the finding's coordinate or the
+ * archive track's own destination, the readout sits under the title, and the register rides the
+ * light alone (The Unlit Rule): a finding carries its coordinate and heats to gold, an uncertified
+ * track shows its cover dimmed and never names its tier.
+ */
+function TrackGroup({ heading, hits }: { heading?: string; hits: SearchHit[] }): ReactNode {
+  return (
+    <ResultGroup className="discovery-list search-page-tracks" heading={heading}>
+      {hits.map((hit) => (
+        <DiscoveryRow key={hit.trackId} track={searchHitToDiscoveryTrack(hit)} />
+      ))}
+    </ResultGroup>
   );
 }
 
@@ -163,6 +121,11 @@ export function anchorCredit(anchor: SearchHit): string {
 /** The whole answer, in the order the resolver meant it: what you named, then what it holds. */
 export function SearchResultsList({ response }: { response: SearchResponse }): ReactNode {
   const { findings, unlit } = partitionHits(response.results);
+  // The answer is one list to the player, in the order it reads: the findings, then the tracks.
+  const tracks = useMemo(
+    () => [...findings, ...unlit].map(searchHitToDiscoveryTrack),
+    [findings, unlit],
+  );
   // "Tracks" earns its place only when something NAMED renders above it — then it is doing
   // contrastive work and names the superset. Alone, it would exist just to name the tier.
   const headUnlit = findings.length > 0 || response.entities.length > 0;
@@ -210,21 +173,13 @@ export function SearchResultsList({ response }: { response: SearchResponse }): R
           not one; "Recommended by Fluncle", the catalogue-side heading, would be a different lie
           here (these are matches, not recommendations). "Findings" is the noun itself — parallel to
           the kind headings above it, and still the contrastive pair for "Tracks" below. */}
-      {findings.length > 0 ? (
-        <ResultGroup heading="Findings">
-          {findings.map((hit) => (
-            <TrackRow hit={hit} key={hit.trackId} />
-          ))}
-        </ResultGroup>
-      ) : undefined}
+      <DiscoveryPlayableList tracks={tracks}>
+        {findings.length > 0 ? <TrackGroup heading="Findings" hits={findings} /> : undefined}
 
-      {unlit.length > 0 ? (
-        <ResultGroup heading={headUnlit ? "Tracks" : undefined}>
-          {unlit.map((hit) => (
-            <TrackRow hit={hit} key={hit.trackId} />
-          ))}
-        </ResultGroup>
-      ) : undefined}
+        {unlit.length > 0 ? (
+          <TrackGroup heading={headUnlit ? "Tracks" : undefined} hits={unlit} />
+        ) : undefined}
+      </DiscoveryPlayableList>
     </>
   );
 }

@@ -85,11 +85,13 @@ export const SearchHitSchema = z
     bpm: z.number().optional(),
     /** True ⇔ a `findings` row exists ⇔ this is one of Fluncle's Findings. */
     certified: z.boolean(),
+    durationMs: z.number().optional(),
     galaxy: z.string().optional(),
     key: z.string().optional(),
     label: z.string().optional(),
     /** The permanent coordinate. Present only on a certified finding. */
     logId: z.string().optional(),
+    previewable: z.boolean().optional(),
     releaseDate: z.string().optional(),
     spotifyUrl: z.string().optional(),
     title: z.string(),
