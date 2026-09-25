@@ -1,12 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// COST-01 Path A (Worker-local) capture, exercised through the REAL observation.ts
-// vendor functions + the REAL costs.ts best-effort wrapper. Two guarantees:
-//   1. a captured vendor call INSERTS a cost row (firecrawl `cash` request, the
-//      OpenRouter distil `cash` tokens);
-//   2. a LEDGER FAILURE (getDb throws) is swallowed — the vendor op still returns
-//      its real result, proving the capture can NEVER break the note/observation.
-
 const execute = vi.hoisted(() => vi.fn());
 const getDb = vi.hoisted(() => vi.fn());
 
@@ -31,18 +24,12 @@ const FIRECRAWL_BODY = {
   },
 };
 
-// An OpenRouter completion that CARRIES `usage`. `usage.cost` is OpenRouter's OWN
-// billed figure (credits = USD), returned because the request sends `usage: { include:
-// true }` — the capture prefers it over the per-MTok estimate. Tests that exercise the
-// estimated fallback swap in a body WITHOUT `cost` via `setOpenRouterBody`.
 const OPENROUTER_BODY_MEASURED = {
   choices: [{ message: { content: "Mr Right On is a 2017 Calibre track." } }],
   model: "anthropic/claude-haiku-4.5",
   usage: { completion_tokens: 40, cost: 0.0031, prompt_tokens: 120 },
 };
 
-// The same completion with NO `cost` — the vendor omitted it, so the capture falls back
-// to the token rate table (`priceOpenRouterTokens`) and marks the row `estimated`.
 const OPENROUTER_BODY_NO_COST = {
   choices: [{ message: { content: "Mr Right On is a 2017 Calibre track." } }],
   model: "anthropic/claude-haiku-4.5",
@@ -104,10 +91,10 @@ describe("Path A capture — inserts a cost row per vendor call", () => {
     expect(result.status).toBe("resolved");
 
     const rows = insertArgs().flat();
-    // Both vendors reached the ledger (vendor is the last col of each 13-tuple).
+
     expect(rows).toContain("firecrawl");
     expect(rows).toContain("openrouter");
-    // The finding attribution rode along.
+
     expect(rows).toContain("004.7.2I");
     expect(rows).toContain("track-1");
   });
@@ -118,8 +105,6 @@ describe("Path A capture — inserts a cost row per vendor call", () => {
       { logId: "004.7.2I", trackId: "track-1" },
     );
 
-    // The vendor returned `usage.cost: 0.0031` → that authoritative figure is the row's
-    // estimated_usd (col 3), and the row is `measured` (col 8), NOT the token estimate.
     const args = insertArgs().find((row) => row.includes("openrouter"));
     expect(args).toBeDefined();
     expect(args?.[3]).toBe(0.0031);
@@ -134,8 +119,6 @@ describe("Path A capture — inserts a cost row per vendor call", () => {
       { logId: "004.7.2I", trackId: "track-1" },
     );
 
-    // No `usage.cost` → 120 in + 40 out priced via `priceOpenRouterTokens`: a number on
-    // the row (col 3), but marked `estimated` (col 8) — a rate guess is never a fact.
     const args = insertArgs().find((row) => row.includes("openrouter"));
     expect(args).toBeDefined();
     expect(typeof args?.[3]).toBe("number");
@@ -148,8 +131,6 @@ describe("Path A best-effort — a ledger failure cannot break the vendor op", (
     getDb.mockRejectedValue(new Error("turso down"));
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
 
-    // The firecrawl search + distil succeeded; the swallowed ledger failure must
-    // NOT downgrade the result to "failed".
     const result = await fetchTrackContext("Calibre Mr Right On", { trackId: "track-1" });
 
     expect(result.status).toBe("resolved");

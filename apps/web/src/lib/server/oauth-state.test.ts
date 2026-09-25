@@ -7,17 +7,6 @@ import {
   stateIsBoundToThisBrowser,
 } from "./oauth-state";
 
-// The OAuth state browser binding (./oauth-state.ts).
-//
-// The state carries a `nonce`, and the start leg hands the browser an HttpOnly cookie
-// holding that nonce. The callback refuses the exchange unless the two match, so a state
-// lifted from a log or URL cannot authorize a different browser's code.
-//
-// A Bearer-carried start prints a Fluncle-origin handoff link instead of handing a
-// provider URL to a client without the binding cookie (./oauth-handoff.ts + its suite).
-// This module mints exactly one kind of state, and the callback gate REJECTS every other
-// `bind` rather than waving it through.
-
 const SESSION_SECRET = "test-session-secret-oauth-state";
 
 beforeAll(() => {
@@ -26,7 +15,6 @@ beforeAll(() => {
   vi.setSystemTime(new Date("2026-06-22T12:00:00.000Z"));
 });
 
-/** Parse a `Set-Cookie` into `{ name, value, attributes }`. */
 function parseSetCookie(header: string): {
   attributes: string[];
   name: string;
@@ -83,8 +71,7 @@ describe("mintOauthState", () => {
     const { attributes } = parseSetCookie(setCookie ?? "");
 
     expect(attributes).toContain("HttpOnly");
-    // Lax, not Strict: the callback is a top-level cross-site GET navigation back
-    // from the platform, and Strict would drop the cookie there and break the flow.
+
     expect(attributes).toContain("SameSite=Lax");
     expect(attributes).toContain("Path=/api");
     expect(attributes).toContain("Max-Age=600");
@@ -115,8 +102,6 @@ describe("mintOauthState", () => {
       purpose: "spotify-auth",
     });
 
-    // The fixed fields are spread LAST, so a caller cannot downgrade the binding or
-    // repoint the purpose by naming one of them in `claims`.
     expect(await verifyState(state)).toMatchObject({
       bind: "cookie",
       handoff: "ticket-value",
@@ -151,7 +136,6 @@ describe("stateIsBoundToThisBrowser — the callback gate", () => {
     const theirs = await mintOauthState("youtube-auth");
     const theirPayload = await verifyState(theirs.state);
 
-    // My browser presents MY nonce against THEIR state — the two halves must match.
     expect(
       stateIsBoundToThisBrowser(callbackRequest(mine.setCookie?.split("; ")[0]), theirPayload),
     ).toBe(false);
@@ -184,7 +168,6 @@ describe("stateIsBoundToThisBrowser — the callback gate", () => {
   });
 
   it('REJECTS `bind: "none"` even with the right cookie present', () => {
-    // A state carrying the unbound value is refused rather than skipping the cookie check.
     expect(
       stateIsBoundToThisBrowser(callbackRequest("fluncle_oauth_youtube_auth=n"), {
         bind: "none",

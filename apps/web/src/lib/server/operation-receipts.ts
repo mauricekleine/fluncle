@@ -242,7 +242,6 @@ export async function reconcileOperationReceipt(
   );
 }
 
-/** Read one receipt's public-safe coordinates without exposing its digest or stored result. */
 export async function inspectOperationReceipt(
   client: OperationReceiptClient,
   operationKey: string,
@@ -628,9 +627,7 @@ async function closeTransaction(transaction: Transaction | undefined): Promise<v
 
   try {
     transaction.close();
-  } catch {
-    // Reconciliation is authoritative even if a broken transport cannot confirm close.
-  }
+  } catch {}
 }
 
 function recordExecutionOutcome(

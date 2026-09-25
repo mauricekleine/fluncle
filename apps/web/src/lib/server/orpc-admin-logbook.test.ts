@@ -8,13 +8,6 @@ import {
   warmOrpcRouter,
 } from "./orpc-test-kit";
 
-// The `admin-logbook` auth proof, driven end-to-end through `handleOrpc` so the REAL
-// admin auth spine (../orpc-auth) runs; only the `logbook` data layer is mocked. The
-// security-critical claim: `update_logbook_entry` is OPERATOR tier (it can clobber a
-// cron-authored entry), so a valid AGENT token is a 403. The agent-tier ops
-// (`list_logbook_gaps`, `create_logbook_entry`) let the agent through. Every op 401s
-// without a token.
-
 const createLogbookEntry = vi.fn();
 const listLogbookGaps = vi.fn();
 const listSpentMoves = vi.fn();
@@ -27,7 +20,7 @@ vi.mock("./logbook", async () => {
     createLogbookEntry: (...args: unknown[]) => createLogbookEntry(...args),
     listLogbookGaps: (...args: unknown[]) => listLogbookGaps(...args),
     listSpentMoves: (...args: unknown[]) => listSpentMoves(...args),
-    // Keep the real `requireSector` (the handlers call it to parse the path param).
+
     requireSector: actual.requireSector,
     updateLogbookEntry: (...args: unknown[]) => updateLogbookEntry(...args),
   };
@@ -52,7 +45,6 @@ beforeEach(() => {
   updateLogbookEntry.mockReset();
 });
 
-// ── list_logbook_gaps — admin tier ───────────────────────────────────────────
 describe("oRPC list_logbook_gaps (GET /admin/logbook/gaps)", () => {
   it("401s with no token", async () => {
     const { handleOrpc } = await import("./orpc");
@@ -80,7 +72,6 @@ describe("oRPC list_logbook_gaps (GET /admin/logbook/gaps)", () => {
   });
 });
 
-// ── create_logbook_entry — admin tier (fill-empty-only) ──────────────────────
 describe("oRPC create_logbook_entry (POST /admin/logbook/{sector})", () => {
   it("401s with no token", async () => {
     const { handleOrpc } = await import("./orpc");
@@ -102,9 +93,7 @@ describe("oRPC create_logbook_entry (POST /admin/logbook/{sector})", () => {
 
     expect(response?.status).toBe(200);
     expect(await readJson(response)).toEqual({ entry: ENTRY, ok: true });
-    // The padded "036" param is parsed to the number 36.
-    // `promptVersion: null` — this call sent no `--prompt-version`, so the entry's
-    // provenance is NULL: no registry prompt authored it (docs/agents/prompt-registry.md).
+
     expect(createLogbookEntry).toHaveBeenCalledWith(36, {
       body: ENTRY.body,
       promptVersion: null,
@@ -125,7 +114,6 @@ describe("oRPC create_logbook_entry (POST /admin/logbook/{sector})", () => {
   });
 });
 
-// ── update_logbook_entry — OPERATOR tier ─────────────────────────────────────
 describe("oRPC update_logbook_entry (PATCH /admin/logbook/{sector})", () => {
   it("403s the AGENT (operator-only — the agent cannot overwrite an entry)", async () => {
     const { handleOrpc } = await import("./orpc");

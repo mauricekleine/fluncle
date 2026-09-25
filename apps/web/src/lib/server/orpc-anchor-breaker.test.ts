@@ -2,16 +2,6 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { AGENT_TOKEN, readJson, req, setAdminTokenEnv, warmOrpcRouter } from "./orpc-test-kit";
 
-// The `get_spotify_anchor_breaker` READ, driven end-to-end through `handleOrpc`. What is under test
-// is the one thing this read is for: answering "why is the anchor waterfall quiet?" completely.
-// Silence has two causes that look identical from outside — the shared-app throttle breaker PAUSING
-// the Spotify search rungs, and the operator flags leaving those rungs (or the paid Apify fallback)
-// DISARMED — and only the first was ever visible. The flags had no read surface at all, so their
-// state could only be inferred from what the sweep failed to do.
-//
-// The breaker state and the two flag reads are the mocked edges; the router, the auth spine and the
-// response envelope are real.
-
 const breakerStateMock = vi.fn();
 const apifyBudgetMock = vi.fn();
 const apifyEnabledMock = vi.fn();
@@ -49,7 +39,6 @@ const CLEAR = {
   trippedAt: null,
 };
 
-/** A brake with the whole day still ahead of it. */
 const BUDGET_OPEN = {
   dailyRows: 300,
   day: "2026-09-20",
@@ -85,7 +74,6 @@ describe("oRPC get_spotify_anchor_breaker (GET /admin/catalogue/anchor/breaker)"
   });
 
   it("answers the AGENT token with the breaker AND which rungs are armed", async () => {
-    // The box's own sweep is entitled to this read — the `get_capture_budget` precedent.
     const { handleOrpc } = await import("./orpc");
     const response = await handleOrpc(req(PATH, "GET", AGENT_TOKEN));
 
@@ -98,8 +86,6 @@ describe("oRPC get_spotify_anchor_breaker (GET /admin/catalogue/anchor/breaker)"
   });
 
   it("reports BOTH rungs disarmed — the state in which nothing can conclude", async () => {
-    // The other side of the same field: with the paid fallback off and the dark search flag off, no
-    // rung in the waterfall can settle a row's question, and a clear breaker says nothing about it.
     apifyEnabledMock.mockResolvedValue(false);
     spotifySearchEnabledMock.mockResolvedValue(false);
 
@@ -113,8 +99,6 @@ describe("oRPC get_spotify_anchor_breaker (GET /admin/catalogue/anchor/breaker)"
   });
 
   it("carries the paid rung's DAILY ROW BRAKE — the fourth reason for silence", async () => {
-    // A tripped breaker, a disarmed rung and a spent day all look identical from outside: nothing
-    // happens. The brake had no read surface at all until it rode along here.
     apifyBudgetMock.mockResolvedValue({
       dailyRows: 300,
       day: "2026-09-20",

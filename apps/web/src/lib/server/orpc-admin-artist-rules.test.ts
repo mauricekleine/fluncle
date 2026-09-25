@@ -124,8 +124,6 @@ describe("replace_label_artist_rules — PUT /admin/labels/{id}/artists", () => 
     expect(replaceLabelArtistRules).toHaveBeenCalledWith("lbl_test", body.rules, expectedSource);
   });
 
-  // `unlisted` hides one public artist PAGE, and a page is not per-label. The whole-set PUT has to
-  // refuse it outright rather than store a rule no read consults.
   it("refuses the global-only unlisted verdict at the contract boundary", async () => {
     const { handleOrpc } = await import("./orpc");
     const response = await handleOrpc(

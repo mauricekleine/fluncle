@@ -2,17 +2,6 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { signOauthHandoff, signOauthState } from "./env";
 import { handoffUrl, mintHandoffTicket, readHandoffTicket } from "./oauth-handoff";
 
-// The handoff TICKET (./oauth-handoff.ts) — the carrier that lets a connect started in
-// a terminal finish in a browser.
-//
-// A Bearer-carried start cannot safely hand a provider URL to a browser that has no nonce
-// cookie. The ticket carries a Fluncle-origin link, and the mint happens inside the
-// operator's logged-in browser.
-//
-// This suite is the ticket alone. The wire-up — the start route's carrier branch, and
-// the handoff route's grant-cookie gate — is asserted end to end through the real
-// handlers in ../../routes/api/admin/oauth-binding.test.ts.
-
 const SESSION_SECRET = "test-session-secret-oauth-handoff";
 
 beforeAll(() => {
@@ -56,9 +45,6 @@ describe("readHandoffTicket", () => {
   });
 
   it("refuses `admin-login` — logging in is what MINTS the cookie the handoff needs", async () => {
-    // Signed under the real handoff subkey, so only the purpose allow-list stops it.
-    // A login handoff could only ever loop: the route would bounce it to the login,
-    // which would bounce it back.
     const ticket = await signOauthHandoff({ iat: Date.now(), purpose: "admin-login" });
 
     expect(await readHandoffTicket(ticket)).toBeUndefined();
@@ -75,8 +61,6 @@ describe("readHandoffTicket", () => {
   });
 
   it("refuses an OAUTH STATE presented as a ticket — the two subkeys are separate", async () => {
-    // Identical wire format, different label. Without the split, a handoff ticket and
-    // an OAuth state would be interchangeable and the binding could be smuggled past.
     const state = await signOauthState({
       bind: "cookie",
       iat: Date.now(),

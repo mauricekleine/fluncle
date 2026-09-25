@@ -8,14 +8,6 @@ import {
   warmOrpcRouter,
 } from "./orpc-test-kit";
 
-// The `admin-editions` auth proof, driven end-to-end through `handleOrpc` so the
-// REAL admin auth spine (../orpc-auth) runs; only the `editions` data layer is
-// mocked. The security-critical claim: `delete_edition` is OPERATOR tier — a hard
-// delete that reaches a SENT edition (the archive pull), and a valid AGENT token is
-// a 403. The other ops are covered here for tier completeness:
-//   - list_editions_admin / create_edition / update_edition — admin (agent-allowed).
-//   - send_edition / delete_edition — operator (agent → 403).
-
 const createEdition = vi.fn();
 const deleteEdition = vi.fn();
 const listEditions = vi.fn();
@@ -32,8 +24,6 @@ vi.mock("./editions", () => ({
 
 const EDITION_ID = "edition-123";
 
-// A schema-complete EditionDTO — oRPC validates the response body against the
-// contract, so the create/update/send envelopes need the full shape.
 const EDITION = {
   content: { intro: "Ahoy cosmonauts." },
   createdAt: "2026-06-26T00:00:00.000Z",
@@ -54,7 +44,6 @@ beforeEach(() => {
   updateEdition.mockReset();
 });
 
-// ── list_editions_admin — admin tier ─────────────────────────────────────────
 describe("oRPC list_editions_admin (GET /admin/newsletter/editions)", () => {
   it("401s with no token", async () => {
     const { handleOrpc } = await import("./orpc");
@@ -76,7 +65,6 @@ describe("oRPC list_editions_admin (GET /admin/newsletter/editions)", () => {
   });
 });
 
-// ── delete_edition — operator tier (the archive pull) ────────────────────────
 describe("oRPC delete_edition (DELETE /admin/newsletter/editions/{id})", () => {
   it("401s with no token", async () => {
     const { handleOrpc } = await import("./orpc");
@@ -127,7 +115,6 @@ describe("oRPC delete_edition (DELETE /admin/newsletter/editions/{id})", () => {
   });
 });
 
-// ── send_edition — operator tier ─────────────────────────────────────────────
 describe("oRPC send_edition (POST /admin/newsletter/editions/{id}/send)", () => {
   it("403s the AGENT", async () => {
     const { handleOrpc } = await import("./orpc");

@@ -1,15 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_MIXTAPE_TITLE, publishMixtape } from "./mixtapes";
 
-// publishMixtape's DB choreography: getMixtapeById (a MIXTAPE_SELECT execute) → the
-// cap pre-check (a max(sequence_number) execute) → the mint batch (gated on
-// `log_id is null`, returning log_id + sequence_number) → an optional title update
-// execute → a final getMixtapeById readback. The row arrives as promote's CLAIM
-// (status `distributing`, log_id NULL — there is no draft state); the mint commits
-// the coordinate. We back it with a single mutable row and answer each query by
-// its SQL shape — enough to prove the gate + mint + canonicalization without a
-// real libsql instance.
-
 type Row = Record<string, unknown>;
 
 const state = vi.hoisted(() => ({ nextSequence: 1, row: {} as Row }));
@@ -22,25 +13,16 @@ const execute = vi.hoisted(() =>
       return { rows: [] };
     }
 
-    // The cap pre-check (nextMixtapeSequence).
     if (query.sql.includes("coalesce(max(sequence_number), 0) + 1")) {
       return { rows: [{ n: state.nextSequence }] };
     }
 
-    // getMixtapeById runs a MIXTAPE_SELECT; return the current row state (the select
-    // projects member_count, default it to 1).
     return { rows: [{ member_count: 1, ...state.row }] };
   }),
 );
 
 const batch = vi.hoisted(() =>
   vi.fn(async (queries: Array<{ args: unknown[] }>) => {
-    // The mint batch stamps the minted coordinate onto the row (status →
-    // 'distributing', NOT 'published' — the first platform link publishes it later).
-    // Mirror the real SQL: the sector PREFIX is the query's first arg, the sequence
-    // comes from the cap-checked next_sequence, and the tail is 1A..9F — so the
-    // minted coordinate reflects the resolved sector date (plannedFor-wins) instead
-    // of a hard-coded value.
     const [sectorPrefix] = (queries[0]?.args ?? []) as [string];
     const sequence = state.nextSequence;
     const logId = `${sectorPrefix}${Math.floor((sequence - 1) / 6) + 1}${"ABCDEF"[(sequence - 1) % 6]}`;
@@ -62,9 +44,6 @@ vi.mock("./tracks", () => ({
   getTracksForMixtape: async () => [],
 }));
 
-// A complete, mintable claim (the row promote inserts before minting). Individual
-// tests blank a field to prove the gate. Note: NO external link — distribution
-// supplies it, so the gate no longer requires one.
 function seedClaim(overrides: Partial<Row> = {}): void {
   state.nextSequence = 1;
   state.row = {
@@ -103,7 +82,6 @@ describe("publishMixtape — mint the claimed coordinate", () => {
 
     const minted = await publishMixtape("claim-id");
 
-    // The sector day is the recorded date; `plannedFor` is not consulted.
     expect(minted.logId).toBe("032.F.1A");
   });
 
@@ -144,9 +122,6 @@ describe("publishMixtape — mint guards + cap", () => {
     batch.mockClear();
   });
 
-  // A claim is just the tracklist — that's the only hard requirement to mint.
-  // The recorded date defaults to today, the dream note is written via the
-  // post-publish edit, and the duration is derived from the upload by distribute.
   it("mints without a recorded date — it defaults to today", async () => {
     seedClaim({ recorded_at: null });
     await expect(publishMixtape("claim-id")).resolves.toMatchObject({ status: "distributing" });

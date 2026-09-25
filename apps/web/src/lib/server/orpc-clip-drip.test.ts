@@ -8,16 +8,6 @@ import {
   warmOrpcRouter,
 } from "./orpc-test-kit";
 
-// The clip drip-feed ops, driven end-to-end through `handleOrpc`. Proves:
-//   - the auth tiers: drip_clips + list_clip_posts are ADMIN (the AGENT box token
-//     passes); set_clip_schedule + set_clip_drip are OPERATOR (the agent is 403);
-//   - the drip logic: the kill switch no-ops the tick; due selection posts within the
-//     per-tick + 24h budget; a push error marks the row failed and never aborts the tick;
-//     a clip whose caption builds BLANK is skipped rather than posted naked (it is not an
-//     error, so the row stays `scheduled` — a later tick fires it once it has a caption).
-// The store (`./clip-social`), Postiz (`./postiz`), the caption builder, and the clip
-// download URL are all mocked — the handler's job is the orchestration, not the DB/network.
-
 const isDripPaused = vi.fn();
 const setDripPaused = vi.fn();
 const countRecentPostedInWindow = vi.fn();
@@ -83,7 +73,7 @@ beforeEach(() => {
   countRecentPostedInWindow.mockResolvedValue(0);
   countDueClipPosts.mockResolvedValue(0);
   dueClipPosts.mockResolvedValue([]);
-  // The capture-back pass: no posted-but-unlinked rows by default (captured: 0).
+
   postedClipPostsAwaitingUrl.mockResolvedValue([]);
   resolveSocialUrl.mockResolvedValue(null);
   postizSetReleaseId.mockResolvedValue(undefined);
@@ -95,7 +85,6 @@ beforeEach(() => {
   pushInstagramReel.mockResolvedValue({ postId: "post-x" });
 });
 
-// ── drip_clips — ADMIN tier (the box's agent token drives it) ────────────────
 describe("oRPC drip_clips (POST /admin/clips/drip)", () => {
   it("401s with no token", async () => {
     const { handleOrpc } = await import("./orpc");
@@ -148,7 +137,7 @@ describe("oRPC drip_clips (POST /admin/clips/drip)", () => {
       skippedCapped: 0,
     });
     expect(pushInstagramReel).toHaveBeenCalledTimes(2);
-    // Caption rebuilt fresh at fire time; the with-audio clip URL is pulled.
+
     expect(pushInstagramReel).toHaveBeenCalledWith({
       caption: "caption for clip-1",
       videoUrl: "https://found.fluncle.com/clip-1/footage.mp4",
@@ -158,9 +147,8 @@ describe("oRPC drip_clips (POST /admin/clips/drip)", () => {
   });
 
   it("clamps the budget to the rolling-24h cap and reports skippedCapped", async () => {
-    // 9 already posted in 24h → remaining24h = 10 - 9 = 1; per-tick cap 3 ⇒ budget 1.
     countRecentPostedInWindow.mockResolvedValue(9);
-    countDueClipPosts.mockResolvedValue(5); // 5 due, only 1 postable this tick
+    countDueClipPosts.mockResolvedValue(5);
     dueClipPosts.mockResolvedValue([
       { clipId: "clip-1", scheduledFor: "2026-07-05T00:00:00.000Z" },
     ]);
@@ -168,7 +156,6 @@ describe("oRPC drip_clips (POST /admin/clips/drip)", () => {
     const { handleOrpc } = await import("./orpc");
     const response = await handleOrpc(req("/admin/clips/drip", "POST", AGENT_TOKEN, {}));
 
-    // dueClipPosts was asked for at most the clamped budget of 1.
     expect(dueClipPosts).toHaveBeenCalledWith({ limit: 1 });
     expect(await readJson(response)).toEqual({
       attempted: 1,
@@ -178,7 +165,7 @@ describe("oRPC drip_clips (POST /admin/clips/drip)", () => {
       paused: false,
       posted: 1,
       skippedBlank: 0,
-      skippedCapped: 4, // 5 due − 1 posted this tick
+      skippedCapped: 4,
     });
   });
 
@@ -214,7 +201,7 @@ describe("oRPC drip_clips (POST /admin/clips/drip)", () => {
     dueClipPosts.mockResolvedValue([
       { clipId: "clip-1", scheduledFor: "2026-07-05T00:00:00.000Z" },
     ]);
-    // No stored caption and no cued track under the window → an empty built caption.
+
     buildClipCaption.mockResolvedValue({ builtCaption: "", clipId: "clip-1", coordinates: [] });
 
     const { handleOrpc } = await import("./orpc");
@@ -230,8 +217,7 @@ describe("oRPC drip_clips (POST /admin/clips/drip)", () => {
       skippedBlank: 1,
       skippedCapped: 0,
     });
-    // Nothing reached Instagram, and the row is untouched — still `scheduled`, so the next
-    // tick fires it once the recording is cued or a caption is written.
+
     expect(pushInstagramReel).not.toHaveBeenCalled();
     expect(setClipPostStatus).not.toHaveBeenCalled();
   });
@@ -270,7 +256,6 @@ describe("oRPC drip_clips (POST /admin/clips/drip)", () => {
     const { handleOrpc } = await import("./orpc");
     const response = await handleOrpc(req("/admin/clips/drip", "POST", AGENT_TOKEN, {}));
 
-    // attempted = posted + failed + skippedBlank.
     expect(await readJson(response)).toEqual({
       attempted: 2,
       captured: 0,
@@ -291,9 +276,8 @@ describe("oRPC drip_clips (POST /admin/clips/drip)", () => {
   });
 
   it("captures the IG permalink back onto a posted-but-unlinked clip (capture pass)", async () => {
-    // A prior tick posted clip-9 (postiz id post-9) but its permalink wasn't up yet.
     postedClipPostsAwaitingUrl.mockResolvedValue([{ clipId: "clip-9", postizId: "post-9" }]);
-    // This tick, Postiz's dated /posts list has published the Reel with its real permalink.
+
     resolveSocialUrl.mockResolvedValue({
       nativeId: "media-9",
       url: "https://www.instagram.com/reel/AbC123/",
@@ -313,7 +297,7 @@ describe("oRPC drip_clips (POST /admin/clips/drip)", () => {
       skippedBlank: 0,
       skippedCapped: 0,
     });
-    // Resolved against the IG platform, the URL back-filled, and the analytics id linked.
+
     expect(resolveSocialUrl).toHaveBeenCalledWith("post-9", "instagram");
     expect(setClipPostStatus).toHaveBeenCalledWith("clip-9", "posted", {
       postedUrl: "https://www.instagram.com/reel/AbC123/",
@@ -323,7 +307,7 @@ describe("oRPC drip_clips (POST /admin/clips/drip)", () => {
 
   it("leaves an unresolved post unlinked (retried next tick) — captured 0", async () => {
     postedClipPostsAwaitingUrl.mockResolvedValue([{ clipId: "clip-9", postizId: "post-9" }]);
-    resolveSocialUrl.mockResolvedValue(null); // not published yet
+    resolveSocialUrl.mockResolvedValue(null);
 
     const { handleOrpc } = await import("./orpc");
     const response = await handleOrpc(req("/admin/clips/drip", "POST", AGENT_TOKEN, {}));
@@ -345,7 +329,6 @@ describe("oRPC drip_clips (POST /admin/clips/drip)", () => {
     const { handleOrpc } = await import("./orpc");
     const response = await handleOrpc(req("/admin/clips/drip", "POST", AGENT_TOKEN, {}));
 
-    // Paused: nothing posted, but the read-only capture-back still ran.
     expect(await readJson(response)).toEqual({
       attempted: 0,
       captured: 1,
@@ -363,7 +346,6 @@ describe("oRPC drip_clips (POST /admin/clips/drip)", () => {
   });
 });
 
-// ── list_clip_posts — ADMIN tier ─────────────────────────────────────────────
 describe("oRPC list_clip_posts (GET /admin/clips/social)", () => {
   it("lets the AGENT read the drip rows", async () => {
     listClipPosts.mockResolvedValue([
@@ -387,7 +369,6 @@ describe("oRPC list_clip_posts (GET /admin/clips/social)", () => {
   });
 });
 
-// ── set_clip_schedule — OPERATOR tier ────────────────────────────────────────
 describe("oRPC set_clip_schedule (PATCH /admin/clips/{clipId}/schedule)", () => {
   it("403s the AGENT (operator-only)", async () => {
     const { handleOrpc } = await import("./orpc");
@@ -428,7 +409,6 @@ describe("oRPC set_clip_schedule (PATCH /admin/clips/{clipId}/schedule)", () => 
   });
 });
 
-// ── set_clip_schedules — OPERATOR tier (batch) ───────────────────────────────
 describe("oRPC set_clip_schedules (POST /admin/clips/schedule)", () => {
   it("403s the AGENT (operator-only, like the single sibling)", async () => {
     const { handleOrpc } = await import("./orpc");
@@ -446,7 +426,7 @@ describe("oRPC set_clip_schedules (POST /admin/clips/schedule)", () => {
 
     expect(response?.status).toBe(200);
     expect(await readJson(response)).toEqual({ ok: true, scheduled: 2 });
-    // One upsert per clip, each with its own snapshotted caption + the chained slot.
+
     expect(upsertClipPost).toHaveBeenCalledTimes(2);
     expect(upsertClipPost).toHaveBeenCalledWith({
       caption: "caption for clip-1",
@@ -472,7 +452,6 @@ describe("oRPC set_clip_schedules (POST /admin/clips/schedule)", () => {
   });
 });
 
-// ── delete_clip_schedule — OPERATOR tier (unschedule) ────────────────────────
 describe("oRPC delete_clip_schedule (DELETE /admin/clips/{clipId}/schedule)", () => {
   it("403s the AGENT (operator-only)", async () => {
     const { handleOrpc } = await import("./orpc");
@@ -495,7 +474,6 @@ describe("oRPC delete_clip_schedule (DELETE /admin/clips/{clipId}/schedule)", ()
   });
 });
 
-// ── set_clip_drip — OPERATOR tier (the kill switch) ──────────────────────────
 describe("oRPC set_clip_drip (PUT /admin/clips/drip/state)", () => {
   it("403s the AGENT (operator-only)", async () => {
     const { handleOrpc } = await import("./orpc");

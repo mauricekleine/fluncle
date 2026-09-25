@@ -2,13 +2,6 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { call } from "@orpc/server";
 import { adminProcedure, operatorProcedure } from "./orpc-auth";
 
-// The admin auth spine. The contract op these
-// procedures are bound to is `get_track`, so each test attaches a trivial
-// `.handler` and invokes it with `call(...)`, exercising the middleware tier in
-// isolation from any route. The role model itself (token → operator/agent → null)
-// is `adminRole` in env.ts, covered there; here we assert the procedures map a
-// resolved role onto the right HTTP tier.
-
 const OPERATOR_TOKEN = "test-operator-token-orpc-auth";
 const AGENT_TOKEN = "test-agent-token-orpc-auth";
 
@@ -24,7 +17,6 @@ function requestAs(token?: string): Request {
   });
 }
 
-// A handler that echoes the resolved role, on each procedure tier.
 const adminEcho = adminProcedure.handler(({ context }) => ({
   ok: true as const,
   role: context.role,

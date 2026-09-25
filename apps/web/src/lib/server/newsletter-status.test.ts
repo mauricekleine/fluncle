@@ -1,8 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// Mock the env reads so RESEND_API_KEY can be present or absent per test, and stub
-// `fetch` so no real Resend call goes out. `readNewsletterStatus` degrades to
-// `{ available: false }` whenever the key is missing or the read faults.
 const readOptionalEnv = vi.hoisted(() => vi.fn());
 
 vi.mock("./env", () => ({ readOptionalEnv }));
@@ -29,7 +26,7 @@ describe("parseNewsletterStatus", () => {
   it("reads a 200 contact as subscribed unless it is unsubscribed", () => {
     expect(parseNewsletterStatus(200, { unsubscribed: false })).toEqual({ subscribed: true });
     expect(parseNewsletterStatus(200, { unsubscribed: true })).toEqual({ subscribed: false });
-    // A 200 with no `unsubscribed` field is treated as subscribed (not unsubscribed).
+
     expect(parseNewsletterStatus(200, undefined)).toEqual({ subscribed: true });
   });
 

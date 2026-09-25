@@ -1,16 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// The bare-handle mention seam: WHO gets credited (lead artists, trust-gated, capped at 3),
-// the handle-form parse (only `/@handle` is usable), the block-caption injection point, and
-// the cap-and-drop guard. The DB-backed `mentionHandlesFor` is proved over a mocked getDb.
-
 const execute = vi.fn();
 
 vi.mock("./db", () => ({
   getDb: async () => ({ execute: (...args: unknown[]) => execute(...args) }),
 }));
 
-// logEvent is a no-op sink here — we only care it doesn't throw on the error path.
 vi.mock("./log", () => ({ logEvent: vi.fn() }));
 
 import {
@@ -22,7 +17,6 @@ import {
   parseMentionHandle,
 } from "./mentions";
 
-// The fixed-template caption `buildCaption` emits (title / label / "" / Found / "" / tags).
 const CAPTION =
   "Indivision — Don't Leave Me This Way (2020)\n" +
   "Indivision Music\n" +
@@ -38,7 +32,6 @@ const CAPTION_NO_LABEL =
   "\n" +
   "#dnb #drumnbass #drumandbass\n";
 
-// ── parseMentionHandle: only the `/@handle` form is usable ────────────────────
 describe("parseMentionHandle", () => {
   const cases: Array<{ name: string; url: string; expected: string | undefined }> = [
     {
@@ -85,7 +78,6 @@ describe("parseMentionHandle", () => {
   }
 });
 
-// ── injectMentionLine: after the label, before the Found separator ────────────
 describe("injectMentionLine", () => {
   it("inserts a single handle line right under the label", () => {
     const out = injectMentionLine(CAPTION, ["@indivisionmusic"]);
@@ -127,7 +119,6 @@ describe("injectMentionLine", () => {
   });
 });
 
-// ── captionWithMentions: cap and drop last-artist-first ───────────────────────
 describe("captionWithMentions", () => {
   it("keeps all handles when they fit under the cap", () => {
     const out = captionWithMentions(CAPTION, ["@one", "@two", "@three"], 5000);
@@ -135,9 +126,8 @@ describe("captionWithMentions", () => {
   });
 
   it("drops handles LAST-ARTIST-FIRST until the caption fits", () => {
-    // A cap that admits the base caption + "@one" but not the longer lines.
     const withOne = injectMentionLine(CAPTION, ["@one"]);
-    const cap = withOne.length; // exactly fits one handle
+    const cap = withOne.length;
     const out = captionWithMentions(CAPTION, ["@one", "@two", "@three"], cap);
 
     expect(out).toBe(withOne);
@@ -149,13 +139,12 @@ describe("captionWithMentions", () => {
     const out = captionWithMentions(CAPTION, ["@one"], 5);
 
     expect(out).toBe(CAPTION);
-    // The load-bearing lines are all intact.
+
     expect(out).toContain("fluncle://027.9.5H");
     expect(out).toContain("#dnb #drumnbass #drumandbass");
   });
 });
 
-// ── mentionHandlesFor: the DB-backed WHO + trust gate ─────────────────────────
 describe("mentionHandlesFor", () => {
   beforeEach(() => {
     execute.mockReset();
@@ -172,8 +161,7 @@ describe("mentionHandlesFor", () => {
 
     const call = execute.mock.calls[0]?.[0] as { args: unknown[]; sql: string };
     expect(call.args).toEqual(["t1", "youtube"]);
-    // The WHO + the absolute trust gate live in SQL, not JS — assert they are present so a
-    // regression that widens either predicate fails here.
+
     expect(call.sql).toContain("ta.role is null");
     expect(call.sql).toContain("status in ('auto', 'confirmed')");
     expect(call.sql).toContain("order by ta.position asc");
@@ -183,8 +171,8 @@ describe("mentionHandlesFor", () => {
     execute.mockResolvedValueOnce({
       rows: [
         { url: "https://www.youtube.com/@one" },
-        { url: "https://www.youtube.com/channel/UCxyz" }, // unusable → skipped
-        { url: "https://www.youtube.com/@one" }, // dup → skipped
+        { url: "https://www.youtube.com/channel/UCxyz" },
+        { url: "https://www.youtube.com/@one" },
         { url: "https://www.youtube.com/@two" },
       ],
     });
@@ -214,7 +202,6 @@ describe("mentionHandlesFor", () => {
   });
 });
 
-// ── captionForPlatform: the shared seam ───────────────────────────────────────
 describe("captionForPlatform", () => {
   beforeEach(() => {
     execute.mockReset();
