@@ -13,6 +13,8 @@ import { parseSetParam, parseTasteParam, serializeSet, serializeTaste } from "..
 import { hasTrackPageIdentity, trackPagePath } from "../track-page";
 import { parseArtistsJson } from "./artists";
 import { listedArtistWhere } from "./artist-visibility";
+import { type FollowTarget, parseFollowTarget, verifyFollowIntent } from "./follow-intent";
+import { resolveFollowTarget } from "./follow-targets";
 import { getDb, typedRow, typedRows } from "./db";
 
 import { type RecSeedItem } from "./recommendations";
@@ -141,7 +143,7 @@ export type SavedSetItem = {
   updatedAt: string;
 };
 
-export type WatchItem = {
+export type FollowItem = {
   createdAt: string;
   entityId: string;
   id: string;
@@ -841,7 +843,7 @@ function rowToItem(row: SavedSetRow): SavedSetItem {
   };
 }
 
-type WatchRow = {
+type FollowRow = {
   created_at: string;
   entity_id: string;
   id: string;
@@ -851,9 +853,7 @@ type WatchRow = {
   slug: string | null;
 };
 
-const WATCH_KINDS = new Set(["artist", "label"]);
-
-export async function listWatches(user: PublicUser): Promise<{ ok: true; watches: WatchItem[] }> {
+export async function listFollows(user: PublicUser): Promise<{ ok: true; follows: FollowItem[] }> {
   const result = await (
     await getDb()
   ).execute({
@@ -870,9 +870,8 @@ export async function listWatches(user: PublicUser): Promise<{ ok: true; watches
   });
 
   return {
-    ok: true,
-    watches: typedRows<WatchRow>(result.rows)
-      .filter((row): row is WatchRow & { name: string; slug: string } =>
+    follows: typedRows<FollowRow>(result.rows)
+      .filter((row): row is FollowRow & { name: string; slug: string } =>
         Boolean(row.name && row.slug),
       )
       .map((row) => ({
@@ -884,78 +883,83 @@ export async function listWatches(user: PublicUser): Promise<{ ok: true; watches
         name: row.name,
         slug: row.slug,
       })),
+    ok: true,
   };
 }
 
-export async function saveWatch(
+async function followTargetFromBody(
+  user: PublicUser,
+  body: Record<string, unknown>,
+): Promise<FollowTarget | Response> {
+  if (typeof body.intent === "string") {
+    const { publicAuthSecret } = await import("./public-auth");
+    const target = verifyFollowIntent({
+      email: user.email,
+      secret: publicAuthSecret(),
+      token: body.intent,
+    });
+
+    return target ?? jsonError(400, "follow_link_invalid", "That follow link has expired");
+  }
+
+  return parseFollowTarget(body) ?? jsonError(400, "invalid_request", "Invalid follow");
+}
+
+export async function saveFollow(
   user: PublicUser,
   body: unknown,
-): Promise<
-  | Response
-  | {
-      ok: true;
-      watch: {
-        createdAt: string;
-        entityId: string;
-        id: string;
-        includeSimilar: boolean;
-        kind: "artist" | "label";
-      };
-    }
-> {
+): Promise<Response | { ok: true; follow: FollowItem; followsEmail: boolean }> {
   if (!isRecord(body)) {
-    return jsonError(400, "invalid_request", "Invalid watch");
+    return jsonError(400, "invalid_request", "Invalid follow");
   }
 
-  const kind = typeof body.kind === "string" ? body.kind : "";
-  const entityId = typeof body.entityId === "string" ? body.entityId.trim() : "";
+  const requested = await followTargetFromBody(user, body);
 
-  if (!WATCH_KINDS.has(kind) || !entityId) {
-    return jsonError(400, "invalid_request", "Invalid watch");
+  if (requested instanceof Response) {
+    return requested;
   }
 
-  const db = await getDb();
+  const target = await resolveFollowTarget(requested);
 
-  const table = kind === "artist" ? "artists" : "labels";
-  const entity = await db.execute({
-    args: [entityId],
-    sql: `select id from ${table} where id = ? limit 1`,
-  });
-
-  if (entity.rows.length === 0) {
+  if (!target) {
     return jsonError(404, "entity_not_found", "No artist or label at that id");
   }
 
+  const db = await getDb();
   const id = randomUUID();
   const now = new Date().toISOString();
 
   await db.execute({
-    args: [id, user.id, kind, entityId, now],
+    args: [id, user.id, target.kind, target.entityId, now],
     sql: `insert into user_watches (id, user_id, kind, entity_id, include_similar, created_at)
       values (?, ?, ?, ?, 0, ?)
       on conflict(user_id, kind, entity_id) do nothing`,
   });
 
   const stored = await db.execute({
-    args: [user.id, kind, entityId],
-    sql: `select id, kind, entity_id, include_similar, created_at
+    args: [user.id, target.kind, target.entityId],
+    sql: `select id, include_similar, created_at
       from user_watches where user_id = ? and kind = ? and entity_id = ? limit 1`,
   });
-  const row = typedRow<WatchRow>(stored.rows);
+  const row = typedRow<Pick<FollowRow, "created_at" | "id" | "include_similar">>(stored.rows);
+  const { isFollowDigestSubscribed } = await import("./follow-digest");
 
   return {
-    ok: true,
-    watch: {
+    follow: {
       createdAt: row?.created_at ?? now,
-      entityId,
+      entityId: target.entityId,
       id: row?.id ?? id,
       includeSimilar: (row?.include_similar ?? 0) === 1,
-      kind: kind as "artist" | "label",
+      kind: target.kind,
+      name: target.name,
+      slug: target.slug,
     },
+    followsEmail: await isFollowDigestSubscribed(user.id),
+    ok: true,
   };
 }
 
-export async function deleteWatch(user: PublicUser, id: string): Promise<Response | { ok: true }> {
+export async function deleteFollow(user: PublicUser, id: string): Promise<Response | { ok: true }> {
   const result = await (
     await getDb()
   ).execute({
@@ -964,7 +968,7 @@ export async function deleteWatch(user: PublicUser, id: string): Promise<Respons
   });
 
   if ((result.rowsAffected ?? 0) === 0) {
-    return jsonError(404, "watch_not_found", "No watch to remove");
+    return jsonError(404, "follow_not_found", "No follow to remove");
   }
 
   return { ok: true };
@@ -1067,6 +1071,13 @@ export async function exportAccountData(user: PublicUser): Promise<{
   export: {
     account: PublicUser;
     generatedAt: string;
+    followDigest: {
+      lastReleaseCount: number | null;
+      lastSentAt: string | null;
+      lastWeekKey: string | null;
+      unsubscribedAt: string | null;
+      updatedAt: string;
+    } | null;
     id: string;
     preferences: UserPreferences;
     privacyNotes: string[];
@@ -1075,7 +1086,7 @@ export async function exportAccountData(user: PublicUser): Promise<{
     savedFindings: SavedFindingItem[];
     savedSets: SavedSetItem[];
     submissions: PrivateSubmissionItem[];
-    watches: WatchItem[];
+    follows: FollowItem[];
   };
   ok: true;
 }> {
@@ -1083,15 +1094,21 @@ export async function exportAccountData(user: PublicUser): Promise<{
   const requestedAt = new Date().toISOString();
   const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
   const exportId = randomUUID();
-  const [progress, saved, sets, submissions, preferences, recSeeds, watches] = await Promise.all([
-    getGalaxyProgress(user),
-    listSavedFindings(user),
-    listSavedSets(user),
-    listUserSubmissions(user),
-    getUserPreferences(user),
-    listRecSeeds(user),
-    listWatches(user),
-  ]);
+  const [progress, saved, sets, submissions, preferences, recSeeds, follows, digest] =
+    await Promise.all([
+      getGalaxyProgress(user),
+      listSavedFindings(user),
+      listSavedSets(user),
+      listUserSubmissions(user),
+      getUserPreferences(user),
+      listRecSeeds(user),
+      listFollows(user),
+      (await getDb()).execute({
+        args: [user.id],
+        sql: `select last_release_count, last_sent_at, last_week_key, unsubscribed_at, updated_at
+        from user_follow_digests where user_id = ? limit 1`,
+      }),
+    ]);
 
   await (
     await getDb()
@@ -1105,6 +1122,25 @@ export async function exportAccountData(user: PublicUser): Promise<{
   return {
     export: {
       account: user,
+      followDigest: (() => {
+        const row = typedRow<{
+          last_release_count: number | null;
+          last_sent_at: string | null;
+          last_week_key: string | null;
+          unsubscribed_at: string | null;
+          updated_at: string;
+        }>(digest.rows);
+        return row
+          ? {
+              lastReleaseCount: row.last_release_count,
+              lastSentAt: row.last_sent_at,
+              lastWeekKey: row.last_week_key,
+              unsubscribedAt: row.unsubscribed_at,
+              updatedAt: row.updated_at,
+            }
+          : null;
+      })(),
+      follows: follows.follows,
       generatedAt: requestedAt,
       id: exportId,
       preferences: preferences.preferences,
@@ -1117,7 +1153,6 @@ export async function exportAccountData(user: PublicUser): Promise<{
       savedFindings: saved.savedFindings,
       savedSets: sets.savedSets,
       submissions: submissions.submissions,
-      watches: watches.watches,
     },
     ok: true,
   };
@@ -1170,6 +1205,7 @@ export async function deleteAccount(user: PublicUser): Promise<{
   ok: true;
   summary: {
     credentials: string;
+    followDigest: string;
     galaxyProgress: string;
     preferences: string;
     recSeeds: string;
@@ -1179,7 +1215,7 @@ export async function deleteAccount(user: PublicUser): Promise<{
     submissions: string;
     user: string;
     verifications: string;
-    watches: string;
+    follows: string;
   };
 }> {
   const db = await getDb();
@@ -1192,6 +1228,8 @@ export async function deleteAccount(user: PublicUser): Promise<{
   const email = typedRow<UserEmailRow>(userResult.rows)?.email ?? undefined;
   const summary = {
     credentials: "deleted",
+    followDigest: "deleted",
+    follows: "deleted",
     galaxyProgress: "deleted",
     preferences: "deleted",
     recSeeds: "deleted",
@@ -1201,7 +1239,6 @@ export async function deleteAccount(user: PublicUser): Promise<{
     submissions: "anonymized",
     user: "marked_deleted",
     verifications: "deleted",
-    watches: "deleted",
   };
 
   await db.batch(
@@ -1262,6 +1299,10 @@ export function accountDeletionStatements({
     {
       args: [userId],
       sql: `delete from user_watches where user_id = ?`,
+    },
+    {
+      args: [userId],
+      sql: `delete from user_follow_digests where user_id = ?`,
     },
     {
       args: [userId],

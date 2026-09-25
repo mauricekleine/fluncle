@@ -1,5 +1,6 @@
 import { oc } from "@orpc/contract";
 import * as z from "zod";
+import { FollowSchema } from "./me-follows";
 import { GalaxyProgressSchema } from "./me-galaxy";
 import { UserPreferencesSchema } from "./me-preferences";
 import { RecSeedSchema } from "./me-recs";
@@ -79,6 +80,8 @@ export const deletePrivateAccount = oc
       ok: z.literal(true),
       summary: z.object({
         credentials: z.string(),
+        followDigest: z.string().optional(),
+        follows: z.string().optional(),
         galaxyProgress: z.string(),
 
         preferences: z.string().optional(),
@@ -105,6 +108,17 @@ export const exportPrivateAccountData = oc
     z.object({
       export: z.object({
         account: PublicUserSchema,
+        followDigest: z
+          .object({
+            lastReleaseCount: z.number().nullable(),
+            lastSentAt: z.string().nullable(),
+            lastWeekKey: z.string().nullable(),
+            unsubscribedAt: z.string().nullable(),
+            updatedAt: z.string(),
+          })
+          .nullable()
+          .optional(),
+        follows: z.array(FollowSchema).optional(),
         generatedAt: z.string(),
         id: z.string(),
         preferences: UserPreferencesSchema,

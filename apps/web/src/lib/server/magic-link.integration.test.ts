@@ -4,14 +4,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as schema from "../../db/schema";
 import { betterAuth } from "better-auth";
 import { createIntegrationAuth } from "./integration-auth";
-import { createIntegrationDb } from "./integration-db";
+import { createIntegrationDb, seedLabel } from "./integration-db";
 import { createPublicAuthOptions } from "./public-auth";
 
 let db: Client;
 
 const BASE_URL = "https://www.fluncle.com";
 
-const sendMagicLinkEmail = vi.fn<(params: { to: string; url: string }) => Promise<void>>();
+const sendMagicLinkEmail =
+  vi.fn<(params: { followName?: string; to: string; url: string }) => Promise<void>>();
 const addContactToSegment = vi.fn<(email: string) => Promise<void>>();
 
 vi.mock("./discord-alert", () => ({ notifyDiscordSignup: async () => {} }));
@@ -22,7 +23,8 @@ vi.mock("./resend", async (importOriginal) => {
   return {
     ...actual,
     addContactToSegment: (email: string) => addContactToSegment(email),
-    sendMagicLinkEmail: (params: { to: string; url: string }) => sendMagicLinkEmail(params),
+    sendMagicLinkEmail: (params: { followName?: string; to: string; url: string }) =>
+      sendMagicLinkEmail(params),
     sendPasswordResetEmail: vi.fn(async () => {}),
     sendVerificationEmail: vi.fn(async () => {}),
   };
@@ -180,5 +182,48 @@ describe("magic-link sign-in", () => {
 
     expect(response.status).toBe(403);
     expect(sendMagicLinkEmail).not.toHaveBeenCalled();
+  });
+  it("carries a validated follow onto the link, bound to the address it was sent to", async () => {
+    await seedLabel(db, { id: "label-1", name: "Hospital Records", slug: "hospital-records" });
+    const auth = buildAuth();
+
+    await requestLink(auth, {
+      callbackURL: "/label/hospital-records",
+      email: "dave@example.com",
+      metadata: { follow: { entityId: "label-1", kind: "label" } },
+    });
+
+    const [params] = sendMagicLinkEmail.mock.calls.at(-1) ?? [];
+    const callback = new URL(sentUrl().searchParams.get("callbackURL") ?? "", BASE_URL);
+    const intent = callback.searchParams.get("follow") ?? "";
+
+    expect(params?.followName).toBe("Hospital Records");
+    expect(callback.pathname).toBe("/label/hospital-records");
+
+    const { verifyFollowIntent } = await import("./follow-intent");
+    const { publicAuthSecret } = await import("./public-auth");
+
+    expect(
+      verifyFollowIntent({ email: "dave@example.com", secret: publicAuthSecret(), token: intent }),
+    ).toEqual({ entityId: "label-1", kind: "label" });
+
+    const verified = await openLink(auth, sentUrl());
+
+    expect(verified.headers.get("location")).toBe(
+      `${BASE_URL}/label/hospital-records?follow=${intent}`,
+    );
+  });
+
+  it("sends a plain sign-in link when the follow names nothing real", async () => {
+    const auth = buildAuth();
+
+    await requestLink(auth, {
+      callbackURL: "/label/nowhere",
+      email: "dave@example.com",
+      metadata: { follow: { entityId: "no-such-label", kind: "label" } },
+    });
+
+    expect(sendMagicLinkEmail.mock.calls.at(-1)?.[0]?.followName).toBeUndefined();
+    expect(sentUrl().searchParams.get("callbackURL")).toBe("/label/nowhere");
   });
 });

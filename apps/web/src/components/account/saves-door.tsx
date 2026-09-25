@@ -40,10 +40,11 @@ import {
 import {
   ListEmpty,
   type SavedFinding,
+  type Follow,
+  type FollowsEmail,
   type SavedSet,
   type SavesDoorData,
   type Submission,
-  type Watch,
 } from "./shared";
 
 export function SavesDoor({
@@ -56,7 +57,7 @@ export function SavesDoor({
   refresh: () => Promise<void>;
 }) {
   const [setsMessage, setSetsMessage] = useState("");
-  const { saved, sets, submissions, watches } = data;
+  const { follows, followsEmail, saved, sets, submissions } = data;
 
   return (
     <div className="account-tab-panel">
@@ -89,7 +90,12 @@ export function SavesDoor({
         ) : null}
       </section>
 
-      <WatchingSection csrfToken={csrfToken} refresh={refresh} watches={watches} />
+      <FollowingSection
+        csrfToken={csrfToken}
+        follows={follows}
+        followsEmail={followsEmail}
+        refresh={refresh}
+      />
 
       <SentLedger submissions={submissions} />
     </div>
@@ -477,87 +483,127 @@ function SavedSetRow({
   );
 }
 
-function WatchingSection({
+function FollowingSection({
   csrfToken,
+  follows,
+  followsEmail,
   refresh,
-  watches,
 }: {
   csrfToken: string;
+  follows: Follow[];
+  followsEmail: FollowsEmail;
   refresh: () => Promise<void>;
-  watches: Watch[];
 }) {
   const [message, setMessage] = useState("");
+  const [subscribed, setSubscribed] = useState(followsEmail.subscribed);
+  const [busy, setBusy] = useState(false);
+
+  async function toggleEmail() {
+    if (busy) {
+      return;
+    }
+
+    setBusy(true);
+
+    const response = await fetch(
+      `/api/v1/follow-digest/${subscribed ? "unsubscribe" : "subscribe"}?token=${encodeURIComponent(followsEmail.token)}`,
+      { body: "{}", headers: { "Content-Type": "application/json" }, method: "POST" },
+    ).catch(() => undefined);
+
+    if (response?.ok) {
+      setSubscribed(!subscribed);
+      setMessage(subscribed ? "Follows email off." : "Follows email on.");
+    } else {
+      setMessage("I couldn't change that just now. Try again in a moment.");
+    }
+
+    setBusy(false);
+  }
 
   return (
     <section className="account-section">
-      <h2>Watching</h2>
+      <h2>Following</h2>
       <ListEmpty
-        items={watches}
-        empty="Nothing watched yet. Tap Watch on any artist or label and it lands here."
+        items={follows}
+        empty="Not following anyone yet. Tap Follow on an artist or label and I'll email you their new releases every Friday."
       >
-        {watches.map((watch) => (
-          <WatchRow
+        {follows.map((follow) => (
+          <FollowRow
             csrfToken={csrfToken}
-            key={watch.id}
+            follow={follow}
+            key={follow.id}
             refresh={refresh}
             setMessage={setMessage}
-            watch={watch}
           />
         ))}
       </ListEmpty>
-      {message ? (
-        <p aria-live="polite" className="account-muted">
-          {message}
+      <div className="account-row">
+        <p className="account-muted">
+          {subscribed
+            ? "I email you their new releases every Friday, and skip the weeks with nothing new."
+            : "Your follows email is off. Switch it on and I'll send their new releases every Friday."}
         </p>
-      ) : null}
+        <Button
+          aria-disabled={busy}
+          onClick={() => void toggleEmail()}
+          size="sm"
+          type="button"
+          variant="outline"
+        >
+          {subscribed ? "Stop the follows email" : "Start the follows email"}
+        </Button>
+      </div>
+      <p aria-live="polite" className="account-muted">
+        {message}
+      </p>
     </section>
   );
 }
 
-function WatchRow({
+function FollowRow({
   csrfToken,
+  follow,
   refresh,
   setMessage,
-  watch,
 }: {
   csrfToken: string;
+  follow: Follow;
   refresh: () => Promise<void>;
   setMessage: (message: string) => void;
-  watch: Watch;
 }) {
-  async function unwatch() {
-    const response = await fetch(`/api/v1/me/watches/${watch.id}`, {
+  async function unfollow() {
+    const response = await fetch(`/api/v1/me/follows/${follow.id}`, {
       headers: { "Content-Type": "application/json", "x-fluncle-csrf": csrfToken },
       method: "DELETE",
     });
 
-    setMessage(response.ok ? "" : "Could not stop watching that. Try again in a moment.");
+    setMessage(response.ok ? "" : "Could not unfollow that. Try again in a moment.");
     await refresh();
   }
 
   return (
     <li className="account-set-row">
-      {watch.kind === "artist" ? (
-        <Link params={{ slug: watch.slug }} to="/artist/$slug">
-          {watch.name}
+      {follow.kind === "artist" ? (
+        <Link params={{ slug: follow.slug }} to="/artist/$slug">
+          {follow.name}
         </Link>
       ) : (
-        <Link params={{ slug: watch.slug }} to="/label/$slug">
-          {watch.name}
+        <Link params={{ slug: follow.slug }} to="/label/$slug">
+          {follow.name}
         </Link>
       )}
       <span className="account-set-actions">
         <span className="account-muted text-xs">
-          {watch.kind === "artist" ? "Artist" : "Label"}
+          {follow.kind === "artist" ? "Artist" : "Label"}
         </span>
         <Button
-          aria-label={`Unwatch ${watch.name}`}
-          onClick={() => void unwatch()}
+          aria-label={`Unfollow ${follow.name}`}
+          onClick={() => void unfollow()}
           size="sm"
           type="button"
           variant="ghost"
         >
-          Unwatch
+          Unfollow
         </Button>
       </span>
     </li>

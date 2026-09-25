@@ -1,14 +1,14 @@
 import { ORPCError } from "@orpc/server";
-import { deleteWatch, listWatches, saveWatch } from "../account-data";
+import { deleteFollow, listFollows, saveFollow } from "../account-data";
 import { privateUserAuth, privateUserMutation } from "../orpc-auth";
 import { apiFault, type Implementer, responseFault } from "./_shared";
 
-export function meWatchesHandlers(os: Implementer) {
-  const listWatchesHandler = os.list_private_watches
+export function meFollowsHandlers(os: Implementer) {
+  const listFollowsHandler = os.list_private_follows
     .use(privateUserAuth)
     .handler(async ({ context }) => {
       try {
-        return await listWatches(context.user);
+        return await listFollows(context.user);
       } catch (error) {
         if (error instanceof ORPCError) {
           throw error;
@@ -18,11 +18,11 @@ export function meWatchesHandlers(os: Implementer) {
       }
     });
 
-  const saveWatchHandler = os.save_private_watch
-    .use(privateUserMutation({ action: "account.watches.write", limit: 90 }))
+  const saveFollowHandler = os.save_private_follow
+    .use(privateUserMutation({ action: "account.follows.write", limit: 90 }))
     .handler(async ({ context, input }) => {
       try {
-        const result = await saveWatch(context.user, input);
+        const result = await saveFollow(context.user, input);
 
         if (result instanceof Response) {
           throw await responseFault(result);
@@ -38,11 +38,11 @@ export function meWatchesHandlers(os: Implementer) {
       }
     });
 
-  const deleteWatchHandler = os.delete_private_watch
-    .use(privateUserMutation({ action: "account.watches.delete", limit: 90 }))
+  const deleteFollowHandler = os.delete_private_follow
+    .use(privateUserMutation({ action: "account.follows.delete", limit: 90 }))
     .handler(async ({ context, input }) => {
       try {
-        const result = await deleteWatch(context.user, input.id);
+        const result = await deleteFollow(context.user, input.id);
 
         if (result instanceof Response) {
           throw await responseFault(result);
@@ -59,8 +59,8 @@ export function meWatchesHandlers(os: Implementer) {
     });
 
   return {
-    delete_private_watch: deleteWatchHandler,
-    list_private_watches: listWatchesHandler,
-    save_private_watch: saveWatchHandler,
+    delete_private_follow: deleteFollowHandler,
+    list_private_follows: listFollowsHandler,
+    save_private_follow: saveFollowHandler,
   };
 }

@@ -60,6 +60,12 @@ describe("deleteAccount (real SQL via accountDeletionStatements)", () => {
           values (?, ?, ?, ?, 0, ?)`,
       },
       {
+        args: [userId, "2026-W39", now, 2, now],
+        sql: `insert into user_follow_digests
+          (user_id, last_week_key, last_sent_at, last_release_count, updated_at)
+          values (?, ?, ?, ?, ?)`,
+      },
+      {
         args: [`sess-${userId}`, userId, `tok-${userId}`, now, now, now],
         sql: `insert into session (id, user_id, token, expires_at, created_at, updated_at)
           values (?, ?, ?, ?, ?, ?)`,
@@ -146,6 +152,7 @@ describe("deleteAccount (real SQL via accountDeletionStatements)", () => {
       "user_saved_findings",
       "user_saved_sets",
       "user_watches",
+      "user_follow_digests",
       "user_preferences",
       "user_galaxy_collections",
       "user_galaxy_state",
@@ -209,6 +216,11 @@ describe("deleteAccount (real SQL via accountDeletionStatements)", () => {
       `select count(*) as n from user_watches where user_id = 'user-B'`,
     );
     expect(Number(bWatches.rows[0]?.n)).toBe(1);
+
+    const bDigest = await db.execute(
+      `select count(*) as n from user_follow_digests where user_id = 'user-B'`,
+    );
+    expect(Number(bDigest.rows[0]?.n)).toBe(1);
 
     const bEditions = await db.execute(
       `select count(*) as n from frontier_editions where user_id = 'user-B'`,
@@ -805,7 +817,7 @@ describe("listGalaxyCollection (real SQL, the collection browser read)", () => {
   });
 });
 
-describe("watches (real SQL, owner-scoped — D2a)", () => {
+describe("follows (real SQL, owner-scoped — D2a)", () => {
   const userA = "user-A";
   const userB = "user-B";
 
@@ -816,132 +828,202 @@ describe("watches (real SQL, owner-scoped — D2a)", () => {
     await seedLabel(db, { id: "label-1", name: "Hospital Records", slug: "hospital-records" });
   });
 
-  it("saveWatch stores the entity, list joins its name + slug", async () => {
-    const { listWatches, saveWatch } = await import("./account-data");
+  it("saveFollow stores the entity, list joins its name + slug", async () => {
+    const { listFollows, saveFollow } = await import("./account-data");
 
-    const result = await saveWatch(publicUser(userA), { entityId: "artist-1", kind: "artist" });
+    const result = await saveFollow(publicUser(userA), { entityId: "artist-1", kind: "artist" });
     expect(result).not.toBeInstanceOf(Response);
 
-    const list = await listWatches(publicUser(userA));
-    expect(list.watches).toHaveLength(1);
-    expect(list.watches[0]?.kind).toBe("artist");
-    expect(list.watches[0]?.entityId).toBe("artist-1");
-    expect(list.watches[0]?.name).toBe("Netsky");
-    expect(list.watches[0]?.slug).toBe("netsky");
+    const list = await listFollows(publicUser(userA));
+    expect(list.follows).toHaveLength(1);
+    expect(list.follows[0]?.kind).toBe("artist");
+    expect(list.follows[0]?.entityId).toBe("artist-1");
+    expect(list.follows[0]?.name).toBe("Netsky");
+    expect(list.follows[0]?.slug).toBe("netsky");
 
-    expect(list.watches[0]?.includeSimilar).toBe(false);
+    expect(list.follows[0]?.includeSimilar).toBe(false);
   });
 
-  it("watches a label too, joining the labels table", async () => {
-    const { listWatches, saveWatch } = await import("./account-data");
+  it("follows a label too, joining the labels table", async () => {
+    const { listFollows, saveFollow } = await import("./account-data");
 
-    await saveWatch(publicUser(userA), { entityId: "label-1", kind: "label" });
+    await saveFollow(publicUser(userA), { entityId: "label-1", kind: "label" });
 
-    const list = await listWatches(publicUser(userA));
-    expect(list.watches[0]?.kind).toBe("label");
-    expect(list.watches[0]?.name).toBe("Hospital Records");
-    expect(list.watches[0]?.slug).toBe("hospital-records");
+    const list = await listFollows(publicUser(userA));
+    expect(list.follows[0]?.kind).toBe("label");
+    expect(list.follows[0]?.name).toBe("Hospital Records");
+    expect(list.follows[0]?.slug).toBe("hospital-records");
   });
 
-  it("watching the same entity twice is idempotent (the UNIQUE), never a duplicate row", async () => {
-    const { listWatches, saveWatch } = await import("./account-data");
+  it("following the same entity twice is idempotent (the UNIQUE), never a duplicate row", async () => {
+    const { listFollows, saveFollow } = await import("./account-data");
 
-    const first = (await saveWatch(publicUser(userA), {
+    const first = (await saveFollow(publicUser(userA), {
       entityId: "artist-1",
       kind: "artist",
-    })) as { watch: { id: string } };
-    const second = (await saveWatch(publicUser(userA), {
+    })) as { follow: { id: string } };
+    const second = (await saveFollow(publicUser(userA), {
       entityId: "artist-1",
       kind: "artist",
-    })) as { watch: { id: string } };
+    })) as { follow: { id: string } };
 
-    expect(second.watch.id).toBe(first.watch.id);
+    expect(second.follow.id).toBe(first.follow.id);
 
-    const list = await listWatches(publicUser(userA));
-    expect(list.watches).toHaveLength(1);
+    const list = await listFollows(publicUser(userA));
+    expect(list.follows).toHaveLength(1);
     expect(await rowCount(db, "user_watches")).toBe(1);
   });
 
-  it("the same entity id under artist and label are distinct watches", async () => {
-    const { listWatches, saveWatch } = await import("./account-data");
+  it("the same entity id under artist and label are distinct follows", async () => {
+    const { listFollows, saveFollow } = await import("./account-data");
 
     await seedLabel(db, { id: "shared-id", name: "A Label", slug: "a-label" });
     await seedArtist(db, { id: "shared-id", name: "An Artist", slug: "an-artist" });
 
-    await saveWatch(publicUser(userA), { entityId: "shared-id", kind: "artist" });
-    await saveWatch(publicUser(userA), { entityId: "shared-id", kind: "label" });
+    await saveFollow(publicUser(userA), { entityId: "shared-id", kind: "artist" });
+    await saveFollow(publicUser(userA), { entityId: "shared-id", kind: "label" });
 
-    const list = await listWatches(publicUser(userA));
-    expect(list.watches.map((w) => w.kind).sort()).toEqual(["artist", "label"]);
+    const list = await listFollows(publicUser(userA));
+    expect(list.follows.map((w) => w.kind).sort()).toEqual(["artist", "label"]);
   });
 
   it("rejects a bad kind (400 invalid_request)", async () => {
-    const { saveWatch } = await import("./account-data");
+    const { saveFollow } = await import("./account-data");
 
-    const result = await saveWatch(publicUser(userA), { entityId: "artist-1", kind: "album" });
+    const result = await saveFollow(publicUser(userA), { entityId: "artist-1", kind: "album" });
     expect(result).toBeInstanceOf(Response);
     expect((result as Response).status).toBe(400);
     expect(await rowCount(db, "user_watches")).toBe(0);
   });
 
   it("rejects a missing entityId (400 invalid_request)", async () => {
-    const { saveWatch } = await import("./account-data");
+    const { saveFollow } = await import("./account-data");
 
-    const result = await saveWatch(publicUser(userA), { kind: "artist" });
+    const result = await saveFollow(publicUser(userA), { kind: "artist" });
     expect(result).toBeInstanceOf(Response);
     expect((result as Response).status).toBe(400);
   });
 
   it("404s an id that matches no entity of that kind", async () => {
-    const { saveWatch } = await import("./account-data");
+    const { saveFollow } = await import("./account-data");
 
-    const result = await saveWatch(publicUser(userA), { entityId: "label-1", kind: "artist" });
+    const result = await saveFollow(publicUser(userA), { entityId: "label-1", kind: "artist" });
     expect(result).toBeInstanceOf(Response);
     expect((result as Response).status).toBe(404);
   });
 
-  it("list is scoped to the session user — A never sees B's watches", async () => {
-    const { listWatches, saveWatch } = await import("./account-data");
+  it("list is scoped to the session user — A never sees B's follows", async () => {
+    const { listFollows, saveFollow } = await import("./account-data");
 
-    await saveWatch(publicUser(userA), { entityId: "artist-1", kind: "artist" });
-    await saveWatch(publicUser(userB), { entityId: "label-1", kind: "label" });
+    await saveFollow(publicUser(userA), { entityId: "artist-1", kind: "artist" });
+    await saveFollow(publicUser(userB), { entityId: "label-1", kind: "label" });
 
-    const aList = await listWatches(publicUser(userA));
-    expect(aList.watches.map((w) => w.entityId)).toEqual(["artist-1"]);
+    const aList = await listFollows(publicUser(userA));
+    expect(aList.follows.map((w) => w.entityId)).toEqual(["artist-1"]);
 
-    const bList = await listWatches(publicUser(userB));
-    expect(bList.watches.map((w) => w.entityId)).toEqual(["label-1"]);
+    const bList = await listFollows(publicUser(userB));
+    expect(bList.follows.map((w) => w.entityId)).toEqual(["label-1"]);
   });
 
-  it("deleteWatch clears only the owner's row (another user's id 404s)", async () => {
-    const { deleteWatch, listWatches, saveWatch } = await import("./account-data");
+  it("deleteFollow clears only the owner's row (another user's id 404s)", async () => {
+    const { deleteFollow, listFollows, saveFollow } = await import("./account-data");
 
-    const aSaved = (await saveWatch(publicUser(userA), {
+    const aSaved = (await saveFollow(publicUser(userA), {
       entityId: "artist-1",
       kind: "artist",
-    })) as { watch: { id: string } };
-    const bSaved = (await saveWatch(publicUser(userB), {
+    })) as { follow: { id: string } };
+    const bSaved = (await saveFollow(publicUser(userB), {
       entityId: "artist-1",
       kind: "artist",
-    })) as { watch: { id: string } };
+    })) as { follow: { id: string } };
 
-    const hijack = await deleteWatch(publicUser(userA), bSaved.watch.id);
+    const hijack = await deleteFollow(publicUser(userA), bSaved.follow.id);
     expect(hijack).toBeInstanceOf(Response);
     expect((hijack as Response).status).toBe(404);
 
-    const removed = await deleteWatch(publicUser(userA), aSaved.watch.id);
+    const removed = await deleteFollow(publicUser(userA), aSaved.follow.id);
     expect(removed).toEqual({ ok: true });
-    expect(await listWatches(publicUser(userA)).then((r) => r.watches)).toHaveLength(0);
+    expect(await listFollows(publicUser(userA)).then((r) => r.follows)).toHaveLength(0);
 
-    expect(await listWatches(publicUser(userB)).then((r) => r.watches)).toHaveLength(1);
+    expect(await listFollows(publicUser(userB)).then((r) => r.follows)).toHaveLength(1);
   });
 
-  it("exportAccountData includes the user's watches", async () => {
-    const { exportAccountData, saveWatch } = await import("./account-data");
+  it("applies a signed follow intent minted for the signed-in email", async () => {
+    const { listFollows, saveFollow } = await import("./account-data");
+    const { signFollowIntent } = await import("./follow-intent");
+    const { publicAuthSecret } = await import("./public-auth");
+    const intent = signFollowIntent({
+      email: publicUser(userA).email,
+      secret: publicAuthSecret(),
+      target: { entityId: "label-1", kind: "label" },
+    });
 
-    await saveWatch(publicUser(userA), { entityId: "artist-1", kind: "artist" });
+    const result = await saveFollow(publicUser(userA), { intent });
+
+    expect(result).not.toBeInstanceOf(Response);
+    expect((await listFollows(publicUser(userA))).follows.map((f) => f.slug)).toEqual([
+      "hospital-records",
+    ]);
+  });
+
+  it("refuses an intent minted for another email, tampered, or expired", async () => {
+    const { saveFollow } = await import("./account-data");
+    const { signFollowIntent } = await import("./follow-intent");
+    const { publicAuthSecret } = await import("./public-auth");
+    const target = { entityId: "artist-1", kind: "artist" } as const;
+    const otherEmail = signFollowIntent({
+      email: publicUser(userB).email,
+      secret: publicAuthSecret(),
+      target,
+    });
+    const expired = signFollowIntent({
+      email: publicUser(userA).email,
+      now: Date.now() - 8 * 24 * 60 * 60 * 1000,
+      secret: publicAuthSecret(),
+      target,
+    });
+    const valid = signFollowIntent({
+      email: publicUser(userA).email,
+      secret: publicAuthSecret(),
+      target,
+    });
+    const tampered = `${valid.slice(0, -2)}xx`;
+
+    for (const intent of [otherEmail, expired, tampered, "artist:artist-1"]) {
+      const result = await saveFollow(publicUser(userA), { intent });
+
+      expect(result).toBeInstanceOf(Response);
+      expect((result as Response).status).toBe(400);
+    }
+
+    expect(await rowCount(db, "user_watches")).toBe(0);
+  });
+
+  it("exportAccountData includes the user's follows", async () => {
+    const { exportAccountData, saveFollow } = await import("./account-data");
+
+    await saveFollow(publicUser(userA), { entityId: "artist-1", kind: "artist" });
     const result = await exportAccountData(publicUser(userA));
-    expect(result.export.watches.map((w) => w.name)).toEqual(["Netsky"]);
+    expect(result.export.follows.map((w) => w.name)).toEqual(["Netsky"]);
+  });
+
+  it("exportAccountData includes follow digest delivery and subscription state", async () => {
+    const { exportAccountData } = await import("./account-data");
+    const now = "2026-09-25T15:00:00.000Z";
+    await db.execute({
+      args: [userA, "2026-W39", now, 2, now],
+      sql: `insert into user_follow_digests
+        (user_id, last_week_key, last_sent_at, last_release_count, updated_at)
+        values (?, ?, ?, ?, ?)`,
+    });
+    const result = await exportAccountData(publicUser(userA));
+    expect(result.export.followDigest).toEqual({
+      lastReleaseCount: 2,
+      lastSentAt: now,
+      lastWeekKey: "2026-W39",
+      unsubscribedAt: null,
+      updatedAt: now,
+    });
   });
 });
 

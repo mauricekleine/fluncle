@@ -4498,6 +4498,25 @@ a.catalogue-letter:focus-visible {
   overflow-wrap: anywhere;
 }
 
+.follow-control {
+  align-items: flex-start;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-top: 1rem;
+}
+
+.follow-note {
+  color: var(--stardust);
+  font-size: 0.85rem;
+  line-height: 1.45;
+  max-width: 34rem;
+}
+
+.follow-note:empty {
+  margin-top: -0.5rem;
+}
+
 .magic-link-actions {
   display: flex;
   flex-wrap: wrap;

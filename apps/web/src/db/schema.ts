@@ -1737,6 +1737,15 @@ export const userWatches = sqliteTable(
   ],
 );
 
+export const userFollowDigests = sqliteTable("user_follow_digests", {
+  lastReleaseCount: integer("last_release_count"),
+  lastSentAt: text("last_sent_at"),
+  lastWeekKey: text("last_week_key"),
+  unsubscribedAt: text("unsubscribed_at"),
+  updatedAt: text("updated_at").notNull(),
+  userId: text("user_id").primaryKey(),
+});
+
 export const userPreferences = sqliteTable("user_preferences", {
   preferences: text("preferences").notNull().default("{}"),
   updatedAt: text("updated_at").notNull(),

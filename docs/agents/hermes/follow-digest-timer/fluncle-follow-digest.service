@@ -1,0 +1,16 @@
+[Unit]
+Description=Send the weekly follow digest
+Documentation=https://github.com/mauricekleine/fluncle/blob/main/docs/agents/hermes/follow-digest-timer/README.md
+Wants=network-online.target docker.service
+After=network-online.target docker.service
+OnFailure=fluncle-sweep-failure@%n.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/fluncle/database-admission.env
+ExecStart=/usr/bin/docker exec -e DATABASE_ADMISSION_FAIL_CLOSED -e DATABASE_ADMISSION_POLL_SECS=2 -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/database-admission-runner.sh fluncle-follow-digest -- bash /opt/hermes-scripts/follow-digest-sweep.sh
+TimeoutStartSec=1800
+NoNewPrivileges=true
+ProtectControlGroups=true
+ProtectKernelTunables=true
+RestrictSUIDSGID=true

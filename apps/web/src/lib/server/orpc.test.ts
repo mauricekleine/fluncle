@@ -699,7 +699,8 @@ const PUBLIC_OPERATION_IDS = [
 
   "deletePrivateRecSeed",
   "deletePrivateSavedSet",
-  "deletePrivateWatch",
+  "deletePrivateFollow",
+  "deleteDigestFollow",
   "deregisterDevice",
   "exportPrivateAccountData",
 
@@ -708,6 +709,7 @@ const PUBLIC_OPERATION_IDS = [
   "getArtist",
   "getCurrentPrivateUser",
   "getEdition",
+  "listDigestFollows",
 
   "getGalaxy",
 
@@ -746,7 +748,7 @@ const PUBLIC_OPERATION_IDS = [
   "listPrivateSavedFindings",
   "listPrivateSavedSets",
   "listPrivateSubmissions",
-  "listPrivateWatches",
+  "listPrivateFollows",
 
   "listSimilarArtists",
 
@@ -757,10 +759,11 @@ const PUBLIC_OPERATION_IDS = [
   "mergePrivateGalaxyProgress",
   "mintPrivateFrontierPlaylist",
   "registerDevice",
+  "subscribeFollowDigest",
   "savePrivateFinding",
   "savePrivateRecSeed",
   "savePrivateSet",
-  "savePrivateWatch",
+  "savePrivateFollow",
   "searchArchive",
   "searchTracks",
   "submitTrack",
@@ -769,6 +772,7 @@ const PUBLIC_OPERATION_IDS = [
   "updatePrivatePreferences",
   "updatePrivateProfile",
   "updatePrivateSavedSet",
+  "unsubscribeFollowDigest",
 ];
 
 function collectOperationIds(spec: GeneratedSpec): {

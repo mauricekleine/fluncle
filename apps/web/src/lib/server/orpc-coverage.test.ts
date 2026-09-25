@@ -5,92 +5,72 @@ import { CONTRACT_OPERATION_NAMES, CONTRACT_OPERATION_ROUTES } from "@fluncle/co
 
 const PUBLIC_ROUTE_OPS: Record<string, string> = {
   "DELETE /devices/{token}": "deregister_device",
-
+  "DELETE /follow-digest/follows/{id}": "delete_digest_follow",
+  "DELETE /me/follows/{id}": "delete_private_follow",
   "DELETE /me/rec-seeds/{trackId}": "delete_private_rec_seed",
   "DELETE /me/saved-findings/{trackId}": "unsave_private_finding",
-
   "DELETE /me/saved-sets/{id}": "delete_private_saved_set",
-
-  "DELETE /me/watches/{id}": "delete_private_watch",
-
   "GET /albums": "list_albums",
   "GET /albums/{slug}": "get_album",
-
   "GET /artists": "list_artists",
-
   "GET /artists/similar": "list_similar_artists",
   "GET /artists/{slug}": "get_artist",
-
   "GET /findings": "list_findings",
-
+  "GET /follow-digest/follows": "list_digest_follows",
   "GET /galaxies": "list_galaxies",
   "GET /galaxies/{slug}": "get_galaxy",
-
   "GET /graph/{kind}/{slug}": "get_graph_preview",
   "GET /health": "get_health",
-
   "GET /labels": "list_labels",
   "GET /labels/{slug}": "get_label",
   "GET /me": "get_current_private_user",
   "GET /me/csrf": "get_private_mutation_token",
   "GET /me/export/{exportId}": "get_private_account_export",
-
+  "GET /me/follows": "list_private_follows",
   "GET /me/frontier-editions": "list_private_frontier_editions",
   "GET /me/frontier-editions/{number}": "get_private_frontier_edition",
-
   "GET /me/frontier-playlist": "get_private_frontier_playlist",
-
   "GET /me/galaxy-collection": "list_private_galaxy_collection",
   "GET /me/galaxy-progress": "get_private_galaxy_progress",
-
   "GET /me/preferences": "get_private_preferences",
   "GET /me/rec-seeds": "list_private_rec_seeds",
   "GET /me/recommendations": "list_private_recommendations",
   "GET /me/saved-findings": "list_private_saved_findings",
   "GET /me/saved-sets": "list_private_saved_sets",
   "GET /me/submissions": "list_private_submissions",
-  "GET /me/watches": "list_private_watches",
-
   "GET /mix/artists": "list_mixable_artists",
   "GET /mix/openers": "list_mix_openers",
-
   "GET /mix/set-tracks": "list_set_tracks",
   "GET /mixtapes": "list_mixtapes",
-
   "GET /newsletter/editions": "list_editions",
   "GET /newsletter/editions/{number}": "get_edition",
-
   "GET /radio/now-playing": "get_radio_now_playing",
   "GET /radio/random": "get_random_radio_track",
-
   "GET /reach/stats": "list_platform_stats",
-
   "GET /replica/token": "get_replica_token",
   "GET /search": "search_tracks",
-
   "GET /search/archive": "search_archive",
   "GET /stories": "list_stories",
   "GET /tracks": "list_tracks",
   "GET /tracks/fresh": "list_fresh",
   "GET /tracks/random": "get_random_track",
   "GET /tracks/{idOrLogId}": "get_track",
-
   "GET /tracks/{idOrLogId}/mixable": "list_mixable_tracks",
-
   "GET /tracks/{idOrLogId}/similar": "list_similar_tracks",
   "PATCH /me/preferences": "update_private_preferences",
   "PATCH /me/profile": "update_private_profile",
   "PATCH /me/saved-sets/{id}": "update_private_saved_set",
   "POST /devices": "register_device",
+  "POST /follow-digest/subscribe": "subscribe_follow_digest",
+  "POST /follow-digest/unsubscribe": "unsubscribe_follow_digest",
   "POST /me/delete": "delete_private_account",
   "POST /me/export": "export_private_account_data",
+  "POST /me/follows": "save_private_follow",
   "POST /me/frontier-playlist": "mint_private_frontier_playlist",
-
   "POST /me/galaxy-progress/logs": "collect_private_galaxy_log",
   "POST /me/rec-seeds": "save_private_rec_seed",
   "POST /me/saved-findings": "save_private_finding",
   "POST /me/saved-sets": "save_private_set",
-  "POST /me/watches": "save_private_watch",
   "POST /newsletter": "subscribe_newsletter",
   "POST /submissions": "submit_track",
   "PUT /me/galaxy-progress": "merge_private_galaxy_progress",
@@ -100,6 +80,7 @@ const CARVE_OUT_ROUTE_PREFIXES = ["auth/"];
 
 const CARVE_OUT_ROUTES = new Set([
   "chat",
+  "follow-digest/unsubscribe",
 
   "me/avatar",
   "mixtape-cover.$logId",

@@ -4,6 +4,7 @@ import {
   createBroadcast,
   sendBroadcast,
   sendPasswordResetEmail,
+  sendFollowDigestEmail,
   sendVerificationEmail,
 } from "./resend";
 
@@ -124,6 +125,29 @@ describe("createBroadcast + sendBroadcast", () => {
     await expect(
       createBroadcast({ editionId: "ed_x", html: "x", name: "n", subject: "s" }),
     ).rejects.toMatchObject({ code: "broadcast_create_failed" });
+  });
+});
+
+describe("sendFollowDigestEmail", () => {
+  it("sends idempotently with one-click unsubscribe headers", async () => {
+    fetchMock.mockResolvedValueOnce(ok({ id: "email_1" }));
+    await sendFollowDigestEmail({
+      headers: {
+        "List-Unsubscribe": "<https://www.fluncle.com/api/v1/follow-digest/unsubscribe?token=abc>",
+        "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
+      },
+      html: "<p>New releases</p>",
+      idempotencyKey: "follow-digest/user-1/2026-W39",
+      subject: "Your follows",
+      text: "New releases",
+      to: "one@example.com",
+    });
+    const [url, init] = fetchMock.mock.calls[0] ?? [];
+    expect(url).toBe("https://api.resend.com/emails");
+    expect(init.headers["Idempotency-Key"]).toBe("follow-digest/user-1/2026-W39");
+    expect(JSON.parse(init.body).headers["List-Unsubscribe-Post"]).toBe(
+      "List-Unsubscribe=One-Click",
+    );
   });
 });
 

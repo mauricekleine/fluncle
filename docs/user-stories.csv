@@ -10,12 +10,12 @@ catalogue,artist,artist-profile,"As a listener, I want an artist's profile: bio,
 catalogue,artist,similar-to-one-artist,"As a listener, I want artists similar to one artist I like.",yes,yes,no,yes,yes,no,n/a,no
 catalogue,artist,sounds-like-selected-artists,"As a listener, I want to multi-select artists I like and see who sounds like all of them.",yes,yes,no,yes,no,no,n/a,no
 catalogue,cross,compound-sound-discovery,"As a listener, I want compound discovery in one query — songs by artists that sound like Koven and Maduk, in A minor, from before 2020.",yes,yes,yes,yes,yes,no,n/a,yes
-catalogue,artist,follow-artist-releases,"As a fan, I want to follow one artist's new releases.",partial,partial,no,no,no,no,yes,no
+catalogue,artist,follow-artist-releases,"As a fan, I want to follow one artist's new releases.",yes,yes,no,no,no,no,yes,no
 catalogue,album,browse-every-album,"As a listener, I want to browse every album and EP, A to Z.",yes,yes,yes,yes,yes,no,no,no
 catalogue,album,album-page,"As a listener, I want an album's page: tracklist, artists, label.",yes,yes,yes,yes,partial,no,partial,no
 catalogue,label,browse-every-label,"As a listener, I want to browse every record label, A to Z.",yes,yes,yes,yes,yes,no,no,no
 catalogue,label,label-page,"As a listener, I want a label's page: its releases, artists, and lineage.",yes,yes,yes,yes,no,no,partial,no
-catalogue,label,follow-label-releases,"As a fan, I want to follow one label's new releases.",partial,partial,no,no,no,no,yes,no
+catalogue,label,follow-label-releases,"As a fan, I want to follow one label's new releases.",yes,yes,no,no,no,no,yes,no
 catalogue,cross,build-a-set,"As a DJ, I want to chain a set: seed my taste and have the engine rank what mixes in clean next.",partial,yes,no,yes,yes,no,n/a,yes
 catalogue,cross,share-reopen-set,"As a DJ, I want to share a set as a link and have anyone reopen it.",yes,yes,n/a,no,partial,n/a,n/a,yes
 catalogue,cross,integrate-as-developer,"As a developer or agent, I want a documented machine interface to the archive.",yes,yes,n/a,yes,n/a,n/a,yes,n/a
