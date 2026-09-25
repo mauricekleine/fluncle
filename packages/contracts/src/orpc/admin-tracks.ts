@@ -798,6 +798,7 @@ export const listTrackWork = oc
       debtAware: z.string().optional(),
       kind: TrackWorkKindSchema,
       limit: z.coerce.number().int().min(1).max(250).default(50),
+      paidMode: z.enum(["quota", "prior"]).optional(),
       scope: TrackWorkScopeSchema.default("all"),
     }),
   )

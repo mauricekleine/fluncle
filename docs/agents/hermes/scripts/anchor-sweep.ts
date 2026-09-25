@@ -1,5 +1,8 @@
 #!/usr/bin/env bun
 
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+
 import {
   DUE_WORK_REPAIR_PENDING_REASON,
   type DueWorkRepairPendingGate,
@@ -31,6 +34,15 @@ const ISRC_WINDOW_UTC = process.env.FLUNCLE_ANCHOR_ISRC_WINDOW_UTC ?? "0-8";
 const DAY_FREE_RUNGS = process.env.FLUNCLE_ANCHOR_DAY_FREE_RUNGS === "1";
 
 const ANCHOR_EXPECTED_INTERVAL_MS = 60 * 60 * 1000;
+const ANCHOR_EXPECTED_SWEEP_MS = 15 * 60 * 1000;
+const ANCHOR_CONTRACT_FAULT_ROWS = 2;
+const ANCHOR_CONTRACT_FAULT_MIN_REPORTS = 15;
+const ANCHOR_CONTRACT_FAULT_SHARE = 0.5;
+const ANCHOR_REPORT_CONTRACT_ID = "anchor_track:v1";
+const ANCHOR_BAKED_SCRIPT_SHA = createHash("sha256")
+  .update(readFileSync(new URL(import.meta.url)))
+  .digest("hex")
+  .slice(0, 12);
 
 const log = (message: string) => console.error(`[anchor-sweep] ${message}`);
 
@@ -131,14 +143,25 @@ export type AnchorPreflight = {
   apifyBudgetSpent: boolean;
   apifyEnabled: boolean;
   spotifySearchEnabled: boolean;
+  gateReason?:
+    | "breaker_quota"
+    | "breaker_throttle"
+    | "flag_off"
+    | "friday_window"
+    | "open"
+    | "shared_meter";
+  nextEligibleAt?: null | string;
 };
 
 export type AnchorQueuePage = {
-  queueDepth: number;
+  queueDepth: null | number;
   rows: AnchorWorkItem[];
 };
 
 export type AnchorSummary = {
+  blockedReason: null | string;
+  gateReason: null | string;
+  nextEligibleAt: null | string;
   apifyActorErrors: number;
 
   apifyBudgetSkipped: number;
@@ -213,6 +236,7 @@ export type AnchorSummary = {
   deferred: number;
 
   reason:
+    | "apify_disabled"
     | "apify_budget_spent"
     | "awaiting_free_ask"
     | "no_capable_rung"
@@ -231,11 +255,15 @@ export type AnchorSummary = {
 } & Partial<Omit<DueWorkRepairPendingGate, "reason">>;
 
 export type AnchorDeps = {
-  fetchQueue: (limit: number) => Promise<AnchorQueuePage | AnchorWorkItem[]>;
+  fetchQueue: (
+    limit: number,
+    paidMode?: "prior" | "quota",
+  ) => Promise<AnchorQueuePage | AnchorWorkItem[]>;
   log: (message: string) => void;
 
   now: () => number;
   report: (trackId: string, candidates: AnchorCandidatePayload[]) => Promise<AnchorVerdict>;
+  recordInvalidFailure?: (trackId: string, status: number) => Promise<{ terminal: boolean }>;
 
   resolveFree: (
     trackId: string,
@@ -370,25 +398,47 @@ export function chunk<T>(items: T[], size: number): T[][] {
 }
 
 export function itemToCandidate(item: ApifyResultItem): AnchorCandidatePayload | null {
-  const track = item.tracks?.[0];
-  const spotifyTrackId = track?.track_id?.trim();
+  const track = Array.isArray(item.tracks) ? item.tracks[0] : undefined;
+  const spotifyTrackId = typeof track?.track_id === "string" ? track.track_id.trim() : "";
 
   if (item.success === false || !track || !spotifyTrackId) {
     return null;
   }
 
-  return {
-    albumImageUrl: track.track_image ?? item.albums?.[0]?.album_image ?? null,
-    artists: (item.artists ?? [])
-      .filter((artist): artist is ApifyArtist & { artist_name: string } =>
-        Boolean(artist.artist_name),
+  const candidate: AnchorCandidatePayload = {
+    albumImageUrl:
+      (typeof track.track_image === "string" ? track.track_image : null) ??
+      (Array.isArray(item.albums) && typeof item.albums[0]?.album_image === "string"
+        ? item.albums[0].album_image
+        : null),
+    artists: (Array.isArray(item.artists) ? item.artists : [])
+      .filter(
+        (artist): artist is ApifyArtist & { artist_name: string } =>
+          typeof artist?.artist_name === "string" && artist.artist_name.length > 0,
       )
-      .map((artist) => ({ id: artist.artist_id ?? null, name: artist.artist_name })),
-    durationMs: typeof track.track_duration_ms === "number" ? track.track_duration_ms : null,
-    isrc: track.track_isrc ?? null,
+      .map((artist) => ({
+        id: typeof artist.artist_id === "string" ? artist.artist_id : null,
+        name: artist.artist_name,
+      })),
+    durationMs:
+      typeof track.track_duration_ms === "number" && Number.isFinite(track.track_duration_ms)
+        ? track.track_duration_ms
+        : null,
+    isrc: typeof track.track_isrc === "string" ? track.track_isrc : null,
     spotifyTrackId,
-    title: track.track_name ?? "",
+    title: typeof track.track_name === "string" ? track.track_name : "",
   };
+  if (
+    candidate.spotifyTrackId.length > 64 ||
+    candidate.title.length > 300 ||
+    (candidate.isrc?.length ?? 0) > 64 ||
+    (candidate.albumImageUrl?.length ?? 0) > 2048 ||
+    candidate.artists.length > 20 ||
+    candidate.artists.some((artist) => artist.name.length > 300 || (artist.id?.length ?? 0) > 64)
+  ) {
+    return null;
+  }
+  return candidate;
 }
 
 export function groupCandidatesByTarget(
@@ -412,7 +462,9 @@ export function groupCandidatesByTarget(
     const bucket = byTarget.get(target);
 
     if (bucket) {
-      bucket.push(candidate);
+      if (bucket.length < 100) {
+        bucket.push(candidate);
+      }
     } else {
       byTarget.set(target, [candidate]);
     }
@@ -458,19 +510,38 @@ export function spotifyAskDeferral(
   return state.asksSpent >= state.limit ? "budget" : null;
 }
 
+function longAnchorThrottle(preflight: AnchorPreflight, now: Date): boolean {
+  return (
+    preflight.gateReason === "breaker_throttle" &&
+    Date.parse(preflight.nextEligibleAt ?? "") - now.getTime() > ANCHOR_EXPECTED_SWEEP_MS
+  );
+}
+
 export function anchorFiringDeferral(
   preflight: AnchorPreflight,
   askWindow: IsrcAskWindow,
   now: Date,
   dayFreeRungs: boolean = false,
-): "apify_budget_spent" | "awaiting_free_ask" | "free_rungs_only" | null {
+): "apify_disabled" | "apify_budget_spent" | "awaiting_free_ask" | "free_rungs_only" | null {
+  if (preflight.gateReason === "friday_window") {
+    return "awaiting_free_ask";
+  }
+  if (preflight.gateReason === "breaker_quota" || longAnchorThrottle(preflight, now)) {
+    return !preflight.apifyEnabled
+      ? "apify_disabled"
+      : preflight.apifyBudgetSpent
+        ? "apify_budget_spent"
+        : null;
+  }
   if (!preflight.apifyEnabled) {
     return null;
   }
+  if (preflight.apifyBudgetSpent) {
+    return "free_rungs_only";
+  }
 
-  const deferral = preflight.apifyBudgetSpent
-    ? "apify_budget_spent"
-    : preflight.spotifySearchEnabled && !withinIsrcAskWindow(askWindow, now)
+  const deferral =
+    preflight.spotifySearchEnabled && !withinIsrcAskWindow(askWindow, now)
       ? "awaiting_free_ask"
       : null;
 
@@ -481,9 +552,10 @@ async function fetchAnchorWorkRows(
   limit: number,
   deps: AnchorDeps,
   summary: AnchorSummary,
+  paidMode?: "prior" | "quota",
 ): Promise<AnchorWorkItem[] | undefined> {
   try {
-    const fetched = await deps.fetchQueue(limit);
+    const fetched = await deps.fetchQueue(limit, paidMode);
     const queue = Array.isArray(fetched) ? fetched : fetched.rows;
     summary.queueDepth = Array.isArray(fetched) ? fetched.length : fetched.queueDepth;
     summary.checked = queue.length;
@@ -543,13 +615,77 @@ function settleUnspentRows(input: {
   return true;
 }
 
+type AnchorStrikeBuffer = {
+  fault: boolean;
+  reported: number;
+  rows: Map<string, { status: number; summary: AnchorSummary }>;
+};
+
+function systemicAnchorContractFault(strikes: AnchorStrikeBuffer): boolean {
+  return (
+    strikes.rows.size > ANCHOR_CONTRACT_FAULT_ROWS &&
+    strikes.rows.size / strikes.reported >= ANCHOR_CONTRACT_FAULT_SHARE
+  );
+}
+
+function markAnchorContractFault(
+  deps: AnchorDeps,
+  strikes: AnchorStrikeBuffer,
+  summary: AnchorSummary,
+): void {
+  if (strikes.fault) {
+    return;
+  }
+  strikes.fault = true;
+  summary.ok = false;
+  summary.blockedReason = "anchor_contract_fault";
+  const message = `anchor contract fault: contract=${ANCHOR_REPORT_CONTRACT_ID} build=${ANCHOR_BAKED_SCRIPT_SHA} distinctRows=${strikes.rows.size} reported=${strikes.reported}`;
+  deps.log(message);
+  recordRunError(summary, message);
+}
+
+async function flushAnchorStrikes(
+  deps: AnchorDeps,
+  strikes: AnchorStrikeBuffer,
+  summary: AnchorSummary,
+): Promise<{ error: null | string; terminal: number }> {
+  if (systemicAnchorContractFault(strikes)) {
+    markAnchorContractFault(deps, strikes, summary);
+  }
+  if (strikes.fault) {
+    return { error: null, terminal: 0 };
+  }
+  let firstError: null | string = null;
+  let terminal = 0;
+  for (const [trackId, { status, summary }] of strikes.rows) {
+    try {
+      const recorded = await deps.recordInvalidFailure?.(trackId, status);
+      if (recorded?.terminal) {
+        settleQueueRow(summary);
+        terminal += 1;
+      }
+    } catch (error) {
+      summary.ok = false;
+      const message = error instanceof Error ? error.message : String(error);
+      firstError ??= message;
+      recordRunError(summary, message);
+    }
+  }
+  return { error: firstError, terminal };
+}
+
 async function runApifyFallback(
   apifyRows: readonly { anchorQuery: string; trackId: string }[],
   actorChunkSize: number,
   deps: AnchorDeps,
   summary: AnchorSummary,
+  strikes: AnchorStrikeBuffer,
+  flushStrikes: boolean,
 ): Promise<void> {
   for (const batch of chunk(apifyRows, actorChunkSize)) {
+    if (strikes.fault) {
+      break;
+    }
     let byTarget: Map<string, AnchorCandidatePayload[]>;
 
     try {
@@ -577,6 +713,7 @@ async function runApifyFallback(
 
       try {
         summary.apifyRowsSent += 1;
+        strikes.reported += 1;
         const verdict = await deps.report(row.trackId, candidates);
         if (verdict.anchored && verdict.verifiedBy === "isrc") {
           summary.anchoredByIsrc += 1;
@@ -592,11 +729,60 @@ async function runApifyFallback(
         }
       } catch (error) {
         deps.log(`${row.trackId}: ${error instanceof Error ? error.message : String(error)}`);
+        if (error instanceof AnchorReportError && (error.status === 400 || error.status === 422)) {
+          if (!strikes.fault) {
+            strikes.rows.set(row.trackId, { status: error.status, summary });
+          }
+          if (
+            !strikes.fault &&
+            strikes.reported >= ANCHOR_CONTRACT_FAULT_MIN_REPORTS &&
+            systemicAnchorContractFault(strikes)
+          ) {
+            markAnchorContractFault(deps, strikes, summary);
+          }
+        }
         summary.skipped += 1;
         recordFailure(summary);
       }
     }
   }
+  if (flushStrikes) {
+    await flushAnchorStrikes(deps, strikes, summary);
+  }
+}
+
+async function finishAnchorTick(input: {
+  actorChunkSize: number;
+  apifyEnabled: boolean;
+  apifyRows: { anchorQuery: string; stamped?: boolean; trackId: string }[];
+  deps: AnchorDeps;
+  flushStrikes: boolean;
+  freeRungsOnly: boolean;
+  spotifySearchEnabled: boolean | undefined;
+  strikes: AnchorStrikeBuffer;
+  summary: AnchorSummary;
+}): Promise<void> {
+  const {
+    actorChunkSize,
+    apifyEnabled,
+    apifyRows,
+    deps,
+    flushStrikes,
+    freeRungsOnly,
+    spotifySearchEnabled,
+    strikes,
+    summary,
+  } = input;
+  if (apifyEnabled === false && spotifySearchEnabled === false && summary.produced === 0) {
+    summary.reason = "no_capable_rung";
+  }
+  if (apifyRows.length === 0) {
+    return;
+  }
+  if (settleUnspentRows({ apifyEnabled, apifyRows, freeRungsOnly, summary })) {
+    return;
+  }
+  await runApifyFallback(apifyRows, actorChunkSize, deps, summary, strikes, flushStrikes);
 }
 
 function tallyFreeVerdict(
@@ -650,6 +836,9 @@ export async function runAnchorTick(
   askState: SpotifyAskState = newSpotifyAskState(),
 
   freeRungsOnly: boolean = false,
+  paidMode?: "prior" | "quota",
+  strikes: AnchorStrikeBuffer = { fault: false, reported: 0, rows: new Map() },
+  flushStrikes: boolean = true,
 ): Promise<AnchorSummary> {
   const summary: AnchorSummary = {
     anchoredByIsrc: 0,
@@ -665,6 +854,7 @@ export async function runAnchorTick(
     apifyRowsSent: 0,
     apifySkippedAwaitingSpotify: 0,
     apifyTargetOmitted: 0,
+    blockedReason: null,
     checked: 0,
     deezerHitsDroppedIncomplete: 0,
     deezerSearchFailed: 0,
@@ -675,6 +865,7 @@ export async function runAnchorTick(
     failed: 0,
     freeDurationMsOmitted: 0,
     freeRungErrors: 0,
+    gateReason: null,
     isrcRecoveredByDeezer: 0,
     lbEmptyIds: 0,
     lbGateRejected: 0,
@@ -685,6 +876,7 @@ export async function runAnchorTick(
     lbRequestFailed: 0,
     lbYieldedOnBreaker: 0,
     missed: 0,
+    nextEligibleAt: null,
     ok: true,
     produced: 0,
     queueDepth: null,
@@ -697,7 +889,7 @@ export async function runAnchorTick(
     spotifyIsrcAsks: 0,
   };
 
-  const queue = await fetchAnchorWorkRows(limit, deps, summary);
+  const queue = await fetchAnchorWorkRows(limit, deps, summary, paidMode);
   if (queue === undefined) {
     return summary;
   }
@@ -805,27 +997,29 @@ export async function runAnchorTick(
     apifyRows.push({ ...row, stamped: rowStamped });
   }
 
-  if (apifyEnabled === false && spotifySearchEnabled === false && summary.produced === 0) {
-    summary.reason = "no_capable_rung";
-  }
-
-  if (apifyRows.length === 0) {
-    return summary;
-  }
-
-  if (settleUnspentRows({ apifyEnabled, apifyRows, freeRungsOnly, summary })) {
-    return summary;
-  }
-
-  await runApifyFallback(apifyRows, actorChunkSize, deps, summary);
+  await finishAnchorTick({
+    actorChunkSize,
+    apifyEnabled,
+    apifyRows,
+    deps,
+    flushStrikes,
+    freeRungsOnly,
+    spotifySearchEnabled,
+    strikes,
+    summary,
+  });
 
   return summary;
 }
 
-async function fetchAnchorQueue(limit: number): Promise<AnchorQueuePage> {
+async function fetchAnchorQueue(
+  limit: number,
+  paidMode?: "prior" | "quota",
+): Promise<AnchorQueuePage> {
+  const mode = paidMode ? `&paidMode=${paidMode}` : "";
   const attempt = () =>
     fetch(
-      `${API_BASE_URL}/api/v1/admin/tracks/work?kind=anchor&limit=${limit}&count=true&debtAware=true`,
+      `${API_BASE_URL}/api/v1/admin/tracks/work?kind=anchor&limit=${limit}&count=${paidMode ? "false" : "true"}&debtAware=true${mode}`,
       {
         headers: { Authorization: `Bearer ${API_TOKEN}` },
         signal: AbortSignal.timeout(30_000),
@@ -856,14 +1050,17 @@ async function fetchAnchorQueue(limit: number): Promise<AnchorQueuePage> {
   }
 
   if (
-    typeof body.queued !== "number" ||
-    !Number.isInteger(body.queued) ||
-    body.queued < body.tracks.length
+    (!paidMode && typeof body.queued !== "number") ||
+    (typeof body.queued === "number" &&
+      (!Number.isInteger(body.queued) || body.queued < body.tracks.length))
   ) {
     throw new Error("anchor queue read returned an invalid whole-queue count");
   }
 
-  return { queueDepth: body.queued, rows: body.tracks as AnchorWorkItem[] };
+  return {
+    queueDepth: typeof body.queued === "number" ? body.queued : null,
+    rows: body.tracks as AnchorWorkItem[],
+  };
 }
 
 export async function runApifyActor(queries: string[]): Promise<ApifyResultItem[]> {
@@ -1029,6 +1226,8 @@ async function readAnchorPreflight(): Promise<AnchorPreflight> {
     rungs?: {
       apifyBudget?: { remainingRows?: number; spent?: boolean };
       apifyEnabled?: boolean;
+      gateReason?: AnchorPreflight["gateReason"];
+      nextEligibleAt?: null | string;
       spotifySearchEnabled?: boolean;
     };
   };
@@ -1040,6 +1239,8 @@ async function readAnchorPreflight(): Promise<AnchorPreflight> {
 
     apifyBudgetSpent: budget?.spent === true,
     apifyEnabled: body.rungs?.apifyEnabled !== false,
+    gateReason: body.rungs?.gateReason,
+    nextEligibleAt: body.rungs?.nextEligibleAt ?? null,
     spotifySearchEnabled: body.rungs?.spotifySearchEnabled === true,
   };
 }
@@ -1059,14 +1260,40 @@ async function reportAnchor(
   });
 
   if (!res.ok) {
-    throw new Error(
+    throw new AnchorReportError(
       `anchor_track ${trackId} failed (${res.status}): ${(await res.text()).slice(0, 200)}`,
+      res.status,
     );
   }
 
   const body = (await res.json()) as AnchorVerdict;
 
   return { anchored: Boolean(body.anchored), verifiedBy: body.verifiedBy ?? null };
+}
+
+export class AnchorReportError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message);
+  }
+}
+
+async function recordInvalidFailure(
+  trackId: string,
+  status: number,
+): Promise<{ terminal: boolean }> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/admin/catalogue/anchor/failure`, {
+    body: JSON.stringify({ status, trackId }),
+    headers: { Authorization: `Bearer ${API_TOKEN}`, "Content-Type": "application/json" },
+    method: "POST",
+    signal: AbortSignal.timeout(30_000),
+  });
+  if (!res.ok) {
+    throw new Error(`anchor failure receipt failed (${res.status})`);
+  }
+  return (await res.json()) as { terminal: boolean };
 }
 
 async function resolveAnchorFree(
@@ -1114,6 +1341,56 @@ async function resolveAnchorFree(
   };
 }
 
+async function classifyAnchorFiring(
+  deps: AnchorDeps,
+  askState: SpotifyAskState,
+): Promise<{
+  askArmed: boolean;
+  deferral: ReturnType<typeof anchorFiringDeferral>;
+  freeRungsOnly: boolean;
+  paidMode?: "prior" | "quota";
+  preflight?: AnchorPreflight;
+}> {
+  if (!deps.readPreflight) {
+    return { askArmed: false, deferral: null, freeRungsOnly: false };
+  }
+  const preflight = await deps.readPreflight().catch((error: unknown) => {
+    deps.log(`preflight read failed: ${error instanceof Error ? error.message : String(error)}`);
+    return undefined;
+  });
+  if (!preflight) {
+    return { askArmed: false, deferral: null, freeRungsOnly: false };
+  }
+  const now = new Date(deps.now());
+  const deferral = anchorFiringDeferral(preflight, askState.askWindow, now, DAY_FREE_RUNGS);
+  const paidMode =
+    preflight.gateReason === "breaker_quota"
+      ? "quota"
+      : longAnchorThrottle(preflight, now)
+        ? "prior"
+        : undefined;
+  return {
+    askArmed:
+      deferral !== "free_rungs_only" && preflight.apifyEnabled && preflight.spotifySearchEnabled,
+    deferral,
+    freeRungsOnly: deferral === "free_rungs_only",
+    paidMode,
+    preflight,
+  };
+}
+
+function sweepBlockedReason(summary: AnchorSummary, paidMode?: "prior" | "quota"): null | string {
+  const mostlyDeferred = summary.checked > 0 && summary.deferred / summary.checked >= 0.8;
+  const noProgress =
+    summary.produced === 0 &&
+    (summary.deferred > 0 || summary.reason !== null || (paidMode && summary.checked === 0));
+  return mostlyDeferred || noProgress
+    ? (summary.reason ??
+        (summary.gateReason === "open" ? "mostly_deferred" : summary.gateReason) ??
+        "awaiting_free_ask")
+    : null;
+}
+
 export async function runAnchorSweep(
   total: number,
   deps: AnchorDeps,
@@ -1133,6 +1410,7 @@ export async function runAnchorSweep(
     apifyRowsSent: 0,
     apifySkippedAwaitingSpotify: 0,
     apifyTargetOmitted: 0,
+    blockedReason: null as null | string,
     checked: 0,
     deezerHitsDroppedIncomplete: 0,
     deezerSearchFailed: 0,
@@ -1143,6 +1421,7 @@ export async function runAnchorSweep(
     failed: 0,
     freeDurationMsOmitted: 0,
     freeRungErrors: 0,
+    gateReason: null as null | string,
     isrcRecoveredByDeezer: 0,
     lbEmptyIds: 0,
     lbGateRejected: 0,
@@ -1153,6 +1432,7 @@ export async function runAnchorSweep(
     lbRequestFailed: 0,
     lbYieldedOnBreaker: 0,
     missed: 0,
+    nextEligibleAt: null as null | string,
     ok: true,
     pages: 0,
     produced: 0,
@@ -1168,38 +1448,22 @@ export async function runAnchorSweep(
   };
 
   const askState = newSpotifyAskState();
+  const strikes: AnchorStrikeBuffer = { fault: false, reported: 0, rows: new Map() };
 
-  let askArmed = false;
-
-  let freeRungsOnly = false;
-
-  if (deps.readPreflight) {
-    const preflight = await deps.readPreflight().catch((error: unknown) => {
-      deps.log(`preflight read failed: ${error instanceof Error ? error.message : String(error)}`);
-
-      return undefined;
-    });
-
-    if (preflight) {
-      merged.apifyBudgetRemaining = preflight.apifyBudgetRemaining;
-      askArmed = preflight.apifyEnabled && preflight.spotifySearchEnabled;
-      const deferral = anchorFiringDeferral(
-        preflight,
-        askState.askWindow,
-        new Date(deps.now()),
-        DAY_FREE_RUNGS,
-      );
-
-      if (deferral === "free_rungs_only") {
-        freeRungsOnly = true;
-        askArmed = false;
-      } else if (deferral !== null) {
-        merged.reason = deferral;
-        merged.rungsSkipped = ["listenbrainz", "deezer-isrc-recovery", "spotify-search", "apify"];
-
-        return merged;
-      }
-    }
+  const { askArmed, deferral, freeRungsOnly, paidMode, preflight } = await classifyAnchorFiring(
+    deps,
+    askState,
+  );
+  if (preflight) {
+    merged.apifyBudgetRemaining = preflight.apifyBudgetRemaining;
+    merged.gateReason = preflight.gateReason ?? null;
+    merged.nextEligibleAt = preflight.nextEligibleAt ?? null;
+  }
+  if (deferral !== null && deferral !== "free_rungs_only") {
+    merged.reason = deferral;
+    merged.blockedReason = deferral;
+    merged.rungsSkipped = ["listenbrainz", "deezer-isrc-recovery", "spotify-search", "apify"];
+    return merged;
   }
 
   let remaining = Math.max(0, Math.trunc(total));
@@ -1207,12 +1471,24 @@ export async function runAnchorSweep(
   if (askArmed) {
     remaining = Math.min(remaining, askState.limit);
   }
+  if (paidMode && merged.apifyBudgetRemaining !== null) {
+    remaining = Math.min(remaining, merged.apifyBudgetRemaining);
+  }
 
   let noCapableRung = false;
 
   while (remaining > 0) {
     const ask = Math.min(pageLimit, remaining);
-    const page = await runAnchorTick(ask, deps, APIFY_QUERY_CHUNK, askState, freeRungsOnly);
+    const page = await runAnchorTick(
+      ask,
+      deps,
+      APIFY_QUERY_CHUNK,
+      askState,
+      freeRungsOnly,
+      paidMode,
+      strikes,
+      false,
+    );
     const pulled = page.checked;
 
     merged.pages += 1;
@@ -1290,6 +1566,20 @@ export async function runAnchorSweep(
     merged.reason = "no_capable_rung";
   }
 
+  const { error, terminal } = await flushAnchorStrikes(deps, strikes, merged);
+  if (error !== null) {
+    merged.ok = false;
+    merged.error ??= error;
+    merged.errors += 1;
+  }
+  if (merged.queueDepth !== null) {
+    merged.queueDepth = Math.max(0, merged.queueDepth - terminal);
+  }
+
+  merged.blockedReason = strikes.fault
+    ? "anchor_contract_fault"
+    : sweepBlockedReason(merged, paidMode);
+
   return merged;
 }
 
@@ -1344,6 +1634,7 @@ async function main(): Promise<void> {
     log,
     now: () => Date.now(),
     readPreflight: readAnchorPreflight,
+    recordInvalidFailure,
     report: reportAnchor,
     resolveFree: resolveAnchorFree,
     runActor: runApifyActor,

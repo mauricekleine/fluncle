@@ -636,6 +636,7 @@ export function adminTracksHandlers(os: Implementer) {
         tracks = await listTrackWork({
           kind: input.kind,
           limit: input.limit,
+          paidMode: input.paidMode,
           scope: input.scope,
         });
       } catch (error) {
@@ -646,7 +647,7 @@ export function adminTracksHandlers(os: Implementer) {
       }
 
       const queued = counting
-        ? await countTrackWork({ kind: input.kind, scope: input.scope })
+        ? await countTrackWork({ kind: input.kind, paidMode: input.paidMode, scope: input.scope })
         : undefined;
       const oldestQueuedCaptureOver24h =
         counting && input.kind === "embed" && input.scope === "all" && input.age === "true"

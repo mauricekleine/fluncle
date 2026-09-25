@@ -678,7 +678,11 @@ export async function spotifyFetch(
     }
 
     if (response.status === 429) {
-      await recordSpotifyThrottle();
+      const quotaExceeded = await Promise.resolve()
+        .then(() => response.clone().text())
+        .then((body) => body.includes("QUOTA_EXCEEDED"))
+        .catch(() => false);
+      await recordSpotifyThrottle(Date.now(), quotaExceeded);
     }
 
     if (response.status === 429 && retryable && attempt < SPOTIFY_MAX_RETRIES) {

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import {
   type AnchorDeps,
   anchorFiringDeferral,
+  AnchorReportError,
   type AnchorPreflight,
   type ApifyResultItem,
   chunk,
@@ -73,6 +74,144 @@ const APIFY_SAMPLE: ApifyResultItem[] = [
     ],
   },
 ];
+
+test("deterministic anchor 400s send row receipts, while 503 stays retryable", async () => {
+  let receipts = 0;
+  const deps: AnchorDeps = {
+    fetchQueue: () => Promise.resolve([{ anchorQuery: "Azuro Hold Tight", trackId: "mb_poison" }]),
+    log: () => {},
+    now: () => 0,
+    recordInvalidFailure: () => {
+      receipts += 1;
+      return Promise.resolve({ terminal: receipts === 3 });
+    },
+    report: () => Promise.reject(new AnchorReportError("invalid_request", 400)),
+    resolveFree: () => Promise.resolve({ anchored: false, apifyEligible: true, verifiedBy: null }),
+    runActor: () => Promise.resolve(APIFY_SAMPLE),
+    searchDeezer: () => Promise.resolve([]),
+    sleep: () => Promise.resolve(),
+  };
+  await runAnchorTick(1, deps);
+  await runAnchorTick(1, deps);
+  const retired = await runAnchorTick(1, deps);
+  expect(receipts).toBe(3);
+  expect(retired.queueDepth).toBe(0);
+
+  const retryable = await runAnchorTick(1, {
+    ...deps,
+    report: () => Promise.reject(new AnchorReportError("service unavailable", 503)),
+  });
+  expect(receipts).toBe(3);
+  expect(retryable.queueDepth).toBe(1);
+});
+
+test("a systemic contract failure blocks the tick without retiring any row", async () => {
+  const receipts: string[] = [];
+  const messages: string[] = [];
+  const summary = await runAnchorTick(3, {
+    fetchQueue: () =>
+      Promise.resolve(
+        ["mb_a", "mb_b", "mb_c"].map((trackId) => ({ anchorQuery: trackId, trackId })),
+      ),
+    log: (message) => messages.push(message),
+    now: () => 0,
+    recordInvalidFailure: (trackId) => {
+      receipts.push(trackId);
+      return Promise.resolve({ terminal: false });
+    },
+    report: () => Promise.reject(new AnchorReportError("invalid_request", 400)),
+    resolveFree: () => Promise.resolve({ anchored: false, apifyEligible: true, verifiedBy: null }),
+    runActor: () => Promise.resolve([]),
+    searchDeezer: () => Promise.resolve([]),
+    sleep: () => Promise.resolve(),
+  });
+  expect(receipts).toEqual([]);
+  expect(summary.ok).toBe(false);
+  expect(summary.blockedReason).toBe("anchor_contract_fault");
+  expect(messages.some((message) => message.includes("contract="))).toBe(true);
+  expect(messages.some((message) => /build=[a-f0-9]{12}/.test(message))).toBe(true);
+});
+
+test("contract failures across queue pages withhold all validation strikes", async () => {
+  const receipts: string[] = [];
+  let page = 0;
+  const summary = await runAnchorSweep(
+    3,
+    {
+      fetchQueue: () => {
+        const rows = page === 0 ? ["mb_a", "mb_b"] : ["mb_c"];
+        page += 1;
+        return Promise.resolve(rows.map((trackId) => ({ anchorQuery: trackId, trackId })));
+      },
+      log: () => {},
+      now: () => 0,
+      recordInvalidFailure: (trackId) => {
+        receipts.push(trackId);
+        return Promise.resolve({ terminal: false });
+      },
+      report: (trackId) =>
+        Promise.reject(new AnchorReportError("invalid_request", trackId === "mb_b" ? 422 : 400)),
+      resolveFree: () =>
+        Promise.resolve({ anchored: false, apifyEligible: true, verifiedBy: null }),
+      runActor: () => Promise.resolve([]),
+      searchDeezer: () => Promise.resolve([]),
+      sleep: () => Promise.resolve(),
+    },
+    2,
+  );
+  expect(receipts).toEqual([]);
+  expect(summary.pages).toBe(2);
+  expect(summary.ok).toBe(false);
+  expect(summary.blockedReason).toBe("anchor_contract_fault");
+});
+
+test("three poison rows among fifteen reports keep their own strikes", async () => {
+  const receipts: string[] = [];
+  const rows = Array.from({ length: 15 }, (_, index) => ({
+    anchorQuery: `query ${index}`,
+    trackId: `mb_${index}`,
+  }));
+  const summary = await runAnchorTick(15, {
+    fetchQueue: () => Promise.resolve(rows),
+    log: () => {},
+    now: () => 0,
+    recordInvalidFailure: (trackId) => {
+      receipts.push(trackId);
+      return Promise.resolve({ terminal: false });
+    },
+    report: (trackId) =>
+      Number(trackId.slice(3)) < 3
+        ? Promise.reject(new AnchorReportError("invalid_request", 400))
+        : Promise.resolve({ anchored: false, verifiedBy: null }),
+    resolveFree: () => Promise.resolve({ anchored: false, apifyEligible: true, verifiedBy: null }),
+    runActor: () => Promise.resolve([]),
+    searchDeezer: () => Promise.resolve([]),
+    sleep: () => Promise.resolve(),
+  });
+  expect(receipts).toEqual(["mb_0", "mb_1", "mb_2"]);
+  expect(summary.apifyRowsSent).toBe(15);
+  expect(summary.ok).toBe(true);
+  expect(summary.blockedReason).toBeNull();
+});
+
+test("actor fields outside the anchor contract do not become a 400 payload", () => {
+  const malformed = {
+    artists: [{ artist_id: 123, artist_name: "DJ Chef" }],
+    success: true,
+    tracks: [{ track_id: "validId", track_isrc: 123, track_name: "The Streets" }],
+  } as unknown as ApifyResultItem;
+  expect(itemToCandidate(malformed)).toMatchObject({
+    artists: [{ id: null, name: "DJ Chef" }],
+    isrc: null,
+    title: "The Streets",
+  });
+  expect(
+    itemToCandidate({
+      success: true,
+      tracks: [{ track_id: "validId", track_name: "x".repeat(301) }],
+    }),
+  ).toBeNull();
+});
 
 describe("itemToCandidate", () => {
   test("maps a good item (id, isrc, duration, title, artists, cover)", () => {
@@ -1347,6 +1486,26 @@ describe("runAnchorSweep (paging past the worklist cap)", () => {
     expect(summary.ok).toBe(true);
   });
 
+  test("one win among mostly deferred rows still reports a block", async () => {
+    const summary = await runAnchorSweep(5, {
+      ...pagedDeps([rows("mb", 5)]),
+      resolveFree: (trackId) =>
+        Promise.resolve(
+          trackId === "mb_0"
+            ? { anchored: true, verifiedBy: "isrc" }
+            : {
+                anchored: false,
+                apifyEligible: false,
+                apifyIneligibleReason: "awaiting_free_ask",
+                verifiedBy: null,
+              },
+        ),
+    });
+    expect(summary.produced).toBe(1);
+    expect(summary.deferred).toBe(4);
+    expect(summary.blockedReason).toBe("awaiting_free_ask");
+  });
+
   test("a short page means the queue ran dry — no further fetches", async () => {
     const summary = await runAnchorSweep(10, pagedDeps([rows("a", 2), [], []]), 2);
 
@@ -1537,10 +1696,61 @@ describe("anchorFiringDeferral", () => {
     expect(anchorFiringDeferral(OPEN, NIGHT, OUT_OF_WINDOW)).toBe("awaiting_free_ask");
   });
 
-  test("a spent daily cap stops the firing whatever the clock says", () => {
-    expect(anchorFiringDeferral({ ...OPEN, apifyBudgetSpent: true }, NIGHT, IN_WINDOW)).toBe(
-      "apify_budget_spent",
-    );
+  test("a spent daily cap preserves free rungs when the gate is open", () => {
+    expect(
+      anchorFiringDeferral(
+        { ...OPEN, apifyBudgetSpent: true, gateReason: "open" },
+        NIGHT,
+        IN_WINDOW,
+      ),
+    ).toBe("free_rungs_only");
+  });
+
+  test("a spent daily cap preserves free rungs when the search flag is off", () => {
+    expect(
+      anchorFiringDeferral(
+        {
+          ...OPEN,
+          apifyBudgetSpent: true,
+          gateReason: "flag_off",
+          spotifySearchEnabled: false,
+        },
+        NIGHT,
+        IN_WINDOW,
+      ),
+    ).toBe("free_rungs_only");
+  });
+
+  test("transient gates with Apify disabled still read the normal queue", () => {
+    for (const gateReason of ["shared_meter", "breaker_throttle"] as const) {
+      expect(
+        anchorFiringDeferral(
+          {
+            ...OPEN,
+            apifyEnabled: false,
+            gateReason,
+            nextEligibleAt: "2026-09-20T03:01:00.000Z",
+          },
+          NIGHT,
+          IN_WINDOW,
+        ),
+      ).toBeNull();
+    }
+  });
+
+  test("a long throttle with Apify disabled still defers the prior-only queue", () => {
+    expect(
+      anchorFiringDeferral(
+        {
+          ...OPEN,
+          apifyEnabled: false,
+          gateReason: "breaker_throttle",
+          nextEligibleAt: "2026-09-20T03:30:00.000Z",
+        },
+        NIGHT,
+        IN_WINDOW,
+      ),
+    ).toBe("apify_disabled");
   });
 
   test("with the free search rungs DISARMED the firing always pulls — the load-bearing case", () => {
@@ -1557,6 +1767,16 @@ describe("anchorFiringDeferral", () => {
         OUT_OF_WINDOW,
       ),
     ).toBeNull();
+  });
+
+  test("a closed Spotify gate names a disabled paid rung accurately", () => {
+    expect(
+      anchorFiringDeferral(
+        { ...OPEN, apifyEnabled: false, gateReason: "breaker_quota" },
+        NIGHT,
+        OUT_OF_WINDOW,
+      ),
+    ).toBe("apify_disabled");
   });
 
   test('an empty window ("always") never defers on the clock', () => {
@@ -1734,21 +1954,179 @@ describe("runAnchorSweep — the firing preflight", () => {
     expect(summary.ok).toBe(true);
   });
 
-  test("a spent cap defers the firing with its own reason", async () => {
+  test("the Friday gate reads no rows and reports a watchdog block", async () => {
+    let fetched = 0;
     const summary = await runAnchorSweep(
-      15,
+      100,
       preflightDeps(
+        {
+          apifyBudgetRemaining: 300,
+          apifyBudgetSpent: false,
+          apifyEnabled: true,
+          gateReason: "friday_window",
+          nextEligibleAt: "2026-09-25T07:00:00.000Z",
+          spotifySearchEnabled: true,
+        },
+        () => {
+          fetched += 1;
+        },
+      ),
+    );
+    expect(fetched).toBe(0);
+    expect(summary.blockedReason).toBe("awaiting_free_ask");
+    expect(summary.gateReason).toBe("friday_window");
+    expect(summary.nextEligibleAt).toBe("2026-09-25T07:00:00.000Z");
+  });
+
+  test("a closed quota gate reads only the paid ISRC worklist", async () => {
+    const modes: (string | undefined)[] = [];
+    const summary = await runAnchorSweep(100, {
+      ...preflightDeps(
+        {
+          apifyBudgetRemaining: 294,
+          apifyBudgetSpent: false,
+          apifyEnabled: true,
+          gateReason: "breaker_quota",
+          spotifySearchEnabled: true,
+        },
+        () => {},
+      ),
+      fetchQueue: (_limit, mode) => {
+        modes.push(mode);
+        return Promise.resolve({ queueDepth: 0, rows: [] });
+      },
+    });
+    expect(modes).toEqual(["quota"]);
+    expect(summary.checked).toBe(0);
+    expect(summary.blockedReason).toBe("breaker_quota");
+  });
+
+  test("a transient shared meter and a nearly expired throttle use the normal queue", async () => {
+    for (const gateReason of ["shared_meter", "breaker_throttle"] as const) {
+      const modes: (string | undefined)[] = [];
+      await runAnchorSweep(1, {
+        ...preflightDeps(
+          {
+            apifyBudgetRemaining: 300,
+            apifyBudgetSpent: false,
+            apifyEnabled: true,
+            gateReason,
+            nextEligibleAt: "2026-09-20T12:01:00.000Z",
+            spotifySearchEnabled: true,
+          },
+          () => {},
+        ),
+        fetchQueue: (_limit, mode) => {
+          modes.push(mode);
+          return Promise.resolve({ queueDepth: 0, rows: [] });
+        },
+      });
+      expect(modes).toEqual([undefined]);
+    }
+  });
+
+  test("a throttle longer than the expected sweep reads only prior asks", async () => {
+    const modes: (string | undefined)[] = [];
+    await runAnchorSweep(1, {
+      ...preflightDeps(
+        {
+          apifyBudgetRemaining: 300,
+          apifyBudgetSpent: false,
+          apifyEnabled: true,
+          gateReason: "breaker_throttle",
+          nextEligibleAt: "2026-09-20T12:30:00.000Z",
+          spotifySearchEnabled: true,
+        },
+        () => {},
+      ),
+      fetchQueue: (_limit, mode) => {
+        modes.push(mode);
+        return Promise.resolve({ queueDepth: 0, rows: [] });
+      },
+    });
+    expect(modes).toEqual(["prior"]);
+  });
+
+  test("a spent cap reads the normal queue and makes free ISRC asks without Apify", async () => {
+    const modes: (string | undefined)[] = [];
+    let actorRuns = 0;
+    let freeAsks = 0;
+    const summary = await runAnchorSweep(1, {
+      ...preflightDeps(
         {
           apifyBudgetRemaining: 0,
           apifyBudgetSpent: true,
           apifyEnabled: true,
-          spotifySearchEnabled: false,
+          gateReason: "open",
+          spotifySearchEnabled: true,
         },
         () => {},
       ),
-    );
+      fetchQueue: (_limit, mode) => {
+        modes.push(mode);
+        return Promise.resolve([{ anchorQuery: "q", trackId: "mb_a" }]);
+      },
+      now: () => Date.parse("2026-09-20T03:00:00Z"),
+      resolveFree: () => {
+        freeAsks += 1;
+        return Promise.resolve({
+          anchored: true,
+          source: "spotify_isrc",
+          spotifyIsrcAsked: true,
+          spotifySearchDone: true,
+          verifiedBy: "isrc",
+        });
+      },
+      runActor: () => {
+        actorRuns += 1;
+        return Promise.resolve([]);
+      },
+    });
 
-    expect(summary.reason).toBe("apify_budget_spent");
+    expect(modes).toEqual([undefined]);
+    expect(freeAsks).toBe(1);
+    expect(summary.spotifyIsrcAsks).toBe(1);
+    expect(summary.checked).toBe(1);
+    expect(actorRuns).toBe(0);
+  });
+
+  test("a transient gate with Apify disabled still pulls and asks the normal queue", async () => {
+    for (const gateReason of ["shared_meter", "breaker_throttle"] as const) {
+      const modes: (string | undefined)[] = [];
+      let freeAsks = 0;
+      const summary = await runAnchorSweep(1, {
+        ...preflightDeps(
+          {
+            apifyBudgetRemaining: 300,
+            apifyBudgetSpent: false,
+            apifyEnabled: false,
+            gateReason,
+            nextEligibleAt: "2026-09-20T12:01:00.000Z",
+            spotifySearchEnabled: true,
+          },
+          () => {},
+        ),
+        fetchQueue: (_limit, mode) => {
+          modes.push(mode);
+          return Promise.resolve([{ anchorQuery: "q", trackId: "mb_a" }]);
+        },
+        resolveFree: () => {
+          freeAsks += 1;
+          return Promise.resolve({
+            anchored: true,
+            source: "spotify_isrc",
+            spotifyIsrcAsked: true,
+            spotifySearchDone: true,
+            verifiedBy: "isrc",
+          });
+        },
+      });
+
+      expect(modes).toEqual([undefined]);
+      expect(freeAsks).toBe(1);
+      expect(summary.spotifyIsrcAsks).toBe(1);
+      expect(summary.checked).toBe(1);
+    }
   });
 
   test("a preflight that THROWS is fail-open — the firing runs as it always did", async () => {

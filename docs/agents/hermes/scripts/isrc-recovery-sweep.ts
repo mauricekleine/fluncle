@@ -19,7 +19,7 @@ const DEFAULT_API_BASE_URL = "https://www.fluncle.com";
 const DEFAULT_BATCH = 100;
 const MAX_WORK_LIMIT = 200;
 export const ADMISSION_OWNER = "fluncle-isrc-recovery";
-export const ISRC_RECOVERY_EXPECTED_INTERVAL_MS = 60 * 60 * 1000;
+export const ISRC_RECOVERY_EXPECTED_INTERVAL_MS = 10 * 60 * 1000;
 export const ISRC_RECOVERY_PACE_MS = 1_100;
 
 const DEEZER_API_BASE_URL = process.env.FLUNCLE_DEEZER_API_BASE_URL ?? "https://api.deezer.com";
