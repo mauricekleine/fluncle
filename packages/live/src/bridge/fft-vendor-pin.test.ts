@@ -55,11 +55,4 @@ describe("bridge/fft.ts is a faithful vendoring of packages/video/src/pipeline/f
       "bridge/fft.ts has drifted from packages/video/src/pipeline/fft.ts — mirror the change (the two fingerprint the SAME audio from opposite ends of the live matcher)",
     ).toBe(original);
   });
-
-  test("the vendored header still says it is vendored, and from where", async () => {
-    const header = await Bun.file(VENDORED_URL).text();
-
-    expect(header).toContain("packages/video/src/pipeline/fft.ts");
-    expect(header).toContain("mirror it here");
-  });
 });

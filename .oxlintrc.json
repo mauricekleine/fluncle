@@ -8,6 +8,7 @@
     "**/build/**",
     "**/.turbo/**",
     "apps/raycast/raycast-env.d.ts",
+    "**/*.gen.ts",
     "apps/web/src/routeTree.gen.ts",
     "apps/web/worker-configuration.d.ts",
     "tools/oxlint/anti-slop/**"
@@ -16,6 +17,10 @@
     {
       "name": "anti-slop",
       "specifier": "./tools/oxlint/anti-slop/index.ts"
+    },
+    {
+      "name": "no-comments",
+      "specifier": "./tools/oxlint/no-comments/index.ts"
     }
   ],
   "options": {
@@ -29,6 +34,17 @@
   // mobile opts back out of the rules that fire on RN primitives. (An override can't drop a
   // whole plugin, so the DOM-shaped rules are named; extend this list if a new one fires.)
   "overrides": [
+    {
+      "files": ["tools/oxlint/no-comments/**"],
+      "rules": {
+        "eslint/sort-keys": "off",
+        "import/consistent-type-specifier-style": "off"
+      }
+    },
+    {
+      "files": ["tools/oxlint/no-comments/**"],
+      "rules": { "no-comments/no-comments": "error" }
+    },
     {
       "files": ["apps/mobile/**"],
       "rules": {
