@@ -229,7 +229,7 @@ export async function sendPasswordResetEmail(params: { to: string; url: string }
 
   const html = [
     "<p>Someone asked to reset the password on your Fluncle account. If that was you, open this link to set a new one:</p>",
-    `<p><a href="${params.url}">Set a new password</a></p>`,
+    `<p><a href="${escapeHtmlAttribute(params.url)}">Set a new password</a></p>`,
     "<p>The link works for one hour. If it wasn&rsquo;t you, ignore this and nothing changes.</p>",
     "<p>Fluncle</p>",
   ].join("\n");
@@ -255,7 +255,7 @@ export async function sendVerificationEmail(params: { to: string; url: string })
 
   const html = [
     "<p>Welcome aboard. Confirm this is your email so I can keep your Fluncle account yours. Open this link:</p>",
-    `<p><a href="${params.url}">Verify your email</a></p>`,
+    `<p><a href="${escapeHtmlAttribute(params.url)}">Verify your email</a></p>`,
     "<p>You are already signed in and nothing is locked behind this. Verifying just keeps the door yours. If you didn&rsquo;t create a Fluncle account, ignore this and nothing happens.</p>",
     "<p>Fluncle</p>",
   ].join("\n");
@@ -270,20 +270,24 @@ export async function sendVerificationEmail(params: { to: string; url: string })
 
 export async function sendMagicLinkEmail(params: { to: string; url: string }): Promise<void> {
   const text = [
-    "Here's your way into Fluncle. Open this link and you're signed in:",
+    "Hey, good to have you with the crew. Open this link and you're in:",
     "",
     params.url,
     "",
     "It works once, for the next 15 minutes. If you didn't ask for it, ignore this and nothing happens.",
     "",
+    "Save any banger that gets you moving and I'll keep it for you, wherever you sign in.",
+    "",
+    "Happy raving,",
     "Fluncle",
   ].join("\n");
 
   const html = [
-    "<p>Here&rsquo;s your way into Fluncle. Open this link and you&rsquo;re signed in:</p>",
+    "<p>Hey, good to have you with the crew. Open this link and you&rsquo;re in:</p>",
     `<p><a href="${escapeHtmlAttribute(params.url)}">Sign in to Fluncle</a></p>`,
     "<p>It works once, for the next 15 minutes. If you didn&rsquo;t ask for it, ignore this and nothing happens.</p>",
-    "<p>Fluncle</p>",
+    "<p>Save any banger that gets you moving and I&rsquo;ll keep it for you, wherever you sign in.</p>",
+    "<p>Happy raving,<br>Fluncle</p>",
   ].join("\n");
 
   await sendTransactionalEmail({

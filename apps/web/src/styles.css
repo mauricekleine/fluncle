@@ -4485,8 +4485,12 @@ a.catalogue-letter:focus-visible {
 
 .magic-link-sent {
   color: var(--starlight-cream);
-  font-size: 0.95rem;
+  font-size: 0.9rem;
   line-height: 1.5;
+}
+
+.magic-link-sent:focus {
+  outline: none;
 }
 
 .magic-link-sent strong {

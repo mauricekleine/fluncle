@@ -19,10 +19,17 @@ import { type AccountUser, Field } from "./shared";
 export const MAGIC_LINK_CALLBACK_ERROR =
   "That link expired or was already used. Put your email in below and I'll send a fresh one.";
 
+export const MAGIC_LINK_FAILED =
+  "I couldn't sign you in with that link. Put your email in below and I'll send a fresh one.";
+
 export function readCallbackError(search: string): string | undefined {
   const error = new URLSearchParams(search).get("error");
 
-  return error ? MAGIC_LINK_CALLBACK_ERROR : undefined;
+  if (!error) {
+    return undefined;
+  }
+
+  return error === "INVALID_TOKEN" ? MAGIC_LINK_CALLBACK_ERROR : MAGIC_LINK_FAILED;
 }
 
 export function AuthForms({
@@ -97,7 +104,7 @@ export function AuthForms({
       ) : null}
       <MagicLinkForm
         callbackURL="/account"
-        hint="No password needed. New here? The same link sets up your account."
+        hint="No password needed. New here? Same link, and I'll set up your account."
       />
       {googleEnabled ? (
         <>
@@ -116,16 +123,18 @@ export function AuthForms({
           </Button>
         </>
       ) : null}
-      <button
-        className="self-start text-sm text-muted-foreground hover:text-accent-foreground"
+      <Button
+        className="self-start px-0 text-muted-foreground hover:text-accent-foreground"
         onClick={() => {
           setView("password");
           setMessage("");
         }}
+        size="sm"
         type="button"
+        variant="link"
       >
         Sign in with a password
-      </button>
+      </Button>
     </div>
   );
 }
@@ -188,13 +197,15 @@ function PasswordSignInForm({
           onChange={(event) => setPassword(event.target.value)}
         />
       </Field>
-      <button
-        className="self-start text-sm text-muted-foreground hover:text-accent-foreground"
+      <Button
+        className="self-start px-0 text-muted-foreground hover:text-accent-foreground"
         onClick={onForgot}
+        size="sm"
         type="button"
+        variant="link"
       >
         Forgot password?
-      </button>
+      </Button>
       <Button disabled={busy} type="submit">
         {busy ? "Signing in…" : "Sign in"}
       </Button>
@@ -203,13 +214,15 @@ function PasswordSignInForm({
           {message}
         </p>
       ) : null}
-      <button
-        className="self-start text-sm text-muted-foreground hover:text-accent-foreground"
+      <Button
+        className="self-start px-0 text-muted-foreground hover:text-accent-foreground"
         onClick={onBack}
+        size="sm"
         type="button"
+        variant="link"
       >
         Email me a link instead
-      </button>
+      </Button>
     </form>
   );
 }
@@ -259,13 +272,15 @@ function ForgotPasswordForm({ onBack }: { onBack: () => void }) {
           If that account exists, a reset link is on its way.
         </p>
       ) : null}
-      <button
-        className="self-start text-sm text-muted-foreground hover:text-accent-foreground"
+      <Button
+        className="self-start px-0 text-muted-foreground hover:text-accent-foreground"
         onClick={onBack}
+        size="sm"
         type="button"
+        variant="link"
       >
         Back to password sign-in
-      </button>
+      </Button>
     </form>
   );
 }
