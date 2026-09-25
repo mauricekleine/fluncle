@@ -1,5 +1,3 @@
-/// <reference types="vite/client" />
-
 import { colors } from "@fluncle/tokens";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {

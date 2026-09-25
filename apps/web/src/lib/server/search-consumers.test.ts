@@ -1,6 +1,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { parseSync } from "oxc-parser";
 import { describe, expect, it } from "vitest";
 
 // THE READ-PATH LOCK. Fluncle has two searches, and the split is a boundary, not a migration
@@ -61,8 +62,6 @@ const SUBMIT_FLOW_ALLOWLIST = [
   "apps/web/src/lib/server/mcp.ts",
   // The oRPC `search_tracks` handler — the op's HTTP mount, importing the capability directly.
   "apps/web/src/lib/server/orpc/search.ts",
-  // The server-side capability behind the op — the implementation, not a consumer.
-  "apps/web/src/lib/server/track-search.ts",
   // The web submit helper: the `searchTracks` fetch the dialog drives.
   "apps/web/src/lib/submissions.ts",
   // WebMCP's `search_tracks` tool — the submit funnel exposed to in-page agents.
@@ -100,8 +99,21 @@ function sourceFiles(dir: string): string[] {
   return files;
 }
 
+function codeWithoutComments(file: string, source: string): string {
+  const comments = parseSync(file, source).comments;
+  let code = "";
+  let cursor = 0;
+  for (const comment of comments) {
+    code += source.slice(cursor, comment.start);
+    code += " ".repeat(comment.end - comment.start);
+    cursor = comment.end;
+  }
+  return code + source.slice(cursor);
+}
+
 function referencesSpotifyOp(content: string): boolean {
-  return SPOTIFY_OP_MARKERS.some((marker) => marker.test(content));
+  const code = codeWithoutComments("source.tsx", content);
+  return SPOTIFY_OP_MARKERS.some((marker) => marker.test(code));
 }
 
 describe("the read path is internal-only — every Spotify-op caller is submit flow", () => {
@@ -122,6 +134,7 @@ describe("the read path is internal-only — every Spotify-op caller is submit f
 
     expect(referencesSpotifyOp(mockBrowseRoute)).toBe(true);
     expect(referencesSpotifyOp(mockRelativeBrowseRoute)).toBe(true);
+    expect(referencesSpotifyOp("// search_tracks and /api/v1/search")).toBe(false);
     expect(
       DYNAMIC_TRACK_SEARCH_IMPORT_MARKER.test("// prose mentions lib/server/track-search"),
     ).toBe(false);
@@ -144,7 +157,7 @@ describe("the read path is internal-only — every Spotify-op caller is submit f
         "— every browse surface searches the archive through `search_archive` " +
         "(GET /api/v1/search/archive), which resolves a pasted Spotify link locally. A file " +
         "added here is a new Spotify-op consumer: if it is not part of the submit flow, point " +
-        "it at `search_archive`; if it is, add it to SUBMIT_FLOW_ALLOWLIST with a comment " +
+        "it at `search_archive`; if it is, add it to SUBMIT_FLOW_ALLOWLIST with a reason " +
         "saying which leg of the funnel it is.",
     ).toEqual(SUBMIT_FLOW_ALLOWLIST);
   });
