@@ -1,9 +1,5 @@
 name: Releases
 
-# Publishing begins only after the generic Quality Checks run for the exact main SHA succeeds.
-# The selector compares that SHA with each surface's last release tag, so it preserves path-scoped
-# releases without calling the full validation workflow a second time. Manual releases must name a
-# SHA whose push-triggered Quality Checks run already passed.
 on:
   workflow_run:
     workflows: [Quality Checks]
@@ -221,7 +217,7 @@ jobs:
           ref: ${{ needs.select.outputs.sha }}
 
       - name: Setup Rust with musl target
-        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
         with:
           targets: x86_64-unknown-linux-musl
           toolchain: stable

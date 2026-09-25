@@ -54,6 +54,8 @@ The root head supplies `twitter:card` only. Do not add site-wide `twitter:title`
 | `web.privacy`    | `/privacy`    | the privacy policy                                                                                                                                                                                                                                                                                                                                                                                                                             | tertiary  |
 | `web.terms`      | `/terms`      | the terms of use                                                                                                                                                                                                                                                                                                                                                                                                                               | tertiary  |
 
+On `/fresh`, tracks from one record fold into one release; a record whose tracks have different release dates appears in each corresponding rolling week with only that week's tracks. The browser marks releases newly shown since the previous sitting by stable release key, rather than release date, because a late crawl can reveal an older release. The baseline stays fixed across reloads during one sitting and lives only in browser storage; no account or server read is involved.
+
 ### Subdomains — sibling hosts on the same Worker
 
 | Surface            | Host                  | Exposes                                                                                               | Weight    |
@@ -115,6 +117,8 @@ Backfill query controls stay optional strings in the contracts because their han
 
 RSS finding items link to their permanent `/log` coordinate when one exists, with Spotify kept in the item body; a coordinate-less finding falls back to its Spotify URL. Cover art uses `media:content` because an RSS `enclosure` requires a byte length the archive does not hold for those images.
 
+Fresh feeds use release dates, including the first day represented by a month- or year-precision date, and never describe an uncertified catalogue row as found. Only certified findings carry a `/log` coordinate and cover; uncertified rows link to Spotify when available and stay unlit. XML feed bodies escape dynamic values for the embedded HTML first, then escape that HTML for XML text. The podcast feed includes a mixtape only when its audio object answers HEAD with a positive byte length, so subscribers never receive a broken enclosure. The calendar folds iCalendar lines at 75 UTF-8 octets without splitting a multi-byte character and joins them with CRLF.
+
 ### Discovery — machine-/crawler-facing maps
 
 | Surface                     | Route                                  | Format                     | Exposes                                                                                                                           | Weight    |
@@ -132,8 +136,11 @@ RSS finding items link to their permanent `/log` coordinate when one exists, wit
 | `discovery.api-catalog`     | `/.well-known/api-catalog`             | `application/linkset+json` | the RFC 9727 linkset pointing at the machine-readable surfaces                                                                    | tertiary  |
 | `discovery.agent-card`      | `/.well-known/agent-card.json`         | `application/json`         | the A2A agent card — Fluncle's actionable public skills (search, list, read, submit, subscribe)                                   | tertiary  |
 | `discovery.agent-skills`    | `/.well-known/agent-skills/index.json` | `application/json`         | the fluncle-api agent skill index (with the SKILL.md digest)                                                                      | tertiary  |
-| `discovery.oembed`          | `/oembed`                              | `application/json+oembed`  | the oEmbed 1.0 provider — a pasted /log, /mixtapes, or /artist link unfurls as a rich finding card (frames `/embed/<logId>`)      | tertiary  |
-| `discovery.cli-installer`   | `/cli/latest.sh`                       | `text/x-shellscript`       | the one-line CLI installer — picks the right `fluncle` binary for the machine off the latest GitHub release and drops it in place | tertiary  |
+
+| `discovery.oembed` | `/oembed` | `application/json+oembed` | the oEmbed 1.0 provider — a pasted /log, /mixtapes, or /artist link unfurls as a rich finding card (frames `/embed/<logId>`) | tertiary |
+| `discovery.cli-installer` | `/cli/latest.sh` | `text/x-shellscript` | the one-line CLI installer — picks the right `fluncle` binary for the machine off the latest GitHub release and drops it in place | tertiary |
+
+`apps/web/public/llms.txt` is the body source imported by `handleAgentDiscovery`. Because Cloudflare serves static assets before Worker routes, `assets.run_worker_first` sends `/llms.txt` through that handler.
 
 ### MCP — the Model Context Protocol server
 

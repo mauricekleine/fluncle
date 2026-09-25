@@ -4,6 +4,8 @@ The rave-02 host trigger for the `--no-agent` **label-triage gate**. It reads th
 
 The work is BAKED at `/opt/hermes-scripts/` — [`../scripts/label-triage-sweep.sh`](../scripts/label-triage-sweep.sh) over [`../scripts/label-triage-sweep.ts`](../scripts/label-triage-sweep.ts) — riding the image and auto-updating from `main` via pin-watch (Unit A). The round this gates is the [fluncle-label-triage](../../../../packages/skills/fluncle-label-triage) skill; the design is [docs/rfcs/label-triage-sweep-rfc.md](../../../rfcs/label-triage-sweep-rfc.md).
 
+The wrapper sets absolute `bun` and `fluncle` paths because a host timer can start with a minimal `PATH`. It sources `cron-output.sh` and wraps the payload instead of replacing the shell process, so the `/status` freshness marker is written even when the payload fails.
+
 ## Why the gate is a separate, deliberately cheap thing
 
 A triage round costs roughly 14k subagent tokens per label and runs an LLM fan-out. The gate costs one countless admin read and a sort.
@@ -29,6 +31,8 @@ Both are env overrides on the unit, and both are first guesses against a refill 
 | `LABEL_TRIAGE_STALE_DAYS` | 30      | how long before a label a round could not rule is looked at again               |
 
 **The threshold counts only never-looked labels, deliberately.** Counting the whole undecided pile would fire every firing forever, because the stuck core never shrinks — the labels a round cannot rule are exactly the ones that stay. Stale labels ride ALONG once a round fires (they are cheap to re-read, and self-healing depends on it: a conflation fixed upstream in MusicBrainz resolves on its own only if something looks again); they just never trigger a round by themselves.
+
+An unparseable cursor date is treated as never looked at, so a bad stamp cannot strand a label outside future rounds. A partial CLI read still counts as a reading when it has parseable output; an empty output fails the gate.
 
 ## Reading a run
 

@@ -1,14 +1,3 @@
-// `/fresh` AS A FINITE WEEK (docs/planning/discovery-ux, DX-17…DX-20), walked by two people.
-//
-//   - Marcus at 1440×900: distinct releases at the top (one record is one entry, its tracks folding
-//     out beneath it), week buckets with their counts, the end of the window said outright, and the
-//     browser-local "new since your last visit" line on the way back.
-//   - Priya at 390×844: one tap on "Play this week" and the week plays through the player.
-//
-// The seed's window (tests/e2e/seed.ts): the lead finding a day back and one catalogue single three
-// days back land in this week; the two-track "Undertow Ledger" record sits twenty days back.
-// Previews are answered with silence (`tests/e2e/player.ts`).
-
 import { expect, test, type ConsoleMessage, type Page } from "@playwright/test";
 import { blockExternalRequests } from "./browser";
 import { routePreviews } from "./player";
@@ -47,20 +36,17 @@ test.describe("Marcus at 1440×900", () => {
     await blockExternalRequests(page);
     await hydrate(page, "/fresh");
 
-    // The catalogue plate: the title alone and one factual line.
     await expect(page.getByRole("heading", { level: 1, name: "Fresh" })).toBeVisible();
     await expect(page.locator(".log-index-intro")).toHaveText(
       /^\d+ drum & bass releases? from the last 30 days\.$/,
     );
 
-    // This week leads, with its count; the lead finding sits in it.
     const thisWeek = page.getByRole("region", { exact: true, name: "This week" });
 
     await expect(thisWeek).toBeVisible();
     await expect(thisWeek.locator(".fresh-week-count")).toHaveText("2 releases");
     await expect(thisWeek.getByText(SEEDED_LEAD.title, { exact: true })).toBeVisible();
 
-    // The two-track record is ONE entry: one title, one count, its tracks folded away.
     const record = page.locator(".fresh-release").filter({
       has: page.getByRole("link", { name: new RegExp(`^${SEEDED_DESTINATION_TRACK.title} by `) }),
     });
@@ -80,12 +66,10 @@ test.describe("Marcus at 1440×900", () => {
     await expect(folded).toHaveCount(2);
     await expect(record.getByText(SEEDED_DESTINATION_NEIGHBOUR.title)).toBeVisible();
 
-    // The end of the window, said outright.
     await expect(page.locator(".fresh-end")).toHaveText(
       "That's every release from the last 30 days. You're caught up.",
     );
 
-    // Every week heading is an H2 under the page's H1, newest first.
     const weeks = page.locator(".fresh-week h2");
 
     await expect(weeks.first()).toHaveText("This week");
@@ -96,7 +80,6 @@ test.describe("Marcus at 1440×900", () => {
   test("sees what landed since the last visit, held in this browser alone", async ({ page }) => {
     await blockExternalRequests(page);
 
-    // A first visit says nothing about the last one.
     await hydrate(page, "/fresh");
     await expect(page.locator(".fresh-since-visit")).toHaveText("");
 
@@ -107,7 +90,6 @@ test.describe("Marcus at 1440×900", () => {
 
     expect(stored?.seen.length).toBeGreaterThan(0);
 
-    // A later sitting that had not seen the lead's release.
     await page.evaluate(
       ({ key, seen }) =>
         window.localStorage.setItem(
@@ -122,13 +104,11 @@ test.describe("Marcus at 1440×900", () => {
     );
     await expect(page.locator(".fresh-week .fresh-new-mark")).toHaveText(["New"]);
 
-    // The line leads to the mark it counts: the jump lands focus on the new release's link.
     await page.getByRole("button", { name: "Jump to the first new release" }).click();
     await expect(
       page.locator(".fresh-week li:has(.fresh-new-mark) .discovery-row-link"),
     ).toBeFocused();
 
-    // Back inside the same sitting, the mark holds; nothing else became new.
     await hydrate(page, "/fresh");
     await expect(page.locator(".fresh-since-visit")).toHaveText(
       "1 new release since your last visit.",
@@ -155,7 +135,6 @@ test.describe("Marcus at 1440×900", () => {
       "That's every track from the last 30 days. You're caught up.",
     );
 
-    // Label-in-name (WCAG 2.5.3): a control's accessible name carries its visible text.
     await hydrate(page, "/fresh");
     const mismatches = await page.evaluate(() =>
       [...document.querySelectorAll<HTMLElement>("main a[aria-label], main button[aria-label]")]

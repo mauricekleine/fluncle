@@ -8,15 +8,6 @@ import { siteUrl } from "../lib/fluncle-links";
 import { listLabelFreshTracks } from "../lib/server/fresh-entity";
 import { releaseBoundFeedCacheControl } from "../lib/server/edge-cache";
 
-// The per-LABEL sibling of /fresh.xml — the whole-archive release feed narrowed to one label:
-// what just came OUT on this label, over the same trailing 30-day release-date window. Only the
-// label's OWN tracks ride it, never a widening to similar labels. The two
-// tiers + the release-framing live in ../lib/fresh-feed-rss. An unknown slug 404s; the feed is
-// anonymous + public (the never-gates law).
-//
-// The unknown-slug 404 is a bare `Response`, not `notFound()` — inside a server handler that router
-// throw serializes to a 200 (the sitemap/docs/embed handlers all take this shape for the reason).
-
 export const Route = createFileRoute("/label/$slug/fresh.xml")({
   server: {
     handlers: {

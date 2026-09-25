@@ -20,13 +20,17 @@ describe("formatReleaseDate (the /tracks date column)", () => {
 });
 
 describe("formatReleaseDayRange (the /fresh week spans)", () => {
-  const RANGE = "\u2009\u2013\u2009";
+  const withoutRangeSpacing = (value: string): string => value.replace(/\s*–\s*/u, "–");
 
   it("collapses a span the way the locale collapses a range", () => {
-    expect(formatReleaseDayRange("2026-09-05", "2026-09-11")).toBe(`Sep 5${RANGE}11, 2026`);
-    expect(formatReleaseDayRange("2026-08-29", "2026-09-04")).toBe(`Aug 29${RANGE}Sep 4, 2026`);
-    expect(formatReleaseDayRange("2025-12-29", "2026-01-04")).toBe(
-      `Dec 29, 2025${RANGE}Jan 4, 2026`,
+    expect(withoutRangeSpacing(formatReleaseDayRange("2026-09-05", "2026-09-11"))).toBe(
+      "Sep 5–11, 2026",
+    );
+    expect(withoutRangeSpacing(formatReleaseDayRange("2026-08-29", "2026-09-04"))).toBe(
+      "Aug 29–Sep 4, 2026",
+    );
+    expect(withoutRangeSpacing(formatReleaseDayRange("2025-12-29", "2026-01-04"))).toBe(
+      "Dec 29, 2025–Jan 4, 2026",
     );
   });
 

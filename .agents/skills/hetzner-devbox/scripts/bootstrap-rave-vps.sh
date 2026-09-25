@@ -10,33 +10,33 @@ APP_DIR="${APP_DIR:-/opt/fluncle-ssh}"
 ADMIN_SSH_PORT="${ADMIN_SSH_PORT:-2222}"
 
 if [[ "${EUID}" -ne 0 ]]; then
-  printf 'bootstrap-rave-vps.sh must run as root\n' >&2
-  exit 1
+	printf 'bootstrap-rave-vps.sh must run as root\n' >&2
+	exit 1
 fi
 
 if [[ -z "${TS_AUTHKEY:-}" ]]; then
-  printf 'TS_AUTHKEY is required\n' >&2
-  exit 1
+	printf 'TS_AUTHKEY is required\n' >&2
+	exit 1
 fi
 
 log() {
-  printf '\n==> %s\n' "$*"
+	printf '\n==> %s\n' "$*"
 }
 
 log "Installing base public SSH app packages"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
 apt-get install -y --no-install-recommends \
-  ca-certificates curl gnupg sudo ufw openssh-server fail2ban
+	ca-certificates curl gnupg sudo ufw openssh-server fail2ban
 
 log "Creating private admin user ${USERNAME}"
 if ! id "${USERNAME}" >/dev/null 2>&1; then
-  useradd --create-home --shell /bin/bash --groups sudo "${USERNAME}"
+	useradd --create-home --shell /bin/bash --groups sudo "${USERNAME}"
 fi
 
 install -d -m 0700 -o "${USERNAME}" -g "${USERNAME}" "/home/${USERNAME}/.ssh"
 if [[ -f /root/.ssh/authorized_keys ]]; then
-  install -m 0600 -o "${USERNAME}" -g "${USERNAME}" /root/.ssh/authorized_keys "/home/${USERNAME}/.ssh/authorized_keys"
+	install -m 0600 -o "${USERNAME}" -g "${USERNAME}" /root/.ssh/authorized_keys "/home/${USERNAME}/.ssh/authorized_keys"
 fi
 
 cat >"/etc/sudoers.d/90-${USERNAME}" <<SUDOERS
@@ -46,29 +46,29 @@ chmod 0440 "/etc/sudoers.d/90-${USERNAME}"
 
 log "Installing Tailscale"
 if ! command -v tailscale >/dev/null 2>&1; then
-  curl -fsSL https://tailscale.com/install.sh | sh
+	curl -fsSL https://tailscale.com/install.sh | sh
 fi
 systemctl enable --now tailscaled
 
 log "Bringing Tailscale online"
 tailscale up \
-  --auth-key="${TS_AUTHKEY}" \
-  --hostname="${TS_HOSTNAME}" \
-  --ssh \
-  --accept-dns=true
+	--auth-key="${TS_AUTHKEY}" \
+	--hostname="${TS_HOSTNAME}" \
+	--ssh \
+	--accept-dns=true
 
 log "Creating locked app user ${APP_USER}"
 if ! getent group "${APP_GROUP}" >/dev/null 2>&1; then
-  groupadd --system "${APP_GROUP}"
+	groupadd --system "${APP_GROUP}"
 fi
 
 if ! id "${APP_USER}" >/dev/null 2>&1; then
-  useradd \
-    --system \
-    --home-dir "${APP_HOME}" \
-    --shell /usr/sbin/nologin \
-    --gid "${APP_GROUP}" \
-    "${APP_USER}"
+	useradd \
+		--system \
+		--home-dir "${APP_HOME}" \
+		--shell /usr/sbin/nologin \
+		--gid "${APP_GROUP}" \
+		"${APP_USER}"
 fi
 
 install -d -m 0755 -o root -g root "${APP_DIR}"
@@ -86,10 +86,7 @@ AllowTcpForwarding no
 AllowAgentForwarding no
 PermitTunnel no
 SSHD
-# Ubuntu 23.04+ ships OpenSSH socket-activated: ssh.socket binds :22 and the
-# sshd_config Port directive is silently ignored. Defeat socket activation so
-# admin sshd moves to ${ADMIN_SSH_PORT} and :22 is freed for the public SSH app
-# (otherwise ssh.socket holds :22 and the app can't bind it).
+
 systemctl disable --now ssh.socket 2>/dev/null || true
 systemctl enable ssh.service
 systemctl restart ssh.service

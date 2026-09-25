@@ -267,7 +267,7 @@ describe("pin-watch stagger wiring", () => {
   const source = readFileSync(PIN_WATCH, "utf8");
 
   test("only a run that reached a clean end releases over the window", () => {
-    const staggered = [...source.matchAll(/\n +restore_sweep_timers staggered\n/g)];
+    const staggered = [...source.matchAll(/\n[ \t]+restore_sweep_timers staggered\n/g)];
     const dryRun = source.indexOf('log "dry-run: $NEW_IMAGE built and pre-smoke passed');
     const deployed = source.indexOf('log "post-swap smoke passed — deployed $NEW_IMAGE"');
     const rollback = source.indexOf('log "new image did not come up healthy');

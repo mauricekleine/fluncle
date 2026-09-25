@@ -120,9 +120,6 @@ export function planIncidents(
   const alerts: Alert[] = [];
   const active = new Set<Stage>();
   for (const verdict of verdicts) {
-    // `degraded` is reported, never paged: embed capacity below intake is drained by off-box
-    // batches. A measurement gap pages only once it has lasted an hour, so the partial window
-    // after an image swap stays quiet.
     const incident = verdict.state === "stalled" || verdict.state === "measurement_unavailable";
     const key = verdict.stage;
     if (incident) {
@@ -166,14 +163,12 @@ export function planIncidents(
       continue;
     }
     const verdict = verdicts.find((item) => item.stage === key);
-    // A scheduled pause neither extends nor recovers an open stall; it freezes it until the
-    // stage is judged again.
+
     if (!verdict || verdict.state === "scheduled_pause") {
       continue;
     }
     prior.healthyChecks += 1;
     if (prior.healthyChecks >= 2 && prior.sentAt.length === 0) {
-      // Never announced (a measurement gap that cleared inside its grace), so nothing to recover.
       delete next[key];
       continue;
     }
@@ -218,8 +213,6 @@ function readMarkers(job: string): Marker[] | null {
   }
 }
 
-// The status and worklist counts run 15–25s on the hosted database, and the reads run in
-// parallel inside the unit's 180s budget, so a read gets a minute before it counts as unmeasured.
 export const API_READ_TIMEOUT_MS = 60_000;
 
 async function apiRead(path: string): Promise<Record<string, unknown> | null> {

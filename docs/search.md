@@ -203,7 +203,7 @@ No new vendor, script, or CSP host: events go through the `sa_event` the page al
 
 ## Operating it
 
-Tier 4 needs `OPENROUTER_API_KEY` — **already a production Worker secret** (the context-note distil uses it), so tier 4 is live on deploy with no new secret to set. `OPENROUTER_SEARCH_MODEL` optionally overrides the model (default `anthropic/claude-haiku-4.5`); it is kept separate from `OPENROUTER_CONTEXT_MODEL` because one is a summariser and the other a parser. Its spend lands in the COST-01 ledger under the `search` step.
+Tier 4 needs `OPENROUTER_API_KEY` — **already a production Worker secret** (the context-note distil uses it), so tier 4 is live on deploy with no new secret to set. `OPENROUTER_SEARCH_MODEL` optionally overrides the model (default `anthropic/claude-haiku-4.5`); it is kept separate from `OPENROUTER_CONTEXT_MODEL` because one is a summariser and the other a parser. Keep the search model and `OPENROUTER_REASONING_EFFORT` together: production uses `openai/gpt-5.6-luna` at `low`, and the search-filter bench found higher effort worse at verbatim parsing. Removing both restores the baked Haiku default, which sends no reasoning field. Its spend lands in the COST-01 ledger under the `search` step.
 
 ## The filter prompt is operator-tunable
 

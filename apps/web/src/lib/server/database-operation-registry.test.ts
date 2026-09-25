@@ -671,7 +671,7 @@ describe("database operation registry", () => {
       join(REPO_ROOT, "apps/ssh/watchdog/fluncle-rave-watchdog.sh"),
       "utf8",
     );
-    const watchdogRun = watchdog.slice(watchdog.lastIndexOf("# --- Run"));
+    const watchdogRun = watchdog.slice(watchdog.lastIndexOf("\nping_beacon\n") + 1);
     const watchdogBeacon = watchdogRun.indexOf("ping_beacon\n");
     const watchdogCrossPing = watchdogRun.indexOf("cross_ping\n");
     const watchdogSnapshot = watchdogRun.indexOf("probe_and_post_onion\n");

@@ -72,6 +72,8 @@ The Worker owns every platform secret (R2, Postiz, Turso, YouTube, Mixcloud, Las
 - **The box never holds the operator token.** The CLI reads `FLUNCLE_API_TOKEN`; on the box that env var holds the value of the **agent-scoped** token (stored in 1Password as `FLUNCLE_AGENT_TOKEN`). The CLI sends it as its Bearer, the Worker recognizes it as the `agent` role, and publish-class actions are refused server-side. The operator's own laptop keeps the full `FLUNCLE_API_TOKEN` (the `operator` role). Both are intentionally **separate** from the admin-cookie signing key (`ADMIN_SESSION_SECRET`, a Worker-only secret), so a box compromise costs only the agent surface and **cannot forge web-admin sessions**.
 - Provisioning and rotating the agent token is a generate → `wrangler secret put FLUNCLE_AGENT_TOKEN` (Worker) → store in 1Password → re-populate the secret env-file (its `FLUNCLE_API_TOKEN` = the agent value) → restart loop; the full operator `FLUNCLE_API_TOKEN` rotates independently the same way. The exact recipe (key generation, the env-file path, the restart) is in the ops runbook note.
 
+When a sweep launches a less trusted child, `agent-env.sh --scrub` removes both credential values and file-pointer variable names from that child's environment. Removing a variable with `env -u` alone does not hide a credential file that the child can read directly. This scrub limits accidental inheritance; moving such a file off the agent-running host is the durable boundary.
+
 ## Run
 
 `<secret-env-file>` below is the root-owned `op`-populated env-file (§ Secrets); its exact path is in the ops runbook note.

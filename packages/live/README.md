@@ -6,6 +6,8 @@ renderer on :4173) and the **bridge** (`bun run bridge`, plan + fingerprint
 identity + supervisor + phone remote on :4180) — bound by `src/contract.ts`.
 Local-only by design (the never-crash rail: no network dependency mid-show).
 
+Both processes run from Bun's TypeScript entry points, so their import paths keep `.ts` extensions. `noUncheckedIndexedAccess` stays off for the DSP and shader hot paths, where typed-array indexing is pervasive and a bad sample can degrade a frame but cannot corrupt persisted data.
+
 ## The glass (Unit L)
 
 `bun run glass` bundles the browser client and serves a self-contained page.

@@ -51,7 +51,7 @@
     "fluncle-label-triage": {
       "source": "packages/skills/fluncle-label-triage",
       "sourceType": "local",
-      "computedHash": "9be0f8c38708c538d4f54072efa0a1bfe5da23d6956c1f339db70e60a9477419"
+      "computedHash": "486192ae5f661b28323a542035335d6281671373ca6fcad06273fb9a138733f7"
     },
     "fluncle-ledger": {
       "source": "packages/skills/fluncle-ledger",
@@ -116,7 +116,7 @@
     "hetzner-devbox": {
       "source": "packages/skills/hetzner-devbox",
       "sourceType": "local",
-      "computedHash": "b434ea4a154af9c40b2a8cd8ae7c3d49c3cc6c6b504d10836ac55f0c468be4c1"
+      "computedHash": "64c8369ec825883be76be4dc5423933b2b3b509eadbb39aad532c90fbb4116bb"
     },
     "impeccable": {
       "source": "pbakaus/impeccable",

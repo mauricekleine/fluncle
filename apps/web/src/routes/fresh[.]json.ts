@@ -4,22 +4,9 @@ import { itemId, itemLink, itemTitle, releaseInstant } from "../lib/fresh-feed-i
 import { listFreshTracks } from "../lib/server/fresh";
 import { releaseBoundFeedCacheControl } from "../lib/server/edge-cache";
 
-// The release-date sibling of /feed.json. That feed keys on findings.added_at — WHEN Fluncle
-// found a tune. This one keys on tracks.release_date — when the tune came OUT — so its dates
-// are RELEASE dates and its copy never says he "found" these, only that they just landed
-// (VOICE.md's Found Rule). It reuses the ratified /fresh page title + line verbatim.
-//
-// Two tiers ride the same list. A CERTIFIED finding carries its Log ID coordinate + cover, so
-// it links to its /log home and shows its art. An UNCERTIFIED catalogue row carries neither
-// (structurally — listFreshTracks only hands over logId/coverImageUrl when certified), so it
-// links OUT to Spotify and renders unlit: no /log, no coordinate, no cover (DESIGN.md's Unlit
-// Rule). A row with neither coordinate nor Spotify has no `url`, only a deterministic `id`.
-
-// The feed-level icon (site cover) + favicon, the images other pages fall back to.
 const coverUrl = `${siteUrl}/fluncle-cover.png`;
 const faviconUrl = `${siteUrl}/favicon.png`;
 
-// Reused verbatim from the /fresh page (apps/web/src/routes/fresh.tsx) — one action, one label.
 const channelTitle = "New drum & bass releases · Fluncle";
 const channelDescription =
   "The freshest drum & bass, hot off the press. Every release from the last 30 days, tracked as Fluncle spins his way through them.";
@@ -34,8 +21,7 @@ export const Route = createFileRoute("/fresh.json")({
         const items = tracks.map((track) => {
           const title = itemTitle(track);
           const link = itemLink(track);
-          // Keep the Spotify link reachable in the body even when it is not the item url (a
-          // certified finding links to /log instead).
+
           const contentText = [title, track.spotifyUrl ?? undefined].filter(Boolean).join("\n\n");
           const published = releaseInstant(track.releaseDate);
 
@@ -48,7 +34,7 @@ export const Route = createFileRoute("/fresh.json")({
             url?: string;
           } = {
             content_text: contentText,
-            // JSON Feed 1.1: `id` is unique and ideally the permalink URL.
+
             id: itemId(track, link),
             title,
           };
@@ -58,7 +44,7 @@ export const Route = createFileRoute("/fresh.json")({
           if (published) {
             item.date_published = published.toISOString();
           }
-          // Only a certified finding carries a cover; an uncertified row stays unlit.
+
           if (track.coverImageUrl) {
             item.image = track.coverImageUrl;
           }
@@ -78,8 +64,6 @@ export const Route = createFileRoute("/fresh.json")({
 
         return new Response(JSON.stringify(feed), {
           headers: {
-            // Readers get a short max-age; the CDN holds s-maxage; SWR keeps
-            // every repeat poll free while a background refresh runs.
             "Cache-Control": releaseBoundFeedCacheControl(now),
             "Content-Type": "application/feed+json; charset=utf-8",
           },

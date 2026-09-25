@@ -1,124 +1,104 @@
 #!/usr/bin/env bash
-# audit-review-sweep.sh — the 5am nightly-audit reviewer driver.
-#
-# The deterministic half finds the open audit PR + prepares the checkout; ONE `claude -p` call
-# reviews it adversarially and — per ./audit/prompts/_reviewer.md — either fixes small residual
-# nits and merges (green CI + no high-impact problem), or comments and leaves it open for the
-# operator. The agent drives gh/git itself (subscription auth; zero OpenRouter tokens).
-#
-# Scheduled by the repo-checked-in HOST systemd timer ../audit-review-timer/ (05:00 Amsterdam),
-# four hours after the 1am auditor so its PR + CI are settled. Full doctrine:
-# ../audit-timer/README.md.
-#
-# USAGE
-#   audit-review-sweep.sh          # review the newest open audit/* PR
-#   audit-review-sweep.sh --pr N   # review a specific PR (pilot / manual)
+
 set -uo pipefail
 
 export PATH="/usr/local/bin:/root/.bun/bin:${PATH:-/usr/bin:/bin}"
 export BUN_BIN="${BUN_BIN:-/usr/local/bin/bun}"
 
-# Headless `claude -p` kills backgrounded Bash ~5s after the final result; a sweep that
-# backgrounds work and ends its turn loses it silently. Documented: code.claude.com/docs/en/env-vars.md
 export CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 AUDIT_DIR="${SCRIPT_DIR}/audit"
 # shellcheck source=./agent-env.sh
 . "${SCRIPT_DIR}/agent-env.sh"
-# The reviewer's pass is shorter than the auditor's — it reads one diff rather than hunting a whole
-# domain — so it takes its own budget, which must stay under its unit's TimeoutStartSec backstop
-# (../audit-review-timer/fluncle-audit-review.service) the same way the auditor's does.
+
 AGENT_PASS_BUDGET_SECS="${AUDIT_REVIEW_PASS_BUDGET_SECS:-${AGENT_PASS_BUDGET_SECS:-2400}}"
 # shellcheck source=./agent-pass.sh
 . "${SCRIPT_DIR}/agent-pass.sh"
 
 SECRETS_FILE="${AUDIT_SECRETS_FILE:-${HOME:-/opt/data/home}/.fluncle-secrets.env}"
 if [ -r "${SECRETS_FILE}" ]; then
-  set -a
-  # shellcheck source=/dev/null
-  . "${SECRETS_FILE}"
-  set +a
+	set -a
+	# shellcheck source=/dev/null
+	. "${SECRETS_FILE}"
+	set +a
 fi
 
 log() { echo "[audit-review] $*" >&2; }
 
-# Reasoning effort for the one `claude -p` pass, pinned rather than left to the CLI default so a
-# shifting default never silently changes how deeply the reviewer reads the diff (the same reason
-# the model is pinned). AUDIT_REVIEW_CLAUDE_EFFORT in the box env overrides it; a value the CLI
-# would not accept falls back to `high` rather than failing the night.
 AUDIT_REVIEW_CLAUDE_EFFORT="${AUDIT_REVIEW_CLAUDE_EFFORT:-high}"
 case "${AUDIT_REVIEW_CLAUDE_EFFORT}" in
-  low | medium | high | xhigh | max) ;;
-  *)
-    log "AUDIT_REVIEW_CLAUDE_EFFORT='${AUDIT_REVIEW_CLAUDE_EFFORT}' is not low|medium|high|xhigh|max; using high"
-    AUDIT_REVIEW_CLAUDE_EFFORT="high"
-    ;;
+low | medium | high | xhigh | max) ;;
+*)
+	log "AUDIT_REVIEW_CLAUDE_EFFORT='${AUDIT_REVIEW_CLAUDE_EFFORT}' is not low|medium|high|xhigh|max; using high"
+	AUDIT_REVIEW_CLAUDE_EFFORT="high"
+	;;
 esac
 
 PR_NUM=""
 while [ $# -gt 0 ]; do
-  case "$1" in
-    --pr) PR_NUM="${2:-}"; shift ;;
-    *) log "unknown arg: $1" ;;
-  esac
-  shift
+	case "$1" in
+	--pr)
+		PR_NUM="${2:-}"
+		shift
+		;;
+	*) log "unknown arg: $1" ;;
+	esac
+	shift
 done
 
 run_review() {
-  local repo="mauricekleine/fluncle"
-  local ws="${AUDIT_WORKSPACE:-${HOME:-/opt/data/home}/audit-workspace/fluncle}"
+	local repo="mauricekleine/fluncle"
+	local ws="${AUDIT_WORKSPACE:-${HOME:-/opt/data/home}/audit-workspace/fluncle}"
 
-  if [ -z "${FLUNCLE_AUDIT_GITHUB_PAT:-}" ]; then
-    echo "{\"ok\":false,\"stage\":\"auth\",\"error\":\"no FLUNCLE_AUDIT_GITHUB_PAT\",\"checked\":0,\"errors\":1,\"produced\":0}"
-    return 1
-  fi
-  export GH_TOKEN="${FLUNCLE_AUDIT_GITHUB_PAT}"
+	if [ -z "${FLUNCLE_AUDIT_GITHUB_PAT:-}" ]; then
+		echo "{\"ok\":false,\"stage\":\"auth\",\"error\":\"no FLUNCLE_AUDIT_GITHUB_PAT\",\"checked\":0,\"errors\":1,\"produced\":0}"
+		return 1
+	fi
+	export GH_TOKEN="${FLUNCLE_AUDIT_GITHUB_PAT}"
 
-  if [ ! -d "${ws}/.git" ]; then
-    echo "{\"ok\":false,\"stage\":\"workspace\",\"error\":\"no audit workspace (run the auditor first)\",\"checked\":0,\"errors\":1,\"produced\":0}"
-    return 1
-  fi
-  cd "${ws}" || { echo "{\"ok\":false,\"stage\":\"cd\",\"checked\":0,\"errors\":1,\"produced\":0}"; return 1; }
-  git config user.name "fluncle-audit-bot"
-  git config user.email "hey@mauricekleine.com"
-  git config commit.gpgsign false
-  git config credential.https://github.com.helper "!gh auth git-credential"
-  git fetch --quiet origin main || true
+	if [ ! -d "${ws}/.git" ]; then
+		echo "{\"ok\":false,\"stage\":\"workspace\",\"error\":\"no audit workspace (run the auditor first)\",\"checked\":0,\"errors\":1,\"produced\":0}"
+		return 1
+	fi
+	cd "${ws}" || {
+		echo "{\"ok\":false,\"stage\":\"cd\",\"checked\":0,\"errors\":1,\"produced\":0}"
+		return 1
+	}
+	git config user.name "fluncle-audit-bot"
+	git config user.email "hey@mauricekleine.com"
+	git config commit.gpgsign false
+	git config credential.https://github.com.helper "!gh auth git-credential"
+	git fetch --quiet origin main || true
 
-  # Pick the PR: explicit --pr, else the NEWEST open audit/* PR.
-  local domain branch
-  if [ -z "${PR_NUM}" ]; then
-    PR_NUM="$(gh pr list --repo "${repo}" --state open --json number,headRefName,createdAt \
-      --jq '[.[] | select(.headRefName | startswith("audit/"))] | sort_by(.createdAt) | reverse | .[0].number // empty' 2>/dev/null || true)"
-  fi
-  if [ -z "${PR_NUM}" ]; then
-    # A clean audit opens no PR, so an empty review queue is a healthy no-op.
-    echo "{\"ok\":true,\"action\":\"none\",\"note\":\"no open audit PR to review\",\"checked\":0,\"errors\":0,\"produced\":0}"
-    return 0
-  fi
-  branch="$(gh pr view "${PR_NUM}" --repo "${repo}" --json headRefName --jq '.headRefName' 2>/dev/null || true)"
-  domain="${branch##*-}"
-  log "reviewing PR #${PR_NUM} (${branch}, domain=${domain})"
+	local domain branch
+	if [ -z "${PR_NUM}" ]; then
+		PR_NUM="$(gh pr list --repo "${repo}" --state open --json number,headRefName,createdAt \
+			--jq '[.[] | select(.headRefName | startswith("audit/"))] | sort_by(.createdAt) | reverse | .[0].number // empty' 2>/dev/null || true)"
+	fi
+	if [ -z "${PR_NUM}" ]; then
 
-  # Check out the PR branch + sync deps so the reviewer can re-run checks.
-  gh pr checkout "${PR_NUM}" --repo "${repo}" >/dev/null 2>&1 || {
-    echo "{\"ok\":false,\"stage\":\"checkout\",\"pr\":${PR_NUM},\"checked\":1,\"errors\":1,\"produced\":0}"; return 1; }
-  "${BUN_BIN}" install --silent || log "bun install nonzero (continuing)"
+		echo "{\"ok\":true,\"action\":\"none\",\"note\":\"no open audit PR to review\",\"checked\":0,\"errors\":0,\"produced\":0}"
+		return 0
+	fi
+	branch="$(gh pr view "${PR_NUM}" --repo "${repo}" --json headRefName --jq '.headRefName' 2>/dev/null || true)"
+	domain="${branch##*-}"
+	log "reviewing PR #${PR_NUM} (${branch}, domain=${domain})"
 
-  local runtime_note prompt
-  runtime_note="RUNTIME: you are on branch ${branch} (PR #${PR_NUM}, domain ${domain}), checked out from origin/main. The auditor's report is the PR body + .audit/report.md; filed findings are rows in docs/audit-backlog.md. Follow your review contract: fix small nits (commit + \`git push\`), then either \`gh pr merge ${PR_NUM} --squash --delete-branch\` (no high-impact problem + required checks green), or \`gh pr comment ${PR_NUM}\` with your findings and leave it open. Confirm checks with \`gh pr checks ${PR_NUM}\`."
-  prompt="$(cat "${AUDIT_DIR}/prompts/_reviewer.md")
+	gh pr checkout "${PR_NUM}" --repo "${repo}" >/dev/null 2>&1 || {
+		echo "{\"ok\":false,\"stage\":\"checkout\",\"pr\":${PR_NUM},\"checked\":1,\"errors\":1,\"produced\":0}"
+		return 1
+	}
+	"${BUN_BIN}" install --silent || log "bun install nonzero (continuing)"
+
+	local runtime_note prompt
+	runtime_note="RUNTIME: you are on branch ${branch} (PR #${PR_NUM}, domain ${domain}), checked out from origin/main. The auditor's report is the PR body + .audit/report.md; filed findings are rows in docs/audit-backlog.md. Follow your review contract: fix small nits (commit + \`git push\`), then either \`gh pr merge ${PR_NUM} --squash --delete-branch\` (no high-impact problem + required checks green), or \`gh pr comment ${PR_NUM}\` with your findings and leave it open. Confirm checks with \`gh pr checks ${PR_NUM}\`."
+	prompt="$(cat "${AUDIT_DIR}/prompts/_reviewer.md")
 
 ${runtime_note}"
 
-  export CLAUDE_CONFIG_DIR="${CLAUDE_CONFIG_DIR:-/opt/claude}"
+	export CLAUDE_CONFIG_DIR="${CLAUDE_CONFIG_DIR:-/opt/claude}"
 
-  # Mark this workspace trusted so the repo's .claude/settings.json — the guard-protected-files
-  # hook (the mechanical backstop behind the prompt's rails) + the baked project skills — loads;
-  # Claude Code silently ignores an untrusted dir's settings. The auditor marks it at 01:00, but a
-  # container rebuild/swap before this 05:00 run wipes .claude.json, so re-assert it here too.
-  # Idempotent; best-effort — on any failure the prompt rails + PAT scope + human-in-loop still gate.
-  AUDIT_WS="${ws}" "${BUN_BIN}" -e '
+	AUDIT_WS="${ws}" "${BUN_BIN}" -e '
     const fs = require("fs");
     const f = process.env.CLAUDE_CONFIG_DIR + "/.claude.json";
     const ws = process.env.AUDIT_WS;
@@ -131,50 +111,34 @@ ${runtime_note}"
     } catch (e) { process.stderr.write("[audit-review] trust-mark skipped: " + e.message + "\n"); }
   ' || log "trust-mark step failed (continuing; prompt rails + PAT scope + review gate still apply)"
 
-  # Strip the box credential set from the child (see ./agent-env.sh). The reviewer reads a PR diff,
-  # which on an audit night is machine-authored — but a diff is still text this process did not
-  # write, and the reviewer holds the same PAT as the author it is reviewing.
-  # Declares GH_TOKEN — the reviewer reads the PR, comments, and holds it open or lets it merge.
-  agent_env_scrub_args --secrets "${SECRETS_FILE}" --allow GH_TOKEN
-  log "invoking claude -p (opus, effort ${AUDIT_REVIEW_CLAUDE_EFFORT}) reviewer for PR #${PR_NUM} (budget ${AGENT_PASS_BUDGET_SECS}s)…"
-  local run_errors=0 pass_reason=""
-  # Bounded by the SCRIPT, for the same reason the auditor's pass is: a unit `TimeoutStartSec`
-  # kill reaches only the host-side `docker exec` client, so the pass would otherwise outlive its
-  # own supervisor and self-report a healthy night. See ./agent-pass.sh.
-  agent_pass_run env ${AGENT_ENV_SCRUB[@]+"${AGENT_ENV_SCRUB[@]}"} FLUNCLE_UNATTENDED=1 \
-    "$(command -v claude)" -p "${prompt}" \
-    --model opus \
-    --effort "${AUDIT_REVIEW_CLAUDE_EFFORT}" \
-    --dangerously-skip-permissions \
-    >&2
-  if [ -n "${AGENT_PASS_REASON}" ]; then
-    log "claude -p ended on ${AGENT_PASS_REASON} after ${AGENT_PASS_SECONDS}s (status ${AGENT_PASS_STATUS}, container oom kills ${AGENT_PASS_OOM_KILLS})"
-    pass_reason="${AGENT_PASS_REASON}"
-    run_errors=1
-  fi
+	agent_env_scrub_args --secrets "${SECRETS_FILE}" --allow GH_TOKEN
+	log "invoking claude -p (opus, effort ${AUDIT_REVIEW_CLAUDE_EFFORT}) reviewer for PR #${PR_NUM} (budget ${AGENT_PASS_BUDGET_SECS}s)…"
+	local run_errors=0 pass_reason=""
 
-  # Report the outcome from the PR's final state.
-  #
-  # `ok` is DERIVED from this run's own error count, exactly as the auditor's own summary derives
-  # it (audit-sweep.sh, step 9) and as the run ledger derives it server-side —
-  # `exit_code === 0 && (summary.errors ?? 0) === 0`. Both branches below return 0, so the error
-  # count is the whole verdict. A literal `ok:true` here sat beside `errors:${run_errors}` and
-  # reported a reviewer whose `claude -p` had failed as a healthy night.
-  local held_produced=1 ok="true" state facts
-  [ "${run_errors}" = "0" ] || held_produced=0
-  [ "${run_errors}" = "0" ] || ok="false"
-  facts="$(printf '"pass_seconds":%s,"container_oom_kills":%s' "${AGENT_PASS_SECONDS}" "${AGENT_PASS_OOM_KILLS}")"
-  [ -z "${pass_reason}" ] || facts="${facts},$(printf '"reason":"%s"' "${pass_reason}")"
-  state="$(gh pr view "${PR_NUM}" --repo "${repo}" --json state --jq '.state' 2>/dev/null || echo UNKNOWN)"
-  case "${state}" in
-    MERGED) echo "{\"ok\":${ok},\"action\":\"merged\",\"pr\":${PR_NUM},\"domain\":\"${domain}\",${facts},\"checked\":1,\"errors\":${run_errors},\"produced\":1}" ;;
-    OPEN)   echo "{\"ok\":${ok},\"action\":\"held\",\"pr\":${PR_NUM},\"domain\":\"${domain}\",\"note\":\"left open with a comment\",${facts},\"checked\":1,\"errors\":${run_errors},\"produced\":${held_produced}}" ;;
-    *)      echo "{\"ok\":false,\"action\":\"unknown\",\"pr\":${PR_NUM},\"state\":\"${state}\",${facts},\"checked\":1,\"errors\":$((run_errors + 1)),\"produced\":0}" ;;
-  esac
+	agent_pass_run env ${AGENT_ENV_SCRUB[@]+"${AGENT_ENV_SCRUB[@]}"} FLUNCLE_UNATTENDED=1 \
+		"$(command -v claude)" -p "${prompt}" \
+		--model opus \
+		--effort "${AUDIT_REVIEW_CLAUDE_EFFORT}" \
+		--dangerously-skip-permissions \
+		>&2
+	if [ -n "${AGENT_PASS_REASON}" ]; then
+		log "claude -p ended on ${AGENT_PASS_REASON} after ${AGENT_PASS_SECONDS}s (status ${AGENT_PASS_STATUS}, container oom kills ${AGENT_PASS_OOM_KILLS})"
+		pass_reason="${AGENT_PASS_REASON}"
+		run_errors=1
+	fi
+
+	local held_produced=1 ok="true" state facts
+	[ "${run_errors}" = "0" ] || held_produced=0
+	[ "${run_errors}" = "0" ] || ok="false"
+	facts="$(printf '"pass_seconds":%s,"container_oom_kills":%s' "${AGENT_PASS_SECONDS}" "${AGENT_PASS_OOM_KILLS}")"
+	[ -z "${pass_reason}" ] || facts="${facts},$(printf '"reason":"%s"' "${pass_reason}")"
+	state="$(gh pr view "${PR_NUM}" --repo "${repo}" --json state --jq '.state' 2>/dev/null || echo UNKNOWN)"
+	case "${state}" in
+	MERGED) echo "{\"ok\":${ok},\"action\":\"merged\",\"pr\":${PR_NUM},\"domain\":\"${domain}\",${facts},\"checked\":1,\"errors\":${run_errors},\"produced\":1}" ;;
+	OPEN) echo "{\"ok\":${ok},\"action\":\"held\",\"pr\":${PR_NUM},\"domain\":\"${domain}\",\"note\":\"left open with a comment\",${facts},\"checked\":1,\"errors\":${run_errors},\"produced\":${held_produced}}" ;;
+	*) echo "{\"ok\":false,\"action\":\"unknown\",\"pr\":${PR_NUM},\"state\":\"${state}\",${facts},\"checked\":1,\"errors\":$((run_errors + 1)),\"produced\":0}" ;;
+	esac
 }
-
-# Deliberately no queue_depth: the newest-PR selector does not establish the full number of open
-# audit PRs, so its one selected row must never be misreported as the outstanding review backlog.
 
 # shellcheck source=./cron-output.sh
 . "${SCRIPT_DIR}/cron-output.sh"
