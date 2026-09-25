@@ -7,6 +7,26 @@ const HOUR_MS = 60 * 60 * 1000;
 export const MAGIC_LINK_LIMIT_PER_IP = 10;
 export const MAGIC_LINK_LIMIT_PER_EMAIL = 5;
 
+const GMAIL_DOMAINS = new Set(["gmail.com", "googlemail.com"]);
+
+export function mailboxAbuseKey(email: string): string {
+  const normalized = email.trim().toLowerCase();
+  const at = normalized.lastIndexOf("@");
+
+  if (at <= 0) {
+    return normalized;
+  }
+
+  const domain = normalized.slice(at + 1);
+  const local = normalized.slice(0, at).split("+")[0] ?? "";
+
+  if (GMAIL_DOMAINS.has(domain)) {
+    return `${local.replaceAll(".", "")}@gmail.com`;
+  }
+
+  return `${local}@${domain}`;
+}
+
 async function readRequestEmail(request: Request): Promise<string | undefined> {
   try {
     const body = (await request.clone().json()) as { email?: unknown } | null;
@@ -29,7 +49,8 @@ async function magicLinkRateLimit(request: Request): Promise<Response | undefine
     return perIp;
   }
 
-  const emailHash = hashRequestPart(await readRequestEmail(request));
+  const email = await readRequestEmail(request);
+  const emailHash = hashRequestPart(email === undefined ? undefined : mailboxAbuseKey(email));
 
   if (!emailHash) {
     return undefined;

@@ -72,3 +72,31 @@ describe("magic-link rate limit", () => {
     expect(consumeRateLimit).not.toHaveBeenCalled();
   });
 });
+
+describe("the address bucket sees through mailbox aliases", () => {
+  async function bucketFor(email: string): Promise<string | undefined> {
+    consumeRateLimit.mockClear();
+    await authRateLimit(magicLinkRequest(email));
+
+    return consumeRateLimit.mock.calls[0]?.[0]?.bucket;
+  }
+
+  it("folds plus-tags into one bucket", async () => {
+    const base = await bucketFor("victim@gmail.com");
+
+    expect(await bucketFor("victim+1@gmail.com")).toBe(base);
+    expect(await bucketFor("victim+anything@gmail.com")).toBe(base);
+    expect(await bucketFor("dave+news@example.org")).toBe(await bucketFor("dave@example.org"));
+  });
+
+  it("folds Gmail dots and googlemail into one bucket", async () => {
+    const base = await bucketFor("victim@gmail.com");
+
+    expect(await bucketFor("v.i.c.t.i.m@gmail.com")).toBe(base);
+    expect(await bucketFor("Victim@GoogleMail.com")).toBe(base);
+  });
+
+  it("keeps dots meaningful outside Gmail", async () => {
+    expect(await bucketFor("d.ave@example.org")).not.toBe(await bucketFor("dave@example.org"));
+  });
+});

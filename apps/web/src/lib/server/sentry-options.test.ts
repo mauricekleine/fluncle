@@ -74,3 +74,91 @@ describe("serverSentryIntegrations", () => {
     expect(transaction.spans?.[0]?.data["url.full"]).not.toContain("private-key");
   });
 });
+
+const MAGIC_TOKEN = "zzMagicLinkSecretToken0123456789";
+
+function tokenBearingUrl(): string {
+  return `https://www.fluncle.com/api/auth/magic-link/verify?token=${MAGIC_TOKEN}&callbackURL=%2Flabel%2Fx%3Ffollow%3D${MAGIC_TOKEN}`;
+}
+
+describe("auth tokens never leave the Worker in a Sentry payload", () => {
+  it("scrubs the token from the request url, query string, referer, breadcrumbs and transaction", () => {
+    const event = scrubServerSentryEvent({
+      breadcrumbs: [
+        { category: "fetch", data: { method: "GET", url: tokenBearingUrl() } },
+        { category: "navigation", data: { from: `/follows?token=${MAGIC_TOKEN}`, to: "/" } },
+      ],
+      request: {
+        headers: { referer: `https://www.fluncle.com/reset-password/${MAGIC_TOKEN}` },
+        query_string: [
+          ["token", MAGIC_TOKEN],
+          ["callbackURL", `/account?follow=${MAGIC_TOKEN}`],
+        ],
+        url: tokenBearingUrl(),
+      },
+      transaction: `GET ${tokenBearingUrl()}`,
+      type: undefined,
+    });
+
+    expect(JSON.stringify(event)).not.toContain(MAGIC_TOKEN);
+    expect(event.request?.url).toContain("/api/auth/magic-link/verify?token=");
+  });
+
+  it("scrubs a string query_string too", () => {
+    const event = scrubServerSentryEvent({
+      request: { query_string: `token=${MAGIC_TOKEN}&unsubscribe=${MAGIC_TOKEN}` },
+      type: undefined,
+    });
+
+    expect(JSON.stringify(event)).not.toContain(MAGIC_TOKEN);
+  });
+
+  it("scrubs spans and transactions", () => {
+    const span = scrubServerSentrySpan({
+      data: {
+        "http.query": `?token=${MAGIC_TOKEN}`,
+        "url.full": tokenBearingUrl(),
+        "url.query": `token=${MAGIC_TOKEN}`,
+      },
+      description: `GET ${tokenBearingUrl()}`,
+      span_id: "1",
+      start_timestamp: 1,
+      trace_id: "1",
+    });
+    const transaction = scrubServerSentryTransaction({
+      request: { url: tokenBearingUrl() },
+      spans: [
+        {
+          data: { "url.full": tokenBearingUrl() },
+          description: "GET",
+          span_id: "2",
+          start_timestamp: 1,
+          trace_id: "1",
+        },
+      ],
+      transaction: `GET ${tokenBearingUrl()}`,
+      type: "transaction",
+    });
+
+    expect(JSON.stringify(span)).not.toContain(MAGIC_TOKEN);
+    expect(JSON.stringify(transaction)).not.toContain(MAGIC_TOKEN);
+  });
+});
+
+describe("the Worker's Sentry hooks", () => {
+  it("scrub every exported payload kind, breadcrumbs included", async () => {
+    const { serverSentryScrubHooks } = await import("./sentry-options");
+
+    expect(Object.keys(serverSentryScrubHooks).sort()).toEqual([
+      "beforeBreadcrumb",
+      "beforeSend",
+      "beforeSendSpan",
+      "beforeSendTransaction",
+    ]);
+    expect(
+      JSON.stringify(
+        serverSentryScrubHooks.beforeBreadcrumb({ data: { url: `/x?token=${MAGIC_TOKEN}` } }),
+      ),
+    ).not.toContain(MAGIC_TOKEN);
+  });
+});

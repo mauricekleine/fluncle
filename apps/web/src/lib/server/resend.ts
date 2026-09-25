@@ -5,15 +5,23 @@ const resendApiUrl = "https://api.resend.com";
 
 type ResendErrorBody = { message?: string; name?: string };
 
-export function resolveResendApiUrl(override: string | undefined): string {
-  if (!override) {
+const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]"]);
+
+export function resolveResendApiUrl({
+  e2e,
+  override,
+  production,
+}: {
+  e2e: string | undefined;
+  override: string | undefined;
+  production: boolean;
+}): string {
+  if (production || e2e !== "1" || !override) {
     return resendApiUrl;
   }
 
   try {
-    const url = new URL(override);
-
-    return ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname)
+    return LOOPBACK_HOSTS.has(new URL(override).hostname)
       ? override.replace(/\/$/, "")
       : resendApiUrl;
   } catch {
@@ -26,7 +34,11 @@ async function resendFetch(
   init: { body?: unknown; idempotencyKey?: string; method: "GET" | "POST" },
 ): Promise<Response> {
   const apiKey = await readEnv("RESEND_API_KEY");
-  const baseUrl = resolveResendApiUrl(await readOptionalEnv("RESEND_API_URL"));
+  const [override, e2e] = await Promise.all([
+    readOptionalEnv("RESEND_API_URL"),
+    readOptionalEnv("FLUNCLE_E2E"),
+  ]);
+  const baseUrl = resolveResendApiUrl({ e2e, override, production: !import.meta.env.DEV });
   const headers: Record<string, string> = {
     Authorization: `Bearer ${apiKey}`,
     "Content-Type": "application/json",
