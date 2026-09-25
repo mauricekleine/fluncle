@@ -64,6 +64,12 @@ export const Route = createFileRoute("/")({
         "@context": "https://schema.org",
         "@id": fluncleWebsiteId,
         "@type": "WebSite",
+        creator: {
+          "@id": "https://www.mauricekleine.com/#maurice",
+          "@type": "Person",
+          name: "Maurice Kleine",
+          url: "https://www.mauricekleine.com/",
+        },
         description: fluncleDescription,
         name: "Fluncle",
         publisher: { "@id": fluncleEntityId },
