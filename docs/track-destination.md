@@ -50,7 +50,7 @@ Its client-side twin, `hasTrackPageIdentity`, is what a rendered LIST row calls 
 
 plus `is_catalogue = 1` (a certified row's destination is `/log`, and a 301 must never be submitted for indexing) and `duplicate_of_track_id is null` (so is a stamped twin's).
 
-The indexability predicate also applies the shared catalogue duration rule. The track sitemap count applies duration as a residual filter over the existing covering index, while the child window uses the same runtime predicate as the page. Existing indexes stay in place, so rollout does not rebuild them on the populated tracks table.
+The indexability predicate also applies the shared catalogue duration rule. The track sitemap count reads duration from its covering index, while the child window uses the same runtime predicate as the page. The count index includes duration because a hosted cold read with duration as a base-table residual took 19.7 seconds on 67,369 indexable tracks; this change rebuilds only that count index.
 
 Tempo, key, ISRC, label, the preview and the neighbours are **not** gates. They are enrichment, and gating on them would make indexability oscillate with a sweep's backlog.
 

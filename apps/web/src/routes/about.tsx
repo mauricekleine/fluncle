@@ -24,7 +24,7 @@ const faq: Array<{ answer: string; question: string }> = [
   },
   {
     answer:
-      "The Galaxy is everywhere I send my findings: the archive here at fluncle.com, Fluncle's Findings on Spotify, the Telegram channel, the CLI, and the rave terminal at ssh rave.fluncle.com. Every surface carries the same findings under the same Log IDs, so it doesn't matter where you find me, it's all there. There's a game too, at galaxy.fluncle.com, where each finding is a star you can fly to. And for anyone who likes to travel dark, the archive mirrors onto Tor, off the grid, still in the Galaxy.",
+      "The Galaxy is everywhere I send my findings: the archive here at fluncle.com, Fluncle's Findings on Spotify, the Telegram channel, the CLI, and the rave terminal at ssh rave.fluncle.com. Every surface carries the same findings under the same Log IDs, so it doesn't matter where you find me, it's all there. There's a game too, at galaxy.fluncle.com, where each finding is a star you can fly to. And for anyone who likes to travel dark, the whole archive mirrors onto Tor, off the grid, still in the Galaxy.",
     question: "What is Fluncle's Galaxy?",
   },
   {

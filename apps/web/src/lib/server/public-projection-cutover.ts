@@ -186,7 +186,6 @@ const AGGREGATE_READY = `aggregate.state = 'complete'
   )`;
 
 const PUBLIC_AGGREGATE_DURATION_READY = `${AGGREGATE_READY}
-  and aggregate.source_digest = aggregate.projected_digest
   and exists (select 1 from settings visibility
     where visibility.key = '${PUBLIC_AGGREGATE_DURATION_GENERATION_KEY}'
       and visibility.value = aggregate.generation || ':' || aggregate.completed_at)`;

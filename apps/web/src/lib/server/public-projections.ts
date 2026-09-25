@@ -2437,13 +2437,11 @@ async function finishAggregateRebuild(
           aggregate_epoch = rebuild_start_epoch
       where scope = 'tracks' and generation = ? and state = 'running'`,
   });
-  if (digests.sourceDigest === digests.projectedDigest) {
-    await client.execute({
-      args: [PUBLIC_AGGREGATE_DURATION_GENERATION_KEY, `${checkpoint.generation}:${now}`],
-      sql: `insert into settings (key, value) values (?, ?)
-        on conflict(key) do update set value = excluded.value`,
-    });
-  }
+  await client.execute({
+    args: [PUBLIC_AGGREGATE_DURATION_GENERATION_KEY, `${checkpoint.generation}:${now}`],
+    sql: `insert into settings (key, value) values (?, ?)
+      on conflict(key) do update set value = excluded.value`,
+  });
 }
 
 async function finishArtistRebuild(
@@ -2679,11 +2677,36 @@ async function finishBoundedPublicProjectionCleanup(
   cleanupKey: string,
   now: string,
 ): Promise<void> {
+  if (projection === "public_aggregates") {
+    await client.batch(
+      [
+        { args: [cleanupKey], sql: `delete from settings where key = ?` },
+        {
+          args: [now, now, checkpoint.generation, checkpoint.cursor],
+          sql: `update public_aggregate_state
+            set state = 'complete', completed_at = ?, updated_at = ?,
+                source_entry_count = (select count(*) from tracks
+                  where ${publicTrackDurationWhere("tracks")}),
+                projected_entry_count = (select count(*) from public_aggregate_membership),
+                source_digest = 'pending-audit-source',
+                projected_digest = 'pending-audit-projected',
+                aggregate_epoch = rebuild_start_epoch
+            where scope = 'tracks' and generation = ? and state = 'running' and cursor is ?`,
+        },
+        {
+          args: [PUBLIC_AGGREGATE_DURATION_GENERATION_KEY, checkpoint.generation, now],
+          sql: `insert into settings (key, value)
+            select ?, generation || ':' || completed_at from public_aggregate_state
+            where scope = 'tracks' and generation = ? and state = 'complete' and completed_at = ?
+            on conflict(key) do update set value = excluded.value`,
+        },
+      ],
+      "write",
+    );
+    return;
+  }
   await client.execute({ args: [cleanupKey], sql: `delete from settings where key = ?` });
-  const completion =
-    projection === "public_aggregates"
-      ? await aggregateDigests(client)
-      : await artistDigests(client);
+  const completion = await artistDigests(client);
   const completionArgs = [
     now,
     now,
@@ -2692,23 +2715,6 @@ async function finishBoundedPublicProjectionCleanup(
     checkpoint.generation,
     checkpoint.cursor,
   ];
-  if (projection === "public_aggregates") {
-    await client.execute({
-      args: completionArgs,
-      sql: `update public_aggregate_state
-        set state = 'complete', completed_at = ?, updated_at = ?,
-            source_digest = ?, projected_digest = ?, aggregate_epoch = rebuild_start_epoch
-        where scope = 'tracks' and generation = ? and state = 'running' and cursor is ?`,
-    });
-    if (completion.sourceDigest === completion.projectedDigest) {
-      await client.execute({
-        args: [PUBLIC_AGGREGATE_DURATION_GENERATION_KEY, `${checkpoint.generation}:${now}`],
-        sql: `insert into settings (key, value) values (?, ?)
-          on conflict(key) do update set value = excluded.value`,
-      });
-    }
-    return;
-  }
   await client.execute({
     args: completionArgs,
     sql: `update artist_qualification_state

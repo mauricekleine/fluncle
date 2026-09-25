@@ -226,7 +226,7 @@ describe("the evidence-rich uncertified track (shape 2)", () => {
 
     expect(
       instructions.filter(({ opcode, p4 }) => opcode === "OpenRead" && !p4.startsWith("k(")),
-    ).toHaveLength(2);
+    ).toHaveLength(0);
   });
 
   it("counts each listening-destination shape once and excludes the source-less shape", async () => {

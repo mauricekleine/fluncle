@@ -1338,6 +1338,13 @@
       "when": 1790348478295,
       "tag": "0190_supreme_magik",
       "breakpoints": true
+    },
+    {
+      "idx": 191,
+      "version": "6",
+      "when": 1790374633731,
+      "tag": "0191_luxuriant_doctor_faustus",
+      "breakpoints": true
     }
   ]
 }

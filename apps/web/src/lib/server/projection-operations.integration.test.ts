@@ -17,6 +17,7 @@ import {
 import {
   PUBLIC_AGGREGATE_DURATION_GENERATION_KEY,
   readCurrentProjectedTrackHubAnchors,
+  readProjectedDefaultTrackTotal,
 } from "./public-projection-cutover";
 import {
   markPublicTrackSourceChangedStatements,
@@ -289,6 +290,106 @@ describe("projection production operations", () => {
       }
     }
     throw new Error("aggregate duration generation did not land within 30 bounded steps");
+  });
+
+  it("finishes one bounded duration generation despite a new track and changed key between steps", async () => {
+    await db.executeMultiple(`
+      insert into tracks (track_id, release_date, key) values
+        ('a', '2026-01-01', 'Am'), ('b', '2026-01-01', 'Bm');
+      delete from settings where key = '${PUBLIC_AGGREGATE_DURATION_GENERATION_KEY}';
+    `);
+
+    await advanceProjectionFor(db, {
+      action: "repair",
+      includeStatus: false,
+      limit: 1,
+      target: "public_aggregates",
+    });
+    const opened = await db.execute(
+      "select generation, state from public_aggregate_state where scope = 'tracks'",
+    );
+    const generation = opened.rows[0]?.generation;
+    if (typeof generation !== "string") {
+      throw new Error("aggregate generation did not open");
+    }
+    expect(opened.rows[0]?.state).toBe("running");
+
+    await db.batch(
+      [
+        {
+          args: [],
+          sql: "insert into tracks (track_id, release_date, key) values ('0', '2026-01-01', 'Cm')",
+        },
+        ...markPublicTrackSourceChangedStatements(
+          "0",
+          publicTrackSourceVersion({ key: "Cm", releaseDate: "2026-01-01" }),
+          { now: "2026-01-02T00:00:00.000Z" },
+        ),
+        { args: [], sql: "update tracks set key = 'Dm' where track_id = 'a'" },
+        ...markPublicTrackSourceChangedStatements(
+          "a",
+          publicTrackSourceVersion({ key: "Dm", releaseDate: "2026-01-01" }),
+          { now: "2026-01-02T00:00:00.000Z" },
+        ),
+      ],
+      "write",
+    );
+
+    for (let step = 0; step < 20; step += 1) {
+      await advanceProjectionFor(db, {
+        action: "repair",
+        includeStatus: false,
+        limit: 1,
+        target: "public_aggregates",
+      });
+      const state = await db.execute(
+        "select generation, state, completed_at from public_aggregate_state where scope = 'tracks'",
+      );
+      expect(state.rows[0]?.generation).toBe(generation);
+      if (state.rows[0]?.state === "complete") {
+        const completedAt = state.rows[0]?.completed_at;
+        if (typeof completedAt !== "string") {
+          throw new Error("aggregate generation has no completion timestamp");
+        }
+        const marker = await db.execute({
+          args: [PUBLIC_AGGREGATE_DURATION_GENERATION_KEY],
+          sql: "select value from settings where key = ?",
+        });
+        expect(marker.rows[0]?.value).toBe(`${generation}:${completedAt}`);
+        await db.execute(`insert into settings (key, value)
+          values ('public_projection_cutover_enabled', 'true')`);
+        expect(await readProjectedDefaultTrackTotal(db)).toBeUndefined();
+        for (let repairStep = 0; repairStep < 10; repairStep += 1) {
+          await advanceProjectionFor(db, {
+            action: "repair",
+            includeStatus: false,
+            limit: 1,
+            target: "public_aggregates",
+          });
+          const settled = await db.execute(`select generation, source_epoch, aggregate_epoch,
+            (select count(*) from projection_repairs where projection = 'public_aggregates')
+              as repairs from public_aggregate_state where scope = 'tracks'`);
+          expect(settled.rows[0]?.generation).toBe(generation);
+          if (
+            Number(settled.rows[0]?.repairs) === 0 &&
+            settled.rows[0]?.source_epoch === settled.rows[0]?.aggregate_epoch
+          ) {
+            const membership = await db.execute(
+              "select track_id, key_bucket from public_aggregate_membership order by track_id",
+            );
+            expect(membership.rows).toEqual([
+              { key_bucket: "Cm", track_id: "0" },
+              { key_bucket: "Dm", track_id: "a" },
+              { key_bucket: "Bm", track_id: "b" },
+            ]);
+            expect(await readProjectedDefaultTrackTotal(db)).toBe(3);
+            return;
+          }
+        }
+        throw new Error("aggregate repair debt did not drain after the bounded generation");
+      }
+    }
+    throw new Error("duration generation did not finish within 20 bounded steps");
   });
 
   it("reports dark readiness and opens only fixed setting keys", async () => {
