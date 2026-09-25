@@ -24,6 +24,7 @@ import {
   listLabels,
   listLabelsMissingBio,
   mergeLabel,
+  recordLabelTriage,
   rejectLabelAlias,
   updateLabelSeedState,
 } from "../labels";
@@ -233,6 +234,41 @@ export function adminLabelsHandlers(os: Implementer) {
       }
     });
 
+  // POST /admin/labels/{slug}/bio — agent tier (`adminAuth`), the note_track precedent:
+  // the on-box sweep authored the label's bio; this VOICE-GATES it and stores it
+  // FILL-EMPTY-ONLY. A bio already on file (operator OR previously auto-authored) is a
+  // skipped no-op. Deliberately AGENT tier (unlike the operator-tier `update_label`
+  // crawl-seed ruling): authoring a bio is enrichment, not an editorial crawl ruling.
+
+  // POST /admin/labels/{slug}/triage — agent tier (`adminAuth`), the describe_label precedent.
+  // A triage round records WHAT IT FOUND; it does not rule. This stamps the cursor and stores the
+  // round's proposal, and is structurally incapable of changing `seed_state` or writing an
+  // `artist_rules` row — those are `update_label` / `replace_label_artist_rules`, which 403 an
+  // agent token at `operatorGuard`. That is the whole safety argument for an unattended sweep.
+  const recordLabelTriageHandler = os.record_label_triage
+    .use(adminAuth)
+    .handler(async ({ input }) => {
+      try {
+        const { slug, ...payload } = input;
+        const recorded = await recordLabelTriage(slug, payload);
+
+        if (!recorded) {
+          throw new ORPCError("NOT_FOUND", {
+            data: { apiCode: "not_found", apiMessage: `No label with slug ${slug}` },
+            message: `No label with slug ${slug}`,
+          });
+        }
+
+        return { ...recorded, ok: true as const };
+      } catch (error) {
+        if (error instanceof ORPCError) {
+          throw error;
+        }
+        throw apiFault(toFault(error));
+      }
+    });
+
+>>>>>>> 30577a82a (feat(labels): record what a triage round found, without letting it rule)
   const describeLabelHandler = os.describe_label.use(adminAuth).handler(async ({ input }) => {
     try {
       const dryRun = input.dryRun === true;
@@ -351,6 +387,7 @@ export function adminLabelsHandlers(os: Implementer) {
     list_labels_missing_bio: listLabelsMissingBioHandler,
     merge_label: mergeLabelHandler,
     mint_label: mintLabelHandler,
+    record_label_triage: recordLabelTriageHandler,
     reject_label_alias: rejectLabelAliasHandler,
     replace_label_artist_rules: replaceLabelArtistRulesHandler,
     update_label: updateLabelHandler,

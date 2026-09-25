@@ -384,7 +384,16 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   record_demand: "admin",
 
   record_health: "admin",
-
+  // The live-set poller's write — admin tier (adminAuth, no operatorGuard), the
+  // record_health precedent; it writes only the internal single-row live_state table
+  // (no publish), so the box agent token drives it each minute.
+  // AGENT tier on purpose, and the distinction is the safety argument for the unattended triage
+  // sweep: a round RECORDS what it found, it does not rule. This op cannot touch `seed_state` and
+  // cannot write an `artist_rules` row — those are `update_label` / `replace_label_artist_rules`,
+  // both operator. The `describe_label` precedent: enrichment the box authors is agent tier, the
+  // editorial act it feeds is not.
+  record_label_triage: "admin",
+>>>>>>> 30577a82a (feat(labels): record what a triage round found, without letting it rule)
   record_live_state: "admin",
 
   record_platform_stats: "admin",

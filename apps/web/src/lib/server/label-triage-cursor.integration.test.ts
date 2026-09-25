@@ -1,0 +1,220 @@
+// The triage cursor — what a round LOOKED at, against the REAL migrated schema.
+//
+// It is an INTEGRATION test because every guarantee here is a statement about SQL a mocked database
+// would let through broken: the cursor is an UPDATE that must leave `seed_state` and `ruled_at`
+// alone, the proposal is one-row-per-label enforced by a UNIQUE index, superseding is a DELETE that
+// must take the child rules with it, and the inert-rule drop happens before the insert.
+//
+// The load-bearing claim is the LAST test: an agent-tier round records a finding and CANNOT rule.
+// That separation is the entire safety argument for letting an unattended sweep run this.
+
+import { type Client } from "@libsql/client";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const holder = vi.hoisted(() => ({ db: undefined as Client | undefined }));
+
+vi.mock("./db", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./db")>();
+
+  return { ...actual, getDb: async () => holder.db };
+});
+
+import { createIntegrationDb } from "./integration-db";
+import { recordLabelTriage } from "./labels";
+
+let db: Client;
+
+/** The cursor columns plus the two a round must never touch. */
+async function labelRow(slug: string) {
+  const result = await db.execute({
+    args: [slug],
+    sql: `select triage_checked_at, triage_verdict, triage_reason, seed_state, ruled_at
+          from labels where slug = ? limit 1`,
+  });
+
+  return result.rows[0] as
+    | undefined
+    | {
+        ruled_at: string | null;
+        seed_state: string;
+        triage_checked_at: string | null;
+        triage_reason: string | null;
+        triage_verdict: string | null;
+      };
+}
+
+async function proposals(slug: string) {
+  const result = await db.execute({
+    args: [slug],
+    sql: `select p.id, p.round_id, p.verdict, p.off_lane_share, p.residual_off_lane_share,
+                 p.verify_agrees
+          from label_triage_proposals p
+          join labels l on l.id = p.label_id
+          where l.slug = ?`,
+  });
+
+  return result.rows;
+}
+
+async function ruleProposals(slug: string) {
+  const result = await db.execute({
+    args: [slug],
+    sql: `select r.artist_name, r.verdict, r.first_credit_count
+          from label_triage_rule_proposals r
+          join label_triage_proposals p on p.id = r.proposal_id
+          join labels l on l.id = p.label_id
+          where l.slug = ?
+          order by r.artist_name`,
+  });
+
+  return result.rows as unknown as {
+    artist_name: string;
+    first_credit_count: number;
+    verdict: string;
+  }[];
+}
+
+async function seedLabel(slug: string, seedState = "undecided") {
+  const now = new Date().toISOString();
+  await db.execute({
+    args: [`lbl_${slug}`, slug, slug, seedState, now, now],
+    sql: `insert into labels (id, name, slug, seed_state, created_at, updated_at)
+          values (?, ?, ?, ?, ?, ?)`,
+  });
+}
+
+const BASE = {
+  confidence: "high" as const,
+  evidence: "MB releases are all jungle",
+  roundId: "r14",
+  verdict: "unclear" as const,
+};
+
+beforeEach(async () => {
+  db = await createIntegrationDb();
+  holder.db = db;
+});
+
+describe("the triage cursor", () => {
+  it("returns undefined for a label that does not exist, rather than minting one", async () => {
+    expect(await recordLabelTriage("ghost", BASE)).toBeUndefined();
+  });
+
+  it("stamps the cursor with the verdict and the reason it could not be ruled", async () => {
+    await seedLabel("acme");
+    const recorded = await recordLabelTriage("acme", { ...BASE, reason: "conflation" });
+
+    const row = await labelRow("acme");
+    expect(row?.triage_checked_at).toBe(recorded?.triageCheckedAt);
+    expect(row?.triage_verdict).toBe("unclear");
+    expect(row?.triage_reason).toBe("conflation");
+  });
+
+  it("NEVER changes the seed state or the operator's ruling stamp", async () => {
+    // The whole safety argument: an agent-tier round records a finding, it does not rule.
+    await seedLabel("acme");
+    await recordLabelTriage("acme", { ...BASE, verdict: "dnb" });
+
+    const row = await labelRow("acme");
+    expect(row?.seed_state).toBe("undecided");
+    expect(row?.ruled_at).toBeNull();
+  });
+
+  it("stores the round's payload as a proposal", async () => {
+    await seedLabel("acme");
+    await recordLabelTriage("acme", {
+      ...BASE,
+      offLaneShare: 0.205,
+      residualOffLaneShare: 0.147,
+      verifyAgrees: false,
+    });
+
+    const [proposal] = await proposals("acme");
+    expect(proposal?.round_id).toBe("r14");
+    expect(proposal?.off_lane_share).toBeCloseTo(0.205);
+    expect(proposal?.residual_off_lane_share).toBeCloseTo(0.147);
+    expect(proposal?.verify_agrees).toBe(0);
+  });
+
+  it("keeps rule proposals that can fire and drops the inert ones", async () => {
+    // A proposal with zero FIRST credits can never match at crawl time; storing it would only
+    // re-drop it at apply time. (The block-ANY intuition proposes exactly these.)
+    await seedLabel("acme");
+    const recorded = await recordLabelTriage("acme", {
+      ...BASE,
+      rules: [
+        { artistMbid: "mbid-a", artistName: "Fires", firstCreditCount: 12, verdict: "allow" },
+        { artistMbid: "mbid-b", artistName: "Inert", firstCreditCount: 0, verdict: "block" },
+      ],
+    });
+
+    expect(recorded?.droppedInertRules).toBe(1);
+    expect(await ruleProposals("acme")).toEqual([
+      { artist_name: "Fires", first_credit_count: 12, verdict: "allow" },
+    ]);
+  });
+
+  it("supersedes an earlier round for the same label instead of accumulating", async () => {
+    await seedLabel("acme");
+    const first = await recordLabelTriage("acme", {
+      ...BASE,
+      roundId: "r14",
+      rules: [{ artistMbid: "mbid-a", artistName: "Old", firstCreditCount: 3, verdict: "allow" }],
+    });
+    expect(first?.superseded).toBe(false);
+
+    const second = await recordLabelTriage("acme", {
+      ...BASE,
+      roundId: "r15",
+      rules: [{ artistMbid: "mbid-b", artistName: "New", firstCreditCount: 5, verdict: "allow" }],
+    });
+
+    expect(second?.superseded).toBe(true);
+    const rows = await proposals("acme");
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.round_id).toBe("r15");
+  });
+
+  it("takes the superseded round's rule proposals with it, leaving no orphans", async () => {
+    await seedLabel("acme");
+    await recordLabelTriage("acme", {
+      ...BASE,
+      rules: [{ artistMbid: "mbid-a", artistName: "Old", firstCreditCount: 3, verdict: "allow" }],
+    });
+    await recordLabelTriage("acme", { ...BASE, roundId: "r15", rules: [] });
+
+    expect(await ruleProposals("acme")).toEqual([]);
+    const orphans = await db.execute(`select count(*) as n from label_triage_rule_proposals`);
+    expect(Number(orphans.rows[0]?.n)).toBe(0);
+  });
+
+  it("keeps one label's proposal when another label is re-triaged", async () => {
+    await seedLabel("acme");
+    await seedLabel("other");
+    await recordLabelTriage("acme", BASE);
+    await recordLabelTriage("other", BASE);
+    await recordLabelTriage("other", { ...BASE, roundId: "r15" });
+
+    expect(await proposals("acme")).toHaveLength(1);
+    expect(await proposals("other")).toHaveLength(1);
+  });
+
+  it("records a round that looked at an already-ruled label without disturbing the ruling", async () => {
+    // The staleness rotation re-visits; a label the operator ruled in the meantime must be
+    // recorded, not reverted.
+    await seedLabel("acme", "enabled");
+    await recordLabelTriage("acme", { ...BASE, verdict: "not_dnb" });
+
+    const row = await labelRow("acme");
+    expect(row?.seed_state).toBe("enabled");
+    expect(row?.triage_verdict).toBe("not_dnb");
+  });
+
+  it("leaves the cursor null on a label no round has seen, which is what never-seen means", async () => {
+    await seedLabel("untouched");
+
+    const row = await labelRow("untouched");
+    expect(row?.triage_checked_at).toBeNull();
+    expect(row?.triage_verdict).toBeNull();
+  });
+});

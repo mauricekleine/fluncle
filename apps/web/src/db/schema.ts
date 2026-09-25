@@ -2369,6 +2369,31 @@ export const labels = sqliteTable(
       .notNull()
       .default("undecided"),
     slug: text("slug").notNull().unique(),
+    // ── THE TRIAGE CURSOR ────────────────────────────────────────────────────────────
+    // What a triage round LOOKED AT, as distinct from what the operator RULED (`ruled_at`). A round
+    // researches an undecided label and often cannot rule it — a conflated MusicBrainz entity, a
+    // catalogue too thin to read, a genuinely mixed one only he can call. Without this the round has
+    // no memory: every pass re-derives its own stuck core, which is affordable when a human chooses
+    // to run one and is not when a timer does.
+    //
+    // A CURSOR, NOT A HOLD FLAG. The rotation is never-seen first (`triage_checked_at is null`),
+    // then oldest-checked, so a label deferred today is re-examined once its staleness window
+    // passes. That preserves the self-healing the round depends on: a conflation fixed upstream, or
+    // a new global rule that moves a share test, resolves the label on its own the next time it
+    // comes round. A boolean would freeze exactly those.
+    //
+    //   - `triage_checked_at`  — when a round last returned a verdict for this label. NULL until
+    //                            first triaged, which is what "never seen" means.
+    //   - `triage_verdict`     — the bucket that round returned. `unclear` is the interesting one;
+    //                            the others are transient, since a ruled label leaves the pile.
+    //   - `triage_reason`      — WHY it could not be ruled, so `/admin/labels` can separate a label
+    //                            waiting on an upstream MusicBrainz split from one waiting on him.
+    //                            Free text by design: the taxonomy is the round's, not the schema's.
+    triageCheckedAt: text("triage_checked_at"),
+    triageReason: text("triage_reason"),
+    triageVerdict: text("triage_verdict", {
+      enum: ["dnb", "dnb_partial", "not_dnb", "unclear"],
+    }),
     updatedAt: text("updated_at").notNull(),
   },
   (table) => [
@@ -2387,7 +2412,20 @@ export const labels = sqliteTable(
     index("labels_undecided_queue_idx")
       .on(table.createdAt)
       .where(sql`${table.seedState} = 'undecided'`),
-
+    // The triage sweep's worklist: undecided labels oldest-look first (`order by
+    // triage_checked_at asc`), with NULLs — never seen — sorting first in SQLite, which is exactly
+    // the rotation the sweep wants. A PARTIAL index over the same un-ruled slice as the queue
+    // above, for the same reason: it never scans the crawler-swollen table and shrinks as he rules.
+    // Plain ASC (SQLite reverse-scans it; a `desc()` index poisons the snapshot).
+    index("labels_triage_queue_idx")
+      .on(table.triageCheckedAt)
+      .where(sql`${table.seedState} = 'undecided'`),
+    // The /admin/labels station read (listLabels): `where seed_state = ? order by name collate
+    // nocase`. The `name` column is BINARY-collated, so the sort key is `name collate nocase` —
+    // the index column carries that collation VERBATIM so the composite serves BOTH the equality
+    // filter and the case-insensitive ORDER BY as one index walk (no temp B-tree sort). Plain ASC
+    // (SQLite reverse-scans it).
+>>>>>>> 30577a82a (feat(labels): record what a triage round found, without letting it rule)
     index("labels_seed_state_name_idx").on(table.seedState, sql`${table.name} collate nocase`),
 
     index("labels_renderable_count_idx").on(table.renderableTrackCount),
@@ -2439,6 +2477,124 @@ export const artistRules = sqliteTable(
   ],
 );
 
+// LABEL TRIAGE PROPOSALS — what a round FOUND, before the operator has ruled on it.
+//
+// A triage round researches an undecided label and produces far more than the verdict the cursor on
+// `labels` records: the evidence, the census arithmetic, a second opinion that tried to refute it,
+// and — for a mixed catalogue — the per-artist rules that would carve it. That payload is what the
+// operator ratifies from, so it has to survive the round that made it.
+//
+// WHY A SIBLING TABLE, NOT COLUMNS ON `labels`. Two reasons, both load-bearing. The evidence is
+// paragraphs and the rule proposals are a LIST, which is the `label_aliases` / `artist_socials`
+// shape — and that no-denormalization principle is the label entity's own (docs/label-entity.md).
+// And `labels` sits on index-covered read paths whose plans are pinned by
+// `entity-hub-seek.integration.test.ts`; widening the row to carry text nobody on those paths reads
+// is how a covering index stops covering. Only the ratification surface joins this table.
+//
+// A PROPOSAL IS NOT A RULE. Rows here are advisory and carry no crawl authority whatsoever: the
+// crawl reads `artist_rules`, and a proposal becomes one only when the operator applies it, which
+// is an operator-tier act. A stale proposal is therefore harmless — it is superseded on the next
+// round for that label, and `label_id` is unique so a label carries exactly its latest round.
+export const labelTriageProposals = sqliteTable(
+  "label_triage_proposals",
+  {
+    // What the census counted: releases, recordings, pages, the in-lane/off-lane split, and the
+    // verbatim sampling caveat when MusicBrainz's page cap was hit.
+    censusSummary: text("census_summary"),
+    confidence: text("confidence", { enum: ["high", "medium", "low"] }).notNull(),
+    createdAt: text("created_at").notNull(),
+    evidence: text("evidence").notNull(),
+    id: text("id").primaryKey(),
+    labelId: text("label_id").notNull(),
+    // The census arithmetic, kept as the round reported it so the operator can audit the call:
+    // `off_lane_share` is the RAW rail, `residual_off_lane_share` the same fraction ignoring credits
+    // an existing global rule already stops. When they straddle 0.15 the label is his judgment call.
+    offLaneShare: real("off_lane_share"),
+    // Free text, not an enum: the taxonomy of WHY a label could not be ruled belongs to the round,
+    // which learns new shapes faster than a migration can follow.
+    reason: text("reason"),
+    residualOffLaneShare: real("residual_off_lane_share"),
+    // The round that produced this, so a proposal can be traced to its run.
+    roundId: text("round_id").notNull(),
+    updatedAt: text("updated_at").notNull(),
+    verdict: text("verdict", {
+      enum: ["dnb", "dnb_partial", "not_dnb", "unclear"],
+    }).notNull(),
+    // The second opinion. `verify_agrees` is the load-bearing bit — false means a verifier reached a
+    // DIFFERENT bucket on fresh evidence, which is the signal that has caught wrong enables.
+    verifyAgrees: integer("verify_agrees", { mode: "boolean" }),
+    verifyEvidence: text("verify_evidence"),
+  },
+  (table) => [
+    // One row per label: the latest round supersedes the last. This is also what makes a stale
+    // proposal harmless rather than something to garbage-collect.
+    uniqueIndex("label_triage_proposals_label_idx").on(table.labelId),
+    // The ratification surface reads a round at a time, newest first.
+    index("label_triage_proposals_round_idx").on(table.roundId),
+  ],
+);
+
+// The per-artist rules a round would write if the operator ratifies its proposal — a ROW each, on
+// the `label_aliases` / `artist_socials` precedent, because the label entity rejects JSON columns on
+// its own no-denormalization principle (docs/label-entity.md) and this is the list that principle is
+// about. Mirrors `artist_rules` deliberately: applying a ratified proposal is a copy, not a
+// translation. NOTHING here fires at crawl time; the crawl reads `artist_rules` only.
+export const labelTriageRuleProposals = sqliteTable(
+  "label_triage_rule_proposals",
+  {
+    artistMbid: text("artist_mbid").notNull(),
+    artistName: text("artist_name").notNull(),
+    createdAt: text("created_at").notNull(),
+    // The census evidence for THIS act, judged on its own catalogue rather than the label's average.
+    evidence: text("evidence"),
+    // Why the rule can fire at all: a proposal with zero FIRST credits on the census is inert and is
+    // dropped before the wire (the block-ANY intuition proposes exactly these).
+    firstCreditCount: integer("first_credit_count").notNull().default(0),
+    id: text("id").primaryKey(),
+    proposalId: text("proposal_id").notNull(),
+    verdict: text("verdict", { enum: ["allow", "block"] }).notNull(),
+  },
+  (table) => [
+    // The parent read: a proposal's whole rule set in one seek.
+    index("label_triage_rule_proposals_proposal_idx").on(table.proposalId),
+    // One row per act per proposal — a round expands an act into all its collaboration MBIDs, and
+    // each of those is a distinct rule, but the same MBID twice is a bug.
+    uniqueIndex("label_triage_rule_proposals_artist_idx").on(table.proposalId, table.artistMbid),
+  ],
+);
+
+// LABEL ALIASES — two spellings, one label, ISRC-anchored trust (RFC musickit-second-authority,
+// U2a). The `artist_socials` precedent: a per-label side table of alternative spellings, each
+// carrying its source + a candidate/confirmed status, so a second metadata authority (Apple's
+// album `recordLabel`, corroborated by MusicBrainz over a shared ISRC) can propose that
+// "Med School Recordings" is the same label as "Medschool" WITHOUT ever rewriting the immutable
+// `tracks.label` string or auto-changing `labels.name`. A JSON column was rejected on the label
+// entity's own no-denormalization principle (docs/label-entity.md).
+//
+// ── WHAT EACH COLUMN IS ─────────────────────────────────────────────────────────
+//   - `label_id`   — the CANONICAL label this alias belongs to. The alias is another spelling
+//                    OF this label, never a label of its own.
+//   - `alias`      — the raw alternative spelling (Apple's `recordLabel`, an operator's typing).
+//   - `alias_slug` — `slugify(alias)`, INDEXED: the join key the resolution wiring reads by, so
+//                    a CONFIRMED alias's slug resolves to `label_id` BEFORE `ensureLabel` /
+//                    `reconcileLabels` would otherwise re-mint it as a new label. This is the
+//                    whole correctness point — the immutable `tracks.label` re-mints merged-away
+//                    slugs on every deploy backfill unless the mint path consults this first.
+//   - `source`     — where the spelling came from. `apple` is the U2a writer; `operator` is a
+//                    hand-added alias; `musicbrainz`/`discogs`/`spotify` are reserved for future
+//                    corroboration sources.
+//   - `kind`       — `name` (a corroborated alternate spelling — Apple AND MusicBrainz agree on
+//                    the same label over the ISRC) or `hint` (a weaker lead — Apple names a label
+//                    the archive does not recognise as this one, or a distributor string). Only
+//                    the operator's CONFIRM promotes either to the public graph.
+//   - `status`     — `candidate` (awaiting the operator) or `confirmed` (ruled the same label).
+//                    ONLY `confirmed` feeds resolution + the public `alternateName` JSON-LD
+//                    (decision C); `candidate`/`hint` stay admin-only. Reject deletes the row.
+//
+// The derivation is IDEMPOTENT and never clobbers a ruling: the unique index is
+// `(label_id, alias_slug, source)` with `on conflict do nothing`, so a re-run over a
+// `confirmed` row is a no-op. See docs/label-entity.md + scripts/backfill-label-aliases.ts.
+>>>>>>> 30577a82a (feat(labels): record what a triage round found, without letting it rule)
 export const labelAliases = sqliteTable(
   "label_aliases",
   {

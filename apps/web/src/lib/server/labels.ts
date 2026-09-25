@@ -2103,3 +2103,134 @@ export async function mergeLabel(
     seedState,
   };
 }
+
+/**
+ * THE TRIAGE CURSOR — what a round LOOKED at, which is not what the operator RULED.
+ *
+ * A triage round researches an undecided label and frequently cannot rule it: a conflated
+ * MusicBrainz entity, a catalogue too thin to read, a genuinely mixed one only he can call. Without
+ * a record of that, every round re-derives its own stuck core — affordable when a human chooses to
+ * run one, and not when a timer does.
+ *
+ * This writes the cursor and the round's proposal in ONE batch, so a label never carries a stamp
+ * whose evidence is missing. It CANNOT change `seed_state` and CANNOT write an `artist_rules` row:
+ * ruling is `updateLabelSeedState` / `replaceLabelArtistRules`, both operator tier. That separation
+ * is what lets the box run a round with an agent token and still be structurally unable to rule.
+ *
+ * Idempotent per label — one proposal row each, the newest round superseding the last — so a resumed
+ * or re-run sweep re-states rather than accumulating.
+ */
+export type TriageRuleProposal = {
+  artistMbid: string;
+  artistName: string;
+  evidence?: string;
+  firstCreditCount: number;
+  verdict: "allow" | "block";
+};
+
+export type RecordLabelTriageInput = {
+  censusSummary?: string;
+  confidence: "high" | "medium" | "low";
+  evidence: string;
+  offLaneShare?: number;
+  reason?: string;
+  residualOffLaneShare?: number;
+  roundId: string;
+  rules?: TriageRuleProposal[];
+  verdict: "dnb" | "dnb_partial" | "not_dnb" | "unclear";
+  verifyAgrees?: boolean;
+  verifyEvidence?: string;
+};
+
+export async function recordLabelTriage(
+  slug: string,
+  input: RecordLabelTriageInput,
+): Promise<
+  { droppedInertRules: number; superseded: boolean; triageCheckedAt: string } | undefined
+> {
+  const label = await getLabelBySlug(slug);
+  if (!label) {
+    return undefined;
+  }
+
+  const db = await getDb();
+  const now = new Date().toISOString();
+  const proposalId = `ltp_${randomUUID()}`;
+
+  // A proposal with no FIRST credits on the census can never fire, so it is dropped here rather
+  // than stored and re-dropped at apply time (the block-ANY intuition proposes exactly these).
+  const offered = input.rules ?? [];
+  const firing = offered.filter((rule) => rule.firstCreditCount > 0);
+
+  const existing = await db.execute({
+    args: [label.id],
+    sql: `select id from label_triage_proposals where label_id = ?`,
+  });
+  const superseded = existing.rows.length > 0;
+
+  await db.batch(
+    [
+      // The cursor. `ruled_at` is untouched on purpose: looking is not ruling.
+      {
+        args: [now, input.verdict, input.reason ?? null, now, label.id],
+        sql: `update labels
+              set triage_checked_at = ?, triage_verdict = ?, triage_reason = ?, updated_at = ?
+              where id = ?`,
+      },
+      // One proposal per label: the newest round replaces the last, and its rules go with it.
+      {
+        args: [label.id],
+        sql: `delete from label_triage_rule_proposals
+              where proposal_id in (select id from label_triage_proposals where label_id = ?)`,
+      },
+      { args: [label.id], sql: `delete from label_triage_proposals where label_id = ?` },
+      {
+        args: [
+          proposalId,
+          label.id,
+          input.roundId,
+          input.verdict,
+          input.confidence,
+          input.evidence,
+          input.reason ?? null,
+          input.censusSummary ?? null,
+          input.offLaneShare ?? null,
+          input.residualOffLaneShare ?? null,
+          input.verifyAgrees === undefined ? null : input.verifyAgrees ? 1 : 0,
+          input.verifyEvidence ?? null,
+          now,
+          now,
+        ],
+        sql: `insert into label_triage_proposals
+                (id, label_id, round_id, verdict, confidence, evidence, reason, census_summary,
+                 off_lane_share, residual_off_lane_share, verify_agrees, verify_evidence,
+                 created_at, updated_at)
+              values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      },
+      ...firing.map((rule) => ({
+        args: [
+          `ltrp_${randomUUID()}`,
+          proposalId,
+          rule.artistMbid,
+          rule.artistName,
+          rule.verdict,
+          rule.firstCreditCount,
+          rule.evidence ?? null,
+          now,
+        ],
+        sql: `insert into label_triage_rule_proposals
+                (id, proposal_id, artist_mbid, artist_name, verdict, first_credit_count, evidence,
+                 created_at)
+              values (?, ?, ?, ?, ?, ?, ?, ?)
+              on conflict (proposal_id, artist_mbid) do nothing`,
+      })),
+    ],
+    "write",
+  );
+
+  return {
+    droppedInertRules: offered.length - firing.length,
+    superseded,
+    triageCheckedAt: now,
+  };
+}

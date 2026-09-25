@@ -10,6 +10,38 @@ export const LabelSeedStateSchema = z
   .enum(["disabled", "enabled", "undecided"])
   .meta({ id: "LabelSeedState" });
 
+/**
+ * What a triage ROUND concluded — deliberately not a `LabelSeedState`, because a round never rules.
+ *
+ * `dnb` / `not_dnb` are what the round would have the operator rule; `dnb_partial` is the settled
+ * verdict that the label stays out of the seed set while named artists are allowed in; `unclear` is
+ * the round declining, which is a finding rather than a gap (a conflated MusicBrainz entity, a
+ * catalogue too thin to read, a genuinely mixed one only he can call).
+ */
+export const LabelTriageVerdictSchema = z
+  .enum(["dnb", "dnb_partial", "not_dnb", "unclear"])
+  .meta({ id: "LabelTriageVerdict" });
+
+/**
+ * One label in the admin shape. `slug` is the identity + the join key back to the raw
+ * `tracks.label` string (`slugify(tracks.label) = labels.slug`); `findingCount` is DERIVED,
+ * never stored — computed per-page over the indexed `tracks.label_id` edge by the
+ * `/admin/labels` station's read, and 0 on the countless `list_labels_admin` seed read.
+ * `ruledAt` is the operator's stamp — null means no human has ruled this label yet (a machine
+ * default or the one-time bootstrap). `logoImageUrl` is the label's OWN logo (its resolved
+ * Discogs/Wikidata image on R2, served up the shared owned-cover ladder), absent when it has none yet.
+ *
+ * ── THE IDENTITY FIELDS ────────────────────────────────────────────────────────────────────
+ * A ruling is an identity question — "may we crawl from THIS label?" is unanswerable when three
+ * labels share the name. So the item also carries what MusicBrainz knows about which label this is:
+ * `mbLabelId` (the MBID, which the station links out to), `disambiguation` (MB's parenthetical
+ * comment, the one field written FOR this problem), and the founding pair `foundingDate` /
+ * `foundedLocation`. All four are ADDITIVE-OPTIONAL: nullable when a read carries them and absent
+ * from a read that does not, so an older client and the CLI keep working unchanged. Most labels
+ * legitimately carry none — MusicBrainz only disambiguates a name that needed it — and a label
+ * with none simply shows no identity line.
+ */
+>>>>>>> 30577a82a (feat(labels): record what a triage round found, without letting it rule)
 export const LabelAdminItemSchema = z
   .object({
     createdAt: z.string(),
@@ -313,6 +345,82 @@ export const listLabelsMissingBio = oc
   .input(z.object({ limit: z.string().optional() }))
   .output(z.object({ labels: z.array(LabelBioWorkItemSchema), ok: z.literal(true) }));
 
+// ── THE TRIAGE CURSOR ──────────────────────────────────────────────────────────────
+// `record_label_triage` is what a triage round writes when it has LOOKED at a label, which is a
+// different act from the operator RULING one. It stamps `labels.triage_checked_at` (+ the verdict
+// and the reason it could not be ruled) and stores the round's payload as a proposal.
+//
+// AGENT tier, deliberately, and the distinction is the whole safety argument for the sweep: this
+// op CANNOT change `seed_state`, cannot write an `artist_rules` row, and cannot make anything
+// crawl. It records a finding. The ruling stays `update_label` / `replace_label_artist_rules`,
+// both operator tier, so a sweep running with the box's agent token is structurally incapable of
+// ruling on a label however wrong it goes. The precedent is `describe_label`: enrichment the box
+// authors is agent tier, the editorial act it feeds is not.
+//
+// It is also IDEMPOTENT per label — one proposal row per label, the newest round superseding the
+// last — so a re-run or a resumed sweep re-states rather than accumulating.
+
+/** One proposed artist rule. Advisory: nothing here fires at crawl time until the operator applies it. */
+const TriageRuleProposalSchema = z.object({
+  artistMbid: z.string(),
+  artistName: z.string(),
+  evidence: z.string().optional(),
+  /** Zero means the rule could never fire; the server drops it rather than storing an inert proposal. */
+  firstCreditCount: z.number().int().min(0),
+  verdict: z.enum(["allow", "block"]),
+});
+
+/**
+ * `record_label_triage` → `POST /admin/labels/{slug}/triage` (operationId `recordLabelTriage`).
+ *
+ * Agent tier (`adminAuth`), the `describe_label` precedent. Stamps the triage cursor and stores the
+ * round's proposal for the operator to ratify from. NEVER changes `seed_state` and never writes an
+ * artist rule — a label's ruling is `update_label`, which 403s an agent token at `operatorGuard`.
+ *
+ * `offLaneShare` is the RAW rail (every off-lane first credit); `residualOffLaneShare` is the same
+ * fraction ignoring credits an existing global rule already stops. When they straddle 0.15 the
+ * station shows the label to the operator by name instead of burying it in the unclear pile.
+ *
+ * Codes: `not_found`/404.
+ */
+export const recordLabelTriage = oc
+  .route({
+    method: "POST",
+    operationId: "recordLabelTriage",
+    path: "/admin/labels/{slug}/triage",
+    summary: "Record what a triage round found (stamps the cursor; never rules)",
+    tags: ["Admin"],
+  })
+  .input(
+    z.object({
+      censusSummary: z.string().optional(),
+      confidence: z.enum(["high", "medium", "low"]),
+      evidence: z.string(),
+      offLaneShare: z.number().min(0).max(1).optional(),
+      /** Free text: the taxonomy of why a label could not be ruled belongs to the round. */
+      reason: z.string().optional(),
+      residualOffLaneShare: z.number().min(0).max(1).optional(),
+      roundId: z.string(),
+      rules: z.array(TriageRuleProposalSchema).optional(),
+      slug: z.string(),
+      verdict: LabelTriageVerdictSchema,
+      verifyAgrees: z.boolean().optional(),
+      verifyEvidence: z.string().optional(),
+    }),
+  )
+  .output(
+    z.object({
+      /** Rules dropped for having zero first credits — they could never fire. */
+      droppedInertRules: z.number().int(),
+      ok: z.literal(true),
+      /** `true` when this superseded an earlier round's proposal for the same label. */
+      superseded: z.boolean(),
+      triageCheckedAt: z.string(),
+    }),
+  );
+
+/** The `admin-labels` domain's ops, merged into the root contract by `./index.ts`. */
+>>>>>>> 30577a82a (feat(labels): record what a triage round found, without letting it rule)
 export const adminLabelsContract = {
   confirm_label_alias: confirmLabelAlias,
   describe_label: describeLabel,
@@ -323,6 +431,7 @@ export const adminLabelsContract = {
   list_labels_missing_bio: listLabelsMissingBio,
   merge_label: mergeLabel,
   mint_label: mintLabel,
+  record_label_triage: recordLabelTriage,
   reject_label_alias: rejectLabelAlias,
   replace_label_artist_rules: replaceLabelArtistRules,
   update_label: updateLabel,
