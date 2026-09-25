@@ -11,41 +11,22 @@ import {
   rankCorpus,
 } from "./catalogue";
 
-// The two pure pieces of The Ear (docs/the-ear.md): the pre-audio capture ladder, and the
-// staleness fingerprint. Both are side-effect-free by design — the ladder because the sweep
-// and the surface must never disagree about WHY a track is next (they call the same
-// function), the fingerprint because it is the entire staleness model and has to be
-// readable at a glance.
-//
-// The ladder's behaviour against the REAL schema (a real archive, real labels, the graph, the
-// fold, the weighted qualification) is proven in catalogue.integration.test.ts; these cases pin
-// the pure decision — AUTHORIZATION (by artist identity or an enabled label) vs PRIORITY (the
-// ordering hint) — that the sweep and the surface share (RFC artist-primary-capture, slice 1).
-
-// A qualified artist id — one that has earned the spend (a certified finding, or a weighted
-// release count ≥ 3 on enabled labels). Authorization is by THIS, never by a name-fold.
 const KRAKOTA_ID = "artist-krakota";
 
 const archive: ArchiveAffinity = {
-  // Anjunabeats is the real shape of the problem: it is RULED OUT, and it CARRIES a finding
-  // (a single crossover remix) — as do all 8 of the operator's disabled labels.
   disabledLabels: new Set(["anjunabeats"]),
-  // The tier-3 ORDERING hint (names on a finding). Never authorization now.
+
   findingArtists: new Set(["krakota", "nu:tone"]),
-  // A label carrying a finding is a HINT, never authorization. `atlantic-uk` is the live
-  // counter-example: an un-enabled label with one crossover finding, whose label-mates must
-  // NOT be authorized by it.
+
   findingLabels: new Set(["anjunabeats", "atlantic-uk", "hospital-records"]),
-  // The AUTHORIZATION set — qualified artist ids.
+
   qualifiedArtists: new Set([KRAKOTA_ID]),
-  // The enabled labels — the label side of authorization.
+
   seedLabels: new Set(["hospital-records", "critical-music"]),
 };
 
 describe("capturePriorityFor — authorization (the artist-driven gate)", () => {
   it("authorizes a track by a QUALIFIED artist (identity) and puts it at the top (3)", () => {
-    // A qualified artist authorizes even on an UNDECIDED label the operator has not ruled on:
-    // capture follows the artist, discovery follows the label.
     expect(
       capturePriorityFor(
         { artistIds: [KRAKOTA_ID], artists: ["Krakota"], label: "Some Undecided Label" },
@@ -55,16 +36,12 @@ describe("capturePriorityFor — authorization (the artist-driven gate)", () => 
   });
 
   it("authorizes an EDGE-LESS track only via its enabled label (1)", () => {
-    // ~2/3 of catalogue rows carry no graph edges until slice 0 drains. An edge-less row can
-    // authorize ONLY through its enabled label — never a name-fold.
     expect(
       capturePriorityFor({ artistIds: [], artists: ["Nobody"], label: "Critical Music" }, archive),
     ).toEqual({ priority: 1, reason: { kind: "seed-label", name: "Critical Music" } });
   });
 
   it("SINKS an edge-less name-match on an un-enabled label — identity-only, not name-fold", () => {
-    // "Krakota" is on a finding (the tier-3 name hint), but this row has no graph edge and its
-    // label is not enabled — so it is NOT authorized. The name would only ORDER it, never buy it.
     expect(
       capturePriorityFor(
         { artistIds: [], artists: ["Krakota"], label: "Some Undecided Label" },
@@ -74,9 +51,6 @@ describe("capturePriorityFor — authorization (the artist-driven gate)", () => 
   });
 
   it("does NOT authorize label-mates off a finding on a NON-enabled label (the Atlantic-UK pin)", () => {
-    // THE COUNTER-EXAMPLE THIS RULE EXISTS FOR. One Atlantic-UK finding must not lift every
-    // crawled Atlantic-UK track to tier 2 and into the budget. A finding lifts its ARTIST, never
-    // its label's neighbours — so an un-enabled label carrying a finding no longer authorizes.
     expect(
       capturePriorityFor({ artistIds: [], artists: ["Nobody"], label: "Atlantic UK" }, archive),
     ).toEqual({ priority: -3, reason: { kind: "unauthorized", name: null } });
@@ -101,16 +75,12 @@ describe("capturePriorityFor — authorization (the artist-driven gate)", () => 
 
 describe("capturePriorityFor — the veto, checked first", () => {
   it("VETOES a disabled label even though it carries a finding (−1)", () => {
-    // All 8 disabled labels in the real archive carry a finding — each arrived on one crossover
-    // remix — so the `label` hint fires on every one. The veto sinks them regardless.
     expect(
       capturePriorityFor({ artistIds: [], artists: ["Nobody"], label: "Anjunabeats" }, archive),
     ).toEqual({ priority: -1, reason: { kind: "skipped-label", name: "Anjunabeats" } });
   });
 
   it("lets the veto beat even a QUALIFIED artist — the operator's ruling wins", () => {
-    // A qualified DnB artist doing a remix on a ruled-out label. Authorization is the strongest
-    // signal there is, and the ruling still wins: he TOLD us the label is not his lane.
     expect(
       capturePriorityFor(
         { artistIds: [KRAKOTA_ID], artists: ["Krakota"], label: "Anjunabeats" },
@@ -131,8 +101,6 @@ describe("capturePriorityFor — the veto, checked first", () => {
 
 describe("capturePriorityFor — priority ordering among AUTHORIZED rows", () => {
   it("falls to the label a finding sits on (2), but only once ENABLED-authorized, through the fold", () => {
-    // `Hospital Records.` and `Hospital Records` are one label (labelSlug). It is enabled (so the
-    // row is authorized) AND carries a finding, so it lands the tier-2 hint.
     expect(
       capturePriorityFor(
         { artistIds: [], artists: ["Nobody"], label: "Hospital Records." },
@@ -142,8 +110,6 @@ describe("capturePriorityFor — priority ordering among AUTHORIZED rows", () =>
   });
 
   it("names a QUALIFIED artist by the row's own first credit when the spelling is not on a finding", () => {
-    // A weighted-count qualifier whose name is not literally on any finding still earns the top
-    // rung; the reason speaks the row's own spelling back.
     expect(
       capturePriorityFor(
         { artistIds: [KRAKOTA_ID], artists: ["Fresh Name"], label: null },
@@ -153,7 +119,6 @@ describe("capturePriorityFor — priority ordering among AUTHORIZED rows", () =>
   });
 
   it("matches the finding-artist hint case-insensitively, naming the spelling the TRACK carries", () => {
-    // The archive set is lowercased; the reason must speak the row's own spelling back.
     expect(
       capturePriorityFor(
         { artistIds: [], artists: ["Guest", "NU:TONE"], label: "Critical Music" },
@@ -172,7 +137,6 @@ describe("capturePriorityFor — priority ordering among AUTHORIZED rows", () =>
   });
 
   it("never lets a blank or all-punctuation label authorize an edge-less row", () => {
-    // `labelSlug` returns undefined for these, so there is no enabled label to authorize on.
     for (const label of ["", "   ", "."]) {
       expect(capturePriorityFor({ artistIds: [], artists: ["Nobody"], label }, archive)).toEqual({
         priority: -3,
@@ -184,9 +148,6 @@ describe("capturePriorityFor — priority ordering among AUTHORIZED rows", () =>
 
 describe("capturePriorityFor — the negative band is distinct and ordered", () => {
   it("gives `unauthorized` its own tier, below the veto and the duplicate", () => {
-    // Three distinct negatives, all excluded from the capture queue by `capture_priority >= 0`.
-    // Their order (a DESC board read) is by how SPECIFIC the reason is: an explicit ruling and an
-    // identity fact outrank the default "not qualified yet".
     const unauthorized = capturePriorityFor(
       { artistIds: [], artists: ["Nobody"], label: "Some Trance Imprint" },
       archive,
@@ -209,24 +170,17 @@ describe("rankCorpus — the staleness fingerprint", () => {
 
   it("moves when a finding is logged, and when one is embedded", () => {
     expect(rankCorpus(60, 60, 0, "d", "initial")).toMatch(/^v6:60:60:0:d:[0-9a-f]{16}$/);
-    // A new finding lands (unembedded): the affinity corpus changed, so every ranked row is stale.
+
     expect(rankCorpus(61, 60, 0, "d", "initial")).not.toBe(rankCorpus(60, 60, 0, "d", "initial"));
-    // Then it embeds: a new vector to be near, so every scored row is stale too.
+
     expect(rankCorpus(61, 61, 0, "d", "initial")).not.toBe(rankCorpus(61, 60, 0, "d", "initial"));
   });
 
   it("moves when the QUALIFIED-ARTIST SET changes — the second-order authorization signal (v5)", () => {
-    // Authorization depends on which artists are qualified, which the two finding counts do not see.
-    // v5 folds the qualified set: an artist crossing the qualification line flips every catalogue
-    // track that credits them (size grows), so the fingerprint must move.
     expect(rankCorpus(60, 60, 42, "d", "initial")).not.toBe(rankCorpus(60, 60, 41, "d", "initial"));
   });
 
   it("moves on a same-size MEMBERSHIP SWAP — the batch-ruling money-bug hole the size alone left open", () => {
-    // The digest arm's whole reason to exist: one artist qualifies as another de-qualifies in a
-    // batch ruling, so the SIZE is identical but the membership differs — and a de-qualified artist's
-    // other-label tracks must re-stale (a wrong capture is otherwise bought). Same count, different
-    // digest → different fingerprint.
     const swapped = qualifiedArtistsDigest(["a", "c"]);
     expect(swapped).not.toBe(digest);
     expect(rankCorpus(60, 60, 2, swapped, "initial")).not.toBe(
@@ -260,10 +214,6 @@ describe("rankCorpus — the staleness fingerprint", () => {
   });
 });
 
-// The ear lens's page diversity (docs/the-ear.md): a greedy pick that repeatedly takes the
-// highest-scoring remaining row after decaying each candidate by how many of its artist / year
-// / key have already been chosen (EAR_DIVERSITY_DECAY = artist 0.97, year 0.985, key 0.99). It
-// is pure — the sweep and the surface must agree on the page — so its ordering is pinned here.
 describe("diversifyRanked — the greedy decay page", () => {
   type Row = DiversitySignals & { id: string };
 
@@ -289,8 +239,6 @@ describe("diversifyRanked — the greedy decay page", () => {
   });
 
   it("lets a lower-scoring DIFFERENT artist leapfrog a same-artist runner-up", () => {
-    // A and B share an artist; C is a different artist scoring just under B. Once A is taken,
-    // B decays by 0.97 (0.99 -> 0.9603) and C (0.98, undecayed) jumps ahead of it.
     const pool: Row[] = [
       { artist: "x", id: "A", key: null, score: 1, year: null },
       { artist: "x", id: "B", key: null, score: 0.99, year: null },
@@ -301,8 +249,6 @@ describe("diversifyRanked — the greedy decay page", () => {
   });
 
   it("does NOT reorder that same pool when every row reads as a distinct artist", () => {
-    // The guard that the leapfrog above is decay, not scoring: reporting a unique artist per row
-    // means the decay exponent is always 0, so raw score order survives.
     const pool: Row[] = [
       { artist: "x", id: "A", key: null, score: 1, year: null },
       { artist: "x", id: "B", key: null, score: 0.99, year: null },
@@ -325,7 +271,6 @@ describe("diversifyRanked — the greedy decay page", () => {
       { artist: null, id: "C", key: null, score: 0.98, year: "2021" },
     ];
 
-    // After A, B decays 0.99 -> 0.97515, below C's undecayed 0.98.
     expect(diversifyRanked(pool, 3, signalsOf).map((r) => r.id)).toEqual(["A", "C", "B"]);
   });
 
@@ -337,7 +282,6 @@ describe("diversifyRanked — the greedy decay page", () => {
       { artist: "y", id: "D", key: null, score: 0.96, year: null },
     ];
 
-    // A, then B (0.9603 > D's 0.96); now x is seen twice, so C decays 0.985 -> 0.9268 and D wins.
     expect(diversifyRanked(pool, 4, signalsOf).map((r) => r.id)).toEqual(["A", "B", "D", "C"]);
   });
 

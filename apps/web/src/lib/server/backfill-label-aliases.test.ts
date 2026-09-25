@@ -1,8 +1,3 @@
-// The label-alias derivation (RFC musickit-second-authority, U2a), proven against the REAL
-// migrated schema on an in-memory libSQL engine. It reads the stored Apple album facts
-// (`albums.record_label_raw`, from U1) and proposes `label_aliases` rows under two guardrails:
-// the distributor denylist and MusicBrainz cross-source corroboration. Idempotent by construction.
-
 import { type Client } from "@libsql/client";
 import { beforeEach, describe, expect, it } from "vitest";
 import { backfillLabelAliases } from "../../../scripts/backfill-label-aliases";
@@ -14,7 +9,6 @@ beforeEach(async () => {
   db = await createIntegrationDb();
 });
 
-/** A canonical label (the MusicBrainz spelling the crawled row already carries). */
 async function insertLabel(id: string, name: string, slug: string): Promise<void> {
   const now = new Date().toISOString();
   await db.execute({
@@ -23,7 +17,6 @@ async function insertLabel(id: string, name: string, slug: string): Promise<void
   });
 }
 
-/** An album carrying Apple's `record_label_raw` (the second authority's spelling). */
 async function insertAlbum(id: string, slug: string, recordLabelRaw: string): Promise<void> {
   const now = new Date().toISOString();
   await db.execute({
@@ -33,7 +26,6 @@ async function insertAlbum(id: string, slug: string, recordLabelRaw: string): Pr
   });
 }
 
-/** A track linking an album to the label its crawled row carries. */
 async function insertTrack(trackId: string, albumId: string, labelId: string): Promise<void> {
   await db.execute({
     args: [trackId, albumId, labelId, `spotify:track:${trackId}`],
@@ -60,8 +52,6 @@ async function aliasRows(): Promise<
 
 describe("backfillLabelAliases (the candidate writer)", () => {
   it("mints a CANDIDATE when Apple's recordLabel fold-agrees with the known label but spells it differently", async () => {
-    // "Med School" (Apple) ⋂ "Medschool" (MusicBrainz) — both fold to `medschool`, but slugify
-    // apart (`med-school` vs `medschool`). Same recording, two authorities agreeing: a candidate.
     await insertLabel("lbl_med", "Medschool", "medschool");
     await insertAlbum("alb_1", "some-ep", "Med School");
     await insertTrack("t1", "alb_1", "lbl_med");
@@ -123,7 +113,7 @@ describe("backfillLabelAliases (the candidate writer)", () => {
 
   it("skips an album with no linked label (nothing to corroborate or attach to)", async () => {
     await insertAlbum("alb_1", "some-ep", "Med School");
-    // A track on the album but with NO label_id.
+
     await db.execute({
       args: ["t1", "alb_1"],
       sql: `insert into tracks (track_id, title, artists_json, album_id, spotify_uri, spotify_url, duration_ms)
@@ -142,13 +132,13 @@ describe("backfillLabelAliases (the candidate writer)", () => {
     await insertTrack("t1", "alb_1", "lbl_med");
 
     await backfillLabelAliases(db);
-    // The operator confirms the candidate.
+
     await db.execute(`update label_aliases set status = 'confirmed'`);
 
     const second = await backfillLabelAliases(db);
 
     expect(second).toMatchObject({ candidates: 0, hints: 0 });
-    // The confirmed row survives untouched (on conflict do nothing on the unique index).
+
     expect((await aliasRows())[0]).toMatchObject({ alias: "Med School", status: "confirmed" });
   });
 });

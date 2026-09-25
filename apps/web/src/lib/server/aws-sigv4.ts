@@ -1,18 +1,5 @@
-// A minimal AWS Signature V4 header signer for S3-compatible endpoints (Cloudflare
-// R2), built on WebCrypto so it runs unchanged in the Worker, Node/vitest, and Bun.
-//
-// The app itself signs R2 via `aws4fetch` (see `r2-presign.ts`); this standalone
-// signer exists for the ONE caller that cannot bring a dependency: the self-contained
-// on-box backup sweep (`docs/agents/hermes/scripts/backup-sweep.ts`), which uploads
-// the daily dump straight to a private R2 bucket with no node_modules on the box. That
-// sweep MIRRORS `signS3Request` verbatim — keep the two in step. `aws-sigv4.test.ts`
-// pins this implementation to `aws4fetch` (the trusted reference already in the repo)
-// so any drift is caught, and it uploads with a REAL payload hash (a signed payload —
-// R2 validates the body against it, catching a truncated/corrupted upload).
-
 const encoder = new TextEncoder();
 
-/** Copy a view's exact byte window into an ArrayBuffer-backed WebCrypto input. */
 function webCryptoBytes(bytes: Uint8Array): Uint8Array<ArrayBuffer> {
   return new Uint8Array(bytes);
 }
@@ -45,7 +32,6 @@ async function hmac(key: ArrayBuffer | Uint8Array, data: string): Promise<ArrayB
   return crypto.subtle.sign("HMAC", cryptoKey, encoder.encode(data));
 }
 
-/** RFC 3986 escaping beyond what `encodeURIComponent` covers (`! * ' ( )`). */
 function encodeRfc3986(value: string): string {
   return encodeURIComponent(value).replace(
     /[!*'()]/g,
@@ -53,12 +39,10 @@ function encodeRfc3986(value: string): string {
   );
 }
 
-/** Canonical URI: each path segment RFC-3986 encoded, slashes preserved. */
 function canonicalUri(pathname: string): string {
   return pathname.split("/").map(encodeRfc3986).join("/");
 }
 
-/** Canonical query string: params RFC-3986 encoded and sorted by key then value. */
 function canonicalQuery(url: URL): string {
   const pairs = [...url.searchParams.entries()].map(
     ([key, value]) => [encodeRfc3986(key), encodeRfc3986(value)] as const,
@@ -71,14 +55,13 @@ function canonicalQuery(url: URL): string {
   return pairs.map(([key, value]) => `${key}=${value}`).join("&");
 }
 
-/** The `YYYYMMDDTHHMMSSZ` AMZ timestamp for a given instant. */
 export function amzDate(now: Date): string {
   return now.toISOString().replace(/[:-]|\.\d{3}/g, "");
 }
 
 export type SignS3RequestOptions = {
   accessKeyId: string;
-  /** The request body (its real SHA-256 is signed). Omit for GET/DELETE. */
+
   body?: Uint8Array;
   contentType?: string;
   method: string;
@@ -89,11 +72,6 @@ export type SignS3RequestOptions = {
   url: string;
 };
 
-/**
- * Sign an S3/R2 request and return the headers to SEND (Authorization plus the
- * `x-amz-*` set; `host` is implicit from the URL, so it is signed but not returned).
- * Verified byte-for-byte against `aws4fetch` in `aws-sigv4.test.ts`.
- */
 export async function signS3Request(
   options: SignS3RequestOptions,
 ): Promise<Record<string, string>> {
@@ -138,7 +116,6 @@ export async function signS3Request(
 
   const signature = toHex(await hmac(signingKey, stringToSign));
 
-  // `host` is set by fetch from the URL — return everything else the request must carry.
   const { host: _host, ...sent } = headers;
 
   return {

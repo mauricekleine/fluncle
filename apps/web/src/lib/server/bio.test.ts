@@ -1,16 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-// The entity-bio engine (lib/server/bio.ts): the voice gate, the Firecrawl fact query, and
-// the prompt-assembly helper. The gate is the artist/label sibling of `gateNoteText`, but in
-// the FACTUAL DOSSIER register — it reuses the SAME shared voice scan for the banned identity
-// words, the Dry Rule's no-exclamation-marks, and no "we"-as-company, while ALLOWING earthly
-// geography (a Wikipedia-style bio names a real country or city plainly). It carries the bio's
-// own longer length ceiling (a 2–4 sentence paragraph, not a one-line note). A bio lands on a
-// public entity page, so a violation hard-fails the store.
-
-// `renderRegisteredPrompt` reads the prompt override table; with the store mocked to throw,
-// `resolvePrompt` falls back to the baked default (version 0) — its cardinal guarantee. So
-// `buildEntityBioPrompt` here exercises the BAKED prompt, exactly the floor a real sweep hits.
 const execute = vi.fn();
 
 vi.mock("./db", () => ({
@@ -40,7 +29,6 @@ beforeEach(() => {
   readOptionalEnv.mockReset();
 });
 
-// A clean, dry, in-voice two-sentence bio — the shape the sweep should produce.
 const GOOD_BIO =
   "One of the names I keep coming back to when the rollers need to breathe. The drums do the talking, and I have logged enough of them to trust the stamp.";
 
@@ -54,9 +42,6 @@ function codeOf(run: () => unknown): string {
   return "(did not throw)";
 }
 
-// The entity a bio is about. Every `gateBioText` call takes one, and its occurrences are masked
-// out before the scan (THE NAME EXEMPTION) — so a name with no bearing on the case under test is
-// a no-op, and the exemption's own behaviour is pinned in its dedicated block below.
 const CALIBRE = "Calibre";
 
 describe("gateBioText", () => {
@@ -79,12 +64,10 @@ describe("gateBioText", () => {
   });
 
   it("throws bio_too_long over the 500-char ceiling", () => {
-    // 260 two-char words = 520 chars, past the paragraph cap.
     expect(codeOf(() => gateBioText("ok ".repeat(260), CALIBRE))).toBe("bio_too_long");
   });
 
   it("accepts a paragraph up to the ceiling (looser than the note's 280 budget)", () => {
-    // A ~360-char paragraph — well past a one-line note's 280, comfortably under 500.
     const paragraph =
       "A stamp I trust when the night wants weight without noise, patient and certain in a way the loud imprints never quite land. " +
       "The tracks I have logged from it hold their nerve through the drop and keep their shape after it. " +
@@ -133,17 +116,6 @@ describe("gateBioText", () => {
   });
 });
 
-// ── THE NAME EXEMPTION ───────────────────────────────────────────────────────────────────
-//
-// The gate polices the prose FLUNCLE wrote and stops policing words it did not choose. An entity's
-// own name is not Fluncle's prose: "Future Signal", "Invaderz Transmissions", and "Jungle Sound:
-// The Bassline Strikes Back!" are real-world names, and a bio must be able to name its subject.
-// Before this, those three could not be written AT ALL — every rewrite named the entity, every
-// rewrite tripped the scan, and the box sweep re-authored them ~90 times each over two days.
-//
-// The bans themselves are untouched. Only the TEXT handed to the scanner changes: exact,
-// case-insensitive occurrences of the FULL name are masked out first.
-
 describe("maskEntityName (what the scanner is allowed to see)", () => {
   it("masks every case-insensitive occurrence of the full name", () => {
     expect(maskEntityName("Future Signal is future signal.", "Future Signal")).toBe("  is  .");
@@ -158,32 +130,25 @@ describe("maskEntityName (what the scanner is allowed to see)", () => {
   });
 
   it("escapes regex metacharacters in a name rather than interpreting them", () => {
-    // A name is a trusted identity string, but it is still not a pattern.
     expect(maskEntityName("Sub Focus (UK) rolls.", "Sub Focus (UK)")).toBe("  rolls.");
     expect(maskEntityName("A.B.C. rolls.", "A.B.C.")).toBe("  rolls.");
   });
 
-  // THE SUBSTRING TRAP. An unanchored replace fires inside longer words, which would silently
-  // amnesty the very words the exemption promises to keep policing. Both of these are entities
-  // that exist in production.
   it("does NOT mask inside a longer word (the short-name case)", () => {
-    // Unanchored, "Sign" would leave " al" / " als" here and the bio would scan clean.
     expect(
       maskEntityName("Sign cut through the signal, and the signals keep coming.", "Sign"),
     ).toBe("  cut through the signal, and the signals keep coming.");
   });
 
   it("does NOT mask inside a longer word when the name ends in punctuation", () => {
-    // Unanchored, "Mission:" would eat the tail of "transmission:".
     expect(maskEntityName("The transmission: arrived late.", "Mission:")).toBe(
       "The transmission: arrived late.",
     );
-    // …but it still masks the entity's own name where it really appears.
+
     expect(maskEntityName("Mission: arrived late.", "Mission:")).toBe("  arrived late.");
   });
 
   it("still masks a name that ENDS in punctuation followed by a letter", () => {
-    // The tail boundary is conditional precisely so this keeps working.
     expect(
       maskEntityName(
         "Jungle Sound: The Bassline Strikes Back! is a compilation.",
@@ -207,14 +172,11 @@ describe("gateBioText + the name exemption (the three production loops)", () => 
   });
 
   it("PASSES an album whose own title carries an exclamation mark (the Dry Rule)", () => {
-    // Masking the full title removes the punctuation INSIDE it — which is the whole mechanism.
     const bio =
       "Jungle Sound: The Bassline Strikes Back! is a compilation that pulls the older end of the sound back into the room. The cuts I have logged off it still hit.";
     expect(gateBioText(bio, "Jungle Sound: The Bassline Strikes Back!")).toBe(bio);
   });
 
-  // THE PROPERTY THAT KEEPS THE GATE MEANINGFUL. The exemption is for the NAME, not for the word:
-  // naming "Future Signal" is fine, using "signal" as a generic word is still a violation.
   it("STILL REJECTS the banned word used generically elsewhere in the same bio", () => {
     expect(
       codeOf(() =>
@@ -237,10 +199,6 @@ describe("gateBioText + the name exemption (the three production loops)", () => 
     ).toBe("voice_gate");
   });
 
-  // Conservative and intended: the exemption covers the FULL name only, so a shortened reference
-  // is still judged. The rewrite can simply use the full name.
-  // THE REGRESSION THE BOUNDARIES EXIST FOR. `/artist/sign` is live and bio-less, so it is a
-  // candidate for the next sweep: without word boundaries its bio could say "signal" freely.
   it("STILL REJECTS a banned word the entity's SHORT name is merely a prefix of", () => {
     expect(
       codeOf(() =>
@@ -263,8 +221,6 @@ describe("gateBioText + the name exemption (the three production loops)", () => 
     ).toBe("voice_gate");
   });
 
-  // The unavoidable cost, stated as a test so it is a KNOWN behaviour rather than a surprise:
-  // when the whole name IS the banned word there is no way to tell the entity from the noun.
   it("fully amnesties a banned word when the entity's WHOLE name is that word (accepted cost)", () => {
     const bio =
       "Signal is a drum and bass producer with a long run of releases behind him. The drums do the talking, and I have logged enough to trust the stamp.";
@@ -283,17 +239,9 @@ describe("gateBioText + the name exemption (the three production loops)", () => 
   });
 
   it("still measures LENGTH on the whole bio, name included", () => {
-    // The exemption is about what Fluncle is judged for SAYING, never about the paragraph's size.
     expect(codeOf(() => gateBioText("Future Signal.", "Future Signal"))).toBe("bio_too_short");
   });
 });
-
-// ── THE FINAL-ATTEMPT ACCEPTANCE ─────────────────────────────────────────────────────────
-//
-// The BACKSTOP under the attempt budget: after three authoring attempts the last draft is stored
-// even if the scan refuses it, so the queue can never spin on one entity forever. It bypasses the
-// voice SCAN only — a present, in-bounds bio is still required — and it hands the violations back
-// so the acceptance is logged and reviewable rather than silent.
 
 describe("acceptFinalDraftBio", () => {
   it("returns a clean bio with NO violations (an ordinary write, no marker)", () => {
@@ -358,18 +306,17 @@ describe("buildEntityBioPrompt (the reusable authoring-prompt assembly)", () => 
       name: "Calibre",
     });
 
-    // The store is down, so the baked default (version 0) is what a real sweep would hit.
     expect(version).toBe(0);
-    // THE GROUNDING RAIL is present and load-bearing.
+
     expect(body).toContain("GROUNDING RAIL");
     expect(body).toContain("Never invent");
-    // The concrete, true material — the name + the logged findings — is interpolated in.
+
     expect(body).toContain("Calibre");
     expect(body).toContain("Mr Majestic");
     expect(body).toContain("Even If");
-    // The gathered facts rode in as grounding fuel.
+
     expect(body).toContain("Signature imprint");
-    // findingCount reflects the logged tracks.
+
     expect(body).toContain("2");
   });
 

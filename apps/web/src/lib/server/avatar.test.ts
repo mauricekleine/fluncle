@@ -2,9 +2,6 @@ import { describe, expect, it } from "vitest";
 import { AVATAR_MAX_BYTES, validateAvatarUpload, verifyAvatarMutation } from "./avatar";
 import { createCsrfToken, type PublicUser } from "./public-auth";
 
-// A minimal PNG header buffer with the intrinsic width/height in the IHDR fields, so
-// `readImageSize` (shared with the cover-master parser) reads the dimensions. 24 bytes
-// is its minimum; width @16 and height @20 are big-endian u32.
 function pngBytes(width: number, height: number): ArrayBuffer {
   const buffer = new ArrayBuffer(24);
   const view = new DataView(buffer);
@@ -29,7 +26,7 @@ describe("validateAvatarUpload", () => {
   it("accepts a supported, small, in-bounds image and derives the extension", () => {
     expect(validateAvatarUpload("image/jpeg", pngBytes(64, 64))).toEqual({ ext: "jpg", ok: true });
     expect(validateAvatarUpload("image/png", pngBytes(512, 512))).toEqual({ ext: "png", ok: true });
-    // A content-type with parameters still resolves to the base mime.
+
     expect(validateAvatarUpload("image/webp; charset=binary", pngBytes(200, 200))).toEqual({
       ext: "webp",
       ok: true,
