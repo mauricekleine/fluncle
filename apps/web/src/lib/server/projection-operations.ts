@@ -295,7 +295,6 @@ async function publicProjectionEpochMatched(
   return result.rows.length > 0;
 }
 
-/** The running definition version for one registered `due_work` family, by its rebuild identity. */
 function trackDefinitionVersionFor(workKind: unknown, subjectType: unknown): string | undefined {
   return DUE_WORK_BACKFILLS.find(
     (definition) => definition.workKind === workKind && definition.subjectType === subjectType,
@@ -372,8 +371,7 @@ async function assertProjectionAuditReady(
   const results = await client.batch(statements);
   const cutoverOpen = results[0]?.rows[0]?.value === "true";
   const rebuildRows = results[1]?.rows ?? [];
-  // A checkpoint whose stored definition version is not the running code's projected its rows under
-  // an older definition, so it is not complete however its `state` column reads.
+
   const rebuildComplete =
     target === "track_due_work"
       ? rebuildRows.length === DUE_WORK_BACKFILLS.length &&
@@ -390,16 +388,6 @@ async function assertProjectionAuditReady(
   }
 }
 
-/**
- * The synthetic catalogue-rank corpus marker's age, or null when it holds no repair row.
- *
- * That marker is a resumable REBUILD checkpoint wearing a source-marker row, not fan-out debt: it
- * clears only when a whole rank generation completes against a corpus proven unchanged, and any
- * corpus mutation restarts the generation from page zero. Its age therefore measures how long the
- * rank rebuild has been running, never whether ordinary markers are draining, so it is reported
- * under its own name and kept out of {@link oldestOutstandingMarkerAge}. Reporting it separately
- * rather than dropping it is what keeps a rank rebuild that genuinely stalls visible.
- */
 function catalogueRankMarkerAge(rows: readonly unknown[], now: number): number | null {
   for (const row of rows as { created_at: unknown; subject_id: unknown }[]) {
     if (row.subject_id !== DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID) {
@@ -436,8 +424,7 @@ function trackFamilyStatus(
         work_kind: string;
       }[]
     | undefined;
-  // A checkpoint that says `complete` under an older definition version has not projected today's
-  // `sort_key`s, so it counts as outstanding rebuild work here too.
+
   const completed =
     rows?.filter((row) => row.state === "complete" && trackCheckpointDefinitionCurrent(row))
       .length ?? 0;
@@ -544,7 +531,6 @@ function crawlFamilyStatus(
   };
 }
 
-/** Read aggregate operational metadata only; no source rows or identifiers leave this function. */
 export async function getProjectionStatusFor(client: ProjectionClient): Promise<ProjectionStatus> {
   const [trackAudit, crawlAudit, aggregateAudit, artistAudit] = await Promise.all([
     readProjectionAuditEvidence(client, "track_due_work"),
@@ -580,8 +566,7 @@ export async function getProjectionStatusFor(client: ProjectionClient): Promise<
     },
     {
       args: [PROJECTION_STATUS_COUNT_LIMIT + 1],
-      // `subject_id` is read only to tell the synthetic catalogue-rank corpus marker apart from
-      // ordinary debt; it is compared against that one constant and never leaves this read.
+
       sql: `select work_kind, subject_id, repair_entered_at as created_at
         from due_work indexed by due_work_repair_idx
         where state = 'repair' order by subject_type, subject_id limit ?`,
@@ -781,9 +766,7 @@ async function advanceTrackRebuild(client: ProjectionClient, limit: number, rest
       sql: `select state, definition_version from due_work_rebuilds
         where work_kind = ? and subject_type = ?`,
     });
-    // A complete checkpoint is skipped only while it is complete UNDER TODAY'S DEFINITION. When an
-    // order or eligibility change moved the version, this step falls through and `startDueWorkRebuild`
-    // opens a fresh generation for it — no audit, no cutover flip, no operator ceremony.
+
     const row = checkpoint.rows[0];
     if (row?.state === "complete" && row.definition_version === definition.definitionVersion) {
       continue;
@@ -799,19 +782,6 @@ async function advanceTrackRebuild(client: ProjectionClient, limit: number, rest
 
 type StaleRebuildOutcome = { complete: boolean; rowsWalked: number; staleFamilies: number };
 
-/**
- * The self-driving half of the definition version.
- *
- * `--action rebuild` is operator-only and no cron runs it, so a mechanism that waited for a human
- * to walk 41 families would be the ceremony the definition version exists to remove. This runs on
- * the agent-eligible REPAIR path instead, and only ever for a family whose stored definition
- * version is not the running code's — which `startDueWorkRebuild`'s own conditional upsert enforces
- * in SQL, not merely here: a complete family on today's definition cannot be restarted by this path
- * at all, because the `where ? = 1 or definition_version is not ?` clause is false for it.
- *
- * Oldest-stale-first, one bounded page per call, and only with the budget ordinary repair left
- * behind, so the walk paces itself across ticks and can never starve the repair it follows.
- */
 async function staleTrackRebuildDefinitions(client: ProjectionClient) {
   const checkpoints = await client.execute(
     `select work_kind, subject_type, definition_version, state, updated_at from due_work_rebuilds`,
@@ -830,13 +800,9 @@ async function staleTrackRebuildDefinitions(client: ProjectionClient) {
   }))
     .filter(({ definition, row }) => {
       if (row === undefined || row.definition_version !== definition.definitionVersion) {
-        // Never built, or built under an older definition: this walk's whole reason to exist.
         return true;
       }
-      // A generation this walk opened writes today's version immediately, so it has to be able to
-      // FINISH a running checkpoint or it would strand every family at page one. The exception is a
-      // family that resolves its own generation (catalogue-rank, off the ranking corpus): its own
-      // driver inside repair owns that walk, and two drivers on one checkpoint double-count it.
+
       return row.state !== "complete" && definition.resolveGeneration === undefined;
     })
     .sort((left, right) => {
@@ -910,8 +876,7 @@ async function advanceTrackRepair(client: ProjectionClient, limit: number) {
     });
     processed += result.scanned;
   }
-  // One read answers both the whole-queue convergence flag and the track source-marker state that
-  // every track reader's guard waits for; a missing row reads as outstanding work.
+
   const convergence = await client.execute(
     `select exists (select 1 from due_work indexed by due_work_repair_idx
         where state = 'repair') as repair_debt,
@@ -1651,19 +1616,12 @@ async function recoverPublicAnchorState(
     if (await currentAnchorDocumentMatches(client, projectionState)) {
       return { complete: true, processed: 0 };
     }
-    // A validity row cannot make leftover or malformed shards usable. Clear the rejected
-    // document in bounded pages before another build can publish into the same namespace.
+
     return restartMalformedAnchorBuild(client, generation, limit, published, persistedValue);
   }
   return undefined;
 }
 
-/**
- * Page-local maintenance: when the order epoch moved past the document, consume the order-change
- * ledger against the published document of the current generation or against the built prefix of
- * an in-flight build. Returns undefined whenever the ledger cannot carry the document to the
- * current epoch, so the caller's existing recovery decides between resuming and rebuilding.
- */
 async function amendPublicAnchorsFromLedger(
   client: ProjectionClient,
   options: {
@@ -1866,8 +1824,7 @@ export async function advancePublicAnchors(
   const shardClauseHash = `${TRACKS_HUB_ANCHOR_ADDRESS.clauseHash}:${generation}:${String(
     state.shard,
   ).padStart(10, "0")}`;
-  // The shard is a self-describing run: its fingerprint carries the row it starts behind, its row
-  // counts, and its base position, so later page-local maintenance can amend it in place.
+
   const leafMeta = serializeHubAnchorLeafMeta({
     after: leafAfter,
     base: leafBase,
@@ -1900,8 +1857,7 @@ export async function advancePublicAnchors(
         select ?, ? where ${PUBLIC_ANCHOR_SOURCE_READY_SQL}
         on conflict(key) do update set value = excluded.value`,
     };
-    // Every walked run is written, boundary rows or not, so the runs cover the whole order. A fresh
-    // build represents every order change at or below its epoch, so the ledger up to it is spent.
+
     await client.batch(
       freshBuild
         ? [shardStatement, stateStatement, purgeAnchorOrderChangesStatement(orderEpoch)]
@@ -2024,12 +1980,12 @@ type ProjectionAdvanceInput = {
 type ProjectionAdvanceOutcome = {
   complete: boolean;
   processed: number;
-  /** Due-work repair only: source rows the stale-definition rebuild walk covered this step. */
+
   rebuildRowsWalked?: number;
-  /** Due-work repair only: families still carrying an older definition version after this step. */
+
   rebuildStaleFamilies?: number;
   scheduled: number;
-  // Track repair only: whether an ordinary track source marker still awaits fanout.
+
   trackSourceMarkersPending?: boolean;
 };
 
@@ -2051,7 +2007,6 @@ async function advanceAuditProjection(
   };
 }
 
-/** One request advances one fixed target through one explicitly bounded mutation page. */
 export function advanceProjectionFor(
   client: ProjectionClient,
   input: ProjectionAdvanceInput & { includeStatus: false },
@@ -2089,7 +2044,7 @@ export async function advanceProjectionFor(
       outcome = await advanceTrackRebuild(client, input.limit, previousAudit?.complete === true);
     } else {
       const repair = await advanceTrackRepair(client, input.limit);
-      // Repair has first claim on the page; the stale-definition walk spends what it left.
+
       const rebuild = await advanceStaleTrackRebuild(
         client,
         Math.max(0, input.limit - repair.processed),
@@ -2112,10 +2067,6 @@ export async function advanceProjectionFor(
       });
       outcome = { complete: result.complete, processed: result.scanned, scheduled: 0 };
     } else {
-      // `processed` counts the markers this step CLEARED as well as the rows it fanned out: a
-      // marker whose rows a re-arm already moved to `repair` expands nothing, and a step that
-      // reports only `expanded` reads as `no_progress` to the maintenance sweep while it is in
-      // fact draining the queue. `scheduled` stays the rows, which is what it names.
       const fanout = await fanOutCrawlProjectionRepairs(client, { limit: input.limit });
       if (!fanout.complete || fanout.expanded > 0) {
         outcome = {
@@ -2125,8 +2076,7 @@ export async function advanceProjectionFor(
         };
       } else {
         const repair = await repairCrawlDueNodes(client, { limit: input.limit });
-        // Same contract as the track family: repair first, then the stale-definition walk on
-        // whatever page budget repair did not spend.
+
         const rebuild = await advanceStaleCrawlRebuild(
           client,
           Math.max(0, input.limit - repair.scanned),
@@ -2387,7 +2337,6 @@ function openCutoverStatement(target: ProjectionCutover) {
   };
 }
 
-/** Opening fails closed on current convergence; closing is always available as the rollback rail. */
 export async function setProjectionCutoverFor(
   client: ProjectionClient,
   input: { enabled: boolean; target: ProjectionCutover },

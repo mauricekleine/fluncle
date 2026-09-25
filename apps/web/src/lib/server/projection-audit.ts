@@ -318,7 +318,6 @@ export async function clearProjectionAuditEvidence(
   });
 }
 
-/** The exact due-work audit tuple, with wall-clock-ready rows made time-stable. */
 export function canonicalDueProjection(
   row: {
     nextDueAt: string;
@@ -529,7 +528,6 @@ async function advancePublicAudit(
   return page.scanned;
 }
 
-/** Advance exactly one persisted audit lane page. No source identifiers are returned. */
 export async function advanceProjectionAudit(
   client: ProjectionAuditClient,
   target: ProjectionAuditTarget,

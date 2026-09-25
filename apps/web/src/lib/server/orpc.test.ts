@@ -2,19 +2,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SENTRY_RELEASE } from "../sentry-config";
 import { get, MIXTAPE, readJson, TRACK, warmOrpcRouter } from "./orpc-test-kit";
 
-// The proof route + the rails seam. `resolveLogPageTarget` is mocked — the
-// handler's job is to shape the contract response and the 404, not to touch
-// Turso. These assertions pin the behavior the live /api/tracks/{idOrLogId}
-// route had, now served by oRPC.
 const resolveLogPageTarget = vi.fn();
 
 vi.mock("./log-resolver", () => ({
   resolveLogPageTarget: (...args: unknown[]) => resolveLogPageTarget(...args),
 }));
 
-// The tracks server module backs the `list_findings` feed + `get_random_track` reads.
-// `decodeTrackCursor` is the real implementation re-exported so the handler's
-// cursor decode behaves exactly as production; the data fetchers are mocked.
 const listTracks = vi.fn();
 const getRandomTrack = vi.fn();
 const getRandomRadioTrack = vi.fn();
@@ -38,9 +31,6 @@ vi.mock("./tracks", async (importOriginal) => {
   };
 });
 
-// The reborn `list_tracks` enumerator reads the `/tracks` hub. `listTracksHubPage`
-// is mocked so the handler never touches Turso; `toCatalogueTrackListItem` (the lean
-// mapper) stays real so the wire shape is exercised end to end.
 const listTracksHubPage = vi.fn();
 
 vi.mock("./tracks-hub", async (importOriginal) => {
@@ -52,10 +42,6 @@ vi.mock("./tracks-hub", async (importOriginal) => {
   };
 });
 
-// The radio ops gate the finding's galaxy behind the browse-by-feel launch gate
-// (nothing public renders a galaxy until the whole map is named). Mocked so the
-// radio reads never touch Turso; defaults to a fully-named map (galaxy passes
-// through) and a gate test below flips it closed.
 const isGalaxyMapFullyNamed = vi.fn();
 
 vi.mock("./galaxies-map", async (importOriginal) => {
@@ -94,8 +80,6 @@ describe("oRPC rails — handleOrpc", () => {
   it("falls through (null) for an /api route with no contract yet", async () => {
     const { handleOrpc } = await import("./orpc");
 
-    // /me/profile is the private (`/me`) tier — Wave B, not converted yet — so
-    // oRPC must not claim it; it falls through to TanStack.
     expect(await handleOrpc(get("https://www.fluncle.com/api/v1/me/profile"))).toBeNull();
   });
 });
@@ -117,8 +101,7 @@ describe("oRPC proof route — GET /tracks/{idOrLogId} (get_track)", () => {
     resolveLogPageTarget.mockResolvedValueOnce({ kind: "track", track: TRACK });
 
     const { handleOrpc } = await import("./orpc");
-    // Only `/api/v1` is oRPC's, for every op and method: the prefix gate runs before routing, so
-    // a bare `/api/*` request falls through to TanStack (null) and never reaches a procedure.
+
     expect(await handleOrpc(get("https://www.fluncle.com/api/tracks/abc"))).toBeNull();
     expect(resolveLogPageTarget).not.toHaveBeenCalled();
   });
@@ -140,8 +123,7 @@ describe("oRPC proof route — GET /tracks/{idOrLogId} (get_track)", () => {
     const response = await handleOrpc(get("https://www.fluncle.com/api/v1/tracks/nope"));
 
     expect(response?.status).toBe(404);
-    // Byte-shape parity with trackNotFoundResponse → jsonError(404, "not_found", …):
-    // `{ code: "not_found", message: <string>, ok: false }`, nothing else.
+
     expect(await readJson(response)).toEqual({
       code: "not_found",
       message: expect.any(String),
@@ -157,7 +139,7 @@ describe("oRPC proof route — GET /tracks/{idOrLogId} (get_track)", () => {
     const response = await handleOrpc(get("https://www.fluncle.com/api/v1/tracks/abc"));
 
     expect(response?.status).toBe(500);
-    // The unexpected-fault arm answers generically → jsonError(500, "error", "Internal error").
+
     const body = await readJson(response);
     expect(body).toEqual({ code: "error", message: "Internal error", ok: false });
     expect(JSON.stringify(body)).not.toContain("turso fell over");
@@ -166,10 +148,6 @@ describe("oRPC proof route — GET /tracks/{idOrLogId} (get_track)", () => {
 });
 
 describe("oRPC public read — GET /health (get_health)", () => {
-  // `sha` = the deployed commit, sourced from the SAME build-time constant Sentry
-  // uses (SENTRY_RELEASE), so health and Sentry can never disagree. Asserting
-  // against that constant keeps the expectation coupled to the one source rather
-  // than a hardcoded value: `null` when the build resolved no SHA, else the string.
   const expectedSha = SENTRY_RELEASE ?? null;
 
   it("serves { ok: true, sha } with Cache-Control: no-store", async () => {
@@ -226,7 +204,6 @@ describe("oRPC public read — GET /findings (list_findings)", () => {
     await handleOrpc(get(`https://www.fluncle.com/api/v1/findings?limit=100&cursor=${cursor}`));
 
     expect(listTracks).toHaveBeenCalledWith({
-      // A cursor is present (page 2+) → skip the redundant archive count(*).
       countTotal: false,
       cursor: { addedAt: "2026-01-01T00:00:00.000Z", trackId: "abc" },
       includeMixtapes: true,
@@ -274,11 +251,6 @@ describe("oRPC public read — GET /findings (list_findings)", () => {
   });
 
   it("skips the archive count on cursor pages, keeps it on page 1 (the redundant-scan fix)", async () => {
-    // The total is invariant across a scroll, so only page 1 (no cursor) pays for the
-    // `count(*)`. A cursor request — every "load more" — passes `countTotal: false`, so
-    // the growing findings⋈tracks scan runs once per feed load, not once per page. The
-    // home feed and the CLI `recent` pager both read the total off page 1, so no consumer
-    // reads the skipped cursor-page total.
     const { encodeTrackCursor } = await import("./tracks");
     const cursor = encodeTrackCursor({ addedAt: "2026-01-01T00:00:00.000Z", trackId: "abc" });
     const { handleOrpc } = await import("./orpc");
@@ -293,7 +265,6 @@ describe("oRPC public read — GET /findings (list_findings)", () => {
   });
 
   it("STRIPS the private sourceAudioKey from a captured finding before it world-serves", async () => {
-    // The admin capture-queue read surfaces the private R2 key; the PUBLIC feed must not.
     const captured = { ...TRACK, sourceAudioKey: "004.7.2I/abc123.m4a", trackId: "captured" };
     listTracks.mockResolvedValueOnce({ totalCount: 1, tracks: [captured] });
 
@@ -303,13 +274,12 @@ describe("oRPC public read — GET /findings (list_findings)", () => {
     expect(response?.status).toBe(200);
     const body = (await readJson(response)) as { tracks: Array<Record<string, unknown>> };
     expect(body.tracks[0]).not.toHaveProperty("sourceAudioKey");
-    // The rest of the finding survives — only the private key is removed.
+
     expect(body.tracks[0]?.trackId).toBe("captured");
   });
 });
 
 describe("oRPC public read — GET /tracks (list_tracks, the reborn enumerator)", () => {
-  // One certified hub entry — the real `toCatalogueTrackListItem` mapper flattens it.
   const FINDING_ENTRY = {
     artistLinks: [],
     finding: { ...TRACK, artistAvatarUrl: undefined, logId: "012.8.0A" },
@@ -336,17 +306,16 @@ describe("oRPC public read — GET /tracks (list_tracks, the reborn enumerator)"
     expect(body.page).toBe(1);
     expect(body.pageCount).toBe(3);
     expect(body.total).toBe(120);
-    // The lean row carries the finding's identity + coordinate, and NOTHING heavy.
+
     expect(body.tracks[0]?.certified).toBe(true);
     expect(body.tracks[0]?.title).toBe(TRACK.title);
     expect(body.tracks[0]?.logId).toBe("012.8.0A");
-    // The row is REACHABLE: it names the recording's permanent id and the page the web hub row
-    // links to — a finding's is its /log page, never a second URL (docs/track-destination.md).
+
     expect(body.tracks[0]?.trackId).toBe(TRACK.trackId);
     expect(body.tracks[0]?.url).toBe("https://www.fluncle.com/log/012.8.0A");
     expect(body.tracks[0]).not.toHaveProperty("note");
     expect(body.tracks[0]).not.toHaveProperty("sourceAudioKey");
-    // Page 1, no certified filter (both registers).
+
     expect(listTracksHubPage).toHaveBeenCalledWith({ certified: undefined }, 1);
   });
 
@@ -367,8 +336,7 @@ describe("oRPC public read — GET /tracks (list_tracks, the reborn enumerator)"
             trackId: "mb_quiet",
           },
         },
-        // No artist credit: the destination would refuse this row, so the row carries no url —
-        // the same `hasTrackPageIdentity` decision the web hub row makes before linking.
+
         {
           artistLinks: [],
           kind: "catalogue" as const,
@@ -400,7 +368,7 @@ describe("oRPC public read — GET /tracks (list_tracks, the reborn enumerator)"
       trackId: "mb_quiet",
       url: "https://www.fluncle.com/track/mb_quiet",
     });
-    // The Unlit Rule holds in the row: no coordinate, no cover.
+
     expect(body.tracks[0]).not.toHaveProperty("logId");
     expect(body.tracks[0]).not.toHaveProperty("coverImageUrl");
     expect(body.tracks[1]).toMatchObject({ certified: false, trackId: "mb_nameless" });
@@ -445,8 +413,6 @@ describe("oRPC public read — GET /tracks (list_tracks, the reborn enumerator)"
 
 describe("oRPC public read — GET /stories (list_stories)", () => {
   it("STRIPS the private sourceAudioKey from every story before it world-serves", async () => {
-    // Stories are the `hasVideo` findings — exactly the ones most likely captured — so the
-    // lean projection's `sourceAudioKey` must be stripped like the `list_findings` feed's.
     const captured = { ...TRACK, sourceAudioKey: "004.7.2I/abc123.m4a", trackId: "captured" };
     listTracks.mockResolvedValueOnce({ totalCount: 1, tracks: [captured] });
 
@@ -457,7 +423,7 @@ describe("oRPC public read — GET /stories (list_stories)", () => {
     const body = (await readJson(response)) as { tracks: Array<Record<string, unknown>> };
     expect(body.tracks[0]).not.toHaveProperty("sourceAudioKey");
     expect(body.tracks[0]?.trackId).toBe("captured");
-    // The story feed reads the `hasVideo` slice, lean.
+
     expect(listTracks).toHaveBeenCalledWith({
       cursor: undefined,
       hasVideo: true,
@@ -497,8 +463,7 @@ describe("oRPC public read — GET /tracks/random (get_random_track)", () => {
     const response = await handleOrpc(get("https://www.fluncle.com/api/v1/tracks/random"));
 
     expect(response?.status).toBe(404);
-    // Parity with the live route's hand-rolled 404 body — code is the custom
-    // `track_not_found`, NOT the rails' generic `not_found` mapping.
+
     expect(await readJson(response)).toEqual({
       code: "track_not_found",
       message: "No tracks found",
@@ -516,15 +481,12 @@ describe("oRPC public read — GET /radio/random (get_random_radio_track)", () =
 
     expect(response?.status).toBe(200);
     expect(await readJson(response)).toEqual({ ok: true, track: TRACK });
-    // The radio op reads ONLY the eligibility-filtered query — never the unfiltered
-    // random read, so an un-squared / observation-less track can never reach it.
+
     expect(getRandomRadioTrack).toHaveBeenCalledTimes(1);
     expect(getRandomTrack).not.toHaveBeenCalled();
   });
 
   it("STRIPS the private sourceAudioKey from the served track", async () => {
-    // The radio hydrates from the FAT DTO, which carries the private capture key — the
-    // public read must strip it just like the tracks feed does.
     getRandomRadioTrack.mockResolvedValueOnce({ ...TRACK, sourceAudioKey: "004.7.2I/abc123.m4a" });
 
     const { handleOrpc } = await import("./orpc");
@@ -561,7 +523,7 @@ describe("oRPC public read — GET /radio/now-playing (get_radio_now_playing)", 
       { logId: "002.1.1B", observationDurationMs: 30_000, trackId: "track-b" },
     ]);
     getRadioScheduleFingerprint.mockResolvedValueOnce("2:2026-06-10T00:00:00.000Z");
-    // Anchor at "now − 5s" so the modulo lands 5s into the first segment.
+
     getRadioScheduleAnchor.mockResolvedValueOnce({
       epochMs: Date.now() - 5_000,
       version: "2:2026-06-10T00:00:00.000Z",
@@ -594,14 +556,14 @@ describe("oRPC public read — GET /radio/now-playing (get_radio_now_playing)", 
     expect(body.ok).toBe(true);
     expect(body.nowPlaying.currentTrack.trackId).toBe("track-a");
     expect(body.nowPlaying.nextTrack?.trackId).toBe("track-b");
-    // 5s into the 20s first segment, within a coarse tolerance for the Date.now()s.
+
     expect(body.nowPlaying.offsetMs).toBeGreaterThanOrEqual(4_000);
     expect(body.nowPlaying.offsetMs).toBeLessThanOrEqual(6_000);
     expect(body.nowPlaying.totalLoopDurationMs).toBe(50_000);
     expect(body.nowPlaying.trackCount).toBe(2);
     expect(body.nowPlaying.scheduleVersion).toBe("2:2026-06-10T00:00:00.000Z");
     expect(typeof body.nowPlaying.serverEpochMs).toBe("number");
-    // The now-playing read never falls through to the random read.
+
     expect(getRandomRadioTrack).not.toHaveBeenCalled();
   });
 
@@ -643,7 +605,7 @@ describe("oRPC public read — GET /radio/now-playing (get_radio_now_playing)", 
     ]);
     getRadioScheduleFingerprint.mockResolvedValueOnce("2:s");
     getRadioScheduleAnchor.mockResolvedValueOnce({ epochMs: Date.now() - 5_000, version: "2:s" });
-    // Both slots hydrate from the FAT DTO carrying the private capture key.
+
     getTrackByIdOrLogId.mockImplementation(async (id: string) =>
       id === "track-a"
         ? { ...CURRENT, sourceAudioKey: "001.1.1A/aaa.m4a" }
@@ -674,7 +636,7 @@ describe("oRPC public read — GET /radio/now-playing (get_radio_now_playing)", 
     getRadioScheduleFingerprint.mockResolvedValueOnce("1:g");
     getRadioScheduleAnchor.mockResolvedValueOnce({ epochMs: Date.now(), version: "1:g" });
     getTrackByIdOrLogId.mockResolvedValue(PLACED);
-    // The map is only partially named — the gate is closed.
+
     isGalaxyMapFullyNamed.mockReset();
     isGalaxyMapFullyNamed.mockResolvedValue(false);
 
@@ -685,7 +647,7 @@ describe("oRPC public read — GET /radio/now-playing (get_radio_now_playing)", 
     const body = (await response?.json()) as {
       nowPlaying: { currentTrack: { galaxy?: unknown; trackId: string } };
     };
-    // The finding still serves; only its galaxy is dark until the lens ships.
+
     expect(body.nowPlaying.currentTrack.trackId).toBe("track-a");
     expect(body.nowPlaying.currentTrack.galaxy).toBeUndefined();
   });
@@ -698,7 +660,7 @@ describe("oRPC public read — GET /radio/now-playing (get_radio_now_playing)", 
     getRadioScheduleFingerprint.mockResolvedValueOnce("1:h");
     getRadioScheduleAnchor.mockResolvedValueOnce({ epochMs: Date.now(), version: "1:h" });
     getTrackByIdOrLogId.mockResolvedValue(PLACED);
-    // Default beforeEach state is fully-named, but pin it for the record.
+
     isGalaxyMapFullyNamed.mockResolvedValue(true);
 
     const { handleOrpc } = await import("./orpc");
@@ -711,9 +673,6 @@ describe("oRPC public read — GET /radio/now-playing (get_radio_now_playing)", 
   });
 });
 
-// The generated PUBLIC OpenAPI document — the spec served at /api/v1/openapi.json
-// (Scalar + Postman read it). The load-bearing constraint: it carries EVERY public op and
-// ZERO admin ops — admin stays OFF the public spec.
 type ErrorSchema = {
   type?: string;
   additionalProperties?: boolean;
@@ -734,29 +693,24 @@ type GeneratedSpec = {
   paths: Record<string, Record<string, Operation>>;
 };
 
-// Every public op's operationId (the camelCase projection of its verb_noun key),
-// derived from the same registry the public coverage net is drawn over. The
-// generated public spec must contain exactly these — no more (no admin leak), no
-// fewer (no dropped public op).
 const PUBLIC_OPERATION_IDS = [
   "collectPrivateGalaxyLog",
   "deletePrivateAccount",
-  // The recommendation-seed domain (docs/the-ear.md § The per-user telescopes).
+
   "deletePrivateRecSeed",
   "deletePrivateSavedSet",
   "deletePrivateWatch",
   "deregisterDevice",
   "exportPrivateAccountData",
-  // Catalogue entity reads — public, no auth. list ops are catalogue-scoped + paginated.
+
   "getAlbum",
-  // Artist reads — public, no auth required (Unit 4 of the artist-relationship RFC).
+
   "getArtist",
   "getCurrentPrivateUser",
   "getEdition",
-  // Galaxy reads — public, no auth (browse-by-feel RFC).
+
   "getGalaxy",
-  // The GraphLink hover card's preview read — public, no auth (it carries only what the
-  // entity's own public page already prints).
+
   "getGraphPreview",
   "getHealth",
   "getLabel",
@@ -774,7 +728,7 @@ const PUBLIC_OPERATION_IDS = [
   "listAlbums",
   "listArtists",
   "listEditions",
-  // The found-order FEED (findings + published mixtapes) and the sonic "more like this" row.
+
   "listFindings",
   "listSimilarTracks",
   "listGalaxies",
@@ -783,7 +737,7 @@ const PUBLIC_OPERATION_IDS = [
   "listMixableArtists",
   "listMixableTracks",
   "listMixtapes",
-  // The public /reach read — Fluncle's numbers across every platform, over time.
+
   "listPlatformStats",
   "listPrivateFrontierEditions",
   "listPrivateGalaxyCollection",
@@ -793,13 +747,9 @@ const PUBLIC_OPERATION_IDS = [
   "listPrivateSavedSets",
   "listPrivateSubmissions",
   "listPrivateWatches",
-  // The multi-artist "sounds like these" sonic read — public, no auth (the /artists compare).
+
   "listSimilarArtists",
-  // Hydrate a whole shared `?set=` chain in one read — the public twin of the web /mix loader's
-  // server-only getMixTracksByTokens, so a saved set opens whole on mobile (uncertified tokens
-  // included). Public-unauth like the other /mix reads.
-  // The fresh-releases operation, GET /api/v1/tracks/fresh, is public by design — the
-  // The public fresh-releases operation is pinned here so every public op remains in the spec.
+
   "listFresh",
   "listSetTracks",
   "listStories",
@@ -846,12 +796,10 @@ describe("oRPC OpenAPI generation — the public spec (the flip)", () => {
     const document = (await generateOpenApiDocument()) as GeneratedSpec;
 
     expect(document.openapi).toMatch(/^3\.1/);
-    // Contract values stay exact (the version + server URL are the API's identity).
+
     expect(document.info.version).toBe("1.0.0");
     expect(document.servers?.[0]?.url).toBe("https://www.fluncle.com/api/v1");
-    // The marketing prose (title/summary/description) is relaxed to presence checks
-    // so a harmless copy edit doesn't break the spec test — it just has to be there
-    // and mention Fluncle.
+
     expect(document.info.title).toContain("Fluncle");
     expect(typeof document.info.summary).toBe("string");
     expect((document.info.summary ?? "").length).toBeGreaterThan(0);
@@ -869,7 +817,6 @@ describe("oRPC OpenAPI generation — the public spec (the flip)", () => {
       );
     }
 
-    // The proof route is still wired (regression guard).
     expect(document.paths["/tracks/{idOrLogId}"]?.get?.operationId).toBe("getTrack");
   });
 
@@ -878,13 +825,11 @@ describe("oRPC OpenAPI generation — the public spec (the flip)", () => {
     const document = (await generateOpenApiDocument()) as GeneratedSpec;
     const { ids, paths } = collectOperationIds(document);
 
-    // No path under the admin tier.
     const adminPaths = paths.filter((path) => path === "/admin" || path.startsWith("/admin/"));
     expect(adminPaths, `admin paths leaked onto the public spec: ${adminPaths.join(", ")}`).toEqual(
       [],
     );
 
-    // And the op set is EXACTLY the public surface — nothing extra, nothing missing.
     expect(new Set(ids)).toEqual(new Set(PUBLIC_OPERATION_IDS));
   });
 
@@ -892,10 +837,6 @@ describe("oRPC OpenAPI generation — the public spec (the flip)", () => {
     const { generateOpenApiDocument } = await import("./orpc");
     const document = (await generateOpenApiDocument()) as GeneratedSpec;
 
-    // The shared fault component MUST mirror the rails encoder (orpc.ts
-    // `encodeErrorBody` → env.ts `jsonError`) exactly: a string `code`, a string
-    // `message`, and `ok` pinned to the literal `false`, with nothing else — so the
-    // spec never claims a field the wire doesn't carry.
     const error = document.components?.schemas?.Error;
     expect(error).toBeDefined();
     expect(error?.type).toBe("object");
@@ -911,8 +852,6 @@ describe("oRPC OpenAPI generation — the public spec (the flip)", () => {
     const { generateOpenApiDocument } = await import("./orpc");
     const document = (await generateOpenApiDocument()) as GeneratedSpec;
 
-    // A sampled GET read, a POST write, and the proof route — each must carry the
-    // shared fault as its `default` response, $ref-ing the one Error component.
     const sampled: [path: string, method: string][] = [
       ["/tracks/{idOrLogId}", "get"],
       ["/tracks", "get"],
@@ -931,8 +870,6 @@ describe("oRPC OpenAPI generation — the public spec (the flip)", () => {
       );
     }
 
-    // And EVERY public operation carries it — no op is documented without its fault
-    // shape, and the success responses are left intact alongside it.
     for (const item of Object.values(document.paths)) {
       for (const operation of Object.values(item)) {
         if (operation.operationId === undefined) {
@@ -943,7 +880,7 @@ describe("oRPC OpenAPI generation — the public spec (the flip)", () => {
           responses.default?.content?.["application/json"]?.schema?.$ref,
           `op "${operation.operationId}" is missing the default Error response`,
         ).toBe("#/components/schemas/Error");
-        // The success response(s) survive — `default` is additive, not a replacement.
+
         const nonDefault = Object.keys(responses).filter((status) => status !== "default");
         expect(
           nonDefault.length,

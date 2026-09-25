@@ -3,9 +3,6 @@ import { apiUrl, get, readJson, warmOrpcRouter } from "./orpc-test-kit";
 
 const assertRateLimit = vi.fn<(options: unknown) => Promise<void>>();
 
-// The shared limiter's atomic DB behavior has focused coverage in
-// rate-limit.test.ts. This suite exercises the contract-bound handler and its
-// Platform API boundary, so the app database is honestly absent.
 vi.mock("./rate-limit", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./rate-limit")>();
 

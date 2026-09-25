@@ -11,18 +11,10 @@ import {
 import { getSetting } from "./settings";
 import { upcomingAfterTodaySql } from "./release-day";
 
-/** The public aggregate/artist reader flag. Only the exact string `true` opens the cutover. */
 export const PUBLIC_PROJECTION_CUTOVER_ENABLED_KEY = "public_projection_cutover_enabled";
 
-/** The schema version written beside a published default-hub anchor document. */
 export const PUBLIC_ANCHOR_FORMAT_VERSION = 1;
 
-/**
- * The order-change ledger: one `settings` row per release-hub order epoch a subject-level public
- * repair produced, keyed by the zero-padded epoch so the range read walks the primary key in epoch
- * order. Anchor maintenance consumes the ledger to amend the current document page-locally; an
- * epoch without a ledger row is an unrepresented order change and forces the full rebuild.
- */
 export const PUBLIC_ANCHOR_ORDER_CHANGE_PREFIX = "projection_public_anchor_order_change_v1:";
 
 export const PUBLIC_ANCHOR_ORDER_CHANGE_EPOCH_WIDTH = 12;
@@ -36,15 +28,12 @@ export function publicAnchorOrderChangeKey(epoch: number): string {
 
 export type PublicAnchorOrderChange = {
   epoch: number;
-  /** The subject's release date before the change; meaningful for `delete` and `move`. */
+
   from: null | string;
   id: string;
-  /**
-   * `insert`/`delete`/`move` name the run(s) whose row set changed; `noop` recorded an epoch bump
-   * with no membership change; `unknown` could not recover the old position and is unamendable.
-   */
+
   kind: "delete" | "insert" | "move" | "noop" | "unknown";
-  /** The subject's release date after the change; meaningful for `insert` and `move`. */
+
   to: null | string;
 };
 
@@ -103,7 +92,6 @@ export type ProjectedTrackHubAnchors = {
   total: number;
 };
 
-/** Missing, malformed, or unreadable settings always retain the authoritative legacy reads. */
 export async function isPublicProjectionCutoverEnabled(): Promise<boolean> {
   try {
     return (await getSetting(PUBLIC_PROJECTION_CUTOVER_ENABLED_KEY)) === "true";
@@ -112,7 +100,6 @@ export async function isPublicProjectionCutoverEnabled(): Promise<boolean> {
   }
 }
 
-/** Client-injected form used by projection readers and real-libSQL integration tests. */
 export async function isPublicProjectionCutoverEnabledFor(
   client: PublicProjectionReadClient,
 ): Promise<boolean> {
@@ -202,7 +189,6 @@ const ARTIST_READY = `artist_state.state = 'complete'
     where projection = 'artist_qualification'
   )`;
 
-/** Return the projected whole-archive total only when its complete clean-through proof is usable. */
 export async function readProjectedDefaultTrackTotal(
   client: PublicProjectionReadClient,
 ): Promise<number | undefined> {
@@ -221,7 +207,6 @@ export async function readProjectedDefaultTrackTotal(
   }
 }
 
-/** Read one exact literal bucket family, retaining an empty usable projection as an empty array. */
 export async function readProjectedAggregateBuckets(
   client: PublicProjectionReadClient,
   kind: "key" | "release_date_bucket",
@@ -269,7 +254,6 @@ export async function readProjectedAggregateBuckets(
   }
 }
 
-/** Read the exact projected qualified set, or run the caller's unchanged legacy set SQL. */
 export async function readQualifiedArtistIds(
   client: PublicProjectionReadClient,
   legacyQualifiedArtistsSql: string,
@@ -296,9 +280,7 @@ export async function readQualifiedArtistIds(
         }
         return artistIds;
       }
-    } catch {
-      // The source query below is the compatibility path for every projection read failure.
-    }
+    } catch {}
   }
 
   const legacy = await client.execute(
@@ -307,10 +289,6 @@ export async function readQualifiedArtistIds(
   return legacy.rows.flatMap((row) => (typeof row.artist_id === "string" ? [row.artist_id] : []));
 }
 
-/**
- * Leaf metadata predicates over a `hub_page_anchors` row aliased `shard`. Every JSON call sits
- * behind `json_valid` so a corpus fingerprint from an older shard never raises inside the read.
- */
 export const ANCHOR_LEAF_META_VALID_SQL = `coalesce(case when json_valid(shard.fingerprint) then
   (json_type(shard.fingerprint) = 'object'
     and json_extract(shard.fingerprint, '$.v') = 1
@@ -322,34 +300,29 @@ export const ANCHOR_LEAF_META_VALID_SQL = `coalesce(case when json_valid(shard.f
 export const ANCHOR_LEAF_ROWS_SQL = `case when ${ANCHOR_LEAF_META_VALID_SQL}
   then json_extract(shard.fingerprint, '$.n') end`;
 
-/** The leaf-run summary of one generation, evaluated inside SQL as a single JSON scalar. */
 export const ANCHOR_LEAF_SUMMARY_SQL = `json_object(
   'leaves', count(*),
   'valid', coalesce(sum(case when ${ANCHOR_LEAF_META_VALID_SQL} then 1 else 0 end), 0),
   'covered', coalesce(sum(${ANCHOR_LEAF_ROWS_SQL}), 0))`;
 
-/** The generation-prefixed shard range of the validity row aliased `validity`. */
 export const ANCHOR_SHARD_RANGE_SQL = `shard.hub = validity.hub
   and shard.clause_hash >= validity.clause_hash || ':' || validity.generation || ':'
   and shard.clause_hash < validity.clause_hash || ':' || validity.generation || ':\uffff'`;
 
 export type ProjectedAnchorDocumentHead = {
-  /** Rows the valid leaf runs cover together. */
   covered: number;
   generation: string;
-  /** Shards under the generation prefix. */
+
   leaves: number;
   total: number;
-  /** Shards carrying valid leaf metadata. */
+
   valid: number;
 };
 
-/** A document whose every shard is a self-describing run. */
 export function isLeafAnchorDocument(head: ProjectedAnchorDocumentHead): boolean {
   return head.leaves > 0 && head.valid === head.leaves;
 }
 
-/** A leaf document is usable when its runs cover exactly the projected total. */
 export function isUsableLeafAnchorDocument(head: ProjectedAnchorDocumentHead): boolean {
   return isLeafAnchorDocument(head) && head.covered === head.total;
 }
@@ -376,10 +349,6 @@ function parseAnchorDocumentHead(row: unknown): ProjectedAnchorDocumentHead | un
   }
 }
 
-/**
- * One snapshot of the current document's identity and shape: the state, repair, address, format,
- * order epoch, and generation predicates plus a bounded leaf summary that never leaves SQL.
- */
 export async function readProjectedAnchorDocumentHead(
   client: PublicProjectionReadClient,
   address: PublicProjectionAnchorAddress,
@@ -401,10 +370,6 @@ export async function readProjectedAnchorDocumentHead(
   return parseAnchorDocumentHead(result.rows[0]);
 }
 
-/**
- * The one run holding the page that starts at absolute position `pageStart`, located by a running
- * prefix count over the generation's leaf metadata. Only that run's row leaves SQL.
- */
 export async function readProjectedAnchorLeafForPageStart(
   client: PublicProjectionReadClient,
   address: PublicProjectionAnchorAddress,
@@ -436,7 +401,6 @@ export async function readProjectedAnchorLeafForPageStart(
 }
 
 export type ProjectedTrackHubPageStart = {
-  /** Undefined when the requested page lies past the projected total. */
   start: HubProjectedPageStart | undefined;
   total: number;
 };
@@ -462,11 +426,6 @@ function pageStartFromAnchors(
   };
 }
 
-/**
- * Resolve where one projected numbered page starts. A leaf document answers from the single run
- * holding the page; an older whole-document format answers from its complete boundary set. Every
- * unusable or failing case returns `undefined` so the caller keeps its legacy source query.
- */
 export async function readProjectedTrackHubPageStart(
   client: PublicProjectionReadClient,
   address: PublicProjectionAnchorAddress,
@@ -523,11 +482,6 @@ export async function readProjectedTrackHubPageStart(
   }
 }
 
-/**
- * Whether the current generation's document is usable, proven inside SQL without concatenating the
- * document: a leaf document proves its run coverage from metadata alone, while an older format
- * still parses whole.
- */
 export async function isCurrentProjectedTrackHubAnchorDocumentUsable(
   client: PublicProjectionReadClient,
   address: PublicProjectionAnchorAddress,
@@ -547,7 +501,6 @@ export async function isCurrentProjectedTrackHubAnchorDocumentUsable(
   }
 }
 
-/** The exact runtime validator without the flag prerequisite, used by the atomic open gate. */
 export async function readCurrentProjectedTrackHubAnchors(
   client: PublicProjectionReadClient,
   address: PublicProjectionAnchorAddress,
@@ -559,11 +512,9 @@ export async function readCurrentProjectedTrackHubAnchors(
 }
 
 export type StoredTrackHubAnchorsForAudit = ProjectedTrackHubAnchors & {
-  /** Whether the stored generation is a leaf document, whose served boundaries need a source walk. */
   leaf: boolean;
 };
 
-/** Shadow-only exact document reader; content and epoch agreement are reported separately. */
 export async function readStoredTrackHubAnchorsForAudit(
   client: PublicProjectionReadClient,
   address: PublicProjectionAnchorAddress,

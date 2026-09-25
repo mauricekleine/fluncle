@@ -1,25 +1,3 @@
-// The /reach store — the server side of the public "how far Fluncle reaches" page.
-// A NOUN-SWAP of `record_health` (status.ts): a daily on-box trigger fires the
-// agent-tier `record_platform_stats` op, the WORKER fetches each platform with the
-// auth it already holds, and one append-only `platform_stats` snapshot row lands per
-// (platform, metric) per day. Two halves, mirroring status.ts:
-//
-//   - WRITE (the box cron): `recordPlatformStats` — run the COLLECTOR (every Tier-1
-//     platform, each isolated best-effort), then insert its rows with ON CONFLICT(id)
-//     DO NOTHING (the idempotent daily snapshot, the record_cost discipline).
-//   - READ (the public page): `listPlatformStats(windowDays)` — per (platform, metric)
-//     the latest value + the bounded series (last N days), grouped in ONE page read.
-//     Bounded + ordered in SQL (the getServiceCheckSamples precedent).
-//
-// THE COLLECTOR is the noun-swap's other half of `record_health`'s per-probe
-// discipline: one fetcher per platform, EACH wrapped so missing configuration and measured-empty
-// results SKIP cleanly while fetch/parse faults become visible failed items; neither case fails the
-// snapshot. Every number collected is already public on its own platform,
-// so `platform_stats` is public-safe by construction.
-//
-// The standardization taxonomy (audience / reach / depth buckets) is deliberately
-// NOT stored here — the rows stay raw and the page slice decides how to group them.
-
 import { getDb, typedRows } from "./db";
 import { type FetchImpl, readOptionalEnv } from "./env";
 import { logEvent } from "./log";
@@ -29,16 +7,10 @@ import { clampSnapshotWindow } from "./snapshot-window";
 import { ApiError, fetchPlaylistFollowerCount } from "./spotify";
 import { getTwitchAccessToken, readTwitchClientId } from "./twitch";
 
-// The injectable fetch — the default is the global `fetch`; the tests pass a fake
-// that routes by URL, so every collector is unit-testable with zero real network. The
-// canonical alias lives in env.ts (a leaf module); re-exported here so its long-standing
-// import site (`./platform-stats`) and the fetcher tests keep working.
 export type { FetchImpl };
 
-/** One measured number a platform fetcher returns (metric name + integer value). */
 export type PlatformMetric = { metric: string; value: number };
 
-/** One row to persist — a (platform, metric) snapshot at `capturedAt`. */
 export type PlatformStatRow = {
   capturedAt: string;
   id: string;
@@ -47,20 +19,16 @@ export type PlatformStatRow = {
   value: number;
 };
 
-/** A platform whose metrics were written in this collect (the metric names written). */
 export type CollectedPlatform = { metrics: string[]; platform: string };
 
-/** A clean non-work outcome: no configuration/connection, or a measured empty result. */
 export type SkippedPlatform = {
   kind: "empty" | "unconfigured";
   platform: string;
   reason: string;
 };
 
-/** A platform whose isolated fetch or parse faulted while the rest of the collect continued. */
 export type FailedPlatform = { platform: string; reason: string };
 
-/** The collector's outcome — the rows to write + the per-platform summary. */
 export type PlatformStatsCollection = {
   collected: CollectedPlatform[];
   failed: FailedPlatform[];
@@ -68,7 +36,6 @@ export type PlatformStatsCollection = {
   skipped: SkippedPlatform[];
 };
 
-/** What `recordPlatformStats` returns: the summary + the count actually written. */
 export type PlatformStatsRecordResult = {
   collected: CollectedPlatform[];
   failed: FailedPlatform[];
@@ -90,12 +57,8 @@ function skipPlatform(kind: SkippedPlatform["kind"], reason: string): never {
   throw new PlatformSkipError(kind, reason);
 }
 
-// A finding's User-Agent — GitHub REQUIRES one, and the others accept it. Fluncle,
-// the curation side-project (mirrors lastfm.ts's USER_AGENT precedent).
 const USER_AGENT = "Fluncle/1.0 (+https://www.fluncle.com)";
 
-// The public handles Fluncle is reachable by, per platform. Public IDENTIFIERS, not
-// secrets — safe to commit (AGENTS.md: a public runtime identifier grants nothing).
 const MIXCLOUD_USER = "fluncle";
 const BLUESKY_ACTOR = "fluncle.com";
 const GITHUB_REPO = "mauricekleine/fluncle";
@@ -104,14 +67,6 @@ const LASTFM_USER = "fluncle";
 const APPSTORE_BUNDLE_ID = "com.fluncle.app";
 const YOUTUBE_HANDLE = "@fluncle";
 
-// ── Parsing helpers ──────────────────────────────────────────────────────────
-
-/**
- * Coerce a platform field into a non-negative integer count, THROWING when it is
- * absent or non-numeric (Last.fm/YouTube return counts as STRINGS; Mixcloud/Telegram
- * as numbers, so both are accepted). A throw here is caught by the collector and
- * turned into an honest failed item, never a stored garbage number.
- */
 export function requireCount(value: unknown, label: string): number {
   const parsed = typeof value === "string" ? Number(value) : value;
 
@@ -122,13 +77,6 @@ export function requireCount(value: unknown, label: string): number {
   return Math.trunc(parsed);
 }
 
-// ── Per-platform collectors (each exported for its unit test) ────────────────
-//
-// Keyless collectors take the injected `fetchImpl` and are pure fetch+parse. The
-// secret/DB-backed ones (lastfm/telegram/youtube read env; spotify/newsletter reuse
-// a helper) read their credential inside and throw a clean reason when unconfigured.
-
-/** Mixcloud — GET api.mixcloud.com/<user> (keyless). */
 export async function collectMixcloud(fetchImpl: FetchImpl): Promise<PlatformMetric[]> {
   const response = await fetchImpl(`https://api.mixcloud.com/${MIXCLOUD_USER}/`);
 
@@ -149,7 +97,6 @@ export async function collectMixcloud(fetchImpl: FetchImpl): Promise<PlatformMet
   ];
 }
 
-/** Bluesky — GET the public AppView getProfile (keyless). */
 export async function collectBluesky(fetchImpl: FetchImpl): Promise<PlatformMetric[]> {
   const response = await fetchImpl(
     `https://public.api.bsky.app/xrpc/app.bsky.actor.getProfile?actor=${encodeURIComponent(BLUESKY_ACTOR)}`,
@@ -167,13 +114,6 @@ export async function collectBluesky(fetchImpl: FetchImpl): Promise<PlatformMetr
   ];
 }
 
-/**
- * GitHub — GET /repos/{owner}/{repo}. Keyless in principle, but the unauthenticated quota is
- * 60 req/hr PER IP and the Worker egresses from Cloudflare's SHARED pool — other tenants
- * exhaust it constantly (day 2's snapshot missed exactly this way). An optional GITHUB_TOKEN
- * (a fine-grained PAT with public-read only — it grants nothing) lifts the quota to 5,000/hr
- * on Fluncle's own bucket; absent, the keyless attempt still runs and may get lucky.
- */
 export async function collectGithub(fetchImpl: FetchImpl): Promise<PlatformMetric[]> {
   const token = await readOptionalEnv("GITHUB_TOKEN");
   const response = await fetchImpl(`https://api.github.com/repos/${GITHUB_REPO}`, {
@@ -195,7 +135,6 @@ export async function collectGithub(fetchImpl: FetchImpl): Promise<PlatformMetri
   ];
 }
 
-/** npm — GET the last-week downloads point (keyless). */
 export async function collectNpm(fetchImpl: FetchImpl): Promise<PlatformMetric[]> {
   const response = await fetchImpl(
     `https://api.npmjs.org/downloads/point/last-week/${NPM_PACKAGE}`,
@@ -210,11 +149,6 @@ export async function collectNpm(fetchImpl: FetchImpl): Promise<PlatformMetric[]
   return [{ metric: "downloads_weekly", value: requireCount(data.downloads, "npm downloads") }];
 }
 
-/**
- * App Store — GET the iTunes lookup by bundle id (keyless). Returns `resultCount: 0`
- * until the app is LIVE, which is an honest skip (the app is pending), NOT an error —
- * so a zero result throws the "not live yet" reason the collector records as a skip.
- */
 export async function collectAppStore(fetchImpl: FetchImpl): Promise<PlatformMetric[]> {
   const response = await fetchImpl(
     `https://itunes.apple.com/lookup?bundleId=${encodeURIComponent(APPSTORE_BUNDLE_ID)}`,
@@ -241,11 +175,6 @@ export async function collectAppStore(fetchImpl: FetchImpl): Promise<PlatformMet
   ];
 }
 
-/**
- * Last.fm — two public reads (only `api_key`, no session/signing): `user.getInfo`
- * → playcount (scrobbles), `user.getLovedTracks` → @attr.total (loved_tracks). Skips
- * cleanly when LASTFM_API_KEY is unset.
- */
 export async function collectLastfm(fetchImpl: FetchImpl): Promise<PlatformMetric[]> {
   const apiKey = await readOptionalEnv("LASTFM_API_KEY");
 
@@ -287,11 +216,6 @@ export async function collectLastfm(fetchImpl: FetchImpl): Promise<PlatformMetri
   ];
 }
 
-/**
- * Telegram — Bot API getChatMemberCount for the channel. Records the RAW count (no
- * −1 for the bot itself; honesty lives in the data, display decisions in the page).
- * Skips cleanly when the bot token / channel id are unset.
- */
 export async function collectTelegram(fetchImpl: FetchImpl): Promise<PlatformMetric[]> {
   const token = await readOptionalEnv("TELEGRAM_BOT_TOKEN");
   const channelId = await readOptionalEnv("TELEGRAM_CHANNEL_ID");
@@ -317,11 +241,6 @@ export async function collectTelegram(fetchImpl: FetchImpl): Promise<PlatformMet
   return [{ metric: "audience", value: requireCount(data.result, "Telegram member count") }];
 }
 
-/**
- * Newsletter — reuse `countSegmentRecipients` (the Resend segment size), the only
- * reach read that already existed. Preflight its two required env values so unconfigured is a clean
- * skip; a null after that preflight is a read fault, not a counterfeit unconfigured outcome.
- */
 export async function collectNewsletter(): Promise<PlatformMetric[]> {
   const [apiKey, segmentId] = await Promise.all([
     readOptionalEnv("RESEND_API_KEY"),
@@ -341,11 +260,6 @@ export async function collectNewsletter(): Promise<PlatformMetric[]> {
   return [{ metric: "audience", value: requireCount(count, "newsletter recipient count") }];
 }
 
-/**
- * Spotify — the playlist's saved/follower count (`fetchPlaylistFollowerCount`, the
- * one number that survived the Feb-2026 gutting). Throws (→ skip) when the playlist
- * id is unset or `spotify_auth` is disconnected.
- */
 export async function collectSpotifyPlaylist(): Promise<PlatformMetric[]> {
   const playlistId = await readOptionalEnv("SPOTIFY_PLAYLIST_ID");
 
@@ -368,11 +282,6 @@ export async function collectSpotifyPlaylist(): Promise<PlatformMetric[]> {
   return [{ metric: "playlist_saves", value: requireCount(total, "Spotify followers.total") }];
 }
 
-/**
- * YouTube — Data API v3 channels.list?part=statistics with a PLAIN key (not OAuth;
- * the stats are public). `forHandle=@fluncle` resolves the channel and returns its
- * statistics in one call → subscriberCount, viewCount. Env-gated: no key → skip.
- */
 export async function collectYoutube(fetchImpl: FetchImpl): Promise<PlatformMetric[]> {
   const key = await readOptionalEnv("YOUTUBE_API_KEY");
 
@@ -406,20 +315,6 @@ export async function collectYoutube(fetchImpl: FetchImpl): Promise<PlatformMetr
   ];
 }
 
-// ── Tier-2 collectors (user-OAuth, docs/reach-tier2-activation.md) ───────────
-//
-// Each reads a durable token minted server-side by its `get<Platform>AccessToken`
-// helper (twitch/tiktok/instagram.ts) — DORMANT until the operator connects, so an
-// absent env or an unconnected token throws a clean reason the collector turns into an honest
-// `kind: "unconfigured"` skip. The DB-free PARSE half of each is a separate
-// exported function (token + fetch injected) so it is unit-testable with zero network.
-
-/**
- * Twitch — the follower TOTAL via Helix, given the broadcaster's own user token +
- * the app's client id. Two reads: `/helix/users` (resolve the authenticated
- * broadcaster's id) then `/helix/channels/followers?broadcaster_id=…` → `total`. Pure
- * fetch+parse; the registry wrapper supplies the token + client id.
- */
 export async function collectTwitchFollowers(
   fetchImpl: FetchImpl,
   accessToken: string,
@@ -453,7 +348,6 @@ export async function collectTwitchFollowers(
   return [{ metric: "followers", value: requireCount(data.total, "Twitch followers total") }];
 }
 
-/** Twitch registry wrapper — supplies the stored token + the app client id. */
 export async function collectTwitch(fetchImpl: FetchImpl): Promise<PlatformMetric[]> {
   let accessToken: string;
   let clientId: string;
@@ -474,12 +368,6 @@ export async function collectTwitch(fetchImpl: FetchImpl): Promise<PlatformMetri
   return collectTwitchFollowers(fetchImpl, accessToken, clientId);
 }
 
-/**
- * Map a Postiz analytics payload's platform-dependent LABELS onto reach metric names —
- * the shared parse half of the two Postiz-backed collectors, pure + unit-testable. A label
- * Postiz stops sending degrades to a missing metric (never a wrong one). An empty payload is an
- * honest clean skip; a non-empty payload with no known labels is a shape fault.
- */
 export function mapPostizMetrics(
   metrics: { label: string; latestTotal: number }[],
   labelMap: Record<string, string>,
@@ -506,14 +394,6 @@ export function mapPostizMetrics(
   return out;
 }
 
-/**
- * TikTok — via POSTIZ platform analytics (the account is already connected there for the
- * publish drafts, and Postiz exposes MORE than TikTok's own Display API would have:
- * followers + total likes + total views, no TikTok developer app, no scope review). The
- * The labels are "Followers" / "Total Likes" / "Views" (plus Following/Videos/Recent-* —
- * deliberately unmapped: the reach page tracks audience and carry, not the posting cadence).
- * The standalone TikTok user-OAuth leg is not used.
- */
 export async function collectTiktok(fetchImpl: FetchImpl): Promise<PlatformMetric[]> {
   const key = await readOptionalEnv("POSTIZ_API_KEY");
 
@@ -540,13 +420,6 @@ export async function collectTiktok(fetchImpl: FetchImpl): Promise<PlatformMetri
   );
 }
 
-/**
- * Instagram — via POSTIZ platform analytics. The standalone-Instagram connection exposes
- * ENGAGEMENT only (Reach/Views/Likes/Saves), NOT a follower
- * count, so the reach page carries Instagram's `views` and the audience number stays absent
- * (honest) until the dormant Instagram-Login OAuth leg (instagram.ts + its auth routes) is
- * ever activated through Meta's business verification — see docs/reach-tier2-activation.md.
- */
 export async function collectInstagram(fetchImpl: FetchImpl): Promise<PlatformMetric[]> {
   const key = await readOptionalEnv("POSTIZ_API_KEY");
 
@@ -569,9 +442,6 @@ export async function collectInstagram(fetchImpl: FetchImpl): Promise<PlatformMe
   return mapPostizMetrics(metrics, { Views: "views" }, "instagram");
 }
 
-// The registry — the drain order is stable so the collect summary reads the
-// same each run. A keyless collector takes `fetchImpl`; the module-backed ones
-// ignore it (they route through a helper), which is why the signature is uniform.
 type PlatformFetcher = {
   collect: (fetchImpl: FetchImpl) => Promise<PlatformMetric[]>;
   platform: string;
@@ -588,22 +458,13 @@ const PLATFORM_FETCHERS: PlatformFetcher[] = [
   { collect: () => collectNewsletter(), platform: "newsletter" },
   { collect: () => collectSpotifyPlaylist(), platform: "spotify_playlist" },
   { collect: collectYoutube, platform: "youtube" },
-  // Postiz-backed (the accounts are connected there for publishing; analytics ride the
-  // same POSTIZ_API_KEY — read-only, one integrations lookup + one analytics read each).
+
   { collect: collectTiktok, platform: "tiktok" },
   { collect: collectInstagram, platform: "instagram" },
-  // Tier-2 (user-OAuth, DORMANT until the operator connects — skips cleanly while
-  // its token/env is absent). See docs/reach-tier2-activation.md.
+
   { collect: collectTwitch, platform: "twitch" },
 ];
 
-/**
- * Run every platform fetcher, EACH isolated best-effort: unconfigured/empty outcomes are clean
- * skips, while fetch/parse faults are visible failures. Neither aborts the snapshot. The
- * `id` is the client-stable `${platform}:${metric}:${yyyy-mm-dd}` (the day derived
- * from `at`), so a second collect the same UTC day re-inserts the same ids and is
- * ignored. Sequential on purpose — a daily cron, not a hot path.
- */
 export async function collectPlatformStats(
   options: { at?: string; fetchImpl?: FetchImpl } = {},
 ): Promise<PlatformStatsCollection> {
@@ -653,11 +514,6 @@ export async function collectPlatformStats(
   return { collected, failed, rows, skipped };
 }
 
-/**
- * Append snapshot rows IDEMPOTENTLY — one multi-row `insert … on conflict(id) do
- * nothing`, returning the count ACTUALLY written (a same-day retry lands zero). The
- * `insertCostEvents` shape.
- */
 export async function insertPlatformStats(rows: PlatformStatRow[]): Promise<number> {
   if (rows.length === 0) {
     return 0;
@@ -681,11 +537,6 @@ export async function insertPlatformStats(rows: PlatformStatRow[]): Promise<numb
   return result.rowsAffected;
 }
 
-/**
- * Collect one snapshot and persist it. Runs the collector (Worker-side, every
- * platform best-effort), inserts its rows idempotently, and returns the per-platform
- * summary + the count written — the `record_platform_stats` handler's body.
- */
 export async function recordPlatformStats(
   options: { at?: string; fetchImpl?: FetchImpl } = {},
 ): Promise<PlatformStatsRecordResult> {
@@ -700,12 +551,8 @@ export async function recordPlatformStats(
   };
 }
 
-// ── The public read (`/reach`) ───────────────────────────────────────────────
-
-/** One point in a metric's series (a day's captured value). */
 export type PlatformStatPoint = { capturedAt: string; value: number };
 
-/** One (platform, metric) series: the latest value + the bounded day-by-day points. */
 export type PlatformStatSeries = {
   latest: number;
   latestAt: string;
@@ -714,13 +561,11 @@ export type PlatformStatSeries = {
   points: PlatformStatPoint[];
 };
 
-/** The whole page read — every series within the window. */
 export type PlatformStatsView = {
   series: PlatformStatSeries[];
   windowDays: number;
 };
 
-/** One stored row as `platform_stats` returns it. */
 type PlatformStatDbRow = {
   captured_at: string;
   metric: string;
@@ -728,14 +573,6 @@ type PlatformStatDbRow = {
   value: number;
 };
 
-/**
- * The page read: every snapshot within the window, ORDERED in SQL by
- * (platform, metric, captured_at) so the grouping and each series' chronology fall
- * straight out of the scan — no arithmetic, no whole-column pull (the
- * getServiceCheckSamples precedent). Grouped in one pass into per-(platform, metric)
- * series, each carrying its bounded points + the latest (last, i.e. max captured_at)
- * value. Bounded by the window, so the read stays small as the ledger grows.
- */
 export async function listPlatformStats(windowDays?: number): Promise<PlatformStatsView> {
   const window = clampSnapshotWindow(windowDays);
   const since = new Date(Date.now() - window * 24 * 60 * 60 * 1000).toISOString();
@@ -758,7 +595,7 @@ export async function listPlatformStats(windowDays?: number): Promise<PlatformSt
 
     if (existing) {
       existing.points.push(point);
-      // Rows arrive captured_at ASC, so the last one seen is the latest.
+
       existing.latest = row.value;
       existing.latestAt = row.captured_at;
     } else {

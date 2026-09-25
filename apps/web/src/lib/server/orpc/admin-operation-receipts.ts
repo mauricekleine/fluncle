@@ -1,6 +1,3 @@
-// The operation-receipt control plane: agent-tier read-only inspection/reconciliation and an
-// operator-only bounded repair. Bounded coordinates travel in POST bodies; no route logs them.
-
 import { getDb } from "../db";
 import { getHealthSnapshotReceiptCutoverDispositionFor } from "../health-receipt-cutover";
 import { logEvent } from "../log";
@@ -53,7 +50,6 @@ async function inspectReceipt(operationKey: string) {
   };
 }
 
-/** Build the operation-receipt inspection, reconciliation, and repair handlers. */
 export function adminOperationReceiptHandlers(os: Implementer) {
   const getOperationReceiptHandler = os.get_operation_receipt
     .use(adminAuth)

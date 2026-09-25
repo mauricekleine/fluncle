@@ -22,22 +22,12 @@ import {
 import { readTrackAnchorLeafRows } from "./public-projections";
 import { TRACKS_HUB_ANCHOR_ADDRESS, TRACKS_HUB_PAGE_SIZE } from "./tracks-hub";
 
-/**
- * The most anchor shards one subject-level order change rewrites: a move touches the run it left
- * and the run it entered, and each of those may split once. Inserts and deletes touch one run.
- */
 export const PUBLIC_ANCHOR_AMENDMENT_MAX_SHARD_WRITES = 4;
 
-/** Order changes one bounded maintenance step consumes against a published document. */
 export const PUBLIC_ANCHOR_AMENDMENTS_PER_STEP = 8;
 
-/** A run that grows past this row count splits into two runs at its midpoint. */
 export const PUBLIC_ANCHOR_LEAF_SPLIT_ROWS = 200;
 
-/**
- * Past this many pending order changes the full generation rebuild is cheaper than amendments: a
- * rebuild step covers one hundred rows while an amendment step covers eight changes.
- */
 export function publicAnchorAmendmentRebuildThreshold(total: number): number {
   return Math.max(
     PUBLIC_ANCHOR_AMENDMENTS_PER_STEP,
@@ -49,26 +39,25 @@ type AmendmentClient = Pick<Client, "batch" | "execute">;
 
 export type AnchorAmendmentGuard = { args: InValue[]; sql: string };
 
-/** The document a ledger entry amends: a published generation or the built prefix of a build. */
 export type AnchorAmendmentTarget =
   | {
       kind: "published";
-      /** The order epoch the validity row currently names. */
+
       orderEpoch: number;
     }
   | {
       kind: "partial";
-      /** The build's durable cursor: the last row of the last built run, null before any row. */
+
       end: HubOrderKey | null;
-      /** The order epoch the build state currently names. */
+
       orderEpoch: number;
-      /** The rows the build has walked; a subject change behind the cursor moves it. */
+
       processed: number;
-      /** The next run number, which bounds `processed` from below. */
+
       shard: number;
-      /** The exact persisted state value, the optimistic token for the state row. */
+
       serialized: string;
-      /** Serialize the amended state with the epoch and row count this entry leaves behind. */
+
       serialize: (orderEpoch: number, processed: number) => string;
       stateKey: string;
     };
@@ -77,7 +66,7 @@ export type AnchorAmendmentInput = {
   currentEpoch: number;
   generation: string;
   now: string;
-  /** The source-readiness predicate bound to the current generation and order epoch. */
+
   sourceReady: AnchorAmendmentGuard;
   target: AnchorAmendmentTarget;
   total: number;
@@ -85,7 +74,7 @@ export type AnchorAmendmentInput = {
 
 export type AnchorAmendmentOutcome = {
   complete: false;
-  /** Ledger entries consumed. */
+
   processed: number;
 };
 
@@ -101,7 +90,7 @@ type LeafWrite = {
   anchorsJson: string;
   clauseHash: string;
   fingerprint: string;
-  /** The fingerprint the row must still carry; undefined inserts a new run. */
+
   token: string | undefined;
 };
 
@@ -126,7 +115,7 @@ async function readLedgerEntries(
   const entries: PublicAnchorOrderChange[] = [];
   for (const [index, row] of result.rows.entries()) {
     const entry = parsePublicAnchorOrderChange(row.value);
-    // Every epoch in the window must carry its own ledger row; a hole is an unrepresented change.
+
     if (entry === undefined || entry.epoch !== afterEpoch + index + 1) {
       return undefined;
     }
@@ -164,10 +153,6 @@ function locatedLeafFromRow(row: Record<string, unknown> | undefined): LocatedLe
   return { anchors, clauseHash, fingerprint, meta, prefix };
 }
 
-/**
- * The run whose range `(after, next.after]` holds `key`: the last run in shard order whose `after`
- * precedes the key. The running prefix count is computed in the same statement; one row leaves SQL.
- */
 async function locateLeaf(
   client: AmendmentClient,
   generation: string,
@@ -253,25 +238,10 @@ function shardSuffix(clauseHash: string, generation: string): string {
   return clauseHash.slice(generationPrefix(generation).length);
 }
 
-/**
- * Re-extract one run from the source after its row count changed by `delta`, proving the new count
- * against the run's range end. An emptied run that has a neighbour is deleted; a run past the split
- * ceiling becomes two runs keyed to sort between their neighbours.
- */
-/** The read bound for one run: every pending change is already in the source, so a run may have
-    absorbed more than one change since its last extraction; a run past twice the split ceiling
-    exceeds the bounded step and defers to the full rebuild. */
 const LEAF_READ_BOUND = PUBLIC_ANCHOR_LEAF_SPLIT_ROWS * 2 + 1;
 
 type LeafPlanWithDelta = { delta: number; plan: LeafPlan };
 
-/**
- * Re-extract one run over its fixed key range and measure its size. The range `(after, next.after]`
- * decides membership, so the source rows are the run by definition and no expected count is
- * asserted; the run's row delta feeds the build cursor and the later run's prefix. An emptied run
- * with a neighbour is deleted; a run past the split ceiling becomes two runs keyed to sort between
- * their neighbours.
- */
 async function planLeaf(
   client: AmendmentClient,
   input: AnchorAmendmentInput,
@@ -285,8 +255,7 @@ async function planLeaf(
     return undefined;
   }
   const delta = source.rows.length - leaf.meta.n;
-  // The head run is never dropped: it is the only run whose range has no lower bound, so a later
-  // insert at the top of the order must always locate it.
+
   if (source.rows.length === 0 && leaf.meta.after !== null && (next !== undefined || prefix > 0)) {
     return {
       delta,
@@ -371,7 +340,7 @@ async function planEntry(
       located.push(leaf);
     }
   }
-  // Runs are re-extracted in shard order so a later run's prefix carries the earlier run's delta.
+
   located.sort((a, b) => (a.clauseHash < b.clauseHash ? -1 : a.clauseHash > b.clauseHash ? 1 : 0));
   const plans: LeafPlan[] = [];
   let processedDelta = 0;
@@ -546,14 +515,6 @@ async function isLeafDocument(client: AmendmentClient, generation: string): Prom
   return shards > 0 && Number(row?.valid) === shards;
 }
 
-/**
- * Consume the order-change ledger against the document page-locally. Each entry lands in its own
- * transaction: the validity row or build state advances to the entry's epoch first, guarded by its
- * previous value, the source-readiness predicate, and every touched run's fingerprint, and the run
- * writes plus the ledger delete land only behind that advance. Returns undefined when the ledger
- * does not represent every pending epoch, an entry is unamendable, the pending backlog exceeds the
- * rebuild threshold, or the document is not a leaf document; the caller then takes the full rebuild.
- */
 export async function amendPublicAnchorDocument(
   client: AmendmentClient,
   input: AnchorAmendmentInput,
@@ -579,7 +540,6 @@ export async function amendPublicAnchorDocument(
     return undefined;
   }
   if (input.target.kind === "partial" && input.target.end === null) {
-    // Nothing is built yet, so every pending change is absorbed by the walk still ahead.
   } else if (!(await isLeafDocument(client, input.generation))) {
     return undefined;
   }
@@ -626,7 +586,6 @@ export async function amendPublicAnchorDocument(
   return processed === 0 ? undefined : { complete: false, processed };
 }
 
-/** Drop every ledger row at or below the epoch a fresh or published document already represents. */
 export function purgeAnchorOrderChangesStatement(throughEpoch: number): InStatement {
   return {
     args: [publicAnchorOrderChangeKey(0), publicAnchorOrderChangeKey(throughEpoch)],

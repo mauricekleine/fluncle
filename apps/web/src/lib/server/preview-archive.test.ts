@@ -24,8 +24,7 @@ describe("preview archive helpers", () => {
     expect(buildPreviewArchiveKey({ logId: "011.6.8K", mime: "audio/mpeg" })).toBe(
       "011.6.8K/preview.mp3",
     );
-    // A changed source MIME lands the preview at a different extension under the
-    // same finding folder (the sibling sweep cleans up the previous one on write).
+
     expect(buildPreviewArchiveKey({ logId: "011.6.8K", mime: "audio/mp4" })).toBe(
       "011.6.8K/preview.m4a",
     );
@@ -71,10 +70,9 @@ describe("preview archive helpers", () => {
       mime: "audio/mpeg",
       source: "deezer:isrc",
     });
-    // The preview lands at the stable per-finding key.
+
     expect(puts).toEqual(["011.6.8K/preview.mp3"]);
-    // Every other-extension sibling for this finding is deleted — never the one we
-    // just wrote.
+
     expect(deletes.sort()).toEqual([
       "011.6.8K/preview.aac",
       "011.6.8K/preview.bin",
@@ -112,16 +110,9 @@ describe("preview archive helpers", () => {
       ),
     ).rejects.toThrow("db unavailable");
 
-    // The sweep runs LAST, after the DB commit — a failed DB write must not delete any
-    // sibling, so the row keeps pointing at an object that still exists.
     expect(deletes).toEqual([]);
   });
 
-  // THE RAIL, ENFORCED. The slot holds ONE official 30s preview, never a full song
-  // (audio-source policy: captured full audio is internal-only, in the private source-audio
-  // bucket). `analyze-track --archive-dir` and the server both reject `--audio-file` bodies
-  // that are an order of magnitude past any 30s clip: a full captured song is never a preview,
-  // whatever the caller claims.
   it("rejects a full song — a body too large to be a 30s preview never reaches R2", async () => {
     const puts: string[] = [];
     const bucket = {
@@ -132,7 +123,6 @@ describe("preview archive helpers", () => {
     };
     const db = { execute: async () => ({ rows: [] }) };
 
-    // ~6MB — a real song. A 30s preview at a generous 320kbps is ~1.2MB.
     const fullSong = new Uint8Array(6_000_000).buffer;
 
     await expect(
@@ -148,19 +138,12 @@ describe("preview archive helpers", () => {
       ),
     ).rejects.toThrow(/preview/i);
 
-    // Nothing was written: the rail rejects BEFORE the put, so no full song lands in R2
-    // wearing a preview's name.
     expect(puts).toEqual([]);
   });
 
   it("never targets the public fluncle-videos bucket / VIDEOS binding", async () => {
-    // fluncle-videos is world-served at found.fluncle.com; the 30s preview archive
-    // must land in the PRIVATE fluncle-source-audio bucket. This mirrors the box
-    // sweep scripts' "never fluncle-videos" guard (docs/agents/hermes/scripts/*).
     const route = await source("../../routes/api/admin/tracks.$trackId.preview.ts");
 
-    // Assert the call exists first so the guard can't silently degrade if the handler
-    // is renamed/moved (indexOf(-1) + slice would otherwise make the checks vacuous).
     expect(route).toContain("archivePreviewForTrack({");
 
     const archiveCall = route.slice(route.indexOf("archivePreviewForTrack({"));

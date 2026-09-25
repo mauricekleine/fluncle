@@ -4,19 +4,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createIntegrationDb, rowCount } from "./integration-db";
 import { type FetchImpl, listPlatformStats, recordPlatformStats } from "./platform-stats";
 
-// THE /reach STORE, against the real schema. The collector + the two ops run against
-// the real in-memory libSQL `platform_stats` table (the generated migration), so the
-// three properties that matter are proven as SQL properties a mock could not:
-//   - the daily-snapshot IDEMPOTENCE (a same-`at` re-collect re-inserts the same ids
-//     and lands 0 — the ON CONFLICT(id) DO NOTHING discipline),
-//   - the GROUPED read shape (per (platform, metric): latest + a bounded series), and
-//   - per-platform SKIP ISOLATION (one platform's fetch faulting never drops another's
-//     snapshot — the record_health per-probe discipline).
-//
-// The keyless + env-gated platforms are driven by an injected `fetchImpl`; the two
-// module-backed platforms (spotify_playlist / newsletter) are mocked to return a
-// number, so no real network is ever touched.
-
 let db: Client;
 
 vi.mock("./db", async (importOriginal) => {
@@ -39,8 +26,6 @@ vi.mock("./resend", async (importOriginal) => {
 
 const ORIGINAL_ENV = { ...process.env };
 
-// A fake `fetch` covering every network platform. `failing` forces a platform's
-// endpoint to a 500 so its best-effort skip can be asserted in isolation.
 function collectorFetch(
   failing: Set<string> = new Set(),
   empty: Set<string> = new Set(),
@@ -125,10 +110,6 @@ describe("the /reach store", () => {
     const at = new Date().toISOString();
     const result = await recordPlatformStats({ at, fetchImpl: collectorFetch() });
 
-    // 10 Tier-1 platforms, 15 metrics total (mixcloud 3, bluesky 2, youtube 2, lastfm 2,
-    // the other six 1 each). tiktok/instagram ride Postiz (no POSTIZ_API_KEY in tests -> skip)
-    // and twitch is Tier-2 DORMANT
-    // — no stored token in this fresh db — so they skip cleanly and write nothing.
     expect(result.collected).toHaveLength(10);
     expect(result.inserted).toBe(15);
     expect(result.failed).toEqual([]);
@@ -150,8 +131,6 @@ describe("the /reach store", () => {
       ].sort(),
     );
 
-    // The Tier-2 legs skip (dormant), never faulting the snapshot — every skip carries a
-    // reason and none contributed a row.
     const skippedPlatforms = result.skipped.map((entry) => entry.platform).sort();
     expect(skippedPlatforms).toEqual(["instagram", "tiktok", "twitch"]);
     for (const skip of result.skipped) {
@@ -172,9 +151,6 @@ describe("the /reach store", () => {
     expect(githubFailure?.reason).toMatch(/GitHub responded 500/);
     expect(result.skipped.some((entry) => entry.platform === "github")).toBe(false);
 
-    // The other nine Tier-1 platforms still landed: 15 total metrics minus github's
-    // single `stars`. (The 3 dormant Tier-2 legs skip too, but that is not this test's
-    // subject — github's fault is isolated from the rest of the Tier-1 snapshot.)
     expect(result.collected).toHaveLength(9);
     expect(result.inserted).toBe(14);
     expect(result.collected.some((entry) => entry.platform === "github")).toBe(false);
@@ -208,7 +184,6 @@ describe("the /reach store", () => {
     const first = await recordPlatformStats({ at, fetchImpl: collectorFetch() });
     expect(first.inserted).toBe(15);
 
-    // Same `at` → same yyyy-mm-dd → same ids → the retry writes zero.
     const second = await recordPlatformStats({ at, fetchImpl: collectorFetch() });
     expect(second.inserted).toBe(0);
     expect(await rowCount(db, "platform_stats")).toBe(15);
@@ -218,7 +193,6 @@ describe("the /reach store", () => {
     const dayOne = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
     const dayTwo = new Date().toISOString();
 
-    // Two different days: different ids, so both land — a two-point series per metric.
     await recordPlatformStats({ at: dayOne, fetchImpl: collectorFetch() });
     await recordPlatformStats({ at: dayTwo, fetchImpl: collectorFetch() });
 
@@ -231,14 +205,12 @@ describe("the /reach store", () => {
 
     expect(mixcloudFollowers).toBeDefined();
     expect(mixcloudFollowers?.points).toHaveLength(2);
-    // Points arrive oldest-first; latest is the max captured_at.
+
     expect(mixcloudFollowers?.points[0]?.capturedAt).toBe(dayOne);
     expect(mixcloudFollowers?.points[1]?.capturedAt).toBe(dayTwo);
     expect(mixcloudFollowers?.latest).toBe(87);
     expect(mixcloudFollowers?.latestAt).toBe(dayTwo);
 
-    // The spotify playlist's saves + the newsletter audience came through the mocked
-    // module helpers, proving the module-backed platforms join the same read.
     const playlistSaves = view.series.find((series) => series.platform === "spotify_playlist");
     expect(playlistSaves?.latest).toBe(2);
   });
@@ -250,7 +222,6 @@ describe("the /reach store", () => {
     await recordPlatformStats({ at: old, fetchImpl: collectorFetch() });
     await recordPlatformStats({ at: recent, fetchImpl: collectorFetch() });
 
-    // A 7-day window excludes the 40-day-old snapshot entirely.
     const view = await listPlatformStats(7);
     expect(view.windowDays).toBe(7);
 
