@@ -51,7 +51,7 @@ export function formatReleaseDayRange(from: string, to: string): string {
     return formatReleaseDate(to);
   }
 
-  return releaseDateFormatter.formatRange(new Date(from), new Date(to)).replace(/\s*–\s*/u, " – ");
+  return releaseDateFormatter.formatRange(new Date(from), new Date(to));
 }
 
 export function findingsCount(count: number): string {

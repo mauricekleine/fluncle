@@ -69,10 +69,10 @@ if ! boat_cli ssh "$id" 'test -d "$HOME/.local/lib"' </dev/null >/dev/null 2>&1;
 	abandon "box setup incomplete — no ~/.local/lib after setup"
 fi
 
-if ! boat_cli scp "$FLUNCLE_BIN" "$id:~/.local/lib/fluncle.mjs" >&2; then
+if ! boat_cli scp "$FLUNCLE_BIN" "$id:/home/user/.local/lib/fluncle.mjs" >&2; then
 	abandon "fluncle CLI copy failed"
 fi
-if ! boat_cli scp "$SCRIPT_DIR/render-detached.sh" "$id:~/render-detached.sh" >&2; then
+if ! boat_cli scp "$SCRIPT_DIR/render-detached.sh" "$id:/home/user/render-detached.sh" >&2; then
 	abandon "render-detached.sh copy failed"
 fi
 boat_cli ssh "$id" 'chmod +x ~/render-detached.sh' >&2 || true

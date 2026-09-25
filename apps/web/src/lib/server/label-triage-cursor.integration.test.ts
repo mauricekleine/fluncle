@@ -1,13 +1,3 @@
-// The triage cursor — what a round LOOKED at, against the REAL migrated schema.
-//
-// It is an INTEGRATION test because every guarantee here is a statement about SQL a mocked database
-// would let through broken: the cursor is an UPDATE that must leave `seed_state` and `ruled_at`
-// alone, the proposal is one-row-per-label enforced by a UNIQUE index, superseding is a DELETE that
-// must take the child rules with it, and the inert-rule drop happens before the insert.
-//
-// The load-bearing claim is the LAST test: an agent-tier round records a finding and CANNOT rule.
-// That separation is the entire safety argument for letting an unattended sweep run this.
-
 import { type Client } from "@libsql/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -24,7 +14,6 @@ import { labelTriageProposalsByIds, recordLabelTriage } from "./labels";
 
 let db: Client;
 
-/** The cursor columns plus the two a round must never touch. */
 async function labelRow(slug: string) {
   const result = await db.execute({
     args: [slug],
@@ -83,7 +72,6 @@ async function seedLabel(slug: string, seedState = "undecided") {
   });
 }
 
-/** A label's id, typed — the raw libsql row value is a union that does not stringify cleanly. */
 async function labelId(slug: string): Promise<string> {
   const result = await db.execute({ args: [slug], sql: `select id from labels where slug = ?` });
 
@@ -118,7 +106,6 @@ describe("the triage cursor", () => {
   });
 
   it("NEVER changes the seed state or the operator's ruling stamp", async () => {
-    // The whole safety argument: an agent-tier round records a finding, it does not rule.
     await seedLabel("acme");
     await recordLabelTriage("acme", { ...BASE, verdict: "dnb" });
 
@@ -144,8 +131,6 @@ describe("the triage cursor", () => {
   });
 
   it("keeps rule proposals that can fire and drops the inert ones", async () => {
-    // A proposal with zero FIRST credits can never match at crawl time; storing it would only
-    // re-drop it at apply time. (The block-ANY intuition proposes exactly these.)
     await seedLabel("acme");
     const recorded = await recordLabelTriage("acme", {
       ...BASE,
@@ -207,8 +192,6 @@ describe("the triage cursor", () => {
   });
 
   it("records a round that looked at an already-ruled label without disturbing the ruling", async () => {
-    // The staleness rotation re-visits; a label the operator ruled in the meantime must be
-    // recorded, not reverted.
     await seedLabel("acme", "enabled");
     await recordLabelTriage("acme", { ...BASE, verdict: "not_dnb" });
 

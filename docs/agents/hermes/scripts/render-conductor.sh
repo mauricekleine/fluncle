@@ -770,14 +770,14 @@ if [ -n "$boxid" ] && [ "$resume_rc" = "0" ]; then
 		log "resumed box $boxid lost its ~/fluncle checkout — stopping it + reprovisioning"
 		boat_cli stop "$boxid" >/dev/null 2>&1 || true
 		boxid=""
-	elif boat_cli scp "$FLUNCLE_BIN" "$boxid:~/.local/lib/fluncle.mjs" >>"$LOG_FILE" 2>&1; then
+	elif boat_cli scp "$FLUNCLE_BIN" "$boxid:/home/user/.local/lib/fluncle.mjs" >>"$LOG_FILE" 2>&1; then
 		log "box CLI refreshed from the conductor's bundled fluncle"
 	else
 		log "box CLI refresh failed — rendering with the existing CLI"
 	fi
 
 	if [ -n "$boxid" ]; then
-		if boat_cli scp "$SCRIPT_DIR/render-detached.sh" "$boxid:~/render-detached.sh" >>"$LOG_FILE" 2>&1; then
+		if boat_cli scp "$SCRIPT_DIR/render-detached.sh" "$boxid:/home/user/render-detached.sh" >>"$LOG_FILE" 2>&1; then
 			boat_cli ssh "$boxid" 'chmod +x ~/render-detached.sh' >/dev/null 2>&1 || true
 			log "render-detached.sh refreshed from the conductor's bundled copy"
 		else

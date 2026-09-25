@@ -215,7 +215,7 @@ jobs:
         if: steps.classify.outputs.e2e == 'true'
         run: bun install --frozen-lockfile
 
-      - name: Install Turso CLI with bounded retries before SHA256 verification
+      - name: Install Turso CLI
         if: steps.classify.outputs.e2e == 'true'
         run: |
           curl -sSfL --retry 5 --retry-all-errors --retry-delay 2 --connect-timeout 15 \
@@ -224,7 +224,7 @@ jobs:
           tar -xzf /tmp/turso-cli.tar.gz -C /tmp turso
           sudo install -m 0755 /tmp/turso /usr/local/bin/turso
 
-      - name: Install sqld with bounded retries before SHA256 verification
+      - name: Install sqld
         if: steps.classify.outputs.e2e == 'true'
         run: |
           curl -sSfL --retry 5 --retry-all-errors --retry-delay 2 --connect-timeout 15 \

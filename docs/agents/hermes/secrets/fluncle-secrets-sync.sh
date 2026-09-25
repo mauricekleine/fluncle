@@ -5,7 +5,7 @@ set -euo pipefail
 BOOTSTRAP="${SECRETS_SYNC_BOOTSTRAP:-/etc/hermes-bootstrap.env}"
 TPL_DIR="${SECRETS_SYNC_TPL_DIR:-/etc/hermes}"
 GATEWAY_OUT="${SECRETS_SYNC_GATEWAY_OUT:-/etc/hermes.env}"
-SWEEP_OUT="${SECRETS_SYNC_SWEEP_OUT:-$(getent passwd admin | cut -d: -f6)/.hermes/home/.fluncle-secrets.env}"
+SWEEP_OUT="${SECRETS_SYNC_SWEEP_OUT:-/home/admin/.hermes/home/.fluncle-secrets.env}"
 CONTAINER="${HERMES_CONTAINER:-hermes}"
 
 RUN_EVENT_UNIT="fluncle-secrets-sync"
@@ -164,7 +164,7 @@ PRODUCED=$((PRODUCED + 1))
 
 if [ -n "${FLUNCLE_GSC_OP_REF:-}" ]; then
 	CHECKED=$((CHECKED + 1))
-	GSC_OUT="${SECRETS_SYNC_GSC_OUT:-$SWEEP_DIR/.fluncle-gsc.json}"
+	GSC_OUT="${SECRETS_SYNC_GSC_OUT:-/home/admin/.hermes/home/.fluncle-gsc.json}"
 	tj="$(mktemp)"
 	_cleanup() { rm -f "$tg" "$ts" "$tj"; }
 	if op read "$FLUNCLE_GSC_OP_REF" >"$tj" 2>/dev/null && grep -q '"private_key"' "$tj"; then

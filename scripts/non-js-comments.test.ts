@@ -35,7 +35,36 @@ beforeAll(() => {
 
 type ShellComment = { line: number; text: string };
 
-const shellComments = (source: string, path: string): ShellComment[] => {
+const ACTION_VERSION_COMMENT = /^#\s*v\d+(?:\.\d+)*(?:\s|$)/;
+const DIGEST_PIN = /@sha256:[0-9a-f]{64}(?=\s|$)/;
+const DIGEST_PINNED_USES = /\buses:\s*\S+@[0-9a-f]{40}\s*$/;
+
+function pinsVersionLabel(source: string, offset: number, commentSource: string): boolean {
+  if (!ACTION_VERSION_COMMENT.test(commentSource)) {
+    return false;
+  }
+  const lines = source.slice(0, offset).split("\n");
+  const line = lines.at(-1) ?? "";
+  if (DIGEST_PINNED_USES.test(line) || DIGEST_PIN.test(line)) {
+    return true;
+  }
+  for (let index = lines.length - 2; index >= 0; index -= 1) {
+    const continued = lines[index];
+    if (!continued || !/\\\s*$/.test(continued)) {
+      break;
+    }
+    if (DIGEST_PIN.test(continued)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+const shellComments = (
+  source: string,
+  path: string,
+  allowPinnedVersion = false,
+): ShellComment[] => {
   const parseable = source.replace(/\$\{\{[\s\S]*?\}\}/g, (expression) =>
     expression.replace(/[^\n]/g, "x"),
   );
@@ -81,6 +110,9 @@ const shellComments = (source: string, path: string): ShellComment[] => {
       if (commentText.startsWith("!") || /^\s*shellcheck\b/.test(commentText)) {
         continue;
       }
+      if (allowPinnedVersion && pinsVersionLabel(source, comment.Pos.Offset, `#${commentText}`)) {
+        continue;
+      }
       found.set(`${comment.Pos.Offset}:${comment.End.Offset}`, {
         line: comment.Pos.Line,
         text: commentText,
@@ -94,19 +126,13 @@ const shellComments = (source: string, path: string): ShellComment[] => {
   return [...found.values()].sort((left, right) => left.line - right.line);
 };
 
-const ACTION_VERSION_COMMENT = /^#\s*v\d+(?:\.\d+)*(?:\s|$)/;
-const DIGEST_PINNED_USES = /\buses:\s*\S+@[0-9a-f]{40}\s*$/;
-
 function pinsActionVersion(
   source: string,
   comment: { offset?: number; source?: unknown },
 ): boolean {
-  const offset = comment.offset ?? 0;
-  const line = source.slice(source.lastIndexOf("\n", offset - 1) + 1, offset);
   return (
     typeof comment.source === "string" &&
-    ACTION_VERSION_COMMENT.test(comment.source) &&
-    DIGEST_PINNED_USES.test(line)
+    pinsVersionLabel(source, comment.offset ?? 0, comment.source)
   );
 }
 
@@ -142,7 +168,7 @@ const yamlComments = (source: string, path: string): string[] => {
           typeof item.value.source === "string" &&
           (!shell || /^(?:bash|sh)(?:\s|$)/.test(shell))
         ) {
-          for (const comment of shellComments(item.value.source, `${path}:run`)) {
+          for (const comment of shellComments(item.value.source, `${path}:run`, true)) {
             found.push(`${path}:run:${comment.line}`);
           }
         }
@@ -193,6 +219,18 @@ describe("non-JavaScript comments", () => {
     expect(
       yamlComments(
         "uses: actions/checkout@0123456789abcdef0123456789abcdef01234567 # v4\n",
+        "fixture.yml",
+      ),
+    ).toEqual([]);
+    expect(
+      yamlComments(
+        `steps:\n  - run: |\n      docker run image@sha256:${"a".repeat(64)} \\\n        check --no-banner # v8.30.1\n`,
+        "fixture.yml",
+      ),
+    ).toEqual([]);
+    expect(
+      yamlComments(
+        `image: registry.example/app@sha256:${"a".repeat(64)} # v8.30.1\n`,
         "fixture.yml",
       ),
     ).toEqual([]);

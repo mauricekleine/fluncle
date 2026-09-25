@@ -1,4 +1,4 @@
-name: Hermes Pin Drift (release-triggered, hourly backstop)
+name: Hermes Pin Drift
 
 on:
   schedule:
@@ -19,7 +19,7 @@ permissions:
 
 jobs:
   drift:
-    name: Check baked Hermes pins; bump safe changes only
+    name: Check + bump baked Hermes pins
     runs-on: ubuntu-latest
     timeout-minutes: 10
     if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
@@ -29,11 +29,11 @@ jobs:
         with:
           token: ${{ secrets.PIN_DRIFT_TOKEN || github.token }}
 
-      - name: Detect drift and apply safe pin bumps
+      - name: Detect drift + apply the safe bumps
         id: drift
         run: bash .github/scripts/hermes-pin-drift.sh --apply
 
-      - name: Open or refresh pin PR for strict checks (PAT enables auto-merge)
+      - name: Open a PR for the safe bumps
         if: steps.drift.outputs.bumped == 'true'
         env:
           GH_TOKEN: ${{ secrets.PIN_DRIFT_TOKEN || github.token }}
@@ -63,7 +63,7 @@ jobs:
               || echo "auto-merge unavailable (enable it + branch protection) — leaving the PR for review."
           fi
 
-      - name: Report risky drift once per unchanged signature
+      - name: Report risky drift as an issue
         if: steps.drift.outputs.braked == 'true'
         env:
           GH_TOKEN: ${{ secrets.PIN_DRIFT_TOKEN || github.token }}
