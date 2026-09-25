@@ -2,7 +2,6 @@ import { encodeDueWorkOrder } from "./due-work-order";
 import { fnv1a64 } from "@fluncle/contracts/util/hash";
 import { dueWorkNowIso } from "./due-work-time";
 
-/** Physical due-work kinds for the remaining track selectors. */
 export type DueWorkVendorKind =
   | "apple-catalogue"
   | "apple-finding"
@@ -20,7 +19,6 @@ export type DueWorkVendorKind =
   | "mbid-isrc-refresh"
   | "mbid-prefix-strip";
 
-/** The source-table columns (and pre-joined findings facts) each evaluator may inspect. */
 export const DUE_WORK_VENDOR_SOURCE_COLUMNS = [
   "addedToSpotify",
   "appleMusicAttemptedAt",
@@ -65,7 +63,6 @@ export const DUE_WORK_VENDOR_SOURCE_COLUMNS = [
   "trackId",
 ] as const;
 
-/** Exact row-local inputs that can change catalogue-rank queue membership or ordering. */
 export const CATALOGUE_RANK_DUE_WORK_SOURCE_COLUMNS = [
   "capturePriority",
   "catalogueRankCorpus",
@@ -97,7 +94,6 @@ export const DUE_WORK_VENDOR_WORK_KIND_INVENTORY = [
   workKind: DueWorkVendorKind;
 }[];
 
-/** One pre-joined track snapshot. Evaluators never read a database or clock. */
 export type DueWorkVendorSource = {
   addedToSpotify: boolean;
   appleMusicAttemptedAt: string | null;
@@ -166,9 +162,8 @@ export type DueWorkVendorRow = {
 };
 
 export type DueWorkVendorEvaluationOptions = {
-  /** The currently-derived ranking corpus; required by the catalogue-rank evaluator. */
   rankCorpus?: string;
-  /** Freeze time at the caller so a source snapshot always evaluates reproducibly. */
+
   now: Date | string;
   sources: readonly DueWorkVendorSource[];
 };
@@ -198,8 +193,7 @@ function reliabilityDueAt(
   if (attemptedAt === null) {
     return now;
   }
-  // Legacy `shouldSkip` deliberately treats a malformed old stamp as eligible, so a clean write
-  // heals it instead of wedging that row forever.
+
   return timestampAfter(attemptedAt, cooldownMs(failures)) ?? now;
 }
 
@@ -211,7 +205,6 @@ function hasIsrc(source: DueWorkVendorSource): boolean {
   return source.isrc?.trim() !== "" && source.isrc !== null;
 }
 
-/** `listIsrcWork` preserves the legacy `isrc != ''` spelling: whitespace remains a candidate. */
 function hasLookupIsrc(source: DueWorkVendorSource): boolean {
   return source.isrc !== null && source.isrc !== "";
 }
@@ -438,11 +431,6 @@ function orderFor(kind: DueWorkVendorKind, source: DueWorkVendorSource): string 
   }
 }
 
-/**
- * The eligibility-and-order decision for one source, with no source-version hash and no sort.
- * The definition fingerprint (`due-work-definition-version.ts`) is taken over this, so it moves
- * whenever a vendor queue's membership predicate or order components move.
- */
 export function describeDueWorkVendorDecision(
   kind: DueWorkVendorKind,
   source: DueWorkVendorSource,
@@ -453,7 +441,6 @@ export function describeDueWorkVendorDecision(
   return nextDueAt === undefined ? "-" : `${nextDueAt}|${orderFor(kind, source)}`;
 }
 
-/** Evaluate one legacy selector over a stable, caller-supplied source snapshot. */
 export function evaluateDueWorkVendorQueue(
   options: DueWorkVendorEvaluationOptions & { kind: DueWorkVendorKind },
 ): DueWorkVendorRow[] {
@@ -480,7 +467,6 @@ export function evaluateDueWorkVendorQueue(
     );
 }
 
-/** Evaluate every remaining selector; physical finding/catalogue legs intentionally stay separate. */
 export function evaluateDueWorkVendor(options: DueWorkVendorEvaluationOptions): DueWorkVendorRow[] {
   return DUE_WORK_VENDOR_WORK_KIND_INVENTORY.flatMap((entry) =>
     evaluateDueWorkVendorQueue({ ...options, kind: entry.workKind }),

@@ -1,25 +1,9 @@
-// Foreign-exchange reference rates for the Costs ledger's single aggregate figure.
-//
-// Source: Frankfurter (https://frankfurter.dev) — a free, KEYLESS API over the ECB's
-// daily reference rates. We only ever need it to render ONE "what you pay today" total
-// in EUR; the individual lines keep their own fixed-price currency.
-//
-// READ-THROUGH DAILY CACHE: the rate is stored in the `exchange_rates` singleton row
-// (base EUR) and reused until it is >12h old, at which point the next read refreshes it.
-// The Costs page is admin-only + low-traffic, so this naturally hits the API at most a
-// couple of times a day. BEST-EFFORT: a fetch failure falls back to the last cached rate
-// (even if stale); with no cache at all it returns null and the page shows the native
-// per-currency breakdown instead of a converted total. Never throws.
-
 import { getDb } from "./db";
 
-// The ECB publishes once per working day; refresh a cache older than this. Keeps the
-// external call to ~once/day while self-healing if a fetch was missed.
 const STALE_MS = 12 * 60 * 60 * 1000;
 const FRANKFURTER_URL = "https://api.frankfurter.dev/v2/rates?base=EUR";
 const FETCH_TIMEOUT_MS = 4000;
 
-// EUR→currency rates (e.g. { USD: 1.18 }) plus the ECB date they are for.
 export type FxRatesDTO = {
   rates: Record<string, number>;
   ratesDate: string;
@@ -61,8 +45,6 @@ function parseRow(row: Record<string, unknown>): StoredRates | null {
   }
 }
 
-// Hit Frankfurter once. Returns null on any failure (network, timeout, non-OK, malformed
-// body) — the caller decides whether to fall back to a stale cache.
 async function fetchEurRates(): Promise<FxRatesDTO | null> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
@@ -74,7 +56,6 @@ async function fetchEurRates(): Promise<FxRatesDTO | null> {
       return null;
     }
 
-    // v2/rates returns an array of { date, base, quote, rate } rows.
     const body = (await response.json()) as unknown;
 
     if (!Array.isArray(body) || body.length === 0) {
@@ -110,9 +91,6 @@ async function fetchEurRates(): Promise<FxRatesDTO | null> {
   }
 }
 
-// The public read: cached EUR rates, refreshed at most ~once/day, best-effort. Returns
-// null only when there is no cache AND the live fetch fails — the page then shows the
-// per-currency breakdown with no converted total.
 export async function getEurRates(): Promise<FxRatesDTO | null> {
   const db = await getDb();
 
@@ -131,7 +109,6 @@ export async function getEurRates(): Promise<FxRatesDTO | null> {
   const fetched = await fetchEurRates();
 
   if (!fetched) {
-    // Fall back to the stale cache if we have one; otherwise no total.
     return cached ? { rates: cached.rates, ratesDate: cached.ratesDate } : null;
   }
 

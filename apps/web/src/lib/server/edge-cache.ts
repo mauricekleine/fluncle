@@ -1,67 +1,23 @@
 import { env, waitUntil } from "cloudflare:workers";
 
-// `caches.default` is the Workers global cache (worker-configuration.d.ts), but the
-// app's tsconfig pulls the DOM lib whose `CacheStorage` has no `.default`. Reach it
-// through a narrow typed view rather than widening the whole project's lib set.
-// Resolved lazily and defensively: outside the Workers runtime (Node tests, the
-// `turso dev` data layer) the `caches` global is absent, so this returns undefined
-// and the cache/purge paths no-op instead of throwing.
 function edgeCache(): Cache | undefined {
   const store = (globalThis as { caches?: { default?: Cache } }).caches;
 
   return store?.default;
 }
 
-// Edge cache for the public read surfaces: the log pages (`/log`, `/log/<id>`), the
-// entity detail pages (`/artist|/album|/label/<slug>`), the hub/index pages (`/`,
-// `/artists`, `/albums`, `/labels`, `/tracks`, `/fresh`), and — the one non-HTML tier —
-// the sitemap documents (`/sitemap.xml` and its children).
-//
-// Why the Cache API, not bare `Cache-Control`: this Worker IS the origin — it
-// renders the SSR document itself rather than `fetch()`ing an upstream. Cloudflare
-// only auto-caches responses it proxies from an origin; a Worker-generated response
-// is never auto-stored from its headers. So we drive `caches.default` explicitly:
-// store the rendered document, serve it on the next hit, and revalidate in the
-// background. The cold path (Worker SSR + a Turso read per render, ~896ms TTFB)
-// then only runs on a true miss or a background refresh, never on the hot path.
-//
-// A finding is publish-then-immutable in practice (the facts are minted on add; the
-// async agent fills bpm/key/video once; an operator may re-tag or fix a note), so a
-// short fresh window with a long stale-while-revalidate tail is the right shape:
-// almost every hit is a cache hit, the rare edit is reflected within the fresh
-// window at worst, and an explicit purge-on-change (purgeLogCache) makes even that
-// window correct. The Cache API has no native SWR, so we implement it: the stored
-// entry carries a long hard TTL (the full SWR window) plus our own freshness stamp,
-// and `withEdgeCache` decides fresh / stale-serve-and-revalidate / miss from it.
-
-/**
- * One cache policy: how long a stored document counts as fresh, how long past that it may
- * still be served while a background render refreshes it, and the browser/CDN-facing
- * directive that states both. Two instances exist (below) — a page policy and a hub policy —
- * because a DETAIL page and an INDEX page go stale for different reasons.
- */
 export type EdgeCachePolicy = {
-  /** The browser/CDN-facing `Cache-Control` for a response served under this policy. */
   readonly cacheControl: string;
-  /**
-   * The ONE response content-type a path under this policy is allowed to store. It is the
-   * storability gate (`isStorable`) AND the reason the HTML tiers can require an HTML-accepting
-   * client while the sitemap tier cannot: a sitemap route answers XML to every crawler, whatever
-   * it put in `Accept`. Anything else off the same path (a redirect, a 404, an error page) is
-   * never stored as the document.
-   */
+
   readonly contentType: "application/xml" | "text/html";
-  /** Within this many seconds of being stored, a cached document is served as-is. */
+
   readonly freshSeconds: number;
-  /** What we ask `caches.default` to keep the entry for: the whole fresh+stale window. */
+
   readonly storedMaxAge: number;
-  /** Past the fresh window, how long a stale copy may still be served while it refreshes. */
+
   readonly swrSeconds: number;
 };
 
-// `s-maxage`/`stale-while-revalidate` let any downstream shared cache (and Cloudflare's own,
-// where applicable) apply the same policy; `max-age=0` keeps private browser caches honest so
-// a viewer always revalidates against the edge rather than pinning a stale page locally.
 function policy(
   freshSeconds: number,
   swrSeconds: number,
@@ -76,148 +32,54 @@ function policy(
   };
 }
 
-// Fresh window for a DETAIL page (`/log/<id>`, `/artist|/album|/label/<slug>`) and the purged
-// `/log` index. Short because a re-enrichment or re-tag should surface quickly even if a purge
-// is missed; long enough that bursts of crawler/share traffic collapse onto one render.
 export const FRESH_SECONDS = 300;
-// Stale-while-revalidate tail for a detail page. Deliberately ~an hour, NOT a day: the SSR
-// document references BUILD-SCOPED hashed asset URLs (`/assets/<hash>.js`), so HTML that
-// outlives its build hands a client dead chunk URLs and breaks client-side navigation until a
-// reload. Deploys land many times a day, so an hour keeps the stale tail inside the deploy
-// cadence; the client-side chunk-load recovery in `routes/__root.tsx` is the second half of
-// that guarantee. A page hit at least once an hour never pays a cold render anyway (the first
-// request past the fresh window serves stale and refreshes behind it).
+
 export const SWR_SECONDS = 3_600;
 
-/** The detail-page / `/log` policy. */
 export const PAGE_CACHE_POLICY = policy(FRESH_SECONDS, SWR_SECONDS);
 
-// Fresh window for a HUB/INDEX page (`/`, `/artists`, `/albums`, `/labels`, `/tracks`,
-// `/fresh`). A minute, because an index invalidates on ANY member change — a new finding, an
-// enrichment, an artist bio, a catalogue row the crawler minted — across four entity kinds and
-// several write paths. Wiring an explicit purge into every one of those would be a wide,
-// easy-to-miss fan-out, and the crawler alone would purge the hubs continuously, which defeats
-// the cache. A 60s ceiling is the better trade: bounded, self-healing, and zero coupling to the
-// write paths, while still collapsing effectively all crawler and visitor traffic onto one
-// render per minute (the measured cold render for `/artists` is ~1s, ~98% of it server think).
 export const HUB_FRESH_SECONDS = 60;
-// Short stale tail for the same reason the detail tail is short (build-scoped assets), and
-// shorter still because a hub's whole job is to show what just landed.
+
 export const HUB_SWR_SECONDS = 600;
 
-/** The hub/index policy. */
 export const HUB_CACHE_POLICY = policy(HUB_FRESH_SECONDS, HUB_SWR_SECONDS);
 
-// Fresh window for the SITEMAP documents (`/sitemap.xml` and its `/sitemap/<kind>-<n>.xml`
-// children). An hour, because a crawl cadence tolerates far more staleness than a reader does:
-// a finding that lands at 09:00 being listed at 09:59 costs nothing, and the alternative — every
-// crawler hit paying the archive-wide read behind these documents — is what made `/sitemap.xml`
-// answer in seconds and time the post-deploy surface sweep out.
 export const SITEMAP_FRESH_SECONDS = 3_600;
-// A day-long stale tail, where the HTML tiers get an hour. The reason theirs is short does not
-// apply here: an XML document references no build-scoped `/assets/<hash>.js`, so it cannot outlive
-// its build into a broken page. A crawler that comes back inside the day is served instantly
-// while the refresh runs behind it.
+
 export const SITEMAP_SWR_SECONDS = 86_400;
 
-/**
- * The sitemap policy — the one non-HTML tier. Its `contentType` is what lets `server.ts` skip the
- * HTML-accepting-client guard for these paths (a crawler asking for `application/xml`, or sending
- * no useful `Accept` at all, must still be served from cache) while `isStorable` keeps a 404 or a
- * stray HTML error page from ever being stored as the sitemap.
- */
 export const SITEMAP_CACHE_POLICY = policy(
   SITEMAP_FRESH_SECONDS,
   SITEMAP_SWR_SECONDS,
   "application/xml",
 );
 
-/** The detail-page directive. Kept as a named export because it is the site's default shape. */
 export const PUBLIC_CACHE_CONTROL = PAGE_CACHE_POLICY.cacheControl;
 
-// Our own freshness stamp (epoch ms at store time); read back to compute age.
 const STAMP_HEADER = "x-edge-cached-at";
 const FRESH_UNTIL_HEADER = "x-edge-fresh-until";
 const EXPIRES_AT_HEADER = "x-edge-expires-at";
 
-/** True for the public log surfaces we edge-cache: `/log` and `/log/<id>`. */
 export function isCacheableLogPath(pathname: string): boolean {
   return pathname === "/log" || pathname === "/log/" || pathname.startsWith("/log/");
 }
 
-// The public entity DETAIL pages we edge-cache: `/artist/<slug>`, `/album/<slug>`,
-// `/label/<slug>`, `/track/<trackId>` (singular + a single slug segment). The plural index pages
-// are cached too, but under the separate, shorter HUB policy below — they invalidate on any member
-// change, so they ride a 60s fresh window instead of an explicit purge, whereas a detail page is
-// purged by the write paths. Enrolment is the slashless canonical path `entityPath` builds —
-// `/artist/<slug>`, never `/artist/<slug>/` — because a cache entry keyed on a path the purge
-// cannot target is unpurgeable. A trailing-slash request keeps its route behaviour and simply
-// bypasses this tier. A nested path (`/artist/<slug>/x`) is not a detail page. `/tracks` (the
-// plural hub) does not match: the alternation requires a `/` after the segment, so the hub keeps
-// its own HUB-policy enrolment below.
-//
-// `/track/<trackId>` belongs on this tier on both halves of the policy:
-//   - The FRESH window. A track destination is a detail page in exactly the sense this policy
-//     means: its content is one row's enrichment (tempo, key, cover, the outbound links) plus its
-//     neighbours, and a re-enrichment must surface inside minutes even when a purge is missed.
-//     300s is the same trade `/log/<id>` and `/album/<slug>` make for the same reason.
-//   - The PURGE, which the window does not stand in for. `track` is an `EntityCacheKind`, and
-//     `getTrackEntityPurgeTargets` returns the track's own page alongside its artist/album/label
-//     pages, so every write path that calls `purgeTrackEntityPages` (track-update, publish) evicts
-//     this page too. That is the explicit invalidation the detail tier assumes.
-// The stale tail is the shared hour, bounded for the same build-scoped-asset reason as every other
-// HTML tier; a track page carries the same build-scoped assets and so the same bound.
-//
-// The enrolment carries more weight here than anywhere else in the alternation: this is the
-// surface with ~122k crawlable URLs behind it, an uncached view pays an exact vector scan for its
-// neighbours (lib/server/track-page.ts), and crawler traffic is uncached-first by definition.
 const ENTITY_DETAIL_PATH = /^\/(?:artist|album|label|track)\/[^/]+$/;
 const PUBLIC_ENTITY_DETAIL_PATH = /^\/(?:artist|album|label|track)\/[^/]+\/?$/;
 
-/**
- * True for a cacheable entity detail page — AND ONLY when it carries no query string. The
- * cache key drops the query (cacheKeyForPath), so a paginated/sorted variant (`?page=2`,
- * `?sort=…`) would collide onto the canonical page-1 entry; caching only the bare canonical
- * URL (what crawlers hit) keeps the SEO win without ever serving page 2's body for page 1.
- */
 export function isCacheableEntityRequest(pathname: string, search: string): boolean {
   return search === "" && ENTITY_DETAIL_PATH.test(pathname);
 }
 
-// The PAGINATED catalogue hubs: the four editorial indexes and the fresh-releases board. These
-// are the SLOW pages — each is a multi-row aggregate query, and `/artists` measured ~1s of server
-// think — and they are the ones crawlers hammer, so they are where an edge hit is worth the most.
-// They accept a lone `?page=<n>` (the DOCUMENTED crawler pager into the catalogue long tail — see
-// albums.index.tsx / labels.index.tsx) folded into the cache key; every richer query variant is
-// refused. `/log` is deliberately absent: it is on the page policy because the finding write paths
-// already purge it explicitly.
-//
-// The ROOT is deliberately absent too, and that is a change from when it WAS the paginated archive
-// feed. `/` is now the front door: it takes no `?page=`, so a `?page=2` on it would key a second
-// entry holding a byte-identical page-1 body. It rides the bare-URL-only enrolment below instead,
-// alongside `/findings` — the archive feed it handed that job to, which paginates on the CLIENT
-// through `/api/v1/tracks` and so has no cacheable page variant of its own either.
 const HUB_PATHS_BELOW_ROOT = new Set(["/albums", "/artists", "/fresh", "/labels", "/tracks"]);
 
-/** True for one of the paginated catalogue hubs (the five plural indexes/boards). */
 function isPaginatedHubPath(pathname: string): boolean {
   const trimmed = pathname.length > 1 && pathname.endsWith("/") ? pathname.slice(0, -1) : pathname;
 
   return HUB_PATHS_BELOW_ROOT.has(trimmed);
 }
 
-// The additional stable public pages enrolled at the HUB policy but cached BARE-URL-ONLY (no
-// cacheable page param): the index pages that invalidate on any member change (the 60s window
-// IS their invalidation, exactly like the catalogue hubs), the deploy-scoped static/legal/docs
-// pages (they change only on deploy, which rotates the build-scoped asset hashes the SWR tail is
-// bounded by), and the stable-but-writable detail pages (a galaxy, a logbook sector, a
-// newsletter edition). The detail pages ride the 60s window rather than an explicit purge — the
-// write is rare and the window self-heals — so no write path has to learn to purge them.
 const STATIC_HUB_EXACT = new Set([
-  // The FRONT DOOR and the archive feed it opens onto. Both are query-less canonical pages: `/`
-  // takes no params at all (a `?story=` on it 301s away before a response is ever built), and
-  // `/findings` carries only the Stories dialog's `?story=`, which must NEVER be shared-cached —
-  // a bare-URL-only enrolment refuses every query, which is exactly that guarantee.
   "/",
   "/findings",
   "/about",
@@ -231,29 +93,15 @@ const STATIC_HUB_EXACT = new Set([
   "/terms",
 ]);
 
-// A single detail segment under the three writable-but-stable parents: `/galaxies/<slug>`,
-// `/logbook/<sector>`, `/newsletter/<n>`. One segment only (a nested path is not a detail page),
-// and a 404 for a bad segment is simply never stored (isStorable is 200-only). A pagination
-// variant on these (`/galaxies/<slug>?page=2`, `/logbook/<sector>?page=2`) is refused by the
-// query-less guard in isCacheableHubRequest, so only the bare canonical URL is cached.
 const STATIC_HUB_DETAIL = /^\/(?:galaxies|logbook|newsletter)\/[^/]+$/;
 
-/**
- * True for a bare-URL-only HUB-policy page (the stable enrolments above). The caller
- * (`isCacheableHubRequest`) has already rejected any query string; this only classifies the
- * path. A single trailing slash is tolerated.
- */
 function isStaticHubPath(pathname: string): boolean {
-  // The ROOT is matched in its exact form only. Trimming first would fold `//` (a doubled root, a
-  // real thing crawlers and bad links produce) onto `/` and hand it the front door's cache entry.
   if (pathname === "/") {
     return STATIC_HUB_EXACT.has("/");
   }
 
   const trimmed = pathname.endsWith("/") ? pathname.slice(0, -1) : pathname;
 
-  // Whatever trimming produced the root or nothing was not a path (`//`, `/`): the exact-form
-  // branch above is the only way `/` is ever a hub.
   if (trimmed === "" || trimmed === "/") {
     return false;
   }
@@ -262,8 +110,6 @@ function isStaticHubPath(pathname: string): boolean {
     return true;
   }
 
-  // The `/docs` doc tree (`/docs`, `/docs/api`, `/docs/<slug>`). Anchored on `/docs/` so the
-  // sibling markdown emitter `/docs.md/<slug>` (its own Cache-Control, non-HTML) is NOT caught.
   if (trimmed.startsWith("/docs/")) {
     return true;
   }
@@ -271,14 +117,6 @@ function isStaticHubPath(pathname: string): boolean {
   return STATIC_HUB_DETAIL.test(trimmed);
 }
 
-/**
- * A lone `?page=<positive integer>` and nothing else → that integer; every other search →
- * `null`. This is the ONE query shape a paginated hub may cache: it folds into the cache key
- * (cacheKeyRequest) as the PARSED integer, so `?page=007` and `?page=7` key identically and can
- * never collide onto page 1 or each other. Anything else — `?page=0`, `?page=-1`, `?page=1.5`,
- * `?page=`, a second param, a repeated `page`, or any non-`page` param — is refused, because the
- * key would drop the difference and serve the wrong body.
- */
 function loneNumericPage(search: string): number | null {
   const params = new URLSearchParams(search.startsWith("?") ? search.slice(1) : search);
   const keys = [...params.keys()];
@@ -289,7 +127,6 @@ function loneNumericPage(search: string): number | null {
 
   const raw = params.get("page");
 
-  // A bare run of digits only — no sign, decimal, or whitespace — and at least 1.
   if (raw === null || !/^\d+$/.test(raw)) {
     return null;
   }
@@ -299,20 +136,6 @@ function loneNumericPage(search: string): number | null {
   return page >= 1 ? page : null;
 }
 
-/**
- * True for a cacheable hub/index page. Two tiers:
- *  - a PAGINATED catalogue hub (`/`, `/artists`, `/albums`, `/labels`, `/tracks`, `/fresh`): its
- *    bare canonical URL, OR a lone `?page=<n>` (folded into the key so page N never collides onto
- *    page 1). Every richer variant (`?galaxy=…`, `?sort=…`, `?view=…`, `?story=…`, `?page=2&…`)
- *    is refused;
- *  - a STATIC/index/detail page enrolled at the hub policy (galaxies, mixtapes, logbook,
- *    newsletter, reach, about, privacy, terms, the docs tree, and the galaxy/sector/edition
- *    detail pages): its bare canonical URL ONLY — any query string is refused, because the key
- *    drops it and a `?page=`/`?platform=` variant would otherwise serve the wrong body.
- * The cache key drops (paginated) or refuses (static) every uncacheable query for exactly the
- * reason `isCacheableEntityRequest` demands it. A single trailing slash is tolerated and keys as
- * its own entry, so no variant is ever served for another URL.
- */
 export function isCacheableHubRequest(pathname: string, search: string): boolean {
   if (isPaginatedHubPath(pathname)) {
     return search === "" || loneNumericPage(search) !== null;
@@ -325,24 +148,12 @@ export function isCacheableHubRequest(pathname: string, search: string): boolean
   return isStaticHubPath(pathname);
 }
 
-// The sitemap documents: the index and its per-kind children. Bare canonical URLs only (the key
-// drops the query, and neither document has a legitimate query variant); the child's whole
-// identity rides its path segment, so each child keys as its own entry. A malformed segment 404s
-// and `isStorable` refuses to store it.
 const SITEMAP_PATH = /^\/sitemap(?:\.xml|\/[A-Za-z0-9._-]+)$/;
 
-/** True for `/sitemap.xml` or one of its `/sitemap/<kind>-<n>.xml` children, query-free. */
 function isCacheableSitemapRequest(pathname: string, search: string): boolean {
   return search === "" && SITEMAP_PATH.test(pathname);
 }
 
-/**
- * True for a public HTML page path, independent of whether this particular URL variant earns a
- * cache entry. A trailing-slash entity URL is still a page request — the router redirects it to
- * the slashless canonical path — so content negotiation must recognize it even though enrolment
- * remains slashless-only. Query strings are intentionally ignored: a page variant still answers
- * the same HTML-vs-JSON question, while the cache policy continues to reject unsafe variants.
- */
 export function isPublicHtmlPagePath(pathname: string): boolean {
   return (
     isCacheableLogPath(pathname) ||
@@ -351,15 +162,6 @@ export function isPublicHtmlPagePath(pathname: string): boolean {
   );
 }
 
-/**
- * THE chokepoint: the policy this request should be edge-cached under, or `undefined` when it
- * must not be shared-cached at all. Every caller (server.ts) goes through this one function, so
- * the "which paths are cacheable, and for how long" decision is defined and tested in one place.
- *
- * Callers remain responsible for the request-shape guards this function cannot see: GET only, no
- * admin cookie, and — for the HTML tiers ONLY — an HTML-accepting client (see server.ts, which
- * reads `contentType` off the returned policy to decide).
- */
 function releaseSensitivePath(pathname: string): boolean {
   const path = pathname.length > 1 ? pathname.replace(/\/$/, "") : pathname;
   return (
@@ -375,7 +177,6 @@ function secondsUntilNextUtcMidnight(now: Date): number {
   return Math.max(0, Math.floor((next - now.getTime()) / 1000));
 }
 
-/** The next UTC day changes release membership without a write, so both cache windows end there. */
 export function releaseBoundPolicy(base: EdgeCachePolicy, now: Date): EdgeCachePolicy {
   const remaining = secondsUntilNextUtcMidnight(now);
   if (base.storedMaxAge <= remaining) {
@@ -386,7 +187,6 @@ export function releaseBoundPolicy(base: EdgeCachePolicy, now: Date): EdgeCacheP
   return policy(fresh, stale, base.contentType);
 }
 
-/** Feed responses use the same release-day lifetime rule as the pages they describe. */
 export function releaseBoundFeedCacheControl(now: Date = new Date()): string {
   return releaseBoundPolicy(PAGE_CACHE_POLICY, now).cacheControl;
 }
@@ -413,26 +213,12 @@ export function edgeCachePolicyFor(
     : undefined;
 }
 
-// The canonical origin for cache keys. Storing and purging both key off THIS origin
-// (plus the request's path), never the incoming host — so the key a write deletes is
-// exactly the key a read stored, regardless of which hostname served the request
-// (www, a preview tunnel, localhost). Without this, a purge built from the canonical
-// URL would miss an entry stored under a different incoming origin.
 const CANONICAL_ORIGIN = "https://www.fluncle.com";
 
-// The stable `caches.default` key for a canonical path: canonical origin + that path,
-// dropping any query string so `?utm=…`/share params can't fragment or poison the
-// cache. Used by the PURGE paths, which key off query-less canonical paths.
 function cacheKeyForPath(pathname: string): Request {
   return new Request(`${CANONICAL_ORIGIN}${pathname}`, { method: "GET" });
 }
 
-// The stable `caches.default` key for an incoming READ request: canonical origin + pathname,
-// plus — for a paginated hub carrying a lone `?page=<n>` — that PARSED page (`/artists?page=3`).
-// Every other query is dropped, so share/utm params can't fragment the cache, while a legitimate
-// `?page=3` keys as its own entry and can never collide onto page 1. The page is the parsed
-// integer, so the key is canonical (`?page=007` and `?page=7` are one entry). Static/legal/docs
-// and entity/log paths never reach the page branch (not paginated hubs), so they key query-less.
 function cacheKeyRequest(pathname: string, search: string): Request {
   const page = isPaginatedHubPath(pathname) ? loneNumericPage(search) : null;
   const keyPath = page === null ? pathname : `${pathname}?page=${page}`;
@@ -440,11 +226,6 @@ function cacheKeyRequest(pathname: string, search: string): Request {
   return new Request(`${CANONICAL_ORIGIN}${keyPath}`, { method: "GET" });
 }
 
-/**
- * Serve a cacheable document through `caches.default` with manual stale-while-revalidate,
- * under the given policy (from `edgeCachePolicyFor`). `render` produces the fresh response on
- * a miss or a background refresh; it is only invoked when needed.
- */
 export async function withEdgeCache(
   request: Request,
   render: () => Promise<Response>,
@@ -452,7 +233,6 @@ export async function withEdgeCache(
 ): Promise<Response> {
   const cache = edgeCache();
 
-  // No edge cache available (outside the Workers runtime): render straight through.
   if (!cache) {
     return render();
   }
@@ -474,7 +254,6 @@ export async function withEdgeCache(
       return tagHit(hit, "fresh", cachePolicy);
     }
 
-    // Stale but within the SWR tail: serve the stale copy now, refresh behind it.
     waitUntil(refresh(cache, cacheKey, render, cachePolicy));
 
     return tagHit(hit, "stale", cachePolicy);
@@ -484,7 +263,6 @@ export async function withEdgeCache(
     await cache.delete(cacheKey);
   }
 
-  // Cold miss: render, store (if cacheable), and serve.
   const response = await render();
 
   if (isStorable(response, cachePolicy)) {
@@ -505,15 +283,10 @@ async function refresh(
   if (isStorable(response, cachePolicy)) {
     await cache.put(cacheKey, toStoredResponse(response, cachePolicy));
   } else {
-    // The page stopped being cacheable (e.g. it now 404s/redirects): evict so the
-    // next request re-renders instead of resurrecting a stale body.
     await cache.delete(cacheKey);
   }
 }
 
-// Only cache a plain 200 of the ONE shape the policy's paths emit. A 301 (trackId →
-// coordinate), a 404 (a missing finding, a sitemap shard past the end), or a response of
-// the wrong type must never be edge-cached as the document.
 function isStorable(response: Response, cachePolicy: EdgeCachePolicy): boolean {
   return (
     response.status === 200 &&
@@ -521,7 +294,6 @@ function isStorable(response: Response, cachePolicy: EdgeCachePolicy): boolean {
   );
 }
 
-// Re-wrap with the public Cache-Control, our freshness stamp, and a stored hard TTL.
 function toStoredResponse(response: Response, cachePolicy: EdgeCachePolicy): Response {
   const stored = new Response(response.body, response);
   const storedAt = Date.now();
@@ -533,8 +305,6 @@ function toStoredResponse(response: Response, cachePolicy: EdgeCachePolicy): Res
   return stored;
 }
 
-// On the way out to the client, present the real SWR directive (not the long stored
-// TTL) and a debug status so a preview can confirm hit/miss without guessing.
 function tagHit(
   response: Response,
   status: "fresh" | "stale",
@@ -562,28 +332,10 @@ function tagResponse(response: Response, status: string, cachePolicy: EdgeCacheP
   return out;
 }
 
-// ── Purge on change ──────────────────────────────────────────────────────────
-//
-// A write to a finding (publish, enrichment, re-tag, video link, note edit) must
-// drop that finding's `/log/<id>` page and the `/log` index from cache so the next
-// request re-renders. Two layers: a local `cache.delete` (instant, this data center
-// only) and a global Cloudflare purge-by-URL (every data center) when the zone token
-// is configured. The Worker runs under a Placement Hint (wrangler.jsonc), so "this data
-// center" is the placed one that also serves the cache reads; the global purge covers
-// entries held anywhere else. The global purge is best-effort — if the token is absent
-// or the call fails, the local delete plus the short fresh window still bound
-// staleness, so a write never blocks on it.
-
-/** The log paths a finding's change can stale: its own page and the index. */
 function logPathsToPurge(logId: string): string[] {
   return [`/log/${encodeURIComponent(logId)}`, "/log"];
 }
 
-/**
- * Purge a finding's cached log surfaces after a write. Fire-and-extend via
- * `waitUntil` so callers (the write paths) don't await network I/O; safe to call
- * with a missing/blank logId (no-op).
- */
 export function purgeLogCache(logId: string | null | undefined): void {
   if (!logId?.trim()) {
     return;
@@ -596,12 +348,6 @@ async function purgeLogCacheNow(logId: string): Promise<void> {
   await purgePathsNow(logPathsToPurge(logId));
 }
 
-/**
- * The shared purge core: evict a set of canonical paths from BOTH the local `caches.default`
- * (instant, this data center) and the global Cloudflare cache (every data center, via the
- * zone purge-by-URL REST API). Every purge — log surfaces and entity pages alike — funnels
- * through here so the two-layer behaviour and the canonical-origin keying are defined once.
- */
 export async function purgePathsNow(paths: string[]): Promise<void> {
   if (paths.length === 0) {
     return;
@@ -609,17 +355,10 @@ export async function purgePathsNow(paths: string[]): Promise<void> {
 
   const cache = edgeCache();
 
-  // Local eviction: instant, this data center. Always safe, no credentials. Skipped
-  // outside the Workers runtime (no `caches` global, e.g. unit tests). Keys off the
-  // SAME canonical-origin key the read path stored under (cacheKeyForPath), so the
-  // delete always lands on the entry a read created.
   if (cache) {
     await Promise.all(paths.map((path) => cache.delete(cacheKeyForPath(path)).catch(() => false)));
   }
 
-  // Global eviction: every data center, via the zone purge-by-URL REST API. Skipped
-  // (not an error) when the operator hasn't wired the token — the local delete + the
-  // short fresh window keep staleness bounded.
   const zoneId = readBinding("CF_CACHE_PURGE_ZONE_ID");
   const token = readBinding("CF_CACHE_PURGE_TOKEN");
 
@@ -638,44 +377,19 @@ export async function purgePathsNow(paths: string[]): Promise<void> {
       },
       method: "POST",
     });
-  } catch {
-    // Best-effort: the local delete + short fresh window bound staleness regardless.
-  }
+  } catch {}
 }
 
-// ── Purge the public entity detail pages ───────────────────────────────────────
-//
-// The `/artist|/album|/label/<slug>` pages are a JOIN — an entity row plus the findings and
-// catalogue rows that point at it — so a write to any of those must drop the affected page(s)
-// exactly as a finding write drops `/log/<id>`. Same two layers, same canonical keying.
-
-/** The three cacheable entity detail kinds. */
 export type EntityCacheKind = "artist" | "album" | "label" | "track";
 
-/**
- * The canonical path for one entity detail page. `track` rides the same shape with the track's
- * permanent id in the slug position — `/track/<trackId>`, exactly what `trackPagePath` builds and
- * what `ENTITY_DETAIL_PATH` matches, so the purge key is byte-identical to the read key.
- */
 function entityPath(kind: EntityCacheKind, slug: string): string {
   return `/${kind}/${encodeURIComponent(slug)}`;
 }
 
-/**
- * The canonical purge URL for an entity detail page — exported so the URL shape is unit-pinned
- * (a drifted origin or path would silently leave a stale page served, exactly as for the log
- * surfaces).
- */
 export function entityPurgeUrl(kind: EntityCacheKind, slug: string): string {
   return `${CANONICAL_ORIGIN}${entityPath(kind, slug)}`;
 }
 
-/**
- * Purge a set of entity detail pages after a write, awaitably. Blank slugs are dropped and
- * duplicate targets collapse to one path. Callers that ALREADY run inside a `waitUntil`
- * (e.g. after resolving a track's linked slugs) use this; everything else uses the
- * fire-and-forget `purgeEntityCache`/`purgeEntityCaches` below.
- */
 export async function purgeEntityCachesNow(
   targets: { kind: EntityCacheKind; slug: string }[],
 ): Promise<void> {
@@ -690,15 +404,10 @@ export async function purgeEntityCachesNow(
   await purgePathsNow(paths);
 }
 
-/**
- * Fire-and-forget purge of several entity detail pages after a write — `waitUntil`-extended
- * so the write path never awaits network I/O. Safe with an empty/blank-only target list.
- */
 export function purgeEntityCaches(targets: { kind: EntityCacheKind; slug: string }[]): void {
   waitUntil(purgeEntityCachesNow(targets));
 }
 
-/** Fire-and-forget purge of a single entity detail page. No-op on a missing/blank slug. */
 export function purgeEntityCache(kind: EntityCacheKind, slug: string | null | undefined): void {
   if (!slug?.trim()) {
     return;
@@ -707,9 +416,6 @@ export function purgeEntityCache(kind: EntityCacheKind, slug: string | null | un
   purgeEntityCaches([{ kind, slug: slug.trim() }]);
 }
 
-// The purge credentials live on the Worker env (wrangler vars/secrets), read the
-// same way the rest of the server reads bindings. Optional: absent in dev and until
-// the operator provisions the token, where the local delete path still runs.
 function readBinding(key: "CF_CACHE_PURGE_ZONE_ID" | "CF_CACHE_PURGE_TOKEN"): string | undefined {
   const value = (env as unknown as Record<string, string | undefined>)[key];
 

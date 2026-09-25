@@ -30,11 +30,6 @@ export type GoalDReviewedWriterEntry = DueWorkReviewedMutationSiteBase & {
     | "test-fixture";
 };
 
-/**
- * Every production writer that transactionally couples an eligibility source mutation to the
- * subject-level due-work repair marker. The static completeness test enumerates the real helper
- * callsites and requires an exact match with this list.
- */
 export const DUE_WORK_PRODUCER_INVENTORY = [
   {
     file: "scripts/backfill-album-graph.ts",
@@ -275,11 +270,6 @@ export const DUE_WORK_PRODUCER_INVENTORY = [
   },
 ] as const satisfies readonly DueWorkProducerInventoryEntry[];
 
-/**
- * Exact source mutation sites that are either statement builders whose every callsite is checked
- * for transactional coupling, or writes that cannot change a due-work evaluator input. Site ids
- * include the normalized SQL fingerprint, so another mutation in the same file fails closed.
- */
 export const DUE_WORK_REVIEWED_NONPRODUCER_WRITERS = [
   {
     disposition: "non-eligibility",
@@ -706,7 +696,6 @@ export const DUE_WORK_REVIEWED_NONPRODUCER_WRITERS = [
   },
 ] as const satisfies readonly DueWorkReviewedWriterEntry[];
 
-/** Exact dispositions for Goal D source-table SQL that does not owe a new shadow repair marker. */
 export const GOAL_D_REVIEWED_NONPROJECTION_WRITERS = [
   {
     disposition: "delegated-atomicity",

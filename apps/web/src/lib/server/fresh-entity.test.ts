@@ -1,15 +1,3 @@
-// The per-entity fresh reads — the whole-archive `/fresh` narrowed to ONE artist or ONE label,
-// proven against the REAL migrated schema on an in-memory libSQL engine (the fresh.test.ts harness).
-// What is easy to get wrong and impossible to see without a DB:
-//
-//   1. THE NARROWING IS LITERAL. An artist feed carries only tracks credited to THAT artist (via
-//      the `track_artists` join); a label feed only tracks pointing at THAT `label_id`. Another
-//      entity's fresh release never leaks in.
-//   2. THE REGISTER SPLIT survives the narrowing: a certified finding keeps its coordinate + cover;
-//      an uncertified catalogue row carries neither (the Unlit Rule).
-//   3. THE WINDOW holds: only releases in the trailing 30 days, no future-dated pre-order.
-//   4. AN UNKNOWN SLUG resolves to `undefined` (the route turns that into a 404).
-
 import { type Client } from "@libsql/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -25,8 +13,6 @@ import { createIntegrationDb } from "./integration-db";
 import { listFreshTracks } from "./fresh";
 import { listArtistFreshTracks, listLabelFreshTracks } from "./fresh-entity";
 
-// A fixed clock so the window boundaries are deterministic. Relative to this NOW:
-//   windowStart = 2026-06-17, today = 2026-07-17.
 const NOW = new Date("2026-07-17T12:00:00.000Z");
 
 let db: Client;
@@ -45,7 +31,6 @@ async function seedLabel(id: string, name: string, slug: string): Promise<void> 
   });
 }
 
-/** A `tracks` row with an optional finding, credited to `artistIds` and (optionally) a label. */
 async function seedTrack(options: {
   artistIds?: string[];
   artists: string[];
@@ -118,7 +103,6 @@ describe("listArtistFreshTracks", () => {
     await seedArtist("art_a", "Camo & Krooked", "camo-and-krooked");
     await seedArtist("art_b", "Someone Else", "someone-else");
 
-    // The artist's certified finding (lit) + uncertified catalogue row (unlit), both in-window.
     await seedTrack({
       artistIds: ["art_a"],
       artists: ["Camo & Krooked"],
@@ -132,7 +116,7 @@ describe("listArtistFreshTracks", () => {
       releaseDate: "2026-07-10",
       trackId: "a_catalogue",
     });
-    // Another artist's fresh release — must NOT leak into this feed (the literal rule).
+
     await seedTrack({
       artistIds: ["art_b"],
       artists: ["Someone Else"],
@@ -149,7 +133,6 @@ describe("listArtistFreshTracks", () => {
       "Title a_catalogue",
     ]);
 
-    // THE RAIL: the certified finding carries its coordinate + cover; the unlit row carries neither.
     const finding = feed?.tracks[0];
     expect(finding?.certified).toBe(true);
     expect(finding?.logId).toBe("200.7.a_finding");
@@ -165,13 +148,13 @@ describe("listArtistFreshTracks", () => {
     await seedTrack({
       artistIds: ["art_a"],
       artists: ["Camo & Krooked"],
-      releaseDate: "2026-05-01", // outside the window
+      releaseDate: "2026-05-01",
       trackId: "too_old",
     });
     await seedTrack({
       artistIds: ["art_a"],
       artists: ["Camo & Krooked"],
-      releaseDate: "2026-08-01", // future — not out yet
+      releaseDate: "2026-08-01",
       trackId: "preorder",
     });
     await seedTrack({
@@ -222,7 +205,7 @@ describe("listLabelFreshTracks", () => {
       releaseDate: "2026-07-11",
       trackId: "l_catalogue",
     });
-    // A fresh release on a DIFFERENT label — must not appear.
+
     await seedTrack({
       artists: ["Someone"],
       certified: true,

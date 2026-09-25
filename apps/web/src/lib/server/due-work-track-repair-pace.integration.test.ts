@@ -118,7 +118,6 @@ async function countRankRows(where: string, args: string[] = []): Promise<number
   );
 }
 
-/** The per-definition probe loop the single repair-index read must agree with. */
 async function firstPendingDefinitionByDefinitionProbe(
   client: DueWorkClient,
 ): Promise<DueWorkRepairDefinition<string> | undefined> {

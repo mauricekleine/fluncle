@@ -31,36 +31,16 @@ import { DUE_WORK_TRACK_WORK_KIND_INVENTORY } from "./due-work-track-definitions
 import { DUE_WORK_VENDOR_WORK_KIND_INVENTORY } from "./due-work-vendor-definitions";
 import { advanceProjectionFenceStatement, TRACK_DUE_AUDIT_FENCE_KEY } from "./projection-fences";
 
-/**
- * Physical queue rows one track source marker expands into. A track marker is the widest subject:
- * it projects into every track queue, every vendor queue, and every finding queue, and each of
- * those outcomes is exactly one row in the page's write batch — an upsert when the queue wants the
- * subject, a delete when it does not.
- */
 export const TRACK_SOURCE_REPAIR_FANOUT =
   DUE_WORK_TRACK_WORK_KIND_INVENTORY.length +
   DUE_WORK_VENDOR_WORK_KIND_INVENTORY.length +
   FINDING_DUE_WORK_KINDS.length;
 
-/**
- * Ordinary source markers one page converges. The bound is the page's ROW count, not its marker
- * count and not its statement count: one marker multiplies into {@link TRACK_SOURCE_REPAIR_FANOUT}
- * rows, so the widest page stays inside the shared {@link MAX_DUE_WORK_CHUNK_SIZE} projection bound
- * every other bounded write batch in this module already runs at. Registering another physical
- * queue narrows the page automatically instead of silently widening the batch past that bound.
- *
- * The page always flushes as the same two to four statements — a set-based guarded upsert, a
- * set-based guarded delete, the marker clear, and the audit-fence advance — and widening it adds
- * rows and bound parameters to those, never more statements.
- */
 export const SOURCE_REPAIR_LIMIT = Math.floor(MAX_DUE_WORK_CHUNK_SIZE / TRACK_SOURCE_REPAIR_FANOUT);
 export const PHYSICAL_REPAIR_LIMIT = 50;
-// A rank rebuild page is one indexed `track_id` range read, then one write batch of per-row guarded
-// upserts (14 bound values each, no compound SELECT) plus one guarded checkpoint advance; bounded
-// cleanup deletes at most this many primary keys per call. That is the page shape every other
-// definition's rebuild action already runs at the shared due-work chunk bound.
+
 export const RANK_REBUILD_LIMIT = MAX_DUE_WORK_CHUNK_SIZE;
-/** Newest rank marker version whose live corpus matched a generation, as `{generation, markerVersion}`. */
+
 export const CATALOGUE_RANK_CORPUS_CHECK_KEY = "due_work_catalogue_rank_corpus_check_v1";
 
 type CatalogueRankCorpusCheck = { generation: string; markerVersion: string };
@@ -269,8 +249,7 @@ async function convergeEvaluatedSourceMarkers(
   }
   if (removed.length > 0) {
     const rows = removed.map(() => "(?, ?, ?, ?, ?, ?)").join(", ");
-    // Keep the bounded candidate set on the driving side. A correlated EXISTS with `due_work` as
-    // the outer DELETE turns this into a full projection scan instead of primary-key removals.
+
     writes.push({
       args: removed.flatMap((outcome) => [
         outcome.workKind,
@@ -326,21 +305,13 @@ async function advanceCatalogueRankRebuild(
     throw new Error("catalogue-rank due-work rebuild definition is missing");
   }
   const checkpoint = await readDueWorkRebuild(client, definition);
-  // Every corpus mutation replaces the rank marker's version in its source transaction. A running
-  // generation already proven current after reading this exact marker version keeps its cursor
-  // without a corpus read. Any other marker version re-derives the live corpus before this page:
-  // an unchanged definition resumes or clears against the durable generation, while a changed one
-  // restarts from page zero at once, because a generation built from a superseded corpus can never
-  // clear the marker.
+
   const markerChecked =
     checkpoint?.state === "running" &&
     corpusCheck?.generation === checkpoint.generation &&
     corpusCheck.markerVersion === marker.sourceVersion;
   const materialRevision = dueWorkCatalogueRankMarkerMaterialRevision(marker.sourceVersion);
   if (!markerChecked && materialRevision !== undefined) {
-    // A marker written before the material-revision protocol may be the only durable proof of an
-    // in-place finding-vector replacement. Adopt it exactly once, but only while that exact marker
-    // still owns the synthetic subject; a concurrent newer mutation therefore wins both rows.
     await client.execute({
       args: [
         CATALOGUE_RANK_MATERIAL_REVISION_KEY,
@@ -372,8 +343,6 @@ async function advanceCatalogueRankRebuild(
     newGeneration,
   });
 
-  // Clear only a completed generation whose corpus is proven current for this exact marker version,
-  // whether that proof was read in this step or recorded by an earlier one.
   let markerCleared = false;
   if (
     result.complete &&
@@ -452,10 +421,6 @@ async function readCatalogueRankMarker(client: DueWorkClient): Promise<
   };
 }
 
-/**
- * Advance the synthetic catalogue-rank corpus marker by one bounded rebuild chunk. There is nothing
- * to advance while no corpus change awaits a rebuild; `complete` is true only once the marker clears.
- */
 async function advanceCatalogueRankSourceMarker(
   client: DueWorkClient,
   limit: number,
@@ -471,13 +436,6 @@ async function advanceCatalogueRankSourceMarker(
   return { ...result, marker: rank.marker };
 }
 
-/**
- * Converge a bounded page of transactionally coupled source markers directly into final physical
- * rows. Each generic marker is cleared atomically with all of its eligible upserts and ineligible
- * deletes; its version guard leaves a concurrent producer marker and projection rows intact.
- * Catalogue-rank corpus changes instead advance one resumable rebuild chunk under the producer
- * marker's generation.
- */
 export async function fanOutDueWorkSourceRepairs(
   client: DueWorkClient,
   options: {
@@ -494,9 +452,7 @@ export async function fanOutDueWorkSourceRepairs(
   ) {
     throw new Error(`due-work limit must be an integer from 1 through ${MAX_DUE_WORK_CHUNK_SIZE}`);
   }
-  // One track marker can project into every registered physical queue. The page bound is therefore
-  // stated in rows, not markers, and {@link SOURCE_REPAIR_LIMIT} carries that division; callers
-  // already continue from the durable marker set while `hasMore` remains true.
+
   const limit = Math.min(options.limit ?? SOURCE_REPAIR_LIMIT, SOURCE_REPAIR_LIMIT);
   const page = await listDueWorkSourceRepairs(client, {
     excludeSubjectId: DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID,
@@ -530,18 +486,6 @@ export async function fanOutDueWorkSourceRepairs(
   };
 }
 
-/**
- * Locate one registered physical queue holding repair markers in one read. The read seeks
- * `due_work_repair_idx` on `state` and checks `work_kind` after a row fetch, because no index
- * carries `work_kind` beside repair state; it therefore walks the source markers that sort ahead of
- * the first physical marker once. A per-definition probe seeks only `state` and `subject_type` and
- * repeats that same walk for every definition, so the single read is the cheaper shape under a
- * source-marker burst as well as in round trips. Which pending definition drains first is
- * immaterial: each repair page removes its markers, so the next read reaches the next pending
- * definition. A marker whose queue has no registered definition can never be repaired; it is
- * excluded from the following read so it cannot hide registered markers behind it in index order,
- * and the walk stops after as many reads as there are registered definitions.
- */
 export async function findPendingPhysicalRepairDefinition(
   client: DueWorkClient,
 ): Promise<DueWorkRepairDefinition<string> | undefined> {
@@ -581,12 +525,6 @@ export async function findPendingPhysicalRepairDefinition(
   return undefined;
 }
 
-/**
- * Whether an ordinary track source marker still awaits fanout. Every track reader's guard refuses
- * while more than a page of these remain; the synthetic catalogue-rank corpus marker is excluded
- * because only the rank read waits for it. The unary `+` keeps the partial repair index out of the
- * plan: that index would walk every track repair row, while the primary key seeks markers only.
- */
 export const PENDING_TRACK_SOURCE_MARKERS_SQL = `select 1 from due_work
   where work_kind = '${DUE_WORK_SOURCE_REPAIR_KIND}' and subject_type = 'track' and +state = 'repair'
     and subject_id <> '${DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID}'`;
@@ -597,25 +535,13 @@ export async function hasPendingTrackSourceMarkers(client: DueWorkClient): Promi
 }
 
 export type DueWorkReadDrainBudget = {
-  /** Physical repair chunks one request may start across its guarded reads. */
   physicalChunks: number;
-  /** Source-repair pages one request may start across its guarded reads. */
+
   sourcePages: number;
-  /** Cumulative guard drain time after which no further page or chunk starts. */
+
   wallMs: number;
 };
 
-/**
- * The repair one Worker request may drain inside its due-work read guards before a guarded read
- * answers `due_work_maintenance_pending`. Every guarded read converges one source page and one
- * physical chunk; a further page or chunk starts only while the whole request stays inside all
- * three bounds, so a burst of up to `SOURCE_REPAIR_LIMIT * sourcePages` markers converges inside
- * one read instead of pausing its consumer for a tick. The budget multiplies bounded transactions
- * and never enlarges one: each page and chunk keeps its own version-guarded write batch. A hosted
- * page is five indexed reads plus one write batch, so round trips dominate its cost and the wall
- * bound is the one that binds in production; the unit caps bound the transactions a request can
- * issue against a fast database.
- */
 export const DUE_WORK_READ_DRAIN_BUDGET: Readonly<DueWorkReadDrainBudget> = {
   physicalChunks: 4,
   sourcePages: 12,
@@ -634,27 +560,8 @@ function repairConverged(result: DueWorkRepairResult): boolean {
   return !result.hasMore && result.deferred === 0;
 }
 
-/**
- * What one guarded read's drain converged. `sourceConverged` is the only lane a ready read must
- * consult: an unconverged source family may still owe this queue rows it cannot see, so a read that
- * finds nothing servable is paused rather than empty. Physical debt is reported for callers that
- * want it, but it can never make a ready read unsafe — a physical marker IS the queue row, held in
- * `state = 'repair'`, which no ready read reaches.
- */
 export type { DueWorkReadRepairOutcome } from "./due-work-types";
 
-/**
- * Converge the requested queue's repair before its ready index is read. Ordinary source markers of
- * the queue's subject family drain in pages, then the queue's own physical markers drain in chunks,
- * under the request-wide {@link DUE_WORK_READ_DRAIN_BUDGET} shared by every guarded read in one
- * Worker request. The first page and the first chunk always run, so every refused read still
- * advances both lanes. Chunks beyond the first start only once the source family is clean, because
- * the read cannot proceed before then. A catalogue-rank read advances its corpus rebuild by exactly
- * one chunk after its ordinary pages, whatever the budget allows. Each unit commits or fails as its
- * own guarded batch and a failed batch propagates without being re-issued. The drain reports each
- * lane's convergence; it never decides on its own that a read must be refused, because the debt it
- * could not converge may be debt the read can serve around.
- */
 export async function drainDueWorkBeforeRead(
   client: DueWorkClient,
   workKind: string,
@@ -697,8 +604,7 @@ export async function drainDueWorkBeforeRead(
   while (!repairConverged(source) && mayStart(drain.sourcePages, budget.sourcePages)) {
     source = await drainSourcePage();
   }
-  // Only the rank read waits for the corpus marker. It advances that rebuild by exactly one chunk
-  // per read, after its ordinary pages, as a unit outside the page count.
+
   const rank =
     workKind === "catalogue-rank"
       ? await timed(() => advanceCatalogueRankSourceMarker(client, RANK_REBUILD_LIMIT))
@@ -717,11 +623,6 @@ export async function drainDueWorkBeforeRead(
   return { physicalConverged: repairConverged(physical), sourceConverged };
 }
 
-/**
- * The drain for a caller whose own read cannot withhold a marked subject. It refuses on any residual
- * debt, which is the widest possible answer; every marker-aware reader calls
- * {@link drainDueWorkBeforeRead} and decides for itself.
- */
 export async function repairDueWorkBeforeRead(
   client: DueWorkClient,
   workKind: string,

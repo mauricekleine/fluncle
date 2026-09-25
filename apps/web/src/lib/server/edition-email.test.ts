@@ -1,10 +1,6 @@
 import { type EditionDTO, type TrackListItem } from "@fluncle/contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-// The render hydrates each finding's tiny `{ logId, why }` reference to its live
-// `Artist — Title` (+ Spotify link) via `getTracksByLogIds` — mocked here so the
-// render is proved without a real libsql instance.
-
 const getTracksByLogIds = vi.hoisted(() => vi.fn());
 
 vi.mock("./tracks", () => ({ getTracksByLogIds }));
@@ -61,7 +57,6 @@ describe("renderEditionEmailHtml — finding hydration", () => {
       }),
     );
 
-    // One em dash in the whole letter, and it is the tracklist separator inside the label.
     expect(html.match(/—/g)).toHaveLength(1);
     expect(html).toContain("</a><br /><span");
   });

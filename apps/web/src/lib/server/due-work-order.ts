@@ -1,10 +1,7 @@
-/** The two directions understood by a due-work order component. */
 export type DueWorkDirection = "asc" | "desc";
 
-/** Explicit placement for a nullable timestamp component. */
 export type DueWorkNullPlacement = "first" | "last";
 
-/** One position in a due-work tuple. Every position carries its own ordering rules. */
 export type DueWorkOrderComponent =
   | {
       kind: "integer";
@@ -41,8 +38,6 @@ const UINT64_MASK = 0xffffffffffffffffn;
 const SIGNED_INTEGER_BIAS = 0x8000000000000000n;
 const UTF8 = new TextEncoder();
 
-// Tags are part of the format, rather than metadata outside the key. This makes different
-// component kinds and different order descriptions unable to serialize to the same bytes.
 const TAGS = {
   boolean: { asc: 0x40, desc: 0x41 },
   integer: { asc: 0x10, desc: 0x11 },
@@ -111,10 +106,6 @@ function integerPayload(value: bigint | number, direction: DueWorkDirection): By
   const magnitude = negative ? -integer : integer;
   const magnitudeBytes = minimalBigIntBytes(magnitude);
 
-  // Positive lengths use 01…01 00, so larger magnitudes sort later. Negative lengths use
-  // 00…00 01, so a larger magnitude (and therefore a smaller number) sorts earlier. The
-  // length terminator makes the variable-width payload self-delimiting before its fixed-size
-  // magnitude bytes begin.
   const lengthPrefix = Array.from({ length: magnitudeBytes.length }, () =>
     negative ? 0x00 : 0x01,
   );
@@ -133,9 +124,7 @@ function numberPayload(value: number, direction: DueWorkDirection): Bytes {
   const view = new DataView(buffer);
   view.setFloat64(0, value, false);
   const bits = view.getBigUint64(0, false);
-  // This is the standard monotonic transform from IEEE-754 bit patterns to unsigned order.
-  // It deliberately gives -0 a position immediately before +0, making every finite bit
-  // pattern distinct and deterministic.
+
   const ordered = (bits & FLOAT_SIGN_BIT) !== 0n ? ~bits & UINT64_MASK : bits ^ FLOAT_SIGN_BIT;
   const payload = fixedWidthBytes(ordered, 8);
   return direction === "asc" ? payload : invert(payload);
@@ -164,8 +153,6 @@ function textPayload(value: string, direction: DueWorkDirection): Bytes {
   assertValidUtf16(value);
   const payload: Bytes = [];
   for (const byte of UTF8.encode(value)) {
-    // Each UTF-8 byte becomes two non-zero bytes. Zero is reserved as the terminator, so a
-    // shorter text sorts before a longer text with the shorter value as its prefix.
     payload.push((byte >> 4) + 1, (byte & 0x0f) + 1);
   }
   payload.push(0x00);
@@ -239,8 +226,7 @@ function parseIsoTimestamp(value: string): number {
   if (!Number.isSafeInteger(milliseconds)) {
     throw new RangeError("Invalid ISO timestamp");
   }
-  // Date.parse truncates precision beyond milliseconds. The grammar rejects that precision so
-  // two different supported instants can never silently collapse onto one timestamp key.
+
   if (fractionText !== undefined && fractionText.length > 3) {
     throw new RangeError("Timestamp fractions may contain at most three digits");
   }
@@ -322,14 +308,6 @@ function bytesToLowerHex(bytes: Bytes): string {
   return hex;
 }
 
-/**
- * Encode a due-work tuple as one lowercase hexadecimal TEXT key.
- *
- * Every fixed-width component has a known byte width. Text is UTF-8 encoded with a reserved
- * terminator, and integer magnitudes use a terminated unary length prefix. Therefore concatenated
- * components remain unambiguous, while lowercase hexadecimal preserves bytewise BINARY order in
- * SQLite exactly.
- */
 export function encodeDueWorkOrder(components: readonly DueWorkOrderComponent[]): string {
   if (!Array.isArray(components)) {
     throw new TypeError("Due-work order must be an array of components");

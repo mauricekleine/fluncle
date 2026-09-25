@@ -1,6 +1,5 @@
 import { encodeDueWorkOrder, type DueWorkOrderComponent } from "./due-work-order";
 
-/** The due-work kinds owned by the finding and entity selectors in this slice. */
 export const DUE_WORK_KINDS = [
   "finding.enrich",
   "finding.context",
@@ -20,7 +19,6 @@ export const DUE_WORK_KINDS = [
 
 export type DueWorkKind = (typeof DUE_WORK_KINDS)[number];
 
-/** The exact source columns needed to decide eligibility and ordering for each kind. */
 export const DUE_WORK_SOURCE_COLUMNS = {
   "album.bio": ["id", "bio", "certified_finding_count", "renderable_track_count", "created_at"],
   "album.cover-master": ["slug", "image_state", "image_attempted_at"],
@@ -44,7 +42,6 @@ export const DUE_WORK_SOURCE_COLUMNS = {
   "label.image": ["slug", "image_state", "image_attempted_at"],
 } as const satisfies Record<DueWorkKind, readonly string[]>;
 
-/** One materialized due-work row. `nextDueAt` is the frozen evaluation instant for eligible work. */
 export type DueWorkRow = {
   entityId: string;
   kind: DueWorkKind;
@@ -109,8 +106,6 @@ export type ArtistImageSource = {
   spotify_artist_id: string | null;
 };
 
-// Exported so the definition-fingerprint coverage test can enumerate every constant these
-// evaluators read and prove the probe matrix crosses each one.
 export const BIO_INDEX_FLOOR = 3;
 export const ENRICH_STALE_PROCESSING_MS = 30 * 60 * 1000;
 export const IMAGE_RETRY_COOLDOWN_MS = 6 * 60 * 60 * 1000;
@@ -170,7 +165,6 @@ export type DueWorkSourceByKind = {
   "label.image": LabelImageSource;
 };
 
-/** Stable version of exactly the columns each entity evaluator inspects. */
 export function dueWorkEntitySourceVersion<Kind extends DueWorkKind>(
   kind: Kind,
   source: DueWorkSourceByKind[Kind],
@@ -299,7 +293,6 @@ function slugOrder(source: { slug: string }): DueWorkOrderComponent[] {
   return [textComponent(source.slug)];
 }
 
-/** Evaluate the self-healing finding enrichment queue. */
 export function evaluateFindingEnrich(source: FindingEnrichSource, now: string): DueWorkRow | null {
   if (!["pending", "failed", "processing"].includes(source.enrichment_status ?? "")) {
     return null;
@@ -321,7 +314,6 @@ export function evaluateFindingEnrich(source: FindingEnrichSource, now: string):
   );
 }
 
-/** Evaluate either context queue policy; normal excludes confirmed-empty rows. */
 export function evaluateFindingContext(
   source: FindingContextSource,
   now: string,
@@ -358,7 +350,6 @@ export function evaluateFindingContextRetryEmpty(
   return evaluateFindingContext(source, now, true);
 }
 
-/** Evaluate the fill-empty-only note queue, including its context-fuel gate. */
 export function evaluateFindingNote(source: FindingNoteSource, now: string): DueWorkRow | null {
   if (source.context_note === null || !isSqliteEmpty(source.note)) {
     return null;
@@ -373,7 +364,6 @@ export function evaluateFindingNote(source: FindingNoteSource, now: string): Due
   );
 }
 
-/** Evaluate the observation queue, which also requires a resolved context note. */
 export function evaluateFindingObserve(
   source: FindingObserveSource,
   now: string,
@@ -391,7 +381,6 @@ export function evaluateFindingObserve(
   );
 }
 
-/** Evaluate the normal render queue: context present and video absent. */
 export function evaluateFindingRender(
   source: FindingRenderSource,
   now: string,
@@ -503,7 +492,6 @@ export function evaluateAlbumCoverMaster(
   return evaluateCoverMaster("album.cover-master", source, now);
 }
 
-/** Evaluate the pending, cooldown-gated label logo queue. */
 export function evaluateLabelImage(source: LabelImageSource, now: string): DueWorkRow | null {
   if (source.image_state !== "pending") {
     return null;
@@ -527,7 +515,6 @@ export function evaluateLabelImage(source: LabelImageSource, now: string): DueWo
   );
 }
 
-/** Evaluate the Spotify-id artist-image backfill queue. */
 export function evaluateArtistImage(source: ArtistImageSource, now: string): DueWorkRow | null {
   if (
     source.image_url !== null ||

@@ -20,14 +20,12 @@ export const MAX_DUE_WORK_CHUNK_SIZE = 500;
 const DUE_WORK_CATALOGUE_RANK_FRESHNESS_SEPARATOR = "|rank-fresh|";
 const DUE_WORK_CATALOGUE_RANK_MATERIAL_REVISION_PREFIX = "track-update:";
 
-/** Return the synthetic rank subject only for a centrally registered corpus dependency. */
 export function dueWorkCatalogueRankRepairSubjects(
   _producer: DueWorkCatalogueRankProducer,
 ): DueWorkSourceSubject[] {
   return [{ subjectId: DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID, subjectType: "track" }];
 }
 
-/** Extract the durable material evidence from a legacy-compatible rank marker. */
 export function dueWorkCatalogueRankMarkerMaterialRevision(
   sourceVersion: string,
 ): string | undefined {
@@ -45,11 +43,6 @@ export class DueWorkMaintenancePendingError extends Error {
   }
 }
 
-/**
- * BACKPRESSURE IS NOT A FAULT. The one recognizer every wire boundary narrows on, so the oRPC rails
- * and the server-fn rails answer a deferred read the same way: a typed "come back", never a captured
- * error and never a 500.
- */
 export function isDueWorkMaintenancePending(error: unknown): boolean {
   return error instanceof DueWorkMaintenancePendingError;
 }
@@ -123,7 +116,7 @@ export type DueWorkRepairResult = {
 export type DueWorkRebuildCheckpoint<WorkKind extends string = string> = {
   completedAt: null | string;
   cursor: null | string;
-  /** The definition version this generation was projected under; null predates the mechanism. */
+
   definitionVersion: null | string;
   generation: string;
   projectedCount: number;
@@ -145,10 +138,6 @@ export type DueWorkRebuildDefinition<
   WorkKind extends string,
   Source extends DueWorkRebuildSource,
 > = {
-  /**
-   * The fingerprint of the code that decides this family's eligibility and `sort_key`. Stored with
-   * the checkpoint; a mismatch restarts the generation without any audit or cutover ceremony.
-   */
   definitionVersion: string;
   project: (
     source: Source,
@@ -453,11 +442,6 @@ function sourceMarkerVersionConflictAssignment(): string {
   end`;
 }
 
-/**
- * Mark each changed source subject once, independently of how many physical queues derive from it.
- * Producers append this statement to the same write batch as the source mutation. The opaque token
- * lets reconciliation clear only the snapshot it evaluated, so a concurrent source write survives.
- */
 export function markDueWorkSourceRepairsStatement(
   subjects: readonly DueWorkSourceSubject[],
   options: {
@@ -472,9 +456,7 @@ export function markDueWorkSourceRepairsStatement(
   assertNonEmpty(options.producer, "due-work producer");
   const markerVersion = options.markerVersion ?? `${options.producer}:${randomToken()}`;
   assertNonEmpty(markerVersion, "source repair marker version");
-  // Turso's hosted SQLite build caps compound SELECTs at 50 terms. A VALUES CTE is the same
-  // parameterized row constructor without that parser limit, preserves the immediately-adjacent
-  // `changes()` gate, and supports the helper's full 500-subject API bound.
+
   const rows = unique.map(() => "(?, ?, ?, 'repair', '', ?, ?, ?, ?, ?)").join(", ");
   const args = unique.flatMap((subject) => [
     DUE_WORK_SOURCE_REPAIR_KIND,
@@ -512,7 +494,6 @@ export function markDueWorkSourceRepairsStatement(
   };
 }
 
-/** Clear a source marker only when no later producer has replaced its race token. */
 export function clearDueWorkSourceRepairStatement(
   marker: DueWorkSourceSubject & { sourceVersion: string },
 ): DueWorkStatement {
@@ -525,7 +506,6 @@ export function clearDueWorkSourceRepairStatement(
   };
 }
 
-/** Mark the subjects returned as `subject_id` by a bounded, producer-owned selection query. */
 export function markDueWorkSourceRepairsFromSelectStatement(
   subjectType: DueWorkSubjectType,
   selection: DueWorkPositionalStatement,
@@ -569,11 +549,6 @@ export function markDueWorkSourceRepairsFromSelectStatement(
   };
 }
 
-/**
- * Append the unchanged legacy due-work marker and the producer policy's public shadow markers with
- * one race token and time. The returned statements belong immediately after the bounded source
- * statement they describe.
- */
 export function markDueWorkSourceMaintenanceStatements(
   subjects: readonly DueWorkSourceSubject[],
   options: {
@@ -611,10 +586,6 @@ export function markDueWorkSourceMaintenanceStatements(
   ];
 }
 
-/**
- * Build legacy and policy-selected public maintenance from one bounded producer-owned `subject_id`
- * selection. The legacy marker is first because its affected-row count is the public epoch gate.
- */
 export function markDueWorkSourceMaintenanceFromSelectStatements(
   subjectType: DueWorkSubjectType,
   selection: DueWorkPositionalStatement,
@@ -658,7 +629,6 @@ type DueWorkSourceMutationOptions = {
   publicProjectionImpact?: PublicProjectionDynamicImpactOverride;
 };
 
-/** Build one bounded source mutation and its adjacent repair markers for a caller-owned batch. */
 export function dueWorkSourceMutationStatements(
   statements: readonly InStatement[],
   subjects: readonly DueWorkSourceSubject[],
@@ -685,7 +655,6 @@ export function dueWorkSourceMutationStatements(
   return [...statements, ...maintenance, ...afterMaintenance];
 }
 
-/** Execute complete mutation groups in bounded batches without splitting their statement order. */
 export async function batchDueWorkMutationGroups(
   client: Pick<Client, "batch">,
   groups: readonly (readonly InStatement[])[],
@@ -723,7 +692,6 @@ export async function batchDueWorkMutationGroups(
   return groupedResults;
 }
 
-/** Execute a bounded source mutation and its repair marker in one libSQL write transaction. */
 export async function batchDueWorkSourceMutation(
   client: DueWorkClient,
   statements: readonly InStatement[],
@@ -753,7 +721,6 @@ export async function listReadyDueWork<WorkKind extends string>(
   return { hasMore: rows.length > limit, items: rows.slice(0, limit) };
 }
 
-/** True while an outstanding source marker still owns the ready row this correlates against. */
 const DUE_WORK_SOURCE_MARKED_SQL = `exists (
         select 1 from due_work marker
         where marker.work_kind = '${DUE_WORK_SOURCE_REPAIR_KIND}'
@@ -761,11 +728,6 @@ const DUE_WORK_SOURCE_MARKED_SQL = `exists (
           and marker.subject_id = ready.subject_id
           and marker.state = 'repair')`;
 
-/**
- * How many ready rows one servable page may look at per row it may return, and the hard ceiling on
- * that window. The multiple gives a page room to see past withheld rows; the ceiling keeps the read
- * one bounded page rather than a walk of the ready index when a whole queue head is withheld.
- */
 export const DUE_WORK_READY_SCAN_MULTIPLE = 4;
 export const DUE_WORK_READY_SCAN_CAP = 1_000;
 
@@ -773,30 +735,10 @@ export function dueWorkReadyScanWindow(limit: number): number {
   return Math.min(limit * DUE_WORK_READY_SCAN_MULTIPLE + 1, DUE_WORK_READY_SCAN_CAP);
 }
 
-// A page must be able to see past a full page of withheld rows, or one burst of markers landing on
-// the head of a queue would hide every servable row behind it.
 if (DUE_WORK_READY_SCAN_MULTIPLE < 2) {
   throw new Error("due-work ready scan window must exceed one page");
 }
 
-/**
- * One ready page that withholds every subject still carrying an outstanding source-repair marker.
- *
- * A source marker is transactionally coupled proof that the subject's eligibility moved and its
- * physical rows have not been re-projected yet, so a row it covers may be stale in membership, in
- * sort position, or in both. Withholding it is exactly the rail the guarded read's refusal exists
- * to hold: a worklist must never serve a row whose eligibility changed and is not yet projected,
- * because the storage and capture budgets behind it spend real money. The marker says nothing about
- * any OTHER subject, though, so refusing the whole read is far wider than the rail requires; this
- * read keeps the rail per subject and serves the rest of the page.
- *
- * A physical repair marker needs nothing here. It IS the queue row, held in `state = 'repair'`,
- * which no ready read reaches.
- *
- * The withholding test seeks the source marker's own primary key once per scanned row, and the scan
- * window is bounded, so a queue whose whole head is withheld costs one bounded read and serves
- * nothing — which is the honest answer for that queue, and the one its caller reports as paused.
- */
 export async function listServableDueWork<WorkKind extends string>(
   client: DueWorkClient,
   workKind: WorkKind,
@@ -827,11 +769,6 @@ export async function listServableDueWork<WorkKind extends string>(
   };
 }
 
-/**
- * Count work that can be handed out now without consulting a source table. Ready rows and
- * scheduled rows whose retry time has elapsed are counted through their two partial indexes;
- * leases and future retries are deliberately excluded.
- */
 export async function countDueWorkNow(
   client: DueWorkClient,
   workKind: string,
@@ -860,7 +797,6 @@ export async function countDueWorkNow(
   );
 }
 
-/** Read a bounded page of transactionally coupled source-repair markers. */
 export async function listDueWorkSourceRepairs(
   client: DueWorkClient,
   options: {
@@ -920,7 +856,6 @@ export async function promoteDueWork(
   return result.rowsAffected;
 }
 
-/** Probe whether another overdue scheduled row remains after one bounded promotion page. */
 export async function hasDueScheduledWork(
   client: DueWorkClient,
   workKind: string,
@@ -1268,11 +1203,6 @@ export async function startDueWorkRebuild<WorkKind extends string>(
   const results = await client.batch(
     [
       {
-        // The restart is either asked for (a completed audit) or FORCED by a definition change:
-        // a stored version that is not the running code's means every projected `sort_key` in this
-        // family was computed by an older definition, so the generation starts over. `is not` is
-        // the null-safe comparison, which makes a checkpoint written before this column existed
-        // stale exactly once.
         args: [
           identity.workKind,
           identity.subjectType,
@@ -1361,7 +1291,6 @@ function guardedRebuildProjectionStatement<WorkKind extends string>(
   };
 }
 
-/** Seek only rows a running rebuild may remove; current-generation rows never enter the page. */
 export function dueWorkCleanupPageStatement<WorkKind extends string>(
   checkpoint: DueWorkRebuildCheckpoint<WorkKind>,
   savedCursor: unknown,

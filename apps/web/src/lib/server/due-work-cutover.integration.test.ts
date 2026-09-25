@@ -96,8 +96,6 @@ describe("listTrackWork Goal C cutover", () => {
     await seedCatalogueTrack(db, { title: "Not projected", trackId: "not-projected" });
     await withAudio("not-projected");
 
-    // The catalogue has the lexically earlier projection key on purpose: the legacy outer order
-    // is findings first, then catalogue, not one global sort over the two physical halves.
     await ready("embed-findings", "finding-track", "ff");
     await ready("embed-catalogue", "catalogue-track", "00");
     await setSetting(TRACK_WORK_DUE_CUTOVER_ENABLED_KEY, "true");
@@ -172,8 +170,6 @@ describe("listTrackWork Goal C cutover", () => {
     await ready("capture-findings", "finding-capture", "ff");
     await ready("capture-catalogue", "catalogue-capture", "00");
 
-    // The untouched catalogue budget is closed. The due reader sees only the findings half, and
-    // an explicit catalogue scope is empty before any due_work read occurs.
     expect((await listTrackWork({ kind: "capture" })).map((item) => item.trackId)).toEqual([
       "finding-capture",
     ]);
@@ -221,16 +217,11 @@ describe("listTrackWork Goal C cutover", () => {
     ).resolves.toEqual({ hasMore: true, subjectIds: ["scheduled-500"] });
   });
 
-  // AN EMPTY PAGE HANDS OUT NO ROW. The deferral over an empty page under residual source debt is
-  // what turned the render conductor's near-always-empty queue into a deferral on every tick while
-  // the track family carried permanent debt. A queue may opt out of it; the metered queues do not.
   it("answers an honest empty page under debt only for a queue that opted in", async () => {
     const { markDueWorkSourceRepairsStatement } = await import("./due-work");
     const { DUE_WORK_READ_DRAIN_BUDGET, SOURCE_REPAIR_LIMIT } =
       await import("./due-work-source-repair");
 
-    // More track source debt than one request's whole drain budget can converge, and no row in the
-    // queue being read — the conductor's ordinary overnight shape.
     const burst = SOURCE_REPAIR_LIMIT * (DUE_WORK_READ_DRAIN_BUDGET.sourcePages + 1) + 1;
     const trackIds = Array.from(
       { length: burst },
@@ -273,13 +264,6 @@ describe("listTrackWork Goal C cutover", () => {
     const { DUE_WORK_READ_DRAIN_BUDGET, SOURCE_REPAIR_LIMIT } =
       await import("./due-work-source-repair");
 
-    // One subject more than a single guarded read's whole drain budget converges. Every steady
-    // track writer — the rank sweep, the demand rewrite, the crawl, an operator requeue, and the
-    // sweeps' own write-backs — mints markers at this shape, so this is the ordinary steady state,
-    // not an incident.
-    // A scope spanning both certification halves reads two physical queues, and every guarded read
-    // always runs its first page whatever the shared budget has left, so one request converges
-    // `sourcePages + 1` pages in all.
     const burst = SOURCE_REPAIR_LIMIT * (DUE_WORK_READ_DRAIN_BUDGET.sourcePages + 1) + 1;
     const trackIds = Array.from(
       { length: burst },
@@ -301,14 +285,10 @@ describe("listTrackWork Goal C cutover", () => {
       );
     }
 
-    // One Worker request, so the drain budget is shared by both physical embed queues exactly as
-    // it is in production.
     const served = (
       await runWithDatabaseRequestScope(() => listTrackWork({ kind: "embed", limit: burst }))
     ).map((item) => item.trackId);
 
-    // The read drains what its budget allows and answers with it. Debt it could not reach belongs
-    // to other subjects, so they cannot withhold the rows this read completed.
     expect(served.length).toBeGreaterThan(0);
     const outstanding = await db.execute({
       args: ["source-repair"],
@@ -327,8 +307,6 @@ describe("listTrackWork Goal C cutover", () => {
     const { DUE_WORK_READ_DRAIN_BUDGET, SOURCE_REPAIR_LIMIT } =
       await import("./due-work-source-repair");
 
-    // Source markers drain in subject order, so a subject that sorts behind a full drain budget
-    // still carries its marker when the read answers. That is the row the money rail is about.
     const fillers = Array.from(
       { length: SOURCE_REPAIR_LIMIT * (DUE_WORK_READ_DRAIN_BUDGET.sourcePages + 1) },
       (_, index) => `aa-filler-${String(index).padStart(3, "0")}`,
@@ -339,7 +317,6 @@ describe("listTrackWork Goal C cutover", () => {
     }
     await setSetting(TRACK_WORK_DUE_CUTOVER_ENABLED_KEY, "true");
 
-    // Project the row and serve it once, so the queue holds a real ready row for it.
     await db.execute(
       markDueWorkSourceRepairsStatement([{ subjectId: "zz-vetoed-track", subjectType: "track" }], {
         now: NOW,
@@ -352,8 +329,6 @@ describe("listTrackWork Goal C cutover", () => {
       ),
     ).toEqual(["zz-vetoed-track"]);
 
-    // Move that row's eligibility behind a burst its marker sorts last in. Its projected row still
-    // reads as eligible; the marker is the only thing that knows better, and it survives the drain.
     await db.execute({
       args: [NOW.toISOString(), "zz-vetoed-track"],
       sql: `update tracks set dismissed_at = ? where track_id = ?`,
@@ -372,10 +347,6 @@ describe("listTrackWork Goal C cutover", () => {
     expect(served.length).toBeGreaterThan(0);
   });
 
-  // THE SCOPING IS BY SUBJECT, AND A SUBJECT CARRIES ITS TYPE. Withholding is keyed on the marker's
-  // own primary key — `(work_kind, subject_type, subject_id)` — so a label-typed or artist-typed
-  // marker never withholds a track row that happens to share its id. The rulings that DO owe a
-  // track something say so in track-typed markers, in the same transaction.
   it("serves a track a label-typed marker cannot own", async () => {
     const { listTrackWork } = await import("./track-work");
     const { markDueWorkSourceRepairsStatement } = await import("./due-work");
@@ -384,7 +355,6 @@ describe("listTrackWork Goal C cutover", () => {
     await withAudio("shared-id");
     await setSetting(TRACK_WORK_DUE_CUTOVER_ENABLED_KEY, "true");
 
-    // Project the track first, so the queue holds a real ready row for it.
     await db.execute(
       markDueWorkSourceRepairsStatement([{ subjectId: "shared-id", subjectType: "track" }], {
         now: NOW,
@@ -397,8 +367,6 @@ describe("listTrackWork Goal C cutover", () => {
       ),
     ).toEqual(["shared-id"]);
 
-    // A label ruling's own entity marker, standing beside that ready track row and wearing the
-    // SAME subject id. It owes the label's projections a repair and owes this track nothing.
     await db.execute(
       markDueWorkSourceRepairsStatement([{ subjectId: "shared-id", subjectType: "label" }], {
         now: NOW,
@@ -432,8 +400,6 @@ describe("listTrackWork Goal C cutover", () => {
     }
     await setSetting(TRACK_WORK_DUE_CUTOVER_ENABLED_KEY, "true");
 
-    // The ruling itself. It changes what Fluncle may spend on these rows, so it re-stales their
-    // rank AND marks each track individually — a label marker alone would never reach them.
     await updateLabelSeedState("lbl-ruled", "disabled");
 
     const marked = await db.execute(
@@ -444,8 +410,6 @@ describe("listTrackWork Goal C cutover", () => {
     );
     expect(marked.rows.map((row) => row.subject_id)).toEqual(["ruled-a", "ruled-b"]);
 
-    // Those markers are the withholding: a capture worklist read serves neither until the ruling's
-    // repair has converged them.
     expect(
       (await runWithDatabaseRequestScope(() => listTrackWork({ kind: "capture", limit: 10 }))).map(
         (item) => item.trackId,

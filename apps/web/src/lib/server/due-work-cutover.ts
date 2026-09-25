@@ -19,11 +19,6 @@ import {
 import { type DueWorkReadRepairOutcome } from "./due-work-types";
 import { getSetting } from "./settings";
 
-/**
- * Drain this queue's repair and report what converged. A ready read that finds servable rows serves
- * them whatever the drain left behind: a source marker withholds its own subject and nothing else,
- * and a physical marker holds its row out of `ready` by itself.
- */
 async function maintainDueWork(
   client: DueWorkClient,
   workKind: string,
@@ -32,17 +27,10 @@ async function maintainDueWork(
   return drainDueWorkBeforeRead(client, workKind);
 }
 
-/** The Goal C read flag. Only the exact string "true" opens the cutover. */
 export const TRACK_WORK_DUE_CUTOVER_ENABLED_KEY = "track_work_due_cutover_enabled";
 
 export type TrackWorkDueScope = "all" | DueWorkScope;
 
-/**
- * Read the Goal C flag with the default-safe settings contract. A missing, malformed, or failed
- * settings read keeps the legacy selector in charge. This is intentionally a read-only flag:
- * the existing operator settings path can flip it without making queue reads responsible for any
- * due-work state transition.
- */
 export async function isTrackWorkDueCutoverEnabled(): Promise<boolean> {
   try {
     return (await getSetting(TRACK_WORK_DUE_CUTOVER_ENABLED_KEY)) === "true";
@@ -51,7 +39,6 @@ export async function isTrackWorkDueCutoverEnabled(): Promise<boolean> {
   }
 }
 
-/** The shared Goal C flag reader for due-work consumers outside listTrackWork. */
 export async function isDueWorkCutoverEnabled(): Promise<boolean> {
   return isTrackWorkDueCutoverEnabled();
 }
@@ -63,26 +50,12 @@ export type DueWorkSubjectPage = {
   subjectIds: string[];
 };
 
-/**
- * Promote one bounded due-time page, then seek one bounded ready page by the maintained index.
- * The projection read deliberately selects only subject IDs; callers hydrate their own exact DTO.
- */
 export async function readPromotedDueWorkPage(
   client: DueWorkClient,
   workKind: string,
   options: {
     continuation?: DueWorkContinuation;
-    /**
-     * What an EMPTY page means while this request's bounded drain left source debt behind.
-     *
-     * `defer` (the default) answers `due_work_maintenance_pending`: the debt may own every row the
-     * read would have returned, or rows not projected yet, so "nothing to do" cannot be said
-     * honestly. `serve` answers the empty page instead. Serving an empty page hands out no row and
-     * therefore spends nothing — the cost of a wrong empty is a MISSED TICK, not a wrong spend —
-     * so a queue may opt in when its consumer simply retries on its own cadence and nothing
-     * downstream reads "empty" as "backlog drained". A queue whose order spends a metered budget
-     * keeps the default: there an empty answer is what tells the operator the money stopped.
-     */
+
     emptyPageUnderDebt?: "defer" | "serve";
     limit: number;
     now?: () => Date;
@@ -124,9 +97,6 @@ export async function readPromotedDueWorkPage(
     args.push(...options.subjectIds);
   }
 
-  // The bounded window is scanned in ready order, then every subject an outstanding source marker
-  // still owns is withheld by that marker's own primary key. Withholding is per subject, so the
-  // rest of the window is exactly as servable as it was before the marker landed.
   args.push(dueWorkReadyScanWindow(options.limit), options.limit + 1);
   const result = await client.execute({
     args,
@@ -150,10 +120,6 @@ export async function readPromotedDueWorkPage(
     typeof row.subject_id === "string" ? [row.subject_id] : [],
   );
 
-  // Nothing servable while the subject family still owes repair is not an empty queue: the debt may
-  // own every row this read would have returned, or rows it has not projected yet. A queue that
-  // opted into `serve` accepts that and answers the empty page, because the worst it can cost is
-  // one delayed tick.
   if (
     subjectIds.length === 0 &&
     !repair.sourceConverged &&
@@ -219,13 +185,6 @@ function compareReadyRows(left: ReadyTrackRow, right: ReadyTrackRow): number {
   return sortKey === 0 ? compareBinary(left.subjectId, right.subjectId) : sortKey;
 }
 
-/**
- * Read the bounded ready projection for one listTrackWork request.
- *
- * The bounded promotion moves elapsed retries onto the same ready index before the page read.
- * `listTrackWork` remains non-claiming because its existing CLI and sweep contract is a read;
- * the returned IDs are the only source rows the caller hydrates.
- */
 export async function readTrackWorkDueIds(
   client: DueWorkClient,
   options: { kind: DueWorkKind; limit: number; scope: TrackWorkDueScope },
@@ -236,13 +195,6 @@ export async function readTrackWorkDueIds(
     return [];
   }
 
-  // `youtube-reverdict` was the one legacy specialist read whose global order interleaved the two
-  // certification halves. Its two physical projections therefore need a bounded merge. All other
-  // shared queues preserve listTrackWork's findings-first concatenation, while anchor/recovery are
-  // catalogue-only and have one physical queue.
-  // A scope spanning both certification halves reads two physical queues. One of them having
-  // nothing servable while its family still owes repair does not make the other's rows unservable,
-  // so a pending answer is carried and raised only if the whole request ends up with nothing.
   let pending: DueWorkMaintenancePendingError | undefined;
   const readOrDefer = async (
     entry: TrackWorkInventoryEntry,
@@ -292,7 +244,6 @@ export async function readTrackWorkDueIds(
   return answer(ids);
 }
 
-/** Count only the projected backlog that is due now, preserving the physical scope split. */
 export async function countTrackWorkDue(
   client: DueWorkClient,
   options: { kind: DueWorkKind; scope: TrackWorkDueScope },

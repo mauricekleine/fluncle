@@ -10,12 +10,6 @@ import {
 } from "./frontier-editions";
 import { createIntegrationDb } from "./integration-db";
 
-// THE FRONTIER-EDITIONS STORE, PROVEN against the REAL generated schema: the
-// newest-first summary list, the user-scoped edition read (never trust the number
-// alone), the frozen-track round-trip (artists JSON, the finding/catalogue slot split,
-// the readout chips), and the reusable INSERT builder's `coalesce(max(number),0)+1`
-// monotonic derivation.
-
 let db: Client;
 
 vi.mock("./db", async (importOriginal) => {
@@ -24,7 +18,6 @@ vi.mock("./db", async (importOriginal) => {
   return { ...actual, getDb: () => Promise.resolve(db) };
 });
 
-/** Write one edition via the reusable builder — the exact path A2 folds into its batch. */
 async function insertEdition(
   userId: string,
   createdAt: string,
@@ -116,7 +109,6 @@ describe("getFrontierEdition", () => {
 
     const [finding, catalogue] = edition.tracks;
 
-    // The finding slot carries its coordinate + frozen readout chips + JSON-round-tripped artists.
     expect(finding?.trackId).toBe("finding-1");
     expect(finding?.slot).toBe("finding");
     expect(finding?.logId).toBe("001.1.1A");
@@ -126,10 +118,9 @@ describe("getFrontierEdition", () => {
     expect(finding?.bpm).toBe(174);
     expect(finding?.key).toBe("A minor");
     expect(finding?.durationMs).toBe(270_000);
-    // The frozen similarity round-trips as a real (float).
+
     expect(finding?.similarity).toBeCloseTo(0.9231, 4);
 
-    // The catalogue row stays coordinate-less and omits the readout fields it cannot back.
     expect(catalogue?.trackId).toBe("cat-1");
     expect(catalogue?.slot).toBe("catalogue");
     expect(catalogue?.logId).toBeUndefined();
@@ -137,7 +128,7 @@ describe("getFrontierEdition", () => {
     expect(catalogue?.bpm).toBeUndefined();
     expect(catalogue?.key).toBeUndefined();
     expect(catalogue?.durationMs).toBeUndefined();
-    // A row frozen without a similarity degrades to undefined (nullable column).
+
     expect(catalogue?.similarity).toBeUndefined();
   });
 
@@ -152,15 +143,12 @@ describe("getFrontierEdition", () => {
     expect(edition?.summary.seedsUsed).toBe(3);
     expect(edition?.summary.seedsSkipped).toEqual(["seed-x", "seed-y"]);
 
-    // The summary list carries the same frozen meta (the shelf reads it there too).
     const [summary] = await getFrontierEditions("user-A");
     expect(summary?.seedsUsed).toBe(3);
     expect(summary?.seedsSkipped).toEqual(["seed-x", "seed-y"]);
   });
 
   it("degrades a seed-meta-less edition to undefined (the pre-migration shape)", async () => {
-    // No meta passed — seeds_used / seeds_skipped_json store NULL, exactly like an
-    // edition frozen before the D4 columns existed.
     await insertEdition("user-A", "2026-07-11T10:00:00.000Z", [findingTrack]);
 
     const [summary] = await getFrontierEditions("user-A");
@@ -171,7 +159,6 @@ describe("getFrontierEdition", () => {
   it("is user-scoped: the number alone never fetches another user's edition", async () => {
     await insertEdition("user-A", "2026-07-11T10:00:00.000Z", [findingTrack]);
 
-    // user-A has edition 1; user-B does not, even though the number exists globally.
     expect(await getFrontierEdition("user-B", 1)).toBeUndefined();
     expect(await getFrontierEdition("user-A", 99)).toBeUndefined();
   });
@@ -183,7 +170,6 @@ describe("frontierEditionInsertStatements", () => {
     await insertEdition("user-A", "2026-07-11T10:00:00.000Z", [findingTrack]);
     await insertEdition("user-A", "2026-07-18T10:00:00.000Z", [findingTrack]);
 
-    // Each user's numbering is independent and starts at 1.
     await insertEdition("user-B", "2026-07-18T10:00:00.000Z", [findingTrack]);
 
     expect((await getFrontierEditions("user-A")).map((edition) => edition.number)).toEqual([

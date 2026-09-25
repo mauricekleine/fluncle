@@ -95,8 +95,6 @@ describe("Goal C core vendor selector cutovers", () => {
     expect(await countUnverifiedCaptures()).toBe(2);
     await schedule("capture-verification", "00_missing");
 
-    // The missing projected subject consumes its projection slot; hydration cannot leak cap_b in
-    // from the source corpus to fill the hole.
     expect((await listUnverifiedCaptures(2)).map((row) => row.trackId)).toEqual(["cap_a"]);
     const promoted = await db.execute({
       args: ["capture-verification"],
@@ -229,7 +227,6 @@ describe("Goal C core vendor selector cutovers", () => {
   });
 
   it("serves the rows a rank page's own residual fanout cannot touch", async () => {
-    // One marker more than a guarded read's drain budget converges, so a marker survives the read.
     const pageSize = SOURCE_REPAIR_LIMIT * DUE_WORK_READ_DRAIN_BUDGET.sourcePages + 1;
     const trackIds = Array.from(
       { length: pageSize * 2 + 1 },
@@ -247,15 +244,10 @@ describe("Goal C core vendor selector cutovers", () => {
     expect(first.prioritized).toBe(pageSize);
     expect(first.remaining).toBeGreaterThan(0);
 
-    // The page's own write-back left one marker per ranked subject. The next read's drain budget
-    // converges every five-marker page it allows and still cannot reach the last one, which is the
-    // bounded-maintenance shape. A marker owns its own subject and no other, so
-    // the read serves a full page instead.
     const second = await rankCatalogue(pageSize);
     expect(second.prioritized).toBe(pageSize);
     expect(second.remaining).toBeGreaterThan(0);
 
-    // Residual debt survives the read, which is what makes this the paused-tick shape.
     const pending = await db.execute({
       args: [DUE_WORK_SOURCE_REPAIR_KIND],
       sql: `select subject_id from due_work where work_kind = ? and state = 'repair'`,
@@ -277,7 +269,7 @@ describe("Goal C core vendor selector cutovers", () => {
     for (const trackId of trackIds) {
       await schedule("catalogue-rank", trackId);
     }
-    // Repair debt outside catalogue-rank's scope that no registered definition converges.
+
     await markDueWorkRepair(db, {
       sourceVersion: "unrelated-v1",
       subjectId: "artist_unrelated",
@@ -304,7 +296,6 @@ describe("Goal C core vendor selector cutovers", () => {
   });
 
   it("reports pending track source markers until a ranked page's fanout drains", async () => {
-    // One marker more than a source page holds, so the first step provably leaves debt behind.
     const trackIds = Array.from(
       { length: SOURCE_REPAIR_LIMIT + 1 },
       (_, index) => `rank_drain_${String(index).padStart(3, "0")}`,
@@ -325,7 +316,7 @@ describe("Goal C core vendor selector cutovers", () => {
         limit: 500,
         target: "track_due_work",
       });
-    // One step fans out a full source page of the markers; the next clears the last one.
+
     expect(await step()).toMatchObject({ complete: false, trackSourceMarkersPending: true });
     expect(await step()).toMatchObject({ complete: true, trackSourceMarkersPending: false });
   });

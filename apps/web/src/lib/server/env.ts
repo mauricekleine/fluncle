@@ -1,265 +1,110 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 
-// The injectable `fetch` — the default is the global `fetch`; tests pass a fake that
-// routes by URL, so every fetch+parse leg (the reach collectors, the OAuth token
-// helpers) is unit-testable with zero real network. Its canonical home is here (a leaf
-// module) so any server module can import it without a cycle.
 export type FetchImpl = typeof fetch;
 
 let didLoadLocalEnv = false;
 
 const envKeys = [
-  // Admin "Login with Spotify" allow-list — the operator identity, kept out of
-  // this public repo. ADMIN_ALLOWED_EMAILS is required; ADMIN_ALLOWED_SPOTIFY_IDS
-  // is optional. Both are comma-separated (see admin-auth.ts).
   "ADMIN_ALLOWED_EMAILS",
   "ADMIN_ALLOWED_SPOTIFY_IDS",
-  // The ROOT HMAC secret behind the admin-session cookie AND the OAuth state. It
-  // is never used to sign anything directly: two labeled SUBKEYS are derived from
-  // it (`signingSubkey` below), one per purpose, so the grant cookie and the OAuth
-  // state no longer share a key — a signature minted for one purpose can never
-  // verify as the other, and the two windows/payload shapes stay independent even
-  // though one env var provisions both.
-  //
-  // DELIBERATELY SEPARATE from FLUNCLE_API_TOKEN (the API Bearer carrier): the
-  // agent box holds the API token, so sharing one secret would let a token leak
-  // forge {role:"admin"} session cookies. Splitting them means a leaked Bearer
-  // token cannot mint web sessions.
+
   "ADMIN_SESSION_SECRET",
   "BETTER_AUTH_SECRET",
   "BETTER_AUTH_URL",
-  // Cartesia (Sonic) TTS — the audio-observation voice (Worker-side; the agent never
-  // holds it). CARTESIA_API_KEY is a secret; CARTESIA_VOICE_ID is the swappable config
-  // var holding the cloned Fluncle voice id, read via readOptionalEnv so an
-  // unprovisioned Worker degrades cleanly.
+
   "CARTESIA_API_KEY",
   "CARTESIA_VOICE_ID",
   "FIRECRAWL_API_KEY",
-  // The Beatport backfill's CATALOGUE sub-cap (lib/server/backfill.ts) — how many uncertified rows
-  // one tick may scrape. Non-secret operator tuning, read via readOptionalEnv: unset falls back to
-  // the small in-code default, and `0` switches the tier off. It lives in the WORKER rather than
-  // the box because the Worker holds FIRECRAWL_API_KEY and each row is one Firecrawl credit, so
-  // the spending cap belongs where the spending is — and because the box's PINNED CLI would fail
-  // outright on a new flag (the freshness tap's missing CLI command records that trap).
+
   "FLUNCLE_BACKFILL_BEATPORT_CATALOGUE_LIMIT",
   "FLUNCLE_API_TOKEN",
-  // The Hermes box's admin Bearer. A SECOND, lower-privilege admin token: it
-  // authenticates as the "agent" role (see adminRole / requireOperator), which is
-  // bounded server-side to the reversible/internal surface — reads, enrich-sweep,
-  // analysis write-back, a TikTok draft. It can NEVER hit a publish-/irreversible-
-  // class route even with full shell access on the box, because the credential
-  // itself lacks that authority here. The full FLUNCLE_API_TOKEN (the operator's
-  // own CLI) and the browser grant cookie are the "operator" role. OPTIONAL —
-  // unset means no agent principal exists and the surface is operator-only.
+
   "FLUNCLE_AGENT_TOKEN",
-  // Resend — the newsletter's send-of-record.
-  // The Worker owns the key; the agent box never holds it (the agent calls the
-  // admin send op, the Worker creates + sends the broadcast). RESEND_API_KEY is the
-  // secret; RESEND_SEGMENT_ID is the Fluncle Audience/Segment the subscribe path
-  // adds contacts to AND the broadcast targets; RESEND_FROM is the verified sender
-  // (e.g. "Fluncle <fluncle@newsletter.fluncle.com>"), read via readOptionalEnv so
-  // a missing one is a clean 500 rather than a thrown Missing at module scope.
+
   "RESEND_API_KEY",
   "RESEND_SEGMENT_ID",
   "RESEND_FROM",
   "POSTIZ_API_KEY",
   "POSTIZ_API_URL",
-  // R2 S3-API credentials for presigned direct-to-bucket uploads (the video
-  // bundle bypasses the Worker body limit). The Worker owns these; the CLI only
-  // ever holds the admin token + the short-lived presigned URLs they sign.
+
   "R2_ACCESS_KEY_ID",
   "R2_SECRET_ACCESS_KEY",
-  // Non-secret: the Cloudflare account id, wired as a plain var in wrangler.jsonc.
+
   "R2_ACCOUNT_ID",
   "SPOTIFY_CLIENT_ID",
   "SPOTIFY_CLIENT_SECRET",
   "SPOTIFY_REDIRECT_URI",
   "SPOTIFY_PLAYLIST_ID",
-  // "Continue with Google" public sign-in (Better Auth `socialProviders.google`,
-  // lib/server/public-auth.ts). The OAuth client id + secret from the Google Cloud
-  // console. Both OPTIONAL, read via readOptionalEnv: the Google provider is spread
-  // into the auth config ONLY when BOTH are present, so the whole leg is a NO-OP
-  // (and the "Continue with Google" button never renders) until they are set —
-  // email/password sign-up + sign-in work unprovisioned exactly like the other
-  // env-gated side-channels. Distinct from SPOTIFY_CLIENT_* (that is the ADMIN
-  // "Login with Spotify" operator identity, not a public user provider).
+
   "GOOGLE_CLIENT_ID",
   "GOOGLE_CLIENT_SECRET",
-  // Our own YouTube OAuth (mixtape video distribution), mirroring Spotify. The
-  // Worker holds the durable refresh token in youtube_auth and mints a short-lived
-  // access token for the CLI's resumable upload PUT.
+
   "YOUTUBE_CLIENT_ID",
   "YOUTUBE_CLIENT_SECRET",
   "YOUTUBE_REDIRECT_URI",
-  // A plain YouTube Data API v3 key (a `key=` query param, NOT OAuth) for the public
-  // channel statistics the /reach collector reads (subscribers + total views). The
-  // stats are public, so no OAuth ceremony — distinct from the YOUTUBE_CLIENT_* OAuth
-  // above that the mixtape video distribution uses. OPTIONAL, read via readOptionalEnv:
-  // absent, the reach collector skips the youtube platform cleanly (env-gated), exactly
-  // like the Last.fm/Bluesky legs no-op unprovisioned.
+
   "YOUTUBE_API_KEY",
-  // Our own Mixcloud OAuth (mixtape audio distribution). The Worker runs the code
-  // exchange + stores the durable token in mixcloud_auth, then hands it to the CLI
-  // just-in-time for the CLI-direct upload (the bytes are CLI-direct; the token is
-  // not — the CLI stays a thin client). No redirect-URI var: Mixcloud takes it at
-  // runtime, so it's derived from the request origin (mixcloudRedirectUri).
+
   "MIXCLOUD_CLIENT_ID",
   "MIXCLOUD_CLIENT_SECRET",
-  // The /reach Tier-2 OAuth plumbing (docs/reach-tier2-activation.md) — one number
-  // apiece behind a per-platform USER OAuth + refresh, mirroring the Spotify/YouTube
-  // token dance (the durable token lives Worker-side in <platform>_auth, minted on
-  // demand). All OPTIONAL, read via readOptionalEnv: every leg is DORMANT until its
-  // creds are set AND the operator connects, so the reach collector skips the platform
-  // cleanly (env-gated) exactly like the Last.fm/Bluesky legs no-op unprovisioned. The
-  // redirect URI is derived from the request origin (like Mixcloud), so no *_REDIRECT_URI
-  // var — the operator registers that exact callback URL in each platform's app console.
-  //
-  // Twitch — the broadcaster's OWN user token + `moderator:read:followers` (an app
-  // token no longer suffices for the follower total). Client id/secret from the Twitch
-  // developer console.
+
   "TWITCH_CLIENT_ID",
   "TWITCH_CLIENT_SECRET",
-  // TikTok — the Display API OAuth (Login Kit v2), our own connect for @fluncle. The
-  // daily social-metrics snapshot reads `POST /v2/video/list/` PER-VIDEO metrics into the
-  // `social_metrics` ledger under the `tiktok_display` source (TikTok's own authoritative
-  // numbers, alongside the Postiz source). CHANNEL-level TikTok stats are NOT read here —
-  // the /reach collector already gets those via Postiz (platform-stats.ts `collectTiktok`),
-  // so this leg is per-video only, no duplication. TIKTOK_CLIENT_KEY / TIKTOK_CLIENT_SECRET
-  // are the TikTok developer app's credentials (note TikTok's "client_key", not
-  // "client_id"); TIKTOK_REDIRECT_URI is the exact registered callback URL
-  // (…/api/admin/tiktok/auth/callback). All three read via readOptionalEnv, so the whole
-  // leg is a clean NO-OP until they are set AND the operator connects — exactly like the
-  // Twitch/Instagram reach legs. Sandbox vs production is a pure SECRET SWAP (same code).
+
   "TIKTOK_CLIENT_KEY",
   "TIKTOK_CLIENT_SECRET",
   "TIKTOK_REDIRECT_URI",
-  // Instagram — the "Instagram API with Instagram Login" business flow (NOT the
-  // Facebook-Login variant), `instagram_business_basic` scope → `followers_count`. The
-  // Instagram App ID/Secret from the Meta app dashboard. The stored token is a 60-day
-  // LONG-LIVED token (no refresh_token — it is refreshed in place via
-  // graph.instagram.com/refresh_access_token), so instagram_auth carries no refresh column.
+
   "GITHUB_TOKEN",
   "INSTAGRAM_CLIENT_ID",
   "INSTAGRAM_CLIENT_SECRET",
-  // Last.fm write side (love-on-add). API_KEY + SHARED_SECRET come from the
-  // Last.fm API application; SESSION_KEY (durable, non-expiring) comes from
-  // running `fluncle admin auth lastfm`. All three are Worker secrets. The love
-  // hook no-ops when SESSION_KEY is absent, so the publish path works unprovisioned.
+
   "LASTFM_API_KEY",
   "LASTFM_SHARED_SECRET",
   "LASTFM_SESSION_KEY",
-  // Apple Music API developer token, for the EXACT ISRC → Apple Music URL resolve
-  // (lib/server/apple-music.ts, the `apple-music` backfill). Three parts of one
-  // MusicKit key: TEAM_ID (the Apple Developer team), KEY_ID (the MusicKit key id),
-  // and PRIVATE_KEY (the ES256 .p8 private key, PEM). The Worker mints a short-lived
-  // ES256 JWT from them per the Apple Music API auth spec — the box never holds them.
-  // All three read via readOptionalEnv, so the whole leg is a NO-OP until they are
-  // set (exactly like Last.fm's session key): no URL is ever stored, and nothing wrong
-  // is stored, while they are absent. Provisioning them requires an Apple Developer
-  // MusicKit key (the keyless iTunes Search API has no ISRC lookup — that is the Apple
-  // Music API, which needs this token). See docs/app-store-review.md.
+
   "APPLE_MUSIC_TEAM_ID",
   "APPLE_MUSIC_KEY_ID",
   "APPLE_MUSIC_PRIVATE_KEY",
-  // Discogs read-only release-ID enrichment (lib/server/discogs.ts): a personal
-  // access token created in the `fluncle` Discogs developer settings. It lifts the
-  // rate limit to ~60 req/min and is read via readOptionalEnv, so the lookup
-  // no-ops (in_release_id/in_master_id stay inert) until the secret is set.
+
   "DISCOGS_USER_TOKEN",
   "TELEGRAM_BOT_TOKEN",
   "TELEGRAM_CHANNEL_ID",
   "DISCORD_WEBHOOK_URL",
-  // Operator-only event alerts. Distinct from DISCORD_WEBHOOK_URL, which posts
-  // public track submissions to the crew channel. Optional: alert producers no-op
-  // when the Worker secret is absent.
+
   "DISCORD_ALERT_WEBHOOK",
-  // Bluesky (AT Protocol) publish side-channel (lib/server/bluesky.ts). The
-  // handle/identifier + an app password (NOT the account password) for
-  // @fluncle.com (a leading "@" in the stored value is fine — bluesky.ts strips
-  // it). Both read via readOptionalEnv, so the whole leg is a NO-OP until
-  // they're set — a publish is never touched while they're absent.
+
   "BLUESKY_IDENTIFIER",
   "BLUESKY_APP_PASSWORD",
   "TURSO_DATABASE_URL",
   "TURSO_AUTH_TOKEN",
-  // The shared read-only catalogue replica for offline-first mobile. All four are
-  // OPTIONAL and read as one feature flag by orpc/replica.ts: absent or partial
-  // configuration keeps GET /replica/token dark with a typed 503. The URL is the
-  // libSQL URL handed to devices; the database name + organization identify the
-  // Platform API mint target; the Platform token is the Worker-only bearer that
-  // authorizes minting short-lived database credentials.
+
   "DEVICE_REPLICA_DB_URL",
   "DEVICE_REPLICA_DB_NAME",
   "TURSO_PLATFORM_ORG",
   "TURSO_PLATFORM_TOKEN",
-  // The SECOND database — `fluncle-telemetry`, the run ledger (`src/db/telemetry-schema.ts`,
-  // `getTelemetryDb` in ./db.ts). A separate store because libSQL has a single writer and a
-  // ledger sitting behind the primary's writer goes dark exactly when the stall it should be
-  // diagnosing happens. BOTH read via readOptionalEnv, so an unprovisioned checkout (local
-  // dev, the test suite, a preview) turns the ledger write into a clean no-op instead of a
-  // throw — diagnostics must never break the product path they observe.
+
   "TURSO_TELEMETRY_DATABASE_URL",
   "TURSO_TELEMETRY_AUTH_TOKEN",
-  // Cloudflare cache purge-by-URL (lib/server/edge-cache.ts): when a finding is
-  // published or updated, the Worker drops its `/log/<id>` page + the `/log` index
-  // from the edge cache globally. Both OPTIONAL — absent, the purge degrades to a
-  // local (this-data-center) eviction plus the short fresh window. CF_CACHE_PURGE_ZONE_ID
-  // is the fluncle.com zone id (non-secret); CF_CACHE_PURGE_TOKEN is an API token
-  // scoped to Zone → Cache Purge on that zone (a secret). Read off the Worker `env`
-  // binding directly in edge-cache.ts, not via readEnv (they may be unset).
+
   "CF_CACHE_PURGE_ZONE_ID",
   "CF_CACHE_PURGE_TOKEN",
-  // Expo Push Service access token for the mobile app's push notifications
-  // (lib/server/push.ts). OPTIONAL and read via
-  // readOptionalEnv: the whole push feature is a NO-OP until this is set — the
-  // send-on-publish side-channel returns immediately, so the publish path works
-  // unprovisioned exactly like the Last.fm/Telegram hooks. With Expo's "Enhanced
-  // Security for Push" enabled this Bearer is REQUIRED for /send to authorize.
+
   "EXPO_ACCESS_TOKEN",
-  // OpenRouter — the small-LLM distil pass that turns raw Firecrawl search snippets
-  // into a clean context_note (lib/server/observation.ts). OPENROUTER_API_KEY is a
-  // secret, read via readOptionalEnv so an unprovisioned Worker degrades gracefully:
-  // the distil falls back to the cleaned raw snippets rather than blocking the
-  // render. OPENROUTER_CONTEXT_MODEL is an OPTIONAL, non-secret override for the
-  // distil model; absent, it defaults to `anthropic/claude-haiku-4.5`.
+
   "OPENROUTER_API_KEY",
   "OPENROUTER_CONTEXT_MODEL",
-  // OPTIONAL reasoning-effort pin for context distillation. Absent sends no
-  // `reasoning` field, preserving the provider/model default.
+
   "OPENROUTER_CONTEXT_EFFORT",
-  // The same key drives search's fourth tier — the model that turns a natural-language query
-  // into a filter object (lib/server/search-llm.ts). OPENROUTER_SEARCH_MODEL is the OPTIONAL,
-  // non-secret override for THAT model (default `anthropic/claude-haiku-4.5`), kept separate
-  // from the distil's so the two can be tuned independently: one is a summariser, the other a
-  // parser. Unprovisioned, search degrades to full text and keeps working.
+
   "OPENROUTER_SEARCH_MODEL",
-  // OPTIONAL reasoning-effort pin for that same search model, sent as OpenRouter's
-  // `reasoning: { effort }` only when set; absent, no reasoning field is sent.
-  // LOAD-BEARING whenever OPENROUTER_SEARCH_MODEL names a reasoning model — higher
-  // efforts parse this task worse (scripts/bench-search-filter.ts) — so the two vars
-  // travel together in wrangler.jsonc: set both or delete both.
+
   "OPENROUTER_REASONING_EFFORT",
-  // Simple Analytics read API — the demand signal (docs/catalogue-crawler.md § Demand). The
-  // Worker fetches the pageview stats itself (`GET simpleanalytics.com/fluncle.com.json`, the
-  // APEX host, with an `Api-Key` header) and reorders crawl/capture priority toward the artists
-  // and labels real visitors looked at. OPTIONAL, read via readOptionalEnv: absent, the
-  // `record_demand` op degrades to a clean no-op (it writes nothing — never wiping the demand
-  // columns on a transient missing key), so the whole leg is dark until the operator sets it.
+
   "SIMPLE_ANALYTICS_API_KEY",
-  // ChatDnB (the admin-gated /admin/chat spike, lib/server/chat.ts) — the model that
-  // holds Fluncle's voice and answers over his own archive tools. OPTIONAL, non-secret
-  // override for the chat model; absent, it defaults to `anthropic/claude-haiku-4.5`, the
-  // same family the search + distil tiers trust. The chat itself needs OPENROUTER_API_KEY
-  // (the shared key above); without it the route answers 503, since a chat has no cheaper
-  // degraded fallback the way search degrades to full text.
+
   "OPENROUTER_CHAT_MODEL",
-  // The `sonar` vector sidecar (apps/sonar, lib/server/sonar.ts) — the in-memory exact
-  // nearest-neighbour engine the vector surfaces (sonic search, sounds-like-these-artists,
-  // /log neighbours) route to behind their dark flags. SONAR_BASE_URL is the sidecar's
-  // origin (non-secret host, e.g. `https://<host>`); SONAR_SECRET is the shared secret sent
-  // as the `x-sonar-secret` header (a secret). BOTH read via readOptionalEnv, so the whole
-  // client is a clean NO-OP until they are set: an unset key ⇒ searchSonar returns null ⇒
-  // every surface falls back to its existing Turso vector scan, exactly like today.
+
   "SONAR_BASE_URL",
   "SONAR_SECRET",
 ] as const;
@@ -271,14 +116,6 @@ export async function loadLocalEnv(options: { force?: boolean } = {}): Promise<v
     return;
   }
 
-  // Never hand the operator's real `.dev.vars` to the test suite. `import.meta.env.DEV`
-  // is true under vitest, so without this a test exercising a write path ran with LIVE
-  // credentials and fired the real integration (createSubmission POSTing to the real
-  // Discord webhook, once per seeded row). GitHub CI already runs this suite with no env
-  // at all — quality-checks.yml passes neither vars nor secrets, and `.dev.vars` does not
-  // exist on a runner — and it is green, so nothing here depends on these values. Skipping
-  // the load makes a local run match CI instead of being the one place with real keys.
-  // The no-network rail in src/test/block-network.ts is the second layer, at the transport.
   if (process.env.VITEST) {
     didLoadLocalEnv = true;
 
@@ -330,47 +167,15 @@ export async function readEnvs<const T extends readonly EnvKey[]>(
   ) as Record<T[number], string>;
 }
 
-// One admin identity, two carriers: the CLI/agent
-// send FLUNCLE_API_TOKEN as a Bearer header (requireAdmin compares it directly);
-// the browser sends a signed grant COOKIE whose HMAC signing key is the SEPARATE
-// ADMIN_SESSION_SECRET (admin-auth.ts), never a transported value. The two
-// secrets are split so a leaked Bearer token cannot forge session cookies.
-// requireAdmin accepts either, so every existing /api/admin/* route is reachable
-// from the browser tagging UI without forking per-carrier logic.
 export const ADMIN_COOKIE_NAME = "fluncle_admin";
-// The browser session window. Deliberately NOT the OAuth state window: a 10-min
-// cookie would log the single operator out mid-session. It stays 30 days because
-// the window is no longer the ONLY brake — `revoke_admin_grants` bumps the grant
-// epoch below and kills every outstanding cookie in one flip. Shortening it is a
-// one-line operator choice, not a prerequisite.
+
 export const ADMIN_GRANT_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 const OAUTH_STATE_MAX_AGE_MS = 10 * 60 * 1000;
-// The CLI handoff ticket's window (lib/server/oauth-handoff.ts). Matched to the
-// OAuth state window on purpose: the ticket exists only to carry a terminal-printed
-// connect into a browser, and a link that outlives the flow it starts is just a
-// longer-lived credential.
+
 export const OAUTH_HANDOFF_MAX_AGE_MS = 10 * 60 * 1000;
 
-// ── The grant epoch: revocation for a stateless cookie ────────────────────────
-// A signed grant cookie is self-contained, so before this there was NO way to
-// invalidate one short of rotating ADMIN_SESSION_SECRET (which also breaks every
-// in-flight OAuth state). The epoch fixes that with one integer in the `settings`
-// KV: `signAdminGrant` BAKES the current epoch into the signed payload, and
-// `verifyAdminGrant` rejects any grant whose epoch predates the current value. So
-// `revoke_admin_grants` (a single `setSetting`) logs every browser out at once,
-// with no deploy and no secret rotation.
-//
-// UNSET ⇒ epoch 0, which every freshly minted grant also carries: on a deploy that
-// has never revoked, behaviour is exactly as before. From the first bump onward the
-// check bites. A read that FAILS (or a malformed value) is treated as unknown and
-// REJECTS — a revocation that fails open is not a revocation. The recovery from a
-// malformed value is `fluncle admin auth revoke-grants` (Bearer-carried, so it is
-// unaffected by a rejected cookie), which writes a well-formed epoch again.
 export const ADMIN_GRANT_EPOCH_KEY = "admin_grant_epoch";
 
-// The `settings` KV read, behind a LAZY import: `./settings` → `./db` → this
-// module, so a static import here would close a cycle. Same pattern as
-// `orpc-auth.ts`'s `liftResponseToFault`.
 async function readGrantEpoch(): Promise<number> {
   const { getSetting } = await import("./settings");
   const raw = await getSetting(ADMIN_GRANT_EPOCH_KEY);
@@ -382,8 +187,6 @@ async function readGrantEpoch(): Promise<number> {
   const trimmed = raw.trim();
   const parsed = Number(trimmed);
 
-  // An empty stored value is malformed, not zero: `Number("")` is 0, which would
-  // silently reset the epoch and resurrect every revoked cookie.
   if (!trimmed || !Number.isInteger(parsed) || parsed < 0) {
     throw new Error(`Malformed ${ADMIN_GRANT_EPOCH_KEY}`);
   }
@@ -391,22 +194,10 @@ async function readGrantEpoch(): Promise<number> {
   return parsed;
 }
 
-/** The epoch a freshly minted grant is stamped with. Throws if it cannot be read. */
 export async function currentGrantEpoch(): Promise<number> {
   return readGrantEpoch();
 }
 
-/**
- * Bump the grant epoch, invalidating every outstanding admin grant cookie. Returns
- * the new epoch. Operator-tier by construction (the only caller is the
- * `revoke_admin_grants` op).
- *
- * When the stored value is unreadable/malformed the previous epoch is unknown, so
- * incrementing it is not safe (a grant stamped with a higher number would survive).
- * It instead jumps to a whole-seconds timestamp — monotonic and far above any bump
- * count — so the revoke is effective and also REPAIRS the malformed value that was
- * locking browser logins out.
- */
 export async function revokeAdminGrants(): Promise<number> {
   const { setSetting } = await import("./settings");
   const next = await readGrantEpoch().then(
@@ -419,30 +210,14 @@ export async function revokeAdminGrants(): Promise<number> {
   return next;
 }
 
-// Two admin ROLES, not one admin with carriers:
-//   - "operator" — the human. Carried by the browser grant cookie OR the full
-//     FLUNCLE_API_TOKEN Bearer (the operator's own CLI). Can do everything.
-//   - "agent" — Hermes (and the Discord allow-list). Carried by FLUNCLE_AGENT_TOKEN.
-//     Bounded to the reversible/internal surface; publish-/irreversible-class
-//     routes 403 it (requireOperator).
-// Both are admin principals (they authenticate onto /api/admin/*); the role is the
-// privilege. The split is what makes the box gate non-load-bearing: a compromised
-// agent holds only the agent token, which the Worker refuses for publish actions.
 export type AdminRole = "operator" | "agent";
 
-// The role behind a request, or null if it is not an admin principal at all. This
-// is the single source of truth both requireAdmin and requireOperator read from.
 export async function adminRole(request: Request): Promise<AdminRole | null> {
   const header = request.headers.get("Authorization");
   const prefix = "Bearer ";
   const token = header?.startsWith(prefix) ? header.slice(prefix.length) : undefined;
 
   if (token) {
-    // readOptionalEnv, NOT readEnv: on a deployment where FLUNCLE_API_TOKEN was never
-    // provisioned (a preview branch, a half-configured Worker) the throwing read turned
-    // a Bearer request into an unhandled 500 instead of the 401 it is. An absent
-    // operator token means "no operator can authenticate here", so fall through to the
-    // agent token and then to unauthorized — the same shape the agent read already has.
     const operatorToken = await readOptionalEnv("FLUNCLE_API_TOKEN");
 
     if (operatorToken && constantTimeEqual(token, operatorToken)) {
@@ -456,8 +231,6 @@ export async function adminRole(request: Request): Promise<AdminRole | null> {
     }
   }
 
-  // The browser grant cookie is always the operator (it is minted only after
-  // "Login with Spotify" against the operator allow-list).
   if (await hasValidAdminCookie(request)) {
     return "operator";
   }
@@ -465,39 +238,12 @@ export async function adminRole(request: Request): Promise<AdminRole | null> {
   return null;
 }
 
-// ── The admin mutation origin guard (the cheap half of the /me CSRF stack) ─────
-// An admin request arrives on one of two carriers. A BEARER request is a program
-// (the CLI, the agent box, a script): it is not a browser, cannot be tricked into
-// sending a credential it does not hold, and legitimately sends no Origin — so it
-// is exempt, and stays byte-for-byte unaffected.
-//
-// A COOKIE request is a browser, and browsers attach the grant automatically. Until
-// now the only thing standing between an attacker's page and an admin mutation was
-// `SameSite=Lax`, which is SITE-scoped (eTLD+1): a request from any
-// `*.fluncle.com` host counts as same-site and DOES carry the grant, and Chrome's
-// "Lax-allowing-unsafe" intervention additionally lets a top-level cross-site POST
-// through for two minutes after the cookie is set. Requiring the Origin (or, when a
-// client omits it, the Referer) to match the request's own origin closes both: a
-// state-changing cookie-carried request must come from a page Fluncle itself served.
-//
-// Deliberately NOT the full `/me` stack: no per-user CSRF token (the admin identity
-// is a single operator with no token-mint surface) and no content-type gate (admin
-// routes legitimately take multipart). Same 403 `invalid_origin` shape as `/me`, so
-// the wire vocabulary stays one thing.
 const STATE_CHANGING_METHODS = new Set(["DELETE", "PATCH", "POST", "PUT"]);
 
-/** Whether the request presents an `Authorization: Bearer …` header at all. */
 export function hasBearerHeader(request: Request): boolean {
   return request.headers.get("Authorization")?.startsWith("Bearer ") ?? false;
 }
 
-/**
- * Guard a state-changing COOKIE-carried admin request against a cross-origin
- * caller. Returns a 403 `invalid_origin` Response when it must be refused, or
- * `undefined` when the request may proceed (a safe method, a Bearer client, or a
- * matching origin). Call AFTER the principal resolves, so an unauthenticated
- * request still reads as 401.
- */
 export function requireAdminMutationOrigin(request: Request): Response | undefined {
   if (!STATE_CHANGING_METHODS.has(request.method.toUpperCase()) || hasBearerHeader(request)) {
     return undefined;
@@ -526,16 +272,10 @@ export function requireAdminMutationOrigin(request: Request): Response | undefin
   }
 }
 
-// Any admin principal (operator OR agent). Use at the top of agent-allowed routes:
-// reads, enrich-sweep, and the conditional routes that then branch on adminRole.
 export async function requireAdmin(request: Request): Promise<Response | undefined> {
   return (await adminRole(request)) ? undefined : unauthorized();
 }
 
-// Operator only. Use on every publish-/irreversible-class route: a valid agent
-// token gets a 403 (it authenticated fine, it just lacks the role), a non-admin a
-// 401. The browser cookie and the full token pass, so the human admin UI and the
-// operator's own CLI are unaffected.
 export async function requireOperator(request: Request): Promise<Response | undefined> {
   const role = await adminRole(request);
 
@@ -556,7 +296,6 @@ export function readCookie(header: string | null, name: string): string | undefi
   }
 
   for (const part of header.split(/;\s*/)) {
-    // Split on the FIRST '=' only — base64url grant values can contain '='.
     const eq = part.indexOf("=");
 
     if (eq !== -1 && part.slice(0, eq) === name) {
@@ -578,22 +317,9 @@ export function jsonError(status: number, code: string, message: string): Respon
   );
 }
 
-// ── Key separation: two labeled subkeys, one root secret ──────────────────────
-// ADMIN_SESSION_SECRET signs NOTHING directly. Each purpose gets its own
-// HMAC-derived subkey, so the grant cookie and the OAuth state are cryptographically
-// independent: a signature minted for one purpose cannot verify as the other even
-// though the payload wire format is identical, and adding a third purpose later
-// costs a label rather than an env var.
-//
-// The derivation is HKDF-extract in spirit: subkey = HMAC(root, label). The labels
-// are versioned so a future format change can rotate one carrier without touching
-// the other. CHANGING A LABEL invalidates every credential signed under it.
 const GRANT_KEY_LABEL = "fluncle/admin-grant-cookie/v1";
 const OAUTH_STATE_KEY_LABEL = "fluncle/oauth-state/v1";
-// The third label: the CLI handoff ticket. Its OWN subkey, so a handoff ticket can
-// never verify as an OAuth state (which would smuggle an unbound state past the
-// callback) nor as a grant cookie — the same isolation the other two already have
-// from each other, extended to the carrier this closes the CLI hole with.
+
 const OAUTH_HANDOFF_KEY_LABEL = "fluncle/oauth-handoff/v1";
 
 async function signingSubkey(label: string): Promise<Buffer> {
@@ -609,10 +335,6 @@ function signWithKey(key: Buffer, payload: Record<string, string | number>): str
   return `${body}.${signature}`;
 }
 
-// The HMAC verify primitive, shared by the OAuth state path and the admin session
-// cookie. The two carriers differ in their signing subkey AND their freshness
-// window, so both are parameters — the OAuth path keeps its tight 10-min window
-// while the admin session gets a 30-day one, off one implementation.
 function verifyWithKey(key: Buffer, state: string, maxAgeMs: number): Record<string, unknown> {
   const [body, signature] = state.split(".");
 
@@ -639,10 +361,6 @@ function verifyWithKey(key: Buffer, state: string, maxAgeMs: number): Record<str
   return parsed;
 }
 
-/**
- * Sign an OAuth state under the oauth-state subkey. The 10-minute window is
- * enforced on the way back in by `verifyState`.
- */
 export async function signOauthState(payload: Record<string, string | number>): Promise<string> {
   return signWithKey(await signingSubkey(OAUTH_STATE_KEY_LABEL), payload);
 }
@@ -651,15 +369,10 @@ export async function verifyState(state: string): Promise<Record<string, unknown
   return verifyWithKey(await signingSubkey(OAUTH_STATE_KEY_LABEL), state, OAUTH_STATE_MAX_AGE_MS);
 }
 
-/**
- * Sign a CLI handoff ticket under its own subkey (lib/server/oauth-handoff.ts).
- * Ten-minute window, enforced on the way back in by `verifyOauthHandoff`.
- */
 export async function signOauthHandoff(payload: Record<string, string | number>): Promise<string> {
   return signWithKey(await signingSubkey(OAUTH_HANDOFF_KEY_LABEL), payload);
 }
 
-/** Throws on a bad signature or an expired ticket, exactly like `verifyState`. */
 export async function verifyOauthHandoff(token: string): Promise<Record<string, unknown>> {
   return verifyWithKey(
     await signingSubkey(OAUTH_HANDOFF_KEY_LABEL),
@@ -668,28 +381,12 @@ export async function verifyOauthHandoff(token: string): Promise<Record<string, 
   );
 }
 
-/**
- * Mint the browser's admin grant, stamped with the CURRENT grant epoch (see
- * ADMIN_GRANT_EPOCH_KEY). Signed under the grant-cookie subkey, so it can never be
- * replayed as an OAuth state and vice versa. Throws when the epoch is unreadable —
- * an un-epoched grant would be unrevocable, so minting fails loudly instead.
- */
 export async function signAdminGrant(): Promise<string> {
   const [key, epoch] = await Promise.all([signingSubkey(GRANT_KEY_LABEL), currentGrantEpoch()]);
 
   return signWithKey(key, { epoch, iat: Date.now(), role: "admin" });
 }
 
-/**
- * Whether a grant cookie value is a live admin grant: valid signature under the
- * grant subkey, inside the 30-day window, `role: "admin"`, AND an epoch at or above
- * the current one. Any failure — tampering, expiry, a revoked epoch, an unreadable
- * epoch — is a plain `false`, never a throw.
- *
- * The epoch read is LAST, behind the signature and window checks, so a garbage cookie
- * can never spend a DB round-trip: only a credential Fluncle actually minted reaches
- * the `settings` lookup.
- */
 export async function verifyAdminGrant(value: string | null | undefined): Promise<boolean> {
   if (!value) {
     return false;
@@ -706,9 +403,6 @@ export async function verifyAdminGrant(value: string | null | undefined): Promis
       return false;
     }
 
-    // A grant minted before the epoch existed carries no `epoch` at all; treat that
-    // as unrevocable and refuse it (those cookies die on this deploy anyway, since
-    // the signing key moved to a derived subkey).
     if (typeof payload.epoch !== "number" || !Number.isInteger(payload.epoch)) {
       return false;
     }
@@ -727,9 +421,6 @@ function forbidden(): Response {
   return jsonError(403, "forbidden", "This action requires the operator role");
 }
 
-// Exported for unit tests: Node's timingSafeEqual THROWS on length-mismatch, so
-// the length guard is load-bearing — a missing guard turns an intended 401 into
-// an unhandled 500. Tests assert the guard returns false (never throws/bypasses).
 export function constantTimeEqual(left: string, right: string): boolean {
   const leftBuffer = Buffer.from(left);
   const rightBuffer = Buffer.from(right);

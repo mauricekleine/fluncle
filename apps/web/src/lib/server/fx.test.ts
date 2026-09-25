@@ -1,10 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// getEurRates is a read-through daily cache over Frankfurter. The guarantees under test:
-//   1. a FRESH cache is served without touching the network;
-//   2. a STALE / missing cache triggers a fetch, which is upserted and returned;
-//   3. a fetch FAILURE degrades gracefully — stale cache if present, else null — never throws.
-
 const execute = vi.hoisted(() => vi.fn());
 const getDb = vi.hoisted(() => vi.fn());
 
@@ -28,7 +23,6 @@ function cacheRow(fetchedAt: string) {
   };
 }
 
-// A `select` returns the given cache rows; an `insert` (the upsert) returns nothing.
 function mockDb(selectRows: Record<string, unknown>[]) {
   execute.mockImplementation((query: { sql: string }) =>
     query.sql.includes("select")
@@ -72,12 +66,11 @@ describe("getEurRates read-through cache", () => {
 
     expect(result).toEqual({ rates: { USD: 1.05 }, ratesDate: "2026-07-01" });
     expect(fetchSpy).not.toHaveBeenCalled();
-    // Only the SELECT ran — no upsert on a fresh hit.
+
     expect(execute).toHaveBeenCalledTimes(1);
   });
 
   it("refetches + upserts when the cache is stale", async () => {
-    // 13h old (past the 12h staleness window).
     const stale = new Date(Date.now() - 13 * 60 * 60 * 1000).toISOString();
     mockDb([cacheRow(stale)]);
     mockFetch(true);
@@ -85,7 +78,7 @@ describe("getEurRates read-through cache", () => {
     const result = await getEurRates();
 
     expect(result).toEqual({ rates: { GBP: 0.86, USD: 1.18 }, ratesDate: "2026-07-09" });
-    // SELECT + upsert INSERT.
+
     expect(execute).toHaveBeenCalledTimes(2);
     const upsert = execute.mock.calls.find((call) => String(call[0]?.sql ?? "").includes("insert"));
     expect(upsert).toBeDefined();
@@ -107,7 +100,6 @@ describe("getEurRates read-through cache", () => {
 
     const result = await getEurRates();
 
-    // The stale rate is better than nothing; no upsert on a failed fetch.
     expect(result).toEqual({ rates: { USD: 1.05 }, ratesDate: "2026-07-01" });
     expect(execute).toHaveBeenCalledTimes(1);
   });

@@ -1,4 +1,3 @@
-/** Every eligibility producer whose source transaction must append the global rank marker. */
 export const DUE_WORK_CATALOGUE_RANK_PRODUCER_DEPENDENCIES = {
   ambiguous: ["capture-verification-quarantine"],
   required: [
