@@ -27,9 +27,10 @@ import { mergeLabel } from "./labels";
 let db: Client;
 let fixtureDirectory: string | undefined;
 const timestamp = "2026-08-01T00:00:00.000Z";
+const crawlInputSchema = crawlCatalogueContract["~orpc"].inputSchema;
 const crawlOutputSchema = crawlCatalogueContract["~orpc"].outputSchema;
-if (!crawlOutputSchema) {
-  throw new Error("crawl catalogue output schema is missing");
+if (!crawlInputSchema || !crawlOutputSchema) {
+  throw new Error("crawl catalogue contract schema is missing");
 }
 
 type TransactionCounts = {
@@ -120,6 +121,16 @@ function instrumentTransactions(client: Client): { client: Client; counts: Trans
   return { client, counts };
 }
 
+function executedSql(statement: unknown): string {
+  if (typeof statement === "string") {
+    return statement;
+  }
+  if (typeof statement === "object" && statement !== null && "sql" in statement) {
+    return typeof statement.sql === "string" ? statement.sql : "";
+  }
+  return "";
+}
+
 async function seedRelease(): Promise<void> {
   await db.execute({
     args: [CRAWL_DUE_CUTOVER_ENABLED_KEY, "true"],
@@ -185,6 +196,14 @@ afterEach(async () => {
 });
 
 describe("crawl admission phases", () => {
+  it("preserves the first-prepare repair sample flag through the oRPC input contract", () => {
+    const delivered = crawlInputSchema.parse({
+      body: { limit: 1, maxHop: 2, phase: "prepare", sampleStorableRepair: true },
+      query: {},
+    });
+    expect(delivered.body).toMatchObject({ phase: "prepare", sampleStorableRepair: true });
+  });
+
   it("preserves prepare telemetry through the oRPC output contract", async () => {
     const prepared = await prepareCrawlPhase({ limit: 1, maxHop: 2 });
     const delivered = crawlOutputSchema.parse({
@@ -210,8 +229,50 @@ describe("crawl admission phases", () => {
     await db.execute(`update crawl_due_work set state = 'repair', storable_rank = 1,
       repair_entered_at = '2026-08-01T00:00:01.000Z'
       where node_id = 'musicbrainz:release:release-phase'`);
-    const prepared = await prepareCrawlPhase({ limit: 1, maxHop: 2 });
+    const prepared = await prepareCrawlPhase({ limit: 1, maxHop: 2, sampleStorableRepair: true });
     expect(prepared.storableReady).toBe(true);
+  });
+
+  it("uses only the ready lane when the repair sample flag is absent", async () => {
+    await db.execute(`update crawl_due_work set state = 'repair', storable_rank = 1,
+      repair_entered_at = '2026-08-01T00:00:01.000Z'
+      where node_id = 'musicbrainz:release:release-phase'`);
+    const execute = vi.spyOn(db, "execute");
+    const prepared = await prepareCrawlPhase({ limit: 1, maxHop: 2 });
+    const sampledRepair = execute.mock.calls.some(([statement]) => {
+      const sql = executedSql(statement);
+      return sql.includes("crawl_due_work_repair_idx") && sql.includes("crawl_frontier as node");
+    });
+    expect(sampledRepair).toBe(false);
+    expect(prepared.storableReady).toBeNull();
+  });
+
+  it("returns unknown after a capped repair sample without a storable release", async () => {
+    await db.execute("update labels set seed_state = 'disabled' where id = 'label-phase'");
+    await db.execute(`update crawl_due_work set state = 'repair', storable_rank = 1,
+      repair_entered_at = '2026-08-01T00:00:01.000Z'
+      where node_id = 'musicbrainz:release:release-phase'`);
+    await db.batch(
+      Array.from({ length: 200 }, (_, index) => ({
+        args: [`musicbrainz:release:repair-${String(index).padStart(3, "0")}`, timestamp],
+        sql: `insert into crawl_due_work
+          (node_id, node_kind, state, hop, demand_rank, created_at, storable_rank,
+           generation, source_version, updated_at, repair_entered_at)
+          values (?, 'release', 'repair', 0, 1, ?, 1,
+            'test', 'test', '2026-08-01T00:00:00.000Z', '2026-08-01T00:00:00.000Z')`,
+      })),
+      "write",
+    );
+    const execute = vi.spyOn(db, "execute");
+    const prepared = await prepareCrawlPhase({ limit: 1, maxHop: 2, sampleStorableRepair: true });
+    const cappedSample = execute.mock.calls.find(([statement]) => {
+      const sql = executedSql(statement);
+      return sql.includes("repair_page") && sql.includes("crawl_due_work_repair_idx");
+    });
+    expect(cappedSample).toBeDefined();
+    expect(cappedSample?.[0]).toMatchObject({ args: [200] });
+    expect(executedSql(cappedSample?.[0])).toContain("order by node_id limit ?");
+    expect(prepared.storableReady).toBeNull();
   });
 
   it("settles a terminal known-disabled release without a MusicBrainz call and re-arms after enable", async () => {

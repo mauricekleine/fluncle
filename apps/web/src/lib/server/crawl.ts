@@ -11,6 +11,7 @@ import { linkTracksToArtistEntities, stampRemixerRoles } from "./artists";
 import { existingAlbumTitleFolds, foldTrackTitle } from "./catalogue-dedupe";
 import {
   CRAWL_STALE_ARTIST_REARM_LIMIT,
+  crawlParentAllowedSql,
   crawlRankLabelSlugSql,
   MAX_CRAWL_DUE_CHUNK_SIZE,
   markCrawlNodeRepairStatement,
@@ -2351,37 +2352,51 @@ export async function initializeCrawlPhase(): Promise<
   return { ...(await initializeCrawlPhaseState(true)), kind: "initialized" };
 }
 
-async function storableReleaseExists(db: Pick<Client, "execute">): Promise<boolean> {
+const CRAWL_STORABLE_REPAIR_SAMPLE_LIMIT = 200;
+
+async function storableReleaseExists(
+  db: Pick<Client, "execute">,
+  sampleRepair: boolean,
+): Promise<boolean | null> {
   const ready = await db.execute(`select 1 from crawl_due_work
     indexed by crawl_due_work_release_ready_idx
     where state = 'ready' and node_kind = 'release' and storable_rank = 0 limit 1`);
   if (ready.rows.length > 0) {
     return true;
   }
-  const repair = await db.execute(`select 1 from crawl_due_work as due
-    indexed by crawl_due_work_repair_idx
-    join crawl_frontier as node on node.id = due.node_id
-    where due.state = 'repair' and node.kind = 'release' and node.state = 'pending'
-      and (
-        exists (select 1 from labels as label
-          where label.slug = coalesce(node.release_label_slug,
-            case when substr(node.parent_id, 1, length('musicbrainz:artist:')) = 'musicbrainz:artist:'
-              then null else node.label_slug end)
-            and label.seed_state = 'enabled')
-        or exists (select 1 from artist_rules as parent_rule
-          where substr(node.parent_id, 1, length('musicbrainz:artist:')) = 'musicbrainz:artist:'
-            and parent_rule.artist_mbid = substr(node.parent_id, length('musicbrainz:artist:') + 1)
-            and parent_rule.verdict = 'allow')
-      ) limit 1`);
-  return repair.rows.length > 0;
+  if (!sampleRepair) {
+    return null;
+  }
+  const repair = await db.execute({
+    args: [CRAWL_STORABLE_REPAIR_SAMPLE_LIMIT],
+    sql: `with repair_page as materialized (
+      select node_id from crawl_due_work indexed by crawl_due_work_repair_idx
+      where state = 'repair' order by node_id limit ?
+    )
+    select count(*) as sampled,
+      coalesce(max(case
+        when node.kind = 'release' and node.state = 'pending'
+          and (label.seed_state = 'enabled' or ${crawlParentAllowedSql("node.")})
+        then 1 else 0 end), 0) as storable
+    from repair_page
+    left join crawl_frontier as node on node.id = repair_page.node_id
+    left join labels as label on label.slug = ${crawlRankLabelSlugSql("node.")}`,
+  });
+  const sample = typedRows<{ sampled: number; storable: number }>(repair.rows)[0];
+  if (Number(sample?.storable) === 1) {
+    return true;
+  }
+  return Number(sample?.sampled ?? 0) < CRAWL_STORABLE_REPAIR_SAMPLE_LIMIT ? false : null;
 }
 
 export async function prepareCrawlPhase({
   limit = 2,
   maxHop = DEFAULT_MAX_HOP,
+  sampleStorableRepair = false,
 }: {
   limit?: number;
   maxHop?: number;
+  sampleStorableRepair?: boolean;
 } = {}): Promise<CrawlPhasePrepareResult> {
   if (!Number.isInteger(limit) || limit < 1 || limit > MAX_CRAWL_PREPARE_LIMIT) {
     throw new Error(
@@ -2403,7 +2418,7 @@ export async function prepareCrawlPhase({
   await rearmSkippedDisabledReleases(maxHop);
 
   const db = await getDb();
-  const storableReady = await storableReleaseExists(db);
+  const storableReady = await storableReleaseExists(db, sampleStorableRepair);
   const claimed = await claimCrawlFrontierRows(db, {
     claimedBy: CRAWL_CATALOGUE_CLAIM_OWNER,
     leaseMs: CRAWL_CATALOGUE_LEASE_MS,

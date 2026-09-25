@@ -70,6 +70,20 @@ test("request kinds count every box attempt, including retries, and identify a l
       error: null,
       failed: 0,
       ok: true,
+      pending: 0,
+      reason: null,
+      storableReady: null,
+      throttled: false,
+      tracksFound: 0,
+      tracksSkippedLabelGate: 0,
+      tracksWritten: 0,
+    }),
+  ).toBeNull();
+  expect(
+    blockedReason({
+      error: null,
+      failed: 0,
+      ok: true,
       pending: 1,
       reason: null,
       storableReady: true,
@@ -180,10 +194,22 @@ function fixture(): Fixture {
     '      printf \'%s\\n\' \'{"ok":true,"phase":"prepare","kind":"prepared","items":[{"nodeId":"node-1","preparedToken":"prepared-token-1"},{"nodeId":"node-2","preparedToken":"prepared-token-2"}],"frontierPending":2}\' ;;',
     "    prepare:storable-first)",
     "      count=$(grep -c '^prepare:' " + data.calls + ")",
+    "      if grep -q '\"sampleStorableRepair\":true' \"$phase_file\"; then printf 'sample-repair:true\\n' >> " +
+      data.calls +
+      "; else printf 'sample-repair:absent\\n' >> " +
+      data.calls +
+      "; fi",
     '      if [ "$count" -eq 1 ]; then',
     '        printf \'%s\\n\' \'{"ok":true,"phase":"prepare","kind":"prepared","items":[{"nodeId":"node-1","preparedToken":"prepared-token-1"}],"frontierPending":1,"storableReady":true}\'',
     "      else",
     '        printf \'%s\\n\' \'{"ok":true,"phase":"prepare","kind":"drained","items":[],"frontierPending":0,"storableReady":false}\'',
+    "      fi ;;",
+    "    prepare:storable-unknown-first)",
+    "      count=$(grep -c '^prepare:' " + data.calls + ")",
+    '      if [ "$count" -eq 1 ]; then',
+    '        printf \'%s\\n\' \'{"ok":true,"phase":"prepare","kind":"prepared","items":[{"nodeId":"node-1","preparedToken":"prepared-token-1"}],"frontierPending":1,"storableReady":null}\'',
+    "      else",
+    '        printf \'%s\\n\' \'{"ok":true,"phase":"prepare","kind":"drained","items":[],"frontierPending":0,"storableReady":true}\'',
     "      fi ;;",
     "    prepare:repair-pending|fetch:repair-pending-fetch)",
     '      printf \'%s\\n\' \'{"code":"due_work_maintenance_pending","message":"Due-work maintenance is still converging","ok":false}\'',
@@ -205,7 +231,7 @@ function fixture(): Fixture {
     "        while [ ! -e " + data.fetchRelease + " ]; do sleep 0.01; done",
     "      fi",
     '      printf \'%s\\n\' \'{"ok":true,"phase":"fetch","commitToken":"commit-token","operationId":"crawl-op","operationKey":"crawl-key","requestDigest":"digest"}\' ;;',
-    "    commit:normal|commit:batch|commit:storable-first|commit:provider-pause|commit:box-fetch|commit:box-fetch-off|commit:commit-batch|commit:commit-batch-poison|commit:box-fetch-batch)",
+    "    commit:normal|commit:batch|commit:storable-first|commit:storable-unknown-first|commit:provider-pause|commit:box-fetch|commit:box-fetch-off|commit:commit-batch|commit:commit-batch-poison|commit:box-fetch-batch)",
     '      printf \'%s\\n\' \'{"ok":true,"phase":"commit","receipt":{"outcome":"committed","state":"committed","result":{"expanded":1,"failed":0,"tracksFound":3,"tracksWritten":3,"tracksSkipped":0,"rateLimited":false}}}\' ;;',
     "    commit:throttle-then-work)",
     "      count=$(grep -c '^commit:' " + data.calls + ")",
@@ -412,6 +438,30 @@ describe("crawl-sweep phase protocol", () => {
         storableReady: true,
         tracksWritten: 3,
       });
+      expect(readFileSync(data.calls, "utf8").match(/^prepare:/gm)).toHaveLength(2);
+      expect(readFileSync(data.calls, "utf8").match(/^sample-repair:.*$/gm)).toEqual([
+        "sample-repair:true",
+        "sample-repair:absent",
+      ]);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "keeps an unknown first sample when a later prepare reports storable work",
+    async () => {
+      const data = fixture();
+      const result = await collect(
+        Bun.spawn([process.execPath, SWEEP], {
+          detached: true,
+          env: { ...sweepEnvironment(data, "storable-unknown-first"), FLUNCLE_CRAWL_NODES: "2" },
+          stderr: "pipe",
+          stdout: "pipe",
+        }),
+      );
+
+      expect(result.exitCode, result.stderr).toBe(0);
+      expect(JSON.parse(result.stdout)).toMatchObject({ checked: 1, storableReady: null });
       expect(readFileSync(data.calls, "utf8").match(/^prepare:/gm)).toHaveLength(2);
     },
     TEST_TIMEOUT_MS,

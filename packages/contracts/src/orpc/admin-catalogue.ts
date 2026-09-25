@@ -453,6 +453,7 @@ const CrawlPhaseInputSchema = z.discriminatedUnion("phase", [
     limit: z.number().int().min(1).max(MAX_CRAWL_PREPARE_LIMIT).default(2),
     maxHop: z.number().int().min(0).max(3).default(2),
     phase: z.literal("prepare"),
+    sampleStorableRepair: z.boolean().optional(),
   }),
   z.object({
     phase: z.literal("fetch"),

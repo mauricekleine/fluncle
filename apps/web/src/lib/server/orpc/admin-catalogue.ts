@@ -260,7 +260,11 @@ export function adminCatalogueHandlers(os: Implementer) {
       }
       if (phase?.phase === "prepare") {
         return {
-          ...(await prepareCrawlPhase({ limit: phase.limit, maxHop: phase.maxHop })),
+          ...(await prepareCrawlPhase({
+            limit: phase.limit,
+            maxHop: phase.maxHop,
+            sampleStorableRepair: phase.sampleStorableRepair,
+          })),
           ok: true as const,
           phase: phase.phase,
         };

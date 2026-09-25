@@ -427,10 +427,7 @@ export function blockedReason(
   if (!summary.ok || summary.failed > 0 || summary.error !== null || summary.reason !== null) {
     return null;
   }
-  return summary.storableReady === false ||
-    (summary.storableReady === null && summary.pending === 0)
-    ? "no_storable_work"
-    : null;
+  return summary.storableReady === false ? "no_storable_work" : null;
 }
 
 function finishSummary(summary: SweepSummary): void {
@@ -882,6 +879,7 @@ async function drainFrontier(directory: string, summary: SweepSummary): Promise<
   const startedAt = Date.now();
   const spentMs = (): number => Date.now() - startedAt;
   let processed = 0;
+  let firstPrepare = true;
 
   while (processed < NODES) {
     if (spentMs() >= WALL_BUDGET_MS) {
@@ -892,6 +890,7 @@ async function drainFrontier(directory: string, summary: SweepSummary): Promise<
       limit: Math.min(PREPARE_LIMIT, NODES - processed),
       maxHop: MAX_HOP,
       phase: "prepare",
+      ...(firstPrepare ? { sampleStorableRepair: true } : {}),
     });
     if (!prepared) {
       recordPhaseYield(summary);
@@ -899,8 +898,9 @@ async function drainFrontier(directory: string, summary: SweepSummary): Promise<
     }
     summary.pending = prepared.frontierPending ?? summary.pending;
     summary.queueDepth = summary.pending;
-    if (summary.storableReady === null) {
+    if (firstPrepare) {
       summary.storableReady = prepared.storableReady ?? null;
+      firstPrepare = false;
     }
 
     const boxFetch = BOX_FETCH && prepared.boxFetch === true;
