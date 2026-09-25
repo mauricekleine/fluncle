@@ -336,11 +336,20 @@ async function recoverClaimedDelivery(
   return sendClaimedDelivery(db, delivery, userId, weekKey, clock, testRecipient);
 }
 
+function liveClock(clock: (() => Date) | undefined): () => Date {
+  return clock ?? (() => new Date());
+}
+
 export async function reconcileStaleDeliveryClaims(
   db: Awaited<ReturnType<typeof getDb>>,
   currentWeekKey: string,
   now: Date,
+  dryRun = false,
 ): Promise<number> {
+  if (dryRun) {
+    return 0;
+  }
+
   const result = await db.execute({
     args: [
       "Resend idempotency window elapsed before recovery",
@@ -381,7 +390,7 @@ export async function sendFollowDigests(
   } = {},
 ): Promise<FollowDigestSendResult> {
   const now = options.now ?? new Date();
-  const clock = options.clock ?? (() => new Date());
+  const clock = liveClock(options.clock);
   const weekKey = digestWeekKey(now);
   const dryRun = options.dryRun ?? false;
   const testRecipient = await readOptionalEnv("FOLLOW_DIGEST_TEST_RECIPIENT");
@@ -407,9 +416,7 @@ export async function sendFollowDigests(
   );
   const db = await getDb();
   const deliveryWeekKey = testRecipient ? `test/${weekKey}` : weekKey;
-  if (!dryRun) {
-    base.unknown += await reconcileStaleDeliveryClaims(db, deliveryWeekKey, clock());
-  }
+  base.unknown += await reconcileStaleDeliveryClaims(db, deliveryWeekKey, clock(), dryRun);
   const result = await db.execute({
     args: [deliveryWeekKey, options.cursor ?? "", weekKey, limit + 1],
     sql: `select u.id
