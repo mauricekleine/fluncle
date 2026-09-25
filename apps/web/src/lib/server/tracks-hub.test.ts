@@ -171,6 +171,11 @@ describe("listTracksHubPage — the register split + the linked row", () => {
     await seedTrack({ releaseDate: "2022-01-01", trackId: "f1" });
     await certify({ logId: "200.7.1A", trackId: "f1" });
     await seedTrack({ releaseDate: "2021-01-01", trackId: "c1" });
+    await db.execute({
+      args: ["c1"],
+      sql: `update tracks set album_image_url = 'https://i.scdn.co/image/cover',
+             bpm = 174, key = 'F minor', isrc = 'GBTEST2600001' where track_id = ?`,
+    });
 
     const { items } = await listTracksHubPage({}, 1);
 
@@ -181,6 +186,15 @@ describe("listTracksHubPage — the register split + the linked row", () => {
     // The Unlit Rule: a catalogue row carries no coordinate.
     expect(catalogue?.kind === "catalogue" && "logId" in catalogue.track).toBe(false);
     expect(catalogue?.kind === "catalogue" && catalogue.track.trackId).toBe("c1");
+    if (catalogue?.kind === "catalogue") {
+      expect(catalogue.track).toMatchObject({
+        albumImageUrl: expect.any(String),
+        bpm: 174,
+        durationMs: 210000,
+        key: "F minor",
+        previewable: true,
+      });
+    }
   });
 
   it("resolves an artist credit to its slug when the entity exists, plain otherwise", async () => {

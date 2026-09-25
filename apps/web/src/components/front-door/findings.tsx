@@ -12,13 +12,20 @@
 // uncertified archive is a DIFFERENT band further down the page, in a different register — the
 // distinction is carried by placement and light, and named nowhere (DESIGN.md's Unlit Rule).
 //
+// ── THE TILES PLAY ───────────────────────────────────────────────────────────────────────────
+// Each tile's cover is its play button and the band is one list to the player (the lead above
+// included, so its play runs on into these); the coordinate and the caption beneath open the log
+// page. Playing is not a transport: nothing on the page advances, and the band stays a window.
+//
 // Every cover here is lazy. The lead's cover above is the page's one eager image; the signal only
 // helps while it is scarce.
 
 import { Link } from "@tanstack/react-router";
 import { type ReactNode } from "react";
 import { type TrackListItem } from "@fluncle/contracts";
+import { PlayCover } from "@/components/player/playable-list";
 import { TrackArtwork } from "@/components/track-artwork";
+import { discoveryQueueTrack, findingToDiscoveryTrack } from "@/lib/discovery-tracks";
 import { artistTitleLine } from "@/lib/log-prose";
 import { COVER_TILE_SIZE, albumCoverAtSize } from "@/lib/media";
 
@@ -35,13 +42,9 @@ export function FrontDoorFindings({ findings }: { findings: TrackListItem[] }): 
     <ul className="fd-finding-grid">
       {tiles.map((finding) =>
         finding.logId ? (
-          <li key={finding.trackId}>
+          <li className="fd-finding-tile" key={finding.trackId}>
+            <FindingTileCover finding={finding} />
             <Link className="fd-finding" params={{ logId: finding.logId }} to="/log/$logId">
-              <TrackArtwork
-                alt=""
-                className="fd-finding-cover"
-                src={albumCoverAtSize(finding.albumImageUrl, COVER_TILE_SIZE)}
-              />
               <span className="fd-finding-coordinate">{finding.logId}</span>
               <span className="fd-finding-line">{artistTitleLine(finding)}</span>
             </Link>
@@ -49,5 +52,34 @@ export function FrontDoorFindings({ findings }: { findings: TrackListItem[] }): 
         ) : undefined,
       )}
     </ul>
+  );
+}
+
+/** The tile's cover: its play button when the finding has a live preview, the plain cover when not. */
+function FindingTileCover({ finding }: { finding: TrackListItem }): ReactNode {
+  const cover = (
+    <TrackArtwork
+      alt=""
+      className="fd-finding-cover"
+      src={albumCoverAtSize(finding.albumImageUrl, COVER_TILE_SIZE)}
+    />
+  );
+  const track = findingToDiscoveryTrack(finding);
+
+  // No preview: the cover opens the log page, beside the caption (siblings, never nested).
+  if (!track.previewable || !finding.logId) {
+    return finding.logId ? (
+      <Link aria-hidden="true" params={{ logId: finding.logId }} tabIndex={-1} to="/log/$logId">
+        {cover}
+      </Link>
+    ) : (
+      cover
+    );
+  }
+
+  return (
+    <PlayCover className="fd-finding-play" lit track={discoveryQueueTrack(track)}>
+      {cover}
+    </PlayCover>
   );
 }

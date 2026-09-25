@@ -328,6 +328,7 @@ describe("tier 1 — a coordinate", () => {
 
     expect(result.results.map((hit) => hit.title)).toEqual(["Nine Clouds"]);
     expect(result.results[0]?.certified).toBe(true);
+    expect(result.results[0]).toMatchObject({ durationMs: 180000, previewable: false });
   });
 
   it("accepts the fluncle:// form", async () => {

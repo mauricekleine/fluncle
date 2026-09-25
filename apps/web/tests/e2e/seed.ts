@@ -531,6 +531,21 @@ async function seedFrontDoorFixtures(client: Client): Promise<void> {
     sql: `update tracks set release_date = ? where track_id = ?`,
   });
 
+  // A live preview source on every finding (a stored preview URL) and on the catalogue release (an
+  // ISRC), so every discovery list has tracks that play and a queue longer than one. No spec ever
+  // reaches the preview hosts: the player specs answer `/api/preview` themselves
+  // (`tests/e2e/player.ts`).
+  for (const [index] of FINDINGS.entries()) {
+    await client.execute({
+      args: [`https://found.fluncle.com/e2e/preview-${index + 1}.mp3`, `e2e-track-${index + 1}`],
+      sql: `update tracks set preview_url = coalesce(preview_url, ?) where track_id = ?`,
+    });
+  }
+  await client.execute({
+    args: ["GBE2E2600002", SEEDED_CATALOGUE_RELEASE.trackId],
+    sql: `update tracks set isrc = ? where track_id = ?`,
+  });
+
   await seedCatalogueTrack(client, {
     artists: [SEEDED_FUTURE_RELEASE.artist],
     label: LABEL.name,

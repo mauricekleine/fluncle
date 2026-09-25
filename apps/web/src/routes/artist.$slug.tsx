@@ -165,9 +165,7 @@ function artistHead(loaderData: ArtistPageData | undefined) {
   // at the `medium` rung — byte-identical to what the components ask for, so the preload is a hit
   // and never a second fetch. Exactly one is spent: a preload only buys priority while it is
   // scarce (the homepage cover is the same one-preload shape).
-  const leadGridCover = findings.find((finding) => finding.logId)?.albumImageUrl;
-  const leadImageUrl =
-    albumCoverAtSize(leadGridCover, "medium") ?? albumCoverAtSize(imageUrl, "medium");
+  const leadImageUrl = leadGridCoverUrl(findings) ?? albumCoverAtSize(imageUrl, "medium");
 
   const musicGroup = musicGroupJsonLd(
     {
@@ -248,6 +246,17 @@ function artistHead(loaderData: ArtistPageData | undefined) {
 // the crawler-stability argument the shared default is built on still holds for the label pages.
 export const ARTIST_CATALOGUE_SORT_DEFAULT: CatalogueSort = "recent";
 
+/**
+ * The findings band's first cover at the rung its tile renders, or undefined when the band has no
+ * cover to lead with. When it exists it is the page's lead image: preloaded from the head and the
+ * one image fetched at high priority (the masthead portrait yields to it).
+ */
+function leadGridCoverUrl(
+  findings: Extract<ArtistPageData, { status: "found" }>["findings"],
+): string | undefined {
+  return albumCoverAtSize(findings.find((finding) => finding.logId)?.albumImageUrl, "medium");
+}
+
 // Route options follow TanStack's create-route-property-order (each step feeds the
 // next's inferred types), which isn't alphabetical — so sort-keys is off here.
 // oxlint-disable-next-line sort-keys
@@ -316,6 +325,8 @@ function ArtistPage() {
 
   const { bio, catalogue, dossier, findings, id, imageUrl, name, slug, socials, sort, upcoming } =
     data;
+  // The same rule the head's preload uses, so the high-priority image is the preloaded one.
+  const findingsBandLeads = leadGridCoverUrl(findings) !== undefined;
 
   return (
     <main className="log-plate-stage">
@@ -327,11 +338,14 @@ function ArtistPage() {
               the DTO hands out is the og:image size, not this one. */}
           <ArtistAvatar
             className="artist-masthead-avatar"
+            // Above the fold on every viewport, so never lazy. It holds the page's one high
+            // fetch priority only when it IS the lead image (`leadImageUrl` in the route head): a
+            // catalogue-only artist with no findings cover. When the findings band leads, its first
+            // cover is the larger paint (114 CSS px on desktop, 161 on a phone, against this 80)
+            // and the preloaded LCP image, so this portrait stays at the default priority.
+            eager
             name={name}
-            // The page's lead image, above the fold on every viewport and preloaded from the route
-            // head (the loader already knows this exact URL), so it must not be lazy — a lazy hero
-            // wastes the preload by re-discovering the image at Low priority after layout.
-            priority
+            priority={!findingsBandLeads}
             src={albumCoverAtSize(imageUrl, "medium")}
           />
           <h1 className="log-coordinate log-index-title artist-name">{name}</h1>

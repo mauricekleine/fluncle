@@ -1,8 +1,15 @@
-import { CaretRightIcon, DotsThreeIcon, PlayIcon, ShareNetworkIcon } from "@phosphor-icons/react";
+import {
+  CaretRightIcon,
+  DotsThreeIcon,
+  FilmStripIcon,
+  ShareNetworkIcon,
+  WaveformIcon,
+} from "@phosphor-icons/react";
 import { Link } from "@tanstack/react-router";
 import { useCallback } from "react";
 import { siMixcloud, siSoundcloud, siSpotify, siTiktok, siYoutube } from "simple-icons";
 import { BrandIcon } from "@/components/brand-icon";
+import { PlayCover } from "@/components/player/playable-list";
 import { GraphLink } from "@/components/graph-link";
 import { TrackArtwork } from "@/components/track-artwork";
 import { Badge } from "@fluncle/ui/components/badge";
@@ -13,17 +20,21 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@fluncle/ui/components/dropdown-menu";
+import { discoveryQueueTrack, findingToDiscoveryTrack } from "@/lib/discovery-tracks";
 import { siteUrl } from "@/lib/fluncle-links";
 import { bangersCount, formatAlbumDuration, formatDuration } from "@/lib/format";
 import { albumCoverAtSize } from "@/lib/media";
 import { type FeedItem, mixtapeCoverUrl, mixtapeDisplayTitle } from "@/lib/mixtapes";
+import { similarSearchHref } from "@/lib/player-tracks";
+import { type QueueTrack } from "@/lib/preview-player";
 import { type Track } from "@/lib/tracks";
 import { cn } from "@/lib/utils";
 
 // The signature component (DESIGN.md): a finding, not just a row. The whole row
-// reads as one link to its log page (a stretched link); the artwork doubles as
-// the story opener (the play affordance) when there's footage, and a single
-// links menu sits beside the caret — siblings of the stretched link, above it.
+// reads as one link to its log page (a stretched link); the artwork is the play
+// button for the finding's preview (it plays the feed from this row, as every
+// discovery list does), and a single ⋮ menu sits beside the caret, carrying the
+// story when there is footage — siblings of the stretched link, above it.
 export function TrackRow({ track, trackNumber }: { track: FeedItem; trackNumber: number }) {
   if (track.type === "mixtape") {
     const logId = track.logId as string;
@@ -75,14 +86,20 @@ export function TrackRow({ track, trackNumber }: { track: FeedItem; trackNumber:
     );
   }
 
-  // The artwork opens the story only when the finding has footage; otherwise the
-  // cover is inert and the stretched row link carries the click to the log page.
+  // The story opener lives in the ⋮ menu when the finding has footage; the cover is the preview.
   const storyLogId = track.videoUrl ? track.logId : undefined;
   // Artist — Title as the primary line (the em dash disambiguates titles that
   // carry their own " - ", e.g. remixes), matching the log index and the rest
   // of the surfaces. The record label, with the release year, reads beneath.
   const trackLine = `${track.artists.join(", ")} — ${track.title}`;
   const releaseYear = track.releaseDate?.slice(0, 4);
+  const playable = findingToDiscoveryTrack(track);
+  const artwork = (
+    <TrackArtwork
+      alt={`${trackLine} cover art`}
+      src={albumCoverAtSize(track.albumImageUrl, "small")}
+    />
+  );
 
   return (
     <li className="track-row">
@@ -103,33 +120,13 @@ export function TrackRow({ track, trackNumber }: { track: FeedItem; trackNumber:
         <span className="track-log-id">{`#${trackNumber.toString().padStart(2, "0")}`}</span>
       )}
 
-      {storyLogId ? (
-        // The artwork IS the play affordance: it opens the story over the feed
-        // (the mask shows — and crawlers see — the standalone /log/<id> URL).
-        // `/findings` is the route that owns the `?story=` param and mounts the
-        // dialog, and it is this row's only consumer. `/` is the front door and
-        // takes no params: a `?story=` there is a 301 to the standalone page,
-        // which would navigate AWAY from the feed instead of opening over it.
-        <Link
-          aria-label={`Watch the story for ${trackLine}`}
-          className="track-play"
-          mask={{ params: { logId: storyLogId }, to: "/log/$logId", unmaskOnReload: true }}
-          search={{ story: storyLogId }}
-          to="/findings"
-        >
-          <TrackArtwork
-            alt={`${trackLine} cover art`}
-            src={albumCoverAtSize(track.albumImageUrl, "small")}
-          />
-          <span aria-hidden="true" className="track-play-glyph">
-            <PlayIcon weight="fill" />
-          </span>
-        </Link>
+      {playable.previewable ? (
+        // The artwork IS the play button: the feed is one list to the player.
+        <PlayCover lit track={discoveryQueueTrack(playable)}>
+          {artwork}
+        </PlayCover>
       ) : (
-        <TrackArtwork
-          alt={`${trackLine} cover art`}
-          src={albumCoverAtSize(track.albumImageUrl, "small")}
-        />
+        artwork
       )}
 
       <span className="min-w-0">
@@ -184,7 +181,12 @@ export function TrackRow({ track, trackNumber }: { track: FeedItem; trackNumber:
       </span>
 
       <span className="track-actions">
-        <TrackLinksMenu track={track} trackLine={trackLine} />
+        <TrackLinksMenu
+          queued={discoveryQueueTrack(playable)}
+          storyLogId={storyLogId}
+          track={track}
+          trackLine={trackLine}
+        />
         <CaretRightIcon aria-hidden="true" className="track-caret" size={18} weight="bold" />
       </span>
     </li>
@@ -221,7 +223,10 @@ function MixtapeLinksMenu({ track }: { track: Extract<FeedItem, { type: "mixtape
 
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger aria-label={`Links for ${track.title}`} className="track-action">
+      <DropdownMenuTrigger
+        aria-label={`Links for ${track.title}`}
+        className="track-action track-action--menu"
+      >
         <DotsThreeIcon aria-hidden="true" size={18} weight="bold" />
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="min-w-40">
@@ -248,7 +253,17 @@ function MixtapeLinksMenu({ track }: { track: Extract<FeedItem, { type: "mixtape
 // opening a menu of the platforms this finding actually has — Spotify always,
 // TikTok/YouTube when a published post exists — plus Share. New platforms slot in
 // here without changing the row's layout.
-function TrackLinksMenu({ track, trackLine }: { track: Track; trackLine: string }) {
+function TrackLinksMenu({
+  queued,
+  storyLogId,
+  track,
+  trackLine,
+}: {
+  queued: QueueTrack;
+  storyLogId?: string;
+  track: Track;
+  trackLine: string;
+}) {
   const shareUrl = track.logId ? `${siteUrl}/log/${track.logId}` : track.spotifyUrl;
 
   const share = useCallback(() => {
@@ -265,17 +280,41 @@ function TrackLinksMenu({ track, trackLine }: { track: Track; trackLine: string 
 
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger aria-label={`Links for ${trackLine}`} className="track-action">
+      <DropdownMenuTrigger
+        aria-label={`Actions for ${trackLine}`}
+        className="track-action track-action--menu"
+      >
         <DotsThreeIcon aria-hidden="true" size={18} weight="bold" />
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="min-w-40">
+      <DropdownMenuContent align="end" className="min-w-44 shadow-none">
+        {storyLogId ? (
+          // The story opens OVER the feed: `/findings` owns the `?story=` param and mounts the
+          // dialog, and the mask shows (and crawlers see) the standalone /log/<id> URL.
+          <DropdownMenuItem
+            render={
+              <Link
+                mask={{ params: { logId: storyLogId }, to: "/log/$logId", unmaskOnReload: true }}
+                search={{ story: storyLogId }}
+                to="/findings"
+              />
+            }
+          >
+            <FilmStripIcon aria-hidden="true" className="size-4" />
+            Watch the story
+          </DropdownMenuItem>
+        ) : null}
         <DropdownMenuItem
           render={
-            <a aria-label="Spotify" href={track.spotifyUrl} rel="noreferrer" target="_blank" />
+            <a
+              aria-label="Listen on Spotify"
+              href={track.spotifyUrl}
+              rel="noreferrer"
+              target="_blank"
+            />
           }
         >
           <BrandIcon className="size-4" icon={siSpotify} />
-          Spotify
+          Listen on Spotify
         </DropdownMenuItem>
         {track.tiktokUrl ? (
           <DropdownMenuItem
@@ -297,6 +336,12 @@ function TrackLinksMenu({ track, trackLine }: { track: Track; trackLine: string 
             YouTube
           </DropdownMenuItem>
         ) : null}
+        <DropdownMenuItem
+          render={<Link data-discovery="similar" to={similarSearchHref(queued) as never} />}
+        >
+          <WaveformIcon aria-hidden="true" className="size-4" />
+          Similar tracks
+        </DropdownMenuItem>
         <DropdownMenuSeparator />
         <DropdownMenuItem onClick={share}>
           <ShareNetworkIcon aria-hidden="true" className="size-4" />

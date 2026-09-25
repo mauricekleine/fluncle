@@ -1319,6 +1319,25 @@ describe("an automatic start yields to a sound already playing", () => {
     expect(story.pauses).toBe(0);
   });
 
+  it.each([
+    ["a muted footage loop", { muted: true, volume: 1 }],
+    ["a zero-volume video", { muted: false, volume: 0 }],
+  ])("%s is not a sound: the list still moves on", async (_name, level) => {
+    const element = installBrowserAudio();
+    const footage = Object.assign(new OtherMedia(), level);
+    const page = installPage([footage]);
+
+    playQueue(tracks("a", "b"), 0);
+    element.arrive();
+    page.start(footage);
+    element.finish();
+    await settled();
+
+    expect(readPlayer()).toMatchObject({ status: "loading", trackId: "b" });
+    expect(footage.paused).toBe(false);
+    expect(footage.pauses).toBe(0);
+  });
+
   it("the listener's own press still takes the room", () => {
     installBrowserAudio();
     const story = new OtherMedia();

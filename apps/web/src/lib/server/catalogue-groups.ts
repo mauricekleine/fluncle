@@ -111,6 +111,8 @@ import {
   GRAPH_GROUP_TRACK_LIMIT,
 } from "../catalogue";
 import { parseArtistsJson } from "./artists";
+import { bestAlbumCoverUrl } from "../media";
+import { hasPreviewSource } from "../track-preview";
 import { listedArtistWhere } from "./artist-visibility";
 import { getDb, typedRows } from "./db";
 import { dedupeByRecordingIdentity, type RecordingIdentity } from "./track-match";
@@ -143,10 +145,18 @@ export {
 
 type GroupTrackRow = {
   album: string | null;
+  album_image_key: string | null;
+  album_image_state: string | null;
+  album_image_updated_at: string | null;
+  album_image_url: string | null;
   album_slug: string | null;
   artists_json: string;
+  bpm: number | null;
+  duration_ms: number;
   group_key: string;
   isrc: string | null;
+  key: string | null;
+  preview_url: string | null;
   release_date: string | null;
   spotify_url: string | null;
   title: string;
@@ -233,15 +243,55 @@ function trackOrderSql(sort: CatalogueSort, prefix: string): string {
        ${prefix}title collate nocase asc`;
 }
 
-function toTrack(
-  row: Pick<GroupTrackRow, "artists_json" | "spotify_url" | "title" | "track_id">,
-): CatalogueTrackItem {
+function toTrack(row: TrackRowColumns): CatalogueTrackItem {
   return {
+    albumImageUrl: bestAlbumCoverUrl({
+      imageKey: row.album_image_key,
+      imageState: row.album_image_state,
+      imageUpdatedAt: row.album_image_updated_at,
+      spotifyUrl: row.album_image_url,
+    }),
     artists: parseArtistsJson(row.artists_json),
+    bpm: row.bpm ?? undefined,
+    durationMs: row.duration_ms || undefined,
+    key: row.key ?? undefined,
+    previewable: hasPreviewSource({ isrc: row.isrc, previewUrl: row.preview_url }),
+    releaseDate: row.release_date ?? undefined,
     spotifyUrl: row.spotify_url ?? undefined,
     title: row.title,
     trackId: row.track_id,
   };
+}
+
+/** The columns one rendered track row reads: its own, plus its album's owned cover. */
+type TrackRowColumns = Omit<GroupTrackRow, "album" | "album_slug" | "group_key">;
+
+type UpcomingRow = TrackRowColumns & { log_id: string | null };
+
+/**
+ * An Upcoming row carries everything any other track row does (the cover, the BPM/key/length
+ * readout, whether a preview exists), so it renders as the same discovery row.
+ */
+const UPCOMING_ROW_COLUMNS = `tracks.track_id, tracks.title, tracks.artists_json, tracks.spotify_url,
+          tracks.isrc, tracks.preview_url, tracks.album_image_url,
+          al.image_key as album_image_key, al.image_state as album_image_state,
+          al.image_updated_at as album_image_updated_at, tracks.duration_ms, tracks.bpm,
+          tracks.key, tracks.release_date, findings.log_id`;
+
+/**
+ * One Upcoming page: `pageSql` picks the page's track ids (and their release dates) off the
+ * entity's own index, sorted and LIMITed with nothing else joined, and only those rows then read
+ * their columns, their finding and their album. A LIMITed subquery under a join is never
+ * flattened, so the album and finding seeks are bounded by the page, never by the entity's
+ * future catalogue or the offset.
+ */
+function upcomingPageSql(pageSql: string): string {
+  return `select ${UPCOMING_ROW_COLUMNS}
+          from (${pageSql}) upcoming_page
+          join tracks on tracks.track_id = upcoming_page.track_id
+          left join findings on findings.track_id = tracks.track_id
+          left join albums al on al.id = tracks.album_id
+          order by upcoming_page.release_date asc, upcoming_page.track_id asc`;
 }
 
 /** The next release-date rows use each entity's existing ordered index and the page's row DTO. */
@@ -265,13 +315,12 @@ export async function listArtistUpcoming(
         GRAPH_GROUP_ROW_CEILING,
         (page - 1) * GRAPH_GROUP_ROW_CEILING,
       ],
-      sql: `select tracks.track_id, tracks.title, tracks.artists_json, tracks.spotify_url, findings.log_id
+      sql: upcomingPageSql(`select tracks.track_id as track_id, tracks.release_date as release_date
           from (${candidate}) artist_tracks
           join tracks on tracks.track_id = artist_tracks.track_id
-          left join findings on findings.track_id = tracks.track_id
           where ${predicate}
           order by tracks.release_date asc, tracks.track_id asc
-          limit ? offset ?`,
+          limit ? offset ?`),
     }),
     db.execute({
       args: [artistId, artistId, today, artistId, today],
@@ -293,12 +342,11 @@ export async function listLabelUpcoming(
   const [result, count] = await Promise.all([
     db.execute({
       args: [labelId, today, GRAPH_GROUP_ROW_CEILING, (page - 1) * GRAPH_GROUP_ROW_CEILING],
-      sql: `select tracks.track_id, tracks.title, tracks.artists_json, tracks.spotify_url, findings.log_id
+      sql: upcomingPageSql(`select tracks.track_id as track_id, tracks.release_date as release_date
           from tracks indexed by tracks_label_cover_idx
-          left join findings on findings.track_id = tracks.track_id
           where ${predicate}
           order by tracks.release_date asc, tracks.track_id asc
-          limit ? offset ?`,
+          limit ? offset ?`),
     }),
     db.execute({
       args: [labelId, today],
@@ -318,11 +366,7 @@ async function upcomingPageFromRows(
   if (page > pageCount) {
     throw new CataloguePageOutOfRangeError();
   }
-  const pageRows = typedRows<
-    Pick<GroupTrackRow, "artists_json" | "spotify_url" | "title" | "track_id"> & {
-      log_id: string | null;
-    }
-  >(rows);
+  const pageRows = typedRows<UpcomingRow>(rows);
   const findings = await getGraphFindingsByIds(
     pageRows.filter((row) => row.log_id !== null).map((row) => row.track_id),
   );
@@ -371,6 +415,11 @@ export async function listArtistCatalogue(
             select tracks.track_id as track_id, tracks.title as title,
                    tracks.artists_json as artists_json, tracks.spotify_url as spotify_url,
                    tracks.isrc as isrc, tracks.album as album, al.slug as album_slug,
+                   tracks.album_image_url as album_image_url,
+                   al.image_key as album_image_key, al.image_state as album_image_state,
+                   al.image_updated_at as album_image_updated_at,
+                   tracks.duration_ms as duration_ms, tracks.bpm as bpm,
+                   tracks.key as key, tracks.preview_url as preview_url,
                    tracks.release_date as release_date,
                    lower(coalesce(tracks.album, '')) as group_key
             from tracks
@@ -405,6 +454,8 @@ export async function listArtistCatalogue(
             select paged.*, max(paged.group_rn) over () as total_groups from paged
           )
           select track_id, title, artists_json, spotify_url, isrc, album, album_slug,
+                 album_image_url, album_image_key, album_image_state, album_image_updated_at,
+                 duration_ms, bpm, key, preview_url,
                  release_date, group_key, group_name, group_slug, group_release_date,
                  track_count, record_count, total_tracks, total_groups
           from counted
@@ -540,6 +591,11 @@ export async function listLabelCatalogue(
             select tracks.track_id as track_id, tracks.title as title,
                    tracks.artists_json as artists_json, tracks.spotify_url as spotify_url,
                    tracks.isrc as isrc, tracks.album as album, al.slug as album_slug,
+                   tracks.album_image_url as album_image_url,
+                   al.image_key as album_image_key, al.image_state as album_image_state,
+                   al.image_updated_at as album_image_updated_at,
+                   tracks.duration_ms as duration_ms, tracks.bpm as bpm,
+                   tracks.key as key, tracks.preview_url as preview_url,
                    tracks.release_date as release_date,
                    lower(credit.value) as group_key, credit.value as credit_name,
                    asl.slug as artist_slug
@@ -579,6 +635,8 @@ export async function listLabelCatalogue(
             select paged.*, max(paged.group_rn) over () as total_groups from paged
           )
           select track_id, title, artists_json, spotify_url, isrc, album, album_slug,
+                 album_image_url, album_image_key, album_image_state, album_image_updated_at,
+                 duration_ms, bpm, key, preview_url,
                  release_date, group_key, group_name, group_slug, group_release_date,
                  track_count, record_count, total_groups,
                  (select count(*)

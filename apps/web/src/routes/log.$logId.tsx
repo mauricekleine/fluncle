@@ -57,7 +57,7 @@ import {
 import { isGalaxyMapFullyNamed } from "@/lib/server/galaxies-map";
 import { getArtistSlugMap } from "@/lib/server/artists";
 import { fold } from "@/lib/server/track-match";
-import { TrackArtwork } from "@/components/track-artwork";
+import { FindingsGridList } from "@/components/graph-sections";
 
 // The standalone log page: one finding's permanent, readable, indexable record
 // (the archival-plate register). The cinematic full-bleed register is the
@@ -595,22 +595,14 @@ function LogPage() {
         {similar.length > 0 ? (
           <section aria-label="Close in sound" className="log-similar" data-discovery="similar">
             <h2>Close in sound</h2>
-            <ul className="log-similar-list">
-              {similar.map((finding) =>
-                finding.logId ? (
-                  <li key={finding.trackId}>
-                    <Link params={{ logId: finding.logId }} to="/log/$logId">
-                      <TrackArtwork
-                        alt=""
-                        className="log-similar-cover"
-                        src={albumCoverAtSize(finding.albumImageUrl, "small")}
-                      />
-                      <span className="log-similar-line">{artistTitleLine(finding)}</span>
-                    </Link>
-                  </li>
-                ) : null,
-              )}
-            </ul>
+            <FindingsGridList
+              className="log-similar-list"
+              coverClassName="log-similar-cover"
+              findings={similar}
+              lineClassName="log-similar-line"
+              priorityFirst={false}
+              size="small"
+            />
           </section>
         ) : undefined}
 

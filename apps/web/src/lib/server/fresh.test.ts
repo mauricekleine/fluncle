@@ -125,6 +125,11 @@ describe("listFreshReleases", () => {
       releaseDate: "2026-06-20", // earlier this month
       trackId: "c_earlier",
     });
+    await db.execute({
+      args: ["c_week"],
+      sql: `update tracks set album_image_url = 'https://i.scdn.co/image/cover',
+             bpm = 174, key = 'F minor', isrc = 'GBTEST2600001' where track_id = ?`,
+    });
 
     const { sections, windowDays } = await listFreshReleases(NOW);
 
@@ -143,6 +148,14 @@ describe("listFreshReleases", () => {
     expect(week?.findings.every((finding) => Boolean(finding.logId))).toBe(true);
     const everyCatalogue = sections.flatMap((section) => section.catalogue);
     expect(everyCatalogue.every((track) => !("logId" in track))).toBe(true);
+    expect(week?.catalogue[0]).toMatchObject({
+      albumImageUrl: expect.any(String),
+      bpm: 174,
+      durationMs: 210000,
+      key: "F minor",
+      previewable: true,
+    });
+    expect(earlier?.catalogue[0]?.previewable).toBe(false);
   });
 
   it("excludes an older release and a future-dated pre-order", async () => {

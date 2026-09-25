@@ -103,7 +103,8 @@ describe("the answered surface", () => {
     // No coordinate, and no Spotify mark standing over a page that is not Spotify's.
     expect(html).not.toContain("search-row-coordinate");
     expect(html).not.toContain("https://open.spotify.com/track/x");
-    expect(html).toContain("search-row--unlit");
+    // The unlit register: a discovery row with no `data-lit`.
+    expect(html).toContain('<li class="discovery-row">');
     // Alone on the page, the unlit rows stand BARE: a heading over the only content would exist
     // purely to name the tier.
     expect(html).not.toContain("Tracks</h2>");
@@ -124,7 +125,7 @@ describe("the answered surface", () => {
 
     expect(html).toContain('href="https://open.spotify.com/track/x"');
     expect(html).toContain('rel="noopener noreferrer"');
-    expect(html).toContain("search-row--unlit");
+    expect(html).toContain('<li class="discovery-row">');
   });
 
   // The superset heading earns its place only when something NAMED renders above it.

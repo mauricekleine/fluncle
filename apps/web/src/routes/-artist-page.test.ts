@@ -531,3 +531,78 @@ it("renders a findings-free artist masthead without a findings band or apology",
   expect(html).not.toContain('class="artist-grid"');
   expect(html).not.toContain("Quiet sector");
 });
+
+// ONE lead image per artist page: the image the head preloads is the only one fetched at high
+// priority. With a findings band that is its first cover (the larger paint: 114 CSS px on desktop,
+// 161 on a phone, against the masthead portrait's 80); a catalogue-only artist leads with the
+// portrait instead.
+describe("the artist page spends high fetch priority on one image", () => {
+  async function renderArtistPage(findings: unknown[]): Promise<{ head: string; html: string }> {
+    getPublicArtistBySlug.mockResolvedValue({
+      ...ARTIST,
+      imageUrl: "https://found.fluncle.com/artists/drift.jpg",
+    });
+    getPublicArtistSocials.mockResolvedValue([]);
+    getPublicArtistAliasNames.mockResolvedValue([]);
+    getArtistNeighbours.mockResolvedValue([]);
+    getFindingsByArtist.mockResolvedValue(findings);
+    countArtistFindings.mockResolvedValue(findings.length);
+    listArtistCatalogue.mockResolvedValue(NO_CATALOGUE);
+
+    const data = await resolveArtistPageData("drift", "recent", 1);
+    const rootRoute = createRootRoute();
+    const artistRoute = createRoute({
+      component: Route.options.component,
+      getParentRoute: () => rootRoute,
+      loader: () => data,
+      path: "/artist/$slug",
+    });
+    const artistsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/artists" });
+    const homeRoute = createRoute({ getParentRoute: () => rootRoute, path: "/" });
+    const logRoute = createRoute({ getParentRoute: () => rootRoute, path: "/log/$logId" });
+    const router = createRouter({
+      history: createMemoryHistory({ initialEntries: ["/artist/drift"] }),
+      routeTree: rootRoute.addChildren([artistRoute, artistsRoute, homeRoute, logRoute]),
+    });
+    await router.load();
+
+    const head = JSON.stringify(
+      Route.options.head?.({ loaderData: data, params: { slug: "drift" } } as never),
+    );
+
+    return { head, html: renderToString(createElement(RouterProvider, { router } as never)) };
+  }
+
+  function highPriorityImages(html: string): string[] {
+    return (html.match(/<img[^>]*>/g) ?? []).filter((img) =>
+      img.toLowerCase().includes('fetchpriority="high"'),
+    );
+  }
+
+  it("gives it to the findings band's first cover, never also to the portrait", async () => {
+    const { head, html } = await renderArtistPage([
+      {
+        albumImageUrl: "https://found.fluncle.com/albums/first.jpg",
+        artists: ["Drift"],
+        logId: "001.1.1A",
+        title: "First",
+        trackId: "t-1",
+      },
+    ]);
+    const high = highPriorityImages(html);
+
+    expect(high).toHaveLength(1);
+    expect(high[0]).toContain("artist-grid-cover");
+    expect(head).toContain("albums/first.jpg");
+    expect(html).toMatch(/<img[^>]*artist-masthead-avatar[^>]*loading="eager"/);
+  });
+
+  it("gives it to the portrait when there is no findings band", async () => {
+    const { head, html } = await renderArtistPage([]);
+    const high = highPriorityImages(html);
+
+    expect(high).toHaveLength(1);
+    expect(high[0]).toContain("artist-masthead-avatar");
+    expect(head).toContain("artists/drift.jpg");
+  });
+});
