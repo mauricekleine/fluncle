@@ -5813,6 +5813,236 @@ a.catalogue-letter:focus-visible {
   }
 }
 
+/* ── Browse: the one top-bar route between the catalogue hubs ──────────────── */
+/* The first control in the right-hand cluster (components/nav/browse-menu.tsx), dressed exactly
+   like search and the crew door: a glyph, a word on a wide bar, a caret, the Gold Veil heat on
+   hover and while open (the Ignition Rule). It takes the cluster's auto margin, so search and the
+   crew door sit beside it instead of splitting the slack with it. Two triggers render, one per
+   presentation, and the breakpoint shows exactly one: the dropdown from 40rem up, the sheet below. */
+.browse-trigger {
+  align-items: center;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md, 0.5rem);
+  color: var(--muted-foreground);
+  cursor: pointer;
+  display: inline-flex;
+  font-size: 0.82rem;
+  font-weight: 600;
+  gap: 0.4rem;
+  margin-left: auto;
+  padding: 0.3rem 0.5rem;
+  transition:
+    color 150ms ease-out,
+    background-color 150ms ease-out,
+    border-color 150ms ease-out;
+  white-space: nowrap;
+}
+
+.browse-trigger:hover,
+.browse-trigger:focus-visible,
+.browse-trigger[aria-expanded="true"],
+.browse-trigger[data-popup-open] {
+  background: var(--gold-veil);
+  border-color: color-mix(in oklch, var(--eclipse-gold) 30%, transparent);
+  color: var(--eclipse-glow);
+}
+
+.browse-trigger ~ .search-trigger,
+.browse-trigger ~ .crew-trigger {
+  margin-left: 0;
+}
+
+/* The front door has no breadcrumb and no search glyph, so its wordmark already takes the slack;
+   a second auto margin here would split it and float Browse mid-bar. */
+.nav-shell[data-front-door] .browse-trigger {
+  margin-left: 0;
+}
+
+.browse-trigger-icon {
+  flex: none;
+  height: 1rem;
+  width: 1rem;
+}
+
+.browse-trigger-caret {
+  color: color-mix(in oklch, var(--muted-foreground) 70%, transparent);
+  display: none;
+  flex: none;
+  height: 0.7rem;
+  width: 0.7rem;
+}
+
+/* The word is a courtesy on a wide bar; the glyph carries it on a phone, and the accessible name
+   rides on the trigger either way. */
+.browse-trigger-label {
+  display: none;
+}
+
+.browse-trigger--menu {
+  display: none;
+}
+
+/* On a phone the glyph alone is the target, so it takes a full 44px box (WCAG 2.5.5) and hands the
+   extra height back to the bar with a negative block margin: the bar stays one line, the same
+   height it was. */
+.browse-trigger--sheet {
+  justify-content: center;
+  margin-block: -0.5rem;
+  min-height: 2.75rem;
+  min-width: 2.75rem;
+}
+
+@media (min-width: 40rem) {
+  .browse-trigger--menu {
+    display: inline-flex;
+  }
+
+  .browse-trigger--sheet {
+    display: none;
+  }
+
+  .browse-trigger-label,
+  .browse-trigger-caret {
+    display: inline;
+  }
+}
+
+/* A hub row: its ratified label over its colophon blurb. The blurb is quieter Stardust; the row
+   heats like every quiet control, and the current hub keeps the account menu's cream tint. */
+.browse-hub-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 0;
+}
+
+.browse-hub-label {
+  color: var(--starlight-cream);
+  font-weight: 700;
+}
+
+.browse-hub-blurb {
+  color: var(--stardust);
+  font-size: 0.78rem;
+  line-height: 1.3;
+}
+
+.browse-menu .browse-hub {
+  padding-block: 0.45rem;
+}
+
+.browse-hub--active {
+  background: color-mix(in oklch, var(--stardust) 14%, transparent);
+}
+
+/* Unlayered, so these beat the Shadcn item's layered highlight: the current hub's resting tint
+   must still give way to the Gold Veil when a pointer or the keyboard reaches it (WCAG 2.4.7), and
+   the row's text heats with it (the Ignition Rule). */
+.browse-menu .browse-hub[data-highlighted],
+.browse-sheet-list .browse-hub:hover,
+.browse-sheet-list .browse-hub:focus-visible {
+  background: var(--gold-veil);
+}
+
+.browse-menu .browse-hub[data-highlighted] .browse-hub-label,
+.browse-sheet-list .browse-hub:hover .browse-hub-label,
+.browse-sheet-list .browse-hub:focus-visible .browse-hub-label {
+  color: var(--eclipse-glow);
+}
+
+.browse-sheet-list .browse-hub:focus-visible {
+  outline: 2px solid var(--eclipse-glow);
+  outline-offset: -2px;
+}
+
+/* The sheet: the plate's glass, as the behind-the-scenes drawer wears it, over the shared scrim. */
+.browse-sheet {
+  background: color-mix(in oklch, var(--card) 86%, transparent);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+@supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .browse-sheet {
+    -webkit-backdrop-filter: blur(18px) saturate(125%);
+    backdrop-filter: blur(18px) saturate(125%);
+    background: color-mix(in oklch, var(--card) 72%, transparent);
+  }
+}
+
+.browse-sheet-list {
+  display: grid;
+  list-style: none;
+  margin: 0;
+  padding: 0.5rem;
+}
+
+/* Thumb-sized rows: every row clears 44px, the whole row is the link. */
+.browse-sheet-list .browse-hub {
+  align-items: center;
+  border-radius: var(--radius-md, 0.5rem);
+  display: flex;
+  min-height: 3.25rem;
+  padding: 0.55rem 0.75rem;
+  transition: background-color 150ms ease-out;
+}
+
+/* The shortcut seam (the style-chip row): a heading and a wrapping row of chips, in both
+   presentations. Chips are the `.catalogue-letter` register: Stardust ink, no gold at rest. */
+.browse-shortcuts--sheet {
+  border-top: 1px solid var(--border);
+  padding: 0.75rem 1.25rem 1rem;
+}
+
+.browse-shortcuts-label {
+  color: var(--muted-foreground);
+  font-size: 0.76rem;
+  font-weight: 700;
+  margin: 0 0 0.5rem;
+}
+
+.browse-shortcut-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  list-style: none;
+  margin: 0;
+  padding: 0 0.25rem 0.25rem;
+}
+
+.browse-shortcut {
+  border: 1px solid var(--dust-line);
+  border-radius: 999px;
+  color: var(--stardust);
+  display: inline-flex;
+  font-size: 0.78rem;
+  font-weight: 600;
+  min-height: 2rem;
+  padding: 0.2rem 0.65rem;
+}
+
+.browse-shortcut:hover,
+.browse-shortcut[data-highlighted] {
+  color: var(--starlight-cream);
+}
+
+.browse-shortcut:focus-visible {
+  outline: 2px solid var(--eclipse-glow);
+  outline-offset: 2px;
+}
+
+.browse-shortcuts--sheet .browse-shortcut {
+  align-items: center;
+  min-height: 2.75rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .browse-trigger,
+  .browse-sheet-list .browse-hub {
+    transition: none;
+  }
+}
+
 /* ── Search: the dialog ────────────────────────────────────────────────────── */
 .search-dialog {
   max-width: 34rem;

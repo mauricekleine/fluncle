@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  navBrowseHubs,
   navFollow,
   navNerds,
   navRoutePaths,
@@ -149,5 +150,26 @@ describe("nav model completeness", () => {
     ];
 
     expect(new Set(ids).size).toBe(ids.length);
+  });
+});
+
+describe("the Browse menu's hubs", () => {
+  it("are the five catalogue hubs, in the ruled order, archive only", () => {
+    expect(navBrowseHubs.map((item) => (item.kind === "route" ? item.to : item.id))).toEqual([
+      "/tracks",
+      "/artists",
+      "/albums",
+      "/labels",
+      "/fresh",
+    ]);
+  });
+
+  it("reuse the colophon's own label and blurb for each hub", () => {
+    const browse = navSections.find((section) => section.id === "browse");
+
+    for (const hub of navBrowseHubs) {
+      expect(browse?.items).toContainEqual(hub);
+      expect(hub.blurb).toBeTruthy();
+    }
   });
 });
