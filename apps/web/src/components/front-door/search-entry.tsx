@@ -3,7 +3,11 @@ import { Link } from "@tanstack/react-router";
 import { type ReactNode } from "react";
 import { SearchExampleGlyph } from "@/components/search/search-glyph";
 import { StyleChips } from "@/components/search/style-chips";
-import { useIsApple, useSearchController } from "@/components/search/search-command";
+import {
+  prefetchSearchDialog,
+  useIsApple,
+  useSearchController,
+} from "@/components/search/search-command";
 import { SEARCH_EXAMPLES, searchPagePath } from "@/lib/search-results";
 import { STYLE_CHIPS_LINE } from "@/lib/search-styles";
 
@@ -17,6 +21,8 @@ export function FrontDoorSearch(): ReactNode {
         aria-keyshortcuts={isApple ? "Meta+K" : "Control+K"}
         className="fd-search-field"
         onClick={() => open()}
+        onFocus={prefetchSearchDialog}
+        onPointerEnter={prefetchSearchDialog}
         type="button"
       >
         <MagnifyingGlassIcon aria-hidden="true" className="fd-search-field-icon" />

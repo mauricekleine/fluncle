@@ -58,10 +58,20 @@ test.describe("browse menu — desktop", () => {
   });
 
   test("the keyboard reaches a hub: Enter opens, arrows move, Enter goes", async ({ page }) => {
+    const popupRequests: string[] = [];
+
+    page.on("request", (request) => {
+      if (request.url().includes("/components/nav/browse-popup.tsx")) {
+        popupRequests.push(request.url());
+      }
+    });
+
     await blockExternalRequests(page);
     await hydrate(page, "/fresh");
 
+    expect(popupRequests).toHaveLength(0);
     await page.getByRole("button", { name: "Browse the archive" }).focus();
+    await expect.poll(() => popupRequests.length).toBe(1);
     await page.keyboard.press("Enter");
     await expect(page.getByRole("menuitem").first()).toBeFocused();
     await page.keyboard.press("ArrowDown");

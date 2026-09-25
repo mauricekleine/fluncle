@@ -1,25 +1,16 @@
-import { CaretDownIcon, SquaresFourIcon, XIcon } from "@phosphor-icons/react";
-import { Link, useRouterState } from "@tanstack/react-router";
-import { type ReactNode, type RefObject, useEffect, useRef, useState } from "react";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuGroup,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@fluncle/ui/components/dropdown-menu";
-import { Button } from "@fluncle/ui/components/button";
-import {
-  Sheet,
-  SheetClose,
-  SheetContent,
-  SheetHeader,
-  SheetTitle,
-  SheetTrigger,
-} from "@fluncle/ui/components/sheet";
-import { navBrowseHubs } from "@/lib/nav-model";
+import { CaretDownIcon, SquaresFourIcon } from "@phosphor-icons/react";
+import { useRouterState } from "@tanstack/react-router";
+import { lazy, type ReactNode, type RefObject, Suspense, useEffect, useRef, useState } from "react";
+import { DropdownMenu, DropdownMenuTrigger } from "@fluncle/ui/components/dropdown-menu";
+import { Sheet, SheetTrigger } from "@fluncle/ui/components/sheet";
+
+const loadBrowsePopup = () => import("@/components/nav/browse-popup");
+const BrowseDropdownContent = lazy(async () => ({
+  default: (await loadBrowsePopup()).BrowseDropdownContent,
+}));
+const BrowseSheetContent = lazy(async () => ({
+  default: (await loadBrowsePopup()).BrowseSheetContent,
+}));
 
 export type BrowseShortcut = {
   label: string;
@@ -32,16 +23,23 @@ export type BrowseShortcuts = {
   label: string;
 };
 
-type Hub = { blurb?: string; id: string; label: string; to: string };
-
 type Presentation = "menu" | "sheet";
 
-const HUBS: Hub[] = navBrowseHubs.flatMap((item) =>
-  item.kind === "route" ? [{ blurb: item.blurb, id: item.id, label: item.label, to: item.to }] : [],
-);
+type PresentationProps = {
+  current: string;
+  open: boolean;
+  returnFocus: () => boolean;
+  setOpen: (open: boolean) => void;
+  shortcuts?: BrowseShortcuts;
+  triggerRef: RefObject<HTMLButtonElement | null>;
+};
 
 export function isSearchShortcut(event: Pick<KeyboardEvent, "ctrlKey" | "key" | "metaKey">) {
   return event.key.toLowerCase() === "k" && (event.metaKey || event.ctrlKey);
+}
+
+function prefetchBrowsePopup(): void {
+  void loadBrowsePopup();
 }
 
 function TriggerFace(): ReactNode {
@@ -54,24 +52,6 @@ function TriggerFace(): ReactNode {
   );
 }
 
-function HubText({ hub }: { hub: Hub }): ReactNode {
-  return (
-    <span className="browse-hub-text">
-      <span className="browse-hub-label">{hub.label}</span>
-      {hub.blurb ? <span className="browse-hub-blurb">{hub.blurb}</span> : null}
-    </span>
-  );
-}
-
-type PresentationProps = {
-  current: string;
-  open: boolean;
-  returnFocus: () => boolean;
-  setOpen: (open: boolean) => void;
-  shortcuts?: BrowseShortcuts;
-  triggerRef: RefObject<HTMLButtonElement | null>;
-};
-
 function BrowseDropdown({
   current,
   open,
@@ -80,55 +60,37 @@ function BrowseDropdown({
   shortcuts,
   triggerRef,
 }: PresentationProps): ReactNode {
+  const [activated, setActivated] = useState(false);
+
+  const onOpenChange = (next: boolean) => {
+    if (next) {
+      setActivated(true);
+    }
+
+    setOpen(next);
+  };
+
   return (
-    <DropdownMenu onOpenChange={setOpen} open={open}>
+    <DropdownMenu onOpenChange={onOpenChange} open={open}>
       <DropdownMenuTrigger
         aria-label="Browse the archive"
         className="browse-trigger browse-trigger--menu"
+        onFocus={prefetchBrowsePopup}
+        onPointerDown={prefetchBrowsePopup}
+        onPointerEnter={prefetchBrowsePopup}
         ref={triggerRef}
       >
         <TriggerFace />
       </DropdownMenuTrigger>
-      <DropdownMenuContent
-        align="end"
-        className="browse-menu w-72 shadow-none"
-        finalFocus={returnFocus}
-      >
-        <DropdownMenuGroup>
-          {HUBS.map((hub) => {
-            const active = hub.to === current;
-
-            return (
-              <DropdownMenuItem
-                className={active ? "browse-hub browse-hub--active" : "browse-hub"}
-                key={hub.id}
-                render={<Link aria-current={active ? "page" : undefined} to={hub.to as never} />}
-              >
-                <HubText hub={hub} />
-              </DropdownMenuItem>
-            );
-          })}
-        </DropdownMenuGroup>
-        {shortcuts && shortcuts.items.length > 0 ? (
-          <>
-            <DropdownMenuSeparator />
-            <DropdownMenuGroup className="browse-shortcuts">
-              <DropdownMenuLabel>{shortcuts.label}</DropdownMenuLabel>
-              <div className="browse-shortcut-row">
-                {shortcuts.items.map((shortcut) => (
-                  <DropdownMenuItem
-                    className="browse-shortcut"
-                    key={`${shortcut.to}:${JSON.stringify(shortcut.search ?? {})}`}
-                    render={<Link search={shortcut.search as never} to={shortcut.to as never} />}
-                  >
-                    {shortcut.label}
-                  </DropdownMenuItem>
-                ))}
-              </div>
-            </DropdownMenuGroup>
-          </>
-        ) : null}
-      </DropdownMenuContent>
+      {open || activated ? (
+        <Suspense fallback={null}>
+          <BrowseDropdownContent
+            current={current}
+            returnFocus={returnFocus}
+            shortcuts={shortcuts}
+          />
+        </Suspense>
+      ) : null}
     </DropdownMenu>
   );
 }
@@ -141,70 +103,38 @@ function BrowseSheet({
   shortcuts,
   triggerRef,
 }: PresentationProps): ReactNode {
-  const close = () => setOpen(false);
+  const [activated, setActivated] = useState(false);
+
+  const onOpenChange = (next: boolean) => {
+    if (next) {
+      setActivated(true);
+    }
+
+    setOpen(next);
+  };
 
   return (
-    <Sheet onOpenChange={setOpen} open={open}>
+    <Sheet onOpenChange={onOpenChange} open={open}>
       <SheetTrigger
         aria-label="Browse the archive"
         className="browse-trigger browse-trigger--sheet"
+        onFocus={prefetchBrowsePopup}
+        onPointerDown={prefetchBrowsePopup}
+        onPointerEnter={prefetchBrowsePopup}
         ref={triggerRef}
       >
         <TriggerFace />
       </SheetTrigger>
-      <SheetContent
-        className="browse-sheet gap-0 shadow-none ring-1 ring-foreground/10 motion-reduce:transition-none motion-reduce:duration-0"
-        finalFocus={returnFocus}
-        showCloseButton={false}
-        side="bottom"
-      >
-        <SheetHeader className="flex-row items-center justify-between border-b border-border">
-          <SheetTitle>Browse</SheetTitle>
-          <SheetClose render={<Button className="size-11" size="icon" variant="ghost" />}>
-            <XIcon aria-hidden="true" />
-            <span className="sr-only">Close</span>
-          </SheetClose>
-        </SheetHeader>
-        <nav aria-label="Browse the archive" className="browse-sheet-body">
-          <ul className="browse-sheet-list">
-            {HUBS.map((hub) => {
-              const active = hub.to === current;
-
-              return (
-                <li key={hub.id}>
-                  <Link
-                    aria-current={active ? "page" : undefined}
-                    className={active ? "browse-hub browse-hub--active" : "browse-hub"}
-                    onClick={close}
-                    to={hub.to as never}
-                  >
-                    <HubText hub={hub} />
-                  </Link>
-                </li>
-              );
-            })}
-          </ul>
-          {shortcuts && shortcuts.items.length > 0 ? (
-            <div className="browse-shortcuts browse-shortcuts--sheet">
-              <p className="browse-shortcuts-label">{shortcuts.label}</p>
-              <ul className="browse-shortcut-row">
-                {shortcuts.items.map((shortcut) => (
-                  <li key={`${shortcut.to}:${JSON.stringify(shortcut.search ?? {})}`}>
-                    <Link
-                      className="browse-shortcut"
-                      onClick={close}
-                      search={shortcut.search as never}
-                      to={shortcut.to as never}
-                    >
-                      {shortcut.label}
-                    </Link>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          ) : null}
-        </nav>
-      </SheetContent>
+      {open || activated ? (
+        <Suspense fallback={null}>
+          <BrowseSheetContent
+            current={current}
+            returnFocus={returnFocus}
+            setOpen={setOpen}
+            shortcuts={shortcuts}
+          />
+        </Suspense>
+      ) : null}
     </Sheet>
   );
 }
