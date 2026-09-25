@@ -514,6 +514,23 @@ describe("public shadow projections", () => {
     ).toBeUndefined();
   });
 
+  it("serves literal key buckets ascending and release-year buckets newest-first", async () => {
+    await seedProjectionWorld();
+    await rebuildAll();
+    await setCutover("true");
+
+    expect(await readProjectedAggregateBuckets(db, "release_date_bucket")).toEqual([
+      { bucket: "20x?", count: 1 },
+      { bucket: "2024", count: 1 },
+      { bucket: "", count: 1 },
+    ]);
+    expect(await readProjectedAggregateBuckets(db, "key")).toEqual([
+      { bucket: "", count: 1 },
+      { bucket: "C minor", count: 1 },
+      { bucket: "wat", count: 1 },
+    ]);
+  });
+
   it("reads projected buckets and served hub pages without a source scan or temp sort", async () => {
     await seedBulkProjectionWorld(TRACKS_HUB_PAGE_SIZE + 1);
     await rebuildAll();
