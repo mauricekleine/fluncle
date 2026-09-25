@@ -1,4 +1,4 @@
-import { contract } from "@fluncle/contracts/orpc";
+import { AnchorCandidateSchema, contract } from "@fluncle/contracts/orpc";
 import { OpenAPIGenerator } from "@orpc/openapi";
 import { OpenAPIHandler } from "@orpc/openapi/fetch";
 import { implement, ORPCError } from "@orpc/server";
@@ -7,6 +7,7 @@ import { type OrpcContext } from "./orpc-context";
 import { applyPublicCors, buildPublicCorsMatcher, corsPreflightResponse } from "./orpc-cors";
 import { dueWorkMaintenancePendingMiddleware } from "./orpc-backpressure";
 import { isApiFaultData } from "./orpc/_shared";
+import { logEvent } from "./log";
 import { adminAlbumsHandlers } from "./orpc/admin-albums";
 import { adminArtifactsHandlers } from "./orpc/admin-artifacts";
 import { adminArtistRulesHandlers } from "./orpc/admin-artist-rules";
@@ -195,6 +196,8 @@ export async function handleOrpc(request: Request): Promise<Response | null> {
   }
 
   const suffix = url.pathname.slice(API_PREFIX.length);
+  const anchorValidationRequest =
+    suffix === "/admin/catalogue/anchor" && request.method === "POST" ? request.clone() : null;
 
   const preflight = corsPreflightResponse(request, suffix, isPublicCorsPath);
 
@@ -209,6 +212,44 @@ export async function handleOrpc(request: Request): Promise<Response | null> {
 
   if (!matched) {
     return null;
+  }
+
+  if (anchorValidationRequest && response.status === 400) {
+    try {
+      const input: unknown = await anchorValidationRequest.json();
+      const candidates =
+        typeof input === "object" && input !== null && "candidates" in input
+          ? input.candidates
+          : undefined;
+      const fields = new Set<string>();
+      if (Array.isArray(candidates)) {
+        if (candidates.length > 100) {
+          fields.add("candidates");
+        }
+        for (const candidate of candidates.slice(0, 100)) {
+          const parsed = AnchorCandidateSchema.safeParse(candidate);
+          if (!parsed.success) {
+            for (const issue of parsed.error.issues) {
+              fields.add(`candidates.${issue.path.map(String).join(".")}`);
+            }
+          }
+        }
+      } else {
+        fields.add("candidates");
+      }
+      if (
+        typeof input !== "object" ||
+        input === null ||
+        !("trackId" in input) ||
+        typeof input.trackId !== "string" ||
+        input.trackId.length === 0
+      ) {
+        fields.add("trackId");
+      }
+      logEvent("warn", "anchor.validation-failed", { fields: [...fields].sort() });
+    } catch {
+      logEvent("warn", "anchor.validation-failed", { fields: ["body"] });
+    }
   }
 
   if (isNoStoreSuffix(suffix)) {

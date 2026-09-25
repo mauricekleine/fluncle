@@ -102,7 +102,7 @@ export function NavFooter({ galaxiesLive }: { galaxiesLive: boolean }): ReactNod
         <HomeStatusPill />
       </div>
 
-      <nav aria-label="Legal" className="nav-footer-legal">
+      <nav aria-label="Legal and credits" className="nav-footer-legal">
         <Link className="nav-footer-legal-link" to="/privacy">
           Privacy
         </Link>
@@ -110,6 +110,15 @@ export function NavFooter({ galaxiesLive }: { galaxiesLive: boolean }): ReactNod
         <Link className="nav-footer-legal-link" to="/terms">
           Terms
         </Link>
+        <span aria-hidden="true">·</span>
+        <a
+          className="nav-footer-legal-link"
+          href="https://www.mauricekleine.com/"
+          rel="noreferrer"
+          target="_blank"
+        >
+          a side quest by maurice kleine
+        </a>
       </nav>
     </footer>
   );

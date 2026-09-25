@@ -218,6 +218,10 @@ function readMarkers(job: string): Marker[] | null {
   }
 }
 
+// The status and worklist counts run 15–25s on the hosted database, and the reads run in
+// parallel inside the unit's 180s budget, so a read gets a minute before it counts as unmeasured.
+export const API_READ_TIMEOUT_MS = 60_000;
+
 async function apiRead(path: string): Promise<Record<string, unknown> | null> {
   if (!API_TOKEN) {
     return null;
@@ -225,7 +229,7 @@ async function apiRead(path: string): Promise<Record<string, unknown> | null> {
   try {
     const response = await fetch(`${API_BASE}${path}`, {
       headers: { Authorization: `Bearer ${API_TOKEN}` },
-      signal: AbortSignal.timeout(15_000),
+      signal: AbortSignal.timeout(API_READ_TIMEOUT_MS),
     });
     if (!response.ok) {
       return null;

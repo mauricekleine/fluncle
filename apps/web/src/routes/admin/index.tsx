@@ -696,6 +696,7 @@ function AdminQueuePage() {
 }
 
 const SOURCE_ICONS: Record<AttentionSource, ComponentType<{ className?: string }>> = {
+  "anchor-failure": GitDiffIcon,
   "anchor-review": GitDiffIcon,
   "artist-review": MicrophoneStageIcon,
   "attach-cues": FilmSlateIcon,
@@ -714,6 +715,7 @@ const SOURCE_ICONS: Record<AttentionSource, ComponentType<{ className?: string }
 };
 
 const SOURCE_LABELS: Record<AttentionSource, string> = {
+  "anchor-failure": "Anchor failure",
   "anchor-review": "Version check",
   "artist-review": "Artist",
   "attach-cues": "Recording",

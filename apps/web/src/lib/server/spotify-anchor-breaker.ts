@@ -8,6 +8,16 @@ export const SPOTIFY_ANCHOR_BREAKER_FAILURES_KEY = "spotify_anchor_breaker_failu
 export const SPOTIFY_ANCHOR_BREAKER_REASON_KEY = "spotify_anchor_breaker_reason";
 
 const SPOTIFY_ANCHOR_BREAKER_LAST_FAILURE_AT_KEY = "spotify_anchor_breaker_last_failure_at";
+const SPOTIFY_ANCHOR_BREAKER_QUOTA_AT_KEY = "spotify_anchor_breaker_quota_at";
+
+export async function getSpotifyAnchorQuotaUntil(now: number): Promise<null | string> {
+  const quotaMs = parseStamp(await getSetting(SPOTIFY_ANCHOR_BREAKER_QUOTA_AT_KEY));
+  if (!Number.isFinite(quotaMs) || quotaMs > now) {
+    return null;
+  }
+  const until = quotaMs + SPOTIFY_ANCHOR_BREAKER_COOLDOWN_MS;
+  return until > now ? new Date(until).toISOString() : null;
+}
 
 export const SPOTIFY_ANCHOR_BREAKER_MAX_FAILURES = 5;
 
@@ -16,6 +26,7 @@ export const SPOTIFY_ANCHOR_BREAKER_FAILURE_WINDOW_MS = 10 * 60 * 1000;
 export const SPOTIFY_ANCHOR_BREAKER_COOLDOWN_MS = 60 * 60 * 1000;
 
 export const SPOTIFY_ANCHOR_BREAKER_REASON_THROTTLED = "throttled";
+export const SPOTIFY_ANCHOR_BREAKER_REASON_QUOTA = "quota_exceeded";
 
 function parseCount(raw: string | undefined, fallback = 0): number {
   if (raw === undefined || !/^\d+$/.test(raw.trim())) {
@@ -98,7 +109,7 @@ export async function getSpotifyAnchorBreakerState(
 
   return {
     cooldownRemainingMs: verdict.cooldownRemainingMs,
-    reason: verdict.tripped ? reason || null : null,
+    reason: verdict.tripped ? reason || SPOTIFY_ANCHOR_BREAKER_REASON_THROTTLED : null,
     throttlesInWindow: windowLive ? parseCount(failures) : 0,
     tripped: verdict.tripped,
     trippedAt: verdict.tripped ? (trippedAt ?? null) : null,
@@ -117,18 +128,29 @@ export async function spotifyAnchorSearchBreakerTripped(
   }
 }
 
-export async function recordSpotifyThrottle(now: number = Date.now()): Promise<void> {
+export async function recordSpotifyThrottle(
+  now: number = Date.now(),
+  quotaExceeded = false,
+): Promise<void> {
   try {
-    const [trippedAt, failures, lastFailureAt] = await Promise.all([
+    const [trippedAt, failures, lastFailureAt, quotaAt] = await Promise.all([
       getSetting(SPOTIFY_ANCHOR_BREAKER_TRIPPED_AT_KEY),
       getSetting(SPOTIFY_ANCHOR_BREAKER_FAILURES_KEY),
       getSetting(SPOTIFY_ANCHOR_BREAKER_LAST_FAILURE_AT_KEY),
+      getSetting(SPOTIFY_ANCHOR_BREAKER_QUOTA_AT_KEY),
     ]);
 
     const verdict = spotifyAnchorBreakerVerdict({ now, trippedAt: trippedAt ?? null });
 
+    if (quotaExceeded) {
+      await setSetting(SPOTIFY_ANCHOR_BREAKER_QUOTA_AT_KEY, new Date(now).toISOString());
+    }
+
     if (verdict.corrupt) {
-      await setSetting(SPOTIFY_ANCHOR_BREAKER_TRIPPED_AT_KEY, new Date(now).toISOString());
+      await Promise.all([
+        setSetting(SPOTIFY_ANCHOR_BREAKER_TRIPPED_AT_KEY, new Date(now).toISOString()),
+        setSetting(SPOTIFY_ANCHOR_BREAKER_REASON_KEY, SPOTIFY_ANCHOR_BREAKER_REASON_THROTTLED),
+      ]);
 
       return;
     }
@@ -143,18 +165,25 @@ export async function recordSpotifyThrottle(now: number = Date.now()): Promise<v
       now,
     });
     const stamp = new Date(now).toISOString();
+    const quotaMs = parseStamp(quotaAt);
+    const quotaInWindow =
+      quotaExceeded ||
+      (Number.isFinite(quotaMs) && now - quotaMs < SPOTIFY_ANCHOR_BREAKER_FAILURE_WINDOW_MS);
 
     if (streak >= SPOTIFY_ANCHOR_BREAKER_MAX_FAILURES) {
+      const reason = quotaInWindow
+        ? SPOTIFY_ANCHOR_BREAKER_REASON_QUOTA
+        : SPOTIFY_ANCHOR_BREAKER_REASON_THROTTLED;
       await Promise.all([
         setSetting(SPOTIFY_ANCHOR_BREAKER_TRIPPED_AT_KEY, stamp),
-        setSetting(SPOTIFY_ANCHOR_BREAKER_REASON_KEY, SPOTIFY_ANCHOR_BREAKER_REASON_THROTTLED),
+        setSetting(SPOTIFY_ANCHOR_BREAKER_REASON_KEY, reason),
         setSetting(SPOTIFY_ANCHOR_BREAKER_FAILURES_KEY, "0"),
         setSetting(SPOTIFY_ANCHOR_BREAKER_LAST_FAILURE_AT_KEY, stamp),
       ]);
 
       logEvent("warn", "spotify.anchor-breaker-tripped", {
         cooldownMs: SPOTIFY_ANCHOR_BREAKER_COOLDOWN_MS,
-        reason: SPOTIFY_ANCHOR_BREAKER_REASON_THROTTLED,
+        reason,
         throttles: streak,
       });
 
@@ -176,6 +205,7 @@ export async function resetSpotifyAnchorBreaker(): Promise<SpotifyAnchorBreakerS
     setSetting(SPOTIFY_ANCHOR_BREAKER_REASON_KEY, ""),
     setSetting(SPOTIFY_ANCHOR_BREAKER_FAILURES_KEY, "0"),
     setSetting(SPOTIFY_ANCHOR_BREAKER_LAST_FAILURE_AT_KEY, ""),
+    setSetting(SPOTIFY_ANCHOR_BREAKER_QUOTA_AT_KEY, ""),
   ]);
 
   return getSpotifyAnchorBreakerState();

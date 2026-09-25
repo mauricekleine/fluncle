@@ -27,9 +27,11 @@ export const tracks = sqliteTable(
     album: text("album"),
 
     albumId: text("album_id"),
+
     albumImageUrl: text("album_image_url"),
 
     analyzedAt: text("analyzed_at"),
+
     analyzedFrom: text("analyzed_from", { enum: ["preview", "full"] }),
 
     anchorReviewJson: text("anchor_review_json"),
@@ -39,34 +41,49 @@ export const tracks = sqliteTable(
     artistCreditsBackfilledAt: text("artist_credits_backfilled_at"),
 
     artistEdgesBackfilledAt: text("artist_edges_backfilled_at"),
+
     artistsJson: text("artists_json").notNull(),
 
     backfillAppleMusicAttemptedAt: text("backfill_apple_music_attempted_at"),
+
     backfillAppleMusicAttempts: integer("backfill_apple_music_attempts").notNull().default(0),
+
     backfillAppleMusicDoneAt: text("backfill_apple_music_done_at"),
+
     backfillAppleMusicFailures: integer("backfill_apple_music_failures").notNull().default(0),
 
     backfillBeatportAttemptedAt: text("backfill_beatport_attempted_at"),
+
     backfillBeatportAttempts: integer("backfill_beatport_attempts").notNull().default(0),
+
     backfillBeatportDoneAt: text("backfill_beatport_done_at"),
+
     backfillBeatportFailures: integer("backfill_beatport_failures").notNull().default(0),
 
     backfillDeezerAttemptedAt: text("backfill_deezer_attempted_at"),
+
     backfillDeezerAttempts: integer("backfill_deezer_attempts").notNull().default(0),
+
     backfillDeezerDoneAt: text("backfill_deezer_done_at"),
+
     backfillDeezerFailures: integer("backfill_deezer_failures").notNull().default(0),
 
     backfillDiscogsAttemptedAt: text("backfill_discogs_attempted_at"),
+
     backfillDiscogsAttempts: integer("backfill_discogs_attempts").notNull().default(0),
+
     backfillDiscogsDoneAt: text("backfill_discogs_done_at"),
+
     backfillDiscogsFailures: integer("backfill_discogs_failures").notNull().default(0),
 
     beatportUrl: text("beatport_url"),
 
     beatportVerifiedAt: text("beatport_verified_at"),
+
     bpm: real("bpm"),
 
     bpmConfidence: real("bpm_confidence"),
+
     bpmSource: text("bpm_source"),
 
     capturePriority: integer("capture_priority"),
@@ -84,11 +101,15 @@ export const tracks = sqliteTable(
     captureVerification: text("capture_verification"),
 
     captureVerifiedAt: text("capture_verified_at"),
+
     catalogueRankCorpus: text("catalogue_rank_corpus"),
+
     catalogueRankedAt: text("catalogue_ranked_at"),
 
     deezerTrackId: text("deezer_track_id"),
+
     deezerVerifiedAt: text("deezer_verified_at"),
+
     deezerVerifiedBy: text("deezer_verified_by"),
 
     demandScore: integer("demand_score"),
@@ -96,9 +117,11 @@ export const tracks = sqliteTable(
     dismissedAt: text("dismissed_at"),
 
     duplicateOfTrackId: text("duplicate_of_track_id"),
+
     durationMs: integer("duration_ms").notNull(),
 
     embeddingBlob: float32Vector("embedding_blob"),
+
     featuresJson: text("features_json"),
 
     hasEmbedding: integer("has_embedding", { mode: "boolean" }).notNull().default(false),
@@ -106,18 +129,23 @@ export const tracks = sqliteTable(
     hasIsrc: integer("has_isrc", { mode: "boolean" }).notNull().default(false),
 
     inMasterId: integer("in_master_id"),
+
     inReleaseId: integer("in_release_id"),
 
     isCatalogue: integer("is_catalogue", { mode: "boolean" }).notNull().default(true),
+
     isrc: text("isrc"),
 
     isrcAttemptedAt: text("isrc_attempted_at"),
 
     isrcRecoveryAttemptedAt: text("isrc_recovery_attempted_at"),
+
     key: text("key"),
 
     keyConfidence: real("key_confidence"),
+
     keySource: text("key_source"),
+
     label: text("label"),
 
     labelId: text("label_id"),
@@ -127,14 +155,21 @@ export const tracks = sqliteTable(
     mbRecordingIdAttemptedAt: text("mb_recording_id_attempted_at"),
 
     nearestFindingScore: real("nearest_finding_score"),
+
     nearestFindingTrackId: text("nearest_finding_track_id"),
+
     popularity: integer("popularity"),
 
     previewArchiveKey: text("preview_archive_key"),
+
     previewArchiveMime: text("preview_archive_mime"),
+
     previewArchiveSource: text("preview_archive_source"),
+
     previewArchivedAt: text("preview_archived_at"),
+
     previewUrl: text("preview_url"),
+
     releaseDate: text("release_date"),
 
     sourceAudioAttemptedAt: text("source_audio_attempted_at"),
@@ -155,7 +190,14 @@ export const tracks = sqliteTable(
 
     spotifyAnchorAttempts: integer("spotify_anchor_attempts"),
 
+    spotifyAnchorInvalidAttempts: integer("spotify_anchor_invalid_attempts").notNull().default(0),
+
+    spotifyAnchorPaidAdmittedAt: text("spotify_anchor_paid_admitted_at"),
+
     spotifyAnchorSource: text("spotify_anchor_source"),
+
+    spotifyAnchorTerminalError: text("spotify_anchor_terminal_error"),
+
     spotifyAnchorVerifiedBy: text("spotify_anchor_verified_by"),
 
     spotifyAnchoredAt: text("spotify_anchored_at"),
@@ -163,14 +205,21 @@ export const tracks = sqliteTable(
     spotifyIsrcAskedAt: text("spotify_isrc_asked_at"),
 
     spotifyUri: text("spotify_uri"),
+
     spotifyUrl: text("spotify_url"),
+
     title: text("title").notNull(),
+
     trackId: text("track_id").primaryKey(),
 
     youtubeProvenanceFailures: integer("youtube_provenance_failures"),
+
     youtubeVerifiedAt: text("youtube_verified_at"),
+
     youtubeVerifiedBy: text("youtube_verified_by"),
+
     youtubeVideoId: text("youtube_video_id"),
+
     youtubeVideoOfficial: integer("youtube_video_official"),
   },
 
@@ -295,9 +344,17 @@ export const tracks = sqliteTable(
       .on(table.hasIsrc, table.hasEmbedding, table.nearestFindingScore, table.trackId)
       .where(sql`${table.spotifyUri} is null`),
 
+    index("tracks_anchor_prior_order_idx")
+      .on(table.hasIsrc, table.hasEmbedding, table.nearestFindingScore, table.trackId)
+      .where(sql`${table.spotifyUri} is null and ${table.spotifyIsrcAskedAt} is not null`),
+
     index("tracks_anchor_review_idx")
       .on(table.trackId)
       .where(sql`${table.anchorReviewJson} is not null`),
+
+    index("tracks_anchor_terminal_idx")
+      .on(table.trackId)
+      .where(sql`${table.spotifyAnchorTerminalError} is not null`),
 
     index("tracks_dismissed_idx")
       .on(table.dismissedAt)

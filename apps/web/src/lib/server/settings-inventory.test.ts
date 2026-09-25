@@ -53,6 +53,7 @@ const SETTINGS_INVENTORY = {
   "spotify-anchor-breaker.ts": [
     "spotify_anchor_breaker_failures",
     "spotify_anchor_breaker_last_failure_at",
+    "spotify_anchor_breaker_quota_at",
     "spotify_anchor_breaker_reason",
     "spotify_anchor_breaker_tripped_at",
   ],
@@ -160,7 +161,7 @@ describe("settings inventory drift", () => {
     expect(orphaned, "Registered settings keys with no reader and no writer").toEqual([]);
     expect(unregistered, "Settings keys used by code but missing from the inventory").toEqual([]);
     expect(wrongOwner, "Settings keys used outside their registered owner module").toEqual([]);
-    expect(registered.size).toBe(44);
+    expect(registered.size).toBe(45);
     expect(Object.keys(SETTINGS_INVENTORY)).toHaveLength(20);
   });
 });
