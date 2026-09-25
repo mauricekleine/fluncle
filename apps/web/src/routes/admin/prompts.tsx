@@ -51,35 +51,10 @@ import {
   type PromptSurface,
 } from "@/lib/server/prompts";
 
-// The `/admin/prompts` station — every prompt Fluncle feeds a model, editable with no deploy
-// (lib/server/prompts.ts, docs/agents/prompt-registry.md).
-//
-// ── WHAT THE OPERATOR CAME HERE TO DO ───────────────────────────────────────────
-// See what a prompt says, change it, and be able to put it back. That is the whole page.
-// A live edit is not a settings tweak: it silently rewrites every note, script, entry, and
-// verdict the pipeline authors from the next tick on, and nobody gets an error when the
-// wording goes bad. So the three things that make an edit SAFE are the feature, not polish:
-//
-//   1. The DIFF. Nothing is ever saved blind. The editor shows, line by line, what moves
-//      against the body running right now, and every historical version can be diffed
-//      against it too.
-//   2. The HISTORY. Every version, newest first, with its note (the "why"). The note field
-//      is what makes this list readable a month later, so the copy pushes for it.
-//   3. The ROLLBACK. One action, on any version, and it is append-only: rolling back MINTS a
-//      new version carrying the old body rather than rewinding, so the rollback is itself
-//      undoable. It still changes what every future artifact is authored under, so it sits
-//      behind a confirm that names exactly that.
-//
-// Reset-to-the-repo-default is the same one write with a different source of body, and it is
-// rare, so it lives off the resting surface behind the ⋮ (the disclosure law).
-
 const PROMPTS_KEY = ["admin", "prompts"] as const;
 
-/** The operator's "why", capped by the contract (`update_prompt`). */
 const NOTE_MAX_LENGTH = 280;
 
-// One read feeds the whole station: every prompt, its baked default, the body running now, and
-// its full history. The table is a handful of rows, so a per-prompt fetch would buy nothing.
 const fetchPrompts = createServerFn({ method: "GET" }).handler(
   async (): Promise<PromptDetail[]> => {
     if (!(await isAdminRequest())) {
@@ -118,8 +93,6 @@ function AdminPromptsPage() {
   return (
     <AdminShell subtitle={subtitle} title="Prompts">
       <div className="space-y-5 p-4 sm:p-5">
-        {/* The one thing to know before touching a control here: what an edit reaches, and why
-            it is safe to try. Plain words, above the rows. */}
         <p className="max-w-2xl text-sm text-muted-foreground">
           Every prompt Fluncle feeds a model. Change one and it is live without a deploy. Nothing
           here is deleted: a save appends a version, so the old wording is always one action away,
@@ -146,11 +119,6 @@ function AdminPromptsPage() {
   );
 }
 
-// ---------------------------------------------------------------------------
-// The row
-// ---------------------------------------------------------------------------
-
-/** Where an edit lands, in human words rather than the raw enum. */
 function surfaceLine(surface: PromptSurface): string {
   return surface === "box" ? "Live on the next sweep, no rebake" : "Live on the next request";
 }
@@ -180,8 +148,6 @@ function PromptRow({ onOpen, prompt }: { onOpen: () => void; prompt: PromptDetai
   );
 }
 
-// Which of the two bodies is running, as quiet data (the labels "Seeding" chip precedent): an
-// icon and a word, never an alarm — running the repo's default is the resting state, not a fault.
 function SourceChip({ prompt }: { prompt: PromptDetail }) {
   const override = prompt.source === "override";
   const Glyph = override ? PencilSimpleIcon : PackageIcon;
@@ -193,10 +159,6 @@ function SourceChip({ prompt }: { prompt: PromptDetail }) {
     </span>
   );
 }
-
-// ---------------------------------------------------------------------------
-// The editor
-// ---------------------------------------------------------------------------
 
 function PromptEditor({ prompt }: { prompt: PromptDetail }) {
   const queryClient = useQueryClient();
@@ -232,7 +194,6 @@ function PromptEditor({ prompt }: { prompt: PromptDetail }) {
         <DialogDescription>{prompt.description}</DialogDescription>
       </DialogHeader>
 
-      {/* The two facts that decide how careful to be: where this lands, and what is running. */}
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-y border-border py-2.5">
         <span className="text-xs text-muted-foreground">{surfaceLine(prompt.surface)}</span>
         <SourceChip prompt={prompt} />
@@ -265,9 +226,6 @@ function PromptEditor({ prompt }: { prompt: PromptDetail }) {
 
         <TabsContent className="space-y-4 pt-4" value="edit">
           <Textarea
-            // field-sizing-fixed, against the shared Textarea's grow-to-content default: a
-            // prompt body is a few thousand characters, and a field that tall would push the
-            // diff and the Save button off the bottom of the dialog. Fixed frame, scrolls.
             className="h-72 field-sizing-fixed overflow-auto font-mono text-xs leading-5"
             onChange={(event) => setDraft(event.target.value)}
             spellCheck={false}
@@ -417,9 +375,6 @@ function PromptEditor({ prompt }: { prompt: PromptDetail }) {
   );
 }
 
-// The `{{variables}}` this body may interpolate. An operator editing blind is how this feature
-// hurts someone, so the slots are on screen next to the editor, quoted verbatim in mono (the One
-// Voice Rule — mono speaks for the machine).
 function Variables({ variables }: { variables: string[] }) {
   if (variables.length === 0) {
     return (
@@ -449,11 +404,6 @@ function Variables({ variables }: { variables: string[] }) {
   );
 }
 
-// ---------------------------------------------------------------------------
-// The history
-// ---------------------------------------------------------------------------
-
-// Pinned locale + UTC so a stamp never disagrees with itself between two machines.
 const stamp = new Intl.DateTimeFormat("en-US", {
   day: "numeric",
   hour: "2-digit",
@@ -553,13 +503,6 @@ function HistoryEntry({
   );
 }
 
-// ---------------------------------------------------------------------------
-// The one write
-// ---------------------------------------------------------------------------
-
-// The operator-tier `update_prompt` op (POST /admin/prompts/{slug}). Append-only: an edit, a
-// rollback, and a reset are all this one call, differing only in where the body came from. The
-// browser carries the admin grant cookie; the fetch mirrors the labels page's ruling call.
 async function updatePrompt(slug: string, body: string, note?: string): Promise<void> {
   const response = await fetch(`/api/v1/admin/prompts/${encodeURIComponent(slug)}`, {
     body: JSON.stringify({ body, note }),

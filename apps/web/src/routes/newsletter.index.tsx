@@ -6,11 +6,6 @@ import { findingsCount, formatDateLong } from "@/lib/format";
 import { jsonLdScript } from "@/lib/json-ld";
 import { listEditions } from "@/lib/server/editions";
 
-// The public newsletter archive (`/newsletter`): every back issue of the
-// mothership, each a readable web page rather than a dead email. The list is the
-// sent editions, newest first — the same structured payload the email renders
-// from, shown here as the archival register (the log-plate family).
-
 const fetchEditions = createServerFn({ method: "GET" }).handler(() => listEditions());
 
 const title = "Fluncle: the mothership";
@@ -31,9 +26,7 @@ export const Route = createFileRoute("/newsletter/")({
       { content: `${siteUrl}/fluncle-cover.png`, property: "og:image" },
       { content: `${siteUrl}/newsletter`, property: "og:url" },
     ],
-    // JSON-LD through `jsonLdScript`, which HTML-escapes the serialized payload
-    // before the inline <script>, so a subject with `</script>` can't break out
-    // (the same stored-XSS guard the mixtape index uses).
+
     scripts: [
       jsonLdScript({
         "@context": "https://schema.org",

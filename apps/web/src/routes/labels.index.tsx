@@ -16,28 +16,13 @@ import {
   listLabelsHubPage,
 } from "@/lib/server/labels";
 
-// The labels index: ONE alphabetical index of every record label Fluncle holds — the certified
-// findings and the wider catalogue he is charting — cover-led, each tile linking to its
-// `/label/<slug>` page (the internal-link hub that keeps those pages from being orphans). A
-// certified label's name takes the certification light (DESIGN.md's Unlit Rule, Eclipse Gold); an
-// uncertified one keeps the plain ink. The distinction is visual only — no badge, no tier heading,
-// no finding count.
-//
-// A NAME SEARCH (`?q=`) narrows the index SQL-side (the shared hub gate stays single-sourced): the
-// bare hub is indexable + in the sitemap, but any `?q=` present flips it to noindex (the /tracks
-// filter rule), drops the whole-index count on the masthead for a count-free line, and hides the A–Z
-// lane (searching by name is not browsing the alphabet). The page is BLIND to a label's crawl
-// `seed_state`: that is crawl scope, never storage, and no read here knows it exists. Every page —
-// page 1 included — SSRs one static slice of tiles behind a real-anchor `?page=N` pager, with an A–Z
-// fast lane linking every region of the alphabet, so the whole index is reachable by internal links.
-
 const countFormatter = new Intl.NumberFormat("en-US");
 
 type LabelsPageData =
   | {
       hub: CatalogueHubNumberedPage<LabelHubEntry>;
       page: number;
-      /** The active name search, or undefined on the bare hub — the filtered/noindex bit keys off it. */
+
       q: string | undefined;
       status: "found";
     }
@@ -61,9 +46,6 @@ const fetchLabelsPage = createServerFn({ method: "GET" })
   .validator((data: { page?: number; q?: string }) => data)
   .handler(({ data }): Promise<LabelsPageData> => resolveLabelsPage(data.page, data.q));
 
-// Machine-facing strings stay honestly-plain third-person (the Narrator rule), and they carry the
-// genre keyword — Bing flagged the hub layer for short, keyword-free titles and identical paged
-// meta must vary by page. Paged variants bake their page number into BOTH strings.
 const title = "Every drum & bass record label, A to Z · Fluncle";
 const description =
   "Every drum & bass record label Fluncle holds, A to Z, with the founding facts and lineage that link them.";
@@ -84,9 +66,6 @@ function labelsHead(loaderData: LabelsPageData | undefined) {
     return {};
   }
 
-  // A name search is a sliced view of the one hub: it collapses onto the bare `/labels` canonical and
-  // goes `noindex, follow` (the /tracks filter rule) so a crawler indexes the hub, not the search
-  // permutations. A clean paged view is its own canonical and real content — noindex NEVER.
   const filtered = loaderData.q !== undefined;
   const canonical =
     filtered || loaderData.page <= 1
@@ -94,8 +73,7 @@ function labelsHead(loaderData: LabelsPageData | undefined) {
       : `${siteUrl}/labels?page=${loaderData.page}`;
 
   const meta = pagedMeta(filtered ? 1 : loaderData.page);
-  // The hub's own Satori card (routes/api/og.hub.ts), with the /log head's full image
-  // shape (width/height/type + twitter:image) so every unfurler sizes it right.
+
   const ogImage = `${siteUrl}/api/og/hub?hub=labels`;
   const metaTags = [
     { title: meta.title },
@@ -116,14 +94,9 @@ function labelsHead(loaderData: LabelsPageData | undefined) {
   if (filtered) {
     metaTags.push({ content: "noindex, follow", name: "robots" });
 
-    // A filtered view is noindexed, so its CollectionPage would be structured-data noise — clean
-    // pages only carry the JSON-LD.
     return { links: [{ href: canonical, rel: "canonical" }], meta: metaTags };
   }
 
-  // The ItemList carries the page's tiles — every one a real `/label/<slug>` page — as the
-  // `mainEntity` of a `CollectionPage`, carrying `numberOfItems` so the list's size is machine-
-  // readable.
   const labels = loaderData.hub.items;
   const collectionPage = {
     "@context": "https://schema.org",
@@ -145,9 +118,7 @@ function labelsHead(loaderData: LabelsPageData | undefined) {
   return {
     links: [{ href: canonical, rel: "canonical" }],
     meta: metaTags,
-    // JSON-LD goes through `jsonLdScript`, which HTML-escapes the serialized payload before
-    // it reaches the inline <script>, so a `</script>` in a vendor-sourced label name can't
-    // break out (stored-XSS sink, security review).
+
     scripts: [jsonLdScript(collectionPage)],
   };
 }
@@ -175,15 +146,12 @@ export const Route = createFileRoute("/labels/")({
 
 type LabelsSearch = { page?: number; q?: string };
 
-// One composed string (not JSX fragments) so the count is a single SSR text node. The count clause
-// drops at ≤ 1 ("1 drum & bass labels" is not a sentence).
 function mastheadLine(total: number): string {
   return total > 1
     ? `${countFormatter.format(total)} drum & bass labels, A to Z.`
     : "Drum & bass labels, A to Z.";
 }
 
-/** "1 match" / "312 matches" — the count a name search holds, by the form when it is active. */
 function matchCount(count: number): string {
   return `${countFormatter.format(count)} ${count === 1 ? "match" : "matches"}`;
 }
@@ -206,8 +174,7 @@ function LabelsPage() {
       <article className="log-plate log-index">
         <header className="log-masthead">
           <h1 className="log-coordinate log-index-title">Labels</h1>
-          {/* On a filtered view the count drops — the whole-index total would mis-caption a slice, so
-              the matchline below owns that number (the /tracks rule). ONE composed string. */}
+
           <p className="log-index-intro">{mastheadLine(filtered ? 0 : hub.total)}</p>
         </header>
 
@@ -232,8 +199,6 @@ function LabelsPage() {
           </p>
         ) : (
           <>
-            {/* The A–Z lane is a browse aid; a name search has already narrowed the list, so it hides
-                while searching (the loader skips computing it then). */}
             {filtered ? undefined : (
               <HubLetterLane
                 buildHref={buildHref}
@@ -252,9 +217,7 @@ function LabelsPage() {
                     <TrackArtwork
                       alt=""
                       className="artist-grid-cover"
-                      // BOTH branches ask for the tile rung now: the logo rides the same
-                      // owned-master ladder the album fallback beside it does, so a label's own
-                      // picture is no longer the one full-size original on a catalogue-scale grid.
+
                       src={
                         albumCoverAtSize(label.logoImageUrl, HUB_COVER_TILE_SIZE) ??
                         albumCoverAtSize(label.coverImageUrl, HUB_COVER_TILE_SIZE)
@@ -284,7 +247,6 @@ function LabelsPage() {
   );
 }
 
-/** Build a `/labels?…` href preserving the active name search across pages (page 1 drops `page`). */
 function buildLabelsHref(q: string | undefined, page: number): string {
   const params = new URLSearchParams();
 

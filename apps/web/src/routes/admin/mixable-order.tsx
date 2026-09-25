@@ -13,20 +13,6 @@ import { ObjectGlyph, ObjectLead, ObjectList, ObjectRow } from "@/components/adm
 import { isLogId } from "@/lib/log-id";
 import { mixReasonLabel } from "@/lib/mix-set";
 
-// The dream-weaver (RFC mixability-engine, Unit 3): the operator pastes a pool of Log
-// IDs, gets a smooth PROPOSED order, and copies it into Rekordbox. THIN by design
-// (Decision 6): no new multi-select primitive — a coordinate input + the shared
-// ObjectList/ObjectRow. It PROPOSES, never publishes: `recordings promote` stays the
-// only way a mixtape is minted. The output is a smoothness-optimized chain, NOT an
-// energy-shaped set — the copy says so.
-//
-// A DELIBERATE deviation from the admin-route default (the loader-seeded react-query
-// hybrid, AGENTS.md § Architecture): this route has NO loader and NO seeded query. It
-// is a COMPUTE-ON-DEMAND tool, not a board — there is no resting data to hydrate,
-// because nothing exists until the operator pastes a pool and presses the button. The
-// one server call is therefore a `useMutation` keyed on that press, and an SSR seed
-// would have nothing to seed. The guard is the only thing `beforeLoad` does.
-
 export const Route = createFileRoute("/admin/mixable-order")({
   beforeLoad: () => ensureAdmin(),
   component: MixableOrderPage,
@@ -50,7 +36,6 @@ type MixableOrderResult = {
   totalCost: number;
 };
 
-// Parse the pasted pool — accepts commas, whitespace, or newlines between coordinates.
 function parsePool(raw: string): string[] {
   return [
     ...new Set(
@@ -166,9 +151,6 @@ function MixableOrderPage() {
                       {index === 0 ? (
                         <span>opens</span>
                       ) : stop.flagged ? (
-                        // A caution, on the palette's caution token (never an
-                        // off-palette amber): the transition was costed at the
-                        // neutral median because a scoring input was missing.
                         <span className="text-destructive">sparse join</span>
                       ) : (
                         <span>

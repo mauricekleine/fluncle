@@ -12,27 +12,13 @@ import { pageParam, textParam } from "@/lib/search-params";
 import { type AlbumHubEntry, listAlbumsHubPage } from "@/lib/server/albums";
 import { type CatalogueHubNumberedPage } from "@/lib/server/labels";
 
-// The albums index: ONE alphabetical index of every record Fluncle holds — the certified findings
-// and the wider catalogue he is charting — cover-led (the album art IS the entity here), each tile
-// linking to its `/album/<slug>` page (the internal-link hub that keeps the album pages from being
-// orphans). A certified record's name takes the certification light (DESIGN.md's Unlit Rule, Eclipse
-// Gold); an uncertified one keeps the plain ink. The distinction is visual only — no badge, no tier
-// heading, no finding count.
-//
-// A NAME SEARCH (`?q=`) narrows the index SQL-side (the shared hub gate stays single-sourced): the
-// bare hub is indexable + in the sitemap, but any `?q=` present flips it to noindex (the /tracks
-// filter rule) and drops the whole-index count on the masthead for a count-free line. Albums have NO
-// A–Z lane — an album's identity is its cover, not a title-initial — so the numbered `?page=N` pager
-// IS the album index's crawl entry into the long tail. Every page — page 1 included — SSRs one static
-// slice of tiles behind a real-anchor pager. A page past the end 404s — never a clamp to page 1.
-
 const countFormatter = new Intl.NumberFormat("en-US");
 
 type AlbumsPageData =
   | {
       hub: CatalogueHubNumberedPage<AlbumHubEntry>;
       page: number;
-      /** The active name search, or undefined on the bare hub — the filtered/noindex bit keys off it. */
+
       q: string | undefined;
       status: "found";
     }
@@ -56,9 +42,6 @@ const fetchAlbumsPage = createServerFn({ method: "GET" })
   .validator((data: { page?: number; q?: string }) => data)
   .handler(({ data }): Promise<AlbumsPageData> => resolveAlbumsPage(data.page, data.q));
 
-// Machine-facing strings stay honestly-plain third-person (the Narrator rule), and they carry the
-// genre keyword — Bing flagged the hub layer for short, keyword-free titles and identical paged
-// meta must vary by page. Paged variants bake their page number into BOTH strings.
 const title = "Every drum & bass album, A to Z · Fluncle";
 const description =
   "Every drum & bass album, EP and single Fluncle holds, A to Z, with the artists and labels behind them.";
@@ -79,9 +62,6 @@ function albumsHead(loaderData: AlbumsPageData | undefined) {
     return {};
   }
 
-  // A name search is a sliced view of the one hub: it collapses onto the bare `/albums` canonical and
-  // goes `noindex, follow` (the /tracks filter rule). A clean paged view is its own canonical and
-  // real content — noindex NEVER.
   const filtered = loaderData.q !== undefined;
   const canonical =
     filtered || loaderData.page <= 1
@@ -89,8 +69,7 @@ function albumsHead(loaderData: AlbumsPageData | undefined) {
       : `${siteUrl}/albums?page=${loaderData.page}`;
 
   const meta = pagedMeta(filtered ? 1 : loaderData.page);
-  // The hub's own Satori card (routes/api/og.hub.ts), with the /log head's full image
-  // shape (width/height/type + twitter:image) so every unfurler sizes it right.
+
   const ogImage = `${siteUrl}/api/og/hub?hub=albums`;
   const metaTags = [
     { title: meta.title },
@@ -114,9 +93,6 @@ function albumsHead(loaderData: AlbumsPageData | undefined) {
     return { links: [{ href: canonical, rel: "canonical" }], meta: metaTags };
   }
 
-  // The ItemList carries the page's tiles — every one a real `/album/<slug>` page — as the
-  // `mainEntity` of a `CollectionPage`, carrying `numberOfItems` so the list's size is machine-
-  // readable without counting.
   const albums = loaderData.hub.items;
   const collectionPage = {
     "@context": "https://schema.org",
@@ -165,15 +141,12 @@ export const Route = createFileRoute("/albums/")({
 
 type AlbumsSearch = { page?: number; q?: string };
 
-// One composed string (not JSX fragments) so the count is a single SSR text node. The count clause
-// drops at ≤ 1 ("1 drum & bass records" is not a sentence).
 function mastheadLine(total: number): string {
   return total > 1
     ? `${countFormatter.format(total)} drum & bass records, A to Z.`
     : "Drum & bass records, A to Z.";
 }
 
-/** "1 match" / "312 matches" — the count a name search holds, by the form when it is active. */
 function matchCount(count: number): string {
   return `${countFormatter.format(count)} ${count === 1 ? "match" : "matches"}`;
 }
@@ -196,8 +169,7 @@ function AlbumsPage() {
       <article className="log-plate log-index">
         <header className="log-masthead">
           <h1 className="log-coordinate log-index-title">Albums</h1>
-          {/* On a filtered view the count drops — the whole-index total would mis-caption a slice, so
-              the matchline below owns that number (the /tracks rule). ONE composed string. */}
+
           <p className="log-index-intro">{mastheadLine(filtered ? 0 : hub.total)}</p>
         </header>
 
@@ -259,7 +231,6 @@ function AlbumsPage() {
   );
 }
 
-/** Build an `/albums?…` href preserving the active name search across pages (page 1 drops `page`). */
 function buildAlbumsHref(q: string | undefined, page: number): string {
   const params = new URLSearchParams();
 

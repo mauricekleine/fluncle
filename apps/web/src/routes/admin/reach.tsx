@@ -14,27 +14,11 @@ import {
   type SocialMetricsBoard,
 } from "@/lib/server/reach-board";
 
-// The `/admin/reach` station — the pivot board over the append-only social-metrics ledger
-// (reach-board.ts). It answers the operator's two working questions: which posts are moving RIGHT
-// NOW (day-over-day view velocity, not cumulative vanity — the default sort), and which creative
-// axes actually perform (platform × video-structure and platform × plate-subject, with small-n
-// counts so a one-post cell never reads as a trend).
-//
-// ── DATA FLOW ─────────────────────────────────────────────────────────────────────────────────
-// The admin loader-seeded react-query hybrid (AGENTS.md): a GET server fn reads
-// `getSocialMetricsBoard` SERVER-SIDE in-process (the browser-admin pattern — no oRPC client, the
-// `/admin/funnel` precedent), the loader seeds it, and a focus-refetching `useQuery` keeps the
-// numbers honest on tab-back. The whole reduction + ranking is in SQL; the page only draws.
-//
-// The register is plain operator English (the admin law): no fiction, just the numbers and what
-// they measure.
-
 const REACH_KEY = ["admin", "reach"] as const;
 
 const numberFormatter = new Intl.NumberFormat("en-US");
 const formatCount = (value: number) => numberFormatter.format(Math.round(value));
 
-// UTC-pinned "Jul 18" so the server render matches hydration exactly (the /admin/funnel precedent).
 const dateFormatter = new Intl.DateTimeFormat("en-US", {
   day: "numeric",
   month: "short",
@@ -42,7 +26,6 @@ const dateFormatter = new Intl.DateTimeFormat("en-US", {
 });
 const formatDay = (day: string) => dateFormatter.format(new Date(`${day}T00:00:00.000Z`));
 
-/** A per-day velocity, signed: "+225 / day", "−40 / day", or "flat". */
 function formatVelocity(perDay: number): string {
   if (perDay > 0) {
     return `+${formatCount(perDay)} / day`;
@@ -55,8 +38,6 @@ function formatVelocity(perDay: number): string {
   return "flat";
 }
 
-// The one-call read, server-side + in-process (no HTTP, no CORS), re-checking the grant. The
-// loader and the focus-refetch both land here.
 const fetchReach = createServerFn({ method: "GET" }).handler(
   async (): Promise<SocialMetricsBoard> => {
     if (!(await isAdminRequest())) {
@@ -113,11 +94,6 @@ function ReachPage() {
     </AdminShell>
   );
 }
-
-// ── The moving band ─────────────────────────────────────────────────────────────────────────
-// Every measured post series, most-velocity first (the SQL sort). Each row: what it is, where it
-// lives, its latest views + the sparkline, its day-over-day velocity, and the platform-specific
-// tail (retention for youtube_analytics rows; likes/comments/shares for the rest).
 
 function MovingBand({ posts }: { posts: ReachPostRow[] }) {
   return (
@@ -180,8 +156,6 @@ function PostRow({ post }: { post: ReachPostRow }) {
   );
 }
 
-// Retention is the short-form signal — surfaced only for youtube_analytics rows, which are the
-// only source that reports it.
 function RetentionTail({ post }: { post: ReachPostRow }) {
   if (post.averageViewPercentage === null) {
     return <span>retention pending</span>;
@@ -197,7 +171,6 @@ function RetentionTail({ post }: { post: ReachPostRow }) {
   );
 }
 
-// The engagement tail for TikTok + Postiz rows: likes / comments / shares.
 function EngagementTail({ post }: { post: ReachPostRow }) {
   const parts = [
     post.likes === null ? undefined : `${formatCount(post.likes)} likes`,
@@ -208,8 +181,6 @@ function EngagementTail({ post }: { post: ReachPostRow }) {
   return <span>{parts.length > 0 ? parts.join(" · ") : "no engagement yet"}</span>;
 }
 
-// The per-day velocity with a direction glyph. A lone snapshot has no velocity yet, so it says so
-// rather than showing a fake zero (the honest short-data rule).
 function VelocityValue({ perDay, snapshots }: { perDay: null | number; snapshots: number }) {
   if (perDay === null) {
     return (
@@ -235,8 +206,6 @@ function VelocityValue({ perDay, snapshots }: { perDay: null | number; snapshots
   );
 }
 
-// A dependency-free inline-SVG sparkline of the post's view series. A single point draws one dot;
-// a flat series draws a flat line. Decorative — the numbers beside it carry the meaning.
 const SPARK_W = 88;
 const SPARK_H = 28;
 
@@ -282,7 +251,7 @@ function Sparkline({ post }: { post: ReachPostRow }) {
           vectorEffect="non-scaling-stroke"
         />
       ) : undefined}
-      {/* The One Sun: the live edge is the only gold. */}
+
       <circle
         className="fill-primary"
         cx={last.x}
@@ -304,8 +273,6 @@ function PlatformGlyph({ platform }: { platform: ReachPostRow["platform"] }) {
   );
 }
 
-// The snapshot source, as a quiet chip — which numbers these are (the ledger can carry two series
-// for one post, so the source has to read).
 function SourceChip({ source }: { source: ReachPostRow["source"] }) {
   const label =
     source === "youtube_analytics"
@@ -322,10 +289,6 @@ function SourceChip({ source }: { source: ReachPostRow["source"] }) {
     </span>
   );
 }
-
-// ── The pivot band ──────────────────────────────────────────────────────────────────────────
-// One creative axis, its cells grouped by platform. Each cell: the axis value, its post count
-// (the small-n signal), median + mean views, and mean retention where any post reported it.
 
 function PivotBand({ intro, pivot, title }: { intro: string; pivot: ReachPivot; title: string }) {
   if (pivot.cells.length === 0) {

@@ -9,20 +9,11 @@ import { editionsLabels } from "@/lib/server/edition-email";
 import { getEditionByNumber } from "@/lib/server/editions";
 import { listGalaxyNames } from "@/lib/server/galaxies-map";
 
-// The loader hydrates each finding's logId to its `Artist — Title` label (server-side,
-// one batched read) and ships the label strings to the client, mirroring the email.
-// `galaxyNames` is the live sonic map (browse-by-feel RFC), which the section matcher
-// ranks the edition's authored galaxy labels against.
 type EditionLoaderData = {
   edition: EditionDTO;
   galaxyNames: string[];
   labels: Record<string, string>;
 };
-
-// One back issue of the mothership (`/newsletter/<number>`) rendered as a proper
-// web page — the intro, the galaxy-grouped finds (each linking to its permanent
-// /log page), the mixtape, the tidbits — NOT the embedded email HTML. The same
-// stored `content` payload the email renders from; one source, two renders.
 
 const fetchEdition = createServerFn({ method: "GET" })
   .validator((data: { number: string }) => data)
@@ -44,8 +35,6 @@ const fetchEdition = createServerFn({ method: "GET" })
     return { edition, galaxyNames, labels };
   });
 
-// A typed head() outside the route options — reading loaderData inline makes the
-// route's own type inference circular (the same pattern the log page uses).
 function editionHead(edition: EditionDTO | undefined) {
   if (!edition) {
     return {};
@@ -76,9 +65,7 @@ function editionHead(edition: EditionDTO | undefined) {
         headline: edition.subject ?? `Edition #${edition.number}`,
         url: pageUrl,
       }),
-      // The trail, when the edition has a number to name. `number` is nullable on the DTO (a
-      // draft has none), and a breadcrumb whose leaf reads "#undefined" is worse than no
-      // breadcrumb — so an unnumbered edition simply gets no trail.
+
       ...(edition.number === undefined
         ? []
         : [jsonLdScript(newsletterBreadcrumbsJsonLd(edition.number))]),
@@ -107,9 +94,7 @@ function EditionPage() {
           <h1 className="log-coordinate log-index-title">
             {edition.subject ?? `Edition #${edition.number}`}
           </h1>
-          {/* An edition's date is the day it WENT OUT, not a Found date (VOICE.md's Found
-              Rule reserves "Found" for the day Fluncle first heard a tune). The mothership
-              departs every Friday, so its back issue is dated by that departure. */}
+
           {edition.sentAt ? (
             <p className="log-coordinate-uri">Departed {formatDateLong(edition.sentAt)}</p>
           ) : null}

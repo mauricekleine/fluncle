@@ -13,21 +13,6 @@ import { apiErrorResponse } from "../../../lib/server/http-errors";
 import { requirePublicUser } from "../../../lib/server/public-auth";
 import { enforceRateLimit } from "../../../lib/server/rate-limit";
 
-// POST/DELETE /api/me/avatar (the account portrait upload). A large-body/direct-
-// upload carve-out (AGENTS.md): the browser downscales the picked image to a ≤512²
-// square and PUTs the bytes here as `image/jpeg` (or png/webp); the DELETE clears
-// the photo. NOT an oRPC op — it carries image bytes, not RPC JSON. Every safety
-// rail lives server-side:
-//   * `requirePublicUser` — a session is required and the user is derived FROM it,
-//     never from the body (no userId in the request);
-//   * `verifyAvatarMutation` — same-origin + a valid CSRF token (the `/me` mutation
-//     protection, minus its application/json demand);
-//   * `enforceRateLimit` — `account.avatar`, 10/hour, keyed on the user;
-//   * `validateAvatarUpload` — content-type allow-list + ≤2 MB + ≤512² dimensions.
-// R2 credentials stay Worker-side (the `VIDEOS` binding, found.fluncle.com); the
-// object lands at `avatars/<userId>.<ext>` and the served Cloudflare Images URL is
-// stamped onto `user.image`.
-
 const AVATAR_RATE = { action: "account.avatar", limit: 10, windowMs: 60 * 60 * 1000 } as const;
 
 export const serverHandlers: ApiHandlers = {

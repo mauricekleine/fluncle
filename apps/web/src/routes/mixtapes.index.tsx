@@ -19,8 +19,7 @@ export const Route = createFileRoute("/mixtapes/")({
   head: ({ loaderData }: { loaderData?: MixtapeDTO[] }) => ({
     links: [
       { href: `${siteUrl}/mixtapes`, rel: "canonical" },
-      // oEmbed discovery: a pasted /mixtapes link unfurls as a `link`-type card
-      // (title + Fluncle cover). See routes/oembed.ts.
+
       {
         href: `${siteUrl}/oembed?url=${encodeURIComponent(`${siteUrl}/mixtapes`)}&format=json`,
         rel: "alternate",
@@ -36,10 +35,7 @@ export const Route = createFileRoute("/mixtapes/")({
       { content: `${siteUrl}/fluncle-cover.png`, property: "og:image" },
       { content: `${siteUrl}/mixtapes`, property: "og:url" },
     ],
-    // JSON-LD goes through `jsonLdScript`, which HTML-escapes the serialized
-    // payload before it reaches the inline <script>'s `children` (rendered raw
-    // via dangerouslySetInnerHTML), so a `</script>` in a mixtape title can't
-    // break out of the <script> (stored-XSS sink, security review).
+
     scripts: [
       jsonLdScript({
         "@context": "https://schema.org",

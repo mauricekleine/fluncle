@@ -15,21 +15,6 @@ import { type MixtapeDTO, mixtapeCoverUrl, mixtapeDisplayTitle } from "@/lib/mix
 import { isAdminRequest } from "@/lib/server/admin-auth";
 import { listMixtapes } from "@/lib/server/mixtapes";
 
-// The Mixtapes index — every MINTED mixtape (published + still-distributing), Fluncle's own DJ
-// sets. A mixtape is a spine-native object: born only via `promote_recording` (never authored
-// here), it carries an `F`-marked Log ID, a tracklist frozen from its take, an on-the-fly cover,
-// and outbound links to wherever it was distributed (YouTube video, Mixcloud audio). This page is
-// that object's admin HOME — before ADM-02 it was a redirect-only stub to /admin/plans, so a
-// published mixtape (including Mixtape #1) had nowhere to live in the UI.
-//
-// Read SERVER-SIDE in-process (a createServerFn calling the `listMixtapes` helper — the same read
-// the `list_mixtapes_admin` op wraps), with `includeUnpublished` so a distributing mixtape shows
-// while its assets upload, and `hydrateMembers` so each row's tracklist count is honest. Reads
-// only — the distribution control plane (YouTube/Mixcloud finalize, cues, announce) lives on the
-// operator-tier oRPC ops the fluncle-mixtapes skill drives.
-
-// Every minted mixtape, newest first (the helper orders by added/created desc). Server-side:
-// in-process, no HTTP, no CORS.
 const fetchMixtapes = createServerFn({ method: "GET" }).handler(async (): Promise<MixtapeDTO[]> => {
   if (!(await isAdminRequest())) {
     throw redirect({ to: "/admin/login" });
@@ -88,10 +73,6 @@ function MixtapesIndex({ mixtapes }: { mixtapes: MixtapeDTO[] }) {
   );
 }
 
-// One minted mixtape as an Object Row: cover-led (its on-the-fly cover links to the public
-// /log page), the `#N — title`, its `F`-marked coordinate in the Log-ID face, the
-// status/date/duration line, and the outbound distribution links to wherever it went
-// (YouTube, Mixcloud, SoundCloud).
 function MixtapeRow({ mixtape }: { mixtape: MixtapeDTO }) {
   const { logId } = mixtape;
   const logHref = logId ? `/log/${encodeURIComponent(logId)}` : undefined;
@@ -152,9 +133,6 @@ function MixtapeRow({ mixtape }: { mixtape: MixtapeDTO }) {
   );
 }
 
-// The platforms a mixtape reads its distribution from — the video on YouTube, the audio on
-// Mixcloud (and SoundCloud for the legacy tapes). Each present `externalUrls` entry renders as a
-// quiet outbound brand-mark link, so the operator can jump straight to where a mixtape lives.
 const DIST_PLATFORMS: {
   Icon: ComponentType<{ className?: string }>;
   key: "youtube" | "mixcloud" | "soundcloud";

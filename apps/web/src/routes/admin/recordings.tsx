@@ -13,22 +13,6 @@ import { isAdminRequest } from "@/lib/server/admin-auth";
 import { listClips } from "@/lib/server/clips";
 import { listRecordings } from "@/lib/server/recordings";
 
-// The recordings index — every captured set (a RECORDING), promoted or not, and the one
-// primary action that stages a new one (Upload recording, top-right in the header). A
-// captured set is uploaded here, then each row links to its Studio
-// (/admin/studio/$recordingId) — the per-set clipping workstation. The cross-recording
-// clip LIBRARY + the Instagram drip kill-switch live on the sibling Clips page; this page
-// is purely "find + open a set to clip it" plus the uploader (ADM-03 — the Studio group
-// split Recordings out of Clips).
-//
-// Each row carries a promoted badge (`fluncle://<logId>` once a take is promoted to a
-// mixtape) and its clip count, so the operator can see at a glance which sets have been
-// worked. A recording with no clips still appears — that's the point (open it to cut the
-// first clip). Reads `list_recordings` + `list_clips` (the latter only for the per-recording
-// clip counts), both SERVER-SIDE in-process (a createServerFn calling the server helpers) —
-// not a cross-origin client fetch.
-
-// Every recording (the index rows + the count denominators).
 const fetchRecordings = createServerFn({ method: "GET" }).handler(
   async (): Promise<RecordingDTO[]> => {
     if (!(await isAdminRequest())) {
@@ -39,8 +23,6 @@ const fetchRecordings = createServerFn({ method: "GET" }).handler(
   },
 );
 
-// Every clip — used only to count how many clips each recording has yielded (the per-row
-// tally). The clip library itself lives on the Clips page.
 const fetchAllClips = createServerFn({ method: "GET" }).handler(async (): Promise<ClipDTO[]> => {
   if (!(await isAdminRequest())) {
     throw redirect({ to: "/admin/login" });
@@ -62,9 +44,6 @@ function RecordingsPage() {
   const { clips: initialClips, recordings: initialRecordings } = Route.useLoaderData();
   const queryClient = useQueryClient();
 
-  // The recordings index, seeded from the loader and refetched on focus — so a
-  // browser-uploaded recording lands here without a reload (the header "Upload recording"
-  // action invalidates this key on success).
   const { data: recordings } = useQuery<RecordingDTO[]>({
     initialData: initialRecordings,
     queryFn: () => fetchRecordings(),
@@ -79,7 +58,6 @@ function RecordingsPage() {
     refetchOnWindowFocus: true,
   });
 
-  // The clip count per recording, over ALL clips — a stable map of the backlog.
   const clipCountByRecording = useMemo(() => {
     const counts = new Map<string, number>();
 
@@ -111,9 +89,6 @@ function RecordingsPage() {
   );
 }
 
-// The recordings index: every captured set with its title, clip count, and a promoted
-// badge, each linking to its Studio. A recording with no clips still appears — that's the
-// point (open it to cut the first clip).
 function RecordingsIndex({
   clipCountByRecording,
   recordings,

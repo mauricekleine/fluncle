@@ -10,26 +10,10 @@ import { albumCoverAtSize } from "@/lib/media";
 import { isAdminRequest } from "@/lib/server/admin-auth";
 import { type CostInsights, getCostInsights } from "@/lib/server/costs";
 
-// The Usage & cost station (COST-01, RFC §6) — the operator's read on what the
-// pipeline SPENDS, per automation step and per finding, from the append-only
-// `cost_events` ledger. The one hard rule (RFC §0): CASH (real incremental money —
-// OpenRouter distil, Cartesia TTS, Firecrawl, Resend) is the headline; SUBSIDIZED
-// (fixed-plan draws — subscription LLM tokens + on-box compute) renders as a
-// SEPARATE, clearly-labelled column and is NEVER summed into cash. Unpriced rows
-// (a rate we don't know yet) are counted, never laundered to $0.
-//
-// Read SERVER-SIDE in-process (a createServerFn calling `getCostInsights` — the
-// browser-admin pattern, no oRPC client, no CORS), seeded into a focus-refetching
-// query so a fresh sweep's rows appear on tab-back without a reload. Sits under the
-// "Costs" sidebar group beside COST-02's `/admin/costs` subscriptions ledger — they
-// share the operator's mental model, never data or a combined total.
-
 const OXANIUM_STACK = '"Oxanium", ui-sans-serif, system-ui, sans-serif';
 
 const USAGE_KEY = ["admin", "usage"] as const;
 
-// A human label per ledger step (the enum is machine-terse). An unmapped step
-// falls back to its raw key, so a new step still renders.
 const STEP_LABELS: Record<string, string> = {
   bio: "Bios",
   context: "Context notes",
@@ -45,7 +29,6 @@ const STEP_LABELS: Record<string, string> = {
   video: "Video render",
 };
 
-// The two aggregations, server-side + in-process (no HTTP, no CORS).
 const fetchUsage = createServerFn({ method: "GET" }).handler(async (): Promise<CostInsights> => {
   if (!(await isAdminRequest())) {
     throw redirect({ to: "/admin/login" });
@@ -60,8 +43,6 @@ export const Route = createFileRoute("/admin/usage")({
   loader: () => fetchUsage(),
 });
 
-// USD with enough precision for sub-cent marginal costs (a Firecrawl search is
-// ~$0.0016), but tidy at larger magnitudes. Below a cent → 4 dp; else currency.
 function formatUsd(amount: number): string {
   if (amount === 0) {
     return "$0";
@@ -100,10 +81,6 @@ function UsagePage() {
   );
 }
 
-// The headline split, rendered AS the split: cash is the gold stat; subsidized is a
-// separate, labelled tile ("fixed-plan draw — already in Subscriptions"), never
-// added to cash. A third quiet tile surfaces the unpriced count so a guess never
-// hides as a fact.
 function TotalsRow({ totals, windowDays }: { totals: CostInsights["totals"]; windowDays: number }) {
   return (
     <section aria-label="Totals">
@@ -132,9 +109,6 @@ function TotalsRow({ totals, windowDays }: { totals: CostInsights["totals"]; win
   );
 }
 
-// Per-step rollup — cash and subsidized-draw in SEPARATE columns, plus an unpriced
-// marker on any step still carrying a row we can't price. Sorted cash-heaviest
-// first (the read `getCostInsights` returns).
 function StepSection({ steps }: { steps: CostInsights["steps"] }) {
   return (
     <section aria-label="Cost per step">
@@ -175,8 +149,6 @@ function StepSection({ steps }: { steps: CostInsights["steps"] }) {
   );
 }
 
-// Per-finding top-N — the highest CASH-cost findings, cash only (the operator's
-// "what did this find cost in real money" question).
 function FindingSection({ findings }: { findings: CostInsights["topFindings"] }) {
   return (
     <section aria-label="Cost per finding">

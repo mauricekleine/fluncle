@@ -2,24 +2,6 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { ADMIN_COOKIE_NAME, ADMIN_GRANT_EPOCH_KEY } from "../../../lib/server/env";
 import { OPERATOR_TOKEN, setAdminTokenEnv } from "../../../lib/server/orpc-test-kit";
 
-// The OAuth state browser binding, driven END TO END through the real route handlers
-// (`serverHandlers`) rather than the helper alone — the wire-up is the thing that was
-// missing, so the wire-up is what is asserted.
-//
-// Two representative legs stand in for all seven:
-//   - youtube/auth/{start,callback} — the shape every platform connect shares (a
-//     JSON start behind `requireOperator`, a redirect callback that exchanges a code).
-//   - spotify/auth/{login,callback} — the ADMIN LOGIN front door, the one that hands
-//     out the grant cookie, and the only start route that is public.
-//
-//   - oauth/handoff — the CLI's front door, which turns a Bearer-carried start into a
-//     browser-minted flow so there is no unbound state left anywhere.
-//
-// The property under test: a callback refuses the token exchange unless the browser
-// presents back the nonce cookie the start leg set — and EVERY flow is now such a
-// flow. A Bearer-carried start no longer receives a provider URL at all; it receives a
-// handoff link that mints the state inside the operator's browser.
-
 const SESSION_SECRET = "test-session-secret-oauth-binding";
 
 let epochValue: string | undefined;
@@ -48,10 +30,6 @@ const buildSpotifyLoginUrl = vi.fn();
 const fetchSpotifyProfile = vi.fn();
 const exchangeCodeForToken = vi.fn();
 
-// A PARTIAL mock: the four network-touching functions are faked, but everything else
-// — crucially `ApiError`, which `http-errors.ts` imports from here and `instanceof`s —
-// stays real. A whole-module mock left `ApiError` undefined, which turned any error
-// path through `apiErrorResponse` into a TypeError instead of the clean 400 it is.
 vi.mock("../../../lib/server/spotify", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../lib/server/spotify")>()),
   buildSpotifyAuthUrl: vi.fn(),
@@ -101,19 +79,16 @@ function get(path: string, headers: Record<string, string> = {}): Request {
   return new Request(`${ORIGIN}${path}`, { headers, method: "GET" });
 }
 
-/** A real grant cookie header, minted through the production signing path. */
 async function grantHeader(): Promise<string> {
   const { signGrant } = await import("../../../lib/server/admin-auth");
 
   return `${ADMIN_COOKIE_NAME}=${await signGrant()}`;
 }
 
-/** `name=value` from a `Set-Cookie`, ready to send back as a `cookie` header. */
 function cookiePair(setCookie: null | string): string {
   return (setCookie ?? "").split("; ")[0] ?? "";
 }
 
-/** The `state` query param out of the authorize URL the start leg built. */
 function stateFromAuthUrl(url: string): string {
   return new URL(url).searchParams.get("state") ?? "";
 }
@@ -160,7 +135,7 @@ describe("youtube connect — a BROWSER-started flow is bound to that browser", 
 
     expect(response.status).toBe(302);
     expect(exchangeCodeForYouTubeToken).toHaveBeenCalledWith("abc");
-    // The nonce is consumed, so the state cannot be replayed even here.
+
     expect(response.headers.get("Set-Cookie")).toContain("Max-Age=0");
   });
 
@@ -177,7 +152,7 @@ describe("youtube connect — a BROWSER-started flow is bound to that browser", 
 
     expect(response.status).toBe(400);
     expect(((await response.json()) as { code: string }).code).toBe("invalid_state");
-    // THE POINT: the attacker's code is never spent, so no foreign token is stored.
+
     expect(exchangeCodeForYouTubeToken).not.toHaveBeenCalled();
   });
 
@@ -201,7 +176,6 @@ describe("youtube connect — a BROWSER-started flow is bound to that browser", 
 });
 
 describe("youtube connect — a CLI-started flow is handed off, never left unbound", () => {
-  /** `fluncle admin auth youtube`: a Bearer start, and the link it prints. */
   async function startFromCli(): Promise<Response> {
     return handler(
       youtubeStart,
@@ -221,11 +195,9 @@ describe("youtube connect — a CLI-started flow is handed off, never left unbou
 
     expect(url.origin).toBe(ORIGIN);
     expect(url.pathname).toBe("/api/v1/admin/oauth/handoff");
-    // Nothing to bind and nothing to replay: no state is signed and no cookie set
-    // until a browser asks for one.
+
     expect(response.headers.get("Set-Cookie")).toBeNull();
-    // The builder runs ONLY as the config pre-flight, on an empty state that is
-    // discarded — so an unconfigured platform still 400s at the CLI.
+
     expect(buildYouTubeAuthUrl).toHaveBeenCalledWith("");
   });
 
@@ -265,7 +237,6 @@ describe("youtube connect — a CLI-started flow is handed off, never left unbou
     expect(location).toContain("https://accounts.google.com");
     expect(setCookie).toContain("fluncle_oauth_youtube_auth=");
 
-    // And the callback then behaves exactly like a browser start's: bound.
     const completed = await handler(
       youtubeCallback,
       "GET",
@@ -295,7 +266,6 @@ describe("youtube connect — a CLI-started flow is handed off, never left unbou
     });
     const state = stateFromAuthUrl(handed.headers.get("Location") ?? "");
 
-    // THE RESIDUAL, GONE: this is the exact replay the old `bind: "none"` allowed.
     const response = await handler(
       youtubeCallback,
       "GET",
@@ -312,8 +282,6 @@ describe("youtube connect — a CLI-started flow is handed off, never left unbou
     const { authUrl } = (await (await startFromCli()).json()) as { authUrl: string };
     const ticket = new URL(authUrl).searchParams.get("token") ?? "";
 
-    // Discount the start leg's config pre-flight, so what follows measures the
-    // handoff alone.
     buildYouTubeAuthUrl.mockClear();
 
     const response = await handler(
@@ -345,8 +313,6 @@ describe("youtube connect — a CLI-started flow is handed off, never left unbou
       }),
     });
 
-    // A Bearer caller is exactly the carrier that cannot hold the nonce cookie, so
-    // authenticating as the operator is NOT enough here — only the browser is.
     expect(response.status).toBe(302);
     expect(response.headers.get("Location")).toContain("/admin/login");
     expect(buildYouTubeAuthUrl).not.toHaveBeenCalled();
@@ -374,8 +340,6 @@ describe("youtube connect — a CLI-started flow is handed off, never left unbou
     expect(expired.status).toBe(400);
     expect(((await expired.json()) as { code: string }).code).toBe("invalid_handoff");
 
-    // A garbage ticket with NO cookie must also answer 400 rather than the login
-    // bounce — the bounce would tell an anonymous caller their ticket was good.
     const garbage = await handler(
       oauthHandoff,
       "GET",
@@ -413,7 +377,7 @@ describe("the login round trip — a handoff opened while signed out comes back"
     });
 
     expect(response.status).toBe(302);
-    // A FIXED path rebuilt from a ticket Fluncle signed — never a caller-supplied URL.
+
     expect(response.headers.get("Location")).toBe(
       `/api/v1/admin/oauth/handoff?token=${encodeURIComponent(ticket)}`,
     );
@@ -515,7 +479,7 @@ describe("admin login — the front door is ALWAYS bound", () => {
     });
 
     expect(response.status).toBe(400);
-    // The identity is never read and no grant is issued.
+
     expect(fetchSpotifyProfile).not.toHaveBeenCalled();
     expect(response.headers.get("Set-Cookie")).toBeNull();
   });
