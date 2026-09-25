@@ -25,6 +25,8 @@ Hand-maintained against the `SURFACES` catalog — nothing generates these table
 
 ### Web routes — pages on `www.fluncle.com`
 
+The root head supplies `twitter:card` only. Do not add site-wide `twitter:title`, `twitter:description`, or `twitter:image`: X prefers those tags to a page’s Open Graph tags, so root values would override page-specific link previews. Update `/privacy`’s static last-updated date whenever its policy text changes; the fixed value also keeps server and client rendering identical.
+
 | Surface          | Route         | Exposes                                                                                                                                                                                                                                                                                                                                                                                                                                        | Weight    |
 | ---------------- | ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------- |
 | `web.home`       | `/`           | the front door — search with real example queries, one edited lead finding, the newest findings, what just came out, and the four routes into the wider archive                                                                                                                                                                                                                                                                                | primary   |
@@ -64,6 +66,8 @@ Hand-maintained against the `SURFACES` catalog — nothing generates these table
 | `subdomain.onion`  | `…kqo33fyppkqd.onion` | the Tor onion mirror of `www.fluncle.com` — the archive, API, RSS, and MCP over Tor                   | tertiary  |
 
 ### API — the public `/api/v1` surface
+
+The `/api/v1/status` resource is public and emits only public service fields; `secondsSinceProberReport` must follow the healthcheck prober’s own `hermes` report, since another service can report recently while the prober is silent. File-route carve-outs mount the same handler at `/api/*` and `/api/v1/*` so POST bodies survive; oRPC operations have only the versioned mount.
 
 Cross-origin browser reads are derived from the composed oRPC router: only unauthenticated GET operations receive `Access-Control-Allow-Origin: *`, including error responses and preflights. The matcher excludes `get_replica_token` because it returns a device credential and `get_current_private_user` because a cross-origin request without its session cookie would falsely report no user. An unrecognized path, authenticated operation, or write receives no CORS allowance.
 

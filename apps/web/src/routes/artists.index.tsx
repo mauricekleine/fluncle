@@ -20,39 +20,21 @@ import {
 } from "@/lib/server/artists";
 import { type CatalogueHubNumberedPage } from "@/lib/server/labels";
 
-// The artists index: ONE alphabetical index of every artist Fluncle holds — the certified findings
-// and the wider catalogue he is charting — cover-led, each tile linking to its `/artist/<slug>`
-// page. A certified artist's name takes the certification light (DESIGN.md's Unlit Rule, Eclipse
-// Gold); an uncertified one keeps the plain ink. The distinction is visual only — no badge, no tier
-// heading, no finding count.
-//
-// TWO browse modes ride the same index, both URL-driven (noindex, SSR):
-//   - a NAME SEARCH (`?q=`) narrows the index SQL-side (the shared hub gate stays single-sourced) and
-//     hides the A–Z lane (searching by name is not browsing the alphabet);
-//   - a SOUND COMPARE (`?like=a,b`) is the "sounds like these" multi-select: pick two or more artists
-//     and see who sits nearest to their average in Fluncle's audio-embedding space.
-// The bare hub is indexable + in the sitemap; any `?q=` OR `?like=` present flips it to noindex (the
-// /tracks filter rule). Every page — page 1 included — SSRs one static slice behind a real-anchor
-// `?page=N` pager with an A–Z fast lane, so the whole index is reachable by internal links.
-
 const countFormatter = new Intl.NumberFormat("en-US");
 
-/** The most artists a "sounds like these" compare carries — matches the op's cap (artist-dossier). */
 const MAX_COMPARE_SLUGS = 6;
 
 type ArtistsFoundData = {
   hub: CatalogueHubNumberedPage<ArtistHubEntry>;
   page: number;
-  /** The active name search, or undefined on the bare hub — the filtered/noindex bit keys off it. */
+
   q: string | undefined;
   status: "found";
 };
 
 type ArtistsSimilarData = {
-  /** The compared artists' display names — the results intro names its anchors ("Closest in sound
-      to X and Y."). Empty (all-unknown slugs) falls back to a referent-free line. */
   names: string[];
-  /** The nearest-in-sound results, as hub tiles (the unlit/lit treatment is reused verbatim). */
+
   results: ArtistHubEntry[];
   status: "similar";
 };
@@ -77,7 +59,6 @@ const fetchArtistsPage = createServerFn({ method: "GET" })
   .validator((data: { page?: number; q?: string }) => data)
   .handler(({ data }): Promise<ArtistsPageData> => resolveArtistsPage(data.page, data.q));
 
-/** Parse the raw `?like=` list into deduped, capped slugs (the same shape the op validates). */
 function parseCompareSlugs(like: string): string[] {
   return [
     ...new Set(
@@ -98,7 +79,6 @@ const fetchSimilarArtists = createServerFn({ method: "GET" })
       return { names: [], results: [] };
     }
 
-    // The compared artists' NAMES (for the intro) and the nearest-in-sound TILES ride one wave.
     const [names, results] = await Promise.all([
       artistNamesBySlugs(slugs),
       listSimilarArtistTiles(slugs),
@@ -107,8 +87,6 @@ const fetchSimilarArtists = createServerFn({ method: "GET" })
     return { names, results };
   });
 
-// Machine-facing strings stay honestly-plain third-person (the Narrator rule), and they carry the
-// genre keyword, and paged variants carry their page number in the meta pair.
 const title = "Every drum & bass artist, A to Z · Fluncle";
 const description =
   "Every drum & bass artist Fluncle holds, A to Z, with the labels that pressed their records.";
@@ -124,10 +102,7 @@ function pagedMeta(page: number): { description: string; title: string } {
   };
 }
 
-/** The base meta tag set for a canonical + title/description pair (shared by both views). */
 function metaTagsFor(canonical: string, meta: { description: string; title: string }) {
-  // The hub's own Satori card (routes/api/og.hub.ts), with the /log head's full image
-  // shape (width/height/type + twitter:image) so every unfurler sizes it right.
   const ogImage = `${siteUrl}/api/og/hub?hub=artists`;
 
   return [
@@ -152,8 +127,6 @@ function artistsHead(loaderData: ArtistsPageData | undefined) {
     return {};
   }
 
-  // The sound-compare results are a filtered permutation of the one hub: noindexed onto the bare
-  // `/artists` canonical, no CollectionPage (it would be structured-data noise on a noindexed view).
   if (loaderData.status === "similar") {
     const canonical = `${siteUrl}/artists`;
     const metaTags = metaTagsFor(canonical, pagedMeta(1));
@@ -162,8 +135,6 @@ function artistsHead(loaderData: ArtistsPageData | undefined) {
     return { links: [{ href: canonical, rel: "canonical" }], meta: metaTags };
   }
 
-  // A name search collapses onto the bare `/artists` canonical and goes `noindex, follow` (the
-  // /tracks filter rule). A clean paged view is its own canonical and real content — noindex NEVER.
   const filtered = loaderData.q !== undefined;
   const canonical =
     filtered || loaderData.page <= 1
@@ -177,8 +148,6 @@ function artistsHead(loaderData: ArtistsPageData | undefined) {
     return { links: [{ href: canonical, rel: "canonical" }], meta: metaTags };
   }
 
-  // The ItemList carries the page's tiles — every one is a real `/artist/<slug>` page — as the
-  // `mainEntity` of a `CollectionPage`, with `numberOfItems` set to the whole index size.
   const artists = loaderData.hub.items;
   const collectionPage = {
     "@context": "https://schema.org",
@@ -200,15 +169,11 @@ function artistsHead(loaderData: ArtistsPageData | undefined) {
   return {
     links: [{ href: canonical, rel: "canonical" }],
     meta: metaTags,
-    // JSON-LD goes through `jsonLdScript`, which HTML-escapes the serialized payload before it
-    // reaches the inline <script> (rendered raw via dangerouslySetInnerHTML), so a `</script>` in a
-    // (Spotify-sourced) artist name can't break out of the <script> (stored-XSS sink).
+
     scripts: [jsonLdScript(collectionPage)],
   };
 }
 
-// Route options follow TanStack's create-route-property-order (validateSearch → loaderDeps → loader →
-// head → component); each step feeds the next's inferred types, so the order isn't alphabetical.
 // oxlint-disable-next-line sort-keys
 export const Route = createFileRoute("/artists/")({
   validateSearch: (search: Record<string, unknown>): ArtistsSearch => ({
@@ -218,9 +183,6 @@ export const Route = createFileRoute("/artists/")({
   }),
   loaderDeps: ({ search }) => ({ like: search.like, page: search.page, q: search.q }),
   loader: async ({ deps }): Promise<ArtistsPageData> => {
-    // A compare needs TWO or more artists; a single-slug (or empty) `?like=` is not a comparison, so
-    // it falls through to the bare hub rather than serving a one-anchor "sounds like these" (the op
-    // 400s below two, and the loader mirrors that minimum rather than drifting from it).
     if (deps.like !== undefined && parseCompareSlugs(deps.like).length >= 2) {
       const data = await fetchSimilarArtists({ data: { like: deps.like } });
 
@@ -242,21 +204,16 @@ export const Route = createFileRoute("/artists/")({
 
 type ArtistsSearch = { like?: string; page?: number; q?: string };
 
-// One composed string (not JSX fragments) so the count is a single SSR text node. The count clause
-// drops at ≤ 1 ("1 drum & bass artists" is not a sentence).
 function mastheadLine(total: number): string {
   return total > 1
     ? `${countFormatter.format(total)} drum & bass artists, A to Z.`
     : "Drum & bass artists, A to Z.";
 }
 
-/** "1 match" / "312 matches" — the count a name search holds, by the form when it is active. */
 function matchCount(count: number): string {
   return `${countFormatter.format(count)} ${count === 1 ? "match" : "matches"}`;
 }
 
-/** The tile's inner content — the avatar over the name + track count, shared by the link, the select
- *  button, and the results tile so all three read identically. */
 function ArtistTileContent({ artist }: { artist: ArtistHubEntry }) {
   return (
     <>
@@ -271,14 +228,6 @@ function ArtistTileContent({ artist }: { artist: ArtistHubEntry }) {
   );
 }
 
-/**
- * The browse grid + its quiet "Compare sounds" select mode. At rest every tile is a link to its
- * `/artist/<slug>` page. In select mode each tile becomes a toggle button (aria-pressed, keyboard
- * operable) with a focus-ring selection outline (Eclipse-Glow, the reader-taste ruling — NOT a
- * certification claim); picking two to six and hitting "Sounds like these" navigates to `?like=a,b`.
- * Focus follows the mode toggle (Cancel on enter, "Compare sounds" on exit) so the keyboard is never
- * stranded on a button that just unmounted.
- */
 function ArtistsBrowseGrid({ artists }: { artists: ArtistHubEntry[] }) {
   const navigate = useNavigate();
   const [selecting, setSelecting] = useState(false);
@@ -287,9 +236,6 @@ function ArtistsBrowseGrid({ artists }: { artists: ArtistHubEntry[] }) {
   const cancelButtonRef = useRef<HTMLButtonElement>(null);
   const didMount = useRef(false);
 
-  // Move focus with the mode change (skip the first render so it never steals focus on mount): the
-  // button the reader activated unmounts on the toggle, so focus lands on its replacement rather than
-  // dropping to the body.
   useEffect(() => {
     if (!didMount.current) {
       didMount.current = true;
@@ -308,9 +254,6 @@ function ArtistsBrowseGrid({ artists }: { artists: ArtistHubEntry[] }) {
         return prev.filter((value) => value !== slug);
       }
 
-      // Refuse past the cap rather than silently swallowing the pick — the unselected tiles are also
-      // `disabled` at the cap, so the refusal is perceivable (dimmed + inert) and the hint reads the
-      // ceiling ("6 selected."). This guard is the belt to that suspenders.
       return prev.length >= MAX_COMPARE_SLUGS ? prev : [...prev, slug];
     });
 
@@ -331,8 +274,6 @@ function ArtistsBrowseGrid({ artists }: { artists: ArtistHubEntry[] }) {
   return (
     <>
       <div className="hub-compare-bar">
-        {/* Persistently mounted so the aria-live region announces its first populated state: an
-            empty→text change is announced, whereas a region that mounts already-populated may not. */}
         <span aria-live="polite" className="hub-compare-hint">
           {selecting ? hint : ""}
         </span>
@@ -391,7 +332,6 @@ function ArtistsBrowseGrid({ artists }: { artists: ArtistHubEntry[] }) {
   );
 }
 
-/** Join names into one plain phrase: "X", "X and Y", "X, Y and Z" — the results intro's anchor list. */
 function namesToPhrase(names: string[]): string {
   if (names.length <= 1) {
     return names[0] ?? "";
@@ -400,10 +340,7 @@ function namesToPhrase(names: string[]): string {
   return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
 }
 
-/** The `?like=a,b` results view — the artists nearest in sound to the compared set, named. */
 function ArtistsSimilarView({ names, results }: { names: string[]; results: ArtistHubEntry[] }) {
-  // Name the anchors when we resolved them ("Closest in sound to X and Y."); if every slug was
-  // unknown, fall back to a referent-free reference line rather than dangling a "these".
   const intro =
     names.length > 0
       ? `Closest in sound to ${namesToPhrase(names)}.`
@@ -470,8 +407,7 @@ function ArtistsPage() {
       <article className="log-plate log-index">
         <header className="log-masthead">
           <h1 className="log-coordinate log-index-title">Artists</h1>
-          {/* On a filtered view the count drops — the whole-index total would mis-caption a slice, so
-              the matchline below owns that number (the /tracks rule). ONE composed string. */}
+
           <p className="log-index-intro">{mastheadLine(filtered ? 0 : hub.total)}</p>
         </header>
 
@@ -496,7 +432,6 @@ function ArtistsPage() {
           </p>
         ) : (
           <>
-            {/* The A–Z lane hides while searching (a name search has already narrowed the list). */}
             {filtered ? undefined : (
               <HubLetterLane
                 buildHref={buildHref}
@@ -523,7 +458,6 @@ function ArtistsPage() {
   );
 }
 
-/** Build an `/artists?…` href preserving the active name search across pages (page 1 drops `page`). */
 function buildArtistsHref(q: string | undefined, page: number): string {
   const params = new URLSearchParams();
 

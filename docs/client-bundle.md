@@ -31,6 +31,8 @@ Tree-shaking is not a safety net. A module-level side effect Rollup cannot prove
 
 A loader that awaits a heavy route-specific module must dynamically import it inside the loader. The `/docs` routes are the exemplar.
 
+The `/docs` route serializes its server-built Fumadocs page tree before client hydration; the generated page-tree source reaches `node:path` and must stay outside the client bundle. Scope Fumadocs providers and the `.dark` class to the docs layout, not `<html>`: a root-level theme class persists after client navigation and changes the public app’s Shadcn styles.
+
 ### The one exemption, and why it is safe
 
 `lib/server/track-match.ts` is permitted, and it earns it by having an **empty import list** — a pure fold over strings, 3 KB, with nothing behind it to drag. `lib/log-schema.ts` needs it for a finding's remixer credits and is read from route `head`s. Its path is canon across `docs/`, the `fluncle-rekordbox-sync` skill, and a Python port kept in lockstep, so relocating it is a repo-wide rename for 3 KB.

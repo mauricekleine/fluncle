@@ -7,28 +7,6 @@ import { siteUrl } from "@/lib/fluncle-links";
 import { createCsrfToken, getPublicSession } from "@/lib/server/public-auth";
 import { Button } from "@fluncle/ui/components/button";
 
-// ── /chat — ChatDnB, the crew door ────────────────────────────────────────────────────
-//
-// The public face of ChatDnB: a chat with Fluncle over his own archive, opened to the
-// crew — verified-email accounts, the learning cohort of the gated rollout (sign-in never
-// requires verification; FEATURES gate on it). The conversation itself is the SHARED
-// ChatConversation (components/chat/), the same transcript the /admin/chat workbench
-// renders; this route wraps it in the public chrome instead of the AdminShell, points the
-// transport at the session-gated POST /api/chat, and hands it the CSRF token every
-// message POST must carry.
-//
-// Not a SaaS chat window (PRODUCT.md bans the streaming-app clone by name): one quiet
-// plate, dark, the conversation is the content. Three states off the session — anonymous
-// (a quiet invitation to sign in), signed-in-but-unverified (the verify pointer), and
-// verified (the chat). The gate here is WAYFINDING only: the server route re-checks the
-// session, the verification, the origin/CSRF, and the rate dials on every turn.
-
-/**
- * The gate state for the door, resolved from the requester's own session. Deliberately
- * minimal — no email, no name, nothing the page does not render. The CSRF token is
- * minted only for the verified state (the only one that can post a turn), the same
- * loader-minted token the account page uses for its mutations.
- */
 type ChatGate = { state: "anonymous" | "unverified" } | { csrfToken: string; state: "verified" };
 
 const getChatGate = createServerFn({ method: "GET" }).handler(async (): Promise<ChatGate> => {
@@ -48,10 +26,7 @@ const getChatGate = createServerFn({ method: "GET" }).handler(async (): Promise<
 // oxlint-disable-next-line sort-keys -- TanStack's canonical option order (loader feeds head/component).
 export const Route = createFileRoute("/chat")({
   loader: () => getChatGate(),
-  // The gate + the minted CSRF token are per-session. Override the router's 60s default
-  // to 0 so a client nav never reuses one caller's gate/token for another, or a stale
-  // one after sign-in/verification changes state. The server re-checks the session on
-  // every turn; this keeps the CLIENT cache from outliving it.
+
   staleTime: 0,
   head: () => ({
     links: [{ href: `${siteUrl}/chat`, rel: "canonical" }],
@@ -61,11 +36,7 @@ export const Route = createFileRoute("/chat")({
         content: "Talk to Fluncle. He answers from his own archive of certified findings.",
         name: "description",
       },
-      // Unlisted while the rollout is gated (ROADMAP §ChatDnB): the door exists for the
-      // crew who sign in, but it is not announced and not indexed. It IS catalogued in
-      // @fluncle/registry as `web.chat` with `pending: true` — the pre-staged, DARK gate,
-      // which reaches no menu, no /status probe, and no sitemap — so graduating ChatDnB is
-      // that one field-flip plus deleting this tag.
+
       { content: "noindex", name: "robots" },
     ],
   }),
@@ -76,10 +47,6 @@ function ChatDoor() {
   const gate = Route.useLoaderData();
 
   return (
-    // The workbench register (public-chrome locks the shell to the viewport on /chat):
-    // this main is a flex column filling everything under the top bar, the plate fills
-    // the main, and the transcript scrolls INSIDE the plate — the ChatGPT shape, worn
-    // as a Fluncle plate. min-h-0 at every level or the scroller can't shrink.
     <main className="flex min-h-0 flex-1 flex-col overflow-x-hidden p-4 text-foreground sm:p-6 lg:px-8 lg:py-6">
       <article className="home-plate chat-plate mx-auto min-h-0 w-full max-w-4xl flex-1">
         <header className="home-masthead">
@@ -90,7 +57,6 @@ function ChatDoor() {
         </header>
 
         {gate.state === "verified" ? (
-          // The transcript takes every row the plate has left under the masthead.
           <div className="flex min-h-0 flex-1 flex-col">
             <ChatConversation
               csrfToken={gate.csrfToken}

@@ -66,29 +66,10 @@ import { readCaptions } from "@/lib/server/captions";
 import { captionForPlatform } from "@/lib/server/mentions";
 import { cn } from "@/lib/utils";
 
-// The operator's `/admin` home — the attention queue. Every action the system
-// needs is a row: cover art, the object
-// line, its data, and the primary action inline (or a deep-link with the object
-// selected). Two-tier order (deadlines by time-left, then oldest-first), a
-// bounded working set, snooze / won't-do, a single-key loop (j/k + Enter), and a
-// zero state that celebrates. Zero rows is the success state.
-//
-// The pure mechanics live in lib/attention.ts; the server reads in
-// lib/server/attention.ts; the snooze/won't-do map in lib/queue-prefs.ts
-// (localStorage — one operator, one browser; a server column couldn't see this
-// browser's snoozes). The findings board this page replaced lives at
-// /admin/findings; its old ?stage/?mix deep-links redirect there.
-
 const QUEUE_KEY = ["admin", "attention"] as const;
 
-// A scratch react-query key for `usePublish` on this page. The hook patches its
-// board cache after a push; the queue has no board query, so we point it at an
-// unused key (the patch no-ops on the absent cache) and instead invalidate
-// QUEUE_KEY ourselves so the row re-derives from the server.
 const DISTRIBUTE_KEY = ["admin", "attention-distribute"] as const;
 
-// Every admin server function re-checks the grant — the page guard only protects
-// the render, not the RPC behind a server function.
 const fetchAttention = createServerFn({ method: "GET" }).handler(async () => {
   if (!(await isAdminRequest())) {
     throw redirect({ to: "/admin/login" });
@@ -97,8 +78,6 @@ const fetchAttention = createServerFn({ method: "GET" }).handler(async () => {
   return readAttentionSnapshot();
 });
 
-// Lazy caption read for [Copy caption] — reads the public note.txt server-side
-// inside the tap (the board's gesture-safe clipboard pattern).
 const fetchCaption = createServerFn({ method: "GET" })
   .validator((data: { logId: string; trackId?: string }) => data)
   .handler(async ({ data }): Promise<{ caption: string }> => {
@@ -109,21 +88,16 @@ const fetchCaption = createServerFn({ method: "GET" })
     const captions = await readCaptions([data.logId]);
     const raw = captions[data.logId] ?? "";
 
-    // The copied caption is the operator's manual TikTok paste (YouTube auto-pushes with
-    // its own handles), so it carries the finding's TikTok @handles at copy time.
     return { caption: await captionForPlatform(data.trackId ?? "", "tiktok", raw) };
   });
 
 type QueueSearch = {
-  /** The [Show all] view state — deep-linked so the widened view survives reload. */
   all?: true;
-  /** Legacy board search params — redirected to /admin/findings in beforeLoad. */
+
   mix?: string;
   stage?: string;
 };
 
-// Route options follow TanStack's create-route-property-order (each step feeds the
-// next's inferred types), which isn't alphabetical — so sort-keys is off here.
 // oxlint-disable-next-line sort-keys
 export const Route = createFileRoute("/admin/")({
   validateSearch: (search: Record<string, unknown>): QueueSearch => ({
@@ -134,8 +108,6 @@ export const Route = createFileRoute("/admin/")({
     ...(typeof search.stage === "string" ? { stage: search.stage } : {}),
   }),
   beforeLoad: async ({ search }) => {
-    // The findings board owned `/admin` before the queue; its ?stage/?mix
-    // deep-links (bookmarks) land here and carry straight over.
     if (search.stage !== undefined || search.mix !== undefined) {
       const params = new URLSearchParams();
       if (search.stage !== undefined) {
@@ -152,7 +124,6 @@ export const Route = createFileRoute("/admin/")({
   component: AdminQueuePage,
 });
 
-/** Where a visible row sits — due rows count toward zero, the rest ride [Show all]. */
 type RowState = "backlog" | "dismissed" | "due" | "snoozed";
 
 type VisibleRow = { item: AttentionItem; state: RowState };
@@ -170,8 +141,6 @@ function prefersReducedMotion(): boolean {
   return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 }
 
-// Trigger a file download for a URL without navigating away (the push dialog's
-// "Download cover" gesture, expressed programmatically for the row menu).
 function downloadUrl(url: string, filename: string): void {
   const anchor = document.createElement("a");
   anchor.href = url;
@@ -183,9 +152,6 @@ function downloadUrl(url: string, filename: string): void {
   anchor.remove();
 }
 
-// Render the cover to a PNG blob (the one image type browsers reliably accept on
-// the clipboard). Needs the object to be CORS-readable; a taint or load failure
-// throws, and the caller falls back to a download.
 async function coverToPngBlob(url: string): Promise<Blob> {
   const image = await new Promise<HTMLImageElement>((resolve, reject) => {
     const element = new Image();
@@ -211,10 +177,6 @@ async function coverToPngBlob(url: string): Promise<Blob> {
   return blob;
 }
 
-// Grab the cover for pasting/attaching into the target app: copy the image to the
-// clipboard when the browser + CORS allow it, otherwise fall back to a download
-// (matching the push dialog's "Download cover"). Never rejects — the download
-// path always resolves.
 async function copyOrDownloadCover(
   url: string,
   filename: string,
@@ -224,9 +186,7 @@ async function copyOrDownloadCover(
       const png = await coverToPngBlob(url);
       await navigator.clipboard.write([new ClipboardItem({ "image/png": png })]);
       return "copied";
-    } catch {
-      // Fall through to the download path below.
-    }
+    } catch {}
   }
   downloadUrl(url, filename);
   return "downloaded";
@@ -238,10 +198,6 @@ function AdminQueuePage() {
   const navigate = Route.useNavigate();
   const queryClient = useQueryClient();
 
-  // The board's publish engine, reused verbatim for the row's push actions — the
-  // same gated `/social/:platform/draft` op the board push dialog calls. Its cache
-  // patch targets DISTRIBUTE_KEY (an unused scratch key), so we invalidate the
-  // queue ourselves after each push (below) to re-derive the row.
   const {
     busy: pushBusy,
     error: pushError,
@@ -249,8 +205,6 @@ function AdminQueuePage() {
     setError: setPushError,
   } = usePublish(DISTRIBUTE_KEY);
 
-  // Seeded from the SSR loader; window-focus refetch keeps the rows honest when
-  // the operator tabs back from TikTok / the Studio / a terminal.
   const { data, error: queryError } = useQuery({
     initialData: initial,
     queryFn: () => fetchAttention(),
@@ -260,30 +214,22 @@ function AdminQueuePage() {
 
   const prefs = useQueuePrefs();
 
-  // The queue's clock — ages and deadlines tick while the tab sits open (30s is
-  // honest for minute-grade readouts; tabular numerals keep the update quiet).
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 30_000);
     return () => window.clearInterval(timer);
   }, []);
 
-  // Rows cleared optimistically this session (marked posted) — removed locally the
-  // moment the op lands; the next refetch reconciles with the server.
   const [clearedIds, setClearedIds] = useState<ReadonlySet<string>>(() => new Set());
   const items = useMemo(
     () => data.items.filter((item) => !clearedIds.has(item.id)),
     [clearedIds, data.items],
   );
 
-  // Prune decisions for rows that left the system, so the stored map stays
-  // bounded to what actually exists.
   useEffect(() => {
     pruneQueuePrefs(new Set(data.items.map((item) => item.id)));
   }, [data.items]);
 
-  // Surface a failed push (the hook swallows it into state) as a toast, then clear
-  // it so the same error can fire again on a retry.
   useEffect(() => {
     if (pushError) {
       toast.error(pushError);
@@ -305,12 +251,9 @@ function AdminQueuePage() {
     return rows;
   }, [ordered, showAll]);
 
-  // The latest visible list for callbacks that outlive a render (the 200ms settle).
   const visibleRef = useRef(visible);
   visibleRef.current = visible;
 
-  // The keyboard cursor. Selection follows the row's identity; when its row
-  // leaves, the explicit advance (below) hands the cursor to the neighbour.
   const [selectedId, setSelectedId] = useState<string | undefined>();
   const selectedIndex = Math.max(
     0,
@@ -344,23 +287,16 @@ function AdminQueuePage() {
     setSelectedId(next?.item.id);
   }, []);
 
-  // ── Action state ────────────────────────────────────────────────────────────
   const [busyId, setBusyId] = useState<string | undefined>();
   const [copiedId, setCopiedId] = useState<string | undefined>();
   const [flashId, setFlashId] = useState<string | undefined>();
   const [leavingId, setLeavingId] = useState<string | undefined>();
   const [snoozeFor, setSnoozeFor] = useState<string | undefined>();
-  // The open "Mark posted" popover — a TikTok draft's finish-in-app panel (copy the cover,
-  // paste the live URL). Per-row; the URL field lives inside the popover, so one row's edit
-  // can't leak into another's: the URL field is local to the popover.
+
   const [finishFor, setFinishFor] = useState<string | undefined>();
-  // The zero state's cover — the last row dealt with this session; a fresh load
-  // falls back to the newest finding's cover from the snapshot.
+
   const [lastCleared, setLastCleared] = useState<{ artUrl?: string } | undefined>();
 
-  // The tactile action-fire + settle-out: a gold flash while the row fades, then
-  // the state change lands (200ms, ease-out). Reduced motion: the change is
-  // instant — no flash, no fade.
   const settleOut = useCallback(
     (item: AttentionItem, finish: () => void) => {
       setLastCleared(item.artUrl ? { artUrl: item.artUrl } : {});
@@ -405,10 +341,6 @@ function AdminQueuePage() {
     setSelectedId(item.id);
   }, []);
 
-  // Quick caption copy — the caption is fetched inside the tap and handed to the
-  // clipboard as a Promise, so the async read stays within the user gesture (iOS
-  // rejects a write that lands after an awaited fetch). Copying auto-advances the
-  // cursor: the loop keeps moving.
   const copyCaption = useCallback(
     (item: AttentionItem) => {
       if (!item.logId) {
@@ -435,8 +367,6 @@ function AdminQueuePage() {
     [advanceFrom],
   );
 
-  // Re-push a bounced draft — the same gated op the board's push dialog calls.
-  // The row stays: its deadline resets to a fresh 24h on the refetch.
   const rePush = useCallback(
     async (item: AttentionItem) => {
       if (!item.trackId || busyId) {
@@ -467,8 +397,6 @@ function AdminQueuePage() {
     [busyId, queryClient],
   );
 
-  // Record the hand-finished TikTok post — `update_track_social` with the real
-  // public URL (published requires one). The row clears; refetch reconciles.
   const markPosted = useCallback(
     async (item: AttentionItem, url: string) => {
       if (!item.trackId || busyId) {
@@ -500,9 +428,6 @@ function AdminQueuePage() {
     [busyId, queryClient, settleOut],
   );
 
-  // Rule on a suspected version mismatch — `resolve_anchor_review`, operator-tier. Accepting
-  // anchors the row to the candidate the gate refused; dismissing clears the note and leaves the
-  // row's normal retry lifecycle alone. Either way the review is gone, so the row settles out.
   const resolveAnchorReview = useCallback(
     async (item: AttentionItem, resolution: "accepted" | "dismissed") => {
       if (!item.trackId || busyId) {
@@ -536,10 +461,6 @@ function AdminQueuePage() {
     [busyId, queryClient, settleOut],
   );
 
-  // Rule on a bio that landed past the voice gate — `resolve_bio_review`, operator-tier.
-  // `keep` blesses the paragraph (the flag clears, the page is untouched); `rewrite` empties the
-  // bio, which hands the entity back to the sweep's worklist with a fresh attempt budget. Either
-  // way the review is settled, so the row settles out.
   const resolveBioReview = useCallback(
     async (item: AttentionItem, resolution: "keep" | "rewrite") => {
       const entity = item.entity;
@@ -574,10 +495,6 @@ function AdminQueuePage() {
     [busyId, queryClient, settleOut],
   );
 
-  // Push the finding's video to a platform straight from the row — the same gated
-  // draft op as the board (YouTube posts a public Short; TikTok drops a silent
-  // inbox draft). Reconcile the queue afterwards: a fresh TikTok push becomes this
-  // finding's deadline row, a YouTube push leaves the TikTok-tracked row as-is.
   const handlePush = useCallback(
     async (item: AttentionItem, platform: Platform) => {
       if (!item.trackId) {
@@ -589,8 +506,6 @@ function AdminQueuePage() {
     [pushDraft, queryClient],
   );
 
-  // Grab the cover to paste/attach into the app — clipboard when the browser
-  // allows it, a download otherwise (the push dialog's cover gesture).
   const copyCover = useCallback((item: AttentionItem) => {
     if (!item.logId) {
       return;
@@ -601,10 +516,6 @@ function AdminQueuePage() {
     });
   }, []);
 
-  // ── The single-key loop ─────────────────────────────────────────────────────
-  // j/k (or arrows) move the cursor, Enter fires the selected row's primary, s
-  // snoozes, x won't-does. Inert while a popover owns the keys or focus sits in a
-  // field; Enter defers to whatever control actually has focus.
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey) {
@@ -676,7 +587,6 @@ function AdminQueuePage() {
     return () => window.removeEventListener("keydown", onKey);
   }, [finishFor, handleWontDo, selectedId, snoozeFor]);
 
-  // Keep the cursor's row on screen as j/k walk past the fold.
   useEffect(() => {
     if (selectedId) {
       rowRefs.current.get(selectedId)?.scrollIntoView({ block: "nearest" });
@@ -702,7 +612,7 @@ function AdminQueuePage() {
   if (data.renderQueueDepth > 0) {
     subtitleParts.push(`render queue ${data.renderQueueDepth}`);
   }
-  // tabular-nums: the counts tick on refetch and must not jitter (The Tabular Rule).
+
   const subtitle =
     subtitleParts.length > 0 ? (
       <span className="tabular-nums">{subtitleParts.join(" · ")}</span>
@@ -785,8 +695,6 @@ function AdminQueuePage() {
   );
 }
 
-// ─── One row ──────────────────────────────────────────────────────────────────
-
 const SOURCE_ICONS: Record<AttentionSource, ComponentType<{ className?: string }>> = {
   "anchor-review": GitDiffIcon,
   "artist-review": MicrophoneStageIcon,
@@ -805,8 +713,6 @@ const SOURCE_ICONS: Record<AttentionSource, ComponentType<{ className?: string }
   "tiktok-draft": TiktokIcon,
 };
 
-// The glyph's text equivalent — the row's source, spoken (the glyph itself is
-// decorative, so a screen reader still hears which platform/task the row is).
 const SOURCE_LABELS: Record<AttentionSource, string> = {
   "anchor-review": "Version check",
   "artist-review": "Artist",
@@ -846,7 +752,7 @@ type QueueRowProps = {
   onSnooze: (item: AttentionItem, until: string) => void;
   onSnoozeOpenChange: (open: boolean) => void;
   onWontDo: (item: AttentionItem) => void;
-  /** The publish hook's busy map, keyed `${trackId}:${platform}:${status}`. */
+
   pushBusy: Record<string, boolean>;
   registerPrimary: (id: string, el: HTMLElement | null) => void;
   registerRow: (id: string, el: HTMLLIElement | null) => void;
@@ -937,16 +843,9 @@ function QueueRow({
 }: QueueRowProps) {
   const SourceIcon = SOURCE_ICONS[item.source];
   const primary = primaryFor(item, now);
-  // A fresh post row's primary pushes one platform; reflect that platform's in-flight state.
-  // A pushed TikTok draft is finished in-app, then marked posted here (copy the cover, paste
-  // the live URL). Only tiktok-draft rows carry that panel.
+
   const canFinish = item.source === "tiktok-draft";
-  // A suspected version mismatch carries a second ruling ("Not a match") beside the primary, plus
-  // the MusicBrainz link when the primary is not already it — the ruling is a two-way decision, and
-  // the upstream fix is the part that helps every other consumer of the open graph.
-  // A bio that landed past the voice gate carries the same two-way inline ruling: the entity it
-  // belongs to is the ruling's target, and the gate's own reasons are the evidence he rules on —
-  // without them the row would be "a bio is wrong somewhere", which is not a decision.
+
   const { bioEntity, bioViolations, candidate, deadline, parked, pushing } = queueRowState(
     item,
     now,
@@ -956,18 +855,13 @@ function QueueRow({
   const waitingCount = visibleWaitingCount(item);
 
   return (
-    // The click only moves the queue's cursor — the same thing j/k and the arrows do in the
-    // single-key loop above, so the keyboard path is already complete and the row's own actions
-    // are real buttons and links. A `role="button"` bolt-on would wrap those controls in a
-    // fake button and read the whole row as one control, which is worse.
     // oxlint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-noninteractive-element-interactions -- pointer shortcut for an existing, complete keyboard path (see above).
     <li
       className={cn(
         "flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-border/70 px-3 py-2.5 transition-[opacity,background-color] duration-200 ease-out last:border-0 sm:px-4",
         queueRowSelectionClass(selected),
         flash && "bg-primary/15",
-        // 75%, not lower: the 11px Stardust meta must hold WCAG AA on the plate
-        // (The Legible Sky Rule) — the row still carries a live Restore control.
+
         state === "dismissed" && "opacity-75",
         leaving && "pointer-events-none bg-primary/15 opacity-0",
       )}
@@ -1033,17 +927,13 @@ function QueueRow({
               {item.reviewLinks} to verify
             </span>
           ) : undefined}
-          {/* The length gap between our row and the candidate. It is the whole case: inside a
-              second, with the same artists and base title, the duration is what says "same
-              recording, different name" — so it reads as data (Oxanium, tabular). */}
+
           {candidate ? (
             <span className="font-display tracking-[-0.01em] tabular-nums">
               {formatDelta(candidate.deltaMs)}
             </span>
           ) : undefined}
-          {/* Which page the paragraph is on. A bio row's title is a bare entity name, and the
-              three kinds share a namespace, so without this "Helix" says nothing about where to
-              look. */}
+
           {bioEntity ? (
             <Badge
               className="px-1 py-0 font-display text-[10px] text-muted-foreground"
@@ -1070,16 +960,11 @@ function QueueRow({
             );
           })}
         </div>
-        {/* The pre-chew sweep's advisory verdict — a quiet second line under the meta,
-            never competing with the row's primary [Review] action (advisory, not a
-            decision). Only submission rows carry it, and only once the sweep has run. */}
+
         {item.verdict ? (
           <p className="mt-0.5 truncate text-[11px] italic text-muted-foreground">{item.verdict}</p>
         ) : undefined}
-        {/* The other half of the evidence: what the gate found, and the version words that differ
-            from ours. The row's own title is above, so the two titles read side by side — which is
-            the entire decision. An empty descriptor means the CANDIDATE is the plain one and we are
-            the labelled row, so it is spelled out rather than left blank. */}
+
         {candidate ? (
           <p className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground">
             <span className="truncate">
@@ -1094,10 +979,7 @@ function QueueRow({
             </Badge>
           </p>
         ) : undefined}
-        {/* WHAT THE GATE SAID. This line is the row's entire reason to exist: the acceptance used
-            to be greppable-only, so the reasons were the thing being lost. They are the gate's own
-            words, verbatim, and the ruling above is made against them. A corrupt reasons column
-            still raises the row — it says so rather than disappearing. */}
+
         {bioEntity ? (
           <p className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground">
             <span className="truncate">Gate said: {bioViolationSummary(bioViolations)}</span>
@@ -1155,10 +1037,6 @@ function QueueRow({
               selected={selected}
             />
             {bioEntity ? (
-              // The second ruling. It empties the bio (and its provenance), which is what puts the
-              // entity back on the sweep's worklist with a fresh attempt budget — so this is
-              // "un-publish and try again", not a dismissal. Distinct from [x] Won't do, which
-              // only hides the row in this browser and leaves the paragraph live.
               <Button
                 disabled={busy}
                 onClick={() => onResolveBioReview(item, "rewrite")}
@@ -1180,9 +1058,6 @@ function QueueRow({
             ) : undefined}
             {candidate ? (
               <>
-                {/* The second ruling. It clears the note and nothing else: the row keeps its normal
-                    stamp, counter, and retry cap, so saying no decides only that this near-match
-                    was not it. Distinct from [x] Won't do, which hides the row in this browser. */}
                 <Button
                   disabled={busy}
                   onClick={() => onResolveAnchorReview(item, "dismissed")}
@@ -1191,8 +1066,7 @@ function QueueRow({
                 >
                   Not a match
                 </Button>
-                {/* The upstream fix. Omitted when the primary is already this link (an
-                    un-anchorable candidate), so the row never shows it twice. */}
+
                 {item.mbUrl && primary.kind !== "open" ? (
                   <Button
                     nativeButton={false}
@@ -1272,15 +1146,12 @@ type PrimaryButtonProps = {
   onPush: (item: AttentionItem, platform: Platform) => void;
   onRePush: (item: AttentionItem) => void;
   primary: PrimaryAction;
-  /** True while this row's platform push is in flight (a push-kind primary). */
+
   pushing: boolean;
   registerPrimary: (id: string, el: HTMLElement | null) => void;
   selected: boolean;
 };
 
-// The row's primary action — the one thing Enter fires. The selected row's
-// primary carries the gold (the sun follows the cursor); every other row's stays
-// an outline.
 function PrimaryButton({
   busy,
   copied,
@@ -1314,8 +1185,6 @@ function PrimaryButton({
     );
   }
 
-  // The bio ruling that KEEPS the paragraph — it clears the review flag and touches nothing
-  // public, which is why it is the primary: the common case is a gate that was over-strict.
   if (primary.kind === "keep-bio") {
     return (
       <Button
@@ -1338,8 +1207,6 @@ function PrimaryButton({
       <Button
         nativeButton={false}
         render={
-          // The visible label repeats down the queue ("Review", "Distribute"), so the
-          // accessible name carries the row it belongs to.
           <a
             aria-label={`${primary.label} — ${item.title}`}
             href={primary.href}
@@ -1403,10 +1270,6 @@ function PrimaryButton({
   );
 }
 
-// The "Mark posted" panel for a pushed TikTok draft: copy the cover to attach in-app, then
-// paste the live URL to clear the row. The URL field is LOCAL to this popover, so one row's
-// edit never leaks into another's: the URL field is local to this popover, so a previous track's
-// URL on a different row).
 function MarkPostedPopover({
   busy,
   item,
@@ -1491,10 +1354,6 @@ function Chip({ children }: { children: ReactNode }) {
   return <span className="flex items-center gap-1">{children}</span>;
 }
 
-// The row's artwork tile. A failed load (a cover the dev bucket doesn't hold)
-// falls back to the same tile a coverless object gets: the source glyph over the
-// eclipse-tinted fallback (DESIGN.md, the Track Row's gold-to-red artwork
-// fallback, at instrument size).
 function RowArt({
   artUrl,
   Icon,
@@ -1511,8 +1370,7 @@ function RowArt({
         className="size-10 shrink-0 rounded-[var(--rounded-artwork)] border border-border object-cover"
         loading="lazy"
         onError={() => setFailed(true)}
-        // A load that failed BEFORE hydration never re-fires `error`, so the
-        // mount ref re-checks the finished-but-empty state.
+
         ref={(el) => {
           if (el && el.complete && el.naturalWidth === 0) {
             setFailed(true);
@@ -1533,11 +1391,6 @@ function RowArt({
   );
 }
 
-// ─── The zero state ───────────────────────────────────────────────────────────
-
-// The one sanctioned motion exception: the last cover cleared, warmly lit by a
-// single gold bloom, one word,
-// a 200ms ease-out settle. Reduced motion: static (styles.css, .queue-clear).
 function ZeroState({ coverUrl }: { coverUrl?: string }) {
   return (
     <div className="relative flex flex-1 flex-col items-center justify-center gap-6 overflow-hidden px-4 py-24">
@@ -1558,8 +1411,6 @@ function ZeroState({ coverUrl }: { coverUrl?: string }) {
     </div>
   );
 }
-
-// ─── The key legend ───────────────────────────────────────────────────────────
 
 function KeyLegend() {
   return (

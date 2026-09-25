@@ -5,29 +5,10 @@ import { siteUrl } from "@/lib/fluncle-links";
 import { jsonLdScript } from "@/lib/json-ld";
 import { docsBreadcrumbsJsonLd } from "@/lib/log-schema";
 
-// The embedded Scalar API reference, at /docs/api inside the docs hub. It reads
-// the already-served OpenAPI 3.1 document at /api/v1/openapi.json (the same
-// versioned base it describes) and renders it forced-dark, retinted to the
-// Nostalgic Cosmos: warm near-blacks, Starlight Cream ink, Eclipse Gold as the
-// one accent, Re-entry Red for errors (DESIGN.md). theme:"none" hands the full
-// palette to scalarCss below so no preset hue leaks in.
-//
-// Scalar's sheet is linked from THIS route's `head`, via `?url`, exactly as
-// /docs links docs.css — NEVER as a bare `import "…/style.css"`. A side-effect
-// CSS import lands in the client entry's CSS bundle, and the entry's bundle is
-// attached to the __root route, so Scalar's 288 KB sheet became a
-// render-blocking <link> on EVERY page (measured: a 249 KB minified
-// `assets/index-*.css` in `__root__.css`, on the homepage as much as here).
-// `?url` keeps it an asset only this route asks for. Cascade order is unchanged:
-// route `head` links render root-first and BEFORE manifest CSS
-// (@tanstack/react-router's headContentUtils), so Scalar still lands after
-// styles.css and docs.css, as it did when it came through the manifest.
 export const Route = createFileRoute("/docs/api")({
   component: ApiReference,
   head: () => ({
     links: [
-      // Self-canonical, like every other doc page (see ./-docs-head.ts) — the reference is a
-      // real indexable page, not a variant of /docs.
       {
         href: `${siteUrl}/docs/api`,
         rel: "canonical",
@@ -46,15 +27,11 @@ export const Route = createFileRoute("/docs/api")({
         name: "description",
       },
     ],
-    // Fluncle → Docs → API reference. This page is a `/docs` LEAF with its own head, so it owes
-    // its own trail: the chrome marks up hub trails only (components/nav/nav-breadcrumb.tsx), and
-    // the leaf name is the reference's real title, which the slug alone could only read as "Api".
+
     scripts: [jsonLdScript(docsBreadcrumbsJsonLd("API reference"))],
   }),
 });
 
-// The Retint Rule, applied to Scalar's CSS variables: take the reference engine,
-// recolor it to canon. Values mirror the tokens in styles.css.
 const scalarCss = `
 .scalar-app {
   --scalar-font: var(--font-sans, ui-sans-serif, system-ui, sans-serif);
@@ -104,12 +81,7 @@ function ApiReference() {
         hideDarkModeToggle: true,
         theme: "none",
         url: "/api/v1/openapi.json",
-        // Scalar defaults this to true and then fetches its own faces from
-        // fonts.scalar.com — 14 files, none of them ever used, because `customCss`
-        // above already re-points `--scalar-font` and `--scalar-font-code` at our own
-        // stack. Turning it off removes 14 wasted requests from this page AND keeps
-        // `font-src 'self'` stays strict: these are the only third-party fonts this page could
-        // request, and the honest fix is to stop asking for them rather than widen the policy.
+
         withDefaultFonts: false,
       }}
     />

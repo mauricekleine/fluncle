@@ -2,10 +2,6 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useRef } from "react";
 import { siteUrl } from "@/lib/fluncle-links";
 
-// Fluncle's Galaxy — the game. The whole game is a
-// client-only canvas app, loaded as its own chunk inside useEffect so the
-// archive's bundle stays light and the server never touches browser APIs.
-
 const title = "Fluncle's Galaxy";
 const description = "Every banger out there is a star. Fly the Galaxy, log them all.";
 
@@ -26,8 +22,7 @@ export const Route = createFileRoute("/galaxy")({
         content: description,
         name: "description",
       },
-      // A client-only canvas: crawlers see chrome and no content, so the page stays out of the
-      // index. The OG card below keeps it fully shareable.
+
       {
         content: "noindex",
         name: "robots",

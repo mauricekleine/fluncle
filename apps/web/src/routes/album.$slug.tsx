@@ -15,16 +15,6 @@ import { albumCoverAtSize } from "@/lib/media";
 import { bioMetaDescription } from "@/lib/meta-description";
 import { type AlbumPageData } from "./-album-page-data";
 
-// The album page — one record's place in the archive, and the fourth node of the graph
-// (log ↔ artist ↔ label ↔ album). The twin of `/label/<slug>`, plus one edge the label page
-// has no use for: the album's LABEL, rendered as a link and stamped into the JSON-LD as
-// `albumRelease.recordLabel` pointing at that label page's Organization `@id`. That edge is
-// where the graph closes. See docs/album-entity.md.
-
-// The resolver is reached by a DYNAMIC import inside the handler, and the type by `import
-// type` — so nothing in this route module statically references `lib/server/**`. The client
-// build removes a handler body wholesale, which takes the import (and the whole database chain
-// behind it) out of the browser bundle; see `-album-page-data.ts` for the measurement.
 const fetchAlbum = createServerFn({ method: "GET" })
   .validator((data: { slug: string }) => data)
   .handler(async ({ data: { slug } }): Promise<AlbumPageData> => {
@@ -54,23 +44,15 @@ function albumHead(loaderData: AlbumPageData | undefined) {
     upc,
   } = loaderData;
   const pageUrl = `${siteUrl}/album/${slug}`;
-  // Honestly-plain third-person for the machine-facing strings (the Narrator rule).
+
   const title = `${name} · Fluncle`;
-  // The factual bio is the honest, UNIQUE description when one is authored — the same objective
-  // paragraph the page prints, trimmed to the meta cap. Absent (the bio backfill is in flight),
-  // it falls back to the templated line verbatim, so nothing regresses. It describes the page it
-  // is actually on, and never names the tier the quieter rows belong to — that tier has no public
-  // name (docs/album-entity.md), so "catalogue" cannot leak into a SERP snippet.
-  // The bare fallback folds in the facts the loader already carries (year, label) so even a
-  // bio-less, findings-less record clears the search engines' short-description floor with
-  // something true rather than padding.
+
   const releaseYear = releaseDate?.slice(0, 4);
   const factClause = [
     releaseYear === undefined ? undefined : `a ${releaseYear} release`,
     label === undefined
       ? undefined
-      : // "pressed on" when the label stands alone — "The tracks on X, on Y" doubles the "on".
-        `${releaseYear === undefined ? "pressed " : ""}on ${label.name}`,
+      : `${releaseYear === undefined ? "pressed " : ""}on ${label.name}`,
   ]
     .filter((part) => part !== undefined)
     .join(" ");
@@ -83,10 +65,7 @@ function albumHead(loaderData: AlbumPageData | undefined) {
           ? `The tracks on ${name}, ${factClause}, with the artists behind them.`
           : `The tracks on ${name}, with the artists behind them.`;
   const imageUrl = albumCoverAtSize(coverImageUrl, "large") ?? `${siteUrl}/fluncle-cover.png`;
-  // THE LEAD IMAGE — the findings band's first cover, which is this page's LCP candidate and is
-  // already above the fold on every viewport. Preloaded at the `medium` rung, byte-identical to what
-  // FindingsGrid asks for, so it is a cache hit rather than a second fetch. Same one-preload shape
-  // as /artist/<slug> and the homepage cover; FindingsGrid marks the matching tile non-lazy.
+
   const leadImageUrl = albumCoverAtSize(
     findings.find((finding) => finding.logId)?.albumImageUrl,
     "medium",
@@ -119,8 +98,7 @@ function albumHead(loaderData: AlbumPageData | undefined) {
           artists,
           bio,
           catalogNumber,
-          // The owned cover master when the album resolved one (bestAlbumCoverUrl already chose it
-          // for the finding's DTO), taken to `large` — never a raw i.scdn.co URL when a master exists.
+
           imageUrl: albumCoverAtSize(coverImageUrl, "large"),
           label: label ? { name: label.name, slug: label.slug } : undefined,
           name,
@@ -136,8 +114,6 @@ function albumHead(loaderData: AlbumPageData | undefined) {
   };
 }
 
-// Route options follow TanStack's create-route-property-order (each step feeds the next's
-// inferred types), which isn't alphabetical — so sort-keys is off here.
 // oxlint-disable-next-line sort-keys
 export const Route = createFileRoute("/album/$slug")({
   loader: async ({ params }): Promise<AlbumPageData> => {
@@ -168,23 +144,7 @@ function AlbumPage() {
       <article className="log-plate log-index">
         <header className="log-masthead">
           <h1 className="log-coordinate log-index-title artist-name">{name}</h1>
-          {/* The album → label edge, the one link the label page has no twin for. The label's
-              NAME is the graph link; the "On" that introduces it is not part of the entity.
 
-              THE CATALOGUE NUMBER RIDES THAT LINE AND ONLY THAT LINE. `Label CATNO` is the
-              record-shop convention, and the label is what makes the code legible AS a code — a
-              reader parses RAMM123 without being told what it is precisely because "On RAM Records"
-              stands in front of it. Strip the label and the convention goes with it, leaving a bare
-              alphanumeric as the only sub-line under an album title with nothing on the page to
-              identify it. That is not a rare case: `getLabelForAlbum` resolves through the
-              certification, so an uncertified, crawl-minted record ALWAYS reads `label: undefined`
-              — exactly the tier that is never introduced, never named, never given a noun
-              (docs/album-entity.md; DESIGN.md's Unlit Rule). So the number waits for its host, and
-              a record that has one without a linked label simply does not print it.
-
-              The machine still gets it either way: the JSON-LD emits `catalogNumber` on the
-              MusicRelease whether or not the label edge exists (lib/log-schema.ts), because a key
-              named `catalogNumber` carries its own noun and needs no host to be legible. */}
           {label ? (
             <p className="graph-uplink">
               On{" "}
@@ -199,18 +159,14 @@ function AlbumPage() {
               ) : undefined}
             </p>
           ) : undefined}
-          {/* The voiced bio sits beneath the masthead — body prose that augments the signature
-              line, never replaces it. Only rendered once one is authored. */}
+
           {bio ? <p className="log-index-bio">{bio}</p> : undefined}
         </header>
 
-        {/* Every band below is conditional: an empty one renders nothing at all, so this page
-            is only ever about what it actually carries (components/graph-sections.tsx). */}
         <FindingsGrid findings={findings} />
 
         <ArtistChips artists={artists} title={`Artists on ${name}`} />
 
-        {/* The quieter rows: no heading, no noun, nothing at all when empty. */}
         <UnlitTracks label={`More tracks on ${name}`} tracks={catalogue} />
 
         <footer className="log-plate-footer">

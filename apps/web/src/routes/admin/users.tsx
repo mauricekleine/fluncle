@@ -10,17 +10,6 @@ import { formatDate } from "@/lib/format";
 import { isAdminRequest } from "@/lib/server/admin-auth";
 import { listAdminUsers } from "@/lib/server/users";
 
-// The `/admin/users` station — the account roster, and the operator's READ-ONLY
-// window on the gated rollout of the account-backed features (saved findings, saved
-// `/mix` sets, the Galaxy). Every account the site knows is a row here, newest-first,
-// so the operator can watch the crew roster grow as those features open up.
-//
-// READ-ONLY, and deliberately so: this page mints nothing, suspends nothing, deletes
-// nothing. The account lifecycle (verify, suspend, the deletion that ANONYMIZES the
-// row) lives behind Better Auth and the user's own `/me` tier — never an operator
-// mutation here. The row's right edge is the rollout signal it exists to show: how
-// many findings and sets an account has saved, and whether it has touched the Galaxy.
-
 const USERS_KEY = ["admin", "users"] as const;
 
 const fetchUsers = createServerFn({ method: "GET" }).handler(async (): Promise<UserAdminItem[]> => {
@@ -77,7 +66,6 @@ function AdminUsersPage() {
   );
 }
 
-// No account exists yet — the roster is empty. Quiet and honest, no fake rows.
 function EmptyUsers() {
   return (
     <div className="mx-auto max-w-md rounded-lg border border-border bg-card/60 px-6 py-12 text-center">
@@ -95,11 +83,8 @@ function EmptyUsers() {
 }
 
 function UserRow({ user }: { user: UserAdminItem }) {
-  // The handle line: the chosen username if there is one, else the email — whichever is the
-  // account's most human identifier stands in as the coordinate.
   const handle = user.username ? `@${user.username}` : user.email;
-  // The visible name, falling back to the handle for a name-less (or anonymized) row so a
-  // row is never blank.
+
   const title = user.name.trim() || handle;
 
   return (
@@ -114,9 +99,6 @@ function UserRow({ user }: { user: UserAdminItem }) {
   );
 }
 
-// The account's own avatar (from its identity provider), at the object row's md plate
-// footprint. Falls back to the user glyph when there is none. Decorative (the name sits
-// beside it), lazy-loaded.
 function UserAvatar({ image }: { image: string | null }) {
   if (!image) {
     return <ObjectGlyph icon={UserCircleIcon} />;
@@ -132,8 +114,6 @@ function UserAvatar({ image }: { image: string | null }) {
   );
 }
 
-// The quiet meta line: verified state, when they joined, when they were last seen, and a
-// status word for the rare non-active account. All in the admin's flat functional register.
 function UserMeta({ user }: { user: UserAdminItem }) {
   return (
     <>
@@ -157,8 +137,6 @@ function UserMeta({ user }: { user: UserAdminItem }) {
   );
 }
 
-// The rollout signal, right-aligned: how many findings and sets this account has saved, and
-// whether it has touched the Galaxy. Quiet data, tabular — never an alarm.
 function UserArtifacts({ user }: { user: UserAdminItem }) {
   return (
     <div className="flex items-center gap-3 text-xs text-muted-foreground tabular-nums">

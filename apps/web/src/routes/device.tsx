@@ -9,30 +9,16 @@ import { authClient } from "@/lib/auth-client";
 import { siteUrl } from "@/lib/fluncle-links";
 import { type MeResponse, meResponse } from "@/lib/server/account-data";
 
-// The device-authorization verification surface (RFC 8628). The CLI sends the
-// user here (it prints the URL and opens the browser at `/device?user_code=…`).
-// A signed-in user confirms the code their terminal is showing, then approves —
-// minting a USER session token the CLI polls for. This token is for the user's
-// own Galaxy sync; it is never the admin grant.
-
 type DeviceSearch = {
   user_code?: string;
 };
 
 type Phase = "approved" | "denied" | "error" | "idle" | "working";
 
-/**
- * The identity read: the `/me` session shape, resolved from the caller's own session
- * (via `getRequest`). Called by the loader so the signed-in/out gate is decided on the
- * SERVER and painted on first render — no post-mount `/me` round trip, no "Checking the
- * manifest…" flash. The approve/deny actions still post through `authClient` on the client.
- */
 const getDeviceIdentity = createServerFn({ method: "GET" }).handler(
   (): Promise<MeResponse> => meResponse(getRequest()),
 );
 
-// TanStack's canonical option order (validateSearch feeds the next step's
-// inference), which isn't alphabetical — so sort-keys is off here. See AGENTS.md.
 // oxlint-disable-next-line sort-keys
 export const Route = createFileRoute("/device")({
   validateSearch: (search: Record<string, unknown>): DeviceSearch => ({
@@ -47,7 +33,7 @@ export const Route = createFileRoute("/device")({
         content: "Approve a Fluncle CLI sign-in and sync your Galaxy progress from the terminal.",
         name: "description",
       },
-      // A confirmation screen tied to a one-time code — never index it.
+
       { content: "noindex, nofollow", name: "robots" },
     ],
   }),
@@ -76,16 +62,13 @@ function DevicePage() {
     setMessage("");
 
     try {
-      // Claim the code first: `GET /device` binds it to this signed-in session so
-      // approve/deny is authorized to act on it (RFC 8628's user-interaction step).
       const claim = await authClient.$fetch<{ status?: string }>("/device", {
         query: { user_code: userCode },
       });
 
       if (claim.error) {
         setPhase("error");
-        // `$fetch` surfaces the device-flow error code on the error object; fall
-        // back to its message when the code isn't typed through.
+
         const claimError = claim.error as { error?: string; message?: string };
         setMessage(deviceErrorCopy(claimError.error, claimError.message));
         return;
@@ -189,9 +172,6 @@ function DevicePage() {
   );
 }
 
-// Map the device-flow approve/deny error codes to Fluncle-voiced copy. The plugin
-// returns codes like `expired_token`, `invalid_request`, and `unauthorized` (a
-// wrong/stale user code, or no session) in the `error` field.
 function deviceErrorCopy(code: string | undefined, fallback: string | undefined): string {
   const normalized = code?.toLowerCase() ?? "";
 

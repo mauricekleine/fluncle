@@ -59,29 +59,14 @@ import { getArtistSlugMap } from "@/lib/server/artists";
 import { fold } from "@/lib/server/track-match";
 import { FindingsGridList } from "@/components/graph-sections";
 
-// The standalone log page: one finding's permanent, readable, indexable record
-// (the archival-plate register). The cinematic full-bleed register is the
-// Stories dialog over the home feed — same data, different presentation.
-// This page is what a crawler, an AI agent, or
-// a shared link sees at the coordinate.
-
-// The measured BPM/key values link to the "how Fluncle measures" methodology on
-// /about — every finding's tempo + key is first-party DSP over the captured full
-// song, graded by the operator's Rekordbox (the measurement moat). This slug is
-// the anchor of that FAQ entry; about.tsx derives the same slug from the question,
-// and a test in -about-schema.test.ts pins the two together (exported for it).
 export const MEASURED_FAQ_ANCHOR = "how-does-fluncle-measure-bpm-and-key";
 
 type LogPageData =
   | {
       status: "found";
-      // Name → slug for the finding's resolved artists — the artist-name links +
-      // the `@id` stamped on the byArtist JSON-LD node (Unit 3).
+
       artistSlugs: Record<string, string>;
-      // The public launch gate (browse-by-feel RFC): the galaxy clause + its
-      // `/galaxies/<slug>` link render ONLY once the whole map is named. A partial or
-      // unnamed map keeps the clause dark (its pre-launch state), even for a placed
-      // finding whose own galaxy happens to be named.
+
       galaxyReady: boolean;
       newer?: TrackNeighbor;
       older?: TrackNeighbor;
@@ -100,8 +85,6 @@ const fetchLogPage = createServerFn({ method: "GET" })
   .handler(async ({ data: { logId } }): Promise<LogPageData> => {
     const target = await resolveLogPageTarget(logId);
 
-    // No Log ID → no log page: a finding without a coordinate isn't a log
-    // entry yet (the feed shows its bare #NN until it's backfilled).
     if (!target) {
       return { status: "missing" };
     }
@@ -116,7 +99,6 @@ const fetchLogPage = createServerFn({ method: "GET" })
       return { status: "missing" };
     }
 
-    // Normalize ONCE, here: a trackId deep link 301s to the coordinate.
     if (track.logId !== logId) {
       return { logId: track.logId, status: "moved" };
     }
@@ -131,9 +113,6 @@ const fetchLogPage = createServerFn({ method: "GET" })
     return { ...neighbors, artistSlugs, galaxyReady, similar, status: "found", track };
   });
 
-// Typed helper outside the route options: an inline head() that reads
-// loaderData makes the route's own type inference circular (same pattern as
-// the stories route).
 function logHead(loaderData: LogPageData | undefined) {
   if (loaderData?.status !== "found" && loaderData?.status !== "found-mixtape") {
     return {};
@@ -145,16 +124,11 @@ function logHead(loaderData: LogPageData | undefined) {
     const pageUrl = logPageUrl(logId);
     const title = `${logId} · ${mixtape.title} · Fluncle`;
     const description = mixtape.note ?? "A checkpoint in Fluncle's Findings.";
-    // The per-mixtape 1200×630 link-preview, rendered on the fly by the cover
-    // endpoint (Satori). Falls back to an operator-set cover, then the site
-    // default — matching the finding branch's graceful degrade.
+
     const ogImageUrl = mixtape.logId
       ? mixtapeCoverUrl(logId, "og")
       : (mixtape.coverImageUrl ?? `${siteUrl}/fluncle-cover.png`);
-    // The set video's VideoObject + og:video — parity with the finding video, so
-    // the mixtape's set recording is crawled/indexed like the rendered clips.
-    // Emitted only once the set video is uploaded (setVideoAt); the video file is
-    // the bare R2 set.mp4 (range-streamed, not a Media Transformation).
+
     const setVideoSchema = mixtape.setVideoAt
       ? mixtapeVideoObjectJsonLd(mixtape, {
           contentUrl: mixtapeSetVideoUrl(logId),
@@ -166,8 +140,7 @@ function logHead(loaderData: LogPageData | undefined) {
     return {
       links: [
         { href: pageUrl, rel: "canonical" },
-        // oEmbed discovery: a consumer that pastes this mixtape's link fetches the
-        // provider (a `rich` card iframing /embed/<logId>). See routes/oembed.ts.
+
         {
           href: `${siteUrl}/oembed?url=${encodeURIComponent(pageUrl)}&format=json`,
           rel: "alternate",
@@ -197,11 +170,7 @@ function logHead(loaderData: LogPageData | undefined) {
         { content: description, name: "twitter:description" },
         { content: ogImageUrl, name: "twitter:image" },
       ],
-      // JSON-LD goes through `jsonLdScript`, which HTML-escapes the serialized
-      // payload before it reaches the inline <script>'s `children` (rendered raw
-      // via dangerouslySetInnerHTML), so a `</script>` in mixtape.title / .note /
-      // member titles can't break out of the <script> (stored-XSS sink,
-      // security review).
+
       scripts: [
         jsonLdScript(mixtapeAlbumJsonLd(mixtape)),
         jsonLdScript(breadcrumbsJsonLd(logId)),
@@ -215,26 +184,17 @@ function logHead(loaderData: LogPageData | undefined) {
   const media = trackMedia(logId);
   const pageUrl = logPageUrl(logId);
   const title = `${logId} · ${artistTitleLine(track)} · Fluncle`;
-  // The galaxy clause rides the prose + JSON-LD only behind the launch gate (browse-by-
-  // feel RFC): `galaxy` is the real `{ name, slug }` when the whole map is named, else
-  // undefined (dark, the pre-launch state). definitionalSentences ignores it; the richer
-  // definitionalProse the JSON-LD mirrors weaves it in.
+
   const galaxy = galaxyReady ? track.galaxy : undefined;
   const description = definitionalSentences({ ...track, logId });
   const imageUrl = albumCoverAtSize(track.albumImageUrl, "large") ?? media.coverUrl;
   const recording = musicRecordingJsonLd({ ...track, artistSlugs, galaxy, logId }, imageUrl);
-  // The social card: the per-finding OG image (the poster frame + treatment),
-  // versioned by `updatedAt` so a re-enriched finding re-renders (the /api/og
-  // response is CDN-cached long but not immutable — OG_CACHE_CONTROL in
-  // lib/server/satori-render.ts). The JSON-LD `image` above stays the
-  // square album cover — the right shape for a MusicRecording.
+
   const ogVersion = track.updatedAt ? Date.parse(track.updatedAt) : Number.NaN;
   const ogQuery = Number.isFinite(ogVersion) ? `?v=${ogVersion}` : "";
   const ogImage = `${siteUrl}/api/og/${encodeURIComponent(logId)}${ogQuery}`;
   const breadcrumbs = breadcrumbsJsonLd(logId);
-  // The VideoObject — the richer crawl signal on top of og:video, emitted only
-  // when the finding has a rendered video. uploadDate is the finding's freshest
-  // real timestamp (a fresh square crop counts as the upload moment).
+
   const videoSchema = track.videoUrl
     ? videoObjectJsonLd(
         { ...track, galaxy, logId },
@@ -245,18 +205,11 @@ function logHead(loaderData: LogPageData | undefined) {
         },
       )
     : undefined;
-  // The spoken observation's AudioObject — the audio twin of the VideoObject above,
-  // emitted only when the finding carries a rendered observation. The builder reads
-  // the observation fields (URL, duration, generated-at) straight off the track DTO.
+
   const observationSchema = track.observationAudioUrl
     ? observationAudioObjectJsonLd({ ...track, galaxy, logId })
     : undefined;
 
-  // The pane's poster frame — this page's LCP element. The loader already holds everything the URL
-  // is built from, so preload it: otherwise the browser only finds it on the `<video poster>`
-  // attribute in the body, behind the render-blocking CSS (measured on /log/052.9.5E — `</head>` at
-  // byte 8,363, the poster attribute at byte 13,038, for a 23.5 KB image). Undefined for a finding with no
-  // footage (see `firstPaintFootagePoster`), where the pane's own <img> carries the signal instead.
   const footagePoster = firstPaintFootagePoster(track);
 
   return {
@@ -265,8 +218,7 @@ function logHead(loaderData: LogPageData | undefined) {
       ...(footagePoster
         ? [{ as: "image", fetchPriority: "high" as const, href: footagePoster, rel: "preload" }]
         : []),
-      // oEmbed discovery: a consumer that pastes this finding's link fetches the
-      // provider (a `rich` card iframing /embed/<logId>). See routes/oembed.ts.
+
       {
         href: `${siteUrl}/oembed?url=${encodeURIComponent(pageUrl)}&format=json`,
         rel: "alternate",
@@ -296,12 +248,7 @@ function logHead(loaderData: LogPageData | undefined) {
       { content: description, name: "twitter:description" },
       { content: ogImage, name: "twitter:image" },
     ],
-    // JSON-LD goes through `jsonLdScript`, which HTML-escapes the serialized
-    // payload before it reaches the inline <script>'s `children` (rendered raw
-    // via dangerouslySetInnerHTML), so a `</script>` in the (Spotify-sourced)
-    // title/artist/album or the operator `note` (woven into definitionalProse,
-    // the JSON-LD description) can't break out of the <script> (stored-XSS sink,
-    // security review).
+
     scripts: [
       jsonLdScript(recording),
       jsonLdScript(breadcrumbs),
@@ -311,12 +258,8 @@ function logHead(loaderData: LogPageData | undefined) {
   };
 }
 
-// Route options follow TanStack's create-route-property-order (each step feeds the
-// next's inferred types), which isn't alphabetical — so sort-keys is off here.
 // oxlint-disable-next-line sort-keys
 export const Route = createFileRoute("/log/$logId")({
-  // Shape-guard BEFORE the loader: anything that is neither a coordinate nor a
-  // Spotify track id (the legacy deep-link form) is a 404, no DB roundtrip.
   beforeLoad: ({ params }) => {
     if (!isLogPageParam(params.logId)) {
       throw notFound();
@@ -346,14 +289,9 @@ export const Route = createFileRoute("/log/$logId")({
 
 function LogPage() {
   const data = Route.useLoaderData();
-  // The app-wide key-notation preference (device-local, profile-synced when signed
-  // in). SSR + first paint render the default "scales" verbatim; the stored/profile
-  // choice is adopted post-mount, so there is no hydration mismatch.
+
   const { notation } = useKeyNotation();
-  // Referrer-aware arrival: null on the server + first paint (so SSR and hydration
-  // agree — the edge-cached response never varies on the referrer), then the social
-  // platform this reader arrived from once `document.referrer` is readable. A social
-  // arrival quietly emphasises the follow-along door below (progressive enhancement).
+
   const arrivedFrom = useSocialArrival();
 
   if (data.status !== "found") {
@@ -367,8 +305,7 @@ function LogPage() {
   const { artistSlugs, galaxyReady, newer, older, similar, track } = data;
   const logId = track.logId as string;
   const { sector, tail } = splitLogId(logId);
-  // The galaxy clause links into the lens only behind the launch gate (browse-by-feel
-  // RFC): the real `{ name, slug }` when the whole map is named, else undefined (dark).
+
   const galaxy = galaxyReady ? track.galaxy : undefined;
   const proseSegments = definitionalProseSegments({ ...track, galaxy, logId });
 
@@ -401,8 +338,7 @@ function LogPage() {
               return (
                 <Fragment key={artist}>
                   {index > 0 ? ", " : null}
-                  {/* Every artist Fluncle has resolved is a graph link. One without an entity
-                      row yet reads as plain text — there is nowhere honest to send you. */}
+
                   {slug ? (
                     <GraphLink kind="artist" slug={slug}>
                       {artist}
@@ -414,12 +350,7 @@ function LogPage() {
               );
             })}
           </p>
-          {/*
-            The definitional prose, rendered from ordered segments so the galaxy clause
-            links its name to `/galaxies/<slug>` (browse-by-feel RFC) while the JSON-LD
-            description reads the same text plain (log-schema's `definitionalProse`, the
-            mirror). Segments join with a single space, matching that string.
-          */}
+
           <p className="log-definition-prose">
             {proseSegments.map((segment, index) => (
               <Fragment
@@ -491,11 +422,7 @@ function LogPage() {
               <dd>{formatKey(track.key, notation)}</dd>
             </div>
           ) : undefined}
-          {/* The graph, made walkable. The record and the imprint are entities with pages of
-              their own, and until now they were dead text on the one page that names them
-              both. Each links when its entity row exists (`albumSlug` / `labelSlug` ride in on
-              the same SELECT that loaded the finding — no lookup here); a name with no page
-              behind it stays plain text rather than pointing at a 404. */}
+
           {track.album ? (
             <div className="log-field">
               <dt>Album</dt>
@@ -606,27 +533,10 @@ function LogPage() {
           </section>
         ) : undefined}
 
-        {/*
-          The follow-along handoff — the ENTRY-POINT register (operator ruling 2026-07-20):
-          a social viewer lands here knowing nothing, so the lede speaks plain human first
-          person and introduces Fluncle without cosmos vocabulary ("waypoint"/"trail" mean
-          nothing to a stranger; deep lore stays on the deep pages). It offers the two
-          zero-login return paths (the Spotify playlist + the Friday newsletter, reusing
-          the ratified SubscribeDialog). It sits AFTER the finding and "Close in sound",
-          never above the video: the music-first hierarchy leads. No banner, no gradient —
-          a quiet line in the plate flow, the buttons carrying the literal actions per the
-          Chrome Rule.
-        */}
         <section
           aria-label="Follow along"
           className={arrivedFrom ? "log-trail log-trail--arrived" : "log-trail"}
         >
-          {/*
-            The referrer-aware arrival line (progressive enhancement, client-only): a
-            reader who clicked over from a social post gets one plain acknowledgement
-            before the intro. ENTRY-POINT register — plain human, zero cosmos vocabulary,
-            same as the lede below (operator ruling 2026-07-20). Absent for a direct hit.
-          */}
           {arrivedFrom ? <p className="log-trail-arrival">Glad you made it over.</p> : null}
           <p className="log-trail-lede">
             Hi, I&rsquo;m Fluncle. I collect drum &amp; bass bangers. Follow the playlist, or join
@@ -653,12 +563,6 @@ function LogPage() {
           </div>
         </section>
 
-        {/*
-          The old "More in the {galaxy} galaxy" related row is removed (browse-by-feel
-          RFC, Slice 4): its members duplicated "Close in sound" above, and the way into
-          the galaxy now rides the linked prose clause. Register differentiation stays
-          clean — "Close in sound" = these specific tracks; the prose clause = the region.
-        */}
         <nav aria-label="Adjacent findings" className="log-neighbors">
           {newer ? (
             <Link className="log-neighbor" params={{ logId: newer.logId }} to="/log/$logId">
@@ -700,9 +604,7 @@ function LogPage() {
 function MixtapeLogPage({ mixtape }: { mixtape: MixtapeDTO }) {
   const logId = mixtape.logId as string;
   const { sector, tail } = splitLogId(logId);
-  // Drop the " | <coordinate>" suffix (the coordinate is the h1 right above); the
-  // full canonical title still rides into <title>, og:title, and the JSON-LD.
-  // Same helper across the feed row + /mixtapes index, so the title never drifts.
+
   const displayTitle = mixtapeDisplayTitle(mixtape.title);
 
   return (

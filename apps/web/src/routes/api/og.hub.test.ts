@@ -1,9 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-// The hub OG card's two contracts: the `?hub=` param is validated BEFORE any DB read
-// (an unknown or absent hub is a plain 404 — no count query, no WASM raster), and a
-// valid hub renders exactly its own count read, mirrored into the page's masthead line.
-
 const countIndexableAlbums = vi.hoisted(() => vi.fn(async () => 0));
 const countIndexableArtists = vi.hoisted(() => vi.fn(async () => 0));
 const countIndexableLabels = vi.hoisted(() => vi.fn(async () => 0));
@@ -14,8 +10,6 @@ vi.mock("@/lib/server/artists", () => ({ countIndexableArtists }));
 vi.mock("@/lib/server/labels", () => ({ countIndexableLabels }));
 vi.mock("@/lib/server/tracks-hub", () => ({ countAllTracks }));
 
-// Raster nothing: a fake ImageResponse just carries the html + headers it was handed,
-// so the assertions read the markup and the Cache-Control without paying for resvg.
 vi.mock("workers-og", () => ({
   ImageResponse: class {
     headers: Headers;
@@ -52,8 +46,6 @@ describe("the hub OG card", () => {
     }
   });
 
-  // The prototype keys probe the lookup itself: `HUB_CARDS` must resolve own keys only,
-  // or `?hub=constructor` walks up to Object.prototype and slips past the 404 guard.
   it.each([
     ["?hub=galaxies"],
     ["?hub="],
@@ -83,7 +75,7 @@ describe("the hub OG card", () => {
 
     expect(res.status).toBe(200);
     expect(count).toHaveBeenCalledTimes(1);
-    // Only the asked hub's counter runs — the other three stay untouched.
+
     for (const other of COUNTS) {
       if (other !== count) {
         expect(other).not.toHaveBeenCalled();

@@ -72,30 +72,12 @@ import {
   xOffsetToLeftFraction,
 } from "@/lib/studio-clip";
 
-// The Studio clip editor, keyed on a RECORDING (RFC recording-primitive, Design B —
-// Wave 3). One landscape set rendition (the recording's OWNED `r2Key` master) → many
-// framed 9:16 footage clips. A recording is a captured set that is NOT (yet) a published
-// mixtape: it is clippable without minting a scarce Log ID coordinate. Entered from the
-// recordings index on `/admin/clips` (a CLI-created recording) or the "Clip this set"
-// action on a promoted mixtape (which links to its recording's Studio).
-//
-// The preview sources the recording's owned key
-// directly; clips are created against `/admin/recordings/{id}/clips`; the cue rail is the
-// NET-NEW authoring editor (a recording starts with an EMPTY tracklist — the operator
-// types + marks each cue, persisted as the whole `tracklistJson` array via
-// `update_recording`). A raw recording degrades gracefully: no cover → a neutral poster;
-// no energy envelope (recordings carry no `studio-envelope.json`) → the drop-suggestion
-// lane is absent, manual in/out only; `ResyncFromCues` appears only once promoted.
-
 const SEEK_STEP_SECONDS = 5;
 const CLIP_LENGTH_PRESETS_MS = [15_000, 30_000, 60_000] as const;
 const DEFAULT_CLIP_LENGTH_MS = 15_000;
-// A clip needs a real window; `create_clip` rejects out ≤ in. Guard a tiny floor.
+
 const MIN_CLIP_MS = 1_000;
 
-// Resolve the recording in-process (a createServerFn calling the server helper directly,
-// the pattern the clip library uses — no client fetch, no CORS). A missing recording
-// bounces back to the clip library rather than 500-ing.
 const fetchStudioRecording = createServerFn({ method: "GET" })
   .validator((data: { recordingId: string }) => data)
   .handler(async ({ data: { recordingId } }): Promise<RecordingDTO> => {
@@ -110,9 +92,6 @@ const fetchStudioRecording = createServerFn({ method: "GET" })
     }
   });
 
-// Resolve the promoted mixtape in-process for the management block. The by-id read
-// admits any status, so a mixtape still `distributing` (post-mint, pre-public)
-// resolves; a bad id returns null (the block hides) rather than 500-ing.
 const fetchStudioMixtape = createServerFn({ method: "GET" })
   .validator((data: { mixtapeId: string }) => data)
   .handler(async ({ data: { mixtapeId } }): Promise<MixtapeDTO | null> => {
@@ -133,7 +112,6 @@ export const Route = createFileRoute("/admin/studio/$recordingId")({
   loader: ({ params }) => fetchStudioRecording({ data: { recordingId: params.recordingId } }),
 });
 
-// An active hand-pick band, as ordered in/out fractions of the set duration.
 type Band = { inFraction: number; outFraction: number };
 
 function StudioPage() {
@@ -142,11 +120,6 @@ function StudioPage() {
 
   return (
     <AdminShell
-      // The Publish action lives in the HEADER — its own section, structurally apart from
-      // the clip toolbar's gold "Create clip" deep in the body, so the One Sun never has
-      // two gold actions competing in one region (RFC §8, DESIGN "The One Sun Rule"). It
-      // shows only on an UN-PROMOTED take (a recording that owns a set video but hasn't
-      // minted a coordinate); a plan (no video) and an already-promoted take show nothing.
       headerActions={
         recording.hasVideo && !recording.mixtapeId ? (
           <PublishAction recordingId={recording.id} />
@@ -170,10 +143,6 @@ function StudioPage() {
   );
 }
 
-// The outer shell mounts `Video.Root` (the "one clock" state machine + stall recovery)
-// so the editor body can read the machine through context. The preview sources the
-// recording's OWNED key directly; a recording has no cover, so the poster is a neutral
-// stage (no card image).
 function StudioEditor({
   initialRecording,
   title,
@@ -181,8 +150,6 @@ function StudioEditor({
   initialRecording: RecordingDTO;
   title: string;
 }) {
-  // A PLAN (a recording with no video — `r2Key` absent since the
-  // plan→recording→mixtape Deploy-1) has nothing to clip yet.
   if (!initialRecording.r2Key) {
     return (
       <p className="text-sm text-muted-foreground">
@@ -209,14 +176,11 @@ function StudioEditorBody({
 }) {
   const queryClient = useQueryClient();
   const recordingId = initialRecording.id;
-  // The one clock + element geometry come from Video.Root; the crop xOffset is in SOURCE
-  // pixels, so it needs `videoSize` (a 1080p landscape default until the rendition
-  // reports its real dimensions).
+
   const { currentSeconds, durationSeconds, seek, togglePlay, videoSize } = useVideo();
 
   const [band, setBand] = useState<Band | null>(null);
-  // The framing rect starts centred (a centred top-down set crops cleanly there) and
-  // re-centres when the real geometry loads, until the operator nudges it.
+
   const [cropLeftFraction, setCropLeftFraction] = useState(() =>
     centredCropLeftFraction(1920, 1080),
   );
@@ -225,12 +189,9 @@ function StudioEditorBody({
   const [liveMessage, setLiveMessage] = useState("");
   const [error, setError] = useAutoNotice();
   const [notice, setNotice] = useAutoNotice();
-  // The cue rail: which cue the keyboard mark (`c`) / clear (`x`) targets.
+
   const [selectedCueId, setSelectedCueId] = useState<string | null>(null);
 
-  // ── The recording itself (its `tracklist` carries every authored cue). Seeded from the
-  // loader so there's no flash, then kept live: focus-refetch ON (admin convention), and
-  // each cue write updates it optimistically via setQueryData.
   const recordingQueryKey = ["admin", "studio-recording", recordingId] as const;
   const { data: recording } = useQuery<RecordingDTO>({
     initialData: initialRecording,
@@ -240,16 +201,12 @@ function StudioEditorBody({
   });
   const tracklist = recording.tracklist;
 
-  // ── The recording's clips. Focus-refetch ON (admin convention).
   const { data: clips } = useQuery<ClipDTO[]>({
     queryFn: () => fetchClips(recordingId),
     queryKey: ["admin", "clips", "recording", recordingId],
     refetchOnWindowFocus: true,
   });
 
-  // No energy envelope for a recording (it carries no `studio-envelope.json`), so the
-  // lane degrades to the playhead + committed clips + the active band, and there are no
-  // drop suggestions. The timeline axis is the video's own duration.
   const durationMs = Math.round(durationSeconds * 1000);
   const currentMs = Math.round(currentSeconds * 1000);
 
@@ -260,26 +217,21 @@ function StudioEditorBody({
     [durationMs, seek],
   );
 
-  // Re-centre the framing when the real rendition geometry loads, until the operator
-  // has nudged it (then it's theirs to keep).
   useEffect(() => {
     if (!framingTouched.current) {
       setCropLeftFraction(centredCropLeftFraction(videoSize.width, videoSize.height));
     }
   }, [videoSize]);
 
-  // The operator dragged the rect — stop auto-centring and remember the choice.
   const handleCropChange = useCallback((next: number) => {
     framingTouched.current = true;
     setCropLeftFraction(next);
   }, []);
 
-  // Recordings have no envelope → no suggestion ghosts.
   const suggestionRegions: TimelineRegion[] = [];
 
   const playheadFraction = msToFraction(currentMs, durationMs);
 
-  // Drop a clip-length band at the playhead (the keyboard `M` mark + the toolbar).
   const markAtPlayhead = useCallback(() => {
     const window = defaultBandAt(currentMs, clipLengthMs, durationMs);
     setBand({
@@ -317,8 +269,6 @@ function StudioEditorBody({
     setLiveMessage("Framing reset to centre");
   }, [videoSize]);
 
-  // ── Create a clip: the active band + the framing xOffset → a `create_clip` row on the
-  // recording (`POST /admin/recordings/{id}/clips`).
   const createClip = useMutation({
     mutationFn: async () => {
       if (!band) {
@@ -380,12 +330,6 @@ function StudioEditorBody({
     },
   });
 
-  // ── Persist the WHOLE cue tracklist via `replace_recording_cues` (the array is the unit
-  // of truth). This is the FINDING-LINKED write path: each cue carries its `findingId`
-  // (the honest link to canon) verbatim — no server-side text re-resolution — so a
-  // promoted mixtape + every clip caption resolve to a real coordinate. Each edit computes
-  // the next array locally (the pure `recording-cues` helpers), updates the cache
-  // optimistically so the rail + lane move before the round trip, and a failure rolls back.
   const saveTracklist = useMutation<
     void,
     Error,
@@ -434,12 +378,10 @@ function StudioEditorBody({
     onSettled: () => queryClient.invalidateQueries({ queryKey: recordingQueryKey }),
   });
 
-  // ── Cue authoring (the net-new editor). Each handler computes the next array via a
-  // pure helper and persists it.
   const addCueTrack = useCallback(
     (cue: NewCue) => {
       const id = crypto.randomUUID();
-      // `addCue` carries the cue's `findingId` (a picked finding) or omits it (free text).
+
       saveTracklist.mutate(addCue(tracklist, cue, () => id));
       setSelectedCueId(id);
       setLiveMessage(`Added ${cue.artists.join(", ")} — ${cue.title}`);
@@ -480,7 +422,6 @@ function StudioEditorBody({
     [saveTracklist, tracklist],
   );
 
-  // Move the cue-rail selection (the ↑/↓ keyboard target), clamped to the tracklist.
   const moveSelection = useCallback(
     (delta: number) => {
       if (tracklist.length === 0) {
@@ -499,23 +440,18 @@ function StudioEditorBody({
     [selectedCueId, tracklist],
   );
 
-  // Default the selection to the first cue once the tracklist is known.
   useEffect(() => {
     if (selectedCueId === null && tracklist.length > 0) {
       setSelectedCueId(tracklist[0]?.id ?? null);
     }
   }, [selectedCueId, tracklist]);
 
-  // ── The keyboard loop (role="application"). Skip when typing in a field, and when
-  // the scrubber already handled the key (it preventDefaults space/arrows/Home/End).
   const handleKeyDown = useCallback(
     (event: React.KeyboardEvent) => {
       if (event.defaultPrevented || isTypingTarget(event.target)) {
         return;
       }
 
-      // Space + Enter ACTIVATE a focused button/link; let the control own them so a
-      // shortcut never double-fires.
       if (
         (event.key === " " || event.key === "Spacebar" || event.key === "Enter") &&
         isActivationTarget(event.target)
@@ -602,7 +538,6 @@ function StudioEditorBody({
   const bandWindow = band ? bandToWindow(band.inFraction, band.outFraction, durationMs) : null;
   const bandValid = bandWindow !== null && bandWindow.outMs - bandWindow.inMs >= MIN_CLIP_MS;
 
-  // The cue pins the lane draws: one per marked cue.
   const cueTicks = tracklist
     .filter((cue) => cue.startMs != null)
     .map((cue) => ({ outOfOrder: false, startMs: cue.startMs ?? 0, trackId: cue.id }));
@@ -621,8 +556,6 @@ function StudioEditorBody({
         {liveMessage}
       </span>
 
-      {/* Left pane (the cue list) — the AUTHORED tracklist (add/type/mark/remove) plus the
-          recording's committed clips. It scrolls independently at xl+. */}
       <div className="flex min-w-0 flex-col xl:min-h-0 xl:overflow-y-auto xl:pr-6">
         <RecordingCueRail
           onAdd={addCueTrack}
@@ -637,20 +570,14 @@ function StudioEditorBody({
           tracklist={tracklist}
         />
 
-        {/* Re-sync the live distribution from the cues — only once the recording is
-            PROMOTED (its linked published mixtape exists). Un-promoted → return null. */}
         {recording.mixtapeId ? (
           <ResyncFromCues cuedCount={cueProgress.marked} mixtapeId={recording.mixtapeId} />
         ) : null}
 
-        {/* The promoted-mixtape management block — the publish-time fields (the dream note,
-            SoundCloud, distribution, the set-video toggle) resurface here once the take is a
-            published mixtape (RFC §8, surface 5). Un-promoted → nothing. */}
         {recording.mixtapeId ? (
           <PromotedMixtapeBlock logId={recording.logId} mixtapeId={recording.mixtapeId} />
         ) : null}
 
-        {/* The recording's clips so far. */}
         <div className="mt-6">
           <Label>Clips ({clips?.length ?? 0})</Label>
           {clips && clips.length > 0 ? (
@@ -682,8 +609,6 @@ function StudioEditorBody({
         </div>
       </div>
 
-      {/* Right pane (the visualiser) — the preview, transport, energy lane, clip
-          toolbar. */}
       <div className="min-w-0 xl:min-h-0 xl:overflow-y-auto xl:border-l xl:border-border xl:pl-6">
         <div className="mx-auto w-full max-w-3xl">
           <Video.Surface
@@ -699,7 +624,6 @@ function StudioEditorBody({
             />
           </Video.Surface>
 
-          {/* Transport: play/pause, the shared scrubber, the time readout, the cog. */}
           <div className="mt-3 flex items-center gap-3">
             <Video.PlayButton />
             <Video.Scrubber label={`Seek through ${title}`} />
@@ -712,8 +636,6 @@ function StudioEditorBody({
             />
           </div>
 
-          {/* The one quiet energy lane. A recording has no envelope, so this is just the
-              rail + playhead + committed clips + the active band. */}
           <div className="mt-3">
             <StudioEnergyLane
               band={band ? { aFraction: band.inFraction, bFraction: band.outFraction } : null}
@@ -733,7 +655,6 @@ function StudioEditorBody({
             </p>
           </div>
 
-          {/* The clip-making toolbar. Gold lives ONLY on Create clip (the One Sun). */}
           <div className="mt-3 flex flex-wrap items-center gap-2">
             <Button onClick={markAtPlayhead} size="sm" variant="outline">
               Mark <kbd className="studio-kbd">M</kbd>
@@ -858,7 +779,6 @@ function SettingsCog({
   );
 }
 
-// The platforms a mixtape can be re-synced to, in push order (YouTube first).
 const RESYNC_PLATFORMS = ["youtube", "mixcloud"] as const;
 type ResyncPlatform = (typeof RESYNC_PLATFORMS)[number];
 type ResyncLeg = { message?: string; ok: boolean; platform: ResyncPlatform };
@@ -868,12 +788,6 @@ const PLATFORM_LABEL: Record<ResyncPlatform, string> = {
   youtube: "YouTube video",
 };
 
-// ── Re-sync from cues ──────────────────────────────────────────────────────────
-// Push the promoted recording's cues to its ALREADY-published distribution: re-derive
-// the YouTube chapters + Mixcloud sections and edit the live video + show (no re-upload
-// — the same server-side `resync_mixtape_*` ops the CLI calls). Only rendered once the
-// recording is promoted (the parent guards on `recording.mixtapeId`); a platform without
-// a distribution row is skipped. Disabled until ≥1 cue exists.
 function ResyncFromCues({ cuedCount, mixtapeId }: { cuedCount: number; mixtapeId: string }) {
   const [results, setResults] = useState<ResyncLeg[] | null>(null);
 
@@ -911,7 +825,6 @@ function ResyncFromCues({ cuedCount, mixtapeId }: { cuedCount: number; mixtapeId
     onSuccess: (out) => setResults(out),
   });
 
-  // Not published yet → nothing to re-sync; the control stays out of the way entirely.
   if (!published) {
     return null;
   }
@@ -982,16 +895,6 @@ function ResyncFromCues({ cuedCount, mixtapeId }: { cuedCount: number; mixtapeId
   );
 }
 
-// ── Publish as mixtape ─────────────────────────────────────────────────────────
-// The publish action on an UN-PROMOTED take: mint a scarce Log ID coordinate and turn the
-// take into a published mixtape (a checkpoint of Fluncle dreaming). `promote_recording` is
-// idempotent (mint-or-reuse); on success we invalidate the route so the header + the
-// management block reflect the freshly-minted `logId`/`mixtapeId`.
-//
-// One Sun: the Studio's everyday gold is "Create clip" (the surface's whole job is clipping;
-// publishing is a rarer, terminal action). So this HEADER trigger stays a quiet OUTLINE —
-// the gold reappears only at the moment of commitment, on the confirm dialog's action — so
-// no two golds ever compete in one viewport (RFC §8, DESIGN "The One Sun Rule").
 function PublishAction({ recordingId }: { recordingId: string }) {
   const router = useRouter();
   const [error, setError] = useAutoNotice();
@@ -1054,12 +957,6 @@ function PublishAction({ recordingId }: { recordingId: string }) {
   );
 }
 
-// ── The promoted-mixtape management block ──────────────────────────────────────
-// Once a take is promoted, the publish-time fields the plan editor dropped (B1) resurface
-// here (RFC §8, surface 5): the dream note, the SoundCloud link, the per-platform
-// distribution strip, and the set-video toggle. Reuses the same server-side ops the old
-// mixtape editor called (`update_mixtape` PATCH + the `/social` read). Fetches the mixtape
-// DTO in-process; a null (a race, a missing row) hides the block.
 function PromotedMixtapeBlock({ logId, mixtapeId }: { logId?: string; mixtapeId: string }) {
   const queryClient = useQueryClient();
 
@@ -1116,9 +1013,6 @@ function PromotedMixtapeBlock({ logId, mixtapeId }: { logId?: string; mixtapeId:
   );
 }
 
-// The dream note + the one manual link (SoundCloud). Both PATCH `update_mixtape` on save
-// (YouTube + Mixcloud are recorded by `distribute`, not editable here). Save-on-blur for
-// the note; the SoundCloud field validates as an optional http(s) URL.
 function NoteAndLinks({ mixtape, refresh }: { mixtape: MixtapeDTO; refresh: () => Promise<void> }) {
   const noteId = useId();
   const scId = useId();
@@ -1200,9 +1094,6 @@ function NoteAndLinks({ mixtape, refresh }: { mixtape: MixtapeDTO; refresh: () =
   );
 }
 
-// The per-platform distribution status: one row per platform (uploading / published /
-// failed), a link once published, and the unlisted→public flip for YouTube while the
-// mixtape is still `distributing`. Read from `/social` with focus-refetch ON.
 const PLATFORM_LABELS: Record<string, string> = {
   mixcloud: "Mixcloud",
   soundcloud: "SoundCloud",
@@ -1315,15 +1206,6 @@ function DistributionStatusBadge({ status }: { status: string }) {
   );
 }
 
-// ── Announce to the crew ───────────────────────────────────────────────────────
-// The last lifecycle step: post the mixtape's crew callout to the Fluncle's Findings
-// Telegram channel — Fluncle sharing his own dream/checkpoint (its listen links + the
-// /log home, in the mixtape's own voice). Only once the mixtape is `published` (its
-// first platform link landed, so there's something to listen to). Posting to a public
-// channel is an external effect, so it sits behind a confirm (the resync/publish
-// precedent). Idempotent server-side by an `announced_at` marker — once it's out the
-// control flips to a quiet done state, so the crew is never double-posted. On success
-// it echoes the exact text that went out.
 function AnnounceControl({
   mixtape,
   refresh,
@@ -1337,8 +1219,6 @@ function AnnounceControl({
   const id = mixtape.id;
   const announced = Boolean(mixtape.announcedAt);
 
-  // Nothing to announce until a listen link exists (published = the first platform
-  // link landed). While still `distributing`, the control stays out of the way.
   if (mixtape.status !== "published") {
     return null;
   }
@@ -1430,9 +1310,6 @@ function AnnounceControl({
   );
 }
 
-// The set-video gate: flip on AFTER uploading the full set video to R2 (`<log-id>/set.mp4`)
-// and the mixtape's /log page shows the branded scrubber player. A flag, not an upload —
-// writes `setVideoAt` through `update_mixtape`. Only shown once the coordinate is minted.
 function SetVideoToggle({
   mixtape,
   refresh,
@@ -1491,8 +1368,6 @@ function SetVideoToggle({
   );
 }
 
-// ── small shared bits ─────────────────────────────────────────────────────────
-
 function isTypingTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) {
     return false;
@@ -1505,9 +1380,6 @@ function isTypingTarget(target: EventTarget | null): boolean {
   );
 }
 
-// Does this key target ACTIVATE on Space/Enter on its own (a button or link)? If so
-// the global shortcut handler lets the control own those keys, so a shortcut never
-// double-fires alongside the control's native activation.
 function isActivationTarget(target: EventTarget | null): boolean {
   return target instanceof HTMLElement && target.closest("a, button, [role='button']") !== null;
 }
@@ -1538,9 +1410,6 @@ async function fetchMixtapeSocial(mixtapeId: string): Promise<MixtapeSocialPostI
   return body.posts ?? [];
 }
 
-// PATCH the promoted mixtape (`update_mixtape`): the dream note, the SoundCloud link, or the
-// set-video flag. Each is its own field on the operator-tier op — a published mixtape stays
-// editable there without touching its immutable minted coordinate.
 async function saveMixtape(
   id: string,
   body: { note?: string; setVideoAt?: string; soundcloudUrl?: string },
@@ -1556,8 +1425,6 @@ async function saveMixtape(
   }
 }
 
-// An optional http(s) URL: empty is fine (clears the link), otherwise it must parse as
-// http/https (the SoundCloud field).
 function isOptionalHttpUrl(value: string): boolean {
   const trimmed = value.trim();
 

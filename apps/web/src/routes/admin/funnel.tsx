@@ -34,38 +34,11 @@ import {
 import { isAdminRequest } from "@/lib/server/admin-auth";
 import { type FunnelView, getFunnel } from "@/lib/server/funnel";
 
-// The `/admin/funnel` station — the catalogue pipeline (crawl → anchor → capture →
-// analyze/embed → rec-eligible → certified) on one page (docs/admin-shell.md).
-// Five bands: the funnel (proportional stage bars, each a link to its operating
-// surface), the public surfaces, the meters (the operator's spend levers — capture budget, anchor
-// bench, frontier depth), the capture backlog (what there is to spend the metered budget ON,
-// stated independently of whether the window is open), and the charts (catalogue growth,
-// eligible-pool growth, and per-stage daily throughput from the snapshot series).
-//
-// ── DATA FLOW ─────────────────────────────────────────────────────────────────
-// The admin loader-seeded react-query hybrid (AGENTS.md): a GET server fn reads `getFunnel`
-// SERVER-SIDE in-process (the browser-admin pattern — no oRPC client, no CORS, exactly as
-// `/admin/usage` reads `getCostInsights`), the loader seeds it, and a focus-refetching
-// `useQuery` keeps the live counts honest on tab-back. All arranging happens in the pure
-// `funnel-view.ts` helpers, so the page itself only draws.
-//
-// ── LIVE ON EVERY LOAD ──────────────────────────────────────────────────────────
-// `getFunnel` computes the whole live block on every read (funnel.ts) — a handful of sub-second
-// COUNT scans, cheap enough for a single-operator admin page that a stale daily snapshot would only
-// buy staleness. A short `staleTime` coalesces a burst of focus-refetches so rapid tab-backs do not
-// each re-run the scans; it is a light touch, not a cache.
-//
-// ── NO BACKFILL ───────────────────────────────────────────────────────────────
-// The snapshot series starts at the first real daily tick and grows honestly (the RFC's
-// deliberate no-backfill rule). So every chart carries a short-data state — a single dry
-// line, never a fabricated zero-baseline — until two snapshots exist.
-
 const FUNNEL_KEY = ["admin", "funnel"] as const;
 
 const numberFormatter = new Intl.NumberFormat("en-US");
 const formatCount = (value: number) => numberFormatter.format(value);
 
-// UTC-pinned "Jul 18" so the server render matches hydration exactly (the /reach precedent).
 const dateFormatter = new Intl.DateTimeFormat("en-US", {
   day: "numeric",
   month: "short",
@@ -74,10 +47,9 @@ const dateFormatter = new Intl.DateTimeFormat("en-US", {
 const formatDay = (day: string) => dateFormatter.format(new Date(`${day}T00:00:00.000Z`));
 
 const GB = 1024 * 1024 * 1024;
-// GB to one place — the unit the capture proxy invoices in (the /admin/catalogue idiom).
+
 const formatGb = (bytes: number) => `${(bytes / GB).toFixed(1)} GB`;
 
-// A signed movement: "+4,900" / "−190" (a real minus), "0" flat. The pipe-width glance.
 function formatDelta(delta: number): string {
   if (delta > 0) {
     return `+${formatCount(delta)}`;
@@ -90,8 +62,6 @@ function formatDelta(delta: number): string {
   return "0";
 }
 
-// The one-call read, server-side + in-process (no HTTP, no CORS), re-checking the grant. Computes
-// the live block fresh on every call — the loader and the focus-refetch both land here.
 const fetchFunnel = createServerFn({ method: "GET" }).handler(async (): Promise<FunnelView> => {
   if (!(await isAdminRequest())) {
     throw redirect({ to: "/admin/login" });
@@ -114,8 +84,7 @@ function FunnelPage() {
     queryFn: () => fetchFunnel(),
     queryKey: FUNNEL_KEY,
     refetchOnWindowFocus: true,
-    // Live on every load, but a burst of tab-backs should not each re-run the stage/anchor scans;
-    // this coalesces them without caching (a fresh scan is a handful of sub-second COUNTs).
+
     staleTime: 30_000,
   });
 
@@ -138,12 +107,6 @@ function FunnelPage() {
     </AdminShell>
   );
 }
-
-// ── The funnel band ────────────────────────────────────────────────────────────
-// Each stage is a real link to its operating surface (WCAG AA + keyboard reach: an anchor,
-// visible focus ring), drawn with an honest proportional-width bar. The bar is decorative;
-// the numbers beside it carry the meaning, so the bar is aria-hidden. `stageBars` hands the rows
-// over sorted biggest-first, so the band tapers monotonically and an overtake reads as a reorder.
 
 function FunnelBand({ bars }: { bars: FunnelStageBar[] }) {
   return (
@@ -170,9 +133,6 @@ const STAGE_LINK_CLASS =
 function StageBarRow({ bar }: { bar: FunnelStageBar }) {
   const body = <StageBarBody bar={bar} />;
 
-  // The `to` must be a literal at each Link so TanStack infers each route's own required search
-  // (a union `to` would force one merged search shape onto every branch). Two concrete cases,
-  // one per StageLink shape — both real client-side <Link>s (keyboard-reachable, focus-ringed).
   if (bar.link.to === "/admin/findings") {
     return (
       <Link className={STAGE_LINK_CLASS} search={{ mix: "all", stage: "all" }} to="/admin/findings">
@@ -189,7 +149,6 @@ function StageBarRow({ bar }: { bar: FunnelStageBar }) {
 }
 
 function StageBarBody({ bar }: { bar: FunnelStageBar }) {
-  // A non-empty stage keeps a sliver of bar so a tiny exit still reads and stays clickable.
   const width = bar.total > 0 ? Math.max(bar.widthPct, 2) : 0;
 
   return (
@@ -197,9 +156,7 @@ function StageBarBody({ bar }: { bar: FunnelStageBar }) {
       <span className="w-24 shrink-0 text-sm font-medium">{bar.label}</span>
       <span aria-hidden="true" className="relative h-6 min-w-0 flex-1 overflow-hidden rounded">
         <span className="absolute inset-0 rounded bg-card/60" />
-        {/* The Ignition Rule (DESIGN.md, One Sun): the bar rests neutral and heats to gold
-            only on interaction — the sun on this page is spent on the live-edge dots and the
-            capture-budget lever, not on seven bars at rest. */}
+
         <span
           className="absolute inset-y-0 left-0 rounded bg-foreground/10 transition-colors group-hover:bg-primary/25"
           style={{ width: `${width}%` }}
@@ -207,9 +164,7 @@ function StageBarBody({ bar }: { bar: FunnelStageBar }) {
       </span>
       <span className="flex shrink-0 items-baseline gap-2 text-right tabular-nums">
         <span className="text-sm font-medium">{formatCount(bar.total)}</span>
-        {/* The queued-behind cell holds a fixed width across every row so the totals line up. The
-            anchor row shows the two populations (the embedded head the sweep works, and the
-            metadata still awaiting audio); every other row shows the single queued figure. */}
+
         {bar.queuedSplit ? (
           <span className="w-24 text-xs text-muted-foreground sm:w-56">
             {formatCount(bar.queuedSplit.ready)} ready ·{" "}
@@ -230,13 +185,6 @@ function StageBarBody({ bar }: { bar: FunnelStageBar }) {
     </>
   );
 }
-
-// ── The public-surfaces band ─────────────────────────────────────────────────────
-// How much of the archive is live on the public web now, as stat tiles (the shared meters
-// vocabulary). Tracks is the headline — the whole `/tracks` hub, findings + catalogue — so it
-// takes the accent; the three entity figures are the INDEXABLE sets (pages that clear the
-// thin-content floor and enter the sitemap). Each number is read through the same predicate its
-// public surface obeys, so the card can never disagree with what a visitor or crawler sees.
 
 function PublicSurfacesBand({ surfaces }: { surfaces: FunnelView["live"]["publicSurfaces"] }) {
   return (
@@ -273,19 +221,12 @@ function PublicSurfacesBand({ surfaces }: { surfaces: FunnelView["live"]["public
   );
 }
 
-// ── The meters band ────────────────────────────────────────────────────────────
-// The operator's spend levers, as stat tiles (the shared /admin/usage + /admin/costs
-// vocabulary): capture budget remaining today (the accent lever), the anchor re-ask bench,
-// and the crawl frontier still to drain.
-
 function MetersBand({ meters }: { meters: FunnelView["live"]["meters"] }) {
   const { captureBudget: budget } = meters;
   const captureValue = budget.paused
     ? "Paused"
     : `${formatGb(budget.remainingBytes)} · ${formatCount(budget.remainingTracks)}`;
-  // The brake, stated. `open` is the fact the capture queue actually obeys — paused, or spent out
-  // for the window, and nothing drains. It is named here because the backlog band below reports the
-  // work independently of it, and the two only read together if this one says which way it is set.
+
   const captureHint = budget.paused
     ? "capture is paused — nothing spends today"
     : `${budget.open ? "open" : "shut"} · left of ${formatGb(budget.dailyBytes)} · ${formatCount(budget.dailyTracks)} tracks per ${budget.windowHours}h`;
@@ -317,15 +258,6 @@ function MetersBand({ meters }: { meters: FunnelView["live"]["meters"] }) {
     </section>
   );
 }
-
-// ── The capture-backlog band ───────────────────────────────────────────────────
-// What the metered capture queue is holding, stated independently of whether the budget window is
-// letting any of it through — the meter above says what is left to spend TODAY, this says what
-// there is to spend it ON. Split the two ways the next spend decision turns: by the Ear's pre-audio
-// tier (the order the queue drains), and by whether the row already carries a Spotify anchor
-// (rec-eligibility requires one, so bytes bought for an unanchored row cannot reach the pool until
-// anchoring catches up). A real table, because the rows are a small labelled matrix and a screen
-// reader should read it as one.
 
 function CaptureBacklogBand({ backlog }: { backlog: FunnelView["live"]["captureBacklog"] }) {
   const unanchored = backlog.authorized - backlog.authorizedAnchored;
@@ -402,11 +334,6 @@ function CaptureBacklogBand({ backlog }: { backlog: FunnelView["live"]["captureB
   );
 }
 
-// ── The charts band ────────────────────────────────────────────────────────────
-// Growth per day (catalogue total, eligible pool) and per-stage daily throughput, all from
-// the snapshot series. Every chart has an honest short-data state: with fewer than two
-// snapshots there is no line to draw, so the chart says so rather than inventing a baseline.
-
 function ChartsBand({ series }: { series: FunnelView["series"] }) {
   const throughput = latestThroughput(series);
 
@@ -452,9 +379,6 @@ function ChartsBand({ series }: { series: FunnelView["series"] }) {
   );
 }
 
-// One growth line: the house SVG line-chart (the /reach console idiom — a translucent area
-// under a cream line with min/max rails and one gold live-edge dot). A single point draws the
-// dot and its reading, never a fabricated line.
 function GrowthChart({
   label,
   points,
@@ -500,7 +424,7 @@ function GrowthChart({
                 />
               </>
             )}
-            {/* The One Sun: the live edge is the only gold on the chart. */}
+
             <circle
               className="fill-primary motion-safe:animate-pulse"
               cx={geometry.last.x}
@@ -548,7 +472,6 @@ function GrowthChart({
   );
 }
 
-// A stage's daily movement, with a direction glyph: up gained rows, down shed them, flat held.
 function DeltaValue({ delta }: { delta: number }) {
   const Glyph = delta > 0 ? ArrowUpIcon : delta < 0 ? ArrowDownIcon : undefined;
 
@@ -568,8 +491,6 @@ function BandHeading({ children }: { children: ReactNode }) {
   return <h2 className="text-sm font-bold">{children}</h2>;
 }
 
-// The honest short-data placeholder: a quiet dashed line that says why there is nothing to
-// draw yet, never a fake baseline (the no-backfill rule).
 function DryLine({ children }: { children: ReactNode }) {
   return (
     <div className="rounded-lg border border-dashed border-border p-6 text-center text-sm text-muted-foreground">

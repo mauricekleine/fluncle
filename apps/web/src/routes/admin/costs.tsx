@@ -58,21 +58,7 @@ import { isAdminRequest } from "@/lib/server/admin-auth";
 import { getEurRates, type FxRatesDTO } from "@/lib/server/fx";
 import { listSubscriptions } from "@/lib/server/subscriptions";
 
-// The brand's numeric face — money reads in Oxanium everywhere on this surface, matching
-// the sibling `/admin/usage` spend tiles (DESIGN.md "numeric").
 const OXANIUM_STACK = '"Oxanium", ui-sans-serif, system-ui, sans-serif';
-
-// The Costs station (COST-02) — the operator's PRIVATE cost ledger: every recurring
-// and one-off Fluncle spend in one place. This is the single source of truth for
-// spend, pulled out of the public repo docs on purpose — vendor names and amounts are
-// private, so they live in the DB at runtime and are read here behind the admin gate,
-// never committed to a file. The table ships EMPTY; the operator fills it in-app.
-//
-// Read SERVER-SIDE in-process (a createServerFn calling `listSubscriptions` — the same
-// read the `list_subscriptions` op wraps), so the first paint is instant and no client
-// fetch fires on mount. The writes go to the operator-tier oRPC ops
-// (create/update/delete_subscription) via same-origin fetch — the same admin cookie
-// carries the operator identity — then the query invalidates to refetch.
 
 const CATEGORIES = ["infra", "AI", "media", "distribution", "domains", "tooling"] as const;
 const CADENCES = ["monthly", "annual", "one-off", "usage"] as const;
@@ -102,10 +88,6 @@ const STATUS_ITEMS: Record<Status, string> = {
   trial: "Trial",
 };
 
-// Rows group by category, and the categories render in this fixed order (spend-shaped:
-// the infrastructure and AI that carry the bill first, the incidentals last) — not the
-// ledger's newest-updated order, which means nothing to the operator. Each gets a
-// semantic Phosphor mark so a group is scannable by its icon alone.
 const CATEGORY_ORDER: Category[] = ["infra", "AI", "media", "distribution", "domains", "tooling"];
 const CATEGORY_ICONS: Record<Category, Icon> = {
   AI: SparkleIcon,
@@ -116,8 +98,6 @@ const CATEGORY_ICONS: Record<Category, Icon> = {
   tooling: WrenchIcon,
 };
 
-// The per-cadence suffix the amount carries (so cadence never needs its own meta chip):
-// recurring lines read "/mo" or "/yr"; usage + one-off name themselves.
 const CADENCE_SUFFIX: Record<Cadence, string> = {
   annual: "/yr",
   monthly: "/mo",
@@ -127,7 +107,6 @@ const CADENCE_SUFFIX: Record<Cadence, string> = {
 
 const SUBSCRIPTIONS_KEY = ["admin", "subscriptions"] as const;
 
-// The whole ledger, newest-updated first. Server-side: in-process, no HTTP, no CORS.
 const fetchSubscriptions = createServerFn({ method: "GET" }).handler(
   async (): Promise<SubscriptionDTO[]> => {
     if (!(await isAdminRequest())) {
@@ -138,8 +117,6 @@ const fetchSubscriptions = createServerFn({ method: "GET" }).handler(
   },
 );
 
-// Today's EUR reference rates (read-through daily cache, best-effort — null when the
-// vendor is down and there is no cache yet). Powers the single aggregate EUR figure.
 const fetchFxRates = createServerFn({ method: "GET" }).handler(
   async (): Promise<FxRatesDTO | null> => {
     if (!(await isAdminRequest())) {
@@ -160,8 +137,6 @@ export const Route = createFileRoute("/admin/costs")({
   },
 });
 
-// The operator's form values — major-unit amount (converted to cents on submit), the
-// closed enums, and the free-text fields. Kept as strings for controlled inputs.
 type FormValues = {
   amount: string;
   billingUrl: string;
@@ -200,7 +175,7 @@ function formValuesFrom(sub: SubscriptionDTO): FormValues {
     name: sub.name,
     notes: sub.notes ?? "",
     powers: sub.powers ?? "",
-    // The <input type="date"> wants a YYYY-MM-DD value; the stored ISO carries a time.
+
     renewsAt: sub.renewsAt ? sub.renewsAt.slice(0, 10) : "",
     status: sub.status,
     vendor: sub.vendor,
@@ -215,8 +190,6 @@ function formatMoney(cents: number, currency: string): string {
   }
 }
 
-// Normalise a recurring line to its monthly-equivalent cents (annual ÷ 12). One-off +
-// usage lines have no honest monthly figure, so they're left out of the running total.
 function monthlyEquivalentCents(sub: SubscriptionDTO): number | undefined {
   if (sub.status !== "active") {
     return undefined;
@@ -245,8 +218,6 @@ type LedgerModel = {
   monthly: CurrencyTotals;
 };
 
-// Sum monthly-equivalents into a per-currency map (a ledger can mix EUR + USD), then
-// hand back entries sorted heaviest-first so the biggest currency leads every readout.
 function totalsByCurrency(lines: SubscriptionDTO[]): CurrencyTotals {
   const totals = new Map<string, number>();
 
@@ -261,9 +232,6 @@ function totalsByCurrency(lines: SubscriptionDTO[]): CurrencyTotals {
   return [...totals.entries()].sort((a, b) => b[1] - a[1]);
 }
 
-// One pass over the ledger → the whole page's data: category groups in CATEGORY_ORDER
-// (each sorted costliest-first, each with its own monthly subtotal), the ledger-wide
-// monthly total, and the paid / free / inactive tallies for the headline tiles.
 function buildLedgerModel(subscriptions: SubscriptionDTO[]): LedgerModel {
   const counts = { free: 0, inactive: 0, paid: 0, total: subscriptions.length };
 
@@ -305,10 +273,8 @@ function CostsPage() {
     refetchOnWindowFocus: true,
   });
 
-  // Today's EUR rates ride the loader (they only change once/day, so no focus refetch).
   const fx = initial.fx;
 
-  // The dialog is a single reused form: `editing` null = a new line, set = an edit.
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<SubscriptionDTO | undefined>();
   const [deleting, setDeleting] = useState<SubscriptionDTO | undefined>();
@@ -334,8 +300,6 @@ function CostsPage() {
     },
   });
 
-  // The whole read in one pass: category groups (each with its own monthly subtotal),
-  // the ledger-wide monthly total per currency, and the paid/free/inactive counts.
   const model = useMemo(() => buildLedgerModel(subscriptions), [subscriptions]);
 
   const subtitle =
@@ -422,15 +386,6 @@ function CostsPage() {
   );
 }
 
-// The headline: the recurring total as the one gold number, its annualized run-rate
-// beside it, and the line tally with its paid / free split. Mirrors the `/admin/usage`
-// totals row so the two Cost stations read as one workspace.
-//
-// When the ledger mixes currencies and today's ECB rates are available, the money tiles
-// collapse to a SINGLE "≈ €X" — the operator's "what do I actually pay" number — with
-// the native per-currency breakdown + the rate date in the hint. Individual lines keep
-// their own fixed-price currency (they are not converted). If rates are missing, or the
-// ledger is EUR-only, the tiles fall back to the per-currency stack, never a fake total.
 function TotalsRow({ fx, model }: { fx: FxRatesDTO | null; model: LedgerModel }) {
   const { counts, monthly } = model;
   const perYear: CurrencyTotals = monthly.map(([currency, cents]) => [currency, cents * 12]);
@@ -485,9 +440,6 @@ function TotalsRow({ fx, model }: { fx: FxRatesDTO | null; model: LedgerModel })
   );
 }
 
-// A per-currency money readout. A single currency reads big (the tile's own 2xl); a
-// mixed ledger stacks each currency on its own line, one size down so the tile keeps
-// its height. An all-free / usage-only ledger has no honest recurring figure → em dash.
 function MoneyStack({ entries }: { entries: CurrencyTotals }) {
   const [first] = entries;
 
@@ -511,7 +463,6 @@ function MoneyStack({ entries }: { entries: CurrencyTotals }) {
   );
 }
 
-// One category, its lines under a header that carries the group's own monthly subtotal.
 function CategoryGroup({
   group,
   onDelete,
@@ -570,10 +521,6 @@ function EmptyLedger({ onAdd }: { onAdd: () => void }) {
   );
 }
 
-// One cost line: name + vendor on top, a quiet meta line (status if not active · renewal
-// · what it powers · billing), then the amount on the right — real spend in full weight,
-// a free plan dimmed to "Free" so the money reads at a glance. Category lives in the
-// group header; cadence rides the amount's "/mo" · "/yr" suffix.
 function CostRow({
   onDelete,
   onEdit,
@@ -633,9 +580,6 @@ function CostRow({
   );
 }
 
-// The amount, right-aligned in Oxanium. A $0 line is a free plan, not a spend — it reads
-// a quiet "Free" (no cadence suffix) so the eye skips to where the money actually is. A
-// paid line stays full-weight and carries the cadence as its "/mo" · "/yr" · … suffix.
 function AmountCell({ subscription: sub }: { subscription: SubscriptionDTO }) {
   const isFree = sub.amount === 0;
 
@@ -663,8 +607,6 @@ function AmountCell({ subscription: sub }: { subscription: SubscriptionDTO }) {
   );
 }
 
-// The add/edit form dialog. On submit it POSTs (new) or PATCHes (edit) the operator-tier
-// oRPC op; the amount is entered in major units and converted to cents on the wire.
 function CostDialog({
   editing,
   onOpenChange,
@@ -679,8 +621,6 @@ function CostDialog({
   const [values, setValues] = useState<FormValues>(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
 
-  // Re-seed the form whenever the dialog opens (a fresh EMPTY_FORM for a new line, the
-  // row's values for an edit). Keyed off `open` + the editing id via a render guard.
   const seedKey = `${open ? "open" : "closed"}:${editing?.id ?? "new"}`;
   const [seededFor, setSeededFor] = useState<string | undefined>();
 
@@ -935,9 +875,6 @@ function CostDialog({
   );
 }
 
-// A labelled form field. `children` is a render prop handed the generated id so the
-// visible <Label> is programmatically associated with its control (an Input's id, or a
-// Select's SelectTrigger id) — keyboard + screen-reader access, per the canon.
 function Field({
   children,
   className,

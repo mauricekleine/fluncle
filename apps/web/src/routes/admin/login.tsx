@@ -10,14 +10,6 @@ import {
   CardTitle,
 } from "@fluncle/ui/components/card";
 
-// The admin front door. Plain utility copy — this surface lives behind the
-// curtain (PRODUCT.md: the operator is never the narrator), so no Fluncle voice.
-// The only way in is Login with Spotify, allow-listed to the operator account
-// (admin-auth.ts); the button is a plain link to the public login-start route.
-// `handoff` is the CLI connect ticket (lib/server/oauth-handoff.ts): a connect link
-// opened while signed out lands here, and the ticket rides through the login so the
-// operator is returned to the connect afterwards instead of the board. It is opaque
-// here — the login start verifies it, the handoff route verifies it again.
 type LoginSearch = {
   error?: string;
   handoff?: string;

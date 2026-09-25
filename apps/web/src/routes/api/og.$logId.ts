@@ -16,31 +16,9 @@ import {
 import { getTrackByIdOrLogId } from "@/lib/server/tracks";
 import { type ApiHandlers, aliasHandlers } from "./-alias";
 
-// Per-finding Open Graph card (1200×630), rendered on the edge with workers-og
-// (Satori + resvg WASM — confirmed running under the @cloudflare/vite-plugin
-// build). The finding's own drop frame (`poster.jpg`) is the hero background,
-// inlined as a data-URI (Satori doesn't fetch remote <img>); the Fluncle
-// treatment sits over it — the FLUNCLE'S FINDINGS lockup, the gold Log ID, the
-// Artist — Title headline, and the Found/telemetry line. The log page points
-// og:image here, versioned by `?v=<updatedAt>` so a re-enriched finding re-renders.
-// The response carries a long `Cache-Control` (OG_CACHE_CONTROL) so the CDN answers a
-// repeat unfurl for free — NOT `immutable`, since a bare (unversioned) hit serves latest.
-//
-// TYPE: the card is split by role, not set in one face (DESIGN.md §3). Oxanium speaks
-// for the brand and the numbers — the lockup and the `fluncle://` coordinate (a coordinate
-// is ALWAYS Oxanium, even inside a URI). Space Grotesk does the reading — the title, the
-// artist line, and the Found/telemetry line, which is a body line that happens to contain
-// numerals; a whole paragraph in Oxanium is a One Voice Rule break. The container therefore
-// defaults to the BODY face and the brand marks opt IN, so an unmarked element reads as
-// prose rather than silently inheriting the display face. Both faces carry the One Box Rule
-// baked into their tables (lib/server/satori-render.ts).
-
 const WIDTH = 1200;
 const HEIGHT = 630;
 
-// The one-sun palette. The rendered card has no CSS variables, so the hex is
-// interpolated into the markup — but READ from `@fluncle/tokens` (the generated
-// mirror of DESIGN.md), never hand-copied, so a palette change reaches the card.
 const COLOR = {
   bg: colors.deepField,
   cream: colors.starlightCream,
@@ -58,17 +36,11 @@ export const serverHandlers: ApiHandlers = {
       return new Response("Not found", { status: 404 });
     }
 
-    // The drop frame is the hero; findings without footage fall back to the
-    // album cover.
     const bgSource = track.videoUrl
       ? trackMedia(track.logId ?? logId).posterUrl
       : albumCoverAtSize(track.albumImageUrl, "large");
     const background = bgSource ? await fetchImageDataUri(bgSource) : undefined;
 
-    // The finding's sonic galaxy (browse-by-feel RFC) rides the card's meta line only
-    // behind the launch gate: the real operator-named galaxy once the WHOLE map is
-    // named, else undefined (the pre-launch dark state, unchanged). Replaces the retired
-    // vibe-quadrant derivation.
     const galaxy = track.galaxy && (await isGalaxyMapFullyNamed()) ? track.galaxy.name : undefined;
     const meta = [
       `Found ${formatDateLong(track.addedAt)}`,
@@ -79,9 +51,6 @@ export const serverHandlers: ApiHandlers = {
       .filter(Boolean)
       .join("  ·  ");
 
-    // The card deviates from the list convention's `Artist — Title`: at
-    // display size, title-led over two lines (matching the /log page's own
-    // hierarchy) reads far better, especially for long remix titles.
     const title = satoriText(track.title);
     const artist = satoriText(track.artists.join(", "));
 

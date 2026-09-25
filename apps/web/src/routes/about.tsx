@@ -11,27 +11,11 @@ import { fluncleDescription } from "@/lib/identity";
 import { jsonLdScript } from "@/lib/json-ld";
 import { spriteUrl } from "@fluncle/sprites";
 
-// The entity and answer surface (web-overhaul RFC §4): the Galaxy lore in
-// Fluncle's own voice, the four definition blocks, the Log-ID decode with a
-// worked example, and the crew questions — all server-rendered, with
-// MusicGroup + FAQPage schema that MIRRORS the visible prose (schema that
-// contradicts the page gets discounted; FAQPage no longer yields Google rich
-// results and is here for non-Google extraction).
-
 const title = "About Fluncle: the Galaxy, Log IDs, and the findings";
 
-// This page's OWN SERP snippet, never `fluncleMetaDescription`. That constant is the canonical
-// ≤155-char ENTITY line and the homepage carries it; a second page wearing it sends the archive's
-// two most-impressed URLs to search under one description, while every other hub (/log, /mixtapes,
-// /artists, /labels…) carries a line about ITSELF. A description describes the page it is on.
-// Assembled from strings the repo has already ratified rather than newly drafted: the three clauses
-// mirror llms.txt's own /about bullet, and the second sentence is the markdown homepage's opening
-// line (agent-discovery.ts). Honestly-plain third person (the Narrator rule), under the 155-char cap.
 const metaDescription =
   "Who Fluncle is, what the Galaxy is, and how to read a Log ID like fluncle://004.7.2I. One selector, no team, digging drum & bass since '90.";
 
-// The FAQ once, as data: the visible section and the FAQPage schema render
-// from the same strings so they cannot drift apart.
 const faq: Array<{ answer: string; question: string }> = [
   {
     answer:
@@ -80,12 +64,6 @@ const faq: Array<{ answer: string; question: string }> = [
   },
 ];
 
-/**
- * A crew-question's stable anchor slug, so each FAQ entry is deep-linkable. The /log
- * page's measured BPM/key line links to the measurement question by this slug
- * (log.$logId.tsx keeps the same string; the contract is pinned by a test in
- * -about-schema.test.ts). Deterministic from the question text. Exported for that test.
- */
 export function faqAnchor(question: string): string {
   return question
     .toLowerCase()
@@ -95,11 +73,7 @@ export function faqAnchor(question: string): string {
 
 function aboutHead() {
   const pageUrl = `${siteUrl}/about`;
-  // THE ONE canonical Fluncle entity node — declared once, here, and referenced by `@id`
-  // everywhere else (the home WebSite's `publisher`, every MusicPlaylist/MusicAlbum `creator`, the
-  // reach page's `interactionStatistic` carrier, the VideoObjects, the mixtape `byArtist`). It is a
-  // `Person`, not a `MusicGroup`: Wikidata P31=Q5 and MusicBrainz both say human, and llms.txt says
-  // "a single selector, not a team". The full `sameAs` identity block lives ONCE, on this node.
+
   const entity = {
     "@context": "https://schema.org",
     "@id": fluncleEntityId,
@@ -130,11 +104,7 @@ function aboutHead() {
       { content: `${siteUrl}/fluncle-cover.png`, property: "og:image" },
       { content: pageUrl, property: "og:url" },
     ],
-    // JSON-LD goes through `jsonLdScript`, which HTML-escapes the serialized
-    // payload before it reaches the inline <script>'s `children` (rendered raw
-    // via dangerouslySetInnerHTML). The values here are first-party copy, but the
-    // safe path is uniform across every JSON-LD emitter (stored-XSS sink,
-    // security review).
+
     scripts: [jsonLdScript(entity), jsonLdScript(faqPage)],
   };
 }
