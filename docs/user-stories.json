@@ -429,13 +429,12 @@
           "evidence": "/artist/<slug>/fresh.xml"
         },
         "web": {
-          "state": "partial",
-          "evidence": "account watch (save_private_watch)",
-          "note": "watch stored; no notification leg yet"
+          "state": "yes",
+          "evidence": "Follow control (save_private_follow) + the Friday follows digest (send_follow_digests)"
         },
         "api": {
-          "state": "partial",
-          "evidence": "save_private_watch"
+          "state": "yes",
+          "evidence": "save_private_follow"
         }
       }
     },
@@ -567,13 +566,12 @@
           "evidence": "/label/<slug>/fresh.xml"
         },
         "web": {
-          "state": "partial",
-          "evidence": "account watch (save_private_watch)",
-          "note": "watch stored; no notification leg yet"
+          "state": "yes",
+          "evidence": "Follow control (save_private_follow) + the Friday follows digest (send_follow_digests)"
         },
         "api": {
-          "state": "partial",
-          "evidence": "save_private_watch"
+          "state": "yes",
+          "evidence": "save_private_follow"
         }
       }
     },

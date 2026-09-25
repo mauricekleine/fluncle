@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "@fluncle/ui/components/button";
 import {
   Dialog,
@@ -9,12 +9,28 @@ import {
   DialogTitle,
 } from "@fluncle/ui/components/dialog";
 import { Input } from "@fluncle/ui/components/input";
-import { Tabs, TabsList, TabsTrigger } from "@fluncle/ui/components/tabs";
 import { siGoogle } from "simple-icons";
 import { BrandIcon } from "@/components/brand-icon";
 import { authClient } from "@/lib/auth-client";
 import { siteUrl } from "@/lib/fluncle-links";
+import { MagicLinkForm } from "./magic-link-form";
 import { type AccountUser, Field } from "./shared";
+
+export const MAGIC_LINK_CALLBACK_ERROR =
+  "That link expired or was already used. Put your email in below and I'll send a fresh one.";
+
+export const MAGIC_LINK_FAILED =
+  "I couldn't sign you in with that link. Put your email in below and I'll send a fresh one.";
+
+export function readCallbackError(search: string): string | undefined {
+  const error = new URLSearchParams(search).get("error");
+
+  if (!error) {
+    return undefined;
+  }
+
+  return error === "INVALID_TOKEN" ? MAGIC_LINK_CALLBACK_ERROR : MAGIC_LINK_FAILED;
+}
 
 export function AuthForms({
   googleEnabled,
@@ -27,57 +43,16 @@ export function AuthForms({
   refresh: () => Promise<void>;
   setMessage: (message: string) => void;
 }) {
-  const [view, setView] = useState<"auth" | "reset">("auth");
-
-  const [mode, setMode] = useState<"signin" | "signup">("signup");
-  const [email, setEmail] = useState("");
-  const [username, setUsername] = useState("");
-  const [password, setPassword] = useState("");
+  const [view, setView] = useState<"link" | "password" | "reset">("link");
   const [busy, setBusy] = useState(false);
 
-  async function submit(event: React.FormEvent) {
-    event.preventDefault();
-    setMessage("");
-    setBusy(true);
+  useEffect(() => {
+    const callbackError = readCallbackError(window.location.search);
 
-    try {
-      const result =
-        mode === "signup"
-          ? await authClient.signUp.email({
-              callbackURL: "/account",
-              email,
-              name: username,
-              password,
-              username,
-            })
-          : username.includes("@")
-            ? await authClient.signIn.email({ email: username, password })
-            : await authClient.signIn.username({ password, username });
-
-      if (result.error) {
-        setMessage(result.error.message ?? "Could not sign in.");
-        return;
-      }
-
-      await refresh();
-
-      setMessage(
-        mode === "signup"
-          ? "I sent a link to verify your email. You're already signed in, so there's no rush."
-          : "",
-      );
-    } catch (error) {
-      setMessage(
-        error instanceof Error
-          ? error.message
-          : mode === "signup"
-            ? "Could not create the account."
-            : "Could not sign in.",
-      );
-    } finally {
-      setBusy(false);
+    if (callbackError) {
+      setMessage(callbackError);
     }
-  }
+  }, [setMessage]);
 
   async function continueWithGoogle() {
     setMessage("");
@@ -95,29 +70,47 @@ export function AuthForms({
     return (
       <ForgotPasswordForm
         onBack={() => {
-          setView("auth");
+          setView("password");
           setMessage("");
         }}
       />
     );
   }
 
-  return (
-    <form className="account-stack" onSubmit={(event) => void submit(event)}>
-      <Tabs
-        value={mode}
-        onValueChange={(value) => {
-          setMode(value as "signin" | "signup");
+  if (view === "password") {
+    return (
+      <PasswordSignInForm
+        message={message}
+        onBack={() => {
+          setView("link");
           setMessage("");
         }}
-      >
-        <TabsList className="w-full">
-          <TabsTrigger value="signin">Sign in</TabsTrigger>
-          <TabsTrigger value="signup">Create account</TabsTrigger>
-        </TabsList>
-      </Tabs>
+        onForgot={() => {
+          setView("reset");
+          setMessage("");
+        }}
+        refresh={refresh}
+        setMessage={setMessage}
+      />
+    );
+  }
+
+  return (
+    <div className="account-stack auth-door">
+      {message ? (
+        <p aria-live="polite" className="account-muted">
+          {message}
+        </p>
+      ) : null}
+      <MagicLinkForm
+        callbackURL="/account?tab=saves"
+        hint="No password needed. New here? Same link, and I'll set up your account."
+      />
       {googleEnabled ? (
         <>
+          <p aria-hidden="true" className="auth-door-or">
+            or
+          </p>
           <Button
             className="w-full"
             disabled={busy}
@@ -128,67 +121,108 @@ export function AuthForms({
             <BrandIcon className="size-4" icon={siGoogle} />
             Continue with Google
           </Button>
-          <p className="account-muted text-center text-xs">or use your email</p>
         </>
       ) : null}
-      {mode === "signup" ? (
-        <Field label="Email">
-          <Input
-            autoComplete="email"
-            type="email"
-            value={email}
-            onChange={(event) => setEmail(event.target.value)}
-          />
-        </Field>
-      ) : null}
-      <Field
-        hint={
-          mode === "signup"
-            ? "3–24 characters: lowercase letters, numbers, underscores. Your handle across Fluncle."
-            : undefined
-        }
-        label={mode === "signin" ? "Email or username" : "Username"}
+      <Button
+        className="self-start px-0 text-muted-foreground hover:text-accent-foreground"
+        onClick={() => {
+          setView("password");
+          setMessage("");
+        }}
+        size="sm"
+        type="button"
+        variant="link"
       >
+        Sign in with a password
+      </Button>
+    </div>
+  );
+}
+
+function PasswordSignInForm({
+  message,
+  onBack,
+  onForgot,
+  refresh,
+  setMessage,
+}: {
+  message: string;
+  onBack: () => void;
+  onForgot: () => void;
+  refresh: () => Promise<void>;
+  setMessage: (message: string) => void;
+}) {
+  const [identifier, setIdentifier] = useState("");
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function submit(event: React.FormEvent) {
+    event.preventDefault();
+    setMessage("");
+    setBusy(true);
+
+    try {
+      const result = identifier.includes("@")
+        ? await authClient.signIn.email({ email: identifier, password })
+        : await authClient.signIn.username({ password, username: identifier });
+
+      if (result.error) {
+        setMessage(result.error.message ?? "Could not sign in.");
+
+        return;
+      }
+
+      await refresh();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Could not sign in.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <form className="account-stack" onSubmit={(event) => void submit(event)}>
+      <Field label="Email or username">
         <Input
           autoComplete="username"
-          value={username}
-          onChange={(event) => setUsername(event.target.value)}
+          value={identifier}
+          onChange={(event) => setIdentifier(event.target.value)}
         />
       </Field>
       <Field label="Password">
         <Input
-          autoComplete={mode === "signin" ? "current-password" : "new-password"}
+          autoComplete="current-password"
           type="password"
           value={password}
           onChange={(event) => setPassword(event.target.value)}
         />
       </Field>
-      {mode === "signin" ? (
-        <button
-          className="self-start text-sm text-muted-foreground hover:text-accent-foreground"
-          onClick={() => {
-            setView("reset");
-            setMessage("");
-          }}
-          type="button"
-        >
-          Forgot password?
-        </button>
-      ) : null}
+      <Button
+        className="self-start px-0 text-muted-foreground hover:text-accent-foreground"
+        onClick={onForgot}
+        size="sm"
+        type="button"
+        variant="link"
+      >
+        Forgot password?
+      </Button>
       <Button disabled={busy} type="submit">
-        {busy
-          ? mode === "signup"
-            ? "Creating account…"
-            : "Signing in…"
-          : mode === "signup"
-            ? "Create private account"
-            : "Sign in"}
+        {busy ? "Signing in…" : "Sign in"}
       </Button>
       {message ? (
         <p aria-live="polite" className="account-muted">
           {message}
         </p>
       ) : null}
+      <Button
+        className="self-start px-0 text-muted-foreground hover:text-accent-foreground"
+        onClick={onBack}
+        size="sm"
+        type="button"
+        variant="link"
+      >
+        Email me a link instead
+      </Button>
     </form>
   );
 }
@@ -238,15 +272,22 @@ function ForgotPasswordForm({ onBack }: { onBack: () => void }) {
           If that account exists, a reset link is on its way.
         </p>
       ) : null}
-      <button
-        className="self-start text-sm text-muted-foreground hover:text-accent-foreground"
+      <Button
+        className="self-start px-0 text-muted-foreground hover:text-accent-foreground"
         onClick={onBack}
+        size="sm"
         type="button"
+        variant="link"
       >
-        Back to sign in
-      </button>
+        Back to password sign-in
+      </Button>
     </form>
   );
+}
+
+export async function refreshSessionUser(): Promise<void> {
+  await authClient.getSession({ query: { disableCookieCache: true } });
+  authClient.$store.notify("$sessionSignal");
 }
 
 const CLAIM_DISMISSED_KEY = "fluncle-claim-username-dismissed";
@@ -306,7 +347,7 @@ export function ClaimUsernameDialog({
       }
 
       setOpen(false);
-      await refresh();
+      await Promise.all([refresh(), refreshSessionUser()]);
     } catch {
       setError("Could not save right now. Try again in a moment.");
     } finally {

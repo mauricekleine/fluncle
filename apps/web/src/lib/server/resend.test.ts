@@ -4,6 +4,7 @@ import {
   createBroadcast,
   sendBroadcast,
   sendPasswordResetEmail,
+  sendFollowDigestEmail,
   sendVerificationEmail,
 } from "./resend";
 
@@ -124,6 +125,48 @@ describe("createBroadcast + sendBroadcast", () => {
     await expect(
       createBroadcast({ editionId: "ed_x", html: "x", name: "n", subject: "s" }),
     ).rejects.toMatchObject({ code: "broadcast_create_failed" });
+  });
+});
+
+describe("sendFollowDigestEmail", () => {
+  it("preserves the upstream status for bounded retry decisions", async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify({ message: "slow down" }), { status: 429 }),
+    );
+    await expect(
+      sendFollowDigestEmail({
+        from: "Fluncle <fluncle@newsletter.fluncle.com>",
+        headers: {},
+        html: "<p>New releases</p>",
+        idempotencyKey: "follow-digest/user-1/2026-W39/claim",
+        subject: "Your follows",
+        text: "New releases",
+        to: "one@example.com",
+      }),
+    ).rejects.toMatchObject({ upstreamStatus: 429 });
+  });
+  it("sends idempotently with one-click unsubscribe headers", async () => {
+    fetchMock.mockResolvedValueOnce(ok({ id: "email_1" }));
+    const result = await sendFollowDigestEmail({
+      from: "Frozen Sender <frozen@example.com>",
+      headers: {
+        "List-Unsubscribe": "<https://www.fluncle.com/api/v1/follow-digest/unsubscribe?token=abc>",
+        "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
+      },
+      html: "<p>New releases</p>",
+      idempotencyKey: "follow-digest/user-1/2026-W39",
+      subject: "Your follows",
+      text: "New releases",
+      to: "one@example.com",
+    });
+    const [url, init] = fetchMock.mock.calls[0] ?? [];
+    expect(url).toBe("https://api.resend.com/emails");
+    expect(init.headers["Idempotency-Key"]).toBe("follow-digest/user-1/2026-W39");
+    expect(JSON.parse(init.body).headers["List-Unsubscribe-Post"]).toBe(
+      "List-Unsubscribe=One-Click",
+    );
+    expect(JSON.parse(init.body).from).toBe("Frozen Sender <frozen@example.com>");
+    expect(result.id).toBe("email_1");
   });
 });
 

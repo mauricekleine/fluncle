@@ -4473,6 +4473,56 @@ a.catalogue-letter:focus-visible {
   line-height: 1.45;
 }
 
+.auth-door {
+  max-width: 26rem;
+}
+
+.auth-door-or {
+  color: var(--stardust);
+  font-size: 0.8rem;
+  text-align: center;
+}
+
+.magic-link-sent {
+  color: var(--starlight-cream);
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+.magic-link-sent:focus {
+  outline: none;
+}
+
+.magic-link-sent strong {
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.follow-control {
+  align-items: flex-start;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-top: 1rem;
+}
+
+.follow-note {
+  color: var(--stardust);
+  font-size: 0.85rem;
+  line-height: 1.45;
+  max-width: 34rem;
+}
+
+.follow-note:empty {
+  margin-top: -0.5rem;
+}
+
+.magic-link-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
 .account-row {
   align-items: center;
   display: flex;

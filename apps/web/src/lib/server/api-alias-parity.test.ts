@@ -5,7 +5,12 @@ import { describe, expect, it } from "vitest";
 const API_DIR = fileURLToPath(new URL("../../routes/api", import.meta.url));
 const V1_DIR = `${API_DIR}/v1`;
 
-const V1_ONLY_ROUTES = new Set(["openapi[.]json", "postman[.]json", "status"]);
+const V1_ONLY_ROUTES = new Set([
+  "follow-digest/unsubscribe",
+  "openapi[.]json",
+  "postman[.]json",
+  "status",
+]);
 
 const BARE_ONLY_ROUTES = new Set(["og.set", "og.hub"]);
 

@@ -54,6 +54,7 @@ const EXPECTED_WRITE_OPERATION_IDS = [
   "catalogue.reconcile-hub-counts",
   "catalogue.verify-captures",
   "clips.studio",
+  "email.follow-digest",
   "frontier.refresh",
   "galaxies.cluster",
   "health.snapshot",
@@ -121,6 +122,7 @@ const EXPECTED_CONTROL_PLANE_ADMISSION_EXEMPTIONS = [
 ] as const;
 const EXPECTED_DELIBERATELY_NON_REPLAYABLE_OPERATION_IDS = [
   "clips.studio",
+  "email.follow-digest",
   "frontier.refresh",
   "live.snapshot",
   "ops.pin-watch",

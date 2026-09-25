@@ -5,6 +5,7 @@ import {
   type SpanJSON,
   type TransactionEvent,
 } from "@sentry/core";
+import { scrubSensitiveValue } from "../sentry-scrub";
 
 const LEGACY_RECEIPT_KEY_IN_URL = /(\/api\/v1\/admin\/operation-receipts\/)[^/?#\s]+/g;
 
@@ -26,7 +27,11 @@ function scrubEventCoordinates<T extends { request?: { url?: string }; transacti
 }
 
 export function scrubServerSentryEvent(event: ErrorEvent): ErrorEvent {
-  return scrubEventCoordinates(event);
+  return scrubSensitiveValue(scrubEventCoordinates(event));
+}
+
+export function scrubServerSentryBreadcrumb<T>(breadcrumb: T): T {
+  return scrubSensitiveValue(breadcrumb);
 }
 
 export function scrubServerSentrySpan(span: SpanJSON): SpanJSON {
@@ -40,14 +45,14 @@ export function scrubServerSentrySpan(span: SpanJSON): SpanJSON {
     }
   }
 
-  return span;
+  return scrubSensitiveValue(span);
 }
 
 export function scrubServerSentryTransaction(event: TransactionEvent): TransactionEvent {
   scrubEventCoordinates(event);
   event.spans = event.spans?.map(scrubServerSentrySpan);
 
-  return event;
+  return scrubSensitiveValue(event);
 }
 
 export function serverSentryIntegrations(defaultIntegrations: Integration[]): Integration[] {
@@ -58,3 +63,10 @@ export function serverSentryIntegrations(defaultIntegrations: Integration[]): In
     metadataOnlyHttp,
   ];
 }
+
+export const serverSentryScrubHooks = {
+  beforeBreadcrumb: scrubServerSentryBreadcrumb,
+  beforeSend: scrubServerSentryEvent,
+  beforeSendSpan: scrubServerSentrySpan,
+  beforeSendTransaction: scrubServerSentryTransaction,
+};

@@ -29,12 +29,15 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   "GET /admin/albums/{slug}/bio-draft": "draft_album_bio",
 
   "GET /admin/artifacts/changes": "list_artifact_changes",
+
   "GET /admin/artifacts/consumers/{consumerId}": "get_artifact_consumer",
+
   "GET /admin/artifacts/snapshots": "list_artifact_snapshot",
 
   "GET /admin/artist-rules": "list_artist_rules",
 
   "GET /admin/artists": "list_unresolved_artists",
+
   "GET /admin/artists/bio-queue": "list_artists_missing_bio",
 
   "GET /admin/artists/socials": "list_artist_socials",
@@ -46,17 +49,22 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   "GET /admin/catalogue": "list_catalogue_tracks",
 
   "GET /admin/catalogue/anchor/apify-budget": "get_anchor_apify_budget",
+
   "GET /admin/catalogue/anchor/breaker": "get_spotify_anchor_breaker",
 
   "GET /admin/catalogue/capture-budget": "get_capture_budget",
 
   "GET /admin/catalogue/captures/unverified": "list_unverified_captures",
+
   "GET /admin/catalogue/crawl": "get_crawl_status",
+
   "GET /admin/clips": "list_clips",
 
   "GET /admin/clips/social": "list_clip_posts",
 
   "GET /admin/clips/{clipId}/caption": "get_clip_caption",
+
+  "GET /admin/follow-digests/state": "get_follow_digest_state",
 
   "GET /admin/frontier/minting": "get_frontier_minting",
 
@@ -67,15 +75,19 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   "GET /admin/labels": "list_labels_admin",
 
   "GET /admin/labels/aliases": "list_label_aliases",
+
   "GET /admin/labels/bio-queue": "list_labels_missing_bio",
 
   "GET /admin/labels/{id}/artists": "list_label_artist_rules",
 
   "GET /admin/labels/{slug}/bio-draft": "draft_label_bio",
+
   "GET /admin/lastfm/auth/start": "start_lastfm_auth",
 
   "GET /admin/logbook/gaps": "list_logbook_gaps",
+
   "GET /admin/mixtapes": "list_mixtapes_admin",
+
   "GET /admin/mixtapes/{mixtapeId}/social": "get_mixtape_social",
 
   "GET /admin/newsletter/editions": "list_editions_admin",
@@ -87,17 +99,23 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   "GET /admin/projections/status": "get_projection_status",
 
   "GET /admin/prompts": "list_prompts",
+
   "GET /admin/prompts/{slug}": "get_prompt",
+
   "GET /admin/recordings": "list_recordings",
+
   "GET /admin/recordings/{recordingId}": "get_recording",
 
   "GET /admin/social/metrics": "get_social_metrics",
+
   "GET /admin/submissions": "list_submissions",
+
   "GET /admin/submissions/{submissionId}": "get_submission",
 
   "GET /admin/subscriptions": "list_subscriptions",
 
   "GET /admin/telemetry/runs": "read_run_ledger",
+
   "GET /admin/tracks": "list_tracks_admin",
 
   "GET /admin/tracks/embeddings": "list_track_embeddings",
@@ -109,6 +127,7 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   "GET /admin/tracks/{trackId}": "get_track_admin",
 
   "GET /admin/tracks/{trackId}/observation-neighbours": "list_observation_neighbours",
+
   "GET /admin/tracks/{trackId}/social": "list_track_social",
 
   "GET /admin/users": "list_users_admin",
@@ -118,6 +137,7 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   "PATCH /admin/artist-rules/{id}": "update_artist_rule",
 
   "PATCH /admin/artists/socials/{socialId}": "update_artist_social",
+
   "PATCH /admin/clips/{clipId}": "update_clip",
 
   "PATCH /admin/clips/{clipId}/schedule": "set_clip_schedule",
@@ -127,6 +147,7 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   "PATCH /admin/labels/{id}": "update_label",
 
   "PATCH /admin/logbook/{sector}": "update_logbook_entry",
+
   "PATCH /admin/mixtapes/{mixtapeId}": "update_mixtape",
 
   "PATCH /admin/newsletter/editions/{id}": "update_edition",
@@ -134,18 +155,27 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   "PATCH /admin/note-gate": "update_note_gate",
 
   "PATCH /admin/observation-gate": "update_observation_gate",
+
   "PATCH /admin/recordings/{recordingId}": "update_recording",
 
   "PATCH /admin/subscriptions/{id}": "update_subscription",
+
   "PATCH /admin/tracks/{trackId}": "update_track",
+
   "PATCH /admin/tracks/{trackId}/social/{platform}": "update_track_social",
 
   "POST /admin/albums/{slug}/bio": "describe_album",
+
   "POST /admin/artifacts/changes/compact": "compact_artifact_changes",
+
   "POST /admin/artifacts/consumers": "register_artifact_consumer",
+
   "POST /admin/artifacts/consumers/{consumerId}/activate": "activate_artifact_consumer",
+
   "POST /admin/artifacts/consumers/{consumerId}/checkpoint": "acknowledge_artifact_changes",
+
   "POST /admin/artifacts/consumers/{consumerId}/inactivate": "inactivate_artifact_consumer",
+
   "POST /admin/artifacts/consumers/{consumerId}/rebuilds/{stream}/checkpoint":
     "checkpoint_artifact_rebuild",
 
@@ -158,7 +188,9 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   "POST /admin/artists/socials/{socialId}/review": "review_artist_social",
 
   "POST /admin/artists/{artistId}/resolve": "resolve_artist",
+
   "POST /admin/artists/{artistId}/review": "review_artist",
+
   "POST /admin/artists/{artistId}/socials": "add_artist_social",
 
   "POST /admin/artists/{slug}/bio": "describe_artist",
@@ -166,12 +198,15 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   "POST /admin/auth/revoke-grants": "revoke_admin_grants",
 
   "POST /admin/backfill/apple-catalogue": "backfill_apple_catalogue",
+
   "POST /admin/backfill/apple-music": "backfill_apple_music",
 
   "POST /admin/backfill/artist-credits": "backfill_artist_credits",
 
   "POST /admin/backfill/artist-edges": "backfill_artist_edges",
+
   "POST /admin/backfill/artist-images": "backfill_artist_images",
+
   "POST /admin/backfill/artists": "backfill_artists",
 
   "POST /admin/backfill/beatport": "backfill_beatport",
@@ -179,14 +214,17 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   "POST /admin/backfill/cover-masters": "backfill_cover_masters",
 
   "POST /admin/backfill/deezer": "backfill_deezer",
+
   "POST /admin/backfill/discogs": "backfill_discogs",
 
   "POST /admin/backfill/discogs-facts": "backfill_discogs_facts",
+
   "POST /admin/backfill/label-images": "backfill_label_images",
 
   "POST /admin/backfill/label-lineage": "backfill_label_lineage",
 
   "POST /admin/backfill/label-releases": "backfill_label_releases",
+
   "POST /admin/backfill/lastfm": "backfill_lastfm",
 
   "POST /admin/backfill/recording-mbids": "backfill_recording_mbids",
@@ -212,7 +250,9 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   "POST /admin/catalogue/captures/verify": "verify_capture",
 
   "POST /admin/catalogue/certify": "certify_track",
+
   "POST /admin/catalogue/crawl": "crawl_catalogue",
+
   "POST /admin/catalogue/crawl/commits": "commit_crawl_nodes",
 
   "POST /admin/catalogue/demand": "record_demand",
@@ -226,6 +266,7 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   "POST /admin/catalogue/wrong-audio/clear": "clear_wrong_audio",
 
   "POST /admin/catalogue/wrong-audio/flag": "flag_wrong_audio",
+
   "POST /admin/clips/drip": "drip_clips",
 
   "POST /admin/clips/schedule": "set_clip_schedules",
@@ -237,6 +278,8 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   "POST /admin/costs/events": "record_cost",
 
   "POST /admin/database-admission": "coordinate_database_admission",
+
+  "POST /admin/follow-digests/send": "send_follow_digests",
 
   "POST /admin/frontier-playlists/refresh": "refresh_frontier_playlists",
 
@@ -261,47 +304,65 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   "POST /admin/logbook/{sector}": "create_logbook_entry",
 
   "POST /admin/migrations/preview-archive": "migrate_preview_archive",
+
   "POST /admin/mixcloud/token": "mint_mixcloud_token",
 
   "POST /admin/mixtapes/{mixtapeId}/announce": "announce_mixtape",
+
   "POST /admin/mixtapes/{mixtapeId}/mixcloud/finalize": "finalize_mixtape_mixcloud",
 
   "POST /admin/mixtapes/{mixtapeId}/mixcloud/resync": "resync_mixtape_mixcloud",
 
   "POST /admin/mixtapes/{mixtapeId}/set-video/presign": "presign_set_video_upload",
+
   "POST /admin/mixtapes/{mixtapeId}/youtube/finalize": "finalize_mixtape_youtube",
+
   "POST /admin/mixtapes/{mixtapeId}/youtube/initiate": "initiate_mixtape_youtube",
+
   "POST /admin/mixtapes/{mixtapeId}/youtube/publish": "publish_mixtape_youtube",
 
   "POST /admin/mixtapes/{mixtapeId}/youtube/resync": "resync_mixtape_youtube",
+
   "POST /admin/newsletter/editions": "create_edition",
+
   "POST /admin/newsletter/editions/{id}/send": "send_edition",
 
   "POST /admin/note-rejections/{id}/resolve": "resolve_note_rejection",
 
   "POST /admin/observation-rejections/{id}/resolve": "resolve_observation_rejection",
+
   "POST /admin/operation-receipts/inspect": "get_operation_receipt",
+
   "POST /admin/operation-receipts/reconcile": "reconcile_operation_receipts",
+
   "POST /admin/operation-receipts/resolve": "resolve_operation_receipt",
 
   "POST /admin/projections/due-work/{workKind}/rekey": "rekey_due_work_queue",
+
   "POST /admin/projections/{target}/advance": "advance_projection",
 
   "POST /admin/prompts/{slug}": "update_prompt",
+
   "POST /admin/push/receipts/sweep": "sweep_push_receipts",
 
   "POST /admin/reach/collect": "record_platform_stats",
+
   "POST /admin/recordings": "create_recording",
 
   "POST /admin/recordings/{recordingId}/clips": "create_clip",
+
   "POST /admin/recordings/{recordingId}/promote": "promote_recording",
+
   "POST /admin/recordings/{recordingId}/set-video/presign": "presign_recording_upload",
 
   "POST /admin/social/metrics/record": "record_social_metrics",
+
   "POST /admin/social/posts/capture": "capture_post_urls",
 
   "POST /admin/social/publish/advance": "advance_publish_queue",
+
   "POST /admin/submissions/{submissionId}/approve": "approve_submission",
+
   "POST /admin/submissions/{submissionId}/reject": "reject_submission",
 
   "POST /admin/submissions/{submissionId}/triage": "triage_submission",
@@ -309,31 +370,43 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   "POST /admin/subscriptions": "create_subscription",
 
   "POST /admin/telemetry/runs": "record_run",
+
   "POST /admin/tracks": "publish_track",
 
   "POST /admin/tracks/captures/commit": "commit_track_captures",
+
   "POST /admin/tracks/captures/prepare": "prepare_track_captures",
+
   "POST /admin/tracks/embeddings": "update_track_embeddings",
+
   "POST /admin/tracks/{trackId}/capture/authorize": "authorize_track_capture",
+
   "POST /admin/tracks/{trackId}/capture/commit": "commit_track_capture",
+
   "POST /admin/tracks/{trackId}/capture/prepare": "prepare_track_capture",
 
   "POST /admin/tracks/{trackId}/context": "context_track",
 
   "POST /admin/tracks/{trackId}/note": "note_track",
+
   "POST /admin/tracks/{trackId}/observe": "observe_track",
+
   "POST /admin/tracks/{trackId}/social/{platform}/draft": "draft_track_social",
+
   "POST /admin/tracks/{trackId}/video/finalize": "finalize_track_video",
 
   "POST /admin/tracks/{trackId}/video/purge": "purge_video",
 
   "POST /admin/tracks/{trackId}/video/requeue": "requeue_video",
+
   "POST /admin/tracks/{trackId}/video/uploads": "presign_track_video_uploads",
 
   "POST /admin/twitch/live": "record_live_state",
+
   "POST /admin/youtube/token": "mint_youtube_token",
 
   "PUT /admin/catalogue/anchor/apify": "set_anchor_apify",
+
   "PUT /admin/catalogue/anchor/apify-budget": "set_anchor_apify_budget",
 
   "PUT /admin/catalogue/anchor/search": "set_anchor_search",
@@ -343,6 +416,8 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   "PUT /admin/catalogue/dismissed": "set_track_dismissed",
 
   "PUT /admin/clips/drip/state": "set_clip_drip",
+
+  "PUT /admin/follow-digests/state": "set_follow_digest_state",
 
   "PUT /admin/frontier/minting": "set_frontier_minting",
 

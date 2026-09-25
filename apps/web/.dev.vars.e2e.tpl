@@ -17,6 +17,13 @@ TURSO_AUTH_TOKEN=e2e-local-token
 SONAR_BASE_URL=http://127.0.0.1:__E2E_SONAR_PORT__
 SONAR_SECRET=e2e-fake-sonar-secret
 
+# In-process fake Resend, bound to this checkout's isolated port: every email the worker sends
+# lands there and a spec reads it back (tests/e2e/fake-resend.ts). Nothing reaches Resend.
+RESEND_API_URL=http://127.0.0.1:__E2E_MAIL_PORT__
+RESEND_API_KEY=re_e2e_fake_key
+RESEND_FROM=Fluncle <fluncle@example.invalid>
+RESEND_SEGMENT_ID=e2e-fake-segment
+
 # Every spec shares one local address, so the per-IP search budget is raised for the suite.
 FLUNCLE_E2E=1
 SEARCH_ARCHIVE_RATE_LIMIT=100000
