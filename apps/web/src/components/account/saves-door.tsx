@@ -25,10 +25,12 @@ import {
 } from "@fluncle/ui/components/dropdown-menu";
 import { Input } from "@fluncle/ui/components/input";
 import { Skeleton } from "@fluncle/ui/components/skeleton";
+import { TrackArtwork } from "@/components/track-artwork";
 import { formatDateLong } from "@/lib/format";
 import { albumCoverAtSize } from "@/lib/media";
 import { toQueueTrack } from "@/lib/player-tracks";
 import { usePreviewPlayer } from "@/lib/preview-player";
+import { unsaveTrack } from "@/lib/saved-tracks";
 import {
   filterSavedFindings,
   SAVES_POWER_SCALE,
@@ -116,12 +118,12 @@ function SavedFindingsSection({
 
   return (
     <section className="account-section">
-      <h2>Saved findings</h2>
+      <h2>Saved tracks</h2>
 
       {showTools ? (
         <div className="saves-tools">
           <Input
-            aria-label="Search saved findings by artist or title"
+            aria-label="Search saved tracks by artist or title"
             className="saves-search"
             onChange={(event) => setQuery(event.target.value)}
             placeholder="Search by artist or title"
@@ -142,11 +144,11 @@ function SavedFindingsSection({
 
       {findings.length === 0 ? (
         <p className="account-muted">
-          Nothing saved yet. Tap the bookmark on any finding in the archive and it lands here.
+          Nothing saved yet. When a track grabs you, tap Save and it lands here.
         </p>
       ) : visible.length === 0 ? (
         <p aria-live="polite" className="account-muted">
-          No saved findings match that search.
+          No saved tracks match that search.
         </p>
       ) : (
         <ul className="account-list saves-list">
@@ -209,6 +211,10 @@ function SavedFindingRow({
         method: "DELETE",
       });
 
+      if (response.ok) {
+        unsaveTrack(finding.trackId);
+      }
+
       setMessage(response.ok ? "" : "Could not remove that save. Try again in a moment.");
       await refresh();
     } finally {
@@ -222,22 +228,21 @@ function SavedFindingRow({
         <span aria-hidden className="saves-row-logid" />
 
         <span className="saves-cover-wrap">
-          {finding.imageUrl ? (
-            <img
-              alt=""
-              className="saves-cover"
-              height={40}
-              loading="lazy"
-              src={albumCoverAtSize(finding.imageUrl, "small")}
-              width={40}
-            />
-          ) : (
-            <span aria-hidden className="saves-cover" />
-          )}
+          <TrackArtwork className="saves-cover" src={albumCoverAtSize(finding.imageUrl, "small")} />
         </span>
 
         <span className="saves-row-body min-w-0">
-          <span className="saves-row-title block">{trackLine}</span>
+          {finding.href ? (
+            <Link
+              aria-label={`Open the track page for ${trackLine}`}
+              className="track-row-link"
+              to={finding.href as never}
+            >
+              <span className="saves-row-title block">{trackLine}</span>
+            </Link>
+          ) : (
+            <span className="saves-row-title block">{trackLine}</span>
+          )}
           <span className="saves-row-meta">Saved {formatDateLong(finding.savedAt)}</span>
         </span>
 
@@ -288,18 +293,7 @@ function SavedFindingLitRow({
       </Link>
 
       <span className="preview-art saves-cover-wrap">
-        {finding.imageUrl ? (
-          <img
-            alt=""
-            className="saves-cover"
-            height={40}
-            loading="lazy"
-            src={albumCoverAtSize(finding.imageUrl, "small")}
-            width={40}
-          />
-        ) : (
-          <span aria-hidden className="saves-cover" />
-        )}
+        <TrackArtwork className="saves-cover" src={albumCoverAtSize(finding.imageUrl, "small")} />
         <button
           aria-label={
             preview.isActive

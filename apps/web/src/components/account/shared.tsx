@@ -51,6 +51,7 @@ export type Collection = {
 
 export type SavedFinding = {
   artists: string[];
+  href?: string;
   imageUrl?: string;
   logId?: string;
   note?: string;

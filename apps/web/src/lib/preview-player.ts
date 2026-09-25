@@ -35,6 +35,7 @@ export type QueueTrack = {
   id: string;
 
   lit?: boolean;
+  logId?: string;
   similar?: boolean;
   spotifyUrl?: string;
   title: string;

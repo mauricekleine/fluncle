@@ -1,15 +1,9 @@
-import {
-  CaretRightIcon,
-  DotsThreeIcon,
-  FilmStripIcon,
-  ShareNetworkIcon,
-  WaveformIcon,
-} from "@phosphor-icons/react";
+import { CaretRightIcon, DotsThreeIcon, FilmStripIcon, WaveformIcon } from "@phosphor-icons/react";
 import { Link } from "@tanstack/react-router";
-import { useCallback } from "react";
 import { siMixcloud, siSoundcloud, siSpotify, siTiktok, siYoutube } from "simple-icons";
 import { BrandIcon } from "@/components/brand-icon";
 import { PlayCover } from "@/components/player/playable-list";
+import { SaveMenuItem, ShareMenuItem } from "@/components/player/track-menu-items";
 import { GraphLink } from "@/components/graph-link";
 import { TrackArtwork } from "@/components/track-artwork";
 import { Badge } from "@fluncle/ui/components/badge";
@@ -21,11 +15,10 @@ import {
   DropdownMenuTrigger,
 } from "@fluncle/ui/components/dropdown-menu";
 import { discoveryQueueTrack, findingToDiscoveryTrack } from "@/lib/discovery-tracks";
-import { siteUrl } from "@/lib/fluncle-links";
 import { bangersCount, formatAlbumDuration, formatDuration } from "@/lib/format";
 import { albumCoverAtSize } from "@/lib/media";
 import { type FeedItem, mixtapeCoverUrl, mixtapeDisplayTitle } from "@/lib/mixtapes";
-import { similarSearchHref } from "@/lib/player-tracks";
+import { savableTrack, similarSearchHref } from "@/lib/player-tracks";
 import { type QueueTrack } from "@/lib/preview-player";
 import { type Track } from "@/lib/tracks";
 import { cn } from "@/lib/utils";
@@ -169,7 +162,7 @@ export function TrackRow({ track, trackNumber }: { track: FeedItem; trackNumber:
 }
 
 function MixtapeLinksMenu({ track }: { track: Extract<FeedItem, { type: "mixtape" }> }) {
-  const shareUrl = track.logId ? `${siteUrl}/log/${track.logId}` : siteUrl;
+  const shareHref = track.logId ? `/log/${track.logId}` : "/";
   const externalLinks = [
     track.externalUrls.mixcloud
       ? { href: track.externalUrls.mixcloud, icon: siMixcloud, label: "Mixcloud" }
@@ -183,18 +176,6 @@ function MixtapeLinksMenu({ track }: { track: Extract<FeedItem, { type: "mixtape
   ].filter((link): link is { href: string; icon: typeof siMixcloud; label: string } =>
     Boolean(link),
   );
-
-  const share = useCallback(() => {
-    if (typeof navigator === "undefined") {
-      return;
-    }
-
-    if (navigator.share) {
-      void navigator.share({ title: track.title, url: shareUrl }).catch(() => {});
-    } else {
-      void navigator.clipboard?.writeText(shareUrl);
-    }
-  }, [shareUrl, track.title]);
 
   return (
     <DropdownMenu>
@@ -215,10 +196,7 @@ function MixtapeLinksMenu({ track }: { track: Extract<FeedItem, { type: "mixtape
           </DropdownMenuItem>
         ))}
         {externalLinks.length > 0 ? <DropdownMenuSeparator /> : null}
-        <DropdownMenuItem onClick={share}>
-          <ShareNetworkIcon aria-hidden="true" className="size-4" />
-          Share
-        </DropdownMenuItem>
+        <ShareMenuItem title={track.title} track={{ href: shareHref }} />
       </DropdownMenuContent>
     </DropdownMenu>
   );
@@ -235,20 +213,6 @@ function TrackLinksMenu({
   track: Track;
   trackLine: string;
 }) {
-  const shareUrl = track.logId ? `${siteUrl}/log/${track.logId}` : track.spotifyUrl;
-
-  const share = useCallback(() => {
-    if (typeof navigator === "undefined") {
-      return;
-    }
-
-    if (navigator.share) {
-      void navigator.share({ title: trackLine, url: shareUrl }).catch(() => {});
-    } else {
-      void navigator.clipboard?.writeText(shareUrl);
-    }
-  }, [shareUrl, trackLine]);
-
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
@@ -257,7 +221,7 @@ function TrackLinksMenu({
       >
         <DotsThreeIcon aria-hidden="true" size={18} weight="bold" />
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="min-w-44 shadow-none">
+      <DropdownMenuContent align="end" className="track-menu-content min-w-48 shadow-none">
         {storyLogId ? (
           <DropdownMenuItem
             render={
@@ -318,10 +282,8 @@ function TrackLinksMenu({
           Similar tracks
         </DropdownMenuItem>
         <DropdownMenuSeparator />
-        <DropdownMenuItem onClick={share}>
-          <ShareNetworkIcon aria-hidden="true" className="size-4" />
-          Share
-        </DropdownMenuItem>
+        <SaveMenuItem track={savableTrack({ ...queued, logId: track.logId })} />
+        <ShareMenuItem title={trackLine} track={queued} />
       </DropdownMenuContent>
     </DropdownMenu>
   );

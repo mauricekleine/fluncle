@@ -7,9 +7,11 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@fluncle/ui/components/dropdown-menu";
-import { similarSearchHref, trackCredit } from "@/lib/player-tracks";
+import { SaveMenuItem, ShareMenuItem } from "@/components/player/track-menu-items";
+import { savableTrack, similarSearchHref, trackCredit } from "@/lib/player-tracks";
 import { type QueueTrack } from "@/lib/preview-player";
 import { cn } from "@/lib/utils";
 
@@ -23,7 +25,10 @@ export function TrackActionsMenu({
   className?: string;
 
   side?: "bottom" | "top";
-  track: Pick<QueueTrack, "artists" | "id" | "similar" | "spotifyUrl" | "title">;
+  track: Pick<
+    QueueTrack,
+    "artists" | "coverUrl" | "href" | "id" | "logId" | "similar" | "spotifyUrl" | "title"
+  >;
 }): ReactNode {
   const credit = trackCredit(track);
 
@@ -35,7 +40,11 @@ export function TrackActionsMenu({
       >
         <DotsThreeVerticalIcon aria-hidden="true" size={18} weight="bold" />
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="min-w-44 shadow-none" side={side}>
+      <DropdownMenuContent
+        align="end"
+        className="track-menu-content min-w-48 shadow-none"
+        side={side}
+      >
         {children}
         {track.spotifyUrl ? (
           <DropdownMenuItem
@@ -66,6 +75,9 @@ export function TrackActionsMenu({
             Similar tracks
           </DropdownMenuItem>
         )}
+        <DropdownMenuSeparator />
+        <SaveMenuItem track={savableTrack(track)} />
+        <ShareMenuItem title={credit} track={track} />
       </DropdownMenuContent>
     </DropdownMenu>
   );
