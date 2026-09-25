@@ -192,7 +192,7 @@ export const tracks = sqliteTable(
 
     spotifyAnchorInvalidAttempts: integer("spotify_anchor_invalid_attempts").notNull().default(0),
 
-    spotifyAnchorQuotaAdmittedAt: text("spotify_anchor_quota_admitted_at"),
+    spotifyAnchorPaidAdmittedAt: text("spotify_anchor_paid_admitted_at"),
 
     spotifyAnchorSource: text("spotify_anchor_source"),
 

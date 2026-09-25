@@ -164,10 +164,36 @@ describe("quota-aware paid admission", () => {
     const { anchorSpotifySearchGate } = await import("./anchor-spotify-search");
     expect(
       (await anchorSpotifySearchGate(new Date(NON_FRIDAY.getTime() + 2 * 60 * 60 * 1000))).reason,
-    ).toBe("breaker_quota");
+    ).toBe("open");
     expect(
       (await anchorSpotifySearchGate(new Date(NON_FRIDAY.getTime() + 24 * 60 * 60 * 1000))).reason,
     ).toBe("open");
+  });
+
+  it("reopens the free lane after a 00:30 quota trip before the 03:30 re-probe", async () => {
+    const { resolveAnchorFree } = await import("./anchor");
+    const { anchorSpotifySearchGate, setAnchorSpotifySearchEnabled } =
+      await import("./anchor-spotify-search");
+    const { recordSpotifyThrottle } = await import("./spotify-anchor-breaker");
+    const quotaAt = new Date("2026-07-22T00:30:00.000Z");
+    await setAnchorSpotifySearchEnabled(true);
+    for (let i = 0; i < 5; i += 1) {
+      await recordSpotifyThrottle(quotaAt.getTime(), true);
+    }
+    expect(await anchorSpotifySearchGate(quotaAt)).toMatchObject({
+      nextEligibleAt: "2026-07-22T01:30:00.000Z",
+      reason: "breaker_quota",
+    });
+    await seedCatalogue({ isrc: "ROWISRC0001", trackId: "mb_quota_reprobe" });
+    findSpotifyTrackByIsrc.mockResolvedValue({ match: { trackId: "spISRC" } });
+    fetchTrackMetadata.mockResolvedValue(metadata());
+    expect(
+      (await resolveAnchorFree("mb_quota_reprobe", new Date("2026-07-22T03:10:00.000Z"))).anchored,
+    ).toBe(true);
+    expect(findSpotifyTrackByIsrc).toHaveBeenCalled();
+    expect((await anchorSpotifySearchGate(new Date("2026-07-22T03:30:00.000Z"))).reason).toBe(
+      "open",
+    );
   });
 
   it("keeps an unasked ISRC row off Apify after a throttle trip", async () => {
@@ -961,26 +987,70 @@ describe("anchorTrack — the admission rule is re-checked at the write boundary
     }
   });
 
-  it("rejects a no-ISRC paid report during a quota trip", async () => {
-    const { anchorTrack } = await import("./anchor");
+  it("honours a paid receipt when an actor returns inside the Friday window", async () => {
+    const { anchorTrack, resolveAnchorFree } = await import("./anchor");
     const { setAnchorSpotifySearchEnabled } = await import("./anchor-spotify-search");
     const { recordSpotifyThrottle } = await import("./spotify-anchor-breaker");
+    const chargedAt = new Date("2026-07-24T03:59:00.000Z");
     await setAnchorSpotifySearchEnabled(true);
-    await seedCatalogue({ isrc: null, trackId: "mb_quota_direct_no_isrc" });
+    await seedCatalogue({ isrc: "ROWISRC0001", trackId: "mb_friday_edge" });
     for (let i = 0; i < 5; i += 1) {
-      await recordSpotifyThrottle(NON_FRIDAY.getTime(), true);
+      await recordSpotifyThrottle(chargedAt.getTime(), true);
     }
+    expect((await resolveAnchorFree("mb_friday_edge", chargedAt)).apifyEligible).toBe(true);
 
     vi.useFakeTimers({ toFake: ["Date"] });
-    vi.setSystemTime(NON_FRIDAY);
+    vi.setSystemTime(new Date("2026-07-24T04:01:00.000Z"));
     try {
-      await expect(anchorTrack("mb_quota_direct_no_isrc", [candidate])).rejects.toMatchObject({
+      expect((await anchorTrack("mb_friday_edge", [candidate])).anchored).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("expires a charged receipt before accepting a late Friday report", async () => {
+    const { anchorTrack, resolveAnchorFree } = await import("./anchor");
+    const { setAnchorSpotifySearchEnabled } = await import("./anchor-spotify-search");
+    const { recordSpotifyThrottle } = await import("./spotify-anchor-breaker");
+    const chargedAt = new Date("2026-07-24T03:59:00.000Z");
+    await setAnchorSpotifySearchEnabled(true);
+    await seedCatalogue({ isrc: "ROWISRC0001", trackId: "mb_friday_late" });
+    for (let i = 0; i < 5; i += 1) {
+      await recordSpotifyThrottle(chargedAt.getTime(), true);
+    }
+    expect((await resolveAnchorFree("mb_friday_late", chargedAt)).apifyEligible).toBe(true);
+
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-07-24T06:01:00.000Z"));
+    try {
+      await expect(anchorTrack("mb_friday_late", [candidate])).rejects.toMatchObject({
         reason: "awaiting_free_ask",
       });
     } finally {
       vi.useRealTimers();
     }
-    expect((await anchorState("mb_quota_direct_no_isrc")).uri).toBeNull();
+  });
+
+  it("honours a paid no-ISRC row after its settled fuzzy ask when quota trips", async () => {
+    const { anchorTrack, resolveAnchorFree } = await import("./anchor");
+    const { setAnchorSpotifySearchEnabled } = await import("./anchor-spotify-search");
+    const { recordSpotifyThrottle } = await import("./spotify-anchor-breaker");
+    const chargedAt = new Date("2026-07-22T12:00:00.000Z");
+    await setAnchorSpotifySearchEnabled(true);
+    await seedCatalogue({ isrc: null, trackId: "mb_fuzzy_then_quota" });
+    searchTrackCandidates.mockResolvedValue([]);
+    expect((await resolveAnchorFree("mb_fuzzy_then_quota", chargedAt)).apifyEligible).toBe(true);
+    for (let i = 0; i < 5; i += 1) {
+      await recordSpotifyThrottle(chargedAt.getTime() + 60_000, true);
+    }
+
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(chargedAt.getTime() + 2 * 60_000));
+    try {
+      expect((await anchorTrack("mb_fuzzy_then_quota", [candidate])).anchored).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("refuses a never-asked ISRC row with `awaiting_free_ask`, touching nothing", async () => {

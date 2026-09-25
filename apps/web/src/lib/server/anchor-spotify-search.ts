@@ -1,5 +1,9 @@
 import { logEvent } from "./log";
-import { getSpotifyAnchorBreakerState, getSpotifyAnchorQuotaUntil } from "./spotify-anchor-breaker";
+import {
+  getSpotifyAnchorBreakerState,
+  getSpotifyAnchorQuotaUntil,
+  SPOTIFY_ANCHOR_BREAKER_REASON_QUOTA,
+} from "./spotify-anchor-breaker";
 import { getSetting, setSetting } from "./settings";
 import { isSpotifyCallBudgetAvailable, recordSpotifyCall } from "./spotify-budget";
 
@@ -69,6 +73,17 @@ export async function anchorSpotifySearchGate(now: Date): Promise<AnchorSpotifyG
       return { nextEligibleAt: null, reason: "breaker_throttle" };
     }
     const quotaUntil = await getSpotifyAnchorQuotaUntil(now.getTime());
+    if (breaker.tripped && breaker.reason === SPOTIFY_ANCHOR_BREAKER_REASON_QUOTA) {
+      return {
+        nextEligibleAt: new Date(
+          Math.max(
+            now.getTime() + breaker.cooldownRemainingMs,
+            quotaUntil ? Date.parse(quotaUntil) : 0,
+          ),
+        ).toISOString(),
+        reason: "breaker_quota",
+      };
+    }
     if (quotaUntil) {
       return { nextEligibleAt: quotaUntil, reason: "breaker_quota" };
     }

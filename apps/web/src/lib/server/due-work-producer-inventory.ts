@@ -290,7 +290,7 @@ export const DUE_WORK_REVIEWED_NONPRODUCER_WRITERS = [
     sites: [
       "anchor.ts:update:tracks:b6e72ebf",
       "anchor.ts:update:tracks:106f7943",
-      "anchor.ts:update:tracks:885aa678",
+      "anchor.ts:update:tracks:c07152e4",
     ],
   },
   {
@@ -808,7 +808,7 @@ export const GOAL_D_REVIEWED_NONPROJECTION_WRITERS = [
     sites: [
       "anchor.ts:update:tracks:b6e72ebf",
       "anchor.ts:update:tracks:106f7943",
-      "anchor.ts:update:tracks:885aa678",
+      "anchor.ts:update:tracks:c07152e4",
     ],
   },
   {

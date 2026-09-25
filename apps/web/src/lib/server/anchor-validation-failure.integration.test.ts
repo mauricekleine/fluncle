@@ -58,6 +58,46 @@ describe("anchor candidate validation quarantine", () => {
     expect((await listTrackWork({ kind: "anchor", limit: 1 }))[0]?.trackId).toBe(trackId);
   });
 
+  it("clears validation strikes after a successful report", async () => {
+    const { anchorTrack, recordAnchorValidationFailure } = await import("./anchor");
+    const trackId = "mb_d99a706f-1e9f-4117-a800-3d2453af800c";
+    await recordAnchorValidationFailure(trackId, 400);
+    expect(
+      (
+        await anchorTrack(
+          trackId,
+          [
+            {
+              artists: [{ name: "DJ Chef" }],
+              durationMs: 301000,
+              isrc: "GBQXF1710012",
+              spotifyTrackId: "spRecovered",
+              title: "The Streets",
+            },
+          ],
+          { source: "deezer" },
+        )
+      ).anchored,
+    ).toBe(true);
+    const row = await db.execute({
+      args: [trackId],
+      sql: "select spotify_anchor_invalid_attempts from tracks where track_id = ?",
+    });
+    expect(row.rows[0]?.spotify_anchor_invalid_attempts).toBe(0);
+  });
+
+  it("clears validation strikes after a clean report with no match", async () => {
+    const { anchorTrack, recordAnchorValidationFailure } = await import("./anchor");
+    const trackId = "mb_d99a706f-1e9f-4117-a800-3d2453af800c";
+    await recordAnchorValidationFailure(trackId, 422);
+    expect((await anchorTrack(trackId, [])).anchored).toBe(false);
+    const row = await db.execute({
+      args: [trackId],
+      sql: "select spotify_anchor_invalid_attempts from tracks where track_id = ?",
+    });
+    expect(row.rows[0]?.spotify_anchor_invalid_attempts).toBe(0);
+  });
+
   it("selects only ISRC rows when quota is closed and only prior asks on throttle", async () => {
     const { listTrackWork } = await import("./track-work");
     const trackId = "mb_d99a706f-1e9f-4117-a800-3d2453af800c";

@@ -1317,6 +1317,13 @@
       "when": 1790326017845,
       "tag": "0187_friendly_shaman",
       "breakpoints": true
+    },
+    {
+      "idx": 188,
+      "version": "6",
+      "when": 1790332545578,
+      "tag": "0188_careful_darkstar",
+      "breakpoints": true
     }
   ]
 }

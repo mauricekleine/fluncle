@@ -11,17 +11,12 @@ const SPOTIFY_ANCHOR_BREAKER_LAST_FAILURE_AT_KEY = "spotify_anchor_breaker_last_
 const SPOTIFY_ANCHOR_BREAKER_QUOTA_AT_KEY = "spotify_anchor_breaker_quota_at";
 
 export async function getSpotifyAnchorQuotaUntil(now: number): Promise<null | string> {
-  const quotaAt = await getSetting(SPOTIFY_ANCHOR_BREAKER_QUOTA_AT_KEY);
-  const quotaMs = parseStamp(quotaAt);
+  const quotaMs = parseStamp(await getSetting(SPOTIFY_ANCHOR_BREAKER_QUOTA_AT_KEY));
   if (!Number.isFinite(quotaMs) || quotaMs > now) {
     return null;
   }
-  const observedDay = new Date(quotaMs).toISOString().slice(0, 10);
-  const currentDay = new Date(now).toISOString().slice(0, 10);
-  if (observedDay !== currentDay) {
-    return null;
-  }
-  return new Date(Date.parse(`${currentDay}T00:00:00.000Z`) + 24 * 60 * 60 * 1000).toISOString();
+  const until = quotaMs + SPOTIFY_ANCHOR_BREAKER_COOLDOWN_MS;
+  return until > now ? new Date(until).toISOString() : null;
 }
 
 export const SPOTIFY_ANCHOR_BREAKER_MAX_FAILURES = 5;
@@ -147,6 +142,10 @@ export async function recordSpotifyThrottle(
 
     const verdict = spotifyAnchorBreakerVerdict({ now, trippedAt: trippedAt ?? null });
 
+    if (quotaExceeded) {
+      await setSetting(SPOTIFY_ANCHOR_BREAKER_QUOTA_AT_KEY, new Date(now).toISOString());
+    }
+
     if (verdict.corrupt) {
       await Promise.all([
         setSetting(SPOTIFY_ANCHOR_BREAKER_TRIPPED_AT_KEY, new Date(now).toISOString()),
@@ -170,10 +169,6 @@ export async function recordSpotifyThrottle(
     const quotaInWindow =
       quotaExceeded ||
       (Number.isFinite(quotaMs) && now - quotaMs < SPOTIFY_ANCHOR_BREAKER_FAILURE_WINDOW_MS);
-
-    if (quotaExceeded) {
-      await setSetting(SPOTIFY_ANCHOR_BREAKER_QUOTA_AT_KEY, stamp);
-    }
 
     if (streak >= SPOTIFY_ANCHOR_BREAKER_MAX_FAILURES) {
       const reason = quotaInWindow

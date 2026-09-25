@@ -1,0 +1,1 @@
+ALTER TABLE `tracks` RENAME COLUMN "spotify_anchor_quota_admitted_at" TO "spotify_anchor_paid_admitted_at";

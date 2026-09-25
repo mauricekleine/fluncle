@@ -220,7 +220,7 @@ type AnchorRow = {
   certified: number;
   duration_ms: number;
   isrc: null | string;
-  spotify_anchor_quota_admitted_at: null | string;
+  spotify_anchor_paid_admitted_at: null | string;
   spotify_isrc_asked_at: null | string;
   spotify_uri: null | string;
   title: string;
@@ -247,7 +247,7 @@ export class AnchorTrackError extends Error {
 }
 
 export const ANCHOR_INVALID_FAILURE_LIMIT = 3;
-export const ANCHOR_QUOTA_ADMISSION_MAX_AGE_MS = 2 * 60 * 60 * 1000;
+export const ANCHOR_PAID_ADMISSION_MAX_AGE_MS = 2 * 60 * 60 * 1000;
 
 async function assertPaidAnchorAdmission(
   row: AnchorRow,
@@ -257,27 +257,23 @@ async function assertPaidAnchorAdmission(
   if (source !== "apify") {
     return;
   }
+  const paidAdmittedAt = Date.parse(row.spotify_anchor_paid_admitted_at ?? "");
+  const paidAdmissionLive =
+    Number.isFinite(paidAdmittedAt) &&
+    Date.now() >= paidAdmittedAt &&
+    Date.now() - paidAdmittedAt <= ANCHOR_PAID_ADMISSION_MAX_AGE_MS;
+  if (paidAdmissionLive) {
+    return;
+  }
   const gateReason = (await anchorSpotifySearchGate(new Date())).reason;
   if (gateReason === "friday_window") {
     throw new AnchorTrackError("awaiting_free_ask", `Track ${trackId} waits for the Friday window`);
   }
-  if (gateReason === "breaker_quota" && !row.isrc?.trim()) {
-    throw new AnchorTrackError(
-      "awaiting_free_ask",
-      `Track ${trackId} has no ISRC for the quota exception`,
-    );
-  }
-  const quotaAdmittedAt = Date.parse(row.spotify_anchor_quota_admitted_at ?? "");
-  const quotaAdmissionLive =
-    Number.isFinite(quotaAdmittedAt) &&
-    Date.now() >= quotaAdmittedAt &&
-    Date.now() - quotaAdmittedAt <= ANCHOR_QUOTA_ADMISSION_MAX_AGE_MS;
   if (
     row.isrc?.trim() &&
     !row.spotify_isrc_asked_at &&
     (await isAnchorSpotifySearchEnabled()) &&
-    gateReason !== "breaker_quota" &&
-    !quotaAdmissionLive
+    gateReason !== "breaker_quota"
   ) {
     throw new AnchorTrackError(
       "awaiting_free_ask",
@@ -338,7 +334,7 @@ export async function anchorTrack(
   const found = await db.execute({
     args: [trackId],
     sql: `select t.isrc, t.title, t.artists_json, t.duration_ms, t.spotify_uri,
-                 t.spotify_isrc_asked_at, t.spotify_anchor_quota_admitted_at,
+                 t.spotify_isrc_asked_at, t.spotify_anchor_paid_admitted_at,
                  (f.track_id is not null) as certified
           from tracks t
           left join findings f on f.track_id = t.track_id
@@ -432,7 +428,8 @@ export async function anchorTrack(
             sql: `update tracks
                   set spotify_anchor_attempted_at = ?,
                       spotify_anchor_attempts = coalesce(spotify_anchor_attempts, 0) + 1,
-                      spotify_isrc_asked_at = null
+                      spotify_isrc_asked_at = null,
+                      spotify_anchor_invalid_attempts = 0
                   where track_id = ?`,
           },
         ],
@@ -481,7 +478,8 @@ export async function anchorTrack(
               -- The free exact-ISRC ask receipt dies with the question it was evidence about
               -- (schema.ts, spotify_isrc_asked_at): this row is anchored, so there is nothing
               -- left to ask and nothing left to authorise.
-              spotify_isrc_asked_at = null
+              spotify_isrc_asked_at = null,
+              spotify_anchor_invalid_attempts = 0
           where track_id = ?`,
       },
       updateTrackDuplicateIsrcStatement(trackId, expectedIsrc),
@@ -1096,10 +1094,10 @@ async function admitToApifyRung(
   }
 
   const { budget, charged } = await chargeAnchorApifyRow(now);
-  if (charged && input.hasIsrc && input.gateReason === "breaker_quota") {
+  if (charged) {
     await db.execute({
       args: [now.toISOString(), trackId],
-      sql: "update tracks set spotify_anchor_quota_admitted_at = ? where track_id = ?",
+      sql: "update tracks set spotify_anchor_paid_admitted_at = ? where track_id = ?",
     });
   }
 

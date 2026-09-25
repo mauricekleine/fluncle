@@ -1,5 +1,8 @@
 #!/usr/bin/env bun
 
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+
 import {
   DUE_WORK_REPAIR_PENDING_REASON,
   type DueWorkRepairPendingGate,
@@ -31,6 +34,15 @@ const ISRC_WINDOW_UTC = process.env.FLUNCLE_ANCHOR_ISRC_WINDOW_UTC ?? "0-8";
 const DAY_FREE_RUNGS = process.env.FLUNCLE_ANCHOR_DAY_FREE_RUNGS === "1";
 
 const ANCHOR_EXPECTED_INTERVAL_MS = 60 * 60 * 1000;
+const ANCHOR_EXPECTED_SWEEP_MS = 15 * 60 * 1000;
+const ANCHOR_CONTRACT_FAULT_ROWS = 2;
+const ANCHOR_CONTRACT_FAULT_MIN_REPORTS = 15;
+const ANCHOR_CONTRACT_FAULT_SHARE = 0.5;
+const ANCHOR_REPORT_CONTRACT_ID = "anchor_track:v1";
+const ANCHOR_BAKED_SCRIPT_SHA = createHash("sha256")
+  .update(readFileSync(new URL(import.meta.url)))
+  .digest("hex")
+  .slice(0, 12);
 
 const log = (message: string) => console.error(`[anchor-sweep] ${message}`);
 
@@ -598,13 +610,77 @@ function settleUnspentRows(input: {
   return true;
 }
 
+type AnchorStrikeBuffer = {
+  fault: boolean;
+  reported: number;
+  rows: Map<string, { status: number; summary: AnchorSummary }>;
+};
+
+function systemicAnchorContractFault(strikes: AnchorStrikeBuffer): boolean {
+  return (
+    strikes.rows.size > ANCHOR_CONTRACT_FAULT_ROWS &&
+    strikes.rows.size / strikes.reported >= ANCHOR_CONTRACT_FAULT_SHARE
+  );
+}
+
+function markAnchorContractFault(
+  deps: AnchorDeps,
+  strikes: AnchorStrikeBuffer,
+  summary: AnchorSummary,
+): void {
+  if (strikes.fault) {
+    return;
+  }
+  strikes.fault = true;
+  summary.ok = false;
+  summary.blockedReason = "anchor_contract_fault";
+  const message = `anchor contract fault: contract=${ANCHOR_REPORT_CONTRACT_ID} build=${ANCHOR_BAKED_SCRIPT_SHA} distinctRows=${strikes.rows.size} reported=${strikes.reported}`;
+  deps.log(message);
+  recordRunError(summary, message);
+}
+
+async function flushAnchorStrikes(
+  deps: AnchorDeps,
+  strikes: AnchorStrikeBuffer,
+  summary: AnchorSummary,
+): Promise<{ error: null | string; terminal: number }> {
+  if (systemicAnchorContractFault(strikes)) {
+    markAnchorContractFault(deps, strikes, summary);
+  }
+  if (strikes.fault) {
+    return { error: null, terminal: 0 };
+  }
+  let firstError: null | string = null;
+  let terminal = 0;
+  for (const [trackId, { status, summary }] of strikes.rows) {
+    try {
+      const recorded = await deps.recordInvalidFailure?.(trackId, status);
+      if (recorded?.terminal) {
+        settleQueueRow(summary);
+        terminal += 1;
+      }
+    } catch (error) {
+      summary.ok = false;
+      const message = error instanceof Error ? error.message : String(error);
+      firstError ??= message;
+      recordRunError(summary, message);
+    }
+  }
+  return { error: firstError, terminal };
+}
+
 async function runApifyFallback(
   apifyRows: readonly { anchorQuery: string; trackId: string }[],
   actorChunkSize: number,
   deps: AnchorDeps,
   summary: AnchorSummary,
+  strikes: AnchorStrikeBuffer,
+  flushStrikes: boolean,
 ): Promise<void> {
   for (const batch of chunk(apifyRows, actorChunkSize)) {
+    if (strikes.fault) {
+      break;
+    }
     let byTarget: Map<string, AnchorCandidatePayload[]>;
 
     try {
@@ -632,6 +708,7 @@ async function runApifyFallback(
 
       try {
         summary.apifyRowsSent += 1;
+        strikes.reported += 1;
         const verdict = await deps.report(row.trackId, candidates);
         if (verdict.anchored && verdict.verifiedBy === "isrc") {
           summary.anchoredByIsrc += 1;
@@ -648,17 +725,15 @@ async function runApifyFallback(
       } catch (error) {
         deps.log(`${row.trackId}: ${error instanceof Error ? error.message : String(error)}`);
         if (error instanceof AnchorReportError && (error.status === 400 || error.status === 422)) {
-          try {
-            const recorded = await deps.recordInvalidFailure?.(row.trackId, error.status);
-            if (recorded?.terminal) {
-              settleQueueRow(summary);
-            }
-          } catch (failureError) {
-            summary.ok = false;
-            recordRunError(
-              summary,
-              failureError instanceof Error ? failureError.message : String(failureError),
-            );
+          if (!strikes.fault) {
+            strikes.rows.set(row.trackId, { status: error.status, summary });
+          }
+          if (
+            !strikes.fault &&
+            strikes.reported >= ANCHOR_CONTRACT_FAULT_MIN_REPORTS &&
+            systemicAnchorContractFault(strikes)
+          ) {
+            markAnchorContractFault(deps, strikes, summary);
           }
         }
         summary.skipped += 1;
@@ -666,6 +741,43 @@ async function runApifyFallback(
       }
     }
   }
+  if (flushStrikes) {
+    await flushAnchorStrikes(deps, strikes, summary);
+  }
+}
+
+async function finishAnchorTick(input: {
+  actorChunkSize: number;
+  apifyEnabled: boolean;
+  apifyRows: { anchorQuery: string; stamped?: boolean; trackId: string }[];
+  deps: AnchorDeps;
+  flushStrikes: boolean;
+  freeRungsOnly: boolean;
+  spotifySearchEnabled: boolean | undefined;
+  strikes: AnchorStrikeBuffer;
+  summary: AnchorSummary;
+}): Promise<void> {
+  const {
+    actorChunkSize,
+    apifyEnabled,
+    apifyRows,
+    deps,
+    flushStrikes,
+    freeRungsOnly,
+    spotifySearchEnabled,
+    strikes,
+    summary,
+  } = input;
+  if (apifyEnabled === false && spotifySearchEnabled === false && summary.produced === 0) {
+    summary.reason = "no_capable_rung";
+  }
+  if (apifyRows.length === 0) {
+    return;
+  }
+  if (settleUnspentRows({ apifyEnabled, apifyRows, freeRungsOnly, summary })) {
+    return;
+  }
+  await runApifyFallback(apifyRows, actorChunkSize, deps, summary, strikes, flushStrikes);
 }
 
 function tallyFreeVerdict(
@@ -720,6 +832,8 @@ export async function runAnchorTick(
 
   freeRungsOnly: boolean = false,
   paidMode?: "prior" | "quota",
+  strikes: AnchorStrikeBuffer = { fault: false, reported: 0, rows: new Map() },
+  flushStrikes: boolean = true,
 ): Promise<AnchorSummary> {
   const summary: AnchorSummary = {
     anchoredByIsrc: 0,
@@ -878,19 +992,17 @@ export async function runAnchorTick(
     apifyRows.push({ ...row, stamped: rowStamped });
   }
 
-  if (apifyEnabled === false && spotifySearchEnabled === false && summary.produced === 0) {
-    summary.reason = "no_capable_rung";
-  }
-
-  if (apifyRows.length === 0) {
-    return summary;
-  }
-
-  if (settleUnspentRows({ apifyEnabled, apifyRows, freeRungsOnly, summary })) {
-    return summary;
-  }
-
-  await runApifyFallback(apifyRows, actorChunkSize, deps, summary);
+  await finishAnchorTick({
+    actorChunkSize,
+    apifyEnabled,
+    apifyRows,
+    deps,
+    flushStrikes,
+    freeRungsOnly,
+    spotifySearchEnabled,
+    strikes,
+    summary,
+  });
 
   return summary;
 }
@@ -1253,7 +1365,8 @@ async function classifyAnchorFiring(
   const paidMode =
     preflight.gateReason === "breaker_quota"
       ? "quota"
-      : preflight.gateReason === "breaker_throttle" || preflight.gateReason === "shared_meter"
+      : preflight.gateReason === "breaker_throttle" &&
+          Date.parse(preflight.nextEligibleAt ?? "") - deps.now() > ANCHOR_EXPECTED_SWEEP_MS
         ? "prior"
         : undefined;
   return {
@@ -1335,6 +1448,7 @@ export async function runAnchorSweep(
   };
 
   const askState = newSpotifyAskState();
+  const strikes: AnchorStrikeBuffer = { fault: false, reported: 0, rows: new Map() };
 
   const { askArmed, deferral, freeRungsOnly, paidMode, preflight } = await classifyAnchorFiring(
     deps,
@@ -1372,6 +1486,8 @@ export async function runAnchorSweep(
       askState,
       freeRungsOnly,
       paidMode,
+      strikes,
+      false,
     );
     const pulled = page.checked;
 
@@ -1450,7 +1566,19 @@ export async function runAnchorSweep(
     merged.reason = "no_capable_rung";
   }
 
-  merged.blockedReason = sweepBlockedReason(merged, paidMode);
+  const { error, terminal } = await flushAnchorStrikes(deps, strikes, merged);
+  if (error !== null) {
+    merged.ok = false;
+    merged.error ??= error;
+    merged.errors += 1;
+  }
+  if (merged.queueDepth !== null) {
+    merged.queueDepth = Math.max(0, merged.queueDepth - terminal);
+  }
+
+  merged.blockedReason = strikes.fault
+    ? "anchor_contract_fault"
+    : sweepBlockedReason(merged, paidMode);
 
   return merged;
 }

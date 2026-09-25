@@ -165,6 +165,23 @@ describe("recordSpotifyThrottle — the trip and the release", () => {
     expect((await getSpotifyAnchorBreakerState(now)).reason).toBe("quota_exceeded");
   });
 
+  it("renews the one-hour quota evidence on a later quota 429", async () => {
+    const {
+      getSpotifyAnchorQuotaUntil,
+      recordSpotifyThrottle,
+      SPOTIFY_ANCHOR_BREAKER_COOLDOWN_MS,
+    } = await import("./spotify-anchor-breaker");
+    const now = 10_000_000;
+    await recordSpotifyThrottle(now, true);
+    expect(await getSpotifyAnchorQuotaUntil(now)).toBe(
+      new Date(now + SPOTIFY_ANCHOR_BREAKER_COOLDOWN_MS).toISOString(),
+    );
+    await recordSpotifyThrottle(now + SPOTIFY_ANCHOR_BREAKER_COOLDOWN_MS / 2, true);
+    expect(await getSpotifyAnchorQuotaUntil(now + SPOTIFY_ANCHOR_BREAKER_COOLDOWN_MS)).toBe(
+      new Date(now + SPOTIFY_ANCHOR_BREAKER_COOLDOWN_MS * 1.5).toISOString(),
+    );
+  });
+
   it("does NOT trip on throttles spread beyond the failure window", async () => {
     const {
       spotifyAnchorSearchBreakerTripped,

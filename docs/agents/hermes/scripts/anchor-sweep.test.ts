@@ -105,6 +105,95 @@ test("deterministic anchor 400s send row receipts, while 503 stays retryable", a
   expect(retryable.queueDepth).toBe(1);
 });
 
+test("a systemic contract failure blocks the tick without retiring any row", async () => {
+  const receipts: string[] = [];
+  const messages: string[] = [];
+  const summary = await runAnchorTick(3, {
+    fetchQueue: () =>
+      Promise.resolve(
+        ["mb_a", "mb_b", "mb_c"].map((trackId) => ({ anchorQuery: trackId, trackId })),
+      ),
+    log: (message) => messages.push(message),
+    now: () => 0,
+    recordInvalidFailure: (trackId) => {
+      receipts.push(trackId);
+      return Promise.resolve({ terminal: false });
+    },
+    report: () => Promise.reject(new AnchorReportError("invalid_request", 400)),
+    resolveFree: () => Promise.resolve({ anchored: false, apifyEligible: true, verifiedBy: null }),
+    runActor: () => Promise.resolve([]),
+    searchDeezer: () => Promise.resolve([]),
+    sleep: () => Promise.resolve(),
+  });
+  expect(receipts).toEqual([]);
+  expect(summary.ok).toBe(false);
+  expect(summary.blockedReason).toBe("anchor_contract_fault");
+  expect(messages.some((message) => message.includes("contract="))).toBe(true);
+  expect(messages.some((message) => /build=[a-f0-9]{12}/.test(message))).toBe(true);
+});
+
+test("contract failures across queue pages withhold all validation strikes", async () => {
+  const receipts: string[] = [];
+  let page = 0;
+  const summary = await runAnchorSweep(
+    3,
+    {
+      fetchQueue: () => {
+        const rows = page === 0 ? ["mb_a", "mb_b"] : ["mb_c"];
+        page += 1;
+        return Promise.resolve(rows.map((trackId) => ({ anchorQuery: trackId, trackId })));
+      },
+      log: () => {},
+      now: () => 0,
+      recordInvalidFailure: (trackId) => {
+        receipts.push(trackId);
+        return Promise.resolve({ terminal: false });
+      },
+      report: (trackId) =>
+        Promise.reject(new AnchorReportError("invalid_request", trackId === "mb_b" ? 422 : 400)),
+      resolveFree: () =>
+        Promise.resolve({ anchored: false, apifyEligible: true, verifiedBy: null }),
+      runActor: () => Promise.resolve([]),
+      searchDeezer: () => Promise.resolve([]),
+      sleep: () => Promise.resolve(),
+    },
+    2,
+  );
+  expect(receipts).toEqual([]);
+  expect(summary.pages).toBe(2);
+  expect(summary.ok).toBe(false);
+  expect(summary.blockedReason).toBe("anchor_contract_fault");
+});
+
+test("three poison rows among fifteen reports keep their own strikes", async () => {
+  const receipts: string[] = [];
+  const rows = Array.from({ length: 15 }, (_, index) => ({
+    anchorQuery: `query ${index}`,
+    trackId: `mb_${index}`,
+  }));
+  const summary = await runAnchorTick(15, {
+    fetchQueue: () => Promise.resolve(rows),
+    log: () => {},
+    now: () => 0,
+    recordInvalidFailure: (trackId) => {
+      receipts.push(trackId);
+      return Promise.resolve({ terminal: false });
+    },
+    report: (trackId) =>
+      Number(trackId.slice(3)) < 3
+        ? Promise.reject(new AnchorReportError("invalid_request", 400))
+        : Promise.resolve({ anchored: false, verifiedBy: null }),
+    resolveFree: () => Promise.resolve({ anchored: false, apifyEligible: true, verifiedBy: null }),
+    runActor: () => Promise.resolve([]),
+    searchDeezer: () => Promise.resolve([]),
+    sleep: () => Promise.resolve(),
+  });
+  expect(receipts).toEqual(["mb_0", "mb_1", "mb_2"]);
+  expect(summary.apifyRowsSent).toBe(15);
+  expect(summary.ok).toBe(true);
+  expect(summary.blockedReason).toBeNull();
+});
+
 test("actor fields outside the anchor contract do not become a 400 payload", () => {
   const malformed = {
     artists: [{ artist_id: 123, artist_name: "DJ Chef" }],
@@ -1859,6 +1948,52 @@ describe("runAnchorSweep — the firing preflight", () => {
     expect(modes).toEqual(["quota"]);
     expect(summary.checked).toBe(0);
     expect(summary.blockedReason).toBe("breaker_quota");
+  });
+
+  test("a transient shared meter and a nearly expired throttle use the normal queue", async () => {
+    for (const gateReason of ["shared_meter", "breaker_throttle"] as const) {
+      const modes: (string | undefined)[] = [];
+      await runAnchorSweep(1, {
+        ...preflightDeps(
+          {
+            apifyBudgetRemaining: 300,
+            apifyBudgetSpent: false,
+            apifyEnabled: true,
+            gateReason,
+            nextEligibleAt: "2026-09-20T12:01:00.000Z",
+            spotifySearchEnabled: true,
+          },
+          () => {},
+        ),
+        fetchQueue: (_limit, mode) => {
+          modes.push(mode);
+          return Promise.resolve({ queueDepth: 0, rows: [] });
+        },
+      });
+      expect(modes).toEqual([undefined]);
+    }
+  });
+
+  test("a throttle longer than the expected sweep reads only prior asks", async () => {
+    const modes: (string | undefined)[] = [];
+    await runAnchorSweep(1, {
+      ...preflightDeps(
+        {
+          apifyBudgetRemaining: 300,
+          apifyBudgetSpent: false,
+          apifyEnabled: true,
+          gateReason: "breaker_throttle",
+          nextEligibleAt: "2026-09-20T12:30:00.000Z",
+          spotifySearchEnabled: true,
+        },
+        () => {},
+      ),
+      fetchQueue: (_limit, mode) => {
+        modes.push(mode);
+        return Promise.resolve({ queueDepth: 0, rows: [] });
+      },
+    });
+    expect(modes).toEqual(["prior"]);
   });
 
   test("a spent cap defers the firing with its own reason", async () => {

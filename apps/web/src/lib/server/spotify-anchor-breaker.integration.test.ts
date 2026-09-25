@@ -159,6 +159,30 @@ describe("the breaker TRIPS from real 429s on the real fetch path", () => {
     }
   });
 
+  it("admits a quota exception after one real 429 and reopens one hour later", async () => {
+    const { anchorSpotifySearchGate, setAnchorSpotifySearchEnabled } =
+      await import("./anchor-spotify-search");
+    const { getSpotifyAnchorBreakerState } = await import("./spotify-anchor-breaker");
+    const quotaAt = new Date("2026-07-22T00:30:00.000Z");
+    await setAnchorSpotifySearchEnabled(true);
+    stubSpotify({ throttle: true, throttleBody: '{"error":{"reason":"QUOTA_EXCEEDED"}}' });
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(quotaAt);
+    try {
+      await driveThrottledCalls(1);
+      expect((await getSpotifyAnchorBreakerState()).tripped).toBe(false);
+      expect(await anchorSpotifySearchGate(quotaAt)).toMatchObject({
+        nextEligibleAt: "2026-07-22T01:30:00.000Z",
+        reason: "breaker_quota",
+      });
+      expect((await anchorSpotifySearchGate(new Date("2026-07-22T01:30:00.000Z"))).reason).toBe(
+        "open",
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("a throttled anchor sweep trips the breaker that pauses it — the self-limiting loop", async () => {
     const { anchorSpotifySearchAllowed, setAnchorSpotifySearchEnabled } =
       await import("./anchor-spotify-search");
