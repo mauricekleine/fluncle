@@ -50,8 +50,7 @@ describe("Sonar's Turso fallback cost contract", () => {
       [
         { id: "a", vector: "[0, 1]" },
         { id: "b", vector: "[0.1, 0.9]" },
-        // The perfect match is outside the two-id candidate window. If the limit were applied
-        // after cosine ranking, this row would win and the assertion below would fail.
+
         { id: "c", vector: "[1, 0]" },
       ].map(({ id, vector }) => ({
         args: [id, vector],
@@ -126,8 +125,6 @@ describe("Sonar's Turso fallback cost contract", () => {
   });
 
   it("types the expiry so a caller can degrade without reading the message", async () => {
-    // A surface that must answer honestly rather than fault has to tell "the database is taking
-    // too long" apart from "the query is wrong". Matching the message string is how that rots.
     const never = new Promise<never>(() => undefined);
     const db = { execute: () => never };
     const expiry = await executeVectorFallback(
@@ -145,10 +142,6 @@ describe("Sonar's Turso fallback cost contract", () => {
   });
 
   it("keeps `/mix`'s own ceilings inside the generic one, and the rail's inside the probe's", () => {
-    // `/mix` is an interactive public page, not a diagnostic: it degrades sooner than the generic
-    // analytical ceiling. The ordering is the contract — a scan that would land inside its own
-    // budget is never pre-empted by the whole-rail backstop, and the out-of-process probe outlasts
-    // both, so a bounded degradation can never read to it as a dead endpoint.
     expect(MIX_RAIL_SCAN_DEADLINE_MS).toBeLessThan(MIX_RAIL_DEADLINE_MS);
     expect(MIX_RAIL_DEADLINE_MS).toBeLessThan(VECTOR_FALLBACK_DEADLINE_MS);
     expect(VECTOR_FALLBACK_DEADLINE_MS).toBeLessThan(VECTOR_ENDPOINT_PROBE_TIMEOUT_MS);

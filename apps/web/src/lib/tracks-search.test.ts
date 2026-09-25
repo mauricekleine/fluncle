@@ -1,6 +1,3 @@
-// The `/tracks` hub's pure, client-safe contract: the URL filter coercion, the active-filter bit,
-// and the SEO head (canonical always bare, noindex the moment a filter appears). No router, no DB.
-
 import { describe, expect, it } from "vitest";
 import {
   KEY_FILTER_OPTIONS,
@@ -14,14 +11,12 @@ import {
   tracksSearchHasFilters,
 } from "./tracks-search";
 
-/** A crafted RPC payload — whatever a direct HTTP caller sends, outside the loader's types. */
 function crafted(payload: unknown): { filters: TracksSearch; page: number } {
   return payload as { filters: TracksSearch; page: number };
 }
 
 describe("tracksMastheadLine", () => {
   it("carries the held count as ONE composed string when the count is real", () => {
-    // One string, one SSR text node — no comment-split fragments a text extractor can truncate.
     expect(tracksMastheadLine(31788)).toBe("31,788 drum & bass tracks, newest first.");
     expect(tracksMastheadLine(2)).toBe("2 drum & bass tracks, newest first.");
   });
@@ -70,11 +65,9 @@ describe("parseTracksSearch", () => {
   });
 
   it("folds a sub-1 fraction to undefined — truncation before positivity, never a 0", () => {
-    // "?bpmMin=0.5" must drop, not truncate to a 0 the serverFn boundary rejects: the loader's
-    // URL → parse → serverFn round-trip has to stay accepted for every URL a reader can type.
     expect(parseTracksSearch({ bpmMin: "0.5" }).bpmMin).toBeUndefined();
     expect(parseTracksSearch({ yearMin: "0.9" }).yearMin).toBeUndefined();
-    // A fraction at or above 1 still truncates to its integer part.
+
     expect(parseTracksSearch({ bpmMin: "170.7" }).bpmMin).toBe(170);
     expect(parseTracksSearch({ bpmMax: "1.5" }).bpmMax).toBe(1);
   });
@@ -127,7 +120,7 @@ describe("parseTracksHubPayload — the serverFn boundary parses, never casts", 
 
     expect(parseTracksHubPayload(payload)).toStrictEqual(payload);
     expect(JSON.stringify(parseTracksHubPayload(payload))).toBe(JSON.stringify(payload));
-    // The bare hub (all axes absent) round-trips to parseTracksSearch's exact shape.
+
     expect(parseTracksHubPayload({ filters: {}, page: 1 })).toEqual({
       filters: parseTracksSearch({}),
       page: 1,
@@ -155,7 +148,6 @@ describe("parseTracksHubPayload — the serverFn boundary parses, never casts", 
   });
 
   it("rejects a known axis at the wrong type instead of coercing it into a clause", () => {
-    // A string "170" is a crafted payload: the loader sends parsed NUMBERS.
     expect(() => parseTracksHubPayload(crafted({ filters: { bpmMin: "170" }, page: 1 }))).toThrow(
       /bpmMin/,
     );
@@ -229,9 +221,6 @@ describe("parseTracksHubPayload — the serverFn boundary parses, never casts", 
   });
 
   it("accepts EVERY filter set parseTracksSearch can emit — the loader round-trip never rejects", () => {
-    // The lockstep property between the lenient URL parse and the strict payload boundary: whatever
-    // junk a URL carries, the parsed filters must pass the boundary untouched. One numeric axis and
-    // one string axis exercise both strict paths against the full junk vocabulary.
     const rawValues = [
       "0.5",
       "0.9",
@@ -290,7 +279,7 @@ describe("KEY_FILTER_OPTIONS", () => {
     expect(KEY_FILTER_OPTIONS).toHaveLength(24);
     expect(KEY_FILTER_OPTIONS).toContain("F minor");
     expect(KEY_FILTER_OPTIONS).toContain("C major");
-    // Sharp spellings only — the parser folds "Db major" to "C# major", so the control offers "C#".
+
     expect(KEY_FILTER_OPTIONS).toContain("C# major");
     expect(KEY_FILTER_OPTIONS).not.toContain("Db major");
   });
@@ -307,8 +296,6 @@ describe("buildTracksHref", () => {
   });
 
   it("serializes EVERY filter axis — bpm included, since it stays in the search vocabulary", () => {
-    // The BPM control is gone from the UI, but a `?bpmMin=` filter arriving by URL must survive
-    // paging, so the pager href still carries it. Every axis the parser reads, the builder writes.
     const filters: TracksSearch = {
       bpmMax: 180,
       bpmMin: 160,
@@ -331,8 +318,6 @@ describe("buildTracksHref", () => {
   });
 
   it("round-trips every axis: parse(build(filters)) === filters", () => {
-    // The load-bearing invariant — the builder and `parseTracksSearch` stay in lockstep, so a pager
-    // link never silently drops a filter. Rebuild the search record from the href and re-parse it.
     const filters: TracksSearch = {
       bpmMax: 180,
       bpmMin: 160,
@@ -354,12 +339,10 @@ describe("buildTracksHref", () => {
   });
 });
 
-/** Pull the robots meta content out of a head result, if present. */
 function robots(head: ReturnType<typeof tracksHead>): string | undefined {
   return head.meta.find((entry) => "name" in entry && entry.name === "robots")?.content;
 }
 
-/** Pull the <title> out of a head result. */
 function title(head: ReturnType<typeof tracksHead>): string | undefined {
   return head.meta.find((entry) => "title" in entry)?.title;
 }
@@ -392,12 +375,10 @@ describe("tracksHead", () => {
       },
     );
 
-    // Page 1 canonical is the bare hub.
     expect(head.links).toEqual([{ href: "https://www.fluncle.com/tracks", rel: "canonical" }]);
-    // No robots meta => indexable.
+
     expect(robots(head)).toBeUndefined();
-    // The ItemList carries the LIT finding (a catalogue row is never given a fluncle URL), and
-    // `numberOfItems` is the whole held count, not the page size.
+
     const ld = (head.scripts[0] as { children: string }).children;
     expect(ld).toContain("https://www.fluncle.com/log/241.7.3A");
     expect(ld).not.toContain("Unlit");
@@ -418,7 +399,7 @@ describe("tracksHead", () => {
     const head = tracksHead({ bpmMin: 170 }, { entries: [], page: 2, total: 12 });
 
     expect(robots(head)).toBe("noindex, follow");
-    // A filtered view collapses onto the bare hub, even when paged.
+
     expect(head.links).toEqual([{ href: "https://www.fluncle.com/tracks", rel: "canonical" }]);
     expect(title(head)).toBe("Every drum & bass track, newest first · Fluncle");
     expect(head.scripts).toEqual([]);

@@ -1,14 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { FALLBACK_DURATION_MS, type StoryProgressSnapshot, storyProgress } from "./story-progress";
 
-// The gate's load-bearing job: a clip-bearing story must NOT clock (and so must
-// never finish / auto-advance) until its clip is genuinely playable. On a slow
-// load the <video> exists — and may even know its duration — while no frame has
-// played; clocking that ran the bar over a frozen poster and could close the
-// story before anything played. So below HAVE_CURRENT_DATA the verdict holds at
-// 0 and reports `loading`; at/above it, the clip's own clock takes over.
-
-// HAVE_NOTHING(0) … HAVE_CURRENT_DATA(2) … HAVE_ENOUGH_DATA(4)
 const NOTHING = 0;
 const METADATA = 1;
 const CURRENT = 2;
@@ -35,8 +27,6 @@ describe("storyProgress — clip gate", () => {
   });
 
   it("still holds when only metadata (duration) is in but no frame has played", () => {
-    // Duration alone must not advance the bar: readyState is below HAVE_CURRENT_DATA, so nothing
-    // has played.
     expect(storyProgress(clip({ currentTime: 0, duration: 30, readyState: METADATA }))).toEqual({
       finished: false,
       loading: true,

@@ -1,11 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { subdomainRewrite } from "./router-rewrite";
 
-// The subdomain host-rewrite contract: each sibling host's root ("/") maps to its
-// route on the way IN, and the route maps back to "/" on the way OUT, so the address
-// bar stays <subdomain>.fluncle.com/. The rewrite runs isomorphically (SSR + client),
-// so this pure-function check is the load-bearing guarantee.
-
 function rewriteIn(href: string): string {
   return subdomainRewrite.input({ url: new URL(href) }).pathname;
 }

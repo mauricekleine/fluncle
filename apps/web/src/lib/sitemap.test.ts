@@ -15,8 +15,6 @@ import {
   SITEMAP_MAX_URLS,
 } from "./sitemap";
 
-// The fixture builder derives `pages` the way the pure reference does, so a case only ever states
-// the rows it cares about (and `mixOpen`, the one input no bag implies).
 function bags(overrides: Partial<SitemapRowBags> & { mixOpen?: boolean } = {}): SitemapBags {
   const rows: SitemapRowBags = { ...EMPTY_SITEMAP_ROW_BAGS, ...overrides };
 
@@ -25,14 +23,10 @@ function bags(overrides: Partial<SitemapRowBags> & { mixOpen?: boolean } = {}): 
 
 const EMPTY_SITEMAP_BAGS = bags();
 
-/** The index as the route builds it: stats derived from the bags, then rendered. */
 function indexXml(source: SitemapBags): string {
   return buildSitemapIndexXml(sitemapIndexStatsFromBags(source));
 }
 
-// Every `<loc>` the index would ever serve: walk every kind × every one of its pages and pull
-// the URLs out. This is the "what does the sitemap actually list" question the split must not
-// change the answer to.
 function allSitemapLocs(source: SitemapBags): string[] {
   return SITEMAP_KINDS.flatMap((kind) =>
     Array.from({ length: shardCount(kind, source) }, (_unused, page) =>
@@ -65,7 +59,6 @@ describe("the sitemap index", () => {
   });
 
   it("omits a child for a kind with nothing in it", () => {
-    // An empty <urlset> tells a crawler the URLs were REMOVED; a missing sitemap says nothing.
     const xml = indexXml(bags({ logs: LOGS }));
 
     for (const empty of [
@@ -78,13 +71,11 @@ describe("the sitemap index", () => {
     ]) {
       expect(xml).not.toContain(empty);
     }
-    // The retired `graph` bucket is gone — never advertise it.
+
     expect(xml).not.toContain("graph-");
   });
 
   it("lists a child per NON-EMPTY entity type, each on its own line", () => {
-    // The whole point of the split: artists / labels / albums / galaxies are four children, not
-    // one `graph`, so GSC reports each type's submitted/indexed count on its own.
     const xml = indexXml(
       bags({
         albums: [{ lastmod: "2026-05-01T00:00:00.000Z", slug: "wormhole" }],
@@ -122,7 +113,6 @@ describe("the sitemap index", () => {
       }),
     );
 
-    // The artists child dates from its freshest artist; the labels child from its own.
     expect(xml.slice(xml.indexOf("artists-1.xml"), xml.indexOf("labels-1.xml"))).toContain(
       "<lastmod>2026-06-20T00:00:00.000Z</lastmod>",
     );
@@ -136,7 +126,7 @@ describe("the sitemap index", () => {
     const galaxiesLine = xml.slice(xml.indexOf("galaxies-1.xml"));
 
     expect(galaxiesLine).toContain("galaxies-1.xml");
-    // The <sitemap> block ends at the next </sitemap>; it must carry no <lastmod>.
+
     expect(galaxiesLine.slice(0, galaxiesLine.indexOf("</sitemap>"))).not.toContain("<lastmod>");
   });
 
@@ -190,18 +180,15 @@ describe("a child sitemap", () => {
     expect(xml).toContain(`<loc>${siteUrl}/privacy</loc>`);
     expect(xml).toContain(`<loc>${siteUrl}/terms</loc>`);
     expect(xml).toContain(`<loc>${siteUrl}/radio</loc>`);
-    // The GAME is never a `<loc>`: /galaxy renders `noindex` (a client-only canvas), so submitting
-    // it would ask for the one thing the page refuses. The `/galaxies` lens is a different surface.
+
     expect(xml).not.toContain(`<loc>${siteUrl}/galaxy</loc>`);
-    // The console pages — real indexable surfaces, listed unconditionally.
+
     expect(xml).toContain(`<loc>${siteUrl}/docs</loc>`);
     expect(xml).toContain(`<loc>${siteUrl}/reach</loc>`);
     expect(xml).toContain(`<loc>${siteUrl}/status</loc>`);
-    // The identity DOOR is listed; its per-key answers never are (they render `noindex, follow` —
-    // one recording is reachable under up to three identifiers).
+
     expect(xml).toContain(`<loc>${siteUrl}/identity</loc>`);
-    // 20 hubs; /mix (gated on getMixChainDepth().open) and /galaxies (gated on the map being
-    // named) are both dark here.
+
     expect(xml).not.toContain(`<loc>${siteUrl}/mix</loc>`);
     expect(xml.match(/<loc>/g)).toHaveLength(20);
   });
@@ -245,7 +232,7 @@ describe("a child sitemap", () => {
 
     expect(xml).toContain(`<loc>${siteUrl}/artist/dimension</loc>`);
     expect(xml).toContain("<image:loc>https://img/dimension.jpg</image:loc>");
-    // The artists child carries ONLY artists — no label / album / galaxy leaks across the split.
+
     expect(xml).not.toContain("/label/");
     expect(xml).not.toContain("/album/");
     expect(xml).not.toContain("/galaxies/");
@@ -269,7 +256,7 @@ describe("a child sitemap", () => {
     expect(buildSitemapShardXml("galaxies", 1, graphBags)).toContain(
       `<loc>${siteUrl}/galaxies/deep-roller</loc>`,
     );
-    // Each entity-type child carries exactly its own one <loc>.
+
     for (const kind of ["labels", "albums", "galaxies"] as const) {
       expect(buildSitemapShardXml(kind, 1, graphBags)?.match(/<loc>/g)).toHaveLength(1);
     }
@@ -285,10 +272,8 @@ describe("a child sitemap", () => {
   });
 
   it("lists the /mix hub only while its self-lifting gate is open", () => {
-    // Closed (the default): the tool is private, so it is not in the sitemap.
     const closed = buildSitemapShardXml("pages", 1, EMPTY_SITEMAP_BAGS) ?? "";
-    // Open: the archive is deep enough (getMixChainDepth().open) and the hub lights up — with
-    // no deploy, exactly as /galaxies rides its bag being non-empty.
+
     const open = buildSitemapShardXml("pages", 1, bags({ mixOpen: true })) ?? "";
 
     expect(closed).not.toContain(`<loc>${siteUrl}/mix</loc>`);
@@ -313,7 +298,7 @@ describe("a child sitemap", () => {
 
     expect(xml).toContain(`<loc>${siteUrl}/docs/cli</loc>`);
     expect(xml).toContain(`<loc>${siteUrl}/docs/mcp</loc>`);
-    // The MDX carries no per-page timestamp, so a docs entry is honestly undated.
+
     expect(xml).not.toContain("<lastmod>");
   });
 
@@ -447,8 +432,6 @@ describe("a child sitemap", () => {
   });
 
   it("slices an in-memory entity bag at SITEMAP_MAX_URLS", () => {
-    // This is the builder's in-memory arithmetic, not a keyset proof. Galaxies stay on this path
-    // because their stable public order begins with a derived member count and has no serving index.
     const manyGalaxies = Array.from({ length: SITEMAP_MAX_URLS + 2 }, (_unused, index) => ({
       slug: `galaxy-${index}`,
     }));
@@ -483,7 +466,6 @@ describe("shard paths", () => {
 });
 
 describe("the URL set is preserved across the split", () => {
-  // A fully-populated archive: one member of every kind, so the union covers every path shape.
   const FULL = bags({
     albums: [{ slug: "wormhole" }],
     artists: [{ slug: "dimension" }],
@@ -495,10 +477,7 @@ describe("the URL set is preserved across the split", () => {
   });
 
   it("emits exactly the union of static hubs + findings + every graph entity + logbook", () => {
-    // The diff proof: splitting the old `graph` child into artists/labels/albums/galaxies must
-    // not add or drop a single URL. This is the whole known URL space, spelled out.
     const expected = new Set([
-      // pages (the static hubs — /galaxies is lit because the map is named here)
       `${siteUrl}/`,
       `${siteUrl}/findings`,
       `${siteUrl}/log`,
@@ -521,28 +500,25 @@ describe("the URL set is preserved across the split", () => {
       `${siteUrl}/identity`,
       `${siteUrl}/mix`,
       `${siteUrl}/galaxies`,
-      // findings
+
       `${siteUrl}/log/011.6.8K`,
       `${siteUrl}/log/004.7.2I`,
-      // the graph entities, now each in its own child
+
       `${siteUrl}/artist/dimension`,
       `${siteUrl}/label/medschool`,
       `${siteUrl}/album/wormhole`,
       `${siteUrl}/galaxies/deep-roller`,
-      // logbook
+
       `${siteUrl}/logbook/036`,
     ]);
 
     const locs = allSitemapLocs(FULL);
 
-    // No duplicates, and the set matches exactly — nothing lost, nothing doubled.
     expect(locs).toHaveLength(expected.size);
     expect(new Set(locs)).toEqual(expected);
   });
 
   it("keeps every graph entity's <loc> across the per-entity children", () => {
-    // The four per-entity children, unioned, are exactly what a `graph` bucket held — the four
-    // entity URLs, no more, no less.
     const graphLocs = (["artists", "labels", "albums", "galaxies"] as const).flatMap((kind) => {
       const xml = buildSitemapShardXml(kind, 1, FULL) ?? "";
 

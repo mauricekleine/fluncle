@@ -65,60 +65,43 @@ export type { RadioScheduleEntry };
 export type TrackRow = {
   added_at: string;
   album: string | null;
-  // The album's stored Apple artwork facts (RFC musickit-second-authority U1), joined by
-  // `tracks.album_id`. Non-null only when the album has a row AND the Apple sweep filled it.
-  // The DTO composes them into `artworkMaxUrl` (a ≥1920 render source) — RENDER-TIME ONLY.
+
   album_artwork_height: number | null;
   album_artwork_url_template: string | null;
   album_artwork_width: number | null;
   album_image_url: string | null;
-  // The album's OWNED cover master (RFC U3b), joined by `tracks.album_id`. `album_image_state` is
-  // `resolved` only once the `backfill_cover_masters` sweep stored a ≤1200 derivative; the DTO
-  // then serves it via Cloudflare Images (`bestAlbumCoverUrl`) instead of the Spotify hotlink.
+
   album_image_key: string | null;
   album_image_state: string | null;
   album_image_updated_at: string | null;
-  // The graph pointers, joined by `tracks.album_id` / `tracks.label_id` (see `label_slug`
-  // below). Non-null only when the entity row exists — which is what lets a `GraphLink`
-  // render server-side, with the page, and never point at a 404.
+
   album_slug: string | null;
-  // ISO timestamp of the last analysis write (bpm/key/features). Admin-only observability —
-  // stripped from every public DTO by `toPublicTrackListItem`; no sweep predicate reads it.
+
   analyzed_at: string | null;
-  // Which audio class BPM/key were analyzed from ("full" the captured song | "preview" a 30s
-  // preview | null legacy). Internal analysis provenance — the capture sweep's re-derive
-  // predicate reads it; stripped from every public DTO by `toPublicTrackListItem`.
+
   analyzed_from: string | null;
-  // The finding's Apple Music track URL (public listen link, the Spotify twin) —
-  // catalogue identity, resolved EXACTLY by ISRC by the `apple-music` backfill. Null
-  // until it resolves. See `apple_music_url` on `tracks` in db/schema.ts.
+
   apple_music_url: string | null;
   artists_json: string;
   bpm: number | null;
-  // Who last set bpm/key — the source-hierarchy provenance (operator > rekordbox > DSP;
-  // track-update.ts). Admin-only: `toPublicTrackListItem` strips both before any public
-  // read. The Rekordbox sync reads them to skip an operator-graded row and to know
-  // whether a matching value still needs a protective `rekordbox` stamp.
+
   bpm_source: string | null;
   duration_ms: number;
   enrichment_status: string;
   features_json: string | null;
-  // The finding's sonic galaxy (browse-by-feel RFC), joined by `tracks.galaxy_id`.
-  // `galaxy_name`/`galaxy_slug` are non-null ONLY when the galaxy is operator-NAMED —
-  // an unnamed or unassigned finding reads null on both, and the DTO omits `galaxy`.
+
   galaxy_name: string | null;
   galaxy_slug: string | null;
   in_release_id: number | null;
   isrc: string | null;
   key: string | null;
-  // Who last set the key — see `bpm_source` above. Admin-only (public-stripped).
+
   key_source: string | null;
   label: string | null;
-  // The `/label/<slug>` this finding's imprint has — the `album_slug` twin. See above.
+
   label_slug: string | null;
   log_id: string | null;
-  // The MusicBrainz recording MBID — the canonical KG join key (the MusicBrainz identity layer).
-  // PUBLIC identity like `isrc`: the `/log` MusicRecording emits it as a `sameAs` + `identifier`.
+
   mb_recording_id: string | null;
   note: string | null;
   observation_alignment_json: string | null;
@@ -165,31 +148,8 @@ type MixtapeFeedRow = {
   youtube_url: string | null;
 };
 
-/**
- * THE FINDING JOIN — the FROM clause every "this row is a finding" read drives through.
- *
- * A finding is the pair `findings ⋈ tracks` (docs/track-lifecycle.md): `tracks` holds the
- * universal music object, `findings` the certification (the Log ID, the note, the video,
- * the observation, the found date). The join is INNER, so a catalogue track with no
- * `findings` row can never leak into a finding surface — that is the whole safety property
- * of the split, and it is why no read here says a bare `from tracks`.
- *
- * `findings` leads because every list/queue predicate and every sort key lives on it
- * (`findings_added_at_track_id_idx` carries the feed order); `tracks` is reached by its
- * PRIMARY KEY, so the join costs one b-tree seek per row.
- *
- * With an all-certified archive the join selects exactly the rows a direct `from tracks`
- * `from tracks` did. It stops being a no-op the moment the catalogue epic lands
- * uncertified tracks — which is precisely when a missing join would have become a bug.
- *
- * `track_id` is the only column on BOTH tables, so it is the only one that MUST be
- * qualified; everything else resolves unambiguously. Every column below is qualified
- * anyway, so a reader can see which half of the pair it comes from.
- */
 export const FINDINGS_FROM = `findings join tracks on tracks.track_id = findings.track_id`;
 
-// Columns exposed to clients. `features_json` is the enrichment spectral summary,
-// surfaced (parsed) as creative fuel for the video agent.
 export const TRACK_SELECT = `tracks.track_id, tracks.spotify_url, tracks.apple_music_url, tracks.title, tracks.album, tracks.album_image_url, tracks.artists_json, tracks.analyzed_at, tracks.analyzed_from,
   tracks.bpm, tracks.bpm_source, tracks.duration_ms, findings.enrichment_status, tracks.features_json, tracks.in_release_id, tracks.isrc, tracks.key, tracks.key_source, tracks.label, tracks.mb_recording_id, findings.log_id, tracks.popularity,
   tracks.preview_url, tracks.release_date, tracks.source_audio_failures, tracks.source_audio_key, findings.video_url, findings.video_squared_at, findings.video_vehicle, findings.video_grain, findings.video_register, findings.video_palette, findings.video_plate_subject, findings.video_structure, findings.video_model, findings.video_model_reasoning, findings.note, findings.added_at,
@@ -214,53 +174,18 @@ export const TRACK_SELECT = `tracks.track_id, tracks.spotify_url, tracks.apple_m
        and url is not null
      order by published_at desc limit 1) as youtube_url`;
 
-// ── The lean LIST projection (Finding B4) ──
-//
-// Every PUBLIC list surface (the homepage feed, /log index, Stories, llms.txt paging,
-// the public `list_findings`/`list_stories` ops) renders a handful of per-row fields but
-// The projection excludes three HEAVY fields that none of them read: `observation_alignment_json`
-// (the spoken observation's word-timing arrays — big), `features_json` (the spectral
-// summary), and `video_model_reasoning`. Shipping them on every list row bloats the SSR
-// HTML and the hydrated react-query cache, and it grows with the archive.
-//
-// The consumer audit (see tracks-dto.test.ts + the PR body) proved the only readers of
-// these three are on NON-list paths that keep the fat shape: `observationAlignment` →
-// radio (its own `getRandomRadioTrack`/`getRadioEligibleTracks` path) + the MCP transcript;
-// `features` → the single-track `get_track` read (the video pipeline's fuel) + the admin
-// board's enrich dialog + the mixability engine's own query; `videoModelReasoning` → the
-// admin/CLI update write-paths. So the lean projection is safe for the list surfaces and
-// the fat `TRACK_SELECT`/`toTrackListItem` stays the default for admin/MCP/single-track.
-//
-// `LEAN_TRACK_SELECT` is DERIVED from `TRACK_SELECT` (single source of truth, drift-proof —
-// a new column added to `TRACK_SELECT` automatically flows to the lean read too). The split
-// is on `,`; none of the correlated subqueries contain a comma, so each fragment trims to a
-// bare `<table>.<column>` and the omitted three are filtered out exactly. The table prefix
-// is part of the key, so it tracks which half of the tracks/findings pair each column
-// lives on (`features_json` is the recording's; the other two are the certification's).
 const LEAN_LIST_OMITTED_COLUMNS = new Set([
   "tracks.features_json",
   "findings.observation_alignment_json",
   "findings.video_model_reasoning",
 ]);
-// The render-only artworkMax subqueries (a ≥1920 Apple source composed at the DTO boundary).
-// NO web/feed surface renders `artworkMaxUrl` — the ONLY consumer is the video pipeline, and
-// it reads it off the FAT single-track read (`get_track` → `/api/tracks/{id}` →
-// `getTrackByIdOrLogId`/`TRACK_SELECT`), never the feed (`packages/video/pipeline/fetch-track.ts`,
-// verified). So the LEAN feed projection drops these three subqueries: the DTO still DECLARES
-// `artworkMaxUrl` (the fat `toTrackListItem` composes it from `TRACK_SELECT`'s columns for the
-// single-track read), but a lean feed row never runs them and carries it undefined. This is the
-// same conditional-column shape the rest of the lean projection uses — one mapper, two SELECTs.
+
 const LEAN_OMITTED_SUBQUERY_ALIASES = new Set([
   "album_artwork_height",
   "album_artwork_url_template",
   "album_artwork_width",
 ]);
 
-// Shared projection derivation: `TRACK_SELECT` minus the given base COLUMNS, minus any
-// correlated-subquery fragment whose `as <alias>` output is dropped. The `,`-split is safe —
-// no fragment (a bare `<table>.<column>` or a `(select …) as <alias>`) contains a comma — so
-// each trims to exactly one column/subquery. Single source of truth: a column added to
-// `TRACK_SELECT` flows to every derived projection automatically.
 function deriveTrackSelect(omittedColumns: Set<string>, omittedAliases: Set<string>): string {
   return TRACK_SELECT.split(",")
     .filter((fragment) => {
@@ -282,23 +207,6 @@ export const LEAN_TRACK_SELECT = deriveTrackSelect(
   LEAN_OMITTED_SUBQUERY_ALIASES,
 );
 
-// ── The BOARD list projection (renders + findings efficiency batch) ──
-//
-// The two admin BOARDS (`/admin/renders`, `/admin/findings`) render a finding's
-// identity + its video/publish ledger, but NEVER its graph edges or discovery
-// placement. So on top of the lean drop (the three heavy columns + the render-only
-// artworkMax subqueries) the board projection also drops the CORRELATED SUBQUERIES
-// those pages never read — the biggest per-row cost in `TRACK_SELECT` (each fires
-// once per row):
-//   - galaxy (name/slug)      — the browse-by-feel cluster; no board cell shows it.
-//   - albumSlug / labelSlug   — the `/album` + `/label` graph links; boards don't link out.
-//   - youtubeUrl              — the published-YouTube post url; the board reads its posts
-//                               through `listSocialPostsForTracks`, and the clip preview
-//                               (StoriesPlayer→StoryView) links only TikTok, never YouTube.
-// What the boards DO render stays: the album COVER master (`album_image_*` → `albumImageUrl`,
-// the cover on every row) and `tiktokUrl` (the preview's "Watch on TikTok"). Verified against
-// the row components (finding-identity, pipeline board-model, story-view) — a dropped field is
-// a compile error via `BoardTrackListItem`, never a silent blank.
 const BOARD_OMITTED_SUBQUERY_ALIASES = new Set([
   "album_slug",
   "galaxy_name",
@@ -311,24 +219,6 @@ const BOARD_TRACK_SELECT = deriveTrackSelect(
   new Set([...LEAN_OMITTED_SUBQUERY_ALIASES, ...BOARD_OMITTED_SUBQUERY_ALIASES]),
 );
 
-// ── The GRAPH list projection (the /artist · /label · /album graph pages) ──
-//
-// The findings grid that LEADS each graph page renders a cover → `/log` link and nothing more,
-// and its JSON-LD carries only per-track facts. It reads SEVEN fields: `logId`, `albumImageUrl`,
-// `artists`, `title` (the grid + its `artistTitleLine`) and `durationMs`, `isrc`, `releaseDate`
-// (the JSON-LD `MusicRecording`s). The graph reads are `getFindingsByArtist`/`getFindingsByLabel`/
-// `getFindingsByAlbum`, which ALSO back four bounded co-callers — oembed (cover + artists), the
-// graph hover card (cover + `addedAt`), the MCP `get_artist`/`get_label` tools (`compactFinding`:
-// + galaxy/bpm/key/note/album/preview/label/spotify/found), and the admin bio-describe (title).
-//
-// The UNION across all of them omits: the three heavy JSON columns + the render-only artworkMax
-// (both already dropped by LEAN), plus the album/label graph-link slugs and the youtube/tiktok
-// post subqueries — none of which any caller reads. It KEEPS galaxy (the MCP tool reports it)
-// and the cover-master columns (every caller's cover). So this projection is LEAN, minus the
-// graph-link slugs + youtube + tiktok, keeping galaxy. Every consumer types the result as
-// `TrackListItem` (a `GraphFindingItem` is assignable — the four dropped fields are optional
-// there), so no call site changes; a graph component that reaches for a dropped field is a
-// compile error via `GraphFindingItem`.
 const GRAPH_OMITTED_SUBQUERY_ALIASES = new Set([
   "album_slug",
   "label_slug",
@@ -340,17 +230,10 @@ const GRAPH_TRACK_SELECT = deriveTrackSelect(
   new Set([...LEAN_OMITTED_SUBQUERY_ALIASES, ...GRAPH_OMITTED_SUBQUERY_ALIASES]),
 );
 
-/** A finite number, or undefined — for tolerant parsing of stored feature JSON. */
 function finiteOrUndefined(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
-/**
- * Parse the stored `observation_alignment_json` into the public caption shape
- * (`{ words: [{ text, startMs, endMs }] }`), or undefined. An empty-words sentinel
- * (the forced-alignment backfill stores `{ words: [] }` to mark a finding handled
- * when the aligner found nothing) surfaces as undefined — no captions to render.
- */
 function parseObservationAlignment(
   json: string | null,
 ): { words: { endMs: number; startMs: number; text: string }[] } | undefined {
@@ -381,11 +264,6 @@ function parseObservationAlignment(
       const startMs = finiteOrUndefined(word.startMs);
       const endMs = finiteOrUndefined(word.endMs);
 
-      // Legacy SSML markup tokens (e.g. `<break time="1.0s" />`) can linger in an
-      // older observation script, and an aligner tokenises them as "words".
-      // They must never render as caption text — drop any token carrying tag markup
-      // (`<`, `>`, or an `attr="…"` fragment). Spoken words never contain these, and
-      // dropping a break leaves a natural gap (the next word's start is past the pause).
       if (!text || /[<>]|="/.test(text) || startMs === undefined || endMs === undefined) {
         return [];
       }
@@ -400,7 +278,6 @@ function parseObservationAlignment(
   }
 }
 
-/** Parse the enrichment `features_json` into a typed spectral summary, or undefined. */
 function parseFeatures(json: string | null): TrackFeatures | undefined {
   if (!json) {
     return undefined;
@@ -421,11 +298,6 @@ function parseFeatures(json: string | null): TrackFeatures | undefined {
   }
 }
 
-// The finding's sonic galaxy for the public DTO (browse-by-feel RFC): the
-// operator-named cluster read via the `galaxy_id` join. Present ONLY when the galaxy
-// is NAMED (both name + slug frozen) — an unassigned finding, or one in an unnamed
-// galaxy, reads null on both and the DTO omits `galaxy`. Replaces the retired
-// vibe-quadrant derivation.
 function galaxyOf(
   name: string | null,
   slug: string | null,
@@ -437,17 +309,11 @@ function analyzedFromOf(value: string | null): "full" | "preview" | undefined {
   return value === "full" || value === "preview" ? value : undefined;
 }
 
-// The three heavy per-row fields the lean list projection omits — the DTO mirror of
-// `LEAN_LIST_OMITTED_COLUMNS`. A `LeanTrackListItem` is assignable to `TrackListItem`
-// (all three are OPTIONAL on the contract), so a lean item flows into any
-// `TrackListItem[]`/`FeedItem[]` unchanged; it simply carries these three undefined.
 export type LeanTrackListItem = Omit<
   TrackListItem,
   "features" | "observationAlignment" | "videoModelReasoning"
 >;
 
-// A lean DB row — a `TrackRow` without the three heavy columns `LEAN_TRACK_SELECT` drops.
-// `TrackRow` is assignable to it, so `toLeanTrackListItem` also accepts a full (fat) row.
 type LeanTrackRow = Omit<
   TrackRow,
   "features_json" | "observation_alignment_json" | "video_model_reasoning"
@@ -467,59 +333,35 @@ function leanVideoFields(row: LeanTrackRow) {
   };
 }
 
-/**
- * The lean list DTO (Finding B4): every `TrackListItem` field EXCEPT the three heavy ones
- * (`features`, `observationAlignment`, `videoModelReasoning`). Backs the public list
- * surfaces, which never read those three. `toTrackListItem` delegates here and adds the
- * three back — one field-mapping definition, no duplication.
- */
 export function toLeanTrackListItem(row: LeanTrackRow): LeanTrackListItem {
   return {
     ...leanVideoFields(row),
     addedAt: row.added_at,
     addedToSpotify: Boolean(row.added_to_spotify),
     album: row.album ?? undefined,
-    // THE BEST DISPLAY COVER, chosen at the DTO boundary so web, mobile, and the video pipeline
-    // all upgrade at once (RFC musickit-second-authority U3a → U3b). Prefer the album's OWNED
-    // 1200²-capped master through Cloudflare Images once the sweep resolved one; else fall through
-    // to the Spotify chain upgraded from the stored 300² to 640². Emitted at `large`; a surface
-    // re-sizes with `albumCoverAtSize` (which handles BOTH providers), so mobile + the video
-    // pipeline (raw consumers) get a right-sized cover and the feed rows can still ask for `small`.
+
     albumImageUrl: bestAlbumCoverUrl({
       imageKey: row.album_image_key,
       imageState: row.album_image_state,
       imageUpdatedAt: row.album_image_updated_at,
       spotifyUrl: row.album_image_url,
     }),
-    // The graph pointers — the `/album/<slug>` + `/label/<slug>` pages this finding belongs
-    // to, resolved in the SAME select that loaded the track. This is what makes the GraphLink
-    // system free at the point of use: every surface that renders a finding already holds the
-    // slug it needs to link its album and its imprint, so there is no per-link lookup and no
-    // N+1 (the hover CARD is the only lazy part; see lib/server/graph-preview.ts).
+
     albumSlug: row.album_slug ?? undefined,
-    // Analysis provenance (RFC bpm-key-accuracy) — the audio class BPM/key were derived
-    // from. Internal capture/enrich state on the admin-authed DTO; `toPublicTrackListItem`
-    // strips it before any public read. `null` legacy rows surface undefined ("assume
-    // preview-grade"). The capture sweep's re-derive predicate reads it.
+
     analyzedAt: row.analyzed_at ?? undefined,
     analyzedFrom: analyzedFromOf(row.analyzed_from),
-    // The Apple Music listen link — a PUBLIC field (the Spotify twin), so it is NOT in
-    // PRIVATE_TRACK_FIELDS and survives to the public DTO. Absent until the ISRC resolves.
+
     appleMusicUrl: row.apple_music_url ?? undefined,
     artists: parseArtistsJson(row.artists_json),
-    // A ≥1920 render source composed server-side from the album's stored Apple facts (U1),
-    // so `packages/video` prefers it over the 640² Spotify cover without importing apps/web or
-    // minting an Apple URL itself. Undefined when the album carries no Apple artwork — the
-    // render falls through to `albumImageUrl`. RENDER-TIME ONLY, never persisted (decision A).
+
     artworkMaxUrl: composeAppleArtworkUrl(
       row.album_artwork_url_template,
       row.album_artwork_width,
       row.album_artwork_height,
     ),
     bpm: row.bpm ?? undefined,
-    // Source-hierarchy provenance (operator > rekordbox > DSP; track-update.ts). Admin-only
-    // on this DTO — `toPublicTrackListItem` strips both. The Rekordbox sync reads them to
-    // skip an operator-graded row and to detect a matching-but-unstamped value.
+
     bpmSource: row.bpm_source ?? undefined,
     discogsReleaseUrl: row.in_release_id ? discogsReleaseUrl(row.in_release_id) : undefined,
     durationMs: row.duration_ms,
@@ -527,20 +369,16 @@ export function toLeanTrackListItem(row: LeanTrackRow): LeanTrackListItem {
     galaxy: galaxyOf(row.galaxy_name, row.galaxy_slug),
     isrc: row.isrc ?? undefined,
     key: row.key ?? undefined,
-    // Key provenance — see `bpmSource` above. Admin-only (public-stripped).
+
     keySource: row.key_source ?? undefined,
     label: row.label ?? undefined,
     labelSlug: row.label_slug ?? undefined,
     logId: row.log_id ?? undefined,
     logPageUrl: row.log_id ? logPageUrl(row.log_id) : undefined,
-    // The MusicBrainz recording MBID (the KG join key) — PUBLIC, like `isrc`; the `/log`
-    // MusicRecording emits it as a `sameAs` + `identifier`. Absent until a fill path lands it.
+
     mbRecordingId: row.mb_recording_id ?? undefined,
     note: row.note?.trim() ? row.note : undefined,
-    // Version the playback URL by the render timestamp so a re-`observe`
-    // (which overwrites observation.mp3 in place) re-keys the edge cache — the
-    // bare URL alone HITs stale until its max-age TTL. The bare URL stays in the
-    // DB column (the admin-overwrite source of truth); only consumers see ?v=.
+
     observationAudioUrl: versionedObservationAudioUrl(
       row.observation_audio_url ?? undefined,
       row.observation_generated_at ?? undefined,
@@ -551,14 +389,9 @@ export function toLeanTrackListItem(row: LeanTrackRow): LeanTrackListItem {
     postedToTelegram: Boolean(row.posted_to_telegram),
     previewUrl: row.preview_url ?? undefined,
     releaseDate: row.release_date ?? undefined,
-    // The consecutive full-song capture failures — surfaced so the `fluncle-capture`
-    // sweep reads the prior count and increments truthfully (the queue's failure cap
-    // depends on it). Only non-zero counts surface; a never-failed finding omits it.
+
     sourceAudioFailures: row.source_audio_failures > 0 ? row.source_audio_failures : undefined,
-    // The R2 key of the captured full song (`<logId>/<sha256>.<ext>`) — presence
-    // means the song is captured. Admin/agent-tier only (this whole DTO is admin-authed);
-    // the key grants nothing without the private-bucket R2 creds. The enrich + embed
-    // sweeps read it (the embed queue only embeds captured findings). Absent until captured.
+
     sourceAudioKey: row.source_audio_key ?? undefined,
     spotifyUrl: row.spotify_url,
     tiktokUrl: row.tiktok_url ?? undefined,
@@ -570,10 +403,6 @@ export function toLeanTrackListItem(row: LeanTrackRow): LeanTrackListItem {
   };
 }
 
-/**
- * The full (fat) list DTO: the lean base plus the three heavy fields the admin/MCP/
- * single-track reads need. The default projection for every non-public-list consumer.
- */
 export function toTrackListItem(row: TrackRow): TrackListItem {
   return {
     ...toLeanTrackListItem(row),
@@ -583,29 +412,12 @@ export function toTrackListItem(row: TrackRow): TrackListItem {
   };
 }
 
-// The BOARD list DTO (renders + findings efficiency batch): the lean base MINUS the five
-// graph/discovery fields `BOARD_TRACK_SELECT` stops selecting. The two admin boards read
-// through this shape (`BoardRow` extends it), so a board cell that reaches for a dropped
-// field is a COMPILE error rather than a runtime blank. Assignable to `TrackListItem` (all
-// five are optional there), so a board item still flows into `StoriesPlayer`/`TrackListItem[]`.
 export type BoardTrackListItem = Omit<
   LeanTrackListItem,
   "albumSlug" | "artworkMaxUrl" | "galaxy" | "labelSlug" | "youtubeUrl"
 >;
 
-/**
- * The board list DTO mapper. Delegates to the lean mapper — ONE field-mapping source, no
- * duplication — and narrows the RESULT to the board shape. Under the board projection the
- * five dropped columns arrive absent (their subqueries were never run), so the lean mapper
- * fills them `undefined`; the narrower return type then forbids any board consumer from
- * reading them. Its input is the lean row (a superset of the board row at the type level),
- * which the list pipeline already types as `TrackRow`.
- */
 export function toBoardTrackListItem(row: LeanTrackRow): BoardTrackListItem {
-  // Delegate to the lean mapper (ONE field-mapping source), then strip the five
-  // graph/discovery fields so a board item never carries them — even if a future SELECT
-  // change reintroduced a source column. The rest-spread drops them; the destructured
-  // names are the discards.
   const {
     albumSlug: _albumSlug,
     artworkMaxUrl: _artworkMaxUrl,
@@ -618,28 +430,13 @@ export function toBoardTrackListItem(row: LeanTrackRow): BoardTrackListItem {
   return board;
 }
 
-// The board-projection page shape — `TrackListPage` with its rows narrowed to the board
-// DTO, so a `board: true` caller gets the compile-time guarantee at the return boundary.
 export type BoardTrackListPage = Omit<TrackListPage, "tracks"> & { tracks: BoardTrackListItem[] };
 
-// The GRAPH list DTO (the /artist · /label · /album graph reads): the lean base MINUS the four
-// graph-link/post fields `GRAPH_TRACK_SELECT` stops selecting (the album/label slugs + the
-// youtube/tiktok post subqueries). It KEEPS `galaxy` (the MCP `get_artist`/`get_label` tools
-// report it) and the cover master (every consumer's cover). Assignable to `TrackListItem` (the
-// four are optional there), so every `getFindingsBy*` consumer — the graph pages, oembed, the
-// hover card, the MCP tools, the admin bio-describe — takes it unchanged; a consumer that reaches
-// for a dropped field is a COMPILE error, never a silent blank.
 export type GraphFindingItem = Omit<
   LeanTrackListItem,
   "albumSlug" | "labelSlug" | "tiktokUrl" | "youtubeUrl"
 >;
 
-/**
- * The graph list DTO mapper. Delegates to the lean mapper (ONE field-mapping source), then
- * strips the four graph-link/post fields so a graph finding never carries them. Under the graph
- * projection those columns arrive absent (their subqueries were never run), so the lean mapper
- * fills them `undefined`; the narrower return type then forbids any consumer from reading them.
- */
 export function toGraphFindingItem(row: LeanTrackRow): GraphFindingItem {
   const {
     albumSlug: _albumSlug,
@@ -652,16 +449,6 @@ export function toGraphFindingItem(row: LeanTrackRow): GraphFindingItem {
   return graph;
 }
 
-// Internal admin/agent-only fields stripped from every item bound for a PUBLIC surface.
-//   - `sourceAudioKey` — the R2 key of the CAPTURED copyrighted full song (a content hash)
-//     in the PRIVATE `fluncle-source-audio` bucket; it must NEVER world-serve
-//     (audio-source-policy: the full audio is a private analysis artifact; exposing its key
-//     advertises the archive).
-//   - `analyzedFrom` — BPM/key analysis provenance (RFC bpm-key-accuracy); internal
-//     capture/enrich state, never part of a public DTO.
-//   - `bpmSource`/`keySource` — the source-hierarchy provenance (operator > rekordbox > DSP);
-//     internal curation state the Rekordbox sync reads, never part of a public DTO.
-// The on-box sweeps read all of them on the ADMIN path (which deliberately does NOT strip).
 const PRIVATE_TRACK_FIELDS = [
   "analyzedAt",
   "analyzedFrom",
@@ -670,19 +457,7 @@ const PRIVATE_TRACK_FIELDS = [
   "sourceAudioKey",
 ] as const;
 
-/**
- * Strip the internal admin/agent-only fields (`PRIVATE_TRACK_FIELDS`) from a track/feed item
- * bound for a PUBLIC surface. Every PUBLIC read runs its items through this — the oRPC public
- * tracks router (`orpc/tracks.ts`) and the in-process MCP tools (`mcp.ts`); the browser WebMCP
- * surface proxies those same public HTTP reads, so it is covered transitively. The ADMIN read
- * path deliberately does NOT strip — the sweeps need these fields. A mixtape (or a finding
- * carrying none of them) passes through untouched.
- */
 export function toPublicTrackListItem<T extends object>(item: T): T {
-  // Read each optional field through a cast (not a `{ …?: string }` param type — that WEAK
-  // type would reject a FeedItem's mixtape arm, which shares no property with it, at the
-  // `list_findings` map). Only clone when a private field is actually present, so a mixtape or
-  // a finding carrying none of them returns the exact same reference as before.
   let result = item;
 
   for (const field of PRIVATE_TRACK_FIELDS) {
@@ -694,15 +469,6 @@ export function toPublicTrackListItem<T extends object>(item: T): T {
   return result;
 }
 
-/** Fetch a single track by its Spotify trackId or its Log ID. */
-/**
- * The minimal shape the `/api/preview` relay needs to resolve a live preview — resolved through
- * the catalogue-aware resolver (so it answers by track ID or Log ID), not through the
- * finding-scoped resolver `getTrackByIdOrLogId` uses. That difference is the point: a catalogue
- * track has no certification, so the finding-scoped resolver returns nothing for it, while The
- * Ear's inline artwork audition (docs/the-ear.md § The operator's actions) previews catalogue
- * rows. Everything selected here lives on `tracks`; the certification half is only an identity.
- */
 export async function getLivePreviewTrack(
   idOrLogId: string,
 ): Promise<{ artists: string[]; isrc?: string; previewUrl?: string; title: string } | undefined> {
@@ -750,13 +516,6 @@ export async function getTrackByIdOrLogId(idOrLogId: string): Promise<TrackListI
   return row ? toTrackListItem(row) : undefined;
 }
 
-/**
- * Hydrate a batch of findings by their Log IDs in ONE query (no N+1), keyed by
- * `logId` for O(1) lookup. The edition-email render holds only each finding's tiny
- * `{ logId, why }` reference (the schema keeps it small + current), so the render
- * resolves the live `Artist — Title` + Spotify link from here. A logId with no live
- * finding is simply absent from the map; bound args only, never interpolated.
- */
 export async function getTracksByLogIds(logIds: string[]): Promise<Record<string, TrackListItem>> {
   const unique = [...new Set(logIds.filter((id) => id.trim()))];
 
@@ -783,13 +542,6 @@ export async function getTracksByLogIds(logIds: string[]): Promise<Record<string
   return byLogId;
 }
 
-/**
- * Hydrate a batch of findings by their `track_id` in ONE query (no N+1), keyed by
- * `trackId` for O(1) lookup. The plan editor holds each finding only as a cue's
- * `finding_id` (`recording_cues`); this resolves the live `Artist — Title` + cover +
- * BPM/key so the findings builder renders rich rows. A `trackId` with no live finding is
- * simply absent from the map; bound args only, never interpolated.
- */
 export async function getTracksByIds(trackIds: string[]): Promise<Record<string, TrackListItem>> {
   const unique = [...new Set(trackIds.filter((id) => id.trim()))];
 
@@ -814,15 +566,6 @@ export async function getTracksByIds(trackIds: string[]): Promise<Record<string,
   return byTrackId;
 }
 
-/**
- * `getTracksByIds`, but through the lean BOARD projection: the fat `TRACK_SELECT` runs the
- * three heavy JSON columns + a dozen correlated subqueries per row, and an admin surface
- * that only shows a finding's identity + cover (a naming AUDITION, not a graph page) reads
- * none of them. Reuses the same `BOARD_TRACK_SELECT`/`toBoardTrackListItem` the two admin
- * boards use (single source of truth, drift-proof), so a consumer that reaches for a dropped
- * graph/discovery field is a COMPILE error, never a silent blank. Keyed by `trackId` like
- * its fat twin; bound args only.
- */
 export async function getBoardTracksByIds(
   trackIds: string[],
 ): Promise<Record<string, BoardTrackListItem>> {
@@ -849,14 +592,6 @@ export async function getBoardTracksByIds(
   return byTrackId;
 }
 
-/**
- * Every coordinate-bearing finding that features an artist, newest-first — the
- * artist page's cover grid (Unit 3, artist-relationship RFC §3). The canonical
- * source is the `track_artists` edge plus the kept `artists_json` display cache,
- * matching the name EXACTLY within the JSON array so a substring like "Sub"
- * can't drag in "Subtronics". A finding with no Log ID never appears (the page is
- * a grid of log links).
- */
 export async function getFindingsByArtist(
   artistId: string,
   artistName: string,
@@ -884,7 +619,6 @@ export async function getFindingsByArtist(
   return typedRows<TrackRow>(result.rows).map(toGraphFindingItem);
 }
 
-/** Hydrate only the certified rows of one already bounded upcoming entity page. */
 export async function getGraphFindingsByIds(ids: string[]): Promise<GraphFindingItem[]> {
   if (ids.length === 0) {
     return [];
@@ -908,12 +642,6 @@ export async function getGraphFindingsByIds(ids: string[]): Promise<GraphFinding
   });
 }
 
-/**
- * Every coordinate-bearing finding on one label / one album, newest-first — the cover grid
- * that LEADS each graph page. Reads through the `tracks.label_id` / `tracks.album_id`
- * pointer (an indexed seek, never a fold over the catalogue; see schema.ts) and drives
- * from `FINDINGS_FROM`, so it can only ever return findings.
- */
 export async function getFindingsByLabel(
   labelId: string,
   today?: string,
@@ -925,8 +653,6 @@ export async function getFindingsByAlbum(albumId: string): Promise<GraphFindingI
   return findingsByEntity("tracks.album_id", albumId);
 }
 
-// The shared body of the two above. `column` is a CONSTANT from this module (never user
-// input) — the value is always bound.
 async function findingsByEntity(
   column: "tracks.album_id" | "tracks.label_id",
   entityId: string,
@@ -945,15 +671,6 @@ async function findingsByEntity(
   return typedRows<TrackRow>(result.rows).map(toGraphFindingItem);
 }
 
-// ── The /log index text read ──────────────────────────────────────────────────
-//
-// The `/log` page is a TEXT list — one row per finding: its Log ID, the `Artist · Title`
-// line, and the found date. No cover, no graph edge, no video, no observation. So it takes the
-// LEANEST read of all: the five columns it renders, and nothing else — not even the cover master
-// the feed and graph reads carry. A dedicated projection rather than a `listTracks` grade, because
-// the page needs none of the feed machinery (cursor, mixtapes, filters) and none of the fat DTO —
-// just coordinate-bearing findings newest-FOUND first, capped for one readable plate. The
-// `log_id is not null` gate does the page's own filter in SQL (it renders only coordinate rows).
 export type LogIndexEntry = {
   addedAt: string;
   artists: string[];
@@ -988,40 +705,6 @@ export async function listLogIndexEntries(limit = 500): Promise<LogIndexEntry[]>
   }));
 }
 
-/**
- * A track Fluncle KNOWS OF but has never certified — a `tracks` row with no `findings` row.
- * The other half of a graph page: the rest of the record, the rest of the label.
- *
- * ── THE ANTI-JOIN, AND WHY IT IS THE ONE READ THAT DOES NOT USE `FINDINGS_FROM` ────────
- * Every other read in this module drives through the inner finding join, which is what
- * makes it structurally impossible to mistake a catalogue track for a finding. This read
- * wants exactly the complement — `left join findings … where findings.track_id is null` —
- * so it states that inversion explicitly, and its return type is a DIFFERENT type
- * (`CatalogueTrackItem`) that carries NO `logId`, NO note, NO video, NO coordinate. There
- * is nothing on it a finding surface could render, so a row from here cannot leak into one
- * by accident; the type system is doing the same job the inner join does elsewhere.
- *
- * The pages render these rows UNLIT (DESIGN.md): quieter, uncoordinated, and linking OUT
- * (a track with no Log ID has no page of its own to link to). They are never introduced,
- * never named, never counted aloud — a finding is the only named object in Fluncle's world.
- *
- * ── AND WHY IT IS CAPPED ───────────────────────────────────────────────────────────────
- * The seek is indexed (`tracks_album_id_idx`), so the SCAN is bounded however big the
- * catalogue gets. The RESULT SET is not — and that is the distinction that bites. Measured on
- * a 10,800-row synthetic catalogue, an uncapped `/label/hospital-records` served **4.34 MB of
- * HTML** — 3,000 rows through the SSR markup, again through the hydration payload, and a third
- * time as `MusicRecording` nodes in the JSON-LD. An indexed seek that returns 3,000 rows is
- * still 3,000 rows.
- *
- * So the page takes a SLICE, and the TOTAL is counted in SQL (`count(*) over ()`) and returned
- * as a scalar — never by handing the rows to the isolate to length-check (AGENTS.md: rank and
- * aggregate in SQL). The thin-content gate keys off the total; the page renders the slice.
- *
- * The ARTIST and LABEL pages have since outgrown this shape entirely: a flat slice of a
- * discography is a dump, so their rows are GROUPED, and the bound moved with them into
- * `catalogue-groups.ts` (a page of groups, plus a per-group row cap, both in SQL). What is
- * left here is the ALBUM page, which needs no grouping because an album IS one group.
- */
 export type CatalogueTrackItem = {
   albumImageUrl?: string;
   artists: string[];
@@ -1030,28 +713,17 @@ export type CatalogueTrackItem = {
   key?: string;
   previewable: boolean;
   releaseDate?: string;
-  /** Null when the track has no Spotify presence at all (a catalogue-only resolve). */
+
   spotifyUrl: string | undefined;
   title: string;
   trackId: string;
 };
 
-/**
- * The most quieter rows an ALBUM page will ever render. A cap the page can survive, not a cap
- * the DATA respects — the entity's true count still drives the thin-content gate.
- *
- * The artist and label pages no longer read through here at all: at catalogue scale their rows
- * are GROUPED (by record, and by artist-then-record), and grouping moves the bound rather than
- * removing it — see `catalogue-groups.ts`, which owns their limits. An album is already one
- * record, so its tracklist stays the flat list it always was, and this is its ceiling.
- */
 export const GRAPH_PAGE_CATALOGUE_LIMIT = 100;
 
-/** A page's worth of quieter rows, plus how many the entity carries in total. */
 export type CatalogueSlice = {
-  /** At most {@link GRAPH_PAGE_CATALOGUE_LIMIT} rows — what the page renders. */
   tracks: CatalogueTrackItem[];
-  /** Every uncertified track on the entity, counted in SQL. Drives the thin-content gate. */
+
   total: number;
 };
 
@@ -1073,25 +745,11 @@ type CatalogueTrackRow = {
   track_id: string;
 };
 
-/**
- * The uncertified tracklist of ONE record. `count(*) over ()` is evaluated over the WHOLE
- * filtered set — SQLite applies `limit` last — so one round trip brings back the capped slice
- * AND the honest total, and the rows past the cap never cross the wire.
- *
- * `release_date is null` leads the sort because SQLite orders NULL as the SMALLEST value, so a
- * bare `release_date desc` would float every undated row to the top of the page.
- *
- * The cover and readout travel with the bounded slice so its rows need no follow-up reads.
- */
 export async function listCatalogueTracksByAlbum(albumId: string): Promise<CatalogueSlice> {
   const db = await getDb();
   const result = await db.execute({
     args: [albumId, GRAPH_PAGE_CATALOGUE_LIMIT],
-    // The two `is null` guards past the finding anti-join are the STAMPED half of the duplicate
-    // defence: a row an operator has marked a duplicate (`duplicate_of_track_id`) or dismissed
-    // (`dismissed_at`) leaves both the slice AND the `count(*) over ()` total, so the thin-content
-    // gate keys off the same set the page renders. The crawler leaves most twins unstamped, so the
-    // slice is folded again below (`dedupeByRecordingIdentity`) before it crosses the wire.
+
     sql: `select tracks.track_id, tracks.title, tracks.artists_json, tracks.spotify_url,
                  tracks.album_image_url,
                  (select image_key from albums where albums.id = tracks.album_id) as album_image_key,
@@ -1120,9 +778,6 @@ export async function listCatalogueTracksByAlbum(albumId: string): Promise<Catal
   const rawTotal = Number(rows[0]?.total ?? 0);
 
   return {
-    // The SQL total counts every unstamped twin; the fold has now collapsed the ones in this
-    // slice, so subtract them. Clamped to the rendered count so the gate never reports fewer
-    // tracks than the page shows (`count(distinct)` in SQL would double-scan the growing table).
     total: Math.max(rawTotal - (rows.length - deduped.length), deduped.length),
     tracks: deduped.map((row) => ({
       albumImageUrl: bestAlbumCoverUrl({
@@ -1144,14 +799,6 @@ export async function listCatalogueTracksByAlbum(albumId: string): Promise<Catal
   };
 }
 
-/**
- * Read the INTERNAL `context_note` for a track (the Firecrawl-derived facts).
- * `context_note` is deliberately OUTSIDE `TRACK_SELECT` (internal-only fuel,
- * never surfaced through `toTrackListItem`), so the observe steps read it
- * directly: the `context_track` step skips when it is already present
- * (idempotent no-op), and `observe_track` reads it as the stored fuel it no
- * longer fetches itself. Returns `null` when the track is missing or unset.
- */
 export async function getTrackContextNote(idOrLogId: string): Promise<string | null> {
   const db = await getDb();
   const result = await db.execute({
@@ -1166,13 +813,6 @@ export async function getTrackContextNote(idOrLogId: string): Promise<string | n
   return row ? (row.context_note ?? null) : null;
 }
 
-/**
- * The stored observation script + its prompt-version provenance, for the force
- * re-render path: a re-render of the SAME script is not a re-author, so the row's
- * provenance must survive it (a null here can mean "authored before the registry" —
- * an honest null the render path must not overwrite). Column-only read like
- * `getTrackContextNote`.
- */
 export async function getObservationProvenance(
   idOrLogId: string,
 ): Promise<{ promptVersion: number | null; script: string | null }> {
@@ -1196,20 +836,11 @@ export async function getObservationProvenance(
   };
 }
 
-/**
- * The R2 key of a finding's captured FULL SONG (`source_audio_key`), or null when
- * the finding is unknown OR not yet captured. A dedicated column-only read (like
- * `getTrackContextNote`) rather than a widening of `TRACK_SELECT`/`toTrackListItem`:
- * the full song is a private analysis artifact, never part of a public/admin DTO,
- * and only the `get_source_audio` streaming endpoint (the M5 bridge) needs the key.
- */
 export async function getSourceAudioKey(idOrLogId: string): Promise<string | null> {
   const db = await getDb();
   const result = await db.execute({
     args: [idOrLogId, idOrLogId, idOrLogId],
-    // Catalogue-aware, not finding-scoped: a catalogue row's captured bytes stream too — the
-    // quarantine lens auditions them so the operator can hear which side of a wrong-audio
-    // collision is actually wrong (docs/the-ear.md § Wrong audio). Same privacy tier either way.
+
     sql: `with ${TRACK_OR_LOG_ID_CTE}
           select tracks.source_audio_key from resolved_track
           join tracks on tracks.track_id = resolved_track.track_id
@@ -1223,13 +854,6 @@ export async function getSourceAudioKey(idOrLogId: string): Promise<string | nul
 const SEARCH_DEFAULT_LIMIT = 20;
 const SEARCH_MAX_LIMIT = 50;
 
-/**
- * Admin free-text search over the findings archive — matches `q` (case-insensitive,
- * substring) against track_id, log_id, title, or any stored artist. Newest-first to
- * mirror listTracks. The artists are stored as a JSON array string (`artists_json`),
- * so we match the raw JSON text — good enough to find an artist by name without
- * unpacking the array. Bound args only; `q` is never interpolated into SQL.
- */
 export async function searchTracks(options: {
   q: string;
   limit?: number;
@@ -1262,24 +886,9 @@ export async function searchTracks(options: {
   return typedRows<TrackRow>(result.rows).map(toTrackListItem);
 }
 
-/**
- * The most-recently-SHIPPED findings — the admin Renders view's "recently shipped"
- * list (the operator's morning render review). Every finding that carries a video,
- * ordered by its video VINTAGE (`video_squared_at`, the two-master ship stamp)
- * newest-first, so a fresh overnight render surfaces at the top even though the
- * finding it filmed is an OLD find (the render queue is worked oldest-first).
- *
- * DISTINCT from `listTracks({ hasVideo: true })`, which orders by FOUND order and so
- * would bury an overnight render of an old find below the newest-added catalogue. A
- * legacy single-master finding (no `video_squared_at`) sorts last — SQLite orders
- * NULLs last under DESC — then by found-order, so the freshest two-master renders
- * always lead.
- */
 export async function listRecentlyRenderedFindings(limit: number): Promise<BoardTrackListItem[]> {
   const db = await getDb();
-  // The renders board reads this through the BOARD projection (no graph/discovery
-  // subqueries): each row shows its identity + video ledger, and the "Watch" preview
-  // (StoriesPlayer→StoryView) needs only the cover master + `tiktokUrl`, both kept.
+
   const result = await db.execute({
     args: [limit],
     sql: `select ${BOARD_TRACK_SELECT} from ${FINDINGS_FROM}
@@ -1291,12 +900,6 @@ export async function listRecentlyRenderedFindings(limit: number): Promise<Board
   return typedRows<TrackRow>(result.rows).map(toBoardTrackListItem);
 }
 
-/**
- * Whether one finding carries stored spectral `features_json` — the Enrich dialog's lazy
- * presence read. The board projection drops `features` from every row (only this dialog
- * ever showed its presence), so the single OPEN row fetches it on demand, mirroring the
- * context-note / observation-script lazy reads. A tiny presence probe, never the blob.
- */
 export async function hasTrackFeatures(trackId: string): Promise<boolean> {
   const db = await getDb();
   const result = await db.execute({
@@ -1309,16 +912,9 @@ export async function hasTrackFeatures(trackId: string): Promise<boolean> {
   return result.rows.length > 0;
 }
 
-/**
- * The capture-source facts the admin board's Capture-source dialog shows for ONE finding
- * (docs/the-ear.md § Wrong audio): where the capture stands, what the gate said about it, the
- * operator's pin if one stands, and the YouTube id the row holds. Read lazily for the open row
- * only — capture state is internal side-channel and never rides the public track contract or the
- * board's hot page read. Null for an unknown track.
- */
 export type CaptureSourceState = {
   captureSourcePin: null | string;
-  /** Whether the standing pin waives the duration guard (a deliberately chosen different edit). */
+
   captureSourcePinAllowDuration: boolean;
   captureStatus: string;
   captureVerification: null | string;
@@ -1378,7 +974,6 @@ export async function getTracksForMixtape(mixtapeId: string): Promise<MixtapeMem
   }));
 }
 
-/** One random certified track, mapped like every other list item. */
 export async function getRandomTrack(): Promise<TrackListItem | undefined> {
   const db = await getDb();
   const result = await db.execute({
@@ -1389,19 +984,6 @@ export async function getRandomTrack(): Promise<TrackListItem | undefined> {
   return row ? toTrackListItem(row) : undefined;
 }
 
-/**
- * One random RADIO-ELIGIBLE finding for the cycling station (radio.fluncle.com).
- *
- * Eligible = the finding carries BOTH a clean square master (`video_squared_at`
- * set) AND an observation (`observation_audio_url` set):
- *   - The square master is what radio centre-crops per orientation (media.ts
- *     `videoCrop`) and draws its OWN chrome over, so a legacy baked-text cut must
- *     never reach the station — `video_squared_at` is the two-master signal.
- *   - The observation is the only audio radio plays (the video is silent), so a
- *     finding with no observation has nothing to say.
- * Both predicates are `is not null` filters on this OWN bare query (not the
- * `listTracks` builder), so the endpoint only ever returns a playable finding.
- */
 export async function getRandomRadioTrack(): Promise<TrackListItem | undefined> {
   const db = await getDb();
   const result = await db.execute({
@@ -1415,21 +997,6 @@ export async function getRandomRadioTrack(): Promise<TrackListItem | undefined> 
   return row ? toTrackListItem(row) : undefined;
 }
 
-// ── radio.fluncle.com — the shared schedule (the radio-broadcast RFC, Unit A) ──
-
-/**
- * The radio loop's eligible findings, deterministically ordered. The eligibility
- * predicate matches `getRandomRadioTrack` (a clean square master + an observation)
- * PLUS `observation_duration_ms`/`log_id` non-null — the schedule arithmetic needs
- * the segment length (the audio IS the clock) and the URL builder needs the logId,
- * where the random op tolerated their absence by skipping client-side.
- *
- * The order is found-order — `added_at ASC, track_id ASC`, the codebase's
- * canonical stable total order (the feed cursor, neighbors, and search tiebreak
- * all use this tuple). It MUST NOT be `random()` — that is exactly what breaks
- * synchronization. A non-found shuffle (Decision #2) would be a stable
- * epoch-seeded permutation in the handler; the SQL stays deterministic either way.
- */
 export async function getRadioEligibleTracks(): Promise<RadioScheduleEntry[]> {
   const db = await getDb();
   const result = await db.execute({
@@ -1453,14 +1020,6 @@ export async function getRadioEligibleTracks(): Promise<RadioScheduleEntry[]> {
   }));
 }
 
-/**
- * A cheap fingerprint of the eligible set — `${count}:${maxObservationGeneratedAt}`
- * over the SAME predicate as `getRadioEligibleTracks`. `count` rises on a new
- * eligible finding; `latest` (the max `observation_generated_at`) moves on a
- * re-observe (a changed duration). A different fingerprint is the "the schedule
- * changed" trigger that rolls the epoch to the next loop boundary — computed on
- * the READ path, so the eligibility-changing agent writes never touch the anchor.
- */
 export async function getRadioScheduleFingerprint(): Promise<string> {
   const db = await getDb();
   const result = await db.execute({
@@ -1482,18 +1041,6 @@ type RadioScheduleRow = {
   version: string;
 };
 
-/**
- * Read the stored schedule anchor, ROLLING it to the next loop boundary when the
- * eligible set changed (a self-heal on the read path). Returns the live epoch the
- * modulo math is measured from plus the fingerprint clients re-fetch on.
- *
- * On a fingerprint mismatch (or a first-ever read), the new schedule is made to
- * take effect at the NEXT loop boundary of the OLD loop (`nextBoundaryEpochMs`),
- * so a grown/re-observed catalogue applies at a seam and no current listener's
- * playhead jumps mid-loop — then the row is upserted. `oldEntries` lets the caller
- * pass the freshly-read eligible set so the boundary roll uses the OLD loop length
- * the listeners are still riding (the caller reads the live set anyway).
- */
 export async function getRadioScheduleAnchor(
   version: string,
   oldLoopDurationMs: number,
@@ -1509,13 +1056,10 @@ export async function getRadioScheduleAnchor(
     ).rows,
   );
 
-  // The anchor still matches the live set — nothing to roll.
   if (stored && stored.version === version) {
     return { epochMs: stored.epoch_ms, version };
   }
 
-  // First-ever read: anchor at now. A changed set: roll the OLD epoch to the next
-  // boundary of the OLD loop so the new schedule applies at a seam.
   const epochMs = stored ? nextBoundaryEpochMs(stored.epoch_ms, oldLoopDurationMs, nowMs) : nowMs;
   const generatedAt = new Date(nowMs).toISOString();
 
@@ -1544,10 +1088,6 @@ type NeighborRow = {
   title: string;
 };
 
-/**
- * The adjacent coordinate-bearing findings in found order — the log page's
- * newer/older links (crawlable adjacency through the whole archive).
- */
 export async function getTrackNeighbors(track: {
   addedAt: string;
   trackId: string;
@@ -1578,47 +1118,6 @@ export async function getTrackNeighbors(track: {
   };
 }
 
-// Related-track adjacency is provided by the sonic galaxy lens
-// (`/galaxies/<slug>`, reached from the linked prose clause), which is the real
-// topical adjacency now, and "Close in sound" (`getSimilarFindings`) already covers the
-// per-finding neighbourhood. The vibe columns themselves are dropped — nothing read or
-// wrote them, and the stale coordinates were still leaking into the observe/note prompts.
-
-/**
- * The N sonically-nearest findings to a given one — the automatic "more like this"
- * cluster (docs/track-lifecycle.md). Loads the target's MuQ embedding, has the DATABASE
- * cosine-rank it against every OTHER coordinate-bearing finding's vector, and hydrates
- * the winners in similarity order. Powers the `/log` "more like this" row and the public
- * `list_similar_tracks` op; a future "play something like this" radio hook reads the
- * same function.
- *
- * The explicit diagnostic path is an exact scan in SQL —
- * `order by vector_distance_cos(vector, ?) limit N`
- * with the probe bound as a RAW BLOB (`toVectorProbe`; see embedding.ts for why the
- * binding is the whole ballgame). It returns the ~6 winners from the shared deterministic
- * candidate window, never the corpus, in one round trip. The old shape — every stored JSON vector into the
- * isolate, cosine there — hard-failed `turso dev`'s 10 MiB response cap at 460 embedded
- * findings and was on course to OOM the 128 MB Worker isolate in prod
- * (docs/local-database.md "Local is not production"). No ANN index: `libsql_vector_idx`
- * wedged hosted Turso's write path in the measurement spike and is not to be used.
- *
- * Returns `[]` (never throws) when the finding is unknown, has no embedding yet (the
- * embed cron hasn't drained it), or nothing else is embedded. A candidate with no
- * `track_embeddings` row (un-embedded, or the transient pre-backfill window) is skipped, not
- * fatal. Only coordinate-bearing candidates (`log_id IS NOT NULL`) are considered — every
- * result links to a `/log` page — and the target is excluded.
- *
- * Ordering is deterministic: distance ascending, `track_id` ascending as the tiebreak.
- *
- * SCALE NOTE. The diagnostic scan asks a semantically global question — "close in sound" is a
- * nearest-neighbour question over the archive — but its deterministic candidate window is capped
- * by the shared fallback contract. Ranking the satellite's native vector column directly (the DB
- * does the cosine in SQL) keeps it a plain bounded linear blob scan. The
- * lever, when the archive gets large, is a btree pre-filter before the scan — `where galaxy_id = ?` — but
- * it would confine the row to the finding's own galaxy, which CHANGES what comes back, and
- * a precomputed neighbour table (the Ear pattern) is the durable answer. Both are product/
- * infra calls, not made here.
- */
 export async function getSimilarFindings(
   idOrLogId: string,
   limit = 6,
@@ -1658,14 +1157,6 @@ export async function getSimilarFindings(
     return [];
   }
 
-  // THE SONAR ROUTE (dark, DEFAULT OFF). "More like this" is a GLOBAL nearest-neighbour question over
-  // certified findings, so sonar scans its `tracks` index with `certified: true` and the target
-  // excluded. sonar DEFINES `certified` as `findings.log_id is not null` (apps/sonar/src/turso.rs
-  // joins on that, since `log_id` is nullable), which is exactly the set the Turso scan below ranks
-  // (`where findings.log_id is not null`); the hydrator re-asserts the Log ID as defense-in-depth.
-  // When enabled, an unavailable or empty Sonar answer omits this optional band promptly. The
-  // exact Turso scan is available only through the explicit diagnostic option: public flag-OFF
-  // and outage paths never start remote work that cannot be cancelled once Turso accepts it.
   if (sonarEnabled) {
     const matches = await searchSonar({
       excludeIds: [targetRow.track_id],
@@ -1678,17 +1169,8 @@ export async function getSimilarFindings(
     return matches === null ? [] : hydrateSimilarFindings(matches);
   }
 
-  // The probe rides as raw f32 bytes, NOT as a JSON string — a 14x cliff on hosted that
-  // does not reproduce locally (embedding.ts, `toVectorProbe`).
   const probe = toVectorProbe(target);
-  // Rank the satellite's native `embedding_blob` directly AND hydrate the winners in the SAME
-  // query — the DB does the cosine in SQL, orders by it, and returns only the winning rows
-  // with their full `TRACK_SELECT` columns, already in ranked order. This folds the old
-  // rank-then-hydrate pair into one round-trip (the target lookup above stays as the
-  // no-embedding guard; `vector_distance_cos` throws on a NULL probe). The join to
-  // `track_embeddings` is INNER, which IS the old `embedding_blob is not null` filter: a
-  // candidate with no vector never reaches the cosine, it simply is not in the satellite.
-  // Args bind in SQL-TEXT order: excluded target, then probe and result limit.
+
   const rankedResult = await executeVectorFallback(db, "sonar.fallback.log", {
     args: [targetRow.track_id, probe, limit],
     sql: `with candidates(track_id) as materialized (
@@ -1716,20 +1198,6 @@ export async function getSimilarFindings(
   return typedRows<TrackRow>(rankedResult.rows).map((row) => toTrackListItem(row));
 }
 
-/**
- * Hydrate sonar's ranked finding ids into full {@link TrackListItem}s IN SONAR'S ORDER — one flat
- * `where track_id in (…)` read over `FINDINGS_FROM` (no vector math), reusing the shared
- * `TRACK_SELECT`/{@link toTrackListItem} so the DTO matches the Turso path exactly.
- *
- * THE `log_id is not null` GUARD is load-bearing, not decoration. sonar's `certified` is now DEFINED
- * as "a findings row WITH a Log ID exists" (apps/sonar/src/turso.rs joins `f.log_id is not null`), to
- * match the OFF path's `where findings.log_id is not null`. `findings.log_id` is NULLABLE (a straggler
- * awaiting its coordinate backfill), and `FINDINGS_FROM` is only a bare inner join (`findings join
- * tracks`) that does NOT filter it — so this WHERE re-asserts the Log ID here as defense-in-depth: a
- * stale sonar (deployed before the turso.rs change, or mid-refresh) can never sneak an un-coordinated
- * finding onto `/log` through the hydrator. An id that no longer hydrates (a delete, or a now-null
- * log_id since sonar's last refresh) is dropped, never faked.
- */
 async function hydrateSimilarFindings(matches: SonarMatch[]): Promise<TrackListItem[]> {
   return hydrateRankedSonarMatches(
     matches,
@@ -1749,52 +1217,26 @@ async function hydrateSimilarFindings(matches: SonarMatch[]): Promise<TrackListI
   );
 }
 
-// ── `/mix`: the catalogue-aware rail ─────────────────────────────────────────
-//
-// THE JOIN IS A LEFT JOIN, and that one word is most of this feature. Every other read in
-// this file drives through `FINDINGS_FROM` (an INNER join), because every other surface is
-// about findings — the things Fluncle has been to. `/mix` is the first surface that is
-// about the MUSIC: a track is mixable if it has a key and a vector, and whether Fluncle
-// ever certified it has no bearing on whether it beatmatches. So the rail scans
-// `MIX_FROM`, and an uncertified track competes on exactly the same terms as a finding.
-//
-// That is what makes the tool get BETTER as the archive grows rather than merely bigger,
-// and it is the whole reason the catalogue is worth crawling.
 const MIX_FROM = `tracks left join findings on findings.track_id = tracks.track_id`;
 
-// The columns `MixTrackSchema` needs — deliberately tiny. A `/mix` row is a small honest
-// shape (title, artists, cover, the two chips, and whether it is certified), not a
-// `TrackListItem`: there is no note, no video, no galaxy here to leak into the unlit
-// register, because they are not selected. `log_id` is the ONLY certification signal, and
-// both `certified` and `logId` are read off it, so they cannot disagree.
 const MIX_TRACK_SELECT = `tracks.track_id, tracks.title, tracks.artists_json, tracks.album_image_url,
   tracks.spotify_url, tracks.apple_music_url, tracks.duration_ms, tracks.bpm, tracks.key, findings.log_id`;
 
 type MixTrackRow = {
   album_image_url: string | null;
-  // NULL until the Apple ISRC backfill resolves it (or Apple has no match) — the Apple twin of
-  // spotify_url below. An unlit /mix row shows whichever listen-out glyphs it actually has.
+
   apple_music_url: string | null;
   artists_json: string;
   bpm: number | null;
   duration_ms: number;
   key: string | null;
   log_id: string | null;
-  // NULL for a crawler-minted catalogue row (MusicBrainz-born; Spotify is a per-track
-  // ISRC anchor, not a guarantee). Typing this `string` once let a NULL sail into a
-  // required schema field and 500 the whole /mix rail the day the first crawled track
-  // was analyzed into rankability.
+
   spotify_url: string | null;
   title: string;
   track_id: string;
 };
 
-/**
- * A `MIX_FROM` row → the wire DTO. THE UNLIT RULE, in three lines: `certified` is
- * `Boolean(log_id)` and `logId` is `log_id ?? undefined`, so a row without a coordinate is
- * uncertified and an uncertified row has no coordinate — one column, one truth, no way for
- * a caller to construct a catalogue row that shows a Log ID. The tier is never named.
- */
 function toMixTrackDTO(row: MixTrackRow): MixTrackDTO {
   return {
     albumImageUrl: row.album_image_url ?? undefined,
@@ -1811,7 +1253,6 @@ function toMixTrackDTO(row: MixTrackRow): MixTrackDTO {
   };
 }
 
-// A candidate/target row for the mixability engine: the four scoring columns + its ids.
 type MixRow = {
   bpm: number | null;
   embedding_blob: unknown;
@@ -1821,55 +1262,15 @@ type MixRow = {
   track_id: string;
 };
 
-// A `/mix` CANDIDATE row. The vector itself never crosses the wire: the database
-// reports only whether the track HAS one (`has_embedding`, feeding the coverage gate)
-// and its cosine DISTANCE to the target (`sonic_dist` — null when either side has no
-// vector), which `cosineFromDistance` turns back into the cosine the engine scores.
 type MixCandidateRow = Omit<MixRow, "embedding_blob"> & {
   has_embedding: number | null;
   sonic_dist: number | null;
 };
 
-// ── The depth gate ───────────────────────────────────────────────────────────
-
-/**
- * Measure whether the archive is deep enough for `/mix` to be worth opening to a stranger
- * (`mixChainDepth` — the median track's named-move neighbourhood against a floor of one of
- * Fluncle's own sets plus a full rail).
- *
- * Reads the memoized archive key histogram (key-histogram.ts) — the same read `namedMoveKeys`
- * below makes. The fold over two dozen buckets is free, so the memo lives on the READ rather than
- * on this answer, and the rail no longer pays a second walk of `tracks_key_idx` for the same fact.
- */
 export async function getMixChainDepth(): Promise<MixChainDepth> {
   return mixChainDepth(await readKeyHistogram());
 }
 
-// ── The candidate pre-filter ─────────────────────────────────────────────────
-
-/**
- * The archive's stored key SPELLINGS that sit a named harmonic move from `from` — the
- * `key in (…)` pre-filter's argument list.
- *
- * It reads the archive's own spellings rather than generating them, and that is the point:
- * `tracks.key` is scale text written by several hands (the DSP writes sharps, Rekordbox may
- * not, an operator may type a flat), and a hand-built reverse map would silently drop every
- * spelling it failed to predict. Folding the DISTINCT keys the archive actually holds
- * through the same tolerant `parseKey` the engine uses cannot drift from it. The spelling list
- * is 24-ish values off `tracks_key_idx`, and it is now LITERALLY the same read the depth gate
- * makes — `readKeyHistogram`, memoized for a minute — rather than a second walk of the same
- * index issued on every rail. The two answers were always the same fact about the archive; only
- * the gate remembered it, so a `/mix` load paid a fresh full index walk (O(keyed tracks), and the
- * catalogue crawler grows that set) to rebuild two dozen strings that had not moved.
- *
- * THIS IS A SCORING DECISION, not a performance fix, and it is made deliberately. The old
- * scan ranked EVERY keyed row and let distant keys surface when the archive was too sparse
- * to offer better. The rail no longer does that: a `distant` pair is not a move a DJ makes
- * on purpose, and the rail's promise — everything on it mixes clean — is worth more than a
- * full-looking list. The gate is what makes it safe: it opens only once the median track has
- * a named move to 29 others, so the neighbourhood the rail serves is exactly the
- * neighbourhood the gate measured. One definition of "what can follow this", used by both.
- */
 async function namedMoveKeys(from: Camelot): Promise<string[]> {
   const histogram = await readKeyHistogram();
   const wanted = new Set(namedMoveClasses(from).map(({ letter, number }) => `${number}${letter}`));
@@ -1881,51 +1282,12 @@ async function namedMoveKeys(from: Camelot): Promise<string[]> {
   });
 }
 
-/** The Camelot position of a scale-text key, or null when it is absent/unparseable. */
 function camelotOfKey(key: string | null): Camelot | null {
   const parsed = parseKey(key);
 
   return parsed ? toCamelot(parsed) : null;
 }
 
-// ── Taste: SINGLE-PROBE-ON-LAST ──────────────────────────────────────────────
-//
-// THE RATIFIED MODEL. Mixing a transition is a question about ADJACENCY TO THE TRACK YOU JUST
-// PLAYED, not about the whole set's average flavour. So the rail's taste probe is ONE vector —
-// the LAST track of the live chain — and nothing else. `getMixableTracks`' `idOrLogId` IS that
-// track: every caller passes the chain's tail (the web builder's `tail`, the mobile hook, the
-// MCP `build_set` seed), which is why this needs no new wire field to know what "last" means.
-//
-// WHAT IT REPLACED: a fold over up to 24 probes (3 per seeded artist) drawn from the reader's
-// `?taste=` artist seed, scored by a second SQL statement over the shortlist. Two things went
-// with it. The seed is no longer a RANKING input at all — it still picks what a set OPENS with
-// (`getMixOpeners`), which is where a "pick artists you like" control belongs, but once the
-// chain has a tail the tail is the whole question. And the second statement is gone: the
-// candidate scan below ALREADY computes each candidate's cosine to the target, so the taste
-// cosine is a number the rail is holding, not a number it has to go and ask for.
-//
-// STILL NEVER A CENTROID (docs/the-ear.md). One probe cannot be an average of anything — the
-// multi-probe fold this replaces was max-similarity precisely so it would not become a mean,
-// and single-probe-on-last is that property taken to its limit. The chain stays the exclude
-// list, so the set EVOLVES as it goes: track 5 is chosen next to track 4, which was chosen next
-// to track 3 — still in the neighbourhood of track 1, but it has drifted, which is what a set
-// does.
-
-/**
- * Re-rank the rail under single-probe-on-last: mixability × taste, where taste is the
- * candidate's calibrated cosine to the TARGET — the last track of the chain.
- *
- * `tasteLive` is false when there is no trustworthy measurement to multiply by (the target has
- * no vector, or the archive has not cleared the sonic coverage gate). Then the rail is the plain
- * mixability order when there is no trustworthy taste measurement. The two must move together:
- * the gate exists to say "the MuQ term is not trustworthy here yet", and taste is that same
- * measurement asked against the same anchor.
- *
- * Each candidate's cosine is read off `sonicCos`, which the caller already has — from
- * `vector_distance_cos` on the Turso path, or from sonar's `score` on the sonar path (both
- * cosine SIMILARITY, same scale). A candidate with no vector scores `null` and keeps its
- * mixability rank rather than being punished for a missing measurement (`applyTaste`).
- */
 function rankMixRail(
   target: RankTrack,
   candidates: RankCandidate<string>[],
@@ -1952,37 +1314,6 @@ function rankMixRail(
   );
 }
 
-/**
- * The tracks that mix cleanly OUT of the given one, ranked by the mixability engine
- * (`mixability.ts`) — the rail behind `/mix` and the public `list_mixable_tracks` op.
- *
- * CANDIDATES ARE THE WHOLE ARCHIVE (`MIX_FROM`, a LEFT join), not just the findings: the key
- * is the engine's mandatory floor, so any keyed track is rankable, and a catalogue track
- * competes for the rail on the same terms as a certified one. Each result carries its
- * `certified` bit for the REGISTER it renders in (DESIGN.md's Unlit Rule) and nothing more —
- * the tier is never named on the wire, never labelled on the page.
- *
- * THE VECTORS STAY IN THE DATABASE. The scan computes each candidate's cosine to the target
- * with `vector_distance_cos` (the probe bound as a RAW BLOB — embedding.ts, `toVectorProbe`)
- * and each row carries back a single number, rather than 21 KB of vector per candidate. It is
- * pre-filtered by `key in (…)` to the ~8 Camelot classes a NAMED harmonic move can reach
- * (`namedMoveKeys` — read its comment; that is a scoring decision, argued there), which is the
- * ratified "btree pre-filter ahead of an exact vector scan" shape and the only reason this
- * survives a five-figure catalogue.
- *
- * TASTE IS SINGLE-PROBE-ON-LAST (read the section header above): the engine shortlists the
- * `TASTE_SHORTLIST` cleanest mixes and re-ranks them by mixability × the candidate's calibrated
- * cosine to the TARGET, which is the chain's last track. `idOrLogId` IS that track — every
- * caller passes the tail — so the probe costs no extra statement: the candidate scan already
- * measured it. Everything on the rail still mixes clean; taste only chooses among the clean
- * ones. No artist seed is involved; `?taste=` picks a set's OPENER (`getMixOpeners`), not its
- * next step.
- *
- * `exclude` drops the already-chained tracks SERVER-SIDE (Log IDs and/or Spotify track ids,
- * mixed freely — a chain now holds both kinds) so a deep chain can't silently empty the rail.
- * Each result carries its `reason` chip, never a numeric score (§3.0 invariant). Returns `[]`
- * (never throws) for an unknown coordinate, a target with no key, or an empty archive.
- */
 export async function getMixableTracks(
   idOrLogId: string,
   options: { exclude?: string[]; limit?: number } = {},
@@ -1994,17 +1325,12 @@ export async function getMixableTracks(
       throw error;
     }
 
-    // AN EMPTY RAIL IS THE DOCUMENTED DEGRADATION, and it is the honest one: the reader is told
-    // "nothing to follow this" instead of watching a page hang. It is not a retry — libSQL cannot
-    // cancel the remote work, so a second attempt would stack a second scan on the database that
-    // is already the reason we are here. The next request meets a warmer database and a warm memo.
     console.warn(`${error.label} exceeded ${error.deadlineMs}ms — serving an empty rail`);
 
     return [];
   }
 }
 
-/** The rail itself. Every path out of here is bounded by its caller above. */
 async function mixRail(
   idOrLogId: string,
   options: { exclude?: string[]; limit?: number },
@@ -2016,13 +1342,7 @@ async function mixRail(
   }
 
   const db = await getDb();
-  // THE COLD PATH IS A CHAIN OF ROUND TRIPS, and the only cure for a round trip is to stop
-  // waiting for it. The archive's key spellings (`namedMoveKeys`, below) depend on nothing this
-  // function reads, so the histogram read is STARTED here and awaited where it is used: on a cold
-  // isolate that overlaps a settings lookup plus an index walk with the target read instead of
-  // queueing them behind it. `readKeyHistogram` shares one in-flight read, so this is the same
-  // read the rail awaits, never a second one. A rejection is re-raised at the real await below;
-  // the no-op handler only keeps the early-return paths from reporting it as unhandled.
+
   const warmingKeyHistogram = readKeyHistogram();
 
   warmingKeyHistogram.catch(() => undefined);
@@ -2044,17 +1364,12 @@ async function mixRail(
     return [];
   }
 
-  // The key is the engine's floor (`scoreMix`: a pair whose key we do not know is a pair we
-  // cannot justify), so a target with no key has no rail — and no pre-filter either.
   const targetCamelot = camelotOfKey(targetRow.key);
 
   if (!targetCamelot) {
     return [];
   }
 
-  // Which engine answers is a `settings` lookup that depends on nothing below it, and it is only
-  // ever asked of a target that HAS a vector — so it is started here, beside the histogram read,
-  // and awaited at the branch that needs it. No path pays a read it would not otherwise have made.
   const sonarMixEnabled = targetRow.embedding_blob === null ? null : isSonarMixEnabled();
 
   sonarMixEnabled?.catch(() => undefined);
@@ -2065,25 +1380,15 @@ async function mixRail(
     return [];
   }
 
-  // The target's vector is the probe — the sonic term AND, since single-probe-on-last, the
-  // taste probe. When it has none, every pair's sonic term is null anyway, so the scan skips
-  // the distance work entirely and the rail degrades to plain mixability.
   const targetEmbedding = readEmbeddingBlob(targetRow.embedding_blob);
   const probe = targetEmbedding ? toVectorProbe(targetEmbedding) : null;
 
-  // A chain holds findings AND catalogue tracks, so an exclusion may arrive as either kind
-  // of token. Split them and exclude on both columns.
   const excluded = [...new Set((options.exclude ?? []).map((id) => id.trim()).filter(Boolean))];
   const excludedLogIds = excluded.filter((id) => isLogId(id));
   const excludedTrackIds = excluded.filter((id) => !isLogId(id));
 
   const target = toMixTrack(targetRow);
 
-  // THE SONAR ROUTE (dark, DEFAULT OFF). It replaces the whole-archive `vector_distance_cos`
-  // scan below — the one statement here that grows with the catalogue — and nothing else: the
-  // same mixability engine ranks the candidates it returns, so a flag flip is a latency swap
-  // rather than a re-ranking. Requires a target vector (there is no probe without one). Falls
-  // through to the Turso scan when off / unprovisioned / down / empty.
   if (targetEmbedding && (await sonarMixEnabled)) {
     const railed = await mixRailFromSonar({
       excludedLogIds,
@@ -2110,23 +1415,9 @@ async function mixRail(
       ? `and tracks.track_id not in (${excludedTrackIds.map(() => "?").join(", ")})`
       : "";
 
-  // `findings` enters the CANDIDATE scan for exactly one reason: the Log ID exclusion clause. No
-  // other part of the CTE reads a findings column — it selects `tracks.track_id` and filters on
-  // `tracks.key`/`tracks.track_id` — and `findings.track_id` is that table's primary key, so the
-  // LEFT JOIN can neither duplicate a candidate nor drop one. With nothing to exclude by
-  // coordinate the scan therefore drives straight off `tracks`.
-  //
-  // SQLite's omit-noop-join optimization already drops an unused unique LEFT JOIN, so this is not
-  // a saving to claim — it is a refusal to DEPEND on that optimization for the widest statement
-  // the rail issues, on a hosted planner that is a different build from the local one. Stating
-  // the join only where it is read is the version that cannot regress quietly. The hydrating
-  // select below keeps it unconditionally: it reads `findings.log_id`, the rail's only
-  // certification signal.
   const candidateFrom = excludedLogIds.length > 0 ? MIX_FROM : `tracks`;
   const distanceSql = probe ? `vector_distance_cos(emb.embedding_blob, ?)` : `null`;
   const candidateStatement = {
-    // SQL-TEXT order decides the bind order: the ID-only candidate CTE's keys, target and
-    // exclusions lead; the post-cap vector calculation receives the probe last.
     args: [
       ...keys,
       targetRow.track_id,
@@ -2134,11 +1425,7 @@ async function mixRail(
       ...excludedTrackIds,
       ...(probe ? [probe] : []),
     ],
-    // The vector satellite joins after the ID-only candidate cap. The DB still ranks the cosine
-    // in SQL. The satellite joins LEFT, deliberately:
-    // an unembedded candidate still belongs on the rail (it mixes on key + BPM), it just gets a
-    // null `vec` and a null sonic term. `has_embedding` is read off the `tracks` row the scan
-    // already has rather than off the join, so the coverage gate costs nothing extra.
+
     sql: `with candidates(track_id) as materialized (
             select tracks.track_id
             from ${candidateFrom}
@@ -2157,14 +1444,7 @@ async function mixRail(
           left join track_embeddings emb on emb.track_id = tracks.track_id
           order by tracks.rowid`,
   };
-  // THE DEADLINE BELONGS TO THE SCAN, NOT TO THE COSINE. Both branches read the same rows — every
-  // key-compatible track in the archive, up to the candidate bound — and the probe only decides
-  // whether a number is computed per row. So both go through the same bounded executor, which is
-  // what attaches the three things this statement must have and cannot be trusted to have by
-  // accident: the absolute deadline, the `heavy-read` admission seat (an isolate runs one of these
-  // at a time), and the `sonar.fallback.mix` cost span. Branching the executor on `probe` made all
-  // three conditional on the TARGET having a vector, which is a property of one row and has
-  // nothing to do with how much work the scan is.
+
   const candidateResult = await executeVectorFallback(
     db,
     "sonar.fallback.mix",
@@ -2177,14 +1457,11 @@ async function mixRail(
   const candidateRows = typedRows<MixCandidateRow>(candidateResult.rows);
   const candidates: RankCandidate<string>[] = candidateRows.map((row) => ({
     item: row.track_id,
-    // The database already answered the sonic question for this pair; `null` here means
-    // "no comparable vector", exactly as a null embedding meant before.
+
     sonicCos: probe ? cosineFromDistance(row.sonic_dist) : null,
     track: toMixTrack({ ...row, embedding_blob: null }),
   }));
 
-  // The sonic-term gate is a global archive property: count the embedded tracks in play
-  // (candidates + the target when embedded) and open the gate only past the floor.
   const embeddedCount =
     candidateRows.filter((row) => Boolean(row.has_embedding)).length +
     (targetRow.embedding_blob !== null ? 1 : 0);
@@ -2198,46 +1475,6 @@ async function mixRail(
   return hydrateMixRail(ranked);
 }
 
-/**
- * The `/mix` rail's candidate scan, answered by sonar instead of Turso — or `null`, the
- * "fall back to the Turso scan" signal, whenever sonar cannot be trusted to answer it.
- *
- * WHAT MOVES AND WHAT DOES NOT. Only the nearest-neighbour part moves. sonar returns
- * `TASTE_SHORTLIST` ids nearest the single last-track probe, already key-pre-filtered, each with
- * its cosine; this function then hydrates their four scoring columns and hands them to the SAME
- * `rankMixRail` the Turso path uses, so the reason chip, the key/BPM weighting, the texture
- * tiebreak and the DTO all come out identical. It asks for the SHORTLIST rather than the rail's
- * `limit` deliberately: sonar orders by pure adjacency, the rail orders by mixability × adjacency
- * (a same-key candidate at a middling cosine legitimately outranks a near-cosine one a fifth
- * away), so taking sonar's top `limit` verbatim would have made the flag a ranking change.
- *
- * FILTER FIDELITY, the routing precondition. Two predicates guard the Turso scan and both must
- * be reproduced EXACTLY in sonar's own filter, never re-applied while hydrating (that would cut
- * into an already-decided top-k):
- *   - `tracks.key in (…)` → `filter.key_in`. `namedMoveKeys` returns the archive's raw stored
- *     key SPELLINGS and sonar stores that same `tracks.key` string verbatim (apps/sonar/turso.rs)
- *     and compares it by equality — the same strings, the same test.
- *   - the chain exclusions → `excludeIds`. sonar is keyed by `track_id` ONLY, and a chain token
- *     may be a Log ID, so the Log IDs are RESOLVED to track ids here first. A coordinate that
- *     resolves to nothing was never a candidate anyway.
- *
- * WHAT SONAR CANNOT SEE: its index holds only embedded tracks, so an un-embedded key-match —
- * which the Turso scan still ranks on key+BPM alone — is absent from the sonar rail. That is the
- * first accepted divergence, and it is the shape of the trade: routing a vector question to a
- * vector index means the answer is drawn from the tracks that have vectors.
- *
- * THE SECOND DIVERGENCE — the shortlist is a TRUNCATION, and it is live, not theoretical. The
- * Turso scan carries NO `limit`: it ranks every key-compatible row in the archive. This asks for
- * the nearest `TASTE_SHORTLIST` by adjacency, so once the key-filtered pool exceeds that (it
- * already does — the key pre-filter admits several Camelot neighbours out of an archive in the
- * tens of thousands), a candidate with middling adjacency but an excellent BPM fit can place in
- * the Turso rail's top `limit` and be absent from sonar's shortlist entirely. So the flip is a
- * latency swap in SHAPE (same engine, same weighting, same tiebreak) but not a guarantee of an
- * identical rail at the tail. The cap is exactly what makes the query flat as the catalogue
- * grows — the unbounded scan is the thing being replaced — so widening it to chase parity would
- * trade the win away. Raise `TASTE_SHORTLIST` if the rail ever visibly loses a good mix; do not
- * remove the cap.
- */
 async function mixRailFromSonar(params: {
   excludedLogIds: string[];
   excludedTrackIds: string[];
@@ -2266,9 +1503,7 @@ async function mixRailFromSonar(params: {
 
   const ids = [...new Set(matches.map((match) => match.id))];
   const rowById = new Map((await getMixScoringRows(ids)).map((row) => [row.track_id, row]));
-  // WALK THE MATCHES, not the rows: sonar's order is the candidate order, so it is what breaks a
-  // scoring tie downstream (`shortlistMixable`/`applyTaste` both fall back to the input index).
-  // An id that no longer hydrates — deleted since sonar's last refresh — is dropped, never faked.
+
   const candidates: RankCandidate<string>[] = matches.flatMap((match) => {
     const row = rowById.get(match.id);
 
@@ -2276,29 +1511,23 @@ async function mixRailFromSonar(params: {
       ? [
           {
             item: row.track_id,
-            // sonar's `score` IS the cosine similarity (a normalized dot), the same scale
-            // `cosineFromDistance` puts the Turso path's distance on.
+
             sonicCos: match.score,
             track: toMixTrack({ ...row, embedding_blob: null }),
           },
         ]
       : [];
   });
-  // Every entry sonar holds is embedded, so the count in play is what it returned, plus the
-  // target. The gate stays the same global-coverage question it is on the Turso path.
+
   const gateOpen = sonicGateOpen(matches.length + 1);
   const ranked = rankMixRail(params.target, candidates, params.limit, {
     gateOpen,
     tasteLive: gateOpen,
   });
 
-  // A rail the engine could not justify a single row of is a fallback, not an answer: the Turso
-  // scan sees candidates sonar cannot (the un-embedded ones), so falling back can only restore
-  // today's behaviour, never worsen it.
   return ranked.length === 0 ? null : hydrateMixRail(ranked);
 }
 
-/** The chain's Log-ID tokens as `track_id`s — sonar excludes by track id only. */
 async function resolveTrackIdsByLogIds(logIds: string[]): Promise<string[]> {
   if (logIds.length === 0) {
     return [];
@@ -2314,11 +1543,6 @@ async function resolveTrackIdsByLogIds(logIds: string[]): Promise<string[]> {
   return typedRows<{ track_id: string }>(result.rows).map((row) => row.track_id);
 }
 
-/**
- * The four mixability-scoring columns for a set of track ids — the sonar path's hydrate, the
- * flat `where track_id in (…)` counterpart of the Turso path's candidate scan, with no vector
- * math in it. An id that no longer resolves is dropped, never faked.
- */
 async function getMixScoringRows(trackIds: string[]): Promise<Omit<MixRow, "embedding_blob">[]> {
   if (trackIds.length === 0) {
     return [];
@@ -2335,7 +1559,6 @@ async function getMixScoringRows(trackIds: string[]): Promise<Omit<MixRow, "embe
   return typedRows<Omit<MixRow, "embedding_blob">>(result.rows);
 }
 
-/** The rail's tail, shared by both engines: ranked ids → the wire DTO, order preserved. */
 async function hydrateMixRail(
   ranked: { item: string; reason: MixReason }[],
 ): Promise<MixCandidateDTO[]> {
@@ -2352,9 +1575,6 @@ async function hydrateMixRail(
   });
 }
 
-// ── The `/mix` hydrates ──────────────────────────────────────────────────────
-
-/** Hydrate `/mix` rows by `track_id`, keyed for O(1) lookup. Certified or not. */
 async function getMixTracksByIds(trackIds: string[]): Promise<Record<string, MixTrackDTO>> {
   const unique = [...new Set(trackIds.filter((id) => id.trim()))];
 
@@ -2378,13 +1598,6 @@ async function getMixTracksByIds(trackIds: string[]): Promise<Record<string, Mix
   return byTrackId;
 }
 
-/**
- * Hydrate a `?set=` chain from its tokens, IN ORDER. A token is a finding's Log ID or — for a
- * track Fluncle never certified, which has no coordinate to name it by — its Spotify track id.
- * One query for both kinds; a token that resolves to nothing drops silently (a set link
- * outlives the archive it was built from, and a vanished row should thin the chain, not 500
- * the page).
- */
 export async function getMixTracksByTokens(tokens: string[]): Promise<MixTrackDTO[]> {
   const unique = [...new Set(tokens.map((token) => token.trim()).filter(Boolean))];
 
@@ -2421,7 +1634,6 @@ export async function getMixTracksByTokens(tokens: string[]): Promise<MixTrackDT
     }
   }
 
-  // The URL is the order (a set is a sequence), so walk the tokens, not the result rows.
   return unique.flatMap((token) => {
     const item = byToken.get(token);
 
@@ -2429,17 +1641,6 @@ export async function getMixTracksByTokens(tokens: string[]): Promise<MixTrackDT
   });
 }
 
-// ── Taste-seeding: the artists, and what to open with ────────────────────────
-
-/**
- * The artists a mix can be seeded from — every artist with at least one RANKABLE track (a key
- * and a vector), most-represented first, optionally filtered by name. The taste picker's grid.
- *
- * `trackCount` counts rankable tracks and NOT findings, because that is the honest measure of
- * what seeding this artist can actually do: an artist with 40 catalogue tracks Fluncle can
- * place is a better seed than one with a single certified finding, and the picker must not
- * pretend otherwise. See `list_mixable_artists` for why this is not `listArtists`.
- */
 export async function listMixableArtists(
   options: { limit?: number; q?: string } = {},
 ): Promise<MixArtist[]> {
@@ -2450,17 +1651,6 @@ export async function listMixableArtists(
   return readMixableArtistsProjection(db, { limit, q });
 }
 
-/**
- * What to open a set with, given the seeded artists: their OWN rankable tracks, certified
- * first. See `list_mix_openers` for why this is the artists' tracks rather than a taste-ranked
- * sweep of the archive (exact beats inferred, and a stranger can VERIFY this list at a glance).
- *
- * Certified first is not a ranking of quality — it is a ranking of AFFORDANCE: a finding has
- * somewhere to send you (`/log`), and putting the rows that can show you around at the top of a
- * stranger's very first list is how they discover there is a Fluncle here at all. Within each
- * register, the most popular. Uncertified rows below them carry no label and no heading; the
- * list is a mixed one, and its heading names the SUPERSET (the Unlit Rule).
- */
 export async function getMixOpeners(
   artistSlugs: string[],
   options: { limit?: number } = {},
@@ -2489,7 +1679,6 @@ export async function getMixOpeners(
   return typedRows<MixTrackRow>(result.rows).map(toMixTrackDTO);
 }
 
-/** One ordered stop in a proposed mix (the admin dream-weaver's output row). */
 export type MixOrderStop = {
   artists: string[];
   bpm?: number;
@@ -2501,20 +1690,12 @@ export type MixOrderStop = {
   transitionScore?: number;
 };
 
-/** The dream-weaver's full result: the ordered stops + total cost + which algorithm ran. */
 export type MixableOrderResult = {
   algorithm: "held-karp" | "greedy-2opt";
   order: MixOrderStop[];
   totalCost: number;
 };
 
-/**
- * Order a pool of findings (by Log ID) into a smoothness-optimized proposed mix —
- * Product B's dream-weaver, a PURE admin READ (never writes). Held-Karp exact for
- * ≤16, greedy + 2-opt to 64. `seedLogId` pins the first stop. Every `transitionScore`
- * describes the edge INTO its stop (the first stop's is undefined). An unknown Log ID
- * is a clean fault (the caller lists what didn't resolve), never a silent mis-order.
- */
 export async function getMixableOrder(
   logIds: string[],
   options: { seedLogId?: string } = {},
@@ -2525,13 +1706,7 @@ export async function getMixableOrder(
   const placeholders = unique.map(() => "?").join(", ");
   const result = await db.execute({
     args: unique,
-    // THE VECTORS ARE GENUINELY NEEDED HERE, not merely counted — this is the one `/mix` read
-    // where the bytes cross into the isolate on purpose. `toMixTrack(row)` below decodes each
-    // one (unlike the rail, which nulls the blob and lets the DATABASE answer the pairwise
-    // cosine), because the dream-weaver scores an ALL-PAIRS cost matrix: `scoreMix` reads
-    // `a.embedding`/`b.embedding` for every edge, and there is no single probe to rank against.
-    // That is affordable only because the pool is bounded at 64 Log IDs by the path search
-    // (Held-Karp to 16, greedy + 2-opt to 64) — ≤ 256 KB, an operator read, never a public one.
+
     sql: `select tracks.track_id, findings.log_id, tracks.key, tracks.bpm,
                  emb.embedding_blob, tracks.features_json, tracks.title, tracks.artists_json
           from ${FINDINGS_FROM}
@@ -2595,23 +1770,8 @@ export async function getMixableOrder(
   return { algorithm: path.algorithm, order, totalCost: path.totalCost };
 }
 
-/** A resolvable-input fault the `get_mixable_order` handler maps to a 400. */
 export class MixableOrderError extends Error {}
 
-/**
- * The findings in one sonic galaxy, ordered by centroid-distance ASCENDING — the core
- * of the galaxy first (browse-by-feel RFC). The DATABASE cosine-ranks every member's
- * MuQ vector against the galaxy's stored centroid and returns just the requested page,
- * in that deterministic order (the order a future radio consumer needs). Backs the
- * public `get_galaxy` op + the `/galaxies/<slug>` lens. Returns `[]` when the galaxy has
- * no members. The caller (`galaxies-map.ts`) public-strips the items.
- *
- * This is the spike's PRE-FILTERED shape, and the cheapest of the three: the `galaxy_id`
- * btree narrows the scan to one cluster's members before a single vector is touched
- * (274 ms at 100k on hosted, against ~1.9 s unfiltered). Paging happens in SQL, so the
- * isolate never holds more than a page. A member with no readable vector (shouldn't
- * happen — assignment requires one) sorts LAST, as it did when it scored −Infinity.
- */
 export async function getFindingsByGalaxyRanked(
   galaxyId: string,
   centroid: number[],
@@ -2632,16 +1792,6 @@ export async function getFindingsByGalaxyRanked(
   });
 }
 
-/**
- * The `/admin/galaxies` naming AUDITION's member read — the same core-first ranking as
- * `getFindingsByGalaxyRanked`, but hydrated through the lean BOARD projection instead of the
- * fat `getTracksByIds`. The audition renders only a cover + title/artists + Log ID (the play
- * control on the shared preview singleton), so it never reads the graph/discovery subqueries
- * or the heavy JSON columns the fat read drags in. This is a DELIBERATE admin/public split:
- * the public `/galaxies/<slug>` lens keeps the fat `getFindingsByGalaxyRanked` (its findings
- * are graph pages), and the admin audition gets its own lean hydration — the safer split, so
- * a change here can never quietly drop a field the public lens renders.
- */
 export async function getGalaxyAuditionMembers(
   galaxyId: string,
   centroid: number[],
@@ -2662,13 +1812,6 @@ export async function getGalaxyAuditionMembers(
   });
 }
 
-/**
- * The shared core-first ranking behind both galaxy member reads: the DATABASE cosine-ranks
- * every member's MuQ vector against the galaxy's centroid and returns just the requested
- * page's `track_id`s, in that deterministic order (the hydration is the caller's — fat for
- * the public lens, lean board for the admin audition). Returns `[]` for an empty galaxy or a
- * non-positive limit.
- */
 async function rankGalaxyMemberIds(
   galaxyId: string,
   centroid: number[],
@@ -2680,9 +1823,7 @@ async function rankGalaxyMemberIds(
   }
 
   const db = await getDb();
-  // Args in SQL-TEXT order: the subquery's galaxy id is written before the ORDER BY's
-  // probe, so it binds first. The `case` around the distance is what keeps
-  // `vector_distance_cos` from ever seeing a NULL (it throws on one).
+
   const probe = toVectorProbe(centroid);
   const pageResult = await db.execute({
     args: [galaxyId, probe, limit, offset],
@@ -2702,21 +1843,6 @@ async function rankGalaxyMemberIds(
   return typedRows<{ track_id: string }>(pageResult.rows).map((row) => row.track_id);
 }
 
-/**
- * Which of the given tracks already carry a MuQ audio embedding. Returns the trackIds that have
- * one as a Set — the admin board turns it into the Embeddings cell status. The embedding vector
- * is INTERNAL analysis fuel: it never rides the public `TrackListItem` contract (only its
- * presence, admin-only, and the derived `list_similar_tracks` neighbours do), so the board reads
- * it through this gated path like `context_note`. One batch query for the whole page, no N+1.
- * See docs/track-lifecycle.md.
- *
- * IT ASKS THE SATELLITE, NOT THE MIRROR, and that is the point of putting the question here: an
- * existence probe into `track_embeddings` by primary key is the ground truth `has_embedding`
- * stands for, so the one board cell an operator actually looks at to decide whether the embed
- * queue is moving reads the vectors themselves. It is a bounded page of ids, never a scan, so
- * the partial-index argument that forces every OTHER presence read onto the mirror does not
- * apply — and the blob is never selected, only its key.
- */
 export async function listEmbeddingPresenceForTracks(trackIds: string[]): Promise<Set<string>> {
   if (trackIds.length === 0) {
     return new Set();
@@ -2737,32 +1863,11 @@ type TrackCountRow = {
   total_count: number;
 };
 
-/**
- * How long a track may sit in `processing` before the enrich-queue treats it as
- * stuck (the box rebooted mid-run, etc.) and re-picks it. Enrichment is a
- * multi-minute job, so 30 min is comfortably longer than a healthy run; a row
- * that's been "processing" past it is presumed dead, not in-flight. The
- * idempotency key (`enrich:${logId}`) makes a wrongly-early re-pick harmless —
- * an in-flight run is de-duped rather than duplicated.
- */
 export const ENRICH_STALE_PROCESSING_MS = 30 * 60 * 1000;
 
-// The full-song capture queue's BACKOFF (RFC full-audio § Unit 1). A `failed` finding is
-// held out of the queue until `source_audio_attempted_at` is older than the cooldown, and
-// is dropped entirely once `source_audio_failures` reaches the cap — so a persistently
-// failing finding stops re-attempting every tick (and, under newest-first order, stops
-// pinning the batch slots + burning proxy bandwidth). `pending`/NULL are always eligible.
 export const CAPTURE_FAILED_COOLDOWN_MS = 60 * 60 * 1000;
 export const CAPTURE_MAX_FAILURES = 8;
 
-/**
- * Enrichment state filters. The four are the real `enrichment_status` values;
- * `"queue"` is the SELF-HEALING meta-filter the sweep uses: tracks NEEDING
- * (re-)enrichment = pending ∪ failed ∪ STALE processing (a `processing` row
- * older than ENRICH_STALE_PROCESSING_MS, including rows with no updated_at).
- * Filtering on only pending/failed would never re-pick a box-rebooted
- * `processing` track — the most common failure — so "queue" must include it.
- */
 export type EnrichmentStatusFilter = "pending" | "processing" | "done" | "failed" | "queue";
 
 export const ENRICHMENT_STATUS_FILTERS: readonly EnrichmentStatusFilter[] = [
@@ -2783,124 +1888,40 @@ type FindingDueWorkKind =
   | "finding.render.requires-observation";
 
 type ListTracksOptions = {
-  /**
-   * Read the BOARD list projection (renders + findings efficiency batch) — the lean drop
-   * PLUS the graph/discovery correlated subqueries the two admin boards never render
-   * (`galaxy`, `albumSlug`, `labelSlug`, `artworkMax`, the published-YouTube url). The
-   * album cover master + `tiktokUrl` stay (both boards render them). Set by the two board
-   * fetches; omitted (fat) everywhere else. Additive at the type level: a board item is
-   * still a `TrackListItem` (the five are optional). Wins over `lean` when both are set.
-   */
   board?: boolean;
-  /**
-   * The full-song CAPTURE queue's filter (admin only) — the `fluncle-capture`
-   * cron's worklist. `true` = findings still NEEDING a capture: `pending`/NULL always
-   * eligible (the NULL arm is defensive — the column is notNull-default, but a pre-column
-   * row reads NULL), a terminal `unmatched`/`done` never re-burned, and a `failed` row
-   * BACKED OFF (re-picked only past the cooldown + below the failure cap —
-   * CAPTURE_FAILED_COOLDOWN_MS / CAPTURE_MAX_FAILURES). Coordinate-less rows are excluded
-   * (`log_id is not null`). This is a SEPARATE queue: capture never gates the enrich/embed
-   * queues (RFC full-audio § "Capture does NOT gate the analysis queues"). The capture
-   * cron pairs it with `order: "desc"` so a fresh add jumps ahead of the backfill. Omitted
-   * for public reads.
-   */
+
   captureQueue?: boolean;
-  /**
-   * Whether to run the `count(*)` companion query for `totalCount`. Default `true`.
-   * `false` skips it entirely (one fewer full scan of the filtered join per call) for
-   * callers that don't render a total — the findings board (counts derive from loaded
-   * rows) and the renders queue (a `hasMore` "N+" sentinel off the list read's own
-   * over-fetch). When skipped, `totalCount` falls back to the returned row count.
-   */
+
   countTotal?: boolean;
   cursor?: TrackCursor;
-  /**
-   * Context-fetch state (admin only) — the `context_track` queue's filter.
-   * `false` = the queue: findings still NEEDING a context fetch. Status-aware so a
-   * CONFIRMED-EMPTY fetch is not re-burned every tick: it matches `context_status`
-   * pending ∪ failed ∪ NULL (never-attempted rows that predate the column read NULL
-   * and count as pending), but NOT `empty`/`resolved`. `true` = already resolved
-   * (`context_note IS NOT NULL`). Internal field, never surfaced; omitted for
-   * public reads. Pair `false` with `retryEmptyContext` to also re-pick `empty`.
-   */
+
   hasContext?: boolean;
-  /**
-   * Audio-embedding presence (admin only) — the MuQ embed queue's filter.
-   * `false` = the embed worklist: `has_embedding = 0` AND a captured source key
-   * on file (`source_audio_key IS NOT NULL`), since MuQ embeds the CAPTURED full song,
-   * not a preview or the unmatched tail (RFC full-audio § Unit 3) — a keyless finding is
-   * excluded. `true` = a vector is on file (a pure presence check, no key gate). Omitted
-   * for public reads. Mirrors `hasVideo`/`hasKey`'s tri-state. See docs/track-lifecycle.md.
-   */
+
   hasEmbedding?: boolean;
-  /**
-   * Observation presence (admin only) — the observation queue's filter.
-   * `false` = `observation_audio_url IS NULL` (no spoken observation yet);
-   * `true` = already minted. The observation queue is `hasContext=true AND
-   * hasObservation=false`. Omitted for public reads.
-   */
+
   hasObservation?: boolean;
-  /**
-   * Editorial-note presence (admin only) — the auto-note queue's filter.
-   * `false` = `note IS NULL OR note = ''` (no editorial note yet — the queue);
-   * `true` = a note is on file. The note queue is `hasContext=true AND hasNote=false`
-   * (a finding with the context_note fuel but no written note yet). Omitted for
-   * public reads.
-   */
+
   hasNote?: boolean;
-  /**
-   * Musical-key presence (admin only) — the Rekordbox sync's queue.
-   * `false` = `key IS NULL` (no stored key yet: the DSP left it null below its
-   * confidence floor — the missing-key backlog the sync targets); `true` = a
-   * key is on file. Omitted for public reads. Mirrors `hasVideo`'s tri-state.
-   */
+
   hasKey?: boolean;
-  /** Only findings with a rendered video — the Stories feed's filter. */
+
   hasVideo?: boolean;
   includeMixtapes?: boolean;
-  /**
-   * Read the LEAN list projection (Finding B4) — drop the three heavy per-row fields
-   * (`features`, `observationAlignment`, `videoModelReasoning`) that no PUBLIC list
-   * surface renders. Set on the public list ops + the SSR feed loaders; omitted (fat)
-   * for the admin board, the queue sweeps, and MCP, which read those fields. Additive:
-   * a lean item is still a `TrackListItem` (the three are optional), just carrying them
-   * undefined.
-   */
+
   lean?: boolean;
   limit: number;
-  /**
-   * Found-order direction. "desc" (newest-first) is the public default; the
-   * admin tagging queue passes "asc" to work the oldest unlabelled finds first.
-   */
+
   order?: "asc" | "desc";
-  /**
-   * Widen the `hasContext=false` context queue to also re-pick CONFIRMED-EMPTY
-   * finds (`context_status = 'empty'`) — the `--retry-empty` escape hatch for when
-   * a query/source fix means a previously-hopeless find might now resolve. No
-   * effect unless `hasContext === false`. Omitted for public reads.
-   */
+
   retryEmptyContext?: boolean;
-  /** Public release-day ceiling; undated findings keep their existing place. */
+
   releaseThrough?: string;
   since?: string;
-  /**
-   * Enrichment-state filter (admin only). A bare status matches that exact
-   * `enrichment_status`; "queue" matches everything needing (re-)enrichment —
-   * pending ∪ failed ∪ stale processing — and is what the enrich-queue + sweep
-   * read. Omitted for public reads.
-   */
+
   status?: EnrichmentStatusFilter;
   until?: string;
 };
 
-/**
- * Group `artist_socials` YouTube URLs (each joined to a finding via `track_artists`)
- * by `track_id` into that finding's DEDUPED list of `UC…` channel ids — the capture
- * queue's artist-own-channel trust signal. Each URL runs through
- * `extractYoutubeChannelId`, so a `/user/<name>` or `/@handle` link (no directly usable
- * channel id) contributes nothing; a finding left with no channel id is simply absent
- * from the returned map. PURE (no DB) so the grouping/dedupe is unit-testable.
- */
 export function groupArtistYoutubeChannelIds(
   rows: { track_id: string; url: string }[],
 ): Map<string, string[]> {
@@ -2925,18 +1946,6 @@ export function groupArtistYoutubeChannelIds(
   return byTrack;
 }
 
-/**
- * Read every listed track's artists' YouTube `UC…` channel ids in ONE batched query,
- * grouped by `track_id` — the capture queue's artist-own-channel trust signal. Kept off
- * the shared `TRACK_SELECT`/`toTrackListItem` path (every other consumer) so a correlated
- * subquery does not bloat every DTO. Bound params only — the track ids are never
- * interpolated. `status` does not gate (any known artist YouTube link is a valid
- * own-channel signal for capture). A track whose artists have no `/channel/UC…` link is
- * simply absent from the returned map — an empty set is omitted, never surfaced as `[]`.
- *
- * Shared by the finding-only capture queue (`attachArtistYoutubeChannelIds` below) and the
- * catalogue-aware `list_track_work` capture worklist (track-work.ts), so the two cannot drift.
- */
 export async function readArtistYoutubeChannelIdsByTrack(
   db: Awaited<ReturnType<typeof getDb>>,
   trackIds: readonly string[],
@@ -2958,11 +1967,6 @@ export async function readArtistYoutubeChannelIdsByTrack(
   return groupArtistYoutubeChannelIds(typedRows<{ track_id: string; url: string }>(result.rows));
 }
 
-/**
- * Attach `artistYoutubeChannelIds` to the capture-queue items IN PLACE, off the shared
- * batched read above. The full-song capture sweep reads this field as its strongest trust
- * tier: a candidate on the artist's OWN channel is the artist's own upload.
- */
 async function attachArtistYoutubeChannelIds(
   db: Awaited<ReturnType<typeof getDb>>,
   items: TrackListItem[],
@@ -2999,10 +2003,6 @@ type FindingDueWorkSelector = Pick<
   | "until"
 >;
 
-/**
- * Match only the exact recurring finding queues represented by the due-work projection.
- * Every other list shape stays on the generic source selector.
- */
 function isUnsupportedFindingDueWorkShape(options: FindingDueWorkSelector): boolean {
   return (
     options.order !== "asc" ||
@@ -3092,11 +2092,6 @@ type TrackListFilters = Pick<
   | "until"
 >;
 
-/**
- * Build the finding-list predicates and bound values as one cohesive query phase.
- * The count query reuses this exact pair so a windowed or queue caller receives a
- * count scoped to the same filters as its page.
- */
 function buildTrackListFilters({
   captureQueue,
   hasContext,
@@ -3132,30 +2127,16 @@ function buildTrackListFilters({
     filterClauses.push(`findings.video_url is ${hasVideo ? "not " : ""}null`);
   }
 
-  // The Rekordbox-sync queue: `key IS NULL` means no stored musical key — the DSP left it
-  // null below its confidence floor. `true` means a key is on file. Mirrors hasVideo.
   if (hasKey !== undefined) {
     filterClauses.push(`tracks.key is ${hasKey ? "not " : ""}null`);
   }
 
-  // The MuQ embed queue (RFC full-audio § Unit 3): `has_embedding = 0` AND a captured
-  // source key on file (`source_audio_key IS NOT NULL`). MuQ embeds the captured full song,
-  // never a preview or unmatched tail, so keyless findings are not embeddable yet.
-  //
-  // BOTH ARMS READ THE STORED MIRROR rather than probing `track_embeddings`. This spelling is
-  // load-bearing: `tracks_embed_queue_idx` is partial on `source_audio_key is not null and
-  // has_embedding = 0`, and SQLite only selects it when the WHERE clause provably implies that
-  // predicate. Keep it aligned with schema.ts or the five-minute box tick becomes a full scan.
   if (hasEmbedding === true) {
     filterClauses.push("tracks.has_embedding = 1");
   } else if (hasEmbedding === false) {
     filterClauses.push("tracks.has_embedding = 0 and tracks.source_audio_key is not null");
   }
 
-  // The context queue. `true` means resolved. `false` selects rows with no note whose status is
-  // pending, failed, or NULL (legacy never-attempted), excluding confirmed-empty rows unless
-  // `retryEmptyContext` explicitly widens the queue. The note guard also excludes legacy rows
-  // that have a note but no status.
   if (hasContext === true) {
     filterClauses.push("findings.context_note is not null");
   } else if (hasContext === false) {
@@ -3166,23 +2147,16 @@ function buildTrackListFilters({
     );
   }
 
-  // Paired with hasContext=true, `false` is the ready-to-observe queue.
   if (hasObservation !== undefined) {
     filterClauses.push(`findings.observation_audio_url is ${hasObservation ? "not " : ""}null`);
   }
 
-  // Paired with hasContext=true, `false` is the auto-note queue. Whitespace is empty to match
-  // note_track's fill-empty-only semantics.
   if (hasNote === true) {
     filterClauses.push("(findings.note is not null and trim(findings.note) != '')");
   } else if (hasNote === false) {
     filterClauses.push("(findings.note is null or trim(findings.note) = '')");
   }
 
-  // The full-song capture queue: pending/NULL rows are always eligible; done/unmatched rows are
-  // terminal. Failed rows return only after the bound cooldown and below the trusted failure cap.
-  // Coordinate-less stragglers stay out because an R2 key requires a Log ID. This predicate is
-  // deliberately separate from the enrich/embed queues, and the cron pairs it with order=desc.
   if (captureQueue) {
     const captureCooldown = new Date(Date.now() - CAPTURE_FAILED_COOLDOWN_MS).toISOString();
     filterClauses.push(
@@ -3191,9 +2165,6 @@ function buildTrackListFilters({
     filterArgs.push(captureCooldown);
   }
   if (status === "queue") {
-    // Self-healing enrichment queue: pending, failed, and stale processing. A processing row is
-    // stale after the threshold or when its updated_at predates the column. Bind the timestamp;
-    // never interpolate it.
     const staleCutoff = new Date(Date.now() - ENRICH_STALE_PROCESSING_MS).toISOString();
     filterClauses.push(
       "(findings.enrichment_status in ('pending', 'failed') or (findings.enrichment_status = 'processing' and (findings.updated_at is null or findings.updated_at < ?)))",
@@ -3207,22 +2178,6 @@ function buildTrackListFilters({
   return { filterArgs, filterClauses };
 }
 
-/**
- * The render queues answer an honest EMPTY page while track source repair is still converging,
- * instead of deferring the read.
- *
- * The rail the deferral exists to hold is untouched: an empty page hands out no row, so nothing
- * downstream spends on an ordering repair has not caught up with, and every row this read DOES
- * serve is still withheld per subject by its own outstanding marker. What the deferral costs here
- * is the whole queue: the render conductor is a single-flight loop over roughly one finding a day,
- * so its ready page is empty almost every tick, and a permanently non-zero track family therefore
- * turned every one of those ticks into a deferral rather than into a render. The worst a wrong
- * empty can cost is one delayed pick, which the next tick takes.
- *
- * The metered queues keep the deferral. There an empty answer is read as "the backlog is drained"
- * by the sweeps that size a capture or GPU budget off it, and relaxing that is an operator ruling,
- * not a code change.
- */
 const EMPTY_RENDER_PAGE_IS_SERVABLE = new Set<FindingDueWorkKind>([
   "finding.render",
   "finding.render.requires-observation",
@@ -3354,11 +2309,6 @@ export async function listTracks({
 }: ListTracksOptions): Promise<FeedListPage | TrackListPage | BoardTrackListPage> {
   const db = await getDb();
 
-  // The list projection grade. LEAN (Finding B4) drops the three heavy caption/feature/
-  // reasoning columns the public surfaces never read; BOARD goes further, also dropping the
-  // graph/discovery correlated subqueries the admin boards never render. Both mappers return
-  // items assignable to `TrackListItem`, so the merge/return types are unchanged; `board`
-  // wins over `lean` when both are set.
   const { mapRow, trackSelect } = trackListProjection(board, lean);
 
   const projectedDueWorkKind = selectFindingDueWorkKind({
@@ -3391,11 +2341,6 @@ export async function listTracks({
     return projectedPage;
   }
 
-  // GOAL H: keep this generic legacy selector intact until the default-off cutover is proven.
-  // Descending UI probes and filter combinations that are not queue modes stay on this branch.
-
-  // Discovery-window and queue filters share one predicate-building phase so the list and
-  // count queries cannot drift apart.
   const { filterArgs, filterClauses } = buildTrackListFilters({
     captureQueue,
     hasContext,
@@ -3411,16 +2356,12 @@ export async function listTracks({
     until,
   });
 
-  // asc/desc are internal literals (never user strings), so they interpolate
-  // safely; the cursor comparison flips with the direction.
   const dir = order === "asc" ? "asc" : "desc";
   const cursorComparator =
     dir === "asc"
       ? "(findings.added_at > ? or (findings.added_at = ? and tracks.track_id > ?))"
       : "(findings.added_at < ? or (findings.added_at = ? and tracks.track_id < ?))";
-  // The mixtape arm of the feed pages by the SAME cursor tuple, but over `mixtapes`
-  // (its id column is `log_id`), so it carries its own comparator rather than a
-  // string-rewrite of the findings one.
+
   const mixtapeCursorComparator =
     dir === "asc"
       ? "(added_at > ? or (added_at = ? and log_id > ?))"
@@ -3432,8 +2373,6 @@ export async function listTracks({
   const cursorArgs = cursor ? [cursor.addedAt, cursor.addedAt, cursor.trackId] : [];
   const args: Array<string | number> = [...filterArgs, ...cursorArgs, limit + 1];
 
-  // The `count(*)` companion is a second full scan of the filtered join; a caller that
-  // never renders a total (the boards) passes `countTotal: false` to skip it entirely.
   const [result, countResult] = await Promise.all([
     db.execute({
       args,
@@ -3461,9 +2400,7 @@ export async function listTracks({
         limit,
       )
     : undefined;
-  // When the count query was skipped (`countTotal: false`), fall back to the returned
-  // row count — the boards don't render the total, and the renders queue reads its "N+"
-  // overflow off `nextCursor` (the list read's own limit+1 over-fetch), not this number.
+
   const countRows = countResult ? typedRows<TrackCountRow>(countResult.rows) : undefined;
   const totalCount = feedFindingsCount(countRows?.[0]?.total_count, rows.length);
 
@@ -3490,11 +2427,6 @@ export async function listTracks({
   const lastVisibleRow = visibleRows.at(-1);
   const tracks = visibleRows.map(mapRow);
 
-  // The capture queue's artist-own-channel trust signal: attach each finding's
-  // artists' YouTube channel ids in ONE batched read (never through TRACK_SELECT — that
-  // shared select feeds every consumer, so a correlated subquery there would bloat
-  // every DTO). The full-song capture sweep reads `artistYoutubeChannelIds` as its
-  // strongest trust tier. Capture-queue reads only.
   if (captureQueue) {
     await attachArtistYoutubeChannelIds(db, tracks);
   }
@@ -3580,10 +2512,6 @@ function binaryCompare(left: string, right: string): number {
   return 0;
 }
 
-// The JS mirror of the SQL cursor comparator. The feed fetches findings and
-// mixtapes in two separate queries (each filtered by the same cursor and
-// limited to limit+1), then merges in JS. This helper reproduces the cursor
-// filter so mergeFeedPage can be tested end-to-end without a database.
 function isAfterCursor(item: FeedItem, cursor: TrackCursor, dir: "asc" | "desc"): boolean {
   const itemAddedAt = item.addedAt ?? "";
   const itemId = itemCursorId(item);
@@ -3608,23 +2536,6 @@ function isAfterCursor(item: FeedItem, cursor: TrackCursor, dir: "asc" | "desc")
   return false;
 }
 
-/**
- * Merge findings and mixtapes into a single feed page. Both tables are fetched
- * separately (each over-fetching by one), then concatenated, sorted by
- * `addedAt` (tiebreak: the cursor id — `trackId` for findings, `logId` for
- * mixtapes), and sliced to `limit+1`. The first `limit` items are the visible
- * page; the extra item signals `hasMore` and seeds the next cursor.
- *
- * When `cursor` is provided, each array is filtered by the same comparator the
- * SQL cursor uses (so the function can simulate full paging in tests without a
- * database). `listTracks` calls this WITHOUT a cursor — the SQL already
- * filtered — so the filter is a no-op in production and only exercised by tests.
- *
- * Each table is sorted before slicing to `limit+1` — the JS mirror of the SQL
- * `order by ... limit ?`. In production the SQL already sorted the rows, so the
- * sort is a cheap no-op; it makes the function self-contained for tests that
- * pass unsorted fixtures.
- */
 export function mergeFeedPage(
   findings: FeedItem[],
   mixtapes: FeedItem[],
@@ -3639,7 +2550,6 @@ export function mergeFeedPage(
     ? mixtapes.filter((item) => isAfterCursor(item, cursor, dir))
     : mixtapes.slice();
 
-  // Over-fetch limit+1 from each table (matches the SQL `limit ?` with limit+1).
   const findingsPage = filteredFindings
     .sort((left, right) => compareFeedItems(left, right, dir))
     .slice(0, limit + 1);
@@ -3662,14 +2572,6 @@ export function mergeFeedPage(
   return { hasMore, items, nextCursor };
 }
 
-/**
- * The feed's "Found · N" counter is findings-only by design: mixtapes join the
- * feed stream without inflating the finding count. `listTracks` passes the
- * dedicated `count(*)` over the finding join (and the findings row count as
- * fallback); mixtapes never enter the count. Extracting this as a named helper
- * makes the invariant explicit and testable — a future change that unions
- * mixtapes into the count would have to touch this function and its tests.
- */
 export function feedFindingsCount(sqlCount: number | undefined, fallback: number): number {
   return Number(sqlCount ?? fallback);
 }

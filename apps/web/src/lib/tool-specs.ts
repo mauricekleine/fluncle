@@ -1,54 +1,12 @@
-// The client-safe half of the shared tool registry — every field of a tool EXCEPT its
-// server-side `execute`.
-//
-// ── WHY THIS IS SPLIT OUT ────────────────────────────────────────────────────────────
-// The in-page WebMCP surface (lib/webmcp.ts) is bundled into the BROWSER. It needs each
-// shared tool's name + description + JSON-Schema, but it must NOT drag the server-only
-// `execute` closures (which import Turso, the audio pipeline, etc.) into the client bundle.
-// So the tool SPEC (name/title/description/input/tier/access/effect/transports/project) lives
-// here with zero server imports, and the server `execute` + adapters live in ./registry.ts,
-// which imports these specs and attaches an `execute` to each. WebMCP imports only from this
-// file; the MCP server and ChatDnB import the full ToolDefs from ./registry.ts.
-//
-// It sits under `lib/` rather than `lib/server/tools/` because that is what client-safe means
-// here: the `fluncle-client-chunk-purity` gate reads the PATH, so a module the browser bundle is
-// allowed to hold lives outside `lib/server/**` (docs/client-bundle.md, Rule 1).
-
 import { z } from "zod";
 
-// ── Shared types ─────────────────────────────────────────────────────────────────────
-
-/** Where a tool may appear. `chat` is ChatDnB's AI-SDK tool set; `mcp`/`webmcp` the two MCPs. */
 export type Transport = "mcp" | "chat" | "webmcp";
 
-/** The grounding class a tool belongs to (Unit A taxonomy). */
 export type ToolTier = "lore-canon" | "catalogue" | "system";
 
-/**
- * The CLOSED set of output shapes a tool projects to — not a free-form per-tool function, so
- * divergence stays reviewable. The tag names WHICH shape a transport realizes; the server
- * `execute` produces it (branching on `ctx.transport` only where the shapes actually differ).
- *
- *   - `publicRecord`   — the MCP's full public record (a finding, or a whole `SearchResult` with
- *                        BOTH registers certified-tagged).
- *   - `compactCard`    — ChatDnB's compact finding card (list_findings/list_fresh, and chat's
- *                        findings-only `search_archive` until PR-4).
- *   - `twoBucket`      — the (findings, catalogue) split (PR-4).
- *   - `identity`       — a status summary.
- *   - `entityCard`     — an artist/label dossier card (its findings + socials/aliases + slug).
- *   - `chainCard`      — a `build_set` mix chain (seed + ordered steps + the `/mix` setUrl).
- *   - `neighbourList`  — a `list_similar_artists` list of nearest artist entities.
- *   - `acknowledgement`— a write's `{ ok }` receipt (a submission id, a newsletter board).
- *   - `browseIndex`    — a paginated A–Z index of entity rows (name/slug/certified/trackCount) with
- *                        its page/pageCount/total; the whole-catalogue browse (list_artists/albums/
- *                        labels). Naming an entity is always allowed, so both transports share it.
- */
 export type Projection =
   | "acknowledgement"
   | "browseIndex"
-  // The reborn `list_tracks` enumerator's shape: a FLAT list of lean certified-tagged track rows
-  // (the `CatalogueTrackListItem` machine twin of the web `/tracks` page), plus its page facts. Same
-  // shape on every transport — a browse list the model reads, never a lore card.
   | "browseTracks"
   | "chainCard"
   | "compactCard"
@@ -58,57 +16,36 @@ export type Projection =
   | "publicRecord"
   | "twoBucket";
 
-/** Whether a tool needs a session. AUTHORED INDEPENDENTLY of `transports` (the auth cross-check). */
 export type ToolAccess = "public" | "session";
 
-/** A read never mutates; a write receives `ctx.request` and mutates user-owned state. */
 export type ToolEffect = "read" | "write";
 
-/**
- * Retain a spec's CONCRETE input-schema type (so ChatDnB's `tool()` keeps precise arg typing)
- * while type-checking every field against {@link ToolSpec}. `: ToolSpec` would erase the schema
- * to the base `z.ZodType`, which `ai`'s `tool()` rejects; `satisfies` alone would widen the
- * `transports`/`project` string literals, so this contextual-typing helper does both jobs.
- */
 export function defineSpec<In extends z.ZodType>(spec: ToolSpec<In>): ToolSpec<In> {
   return spec;
 }
 
-/** One archive verb's transport-independent spec — everything but its server `execute`. */
 export type ToolSpec<In extends z.ZodType = z.ZodType> = {
-  /** verb_noun — the cross-surface identity (docs/naming-conventions.md, Convention B). */
   name: string;
-  /** The MCP `title` (a short human label). */
+
   title: string;
-  /** The shared, model-facing description. */
+
   description: string;
-  /** The ONE canonical Zod input schema — the source of truth for every transport's schema. */
+
   input: In;
-  /** The grounding class. */
+
   tier: ToolTier;
-  /** public | session — authored independently of `transports`. */
+
   access: ToolAccess;
-  /** read | write. */
+
   effect: ToolEffect;
-  /** Where this tool may appear. */
+
   transports: Transport[];
-  /** The output shape each transport realizes (a closed, reviewable set). */
+
   project: Partial<Record<Transport, Projection>>;
 };
 
-// ── The five overlapping tool specs ──────────────────────────────────────────────────
-//
-// One name/title/description/input, single-sourced. INPUT decisions (resolved by the operator):
-// `get_track`'s canonical arg is `idOrLogId`; `list_fresh` caps at 100 everywhere; `list_findings`'
-// limit is an integer, and the reborn `list_tracks` browse enumerator pages by `page`.
-
-/** The recent-window list cap (1..48, default 10) — MCP + chat already agreed here. */
 export const MAX_RECENT_LIMIT = 48;
 
-/**
- * The fresh-list cap. Mirrors ./fresh.ts's `FRESH_TRACKS_MAX` (a server-only module, so the value
- * is duplicated here for the client bundle; the registry test asserts the two stay equal).
- */
 export const FRESH_LIMIT_MAX = 100;
 
 export const listFindingsSpec = defineSpec({
@@ -132,15 +69,6 @@ export const listFindingsSpec = defineSpec({
   transports: ["mcp", "chat", "webmcp"],
 });
 
-/**
- * The reborn `list_tracks` — the whole-archive browse ENUMERATOR (the machine twin of the web
- * `/tracks` page), distinct from the found-order `list_findings` feed above. Every track Fluncle
- * holds, newest RELEASE first, one numbered page at a time, with a tri-state `certified` filter. Its
- * rows are the LEAN certified-tagged shape (title, artists, `certified`, `trackId`, the row's own page
- * `url`, a `logId` coordinate on the certified ones, `spotifyUrl`, album/label/release info) — flat for
- * every transport, so the model
- * reads a browse list, never a lore card. `tier: "catalogue"` (it returns the catalogue register).
- */
 export const listTracksSpec = defineSpec({
   access: "public",
   description:
@@ -156,9 +84,7 @@ export const listTracksSpec = defineSpec({
     page: z.number().int().min(1).optional().describe("Which page to return (1-based, default 1)."),
   }),
   name: "list_tracks",
-  // FLAT certified-tagged rows for every transport (no two-bucket split): a browse enumerator hands
-  // the model a plain list it reads, not a set of lore cards. Both registers ride the same shape,
-  // each row carrying `certified` + (for the lit ones) its `logId` — the Unlit Rule holds in the row.
+
   project: { chat: "browseTracks", mcp: "browseTracks", webmcp: "browseTracks" },
   tier: "catalogue",
   title: "Browse the whole archive",
@@ -186,8 +112,7 @@ export const listFreshSpec = defineSpec({
       ),
   }),
   name: "list_fresh",
-  // Chat splits the fresh list into two registers (PR-4): certified findings + the unlit catalogue
-  // rows. The MCP world-serves the whole flat list, each row certified-tagged.
+
   project: { chat: "twoBucket", mcp: "publicRecord", webmcp: "publicRecord" },
   tier: "lore-canon",
   title: "Fresh releases",
@@ -230,20 +155,12 @@ export const getStatusSpec = defineSpec({
   effect: "read",
   input: z.object({}),
   name: "get_status",
-  // Codified OFF WebMCP: the browser read path is get_track. MCP + chat only.
+
   project: { chat: "identity", mcp: "identity" },
   tier: "system",
   title: "Are all systems up?",
   transports: ["mcp", "chat"],
 });
-
-// ── The shared archive-read tools ─────────────────────────────────────────────
-//
-// The shared registry gives MCP (and, where a public HTTP twin exists, WebMCP) a real ARCHIVE
-// search plus entity/dossier reads beyond the Spotify-only `search_tracks`. The descriptions are
-// shared, model-facing, and register-neutral — the certified /
-// catalogue register discipline lives in ChatDnB's system prompt (the MCP has no model prose), not
-// in the tool text, so nothing here teaches a tier (DESIGN.md Unlit Rule).
 
 export const searchArchiveSpec = defineSpec({
   access: "public",
@@ -257,9 +174,7 @@ export const searchArchiveSpec = defineSpec({
       .describe("What to dig for (a name, a label, a key/BPM, or 'sounds like <track>')."),
   }),
   name: "search_archive",
-  // Chat splits the result into two registers (PR-4): certified findings + unlit catalogue rows.
-  // The MCP world-serves the whole SearchResult, both registers certified-tagged; WebMCP reads the
-  // public GET /api/v1/search/archive twin.
+
   project: { chat: "twoBucket", mcp: "publicRecord", webmcp: "publicRecord" },
   tier: "lore-canon",
   title: "Search the archive",
@@ -275,10 +190,7 @@ export const getArtistSpec = defineSpec({
     name: z.string().min(1).describe("The artist's name, as it reads on a finding (e.g. Netsky)."),
   }),
   name: "get_artist",
-  // MCP + chat only. The public GET /api/v1/artists/{slug} twin takes a pre-computed SLUG (not the
-  // tool's `name`) and returns a much thinner shape (no findings/socials); resolving name→slug in
-  // the browser risks a stored-slug mismatch, and this PR adds no name-keyed public endpoint. A
-  // codified asymmetry, like get_status off WebMCP.
+
   project: { chat: "entityCard", mcp: "entityCard" },
   tier: "lore-canon",
   title: "Look up an artist",
@@ -297,8 +209,7 @@ export const getLabelSpec = defineSpec({
       .describe("The label's name, as it reads on a finding (e.g. Hospital Records)."),
   }),
   name: "get_label",
-  // MCP + chat only: there is no public GET /labels/{slug} JSON twin for WebMCP to call, and this
-  // PR adds no new HTTP endpoint (a codified asymmetry, like get_status off WebMCP).
+
   project: { chat: "entityCard", mcp: "entityCard" },
   tier: "lore-canon",
   title: "Look up a label",
@@ -317,16 +228,13 @@ export const buildSetSpec = defineSpec({
       .describe("A finding to start from, either a Log ID coordinate (004.7.2I) or a track name."),
   }),
   name: "build_set",
-  // MCP + chat only: build_set takes a name/coordinate and returns a reasoned set with a /mix
-  // handoff — there is no single public HTTP endpoint that IS that operation (the mixable rail is a
-  // different op, coordinate-in, no setUrl), and this PR adds none. A codified asymmetry.
+
   project: { chat: "chainCard", mcp: "chainCard" },
   tier: "lore-canon",
   title: "Build a mixable set",
   transports: ["mcp", "chat"],
 });
 
-/** How many nearest artists `list_similar_artists` returns by default / at most. */
 export const SIMILAR_ARTISTS_DEFAULT = 4;
 export const SIMILAR_ARTISTS_MAX = 12;
 
@@ -346,49 +254,13 @@ export const listSimilarArtistsSpec = defineSpec({
     name: z.string().min(1).describe("The artist's name, as it reads on a finding (e.g. Koven)."),
   }),
   name: "list_similar_artists",
-  // MCP + chat only. A public HTTP neighbour read does exist (`list_similar_artists`,
-  // GET /artists/similar), but it is a DIFFERENT operation: it takes one to
-  // MAX_SIMILAR_ARTISTS_INPUT (6) artist SLUGS — not this tool's SIMILAR_ARTISTS_MAX — and
-  // answers "sounds like all of these", where this tool takes a single artist NAME an agent has in
-  // hand. Same verb, same noun, two addressings — the tool never became a transport of the op.
+
   project: { chat: "neighbourList", mcp: "neighbourList" },
   tier: "lore-canon",
   title: "Artists like this one",
   transports: ["mcp", "chat"],
 });
 
-// ── The catalogue browse tools (PR-5 + Slice F) ───────────────────────────────────────
-//
-// TWO shapes here. The `list_*_catalogue` reads take ONE album/artist/label BY NAME and return the
-// tracks on it Fluncle has never certified — a catalogue-only result BY CONSTRUCTION (the reads
-// anti-join findings). The `list_{artists,albums,labels}` reads (Slice F) are the other half an
-// agent needs: the WHOLE alphabetical index of every artist/album/label with a page, each row
-// flagged certified or not, so an agent can DISCOVER the catalogue rather than only confirm a name
-// it already knows.
-//
-// Chat gets the catalogue-only two-bucket ({ findings: [], catalogue }) for the `_catalogue` reads,
-// which renders bare/unheaded (the Unlit Rule); the MCP world-serves the flat catalogue list, each
-// row certified-tagged (like list_fresh). The `list_*` browse index is register-neutral (naming an
-// entity is always allowed — the Unlit Rule silences uncertified TRACKS, never entities), so both
-// transports share the `browseIndex` shape. All six are MCP + chat only, like get_artist/get_label:
-// the web reads take a pre-computed slug, so there is no name-keyed public HTTP twin. A codified
-// WebMCP asymmetry.
-//
-// PAGINATION: every one takes an optional `page` (1-based). The `_catalogue` reads page over the
-// grouped web read (a page of the entity's records/artists), so nothing past the first page is
-// stranded; the `list_*` browse reads page 50 rows at a time over the A–Z index.
-//
-// `tier: "catalogue"` — unlike search_archive/list_fresh (both registers ⇒ lore-canon), a browse
-// returns the catalogue register. The descriptions state plainly what each lists and keep the
-// certified/uncertified split factual (a certified entry carries a Log ID), naming no leakable
-// tier-noun and no query mechanism (the Flat Copy Test).
-//
-// NOTE on the `title`s: they name the internal tier word ("catalogue") or "browse". That is a
-// TOOLING-REGISTER surface only (a human label for the tool in an MCP client / the workbench) — it
-// must NEVER be rendered as crew-facing card chrome. The chat card stays bare/unheaded (DESIGN.md
-// §157, the Unlit Rule); the tier is never a noun the crew reads.
-
-/** The 1-based page param the browse reads share. */
 const browsePageInput = z
   .number()
   .int()
@@ -486,14 +358,6 @@ export const listLabelsSpec = defineSpec({
   transports: ["mcp", "chat"],
 });
 
-// ── The write tools (public writes, gated per surface) ───────────────────────────────
-//
-// Anonymous on the MCP exactly as they were before this PR (the /mcp endpoint has no session);
-// on ChatDnB they ride the gated route (session + verified email + CSRF + dual rate dials), which
-// is strictly safer. `effect: "write"` marks that they receive `ctx.request` (the submitter hash /
-// rate limit). `access: "public"` — they mutate no session-owned state; the auth cross-field test
-// asserts no `access: "session"` tool is ever realized onto the MCP.
-
 export const submitTrackSpec = defineSpec({
   access: "public",
   description:
@@ -534,11 +398,6 @@ export const subscribeNewsletterSpec = defineSpec({
   transports: ["mcp", "chat", "webmcp"],
 });
 
-/**
- * Every shared tool spec, single-sourced. Order: `list_findings` (the found-order feed) first, then
- * the reborn `list_tracks` browse enumerator, the rest of the overlapping read tools, the reads PR-2
- * lifted out of ChatDnB, the PR-5 catalogue browse reads, then the writes.
- */
 export const SHARED_TOOL_SPECS: ToolSpec[] = [
   listFindingsSpec,
   listTracksSpec,
@@ -561,13 +420,6 @@ export const SHARED_TOOL_SPECS: ToolSpec[] = [
   subscribeNewsletterSpec,
 ];
 
-// ── The JSON-Schema bridge + the WebMCP adapter (client-safe) ─────────────────────────
-
-/**
- * The advertised JSON Schema for a tool's input. `unrepresentable: "any"` degrades a future
- * exotic type to `{}` rather than throwing the whole tools/list; the explicit-opts form
- * deliberately omits `additionalProperties: false` (RFC Unit A).
- */
 export function toInputJsonSchema(spec: ToolSpec): Record<string, unknown> {
   return z.toJSONSchema(spec.input, {
     io: "input",
@@ -576,7 +428,6 @@ export function toInputJsonSchema(spec: ToolSpec): Record<string, unknown> {
   }) as Record<string, unknown>;
 }
 
-/** The WebMCP tool shape (mirrors lib/webmcp.ts's `WebMcpTool`). */
 export type WebMcpToolDescriptor = {
   description: string;
   execute: (input: Record<string, unknown>) => Promise<{
@@ -586,11 +437,6 @@ export type WebMcpToolDescriptor = {
   name: string;
 };
 
-/**
- * Project a tool spec onto the in-page WebMCP surface. The browser has no in-process server
- * functions, so it keeps its own hand-written HTTP `execute` (`httpExecute`); only the shared
- * name + description + JSON-Schema come from the registry.
- */
 export function toWebMcpTool(
   spec: ToolSpec,
   httpExecute: WebMcpToolDescriptor["execute"],
