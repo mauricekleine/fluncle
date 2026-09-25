@@ -2,15 +2,6 @@ import { type ServiceHealthStatus } from "@fluncle/contracts";
 import { liveSurfaces } from "@fluncle/registry";
 import { publicApiGet } from "../api";
 
-// The three-state service-health enum the /api/v1/status endpoint emits is the
-// `admin-health` contract's `ServiceHealthStatus` (single source of truth in
-// `@fluncle/contracts`). The rest of the /api/v1/status shape below is a non-oRPC
-// resource read (carved out of the contract-coverage net), so it is mirrored here.
-
-// One service row as the public /api/v1/status endpoint emits it. This is the
-// machine-readable sibling of the /status HTML dashboard — a non-oRPC resource
-// read (carved out of the contract-coverage net), so there is no generated
-// response type to import; the wire shape is mirrored here.
 export type StatusService = {
   checkedAt: string | null;
   latencyMs: number | null;
@@ -20,10 +11,6 @@ export type StatusService = {
   status: ServiceHealthStatus;
 };
 
-// The full /api/v1/status payload: the service grid plus the server-computed
-// freshness gaps (no client clock skew). `freshestReportAt` /
-// `secondsSinceFreshestReport` are null until the healthcheck cron has written
-// at least one snapshot.
 export type StatusResponse = {
   freshestReportAt: string | null;
   generatedAt: string;
@@ -32,18 +19,10 @@ export type StatusResponse = {
   services: StatusService[];
 };
 
-// The current health of Fluncle's services, read from the public status snapshot
-// the healthcheck cron posts. A thin GET — no auth, no business logic.
 export async function statusCommand(): Promise<StatusResponse> {
   return publicApiGet<StatusResponse>("/api/v1/status");
 }
 
-// The registry tags the surfaces it expects a /status probe to cover by writing
-// "Probed on /status as service `<id>`" into their `operatorNotes`. Mine those
-// notes once so a service id (e.g. `r2`, `dns`, `ssh`) reads back as the surface's
-// own plain-words description — the labels then track the catalog instead of a
-// second hand-kept copy here. Anything the registry doesn't name (web, db, hermes)
-// falls back to the raw service id.
 const serviceLabels: ReadonlyMap<string, string> = (() => {
   const labels = new Map<string, string>();
 
@@ -60,15 +39,12 @@ const serviceLabels: ReadonlyMap<string, string> = (() => {
   return labels;
 })();
 
-// The status glyph for a service's health — deadpan, no emoji (CLI register).
 const statusMarks: Record<ServiceHealthStatus, string> = {
   degraded: "~",
   down: "x",
   ok: "+",
 };
 
-// How long ago a report landed, in the terse "5m ago" / "2h ago" shape. Used for
-// the snapshot age so a stale board reads at a glance.
 function ago(seconds: number): string {
   if (seconds < 60) {
     return `${seconds}s ago`;
@@ -85,13 +61,6 @@ function ago(seconds: number): string {
   return `${Math.round(seconds / 86_400)}d ago`;
 }
 
-/**
- * Render the status snapshot as a terse, deadpan board (the CLI register): one
- * aligned row per service — a health mark, the service name, its state, and a
- * short note — under a one-line headline, with the snapshot's age last. No emoji,
- * active voice. The headline reads the worst service so the top line tells the
- * whole story.
- */
 export function statusLines(snapshot: StatusResponse): string[] {
   const { secondsSinceFreshestReport, services } = snapshot;
 

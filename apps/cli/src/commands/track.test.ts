@@ -5,12 +5,6 @@ import { join } from "node:path";
 import * as realApi from "../api";
 import { CliError } from "../output";
 
-// The re-render-contract guard must short-circuit BEFORE any network call, so the
-// mock records every admin POST and (by default) throws a sentinel if the guard
-// ever lets the flow reach the presign step. `bundle_incomplete` /
-// `nothing_to_upload` cases must never reach it; the `--allow-partial` case must
-// (and surface the sentinel). Tests that need the FULL flow (the plates-only
-// pre-upload) swap `adminApiPostImpl` for a live presign fake.
 let postCalls: string[] = [];
 
 let adminApiPostImpl: (path: string, body?: unknown) => Promise<unknown> = async () => {
@@ -27,9 +21,6 @@ await mock.module("../api", () => ({
 
 const { checkBundleCompleteness, isPlatesOnlyUpload, trackVideoCommand } = await import("./track");
 
-// A resolved-files set with every re-render-contract + advisory file present. The
-// guard checks truthiness only (the caller resolves paths), so placeholder paths are
-// enough — no file needs to exist on disk.
 const fullBundle = {
   composition: "/out/032.0.4L/composition.tsx",
   footage: "/out/032.0.4L/footage.mp4",
@@ -153,8 +144,6 @@ describe("trackVideoCommand bundle guard", () => {
     postCalls = [];
   });
 
-  // Await a call and return whatever it throws (or null) — bun's `.rejects` matcher
-  // reads as a non-thenable to the type-aware linter, so capture the error directly.
   const capture = async (run: () => Promise<unknown>): Promise<unknown> => {
     try {
       await run();
@@ -185,7 +174,6 @@ describe("trackVideoCommand bundle guard", () => {
       }),
     );
 
-    // Not bundle_incomplete — it reaches the presign step (our sentinel).
     expect((error as Error).message).toContain("PRESIGN_REACHED");
     expect(postCalls.length).toBe(1);
   });
@@ -206,8 +194,6 @@ describe("trackVideoCommand bundle guard", () => {
   });
 
   test("a plates-only upload passes the guard, PUTs the plates, and NEVER finalizes", async () => {
-    // A finalize on a plate pre-upload would set video_url and dequeue the finding
-    // from the render queue before it is filmed — the one call this flow must not make.
     adminApiPostImpl = async (path: string) => {
       if (!path.endsWith("/video/uploads")) {
         throw new Error(`FINALIZE_REACHED: ${path}`);
@@ -239,7 +225,6 @@ describe("trackVideoCommand bundle guard", () => {
       return new Response("", { status: 200 });
     }) as typeof fetch;
 
-    // Real files on disk: small artifacts are BUFFERED before the PUT, so the upload reads the path eagerly.
     const dir = await mkdtemp(join(tmpdir(), "fluncle-plates-"));
 
     try {
@@ -260,7 +245,7 @@ describe("trackVideoCommand bundle guard", () => {
         },
       });
       expect(putUrls).toEqual(["https://r2/put?sig=p", "https://r2/put?sig=b"]);
-      // Exactly ONE admin POST — the presign; finalize was never called.
+
       expect(postCalls).toEqual(["/api/v1/admin/tracks/032.0.4L/video/uploads"]);
     } finally {
       globalThis.fetch = realFetch;

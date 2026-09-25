@@ -244,8 +244,6 @@ describe("projection operator commands", () => {
     expect(calls[3]).toEqual({ method: "GET", path: "/api/v1/admin/projections/status" });
   });
 
-  // A step is one HTTP round trip whose cost the caller cannot know, so a caller with a deadline
-  // of its own states the deadline. The step ceiling stays the hard cap on requests issued.
   test("stops issuing steps once the wall budget is spent and says so", async () => {
     for (let step = 0; step < 5; step += 1) {
       postResponses.push({
@@ -273,8 +271,6 @@ describe("projection operator commands", () => {
       wallMs: 10_000,
     });
 
-    // The reading at entry is 0, so the budget is spent after the readings at 4s and 8s: three
-    // steps ran, the fourth was never issued, and the ceiling of 100 never came into it.
     expect(result).toMatchObject({ complete: false, processed: 3, steps: 3, wallStopped: true });
     expect(calls).toHaveLength(3);
   });
@@ -299,8 +295,6 @@ describe("projection operator commands", () => {
       wallMs: 1_000,
     });
 
-    // A call that issued no request at all would report a step sequence it never attempted, and its
-    // caller would read zero progress as a drained family.
     expect(result).toMatchObject({ complete: true, processed: 4, steps: 1, wallStopped: false });
     expect(calls).toHaveLength(1);
   });

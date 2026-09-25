@@ -2,11 +2,6 @@ import { describe, expect, test } from "bun:test";
 
 import { buildBioBody } from "./admin-artists";
 
-// `buildBioBody` is the shared POST body for `admin {artists,labels,albums} describe` — the one
-// seam that decides what actually reaches the `describe_*` route. `finalAttempt` in particular is
-// a WRITE-BEHAVIOUR flag (it tells the Worker to store a draft the voice scan refused), so it must
-// be impossible to send by accident: absent unless the caller explicitly asked for it.
-
 const BIO = "A drum and bass producer with a long run of releases behind them.";
 
 describe("buildBioBody", () => {

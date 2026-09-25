@@ -1,16 +1,5 @@
 #!/usr/bin/env bun
 
-// Build the publishable npm package `fluncle` from the one CLI source.
-//
-// The npm artifact is a single, self-contained node-targeted JS bundle (KB-scale,
-// not the ~60MB Bun --compile binary) so `npm i -g fluncle`, `npx fluncle <cmd>`,
-// and `bunx fluncle <cmd>` all run instantly. commander + dotenv are inlined; the
-// bundle imports only node builtins, so the published package declares no runtime
-// dependencies.
-//
-// Bun keeps the source's `#!/usr/bin/env bun` shebang at byte 0; we rewrite it to
-// `node` (its --banner flag cannot guarantee position 0, which breaks ESM parsing).
-
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -43,7 +32,7 @@ async function main(): Promise<void> {
   }
 
   const built = await result.outputs[0].text();
-  // Force a node shebang at byte 0 so the bin is directly executable under node.
+
   const withNodeShebang = built.replace(/^#![^\n]*\n/, "#!/usr/bin/env node\n");
   const final = withNodeShebang.startsWith("#!")
     ? withNodeShebang
@@ -65,10 +54,6 @@ function readVersion(): string {
     return fromEnv;
   }
 
-  // The CLI version is sourced from the GitHub release tag — the cli-release
-  // workflow passes it automatically. Require it explicitly for manual builds so
-  // we can never publish the stale package.json version. Latest release:
-  // github.com/mauricekleine/fluncle/releases.
   throw new Error(
     "FLUNCLE_CLI_VERSION is required (e.g. FLUNCLE_CLI_VERSION=0.33.0). The cli-release workflow sets it from the release tag.",
   );
@@ -78,10 +63,7 @@ function buildPackageJson(): Record<string, unknown> {
   return {
     bin: { fluncle: "./bin/fluncle.mjs" },
     bugs: { url: "https://github.com/mauricekleine/fluncle/issues" },
-    // A colon, not an em dash, and the tagline in sentence case: npmjs.com/package/fluncle
-    // prints this to a stranger, and VOICE.md §6 sanctions exactly one em dash (the
-    // `Artist — Title` tracklist separator). Kept identical to the Homebrew formula's
-    // `desc` (apps/cli/packaging/homebrew/fluncle.rb) — one sentence, one spelling.
+
     description: "Drum & bass bangers from another dimension: the Fluncle CLI",
     engines: { node: ">=18" },
     files: ["bin/fluncle.mjs", "README.md"],

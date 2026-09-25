@@ -8,7 +8,6 @@ import { adminApiDelete, adminApiGet, adminApiPost } from "../api";
 
 const MBID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-/** Validate a global artist ruling before the operator-tier request can mutate anything. */
 export function artistRuleInput(
   artistMbid: string,
   verdict: string,
@@ -19,8 +18,6 @@ export function artistRuleInput(
     throw new Error("Artist MBID must be a MusicBrainz artist MBID");
   }
 
-  // `unlisted` is accepted here and nowhere else: it is a GLOBAL visibility ruling (no public
-  // artist page), and this command is the only global-rule write path.
   if (verdict !== "allow" && verdict !== "block" && verdict !== "unlisted") {
     throw new Error("Pass --verdict allow|block|unlisted");
   }
@@ -51,19 +48,8 @@ export async function removeArtistRuleCommand(id: string): Promise<{ ok: true }>
   return adminApiDelete<{ ok: true }>(`/api/v1/admin/artist-rules/${encodeURIComponent(id)}`);
 }
 
-// ── The voiced bio: the entity-bio engine (thin HTTP client) ──────────────────
-// The entity sibling of `admin tracks note`: author the artist's/label's bio through the
-// agent-tier `describe_*` route (the MODEL authors it in the box cron; the CLI just posts
-// the gated text). Fills an empty bio only; an operator bio is never clobbered.
-
-/** One row of the bio worklist: an entity with findings but no bio yet. */
 export type EntityBioWorkItem = { id: string; name: string; slug: string };
 
-/**
- * The Worker-paced bio DRAFT: the assembled grounding the box authors from. The Worker runs
- * the Firecrawl gather (its key) + pulls the logged finding titles (its DB) and returns a
- * ready-to-author prompt + its provenance version. `found:false` is an unresolved slug.
- */
 export type EntityBioDraft = {
   findingCount: number;
   found: boolean;
@@ -73,25 +59,22 @@ export type EntityBioDraft = {
   promptVersion: number;
 };
 
-/** What a describe call returns: the stored (or dry-run/skipped) bio + its slug. */
 export type EntityBioResult = {
   bio: string;
-  // True on a --dry-run: the voice gate ran, nothing was stored.
+
   dryRun?: boolean;
-  // True when --final-attempt stored a bio the voice scan would otherwise have refused.
-  // THE OPERATOR REVIEW FLAG — absent on every normal write.
+
   gateBypassed?: boolean;
   ok: boolean;
-  // True when a bio already existed and the fill-empty-only guard refused to clobber it.
+
   skipped?: boolean;
   slug: string;
-  // The voice-gate reasons that were ACCEPTED, verbatim. Present only with `gateBypassed`.
+
   voiceViolations?: string[];
 };
 
 type BioBody = { bio: string; dryRun?: boolean; finalAttempt?: boolean; promptVersion?: number };
 
-/** Build the POST body shared by all three entity describe commands. */
 export function buildBioBody(options: {
   bio: string;
   dryRun?: boolean;
@@ -104,10 +87,6 @@ export function buildBioBody(options: {
     body.dryRun = true;
   }
 
-  // The sweep's THIRD and last authoring pass over one entity: store the draft even if the
-  // voice scan refuses it (the length bounds and fill-empty-only still apply). Sent ONLY by
-  // the on-box entity-bio sweep; omitted entirely on every other call, so a normal describe
-  // is byte-identical to what it always was.
   if (options.finalAttempt) {
     body.finalAttempt = true;
   }
@@ -119,9 +98,6 @@ export function buildBioBody(options: {
   return body;
 }
 
-// Author + store one artist's bio (the voice-gated, fill-empty-only write). The box's
-// future bio cron drives this per row; the operator runs it ad-hoc. `--dry-run` runs the
-// voice gate and reports the verdict without storing anything.
 export async function describeArtistCommand(
   slug: string,
   options: { bio: string; dryRun?: boolean; finalAttempt?: boolean; promptVersion?: number },
@@ -132,15 +108,10 @@ export async function describeArtistCommand(
   );
 }
 
-// Trigger the Worker's bio-draft grounding for one artist: the Firecrawl gather + finding
-// titles + the assembled `describe_artist` prompt, returned ready-to-author. The box's bio
-// sweep calls this per queued entity, then runs `claude -p` on the returned prompt.
 export async function draftArtistBioCommand(slug: string): Promise<EntityBioDraft> {
   return adminApiGet<EntityBioDraft>(`/api/v1/admin/artists/${encodeURIComponent(slug)}/bio-draft`);
 }
 
-// The BIO queue: artists with findings but no bio yet, oldest first — the worklist the
-// `describe_artist` cron drains (each row is a `admin artists describe <slug>`).
 export async function artistsBioQueueCommand(limit: number): Promise<EntityBioWorkItem[]> {
   const response = await adminApiGet<{ artists: EntityBioWorkItem[]; ok: boolean }>(
     `/api/v1/admin/artists/bio-queue?limit=${limit}`,
@@ -149,9 +120,6 @@ export async function artistsBioQueueCommand(limit: number): Promise<EntityBioWo
   return response.artists;
 }
 
-// ── Artist social resolution (Unit 2.1) ──────────────────────────────────────
-
-/** One row of the resolve worklist: an artist awaiting social resolution. */
 export type UnresolvedArtist = {
   id: string;
   name: string;
@@ -163,7 +131,6 @@ export type ArtistsResolveQueueResult = {
   ok: boolean;
 };
 
-/** A resolved social (MB url-rels walk or Firecrawl gap-fill). */
 export type ResolvedArtistSocial = {
   platform: string;
   source: string;
@@ -172,22 +139,16 @@ export type ResolvedArtistSocial = {
 
 export type ArtistResolveResult = {
   artistId: string;
-  // The artist's MusicBrainz id + Wikidata QID captured onto the artist row
-  // during the walk (null when MB had no match / the artist carried no KG anchor).
+
   mbid: string | null;
   ok: boolean;
-  // True when MusicBrainz throttled the walk mid-flight (the sweep retries the
-  // artist on the next tick rather than treating the partial result as final).
+
   rateLimited: boolean;
   socials: ResolvedArtistSocial[];
   socialsCount: number;
   wikidataQid: string | null;
 };
 
-// A bounded page of the resolve worklist (artists with `resolved_at IS NULL`),
-// oldest-first by id. The sweep reads this, then calls `resolveArtistCommand`
-// per row. Cursor-paged by artist id — pass the prior page's `nextCursor` to
-// resume; it comes back null when the queue is drained.
 export async function listArtistsCommand(
   limit: number,
   cursor?: string,
@@ -201,22 +162,12 @@ export async function listArtistsCommand(
   return adminApiGet<ArtistsResolveQueueResult>(`/api/v1/admin/artists?${params.toString()}`);
 }
 
-// Trigger the Worker's social resolution for one artist: the MB url-rels walk +
-// the Firecrawl /v2/extract gap-fill for TikTok + missing YouTube. Idempotent per
-// artist (re-resolving stamps timestamps). MB rows land as `status=auto` (trusted);
-// Firecrawl rows as `status=candidate` (operator-confirm before public).
 export async function resolveArtistCommand(artistId: string): Promise<ArtistResolveResult> {
   return adminApiPost<ArtistResolveResult>(
     `/api/v1/admin/artists/${encodeURIComponent(artistId)}/resolve`,
   );
 }
 
-// ── The similar-artists precompute sweep (D6) ─────────────────────────────────
-// The artist-graph sibling of `admin catalogue rank`: one tick of the sweep that keeps the
-// `/artist/<slug>` "similar artists" rail off the page's hot path. The CLI is a thin pacer —
-// the Worker owns the vector arithmetic; `remaining > 0` means run it again.
-
-/** One `rank_artists` tick's summary — the JSON line a cron reads. */
 export type RankArtistsSummary = {
   centroidsComputed: number;
   centroidsRemoved: number;
@@ -225,20 +176,12 @@ export type RankArtistsSummary = {
   remaining: number;
 };
 
-/**
- * One tick of the similar-artists sweep. `fluncle admin artists rank [--limit <n>]`.
- *
- * Recomputes up to `limit` stale artist centroids (the mean over EVERY embedded track that
- * credits the artist — findings AND catalogue) and re-ranks each one's top-K sonic neighbours
- * in SQL, then purges any orphan centroid. Idempotent, resume-safe, a no-op on a settled graph.
- */
 export async function rankArtistsCommand(options: {
   countRemaining?: boolean;
   limit?: string;
 }): Promise<{ summary: RankArtistsSummary }> {
   const limit = options.limit ? Number.parseInt(options.limit, 10) : undefined;
-  // `countRemaining` opts into the real backlog COUNT for `remaining` (the human-readable readout);
-  // the default sentinel keeps the automation path off the second stale-set scan (server contract).
+
   const response = await adminApiPost<{ ok: true; summary: RankArtistsSummary }>(
     "/api/v1/admin/artists/rank",
     {
@@ -254,9 +197,7 @@ export type ArtistsBackfillResult = {
   dryRun: boolean;
   failed: Array<{ error: string; logId: string }>;
   failedCount: number;
-  // The feed cursor to resume from on the next pass, or null when the queue is
-  // drained. The endpoint handles only a bounded pass per request (each finding
-  // requires a Spotify re-fetch), so the CLI loops this until null.
+
   nextCursor: string | null;
   ok: boolean;
   skipped: string[];
@@ -273,24 +214,17 @@ export type ArtistImagesBackfillResult = {
   failedCount: number;
   filled: string[];
   filledCount: number;
-  // The feed cursor to resume from on the next pass, or null when the queue is
-  // drained. Each pass resolves a bounded set through per-ID Spotify artist
-  // calls, so the CLI loops this until null.
+
   nextCursor: string | null;
   ok: boolean;
-  // Exact eligible backlog remaining after this pass.
+
   queueDepth: number;
   rateLimited: boolean;
-  // Artists Spotify has no image for — left null (a monogram tile renders), not failed.
+
   skipped: string[];
   skippedCount: number;
 };
 
-// One bounded pass of the artist-avatar backfill via the admin API — the Worker
-// fetches the largest Spotify profile image for artists missing one and stamps
-// `artists.image_url`. Idempotent + self-draining (an imaged artist drops out of the
-// queue). `--dry-run` reports which artists would be filled without touching the DB.
-// Pass the prior pass's `nextCursor` to resume; the CLI loops until it comes back null.
 export async function backfillArtistImagesCommand(
   limit: number,
   dryRun: boolean,
@@ -307,12 +241,6 @@ export async function backfillArtistImagesCommand(
   );
 }
 
-// One bounded pass of the artist-entity backfill via the admin API — the Worker
-// re-fetches each eligible finding's Spotify track metadata and upserts `artists`
-// + `track_artists`. Findings that already have a `track_artists` row are skipped
-// (idempotent). `--dry-run` reports which findings would be upserted without
-// touching the DB. Pass the prior pass's `nextCursor` to resume; the CLI loops
-// until it comes back null.
 export async function backfillArtistsCommand(
   limit: number,
   dryRun: boolean,

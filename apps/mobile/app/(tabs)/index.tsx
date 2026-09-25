@@ -26,10 +26,6 @@ type FeedList = {
   isFetchingNextPage: boolean;
 };
 
-// The Stories feed (RFC Unit 2). This shell resolves the four honest states (H4) — no
-// card ever renders on a blank, spinning, or lying screen — and hands the populated feed
-// to <FeedPager>. Any data in hand wins; only a truly empty query falls to
-// loading / error / empty.
 export default function FeedScreen() {
   const {
     data,
@@ -41,13 +37,7 @@ export default function FeedScreen() {
     isPending,
     refetch,
   } = useFindingsFeed();
-  // FEED-ONLY: the full-screen Feed shows only findings
-  // with a Fluncle-rendered (first-party) video. An un-rendered finding would fall to the
-  // album-art cover placeholder, which is off-brand and raises third-party-artwork /
-  // copyright questions in this surface. The Archive tab (archive.tsx) reads the SAME
-  // `flattenFeed` and stays the COMPLETE browse list — the filter lives here, at the Feed
-  // consumer, not in `flattenFeed`. Filter rate is ~1% (nearly every finding is rendered),
-  // so the pager's next-page fetch keys off `hasNextPage` (below), never the filtered count.
+
   const findings = flattenFeed(data?.pages).filter(hasRender);
   const state = resolveFeedState({ count: findings.length, isError, isPaused, isPending });
 
@@ -74,16 +64,11 @@ export default function FeedScreen() {
   );
 }
 
-// The populated pager. FlashList v2 vertical pager, one cell per screen.
-// KNOWN RISK (RFC): FlashList #1200 — verify one-card-per-swipe on a low-end
-// Android device; FlatList pagingEnabled is the documented fallback.
 function FeedPager({ fetchNextPage, findings, hasNextPage, isFetchingNextPage }: FeedList) {
   const { height } = useWindowDimensions();
   const [activeId, setActiveId] = useState<string | null>(null);
   const [soundOn, setSoundOn] = useState(false);
 
-  // The viewability callback must keep a stable identity (RN warns otherwise), so
-  // it reads live pagination state through a ref refreshed each render.
   const stateRef = useRef({ fetchNextPage, findings, hasNextPage, isFetchingNextPage });
   stateRef.current = { fetchNextPage, findings, hasNextPage, isFetchingNextPage };
 
@@ -92,8 +77,7 @@ function FeedPager({ fetchNextPage, findings, hasNextPage, isFetchingNextPage }:
     if (token?.item) {
       setActiveId(idOf(token.item));
     }
-    // Prefetch older findings before the user reaches the end. onEndReached is
-    // unreliable on a paging feed, so drive it off the visible index instead.
+
     const idx = token?.index ?? -1;
     const s = stateRef.current;
     if (idx >= 0 && idx >= s.findings.length - 3 && s.hasNextPage && !s.isFetchingNextPage) {
@@ -102,12 +86,8 @@ function FeedPager({ fetchNextPage, findings, hasNextPage, isFetchingNextPage }:
   }).current;
   const viewabilityConfig = useRef({ itemVisiblePercentThreshold: 80 }).current;
 
-  // autoplay the first card before the first viewability event fires
   const current = activeId ?? (findings[0] ? idOf(findings[0]) : null);
 
-  // A stable toggle (updater form needs no soundOn dep) and a stable renderItem so
-  // FlashList doesn't rebuild every cell on each redraw — only when the active card
-  // or the global sound state actually changes.
   const toggleSound = useCallback(() => setSoundOn((s) => !s), [setSoundOn]);
   const renderItem = useCallback(
     ({ item }: { item: TrackListItem }) => (
@@ -145,7 +125,6 @@ function FeedPager({ fetchNextPage, findings, hasNextPage, isFetchingNextPage }:
   );
 }
 
-/** A slow opacity pulse for the quiet loading/fetch indicators; static under reduce. */
 function Pulse({ children, style }: { children: ReactNode; style?: object }) {
   const reduced = useReducedMotion();
   const t = useSharedValue(0);
@@ -158,7 +137,6 @@ function Pulse({ children, style }: { children: ReactNode; style?: object }) {
   return <Animated.View style={[pulse, style]}>{children}</Animated.View>;
 }
 
-/** First paint: a quiet warm-dark hold (never a spinner on black). */
 function FeedLoading() {
   return (
     <View style={[styles.screen, styles.center]}>
@@ -169,7 +147,6 @@ function FeedLoading() {
   );
 }
 
-/** An honest failure with a literal retry (the Chrome Rule). */
 function FeedError({ onRetry }: { onRetry: () => void }) {
   return (
     <View style={[styles.screen, styles.center]}>
@@ -192,18 +169,11 @@ function FeedError({ onRetry }: { onRetry: () => void }) {
   );
 }
 
-/**
- * The device has no connection, so the feed query is parked rather than failing. No retry
- * control: the query resumes itself the moment the device is back, and a button that only
- * works once it already worked is chrome that lies.
- */
 function FeedOffline() {
   return (
     <View style={[styles.screen, styles.center]}>
       <Text style={[font.title, styles.title]}>{feedCopy.offline.title}</Text>
-      {/* Announced like the archive's offline line (archive.tsx's ArchiveOffline): the two
-          offline states are the same state on sibling surfaces, so they speak the same way.
-          The inherited FeedError/FeedEmpty drift is deliberately left alone. */}
+
       <Text accessibilityLiveRegion="polite" style={[font.body, styles.body]}>
         {feedCopy.offline.body}
       </Text>
@@ -211,7 +181,6 @@ function FeedOffline() {
   );
 }
 
-/** No findings yet — the written Fluncle voice, forward-looking. */
 function FeedEmpty() {
   return (
     <View style={[styles.screen, styles.center]}>
@@ -221,7 +190,6 @@ function FeedEmpty() {
   );
 }
 
-/** A quiet "loading more" beat at the bottom while the next page fetches. */
 function FeedFooter() {
   const insets = useSafeAreaInsets();
   return (
@@ -245,7 +213,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 22,
     paddingVertical: 11,
   },
-  // Ignition: the control heats to a gold fill on press (dark ink on top).
+
   retryPressed: { backgroundColor: color.eclipseGold, borderColor: color.eclipseGold },
   screen: { backgroundColor: color.deepField, flex: 1 },
   title: { color: color.starlightCream, textAlign: "center" },

@@ -1,8 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { nextOffset } from "./mixtape-youtube";
 
-// The resume-offset math for the YouTube resumable PUT: a 308 carries a confirmed
-// `Range: bytes=0-<lastByte>`, and the next byte to send is lastByte + 1.
 describe("nextOffset", () => {
   test("parses a confirmed range to the next byte offset", () => {
     expect(nextOffset("bytes=0-262143", 0)).toBe(262144);

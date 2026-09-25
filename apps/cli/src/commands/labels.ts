@@ -1,11 +1,3 @@
-// The `labels` CLI command — a thin `publicApiGet` read over the public
-// `list_labels` / `get_label` oRPC ops, mirroring `artists`. Catalogue reference
-// register (plain, no cosmos): the bare list is every label Fluncle holds, A to
-// Z, one page at a time (`--page`); a bare `slug` reads one label's dossier. The
-// Unlit Rule keeps the certified marker off a list row; `--json` carries it. The
-// detail may name the label's home — the entity dossier is the one register
-// where earthly geography is stated plainly (VOICE.md §5).
-
 import { type LabelGetResponse, type LabelsResponse } from "@fluncle/contracts";
 import { publicApiGet } from "../api";
 import { printJson } from "../output";

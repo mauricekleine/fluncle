@@ -6,8 +6,7 @@ import { CliError } from "../output";
 import { type RecentTrack, recentCommand } from "./recent";
 
 const TELEGRAM_APP_URI = "tg://resolve?domain=fluncle";
-// The `?si=` share token attributes plays back to the playlist's share link —
-// kept on the open path (about/help display the bare canonical URL from links.ts).
+
 const SPOTIFY_PLAYLIST_OPEN_URL = `${spotifyPlaylistUrl}?si=054d3c6cbcf14a36`;
 const SELECT_NON_INTERACTIVE_MESSAGE =
   "fluncle open requires an interactive terminal. Use fluncle recent to list tracks.";

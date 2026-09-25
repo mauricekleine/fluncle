@@ -1,22 +1,7 @@
-// PLAIN CommonJS ON PURPOSE. Expo ≥56.0.15 evaluates a TS config as an ES module, where the
-// `expo/config*` subpaths (CJS directory shims with no `exports` entry) throw "Directory import …
-// is not supported". The TS transpile path also calls the legacy JavaScript compiler API
-// (`ts.ModuleKind`/`transpileModule`) that TypeScript 7 does not expose.
-// A .js config in a no-"type" package takes the boring require() path: no transpile, no
-// ESM resolution, nothing to break. Types ride JSDoc off the same expo type entries.
-
-// Config-time brand hexes are hardcoded: Expo evaluates this file standalone and cannot
-// import the raw-TS @fluncle/tokens package. Mirror of packages/tokens.
 const DEEP_FIELD = "#090a0b";
 
-// Personal/free Apple teams can't sign Push Notifications or Associated Domains
-// (paid Developer Program only). EXPO_FREE_TEAM=1 strips both so you can run on a
-// physical device with a free Apple ID — that build loses remote push + universal
-// links (both need the paid account anyway; the fluncle:// scheme still deep-links).
-// Omit the env var for paid / EAS builds to keep the full V1 capabilities.
 const FREE_TEAM = process.env.EXPO_FREE_TEAM === "1";
 
-/** @type {import("expo/config-plugins").ConfigPlugin} */
 const withFreeTeamSigning = (config) => {
   const { withEntitlementsPlist } = require("expo/config-plugins");
   return withEntitlementsPlist(config, (c) => {
@@ -26,14 +11,8 @@ const withFreeTeamSigning = (config) => {
   });
 };
 
-/** @type {import("expo/config").ExpoConfig} */
 const config = {
   android: {
-    // The adaptive launcher icon: the transparent traveler cut (figure at 58%
-    // of frame for Android's tighter adaptive mask) layered over Deep Field.
-    // Rendered from @fluncle/media (`bun run --cwd packages/media
-    // render:mobile-assets`); a change is a NATIVE asset change — rebuild, not
-    // reload.
     adaptiveIcon: {
       backgroundColor: DEEP_FIELD,
       foregroundImage: "./assets/adaptive-icon.png",
@@ -52,12 +31,10 @@ const config = {
   experiments: { typedRoutes: false },
   extra: {
     eas: {
-      // The EAS project id minted by `eas init` (a public identifier, not a secret).
       projectId: "4db7808b-9463-4411-af2a-d0d2c5af72e9",
     },
   },
-  // The app icon: the operator's drifting-traveler pick on plain Deep Field,
-  // rendered as a 1024×1024 opaque PNG by @fluncle/media.
+
   icon: "./assets/icon.png",
   ios: {
     bundleIdentifier: "com.fluncle.app",
@@ -65,17 +42,14 @@ const config = {
       ITSAppUsesNonExemptEncryption: false,
     },
     supportsTablet: false,
-    // universal links need the paid account — omitted on free-team builds
+
     ...(FREE_TEAM ? {} : { associatedDomains: ["applinks:www.fluncle.com"] }),
   },
   name: "Fluncle",
   orientation: "portrait",
   plugins: [
     "expo-router",
-    // The splash mark: the traveler small over an edge-faded starfield on a
-    // transparent ground, composited over the Deep Field backgroundColor (so
-    // the square dissolves into the native ground with no seam). imageWidth is
-    // in dp; 240 keeps the mark quiet, per the icon family's composition.
+
     [
       "expo-splash-screen",
       {
@@ -85,17 +59,9 @@ const config = {
         resizeMode: "contain",
       },
     ],
-    // supportsBackgroundPlayback must be TRUE even though the FEED never plays in the
-    // background: expo-video's plugin, when false, actively STRIPS "audio" from
-    // UIBackgroundModes — deleting the entitlement the Radio's expo-audio plugin adds
-    // (the two plugins fight; video's mod wraps audio's and wins). The feed's silence
-    // in the background is JS behavior (useBackgroundPause), not this plist entry.
+
     ["expo-video", { supportsBackgroundPlayback: true, supportsPictureInPicture: false }],
-    // The Radio surface keeps the spoken observation playing past a lock / backgrounding.
-    // This plugin adds iOS `UIBackgroundModes: ["audio"]` and the Android media-playback
-    // foreground service + permissions. Recording is disabled (Radio never records), so
-    // no microphone permission or RECORD_AUDIO is requested. NOTE: this is a NATIVE
-    // config change — it needs a rebuild (`expo run:ios` / a new EAS build), NOT a reload.
+
     [
       "expo-audio",
       {
@@ -116,14 +82,6 @@ if (FREE_TEAM) {
   config.plugins.push(withFreeTeamSigning);
 }
 
-// The libSQL ENGINE is unconditional: the expo-sqlite config
-// plugin writes expo.sqlite.useLibSQL=true at prebuild, and the podspec swaps the whole
-// implementation — SQLiteModule.swift + bundled sqlite3 out, SQLiteModuleLibSQL.swift +
-// libsql.xcframework in — so ALL of the app's SQLite (the kv-store device stores included)
-// rides libSQL in every build. This is what lets the device replica activate for real
-// users. Build trap: flipping this line rewrites Podfile.properties.json WITHOUT dirtying
-// the Podfile checksum, so `expo run:ios` silently rebuilds the old engine — force
-// `pod install` in ios/ after any change here.
 config.plugins.push(["expo-sqlite", { useLibSQL: true }]);
 
 module.exports = config;

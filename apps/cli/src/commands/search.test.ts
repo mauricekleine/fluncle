@@ -2,10 +2,6 @@ import { beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 
 import * as realApi from "../api";
 
-// The `search` command is a thin HTTP client over `search_archive`. The mock
-// serves one envelope; assertions ride on how the output shapes it — a jump
-// line, entity links, and the coordinate-led / `—`-fallback track table (the
-// Unlit Rule, matching `fresh`).
 let apiResponse: unknown = { entities: [], ok: true, results: [] };
 let lastPath = "";
 
@@ -67,8 +63,7 @@ describe("searchCommand", () => {
 
     const text = output();
     expect(text).toContain("241.7.3A  Break — Lit One");
-    // The uncertified row leads with the — fallback in the (padded) coordinate
-    // column and carries no coordinate of its own.
+
     expect(text).toMatch(/^— +Quiet One — Quiet Tune$/m);
   });
 

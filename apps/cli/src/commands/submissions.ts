@@ -97,9 +97,6 @@ export async function approveSubmissionCommand(
   console.log(`Approved ${formatTrackLine(submission)}.`);
 }
 
-// `admin submissions triage <id> --verdict <text>` — write the pre-chew advisory
-// verdict onto a PENDING submission (the `fluncle-triage` box sweep's delivery step).
-// AGENT tier: it moves no approve/reject authority, so the box's agent token drives it.
 export async function triageSubmissionCommand(
   submissionId: string,
   verdict: string,
@@ -108,8 +105,6 @@ export async function triageSubmissionCommand(
   const response = await adminApiPost<SubmissionResponse>(
     `/api/v1/admin/submissions/${encodeURIComponent(submissionId)}/triage`,
     {
-      // PROVENANCE — omitted when the sweep fell back to its baked-in prompt, so the
-      // column stays NULL (docs/agents/prompt-registry.md).
       ...(typeof options.promptVersion === "number"
         ? { promptVersion: options.promptVersion }
         : {}),
@@ -135,10 +130,6 @@ async function fetchSubmission(submissionId: string): Promise<Submission> {
   return response.submission;
 }
 
-// Approval is a publish; it needs an explicit yes. Off a TTY there's no way to
-// ask, so error clearly (matching the other interactive prompts) instead of
-// silently treating a scripted approve as a cancelled no-op. `--json` is the
-// non-interactive path: it approves without prompting.
 async function confirm(label: string): Promise<boolean> {
   if (!process.stdin.isTTY || !process.stdout.isTTY) {
     throw new CliError(

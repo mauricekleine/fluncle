@@ -1,9 +1,3 @@
-// `admin queue` — the operator's attention queue, off the Worker. A thin HTTP
-// client over the admin-tier `get_attention` read: the same snapshot the `/admin`
-// dashboard renders, folded into a portable digest (the day's dispatch, the
-// per-source waiting rows, the render-queue pulse). The Raycast menu-bar command
-// reads the very same `--json` output.
-
 import {
   type AttentionQueue,
   type AttentionResponse,
@@ -11,14 +5,12 @@ import {
 } from "@fluncle/contracts";
 import { adminApiGet } from "../api";
 
-/** Read the attention-queue digest — the non-printing getter Raycast + the runner share. */
 export async function attentionQueueCommand(): Promise<AttentionQueue> {
   const response = await adminApiGet<AttentionResponse>("/api/v1/admin/attention");
 
   return response.attention;
 }
 
-/** The terse, deadpan source labels the CLI board tags each row with (CLI register). */
 const SOURCE_LABELS: Record<AttentionSource, string> = {
   "anchor-review": "version check",
   "artist-review": "artist links",
@@ -37,11 +29,6 @@ const SOURCE_LABELS: Record<AttentionSource, string> = {
   "tiktok-draft": "tiktok draft",
 };
 
-/**
- * Render the digest as a deadpan board (the CLI register): the day's dispatch on top,
- * then one aligned row per waiting item — a source tag and the object line — and the
- * render-queue depth last. Clean and parseable; `--json` stays the tooling contract.
- */
 export function attentionQueueLines(queue: AttentionQueue): string[] {
   const lines = [queue.brief];
 

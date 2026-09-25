@@ -1,9 +1,3 @@
-// Fluncle Studio — the recording admin commands (RFC recording-primitive, Design B). A
-// recording is a captured DJ set that is NOT (yet) a published mixtape: clip it without
-// minting a coordinate, then `promote` it to a full published mixtape later (reusing the
-// already-staged video, no re-upload). The CLI stays a thin HTTP client over the admin
-// oRPC ops; `recordingGet` is the non-printing resolver the clip cut reads.
-
 import {
   type RecordingDTO,
   type RecordingResponse,
@@ -18,8 +12,7 @@ export type { RecordingDTO };
 
 export type RecordingCreateOptions = {
   json?: boolean;
-  // A PLAN — a videoless recording (RFC plan→recording→mixtape §1): no video, the server
-  // mints a Galaxy-vocab handle. Mutually exclusive with --video/--title.
+
   plan?: boolean;
   recordedAt?: string;
   title?: string;
@@ -28,32 +21,29 @@ export type RecordingCreateOptions = {
 
 export type RecordingListOptions = {
   json?: boolean;
-  // Narrow to plans (videoless) or takes (with video). RFC plan→recording→mixtape §7.
+
   kind?: string;
-  // The plan whose takes to list.
+
   parentId?: string;
 };
 
 export type RecordingUpdateOptions = {
   json?: boolean;
-  // Attach this take to its plan (a recording id) — assigns the take's version.
+
   parentId?: string;
   recordedAt?: string;
   title?: string;
-  // A JSON file holding the whole cue tracklist array (`[{ id?, artists, title, startMs? }]`).
+
   tracklistFile?: string;
 };
 
 export type RecordingReplaceCuesOptions = {
-  // A JSON file holding the ordered cue array
-  // (`[{ findingId?, artistsText, titleText, position, startMs? }]`).
   cuesFile?: string;
   json?: boolean;
 };
 
 type JsonOptions = { json?: boolean };
 
-/** Resolve one recording by id — the non-printing getter the clip cut reads. */
 export async function recordingGet(id: string): Promise<RecordingDTO> {
   const response = await adminApiGet<RecordingResponse>(
     `/api/v1/admin/recordings/${encodeURIComponent(id)}`,
@@ -63,7 +53,6 @@ export async function recordingGet(id: string): Promise<RecordingDTO> {
 }
 
 function formatRecordingSummary(recording: RecordingDTO): string {
-  // A PLAN has no video; a TAKE has one (and a version label among its plan's takes).
   const kind = recording.hasVideo ? `take v${recording.version}` : "plan";
   const promoted = recording.logId ? ` → fluncle://${recording.logId}` : " (un-promoted)";
   const cues = recording.tracklist.length;
@@ -114,8 +103,7 @@ export async function recordingGetCommand(
   }
 
   console.log(formatRecordingSummary(recording));
-  // A PLAN (no video yet) owns no key — print the honest absence.
-  // voice-lint-allow: the `—` NULL-CELL glyph, explicitly blessed by the 2026-07-18 `audit/20260717-voice` ledger row
+
   console.log(`  r2Key: ${recording.r2Key ?? "— (no set video)"}`);
 
   for (const cue of recording.tracklist) {
@@ -125,8 +113,6 @@ export async function recordingGetCommand(
 }
 
 export async function recordingCreateCommand(options: RecordingCreateOptions = {}): Promise<void> {
-  // A PLAN is a videoless recording: no --video, no --title — the server mints the
-  // Galaxy-vocab handle. RFC plan→recording→mixtape §1.
   if (options.plan) {
     const created = await adminApiPost<RecordingResponse>("/api/v1/admin/recordings", {
       kind: "plan",
@@ -206,7 +192,6 @@ export async function recordingUpdateCommand(
     body.recordedAt = options.recordedAt;
   }
 
-  // Attach this take to its plan — the server assigns the take's version atomically.
   if (options.parentId !== undefined) {
     body.parentId = options.parentId;
   }

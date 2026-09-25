@@ -6,15 +6,6 @@ export { DUE_WORK_REKEY_LIMIT_MAX, PROJECTION_STEP_LIMIT_MAX };
 export const PROJECTION_MAX_STEPS = 100;
 export const DUE_WORK_REKEY_MAX_PAGES = 200;
 
-/**
- * Bounds on `--wall-ms`, the wall budget an advance invocation may spend issuing steps.
- *
- * A step is one HTTP round trip, so a step count is a poor proxy for how long an invocation runs:
- * the same ceiling costs a second against a warm database and minutes against a loaded one. A
- * caller that must return inside a deadline of its own — the box maintenance sweep runs each family
- * under a child-process deadline — states that deadline here instead of guessing a step count from
- * an assumed per-step cost. The step ceiling stays the hard cap on requests issued.
- */
 export const PROJECTION_WALL_MS_MIN = 1_000;
 export const PROJECTION_WALL_MS_MAX = 600_000;
 
@@ -86,7 +77,7 @@ export type ProjectionStepResponse = {
   complete: boolean;
   ok: true;
   processed: number;
-  /** Due-work repair only: the stale-definition rebuild walk this step drove. */
+
   rebuildRowsWalked?: number;
   rebuildStaleFamilies?: number;
   scheduled: number;
@@ -95,11 +86,7 @@ export type ProjectionStepResponse = {
 };
 type ProjectionAdvanceSummary = Omit<ProjectionStepResponse, "status"> & {
   steps: number;
-  /**
-   * Whether the wall budget, rather than completion or the step ceiling, ended the step sequence.
-   * It is the difference between "this family is drained" and "this family has more to drain", so
-   * an automated caller can report an honest incomplete result instead of an error.
-   */
+
   wallStopped: boolean;
 };
 export type ProjectionAdvanceResponse = ProjectionAdvanceSummary & {
@@ -146,9 +133,7 @@ export async function advanceProjectionCommand(
   }
   const stepBody =
     maxSteps > 1 || !includeTerminalStatus ? { ...body, includeStatus: false } : body;
-  // The first step always runs, whatever the budget: an invocation that issued no request at all
-  // would report a step sequence it never attempted, and its caller would read zero progress as a
-  // drained family. The budget bounds what FOLLOWS a step, never a step already in flight.
+
   const startedAt = now();
   let response = await adminApiPost<ProjectionStepResponse>(
     `/api/v1/admin/projections/${target}/advance`,
@@ -175,7 +160,6 @@ export async function advanceProjectionCommand(
     rebuildRowsWalked += response.rebuildRowsWalked ?? 0;
   }
 
-  // The walk total is the sum across steps; the stale-family count is the terminal reading.
   const rebuild =
     response.rebuildStaleFamilies === undefined
       ? {}
@@ -214,10 +198,6 @@ export type DueWorkRekeyPageResponse = {
 
 export type DueWorkRekeyResponse = DueWorkRekeyPageResponse & { pages: number };
 
-/**
- * Walk one queue's re-key pages. Each page is a durable server-side act keyed by the cursor it
- * returns, so an interrupted run resumes by passing the last reported cursor back in.
- */
 export async function rekeyDueWorkQueueCommand(input: {
   apply: boolean;
   cursor: null | string;
@@ -236,8 +216,6 @@ export async function rekeyDueWorkQueueCommand(input: {
   let matched = response.matched;
   cursor = response.cursor;
 
-  // A dry run reports the first page and stops: walking further would only restate the same
-  // bounded remaining count without changing anything.
   while (apply && response.hasMore && response.cursor !== null && pages < maxPages) {
     response = await adminApiPost<DueWorkRekeyPageResponse>(
       `/api/v1/admin/projections/due-work/${encodeURIComponent(workKind)}/rekey`,

@@ -1,12 +1,3 @@
-// Unit tests for the pure helpers in triage-sweep.ts — the box-script sweep is
-// self-contained (it can't import the workspace) and lives outside any package's test
-// runner, so this file uses `bun:test` and is run directly:
-//
-//   bun test docs/agents/hermes/scripts/triage-sweep.test.ts
-//
-// `main()` is guarded behind `import.meta.main` in the sweep, so importing it here is
-// side-effect free (no fluncle spawn, no claude, no network). Keep this green when
-// touching the dedupe/plausibility heuristic or the verdict prompt.
 import { describe, expect, test } from "bun:test";
 
 import {
@@ -97,7 +88,7 @@ describe("buildTriagePrompt", () => {
     expect(prompt).toContain("Mr Right On");
     expect(prompt).toContain("ALREADY LOGGED");
     expect(prompt).toContain("copywriting-fluncle");
-    // The three-verdict register is named for the model.
+
     expect(prompt).toContain("already logged");
     expect(prompt).toContain("not our lane");
   });

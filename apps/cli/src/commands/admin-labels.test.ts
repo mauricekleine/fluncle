@@ -108,7 +108,7 @@ describe("mintLabelCommand", () => {
         path: "/api/v1/admin/labels",
       },
     ]);
-    // The op is keyed by the MusicBrainz identity, so there is no Fluncle id to resolve first.
+
     expect(gets).toEqual([]);
     expect(ruled.outcome).toBe("minted");
   });
@@ -116,8 +116,6 @@ describe("mintLabelCommand", () => {
   test("passes the take-over slug straight through, normalized, and omits it otherwise", async () => {
     await mintLabelCommand("4cbb2ba1-4e0a-4a6e-8f3d-5e17a4c0a1f2", undefined, "  Med-School ");
 
-    // The SERVER decides whether that row is the one the mint collided with and whether it may
-    // give up its identity, so the CLI resolves nothing and spends no seed-set read.
     expect(posts).toEqual([
       {
         body: {

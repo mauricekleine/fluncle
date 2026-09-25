@@ -11,20 +11,12 @@ import {
   clipCutFilterComplex,
 } from "./clips";
 
-// Synthetic cue sheet: three tracks at 0 / 60s / 120s in a 180s set. `resolveClipTracks`
-// keys off `startMs` only, so the other MixtapeMember fields are omitted here. It is a pure
-// `@fluncle/contracts/util` helper (still used by the recording cue rail); the clip cut no
-// longer consumes it, but the coverage lives here alongside its historical home.
 const CUED_MEMBERS: ClipTrackInput[] = [
   { artists: ["Alpha"], startMs: 0, title: "First" },
   { artists: ["Beta", "Gamma"], startMs: 60_000, title: "Second" },
   { artists: ["Delta"], startMs: 120_000, title: "Third" },
 ];
 const SET_DURATION_MS = 180_000;
-
-// CI has NO ffmpeg, so every test here exercises the PURE logic only — the crop filtergraph
-// and the ffmpeg arg SHAPE (a string array, never invoked). The cut
-// command's actual shell-out lives behind an `assertFfmpeg` probe and is never reached here.
 
 describe("clipCutFilterComplex — the overlay-free crop", () => {
   test("crops 16:9 → 9:16 at the xOffset, scales to 1080×1920, fixes SAR, maps [out]", () => {
@@ -43,7 +35,6 @@ describe("clipCutFilterComplex — the overlay-free crop", () => {
   test("bakes NO text overlay — no drawtext, fonts, halo, or caption box", () => {
     const filter = clipCutFilterComplex({ xOffset: 240 });
 
-    // The clip ships clean; captions go on Instagram / TikTok, not into the pixels.
     expect(filter).not.toContain("drawtext");
     expect(filter).not.toContain("fontfile");
     expect(filter).not.toContain("gblur");
@@ -82,11 +73,11 @@ describe("clipCutFfmpegArgs", () => {
 
   test("carries the crop as a -filter_complex, mapping [out] + optional audio", () => {
     expect(flagValue("-filter_complex")).toBe(clipCutFilterComplex({ xOffset: 240 }));
-    // The graph's video pad and the source audio are mapped explicitly.
+
     const mapIndex = args.indexOf("-map");
     expect(args[mapIndex + 1]).toBe("[out]");
     expect(args).toContain("0:a?");
-    // No simple -vf when a filter_complex is in play.
+
     expect(args).not.toContain("-vf");
   });
 
@@ -101,9 +92,6 @@ describe("clipCutFfmpegArgs", () => {
   });
 });
 
-// `resolveClipTracks` / `trackLabel` are pure `@fluncle/contracts/util` helpers, still used
-// by the recording cue rail (they no longer feed the clip cut, which ships overlay-free).
-// Their coverage stays here alongside the clip module they were introduced with.
 describe("trackLabel", () => {
   test("joins Artist — Title with the sanctioned em dash", () => {
     expect(trackLabel(["Alix Perez"], "Forsaken")).toBe("Alix Perez — Forsaken");
@@ -154,7 +142,6 @@ describe("resolveClipTracks", () => {
   });
 
   test("before-first — a window before the first cue clamps to the first track", () => {
-    // A set whose first cue is at 5s; a window at [1s, 3s) resolves to that first track.
     const members: ClipTrackInput[] = [
       { artists: ["Alpha"], startMs: 5_000, title: "First" },
       { artists: ["Beta"], startMs: 60_000, title: "Second" },

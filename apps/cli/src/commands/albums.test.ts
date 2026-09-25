@@ -2,9 +2,6 @@ import { beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 
 import * as realApi from "../api";
 
-// The `albums` command is a thin HTTP client over `list_albums` / `get_album`,
-// sharing the entity-index rendering with `artists`. These tests cover the
-// album-specific bits: the request paths and the release date on the dossier.
 let apiResponse: unknown = {};
 let lastPath = "";
 

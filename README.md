@@ -92,6 +92,8 @@ The public CLI defaults to `https://www.fluncle.com` and the `production` profil
 
 ## CLI
 
+The CLI keeps listener sessions in a per-profile `user.<profile>.json` file, separate from the operator token in `.env.<profile>`. User requests read only the listener token; admin requests read only `FLUNCLE_API_TOKEN`. The listener token file is chmodded to `0600` on every write because a create-time mode does not tighten an existing file. Tests skip the operator profile when `NODE_ENV=test`, and subprocess tests use a loopback API, so a local test cannot issue an admin command against production. Bodyless admin POSTs omit `Content-Type: application/json`: oRPC rejects an empty body advertised as JSON. Multipart requests let `fetch` set the boundary-bearing content type. The CLI writes piped output synchronously so a large JSON response cannot be cut off when Bun exits.
+
 Install the latest standalone CLI release:
 
 ```bash
