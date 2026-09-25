@@ -103,7 +103,7 @@ export async function resolveLabelPageData(
     return { status: "missing" };
   }
 
-  if (catalogue.totalTracks === 0 && findings.length === 0 && upcoming.total === 0) {
+  if (label.renderableTrackCount === 0) {
     return { status: "missing" };
   }
 

@@ -47,7 +47,7 @@ export async function resolveAlbumPageData(slug: string): Promise<AlbumPageData>
     getLabelForAlbum(album.id),
   ]);
 
-  if (findings.length === 0 && catalogue.total === 0) {
+  if (album.renderableTrackCount === 0) {
     return { status: "missing" };
   }
 
@@ -60,7 +60,7 @@ export async function resolveAlbumPageData(slug: string): Promise<AlbumPageData>
     coverImageUrl: findings[0]?.albumImageUrl,
     findings,
 
-    indexable: findings.length + catalogue.total >= ALBUM_INDEX_MIN_TRACKS,
+    indexable: album.renderableTrackCount >= ALBUM_INDEX_MIN_TRACKS,
     label,
     name: album.name,
 

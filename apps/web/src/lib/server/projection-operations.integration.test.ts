@@ -1,4 +1,5 @@
 import { createClient, type Client, type InStatement } from "@libsql/client";
+import { ProjectionStatusSchema } from "@fluncle/contracts/orpc";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { LOCAL_DB_CONCURRENCY } from "../database-concurrency";
@@ -254,6 +255,41 @@ describe("projection production operations", () => {
   });
 
   afterEach(() => db.close());
+
+  it("restarts a complete aggregate generation when its duration marker is missing and lands the key in bounded steps", async () => {
+    await db.execute({
+      args: [PUBLIC_AGGREGATE_DURATION_GENERATION_KEY],
+      sql: "delete from settings where key = ?",
+    });
+    const initialStatus = ProjectionStatusSchema.parse(await getProjectionStatusFor(db));
+    expect(initialStatus.projections.publicAggregates.durationGenerationReady).toBe(false);
+
+    for (let step = 0; step < 30; step++) {
+      await advanceProjectionFor(db, {
+        action: "repair",
+        includeStatus: false,
+        limit: 1,
+        target: "public_aggregates",
+      });
+      if ((await getProjectionStatusFor(db)).projections.publicAggregates.durationGenerationReady) {
+        const marker = await db.execute({
+          args: [PUBLIC_AGGREGATE_DURATION_GENERATION_KEY],
+          sql: "select value from settings where key = ?",
+        });
+        const state = await db.execute(
+          "select generation, completed_at from public_aggregate_state where scope = 'tracks'",
+        );
+        const generation = state.rows[0]?.generation;
+        const completedAt = state.rows[0]?.completed_at;
+        if (typeof generation !== "string" || typeof completedAt !== "string") {
+          throw new Error("aggregate rebuild did not complete");
+        }
+        expect(marker.rows[0]?.value).toBe(`${generation}:${completedAt}`);
+        return;
+      }
+    }
+    throw new Error("aggregate duration generation did not land within 30 bounded steps");
+  });
 
   it("reports dark readiness and opens only fixed setting keys", async () => {
     const before = await getProjectionStatusFor(db);
@@ -1602,6 +1638,10 @@ describe("projection production operations", () => {
       set generation = 'maintenance', release_hub_order_epoch = 1,
           source_epoch = 1, aggregate_epoch = 1
       where scope = 'tracks'`);
+    await db.execute({
+      args: [`maintenance:2026-01-01`, PUBLIC_AGGREGATE_DURATION_GENERATION_KEY],
+      sql: "update settings set value = ? where key = ?",
+    });
 
     let complete = false;
     let totalProcessed = 0;
@@ -2090,6 +2130,10 @@ describe("projection production operations", () => {
       set default_track_total = 250, projected_entry_count = 250,
           generation = 'same-generation', release_hub_order_epoch = 1
       where scope = 'tracks'`);
+    await db.execute({
+      args: [`same-generation:2026-01-01`, PUBLIC_AGGREGATE_DURATION_GENERATION_KEY],
+      sql: "update settings set value = ? where key = ?",
+    });
 
     let complete = false;
     for (let step = 0; step < 10 && !complete; step += 1) {

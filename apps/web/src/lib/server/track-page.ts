@@ -210,14 +210,14 @@ export async function readTrackDestination(trackId: string): Promise<TrackPageRo
     return { kind: "certified", logId: row.log_id };
   }
 
-  if (!publicTrackDurationOk(row.duration_ms, false)) {
-    return { kind: "missing" };
-  }
-
   if (row.duplicate_of_track_id) {
     return row.principal_log_id
       ? { kind: "certified", logId: row.principal_log_id }
       : { kind: "duplicate", principalTrackId: row.duplicate_of_track_id };
+  }
+
+  if (!publicTrackDurationOk(row.duration_ms, false)) {
+    return { kind: "missing" };
   }
 
   const artistNames = parseArtistsJson(row.artists_json);

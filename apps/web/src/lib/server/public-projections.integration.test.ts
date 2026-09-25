@@ -322,7 +322,7 @@ describe("public shadow projections", () => {
     ).toBeUndefined();
   });
 
-  it("does not qualify an artist from long catalogue credits", async () => {
+  it("keeps long catalogue credits in artist qualification for ranking", async () => {
     await seedLabel("enabled", true);
     await seedArtist("long-only");
     for (const trackId of ["long-1", "long-2", "long-3"]) {
@@ -341,13 +341,13 @@ describe("public shadow projections", () => {
     await rebuildAll();
     await setCutover("true");
 
-    expect(await readQualifiedArtistIds(db, QUALIFIED_ARTISTS_SQL)).toEqual([]);
+    expect(await readQualifiedArtistIds(db, QUALIFIED_ARTISTS_SQL)).toEqual(["long-only"]);
     expect(
       (
         await db.execute(`select * from artist_qualification
       where artist_id = 'long-only'`)
       ).rows,
-    ).toHaveLength(0);
+    ).toHaveLength(1);
   });
 
   it("seeks projected hub pages through composite ranges, including the NULL transition", async () => {

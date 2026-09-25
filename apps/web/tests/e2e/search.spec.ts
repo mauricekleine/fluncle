@@ -351,7 +351,7 @@ test("the empty states name what happened and offer a way back", async ({ page }
   await page.goto(`/search?q=${NO_MATCH_TOKEN}`, { waitUntil: "networkidle" });
   await expect(page.getByText(`Nothing out here for “${NO_MATCH_TOKEN}”.`)).toBeVisible();
 
-  const wayBack = page.getByRole("link", { name: "dig through my tracks" });
+  const wayBack = page.getByRole("link", { name: "dig through every track I hold" });
   await expect(wayBack).toBeVisible();
 
   await expect(page.locator(".search-page-examples a")).toHaveCount(4);

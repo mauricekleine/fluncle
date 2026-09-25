@@ -16,8 +16,6 @@ export const PUBLIC_PROJECTION_CUTOVER_ENABLED_KEY = "public_projection_cutover_
 
 export const PUBLIC_AGGREGATE_DURATION_GENERATION_KEY = "public_aggregate_duration_generation";
 
-export const PUBLIC_ARTIST_DURATION_GENERATION_KEY = "public_artist_duration_generation";
-
 export const PUBLIC_ANCHOR_FORMAT_VERSION = 1;
 
 export const PUBLIC_ANCHOR_ORDER_CHANGE_PREFIX = "projection_public_anchor_order_change_v1:";
@@ -202,9 +200,6 @@ async function isAggregateDurationReady(client: PublicProjectionReadClient): Pro
 const ARTIST_READY = `artist_state.state = 'complete'
   and artist_state.projection_epoch = artist_state.source_epoch
   and artist_state.source_digest = artist_state.projected_digest
-  and exists (select 1 from settings visibility
-    where visibility.key = '${PUBLIC_ARTIST_DURATION_GENERATION_KEY}'
-      and visibility.value = artist_state.generation || ':' || artist_state.completed_at)
   and not exists (
     select 1 from projection_repairs indexed by projection_repairs_order_idx
     where projection = 'artist_qualification'

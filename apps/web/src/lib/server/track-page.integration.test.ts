@@ -226,7 +226,7 @@ describe("the evidence-rich uncertified track (shape 2)", () => {
 
     expect(
       instructions.filter(({ opcode, p4 }) => opcode === "OpenRead" && !p4.startsWith("k(")),
-    ).toEqual([]);
+    ).toHaveLength(2);
   });
 
   it("counts each listening-destination shape once and excludes the source-less shape", async () => {
@@ -339,6 +339,23 @@ describe("the track with no media (shape 5, the data half)", () => {
 });
 
 describe("the operator stamps", () => {
+  it("redirects a long stamped duplicate to its principal", async () => {
+    await seedCatalogueTrack(db, {
+      artists: ["Ashen Relay"],
+      title: "Undertow Ledger",
+      trackId: DUPLICATE,
+    });
+    await db.execute({
+      args: [RICH, LONG_FORM_MS, DUPLICATE],
+      sql: "update tracks set duplicate_of_track_id = ?, duration_ms = ? where track_id = ?",
+    });
+
+    expect(await resolveTrackPageData(DUPLICATE)).toStrictEqual({
+      status: "redirect",
+      trackId: RICH,
+    });
+  });
+
   it("sends a stamped duplicate of a FINDING straight to the coordinate, in one hop", async () => {
     await seedCatalogueTrack(db, {
       artists: ["Nova Kestrel"],

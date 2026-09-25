@@ -40,7 +40,7 @@ const STATUS = {
   projections: {
     artistQualification: family,
     crawlDueWork: family,
-    publicAggregates: { ...family, anchorsReady: true },
+    publicAggregates: { ...family, anchorsReady: true, durationGenerationReady: true },
     trackDueWork: family,
   },
   readyToOpen: { crawlDueWork: true, publicProjections: true, trackDueWork: true },
@@ -66,6 +66,10 @@ describe("projection agent authorization", () => {
     const response = await handleOrpc(req("/admin/projections/status", "GET", AGENT_TOKEN));
 
     expect(response?.status).toBe(200);
+    expect(await response?.json()).toHaveProperty(
+      "status.projections.publicAggregates.durationGenerationReady",
+      true,
+    );
     expect(getProjectionStatusFor).toHaveBeenCalledOnce();
   });
 

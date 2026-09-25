@@ -13,7 +13,6 @@ import {
 } from "./hub-page-anchors";
 import {
   PUBLIC_AGGREGATE_DURATION_GENERATION_KEY,
-  PUBLIC_ARTIST_DURATION_GENERATION_KEY,
   ANCHOR_LEAF_META_VALID_SQL,
   parseAnchorDocument,
   PUBLIC_ANCHOR_FORMAT_VERSION,
@@ -771,7 +770,7 @@ async function readTrackArtistContributions(
       join tracks t on t.track_id = ta.track_id
       left join findings f on f.track_id = ta.track_id
       left join labels l on l.id = t.label_id
-      where ta.track_id = ? and ${publicTrackDurationWhere("t", "f")}
+      where ta.track_id = ?
       order by ta.artist_id`,
   });
   return (
@@ -854,7 +853,6 @@ async function readArtistProjectionPage(
         join tracks t on t.track_id = ta.track_id
         left join findings f on f.track_id = ta.track_id
         left join labels l on l.id = t.label_id
-        where ${publicTrackDurationWhere("t", "f")}
         order by ta.track_id, ta.artist_id`,
     }),
     client.execute({
@@ -1168,7 +1166,7 @@ async function repairArtistQualificationById(
       join tracks t on t.track_id = ta.track_id
       left join findings f on f.track_id = ta.track_id
       left join labels l on l.id = t.label_id
-      where ta.artist_id = ? and ${publicTrackDurationWhere("t", "f")}`,
+      where ta.artist_id = ?`,
   });
   const row = totals.rows[0] as { certified?: number; half_units?: number } | undefined;
   const certified = Number(row?.certified ?? 0);
@@ -1776,7 +1774,6 @@ async function artistDigests(client: PublicProjectionClient): Promise<{
         join tracks t on t.track_id = ta.track_id
         left join findings f on f.track_id = ta.track_id
         left join labels l on l.id = t.label_id
-        where ${publicTrackDurationWhere("t", "f")}
         order by ta.track_id, ta.artist_id`),
       client.execute(`select track_id, artist_id, certified_contribution,
           enabled_credit_half_units from artist_qualification_contributions
@@ -1790,7 +1787,6 @@ async function artistDigests(client: PublicProjectionClient): Promise<{
         join tracks t on t.track_id = ta.track_id
         left join findings f on f.track_id = ta.track_id
         left join labels l on l.id = t.label_id
-        where ${publicTrackDurationWhere("t", "f")}
         group by ta.artist_id
         order by ta.artist_id`),
       client.execute(`select artist_id, certified_finding_count, enabled_credit_half_units,
@@ -2319,7 +2315,6 @@ async function readRemainingPublicProjectionAuditChunk(
           from track_artists ta join tracks t on t.track_id = ta.track_id
           left join findings f on f.track_id = ta.track_id left join labels l on l.id = t.label_id
           where (ta.track_id, ta.artist_id) > (?, ?)
-            and ${publicTrackDurationWhere("t", "f")}
           order by ta.track_id, ta.artist_id limit ?`
         : `select track_id, artist_id, certified_contribution, enabled_credit_half_units
           from artist_qualification_contributions where (track_id, artist_id) > (?, ?)
@@ -2356,7 +2351,6 @@ async function readRemainingPublicProjectionAuditChunk(
             as enabled_credit_half_units
         from page left join track_artists ta on ta.artist_id = page.id
         left join tracks t on t.track_id = ta.track_id
-          and ${publicTrackDurationWhere("t")}
         left join findings f on f.track_id = t.track_id
         left join labels l on l.id = t.label_id group by page.id order by page.id`
       : `select artist_id, certified_finding_count, enabled_credit_half_units, is_qualified
@@ -2499,13 +2493,6 @@ async function finishArtistRebuild(
           projection_epoch = rebuild_start_epoch
       where scope = 'artists' and generation = ? and state = 'running'`,
   });
-  if (digests.sourceDigest === digests.projectedDigest) {
-    await client.execute({
-      args: [PUBLIC_ARTIST_DURATION_GENERATION_KEY, `${checkpoint.generation}:${now}`],
-      sql: `insert into settings (key, value) values (?, ?)
-        on conflict(key) do update set value = excluded.value`,
-    });
-  }
 }
 
 function projectionWriteSubpages(trackIds: readonly string[]): string[][] {
@@ -2729,13 +2716,6 @@ async function finishBoundedPublicProjectionCleanup(
           source_digest = ?, projected_digest = ?, projection_epoch = rebuild_start_epoch
       where scope = 'artists' and generation = ? and state = 'running' and cursor is ?`,
   });
-  if (completion.sourceDigest === completion.projectedDigest) {
-    await client.execute({
-      args: [PUBLIC_ARTIST_DURATION_GENERATION_KEY, `${checkpoint.generation}:${now}`],
-      sql: `insert into settings (key, value) values (?, ?)
-        on conflict(key) do update set value = excluded.value`,
-    });
-  }
 }
 
 async function runPublicProjectionRebuildChunkWithOptions(
@@ -3280,7 +3260,6 @@ async function auditPublicProjectionState(
           as enabled_credit_half_units
       from track_artists ta join tracks t on t.track_id = ta.track_id
       left join findings f on f.track_id = ta.track_id left join labels l on l.id = t.label_id
-      where ${publicTrackDurationWhere("t", "f")}
       order by ta.track_id, ta.artist_id`);
     const projected = await client.execute(`select track_id, artist_id, certified_contribution,
         enabled_credit_half_units from artist_qualification_contributions
@@ -3321,7 +3300,6 @@ async function auditPublicProjectionState(
             then case when ta.role = 'remixer' then 1 else 2 end else 0 end), 0) as half_units
         from track_artists ta join tracks t on t.track_id = ta.track_id
         left join findings f on f.track_id = ta.track_id left join labels l on l.id = t.label_id
-        where ${publicTrackDurationWhere("t", "f")}
         group by ta.artist_id order by ta.artist_id`);
       const projectedArtists = await client.execute(`select artist_id,
           certified_finding_count as certified, enabled_credit_half_units as half_units

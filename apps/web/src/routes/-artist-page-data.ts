@@ -101,7 +101,7 @@ export async function resolveArtistPageData(
     return { status: "missing" };
   }
 
-  if (catalogue.totalTracks === 0 && findings.length === 0 && upcoming.total === 0) {
+  if (artist.renderableTrackCount === 0 && findings.length === 0) {
     return { status: "missing" };
   }
 

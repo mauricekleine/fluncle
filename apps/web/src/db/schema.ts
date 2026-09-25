@@ -14,7 +14,7 @@ import {
   TRACK_PAGE_INDEXABLE_COVER_COUNT_INDEX,
   TRACK_PAGE_INDEXABLE_LEGACY_COUNT_INDEX,
   trackPageIndexableCoverIndexWhere,
-  trackPageIndexableWhere,
+  trackPageIndexableIndexWhere,
 } from "./track-page-indexability";
 
 const float32Vector = customType<{ data: Uint8Array; driverData: Uint8Array }>({
@@ -240,7 +240,7 @@ export const tracks = sqliteTable(
 
     index(TRACK_PAGE_INDEXABLE_LEGACY_COUNT_INDEX)
       .on(table.trackId)
-      .where(sql.raw(trackPageIndexableWhere())),
+      .where(sql.raw(trackPageIndexableIndexWhere())),
 
     index(TRACK_PAGE_INDEXABLE_COVER_COUNT_INDEX)
       .on(
@@ -253,7 +253,6 @@ export const tracks = sqliteTable(
         table.albumImageUrl,
         table.title,
         table.artistsJson,
-        table.durationMs,
       )
       .where(sql.raw(trackPageIndexableCoverIndexWhere())),
 

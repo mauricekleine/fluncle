@@ -43,6 +43,7 @@ import {
   ANCHOR_SHARD_RANGE_SQL,
   isCurrentProjectedTrackHubAnchorDocumentUsable,
   PUBLIC_PROJECTION_CUTOVER_ENABLED_KEY,
+  PUBLIC_AGGREGATE_DURATION_GENERATION_KEY,
 } from "./public-projection-cutover";
 import {
   amendPublicAnchorDocument,
@@ -108,7 +109,7 @@ export type ProjectionStatus = {
   projections: {
     artistQualification: FamilyStatus;
     crawlDueWork: FamilyStatus;
-    publicAggregates: FamilyStatus & { anchorsReady: boolean };
+    publicAggregates: FamilyStatus & { anchorsReady: boolean; durationGenerationReady: boolean };
     trackDueWork: FamilyStatus & { catalogueRankMarkerAgeMs: number | null };
   };
   readyToOpen: {
@@ -546,8 +547,9 @@ export async function getProjectionStatusFor(client: ProjectionClient): Promise<
         PUBLIC_PROJECTION_CUTOVER_ENABLED_KEY,
         TRACK_DUE_AUDIT_FENCE_KEY,
         TRACK_WORK_DUE_CUTOVER_ENABLED_KEY,
+        PUBLIC_AGGREGATE_DURATION_GENERATION_KEY,
       ],
-      sql: `select key, value from settings where key in (?, ?, ?, ?, ?)`,
+      sql: `select key, value from settings where key in (?, ?, ?, ?, ?, ?)`,
     },
     {
       args: [PROJECTION_STATUS_COUNT_LIMIT + 1],
@@ -624,7 +626,7 @@ export async function getProjectionStatusFor(client: ProjectionClient): Promise<
       args: [],
       sql: `select state, scanned_count, projected_entry_count as projected_count,
         source_digest, projected_digest, source_epoch, aggregate_epoch, generation,
-        release_hub_order_epoch
+        release_hub_order_epoch, completed_at
         from public_aggregate_state where scope = 'tracks'`,
     },
     {
@@ -677,8 +679,20 @@ export async function getProjectionStatusFor(client: ProjectionClient): Promise<
     aggregateAudit,
   );
   const anchorProof = await anchorsReady(client);
-  const publicAggregates = { ...aggregates, anchorsReady: anchorProof };
-  publicAggregates.ready = publicAggregates.ready && anchorProof;
+  const aggregateState = results[14]?.rows[0];
+  const aggregateGeneration = aggregateState?.generation;
+  const aggregateCompletedAt = aggregateState?.completed_at;
+  const durationGenerationReady =
+    aggregateState?.state === "complete" &&
+    typeof aggregateGeneration === "string" &&
+    typeof aggregateCompletedAt === "string" &&
+    settingRows.some(
+      (row) =>
+        row.key === PUBLIC_AGGREGATE_DURATION_GENERATION_KEY &&
+        row.value === `${aggregateGeneration}:${aggregateCompletedAt}`,
+    );
+  const publicAggregates = { ...aggregates, anchorsReady: anchorProof, durationGenerationReady };
+  publicAggregates.ready = publicAggregates.ready && anchorProof && durationGenerationReady;
   const artistRepairRows = results[11]?.rows ?? [];
   const artistRepairs = boundedCount(artistRepairRows);
   const artistQualification = publicFamily(
@@ -2007,6 +2021,119 @@ async function advanceAuditProjection(
   };
 }
 
+async function advancePublicProjectionFor(
+  client: ProjectionClient,
+  input: ProjectionAdvanceInput,
+  includeStatus: boolean,
+  previousAudit: ProjectionAuditEvidence | undefined,
+): Promise<ProjectionAdvanceOutcome & { status: ProjectionStatus | undefined }> {
+  let outcome: ProjectionAdvanceOutcome;
+  const projection = input.target as PublicProjectionName;
+  if (input.action === "rebuild") {
+    const aggregateGeneration =
+      projection === "public_aggregates"
+        ? await readAggregateDurationGeneration(client)
+        : undefined;
+    const durationRestart =
+      aggregateGeneration?.state === "complete" && !aggregateGeneration.markerReady;
+    const result = await runPublicProjectionRebuildChunk(client, projection, {
+      boundedCleanup: true,
+      limit: input.limit,
+      newGeneration: previousAudit?.complete === true || durationRestart,
+    });
+    if (projection === "public_aggregates" && result.complete && result.scanned === 0) {
+      const anchors = await advancePublicAnchors(client, Math.min(input.limit, 100));
+      outcome = {
+        complete: anchors.complete,
+        processed: anchors.processed,
+        scheduled: 0,
+      };
+    } else {
+      outcome = {
+        complete: projection === "public_aggregates" ? false : result.complete,
+        processed: result.scanned,
+        scheduled: 0,
+      };
+    }
+  } else {
+    if (projection === "public_aggregates") {
+      const generation = await readAggregateDurationGeneration(client);
+      const rebuildNeeded =
+        generation.marker === null ||
+        (generation.state === "running" && !generation.markerReady) ||
+        (generation.state === "complete" &&
+          !generation.markerReady &&
+          (await anchorsReady(client)));
+      if (rebuildNeeded) {
+        const rebuilt = await runPublicProjectionRebuildChunk(client, projection, {
+          boundedCleanup: true,
+          limit: input.limit,
+          newGeneration: generation.state === "complete",
+        });
+        return {
+          complete: false,
+          processed: rebuilt.scanned,
+          scheduled: 0,
+          status: includeStatus ? await getProjectionStatusFor(client) : undefined,
+        };
+      }
+    }
+    const repair = await repairPublicProjectionChunk(client, {
+      limit: input.limit,
+      projection,
+    });
+    const remainingDebt = await hasPublicProjectionRepairDebt(client, projection);
+    const repairProcessed = repair.fanout + repair.repaired;
+    const anchors =
+      projection === "public_aggregates" && !remainingDebt
+        ? await advancePublicAnchors(client, Math.min(input.limit, 100))
+        : { complete: projection !== "public_aggregates", processed: 0 };
+    const epochMatched = !remainingDebt && (await publicProjectionEpochMatched(client, projection));
+    const status = includeStatus ? await getProjectionStatusFor(client) : undefined;
+    const complete =
+      !remainingDebt &&
+      epochMatched &&
+      (projection !== "public_aggregates" ||
+        (anchors.complete &&
+          (status === undefined || status.projections.publicAggregates.anchorsReady)));
+    const response = {
+      complete,
+      processed: repairProcessed + anchors.processed,
+      scheduled: repair.fanout,
+    };
+    return { ...response, status };
+  }
+  return {
+    ...outcome,
+    status: includeStatus ? await getProjectionStatusFor(client) : undefined,
+  };
+}
+
+async function readAggregateDurationGeneration(client: ProjectionClient): Promise<{
+  marker: null | string;
+  markerReady: boolean;
+  state: null | string;
+}> {
+  const result = await client.execute({
+    args: [PUBLIC_AGGREGATE_DURATION_GENERATION_KEY],
+    sql: `select aggregate.state, aggregate.generation, aggregate.completed_at,
+                 visibility.value as marker
+              from public_aggregate_state aggregate
+              left join settings visibility on visibility.key = ?
+              where aggregate.scope = 'tracks' limit 1`,
+  });
+  const row = result.rows[0];
+  const marker = typeof row?.marker === "string" ? row.marker : null;
+  return {
+    marker,
+    markerReady:
+      typeof row?.generation === "string" &&
+      typeof row.completed_at === "string" &&
+      marker === `${row.generation}:${row.completed_at}`,
+    state: typeof row?.state === "string" ? row.state : null,
+  };
+}
+
 export function advanceProjectionFor(
   client: ProjectionClient,
   input: ProjectionAdvanceInput & { includeStatus: false },
@@ -2091,54 +2218,7 @@ export async function advanceProjectionFor(
       }
     }
   } else {
-    const projection = input.target as PublicProjectionName;
-    if (input.action === "rebuild") {
-      const result = await runPublicProjectionRebuildChunk(client, projection, {
-        boundedCleanup: true,
-        limit: input.limit,
-        newGeneration: previousAudit?.complete === true,
-      });
-      if (projection === "public_aggregates" && result.complete && result.scanned === 0) {
-        const anchors = await advancePublicAnchors(client, Math.min(input.limit, 100));
-        outcome = {
-          complete: anchors.complete,
-          processed: anchors.processed,
-          scheduled: 0,
-        };
-      } else {
-        outcome = {
-          complete: projection === "public_aggregates" ? false : result.complete,
-          processed: result.scanned,
-          scheduled: 0,
-        };
-      }
-    } else {
-      const repair = await repairPublicProjectionChunk(client, {
-        limit: input.limit,
-        projection,
-      });
-      const remainingDebt = await hasPublicProjectionRepairDebt(client, projection);
-      const repairProcessed = repair.fanout + repair.repaired;
-      const anchors =
-        projection === "public_aggregates" && !remainingDebt
-          ? await advancePublicAnchors(client, Math.min(input.limit, 100))
-          : { complete: projection !== "public_aggregates", processed: 0 };
-      const epochMatched =
-        !remainingDebt && (await publicProjectionEpochMatched(client, projection));
-      const status = includeStatus ? await getProjectionStatusFor(client) : undefined;
-      const complete =
-        !remainingDebt &&
-        epochMatched &&
-        (projection !== "public_aggregates" ||
-          (anchors.complete &&
-            (status === undefined || status.projections.publicAggregates.anchorsReady)));
-      const response = {
-        complete,
-        processed: repairProcessed + anchors.processed,
-        scheduled: repair.fanout,
-      };
-      return { ...response, status };
-    }
+    return advancePublicProjectionFor(client, input, includeStatus, previousAudit);
   }
   return {
     ...outcome,

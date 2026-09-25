@@ -52,6 +52,7 @@ export type AlbumRecord = {
   releaseDate?: string;
 
   releaseGroupMbid?: string;
+  renderableTrackCount: number;
   slug: string;
 
   upc?: string;
@@ -69,8 +70,13 @@ export function albumSlug(raw: string | null | undefined): string | undefined {
   return slug === "" ? undefined : slug;
 }
 
-function toAlbumRecord(row: AlbumRow): AlbumRecord {
-  return { id: row.id, name: row.name, slug: row.slug };
+function toAlbumRecord(row: AlbumRow & { renderable_track_count: number }): AlbumRecord {
+  return {
+    id: row.id,
+    name: row.name,
+    renderableTrackCount: Number(row.renderable_track_count),
+    slug: row.slug,
+  };
 }
 
 export async function ensureAlbum(
@@ -163,6 +169,7 @@ export async function getAlbumBySlug(slug: string): Promise<AlbumRecord | undefi
   const result = await db.execute({
     args: [slug],
     sql: `select ${ALBUM_COLUMNS}, bio, release_group_mbid, upc, discogs_catno,
+                 renderable_track_count,
                  (select min(t.release_date) from tracks t
                     where t.album_id = albums.id and t.release_date is not null
                       and ${publicTrackDurationWhere("t")}) as release_date
@@ -175,6 +182,7 @@ export async function getAlbumBySlug(slug: string): Promise<AlbumRecord | undefi
       discogs_catno: string | null;
       release_date: string | null;
       release_group_mbid: string | null;
+      renderable_track_count: number;
       upc: string | null;
     }
   >(result.rows)[0];

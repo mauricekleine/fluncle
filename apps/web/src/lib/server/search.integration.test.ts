@@ -176,6 +176,10 @@ beforeAll(async () => {
       sql: `insert into artists (id, name, slug, created_at, updated_at)
           values ('a1', 'Netsky', 'netsky', '2026-07-01', '2026-07-01')`,
     });
+    await db.execute("update artists set renderable_track_count = 1 where id = 'a1'");
+    await db.execute(
+      "insert into track_artists (track_id, artist_id, position) values ('certified-netsky', 'a1', 1), ('uncertified-netsky', 'a1', 1)",
+    );
     const checkpoint = await db.execute("pragma wal_checkpoint(TRUNCATE)");
     if (Number(checkpoint.rows[0]?.busy) !== 0) {
       throw new Error("Search fixture template WAL checkpoint is busy");
@@ -443,6 +447,7 @@ describe("aliases — an artist answers to every name", () => {
       sql: `insert into artists (id, name, slug, created_at, updated_at)
             values ('a2', 'Origin', 'origin', '2026-07-01', '2026-07-01')`,
     });
+    await db.execute("update artists set renderable_track_count = 1 where id = 'a2'");
 
     const aliasRows: [string, string, string, string, string, string][] = [
       ["aa1", "Boris Daenen", "boris-daenen", "musicbrainz", "name", "auto"],
@@ -828,6 +833,8 @@ describe("the name filters resolve to indexed ids (and fall back when they canno
   }
 
   it("seeks the artist EDGE, and returns exactly what the substring scan returned", async () => {
+    await db.execute("delete from track_artists where artist_id = 'a1'");
+    await db.execute("update artists set renderable_track_count = 0 where id = 'a1'");
     const beforeSql = await compiledSql({ artist: "Netsky" });
     const before = await searchArchive({ q: "Netsky" });
 
@@ -873,6 +880,8 @@ describe("the name filters resolve to indexed ids (and fall back when they canno
   });
 
   it("keeps the substring scan for an artist with no edges", async () => {
+    await db.execute("delete from track_artists where artist_id = 'a1'");
+    await db.execute("update artists set renderable_track_count = 0 where id = 'a1'");
     expect(await resolveFilterEntities({ artist: "Netsky" })).toEqual({});
 
     const result = await searchArchive({ q: "Netsky" });
@@ -915,6 +924,8 @@ describe("the name filters resolve to indexed ids (and fall back when they canno
   });
 
   it("holds the count guard on the AKA rank — an edgeless artist resolves no id", async () => {
+    await db.execute("delete from track_artists where artist_id = 'a1'");
+    await db.execute("update artists set renderable_track_count = 0 where id = 'a1'");
     await db.execute({
       args: [],
       sql: `insert into artist_aliases (id, artist_id, alias, alias_slug, source, kind, status, created_at)
@@ -1191,12 +1202,13 @@ describe("the entity reads — index-served, and exactly the lower() compare the
         sql: `select artists.name as name, artists.slug as slug,
                 case when lower(artists.name) ${predicate} then 0 else 1 end as name_rank
               from artists not indexed
-              where lower(artists.name) ${predicate}
+              where (lower(artists.name) ${predicate}
                  or exists (select 1 from artist_aliases
                             where artist_aliases.artist_id = artists.id
                               and artist_aliases.kind = 'name'
                               and artist_aliases.status in ('auto', 'confirmed')
-                              and lower(artist_aliases.alias) ${predicate})
+                              and lower(artist_aliases.alias) ${predicate}))
+                and artists.renderable_track_count > 0
               order by name_rank asc, length(artists.name) asc, artists.name asc
               limit ?`,
       };
@@ -1262,6 +1274,9 @@ describe("the entity reads — index-served, and exactly the lower() compare the
         sql: `insert into artists (id, name, slug, created_at, updated_at) values (?, ?, ?, ?, ?)`,
       });
     }
+    await db.execute(
+      "update artists set renderable_track_count = 1 where id in ('a2', 'a3', 'a4', 'a5', 'a6', 'a7')",
+    );
 
     const artistAliases: [string, string, string, string, string][] = [
       ["aa1", "a1", "Boris Daenen", "name", "auto"],
@@ -1499,6 +1514,26 @@ describe("the entity reads — index-served, and exactly the lower() compare the
 });
 
 describe("the entity gate follows the shared hub floor (not certified-only)", () => {
+  it("does not suggest an artist whose only recording is hidden", async () => {
+    await db.execute({
+      sql: `insert into artists (id, name, slug, created_at, updated_at)
+        values ('hidden-artist', 'Hidden Artist', 'hidden-artist', '2026-01-01', '2026-01-01')`,
+    });
+    await seed(db, {
+      artists: ["Hidden Artist"],
+      title: "Long Mix",
+      trackId: "hidden-long-mix",
+    });
+    await db.execute("update tracks set duration_ms = 900000 where track_id = 'hidden-long-mix'");
+    const statement = entityMatchStatement("artist", "Hidden Artist", "exact");
+    expect(statement).toBeDefined();
+    if (statement === undefined) {
+      return;
+    }
+    const result = await db.execute(statement);
+    expect(result.rows).toEqual([]);
+  });
+
   beforeEach(async () => {
     for (const n of [1, 2, 3]) {
       await seed(db, {
@@ -1812,6 +1847,7 @@ describe("the style tier — a style word ranks by sound, ahead of a namesake", 
       sql: `insert into artists (id, name, slug, created_at, updated_at)
             values ('a-liquid', 'Liquid', 'liquid-artist', '2026-07-01', '2026-07-01')`,
     });
+    await db.execute("update artists set renderable_track_count = 1 where id = 'a-liquid'");
 
     const result = await searchArchive({ q: "some liquid dnb" });
 

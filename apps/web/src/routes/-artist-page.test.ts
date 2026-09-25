@@ -61,7 +61,7 @@ const ARTIST = {
   lastfmUrl: undefined,
   mbid: undefined,
   name: "Drift",
-  renderableTrackCount: 0,
+  renderableTrackCount: 1,
   slug: "drift",
   spotifyUrl: undefined,
   wikidataQid: undefined,
@@ -164,7 +164,7 @@ describe("resolveArtistPageData (the artist page indexability gate)", () => {
   });
 
   it("hides a findings-free artist with no visible tracks", async () => {
-    getPublicArtistBySlug.mockResolvedValue(ARTIST);
+    getPublicArtistBySlug.mockResolvedValue({ ...ARTIST, renderableTrackCount: 0 });
     getFindingsByArtist.mockResolvedValue([]);
     countArtistFindings.mockResolvedValue(0);
 
@@ -186,6 +186,7 @@ describe("resolveArtistPageData (the artist page indexability gate)", () => {
   });
 
   it("keeps the gate off the artists_json fallback — grid covers alone do not index a page", async () => {
+    getPublicArtistBySlug.mockResolvedValue({ ...ARTIST, renderableTrackCount: 0 });
     getFindingsByArtist.mockResolvedValue([
       finding("001.1.1A"),
       finding("002.1.1A"),

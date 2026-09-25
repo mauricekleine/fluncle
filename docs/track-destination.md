@@ -50,7 +50,7 @@ Its client-side twin, `hasTrackPageIdentity`, is what a rendered LIST row calls 
 
 plus `is_catalogue = 1` (a certified row's destination is `/log`, and a 301 must never be submitted for indexing) and `duplicate_of_track_id is null` (so is a stamped twin's).
 
-The indexability predicate also applies the shared catalogue duration rule. The track sitemap count index covers `duration_ms`, so its count stays an index read, and the child window uses the same predicate as the page.
+The indexability predicate also applies the shared catalogue duration rule. The track sitemap count applies duration as a residual filter over the existing covering index, while the child window uses the same runtime predicate as the page. Existing indexes stay in place, so rollout does not rebuild them on the populated tracks table.
 
 Tempo, key, ISRC, label, the preview and the neighbours are **not** gates. They are enrichment, and gating on them would make indexability oscillate with a sweep's backlog.
 
@@ -62,7 +62,7 @@ The page's robots directive and the sitemap's membership **cannot drift**, becau
 
 ### Why it is a conjunction of simple terms
 
-It could have been a weighted score, and a score would have been prettier and unusable. This predicate runs over the whole `tracks` table for the sitemap — a table the crawler grows without bound — so it has to stay a shape the planner can drive off an index. The sitemap index's one-row count locks a covering index behind the simple catalogue partial predicate; its two Spotify-or-Apple branches still evaluate this full evidence predicate, so their sum remains exact. The child keyset window remains on `tracks_catalogue_active_track_id_idx`. The shared predicate keeps identity and evidence terms in one source, while the count index stores the remaining evidence columns as keys rather than claiming that its partial predicate is the whole rule.
+It could have been a weighted score, and a score would have been prettier and unusable. This predicate runs over the whole `tracks` table for the sitemap — a table the crawler grows without bound — so it has to stay a shape the planner can drive off an index. The sitemap count drives its two Spotify-or-Apple branches from the existing catalogue covering index and reads the track row for the duration residual, so their sum remains exact without rebuilding that index. The child keyset window remains on `tracks_catalogue_active_track_id_idx`. The shared predicate keeps identity and evidence terms in one source; its index form omits only the duration condition, which the runtime adds when deciding page and sitemap membership.
 
 `is_catalogue` is internal bookkeeping, used to **select** and never to **render**.
 

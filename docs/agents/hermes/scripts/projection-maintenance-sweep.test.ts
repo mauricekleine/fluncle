@@ -49,7 +49,11 @@ const status = (
     projections: {
       artistQualification: projectionOverrides.artists ?? family(),
       crawlDueWork: projectionOverrides.crawl ?? family(),
-      publicAggregates: { anchorsReady: true, ...(projectionOverrides.aggregate ?? family()) },
+      publicAggregates: {
+        anchorsReady: true,
+        durationGenerationReady: true,
+        ...(projectionOverrides.aggregate ?? family()),
+      },
       trackDueWork: projectionOverrides.track ?? family(),
     },
   },
@@ -66,6 +70,27 @@ const advance = (target: FamilyName, complete = true, processed = 1, steps = 1) 
 });
 
 describe("the stale-definition re-projection the repair path carries", () => {
+  test("a missing aggregate duration generation schedules bounded rebuild until its key lands", () => {
+    const calls: string[][] = [];
+    let generationReady = false;
+    const run = (args: string[]) => {
+      calls.push(args);
+      if (args[2] === "get") {
+        return status(
+          { publicProjections: true },
+          { aggregate: family({ durationGenerationReady: generationReady }) },
+        );
+      }
+      generationReady = true;
+      return advance("public_aggregates");
+    };
+
+    expect(runTick(run).publicAggregates.attempted).toBe(true);
+    expect(calls[1]).toContain("repair");
+    expect(calls[1]).toContain("--wall-ms");
+    expect(runTick(run).publicAggregates.attempted).toBe(false);
+  });
+
   test("advances a due-work family with zero repair debt when its rebuild is incomplete", () => {
     const calls: string[][] = [];
     const summary = runProjectionMaintenanceTick((args) => {

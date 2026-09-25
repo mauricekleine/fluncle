@@ -414,7 +414,7 @@ describe("tracksHead", () => {
       { href: "https://www.fluncle.com/tracks?page=3", rel: "canonical" },
     ]);
     expect(robots(head)).toBeUndefined();
-    expect(title(head)).toBe("Drum & bass tracks, page 3 · Fluncle");
+    expect(title(head)).toBe("Every drum & bass track, page 3 · Fluncle");
   });
 
   it("ANY filter flips the page to noindex, keeps the bare canonical, and drops the JSON-LD", () => {
@@ -423,7 +423,7 @@ describe("tracksHead", () => {
     expect(robots(head)).toBe("noindex, follow");
 
     expect(head.links).toEqual([{ href: "https://www.fluncle.com/tracks", rel: "canonical" }]);
-    expect(title(head)).toBe("Drum & bass tracks, newest first · Fluncle");
+    expect(title(head)).toBe("Every drum & bass track, newest first · Fluncle");
     expect(head.scripts).toEqual([]);
   });
 });

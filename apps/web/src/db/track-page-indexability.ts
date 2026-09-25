@@ -31,15 +31,19 @@ export function trackPageIndexableCoverIndexWhere(table?: string): string {
   return `${column(table, "is_catalogue")} = 1`;
 }
 
-export function trackPageIndexableWhere(table?: string): string {
+export function trackPageIndexableIndexWhere(table?: string): string {
   return `${column(table, "is_catalogue")} = 1
-      and ${catalogueTrackDurationWhere(table)}
       and ${column(table, "duplicate_of_track_id")} is null
       and ${trackPageIdentityWhere(table)}
       and ${column(table, "album_id")} is not null
       and ${column(table, "release_date")} is not null
       and ${column(table, "album_image_url")} is not null
       and (${column(table, "spotify_url")} is not null or ${column(table, "apple_music_url")} is not null)`;
+}
+
+export function trackPageIndexableWhere(table?: string): string {
+  return `${trackPageIndexableIndexWhere(table)}
+      and ${catalogueTrackDurationWhere(table)}`;
 }
 
 export function trackPageIndexableCountQueryWhere(

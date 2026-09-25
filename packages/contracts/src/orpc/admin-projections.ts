@@ -78,7 +78,10 @@ export const ProjectionStatusSchema = z.object({
   projections: z.object({
     artistQualification: ProjectionFamilyStatusSchema,
     crawlDueWork: ProjectionFamilyStatusSchema,
-    publicAggregates: ProjectionFamilyStatusSchema.extend({ anchorsReady: z.boolean() }),
+    publicAggregates: ProjectionFamilyStatusSchema.extend({
+      anchorsReady: z.boolean(),
+      durationGenerationReady: z.boolean(),
+    }),
     trackDueWork: ProjectionFamilyStatusSchema.extend({
       catalogueRankMarkerAgeMs: CountSchema.nullable().optional(),
     }),

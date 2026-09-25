@@ -210,6 +210,7 @@ function entitySql(kind: SearchEntity["kind"], mode: EntityMatchMode): EntityQue
                                    and artist_aliases.status in ('auto', 'confirmed')
                                    and lower(artist_aliases.alias) ${predicate}))
               and ${listedArtistWhere()}
+              and artists.renderable_track_count > 0
             order by name_rank asc, length(artists.name) asc, artists.name asc
             limit ?`,
     };
