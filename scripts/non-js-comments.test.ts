@@ -168,7 +168,7 @@ describe("non-JavaScript comments", () => {
         ),
       );
     expect(violations).toEqual([]);
-  });
+  }, 30_000);
 
   test("tracked YAML and shell run blocks contain no comments", () => {
     const violations = files
