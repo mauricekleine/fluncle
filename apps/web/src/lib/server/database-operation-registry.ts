@@ -225,6 +225,9 @@ export const DATABASE_ADMISSION_SHAPES: Readonly<Record<string, DatabaseAdmissio
   "device.mirror": wholeLifetime(
     "The continuous source scan and local mirror transaction form one consistency window.",
   ),
+  "email.follow-digest": wholeLifetime(
+    "The bounded send walks recipients and writes delivery state after the external email call.",
+  ),
   "frontier.refresh": wholeLifetime(
     "The non-replayable playlist refresh interleaves source reads with publication state.",
   ),
@@ -433,6 +436,14 @@ export const DATABASE_MUTATION_POLICIES = {
     rationale:
       "Bounded source repair and elapsed-retry promotion converge due_work onto current source truth.",
     reconciliation: "Read the same bounded ready page after repeating maintenance.",
+  },
+  "email.follow-digest": {
+    evidenceSource: "apps/web/src/lib/server/follow-digest.ts",
+    kind: "deliberately-non-replayable",
+    rationale:
+      "The email provider call can succeed before the per-user state write is acknowledged.",
+    reconciliation:
+      "Inspect the user-week delivery key at Resend and the subscriber state before replay.",
   },
   "frontier.refresh": {
     evidenceSource: "apps/web/src/lib/server/frontier-playlist.ts",
@@ -649,6 +660,7 @@ export const TRIGGER_MUTATION_POLICY_IDS = {
   "catalogue.verify-captures.write": "catalogue.verify-captures",
   "clips.cut": "clips.studio",
   "device.mirror": "device.mirror",
+  "email.follow-digest": "email.follow-digest",
   "frontier.refresh": "frontier.refresh",
   "galaxies.map.write": "galaxies.cluster",
   "health.snapshot": "health.snapshot",
@@ -1051,6 +1063,28 @@ const HEALTH_RECEIPT_FLAG_OFF_COMPATIBILITY: DatabaseProfileDefinition = {
 };
 
 export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] = [
+  defineOperation({
+    accessClass: "write",
+    cadence: calendar("Fri 17:00 Europe/Amsterdam"),
+    directory: "follow-digest-timer",
+    heavy: false,
+    mutationTarget: "primary",
+    operationId: "email.follow-digest",
+    service: "fluncle-follow-digest.service",
+    telemetryUnit: "follow-digest",
+    timer: "fluncle-follow-digest.timer",
+    triggers: [
+      endpoint(
+        "email.follow-digest",
+        "write",
+        "POST",
+        "/api/v1/admin/follow-digests/send",
+        `${SCRIPTS}/follow-digest-sweep.ts`,
+        { mutationTarget: "primary" },
+      ),
+    ],
+    wrapperSource: `${SCRIPTS}/follow-digest-sweep.sh`,
+  }),
   defineOperation({
     accessClass: "write",
     cadence: every("9min", "30min"),

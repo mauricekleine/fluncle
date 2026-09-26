@@ -34,6 +34,9 @@ const SCAN_ROOTS = [
   "apps/web/src/lib/server/push.ts",
 
   "apps/web/src/lib/server/edition-email.ts",
+  "apps/web/src/lib/server/follow-digest-copy.ts",
+  "apps/web/src/lib/server/follow-digest-email.ts",
+  "apps/web/src/lib/server/resend.ts",
 ];
 
 const SKIPPED_DIRECTORIES = [
@@ -318,6 +321,8 @@ describe("voice lint", () => {
     expect(scanned.has("apps/web/src/lib/server/telegram.ts")).toBe(true);
     expect(scanned.has("apps/web/src/lib/server/bluesky.ts")).toBe(true);
     expect(scanned.has("apps/web/src/lib/server/push.ts")).toBe(true);
+    expect(scanned.has("apps/web/src/lib/server/follow-digest-copy.ts")).toBe(true);
+    expect(scanned.has("apps/web/src/lib/server/resend.ts")).toBe(true);
 
     const strays = [...scanned].filter(
       (file) =>

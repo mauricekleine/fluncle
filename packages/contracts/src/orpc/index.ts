@@ -43,6 +43,7 @@ import { adminTwitchContract } from "./admin-twitch";
 import { adminUsersContract } from "./admin-users";
 import { devicesContract } from "./devices";
 import { editionsContract } from "./editions";
+import { followDigestContract } from "./follow-digest";
 import { healthContract } from "./health";
 import { meContract } from "./me";
 import { meFrontierContract } from "./me-frontier";
@@ -51,6 +52,7 @@ import { mePreferencesContract } from "./me-preferences";
 import { meRecsContract } from "./me-recs";
 import { meSavedContract } from "./me-saved";
 import { meSetsContract } from "./me-sets";
+import { meFollowsContract } from "./me-follows";
 import { meWatchesContract } from "./me-watches";
 import { mixContract } from "./mix";
 import { mixtapesContract } from "./mixtapes";
@@ -70,6 +72,7 @@ export {
   getAlbum,
   listAlbums,
 } from "./albums";
+export { followDigestContract } from "./follow-digest";
 export {
   ArtistListItemSchema,
   artistsContract,
@@ -488,6 +491,14 @@ export {
   updatePrivateSavedSet,
 } from "./me-sets";
 export {
+  deletePrivateFollow,
+  FollowKindSchema,
+  FollowSchema,
+  listPrivateFollows,
+  revokePrivateFollowLinkAccess,
+  savePrivateFollow,
+} from "./me-follows";
+export {
   deletePrivateWatch,
   listPrivateWatches,
   savePrivateWatch,
@@ -577,6 +588,7 @@ export const contract = {
   ...adminFunnelContract,
   ...adminHealthContract,
   ...adminHubCountsContract,
+  ...followDigestContract,
   ...adminLabelsContract,
   ...adminLogbookContract,
   ...adminMigrationsContract,
@@ -603,6 +615,7 @@ export const contract = {
   ...meRecsContract,
   ...meSavedContract,
   ...meSetsContract,
+  ...meFollowsContract,
   ...meWatchesContract,
   ...mixContract,
   ...mixtapesContract,

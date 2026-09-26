@@ -12,12 +12,7 @@ import { runWithDatabaseRequestScope } from "./lib/server/database-request-scope
 import { handleMcp } from "./lib/server/mcp";
 import { handleOrpc } from "./lib/server/orpc";
 import { withSecurityHeaders } from "./lib/server/security-headers";
-import {
-  scrubServerSentryEvent,
-  scrubServerSentrySpan,
-  scrubServerSentryTransaction,
-  serverSentryIntegrations,
-} from "./lib/server/sentry-options";
+import { serverSentryIntegrations, serverSentryScrubHooks } from "./lib/server/sentry-options";
 import { SENTRY_RELEASE, WORKER_SENTRY_DSN } from "./lib/sentry-config";
 
 const TRACE_RATE_ALWAYS = 1.0;
@@ -127,9 +122,7 @@ const cfHandler: ExportedHandler<Env> = {
 
 export default Sentry.withSentry(
   () => ({
-    beforeSend: scrubServerSentryEvent,
-    beforeSendSpan: scrubServerSentrySpan,
-    beforeSendTransaction: scrubServerSentryTransaction,
+    ...serverSentryScrubHooks,
     dsn: import.meta.env.PROD ? WORKER_SENTRY_DSN : undefined,
     integrations: serverSentryIntegrations,
     release: SENTRY_RELEASE,

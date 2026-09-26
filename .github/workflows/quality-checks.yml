@@ -179,7 +179,7 @@ jobs:
     name: Public flows when selected
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     env:
       SQLD_SHA256: edc6e17188d7f2e7c6a76eb7ea21f57f4f90fd49578f16a3884fe433e9ecbd84
       SQLD_VERSION: v0.24.31

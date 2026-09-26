@@ -21,8 +21,8 @@ import {
   listGalaxyCollection,
   listSavedFindings,
   listSavedSets,
+  listFollows,
   listUserSubmissions,
-  listWatches,
   meResponse,
 } from "@/lib/server/account-data";
 import { createCsrfToken, getPublicSession } from "@/lib/server/public-auth";
@@ -45,19 +45,23 @@ const getAccountDoorData = createServerFn({ method: "GET" })
     }
 
     if (data.tab === "saves") {
-      const [saved, sets, submissions, watches] = await Promise.all([
+      const { isFollowDigestSubscribed } = await import("@/lib/server/follow-digest");
+      const { createFollowDigestToken } = await import("@/lib/server/follow-digest-tokens");
+      const [saved, sets, submissions, follows, subscribed] = await Promise.all([
         listSavedFindings(user),
         listSavedSets(user),
         listUserSubmissions(user),
-        listWatches(user),
+        listFollows(user),
+        isFollowDigestSubscribed(user.id),
       ]);
 
       return {
+        follows: follows.follows,
+        followsEmail: { subscribed, token: await createFollowDigestToken(user.id, "manage") },
         saved: saved.savedFindings,
         sets: sets.savedSets,
         submissions: submissions.submissions,
         tab: "saves",
-        watches: watches.watches,
       };
     }
 

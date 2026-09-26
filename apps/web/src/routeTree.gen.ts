@@ -22,6 +22,7 @@ import { Route as DeviceRouteImport } from './routes/device'
 import { Route as DocsRouteImport } from './routes/docs'
 import { Route as FeedDotjsonRouteImport } from './routes/feed[.]json'
 import { Route as FindingsRouteImport } from './routes/findings'
+import { Route as FollowsRouteImport } from './routes/follows'
 import { Route as FreshRouteImport } from './routes/fresh'
 import { Route as FreshDotjsonRouteImport } from './routes/fresh[.]json'
 import { Route as FreshDotxmlRouteImport } from './routes/fresh[.]xml'
@@ -110,6 +111,7 @@ import { Route as OutSpotifyTrackIdRouteImport } from './routes/out.spotify.$tra
 import { Route as ApiAdminOauthHandoffRouteImport } from './routes/api/admin/oauth/handoff'
 import { Route as ApiV1AdminChatRouteImport } from './routes/api/v1/admin/chat'
 import { Route as ApiV1AdminLogoutRouteImport } from './routes/api/v1/admin/logout'
+import { Route as ApiV1FollowDigestUnsubscribeRouteImport } from './routes/api/v1/follow-digest/unsubscribe'
 import { Route as ApiV1MeAvatarRouteImport } from './routes/api/v1/me/avatar'
 import { Route as ApiV1MixtapeCoverLogIdRouteImport } from './routes/api/v1/mixtape-cover.$logId'
 import { Route as ApiV1OgLogIdRouteImport } from './routes/api/v1/og.$logId'
@@ -214,6 +216,11 @@ const FeedDotjsonRoute = FeedDotjsonRouteImport.update({
 const FindingsRoute = FindingsRouteImport.update({
   id: '/findings',
   path: '/findings',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const FollowsRoute = FollowsRouteImport.update({
+  id: '/follows',
+  path: '/follows',
   getParentRoute: () => rootRouteImport,
 } as any)
 const FreshRoute = FreshRouteImport.update({
@@ -656,6 +663,12 @@ const ApiV1AdminLogoutRoute = ApiV1AdminLogoutRouteImport.update({
   path: '/api/v1/admin/logout',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiV1FollowDigestUnsubscribeRoute =
+  ApiV1FollowDigestUnsubscribeRouteImport.update({
+    id: '/api/v1/follow-digest/unsubscribe',
+    path: '/api/v1/follow-digest/unsubscribe',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const ApiV1MeAvatarRoute = ApiV1MeAvatarRouteImport.update({
   id: '/api/v1/me/avatar',
   path: '/api/v1/me/avatar',
@@ -898,6 +911,7 @@ export interface FileRoutesByFullPath {
   '/docs': typeof DocsRouteWithChildren
   '/feed.json': typeof FeedDotjsonRoute
   '/findings': typeof FindingsRoute
+  '/follows': typeof FollowsRoute
   '/fresh': typeof FreshRoute
   '/fresh.json': typeof FreshDotjsonRoute
   '/fresh.xml': typeof FreshDotxmlRoute
@@ -986,6 +1000,7 @@ export interface FileRoutesByFullPath {
   '/api/admin/oauth/handoff': typeof ApiAdminOauthHandoffRoute
   '/api/v1/admin/chat': typeof ApiV1AdminChatRoute
   '/api/v1/admin/logout': typeof ApiV1AdminLogoutRoute
+  '/api/v1/follow-digest/unsubscribe': typeof ApiV1FollowDigestUnsubscribeRoute
   '/api/v1/me/avatar': typeof ApiV1MeAvatarRoute
   '/api/v1/mixtape-cover/$logId': typeof ApiV1MixtapeCoverLogIdRoute
   '/api/v1/og/$logId': typeof ApiV1OgLogIdRoute
@@ -1038,6 +1053,7 @@ export interface FileRoutesByTo {
   '/device': typeof DeviceRoute
   '/feed.json': typeof FeedDotjsonRoute
   '/findings': typeof FindingsRoute
+  '/follows': typeof FollowsRoute
   '/fresh': typeof FreshRoute
   '/fresh.json': typeof FreshDotjsonRoute
   '/fresh.xml': typeof FreshDotxmlRoute
@@ -1126,6 +1142,7 @@ export interface FileRoutesByTo {
   '/api/admin/oauth/handoff': typeof ApiAdminOauthHandoffRoute
   '/api/v1/admin/chat': typeof ApiV1AdminChatRoute
   '/api/v1/admin/logout': typeof ApiV1AdminLogoutRoute
+  '/api/v1/follow-digest/unsubscribe': typeof ApiV1FollowDigestUnsubscribeRoute
   '/api/v1/me/avatar': typeof ApiV1MeAvatarRoute
   '/api/v1/mixtape-cover/$logId': typeof ApiV1MixtapeCoverLogIdRoute
   '/api/v1/og/$logId': typeof ApiV1OgLogIdRoute
@@ -1181,6 +1198,7 @@ export interface FileRoutesById {
   '/docs': typeof DocsRouteWithChildren
   '/feed.json': typeof FeedDotjsonRoute
   '/findings': typeof FindingsRoute
+  '/follows': typeof FollowsRoute
   '/fresh': typeof FreshRoute
   '/fresh.json': typeof FreshDotjsonRoute
   '/fresh.xml': typeof FreshDotxmlRoute
@@ -1269,6 +1287,7 @@ export interface FileRoutesById {
   '/api/admin/oauth/handoff': typeof ApiAdminOauthHandoffRoute
   '/api/v1/admin/chat': typeof ApiV1AdminChatRoute
   '/api/v1/admin/logout': typeof ApiV1AdminLogoutRoute
+  '/api/v1/follow-digest/unsubscribe': typeof ApiV1FollowDigestUnsubscribeRoute
   '/api/v1/me/avatar': typeof ApiV1MeAvatarRoute
   '/api/v1/mixtape-cover/$logId': typeof ApiV1MixtapeCoverLogIdRoute
   '/api/v1/og/$logId': typeof ApiV1OgLogIdRoute
@@ -1325,6 +1344,7 @@ export interface FileRouteTypes {
     | '/docs'
     | '/feed.json'
     | '/findings'
+    | '/follows'
     | '/fresh'
     | '/fresh.json'
     | '/fresh.xml'
@@ -1413,6 +1433,7 @@ export interface FileRouteTypes {
     | '/api/admin/oauth/handoff'
     | '/api/v1/admin/chat'
     | '/api/v1/admin/logout'
+    | '/api/v1/follow-digest/unsubscribe'
     | '/api/v1/me/avatar'
     | '/api/v1/mixtape-cover/$logId'
     | '/api/v1/og/$logId'
@@ -1465,6 +1486,7 @@ export interface FileRouteTypes {
     | '/device'
     | '/feed.json'
     | '/findings'
+    | '/follows'
     | '/fresh'
     | '/fresh.json'
     | '/fresh.xml'
@@ -1553,6 +1575,7 @@ export interface FileRouteTypes {
     | '/api/admin/oauth/handoff'
     | '/api/v1/admin/chat'
     | '/api/v1/admin/logout'
+    | '/api/v1/follow-digest/unsubscribe'
     | '/api/v1/me/avatar'
     | '/api/v1/mixtape-cover/$logId'
     | '/api/v1/og/$logId'
@@ -1607,6 +1630,7 @@ export interface FileRouteTypes {
     | '/docs'
     | '/feed.json'
     | '/findings'
+    | '/follows'
     | '/fresh'
     | '/fresh.json'
     | '/fresh.xml'
@@ -1695,6 +1719,7 @@ export interface FileRouteTypes {
     | '/api/admin/oauth/handoff'
     | '/api/v1/admin/chat'
     | '/api/v1/admin/logout'
+    | '/api/v1/follow-digest/unsubscribe'
     | '/api/v1/me/avatar'
     | '/api/v1/mixtape-cover/$logId'
     | '/api/v1/og/$logId'
@@ -1750,6 +1775,7 @@ export interface RootRouteChildren {
   DocsRoute: typeof DocsRouteWithChildren
   FeedDotjsonRoute: typeof FeedDotjsonRoute
   FindingsRoute: typeof FindingsRoute
+  FollowsRoute: typeof FollowsRoute
   FreshRoute: typeof FreshRoute
   FreshDotjsonRoute: typeof FreshDotjsonRoute
   FreshDotxmlRoute: typeof FreshDotxmlRoute
@@ -1811,6 +1837,7 @@ export interface RootRouteChildren {
   ApiAdminOauthHandoffRoute: typeof ApiAdminOauthHandoffRoute
   ApiV1AdminChatRoute: typeof ApiV1AdminChatRoute
   ApiV1AdminLogoutRoute: typeof ApiV1AdminLogoutRoute
+  ApiV1FollowDigestUnsubscribeRoute: typeof ApiV1FollowDigestUnsubscribeRoute
   ApiV1MeAvatarRoute: typeof ApiV1MeAvatarRoute
   ApiV1MixtapeCoverLogIdRoute: typeof ApiV1MixtapeCoverLogIdRoute
   ApiV1OgLogIdRoute: typeof ApiV1OgLogIdRoute
@@ -1943,6 +1970,13 @@ declare module '@tanstack/react-router' {
       path: '/findings'
       fullPath: '/findings'
       preLoaderRoute: typeof FindingsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/follows': {
+      id: '/follows'
+      path: '/follows'
+      fullPath: '/follows'
+      preLoaderRoute: typeof FollowsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/fresh': {
@@ -2561,6 +2595,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiV1AdminLogoutRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/v1/follow-digest/unsubscribe': {
+      id: '/api/v1/follow-digest/unsubscribe'
+      path: '/api/v1/follow-digest/unsubscribe'
+      fullPath: '/api/v1/follow-digest/unsubscribe'
+      preLoaderRoute: typeof ApiV1FollowDigestUnsubscribeRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/v1/me/avatar': {
       id: '/api/v1/me/avatar'
       path: '/api/v1/me/avatar'
@@ -2944,6 +2985,7 @@ const rootRouteChildren: RootRouteChildren = {
   DocsRoute: DocsRouteWithChildren,
   FeedDotjsonRoute: FeedDotjsonRoute,
   FindingsRoute: FindingsRoute,
+  FollowsRoute: FollowsRoute,
   FreshRoute: FreshRoute,
   FreshDotjsonRoute: FreshDotjsonRoute,
   FreshDotxmlRoute: FreshDotxmlRoute,
@@ -3005,6 +3047,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiAdminOauthHandoffRoute: ApiAdminOauthHandoffRoute,
   ApiV1AdminChatRoute: ApiV1AdminChatRoute,
   ApiV1AdminLogoutRoute: ApiV1AdminLogoutRoute,
+  ApiV1FollowDigestUnsubscribeRoute: ApiV1FollowDigestUnsubscribeRoute,
   ApiV1MeAvatarRoute: ApiV1MeAvatarRoute,
   ApiV1MixtapeCoverLogIdRoute: ApiV1MixtapeCoverLogIdRoute,
   ApiV1OgLogIdRoute: ApiV1OgLogIdRoute,

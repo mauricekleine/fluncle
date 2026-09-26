@@ -122,7 +122,7 @@ export function definitionalProseSegments(track: LogProseInput): ProseSegment[] 
 
   segments.push({
     kind: "text",
-    text: `The coordinate fluncle://${track.logId} names this finding on every surface of the Galaxy: the web log, the RSS feed, and the fluncle CLI.`,
+    text: `The coordinate fluncle://${track.logId} names this finding on every surface of the Galaxy: the web log, the RSS feed, and the Fluncle CLI.`,
   });
 
   return segments;

@@ -4,6 +4,8 @@ const CORS_EXCLUDED_OPERATIONS = new Set<string>([
   "get_replica_token",
 
   "get_current_private_user",
+
+  "list_digest_follows",
 ]);
 
 const CORS_ALLOWED_METHODS = "GET, OPTIONS";

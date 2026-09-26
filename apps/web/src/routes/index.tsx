@@ -163,7 +163,7 @@ function FrontDoorPage() {
 
           <FrontDoorSection
             id="fd-findings"
-            intro="I rewound every one of these before I logged it. Freshest at the front, so take your pick, fam."
+            intro="I rewound every banger here before I logged it. Freshest at the front, so take your pick, fam."
             link={
               findingsTotal > 0
                 ? {
