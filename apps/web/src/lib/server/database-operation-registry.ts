@@ -1866,7 +1866,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         "pipeline.watch.crawl",
         "read",
         "GET",
-        "/api/v1/admin/catalogue/crawl",
+        "/api/v1/admin/catalogue/pipeline",
         `${SCRIPTS}/pipeline-watch.ts`,
         { mutationTarget: null },
       ),

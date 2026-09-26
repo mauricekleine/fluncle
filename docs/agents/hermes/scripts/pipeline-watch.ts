@@ -5,7 +5,9 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { findJsonSummary } from "./cron-marker";
 import {
+  countValue,
   evaluatePipeline,
+  type BoundedCount,
   type Marker,
   type PipelineSnapshot,
   type Stage,
@@ -56,6 +58,42 @@ export type Alert = {
 
 const validCount = (value: unknown): value is number =>
   typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+
+function parseBoundedCount(value: unknown): BoundedCount | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const entry = value as Record<string, unknown>;
+  return validCount(entry.count) &&
+    typeof entry.atLeast === "boolean" &&
+    (!entry.atLeast || entry.count > 0)
+    ? { atLeast: entry.atLeast, count: entry.count }
+    : null;
+}
+
+export function parsePipelineWatchRead(value: unknown): {
+  anchorQueue: BoundedCount | null;
+  capture: BoundedCount | null;
+  crawl: PipelineSnapshot["crawl"];
+} {
+  const empty = { anchorQueue: null, capture: null, crawl: null };
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return empty;
+  }
+  const payload = value as Record<string, unknown>;
+  if (payload.ok !== true) {
+    return empty;
+  }
+  const frontier = parseBoundedCount(payload.frontier);
+  const anchors = parseBoundedCount(payload.anchors);
+  const storable = parseBoundedCount(payload.storable);
+  const unstorable = parseBoundedCount(payload.unstorable);
+  return {
+    anchorQueue: anchors,
+    capture: parseBoundedCount(payload.capture),
+    crawl: frontier && storable && unstorable ? { frontier, storable, unstorable } : null,
+  };
+}
 
 export function parseIncidentState(value: unknown): IncidentState {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -241,28 +279,15 @@ export async function collectSnapshot(): Promise<PipelineSnapshot> {
   const markers = Object.fromEntries(
     stages.map((stage) => [stage, readMarkers(JOBS[stage])]),
   ) as PipelineSnapshot["markers"];
-  const [crawl, budget, capture, analyze, embed] = await Promise.all([
-    apiRead("/api/v1/admin/catalogue/crawl?summary=true"),
+  const [pipeline, budget, analyze, embed] = await Promise.all([
+    apiRead("/api/v1/admin/catalogue/pipeline"),
     apiRead("/api/v1/admin/catalogue/capture-budget"),
-    apiRead("/api/v1/admin/tracks/work?kind=capture&scope=all&count=true&debtAware=true&limit=1"),
     apiRead("/api/v1/admin/tracks/work?kind=analyze&scope=all&count=true&debtAware=true&limit=1"),
     apiRead(
       "/api/v1/admin/tracks/work?kind=embed&scope=all&count=true&debtAware=true&age=true&limit=1",
     ),
   ]);
-  const frontier = crawl?.frontier;
-  const frontierPending =
-    frontier && typeof frontier === "object" ? (frontier as Record<string, unknown>).pending : null;
-  const crawlCounts =
-    validCount(frontierPending) &&
-    validCount(crawl?.storablePending) &&
-    validCount(crawl?.unstorablePending)
-      ? {
-          frontier: frontierPending,
-          storable: crawl.storablePending,
-          unstorable: crawl.unstorablePending,
-        }
-      : null;
+  const pipelineCounts = parsePipelineWatchRead(pipeline);
   const budgetState =
     typeof budget?.open === "boolean" &&
     validCount(budget.remainingBytes) &&
@@ -275,9 +300,9 @@ export async function collectSnapshot(): Promise<PipelineSnapshot> {
         }
       : null;
   return {
-    anchorQueue: validCount(crawl?.anchorsPending) ? crawl.anchorsPending : null,
+    anchorQueue: pipelineCounts.anchorQueue,
     budget: budgetState,
-    crawl: crawlCounts,
+    crawl: pipelineCounts.crawl,
     crawlZeroChecks: 0,
     embedOldCapture:
       typeof embed?.oldestQueuedCaptureOver24h === "boolean"
@@ -286,7 +311,7 @@ export async function collectSnapshot(): Promise<PipelineSnapshot> {
     markers,
     queues: {
       analyze: validCount(analyze?.queued) ? analyze.queued : null,
-      capture: validCount(capture?.queued) ? capture.queued : null,
+      capture: pipelineCounts.capture,
       embed: validCount(embed?.queued) ? embed.queued : null,
     },
   };
@@ -431,7 +456,11 @@ async function sendAlert(alert: Alert): Promise<boolean> {
 async function main(): Promise<void> {
   const now = new Date();
   const snapshot = await collectSnapshot();
-  const supply = advanceCrawlSupply(loadSupply(), snapshot.crawl?.storable ?? null, now.getTime());
+  const supply = advanceCrawlSupply(
+    loadSupply(),
+    countValue(snapshot.crawl?.storable ?? null),
+    now.getTime(),
+  );
   snapshot.crawlZeroChecks = supply.checks;
   saveSupply(supply);
   const trend = advanceEmbedTrend(loadTrend(), snapshot.queues.embed, now.getTime());

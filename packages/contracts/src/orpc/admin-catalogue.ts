@@ -582,6 +582,30 @@ export const CrawlPipelineSummarySchema = z
   })
   .meta({ id: "CrawlPipelineSummary" });
 
+export const PipelineWatchBoundedCountSchema = z
+  .object({ atLeast: z.boolean(), count: z.number().int().nonnegative() })
+  .meta({ id: "PipelineWatchBoundedCount" });
+
+export const getPipeline = oc
+  .route({
+    method: "GET",
+    operationId: "getPipeline",
+    path: "/admin/catalogue/pipeline",
+    summary: "Bounded pipeline counts for the box watchdog",
+    tags: ["Admin"],
+  })
+  .input(z.object({}))
+  .output(
+    z.object({
+      anchors: PipelineWatchBoundedCountSchema,
+      capture: PipelineWatchBoundedCountSchema.nullable(),
+      frontier: PipelineWatchBoundedCountSchema,
+      ok: z.literal(true),
+      storable: PipelineWatchBoundedCountSchema,
+      unstorable: PipelineWatchBoundedCountSchema,
+    }),
+  );
+
 export const crawlCatalogue = oc
   .route({
     inputStructure: "detailed",
@@ -1026,6 +1050,7 @@ export const adminCatalogueContract = {
   get_anchor_apify_budget: getAnchorApifyBudget,
   get_capture_budget: getCaptureBudget,
   get_crawl_status: getCrawlStatus,
+  get_pipeline: getPipeline,
   get_spotify_anchor_breaker: getSpotifyAnchorBreaker,
   list_catalogue_tracks: listCatalogueTracks,
   list_unverified_captures: listUnverifiedCaptures,

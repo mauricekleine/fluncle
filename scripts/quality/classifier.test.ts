@@ -69,6 +69,14 @@ describe("dependency-closure classifier", () => {
     expect(installer.lanes.skills).toBe(true);
   });
 
+  test("the pipeline evaluator selects web checks for its web integration consumer", () => {
+    const plan = classifyPaths(["docs/agents/hermes/scripts/pipeline-watch-evaluate.ts"]);
+    expect(plan.full).toBe(false);
+    expect(plan.lanes.scripts).toBe(true);
+    expect(plan.lanes.e2e).toBe(true);
+    expect(plan.packages).toContain("@fluncle/web");
+  });
+
   test("discovery capture selects scripts without public-web E2E", () => {
     const plan = classifyPaths([
       "scripts/ux-capture.ts",

@@ -257,6 +257,7 @@ export {
   DeezerIsrcCandidateSchema,
   getCaptureBudget,
   getCrawlStatus,
+  getPipeline,
   listCatalogueTracks,
   MAX_CRAWL_COMMIT_BATCH,
   MAX_CRAWL_PREPARE_LIMIT,
