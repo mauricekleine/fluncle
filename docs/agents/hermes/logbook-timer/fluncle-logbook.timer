@@ -14,6 +14,7 @@ RandomizedDelaySec=60
 # window backfills history oldest-first over successive nights. Persistent catches up a tick
 # missed across a box reboot — a late entry is harmless (fill-empty-only + idempotent).
 OnCalendar=*-*-* 00:40:00 Europe/Amsterdam
+OnCalendar=*-*-* 01:50:00 Europe/Amsterdam
 Persistent=true
 
 [Install]

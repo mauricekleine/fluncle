@@ -1,6 +1,6 @@
 # fluncle-cluster-timer — the sonic-galaxy cluster engine on a host timer
 
-The rave-02 (Hermes box) host trigger for the **browse-by-feel** cluster engine. `fluncle-cluster` keeps the sonic-galaxy map current: each night it assigns every embedded finding to its nearest stored galaxy centroid (cosine, over the MuQ embedding space), recomputes each centroid as its members' mean, retires an emptied galaxy, and consumes any operator-requested split. This is what SCHEDULES it: a small host systemd timer on the rave-02 host that `docker exec`s the baked sweep script inside the `hermes` container once a night (02:20 Amsterdam).
+The Hermes host trigger for the **browse-by-feel** cluster engine. `fluncle-cluster` keeps the sonic-galaxy map current: each night it assigns every embedded finding to its nearest stored galaxy centroid (cosine, over the MuQ embedding space), recomputes each centroid as its members' mean, retires an emptied galaxy, and consumes any operator-requested split. This is what SCHEDULES it: a small host systemd timer that `docker exec`s the baked sweep script inside the `hermes` container at 03:20 Amsterdam, with a guarded retry at 04:30. Both local times exist across spring and autumn clock changes.
 
 The engine's full doctrine (why the nightly run is assignment-only, why a full fit is an operator act, the write-order contract, the naming flow) is [docs/agents/cluster-engine.md](../../cluster-engine.md). This file is the box wire-up only.
 

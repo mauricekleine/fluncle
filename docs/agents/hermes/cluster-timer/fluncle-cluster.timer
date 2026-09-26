@@ -1,5 +1,5 @@
 [Unit]
-Description=fluncle-cluster timer — the nightly sonic-galaxy assignment tick at 02:20 Amsterdam on the rave-02 host
+Description=fluncle-cluster timer — the nightly sonic-galaxy assignment tick at 03:20 Amsterdam on the Hermes host
 
 [Timer]
 # Per-firing jitter dissolves timer-phase alignment: mass timer restarts, including a pin-watch
@@ -7,8 +7,6 @@ Description=fluncle-cluster timer — the nightly sonic-galaxy assignment tick a
 # the same second; the synchronized write bursts convoy on libSQL's single writer).
 # Re-rolled each firing, so no restart can ever re-align the roster.
 RandomizedDelaySec=60
-# 02:20 Europe/Amsterdam via the explicit OnCalendar TZ suffix — the host clock is UTC (only
-# the Hermes container is TZ-pinned), so we name the zone here; DST-safe, needs systemd >=252.
 # Sits in the nightly band after the 00:40 logbook + 01:00 audit, and well clear of the
 # every-5m embed cron so the corpus read sees a settled map. The tick is ASSIGNMENT-ONLY
 # (no fit) and idempotent — a no-op on an unchanged corpus — so a nightly cadence is plenty
@@ -16,7 +14,8 @@ RandomizedDelaySec=60
 # tick missed across a box reboot; a late assignment is harmless (it just files tonight's new
 # findings whenever it runs). The COLD-START and --remint fits are OPERATOR acts, never this
 # timer — run by hand (see ../cluster-timer/README.md), never scheduled.
-OnCalendar=*-*-* 02:20:00 Europe/Amsterdam
+OnCalendar=*-*-* 03:20:00 Europe/Amsterdam
+OnCalendar=*-*-* 04:30:00 Europe/Amsterdam
 Persistent=true
 
 [Install]

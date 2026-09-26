@@ -68,6 +68,7 @@ run_review() {
 	git config user.email "hey@mauricekleine.com"
 	git config commit.gpgsign false
 	git config credential.https://github.com.helper "!gh auth git-credential"
+	find .git -maxdepth 1 -name index.lock -mmin +30 -delete 2>/dev/null || true
 	git fetch --quiet origin main || true
 
 	local domain branch

@@ -6,7 +6,7 @@ The sweep WORK is BAKED at `/opt/hermes-scripts/` — the `.sh`/`.ts` pair (sour
 
 ## The timezone is in the timer, not the container clock
 
-The systemd timer expresses the timezone DIRECTLY: `OnCalendar=Fri 15:00 Europe/Amsterdam`. So the Friday-afternoon slot is correct whatever the host or container clock reads, across the CET⇄CEST flip. `Persistent=true` catches up a Friday the box slept through — harmless, because a late run only persists a draft.
+The systemd timer expresses the timezone DIRECTLY: `OnCalendar=Fri 15:00 Europe/Amsterdam`. So the Friday-afternoon slot is correct whatever the host or container clock reads, across the CET⇄CEST flip. The timer carries a 16:15 Friday retry slot, and the service passes `--weekday Fri` to the shared [`daily-retry-runner.sh`](../scripts/daily-retry-runner.sh). `Persistent=true` still re-arms the timer after a reboot or a unit refresh, but an activation on any day other than Friday, or before 15:00 on a Friday, is a no-op: a catch-up never authors an off-cycle edition. A Friday the box slept through across both slots waits for the next Friday.
 
 ## Why a host timer + the /status marker
 

@@ -109,15 +109,18 @@ watchdog_state=""
 watchdog_window_ms=$(((90 - ADMISSION_KILL_GRACE_SECS - 5) * 1000))
 
 emit_admission_skip() {
-	local outcome="$1" skip_yield_reason="$2" summary job
+	local outcome="$1" skip_yield_reason="$2" summary job errors=0
 	case "$owner" in
 	fluncle-*) job="${owner#fluncle-}" ;;
 	*) return 0 ;;
 	esac
 	skip_yield_reason="$(safe_admission_yield_reason "$skip_yield_reason")"
+	if [ "${FLUNCLE_DAILY_RETRY:-0}" = "1" ]; then
+		errors=1
+	fi
 
-	summary="$(printf '{"admissionOutcome":"%s","admissionWaitMs":%s,"admissionYieldReason":"%s","checked":null,"errors":0,"expectedIntervalMs":null,"gateState":"admission-skipped","payloadStarted":false,"produced":null,"queueDepth":null}' \
-		"$outcome" "$wait_ms" "$skip_yield_reason")"
+	summary="$(printf '{"admissionOutcome":"%s","admissionWaitMs":%s,"admissionYieldReason":"%s","checked":null,"errors":%s,"expectedIntervalMs":null,"gateState":"admission-skipped","payloadStarted":false,"produced":null,"queueDepth":null}' \
+		"$outcome" "$wait_ms" "$skip_yield_reason" "$errors")"
 
 	(
 		CRON_OUTPUT_REBAKE_MARKER_ONLY=true

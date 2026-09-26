@@ -365,6 +365,26 @@ export async function runReconcileHubCountsTick(
   return summary;
 }
 
+export function dailyRetryReconcileSummary(
+  summary: ReconcileHubCountsSummary,
+  retryEnabled: boolean,
+): ReconcileHubCountsSummary {
+  if (
+    retryEnabled &&
+    summary.admissionOutcome === "phase-yielded" &&
+    summary.gateState === "paused" &&
+    summary.reason === "database_admission" &&
+    summary.windows === 0 &&
+    summary.checked === 0 &&
+    summary.produced === 0 &&
+    summary.partial === true
+  ) {
+    return { ...summary, errors: 1, ok: false };
+  }
+
+  return summary;
+}
+
 async function postReconcileWindow(
   cursor: ReconcileCursor | null,
 ): Promise<ReconcileHubCountsResponse> {
@@ -460,11 +480,14 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  const summary = await runReconcileHubCountsTick({
-    log,
+  const summary = dailyRetryReconcileSummary(
+    await runReconcileHubCountsTick({
+      log,
 
-    reconcile: process.env.FLUNCLE_ADMISSION_RUNNER_PID ? postReconcileWindow : admittedWindow,
-  });
+      reconcile: process.env.FLUNCLE_ADMISSION_RUNNER_PID ? postReconcileWindow : admittedWindow,
+    }),
+    process.env.FLUNCLE_DAILY_RETRY === "1",
+  );
 
   console.log(JSON.stringify({ ...summary, elapsedMs: Date.now() - started }));
 

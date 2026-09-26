@@ -14,6 +14,41 @@ if [ "$RESULT" != "timeout" ] && { { [ "$STATUS" = "15" ] && [ "$CODE" = "2" ]; 
 	exit 0
 fi
 
+retry_final_slot() {
+	case "$1" in
+	fluncle-audit.service) echo "Europe/Amsterdam 03:10" ;;
+	fluncle-audit-review.service) echo "Europe/Amsterdam 06:20" ;;
+	fluncle-backup.service) echo "Europe/Amsterdam 05:20" ;;
+	fluncle-cluster.service) echo "Europe/Amsterdam 04:30" ;;
+	fluncle-demand.service) echo "Europe/Amsterdam 05:50" ;;
+	fluncle-funnel-snapshot.service) echo "UTC 23:57" ;;
+	fluncle-label-releases.service) echo "Europe/Amsterdam 08:20" ;;
+	fluncle-label-triage.service) echo "Europe/Amsterdam 07:50" ;;
+	fluncle-logbook.service) echo "Europe/Amsterdam 01:50" ;;
+	fluncle-newsletter.service) echo "Europe/Amsterdam 16:15 Fri" ;;
+	fluncle-reach.service) echo "Europe/Amsterdam 05:10" ;;
+	fluncle-reconcile-hub-counts.service) echo "Europe/Amsterdam 05:25" ;;
+	fluncle-sentry-triage.service) echo "Europe/Amsterdam 05:40" ;;
+	fluncle-social-metrics.service) echo "UTC 23:30" ;;
+	esac
+}
+
+RETRY_SLOT="$(retry_final_slot "$UNIT")"
+if [ -n "$RETRY_SLOT" ] && [ "$STATUS" != "75" ]; then
+	read -r SLOT_TZ SLOT_FINAL SLOT_WEEKDAY <<<"$RETRY_SLOT"
+	STARTED="$(systemctl show -p ExecMainStartTimestamp --value -- "$UNIT" 2>/dev/null || true)"
+	START_TIME=""
+	START_WEEKDAY=""
+	if [ -n "$STARTED" ] && [ "$STARTED" != "n/a" ]; then
+		START_TIME="$(TZ="$SLOT_TZ" date -d "$STARTED" +%H%M 2>/dev/null || true)"
+		START_WEEKDAY="$(TZ="$SLOT_TZ" date -d "$STARTED" +%a 2>/dev/null || true)"
+	fi
+	if [[ "$START_TIME" =~ ^[0-9]{4}$ ]] && { [ -z "${SLOT_WEEKDAY:-}" ] || [ "$START_WEEKDAY" = "$SLOT_WEEKDAY" ]; } && [[ "$START_TIME" < "${SLOT_FINAL/:/}" ]]; then
+		echo "fluncle-sweep-failure: ${UNIT} failed in an attempt that started before its ${SLOT_FINAL} ${SLOT_TZ} final slot (result=${RESULT:-unknown}, status=${STATUS:-?}) — the retry slot decides; not posting." >&2
+		exit 0
+	fi
+fi
+
 WEBHOOK="$(docker inspect "$CONTAINER" --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null | sed -n 's/^DISCORD_ALERT_WEBHOOK=//p' | head -1 || true)"
 [ -n "$WEBHOOK" ] || exit 0
 
@@ -42,7 +77,11 @@ else
 	echo "fluncle-sweep-failure: state dir ${STATE_DIR} missing/unwritable — posting without cooldown." >&2
 fi
 
-MSG="⚠️ fluncle sweep failed on rave-02: ${UNIT} (result=${RESULT:-unknown}, exit=${STATUS:-?}). It died before writing its /status marker — inspect with journalctl -u ${UNIT}.${MUTED_SUFFIX}"
+DETAIL="It died before writing its /status marker"
+if [ "$STATUS" = "75" ] && [ -n "$RETRY_SLOT" ]; then
+	DETAIL="The daily payload is incomplete or unconfirmed"
+fi
+MSG="⚠️ fluncle sweep failed on the Hermes host: ${UNIT} (result=${RESULT:-unknown}, exit=${STATUS:-?}). ${DETAIL} — inspect with journalctl -u ${UNIT}.${MUTED_SUFFIX}"
 
 if curl -fsS -m 10 -H 'Content-Type: application/json' \
 	-d "$(printf '{"content":%s}' "$(printf '%s' "$MSG" | sed 's/\\/\\\\/g; s/"/\\"/g; s/^/"/; s/$/"/')")" \

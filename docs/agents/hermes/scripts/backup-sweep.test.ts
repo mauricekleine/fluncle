@@ -20,6 +20,7 @@ import {
   createBackupRunCounters,
   failBackupOperation,
   hashFile,
+  reusableDailyDump,
   selectExpiredBackupKeys,
   signedPut,
   streamDumpSql,
@@ -428,5 +429,42 @@ describe("run-ledger summary counters", () => {
 
     expect(result.status).toBe(1);
     expect(summary).toMatchObject({ checked: 0, errors: 1, failed: 0, produced: 0 });
+  });
+});
+
+describe("a partial-day retry runs only the missing leg", () => {
+  const today = [
+    "db-backups/daily/2026-09-25/fluncle.sql.gz",
+    "db-backups/daily/2026-09-25/manifest.json",
+    "db-backups/daily/2026-09-24/fluncle.sql.gz",
+    "db-backups/daily/2026-09-24/manifest.json",
+  ];
+
+  test("a partial retry reuses today's landed database artifact and skips the heavy dump", () => {
+    expect(reusableDailyDump({ date: "2026-09-25", existing: today, retryState: "partial" })).toBe(
+      "db-backups/daily/2026-09-25/fluncle.sql.gz",
+    );
+  });
+
+  test("the primary slot always dumps, even when a same-day artifact exists", () => {
+    expect(
+      reusableDailyDump({ date: "2026-09-25", existing: today, retryState: "pending" }),
+    ).toBeNull();
+    expect(
+      reusableDailyDump({ date: "2026-09-25", existing: today, retryState: undefined }),
+    ).toBeNull();
+  });
+
+  test("a partial retry dumps again when today's artifact or manifest never landed", () => {
+    expect(
+      reusableDailyDump({
+        date: "2026-09-25",
+        existing: ["db-backups/daily/2026-09-25/fluncle.sql.gz"],
+        retryState: "partial",
+      }),
+    ).toBeNull();
+    expect(
+      reusableDailyDump({ date: "2026-09-26", existing: today, retryState: "partial" }),
+    ).toBeNull();
   });
 });

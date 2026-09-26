@@ -13,7 +13,6 @@ import {
   planAttempt,
   readAttemptLedger,
   recordAttempt,
-  remainingQueueDepth,
   selectWork,
   writeAttemptLedger,
 } from "./attempt-ledger";
@@ -739,11 +738,7 @@ async function main(): Promise<void> {
     }
   }
 
-  summary.gapsRemaining = remainingQueueDepth(
-    gaps.length,
-    summary.authored + summary.alreadyAuthored,
-    summary.exhausted,
-  );
+  summary.gapsRemaining = Math.max(0, gaps.length - summary.authored - summary.alreadyAuthored);
 
   console.log(JSON.stringify({ ok: true, ...summary }));
 }

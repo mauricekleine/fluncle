@@ -10,6 +10,8 @@ It **certifies nothing** — a tapped track is a `tracks` row with no `findings`
 
 The sweep WORK is BAKED at `/opt/hermes-scripts/` — the `.sh`/`.ts` pair (source: [`../scripts/label-releases-sweep.sh`](../scripts/label-releases-sweep.sh) → [`../scripts/label-releases-sweep.ts`](../scripts/label-releases-sweep.ts)) — riding the image and auto-updating from `main` via pin-watch.
 
+The fixed daily slot is 07:20 Amsterdam, with one guarded retry at 08:20. A run that database admission skipped before its payload started gets the second chance; a run that already started its payload does not repeat. Both slots keep per-firing jitter, and the retry enters the same database guardrail. The shared [`daily-retry-runner.sh`](../scripts/daily-retry-runner.sh) reads the day's marker before launching, so a successful first slot makes the second slot a no-op. If both slots skip the payload, only the final slot fails the host service and invokes its Discord failure notifier. `Persistent=true` still catches up a timer missed while the host was down.
+
 ## The model: a thin trigger, a Worker that does the work
 
 The BOX is a TRIGGER and nothing more. It POSTs bounded passes of `backfill_label_releases` with its agent token until the due seed labels are drained; the **Worker** does the whole job — the official-Spotify fresh-release search, the single album/track reads, the gate, the dedupe, the mint. The box holds no Spotify identity and no vendor token on this path.
@@ -68,10 +70,8 @@ The repo carries the scripts, the timer units, and this doc. Enabling it on the 
 
 ```bash
 # On the rave-02 HOST, from a repo checkout, as root:
-sudo install -m 0644 docs/agents/hermes/label-releases-timer/fluncle-label-releases.service /etc/systemd/system/
-sudo install -m 0644 docs/agents/hermes/label-releases-timer/fluncle-label-releases.timer   /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now fluncle-label-releases.timer
+sudo bash docs/agents/hermes/install-host-timers.sh --refresh-unit fluncle-label-releases.service --refresh-unit fluncle-label-releases.timer
+sudo systemctl restart fluncle-label-releases.timer
 
 # Verify one tick now.
 sudo systemctl start fluncle-label-releases.service            # one tick
