@@ -15,7 +15,7 @@ EnvironmentFile=-/etc/fluncle/database-admission.env
 # user. The .sh/.ts pair is BAKED at /opt/hermes-scripts/ (auto-updates from main via pin-watch);
 # this host unit only TRIGGERS it, and the sweep self-writes its /status marker (cron-output.sh) so
 # the prober stays honest.
-ExecStart=/usr/bin/docker exec -e DATABASE_ADMISSION_FAIL_CLOSED -e DATABASE_ADMISSION_POLL_SECS=2 -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/label-triage-sweep.sh
+ExecStart=/usr/bin/docker exec -e DATABASE_ADMISSION_FAIL_CLOSED -e DATABASE_ADMISSION_POLL_SECS=2 -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/daily-retry-runner.sh fluncle-label-triage Europe/Amsterdam 06:40 07:50 -- bash /opt/hermes-scripts/label-triage-sweep.sh
 # A PURE trigger — one countless admin read and a sort. It spends no model tokens, so it needs
 # none of the headroom the hybrid authoring sweeps take.
 TimeoutStartSec=120

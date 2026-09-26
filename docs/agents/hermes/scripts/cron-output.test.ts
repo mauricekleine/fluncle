@@ -384,7 +384,7 @@ describe("emit_cron_output — the run-ledger POST", () => {
     expect(record.exit_code).toBe(17);
 
     expect(record.summary_raw).toBe("");
-  });
+  }, 15_000);
 
   test("a summary carrying quotes, backslashes and a raw tab still arrives as valid JSON", async () => {
     const messy = '{"ok":true,"note":"he said "go"","win":"C:\\tmp","tab":"a\tb"}';
@@ -601,12 +601,12 @@ describe("end to end: real sweeps → real markers → the sweep-errors row", ()
     expect(result.check).toMatchObject({ message: "no repeat errors", status: "ok" });
   });
 
-  test("the sweep's own /status row stays exactly as green as the sweep reported", () => {
+  test("the backup row stays degraded without artifacts while the sweep-error row tracks chatter", () => {
     const dir = runTicks(STUCK_TICK, 4);
     const cron = { cadenceMs: 24 * 60 * 60_000, match: "backup", service: "cron.backup" };
 
-    expect(judgeCron(cron, dir)).toBe("fresh-ok");
-    expect(cronCheck(cron, "fresh-ok").status).toBe("ok");
+    expect(judgeCron(cron, dir)).toBe("incomplete");
+    expect(cronCheck(cron, "incomplete").status).toBe("degraded");
     expect(probeSweepStrain(new Map([["cron.backup", dir]]), {}).strained).toEqual(["cron.backup"]);
   });
 

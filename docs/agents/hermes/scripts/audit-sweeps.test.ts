@@ -45,7 +45,7 @@ type Fixture = {
   ws: string;
 };
 
-function calls(box: Fixture, command: "claude" | "gh" | "git"): string {
+function calls(box: Fixture, command: "bun" | "claude" | "gh" | "git"): string {
   try {
     return readFileSync(join(box.root, `${command}.log`), "utf8");
   } catch {
@@ -160,7 +160,16 @@ function fixture(): Fixture {
   writeFileSync(join(prompts, "_reviewer.md"), "# fixture review\n", "utf8");
   writeFileSync(join(prompts, "test.md"), "Inspect the fixture.\n", "utf8");
 
-  executable(join(bin, "bun"), "#!/usr/bin/env bash\nexit 0\n");
+  executable(
+    join(bin, "bun"),
+    `#!/usr/bin/env bash
+printf '%s\\n' "$*" >>"${join(root, "bun.log")}"
+case "\${1:-}" in
+  *rotation.ts) [ "\${2:-}" != "\${STUB_ROTATION_DAY:-}" ] || printf 'test' ;;
+esac
+exit 0
+`,
+  );
 
   executable(
     join(bin, "claude"),
@@ -190,6 +199,11 @@ case "$*" in
     exit "\${STUB_COMMIT_STATUS:-0}"
     ;;
   push*) exit "\${STUB_PUSH_STATUS:-0}" ;;
+  ls-remote*)
+    [ -z "\${STUB_LS_REMOTE_STATUS:-}" ] || exit "\${STUB_LS_REMOTE_STATUS}"
+    [ "\${STUB_REMOTE_BRANCH:-0}" = "1" ] || exit 2
+    printf 'abc123\\trefs/heads/audit/fixture\\n'
+    ;;
 esac
 exit 0
 `,
@@ -675,6 +689,67 @@ describe("fluncle-audit ships the agent's working tree", () => {
     expect(calls(box, "git")).not.toMatch(/^commit\b/m);
     expect(calls(box, "git")).toMatch(/^push --quiet -u origin HEAD$/m);
     expect(calls(box, "gh")).not.toContain("pr create");
+  });
+
+  test("a re-run after tonight's branch shipped skips the pass and reuses the PR", async () => {
+    const box = fixture();
+    const result = await run(box, "audit-sweep.sh", ["--domain", "test"], {
+      STUB_AUDIT_PR_URL: "https://example.invalid/pull/9",
+      STUB_CHANGED: "1",
+      STUB_REMOTE_BRANCH: "1",
+      STUB_REPORT: "1 fix, 0 filed",
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.summary).toMatchObject({
+      action: "already-shipped",
+      ok: true,
+      pr: "https://example.invalid/pull/9",
+      produced: 0,
+    });
+    expect(calls(box, "claude")).toBe("");
+    expect(calls(box, "git")).not.toMatch(/^(reset|add|commit|push)\b/m);
+    expect(calls(box, "gh")).not.toContain("pr create");
+  });
+
+  test("a re-run after tonight's branch was pushed without a PR fails loud and re-runs nothing", async () => {
+    const box = fixture();
+    const result = await run(box, "audit-sweep.sh", ["--domain", "test"], {
+      STUB_REMOTE_BRANCH: "1",
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.summary).toMatchObject({ action: "ship-failed", errors: 1, ok: false });
+    expect(calls(box, "claude")).toBe("");
+    expect(calls(box, "git")).not.toMatch(/^(reset|push)\b/m);
+  });
+
+  test("an unreadable origin stops the night before the pass instead of reading as no branch", async () => {
+    const box = fixture();
+    const result = await run(box, "audit-sweep.sh", ["--domain", "test"], {
+      STUB_LS_REMOTE_STATUS: "128",
+      STUB_REPORT: "1 fix, 0 filed",
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.summary).toMatchObject({ errors: 1, ok: false, stage: "remote-branch" });
+    expect(calls(box, "claude")).toBe("");
+    expect(calls(box, "git")).not.toMatch(/^(reset|push)\b/m);
+  });
+
+  test("the domain and branch follow the runner's Amsterdam slot day across the summer UTC boundary", async () => {
+    const box = fixture();
+    const result = await run(box, "audit-sweep.sh", [], {
+      FLUNCLE_DAILY_RETRY_SLOT_DAY: "2026-07-15",
+      STUB_ROTATION_DAY: "2026-07-15",
+    });
+
+    expect(result.summary).toMatchObject({ action: "clean", domain: "test" });
+    expect(calls(box, "bun")).toMatch(/rotation\.ts 2026-07-15$/m);
+    expect(calls(box, "git")).toMatch(
+      /^ls-remote --exit-code --heads origin refs\/heads\/audit\/20260715-test$/m,
+    );
+    expect(calls(box, "git")).toMatch(/^checkout -qB audit\/20260715-test origin\/main$/m);
   });
 
   test("a clean tree opens no PR", async () => {

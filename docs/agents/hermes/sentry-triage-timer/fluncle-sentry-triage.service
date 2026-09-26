@@ -13,7 +13,7 @@ Type=oneshot
 # Root drives the Docker daemon; `docker exec -u hermes` runs the WORK as the unprivileged hermes
 # user. The .sh + .ts + prompt are BAKED at /opt/hermes-scripts (Unit A — auto-updates from main via
 # pin-watch); this host unit only TRIGGERS the sweep, which self-writes its /status marker (cron-output.sh).
-ExecStart=/usr/bin/docker exec -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/sentry-triage-sweep.sh
+ExecStart=/usr/bin/docker exec -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/daily-retry-runner.sh fluncle-sentry-triage Europe/Amsterdam 03:30 05:40 -- bash /opt/hermes-scripts/sentry-triage-sweep.sh
 # A BACKSTOP, NOT THE BUDGET — same reasoning as the auditor's unit: this timeout kills the
 # host-side `docker exec` client only, so the container-side sweep would keep running and write an
 # ordinary marker. The real budget lives in the script (`agent-pass.sh`, bounded by

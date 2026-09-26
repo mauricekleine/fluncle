@@ -47,6 +47,7 @@ export type OperationCadence = Readonly<{
   persistent: boolean;
   randomizedDelaySec?: string;
   reconcileInterval?: Readonly<{ defaultSeconds: number; environment: string }>;
+  retryOnCalendar?: string;
 }>;
 
 export type OperationTrigger = OperationDatabaseProfile &
@@ -1036,6 +1037,11 @@ const calendar = (
   persistent = true,
 ): OperationCadence => ({ kind: "timer", onCalendar, persistent, randomizedDelaySec });
 
+const withRetrySlot = (cadence: OperationCadence, retryOnCalendar: string): OperationCadence => ({
+  ...cadence,
+  retryOnCalendar,
+});
+
 const daemon = (
   environment: string,
   defaultSeconds: number,
@@ -1291,7 +1297,10 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
   }),
   defineOperation({
     accessClass: null,
-    cadence: calendar("*-*-* 05:00:00 Europe/Amsterdam"),
+    cadence: withRetrySlot(
+      calendar("*-*-* 05:00:00 Europe/Amsterdam"),
+      "*-*-* 06:20:00 Europe/Amsterdam",
+    ),
     directory: "audit-review-timer",
     heavy: false,
     mutationTarget: null,
@@ -1312,7 +1321,10 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
   }),
   defineOperation({
     accessClass: null,
-    cadence: calendar("*-*-* 01:00:00 Europe/Amsterdam"),
+    cadence: withRetrySlot(
+      calendar("*-*-* 01:00:00 Europe/Amsterdam"),
+      "*-*-* 03:10:00 Europe/Amsterdam",
+    ),
     directory: "audit-timer",
     heavy: false,
     mutationTarget: null,
@@ -1406,7 +1418,10 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
   }),
   defineOperation({
     accessClass: "heavy-read",
-    cadence: calendar("*-*-* 03:00:00 Europe/Amsterdam"),
+    cadence: withRetrySlot(
+      calendar("*-*-* 03:00:00 Europe/Amsterdam"),
+      "*-*-* 05:20:00 Europe/Amsterdam",
+    ),
     directory: "backup-timer",
     heavy: true,
     mutationTarget: null,
@@ -1496,7 +1511,10 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
   }),
   defineOperation({
     accessClass: "write",
-    cadence: calendar("*-*-* 02:20:00 Europe/Amsterdam"),
+    cadence: withRetrySlot(
+      calendar("*-*-* 03:20:00 Europe/Amsterdam"),
+      "*-*-* 04:30:00 Europe/Amsterdam",
+    ),
     directory: "cluster-timer",
     heavy: true,
     mutationTarget: "primary",
@@ -1640,7 +1658,10 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
   }),
   defineOperation({
     accessClass: "write",
-    cadence: calendar("*-*-* 04:40:00 Europe/Amsterdam"),
+    cadence: withRetrySlot(
+      calendar("*-*-* 04:40:00 Europe/Amsterdam"),
+      "*-*-* 05:50:00 Europe/Amsterdam",
+    ),
     directory: "demand-timer",
     heavy: true,
     mutationTarget: "primary",
@@ -1789,7 +1810,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
   }),
   defineOperation({
     accessClass: "write",
-    cadence: calendar("*-*-* 23:45:00 UTC"),
+    cadence: withRetrySlot(calendar("*-*-* 23:45:00 UTC"), "*-*-* 23:57:00 UTC"),
     directory: "funnel-snapshot-timer",
     heavy: false,
     mutationTarget: "primary",
@@ -1921,7 +1942,10 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
   }),
   defineOperation({
     accessClass: "read",
-    cadence: calendar("*-*-* 06:40:00 Europe/Amsterdam", "90"),
+    cadence: withRetrySlot(
+      calendar("*-*-* 06:40:00 Europe/Amsterdam", "90"),
+      "*-*-* 07:50:00 Europe/Amsterdam",
+    ),
     directory: "label-triage-timer",
     heavy: false,
     mutationTarget: null,
@@ -2025,7 +2049,10 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
   }),
   defineOperation({
     accessClass: "write",
-    cadence: every("23min", "24h"),
+    cadence: withRetrySlot(
+      calendar("*-*-* 07:20:00 Europe/Amsterdam", "90"),
+      "*-*-* 08:20:00 Europe/Amsterdam",
+    ),
     directory: "label-releases-timer",
     heavy: false,
     mutationTarget: "primary",
@@ -2069,7 +2096,10 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
   }),
   defineOperation({
     accessClass: "write",
-    cadence: calendar("*-*-* 00:40:00 Europe/Amsterdam"),
+    cadence: withRetrySlot(
+      calendar("*-*-* 00:40:00 Europe/Amsterdam"),
+      "*-*-* 01:50:00 Europe/Amsterdam",
+    ),
     directory: "logbook-timer",
     heavy: false,
     mutationTarget: "primary",
@@ -2099,7 +2129,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
   }),
   defineOperation({
     accessClass: "write",
-    cadence: calendar("Fri 15:00 Europe/Amsterdam"),
+    cadence: withRetrySlot(calendar("Fri 15:00 Europe/Amsterdam"), "Fri 16:15 Europe/Amsterdam"),
     directory: "newsletter-timer",
     heavy: false,
     mutationTarget: "primary",
@@ -2359,7 +2389,10 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
   }),
   defineOperation({
     accessClass: "write",
-    cadence: calendar("*-*-* 04:00:00 Europe/Amsterdam"),
+    cadence: withRetrySlot(
+      calendar("*-*-* 04:00:00 Europe/Amsterdam"),
+      "*-*-* 05:10:00 Europe/Amsterdam",
+    ),
     directory: "reach-timer",
     heavy: false,
     mutationTarget: "primary",
@@ -2381,7 +2414,10 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
   }),
   defineOperation({
     accessClass: "write",
-    cadence: calendar("*-*-* 04:10:00 Europe/Amsterdam"),
+    cadence: withRetrySlot(
+      calendar("*-*-* 04:10:00 Europe/Amsterdam"),
+      "*-*-* 05:25:00 Europe/Amsterdam",
+    ),
     directory: "reconcile-hub-counts-timer",
     heavy: true,
     mutationTarget: "primary",
@@ -2499,7 +2535,10 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
   }),
   defineOperation({
     accessClass: null,
-    cadence: calendar("*-*-* 03:30:00 Europe/Amsterdam"),
+    cadence: withRetrySlot(
+      calendar("*-*-* 03:30:00 Europe/Amsterdam"),
+      "*-*-* 05:40:00 Europe/Amsterdam",
+    ),
     directory: "sentry-triage-timer",
     heavy: false,
     mutationTarget: null,
@@ -2542,7 +2581,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
   }),
   defineOperation({
     accessClass: "write",
-    cadence: calendar("*-*-* 22:15:00 UTC"),
+    cadence: withRetrySlot(calendar("*-*-* 22:15:00 UTC"), "*-*-* 23:30:00 UTC"),
     directory: "social-metrics-timer",
     heavy: false,
     mutationTarget: "primary",

@@ -12,6 +12,7 @@ RandomizedDelaySec=90
 # within a day of it happening. Persistent catches up a tick missed across a box reboot; the gate
 # is a pure read, so a deferred tick costs nothing and reports the same thing later.
 OnCalendar=*-*-* 06:40:00 Europe/Amsterdam
+OnCalendar=*-*-* 07:50:00 Europe/Amsterdam
 Persistent=true
 
 [Install]

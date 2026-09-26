@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  dailyRetryReconcileSummary,
   MAX_WINDOWS,
   parseReconcileCursor,
   parseWindowEnvelope,
@@ -349,6 +350,35 @@ describe("runReconcileHubCountsTick — windows", () => {
       windows: 0,
     });
     expect(run.lines.some((line) => line.startsWith("AUDIT "))).toBe(false);
+  });
+
+  test("the daily retry ledger marks only a zero-window admission yield as unfinished", async () => {
+    const firstWindow = await runReconcileHubCountsTick(scripted([undefined]).deps);
+    const afterWork = await runReconcileHubCountsTick(
+      scripted([
+        {
+          albums: ZERO,
+          artists: ZERO,
+          labels: { corrected: 2, deferred: 0 },
+          next: { afterId: "lbl_b", table: "labels" },
+          ok: true,
+          tookMs: 40,
+        },
+        undefined,
+      ]).deps,
+    );
+
+    expect(dailyRetryReconcileSummary(firstWindow, false)).toMatchObject({ errors: 0, ok: true });
+    expect(dailyRetryReconcileSummary(firstWindow, true)).toMatchObject({
+      errors: 1,
+      ok: false,
+      windows: 0,
+    });
+    expect(dailyRetryReconcileSummary(afterWork, true)).toMatchObject({
+      errors: 0,
+      ok: true,
+      windows: 1,
+    });
   });
 
   test("counts a table as checked only once the cursor has moved past it", async () => {

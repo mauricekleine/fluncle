@@ -203,6 +203,35 @@ describe("run-ledger summary counters", () => {
     expect("expectedIntervalMs" in summary).toBe(false);
     expect("expected_interval_ms" in summary).toBe(false);
   });
+
+  test("an exhausted gap stays outstanding without spending another draft", () => {
+    rmSync(CONTROL, { force: true, recursive: true });
+    rmSync(STATE_DIR, { force: true, recursive: true });
+    mkdirSync(CONTROL, { recursive: true });
+    mkdirSync(STATE_DIR, { recursive: true });
+    writeFileSync(join(CONTROL, "queue-mode"), "work", "utf8");
+    writeFileSync(ledgerPath(), `36\t${MAX_LOGBOOK_ATTEMPTS}\t0\n`, "utf8");
+    verdict("pass");
+    claudeVerdict("up");
+
+    const result = spawnSync(process.execPath, [join(import.meta.dir, "logbook-sweep.ts")], {
+      encoding: "utf8",
+      env: { ...process.env, FLUNCLE_API_TOKEN: "" },
+    });
+    const summary = JSON.parse(result.stdout.trim()) as Record<string, unknown>;
+
+    expect(result.status).toBe(0);
+    expect(summary).toMatchObject({
+      authored: 0,
+      checked: 0,
+      exhausted: 1,
+      gapsRemaining: 1,
+      produced: 0,
+    });
+    expect(authorings()).toBe(0);
+    expect(stores()).toEqual([]);
+    expect(readAttemptLedger(ledgerPath()).get("36")?.attempts).toBe(MAX_LOGBOOK_ATTEMPTS);
+  });
 });
 
 function verdict(value: "pass" | "voice" | "echo" | "infra403"): void {

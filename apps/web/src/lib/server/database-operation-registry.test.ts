@@ -196,9 +196,19 @@ function unitValue(contents: string, key: string): string | undefined {
   return line?.slice(key.length + 1);
 }
 
+function unitValues(contents: string, key: string): string[] {
+  return contents
+    .split("\n")
+    .filter((candidate) => candidate.startsWith(`${key}=`))
+    .map((line) => line.slice(key.length + 1));
+}
+
 function timerCadence(contents: string): OperationCadence {
   const onBootSec = unitValue(contents, "OnBootSec");
-  const onCalendar = unitValue(contents, "OnCalendar");
+  const [onCalendar, retryOnCalendar, ...extraCalendars] = unitValues(contents, "OnCalendar");
+  if (extraCalendars.length > 0) {
+    throw new Error(`a timer carries at most a primary and one retry OnCalendar slot`);
+  }
   const onUnitActiveSec = unitValue(contents, "OnUnitActiveSec");
   const persistent = unitValue(contents, "Persistent") === "true";
   const randomizedDelaySec = unitValue(contents, "RandomizedDelaySec");
@@ -210,6 +220,7 @@ function timerCadence(contents: string): OperationCadence {
     ...(onUnitActiveSec ? { onUnitActiveSec } : {}),
     persistent,
     ...(randomizedDelaySec ? { randomizedDelaySec } : {}),
+    ...(retryOnCalendar ? { retryOnCalendar } : {}),
   };
 }
 
@@ -507,6 +518,24 @@ describe("database operation registry", () => {
       );
       expect(basename(operation.timerSource), operation.operationId).toBe(operation.owner.timer);
     }
+  });
+
+  it("models every retry OnCalendar slot, so a heavy operation's second firing is visible", () => {
+    const backup = DATABASE_OPERATION_REGISTRY.find(
+      (operation) => operation.owner.timer === "fluncle-backup.timer",
+    );
+
+    expect(backup?.heavy).toBe(true);
+    expect(backup?.cadence.onCalendar).toBe("*-*-* 03:00:00 Europe/Amsterdam");
+    expect(backup?.cadence.retryOnCalendar).toBe("*-*-* 05:20:00 Europe/Amsterdam");
+    expect(
+      timerCadence(
+        "[Timer]\nOnCalendar=*-*-* 03:00:00 Europe/Amsterdam\nOnCalendar=*-*-* 05:20:00 Europe/Amsterdam\nPersistent=true\n",
+      ).retryOnCalendar,
+    ).toBe("*-*-* 05:20:00 Europe/Amsterdam");
+    expect(() =>
+      timerCadence("[Timer]\nOnCalendar=01:00\nOnCalendar=02:00\nOnCalendar=03:00\n"),
+    ).toThrow();
   });
 
   it("resolves every timer through its service and checked-in wrapper", () => {

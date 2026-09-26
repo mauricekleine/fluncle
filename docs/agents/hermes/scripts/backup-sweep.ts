@@ -60,8 +60,6 @@ const KEEP_MONTHLY = Number(process.env.FLUNCLE_BACKUP_KEEP_MONTHLY ?? "12");
 const BOXSTATE_KEEP_DAILY = Number(process.env.FLUNCLE_BOXSTATE_KEEP_DAILY ?? "14");
 const BOXSTATE_KEEP_MONTHLY = Number(process.env.FLUNCLE_BOXSTATE_KEEP_MONTHLY ?? "6");
 
-const DISCORD_ALERT_WEBHOOK = process.env.DISCORD_ALERT_WEBHOOK ?? "";
-
 const ROW_BATCH = Math.max(1, Number(process.env.FLUNCLE_BACKUP_ROW_BATCH ?? "1000"));
 
 const WRITE_CHUNK_BYTES = 512 * 1024;
@@ -727,20 +725,6 @@ function libsqlSource(): DumpSource {
   };
 }
 
-async function alertDiscord(message: string): Promise<void> {
-  if (!DISCORD_ALERT_WEBHOOK) {
-    return;
-  }
-  try {
-    await fetch(DISCORD_ALERT_WEBHOOK, {
-      body: JSON.stringify({ content: message }),
-      headers: { "Content-Type": "application/json" },
-      method: "POST",
-      signal: AbortSignal.timeout(5000),
-    });
-  } catch {}
-}
-
 async function uploadTier(options: {
   artifact: ArtifactFile;
   artifactName: string;
@@ -792,10 +776,26 @@ async function uploadTier(options: {
   return { dailyKey: dailyArtifact, monthlyWritten: !monthlyExists, pruned: expired.length };
 }
 
+export function reusableDailyDump(options: {
+  date: string;
+  existing: readonly string[];
+  retryState: string | undefined;
+}): string | null {
+  if (options.retryState !== "partial") {
+    return null;
+  }
+  const folder = `${DAILY_PREFIX}${options.date}/`;
+  const artifact = `${folder}fluncle.sql.gz`;
+
+  return options.existing.includes(artifact) &&
+    options.existing.includes(`${folder}${MANIFEST_NAME}`)
+    ? artifact
+    : null;
+}
+
 type BoxStateOutcome =
-  | { key: string; manifest: BoxStateManifest; ok: true; pruned: number; skipped: false }
-  | { ok: true; reason: string; skipped: true }
-  | { error: string; ok: false; skipped: false };
+  | { key: string; manifest: BoxStateManifest; ok: true; pruned: number }
+  | { error: string; ok: false };
 
 export type BackupRunCounters = {
   checked: number;
@@ -833,7 +833,7 @@ async function runBoxStateLeg(now: Date, tempDir: string): Promise<BoxStateOutco
   const key = boxStateKeyFromEnv(process.env);
 
   if (!key) {
-    return { ok: true, reason: "no_encryption_key", skipped: true };
+    return { error: "no_encryption_key", ok: false };
   }
 
   const paths = selectBoxStatePaths(boxStateCandidates());
@@ -867,12 +867,11 @@ async function runBoxStateLeg(now: Date, tempDir: string): Promise<BoxStateOutco
       monthlyPrefix: BOXSTATE_MONTHLY_PREFIX,
     });
 
-    return { key: tier.dailyKey, manifest, ok: true, pruned: tier.pruned, skipped: false };
+    return { key: tier.dailyKey, manifest, ok: true, pruned: tier.pruned };
   } catch (error) {
     return {
       error: error instanceof Error ? error.message : String(error),
       ok: false,
-      skipped: false,
     };
   } finally {
     await rm(archivePath, { force: true });
@@ -992,82 +991,92 @@ async function main(): Promise<void> {
   const tempDir = process.env.FLUNCLE_BACKUP_TMPDIR ?? tmpdir();
   mkdirSync(tempDir, { recursive: true });
 
-  const dumpPath = join(tempDir, `fluncle-backup-${process.pid}.sql.gz`);
-  let dump: { file: ArtifactFile; manifest: DumpManifest };
+  const date = now.toISOString().slice(0, 10);
+  const month = now.toISOString().slice(0, 7);
+  const existingDumps = await r2List(PREFIX);
+  const reusedDailyKey = reusableDailyDump({
+    date,
+    existing: existingDumps,
+    retryState: process.env.FLUNCLE_DAILY_RETRY_STATE,
+  });
+  let dump: { file: ArtifactFile; manifest: DumpManifest } | null = null;
   let tier: { dailyKey: string; monthlyWritten: boolean; pruned: number };
 
-  beginBackupOperation(runCounters);
-  try {
-    dump = await writeGzippedDump(libsqlSource(), dumpPath, dumpOptions);
+  if (reusedDailyKey !== null) {
+    log(
+      `today's database artifact ${reusedDailyKey} already landed; running the box-state leg only`,
+    );
+    tier = { dailyKey: reusedDailyKey, monthlyWritten: false, pruned: 0 };
+  } else {
+    const dumpPath = join(tempDir, `fluncle-backup-${process.pid}.sql.gz`);
 
-    const date = now.toISOString().slice(0, 10);
-    const month = now.toISOString().slice(0, 7);
-
-    tier = await uploadTier({
-      artifact: dump.file,
-      artifactName: "fluncle.sql.gz",
-      contentType: "application/gzip",
-      dailyPrefix: DAILY_PREFIX,
-      date,
-      existing: await r2List(PREFIX),
-      keepDaily: KEEP_DAILY,
-      keepMonthly: KEEP_MONTHLY,
-      manifestJson: `${JSON.stringify(dump.manifest, null, 2)}\n`,
-      month,
-      monthlyPrefix: MONTHLY_PREFIX,
-    });
-    completeBackupOperation(runCounters);
-  } finally {
-    await rm(dumpPath, { force: true });
-  }
-
-  const boxStateConfigured = boxStateKeyFromEnv(process.env) !== null;
-
-  if (boxStateConfigured) {
     beginBackupOperation(runCounters);
+    try {
+      const written = await writeGzippedDump(libsqlSource(), dumpPath, dumpOptions);
+      dump = written;
+
+      tier = await uploadTier({
+        artifact: written.file,
+        artifactName: "fluncle.sql.gz",
+        contentType: "application/gzip",
+        dailyPrefix: DAILY_PREFIX,
+        date,
+        existing: existingDumps,
+        keepDaily: KEEP_DAILY,
+        keepMonthly: KEEP_MONTHLY,
+        manifestJson: `${JSON.stringify(written.manifest, null, 2)}\n`,
+        month,
+        monthlyPrefix: MONTHLY_PREFIX,
+      });
+      completeBackupOperation(runCounters);
+    } finally {
+      await rm(dumpPath, { force: true });
+    }
   }
+
+  beginBackupOperation(runCounters);
 
   const boxState = await runBoxStateLeg(now, tempDir);
 
   if (!boxState.ok) {
     failBackupOperation(runCounters);
     log(`box-state leg failed: ${boxState.error}`);
-    await alertDiscord(`Fluncle backup-sweep: the box-state leg failed — ${boxState.error}`);
-  } else if (!boxState.skipped) {
+  } else {
     completeBackupOperation(runCounters);
   }
 
   console.log(
     JSON.stringify({
       ...runCounters,
-      boxState: boxState.skipped
-        ? { reason: boxState.reason, skipped: true }
-        : boxState.ok
-          ? {
-              cipherBytes: boxState.manifest.cipherBytes,
-              entryCount: boxState.manifest.entryCount,
-              key: boxState.key,
-              pruned: boxState.pruned,
-            }
-          : { error: boxState.error, ok: false },
+      boxState: boxState.ok
+        ? {
+            cipherBytes: boxState.manifest.cipherBytes,
+            entryCount: boxState.manifest.entryCount,
+            key: boxState.key,
+            pruned: boxState.pruned,
+          }
+        : { error: boxState.error, ok: false },
       dailyKey: tier.dailyKey,
+      dumpReused: dump === null,
       elapsedMs: Date.now() - started,
-      gzipBytes: dump.file.bytes,
+      gzipBytes: dump?.file.bytes ?? null,
       monthlyWritten: tier.monthlyWritten,
       ok: boxState.ok,
       pruned: tier.pruned,
       ...(boxState.ok ? {} : { reason: "box_state_failed" }),
-      sqlBytes: dump.manifest.sqlBytes,
-      tableCount: dump.manifest.tableCount,
+      sqlBytes: dump?.manifest.sqlBytes ?? null,
+      tableCount: dump?.manifest.tableCount ?? null,
     }),
   );
+  if (!boxState.ok) {
+    process.exitCode = 1;
+  }
 }
 
 if (import.meta.main) {
-  main().catch(async (error: unknown) => {
+  main().catch((error: unknown) => {
     const message = error instanceof Error ? error.message : String(error);
     log(`backup failed: ${message}`);
-    await alertDiscord(`Fluncle backup-sweep failed: ${message}`);
     console.log(
       JSON.stringify({
         ...runCounters,
