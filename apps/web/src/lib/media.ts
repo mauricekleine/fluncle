@@ -74,9 +74,10 @@ const SPOTIFY_IMAGE_SIZE_CODE = {
   small: "ab67616d00004851",
 } as const;
 
-export type CoverSize = "large" | "medium" | "small" | "tile" | "xl";
+export type CoverSize = "hub" | "large" | "medium" | "small" | "tile" | "xl";
 
 const OWNED_COVER_WIDTH: Record<CoverSize, number> = {
+  hub: 128,
   large: 640,
   medium: 300,
   small: 64,
@@ -101,6 +102,7 @@ const SPOTIFY_ARTIST_IMAGE_RE = /^(https:\/\/i\.scdn\.co\/image\/)ab676161[0-9a-
 const COVER_ART_ARCHIVE_FRONT_RE =
   /^(https:\/\/coverartarchive\.org\/release\/[0-9a-f-]{36}\/front)(?:-(?:250|500|1200))?(\?.*)?$/;
 const COVER_ART_ARCHIVE_WIDTH: Record<Exclude<CoverSize, "large">, number> = {
+  hub: 250,
   medium: 500,
   small: 250,
   tile: 250,
@@ -156,7 +158,9 @@ export function albumCoverAtSize(url: string | undefined, size: CoverSize): stri
 
   if (album) {
     const code =
-      SPOTIFY_IMAGE_SIZE_CODE[size === "xl" ? "large" : size === "tile" ? "medium" : size];
+      SPOTIFY_IMAGE_SIZE_CODE[
+        size === "xl" ? "large" : size === "tile" || size === "hub" ? "medium" : size
+      ];
 
     return `${album[1]}${code}${album[2]}`;
   }
@@ -165,7 +169,9 @@ export function albumCoverAtSize(url: string | undefined, size: CoverSize): stri
 
   if (artist) {
     const code =
-      SPOTIFY_ARTIST_IMAGE_SIZE_CODE[size === "xl" ? "large" : size === "tile" ? "medium" : size];
+      SPOTIFY_ARTIST_IMAGE_SIZE_CODE[
+        size === "xl" ? "large" : size === "tile" ? "medium" : size === "hub" ? "small" : size
+      ];
 
     return `${artist[1]}${code}${artist[2]}`;
   }
@@ -181,6 +187,59 @@ export function albumCoverAtSize(url: string | undefined, size: CoverSize): stri
   }
 
   return url;
+}
+
+export function hubCoverSrcSet(url: string | undefined): string | undefined {
+  if (!url) {
+    return undefined;
+  }
+
+  const small = albumCoverAtSize(url, "hub");
+  const large = albumCoverAtSize(url, "tile");
+
+  if (!small || !large) {
+    return undefined;
+  }
+
+  if (OWNED_COVER_WIDTH_RE.test(url)) {
+    return `${small} 128w, ${large} 300w`;
+  }
+
+  if (SPOTIFY_ARTIST_IMAGE_RE.test(url)) {
+    return `${small} 160w, ${large} 320w`;
+  }
+
+  if (SPOTIFY_ALBUM_IMAGE_RE.test(url)) {
+    const thumbnail = albumCoverAtSize(url, "small");
+
+    return thumbnail ? `${thumbnail} 64w, ${large} 300w` : undefined;
+  }
+
+  if (COVER_ART_ARCHIVE_FRONT_RE.test(url)) {
+    const medium = albumCoverAtSize(url, "medium");
+
+    return medium && medium !== small ? `${small} 250w, ${medium} 500w` : undefined;
+  }
+
+  return undefined;
+}
+
+export function freshStandoutSrcSet(url: string | undefined): string | undefined {
+  const hub = hubCoverSrcSet(url);
+
+  if (!url || !hub) {
+    return undefined;
+  }
+
+  if (COVER_ART_ARCHIVE_FRONT_RE.test(url)) {
+    const xl = albumCoverAtSize(url, "xl");
+
+    return xl ? `${hub}, ${xl} 1200w` : hub;
+  }
+
+  const large = albumCoverAtSize(url, "large");
+
+  return large ? `${hub}, ${large} 640w` : hub;
 }
 
 export function bestAlbumCoverUrl(cover: {

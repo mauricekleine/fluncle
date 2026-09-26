@@ -10,7 +10,7 @@ import { TrackArtwork } from "@/components/track-artwork";
 import { siteUrl } from "@/lib/fluncle-links";
 import { tracksCount } from "@/lib/format";
 import { jsonLdScript } from "@/lib/json-ld";
-import { albumCoverAtSize, HUB_COVER_TILE_SIZE } from "@/lib/media";
+import { albumCoverAtSize, hubCoverSrcSet } from "@/lib/media";
 import { type HubOrder, hubHref, hubOrderParam } from "@/lib/hub-order";
 import { pageParam, textParam } from "@/lib/search-params";
 import {
@@ -186,7 +186,15 @@ function albumMeta(album: AlbumHubEntry): string {
     : tracksCount(album.trackCount);
 }
 
-function AlbumTile({ album }: { album: AlbumHubEntry }) {
+function AlbumTile({
+  album,
+  eager,
+  priority,
+}: {
+  album: AlbumHubEntry;
+  eager?: boolean;
+  priority?: boolean;
+}) {
   return (
     <HubTile kind="album" lit={album.certified} name={album.name} slug={album.slug}>
       <Link
@@ -197,7 +205,11 @@ function AlbumTile({ album }: { album: AlbumHubEntry }) {
         <TrackArtwork
           alt=""
           className="artist-grid-cover"
-          src={albumCoverAtSize(album.coverImageUrl, HUB_COVER_TILE_SIZE)}
+          eager={eager}
+          priority={priority}
+          sizes="(min-width: 40rem) 120px, 50vw"
+          src={albumCoverAtSize(album.coverImageUrl, "hub")}
+          srcSet={hubCoverSrcSet(album.coverImageUrl)}
         />
         <span className="artist-grid-line">{album.name}</span>
         {album.artists.length > 0 ? (
@@ -275,8 +287,13 @@ function AlbumsPage() {
               />
             )}
             <ul aria-label="Albums" className="artist-grid hub-grid">
-              {hub.items.map((album) => (
-                <AlbumTile album={album} key={album.slug} />
+              {hub.items.map((album, index) => (
+                <AlbumTile
+                  album={album}
+                  eager={index < 4}
+                  key={album.slug}
+                  priority={index === 0}
+                />
               ))}
             </ul>
             <CataloguePager
