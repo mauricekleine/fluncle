@@ -225,7 +225,7 @@ RUN arch="$(uname -m)" \
        x86_64|amd64)  cpu="x64" ;; \
        *) echo "unsupported arch for the fluncle binary: $arch" >&2; exit 1 ;; \
      esac \
-  && curl -fsSL "https://github.com/mauricekleine/fluncle/releases/download/v0.254.0/fluncle-linux-${cpu}" \
+  && curl -fsSL "https://github.com/mauricekleine/fluncle/releases/download/v0.260.0/fluncle-linux-${cpu}" \
        -o /usr/local/bin/fluncle \
   && chmod 755 /usr/local/bin/fluncle
 
@@ -311,7 +311,7 @@ RUN chmod -R a+rX /opt/fonts
 # /usr/local/lib + a /usr/local/bin/claude symlink, both world-accessible, so the
 # NON-root cron user can exec it (same world-readable property the `fluncle` CLI relies
 # on). Bump lever: this version line.
-RUN npm install -g @anthropic-ai/claude-code@2.1.282
+RUN npm install -g @anthropic-ai/claude-code@2.1.283
 
 # ALL local Fluncle skills, baked for Claude Code so every box `claude -p` discovers
 # them without a per-run `skills:install`: the voice crons load `copywriting-fluncle`
