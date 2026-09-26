@@ -33,7 +33,16 @@ const DEFAULT_PAGES = [
   "/labels",
   "/fresh",
 ];
-const LIGHTHOUSE_PAGES = new Set(["/", "/search?q=liquid", "/tracks", "/artists", "/fresh"]);
+const LIGHTHOUSE_PAGES = new Set([
+  "/",
+  "/search?q=liquid",
+  "/tracks",
+  "/artists",
+  "/albums",
+  "/labels",
+  "/fresh",
+]);
+const ANALYTICS_URL = /^https:\/\/[^/]*simpleanalyticscdn\.com\//;
 const PLAY_NAME = /\b(play|preview)\b/i;
 const MOBILE_UA =
   "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1";
@@ -200,6 +209,7 @@ async function firstPlayControl(
 }
 
 async function installAudioProbe(context: BrowserContext): Promise<void> {
+  await context.route(ANALYTICS_URL, (route) => route.abort());
   await context.addInitScript(() => {
     const tracked: HTMLAudioElement[] = [];
     (window as Window & { __uxCaptureAudio?: HTMLAudioElement[] }).__uxCaptureAudio = tracked;
@@ -461,6 +471,7 @@ async function runLighthouse(options: Options, path: string): Promise<Lighthouse
     `--output-path=${outputPath}`,
     "--only-categories=performance,accessibility,best-practices,seo",
     "--form-factor=mobile",
+    "--blocked-url-patterns=*simpleanalyticscdn.com*",
     "--chrome-flags=--headless=new",
     "--quiet",
   ];

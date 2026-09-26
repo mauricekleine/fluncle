@@ -4,6 +4,8 @@ import {
   albumCoverAtSize,
   bestAlbumCoverUrl,
   bestArtistAvatarUrl,
+  freshStandoutSrcSet,
+  hubCoverSrcSet,
   labelLogoUrl,
   ownedCoverUrl,
   trackMedia,
@@ -539,6 +541,63 @@ describe("albumCoverAtSize — resizes BOTH providers", () => {
     const bare = "https://found.fluncle.com/labels/some-label.jpg";
 
     expect(albumCoverAtSize(bare, "small")).toBe(bare);
+  });
+});
+
+describe("hubCoverSrcSet", () => {
+  it("offers a 128px owned image for a 104px tile and a sharper 300px candidate", () => {
+    const large = ownedCoverUrl(KEY, "2026-07-13T00:00:00.000Z", "large");
+
+    expect(albumCoverAtSize(large, "hub")).toContain("width=128,");
+    expect(hubCoverSrcSet(large)).toBe(
+      `${albumCoverAtSize(large, "hub")} 128w, ${albumCoverAtSize(large, "tile")} 300w`,
+    );
+  });
+
+  it("uses the portrait ladder and keeps unknown image dimensions out of srcset", () => {
+    const portrait = "https://i.scdn.co/image/ab6761610000e5ebcafef00d";
+
+    expect(hubCoverSrcSet(portrait)).toBe(
+      `${albumCoverAtSize(portrait, "hub")} 160w, ${albumCoverAtSize(portrait, "tile")} 320w`,
+    );
+    expect(hubCoverSrcSet("https://example.com/cover.jpg")).toBeUndefined();
+  });
+
+  it("uses each provider's actual artwork widths", () => {
+    const spotify = "https://i.scdn.co/image/ab67616d0000b273cafef00d";
+    const archive =
+      "https://coverartarchive.org/release/99b09d02-9cc9-3fed-8431-f162165a9371/front";
+
+    expect(hubCoverSrcSet(spotify)).toBe(
+      `${albumCoverAtSize(spotify, "small")} 64w, ${albumCoverAtSize(spotify, "tile")} 300w`,
+    );
+    expect(hubCoverSrcSet(archive)).toBe(
+      `${albumCoverAtSize(archive, "hub")} 250w, ${albumCoverAtSize(archive, "medium")} 500w`,
+    );
+  });
+});
+
+describe("freshStandoutSrcSet", () => {
+  it("retains mobile owned-image candidates and adds a desktop-density source", () => {
+    const image = ownedCoverUrl(KEY, "2026-07-13T00:00:00.000Z", "large");
+
+    expect(freshStandoutSrcSet(image)).toBe(
+      `${hubCoverSrcSet(image)}, ${albumCoverAtSize(image, "large")} 640w`,
+    );
+  });
+
+  it("uses the larger Spotify and Cover Art Archive renditions when available", () => {
+    const portrait = "https://i.scdn.co/image/ab6761610000e5ebcafef00d";
+    const archive =
+      "https://coverartarchive.org/release/99b09d02-9cc9-3fed-8431-f162165a9371/front";
+
+    expect(freshStandoutSrcSet(portrait)).toBe(
+      `${hubCoverSrcSet(portrait)}, ${albumCoverAtSize(portrait, "large")} 640w`,
+    );
+    expect(freshStandoutSrcSet(archive)).toBe(
+      `${hubCoverSrcSet(archive)}, ${albumCoverAtSize(archive, "xl")} 1200w`,
+    );
+    expect(freshStandoutSrcSet("https://example.com/image.jpg")).toBeUndefined();
   });
 });
 

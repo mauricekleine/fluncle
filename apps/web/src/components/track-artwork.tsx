@@ -5,14 +5,20 @@ import { cn } from "@/lib/utils";
 export function TrackArtwork({
   alt,
   className,
+  eager,
   priority,
+  sizes,
   src,
+  srcSet,
 }: {
   alt?: string;
   className?: string;
+  eager?: boolean;
 
   priority?: boolean;
+  sizes?: string;
   src?: string;
+  srcSet?: string;
 }) {
   const imgRef = useRef<HTMLImageElement>(null);
   const [failedSrc, setFailedSrc] = useState<string>();
@@ -21,7 +27,7 @@ export function TrackArtwork({
     const img = imgRef.current;
 
     if (img && img.complete && img.naturalWidth === 0 && img.src) {
-      setFailedSrc(img.currentSrc || img.src);
+      setFailedSrc(img.src);
     }
   }, [src]);
 
@@ -36,10 +42,12 @@ export function TrackArtwork({
       className={cn("track-artwork", className)}
       decoding="async"
       fetchPriority={priority ? "high" : undefined}
-      loading={priority ? "eager" : "lazy"}
+      loading={priority || eager ? "eager" : "lazy"}
       onError={() => setFailedSrc(src)}
       ref={imgRef}
+      sizes={sizes}
       src={src}
+      srcSet={srcSet}
     />
   ) : (
     <span aria-hidden="true" className={cn("track-artwork track-artwork-fallback", className)} />

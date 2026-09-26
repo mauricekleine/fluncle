@@ -49,6 +49,16 @@ async function requestMagicLink(page: Page, email: string): Promise<void> {
   await expect(sent).toContainText(email);
 }
 
+test("the crew slot opens the sign-in door from a fresh public page", async ({ page }) => {
+  await blockExternalRequests(page);
+
+  await page.goto("/", { waitUntil: "networkidle" });
+  await page.getByRole("button", { name: "Join the crew" }).click();
+
+  await expect(page).toHaveURL(/\/account$/);
+  await expect(page.getByRole("button", { name: "Email me a link" })).toBeVisible();
+});
+
 test("a new account joins by magic link, saves a finding, sees it on /account, and loses it on sign out", async ({
   page,
 }) => {

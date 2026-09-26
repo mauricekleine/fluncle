@@ -5,7 +5,9 @@ export function ArtistAvatar({
   eager,
   name,
   priority,
+  sizes,
   src,
+  srcSet,
 }: {
   className?: string;
 
@@ -13,7 +15,9 @@ export function ArtistAvatar({
   name: string;
 
   priority?: boolean;
+  sizes?: string;
   src?: string;
+  srcSet?: string;
 }) {
   if (src) {
     return (
@@ -23,7 +27,9 @@ export function ArtistAvatar({
         decoding="async"
         fetchPriority={priority ? "high" : undefined}
         loading={priority || eager ? "eager" : "lazy"}
+        sizes={sizes}
         src={src}
+        srcSet={srcSet}
       />
     );
   }
