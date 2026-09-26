@@ -16,8 +16,10 @@ export type StageState =
   | "degraded"
   | "measurement_unavailable";
 export type Marker = { at: number; summary: Record<string, unknown> };
+export type BoundedCount = { atLeast: boolean; count: number };
+type CountInput = BoundedCount | number;
 export type StageVerdict = {
-  backlog: number | null;
+  backlog: BoundedCount | null;
   cause: string;
   message: string;
   output: number | null;
@@ -26,19 +28,19 @@ export type StageVerdict = {
   windowMs: number;
 };
 export type PipelineSnapshot = {
-  anchorQueue: number | null;
+  anchorQueue: CountInput | null;
   budget: {
     closedReason: string | null;
     open: boolean;
     remainingBytes: number;
     remainingTracks: number;
   } | null;
-  crawl: { frontier: number; storable: number; unstorable: number } | null;
+  crawl: { frontier: CountInput; storable: CountInput; unstorable: CountInput } | null;
   crawlZeroChecks: number;
   embedOldCapture: boolean | null;
   embedTrend?: { since: number; startingQueue: number } | null;
   markers: Record<Stage, Marker[] | null>;
-  queues: { analyze: number | null; capture: number | null; embed: number | null };
+  queues: { analyze: number | null; capture: CountInput | null; embed: number | null };
 };
 
 const MINUTE = 60_000;
@@ -70,6 +72,15 @@ const CADENCE: Record<Stage, number> = {
 const number = (value: unknown): number | null =>
   typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
 
+export const countValue = (value: CountInput | null): number | null =>
+  value === null ? null : typeof value === "number" ? value : value.count;
+
+const boundedCount = (value: CountInput | null): BoundedCount | null =>
+  value === null ? null : typeof value === "number" ? { atLeast: false, count: value } : value;
+
+const formatCount = (value: BoundedCount | null): string =>
+  value === null ? "unknown" : value.atLeast ? `at least ${value.count}` : String(value.count);
+
 function withinFrontierRefreshWindow(now: Date): boolean {
   const parts = new Intl.DateTimeFormat("en-US", {
     hour: "2-digit",
@@ -87,7 +98,7 @@ function result(
   state: StageState,
   cause: string,
   output: number | null,
-  backlog: number | null,
+  backlog: CountInput | null,
   windowMs: number,
   action: string,
 ): StageVerdict {
@@ -98,9 +109,9 @@ function result(
         ? `${windowMs / HOUR}h`
         : `${windowMs / MINUTE}m`;
   return {
-    backlog,
+    backlog: boundedCount(backlog),
     cause,
-    message: `${stage}: ${state.replaceAll("_", " ")} over ${duration}; ${output ?? "unknown"} produced / ${backlog ?? "unknown"} queued; ${cause.replaceAll("_", " ")}. ${action}`,
+    message: `${stage}: ${state.replaceAll("_", " ")} over ${duration}; ${output ?? "unknown"} produced / ${formatCount(boundedCount(backlog))} queued; ${cause.replaceAll("_", " ")}. ${action}`,
     output,
     stage,
     state,
@@ -315,11 +326,15 @@ function evaluateStage(snapshot: PipelineSnapshot, stage: Stage, now: Date): Sta
               ? PIPELINE_SLOS.embed.windowMs
               : 0;
   const markers = stageMarkers(snapshot, stage, nowMs);
+  const captureBudgetClosed =
+    stage === "capture" &&
+    snapshot.budget !== null &&
+    (!snapshot.budget.open || snapshot.budget.remainingBytes < BUDGET_EXHAUSTED_BYTES);
   if (
     !markers ||
     (stage === "crawl" && !snapshot.crawl) ||
     (stage === "capture" && !snapshot.budget) ||
-    backlog === null ||
+    (backlog === null && !captureBudgetClosed) ||
     (stage === "embed" && snapshot.embedOldCapture === null)
   ) {
     return result(
@@ -361,8 +376,9 @@ function evaluateStage(snapshot: PipelineSnapshot, stage: Stage, now: Date): Sta
       : null;
   if (
     stage === "crawl" &&
-    (snapshot.crawl?.frontier ?? 0) >= PIPELINE_SLOS.crawl.frontierFloor &&
-    snapshot.crawl?.storable === 0 &&
+    snapshot.crawl !== null &&
+    (countValue(snapshot.crawl.frontier) ?? 0) >= PIPELINE_SLOS.crawl.frontierFloor &&
+    countValue(snapshot.crawl.storable) === 0 &&
     (crawlRecentWrites ?? 0) < CRAWL_SUPPLY_MIN_WRITES
   ) {
     if (snapshot.crawlZeroChecks < 2) {
@@ -386,15 +402,11 @@ function evaluateStage(snapshot: PipelineSnapshot, stage: Stage, now: Date): Sta
       "No storable releases queued; review label decisions.",
     );
   }
-  if (
-    stage === "capture" &&
-    (snapshot.budget?.open === false ||
-      (snapshot.budget?.remainingBytes ?? Infinity) < BUDGET_EXHAUSTED_BYTES)
-  ) {
+  if (captureBudgetClosed) {
     return result(
       stage,
       "budget_closed",
-      snapshot.budget.closedReason ?? "budget_exhausted",
+      snapshot.budget?.closedReason ?? "budget_exhausted",
       0,
       backlog,
       windowMs,
@@ -426,7 +438,7 @@ function evaluateStage(snapshot: PipelineSnapshot, stage: Stage, now: Date): Sta
       "Check marker summary counters.",
     );
   }
-  if (backlog === 0) {
+  if (countValue(backlog) === 0) {
     return result(stage, "healthy", "supply_empty", output, backlog, windowMs, "No ready work.");
   }
   if (stage === "anchor") {
@@ -470,7 +482,7 @@ function evaluateStage(snapshot: PipelineSnapshot, stage: Stage, now: Date): Sta
     }
     if (
       backlog !== null &&
-      backlog >= 1000 &&
+      (countValue(backlog) ?? 0) >= 1000 &&
       expected.length === 2 &&
       anchorOutput !== null &&
       anchorOutput < PIPELINE_SLOS.anchor.minOutput
@@ -527,7 +539,7 @@ function evaluateStage(snapshot: PipelineSnapshot, stage: Stage, now: Date): Sta
         trend !== undefined &&
         nowMs - trend.since >= PIPELINE_SLOS.embed.capacityWindowMs &&
         backlog !== null &&
-        backlog > trend.startingQueue)
+        (countValue(backlog) ?? 0) > trend.startingQueue)
     ) {
       return result(
         stage,

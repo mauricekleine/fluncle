@@ -25,6 +25,8 @@ Web integration suites use the production public-auth options with sign-up verif
 
 The package graph is read from workspace manifests and selection walks reverse dependencies. The comparison uses full history and explicit base/head SHAs, including the pull request base rather than the synthetic merge ref. Scheduled and operator-dispatched Quality Checks are full backstops. Playwright's changed-test heuristic may be used for early local feedback, but it is never the CI authority.
 
+`docs/agents/hermes/scripts/pipeline-watch-evaluate.ts` also selects the web closure because the web pipeline-read integration test imports the evaluator; its box-script lane remains selected.
+
 A linked worktree must resolve workspace packages inside its own checkout before its checks run. Node can otherwise walk to a parent checkout's `node_modules`, producing a passing check against another revision; `scripts/quality/workspace-install.mjs` checks the resolved package location.
 
 Security retains separate full-history Gitleaks and dependency-audit workflows. Audit still produces the raw report and applies the repository's policy gate in separate invocations. These inexpensive policy contracts are not path-pruned.
