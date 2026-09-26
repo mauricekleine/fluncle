@@ -6,7 +6,7 @@ import { TrackArtwork } from "@/components/track-artwork";
 import { discoveryQueueTrack } from "@/lib/discovery-tracks";
 import { tracksCount } from "@/lib/format";
 import { type FreshRelease, type FreshStandoutSpan, releaseTrack } from "@/lib/fresh-releases";
-import { albumCoverAtSize, HUB_COVER_TILE_SIZE } from "@/lib/media";
+import { albumCoverAtSize, freshStandoutSrcSet } from "@/lib/media";
 import { freshStandoutsHeading } from "./copy";
 import { FreshNewMark, releaseLead } from "./release-entry";
 
@@ -17,7 +17,7 @@ function StandoutArt({
   priority: boolean;
   release: FreshRelease;
 }): ReactNode {
-  const cover = albumCoverAtSize(release.coverUrl, HUB_COVER_TILE_SIZE);
+  const cover = albumCoverAtSize(release.coverUrl, "hub");
 
   if (!cover && !release.lit && release.avatarUrl) {
     return (
@@ -25,12 +25,23 @@ function StandoutArt({
         className="fresh-standout-art fresh-standout-avatar"
         name={release.artists[0] ?? release.title}
         priority={priority}
-        src={albumCoverAtSize(release.avatarUrl, HUB_COVER_TILE_SIZE)}
+        sizes="(max-width: 40rem) 38vw, 9rem"
+        src={albumCoverAtSize(release.avatarUrl, "hub")}
+        srcSet={freshStandoutSrcSet(release.avatarUrl)}
       />
     );
   }
 
-  return <TrackArtwork alt="" className="fresh-standout-art" priority={priority} src={cover} />;
+  return (
+    <TrackArtwork
+      alt=""
+      className="fresh-standout-art"
+      priority={priority}
+      sizes="(max-width: 40rem) 38vw, 9rem"
+      src={cover}
+      srcSet={freshStandoutSrcSet(release.coverUrl)}
+    />
+  );
 }
 
 function StandoutTitle({ release }: { release: FreshRelease }): ReactNode {

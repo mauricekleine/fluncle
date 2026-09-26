@@ -1,18 +1,19 @@
 import { BellSimpleIcon } from "@phosphor-icons/react";
 import { useRouter } from "@tanstack/react-router";
-import { useEffect, useRef, useState } from "react";
+import { Suspense, useEffect, useRef, useState } from "react";
 import { Button } from "@fluncle/ui/components/button";
-import {
-  Popover,
-  PopoverContent,
-  PopoverDescription,
-  PopoverHeader,
-  PopoverTitle,
-  PopoverTrigger,
-} from "@fluncle/ui/components/popover";
-import { MagicLinkForm } from "@/components/account/magic-link-form";
+import { Popover, PopoverTrigger } from "@fluncle/ui/components/popover";
+import { LazyPopupBoundary } from "@/components/lazy-popup-boundary";
 import { authClient } from "@/lib/auth-client";
 import { authedJsonFetch } from "@/lib/authed-fetch";
+import { lazyNamed } from "@/lib/lazy-named";
+
+const loadFollowPopover = () => import("@/components/follow-popover");
+const FollowPopover = lazyNamed(loadFollowPopover, "FollowPopover");
+
+function prefetchFollowPopover(): void {
+  void loadFollowPopover();
+}
 
 type Face = "following" | "loading" | "not-following" | "signed-out";
 
@@ -82,7 +83,16 @@ export function FollowButton({
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState("");
   const [open, setOpen] = useState(false);
+  const [activated, setActivated] = useState(false);
   const landing = useRef<{ error: boolean; intent?: string } | undefined>(undefined);
+
+  function onOpenChange(next: boolean): void {
+    if (next) {
+      setActivated(true);
+    }
+
+    setOpen(next);
+  }
 
   useEffect(() => {
     if (landing.current !== undefined) {
@@ -218,12 +228,15 @@ export function FollowButton({
   return (
     <div className="follow-control">
       {face === "signed-out" ? (
-        <Popover onOpenChange={setOpen} open={open}>
+        <Popover onOpenChange={onOpenChange} open={open}>
           <PopoverTrigger
             render={
               <Button
                 aria-label={`Follow ${name}`}
                 className="shrink-0"
+                onFocus={prefetchFollowPopover}
+                onPointerDown={prefetchFollowPopover}
+                onPointerEnter={prefetchFollowPopover}
                 size="sm"
                 type="button"
                 variant="outline"
@@ -233,24 +246,13 @@ export function FollowButton({
             {icon}
             Follow
           </PopoverTrigger>
-          <PopoverContent
-            align="start"
-            className="follow-popover w-[min(20rem,calc(100vw-1rem))] gap-3"
-          >
-            <PopoverHeader>
-              <PopoverTitle>Follow {name}</PopoverTitle>
-              <PopoverDescription>
-                I&rsquo;ll email you {name}&rsquo;s new releases every Friday. Nothing new, no
-                email.
-              </PopoverDescription>
-            </PopoverHeader>
-            <MagicLinkForm
-              callbackURL={typeof window === "undefined" ? "/" : window.location.pathname}
-              hint={`No password. The link signs you in and follows ${name} for you.`}
-              metadata={{ follow: { entityId, kind } }}
-              sentNote={`Open it and you're following ${name}.`}
-            />
-          </PopoverContent>
+          {open || activated ? (
+            <LazyPopupBoundary>
+              <Suspense fallback={null}>
+                <FollowPopover entityId={entityId} kind={kind} name={name} />
+              </Suspense>
+            </LazyPopupBoundary>
+          ) : null}
         </Popover>
       ) : (
         <Button

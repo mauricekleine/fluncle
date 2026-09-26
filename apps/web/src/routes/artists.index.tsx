@@ -12,7 +12,7 @@ import { StoryNotFoundState } from "@/components/stories/stories-states";
 import { siteUrl } from "@/lib/fluncle-links";
 import { tracksCount } from "@/lib/format";
 import { jsonLdScript } from "@/lib/json-ld";
-import { albumCoverAtSize, HUB_COVER_TILE_SIZE } from "@/lib/media";
+import { albumCoverAtSize, hubCoverSrcSet } from "@/lib/media";
 import { type HubOrder, hubHref, hubOrderParam } from "@/lib/hub-order";
 import { pageParam, textParam } from "@/lib/search-params";
 import {
@@ -247,13 +247,25 @@ function matchCount(count: number): string {
   return `${countFormatter.format(count)} ${count === 1 ? "match" : "matches"}`;
 }
 
-function ArtistTileContent({ artist }: { artist: ArtistHubEntry }) {
+function ArtistTileContent({
+  artist,
+  eager,
+  priority,
+}: {
+  artist: ArtistHubEntry;
+  eager?: boolean;
+  priority?: boolean;
+}) {
   return (
     <>
       <ArtistAvatar
         className="artist-card-avatar"
+        eager={eager}
         name={artist.name}
-        src={albumCoverAtSize(artist.imageUrl, HUB_COVER_TILE_SIZE)}
+        priority={priority}
+        sizes="104px"
+        src={albumCoverAtSize(artist.imageUrl, "hub")}
+        srcSet={hubCoverSrcSet(artist.imageUrl)}
       />
       <span className="artist-grid-line">{artist.name}</span>
       <span className="artist-grid-count">{tracksCount(artist.trackCount)}</span>
@@ -261,7 +273,15 @@ function ArtistTileContent({ artist }: { artist: ArtistHubEntry }) {
   );
 }
 
-function ArtistLinkTile({ artist }: { artist: ArtistHubEntry }) {
+function ArtistLinkTile({
+  artist,
+  eager,
+  priority,
+}: {
+  artist: ArtistHubEntry;
+  eager?: boolean;
+  priority?: boolean;
+}) {
   return (
     <HubTile kind="artist" lit={artist.certified} name={artist.name} round slug={artist.slug}>
       <Link
@@ -269,7 +289,7 @@ function ArtistLinkTile({ artist }: { artist: ArtistHubEntry }) {
         params={{ slug: artist.slug }}
         to="/artist/$slug"
       >
-        <ArtistTileContent artist={artist} />
+        <ArtistTileContent artist={artist} eager={eager} priority={priority} />
       </Link>
     </HubTile>
   );
@@ -347,7 +367,7 @@ function ArtistsBrowseGrid({ artists }: { artists: ArtistHubEntry[] }) {
       </div>
 
       <ul aria-label="Artists" className="artist-avatar-grid hub-grid">
-        {artists.map((artist) => {
+        {artists.map((artist, index) => {
           const isSelected = selected.includes(artist.slug);
 
           return selecting ? (
@@ -359,11 +379,16 @@ function ArtistsBrowseGrid({ artists }: { artists: ArtistHubEntry[] }) {
                 onClick={() => toggle(artist.slug)}
                 type="button"
               >
-                <ArtistTileContent artist={artist} />
+                <ArtistTileContent artist={artist} eager={index < 4} priority={index === 0} />
               </button>
             </li>
           ) : (
-            <ArtistLinkTile artist={artist} key={artist.slug} />
+            <ArtistLinkTile
+              artist={artist}
+              eager={index < 4}
+              key={artist.slug}
+              priority={index === 0}
+            />
           );
         })}
       </ul>
@@ -401,8 +426,13 @@ function ArtistsSimilarView({ names, results }: { names: string[]; results: Arti
             className="artist-avatar-grid hub-grid"
             data-discovery="similar"
           >
-            {results.map((artist) => (
-              <ArtistLinkTile artist={artist} key={artist.slug} />
+            {results.map((artist, index) => (
+              <ArtistLinkTile
+                artist={artist}
+                eager={index < 4}
+                key={artist.slug}
+                priority={index === 0}
+              />
             ))}
           </ul>
         )}

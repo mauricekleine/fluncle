@@ -154,7 +154,7 @@ describe("public discovery event coverage", () => {
     expect(marked.map((file) => file.rel).sort()).toEqual([
       "components/chat/neighbour-card.tsx",
       "components/player/player-bar.tsx",
-      "components/player/track-actions-menu.tsx",
+      "components/player/track-actions-content.tsx",
       "components/track-destination.tsx",
       "components/track-row.tsx",
       "routes/artist.$slug.tsx",
