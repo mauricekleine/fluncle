@@ -539,10 +539,10 @@ export function createProgram(): Command {
 
   program
     .name("fluncle")
-    .description(fluncleTagline.toLowerCase())
+    .description(fluncleTagline)
     .option("--env <local|production>", "Config profile to load (default: production)")
     .showSuggestionAfterError(false)
-    .addHelpCommand("help [command]", "display help for command")
+    .addHelpCommand("help [command]", "Display help for command")
     .hook("preAction", (_thisCommand, actionCommand) => {
       const options = actionCommand.optsWithGlobals() as GlobalOptions;
       setEnvProfile(options.env);
@@ -597,6 +597,7 @@ async function main(args = process.argv.slice(2)): Promise<void> {
 function configureCommand(command: Command): Command {
   return command
     .exitOverride()
+    .helpOption("-h, --help", "Display help for command")
     .addHelpCommand(false)
     .configureOutput({
       writeErr: () => {},
@@ -712,7 +713,7 @@ function addListenCommands(program: Command): void {
 
   program
     .command("random")
-    .description("The archive throws one back")
+    .description("The archive throws a banger back")
     .option("--json", "Print JSON", false)
     .action(async (options: JsonOptions) => {
       const { randomCommand } = await import("./commands/random");
@@ -842,7 +843,7 @@ function addAdminCommands(program: Command): void {
 
   admin
     .command("help", { hidden: true })
-    .description("display help for command")
+    .description("Display help for command")
     .action(() => {
       admin.outputHelp();
     });
@@ -1994,6 +1995,70 @@ JSON field reference:
       const { publishAdvancePauseCommand } = await import("./commands/publish");
       await runPublishAdvancePause(false, options, publishAdvancePauseCommand);
     });
+
+  const adminFollowDigests = configureCommand(
+    admin.command("digests").description("Weekly email digest for followed artists and labels"),
+  );
+
+  adminFollowDigests.action(() => adminFollowDigests.outputHelp());
+
+  adminFollowDigests
+    .command("status")
+    .description("Read the follow digest kill switch")
+    .option("--json", "Print JSON", false)
+    .action(async (options: { json: boolean }) => {
+      const { getFollowDigestStateCommand } = await import("./commands/digests");
+      const paused = await getFollowDigestStateCommand();
+      if (options.json) {
+        printJson({ ok: true, paused });
+      } else {
+        console.log(paused ? "Follow digests are paused." : "Follow digests are running.");
+      }
+    });
+
+  for (const [verb, paused] of [
+    ["pause", true],
+    ["resume", false],
+  ] as const) {
+    adminFollowDigests
+      .command(verb)
+      .description(paused ? "Pause follow digests" : "Resume follow digests")
+      .option("--json", "Print JSON", false)
+      .action(async (options: { json: boolean }) => {
+        const { setFollowDigestStateCommand } = await import("./commands/digests");
+        const result = await setFollowDigestStateCommand(paused);
+        if (options.json) {
+          printJson({ ok: true, paused: result });
+        } else {
+          console.log(result ? "Follow digests are paused." : "Follow digests are running.");
+        }
+      });
+  }
+
+  adminFollowDigests
+    .command("send")
+    .description("Send one bounded follow digest batch")
+    .option("--cursor <id>", "Continue after this user id")
+    .option("--limit <number>", "Maximum users to consider")
+    .option("--dry-run", "Count eligible emails without sending")
+    .option("--json", "Print JSON", false)
+    .action(
+      async (options: { cursor?: string; dryRun?: boolean; json: boolean; limit?: string }) => {
+        const { sendFollowDigestsCommand } = await import("./commands/digests");
+        const result = await sendFollowDigestsCommand({
+          cursor: options.cursor,
+          dryRun: options.dryRun,
+          limit: options.limit === undefined ? undefined : Number(options.limit),
+        });
+        if (options.json) {
+          printJson(result);
+        } else {
+          console.log(
+            `Considered ${result.considered}; sent ${result.sent}; empty ${result.empty}; next ${result.nextCursor ?? "done"}.`,
+          );
+        }
+      },
+    );
 
   const adminCapture = configureCommand(
     admin.command("capture").description("The metered audio-capture budget and its kill switch"),
@@ -8556,7 +8621,7 @@ Listen:
   fluncle open [--limit 20] [--browser|--app]   Pick a track, open it in Spotify
   fluncle open playlist [--browser|--app]       Open Fluncle's Findings in Spotify
   fluncle open telegram [--browser|--app]       Open the Telegram feed
-  fluncle random [--json]                       The archive throws one back
+  fluncle random [--json]                       The archive throws a banger back
   fluncle subscribe [email]                     Fresh bangers, every Friday
 
 Browse:

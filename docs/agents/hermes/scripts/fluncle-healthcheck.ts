@@ -447,6 +447,7 @@ export const AUTOMATION_CRONS: CronDef[] = [
   { cadenceMs: 30 * 60_000, match: "publish-advance", service: "cron.publish-advance" },
 
   { cadenceMs: 7 * 24 * 60 * 60_000, match: "newsletter", service: "cron.newsletter" },
+  { cadenceMs: 7 * 24 * 60 * 60_000, match: "follow-digest", service: "cron.follow-digest" },
 
   { cadenceMs: 15 * 60_000, match: "frontier-refresh", service: "cron.frontier-refresh" },
   { cadenceMs: 24 * 60 * 60_000, match: "backup", service: "cron.backup" },

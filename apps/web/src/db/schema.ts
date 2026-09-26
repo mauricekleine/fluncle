@@ -1738,6 +1738,38 @@ export const userWatches = sqliteTable(
   ],
 );
 
+export const userFollowDigests = sqliteTable("user_follow_digests", {
+  lastReleaseCount: integer("last_release_count"),
+  lastSentAt: text("last_sent_at"),
+  lastWeekKey: text("last_week_key"),
+  manageTokenVersion: integer("manage_token_version").notNull().default(0),
+  unsubscribedAt: text("unsubscribed_at"),
+  updatedAt: text("updated_at").notNull(),
+  userId: text("user_id").primaryKey(),
+});
+
+export const followDigestDeliveries = sqliteTable(
+  "follow_digest_deliveries",
+  {
+    attempts: integer("attempts").notNull().default(0),
+    claimedAt: text("claimed_at").notNull(),
+    id: text("id").primaryKey(),
+    idempotencyKey: text("idempotency_key").notNull(),
+    lastError: text("last_error"),
+    payloadJson: text("payload_json").notNull(),
+    releaseCount: integer("release_count").notNull(),
+    resendId: text("resend_id"),
+    sentAt: text("sent_at"),
+    status: text("status", { enum: ["claimed", "sent", "failed", "unknown"] }).notNull(),
+    updatedAt: text("updated_at").notNull(),
+    userId: text("user_id").notNull(),
+    weekKey: text("week_key").notNull(),
+  },
+  (table) => [
+    uniqueIndex("follow_digest_deliveries_user_week_idx").on(table.userId, table.weekKey),
+  ],
+);
+
 export const userPreferences = sqliteTable("user_preferences", {
   preferences: text("preferences").notNull().default("{}"),
   updatedAt: text("updated_at").notNull(),

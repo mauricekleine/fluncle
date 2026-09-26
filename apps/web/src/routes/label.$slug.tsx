@@ -12,7 +12,7 @@ import {
   graphPageTracks,
 } from "@/components/graph-sections";
 import { StoryNotFoundState } from "@/components/stories/stories-states";
-import { WatchButton } from "@/components/watch-button";
+import { FollowButton } from "@/components/follow-button";
 import { entityFreshChannel } from "@/lib/fresh-feed-rss";
 import { siteUrl } from "@/lib/fluncle-links";
 import { jsonLdScript } from "@/lib/json-ld";
@@ -245,7 +245,7 @@ function LabelPage() {
 
           {dateline ? <p className="log-index-dateline">{dateline}</p> : undefined}
 
-          <WatchButton entityId={id} kind="label" name={name} />
+          <FollowButton entityId={id} kind="label" name={name} />
         </header>
 
         <FindingsGrid findings={findings} />

@@ -71,6 +71,7 @@ type SeedUser = {
   createdAt?: number;
   displayUsername?: null | string;
   email: string;
+  emailVerified?: boolean;
   id: string;
   name?: string;
   status?: "active" | "deleted" | "suspended";
@@ -84,6 +85,7 @@ export async function seedUser(client: Client, user: SeedUser): Promise<void> {
     args: [
       user.id,
       user.email,
+      user.emailVerified ? 1 : 0,
       user.name ?? "Test User",
       user.username ?? null,
       user.displayUsername ?? null,
@@ -92,8 +94,8 @@ export async function seedUser(client: Client, user: SeedUser): Promise<void> {
       now,
     ],
     sql: `insert into "user"
-      (id, email, name, username, display_username, status, created_at, updated_at)
-      values (?, ?, ?, ?, ?, ?, ?, ?)`,
+      (id, email, email_verified, name, username, display_username, status, created_at, updated_at)
+      values (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   });
 }
 

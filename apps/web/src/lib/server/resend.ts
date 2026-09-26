@@ -5,11 +5,49 @@ const resendApiUrl = "https://api.resend.com";
 
 type ResendErrorBody = { message?: string; name?: string };
 
+export class ResendDeliveryError extends ApiError {
+  upstreamStatus: number;
+
+  constructor(message: string, upstreamStatus: number) {
+    super("email_send_failed", message, 502);
+    this.upstreamStatus = upstreamStatus;
+  }
+}
+
+const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]"]);
+
+export function resolveResendApiUrl({
+  e2e,
+  override,
+  production,
+}: {
+  e2e: string | undefined;
+  override: string | undefined;
+  production: boolean;
+}): string {
+  if (production || e2e !== "1" || !override) {
+    return resendApiUrl;
+  }
+
+  try {
+    return LOOPBACK_HOSTS.has(new URL(override).hostname)
+      ? override.replace(/\/$/, "")
+      : resendApiUrl;
+  } catch {
+    return resendApiUrl;
+  }
+}
+
 async function resendFetch(
   path: string,
   init: { body?: unknown; idempotencyKey?: string; method: "GET" | "POST" },
 ): Promise<Response> {
   const apiKey = await readEnv("RESEND_API_KEY");
+  const [override, e2e] = await Promise.all([
+    readOptionalEnv("RESEND_API_URL"),
+    readOptionalEnv("FLUNCLE_E2E"),
+  ]);
+  const baseUrl = resolveResendApiUrl({ e2e, override, production: !import.meta.env.DEV });
   const headers: Record<string, string> = {
     Authorization: `Bearer ${apiKey}`,
     "Content-Type": "application/json",
@@ -19,7 +57,7 @@ async function resendFetch(
     headers["Idempotency-Key"] = init.idempotencyKey;
   }
 
-  return fetch(`${resendApiUrl}${path}`, {
+  return fetch(`${baseUrl}${path}`, {
     body: init.body === undefined ? undefined : JSON.stringify(init.body),
     headers,
     method: init.method,
@@ -82,7 +120,7 @@ export async function createBroadcast(params: {
   if (!from) {
     throw new ApiError(
       "send_misconfigured",
-      "RESEND_FROM is not configured — set the verified sender before sending an edition.",
+      "RESEND_FROM is not configured: set the verified sender before sending an edition.",
       500,
     );
   }
@@ -164,17 +202,20 @@ export async function sendBroadcast(
 }
 
 async function sendTransactionalEmail(params: {
+  from?: string;
+  headers?: Record<string, string>;
   html: string;
+  idempotencyKey?: string;
   subject: string;
   text: string;
   to: string;
-}): Promise<void> {
-  const from = await readOptionalEnv("RESEND_FROM");
+}): Promise<{ id?: string }> {
+  const from = params.from ?? (await readOptionalEnv("RESEND_FROM"));
 
   if (!from) {
     throw new ApiError(
       "send_misconfigured",
-      "RESEND_FROM is not configured — set the verified sender before sending.",
+      "RESEND_FROM is not configured: set the verified sender before sending.",
       500,
     );
   }
@@ -182,21 +223,49 @@ async function sendTransactionalEmail(params: {
   const response = await resendFetch("/emails", {
     body: {
       from,
+      headers: params.headers,
       html: params.html,
       subject: params.subject,
       text: params.text,
       to: params.to,
     },
+    idempotencyKey: params.idempotencyKey,
     method: "POST",
   });
 
   if (!response.ok) {
-    throw new ApiError(
-      "email_send_failed",
+    throw new ResendDeliveryError(
       `Resend could not send the email (${await readError(response)})`,
-      502,
+      response.status,
     );
   }
+
+  const body = (await response.json().catch(() => undefined)) as { id?: string } | undefined;
+  return { id: body?.id };
+}
+
+export async function sendFollowDigestEmail(params: {
+  from: string;
+  headers: Record<string, string>;
+  html: string;
+  idempotencyKey: string;
+  subject: string;
+  text: string;
+  to: string;
+}): Promise<{ id: string }> {
+  const result = await sendTransactionalEmail(params);
+  if (!result.id) {
+    throw new ApiError("email_send_failed", "Resend did not return an email id", 502);
+  }
+  return { id: result.id };
+}
+
+export async function readResendSender(): Promise<string> {
+  const from = await readOptionalEnv("RESEND_FROM");
+  if (!from) {
+    throw new ApiError("send_misconfigured", "RESEND_FROM is not configured", 500);
+  }
+  return from;
 }
 
 export async function sendPasswordResetEmail(params: { to: string; url: string }): Promise<void> {
@@ -212,7 +281,7 @@ export async function sendPasswordResetEmail(params: { to: string; url: string }
 
   const html = [
     "<p>Someone asked to reset the password on your Fluncle account. If that was you, open this link to set a new one:</p>",
-    `<p><a href="${params.url}">Set a new password</a></p>`,
+    `<p><a href="${escapeHtmlAttribute(params.url)}">Set a new password</a></p>`,
     "<p>The link works for one hour. If it wasn&rsquo;t you, ignore this and nothing changes.</p>",
     "<p>Fluncle</p>",
   ].join("\n");
@@ -238,7 +307,7 @@ export async function sendVerificationEmail(params: { to: string; url: string })
 
   const html = [
     "<p>Welcome aboard. Confirm this is your email so I can keep your Fluncle account yours. Open this link:</p>",
-    `<p><a href="${params.url}">Verify your email</a></p>`,
+    `<p><a href="${escapeHtmlAttribute(params.url)}">Verify your email</a></p>`,
     "<p>You are already signed in and nothing is locked behind this. Verifying just keeps the door yours. If you didn&rsquo;t create a Fluncle account, ignore this and nothing happens.</p>",
     "<p>Fluncle</p>",
   ].join("\n");
@@ -249,4 +318,60 @@ export async function sendVerificationEmail(params: { to: string; url: string })
     text,
     to: params.to,
   });
+}
+
+export async function sendMagicLinkEmail(params: {
+  followName?: string;
+  to: string;
+  url: string;
+}): Promise<void> {
+  const name = params.followName;
+  const safeName = name ? escapeHtmlAttribute(name) : undefined;
+  const opener = name
+    ? `Hey, good to have you with the crew. Open this link and you're in, following ${name}:`
+    : "Hey, good to have you with the crew. Open this link and you're in:";
+  const htmlOpener = safeName
+    ? `Hey, good to have you with the crew. Open this link and you&rsquo;re in, following ${safeName}:`
+    : "Hey, good to have you with the crew. Open this link and you&rsquo;re in:";
+  const closing = name
+    ? `Every Friday I'll email you ${name}'s new releases. Nothing new, no email.`
+    : "Save any banger that gets you moving and I'll keep it for you, wherever you sign in.";
+  const htmlClosing = safeName
+    ? `Every Friday I&rsquo;ll email you ${safeName}&rsquo;s new releases. Nothing new, no email.`
+    : "Save any banger that gets you moving and I&rsquo;ll keep it for you, wherever you sign in.";
+  const text = [
+    opener,
+    "",
+    params.url,
+    "",
+    "It works once, for the next 15 minutes. If you didn't ask for it, ignore this and nothing happens.",
+    "",
+    closing,
+    "",
+    "Happy raving,",
+    "Fluncle",
+  ].join("\n");
+
+  const html = [
+    `<p>${htmlOpener}</p>`,
+    `<p><a href="${escapeHtmlAttribute(params.url)}">${safeName ? `Sign in and follow ${safeName}` : "Sign in to Fluncle"}</a></p>`,
+    "<p>It works once, for the next 15 minutes. If you didn&rsquo;t ask for it, ignore this and nothing happens.</p>",
+    `<p>${htmlClosing}</p>`,
+    "<p>Happy raving,<br>Fluncle</p>",
+  ].join("\n");
+
+  await sendTransactionalEmail({
+    html,
+    subject: name ? `Your link to follow ${name}` : "Your Fluncle sign-in link",
+    text,
+    to: params.to,
+  });
+}
+
+function escapeHtmlAttribute(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
 }

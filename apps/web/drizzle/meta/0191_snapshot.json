@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "7b419a27-ae16-46e5-b2d1-1d6f0c4d8091",
+  "id": "4a758dde-9f54-4bec-9353-782893014ff4",
   "prevId": "40e749e4-b2e6-48ee-9368-6b2c0d1eaf54",
   "tables": {
     "account": {
@@ -8485,8 +8485,7 @@
             "release_date",
             "album_image_url",
             "title",
-            "artists_json",
-            "duration_ms"
+            "artists_json"
           ],
           "isUnique": false,
           "where": "is_catalogue = 1"
@@ -8968,6 +8967,58 @@
           "isUnique": false
         }
       },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "user_follow_digests": {
+      "name": "user_follow_digests",
+      "columns": {
+        "last_release_count": {
+          "name": "last_release_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "last_sent_at": {
+          "name": "last_sent_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "last_week_key": {
+          "name": "last_week_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "unsubscribed_at": {
+          "name": "unsubscribed_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {},
       "foreignKeys": {},
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},

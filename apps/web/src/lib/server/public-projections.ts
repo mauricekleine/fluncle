@@ -2685,8 +2685,6 @@ async function finishBoundedPublicProjectionCleanup(
           args: [now, now, checkpoint.generation, checkpoint.cursor],
           sql: `update public_aggregate_state
             set state = 'complete', completed_at = ?, updated_at = ?,
-                source_entry_count = (select count(*) from tracks
-                  where ${publicTrackDurationWhere("tracks")}),
                 projected_entry_count = (select count(*) from public_aggregate_membership),
                 source_digest = 'pending-audit-source',
                 projected_digest = 'pending-audit-projected',

@@ -24,7 +24,7 @@ import {
   listArtistsMissingBio,
   listArtistSitemapRows,
 } from "./artists";
-import { listWatches } from "./account-data";
+import { listFollows } from "./account-data";
 import { createIntegrationDb } from "./integration-db";
 import { mentionHandlesFor } from "./mentions";
 import {
@@ -258,13 +258,13 @@ describe("a global unlisted rule takes the artist's PAGE off the site", () => {
   it("drops out of a signed-in listener's watch list without touching the stored row", async () => {
     await seedWatchedArtists();
 
-    expect((await listWatches(TEST_USER)).watches.map((watch) => watch.slug)).toEqual(["remixer"]);
+    expect((await listFollows(TEST_USER)).follows.map((watch) => watch.slug)).toEqual(["remixer"]);
 
     const stored = await db.execute(`select count(*) as n from user_watches`);
     expect(Number(stored.rows[0]?.n)).toBe(2);
 
     await db.execute(`delete from artist_rules where artist_mbid = '${UNLISTED_MBID}'`);
-    expect((await listWatches(TEST_USER)).watches.map((watch) => watch.slug).sort()).toEqual([
+    expect((await listFollows(TEST_USER)).follows.map((watch) => watch.slug).sort()).toEqual([
       "pop-original",
       "remixer",
     ]);

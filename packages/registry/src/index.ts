@@ -1078,7 +1078,7 @@ export const SURFACES: readonly Surface[] = [
   },
   {
     command: "fluncle random",
-    exposedContent: ["the archive throws one back"],
+    exposedContent: ["the archive throws a banger back"],
     kind: "cli",
     name: "cli.random",
     weights: { cli: "secondary" },
@@ -1709,6 +1709,25 @@ export const SURFACES: readonly Surface[] = [
     statusDescription: "the prober behind this very page",
     title: "Healthcheck prober",
     weights: { status: "hidden" },
+  },
+  {
+    command: "fluncle admin digests send",
+    exposedContent: [
+      "send new releases from followed artists and labels to signed-in crew each Friday",
+    ],
+    kind: "cron",
+    name: "cron.follow-digest",
+    operatorNotes:
+      "Friday 17:00 Amsterdam, a template-only host-timer sweep. The Worker owns recipient selection, the enabled-by-default kill switch, Resend idempotency keys, and per-call send cap. The box uses only its agent token. Source: docs/agents/hermes/scripts/follow-digest-sweep.*.",
+    probeConfig: {
+      cadenceMs: 7 * 24 * 60 * MINUTE_MS,
+      cronName: "fluncle-follow-digest",
+      kind: "cron",
+      schedule: { time: "17:00", tz: "Europe/Amsterdam", weekday: 5 },
+    },
+    statusDescription: "sends new releases from the artists and labels you follow",
+    title: "Your follows",
+    weights: { status: "secondary" },
   },
   {
     command: "fluncle admin newsletter draft",

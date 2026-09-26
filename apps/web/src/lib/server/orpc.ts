@@ -51,6 +51,7 @@ import { adminTwitchHandlers } from "./orpc/admin-twitch";
 import { adminUsersHandlers } from "./orpc/admin-users";
 import { devicesHandlers } from "./orpc/devices";
 import { editionsHandlers } from "./orpc/editions";
+import { followDigestHandlers } from "./orpc/follow-digest";
 import { healthHandlers } from "./orpc/health";
 import { meHandlers } from "./orpc/me";
 import { meFrontierHandlers } from "./orpc/me-frontier";
@@ -59,7 +60,7 @@ import { mePreferencesHandlers } from "./orpc/me-preferences";
 import { meRecsHandlers } from "./orpc/me-recs";
 import { meSavedHandlers } from "./orpc/me-saved";
 import { meSetsHandlers } from "./orpc/me-sets";
-import { meWatchesHandlers } from "./orpc/me-watches";
+import { meFollowsHandlers } from "./orpc/me-follows";
 import { mixHandlers } from "./orpc/mix";
 import { mixtapesHandlers } from "./orpc/mixtapes";
 import { newsletterHandlers } from "./orpc/newsletter";
@@ -99,6 +100,7 @@ export const router = os.use(dueWorkMaintenancePendingMiddleware).router({
   ...adminFunnelHandlers(os),
   ...adminHealthHandlers(os),
   ...adminHubCountsHandlers(os),
+  ...followDigestHandlers(os),
   ...adminLabelsHandlers(os),
   ...adminLogbookHandlers(os),
   ...adminMigrationsHandlers(os),
@@ -125,7 +127,7 @@ export const router = os.use(dueWorkMaintenancePendingMiddleware).router({
   ...meRecsHandlers(os),
   ...meSavedHandlers(os),
   ...meSetsHandlers(os),
-  ...meWatchesHandlers(os),
+  ...meFollowsHandlers(os),
   ...mixHandlers(os),
   ...mixtapesHandlers(os),
   ...newsletterHandlers(os),
@@ -174,7 +176,12 @@ const handler = new OpenAPIHandler(router, {
 
 const API_PREFIX = "/api/v1";
 
-const NO_STORE_SUFFIXES = new Set(["/admin/vectors/tracks/serving", "/health", "/replica/token"]);
+const NO_STORE_SUFFIXES = new Set([
+  "/admin/vectors/tracks/serving",
+  "/follow-digest/follows",
+  "/health",
+  "/replica/token",
+]);
 const NO_STORE_SUFFIX_PATTERNS = [/^\/admin\/tracks\/[^/]+\/capture\/(?:prepare|authorize)$/];
 
 function isNoStoreSuffix(suffix: string): boolean {

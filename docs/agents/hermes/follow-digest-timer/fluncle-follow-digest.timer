@@ -1,0 +1,10 @@
+[Unit]
+Description=Send follow digests every Friday at 17:00 Amsterdam
+
+[Timer]
+OnCalendar=Fri 17:00 Europe/Amsterdam
+Persistent=true
+RandomizedDelaySec=60
+
+[Install]
+WantedBy=timers.target

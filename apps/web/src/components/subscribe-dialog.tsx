@@ -113,7 +113,7 @@ export function SubscribeDialog({
 
         {didSubscribe ? (
           <p className="rounded-md border border-primary/30 bg-accent px-3 py-2 text-sm text-accent-foreground">
-            Welcome to the mothership. First one departs Friday.
+            Welcome to the mothership. It departs every Friday.
           </p>
         ) : (
           <form className="grid gap-3" onSubmit={handleSubmit}>
