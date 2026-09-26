@@ -36,10 +36,15 @@ retry_final_slot() {
 RETRY_SLOT="$(retry_final_slot "$UNIT")"
 if [ -n "$RETRY_SLOT" ] && [ "$STATUS" != "75" ]; then
 	read -r SLOT_TZ SLOT_FINAL SLOT_WEEKDAY <<<"$RETRY_SLOT"
-	LOCAL_TIME="$(TZ="$SLOT_TZ" date +%H%M)"
-	LOCAL_WEEKDAY="$(TZ="$SLOT_TZ" date +%a)"
-	if { [ -z "${SLOT_WEEKDAY:-}" ] || [ "$LOCAL_WEEKDAY" = "$SLOT_WEEKDAY" ]; } && [[ "$LOCAL_TIME" < "${SLOT_FINAL/:/}" ]]; then
-		echo "fluncle-sweep-failure: ${UNIT} failed before its ${SLOT_FINAL} ${SLOT_TZ} final slot (result=${RESULT:-unknown}, status=${STATUS:-?}) — the retry slot decides; not posting." >&2
+	STARTED="$(systemctl show -p ExecMainStartTimestamp --value -- "$UNIT" 2>/dev/null || true)"
+	START_TIME=""
+	START_WEEKDAY=""
+	if [ -n "$STARTED" ] && [ "$STARTED" != "n/a" ]; then
+		START_TIME="$(TZ="$SLOT_TZ" date -d "$STARTED" +%H%M 2>/dev/null || true)"
+		START_WEEKDAY="$(TZ="$SLOT_TZ" date -d "$STARTED" +%a 2>/dev/null || true)"
+	fi
+	if [[ "$START_TIME" =~ ^[0-9]{4}$ ]] && { [ -z "${SLOT_WEEKDAY:-}" ] || [ "$START_WEEKDAY" = "$SLOT_WEEKDAY" ]; } && [[ "$START_TIME" < "${SLOT_FINAL/:/}" ]]; then
+		echo "fluncle-sweep-failure: ${UNIT} failed in an attempt that started before its ${SLOT_FINAL} ${SLOT_TZ} final slot (result=${RESULT:-unknown}, status=${STATUS:-?}) — the retry slot decides; not posting." >&2
 		exit 0
 	fi
 fi

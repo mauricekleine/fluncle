@@ -722,8 +722,18 @@ export function judgeCron(
 ): CronVerdict {
   const staleBudgetMs = cronStaleBudgetMs(cron);
 
-  const noData = (): CronVerdict =>
-    uptimeMs !== null && uptimeMs > staleBudgetMs ? "lagging" : "no-data";
+  const noData = (): CronVerdict => {
+    if (uptimeMs !== null && uptimeMs > staleBudgetMs) {
+      return "lagging";
+    }
+    const schedule = DAILY_RETRY_SCHEDULES[`fluncle-${cron.service.replace(/^cron\./, "")}`];
+    return uptimeMs !== null &&
+      uptimeMs >= cron.cadenceMs &&
+      schedule !== undefined &&
+      expectedCompletedSlotDay(schedule, now) !== null
+      ? "incomplete"
+      : "no-data";
+  };
 
   if (!dir) {
     return noData();

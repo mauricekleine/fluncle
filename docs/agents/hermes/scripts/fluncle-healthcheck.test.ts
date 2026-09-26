@@ -798,6 +798,19 @@ describe("judgeCron — no runs at all", () => {
     expect(cronCheck(CRON, "lagging").status).toBe("degraded");
   });
 
+  test("a retry-runner job with no marker dir after a full cycle of uptime owes its slot day", () => {
+    const now = new Date("2026-09-26T08:00:00Z");
+
+    expect(judgeCron(CRON, undefined, 25 * 60 * 60_000, now)).toBe("incomplete");
+    expect(cronCheck(CRON, judgeCron(CRON, undefined, 25 * 60 * 60_000, now)).status).toBe(
+      "degraded",
+    );
+    const empty = mkdtempSync(join(tmpdir(), "fluncle-cron-empty-"));
+    temporaryDirectories.push(empty);
+    expect(judgeCron(CRON, empty, 25 * 60 * 60_000, now)).toBe("incomplete");
+    expect(judgeCron(CRON, undefined, 60_000, now)).toBe("no-data");
+  });
+
   test("an EMPTY marker dir ages the same way", () => {
     const dir = mkdtempSync(join(tmpdir(), "fluncle-cron-empty-"));
     temporaryDirectories.push(dir);

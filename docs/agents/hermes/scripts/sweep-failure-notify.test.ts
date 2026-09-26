@@ -15,7 +15,12 @@ afterEach(() => {
   }
 });
 
-function runNotifier(unit: string, status: string, clock = { time: "1200", weekday: "Sat" }) {
+function runNotifier(
+  unit: string,
+  status: string,
+  start: { time: string; weekday: string } | null = { time: "1200", weekday: "Sat" },
+  now = { time: "1200", weekday: "Sat" },
+) {
   const root = mkdtempSync(join(tmpdir(), "fluncle-sweep-failure-"));
   roots.push(root);
   const bin = join(root, "bin");
@@ -23,11 +28,11 @@ function runNotifier(unit: string, status: string, clock = { time: "1200", weekd
   mkdirSync(bin);
   const commands = {
     curl: '#!/usr/bin/env bash\nprintf "%s\\n" "$@" > "$CURL_CAPTURE"\n',
-    date: '#!/usr/bin/env bash\ncase "${1:-}" in +%H%M) printf "%s\\n" "$FAKE_TIME" ;; +%a) printf "%s\\n" "$FAKE_WEEKDAY" ;; *) exec /bin/date "$@" ;; esac\n',
+    date: '#!/usr/bin/env bash\nif [ "${1:-}" = "-d" ]; then case "${3:-}" in +%H%M) printf "%s\\n" "$FAKE_START_TIME" ;; +%a) printf "%s\\n" "$FAKE_START_WEEKDAY" ;; esac; exit 0; fi\ncase "${1:-}" in +%H%M) printf "%s\\n" "$FAKE_TIME" ;; +%a) printf "%s\\n" "$FAKE_WEEKDAY" ;; *) exec /bin/date "$@" ;; esac\n',
     docker:
       '#!/usr/bin/env bash\nprintf "DISCORD_ALERT_WEBHOOK=https://example.invalid/alert\\n"\n',
     systemctl:
-      '#!/usr/bin/env bash\ncase "$3" in Result) printf "exit-code\\n" ;; ExecMainStatus) printf "%s\\n" "$TEST_STATUS" ;; ExecMainCode) printf "1\\n" ;; esac\n',
+      '#!/usr/bin/env bash\ncase "$3" in Result) printf "exit-code\\n" ;; ExecMainStatus) printf "%s\\n" "$TEST_STATUS" ;; ExecMainCode) printf "1\\n" ;; ExecMainStartTimestamp) printf "%s\\n" "$FAKE_STARTED" ;; esac\n',
   };
   for (const [name, script] of Object.entries(commands)) {
     const path = join(bin, name);
@@ -39,8 +44,11 @@ function runNotifier(unit: string, status: string, clock = { time: "1200", weekd
     env: {
       ...process.env,
       CURL_CAPTURE: capture,
-      FAKE_TIME: clock.time,
-      FAKE_WEEKDAY: clock.weekday,
+      FAKE_STARTED: start === null ? "n/a" : "Sat 2026-09-26 00:00:00 UTC",
+      FAKE_START_TIME: start?.time ?? "",
+      FAKE_START_WEEKDAY: start?.weekday ?? "",
+      FAKE_TIME: now.time,
+      FAKE_WEEKDAY: now.weekday,
       PATH: `${bin}:${process.env.PATH ?? ""}`,
       SWEEP_FAILURE_STATE_DIR: join(root, "state"),
       TEST_STATUS: status,
@@ -77,6 +85,34 @@ test("a retry-runner job failing at or after its final slot alerts once", () => 
   expect(runNotifier("fluncle-backup.service", "75", { time: "0305", weekday: "Sat" })).toContain(
     "The daily payload is incomplete or unconfirmed",
   );
+});
+
+test("a final attempt that started at 23:57 and failed after midnight still alerts", () => {
+  expect(
+    runNotifier(
+      "fluncle-funnel-snapshot.service",
+      "137",
+      { time: "2357", weekday: "Sat" },
+      { time: "0003", weekday: "Sun" },
+    ),
+  ).toContain("fluncle-funnel-snapshot.service");
+});
+
+test("a first attempt that started before the final slot stays quiet even when it fails later", () => {
+  expect(
+    runNotifier(
+      "fluncle-funnel-snapshot.service",
+      "137",
+      { time: "2345", weekday: "Sat" },
+      { time: "2359", weekday: "Sat" },
+    ),
+  ).toBe("");
+});
+
+test("an unknown start time never suppresses the alert", () => {
+  expect(
+    runNotifier("fluncle-backup.service", "137", null, { time: "0305", weekday: "Sat" }),
+  ).toContain("fluncle-backup.service");
 });
 
 test("a weekly job's final-slot window only applies on its weekday", () => {
