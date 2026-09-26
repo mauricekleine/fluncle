@@ -85,8 +85,6 @@ const OWNED_COVER_WIDTH: Record<CoverSize, number> = {
   xl: 1200,
 };
 
-export const HUB_COVER_TILE_SIZE: CoverSize = "tile";
-
 export const COVER_TILE_SIZE: CoverSize = "medium";
 
 const SPOTIFY_ALBUM_IMAGE_RE = /^(https:\/\/i\.scdn\.co\/image\/)ab67616d[0-9a-f]{8}([0-9a-f]+)$/;
