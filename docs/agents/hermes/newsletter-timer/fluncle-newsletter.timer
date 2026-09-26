@@ -8,9 +8,9 @@ Description=fluncle-newsletter timer — draft the weekly edition Fri 15:00 Amst
 # Re-rolled each firing, so no restart can ever re-align the roster.
 RandomizedDelaySec=60
 # The weekly Friday 15:00 Amsterdam edition. The systemd timer expresses the timezone DIRECTLY
-# in OnCalendar, so the slot is correct regardless of the host or container TZ. Persistent catches up a Friday the box slept through on the next boot —
-# harmless, because the sweep only PERSISTS a draft (the Send is a separate operator-gated
-# command), so a late draft never auto-sends.
+# in OnCalendar, so the slot is correct regardless of the host or container TZ. 16:15 is the
+# same-Friday retry slot. The service passes --weekday Fri to daily-retry-runner.sh, so a
+# Persistent catch-up on any other day is a no-op and never authors an off-cycle edition.
 OnCalendar=Fri 15:00 Europe/Amsterdam
 OnCalendar=Fri 16:15 Europe/Amsterdam
 Persistent=true

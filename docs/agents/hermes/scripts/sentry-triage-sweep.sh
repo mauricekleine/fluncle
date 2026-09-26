@@ -78,6 +78,8 @@ run_triage() {
 	git config credential.https://github.com.helper "!gh auth git-credential"
 	git config core.fileMode false
 
+	find .git -maxdepth 1 -name index.lock -mmin +30 -delete 2>/dev/null || true
+
 	git fetch --quiet origin main || {
 		echo "{\"ok\":false,\"stage\":\"fetch\",\"checked\":0,\"errors\":1,\"produced\":0}"
 		return 1

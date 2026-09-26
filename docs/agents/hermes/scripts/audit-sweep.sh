@@ -88,10 +88,29 @@ run_audit() {
 
 	git config core.fileMode false
 
+	find .git -maxdepth 1 -name index.lock -mmin +30 -delete 2>/dev/null || true
+
 	git fetch --quiet origin main || {
 		echo "{\"ok\":false,\"stage\":\"fetch\",\"domain\":\"${DOMAIN}\",\"checked\":0,\"errors\":1,\"produced\":0}"
 		return 1
 	}
+
+	local date_tag branch
+	date_tag="$(date -u +%Y%m%d)"
+	branch="audit/${date_tag}-${DOMAIN}"
+	if [ "${DRY_RUN}" != "1" ] && git ls-remote --exit-code --heads origin "refs/heads/${branch}" >/dev/null 2>&1; then
+		local shipped_pr
+		shipped_pr="$(gh pr list --head "${branch}" --state all --json url --jq '.[0].url // empty' 2>/dev/null || true)"
+		if [ -n "${shipped_pr}" ]; then
+			log "tonight's branch ${branch} already shipped as ${shipped_pr}; nothing to re-run"
+			echo "{\"ok\":true,\"domain\":\"${DOMAIN}\",\"action\":\"already-shipped\",\"pr\":\"${shipped_pr}\",\"checked\":1,\"errors\":0,\"produced\":0}"
+			return 0
+		fi
+		log "tonight's branch ${branch} was pushed without a PR; leaving it for the operator"
+		echo "{\"ok\":false,\"domain\":\"${DOMAIN}\",\"action\":\"ship-failed\",\"error\":\"branch pushed without a PR\",\"checked\":1,\"errors\":1,\"produced\":0}"
+		return 1
+	fi
+
 	git reset --hard --quiet origin/main
 	git clean -fdq
 	rm -rf .audit && mkdir -p .audit
@@ -99,9 +118,6 @@ run_audit() {
 	log "bun install…"
 	"${BUN_BIN}" install --silent || log "bun install returned nonzero (continuing; checks may be partial)"
 
-	local date_tag branch
-	date_tag="$(date -u +%Y%m%d)"
-	branch="audit/${date_tag}-${DOMAIN}"
 	git checkout -qB "${branch}" origin/main
 
 	if [ "${DOMAIN}" = "surfaces-seo" ]; then

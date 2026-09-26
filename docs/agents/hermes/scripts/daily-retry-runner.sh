@@ -7,12 +7,21 @@ time_zone="${2:-}"
 primary_slot="${3:-}"
 final_slot="${4:-}"
 shift 4 || true
+weekday=""
+if [ "${1:-}" = "--weekday" ]; then
+	weekday="${2:-}"
+	shift 2 || true
+fi
 if [ "${1:-}" = "--" ]; then
 	shift
 fi
-if [ -z "$job" ] || [ -z "$time_zone" ] || [[ ! "$primary_slot" =~ ^[0-2][0-9]:[0-5][0-9]$ ]] || [[ ! "$final_slot" =~ ^[0-2][0-9]:[0-5][0-9]$ ]] || [ "$#" -eq 0 ]; then
-	echo 'usage: daily-retry-runner.sh fluncle-<job> <timezone> <primary-hour:minute> <final-hour:minute> -- <command> [args...]' >&2
+if [ -z "$job" ] || [ -z "$time_zone" ] || [[ ! "$primary_slot" =~ ^[0-2][0-9]:[0-5][0-9]$ ]] || [[ ! "$final_slot" =~ ^[0-2][0-9]:[0-5][0-9]$ ]] || [[ -n "$weekday" && ! "$weekday" =~ ^(Mon|Tue|Wed|Thu|Fri|Sat|Sun)$ ]] || [ "$#" -eq 0 ]; then
+	echo 'usage: daily-retry-runner.sh fluncle-<job> <timezone> <primary-hour:minute> <final-hour:minute> [--weekday Mon|Tue|Wed|Thu|Fri|Sat|Sun] -- <command> [args...]' >&2
 	exit 2
+fi
+weekday_args=()
+if [ -n "$weekday" ]; then
+	weekday_args=(--weekday "$weekday")
 fi
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -26,9 +35,16 @@ marker_snapshot() {
 	local markers=("$marker_dir"/*.md)
 	printf '%s\n' "${markers[@]}"
 }
-state="$("$bun_bin" "${script_dir}/daily-retry-state.ts" "$job" "$time_zone" "$primary_slot" "$started_at")" || exit 2
+retry_state() {
+	"$bun_bin" "${script_dir}/daily-retry-state.ts" "$job" "$time_zone" "$primary_slot" "$started_at" ${weekday:+"$weekday"}
+}
+state="$(retry_state)" || exit 2
 initial_state="$state"
 
+if [ "$state" = "off-cycle" ]; then
+	echo "${job}: not its scheduled ${weekday} slot; a catch-up activation is a no-op"
+	exit 0
+fi
 if [ "$state" = "exhausted" ]; then
 	echo "${job}: today's retry attempts are exhausted"
 	exit 0
@@ -44,7 +60,7 @@ fi
 
 before_markers="$(marker_snapshot)"
 set -m
-FLUNCLE_DAILY_RETRY=1 "$@" &
+FLUNCLE_DAILY_RETRY=1 FLUNCLE_DAILY_RETRY_STATE="$state" "$@" &
 child_pid="$!"
 terminate_payload() {
 	trap - TERM INT HUP
@@ -63,7 +79,7 @@ wait "$child_pid"
 payload_rc="$?"
 trap - TERM INT HUP
 
-state="$("$bun_bin" "${script_dir}/daily-retry-state.ts" "$job" "$time_zone" "$primary_slot" "$started_at")" || exit 2
+state="$(retry_state)" || exit 2
 after_markers="$(marker_snapshot)"
 if [ "$state" = "complete" ]; then
 	exit 0
@@ -86,7 +102,11 @@ if [ "$before_markers" = "$after_markers" ] && [ "$rebake_active" != true ]; the
 		emit_admission_skip_output "${job#fluncle-}" '{"checked":null,"errors":1,"gateState":"active","ok":false,"outcome":"payload-unconfirmed","payloadStarted":null,"produced":null}'
 	) || true
 	[ "$payload_rc" -ne 0 ] || payload_rc=75
-	exit "$payload_rc"
+	state="$(retry_state)" || exit 2
+	after_markers="$(marker_snapshot)"
+	if [ "$state" != "partial" ] && [ "$state" != "exhausted" ]; then
+		exit "$payload_rc"
+	fi
 fi
 
 if [ "$state" = "exhausted" ]; then
@@ -118,7 +138,7 @@ if [ "${FLUNCLE_DAILY_RETRY_STRADDLE_ATTEMPT:-0}" != "1" ]; then
 		sleep "$jitter"
 		if [ "$(TZ="$time_zone" date +%Y%m%d)" = "$local_day" ]; then
 			export FLUNCLE_DAILY_RETRY_STRADDLE_ATTEMPT=1
-			exec bash "$0" "$job" "$time_zone" "$primary_slot" "$final_slot" -- "$@"
+			exec bash "$0" "$job" "$time_zone" "$primary_slot" "$final_slot" ${weekday_args[@]+"${weekday_args[@]}"} -- "$@"
 		fi
 	fi
 fi

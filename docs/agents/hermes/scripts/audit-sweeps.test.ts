@@ -190,6 +190,10 @@ case "$*" in
     exit "\${STUB_COMMIT_STATUS:-0}"
     ;;
   push*) exit "\${STUB_PUSH_STATUS:-0}" ;;
+  ls-remote*)
+    [ "\${STUB_REMOTE_BRANCH:-0}" = "1" ] || exit 2
+    printf 'abc123\\trefs/heads/audit/fixture\\n'
+    ;;
 esac
 exit 0
 `,
@@ -675,6 +679,39 @@ describe("fluncle-audit ships the agent's working tree", () => {
     expect(calls(box, "git")).not.toMatch(/^commit\b/m);
     expect(calls(box, "git")).toMatch(/^push --quiet -u origin HEAD$/m);
     expect(calls(box, "gh")).not.toContain("pr create");
+  });
+
+  test("a re-run after tonight's branch shipped skips the pass and reuses the PR", async () => {
+    const box = fixture();
+    const result = await run(box, "audit-sweep.sh", ["--domain", "test"], {
+      STUB_AUDIT_PR_URL: "https://example.invalid/pull/9",
+      STUB_CHANGED: "1",
+      STUB_REMOTE_BRANCH: "1",
+      STUB_REPORT: "1 fix, 0 filed",
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.summary).toMatchObject({
+      action: "already-shipped",
+      ok: true,
+      pr: "https://example.invalid/pull/9",
+      produced: 0,
+    });
+    expect(calls(box, "claude")).toBe("");
+    expect(calls(box, "git")).not.toMatch(/^(reset|add|commit|push)\b/m);
+    expect(calls(box, "gh")).not.toContain("pr create");
+  });
+
+  test("a re-run after tonight's branch was pushed without a PR fails loud and re-runs nothing", async () => {
+    const box = fixture();
+    const result = await run(box, "audit-sweep.sh", ["--domain", "test"], {
+      STUB_REMOTE_BRANCH: "1",
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.summary).toMatchObject({ action: "ship-failed", errors: 1, ok: false });
+    expect(calls(box, "claude")).toBe("");
+    expect(calls(box, "git")).not.toMatch(/^(reset|push)\b/m);
   });
 
   test("a clean tree opens no PR", async () => {

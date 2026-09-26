@@ -149,7 +149,7 @@ Every automation cron runs from a repo-checked-in host timer so the SCHEDULE is 
 
 **The run's `ok` covers BOTH legs.** A missing encryption key or failed leg 2 reports `ok: false` with `reason: "box_state_failed"` even though the dump landed. The backup health row requires both daily artifact keys in the summary. Leg 2 runs only after the dump is durable in R2, so it cannot cost the night's database artifact. The host `OnFailure` notifier sends one alert for a failed service; the sweep does not send a second alert.
 
-The host timer fires at 03:00 and 05:20 Amsterdam. The shared [`daily-retry-runner.sh`](../scripts/daily-retry-runner.sh) no-ops the second slot only after both dated artifact keys appear in a successful marker. A database-admission skip or a partial artifact run can use the retry slot, and a day still incomplete after that slot fails the service for one Discord alert. Every attempt still passes through database admission. The `/status` backup row judges the two artifact keys, not a clean process exit.
+The host timer fires at 03:00 and 05:20 Amsterdam. The shared [`daily-retry-runner.sh`](../scripts/daily-retry-runner.sh) no-ops the second slot only after both dated artifact keys appear in a successful marker. A database-admission skip or a partial artifact run can use the retry slot, and a day still incomplete after that slot fails the service for one Discord alert. A partial retry re-lists R2 first: when today's `fluncle.sql.gz` and its manifest already landed, it skips the dump and uploads only the box-state leg, so the retry never repeats the heavy read. Every attempt still passes through database admission. The `/status` backup row judges the two artifact keys, not a clean process exit.
 
 ## Deploy (on rave-02, one time)
 

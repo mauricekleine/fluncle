@@ -4,12 +4,31 @@ import { join } from "node:path";
 export type DailyRetryState =
   | "complete"
   | "exhausted"
+  | "off-cycle"
   | "partial"
   | "pending"
   | "skipped"
   | "started";
 
-function slotDay(date: Date, timeZone: string, primarySlot: string): string {
+export const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
+
+export type Weekday = (typeof WEEKDAYS)[number];
+
+export const RERUN_SAFE_JOBS: ReadonlySet<string> = new Set([
+  "fluncle-backup",
+  "fluncle-cluster",
+  "fluncle-demand",
+  "fluncle-funnel-snapshot",
+  "fluncle-label-releases",
+  "fluncle-label-triage",
+  "fluncle-logbook",
+  "fluncle-newsletter",
+  "fluncle-reach",
+  "fluncle-reconcile-hub-counts",
+  "fluncle-social-metrics",
+]);
+
+function localParts(date: Date, timeZone: string) {
   const parts = new Intl.DateTimeFormat("en-US", {
     day: "2-digit",
     hour: "2-digit",
@@ -17,16 +36,40 @@ function slotDay(date: Date, timeZone: string, primarySlot: string): string {
     minute: "2-digit",
     month: "2-digit",
     timeZone,
+    weekday: "short",
     year: "numeric",
   }).formatToParts(date);
   const part = (type: string) => parts.find((entry) => entry.type === type)?.value ?? "";
-  const day = `${part("year")}-${part("month")}-${part("day")}`;
 
-  if (`${part("hour")}:${part("minute")}` >= primarySlot) {
-    return day;
+  return {
+    day: `${part("year")}-${part("month")}-${part("day")}`,
+    time: `${part("hour")}:${part("minute")}`,
+    weekday: part("weekday"),
+  };
+}
+
+export function offCycle(
+  date: Date,
+  timeZone: string,
+  primarySlot: string,
+  weekday: Weekday | undefined,
+): boolean {
+  if (weekday === undefined) {
+    return false;
+  }
+  const local = localParts(date, timeZone);
+
+  return local.weekday !== weekday || local.time < primarySlot;
+}
+
+function slotDay(date: Date, timeZone: string, primarySlot: string): string {
+  const local = localParts(date, timeZone);
+
+  if (local.time >= primarySlot) {
+    return local.day;
   }
 
-  const prior = new Date(`${day}T00:00:00Z`);
+  const prior = new Date(`${local.day}T00:00:00Z`);
   prior.setUTCDate(prior.getUTCDate() - 1);
 
   return prior.toISOString().slice(0, 10);
@@ -91,7 +134,11 @@ function markerOutcome(
     return "skipped";
   }
 
-  if (summary === null || summary.outcome === "payload-unconfirmed") {
+  if (summary?.outcome === "payload-unconfirmed") {
+    return RERUN_SAFE_JOBS.has(job) ? "partial" : "started";
+  }
+
+  if (summary === null) {
     return "started";
   }
 
@@ -122,7 +169,11 @@ export function dailyRetryState(options: {
   now: Date;
   primarySlot: string;
   timeZone: string;
+  weekday?: Weekday;
 }): DailyRetryState {
+  if (offCycle(options.now, options.timeZone, options.primarySlot, options.weekday)) {
+    return "off-cycle";
+  }
   const day = slotDay(options.now, options.timeZone, options.primarySlot);
   const markerDirectory = join(options.directory, options.job);
   let names: string[];
@@ -185,7 +236,8 @@ export function dailyRetryState(options: {
 }
 
 if (import.meta.main) {
-  const [job, timeZone, primarySlot, startedAt] = process.argv.slice(2);
+  const [job, timeZone, primarySlot, startedAt, weekdayArgument] = process.argv.slice(2);
+  const weekday = WEEKDAYS.find((candidate) => candidate === weekdayArgument);
 
   if (
     !job ||
@@ -194,10 +246,11 @@ if (import.meta.main) {
     !primarySlot ||
     !/^\d{2}:\d{2}$/.test(primarySlot) ||
     !startedAt ||
-    Number.isNaN(Date.parse(startedAt))
+    Number.isNaN(Date.parse(startedAt)) ||
+    (weekdayArgument !== undefined && weekday === undefined)
   ) {
     process.stderr.write(
-      "usage: daily-retry-state.ts fluncle-<job> <timezone> <primary-hour:minute> <started-at-iso>\n",
+      "usage: daily-retry-state.ts fluncle-<job> <timezone> <primary-hour:minute> <started-at-iso> [Mon|Tue|Wed|Thu|Fri|Sat|Sun]\n",
     );
     process.exit(2);
   }
@@ -212,6 +265,7 @@ if (import.meta.main) {
         now: new Date(startedAt),
         primarySlot,
         timeZone,
+        ...(weekday === undefined ? {} : { weekday }),
       })}\n`,
     );
   } catch (error) {

@@ -15,7 +15,7 @@ import { join, resolve } from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { deriveRunOk, normalizeRunSummary } from "../../../../apps/web/src/lib/server/run-events";
 
-import { dailyRetryState } from "./daily-retry-state";
+import { dailyRetryState, RERUN_SAFE_JOBS } from "./daily-retry-state";
 
 const ROOT = resolve(import.meta.dir, "..");
 const RUNNER = resolve(import.meta.dir, "daily-retry-runner.sh");
@@ -47,7 +47,7 @@ function fixture(job: string) {
   chmodSync(join(bin, "date"), 0o755);
   writeFileSync(
     payload,
-    '#!/usr/bin/env bash\nprintf x >> "$ATTEMPTS"\ncount="$(wc -c < "$ATTEMPTS" | tr -d " ")"\nsource="${RESULT_MARKER:-}"\nif [ "$count" -ge 2 ] && [ -n "${SECOND_RESULT_MARKER:-}" ]; then source="$SECOND_RESULT_MARKER"; fi\nif [ -n "$source" ]; then marker="$MARKER_DIR/result-${count}.md"; cp "$source" "$marker"; TZ=UTC touch -t "${RESULT_MTIME:-202609251200}" "$marker"; fi\nexit "${PAYLOAD_EXIT:-0}"\n',
+    '#!/usr/bin/env bash\nprintf x >> "$ATTEMPTS"\nprintf "%s\\n" "${FLUNCLE_DAILY_RETRY_STATE:-}" >> "$ATTEMPTS.states"\ncount="$(wc -c < "$ATTEMPTS" | tr -d " ")"\nsource="${RESULT_MARKER:-}"\nif [ "$count" -ge 2 ] && [ -n "${SECOND_RESULT_MARKER:-}" ]; then source="$SECOND_RESULT_MARKER"; fi\nif [ -n "$source" ]; then marker="$MARKER_DIR/result-${count}.md"; cp "$source" "$marker"; TZ=UTC touch -t "${RESULT_MTIME:-202609251200}" "$marker"; fi\nexit "${PAYLOAD_EXIT:-0}"\n',
   );
   chmodSync(payload, 0o755);
 
@@ -91,6 +91,8 @@ function run(
     resultMtime?: string;
     secondResultMarker?: string;
     startedAt?: string;
+    timeZone?: string;
+    weekday?: string;
   } = {},
 ) {
   return spawnSync(
@@ -98,9 +100,10 @@ function run(
     [
       RUNNER,
       `fluncle-${job}`,
-      "UTC",
+      options.timeZone ?? "UTC",
       options.primarySlot ?? (job === "funnel-snapshot" ? "23:45" : "11:00"),
       finalSlot,
+      ...(options.weekday === undefined ? [] : ["--weekday", options.weekday]),
       "--",
       "bash",
       setup.payload,
@@ -128,6 +131,14 @@ function run(
       },
     },
   );
+}
+
+function retryStates(path: string): string[] {
+  try {
+    return readFileSync(`${path}.states`, "utf8").trim().split("\n");
+  } catch {
+    return [];
+  }
 }
 
 function attempts(path: string): number {
@@ -235,7 +246,7 @@ describe("daily and weekly retry", () => {
     expect(attempts(unrecognized.attempts)).toBe(0);
   });
 
-  test("quiesce TERM reaches a nested Bash payload before the runner exits", async () => {
+  test("a TERM delivered to the runner inside the container reaches a nested Bash payload before it exits", async () => {
     const setup = fixture("backup");
     const nestedPid = join(setup.root, "nested-pid");
     const nestedSignal = join(setup.root, "nested-term");
@@ -463,11 +474,10 @@ describe("daily and weekly retry", () => {
     expect(attempts(setup.attempts)).toBe(1);
   });
 
-  test("an unconfirmed payload failure is marked and never repeated by the retry slot", () => {
+  test("an unconfirmed start of a re-run-safe payload is marked, then retried once by the final slot", () => {
     const setup = fixture("cluster");
 
-    expect(run(setup, "cluster", "13:00", { exit: 75 }).status).toBe(75);
-    expect(run(setup, "cluster", "11:00").status).toBe(0);
+    expect(run(setup, "cluster", "13:00", { exit: 75 }).status).toBe(0);
     expect(attempts(setup.attempts)).toBe(1);
     const markers = readdirSync(setup.markerDirectory);
     expect(markers).toHaveLength(1);
@@ -488,7 +498,62 @@ describe("daily and weekly retry", () => {
         primarySlot: "11:00",
         timeZone: "UTC",
       }),
+    ).toBe("partial");
+
+    expect(run(setup, "cluster", "11:00", { exit: 75 }).status).toBe(75);
+    expect(attempts(setup.attempts)).toBe(2);
+    expect(run(setup, "cluster", "11:00", { exit: 75 }).status).toBe(0);
+    expect(attempts(setup.attempts)).toBe(2);
+  });
+
+  test("a fenced backup whose retry completes ends the day complete with one alert-free exit", () => {
+    const setup = fixture("backup");
+    const complete = join(setup.root, "complete.md");
+    writeFileSync(
+      complete,
+      '# Cron Job\n\n{"boxState":{"key":"box-state/daily/2026-09-25/box-state.tar.gz.enc"},"dailyKey":"db-backups/daily/2026-09-25/fluncle.sql.gz","errors":0,"ok":true}\n',
+    );
+
+    expect(run(setup, "backup", "13:00", { exit: 75 }).status).toBe(0);
+    expect(run(setup, "backup", "11:00", { secondResultMarker: complete }).status).toBe(0);
+    expect(attempts(setup.attempts)).toBe(2);
+    expect(retryStates(setup.attempts)).toEqual(["pending", "partial"]);
+  });
+
+  test("an unconfirmed start of a payload outside the re-run-safe roster is never repeated", () => {
+    const setup = fixture("unlisted");
+
+    expect(run(setup, "unlisted", "13:00", { exit: 75 }).status).toBe(75);
+    expect(run(setup, "unlisted", "11:00").status).toBe(0);
+    expect(attempts(setup.attempts)).toBe(1);
+    expect(
+      dailyRetryState({
+        directory: setup.output,
+        job: "fluncle-unlisted",
+        now: FIXED_NOW,
+        primarySlot: "11:00",
+        timeZone: "UTC",
+      }),
     ).toBe("started");
+  });
+
+  test("every covered sweep except the git-workspace agent passes retries an unconfirmed start", () => {
+    const covered = readdirSync(ROOT)
+      .flatMap((directory) =>
+        directory.endsWith("-timer")
+          ? readdirSync(join(ROOT, directory))
+              .filter((name) => name.endsWith(".service"))
+              .map((name) => readFileSync(join(ROOT, directory, name), "utf8"))
+          : [],
+      )
+      .flatMap((service) => {
+        const unit = /daily-retry-runner\.sh (fluncle-[a-z0-9-]+) /.exec(service)?.[1];
+        return unit === undefined ? [] : [unit];
+      })
+      .sort();
+    const gitWorkspaceAgents = ["fluncle-audit", "fluncle-audit-review", "fluncle-sentry-triage"];
+
+    expect(covered).toEqual([...RERUN_SAFE_JOBS, ...gitWorkspaceAgents].sort());
   });
 
   test("the funnel final slot keeps its UTC day when its marker lands after midnight", () => {
@@ -607,6 +672,195 @@ describe("daily and weekly retry", () => {
     expect(marker).toContain('"errors":1');
     expect(marker).toContain('"payloadStarted":false');
     expect(marker).toContain('"gateState":"admission-skipped"');
+  });
+
+  test("a payload SIGKILLed with its runner leaves no marker, so the final slot re-runs it", async () => {
+    const setup = fixture("backup");
+    const started = join(setup.root, "started");
+    const complete = join(setup.root, "complete.md");
+    writeFileSync(
+      complete,
+      '# Cron Job\n\n{"boxState":{"key":"box-state/daily/2026-09-25/box-state.tar.gz.enc"},"dailyKey":"db-backups/daily/2026-09-25/fluncle.sql.gz","errors":0,"ok":true}\n',
+    );
+    writeFileSync(
+      setup.payload,
+      '#!/usr/bin/env bash\nprintf x >> "$ATTEMPTS"\nif [ "$(wc -c < "$ATTEMPTS" | tr -d " ")" -ge 2 ]; then cp "$COMPLETE" "$MARKER_DIR/done.md"; exit 0; fi\n: > "$STARTED"\nsleep 30\n',
+    );
+    const env = {
+      ...process.env,
+      ATTEMPTS: setup.attempts,
+      BUN_BIN: process.execPath,
+      COMPLETE: complete,
+      FAKE_LOCAL_DAY: "20260925",
+      FAKE_LOCAL_TIME: "1200",
+      FAKE_STARTED_AT: "2026-09-25T12:00:00Z",
+      HEALTHCHECK_CRON_OUTPUT_DIR: setup.output,
+      HOME: setup.root,
+      MARKER_DIR: setup.markerDirectory,
+      PATH: `${setup.bin}:${process.env.PATH ?? ""}`,
+      STARTED: started,
+    };
+    const child = spawn(
+      "bash",
+      [RUNNER, "fluncle-backup", "UTC", "11:00", "13:00", "--", "bash", setup.payload],
+      { detached: true, env, stdio: "ignore" },
+    );
+
+    for (let attempt = 0; attempt < 100 && !existsSync(started); attempt += 1) {
+      await Bun.sleep(20);
+    }
+    expect(existsSync(started)).toBe(true);
+    process.kill(-(child.pid ?? 0), "SIGKILL");
+    await new Promise((resolveExit) => {
+      child.once("exit", resolveExit);
+    });
+    expect(readdirSync(setup.markerDirectory)).toEqual([]);
+
+    const retry = spawnSync(
+      "bash",
+      [RUNNER, "fluncle-backup", "UTC", "11:00", "11:00", "--", "bash", setup.payload],
+      { encoding: "utf8", env },
+    );
+    expect(retry.status).toBe(0);
+    expect(attempts(setup.attempts)).toBe(2);
+  }, 8000);
+
+  test("a partial backup hands its partial state to the payload so only the missing leg runs", () => {
+    const setup = fixture("backup");
+    const partial = join(setup.root, "partial.md");
+    const complete = join(setup.root, "complete.md");
+    writeFileSync(
+      partial,
+      `# Cron Job\n\n${JSON.stringify({ boxState: { error: "upload failed", ok: false }, dailyKey: `db-backups/daily/${FIXED_DAY}/fluncle.sql.gz`, errors: 0, ok: false })}\n`,
+    );
+    writeFileSync(
+      complete,
+      `# Cron Job\n\n${JSON.stringify({ boxState: { key: `box-state/daily/${FIXED_DAY}/box-state.tar.gz.enc` }, dailyKey: `db-backups/daily/${FIXED_DAY}/fluncle.sql.gz`, dumpReused: true, errors: 0, ok: true })}\n`,
+    );
+
+    expect(
+      run(setup, "backup", "13:00", {
+        exit: 1,
+        resultMarker: partial,
+        secondResultMarker: complete,
+      }).status,
+    ).toBe(0);
+    expect(
+      run(setup, "backup", "11:00", {
+        resultMarker: partial,
+        secondResultMarker: complete,
+      }).status,
+    ).toBe(0);
+    expect(retryStates(setup.attempts)).toEqual(["pending", "partial"]);
+    expect(
+      dailyRetryState({
+        directory: setup.output,
+        job: "fluncle-backup",
+        now: FIXED_NOW,
+        primarySlot: "11:00",
+        timeZone: "UTC",
+      }),
+    ).toBe("complete");
+  });
+
+  describe("a weekly timer resolves its slot day by its weekday", () => {
+    const newsletterComplete = '# Cron Job\n\n{"checked":1,"errors":0,"ok":true,"produced":1}\n';
+    const sunday = {
+      localDay: "20260927",
+      localTime: "1030",
+      primarySlot: "15:00",
+      startedAt: "2026-09-27T08:30:00Z",
+      timeZone: "Europe/Amsterdam",
+      weekday: "Fri",
+    };
+
+    test("a Sunday catch-up after a completed Friday is a no-op", () => {
+      const setup = fixture("newsletter");
+      const friday = join(setup.markerDirectory, "friday.md");
+      writeFileSync(friday, newsletterComplete);
+      utimesSync(friday, new Date("2026-09-25T13:10:00Z"), new Date("2026-09-25T13:10:00Z"));
+
+      const result = run(setup, "newsletter", "16:15", sunday);
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain("catch-up activation is a no-op");
+      expect(attempts(setup.attempts)).toBe(0);
+    });
+
+    test("a Sunday catch-up with no marker at all never authors an off-cycle edition", () => {
+      const setup = fixture("newsletter");
+
+      expect(run(setup, "newsletter", "16:15", sunday).status).toBe(0);
+      expect(attempts(setup.attempts)).toBe(0);
+    });
+
+    test("a Friday catch-up before the primary slot is a no-op", () => {
+      const setup = fixture("newsletter");
+
+      expect(
+        run(setup, "newsletter", "16:15", {
+          ...sunday,
+          localDay: "20260925",
+          startedAt: "2026-09-25T08:30:00Z",
+        }).status,
+      ).toBe(0);
+      expect(attempts(setup.attempts)).toBe(0);
+    });
+
+    test("the Friday primary slot still runs", () => {
+      const setup = fixture("newsletter");
+
+      expect(
+        run(setup, "newsletter", "16:15", {
+          ...sunday,
+          localDay: "20260925",
+          localTime: "1501",
+          startedAt: "2026-09-25T13:01:00Z",
+        }).status,
+      ).toBe(0);
+      expect(attempts(setup.attempts)).toBe(1);
+      expect(
+        dailyRetryState({
+          directory: setup.output,
+          job: "fluncle-newsletter",
+          now: new Date("2026-09-27T08:30:00Z"),
+          primarySlot: "15:00",
+          timeZone: "Europe/Amsterdam",
+          weekday: "Fri",
+        }),
+      ).toBe("off-cycle");
+    });
+  });
+
+  test("every weekly timer hands the runner its weekday", () => {
+    for (const directory of readdirSync(ROOT).filter((name) => name.endsWith("-timer"))) {
+      for (const name of readdirSync(join(ROOT, directory)).filter((file) =>
+        file.endsWith(".timer"),
+      )) {
+        const timer = readFileSync(join(ROOT, directory, name), "utf8");
+        const weekday = /^OnCalendar=(Mon|Tue|Wed|Thu|Fri|Sat|Sun) /m.exec(timer)?.[1];
+        if (weekday === undefined) {
+          continue;
+        }
+        const service = readFileSync(
+          join(ROOT, directory, name.replace(/\.timer$/, ".service")),
+          "utf8",
+        );
+        expect(service, name).toContain(`--weekday ${weekday} --`);
+      }
+    }
+  });
+
+  test("no calendar slot falls in the Europe/Amsterdam spring-forward gap", () => {
+    for (const directory of readdirSync(ROOT).filter((name) => name.endsWith("-timer"))) {
+      for (const name of readdirSync(join(ROOT, directory)).filter((file) =>
+        file.endsWith(".timer"),
+      )) {
+        const timer = readFileSync(join(ROOT, directory, name), "utf8");
+        for (const slot of timer.match(/^OnCalendar=.*Europe\/Amsterdam$/gm) ?? []) {
+          expect(slot, name).not.toMatch(/ 02:\d{2}(:\d{2})? Europe\/Amsterdam$/);
+        }
+      }
+    }
   });
 
   test("all daily and weekly services use the shared retry guard and exactly two calendar slots", () => {

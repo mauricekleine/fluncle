@@ -776,6 +776,23 @@ async function uploadTier(options: {
   return { dailyKey: dailyArtifact, monthlyWritten: !monthlyExists, pruned: expired.length };
 }
 
+export function reusableDailyDump(options: {
+  date: string;
+  existing: readonly string[];
+  retryState: string | undefined;
+}): string | null {
+  if (options.retryState !== "partial") {
+    return null;
+  }
+  const folder = `${DAILY_PREFIX}${options.date}/`;
+  const artifact = `${folder}fluncle.sql.gz`;
+
+  return options.existing.includes(artifact) &&
+    options.existing.includes(`${folder}${MANIFEST_NAME}`)
+    ? artifact
+    : null;
+}
+
 type BoxStateOutcome =
   | { key: string; manifest: BoxStateManifest; ok: true; pruned: number }
   | { error: string; ok: false };
@@ -974,33 +991,47 @@ async function main(): Promise<void> {
   const tempDir = process.env.FLUNCLE_BACKUP_TMPDIR ?? tmpdir();
   mkdirSync(tempDir, { recursive: true });
 
-  const dumpPath = join(tempDir, `fluncle-backup-${process.pid}.sql.gz`);
-  let dump: { file: ArtifactFile; manifest: DumpManifest };
+  const date = now.toISOString().slice(0, 10);
+  const month = now.toISOString().slice(0, 7);
+  const existingDumps = await r2List(PREFIX);
+  const reusedDailyKey = reusableDailyDump({
+    date,
+    existing: existingDumps,
+    retryState: process.env.FLUNCLE_DAILY_RETRY_STATE,
+  });
+  let dump: { file: ArtifactFile; manifest: DumpManifest } | null = null;
   let tier: { dailyKey: string; monthlyWritten: boolean; pruned: number };
 
-  beginBackupOperation(runCounters);
-  try {
-    dump = await writeGzippedDump(libsqlSource(), dumpPath, dumpOptions);
+  if (reusedDailyKey !== null) {
+    log(
+      `today's database artifact ${reusedDailyKey} already landed; running the box-state leg only`,
+    );
+    tier = { dailyKey: reusedDailyKey, monthlyWritten: false, pruned: 0 };
+  } else {
+    const dumpPath = join(tempDir, `fluncle-backup-${process.pid}.sql.gz`);
 
-    const date = now.toISOString().slice(0, 10);
-    const month = now.toISOString().slice(0, 7);
+    beginBackupOperation(runCounters);
+    try {
+      const written = await writeGzippedDump(libsqlSource(), dumpPath, dumpOptions);
+      dump = written;
 
-    tier = await uploadTier({
-      artifact: dump.file,
-      artifactName: "fluncle.sql.gz",
-      contentType: "application/gzip",
-      dailyPrefix: DAILY_PREFIX,
-      date,
-      existing: await r2List(PREFIX),
-      keepDaily: KEEP_DAILY,
-      keepMonthly: KEEP_MONTHLY,
-      manifestJson: `${JSON.stringify(dump.manifest, null, 2)}\n`,
-      month,
-      monthlyPrefix: MONTHLY_PREFIX,
-    });
-    completeBackupOperation(runCounters);
-  } finally {
-    await rm(dumpPath, { force: true });
+      tier = await uploadTier({
+        artifact: written.file,
+        artifactName: "fluncle.sql.gz",
+        contentType: "application/gzip",
+        dailyPrefix: DAILY_PREFIX,
+        date,
+        existing: existingDumps,
+        keepDaily: KEEP_DAILY,
+        keepMonthly: KEEP_MONTHLY,
+        manifestJson: `${JSON.stringify(written.manifest, null, 2)}\n`,
+        month,
+        monthlyPrefix: MONTHLY_PREFIX,
+      });
+      completeBackupOperation(runCounters);
+    } finally {
+      await rm(dumpPath, { force: true });
+    }
   }
 
   beginBackupOperation(runCounters);
@@ -1026,14 +1057,15 @@ async function main(): Promise<void> {
           }
         : { error: boxState.error, ok: false },
       dailyKey: tier.dailyKey,
+      dumpReused: dump === null,
       elapsedMs: Date.now() - started,
-      gzipBytes: dump.file.bytes,
+      gzipBytes: dump?.file.bytes ?? null,
       monthlyWritten: tier.monthlyWritten,
       ok: boxState.ok,
       pruned: tier.pruned,
       ...(boxState.ok ? {} : { reason: "box_state_failed" }),
-      sqlBytes: dump.manifest.sqlBytes,
-      tableCount: dump.manifest.tableCount,
+      sqlBytes: dump?.manifest.sqlBytes ?? null,
+      tableCount: dump?.manifest.tableCount ?? null,
     }),
   );
   if (!boxState.ok) {
