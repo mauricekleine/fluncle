@@ -831,7 +831,7 @@ describe("daily and weekly retry", () => {
     });
   });
 
-  test("every weekly timer hands the runner its weekday", () => {
+  test("every weekly timer under the retry runner hands it its weekday", () => {
     for (const directory of readdirSync(ROOT).filter((name) => name.endsWith("-timer"))) {
       for (const name of readdirSync(join(ROOT, directory)).filter((file) =>
         file.endsWith(".timer"),
@@ -845,6 +845,9 @@ describe("daily and weekly retry", () => {
           join(ROOT, directory, name.replace(/\.timer$/, ".service")),
           "utf8",
         );
+        if (!service.includes("daily-retry-runner.sh")) {
+          continue;
+        }
         expect(service, name).toContain(`--weekday ${weekday} --`);
       }
     }
