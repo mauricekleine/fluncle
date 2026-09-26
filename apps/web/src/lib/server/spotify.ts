@@ -659,6 +659,7 @@ export async function spotifyFetch(
   path: string,
   accessToken: string,
   init: RequestInit = {},
+  retryOnThrottle = true,
 ): Promise<Response> {
   const headers = new Headers(init.headers);
   headers.set("Authorization", `Bearer ${accessToken}`);
@@ -677,15 +678,23 @@ export async function spotifyFetch(
       return response;
     }
 
+    let quotaExceeded = false;
+
     if (response.status === 429) {
-      const quotaExceeded = await Promise.resolve()
+      quotaExceeded = await Promise.resolve()
         .then(() => response.clone().text())
         .then((body) => body.includes("QUOTA_EXCEEDED"))
         .catch(() => false);
       await recordSpotifyThrottle(Date.now(), quotaExceeded);
     }
 
-    if (response.status === 429 && retryable && attempt < SPOTIFY_MAX_RETRIES) {
+    if (
+      response.status === 429 &&
+      retryOnThrottle &&
+      !quotaExceeded &&
+      retryable &&
+      attempt < SPOTIFY_MAX_RETRIES
+    ) {
       const waitMs = parseRetryAfterMs(response.headers.get("Retry-After"));
 
       if (spentMs + waitMs <= SPOTIFY_RETRY_BUDGET_MS) {
@@ -702,7 +711,16 @@ export async function spotifyFetch(
       }
     }
 
-    throw new Error(await readApiError(response, "Spotify API request failed"));
+    const message = await readApiError(response, "Spotify API request failed");
+
+    if (response.status === 429) {
+      throw Object.assign(new Error(message), {
+        quotaExceeded,
+        retryAfterMs: parseRetryAfterMs(response.headers.get("Retry-After")),
+      });
+    }
+
+    throw new Error(message);
   }
 }
 

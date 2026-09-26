@@ -72,6 +72,78 @@ function markerDir(runs: { ageMs: number; body: string }[]): string {
   return dir;
 }
 
+test("the label-release tap reads degraded after a due day with fewer than 1000 completed probes", () => {
+  const dir = mkdtempSync(join(tmpdir(), "fluncle-label-tap-health-"));
+  temporaryDirectories.push(dir);
+  const now = new Date("2026-09-26T10:00:00Z");
+  const cron: CronDef = {
+    cadenceMs: 24 * 60 * 60_000,
+    match: "label-releases",
+    service: "cron.label-releases",
+  };
+  for (const [index, probed] of [600, 300].entries()) {
+    const path = join(dir, `${index}.md`);
+    writeFileSync(
+      path,
+      marker(
+        JSON.stringify({ labelsDue: 2074, labelsProbed: probed, neverChecked: 1436, ok: true }),
+      ),
+    );
+    const when = new Date(`2026-09-26T0${index + 3}:15:00Z`).getTime() / 1000;
+    utimesSync(path, when, when);
+  }
+  expect(judgeCron(cron, dir, null, now)).toBe("incomplete");
+  expect(cronCheck(cron, "incomplete").status).toBe("degraded");
+  const final = join(dir, "2.md");
+  writeFileSync(final, marker(JSON.stringify({ labelsDue: 1174, labelsProbed: 100, ok: true })));
+  const when = new Date("2026-09-26T05:15:00Z").getTime() / 1000;
+  utimesSync(final, when, when);
+  expect(judgeCron(cron, dir, null, now)).toBe("fresh-ok");
+});
+
+test("a skipped final tap firing does not erase enough earlier probes", () => {
+  const dir = mkdtempSync(join(tmpdir(), "fluncle-label-tap-health-"));
+  temporaryDirectories.push(dir);
+  const cron: CronDef = {
+    cadenceMs: 24 * 60 * 60_000,
+    match: "label-releases",
+    service: "cron.label-releases",
+  };
+  const runs = [
+    { at: "2026-09-26T03:15:00Z", body: { labelsDue: 2074, labelsProbed: 1000, ok: true } },
+    {
+      at: "2026-09-26T08:46:00Z",
+      body: { gateState: "admission-skipped", ok: true, payloadStarted: false },
+    },
+  ];
+  for (const [index, run] of runs.entries()) {
+    const path = join(dir, `${index}.md`);
+    writeFileSync(path, marker(JSON.stringify(run.body)));
+    const when = Date.parse(run.at) / 1000;
+    utimesSync(path, when, when);
+  }
+  expect(judgeCron(cron, dir, null, new Date("2026-09-26T10:00:00Z"))).toBe("fresh-ok");
+});
+
+test("tap health notices labels becoming due later and a missing first window", () => {
+  const now = new Date("2026-09-26T10:00:00Z");
+  const cron: CronDef = {
+    cadenceMs: 24 * 60 * 60_000,
+    match: "label-releases",
+    service: "cron.label-releases",
+  };
+  expect(judgeCron(cron, undefined, 12 * 60 * 60_000, now)).toBe("incomplete");
+  const dir = mkdtempSync(join(tmpdir(), "fluncle-label-tap-health-"));
+  temporaryDirectories.push(dir);
+  for (const [index, due] of [0, 20].entries()) {
+    const path = join(dir, `${index}.md`);
+    writeFileSync(path, marker(JSON.stringify({ labelsDue: due, labelsProbed: 0, ok: true })));
+    const when = new Date(`2026-09-26T0${index + 3}:15:00Z`).getTime() / 1000;
+    utimesSync(path, when, when);
+  }
+  expect(judgeCron(cron, dir, null, now)).toBe("incomplete");
+});
+
 function marker(stdout: string): string {
   return `# Cron Job: fluncle-backup\n\n${stdout}`;
 }

@@ -131,6 +131,18 @@ export function parseOnCalendarMs(expression: string): number | null {
     }
   }
 
+  if (!weekday && dateSpec === "*-*-*") {
+    const bounded = timeSpec.match(/^(\d{2})\.\.(\d{2}):00\/(\d{1,2}):00$/);
+    if (bounded) {
+      const startHour = Number(bounded[1]);
+      const endHour = Number(bounded[2]);
+      const stepMinutes = Number(bounded[3]);
+      if (startHour <= endHour && endHour < 24 && stepMinutes > 0 && 60 % stepMinutes === 0) {
+        return DAY_MS;
+      }
+    }
+  }
+
   if (!/^\d{1,2}:\d{2}(?::\d{2})?$/.test(timeSpec)) {
     return null;
   }

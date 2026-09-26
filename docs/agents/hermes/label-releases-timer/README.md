@@ -10,7 +10,7 @@ It **certifies nothing** — a tapped track is a `tracks` row with no `findings`
 
 The sweep WORK is BAKED at `/opt/hermes-scripts/` — the `.sh`/`.ts` pair (source: [`../scripts/label-releases-sweep.sh`](../scripts/label-releases-sweep.sh) → [`../scripts/label-releases-sweep.ts`](../scripts/label-releases-sweep.ts)) — riding the image and auto-updating from `main` via pin-watch.
 
-The fixed daily slot is 07:20 Amsterdam, with one guarded retry at 08:20. A run that database admission skipped before its payload started gets the second chance; a run that already started its payload does not repeat. Both slots keep per-firing jitter, and the retry enters the same database guardrail. The shared [`daily-retry-runner.sh`](../scripts/daily-retry-runner.sh) reads the day's marker before launching, so a successful first slot makes the second slot a no-op. If both slots skip the payload, only the final slot fails the host service and invokes its Discord failure notifier. `Persistent=true` still catches up a timer missed while the host was down.
+The timer fires every 15 minutes from 03:00 through 08:45 UTC, with per-firing jitter. Each firing makes bounded passes through database admission; a Spotify daily quota response closes the tap until the next 03:00 UTC window, while a transient 429 honors `Retry-After` and moves to another due label. This multi-firing timer deliberately does not use the daily-retry runner: a successful partial firing must never suppress the remaining window. `Persistent=false` prevents a missed window from catching up during the quota-closed day. The host failure notifier still catches service failures.
 
 ## The model: a thin trigger, a Worker that does the work
 
@@ -30,13 +30,13 @@ The official API's album search is a documented endpoint rather than a scraped G
 
 The tap is back on the same per-app Spotify budget as the user-facing paths (a new crew member's playlist mint, the Frontier refresh, publish), so it is paced rather than trusted. Every call the Worker makes is recorded into the shared call meter (`apps/web/src/lib/server/spotify-budget.ts`), and before each label — and each batch of single reads — the tap checks that the window is below **its own ceiling, a fraction of the meter's max**. It stops while there is still real headroom, so a mint arriving a moment later finds room; it never spends the last of the window.
 
-Hitting that ceiling is not an error. The pass reports `budgetPaused` and ends cleanly, and because every per-label `label_releases_checked_at` stamp is durable, the next pass resumes exactly where it stopped. The sweep stands down one meter window (~30s) and asks again, bounded by a pause fuse so a permanently-busy app ends the tick instead of spinning.
+Hitting that ceiling is not an error. The pass reports `budgetPaused` and ends cleanly, and because every per-label `label_releases_checked_at` stamp is durable, the next pass resumes exactly where it stopped. The sweep stands down one meter window (~30s) and asks again, bounded by a pause fuse so a permanently-busy app ends the firing instead of spinning. A throttled label remains unchecked and rotates behind other never-checked labels; checked labels become due again after 20 hours.
 
 **The scaling ceiling to watch:** this is comfortable at today's volume (~1 search per label per day plus a trickle of single reads). If the crew grows enough that mints regularly find the window spent, the fix is to measure the app's real sustainable rate and raise `SPOTIFY_CALL_WINDOW_MAX`, not to loosen the tap's ceiling.
 
 That pacing is what makes the cadence, not the batch size, the real throttle. Every scrap of state is in the database, so "run again" and "resume" are the same command: a box reboot mid-probe costs one label's re-tap, not a re-mint (the dedupe skips rows already minted, from both directions — Spotify id/uri/ISRC and same-album title fold).
 
-- `FLUNCLE_LABEL_RELEASES_LABELS` (default `5`) — enabled seed labels asked for per PASS; `--limit N` overrides it for an attended burn. `FLUNCLE_LABEL_RELEASES_MAX_PASSES` (default `30`) — the tick's pass fuse. `FLUNCLE_LABEL_RELEASES_BUDGET_WAIT_MS` (default `30000`) / `FLUNCLE_LABEL_RELEASES_MAX_BUDGET_WAITS` (default `5`) — the budget stand-down and its fuse.
+- `FLUNCLE_LABEL_RELEASES_LABELS` (default `5`) — enabled seed labels asked for per PASS; `--limit N` overrides it for an attended burn. `FLUNCLE_LABEL_RELEASES_MAX_PASSES` (default `40`) — the tick's pass fuse. `FLUNCLE_LABEL_RELEASES_BUDGET_WAIT_MS` (default `30000`) / `FLUNCLE_LABEL_RELEASES_MAX_BUDGET_WAITS` (default `12`) — the budget stand-down and its fuse.
 
 ## The gate: artist-grounding AND an exact copyright match (both mandatory)
 
@@ -81,4 +81,4 @@ systemctl list-timers fluncle-label-releases.timer
 
 (A full re-provision restores it automatically — [`../install-host-timers.sh`](../install-host-timers.sh) globs every `*-timer/` dir; the manual pass above is only for the FIRST enable on an already-running box.)
 
-**It is already on /status.** `cron.label-releases` is registered in `@fluncle/registry` and in the `fluncle-healthcheck` prober's cron array, so the moment the timer runs its first tick the `/status` row goes live. Nothing further to wire.
+**It is already on /status.** `cron.label-releases` is registered in `@fluncle/registry` and in the `fluncle-healthcheck` prober. After each UTC free window, the healthcheck sums the day's `labelsProbed` markers and reads degraded if due labels existed and fewer than `min(labelsDue, 1000)` were completed. The sweep also emits `labelsDue`, `neverChecked`, `quotaExceeded`, and `blockedReason` so quota closure is visible in the ledger.

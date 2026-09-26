@@ -11,6 +11,7 @@ const spotify = vi.hoisted(() => ({
   failPath: (_path: string): boolean => false,
   grantGone: false,
   respond: (_path: string): unknown => ({}),
+  throttle: (_path: string): null | { quotaExceeded: boolean; retryAfterMs: number } => null,
   throwKind: null as "429" | "error" | null,
 }));
 
@@ -43,6 +44,16 @@ vi.mock("./spotify", () => {
     spotifyFetch: async (path: string) => {
       spotify.calls.push(path);
 
+      const throttle = spotify.throttle(path);
+      if (throttle) {
+        throw Object.assign(
+          new Error(
+            `Spotify request failed: 429 ${throttle.quotaExceeded ? "QUOTA_EXCEEDED" : "Too Many Requests"}`,
+          ),
+          throttle,
+        );
+      }
+
       if (spotify.throwKind === "429") {
         throw new Error("Spotify request failed: 429 Too Many Requests");
       }
@@ -64,6 +75,7 @@ import {
   parseProbeAlbum,
   parseProbeTrack,
   probeLabelReleases,
+  nextSpotifyQuotaWindow,
   stripCopyrightPrefix,
   TAP_BUDGET_CEILING,
 } from "./label-releases";
@@ -268,6 +280,7 @@ beforeEach(async () => {
   spotify.throwKind = null;
   spotify.failPath = () => false;
   spotify.respond = () => ({});
+  spotify.throttle = () => null;
 });
 
 afterEach(async () => {
@@ -1010,6 +1023,50 @@ describe("probeLabelReleases", () => {
     expect(result.newRows).toBe(0);
   });
 
+  it("rotates a throttled first label behind another never-checked label without charging it", async () => {
+    await seedEnabledLabel(db, { id: "lbl_1", name: "Aaa Label", slug: "aaa-label" });
+    await seedEnabledLabel(db, { id: "lbl_2", name: "Zzz Label", slug: "zzz-label" });
+    setSpotifyFixture({ searchAlbumIds: [] });
+    let throttles = 0;
+    spotify.throttle = (path) => {
+      if (path.includes("Aaa") && throttles++ === 0) {
+        return { quotaExceeded: false, retryAfterMs: 5_000 };
+      }
+      return null;
+    };
+
+    const first = await probeLabelReleases();
+    expect(first.labelsProbed).toBe(0);
+    expect(first.blockedReason).toBe("spotify_throttle");
+    const firstStamp = await db.execute(
+      "select label_releases_checked_at from labels where slug = 'aaa-label'",
+    );
+    expect(firstStamp.rows[0]?.label_releases_checked_at).toBeNull();
+
+    await db.execute(
+      "update settings set value = '2000-01-01T00:00:00Z' where key = 'spotify_label_releases_throttle_until'",
+    );
+    const second = await probeLabelReleases({ limit: 1 });
+    expect(second.labelSlugs).toEqual(["zzz-label"]);
+    const third = await probeLabelReleases({ limit: 1 });
+    expect(third.labelSlugs).toEqual(["aaa-label"]);
+  });
+
+  it("holds a daily quota until the next UTC free window without a second Spotify call", async () => {
+    await seedEnabledLabel(db, { id: "lbl_1", name: "Medschool", slug: "medschool" });
+    setSpotifyFixture({ searchAlbumIds: [] });
+    spotify.throttle = () => ({ quotaExceeded: true, retryAfterMs: 1000 });
+    const first = await probeLabelReleases();
+    expect(first.quotaExceeded).toBe(true);
+    expect(first.labelsProbed).toBe(0);
+    expect(nextSpotifyQuotaWindow(new Date("2026-09-26T04:00:00Z"))).toBe(
+      "2026-09-27T03:00:00.000Z",
+    );
+    const second = await probeLabelReleases();
+    expect(second.blockedReason).toBe("spotify_quota");
+    expect(spotify.calls).toHaveLength(1);
+  });
+
   it("a minted row shows on /fresh in the unlit (catalogue) half", async () => {
     await seedEnabledLabel(db, { id: "lbl_1", name: "Medschool", slug: "medschool" });
     const now = new Date("2026-07-20T12:00:00Z");
@@ -1117,6 +1174,31 @@ describe("probeLabelReleases", () => {
     expect(Number(label.rows[0]?.label_releases_failures ?? 0)).toBe(0);
   });
 
+  it("checks the shared meter before each album read within one label", async () => {
+    await seedEnabledLabel(db, { id: "lbl_1", name: "Medschool", slug: "medschool" });
+    setSpotifyFixture({
+      albums: ["one", "two", "three"].map((id) => ({
+        copyrights: ["℗ 2026 Medschool"],
+        id,
+        name: id,
+        releaseDate: "2026-09-26",
+        trackIds: [],
+      })),
+      searchAlbumIds: ["one", "two", "three"],
+    });
+    await setSpotifyCallMeter(db, TAP_BUDGET_CEILING - 2);
+
+    const result = await probeLabelReleases();
+    expect(result.budgetPaused).toBe(true);
+    expect(result.labelsProbed).toBe(0);
+    expect(spotify.calls).toHaveLength(2);
+    expect(await readSpotifyCallCount()).toBe(TAP_BUDGET_CEILING);
+    const label = await db.execute(
+      "select label_releases_checked_at from labels where slug = 'medschool'",
+    );
+    expect(label.rows[0]?.label_releases_checked_at).toBeNull();
+  });
+
   it("RESUMES on the next window — the paused label is still due and mints", async () => {
     await seedEnabledLabel(db, { id: "lbl_1", name: "Medschool", slug: "medschool" });
     setMintableFixture();
@@ -1153,14 +1235,14 @@ describe("probeLabelReleases", () => {
     expect(stamps.rows[1]?.label_releases_checked_at).toBeNull();
   });
 
-  it("never blocks the tap when the meter's own store faults (fail-open)", async () => {
+  it("stands down when the shared breaker state cannot be read", async () => {
     await seedEnabledLabel(db, { id: "lbl_1", name: "Medschool", slug: "medschool" });
     setMintableFixture();
     await db.execute("drop table settings");
 
     const result = await probeLabelReleases();
 
-    expect(result.budgetPaused).toBe(false);
-    expect(result.newRows).toBe(1);
+    expect(result.blockedReason).toBe("spotify_breaker");
+    expect(spotify.calls).toHaveLength(0);
   });
 });

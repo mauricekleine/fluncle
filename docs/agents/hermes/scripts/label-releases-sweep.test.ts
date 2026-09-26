@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   type LabelReleasesDeps,
   type PassResult,
+  isSpotifyFreeWindow,
   parseLimitArg,
   runLabelReleasesTick,
 } from "./label-releases-sweep";
@@ -9,13 +10,18 @@ import {
 const PASS: PassResult = {
   albumsMatched: 1,
   albumsSeen: 2,
+  blockedReason: null,
   budgetPaused: false,
   configured: true,
   failedLabels: [],
   fetchCeilingHit: false,
+  labelsDue: 100,
   labelsProbed: 5,
+  neverChecked: 70,
   newRows: 1,
+  quotaExceeded: false,
   rateLimited: false,
+  retryAfterMs: 0,
   skippedKnown: 0,
   skippedUndated: 0,
   skippedUngrounded: 1,
@@ -87,11 +93,52 @@ describe("runLabelReleasesTick", () => {
     expect(script.calls()).toBe(1);
   });
 
-  test("stops on a Spotify 429 — the next tick resumes", async () => {
-    const script = scripted([{ ...PASS, rateLimited: true }, PASS]);
-    const summary = await runLabelReleasesTick(5, deps({ runPass: script.runPass }));
+  test("a first-label transient 429 waits for Retry-After and probes another label in the same tick", async () => {
+    const script = scripted([
+      {
+        ...PASS,
+        blockedReason: "spotify_throttle",
+        labelsProbed: 0,
+        rateLimited: true,
+        retryAfterMs: 4000,
+      },
+      PASS,
+      DRAINED,
+    ]);
+    const waits: number[] = [];
+    const summary = await runLabelReleasesTick(
+      5,
+      deps({
+        runPass: script.runPass,
+        wait: (ms) => {
+          waits.push(ms);
+          return Promise.resolve();
+        },
+      }),
+    );
 
     expect(summary.rateLimited).toBe(true);
+    expect(summary.labelsProbed).toBe(5);
+    expect(summary.checked).toBe(5);
+    expect(waits).toEqual([4000]);
+    expect(script.calls()).toBe(3);
+  });
+
+  test("daily quota stops this firing and exposes its blocker", async () => {
+    const script = scripted([
+      {
+        ...PASS,
+        blockedReason: "spotify_quota",
+        labelsProbed: 0,
+        quotaExceeded: true,
+        rateLimited: true,
+      },
+      PASS,
+    ]);
+    const summary = await runLabelReleasesTick(5, deps({ runPass: script.runPass }));
+    expect(summary.quotaExceeded).toBe(true);
+    expect(summary.blockedReason).toBe("spotify_quota");
+    expect(summary.checked).toBe(0);
     expect(script.calls()).toBe(1);
   });
 
@@ -137,8 +184,8 @@ describe("runLabelReleasesTick", () => {
     expect(summary.budgetPaused).toBe(true);
     expect(summary.ok).toBe(true);
 
-    expect(waits.length).toBeLessThanOrEqual(5);
-    expect(script.calls()).toBeLessThanOrEqual(6);
+    expect(waits.length).toBeLessThanOrEqual(12);
+    expect(script.calls()).toBeLessThanOrEqual(13);
   });
 
   test("a failed pass reports ok:false, never a throw", async () => {
@@ -203,4 +250,18 @@ describe("parseLimitArg", () => {
     expect(parseLimitArg([], 5)).toBe(5);
     expect(parseLimitArg(["--limit", "-3"], 5)).toBe(5);
   });
+});
+
+test("the tap only asks Spotify inside the UTC free window", async () => {
+  expect(isSpotifyFreeWindow(new Date("2026-09-26T02:59:00Z"))).toBe(false);
+  expect(isSpotifyFreeWindow(new Date("2026-09-26T03:00:00Z"))).toBe(true);
+  expect(isSpotifyFreeWindow(new Date("2026-09-26T08:59:00Z"))).toBe(true);
+  expect(isSpotifyFreeWindow(new Date("2026-09-26T09:00:00Z"))).toBe(false);
+  const script = scripted([PASS]);
+  const summary = await runLabelReleasesTick(
+    5,
+    deps({ runPass: script.runPass, withinWindow: () => false }),
+  );
+  expect(summary.blockedReason).toBe("outside_spotify_window");
+  expect(script.calls()).toBe(0);
 });

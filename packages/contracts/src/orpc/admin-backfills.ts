@@ -596,9 +596,14 @@ export const backfillLabelReleases = oc
 
       albumsSeen: z.number(),
 
+      blockedReason: z
+        .enum(["spotify_breaker", "spotify_budget", "spotify_quota", "spotify_throttle"])
+        .nullable(),
+
       budgetPaused: z.boolean(),
 
       configured: z.boolean(),
+
       dryRun: z.boolean(),
 
       failedFetches: z.number(),
@@ -609,14 +614,23 @@ export const backfillLabelReleases = oc
 
       labelSlugs: z.array(z.string()),
 
+      labelsDue: z.number(),
+
       labelsProbed: z.number(),
+
+      neverChecked: z.number(),
 
       newRows: z.number(),
 
       newTrackIds: z.array(z.string()),
+
       ok: z.literal(true),
 
+      quotaExceeded: z.boolean(),
+
       rateLimited: z.boolean(),
+
+      retryAfterMs: z.number(),
 
       skippedKnown: z.number(),
 

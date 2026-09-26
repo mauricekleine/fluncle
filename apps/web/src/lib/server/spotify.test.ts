@@ -170,6 +170,24 @@ describe("spotifyFetch 429 backoff", () => {
     vi.useRealTimers();
   });
 
+  it("returns quota and Retry-After details to a subordinate caller without retrying", async () => {
+    const { spotifyFetch } = await import("./spotify");
+    const fetchMock = vi.fn(
+      async () =>
+        new Response('{"error":{"reason":"QUOTA_EXCEEDED"}}', {
+          headers: { "Retry-After": "37" },
+          status: 429,
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(spotifyFetch("/search", "token", {}, false)).rejects.toMatchObject({
+      quotaExceeded: true,
+      retryAfterMs: 37_000,
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it("waits out a 429 Retry-After on an idempotent GET, then succeeds", async () => {
     vi.useFakeTimers();
     selectQueue = [{ access_token: "at-valid", expires_at: future(), refresh_token: "rt" }];

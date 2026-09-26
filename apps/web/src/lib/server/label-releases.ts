@@ -7,6 +7,8 @@ import { relinkTracksToEntity } from "./hub-counts";
 import { hasIsrc } from "./isrc";
 import { labelFold } from "./labels";
 import { logEvent } from "./log";
+import { getSetting, setSetting } from "./settings";
+import { getSpotifyAnchorBreakerState } from "./spotify-anchor-breaker";
 import { ApiError, getSpotifyAccessToken, SPOTIFY_REAUTH_REQUIRED, spotifyFetch } from "./spotify";
 import { readSpotifyCallCount, recordSpotifyCall, SPOTIFY_CALL_WINDOW_MAX } from "./spotify-budget";
 import { insertTrackDuplicateKeyStatement } from "./track-duplicate-keys";
@@ -19,6 +21,8 @@ const FAILURE_COOLDOWN_BASE_MS = 6 * 60 * 60 * 1000;
 const FAILURE_COOLDOWN_MAX_MS = 7 * 24 * 60 * 60 * 1000;
 
 const WORKLIST_OVERSCAN = PROBE_LABELS_PER_PASS * 4;
+const QUOTA_UNTIL_KEY = "spotify_label_releases_quota_until";
+const THROTTLE_UNTIL_KEY = "spotify_label_releases_throttle_until";
 
 const SEARCH_LIMIT = 10;
 
@@ -78,12 +82,17 @@ export type LabelReleasesProbeResult = {
   fetchCeilingHit: boolean;
 
   labelsProbed: number;
+  labelsDue: number;
+  neverChecked: number;
 
   newRows: number;
 
   newTrackIds: string[];
 
   rateLimited: boolean;
+  quotaExceeded: boolean;
+  retryAfterMs: number;
+  blockedReason: null | "spotify_breaker" | "spotify_budget" | "spotify_quota" | "spotify_throttle";
 
   skippedKnown: number;
 
@@ -445,15 +454,55 @@ async function recordLabelFailure(slug: string, priorFailures: number): Promise<
   });
 }
 
-async function listProbeLabels(): Promise<LabelProbeRow[]> {
+async function deferLabel(slug: string): Promise<void> {
+  const db = await getDb();
+  await db.execute({
+    args: [new Date().toISOString(), slug],
+    sql: "update labels set label_releases_attempted_at = ? where slug = ?",
+  });
+}
+
+export function nextSpotifyQuotaWindow(now: Date): string {
+  const next = new Date(now);
+  next.setUTCHours(3, 0, 0, 0);
+  if (next.getTime() <= now.getTime()) {
+    next.setUTCDate(next.getUTCDate() + 1);
+  }
+  return next.toISOString();
+}
+
+async function dueCounts(now: number): Promise<{ labelsDue: number; neverChecked: number }> {
   const db = await getDb();
   const result = await db.execute({
-    args: [WORKLIST_OVERSCAN],
+    args: [new Date(now - REPROBE_INTERVAL_MS).toISOString()],
+    sql: `select count(*) as labels_due,
+                 sum(case when label_releases_checked_at is null then 1 else 0 end) as never_checked
+          from labels
+          where seed_state = 'enabled'
+            and (label_releases_checked_at is null or label_releases_checked_at <= ?)`,
+  });
+  return {
+    labelsDue: Number(result.rows[0]?.labels_due ?? 0),
+    neverChecked: Number(result.rows[0]?.never_checked ?? 0),
+  };
+}
+
+async function listProbeLabels(now: number): Promise<LabelProbeRow[]> {
+  const db = await getDb();
+  const result = await db.execute({
+    args: [
+      new Date(now - REPROBE_INTERVAL_MS).toISOString(),
+      Math.floor(now / 1000),
+      WORKLIST_OVERSCAN,
+    ],
     sql: `select id, slug, name, label_releases_checked_at, label_releases_attempted_at,
                  label_releases_failures
           from labels
           where seed_state = 'enabled'
-          order by label_releases_checked_at asc, slug asc
+            and (label_releases_checked_at is null or label_releases_checked_at <= ?)
+            and (label_releases_failures = 0 or label_releases_attempted_at is null
+                 or unixepoch(label_releases_attempted_at) <= ? - min(604800, 21600 * (1 << min(label_releases_failures, 10))))
+          order by label_releases_checked_at asc, label_releases_attempted_at asc, slug asc
           limit ?`,
   });
 
@@ -494,32 +543,42 @@ function isEligible(label: LabelProbeRow, now: number): boolean {
 
 type SpotifyGet =
   | { body: unknown; kind: "ok" }
+  | { kind: "budget" }
   | { kind: "failed" }
-  | { kind: "ratelimited" }
+  | { kind: "ratelimited"; quotaExceeded: boolean; retryAfterMs: number }
   | { kind: "unauthorized" };
 
 async function tapHasBudgetHeadroom(): Promise<boolean> {
   try {
     return (await readSpotifyCallCount(Date.now())) < TAP_BUDGET_CEILING;
   } catch {
-    return true;
+    return false;
   }
 }
 
-async function recordTapCall(): Promise<void> {
+async function recordTapCall(): Promise<boolean> {
   try {
     await recordSpotifyCall(Date.now());
-  } catch {}
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function spotifyGet(path: string, accessToken: string): Promise<SpotifyGet> {
-  try {
-    const response = await spotifyFetch(path, accessToken);
-    await recordTapCall();
+  if (!(await tapHasBudgetHeadroom())) {
+    return { kind: "budget" };
+  }
 
-    return { body: await response.json(), kind: "ok" };
+  let response: Response;
+  try {
+    response = await spotifyFetch(path, accessToken, {}, false);
   } catch (error) {
-    await recordTapCall();
+    const recorded = await recordTapCall();
+
+    if (!recorded) {
+      return { kind: "budget" };
+    }
 
     if (
       error instanceof ApiError &&
@@ -529,9 +588,24 @@ async function spotifyGet(path: string, accessToken: string): Promise<SpotifyGet
     }
 
     if (error instanceof Error && error.message.includes("429")) {
-      return { kind: "ratelimited" };
+      const details = error as Error & { quotaExceeded?: boolean; retryAfterMs?: number };
+      return {
+        kind: "ratelimited",
+        quotaExceeded: details.quotaExceeded === true || error.message.includes("QUOTA_EXCEEDED"),
+        retryAfterMs: Math.max(1000, details.retryAfterMs ?? 30_000),
+      };
     }
 
+    return { kind: "failed" };
+  }
+
+  if (!(await recordTapCall())) {
+    return { kind: "budget" };
+  }
+
+  try {
+    return { body: await response.json(), kind: "ok" };
+  } catch {
     return { kind: "failed" };
   }
 }
@@ -551,6 +625,24 @@ type BlockedSpotifyArtists = {
   global: Set<string>;
   label: Set<string>;
 };
+
+async function stopOnThrottle(
+  label: LabelProbeRow,
+  outcome: Extract<SpotifyGet, { kind: "ratelimited" }>,
+  result: LabelReleasesProbeResult,
+): Promise<LabelSignal> {
+  await deferLabel(label.slug);
+  result.rateLimited = true;
+  result.quotaExceeded = outcome.quotaExceeded;
+  result.retryAfterMs = outcome.retryAfterMs;
+  result.blockedReason = outcome.quotaExceeded ? "spotify_quota" : "spotify_throttle";
+  if (outcome.quotaExceeded) {
+    await setSetting(QUOTA_UNTIL_KEY, nextSpotifyQuotaWindow(new Date()));
+  } else {
+    await setSetting(THROTTLE_UNTIL_KEY, new Date(Date.now() + outcome.retryAfterMs).toISOString());
+  }
+  return "stop-rate";
+}
 
 async function blockedSpotifyArtistsForLabel(labelId: string): Promise<BlockedSpotifyArtists> {
   try {
@@ -612,9 +704,13 @@ async function probeOneLabel(
   }
 
   if (search.kind === "ratelimited") {
-    result.rateLimited = true;
+    return stopOnThrottle(label, search, result);
+  }
 
-    return "stop-rate";
+  if (search.kind === "budget") {
+    result.budgetPaused = true;
+    result.blockedReason = "spotify_budget";
+    return "stop-meter";
   }
 
   if (search.kind === "failed") {
@@ -624,20 +720,20 @@ async function probeOneLabel(
     return "continue";
   }
 
-  result.labelsProbed += 1;
-  result.labelSlugs.push(label.slug);
-
   const albumIds = [...new Set(parseLabelAlbumSearch(search.body))].slice(0, MAX_ALBUMS_PER_LABEL);
   result.albumsSeen += albumIds.length;
 
   if (albumIds.length === 0) {
     await markLabelChecked(label.slug);
+    result.labelsProbed += 1;
+    result.labelSlugs.push(label.slug);
 
     return "continue";
   }
 
   if (!(await tapHasBudgetHeadroom())) {
     result.budgetPaused = true;
+    result.blockedReason = "spotify_budget";
 
     return "stop-meter";
   }
@@ -659,9 +755,13 @@ async function probeOneLabel(
     }
 
     if (outcome.kind === "ratelimited") {
-      result.rateLimited = true;
+      return stopOnThrottle(label, outcome, result);
+    }
 
-      return "stop-rate";
+    if (outcome.kind === "budget") {
+      result.budgetPaused = true;
+      result.blockedReason = "spotify_budget";
+      return "stop-meter";
     }
 
     if (outcome.kind === "failed") {
@@ -710,6 +810,7 @@ async function probeOneLabel(
 
     if (!(await tapHasBudgetHeadroom())) {
       result.budgetPaused = true;
+      result.blockedReason = "spotify_budget";
 
       return "stop-meter";
     }
@@ -731,9 +832,13 @@ async function probeOneLabel(
       }
 
       if (outcome.kind === "ratelimited") {
-        result.rateLimited = true;
+        return stopOnThrottle(label, outcome, result);
+      }
 
-        return "stop-rate";
+      if (outcome.kind === "budget") {
+        result.budgetPaused = true;
+        result.blockedReason = "spotify_budget";
+        return "stop-meter";
       }
 
       if (outcome.kind === "failed") {
@@ -768,6 +873,8 @@ async function probeOneLabel(
   }
 
   await markLabelChecked(label.slug);
+  result.labelsProbed += 1;
+  result.labelSlugs.push(label.slug);
 
   return "continue";
 }
@@ -780,6 +887,7 @@ export async function probeLabelReleases({
   const result: LabelReleasesProbeResult = {
     albumsMatched: 0,
     albumsSeen: 0,
+    blockedReason: null,
     budgetPaused: false,
     configured: true,
     dryRun,
@@ -787,10 +895,14 @@ export async function probeLabelReleases({
     failedLabels: [],
     fetchCeilingHit: false,
     labelSlugs: [],
+    labelsDue: 0,
     labelsProbed: 0,
+    neverChecked: 0,
     newRows: 0,
     newTrackIds: [],
+    quotaExceeded: false,
     rateLimited: false,
+    retryAfterMs: 0,
     skippedKnown: 0,
     skippedUndated: 0,
     skippedUngrounded: 0,
@@ -798,7 +910,10 @@ export async function probeLabelReleases({
   };
 
   const cap = Math.max(1, Math.min(limit, PROBE_LABELS_PER_PASS));
-  const candidates = await listProbeLabels();
+  const counts = await dueCounts(now);
+  result.labelsDue = counts.labelsDue;
+  result.neverChecked = counts.neverChecked;
+  const candidates = await listProbeLabels(now);
   const eligible = candidates.filter((label) => isEligible(label, now)).slice(0, cap);
 
   if (eligible.length === 0) {
@@ -808,6 +923,33 @@ export async function probeLabelReleases({
   if (dryRun) {
     result.labelSlugs = eligible.map((label) => label.slug);
 
+    return result;
+  }
+
+  const quotaUntil = await getSetting(QUOTA_UNTIL_KEY).catch(() => undefined);
+  if (quotaUntil && Date.parse(quotaUntil) > now) {
+    result.quotaExceeded = true;
+    result.blockedReason = "spotify_quota";
+    return result;
+  }
+
+  const throttleUntil = await getSetting(THROTTLE_UNTIL_KEY).catch(() => undefined);
+  if (throttleUntil && Date.parse(throttleUntil) > now) {
+    result.rateLimited = true;
+    result.retryAfterMs = Date.parse(throttleUntil) - now;
+    result.blockedReason = "spotify_throttle";
+    return result;
+  }
+
+  try {
+    const breaker = await getSpotifyAnchorBreakerState(now);
+    if (breaker.tripped) {
+      result.quotaExceeded = breaker.reason === "quota_exceeded";
+      result.blockedReason = result.quotaExceeded ? "spotify_quota" : "spotify_breaker";
+      return result;
+    }
+  } catch {
+    result.blockedReason = "spotify_breaker";
     return result;
   }
 
@@ -824,6 +966,7 @@ export async function probeLabelReleases({
   for (const label of eligible) {
     if (!(await tapHasBudgetHeadroom())) {
       result.budgetPaused = true;
+      result.blockedReason = "spotify_budget";
       break;
     }
 

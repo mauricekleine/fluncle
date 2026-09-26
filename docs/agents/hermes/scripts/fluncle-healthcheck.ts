@@ -714,6 +714,48 @@ function owedSlotDayMissing(cron: CronDef, dir: string, now: Date): boolean {
   return day !== null && !slotDayCompleted({ day, directory: dirname(dir), job, schedule });
 }
 
+const LABEL_RELEASES_MIN_PROBES_PER_DAY = 1000;
+
+function labelReleaseWindowCompleted(now: Date): boolean {
+  return now.getUTCHours() > 9 || (now.getUTCHours() === 9 && now.getUTCMinutes() >= 30);
+}
+
+function labelReleaseDayIncomplete(
+  runFiles: { mtimeMs: number; path: string }[],
+  now: Date,
+): boolean {
+  const day = new Date(now);
+  if (!labelReleaseWindowCompleted(now)) {
+    day.setUTCDate(day.getUTCDate() - 1);
+  }
+  const target = day.toISOString().slice(0, 10);
+  let observedDemand: number | null = null;
+  let probed = 0;
+
+  for (const file of [...runFiles].reverse()) {
+    if (new Date(file.mtimeMs).toISOString().slice(0, 10) !== target) {
+      continue;
+    }
+    let summary: Record<string, unknown> | null;
+    try {
+      summary = findJsonSummary(readFileSync(file.path, "utf8"));
+    } catch {
+      continue;
+    }
+    if (summary && typeof summary.labelsDue === "number") {
+      observedDemand = Math.max(observedDemand ?? 0, probed + summary.labelsDue);
+    }
+    if (summary && typeof summary.labelsProbed === "number") {
+      probed += summary.labelsProbed;
+    }
+  }
+
+  return (
+    observedDemand === null ||
+    (observedDemand > 0 && probed < Math.min(observedDemand, LABEL_RELEASES_MIN_PROBES_PER_DAY))
+  );
+}
+
 export function judgeCron(
   cron: CronDef,
   dir: string | undefined,
@@ -723,6 +765,9 @@ export function judgeCron(
   const staleBudgetMs = cronStaleBudgetMs(cron);
 
   const noData = (): CronVerdict => {
+    if (cron.service === "cron.label-releases" && labelReleaseWindowCompleted(now)) {
+      return "incomplete";
+    }
     if (uptimeMs !== null && uptimeMs > staleBudgetMs) {
       return "lagging";
     }
@@ -773,6 +818,10 @@ export function judgeCron(
 
   if (!summary) {
     return "no-summary";
+  }
+
+  if (cron.service === "cron.label-releases" && labelReleaseWindowCompleted(now)) {
+    return labelReleaseDayIncomplete(runFiles, now) ? "incomplete" : "fresh-ok";
   }
 
   if (
