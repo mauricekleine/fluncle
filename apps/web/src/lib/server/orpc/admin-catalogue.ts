@@ -55,6 +55,7 @@ import {
   prepareCrawlPhase,
 } from "../crawl";
 import { adminAuth, operatorGuard } from "../orpc-auth";
+import { readPipelineWatch } from "../pipeline-watch-read";
 import { certifyExistingTrack } from "../publish";
 import { apiFault, type Implementer, parseBool, parseLimit } from "./_shared";
 
@@ -323,6 +324,14 @@ export function adminCatalogueHandlers(os: Implementer) {
     }
   });
 
+  const getPipelineHandler = os.get_pipeline.use(adminAuth).handler(async () => {
+    try {
+      return { ...(await readPipelineWatch()), ok: true as const };
+    } catch (error) {
+      throw apiFault(error);
+    }
+  });
+
   const anchorTrackHandler = os.anchor_track.use(adminAuth).handler(async ({ input }) => {
     try {
       const candidates = input.candidates.flatMap((candidate): AnchorCandidate[] => {
@@ -572,6 +581,7 @@ export function adminCatalogueHandlers(os: Implementer) {
     get_anchor_apify_budget: getAnchorApifyBudgetHandler,
     get_capture_budget: getCaptureBudgetHandler,
     get_crawl_status: getCrawlStatusHandler,
+    get_pipeline: getPipelineHandler,
     get_spotify_anchor_breaker: getSpotifyAnchorBreakerHandler,
     list_catalogue_tracks: listCatalogueTracksHandler,
     list_unverified_captures: listUnverifiedCapturesHandler,

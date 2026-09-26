@@ -192,6 +192,8 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   get_mixable_order: "admin",
   get_mixtape_social: "admin",
   get_operation_receipt: "admin",
+
+  get_pipeline: "admin",
   get_private_account_export: "private-session",
   get_private_frontier_edition: "private-session",
   get_private_frontier_playlist: "private-session",

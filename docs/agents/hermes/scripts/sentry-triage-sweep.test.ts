@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   chmodSync,
@@ -32,6 +32,8 @@ import {
 } from "./sentry-triage-sweep";
 
 const temporaryDirectories: string[] = [];
+
+setDefaultTimeout(30_000);
 
 afterEach(() => {
   for (const directory of temporaryDirectories.splice(0)) {

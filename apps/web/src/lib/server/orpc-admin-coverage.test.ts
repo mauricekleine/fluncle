@@ -57,6 +57,7 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   "GET /admin/catalogue/captures/unverified": "list_unverified_captures",
 
   "GET /admin/catalogue/crawl": "get_crawl_status",
+  "GET /admin/catalogue/pipeline": "get_pipeline",
 
   "GET /admin/clips": "list_clips",
 

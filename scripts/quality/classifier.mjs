@@ -202,6 +202,10 @@ function classifyPath(
     matched = true;
   }
 
+  if (path === "docs/agents/hermes/scripts/pipeline-watch-evaluate.ts") {
+    changedPackageNames.add("@fluncle/web");
+  }
+
   if (SKILL_DIRECTORIES.some((directory) => path.startsWith(directory)) || SKILL_FILES.has(path)) {
     lanes.skills = true;
     matched = true;

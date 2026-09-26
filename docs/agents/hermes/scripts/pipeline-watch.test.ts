@@ -12,6 +12,7 @@ import {
   advanceCrawlSupply,
   advanceEmbedTrend,
   parseIncidentState,
+  parsePipelineWatchRead,
   planIncidents,
 } from "./pipeline-watch";
 
@@ -156,7 +157,7 @@ describe("real box journal summary replay", () => {
         },
       },
     ];
-    const verdict = evaluate("anchor", markers);
+    const verdict = evaluate("anchor", markers, { anchorQueue: { atLeast: true, count: 1000 } });
     expect(verdict.state).toBe("scheduled_pause");
     expect(planIncidents({}, [verdict], first + 2 * 60 * 60_000).alerts).toEqual([]);
   });
@@ -167,7 +168,9 @@ describe("real box journal summary replay", () => {
       at: first + hour * 60 * 60_000,
       summary: { gateReason: "quota_hold", produced: 15, queueDepth: 2000 },
     }));
-    expect(evaluate("anchor", markers).state).toBe("healthy");
+    expect(evaluate("anchor", markers, { anchorQueue: { atLeast: true, count: 1000 } }).state).toBe(
+      "healthy",
+    );
   });
 
   test("a crawler still writing tracks is not a supply stall while its ready lane reads zero", () => {
@@ -177,10 +180,33 @@ describe("real box journal summary replay", () => {
       summary: { tracksWritten: index % 3 === 0 ? 10 : 3 },
     }));
     const verdict = evaluate("crawl", markers, {
-      crawl: { frontier: 180000, storable: 0, unstorable: 174000 },
+      crawl: {
+        frontier: { atLeast: true, count: 180000 },
+        storable: { atLeast: false, count: 0 },
+        unstorable: { atLeast: true, count: 174000 },
+      },
       crawlZeroChecks: 2,
     });
     expect(verdict.state).not.toBe("stalled");
+  });
+
+  test("a bounded empty crawler ready lane is a supply stall below the write threshold", () => {
+    const first = Date.parse("2026-09-25T18:45:00.000Z");
+    const markers = Array.from({ length: 12 }, (_, index) => ({
+      at: first + index * 10 * 60_000,
+      summary: { tracksWritten: index === 0 ? 1 : 0 },
+    }));
+    const verdict = evaluate("crawl", markers, {
+      crawl: {
+        frontier: { atLeast: true, count: 180000 },
+        storable: { atLeast: false, count: 0 },
+        unstorable: { atLeast: true, count: 174000 },
+      },
+      crawlZeroChecks: 2,
+    });
+    expect(verdict.state).toBe("stalled");
+    expect(verdict.cause).toBe("supply_empty");
+    expect(verdict.backlog).toEqual({ atLeast: true, count: 174000 });
   });
 
   test("a spent Apify budget is a closed budget, never a page", () => {
@@ -194,7 +220,7 @@ describe("real box journal summary replay", () => {
         produced: 0,
       },
     }));
-    const verdict = evaluate("anchor", markers);
+    const verdict = evaluate("anchor", markers, { anchorQueue: { atLeast: true, count: 1000 } });
     expect(verdict.state).toBe("budget_closed");
     expect(planIncidents({}, [verdict], first + 3 * 60 * 60_000).alerts).toEqual([]);
   });
@@ -351,7 +377,7 @@ describe("tripwire boundaries", () => {
 
 describe("paging policy", () => {
   const verdict = (state: StageVerdict["state"]): StageVerdict => ({
-    backlog: 100,
+    backlog: { atLeast: false, count: 100 },
     cause: state === "degraded" ? "capacity_below_intake" : "measurement_unavailable",
     message: "m",
     output: 0,
@@ -449,7 +475,7 @@ describe("watchdog regression replays", () => {
     const verdict = evaluate("anchor", markers, { anchorQueue: 2000 } as Partial<PipelineSnapshot>);
     expect(verdict.state).toBe("stalled");
     expect(verdict.cause).toBe("admission_lane_closed");
-    expect(verdict.backlog).toBe(2000);
+    expect(verdict.backlog).toEqual({ atLeast: false, count: 2000 });
     expect(
       evaluate("anchor", markers, { anchorQueue: null } as Partial<PipelineSnapshot>).state,
     ).toBe("measurement_unavailable");
@@ -624,7 +650,7 @@ describe("second-review fixes", () => {
     ];
     const verdict = evaluate("isrc-recovery", markers);
     expect(verdict.state).toBe("healthy");
-    expect(verdict.backlog).toBe(40);
+    expect(verdict.backlog).toEqual({ atLeast: false, count: 40 });
   });
 
   test("an unreadable funnel marker directory is a measurement gap, not a missing snapshot", () => {
@@ -639,7 +665,7 @@ describe("second-review fixes", () => {
 
   test("the Friday window freezes an open anchor stall instead of recovering it", () => {
     const stalled: StageVerdict = {
-      backlog: 2000,
+      backlog: { atLeast: false, count: 2000 },
       cause: "vendor_gate",
       message: "m",
       output: 0,
@@ -653,5 +679,95 @@ describe("second-review fixes", () => {
     const second = planIncidents(first.next, [paused], base + 30 * 60_000);
     expect([...first.alerts, ...second.alerts].map((alert) => alert.type)).toEqual([]);
     expect(Object.keys(second.next)).toEqual(["anchor"]);
+  });
+});
+
+describe("bounded pipeline read", () => {
+  test("capped read keeps every lower bound in verdicts, alerts, and structured output", () => {
+    const parsed = parsePipelineWatchRead(fixtures.pipelineRead);
+    expect(parsed.crawl).toEqual({
+      frontier: { atLeast: true, count: 1000 },
+      storable: { atLeast: true, count: 1 },
+      unstorable: { atLeast: true, count: 5000 },
+    });
+    const anchor = evaluate("anchor", asMarkers(fixtures.anchorGate), {
+      anchorQueue: parsed.anchorQueue,
+    });
+    expect(anchor.state).toBe("stalled");
+    expect(anchor.backlog).toEqual({ atLeast: true, count: 1000 });
+    expect(anchor.message).toContain("at least 1000 queued");
+    expect(planIncidents({}, [anchor], Date.now()).alerts[0]?.message).toContain(
+      "at least 1000 queued",
+    );
+    const capture = evaluate("capture", asMarkers(fixtures.captureBudget), {
+      queues: { analyze: 5, capture: parsed.capture, embed: 5 },
+    });
+    expect(capture.backlog).toEqual({ atLeast: true, count: 2000 });
+    expect(capture.message).toContain("at least 2000 queued");
+    const crawl = evaluate("crawl", asMarkers(fixtures.crawlLabel), { crawl: parsed.crawl });
+    expect(crawl.backlog).toEqual({ atLeast: true, count: 1000 });
+  });
+
+  test("frontier threshold and storable zero retain their exact verdict boundaries", () => {
+    const markers = asMarkers(fixtures.crawlLabel);
+    const capped = parsePipelineWatchRead({
+      ...fixtures.pipelineRead,
+      storable: { atLeast: false, count: 0 },
+    });
+    const atThreshold = evaluate("crawl", markers, { crawl: capped.crawl });
+    expect(atThreshold.cause).toBe("supply_empty");
+    expect(atThreshold.message).toContain("at least 5000 queued");
+    const belowThreshold = evaluate("crawl", markers, {
+      crawl: {
+        frontier: { atLeast: false, count: 999 },
+        storable: { atLeast: false, count: 0 },
+        unstorable: { atLeast: false, count: 12 },
+      },
+    });
+    expect(belowThreshold.cause).not.toBe("supply_empty");
+    expect(belowThreshold.backlog).toEqual({ atLeast: false, count: 999 });
+    expect(belowThreshold.message).toContain("999 queued");
+  });
+
+  test("repair debt stays stalled while malformed reads stay unavailable", () => {
+    const repaired = parsePipelineWatchRead({
+      ...fixtures.pipelineRead,
+      capture: { atLeast: true, count: 2 },
+    });
+    const markers = asMarkers(fixtures.captureBudget).map((marker) => ({
+      ...marker,
+      summary: { ...marker.summary, reason: "due_work_repair_pending" },
+    }));
+    const verdict = evaluate("capture", markers, {
+      queues: { analyze: 5, capture: repaired.capture, embed: 5 },
+    });
+    expect(repaired.capture).toEqual({ atLeast: true, count: 2 });
+    expect(verdict.state).toBe("stalled");
+    expect(verdict.cause).toBe("due_work_repair_pending");
+
+    const unavailable = parsePipelineWatchRead({ ...fixtures.pipelineRead, capture: null });
+    expect(
+      evaluate("capture", markers, {
+        queues: { analyze: 5, capture: unavailable.capture, embed: 5 },
+      }).state,
+    ).toBe("measurement_unavailable");
+    expect(
+      parsePipelineWatchRead({ ...fixtures.pipelineRead, frontier: { count: 1000 } }).crawl,
+    ).toBeNull();
+    expect(
+      parsePipelineWatchRead({ ...fixtures.pipelineRead, frontier: { atLeast: true, count: 0 } })
+        .crawl,
+    ).toBeNull();
+    expect(parsePipelineWatchRead({ ...fixtures.pipelineRead, ok: false }).anchorQueue).toBeNull();
+  });
+
+  test("a closed capture budget stays budget closed when repair debt hides its count", () => {
+    const verdict = evaluate("capture", asMarkers(fixtures.captureBudget), {
+      budget: { closedReason: "paused", open: false, remainingBytes: 0, remainingTracks: 0 },
+      queues: { analyze: 5, capture: null, embed: 5 },
+    });
+    expect(verdict.state).toBe("budget_closed");
+    expect(verdict.backlog).toBeNull();
+    expect(planIncidents({}, [verdict], Date.now()).alerts).toEqual([]);
   });
 });
