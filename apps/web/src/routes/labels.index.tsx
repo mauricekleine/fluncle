@@ -10,7 +10,7 @@ import { TrackArtwork } from "@/components/track-artwork";
 import { siteUrl } from "@/lib/fluncle-links";
 import { tracksCount } from "@/lib/format";
 import { jsonLdScript } from "@/lib/json-ld";
-import { albumCoverAtSize, HUB_COVER_TILE_SIZE } from "@/lib/media";
+import { albumCoverAtSize, hubCoverSrcSet } from "@/lib/media";
 import { type HubOrder, hubHref, hubOrderParam } from "@/lib/hub-order";
 import { pageParam, textParam } from "@/lib/search-params";
 import {
@@ -178,7 +178,17 @@ function mastheadLine(total: number): string {
   return total > 1 ? `${countFormatter.format(total)} drum & bass labels.` : "Drum & bass labels.";
 }
 
-function LabelTile({ label }: { label: LabelHubEntry }) {
+function LabelTile({
+  eager,
+  label,
+  priority,
+}: {
+  eager?: boolean;
+  label: LabelHubEntry;
+  priority?: boolean;
+}) {
+  const image = label.logoImageUrl || label.coverImageUrl || undefined;
+
   return (
     <HubTile kind="label" lit={label.certified} name={label.name} slug={label.slug}>
       <Link
@@ -189,10 +199,11 @@ function LabelTile({ label }: { label: LabelHubEntry }) {
         <TrackArtwork
           alt=""
           className="artist-grid-cover"
-          src={
-            albumCoverAtSize(label.logoImageUrl, HUB_COVER_TILE_SIZE) ??
-            albumCoverAtSize(label.coverImageUrl, HUB_COVER_TILE_SIZE)
-          }
+          eager={eager}
+          priority={priority}
+          sizes="(min-width: 40rem) 120px, 50vw"
+          src={albumCoverAtSize(image, "hub")}
+          srcSet={hubCoverSrcSet(image)}
         />
         <span className="artist-grid-line">{label.name}</span>
         <span className="artist-grid-count">{tracksCount(label.trackCount)}</span>
@@ -267,8 +278,13 @@ function LabelsPage() {
               />
             )}
             <ul aria-label="Labels" className="artist-grid hub-grid">
-              {hub.items.map((label) => (
-                <LabelTile key={label.slug} label={label} />
+              {hub.items.map((label, index) => (
+                <LabelTile
+                  eager={index < 4}
+                  key={label.slug}
+                  label={label}
+                  priority={index === 0}
+                />
               ))}
             </ul>
             <CataloguePager
