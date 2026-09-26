@@ -1,5 +1,5 @@
 import { describe, expect, test as bunTest } from "bun:test";
-import { fluncleAsciiLogo } from "./brand";
+import { fluncleAsciiLogo, fluncleTagline } from "./brand";
 import {
   ARTIST_RULE_BOUNDARY,
   artistRuleLines,
@@ -828,6 +828,15 @@ describe("fluncle CLI parsing and JSON output", () => {
     expect(result.stdout).not.toContain("Operator:");
   });
 
+  testCli("sets root help in sentence case, the tagline included", async () => {
+    const result = await runCli([]);
+
+    expect(result.stdout).toContain(`\n${fluncleTagline}\n`);
+    expect(result.stdout).toContain("Display help for command");
+    expect(result.stdout).not.toContain("drum & bass bangers");
+    expect(result.stdout).not.toContain("display help");
+  });
+
   testCli("about prints the wordmark, the intro, and the grouped link map", async () => {
     const result = await runCli(["about"]);
 
@@ -847,6 +856,8 @@ describe("fluncle CLI parsing and JSON output", () => {
     expect(result.stdout).toContain("https://www.mixcloud.com/fluncle/");
     expect(result.stdout).toContain("https://galaxy.fluncle.com");
     expect(result.stdout).toContain("ssh rave.fluncle.com");
+    expect(result.stdout).toContain("SSH (the rave terminal)");
+    expect(result.stdout).not.toContain("this terminal");
     expect(result.stdout).toContain("https://github.com/mauricekleine/fluncle");
   });
 

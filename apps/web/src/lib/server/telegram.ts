@@ -55,7 +55,7 @@ export async function postToTelegram(
 }
 
 const DEFAULT_DREAM_LINE =
-  "I mixed a whole run of findings down into one long one. A checkpoint before the next sector, the nearest you'll get to hearing me dream.";
+  "I mixed a whole run of findings down into one long mixtape. A checkpoint before the next sector, the nearest you'll get to hearing me dream.";
 
 const CREW_TURN = "Pull it up loud, cosmonauts.";
 

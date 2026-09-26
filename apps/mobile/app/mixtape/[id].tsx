@@ -102,7 +102,7 @@ function MixtapeDetail({ mixtape }: { mixtape: MixtapeDTO }) {
             <View style={styles.action}>
               <HeatButton
                 icon={<MaterialCommunityIcons color={color.inkOnGold} name="youtube" size={18} />}
-                label="Watch the set"
+                label="Watch on YouTube"
                 onPress={() => openExternalUrl(youtube)}
               />
             </View>
@@ -111,7 +111,7 @@ function MixtapeDetail({ mixtape }: { mixtape: MixtapeDTO }) {
             <View style={styles.action}>
               <HeatButton
                 icon={<Ionicons color={color.starlightCream} name="musical-notes" size={16} />}
-                label="Mixcloud"
+                label="Listen on Mixcloud"
                 onPress={() => openExternalUrl(mixcloud)}
                 variant="outline"
               />

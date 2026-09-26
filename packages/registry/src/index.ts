@@ -1078,7 +1078,7 @@ export const SURFACES: readonly Surface[] = [
   },
   {
     command: "fluncle random",
-    exposedContent: ["the archive throws one back"],
+    exposedContent: ["the archive throws a banger back"],
     kind: "cli",
     name: "cli.random",
     weights: { cli: "secondary" },

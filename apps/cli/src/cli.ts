@@ -539,10 +539,10 @@ export function createProgram(): Command {
 
   program
     .name("fluncle")
-    .description(fluncleTagline.toLowerCase())
+    .description(fluncleTagline)
     .option("--env <local|production>", "Config profile to load (default: production)")
     .showSuggestionAfterError(false)
-    .addHelpCommand("help [command]", "display help for command")
+    .addHelpCommand("help [command]", "Display help for command")
     .hook("preAction", (_thisCommand, actionCommand) => {
       const options = actionCommand.optsWithGlobals() as GlobalOptions;
       setEnvProfile(options.env);
@@ -597,6 +597,7 @@ async function main(args = process.argv.slice(2)): Promise<void> {
 function configureCommand(command: Command): Command {
   return command
     .exitOverride()
+    .helpOption("-h, --help", "Display help for command")
     .addHelpCommand(false)
     .configureOutput({
       writeErr: () => {},
@@ -712,7 +713,7 @@ function addListenCommands(program: Command): void {
 
   program
     .command("random")
-    .description("The archive throws one back")
+    .description("The archive throws a banger back")
     .option("--json", "Print JSON", false)
     .action(async (options: JsonOptions) => {
       const { randomCommand } = await import("./commands/random");
@@ -842,7 +843,7 @@ function addAdminCommands(program: Command): void {
 
   admin
     .command("help", { hidden: true })
-    .description("display help for command")
+    .description("Display help for command")
     .action(() => {
       admin.outputHelp();
     });
@@ -8620,7 +8621,7 @@ Listen:
   fluncle open [--limit 20] [--browser|--app]   Pick a track, open it in Spotify
   fluncle open playlist [--browser|--app]       Open Fluncle's Findings in Spotify
   fluncle open telegram [--browser|--app]       Open the Telegram feed
-  fluncle random [--json]                       The archive throws one back
+  fluncle random [--json]                       The archive throws a banger back
   fluncle subscribe [email]                     Fresh bangers, every Friday
 
 Browse:
