@@ -16,6 +16,7 @@ type SendResult = {
   skipped: number;
   unknown: number;
   weekKey: string;
+  windowClosed: boolean;
 };
 
 export type FollowDigestSweepSummary = {
@@ -34,6 +35,8 @@ export type FollowDigestSweepSummary = {
   skipped: number;
   unknown: number;
   weekKey: null | string;
+  windowClosed: boolean;
+  payloadStarted: boolean;
 };
 
 export async function runFollowDigestSweep(
@@ -50,11 +53,13 @@ export async function runFollowDigestSweep(
     nextCursor: null,
     ok: true,
     passes: 0,
+    payloadStarted: true,
     produced: 0,
     sent: 0,
     skipped: 0,
     unknown: 0,
     weekKey: null,
+    windowClosed: false,
   };
   let cursor: string | undefined;
   try {
@@ -63,6 +68,15 @@ export async function runFollowDigestSweep(
       const result = await send(cursor, limit);
       if (result.ok !== true || result.considered < 0 || result.sent < 0) {
         throw new Error("send_follow_digests returned an invalid response");
+      }
+      if (result.windowClosed) {
+        summary.error = "Follow digest send window closed";
+        summary.errors = 1;
+        summary.ok = false;
+        summary.payloadStarted = summary.passes > 0;
+        summary.windowClosed = true;
+        summary.weekKey = result.weekKey;
+        break;
       }
       summary.passes += 1;
       summary.checked += result.considered;

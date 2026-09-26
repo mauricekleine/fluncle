@@ -17,6 +17,7 @@ describe("follow digest sweep", () => {
             skipped: 0,
             unknown: 0,
             weekKey: "2026-W39",
+            windowClosed: false,
           }
         : {
             capped: false,
@@ -31,6 +32,7 @@ describe("follow digest sweep", () => {
             skipped: 0,
             unknown: 1,
             weekKey: "2026-W39",
+            windowClosed: false,
           },
     );
     expect(summary).toMatchObject({ checked: 4, failed: 1, ok: true, sent: 2, unknown: 1 });
@@ -52,6 +54,7 @@ describe("follow digest sweep", () => {
             skipped: 0,
             unknown: 0,
             weekKey: "2026-W39",
+            windowClosed: false,
           }
         : {
             capped: false,
@@ -66,6 +69,7 @@ describe("follow digest sweep", () => {
             skipped: 0,
             unknown: 0,
             weekKey: "2026-W39",
+            windowClosed: false,
           };
     });
     expect(calls).toEqual([
@@ -88,11 +92,37 @@ describe("follow digest sweep", () => {
       skipped: 0,
       unknown: 0,
       weekKey: "2026-W39",
+      windowClosed: false,
     }));
     expect(paused.gateState).toBe("paused");
     const failed = await runFollowDigestSweep(async () => {
       throw new Error("HTTP 503");
     });
     expect(failed).toMatchObject({ error: "HTTP 503", errors: 1, ok: false });
+  });
+
+  it("marks a refused send window as an incomplete slot", async () => {
+    const summary = await runFollowDigestSweep(async () => ({
+      capped: false,
+      considered: 0,
+      dryRun: false,
+      empty: 0,
+      failed: 0,
+      ok: true,
+      paused: false,
+      sent: 0,
+      skipped: 0,
+      unknown: 0,
+      weekKey: "2026-W39",
+      windowClosed: true,
+    }));
+    expect(summary).toMatchObject({
+      checked: 0,
+      errors: 1,
+      ok: false,
+      payloadStarted: false,
+      sent: 0,
+      windowClosed: true,
+    });
   });
 });

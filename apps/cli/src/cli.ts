@@ -2052,6 +2052,8 @@ JSON field reference:
         });
         if (options.json) {
           printJson(result);
+        } else if (result.windowClosed && !result.dryRun) {
+          console.log("Follow digest sends open Friday at 17:00 Amsterdam.");
         } else {
           console.log(
             `Considered ${result.considered}; sent ${result.sent}; empty ${result.empty}; next ${result.nextCursor ?? "done"}.`,

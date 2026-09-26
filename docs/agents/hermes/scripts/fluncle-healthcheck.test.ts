@@ -1746,6 +1746,16 @@ describe("judgeCron — a retry-runner job owes its scheduled slot day", () => {
     body: '# Cron Job: fluncle-newsletter\n\n{"checked":1,"errors":0,"ok":true,"produced":1}\n',
   });
 
+  const followDigest: CronDef = {
+    cadenceMs: 7 * 24 * 60 * 60_000,
+    match: "follow-digest",
+    service: "cron.follow-digest",
+  };
+  const followDigestRun = (at: string) => ({
+    at,
+    body: '# Cron Job: fluncle-follow-digest\n\n{"checked":1,"errors":0,"ok":true,"produced":1,"sent":1}\n',
+  });
+
   test("yesterday's success does not cover a day whose attempts both died without a marker", () => {
     const dir = jobDir("backup", [backupRun("2026-09-25T01:05:00Z")]);
     const now = new Date("2026-09-26T08:00:00Z");
@@ -1788,5 +1798,14 @@ describe("judgeCron — a retry-runner job owes its scheduled slot day", () => {
         now,
       ),
     ).toBe("incomplete");
+  });
+
+  test("a missed Friday follow digest is degraded on Saturday and Monday", () => {
+    const dir = jobDir("follow-digest", [followDigestRun("2026-09-18T15:05:00Z")]);
+    for (const now of [new Date("2026-09-26T10:00:00Z"), new Date("2026-09-28T10:00:00Z")]) {
+      const verdict = judgeCron(followDigest, dir, null, now);
+      expect(verdict).toBe("incomplete");
+      expect(cronCheck(followDigest, verdict).status).toBe("degraded");
+    }
   });
 });

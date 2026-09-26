@@ -52,6 +52,29 @@ export const TURSO_LOG_FILE = join(WEB_ROOT, ".dev", "e2e-turso.log");
 const READINESS_TIMEOUT_MS = 90_000;
 const READINESS_POLL_MS = 500;
 
+function digestTestNow(): string {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    day: "2-digit",
+    month: "2-digit",
+    timeZone: "Europe/Amsterdam",
+    year: "numeric",
+  }).formatToParts(new Date());
+  const part = (type: string) => parts.find((entry) => entry.type === type)?.value ?? "";
+  const friday = new Date(
+    Date.UTC(Number(part("year")), Number(part("month")) - 1, Number(part("day")), 19),
+  );
+  friday.setUTCDate(friday.getUTCDate() - ((friday.getUTCDay() + 2) % 7));
+  return friday.toISOString();
+}
+
+export function readE2eDigestNow(): Date {
+  const configured = /^FOLLOW_DIGEST_TEST_NOW=(.+)$/m.exec(readFileSync(DEV_VARS, "utf8"))?.[1];
+  if (!configured) {
+    throw new Error("E2E follow digest clock is missing");
+  }
+  return new Date(configured);
+}
+
 export function isPortListening(port: number): Promise<boolean> {
   return new Promise((resolve) => {
     const socket = connect({ host: "127.0.0.1", port });
@@ -92,7 +115,8 @@ function renderDevVarsTemplate(): string {
     .replaceAll("__E2E_VITE_PORT__", String(VITE_PORT))
     .replaceAll("__E2E_LIBSQL_PORT__", String(LIBSQL_PORT))
     .replaceAll("__E2E_SONAR_PORT__", String(SONAR_PORT))
-    .replaceAll("__E2E_MAIL_PORT__", String(MAIL_PORT));
+    .replaceAll("__E2E_MAIL_PORT__", String(MAIL_PORT))
+    .replaceAll("__E2E_FOLLOW_DIGEST_NOW__", digestTestNow());
   const unresolved = rendered.match(/__E2E_[A-Z_]+__/g);
 
   if (unresolved) {

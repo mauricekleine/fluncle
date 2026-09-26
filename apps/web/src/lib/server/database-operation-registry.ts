@@ -1071,7 +1071,7 @@ const HEALTH_RECEIPT_FLAG_OFF_COMPATIBILITY: DatabaseProfileDefinition = {
 export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] = [
   defineOperation({
     accessClass: "write",
-    cadence: calendar("Fri 17:00 Europe/Amsterdam"),
+    cadence: withRetrySlot(calendar("Fri 17:00 Europe/Amsterdam"), "Fri 18:15 Europe/Amsterdam"),
     directory: "follow-digest-timer",
     heavy: false,
     mutationTarget: "primary",
