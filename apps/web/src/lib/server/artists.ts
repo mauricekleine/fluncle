@@ -2,6 +2,7 @@ import { parseArtistsJson } from "./artist-names";
 import { type Client, type InStatement, type ResultSet } from "@libsql/client";
 import { randomUUID } from "node:crypto";
 import { type ArtistListItem } from "@fluncle/contracts";
+import { publicTrackDurationOk } from "../../db/public-track-visibility";
 import { type ArtistSocialPlatform, ARTIST_SOCIAL_PLATFORMS } from "../artist-socials";
 import { SIMILAR_ARTISTS_LIMIT, listSimilarArtistNeighbours } from "./artist-dossier";
 import { validateSocialUrlForPlatform } from "./artist-resolution";
@@ -21,6 +22,7 @@ import {
 } from "./due-work";
 import {
   hubCountArtistEdgeStatements,
+  hasPublicGraphTracks,
   type HubCountArtistDelta,
   hubCountArtistDeltaStatement,
 } from "./hub-counts";
@@ -104,7 +106,8 @@ export async function getArtistBySlug(slug: string): Promise<ArtistRecord | unde
 }
 
 export async function getPublicArtistBySlug(slug: string): Promise<ArtistRecord | undefined> {
-  return resolveArtistBySlug(slug, ` and ${listedArtistWhere()}`);
+  const artist = await resolveArtistBySlug(slug, ` and ${listedArtistWhere()}`);
+  return artist && (await hasPublicGraphTracks("artists", artist.id)) ? artist : undefined;
 }
 
 async function resolveArtistBySlug(
@@ -1082,7 +1085,8 @@ export async function upsertTrackArtists(
     }),
     db.execute({
       args: [trackId],
-      sql: `select is_catalogue, key is not null and has_embedding = 1 as is_rankable
+      sql: `select is_catalogue, duration_ms,
+                   key is not null and has_embedding = 1 as is_rankable
             from tracks where track_id = ? limit 1`,
     }),
   ]);
@@ -1090,6 +1094,7 @@ export async function upsertTrackArtists(
     typedRows<{ artist_id: string }>(heldEdges.rows).map((row) => row.artist_id),
   );
   const catalogueFlag = typedRows<{
+    duration_ms: number;
     is_catalogue: bigint | number;
     is_rankable: bigint | number;
   }>(trackRow.rows)[0];
@@ -1100,7 +1105,12 @@ export async function upsertTrackArtists(
       : {
           certified: Number(catalogueFlag.is_catalogue) === 0 ? 1 : 0,
           rankable: Number(catalogueFlag.is_rankable) === 1 ? 1 : 0,
-          renderable: 1,
+          renderable: publicTrackDurationOk(
+            Number(catalogueFlag.duration_ms),
+            Number(catalogueFlag.is_catalogue) === 0,
+          )
+            ? 1
+            : 0,
         };
 
   let anyNewEdge = false;

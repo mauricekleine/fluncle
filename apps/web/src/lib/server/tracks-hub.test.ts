@@ -19,6 +19,8 @@ import {
 import { parseTracksHubPayload } from "../tracks-search";
 import { readKeyHistogram, resetKeyHistogramCache } from "./key-histogram";
 import { PUBLIC_PROJECTION_CUTOVER_ENABLED_KEY } from "./public-projection-cutover";
+import { publicTrackDurationWhere } from "../../db/public-track-visibility";
+import { LONG_FORM_MS } from "../catalogue-eligibility";
 import {
   type TracksHubEntry,
   TRACKS_HUB_ANCHOR_ADDRESS,
@@ -128,6 +130,28 @@ beforeEach(async () => {
 });
 
 describe("listTracksHubPage — the register split + the linked row", () => {
+  it("excludes long catalogue rows from rows, totals, and year lanes while retaining findings", async () => {
+    const now = new Date("2026-10-01T00:00:00Z");
+    await seedTrack({ releaseDate: "2024-01-01", trackId: "short" });
+    await seedTrack({ releaseDate: "2025-01-01", trackId: "long-catalogue" });
+    await seedTrack({ releaseDate: "2026-01-01", trackId: "long-finding" });
+    await db.execute({
+      args: [LONG_FORM_MS],
+      sql: `update tracks set duration_ms = ?
+        where track_id in ('long-catalogue', 'long-finding')`,
+    });
+    await certify({ logId: "L000001", trackId: "long-finding" });
+
+    const page = await listTracksHubPage({}, 1, now);
+    expect(ids(page.items)).toEqual(["long-finding", "short"]);
+    expect(page.total).toBe(2);
+    expect(await countAllTracks(now)).toBe(2);
+    expect(await listTracksHubYearLane({}, now)).toEqual([
+      { page: 1, year: "2026" },
+      { page: 1, year: "2024" },
+    ]);
+  });
+
   it("holds future full and partial dates out of rows, counts, and year lanes", async () => {
     const now = new Date("2026-10-01T00:00:00Z");
     await seedTrack({ releaseDate: "2026-10-01", trackId: "today" });
@@ -368,7 +392,7 @@ describe("listTracksHubPage — the filters compose with the page", () => {
     const { items, total } = await listTracksHubPage({ label: "Hospital Records" }, 1);
 
     expect(resolved).toEqual({ labelId: "lbl_hosp" });
-    expect(tracksHubClauses({ label: "Hospital Records" }, resolved)[0]?.sql).toBe(
+    expect(tracksHubClauses({ label: "Hospital Records" }, resolved)[1]?.sql).toBe(
       "tracks.label_id = ?",
     );
     expect(ids(items)).toEqual(["hosp"]);
@@ -426,7 +450,10 @@ describe("the /tracks serverFn boundary never compiles beyond the hub vocabulary
 
     const clauses = tracksHubClauses(parseTracksHubPayload(payload).filters);
 
-    expect(clauses.map((clause) => clause.sql)).toEqual(["tracks.bpm >= ?"]);
+    expect(clauses.map((clause) => clause.sql)).toEqual([
+      publicTrackDurationWhere("tracks"),
+      "tracks.bpm >= ?",
+    ]);
   });
 
   it("a crafted certified flag is stripped, so no is_catalogue clause compiles here", () => {
@@ -434,7 +461,9 @@ describe("the /tracks serverFn boundary never compiles beyond the hub vocabulary
       typeof parseTracksHubPayload
     >[0];
 
-    expect(tracksHubClauses(parseTracksHubPayload(payload).filters)).toEqual([]);
+    expect(tracksHubClauses(parseTracksHubPayload(payload).filters)).toEqual([
+      { args: [], sql: publicTrackDurationWhere("tracks") },
+    ]);
   });
 });
 
@@ -624,9 +653,9 @@ describe("the findings join is paid only when a predicate reads it", () => {
       { certified: true },
       { certified: false },
     ]) {
-      expect(tracksHubIdPageQuery(filters, 48, 0).sql).not.toContain("findings");
-      expect(tracksHubCountQuery(filters).sql).not.toContain("findings");
-      expect(tracksHubYearLaneQuery(filters).sql).not.toContain("findings");
+      expect(tracksHubIdPageQuery(filters, 48, 0).sql).not.toContain("left join findings");
+      expect(tracksHubCountQuery(filters).sql).not.toContain("left join findings");
+      expect(tracksHubYearLaneQuery(filters).sql).not.toContain("left join findings");
     }
   });
 

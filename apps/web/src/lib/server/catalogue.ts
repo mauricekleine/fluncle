@@ -2,6 +2,10 @@ import { createHash } from "node:crypto";
 import { type InStatement } from "@libsql/client/web";
 import { CAPTURE_TIER, type CapturePriorityKind } from "../capture-tier";
 import { DUPLICATE_SIMILARITY, LONG_FORM_MS } from "../catalogue-eligibility";
+import {
+  catalogueTrackDurationWhere,
+  publicTrackDurationOk,
+} from "../../db/public-track-visibility";
 import { parseArtistsJson } from "./artists";
 import { getDb, typedRow, typedRows } from "./db";
 import {
@@ -1420,7 +1424,14 @@ async function countStale(corpus: string): Promise<number> {
   return Number(typedRows<{ n: number }>(result.rows)[0]?.n ?? 0);
 }
 
-export type CatalogueLens = "capture" | "dismissed" | "ear" | "failed" | "quarantine" | "unmatched";
+export type CatalogueLens =
+  | "capture"
+  | "dismissed"
+  | "ear"
+  | "failed"
+  | "long"
+  | "quarantine"
+  | "unmatched";
 
 export type CatalogueMatch = {
   artists: string[];
@@ -1447,6 +1458,7 @@ export type CatalogueTrackItem = {
   duplicateOf: CatalogueMatch | null;
 
   hasCapturedAudio: boolean;
+  hiddenFromPublic: boolean;
 
   hasPreview: boolean;
   isrc: string | null;
@@ -1885,8 +1897,10 @@ type CatalogueRow = {
   capture_verification: string | null;
   catalogue_ranked_at: string | null;
   dismissed_at: string | null;
+  duration_ms: number;
   duplicate_of_track_id: string | null;
   has_captured_audio: number;
+  has_finding: number;
   isrc: string | null;
   key: string | null;
   label: string | null;
@@ -1911,7 +1925,9 @@ const CATALOGUE_SELECT = `ct.track_id, ct.title, ct.artists_json, ct.album_image
   ct.apple_music_url, ct.isrc, ct.preview_url, ct.bpm, ct.key, ct.label, ct.release_date,
   ct.nearest_finding_score, ct.nearest_finding_track_id, ct.capture_priority, ct.capture_status,
   ct.capture_verification, ct.catalogue_ranked_at, ct.duplicate_of_track_id, ct.dismissed_at,
-  ct.source_audio_attempted_at, (ct.source_audio_key is not null) as has_captured_audio`;
+  ct.duration_ms,
+  ct.source_audio_attempted_at, (ct.source_audio_key is not null) as has_captured_audio,
+  exists (select 1 from findings f where f.track_id = ct.track_id) as has_finding`;
 
 export async function listCatalogueTracks(
   lens: CatalogueLens,
@@ -1937,36 +1953,47 @@ export async function listCatalogueTracks(
                 order by ct.nearest_finding_score desc, ct.track_id desc
                 limit ?`,
         }
-      : lens === "quarantine"
+      : lens === "long"
         ? {
-            args: [WRONG_AUDIO_STATUS, page],
+            args: [page],
             sql: `select ${CATALOGUE_SELECT}
+                  from tracks ct indexed by tracks_catalogue_active_track_id_idx
+                  where ct.is_catalogue = 1 and ct.dismissed_at is null
+                    and not (${catalogueTrackDurationWhere("ct")})
+                    and not exists (select 1 from findings f where f.track_id = ct.track_id)
+                  order by ct.track_id asc
+                  limit ?`,
+          }
+        : lens === "quarantine"
+          ? {
+              args: [WRONG_AUDIO_STATUS, page],
+              sql: `select ${CATALOGUE_SELECT}
                   from tracks ct
                   where ct.is_catalogue = 1 and ct.dismissed_at is null and ct.capture_status = ?
                   order by ct.catalogue_ranked_at desc, ct.track_id asc
                   limit ?`,
-          }
-        : lens === "unmatched" || lens === "failed"
-          ? {
-              args: [lens, page],
-              sql: `select ${CATALOGUE_SELECT}
+            }
+          : lens === "unmatched" || lens === "failed"
+            ? {
+                args: [lens, page],
+                sql: `select ${CATALOGUE_SELECT}
                     from tracks ct
                     where ct.is_catalogue = 1 and ct.dismissed_at is null and ct.capture_status = ?
                     order by ct.source_audio_attempted_at desc, ct.track_id asc
                     limit ?`,
-            }
-          : lens === "dismissed"
-            ? {
-                args: [page],
-                sql: `select ${CATALOGUE_SELECT}
+              }
+            : lens === "dismissed"
+              ? {
+                  args: [page],
+                  sql: `select ${CATALOGUE_SELECT}
                     from tracks ct
                     where ct.is_catalogue = 1 and ct.dismissed_at is not null
                     order by ct.dismissed_at desc, ct.track_id asc
                     limit ?`,
-              }
-            : {
-                args: [WRONG_AUDIO_STATUS, page],
-                sql: `select ${CATALOGUE_SELECT}
+                }
+              : {
+                  args: [WRONG_AUDIO_STATUS, page],
+                  sql: `select ${CATALOGUE_SELECT}
                     from tracks ct
                     where ct.is_catalogue = 1
                       and ct.dismissed_at is null
@@ -1977,7 +2004,7 @@ export async function listCatalogueTracks(
                       and ct.duration_ms < ${LONG_FORM_MS}
                     order by ct.capture_priority desc, ct.track_id desc
                     limit ?`,
-              };
+                };
   const result = await db.execute(query);
   const rows = typedRows<CatalogueRow>(result.rows);
 
@@ -2029,10 +2056,9 @@ export async function listCatalogueTracks(
       captureVerification: row.capture_verification,
       dismissedAt: row.dismissed_at,
       duplicateOf,
-
       hasCapturedAudio: Number(row.has_captured_audio) === 1,
-
       hasPreview: Boolean(row.preview_url) || Boolean(row.isrc && row.isrc.trim()),
+      hiddenFromPublic: !publicTrackDurationOk(row.duration_ms, Number(row.has_finding) === 1),
       isrc: row.isrc,
       key: row.key,
       label: row.label,

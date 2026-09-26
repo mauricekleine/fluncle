@@ -1,4 +1,8 @@
 import { bestAlbumCoverUrl } from "../media";
+import {
+  catalogueTrackDurationWhere,
+  publicTrackDurationWhere,
+} from "../../db/public-track-visibility";
 import { parseArtistsJson } from "./artist-names";
 import { listedArtistWhere } from "./artist-visibility";
 import { getDb, typedRows } from "./db";
@@ -97,6 +101,7 @@ export function entityNewestStatement(kind: "artist" | "label", id: string, toda
           from ${source}
           left join albums on albums.id = tracks.album_id
           where ${pointer} and tracks.is_catalogue = 1 and ${PLAYABLE_WHERE}
+            and ${catalogueTrackDurationWhere("tracks")}
           order by tracks.release_date desc, tracks.track_id desc
           limit ?`,
   };
@@ -110,6 +115,7 @@ export function albumTracklistStatement(id: string, today: string) {
           left join findings on findings.track_id = tracks.track_id
           left join albums on albums.id = tracks.album_id
           where tracks.album_id = ? and ${PLAYABLE_WHERE}
+            and ${publicTrackDurationWhere("tracks", "findings")}
           order by case when findings.log_id is not null then 0 else 1 end asc,
                    case when findings.log_id is not null then findings.added_at end desc,
                    tracks.release_date is null asc, tracks.release_date desc,

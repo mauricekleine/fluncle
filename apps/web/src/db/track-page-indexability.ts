@@ -1,3 +1,5 @@
+import { catalogueTrackDurationWhere } from "./public-track-visibility";
+
 export const TRACK_PAGE_INDEXABLE_LEGACY_COUNT_INDEX = "tracks_sitemap_indexable_track_id_idx";
 
 export const TRACK_PAGE_INDEXABLE_COVER_COUNT_INDEX = "tracks_sitemap_indexable_cover_idx";
@@ -29,7 +31,7 @@ export function trackPageIndexableCoverIndexWhere(table?: string): string {
   return `${column(table, "is_catalogue")} = 1`;
 }
 
-export function trackPageIndexableWhere(table?: string): string {
+export function trackPageIndexableIndexWhere(table?: string): string {
   return `${column(table, "is_catalogue")} = 1
       and ${column(table, "duplicate_of_track_id")} is null
       and ${trackPageIdentityWhere(table)}
@@ -37,6 +39,11 @@ export function trackPageIndexableWhere(table?: string): string {
       and ${column(table, "release_date")} is not null
       and ${column(table, "album_image_url")} is not null
       and (${column(table, "spotify_url")} is not null or ${column(table, "apple_music_url")} is not null)`;
+}
+
+export function trackPageIndexableWhere(table?: string): string {
+  return `${trackPageIndexableIndexWhere(table)}
+      and ${catalogueTrackDurationWhere(table)}`;
 }
 
 export function trackPageIndexableCountQueryWhere(

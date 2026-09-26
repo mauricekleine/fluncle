@@ -103,6 +103,10 @@ export async function resolveLabelPageData(
     return { status: "missing" };
   }
 
+  if (label.renderableTrackCount === 0) {
+    return { status: "missing" };
+  }
+
   return {
     alternateNames,
     artists,

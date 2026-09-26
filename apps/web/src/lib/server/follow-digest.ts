@@ -1,5 +1,6 @@
 import { bestAlbumCoverUrl, trackMedia } from "../media";
 import { randomUUID } from "node:crypto";
+import { publicTrackDurationWhere } from "../../db/public-track-visibility";
 import { parseArtistsJson } from "./artists";
 import { listedArtistWhere } from "./artist-visibility";
 import { getDb, typedRow, typedRows } from "./db";
@@ -86,6 +87,7 @@ export const FOLLOW_DIGEST_RELEASE_SQL = `with matched as (
         where ta.track_id = tracks.track_id and ta.artist_id = a.id
       )))
     and (tracks.is_catalogue = 1 or findings.log_id is not null)
+    and ${publicTrackDurationWhere("tracks", "findings")}
     and tracks.dismissed_at is null
     and tracks.duplicate_of_track_id is null
     and (findings.log_id is not null or tracks.spotify_url is not null or tracks.apple_music_url is not null)

@@ -1,5 +1,7 @@
 import { type SearchEntity, type SearchFilters, type SearchHit } from "@fluncle/contracts/orpc";
 import { slugify } from "@fluncle/contracts/util/galaxy-slug";
+import { publicTrackDurationWhere } from "../../db/public-track-visibility";
+import { LONG_FORM_MS } from "../catalogue-eligibility";
 import { parseKey } from "../key-camelot";
 import { mixtapeCoverUrl } from "../mixtapes";
 import {
@@ -73,6 +75,8 @@ const SEARCH_SELECT = `tracks.track_id, tracks.title, tracks.artists_json, track
 
 const SEARCH_FROM = `tracks left join findings on findings.track_id = tracks.track_id`;
 
+const PUBLIC_SEARCH_WHERE = publicTrackDurationWhere("tracks", "findings");
+
 const CERTIFIED_FIRST = `case when findings.track_id is null then 1 else 0 end asc`;
 
 function parseArtists(json: string): string[] {
@@ -118,7 +122,7 @@ async function ftsSearch(match: string, limit: number): Promise<SearchHit[]> {
           from tracks_fts
           join tracks on tracks.track_id = tracks_fts.track_id
           left join findings on findings.track_id = tracks.track_id
-          where tracks_fts match ?
+          where tracks_fts match ? and ${PUBLIC_SEARCH_WHERE}
           order by ${CERTIFIED_FIRST}, bm25(tracks_fts) asc, tracks.track_id asc
           limit ?`,
   });
@@ -206,6 +210,7 @@ function entitySql(kind: SearchEntity["kind"], mode: EntityMatchMode): EntityQue
                                    and artist_aliases.status in ('auto', 'confirmed')
                                    and lower(artist_aliases.alias) ${predicate}))
               and ${listedArtistWhere()}
+              and artists.renderable_track_count > 0
             order by name_rank asc, length(artists.name) asc, artists.name asc
             limit ?`,
     };
@@ -606,6 +611,7 @@ async function runFilters(filters: SearchFilters, limit: number): Promise<Search
     sql: `select ${SEARCH_SELECT}
           from ${SEARCH_FROM}
           where ${clauses.map((clause) => clause.sql).join(" and ")}
+            and ${PUBLIC_SEARCH_WHERE}
           order by ${CERTIFIED_FIRST}, tracks.release_date desc, tracks.track_id asc
           limit ?`,
   });
@@ -636,7 +642,7 @@ async function resolveAnchor(
           join tracks on tracks.track_id = tracks_fts.track_id
           join track_embeddings emb on emb.track_id = tracks.track_id
           left join findings on findings.track_id = tracks.track_id
-          where tracks_fts match ?
+          where tracks_fts match ? and ${PUBLIC_SEARCH_WHERE}
           order by ${CERTIFIED_FIRST}, bm25(tracks_fts) asc, tracks.track_id asc
           limit 1`,
   });
@@ -670,15 +676,38 @@ export async function rankTracksByVector(
       return null;
     }
 
-    const matches = await searchSonar({
+    const request = {
       excludeIds: excludeTrackId ? [excludeTrackId] : [],
-      filter,
-      index: "tracks",
+      index: "tracks" as const,
       probes: [probe],
       topK: limit,
-    });
+    };
+    const [findings, catalogue] = await Promise.all([
+      searchSonar({ ...request, filter: { ...filter, has_finding: true } }),
+      searchSonar({
+        ...request,
+        filter: { ...filter, duration_ms_max: LONG_FORM_MS, has_finding: false },
+      }),
+    ]);
 
-    return matches === null ? null : hydrateTrackHits(matches);
+    if (findings === null || catalogue === null) {
+      return null;
+    }
+
+    const seen = new Set<string>();
+    const matches = [...findings, ...catalogue]
+      .sort((left, right) => right.score - left.score || left.id.localeCompare(right.id))
+      .filter((match) => {
+        if (seen.has(match.id)) {
+          return false;
+        }
+
+        seen.add(match.id);
+        return true;
+      })
+      .slice(0, limit);
+
+    return hydrateTrackHits(matches);
   }
 
   if (options.allowBoundedSql !== true) {
@@ -688,6 +717,7 @@ export async function rankTracksByVector(
   const clauses = compileFilters(columnFilters, await resolveFilterEntities(columnFilters));
   const where = [
     ...clauses.map((clause) => clause.sql),
+    PUBLIC_SEARCH_WHERE,
     ...(excludeTrackId ? ["tracks.track_id != ?"] : []),
     `tracks.has_embedding = 1`,
   ].join(" and ");
@@ -758,7 +788,8 @@ async function hydrateTrackHits(matches: SonarMatch[]): Promise<SearchHit[]> {
       const db = await getDb();
       const result = await db.execute({
         args: ids,
-        sql: `select ${SEARCH_SELECT} from ${SEARCH_FROM} where tracks.track_id in (${placeholders})`,
+        sql: `select ${SEARCH_SELECT} from ${SEARCH_FROM}
+              where tracks.track_id in (${placeholders}) and ${PUBLIC_SEARCH_WHERE}`,
       });
 
       return typedRows<SearchRow>(result.rows);
@@ -986,7 +1017,7 @@ export async function searchLikeTrack(options: {
               left join artists lead_artist
                 on lead_artist.id = ${leadCentroidArtistSql("tracks.track_id")}
               left join artist_centroids lead_ac on lead_ac.artist_id = lead_artist.id
-              where tracks.track_id = ?
+              where tracks.track_id = ? and ${PUBLIC_SEARCH_WHERE}
               limit 1`,
       })
     ).rows,
@@ -1071,7 +1102,8 @@ export async function searchArchive(options: {
       (
         await db.execute({
           args: [coordinate],
-          sql: `select ${SEARCH_SELECT} from ${SEARCH_FROM} where findings.log_id = ? limit 1`,
+          sql: `select ${SEARCH_SELECT} from ${SEARCH_FROM}
+                where findings.log_id = ? and ${PUBLIC_SEARCH_WHERE} limit 1`,
         })
       ).rows,
     );
@@ -1095,7 +1127,8 @@ export async function searchArchive(options: {
       (
         await db.execute({
           args: [`spotify:track:${spotifyTrackId}`],
-          sql: `select ${SEARCH_SELECT} from ${SEARCH_FROM} where tracks.spotify_uri = ? limit 1`,
+          sql: `select ${SEARCH_SELECT} from ${SEARCH_FROM}
+                where tracks.spotify_uri = ? and ${PUBLIC_SEARCH_WHERE} limit 1`,
         })
       ).rows,
     );

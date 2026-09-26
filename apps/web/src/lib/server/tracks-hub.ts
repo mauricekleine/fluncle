@@ -50,10 +50,16 @@ import { TRACK_SELECT, toPublicTrackListItem, toTrackListItem, type TrackRow } f
 import { type SearchStyle } from "../search-styles";
 import { SONIC_SEED_SELECT, sonicSeedFlag } from "./sonic-seed";
 import { rankTrackIdsByProbe, resolveStyleProbe } from "./style-probe";
+import { publicTrackDurationWhere } from "../../db/public-track-visibility";
 
 export const TRACKS_HUB_PAGE_SIZE = 48;
 
 export const TRACKS_HUB_ORDER_BY = "tracks.release_date desc, tracks.track_id desc";
+
+const PUBLIC_DURATION_CLAUSE: Clause = {
+  args: [],
+  sql: publicTrackDurationWhere("tracks"),
+};
 
 export type TracksHubFilters = Pick<
   SearchFilters,
@@ -113,7 +119,7 @@ export function tracksHubClauses(
   resolved: ResolvedFilterEntities = {},
   today?: string,
 ): Clause[] {
-  const clauses = compileFilters(filters, resolved);
+  const clauses = [PUBLIC_DURATION_CLAUSE, ...compileFilters(filters, resolved)];
 
   if (today !== undefined) {
     clauses.push({ args: [today], sql: releasedByTodaySql("tracks.release_date") });
@@ -140,7 +146,9 @@ function whereFor(clauses: Clause[]): { args: (number | string)[]; where: string
 }
 
 function findingsJoinFor(clauses: Clause[]): string {
-  return clauses.some((clause) => clause.sql.includes("findings."))
+  return clauses.some(
+    (clause) => clause !== PUBLIC_DURATION_CLAUSE && clause.sql.includes("findings."),
+  )
     ? "left join findings on findings.track_id = tracks.track_id"
     : "";
 }
@@ -188,7 +196,7 @@ export function tracksHubClauseKey(
 function tracksHubPersistedClauseHash(): string {
   return hubClauseHash(
     JSON.stringify({
-      clauses: hubClauseSetKey([]),
+      clauses: hubClauseSetKey([PUBLIC_DURATION_CLAUSE]),
       orderBy: TRACKS_HUB_ORDER_BY,
       pageSize: TRACKS_HUB_PAGE_SIZE,
     }),
@@ -440,7 +448,7 @@ export function projectedTracksHubIdPageQueries(
               args: [limit, start.offset],
               sql: `select tracks.track_id as track_id
                 from tracks indexed by tracks_release_date_track_id_idx
-                where tracks.release_date is null
+                where tracks.release_date is null and ${publicTrackDurationWhere("tracks")}
                 order by ${TRACKS_HUB_ORDER_BY}
                 limit ? offset ?`,
             }
@@ -449,6 +457,7 @@ export function projectedTracksHubIdPageQueries(
               sql: `select tracks.track_id as track_id
                 from tracks indexed by tracks_release_date_track_id_idx
                 where tracks.release_date is null and tracks.track_id < ?
+                  and ${publicTrackDurationWhere("tracks")}
                 order by ${TRACKS_HUB_ORDER_BY}
                 limit ? offset ?`,
             },
@@ -461,6 +470,7 @@ export function projectedTracksHubIdPageQueries(
         args: [limit, start.offset],
         sql: `select tracks.track_id as track_id
           from tracks indexed by tracks_release_date_track_id_idx
+          where ${publicTrackDurationWhere("tracks")}
           order by ${TRACKS_HUB_ORDER_BY}
           limit ? offset ?`,
       },
@@ -476,7 +486,7 @@ export function projectedTracksHubIdPageQueries(
       args: [remaining],
       sql: `select tracks.track_id as track_id
         from tracks indexed by tracks_release_date_track_id_idx
-        where tracks.release_date is null
+        where tracks.release_date is null and ${publicTrackDurationWhere("tracks")}
         order by ${TRACKS_HUB_ORDER_BY}
         limit ?`,
     }),
@@ -485,6 +495,7 @@ export function projectedTracksHubIdPageQueries(
       sql: `select tracks.track_id as track_id
         from tracks indexed by tracks_release_date_track_id_idx
         where (tracks.release_date, tracks.track_id) < (?, ?)
+          and ${publicTrackDurationWhere("tracks")}
         order by ${TRACKS_HUB_ORDER_BY}
         limit ? offset ?`,
     },
@@ -520,7 +531,8 @@ export function tracksHubHydrateQuery(ids: string[]): { args: string[]; sql: str
           from tracks
           left join findings on findings.track_id = tracks.track_id
           ${LEAD_ARTIST_JOIN}
-          where tracks.track_id in (${placeholders})`,
+          where tracks.track_id in (${placeholders})
+            and ${publicTrackDurationWhere("tracks", "findings")}`,
   };
 }
 
@@ -535,7 +547,7 @@ async function countTracksHub(
 
   return memoizedAggregate(aggregateKey("count", clauses), async () => {
     const db = await getDb();
-    if (tracksHubClauses(filters, resolved).length === 0) {
+    if (tracksHubClauses(filters, resolved).length === 1) {
       return (await readDefaultTracksHubTotal(db)) - futureCount;
     }
     const result = await db.execute(query);
@@ -615,7 +627,7 @@ export async function listTracksHubPage(
   const projectedPage = Math.floor(projectedRank / limit) + 1;
   const projectedSkip = projectedRank % limit;
   const projectedStart =
-    tracksHubClauses(filters, resolved).length === 0
+    tracksHubClauses(filters, resolved).length === 1
       ? await readProjectedTrackHubPageStart(db, TRACKS_HUB_ANCHOR_ADDRESS, limit, projectedPage)
       : undefined;
 
@@ -631,6 +643,7 @@ export async function listTracksHubPage(
             sql: `select tracks.track_id as track_id
             from tracks indexed by tracks_release_date_track_id_idx
             where tracks.release_date > ? and not ${validReleaseDateSql("tracks.release_date")}
+              and ${publicTrackDurationWhere("tracks")}
             order by ${TRACKS_HUB_ORDER_BY} limit ? offset ?`,
           })
         : undefined;
@@ -650,7 +663,7 @@ export async function listTracksHubPage(
       countTracksHub(filters, resolved, today, futureCount),
       db.execute(tracksHubIdPageQuery(filters, limit, (page - 1) * limit, resolved, today)),
     ]);
-  } else if (clauses.length > 0) {
+  } else if (clauses.length > 1) {
     const anchorsPromise = memoizedAggregate(aggregateKey("anchors", clauses), () =>
       extractTracksHubAnchors(filters, resolved, today),
     );
@@ -731,7 +744,7 @@ async function releaseHeadCounts(
     sql: `select count(*) as after_today,
           coalesce(sum(case when ${validReleaseDateSql("tracks.release_date")} then 1 else 0 end), 0) as future_count
           from tracks indexed by tracks_release_date_track_id_idx
-          where tracks.release_date > ?`,
+          where tracks.release_date > ? and ${publicTrackDurationWhere("tracks")}`,
   });
   const row = typedRows<{ after_today: number; future_count: number }>(result.rows)[0];
   const futureCount = Number(row?.future_count ?? 0);
@@ -822,7 +835,7 @@ export async function listTracksHubYearLane(
   const { clauses, ...query } = tracksHubYearLaneQuery(filters, resolved, today);
 
   return memoizedAggregate(aggregateKey("years", clauses), async () => {
-    if (tracksHubClauses(filters, resolved).length === 0) {
+    if (tracksHubClauses(filters, resolved).length === 1) {
       const projected = await readProjectedAggregateBuckets(db, "release_date_bucket", today);
       if (projected !== undefined) {
         return yearPages(
@@ -857,7 +870,7 @@ async function rankedSoundIds(
   const { bpmMax, bpmMin, sound: _sound, ...rest } = filters;
   const columnClauses = tracksHubClauses(rest, resolved);
   const bpmClauses = tracksHubClauses({ bpmMax, bpmMin }, resolved);
-  const sonarRoute = columnClauses.length === 0;
+  const sonarRoute = columnClauses.length === 1;
   const clauses = sonarRoute
     ? []
     : [
@@ -873,6 +886,7 @@ async function rankedSoundIds(
         clauses,
         depth: TRACKS_SOUND_DEPTH,
         from: findingsJoinFor(clauses),
+        publicDuration: sonarRoute,
         releasedBy: sonarRoute ? today : undefined,
         sonarFilter: sonarRoute ? { bpmMax, bpmMin } : undefined,
       });

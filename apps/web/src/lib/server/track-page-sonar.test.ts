@@ -2,7 +2,13 @@ import { type Client } from "@libsql/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { EMBEDDING_DIMS, readEmbeddingBlob } from "./embedding";
-import { createIntegrationDb, seedCatalogueTrack, seedEmbedding } from "./integration-db";
+import { LONG_FORM_MS } from "../catalogue-eligibility";
+import {
+  createIntegrationDb,
+  seedCatalogueTrack,
+  seedEmbedding,
+  seedTrack,
+} from "./integration-db";
 import { type SonarFilter, type SonarMatch } from "./sonar";
 
 const isSonarTrackEnabled = vi.hoisted(() => vi.fn<() => Promise<boolean>>());
@@ -50,10 +56,12 @@ function cosine(left: number[], right: number[]): number {
 
 async function referenceSonar(request: SonarRequest): Promise<SonarMatch[]> {
   const result = await db.execute(
-    `select tracks.track_id, tracks.bpm, tracks.dismissed_at, tracks.duplicate_of_track_id,
+    `select tracks.track_id, tracks.bpm, tracks.duration_ms, tracks.dismissed_at, tracks.duplicate_of_track_id,
+       findings.track_id as finding_track_id,
        track_embeddings.embedding_blob
      from tracks
-     join track_embeddings on track_embeddings.track_id = tracks.track_id`,
+     join track_embeddings on track_embeddings.track_id = tracks.track_id
+     left join findings on findings.track_id = tracks.track_id`,
   );
   const excluded = new Set(request.excludeIds ?? []);
   const matches: SonarMatch[] = [];
@@ -70,6 +78,10 @@ async function referenceSonar(request: SonarRequest): Promise<SonarMatch[]> {
       (filter?.dismissed !== undefined && (row.dismissed_at !== null) !== filter.dismissed) ||
       (filter?.is_duplicate !== undefined &&
         (row.duplicate_of_track_id !== null) !== filter.is_duplicate) ||
+      (filter?.has_finding !== undefined &&
+        (row.finding_track_id !== null) !== filter.has_finding) ||
+      (filter?.duration_ms_max !== undefined &&
+        Number(row.duration_ms) >= filter.duration_ms_max) ||
       (filter?.bpm_min !== undefined && (bpm === undefined || bpm < filter.bpm_min)) ||
       (filter?.bpm_max !== undefined && (bpm === undefined || bpm > filter.bpm_max))
     ) {
@@ -105,6 +117,29 @@ beforeEach(async () => {
 });
 
 describe("listSonicNeighbours — the /track sonar route", () => {
+  it("keeps a long finding and hides a long catalogue neighbour", async () => {
+    await seed("long-catalogue", 173, vector(0.999));
+    await seedTrack(db, {
+      artists: ["Finding Artist"],
+      logId: "700.1.0A",
+      title: "Long Finding",
+      trackId: "long-finding",
+    });
+    await seedEmbedding(db, "long-finding", vector(0.998));
+    await db.execute({
+      args: [173, LONG_FORM_MS, "long-finding", "long-catalogue"],
+      sql: `update tracks set bpm = ?, duration_ms = ? where track_id in (?, ?)`,
+    });
+
+    isSonarTrackEnabled.mockResolvedValue(true);
+    searchSonar.mockImplementation(referenceSonar);
+
+    const neighbours = await listSonicNeighbours("target", 4);
+
+    expect(neighbours.map((row) => row.trackId)).toContain("long-finding");
+    expect(neighbours.map((row) => row.trackId)).not.toContain("long-catalogue");
+  });
+
   it("returns no optional band before a database read when the flag is off", async () => {
     isSonarTrackEnabled.mockResolvedValue(false);
     const execute = vi.spyOn(db, "execute");
@@ -125,13 +160,15 @@ describe("listSonicNeighbours — the /track sonar route", () => {
 
     expect(sonar.map((row) => row.trackId)).toEqual(turso.map((row) => row.trackId));
     expect(sonar.map((row) => row.trackId)).toEqual(["tempo-near", "tempo-next"]);
-    expect(searchSonar).toHaveBeenCalledOnce();
+    expect(searchSonar).toHaveBeenCalledTimes(2);
     expect(searchSonar).toHaveBeenCalledWith(
       expect.objectContaining({
         filter: {
           bpm_max: 174 * 1.08,
           bpm_min: 174 * 0.92,
           dismissed: false,
+          duration_ms_max: LONG_FORM_MS,
+          has_finding: false,
           is_duplicate: false,
         },
       }),

@@ -396,6 +396,7 @@ export const DUE_WORK_REVIEWED_NONPRODUCER_WRITERS = [
       "hub-counts.ts:update:artists:d23372bf",
       "hub-counts.ts:update:artists:b06285c6",
       "hub-counts.ts:update:artists:f35e8253",
+      "hub-counts.ts:update:artists:0d5f8838",
     ],
   },
   {
@@ -545,10 +546,17 @@ export const DUE_WORK_REVIEWED_NONPRODUCER_WRITERS = [
     file: "scripts/backfill-hub-counts.ts",
     rationale: "Writes only invocation-scoped staging relations, never eligibility source truth.",
     sites: [
-      "scripts/backfill-hub-counts.ts:insert:dynamic:9ae9c583",
-      "scripts/backfill-hub-counts.ts:insert:dynamic:c0d12468",
-      "scripts/backfill-hub-counts.ts:insert:dynamic:1305bca4",
+      "scripts/backfill-hub-counts.ts:insert:dynamic:381ec2dd",
+      "scripts/backfill-hub-counts.ts:insert:dynamic:4a108f12",
+      "scripts/backfill-hub-counts.ts:insert:dynamic:6cf17ee2",
     ],
+  },
+  {
+    disposition: "non-eligibility",
+    file: "scripts/repair-long-graph-counts.ts",
+    rationale:
+      "Repairs maintained public graph counters from existing track truth in bounded write batches.",
+    sites: ["scripts/repair-long-graph-counts.ts:update:dynamic:e49d12b3"],
   },
   {
     disposition: "non-eligibility",
@@ -906,10 +914,16 @@ export const GOAL_D_REVIEWED_NONPROJECTION_WRITERS = [
     file: "scripts/backfill-hub-counts.ts",
     rationale: "Writes invocation-scoped staging relations rather than public projection facts.",
     sites: [
-      "scripts/backfill-hub-counts.ts:insert:dynamic:9ae9c583",
-      "scripts/backfill-hub-counts.ts:insert:dynamic:c0d12468",
-      "scripts/backfill-hub-counts.ts:insert:dynamic:1305bca4",
+      "scripts/backfill-hub-counts.ts:insert:dynamic:381ec2dd",
+      "scripts/backfill-hub-counts.ts:insert:dynamic:4a108f12",
+      "scripts/backfill-hub-counts.ts:insert:dynamic:6cf17ee2",
     ],
+  },
+  {
+    disposition: "derived-projection-write",
+    file: "scripts/repair-long-graph-counts.ts",
+    rationale: "Repairs maintained public graph counters from existing track truth.",
+    sites: ["scripts/repair-long-graph-counts.ts:update:dynamic:e49d12b3"],
   },
   {
     disposition: "non-projection-fact",

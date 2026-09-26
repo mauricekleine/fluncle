@@ -14,6 +14,7 @@ import {
   seedEmbedding,
   seedTrack,
 } from "./integration-db";
+import { LONG_FORM_MS } from "../catalogue-eligibility";
 
 let db: Client;
 
@@ -102,6 +103,26 @@ beforeEach(async () => {
 });
 
 describe("rec seeds (real SQL)", () => {
+  it("rejects long catalogue seeds and keeps long findings available", async () => {
+    const { listRecSeeds, saveRecSeed } = await import("./recommendations");
+    const user = publicUser("long-seeds");
+    await seedCatalogue("long-catalogue");
+    await seedFinding("long-finding", { logId: "001.1.1A" });
+    await db.execute({
+      args: [LONG_FORM_MS],
+      sql: `update tracks set duration_ms = ? where track_id in ('long-catalogue', 'long-finding')`,
+    });
+
+    const hidden = await saveRecSeed(user, { trackId: "long-catalogue" });
+    expect(hidden).toBeInstanceOf(Response);
+    if (hidden instanceof Response) {
+      expect(hidden.status).toBe(404);
+    }
+    const finding = await saveRecSeed(user, { trackId: "long-finding" });
+    expect(finding).not.toBeInstanceOf(Response);
+    expect((await listRecSeeds(user)).seeds.map((seed) => seed.trackId)).toEqual(["long-finding"]);
+  });
+
   it("saves by trackId AND by Log ID, lists hydrated newest-first, and only a finding carries a logId", async () => {
     const { listRecSeeds, saveRecSeed } = await import("./recommendations");
     const user = publicUser("user-A");
@@ -266,7 +287,10 @@ describe("listRecommendations (real SQL)", () => {
     await db.execute(
       `update tracks set dismissed_at = '2026-01-01T00:00:00.000Z' where track_id = 'dismissed-1'`,
     );
-    await db.execute(`update tracks set duration_ms = 900000 where track_id = 'longform-1'`);
+    await db.execute({
+      args: [LONG_FORM_MS],
+      sql: `update tracks set duration_ms = ? where track_id = 'longform-1'`,
+    });
     await db.execute(`update tracks set spotify_uri = null where track_id = 'unanchored-1'`);
 
     const result = await listRecommendations(user);

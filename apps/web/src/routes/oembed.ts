@@ -11,6 +11,7 @@ import {
 } from "@/lib/oembed";
 import { getAlbumBySlug } from "@/lib/server/albums";
 import { getPublicArtistBySlug } from "@/lib/server/artists";
+import { hasPublicGraphTracks } from "@/lib/server/hub-counts";
 import { getLabelBySlug } from "@/lib/server/labels";
 import { resolveLogPageTarget } from "@/lib/server/log-resolver";
 import { getFindingsByAlbum, getFindingsByArtist, getFindingsByLabel } from "@/lib/server/tracks";
@@ -112,7 +113,7 @@ async function resolveOembed(
   if (target.kind === "label") {
     const label = await getLabelBySlug(target.slug);
 
-    if (!label) {
+    if (!label || !(await hasPublicGraphTracks("labels", label.id))) {
       return undefined;
     }
 
@@ -132,7 +133,7 @@ async function resolveOembed(
   if (target.kind === "album") {
     const album = await getAlbumBySlug(target.slug);
 
-    if (!album) {
+    if (!album || !(await hasPublicGraphTracks("albums", album.id))) {
       return undefined;
     }
 

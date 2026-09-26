@@ -94,6 +94,24 @@ it("includes an undated track with an ISRC-only preview source", async () => {
   ]);
 });
 
+it("keeps long catalogue tracks out of hub play queues while retaining long findings", async () => {
+  await track("long-catalogue", "2026-01-02");
+  await track("long-finding", "2026-01-01");
+  await db.execute(
+    "update tracks set duration_ms = 900000 where track_id in ('long-catalogue', 'long-finding')",
+  );
+  await db.execute(
+    "insert into findings (track_id, log_id, added_at) values ('long-finding', '701.1.0A', '2026-01-03')",
+  );
+  await db.execute("update tracks set is_catalogue = 0 where track_id = 'long-finding'");
+
+  for (const kind of ["album", "artist", "label"] as const) {
+    expect((await listEntityQueue(kind, kind))?.map((row) => row.trackId)).toEqual([
+      "long-finding",
+    ]);
+  }
+});
+
 async function plan(statement: { args: (number | string)[]; sql: string }) {
   const result = await db.execute({
     args: statement.args,

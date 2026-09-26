@@ -550,16 +550,12 @@ describe("list_similar_artists — the neighbours read, over the real precompute
     expect(result).toEqual({ found: false, ok: true });
   });
 
-  it("returns an honest empty list for a resolved artist with no neighbours yet", async () => {
+  it("does not surface an artist with no visible tracks", async () => {
     await seedArtist(db, { id: "sa-solo", name: "Solo Act", slug: "solo-act" });
 
-    const result = (await toolExecute("list_similar_artists")({ name: "Solo Act" })) as {
-      ok: boolean;
-      similar: unknown[];
-    };
+    const result = await toolExecute("list_similar_artists")({ name: "Solo Act" });
 
-    expect(result.ok).toBe(true);
-    expect(result.similar).toEqual([]);
+    expect(result).toEqual({ found: false, ok: true });
   });
 });
 
