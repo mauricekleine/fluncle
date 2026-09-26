@@ -34,6 +34,8 @@ describe("formatMixtapeAnnouncement", () => {
 
     expect(text).toContain("checkpoint before the next sector");
 
+    expect(text).toContain("one long mixtape");
+
     expect(text).toContain("Pull it up loud, cosmonauts.");
 
     expect(text).not.toContain("!");
