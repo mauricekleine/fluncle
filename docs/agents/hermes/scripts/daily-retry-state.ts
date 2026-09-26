@@ -28,6 +28,80 @@ export const RERUN_SAFE_JOBS: ReadonlySet<string> = new Set([
   "fluncle-social-metrics",
 ]);
 
+export type DailyRetrySchedule = Readonly<{
+  finalSlot: string;
+  primarySlot: string;
+  timeZone: string;
+  weekday?: Weekday;
+}>;
+
+const amsterdam = (primarySlot: string, finalSlot: string, weekday?: Weekday) => ({
+  finalSlot,
+  primarySlot,
+  timeZone: "Europe/Amsterdam",
+  ...(weekday === undefined ? {} : { weekday }),
+});
+
+export const DAILY_RETRY_SCHEDULES: Readonly<Record<string, DailyRetrySchedule>> = {
+  "fluncle-audit": amsterdam("01:00", "03:10"),
+  "fluncle-audit-review": amsterdam("05:00", "06:20"),
+  "fluncle-backup": amsterdam("03:00", "05:20"),
+  "fluncle-cluster": amsterdam("03:20", "04:30"),
+  "fluncle-demand": amsterdam("04:40", "05:50"),
+  "fluncle-funnel-snapshot": { finalSlot: "23:57", primarySlot: "23:45", timeZone: "UTC" },
+  "fluncle-label-releases": amsterdam("07:20", "08:20"),
+  "fluncle-label-triage": amsterdam("06:40", "07:50"),
+  "fluncle-logbook": amsterdam("00:40", "01:50"),
+  "fluncle-newsletter": amsterdam("15:00", "16:15", "Fri"),
+  "fluncle-reach": amsterdam("04:00", "05:10"),
+  "fluncle-reconcile-hub-counts": amsterdam("04:10", "05:25"),
+  "fluncle-sentry-triage": amsterdam("03:30", "05:40"),
+  "fluncle-social-metrics": { finalSlot: "23:30", primarySlot: "22:15", timeZone: "UTC" },
+};
+
+export const DAILY_RETRY_COMPLETION_GRACE_MINUTES = 120;
+
+function minutesOf(slot: string): number {
+  return Number(slot.slice(0, 2)) * 60 + Number(slot.slice(3, 5));
+}
+
+export function expectedCompletedSlotDay(schedule: DailyRetrySchedule, now: Date): string | null {
+  const local = localParts(now, schedule.timeZone);
+  const elapsedToday = minutesOf(local.time);
+  const owedAfter = minutesOf(schedule.finalSlot) + DAILY_RETRY_COMPLETION_GRACE_MINUTES;
+
+  for (let back = 0; back <= 8; back += 1) {
+    const day = new Date(`${local.day}T00:00:00Z`);
+    day.setUTCDate(day.getUTCDate() - back);
+    if (schedule.weekday !== undefined && WEEKDAYS[day.getUTCDay()] !== schedule.weekday) {
+      continue;
+    }
+    if (elapsedToday + back * 1440 >= owedAfter) {
+      return day.toISOString().slice(0, 10);
+    }
+  }
+
+  return null;
+}
+
+export function slotDayCompleted(options: {
+  day: string;
+  directory: string;
+  job: string;
+  schedule: DailyRetrySchedule;
+}): boolean {
+  const state = dailyRetryState({
+    day: options.day,
+    directory: options.directory,
+    job: options.job,
+    now: new Date(),
+    primarySlot: options.schedule.primarySlot,
+    timeZone: options.schedule.timeZone,
+  });
+
+  return state === "complete" || state === "started";
+}
+
 function localParts(date: Date, timeZone: string) {
   const parts = new Intl.DateTimeFormat("en-US", {
     day: "2-digit",
@@ -170,11 +244,15 @@ export function dailyRetryState(options: {
   primarySlot: string;
   timeZone: string;
   weekday?: Weekday;
+  day?: string;
 }): DailyRetryState {
-  if (offCycle(options.now, options.timeZone, options.primarySlot, options.weekday)) {
+  if (
+    options.day === undefined &&
+    offCycle(options.now, options.timeZone, options.primarySlot, options.weekday)
+  ) {
     return "off-cycle";
   }
-  const day = slotDay(options.now, options.timeZone, options.primarySlot);
+  const day = options.day ?? slotDay(options.now, options.timeZone, options.primarySlot);
   const markerDirectory = join(options.directory, options.job);
   let names: string[];
 
@@ -256,13 +334,14 @@ if (import.meta.main) {
   }
 
   try {
+    const now = new Date(startedAt);
     process.stdout.write(
-      `${dailyRetryState({
+      `${slotDay(now, timeZone, primarySlot)} ${dailyRetryState({
         directory:
           process.env.HEALTHCHECK_CRON_OUTPUT_DIR ??
           join(process.env.HOME ?? "/opt/data/home", "..", "cron", "output"),
         job,
-        now: new Date(startedAt),
+        now,
         primarySlot,
         timeZone,
         ...(weekday === undefined ? {} : { weekday }),

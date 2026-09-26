@@ -15,7 +15,7 @@ import { join, resolve } from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { deriveRunOk, normalizeRunSummary } from "../../../../apps/web/src/lib/server/run-events";
 
-import { dailyRetryState, RERUN_SAFE_JOBS } from "./daily-retry-state";
+import { DAILY_RETRY_SCHEDULES, dailyRetryState, RERUN_SAFE_JOBS } from "./daily-retry-state";
 
 const ROOT = resolve(import.meta.dir, "..");
 const RUNNER = resolve(import.meta.dir, "daily-retry-runner.sh");
@@ -47,7 +47,7 @@ function fixture(job: string) {
   chmodSync(join(bin, "date"), 0o755);
   writeFileSync(
     payload,
-    '#!/usr/bin/env bash\nprintf x >> "$ATTEMPTS"\nprintf "%s\\n" "${FLUNCLE_DAILY_RETRY_STATE:-}" >> "$ATTEMPTS.states"\ncount="$(wc -c < "$ATTEMPTS" | tr -d " ")"\nsource="${RESULT_MARKER:-}"\nif [ "$count" -ge 2 ] && [ -n "${SECOND_RESULT_MARKER:-}" ]; then source="$SECOND_RESULT_MARKER"; fi\nif [ -n "$source" ]; then marker="$MARKER_DIR/result-${count}.md"; cp "$source" "$marker"; TZ=UTC touch -t "${RESULT_MTIME:-202609251200}" "$marker"; fi\nexit "${PAYLOAD_EXIT:-0}"\n',
+    '#!/usr/bin/env bash\nprintf x >> "$ATTEMPTS"\nprintf "%s\\n" "${FLUNCLE_DAILY_RETRY_STATE:-}" >> "$ATTEMPTS.states"\nprintf "%s\\n" "${FLUNCLE_DAILY_RETRY_SLOT_DAY:-}" >> "$ATTEMPTS.days"\ncount="$(wc -c < "$ATTEMPTS" | tr -d " ")"\nsource="${RESULT_MARKER:-}"\nif [ "$count" -ge 2 ] && [ -n "${SECOND_RESULT_MARKER:-}" ]; then source="$SECOND_RESULT_MARKER"; fi\nif [ -n "$source" ]; then marker="$MARKER_DIR/result-${count}.md"; cp "$source" "$marker"; TZ=UTC touch -t "${RESULT_MTIME:-202609251200}" "$marker"; fi\nexit "${PAYLOAD_EXIT:-0}"\n',
   );
   chmodSync(payload, 0o755);
 
@@ -136,6 +136,14 @@ function run(
 function retryStates(path: string): string[] {
   try {
     return readFileSync(`${path}.states`, "utf8").trim().split("\n");
+  } catch {
+    return [];
+  }
+}
+
+function slotDays(path: string): string[] {
+  try {
+    return readFileSync(`${path}.days`, "utf8").trim().split("\n");
   } catch {
     return [];
   }
@@ -866,6 +874,38 @@ describe("daily and weekly retry", () => {
     }
   });
 
+  test("both audit slots hand the payload the same Amsterdam slot day across the summer UTC boundary", () => {
+    const setup = fixture("audit");
+    const skip = join(setup.root, "skip.md");
+    writeFileSync(skip, `# Cron Job\n\n${skipSummary("reach")}\n`);
+    const shared = {
+      afterLocalDay: "20260715",
+      primarySlot: "01:00",
+      resultMarker: skip,
+      resultMtime: "202607142311",
+      timeZone: "Europe/Amsterdam",
+    };
+
+    expect(
+      run(setup, "audit", "03:10", {
+        ...shared,
+        localDay: "20260715",
+        localTime: "0110",
+        startedAt: "2026-07-14T23:10:00Z",
+      }).status,
+    ).toBe(0);
+    expect(
+      run(setup, "audit", "03:10", {
+        ...shared,
+        localDay: "20260715",
+        localTime: "0311",
+        startedAt: "2026-07-15T01:11:00Z",
+      }).status,
+    ).toBe(75);
+    expect(attempts(setup.attempts)).toBe(2);
+    expect(slotDays(setup.attempts)).toEqual(["2026-07-15", "2026-07-15"]);
+  });
+
   test("all daily and weekly services use the shared retry guard and exactly two calendar slots", () => {
     const names = [
       "audit-review",
@@ -884,6 +924,10 @@ describe("daily and weekly retry", () => {
       "social-metrics",
     ];
 
+    expect(Object.keys(DAILY_RETRY_SCHEDULES).sort()).toEqual(
+      names.map((name) => `fluncle-${name}`).sort(),
+    );
+
     for (const name of names) {
       const unit = `fluncle-${name}`;
       const directory = join(ROOT, `${name}-timer`);
@@ -891,6 +935,16 @@ describe("daily and weekly retry", () => {
       const service = readFileSync(join(directory, `${unit}.service`), "utf8");
 
       expect(timer.match(/^OnCalendar=/gm)?.length, unit).toBe(2);
+      const args = new RegExp(
+        `daily-retry-runner\\.sh ${unit} (\\S+) (\\d{2}:\\d{2}) (\\d{2}:\\d{2})(?: --weekday (\\w{3}))? --`,
+      ).exec(service);
+      const schedule = DAILY_RETRY_SCHEDULES[unit];
+      expect(schedule, unit).toEqual({
+        finalSlot: args?.[3],
+        primarySlot: args?.[2],
+        timeZone: args?.[1],
+        ...(args?.[4] === undefined ? {} : { weekday: args[4] }),
+      });
       expect(service, unit).toContain(`/opt/hermes-scripts/daily-retry-runner.sh ${unit} `);
       expect(service, unit).toContain("OnFailure=fluncle-sweep-failure@%n.service");
     }

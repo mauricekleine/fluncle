@@ -4,6 +4,8 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { DAILY_RETRY_SCHEDULES } from "./daily-retry-state";
+
 const notifier = join(import.meta.dir, "..", "sweep-failure", "fluncle-sweep-failure-notify.sh");
 const roots: string[] = [];
 
@@ -13,7 +15,7 @@ afterEach(() => {
   }
 });
 
-function runNotifier(unit: string, status: string) {
+function runNotifier(unit: string, status: string, clock = { time: "1200", weekday: "Sat" }) {
   const root = mkdtempSync(join(tmpdir(), "fluncle-sweep-failure-"));
   roots.push(root);
   const bin = join(root, "bin");
@@ -21,6 +23,7 @@ function runNotifier(unit: string, status: string) {
   mkdirSync(bin);
   const commands = {
     curl: '#!/usr/bin/env bash\nprintf "%s\\n" "$@" > "$CURL_CAPTURE"\n',
+    date: '#!/usr/bin/env bash\ncase "${1:-}" in +%H%M) printf "%s\\n" "$FAKE_TIME" ;; +%a) printf "%s\\n" "$FAKE_WEEKDAY" ;; *) exec /bin/date "$@" ;; esac\n',
     docker:
       '#!/usr/bin/env bash\nprintf "DISCORD_ALERT_WEBHOOK=https://example.invalid/alert\\n"\n',
     systemctl:
@@ -36,13 +39,19 @@ function runNotifier(unit: string, status: string) {
     env: {
       ...process.env,
       CURL_CAPTURE: capture,
+      FAKE_TIME: clock.time,
+      FAKE_WEEKDAY: clock.weekday,
       PATH: `${bin}:${process.env.PATH ?? ""}`,
       SWEEP_FAILURE_STATE_DIR: join(root, "state"),
       TEST_STATUS: status,
     },
   });
   expect(result.status).toBe(0);
-  return readFileSync(capture, "utf8");
+  try {
+    return readFileSync(capture, "utf8");
+  } catch {
+    return "";
+  }
 }
 
 test("an exhausted daily retry alert describes an incomplete payload", () => {
@@ -54,4 +63,38 @@ test("an exhausted daily retry alert describes an incomplete payload", () => {
 test("other sweep failures retain the missing marker alert", () => {
   const posted = runNotifier("fluncle-render.service", "1");
   expect(posted).toContain("It died before writing its /status marker");
+});
+
+test("a first-slot kill of a retry-runner job stays quiet until its final slot decides", () => {
+  expect(runNotifier("fluncle-backup.service", "137", { time: "0305", weekday: "Sat" })).toBe("");
+  expect(runNotifier("fluncle-audit.service", "255", { time: "0130", weekday: "Sat" })).toBe("");
+});
+
+test("a retry-runner job failing at or after its final slot alerts once", () => {
+  expect(runNotifier("fluncle-backup.service", "137", { time: "0521", weekday: "Sat" })).toContain(
+    "fluncle-backup.service",
+  );
+  expect(runNotifier("fluncle-backup.service", "75", { time: "0305", weekday: "Sat" })).toContain(
+    "The daily payload is incomplete or unconfirmed",
+  );
+});
+
+test("a weekly job's final-slot window only applies on its weekday", () => {
+  expect(runNotifier("fluncle-newsletter.service", "137", { time: "1505", weekday: "Fri" })).toBe(
+    "",
+  );
+  expect(
+    runNotifier("fluncle-newsletter.service", "137", { time: "1505", weekday: "Sun" }),
+  ).toContain("fluncle-newsletter.service");
+});
+
+test("the notifier's final slots match every retry-runner service", () => {
+  const source = readFileSync(notifier, "utf8");
+  for (const [job, schedule] of Object.entries(DAILY_RETRY_SCHEDULES)) {
+    const line = `${job}.service) echo "${schedule.timeZone} ${schedule.finalSlot}${schedule.weekday === undefined ? "" : ` ${schedule.weekday}`}" ;;`;
+    expect(source, job).toContain(line);
+  }
+  expect(source.match(/\.service\) echo "/g)?.length).toBe(
+    Object.keys(DAILY_RETRY_SCHEDULES).length,
+  );
 });

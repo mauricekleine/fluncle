@@ -4,9 +4,14 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { connect } from "node:net";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { cronStaleBudgetMs, type CronDef } from "./cron-freshness";
 import { findJsonSummary, splitMarker } from "./cron-marker";
+import {
+  DAILY_RETRY_SCHEDULES,
+  expectedCompletedSlotDay,
+  slotDayCompleted,
+} from "./daily-retry-state";
 
 export { cronStaleBudgetMs, MAX_TIMER_JITTER_MS, type CronDef } from "./cron-freshness";
 export { findJsonSummary, splitMarker, STDERR_DELIMITER } from "./cron-marker";
@@ -697,10 +702,23 @@ function resultCoversUtcSlotDay(
   );
 }
 
+function owedSlotDayMissing(cron: CronDef, dir: string, now: Date): boolean {
+  const job = `fluncle-${cron.service.replace(/^cron\./, "")}`;
+  const schedule = DAILY_RETRY_SCHEDULES[job];
+
+  if (schedule === undefined || basename(dir) !== job) {
+    return false;
+  }
+  const day = expectedCompletedSlotDay(schedule, now);
+
+  return day !== null && !slotDayCompleted({ day, directory: dirname(dir), job, schedule });
+}
+
 export function judgeCron(
   cron: CronDef,
   dir: string | undefined,
   uptimeMs: number | null = null,
+  now: Date = new Date(),
 ): CronVerdict {
   const staleBudgetMs = cronStaleBudgetMs(cron);
 
@@ -729,7 +747,7 @@ export function judgeCron(
     return noData();
   }
 
-  if (Date.now() - newest.mtimeMs > staleBudgetMs) {
+  if (now.getTime() - newest.mtimeMs > staleBudgetMs) {
     return "lagging";
   }
 
@@ -781,6 +799,10 @@ export function judgeCron(
       typeof summary.exhausted === "number" &&
       summary.exhausted > 0
     ) {
+      return "incomplete";
+    }
+
+    if (owedSlotDayMissing(cron, dir, now)) {
       return "incomplete";
     }
   }

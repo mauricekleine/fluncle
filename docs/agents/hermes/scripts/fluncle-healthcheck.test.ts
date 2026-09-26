@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -1691,5 +1691,89 @@ describe("the stall bar", () => {
     }));
 
     expect((sweepStrainCheck([], [], many).message ?? "").length).toBeLessThanOrEqual(120);
+  });
+});
+
+describe("judgeCron — a retry-runner job owes its scheduled slot day", () => {
+  function jobDir(job: string, runs: { at: string; body: string }[]): string {
+    const root = mkdtempSync(join(tmpdir(), "fluncle-owed-"));
+    temporaryDirectories.push(root);
+    const dir = join(root, `fluncle-${job}`);
+    mkdirSync(dir);
+    runs.forEach((run, index) => {
+      const path = join(dir, `run-${index}.md`);
+      writeFileSync(path, run.body);
+      const when = new Date(run.at);
+      utimesSync(path, when, when);
+    });
+    return dir;
+  }
+
+  function backupRun(at: string): { at: string; body: string } {
+    const day = at.slice(0, 10);
+    return {
+      at,
+      body: `# Cron Job: fluncle-backup\n\n${JSON.stringify({
+        boxState: { key: `box-state/daily/${day}/box-state.tar.gz.enc` },
+        dailyKey: `db-backups/daily/${day}/fluncle.sql.gz`,
+        errors: 0,
+        ok: true,
+      })}\n`,
+    };
+  }
+
+  const backup: CronDef = { cadenceMs: 24 * 60 * 60_000, match: "backup", service: "cron.backup" };
+  const newsletter: CronDef = {
+    cadenceMs: 7 * 24 * 60 * 60_000,
+    match: "newsletter",
+    service: "cron.newsletter",
+  };
+  const newsletterRun = (at: string) => ({
+    at,
+    body: '# Cron Job: fluncle-newsletter\n\n{"checked":1,"errors":0,"ok":true,"produced":1}\n',
+  });
+
+  test("yesterday's success does not cover a day whose attempts both died without a marker", () => {
+    const dir = jobDir("backup", [backupRun("2026-09-25T01:05:00Z")]);
+    const now = new Date("2026-09-26T08:00:00Z");
+
+    expect(judgeCron(backup, dir, null, now)).toBe("incomplete");
+    expect(cronCheck(backup, judgeCron(backup, dir, null, now)).status).toBe("degraded");
+  });
+
+  test("today's completion after the final slot and grace is ok", () => {
+    const dir = jobDir("backup", [
+      backupRun("2026-09-25T01:05:00Z"),
+      backupRun("2026-09-26T01:05:00Z"),
+    ]);
+
+    expect(judgeCron(backup, dir, null, new Date("2026-09-26T08:00:00Z"))).toBe("fresh-ok");
+  });
+
+  test("before today's final slot and grace, yesterday's completion still covers the owed day", () => {
+    const dir = jobDir("backup", [backupRun("2026-09-25T01:05:00Z")]);
+
+    expect(judgeCron(backup, dir, null, new Date("2026-09-26T04:00:00Z"))).toBe("fresh-ok");
+  });
+
+  test("a weekly job owes its last scheduled weekday, not the calendar day", () => {
+    const now = new Date("2026-09-27T10:00:00Z");
+
+    expect(
+      judgeCron(
+        newsletter,
+        jobDir("newsletter", [newsletterRun("2026-09-25T13:05:00Z")]),
+        null,
+        now,
+      ),
+    ).toBe("fresh-ok");
+    expect(
+      judgeCron(
+        newsletter,
+        jobDir("newsletter", [newsletterRun("2026-09-18T13:05:00Z")]),
+        null,
+        now,
+      ),
+    ).toBe("incomplete");
   });
 });

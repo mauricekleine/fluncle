@@ -52,8 +52,12 @@ run_audit() {
 	local repo="mauricekleine/fluncle"
 	local ws="${AUDIT_WORKSPACE:-${HOME:-/opt/data/home}/audit-workspace/fluncle}"
 
+	local slot_day="${FLUNCLE_DAILY_RETRY_SLOT_DAY:-}"
+	if [[ ! "${slot_day}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+		slot_day="$(TZ=Europe/Amsterdam date +%Y-%m-%d)"
+	fi
 	if [ -z "${DOMAIN}" ]; then
-		DOMAIN="$("${BUN_BIN}" "${AUDIT_DIR}/rotation.ts" 2>/dev/null || true)"
+		DOMAIN="$("${BUN_BIN}" "${AUDIT_DIR}/rotation.ts" "${slot_day}" 2>/dev/null || true)"
 	fi
 	local prompt_file="${AUDIT_DIR}/prompts/${DOMAIN}.md"
 	if [ -z "${DOMAIN}" ] || [ ! -r "${prompt_file}" ]; then
@@ -96,9 +100,19 @@ run_audit() {
 	}
 
 	local date_tag branch
-	date_tag="$(date -u +%Y%m%d)"
+	date_tag="${slot_day//-/}"
 	branch="audit/${date_tag}-${DOMAIN}"
-	if [ "${DRY_RUN}" != "1" ] && git ls-remote --exit-code --heads origin "refs/heads/${branch}" >/dev/null 2>&1; then
+	local remote_branch_rc=2
+	if [ "${DRY_RUN}" != "1" ]; then
+		git ls-remote --exit-code --heads origin "refs/heads/${branch}" >/dev/null 2>&1
+		remote_branch_rc=$?
+	fi
+	if [ "${remote_branch_rc}" -ne 0 ] && [ "${remote_branch_rc}" -ne 2 ]; then
+		log "could not read origin for tonight's branch ${branch} (git ls-remote exit ${remote_branch_rc}); not starting a pass"
+		echo "{\"ok\":false,\"stage\":\"remote-branch\",\"domain\":\"${DOMAIN}\",\"checked\":0,\"errors\":1,\"produced\":0}"
+		return 1
+	fi
+	if [ "${remote_branch_rc}" -eq 0 ]; then
 		local shipped_pr
 		shipped_pr="$(gh pr list --head "${branch}" --state all --json url --jq '.[0].url // empty' 2>/dev/null || true)"
 		if [ -n "${shipped_pr}" ]; then
@@ -134,7 +148,7 @@ run_audit() {
 	local prompt
 	prompt="$(cat "${AUDIT_DIR}/prompts/_preamble.md")
 
-# Tonight: ${DOMAIN} — $(date -u +%Y-%m-%d)
+# Tonight: ${DOMAIN} — ${slot_day}
 
 ${runtime_note}
 

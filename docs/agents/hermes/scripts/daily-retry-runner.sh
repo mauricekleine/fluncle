@@ -38,7 +38,16 @@ marker_snapshot() {
 retry_state() {
 	"$bun_bin" "${script_dir}/daily-retry-state.ts" "$job" "$time_zone" "$primary_slot" "$started_at" ${weekday:+"$weekday"}
 }
-state="$(retry_state)" || exit 2
+read_retry_state() {
+	local output
+	output="$(retry_state)" || return 1
+	slot_day="${output%% *}"
+	state="${output#* }"
+	[[ "$slot_day" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] && [ -n "$state" ] && [ "$state" != "$output" ]
+}
+slot_day=""
+state=""
+read_retry_state || exit 2
 initial_state="$state"
 
 if [ "$state" = "off-cycle" ]; then
@@ -60,7 +69,7 @@ fi
 
 before_markers="$(marker_snapshot)"
 set -m
-FLUNCLE_DAILY_RETRY=1 FLUNCLE_DAILY_RETRY_STATE="$state" "$@" &
+FLUNCLE_DAILY_RETRY=1 FLUNCLE_DAILY_RETRY_STATE="$state" FLUNCLE_DAILY_RETRY_SLOT_DAY="$slot_day" "$@" &
 child_pid="$!"
 terminate_payload() {
 	trap - TERM INT HUP
@@ -79,7 +88,7 @@ wait "$child_pid"
 payload_rc="$?"
 trap - TERM INT HUP
 
-state="$(retry_state)" || exit 2
+read_retry_state || exit 2
 after_markers="$(marker_snapshot)"
 if [ "$state" = "complete" ]; then
 	exit 0
@@ -102,7 +111,7 @@ if [ "$before_markers" = "$after_markers" ] && [ "$rebake_active" != true ]; the
 		emit_admission_skip_output "${job#fluncle-}" '{"checked":null,"errors":1,"gateState":"active","ok":false,"outcome":"payload-unconfirmed","payloadStarted":null,"produced":null}'
 	) || true
 	[ "$payload_rc" -ne 0 ] || payload_rc=75
-	state="$(retry_state)" || exit 2
+	read_retry_state || exit 2
 	after_markers="$(marker_snapshot)"
 	if [ "$state" != "partial" ] && [ "$state" != "exhausted" ]; then
 		exit "$payload_rc"
