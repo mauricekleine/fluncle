@@ -27,7 +27,9 @@ test.beforeAll(async () => {
   await db.batch([
     {
       args: [ARTIST.id, ARTIST.name, ARTIST.slug, now, now],
-      sql: `insert or ignore into artists (id, name, slug, created_at, updated_at) values (?, ?, ?, ?, ?)`,
+      sql: `insert or ignore into artists
+        (id, name, slug, renderable_track_count, created_at, updated_at)
+        values (?, ?, ?, 1, ?, ?)`,
     },
     {
       args: [

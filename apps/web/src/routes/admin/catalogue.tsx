@@ -92,11 +92,13 @@ export const Route = createFileRoute("/admin/catalogue")({
     lens:
       search.lens === "capture"
         ? "capture"
-        : search.lens === "quarantine"
-          ? "quarantine"
-          : search.lens === "dismissed"
-            ? "dismissed"
-            : "ear",
+        : search.lens === "long"
+          ? "long"
+          : search.lens === "quarantine"
+            ? "quarantine"
+            : search.lens === "dismissed"
+              ? "dismissed"
+              : "ear",
   }),
   loaderDeps: ({ search }) => ({ lens: search.lens }),
   beforeLoad: () => ensureAdmin(),
@@ -227,6 +229,13 @@ function AdminCataloguePage() {
             label="Next to capture"
             onClick={() => void navigate({ search: { lens: "capture" } })}
           />
+          <Button
+            onClick={() => void navigate({ search: { lens: "long" } })}
+            size="sm"
+            variant={lens === "long" ? "secondary" : "ghost"}
+          >
+            Long mixes
+          </Button>
 
           {summary.quarantined > 0 || lens === "quarantine" ? (
             <LensPill
@@ -415,6 +424,20 @@ function summaryLine(summary: CatalogueSummary): string {
 }
 
 function EmptyCatalogue({ lens, summary }: { lens: CatalogueLens; summary: CatalogueSummary }) {
+  if (lens === "long") {
+    return (
+      <Empty>
+        <EmptyHeader>
+          <EmptyMedia variant="icon">
+            <BinocularsIcon aria-hidden="true" weight="thin" />
+          </EmptyMedia>
+          <EmptyTitle>No long mixes</EmptyTitle>
+          <EmptyDescription>No active catalogue rows meet the long-form boundary.</EmptyDescription>
+        </EmptyHeader>
+      </Empty>
+    );
+  }
+
   if (lens === "quarantine") {
     return (
       <Empty>
@@ -537,6 +560,11 @@ function CatalogueRow({
     <ObjectRow
       trailing={
         <>
+          {track.hiddenFromPublic ? (
+            <Badge className="whitespace-nowrap" variant="outline">
+              Hidden · long mix
+            </Badge>
+          ) : null}
           {lens === "quarantine" ? (
             <Badge className="whitespace-nowrap" variant="outline">
               Wrong audio

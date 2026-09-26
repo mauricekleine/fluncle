@@ -1,4 +1,5 @@
 import { type InStatement } from "@libsql/client";
+import { publicTrackDurationWhere } from "../../db/public-track-visibility";
 
 import { getDb, typedRows } from "./db";
 import { releaseTodayUtc, validReleaseDateSql } from "./release-day";
@@ -103,8 +104,8 @@ function pageStatement(
                    page.certified_finding_count as stored_certified,
                    page.rankable_track_count as stored_rankable,
                    page.latest_release_date as stored_latest,
-                   max(case when ${validReleaseDateSql("t.release_date")} and t.release_date <= ? and t.dismissed_at is null and t.duplicate_of_track_id is null then t.release_date end) as latest,
-                   count(t.track_id) as renderable,
+                   max(case when ${validReleaseDateSql("t.release_date")} and t.release_date <= ? and t.dismissed_at is null and t.duplicate_of_track_id is null and ${publicTrackDurationWhere("t")} then t.release_date end) as latest,
+                   count(case when ${publicTrackDurationWhere("t")} then t.track_id end) as renderable,
                    coalesce(sum(case when t.is_catalogue = 0 then 1 else 0 end), 0) as certified,
                    coalesce(sum(case when t.key is not null and t.has_embedding = 1 then 1 else 0 end), 0)
                      as rankable
@@ -132,8 +133,8 @@ function pageStatement(
                  page.certified_finding_count as stored_certified,
                  0 as stored_rankable,
                  page.latest_release_date as stored_latest,
-                 max(case when ${validReleaseDateSql("tracks.release_date")} and tracks.release_date <= ? and tracks.dismissed_at is null and tracks.duplicate_of_track_id is null then tracks.release_date end) as latest,
-                 count(tracks.track_id) as renderable,
+                 max(case when ${validReleaseDateSql("tracks.release_date")} and tracks.release_date <= ? and tracks.dismissed_at is null and tracks.duplicate_of_track_id is null and ${publicTrackDurationWhere("tracks")} then tracks.release_date end) as latest,
+                 count(case when ${publicTrackDurationWhere("tracks")} then tracks.track_id end) as renderable,
                  coalesce(sum(case when tracks.is_catalogue = 0 then 1 else 0 end), 0) as certified,
                  0 as rankable
           from page

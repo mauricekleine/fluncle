@@ -2,6 +2,7 @@ import { type Client } from "@libsql/client";
 import { type SearchFilters } from "@fluncle/contracts/orpc";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { LONG_FORM_MS } from "../catalogue-eligibility";
 import { EMBEDDING_DIMS, readEmbeddingBlob } from "./embedding";
 import {
   createIntegrationDb,
@@ -52,9 +53,11 @@ function cosine(left: number[], right: number[]): number {
 
 async function referenceSonar(request: SonarRequest): Promise<SonarMatch[]> {
   const result = await db.execute(
-    `select tracks.track_id, tracks.bpm, track_embeddings.embedding_blob
+    `select tracks.track_id, tracks.bpm, tracks.duration_ms, findings.track_id as finding_track_id,
+            track_embeddings.embedding_blob
      from tracks
-     join track_embeddings on track_embeddings.track_id = tracks.track_id`,
+     join track_embeddings on track_embeddings.track_id = tracks.track_id
+     left join findings on findings.track_id = tracks.track_id`,
   );
   const excluded = new Set(request.excludeIds ?? []);
 
@@ -63,11 +66,16 @@ async function referenceSonar(request: SonarRequest): Promise<SonarMatch[]> {
       const id = typeof row.track_id === "string" ? row.track_id : "";
       const embedding = readEmbeddingBlob(row.embedding_blob);
       const bpm = row.bpm === null ? null : Number(row.bpm);
+      const durationMs = row.duration_ms === null ? null : Number(row.duration_ms);
+      const hasFinding = row.finding_track_id !== null;
       const filter = request.filter;
 
       if (
         !embedding ||
         excluded.has(id) ||
+        (filter?.has_finding !== undefined && hasFinding !== filter.has_finding) ||
+        (filter?.duration_ms_max !== undefined &&
+          (durationMs === null || durationMs >= filter.duration_ms_max)) ||
         (filter?.bpm_min !== undefined && (bpm === null || bpm < filter.bpm_min)) ||
         (filter?.bpm_max !== undefined && (bpm === null || bpm > filter.bpm_max))
       ) {
@@ -140,10 +148,49 @@ describe("rankTracksByVector — sonic search Sonar parity", () => {
     expect(sonar.map((row) => row.trackId)).toEqual(["near", "tied-a", "tied-b"]);
     expect(searchSonar).toHaveBeenCalledWith({
       excludeIds: ["anchor"],
-      filter: { bpm_max: 176, bpm_min: 170 },
+      filter: { bpm_max: 176, bpm_min: 170, has_finding: true },
       index: "tracks",
       probes: [probe],
       topK: 3,
     });
+    expect(searchSonar).toHaveBeenCalledWith({
+      excludeIds: ["anchor"],
+      filter: {
+        bpm_max: 176,
+        bpm_min: 170,
+        duration_ms_max: LONG_FORM_MS,
+        has_finding: false,
+      },
+      index: "tracks",
+      probes: [probe],
+      topK: 3,
+    });
+  });
+
+  it("excludes long catalogue matches before top-k while keeping long findings", async () => {
+    const probe = vector(1, 1);
+    await seedCatalogue("long-catalogue", 174, vector(0.999, 7));
+    await db.execute({
+      args: [LONG_FORM_MS, "long-catalogue"],
+      sql: "update tracks set duration_ms = ? where track_id = ?",
+    });
+    await seedTrack(db, { logId: "004.1.1B", title: "long-finding", trackId: "long-finding" });
+    await seedEmbedding(db, "long-finding", vector(0.998, 8));
+    await db.execute({
+      args: [LONG_FORM_MS, "long-finding"],
+      sql: "update tracks set duration_ms = ? where track_id = ?",
+    });
+
+    isSonarSonicEnabled.mockResolvedValue(false);
+    const database = await rankTracksByVector(probe, {}, "anchor", 3, {
+      allowBoundedSql: true,
+    });
+
+    isSonarSonicEnabled.mockResolvedValue(true);
+    searchSonar.mockImplementation(referenceSonar);
+    const sonar = await rankTracksByVector(probe, {}, "anchor", 3);
+
+    expect(database?.map((row) => row.trackId)).toEqual(["long-finding", "too-slow", "too-fast"]);
+    expect(sonar?.map((row) => row.trackId)).toEqual(database?.map((row) => row.trackId));
   });
 });

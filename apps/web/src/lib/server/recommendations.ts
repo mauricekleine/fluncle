@@ -14,6 +14,7 @@ import {
   type SonarMatch,
 } from "./sonar";
 import { executeVectorFallback, vectorFallbackCandidateLimitSql } from "./vector-fallback";
+import { publicTrackDurationWhere } from "../../db/public-track-visibility";
 
 export const MAX_REC_SEEDS = 12;
 
@@ -125,7 +126,10 @@ export type RecommendationsResult = {
   seedsUsed: number;
 };
 
-async function findSeedTrack(trackIdOrLogId: string): Promise<TrackRefRow | undefined> {
+async function findSeedTrack(
+  trackIdOrLogId: string,
+  includeHidden = false,
+): Promise<TrackRefRow | undefined> {
   const value = trackIdOrLogId.trim();
 
   if (!value) {
@@ -140,6 +144,7 @@ async function findSeedTrack(trackIdOrLogId: string): Promise<TrackRefRow | unde
       select tracks.track_id, findings.log_id from resolved_track
       join tracks on tracks.track_id = resolved_track.track_id
       left join findings on findings.track_id = tracks.track_id
+      where ${includeHidden ? "1 = 1" : publicTrackDurationWhere("tracks", "findings")}
       limit 1`,
   });
 
@@ -158,7 +163,7 @@ export async function listRecSeeds(user: PublicUser): Promise<{ ok: true; seeds:
       from user_rec_seeds s
       join tracks t on t.track_id = s.track_id
       left join findings f on f.track_id = s.track_id
-      where s.user_id = ?
+      where s.user_id = ? and ${publicTrackDurationWhere("t", "f")}
       order by s.added_at desc, s.track_id asc`,
   });
 
@@ -238,7 +243,7 @@ export async function deleteRecSeed(
   user: PublicUser,
   trackIdOrLogId: string,
 ): Promise<Response | { ok: true }> {
-  const track = await findSeedTrack(trackIdOrLogId);
+  const track = await findSeedTrack(trackIdOrLogId, true);
 
   if (!track) {
     return jsonError(404, "track_not_found", "No track by that id");
@@ -272,7 +277,7 @@ export async function listRecommendations(
         from user_rec_seeds s
         join tracks t on t.track_id = s.track_id
         left join track_embeddings emb on emb.track_id = t.track_id
-        where s.user_id = ?
+        where s.user_id = ? and ${publicTrackDurationWhere("t")}
         order by s.added_at asc, s.track_id asc`,
     }),
     excludeRecent
@@ -528,7 +533,8 @@ async function hydrateTracks(trackIds: string[]): Promise<Map<string, HydrateRow
         (select image_updated_at from albums where albums.id = t.album_id) as album_image_updated_at
       from tracks t
       left join findings f on f.track_id = t.track_id
-      where t.track_id in (${ids.map(() => "?").join(", ")})`,
+      where t.track_id in (${ids.map(() => "?").join(", ")})
+        and ${publicTrackDurationWhere("t", "f")}`,
   });
 
   const byTrackId = new Map<string, HydrateRow>();

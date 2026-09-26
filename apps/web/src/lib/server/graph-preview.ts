@@ -8,6 +8,7 @@ import { albumCoverAtSize } from "../media";
 import { getAlbumBySlug } from "./albums";
 import { getPublicArtistBySlug } from "./artists";
 import { getPublicGalaxyBySlug } from "./galaxies-map";
+import { hasPublicGraphTracks } from "./hub-counts";
 import { getLabelBySlug } from "./labels";
 import { getFindingsByAlbum, getFindingsByArtist, getFindingsByLabel } from "./tracks";
 import { type TrackListItem } from "./tracks";
@@ -90,7 +91,7 @@ async function resolveEntity(
   if (kind === "album") {
     const album = await getAlbumBySlug(slug);
 
-    return album
+    return album && (await hasPublicGraphTracks("albums", album.id))
       ? {
           bio: album.bio,
           findings: await getFindingsByAlbum(album.id),
@@ -102,7 +103,7 @@ async function resolveEntity(
 
   const label = await getLabelBySlug(slug);
 
-  return label
+  return label && (await hasPublicGraphTracks("labels", label.id))
     ? {
         bio: label.bio,
         findings: await getFindingsByLabel(label.id),

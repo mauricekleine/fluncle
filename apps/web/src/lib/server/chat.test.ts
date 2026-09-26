@@ -28,6 +28,7 @@ const getAlbumBySlug = vi.hoisted(() => vi.fn<(slug: string) => Promise<unknown>
 const listCatalogueTracksByAlbum = vi.hoisted(() => vi.fn<() => Promise<unknown>>());
 const listArtistCatalogue = vi.hoisted(() => vi.fn<() => Promise<unknown>>());
 const listLabelCatalogue = vi.hoisted(() => vi.fn<() => Promise<unknown>>());
+const hasPublicGraphTracks = vi.hoisted(() => vi.fn<() => Promise<boolean>>());
 
 function toSlug(name: string): string {
   return name
@@ -73,6 +74,7 @@ vi.mock("./catalogue-groups", () => ({
   listArtistCatalogue,
   listLabelCatalogue,
 }));
+vi.mock("./hub-counts", () => ({ hasPublicGraphTracks }));
 
 import {
   buildChatTools,
@@ -88,6 +90,8 @@ import {
 } from "./chat";
 
 beforeEach(() => {
+  hasPublicGraphTracks.mockReset();
+  hasPublicGraphTracks.mockResolvedValue(true);
   readOptionalEnv.mockReset();
   readOptionalEnv.mockResolvedValue(undefined);
   getTracksByLogIds.mockReset();
@@ -1008,12 +1012,8 @@ describe("get_artist / get_label — the entity cards' grounding", () => {
     expect(result.artist.findings ?? []).toEqual([]);
   });
 
-  it("get_artist still names a resolved artist even with an empty catalogue (never found:false)", async () => {
-    getPublicArtistBySlug.mockResolvedValue({
-      id: "art-3",
-      name: "Faint Trace",
-      slug: "faint-trace",
-    });
+  it("get_artist hides an artist with no public tracks", async () => {
+    getPublicArtistBySlug.mockResolvedValue(undefined);
     countArtistFindings.mockResolvedValue(0);
     getFindingsByArtist.mockResolvedValue([]);
 
@@ -1022,8 +1022,7 @@ describe("get_artist / get_label — the entity cards' grounding", () => {
       found?: boolean;
     };
 
-    expect(result.found).toBeUndefined();
-    expect(result.artist?.name).toBe("Faint Trace");
+    expect(result).toEqual({ found: false, ok: true });
   });
 
   it("drops an entity finding with no coordinate before it reaches the model (the wire boundary)", async () => {
@@ -1199,7 +1198,7 @@ describe("get_artist / get_label — the entity cards' grounding", () => {
     expect(result.label.findings ?? []).toEqual([]);
   });
 
-  it("get_label still names a resolved label even with an empty catalogue (never found:false)", async () => {
+  it("get_label hides a label with no public tracks", async () => {
     getLabelBySlug.mockResolvedValue({
       id: "lbl-3",
       logoImageUrl: undefined,
@@ -1207,14 +1206,14 @@ describe("get_artist / get_label — the entity cards' grounding", () => {
       slug: "faint-imprint",
     });
     getFindingsByLabel.mockResolvedValue([]);
+    hasPublicGraphTracks.mockResolvedValue(false);
 
     const result = (await labelExecutor()({ name: "Faint Imprint" }, {} as never)) as {
       found?: boolean;
       label?: { name?: string };
     };
 
-    expect(result.found).toBeUndefined();
-    expect(result.label?.name).toBe("Faint Imprint");
+    expect(result).toEqual({ found: false, ok: true });
   });
 
   it("never leaks a previewUrl onto a get_artist or get_label output (the token stays server-side)", async () => {

@@ -29,6 +29,7 @@ const getAlbumBySlugMock = vi.hoisted(() => vi.fn());
 const listCatalogueTracksByAlbumMock = vi.hoisted(() => vi.fn());
 const listArtistCatalogueMock = vi.hoisted(() => vi.fn());
 const listLabelCatalogueMock = vi.hoisted(() => vi.fn());
+const hasPublicGraphTracksMock = vi.hoisted(() => vi.fn());
 
 const toSlug = (name: string): string =>
   name
@@ -87,6 +88,7 @@ vi.mock("./labels", () => ({
   labelSlug: (name: string) => toSlug(name) || undefined,
 }));
 vi.mock("./artist-dossier", () => ({ getArtistNeighbours: getArtistNeighboursMock }));
+vi.mock("./hub-counts", () => ({ hasPublicGraphTracks: hasPublicGraphTracksMock }));
 
 vi.mock("./fresh", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./fresh")>()),
@@ -97,6 +99,11 @@ const { handleMcp } = await import("./mcp");
 
 const { ApiError } = await import("./spotify");
 const { __resetSearchCache } = await import("./track-search");
+
+beforeEach(() => {
+  hasPublicGraphTracksMock.mockReset();
+  hasPublicGraphTracksMock.mockResolvedValue(true);
+});
 
 const resolveTargetMock = resolveTarget;
 const recentTracksMock = listTracksMock;

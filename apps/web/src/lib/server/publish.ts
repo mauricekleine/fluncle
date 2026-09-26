@@ -1,5 +1,6 @@
 import { type InStatement } from "@libsql/client/web";
 import { type PublishTrackResult } from "@fluncle/contracts";
+import { publicTrackDurationOk } from "../../db/public-track-visibility";
 
 export type { PublishTrackResult };
 
@@ -103,7 +104,9 @@ function isPublishedFlag(value: number | null): boolean {
   return Number(value ?? 0) === 1;
 }
 
-const CERTIFY_DELTA: HubCountDelta = { certified: 1, renderable: 0 };
+function certificationCountDelta(durationMs: number): HubCountDelta {
+  return { certified: 1, renderable: publicTrackDurationOk(durationMs, false) ? 0 : 1 };
+}
 
 async function resolveFindingLogId(
   db: Awaited<ReturnType<typeof getDb>>,
@@ -576,15 +579,16 @@ async function certifyExistingTrackWithOptions(
   if (row.finding_id && row.finding_log_id) {
     logId = row.finding_log_id;
   } else {
+    const certifyDelta = certificationCountDelta(row.duration_ms);
     logId = await resolveFindingLogId(db, { foundAt: nowIso, isrc, trackId });
     await batchDueWorkSourceMutation(
       db,
       [
         findingInsertStatement({ logId, note: options.note, nowIso, trackId }),
         { args: [trackId], sql: `update tracks set is_catalogue = 0 where track_id = ?` },
-        ...(row.label_id ? [hubCountDeltaStatement("labels", row.label_id, CERTIFY_DELTA)] : []),
-        ...(row.album_id ? [hubCountDeltaStatement("albums", row.album_id, CERTIFY_DELTA)] : []),
-        hubCountDeltaForTrackArtistsStatement(trackId, CERTIFY_DELTA),
+        ...(row.label_id ? [hubCountDeltaStatement("labels", row.label_id, certifyDelta)] : []),
+        ...(row.album_id ? [hubCountDeltaStatement("albums", row.album_id, certifyDelta)] : []),
+        hubCountDeltaForTrackArtistsStatement(trackId, certifyDelta),
       ],
       [
         { subjectId: trackId, subjectType: "track" },

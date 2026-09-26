@@ -1,5 +1,9 @@
 import { type Client } from "@libsql/client";
 import {
+  catalogueTrackDurationWhere,
+  publicTrackDurationWhere,
+} from "../../db/public-track-visibility";
+import {
   type CatalogueArtistGroup,
   type CatalogueGroupPage,
   CataloguePageOutOfRangeError,
@@ -156,7 +160,8 @@ export async function listArtistUpcoming(
 ): Promise<UpcomingTrackPage> {
   const db = await getDb();
   const predicate = `${upcomingAfterTodaySql("tracks.release_date")}
-            and tracks.duplicate_of_track_id is null and tracks.dismissed_at is null`;
+            and tracks.duplicate_of_track_id is null and tracks.dismissed_at is null
+            and ${publicTrackDurationWhere("tracks")}`;
   const candidate = artistCandidateIdsSql("?", "(select name from artists where id = ?)", "?");
   const [result, count] = await Promise.all([
     db.execute({
@@ -192,7 +197,8 @@ export async function listLabelUpcoming(
 ): Promise<UpcomingTrackPage> {
   const db = await getDb();
   const predicate = `tracks.label_id = ? and ${upcomingAfterTodaySql("tracks.release_date")}
-            and tracks.duplicate_of_track_id is null and tracks.dismissed_at is null`;
+            and tracks.duplicate_of_track_id is null and tracks.dismissed_at is null
+            and ${publicTrackDurationWhere("tracks")}`;
   const [result, count] = await Promise.all([
     db.execute({
       args: [labelId, today, GRAPH_GROUP_ROW_CEILING, (page - 1) * GRAPH_GROUP_ROW_CEILING],
@@ -269,6 +275,7 @@ export async function listArtistCatalogue(
             left join albums al on al.id = tracks.album_id
             where ta.artist_id = ? and findings.track_id is null
                   and tracks.duplicate_of_track_id is null and tracks.dismissed_at is null
+                  and ${catalogueTrackDurationWhere("tracks")}
                   ${today === undefined ? "" : `and ${releasedByTodaySql("tracks.release_date")}`}
           ),
           ranked as (
@@ -397,6 +404,7 @@ export async function listLabelCatalogue(
             left join albums al on al.id = tracks.album_id
             where tracks.label_id = ? and findings.track_id is null
                   and tracks.duplicate_of_track_id is null and tracks.dismissed_at is null
+                  and ${catalogueTrackDurationWhere("tracks")}
                   ${today === undefined ? "" : `and ${releasedByTodaySql("tracks.release_date")}`}
           ),
           ranked as (
@@ -436,6 +444,7 @@ export async function listLabelCatalogue(
                   where tracks.label_id = ? and findings.track_id is null
                         and tracks.duplicate_of_track_id is null
                         and tracks.dismissed_at is null
+                        and ${catalogueTrackDurationWhere("tracks")}
                         ${today === undefined ? "" : `and ${releasedByTodaySql("tracks.release_date")}`}) as total_tracks
           from counted
           where rn <= ? and group_rn > ? and group_rn <= ?

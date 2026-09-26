@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { type SearchFilters } from "@fluncle/contracts/orpc";
+import { LONG_FORM_MS } from "../catalogue-eligibility";
 
 const isSonarSonicEnabled = vi.hoisted(() => vi.fn<() => Promise<boolean>>());
 const isSonarArtistsEnabled = vi.hoisted(() => vi.fn<() => Promise<boolean>>());
@@ -73,17 +74,23 @@ describe("rankTracksByVector — the sonar route (dark)", () => {
 
   it("flag ON: routes to sonar and hydrates the ids IN SONAR'S ORDER", async () => {
     isSonarSonicEnabled.mockResolvedValue(true);
-    searchSonar.mockResolvedValue([
-      { id: "t2", score: 0.9 },
-      { id: "t1", score: 0.8 },
-    ]);
+    searchSonar.mockImplementation(async ({ filter }: { filter: { has_finding: boolean } }) =>
+      filter.has_finding ? [{ id: "t1", score: 0.8 }] : [{ id: "t2", score: 0.9 }],
+    );
     execute.mockResolvedValue({ rows: [row("t1"), row("t2")] });
 
     const hits = await rankTracksByVector(PROBE, NO_FILTERS, "anchor", 5);
 
     expect(searchSonar).toHaveBeenCalledWith({
       excludeIds: ["anchor"],
-      filter: {},
+      filter: { has_finding: true },
+      index: "tracks",
+      probes: [PROBE],
+      topK: 5,
+    });
+    expect(searchSonar).toHaveBeenCalledWith({
+      excludeIds: ["anchor"],
+      filter: { duration_ms_max: LONG_FORM_MS, has_finding: false },
       index: "tracks",
       probes: [PROBE],
       topK: 5,
@@ -93,10 +100,14 @@ describe("rankTracksByVector — the sonar route (dark)", () => {
 
   it("drops a ranked id that no longer hydrates instead of inventing a hit", async () => {
     isSonarSonicEnabled.mockResolvedValue(true);
-    searchSonar.mockResolvedValue([
-      { id: "deleted-after-refresh", score: 0.95 },
-      { id: "t1", score: 0.8 },
-    ]);
+    searchSonar.mockImplementation(async ({ filter }: { filter: { has_finding: boolean } }) =>
+      filter.has_finding
+        ? []
+        : [
+            { id: "deleted-after-refresh", score: 0.95 },
+            { id: "t1", score: 0.8 },
+          ],
+    );
     execute.mockResolvedValue({ rows: [row("t1")] });
 
     const hits = await rankTracksByVector(PROBE, NO_FILTERS, undefined, 5);
@@ -112,7 +123,17 @@ describe("rankTracksByVector — the sonar route (dark)", () => {
     await rankTracksByVector(PROBE, { bpmMax: 176, bpmMin: 170 }, undefined, 5);
 
     expect(searchSonar).toHaveBeenCalledWith(
-      expect.objectContaining({ filter: { bpm_max: 176, bpm_min: 170 } }),
+      expect.objectContaining({ filter: { bpm_max: 176, bpm_min: 170, has_finding: true } }),
+    );
+    expect(searchSonar).toHaveBeenCalledWith(
+      expect.objectContaining({
+        filter: {
+          bpm_max: 176,
+          bpm_min: 170,
+          duration_ms_max: LONG_FORM_MS,
+          has_finding: false,
+        },
+      }),
     );
   });
 
@@ -134,7 +155,7 @@ describe("rankTracksByVector — the sonar route (dark)", () => {
 
     const hits = await rankTracksByVector(PROBE, NO_FILTERS, undefined, 5);
 
-    expect(searchSonar).toHaveBeenCalledOnce();
+    expect(searchSonar).toHaveBeenCalledTimes(2);
     expect(hits).toEqual([]);
     expect(execute).not.toHaveBeenCalled();
   });

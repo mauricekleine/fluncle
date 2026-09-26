@@ -62,7 +62,7 @@ type ProjectionStatusResponse = {
     projections: {
       artistQualification: FamilyStatus;
       crawlDueWork: FamilyStatus;
-      publicAggregates: FamilyStatus & { anchorsReady: boolean };
+      publicAggregates: FamilyStatus & { anchorsReady: boolean; durationGenerationReady: boolean };
       trackDueWork: FamilyStatus & { catalogueRankMarkerAgeMs?: null | number };
     };
   };
@@ -196,6 +196,7 @@ function parseStatus(value: unknown): ProjectionStatusResponse {
     !isFamilyStatus(projections["crawlDueWork"]) ||
     !isFamilyStatus(projections["publicAggregates"]) ||
     typeof projections["publicAggregates"]["anchorsReady"] !== "boolean" ||
+    typeof projections["publicAggregates"]["durationGenerationReady"] !== "boolean" ||
     !isFamilyStatus(projections["trackDueWork"]) ||
     !isOptionalAge(projections["trackDueWork"]["catalogueRankMarkerAgeMs"])
   ) {
@@ -549,7 +550,8 @@ export function runProjectionMaintenanceTick(
     {
       enabled: cutovers.publicProjections,
       minSteps: PUBLIC_MIN_STEPS,
-      repairNeeded: needsRepair(aggregates) || !aggregates.anchorsReady,
+      repairNeeded:
+        needsRepair(aggregates) || !aggregates.anchorsReady || !aggregates.durationGenerationReady,
       status: aggregates,
       subjectsPerStep: PUBLIC_SUBJECTS_PER_STEP,
       target: "public_aggregates",

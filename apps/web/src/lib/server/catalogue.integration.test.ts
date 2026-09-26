@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { qualifiedArtistsDigest } from "./catalogue";
+import { LONG_FORM_MS } from "../catalogue-eligibility";
 import {
   createIntegrationDb,
   seedCatalogueTrack,
@@ -696,6 +697,23 @@ describe("the capture queue — authorization, then the priority ladder", () => 
 });
 
 describe("the read — the ranked page, and the WHY on every row", () => {
+  it("keeps long catalogue rows visible to operators with a hidden marker", async () => {
+    const { listCatalogueTracks } = await import("./catalogue");
+
+    await seedCatalogue("cat-long");
+    await seedCatalogue("cat-short");
+    await db.execute({
+      args: [LONG_FORM_MS, "cat-long"],
+      sql: `update tracks set duration_ms = ? where track_id = ?`,
+    });
+
+    const longRows = await listCatalogueTracks("long");
+
+    expect(longRows.map((track) => track.trackId)).toEqual(["cat-long"]);
+    expect(longRows[0]?.hiddenFromPublic).toBe(true);
+    expect((await listCatalogueTracks("dismissed")).map((track) => track.trackId)).toEqual([]);
+  });
+
   it("orders The Ear by score, DESC, and carries the finding each row matched", async () => {
     const { listCatalogueTracks, rankCatalogue } = await import("./catalogue");
 

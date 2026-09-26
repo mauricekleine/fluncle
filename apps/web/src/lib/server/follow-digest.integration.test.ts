@@ -1,4 +1,5 @@
 import { type Client } from "@libsql/client";
+import { LONG_FORM_MS } from "../catalogue-eligibility";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createIntegrationDb,
@@ -78,6 +79,31 @@ async function track(
 }
 
 describe("weekly follow digest", () => {
+  it("omits long catalogue releases while keeping long findings", async () => {
+    const { listFollowDigestReleases } = await import("./follow-digest");
+    await seedUser(db, { email: "one@example.com", emailVerified: true, id: "one" });
+    await seedArtist(db, { id: "artist-a", name: "Artist A", slug: "artist-a" });
+    await watch("one", "artist", "artist-a", "watch-a");
+    for (const id of ["short", "long-catalogue", "long-finding"]) {
+      await track(id, "2026-09-24", { artistId: "artist-a" });
+    }
+    await db.execute({
+      args: [LONG_FORM_MS, "long-catalogue", "long-finding"],
+      sql: `update tracks set duration_ms = ? where track_id in (?, ?)`,
+    });
+    await db.execute({
+      args: ["long-finding", "001.1.1", "2026-09-24T00:00:00.000Z"],
+      sql: `insert into findings (track_id, log_id, added_at) values (?, ?, ?)`,
+    });
+    await db.execute(`update tracks set is_catalogue = 0 where track_id = 'long-finding'`);
+
+    const result = await listFollowDigestReleases("one", "2026-09-23", "2026-09-25");
+    expect(result.items.map((item) => item.href).sort()).toEqual([
+      "https://www.fluncle.com/log/001.1.1",
+      "https://www.fluncle.com/track/short",
+    ]);
+  });
+
   it("skips a recipient deleted during token creation and continues the batch", async () => {
     const { sendFollowDigests } = await import("./follow-digest");
     const tokens = await import("./follow-digest-tokens");

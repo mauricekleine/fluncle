@@ -21,6 +21,7 @@ import {
 import { spotifyHop } from "../../routes/out.spotify.$trackId";
 import { anchorRefusalReason, kindClause, scopeClause } from "./track-work";
 import { createIntegrationDb } from "./integration-db";
+import { LONG_FORM_MS } from "../catalogue-eligibility";
 
 let db: Client;
 
@@ -890,6 +891,26 @@ describe("tier, and the straggler window", () => {
 });
 
 describe("the key lookups and the relation between what they return", () => {
+  it("omits long catalogue identities while retaining long findings", async () => {
+    await insertTrack("long-catalogue", {
+      durationMs: LONG_FORM_MS,
+      isrc: "GBABC1234567",
+    });
+    await insertTrack("long-finding", {
+      durationMs: LONG_FORM_MS,
+      isrc: "GBABC1234567",
+    });
+    await certify("long-finding", "010.1.1A");
+
+    expect(await readIdentity({ idOrLogId: "long-catalogue", kind: "idOrLogId" })).toBeUndefined();
+    expect(
+      (await readIdentity({ isrcs: ["GBABC1234567"], kind: "isrc" }))?.recordings.map(
+        (recording) => recording.trackId,
+      ),
+    ).toEqual(["long-finding"]);
+    expect((await only({ idOrLogId: "long-finding", kind: "idOrLogId" })).certified).toBe(true);
+  });
+
   it("answers a single match as canonical", async () => {
     await insertTrack("k-1", { isrc: "GBABC1234567" });
 

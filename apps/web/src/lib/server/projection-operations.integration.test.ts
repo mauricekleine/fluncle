@@ -1,4 +1,5 @@
 import { createClient, type Client, type InStatement } from "@libsql/client";
+import { ProjectionStatusSchema } from "@fluncle/contracts/orpc";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { LOCAL_DB_CONCURRENCY } from "../database-concurrency";
@@ -13,7 +14,11 @@ import {
   readProjectionAuditEvidence,
   type ProjectionAuditTarget,
 } from "./projection-audit";
-import { readCurrentProjectedTrackHubAnchors } from "./public-projection-cutover";
+import {
+  PUBLIC_AGGREGATE_DURATION_GENERATION_KEY,
+  readCurrentProjectedTrackHubAnchors,
+  readProjectedDefaultTrackTotal,
+} from "./public-projection-cutover";
 import {
   markPublicTrackSourceChangedStatements,
   publicTrackSourceVersion,
@@ -111,6 +116,7 @@ describe("projection production operations", () => {
         on projection_repairs(projection, source_epoch, subject_type, subject_id);
       create table tracks (
         track_id text primary key, release_date text, key text, label_id text,
+        duration_ms integer not null default 210000,
         has_embedding integer not null default 0
       );
       create index tracks_release_date_track_id_idx on tracks(release_date desc, track_id desc);
@@ -192,8 +198,13 @@ describe("projection production operations", () => {
       args: [EMPTY_DIGEST, EMPTY_DIGEST],
       sql: `insert into public_aggregate_state
         (scope, state, scanned_count, projected_entry_count, source_digest, projected_digest,
-         source_epoch, aggregate_epoch, default_track_total, release_hub_order_epoch, generation)
-        values ('tracks', 'complete', 0, 0, ?, ?, 0, 0, 0, 0, 'agg')`,
+         source_epoch, aggregate_epoch, default_track_total, release_hub_order_epoch,
+         generation, completed_at)
+        values ('tracks', 'complete', 0, 0, ?, ?, 0, 0, 0, 0, 'agg', '2026-01-01')`,
+    });
+    await db.execute({
+      args: [PUBLIC_AGGREGATE_DURATION_GENERATION_KEY, "agg:2026-01-01"],
+      sql: `insert into settings (key, value) values (?, ?)`,
     });
     await db.execute({
       args: [EMPTY_DIGEST, EMPTY_DIGEST],
@@ -245,6 +256,141 @@ describe("projection production operations", () => {
   });
 
   afterEach(() => db.close());
+
+  it("restarts a complete aggregate generation when its duration marker is missing and lands the key in bounded steps", async () => {
+    await db.execute({
+      args: [PUBLIC_AGGREGATE_DURATION_GENERATION_KEY],
+      sql: "delete from settings where key = ?",
+    });
+    const initialStatus = ProjectionStatusSchema.parse(await getProjectionStatusFor(db));
+    expect(initialStatus.projections.publicAggregates.durationGenerationReady).toBe(false);
+
+    for (let step = 0; step < 30; step++) {
+      await advanceProjectionFor(db, {
+        action: "repair",
+        includeStatus: false,
+        limit: 1,
+        target: "public_aggregates",
+      });
+      if ((await getProjectionStatusFor(db)).projections.publicAggregates.durationGenerationReady) {
+        const marker = await db.execute({
+          args: [PUBLIC_AGGREGATE_DURATION_GENERATION_KEY],
+          sql: "select value from settings where key = ?",
+        });
+        const state = await db.execute(
+          "select generation, completed_at from public_aggregate_state where scope = 'tracks'",
+        );
+        const generation = state.rows[0]?.generation;
+        const completedAt = state.rows[0]?.completed_at;
+        if (typeof generation !== "string" || typeof completedAt !== "string") {
+          throw new Error("aggregate rebuild did not complete");
+        }
+        expect(marker.rows[0]?.value).toBe(`${generation}:${completedAt}`);
+        return;
+      }
+    }
+    throw new Error("aggregate duration generation did not land within 30 bounded steps");
+  });
+
+  it("finishes one bounded duration generation despite a new track and changed key between steps", async () => {
+    await db.executeMultiple(`
+      insert into tracks (track_id, release_date, key) values
+        ('a', '2026-01-01', 'Am'), ('b', '2026-01-01', 'Bm');
+      delete from settings where key = '${PUBLIC_AGGREGATE_DURATION_GENERATION_KEY}';
+    `);
+
+    await advanceProjectionFor(db, {
+      action: "repair",
+      includeStatus: false,
+      limit: 1,
+      target: "public_aggregates",
+    });
+    const opened = await db.execute(
+      "select generation, state from public_aggregate_state where scope = 'tracks'",
+    );
+    const generation = opened.rows[0]?.generation;
+    if (typeof generation !== "string") {
+      throw new Error("aggregate generation did not open");
+    }
+    expect(opened.rows[0]?.state).toBe("running");
+
+    await db.batch(
+      [
+        {
+          args: [],
+          sql: "insert into tracks (track_id, release_date, key) values ('0', '2026-01-01', 'Cm')",
+        },
+        ...markPublicTrackSourceChangedStatements(
+          "0",
+          publicTrackSourceVersion({ key: "Cm", releaseDate: "2026-01-01" }),
+          { now: "2026-01-02T00:00:00.000Z" },
+        ),
+        { args: [], sql: "update tracks set key = 'Dm' where track_id = 'a'" },
+        ...markPublicTrackSourceChangedStatements(
+          "a",
+          publicTrackSourceVersion({ key: "Dm", releaseDate: "2026-01-01" }),
+          { now: "2026-01-02T00:00:00.000Z" },
+        ),
+      ],
+      "write",
+    );
+
+    for (let step = 0; step < 20; step += 1) {
+      await advanceProjectionFor(db, {
+        action: "repair",
+        includeStatus: false,
+        limit: 1,
+        target: "public_aggregates",
+      });
+      const state = await db.execute(
+        "select generation, state, completed_at from public_aggregate_state where scope = 'tracks'",
+      );
+      expect(state.rows[0]?.generation).toBe(generation);
+      if (state.rows[0]?.state === "complete") {
+        const completedAt = state.rows[0]?.completed_at;
+        if (typeof completedAt !== "string") {
+          throw new Error("aggregate generation has no completion timestamp");
+        }
+        const marker = await db.execute({
+          args: [PUBLIC_AGGREGATE_DURATION_GENERATION_KEY],
+          sql: "select value from settings where key = ?",
+        });
+        expect(marker.rows[0]?.value).toBe(`${generation}:${completedAt}`);
+        await db.execute(`insert into settings (key, value)
+          values ('public_projection_cutover_enabled', 'true')`);
+        expect(await readProjectedDefaultTrackTotal(db)).toBeUndefined();
+        for (let repairStep = 0; repairStep < 10; repairStep += 1) {
+          await advanceProjectionFor(db, {
+            action: "repair",
+            includeStatus: false,
+            limit: 1,
+            target: "public_aggregates",
+          });
+          const settled = await db.execute(`select generation, source_epoch, aggregate_epoch,
+            (select count(*) from projection_repairs where projection = 'public_aggregates')
+              as repairs from public_aggregate_state where scope = 'tracks'`);
+          expect(settled.rows[0]?.generation).toBe(generation);
+          if (
+            Number(settled.rows[0]?.repairs) === 0 &&
+            settled.rows[0]?.source_epoch === settled.rows[0]?.aggregate_epoch
+          ) {
+            const membership = await db.execute(
+              "select track_id, key_bucket from public_aggregate_membership order by track_id",
+            );
+            expect(membership.rows).toEqual([
+              { key_bucket: "Cm", track_id: "0" },
+              { key_bucket: "Dm", track_id: "a" },
+              { key_bucket: "Bm", track_id: "b" },
+            ]);
+            expect(await readProjectedDefaultTrackTotal(db)).toBe(3);
+            return;
+          }
+        }
+        throw new Error("aggregate repair debt did not drain after the bounded generation");
+      }
+    }
+    throw new Error("duration generation did not finish within 20 bounded steps");
+  });
 
   it("reports dark readiness and opens only fixed setting keys", async () => {
     const before = await getProjectionStatusFor(db);
@@ -1593,6 +1739,10 @@ describe("projection production operations", () => {
       set generation = 'maintenance', release_hub_order_epoch = 1,
           source_epoch = 1, aggregate_epoch = 1
       where scope = 'tracks'`);
+    await db.execute({
+      args: [`maintenance:2026-01-01`, PUBLIC_AGGREGATE_DURATION_GENERATION_KEY],
+      sql: "update settings set value = ? where key = ?",
+    });
 
     let complete = false;
     let totalProcessed = 0;
@@ -2081,6 +2231,10 @@ describe("projection production operations", () => {
       set default_track_total = 250, projected_entry_count = 250,
           generation = 'same-generation', release_hub_order_epoch = 1
       where scope = 'tracks'`);
+    await db.execute({
+      args: [`same-generation:2026-01-01`, PUBLIC_AGGREGATE_DURATION_GENERATION_KEY],
+      sql: "update settings set value = ? where key = ?",
+    });
 
     let complete = false;
     for (let step = 0; step < 10 && !complete; step += 1) {

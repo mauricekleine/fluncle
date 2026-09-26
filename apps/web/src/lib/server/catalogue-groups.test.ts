@@ -11,6 +11,7 @@ vi.mock("./db", async (importOriginal) => {
 
 import { backfillArtistLinks } from "../../../scripts/backfill-artist-links";
 import { ARTIST_CATALOGUE_SORT_DEFAULT } from "../../routes/artist.$slug";
+import { LONG_FORM_MS } from "../catalogue-eligibility";
 import { getArtistBySlug } from "./artists";
 import {
   CataloguePageOutOfRangeError,
@@ -56,6 +57,7 @@ async function seedCatalogueTrack(options: {
   album: null | string;
   artists: string[];
   dismissedAt?: string;
+  durationMs?: number;
   duplicateOfTrackId?: string;
   isrc?: string;
   labelId: string;
@@ -78,11 +80,12 @@ async function seedCatalogueTrack(options: {
       options.isrc ?? null,
       options.duplicateOfTrackId ?? null,
       options.dismissedAt ?? null,
+      options.durationMs ?? 0,
     ],
     sql: `insert into tracks
             (track_id, title, artists_json, album, label_id, release_date, spotify_url,
              isrc, duplicate_of_track_id, dismissed_at, duration_ms)
-          values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+          values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   });
 }
 
@@ -126,6 +129,40 @@ beforeEach(async () => {
 });
 
 describe("upcoming entity tracks", () => {
+  it("omits long catalogue rows and keeps a long finding", async () => {
+    await seedArtist("art_future", "Future Artist", "future-artist");
+    for (const [trackId, releaseDate] of [
+      ["long-released", "2026-09-01"],
+      ["long-upcoming", "2026-11-01"],
+      ["long-finding", "2026-11-01"],
+    ] as const) {
+      await seedCatalogueTrack({
+        album: "Long Album",
+        artists: ["Future Artist"],
+        durationMs: LONG_FORM_MS,
+        labelId: "lbl_1",
+        releaseDate,
+        trackId,
+      });
+      await db.execute({
+        args: [trackId],
+        sql: `insert into track_artists (track_id, artist_id, position)
+              values (?, 'art_future', 1)`,
+      });
+    }
+    await db.execute(`insert into findings (track_id, log_id, added_at)
+      values ('long-finding', '100.1.1A', '2026-09-01T00:00:00.000Z')`);
+
+    expect((await listArtistCatalogue("art_future", "name", 1, "2026-10-01")).totalTracks).toBe(0);
+    expect((await listLabelCatalogue("lbl_1", "name", 1, "2026-10-01")).totalTracks).toBe(0);
+    const artist = await listArtistUpcoming("art_future", "2026-10-01");
+    const label = await listLabelUpcoming("lbl_1", "2026-10-01");
+    expect(artist.tracks).toEqual([]);
+    expect(label.tracks).toEqual([]);
+    expect(artist.findings.map((finding) => finding.trackId)).toEqual(["long-finding"]);
+    expect(label.findings.map((finding) => finding.trackId)).toEqual(["long-finding"]);
+  });
+
   it("keeps a future finding credited only in artists_json on its artist page", async () => {
     await seedArtist("art_future", "Future Artist", "future-artist");
     await seedCertifiedFinding("future-no-edge", "art_future", "Future Artist");
@@ -222,7 +259,8 @@ describe("upcoming entity tracks", () => {
 
       expect(pageRoot, sql).toBeDefined();
 
-      expect(page).not.toMatch(/\b(?:al|albums|findings)\b/);
+      expect(page).not.toMatch(/\b(?:al|albums)\b/);
+      expect(page).not.toMatch(/SEARCH findings USING (?!COVERING INDEX)/);
 
       expect(outside).toMatch(/SEARCH al USING INTEGER PRIMARY KEY|SEARCH al USING INDEX/);
       expect(outside).toMatch(/SEARCH findings USING/);

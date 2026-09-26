@@ -10,6 +10,7 @@ import {
   PUBLIC_ANCHOR_LEAF_SPLIT_ROWS,
 } from "./public-anchor-amendments";
 import {
+  PUBLIC_AGGREGATE_DURATION_GENERATION_KEY,
   PUBLIC_PROJECTION_CUTOVER_ENABLED_KEY,
   publicAnchorOrderChangeKey,
   readProjectedAnchorLeafForPageStart,
@@ -61,8 +62,9 @@ describe("page-local public anchor maintenance", () => {
       args: [EMPTY_DIGEST, EMPTY_DIGEST],
       sql: `insert into public_aggregate_state
         (scope, state, scanned_count, projected_entry_count, source_digest, projected_digest,
-         source_epoch, aggregate_epoch, default_track_total, release_hub_order_epoch, generation)
-        values ('tracks', 'complete', 0, 0, ?, ?, 0, 0, 0, 1, 'leaf')`,
+         source_epoch, aggregate_epoch, default_track_total, release_hub_order_epoch, generation,
+         completed_at)
+        values ('tracks', 'complete', 0, 0, ?, ?, 0, 0, 0, 1, 'leaf', '2026-01-01T00:00:00.000Z')`,
     });
     await db.execute({
       args: [EMPTY_DIGEST, EMPTY_DIGEST],
@@ -72,6 +74,10 @@ describe("page-local public anchor maintenance", () => {
     });
     await db.execute({
       args: [PUBLIC_PROJECTION_CUTOVER_ENABLED_KEY, "true"],
+      sql: `insert into settings (key, value) values (?, ?)`,
+    });
+    await db.execute({
+      args: [PUBLIC_AGGREGATE_DURATION_GENERATION_KEY, "leaf:2026-01-01T00:00:00.000Z"],
       sql: `insert into settings (key, value) values (?, ?)`,
     });
   });

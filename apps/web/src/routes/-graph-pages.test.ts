@@ -71,10 +71,10 @@ function labelHeadTitle(data: unknown): string | undefined {
 const LABEL = {
   id: "lbl_1",
   name: "Hospital Records",
-  renderableTrackCount: 0,
+  renderableTrackCount: 1,
   slug: "hospital-records",
 };
-const ALBUM = { id: "alb_1", name: "Wormhole", slug: "wormhole" };
+const ALBUM = { id: "alb_1", name: "Wormhole", renderableTrackCount: 1, slug: "wormhole" };
 
 function findings(count: number) {
   return Array.from({ length: count }, (_value, index) => ({
@@ -312,6 +312,13 @@ describe("the label page", () => {
 });
 
 describe("the album page", () => {
+  it("404s a zero-public-track album even when a raw tracklist row exists", async () => {
+    getAlbumBySlug.mockResolvedValue({ ...ALBUM, renderableTrackCount: 0 });
+    listCatalogueTracksByAlbum.mockResolvedValue(albumCatalogue(1));
+
+    expect(await resolveAlbumPageData("wormhole")).toEqual({ status: "missing" });
+  });
+
   it("404s on a slug with no album entity", async () => {
     getAlbumBySlug.mockResolvedValue(undefined);
 
@@ -319,6 +326,7 @@ describe("the album page", () => {
   });
 
   it("SERVES a findings-free album — a discography is a page (the album twin of the label reversal)", async () => {
+    getAlbumBySlug.mockResolvedValue({ ...ALBUM, renderableTrackCount: 12 });
     getFindingsByAlbum.mockResolvedValue([]);
     listCatalogueTracksByAlbum.mockResolvedValue(albumCatalogue(12));
 
@@ -346,6 +354,7 @@ describe("the album page", () => {
   });
 
   it("counts the quieter rows toward the floor — a one-finding record with a tracklist indexes", async () => {
+    getAlbumBySlug.mockResolvedValue({ ...ALBUM, renderableTrackCount: 10 });
     getFindingsByAlbum.mockResolvedValue(findings(1));
     listCatalogueTracksByAlbum.mockResolvedValue(albumCatalogue(9));
 

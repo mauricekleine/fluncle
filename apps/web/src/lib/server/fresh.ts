@@ -1,6 +1,7 @@
 import { type FreshTrack } from "@fluncle/contracts";
 import { bestAlbumCoverUrl, bestArtistAvatarUrl } from "../media";
 import { hasPreviewSource } from "../track-preview";
+import { publicTrackDurationWhere } from "../../db/public-track-visibility";
 import { parseArtistsJson } from "./artists";
 import { listedArtistWhere } from "./artist-visibility";
 import { getDb, typedRows } from "./db";
@@ -230,6 +231,7 @@ export async function listFreshReleases(
             from tracks
             ${LEAD_ARTIST_JOIN}
             where tracks.is_catalogue = 1
+              and ${publicTrackDurationWhere("tracks")}
               and tracks.release_date >= ? and ${datedReleaseByTodaySql("tracks.release_date")}
             order by tracks.release_date desc, tracks.track_id desc
             limit ?`,
@@ -291,12 +293,14 @@ export async function listFreshRecords(now: Date = new Date()): Promise<FreshRec
                  (select t2.album_image_url
                     from tracks t2
                     where t2.album_id = al.id and t2.album_image_url is not null
+                      and ${publicTrackDurationWhere("t2")}
                     order by t2.release_date is null asc, t2.release_date desc, t2.track_id asc
                     limit 1) as cover_url
           from tracks
           join albums al on al.id = tracks.album_id
           join json_each(tracks.artists_json) credit
           where tracks.release_date >= ? and ${datedReleaseByTodaySql("tracks.release_date")}
+            and ${publicTrackDurationWhere("tracks")}
           group by al.id
           order by max(tracks.release_date) desc, min(al.name) collate nocase asc
           limit ?`,
