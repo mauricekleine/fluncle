@@ -19,6 +19,13 @@ import {
   resolveAnchorReview,
 } from "../anchor";
 import {
+  CrawlHoldAlreadyReleasedError,
+  CrawlHoldCursorError,
+  CrawlHoldNotFoundError,
+  listCrawlHolds,
+  resolveCrawlHold,
+} from "../crawl-plausibility";
+import {
   getAnchorApifyBudget,
   isAnchorApifyEnabled,
   setAnchorApifyDailyRows,
@@ -621,6 +628,45 @@ export function adminCatalogueHandlers(os: Implementer) {
       }
     });
 
+  const listCrawlHoldsHandler = os.list_crawl_holds.use(adminAuth).handler(async ({ input }) => {
+    try {
+      const page = await listCrawlHolds({
+        ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
+        ...(input.limit === undefined ? {} : { limit: input.limit }),
+        ...(input.state === undefined ? {} : { state: input.state }),
+      });
+
+      return { ...page, ok: true as const };
+    } catch (error) {
+      if (error instanceof CrawlHoldCursorError) {
+        throw new ORPCError("BAD_REQUEST", { message: error.message, status: 400 });
+      }
+
+      throw apiFault(error);
+    }
+  });
+
+  const resolveCrawlHoldHandler = os.resolve_crawl_hold
+    .use(adminAuth)
+    .use(operatorGuard)
+    .handler(async ({ input }) => {
+      try {
+        const { state } = await resolveCrawlHold(input.releaseMbid, input.decision);
+
+        return { ok: true as const, state };
+      } catch (error) {
+        if (error instanceof CrawlHoldNotFoundError) {
+          throw new ORPCError("NOT_FOUND", { message: error.message, status: 404 });
+        }
+
+        if (error instanceof CrawlHoldAlreadyReleasedError) {
+          throw new ORPCError("CONFLICT", { message: error.message, status: 409 });
+        }
+
+        throw apiFault(error);
+      }
+    });
+
   const resolveAnchorReviewHandler = os.resolve_anchor_review
     .use(adminAuth)
     .use(operatorGuard)
@@ -833,6 +879,7 @@ export function adminCatalogueHandlers(os: Implementer) {
     get_pipeline: getPipelineHandler,
     get_spotify_anchor_breaker: getSpotifyAnchorBreakerHandler,
     list_catalogue_tracks: listCatalogueTracksHandler,
+    list_crawl_holds: listCrawlHoldsHandler,
     list_unverified_captures: listUnverifiedCapturesHandler,
     prepare_anchor: prepareAnchorHandler,
     prepare_anchor_batch: prepareAnchorBatchHandler,
@@ -848,6 +895,7 @@ export function adminCatalogueHandlers(os: Implementer) {
     resolve_anchor_candidate: resolveAnchorCandidateHandler,
     resolve_anchor_paid_result: resolveAnchorPaidResultHandler,
     resolve_anchor_review: resolveAnchorReviewHandler,
+    resolve_crawl_hold: resolveCrawlHoldHandler,
     set_anchor_apify: setAnchorApifyHandler,
     set_anchor_apify_budget: setAnchorApifyBudgetHandler,
     set_anchor_search: setAnchorSearchHandler,

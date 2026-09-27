@@ -29,6 +29,7 @@ const SETTINGS_INVENTORY = {
   ],
   "clip-social.ts": ["clip_drip_paused"],
   "crawl-cutover.ts": ["crawl_box_fetch_enabled", "crawl_due_cutover_enabled"],
+  "crawl-plausibility.ts": ["crawl_plausibility_hold_enabled"],
   "due-work-cutover.ts": ["track_work_due_cutover_enabled"],
   "env.ts": ["admin_grant_epoch"],
   "follow-digest.ts": ["follow_digest_paused"],
@@ -170,7 +171,7 @@ describe("settings inventory drift", () => {
     expect(orphaned, "Registered settings keys with no reader and no writer").toEqual([]);
     expect(unregistered, "Settings keys used by code but missing from the inventory").toEqual([]);
     expect(wrongOwner, "Settings keys used outside their registered owner module").toEqual([]);
-    expect(registered.size).toBe(49);
-    expect(Object.keys(SETTINGS_INVENTORY)).toHaveLength(22);
+    expect(registered.size).toBe(50);
+    expect(Object.keys(SETTINGS_INVENTORY)).toHaveLength(23);
   });
 });

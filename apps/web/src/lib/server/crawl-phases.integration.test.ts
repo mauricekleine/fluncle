@@ -21,6 +21,7 @@ import {
   prepareCrawlPhase,
 } from "./crawl";
 import { CRAWL_BOX_FETCH_ENABLED_KEY, CRAWL_DUE_CUTOVER_ENABLED_KEY } from "./crawl-cutover";
+import { resolveCrawlHold } from "./crawl-plausibility";
 import { setMusicbrainzRateLimitForTests } from "./musicbrainz";
 import { mergeLabel } from "./labels";
 
@@ -320,6 +321,37 @@ describe("crawl admission phases", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it("holds an implausibly credited release inside the admitted commit and stores it once released", async () => {
+    await db.execute("update labels set founding_date = '2009' where id = 'label-phase'");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        Promise.resolve(new Response(JSON.stringify({ ...providerRelease(1), date: "1969" }))),
+      ),
+    );
+
+    const held = await commitCrawlPhase(await prepareAndFetch());
+    expect(held).toMatchObject({
+      outcome: "committed",
+      result: { releaseDetailsStored: 0, tracksHeldImplausible: 1, tracksWritten: 0 },
+    });
+    expect(
+      (
+        await db.execute(
+          "select state from crawl_release_holds where release_mbid = 'release-phase'",
+        )
+      ).rows[0]?.state,
+    ).toBe("held");
+
+    await resolveCrawlHold("release-phase", "store");
+    const rearmed = await prepareCrawlPhase({ limit: 1, maxHop: 2 });
+    expect(rearmed.items[0]?.nodeId).toBe("musicbrainz:release:release-phase");
+    const stored = await commitCrawlPhase(
+      await fetchCrawlPhase(rearmed.items[0]?.preparedToken ?? ""),
+    );
+    expect(stored).toMatchObject({ result: { releaseDetailsStored: 1, tracksWritten: 1 } });
+  });
+
   it("still fetches an undecided-label terminal release", async () => {
     await db.execute("update labels set seed_state = 'undecided' where id = 'label-phase'");
     await db.execute(`update crawl_frontier set hop = 2, release_label_slug = 'phase-label'
@@ -605,7 +637,10 @@ describe("crawl admission phases", () => {
       "fetch",
       vi.fn(() =>
         Promise.resolve(
-          new Response(JSON.stringify(providerReleaseWithArtistCount(100, 0, 1)), { status: 200 }),
+          new Response(
+            JSON.stringify({ ...providerReleaseWithArtistCount(100, 0, 1), date: "2013-06-10" }),
+            { status: 200 },
+          ),
         ),
       ),
     );
@@ -622,7 +657,7 @@ describe("crawl admission phases", () => {
     expect((await db.execute("select count(*) as n from tracks")).rows[0]?.n).toBe(100);
     expect(
       instrumented.counts.execute + instrumented.counts.batch + instrumented.counts.commit,
-    ).toBe(22);
+    ).toBe(24);
     expect(instrumented.counts.maxBatchStatements).toBe(500);
   });
 
