@@ -163,6 +163,27 @@ describe("listTracksHubSoundPage — a style re-ranks, the filters pre-filter", 
     expect(ids(page.hub.items)).toEqual(["f-exact", "a-near", "a-mid"]);
   });
 
+  it("counts only public catalogue hits in a Sonar-ranked total", async () => {
+    await seedTrack({ angle: 0.5, releaseDate: "2020-01-01", trackId: "a-spoken" });
+    await db.execute(`update tracks set title = 'Rewind (Commentary)' where track_id = 'a-spoken'`);
+    isSonarSonicEnabled.mockResolvedValue(true);
+    searchSonar.mockImplementation(async ({ filter }: { filter: { has_finding: boolean } }) =>
+      filter.has_finding
+        ? []
+        : [
+            { id: "a-spoken", score: 1 },
+            { id: "a-near", score: 0.99 },
+            { id: "a-mid", score: 0.9 },
+          ],
+    );
+
+    const page = await listTracksHubSoundPage({ bpmMin: 170 }, liquid, 1, NOW);
+
+    expect(page.ranked).toBe(true);
+    expect(ids(page.hub.items)).toEqual(["a-near", "a-mid"]);
+    expect(page.hub.total).toBe(2);
+  });
+
   it("falls back to the newest-first list, flagged, when the ranking cannot run", async () => {
     const page = await listTracksHubSoundPage({}, liquid, 1, NOW);
     const newest = await listTracksHubPage({}, 1, NOW);

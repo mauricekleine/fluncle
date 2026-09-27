@@ -9,6 +9,7 @@ export const AttentionSourceSchema = z
     "attach-cues",
     "bio-review",
     "capture-suspect",
+    "crawl-hold",
     "distribute",
     "drip-empty",
     "label-review",

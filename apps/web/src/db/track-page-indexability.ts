@@ -1,4 +1,4 @@
-import { catalogueTrackDurationWhere } from "./public-track-visibility";
+import { catalogueTrackPublicWhere } from "./public-track-visibility";
 
 export const TRACK_PAGE_INDEXABLE_LEGACY_COUNT_INDEX = "tracks_sitemap_indexable_track_id_idx";
 
@@ -43,7 +43,7 @@ export function trackPageIndexableIndexWhere(table?: string): string {
 
 export function trackPageIndexableWhere(table?: string): string {
   return `${trackPageIndexableIndexWhere(table)}
-      and ${catalogueTrackDurationWhere(table)}`;
+      and ${catalogueTrackPublicWhere(table)}`;
 }
 
 export function trackPageIndexableCountQueryWhere(

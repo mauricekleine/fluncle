@@ -2,7 +2,12 @@ import { type Client } from "@libsql/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { EMBEDDING_DIMS } from "./embedding";
-import { createIntegrationDb, seedEmbedding, seedTrack } from "./integration-db";
+import {
+  createIntegrationDb,
+  seedCatalogueTrack,
+  seedEmbedding,
+  seedTrack,
+} from "./integration-db";
 
 const isSonarArtistsEnabled = vi.hoisted(() => vi.fn<() => Promise<boolean>>());
 const isSonarLogEnabled = vi.hoisted(() => vi.fn<() => Promise<boolean>>());
@@ -272,6 +277,30 @@ describe("getMixableTracks — the /mix sonar route (dark)", () => {
 
     expect(rail[0]?.certified).toBe(true);
     expect(rail[0]?.logId).toBe("301.1.1A");
+  });
+
+  it("asks again past a hidden spoken-word catalogue hit so the shortlist stays full", async () => {
+    await seedMix(MIX_ROWS);
+    await seedCatalogueTrack(db, { title: "Rewind (Commentary)", trackId: "t_spoken" });
+    const ranked = [
+      "t_spoken",
+      "t_near",
+      "t_far",
+      ...MIX_FILLER_MATCHES.map((match) => match.id),
+      ...Array.from({ length: TASTE_SHORTLIST }, (_, index) => `t_unseeded_${index}`),
+    ];
+    isSonarMixEnabled.mockResolvedValue(true);
+    searchSonar.mockImplementation(async ({ topK }: { topK: number }) =>
+      ranked.slice(0, topK).map((id, index) => ({ id, score: 1 - index / 1000 })),
+    );
+
+    const rail = await getMixableTracks("t_tail", { limit: 12 });
+
+    expect(searchSonar).toHaveBeenCalledTimes(2);
+    const secondAsk = searchSonar.mock.calls[1]?.[0] as { topK: number } | undefined;
+    expect(secondAsk?.topK ?? 0).toBeGreaterThan(TASTE_SHORTLIST);
+    expect(rail.map((candidate) => candidate.trackId)).not.toContain("t_spoken");
+    expect(rail.map((candidate) => candidate.trackId)).toContain("t_near");
   });
 
   it("falls back to the Turso scan when sonar answers null (off/unprovisioned/down)", async () => {

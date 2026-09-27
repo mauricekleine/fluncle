@@ -376,6 +376,38 @@ describe("public search duration boundary", () => {
     expect((await searchArchive({ q: "024.7.2R" })).results[0]?.trackId).toBe("certified-1991");
     expect((await searchArchive({ q: "clouds" })).results[0]?.trackId).toBe("certified-1991");
   });
+
+  it("hides a spoken-word catalogue recording from text, filters, links, and sonic seeds while retaining a spoken-word finding", async () => {
+    const hiddenUri = "spotify:track:9Z8y7X6w5V4u3T2s1R0qPo";
+    await db.execute({
+      args: [hiddenUri, "uncertified-netsky"],
+      sql: "update tracks set title = 'Rio (Commentary)', spotify_uri = ? where track_id = ?",
+    });
+    await db.execute({
+      args: ["certified-1991"],
+      sql: "update tracks set title = 'Nine Clouds (Interview)' where track_id = ?",
+    });
+
+    expect((await searchArchive({ q: "Rio" })).results).toEqual([]);
+    expect((await searchArchive({ q: hiddenUri })).results).toEqual([]);
+    expect((await searchArchive({ q: "Netsky" })).results.map((hit) => hit.trackId)).toEqual([
+      "certified-netsky",
+    ]);
+    expect(await searchLikeTrack({ trackId: "uncertified-netsky" })).toBeNull();
+    expect((await searchArchive({ q: "024.7.2R" })).results[0]?.trackId).toBe("certified-1991");
+    expect((await searchArchive({ q: "clouds" })).results[0]?.trackId).toBe("certified-1991");
+  });
+
+  it("keeps a catalogue song whose title only contains a qualifier word", async () => {
+    await db.execute({
+      args: ["uncertified-netsky"],
+      sql: "update tracks set title = 'Interview With The Vampire' where track_id = ?",
+    });
+
+    expect(
+      (await searchArchive({ q: "Interview With The Vampire" })).results.map((hit) => hit.trackId),
+    ).toEqual(["uncertified-netsky"]);
+  });
 });
 
 describe("tier 2 — an exact entity name", () => {

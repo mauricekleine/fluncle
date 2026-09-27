@@ -58,6 +58,8 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
 
   "GET /admin/catalogue/crawl": "get_crawl_status",
 
+  "GET /admin/catalogue/holds": "list_crawl_holds",
+
   "GET /admin/catalogue/label-releases-budget": "get_label_releases_budget",
 
   "GET /admin/catalogue/pipeline": "get_pipeline",
@@ -280,6 +282,8 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   "POST /admin/catalogue/demand": "record_demand",
 
   "POST /admin/catalogue/force-capture": "force_capture",
+
+  "POST /admin/catalogue/holds/{releaseMbid}/resolve": "resolve_crawl_hold",
 
   "POST /admin/catalogue/isrc-recovery/requeue": "requeue_isrc_recovery",
 

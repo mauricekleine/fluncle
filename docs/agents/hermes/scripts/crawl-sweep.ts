@@ -135,6 +135,8 @@ type SweepSummary = {
 
   throttles: number;
   tracksFound: number;
+
+  tracksHeldImplausible: number;
   tracksSkipped: number;
 
   tracksSkippedArtistRule: number;
@@ -386,6 +388,7 @@ function createSummary(): SweepSummary {
     throttled: false,
     throttles: 0,
     tracksFound: 0,
+    tracksHeldImplausible: 0,
     tracksSkipped: 0,
     tracksSkippedArtistRule: 0,
     tracksSkippedHeld: 0,
@@ -521,6 +524,7 @@ function applyLegacyPass(summary: SweepSummary, pass: JsonObject): void {
   summary.tracksSkipped = Number(pass.tracksSkipped ?? 0);
   summary.tracksSkippedArtistRule = Number(pass.tracksSkippedArtistRule ?? 0);
   summary.tracksSkippedHeld = Number(pass.tracksSkippedHeld ?? 0);
+  summary.tracksHeldImplausible = Number(pass.tracksHeldImplausible ?? 0);
   summary.tracksSkippedLabelGate = Number(pass.tracksSkippedLabelGate ?? 0);
 }
 
@@ -554,6 +558,7 @@ function applyReceipt(summary: SweepSummary, committed: ReceiptEnvelope): NodeOu
   summary.tracksSkipped += Number(result.tracksSkipped ?? 0);
   summary.tracksSkippedArtistRule += Number(result.tracksSkippedArtistRule ?? 0);
   summary.tracksSkippedHeld += Number(result.tracksSkippedHeld ?? 0);
+  summary.tracksHeldImplausible += Number(result.tracksHeldImplausible ?? 0);
   summary.tracksSkippedLabelGate += Number(result.tracksSkippedLabelGate ?? 0);
   if (result.rateLimited === true) {
     summary.throttled = true;

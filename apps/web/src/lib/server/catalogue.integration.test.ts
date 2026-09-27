@@ -711,7 +711,29 @@ describe("the read — the ranked page, and the WHY on every row", () => {
 
     expect(longRows.map((track) => track.trackId)).toEqual(["cat-long"]);
     expect(longRows[0]?.hiddenFromPublic).toBe(true);
+    expect(longRows[0]?.hiddenReason).toBe("long_form");
     expect((await listCatalogueTracks("dismissed")).map((track) => track.trackId)).toEqual([]);
+  });
+
+  it("marks a spoken-word catalogue row hidden with its reason while keeping it out of the long lens", async () => {
+    const { listCatalogueTracks } = await import("./catalogue");
+
+    await seedCatalogue("cat-spoken");
+    await seedCatalogue("cat-music");
+    await db.execute(
+      `update tracks set nearest_finding_score = 0.5,
+         title = case when track_id = 'cat-spoken' then 'Rewind (Commentary)' else 'Rewind' end
+       where track_id in ('cat-spoken', 'cat-music')`,
+    );
+
+    const ear = await listCatalogueTracks("ear");
+    const byId = new Map(ear.map((track) => [track.trackId, track]));
+
+    expect(byId.get("cat-spoken")?.hiddenReason).toBe("spoken_word");
+    expect(byId.get("cat-spoken")?.hiddenFromPublic).toBe(true);
+    expect(byId.get("cat-music")?.hiddenReason).toBeNull();
+    expect(byId.get("cat-music")?.hiddenFromPublic).toBe(false);
+    expect((await listCatalogueTracks("long")).map((track) => track.trackId)).toEqual([]);
   });
 
   it("orders The Ear by score, DESC, and carries the finding each row matched", async () => {

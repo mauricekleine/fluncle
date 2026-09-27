@@ -10,10 +10,10 @@ import {
   seedTrack,
 } from "../src/lib/server/integration-db";
 import {
-  LONG_GRAPH_REPAIR_COMPLETE_VALUE,
-  LONG_GRAPH_REPAIR_MARKER_KEY,
-  repairLongGraphCounts,
-} from "./repair-long-graph-counts";
+  LONG_FORM_GRAPH_REPAIR,
+  repairHiddenGraphCounts,
+  SPOKEN_WORD_GRAPH_REPAIR,
+} from "./repair-hidden-graph-counts";
 
 let db: Client;
 
@@ -55,9 +55,9 @@ afterEach(() => {
   db.close();
 });
 
-describe("repairLongGraphCounts", () => {
+describe("repairHiddenGraphCounts long-form pass", () => {
   it("removes only hidden memberships and repairs latest dates once", async () => {
-    const first = await repairLongGraphCounts(db);
+    const first = await repairHiddenGraphCounts(db, LONG_FORM_GRAPH_REPAIR);
     expect(first).toEqual({ repaired: 3, skipped: false });
 
     for (const table of ["albums", "labels", "artists"]) {
@@ -68,11 +68,14 @@ describe("repairLongGraphCounts", () => {
     }
 
     const marker = await db.execute({
-      args: [LONG_GRAPH_REPAIR_MARKER_KEY],
+      args: [LONG_FORM_GRAPH_REPAIR.markerKey],
       sql: `select value from settings where key = ?`,
     });
-    expect(marker.rows[0]?.value).toBe(LONG_GRAPH_REPAIR_COMPLETE_VALUE);
-    expect(await repairLongGraphCounts(db)).toEqual({ repaired: 0, skipped: true });
+    expect(marker.rows[0]?.value).toBe(LONG_FORM_GRAPH_REPAIR.completeValue);
+    expect(await repairHiddenGraphCounts(db, LONG_FORM_GRAPH_REPAIR)).toEqual({
+      repaired: 0,
+      skipped: true,
+    });
   });
 
   it("resumes after a failed page without subtracting the completed page twice", async () => {
@@ -116,17 +119,90 @@ describe("repairLongGraphCounts", () => {
         db.execute(...args)) as Client["execute"],
     } as Client;
 
-    await expect(repairLongGraphCounts(interrupted)).rejects.toThrow("interrupted");
+    await expect(repairHiddenGraphCounts(interrupted, LONG_FORM_GRAPH_REPAIR)).rejects.toThrow(
+      "interrupted",
+    );
     const marker = await db.execute({
-      args: [LONG_GRAPH_REPAIR_MARKER_KEY],
+      args: [LONG_FORM_GRAPH_REPAIR.markerKey],
       sql: `select value from settings where key = ?`,
     });
     expect(marker.rows[0]?.value).toMatch(/^running:long-/);
 
-    expect(await repairLongGraphCounts(db)).toEqual({ repaired: 3, skipped: false });
+    expect(await repairHiddenGraphCounts(db, LONG_FORM_GRAPH_REPAIR)).toEqual({
+      repaired: 3,
+      skipped: false,
+    });
     for (const table of ["albums", "labels", "artists"]) {
       const result = await db.execute(`select renderable_track_count as n from ${table}`);
       expect(result.rows[0]?.n).toBe(1);
     }
+  });
+});
+
+describe("repairHiddenGraphCounts spoken-word pass", () => {
+  beforeEach(async () => {
+    await seedCatalogueTrack(db, { title: "Had a Little Fight (Commentary)", trackId: "spoken" });
+    await seedCatalogueTrack(db, { title: "Interview With The Vampire", trackId: "song" });
+    await seedTrack(db, {
+      logId: "100.1.2A",
+      title: "Certified (Commentary)",
+      trackId: "spoken-finding",
+    });
+    await db.batch(
+      [
+        `update tracks set album_id = 'alb-one', label_id = 'lab-one', release_date = '2022-01-01'
+         where track_id in ('spoken', 'song', 'spoken-finding')`,
+        `update tracks set release_date = '2023-01-01' where track_id = 'spoken'`,
+        `insert into track_artists (track_id, artist_id, position)
+         values ('spoken', 'art-one', 1), ('song', 'art-one', 1), ('spoken-finding', 'art-one', 1)`,
+      ],
+      "write",
+    );
+  });
+
+  it("subtracts only non-finding spoken-word catalogue tracks the long-form pass left counted", async () => {
+    expect(await repairHiddenGraphCounts(db, LONG_FORM_GRAPH_REPAIR)).toEqual({
+      repaired: 3,
+      skipped: false,
+    });
+    await db.batch(
+      ["albums", "labels", "artists"].map(
+        (table) =>
+          `update ${table} set renderable_track_count = 4, latest_release_date = '2023-01-01'`,
+      ),
+      "write",
+    );
+
+    expect(await repairHiddenGraphCounts(db, SPOKEN_WORD_GRAPH_REPAIR)).toEqual({
+      repaired: 1,
+      skipped: false,
+    });
+
+    for (const table of ["albums", "labels", "artists"]) {
+      const result = await db.execute(
+        `select renderable_track_count as n, latest_release_date as latest from ${table}`,
+      );
+      expect(result.rows[0]).toEqual({ latest: "2022-01-01", n: 3 });
+    }
+    expect(await repairHiddenGraphCounts(db, SPOKEN_WORD_GRAPH_REPAIR)).toEqual({
+      repaired: 0,
+      skipped: true,
+    });
+  });
+
+  it("skips every pass once the hub-count backfill applied the current visibility rule", async () => {
+    await db.execute({
+      args: ["backfill_hub_counts_v3_state", "complete:v3"],
+      sql: `insert into settings (key, value) values (?, ?)`,
+    });
+
+    expect(await repairHiddenGraphCounts(db, SPOKEN_WORD_GRAPH_REPAIR)).toEqual({
+      repaired: 0,
+      skipped: true,
+    });
+    expect(await repairHiddenGraphCounts(db, LONG_FORM_GRAPH_REPAIR)).toEqual({
+      repaired: 0,
+      skipped: true,
+    });
   });
 });

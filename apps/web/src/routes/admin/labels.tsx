@@ -2,6 +2,7 @@ import {
   CheckCircleIcon,
   CircleNotchIcon,
   DotsThreeVerticalIcon,
+  PauseCircleIcon,
   PlusIcon,
   ProhibitIcon,
   TagIcon,
@@ -14,6 +15,7 @@ import { Fragment, type ReactNode, useEffect, useMemo, useRef, useState } from "
 import {
   type ArtistRule,
   type ArtistRuleInput,
+  type CrawlHold,
   type LabelAdminItem,
   type LabelAliasCandidate,
   type LabelArtistRuleVerdict,
@@ -52,6 +54,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@fluncle/ui/components/
 import { albumCoverAtSize } from "@/lib/media";
 import { findingsCount } from "@/lib/format";
 import { isAdminRequest } from "@/lib/server/admin-auth";
+import { listCrawlHolds } from "@/lib/server/crawl-plausibility";
 import {
   type LabelsAdminPage,
   type LabelsAdminSection,
@@ -72,6 +75,7 @@ import {
 const LABELS_KEY = ["admin", "labels"] as const;
 const ALIASES_KEY = [...LABELS_KEY, "aliases"] as const;
 const RULES_KEY = [...LABELS_KEY, "rules"] as const;
+const HOLDS_KEY = [...LABELS_KEY, "holds"] as const;
 
 const labelRulesKey = (labelId: string) => [...RULES_KEY, labelId] as const;
 
@@ -109,10 +113,14 @@ type LabelsSectionPage = LabelsAdminPage & {
   rules: Record<string, LabelRuleCounts>;
 };
 
+type HeldReleases = { holds: CrawlHold[]; nextCursor?: string; total: number };
+
 type LabelsBoard = {
   aliases: LabelAliasCandidate[];
   disabled: LabelsSectionPage;
   enabled: LabelsSectionPage;
+
+  held: HeldReleases;
 
   partial: LabelsSectionPage;
 
@@ -135,13 +143,14 @@ const fetchBoard = createServerFn({ method: "GET" }).handler(async (): Promise<L
     throw redirect({ to: "/admin/login" });
   }
 
-  const [undecided, partial, enabled, disabled, aliases, ruled] = await Promise.all([
+  const [undecided, partial, enabled, disabled, aliases, ruled, held] = await Promise.all([
     listLabelsPage("undecided", 1),
     listLabelsPage("partial", 1),
     listLabelsPage("enabled", 1),
     listLabelsPage("disabled", 1),
     listLabelAliasCandidates(),
     ruledLabelCounts(),
+    listCrawlHolds(),
   ]);
   const [undecidedPage, partialPage, enabledPage, disabledPage] = await Promise.all([
     withRuleContext(undecided),
@@ -154,6 +163,7 @@ const fetchBoard = createServerFn({ method: "GET" }).handler(async (): Promise<L
     aliases,
     disabled: disabledPage,
     enabled: enabledPage,
+    held,
     partial: partialPage,
     ruled,
     undecided: undecidedPage,
@@ -180,6 +190,16 @@ const fetchRuleArtists = createServerFn({ method: "GET" })
     return searchRuleArtists(data.query);
   });
 
+const fetchHolds = createServerFn({ method: "GET" })
+  .validator((data: { cursor?: string }) => data)
+  .handler(async ({ data }): Promise<HeldReleases> => {
+    if (!(await isAdminRequest())) {
+      throw redirect({ to: "/admin/login" });
+    }
+
+    return listCrawlHolds(data.cursor ? { cursor: data.cursor } : {});
+  });
+
 const fetchAliases = createServerFn({ method: "GET" }).handler(
   async (): Promise<LabelAliasCandidate[]> => {
     if (!(await isAdminRequest())) {
@@ -192,8 +212,10 @@ const fetchAliases = createServerFn({ method: "GET" }).handler(
 
 // oxlint-disable-next-line sort-keys
 export const Route = createFileRoute("/admin/labels")({
-  validateSearch: (search: Record<string, unknown>): { label?: string } =>
-    typeof search["label"] === "string" ? { label: search["label"] } : {},
+  validateSearch: (search: Record<string, unknown>): { hold?: string; label?: string } => ({
+    ...(typeof search["hold"] === "string" ? { hold: search["hold"] } : {}),
+    ...(typeof search["label"] === "string" ? { label: search["label"] } : {}),
+  }),
   beforeLoad: () => ensureAdmin(),
   loader: () => fetchBoard(),
   component: AdminLabelsPage,
@@ -201,7 +223,7 @@ export const Route = createFileRoute("/admin/labels")({
 
 function AdminLabelsPage() {
   const board = Route.useLoaderData();
-  const { label: focusSlug } = Route.useSearch();
+  const { hold: focusHold, label: focusSlug } = Route.useSearch();
   const queryClient = useQueryClient();
 
   const [rulesTarget, setRulesTarget] = useState<LabelAdminItem | undefined>();
@@ -209,7 +231,8 @@ function AdminLabelsPage() {
   const waiting = board.undecided.total;
   const hasAnyLabels =
     board.undecided.total + board.partial.total + board.enabled.total + board.disabled.total > 0 ||
-    board.aliases.length > 0;
+    board.aliases.length > 0 ||
+    board.held.total > 0;
 
   const subtitle = !hasAnyLabels
     ? "No labels yet"
@@ -230,15 +253,19 @@ function AdminLabelsPage() {
         ) : (
           <>
             {SECTIONS.map((entry) => (
-              <LabelSection
-                focusSlug={focusSlug}
-                initialPage={board[entry.section]}
-                intro={sectionIntro(entry, board.ruled)}
-                key={entry.section}
-                onManageRules={setRulesTarget}
-                section={entry.section}
-                title={entry.title}
-              />
+              <Fragment key={entry.section}>
+                <LabelSection
+                  focusSlug={focusSlug}
+                  initialPage={board[entry.section]}
+                  intro={sectionIntro(entry, board.ruled)}
+                  onManageRules={setRulesTarget}
+                  section={entry.section}
+                  title={entry.title}
+                />
+                {entry.section === "undecided" ? (
+                  <HeldSection focusHold={focusHold} initialHeld={board.held} />
+                ) : null}
+              </Fragment>
             ))}
 
             <AliasSection initialAliases={board.aliases} />
@@ -372,6 +399,161 @@ function AliasSection({ initialAliases }: { initialAliases: LabelAliasCandidate[
         ))}
       </ObjectList>
     </Section>
+  );
+}
+
+function HeldSection({
+  focusHold,
+  initialHeld,
+}: {
+  focusHold: string | undefined;
+  initialHeld: HeldReleases;
+}) {
+  const { data, fetchNextPage, hasNextPage, isFetchingNextPage } = useInfiniteQuery({
+    getNextPageParam: (lastPage: HeldReleases) => lastPage.nextCursor,
+    initialData: { pageParams: [undefined], pages: [initialHeld] },
+    initialPageParam: undefined as string | undefined,
+    queryFn: ({ pageParam }) => fetchHolds({ data: pageParam ? { cursor: pageParam } : {} }),
+    queryKey: HOLDS_KEY,
+    refetchOnWindowFocus: true,
+    staleTime: 20_000,
+  });
+
+  const holds = data.pages.flatMap((page) => page.holds);
+  const total = data.pages.at(-1)?.total ?? initialHeld.total;
+
+  if (total === 0) {
+    return null;
+  }
+
+  return (
+    <Section
+      intro="The crawl found these on a label you seed from, but the release date sits years before the label's time and none of its artists turn up on a label you seed from. Nothing on them is stored until you rule. Storing one is final."
+      title={`Held releases · ${total}`}
+    >
+      <ObjectList>
+        {holds.map((hold) => (
+          <HeldRow focused={hold.releaseMbid === focusHold} hold={hold} key={hold.releaseMbid} />
+        ))}
+      </ObjectList>
+      {hasNextPage ? (
+        <div className="pt-1 text-center">
+          <Button
+            disabled={isFetchingNextPage}
+            onClick={() => void fetchNextPage()}
+            size="sm"
+            variant="outline"
+          >
+            {isFetchingNextPage ? (
+              <CircleNotchIcon aria-hidden="true" className="animate-spin" weight="bold" />
+            ) : undefined}
+            {isFetchingNextPage ? "Loading…" : "Load more"}
+          </Button>
+        </div>
+      ) : undefined}
+    </Section>
+  );
+}
+
+function holdEvidence(hold: CrawlHold): string {
+  const released = hold.releaseDate?.slice(0, 4) ?? "?";
+
+  return hold.reason === "before_founding"
+    ? `Released ${released}, label founded ${hold.thresholdYear}`
+    : `Released ${released}, most of the label's stored releases are ${hold.thresholdYear} or later`;
+}
+
+function HeldRow({ focused, hold }: { focused: boolean; hold: CrawlHold }) {
+  const queryClient = useQueryClient();
+  const [error, setError] = useState<string | undefined>();
+
+  const rowRef = useRef<HTMLLIElement | null>(null);
+  useEffect(() => {
+    if (focused) {
+      rowRef.current?.scrollIntoView({ block: "center" });
+    }
+  }, [focused]);
+
+  const rule = useMutation({
+    mutationFn: (decision: "keep_out" | "store") => resolveHold(hold.releaseMbid, decision),
+    onError: (caught) => setError(caught instanceof Error ? caught.message : String(caught)),
+    onSuccess: () => {
+      setError(undefined);
+
+      void queryClient.invalidateQueries({ queryKey: HOLDS_KEY });
+    },
+  });
+
+  const tracks = `${hold.trackCount} ${hold.trackCount === 1 ? "track" : "tracks"}`;
+  const artists = hold.artists.slice(0, 3).join(", ");
+
+  return (
+    <ObjectRow
+      className={focused ? "bg-primary/5" : undefined}
+      ref={rowRef}
+      trailing={
+        rule.isPending ? (
+          <CircleNotchIcon
+            aria-hidden="true"
+            className="size-4 text-muted-foreground motion-safe:animate-spin"
+            weight="bold"
+          />
+        ) : (
+          <>
+            <Button
+              aria-label={`Keep ${hold.releaseTitle ?? "this release"} out`}
+              onClick={() => rule.mutate("keep_out")}
+              size="sm"
+            >
+              Keep it out
+            </Button>
+            <Button
+              aria-label={`Store ${hold.releaseTitle ?? "this release"}`}
+              onClick={() => rule.mutate("store")}
+              size="sm"
+              variant="outline"
+            >
+              Store it
+            </Button>
+          </>
+        )
+      }
+    >
+      <ObjectLead
+        leading={<ObjectGlyph icon={PauseCircleIcon} />}
+        subtitle={
+          error ? (
+            <span className="text-destructive" role="alert">
+              {error}
+            </span>
+          ) : (
+            <>
+              <span className="truncate">{hold.labelName ?? "Unknown label"}</span>
+              <span aria-hidden="true">·</span>
+              <span>{holdEvidence(hold)}</span>
+              <span aria-hidden="true">·</span>
+              <span>{tracks}</span>
+              {artists ? (
+                <>
+                  <span aria-hidden="true">·</span>
+                  <span className="truncate">{artists}</span>
+                </>
+              ) : null}
+              <span aria-hidden="true">·</span>
+              <a
+                className="text-primary hover:underline focus-visible:outline-2 focus-visible:outline-ring"
+                href={`https://musicbrainz.org/release/${hold.releaseMbid}`}
+                rel="noreferrer"
+                target="_blank"
+              >
+                MusicBrainz ↗
+              </a>
+            </>
+          )
+        }
+        title={hold.releaseTitle ?? "Untitled release"}
+      />
+    </ObjectRow>
   );
 }
 
@@ -1090,6 +1272,22 @@ function AliasRow({ alias }: { alias: LabelAliasCandidate }) {
       />
     </ObjectRow>
   );
+}
+
+async function resolveHold(releaseMbid: string, decision: "keep_out" | "store"): Promise<void> {
+  const response = await fetch(
+    `/api/v1/admin/catalogue/holds/${encodeURIComponent(releaseMbid)}/resolve`,
+    {
+      body: JSON.stringify({ decision }),
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      method: "POST",
+    },
+  );
+
+  if (!response.ok) {
+    throw new Error(await readError(response));
+  }
 }
 
 async function decideAlias(id: string, decision: "confirm" | "reject"): Promise<void> {

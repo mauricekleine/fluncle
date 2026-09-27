@@ -1,6 +1,6 @@
 import { getDb, typedRows } from "./db";
 import { readProjectedAggregateBuckets } from "./public-projection-cutover";
-import { publicTrackDurationWhere } from "../../db/public-track-visibility";
+import { publicTrackWhere } from "../../db/public-track-visibility";
 
 export type KeyHistogramRow = { count: number; key: string | null };
 
@@ -70,7 +70,7 @@ async function readHistogramRows(): Promise<readonly KeyHistogramRow[]> {
 
   const result = await db.execute(
     `select key, count(*) as count from tracks
-      where key is not null and ${publicTrackDurationWhere("tracks")} group by key`,
+      where key is not null and ${publicTrackWhere("tracks")} group by key`,
   );
 
   return typedRows<KeyHistogramRow>(result.rows);

@@ -49,6 +49,8 @@ export const CatalogueTrackItemSchema = z
 
     hiddenFromPublic: z.boolean(),
 
+    hiddenReason: z.enum(["long_form", "spoken_word"]).nullable(),
+
     isrc: z.string().nullable(),
 
     key: z.string().nullable(),
@@ -387,6 +389,8 @@ export const CrawlPassSchema = z
     tracksAllowedIn: z.number().optional(),
 
     tracksFound: z.number(),
+
+    tracksHeldImplausible: z.number().optional(),
 
     tracksSkipped: z.number(),
 
@@ -1045,6 +1049,71 @@ export const resolveAnchorReview = oc
     }),
   );
 
+export const CrawlHoldReasonSchema = z
+  .enum(["before_founding", "before_label_era"])
+  .meta({ id: "CrawlHoldReason" });
+
+export const CrawlHoldStateSchema = z
+  .enum(["held", "kept_out", "released"])
+  .meta({ id: "CrawlHoldState" });
+
+export const CrawlHoldSchema = z
+  .object({
+    artists: z.array(z.string()),
+    createdAt: z.string(),
+    labelId: z.string(),
+    labelName: z.string().nullable(),
+    labelSlug: z.string().nullable(),
+    reason: CrawlHoldReasonSchema,
+    releaseDate: z.string().nullable(),
+    releaseMbid: z.string(),
+    releaseTitle: z.string().nullable(),
+    state: CrawlHoldStateSchema,
+    thresholdYear: z.number().int(),
+    trackCount: z.number().int(),
+  })
+  .meta({ id: "CrawlHold" });
+
+export const listCrawlHolds = oc
+  .route({
+    method: "GET",
+    operationId: "listCrawlHolds",
+    path: "/admin/catalogue/holds",
+    summary: "Releases the crawl held back because their label credit looks implausible",
+    tags: ["Admin"],
+  })
+  .input(
+    z.object({
+      cursor: z.string().min(1).max(512).optional(),
+      limit: z.coerce.number().int().min(1).max(100).optional(),
+      state: CrawlHoldStateSchema.optional(),
+    }),
+  )
+  .output(
+    z.object({
+      holds: z.array(CrawlHoldSchema),
+      nextCursor: z.string().optional(),
+      ok: z.literal(true),
+      total: z.number().int(),
+    }),
+  );
+
+export const resolveCrawlHold = oc
+  .route({
+    method: "POST",
+    operationId: "resolveCrawlHold",
+    path: "/admin/catalogue/holds/{releaseMbid}/resolve",
+    summary: "Rule on a held release: store it on the next crawl tick, or keep it out (operator)",
+    tags: ["Admin"],
+  })
+  .input(
+    z.object({
+      decision: z.enum(["keep_out", "store"]),
+      releaseMbid: z.string().min(1),
+    }),
+  )
+  .output(z.object({ ok: z.literal(true), state: CrawlHoldStateSchema }));
+
 export const setAnchorSearch = oc
   .route({
     method: "PUT",
@@ -1282,6 +1351,7 @@ export const adminCatalogueContract = {
   get_pipeline: getPipeline,
   get_spotify_anchor_breaker: getSpotifyAnchorBreaker,
   list_catalogue_tracks: listCatalogueTracks,
+  list_crawl_holds: listCrawlHolds,
   list_unverified_captures: listUnverifiedCaptures,
   prepare_anchor: prepareAnchor,
   prepare_anchor_batch: prepareAnchorBatch,
@@ -1297,6 +1367,7 @@ export const adminCatalogueContract = {
   resolve_anchor_candidate: resolveAnchorCandidate,
   resolve_anchor_paid_result: resolveAnchorPaidResult,
   resolve_anchor_review: resolveAnchorReview,
+  resolve_crawl_hold: resolveCrawlHold,
   set_anchor_apify: setAnchorApify,
   set_anchor_apify_budget: setAnchorApifyBudget,
   set_anchor_search: setAnchorSearch,

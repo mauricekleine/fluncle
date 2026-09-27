@@ -637,6 +637,41 @@ describe("deriveAttentionItems", () => {
     expect(attentionBrief(two, NOW)).toBe("Two bios that landed past the voice gate.");
   });
 
+  it("rows each release the crawl held back, deep-linked to its hold on /admin/labels", () => {
+    const items = deriveAttentionItems(
+      {
+        ...EMPTY_INPUTS,
+        crawlHolds: [
+          {
+            anchorAt: iso(NOW - 2 * DAY),
+            labelName: "MTA Records",
+            releaseMbid: "rel-1",
+            releaseTitle: "Just Some Of Those Songs",
+          },
+          { anchorAt: iso(NOW - DAY), labelName: null, releaseMbid: "rel-2", releaseTitle: null },
+        ],
+      },
+      NOW,
+    );
+
+    expect(items).toHaveLength(2);
+    expect(items[0]).toEqual({
+      anchorAt: iso(NOW - 2 * DAY),
+      href: "/admin/labels?hold=rel-1",
+      id: "crawl-hold:rel-1",
+      source: "crawl-hold",
+      title: "Just Some Of Those Songs · MTA Records",
+    });
+    expect(items[1]?.title).toBe("Untitled release · unknown label");
+    expect(items[0]?.deadlineAt).toBeUndefined();
+    expect(primaryFor(items[0] as AttentionItem, NOW)).toEqual({
+      href: "/admin/labels?hold=rel-1",
+      kind: "open",
+      label: "Rule on it",
+    });
+    expect(attentionBrief(items, NOW)).toBe("Two releases the crawl held back.");
+  });
+
   it("speaks the label queue in the dispatch", () => {
     const one = deriveAttentionItems(
       {

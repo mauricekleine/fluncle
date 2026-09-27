@@ -2,7 +2,8 @@ import { bestAlbumCoverUrl } from "../media";
 import { REC_ELIGIBLE_WHERE } from "../catalogue-eligibility";
 import { parseArtistsJson } from "./artists";
 import { TRACK_OR_LOG_ID_CTE } from "./track-id-resolver";
-import { DUPLICATE_SIMILARITY, diversifyRanked, LONG_FORM_MS } from "./catalogue";
+import { DUPLICATE_SIMILARITY, diversifyRanked } from "./catalogue";
+import { searchSonarPublicCatalogue } from "./sonar-public-catalogue";
 import { getDb, typedRow, typedRows } from "./db";
 import { cosineFromDistance, readEmbeddingBlob, toVectorProbe } from "./embedding";
 import { jsonError } from "./env";
@@ -14,7 +15,7 @@ import {
   type SonarMatch,
 } from "./sonar";
 import { executeVectorFallback, vectorFallbackCandidateLimitSql } from "./vector-fallback";
-import { publicTrackDurationWhere } from "../../db/public-track-visibility";
+import { publicTrackWhere } from "../../db/public-track-visibility";
 import { hasPreviewSource } from "../track-preview";
 
 export const MAX_REC_SEEDS = 12;
@@ -148,7 +149,7 @@ async function findSeedTrack(
       select tracks.track_id, findings.log_id from resolved_track
       join tracks on tracks.track_id = resolved_track.track_id
       left join findings on findings.track_id = tracks.track_id
-      where ${includeHidden ? "1 = 1" : publicTrackDurationWhere("tracks", "findings")}
+      where ${includeHidden ? "1 = 1" : publicTrackWhere("tracks", "findings")}
       limit 1`,
   });
 
@@ -167,7 +168,7 @@ export async function listRecSeeds(user: PublicUser): Promise<{ ok: true; seeds:
       from user_rec_seeds s
       join tracks t on t.track_id = s.track_id
       left join findings f on f.track_id = s.track_id
-      where s.user_id = ? and ${publicTrackDurationWhere("t", "f")}
+      where s.user_id = ? and ${publicTrackWhere("t", "f")}
       order by s.added_at desc, s.track_id asc`,
   });
 
@@ -281,7 +282,7 @@ export async function listRecommendations(
         from user_rec_seeds s
         join tracks t on t.track_id = s.track_id
         left join track_embeddings emb on emb.track_id = t.track_id
-        where s.user_id = ? and ${publicTrackDurationWhere("t")}
+        where s.user_id = ? and ${publicTrackWhere("t")}
         order by s.added_at asc, s.track_id asc`,
     }),
     excludeRecent
@@ -489,13 +490,11 @@ function sonarCataloguePool(
   vectors: number[][],
   excludeIds: string[],
 ): Promise<SonarMatch[] | null> {
-  return searchSonar({
+  return searchSonarPublicCatalogue({
     excludeIds,
     filter: {
       anchored: true,
       dismissed: false,
-      duration_ms_max: LONG_FORM_MS,
-      has_finding: false,
       is_duplicate: false,
       nearest_finding_score_max: DUPLICATE_SIMILARITY,
     },
@@ -540,7 +539,7 @@ async function hydrateTracks(trackIds: string[]): Promise<Map<string, HydrateRow
       from tracks t
       left join findings f on f.track_id = t.track_id
       where t.track_id in (${ids.map(() => "?").join(", ")})
-        and ${publicTrackDurationWhere("t", "f")}`,
+        and ${publicTrackWhere("t", "f")}`,
   });
 
   const byTrackId = new Map<string, HydrateRow>();

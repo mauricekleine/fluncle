@@ -144,6 +144,7 @@ export async function advanceProjectionCommand(
   let scheduled = response.scheduled;
   let wallStopped = false;
   let rebuildRowsWalked = response.rebuildRowsWalked ?? 0;
+  let rebuildReported = response.rebuildStaleFamilies !== undefined;
 
   while (!response.complete && steps < maxSteps) {
     if (wallMs !== undefined && now() - startedAt >= wallMs) {
@@ -158,12 +159,12 @@ export async function advanceProjectionCommand(
     processed += response.processed;
     scheduled += response.scheduled;
     rebuildRowsWalked += response.rebuildRowsWalked ?? 0;
+    rebuildReported ||= response.rebuildStaleFamilies !== undefined;
   }
 
-  const rebuild =
-    response.rebuildStaleFamilies === undefined
-      ? {}
-      : { rebuildRowsWalked, rebuildStaleFamilies: response.rebuildStaleFamilies };
+  const rebuild = rebuildReported
+    ? { rebuildRowsWalked, rebuildStaleFamilies: response.rebuildStaleFamilies ?? 0 }
+    : {};
   if (!includeTerminalStatus) {
     const { status: _status, ...withoutStatus } = response;
     return { ...withoutStatus, ...rebuild, processed, scheduled, steps, wallStopped };

@@ -24,6 +24,7 @@ import { TRACK_WORK_DUE_CUTOVER_ENABLED_KEY } from "./due-work-cutover";
 import {
   PUBLIC_ANCHOR_FORMAT_VERSION,
   readTrackAnchorSourcePage,
+  reconcilePublicAggregateVisibilityChunk,
   repairPublicProjectionChunk,
   runPublicProjectionRebuildChunk,
   type PublicProjectionName,
@@ -44,6 +45,8 @@ import {
   isCurrentProjectedTrackHubAnchorDocumentUsable,
   PUBLIC_PROJECTION_CUTOVER_ENABLED_KEY,
   PUBLIC_AGGREGATE_DURATION_GENERATION_KEY,
+  PUBLIC_AGGREGATE_VISIBILITY_VERSION,
+  PUBLIC_AGGREGATE_VISIBILITY_VERSION_KEY,
 } from "./public-projection-cutover";
 import {
   amendPublicAnchorDocument,
@@ -548,8 +551,9 @@ export async function getProjectionStatusFor(client: ProjectionClient): Promise<
         TRACK_DUE_AUDIT_FENCE_KEY,
         TRACK_WORK_DUE_CUTOVER_ENABLED_KEY,
         PUBLIC_AGGREGATE_DURATION_GENERATION_KEY,
+        PUBLIC_AGGREGATE_VISIBILITY_VERSION_KEY,
       ],
-      sql: `select key, value from settings where key in (?, ?, ?, ?, ?, ?)`,
+      sql: `select key, value from settings where key in (?, ?, ?, ?, ?, ?, ?)`,
     },
     {
       args: [PROJECTION_STATUS_COUNT_LIMIT + 1],
@@ -690,6 +694,11 @@ export async function getProjectionStatusFor(client: ProjectionClient): Promise<
       (row) =>
         row.key === PUBLIC_AGGREGATE_DURATION_GENERATION_KEY &&
         row.value === `${aggregateGeneration}:${aggregateCompletedAt}`,
+    ) &&
+    settingRows.some(
+      (row) =>
+        row.key === PUBLIC_AGGREGATE_VISIBILITY_VERSION_KEY &&
+        row.value === PUBLIC_AGGREGATE_VISIBILITY_VERSION,
     );
   const publicAggregates = { ...aggregates, anchorsReady: anchorProof, durationGenerationReady };
   publicAggregates.ready = publicAggregates.ready && anchorProof && durationGenerationReady;
@@ -2078,12 +2087,14 @@ async function advancePublicProjectionFor(
         };
       }
     }
+    const visibility = await reconcileVisibilityFor(client, projection, input.limit);
     const repair = await repairPublicProjectionChunk(client, {
       limit: input.limit,
       projection,
     });
-    const remainingDebt = await hasPublicProjectionRepairDebt(client, projection);
-    const repairProcessed = repair.fanout + repair.repaired;
+    const remainingDebt =
+      !visibility.complete || (await hasPublicProjectionRepairDebt(client, projection));
+    const repairProcessed = repair.fanout + repair.repaired + visibility.scanned;
     const anchors =
       projection === "public_aggregates" && !remainingDebt
         ? await advancePublicAnchors(client, Math.min(input.limit, 100))
@@ -2099,7 +2110,8 @@ async function advancePublicProjectionFor(
     const response = {
       complete,
       processed: repairProcessed + anchors.processed,
-      scheduled: repair.fanout,
+      scheduled: repair.fanout + visibility.enqueued,
+      ...visibilityWalkProgress(visibility),
     };
     return { ...response, status };
   }
@@ -2107,6 +2119,29 @@ async function advancePublicProjectionFor(
     ...outcome,
     status: includeStatus ? await getProjectionStatusFor(client) : undefined,
   };
+}
+
+function visibilityWalkProgress(visibility: {
+  complete: boolean;
+  scanned: number;
+  walked: boolean;
+}): { rebuildRowsWalked?: number; rebuildStaleFamilies?: number } {
+  return !visibility.walked
+    ? {}
+    : {
+        rebuildRowsWalked: visibility.scanned,
+        rebuildStaleFamilies: visibility.complete ? 0 : 1,
+      };
+}
+
+function reconcileVisibilityFor(
+  client: ProjectionClient,
+  projection: PublicProjectionName,
+  limit: number,
+): Promise<{ complete: boolean; enqueued: number; scanned: number; walked: boolean }> {
+  return projection === "public_aggregates"
+    ? reconcilePublicAggregateVisibilityChunk(client, { limit })
+    : Promise.resolve({ complete: true, enqueued: 0, scanned: 0, walked: false });
 }
 
 async function readAggregateDurationGeneration(client: ProjectionClient): Promise<{

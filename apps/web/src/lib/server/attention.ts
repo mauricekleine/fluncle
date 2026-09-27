@@ -14,6 +14,7 @@ import { listArtistReviewRows, parseArtistsJson } from "./artists";
 import { listBioReviewRows } from "./bio-review";
 import { listClipPosts } from "./clip-social";
 import { getDb, typedRow, typedRows } from "./db";
+import { listCrawlHoldReviewRows } from "./crawl-plausibility";
 import { listLabelReviewRows } from "./labels";
 import { listMixtapes } from "./mixtapes";
 import { listNoteRejectionReviewRows } from "./note-rejections";
@@ -233,6 +234,7 @@ export async function readAttentionSnapshot(now: number = Date.now()): Promise<A
     artistReviews,
     bioReviews,
     captureSuspects,
+    crawlHolds,
     labelReviews,
     submissions,
     newsletters,
@@ -253,6 +255,8 @@ export async function readAttentionSnapshot(now: number = Date.now()): Promise<A
     listBioReviewRows(),
 
     listCaptureSuspectRows(),
+
+    listCrawlHoldReviewRows(),
 
     listLabelReviewRows(),
     listSubmissionRows(),
@@ -279,6 +283,7 @@ export async function readAttentionSnapshot(now: number = Date.now()): Promise<A
         status: post.status,
       })),
       clips,
+      crawlHolds,
       labelReviews,
       mixtapes: mixtapes.map((mixtape) => ({
         ...((mixtape.addedAt ?? mixtape.createdAt)

@@ -561,10 +561,10 @@ export const DUE_WORK_REVIEWED_NONPRODUCER_WRITERS = [
   },
   {
     disposition: "non-eligibility",
-    file: "scripts/repair-long-graph-counts.ts",
+    file: "scripts/repair-hidden-graph-counts.ts",
     rationale:
       "Repairs maintained public graph counters from existing track truth in bounded write batches.",
-    sites: ["scripts/repair-long-graph-counts.ts:update:dynamic:e49d12b3"],
+    sites: ["scripts/repair-hidden-graph-counts.ts:update:dynamic:e49d12b3"],
   },
   {
     disposition: "non-eligibility",
@@ -937,9 +937,9 @@ export const GOAL_D_REVIEWED_NONPROJECTION_WRITERS = [
   },
   {
     disposition: "derived-projection-write",
-    file: "scripts/repair-long-graph-counts.ts",
+    file: "scripts/repair-hidden-graph-counts.ts",
     rationale: "Repairs maintained public graph counters from existing track truth.",
-    sites: ["scripts/repair-long-graph-counts.ts:update:dynamic:e49d12b3"],
+    sites: ["scripts/repair-hidden-graph-counts.ts:update:dynamic:e49d12b3"],
   },
   {
     disposition: "non-projection-fact",

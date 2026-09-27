@@ -70,6 +70,31 @@ const advance = (target: FamilyName, complete = true, processed = 1, steps = 1) 
 });
 
 describe("the stale-definition re-projection the repair path carries", () => {
+  test("a visibility walk with no disagreement reads as partial progress with no debt age", () => {
+    const summary = runTick((args) =>
+      args[2] === "get"
+        ? status(
+            { publicProjections: true },
+            { aggregate: family({ durationGenerationReady: false }) },
+          )
+        : {
+            ...advance("public_aggregates", false, 40_000, 4),
+            rebuildRowsWalked: 40_000,
+            rebuildStaleFamilies: 1,
+          },
+    );
+
+    expect(summary.publicAggregates).toMatchObject({
+      attempted: true,
+      complete: false,
+      outcome: "partial_progress",
+      rebuildRowsWalked: 40_000,
+      rebuildStaleFamilies: 1,
+      scheduled: 0,
+    });
+    expect(summary).toMatchObject({ oldestDebtAgeMs: null, outcome: "partial_progress" });
+  });
+
   test("a missing aggregate duration generation schedules bounded rebuild until its key lands", () => {
     const calls: string[][] = [];
     let generationReady = false;

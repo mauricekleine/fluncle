@@ -302,7 +302,8 @@ function genericTrackPlan(indexName: string): IndexPlanSpec {
            sum(case when isrc is not null then 1 else 0 end) as isrc_rows,
            sum(case when spotify_anchor_attempts > 0 then 1 else 0 end) as attempted_rows,
            count(artists_json) as credited_rows,
-           count(label_id) as labeled_rows
+           count(label_id) as labeled_rows,
+           count(title) as titled_rows
       from perf_tracks indexed by __INDEX__`,
     ),
     tracks_is_catalogue_idx: statement(

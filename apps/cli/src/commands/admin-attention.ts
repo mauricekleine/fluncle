@@ -18,6 +18,7 @@ const SOURCE_LABELS: Record<AttentionSource, string> = {
   "attach-cues": "cues",
   "bio-review": "bio gate",
   "capture-suspect": "capture check",
+  "crawl-hold": "held release",
   distribute: "distribute",
   "drip-empty": "clip drip",
   "label-review": "label",
