@@ -39,7 +39,7 @@ packages/contracts    oRPC contracts for the public + admin HTTP API (the contra
 packages/live         The live runtime: the glass (WebGL renderer) + the bridge (plan + fingerprint identity + supervisor + phone remote).
 packages/media        Remotion kit for static image assets (link-preview cards, covers).
 packages/registry     The typed catalog of every Fluncle surface (@fluncle/registry, the source of truth).
-packages/skills       Agent skills: operator runbooks + creative doctrine. Installed via bun run skills:install.
+packages/skills       Agent skills: operator runbooks + creative doctrine. Installed with `npx skills add`.
 packages/sprites      Fluncle's pixel-sprite family — the Galaxy game's sprites. Owns the PNGs; the web build mirrors them into public/.
 packages/test-support Shared test helpers — the no-network rail and the test preload.
 packages/tokens       Shared design tokens (colors, typography, radii, motion) from DESIGN.md.
@@ -198,14 +198,14 @@ gofmt -l apps/ssh
 go vet -C apps/ssh ./...
 ```
 
-Production runs as the `fluncle-ssh` systemd service on a dedicated VPS: the app terminates public TCP/22 while administrative OpenSSH listens on 2222 over Tailscale only. Cross-compile and deploy with the `hetzner-devbox` skill, which also documents provisioning and the monthly GeoIP refresh:
+Production runs as the `fluncle-ssh` systemd service on a dedicated VPS: the app terminates public TCP/22 while administrative OpenSSH listens on 2222 over Tailscale only. Cross-compile and deploy with the `fluncle-hetzner-ops` skill, which documents the public SSH host and monthly GeoIP refresh:
 
 ```bash
 GOOS=linux GOARCH=amd64 go build -C apps/ssh -o dist/fluncle-ssh-linux-x64 .
 SERVER_NAME=<tailscale-ip> BINARY_PATH=apps/ssh/dist/fluncle-ssh-linux-x64 \
   FLUNCLE_API_URL=https://www.fluncle.com \
   FLUNCLE_GEOIP_DB=/var/lib/fluncle-ssh/dbip-country-lite.mmdb \
-  packages/skills/hetzner-devbox/scripts/deploy-ssh-app-service.sh
+  packages/skills/fluncle-hetzner-ops/scripts/deploy-ssh-app-service.sh
 ```
 
 ## Web

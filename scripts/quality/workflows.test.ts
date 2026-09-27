@@ -122,12 +122,10 @@ describe("quality topology", () => {
     expect(qualitySource).toContain('--plan "$RUNNER_TEMP/quality-plan.json"');
   });
 
-  test("skills drift and native contracts retain explicit owners", () => {
-    expect(qualitySource).toContain("--lane skills");
+  test("native contracts retain explicit owners", () => {
     expect(qualitySource).toContain("--lane go-ssh");
     expect(qualitySource).toContain("--lane go-dns");
     expect(qualitySource).toContain("--lane sonar");
-    expect(workflowFiles()).not.toContain("skills-sync.yml");
   });
 });
 

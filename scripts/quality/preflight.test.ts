@@ -55,10 +55,10 @@ describe("preflight fingerprints", () => {
 
 describe("preflight scheduling", () => {
   test("parallelizes light leaves without contending the resource-heavy suites", () => {
-    const lanes = ["static", "packages", "scripts", "skills", "go-ssh", "e2e"];
+    const lanes = ["static", "packages", "scripts", "go-ssh", "e2e"];
     const waves = executionWaves(lanes);
 
-    expect(waves).toEqual([["static", "skills", "go-ssh"], ["packages"], ["scripts"], ["e2e"]]);
+    expect(waves).toEqual([["static", "go-ssh"], ["packages"], ["scripts"], ["e2e"]]);
     expect(waves.flat().sort((left, right) => left.localeCompare(right))).toEqual(
       [...lanes].sort((left, right) => left.localeCompare(right)),
     );
