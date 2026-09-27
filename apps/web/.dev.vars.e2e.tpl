@@ -26,6 +26,7 @@ RESEND_SEGMENT_ID=e2e-fake-segment
 
 # Every spec shares one local address, so the per-IP search budget is raised for the suite.
 FLUNCLE_E2E=1
+FOLLOW_DIGEST_TEST_NOW=__E2E_FOLLOW_DIGEST_NOW__
 SEARCH_ARCHIVE_RATE_LIMIT=100000
 
 # Admin identity + signing. Fake — the e2e suite exercises PUBLIC surfaces, and the

@@ -692,7 +692,7 @@ describe("daily and weekly retry", () => {
     );
     writeFileSync(
       setup.payload,
-      '#!/usr/bin/env bash\nprintf x >> "$ATTEMPTS"\nif [ "$(wc -c < "$ATTEMPTS" | tr -d " ")" -ge 2 ]; then cp "$COMPLETE" "$MARKER_DIR/done.md"; exit 0; fi\n: > "$STARTED"\nsleep 30\n',
+      '#!/usr/bin/env bash\nprintf x >> "$ATTEMPTS"\nif [ "$(wc -c < "$ATTEMPTS" | tr -d " ")" -ge 2 ]; then cp "$COMPLETE" "$MARKER_DIR/done.md"; TZ=UTC touch -t 202609251200 "$MARKER_DIR/done.md"; exit 0; fi\n: > "$STARTED"\nsleep 30\n',
     );
     const env = {
       ...process.env,
@@ -837,6 +837,70 @@ describe("daily and weekly retry", () => {
         }),
       ).toBe("off-cycle");
     });
+
+    test("the follow digest never sends from a Saturday or Monday catch-up", () => {
+      for (const startedAt of ["2026-09-26T10:00:00Z", "2026-09-28T10:00:00Z"]) {
+        const setup = fixture("follow-digest");
+        const result = run(setup, "follow-digest", "18:15", {
+          localTime: "1200",
+          primarySlot: "17:00",
+          startedAt,
+          timeZone: "Europe/Amsterdam",
+          weekday: "Fri",
+        });
+        expect(result.status).toBe(0);
+        expect(result.stdout).toContain("catch-up activation is a no-op");
+        expect(attempts(setup.attempts)).toBe(0);
+      }
+    });
+
+    test("the follow digest retries a partial send once on the same Friday", () => {
+      const setup = fixture("follow-digest");
+      const failed = join(setup.root, "failed.md");
+      const complete = join(setup.root, "complete.md");
+      writeFileSync(
+        failed,
+        '# Cron Job\n\n{"checked":1,"errors":1,"ok":false,"produced":1,"sent":1}\n',
+      );
+      writeFileSync(
+        complete,
+        '# Cron Job\n\n{"checked":1,"errors":0,"ok":true,"produced":1,"sent":1}\n',
+      );
+      const friday = {
+        primarySlot: "17:00",
+        startedAt: "2026-09-25T15:01:00Z",
+        timeZone: "Europe/Amsterdam",
+        weekday: "Fri",
+      };
+      expect(
+        run(setup, "follow-digest", "18:15", {
+          ...friday,
+          localTime: "1701",
+          resultMarker: failed,
+          resultMtime: "202609251501",
+        }).status,
+      ).toBe(0);
+      expect(
+        run(setup, "follow-digest", "18:15", {
+          ...friday,
+          localTime: "1816",
+          resultMarker: failed,
+          resultMtime: "202609251616",
+          secondResultMarker: complete,
+          startedAt: "2026-09-25T16:16:00Z",
+        }).status,
+      ).toBe(0);
+      expect(attempts(setup.attempts)).toBe(2);
+      expect(
+        run(setup, "follow-digest", "18:15", {
+          ...friday,
+          localTime: "1817",
+          startedAt: "2026-09-25T16:17:00Z",
+        }).status,
+      ).toBe(0);
+      expect(attempts(setup.attempts)).toBe(2);
+      expect(RERUN_SAFE_JOBS.has("fluncle-follow-digest")).toBe(true);
+    });
   });
 
   test("every weekly timer under the retry runner hands it its weekday", () => {
@@ -913,6 +977,7 @@ describe("daily and weekly retry", () => {
       "backup",
       "cluster",
       "demand",
+      "follow-digest",
       "funnel-snapshot",
       "label-releases",
       "label-triage",

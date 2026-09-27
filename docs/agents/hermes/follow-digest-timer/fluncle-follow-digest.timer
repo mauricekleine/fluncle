@@ -3,6 +3,7 @@ Description=Send follow digests every Friday at 17:00 Amsterdam
 
 [Timer]
 OnCalendar=Fri 17:00 Europe/Amsterdam
+OnCalendar=Fri 18:15 Europe/Amsterdam
 Persistent=true
 RandomizedDelaySec=60
 

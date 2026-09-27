@@ -59,6 +59,35 @@ export function digestWeekKey(date: Date): string {
   return `${year}-W${String(week).padStart(2, "0")}`;
 }
 
+export function scheduledDigestFriday(date: Date): { date: string; sendWindow: boolean } {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    day: "2-digit",
+    hour: "2-digit",
+    hourCycle: "h23",
+    month: "2-digit",
+    timeZone: "Europe/Amsterdam",
+    year: "numeric",
+  }).formatToParts(date);
+  const part = (type: string) => parts.find((entry) => entry.type === type)?.value ?? "";
+  const localDate = new Date(
+    Date.UTC(Number(part("year")), Number(part("month")) - 1, Number(part("day")), 12),
+  );
+  const weekday = localDate.getUTCDay() || 7;
+  localDate.setUTCDate(localDate.getUTCDate() + 5 - weekday);
+  return {
+    date: localDate.toISOString().slice(0, 10),
+    sendWindow: weekday === 5 && Number(part("hour")) >= 17,
+  };
+}
+
+function outsideDigestSendWindow(dryRun: boolean, sendWindow: boolean): boolean {
+  return !dryRun && !sendWindow;
+}
+
+function completedTestDelivery(testRecipient: string | undefined, outcome: string): boolean {
+  return testRecipient !== undefined && outcome === "sent";
+}
+
 export async function isFollowDigestPaused(): Promise<boolean> {
   return (await getSetting(FOLLOW_DIGEST_PAUSED_KEY)) === "true";
 }
@@ -157,6 +186,7 @@ export type FollowDigestSendResult = {
   skipped: number;
   unknown: number;
   weekKey: string;
+  windowClosed: boolean;
 };
 
 async function eligibleSubscriber(
@@ -233,6 +263,9 @@ async function sendClaimedDelivery(
   const allowance = Math.max(1, MAX_SEND_ATTEMPTS - attempts);
   for (let retry = 0; retry < allowance; retry += 1) {
     const attemptAt = clock();
+    if (!scheduledDigestFriday(attemptAt).sendWindow) {
+      throw new Error("Follow digest send window closed");
+    }
     if (
       attemptAt.getTime() - new Date(delivery.claimed_at).getTime() >=
       RESEND_IDEMPOTENCY_SAFE_MS
@@ -265,6 +298,9 @@ async function sendClaimedDelivery(
         where id = ? and status = 'claimed'`,
     });
     let response: Awaited<ReturnType<typeof sendFollowDigestEmail>>;
+    if (!scheduledDigestFriday(clock()).sendWindow) {
+      throw new Error("Follow digest send window closed");
+    }
     try {
       response = await sendFollowDigestEmail(payload);
     } catch (error) {
@@ -338,8 +374,34 @@ async function recoverClaimedDelivery(
   return sendClaimedDelivery(db, delivery, userId, weekKey, clock, testRecipient);
 }
 
-function liveClock(clock: (() => Date) | undefined): () => Date {
-  return clock ?? (() => new Date());
+function liveClock(clock: (() => Date) | undefined, now: Date | undefined): () => Date {
+  return clock ?? (() => now ?? new Date());
+}
+
+async function e2eDigestNow(): Promise<Date | undefined> {
+  if (!import.meta.env.DEV || (await readOptionalEnv("FLUNCLE_E2E")) !== "1") {
+    return undefined;
+  }
+  const configured = await readOptionalEnv("FOLLOW_DIGEST_TEST_NOW");
+  if (!configured) {
+    return undefined;
+  }
+  const now = new Date(configured);
+  if (Number.isNaN(now.getTime())) {
+    throw new Error("FOLLOW_DIGEST_TEST_NOW must be an ISO date");
+  }
+  return now;
+}
+
+async function resolveDigestClock(options: {
+  clock?: () => Date;
+  now?: Date;
+}): Promise<{ clock: () => Date; now: Date }> {
+  const testNow = options.now ? undefined : await e2eDigestNow();
+  return {
+    clock: liveClock(options.clock, options.now ?? testNow),
+    now: options.now ?? testNow ?? new Date(),
+  };
 }
 
 export async function reconcileStaleDeliveryClaims(
@@ -391,9 +453,10 @@ export async function sendFollowDigests(
     now?: Date;
   } = {},
 ): Promise<FollowDigestSendResult> {
-  const now = options.now ?? new Date();
-  const clock = liveClock(options.clock);
-  const weekKey = digestWeekKey(now);
+  const { clock, now } = await resolveDigestClock(options);
+  const scheduledFriday = scheduledDigestFriday(now);
+  const fridayNoon = new Date(`${scheduledFriday.date}T12:00:00.000Z`);
+  const weekKey = digestWeekKey(fridayNoon);
   const dryRun = options.dryRun ?? false;
   const testRecipient = await readOptionalEnv("FOLLOW_DIGEST_TEST_RECIPIENT");
   const base: FollowDigestSendResult = {
@@ -408,7 +471,11 @@ export async function sendFollowDigests(
     skipped: 0,
     unknown: 0,
     weekKey,
+    windowClosed: !scheduledFriday.sendWindow,
   };
+  if (outsideDigestSendWindow(dryRun, scheduledFriday.sendWindow)) {
+    return base;
+  }
   if (await isFollowDigestPaused()) {
     return { ...base, paused: true };
   }
@@ -450,7 +517,7 @@ export async function sendFollowDigests(
         testRecipient,
       );
       base[outcome] += 1;
-      if (testRecipient && outcome === "sent") {
+      if (completedTestDelivery(testRecipient, outcome)) {
         break;
       }
       continue;
@@ -462,12 +529,8 @@ export async function sendFollowDigests(
     }
     const since = eligible.last_sent_at
       ? eligible.last_sent_at.slice(0, 10)
-      : new Date(now.getTime() - 7 * 86400000).toISOString().slice(0, 10);
-    const releases = await listFollowDigestReleases(
-      subscriber.id,
-      since,
-      now.toISOString().slice(0, 10),
-    );
+      : new Date(fridayNoon.getTime() - 7 * 86400000).toISOString().slice(0, 10);
+    const releases = await listFollowDigestReleases(subscriber.id, since, scheduledFriday.date);
     if (releases.items.length === 0) {
       base.empty += 1;
       continue;
@@ -513,7 +576,7 @@ export async function sendFollowDigests(
       idempotencyKey,
       to: testRecipient ?? fresh.email,
     };
-    const claimedAt = now.toISOString();
+    const claimedAt = clock().toISOString();
     const claim = await db.execute({
       args: [
         id,

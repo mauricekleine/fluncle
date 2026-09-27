@@ -79,6 +79,83 @@ async function track(
 }
 
 describe("weekly follow digest", () => {
+  it("only sends from the scheduled Amsterdam Friday slot and keys that Friday", async () => {
+    const { sendFollowDigests, scheduledDigestFriday } = await import("./follow-digest");
+    await seedUser(db, { email: "one@example.com", emailVerified: true, id: "one" });
+    await seedArtist(db, { id: "artist-a", name: "Artist A", slug: "artist-a" });
+    await watch("one", "artist", "artist-a", "watch-a");
+    await track("release", "2026-09-24", { artistId: "artist-a" });
+
+    expect(scheduledDigestFriday(new Date("2026-09-26T12:00:00Z"))).toEqual({
+      date: "2026-09-25",
+      sendWindow: false,
+    });
+    for (const now of [
+      new Date("2026-09-25T14:59:00Z"),
+      new Date("2026-09-26T12:00:00Z"),
+      new Date("2026-09-28T12:00:00Z"),
+    ]) {
+      expect(await sendFollowDigests({ now })).toMatchObject({
+        considered: 0,
+        sent: 0,
+        windowClosed: true,
+      });
+    }
+    expect(await rowCount(db, "follow_digest_deliveries")).toBe(0);
+    expect(sendEmail).not.toHaveBeenCalled();
+
+    expect(await sendFollowDigests({ now: new Date("2026-09-25T15:00:00Z") })).toMatchObject({
+      sent: 1,
+      weekKey: "2026-W39",
+      windowClosed: false,
+    });
+    expect(sendEmail).toHaveBeenCalledTimes(1);
+  });
+
+  it("restarts a partial Friday batch without sending the first recipient again", async () => {
+    const { sendFollowDigests } = await import("./follow-digest");
+    for (const id of ["a", "b"]) {
+      await seedUser(db, { email: `${id}@example.com`, emailVerified: true, id });
+    }
+    await seedArtist(db, { id: "artist-a", name: "Artist A", slug: "artist-a" });
+    await watch("a", "artist", "artist-a", "watch-a");
+    await watch("b", "artist", "artist-a", "watch-b");
+    await track("release", "2026-09-24", { artistId: "artist-a" });
+
+    expect(
+      await sendFollowDigests({ limit: 1, now: new Date("2026-09-25T15:00:00Z") }),
+    ).toMatchObject({ sent: 1 });
+    expect(await sendFollowDigests({ now: new Date("2026-09-25T16:15:00Z") })).toMatchObject({
+      sent: 1,
+    });
+    expect(sendEmail.mock.calls.map(([payload]) => payload.to)).toEqual([
+      "a@example.com",
+      "b@example.com",
+    ]);
+    expect(await rowCount(db, "follow_digest_deliveries")).toBe(2);
+  });
+
+  it("stops before another recipient when the Friday send crosses midnight", async () => {
+    const { sendFollowDigests } = await import("./follow-digest");
+    for (const id of ["a", "b"]) {
+      await seedUser(db, { email: `${id}@example.com`, emailVerified: true, id });
+    }
+    await seedArtist(db, { id: "artist-a", name: "Artist A", slug: "artist-a" });
+    await watch("a", "artist", "artist-a", "watch-a");
+    await watch("b", "artist", "artist-a", "watch-b");
+    await track("release", "2026-09-24", { artistId: "artist-a" });
+    let current = new Date("2026-09-25T21:59:00Z");
+    sendEmail.mockImplementationOnce(async () => {
+      current = new Date("2026-09-25T22:00:00Z");
+      return { id: "resend-a" };
+    });
+
+    await expect(sendFollowDigests({ clock: () => current, now: current })).rejects.toThrow(
+      "Follow digest send window closed",
+    );
+    expect(sendEmail).toHaveBeenCalledTimes(1);
+  });
+
   it("omits long catalogue releases while keeping long findings", async () => {
     const { listFollowDigestReleases } = await import("./follow-digest");
     await seedUser(db, { email: "one@example.com", emailVerified: true, id: "one" });
@@ -241,7 +318,7 @@ describe("weekly follow digest", () => {
       "update follow_digest_deliveries set status = 'claimed', claimed_at = '2026-09-25T14:55:00.000Z' where user_id = 'one'",
     );
     await db.execute("update tracks set title = 'A changed title' where track_id = 'release'");
-    const retry = await sendFollowDigests({ now });
+    const retry = await sendFollowDigests({ now: new Date("2026-09-25T16:15:00.000Z") });
     expect(retry).toMatchObject({ sent: 1, unknown: 0 });
     expect(sendEmail.mock.calls[1]?.[0]).toEqual(firstPayload);
   });
@@ -466,11 +543,11 @@ describe("every send attempt re-checks the clock and the recipient", () => {
   it("never re-sends a claim whose idempotency window closes while the batch is running", async () => {
     const { sendFollowDigests } = await import("./follow-digest");
     await seedOne();
-    await strandClaim("2026-09-24T16:00:00.000Z", new Date("2026-09-24T16:00:00.000Z"));
+    await strandClaim("2026-09-24T16:00:00.000Z", new Date("2026-09-25T15:00:00.000Z"));
 
     const result = await sendFollowDigests({
       clock: () => new Date("2026-09-25T15:30:00.000Z"),
-      now: new Date("2026-09-25T14:00:00.000Z"),
+      now: new Date("2026-09-25T15:00:00.000Z"),
     });
 
     expect(sendEmail).not.toHaveBeenCalled();
@@ -480,7 +557,7 @@ describe("every send attempt re-checks the clock and the recipient", () => {
   it("treats a claim within an hour of the 24 h window as already expired", async () => {
     const { sendFollowDigests } = await import("./follow-digest");
     await seedOne();
-    await strandClaim("2026-09-24T16:00:00.000Z", new Date("2026-09-24T16:00:00.000Z"));
+    await strandClaim("2026-09-24T16:00:00.000Z", new Date("2026-09-25T15:00:00.000Z"));
 
     const at = new Date("2026-09-25T15:10:00.000Z");
     const result = await sendFollowDigests({ clock: () => at, now: at });
