@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createIntegrationDb, rowCount, seedUser } from "./integration-db";
 import { type PublicUser } from "./public-auth";
+import { readSpotifyDailyCallCount } from "./spotify-budget";
 
 let db: Client;
 
@@ -671,6 +672,18 @@ describe("edition_only user opens minting — the mirror catches up without a ne
 });
 
 describe("putFrontierCover (the INERT-until-scope upload leg)", () => {
+  it("counts a raw cover attempt even when the vendor request rejects", async () => {
+    const { putFrontierCover } = await import("./frontier-playlist");
+    const now = Date.now();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.reject(new Error("network down"))),
+    );
+    await putFrontierCover("u1", "pl-1", "BASE64", now);
+    expect(await readSpotifyDailyCallCount(now)).toBe(1);
+    vi.unstubAllGlobals();
+  });
+
   it("degrades cleanly on a 403 missing scope — stamps nothing", async () => {
     const { putFrontierCover } = await import("./frontier-playlist");
 

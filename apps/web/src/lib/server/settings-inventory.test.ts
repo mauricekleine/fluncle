@@ -62,7 +62,11 @@ const SETTINGS_INVENTORY = {
     "spotify_anchor_breaker_reason",
     "spotify_anchor_breaker_tripped_at",
   ],
-  "spotify-budget.ts": ["spotify_calls_window_count", "spotify_calls_window_start"],
+  "spotify-budget.ts": [
+    "spotify_calls_window_count",
+    "spotify_calls_window_start",
+    "spotify_label_releases_daily_budget",
+  ],
   "telescope-playlist.ts": ["telescope.last_mirror", "telescope.spotify_playlist_id"],
 } as const satisfies Record<string, readonly string[]>;
 
@@ -166,7 +170,7 @@ describe("settings inventory drift", () => {
     expect(orphaned, "Registered settings keys with no reader and no writer").toEqual([]);
     expect(unregistered, "Settings keys used by code but missing from the inventory").toEqual([]);
     expect(wrongOwner, "Settings keys used outside their registered owner module").toEqual([]);
-    expect(registered.size).toBe(48);
+    expect(registered.size).toBe(49);
     expect(Object.keys(SETTINGS_INVENTORY)).toHaveLength(22);
   });
 });

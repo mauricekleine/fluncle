@@ -80,7 +80,13 @@ import {
   TAP_BUDGET_CEILING,
 } from "./label-releases";
 import { listFreshReleases } from "./fresh";
+import { recordAnchorSpotifyCall } from "./anchor-spotify-search";
 import {
+  chargeSpotifyTapDailyCall,
+  readSpotifyTapDailyCallsSpent,
+  readSpotifyDailyCallCount,
+  recordSpotifyDailyCall,
+  setSpotifyTapDailyBudget,
   readSpotifyCallCount,
   SPOTIFY_CALL_WINDOW_MAX,
   SPOTIFY_CALLS_WINDOW_COUNT_KEY,
@@ -1214,6 +1220,81 @@ describe("probeLabelReleases", () => {
     expect(resumed.budgetPaused).toBe(false);
     expect(resumed.newRows).toBe(1);
     expect(resumed.newTrackIds).toEqual(["sp_t1"]);
+  });
+
+  it("finishes a ten-album label across meter windows and then probes the next label", async () => {
+    await seedEnabledLabel(db, { id: "lbl_big", name: "Aaa Label", slug: "aaa-label" });
+    await seedEnabledLabel(db, { id: "lbl_next", name: "Zzz Label", slug: "zzz-label" });
+    const albums = Array.from({ length: 10 }, (_, index) => ({
+      copyrights: ["℗ 2026 Aaa Label"],
+      id: `album_${index}`,
+      name: `Album ${index}`,
+      releaseDate: "2026-09-26",
+      trackIds: [`track_${index}_a`, `track_${index}_b`],
+    }));
+    setSpotifyFixture({
+      albums,
+      searchAlbumIds: albums.map((album) => album.id),
+      tracks: albums.flatMap((album) => album.trackIds.map((id) => ({ id, title: id }))),
+    });
+
+    for (let pass = 0; pass < 12; pass += 1) {
+      await setSpotifyCallMeter(db, 0);
+      await probeLabelReleases();
+    }
+
+    const stamps = await db.execute(
+      "select slug, label_releases_checked_at from labels order by slug asc",
+    );
+    expect(stamps.rows[0]?.label_releases_checked_at).not.toBeNull();
+    expect(stamps.rows[1]?.label_releases_checked_at).not.toBeNull();
+    const tracks = await db.execute("select count(*) as n from tracks where label_id = 'lbl_big'");
+    expect(Number(tracks.rows[0]?.n)).toBe(20);
+  });
+
+  it("charges an atomic daily tap cap without repeat requests", async () => {
+    await seedEnabledLabel(db, { id: "lbl_1", name: "Medschool", slug: "medschool" });
+    setMintableFixture();
+    await setSpotifyTapDailyBudget(2);
+    const first = await probeLabelReleases();
+    expect(first.blockedReason).toBe("spotify_budget_spent");
+    expect(first.tapDailyCallsSpent).toBe(2);
+    expect(spotify.calls).toHaveLength(2);
+    expect(await readSpotifyTapDailyCallsSpent()).toBe(2);
+
+    await setSpotifyCallMeter(db, 0);
+    const second = await probeLabelReleases();
+    expect(second.blockedReason).toBe("spotify_budget_spent");
+    expect(spotify.calls).toHaveLength(2);
+  });
+
+  it("counts the shared daily Spotify usage across callers and resets at UTC midnight", async () => {
+    const day = Date.UTC(2026, 8, 26, 12);
+    await recordSpotifyDailyCall(day);
+    await recordSpotifyDailyCall(day + 1000);
+    await recordAnchorSpotifyCall(new Date(day + 1000));
+    expect(await readSpotifyDailyCallCount(day + 2000)).toBe(2);
+    expect(await readSpotifyDailyCallCount(Date.UTC(2026, 8, 27))).toBe(0);
+  });
+
+  it("admits only the configured number of concurrent daily tap charges", async () => {
+    const day = Date.UTC(2026, 8, 26, 12);
+    const charged = await Promise.all(
+      Array.from({ length: 5 }, () => chargeSpotifyTapDailyCall(2, day)),
+    );
+    expect(charged.filter(Boolean)).toHaveLength(2);
+    expect(await readSpotifyTapDailyCallsSpent(day)).toBe(2);
+  });
+
+  it("excludes failure-cooldown labels from due counts", async () => {
+    await seedEnabledLabel(db, { id: "lbl_1", name: "Medschool", slug: "medschool" });
+    await db.execute({
+      args: [new Date().toISOString()],
+      sql: "update labels set label_releases_failures = 1, label_releases_attempted_at = ? where slug = 'medschool'",
+    });
+    const result = await probeLabelReleases({ dryRun: true });
+    expect(result.labelsDue).toBe(0);
+    expect(result.neverChecked).toBe(0);
   });
 
   it("stops MID-PASS at the ceiling, leaving the unprobed labels for the next tick", async () => {

@@ -279,6 +279,8 @@ export function adminBackfillsHandlers(os: Implementer) {
           skippedKnown: result.skippedKnown,
           skippedUndated: result.skippedUndated,
           skippedUngrounded: result.skippedUngrounded,
+          tapDailyBudget: result.tapDailyBudget,
+          tapDailyCallsSpent: result.tapDailyCallsSpent,
           tracksSkippedArtistRule: result.tracksSkippedArtistRule,
         };
       } catch (error) {

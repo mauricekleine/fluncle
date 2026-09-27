@@ -72,7 +72,7 @@ function markerDir(runs: { ageMs: number; body: string }[]): string {
   return dir;
 }
 
-test("the label-release tap reads degraded after a due day with fewer than 1000 completed probes", () => {
+test("the label-release tap derives its daily floor from the 500-call budget", () => {
   const dir = mkdtempSync(join(tmpdir(), "fluncle-label-tap-health-"));
   temporaryDirectories.push(dir);
   const now = new Date("2026-09-26T10:00:00Z");
@@ -81,12 +81,18 @@ test("the label-release tap reads degraded after a due day with fewer than 1000 
     match: "label-releases",
     service: "cron.label-releases",
   };
-  for (const [index, probed] of [600, 300].entries()) {
+  for (const [index, probed] of [25, 24].entries()) {
     const path = join(dir, `${index}.md`);
     writeFileSync(
       path,
       marker(
-        JSON.stringify({ labelsDue: 2074, labelsProbed: probed, neverChecked: 1436, ok: true }),
+        JSON.stringify({
+          labelsDue: 2074,
+          labelsProbed: probed,
+          neverChecked: 1436,
+          ok: true,
+          tapDailyBudget: 500,
+        }),
       ),
     );
     const when = new Date(`2026-09-26T0${index + 3}:15:00Z`).getTime() / 1000;
@@ -95,7 +101,10 @@ test("the label-release tap reads degraded after a due day with fewer than 1000 
   expect(judgeCron(cron, dir, null, now)).toBe("incomplete");
   expect(cronCheck(cron, "incomplete").status).toBe("degraded");
   const final = join(dir, "2.md");
-  writeFileSync(final, marker(JSON.stringify({ labelsDue: 1174, labelsProbed: 100, ok: true })));
+  writeFileSync(
+    final,
+    marker(JSON.stringify({ labelsDue: 1174, labelsProbed: 1, ok: true, tapDailyBudget: 500 })),
+  );
   const when = new Date("2026-09-26T05:15:00Z").getTime() / 1000;
   utimesSync(final, when, when);
   expect(judgeCron(cron, dir, null, now)).toBe("fresh-ok");
@@ -110,7 +119,7 @@ test("a skipped final tap firing does not erase enough earlier probes", () => {
     service: "cron.label-releases",
   };
   const runs = [
-    { at: "2026-09-26T03:15:00Z", body: { labelsDue: 2074, labelsProbed: 1000, ok: true } },
+    { at: "2026-09-26T03:15:00Z", body: { labelsDue: 2074, labelsProbed: 50, ok: true } },
     {
       at: "2026-09-26T08:46:00Z",
       body: { gateState: "admission-skipped", ok: true, payloadStarted: false },
@@ -123,6 +132,155 @@ test("a skipped final tap firing does not erase enough earlier probes", () => {
     utimesSync(path, when, when);
   }
   expect(judgeCron(cron, dir, null, new Date("2026-09-26T10:00:00Z"))).toBe("fresh-ok");
+});
+
+test("tap health uses durable day totals after twenty markers are pruned", () => {
+  const dir = mkdtempSync(join(tmpdir(), "fluncle-label-tap-health-"));
+  temporaryDirectories.push(dir);
+  mkdirSync(join(dir, "daily"));
+  writeFileSync(
+    join(dir, "daily", "2026-09-26.json"),
+    JSON.stringify({
+      blockedReasons: [],
+      day: "2026-09-26",
+      labelsProbed: 50,
+      observedDemand: 200,
+      tapDailyBudget: 500,
+      tapDailyCallsSpent: 500,
+    }),
+  );
+  const path = join(dir, "last.md");
+  writeFileSync(
+    path,
+    marker(JSON.stringify({ labelsDue: 150, labelsProbed: 0, ok: true, tapDailyBudget: 500 })),
+  );
+  utimesSync(path, new Date("2026-09-26T08:45:00Z"), new Date("2026-09-26T08:45:00Z"));
+  expect(
+    judgeCron(
+      { cadenceMs: 24 * 60 * 60_000, match: "label-releases", service: "cron.label-releases" },
+      dir,
+      null,
+      new Date("2026-09-26T10:00:00Z"),
+    ),
+  ).toBe("fresh-ok");
+});
+
+test("an incomplete prior tap day remains degraded before today's window completes", () => {
+  const dir = mkdtempSync(join(tmpdir(), "fluncle-label-tap-health-"));
+  temporaryDirectories.push(dir);
+  mkdirSync(join(dir, "daily"));
+  writeFileSync(
+    join(dir, "daily", "2026-09-25.json"),
+    JSON.stringify({
+      blockedReasons: [],
+      day: "2026-09-25",
+      labelsProbed: 4,
+      observedDemand: 50,
+      tapDailyBudget: 500,
+      tapDailyCallsSpent: 40,
+    }),
+  );
+  const path = join(dir, "today.md");
+  writeFileSync(path, marker(JSON.stringify({ labelsDue: 50, labelsProbed: 0, ok: true })));
+  utimesSync(path, new Date("2026-09-26T04:00:00Z"), new Date("2026-09-26T04:00:00Z"));
+  expect(
+    judgeCron(
+      { cadenceMs: 24 * 60 * 60_000, match: "label-releases", service: "cron.label-releases" },
+      dir,
+      null,
+      new Date("2026-09-26T04:10:00Z"),
+    ),
+  ).toBe("incomplete");
+});
+
+test("tap health follows an operator-raised daily call budget", () => {
+  const dir = mkdtempSync(join(tmpdir(), "fluncle-label-tap-health-"));
+  temporaryDirectories.push(dir);
+  mkdirSync(join(dir, "daily"));
+  const statePath = join(dir, "daily", "2026-09-26.json");
+  const path = join(dir, "last.md");
+  writeFileSync(path, marker(JSON.stringify({ labelsDue: 200, labelsProbed: 0, ok: true })));
+  utimesSync(path, new Date("2026-09-26T08:45:00Z"), new Date("2026-09-26T08:45:00Z"));
+  const cron: CronDef = {
+    cadenceMs: 24 * 60 * 60_000,
+    match: "label-releases",
+    service: "cron.label-releases",
+  };
+  const now = new Date("2026-09-26T10:00:00Z");
+  writeFileSync(
+    statePath,
+    JSON.stringify({
+      blockedReasons: [],
+      day: "2026-09-26",
+      labelsProbed: 10,
+      observedDemand: 200,
+      tapDailyBudget: 100,
+      tapDailyCallsSpent: 100,
+    }),
+  );
+  expect(judgeCron(cron, dir, null, now)).toBe("fresh-ok");
+  writeFileSync(
+    statePath,
+    JSON.stringify({
+      blockedReasons: [],
+      day: "2026-09-26",
+      labelsProbed: 10,
+      observedDemand: 200,
+      tapDailyBudget: 200,
+      tapDailyCallsSpent: 100,
+    }),
+  );
+  expect(judgeCron(cron, dir, null, now)).toBe("incomplete");
+  writeFileSync(
+    statePath,
+    JSON.stringify({
+      blockedReasons: [],
+      day: "2026-09-26",
+      labelsProbed: 0,
+      observedDemand: 200,
+      tapDailyBudget: 0,
+      tapDailyCallsSpent: 0,
+    }),
+  );
+  expect(judgeCron(cron, dir, null, now)).toBe("fresh-ok");
+});
+
+test("quota and spent-budget days are exempt but failed tap markers still fail", () => {
+  const cron: CronDef = {
+    cadenceMs: 24 * 60 * 60_000,
+    match: "label-releases",
+    service: "cron.label-releases",
+  };
+  const now = new Date("2026-09-26T10:00:00Z");
+  for (const reason of ["spotify_quota", "spotify_budget_spent"]) {
+    const dir = mkdtempSync(join(tmpdir(), "fluncle-label-tap-health-"));
+    temporaryDirectories.push(dir);
+    mkdirSync(join(dir, "daily"));
+    writeFileSync(
+      join(dir, "daily", "2026-09-26.json"),
+      JSON.stringify({
+        blockedReasons: [reason],
+        day: "2026-09-26",
+        labelsProbed: 0,
+        observedDemand: 200,
+        tapDailyBudget: 500,
+        tapDailyCallsSpent: 500,
+      }),
+    );
+    const path = join(dir, "last.md");
+    writeFileSync(path, marker(JSON.stringify({ labelsDue: 200, labelsProbed: 0, ok: true })));
+    utimesSync(path, new Date("2026-09-26T08:45:00Z"), new Date("2026-09-26T08:45:00Z"));
+    expect(judgeCron(cron, dir, null, now)).toBe("fresh-ok");
+    writeFileSync(
+      path,
+      marker(JSON.stringify({ blockedReason: reason, labelsDue: 200, labelsProbed: 0, ok: false })),
+    );
+    expect(judgeCron(cron, dir, null, now)).toBe("failed-once");
+    const earlier = join(dir, "earlier.md");
+    writeFileSync(earlier, marker(JSON.stringify({ ok: false })));
+    utimesSync(earlier, new Date("2026-09-26T08:30:00Z"), new Date("2026-09-26T08:30:00Z"));
+    expect(judgeCron(cron, dir, null, now)).toBe("failed");
+  }
 });
 
 test("tap health notices labels becoming due later and a missing first window", () => {

@@ -11,6 +11,7 @@ import {
   newSpotifyAskState,
   parseIsrcAskWindow,
   parseLimitArg,
+  readAnchorIsrcDue,
   runApifyActor,
   runAnchorSweep,
   runAnchorTick,
@@ -1927,6 +1928,55 @@ describe("runAnchorSweep — the firing preflight", () => {
       sleep: () => Promise.resolve(),
     };
   }
+
+  test("a nonempty general queue can have no ISRC asks due after the anchor tick", async () => {
+    const base = preflightDeps(
+      {
+        apifyBudgetRemaining: 300,
+        apifyBudgetSpent: false,
+        apifyEnabled: true,
+        gateReason: "open",
+        spotifySearchEnabled: true,
+      },
+      () => {},
+    );
+    const summary = await runAnchorSweep(1, {
+      ...base,
+      fetchQueue: () => Promise.resolve({ queueDepth: 100, rows: [] }),
+      now: () => Date.parse("2026-09-26T04:00:00Z"),
+      readIsrcDue: () => Promise.resolve(0),
+    });
+    expect(summary.queueDepth).toBe(100);
+    expect(summary.spotifyIsrcDue).toBe(0);
+    const pending = await runAnchorSweep(1, {
+      ...base,
+      fetchQueue: () => Promise.resolve({ queueDepth: 100, rows: [] }),
+      now: () => Date.parse("2026-09-26T04:00:00Z"),
+      readIsrcDue: () => Promise.resolve(3),
+    });
+    expect(pending.spotifyIsrcDue).toBe(3);
+    const unavailable = await runAnchorSweep(1, {
+      ...base,
+      fetchQueue: () => Promise.resolve({ queueDepth: 100, rows: [] }),
+      now: () => Date.parse("2026-09-26T04:00:00Z"),
+      readIsrcDue: () => Promise.reject(new Error("count unavailable")),
+    });
+    expect(unavailable.spotifyIsrcDue).toBeNull();
+  });
+
+  test("ISRC due read subtracts already-asked rows and rejects a missing count", async () => {
+    const modes: string[] = [];
+    const fetcher = ((input: RequestInfo | URL) => {
+      const url = input instanceof Request ? input.url : input instanceof URL ? input.href : input;
+      const mode = new URL(url).searchParams.get("paidMode") ?? "";
+      modes.push(mode);
+      return Promise.resolve(Response.json({ queued: mode === "quota" ? 12 : 9 }));
+    }) as typeof fetch;
+    expect(await readAnchorIsrcDue(fetcher)).toBe(3);
+    expect(modes.sort()).toEqual(["prior", "quota"]);
+    const missing = (() => Promise.resolve(Response.json({}))) as typeof fetch;
+    expect(readAnchorIsrcDue(missing)).rejects.toThrow("invalid count");
+  });
 
   test("a deferred firing reads NO worklist page at all", async () => {
     let fetches = 0;

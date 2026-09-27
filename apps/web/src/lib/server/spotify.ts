@@ -7,7 +7,11 @@ import { getDb, typedRow } from "./db";
 import { readEnvs } from "./env";
 import { logEvent } from "./log";
 import { recordSpotifyThrottle } from "./spotify-anchor-breaker";
-import { isSpotifyCallBudgetAvailable, recordSpotifyCall } from "./spotify-budget";
+import {
+  isSpotifyCallBudgetAvailable,
+  recordSpotifyCall,
+  recordSpotifyDailyCall,
+} from "./spotify-budget";
 
 const spotifyAccountsBaseUrl = "https://accounts.spotify.com";
 const spotifyApiBaseUrl = "https://api.spotify.com/v1";
@@ -660,6 +664,7 @@ export async function spotifyFetch(
   accessToken: string,
   init: RequestInit = {},
   retryOnThrottle = true,
+  recordAnchorThrottle = true,
 ): Promise<Response> {
   const headers = new Headers(init.headers);
   headers.set("Authorization", `Bearer ${accessToken}`);
@@ -669,6 +674,11 @@ export async function spotifyFetch(
   let spentMs = 0;
 
   for (let attempt = 0; ; attempt += 1) {
+    try {
+      await recordSpotifyDailyCall();
+    } catch (error) {
+      logEvent("warn", "spotify.daily-call-record-failed", { error });
+    }
     const response = await fetch(`${spotifyApiBaseUrl}${path}`, {
       ...init,
       headers,
@@ -685,7 +695,9 @@ export async function spotifyFetch(
         .then(() => response.clone().text())
         .then((body) => body.includes("QUOTA_EXCEEDED"))
         .catch(() => false);
-      await recordSpotifyThrottle(Date.now(), quotaExceeded);
+      if (recordAnchorThrottle) {
+        await recordSpotifyThrottle(Date.now(), quotaExceeded);
+      }
     }
 
     if (

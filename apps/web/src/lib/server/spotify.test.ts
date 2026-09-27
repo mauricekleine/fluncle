@@ -10,12 +10,17 @@ vi.mock("./env", () => ({
 const spotifyBudget = vi.hoisted(() => ({
   isAvailable: vi.fn<() => Promise<boolean>>(),
   record: vi.fn<() => Promise<void>>(),
+  recordDaily: vi.fn<() => Promise<void>>(),
 }));
 
 vi.mock("./spotify-budget", () => ({
   isSpotifyCallBudgetAvailable: spotifyBudget.isAvailable,
   recordSpotifyCall: spotifyBudget.record,
+  recordSpotifyDailyCall: spotifyBudget.recordDaily,
 }));
+
+const breaker = vi.hoisted(() => ({ record: vi.fn<() => Promise<void>>() }));
+vi.mock("./spotify-anchor-breaker", () => ({ recordSpotifyThrottle: breaker.record }));
 
 type AuthRow = {
   access_token: string;
@@ -109,6 +114,10 @@ beforeEach(() => {
   spotifyBudget.isAvailable.mockResolvedValue(true);
   spotifyBudget.record.mockReset();
   spotifyBudget.record.mockResolvedValue();
+  spotifyBudget.recordDaily.mockReset();
+  spotifyBudget.recordDaily.mockResolvedValue();
+  breaker.record.mockReset();
+  breaker.record.mockResolvedValue();
 });
 
 afterEach(() => {
@@ -186,6 +195,27 @@ describe("spotifyFetch 429 backoff", () => {
       retryAfterMs: 37_000,
     });
     expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(spotifyBudget.recordDaily).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a tap 429 out of the anchor breaker", async () => {
+    const { spotifyFetch } = await import("./spotify");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("rate limited", { status: 429 })),
+    );
+    await expect(spotifyFetch("/search", "token", {}, false, false)).rejects.toThrow(/429/);
+    expect(breaker.record).not.toHaveBeenCalled();
+    expect(spotifyBudget.recordDaily).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a user Spotify request working when daily telemetry fails", async () => {
+    const { spotifyFetch } = await import("./spotify");
+    spotifyBudget.recordDaily.mockRejectedValueOnce(new Error("counter unavailable"));
+    const fetchMock = vi.fn(async () => new Response("{}", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(spotifyFetch("/me", "token")).resolves.toHaveProperty("status", 200);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("waits out a 429 Retry-After on an idempotent GET, then succeeds", async () => {
@@ -218,6 +248,7 @@ describe("spotifyFetch 429 backoff", () => {
 
     await expect(promise).resolves.toEqual([]);
     expect(searchCalls).toBe(2);
+    expect(spotifyBudget.recordDaily).toHaveBeenCalledTimes(2);
   });
 
   it("throws the original 429 error shape when the wait budget would be exceeded", async () => {

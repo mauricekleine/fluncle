@@ -248,6 +248,8 @@ export type AnchorSummary = {
 
   spotifyIsrcAsks: number;
 
+  spotifyIsrcDue: null | number;
+
   spotifyDeferredBudget: number;
 
   spotifyDeferredWindow: number;
@@ -276,6 +278,7 @@ export type AnchorDeps = {
   searchDeezer: (query: string) => Promise<DeezerCandidatePayload[] | DeezerSearchResult | null>;
 
   readPreflight?: () => Promise<AnchorPreflight>;
+  readIsrcDue?: () => Promise<null | number>;
 
   sleep: (ms: number) => Promise<void>;
 };
@@ -906,6 +909,7 @@ export async function runAnchorTick(
     spotifyDeferredWindow: 0,
     spotifyDeferredYield: 0,
     spotifyIsrcAsks: 0,
+    spotifyIsrcDue: null,
   };
 
   const queue = await fetchAnchorWorkRows(limit, deps, summary, paidMode);
@@ -1080,6 +1084,31 @@ async function fetchAnchorQueue(
     queueDepth: typeof body.queued === "number" ? body.queued : null,
     rows: body.tracks as AnchorWorkItem[],
   };
+}
+
+export async function readAnchorIsrcDue(fetcher: typeof fetch = fetch): Promise<number> {
+  const count = async (mode: "prior" | "quota"): Promise<number> => {
+    const response = await fetcher(
+      `${API_BASE_URL}/api/v1/admin/tracks/work?kind=anchor&limit=1&count=true&paidMode=${mode}`,
+      {
+        headers: { Authorization: `Bearer ${API_TOKEN}` },
+        signal: AbortSignal.timeout(30_000),
+      },
+    );
+    if (!response.ok) {
+      throw new Error(`anchor ISRC due count failed (${response.status})`);
+    }
+    const body = (await response.json()) as { queued?: unknown };
+    if (typeof body.queued !== "number" || !Number.isSafeInteger(body.queued) || body.queued < 0) {
+      throw new Error("anchor ISRC due count returned an invalid count");
+    }
+    return body.queued;
+  };
+  const [allIsrc, previouslyAsked] = await Promise.all([count("quota"), count("prior")]);
+  if (previouslyAsked > allIsrc) {
+    throw new Error("anchor ISRC due count changed between reads");
+  }
+  return allIsrc - previouslyAsked;
 }
 
 export async function runApifyActor(queries: string[]): Promise<ApifyResultItem[]> {
@@ -1410,6 +1439,29 @@ function sweepBlockedReason(summary: AnchorSummary, paidMode?: "prior" | "quota"
     : null;
 }
 
+async function measureAnchorIsrcDue(
+  ok: boolean,
+  preflight: AnchorPreflight | undefined,
+  askState: SpotifyAskState,
+  deps: AnchorDeps,
+): Promise<null | number> {
+  if (!ok || !preflight || !deps.readIsrcDue) {
+    return null;
+  }
+  const due = await deps.readIsrcDue().catch((error: unknown) => {
+    deps.log(`ISRC due count failed: ${error instanceof Error ? error.message : String(error)}`);
+    return null;
+  });
+  if (due === null || !Number.isSafeInteger(due) || due < 0) {
+    return null;
+  }
+  const slots =
+    preflight.spotifySearchEnabled && withinIsrcAskWindow(askState.askWindow, new Date(deps.now()))
+      ? Math.max(0, askState.limit - askState.asksSpent)
+      : 0;
+  return Math.min(due, slots);
+}
+
 export async function runAnchorSweep(
   total: number,
   deps: AnchorDeps,
@@ -1464,6 +1516,7 @@ export async function runAnchorSweep(
     spotifyDeferredWindow: 0,
     spotifyDeferredYield: 0,
     spotifyIsrcAsks: 0,
+    spotifyIsrcDue: null as null | number,
   };
 
   const askState = newSpotifyAskState();
@@ -1599,6 +1652,8 @@ export async function runAnchorSweep(
     ? "anchor_contract_fault"
     : sweepBlockedReason(merged, paidMode);
 
+  merged.spotifyIsrcDue = await measureAnchorIsrcDue(merged.ok, preflight, askState, deps);
+
   return merged;
 }
 
@@ -1652,6 +1707,7 @@ async function main(): Promise<void> {
     fetchQueue: fetchAnchorQueue,
     log,
     now: () => Date.now(),
+    readIsrcDue: readAnchorIsrcDue,
     readPreflight: readAnchorPreflight,
     recordInvalidFailure,
     report: reportAnchor,

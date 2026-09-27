@@ -57,6 +57,7 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   "GET /admin/catalogue/captures/unverified": "list_unverified_captures",
 
   "GET /admin/catalogue/crawl": "get_crawl_status",
+  "GET /admin/catalogue/label-releases-budget": "get_label_releases_budget",
   "GET /admin/catalogue/pipeline": "get_pipeline",
 
   "GET /admin/clips": "list_clips",
@@ -415,6 +416,7 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   "PUT /admin/catalogue/capture-budget": "set_capture_budget",
 
   "PUT /admin/catalogue/dismissed": "set_track_dismissed",
+  "PUT /admin/catalogue/label-releases-budget": "set_label_releases_budget",
 
   "PUT /admin/clips/drip/state": "set_clip_drip",
 

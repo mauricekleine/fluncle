@@ -18,9 +18,8 @@ EnvironmentFile=-/etc/fluncle/database-admission.env
 # drives it, and the tap reuses the publish path's Spotify OAuth (already on the WORKER). The probe
 # is a Worker-paced sweep, so the box just drives the CLI.
 ExecStart=/usr/bin/docker exec -e DATABASE_ADMISSION_FAIL_CLOSED -e DATABASE_ADMISSION_POLL_SECS=2 -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/database-admission-runner.sh fluncle-label-releases -- bash /opt/hermes-scripts/label-releases-sweep.sh
-# A PURE trigger — zero LLM tokens. The probe's Spotify calls ride the client's 429 backoff, so the
-# CLI can loop passes for a few minutes when a fresh label has many releases; 600s clears that with
-# room to spare and still sits far under the 24h cadence.
+# A PURE trigger — zero LLM tokens. The sweep caps itself at 720s including a reserve for its last
+# 120s Worker call, leaving room for database admission and marker/ledger writes within this timeout.
 TimeoutStartSec=910
 # Modest hardening for a root docker-driving oneshot.
 NoNewPrivileges=true

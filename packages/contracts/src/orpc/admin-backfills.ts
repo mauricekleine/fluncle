@@ -597,7 +597,13 @@ export const backfillLabelReleases = oc
       albumsSeen: z.number(),
 
       blockedReason: z
-        .enum(["spotify_breaker", "spotify_budget", "spotify_quota", "spotify_throttle"])
+        .enum([
+          "spotify_breaker",
+          "spotify_budget",
+          "spotify_budget_spent",
+          "spotify_quota",
+          "spotify_throttle",
+        ])
         .nullable(),
 
       budgetPaused: z.boolean(),
@@ -637,6 +643,10 @@ export const backfillLabelReleases = oc
       skippedUndated: z.number(),
 
       skippedUngrounded: z.number(),
+
+      tapDailyBudget: z.number().int(),
+
+      tapDailyCallsSpent: z.number().int(),
 
       tracksSkippedArtistRule: z.number().optional(),
     }),

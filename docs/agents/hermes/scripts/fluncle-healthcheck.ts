@@ -714,14 +714,47 @@ function owedSlotDayMissing(cron: CronDef, dir: string, now: Date): boolean {
   return day !== null && !slotDayCompleted({ day, directory: dirname(dir), job, schedule });
 }
 
-const LABEL_RELEASES_MIN_PROBES_PER_DAY = 1000;
+const LABEL_RELEASES_CALLS_PER_PROBE = 10;
 
 function labelReleaseWindowCompleted(now: Date): boolean {
   return now.getUTCHours() > 9 || (now.getUTCHours() === 9 && now.getUTCMinutes() >= 30);
 }
 
+function labelReleaseDailyStateIncomplete(dir: string, target: string): boolean | null {
+  try {
+    const state = JSON.parse(readFileSync(join(dir, "daily", `${target}.json`), "utf8")) as Record<
+      string,
+      unknown
+    >;
+    if (
+      state.day !== target ||
+      typeof state.labelsProbed !== "number" ||
+      !Number.isSafeInteger(state.labelsProbed) ||
+      typeof state.tapDailyBudget !== "number" ||
+      !Number.isSafeInteger(state.tapDailyBudget) ||
+      state.tapDailyBudget < 0
+    ) {
+      return null;
+    }
+    const blocked = Array.isArray(state.blockedReasons) ? state.blockedReasons : [];
+    if (blocked.includes("spotify_quota") || blocked.includes("spotify_budget_spent")) {
+      return false;
+    }
+    const demand = state.observedDemand;
+    return (
+      typeof demand !== "number" ||
+      (demand > 0 &&
+        state.labelsProbed <
+          Math.min(demand, Math.floor(state.tapDailyBudget / LABEL_RELEASES_CALLS_PER_PROBE)))
+    );
+  } catch {
+    return null;
+  }
+}
+
 function labelReleaseDayIncomplete(
   runFiles: { mtimeMs: number; path: string }[],
+  dir: string,
   now: Date,
 ): boolean {
   const day = new Date(now);
@@ -729,8 +762,13 @@ function labelReleaseDayIncomplete(
     day.setUTCDate(day.getUTCDate() - 1);
   }
   const target = day.toISOString().slice(0, 10);
+  const persisted = labelReleaseDailyStateIncomplete(dir, target);
+  if (persisted !== null) {
+    return persisted;
+  }
   let observedDemand: number | null = null;
   let probed = 0;
+  let tapDailyBudget = 500;
 
   for (const file of [...runFiles].reverse()) {
     if (new Date(file.mtimeMs).toISOString().slice(0, 10) !== target) {
@@ -748,12 +786,39 @@ function labelReleaseDayIncomplete(
     if (summary && typeof summary.labelsProbed === "number") {
       probed += summary.labelsProbed;
     }
+    if (summary && typeof summary.tapDailyBudget === "number" && summary.tapDailyBudget >= 0) {
+      tapDailyBudget = summary.tapDailyBudget;
+    }
+    if (
+      summary?.blockedReason === "spotify_quota" ||
+      summary?.blockedReason === "spotify_budget_spent"
+    ) {
+      return false;
+    }
   }
 
   return (
     observedDemand === null ||
-    (observedDemand > 0 && probed < Math.min(observedDemand, LABEL_RELEASES_MIN_PROBES_PER_DAY))
+    (observedDemand > 0 &&
+      probed <
+        Math.min(observedDemand, Math.floor(tapDailyBudget / LABEL_RELEASES_CALLS_PER_PROBE)))
   );
+}
+
+function labelReleaseCronVerdict(
+  cron: CronDef,
+  summary: Record<string, unknown>,
+  runFiles: { mtimeMs: number; path: string }[],
+  dir: string,
+  now: Date,
+): CronVerdict | null {
+  if (cron.service !== "cron.label-releases") {
+    return null;
+  }
+  if (summary.ok === false) {
+    return runFailed(runFiles[1]?.path) ? "failed" : "failed-once";
+  }
+  return labelReleaseDayIncomplete(runFiles, dir, now) ? "incomplete" : "fresh-ok";
 }
 
 export function judgeCron(
@@ -820,8 +885,9 @@ export function judgeCron(
     return "no-summary";
   }
 
-  if (cron.service === "cron.label-releases" && labelReleaseWindowCompleted(now)) {
-    return labelReleaseDayIncomplete(runFiles, now) ? "incomplete" : "fresh-ok";
+  const labelVerdict = labelReleaseCronVerdict(cron, summary, runFiles, dir, now);
+  if (labelVerdict !== null) {
+    return labelVerdict;
   }
 
   if (
