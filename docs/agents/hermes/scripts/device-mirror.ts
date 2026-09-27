@@ -22,6 +22,11 @@ import {
   runDatabaseAdmissionPhaseAsync,
   stopDatabaseAdmissionPhases,
 } from "./database-admission-phase";
+import {
+  refreshScoringExport,
+  SCORING_EXPORT_FILE,
+  type ScoringExportStatus,
+} from "./label-outliers-export";
 
 export type DeviceSqlValue = ArrayBuffer | ArrayBufferView | bigint | number | string | null;
 export type DeviceRow = Record<string, DeviceSqlValue>;
@@ -177,10 +182,6 @@ const MAX_PAGE_SIZE = 200;
 const DEFAULT_LOCK_STALE_MS = 15 * 60 * 1000;
 
 const LOCK_HEARTBEAT_MS = 60 * 1000;
-
-const DEFAULT_LOCK_WAIT_MS = 2 * 60 * 1000;
-
-const DEFAULT_LOCK_POLL_MS = 1000;
 const STAGE_CONTROL_TABLE = "_device_mirror_stage_control";
 const STAGE_CHECKPOINT_TABLE = "_device_mirror_stage_checkpoint";
 const REQUIRED_SOURCE_TABLES = [...DEVICE_SOURCE_TABLES, "track_embeddings"] as const;
@@ -635,22 +636,6 @@ function positiveIntegerEnv(name: string, fallback: number): number {
 
   if (!Number.isSafeInteger(value) || value <= 0) {
     throw new Error(`${name} must be a positive integer`);
-  }
-
-  return value;
-}
-
-function nonNegativeIntegerEnv(name: string, fallback: number): number {
-  const raw = process.env[name];
-
-  if (raw === undefined) {
-    return fallback;
-  }
-
-  const value = Number.parseInt(raw, 10);
-
-  if (!Number.isSafeInteger(value) || value < 0) {
-    throw new Error(`${name} must be a non-negative integer`);
   }
 
   return value;
@@ -2184,19 +2169,11 @@ export async function publishDeviceGeneration(
 
 export async function takeLockDir(
   lockDir: string,
-  options: {
-    now?: () => number;
-    pollMs: number;
-    sleep?: (ms: number) => Promise<void>;
-    staleMs: number;
-    waitMs: number;
-  },
+  options: { now?: () => number; staleMs: number },
 ): Promise<boolean> {
   const now = options.now ?? Date.now;
-  const sleep = options.sleep ?? ((ms: number) => Bun.sleep(ms));
-  const deadline = now() + options.waitMs;
 
-  for (;;) {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
       await mkdir(lockDir);
       return true;
@@ -2208,21 +2185,27 @@ export async function takeLockDir(
 
     const lockStat = await stat(lockDir).catch(() => undefined);
 
-    if (lockStat && now() - lockStat.mtimeMs > options.staleMs) {
-      await rmdir(lockDir).catch(() => {});
-      continue;
-    }
-
     if (!lockStat) {
       continue;
     }
 
-    if (now() >= deadline) {
+    if (now() - lockStat.mtimeMs <= options.staleMs) {
       return false;
     }
 
-    await sleep(options.pollMs);
+    try {
+      await rmdir(lockDir);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        continue;
+      }
+      throw new Error(
+        `Stale device mirror lock at ${lockDir} could not be removed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
   }
+
+  return false;
 }
 
 async function acquireLock(): Promise<null | (() => Promise<void>)> {
@@ -2231,10 +2214,7 @@ async function acquireLock(): Promise<null | (() => Promise<void>)> {
   const staleMs = positiveIntegerEnv("DEVICE_MIRROR_LOCK_STALE_MS", DEFAULT_LOCK_STALE_MS);
   const heartbeatMs = positiveIntegerEnv("DEVICE_MIRROR_LOCK_HEARTBEAT_MS", LOCK_HEARTBEAT_MS);
 
-  const waitMs = nonNegativeIntegerEnv("DEVICE_MIRROR_LOCK_WAIT_MS", DEFAULT_LOCK_WAIT_MS);
-  const pollMs = positiveIntegerEnv("DEVICE_MIRROR_LOCK_POLL_MS", DEFAULT_LOCK_POLL_MS);
-
-  if (!(await takeLockDir(lockDir, { pollMs, staleMs, waitMs }))) {
+  if (!(await takeLockDir(lockDir, { staleMs }))) {
     return null;
   }
 
@@ -2295,7 +2275,7 @@ type MirrorSummary = {
   produced: number | null;
   publishPath: DevicePublishPath | null;
   queueDepth: number | null;
-  reason?: "database_admission";
+  reason?: "database_admission" | "lock_held";
   rebuildCause: string | null;
   rewriteReason: DeviceRewriteReason | null;
   rebuildDurationMs: number | null;
@@ -2303,6 +2283,7 @@ type MirrorSummary = {
   replicaFramesSynced: number | null;
   replicaLagFrames: number | null;
   rowCounts: null | Record<DeviceSourceTable, number>;
+  scoringExport: null | ScoringExportStatus;
   throttled?: boolean;
   validation: "failed" | "locked" | "paused" | "verified";
 };
@@ -2335,6 +2316,7 @@ function emptySummary(): MirrorSummary {
     replicaLagFrames: null,
     rewriteReason: null,
     rowCounts: null,
+    scoringExport: null,
     validation: "failed",
   };
 }
@@ -2342,6 +2324,7 @@ function emptySummary(): MirrorSummary {
 export type DeviceMirrorRuntime = {
   createTarget?: () => DeviceTargetClient;
   derive?: typeof runDeriver;
+  refreshExport?: (replicaPath: string, exportPath: string) => Promise<ScoringExportStatus>;
   syncSource?: (
     path: string,
     forceRebuild: boolean,
@@ -2359,9 +2342,12 @@ export async function main(runtime: DeviceMirrorRuntime = {}): Promise<MirrorSum
       const locked = {
         ...summary,
         checked: null,
+        error: "another tick holds the device mirror lock; this tick published nothing",
+        errors: 1,
         gateState: "locked" as const,
-        ok: true,
+        ok: false,
         produced: null,
+        reason: "lock_held",
         validation: "locked" as const,
       };
       console.log(JSON.stringify(locked));
@@ -2422,6 +2408,23 @@ export async function main(runtime: DeviceMirrorRuntime = {}): Promise<MirrorSum
     summary.replicaLagFrames = calculateReplicaLagFrames(sync);
     summary.rebuildCause = sync.rebuildCause;
     summary.rebuildDurationMs = sync.rebuildCause ? sync.durationMs : 0;
+    summary.scoringExport = await (runtime.refreshExport ?? refreshScoringExport)(
+      replicaPath,
+      join(stateDirectory, SCORING_EXPORT_FILE),
+    ).catch(
+      (error: unknown): ScoringExportStatus => ({
+        durationMs: null,
+        error: (error instanceof Error ? error.message : String(error)).slice(0, 300),
+        exportedAt: null,
+        status: "failed",
+      }),
+    );
+
+    if (summary.scoringExport.status === "failed") {
+      log(
+        `label-outliers scoring export failed; the publish continues: ${summary.scoringExport.error}`,
+      );
+    }
 
     const derivation = await (runtime.derive ?? runDeriver)(replicaPath, generationPath);
     const generation = inspectDeviceGeneration(generationPath);

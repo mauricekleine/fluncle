@@ -1,11 +1,12 @@
 #!/usr/bin/env bun
 
 import { Database } from "bun:sqlite";
-import { mkdir, mkdtemp, readFile, rm, rmdir, stat, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { runDatabaseAdmissionPhaseAsync } from "./database-admission-phase";
+import { readExportMeta, SCORING_EXPORT_FILE } from "./label-outliers-export";
 import {
   addInto,
   EMBEDDING_DIMENSIONS,
@@ -84,7 +85,6 @@ export type ScoredReplica = {
 
 export type LabelOutliersSummary = {
   alertAcknowledged: boolean | null;
-  lockHeldMs?: null | number;
   checked: null | number;
   elapsedMs?: number;
   embeddedTracks: null | number;
@@ -206,10 +206,6 @@ const CATALOGUE_EMBEDDED = `from tracks t
   join track_embeddings e on e.track_id = t.track_id
   where t.is_catalogue = 1`;
 
-const EMBEDDINGS_FIRST = `from track_embeddings e
-  cross join tracks t on t.track_id = e.track_id
-  where t.is_catalogue = 1`;
-
 export type ReplicaInputs = {
   artistsByTrack: Map<string, string[]>;
   dnbTaggedAlbumIds: Set<string>;
@@ -295,193 +291,52 @@ export function readReplicaInputs(database: Database): ReplicaInputs {
   return { artistsByTrack, dnbTaggedAlbumIds, embeddedTracks, globalSum, groups };
 }
 
-export type ReplicaSnapshot = { close: () => void; inputs: ReplicaInputs };
+export const SCORING_EXPORT_MAX_AGE_MS = 36 * 60 * 60 * 1000;
 
-export function openReplicaSnapshot(path: string): ReplicaSnapshot {
-  const database = new Database(path, { readonly: true, strict: true });
-
-  try {
-    database.run("BEGIN");
-    const inputs = readReplicaInputs(database);
-
-    return {
-      close: () => {
-        if (database.inTransaction) {
-          database.run("COMMIT");
-        }
-        database.close();
-      },
-      inputs,
-    };
-  } catch (error) {
-    database.close();
-    throw error;
-  }
-}
-
-export function scoreSnapshotFile(path: string): Omit<ScoredReplica, "replicaSyncedAt"> {
-  const snapshot = openReplicaSnapshot(path);
-
-  try {
-    const run = scoreCatalogue({ ...snapshot.inputs, groups: snapshot.inputs.groups() });
-
-    return { embeddedTracks: snapshot.inputs.embeddedTracks, run };
-  } finally {
-    snapshot.close();
-  }
-}
-
-const COPY_SCHEMA = [
-  `create table tracks (track_id text primary key, label_id text, album_id text,
-     is_catalogue integer not null, has_embedding integer not null)`,
-  "create table track_embeddings (track_id text primary key, embedding_blob blob not null)",
-  "create table track_artists (track_id text not null, artist_id text not null)",
-  "create table albums (id text primary key, discogs_styles text)",
-];
-
-export function copyScoringInputs(source: Database, target: Database): number {
-  for (const statement of COPY_SCHEMA) {
-    target.run(statement);
-  }
-
-  const insertTrack = target.prepare(
-    "insert into tracks (track_id, label_id, album_id, is_catalogue, has_embedding) values (?, ?, ?, ?, ?)",
-  );
-  const insertEmbedding = target.prepare(
-    "insert into track_embeddings (track_id, embedding_blob) values (?, ?)",
-  );
-  const insertArtist = target.prepare(
-    "insert into track_artists (track_id, artist_id) values (?, ?)",
-  );
-  const insertAlbum = target.prepare("insert into albums (id, discogs_styles) values (?, ?)");
-  let copied = 0;
-
-  target.run("BEGIN");
-
-  for (const row of source
-    .query<
-      {
-        album_id: string | null;
-        embedding_blob: Uint8Array;
-        has_embedding: number;
-        is_catalogue: number;
-        label_id: string | null;
-        track_id: string;
-      },
-      []
-    >(
-      `select t.track_id, t.label_id, t.album_id, t.is_catalogue, t.has_embedding, e.embedding_blob
-         ${EMBEDDINGS_FIRST}`,
-    )
-    .iterate()) {
-    insertTrack.run(row.track_id, row.label_id, row.album_id, row.is_catalogue, row.has_embedding);
-    insertEmbedding.run(row.track_id, row.embedding_blob);
-    copied += 1;
-  }
-
-  for (const row of source
-    .query<{ artist_id: string; track_id: string }, []>(
-      `select ta.track_id, ta.artist_id from track_embeddings e
-         cross join tracks t on t.track_id = e.track_id
-         cross join track_artists ta on ta.track_id = e.track_id
-        where t.is_catalogue = 1`,
-    )
-    .iterate()) {
-    insertArtist.run(row.track_id, row.artist_id);
-  }
-
-  for (const row of source
-    .query<{ discogs_styles: string; id: string }, []>(
-      "select id, discogs_styles from albums where discogs_styles is not null",
-    )
-    .iterate()) {
-    insertAlbum.run(row.id, row.discogs_styles);
-  }
-
-  target.run("COMMIT");
-  target.run("create index tracks_label_id_idx on tracks (label_id)");
-
-  return copied;
-}
-
-export type CopyOutcome =
-  | { heldMs: number; kind: "copied" }
-  | { kind: "busy" }
+export type ScoreOutcome =
+  | ({ kind: "scored" } & ScoredReplica)
+  | { exportedAt: string; kind: "stale" }
   | { kind: "missing" };
 
-export async function copyReplicaUnderMirrorLock(
-  replicaFile: string,
-  lockDir: string,
-  copyFile: string,
-  now: () => number = () => performance.now(),
-): Promise<CopyOutcome> {
-  if (!(await stat(replicaFile).catch(() => undefined))) {
+export async function scoreExportFile(
+  exportFile: string,
+  options: { maxAgeMs?: number; now?: () => number } = {},
+): Promise<ScoreOutcome> {
+  const maxAgeMs = options.maxAgeMs ?? SCORING_EXPORT_MAX_AGE_MS;
+  const now = options.now ?? Date.now;
+
+  if (!(await stat(exportFile).catch(() => undefined))) {
     return { kind: "missing" };
   }
 
-  try {
-    await mkdir(lockDir);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "EEXIST") {
-      return { kind: "busy" };
-    }
-    throw error;
-  }
-
-  const lockedAt = now();
+  const database = new Database(exportFile, { readonly: true, strict: true });
 
   try {
-    const source = new Database(replicaFile, { readonly: true, strict: true });
-    const target = new Database(copyFile, { create: true, strict: true });
+    const meta = readExportMeta(database);
 
-    try {
-      target.run("PRAGMA journal_mode = OFF");
-      target.run("PRAGMA synchronous = OFF");
-      source.run("BEGIN");
-      copyScoringInputs(source, target);
-      source.run("COMMIT");
-    } finally {
-      target.close();
-      source.close();
+    if (!meta) {
+      return { kind: "missing" };
     }
-  } finally {
-    await rmdir(lockDir);
-  }
 
-  return { heldMs: Math.round(now() - lockedAt), kind: "copied" };
-}
+    const exportedTime = Date.parse(meta.exportedAt);
 
-export type ScoreOutcome =
-  | ({ kind: "scored"; lockHeldMs: number | null } & ScoredReplica)
-  | { kind: "busy" }
-  | { kind: "missing" };
-
-export async function scoreReplicaCopy(
-  replicaFile: string,
-  lockDir: string,
-): Promise<ScoreOutcome> {
-  const replicaStat = await stat(replicaFile).catch(() => undefined);
-  const directory = await mkdtemp(join(tmpdir(), "label-outliers-copy-"));
-  const copyFile = join(directory, "scoring-inputs.db");
-
-  try {
-    const copy = await copyReplicaUnderMirrorLock(replicaFile, lockDir, copyFile);
-
-    if (copy.kind !== "copied") {
-      if (copy.kind === "missing") {
-        log(`no device-mirror replica at ${replicaFile}`);
-      }
-      return copy;
+    if (!Number.isFinite(exportedTime) || now() - exportedTime > maxAgeMs) {
+      return { exportedAt: meta.exportedAt, kind: "stale" };
     }
+
+    database.run("BEGIN");
+    const inputs = readReplicaInputs(database);
+    const run = scoreCatalogue({ ...inputs, groups: inputs.groups() });
+    database.run("COMMIT");
 
     return {
-      ...scoreSnapshotFile(copyFile),
+      embeddedTracks: inputs.embeddedTracks,
       kind: "scored",
-      lockHeldMs: copy.heldMs,
-      replicaSyncedAt: replicaStat ? new Date(replicaStat.mtimeMs).toISOString() : null,
+      replicaSyncedAt: meta.exportedAt,
+      run,
     };
   } finally {
-    await rm(directory, { force: true, recursive: true });
+    database.close();
   }
 }
 
@@ -539,14 +394,25 @@ export async function runLabelOutliersSweep(
   const scored = await deps.score();
 
   if (scored.kind === "missing") {
-    return { ...summary, errors: 1, ok: false, reason: "replica_missing" };
+    return {
+      ...summary,
+      error: "the device mirror has not written a scoring export; nothing written",
+      errors: 1,
+      ok: false,
+      reason: "scoring_export_missing",
+    };
   }
 
-  if (scored.kind === "busy") {
-    return { ...summary, reason: "replica_busy" };
+  if (scored.kind === "stale") {
+    return {
+      ...summary,
+      error: `the scoring export dates from ${scored.exportedAt}, older than the sweep accepts; nothing written`,
+      errors: 1,
+      ok: false,
+      reason: "scoring_export_stale",
+      replicaSyncedAt: scored.exportedAt,
+    };
   }
-
-  summary.lockHeldMs = scored.lockHeldMs;
 
   summary.checked = scored.run.unitsScored;
   summary.embeddedTracks = scored.embeddedTracks;
@@ -593,17 +459,11 @@ export async function runLabelOutliersSweep(
   return summary;
 }
 
-function replicaPath(): string {
+function scoringExportPath(): string {
   const home = process.env.HOME ?? "/opt/data/home";
   const stateDirectory = process.env.DEVICE_MIRROR_STATE_DIR ?? join(home, "device-mirror");
 
-  return join(stateDirectory, "source-replica.db");
-}
-
-function replicaLockDir(): string {
-  const home = process.env.HOME ?? "/opt/data/home";
-
-  return process.env.DEVICE_MIRROR_LOCK_DIR ?? `${home}/.device-mirror.lock`;
+  return join(stateDirectory, SCORING_EXPORT_FILE);
 }
 
 async function putJson<T>(path: string, body: unknown, what: string): Promise<T> {
@@ -696,7 +556,7 @@ async function main(): Promise<LabelOutliersSummary> {
     acknowledge: (units) => admittedPut<AcknowledgeResponse>("acknowledge", { units }),
     notify: notifyDiscord,
     record: (payload) => admittedPut<RecordResponse>("record", payload),
-    score: () => scoreReplicaCopy(replicaPath(), replicaLockDir()),
+    score: () => scoreExportFile(scoringExportPath()),
   });
 
   return { ...summary, elapsedMs: Date.now() - started };

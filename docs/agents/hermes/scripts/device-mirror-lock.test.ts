@@ -1,6 +1,14 @@
 import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, rmdirSync, rmSync, utimesSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmdirSync,
+  rmSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -21,46 +29,87 @@ afterEach(() => {
   }
 });
 
+const STALE_MS = 15 * 60_000;
+
+function ageBy(path: string, ms: number): void {
+  const old = new Date(Date.now() - ms);
+  utimesSync(path, old, old);
+}
+
 describe("the device mirror's lock", () => {
-  test("waits out a short holder instead of skipping its tick", async () => {
+  test("takes a free lock", async () => {
     const lockDir = join(scratchDir(), ".device-mirror.lock");
-    mkdirSync(lockDir);
-    setTimeout(() => rmdirSync(lockDir), 120);
 
-    const taken = await takeLockDir(lockDir, { pollMs: 20, staleMs: 60_000, waitMs: 5_000 });
-
-    expect(taken).toBe(true);
+    expect(await takeLockDir(lockDir, { staleMs: STALE_MS })).toBe(true);
     expect(existsSync(lockDir)).toBe(true);
   });
 
-  test("gives up only after its wait window when the holder never lets go", async () => {
+  test("reports a live holder at once instead of waiting", async () => {
     const lockDir = join(scratchDir(), ".device-mirror.lock");
     mkdirSync(lockDir);
-    let clock = Date.now();
-    const sleeps: number[] = [];
+    const started = performance.now();
 
-    const taken = await takeLockDir(lockDir, {
-      now: () => clock,
-      pollMs: 1000,
-      sleep: async (ms) => {
-        sleeps.push(ms);
-        clock += ms;
-      },
-      staleMs: 15 * 60_000,
-      waitMs: 120_000,
-    });
-
-    expect(taken).toBe(false);
-    expect(sleeps.length).toBe(120);
+    expect(await takeLockDir(lockDir, { staleMs: STALE_MS })).toBe(false);
+    expect(performance.now() - started).toBeLessThan(1_000);
   });
 
   test("takes over a lock left by a dead tick", async () => {
     const lockDir = join(scratchDir(), ".device-mirror.lock");
     mkdirSync(lockDir);
-    const old = new Date(Date.now() - 60 * 60_000);
-    utimesSync(lockDir, old, old);
+    ageBy(lockDir, 60 * 60_000);
 
-    expect(await takeLockDir(lockDir, { pollMs: 20, staleMs: 15 * 60_000, waitMs: 0 })).toBe(true);
+    expect(await takeLockDir(lockDir, { staleMs: STALE_MS })).toBe(true);
+    expect(existsSync(lockDir)).toBe(true);
+  });
+
+  test("fails fast when a stale lock directory cannot be removed", async () => {
+    const lockDir = join(scratchDir(), ".device-mirror.lock");
+    mkdirSync(lockDir);
+    writeFileSync(join(lockDir, "stray"), "x");
+    ageBy(lockDir, 60 * 60_000);
+    const started = performance.now();
+
+    const outcome = await takeLockDir(lockDir, { staleMs: STALE_MS }).then(
+      () => "resolved",
+      (error: unknown) => (error instanceof Error ? error.message : String(error)),
+    );
+
+    expect(outcome).toContain("could not be removed");
+    expect(performance.now() - started).toBeLessThan(1_000);
+  });
+
+  test("fails fast when a stale regular file sits at the lock path", async () => {
+    const lockDir = join(scratchDir(), ".device-mirror.lock");
+    writeFileSync(lockDir, "not a directory");
+    ageBy(lockDir, 60 * 60_000);
+
+    const outcome = await takeLockDir(lockDir, { staleMs: STALE_MS }).then(
+      () => "resolved",
+      (error: unknown) => (error instanceof Error ? error.message : String(error)),
+    );
+
+    expect(outcome).toContain("could not be removed");
+  });
+
+  test("a stale holder that vanishes before its removal is retried once, not forever", async () => {
+    const lockDir = join(scratchDir(), ".device-mirror.lock");
+    mkdirSync(lockDir);
+    ageBy(lockDir, 60 * 60_000);
+    let looks = 0;
+
+    const taken = await takeLockDir(lockDir, {
+      now: () => {
+        looks += 1;
+        if (existsSync(lockDir)) {
+          rmdirSync(lockDir);
+        }
+        return Date.now();
+      },
+      staleMs: STALE_MS,
+    });
+
+    expect(taken).toBe(true);
+    expect(looks).toBeLessThanOrEqual(2);
   });
 });
 

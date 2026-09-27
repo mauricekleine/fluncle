@@ -1,23 +1,22 @@
 import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { EMBEDDING_DIMENSIONS, type LabelOutlierRun, scoreCatalogue } from "./label-outliers";
+import { writeScoringExport } from "./label-outliers-export";
 import {
   type AlertedUnit,
   type CorpusFloor,
   discordMessage,
   MAX_RECORDED_OUTLIERS,
-  copyReplicaUnderMirrorLock,
   readEmbedding,
   readReplicaInputs,
   type RecordPayload,
   runLabelOutliersSweep,
   type ScoreOutcome,
-  scoreReplicaCopy,
-  scoreSnapshotFile,
+  scoreExportFile,
   type SweepDeps,
   toPayload,
 } from "./label-outliers-sweep";
@@ -146,93 +145,76 @@ describe("the replica read", () => {
   });
 });
 
-function lockDirIn(directory: string): string {
-  return join(directory, ".device-mirror.lock");
+async function exportOf(exportedAt: string): Promise<string> {
+  const replica = replicaFile();
+  const exportFile = join(scratchDir(), "label-outliers-inputs.db");
+  await writeScoringExport(replica, exportFile, exportedAt);
+
+  return exportFile;
 }
 
-describe("the device mirror always wins the replica", () => {
-  test("a held mirror lock makes the sweep stand aside without touching the lock or the replica", async () => {
-    const path = replicaFile();
-    const lockDir = lockDirIn(scratchDir());
-    mkdirSync(lockDir);
-    const heldSince = statSync(lockDir).mtimeMs;
-    const copyFile = join(scratchDir(), "copy.db");
+const NOW = Date.parse("2026-09-28T05:30:00.000Z");
 
-    const outcome = await copyReplicaUnderMirrorLock(path, lockDir, copyFile);
+describe("the sweep reads only the device mirror's scoring export", () => {
+  test("a fresh export is scored", async () => {
+    const exportFile = await exportOf("2026-09-28T02:00:00.000Z");
 
-    expect(outcome).toEqual({ kind: "busy" });
-    expect(existsSync(copyFile)).toBe(false);
-    expect(statSync(lockDir).mtimeMs).toBe(heldSince);
-  });
-
-  test("a busy replica skips the payload so the retry slot runs it", async () => {
-    const fake = deps({ score: async () => ({ kind: "busy" }) });
-    const summary = await runLabelOutliersSweep(fake, TEST_FLOOR);
-
-    expect(summary).toMatchObject({ ok: true, payloadStarted: false, reason: "replica_busy" });
-    expect(fake.recorded).toEqual([]);
-  });
-
-  test("the lock is held only for the copy and released before scoring", async () => {
-    const path = replicaFile();
-    const lockDir = lockDirIn(scratchDir());
-
-    const outcome = await scoreReplicaCopy(path, lockDir);
+    const outcome = await scoreExportFile(exportFile, { now: () => NOW });
 
     expect(outcome.kind).toBe("scored");
     if (outcome.kind === "scored") {
       expect(outcome.run.flagged.map((unit) => unit.unitId)).toEqual(["album:alb_xmas:lbl_dnb"]);
       expect(outcome.embeddedTracks).toBe(23);
-      expect(outcome.lockHeldMs).toBeGreaterThanOrEqual(0);
+      expect(outcome.replicaSyncedAt).toBe("2026-09-28T02:00:00.000Z");
     }
-    expect(existsSync(lockDir)).toBe(false);
   });
 
-  test("scoring reads only the copy, so a mirror rebuild after the lock is released cannot reach it", async () => {
-    const path = replicaFile();
-    const lockDir = lockDirIn(scratchDir());
-    const copyFile = join(scratchDir(), "copy.db");
-
-    expect((await copyReplicaUnderMirrorLock(path, lockDir, copyFile)).kind).toBe("copied");
-    for (const suffix of ["", "-wal", "-shm"]) {
-      rmSync(`${path}${suffix}`, { force: true });
-    }
-
-    const scored = scoreSnapshotFile(copyFile);
-
-    expect(scored.run.flagged.map((unit) => unit.unitId)).toEqual(["album:alb_xmas:lbl_dnb"]);
-    expect(scored.embeddedTracks).toBe(23);
-  });
-
-  test("the lock is released even when the copy fails", async () => {
-    const path = join(scratchDir(), "source-replica.db");
-    writeFileSync(path, "not a database");
-    const lockDir = lockDirIn(scratchDir());
-
-    const failed = await copyReplicaUnderMirrorLock(
-      path,
-      lockDir,
-      join(scratchDir(), "copy.db"),
-    ).then(
-      () => false,
-      () => true,
-    );
-
-    expect(failed).toBe(true);
-    expect(existsSync(lockDir)).toBe(false);
-  });
-
-  test("a missing replica never takes the lock", async () => {
-    const lockDir = lockDirIn(scratchDir());
-
-    const outcome = await copyReplicaUnderMirrorLock(
-      join(scratchDir(), "absent.db"),
-      lockDir,
-      join(scratchDir(), "copy.db"),
-    );
+  test("a missing export is reported as missing", async () => {
+    const outcome = await scoreExportFile(join(scratchDir(), "absent.db"), { now: () => NOW });
 
     expect(outcome).toEqual({ kind: "missing" });
-    expect(existsSync(lockDir)).toBe(false);
+  });
+
+  test("an export older than the sweep accepts is reported as stale", async () => {
+    const exportFile = await exportOf("2026-09-26T05:00:00.000Z");
+
+    const outcome = await scoreExportFile(exportFile, { now: () => NOW });
+
+    expect(outcome).toEqual({ exportedAt: "2026-09-26T05:00:00.000Z", kind: "stale" });
+  });
+
+  test("a missing export fails the run loudly and writes nothing", async () => {
+    const fake = deps({ score: async () => ({ kind: "missing" }) });
+    const summary = await runLabelOutliersSweep(fake, TEST_FLOOR);
+
+    expect(summary).toMatchObject({
+      ok: false,
+      payloadStarted: false,
+      reason: "scoring_export_missing",
+    });
+    expect(fake.recorded).toEqual([]);
+  });
+
+  test("a stale export fails the run loudly and writes nothing", async () => {
+    const fake = deps({
+      score: async () => ({ exportedAt: "2026-09-26T05:00:00.000Z", kind: "stale" }),
+    });
+    const summary = await runLabelOutliersSweep(fake, TEST_FLOOR);
+
+    expect(summary).toMatchObject({
+      ok: false,
+      payloadStarted: false,
+      reason: "scoring_export_stale",
+    });
+    expect(fake.recorded).toEqual([]);
+  });
+
+  test("the sweep source never names the device mirror's lock or replica", () => {
+    const source = readFileSync(join(import.meta.dir, "label-outliers-sweep.ts"), "utf8");
+
+    expect(source).not.toContain("device-mirror.lock");
+    expect(source).not.toContain("DEVICE_MIRROR_LOCK_DIR");
+    expect(source).not.toContain("source-replica.db");
   });
 });
 
@@ -262,7 +244,6 @@ function scored(outliers: number, tracksScored = 40, embeddedTracks = 40): Score
   return {
     embeddedTracks,
     kind: "scored",
-    lockHeldMs: 5,
     replicaSyncedAt: "2026-09-27T03:00:00.000Z",
     run: run(outliers, tracksScored),
   };
@@ -364,15 +345,6 @@ describe("the nightly sweep", () => {
 
     expect(summary).toMatchObject({ alertAcknowledged: false, notified: false, ok: true });
     expect(fake.acknowledged).toEqual([]);
-  });
-
-  test("a missing replica is a failure the operator sees", async () => {
-    const summary = await runLabelOutliersSweep(
-      deps({ score: async () => ({ kind: "missing" }) }),
-      TEST_FLOOR,
-    );
-
-    expect(summary).toMatchObject({ ok: false, payloadStarted: false, reason: "replica_missing" });
   });
 
   test("a corpus below the absolute floor fails loudly and writes nothing", async () => {
