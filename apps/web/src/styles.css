@@ -4958,9 +4958,13 @@ a.catalogue-letter:focus-visible {
 }
 
 /* The cover doubles as the play control: the `.preview-art` wrapper is positioned
-   (for the absolute button) and lifted above the stretched link. */
+   (for the absolute button) and lifted above the stretched link. A cover with no
+   preview to play stays under the link, so a press on it opens the row like the rest. */
 .saves-cover-wrap {
   position: relative;
+}
+
+.saves-cover-wrap:has(.preview-art-btn) {
   z-index: 1;
 }
 

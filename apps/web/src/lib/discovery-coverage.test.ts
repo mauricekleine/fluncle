@@ -239,11 +239,10 @@ describe("preview call sites state public intent", () => {
     const adminSites = hookSites.filter((file) => file.rel.includes("/admin/"));
 
     expect(publicSites.map((file) => file.rel).sort()).toEqual([
-      "components/account/saves-door.tsx",
       "components/chat/chain-card.tsx",
       "components/chat/finding-card.tsx",
       "components/log/log-footage.tsx",
-      "components/recommendations/recommended-panel.tsx",
+      "components/player/preview-art-button.tsx",
       "components/track-destination.tsx",
     ]);
     expect(adminSites.map((file) => file.rel).sort()).toEqual(["components/admin/note-dialog.tsx"]);

@@ -9,6 +9,7 @@ export const SavedFindingSchema = z
     imageUrl: z.string().optional(),
     logId: z.string().optional(),
     note: z.string().optional(),
+    previewable: z.boolean(),
     savedAt: z.string(),
     title: z.string(),
     trackId: z.string(),

@@ -430,6 +430,43 @@ describe("saveFinding (real SQL, any track — findings AND catalogue)", () => {
     ).toEqual([{ href: "/log/log-cert", logId: "log-cert", trackId: "track-cert-00000000" }]);
   });
 
+  it("marks a saved finding previewable only when it has a stored preview or an ISRC", async () => {
+    const { saveFinding, listSavedFindings } = await import("./account-data");
+    const tracks = [
+      { isrc: null, logId: "log-silent", previewUrl: null, trackId: "track-silent-0000000" },
+      { isrc: " ", logId: "log-blank", previewUrl: "", trackId: "track-blank-00000000" },
+      {
+        isrc: "GBAAA2600003",
+        logId: "log-isrc",
+        previewUrl: null,
+        trackId: "track-isrc-000000000",
+      },
+      {
+        isrc: null,
+        logId: "log-preview",
+        previewUrl: "https://preview.example/a.mp3",
+        trackId: "track-preview-000000",
+      },
+    ];
+
+    for (const track of tracks) {
+      await seedTrack(db, { logId: track.logId, trackId: track.trackId });
+      await db.execute({
+        args: [track.isrc, track.previewUrl, track.trackId],
+        sql: "update tracks set isrc = ?, preview_url = ? where track_id = ?",
+      });
+      await saveFinding(publicUser(userA), { trackId: track.trackId });
+    }
+
+    const list = await listSavedFindings(publicUser(userA));
+    expect(Object.fromEntries(list.savedFindings.map((f) => [f.trackId, f.previewable]))).toEqual({
+      "track-blank-00000000": false,
+      "track-isrc-000000000": true,
+      "track-preview-000000": true,
+      "track-silent-0000000": false,
+    });
+  });
+
   it("saves a certified finding by its Log ID, still storing the coordinate", async () => {
     const { saveFinding } = await import("./account-data");
     await seedTrack(db, { logId: "log-by-id", trackId: "track-byid-00000000" });

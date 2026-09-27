@@ -159,6 +159,7 @@ describe("oRPC /me — GET /me/saved-findings (list_private_saved_findings)", ()
       {
         artists: ["Some Artist"],
         logId: "0001",
+        previewable: true,
         savedAt: "2026-01-01T00:00:00.000Z",
         title: "Some Banger",
         trackId: "abc",
