@@ -15,6 +15,7 @@ import {
 } from "./sonar";
 import { executeVectorFallback, vectorFallbackCandidateLimitSql } from "./vector-fallback";
 import { publicTrackDurationWhere } from "../../db/public-track-visibility";
+import { hasPreviewSource } from "../track-preview";
 
 export const MAX_REC_SEEDS = 12;
 
@@ -66,10 +67,12 @@ type HydrateRow = {
   artists_json: string;
   bpm: null | number;
   duration_ms: null | number;
+  isrc: null | string;
   key: null | string;
   label: null | string;
   log_id: null | string;
   note: null | string;
+  preview_url: null | string;
   release_date: null | string;
   spotify_uri: null | string;
   spotify_url: null | string;
@@ -95,6 +98,7 @@ export type RecommendationFindingItem = {
   label?: string;
   logId: string;
   note?: string;
+  previewable: boolean;
   similarity: number;
   spotifyUri?: string;
   spotifyUrl?: string;
@@ -455,6 +459,7 @@ export async function listRecommendations(
         imageUrl: coverOf(row),
         logId: row.log_id,
         note: row.note ?? undefined,
+        previewable: hasPreviewSource({ isrc: row.isrc, previewUrl: row.preview_url }),
         similarity,
         spotifyUri: row.spotify_uri ?? undefined,
         spotifyUrl: row.spotify_url ?? undefined,
@@ -527,7 +532,8 @@ async function hydrateTracks(trackIds: string[]): Promise<Map<string, HydrateRow
   ).execute({
     args: ids,
     sql: `select t.track_id, t.title, t.artists_json, t.album_image_url, t.spotify_url,
-        t.spotify_uri, t.key, t.bpm, t.duration_ms, t.label, t.release_date, f.log_id, f.note,
+        t.spotify_uri, t.key, t.bpm, t.duration_ms, t.label, t.release_date, t.isrc,
+        t.preview_url, f.log_id, f.note,
         (select image_key from albums where albums.id = t.album_id) as album_image_key,
         (select image_state from albums where albums.id = t.album_id) as album_image_state,
         (select image_updated_at from albums where albums.id = t.album_id) as album_image_updated_at

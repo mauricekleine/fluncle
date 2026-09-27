@@ -146,6 +146,9 @@ test("saves a catalogue track and a finding signed out, shares the canonical lin
   await expect(
     savedTracks.getByRole("link", { name: new RegExp(SEEDED_DESTINATION_NEIGHBOUR.title) }),
   ).toHaveAttribute("href", CATALOGUE_PATH);
+  await expect(
+    savedTracks.getByRole("button", { name: `Play the preview of ${SEEDED_LEAD.title}` }),
+  ).toHaveCount(1);
 
   expect(problems, `expected a clean console, saw:\n${problems.join("\n")}`).toEqual([]);
 });

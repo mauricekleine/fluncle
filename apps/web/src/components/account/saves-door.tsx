@@ -1,4 +1,4 @@
-import { DotsThreeIcon, PauseIcon, PlayIcon, TrashIcon } from "@phosphor-icons/react";
+import { DotsThreeIcon, TrashIcon } from "@phosphor-icons/react";
 import { Link } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
 import {
@@ -25,11 +25,11 @@ import {
 } from "@fluncle/ui/components/dropdown-menu";
 import { Input } from "@fluncle/ui/components/input";
 import { Skeleton } from "@fluncle/ui/components/skeleton";
+import { PreviewArtButton } from "@/components/player/preview-art-button";
 import { TrackArtwork } from "@/components/track-artwork";
 import { formatDateLong } from "@/lib/format";
 import { albumCoverAtSize } from "@/lib/media";
 import { toQueueTrack } from "@/lib/player-tracks";
-import { usePreviewPlayer } from "@/lib/preview-player";
 import { unsaveTrack } from "@/lib/saved-tracks";
 import {
   filterSavedFindings,
@@ -285,7 +285,6 @@ function SavedFindingLitRow({
     () => toQueueTrack({ ...finding, albumImageUrl: finding.imageUrl }),
     [finding],
   );
-  const preview = usePreviewPlayer(finding.trackId, { publicPreview: true, track: queued });
 
   return (
     <li className="saves-row">
@@ -300,23 +299,7 @@ function SavedFindingLitRow({
 
       <span className="preview-art saves-cover-wrap">
         <TrackArtwork className="saves-cover" src={albumCoverAtSize(finding.imageUrl, "small")} />
-        <button
-          aria-label={
-            preview.isActive
-              ? `Pause the preview of ${finding.title}`
-              : `Play the preview of ${finding.title}`
-          }
-          aria-pressed={preview.isActive}
-          className="preview-art-btn"
-          onClick={preview.toggle}
-          type="button"
-        >
-          {preview.isActive ? (
-            <PauseIcon aria-hidden="true" className="size-4" weight="fill" />
-          ) : (
-            <PlayIcon aria-hidden="true" className="size-4" weight="fill" />
-          )}
-        </button>
+        {finding.previewable ? <PreviewArtButton track={queued} /> : null}
       </span>
 
       <span className="saves-row-body min-w-0">

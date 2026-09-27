@@ -8,6 +8,7 @@ function finding(over: Partial<SavedFinding> & { title: string }): SavedFinding 
     imageUrl: over.imageUrl,
     logId: over.logId ?? "0001",
     note: over.note,
+    previewable: over.previewable ?? true,
     savedAt: over.savedAt ?? "2026-01-01T00:00:00.000Z",
     title: over.title,
     trackId: over.trackId ?? over.title,

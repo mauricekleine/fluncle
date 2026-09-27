@@ -24,6 +24,7 @@ export const RecommendationFindingSchema = z
     label: z.string().optional(),
     logId: z.string(),
     note: z.string().optional(),
+    previewable: z.boolean(),
     similarity: z.number(),
     spotifyUri: z.string().optional(),
     spotifyUrl: z.string().optional(),
