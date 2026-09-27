@@ -14,7 +14,6 @@
     "goDnsSeconds": 3,
     "goSshSeconds": 13,
     "scriptsSeconds": 36,
-    "skillsSeconds": 60,
     "sonarSeconds": 99,
     "workflowSeconds": 2
   }

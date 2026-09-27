@@ -44,8 +44,7 @@ jobs:
           if git grep -nE '/Users/[a-z]' -- . \
             ':!AGENTS.md' \
             ':!packages/skills/fluncle-maintenance/references/bump-procedure.md' \
-            ':!.agents/skills/fluncle-maintenance/references/bump-procedure.md' \
-            ':!scripts/install-skills.test.ts'; then
+            ':!.agents/skills/fluncle-maintenance/references/bump-procedure.md'; then
             echo "::error::Local /Users/... path in a committed file — operator topology stays in the private companion repo. See AGENTS.md 'Public Repo'."
             exit 1
           fi

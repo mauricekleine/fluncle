@@ -26,12 +26,12 @@ export const REQUIRED_REPO_ASSETS: readonly string[] = [
   "docs/agents/hermes/scripts/box-state-restore-drill.ts",
   "docs/agents/hermes/scripts/box-state-snapshot.ts",
   "docs/agents/hermes/secrets/fluncle-secrets-sync.sh",
-  "packages/skills/hetzner-devbox/scripts/apply-firewall.sh",
-  "packages/skills/hetzner-devbox/scripts/bootstrap-hardening.sh",
-  "packages/skills/hetzner-devbox/scripts/bootstrap-private-vps.sh",
-  "packages/skills/hetzner-devbox/scripts/check-prereqs.sh",
-  "packages/skills/hetzner-devbox/scripts/create-server.sh",
-  "packages/skills/hetzner-devbox/scripts/install-toolchain.sh",
+  "packages/skills/fluncle-hetzner-ops/scripts/apply-firewall.sh",
+  "packages/skills/fluncle-hetzner-ops/scripts/bootstrap-hardening.sh",
+  "packages/skills/fluncle-hetzner-ops/scripts/bootstrap-private-vps.sh",
+  ".agents/skills/hetzner-devbox/scripts/check-prereqs.sh",
+  ".agents/skills/hetzner-devbox/scripts/create-server.sh",
+  "packages/skills/fluncle-hetzner-ops/scripts/install-toolchain.sh",
 ];
 
 export const SECRET_TEMPLATE_NAMES: readonly string[] = [

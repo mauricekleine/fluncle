@@ -10,7 +10,7 @@ rave-02 is the box every Fluncle automation runs on: the Hermes container (a lon
 
 The rebuild is assembled from the linked assets across the public repository and private companion; follow them in the order below. **Do not reconstruct any of it from source.** Each step below names the asset that does the work; follow the link, run the thing, come back.
 
-**Neighbours, so the right skill wins:** [`fluncle-hermes-operator`](../fluncle-hermes-operator) changes a box that is still alive (pins, secrets, crons). [`hetzner-devbox`](../hetzner-devbox) is the generic VPS provisioning kit. This skill is the box being **gone**, and it drives both of those in order.
+**Neighbours, so the right skill wins:** [`fluncle-hermes-operator`](../fluncle-hermes-operator) changes a box that is still alive (pins, secrets, crons). [`hetzner-devbox`](../../../.agents/skills/hetzner-devbox) is the generic VPS provisioning kit; [`fluncle-hetzner-ops`](../fluncle-hetzner-ops) holds the Hermes host profile. This skill is the box being **gone**, and it drives both of those in order.
 
 ## Read this first — the two halves
 
@@ -51,13 +51,13 @@ Do not rebuild a box that is merely unreachable — a re-provision throws away a
 
 The order is load-bearing. Each step names the asset that does the work.
 
-**1. Create the server.** [`create-server.sh`](../hetzner-devbox/scripts/create-server.sh), after [`check-prereqs.sh`](../hetzner-devbox/scripts/check-prereqs.sh). Size, image, and firewall name are box facts — read them from the labs doc, do not re-derive them.
+**1. Create the server.** [`create-server.sh`](../../../.agents/skills/hetzner-devbox/scripts/create-server.sh), after [`check-prereqs.sh`](../../../.agents/skills/hetzner-devbox/scripts/check-prereqs.sh). Size, image, and firewall name are box facts — read them from the labs doc, do not re-derive them.
 
-**2. Harden the host.** [`bootstrap-hardening.sh`](../hetzner-devbox/scripts/bootstrap-hardening.sh), which streams [`bootstrap-private-vps.sh`](../hetzner-devbox/scripts/bootstrap-private-vps.sh): admin user, sshd off :22, ufw, Docker, Tailscale, **and `op`**. Then [`apply-firewall.sh`](../hetzner-devbox/scripts/apply-firewall.sh) for the provider layer.
+**2. Harden the host.** [`bootstrap-hardening.sh`](../fluncle-hetzner-ops/scripts/bootstrap-hardening.sh), which streams [`bootstrap-private-vps.sh`](../fluncle-hetzner-ops/scripts/bootstrap-private-vps.sh): admin user, sshd off :22, UFW, Tailscale, **and `op`**. Then [`apply-firewall.sh`](../fluncle-hetzner-ops/scripts/apply-firewall.sh) for the provider layer.
 
 **3. Disable Tailscale node-key expiry — before you trust the box.** Then open a **second** terminal and confirm you can still get in, while the first is still connected. See the gotchas.
 
-**4. Install the toolchain, container-only.** [`install-toolchain.sh`](../hetzner-devbox/scripts/install-toolchain.sh) with `TOOLCHAIN_PROFILE=agent-box`. The default `devbox` profile puts a full workstation on a host whose only job is running containers — a materially wider blast radius than the architecture describes.
+**4. Install the toolchain, container-only.** [`install-toolchain.sh`](../fluncle-hetzner-ops/scripts/install-toolchain.sh) with `TOOLCHAIN_PROFILE=agent-box`. The default `devbox` profile puts a full workstation on a host whose only job is running containers — a materially wider blast radius than the architecture describes.
 
 **5. Place the bootstrap env.** `op inject` cannot fetch its own credential, so this one file is the irreducible manual link. The recipe (reading the token with the operator's own biometric session and piping it over SSH, never typing it) and the file's contents are in the labs doc. **`op` must already be installed** — step 2 does that.
 

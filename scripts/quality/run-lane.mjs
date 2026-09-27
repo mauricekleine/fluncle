@@ -6,21 +6,19 @@ import { resolve } from "node:path";
 import { repositoryRoot } from "./classifier.mjs";
 
 function parseArguments(argv) {
-  const parsed = { local: false };
+  const parsed = {};
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
     if (argument === "--lane") {
       parsed.lane = argv[++index];
     } else if (argument === "--plan") {
       parsed.planPath = argv[++index];
-    } else if (argument === "--local") {
-      parsed.local = true;
     } else {
       throw new Error(`Unknown argument: ${argument}`);
     }
   }
   if (!parsed.lane || !parsed.planPath) {
-    throw new Error("Usage: run-lane.mjs --plan <plan.json> --lane <lane> [--local]");
+    throw new Error("Usage: run-lane.mjs --plan <plan.json> --lane <lane>");
   }
   return parsed;
 }
@@ -29,7 +27,7 @@ function command(program, args, options = {}) {
   return { args, options, program };
 }
 
-export function commandsForLane(plan, lane, options = {}) {
+export function commandsForLane(plan, lane) {
   if (lane === "static") {
     return [command("bun", ["run", "lint"]), command("bun", ["run", "format:check"])];
   }
@@ -52,26 +50,6 @@ export function commandsForLane(plan, lane, options = {}) {
 
   if (lane === "scripts") {
     return plan.lanes.scripts ? [command("bun", ["run", "test:scripts"])] : [];
-  }
-
-  if (lane === "skills") {
-    if (!plan.lanes.skills) {
-      return [];
-    }
-    if (options.local) {
-      return [command("bun", ["run", "skills:install", "--verify"])];
-    }
-    return [
-      command("bun", ["run", "skills:install"]),
-      command("git", [
-        "diff",
-        "--exit-code",
-        "--",
-        ".agents/skills",
-        ".claude/skills",
-        "skills-lock.json",
-      ]),
-    ];
   }
 
   if (lane === "go-ssh" || lane === "go-dns") {
@@ -163,8 +141,8 @@ function run(commandDefinition) {
   });
 }
 
-export async function runLane(plan, lane, options = {}) {
-  const commands = commandsForLane(plan, lane, options);
+export async function runLane(plan, lane) {
+  const commands = commandsForLane(plan, lane);
   if (commands.length === 0) {
     process.stdout.write(`quality lane ${lane}: not selected\n`);
     return 0;
@@ -186,7 +164,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1
   try {
     const options = parseArguments(process.argv.slice(2));
     const plan = JSON.parse(readFileSync(options.planPath, "utf8"));
-    process.exitCode = await runLane(plan, options.lane, options);
+    process.exitCode = await runLane(plan, options.lane);
   } catch (error) {
     process.stderr.write(
       `quality lane: ${error instanceof Error ? error.message : String(error)}\n`,

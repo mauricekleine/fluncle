@@ -1,5 +1,4 @@
-# scripts/ tests cover repo tooling (skills install, patched-dependencies) — none may reach
-# the real internet (install-skills shells toward npx). `[test] preload` runs ONLY under
-# `bun test`, so the scripts themselves are untouched when run for real. See packages/test-support.
+# scripts/ tests cover repo tooling (including patched dependencies). The preload
+# blocks accidental network calls in tests without affecting scripts run directly.
 [test]
 preload = ["@fluncle/test-support/preload"]

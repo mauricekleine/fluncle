@@ -14,7 +14,6 @@
     "docs",
     "packages/live",
     "packages/media",
-    "packages/skills",
     "packages/video"
   ],
   "excludedFiles": [
@@ -24,7 +23,6 @@
     "LORE.md",
     "PRODUCT.md",
     "README.md",
-    "VOICE.md",
-    "skills-lock.json"
+    "VOICE.md"
   ]
 }

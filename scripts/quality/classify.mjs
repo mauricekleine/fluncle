@@ -87,7 +87,6 @@ function writeGithubOutput(path, plan) {
     migrations: plan.lanes.migrations,
     packages: JSON.stringify(plan.packages),
     scripts: plan.lanes.scripts,
-    skills: plan.lanes.skills,
     sonar: plan.lanes.sonar,
     turbo: plan.packages.length > 0,
     unknown: plan.unknownFiles.length > 0,

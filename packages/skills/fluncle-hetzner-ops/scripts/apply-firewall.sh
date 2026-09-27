@@ -20,8 +20,21 @@ if [[ -f "${ENV_FILE}" ]]; then
   set +a
 fi
 
-SERVER_NAME="${SERVER_NAME:-devbox-01}"
-FIREWALL_NAME="${FIREWALL_NAME:-devbox-private}"
+SERVER_NAME="${SERVER_NAME:-agent-devbox-01}"
+FIREWALL_PROFILE="${FIREWALL_PROFILE:-private}"
+
+case "${FIREWALL_PROFILE}" in
+  private)
+    FIREWALL_NAME="${FIREWALL_NAME:-agent-devbox-private}"
+    ;;
+  public-ssh | rave)
+    FIREWALL_NAME="${FIREWALL_NAME:-fluncle-rave-public}"
+    ;;
+  *)
+    printf 'Unknown firewall profile: %s. Expected private or public-ssh.\n' "${FIREWALL_PROFILE}" >&2
+    exit 1
+    ;;
+esac
 
 if [[ -z "${HCLOUD_TOKEN:-}" ]]; then
   printf 'HCLOUD_TOKEN is missing in environment or %s\n' "${ENV_FILE}" >&2
@@ -33,7 +46,7 @@ if ! hcloud firewall describe "${FIREWALL_NAME}" >/dev/null 2>&1; then
   hcloud firewall create \
     --name "${FIREWALL_NAME}" \
     --label managed-by=agent-skill \
-    --label purpose=private
+    --label "purpose=${FIREWALL_PROFILE}"
 fi
 
 rules_json="$(hcloud firewall describe "${FIREWALL_NAME}" -o json)"
@@ -68,6 +81,18 @@ if ! has_rule udp 41641; then
     --source-ips 0.0.0.0/0 \
     --source-ips ::/0 \
     --description "Allow Tailscale WireGuard direct connections" \
+    "${FIREWALL_NAME}"
+fi
+
+rules_json="$(hcloud firewall describe "${FIREWALL_NAME}" -o json)"
+if [[ "${FIREWALL_PROFILE}" != "private" ]] && ! has_rule tcp 22; then
+  hcloud firewall add-rule \
+    --direction in \
+    --protocol tcp \
+    --port 22 \
+    --source-ips 0.0.0.0/0 \
+    --source-ips ::/0 \
+    --description "Allow public SSH app on TCP 22" \
     "${FIREWALL_NAME}"
 fi
 

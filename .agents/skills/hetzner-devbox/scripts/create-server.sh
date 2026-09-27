@@ -20,7 +20,7 @@ if [[ -f "${ENV_FILE}" ]]; then
   set +a
 fi
 
-SERVER_NAME="${SERVER_NAME:-agent-devbox-01}"
+SERVER_NAME="${SERVER_NAME:-devbox-01}"
 SERVER_TYPE="${SERVER_TYPE:-cpx32}"
 LOCATION="${LOCATION:-nbg1}"
 IMAGE="${IMAGE:-ubuntu-24.04}"
