@@ -1181,7 +1181,7 @@ describe("database operation registry", () => {
         kind: "daemon",
         persistent: true,
         reconcileInterval: {
-          defaultSeconds: 3600,
+          defaultSeconds: 21600,
           environment: "SONAR_RECONCILE_SECS",
         },
       },
@@ -1196,7 +1196,7 @@ describe("database operation registry", () => {
     expect(operation?.mutationDisposition.kind).toBe("replay-safe-idempotent");
     expect(operation?.operationId).not.toBe("ops.sonar-freshen");
     expect(config).toMatch(/None => 30,/);
-    expect(config).toMatch(/parsed\("SONAR_RECONCILE_SECS", 3600\)/);
+    expect(config).toMatch(/parsed\("SONAR_RECONCILE_SECS", 21600\)/);
     expect(main).toContain("tokio::spawn(consumer.run(");
     expect(consumer).toContain("self.replica.sync().await?");
     expect(consumer).toContain("replace_from_local_replica");

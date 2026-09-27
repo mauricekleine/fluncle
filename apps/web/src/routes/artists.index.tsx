@@ -283,7 +283,14 @@ function ArtistLinkTile({
   priority?: boolean;
 }) {
   return (
-    <HubTile kind="artist" lit={artist.certified} name={artist.name} round slug={artist.slug}>
+    <HubTile
+      kind="artist"
+      lit={artist.certified}
+      name={artist.name}
+      playable={artist.playable}
+      round
+      slug={artist.slug}
+    >
       <Link
         className={artist.certified ? "hub-tile-certified" : undefined}
         params={{ slug: artist.slug }}
