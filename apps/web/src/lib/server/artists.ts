@@ -10,6 +10,7 @@ import { listedArtistWhere } from "./artist-visibility";
 import { bioBypassColumns } from "./bio-review";
 import { restaleCatalogueRankStatements } from "./catalogue-rank-restale";
 import { getDb, typedRows } from "./db";
+import { entityPlayableSql } from "./entity-queue";
 import { isDueWorkCutoverEnabled, readPromotedDueWorkPage } from "./due-work-cutover";
 import {
   batchDueWorkMutationGroups,
@@ -402,6 +403,7 @@ export type ArtistHubEntry = {
 
   imageUrl: string | undefined;
   name: string;
+  playable: boolean;
   slug: string;
 
   trackCount: number;
@@ -423,12 +425,14 @@ export const ARTISTS_HUB_QUERY: CatalogueHubQuery<ArtistHubEntry> = {
       imageUrl: row.image_url ?? null,
     }),
     name: row.name,
+    playable: Number(row.playable) === 1,
     slug: row.slug,
     trackCount: Number(row.track_count),
   }),
   nameExpr: "a.name",
   select: `a.name as name, a.image_url as image_url, a.image_key as image_key,
-           a.image_state as image_state, a.image_updated_at as image_updated_at`,
+           a.image_state as image_state, a.image_updated_at as image_updated_at,
+           ${entityPlayableSql("artist", "a.id")} as playable`,
   slugExpr: "a.slug",
 
   visibilityWhere: listedArtistWhere("a"),
@@ -586,6 +590,18 @@ export async function getArtistListItemBySlug(slug: string): Promise<ArtistListI
   };
 }
 
+async function playableArtistSlugs(slugs: string[]): Promise<Set<string>> {
+  const db = await getDb();
+  const result = await db.execute({
+    args: slugs,
+    sql: `select a.slug as slug from artists a
+          where a.slug in (${slugs.map(() => "?").join(", ")})
+            and ${entityPlayableSql("artist", "a.id")}`,
+  });
+
+  return new Set(typedRows<{ slug: string }>(result.rows).map((row) => row.slug));
+}
+
 export async function listSimilarArtistTiles(slugs: string[]): Promise<ArtistHubEntry[]> {
   const neighbours = await listSimilarArtistNeighbours(slugs, SIMILAR_ARTISTS_LIMIT);
 
@@ -593,10 +609,11 @@ export async function listSimilarArtistTiles(slugs: string[]): Promise<ArtistHub
     return [];
   }
 
-  const counts = await hubCountsBySlugs(
-    ARTISTS_HUB_QUERY,
-    neighbours.map((neighbour) => neighbour.slug),
-  );
+  const neighbourSlugs = neighbours.map((neighbour) => neighbour.slug);
+  const [counts, playable] = await Promise.all([
+    hubCountsBySlugs(ARTISTS_HUB_QUERY, neighbourSlugs),
+    playableArtistSlugs(neighbourSlugs),
+  ]);
 
   return neighbours.map((neighbour) => {
     const entry = counts.get(neighbour.slug);
@@ -605,6 +622,7 @@ export async function listSimilarArtistTiles(slugs: string[]): Promise<ArtistHub
       certified: entry?.certified ?? false,
       imageUrl: neighbour.imageUrl,
       name: neighbour.name,
+      playable: playable.has(neighbour.slug),
       slug: neighbour.slug,
       trackCount: entry?.trackCount ?? 0,
     };

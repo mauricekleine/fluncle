@@ -23,8 +23,8 @@ export function validReleaseDateSql(column: string): string {
     or ${column} glob '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]')`;
 }
 
-export function releasedByTodaySql(column: string): string {
-  return `(${column} is null or ${column} <= ? or not ${validReleaseDateSql(column)})`;
+export function releasedByTodaySql(column: string, today = "?"): string {
+  return `(${column} is null or ${column} <= ${today} or not ${validReleaseDateSql(column)})`;
 }
 
 export function datedReleaseByTodaySql(column: string): string {

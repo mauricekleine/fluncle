@@ -13,8 +13,16 @@ vi.mock("./db", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./db")>();
   return { ...actual, getDb: () => Promise.resolve(db) };
 });
-const { albumTracklistStatement, entityFindingsStatement, entityNewestStatement, listEntityQueue } =
-  await import("./entity-queue");
+const {
+  albumTracklistStatement,
+  entityFindingsStatement,
+  entityNewestStatement,
+  entityPlayableSql,
+  listEntityQueue,
+} = await import("./entity-queue");
+const { listAlbumsHubPage } = await import("./albums");
+const { listArtistsHubPage } = await import("./artists");
+const { listLabelsHubPage } = await import("./labels");
 const { toQueueTrack } = await import("../player-tracks");
 
 beforeEach(async () => {
@@ -134,4 +142,75 @@ it("reads findings from the findings table and newest tracks without sorting a l
     /^SEARCH ta USING (COVERING )?INDEX track_artists_artist_id_idx/,
   );
   expect(await plan(albumTracklistStatement("alb", today))).toContain("tracks_album_id_idx");
+});
+
+const ENTITY_IDS = { album: "alb", artist: "art", label: "lab" } as const;
+const ENTITY_TABLES = { album: "albums", artist: "artists", label: "labels" } as const;
+
+async function playableFlag(kind: "album" | "artist" | "label"): Promise<boolean> {
+  const result = await db.execute({
+    args: [ENTITY_IDS[kind]],
+    sql: `select ${entityPlayableSql(kind, "e.id")} as playable
+          from ${ENTITY_TABLES[kind]} e where e.id = ?`,
+  });
+  return Number(result.rows[0]?.playable) === 1;
+}
+
+async function expectFlagMatchesQueue(expected: boolean) {
+  for (const kind of ["album", "artist", "label"] as const) {
+    expect(await playableFlag(kind)).toBe(expected);
+    expect(((await listEntityQueue(kind, kind)) ?? []).length > 0).toBe(expected);
+  }
+}
+
+it("marks an entity playable exactly when its play queue has a track", async () => {
+  await expectFlagMatchesQueue(false);
+  await track("silent", "2026-01-01", null);
+  await track("future", "2999-01-01");
+  await track("dismissed", "2026-01-02");
+  await db.execute("update tracks set dismissed_at = '2026-01-03' where track_id = 'dismissed'");
+  await track("long-catalogue", "2026-01-04");
+  await db.execute("update tracks set duration_ms = 900000 where track_id = 'long-catalogue'");
+  await expectFlagMatchesQueue(false);
+  await db.execute(
+    "insert into findings (track_id, log_id, added_at) values ('long-catalogue', '701.1.0B', '2026-01-05')",
+  );
+  await db.execute("update tracks set is_catalogue = 0 where track_id = 'long-catalogue'");
+  await expectFlagMatchesQueue(true);
+  await db.execute("delete from findings");
+  await db.execute("update tracks set is_catalogue = 1");
+  await expectFlagMatchesQueue(false);
+  await db.execute("update tracks set isrc = 'GBAAA2600002' where track_id = 'silent'");
+  await expectFlagMatchesQueue(true);
+});
+
+it("carries the playable flag on album, artist and label hub tiles", async () => {
+  await track("silent", "2026-01-01", null);
+  await db.batch(
+    Object.values(ENTITY_TABLES).map((table) => `update ${table} set renderable_track_count = 9`),
+    "write",
+  );
+  const hubPlayable = async () =>
+    (await Promise.all([listAlbumsHubPage(1), listArtistsHubPage(1), listLabelsHubPage(1)])).map(
+      (page) => page.items.map((item) => item.playable),
+    );
+  expect(await hubPlayable()).toEqual([[false], [false], [false]]);
+  await db.execute("update tracks set preview_url = 'https://preview.example/audio'");
+  expect(await hubPlayable()).toEqual([[true], [true], [true]]);
+});
+
+it("answers a tile's playability through the entity's own track index", async () => {
+  const indexes = {
+    album: "tracks_album_id_idx",
+    artist: "track_artists_artist_id_idx",
+    label: "(label_id=?)",
+  } as const;
+  for (const kind of ["album", "artist", "label"] as const) {
+    expect(
+      await plan({
+        args: [ENTITY_IDS[kind]],
+        sql: `select ${entityPlayableSql(kind, "e.id")} from ${ENTITY_TABLES[kind]} e where e.id = ?`,
+      }),
+    ).toContain(indexes[kind]);
+  }
 });
