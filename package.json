@@ -66,7 +66,6 @@
     "quality:preflight": "node scripts/quality/preflight.mjs",
     "quality:preflight:start": "node scripts/quality/preflight.mjs start",
     "quality:workflows": "bun test scripts/quality/workflows.test.ts",
-    "skills:install": "bun run scripts/install-skills.ts",
     "stories:build": "bun scripts/build-user-story-matrix.ts",
     "social:preview": "bun run --cwd packages/video social:preview",
     "test": "turbo run test",
@@ -108,7 +107,7 @@
       "oxfmt --write --ignore-path .prettierignore --no-error-on-unmatched-pattern"
     ],
     "**/*.{js,jsx,ts,tsx}": [
-      "oxlint --fix"
+      "oxlint --fix --no-error-on-unmatched-pattern"
     ]
   },
   "engines": {

@@ -22,6 +22,7 @@ const FULL_FILES = new Set([
   "opencode.json",
   "package.json",
   "renovate.json",
+  "skills-lock.json",
   "tsconfig.json",
   "turbo.json",
 ]);
@@ -42,8 +43,6 @@ const FULL_DIRECTORIES = [".deepsec/", ".superset/", "patches/", "tools/"];
 const WORKFLOW_DIRECTORIES = [".github/"];
 const SCRIPT_DIRECTORIES = ["scripts/", ".husky/", ".claude/hooks/", ".codex/hooks/"];
 const QUALITY_HARNESS_DIRECTORIES = ["scripts/quality/"];
-const SKILL_DIRECTORIES = ["packages/skills/", ".agents/skills/", ".claude/skills/"];
-const SKILL_FILES = new Set(["scripts/install-skills.ts", "skills-lock.json"]);
 
 function normalizePath(path) {
   return path.replaceAll("\\", "/").replace(/^\.\//, "");
@@ -206,11 +205,6 @@ function classifyPath(
     changedPackageNames.add("@fluncle/web");
   }
 
-  if (SKILL_DIRECTORIES.some((directory) => path.startsWith(directory)) || SKILL_FILES.has(path)) {
-    lanes.skills = true;
-    matched = true;
-  }
-
   if (path === ".gitleaks.toml") {
     matched = true;
   }
@@ -281,7 +275,6 @@ export function classifyPaths(paths, options = {}) {
     goSsh: false,
     migrations: false,
     scripts: false,
-    skills: false,
     sonar: false,
     static: changedFiles.length > 0,
     workflows: false,
@@ -316,7 +309,6 @@ export function classifyPaths(paths, options = {}) {
       goSsh: true,
       migrations: true,
       scripts: true,
-      skills: true,
       sonar: true,
       static: true,
       workflows: true,
@@ -337,7 +329,6 @@ export function classifyPaths(paths, options = {}) {
       goSsh: true,
       migrations: true,
       scripts: true,
-      skills: true,
       sonar: true,
       static: true,
       workflows: true,

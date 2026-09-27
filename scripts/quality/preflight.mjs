@@ -21,17 +21,7 @@ import { fileURLToPath } from "node:url";
 import { classifyPaths, repositoryRoot } from "./classifier.mjs";
 import { workspaceInstallProblem } from "./workspace-install.mjs";
 
-const LANES = [
-  "static",
-  "packages",
-  "scripts",
-  "skills",
-  "go-ssh",
-  "go-dns",
-  "sonar",
-  "workflows",
-  "e2e",
-];
+const LANES = ["static", "packages", "scripts", "go-ssh", "go-dns", "sonar", "workflows", "e2e"];
 
 const RESOURCE_HEAVY_LANES = new Set(["packages", "scripts", "e2e"]);
 
@@ -280,7 +270,7 @@ async function runLane(root, directory, planPath, lane, fingerprint) {
   const started = Date.now();
   const child = spawn(
     process.execPath,
-    [join(root, "scripts/quality/run-lane.mjs"), "--plan", planPath, "--lane", lane, "--local"],
+    [join(root, "scripts/quality/run-lane.mjs"), "--plan", planPath, "--lane", lane],
     { cwd: root, env: process.env, stdio: ["ignore", descriptor, descriptor] },
   );
   const status = await new Promise((resolvePromise) => {

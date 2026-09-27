@@ -258,6 +258,7 @@ pinwatch_on_exit() {
 
 BAKED_PATHS_FALLBACK=(
 	docs/agents/hermes
+	.agents/skills
 	packages/skills
 	apps/cli/assets/fonts
 )

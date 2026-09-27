@@ -44,7 +44,6 @@ function estimate(plan, percentileName = "p50") {
     model.coreBaseSeconds +
     packageSeconds +
     (plan.lanes.scripts ? model.scriptsSeconds : 0) +
-    (plan.lanes.skills ? model.skillsSeconds : 0) +
     (plan.lanes.goSsh ? model.goSshSeconds : 0) +
     (plan.lanes.goDns ? model.goDnsSeconds : 0) +
     (plan.lanes.sonar ? model.sonarSeconds : 0) +

@@ -313,8 +313,8 @@ RUN chmod -R a+rX /opt/fonts
 # on). Bump lever: this version line.
 RUN npm install -g @anthropic-ai/claude-code@2.1.282
 
-# ALL local Fluncle skills, baked for Claude Code so every box `claude -p` discovers
-# them without a per-run `skills:install`: the voice crons load `copywriting-fluncle`
+# The committed npx-installed skill snapshot, baked for Claude Code so every
+# box `claude -p` discovers local and upstream skills: the voice crons load `copywriting-fluncle`
 # (note/observe/newsletter authoring), and the nightly audit + reviewer agents lean on
 # the operator skills (fluncle-hermes-operator, fluncle-surfaces, fluncle-audit-operator,
 # fluncle-maintenance, taste, …). CLAUDE DISCOVERS SKILLS UNDER ITS CONFIG DIR
@@ -327,12 +327,10 @@ RUN npm install -g @anthropic-ai/claude-code@2.1.282
 # world-traversable (755) and made writable (1777, sticky) because Claude Code writes
 # session/state files under the config dir at run — the non-root cron user must be able
 # to create them without owning /opt/claude; the skill files themselves stay root-owned
-# + read-only. The whole tree is small (~1 MB), so baking all of packages/skills is
-# drift-proof — a new skill needs no Dockerfile change. COPY needs the repo root as the
-# build context (see the header). Update a skill the same way as any image change: edit
-# it in the repo (packages/skills/<name>), rebuild, restart.
+# + read-only. COPY needs the repo root as the build context (see the header).
+# Refresh the committed snapshot with npx skills before rebuilding the image.
 ENV CLAUDE_CONFIG_DIR=/opt/claude
-COPY packages/skills /opt/claude/skills
+COPY .agents/skills /opt/claude/skills
 RUN chmod -R a+rX /opt/claude/skills \
   && chmod 1777 /opt/claude
 

@@ -1,11 +1,9 @@
 ---
 name: taste
-description: "Evaluate and improve the taste and design quality of code, architecture, APIs, UI, writing, or any creative work using Paul Graham's principles from 'Taste for Makers.' Use when the user asks to review something for taste, elegance, beauty, or design quality. Also use when the user says 'taste check,' 'taste review,' 'is this elegant,' 'make this beautiful,' 'review for taste,' 'does this have good taste,' or wants to improve the aesthetic quality of their work beyond mere correctness."
+description: "Evaluate and improve the taste and design quality of code, architecture, APIs, UI, writing, or any creative work using Paul Graham's principles from 'Taste for Makers.' Use when the user asks for a taste check or a review of elegance, beauty, or design quality, or wants to improve the aesthetic quality of their work beyond mere correctness."
 ---
 
 # Taste for Makers
-
-Adapted from Paul Graham's essay ["Taste for Makers"](https://paulgraham.com/taste.html) (2002) — the 14 principles and their framing are his; the prompts, checklists, and repo-specific application are ours.
 
 Taste is not subjective. As you get better at designing things, your tastes change — and you know they're getting better, which means your old tastes were not merely different but worse. Good and bad design exist. This skill helps you see the difference.
 

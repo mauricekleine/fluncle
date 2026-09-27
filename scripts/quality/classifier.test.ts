@@ -35,12 +35,11 @@ describe("dependency-closure classifier", () => {
     expect(plan.packages).toContain("@fluncle/web");
   });
 
-  test("Go, Rust, extension, mobile, Raycast, media, and skills stay isolated", () => {
+  test("Go, Rust, extension, mobile, Raycast, and media stay isolated", () => {
     const cases = [
       ["apps/ssh/main.go", "goSsh"],
       ["apps/dns/main.go", "goDns"],
       ["apps/sonar/src/main.rs", "sonar"],
-      ["packages/skills/fluncle-maintenance/SKILL.md", "skills"],
     ] as const;
 
     for (const [path, lane] of cases) {
@@ -61,12 +60,8 @@ describe("dependency-closure classifier", () => {
     }
   });
 
-  test("script and generated-skill surfaces select their dedicated checks", () => {
+  test("standalone scripts select their dedicated checks", () => {
     expect(classifyPaths(["docs/agents/hermes/scripts/crawl-sweep.ts"]).lanes.scripts).toBe(true);
-    expect(classifyPaths([".agents/skills/example/SKILL.md"]).lanes.skills).toBe(true);
-    const installer = classifyPaths(["scripts/install-skills.ts"]);
-    expect(installer.lanes.scripts).toBe(true);
-    expect(installer.lanes.skills).toBe(true);
   });
 
   test("the pipeline evaluator selects web checks for its web integration consumer", () => {

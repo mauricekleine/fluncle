@@ -69,4 +69,3 @@ if [[ "${missing}" -ne 0 ]]; then
 fi
 
 log "Prerequisites look ready"
-
