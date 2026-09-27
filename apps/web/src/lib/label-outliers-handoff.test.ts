@@ -49,7 +49,7 @@ describe("the purge handoff", () => {
     );
   });
 
-  it("keeps a single as a comment naming its artists for purge-artists.ts", () => {
+  it("keeps a single as a comment naming its track id and artists", () => {
     const single = item({
       album: null,
       label: null,
@@ -66,7 +66,7 @@ describe("the purge handoff", () => {
     const lines = purgeHandoff([single], "2026-09-27").trimEnd().split("\n");
 
     expect(lines.slice(1)).toEqual([
-      "# 1 singles with no album: purge-artists.ts --artists or an artist rule",
+      "# 1 singles with no album: purge-albums.ts --tracks <id>, or purge-artists.ts / an artist rule",
       "# t_la La Dee Da: foo-fighters",
     ]);
   });

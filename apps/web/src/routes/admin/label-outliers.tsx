@@ -189,7 +189,8 @@ function AdminLabelOutliersPage() {
           Albums and singles that sound far from the rest of their own label, scored each night on
           the box. Open one and listen. If it belongs, mark it fine and it stays off this list until
           its tracks change. If it doesn't, copy it into the catalogue-prune skill: purge-albums.ts
-          takes the album ids, and a single goes through purge-artists.ts or an artist rule.
+          takes the album ids, and a single goes through its --tracks flag, purge-artists.ts, or an
+          artist rule.
         </p>
 
         {selectedVisible.length > 0 ? (

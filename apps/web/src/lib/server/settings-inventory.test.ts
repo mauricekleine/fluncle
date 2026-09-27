@@ -172,7 +172,7 @@ describe("settings inventory drift", () => {
     expect(orphaned, "Registered settings keys with no reader and no writer").toEqual([]);
     expect(unregistered, "Settings keys used by code but missing from the inventory").toEqual([]);
     expect(wrongOwner, "Settings keys used outside their registered owner module").toEqual([]);
-    expect(registered.size).toBe(50);
-    expect(Object.keys(SETTINGS_INVENTORY)).toHaveLength(23);
+    expect(registered.size).toBe(51);
+    expect(Object.keys(SETTINGS_INVENTORY)).toHaveLength(24);
   });
 });

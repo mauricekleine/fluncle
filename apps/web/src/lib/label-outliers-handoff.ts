@@ -34,7 +34,7 @@ export function purgeHandoff(items: readonly LabelOutlierItem[], today: string):
 
   if (singles.length > 0) {
     lines.push(
-      `# ${singles.length} singles with no album: purge-artists.ts --artists or an artist rule`,
+      `# ${singles.length} singles with no album: purge-albums.ts --tracks <id>, or purge-artists.ts / an artist rule`,
       ...singles.map((item) => {
         const slugs = outlierArtists(item)
           .map((artist) => artist.slug)
