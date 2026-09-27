@@ -7,6 +7,12 @@ const apifyBudgetMock = vi.fn();
 const apifyEnabledMock = vi.fn();
 const spotifySearchEnabledMock = vi.fn();
 const gateMock = vi.fn();
+const dailyCallsMock = vi.fn();
+
+vi.mock("./spotify-budget", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./spotify-budget")>();
+  return { ...actual, readSpotifyDailyCallCount: () => dailyCallsMock() };
+});
 
 vi.mock("./spotify-anchor-breaker", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./spotify-anchor-breaker")>();
@@ -64,11 +70,13 @@ beforeEach(() => {
   apifyEnabledMock.mockReset();
   spotifySearchEnabledMock.mockReset();
   gateMock.mockReset();
+  dailyCallsMock.mockReset();
   breakerStateMock.mockResolvedValue(CLEAR);
   apifyBudgetMock.mockResolvedValue(BUDGET_OPEN);
   apifyEnabledMock.mockResolvedValue(true);
   spotifySearchEnabledMock.mockResolvedValue(false);
   gateMock.mockResolvedValue({ nextEligibleAt: null, reason: "flag_off" });
+  dailyCallsMock.mockResolvedValue(7);
 });
 
 describe("oRPC get_spotify_anchor_breaker (GET /admin/catalogue/anchor/breaker)", () => {
@@ -95,7 +103,16 @@ describe("oRPC get_spotify_anchor_breaker (GET /admin/catalogue/anchor/breaker)"
         nextEligibleAt: null,
         spotifySearchEnabled: false,
       },
+      spotifyDailyCalls: 7,
     });
+  });
+
+  it("keeps the anchor gate readable when daily usage telemetry is unavailable", async () => {
+    dailyCallsMock.mockRejectedValue(new Error("counter unavailable"));
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(req(PATH, "GET", AGENT_TOKEN));
+    expect(response?.status).toBe(200);
+    expect(await readJson(response)).toMatchObject({ spotifyDailyCalls: null, tripped: false });
   });
 
   it("reports a quota hold to the box through the breaker contract", async () => {

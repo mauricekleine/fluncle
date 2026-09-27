@@ -455,8 +455,14 @@ export const DUE_WORK_REVIEWED_NONPRODUCER_WRITERS = [
   {
     disposition: "non-eligibility",
     file: "label-releases.ts",
-    rationale: "Writes the label crawl cadence, which no due-work projection evaluates.",
-    sites: ["label-releases.ts:update:labels:32c5071e", "label-releases.ts:update:labels:0e8fa4e4"],
+    rationale:
+      "Writes the label release cadence and resume cursor, which no due-work projection evaluates.",
+    sites: [
+      "label-releases.ts:update:labels:2b63741a",
+      "label-releases.ts:update:labels:0e8fa4e4",
+      "label-releases.ts:update:labels:b8306969",
+      "label-releases.ts:update:labels:7587a192",
+    ],
   },
   {
     disposition: "non-eligibility",
@@ -836,8 +842,14 @@ export const GOAL_D_REVIEWED_NONPROJECTION_WRITERS = [
   {
     disposition: "non-projection-fact",
     file: "label-releases.ts",
-    rationale: "Changes label release-sync bookkeeping, not seed state or crawl scope.",
-    sites: ["label-releases.ts:update:labels:32c5071e", "label-releases.ts:update:labels:0e8fa4e4"],
+    rationale:
+      "Changes label release-sync bookkeeping and resume cursor, not seed state or crawl scope.",
+    sites: [
+      "label-releases.ts:update:labels:2b63741a",
+      "label-releases.ts:update:labels:0e8fa4e4",
+      "label-releases.ts:update:labels:b8306969",
+      "label-releases.ts:update:labels:7587a192",
+    ],
   },
   {
     disposition: "non-projection-fact",

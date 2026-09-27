@@ -2354,6 +2354,7 @@ export const labels = sqliteTable(
     bioVoiceViolations: text("bio_voice_violations"),
 
     certifiedFindingCount: integer("certified_finding_count").notNull().default(0),
+
     createdAt: text("created_at").notNull(),
 
     disambiguation: text("disambiguation"),
@@ -2363,6 +2364,7 @@ export const labels = sqliteTable(
     foundedLocation: text("founded_location"),
 
     foundingDate: text("founding_date"),
+
     id: text("id").primaryKey(),
 
     imageAttemptedAt: text("image_attempted_at"),
@@ -2378,12 +2380,19 @@ export const labels = sqliteTable(
     imageUpdatedAt: text("image_updated_at"),
 
     labelReleasesAttemptedAt: text("label_releases_attempted_at"),
+
     labelReleasesCheckedAt: text("label_releases_checked_at"),
+
     labelReleasesFailures: integer("label_releases_failures").notNull().default(0),
 
+    labelReleasesProgressJson: text("label_releases_progress_json"),
+
     latestReleaseDate: text("latest_release_date"),
+
     lineageAttemptedAt: text("lineage_attempted_at"),
+
     lineageFailures: integer("lineage_failures").notNull().default(0),
+
     lineageState: text("lineage_state", { enum: ["pending", "resolved", "none"] })
       .notNull()
       .default("pending"),
@@ -2395,18 +2404,25 @@ export const labels = sqliteTable(
     parentLabelId: text("parent_label_id"),
 
     renderableTrackCount: integer("renderable_track_count").notNull().default(0),
+
     ruledAt: text("ruled_at"),
 
     scopeChangedAt: text("scope_changed_at"),
+
     seedState: text("seed_state", { enum: ["enabled", "disabled", "undecided"] })
       .notNull()
       .default("undecided"),
+
     slug: text("slug").notNull().unique(),
+
     triageCheckedAt: text("triage_checked_at"),
+
     triageReason: text("triage_reason"),
+
     triageVerdict: text("triage_verdict", {
       enum: ["dnb", "dnb_partial", "not_dnb", "unclear"],
     }),
+
     updatedAt: text("updated_at").notNull(),
   },
   (table) => [

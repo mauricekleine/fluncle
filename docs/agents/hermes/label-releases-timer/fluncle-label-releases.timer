@@ -1,5 +1,5 @@
 [Unit]
-Description=fluncle-label-releases timer — tap Spotify's fresh releases for the enabled seed labels once a day on the rave-02 host
+Description=fluncle-label-releases timer — bounded freshness passes during Spotify's free window
 
 [Timer]
 # Per-firing jitter dissolves timer-phase alignment: mass timer restarts, including a pin-watch
@@ -7,9 +7,8 @@ Description=fluncle-label-releases timer — tap Spotify's fresh releases for th
 # the same second; the synchronized write bursts convoy on libSQL's single writer).
 # Re-rolled each firing, so no restart can ever re-align the roster.
 RandomizedDelaySec=90
-OnCalendar=*-*-* 07:20:00 Europe/Amsterdam
-OnCalendar=*-*-* 08:20:00 Europe/Amsterdam
-Persistent=true
+OnCalendar=*-*-* 03..08:00/15:00 UTC
+Persistent=false
 
 [Install]
 WantedBy=timers.target

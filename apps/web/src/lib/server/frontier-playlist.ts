@@ -10,7 +10,11 @@ import { type PublicUser } from "./public-auth";
 import { listRecommendations } from "./recommendations";
 import { getSetting, setSetting } from "./settings";
 import { getSpotifyAccessToken, spotifyFetch } from "./spotify";
-import { isSpotifyCallBudgetAvailable, recordSpotifyCall } from "./spotify-budget";
+import {
+  isSpotifyCallBudgetAvailable,
+  recordSpotifyCall,
+  recordSpotifyDailyCall,
+} from "./spotify-budget";
 
 export const FRONTIER_MINTING_KEY = "frontier.minting";
 
@@ -586,6 +590,14 @@ export async function putFrontierCover(
 ): Promise<FrontierCoverUpload> {
   try {
     const accessToken = await getSpotifyAccessToken();
+    const dailyCallRecord = recordSpotifyDailyCall(nowMs).catch((error) => {
+      logEvent("warn", "frontier.daily-call-record-failed", { error });
+    });
+    void import("cloudflare:workers")
+      .then(({ waitUntil }) => waitUntil(dailyCallRecord))
+      .catch((error) => {
+        logEvent("warn", "frontier.daily-call-schedule-failed", { error });
+      });
     const response = await fetch(`https://api.spotify.com/v1/playlists/${playlistId}/images`, {
       body: jpegBase64,
       headers: {

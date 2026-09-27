@@ -248,6 +248,10 @@ export type AnchorSummary = {
 
   spotifyIsrcAsks: number;
 
+  spotifyIsrcDue: null | number;
+
+  spotifyIsrcDueError: null | string;
+
   spotifyDeferredBudget: number;
 
   spotifyDeferredWindow: number;
@@ -276,6 +280,7 @@ export type AnchorDeps = {
   searchDeezer: (query: string) => Promise<DeezerCandidatePayload[] | DeezerSearchResult | null>;
 
   readPreflight?: () => Promise<AnchorPreflight>;
+  readIsrcDue?: () => Promise<null | number>;
 
   sleep: (ms: number) => Promise<void>;
 };
@@ -906,6 +911,8 @@ export async function runAnchorTick(
     spotifyDeferredWindow: 0,
     spotifyDeferredYield: 0,
     spotifyIsrcAsks: 0,
+    spotifyIsrcDue: null,
+    spotifyIsrcDueError: null,
   };
 
   const queue = await fetchAnchorWorkRows(limit, deps, summary, paidMode);
@@ -1080,6 +1087,24 @@ async function fetchAnchorQueue(
     queueDepth: typeof body.queued === "number" ? body.queued : null,
     rows: body.tracks as AnchorWorkItem[],
   };
+}
+
+export async function readAnchorIsrcDue(fetcher: typeof fetch = fetch): Promise<number> {
+  const response = await fetcher(
+    `${API_BASE_URL}/api/v1/admin/tracks/work?kind=anchor&limit=1&count=false&paidMode=unasked`,
+    {
+      headers: { Authorization: `Bearer ${API_TOKEN}` },
+      signal: AbortSignal.timeout(30_000),
+    },
+  );
+  if (!response.ok) {
+    throw new Error(`anchor ISRC due probe failed (${response.status})`);
+  }
+  const body = (await response.json()) as { tracks?: unknown };
+  if (!Array.isArray(body.tracks) || body.tracks.length > 1) {
+    throw new Error("anchor ISRC due probe returned an invalid worklist");
+  }
+  return body.tracks.length;
 }
 
 export async function runApifyActor(queries: string[]): Promise<ApifyResultItem[]> {
@@ -1410,6 +1435,39 @@ function sweepBlockedReason(summary: AnchorSummary, paidMode?: "prior" | "quota"
     : null;
 }
 
+async function measureAnchorIsrcDue(
+  ok: boolean,
+  preflight: AnchorPreflight | undefined,
+  askState: SpotifyAskState,
+  queueDepth: null | number,
+  deps: AnchorDeps,
+): Promise<{ error: null | string; due: null | number }> {
+  if (!ok || !preflight || !deps.readIsrcDue) {
+    return { due: null, error: null };
+  }
+  if (queueDepth === 0) {
+    return { due: 0, error: null };
+  }
+  const slots =
+    preflight.spotifySearchEnabled && withinIsrcAskWindow(askState.askWindow, new Date(deps.now()))
+      ? Math.max(0, askState.limit - askState.asksSpent)
+      : 0;
+  if (slots === 0) {
+    return { due: 0, error: null };
+  }
+  try {
+    const due = await deps.readIsrcDue();
+    if (due === null || !Number.isSafeInteger(due) || due < 0) {
+      throw new Error("invalid ISRC due probe result");
+    }
+    return { due: Math.min(due, slots), error: null };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    deps.log(`ISRC due probe failed: ${message}`);
+    return { due: null, error: message };
+  }
+}
+
 export async function runAnchorSweep(
   total: number,
   deps: AnchorDeps,
@@ -1464,6 +1522,8 @@ export async function runAnchorSweep(
     spotifyDeferredWindow: 0,
     spotifyDeferredYield: 0,
     spotifyIsrcAsks: 0,
+    spotifyIsrcDue: null as null | number,
+    spotifyIsrcDueError: null as null | string,
   };
 
   const askState = newSpotifyAskState();
@@ -1599,6 +1659,16 @@ export async function runAnchorSweep(
     ? "anchor_contract_fault"
     : sweepBlockedReason(merged, paidMode);
 
+  const dueProbe = await measureAnchorIsrcDue(
+    merged.ok,
+    preflight,
+    askState,
+    merged.queueDepth,
+    deps,
+  );
+  merged.spotifyIsrcDue = dueProbe.due;
+  merged.spotifyIsrcDueError = dueProbe.error;
+
   return merged;
 }
 
@@ -1652,6 +1722,7 @@ async function main(): Promise<void> {
     fetchQueue: fetchAnchorQueue,
     log,
     now: () => Date.now(),
+    readIsrcDue: readAnchorIsrcDue,
     readPreflight: readAnchorPreflight,
     recordInvalidFailure,
     report: reportAnchor,

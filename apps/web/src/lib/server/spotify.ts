@@ -7,7 +7,11 @@ import { getDb, typedRow } from "./db";
 import { readEnvs } from "./env";
 import { logEvent } from "./log";
 import { recordSpotifyThrottle } from "./spotify-anchor-breaker";
-import { isSpotifyCallBudgetAvailable, recordSpotifyCall } from "./spotify-budget";
+import {
+  isSpotifyCallBudgetAvailable,
+  recordSpotifyCall,
+  recordSpotifyDailyCall,
+} from "./spotify-budget";
 
 const spotifyAccountsBaseUrl = "https://accounts.spotify.com";
 const spotifyApiBaseUrl = "https://api.spotify.com/v1";
@@ -659,6 +663,8 @@ export async function spotifyFetch(
   path: string,
   accessToken: string,
   init: RequestInit = {},
+  retryOnThrottle = true,
+  recordAnchorThrottle = true,
 ): Promise<Response> {
   const headers = new Headers(init.headers);
   headers.set("Authorization", `Bearer ${accessToken}`);
@@ -668,6 +674,14 @@ export async function spotifyFetch(
   let spentMs = 0;
 
   for (let attempt = 0; ; attempt += 1) {
+    const dailyCallRecord = recordSpotifyDailyCall().catch((error) => {
+      logEvent("warn", "spotify.daily-call-record-failed", { error });
+    });
+    void import("cloudflare:workers")
+      .then(({ waitUntil }) => waitUntil(dailyCallRecord))
+      .catch((error) => {
+        logEvent("warn", "spotify.daily-call-schedule-failed", { error });
+      });
     const response = await fetch(`${spotifyApiBaseUrl}${path}`, {
       ...init,
       headers,
@@ -677,15 +691,25 @@ export async function spotifyFetch(
       return response;
     }
 
+    let quotaExceeded = false;
+
     if (response.status === 429) {
-      const quotaExceeded = await Promise.resolve()
+      quotaExceeded = await Promise.resolve()
         .then(() => response.clone().text())
         .then((body) => body.includes("QUOTA_EXCEEDED"))
         .catch(() => false);
-      await recordSpotifyThrottle(Date.now(), quotaExceeded);
+      if (recordAnchorThrottle) {
+        await recordSpotifyThrottle(Date.now(), quotaExceeded);
+      }
     }
 
-    if (response.status === 429 && retryable && attempt < SPOTIFY_MAX_RETRIES) {
+    if (
+      response.status === 429 &&
+      retryOnThrottle &&
+      !quotaExceeded &&
+      retryable &&
+      attempt < SPOTIFY_MAX_RETRIES
+    ) {
       const waitMs = parseRetryAfterMs(response.headers.get("Retry-After"));
 
       if (spentMs + waitMs <= SPOTIFY_RETRY_BUDGET_MS) {
@@ -702,7 +726,16 @@ export async function spotifyFetch(
       }
     }
 
-    throw new Error(await readApiError(response, "Spotify API request failed"));
+    const message = await readApiError(response, "Spotify API request failed");
+
+    if (response.status === 429) {
+      throw Object.assign(new Error(message), {
+        quotaExceeded,
+        retryAfterMs: parseRetryAfterMs(response.headers.get("Retry-After")),
+      });
+    }
+
+    throw new Error(message);
   }
 }
 
