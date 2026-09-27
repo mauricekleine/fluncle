@@ -16,7 +16,7 @@ EnvironmentFile=-/etc/fluncle/database-admission.env
 # pin-watch); this host unit only TRIGGERS it, and the sweep self-writes its /status marker
 # (cron-output.sh). Secrets (the agent token + APIFY_API_TOKEN) come from the shared op-injected
 # ${HOME}/.fluncle-secrets.env the wrapper sources.
-ExecStart=/usr/bin/docker exec -e DATABASE_ADMISSION_FAIL_CLOSED -e DATABASE_ADMISSION_POLL_SECS=2 -u hermes -e HOME=/opt/data/home -e FLUNCLE_ANCHOR_BATCH=250 -e FLUNCLE_ANCHOR_ISRC_ASK_LIMIT=100 -e FLUNCLE_ANCHOR_ISRC_WINDOW_UTC= hermes bash /opt/hermes-scripts/database-admission-runner.sh fluncle-anchor -- bash /opt/hermes-scripts/anchor-sweep.sh
+ExecStart=/usr/bin/docker exec -e DATABASE_ADMISSION_FAIL_CLOSED -e DATABASE_ADMISSION_POLL_SECS=2 -u hermes -e HOME=/opt/data/home -e FLUNCLE_ANCHOR_BATCH=250 -e FLUNCLE_ANCHOR_ISRC_ASK_LIMIT=100 -e FLUNCLE_ANCHOR_ISRC_WINDOW_UTC= hermes bash /opt/hermes-scripts/anchor-sweep.sh
 # `FLUNCLE_ANCHOR_ISRC_ASK_LIMIT=100` is the tick's ceiling on Spotify EXACT-ISRC asks (the sweep's own
 # default is 25). The rung resolves most ISRC-bearing rows at zero cost, so it is what keeps those rows
 # off the metered Apify fallback. It runs at ALL HOURS (`FLUNCLE_ANCHOR_ISRC_WINDOW_UTC=` — empty is

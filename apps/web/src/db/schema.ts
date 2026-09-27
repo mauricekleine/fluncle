@@ -194,6 +194,10 @@ export const tracks = sqliteTable(
 
     spotifyAnchorPaidAdmittedAt: text("spotify_anchor_paid_admitted_at"),
 
+    spotifyAnchorPaidChargedAt: text("spotify_anchor_paid_charged_at"),
+
+    spotifyAnchorPaidState: text("spotify_anchor_paid_state"),
+
     spotifyAnchorSource: text("spotify_anchor_source"),
 
     spotifyAnchorTerminalError: text("spotify_anchor_terminal_error"),

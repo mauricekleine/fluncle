@@ -3,10 +3,19 @@ import {
   type AnchorCandidate,
   anchorTrack,
   AnchorTrackError,
+  cancelAnchorPaidResult,
+  clearPendingAnchorPaidReceipts,
+  commitAnchorFreePhase,
+  getAnchorPaidResultToken,
+  prepareAnchorFreePhase,
+  probeAnchorFreePhase,
+  readAnchorPaidReceiptStatus,
+  readAnchorPreparedCoordinates,
   recordAnchorValidationFailure,
   requeueAnchorStamps,
   requeueIsrcRecoveryStamps,
   resolveAnchorFree,
+  resolveUnavailableAnchorPaidReceipt,
   resolveAnchorReview,
 } from "../anchor";
 import {
@@ -100,6 +109,7 @@ function resolveSpotifyTrackId(candidate: {
 }
 
 export function adminCatalogueHandlers(os: Implementer) {
+  const anchorBatchWallBudgetMs = 20_000;
   const listCatalogueTracksHandler = os.list_catalogue_tracks
     .use(adminAuth)
     .handler(async ({ input }) => {
@@ -189,7 +199,11 @@ export function adminCatalogueHandlers(os: Implementer) {
     .use(operatorGuard)
     .handler(async ({ input }) => {
       try {
-        return { ok: true as const, requeued: await requeueAnchorStamps(input.trackIds) };
+        const requeued = await requeueAnchorStamps(input.trackIds);
+        const paidCleared = input.clearPaid
+          ? await clearPendingAnchorPaidReceipts(input.trackIds)
+          : 0;
+        return { ok: true as const, paidCleared, requeued };
       } catch (error) {
         throw apiFault(error);
       }
@@ -364,7 +378,9 @@ export function adminCatalogueHandlers(os: Implementer) {
         ];
       });
 
-      const result = await anchorTrack(input.trackId, candidates);
+      const result = await anchorTrack(input.trackId, candidates, {
+        paidResultToken: input.paidResultToken,
+      });
 
       return { ...result, ok: true as const };
     } catch (error) {
@@ -399,6 +415,7 @@ export function adminCatalogueHandlers(os: Implementer) {
   const resolveAnchorHandler = os.resolve_anchor.use(adminAuth).handler(async ({ input }) => {
     try {
       const result = await resolveAnchorFree(input.trackId, new Date(), {
+        allowPaid: false,
         deezerCandidates: input.deezerCandidates,
         spotifySearch: input.spotifySearch,
       });
@@ -419,6 +436,190 @@ export function adminCatalogueHandlers(os: Implementer) {
       throw apiFault(error);
     }
   });
+
+  const prepareAnchorHandler = os.prepare_anchor.use(adminAuth).handler(async ({ input }) => {
+    try {
+      const prepared = await prepareAnchorFreePhase(input.trackId, input.deezerCandidates);
+      const { receiptAt } = await readAnchorPreparedCoordinates(prepared);
+      return {
+        ok: true as const,
+        prepared,
+        receiptAt,
+      };
+    } catch (error) {
+      throw apiFault(error);
+    }
+  });
+
+  const prepareAnchorBatchHandler = os.prepare_anchor_batch
+    .use(adminAuth)
+    .handler(async ({ input }) => {
+      const started = performance.now();
+      const items = [];
+      for (const item of input.items) {
+        if (items.length > 0 && performance.now() - started >= anchorBatchWallBudgetMs) {
+          items.push({ elapsedMs: 0, status: "deferred" as const, trackId: item.trackId });
+          continue;
+        }
+        const itemStarted = performance.now();
+        try {
+          const prepared = await prepareAnchorFreePhase(item.trackId, item.deezerCandidates);
+          const { receiptAt } = await readAnchorPreparedCoordinates(prepared);
+          items.push({
+            elapsedMs: performance.now() - itemStarted,
+            prepared,
+            receiptAt,
+            status: "done" as const,
+            trackId: item.trackId,
+          });
+        } catch (error) {
+          items.push({
+            elapsedMs: performance.now() - itemStarted,
+            error: error instanceof Error ? error.message : "Anchor prepare failed",
+            ...(error instanceof AnchorTrackError
+              ? { httpStatus: error.reason === "not_found" ? 404 : 409 }
+              : {}),
+            status: "error" as const,
+            trackId: item.trackId,
+          });
+        }
+      }
+      return { items, ok: true as const };
+    });
+
+  const resolveAnchorCandidateHandler = os.resolve_anchor_candidate
+    .use(adminAuth)
+    .handler(async ({ input }) => {
+      try {
+        return {
+          evidence: await probeAnchorFreePhase(input.prepared, input.spotifySearch),
+          ok: true as const,
+        };
+      } catch (error) {
+        throw apiFault(error);
+      }
+    });
+
+  const commitAnchorHandler = os.commit_anchor.use(adminAuth).handler(async ({ input }) => {
+    try {
+      return {
+        ...(await commitAnchorFreePhase(input.prepared, input.evidence, input.allowPaid)),
+        ok: true as const,
+      };
+    } catch (error) {
+      if (error instanceof AnchorTrackError) {
+        throw new ORPCError(error.reason === "not_found" ? "NOT_FOUND" : "CONFLICT", {
+          data: {
+            apiCode: error.reason,
+            apiMessage: error.message,
+          },
+          message: error.message,
+          status: error.reason === "not_found" ? 404 : 409,
+        });
+      }
+      throw apiFault(error);
+    }
+  });
+
+  const commitAnchorBatchHandler = os.commit_anchor_batch
+    .use(adminAuth)
+    .handler(async ({ input }) => {
+      const started = performance.now();
+      const items = [];
+      for (const item of input.items) {
+        if (items.length > 0 && performance.now() - started >= anchorBatchWallBudgetMs) {
+          items.push({ elapsedMs: 0, status: "deferred" as const, trackId: item.trackId });
+          continue;
+        }
+        const itemStarted = performance.now();
+        try {
+          const coordinates = await readAnchorPreparedCoordinates(item.prepared);
+          if (coordinates.trackId !== item.trackId) {
+            throw new Error("anchor batch track ID does not match prepared row");
+          }
+          const verdict = await commitAnchorFreePhase(item.prepared, item.evidence, item.allowPaid);
+          items.push({
+            ...verdict,
+            elapsedMs: performance.now() - itemStarted,
+            ok: true as const,
+            status: "done" as const,
+            trackId: item.trackId,
+          });
+        } catch (error) {
+          items.push({
+            elapsedMs: performance.now() - itemStarted,
+            error: error instanceof Error ? error.message : "Anchor commit failed",
+            ...(error instanceof AnchorTrackError
+              ? { httpStatus: error.reason === "not_found" ? 404 : 409 }
+              : {}),
+            status: "error" as const,
+            trackId: item.trackId,
+          });
+        }
+      }
+      return { items, ok: true as const };
+    });
+
+  const getAnchorReceiptHandler = os.get_anchor_receipt
+    .use(adminAuth)
+    .handler(async ({ input }) => {
+      try {
+        return {
+          ...(await readAnchorPaidReceiptStatus(input.trackId, input.receiptAt)),
+          ok: true as const,
+        };
+      } catch (error) {
+        throw apiFault(error);
+      }
+    });
+
+  const getAnchorPaidTokenHandler = os.get_anchor_paid_token
+    .use(adminAuth)
+    .handler(async ({ input }) => {
+      try {
+        return {
+          ok: true as const,
+          paidResultToken: await getAnchorPaidResultToken(input.trackId, input.receiptAt),
+        };
+      } catch (error) {
+        if (error instanceof AnchorTrackError) {
+          throw new ORPCError("CONFLICT", { message: error.message, status: 409 });
+        }
+        throw apiFault(error);
+      }
+    });
+
+  const cancelAnchorPaidResultHandler = os.cancel_anchor_paid_result
+    .use(adminAuth)
+    .handler(async ({ input }) => {
+      try {
+        return {
+          ...(await cancelAnchorPaidResult(input.trackId, input.paidResultToken, input.refundCap)),
+          ok: true as const,
+        };
+      } catch (error) {
+        if (error instanceof AnchorTrackError) {
+          throw new ORPCError("CONFLICT", { message: error.message, status: 409 });
+        }
+        throw apiFault(error);
+      }
+    });
+
+  const resolveAnchorPaidResultHandler = os.resolve_anchor_paid_result
+    .use(adminAuth)
+    .handler(async ({ input }) => {
+      try {
+        return {
+          ...(await resolveUnavailableAnchorPaidReceipt(input.trackId, input.receiptAt)),
+          ok: true as const,
+        };
+      } catch (error) {
+        if (error instanceof AnchorTrackError) {
+          throw new ORPCError("CONFLICT", { message: error.message, status: 409 });
+        }
+        throw apiFault(error);
+      }
+    });
 
   const resolveAnchorReviewHandler = os.resolve_anchor_review
     .use(adminAuth)
@@ -614,13 +815,18 @@ export function adminCatalogueHandlers(os: Implementer) {
 
   return {
     anchor_track: anchorTrackHandler,
+    cancel_anchor_paid_result: cancelAnchorPaidResultHandler,
     certify_track: certifyTrackHandler,
     clear_wrong_audio: clearWrongAudioHandler,
+    commit_anchor: commitAnchorHandler,
+    commit_anchor_batch: commitAnchorBatchHandler,
     commit_crawl_nodes: commitCrawlNodesHandler,
     crawl_catalogue: crawlCatalogueHandler,
     flag_wrong_audio: flagWrongAudioHandler,
     force_capture: forceCaptureHandler,
     get_anchor_apify_budget: getAnchorApifyBudgetHandler,
+    get_anchor_paid_token: getAnchorPaidTokenHandler,
+    get_anchor_receipt: getAnchorReceiptHandler,
     get_capture_budget: getCaptureBudgetHandler,
     get_crawl_status: getCrawlStatusHandler,
     get_label_releases_budget: getLabelReleasesBudgetHandler,
@@ -628,6 +834,8 @@ export function adminCatalogueHandlers(os: Implementer) {
     get_spotify_anchor_breaker: getSpotifyAnchorBreakerHandler,
     list_catalogue_tracks: listCatalogueTracksHandler,
     list_unverified_captures: listUnverifiedCapturesHandler,
+    prepare_anchor: prepareAnchorHandler,
+    prepare_anchor_batch: prepareAnchorBatchHandler,
     rank_catalogue: rankCatalogueHandler,
     record_anchor_failure: recordAnchorFailureHandler,
     record_demand: recordDemandHandler,
@@ -637,6 +845,8 @@ export function adminCatalogueHandlers(os: Implementer) {
     reset_apple_breaker: resetAppleBreakerHandler,
     reset_spotify_anchor_breaker: resetSpotifyAnchorBreakerHandler,
     resolve_anchor: resolveAnchorHandler,
+    resolve_anchor_candidate: resolveAnchorCandidateHandler,
+    resolve_anchor_paid_result: resolveAnchorPaidResultHandler,
     resolve_anchor_review: resolveAnchorReviewHandler,
     set_anchor_apify: setAnchorApifyHandler,
     set_anchor_apify_budget: setAnchorApifyBudgetHandler,

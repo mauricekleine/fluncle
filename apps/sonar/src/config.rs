@@ -87,7 +87,7 @@ impl Config {
                 .with_context(|| format!("SONAR_DELTA_SECS is not a valid integer: {v:?}"))?,
             None => 30,
         };
-        let reconcile_secs = parsed("SONAR_RECONCILE_SECS", 3600)?;
+        let reconcile_secs = parsed("SONAR_RECONCILE_SECS", 21600)?;
         if delta_secs == 0 {
             bail!("SONAR_DELTA_SECS must be greater than zero");
         }

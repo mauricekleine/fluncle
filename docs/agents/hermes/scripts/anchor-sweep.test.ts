@@ -1,10 +1,12 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
   type AnchorDeps,
+  AnchorAdmissionYieldError,
   anchorFiringDeferral,
   AnchorReportError,
   type AnchorPreflight,
   type ApifyResultItem,
+  ApifyStartError,
   chunk,
   groupCandidatesByTarget,
   itemToCandidate,
@@ -195,6 +197,71 @@ test("three poison rows among fifteen reports keep their own strikes", async () 
   expect(summary.blockedReason).toBeNull();
 });
 
+test("a rejected actor start disarms paid admission before the next fifteen-row phase", async () => {
+  const allowed: boolean[][] = [];
+  let actorStarts = 0;
+  const rows = Array.from({ length: 30 }, (_, index) => ({
+    anchorQuery: `query-${index}`,
+    trackId: `track-${index}`,
+  }));
+  const summary = await runAnchorTick(30, {
+    cancelPaidActorStart: () => Promise.resolve(),
+    fetchQueue: () => Promise.resolve(rows),
+    log: () => {},
+    now: () => Date.now(),
+    report: () => Promise.resolve({ anchored: false, verifiedBy: null }),
+    resolveFree: () => Promise.resolve({ anchored: false, verifiedBy: null }),
+    resolveFreeBatch: (items) => {
+      allowed.push(items.map((item) => item.allowPaid));
+      return Promise.resolve(
+        items.map((item) => ({
+          status: "done" as const,
+          verdict: { anchored: false, apifyEligible: item.allowPaid, verifiedBy: null },
+        })),
+      );
+    },
+    runActor: () => {
+      actorStarts += 1;
+      return Promise.reject(new ApifyStartError("actor rejected the start"));
+    },
+    searchDeezer: () => Promise.resolve([]),
+    sleep: () => Promise.resolve(),
+  });
+  expect(allowed).toEqual([Array(15).fill(true), Array(15).fill(false)]);
+  expect(actorStarts).toBe(1);
+  expect(summary.apifyActorErrors).toBe(1);
+});
+
+test("a contract fault disarms paid admission before the next fifteen-row phase", async () => {
+  const allowed: boolean[][] = [];
+  const rows = Array.from({ length: 30 }, (_, index) => ({
+    anchorQuery: `query-${index}`,
+    trackId: `track-${index}`,
+  }));
+  const summary = await runAnchorTick(30, {
+    fetchQueue: () => Promise.resolve(rows),
+    log: () => {},
+    now: () => Date.now(),
+    recordInvalidFailure: () => Promise.resolve({ terminal: false }),
+    report: () => Promise.reject(new AnchorReportError("invalid_request", 400)),
+    resolveFree: () => Promise.resolve({ anchored: false, verifiedBy: null }),
+    resolveFreeBatch: (items) => {
+      allowed.push(items.map((item) => item.allowPaid));
+      return Promise.resolve(
+        items.map((item) => ({
+          status: "done" as const,
+          verdict: { anchored: false, apifyEligible: item.allowPaid, verifiedBy: null },
+        })),
+      );
+    },
+    runActor: () => Promise.resolve([]),
+    searchDeezer: () => Promise.resolve([]),
+    sleep: () => Promise.resolve(),
+  });
+  expect(allowed).toEqual([Array(15).fill(true), Array(15).fill(false)]);
+  expect(summary.blockedReason).toBe("anchor_contract_fault");
+});
+
 test("actor fields outside the anchor contract do not become a 400 payload", () => {
   const malformed = {
     artists: [{ artist_id: 123, artist_name: "DJ Chef" }],
@@ -301,6 +368,69 @@ describe("runAnchorTick", () => {
       ...overrides,
     };
   }
+
+  test("a later admission yield preserves earlier report failures in the paused summary", async () => {
+    let reports = 0;
+    const summary = await runAnchorTick(
+      2,
+      deps({
+        fetchQueue: () =>
+          Promise.resolve([
+            { anchorQuery: "a", trackId: "a" },
+            { anchorQuery: "b", trackId: "b" },
+          ]),
+        report: () => {
+          reports += 1;
+          return Promise.reject(
+            reports === 1
+              ? new Error("report unavailable")
+              : new AnchorAdmissionYieldError("queue"),
+          );
+        },
+      }),
+      1,
+    );
+
+    expect(summary).toMatchObject({
+      admissionOutcome: "phase-yielded",
+      checked: 2,
+      failed: 1,
+      gateState: "paused",
+      ok: true,
+      reason: "database_admission",
+    });
+    expect(summary.skipped).toBe(1);
+  });
+
+  test("a yielded report keeps prior invalid-row strikes and flushes available receipts", async () => {
+    let reports = 0;
+    let receipts = 0;
+    const summary = await runAnchorSweep(
+      2,
+      deps({
+        fetchQueue: () =>
+          Promise.resolve([
+            { anchorQuery: "a", trackId: "a" },
+            { anchorQuery: "b", trackId: "b" },
+          ]),
+        recordInvalidFailure: () => {
+          receipts += 1;
+          return Promise.resolve({ terminal: false });
+        },
+        report: () => {
+          reports += 1;
+          return Promise.reject(
+            reports === 1
+              ? new AnchorReportError("invalid_request", 400)
+              : new AnchorAdmissionYieldError("queue"),
+          );
+        },
+      }),
+    );
+
+    expect(summary).toMatchObject({ failed: 1, gateState: "paused", skipped: 1 });
+    expect(receipts).toBe(1);
+  });
 
   test("tallies isrc / search anchors and a clean miss, and POSTs each row's grouped candidates", async () => {
     const posted: Record<string, number> = {};
@@ -868,7 +998,7 @@ describe("runAnchorTick", () => {
     expect(summary.anchoredByIsrc + summary.anchoredBySearch + summary.missed).toBe(0);
   });
 
-  test("an actor run that throws counts the chunk skipped, never aborts the tick", async () => {
+  test("an actor run that throws stops the paid leg with a recovery blocker", async () => {
     const summary = await runAnchorTick(
       50,
       deps({
@@ -881,9 +1011,10 @@ describe("runAnchorTick", () => {
     expect(summary.apifyActorErrors).toBe(1);
     expect(summary.errors).toBe(1);
     expect(summary.error).toContain("apify 500");
+    expect(summary.blockedReason).toBe("paid_result_recovery");
   });
 
-  test("N failed Apify chunks report N failures, never only the last one", async () => {
+  test("an ambiguous first actor chunk prevents later actor chunks", async () => {
     const work = Array.from({ length: 5 }, (_, index) => ({
       anchorQuery: `query ${index}`,
       trackId: `mb_${index}`,
@@ -902,22 +1033,30 @@ describe("runAnchorTick", () => {
       2,
     );
 
-    expect(actorCalls).toBe(3);
-    expect(summary.apifyActorErrors).toBe(3);
-    expect(summary.errors).toBe(3);
-    expect(summary.skipped).toBe(5);
+    expect(actorCalls).toBe(1);
+    expect(summary.apifyActorErrors).toBe(1);
+    expect(summary.errors).toBe(1);
+    expect(summary.skipped).toBe(2);
 
     expect(summary.error).toBe("apify failed chunk 1");
   });
 
   test("a 200 with Deezer's real non-array error shape is an Apify ERROR, never an empty result", async () => {
     const realFetch = globalThis.fetch;
-    globalThis.fetch = (() =>
-      Promise.resolve(
-        Response.json({
-          error: { code: 4, message: "Quota limit exceeded", type: "Exception" },
-        }),
-      )) as typeof globalThis.fetch;
+    globalThis.fetch = ((input: string | URL | Request) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url.includes("/v2/acts/")) {
+        return Promise.resolve(Response.json({ data: { id: "run-error", status: "READY" } }));
+      }
+      if (url.includes("/dataset/items")) {
+        return Promise.resolve(
+          Response.json({
+            error: { code: 4, message: "Quota limit exceeded", type: "Exception" },
+          }),
+        );
+      }
+      return Promise.resolve(Response.json({ data: { status: "SUCCEEDED" } }));
+    }) as typeof globalThis.fetch;
 
     try {
       const summary = await runAnchorTick(
@@ -935,6 +1074,34 @@ describe("runAnchorTick", () => {
       expect(summary.skipped).toBe(1);
       expect(summary.error).toContain("expected an array");
       expect(summary.error).toContain("Quota limit exceeded");
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
+  test("an async Apify run exposes its ID before waiting and reads the completed dataset", async () => {
+    const realFetch = globalThis.fetch;
+    const requests: string[] = [];
+    const started: string[] = [];
+    globalThis.fetch = ((input: string | URL | Request) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      requests.push(url);
+      if (url.includes("/v2/acts/") && url.endsWith("/runs")) {
+        return Promise.resolve(Response.json({ data: { id: "run-1", status: "READY" } }));
+      }
+      if (url.includes("/v2/actor-runs/run-1/dataset/items")) {
+        return Promise.resolve(Response.json(APIFY_SAMPLE));
+      }
+      if (url.includes("/v2/actor-runs/run-1")) {
+        expect(started).toEqual(["run-1"]);
+        return Promise.resolve(Response.json({ data: { id: "run-1", status: "SUCCEEDED" } }));
+      }
+      throw new Error(`unexpected Apify request ${url}`);
+    }) as typeof globalThis.fetch;
+    try {
+      const items = await runApifyActor(["Azuro Hold Tight"], (runId) => started.push(runId));
+      expect(items).toEqual(APIFY_SAMPLE);
+      expect(requests).toHaveLength(3);
     } finally {
       globalThis.fetch = realFetch;
     }
@@ -1487,6 +1654,35 @@ describe("runAnchorSweep (paging past the worklist cap)", () => {
     expect(summary.ok).toBe(true);
   });
 
+  test("a failed paid report resolution disables paid admission on later pages", async () => {
+    const admitted: boolean[] = [];
+    const summary = await runAnchorSweep(
+      2,
+      {
+        ...pagedDeps([rows("a", 1), rows("b", 1)]),
+        report: () => Promise.reject(new AnchorReportError("changed", 409)),
+        resolveFreeBatch: (items) => {
+          admitted.push(...items.map((item) => item.allowPaid));
+          return Promise.resolve(
+            items.map(() => ({
+              status: "done" as const,
+              verdict: {
+                anchored: false,
+                apifyEligible: true,
+                paidResultToken: "token",
+                verifiedBy: null,
+              },
+            })),
+          );
+        },
+        resolvePaidReport: () => Promise.reject(new Error("receipt status unavailable")),
+      },
+      1,
+    );
+    expect(admitted).toEqual([true, false]);
+    expect(summary.blockedReason).toBe("paid_result_recovery");
+  });
+
   test("one win among mostly deferred rows still reports a block", async () => {
     const summary = await runAnchorSweep(5, {
       ...pagedDeps([rows("mb", 5)]),
@@ -1861,6 +2057,35 @@ describe("runAnchorTick — the admission gate", () => {
     expect(summary.apifyBudgetRemaining).toBe(0);
   });
 
+  test("a live paid receipt defers the row without a second actor request or a free-ask label", async () => {
+    let actorRuns = 0;
+    const deps = gateDeps(
+      () => ({ apifyEligible: false, apifyIneligibleReason: "awaiting_paid_result" }),
+      () => {
+        actorRuns += 1;
+      },
+    );
+    const summary = await runAnchorSweep(2, {
+      ...deps,
+      readPreflight: () =>
+        Promise.resolve({
+          apifyBudgetRemaining: 42,
+          apifyBudgetSpent: false,
+          apifyEnabled: true,
+          gateReason: "open",
+          spotifySearchEnabled: true,
+        }),
+    });
+
+    expect(actorRuns).toBe(0);
+    expect(summary.apifyRowsSent).toBe(0);
+    expect(summary.apifySkippedAwaitingPaidResult).toBe(2);
+    expect(summary.apifySkippedAwaitingSpotify).toBe(0);
+    expect(summary.apifyBudgetSkipped).toBe(0);
+    expect(summary.deferred).toBe(2);
+    expect(summary.blockedReason).toBe("awaiting_paid_result");
+  });
+
   test("an ADMITTED row still spends the actor, and the ledger counts rows AND result items", async () => {
     const summary = await runAnchorTick(
       50,
@@ -2077,6 +2302,60 @@ describe("runAnchorSweep — the firing preflight", () => {
     expect(summary.blockedReason).toBe("awaiting_free_ask");
     expect(summary.gateReason).toBe("friday_window");
     expect(summary.nextEligibleAt).toBe("2026-09-25T07:00:00.000Z");
+  });
+
+  test("a blocked paid checkpoint preserves the Friday and Apify disabled firing gates", async () => {
+    for (const preflight of [
+      {
+        apifyBudgetRemaining: 300,
+        apifyBudgetSpent: false,
+        apifyEnabled: true,
+        gateReason: "friday_window" as const,
+        spotifySearchEnabled: true,
+      },
+      {
+        apifyBudgetRemaining: 300,
+        apifyBudgetSpent: false,
+        apifyEnabled: false,
+        gateReason: "quota_hold" as const,
+        spotifySearchEnabled: true,
+      },
+    ]) {
+      let fetched = 0;
+      const summary = await runAnchorSweep(100, {
+        ...preflightDeps(preflight, () => {
+          fetched += 1;
+        }),
+        paidAdmissionDisabled: true,
+      });
+      expect(fetched).toBe(0);
+      expect(summary.reason).toBe(
+        preflight.gateReason === "friday_window" ? "awaiting_free_ask" : "apify_disabled",
+      );
+    }
+  });
+
+  test("a blocked paid checkpoint keeps quota_hold on the prior-only worklist", async () => {
+    const modes: (string | undefined)[] = [];
+    const summary = await runAnchorSweep(100, {
+      ...preflightDeps(
+        {
+          apifyBudgetRemaining: 300,
+          apifyBudgetSpent: false,
+          apifyEnabled: true,
+          gateReason: "quota_hold",
+          spotifySearchEnabled: true,
+        },
+        () => {},
+      ),
+      fetchQueue: (_limit, mode) => {
+        modes.push(mode);
+        return Promise.resolve({ queueDepth: 0, rows: [] });
+      },
+      paidAdmissionDisabled: true,
+    });
+    expect(modes).toEqual(["prior"]);
+    expect(summary.blockedReason).toBe("quota_hold");
   });
 
   test("a closed quota gate reads only the paid ISRC worklist", async () => {

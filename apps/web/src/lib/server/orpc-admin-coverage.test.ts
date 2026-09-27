@@ -57,7 +57,9 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   "GET /admin/catalogue/captures/unverified": "list_unverified_captures",
 
   "GET /admin/catalogue/crawl": "get_crawl_status",
+
   "GET /admin/catalogue/label-releases-budget": "get_label_releases_budget",
+
   "GET /admin/catalogue/pipeline": "get_pipeline",
 
   "GET /admin/clips": "list_clips",
@@ -237,7 +239,25 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
 
   "POST /admin/catalogue/anchor/breaker/reset": "reset_spotify_anchor_breaker",
 
+  "POST /admin/catalogue/anchor/candidates/resolve": "resolve_anchor_candidate",
+
+  "POST /admin/catalogue/anchor/commit": "commit_anchor",
+
+  "POST /admin/catalogue/anchor/commits": "commit_anchor_batch",
+
   "POST /admin/catalogue/anchor/failure": "record_anchor_failure",
+
+  "POST /admin/catalogue/anchor/paid-result/cancel": "cancel_anchor_paid_result",
+
+  "POST /admin/catalogue/anchor/paid-result/resolve": "resolve_anchor_paid_result",
+
+  "POST /admin/catalogue/anchor/paid-result/token": "get_anchor_paid_token",
+
+  "POST /admin/catalogue/anchor/prepare": "prepare_anchor",
+
+  "POST /admin/catalogue/anchor/prepares": "prepare_anchor_batch",
+
+  "POST /admin/catalogue/anchor/receipt": "get_anchor_receipt",
 
   "POST /admin/catalogue/anchor/requeue": "requeue_anchor",
 
@@ -300,7 +320,9 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   "POST /admin/labels/{slug}/bio": "describe_label",
 
   "POST /admin/labels/{slug}/merge": "merge_label",
+
   "POST /admin/labels/{slug}/triage": "record_label_triage",
+
   "POST /admin/lastfm/auth/session": "exchange_lastfm_session",
 
   "POST /admin/logbook/{sector}": "create_logbook_entry",

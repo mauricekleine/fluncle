@@ -18,9 +18,38 @@ export const ANCHOR_APIFY_SPEND_ACTION = "anchor_apify_rows";
 
 export const ANCHOR_APIFY_SPEND_BUCKET = "catalogue";
 
+export const ANCHOR_APIFY_REFUND_ACTION = "anchor_apify_refunds";
+
+export const ANCHOR_APIFY_REFUND_DAILY_ROWS = 10;
+
 export const ANCHOR_APIFY_SPEND_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 export const ANCHOR_APIFY_DEFAULT_DAILY_ROWS = 300;
+
+export function hasUnsettledAnchorPaidReceipt(
+  receipt: unknown,
+  state: unknown,
+  now: Date = new Date(),
+): boolean {
+  if (typeof receipt !== "string" || !receipt.trim()) {
+    return false;
+  }
+  if (state === "pending") {
+    return true;
+  }
+  if (state === "settled") {
+    return false;
+  }
+  if (state !== null && state !== undefined) {
+    return true;
+  }
+  const receiptMs = Date.parse(receipt);
+  return (
+    !Number.isFinite(receiptMs) ||
+    receiptMs > now.getTime() ||
+    now.getTime() - receiptMs <= 2 * 60 * 60 * 1000
+  );
+}
 
 export type AnchorApifyBudget = {
   day: string;
@@ -105,6 +134,93 @@ export async function chargeAnchorApifyRow(
       budget: { dailyRows: 0, day: utcDay(now), remainingRows: 0, rowsSent: 0, spent: true },
       charged: false,
     };
+  }
+}
+
+export async function chargeAnchorApifyRowForTrack(
+  trackId: string,
+  receiptAt: string,
+  now: Date = new Date(),
+): Promise<{ budget: AnchorApifyBudget; charged: boolean; priorReceiptLive: boolean }> {
+  const db = await getDb();
+  const dailyRows = await readAnchorApifyDailyRows();
+  const windowStart = new Date(
+    Math.floor(now.getTime() / ANCHOR_APIFY_SPEND_WINDOW_MS) * ANCHOR_APIFY_SPEND_WINDOW_MS,
+  ).toISOString();
+  const transaction = await db.transaction("write");
+  try {
+    const existing = await transaction.execute({
+      args: [trackId],
+      sql: `select spotify_anchor_paid_admitted_at as receipt,
+                   spotify_anchor_paid_state as paid_state
+            from tracks where track_id = ? limit 1`,
+    });
+    const previous = existing.rows[0]?.receipt;
+    const previousMs = Date.parse(typeof previous === "string" ? previous : "");
+    const pending = hasUnsettledAnchorPaidReceipt(previous, existing.rows[0]?.paid_state, now);
+    const sameLiveReceipt =
+      previous === receiptAt &&
+      pending &&
+      Number.isFinite(previousMs) &&
+      previousMs <= now.getTime() &&
+      now.getTime() - previousMs <= 2 * 60 * 60 * 1000;
+    if (pending || previous === receiptAt) {
+      const counted = await transaction.execute({
+        args: [ANCHOR_APIFY_SPEND_ACTION, ANCHOR_APIFY_SPEND_BUCKET, windowStart],
+        sql: `select count from rate_limit_counters
+              where action = ? and bucket = ? and window_start = ? limit 1`,
+      });
+      await transaction.commit();
+      return {
+        budget: budgetOf(dailyRows, Number(counted.rows[0]?.count ?? 0), now),
+        charged: sameLiveReceipt,
+        priorReceiptLive: !sameLiveReceipt,
+      };
+    }
+    const result = await transaction.execute({
+      args: [
+        ANCHOR_APIFY_SPEND_ACTION,
+        ANCHOR_APIFY_SPEND_BUCKET,
+        windowStart,
+        1,
+        1,
+        dailyRows,
+        dailyRows,
+      ],
+      sql: `insert into rate_limit_counters (action, bucket, window_start, count)
+            select ?, ?, ?, ? where ? <= ?
+            on conflict(action, bucket, window_start) do update set count = count + 1
+            where count + 1 <= ?
+            returning count`,
+    });
+    const count = Number(result.rows[0]?.count ?? Number.NaN);
+    if (!Number.isFinite(count)) {
+      await transaction.rollback();
+      return { budget: await getAnchorApifyBudget(now), charged: false, priorReceiptLive: false };
+    }
+    const stamped = await transaction.execute({
+      args: [receiptAt, now.toISOString(), trackId],
+      sql: `update tracks set spotify_anchor_paid_admitted_at = ?,
+                             spotify_anchor_paid_charged_at = ?,
+                             spotify_anchor_paid_state = 'pending'
+            where track_id = ? and spotify_uri is null`,
+    });
+    if (stamped.rowsAffected !== 1) {
+      await transaction.rollback();
+      return { budget: await getAnchorApifyBudget(now), charged: false, priorReceiptLive: false };
+    }
+    await transaction.commit();
+    return { budget: budgetOf(dailyRows, count, now), charged: true, priorReceiptLive: false };
+  } catch (error) {
+    await transaction.rollback();
+    logEvent("warn", "anchor.apify-spend-charge-failed", { error });
+    return {
+      budget: { dailyRows: 0, day: utcDay(now), remainingRows: 0, rowsSent: 0, spent: true },
+      charged: false,
+      priorReceiptLive: false,
+    };
+  } finally {
+    transaction.close();
   }
 }
 

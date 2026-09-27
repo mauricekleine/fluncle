@@ -35,6 +35,8 @@ const APPROVED_VERBS = new Set<string>([
 
   "capture",
 
+  "cancel",
+
   "commit",
   "distribute",
   "draft",

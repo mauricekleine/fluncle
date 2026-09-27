@@ -1,5 +1,13 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -636,6 +644,38 @@ describe("judgeCron — the marker's body", () => {
     expect(judgeCron(CRON, dir)).toBe("fresh-ok");
     expect(cronCheck(CRON, judgeCron(CRON, dir)).status).toBe("ok");
   });
+
+  test.each(["anchor", "device-mirror"])(
+    "%s reports an hourly admission yield as incomplete with database backpressure",
+    (job) => {
+      const cron = { cadenceMs: 60 * 60_000, match: job, service: `cron.${job}` };
+      const marker = markerDir([
+        {
+          ageMs: 60_000,
+          body: `# Cron Job: fluncle-${job}\n\n${JSON.stringify({
+            admissionOutcome: "phase-yielded",
+            admissionYieldReason: "queue",
+            checked: 0,
+            errors: 0,
+            gateState: "paused",
+            ok: true,
+            produced: 0,
+            reason: "database_admission",
+            throttled: true,
+          })}\n`,
+        },
+      ]);
+
+      expect(judgeCron(cron, marker)).toBe("incomplete");
+      expect(cronCheck(cron, judgeCron(cron, marker)).status).toBe("degraded");
+      expect(
+        markerSignals(readFileSync(join(marker, readdirSync(marker)[0] ?? ""), "utf8")),
+      ).toMatchObject({
+        backpressure: 1,
+        backpressureReason: "database_admission:queue",
+      });
+    },
+  );
 
   test.each(["backup", "reach", "cluster"])(
     "%s admission skip stays degraded until a payload completes",

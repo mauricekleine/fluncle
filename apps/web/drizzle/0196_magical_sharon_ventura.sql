@@ -1,0 +1,1 @@
+ALTER TABLE `tracks` ADD `spotify_anchor_paid_charged_at` text;
