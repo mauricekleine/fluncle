@@ -29,6 +29,7 @@ import { readKeyHistogram } from "./key-histogram";
 import { logEvent } from "./log";
 import { readMixableArtistsProjection } from "./mixable-artists-projection";
 import { isSonarLogEnabled, isSonarMixEnabled, searchSonar, type SonarMatch } from "./sonar";
+import { searchSonarPublicTracks } from "./sonar-public-catalogue";
 import { hydrateRankedSonarMatches } from "./sonar-hydration";
 import {
   executeVectorFallback,
@@ -1498,7 +1499,7 @@ async function mixRailFromSonar(params: {
     ...params.excludedTrackIds,
     ...(await resolveTrackIdsByLogIds(params.excludedLogIds)),
   ];
-  const matches = await searchSonar({
+  const matches = await searchSonarPublicTracks({
     excludeIds,
     filter: { key_in: params.keys },
     index: "tracks",

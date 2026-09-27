@@ -2094,7 +2094,7 @@ async function advancePublicProjectionFor(
     });
     const remainingDebt =
       !visibility.complete || (await hasPublicProjectionRepairDebt(client, projection));
-    const repairProcessed = repair.fanout + repair.repaired + visibility.enqueued;
+    const repairProcessed = repair.fanout + repair.repaired + visibility.scanned;
     const anchors =
       projection === "public_aggregates" && !remainingDebt
         ? await advancePublicAnchors(client, Math.min(input.limit, 100))
@@ -2111,6 +2111,7 @@ async function advancePublicProjectionFor(
       complete,
       processed: repairProcessed + anchors.processed,
       scheduled: repair.fanout + visibility.enqueued,
+      ...visibilityWalkProgress(visibility),
     };
     return { ...response, status };
   }
@@ -2118,6 +2119,18 @@ async function advancePublicProjectionFor(
     ...outcome,
     status: includeStatus ? await getProjectionStatusFor(client) : undefined,
   };
+}
+
+function visibilityWalkProgress(visibility: { complete: boolean; scanned: number }): {
+  rebuildRowsWalked?: number;
+  rebuildStaleFamilies?: number;
+} {
+  return visibility.complete && visibility.scanned === 0
+    ? {}
+    : {
+        rebuildRowsWalked: visibility.scanned,
+        rebuildStaleFamilies: visibility.complete ? 0 : 1,
+      };
 }
 
 function reconcileVisibilityFor(

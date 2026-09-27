@@ -144,6 +144,30 @@ describe("public aggregate visibility reconcile", () => {
     expect(cursor.rows).toHaveLength(0);
   });
 
+  it("reports a walked window with no disagreement as progress, not as a stall", async () => {
+    await db.execute({
+      args: [PUBLIC_AGGREGATE_VISIBILITY_VERSION_KEY],
+      sql: `update settings set value = 'older-rule' where key = ?`,
+    });
+
+    const walked = await advanceProjectionFor(db, {
+      action: "repair",
+      includeStatus: false,
+      limit: 2,
+      target: "public_aggregates",
+    });
+
+    expect(walked).toMatchObject({
+      complete: false,
+      processed: 3,
+      rebuildRowsWalked: 3,
+      rebuildStaleFamilies: 1,
+      scheduled: 0,
+    });
+    await repairUntilComplete();
+    expect(await readProjectedDefaultTrackTotal(db)).toBe(3);
+  });
+
   it("walks the table in bounded windows and resumes from its durable cursor", async () => {
     await simulateProjectionBuiltUnderOlderRule();
 

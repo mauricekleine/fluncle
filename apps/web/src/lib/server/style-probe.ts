@@ -1,5 +1,5 @@
 import { type SearchStyle } from "../search-styles";
-import { searchSonarPublicCatalogue } from "./sonar-public-catalogue";
+import { searchSonarPublicCatalogue, searchSonarPublicTracks } from "./sonar-public-catalogue";
 import { meanEmbedding } from "./artist-dossier";
 import { listedArtistWhere } from "./artist-visibility";
 import { getDb, typedRows } from "./db";
@@ -156,7 +156,7 @@ export async function rankTrackIdsByProbe(
         .map((match) => match.id);
     }
 
-    const matches = await searchSonar({ ...request, filter });
+    const matches = await searchSonarPublicTracks({ ...request, filter });
 
     return matches === null ? null : matches.map((match) => match.id);
   }
