@@ -1,0 +1,28 @@
+[Unit]
+Description=fluncle-label-outliers — rave-02 host trigger for the nightly label-outlier review list
+Documentation=https://github.com/mauricekleine/fluncle/blob/main/docs/agents/hermes/label-outliers-timer/README.md
+Wants=network-online.target docker.service
+After=network-online.target docker.service
+# If this unit dies before writing its own /status marker (OOM, missing binary, a crash
+# before the sweep catch runs), the healthcheck prober never sees a failure. This catch-all
+# posts a minimal Discord alert; %n is this unit's full name.
+OnFailure=fluncle-sweep-failure@%n.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/fluncle/database-admission.env
+# Root drives the Docker daemon; `docker exec -u hermes` runs the WORK as the unprivileged
+# hermes user, which owns the device-mirror replica the sweep reads. The .sh/.ts pair is BAKED
+# at /opt/hermes-scripts/ (auto-updates from main via pin-watch); this host unit only TRIGGERS
+# it, and the sweep self-writes its /status marker (cron-output.sh). The scoring reads the local
+# replica with no hosted-database lease; only the one record_label_outliers write is admitted,
+# as its own phase, so the sweep never holds the lane while it waits on the replica lock.
+ExecStart=/usr/bin/docker exec -e DATABASE_ADMISSION_FAIL_CLOSED -e DATABASE_ADMISSION_POLL_SECS=2 -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/daily-retry-runner.sh fluncle-label-outliers Europe/Amsterdam 05:30 06:30 -- bash /opt/hermes-scripts/label-outliers-sweep.sh
+# Up to 20 minutes waiting for a device-mirror publish to release the replica, a few seconds of
+# scoring over the embedded catalogue, and one admitted write.
+TimeoutStartSec=1800
+# Modest hardening for a root docker-driving oneshot.
+NoNewPrivileges=true
+ProtectControlGroups=true
+ProtectKernelTunables=true
+RestrictSUIDSGID=true

@@ -1542,6 +1542,24 @@ export const SURFACES: readonly Surface[] = [
     weights: { status: "hidden" },
   },
   {
+    exposedContent: [
+      "nightly label-outlier review list — every album and label-less single of embedded catalogue tracks scored against the rest of its own label, the far ones flagged onto /admin/label-outliers (--no-agent)",
+    ],
+    kind: "cron",
+    name: "cron.label-outliers",
+    operatorNotes:
+      "05:30 Amsterdam daily, retry slot 06:30. Reads the device-mirror's local replica of the main database under the device-mirror lock (no hosted-database read), scores each album's mean cosine to its label's leave-it-out centroid as a robust z against that label's own spread (labels under 8 albums use the whole catalogue), keeps the ones at z <= -4 whose artists have fewer than 3 typical tracks elsewhere and whose album Discogs does not file under Drum n Bass or Jungle, then fires the AGENT-tier record_label_outliers op once inside its own admitted phase. The Worker replaces the stored list and returns what is new; the sweep posts one Discord summary only when something new appeared. Dismissing is operator tier (set_label_outliers_dismissed) and holds until the album's tracks change. Zero LLM tokens. Source: docs/agents/hermes/scripts/label-outliers*.ts. See docs/catalogue-crawler.md.",
+    probeConfig: {
+      cadenceMs: 24 * 60 * MINUTE_MS,
+      cronName: "fluncle-label-outliers",
+      kind: "cron",
+      schedule: { time: "05:30", tz: "Europe/Amsterdam" },
+    },
+    statusDescription: "flags albums that sound unlike their label",
+    title: "Label outliers",
+    weights: { status: "hidden" },
+  },
+  {
     command: "fluncle admin albums describe --queue",
     exposedContent: [
       "auto-author the /album/<slug> voiced bio, fill-empty-only (hybrid: one claude -p call)",

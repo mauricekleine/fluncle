@@ -236,6 +236,8 @@ bun run …/purge-albums.ts --albums-file "$PRUNE_OUT_DIR/off-genre-albums.txt" 
 
 `--tracks` / `--tracks-file` names loose tracks the same way, for leaks that carry no album or share one with genuine music (a game soundtrack credited to a DnB label, whose DnB cuts stay while the rock tracks go); an album the named tracks empty goes with them.
 
+The nightly candidates come from `/admin/label-outliers`: albums and label-less singles that sound far from the rest of their own label ([docs/catalogue-crawler.md § Label outliers](../../../docs/catalogue-crawler.md#label-outliers-the-review-list-for-what-the-gate-let-through)). Its **Copy for purge** writes this exact file (the rows on screen, or a selection), and lists singles as comments with their artists' slugs for `purge-artists.ts`. Mark the genuine ones fine on the board so they stay off it.
+
 It deletes every track on the named albums (co-credits included), the albums, and every artist left with no track anywhere; an artist with a track on another album keeps their row and that track, which is how a crooner's drum & bass remix elsewhere survives. The dry-run prints each album with its label and credits, and the orphaned artists. **Hard aborts:** an unknown album id, any findings track on a named album, and any entangled track. Read the label next to each album before confirming: a triage verdict made from one track can name an album whose other tracks are drum & bass. Follow a confirmed run with a global `block` for the orphaned artists whose labels stay enabled, or the next walk re-stores them.
 
 ### Duplicate rows (two artists rows, ONE real act)

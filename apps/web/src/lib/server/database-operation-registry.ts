@@ -203,6 +203,11 @@ export const DATABASE_ADMISSION_SHAPES: Readonly<Record<string, DatabaseAdmissio
     "One claim window reads the worklist, every paced Deezer search runs between phase processes with no lease, and the resolver verdicts settle in windows bounded by rows and by elapsed time.",
     0,
   ),
+  "catalogue.label-outliers": phased(
+    `${SCRIPTS}/label-outliers-sweep.ts`,
+    "Scoring reads the device-mirror's local replica with no lease; only the one replace-the-list write is admitted, so the sweep never holds the lane while it waits on the replica lock.",
+    1,
+  ),
   "catalogue.label-releases": wholeLifetime(
     "Spotify budget checks and release writes form an interleaved resumable loop.",
   ),
@@ -397,6 +402,13 @@ export const DATABASE_MUTATION_POLICIES = {
     kind: "replay-safe-idempotent",
     rationale: "Identity recovery fills only missing ISRC or anchor fields.",
     reconciliation: "Read the bounded track's ISRC and anchor fields before retrying it.",
+  },
+  "catalogue.label-outliers": {
+    evidenceSource: "apps/web/src/lib/server/label-outliers.ts",
+    kind: "replay-safe-idempotent",
+    rationale:
+      "The write replaces the stored list with the posted set by stable unit key and leaves dismissals untouched.",
+    reconciliation: "Read the stored outlier list before posting the same scored set again.",
   },
   "catalogue.label-releases": {
     evidenceSource: "apps/web/src/lib/server/label-releases.ts",
@@ -664,6 +676,7 @@ export const TRIGGER_MUTATION_POLICY_IDS = {
   "catalogue.demand": "catalogue.demand",
   "catalogue.isrc-recovery.queue": "due-work.queue-maintenance",
   "catalogue.isrc-recovery.resolve": "catalogue.isrc-recovery",
+  "catalogue.label-outliers.record": "catalogue.label-outliers",
   "catalogue.label-releases": "catalogue.label-releases",
   "catalogue.rank": "catalogue.rank",
   "catalogue.reconcile-hub-counts": "catalogue.reconcile-hub-counts",
@@ -2120,6 +2133,38 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
       ),
     ],
     wrapperSource: `${SCRIPTS}/label-lineage-sweep.sh`,
+  }),
+  defineOperation({
+    accessClass: "write",
+    cadence: withRetrySlot(
+      calendar("*-*-* 05:30:00 Europe/Amsterdam"),
+      "*-*-* 06:30:00 Europe/Amsterdam",
+    ),
+    directory: "label-outliers-timer",
+    heavy: false,
+    mutationTarget: "primary",
+    operationId: "catalogue.label-outliers",
+    service: "fluncle-label-outliers.service",
+    telemetryUnit: "label-outliers",
+    timer: "fluncle-label-outliers.timer",
+    triggers: [
+      noDatabase(
+        "catalogue.label-outliers.score",
+        null,
+        "score the device-mirror source replica under the device-mirror lock",
+        `${SCRIPTS}/label-outliers-sweep.ts`,
+        { mutationTarget: null },
+      ),
+      endpoint(
+        "catalogue.label-outliers.record",
+        "write",
+        "PUT",
+        "/api/v1/admin/label-outliers",
+        `${SCRIPTS}/label-outliers-sweep.ts`,
+        { mutationTarget: "primary" },
+      ),
+    ],
+    wrapperSource: `${SCRIPTS}/label-outliers-sweep.sh`,
   }),
   defineOperation({
     accessClass: "write",

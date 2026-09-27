@@ -1,0 +1,19 @@
+[Unit]
+Description=fluncle-label-outliers timer — score every label's albums against the rest of the label at 05:30 Amsterdam on the rave-02 host
+
+[Timer]
+# Per-firing jitter dissolves timer-phase alignment: mass timer restarts, including a pin-watch
+# rebake's quiesce/restore, can re-align every sweep to fire
+# the same second; the synchronized write bursts convoy on libSQL's single writer).
+# Re-rolled each firing, so no restart can ever re-align the roster.
+RandomizedDelaySec=60
+# Sits after the nightly band (backup 03:00, cluster 03:20, reach 04:00, reconcile 04:10,
+# demand 04:40, audit-review 05:00) and before label-triage at 06:40, so the operator's morning
+# board is fresh. The retry slot at 06:30 runs only when the primary slot skipped its payload
+# (a busy replica or an admission yield); the daily-retry runner reads the day's marker first.
+OnCalendar=*-*-* 05:30:00 Europe/Amsterdam
+OnCalendar=*-*-* 06:30:00 Europe/Amsterdam
+Persistent=true
+
+[Install]
+WantedBy=timers.target

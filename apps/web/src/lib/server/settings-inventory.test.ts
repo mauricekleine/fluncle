@@ -35,6 +35,7 @@ const SETTINGS_INVENTORY = {
   "follow-digest.ts": ["follow_digest_paused"],
   "frontier-playlist.ts": ["frontier.minting"],
   "health-receipt-cutover.ts": ["health_snapshot_receipts_enabled"],
+  "label-outliers.ts": ["label_outliers_last_run"],
   "label-releases.ts": [
     "spotify_label_releases_quota_until",
     "spotify_label_releases_throttle_until",
