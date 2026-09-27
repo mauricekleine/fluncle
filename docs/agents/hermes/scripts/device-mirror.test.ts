@@ -1,9 +1,22 @@
 import { Database, type SQLQueryBindings } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
-import { copyFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  chmodSync,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { runDatabaseAdmissionPhaseAsync } from "./database-admission-phase";
 import { deriveDeviceDatabase } from "../../../../apps/web/scripts/derive-device-db";
 import {
   createIntegrationDb,
@@ -20,14 +33,20 @@ import {
   deviceRowDigest,
   type DeviceSqlValue,
   type DeviceTargetClient,
+  deviceMirrorTargetClient,
   inspectDeviceGeneration,
   isGenerationWatermark,
   type LibsqlStatement,
+  LibsqlHttpClient,
+  main,
   DEFAULT_PUBLISH_INTERVAL_MS,
   publishCadence,
   publishDeviceGeneration,
   type QueryResult,
+  finalizeSourceReplica,
+  prepareSourceReplica,
   syncSourceReplica,
+  syncSourceReplicaAdmitted,
 } from "./device-mirror";
 import {
   DEVICE_DB_COLUMNS,
@@ -50,6 +69,93 @@ function temporaryDirectory(): string {
   const directory = mkdtempSync(join(tmpdir(), "device-mirror-test-"));
   temporaryDirectories.push(directory);
   return directory;
+}
+
+function admittedMirrorRig(metadataCorruptOnce = false) {
+  const directory = temporaryDirectory();
+  const runner = join(directory, "admission-runner.sh");
+  const timeline = join(directory, "timeline");
+  const lease = join(directory, "lease");
+  const replicaFixture = join(directory, "replica-fixture.db");
+  const metadataMarker = join(directory, "metadata-once");
+  const yieldMarker = join(directory, "yield-source-sync");
+  createReplicaSchema(replicaFixture);
+  if (metadataCorruptOnce) {
+    writeFileSync(metadataMarker, "retry");
+  }
+  writeFileSync(
+    runner,
+    `#!/usr/bin/env bash
+set -uo pipefail
+[ "\${1:-}" = phase ] || exit 2
+[ "\${2:-}" = fluncle-device-mirror ] || exit 2
+shift 2
+if [ "\${1:-}" = -- ]; then shift; fi
+[ "\${4:-}" = source-sync ] || exit 2
+shift 4
+[ "\${1:-}" = --replica-path ] || exit 2
+if [ -f "$MIRROR_YIELD_SOURCE" ]; then
+  printf '{"event":"database.admission.runner","yield_reason":"queue"}\\n' >&2
+  exit 75
+fi
+mkdir "$MIRROR_LEASE_DIR" || exit 2
+printf 'acquire\\n' >> "$MIRROR_TIMELINE"
+if [ -f "$MIRROR_METADATA_ONCE" ]; then
+  rm "$MIRROR_METADATA_ONCE"
+  printf '{"kind":"metadata-corrupt"}\\n'
+  rmdir "$MIRROR_LEASE_DIR"
+  printf 'release\\n' >> "$MIRROR_TIMELINE"
+  exit 0
+fi
+cp "$MIRROR_REPLICA_FIXTURE" "$2"
+printf '{"frameNo":1,"framesSynced":1,"kind":"synced"}\\n'
+rmdir "$MIRROR_LEASE_DIR"
+printf 'release\\n' >> "$MIRROR_TIMELINE"
+`,
+  );
+  chmodSync(runner, 0o755);
+  const environment = {
+    DATABASE_ADMISSION_RUNNER: runner,
+    DEVICE_MIRROR_LOCK_DIR: join(directory, "mirror-lock"),
+    DEVICE_MIRROR_PAGE_SIZE: "2",
+    DEVICE_MIRROR_STATE_DIR: join(directory, "state"),
+    DEVICE_TURSO_AUTH_TOKEN: "test",
+    DEVICE_TURSO_DATABASE_URL: "libsql://target.invalid",
+    MIRROR_LEASE_DIR: lease,
+    MIRROR_METADATA_ONCE: metadataMarker,
+    MIRROR_REPLICA_FIXTURE: replicaFixture,
+    MIRROR_TIMELINE: timeline,
+    MIRROR_YIELD_SOURCE: yieldMarker,
+    TURSO_AUTH_TOKEN: "test",
+    TURSO_DATABASE_URL: "libsql://source.invalid",
+  };
+  const previous = Object.fromEntries(
+    Object.keys(environment).map((key) => [key, process.env[key]]),
+  );
+
+  for (const [key, value] of Object.entries(environment)) {
+    if (value === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
+  }
+
+  return {
+    lease,
+    lock: environment.DEVICE_MIRROR_LOCK_DIR,
+    restore: () => {
+      for (const [key, value] of Object.entries(previous)) {
+        if (value === undefined) {
+          delete process.env[key];
+        } else {
+          process.env[key] = value;
+        }
+      }
+    },
+    timeline,
+    yieldMarker,
+  };
 }
 
 async function rejectionMessage(promise: Promise<unknown>): Promise<string> {
@@ -402,7 +508,480 @@ describe("the publish cadence gate", () => {
   });
 });
 
+describe("the phased mirror service", () => {
+  test("async phase runner preserves yield reason and one retry", async () => {
+    const directory = temporaryDirectory();
+    const runner = join(directory, "retry-admission-runner.sh");
+    const attempts = join(directory, "attempts");
+    writeFileSync(
+      runner,
+      `#!/usr/bin/env bash
+set -uo pipefail
+printf 'attempt\\n' >> "$MIRROR_PHASE_ATTEMPTS"
+if [ "$(wc -l < "$MIRROR_PHASE_ATTEMPTS")" -eq 1 ]; then
+  printf '{"event":"database.admission.runner","yield_reason":"queue"}\\n' >&2
+  exit 75
+fi
+printf 'synced\\n'
+`,
+    );
+    chmodSync(runner, 0o755);
+    const previousRunner = process.env.DATABASE_ADMISSION_RUNNER;
+    const previousAttempts = process.env.MIRROR_PHASE_ATTEMPTS;
+    process.env.DATABASE_ADMISSION_RUNNER = runner;
+    process.env.MIRROR_PHASE_ATTEMPTS = attempts;
+
+    try {
+      expect(
+        await runDatabaseAdmissionPhaseAsync({
+          command: ["true"],
+          owner: "fluncle-device-mirror",
+          yieldRetries: 1,
+        }),
+      ).toEqual({ attempts: 2, kind: "completed", stdout: "synced\n" });
+      expect(readFileSync(attempts, "utf8")).toBe("attempt\nattempt\n");
+    } finally {
+      if (previousRunner === undefined) {
+        delete process.env.DATABASE_ADMISSION_RUNNER;
+      } else {
+        process.env.DATABASE_ADMISSION_RUNNER = previousRunner;
+      }
+      if (previousAttempts === undefined) {
+        delete process.env.MIRROR_PHASE_ATTEMPTS;
+      } else {
+        process.env.MIRROR_PHASE_ATTEMPTS = previousAttempts;
+      }
+    }
+  });
+
+  test("source sync keeps the mirror lock alive and SIGTERM responsive", async () => {
+    const directory = temporaryDirectory();
+    const runner = join(directory, "slow-admission-runner.sh");
+    const harness = join(directory, "mirror-harness.ts");
+    const started = join(directory, "phase-started");
+    const stopping = join(directory, "phase-stopping");
+    const stopped = join(directory, "phase-stopped");
+    const stoppedLockState = join(directory, "stopped-lock-state");
+    const lock = join(directory, "mirror-lock");
+    writeFileSync(
+      runner,
+      `#!/usr/bin/env bash
+set -uo pipefail
+touch "$MIRROR_PHASE_STARTED"
+sleep 10 &
+sleep_pid=$!
+trap 'touch "$MIRROR_PHASE_STOPPING"; sleep 0.25; kill "$sleep_pid" 2>/dev/null || true; wait "$sleep_pid" 2>/dev/null || true; if [ -d "$MIRROR_LOCK_DIR" ]; then printf held > "$MIRROR_STOP_LOCK_STATE"; else printf released > "$MIRROR_STOP_LOCK_STATE"; fi; touch "$MIRROR_PHASE_STOPPED"; exit 143' TERM INT HUP
+wait "$sleep_pid"
+`,
+    );
+    chmodSync(runner, 0o755);
+    writeFileSync(
+      harness,
+      `import { main } from ${JSON.stringify(join(import.meta.dir, "device-mirror.ts"))};
+import { DEVICE_DB_SCHEMA_VERSION } from ${JSON.stringify(join(import.meta.dir, "device-db-derivation.ts"))};
+await main({
+  createTarget: () => ({
+    batch: async () => [{
+      affectedRows: 0,
+      columns: ["schema_version", "cut_name", "derived_at", "source_watermark"],
+      rows: [[DEVICE_DB_SCHEMA_VERSION, "anchored", "2020-01-01T00:00:00.000Z", "old"]],
+    }],
+  }),
+});
+`,
+    );
+    const child = Bun.spawn([process.execPath, harness], {
+      env: {
+        ...process.env,
+        DATABASE_ADMISSION_RUNNER: runner,
+        DEVICE_MIRROR_LOCK_DIR: lock,
+        DEVICE_MIRROR_LOCK_HEARTBEAT_MS: "30",
+        DEVICE_MIRROR_LOCK_STALE_MS: "100",
+        DEVICE_MIRROR_STATE_DIR: join(directory, "state"),
+        DEVICE_TURSO_AUTH_TOKEN: "test",
+        DEVICE_TURSO_DATABASE_URL: "libsql://target.invalid",
+        MIRROR_LOCK_DIR: lock,
+        MIRROR_PHASE_STARTED: started,
+        MIRROR_PHASE_STOPPED: stopped,
+        MIRROR_PHASE_STOPPING: stopping,
+        MIRROR_STOP_LOCK_STATE: stoppedLockState,
+        TURSO_AUTH_TOKEN: "test",
+        TURSO_DATABASE_URL: "libsql://source.invalid",
+      },
+      stderr: "pipe",
+      stdout: "pipe",
+    });
+    const waitUntil = async (predicate: () => boolean) => {
+      const deadline = Date.now() + 2_000;
+      while (!predicate() && Date.now() < deadline) {
+        await Bun.sleep(10);
+      }
+      expect(predicate()).toBe(true);
+    };
+
+    try {
+      await waitUntil(() => existsSync(started) && existsSync(lock));
+      const initialMtime = statSync(lock).mtimeMs;
+      await Bun.sleep(180);
+      expect(existsSync(stopped)).toBe(false);
+      expect(statSync(lock).mtimeMs).toBeGreaterThan(initialMtime + 100);
+
+      const signalledAt = Date.now();
+      child.kill("SIGTERM");
+      await waitUntil(() => existsSync(stopping));
+      expect(existsSync(lock)).toBe(true);
+      await Bun.sleep(80);
+      expect(existsSync(lock)).toBe(true);
+      expect(existsSync(stopped)).toBe(false);
+      const exitCode = await Promise.race([child.exited, Bun.sleep(2_000).then(() => -1)]);
+      expect(exitCode).toBe(143);
+      expect(Date.now() - signalledAt).toBeLessThan(2_000);
+      await waitUntil(() => !existsSync(lock) && existsSync(stopped));
+      expect(readFileSync(stoppedLockState, "utf8")).toBe("held");
+    } finally {
+      child.kill("SIGKILL");
+      await child.exited;
+    }
+  }, 10_000);
+
+  test("SIGTERM between local preparation and source admission starts no new phase", async () => {
+    const directory = temporaryDirectory();
+    const runner = join(directory, "unexpected-admission-runner.sh");
+    const harness = join(directory, "between-phases-harness.ts");
+    const signalLockState = join(directory, "signal-lock-state");
+    const phaseStarted = join(directory, "phase-started");
+    const lock = join(directory, "mirror-lock");
+    writeFileSync(
+      runner,
+      `#!/usr/bin/env bash
+touch "$MIRROR_PHASE_STARTED"
+sleep 0.2
+`,
+    );
+    chmodSync(runner, 0o755);
+    writeFileSync(
+      harness,
+      `import { existsSync, writeFileSync } from "node:fs";
+import { main, syncSourceReplicaAdmitted } from ${JSON.stringify(join(import.meta.dir, "device-mirror.ts"))};
+import { DEVICE_DB_SCHEMA_VERSION } from ${JSON.stringify(join(import.meta.dir, "device-db-derivation.ts"))};
+await main({
+  createTarget: () => ({
+    batch: async () => [{
+      affectedRows: 0,
+      columns: ["schema_version", "cut_name", "derived_at", "source_watermark"],
+      rows: [[DEVICE_DB_SCHEMA_VERSION, "anchored", "2020-01-01T00:00:00.000Z", "old"]],
+    }],
+  }),
+  syncSource: (path, forceRebuild) => syncSourceReplicaAdmitted(path, forceRebuild, undefined, {
+    finalize: async () => {},
+    prepare: async () => {
+      writeFileSync(process.env.MIRROR_SIGNAL_LOCK_STATE ?? "", existsSync(process.env.DEVICE_MIRROR_LOCK_DIR ?? "") ? "held" : "released");
+      process.emit("SIGTERM");
+      return "missing";
+    },
+  }),
+});
+`,
+    );
+    const child = Bun.spawn([process.execPath, harness], {
+      env: {
+        ...process.env,
+        DATABASE_ADMISSION_RUNNER: runner,
+        DEVICE_MIRROR_LOCK_DIR: lock,
+        DEVICE_MIRROR_STATE_DIR: join(directory, "state"),
+        DEVICE_TURSO_AUTH_TOKEN: "test",
+        DEVICE_TURSO_DATABASE_URL: "libsql://target.invalid",
+        MIRROR_PHASE_STARTED: phaseStarted,
+        MIRROR_SIGNAL_LOCK_STATE: signalLockState,
+        TURSO_AUTH_TOKEN: "test",
+        TURSO_DATABASE_URL: "libsql://source.invalid",
+      },
+      stderr: "pipe",
+      stdout: "pipe",
+    });
+
+    try {
+      const exitCode = await Promise.race([child.exited, Bun.sleep(2_000).then(() => -1)]);
+      expect(exitCode).toBe(143);
+      expect(readFileSync(signalLockState, "utf8")).toBe("held");
+      expect(existsSync(phaseStarted)).toBe(false);
+      expect(existsSync(lock)).toBe(false);
+    } finally {
+      child.kill("SIGKILL");
+      await child.exited;
+    }
+  }, 10_000);
+
+  test("invalid heartbeat interval does not leave an acquired mirror lock", async () => {
+    const rig = admittedMirrorRig();
+    const previous = process.env.DEVICE_MIRROR_LOCK_HEARTBEAT_MS;
+    process.env.DEVICE_MIRROR_LOCK_HEARTBEAT_MS = "invalid";
+
+    try {
+      const summary = await main();
+      expect(summary.ok).toBe(false);
+      expect(summary.error).toBe("DEVICE_MIRROR_LOCK_HEARTBEAT_MS must be a positive integer");
+      expect(existsSync(rig.lock)).toBe(false);
+    } finally {
+      if (previous === undefined) {
+        delete process.env.DEVICE_MIRROR_LOCK_HEARTBEAT_MS;
+      } else {
+        process.env.DEVICE_MIRROR_LOCK_HEARTBEAT_MS = previous;
+      }
+      rig.restore();
+    }
+  });
+
+  test("the derived target uses direct database calls outside the primary admission lane", () => {
+    expect(deviceMirrorTargetClient("libsql://target.invalid", "test")).toBeInstanceOf(
+      LibsqlHttpClient,
+    );
+  });
+
+  test("slow local replica validation and checkpoint let a sibling acquire the lane", async () => {
+    const rig = admittedMirrorRig();
+    const path = join(temporaryDirectory(), "local-work.db");
+    const localPhases: string[] = [];
+    const assertSiblingAcquires = async (phase: string) => {
+      await Bun.sleep(80);
+      mkdirSync(rig.lease);
+      localPhases.push(phase);
+      rmdirSync(rig.lease);
+    };
+
+    try {
+      const result = await syncSourceReplicaAdmitted(path, false, undefined, {
+        finalize: async (replicaPath) => {
+          await assertSiblingAcquires("before-checkpoint");
+          await finalizeSourceReplica(replicaPath);
+          await assertSiblingAcquires("after-checkpoint");
+        },
+        prepare: async (replicaPath, forceRebuild) => {
+          await assertSiblingAcquires("before-validation");
+          const cause = await prepareSourceReplica(replicaPath, forceRebuild);
+          await assertSiblingAcquires("after-validation");
+          return cause;
+        },
+      });
+
+      expect(result.frameNo).toBe(1);
+      expect(result.rebuildCause).toBe("missing");
+      expect(localPhases).toEqual([
+        "before-validation",
+        "after-validation",
+        "before-checkpoint",
+        "after-checkpoint",
+      ]);
+      expect(readFileSync(rig.timeline, "utf8")).toBe("acquire\nrelease\n");
+    } finally {
+      rig.restore();
+    }
+  }, 30_000);
+
+  test("remote metadata corruption rebuilds local files between two admitted sync attempts", async () => {
+    const rig = admittedMirrorRig(true);
+    const path = join(temporaryDirectory(), "metadata-retry.db");
+    createReplicaSchema(path);
+
+    try {
+      const result = await syncSourceReplicaAdmitted(path, false);
+      expect(result.rebuildCause).toBe("replica_metadata_corrupt");
+      expect(result.frameNo).toBe(1);
+      expect(readFileSync(rig.timeline, "utf8")).toBe("acquire\nrelease\nacquire\nrelease\n");
+    } finally {
+      rig.restore();
+    }
+  }, 30_000);
+
+  test("a sibling acquires the primary lane during slow derivation while target batches stay outside it", async () => {
+    const generation = trackGenerationFixture(sequentialTracks(8), "phase-success");
+    const { client } = targetFixture();
+    const rig = admittedMirrorRig();
+    let siblingAcquired = false;
+    let targetBatches = 0;
+    client.aroundBatch = (statements, mode, execute) => {
+      expect(existsSync(rig.lease)).toBe(false);
+      targetBatches += 1;
+      return execute(statements, mode);
+    };
+
+    try {
+      const summary = await main({
+        createTarget: () => client,
+        derive: async (_source, out) => {
+          await Bun.sleep(80);
+          mkdirSync(rig.lease);
+          siblingAcquired = true;
+          rmdirSync(rig.lease);
+          appendFileSync(rig.timeline, "derive\n");
+          copyFileSync(generation.path, out);
+          return {
+            bytes: generation.artifactBytes,
+            derivedAt: generation.derivedAt,
+            elapsedMs: 80,
+            preVacuumBytes: generation.artifactBytes,
+          };
+        },
+      });
+
+      expect(summary.validation).toBe("verified");
+      expect(summary.publishPath).toBe("rewrite");
+      expect(siblingAcquired).toBe(true);
+      expect(targetBatches).toBeGreaterThan(2);
+      expect(readFileSync(rig.timeline, "utf8")).toBe("acquire\nrelease\nderive\n");
+      expect(existsSync(rig.lease)).toBe(false);
+      expect(liveTracks(client)).toHaveLength(8);
+    } finally {
+      client.close();
+      rig.restore();
+    }
+  }, 30_000);
+
+  test("a source-sync phase yield after an interrupted stage leaves the old generation live", async () => {
+    const generation = trackGenerationFixture(sequentialTracks(8), "phase-yield");
+    const { client } = targetFixture();
+    const rig = admittedMirrorRig();
+    let stagePages = 0;
+    client.aroundBatch = (statements, mode, execute) => {
+      if (
+        mode === "write" &&
+        statements.some((statement) =>
+          statement.sql.startsWith('INSERT INTO "_device_mirror_stage_tracks"'),
+        )
+      ) {
+        stagePages += 1;
+        if (stagePages === 2) {
+          throw new Error("Stage page interrupted before cutover");
+        }
+      }
+      return execute(statements, mode);
+    };
+    const runtime = {
+      createTarget: () => client,
+      derive: async (_source: string, out: string) => {
+        copyFileSync(generation.path, out);
+        return {
+          bytes: generation.artifactBytes,
+          derivedAt: generation.derivedAt,
+          elapsedMs: 0,
+          preVacuumBytes: generation.artifactBytes,
+        };
+      },
+    };
+
+    try {
+      const interrupted = await main(runtime);
+      expect(interrupted.validation).toBe("failed");
+      expect(stagePages).toBe(2);
+      expect(liveTracks(client)).toEqual(["old-track"]);
+      expect(
+        client.database.query('SELECT count(*) AS count FROM "_device_mirror_stage_tracks"').get(),
+      ).toEqual({ count: 2 });
+
+      client.aroundBatch = undefined;
+      writeFileSync(rig.yieldMarker, "yield");
+      const summary = await main(runtime);
+
+      expect(summary).toMatchObject({
+        admissionOutcome: "phase-yielded",
+        admissionYieldReason: "queue",
+        gateState: "paused",
+        ok: true,
+        reason: "database_admission",
+        throttled: true,
+        validation: "paused",
+      });
+      expect(summary.publishPath).toBeNull();
+      expect(liveTracks(client)).toEqual(["old-track"]);
+      expect(client.database.query("SELECT source_watermark FROM device_sync_meta").get()).toEqual({
+        source_watermark: "old-fingerprint",
+      });
+      expect(
+        client.database.query('SELECT count(*) AS count FROM "_device_mirror_stage_tracks"').get(),
+      ).toEqual({ count: 2 });
+
+      rmSync(rig.yieldMarker);
+      const resumed = await main(runtime);
+      expect(resumed.validation).toBe("verified");
+      expect(resumed.checkpoint?.restarted).toBe(true);
+      expect(liveTracks(client)).toHaveLength(8);
+    } finally {
+      client.close();
+      rig.restore();
+    }
+  }, 30_000);
+});
+
 describe("embedded source replica", () => {
+  test("an inherited whole-payload lease runs sync and target batches directly during unit rollout", async () => {
+    const path = join(temporaryDirectory(), "inherited-replica.db");
+    const previous = {
+      databaseRunner: process.env.DATABASE_ADMISSION_RUNNER,
+      inheritedRunner: process.env.FLUNCLE_ADMISSION_RUNNER_PID,
+      sourceToken: process.env.TURSO_AUTH_TOKEN,
+      sourceUrl: process.env.TURSO_DATABASE_URL,
+    };
+    const previousFetch = globalThis.fetch;
+    process.env.DATABASE_ADMISSION_RUNNER = "/nonexistent-device-mirror-runner";
+    process.env.FLUNCLE_ADMISSION_RUNNER_PID = "inherited";
+    process.env.TURSO_AUTH_TOKEN = "test";
+    process.env.TURSO_DATABASE_URL = "libsql://source.invalid";
+    globalThis.fetch = async () =>
+      new Response(
+        JSON.stringify({
+          results: [
+            {
+              response: {
+                result: {
+                  step_errors: [null, null, null, null],
+                  step_results: [
+                    {},
+                    { cols: [{ name: "value" }], rows: [[{ type: "integer", value: "1" }]] },
+                    {},
+                    null,
+                  ],
+                },
+                type: "batch",
+              },
+              type: "ok",
+            },
+          ],
+        }),
+        { status: 200 },
+      );
+
+    try {
+      const sync = await syncSourceReplicaAdmitted(path, false, () => ({
+        close: () => {},
+        sync: async () => {
+          createReplicaSchema(path);
+          return { frame_no: 42, frames_synced: 1 };
+        },
+      }));
+      const target = deviceMirrorTargetClient("libsql://target.invalid", "test");
+
+      expect(sync.frameNo).toBe(42);
+      expect(target).toBeInstanceOf(LibsqlHttpClient);
+      expect(await target.batch([{ sql: "SELECT 1 AS value" }], "read")).toEqual([
+        { affectedRows: 0, columns: ["value"], rows: [[1n]] },
+      ]);
+    } finally {
+      globalThis.fetch = previousFetch;
+      for (const [key, value] of Object.entries({
+        DATABASE_ADMISSION_RUNNER: previous.databaseRunner,
+        FLUNCLE_ADMISSION_RUNNER_PID: previous.inheritedRunner,
+        TURSO_AUTH_TOKEN: previous.sourceToken,
+        TURSO_DATABASE_URL: previous.sourceUrl,
+      })) {
+        if (value === undefined) {
+          delete process.env[key];
+        } else {
+          process.env[key] = value;
+        }
+      }
+    }
+  });
+
   test("reports zero post-sync lag only when the embedded sync result is measurable", () => {
     expect(calculateReplicaLagFrames({ frameNo: 43, framesSynced: 1 })).toBe(0);
     expect(calculateReplicaLagFrames({ frameNo: 43, framesSynced: 43 })).toBe(0);
