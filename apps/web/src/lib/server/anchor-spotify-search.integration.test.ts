@@ -1,9 +1,13 @@
 import { type Client } from "@libsql/client";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createIntegrationDb } from "./integration-db";
 
 let db: Client;
+let directory: string;
 
 const lookupSpotifyIdsByMbid = vi.fn();
 const fetchTrackMetadata = vi.fn();
@@ -121,7 +125,8 @@ function searchResult(over: Partial<Record<string, unknown>> = {}): Record<strin
 }
 
 beforeEach(async () => {
-  db = await createIntegrationDb();
+  directory = await mkdtemp(join(tmpdir(), "fluncle-anchor-search-"));
+  db = await createIntegrationDb({ url: `file:${join(directory, "anchor.db")}` });
   lookupSpotifyIdsByMbid.mockReset();
   fetchTrackMetadata.mockReset();
   findSpotifyTrackByIsrc.mockReset();
@@ -131,6 +136,11 @@ beforeEach(async () => {
 
   searchDeezerCandidates.mockReset();
   searchDeezerCandidates.mockResolvedValue([]);
+});
+
+afterEach(async () => {
+  db.close();
+  await rm(directory, { force: true, recursive: true });
 });
 
 describe("quota-aware paid admission", () => {

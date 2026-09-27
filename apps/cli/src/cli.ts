@@ -2916,19 +2916,29 @@ JSON field reference:
     .command("requeue-anchor")
     .description("Clear rows' anchor re-ask backoff so the next tick retries them (operator)")
     .argument("<trackIds...>", "The catalogue track id(s) to requeue (up to 250)")
+    .option(
+      "--clear-paid",
+      "Settle a reconciled pending paid receipt; keeps its spend (operator)",
+      false,
+    )
     .option("--json", "Print JSON", false)
-    .action(async (trackIds: string[], options: JsonOptions) => {
+    .action(async (trackIds: string[], options: JsonOptions & { clearPaid: boolean }) => {
       const { requeueAnchorCommand } = await import("./commands/admin-catalogue");
-      const { requeued } = await requeueAnchorCommand(trackIds);
+      const { paidCleared, requeued } = await requeueAnchorCommand(trackIds, options.clearPaid);
 
       if (options.json) {
-        printJson({ ok: true, requeued });
+        printJson({ ok: true, paidCleared, requeued });
         return;
       }
 
       console.log(
         `Re-queued ${requeued} of ${trackIds.length} row(s) — the next anchor tick picks them up at their real priority.`,
       );
+      if (options.clearPaid) {
+        console.log(
+          `Settled ${paidCleared} pending paid receipt(s); recorded spend remains charged.`,
+        );
+      }
     });
 
   const labelReleasesBudget = catalogue

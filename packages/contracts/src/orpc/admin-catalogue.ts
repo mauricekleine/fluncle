@@ -208,11 +208,16 @@ export const requeueAnchor = oc
     method: "POST",
     operationId: "requeueAnchor",
     path: "/admin/catalogue/anchor/requeue",
-    summary: "Clear named rows' anchor re-ask backoff or terminal validation error (operator)",
+    summary: "Requeue named anchor rows and optionally reconcile pending paid receipts (operator)",
     tags: ["Admin"],
   })
-  .input(z.object({ trackIds: z.array(z.string().min(1)).min(1).max(250) }))
-  .output(z.object({ ok: z.literal(true), requeued: z.number() }));
+  .input(
+    z.object({
+      clearPaid: z.boolean().optional(),
+      trackIds: z.array(z.string().min(1)).min(1).max(250),
+    }),
+  )
+  .output(z.object({ ok: z.literal(true), paidCleared: z.number(), requeued: z.number() }));
 
 export const requeueIsrcRecovery = oc
   .route({
@@ -719,6 +724,10 @@ export const anchorTrack = oc
   .input(
     z.object({
       candidates: z.array(AnchorCandidateSchema).max(ANCHOR_CANDIDATE_LIMIT).default([]),
+      paidResultToken: z
+        .string()
+        .max(32 * 1024)
+        .optional(),
       trackId: z.string().min(1),
     }),
   )
@@ -765,6 +774,231 @@ export const DeezerIsrcCandidateSchema = z
   })
   .meta({ id: "DeezerIsrcCandidate" });
 
+const AnchorResolveResultSchema = z.object({
+  anchored: z.boolean(),
+  apifyBudgetRemaining: z.number().int().nonnegative(),
+  apifyEligible: z.boolean(),
+  apifyEnabled: z.boolean(),
+  apifyIneligibleReason: z
+    .enum(["apify_budget_spent", "awaiting_free_ask", "awaiting_paid_result"])
+    .nullable(),
+  freeDurationMsOmitted: z.number().int().nonnegative(),
+  isrcRecoveredByDeezer: z.boolean(),
+  listenbrainzOutcome: z.enum([
+    "anchored",
+    "empty-ids",
+    "gate-rejected",
+    "metadata-failed",
+    "no-map",
+    "no-mbid",
+    "not-attempted",
+    "request-failed",
+    "yielded-on-breaker",
+  ]),
+  ok: z.literal(true),
+  paidResultToken: z.string().optional(),
+  source: z.enum(["listenbrainz", "spotify-isrc", "spotify-search"]).nullable(),
+  spotifyIsrcAsked: z.boolean(),
+  spotifySearchDone: z.boolean(),
+  spotifySearchEnabled: z.boolean(),
+  spotifyThrottled: z.boolean(),
+  stamped: z.boolean(),
+  verifiedBy: z.enum(["isrc", "search", "search-subset"]).nullable(),
+});
+
+const AnchorCommitResultSchema = AnchorResolveResultSchema.extend({
+  paidReceiptPending: z.boolean(),
+});
+
+export const prepareAnchor = oc
+  .route({
+    method: "POST",
+    operationId: "prepareAnchor",
+    path: "/admin/catalogue/anchor/prepare",
+    summary: "Prepare one anchor row for provider lookup",
+    tags: ["Admin"],
+  })
+  .input(
+    z.object({
+      deezerCandidates: z.array(DeezerIsrcCandidateSchema).max(DEEZER_CANDIDATE_LIMIT).optional(),
+      trackId: z.string().min(1),
+    }),
+  )
+  .output(z.object({ ok: z.literal(true), prepared: z.string(), receiptAt: z.string() }));
+
+const AnchorPhaseBatchItemFailureSchema = z.object({
+  elapsedMs: z.number().nonnegative(),
+  error: z.string().optional(),
+  httpStatus: z.number().int().optional(),
+  status: z.enum(["deferred", "error"]),
+  trackId: z.string(),
+});
+
+export const prepareAnchorBatch = oc
+  .route({
+    method: "POST",
+    operationId: "prepareAnchorBatch",
+    path: "/admin/catalogue/anchor/prepares",
+    summary: "Prepare a bounded batch of anchor rows",
+    tags: ["Admin"],
+  })
+  .input(
+    z.object({
+      items: z
+        .array(
+          z.object({
+            deezerCandidates: z
+              .array(DeezerIsrcCandidateSchema)
+              .max(DEEZER_CANDIDATE_LIMIT)
+              .optional(),
+            trackId: z.string().min(1),
+          }),
+        )
+        .min(1)
+        .max(15),
+    }),
+  )
+  .output(
+    z.object({
+      items: z.array(
+        z.union([
+          z.object({
+            elapsedMs: z.number().nonnegative(),
+            prepared: z.string(),
+            receiptAt: z.string(),
+            status: z.literal("done"),
+            trackId: z.string(),
+          }),
+          AnchorPhaseBatchItemFailureSchema,
+        ]),
+      ),
+      ok: z.literal(true),
+    }),
+  );
+
+export const resolveAnchorCandidate = oc
+  .route({
+    method: "POST",
+    operationId: "resolveAnchorCandidate",
+    path: "/admin/catalogue/anchor/candidates/resolve",
+    summary: "Look up free anchor candidates from providers",
+    tags: ["Admin"],
+  })
+  .input(z.object({ prepared: z.string().max(32 * 1024), spotifySearch: z.boolean().optional() }))
+  .output(z.object({ evidence: z.string(), ok: z.literal(true) }));
+
+export const commitAnchor = oc
+  .route({
+    method: "POST",
+    operationId: "commitAnchor",
+    path: "/admin/catalogue/anchor/commit",
+    summary: "Verify provider evidence and settle one anchor row",
+    tags: ["Admin"],
+  })
+  .input(
+    z.object({
+      allowPaid: z.boolean().optional(),
+      evidence: z.string().max(32 * 1024),
+      prepared: z.string().max(32 * 1024),
+    }),
+  )
+  .output(AnchorCommitResultSchema);
+
+export const commitAnchorBatch = oc
+  .route({
+    method: "POST",
+    operationId: "commitAnchorBatch",
+    path: "/admin/catalogue/anchor/commits",
+    summary: "Settle a bounded batch of anchor rows",
+    tags: ["Admin"],
+  })
+  .input(
+    z.object({
+      items: z
+        .array(
+          z.object({
+            allowPaid: z.boolean().optional(),
+            evidence: z.string().max(32 * 1024),
+            prepared: z.string().max(32 * 1024),
+            trackId: z.string().min(1),
+          }),
+        )
+        .min(1)
+        .max(15),
+    }),
+  )
+  .output(
+    z.object({
+      items: z.array(
+        z.union([
+          AnchorCommitResultSchema.extend({
+            elapsedMs: z.number().nonnegative(),
+            status: z.literal("done"),
+            trackId: z.string(),
+          }),
+          AnchorPhaseBatchItemFailureSchema,
+        ]),
+      ),
+      ok: z.literal(true),
+    }),
+  );
+
+export const getAnchorReceipt = oc
+  .route({
+    method: "POST",
+    operationId: "getAnchorReceipt",
+    path: "/admin/catalogue/anchor/receipt",
+    summary: "Read exact paid admission receipt status",
+    tags: ["Admin"],
+  })
+  .input(z.object({ receiptAt: z.string().min(1), trackId: z.string().min(1) }))
+  .output(
+    z.object({
+      admitted: z.boolean(),
+      ok: z.literal(true),
+      paidState: z.string().nullable(),
+    }),
+  );
+
+export const getAnchorPaidToken = oc
+  .route({
+    method: "POST",
+    operationId: "getAnchorPaidToken",
+    path: "/admin/catalogue/anchor/paid-result/token",
+    summary: "Read a fresh token for an exact pending paid anchor receipt",
+    tags: ["Admin"],
+  })
+  .input(z.object({ receiptAt: z.string().min(1), trackId: z.string().min(1) }))
+  .output(z.object({ ok: z.literal(true), paidResultToken: z.string() }));
+
+export const cancelAnchorPaidResult = oc
+  .route({
+    method: "POST",
+    operationId: "cancelAnchorPaidResult",
+    path: "/admin/catalogue/anchor/paid-result/cancel",
+    summary: "Settle a paid admission when its actor never started",
+    tags: ["Admin"],
+  })
+  .input(
+    z.object({
+      paidResultToken: z.string().max(32 * 1024),
+      refundCap: z.boolean().optional(),
+      trackId: z.string().min(1),
+    }),
+  )
+  .output(z.object({ ok: z.literal(true), settled: z.literal(true) }));
+
+export const resolveAnchorPaidResult = oc
+  .route({
+    method: "POST",
+    operationId: "resolveAnchorPaidResult",
+    path: "/admin/catalogue/anchor/paid-result/resolve",
+    summary: "Settle a paid receipt for a track no longer available to anchor",
+    tags: ["Admin"],
+  })
+  .input(z.object({ receiptAt: z.string().min(1), trackId: z.string().min(1) }))
+  .output(z.object({ ok: z.literal(true), reason: z.enum(["missing", "settled", "unavailable"]) }));
+
 export const resolveAnchor = oc
   .route({
     method: "POST",
@@ -782,50 +1016,7 @@ export const resolveAnchor = oc
       trackId: z.string().min(1),
     }),
   )
-  .output(
-    z.object({
-      anchored: z.boolean(),
-
-      apifyBudgetRemaining: z.number().int().nonnegative(),
-
-      apifyEligible: z.boolean(),
-
-      apifyEnabled: z.boolean(),
-
-      apifyIneligibleReason: z.enum(["apify_budget_spent", "awaiting_free_ask"]).nullable(),
-
-      freeDurationMsOmitted: z.number().int().nonnegative(),
-
-      isrcRecoveredByDeezer: z.boolean(),
-
-      listenbrainzOutcome: z.enum([
-        "anchored",
-        "empty-ids",
-        "gate-rejected",
-        "metadata-failed",
-        "no-map",
-        "no-mbid",
-        "not-attempted",
-        "request-failed",
-        "yielded-on-breaker",
-      ]),
-      ok: z.literal(true),
-
-      source: z.enum(["listenbrainz", "spotify-isrc", "spotify-search"]).nullable(),
-
-      spotifyIsrcAsked: z.boolean(),
-
-      spotifySearchDone: z.boolean(),
-
-      spotifySearchEnabled: z.boolean(),
-
-      spotifyThrottled: z.boolean(),
-
-      stamped: z.boolean(),
-
-      verifiedBy: z.enum(["isrc", "search", "search-subset"]).nullable(),
-    }),
-  );
+  .output(AnchorResolveResultSchema);
 
 export const resolveAnchorReview = oc
   .route({
@@ -1073,13 +1264,18 @@ export const resetAppleBreaker = oc
 
 export const adminCatalogueContract = {
   anchor_track: anchorTrack,
+  cancel_anchor_paid_result: cancelAnchorPaidResult,
   certify_track: certifyTrack,
   clear_wrong_audio: clearWrongAudio,
+  commit_anchor: commitAnchor,
+  commit_anchor_batch: commitAnchorBatch,
   commit_crawl_nodes: commitCrawlNodes,
   crawl_catalogue: crawlCatalogue,
   flag_wrong_audio: flagWrongAudio,
   force_capture: forceCapture,
   get_anchor_apify_budget: getAnchorApifyBudget,
+  get_anchor_paid_token: getAnchorPaidToken,
+  get_anchor_receipt: getAnchorReceipt,
   get_capture_budget: getCaptureBudget,
   get_crawl_status: getCrawlStatus,
   get_label_releases_budget: getLabelReleasesBudget,
@@ -1087,6 +1283,8 @@ export const adminCatalogueContract = {
   get_spotify_anchor_breaker: getSpotifyAnchorBreaker,
   list_catalogue_tracks: listCatalogueTracks,
   list_unverified_captures: listUnverifiedCaptures,
+  prepare_anchor: prepareAnchor,
+  prepare_anchor_batch: prepareAnchorBatch,
   rank_catalogue: rankCatalogue,
   record_anchor_failure: recordAnchorFailure,
   record_demand: recordDemand,
@@ -1096,6 +1294,8 @@ export const adminCatalogueContract = {
   reset_apple_breaker: resetAppleBreaker,
   reset_spotify_anchor_breaker: resetSpotifyAnchorBreaker,
   resolve_anchor: resolveAnchor,
+  resolve_anchor_candidate: resolveAnchorCandidate,
+  resolve_anchor_paid_result: resolveAnchorPaidResult,
   resolve_anchor_review: resolveAnchorReview,
   set_anchor_apify: setAnchorApify,
   set_anchor_apify_budget: setAnchorApifyBudget,

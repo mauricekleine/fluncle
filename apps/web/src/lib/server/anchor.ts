@@ -1,4 +1,15 @@
-import { chargeAnchorApifyRow, getAnchorApifyBudget, isAnchorApifyEnabled } from "./anchor-apify";
+import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+
+import {
+  ANCHOR_APIFY_REFUND_ACTION,
+  ANCHOR_APIFY_REFUND_DAILY_ROWS,
+  ANCHOR_APIFY_SPEND_ACTION,
+  ANCHOR_APIFY_SPEND_BUCKET,
+  chargeAnchorApifyRowForTrack,
+  getAnchorApifyBudget,
+  hasUnsettledAnchorPaidReceipt,
+  isAnchorApifyEnabled,
+} from "./anchor-apify";
 import {
   anchorSpotifyBreakerAllows,
   anchorSpotifySearchAllowed,
@@ -14,6 +25,7 @@ import {
   markDueWorkSourceMaintenanceFromSelectStatements,
 } from "./due-work";
 import { type DeezerIsrcCandidate, searchDeezerCandidates } from "./deezer";
+import { readEnv } from "./env";
 import { FILL_ISRC_SQL } from "./isrc";
 import { lookupSpotifyIdsByMbid } from "./listenbrainz";
 import { logEvent } from "./log";
@@ -220,13 +232,20 @@ type AnchorRow = {
   certified: number;
   duration_ms: number;
   isrc: null | string;
+  spotify_anchor_attempted_at: null | string;
   spotify_anchor_paid_admitted_at: null | string;
+  spotify_anchor_paid_state: null | string;
+  spotify_anchor_source: null | string;
+  spotify_anchor_verified_by: null | string;
   spotify_isrc_asked_at: null | string;
   spotify_uri: null | string;
   title: string;
 };
 
-export type AnchorApifyIneligibleReason = "apify_budget_spent" | "awaiting_free_ask";
+export type AnchorApifyIneligibleReason =
+  | "apify_budget_spent"
+  | "awaiting_free_ask"
+  | "awaiting_paid_result";
 
 export type AnchorTrackReason =
   | "already_anchored"
@@ -249,12 +268,37 @@ export class AnchorTrackError extends Error {
 export const ANCHOR_INVALID_FAILURE_LIMIT = 3;
 export const ANCHOR_PAID_ADMISSION_MAX_AGE_MS = 2 * 60 * 60 * 1000;
 
+async function verifyPaidAnchorResultToken(
+  row: AnchorRow,
+  trackId: string,
+  paidResultToken: string,
+): Promise<boolean> {
+  const result = await verifyAnchorPhase<AnchorPaidResultToken>(paidResultToken, "paid-result");
+  if (result.trackId !== trackId || result.receiptAt !== row.spotify_anchor_paid_admitted_at) {
+    throw new AnchorTrackError(
+      "awaiting_free_ask",
+      `Track ${trackId} has no matching paid receipt`,
+    );
+  }
+  return !hasUnsettledAnchorPaidReceipt(
+    row.spotify_anchor_paid_admitted_at,
+    row.spotify_anchor_paid_state,
+  );
+}
+
 async function assertPaidAnchorAdmission(
   row: AnchorRow,
   trackId: string,
   source: AnchorReviewSource,
+  paidResultToken?: string,
 ): Promise<void> {
   if (source !== "apify") {
+    return;
+  }
+  if (paidResultToken) {
+    if (await verifyPaidAnchorResultToken(row, trackId, paidResultToken)) {
+      throw new AnchorTrackError("awaiting_free_ask", `Track ${trackId} has a settled paid result`);
+    }
     return;
   }
   const paidAdmittedAt = Date.parse(row.spotify_anchor_paid_admitted_at ?? "");
@@ -326,7 +370,7 @@ export async function recordAnchorValidationFailure(
 export async function anchorTrack(
   trackId: string,
   candidates: AnchorCandidate[],
-  options: { source?: AnchorReviewSource; stampOnMiss?: boolean } = {},
+  options: { paidResultToken?: string; source?: AnchorReviewSource; stampOnMiss?: boolean } = {},
 ): Promise<{ anchored: boolean; verifiedBy: AnchorGateVerification }> {
   const { source = "apify", stampOnMiss = true } = options;
   const db = await getDb();
@@ -334,7 +378,10 @@ export async function anchorTrack(
   const found = await db.execute({
     args: [trackId],
     sql: `select t.isrc, t.title, t.artists_json, t.duration_ms, t.spotify_uri,
+                 t.spotify_anchor_attempted_at,
                  t.spotify_isrc_asked_at, t.spotify_anchor_paid_admitted_at,
+                 t.spotify_anchor_paid_state, t.spotify_anchor_source,
+                 t.spotify_anchor_verified_by,
                  (f.track_id is not null) as certified
           from tracks t
           left join findings f on f.track_id = t.track_id
@@ -355,14 +402,43 @@ export async function anchorTrack(
     );
   }
 
+  if (options.paidResultToken && source !== "apify") {
+    throw new AnchorTrackError("awaiting_free_ask", `Track ${trackId} has an invalid paid source`);
+  }
+  const paidResultSettled = options.paidResultToken
+    ? await verifyPaidAnchorResultToken(row, trackId, options.paidResultToken)
+    : false;
+
   if (row.spotify_uri) {
+    const matchingCandidate = candidates.find(
+      (candidate) => row.spotify_uri === `spotify:track:${candidate.spotifyTrackId}`,
+    );
+    if (paidResultSettled && row.spotify_anchor_source === "apify" && matchingCandidate) {
+      await connectAnchorArtists(
+        trackId,
+        matchingCandidate.artists.map((artist) => artist.name),
+        matchingCandidate.artists.map((artist) => artist.id ?? ""),
+      );
+      const verifiedBy = row.spotify_anchor_verified_by;
+      return {
+        anchored: true,
+        verifiedBy:
+          verifiedBy === "isrc" || verifiedBy === "search" || verifiedBy === "search-subset"
+            ? verifiedBy
+            : null,
+      };
+    }
     throw new AnchorTrackError(
       "already_anchored",
       `Track ${trackId} already carries a Spotify anchor`,
     );
   }
 
-  await assertPaidAnchorAdmission(row, trackId, source);
+  if (paidResultSettled) {
+    return { anchored: false, verifiedBy: null };
+  }
+
+  await assertPaidAnchorAdmission(row, trackId, source, options.paidResultToken);
 
   const rowArtists = parseArtistsJson(row.artists_json);
   const durationMs = Number(row.duration_ms);
@@ -400,6 +476,14 @@ export async function anchorTrack(
   }
 
   const now = new Date().toISOString();
+  const paidSettlementState =
+    source === "apify" &&
+    hasUnsettledAnchorPaidReceipt(
+      row.spotify_anchor_paid_admitted_at,
+      row.spotify_anchor_paid_state,
+    )
+      ? "settled"
+      : null;
 
   if (!verified) {
     const suspect = detectVersionMismatch(
@@ -423,10 +507,11 @@ export async function anchorTrack(
         db,
         [
           {
-            args: [now, trackId],
+            args: [now, paidSettlementState, trackId],
 
             sql: `update tracks
                   set spotify_anchor_attempted_at = ?,
+                      spotify_anchor_paid_state = coalesce(?, spotify_anchor_paid_state),
                       spotify_anchor_attempts = coalesce(spotify_anchor_attempts, 0) + 1,
                       spotify_isrc_asked_at = null,
                       spotify_anchor_invalid_attempts = 0
@@ -461,6 +546,7 @@ export async function anchorTrack(
           source,
           verifiedBy,
           now,
+          paidSettlementState,
           trackId,
         ],
 
@@ -474,6 +560,7 @@ export async function anchorTrack(
               spotify_anchor_source = ?,
               spotify_anchor_verified_by = ?,
               spotify_anchored_at = ?,
+              spotify_anchor_paid_state = coalesce(?, spotify_anchor_paid_state),
               anchor_review_json = null,
               -- The free exact-ISRC ask receipt dies with the question it was evidence about
               -- (schema.ts, spotify_isrc_asked_at): this row is anchored, so there is nothing
@@ -523,6 +610,7 @@ export type AnchorResolveResult = {
   freeDurationMsOmitted: number;
   isrcRecoveredByDeezer: boolean;
   listenbrainzOutcome: ListenBrainzAnchorOutcome;
+  paidResultToken?: string;
   source: AnchorResolveSource | null;
   spotifyIsrcAsked: boolean;
   spotifySearchDone: boolean;
@@ -795,7 +883,9 @@ export async function recoverIsrcViaDeezer(
   rowTitle: string,
   rowDurationMs: number,
   suppliedCandidates?: DeezerIsrcCandidate[],
+  phaseNow: Date | string = new Date(),
 ): Promise<string | undefined> {
+  const phaseAt = typeof phaseNow === "string" ? phaseNow : phaseNow.toISOString();
   if (!rowTitle.trim() || rowArtists.length === 0 || !(rowDurationMs > 0)) {
     return undefined;
   }
@@ -809,7 +899,7 @@ export async function recoverIsrcViaDeezer(
         db,
         [
           {
-            args: [new Date().toISOString(), trackId],
+            args: [phaseAt, trackId],
             sql: `update tracks
                   set isrc_recovery_attempted_at = ?
                   where track_id = ?`,
@@ -839,7 +929,7 @@ export async function recoverIsrcViaDeezer(
   const recovered = verified?.candidate.isrc.trim();
 
   if (!recovered) {
-    const missAt = new Date().toISOString();
+    const missAt = phaseAt;
     const recoveryAttemptedAt = suppliedCandidates === undefined ? null : missAt;
 
     await batchDueWorkSourceMutation(
@@ -862,7 +952,7 @@ export async function recoverIsrcViaDeezer(
     return undefined;
   }
 
-  const now = new Date().toISOString();
+  const now = phaseAt;
   const deezerTrackId = verified?.candidate.deezerTrackId ?? null;
   const deezerWonAt = deezerTrackId === null ? null : now;
   const recoveryAttemptedAt = suppliedCandidates === undefined ? null : now;
@@ -908,14 +998,14 @@ export async function recoverIsrcViaDeezer(
 async function stampAnchorAttempt(
   db: Awaited<ReturnType<typeof getDb>>,
   trackId: string,
-  now: Date,
+  now: Date | string,
   options: { chargeAttempt: boolean },
 ): Promise<void> {
   await batchDueWorkSourceMutation(
     db,
     [
       {
-        args: [now.toISOString(), trackId],
+        args: [typeof now === "string" ? now : now.toISOString(), trackId],
 
         sql: `update tracks
               set spotify_anchor_attempted_at = ?,
@@ -971,6 +1061,44 @@ export async function requeueAnchorStamps(trackIds: string[]): Promise<number> {
   return result?.rowsAffected ?? 0;
 }
 
+export async function clearPendingAnchorPaidReceipts(trackIds: string[]): Promise<number> {
+  if (trackIds.length === 0) {
+    return 0;
+  }
+  const db = await getDb();
+  const placeholders = trackIds.map(() => "?").join(", ");
+  const source = {
+    args: trackIds,
+    sql: `select track_id as subject_id from tracks
+          where track_id in (${placeholders})
+            and spotify_uri is null
+            and spotify_anchor_paid_state = 'pending'`,
+  };
+  const results = await db.batch(
+    [
+      ...markDueWorkSourceMaintenanceFromSelectStatements("track", source, {
+        producer: "anchor-requeue",
+      }),
+      {
+        args: trackIds,
+        sql: `update tracks
+              set spotify_anchor_paid_state = 'settled',
+                  spotify_anchor_attempted_at = null,
+                  spotify_anchor_attempts = case
+                    when spotify_anchor_terminal_error is not null then 0
+                    else spotify_anchor_attempts end,
+                  spotify_anchor_invalid_attempts = 0,
+                  spotify_anchor_terminal_error = null
+              where track_id in (${placeholders})
+                and spotify_uri is null
+                and spotify_anchor_paid_state = 'pending'`,
+      },
+    ],
+    "write",
+  );
+  return results.at(-1)?.rowsAffected ?? 0;
+}
+
 const ISRC_RECOVERY_EMPTY_MISS_WHERE = `isrc_recovery_attempted_at is not null
         and isrc_recovery_attempted_at >= ?
         and isrc_attempted_at is not isrc_recovery_attempted_at
@@ -1018,13 +1146,13 @@ export async function requeueIsrcRecoveryStamps(input: {
 async function stampSpotifyIsrcAsked(
   db: Awaited<ReturnType<typeof getDb>>,
   trackId: string,
-  now: Date,
+  now: Date | string,
 ): Promise<void> {
   await batchDueWorkSourceMutation(
     db,
     [
       {
-        args: [now.toISOString(), trackId],
+        args: [typeof now === "string" ? now : now.toISOString(), trackId],
         sql: `update tracks set spotify_isrc_asked_at = ? where track_id = ?`,
       },
     ],
@@ -1034,6 +1162,7 @@ async function stampSpotifyIsrcAsked(
 }
 
 type ApifyAdmissionInput = {
+  allowPaid?: boolean;
   anchored: boolean;
   apifyEnabled: boolean;
 
@@ -1041,6 +1170,8 @@ type ApifyAdmissionInput = {
   gateReason: AnchorSpotifyGateReason;
 
   priorAsk: boolean;
+
+  receiptAt?: string;
 
   spotifyIsrcCleanMiss: boolean;
   spotifySearchEnabled: boolean;
@@ -1060,7 +1191,7 @@ async function admitToApifyRung(
   input: ApifyAdmissionInput,
 ): Promise<ApifyAdmission> {
   if (input.spotifyIsrcCleanMiss) {
-    await stampSpotifyIsrcAsked(db, trackId, now);
+    await stampSpotifyIsrcAsked(db, trackId, input.receiptAt ?? now);
   }
 
   const withBudget = async (
@@ -1074,6 +1205,32 @@ async function admitToApifyRung(
 
   if (input.anchored) {
     return withBudget(false, null);
+  }
+
+  const existing = await db.execute({
+    args: [trackId],
+    sql: `select spotify_anchor_paid_admitted_at as receipt,
+                 spotify_anchor_paid_state as paid_state
+          from tracks where track_id = ? limit 1`,
+  });
+  const previous = existing.rows[0]?.receipt;
+  const previousMs = Date.parse(typeof previous === "string" ? previous : "");
+  const pending = hasUnsettledAnchorPaidReceipt(previous, existing.rows[0]?.paid_state, now);
+  if (
+    input.receiptAt &&
+    previous === input.receiptAt &&
+    pending &&
+    Number.isFinite(previousMs) &&
+    previousMs <= now.getTime() &&
+    now.getTime() - previousMs <= ANCHOR_PAID_ADMISSION_MAX_AGE_MS
+  ) {
+    return withBudget(true, null);
+  }
+  if (input.allowPaid === false) {
+    return withBudget(false, null);
+  }
+  if (pending || (input.receiptAt && previous === input.receiptAt)) {
+    return withBudget(false, "awaiting_paid_result");
   }
 
   const asked = input.hasIsrc
@@ -1093,25 +1250,31 @@ async function admitToApifyRung(
     return withBudget(true, null);
   }
 
-  const { budget, charged } = await chargeAnchorApifyRow(now);
-  if (charged) {
-    await db.execute({
-      args: [now.toISOString(), trackId],
-      sql: "update tracks set spotify_anchor_paid_admitted_at = ? where track_id = ?",
-    });
-  }
+  const { budget, charged, priorReceiptLive } = await chargeAnchorApifyRowForTrack(
+    trackId,
+    input.receiptAt ?? newAnchorAdmissionReceipt(now),
+    now,
+  );
 
   return {
     apifyBudgetRemaining: budget.remainingRows,
     apifyEligible: charged,
-    apifyIneligibleReason: charged ? null : "apify_budget_spent",
+    apifyIneligibleReason: charged
+      ? null
+      : priorReceiptLive
+        ? "awaiting_paid_result"
+        : "apify_budget_spent",
   };
 }
 
 export async function resolveAnchorFree(
   trackId: string,
   now: Date = new Date(),
-  options: { deezerCandidates?: DeezerIsrcCandidate[]; spotifySearch?: boolean } = {},
+  options: {
+    allowPaid?: boolean;
+    deezerCandidates?: DeezerIsrcCandidate[];
+    spotifySearch?: boolean;
+  } = {},
 ): Promise<AnchorResolveResult> {
   const db = await getDb();
 
@@ -1183,6 +1346,7 @@ export async function resolveAnchorFree(
       ...noSpotify,
       anchored: true,
       ...(await admitToApifyRung(db, trackId, now, {
+        allowPaid: options.allowPaid,
         anchored: true,
         apifyEnabled,
         gateReason,
@@ -1220,6 +1384,7 @@ export async function resolveAnchorFree(
       ...noSpotify,
 
       ...(await admitToApifyRung(db, trackId, now, {
+        allowPaid: options.allowPaid,
         anchored: false,
         apifyEnabled,
         gateReason,
@@ -1261,6 +1426,7 @@ export async function resolveAnchorFree(
     ...searchWire,
 
     ...(await admitToApifyRung(db, trackId, now, {
+      allowPaid: options.allowPaid,
       anchored: searchOutcome.anchored,
       apifyEnabled,
       gateReason,
@@ -1277,6 +1443,913 @@ export async function resolveAnchorFree(
     spotifySearchEnabled,
     spotifyThrottled: throttled,
     stamped: settled,
+  };
+}
+
+const ANCHOR_PHASE_TOKEN_MAX_BYTES = 32 * 1024;
+const ANCHOR_PHASE_MAX_AGE_MS = ANCHOR_PAID_ADMISSION_MAX_AGE_MS;
+const ANCHOR_PAID_RESULT_TOKEN_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
+function newAnchorAdmissionReceipt(now: Date): string {
+  return now
+    .toISOString()
+    .replace(/Z$/, `${String(randomBytes(4).readUInt32BE(0) % 1_000_000).padStart(6, "0")}Z`);
+}
+
+type AnchorPhaseRow = {
+  artists_json: null | string;
+  certified: number;
+  duration_ms: null | number;
+  isrc: null | string;
+  isrc_recovery_attempted_at: null | string;
+  mb_recording_id: null | string;
+  spotify_anchor_attempted_at: null | string;
+  spotify_anchor_paid_admitted_at: null | string;
+  spotify_anchor_paid_state: null | string;
+  spotify_anchor_source: null | string;
+  spotify_anchor_verified_by: null | string;
+  spotify_isrc_asked_at: null | string;
+  spotify_uri: null | string;
+  title: null | string;
+};
+
+type AnchorPreparedPhase = {
+  apifyEnabled: boolean;
+  deezerCandidates: DeezerIsrcCandidate[] | null;
+  effectiveIsrc: null | string;
+  issuedAt: number;
+  missing: boolean;
+  receiptAt: string;
+  row: AnchorPhaseRow;
+  stage: "prepared";
+  trackId: string;
+};
+
+type AnchorProbeEvidence = {
+  attempts: { candidates: AnchorCandidate[]; source: AnchorResolveSource }[];
+  candidate: AnchorCandidate | null;
+  freeDurationMsOmitted: number;
+  issuedAt: number;
+  listenbrainzOutcome: ListenBrainzAnchorOutcome;
+  preparedDigest: string;
+  source: AnchorResolveSource | null;
+  spotifyIsrcAsked: boolean;
+  spotifyIsrcCleanMiss: boolean;
+  spotifySearchDone: boolean;
+  spotifyThrottled: boolean;
+  stage: "probed";
+};
+
+type AnchorPaidResultToken = {
+  issuedAt: number;
+  receiptAt: string;
+  stage: "paid-result";
+  trackId: string;
+};
+
+async function anchorPhaseKey(): Promise<Buffer> {
+  return createHmac("sha256", await readEnv("ADMIN_SESSION_SECRET"))
+    .update("anchor-phase:v1")
+    .digest();
+}
+
+async function signAnchorPhase(
+  value: AnchorPaidResultToken | AnchorPreparedPhase | AnchorProbeEvidence,
+): Promise<string> {
+  const body = Buffer.from(JSON.stringify(value)).toString("base64url");
+  const signature = createHmac("sha256", await anchorPhaseKey())
+    .update(body)
+    .digest("base64url");
+  const token = `${body}.${signature}`;
+  if (Buffer.byteLength(token) > ANCHOR_PHASE_TOKEN_MAX_BYTES) {
+    throw new Error("anchor phase token exceeds its size limit");
+  }
+  return token;
+}
+
+async function verifyAnchorPhase<
+  T extends AnchorPaidResultToken | AnchorPreparedPhase | AnchorProbeEvidence,
+>(token: string, stage: T["stage"]): Promise<T> {
+  if (Buffer.byteLength(token) > ANCHOR_PHASE_TOKEN_MAX_BYTES) {
+    throw new Error("invalid anchor phase token");
+  }
+  const [body, signature, extra] = token.split(".");
+  if (!body || !signature || extra !== undefined) {
+    throw new Error("invalid anchor phase token");
+  }
+  const expected = createHmac("sha256", await anchorPhaseKey())
+    .update(body)
+    .digest("base64url");
+  const left = Buffer.from(signature);
+  const right = Buffer.from(expected);
+  if (left.length !== right.length || !timingSafeEqual(left, right)) {
+    throw new Error("invalid anchor phase token");
+  }
+  let value: unknown;
+  try {
+    value = JSON.parse(Buffer.from(body, "base64url").toString("utf8"));
+  } catch {
+    throw new Error("invalid anchor phase token");
+  }
+  if (
+    value === null ||
+    typeof value !== "object" ||
+    !("stage" in value) ||
+    value.stage !== stage ||
+    !("issuedAt" in value) ||
+    typeof value.issuedAt !== "number" ||
+    !Number.isSafeInteger(value.issuedAt) ||
+    value.issuedAt > Date.now() ||
+    Date.now() - value.issuedAt >
+      (stage === "paid-result" ? ANCHOR_PAID_RESULT_TOKEN_MAX_AGE_MS : ANCHOR_PHASE_MAX_AGE_MS)
+  ) {
+    throw new Error("invalid or expired anchor phase token");
+  }
+  return value as T;
+}
+
+async function readAnchorPhaseRow(trackId: string): Promise<AnchorPhaseRow> {
+  const db = await getDb();
+  const found = await db.execute({
+    args: [trackId],
+    sql: `select t.artists_json, t.duration_ms, t.isrc, t.isrc_recovery_attempted_at,
+                 t.mb_recording_id,
+                 t.spotify_anchor_attempted_at, t.spotify_anchor_paid_admitted_at,
+                 t.spotify_anchor_paid_state,
+                 t.spotify_anchor_source, t.spotify_anchor_verified_by,
+                 t.spotify_isrc_asked_at, t.spotify_uri, t.title,
+                 (f.track_id is not null) as certified
+          from tracks t left join findings f on f.track_id = t.track_id
+          where t.track_id = ? limit 1`,
+  });
+  const row = typedRows<AnchorPhaseRow>(found.rows)[0];
+  if (!row) {
+    throw new AnchorTrackError("not_found", `No track with id ${trackId}`);
+  }
+  return row;
+}
+
+function verifiedAnchorPhaseCandidate(
+  row: AnchorPhaseRow,
+  effectiveIsrc: null | string,
+  candidate: AnchorCandidate,
+): boolean {
+  if (effectiveIsrc && pickIsrcCandidate(effectiveIsrc, Number(row.duration_ms), [candidate])) {
+    return true;
+  }
+  return Boolean(
+    verifySearchCandidate(
+      parseArtistsJson(row.artists_json ?? "[]"),
+      row.title ?? "",
+      Number(row.duration_ms),
+      [
+        {
+          artists: candidate.artists.map((artist) => artist.name),
+          durationMs: candidate.durationMs,
+          title: candidate.title,
+        },
+      ],
+    ),
+  );
+}
+
+function pickAnchorPhaseCandidate(
+  row: AnchorPhaseRow,
+  effectiveIsrc: null | string,
+  candidates: AnchorCandidate[],
+): AnchorCandidate | undefined {
+  const byIsrc = effectiveIsrc
+    ? pickIsrcCandidate(effectiveIsrc, Number(row.duration_ms), candidates)
+    : undefined;
+  if (byIsrc) {
+    return byIsrc;
+  }
+  return verifySearchCandidate(
+    parseArtistsJson(row.artists_json ?? "[]"),
+    row.title ?? "",
+    Number(row.duration_ms),
+    candidates.map((candidate) => ({
+      artists: candidate.artists.map((artist) => artist.name),
+      candidate,
+      durationMs: candidate.durationMs,
+      title: candidate.title,
+    })),
+  )?.candidate.candidate;
+}
+
+export async function prepareAnchorFreePhase(
+  trackId: string,
+  deezerCandidates?: DeezerIsrcCandidate[],
+): Promise<string> {
+  let row: AnchorPhaseRow;
+  let missing = false;
+  try {
+    row = await readAnchorPhaseRow(trackId);
+  } catch (error) {
+    if (!(error instanceof AnchorTrackError) || error.reason !== "not_found") {
+      throw error;
+    }
+    missing = true;
+    row = {
+      artists_json: null,
+      certified: 0,
+      duration_ms: null,
+      isrc: null,
+      isrc_recovery_attempted_at: null,
+      mb_recording_id: null,
+      spotify_anchor_attempted_at: null,
+      spotify_anchor_paid_admitted_at: null,
+      spotify_anchor_paid_state: null,
+      spotify_anchor_source: null,
+      spotify_anchor_verified_by: null,
+      spotify_isrc_asked_at: null,
+      spotify_uri: null,
+      title: null,
+    };
+  }
+  if (Number(row.certified) === 1) {
+    throw new AnchorTrackError("certified", `Track ${trackId} is certified`);
+  }
+  if (row.spotify_uri) {
+    throw new AnchorTrackError("already_anchored", `Track ${trackId} is already anchored`);
+  }
+  const artists = parseArtistsJson(row.artists_json ?? "[]");
+  const recovered =
+    !missing && !row.isrc?.trim() && deezerCandidates
+      ? verifySearchCandidate(
+          artists,
+          row.title ?? "",
+          Number(row.duration_ms),
+          deezerCandidates.map((candidate) => ({
+            artists: [candidate.artistName],
+            durationMs: candidate.durationMs,
+            isrc: candidate.isrc,
+            title: candidate.title,
+          })),
+        )?.candidate.isrc.trim()
+      : undefined;
+  return signAnchorPhase({
+    apifyEnabled: await isAnchorApifyEnabled(),
+    deezerCandidates: deezerCandidates ?? null,
+    effectiveIsrc: row.isrc?.trim() || recovered || null,
+    issuedAt: Date.now(),
+    missing,
+    receiptAt: newAnchorAdmissionReceipt(new Date()),
+    row,
+    stage: "prepared",
+    trackId,
+  });
+}
+
+export async function readAnchorPreparedCoordinates(
+  prepared: string,
+): Promise<{ receiptAt: string; trackId: string }> {
+  const plan = await verifyAnchorPhase<AnchorPreparedPhase>(prepared, "prepared");
+  return { receiptAt: plan.receiptAt, trackId: plan.trackId };
+}
+
+export async function readAnchorPaidReceiptStatus(
+  trackId: string,
+  receiptAt: string,
+): Promise<{ admitted: boolean; paidState: null | string }> {
+  const db = await getDb();
+  const result = await db.execute({
+    args: [trackId, receiptAt],
+    sql: `select spotify_anchor_paid_state as paid_state
+          from tracks where track_id = ? and spotify_anchor_paid_admitted_at = ? limit 1`,
+  });
+  const row = result.rows[0];
+  return {
+    admitted: Boolean(row),
+    paidState: typeof row?.paid_state === "string" ? row.paid_state : null,
+  };
+}
+
+export async function getAnchorPaidResultToken(
+  trackId: string,
+  receiptAt: string,
+): Promise<string> {
+  const db = await getDb();
+  const pending = await db.execute({
+    args: [trackId, receiptAt],
+    sql: `select 1 as pending from tracks
+          where track_id = ? and spotify_anchor_paid_admitted_at = ?
+            and spotify_anchor_paid_state = 'pending' and spotify_uri is null limit 1`,
+  });
+  if (pending.rows.length !== 1) {
+    throw new AnchorTrackError("awaiting_free_ask", "No matching pending paid receipt");
+  }
+  return signAnchorPhase({
+    issuedAt: Date.now(),
+    receiptAt,
+    stage: "paid-result",
+    trackId,
+  });
+}
+
+export async function cancelAnchorPaidResult(
+  trackId: string,
+  paidResultToken: string,
+  refundCap = false,
+): Promise<{ settled: true }> {
+  let token: AnchorPaidResultToken;
+  try {
+    token = await verifyAnchorPhase<AnchorPaidResultToken>(paidResultToken, "paid-result");
+  } catch {
+    throw new AnchorTrackError("awaiting_free_ask", "Invalid or expired paid result token");
+  }
+  if (token.trackId !== trackId) {
+    throw new AnchorTrackError("awaiting_free_ask", "Paid result token does not match track");
+  }
+  const db = await getDb();
+  const source = {
+    args: [trackId, token.receiptAt],
+    sql: `select track_id as subject_id from tracks
+          where track_id = ? and spotify_anchor_paid_admitted_at = ?
+            and spotify_anchor_paid_state = 'pending' and spotify_uri is null`,
+  };
+  const transaction = await db.transaction("write");
+  let settled = false;
+  try {
+    const pending = await transaction.execute({
+      args: [trackId, token.receiptAt],
+      sql: `select spotify_anchor_paid_charged_at as charged_at from tracks
+            where track_id = ? and spotify_anchor_paid_admitted_at = ?
+              and spotify_anchor_paid_state = 'pending' and spotify_uri is null limit 1`,
+    });
+    if (pending.rows.length === 0) {
+      await transaction.rollback();
+    } else {
+      const chargedAt = pending.rows[0]?.charged_at;
+      if (refundCap && typeof chargedAt === "string" && !Number.isNaN(Date.parse(chargedAt))) {
+        const windowStart = `${chargedAt.slice(0, 10)}T00:00:00.000Z`;
+        const refund = await transaction.execute({
+          args: [
+            ANCHOR_APIFY_REFUND_ACTION,
+            ANCHOR_APIFY_SPEND_BUCKET,
+            windowStart,
+            ANCHOR_APIFY_SPEND_ACTION,
+            ANCHOR_APIFY_SPEND_BUCKET,
+            windowStart,
+            ANCHOR_APIFY_REFUND_DAILY_ROWS,
+          ],
+          sql: `insert into rate_limit_counters (action, bucket, window_start, count)
+                select ?, ?, ?, 1 where exists (
+                  select 1 from rate_limit_counters
+                  where action = ? and bucket = ? and window_start = ? and count > 0
+                )
+                on conflict(action, bucket, window_start) do update set count = count + 1
+                where count < ? returning count`,
+        });
+        if (refund.rows.length === 1) {
+          const credited = await transaction.execute({
+            args: [ANCHOR_APIFY_SPEND_ACTION, ANCHOR_APIFY_SPEND_BUCKET, windowStart],
+            sql: `update rate_limit_counters set count = count - 1
+                  where action = ? and bucket = ? and window_start = ? and count > 0`,
+          });
+          if (credited.rowsAffected !== 1) {
+            throw new Error("Anchor paid refund lost its spend counter");
+          }
+        }
+      }
+      const results = await transaction.batch([
+        ...markDueWorkSourceMaintenanceFromSelectStatements("track", source, {
+          producer: "anchor-requeue",
+        }),
+        {
+          args: [new Date().toISOString(), trackId, token.receiptAt],
+          sql: `update tracks set spotify_anchor_paid_state = 'settled',
+                               spotify_anchor_attempted_at = ?,
+                               spotify_anchor_attempts = case
+                                 when spotify_anchor_terminal_error is not null then spotify_anchor_attempts
+                                 else coalesce(spotify_anchor_attempts, 0) + 1 end,
+                               spotify_isrc_asked_at = null
+              where track_id = ? and spotify_anchor_paid_admitted_at = ?
+                and spotify_anchor_paid_state = 'pending' and spotify_uri is null`,
+        },
+      ]);
+      if (results.at(-1)?.rowsAffected !== 1) {
+        throw new Error("Anchor paid receipt changed during cancellation");
+      }
+      await transaction.commit();
+      settled = true;
+    }
+  } catch (error) {
+    await transaction.rollback();
+    throw error;
+  } finally {
+    transaction.close();
+  }
+  if (settled) {
+    return { settled: true };
+  }
+  const current = await readAnchorPaidReceiptStatus(trackId, token.receiptAt);
+  if (current.admitted && current.paidState === "settled") {
+    return { settled: true };
+  }
+  throw new AnchorTrackError("awaiting_free_ask", "No matching pending paid receipt");
+}
+
+export async function resolveUnavailableAnchorPaidReceipt(
+  trackId: string,
+  receiptAt: string,
+): Promise<{ reason: "missing" | "settled" | "unavailable" }> {
+  const db = await getDb();
+  const terminalWhere = `track_id = ? and spotify_anchor_paid_admitted_at = ?
+    and spotify_anchor_paid_state = 'pending'
+    and (spotify_uri is not null or exists
+      (select 1 from findings where findings.track_id = tracks.track_id))`;
+  const source = {
+    args: [trackId, receiptAt],
+    sql: `select track_id as subject_id from tracks where ${terminalWhere}`,
+  };
+  const results = await db.batch(
+    [
+      ...markDueWorkSourceMaintenanceFromSelectStatements("track", source, {
+        producer: "anchor-requeue",
+      }),
+      {
+        args: [trackId, receiptAt],
+        sql: `update tracks set spotify_anchor_paid_state = 'settled' where ${terminalWhere}`,
+      },
+    ],
+    "write",
+  );
+  if ((results.at(-1)?.rowsAffected ?? 0) === 1) {
+    return { reason: "unavailable" };
+  }
+  const current = await db.execute({
+    args: [trackId],
+    sql: `select spotify_anchor_paid_admitted_at as receipt,
+                 spotify_anchor_paid_state as paid_state
+          from tracks where track_id = ? limit 1`,
+  });
+  const row = current.rows[0];
+  if (!row) {
+    return { reason: "missing" };
+  }
+  if (row.receipt === receiptAt && row.paid_state === "settled") {
+    return { reason: "settled" };
+  }
+  throw new AnchorTrackError("awaiting_free_ask", "No matching unavailable paid receipt");
+}
+
+type AnchorListenBrainzProbe = {
+  candidate: AnchorCandidate | null;
+  candidates: AnchorCandidate[];
+  durationMsOmitted: number;
+  outcome: ListenBrainzAnchorOutcome;
+  throttled: boolean;
+};
+
+async function probeListenBrainzPhase(
+  plan: AnchorPreparedPhase,
+  now: Date,
+): Promise<AnchorListenBrainzProbe> {
+  const mbid = plan.row.mb_recording_id;
+  if (!mbid?.trim()) {
+    return {
+      candidate: null,
+      candidates: [],
+      durationMsOmitted: 0,
+      outcome: "no-mbid",
+      throttled: false,
+    };
+  }
+  const lookup = await lookupSpotifyIdsByMbid(mbid);
+  if (lookup.outcome !== "match") {
+    const outcome =
+      lookup.outcome === "no-map" || lookup.outcome === "empty-ids"
+        ? lookup.outcome
+        : lookup.outcome === "invalid-mbid"
+          ? "no-mbid"
+          : "request-failed";
+    return { candidate: null, candidates: [], durationMsOmitted: 0, outcome, throttled: false };
+  }
+  const spotifyTrackId = lookup.match.spotifyTrackIds[0];
+  if (!spotifyTrackId) {
+    return {
+      candidate: null,
+      candidates: [],
+      durationMsOmitted: 0,
+      outcome: "empty-ids",
+      throttled: false,
+    };
+  }
+  if (!(await anchorSpotifyBreakerAllows(now))) {
+    return {
+      candidate: null,
+      candidates: [],
+      durationMsOmitted: 0,
+      outcome: "yielded-on-breaker",
+      throttled: false,
+    };
+  }
+  const read = await metadataCandidate(spotifyTrackId, now);
+  if (!read.candidate) {
+    return {
+      candidate: null,
+      candidates: [],
+      durationMsOmitted: 0,
+      outcome: "metadata-failed",
+      throttled: read.throttled,
+    };
+  }
+  const accepted = verifiedAnchorPhaseCandidate(plan.row, plan.effectiveIsrc, read.candidate);
+  return {
+    candidate: accepted ? read.candidate : null,
+    candidates: [read.candidate],
+    durationMsOmitted: typeof read.candidate.durationMs === "number" ? 0 : 1,
+    outcome: accepted ? "anchored" : "gate-rejected",
+    throttled: false,
+  };
+}
+
+type AnchorSpotifyProbe = {
+  candidate: AnchorCandidate | null;
+  candidates: AnchorCandidate[];
+  durationMsOmitted: number;
+  isrcAsked: boolean;
+  isrcCleanMiss: boolean;
+  searchDone: boolean;
+  source: AnchorResolveSource | null;
+  throttled: boolean;
+};
+
+async function probeSpotifyIsrcPhase(
+  plan: AnchorPreparedPhase,
+  now: Date,
+): Promise<AnchorSpotifyProbe> {
+  const isrc = plan.effectiveIsrc;
+  if (!isrc) {
+    return {
+      candidate: null,
+      candidates: [],
+      durationMsOmitted: 0,
+      isrcAsked: false,
+      isrcCleanMiss: false,
+      searchDone: false,
+      source: null,
+      throttled: false,
+    };
+  }
+  const lookup = await findSpotifyTrackByIsrc(isrc);
+  await recordAnchorSpotifyCall(now);
+  if (lookup.rateLimited || lookup.unauthorized) {
+    return {
+      candidate: null,
+      candidates: [],
+      durationMsOmitted: 0,
+      isrcAsked: true,
+      isrcCleanMiss: false,
+      searchDone: true,
+      source: null,
+      throttled: lookup.rateLimited,
+    };
+  }
+  const read = lookup.match ? await metadataCandidate(lookup.match.trackId, now) : null;
+  const accepted = read?.candidate
+    ? verifiedAnchorPhaseCandidate(plan.row, isrc, read.candidate)
+    : false;
+  return {
+    candidate: accepted ? (read?.candidate ?? null) : null,
+    candidates: read?.candidate ? [read.candidate] : [],
+    durationMsOmitted: read?.candidate && typeof read.candidate.durationMs !== "number" ? 1 : 0,
+    isrcAsked: true,
+    isrcCleanMiss: !lookup.match || Boolean(read?.candidate && !accepted),
+    searchDone: accepted || Boolean(read?.throttled),
+    source: accepted ? "spotify-isrc" : null,
+    throttled: Boolean(read?.throttled),
+  };
+}
+
+async function probeSpotifyFuzzyPhase(
+  plan: AnchorPreparedPhase,
+  now: Date,
+): Promise<AnchorSpotifyProbe> {
+  let candidate: AnchorCandidate | null = null;
+  let candidates: AnchorCandidate[] = [];
+  let durationMsOmitted = 0;
+  let throttled = false;
+  try {
+    const results = await searchTrackCandidates(
+      anchorSearchQuery(parseArtistsJson(plan.row.artists_json ?? "[]"), plan.row.title ?? ""),
+    );
+    candidates = results.map(searchResultCandidate);
+    durationMsOmitted = candidates.filter((item) => typeof item.durationMs !== "number").length;
+    candidate = pickAnchorPhaseCandidate(plan.row, plan.effectiveIsrc, candidates) ?? null;
+  } catch (error) {
+    logEvent("warn", "anchor.spotify-search-failed", { error, trackId: plan.trackId });
+    throttled = isSpotifyThrottle(error);
+  } finally {
+    await recordAnchorSpotifyCall(now);
+  }
+  return {
+    candidate,
+    candidates,
+    durationMsOmitted,
+    isrcAsked: false,
+    isrcCleanMiss: false,
+    searchDone: true,
+    source: candidate ? "spotify-search" : null,
+    throttled,
+  };
+}
+
+export async function probeAnchorFreePhase(
+  prepared: string,
+  spotifySearch = true,
+): Promise<string> {
+  const plan = await verifyAnchorPhase<AnchorPreparedPhase>(prepared, "prepared");
+  const now = new Date();
+  const listenbrainz: AnchorListenBrainzProbe = plan.missing
+    ? {
+        candidate: null,
+        candidates: [],
+        durationMsOmitted: 0,
+        outcome: "not-attempted",
+        throttled: false,
+      }
+    : await probeListenBrainzPhase(plan, now);
+  const attempts: AnchorProbeEvidence["attempts"] =
+    listenbrainz.candidates.length > 0
+      ? [{ candidates: listenbrainz.candidates, source: "listenbrainz" }]
+      : [];
+  let spotify: AnchorSpotifyProbe = {
+    candidate: null,
+    candidates: [],
+    durationMsOmitted: 0,
+    isrcAsked: false,
+    isrcCleanMiss: false,
+    searchDone: false,
+    source: null,
+    throttled: false,
+  };
+  if (
+    !plan.missing &&
+    !listenbrainz.candidate &&
+    spotifySearch &&
+    (await anchorSpotifySearchAllowed(now))
+  ) {
+    spotify = await probeSpotifyIsrcPhase(plan, now);
+    if (spotify.candidates.length > 0) {
+      attempts.push({ candidates: spotify.candidates, source: "spotify-isrc" });
+    }
+    if (!spotify.searchDone) {
+      const fuzzy = await probeSpotifyFuzzyPhase(plan, now);
+      attempts.push({ candidates: fuzzy.candidates, source: "spotify-search" });
+      spotify = {
+        ...fuzzy,
+        durationMsOmitted: spotify.durationMsOmitted + fuzzy.durationMsOmitted,
+        isrcAsked: spotify.isrcAsked,
+        isrcCleanMiss: spotify.isrcCleanMiss,
+        throttled: spotify.throttled || fuzzy.throttled,
+      };
+    }
+  }
+  const candidate = listenbrainz.candidate ?? spotify.candidate;
+  const source = listenbrainz.candidate ? "listenbrainz" : spotify.source;
+  return signAnchorPhase({
+    attempts,
+    candidate,
+    freeDurationMsOmitted: listenbrainz.durationMsOmitted + spotify.durationMsOmitted,
+    issuedAt: Date.now(),
+    listenbrainzOutcome: listenbrainz.outcome,
+    preparedDigest: createHmac("sha256", await anchorPhaseKey())
+      .update(prepared)
+      .digest("base64url"),
+    source,
+    spotifyIsrcAsked: spotify.isrcAsked,
+    spotifyIsrcCleanMiss: spotify.isrcCleanMiss,
+    spotifySearchDone: spotify.searchDone,
+    spotifyThrottled: listenbrainz.throttled || spotify.throttled,
+    stage: "probed",
+  });
+}
+
+type AnchorCommitRowState = {
+  alreadyAnchored: boolean;
+  paidReplay: boolean;
+  phaseRecovered: boolean;
+  stampedReplay: boolean;
+};
+
+function inspectAnchorCommitRow(
+  plan: AnchorPreparedPhase,
+  proof: AnchorProbeEvidence,
+  row: AnchorPhaseRow,
+): AnchorCommitRowState {
+  const phaseAt = plan.receiptAt;
+  const phaseRecovered = row.isrc_recovery_attempted_at === phaseAt;
+  const paidReplay = row.spotify_anchor_paid_admitted_at === phaseAt;
+  const stampedReplay = row.spotify_anchor_attempted_at === phaseAt;
+  const alreadyAnchored = Boolean(row.spotify_uri);
+  if (paidReplay) {
+    return { alreadyAnchored, paidReplay, phaseRecovered, stampedReplay };
+  }
+  const anchoredByProbe =
+    alreadyAnchored &&
+    proof.attempts.some(
+      (attempt) =>
+        row.spotify_anchor_source === attempt.source &&
+        attempt.candidates.some(
+          (candidate) => row.spotify_uri === `spotify:track:${candidate.spotifyTrackId}`,
+        ),
+    );
+  const immutableMatches =
+    row.artists_json === plan.row.artists_json &&
+    row.duration_ms === plan.row.duration_ms &&
+    row.title === plan.row.title &&
+    row.mb_recording_id === plan.row.mb_recording_id &&
+    row.certified === plan.row.certified;
+  const mutableMatches =
+    (row.spotify_uri === plan.row.spotify_uri || anchoredByProbe) &&
+    (row.isrc === plan.row.isrc || (phaseRecovered && row.isrc === plan.effectiveIsrc)) &&
+    (row.isrc_recovery_attempted_at === plan.row.isrc_recovery_attempted_at || phaseRecovered) &&
+    (row.spotify_isrc_asked_at === plan.row.spotify_isrc_asked_at ||
+      (proof.spotifyIsrcCleanMiss && row.spotify_isrc_asked_at === phaseAt) ||
+      anchoredByProbe ||
+      stampedReplay) &&
+    (row.spotify_anchor_attempted_at === plan.row.spotify_anchor_attempted_at ||
+      stampedReplay ||
+      anchoredByProbe) &&
+    (row.spotify_anchor_paid_admitted_at === plan.row.spotify_anchor_paid_admitted_at ||
+      paidReplay) &&
+    (row.spotify_anchor_paid_state === plan.row.spotify_anchor_paid_state || paidReplay);
+  if (!immutableMatches || !mutableMatches || (alreadyAnchored && !anchoredByProbe)) {
+    throw new AnchorTrackError("already_anchored", "Anchor row changed after prepare");
+  }
+  return { alreadyAnchored, paidReplay, phaseRecovered, stampedReplay };
+}
+
+async function applyAnchorPhaseResult(
+  plan: AnchorPreparedPhase,
+  proof: AnchorProbeEvidence,
+  row: AnchorPhaseRow,
+  state: AnchorCommitRowState,
+): Promise<{
+  anchored: boolean;
+  isrcRecoveredByDeezer: boolean;
+  source: AnchorResolveSource | null;
+  verifiedBy: AnchorGateVerification;
+}> {
+  let isrcRecoveredByDeezer =
+    !plan.row.isrc?.trim() && state.phaseRecovered && Boolean(row.isrc?.trim());
+  if (
+    !state.alreadyAnchored &&
+    !state.paidReplay &&
+    !state.stampedReplay &&
+    !state.phaseRecovered &&
+    !row.isrc?.trim() &&
+    plan.deezerCandidates
+  ) {
+    const recovered = await recoverIsrcViaDeezer(
+      plan.trackId,
+      await getDb(),
+      parseArtistsJson(row.artists_json ?? "[]"),
+      row.title ?? "",
+      Number(row.duration_ms),
+      plan.deezerCandidates,
+      plan.receiptAt,
+    );
+    isrcRecoveredByDeezer = Boolean(recovered);
+  }
+  if (state.alreadyAnchored) {
+    const candidate = proof.attempts
+      .flatMap((attempt) => attempt.candidates)
+      .find((item) => row.spotify_uri === `spotify:track:${item.spotifyTrackId}`);
+    if (candidate) {
+      await connectAnchorArtists(
+        plan.trackId,
+        candidate.artists.map((artist) => artist.name),
+        candidate.artists.map((artist) => artist.id ?? ""),
+      );
+    }
+    return {
+      anchored: true,
+      isrcRecoveredByDeezer,
+      source: row.spotify_anchor_source as AnchorResolveSource,
+      verifiedBy: row.spotify_anchor_verified_by as AnchorGateVerification,
+    };
+  }
+  if (state.paidReplay || state.stampedReplay) {
+    return { anchored: false, isrcRecoveredByDeezer, source: null, verifiedBy: null };
+  }
+  for (const attempt of proof.attempts) {
+    const verdict = await anchorTrack(plan.trackId, attempt.candidates, {
+      source: attempt.source,
+      stampOnMiss: false,
+    });
+    if (verdict.anchored) {
+      return { ...verdict, isrcRecoveredByDeezer, source: attempt.source };
+    }
+  }
+  return { anchored: false, isrcRecoveredByDeezer, source: null, verifiedBy: null };
+}
+
+async function missingAnchorPhaseResult(): Promise<AnchorResolveResult> {
+  const { spotifyIsrcCleanMiss: _ignored, ...noSpotify } = NO_SPOTIFY_OUTCOME;
+  return {
+    ...noSpotify,
+    apifyBudgetRemaining: (await getAnchorApifyBudget()).remainingRows,
+    apifyEligible: false,
+    apifyEnabled: await isAnchorApifyEnabled(),
+    apifyIneligibleReason: null,
+    isrcRecoveredByDeezer: false,
+    listenbrainzOutcome: "not-attempted",
+    spotifySearchEnabled: await isAnchorSpotifySearchEnabled(),
+    stamped: false,
+  };
+}
+
+export async function commitAnchorFreePhase(
+  prepared: string,
+  evidence: string,
+  allowPaid = true,
+): Promise<AnchorResolveResult & { paidReceiptPending: boolean }> {
+  const plan = await verifyAnchorPhase<AnchorPreparedPhase>(prepared, "prepared");
+  const proof = await verifyAnchorPhase<AnchorProbeEvidence>(evidence, "probed");
+  const digest = createHmac("sha256", await anchorPhaseKey())
+    .update(prepared)
+    .digest("base64url");
+  if (proof.preparedDigest !== digest) {
+    throw new Error("anchor probe does not match its prepared row");
+  }
+  if (plan.missing) {
+    return { ...(await missingAnchorPhaseResult()), paidReceiptPending: false };
+  }
+  const now = new Date();
+  const row = await readAnchorPhaseRow(plan.trackId).catch((error: unknown) => {
+    if (error instanceof AnchorTrackError && error.reason === "not_found") {
+      return null;
+    }
+    throw error;
+  });
+  if (!row) {
+    return { ...(await missingAnchorPhaseResult()), paidReceiptPending: false };
+  }
+  const state = inspectAnchorCommitRow(plan, proof, row);
+  const apifyEnabled = await isAnchorApifyEnabled();
+  const spotifySearchEnabled = await isAnchorSpotifySearchEnabled();
+  const gateReason = (await anchorSpotifySearchGate(now)).reason;
+  const { anchored, isrcRecoveredByDeezer, source, verifiedBy } = await applyAnchorPhaseResult(
+    plan,
+    proof,
+    row,
+    state,
+  );
+  const spotifyThrottled = proof.spotifyThrottled;
+  const settled = !apifyEnabled && proof.spotifySearchDone && !anchored && !spotifyThrottled;
+  const park =
+    !apifyEnabled &&
+    !spotifySearchEnabled &&
+    proof.listenbrainzOutcome !== "yielded-on-breaker" &&
+    !proof.spotifySearchDone &&
+    !anchored;
+  if ((settled || park) && !state.stampedReplay && !state.paidReplay) {
+    await stampAnchorAttempt(await getDb(), plan.trackId, plan.receiptAt, {
+      chargeAttempt: settled,
+    });
+  }
+  const admission = await admitToApifyRung(await getDb(), plan.trackId, now, {
+    allowPaid,
+    anchored,
+    apifyEnabled,
+    gateReason,
+    hasIsrc: Boolean(plan.effectiveIsrc),
+    priorAsk: Boolean(plan.row.spotify_isrc_asked_at),
+    receiptAt: plan.receiptAt,
+    spotifyIsrcCleanMiss: proof.spotifyIsrcCleanMiss,
+    spotifySearchEnabled,
+    spotifySearchSettled: proof.spotifySearchDone && !spotifyThrottled,
+  });
+  const paidResultToken =
+    admission.apifyEligible && (apifyEnabled || state.paidReplay) && !anchored
+      ? await signAnchorPhase({
+          issuedAt: plan.issuedAt,
+          receiptAt: plan.receiptAt,
+          stage: "paid-result",
+          trackId: plan.trackId,
+        })
+      : undefined;
+  const receipt = await readAnchorPaidReceiptStatus(plan.trackId, plan.receiptAt);
+  return {
+    anchored,
+    ...admission,
+    apifyEnabled,
+    freeDurationMsOmitted: proof.freeDurationMsOmitted,
+    isrcRecoveredByDeezer,
+    listenbrainzOutcome: proof.listenbrainzOutcome,
+    paidReceiptPending:
+      receipt.admitted && hasUnsettledAnchorPaidReceipt(plan.receiptAt, receipt.paidState, now),
+    ...(paidResultToken ? { paidResultToken } : {}),
+    source,
+    spotifyIsrcAsked: proof.spotifyIsrcAsked,
+    spotifySearchDone: proof.spotifySearchDone,
+    spotifySearchEnabled,
+    spotifyThrottled,
+    stamped: settled || park || state.stampedReplay,
+    verifiedBy,
   };
 }
 
