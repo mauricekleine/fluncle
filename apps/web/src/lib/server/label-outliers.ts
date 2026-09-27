@@ -9,7 +9,9 @@ import { getSetting } from "./settings";
 
 export const LABEL_OUTLIERS_LAST_RUN_KEY = "label_outliers_last_run";
 
-const NEWLY_FLAGGED_NAME_LIMIT = 50;
+export const MIN_CORPUS_FRACTION_OF_LAST_RUN = 0.5;
+
+const PENDING_ALERT_NAME_LIMIT = 50;
 
 const SCORE_EPSILON = 0.001;
 
@@ -19,11 +21,12 @@ export type RecordLabelOutliersInput = {
   labelsScored: number;
   outliers: RecordedLabelOutlier[];
   replicaSyncedAt: string | null;
+  totalFlagged: number;
   tracksScored: number;
   unitsScored: number;
 };
 
-export type NewlyFlaggedLabelOutlier = {
+export type PendingLabelOutlierAlert = {
   albumName: string | null;
   labelName: string | null;
   title: string;
@@ -32,10 +35,12 @@ export type NewlyFlaggedLabelOutlier = {
 
 export type RecordLabelOutliersResult = {
   flagged: number;
-  newlyFlagged: NewlyFlaggedLabelOutlier[];
-  newlyFlaggedCount: number;
+  pendingAlertIds: string[];
+  pendingAlerts: PendingLabelOutlierAlert[];
   removed: number;
 };
+
+export class LabelOutlierRunRejected extends Error {}
 
 type StoredOutlierRow = {
   album_id: string | null;
@@ -68,6 +73,28 @@ export function outlierChanged(stored: StoredOutlierRow, next: RecordedLabelOutl
   );
 }
 
+export function runRejection(
+  input: RecordLabelOutliersInput,
+  lastRun: LabelOutlierRun | null,
+): string | null {
+  if (input.totalFlagged !== input.outliers.length) {
+    return `the run flagged ${input.totalFlagged} units but posted ${input.outliers.length}; a partial list never replaces the stored one`;
+  }
+
+  if (input.tracksScored === 0 || input.unitsScored === 0) {
+    return "the run scored no tracks; an empty corpus never replaces the stored list";
+  }
+
+  if (
+    lastRun !== null &&
+    input.tracksScored < lastRun.tracksScored * MIN_CORPUS_FRACTION_OF_LAST_RUN
+  ) {
+    return `the run scored ${input.tracksScored} tracks against ${lastRun.tracksScored} last time; a corpus that halved overnight is a broken replica, not a catalogue`;
+  }
+
+  return null;
+}
+
 function dedupeByUnit(outliers: readonly RecordedLabelOutlier[]): RecordedLabelOutlier[] {
   const byUnit = new Map<string, RecordedLabelOutlier>();
 
@@ -92,41 +119,68 @@ function outlierArgs(outlier: RecordedLabelOutlier) {
   ];
 }
 
-async function namesFor(unitIds: readonly string[]): Promise<NewlyFlaggedLabelOutlier[]> {
-  if (unitIds.length === 0) {
-    return [];
-  }
-
+export async function listPendingAlerts(): Promise<{
+  ids: string[];
+  named: PendingLabelOutlierAlert[];
+}> {
   const db = await getDb();
-  const result = await db.execute({
-    args: [JSON.stringify(unitIds)],
-    sql: `select o.unit_id, a.name as album_name, l.name as label_name,
-                 coalesce(st.title, a.name, o.unit_id) as title
-            from label_outliers o
-            left join albums a on a.id = o.album_id
-            left join labels l on l.id = o.label_id
-            left join tracks st on st.track_id = o.single_track_id
-           where o.unit_id in (select value from json_each(?))
-           order by o.z asc, o.unit_id asc`,
-  });
-
-  return typedRows<{
+  const result = await db.execute(
+    `select o.unit_id, a.name as album_name, l.name as label_name,
+            coalesce(st.title, a.name, o.unit_id) as title
+       from label_outliers o
+       left join label_outlier_dismissals d
+         on d.unit_id = o.unit_id and d.fingerprint = o.fingerprint
+       left join albums a on a.id = o.album_id
+       left join labels l on l.id = o.label_id
+       left join tracks st on st.track_id = o.single_track_id
+      where o.alerted_at is null and d.unit_id is null
+      order by o.z asc, o.unit_id asc`,
+  );
+  const rows = typedRows<{
     album_name: string | null;
     label_name: string | null;
     title: string;
     unit_id: string;
-  }>(result.rows).map((row) => ({
-    albumName: row.album_name,
-    labelName: row.label_name,
-    title: row.title,
-    unitId: row.unit_id,
-  }));
+  }>(result.rows);
+
+  return {
+    ids: rows.map((row) => row.unit_id),
+    named: rows.slice(0, PENDING_ALERT_NAME_LIMIT).map((row) => ({
+      albumName: row.album_name,
+      labelName: row.label_name,
+      title: row.title,
+      unitId: row.unit_id,
+    })),
+  };
+}
+
+export async function acknowledgeLabelOutlierAlerts(
+  unitIds: readonly string[],
+  now: () => string = () => new Date().toISOString(),
+): Promise<number> {
+  const db = await getDb();
+  const result = await db.execute({
+    args: [now(), JSON.stringify([...new Set(unitIds)])],
+    sql: `update label_outliers set alerted_at = ?
+           where alerted_at is null and unit_id in (select value from json_each(?))`,
+  });
+
+  return result.rowsAffected;
 }
 
 export async function recordLabelOutliers(
   input: RecordLabelOutliersInput,
   now: () => string = () => new Date().toISOString(),
 ): Promise<RecordLabelOutliersResult> {
+  const rejection = runRejection(
+    input,
+    parseLastRun(await getSetting(LABEL_OUTLIERS_LAST_RUN_KEY)),
+  );
+
+  if (rejection) {
+    throw new LabelOutlierRunRejected(rejection);
+  }
+
   const db = await getDb();
   const stamp = now();
   const incoming = dedupeByUnit(input.outliers);
@@ -150,16 +204,9 @@ export async function recordLabelOutliers(
   );
   const incomingIds = new Set(incoming.map((outlier) => outlier.unitId));
   const statements: InStatement[] = [];
-  const newlyFlaggedIds: string[] = [];
 
   for (const outlier of incoming) {
     const previous = stored.get(outlier.unitId);
-    const dismissedFingerprint = dismissals.get(outlier.unitId);
-    const wasVisible = previous !== undefined && dismissedFingerprint !== previous.fingerprint;
-
-    if (!wasVisible && dismissedFingerprint !== outlier.fingerprint) {
-      newlyFlaggedIds.push(outlier.unitId);
-    }
 
     if (!previous) {
       statements.push({
@@ -176,10 +223,11 @@ export async function recordLabelOutliers(
       statements.push({
         args: [...outlierArgs(outlier), outlier.z, stamp, outlier.unitId],
         sql: `update label_outliers
-                 set album_id = ?, artist_support = ?, fingerprint = ?, label_id = ?, reference = ?,
-                     reference_median = ?, score = ?, single_track_id = ?, track_count = ?, z = ?,
-                     updated_at = ?
-               where unit_id = ?`,
+                 set alerted_at = case when fingerprint = ?3 then alerted_at end,
+                     album_id = ?1, artist_support = ?2, fingerprint = ?3, label_id = ?4,
+                     reference = ?5, reference_median = ?6, score = ?7, single_track_id = ?8,
+                     track_count = ?9, z = ?10, updated_at = ?11
+               where unit_id = ?12`,
       });
     }
   }
@@ -213,10 +261,12 @@ export async function recordLabelOutliers(
 
   await db.batch(statements, "write");
 
+  const pending = await listPendingAlerts();
+
   return {
     flagged,
-    newlyFlagged: await namesFor(newlyFlaggedIds.slice(0, NEWLY_FLAGGED_NAME_LIMIT)),
-    newlyFlaggedCount: newlyFlaggedIds.length,
+    pendingAlertIds: pending.ids,
+    pendingAlerts: pending.named,
     removed: removed.length,
   };
 }

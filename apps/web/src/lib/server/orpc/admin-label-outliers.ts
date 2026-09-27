@@ -1,4 +1,7 @@
+import { ORPCError } from "@orpc/server";
 import {
+  acknowledgeLabelOutlierAlerts,
+  LabelOutlierRunRejected,
   listLabelOutliers,
   recordLabelOutliers,
   setLabelOutliersDismissed,
@@ -12,6 +15,27 @@ export function adminLabelOutliersHandlers(os: Implementer) {
     .handler(async ({ input }) => {
       try {
         return { ...(await recordLabelOutliers(input)), ok: true } as const;
+      } catch (error) {
+        if (error instanceof LabelOutlierRunRejected) {
+          throw new ORPCError("CONFLICT", {
+            data: { apiCode: "label_outlier_run_rejected", apiMessage: error.message },
+            message: error.message,
+            status: 409,
+          });
+        }
+
+        throw apiFault(error);
+      }
+    });
+
+  const acknowledgeLabelOutlierAlertsHandler = os.acknowledge_label_outlier_alerts
+    .use(adminAuth)
+    .handler(async ({ input }) => {
+      try {
+        return {
+          acknowledged: await acknowledgeLabelOutlierAlerts(input.unitIds),
+          ok: true,
+        } as const;
       } catch (error) {
         throw apiFault(error);
       }
@@ -40,6 +64,7 @@ export function adminLabelOutliersHandlers(os: Implementer) {
     });
 
   return {
+    acknowledge_label_outlier_alerts: acknowledgeLabelOutlierAlertsHandler,
     list_label_outliers: listLabelOutliersHandler,
     record_label_outliers: recordLabelOutliersHandler,
     set_label_outliers_dismissed: setLabelOutliersDismissedHandler,

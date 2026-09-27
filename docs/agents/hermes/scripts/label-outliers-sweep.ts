@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 
 import { Database } from "bun:sqlite";
-import { mkdir, mkdtemp, readFile, rm, rmdir, stat, utimes, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -21,15 +21,17 @@ const API_TOKEN = process.env.FLUNCLE_API_TOKEN ?? "";
 const DISCORD_ALERT_WEBHOOK = process.env.DISCORD_ALERT_WEBHOOK;
 
 const RECORD_PATH = "/api/v1/admin/label-outliers";
+const ACKNOWLEDGE_PATH = "/api/v1/admin/label-outliers/alerts";
 const BOARD_URL = "https://www.fluncle.com/admin/label-outliers";
 const ADMISSION_OWNER = "fluncle-label-outliers";
-const MAX_RECORDED_OUTLIERS = 2000;
 const EMBEDDING_BYTES = EMBEDDING_DIMENSIONS * 4;
-const LOCK_STALE_MS = 15 * 60 * 1000;
-const LOCK_HEARTBEAT_MS = 60 * 1000;
-const LOCK_POLL_MS = 15 * 1000;
-const LOCK_WAIT_MS = 20 * 60 * 1000;
 const DISCORD_NAME_LIMIT = 8;
+
+export const MAX_RECORDED_OUTLIERS = 2000;
+
+export const CORPUS_FLOOR = { minTracks: 10_000, minUsableFraction: 0.95 } as const;
+
+export type CorpusFloor = { minTracks: number; minUsableFraction: number };
 
 const log = (message: string) => console.error(`[label-outliers-sweep] ${message}`);
 
@@ -51,31 +53,46 @@ export type RecordPayload = {
   labelsScored: number;
   outliers: RecordedOutlier[];
   replicaSyncedAt: string | null;
+  totalFlagged: number;
   tracksScored: number;
   unitsScored: number;
 };
 
-export type NewlyFlagged = { albumName: string | null; labelName: string | null; title: string };
+export type PendingAlert = { albumName: string | null; labelName: string | null; title: string };
 
 export type RecordResponse = {
   flagged?: number;
-  newlyFlagged?: NewlyFlagged[];
-  newlyFlaggedCount?: number;
   ok?: boolean;
+  pendingAlertIds?: string[];
+  pendingAlerts?: PendingAlert[];
   removed?: number;
 };
 
+export type AcknowledgeResponse = { acknowledged?: number; ok?: boolean };
+
+export type Admitted<T> =
+  | { kind: "completed"; response: T }
+  | { kind: "yielded"; reason: string | null };
+
+export type ScoredReplica = {
+  embeddedTracks: number;
+  replicaSyncedAt: string | null;
+  run: LabelOutlierRun;
+};
+
 export type LabelOutliersSummary = {
+  alertAcknowledged: boolean | null;
   checked: null | number;
   elapsedMs?: number;
+  embeddedTracks: null | number;
   error?: string;
   errors: number;
   flagged: null | number;
   labelsScored: null | number;
-  newlyFlagged: null | number;
   notified: boolean;
   ok: boolean;
   payloadStarted: boolean;
+  pendingAlerts: null | number;
   produced: null | number;
   reason?: string;
   replicaSyncedAt: null | string;
@@ -84,14 +101,16 @@ export type LabelOutliersSummary = {
 
 export function emptySummary(): LabelOutliersSummary {
   return {
+    alertAcknowledged: null,
     checked: null,
+    embeddedTracks: null,
     errors: 0,
     flagged: null,
     labelsScored: null,
-    newlyFlagged: null,
     notified: false,
     ok: true,
     payloadStarted: false,
+    pendingAlerts: null,
     produced: null,
     replicaSyncedAt: null,
     tracksScored: null,
@@ -101,7 +120,7 @@ export function emptySummary(): LabelOutliersSummary {
 export function toPayload(run: LabelOutlierRun, replicaSyncedAt: string | null): RecordPayload {
   return {
     labelsScored: run.labelsScored,
-    outliers: run.flagged.slice(0, MAX_RECORDED_OUTLIERS).map((unit) => ({
+    outliers: run.flagged.map((unit) => ({
       albumId: unit.albumId,
       artistSupport: unit.artistSupport,
       fingerprint: unit.fingerprint,
@@ -115,6 +134,7 @@ export function toPayload(run: LabelOutlierRun, replicaSyncedAt: string | null):
       z: round(unit.z),
     })),
     replicaSyncedAt,
+    totalFlagged: run.flagged.length,
     tracksScored: run.tracksScored,
     unitsScored: run.unitsScored,
   };
@@ -124,18 +144,32 @@ function round(value: number): number {
   return Math.round(value * 10_000) / 10_000;
 }
 
+export function corpusFloorViolation(scored: ScoredReplica, floor: CorpusFloor): string | null {
+  const usable = scored.run.tracksScored;
+
+  if (usable < floor.minTracks) {
+    return `only ${usable} usable embedded tracks (floor ${floor.minTracks})`;
+  }
+
+  if (scored.embeddedTracks > 0 && usable / scored.embeddedTracks < floor.minUsableFraction) {
+    return `only ${usable} of ${scored.embeddedTracks} embedded tracks carried a usable vector (floor ${Math.round(floor.minUsableFraction * 100)}%)`;
+  }
+
+  return null;
+}
+
 export function discordMessage(
-  newlyFlagged: readonly NewlyFlagged[],
+  named: readonly PendingAlert[],
   count: number,
   total: number,
 ): string {
-  const named = newlyFlagged.slice(0, DISCORD_NAME_LIMIT);
-  const names = named.map((item) => {
+  const shown = named.slice(0, DISCORD_NAME_LIMIT);
+  const names = shown.map((item) => {
     const where = item.labelName ? ` on ${item.labelName}` : "";
 
     return `• ${item.albumName ?? item.title}${where}`;
   });
-  const more = count > named.length ? [`…and ${count - named.length} more`] : [];
+  const more = count > shown.length ? [`…and ${count - shown.length} more`] : [];
 
   return [
     `Label outliers: ${count} new to review (${total} on the board).`,
@@ -152,8 +186,17 @@ export function readEmbedding(blob: unknown): Float32Array | null {
 
   const copy = new Uint8Array(EMBEDDING_BYTES);
   copy.set(blob);
+  const vector = new Float32Array(copy.buffer);
+  let norm = 0;
 
-  return new Float32Array(copy.buffer);
+  for (const value of vector) {
+    if (!Number.isFinite(value)) {
+      return null;
+    }
+    norm += value * value;
+  }
+
+  return norm > 0 ? vector : null;
 }
 
 const CATALOGUE_EMBEDDED = `from tracks t
@@ -163,16 +206,19 @@ const CATALOGUE_EMBEDDED = `from tracks t
 export type ReplicaInputs = {
   artistsByTrack: Map<string, string[]>;
   dnbTaggedAlbumIds: Set<string>;
+  embeddedTracks: number;
   globalSum: Float64Array;
   groups: () => Iterable<LabelGroup>;
 };
 
 export function readReplicaInputs(database: Database): ReplicaInputs {
   const globalSum = new Float64Array(EMBEDDING_DIMENSIONS);
+  let embeddedTracks = 0;
 
   for (const row of database
     .query<{ embedding_blob: unknown }, []>(`select e.embedding_blob ${CATALOGUE_EMBEDDED}`)
     .iterate()) {
+    embeddedTracks += 1;
     const vector = readEmbedding(row.embedding_blob);
 
     if (vector) {
@@ -239,117 +285,141 @@ export function readReplicaInputs(database: Database): ReplicaInputs {
     }
   }
 
-  return { artistsByTrack, dnbTaggedAlbumIds, globalSum, groups };
+  return { artistsByTrack, dnbTaggedAlbumIds, embeddedTracks, globalSum, groups };
 }
 
-export type ReplicaLock = { release: () => Promise<void> };
+export type ReplicaSnapshot = { close: () => void; inputs: ReplicaInputs };
 
-export async function acquireReplicaLock(
-  lockDir: string,
-  options: {
-    now?: () => number;
-    pollMs?: number;
-    sleep?: (ms: number) => Promise<void>;
-    waitMs?: number;
-  } = {},
-): Promise<ReplicaLock | null> {
-  const now = options.now ?? Date.now;
-  const sleep =
-    options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
-  const deadline = now() + (options.waitMs ?? LOCK_WAIT_MS);
+export function openReplicaSnapshot(path: string): ReplicaSnapshot {
+  const database = new Database(path, { readonly: true, strict: true });
 
-  for (;;) {
-    try {
-      await mkdir(lockDir);
-      break;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
-        throw error;
-      }
+  try {
+    database.run("BEGIN");
+    const inputs = readReplicaInputs(database);
 
-      const lockStat = await stat(lockDir).catch(() => undefined);
+    return {
+      close: () => {
+        if (database.inTransaction) {
+          database.run("COMMIT");
+        }
+        database.close();
+      },
+      inputs,
+    };
+  } catch (error) {
+    database.close();
+    throw error;
+  }
+}
 
-      if (lockStat && now() - lockStat.mtimeMs > LOCK_STALE_MS) {
-        await rmdir(lockDir).catch(() => {});
-        continue;
-      }
+export async function scoreReplicaFile(path: string): Promise<ScoredReplica | null> {
+  const file = await stat(path).catch(() => undefined);
 
-      if (now() >= deadline) {
-        return null;
-      }
-
-      await sleep(options.pollMs ?? LOCK_POLL_MS);
-    }
+  if (!file) {
+    log(`no device-mirror replica at ${path}`);
+    return null;
   }
 
-  const heartbeat = setInterval(() => {
-    const stamp = new Date();
-    utimes(lockDir, stamp, stamp).catch(() => {});
-  }, LOCK_HEARTBEAT_MS);
-  heartbeat.unref?.();
+  const snapshot = openReplicaSnapshot(path);
 
-  let released = false;
+  try {
+    const run = scoreCatalogue({ ...snapshot.inputs, groups: snapshot.inputs.groups() });
 
-  return {
-    release: async () => {
-      if (released) {
-        return;
-      }
-      released = true;
-      clearInterval(heartbeat);
-      await rmdir(lockDir).catch((error: unknown) => {
-        log(
-          `could not release replica lock: ${error instanceof Error ? error.message : String(error)}`,
-        );
-      });
-    },
-  };
+    return {
+      embeddedTracks: snapshot.inputs.embeddedTracks,
+      replicaSyncedAt: new Date(file.mtimeMs).toISOString(),
+      run,
+    };
+  } finally {
+    snapshot.close();
+  }
 }
 
 export type SweepDeps = {
-  lock: () => Promise<ReplicaLock | null>;
+  acknowledge: (unitIds: string[]) => Promise<Admitted<AcknowledgeResponse>>;
   notify: (message: string) => Promise<boolean>;
-  record: (
-    payload: RecordPayload,
-  ) => Promise<
-    { kind: "recorded"; response: RecordResponse } | { kind: "yielded"; reason: string | null }
-  >;
-  score: () => Promise<{ replicaSyncedAt: string | null; run: LabelOutlierRun } | null>;
+  record: (payload: RecordPayload) => Promise<Admitted<RecordResponse>>;
+  score: () => Promise<ScoredReplica | null>;
 };
 
-export async function runLabelOutliersSweep(deps: SweepDeps): Promise<LabelOutliersSummary> {
-  const summary = emptySummary();
-  const lock = await deps.lock();
+function admissionReason(reason: string | null): string {
+  return reason ? `admission_${reason}` : "admission_yield";
+}
 
-  if (!lock) {
-    return { ...summary, reason: "replica_busy" };
+async function alertAndAcknowledge(
+  deps: SweepDeps,
+  response: RecordResponse,
+  summary: LabelOutliersSummary,
+): Promise<void> {
+  const pendingIds = Array.isArray(response.pendingAlertIds) ? response.pendingAlertIds : [];
+  const named = Array.isArray(response.pendingAlerts) ? response.pendingAlerts : [];
+
+  summary.pendingAlerts = pendingIds.length;
+
+  if (pendingIds.length === 0) {
+    return;
   }
 
-  let scored: Awaited<ReturnType<SweepDeps["score"]>>;
+  summary.notified = await deps.notify(
+    discordMessage(named, pendingIds.length, response.flagged ?? pendingIds.length),
+  );
+
+  if (!summary.notified) {
+    summary.alertAcknowledged = false;
+    return;
+  }
 
   try {
-    scored = await deps.score();
-  } finally {
-    await lock.release();
+    const acknowledged = await deps.acknowledge(pendingIds);
+    summary.alertAcknowledged =
+      acknowledged.kind === "completed" && acknowledged.response.ok === true;
+  } catch (error) {
+    summary.alertAcknowledged = false;
+    log(
+      `alert acknowledgement failed; the next run re-sends it: ${error instanceof Error ? error.message : String(error)}`,
+    );
   }
+}
+
+export async function runLabelOutliersSweep(
+  deps: SweepDeps,
+  floor: CorpusFloor = CORPUS_FLOOR,
+): Promise<LabelOutliersSummary> {
+  const summary = emptySummary();
+  const scored = await deps.score();
 
   if (!scored) {
     return { ...summary, errors: 1, ok: false, reason: "replica_missing" };
   }
 
   summary.checked = scored.run.unitsScored;
+  summary.embeddedTracks = scored.embeddedTracks;
   summary.labelsScored = scored.run.labelsScored;
   summary.tracksScored = scored.run.tracksScored;
   summary.replicaSyncedAt = scored.replicaSyncedAt;
+
+  const violation = corpusFloorViolation(scored, floor);
+
+  if (violation) {
+    return { ...summary, error: violation, errors: 1, ok: false, reason: "corpus_below_floor" };
+  }
+
+  if (scored.run.flagged.length > MAX_RECORDED_OUTLIERS) {
+    return {
+      ...summary,
+      error: `${scored.run.flagged.length} units flagged, more than the ${MAX_RECORDED_OUTLIERS} one run may record; nothing written`,
+      errors: 1,
+      flagged: scored.run.flagged.length,
+      ok: false,
+      reason: "too_many_outliers",
+    };
+  }
 
   const payload = toPayload(scored.run, scored.replicaSyncedAt);
   const recorded = await deps.record(payload);
 
   if (recorded.kind === "yielded") {
-    return {
-      ...summary,
-      reason: recorded.reason ? `admission_${recorded.reason}` : "admission_yield",
-    };
+    return { ...summary, reason: admissionReason(recorded.reason) };
   }
 
   summary.payloadStarted = true;
@@ -360,21 +430,9 @@ export async function runLabelOutliersSweep(deps: SweepDeps): Promise<LabelOutli
     return { ...summary, error: "record_label_outliers returned no result", errors: 1, ok: false };
   }
 
-  const newlyFlagged = Array.isArray(response.newlyFlagged) ? response.newlyFlagged : [];
-  const newlyFlaggedCount =
-    typeof response.newlyFlaggedCount === "number"
-      ? response.newlyFlaggedCount
-      : newlyFlagged.length;
-
   summary.flagged = response.flagged;
   summary.produced = payload.outliers.length;
-  summary.newlyFlagged = newlyFlaggedCount;
-
-  if (newlyFlaggedCount > 0) {
-    summary.notified = await deps.notify(
-      discordMessage(newlyFlagged, newlyFlaggedCount, response.flagged),
-    );
-  }
+  await alertAndAcknowledge(deps, response, summary);
 
   return summary;
 }
@@ -386,39 +444,9 @@ function replicaPath(): string {
   return join(stateDirectory, "source-replica.db");
 }
 
-function replicaLockDir(): string {
-  const home = process.env.HOME ?? "/opt/data/home";
-
-  return process.env.DEVICE_MIRROR_LOCK_DIR ?? `${home}/.device-mirror.lock`;
-}
-
-async function scoreReplica(): Promise<{
-  replicaSyncedAt: string | null;
-  run: LabelOutlierRun;
-} | null> {
-  const path = replicaPath();
-  const file = await stat(path).catch(() => undefined);
-
-  if (!file) {
-    log(`no device-mirror replica at ${path}`);
-    return null;
-  }
-
-  const database = new Database(path, { readonly: true, strict: true });
-
-  try {
-    const inputs = readReplicaInputs(database);
-    const run = scoreCatalogue({ ...inputs, groups: inputs.groups() });
-
-    return { replicaSyncedAt: new Date(file.mtimeMs).toISOString(), run };
-  } finally {
-    database.close();
-  }
-}
-
-async function postPayload(payload: RecordPayload): Promise<RecordResponse> {
-  const response = await fetch(`${API_BASE_URL}${RECORD_PATH}`, {
-    body: JSON.stringify(payload),
+async function putJson<T>(path: string, body: unknown, what: string): Promise<T> {
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    body: JSON.stringify(body),
     headers: { Authorization: `Bearer ${API_TOKEN}`, "Content-Type": "application/json" },
     method: "PUT",
     signal: AbortSignal.timeout(120_000),
@@ -426,29 +454,32 @@ async function postPayload(payload: RecordPayload): Promise<RecordResponse> {
 
   if (!response.ok) {
     throw new Error(
-      `record_label_outliers failed (${response.status}): ${(await response.text()).slice(0, 200)}`,
+      `${what} failed (${response.status}): ${(await response.text()).slice(0, 200)}`,
     );
   }
 
-  return (await response.json()) as RecordResponse;
+  return (await response.json()) as T;
 }
 
-async function recordAdmitted(
-  payload: RecordPayload,
-): Promise<
-  { kind: "recorded"; response: RecordResponse } | { kind: "yielded"; reason: string | null }
-> {
+type PhaseName = "acknowledge" | "record";
+
+const PHASES: Record<PhaseName, { path: string; what: string }> = {
+  acknowledge: { path: ACKNOWLEDGE_PATH, what: "acknowledge_label_outlier_alerts" },
+  record: { path: RECORD_PATH, what: "record_label_outliers" },
+};
+
+async function admittedPut<T>(phase: PhaseName, body: unknown): Promise<Admitted<T>> {
   const directory = await mkdtemp(join(tmpdir(), "label-outliers-"));
   const file = join(directory, "payload.json");
 
   try {
-    await writeFile(file, JSON.stringify(payload));
+    await writeFile(file, JSON.stringify(body));
     const result = await runDatabaseAdmissionPhaseAsync({
       command: [
         process.execPath,
         import.meta.filename,
         "--admission-phase",
-        "record",
+        phase,
         "--payload",
         file,
       ],
@@ -460,7 +491,7 @@ async function recordAdmitted(
       return { kind: "yielded", reason: result.yieldReason };
     }
 
-    return { kind: "recorded", response: JSON.parse(result.stdout) as RecordResponse };
+    return { kind: "completed", response: JSON.parse(result.stdout) as T };
   } finally {
     await rm(directory, { force: true, recursive: true });
   }
@@ -480,13 +511,13 @@ async function notifyDiscord(content: string): Promise<boolean> {
     });
 
     if (!response.ok) {
-      log(`discord post returned ${response.status} (best-effort, ignored)`);
+      log(`discord post returned ${response.status}; the alert stays pending for the next run`);
     }
 
     return response.ok;
   } catch (error) {
     log(
-      `discord post failed (best-effort, ignored): ${error instanceof Error ? error.message : String(error)}`,
+      `discord post failed; the alert stays pending for the next run: ${error instanceof Error ? error.message : String(error)}`,
     );
     return false;
   }
@@ -500,29 +531,34 @@ async function main(): Promise<LabelOutliersSummary> {
   }
 
   const summary = await runLabelOutliersSweep({
-    lock: () => acquireReplicaLock(replicaLockDir()),
+    acknowledge: (unitIds) => admittedPut<AcknowledgeResponse>("acknowledge", { unitIds }),
     notify: notifyDiscord,
-    record: recordAdmitted,
-    score: scoreReplica,
+    record: (payload) => admittedPut<RecordResponse>("record", payload),
+    score: () => scoreReplicaFile(replicaPath()),
   });
 
   return { ...summary, elapsedMs: Date.now() - started };
 }
 
+async function runPhase(args: string[]): Promise<void> {
+  const phase = args[1] === "acknowledge" || args[1] === "record" ? args[1] : undefined;
+  const payloadIndex = args.indexOf("--payload");
+  const payloadFile = payloadIndex >= 0 ? args[payloadIndex + 1] : undefined;
+
+  if (!phase || !payloadFile) {
+    log("an admission phase needs a known phase name and --payload");
+    process.exit(2);
+  }
+
+  const body: unknown = JSON.parse(await readFile(payloadFile, "utf8"));
+  console.log(JSON.stringify(await putJson(PHASES[phase].path, body, PHASES[phase].what)));
+}
+
 if (import.meta.main) {
   const args = process.argv.slice(2);
 
-  if (args[0] === "--admission-phase" && args[1] === "record") {
-    const payloadIndex = args.indexOf("--payload");
-    const payloadFile = payloadIndex >= 0 ? args[payloadIndex + 1] : undefined;
-
-    if (!payloadFile) {
-      log("missing --payload for the record phase");
-      process.exit(2);
-    }
-
-    const payload = JSON.parse(await readFile(payloadFile, "utf8")) as RecordPayload;
-    console.log(JSON.stringify(await postPayload(payload)));
+  if (args[0] === "--admission-phase") {
+    await runPhase(args);
   } else {
     try {
       const summary = await main();

@@ -109,6 +109,7 @@ const PUBLIC_UNAUTH_OPS = new Set<string>([
 
 const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> = {
   acknowledge_artifact_changes: "admin",
+  acknowledge_label_outlier_alerts: "admin",
   activate_artifact_consumer: "admin",
   add_artist_rule: "operator",
   add_artist_social: "operator",

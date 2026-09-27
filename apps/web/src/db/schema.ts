@@ -2705,6 +2705,7 @@ export const albums = sqliteTable(
 
 export const labelOutliers = sqliteTable("label_outliers", {
   albumId: text("album_id"),
+  alertedAt: text("alerted_at"),
   artistSupport: integer("artist_support").notNull(),
   fingerprint: text("fingerprint").notNull(),
   firstFlaggedAt: text("first_flagged_at").notNull(),

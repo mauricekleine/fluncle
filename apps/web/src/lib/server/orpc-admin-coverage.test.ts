@@ -456,6 +456,8 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
 
   "PUT /admin/label-outliers": "record_label_outliers",
 
+  "PUT /admin/label-outliers/alerts": "acknowledge_label_outlier_alerts",
+
   "PUT /admin/label-outliers/dismissed": "set_label_outliers_dismissed",
 
   "PUT /admin/labels/{id}/artists": "replace_label_artist_rules",

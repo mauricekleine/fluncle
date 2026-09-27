@@ -205,7 +205,7 @@ export const DATABASE_ADMISSION_SHAPES: Readonly<Record<string, DatabaseAdmissio
   ),
   "catalogue.label-outliers": phased(
     `${SCRIPTS}/label-outliers-sweep.ts`,
-    "Scoring reads the device-mirror's local replica with no lease; only the one replace-the-list write is admitted, so the sweep never holds the lane while it waits on the replica lock.",
+    "Scoring reads a read-only snapshot of the device-mirror's local replica with no lease and no mirror lock; the replace-the-list write and the alert acknowledgement are each admitted as their own short phase.",
     1,
   ),
   "catalogue.label-releases": wholeLifetime(
@@ -407,8 +407,9 @@ export const DATABASE_MUTATION_POLICIES = {
     evidenceSource: "apps/web/src/lib/server/label-outliers.ts",
     kind: "replay-safe-idempotent",
     rationale:
-      "The write replaces the stored list with the posted set by stable unit key and leaves dismissals untouched.",
-    reconciliation: "Read the stored outlier list before posting the same scored set again.",
+      "The write replaces the stored list with the complete posted set by stable unit key, refuses a partial or collapsed run, and leaves dismissals untouched; the acknowledgement only stamps units still unannounced.",
+    reconciliation:
+      "Read the stored outlier list and its pending alerts before posting the same scored set again.",
   },
   "catalogue.label-releases": {
     evidenceSource: "apps/web/src/lib/server/label-releases.ts",
@@ -676,6 +677,7 @@ export const TRIGGER_MUTATION_POLICY_IDS = {
   "catalogue.demand": "catalogue.demand",
   "catalogue.isrc-recovery.queue": "due-work.queue-maintenance",
   "catalogue.isrc-recovery.resolve": "catalogue.isrc-recovery",
+  "catalogue.label-outliers.acknowledge": "catalogue.label-outliers",
   "catalogue.label-outliers.record": "catalogue.label-outliers",
   "catalogue.label-releases": "catalogue.label-releases",
   "catalogue.rank": "catalogue.rank",
@@ -2151,7 +2153,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
       noDatabase(
         "catalogue.label-outliers.score",
         null,
-        "score the device-mirror source replica under the device-mirror lock",
+        "score a read-only snapshot of the device-mirror source replica without the mirror lock",
         `${SCRIPTS}/label-outliers-sweep.ts`,
         { mutationTarget: null },
       ),
@@ -2160,6 +2162,14 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         "write",
         "PUT",
         "/api/v1/admin/label-outliers",
+        `${SCRIPTS}/label-outliers-sweep.ts`,
+        { mutationTarget: "primary" },
+      ),
+      endpoint(
+        "catalogue.label-outliers.acknowledge",
+        "write",
+        "PUT",
+        "/api/v1/admin/label-outliers/alerts",
         `${SCRIPTS}/label-outliers-sweep.ts`,
         { mutationTarget: "primary" },
       ),

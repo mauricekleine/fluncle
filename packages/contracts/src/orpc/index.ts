@@ -99,6 +99,7 @@ export {
 export { GalaxyListItemSchema, galaxiesContract, getGalaxy, listGalaxies } from "./galaxies";
 export { getGraphPreview, GraphEntityKindSchema, graphContract, GraphPreviewSchema } from "./graph";
 export {
+  acknowledgeLabelOutlierAlerts,
   adminLabelOutliersContract,
   LabelOutlierItemSchema,
   LabelOutlierRunSchema,

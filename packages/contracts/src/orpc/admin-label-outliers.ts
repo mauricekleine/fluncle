@@ -34,14 +34,14 @@ export const LabelOutlierRunSchema = z
   })
   .meta({ id: "LabelOutlierRun" });
 
-export const NewlyFlaggedLabelOutlierSchema = z
+export const PendingLabelOutlierAlertSchema = z
   .object({
     albumName: z.string().nullable(),
     labelName: z.string().nullable(),
     title: z.string(),
     unitId: z.string(),
   })
-  .meta({ id: "NewlyFlaggedLabelOutlier" });
+  .meta({ id: "PendingLabelOutlierAlert" });
 
 export const recordLabelOutliers = oc
   .route({
@@ -56,6 +56,7 @@ export const recordLabelOutliers = oc
       labelsScored: z.number().int().min(0),
       outliers: z.array(RecordedLabelOutlierSchema).max(MAX_RECORDED_LABEL_OUTLIERS),
       replicaSyncedAt: z.string().nullable(),
+      totalFlagged: z.number().int().min(0),
       tracksScored: z.number().int().min(0),
       unitsScored: z.number().int().min(0),
     }),
@@ -63,12 +64,27 @@ export const recordLabelOutliers = oc
   .output(
     z.object({
       flagged: z.number().int(),
-      newlyFlagged: z.array(NewlyFlaggedLabelOutlierSchema),
-      newlyFlaggedCount: z.number().int(),
       ok: z.literal(true),
+      pendingAlertIds: z.array(z.string()),
+      pendingAlerts: z.array(PendingLabelOutlierAlertSchema),
       removed: z.number().int(),
     }),
   );
+
+export const acknowledgeLabelOutlierAlerts = oc
+  .route({
+    method: "PUT",
+    operationId: "acknowledgeLabelOutlierAlerts",
+    path: "/admin/label-outliers/alerts",
+    summary: "Mark flagged label outliers as announced, once their Discord summary has landed",
+    tags: ["Admin"],
+  })
+  .input(
+    z.object({
+      unitIds: z.array(z.string().min(1).max(256)).min(1).max(MAX_RECORDED_LABEL_OUTLIERS),
+    }),
+  )
+  .output(z.object({ acknowledged: z.number().int(), ok: z.literal(true) }));
 
 export const LabelOutlierTrackSchema = z
   .object({
@@ -129,6 +145,7 @@ export const setLabelOutliersDismissed = oc
   .output(z.object({ changed: z.number().int(), ok: z.literal(true) }));
 
 export const adminLabelOutliersContract = {
+  acknowledge_label_outlier_alerts: acknowledgeLabelOutlierAlerts,
   list_label_outliers: listLabelOutliers,
   record_label_outliers: recordLabelOutliers,
   set_label_outliers_dismissed: setLabelOutliersDismissed,

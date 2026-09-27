@@ -1,17 +1,21 @@
 import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, utimesSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { EMBEDDING_DIMENSIONS, type LabelOutlierRun, scoreCatalogue } from "./label-outliers";
 import {
-  acquireReplicaLock,
+  type CorpusFloor,
   discordMessage,
+  MAX_RECORDED_OUTLIERS,
+  openReplicaSnapshot,
   readEmbedding,
   readReplicaInputs,
   type RecordPayload,
   runLabelOutliersSweep,
+  scoreReplicaFile,
+  type ScoredReplica,
   type SweepDeps,
   toPayload,
 } from "./label-outliers-sweep";
@@ -31,6 +35,8 @@ afterEach(() => {
   }
 });
 
+const TEST_FLOOR: CorpusFloor = { minTracks: 1, minUsableFraction: 0.95 };
+
 function blobToward(axis: number, jitter: number): Uint8Array {
   const vector = new Float32Array(EMBEDDING_DIMENSIONS);
   vector[axis] = 1;
@@ -39,8 +45,7 @@ function blobToward(axis: number, jitter: number): Uint8Array {
   return new Uint8Array(vector.buffer);
 }
 
-function replica(): Database {
-  const database = new Database(":memory:", { strict: true });
+function seedReplica(database: Database): void {
   database.run(`create table tracks (
     track_id text primary key, label_id text, album_id text,
     is_catalogue integer not null default 1, has_embedding integer not null default 0)`);
@@ -76,8 +81,23 @@ function replica(): Database {
   insertEmbedding.run("loose_1", blobToward(0, 0.02));
   database.run("insert into albums (id, discogs_styles) values ('alb_3', '[\"Jungle\"]')");
   database.run("insert into track_artists (track_id, artist_id) values ('xmas_1', 'art_bing')");
+}
+
+function replica(): Database {
+  const database = new Database(":memory:", { strict: true });
+  seedReplica(database);
 
   return database;
+}
+
+function replicaFile(): string {
+  const path = join(scratchDir(), "source-replica.db");
+  const database = new Database(path, { create: true, strict: true });
+  database.run("PRAGMA journal_mode = WAL");
+  seedReplica(database);
+  database.close();
+
+  return path;
 }
 
 describe("the replica read", () => {
@@ -92,6 +112,7 @@ describe("the replica read", () => {
         [null, 1],
       ]),
     );
+    expect(inputs.embeddedTracks).toBe(23);
     expect([...inputs.dnbTaggedAlbumIds]).toEqual(["alb_3"]);
     expect(inputs.artistsByTrack.get("xmas_1")).toEqual(["art_bing"]);
 
@@ -110,40 +131,71 @@ describe("the replica read", () => {
     expect(readEmbedding(new Uint8Array(12))).toBeNull();
     expect(readEmbedding("not a blob")).toBeNull();
   });
-});
 
-describe("the replica lock", () => {
-  test("waits out a held lock and gives up at the deadline", async () => {
-    const lockDir = join(scratchDir(), ".device-mirror.lock");
-    mkdirSync(lockDir);
-    let clock = Date.now();
+  test("a vector with a non-finite or all-zero component set is unusable", () => {
+    const nan = new Float32Array(EMBEDDING_DIMENSIONS);
+    nan[0] = Number.NaN;
+    const infinite = new Float32Array(EMBEDDING_DIMENSIONS);
+    infinite[3] = Number.POSITIVE_INFINITY;
 
-    const lock = await acquireReplicaLock(lockDir, {
-      now: () => clock,
-      pollMs: 1000,
-      sleep: async (ms) => {
-        clock += ms;
-      },
-      waitMs: 5000,
-    });
-
-    expect(lock).toBeNull();
-  });
-
-  test("takes over a lock nobody has touched for longer than the stale window", async () => {
-    const lockDir = join(scratchDir(), ".device-mirror.lock");
-    mkdirSync(lockDir);
-    const old = new Date(Date.now() - 60 * 60 * 1000);
-    utimesSync(lockDir, old, old);
-
-    const lock = await acquireReplicaLock(lockDir, { waitMs: 0 });
-
-    expect(lock).not.toBeNull();
-    await lock?.release();
+    expect(readEmbedding(new Uint8Array(nan.buffer))).toBeNull();
+    expect(readEmbedding(new Uint8Array(infinite.buffer))).toBeNull();
+    expect(readEmbedding(new Uint8Array(EMBEDDING_DIMENSIONS * 4))).toBeNull();
   });
 });
 
-function run(outliers: number): LabelOutlierRun {
+describe("the device mirror always wins the replica", () => {
+  test("scoring runs while the device mirror holds its lock and never touches that lock", async () => {
+    const path = replicaFile();
+    const lockDir = join(scratchDir(), ".device-mirror.lock");
+    mkdirSync(lockDir);
+    const heldSince = statSync(lockDir).mtimeMs;
+
+    const scored = await scoreReplicaFile(path);
+
+    expect(scored?.run.flagged.map((unit) => unit.unitId)).toEqual(["album:alb_xmas:lbl_dnb"]);
+    expect(existsSync(lockDir)).toBe(true);
+    expect(statSync(lockDir).mtimeMs).toBe(heldSince);
+  });
+
+  test("scoring leaves the device mirror's lock free to take", async () => {
+    const path = replicaFile();
+    const lockDir = join(scratchDir(), ".device-mirror.lock");
+
+    await scoreReplicaFile(path);
+
+    expect(existsSync(lockDir)).toBe(false);
+    mkdirSync(lockDir);
+    expect(existsSync(lockDir)).toBe(true);
+  });
+
+  test("the mirror's sync and checkpoint commit while a scoring snapshot is open, and the snapshot stays consistent", () => {
+    const path = replicaFile();
+    const snapshot = openReplicaSnapshot(path);
+    const mirror = new Database(path, { strict: true });
+
+    mirror.run(
+      "insert into tracks (track_id, label_id, album_id, is_catalogue, has_embedding) values ('late_1', 'lbl_dnb', 'alb_late', 1, 1)",
+    );
+    mirror.run("insert into track_embeddings (track_id, embedding_blob) values (?, ?)", [
+      "late_1",
+      blobToward(0, 0.03),
+    ]);
+    mirror.query("PRAGMA wal_checkpoint(TRUNCATE)").get();
+
+    const tracks = [...snapshot.inputs.groups()].flatMap((group) => group.tracks);
+
+    expect(tracks.map((track) => track.trackId)).not.toContain("late_1");
+    expect(tracks).toHaveLength(23);
+    snapshot.close();
+
+    const count = mirror.query<{ n: number }, []>("select count(*) as n from tracks").get();
+    expect(count?.n).toBe(25);
+    mirror.close();
+  });
+});
+
+function run(outliers: number, tracksScored = 40): LabelOutlierRun {
   return {
     flagged: Array.from({ length: outliers }, (_, index) => ({
       albumId: `alb_${index}`,
@@ -160,19 +212,36 @@ function run(outliers: number): LabelOutlierRun {
       z: -6.123456,
     })),
     labelsScored: 3,
-    tracksScored: 40,
+    tracksScored,
     unitsScored: 20,
   };
 }
 
-function deps(
-  overrides: Partial<SweepDeps> = {},
-): SweepDeps & { notified: string[]; recorded: RecordPayload[] } {
+function scored(outliers: number, tracksScored = 40, embeddedTracks = 40): ScoredReplica {
+  return {
+    embeddedTracks,
+    replicaSyncedAt: "2026-09-27T03:00:00.000Z",
+    run: run(outliers, tracksScored),
+  };
+}
+
+type FakeDeps = SweepDeps & {
+  acknowledged: string[][];
+  notified: string[];
+  recorded: RecordPayload[];
+};
+
+function deps(overrides: Partial<SweepDeps> = {}): FakeDeps {
   const notified: string[] = [];
   const recorded: RecordPayload[] = [];
+  const acknowledged: string[][] = [];
 
   return {
-    lock: async () => ({ release: async () => {} }),
+    acknowledge: async (unitIds) => {
+      acknowledged.push(unitIds);
+      return { kind: "completed", response: { acknowledged: unitIds.length, ok: true } };
+    },
+    acknowledged,
     notified,
     notify: async (message) => {
       notified.push(message);
@@ -181,31 +250,32 @@ function deps(
     record: async (payload) => {
       recorded.push(payload);
       return {
-        kind: "recorded",
-        response: { flagged: payload.outliers.length, newlyFlagged: [], ok: true },
+        kind: "completed",
+        response: { flagged: payload.outliers.length, ok: true, pendingAlertIds: [] },
       };
     },
     recorded,
-    score: async () => ({ replicaSyncedAt: "2026-09-27T03:00:00.000Z", run: run(2) }),
+    score: async () => scored(2),
     ...overrides,
   };
 }
 
 describe("the nightly sweep", () => {
-  test("records the flagged set and stays quiet when nothing new appeared", async () => {
+  test("records the flagged set and stays quiet when nothing is pending", async () => {
     const fake = deps();
-    const summary = await runLabelOutliersSweep(fake);
+    const summary = await runLabelOutliersSweep(fake, TEST_FLOOR);
 
     expect(summary).toMatchObject({
       checked: 20,
       flagged: 2,
-      newlyFlagged: 0,
       notified: false,
       ok: true,
       payloadStarted: true,
+      pendingAlerts: 0,
       produced: 2,
     });
     expect(fake.notified).toEqual([]);
+    expect(fake.acknowledged).toEqual([]);
     expect(fake.recorded[0]?.outliers[0]).toMatchObject({
       referenceMedian: 0.8712,
       score: 0.4123,
@@ -213,64 +283,109 @@ describe("the nightly sweep", () => {
     });
   });
 
-  test("posts one summary when new outliers land", async () => {
+  test("alerts on every pending unit and acknowledges them only after the post landed", async () => {
     const fake = deps({
       record: async () => ({
-        kind: "recorded",
+        kind: "completed",
         response: {
           flagged: 5,
-          newlyFlagged: [
+          ok: true,
+          pendingAlertIds: ["u1", "u2"],
+          pendingAlerts: [
             { albumName: "Merry Christmas", labelName: "Penny Black", title: "White Christmas" },
           ],
-          ok: true,
         },
       }),
     });
-    const summary = await runLabelOutliersSweep(fake);
+    const summary = await runLabelOutliersSweep(fake, TEST_FLOOR);
 
-    expect(summary.newlyFlagged).toBe(1);
-    expect(summary.notified).toBe(true);
+    expect(summary).toMatchObject({ alertAcknowledged: true, notified: true, pendingAlerts: 2 });
     expect(fake.notified).toHaveLength(1);
     expect(fake.notified[0]).toContain("Merry Christmas on Penny Black");
+    expect(fake.notified[0]).toContain("2 new to review");
+    expect(fake.acknowledged).toEqual([["u1", "u2"]]);
   });
 
-  test("a busy replica skips the payload so the retry slot runs it", async () => {
-    const summary = await runLabelOutliersSweep(deps({ lock: async () => null }));
+  test("a failed Discord post leaves the alert pending instead of acknowledging it", async () => {
+    const fake = deps({
+      notify: async () => false,
+      record: async () => ({
+        kind: "completed",
+        response: { flagged: 1, ok: true, pendingAlertIds: ["u1"], pendingAlerts: [] },
+      }),
+    });
+    const summary = await runLabelOutliersSweep(fake, TEST_FLOOR);
 
-    expect(summary).toMatchObject({ ok: true, payloadStarted: false, reason: "replica_busy" });
+    expect(summary).toMatchObject({ alertAcknowledged: false, notified: false, ok: true });
+    expect(fake.acknowledged).toEqual([]);
   });
 
   test("a missing replica is a failure the operator sees", async () => {
-    const summary = await runLabelOutliersSweep(deps({ score: async () => null }));
+    const summary = await runLabelOutliersSweep(deps({ score: async () => null }), TEST_FLOOR);
 
     expect(summary).toMatchObject({ ok: false, payloadStarted: false, reason: "replica_missing" });
   });
 
-  test("the replica lock is released even when scoring throws", async () => {
-    let released = false;
+  test("a corpus below the absolute floor fails loudly and writes nothing", async () => {
+    const fake = deps({ score: async () => scored(0, 900, 900) });
+    const summary = await runLabelOutliersSweep(fake, { minTracks: 1000, minUsableFraction: 0.95 });
+
+    expect(summary).toMatchObject({
+      ok: false,
+      payloadStarted: false,
+      reason: "corpus_below_floor",
+    });
+    expect(fake.recorded).toEqual([]);
+  });
+
+  test("a replica whose vectors are mostly unusable fails loudly and writes nothing", async () => {
+    const fake = deps({ score: async () => scored(0, 0, 50_000) });
+    const summary = await runLabelOutliersSweep(fake);
+
+    expect(summary).toMatchObject({ ok: false, reason: "corpus_below_floor" });
+    expect(fake.recorded).toEqual([]);
+  });
+
+  test("a replica with a tenth of its vectors unusable fails even above the absolute floor", async () => {
+    const fake = deps({ score: async () => scored(2, 45_000, 50_000) });
+    const summary = await runLabelOutliersSweep(fake);
+
+    expect(summary).toMatchObject({ ok: false, reason: "corpus_below_floor" });
+    expect(fake.recorded).toEqual([]);
+  });
+
+  test("more flags than one run may record is a failure that writes nothing, never a truncated list", async () => {
+    const fake = deps({ score: async () => scored(MAX_RECORDED_OUTLIERS + 1) });
+    const summary = await runLabelOutliersSweep(fake, TEST_FLOOR);
+
+    expect(summary).toMatchObject({
+      ok: false,
+      payloadStarted: false,
+      reason: "too_many_outliers",
+    });
+    expect(fake.recorded).toEqual([]);
+  });
+
+  test("scoring that throws writes nothing", async () => {
     const fake = deps({
-      lock: async () => ({
-        release: async () => {
-          released = true;
-        },
-      }),
       score: async () => {
         throw new Error("corrupt replica");
       },
     });
 
-    const outcome = await runLabelOutliersSweep(fake).then(
+    const outcome = await runLabelOutliersSweep(fake, TEST_FLOOR).then(
       () => "resolved",
       (error: unknown) => (error instanceof Error ? error.message : String(error)),
     );
 
     expect(outcome).toBe("corrupt replica");
-    expect(released).toBe(true);
+    expect(fake.recorded).toEqual([]);
   });
 
   test("an admission yield leaves the payload unstarted", async () => {
     const summary = await runLabelOutliersSweep(
       deps({ record: async () => ({ kind: "yielded", reason: "queue" }) }),
+      TEST_FLOOR,
     );
 
     expect(summary).toMatchObject({ ok: true, payloadStarted: false, reason: "admission_queue" });
@@ -278,7 +393,8 @@ describe("the nightly sweep", () => {
 
   test("a record response without a count is a failure", async () => {
     const summary = await runLabelOutliersSweep(
-      deps({ record: async () => ({ kind: "recorded", response: { ok: true } }) }),
+      deps({ record: async () => ({ kind: "completed", response: { ok: true } }) }),
+      TEST_FLOOR,
     );
 
     expect(summary).toMatchObject({ errors: 1, ok: false, payloadStarted: true });
@@ -286,13 +402,14 @@ describe("the nightly sweep", () => {
 });
 
 describe("the payload and the message", () => {
-  test("the payload caps the recorded list and keeps the run counts", () => {
+  test("the payload carries every flagged unit and states the total it was built from", () => {
     const payload = toPayload(run(2500), null);
 
-    expect(payload.outliers).toHaveLength(2000);
+    expect(payload.outliers).toHaveLength(2500);
     expect(payload).toMatchObject({
       labelsScored: 3,
       replicaSyncedAt: null,
+      totalFlagged: 2500,
       tracksScored: 40,
       unitsScored: 20,
     });
