@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { join } from "node:path";
 
 export const DATABASE_ADMISSION_PHASE_YIELD_EXIT = 75;
@@ -42,6 +42,13 @@ export function parseAdmissionYieldReason(stderr: string): string | null {
 }
 
 let lastYieldReason: string | null = null;
+const activePhaseStops = new Set<() => Promise<void>>();
+let admissionPhasesStopping = false;
+
+export async function stopDatabaseAdmissionPhases(): Promise<void> {
+  admissionPhasesStopping = true;
+  await Promise.all([...activePhaseStops].map((stop) => stop()));
+}
 
 type DatabaseAdmissionPhaseInput = Readonly<{
   command: readonly string[];
@@ -95,6 +102,102 @@ export function runDatabaseAdmissionPhase(
     }
 
     return { attempts: attempt, kind: "completed", stdout: result.stdout ?? "" };
+  }
+
+  return { attempts: maximumAttempts, kind: "yielded", yieldReason: lastYieldReason };
+}
+
+export async function runDatabaseAdmissionPhaseAsync(
+  input: DatabaseAdmissionPhaseInput,
+): Promise<DatabaseAdmissionPhaseResult> {
+  if (input.command.length === 0) {
+    throw new Error("database admission phase command is empty");
+  }
+
+  const maximumAttempts = input.yieldRetries + 1;
+  lastYieldReason = null;
+
+  for (let attempt = 1; attempt <= maximumAttempts; attempt += 1) {
+    if (admissionPhasesStopping) {
+      throw new Error("database admission phase stopped for shutdown");
+    }
+    const result = await new Promise<{ status: number | null; stderr: string; stdout: string }>(
+      (resolve, reject) => {
+        const child = spawn("bash", [phaseRunner(), "phase", input.owner, "--", ...input.command], {
+          stdio: ["ignore", "pipe", "pipe"],
+        });
+        let resolveClosed: (() => void) | undefined;
+        const closed = new Promise<void>((resolve) => {
+          resolveClosed = resolve;
+        });
+        const stop = async () => {
+          child.kill("SIGTERM");
+          await closed;
+        };
+        activePhaseStops.add(stop);
+        const signals = ["SIGTERM", "SIGINT", "SIGHUP"] as const;
+        const forwardSignal = (signal: NodeJS.Signals) => child.kill(signal);
+        const listeners = signals.map((signal) => {
+          const listener = () => forwardSignal(signal);
+          process.on(signal, listener);
+          return { listener, signal };
+        });
+        let stderr = "";
+        let stdout = "";
+        let outputTooLarge = false;
+
+        child.stdout.setEncoding("utf8");
+        child.stderr.setEncoding("utf8");
+        child.stdout.on("data", (chunk: string) => {
+          if (outputTooLarge) {
+            return;
+          }
+          stdout += chunk;
+          if (stdout.length > 64 * 1024 * 1024) {
+            outputTooLarge = true;
+            child.kill("SIGTERM");
+          }
+        });
+        child.stderr.on("data", (chunk: string) => {
+          process.stderr.write(chunk);
+          if (outputTooLarge) {
+            return;
+          }
+          stderr += chunk;
+          if (stderr.length > 64 * 1024 * 1024) {
+            outputTooLarge = true;
+            child.kill("SIGTERM");
+          }
+        });
+        child.once("error", (error) => {
+          reject(new Error(`failed to spawn database admission runner: ${error.message}`));
+        });
+        child.once("close", (status) => {
+          activePhaseStops.delete(stop);
+          resolveClosed?.();
+          for (const { listener, signal } of listeners) {
+            process.off(signal, listener);
+          }
+          if (outputTooLarge) {
+            reject(new Error("database admission phase output exceeded 64 MiB"));
+            return;
+          }
+          resolve({ status, stderr, stdout });
+        });
+      },
+    );
+
+    if (result.status === DATABASE_ADMISSION_PHASE_YIELD_EXIT) {
+      lastYieldReason = parseAdmissionYieldReason(result.stderr);
+      if (attempt < maximumAttempts) {
+        continue;
+      }
+      return { attempts: attempt, kind: "yielded", yieldReason: lastYieldReason };
+    }
+    if (result.status !== 0) {
+      throw new Error(`database admission phase exited ${result.status ?? "without a status"}`);
+    }
+    return { attempts: attempt, kind: "completed", stdout: result.stdout };
   }
 
   return { attempts: maximumAttempts, kind: "yielded", yieldReason: lastYieldReason };

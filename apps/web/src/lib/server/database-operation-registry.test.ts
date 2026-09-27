@@ -1114,6 +1114,11 @@ describe("database operation registry", () => {
     expect(operation?.accessClass).toBe("heavy-read");
     expect(operation?.mutationTarget).toBe("derived-remote");
     expect(operation?.mutationDisposition.kind).toBe("replay-safe-idempotent");
+    expect(operation?.admissionShape).toMatchObject({
+      phaseSource: `${SCRIPTS}/device-mirror.ts`,
+      shape: "phased",
+      yieldRetries: 0,
+    });
     expect(resolveDatabaseOperationOwner("fluncle-device-mirror")?.accessClass).toBe("heavy-read");
     expect(source).toContain('const sourceUrl = requiredEnv("TURSO_DATABASE_URL")');
     expect(source).toContain('const targetUrl = requiredEnv("DEVICE_TURSO_DATABASE_URL")');
