@@ -223,8 +223,10 @@ export const DATABASE_ADMISSION_SHAPES: Readonly<Record<string, DatabaseAdmissio
   "database.backup": wholeLifetime(
     "The heavy database export must retain one read lease for its complete consistent snapshot.",
   ),
-  "device.mirror": wholeLifetime(
-    "The continuous source scan and local mirror transaction form one consistency window.",
+  "device.mirror": phased(
+    "docs/agents/hermes/scripts/device-mirror.ts",
+    "The primary source sync takes one admitted phase; derived-target reads and publication use a separate database without the primary coordinator lease.",
+    0,
   ),
   "email.follow-digest": wholeLifetime(
     "The bounded send walks recipients and writes delivery state after the external email call.",

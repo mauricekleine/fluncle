@@ -18,6 +18,10 @@ import {
   deviceDbClosureChecksSql,
   quoteDeviceDbIdentifier,
 } from "./device-db-derivation";
+import {
+  runDatabaseAdmissionPhaseAsync,
+  stopDatabaseAdmissionPhases,
+} from "./database-admission-phase";
 
 export type DeviceSqlValue = ArrayBuffer | ArrayBufferView | bigint | number | string | null;
 export type DeviceRow = Record<string, DeviceSqlValue>;
@@ -178,6 +182,17 @@ const STAGE_CHECKPOINT_TABLE = "_device_mirror_stage_checkpoint";
 const REQUIRED_SOURCE_TABLES = [...DEVICE_SOURCE_TABLES, "track_embeddings"] as const;
 
 const log = (message: string) => console.error(`[device-mirror] ${message}`);
+
+export const DEVICE_MIRROR_WINDOW_YIELD_RETRIES = 0;
+
+export class DeviceMirrorAdmissionYield extends Error {
+  readonly yieldReason: string | null;
+
+  constructor(yieldReason: string | null) {
+    super("Device mirror database admission yielded");
+    this.yieldReason = yieldReason;
+  }
+}
 
 function bytesOf(value: ArrayBuffer | ArrayBufferView): Uint8Array {
   return value instanceof ArrayBuffer
@@ -577,6 +592,24 @@ export class LibsqlHttpClient implements DeviceTargetClient {
   }
 }
 
+async function admissionWindow(command: readonly string[]): Promise<string> {
+  const result = await runDatabaseAdmissionPhaseAsync({
+    command,
+    owner: "fluncle-device-mirror",
+    yieldRetries: DEVICE_MIRROR_WINDOW_YIELD_RETRIES,
+  });
+
+  if (result.kind === "yielded") {
+    throw new DeviceMirrorAdmissionYield(result.yieldReason);
+  }
+
+  return result.stdout;
+}
+
+export function deviceMirrorTargetClient(url: string, authToken: string): DeviceTargetClient {
+  return new LibsqlHttpClient(url, authToken);
+}
+
 function requiredEnv(name: string): string {
   const value = process.env[name]?.trim();
 
@@ -666,6 +699,40 @@ function checkpointReplica(path: string): void {
   }
 }
 
+function isReplicaCorruption(error: unknown): boolean {
+  const message =
+    error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+
+  return ["corrupt", "metadata", "not a database", "sqlite_notadb"].some((word) =>
+    message.includes(word),
+  );
+}
+
+export async function prepareSourceReplica(
+  path: string,
+  forceRebuild: boolean,
+): Promise<string | null> {
+  const replicaFile = await stat(path).catch(() => undefined);
+  let rebuildCause = forceRebuild ? "full_rebuild" : null;
+
+  if (!replicaFile && !rebuildCause) {
+    rebuildCause = "missing";
+  }
+  if (replicaFile && !rebuildCause) {
+    rebuildCause = validateReplicaFile(path);
+  }
+  if (rebuildCause) {
+    await removeReplicaFiles(path);
+  }
+
+  return rebuildCause;
+}
+
+export async function finalizeSourceReplica(path: string): Promise<void> {
+  checkpointReplica(path);
+  await protectReplicaFiles(path);
+}
+
 export async function syncSourceReplica(
   options: {
     authToken: string;
@@ -676,18 +743,7 @@ export async function syncSourceReplica(
   factory: (config: Config) => Pick<Client, "close" | "sync"> = createClient,
 ): Promise<ReplicaSyncResult> {
   const startedAt = performance.now();
-  const replicaFile = await stat(options.path).catch(() => undefined);
-  let rebuildCause = options.forceRebuild ? "full_rebuild" : null;
-
-  if (!replicaFile && !rebuildCause) {
-    rebuildCause = "missing";
-  }
-  if (replicaFile && !rebuildCause) {
-    rebuildCause = validateReplicaFile(options.path);
-  }
-  if (rebuildCause) {
-    await removeReplicaFiles(options.path);
-  }
+  let rebuildCause = await prepareSourceReplica(options.path, options.forceRebuild ?? false);
 
   const config: Config = {
     authToken: options.authToken,
@@ -709,15 +765,7 @@ export async function syncSourceReplica(
   try {
     sync = await client.sync();
   } catch (error) {
-    const message =
-      error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
-
-    if (
-      message.includes("corrupt") ||
-      message.includes("metadata") ||
-      message.includes("not a database") ||
-      message.includes("sqlite_notadb")
-    ) {
+    if (isReplicaCorruption(error)) {
       await removeReplicaFiles(options.path);
     }
 
@@ -726,8 +774,7 @@ export async function syncSourceReplica(
     client.close();
   }
 
-  checkpointReplica(options.path);
-  await protectReplicaFiles(options.path);
+  await finalizeSourceReplica(options.path);
 
   return {
     durationMs: Math.round(performance.now() - startedAt),
@@ -735,6 +782,126 @@ export async function syncSourceReplica(
     framesSynced: sync?.frames_synced ?? 0,
     rebuildCause,
   };
+}
+
+type RemoteReplicaSync =
+  | { kind: "metadata-corrupt" }
+  | { corrupt: boolean; error: string; kind: "failed" }
+  | { frameNo: number | null; framesSynced: number; kind: "synced" };
+
+async function syncSourceReplicaRemote(
+  path: string,
+  factory: (config: Config) => Pick<Client, "close" | "sync"> = createClient,
+): Promise<RemoteReplicaSync> {
+  let client: Pick<Client, "close" | "sync">;
+
+  try {
+    client = factory({
+      authToken: requiredEnv("TURSO_AUTH_TOKEN"),
+      syncUrl: requiredEnv("TURSO_DATABASE_URL"),
+      url: `file:${path}`,
+    });
+  } catch {
+    return { kind: "metadata-corrupt" };
+  }
+
+  try {
+    const sync = await client.sync();
+    return {
+      frameNo: sync?.frame_no ?? null,
+      framesSynced: sync?.frames_synced ?? 0,
+      kind: "synced",
+    };
+  } catch (error) {
+    return {
+      corrupt: isReplicaCorruption(error),
+      error: error instanceof Error ? error.message : String(error),
+      kind: "failed",
+    };
+  } finally {
+    client.close();
+  }
+}
+
+type ReplicaLocalWork = {
+  finalize: typeof finalizeSourceReplica;
+  prepare: typeof prepareSourceReplica;
+};
+
+export async function syncSourceReplicaAdmitted(
+  path: string,
+  forceRebuild: boolean,
+  factory?: (config: Config) => Pick<Client, "close" | "sync">,
+  localWork: ReplicaLocalWork = {
+    finalize: finalizeSourceReplica,
+    prepare: prepareSourceReplica,
+  },
+): Promise<ReplicaSyncResult> {
+  if (process.env.FLUNCLE_ADMISSION_RUNNER_PID) {
+    return syncSourceReplica(
+      {
+        authToken: requiredEnv("TURSO_AUTH_TOKEN"),
+        forceRebuild,
+        path,
+        syncUrl: requiredEnv("TURSO_DATABASE_URL"),
+      },
+      factory,
+    );
+  }
+
+  const startedAt = performance.now();
+  let rebuildCause = await localWork.prepare(path, forceRebuild);
+
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const stdout = await admissionWindow([
+      process.execPath,
+      import.meta.filename,
+      "--admission-phase",
+      "source-sync",
+      "--replica-path",
+      path,
+    ]);
+    let envelope: RemoteReplicaSync;
+
+    try {
+      envelope = JSON.parse(stdout) as RemoteReplicaSync;
+    } catch {
+      throw new Error("Device mirror remote source sync returned an invalid envelope");
+    }
+
+    if (envelope.kind === "metadata-corrupt" && attempt === 0) {
+      rebuildCause = rebuildCause ?? "replica_metadata_corrupt";
+      await removeReplicaFiles(path);
+      continue;
+    }
+    if (envelope.kind === "metadata-corrupt") {
+      throw new Error("Device mirror source replica metadata stayed corrupt after rebuild");
+    }
+    if (envelope.kind === "failed") {
+      if (envelope.corrupt) {
+        await removeReplicaFiles(path);
+      }
+      throw new Error(envelope.error);
+    }
+    if (
+      envelope.kind !== "synced" ||
+      !Number.isSafeInteger(envelope.framesSynced) ||
+      envelope.framesSynced < 0
+    ) {
+      throw new Error("Device mirror remote source sync returned no frame count");
+    }
+
+    await localWork.finalize(path);
+
+    return {
+      durationMs: Math.round(performance.now() - startedAt),
+      frameNo: envelope.frameNo,
+      framesSynced: envelope.framesSynced,
+      rebuildCause,
+    };
+  }
+
+  throw new Error("Device mirror source replica sync retry exhausted");
 }
 
 function defaultDeriverPath(): string {
@@ -1967,6 +2134,7 @@ async function acquireLock(): Promise<null | (() => Promise<void>)> {
   const home = process.env.HOME ?? "/opt/data/home";
   const lockDir = process.env.DEVICE_MIRROR_LOCK_DIR ?? `${home}/.device-mirror.lock`;
   const staleMs = positiveIntegerEnv("DEVICE_MIRROR_LOCK_STALE_MS", DEFAULT_LOCK_STALE_MS);
+  const heartbeatMs = positiveIntegerEnv("DEVICE_MIRROR_LOCK_HEARTBEAT_MS", LOCK_HEARTBEAT_MS);
 
   try {
     await mkdir(lockDir);
@@ -1988,7 +2156,7 @@ async function acquireLock(): Promise<null | (() => Promise<void>)> {
   const heartbeat = setInterval(() => {
     const now = new Date();
     utimes(lockDir, now, now).catch(() => {});
-  }, LOCK_HEARTBEAT_MS);
+  }, heartbeatMs);
   heartbeat.unref?.();
 
   let released = false;
@@ -2009,9 +2177,11 @@ async function acquireLock(): Promise<null | (() => Promise<void>)> {
 
   for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"] as const) {
     process.once(signal, () => {
-      void release().finally(() => {
-        process.exit(143);
-      });
+      void stopDatabaseAdmissionPhases().finally(() =>
+        release().finally(() => {
+          process.exit(143);
+        }),
+      );
     });
   }
 
@@ -2019,6 +2189,8 @@ async function acquireLock(): Promise<null | (() => Promise<void>)> {
 }
 
 type MirrorSummary = {
+  admissionOutcome?: "phase-yielded";
+  admissionYieldReason?: string | null;
   artifactBytes: number | null;
   artifactVersion: number;
   checked: number | null;
@@ -2038,6 +2210,7 @@ type MirrorSummary = {
   produced: number | null;
   publishPath: DevicePublishPath | null;
   queueDepth: number | null;
+  reason?: "database_admission";
   rebuildCause: string | null;
   rewriteReason: DeviceRewriteReason | null;
   rebuildDurationMs: number | null;
@@ -2045,6 +2218,7 @@ type MirrorSummary = {
   replicaFramesSynced: number | null;
   replicaLagFrames: number | null;
   rowCounts: null | Record<DeviceSourceTable, number>;
+  throttled?: boolean;
   validation: "failed" | "locked" | "paused" | "verified";
 };
 
@@ -2080,7 +2254,16 @@ function emptySummary(): MirrorSummary {
   };
 }
 
-export async function main(): Promise<MirrorSummary> {
+export type DeviceMirrorRuntime = {
+  createTarget?: () => DeviceTargetClient;
+  derive?: typeof runDeriver;
+  syncSource?: (
+    path: string,
+    forceRebuild: boolean,
+  ) => Promise<ReplicaSyncResult> | ReplicaSyncResult;
+};
+
+export async function main(runtime: DeviceMirrorRuntime = {}): Promise<MirrorSummary> {
   const summary = emptySummary();
   let releaseLock: null | (() => Promise<void>) = null;
 
@@ -2101,7 +2284,7 @@ export async function main(): Promise<MirrorSummary> {
     }
 
     const sourceUrl = requiredEnv("TURSO_DATABASE_URL");
-    const sourceToken = requiredEnv("TURSO_AUTH_TOKEN");
+    requiredEnv("TURSO_AUTH_TOKEN");
     const targetUrl = requiredEnv("DEVICE_TURSO_DATABASE_URL");
     const targetToken = requiredEnv("DEVICE_TURSO_AUTH_TOKEN");
 
@@ -2109,7 +2292,7 @@ export async function main(): Promise<MirrorSummary> {
       throw new Error("Source and target database URLs must be different");
     }
 
-    const target = new LibsqlHttpClient(targetUrl, targetToken);
+    const target = runtime.createTarget?.() ?? deviceMirrorTargetClient(targetUrl, targetToken);
     const publishIntervalMs = positiveIntegerEnv(
       "DEVICE_MIRROR_PUBLISH_INTERVAL_MS",
       DEFAULT_PUBLISH_INTERVAL_MS,
@@ -2145,19 +2328,17 @@ export async function main(): Promise<MirrorSummary> {
     await chmod(stateDirectory, 0o700);
 
     const oldGenerationBytes = (await stat(generationPath).catch(() => undefined))?.size ?? 0;
-    const sync = await syncSourceReplica({
-      authToken: sourceToken,
-      forceRebuild: process.env.DEVICE_MIRROR_FULL_REBUILD === "true",
-      path: replicaPath,
-      syncUrl: sourceUrl,
-    });
+    const sync = await (runtime.syncSource ?? syncSourceReplicaAdmitted)(
+      replicaPath,
+      process.env.DEVICE_MIRROR_FULL_REBUILD === "true",
+    );
     summary.replicaFrame = sync.frameNo;
     summary.replicaFramesSynced = sync.framesSynced;
     summary.replicaLagFrames = calculateReplicaLagFrames(sync);
     summary.rebuildCause = sync.rebuildCause;
     summary.rebuildDurationMs = sync.rebuildCause ? sync.durationMs : 0;
 
-    const derivation = await runDeriver(replicaPath, generationPath);
+    const derivation = await (runtime.derive ?? runDeriver)(replicaPath, generationPath);
     const generation = inspectDeviceGeneration(generationPath);
     const replicaBytes = (await stat(replicaPath)).size;
     summary.localPeakDiskBytes = replicaBytes + oldGenerationBytes + derivation.preVacuumBytes;
@@ -2197,11 +2378,23 @@ export async function main(): Promise<MirrorSummary> {
     summary.ok = true;
     summary.validation = "verified";
   } catch (error) {
-    summary.errors = 1;
-    summary.error = (error instanceof Error ? error.message : String(error)).slice(0, 500);
-    summary.ok = false;
-    summary.validation = "failed";
-    log(summary.error);
+    if (error instanceof DeviceMirrorAdmissionYield) {
+      summary.admissionOutcome = "phase-yielded";
+      summary.admissionYieldReason = error.yieldReason;
+      summary.checked = 0;
+      summary.gateState = "paused";
+      summary.ok = true;
+      summary.produced = 0;
+      summary.reason = "database_admission";
+      summary.throttled = true;
+      summary.validation = "paused";
+    } else {
+      summary.errors = 1;
+      summary.error = (error instanceof Error ? error.message : String(error)).slice(0, 500);
+      summary.ok = false;
+      summary.validation = "failed";
+      log(summary.error);
+    }
   } finally {
     await releaseLock?.();
   }
@@ -2211,9 +2404,32 @@ export async function main(): Promise<MirrorSummary> {
 }
 
 if (import.meta.main) {
-  const summary = await main();
+  const args = process.argv.slice(2);
+  const phase = args[0] === "--admission-phase" ? args[1] : undefined;
 
-  if (!summary.ok) {
-    process.exit(1);
+  if (phase === "source-sync") {
+    try {
+      const pathIndex = args.indexOf("--replica-path");
+      const path = pathIndex >= 0 ? args[pathIndex + 1] : undefined;
+
+      if (!path) {
+        throw new Error("Missing device mirror replica path");
+      }
+      console.log(JSON.stringify(await syncSourceReplicaRemote(path)));
+    } catch (error) {
+      console.log(
+        JSON.stringify({
+          corrupt: false,
+          error: error instanceof Error ? error.message : String(error),
+          kind: "failed",
+        }),
+      );
+    }
+  } else {
+    const summary = await main();
+
+    if (!summary.ok) {
+      process.exit(1);
+    }
   }
 }
