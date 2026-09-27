@@ -22,7 +22,12 @@ import {
   recordHealth,
 } from "./admin-health";
 import { updateArtistRule } from "./admin-artist-rules";
-import { replaceLabelArtistRules } from "./admin-labels";
+import {
+  LABEL_ARTIST_RULES_MAX,
+  LABEL_TRIAGE_RULE_PROPOSALS_MAX,
+  recordLabelTriage,
+  replaceLabelArtistRules,
+} from "./admin-labels";
 import {
   MAX_RUN_DATABASE_COUNT,
   MAX_RUN_LEDGER_PAGE_SIZE,
@@ -228,7 +233,7 @@ function accepts(op: unknown, input: unknown): boolean {
   assert.equal(
     accepts(replaceLabelArtistRules, {
       id: "lbl_test",
-      rules: Array.from({ length: 100 }, (_, index) => rule(index)),
+      rules: Array.from({ length: LABEL_ARTIST_RULES_MAX }, (_, index) => rule(index)),
     }),
     true,
     "a label rule set AT the cap is accepted",
@@ -236,7 +241,7 @@ function accepts(op: unknown, input: unknown): boolean {
   assert.equal(
     accepts(replaceLabelArtistRules, {
       id: "lbl_test",
-      rules: Array.from({ length: 101 }, (_, index) => rule(index)),
+      rules: Array.from({ length: LABEL_ARTIST_RULES_MAX + 1 }, (_, index) => rule(index)),
     }),
     false,
     "one artist rule past the cap is rejected",
@@ -253,6 +258,38 @@ function accepts(op: unknown, input: unknown): boolean {
     }),
     false,
     "a bare MBID without a display name is rejected",
+  );
+}
+
+{
+  const proposal = (index: number) => ({
+    artistMbid: `00000000-0000-4000-8000-${index.toString(16).padStart(12, "0")}`,
+    artistName: `Artist ${index}`,
+    firstCreditCount: 1,
+    verdict: "allow" as const,
+  });
+  const triage = (count: number) => ({
+    confidence: "medium" as const,
+    evidence: "census",
+    roundId: "round-test",
+    rules: Array.from({ length: count }, (_, index) => proposal(index)),
+    slug: "test-label",
+    verdict: "dnb_partial" as const,
+  });
+
+  assert.ok(
+    LABEL_TRIAGE_RULE_PROPOSALS_MAX >= LABEL_ARTIST_RULES_MAX * 2,
+    "a triage proposal carries at least twice the rule set a ratification can write",
+  );
+  assert.equal(
+    accepts(recordLabelTriage, triage(LABEL_TRIAGE_RULE_PROPOSALS_MAX)),
+    true,
+    "a triage proposal AT the rule cap is accepted",
+  );
+  assert.equal(
+    accepts(recordLabelTriage, triage(LABEL_TRIAGE_RULE_PROPOSALS_MAX + 1)),
+    false,
+    "one proposed rule past the cap is rejected",
   );
 }
 

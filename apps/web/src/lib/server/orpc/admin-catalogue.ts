@@ -54,6 +54,7 @@ import {
   MAX_HOP_CEILING,
   prepareCrawlPhase,
 } from "../crawl";
+import { parseEditorialNote } from "../http-errors";
 import { adminAuth, operatorGuard } from "../orpc-auth";
 import { readPipelineWatch } from "../pipeline-watch-read";
 import { certifyExistingTrack } from "../publish";
@@ -228,7 +229,8 @@ export function adminCatalogueHandlers(os: Implementer) {
     .use(operatorGuard)
     .handler(async ({ input }) => {
       try {
-        const { logId } = await certifyExistingTrack(input.trackId, { note: input.note });
+        const note = parseEditorialNote(input.note);
+        const { logId } = await certifyExistingTrack(input.trackId, { note: note || undefined });
 
         await syncTelescopePlaylist();
 
