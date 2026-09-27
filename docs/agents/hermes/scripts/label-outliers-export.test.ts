@@ -9,6 +9,7 @@ import {
   readExportMeta,
   refreshScoringExport,
   writeScoringExport,
+  writeScoringExportInChild,
 } from "./label-outliers-export";
 
 const scratch: string[] = [];
@@ -153,6 +154,97 @@ describe("the scoring export", () => {
     expect(first.status).toBe("written");
     expect(second).toMatchObject({ exportedAt: "2026-09-28T03:00:00.000Z", status: "written" });
     expect(await exportedAtOf(exportFile)).toBe("2026-09-28T03:00:00.000Z");
+  });
+
+  test("every refresh first removes temporaries an interrupted export left behind", async () => {
+    const directory = scratchDir();
+    const exportFile = join(directory, "label-outliers-inputs.db");
+    await writeScoringExport(replica(directory), exportFile, "2026-09-28T03:00:00.000Z");
+    writeFileSync(`${exportFile}.tmp-99999`, "left by a killed export");
+    writeFileSync(`${exportFile}.tmp-1`, "left by another");
+    writeFileSync(join(directory, "unrelated.tmp-1"), "keep me");
+
+    const status = await refreshScoringExport(join(directory, "source-replica.db"), exportFile, {
+      now: () => new Date("2026-09-28T04:00:00.000Z"),
+    });
+
+    expect(status.status).toBe("fresh");
+    expect(
+      readdirSync(directory)
+        .filter((name) => name.includes(".tmp-"))
+        .sort(),
+    ).toEqual(["unrelated.tmp-1"]);
+    expect(existsSync(exportFile)).toBe(true);
+  });
+
+  test("an export past its budget is abandoned, reported as a timeout, and leaves no temporary", async () => {
+    const directory = scratchDir();
+    const exportFile = join(directory, "label-outliers-inputs.db");
+    let aborted = false;
+
+    const status = await refreshScoringExport(replica(directory), exportFile, {
+      budgetMs: 30,
+      write: async (_replica, target, _at, signal) => {
+        writeFileSync(`${target}.tmp-4242`, "half written");
+        await new Promise<void>((resolve) => {
+          signal.addEventListener("abort", () => {
+            aborted = true;
+            resolve();
+          });
+        });
+      },
+    });
+
+    expect(status.status).toBe("timeout");
+    expect(aborted).toBe(true);
+    expect(existsSync(exportFile)).toBe(false);
+    expect(readdirSync(directory).filter((name) => name.includes(".tmp-"))).toEqual([]);
+  });
+
+  test("the default writer runs the export in a child process that the budget can kill", async () => {
+    const directory = scratchDir();
+    const exportFile = join(directory, "label-outliers-inputs.db");
+    const controller = new AbortController();
+
+    await writeScoringExportInChild(
+      replica(directory),
+      exportFile,
+      "2026-09-28T03:00:00.000Z",
+      controller.signal,
+    );
+
+    expect(await exportedAtOf(exportFile)).toBe("2026-09-28T03:00:00.000Z");
+  });
+
+  test("a target that cannot open still closes the source replica handle", async () => {
+    const directory = scratchDir();
+    const closed: string[] = [];
+    const open = (path: string, options: { create?: boolean; readonly?: boolean }) => {
+      if (options.create) {
+        throw new Error("disk full");
+      }
+      const database = new Database(path, { ...options, strict: true });
+      const close = database.close.bind(database);
+      database.close = () => {
+        closed.push(path);
+        close();
+      };
+      return database;
+    };
+    const replicaFile = replica(directory);
+
+    const failed = await writeScoringExport(
+      replicaFile,
+      join(directory, "label-outliers-inputs.db"),
+      "2026-09-28T03:00:00.000Z",
+      open,
+    ).then(
+      () => false,
+      () => true,
+    );
+
+    expect(failed).toBe(true);
+    expect(closed).toEqual([replicaFile]);
   });
 
   test("a failing refresh reports failure and never throws", async () => {

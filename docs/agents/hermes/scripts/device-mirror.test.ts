@@ -1,3 +1,4 @@
+import { refreshScoringExport } from "./label-outliers-export";
 import { Database, type SQLQueryBindings } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
 import {
@@ -869,11 +870,16 @@ await main({
     }
   }, 30_000);
 
-  test("a publish refreshes the label-outliers export from the synced replica, under the mirror lock", async () => {
+  test("a publish refreshes the label-outliers export only after the cutover, under the mirror lock", async () => {
     const generation = trackGenerationFixture(sequentialTracks(4), "export-writes");
     const { client } = targetFixture();
     const rig = admittedMirrorRig();
-    const calls: { exportPath: string; lockHeld: boolean; replicaExists: boolean }[] = [];
+    const calls: {
+      exportPath: string;
+      liveTracks: number;
+      lockHeld: boolean;
+      replicaExists: boolean;
+    }[] = [];
 
     try {
       const summary = await main({
@@ -890,6 +896,7 @@ await main({
         refreshExport: async (replicaPath, exportPath) => {
           calls.push({
             exportPath,
+            liveTracks: liveTracks(client).length,
             lockHeld: existsSync(rig.lock),
             replicaExists: existsSync(replicaPath),
           });
@@ -907,10 +914,44 @@ await main({
       expect(calls).toEqual([
         {
           exportPath: join(process.env.DEVICE_MIRROR_STATE_DIR ?? "", "label-outliers-inputs.db"),
+          liveTracks: 4,
           lockHeld: true,
           replicaExists: true,
         },
       ]);
+    } finally {
+      client.close();
+      rig.restore();
+    }
+  }, 30_000);
+
+  test("an export that stalls past its budget is abandoned after the publish and never fails the tick", async () => {
+    const generation = trackGenerationFixture(sequentialTracks(4), "export-stalls");
+    const { client } = targetFixture();
+    const rig = admittedMirrorRig();
+
+    try {
+      const summary = await main({
+        createTarget: () => client,
+        derive: async (_source, out) => {
+          copyFileSync(generation.path, out);
+          return {
+            bytes: generation.artifactBytes,
+            derivedAt: generation.derivedAt,
+            elapsedMs: 0,
+            preVacuumBytes: generation.artifactBytes,
+          };
+        },
+        refreshExport: (replicaPath, exportPath) =>
+          refreshScoringExport(replicaPath, exportPath, {
+            budgetMs: 50,
+            write: () => new Promise<void>(() => {}),
+          }),
+      });
+
+      expect(summary).toMatchObject({ ok: true, validation: "verified" });
+      expect(summary.scoringExport?.status).toBe("timeout");
+      expect(liveTracks(client)).toHaveLength(4);
     } finally {
       client.close();
       rig.restore();

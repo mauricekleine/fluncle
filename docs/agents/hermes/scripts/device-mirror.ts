@@ -2408,24 +2408,6 @@ export async function main(runtime: DeviceMirrorRuntime = {}): Promise<MirrorSum
     summary.replicaLagFrames = calculateReplicaLagFrames(sync);
     summary.rebuildCause = sync.rebuildCause;
     summary.rebuildDurationMs = sync.rebuildCause ? sync.durationMs : 0;
-    summary.scoringExport = await (runtime.refreshExport ?? refreshScoringExport)(
-      replicaPath,
-      join(stateDirectory, SCORING_EXPORT_FILE),
-    ).catch(
-      (error: unknown): ScoringExportStatus => ({
-        durationMs: null,
-        error: (error instanceof Error ? error.message : String(error)).slice(0, 300),
-        exportedAt: null,
-        status: "failed",
-      }),
-    );
-
-    if (summary.scoringExport.status === "failed") {
-      log(
-        `label-outliers scoring export failed; the publish continues: ${summary.scoringExport.error}`,
-      );
-    }
-
     const derivation = await (runtime.derive ?? runDeriver)(replicaPath, generationPath);
     const generation = inspectDeviceGeneration(generationPath);
     const replicaBytes = (await stat(replicaPath)).size;
@@ -2465,6 +2447,23 @@ export async function main(runtime: DeviceMirrorRuntime = {}): Promise<MirrorSum
     summary.queueDepth = publication.published ? 0 : publication.backlogRows;
     summary.ok = true;
     summary.validation = "verified";
+    summary.scoringExport = await (runtime.refreshExport ?? refreshScoringExport)(
+      replicaPath,
+      join(stateDirectory, SCORING_EXPORT_FILE),
+    ).catch(
+      (error: unknown): ScoringExportStatus => ({
+        durationMs: null,
+        error: (error instanceof Error ? error.message : String(error)).slice(0, 300),
+        exportedAt: null,
+        status: "failed",
+      }),
+    );
+
+    if (summary.scoringExport.status === "failed" || summary.scoringExport.status === "timeout") {
+      log(
+        `label-outliers scoring export ${summary.scoringExport.status}; the publish already landed: ${summary.scoringExport.error}`,
+      );
+    }
   } catch (error) {
     if (error instanceof DeviceMirrorAdmissionYield) {
       summary.admissionOutcome = "phase-yielded";
