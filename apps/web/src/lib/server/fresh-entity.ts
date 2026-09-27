@@ -3,7 +3,7 @@ import { getDb, typedRows } from "./db";
 import { clampFreshLimit, FRESH_WINDOW_DAYS, type FreshTrack } from "./fresh";
 import { getLabelBySlug } from "./labels";
 import { hasPublicGraphTracks } from "./hub-counts";
-import { catalogueTrackDurationWhere } from "../../db/public-track-visibility";
+import { catalogueTrackPublicWhere } from "../../db/public-track-visibility";
 import { releaseWindowLowerBound } from "./release-day";
 import {
   FINDINGS_FROM,
@@ -67,7 +67,7 @@ async function listEntityFreshTracks(
             left join findings on findings.track_id = tracks.track_id
             ${join}
             where findings.track_id is null
-              and ${catalogueTrackDurationWhere("tracks")}
+              and ${catalogueTrackPublicWhere("tracks")}
               and ${where}
               and tracks.release_date >= ? and tracks.release_date <= ?
             order by tracks.release_date desc, tracks.track_id desc

@@ -163,6 +163,40 @@ describe("upcoming entity tracks", () => {
     expect(label.findings.map((finding) => finding.trackId)).toEqual(["long-finding"]);
   });
 
+  it("omits spoken-word catalogue rows and keeps a spoken-word finding", async () => {
+    await seedArtist("art_future", "Future Artist", "future-artist");
+    for (const [trackId, title, releaseDate] of [
+      ["spoken-released", "Rewind (Commentary)", "2026-09-01"],
+      ["spoken-upcoming", "Rewind - Interview", "2026-11-01"],
+      ["spoken-finding", "Rewind (Commentary)", "2026-11-01"],
+    ] as const) {
+      await seedCatalogueTrack({
+        album: "Spoken Album",
+        artists: ["Future Artist"],
+        labelId: "lbl_1",
+        releaseDate,
+        title,
+        trackId,
+      });
+      await db.execute({
+        args: [trackId],
+        sql: `insert into track_artists (track_id, artist_id, position)
+              values (?, 'art_future', 1)`,
+      });
+    }
+    await db.execute(`insert into findings (track_id, log_id, added_at)
+      values ('spoken-finding', '100.1.1A', '2026-09-01T00:00:00.000Z')`);
+
+    expect((await listArtistCatalogue("art_future", "name", 1, "2026-10-01")).totalTracks).toBe(0);
+    expect((await listLabelCatalogue("lbl_1", "name", 1, "2026-10-01")).totalTracks).toBe(0);
+    const artist = await listArtistUpcoming("art_future", "2026-10-01");
+    const label = await listLabelUpcoming("lbl_1", "2026-10-01");
+    expect(artist.tracks).toEqual([]);
+    expect(label.tracks).toEqual([]);
+    expect(artist.findings.map((finding) => finding.trackId)).toEqual(["spoken-finding"]);
+    expect(label.findings.map((finding) => finding.trackId)).toEqual(["spoken-finding"]);
+  });
+
   it("keeps a future finding credited only in artists_json on its artist page", async () => {
     await seedArtist("art_future", "Future Artist", "future-artist");
     await seedCertifiedFinding("future-no-edge", "art_future", "Future Artist");

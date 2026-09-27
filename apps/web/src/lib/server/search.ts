@@ -1,7 +1,7 @@
 import { type SearchEntity, type SearchFilters, type SearchHit } from "@fluncle/contracts/orpc";
 import { slugify } from "@fluncle/contracts/util/galaxy-slug";
-import { publicTrackDurationWhere } from "../../db/public-track-visibility";
-import { LONG_FORM_MS } from "../catalogue-eligibility";
+import { publicTrackWhere } from "../../db/public-track-visibility";
+import { searchSonarPublicCatalogue } from "./sonar-public-catalogue";
 import { parseKey } from "../key-camelot";
 import { mixtapeCoverUrl } from "../mixtapes";
 import {
@@ -75,7 +75,7 @@ const SEARCH_SELECT = `tracks.track_id, tracks.title, tracks.artists_json, track
 
 const SEARCH_FROM = `tracks left join findings on findings.track_id = tracks.track_id`;
 
-const PUBLIC_SEARCH_WHERE = publicTrackDurationWhere("tracks", "findings");
+const PUBLIC_SEARCH_WHERE = publicTrackWhere("tracks", "findings");
 
 const CERTIFIED_FIRST = `case when findings.track_id is null then 1 else 0 end asc`;
 
@@ -684,10 +684,7 @@ export async function rankTracksByVector(
     };
     const [findings, catalogue] = await Promise.all([
       searchSonar({ ...request, filter: { ...filter, has_finding: true } }),
-      searchSonar({
-        ...request,
-        filter: { ...filter, duration_ms_max: LONG_FORM_MS, has_finding: false },
-      }),
+      searchSonarPublicCatalogue({ ...request, filter }),
     ]);
 
     if (findings === null || catalogue === null) {

@@ -1,4 +1,5 @@
 import { type Client } from "@libsql/client";
+import { createHash } from "node:crypto";
 
 import {
   type HubAnchorLeaf,
@@ -10,11 +11,21 @@ import {
 } from "./hub-page-anchors";
 import { getSetting } from "./settings";
 import { upcomingAfterTodaySql } from "./release-day";
-import { publicTrackDurationWhere } from "../../db/public-track-visibility";
+import { publicTrackWhere } from "../../db/public-track-visibility";
 
 export const PUBLIC_PROJECTION_CUTOVER_ENABLED_KEY = "public_projection_cutover_enabled";
 
 export const PUBLIC_AGGREGATE_DURATION_GENERATION_KEY = "public_aggregate_duration_generation";
+
+export const PUBLIC_AGGREGATE_VISIBILITY_VERSION_KEY = "public_aggregate_visibility_version";
+
+export const PUBLIC_AGGREGATE_VISIBILITY_CURSOR_KEY =
+  "public_aggregate_visibility_reconcile_cursor";
+
+export const PUBLIC_AGGREGATE_VISIBILITY_VERSION = createHash("sha256")
+  .update(publicTrackWhere("t"))
+  .digest("hex")
+  .slice(0, 16);
 
 export const PUBLIC_ANCHOR_FORMAT_VERSION = 1;
 
@@ -188,7 +199,10 @@ const AGGREGATE_READY = `aggregate.state = 'complete'
 const PUBLIC_AGGREGATE_DURATION_READY = `${AGGREGATE_READY}
   and exists (select 1 from settings visibility
     where visibility.key = '${PUBLIC_AGGREGATE_DURATION_GENERATION_KEY}'
-      and visibility.value = aggregate.generation || ':' || aggregate.completed_at)`;
+      and visibility.value = aggregate.generation || ':' || aggregate.completed_at)
+  and exists (select 1 from settings visibility_version
+    where visibility_version.key = '${PUBLIC_AGGREGATE_VISIBILITY_VERSION_KEY}'
+      and visibility_version.value = '${PUBLIC_AGGREGATE_VISIBILITY_VERSION}')`;
 
 async function isAggregateDurationReady(client: PublicProjectionReadClient): Promise<boolean> {
   const result = await client.execute(`select 1 from public_aggregate_state aggregate
@@ -237,7 +251,7 @@ export async function readProjectedAggregateBuckets(
       kind === "release_date_bucket" && today !== undefined
         ? ` - (select count(*) from tracks indexed by tracks_release_date_track_id_idx
             where ${upcomingAfterTodaySql("tracks.release_date")}
-              and ${publicTrackDurationWhere("tracks")}
+              and ${publicTrackWhere("tracks")}
               and tracks.release_date >= counts.bucket
               and tracks.release_date < counts.bucket || '~')`
         : "";

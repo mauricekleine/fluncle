@@ -2,7 +2,7 @@ import { parseArtistsJson } from "./artist-names";
 import { type Client, type InStatement, type ResultSet } from "@libsql/client";
 import { randomUUID } from "node:crypto";
 import { type ArtistListItem } from "@fluncle/contracts";
-import { publicTrackDurationOk } from "../../db/public-track-visibility";
+import { publicTrackOk } from "../../db/public-track-visibility";
 import { type ArtistSocialPlatform, ARTIST_SOCIAL_PLATFORMS } from "../artist-socials";
 import { SIMILAR_ARTISTS_LIMIT, listSimilarArtistNeighbours } from "./artist-dossier";
 import { validateSocialUrlForPlatform } from "./artist-resolution";
@@ -1103,7 +1103,7 @@ export async function upsertTrackArtists(
     }),
     db.execute({
       args: [trackId],
-      sql: `select is_catalogue, duration_ms,
+      sql: `select is_catalogue, duration_ms, title,
                    key is not null and has_embedding = 1 as is_rankable
             from tracks where track_id = ? limit 1`,
     }),
@@ -1115,6 +1115,7 @@ export async function upsertTrackArtists(
     duration_ms: number;
     is_catalogue: bigint | number;
     is_rankable: bigint | number;
+    title: string;
   }>(trackRow.rows)[0];
 
   const edgeDelta: HubCountArtistDelta | undefined =
@@ -1123,8 +1124,8 @@ export async function upsertTrackArtists(
       : {
           certified: Number(catalogueFlag.is_catalogue) === 0 ? 1 : 0,
           rankable: Number(catalogueFlag.is_rankable) === 1 ? 1 : 0,
-          renderable: publicTrackDurationOk(
-            Number(catalogueFlag.duration_ms),
+          renderable: publicTrackOk(
+            { durationMs: Number(catalogueFlag.duration_ms), title: catalogueFlag.title },
             Number(catalogueFlag.is_catalogue) === 0,
           )
             ? 1

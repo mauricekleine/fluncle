@@ -10,7 +10,7 @@ import {
   type MergeLabelResult,
 } from "@fluncle/contracts";
 import { labelFold, slugify } from "@fluncle/contracts/util/galaxy-slug";
-import { publicTrackDurationWhere } from "../../db/public-track-visibility";
+import { publicTrackWhere } from "../../db/public-track-visibility";
 import { bestAlbumCoverUrl, labelLogoUrl } from "../media";
 import { bioBypassColumns } from "./bio-review";
 import { restaleCatalogueRankByLabelStatement } from "./catalogue-rank-restale";
@@ -376,12 +376,12 @@ function coverJsonSelect(pick: string): string {
 const LABEL_COVER_PICK = `(select t2.track_id
                              from tracks t2
                             where t2.label_id = labels.id and t2.album_image_url is not null
-                              and ${publicTrackDurationWhere("t2")}
+                              and ${publicTrackWhere("t2")}
                               and t2.release_date is (select max(t3.release_date)
                                                         from tracks t3
                                                        where t3.label_id = labels.id
                                                          and t3.album_image_url is not null
-                                                         and ${publicTrackDurationWhere("t3")})
+                                                         and ${publicTrackWhere("t3")})
                             order by t2.track_id asc
                             limit 1)`;
 
@@ -1996,7 +1996,7 @@ export async function mergeLabel(
         await db.execute({
           args: [loser.id],
           sql: `select null as from_id,
-                       sum(case when ${publicTrackDurationWhere("tracks")} then 1 else 0 end) as renderable,
+                       sum(case when ${publicTrackWhere("tracks")} then 1 else 0 end) as renderable,
                        sum(case when is_catalogue = 0 then 1 else 0 end) as certified
                 from tracks where label_id = ?`,
         })

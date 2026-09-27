@@ -4,37 +4,70 @@ import { createClient, type Client, type InStatement } from "@libsql/client";
 import { config } from "dotenv";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import {
-  catalogueTrackDurationWhere,
-  publicTrackDurationWhere,
-} from "../src/db/public-track-visibility";
+import { publicTrackWhere } from "../src/db/public-track-visibility";
+import { LONG_FORM_MS, spokenWordTitleWhere } from "../src/lib/catalogue-eligibility";
 import { REMOTE_DB_CONCURRENCY } from "../src/lib/database-concurrency";
 import { validReleaseDateSql } from "../src/lib/server/release-day";
 import {
   HUB_COUNTS_BACKFILL_COMPLETE_VALUE,
   HUB_COUNTS_BACKFILL_MARKER_KEY,
+  HUB_COUNTS_BACKFILL_SUPERSEDED_MARKERS,
 } from "./backfill-hub-counts";
 
-export const LONG_GRAPH_REPAIR_MARKER_KEY = "repair_long_graph_counts_v1_state";
-export const LONG_GRAPH_REPAIR_COMPLETE_VALUE = "complete:v1";
-export const LONG_GRAPH_REPAIR_PAGE_SIZE = 100;
+export const HIDDEN_GRAPH_REPAIR_PAGE_SIZE = 100;
+
+export type HiddenGraphRepairPass = {
+  backfillMarkers: readonly { completeValue: string; key: string }[];
+  completeValue: string;
+  hiddenWhere: (trackAlias: string) => string;
+  markerKey: string;
+  name: "long_form" | "spoken_word";
+};
+
+const CURRENT_BACKFILL_MARKER = {
+  completeValue: HUB_COUNTS_BACKFILL_COMPLETE_VALUE,
+  key: HUB_COUNTS_BACKFILL_MARKER_KEY,
+};
+
+export const LONG_FORM_GRAPH_REPAIR: HiddenGraphRepairPass = {
+  backfillMarkers: [...HUB_COUNTS_BACKFILL_SUPERSEDED_MARKERS, CURRENT_BACKFILL_MARKER],
+  completeValue: "complete:v1",
+  hiddenWhere: (trackAlias) => `not (${trackAlias}.duration_ms < ${LONG_FORM_MS})`,
+  markerKey: "repair_long_graph_counts_v1_state",
+  name: "long_form",
+};
+
+export const SPOKEN_WORD_GRAPH_REPAIR: HiddenGraphRepairPass = {
+  backfillMarkers: [CURRENT_BACKFILL_MARKER],
+  completeValue: "complete:v1",
+  hiddenWhere: (trackAlias) =>
+    `${trackAlias}.duration_ms < ${LONG_FORM_MS} and ${spokenWordTitleWhere(trackAlias)}`,
+  markerKey: "repair_spoken_word_graph_counts_v1_state",
+  name: "spoken_word",
+};
+
+export const HIDDEN_GRAPH_REPAIR_PASSES = [
+  LONG_FORM_GRAPH_REPAIR,
+  SPOKEN_WORD_GRAPH_REPAIR,
+] as const;
 
 type GraphEntity = "albums" | "artists" | "labels";
 
-function hiddenTrackIdsSql(count: number): string {
-  return `tracks.track_id in (${Array.from({ length: count }, () => "?").join(", ")})
-    and tracks.is_catalogue = 1
-    and not (${catalogueTrackDurationWhere("tracks")})
+function hiddenCatalogueTrackWhere(pass: HiddenGraphRepairPass): string {
+  return `tracks.is_catalogue = 1
+    and ${pass.hiddenWhere("tracks")}
     and not exists (select 1 from findings f where f.track_id = tracks.track_id)`;
 }
 
 function entityRepairStatement(
+  pass: HiddenGraphRepairPass,
   entity: GraphEntity,
   trackIds: readonly string[],
   today: string,
   markerValue: string,
 ): InStatement {
-  const hidden = hiddenTrackIdsSql(trackIds.length);
+  const hidden = `tracks.track_id in (${trackIds.map(() => "?").join(", ")})
+    and ${hiddenCatalogueTrackWhere(pass)}`;
   const edgeJoin =
     entity === "artists" ? "join track_artists edge on edge.track_id = tracks.track_id" : "";
   const sourceId =
@@ -56,7 +89,7 @@ function entityRepairStatement(
         : `t.label_id = ${entity}.id`;
 
   return {
-    args: [...trackIds, today, LONG_GRAPH_REPAIR_MARKER_KEY, markerValue],
+    args: [...trackIds, today, pass.markerKey, markerValue],
     sql: `with lost as (
             select ${sourceId} as id, count(*) as n
             from tracks ${edgeJoin}
@@ -72,7 +105,7 @@ function entityRepairStatement(
                   and t.release_date <= ?
                   and t.dismissed_at is null
                   and t.duplicate_of_track_id is null
-                  and ${publicTrackDurationWhere("t")}
+                  and ${publicTrackWhere("t")}
               )
           from lost
           where ${entity}.id = lost.id
@@ -90,39 +123,47 @@ async function readMarker(client: Client, key: string): Promise<string | undefin
   return typeof value === "string" ? value : undefined;
 }
 
-export async function repairLongGraphCounts(
+async function backfillAlreadyApplied(
   client: Client,
+  pass: HiddenGraphRepairPass,
+): Promise<boolean> {
+  for (const marker of pass.backfillMarkers) {
+    if ((await readMarker(client, marker.key)) === marker.completeValue) {
+      return true;
+    }
+  }
+  return false;
+}
+
+export async function repairHiddenGraphCounts(
+  client: Client,
+  pass: HiddenGraphRepairPass,
 ): Promise<{ repaired: number; skipped: boolean }> {
-  if (
-    (await readMarker(client, HUB_COUNTS_BACKFILL_MARKER_KEY)) ===
-    HUB_COUNTS_BACKFILL_COMPLETE_VALUE
-  ) {
+  if (await backfillAlreadyApplied(client, pass)) {
     return { repaired: 0, skipped: true };
   }
 
   await client.execute({
-    args: [LONG_GRAPH_REPAIR_MARKER_KEY, "running:"],
+    args: [pass.markerKey, "running:"],
     sql: `insert into settings (key, value) values (?, ?) on conflict(key) do nothing`,
   });
 
   let repaired = 0;
 
   while (true) {
-    const marker = await readMarker(client, LONG_GRAPH_REPAIR_MARKER_KEY);
-    if (marker === LONG_GRAPH_REPAIR_COMPLETE_VALUE) {
+    const marker = await readMarker(client, pass.markerKey);
+    if (marker === pass.completeValue) {
       return { repaired, skipped: repaired === 0 };
     }
     if (marker === undefined || !marker.startsWith("running:")) {
-      throw new Error("long graph count repair marker is invalid");
+      throw new Error(`${pass.name} graph count repair marker is invalid`);
     }
 
     const result = await client.execute({
-      args: [marker.slice("running:".length), LONG_GRAPH_REPAIR_PAGE_SIZE],
+      args: [marker.slice("running:".length), HIDDEN_GRAPH_REPAIR_PAGE_SIZE],
       sql: `select tracks.track_id as track_id
             from tracks
-            where tracks.track_id > ? and tracks.is_catalogue = 1
-              and not (${catalogueTrackDurationWhere("tracks")})
-              and not exists (select 1 from findings f where f.track_id = tracks.track_id)
+            where tracks.track_id > ? and ${hiddenCatalogueTrackWhere(pass)}
             order by tracks.track_id asc
             limit ?`,
     });
@@ -132,7 +173,7 @@ export async function repairLongGraphCounts(
 
     if (trackIds.length === 0) {
       await client.execute({
-        args: [LONG_GRAPH_REPAIR_COMPLETE_VALUE, LONG_GRAPH_REPAIR_MARKER_KEY, marker],
+        args: [pass.completeValue, pass.markerKey, marker],
         sql: `update settings set value = ? where key = ? and value = ?`,
       });
       continue;
@@ -142,11 +183,11 @@ export async function repairLongGraphCounts(
     const nextMarker = `running:${trackIds.at(-1)}`;
     const results = await client.batch(
       [
-        entityRepairStatement("labels", trackIds, today, marker),
-        entityRepairStatement("albums", trackIds, today, marker),
-        entityRepairStatement("artists", trackIds, today, marker),
+        entityRepairStatement(pass, "labels", trackIds, today, marker),
+        entityRepairStatement(pass, "albums", trackIds, today, marker),
+        entityRepairStatement(pass, "artists", trackIds, today, marker),
         {
-          args: [nextMarker, LONG_GRAPH_REPAIR_MARKER_KEY, marker],
+          args: [nextMarker, pass.markerKey, marker],
           sql: `update settings set value = ? where key = ? and value = ?`,
         },
       ],
@@ -174,8 +215,10 @@ async function main(): Promise<void> {
       : { concurrency: REMOTE_DB_CONCURRENCY, url },
   );
   try {
-    const result = await repairLongGraphCounts(client);
-    console.log(`long graph count repair: ${result.repaired} track(s) processed`);
+    for (const pass of HIDDEN_GRAPH_REPAIR_PASSES) {
+      const result = await repairHiddenGraphCounts(client, pass);
+      console.log(`${pass.name} graph count repair: ${result.repaired} track(s) processed`);
+    }
   } finally {
     client.close();
   }

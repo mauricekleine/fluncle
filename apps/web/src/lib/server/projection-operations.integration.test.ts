@@ -16,6 +16,8 @@ import {
 } from "./projection-audit";
 import {
   PUBLIC_AGGREGATE_DURATION_GENERATION_KEY,
+  PUBLIC_AGGREGATE_VISIBILITY_VERSION,
+  PUBLIC_AGGREGATE_VISIBILITY_VERSION_KEY,
   readCurrentProjectedTrackHubAnchors,
   readProjectedDefaultTrackTotal,
 } from "./public-projection-cutover";
@@ -117,6 +119,7 @@ describe("projection production operations", () => {
       create table tracks (
         track_id text primary key, release_date text, key text, label_id text,
         duration_ms integer not null default 210000,
+        title text not null default '',
         has_embedding integer not null default 0
       );
       create index tracks_release_date_track_id_idx on tracks(release_date desc, track_id desc);
@@ -204,6 +207,10 @@ describe("projection production operations", () => {
     });
     await db.execute({
       args: [PUBLIC_AGGREGATE_DURATION_GENERATION_KEY, "agg:2026-01-01"],
+      sql: `insert into settings (key, value) values (?, ?)`,
+    });
+    await db.execute({
+      args: [PUBLIC_AGGREGATE_VISIBILITY_VERSION_KEY, PUBLIC_AGGREGATE_VISIBILITY_VERSION],
       sql: `insert into settings (key, value) values (?, ?)`,
     });
     await db.execute({

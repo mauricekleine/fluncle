@@ -140,6 +140,23 @@ describe("listSonicNeighbours — the /track sonar route", () => {
     expect(neighbours.map((row) => row.trackId)).not.toContain("long-catalogue");
   });
 
+  it("backfills past a spoken-word catalogue hit so the sonar page matches the bounded Turso page", async () => {
+    await seed("spoken-closest", 174, vector(0.95));
+    await db.execute(
+      `update tracks set title = 'Undertow (Commentary)' where track_id = 'spoken-closest'`,
+    );
+
+    isSonarTrackEnabled.mockResolvedValue(false);
+    const turso = await listSonicNeighbours("target", 2, { allowBoundedSql: true });
+
+    isSonarTrackEnabled.mockResolvedValue(true);
+    searchSonar.mockImplementation(referenceSonar);
+    const sonar = await listSonicNeighbours("target", 2);
+
+    expect(turso.map((row) => row.trackId)).toEqual(["tempo-near", "tempo-next"]);
+    expect(sonar.map((row) => row.trackId)).toEqual(turso.map((row) => row.trackId));
+  });
+
   it("returns no optional band before a database read when the flag is off", async () => {
     isSonarTrackEnabled.mockResolvedValue(false);
     const execute = vi.spyOn(db, "execute");

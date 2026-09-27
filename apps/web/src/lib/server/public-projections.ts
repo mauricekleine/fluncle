@@ -1,6 +1,6 @@
 import { type Client, type InValue } from "@libsql/client";
 import { createHash } from "node:crypto";
-import { publicTrackDurationWhere } from "../../db/public-track-visibility";
+import { publicTrackWhere } from "../../db/public-track-visibility";
 
 import { QUALIFIED_ARTISTS_SQL } from "./catalogue";
 import {
@@ -13,6 +13,9 @@ import {
 } from "./hub-page-anchors";
 import {
   PUBLIC_AGGREGATE_DURATION_GENERATION_KEY,
+  PUBLIC_AGGREGATE_VISIBILITY_CURSOR_KEY,
+  PUBLIC_AGGREGATE_VISIBILITY_VERSION,
+  PUBLIC_AGGREGATE_VISIBILITY_VERSION_KEY,
   ANCHOR_LEAF_META_VALID_SQL,
   parseAnchorDocument,
   PUBLIC_ANCHOR_FORMAT_VERSION,
@@ -169,14 +172,14 @@ export function trackAnchorSourcePageQuery(
           args: [limit],
           sql: `select release_date, track_id from tracks
             indexed by tracks_release_date_track_id_idx
-            where release_date is null and ${publicTrackDurationWhere("tracks")}
+            where release_date is null and ${publicTrackWhere("tracks")}
             order by track_id desc limit ?`,
         }
       : {
           args: [cursor.id, limit],
           sql: `select release_date, track_id from tracks
             indexed by tracks_release_date_track_id_idx
-            where release_date is null and track_id < ? and ${publicTrackDurationWhere("tracks")}
+            where release_date is null and track_id < ? and ${publicTrackWhere("tracks")}
             order by track_id desc limit ?`,
         };
   }
@@ -188,7 +191,7 @@ export function trackAnchorSourcePageQuery(
       args: [limit],
       sql: `select release_date, track_id from tracks
         indexed by tracks_release_date_track_id_idx
-        where release_date is not null and ${publicTrackDurationWhere("tracks")}
+        where release_date is not null and ${publicTrackWhere("tracks")}
         order by release_date desc, track_id desc limit ?`,
     };
   }
@@ -196,7 +199,7 @@ export function trackAnchorSourcePageQuery(
     args: [cursor.key, cursor.id, limit],
     sql: `select release_date, track_id from tracks
       indexed by tracks_release_date_track_id_idx
-      where (release_date, track_id) < (?, ?) and ${publicTrackDurationWhere("tracks")}
+      where (release_date, track_id) < (?, ?) and ${publicTrackWhere("tracks")}
       order by release_date desc, track_id desc limit ?`,
   };
 }
@@ -259,6 +262,111 @@ export function publicTrackSourceVersion(track: {
   releaseDate: null | string;
 }): string {
   return JSON.stringify([track.releaseDate, track.key]);
+}
+
+export const PUBLIC_AGGREGATE_VISIBILITY_SCAN_WINDOW = 10_000;
+
+function visibilityVersionCurrentStatement(): PublicProjectionStatement {
+  return {
+    args: [PUBLIC_AGGREGATE_VISIBILITY_VERSION_KEY, PUBLIC_AGGREGATE_VISIBILITY_VERSION],
+    sql: `insert into settings (key, value) values (?, ?)
+      on conflict(key) do update set value = excluded.value`,
+  };
+}
+
+export type PublicAggregateVisibilityReconcile = {
+  complete: boolean;
+  enqueued: number;
+  scanned: number;
+};
+
+export async function reconcilePublicAggregateVisibilityChunk(
+  client: PublicProjectionClient,
+  options: { limit: number; now?: Date; scanWindow?: number },
+): Promise<PublicAggregateVisibilityReconcile> {
+  const settings = await client.execute({
+    args: [PUBLIC_AGGREGATE_VISIBILITY_VERSION_KEY, PUBLIC_AGGREGATE_VISIBILITY_CURSOR_KEY],
+    sql: `select key, value from settings where key in (?, ?)`,
+  });
+  const values = new Map(
+    settings.rows.flatMap((row) =>
+      typeof row.key === "string"
+        ? [[row.key, typeof row.value === "string" ? row.value : null] as const]
+        : [],
+    ),
+  );
+  if (values.get(PUBLIC_AGGREGATE_VISIBILITY_VERSION_KEY) === PUBLIC_AGGREGATE_VISIBILITY_VERSION) {
+    return { complete: true, enqueued: 0, scanned: 0 };
+  }
+  const aggregateState = await client.execute(
+    `select state from public_aggregate_state where scope = 'tracks' limit 1`,
+  );
+  const state = aggregateState.rows[0]?.state;
+  if (state !== "complete") {
+    return { complete: state === undefined, enqueued: 0, scanned: 0 };
+  }
+  const storedCursor = values.get(PUBLIC_AGGREGATE_VISIBILITY_CURSOR_KEY) ?? null;
+  const cursorPrefix = `${PUBLIC_AGGREGATE_VISIBILITY_VERSION}:`;
+  const after = storedCursor?.startsWith(cursorPrefix)
+    ? storedCursor.slice(cursorPrefix.length)
+    : "";
+  const window = await client.execute({
+    args: [after, options.scanWindow ?? PUBLIC_AGGREGATE_VISIBILITY_SCAN_WINDOW],
+    sql: `select max(track_id) as last, count(*) as scanned from (
+        select track_id from tracks where track_id > ? order by track_id limit ?
+      )`,
+  });
+  const last = window.rows[0]?.last;
+  const scanned = Number(window.rows[0]?.scanned ?? 0);
+  if (typeof last !== "string" || scanned === 0) {
+    await client.batch(
+      [
+        visibilityVersionCurrentStatement(),
+        {
+          args: [PUBLIC_AGGREGATE_VISIBILITY_CURSOR_KEY],
+          sql: `delete from settings where key = ?`,
+        },
+      ],
+      "write",
+    );
+    return { complete: true, enqueued: 0, scanned: 0 };
+  }
+  const limit = Math.max(1, Math.min(options.limit, MAX_PUBLIC_PROJECTION_CHUNK_SIZE));
+  const mismatches = await client.execute({
+    args: [after, last, limit],
+    sql: `select t.track_id, t.release_date, t.key
+      from tracks t
+      left join public_aggregate_membership membership on membership.track_id = t.track_id
+      where t.track_id > ? and t.track_id <= ?
+        and (membership.track_id is null) = (${publicTrackWhere("t")})
+      order by t.track_id
+      limit ?`,
+  });
+  const rows = mismatches.rows as unknown as {
+    key: null | string;
+    release_date: null | string;
+    track_id: string;
+  }[];
+  const nextAfter = rows.length === limit ? (rows.at(-1)?.track_id ?? last) : last;
+  const now = options.now ?? new Date();
+  await client.batch(
+    [
+      {
+        args: [PUBLIC_AGGREGATE_VISIBILITY_CURSOR_KEY, `${cursorPrefix}${nextAfter}`, storedCursor],
+        sql: `insert into settings (key, value) values (?, ?)
+          on conflict(key) do update set value = excluded.value where settings.value is ?`,
+      },
+      ...rows.flatMap((row) =>
+        markPublicTrackSourceChangedStatements(
+          row.track_id,
+          publicTrackSourceVersion({ key: row.key, releaseDate: row.release_date }),
+          { now },
+        ),
+      ),
+    ],
+    "write",
+  );
+  return { complete: false, enqueued: rows.length, scanned };
 }
 
 function releaseDateFromSourceVersion(sourceVersion: string): null | string | undefined {
@@ -451,7 +559,7 @@ async function readAggregateProjectionPage(
         membership.source_version as membership_source_version, membership.updated_at
       from selected
       left join tracks source on source.track_id = selected.track_id
-        and ${publicTrackDurationWhere("source")}
+        and ${publicTrackWhere("source")}
       left join public_aggregate_membership membership
         on membership.track_id = selected.track_id
       order by selected.track_id`,
@@ -1699,23 +1807,21 @@ async function aggregateDigests(client: PublicProjectionClient): Promise<{
     projectedTotal,
   ] = await Promise.all([
     client.execute(`select track_id, substr(release_date, 1, 4) as release_date_bucket,
-          key as key_bucket from tracks where ${publicTrackDurationWhere("tracks")}
+          key as key_bucket from tracks where ${publicTrackWhere("tracks")}
           order by track_id`),
     client.execute(`select track_id, release_date_bucket, key_bucket
           from public_aggregate_membership order by track_id`),
     client.execute(`select aggregate_kind, bucket, count(*) as track_count from (
           select 'release_date_bucket' as aggregate_kind,
                  substr(release_date, 1, 4) as bucket from tracks
-                 where release_date is not null and ${publicTrackDurationWhere("tracks")}
+                 where release_date is not null and ${publicTrackWhere("tracks")}
           union all
           select 'key' as aggregate_kind, key as bucket from tracks
-          where key is not null and ${publicTrackDurationWhere("tracks")}
+          where key is not null and ${publicTrackWhere("tracks")}
         ) group by aggregate_kind, bucket order by aggregate_kind, bucket`),
     client.execute(`select aggregate_kind, bucket, track_count
           from public_aggregate_counts order by aggregate_kind, bucket`),
-    client.execute(
-      `select count(*) as total from tracks where ${publicTrackDurationWhere("tracks")}`,
-    ),
+    client.execute(`select count(*) as total from tracks where ${publicTrackWhere("tracks")}`),
     client.execute(`select default_track_total as total from public_aggregate_state
           where scope = 'tracks'`),
   ]);
@@ -2257,7 +2363,7 @@ async function readRemainingPublicProjectionAuditChunk(
       args: [options.cursor ?? "", options.limit],
       sql: source
         ? `select track_id, substr(release_date, 1, 4) as release_date_bucket, key as key_bucket
-          from tracks where track_id > ? and ${publicTrackDurationWhere("tracks")}
+          from tracks where track_id > ? and ${publicTrackWhere("tracks")}
           order by track_id limit ?`
         : `select track_id, release_date_bucket, key_bucket from public_aggregate_membership
           where track_id > ? order by track_id limit ?`,
@@ -2442,6 +2548,7 @@ async function finishAggregateRebuild(
     sql: `insert into settings (key, value) values (?, ?)
       on conflict(key) do update set value = excluded.value`,
   });
+  await client.execute(visibilityVersionCurrentStatement());
 }
 
 async function finishArtistRebuild(
@@ -2698,6 +2805,7 @@ async function finishBoundedPublicProjectionCleanup(
             where scope = 'tracks' and generation = ? and state = 'complete' and completed_at = ?
             on conflict(key) do update set value = excluded.value`,
         },
+        visibilityVersionCurrentStatement(),
       ],
       "write",
     );
@@ -3137,7 +3245,7 @@ async function auditPublicProjectionState(
       sql: `select t.track_id, t.release_date, t.key
         from tracks t
         left join public_aggregate_membership pam on pam.track_id = t.track_id
-        where ${publicTrackDurationWhere("t")}
+        where ${publicTrackWhere("t")}
           and (pam.track_id is null
             or pam.release_date_bucket is not substr(t.release_date, 1, 4)
             or pam.key_bucket is not t.key)
@@ -3165,7 +3273,7 @@ async function auditPublicProjectionState(
         args: [repairLimit - scheduledTrackRepairs.length],
         sql: `select pam.track_id from public_aggregate_membership pam
           where not exists (select 1 from tracks t where t.track_id = pam.track_id
-            and ${publicTrackDurationWhere("t")})
+            and ${publicTrackWhere("t")})
           order by pam.track_id limit ?`,
       });
       for (const row of unexpected.rows as unknown as { track_id: string }[]) {
@@ -3180,9 +3288,9 @@ async function auditPublicProjectionState(
         client.execute(`select aggregate_kind, bucket, count(*) as track_count from (
             select 'release_date_bucket' as aggregate_kind,
                    substr(release_date, 1, 4) as bucket from tracks
-                   where release_date is not null and ${publicTrackDurationWhere("tracks")}
+                   where release_date is not null and ${publicTrackWhere("tracks")}
             union all select 'key', key from tracks
-              where key is not null and ${publicTrackDurationWhere("tracks")}
+              where key is not null and ${publicTrackWhere("tracks")}
           ) group by aggregate_kind, bucket order by aggregate_kind, bucket`),
         client.execute(`select aggregate_kind, bucket, track_count
           from public_aggregate_counts order by aggregate_kind, bucket`),
@@ -3249,7 +3357,7 @@ async function auditPublicProjectionState(
           args: [now],
           sql: `update public_aggregate_state
             set default_track_total = (select count(*) from tracks
-              where ${publicTrackDurationWhere("tracks")}), updated_at = ?
+              where ${publicTrackWhere("tracks")}), updated_at = ?
             where scope = 'tracks'`,
         });
       }
@@ -3404,17 +3512,15 @@ export async function shadowPublicProjections(client: PublicProjectionClient): P
     aggregateState,
     anchorValidity,
   ] = await Promise.all([
-    client.execute(
-      `select count(*) as total from tracks where ${publicTrackDurationWhere("tracks")}`,
-    ),
+    client.execute(`select count(*) as total from tracks where ${publicTrackWhere("tracks")}`),
     client.execute(`select default_track_total as total from public_aggregate_state
         where scope = 'tracks'`),
     client.execute(`select aggregate_kind, bucket, count(*) as track_count from (
           select 'release_date_bucket' as aggregate_kind,
                  substr(release_date, 1, 4) as bucket from tracks
-                 where release_date is not null and ${publicTrackDurationWhere("tracks")}
+                 where release_date is not null and ${publicTrackWhere("tracks")}
           union all select 'key', key from tracks
-            where key is not null and ${publicTrackDurationWhere("tracks")}
+            where key is not null and ${publicTrackWhere("tracks")}
         ) group by aggregate_kind, bucket order by aggregate_kind, bucket`),
     client.execute(`select aggregate_kind, bucket, track_count from public_aggregate_counts
         order by aggregate_kind, bucket`),

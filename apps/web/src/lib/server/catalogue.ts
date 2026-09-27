@@ -3,8 +3,8 @@ import { type InStatement } from "@libsql/client/web";
 import { CAPTURE_TIER, type CapturePriorityKind } from "../capture-tier";
 import { DUPLICATE_SIMILARITY, LONG_FORM_MS } from "../catalogue-eligibility";
 import {
-  catalogueTrackDurationWhere,
-  publicTrackDurationOk,
+  type PublicTrackHiddenReason,
+  publicTrackHiddenReason,
 } from "../../db/public-track-visibility";
 import { parseArtistsJson } from "./artists";
 import { getDb, typedRow, typedRows } from "./db";
@@ -1460,6 +1460,8 @@ export type CatalogueTrackItem = {
   hasCapturedAudio: boolean;
   hiddenFromPublic: boolean;
 
+  hiddenReason: PublicTrackHiddenReason | null;
+
   hasPreview: boolean;
   isrc: string | null;
   key: string | null;
@@ -1959,7 +1961,7 @@ export async function listCatalogueTracks(
             sql: `select ${CATALOGUE_SELECT}
                   from tracks ct indexed by tracks_catalogue_active_track_id_idx
                   where ct.is_catalogue = 1 and ct.dismissed_at is null
-                    and not (${catalogueTrackDurationWhere("ct")})
+                    and not (ct.duration_ms < ${LONG_FORM_MS})
                     and not exists (select 1 from findings f where f.track_id = ct.track_id)
                   order by ct.track_id asc
                   limit ?`,
@@ -2025,6 +2027,10 @@ export async function listCatalogueTracks(
 
   const items = rows.map((row) => {
     const artists = parseArtistsJson(row.artists_json);
+    const hiddenReason = publicTrackHiddenReason(
+      { durationMs: row.duration_ms, title: row.title },
+      Number(row.has_finding) === 1,
+    );
     const nearestFinding = row.nearest_finding_track_id
       ? (matches.get(row.nearest_finding_track_id) ?? null)
       : null;
@@ -2058,7 +2064,8 @@ export async function listCatalogueTracks(
       duplicateOf,
       hasCapturedAudio: Number(row.has_captured_audio) === 1,
       hasPreview: Boolean(row.preview_url) || Boolean(row.isrc && row.isrc.trim()),
-      hiddenFromPublic: !publicTrackDurationOk(row.duration_ms, Number(row.has_finding) === 1),
+      hiddenFromPublic: hiddenReason !== null,
+      hiddenReason,
       isrc: row.isrc,
       key: row.key,
       label: row.label,

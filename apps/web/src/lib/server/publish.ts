@@ -1,6 +1,6 @@
 import { type InStatement } from "@libsql/client/web";
 import { type PublishTrackResult } from "@fluncle/contracts";
-import { publicTrackDurationOk } from "../../db/public-track-visibility";
+import { publicTrackOk, type PublicTrackVisibilityInput } from "../../db/public-track-visibility";
 
 export type { PublishTrackResult };
 
@@ -104,8 +104,8 @@ function isPublishedFlag(value: number | null): boolean {
   return Number(value ?? 0) === 1;
 }
 
-function certificationCountDelta(durationMs: number): HubCountDelta {
-  return { certified: 1, renderable: publicTrackDurationOk(durationMs, false) ? 0 : 1 };
+function certificationCountDelta(track: PublicTrackVisibilityInput): HubCountDelta {
+  return { certified: 1, renderable: publicTrackOk(track, false) ? 0 : 1 };
 }
 
 async function resolveFindingLogId(
@@ -579,7 +579,7 @@ async function certifyExistingTrackWithOptions(
   if (row.finding_id && row.finding_log_id) {
     logId = row.finding_log_id;
   } else {
-    const certifyDelta = certificationCountDelta(row.duration_ms);
+    const certifyDelta = certificationCountDelta({ durationMs: row.duration_ms, title: row.title });
     logId = await resolveFindingLogId(db, { foundAt: nowIso, isrc, trackId });
     await batchDueWorkSourceMutation(
       db,

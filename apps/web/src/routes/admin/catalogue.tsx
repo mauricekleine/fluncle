@@ -560,11 +560,11 @@ function CatalogueRow({
     <ObjectRow
       trailing={
         <>
-          {track.hiddenFromPublic ? (
+          {track.hiddenReason === null ? null : (
             <Badge className="whitespace-nowrap" variant="outline">
-              Hidden · long mix
+              {track.hiddenReason === "spoken_word" ? "Hidden · spoken word" : "Hidden · long mix"}
             </Badge>
-          ) : null}
+          )}
           {lens === "quarantine" ? (
             <Badge className="whitespace-nowrap" variant="outline">
               Wrong audio

@@ -19,7 +19,7 @@ import {
 import { parseTracksHubPayload } from "../tracks-search";
 import { readKeyHistogram, resetKeyHistogramCache } from "./key-histogram";
 import { PUBLIC_PROJECTION_CUTOVER_ENABLED_KEY } from "./public-projection-cutover";
-import { publicTrackDurationWhere } from "../../db/public-track-visibility";
+import { publicTrackWhere } from "../../db/public-track-visibility";
 import { LONG_FORM_MS } from "../catalogue-eligibility";
 import {
   type TracksHubEntry,
@@ -451,7 +451,7 @@ describe("the /tracks serverFn boundary never compiles beyond the hub vocabulary
     const clauses = tracksHubClauses(parseTracksHubPayload(payload).filters);
 
     expect(clauses.map((clause) => clause.sql)).toEqual([
-      publicTrackDurationWhere("tracks"),
+      publicTrackWhere("tracks"),
       "tracks.bpm >= ?",
     ]);
   });
@@ -462,7 +462,7 @@ describe("the /tracks serverFn boundary never compiles beyond the hub vocabulary
     >[0];
 
     expect(tracksHubClauses(parseTracksHubPayload(payload).filters)).toEqual([
-      { args: [], sql: publicTrackDurationWhere("tracks") },
+      { args: [], sql: publicTrackWhere("tracks") },
     ]);
   });
 });

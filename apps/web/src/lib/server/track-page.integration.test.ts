@@ -123,6 +123,18 @@ describe("the certified track (shape 1)", () => {
     });
   });
 
+  it("keeps a spoken-word finding at its coordinate", async () => {
+    await db.execute({
+      args: [CERTIFIED],
+      sql: `update tracks set title = title || ' (Interview)' where track_id = ?`,
+    });
+
+    expect(await resolveTrackPageData(CERTIFIED)).toStrictEqual({
+      logId: "701.1.0A",
+      status: "redirect",
+    });
+  });
+
   it("resolves to its coordinate, and never to a page of its own", async () => {
     const data = await resolveTrackPageData(CERTIFIED);
 
@@ -141,6 +153,26 @@ describe("the evidence-rich uncertified track (shape 2)", () => {
     await db.execute({
       args: [LONG_FORM_MS, RICH],
       sql: `update tracks set duration_ms = ? where track_id = ?`,
+    });
+
+    const [data, stats, bag] = await Promise.all([
+      resolveTrackPageData(RICH),
+      collectSitemapIndexStats(),
+      collectSitemapBag("tracks"),
+    ]);
+
+    expect(data).toStrictEqual({ status: "missing" });
+    expect(bag.tracks.map((entry) => entry.trackId)).not.toContain(RICH);
+    expect(stats.tracks.count).toBe(bag.tracks.length);
+  });
+
+  it("hides a spoken-word catalogue row from its destination and the track sitemap", async () => {
+    const before = await collectSitemapBag("tracks");
+    expect(before.tracks.map((entry) => entry.trackId)).toContain(RICH);
+
+    await db.execute({
+      args: [RICH],
+      sql: `update tracks set title = title || ' (Commentary)' where track_id = ?`,
     });
 
     const [data, stats, bag] = await Promise.all([
