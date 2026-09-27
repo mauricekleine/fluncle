@@ -1,6 +1,7 @@
 import { type Client } from "@libsql/client";
 
 import { getDb, typedRows } from "./db";
+import { labelSlug } from "./labels";
 import { logEvent } from "./log";
 import { getSetting } from "./settings";
 
@@ -208,7 +209,7 @@ export type ReleaseRecording = { isrcs: readonly string[]; recordingId: string }
 
 type StoredProbe = { args: (null | string)[]; sql: string };
 
-function storedProbeChunks(
+function recordingProbeChunks(
   labelId: string,
   recordings: readonly ReleaseRecording[],
 ): StoredProbe[] {
@@ -220,28 +221,43 @@ function storedProbeChunks(
       ),
     ),
   ];
-  const chunks: StoredProbe[] = [];
+  const probes: StoredProbe[] = [];
+  const owned = "(label_id = ? or label_id is null)";
+  const columns = "select label_id, label from tracks";
 
   for (let index = 0; index < recordingIds.length; index += STORED_PROBE_CHUNK) {
     const chunk = recordingIds.slice(index, index + STORED_PROBE_CHUNK);
     const marks = chunk.map(() => "?").join(", ");
-    chunks.push({
-      args: [labelId, ...chunk.map((id) => `mb_${id}`), labelId, ...chunk],
-      sql: `exists (select 1 from tracks where label_id = ? and track_id in (${marks}))
-            or exists (select 1 from tracks where label_id = ? and mb_recording_id in (${marks}))`,
+    probes.push({
+      args: [...chunk.map((id) => `mb_${id}`), labelId, ...chunk, labelId],
+      sql: `${columns} where track_id in (${marks}) and ${owned}
+            union all
+            ${columns} where mb_recording_id in (${marks}) and ${owned}
+            limit ${STORED_PROBE_CHUNK}`,
     });
   }
 
   for (let index = 0; index < isrcs.length; index += STORED_PROBE_CHUNK) {
     const chunk = isrcs.slice(index, index + STORED_PROBE_CHUNK);
-    chunks.push({
-      args: [labelId, ...chunk],
-      sql: `exists (select 1 from tracks
-                    where label_id = ? and isrc in (${chunk.map(() => "?").join(", ")}))`,
+    probes.push({
+      args: [...chunk, labelId],
+      sql: `${columns} where isrc in (${chunk.map(() => "?").join(", ")}) and ${owned}
+            limit ${STORED_PROBE_CHUNK}`,
     });
   }
 
-  return chunks;
+  return probes;
+}
+
+async function labelSlugsFor(client: ExecuteClient, labelId: string): Promise<Set<string>> {
+  const result = await client.execute({
+    args: [labelId, labelId],
+    sql: `select slug from labels where id = ?
+          union all
+          select alias_slug as slug from label_aliases where label_id = ? and status = 'confirmed'`,
+  });
+
+  return new Set(typedRows<{ slug: string }>(result.rows).map((row) => row.slug));
 }
 
 type PriorHold = { reason: CrawlHoldReason; state: CrawlHoldState; thresholdYear: number };
@@ -271,22 +287,38 @@ async function releaseAlreadyStored(
     releaseGroupMbid: null | string;
   },
 ): Promise<boolean> {
-  const probes = storedProbeChunks(input.labelId, input.recordings);
-
   if (input.releaseGroupMbid) {
-    probes.unshift({
+    const album = await client.execute({
       args: [input.labelId, input.releaseGroupMbid],
-      sql: `exists (select 1 from tracks
+      sql: `select exists (select 1 from tracks
                     where label_id = ?
-                      and album_id = (select id from albums where release_group_mbid = ?))`,
+                      and album_id = (select id from albums where release_group_mbid = ?)) as stored`,
     });
+
+    if (Number(typedRows<{ stored: number }>(album.rows)[0]?.stored ?? 0) === 1) {
+      return true;
+    }
   }
 
-  for (const probe of probes) {
-    const result = await client.execute({ args: probe.args, sql: `select ${probe.sql} as stored` });
+  let slugs: Set<string> | undefined;
 
-    if (Number(typedRows<{ stored: number }>(result.rows)[0]?.stored ?? 0) === 1) {
+  for (const probe of recordingProbeChunks(input.labelId, input.recordings)) {
+    const result = await client.execute({ args: probe.args, sql: probe.sql });
+    const rows = typedRows<{ label: null | string; label_id: null | string }>(result.rows);
+
+    if (rows.some((row) => row.label_id === input.labelId)) {
       return true;
+    }
+
+    const unlinked = rows.filter((row) => row.label_id === null && row.label);
+
+    if (unlinked.length > 0) {
+      slugs ??= await labelSlugsFor(client, input.labelId);
+      const known = slugs;
+
+      if (unlinked.some((row) => known.has(labelSlug(row.label) ?? ""))) {
+        return true;
+      }
     }
   }
 
@@ -349,13 +381,17 @@ export async function decideReleaseHold(
     return { kind: "store" };
   }
 
-  if (verdict.reason === "before_label_era") {
-    const freshFloor = await freshLabelEraFloorYear(client, input.labelId);
-    const recheck = creditPlausibility({ eraFloorYear: freshFloor, foundingYear, releaseYear });
+  const authorised =
+    verdict.reason === "before_label_era"
+      ? creditPlausibility({
+          eraFloorYear: await freshLabelEraFloorYear(client, input.labelId),
+          foundingYear,
+          releaseYear,
+        })
+      : verdict;
 
-    if (recheck.kind === "plausible") {
-      return { kind: "store" };
-    }
+  if (authorised.kind === "plausible") {
+    return { kind: "store" };
   }
 
   if (
@@ -374,8 +410,8 @@ export async function decideReleaseHold(
       input.releaseDate ?? null,
       JSON.stringify([...new Set(input.artistNames)]),
       input.trackCount,
-      verdict.reason,
-      verdict.thresholdYear,
+      authorised.reason,
+      authorised.thresholdYear,
       now,
       now,
     ],
@@ -388,17 +424,17 @@ export async function decideReleaseHold(
 
   logEvent("info", "crawl.release-held", {
     labelId: input.labelId,
-    reason: verdict.reason,
+    reason: authorised.reason,
     release: input.releaseMbid,
-    releaseYear: verdict.releaseYear,
-    thresholdYear: verdict.thresholdYear,
+    releaseYear: authorised.releaseYear,
+    thresholdYear: authorised.thresholdYear,
   });
 
   return {
     kind: "hold",
-    reason: verdict.reason,
+    reason: authorised.reason,
     recorded: true,
-    thresholdYear: verdict.thresholdYear,
+    thresholdYear: authorised.thresholdYear,
   };
 }
 

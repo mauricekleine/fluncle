@@ -471,6 +471,59 @@ describe("the crawl plausibility hold", () => {
     expect(await holdRow()).toBeUndefined();
   });
 
+  it("counts a stored recording whose label link is missing but whose label text names this label", async () => {
+    releaseBody.isrcs = { "rec-sounds-of-silence": ["USXX16900001"] };
+    await seedLabel("2009");
+    await seedCatalogueTrack(db, { label: "MTA  records", trackId: "5publishedspotifyid" });
+    await db.execute(
+      "update tracks set isrc = 'USXX16900001', label_id = null where track_id = '5publishedspotifyid'",
+    );
+    await seedReleaseNode();
+
+    const pass = await crawlOnce();
+
+    expect(pass.tracksHeldImplausible).toBe(0);
+    expect(await holdRow()).toBeUndefined();
+  });
+
+  it("still holds when an unlinked stored recording names a different label", async () => {
+    releaseBody.isrcs = { "rec-sounds-of-silence": ["USXX16900001"] };
+    await seedLabel("2009");
+    await seedCatalogueTrack(db, { label: "Some Other Imprint", trackId: "5otherspotifyid" });
+    await db.execute(
+      "update tracks set isrc = 'USXX16900001', label_id = null where track_id = '5otherspotifyid'",
+    );
+    await seedReleaseNode();
+
+    const pass = await crawlOnce();
+
+    expect(pass.tracksHeldImplausible).toBe(2);
+  });
+
+  it("records the threshold of the uncached check that authorised the hold", async () => {
+    await seedLabel(null);
+    await seedLabelTracks(Array.from({ length: 20 }, () => 2020));
+    const { decideReleaseHold } = await import("./crawl-plausibility");
+
+    expect(await decideReleaseHold(db, eraInput("release-probe", "2019-01-01"))).toEqual({
+      kind: "store",
+    });
+
+    await db.execute({
+      args: [LABEL_ID],
+      sql: "update tracks set release_date = '2018-01-01' where label_id = ?",
+    });
+
+    const decision = await decideReleaseHold(db, eraInput("release-held-fresh", "2010-01-01"));
+    expect(decision).toMatchObject({ kind: "hold", thresholdYear: 2018 });
+
+    const stored = await db.execute(
+      "select threshold_year, reason from crawl_release_holds where release_mbid = 'release-held-fresh'",
+    );
+    expect(Number(stored.rows[0]?.threshold_year)).toBe(2018);
+    expect(stored.rows[0]?.reason).toBe("before_label_era");
+  });
+
   it("still holds a release whose only stored match is a shared ISRC on another label", async () => {
     releaseBody.isrcs = { "rec-sounds-of-silence": ["USXX16900001"] };
     await seedLabel("2009");
