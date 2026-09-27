@@ -32,7 +32,7 @@
     "fluncle-catalogue-prune": {
       "source": "./packages/skills/fluncle-catalogue-prune",
       "sourceType": "local",
-      "computedHash": "44166b9891a78c861233141a465c5ba941b298fc076a718b3841015fd9cdfb38"
+      "computedHash": "c17cf2e3d837a5ea818fcd2689ce6f8ac139fc659689a252315cdd4cf5988f2a"
     },
     "fluncle-embed-batch": {
       "source": "./packages/skills/fluncle-embed-batch",
@@ -124,13 +124,6 @@
       "sourceType": "github",
       "skillPath": "skills/hetzner-devbox/SKILL.md",
       "computedHash": "fe0333b735fc80b5db248bfba9891ce51e8c93047f085278cc0c743977496489"
-    },
-    "impeccable": {
-      "source": "pbakaus/impeccable",
-      "ref": "7d6109b7232a727534153970d13c2855e0ecda48",
-      "sourceType": "github",
-      "skillPath": ".agents/skills/impeccable/SKILL.md",
-      "computedHash": "5e539d6bfd03da45238437d38eff5986720c2935ad624fe7ccc9ab55b6c922ca"
     },
     "improve": {
       "source": "shadcn/improve",

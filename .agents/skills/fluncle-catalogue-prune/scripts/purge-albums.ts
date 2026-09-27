@@ -19,17 +19,32 @@ export type PurgeAlbumsPlan = {
   orphanArtistIds: string[];
   trackIds: string[];
   unknownAlbumIds: string[];
+  unknownTrackIds: string[];
 };
 
-export function planAlbumPurge(cat: Catalogue, albumIds: readonly string[]): PurgeAlbumsPlan {
+export function planAlbumPurge(
+  cat: Catalogue,
+  albumIds: readonly string[],
+  namedTrackIds: readonly string[] = [],
+): PurgeAlbumsPlan {
   const named = new Set(albumIds);
+  const namedTracks = new Set(namedTrackIds);
   const unknownAlbumIds = albumIds.filter((id) => !cat.albumName.has(id));
-  const onAlbums = cat.tracks.filter((t) => t.album_id !== null && named.has(t.album_id));
+  const unknownTrackIds = namedTrackIds.filter((id) => !cat.trackById.has(id));
+  const onAlbums = cat.tracks.filter(
+    (t) => namedTracks.has(t.track_id) || (t.album_id !== null && named.has(t.album_id)),
+  );
   const findingTrackIds = onAlbums
     .filter((t) => cat.findingTrackIds.has(t.track_id))
     .map((t) => t.track_id);
   const trackIds = onAlbums.map((t) => t.track_id);
   const deletable = new Set(trackIds);
+  const emptiedAlbums = new Set(
+    [...new Set(onAlbums.map((t) => t.album_id).filter((id): id is string => id !== null))].filter(
+      (albumId) =>
+        cat.tracks.filter((t) => t.album_id === albumId).every((t) => deletable.has(t.track_id)),
+    ),
+  );
 
   const touched = new Set<string>();
   const keepsTrack = new Set<string>();
@@ -42,11 +57,12 @@ export function planAlbumPurge(cat: Catalogue, albumIds: readonly string[]): Pur
   }
 
   return {
-    albumIds: albumIds.filter((id) => cat.albumName.has(id)),
+    albumIds: [...new Set([...albumIds.filter((id) => cat.albumName.has(id)), ...emptiedAlbums])],
     findingTrackIds,
     orphanArtistIds: [...touched].filter((id) => !keepsTrack.has(id)),
     trackIds,
     unknownAlbumIds,
+    unknownTrackIds,
   };
 }
 
@@ -72,6 +88,20 @@ async function report(cat: Catalogue, plan: PurgeAlbumsPlan): Promise<boolean> {
     const artists = [...new Set(tracks.flatMap((t) => creditsByTrack.get(t.track_id) ?? []))];
     console.log(`  ${cat.albumName.get(albumId)}  [${label}]  ·  ${tracks.length} tracks`);
     console.log(`      credits: ${artists.slice(0, 8).join(", ") || "(none)"}`);
+  }
+
+  const loose = plan.trackIds.filter((id) => {
+    const albumId = cat.trackById.get(id)?.album_id;
+    return albumId === null || albumId === undefined || !plan.albumIds.includes(albumId);
+  });
+  if (loose.length > 0) {
+    console.log(`\nnamed tracks deleted outside a whole album:`);
+    for (const id of loose) {
+      const t = cat.trackById.get(id);
+      console.log(
+        `  "${t?.title ?? id}"  [${t?.label ?? "(no label)"}]  ·  ${(creditsByTrack.get(id) ?? []).join(", ")}`,
+      );
+    }
   }
 
   console.log(`\nartists deleted because nothing of theirs survives:`);
@@ -115,15 +145,25 @@ export async function main(
       ...(filePath ? parseArtistsFile(readFileSync(filePath, "utf8")) : []),
     ]),
   ];
+  const trackFileIndex = argv.indexOf("--tracks-file");
+  const trackFilePath = trackFileIndex >= 0 ? argv[trackFileIndex + 1] : undefined;
+  const namedTrackIds = [
+    ...new Set([
+      ...listArg(argv, "--tracks"),
+      ...(trackFilePath ? parseArtistsFile(readFileSync(trackFilePath, "utf8")) : []),
+    ]),
+  ];
 
-  if (albumIds.length === 0) {
-    console.log("Nothing to do. Pass --albums with pipe-separated album ids and/or --albums-file.");
+  if (albumIds.length === 0 && namedTrackIds.length === 0) {
+    console.log(
+      "Nothing to do. Pass --albums / --albums-file (album ids) and/or --tracks / --tracks-file (track ids).",
+    );
 
     return 0;
   }
 
   const cat = await load();
-  const plan = planAlbumPurge(cat, albumIds);
+  const plan = planAlbumPurge(cat, albumIds, namedTrackIds);
   console.log(`\n===== TARGETED ALBUM PURGE (${confirm ? "WRITE" : "DRY RUN"}) =====`);
 
   if (plan.unknownAlbumIds.length > 0) {
@@ -133,9 +173,18 @@ export async function main(
     return 1;
   }
 
+  if (plan.unknownTrackIds.length > 0) {
+    console.log(`\n  ⚠ no tracks row for: ${plan.unknownTrackIds.join(", ")}`);
+    console.log(`\nABORTED — every named track id must resolve. Fix the list and re-run.`);
+
+    return 1;
+  }
+
   if (plan.findingTrackIds.length > 0) {
     console.log(`  ⚠ FINDING on a named album: ${plan.findingTrackIds.join(", ")}`);
-    console.log(`\nABORTED — an album holding a findings track is never purged. Drop it.`);
+    console.log(
+      `\nABORTED — a findings track is never purged. Drop it (or its album) from the list.`,
+    );
 
     return 1;
   }
