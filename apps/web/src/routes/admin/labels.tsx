@@ -113,7 +113,7 @@ type LabelsSectionPage = LabelsAdminPage & {
   rules: Record<string, LabelRuleCounts>;
 };
 
-type HeldReleases = { holds: CrawlHold[]; total: number };
+type HeldReleases = { holds: CrawlHold[]; nextCursor?: string; total: number };
 
 type LabelsBoard = {
   aliases: LabelAliasCandidate[];
@@ -190,13 +190,15 @@ const fetchRuleArtists = createServerFn({ method: "GET" })
     return searchRuleArtists(data.query);
   });
 
-const fetchHolds = createServerFn({ method: "GET" }).handler(async (): Promise<HeldReleases> => {
-  if (!(await isAdminRequest())) {
-    throw redirect({ to: "/admin/login" });
-  }
+const fetchHolds = createServerFn({ method: "GET" })
+  .validator((data: { cursor?: string }) => data)
+  .handler(async ({ data }): Promise<HeldReleases> => {
+    if (!(await isAdminRequest())) {
+      throw redirect({ to: "/admin/login" });
+    }
 
-  return listCrawlHolds();
-});
+    return listCrawlHolds(data.cursor ? { cursor: data.cursor } : {});
+  });
 
 const fetchAliases = createServerFn({ method: "GET" }).handler(
   async (): Promise<LabelAliasCandidate[]> => {
@@ -407,33 +409,48 @@ function HeldSection({
   focusHold: string | undefined;
   initialHeld: HeldReleases;
 }) {
-  const { data } = useQuery({
-    initialData: initialHeld,
-    queryFn: () => fetchHolds(),
+  const { data, fetchNextPage, hasNextPage, isFetchingNextPage } = useInfiniteQuery({
+    getNextPageParam: (lastPage: HeldReleases) => lastPage.nextCursor,
+    initialData: { pageParams: [undefined], pages: [initialHeld] },
+    initialPageParam: undefined as string | undefined,
+    queryFn: ({ pageParam }) => fetchHolds({ data: pageParam ? { cursor: pageParam } : {} }),
     queryKey: HOLDS_KEY,
     refetchOnWindowFocus: true,
     staleTime: 20_000,
   });
 
-  if (data.total === 0) {
+  const holds = data.pages.flatMap((page) => page.holds);
+  const total = data.pages.at(-1)?.total ?? initialHeld.total;
+
+  if (total === 0) {
     return null;
   }
-
-  const unshown = data.total - data.holds.length;
 
   return (
     <Section
       intro="The crawl found these on a label you seed from, but the release date sits years before the label's time and none of its artists turn up on a label you seed from. Nothing on them is stored until you rule. Storing one is final."
-      title={`Held releases · ${data.total}`}
+      title={`Held releases · ${total}`}
     >
       <ObjectList>
-        {data.holds.map((hold) => (
+        {holds.map((hold) => (
           <HeldRow focused={hold.releaseMbid === focusHold} hold={hold} key={hold.releaseMbid} />
         ))}
       </ObjectList>
-      {unshown > 0 ? (
-        <p className="text-xs text-muted-foreground">{unshown} more wait behind these.</p>
-      ) : null}
+      {hasNextPage ? (
+        <div className="pt-1 text-center">
+          <Button
+            disabled={isFetchingNextPage}
+            onClick={() => void fetchNextPage()}
+            size="sm"
+            variant="outline"
+          >
+            {isFetchingNextPage ? (
+              <CircleNotchIcon aria-hidden="true" className="animate-spin" weight="bold" />
+            ) : undefined}
+            {isFetchingNextPage ? "Loading…" : "Load more"}
+          </Button>
+        </div>
+      ) : undefined}
     </Section>
   );
 }

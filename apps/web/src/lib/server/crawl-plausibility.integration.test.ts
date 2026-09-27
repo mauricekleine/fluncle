@@ -25,7 +25,15 @@ const NODE_ID = `musicbrainz:release:${RELEASE}`;
 
 type Credit = { id: string; name: string };
 
-let releaseBody: { credits: Credit[]; date: string; recordings: string[] } = {
+type ReleaseBody = {
+  credits: Credit[];
+  date: string;
+  isrcs?: Record<string, string>;
+  recordingCredits?: Record<string, Credit[]>;
+  recordings: string[];
+};
+
+let releaseBody: ReleaseBody = {
   credits: [{ id: "artist-easy-listening", name: "Easy Listening Orchestra" }],
   date: "1969",
   recordings: ["rec-mrs-robinson", "rec-sounds-of-silence"],
@@ -41,12 +49,14 @@ function releaseJson(): object {
       {
         tracks: releaseBody.recordings.map((recording) => ({
           recording: {
-            "artist-credit": releaseBody.credits.map((credit) => ({
-              artist: { id: credit.id, name: credit.name },
-              name: credit.name,
-            })),
+            "artist-credit": (releaseBody.recordingCredits?.[recording] ?? releaseBody.credits).map(
+              (credit) => ({
+                artist: { id: credit.id, name: credit.name },
+                name: credit.name,
+              }),
+            ),
             id: recording,
-            isrcs: [],
+            isrcs: releaseBody.isrcs?.[recording] ? [releaseBody.isrcs[recording]] : [],
             length: 180_000,
             title: `Title ${recording}`,
           },
@@ -154,6 +164,8 @@ beforeEach(async () => {
     date: "1969",
     recordings: ["rec-mrs-robinson", "rec-sounds-of-silence"],
   };
+  const { resetLabelEraCacheForTests } = await import("./crawl-plausibility");
+  resetLabelEraCacheForTests();
 
   vi.stubGlobal(
     "fetch",
@@ -174,6 +186,22 @@ afterEach(async () => {
     fixtureDirectory = undefined;
   }
 });
+
+async function seedHeldRows(count: number): Promise<void> {
+  for (let index = 0; index < count; index += 1) {
+    await db.execute({
+      args: [
+        `release-${String(index).padStart(3, "0")}`,
+        LABEL_ID,
+        `2026-09-27T00:00:${String(index % 60).padStart(2, "0")}.${String(index).padStart(3, "0")}Z`,
+      ],
+      sql: `insert into crawl_release_holds
+              (release_mbid, label_id, artists, track_count, reason, threshold_year,
+               created_at, updated_at)
+            values (?, ?, '[]', 1, 'before_founding', 2009, ?3, ?3)`,
+    });
+  }
+}
 
 describe("the crawl plausibility hold", () => {
   it("holds a release dated two or more years before its enabled label's founding", async () => {
@@ -349,6 +377,147 @@ describe("the crawl plausibility hold", () => {
       sql: "select count(*) as n from crawl_due_work where node_id = ?",
     });
     expect(Number(repairs.rows[0]?.n)).toBe(1);
+  });
+
+  it("stores a released hold whose frontier node had already exhausted its retries", async () => {
+    await seedLabel("2009");
+    await seedReleaseNode();
+    await crawlOnce();
+    await db.execute({
+      args: [NODE_ID],
+      sql: "update crawl_frontier set state = 'failed', failures = 5 where id = ?",
+    });
+
+    const { resolveCrawlHold } = await import("./crawl-plausibility");
+    await resolveCrawlHold(RELEASE, "store");
+    const next = await crawlOnce();
+
+    expect(next.tracksWritten).toBe(2);
+    expect(await storedReleaseTracks()).toBe(2);
+  });
+
+  it("treats a release as already stored when a stored recording is now refused by an artist block", async () => {
+    releaseBody.recordingCredits = {
+      "rec-mrs-robinson": [{ id: "artist-blocked", name: "Blocked Act" }],
+    };
+    await seedLabel("2009");
+    await seedCatalogueTrack(db, { label: "MTA Records", trackId: "mb_rec-mrs-robinson" });
+    await db.execute({
+      args: [NOW, NOW],
+      sql: `insert into artist_rules
+              (id, artist_mbid, artist_name, verdict, label_id, source, created_at, updated_at)
+            values ('arl_block', 'artist-blocked', 'Blocked Act', 'block', null, 'operator', ?, ?)`,
+    });
+    await seedReleaseNode();
+
+    const pass = await crawlOnce();
+
+    expect(pass.tracksHeldImplausible).toBe(0);
+    expect(await holdRow()).toBeUndefined();
+  });
+
+  it("treats a release as already stored when the freshness tap stored one of its recordings first", async () => {
+    releaseBody.isrcs = { "rec-sounds-of-silence": "USXX16900001" };
+    await seedLabel("2009");
+    await seedCatalogueTrack(db, { label: "MTA Records", trackId: "sp_tapfirst" });
+    await db.execute("update tracks set isrc = 'USXX16900001' where track_id = 'sp_tapfirst'");
+    await seedReleaseNode();
+
+    const pass = await crawlOnce();
+
+    expect(pass.tracksHeldImplausible).toBe(0);
+    expect(await holdRow()).toBeUndefined();
+  });
+
+  it("finds a known artist credited past the hundredth position", async () => {
+    await seedArtistOnEnabledLabel("artist-known");
+    const { creditedArtistStoredOnEnabledLabel } = await import("./crawl-plausibility");
+    const credits = [
+      ...Array.from({ length: 150 }, (_, index) => `artist-unknown-${index}`),
+      "artist-known",
+    ];
+
+    expect(await creditedArtistStoredOnEnabledLabel(db, credits)).toBe(true);
+  });
+
+  it("reads no label era when the hold is switched off", async () => {
+    releaseBody.date = "2005-03-01";
+    await seedLabel(null);
+    await seedLabelTracks(Array.from({ length: 20 }, (_, index) => 2015 + (index % 6)));
+    await db.execute(
+      "insert into settings (key, value) values ('crawl_plausibility_hold_enabled', 'false')",
+    );
+    const { decideReleaseHold } = await import("./crawl-plausibility");
+    const execute = vi.spyOn(db, "execute");
+
+    const decision = await decideReleaseHold(db, {
+      artistMbids: [],
+      artistNames: [],
+      foundingDate: null,
+      labelId: LABEL_ID,
+      recordings: [{ isrc: null, recordingId: "rec-flag-off" }],
+      releaseDate: "2005-03-01",
+      releaseGroupMbid: null,
+      releaseMbid: "release-flag-off",
+      releaseTitle: null,
+      trackCount: 1,
+    });
+
+    expect(decision).toEqual({ kind: "store" });
+    const eraReads = execute.mock.calls.filter(([statement]) =>
+      JSON.stringify(statement).includes("order by release_date"),
+    );
+    expect(eraReads).toHaveLength(0);
+  });
+
+  it("reads a label's era once for many releases on it", async () => {
+    await seedLabel(null);
+    await seedLabelTracks(Array.from({ length: 20 }, (_, index) => 2015 + (index % 6)));
+    const { decideReleaseHold } = await import("./crawl-plausibility");
+    const execute = vi.spyOn(db, "execute");
+
+    for (const release of ["release-a", "release-b", "release-c"]) {
+      await decideReleaseHold(db, {
+        artistMbids: [],
+        artistNames: [],
+        foundingDate: null,
+        labelId: LABEL_ID,
+        recordings: [{ isrc: null, recordingId: `rec-${release}` }],
+        releaseDate: "2018-01-01",
+        releaseGroupMbid: null,
+        releaseMbid: release,
+        releaseTitle: null,
+        trackCount: 1,
+      });
+    }
+
+    const eraReads = execute.mock.calls.filter(([statement]) =>
+      JSON.stringify(statement).includes("order by release_date"),
+    );
+    expect(eraReads).toHaveLength(1);
+  });
+
+  it("pages through every held release with a cursor", async () => {
+    await seedLabel("2009");
+    await seedHeldRows(105);
+    const { listCrawlHolds } = await import("./crawl-plausibility");
+
+    const first = await listCrawlHolds();
+    expect(first.total).toBe(105);
+    expect(first.holds).toHaveLength(100);
+    expect(first.nextCursor).toBeDefined();
+
+    const second = await listCrawlHolds({ cursor: first.nextCursor });
+    expect(second.holds).toHaveLength(5);
+    expect(second.nextCursor).toBeUndefined();
+
+    const seen = new Set([...first.holds, ...second.holds].map((hold) => hold.releaseMbid));
+    expect(seen.size).toBe(105);
+
+    const { CrawlHoldCursorError } = await import("./crawl-plausibility");
+    await expect(listCrawlHolds({ cursor: "not-a-cursor" })).rejects.toBeInstanceOf(
+      CrawlHoldCursorError,
+    );
   });
 
   it("refuses to rule on an unknown hold or one already released", async () => {

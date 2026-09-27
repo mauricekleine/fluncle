@@ -694,8 +694,9 @@ async function rearmReleasedHolds(): Promise<number> {
                  created_at, updated_at)
               values (?, 'release', 'musicbrainz', ?, 0, null, ?, 'pending', 0, ?, ?)
               on conflict (id) do update set
-                state = 'pending', cursor = 0, note = null, updated_at = excluded.updated_at
-              where crawl_frontier.state in ('done', 'skipped')`,
+                state = 'pending', cursor = 0, failures = 0, note = null,
+                updated_at = excluded.updated_at
+              where crawl_frontier.state in ('done', 'failed', 'skipped')`,
       },
       markCrawlNodeRepairStatement(nodeId, sourceVersion, {
         now,
@@ -1987,6 +1988,7 @@ async function holdImplausibleCredit(
   release: MbReleaseDetail,
   releaseMbid: string,
   scope: ReleaseLabelScope,
+  candidates: readonly TrackCandidate[],
   kept: TrackCandidate[],
   client?: CrawlDbClient,
 ): Promise<{ heldNote: string; tracksHeldImplausible: number }> {
@@ -2001,10 +2003,15 @@ async function holdImplausibleCredit(
     artistNames: kept.flatMap((candidate) => candidate.artists),
     foundingDate: scope.foundingDate,
     labelId: scope.labelId,
+    recordings: candidates.map((candidate) => ({
+      isrc: candidate.isrc,
+      recordingId: candidate.recordingId,
+    })),
     releaseDate: release.date,
+    releaseGroupMbid: release["release-group"]?.id ?? null,
     releaseMbid,
     releaseTitle: release.title,
-    trackIds: kept.map((candidate) => catalogueTrackId(candidate.recordingId)),
+    trackCount: kept.length,
   });
 
   if (decision.kind === "store") {
@@ -2155,6 +2162,7 @@ async function applyRelease(
     release,
     release.id,
     scope,
+    candidates,
     kept,
     client,
   );

@@ -1084,12 +1084,18 @@ export const listCrawlHolds = oc
   })
   .input(
     z.object({
+      cursor: z.string().min(1).max(512).optional(),
       limit: z.coerce.number().int().min(1).max(100).optional(),
       state: CrawlHoldStateSchema.optional(),
     }),
   )
   .output(
-    z.object({ holds: z.array(CrawlHoldSchema), ok: z.literal(true), total: z.number().int() }),
+    z.object({
+      holds: z.array(CrawlHoldSchema),
+      nextCursor: z.string().optional(),
+      ok: z.literal(true),
+      total: z.number().int(),
+    }),
   );
 
 export const resolveCrawlHold = oc

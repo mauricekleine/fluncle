@@ -71,6 +71,34 @@ describe("oRPC list_crawl_holds (GET /admin/catalogue/holds)", () => {
     expect(await readJson(response)).toEqual({ holds: [HOLD], ok: true, total: 1 });
     expect(listMock).toHaveBeenCalledWith({ limit: 5, state: "kept_out" });
   });
+
+  it("passes the page cursor through and returns the next one", async () => {
+    listMock.mockResolvedValueOnce({ holds: [HOLD], nextCursor: "next-page", total: 101 });
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      req("/admin/catalogue/holds?cursor=this-page", "GET", AGENT_TOKEN),
+    );
+
+    expect(response?.status).toBe(200);
+    expect(await readJson(response)).toEqual({
+      holds: [HOLD],
+      nextCursor: "next-page",
+      ok: true,
+      total: 101,
+    });
+    expect(listMock).toHaveBeenCalledWith({ cursor: "this-page" });
+  });
+
+  it("answers a malformed cursor with 400", async () => {
+    const { CrawlHoldCursorError } = await import("./crawl-plausibility");
+    listMock.mockRejectedValueOnce(new CrawlHoldCursorError());
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      req("/admin/catalogue/holds?cursor=garbage", "GET", AGENT_TOKEN),
+    );
+
+    expect(response?.status).toBe(400);
+  });
 });
 
 describe("oRPC resolve_crawl_hold (POST /admin/catalogue/holds/{releaseMbid}/resolve)", () => {

@@ -20,6 +20,7 @@ import {
 } from "../anchor";
 import {
   CrawlHoldAlreadyReleasedError,
+  CrawlHoldCursorError,
   CrawlHoldNotFoundError,
   listCrawlHolds,
   resolveCrawlHold,
@@ -629,13 +630,18 @@ export function adminCatalogueHandlers(os: Implementer) {
 
   const listCrawlHoldsHandler = os.list_crawl_holds.use(adminAuth).handler(async ({ input }) => {
     try {
-      const { holds, total } = await listCrawlHolds({
+      const page = await listCrawlHolds({
+        ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
         ...(input.limit === undefined ? {} : { limit: input.limit }),
         ...(input.state === undefined ? {} : { state: input.state }),
       });
 
-      return { holds, ok: true as const, total };
+      return { ...page, ok: true as const };
     } catch (error) {
+      if (error instanceof CrawlHoldCursorError) {
+        throw new ORPCError("BAD_REQUEST", { message: error.message, status: 400 });
+      }
+
       throw apiFault(error);
     }
   });
