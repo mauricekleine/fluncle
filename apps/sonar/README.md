@@ -70,7 +70,7 @@ Tracks, centroids, and checkpoint metadata live in one published generation. A r
 | `SONAR_CONSUMER_ID`    | yes      | none      | Stable artifact consumer identity.                                                                                  |
 | `SONAR_SECRET`         | yes      | none      | Shared secret for search requests.                                                                                  |
 | `SONAR_DELTA_SECS`     | no       | `30`      | Delay between bounded change reads.                                                                                 |
-| `SONAR_RECONCILE_SECS` | no       | `3600`    | Delay between explicit replica sync plus full local reconciliation.                                                 |
+| `SONAR_RECONCILE_SECS` | no       | `21600`   | Delay between explicit replica sync plus full local reconciliation.                                                 |
 | `SONAR_BATCH_LIMIT`    | no       | `100`     | Change batch size, maximum 500.                                                                                     |
 | `SONAR_SNAPSHOT_LIMIT` | no       | `200`     | Local snapshot attestation page size, maximum 200.                                                                  |
 | `SONAR_PORT`           | no       | `8080`    | Listen port.                                                                                                        |
