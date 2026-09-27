@@ -84,6 +84,9 @@ export const listLabelArtistRules = oc
   .input(z.object({ id: z.string() }))
   .output(z.object({ ok: z.literal(true), rules: z.array(ArtistRuleSchema) }));
 
+export const LABEL_ARTIST_RULES_MAX = 100;
+export const LABEL_TRIAGE_RULE_PROPOSALS_MAX = LABEL_ARTIST_RULES_MAX * 2;
+
 export const replaceLabelArtistRules = oc
   .route({
     method: "PUT",
@@ -97,7 +100,7 @@ export const replaceLabelArtistRules = oc
       id: z.string(),
       rules: z
         .array(ArtistRuleInputSchema)
-        .max(100)
+        .max(LABEL_ARTIST_RULES_MAX)
         .superRefine((rules, context) => {
           const seen = new Set<string>();
 
@@ -337,7 +340,7 @@ export const RecordLabelTriageBodySchema = z
     reason: z.string().optional(),
     residualOffLaneShare: z.number().min(0).max(1).optional(),
     roundId: z.string(),
-    rules: z.array(TriageRuleProposalSchema).optional(),
+    rules: z.array(TriageRuleProposalSchema).max(LABEL_TRIAGE_RULE_PROPOSALS_MAX).optional(),
     verdict: LabelTriageVerdictSchema,
     verifyAgrees: z.boolean().optional(),
     verifyEvidence: z.string().optional(),
