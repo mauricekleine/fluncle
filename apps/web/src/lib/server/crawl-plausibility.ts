@@ -105,22 +105,26 @@ export function creditPlausibility(input: {
   return { kind: "plausible" };
 }
 
-const labelEraCache = new Map<string, { at: number; floor: null | number }>();
+const labelEraCache = new Map<string, { at: number; dated: number; floor: number }>();
 
 export function resetLabelEraCacheForTests(): void {
   labelEraCache.clear();
 }
 
-async function readLabelEraFloorYear(
-  client: ExecuteClient,
-  labelId: string,
-): Promise<null | number> {
+async function countLabelDatedTracks(client: ExecuteClient, labelId: string): Promise<number> {
   const counted = await client.execute({
     args: [labelId],
     sql: `select count(*) as dated from tracks where label_id = ? and release_date >= '1'`,
   });
-  const dated = Number(typedRows<{ dated: number }>(counted.rows)[0]?.dated ?? 0);
 
+  return Number(typedRows<{ dated: number }>(counted.rows)[0]?.dated ?? 0);
+}
+
+async function readLabelEraFloorYear(
+  client: ExecuteClient,
+  labelId: string,
+  dated: number,
+): Promise<null | number> {
   if (dated < LABEL_ERA_MIN_DATED_TRACKS) {
     return null;
   }
@@ -139,21 +143,36 @@ export async function labelEraFloorYear(
   labelId: string,
   now: number = Date.now(),
 ): Promise<null | number> {
+  const dated = await countLabelDatedTracks(client, labelId);
   const cached = labelEraCache.get(labelId);
 
-  if (cached && now - cached.at < LABEL_ERA_CACHE_TTL_MS) {
+  if (cached && cached.dated === dated && now - cached.at < LABEL_ERA_CACHE_TTL_MS) {
     return cached.floor;
   }
 
-  const floor = await readLabelEraFloorYear(client, labelId);
+  const floor = await readLabelEraFloorYear(client, labelId, dated);
+
+  if (floor === null) {
+    labelEraCache.delete(labelId);
+    return null;
+  }
 
   if (labelEraCache.size >= LABEL_ERA_CACHE_MAX_LABELS) {
     labelEraCache.clear();
   }
 
-  labelEraCache.set(labelId, { at: now, floor });
+  labelEraCache.set(labelId, { at: now, dated, floor });
 
   return floor;
+}
+
+export async function freshLabelEraFloorYear(
+  client: ExecuteClient,
+  labelId: string,
+): Promise<null | number> {
+  labelEraCache.delete(labelId);
+
+  return labelEraFloorYear(client, labelId);
 }
 
 export async function creditedArtistStoredOnEnabledLabel(
@@ -185,16 +204,19 @@ export async function creditedArtistStoredOnEnabledLabel(
 
 const STORED_PROBE_CHUNK = 100;
 
-export type ReleaseRecording = { isrc: null | string; recordingId: string };
+export type ReleaseRecording = { isrcs: readonly string[]; recordingId: string };
 
 type StoredProbe = { args: (null | string)[]; sql: string };
 
-function storedProbeChunks(recordings: readonly ReleaseRecording[]): StoredProbe[] {
+function storedProbeChunks(
+  labelId: string,
+  recordings: readonly ReleaseRecording[],
+): StoredProbe[] {
   const recordingIds = [...new Set(recordings.map((recording) => recording.recordingId))];
   const isrcs = [
     ...new Set(
       recordings.flatMap((recording) =>
-        recording.isrc ? [recording.isrc, recording.isrc.toUpperCase()] : [],
+        recording.isrcs.flatMap((isrc) => (isrc ? [isrc, isrc.toUpperCase()] : [])),
       ),
     ),
   ];
@@ -204,17 +226,18 @@ function storedProbeChunks(recordings: readonly ReleaseRecording[]): StoredProbe
     const chunk = recordingIds.slice(index, index + STORED_PROBE_CHUNK);
     const marks = chunk.map(() => "?").join(", ");
     chunks.push({
-      args: [...chunk.map((id) => `mb_${id}`), ...chunk],
-      sql: `exists (select 1 from tracks where track_id in (${marks}))
-            or exists (select 1 from tracks where mb_recording_id in (${marks}))`,
+      args: [labelId, ...chunk.map((id) => `mb_${id}`), labelId, ...chunk],
+      sql: `exists (select 1 from tracks where label_id = ? and track_id in (${marks}))
+            or exists (select 1 from tracks where label_id = ? and mb_recording_id in (${marks}))`,
     });
   }
 
   for (let index = 0; index < isrcs.length; index += STORED_PROBE_CHUNK) {
     const chunk = isrcs.slice(index, index + STORED_PROBE_CHUNK);
     chunks.push({
-      args: chunk,
-      sql: `exists (select 1 from tracks where isrc in (${chunk.map(() => "?").join(", ")}))`,
+      args: [labelId, ...chunk],
+      sql: `exists (select 1 from tracks
+                    where label_id = ? and isrc in (${chunk.map(() => "?").join(", ")}))`,
     });
   }
 
@@ -248,7 +271,7 @@ async function releaseAlreadyStored(
     releaseGroupMbid: null | string;
   },
 ): Promise<boolean> {
-  const probes = storedProbeChunks(input.recordings);
+  const probes = storedProbeChunks(input.labelId, input.recordings);
 
   if (input.releaseGroupMbid) {
     probes.unshift({
@@ -324,6 +347,15 @@ export async function decideReleaseHold(
 
   if (verdict.kind === "plausible") {
     return { kind: "store" };
+  }
+
+  if (verdict.reason === "before_label_era") {
+    const freshFloor = await freshLabelEraFloorYear(client, input.labelId);
+    const recheck = creditPlausibility({ eraFloorYear: freshFloor, foundingYear, releaseYear });
+
+    if (recheck.kind === "plausible") {
+      return { kind: "store" };
+    }
   }
 
   if (

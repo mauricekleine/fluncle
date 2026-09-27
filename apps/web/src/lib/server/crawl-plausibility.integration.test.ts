@@ -28,7 +28,7 @@ type Credit = { id: string; name: string };
 type ReleaseBody = {
   credits: Credit[];
   date: string;
-  isrcs?: Record<string, string>;
+  isrcs?: Record<string, string[]>;
   recordingCredits?: Record<string, Credit[]>;
   recordings: string[];
 };
@@ -56,7 +56,7 @@ function releaseJson(): object {
               }),
             ),
             id: recording,
-            isrcs: releaseBody.isrcs?.[recording] ? [releaseBody.isrcs[recording]] : [],
+            isrcs: releaseBody.isrcs?.[recording] ?? [],
             length: 180_000,
             title: `Title ${recording}`,
           },
@@ -203,6 +203,29 @@ async function seedHeldRows(count: number): Promise<void> {
   }
 }
 
+async function seedTapTrack(trackId: string, isrc: string, labelId: string): Promise<void> {
+  await seedCatalogueTrack(db, { label: "Tap Label", trackId });
+  await db.execute({
+    args: [isrc, labelId, trackId],
+    sql: "update tracks set isrc = ?, label_id = ? where track_id = ?",
+  });
+}
+
+function eraInput(release: string, releaseDate: string) {
+  return {
+    artistMbids: [],
+    artistNames: [],
+    foundingDate: null,
+    labelId: LABEL_ID,
+    recordings: [{ isrcs: [], recordingId: `rec-${release}` }],
+    releaseDate,
+    releaseGroupMbid: null,
+    releaseMbid: release,
+    releaseTitle: null,
+    trackCount: 1,
+  };
+}
+
 describe("the crawl plausibility hold", () => {
   it("holds a release dated two or more years before its enabled label's founding", async () => {
     await seedLabel("2009");
@@ -298,9 +321,13 @@ describe("the crawl plausibility hold", () => {
     expect(await holdRow()).toBeUndefined();
   });
 
-  it("never judges a release whose tracks the archive already stores", async () => {
+  it("never judges a release whose tracks the archive already stores on its label", async () => {
     await seedLabel("2009");
     await seedCatalogueTrack(db, { label: "MTA Records", trackId: "mb_rec-mrs-robinson" });
+    await db.execute({
+      args: [LABEL_ID],
+      sql: "update tracks set label_id = ? where track_id = 'mb_rec-mrs-robinson'",
+    });
     await seedReleaseNode();
 
     const pass = await crawlOnce();
@@ -403,6 +430,10 @@ describe("the crawl plausibility hold", () => {
     await seedLabel("2009");
     await seedCatalogueTrack(db, { label: "MTA Records", trackId: "mb_rec-mrs-robinson" });
     await db.execute({
+      args: [LABEL_ID],
+      sql: "update tracks set label_id = ? where track_id = 'mb_rec-mrs-robinson'",
+    });
+    await db.execute({
       args: [NOW, NOW],
       sql: `insert into artist_rules
               (id, artist_mbid, artist_name, verdict, label_id, source, created_at, updated_at)
@@ -417,16 +448,82 @@ describe("the crawl plausibility hold", () => {
   });
 
   it("treats a release as already stored when the freshness tap stored one of its recordings first", async () => {
-    releaseBody.isrcs = { "rec-sounds-of-silence": "USXX16900001" };
+    releaseBody.isrcs = { "rec-sounds-of-silence": ["USXX16900001"] };
     await seedLabel("2009");
-    await seedCatalogueTrack(db, { label: "MTA Records", trackId: "sp_tapfirst" });
-    await db.execute("update tracks set isrc = 'USXX16900001' where track_id = 'sp_tapfirst'");
+    await seedTapTrack("sp_tapfirst", "USXX16900001", LABEL_ID);
     await seedReleaseNode();
 
     const pass = await crawlOnce();
 
     expect(pass.tracksHeldImplausible).toBe(0);
     expect(await holdRow()).toBeUndefined();
+  });
+
+  it("matches a tap-first recording on any of the recording's ISRCs", async () => {
+    releaseBody.isrcs = { "rec-sounds-of-silence": ["USXX16900001", "GBXX16900002"] };
+    await seedLabel("2009");
+    await seedTapTrack("sp_tapfirst", "GBXX16900002", LABEL_ID);
+    await seedReleaseNode();
+
+    const pass = await crawlOnce();
+
+    expect(pass.tracksHeldImplausible).toBe(0);
+    expect(await holdRow()).toBeUndefined();
+  });
+
+  it("still holds a release whose only stored match is a shared ISRC on another label", async () => {
+    releaseBody.isrcs = { "rec-sounds-of-silence": ["USXX16900001"] };
+    await seedLabel("2009");
+    await db.execute({
+      args: [NOW, NOW],
+      sql: `insert into labels (id, name, slug, seed_state, created_at, updated_at)
+            values ('lbl_elsewhere', 'Elsewhere', 'elsewhere', 'enabled', ?, ?)`,
+    });
+    await seedTapTrack("sp_shared", "USXX16900001", "lbl_elsewhere");
+    await seedReleaseNode();
+
+    const pass = await crawlOnce();
+
+    expect(pass.tracksHeldImplausible).toBe(2);
+    expect(pass.tracksWritten).toBe(0);
+    expect((await holdRow())?.state).toBe("held");
+  });
+
+  it("sees a label's era the moment it crosses twenty dated tracks", async () => {
+    await seedLabel(null);
+    await seedLabelTracks(Array.from({ length: 19 }, () => 2020));
+    const { decideReleaseHold } = await import("./crawl-plausibility");
+
+    expect(await decideReleaseHold(db, eraInput("release-early", "2005-01-01"))).toEqual({
+      kind: "store",
+    });
+
+    await seedCatalogueTrack(db, { label: "MTA Records", trackId: "mb_era-twentieth" });
+    await db.execute({
+      args: [LABEL_ID],
+      sql: "update tracks set label_id = ?, release_date = '2020-01-01' where track_id = 'mb_era-twentieth'",
+    });
+
+    expect((await decideReleaseHold(db, eraInput("release-late", "2005-01-01"))).kind).toBe("hold");
+  });
+
+  it("never holds on an era the label's stored catalogue has since moved away from", async () => {
+    await seedLabel(null);
+    await seedLabelTracks(Array.from({ length: 20 }, () => 2020));
+    const { decideReleaseHold } = await import("./crawl-plausibility");
+
+    expect(await decideReleaseHold(db, eraInput("release-probe", "2019-01-01"))).toEqual({
+      kind: "store",
+    });
+
+    await db.execute({
+      args: [LABEL_ID],
+      sql: "update tracks set release_date = '1995-01-01' where label_id = ?",
+    });
+
+    expect(await decideReleaseHold(db, eraInput("release-after-merge", "2010-01-01"))).toEqual({
+      kind: "store",
+    });
   });
 
   it("finds a known artist credited past the hundredth position", async () => {
@@ -455,7 +552,7 @@ describe("the crawl plausibility hold", () => {
       artistNames: [],
       foundingDate: null,
       labelId: LABEL_ID,
-      recordings: [{ isrc: null, recordingId: "rec-flag-off" }],
+      recordings: [{ isrcs: [], recordingId: "rec-flag-off" }],
       releaseDate: "2005-03-01",
       releaseGroupMbid: null,
       releaseMbid: "release-flag-off",
@@ -482,7 +579,7 @@ describe("the crawl plausibility hold", () => {
         artistNames: [],
         foundingDate: null,
         labelId: LABEL_ID,
-        recordings: [{ isrc: null, recordingId: `rec-${release}` }],
+        recordings: [{ isrcs: [], recordingId: `rec-${release}` }],
         releaseDate: "2018-01-01",
         releaseGroupMbid: null,
         releaseMbid: release,

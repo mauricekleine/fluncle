@@ -18,7 +18,7 @@ import {
   markCrawlNodeRepairsByUpdatedAtStatement,
   markCrawlProjectionRepairStatement,
 } from "./crawl-due-work";
-import { decideReleaseHold } from "./crawl-plausibility";
+import { decideReleaseHold, type ReleaseRecording } from "./crawl-plausibility";
 import { currentSeedRearmBoundary } from "./crawl-rearm-schedule";
 import {
   CRAWL_CATALOGUE_CLAIM_OWNER,
@@ -1984,11 +1984,20 @@ function discogsIdsForRelease(release: MbReleaseDetail): {
   return { inMasterId, inReleaseId };
 }
 
+function releaseRecordings(release: MbReleaseDetail): ReleaseRecording[] {
+  return (release.media ?? []).flatMap((medium) =>
+    (medium.tracks ?? []).flatMap((track) =>
+      track.recording?.id
+        ? [{ isrcs: track.recording.isrcs ?? [], recordingId: track.recording.id }]
+        : [],
+    ),
+  );
+}
+
 async function holdImplausibleCredit(
   release: MbReleaseDetail,
   releaseMbid: string,
   scope: ReleaseLabelScope,
-  candidates: readonly TrackCandidate[],
   kept: TrackCandidate[],
   client?: CrawlDbClient,
 ): Promise<{ heldNote: string; tracksHeldImplausible: number }> {
@@ -2003,10 +2012,7 @@ async function holdImplausibleCredit(
     artistNames: kept.flatMap((candidate) => candidate.artists),
     foundingDate: scope.foundingDate,
     labelId: scope.labelId,
-    recordings: candidates.map((candidate) => ({
-      isrc: candidate.isrc,
-      recordingId: candidate.recordingId,
-    })),
+    recordings: releaseRecordings(release),
     releaseDate: release.date,
     releaseGroupMbid: release["release-group"]?.id ?? null,
     releaseMbid,
@@ -2162,7 +2168,6 @@ async function applyRelease(
     release,
     release.id,
     scope,
-    candidates,
     kept,
     client,
   );
