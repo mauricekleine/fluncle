@@ -1,21 +1,23 @@
 import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { EMBEDDING_DIMENSIONS, type LabelOutlierRun, scoreCatalogue } from "./label-outliers";
 import {
+  type AlertedUnit,
   type CorpusFloor,
   discordMessage,
   MAX_RECORDED_OUTLIERS,
-  openReplicaSnapshot,
+  copyReplicaUnderMirrorLock,
   readEmbedding,
   readReplicaInputs,
   type RecordPayload,
   runLabelOutliersSweep,
-  scoreReplicaFile,
-  type ScoredReplica,
+  type ScoreOutcome,
+  scoreReplicaCopy,
+  scoreSnapshotFile,
   type SweepDeps,
   toPayload,
 } from "./label-outliers-sweep";
@@ -144,54 +146,93 @@ describe("the replica read", () => {
   });
 });
 
+function lockDirIn(directory: string): string {
+  return join(directory, ".device-mirror.lock");
+}
+
 describe("the device mirror always wins the replica", () => {
-  test("scoring runs while the device mirror holds its lock and never touches that lock", async () => {
+  test("a held mirror lock makes the sweep stand aside without touching the lock or the replica", async () => {
     const path = replicaFile();
-    const lockDir = join(scratchDir(), ".device-mirror.lock");
+    const lockDir = lockDirIn(scratchDir());
     mkdirSync(lockDir);
     const heldSince = statSync(lockDir).mtimeMs;
+    const copyFile = join(scratchDir(), "copy.db");
 
-    const scored = await scoreReplicaFile(path);
+    const outcome = await copyReplicaUnderMirrorLock(path, lockDir, copyFile);
 
-    expect(scored?.run.flagged.map((unit) => unit.unitId)).toEqual(["album:alb_xmas:lbl_dnb"]);
-    expect(existsSync(lockDir)).toBe(true);
+    expect(outcome).toEqual({ kind: "busy" });
+    expect(existsSync(copyFile)).toBe(false);
     expect(statSync(lockDir).mtimeMs).toBe(heldSince);
   });
 
-  test("scoring leaves the device mirror's lock free to take", async () => {
-    const path = replicaFile();
-    const lockDir = join(scratchDir(), ".device-mirror.lock");
+  test("a busy replica skips the payload so the retry slot runs it", async () => {
+    const fake = deps({ score: async () => ({ kind: "busy" }) });
+    const summary = await runLabelOutliersSweep(fake, TEST_FLOOR);
 
-    await scoreReplicaFile(path);
-
-    expect(existsSync(lockDir)).toBe(false);
-    mkdirSync(lockDir);
-    expect(existsSync(lockDir)).toBe(true);
+    expect(summary).toMatchObject({ ok: true, payloadStarted: false, reason: "replica_busy" });
+    expect(fake.recorded).toEqual([]);
   });
 
-  test("the mirror's sync and checkpoint commit while a scoring snapshot is open, and the snapshot stays consistent", () => {
+  test("the lock is held only for the copy and released before scoring", async () => {
     const path = replicaFile();
-    const snapshot = openReplicaSnapshot(path);
-    const mirror = new Database(path, { strict: true });
+    const lockDir = lockDirIn(scratchDir());
 
-    mirror.run(
-      "insert into tracks (track_id, label_id, album_id, is_catalogue, has_embedding) values ('late_1', 'lbl_dnb', 'alb_late', 1, 1)",
+    const outcome = await scoreReplicaCopy(path, lockDir);
+
+    expect(outcome.kind).toBe("scored");
+    if (outcome.kind === "scored") {
+      expect(outcome.run.flagged.map((unit) => unit.unitId)).toEqual(["album:alb_xmas:lbl_dnb"]);
+      expect(outcome.embeddedTracks).toBe(23);
+      expect(outcome.lockHeldMs).toBeGreaterThanOrEqual(0);
+    }
+    expect(existsSync(lockDir)).toBe(false);
+  });
+
+  test("scoring reads only the copy, so a mirror rebuild after the lock is released cannot reach it", async () => {
+    const path = replicaFile();
+    const lockDir = lockDirIn(scratchDir());
+    const copyFile = join(scratchDir(), "copy.db");
+
+    expect((await copyReplicaUnderMirrorLock(path, lockDir, copyFile)).kind).toBe("copied");
+    for (const suffix of ["", "-wal", "-shm"]) {
+      rmSync(`${path}${suffix}`, { force: true });
+    }
+
+    const scored = scoreSnapshotFile(copyFile);
+
+    expect(scored.run.flagged.map((unit) => unit.unitId)).toEqual(["album:alb_xmas:lbl_dnb"]);
+    expect(scored.embeddedTracks).toBe(23);
+  });
+
+  test("the lock is released even when the copy fails", async () => {
+    const path = join(scratchDir(), "source-replica.db");
+    writeFileSync(path, "not a database");
+    const lockDir = lockDirIn(scratchDir());
+
+    const failed = await copyReplicaUnderMirrorLock(
+      path,
+      lockDir,
+      join(scratchDir(), "copy.db"),
+    ).then(
+      () => false,
+      () => true,
     );
-    mirror.run("insert into track_embeddings (track_id, embedding_blob) values (?, ?)", [
-      "late_1",
-      blobToward(0, 0.03),
-    ]);
-    mirror.query("PRAGMA wal_checkpoint(TRUNCATE)").get();
 
-    const tracks = [...snapshot.inputs.groups()].flatMap((group) => group.tracks);
+    expect(failed).toBe(true);
+    expect(existsSync(lockDir)).toBe(false);
+  });
 
-    expect(tracks.map((track) => track.trackId)).not.toContain("late_1");
-    expect(tracks).toHaveLength(23);
-    snapshot.close();
+  test("a missing replica never takes the lock", async () => {
+    const lockDir = lockDirIn(scratchDir());
 
-    const count = mirror.query<{ n: number }, []>("select count(*) as n from tracks").get();
-    expect(count?.n).toBe(25);
-    mirror.close();
+    const outcome = await copyReplicaUnderMirrorLock(
+      join(scratchDir(), "absent.db"),
+      lockDir,
+      join(scratchDir(), "copy.db"),
+    );
+
+    expect(outcome).toEqual({ kind: "missing" });
+    expect(existsSync(lockDir)).toBe(false);
   });
 });
 
@@ -217,16 +258,21 @@ function run(outliers: number, tracksScored = 40): LabelOutlierRun {
   };
 }
 
-function scored(outliers: number, tracksScored = 40, embeddedTracks = 40): ScoredReplica {
+function scored(outliers: number, tracksScored = 40, embeddedTracks = 40): ScoreOutcome {
   return {
     embeddedTracks,
+    kind: "scored",
+    lockHeldMs: 5,
     replicaSyncedAt: "2026-09-27T03:00:00.000Z",
     run: run(outliers, tracksScored),
   };
 }
 
+const U1: AlertedUnit = { fingerprint: "fp-1", unitId: "u1" };
+const U2: AlertedUnit = { fingerprint: "fp-2", unitId: "u2" };
+
 type FakeDeps = SweepDeps & {
-  acknowledged: string[][];
+  acknowledged: AlertedUnit[][];
   notified: string[];
   recorded: RecordPayload[];
 };
@@ -234,12 +280,12 @@ type FakeDeps = SweepDeps & {
 function deps(overrides: Partial<SweepDeps> = {}): FakeDeps {
   const notified: string[] = [];
   const recorded: RecordPayload[] = [];
-  const acknowledged: string[][] = [];
+  const acknowledged: AlertedUnit[][] = [];
 
   return {
-    acknowledge: async (unitIds) => {
-      acknowledged.push(unitIds);
-      return { kind: "completed", response: { acknowledged: unitIds.length, ok: true } };
+    acknowledge: async (units) => {
+      acknowledged.push(units);
+      return { kind: "completed", response: { acknowledged: units.length, ok: true } };
     },
     acknowledged,
     notified,
@@ -251,7 +297,7 @@ function deps(overrides: Partial<SweepDeps> = {}): FakeDeps {
       recorded.push(payload);
       return {
         kind: "completed",
-        response: { flagged: payload.outliers.length, ok: true, pendingAlertIds: [] },
+        response: { flagged: payload.outliers.length, ok: true, pendingAlertUnits: [] },
       };
     },
     recorded,
@@ -290,7 +336,7 @@ describe("the nightly sweep", () => {
         response: {
           flagged: 5,
           ok: true,
-          pendingAlertIds: ["u1", "u2"],
+          pendingAlertUnits: [U1, U2],
           pendingAlerts: [
             { albumName: "Merry Christmas", labelName: "Penny Black", title: "White Christmas" },
           ],
@@ -303,7 +349,7 @@ describe("the nightly sweep", () => {
     expect(fake.notified).toHaveLength(1);
     expect(fake.notified[0]).toContain("Merry Christmas on Penny Black");
     expect(fake.notified[0]).toContain("2 new to review");
-    expect(fake.acknowledged).toEqual([["u1", "u2"]]);
+    expect(fake.acknowledged).toEqual([[U1, U2]]);
   });
 
   test("a failed Discord post leaves the alert pending instead of acknowledging it", async () => {
@@ -311,7 +357,7 @@ describe("the nightly sweep", () => {
       notify: async () => false,
       record: async () => ({
         kind: "completed",
-        response: { flagged: 1, ok: true, pendingAlertIds: ["u1"], pendingAlerts: [] },
+        response: { flagged: 1, ok: true, pendingAlertUnits: [U1], pendingAlerts: [] },
       }),
     });
     const summary = await runLabelOutliersSweep(fake, TEST_FLOOR);
@@ -321,7 +367,10 @@ describe("the nightly sweep", () => {
   });
 
   test("a missing replica is a failure the operator sees", async () => {
-    const summary = await runLabelOutliersSweep(deps({ score: async () => null }), TEST_FLOOR);
+    const summary = await runLabelOutliersSweep(
+      deps({ score: async () => ({ kind: "missing" }) }),
+      TEST_FLOOR,
+    );
 
     expect(summary).toMatchObject({ ok: false, payloadStarted: false, reason: "replica_missing" });
   });

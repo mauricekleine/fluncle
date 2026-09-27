@@ -205,7 +205,7 @@ export const DATABASE_ADMISSION_SHAPES: Readonly<Record<string, DatabaseAdmissio
   ),
   "catalogue.label-outliers": phased(
     `${SCRIPTS}/label-outliers-sweep.ts`,
-    "Scoring reads a read-only snapshot of the device-mirror's local replica with no lease and no mirror lock; the replace-the-list write and the alert acknowledgement are each admitted as their own short phase.",
+    "Scoring copies its inputs out of the device-mirror replica under the mirror's own lock, taken without waiting and held about a second, then scores the copy with no lease; the replace-the-list write and the alert acknowledgement are each admitted as their own short phase.",
     1,
   ),
   "catalogue.label-releases": wholeLifetime(
@@ -2153,7 +2153,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
       noDatabase(
         "catalogue.label-outliers.score",
         null,
-        "score a read-only snapshot of the device-mirror source replica without the mirror lock",
+        "copy the scoring inputs out of the device-mirror source replica under the mirror lock, then score the copy",
         `${SCRIPTS}/label-outliers-sweep.ts`,
         { mutationTarget: null },
       ),

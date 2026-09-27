@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 
 import { Database } from "bun:sqlite";
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, rmdir, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -60,10 +60,12 @@ export type RecordPayload = {
 
 export type PendingAlert = { albumName: string | null; labelName: string | null; title: string };
 
+export type AlertedUnit = { fingerprint: string; unitId: string };
+
 export type RecordResponse = {
   flagged?: number;
   ok?: boolean;
-  pendingAlertIds?: string[];
+  pendingAlertUnits?: AlertedUnit[];
   pendingAlerts?: PendingAlert[];
   removed?: number;
 };
@@ -82,6 +84,7 @@ export type ScoredReplica = {
 
 export type LabelOutliersSummary = {
   alertAcknowledged: boolean | null;
+  lockHeldMs?: null | number;
   checked: null | number;
   elapsedMs?: number;
   embeddedTracks: null | number;
@@ -203,6 +206,10 @@ const CATALOGUE_EMBEDDED = `from tracks t
   join track_embeddings e on e.track_id = t.track_id
   where t.is_catalogue = 1`;
 
+const EMBEDDINGS_FIRST = `from track_embeddings e
+  cross join tracks t on t.track_id = e.track_id
+  where t.is_catalogue = 1`;
+
 export type ReplicaInputs = {
   artistsByTrack: Map<string, string[]>;
   dnbTaggedAlbumIds: Set<string>;
@@ -312,34 +319,177 @@ export function openReplicaSnapshot(path: string): ReplicaSnapshot {
   }
 }
 
-export async function scoreReplicaFile(path: string): Promise<ScoredReplica | null> {
-  const file = await stat(path).catch(() => undefined);
-
-  if (!file) {
-    log(`no device-mirror replica at ${path}`);
-    return null;
-  }
-
+export function scoreSnapshotFile(path: string): Omit<ScoredReplica, "replicaSyncedAt"> {
   const snapshot = openReplicaSnapshot(path);
 
   try {
     const run = scoreCatalogue({ ...snapshot.inputs, groups: snapshot.inputs.groups() });
 
-    return {
-      embeddedTracks: snapshot.inputs.embeddedTracks,
-      replicaSyncedAt: new Date(file.mtimeMs).toISOString(),
-      run,
-    };
+    return { embeddedTracks: snapshot.inputs.embeddedTracks, run };
   } finally {
     snapshot.close();
   }
 }
 
+const COPY_SCHEMA = [
+  `create table tracks (track_id text primary key, label_id text, album_id text,
+     is_catalogue integer not null, has_embedding integer not null)`,
+  "create table track_embeddings (track_id text primary key, embedding_blob blob not null)",
+  "create table track_artists (track_id text not null, artist_id text not null)",
+  "create table albums (id text primary key, discogs_styles text)",
+];
+
+export function copyScoringInputs(source: Database, target: Database): number {
+  for (const statement of COPY_SCHEMA) {
+    target.run(statement);
+  }
+
+  const insertTrack = target.prepare(
+    "insert into tracks (track_id, label_id, album_id, is_catalogue, has_embedding) values (?, ?, ?, ?, ?)",
+  );
+  const insertEmbedding = target.prepare(
+    "insert into track_embeddings (track_id, embedding_blob) values (?, ?)",
+  );
+  const insertArtist = target.prepare(
+    "insert into track_artists (track_id, artist_id) values (?, ?)",
+  );
+  const insertAlbum = target.prepare("insert into albums (id, discogs_styles) values (?, ?)");
+  let copied = 0;
+
+  target.run("BEGIN");
+
+  for (const row of source
+    .query<
+      {
+        album_id: string | null;
+        embedding_blob: Uint8Array;
+        has_embedding: number;
+        is_catalogue: number;
+        label_id: string | null;
+        track_id: string;
+      },
+      []
+    >(
+      `select t.track_id, t.label_id, t.album_id, t.is_catalogue, t.has_embedding, e.embedding_blob
+         ${EMBEDDINGS_FIRST}`,
+    )
+    .iterate()) {
+    insertTrack.run(row.track_id, row.label_id, row.album_id, row.is_catalogue, row.has_embedding);
+    insertEmbedding.run(row.track_id, row.embedding_blob);
+    copied += 1;
+  }
+
+  for (const row of source
+    .query<{ artist_id: string; track_id: string }, []>(
+      `select ta.track_id, ta.artist_id from track_embeddings e
+         cross join tracks t on t.track_id = e.track_id
+         cross join track_artists ta on ta.track_id = e.track_id
+        where t.is_catalogue = 1`,
+    )
+    .iterate()) {
+    insertArtist.run(row.track_id, row.artist_id);
+  }
+
+  for (const row of source
+    .query<{ discogs_styles: string; id: string }, []>(
+      "select id, discogs_styles from albums where discogs_styles is not null",
+    )
+    .iterate()) {
+    insertAlbum.run(row.id, row.discogs_styles);
+  }
+
+  target.run("COMMIT");
+  target.run("create index tracks_label_id_idx on tracks (label_id)");
+
+  return copied;
+}
+
+export type CopyOutcome =
+  | { heldMs: number; kind: "copied" }
+  | { kind: "busy" }
+  | { kind: "missing" };
+
+export async function copyReplicaUnderMirrorLock(
+  replicaFile: string,
+  lockDir: string,
+  copyFile: string,
+  now: () => number = () => performance.now(),
+): Promise<CopyOutcome> {
+  if (!(await stat(replicaFile).catch(() => undefined))) {
+    return { kind: "missing" };
+  }
+
+  try {
+    await mkdir(lockDir);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+      return { kind: "busy" };
+    }
+    throw error;
+  }
+
+  const lockedAt = now();
+
+  try {
+    const source = new Database(replicaFile, { readonly: true, strict: true });
+    const target = new Database(copyFile, { create: true, strict: true });
+
+    try {
+      target.run("PRAGMA journal_mode = OFF");
+      target.run("PRAGMA synchronous = OFF");
+      source.run("BEGIN");
+      copyScoringInputs(source, target);
+      source.run("COMMIT");
+    } finally {
+      target.close();
+      source.close();
+    }
+  } finally {
+    await rmdir(lockDir);
+  }
+
+  return { heldMs: Math.round(now() - lockedAt), kind: "copied" };
+}
+
+export type ScoreOutcome =
+  | ({ kind: "scored"; lockHeldMs: number | null } & ScoredReplica)
+  | { kind: "busy" }
+  | { kind: "missing" };
+
+export async function scoreReplicaCopy(
+  replicaFile: string,
+  lockDir: string,
+): Promise<ScoreOutcome> {
+  const replicaStat = await stat(replicaFile).catch(() => undefined);
+  const directory = await mkdtemp(join(tmpdir(), "label-outliers-copy-"));
+  const copyFile = join(directory, "scoring-inputs.db");
+
+  try {
+    const copy = await copyReplicaUnderMirrorLock(replicaFile, lockDir, copyFile);
+
+    if (copy.kind !== "copied") {
+      if (copy.kind === "missing") {
+        log(`no device-mirror replica at ${replicaFile}`);
+      }
+      return copy;
+    }
+
+    return {
+      ...scoreSnapshotFile(copyFile),
+      kind: "scored",
+      lockHeldMs: copy.heldMs,
+      replicaSyncedAt: replicaStat ? new Date(replicaStat.mtimeMs).toISOString() : null,
+    };
+  } finally {
+    await rm(directory, { force: true, recursive: true });
+  }
+}
+
 export type SweepDeps = {
-  acknowledge: (unitIds: string[]) => Promise<Admitted<AcknowledgeResponse>>;
+  acknowledge: (units: AlertedUnit[]) => Promise<Admitted<AcknowledgeResponse>>;
   notify: (message: string) => Promise<boolean>;
   record: (payload: RecordPayload) => Promise<Admitted<RecordResponse>>;
-  score: () => Promise<ScoredReplica | null>;
+  score: () => Promise<ScoreOutcome>;
 };
 
 function admissionReason(reason: string | null): string {
@@ -351,17 +501,17 @@ async function alertAndAcknowledge(
   response: RecordResponse,
   summary: LabelOutliersSummary,
 ): Promise<void> {
-  const pendingIds = Array.isArray(response.pendingAlertIds) ? response.pendingAlertIds : [];
+  const pendingUnits = Array.isArray(response.pendingAlertUnits) ? response.pendingAlertUnits : [];
   const named = Array.isArray(response.pendingAlerts) ? response.pendingAlerts : [];
 
-  summary.pendingAlerts = pendingIds.length;
+  summary.pendingAlerts = pendingUnits.length;
 
-  if (pendingIds.length === 0) {
+  if (pendingUnits.length === 0) {
     return;
   }
 
   summary.notified = await deps.notify(
-    discordMessage(named, pendingIds.length, response.flagged ?? pendingIds.length),
+    discordMessage(named, pendingUnits.length, response.flagged ?? pendingUnits.length),
   );
 
   if (!summary.notified) {
@@ -370,7 +520,7 @@ async function alertAndAcknowledge(
   }
 
   try {
-    const acknowledged = await deps.acknowledge(pendingIds);
+    const acknowledged = await deps.acknowledge(pendingUnits);
     summary.alertAcknowledged =
       acknowledged.kind === "completed" && acknowledged.response.ok === true;
   } catch (error) {
@@ -388,9 +538,15 @@ export async function runLabelOutliersSweep(
   const summary = emptySummary();
   const scored = await deps.score();
 
-  if (!scored) {
+  if (scored.kind === "missing") {
     return { ...summary, errors: 1, ok: false, reason: "replica_missing" };
   }
+
+  if (scored.kind === "busy") {
+    return { ...summary, reason: "replica_busy" };
+  }
+
+  summary.lockHeldMs = scored.lockHeldMs;
 
   summary.checked = scored.run.unitsScored;
   summary.embeddedTracks = scored.embeddedTracks;
@@ -442,6 +598,12 @@ function replicaPath(): string {
   const stateDirectory = process.env.DEVICE_MIRROR_STATE_DIR ?? join(home, "device-mirror");
 
   return join(stateDirectory, "source-replica.db");
+}
+
+function replicaLockDir(): string {
+  const home = process.env.HOME ?? "/opt/data/home";
+
+  return process.env.DEVICE_MIRROR_LOCK_DIR ?? `${home}/.device-mirror.lock`;
 }
 
 async function putJson<T>(path: string, body: unknown, what: string): Promise<T> {
@@ -531,10 +693,10 @@ async function main(): Promise<LabelOutliersSummary> {
   }
 
   const summary = await runLabelOutliersSweep({
-    acknowledge: (unitIds) => admittedPut<AcknowledgeResponse>("acknowledge", { unitIds }),
+    acknowledge: (units) => admittedPut<AcknowledgeResponse>("acknowledge", { units }),
     notify: notifyDiscord,
     record: (payload) => admittedPut<RecordResponse>("record", payload),
-    score: () => scoreReplicaFile(replicaPath()),
+    score: () => scoreReplicaCopy(replicaPath(), replicaLockDir()),
   });
 
   return { ...summary, elapsedMs: Date.now() - started };

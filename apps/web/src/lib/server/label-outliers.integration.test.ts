@@ -118,13 +118,45 @@ beforeEach(async () => {
 
 const ALBUM_UNIT = "album:alb_xmas:lbl_penny";
 
+const ALBUM_ALERT = { fingerprint: "fp-1", unitId: ALBUM_UNIT };
+
+async function seedEmbeddedCatalogue(count: number): Promise<void> {
+  const blob = new Uint8Array(4096);
+  await db.batch(
+    Array.from({ length: count }, (_, index) => [
+      {
+        args: [`emb_${index}`],
+        sql: `insert into tracks (track_id, title, artists_json, duration_ms, is_catalogue)
+              values (?, 'Embedded', '[]', 180000, 1)`,
+      },
+      {
+        args: [`emb_${index}`, blob],
+        sql: "insert into track_embeddings (track_id, embedding_blob) values (?, ?)",
+      },
+    ]).flat(),
+    "write",
+  );
+}
+
+async function purgeEmbeddedCatalogue(count: number): Promise<void> {
+  const ids = JSON.stringify(Array.from({ length: count }, (_, index) => `emb_${index}`));
+  await db.execute({
+    args: [ids],
+    sql: "delete from track_embeddings where track_id in (select value from json_each(?))",
+  });
+  await db.execute({
+    args: [ids],
+    sql: "delete from tracks where track_id in (select value from json_each(?))",
+  });
+}
+
 describe("recordLabelOutliers", () => {
   it("stores the flagged set and names every visible unit not yet announced", async () => {
     const result = await recordLabelOutliers(run([outlier(), single]), () => STAMP);
 
     expect(result).toMatchObject({
       flagged: 2,
-      pendingAlertIds: [ALBUM_UNIT, "track:t_single"],
+      pendingAlertUnits: [ALBUM_ALERT, { fingerprint: "fp-single", unitId: "track:t_single" }],
       removed: 0,
     });
     expect(result.pendingAlerts).toEqual([
@@ -149,20 +181,23 @@ describe("recordLabelOutliers", () => {
 
     const retry = await recordLabelOutliers(run([outlier()]), () => STAMP);
 
-    expect(retry.pendingAlertIds).toEqual([ALBUM_UNIT]);
+    expect(retry.pendingAlertUnits).toEqual([ALBUM_ALERT]);
   });
 
   it("an acknowledged alert is not announced again, and a repeat run drops what left the list", async () => {
     await recordLabelOutliers(run([outlier(), single]), () => STAMP);
-    expect(await acknowledgeLabelOutlierAlerts([ALBUM_UNIT, "track:t_single"], () => STAMP)).toBe(
-      2,
-    );
+    expect(
+      await acknowledgeLabelOutlierAlerts(
+        [ALBUM_ALERT, { fingerprint: "fp-single", unitId: "track:t_single" }],
+        () => STAMP,
+      ),
+    ).toBe(2);
 
     const repeat = await recordLabelOutliers(run([outlier({ z: -15.21 })]), () => STAMP);
 
     expect(repeat).toMatchObject({
       flagged: 1,
-      pendingAlertIds: [],
+      pendingAlertUnits: [],
       pendingAlerts: [],
       removed: 1,
     });
@@ -171,16 +206,29 @@ describe("recordLabelOutliers", () => {
 
   it("an announced unit whose tracks change is announced again", async () => {
     await recordLabelOutliers(run([outlier()]), () => STAMP);
-    await acknowledgeLabelOutlierAlerts([ALBUM_UNIT], () => STAMP);
+    await acknowledgeLabelOutlierAlerts([ALBUM_ALERT], () => STAMP);
 
     const moved = await recordLabelOutliers(run([outlier({ z: -16 })]), () => STAMP);
-    expect(moved.pendingAlertIds).toEqual([]);
+    expect(moved.pendingAlertUnits).toEqual([]);
 
     const changed = await recordLabelOutliers(
       run([outlier({ fingerprint: "fp-2", trackCount: 3 })]),
       () => STAMP,
     );
-    expect(changed.pendingAlertIds).toEqual([ALBUM_UNIT]);
+    expect(changed.pendingAlertUnits).toEqual([{ fingerprint: "fp-2", unitId: ALBUM_UNIT }]);
+  });
+
+  it("an acknowledgement for a fingerprint that changed since the post does not silence the new version", async () => {
+    await recordLabelOutliers(run([outlier()]), () => STAMP);
+    await recordLabelOutliers(run([outlier({ fingerprint: "fp-2", trackCount: 3 })]), () => STAMP);
+
+    expect(await acknowledgeLabelOutlierAlerts([ALBUM_ALERT], () => STAMP)).toBe(0);
+
+    const next = await recordLabelOutliers(
+      run([outlier({ fingerprint: "fp-2", trackCount: 3 })]),
+      () => STAMP,
+    );
+    expect(next.pendingAlertUnits).toEqual([{ fingerprint: "fp-2", unitId: ALBUM_UNIT }]);
   });
 
   it("a dismissed outlier stays off the list and out of the alerts until its tracks change", async () => {
@@ -188,13 +236,16 @@ describe("recordLabelOutliers", () => {
     expect(await setLabelOutliersDismissed([ALBUM_UNIT], true, () => STAMP)).toBe(1);
 
     const same = await recordLabelOutliers(run([outlier()]), () => STAMP);
-    expect(same).toMatchObject({ flagged: 0, pendingAlertIds: [] });
+    expect(same).toMatchObject({ flagged: 0, pendingAlertUnits: [] });
 
     const changed = await recordLabelOutliers(
       run([outlier({ fingerprint: "fp-2", trackCount: 3 })]),
       () => STAMP,
     );
-    expect(changed).toMatchObject({ flagged: 1, pendingAlertIds: [ALBUM_UNIT] });
+    expect(changed).toMatchObject({
+      flagged: 1,
+      pendingAlertUnits: [{ fingerprint: "fp-2", unitId: ALBUM_UNIT }],
+    });
   });
 
   it("a dismissal survives the outlier dropping off the list and coming back unchanged", async () => {
@@ -204,7 +255,7 @@ describe("recordLabelOutliers", () => {
 
     const back = await recordLabelOutliers(run([outlier()]), () => STAMP);
 
-    expect(back).toMatchObject({ flagged: 0, pendingAlertIds: [] });
+    expect(back).toMatchObject({ flagged: 0, pendingAlertUnits: [] });
   });
 
   it("a list shorter than the run's flagged total is refused and the stored list is untouched", async () => {
@@ -227,15 +278,37 @@ describe("recordLabelOutliers", () => {
     expect(await rowCount("label_outliers")).toBe(2);
   });
 
-  it("a corpus under half of the last run's is refused and the stored list is untouched", async () => {
-    await recordLabelOutliers(run([outlier(), single], { tracksScored: 50_000 }), () => STAMP);
+  it("a list that repeats a unit id is refused even when its length matches the total", async () => {
+    await recordLabelOutliers(run([outlier(), single]), () => STAMP);
 
     const refused = await rejection(
-      recordLabelOutliers(run([], { tracksScored: 20_000 }), () => STAMP),
+      recordLabelOutliers(run([outlier(), outlier()], { totalFlagged: 2 }), () => STAMP),
     );
 
     expect(refused).toBeInstanceOf(LabelOutlierRunRejected);
     expect(await rowCount("label_outliers")).toBe(2);
+  });
+
+  it("a corpus far below the live embedded catalogue is refused and the stored list is untouched", async () => {
+    await seedEmbeddedCatalogue(100);
+    await recordLabelOutliers(run([outlier(), single], { tracksScored: 100 }), () => STAMP);
+
+    const refused = await rejection(
+      recordLabelOutliers(run([], { tracksScored: 40 }), () => STAMP),
+    );
+
+    expect(refused).toBeInstanceOf(LabelOutlierRunRejected);
+    expect(await rowCount("label_outliers")).toBe(2);
+  });
+
+  it("a legitimate purge that shrinks the catalogue records on the next run", async () => {
+    await seedEmbeddedCatalogue(100);
+    await recordLabelOutliers(run([outlier(), single], { tracksScored: 100 }), () => STAMP);
+    await purgeEmbeddedCatalogue(60);
+
+    const after = await recordLabelOutliers(run([outlier()], { tracksScored: 40 }), () => STAMP);
+
+    expect(after).toMatchObject({ flagged: 1, removed: 1 });
   });
 
   it("writes the run summary the board reads", async () => {

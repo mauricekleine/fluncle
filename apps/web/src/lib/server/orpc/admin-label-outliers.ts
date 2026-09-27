@@ -33,7 +33,7 @@ export function adminLabelOutliersHandlers(os: Implementer) {
     .handler(async ({ input }) => {
       try {
         return {
-          acknowledged: await acknowledgeLabelOutlierAlerts(input.unitIds),
+          acknowledged: await acknowledgeLabelOutlierAlerts(input.units),
           ok: true,
         } as const;
       } catch (error) {

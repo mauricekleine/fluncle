@@ -34,6 +34,13 @@ export const LabelOutlierRunSchema = z
   })
   .meta({ id: "LabelOutlierRun" });
 
+export const AlertedLabelOutlierSchema = z
+  .object({
+    fingerprint: z.string().min(1).max(128),
+    unitId: z.string().min(1).max(256),
+  })
+  .meta({ id: "AlertedLabelOutlier" });
+
 export const PendingLabelOutlierAlertSchema = z
   .object({
     albumName: z.string().nullable(),
@@ -65,7 +72,7 @@ export const recordLabelOutliers = oc
     z.object({
       flagged: z.number().int(),
       ok: z.literal(true),
-      pendingAlertIds: z.array(z.string()),
+      pendingAlertUnits: z.array(AlertedLabelOutlierSchema),
       pendingAlerts: z.array(PendingLabelOutlierAlertSchema),
       removed: z.number().int(),
     }),
@@ -81,7 +88,7 @@ export const acknowledgeLabelOutlierAlerts = oc
   })
   .input(
     z.object({
-      unitIds: z.array(z.string().min(1).max(256)).min(1).max(MAX_RECORDED_LABEL_OUTLIERS),
+      units: z.array(AlertedLabelOutlierSchema).min(1).max(MAX_RECORDED_LABEL_OUTLIERS),
     }),
   )
   .output(z.object({ acknowledged: z.number().int(), ok: z.literal(true) }));

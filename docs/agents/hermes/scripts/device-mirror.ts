@@ -177,6 +177,10 @@ const MAX_PAGE_SIZE = 200;
 const DEFAULT_LOCK_STALE_MS = 15 * 60 * 1000;
 
 const LOCK_HEARTBEAT_MS = 60 * 1000;
+
+const DEFAULT_LOCK_WAIT_MS = 2 * 60 * 1000;
+
+const DEFAULT_LOCK_POLL_MS = 1000;
 const STAGE_CONTROL_TABLE = "_device_mirror_stage_control";
 const STAGE_CHECKPOINT_TABLE = "_device_mirror_stage_checkpoint";
 const REQUIRED_SOURCE_TABLES = [...DEVICE_SOURCE_TABLES, "track_embeddings"] as const;
@@ -636,6 +640,22 @@ function positiveIntegerEnv(name: string, fallback: number): number {
   return value;
 }
 
+function nonNegativeIntegerEnv(name: string, fallback: number): number {
+  const raw = process.env[name];
+
+  if (raw === undefined) {
+    return fallback;
+  }
+
+  const value = Number.parseInt(raw, 10);
+
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new Error(`${name} must be a non-negative integer`);
+  }
+
+  return value;
+}
+
 async function removeReplicaFiles(path: string): Promise<void> {
   const paths = [path, `${path}-wal`, `${path}-shm`, `${path}-info`];
   await Promise.all(paths.map((candidate) => rm(candidate, { force: true })));
@@ -684,11 +704,43 @@ function validateReplicaFile(path: string): string | null {
   }
 }
 
+const CHECKPOINT_ATTEMPTS = 20;
+
+const CHECKPOINT_RETRY_MS = 250;
+
+export function truncateCheckpoint(
+  database: Database,
+  options: { attempts?: number; sleep?: (ms: number) => void } = {},
+): void {
+  const attempts = options.attempts ?? CHECKPOINT_ATTEMPTS;
+  const sleep = options.sleep ?? ((ms: number) => Bun.sleepSync(ms));
+
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    const result = database.query("PRAGMA wal_checkpoint(TRUNCATE)").get() as {
+      busy: number;
+      checkpointed: number;
+      log: number;
+    } | null;
+
+    if (result && result.busy === 0 && result.log === result.checkpointed) {
+      return;
+    }
+
+    if (attempt < attempts) {
+      sleep(CHECKPOINT_RETRY_MS);
+    }
+  }
+
+  throw new Error(
+    `Source replica WAL checkpoint stayed busy after ${attempts} attempts; the replica is not finalized`,
+  );
+}
+
 function checkpointReplica(path: string): void {
   const database = new Database(path, { strict: true });
 
   try {
-    database.run("PRAGMA wal_checkpoint(TRUNCATE)");
+    truncateCheckpoint(database);
     const failure = validateReplicaFile(path);
 
     if (failure) {
@@ -2130,27 +2182,60 @@ export async function publishDeviceGeneration(
   };
 }
 
+export async function takeLockDir(
+  lockDir: string,
+  options: {
+    now?: () => number;
+    pollMs: number;
+    sleep?: (ms: number) => Promise<void>;
+    staleMs: number;
+    waitMs: number;
+  },
+): Promise<boolean> {
+  const now = options.now ?? Date.now;
+  const sleep = options.sleep ?? ((ms: number) => Bun.sleep(ms));
+  const deadline = now() + options.waitMs;
+
+  for (;;) {
+    try {
+      await mkdir(lockDir);
+      return true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
+        throw error;
+      }
+    }
+
+    const lockStat = await stat(lockDir).catch(() => undefined);
+
+    if (lockStat && now() - lockStat.mtimeMs > options.staleMs) {
+      await rmdir(lockDir).catch(() => {});
+      continue;
+    }
+
+    if (!lockStat) {
+      continue;
+    }
+
+    if (now() >= deadline) {
+      return false;
+    }
+
+    await sleep(options.pollMs);
+  }
+}
+
 async function acquireLock(): Promise<null | (() => Promise<void>)> {
   const home = process.env.HOME ?? "/opt/data/home";
   const lockDir = process.env.DEVICE_MIRROR_LOCK_DIR ?? `${home}/.device-mirror.lock`;
   const staleMs = positiveIntegerEnv("DEVICE_MIRROR_LOCK_STALE_MS", DEFAULT_LOCK_STALE_MS);
   const heartbeatMs = positiveIntegerEnv("DEVICE_MIRROR_LOCK_HEARTBEAT_MS", LOCK_HEARTBEAT_MS);
 
-  try {
-    await mkdir(lockDir);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
-      throw error;
-    }
+  const waitMs = nonNegativeIntegerEnv("DEVICE_MIRROR_LOCK_WAIT_MS", DEFAULT_LOCK_WAIT_MS);
+  const pollMs = positiveIntegerEnv("DEVICE_MIRROR_LOCK_POLL_MS", DEFAULT_LOCK_POLL_MS);
 
-    const lockStat = await stat(lockDir);
-
-    if (Date.now() - lockStat.mtimeMs <= staleMs) {
-      return null;
-    }
-
-    await rmdir(lockDir);
-    await mkdir(lockDir);
+  if (!(await takeLockDir(lockDir, { pollMs, staleMs, waitMs }))) {
+    return null;
   }
 
   const heartbeat = setInterval(() => {

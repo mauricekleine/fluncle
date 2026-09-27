@@ -9,7 +9,7 @@ import { getSetting } from "./settings";
 
 export const LABEL_OUTLIERS_LAST_RUN_KEY = "label_outliers_last_run";
 
-export const MIN_CORPUS_FRACTION_OF_LAST_RUN = 0.5;
+export const MIN_CORPUS_FRACTION_OF_LIVE = 0.8;
 
 const PENDING_ALERT_NAME_LIMIT = 50;
 
@@ -33,9 +33,11 @@ export type PendingLabelOutlierAlert = {
   unitId: string;
 };
 
+export type AlertedLabelOutlier = { fingerprint: string; unitId: string };
+
 export type RecordLabelOutliersResult = {
   flagged: number;
-  pendingAlertIds: string[];
+  pendingAlertUnits: AlertedLabelOutlier[];
   pendingAlerts: PendingLabelOutlierAlert[];
   removed: number;
 };
@@ -75,8 +77,14 @@ export function outlierChanged(stored: StoredOutlierRow, next: RecordedLabelOutl
 
 export function runRejection(
   input: RecordLabelOutliersInput,
-  lastRun: LabelOutlierRun | null,
+  liveEmbeddedTracks: number,
 ): string | null {
+  const distinct = new Set(input.outliers.map((outlier) => outlier.unitId)).size;
+
+  if (distinct !== input.outliers.length) {
+    return `the run posted ${input.outliers.length} units but only ${distinct} distinct ids; a duplicated list never replaces the stored one`;
+  }
+
   if (input.totalFlagged !== input.outliers.length) {
     return `the run flagged ${input.totalFlagged} units but posted ${input.outliers.length}; a partial list never replaces the stored one`;
   }
@@ -85,14 +93,22 @@ export function runRejection(
     return "the run scored no tracks; an empty corpus never replaces the stored list";
   }
 
-  if (
-    lastRun !== null &&
-    input.tracksScored < lastRun.tracksScored * MIN_CORPUS_FRACTION_OF_LAST_RUN
-  ) {
-    return `the run scored ${input.tracksScored} tracks against ${lastRun.tracksScored} last time; a corpus that halved overnight is a broken replica, not a catalogue`;
+  if (input.tracksScored < liveEmbeddedTracks * MIN_CORPUS_FRACTION_OF_LIVE) {
+    return `the run scored ${input.tracksScored} tracks but the archive holds ${liveEmbeddedTracks} embedded catalogue tracks; a replica that far behind is broken, not current`;
   }
 
   return null;
+}
+
+export async function countLiveEmbeddedCatalogueTracks(): Promise<number> {
+  const db = await getDb();
+  const result = await db.execute(
+    `select count(*) as n from track_embeddings e
+       cross join tracks t on t.track_id = e.track_id
+      where t.is_catalogue = 1`,
+  );
+
+  return Number(typedRows<{ n: number }>(result.rows)[0]?.n ?? 0);
 }
 
 function dedupeByUnit(outliers: readonly RecordedLabelOutlier[]): RecordedLabelOutlier[] {
@@ -120,12 +136,12 @@ function outlierArgs(outlier: RecordedLabelOutlier) {
 }
 
 export async function listPendingAlerts(): Promise<{
-  ids: string[];
+  units: AlertedLabelOutlier[];
   named: PendingLabelOutlierAlert[];
 }> {
   const db = await getDb();
   const result = await db.execute(
-    `select o.unit_id, a.name as album_name, l.name as label_name,
+    `select o.unit_id, o.fingerprint, a.name as album_name, l.name as label_name,
             coalesce(st.title, a.name, o.unit_id) as title
        from label_outliers o
        left join label_outlier_dismissals d
@@ -138,31 +154,37 @@ export async function listPendingAlerts(): Promise<{
   );
   const rows = typedRows<{
     album_name: string | null;
+    fingerprint: string;
     label_name: string | null;
     title: string;
     unit_id: string;
   }>(result.rows);
 
   return {
-    ids: rows.map((row) => row.unit_id),
     named: rows.slice(0, PENDING_ALERT_NAME_LIMIT).map((row) => ({
       albumName: row.album_name,
       labelName: row.label_name,
       title: row.title,
       unitId: row.unit_id,
     })),
+    units: rows.map((row) => ({ fingerprint: row.fingerprint, unitId: row.unit_id })),
   };
 }
 
 export async function acknowledgeLabelOutlierAlerts(
-  unitIds: readonly string[],
+  units: readonly AlertedLabelOutlier[],
   now: () => string = () => new Date().toISOString(),
 ): Promise<number> {
   const db = await getDb();
   const result = await db.execute({
-    args: [now(), JSON.stringify([...new Set(unitIds)])],
+    args: [now(), JSON.stringify(units.map((unit) => [unit.unitId, unit.fingerprint]))],
     sql: `update label_outliers set alerted_at = ?
-           where alerted_at is null and unit_id in (select value from json_each(?))`,
+           where alerted_at is null
+             and exists (
+               select 1 from json_each(?) acked
+                where acked.value ->> 0 = label_outliers.unit_id
+                  and acked.value ->> 1 = label_outliers.fingerprint
+             )`,
   });
 
   return result.rowsAffected;
@@ -172,10 +194,7 @@ export async function recordLabelOutliers(
   input: RecordLabelOutliersInput,
   now: () => string = () => new Date().toISOString(),
 ): Promise<RecordLabelOutliersResult> {
-  const rejection = runRejection(
-    input,
-    parseLastRun(await getSetting(LABEL_OUTLIERS_LAST_RUN_KEY)),
-  );
+  const rejection = runRejection(input, await countLiveEmbeddedCatalogueTracks());
 
   if (rejection) {
     throw new LabelOutlierRunRejected(rejection);
@@ -265,7 +284,7 @@ export async function recordLabelOutliers(
 
   return {
     flagged,
-    pendingAlertIds: pending.ids,
+    pendingAlertUnits: pending.units,
     pendingAlerts: pending.named,
     removed: removed.length,
   };
