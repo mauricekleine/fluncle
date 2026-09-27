@@ -11,6 +11,7 @@ import {
   newSpotifyAskState,
   parseIsrcAskWindow,
   parseLimitArg,
+  readAnchorIsrcDue,
   runApifyActor,
   runAnchorSweep,
   runAnchorTick,
@@ -1927,6 +1928,106 @@ describe("runAnchorSweep — the firing preflight", () => {
       sleep: () => Promise.resolve(),
     };
   }
+
+  test("a nonempty general queue can have no ISRC asks due after the anchor tick", async () => {
+    const base = preflightDeps(
+      {
+        apifyBudgetRemaining: 300,
+        apifyBudgetSpent: false,
+        apifyEnabled: true,
+        gateReason: "open",
+        spotifySearchEnabled: true,
+      },
+      () => {},
+    );
+    const summary = await runAnchorSweep(1, {
+      ...base,
+      fetchQueue: () => Promise.resolve({ queueDepth: 100, rows: [] }),
+      now: () => Date.parse("2026-09-26T04:00:00Z"),
+      readIsrcDue: () => Promise.resolve(0),
+    });
+    expect(summary.queueDepth).toBe(100);
+    expect(summary.spotifyIsrcDue).toBe(0);
+    const pending = await runAnchorSweep(1, {
+      ...base,
+      fetchQueue: () => Promise.resolve({ queueDepth: 100, rows: [] }),
+      now: () => Date.parse("2026-09-26T04:00:00Z"),
+      readIsrcDue: () => Promise.resolve(3),
+    });
+    expect(pending.spotifyIsrcDue).toBe(3);
+    const unavailable = await runAnchorSweep(1, {
+      ...base,
+      fetchQueue: () => Promise.resolve({ queueDepth: 100, rows: [] }),
+      now: () => Date.parse("2026-09-26T04:00:00Z"),
+      readIsrcDue: () => Promise.reject(new Error("count unavailable")),
+    });
+    expect(unavailable.spotifyIsrcDue).toBeNull();
+    expect(unavailable.spotifyIsrcDueError).toBe("count unavailable");
+  });
+
+  test("ISRC due read uses one bounded unasked-row probe and rejects a missing worklist", async () => {
+    const urls: string[] = [];
+    const fetcher = ((input: RequestInfo | URL) => {
+      const url = input instanceof Request ? input.url : input instanceof URL ? input.href : input;
+      urls.push(url);
+      return Promise.resolve(Response.json({ tracks: [{ trackId: "unasked" }] }));
+    }) as typeof fetch;
+    expect(await readAnchorIsrcDue(fetcher)).toBe(1);
+    expect(urls).toHaveLength(1);
+    expect(new URL(urls[0] ?? "").searchParams.toString()).toBe(
+      "kind=anchor&limit=1&count=false&paidMode=unasked",
+    );
+    const missing = (() => Promise.resolve(Response.json({}))) as typeof fetch;
+    expect(readAnchorIsrcDue(missing)).rejects.toThrow("invalid worklist");
+  });
+
+  test("no ISRC ask slots leaves no work for the tap gate without a database probe", async () => {
+    let probes = 0;
+    const summary = await runAnchorSweep(1, {
+      ...preflightDeps(
+        {
+          apifyBudgetRemaining: 300,
+          apifyBudgetSpent: false,
+          apifyEnabled: true,
+          gateReason: "open",
+          spotifySearchEnabled: false,
+        },
+        () => {},
+      ),
+      fetchQueue: () => Promise.resolve({ queueDepth: 100, rows: [] }),
+      readIsrcDue: () => {
+        probes += 1;
+        return Promise.resolve(1);
+      },
+    });
+    expect(probes).toBe(0);
+    expect(summary.spotifyIsrcDue).toBe(0);
+    expect(summary.spotifyIsrcDueError).toBeNull();
+  });
+
+  test("an empty anchor queue proves no ISRC asks are due without a database probe", async () => {
+    let probes = 0;
+    const summary = await runAnchorSweep(1, {
+      ...preflightDeps(
+        {
+          apifyBudgetRemaining: 300,
+          apifyBudgetSpent: false,
+          apifyEnabled: true,
+          gateReason: "open",
+          spotifySearchEnabled: true,
+        },
+        () => {},
+      ),
+      fetchQueue: () => Promise.resolve({ queueDepth: 0, rows: [] }),
+      now: () => Date.parse("2026-09-26T04:00:00Z"),
+      readIsrcDue: () => {
+        probes += 1;
+        return Promise.resolve(1);
+      },
+    });
+    expect(probes).toBe(0);
+    expect(summary.spotifyIsrcDue).toBe(0);
+  });
 
   test("a deferred firing reads NO worklist page at all", async () => {
     let fetches = 0;

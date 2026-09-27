@@ -129,7 +129,29 @@ export type AnchorBreakerState = {
   throttlesInWindow: number;
   tripped: boolean;
   trippedAt: null | string;
+  spotifyDailyCalls: null | number;
 };
+
+export type LabelReleasesBudgetState = {
+  callsSpent: number;
+  dailyBudget: number;
+  spotifyDailyCalls: number;
+};
+
+export async function labelReleasesBudgetCommand(): Promise<LabelReleasesBudgetState> {
+  return adminApiGet<LabelReleasesBudgetState & { ok: true }>(
+    "/api/v1/admin/catalogue/label-releases-budget",
+  );
+}
+
+export async function setLabelReleasesBudgetCommand(
+  dailyBudget: number,
+): Promise<LabelReleasesBudgetState> {
+  return adminApiPut<LabelReleasesBudgetState & { ok: true }>(
+    "/api/v1/admin/catalogue/label-releases-budget",
+    { dailyBudget },
+  );
+}
 
 export async function anchorApifyBudgetCommand(): Promise<AnchorApifyBudgetState> {
   return adminApiGet<AnchorApifyBudgetState & { ok: true }>(

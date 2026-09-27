@@ -46,6 +46,11 @@ function fixture(job: string) {
   );
   chmodSync(join(bin, "date"), 0o755);
   writeFileSync(
+    join(bin, "bun"),
+    `#!/usr/bin/env bash\nfor marker in "$HEALTHCHECK_CRON_OUTPUT_DIR/$2"/20??-??-??T*.md; do\n  base="${"${marker##*/}"}"\n  if [[ "$base" =~ ^([0-9]{4})-([0-9]{2})-([0-9]{2})T([0-9]{2}):([0-9]{2}):([0-9]{2})Z- ]]; then\n    TZ=UTC touch -t "${"${BASH_REMATCH[1]}${BASH_REMATCH[2]}${BASH_REMATCH[3]}${BASH_REMATCH[4]}${BASH_REMATCH[5]}.${BASH_REMATCH[6]}"}" "$marker"\n  fi\ndone\nexec "${process.execPath}" "$@"\n`,
+  );
+  chmodSync(join(bin, "bun"), 0o755);
+  writeFileSync(
     payload,
     '#!/usr/bin/env bash\nprintf x >> "$ATTEMPTS"\nprintf "%s\\n" "${FLUNCLE_DAILY_RETRY_STATE:-}" >> "$ATTEMPTS.states"\nprintf "%s\\n" "${FLUNCLE_DAILY_RETRY_SLOT_DAY:-}" >> "$ATTEMPTS.days"\ncount="$(wc -c < "$ATTEMPTS" | tr -d " ")"\nsource="${RESULT_MARKER:-}"\nif [ "$count" -ge 2 ] && [ -n "${SECOND_RESULT_MARKER:-}" ]; then source="$SECOND_RESULT_MARKER"; fi\nif [ -n "$source" ]; then marker="$MARKER_DIR/result-${count}.md"; cp "$source" "$marker"; TZ=UTC touch -t "${RESULT_MTIME:-202609251200}" "$marker"; fi\nexit "${PAYLOAD_EXIT:-0}"\n',
   );
@@ -113,7 +118,7 @@ function run(
       env: {
         ...process.env,
         ATTEMPTS: setup.attempts,
-        BUN_BIN: process.execPath,
+        BUN_BIN: join(setup.bin, "bun"),
         DAILY_RETRY_STRADDLE_JITTER_SECS: "0",
         FAKE_AFTER_LOCAL_DAY: options.afterLocalDay ?? "20260925",
         FAKE_AFTER_LOCAL_TIME: options.afterLocalTime ?? "",
@@ -697,7 +702,7 @@ describe("daily and weekly retry", () => {
     const env = {
       ...process.env,
       ATTEMPTS: setup.attempts,
-      BUN_BIN: process.execPath,
+      BUN_BIN: join(setup.bin, "bun"),
       COMPLETE: complete,
       FAKE_LOCAL_DAY: "20260925",
       FAKE_LOCAL_TIME: "1200",
@@ -979,7 +984,6 @@ describe("daily and weekly retry", () => {
       "demand",
       "follow-digest",
       "funnel-snapshot",
-      "label-releases",
       "label-triage",
       "logbook",
       "newsletter",

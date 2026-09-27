@@ -34,12 +34,17 @@ vi.mock("./resend", async (importOriginal) => {
 });
 
 beforeEach(async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-09-25T15:00:00Z"));
   db = await createIntegrationDb();
   sendEmail.mockReset();
   sendEmail.mockImplementation(async () => ({ id: "resend-test" }));
 });
 
-afterEach(() => db.close());
+afterEach(() => {
+  db.close();
+  vi.useRealTimers();
+});
 
 async function watch(
   userId: string,

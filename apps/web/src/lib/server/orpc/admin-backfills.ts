@@ -259,6 +259,7 @@ export function adminBackfillsHandlers(os: Implementer) {
         return {
           albumsMatched: result.albumsMatched,
           albumsSeen: result.albumsSeen,
+          blockedReason: result.blockedReason,
           budgetPaused: result.budgetPaused,
           configured: result.configured,
           dryRun: result.dryRun,
@@ -266,14 +267,20 @@ export function adminBackfillsHandlers(os: Implementer) {
           failedLabels: result.failedLabels,
           fetchCeilingHit: result.fetchCeilingHit,
           labelSlugs: result.labelSlugs,
+          labelsDue: result.labelsDue,
           labelsProbed: result.labelsProbed,
+          neverChecked: result.neverChecked,
           newRows: result.newRows,
           newTrackIds: result.newTrackIds,
           ok: true as const,
+          quotaExceeded: result.quotaExceeded,
           rateLimited: result.rateLimited,
+          retryAfterMs: result.retryAfterMs,
           skippedKnown: result.skippedKnown,
           skippedUndated: result.skippedUndated,
           skippedUngrounded: result.skippedUngrounded,
+          tapDailyBudget: result.tapDailyBudget,
+          tapDailyCallsSpent: result.tapDailyCallsSpent,
           tracksSkippedArtistRule: result.tracksSkippedArtistRule,
         };
       } catch (error) {

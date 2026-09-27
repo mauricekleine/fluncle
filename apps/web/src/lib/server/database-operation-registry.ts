@@ -2049,10 +2049,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
   }),
   defineOperation({
     accessClass: "write",
-    cadence: withRetrySlot(
-      calendar("*-*-* 07:20:00 Europe/Amsterdam", "90"),
-      "*-*-* 08:20:00 Europe/Amsterdam",
-    ),
+    cadence: calendar("*-*-* 03..08:00/15:00 UTC", "90", false),
     directory: "label-releases-timer",
     heavy: false,
     mutationTarget: "primary",

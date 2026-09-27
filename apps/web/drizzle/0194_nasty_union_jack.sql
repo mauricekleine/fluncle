@@ -1,0 +1,1 @@
+ALTER TABLE `labels` ADD `label_releases_progress_json` text;

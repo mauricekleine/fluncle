@@ -197,6 +197,12 @@ describe("reading a timer's cadence", () => {
     expect(parseTimerCadenceMs("[Timer]\nOnCalendar=*:0/15\n")).toBe(15 * 60_000);
   });
 
+  test("a bounded UTC daily polling window keeps a daily roster cadence", () => {
+    expect(parseTimerCadenceMs("[Timer]\nOnCalendar=*-*-* 03..08:00/15:00 UTC\n")).toBe(
+      24 * 60 * 60_000,
+    );
+  });
+
   test("commented-out directives do not count", () => {
     expect(parseTimerCadenceMs("[Timer]\n# OnUnitActiveSec=5min\nOnCalendar=*:0/15\n")).toBe(
       15 * 60_000,

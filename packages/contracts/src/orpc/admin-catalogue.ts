@@ -1002,8 +1002,40 @@ export const getSpotifyAnchorBreaker = oc
   })
   .input(z.object({}))
   .output(
-    SpotifyAnchorBreakerStateSchema.extend({ ok: z.literal(true), rungs: AnchorRungFlagsSchema }),
+    SpotifyAnchorBreakerStateSchema.extend({
+      ok: z.literal(true),
+      rungs: AnchorRungFlagsSchema,
+      spotifyDailyCalls: z.number().int().nullable(),
+    }),
   );
+
+export const LabelReleasesBudgetSchema = z.object({
+  callsSpent: z.number().int().nonnegative(),
+  dailyBudget: z.number().int().nonnegative(),
+  spotifyDailyCalls: z.number().int().nonnegative(),
+});
+
+export const getLabelReleasesBudget = oc
+  .route({
+    method: "GET",
+    operationId: "getLabelReleasesBudget",
+    path: "/admin/catalogue/label-releases-budget",
+    summary: "Read the label releases tap daily budget and Spotify usage",
+    tags: ["Admin"],
+  })
+  .input(z.object({}))
+  .output(LabelReleasesBudgetSchema.extend({ ok: z.literal(true) }));
+
+export const setLabelReleasesBudget = oc
+  .route({
+    method: "PUT",
+    operationId: "setLabelReleasesBudget",
+    path: "/admin/catalogue/label-releases-budget",
+    summary: "Set the label releases tap daily budget (operator)",
+    tags: ["Admin"],
+  })
+  .input(z.object({ dailyBudget: z.number().int().min(0).max(1_000_000) }))
+  .output(LabelReleasesBudgetSchema.extend({ ok: z.literal(true) }));
 
 export const resetSpotifyAnchorBreaker = oc
   .route({
@@ -1050,6 +1082,7 @@ export const adminCatalogueContract = {
   get_anchor_apify_budget: getAnchorApifyBudget,
   get_capture_budget: getCaptureBudget,
   get_crawl_status: getCrawlStatus,
+  get_label_releases_budget: getLabelReleasesBudget,
   get_pipeline: getPipeline,
   get_spotify_anchor_breaker: getSpotifyAnchorBreaker,
   list_catalogue_tracks: listCatalogueTracks,
@@ -1068,6 +1101,7 @@ export const adminCatalogueContract = {
   set_anchor_apify_budget: setAnchorApifyBudget,
   set_anchor_search: setAnchorSearch,
   set_capture_budget: setCaptureBudget,
+  set_label_releases_budget: setLabelReleasesBudget,
   set_track_dismissed: setTrackDismissed,
   verify_capture: verifyCapture,
 };

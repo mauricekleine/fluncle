@@ -41,6 +41,12 @@ import {
 } from "../catalogue";
 import { recordDemand } from "../demand";
 import { getSpotifyAnchorBreakerState, resetSpotifyAnchorBreaker } from "../spotify-anchor-breaker";
+import {
+  readSpotifyDailyCallCount,
+  readSpotifyTapDailyBudget,
+  readSpotifyTapDailyCallsSpent,
+  setSpotifyTapDailyBudget,
+} from "../spotify-budget";
 import { syncTelescopePlaylist } from "../telescope-playlist";
 import {
   commitCrawlPhase,
@@ -526,13 +532,15 @@ export function adminCatalogueHandlers(os: Implementer) {
     .use(adminAuth)
     .handler(async () => {
       try {
-        const [breaker, apifyBudget, apifyEnabled, spotifySearchEnabled, gate] = await Promise.all([
-          getSpotifyAnchorBreakerState(),
-          getAnchorApifyBudget(),
-          isAnchorApifyEnabled(),
-          isAnchorSpotifySearchEnabled(),
-          anchorSpotifySearchGate(new Date()),
-        ]);
+        const [breaker, apifyBudget, apifyEnabled, spotifySearchEnabled, gate, spotifyDailyCalls] =
+          await Promise.all([
+            getSpotifyAnchorBreakerState(),
+            getAnchorApifyBudget(),
+            isAnchorApifyEnabled(),
+            isAnchorSpotifySearchEnabled(),
+            anchorSpotifySearchGate(new Date()),
+            readSpotifyDailyCallCount().catch(() => null),
+          ]);
 
         return {
           ...breaker,
@@ -544,7 +552,39 @@ export function adminCatalogueHandlers(os: Implementer) {
             nextEligibleAt: gate.nextEligibleAt,
             spotifySearchEnabled,
           },
+          spotifyDailyCalls,
         };
+      } catch (error) {
+        throw apiFault(error);
+      }
+    });
+
+  const readLabelReleasesBudget = async () => {
+    const [dailyBudget, callsSpent, spotifyDailyCalls] = await Promise.all([
+      readSpotifyTapDailyBudget(),
+      readSpotifyTapDailyCallsSpent(),
+      readSpotifyDailyCallCount(),
+    ]);
+    return { callsSpent, dailyBudget, ok: true as const, spotifyDailyCalls };
+  };
+
+  const getLabelReleasesBudgetHandler = os.get_label_releases_budget
+    .use(adminAuth)
+    .handler(async () => {
+      try {
+        return await readLabelReleasesBudget();
+      } catch (error) {
+        throw apiFault(error);
+      }
+    });
+
+  const setLabelReleasesBudgetHandler = os.set_label_releases_budget
+    .use(adminAuth)
+    .use(operatorGuard)
+    .handler(async ({ input }) => {
+      try {
+        await setSpotifyTapDailyBudget(input.dailyBudget);
+        return await readLabelReleasesBudget();
       } catch (error) {
         throw apiFault(error);
       }
@@ -583,6 +623,7 @@ export function adminCatalogueHandlers(os: Implementer) {
     get_anchor_apify_budget: getAnchorApifyBudgetHandler,
     get_capture_budget: getCaptureBudgetHandler,
     get_crawl_status: getCrawlStatusHandler,
+    get_label_releases_budget: getLabelReleasesBudgetHandler,
     get_pipeline: getPipelineHandler,
     get_spotify_anchor_breaker: getSpotifyAnchorBreakerHandler,
     list_catalogue_tracks: listCatalogueTracksHandler,
@@ -601,6 +642,7 @@ export function adminCatalogueHandlers(os: Implementer) {
     set_anchor_apify_budget: setAnchorApifyBudgetHandler,
     set_anchor_search: setAnchorSearchHandler,
     set_capture_budget: setCaptureBudgetHandler,
+    set_label_releases_budget: setLabelReleasesBudgetHandler,
     set_track_dismissed: setTrackDismissedHandler,
     verify_capture: verifyCaptureHandler,
   };
