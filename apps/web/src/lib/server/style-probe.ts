@@ -1,5 +1,5 @@
 import { type SearchStyle } from "../search-styles";
-import { LONG_FORM_MS } from "../catalogue-eligibility";
+import { searchSonarPublicCatalogue } from "./sonar-public-catalogue";
 import { meanEmbedding } from "./artist-dossier";
 import { listedArtistWhere } from "./artist-visibility";
 import { getDb, typedRows } from "./db";
@@ -137,10 +137,7 @@ export async function rankTrackIdsByProbe(
     if (options.publicDuration) {
       const [findings, catalogue] = await Promise.all([
         searchSonar({ ...request, filter: { ...filter, has_finding: true } }),
-        searchSonar({
-          ...request,
-          filter: { ...filter, duration_ms_max: LONG_FORM_MS, has_finding: false },
-        }),
+        searchSonarPublicCatalogue({ ...request, filter }),
       ]);
       if (findings === null || catalogue === null) {
         return null;

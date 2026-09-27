@@ -6,7 +6,9 @@ export const SPOKEN_WORD_QUALIFIERS = [
   "commentary",
   "commentary track",
   "interview",
-  "track_by_track",
+  "track by track",
+  "track-by-track",
+  "track–by–track",
 ] as const;
 
 const SPOKEN_WORD_DASHES = [" - ", " – ", " — "] as const;

@@ -11,6 +11,8 @@ import {
 } from "./public-anchor-amendments";
 import {
   PUBLIC_AGGREGATE_DURATION_GENERATION_KEY,
+  PUBLIC_AGGREGATE_VISIBILITY_VERSION,
+  PUBLIC_AGGREGATE_VISIBILITY_VERSION_KEY,
   PUBLIC_PROJECTION_CUTOVER_ENABLED_KEY,
   publicAnchorOrderChangeKey,
   readProjectedAnchorLeafForPageStart,
@@ -78,6 +80,10 @@ describe("page-local public anchor maintenance", () => {
     });
     await db.execute({
       args: [PUBLIC_AGGREGATE_DURATION_GENERATION_KEY, "leaf:2026-01-01T00:00:00.000Z"],
+      sql: `insert into settings (key, value) values (?, ?)`,
+    });
+    await db.execute({
+      args: [PUBLIC_AGGREGATE_VISIBILITY_VERSION_KEY, PUBLIC_AGGREGATE_VISIBILITY_VERSION],
       sql: `insert into settings (key, value) values (?, ?)`,
     });
   });

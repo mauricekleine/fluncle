@@ -16,7 +16,7 @@ import {
   trackPageIndexableWhere,
 } from "../../db/track-page-indexability";
 import { publicTrackOk, publicTrackWhere } from "../../db/public-track-visibility";
-import { LONG_FORM_MS } from "../catalogue-eligibility";
+import { searchSonarPublicCatalogue } from "./sonar-public-catalogue";
 
 export const TRACK_PAGE_IDENTITY_WHERE = trackPageIdentityWhere("tracks");
 
@@ -461,10 +461,7 @@ async function searchPublicSonarNeighbours(
   const baseFilter = { ...filter, dismissed: false, is_duplicate: false };
   const [findings, catalogue] = await Promise.all([
     searchSonar({ ...request, filter: { ...baseFilter, has_finding: true } }),
-    searchSonar({
-      ...request,
-      filter: { ...baseFilter, duration_ms_max: LONG_FORM_MS, has_finding: false },
-    }),
+    searchSonarPublicCatalogue({ ...request, filter: baseFilter }),
   ]);
 
   if (findings === null || catalogue === null) {

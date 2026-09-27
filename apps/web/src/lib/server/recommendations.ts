@@ -2,7 +2,8 @@ import { bestAlbumCoverUrl } from "../media";
 import { REC_ELIGIBLE_WHERE } from "../catalogue-eligibility";
 import { parseArtistsJson } from "./artists";
 import { TRACK_OR_LOG_ID_CTE } from "./track-id-resolver";
-import { DUPLICATE_SIMILARITY, diversifyRanked, LONG_FORM_MS } from "./catalogue";
+import { DUPLICATE_SIMILARITY, diversifyRanked } from "./catalogue";
+import { searchSonarPublicCatalogue } from "./sonar-public-catalogue";
 import { getDb, typedRow, typedRows } from "./db";
 import { cosineFromDistance, readEmbeddingBlob, toVectorProbe } from "./embedding";
 import { jsonError } from "./env";
@@ -489,13 +490,11 @@ function sonarCataloguePool(
   vectors: number[][],
   excludeIds: string[],
 ): Promise<SonarMatch[] | null> {
-  return searchSonar({
+  return searchSonarPublicCatalogue({
     excludeIds,
     filter: {
       anchored: true,
       dismissed: false,
-      duration_ms_max: LONG_FORM_MS,
-      has_finding: false,
       is_duplicate: false,
       nearest_finding_score_max: DUPLICATE_SIMILARITY,
     },

@@ -1,7 +1,7 @@
 import { type SearchEntity, type SearchFilters, type SearchHit } from "@fluncle/contracts/orpc";
 import { slugify } from "@fluncle/contracts/util/galaxy-slug";
 import { publicTrackWhere } from "../../db/public-track-visibility";
-import { LONG_FORM_MS } from "../catalogue-eligibility";
+import { searchSonarPublicCatalogue } from "./sonar-public-catalogue";
 import { parseKey } from "../key-camelot";
 import { mixtapeCoverUrl } from "../mixtapes";
 import {
@@ -684,10 +684,7 @@ export async function rankTracksByVector(
     };
     const [findings, catalogue] = await Promise.all([
       searchSonar({ ...request, filter: { ...filter, has_finding: true } }),
-      searchSonar({
-        ...request,
-        filter: { ...filter, duration_ms_max: LONG_FORM_MS, has_finding: false },
-      }),
+      searchSonarPublicCatalogue({ ...request, filter }),
     ]);
 
     if (findings === null || catalogue === null) {

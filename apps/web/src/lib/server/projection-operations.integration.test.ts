@@ -16,6 +16,8 @@ import {
 } from "./projection-audit";
 import {
   PUBLIC_AGGREGATE_DURATION_GENERATION_KEY,
+  PUBLIC_AGGREGATE_VISIBILITY_VERSION,
+  PUBLIC_AGGREGATE_VISIBILITY_VERSION_KEY,
   readCurrentProjectedTrackHubAnchors,
   readProjectedDefaultTrackTotal,
 } from "./public-projection-cutover";
@@ -205,6 +207,10 @@ describe("projection production operations", () => {
     });
     await db.execute({
       args: [PUBLIC_AGGREGATE_DURATION_GENERATION_KEY, "agg:2026-01-01"],
+      sql: `insert into settings (key, value) values (?, ?)`,
+    });
+    await db.execute({
+      args: [PUBLIC_AGGREGATE_VISIBILITY_VERSION_KEY, PUBLIC_AGGREGATE_VISIBILITY_VERSION],
       sql: `insert into settings (key, value) values (?, ?)`,
     });
     await db.execute({

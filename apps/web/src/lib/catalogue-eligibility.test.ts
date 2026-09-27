@@ -1,4 +1,5 @@
 import { createClient } from "@libsql/client";
+import { LOCAL_DB_CONCURRENCY } from "./database-concurrency";
 import { describe, expect, it } from "vitest";
 import {
   catalogueTrackHiddenReason,
@@ -33,6 +34,7 @@ const SPOKEN_WORD_TITLES = [
   "Rewind (Track-by-Track)",
   "Rewind (TRACK BY TRACK)",
   "Rewind - Track-by-Track",
+  "Rewind (Track–by–Track)",
 ];
 
 const MUSIC_TITLES = [
@@ -43,6 +45,8 @@ const MUSIC_TITLES = [
   "Commentary Box",
   "Running Commentary (Original Mix)",
   "Track by Track",
+  "Rewind (TrackXbyYTrack)",
+  "Rewind (Track_by_Track)",
   "Unspoken (Black Barrel remix)",
   "Spoken Word (Rude Kid remix)",
   "Client_03_progress_assessment_interview_part_01",
@@ -61,7 +65,7 @@ describe("the spoken-word qualifier rule", () => {
   });
 
   it("agrees with its SQL spelling on every fixture title", async () => {
-    const client = createClient({ url: ":memory:" });
+    const client = createClient({ concurrency: LOCAL_DB_CONCURRENCY, url: ":memory:" });
     try {
       await client.execute("create table titles (title text not null)");
       for (const title of [...SPOKEN_WORD_TITLES, ...MUSIC_TITLES]) {
@@ -110,7 +114,7 @@ describe("the public catalogue track rule", () => {
   });
 
   it("evaluates the SQL rule with the finding exemption on a real table", async () => {
-    const client = createClient({ url: ":memory:" });
+    const client = createClient({ concurrency: LOCAL_DB_CONCURRENCY, url: ":memory:" });
     try {
       await client.batch(
         [
