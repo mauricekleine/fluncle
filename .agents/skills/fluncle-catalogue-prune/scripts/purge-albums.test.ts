@@ -117,6 +117,42 @@ describe("an album purge takes the whole album", () => {
   });
 });
 
+describe("a named-track purge", () => {
+  test("deletes only the named tracks and keeps a co-credited artist who has other music", () => {
+    const plan = planAlbumPurge(christmas(stub().client), [], ["t_remixed"]);
+
+    expect(plan.trackIds).toEqual(["t_remixed"]);
+    expect(plan.orphanArtistIds).toEqual([]);
+    expect(plan.albumIds).toEqual([]);
+  });
+
+  test("an album emptied by the named tracks goes with them", () => {
+    const plan = planAlbumPurge(christmas(stub().client), [], ["t_solo", "t_duet", "t_remixed"]);
+
+    expect(plan.albumIds).toEqual(["al_xmas"]);
+  });
+
+  test("an unknown track id aborts with zero writes", async () => {
+    const s = stub();
+    const { code, out } = await run(["--tracks", "t_missing", "--confirm"], christmas(s.client));
+
+    expect(code).toBe(1);
+    expect(out).toContain("t_missing");
+    expect(s.executed.filter(isWrite)).toEqual([]);
+  });
+
+  test("a named findings track aborts with zero writes", async () => {
+    const s = stub();
+    const { code } = await run(
+      ["--tracks", "t_duet", "--confirm"],
+      christmas(s.client, ["t_duet"]),
+    );
+
+    expect(code).toBe(1);
+    expect(s.executed.filter(isWrite)).toEqual([]);
+  });
+});
+
 describe("the hard aborts", () => {
   test("an album holding a findings track aborts with zero writes", async () => {
     const s = stub();

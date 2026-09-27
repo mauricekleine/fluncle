@@ -234,6 +234,8 @@ bun run …/purge-albums.ts --albums-file "$PRUNE_OUT_DIR/off-genre-albums.txt" 
 bun run …/purge-albums.ts --albums-file "$PRUNE_OUT_DIR/off-genre-albums.txt" --confirm
 ```
 
+`--tracks` / `--tracks-file` names loose tracks the same way, for leaks that carry no album or share one with genuine music (a game soundtrack credited to a DnB label, whose DnB cuts stay while the rock tracks go); an album the named tracks empty goes with them.
+
 It deletes every track on the named albums (co-credits included), the albums, and every artist left with no track anywhere; an artist with a track on another album keeps their row and that track, which is how a crooner's drum & bass remix elsewhere survives. The dry-run prints each album with its label and credits, and the orphaned artists. **Hard aborts:** an unknown album id, any findings track on a named album, and any entangled track. Read the label next to each album before confirming: a triage verdict made from one track can name an album whose other tracks are drum & bass. Follow a confirmed run with a global `block` for the orphaned artists whose labels stay enabled, or the next walk re-stores them.
 
 ### Duplicate rows (two artists rows, ONE real act)
@@ -288,7 +290,7 @@ Every write leaves a JSON in `$PRUNE_OUT_DIR`: `label-rulings-rollback.json`, `p
 - `scripts/rule-labels.ts` — enable/disable labels by name (dry-run/`--confirm`, rollback).
 - `scripts/purge.ts` — LABEL-driven purge (safe-purge artists) with entanglement guard + rollback.
 - `scripts/purge-artists.ts` — TARGETED purge of an operator-named artist list, for the namesake case (dry-run/`--confirm`, rollback). Same cascade as `purge.ts`; hard-aborts on an unresolved slug, a findings track, or entanglement.
-- `scripts/purge-albums.ts` — TARGETED purge of operator-named albums by id: every track on them, the albums, and artists left with no track (dry-run/`--confirm`, rollback, shared cascade + guard).
+- `scripts/purge-albums.ts` — TARGETED purge of operator-named albums or tracks by id: every named track, the albums they empty, and artists left with no track (dry-run/`--confirm`, rollback, shared cascade + guard).
 - `scripts/reseed-label.ts` — frontier repair for a wrong-namesake seed: re-arm the resolver node, retire the impostor MusicBrainz nodes without deleting them (dry-run/`--confirm`, rollback).
 - `scripts/find-conflated-artists.ts` — READ-ONLY detector for one `artists` row holding two real acts: per-side evidence plus the MusicBrainz identity of each side's recordings.
 - `scripts/split-artist.ts` — the conflation repair: SPLIT the other act onto a new row (re-point edges) or STRIP its tracks (dry-run/`--confirm`, rollback, shared cascade + guard).
@@ -298,7 +300,7 @@ Every write leaves a JSON in `$PRUNE_OUT_DIR`: `label-rulings-rollback.json`, `p
 - `scripts/lib.ts` — shared creds + catalogue loader + the safe-purge definition + the named-artist resolution + the shared-credit survival rule + the one artist cascade (guard, rollback, FK-safe delete) both purges use + the atomic track/edge delete.
 - `scripts/orphan-edges.test.ts` — the delete pair's order/atomicity and the orphan predicate, against a stubbed client.
 - `scripts/purge-artists.test.ts` — the shared-credit survival rule, the findings/unknown-slug/entanglement hard aborts, the zero-write dry-run, and the cascade's delete order.
-- `scripts/purge-albums.test.ts` — the whole-album take including co-credits, the orphaned-artist rule, the findings/unknown-album aborts, and the zero-write dry-run.
+- `scripts/purge-albums.test.ts` — the whole-album take including co-credits, the named-track mode, the orphaned-artist rule, the findings/unknown-id aborts, and the zero-write dry-run.
 - `scripts/reseed-label.test.ts` — the namesake classification against `mb_label_id`, the three refusals, the zero-write dry-run, and that a namesake node is noted rather than deleted.
 - `scripts/find-conflated-artists.test.ts` — the candidate gate, the edge-writer attribution, the MB verdict (and its refusal to guess), and that the whole run only reads.
 - `scripts/split-artist.test.ts` — the shared-credit hold-back, the findings / not-actually-conflated / entanglement aborts, both zero-write dry-runs, and the two apply shapes.
