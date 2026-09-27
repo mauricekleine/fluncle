@@ -460,8 +460,8 @@ export const DUE_WORK_REVIEWED_NONPRODUCER_WRITERS = [
     sites: [
       "label-releases.ts:update:labels:2b63741a",
       "label-releases.ts:update:labels:0e8fa4e4",
-      "label-releases.ts:update:labels:7cbad9bd",
       "label-releases.ts:update:labels:b8306969",
+      "label-releases.ts:update:labels:7587a192",
     ],
   },
   {
@@ -847,8 +847,8 @@ export const GOAL_D_REVIEWED_NONPROJECTION_WRITERS = [
     sites: [
       "label-releases.ts:update:labels:2b63741a",
       "label-releases.ts:update:labels:0e8fa4e4",
-      "label-releases.ts:update:labels:7cbad9bd",
       "label-releases.ts:update:labels:b8306969",
+      "label-releases.ts:update:labels:7587a192",
     ],
   },
   {

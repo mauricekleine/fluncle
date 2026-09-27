@@ -1962,20 +1962,71 @@ describe("runAnchorSweep — the firing preflight", () => {
       readIsrcDue: () => Promise.reject(new Error("count unavailable")),
     });
     expect(unavailable.spotifyIsrcDue).toBeNull();
+    expect(unavailable.spotifyIsrcDueError).toBe("count unavailable");
   });
 
-  test("ISRC due read subtracts already-asked rows and rejects a missing count", async () => {
-    const modes: string[] = [];
+  test("ISRC due read uses one bounded unasked-row probe and rejects a missing worklist", async () => {
+    const urls: string[] = [];
     const fetcher = ((input: RequestInfo | URL) => {
       const url = input instanceof Request ? input.url : input instanceof URL ? input.href : input;
-      const mode = new URL(url).searchParams.get("paidMode") ?? "";
-      modes.push(mode);
-      return Promise.resolve(Response.json({ queued: mode === "quota" ? 12 : 9 }));
+      urls.push(url);
+      return Promise.resolve(Response.json({ tracks: [{ trackId: "unasked" }] }));
     }) as typeof fetch;
-    expect(await readAnchorIsrcDue(fetcher)).toBe(3);
-    expect(modes.sort()).toEqual(["prior", "quota"]);
+    expect(await readAnchorIsrcDue(fetcher)).toBe(1);
+    expect(urls).toHaveLength(1);
+    expect(new URL(urls[0] ?? "").searchParams.toString()).toBe(
+      "kind=anchor&limit=1&count=false&paidMode=unasked",
+    );
     const missing = (() => Promise.resolve(Response.json({}))) as typeof fetch;
-    expect(readAnchorIsrcDue(missing)).rejects.toThrow("invalid count");
+    expect(readAnchorIsrcDue(missing)).rejects.toThrow("invalid worklist");
+  });
+
+  test("no ISRC ask slots leaves no work for the tap gate without a database probe", async () => {
+    let probes = 0;
+    const summary = await runAnchorSweep(1, {
+      ...preflightDeps(
+        {
+          apifyBudgetRemaining: 300,
+          apifyBudgetSpent: false,
+          apifyEnabled: true,
+          gateReason: "open",
+          spotifySearchEnabled: false,
+        },
+        () => {},
+      ),
+      fetchQueue: () => Promise.resolve({ queueDepth: 100, rows: [] }),
+      readIsrcDue: () => {
+        probes += 1;
+        return Promise.resolve(1);
+      },
+    });
+    expect(probes).toBe(0);
+    expect(summary.spotifyIsrcDue).toBe(0);
+    expect(summary.spotifyIsrcDueError).toBeNull();
+  });
+
+  test("an empty anchor queue proves no ISRC asks are due without a database probe", async () => {
+    let probes = 0;
+    const summary = await runAnchorSweep(1, {
+      ...preflightDeps(
+        {
+          apifyBudgetRemaining: 300,
+          apifyBudgetSpent: false,
+          apifyEnabled: true,
+          gateReason: "open",
+          spotifySearchEnabled: true,
+        },
+        () => {},
+      ),
+      fetchQueue: () => Promise.resolve({ queueDepth: 0, rows: [] }),
+      now: () => Date.parse("2026-09-26T04:00:00Z"),
+      readIsrcDue: () => {
+        probes += 1;
+        return Promise.resolve(1);
+      },
+    });
+    expect(probes).toBe(0);
+    expect(summary.spotifyIsrcDue).toBe(0);
   });
 
   test("a deferred firing reads NO worklist page at all", async () => {

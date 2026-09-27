@@ -112,6 +112,11 @@ describe("anchor candidate validation quarantine", () => {
       ),
     ).toEqual([trackId]);
     expect(await listTrackWork({ kind: "anchor", limit: 10, paidMode: "prior" })).toEqual([]);
+    expect(
+      (await listTrackWork({ kind: "anchor", limit: 1, paidMode: "unasked" })).map(
+        (row) => row.trackId,
+      ),
+    ).toEqual([trackId]);
     await db.execute({
       args: ["2026-09-25T07:32:42.975Z", trackId],
       sql: "update tracks set spotify_isrc_asked_at = ? where track_id = ?",
@@ -119,5 +124,6 @@ describe("anchor candidate validation quarantine", () => {
     expect(
       (await listTrackWork({ kind: "anchor", limit: 10, paidMode: "prior" }))[0]?.trackId,
     ).toBe(trackId);
+    expect(await listTrackWork({ kind: "anchor", limit: 1, paidMode: "unasked" })).toEqual([]);
   });
 });

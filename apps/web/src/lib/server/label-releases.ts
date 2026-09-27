@@ -503,7 +503,7 @@ async function deferLabel(slug: string): Promise<void> {
   const db = await getDb();
   await db.execute({
     args: [new Date().toISOString(), slug],
-    sql: "update labels set label_releases_attempted_at = ? where slug = ?",
+    sql: "update labels set label_releases_attempted_at = ? where slug = ? and label_releases_failures = 0",
   });
 }
 
@@ -853,10 +853,10 @@ async function probeOneLabel(
       albumIndex: 0,
       trackIndex: 0,
     };
+    result.albumsSeen += progress.albumIds.length;
     await saveProgress(label.slug, progress);
   }
 
-  result.albumsSeen += progress.albumIds.length;
   const blocked = await blockedSpotifyArtistsForLabel(label.id);
 
   for (
@@ -901,6 +901,7 @@ async function probeOneLabel(
             result.albumsMatched += 1;
             const unminted = new Set(await unmintedSpotifyTrackIds(album.trackIds));
             const albumId = (await ensureAlbum(album.name, null)) ?? null;
+            let skippedSinceSave = false;
             for (
               let trackIndex: number = albumIndex === progress.albumIndex ? progress.trackIndex : 0;
               trackIndex < album.trackIds.length;
@@ -909,7 +910,7 @@ async function probeOneLabel(
               const trackId = album.trackIds[trackIndex];
               if (!trackId || !unminted.has(trackId)) {
                 progress = { ...progress, albumIndex, trackIndex: trackIndex + 1 };
-                await saveProgress(label.slug, progress);
+                skippedSinceSave = true;
                 continue;
               }
               const signal = await probeAlbumTrack(
@@ -923,10 +924,14 @@ async function probeOneLabel(
                 budget,
               );
               if (signal !== "continue") {
+                if (skippedSinceSave) {
+                  await saveProgress(label.slug, progress);
+                }
                 return signal;
               }
               progress = { ...progress, albumIndex, trackIndex: trackIndex + 1 };
               await saveProgress(label.slug, progress);
+              skippedSinceSave = false;
             }
           } else {
             result.skippedUngrounded += 1;

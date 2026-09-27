@@ -674,11 +674,14 @@ export async function spotifyFetch(
   let spentMs = 0;
 
   for (let attempt = 0; ; attempt += 1) {
-    try {
-      await recordSpotifyDailyCall();
-    } catch (error) {
+    const dailyCallRecord = recordSpotifyDailyCall().catch((error) => {
       logEvent("warn", "spotify.daily-call-record-failed", { error });
-    }
+    });
+    void import("cloudflare:workers")
+      .then(({ waitUntil }) => waitUntil(dailyCallRecord))
+      .catch((error) => {
+        logEvent("warn", "spotify.daily-call-schedule-failed", { error });
+      });
     const response = await fetch(`${spotifyApiBaseUrl}${path}`, {
       ...init,
       headers,

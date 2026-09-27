@@ -590,9 +590,14 @@ export async function putFrontierCover(
 ): Promise<FrontierCoverUpload> {
   try {
     const accessToken = await getSpotifyAccessToken();
-    await recordSpotifyDailyCall(nowMs).catch((error) => {
+    const dailyCallRecord = recordSpotifyDailyCall(nowMs).catch((error) => {
       logEvent("warn", "frontier.daily-call-record-failed", { error });
     });
+    void import("cloudflare:workers")
+      .then(({ waitUntil }) => waitUntil(dailyCallRecord))
+      .catch((error) => {
+        logEvent("warn", "frontier.daily-call-schedule-failed", { error });
+      });
     const response = await fetch(`https://api.spotify.com/v1/playlists/${playlistId}/images`, {
       body: jpegBase64,
       headers: {

@@ -387,6 +387,20 @@ test("daily tap state accumulates probes independently of pruned cron markers", 
   expect(state.observedDemand).toBe(215);
 });
 
+test("daily tap state remembers a later unblocked firing after anchor priority", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "fluncle-tap-state-"));
+  temporaryDirectories.push(dir);
+  const now = new Date("2026-09-26T04:10:00Z");
+  const summary = await runLabelReleasesTick(
+    5,
+    deps({ runPass: scripted([PASS, DRAINED]).runPass }),
+  );
+  recordTapDailyState(dir, { ...summary, blockedReason: "anchor_priority", labelsProbed: 0 }, now);
+  const state = recordTapDailyState(dir, { ...summary, blockedReason: null, labelsProbed: 3 }, now);
+  expect(state.blockedReasons).toEqual(["anchor_priority"]);
+  expect(state.nonPriorityFirings).toBe(1);
+});
+
 describe("parseLimitArg", () => {
   test("reads --limit N, else the fallback", () => {
     expect(parseLimitArg(["--limit", "20"], 5)).toBe(20);

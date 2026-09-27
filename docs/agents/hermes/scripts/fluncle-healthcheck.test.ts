@@ -245,14 +245,14 @@ test("tap health follows an operator-raised daily call budget", () => {
   expect(judgeCron(cron, dir, null, now)).toBe("fresh-ok");
 });
 
-test("quota and spent-budget days are exempt but failed tap markers still fail", () => {
+test("quota, budget, and anchor-priority days are exempt but failed tap markers still fail", () => {
   const cron: CronDef = {
     cadenceMs: 24 * 60 * 60_000,
     match: "label-releases",
     service: "cron.label-releases",
   };
   const now = new Date("2026-09-26T10:00:00Z");
-  for (const reason of ["spotify_quota", "spotify_budget_spent"]) {
+  for (const reason of ["spotify_quota", "spotify_budget_spent", "anchor_priority"]) {
     const dir = mkdtempSync(join(tmpdir(), "fluncle-label-tap-health-"));
     temporaryDirectories.push(dir);
     mkdirSync(join(dir, "daily"));
@@ -262,6 +262,7 @@ test("quota and spent-budget days are exempt but failed tap markers still fail",
         blockedReasons: [reason],
         day: "2026-09-26",
         labelsProbed: 0,
+        nonPriorityFirings: 0,
         observedDemand: 200,
         tapDailyBudget: 500,
         tapDailyCallsSpent: 500,
@@ -281,6 +282,77 @@ test("quota and spent-budget days are exempt but failed tap markers still fail",
     utimesSync(earlier, new Date("2026-09-26T08:30:00Z"), new Date("2026-09-26T08:30:00Z"));
     expect(judgeCron(cron, dir, null, now)).toBe("failed");
   }
+});
+
+test("anchor-priority tap markers remain healthy without a durable day file", () => {
+  const dir = mkdtempSync(join(tmpdir(), "fluncle-label-tap-health-"));
+  temporaryDirectories.push(dir);
+  const path = join(dir, "last.md");
+  writeFileSync(
+    path,
+    marker(
+      JSON.stringify({
+        blockedReason: "anchor_priority",
+        labelsDue: 200,
+        labelsProbed: 0,
+        ok: true,
+        tapDailyBudget: 500,
+      }),
+    ),
+  );
+  utimesSync(path, new Date("2026-09-26T08:45:00Z"), new Date("2026-09-26T08:45:00Z"));
+  expect(
+    judgeCron(
+      { cadenceMs: 24 * 60 * 60_000, match: "label-releases", service: "cron.label-releases" },
+      dir,
+      null,
+      new Date("2026-09-26T10:00:00Z"),
+    ),
+  ).toBe("fresh-ok");
+});
+
+test("an early anchor-priority pause does not hide later unblocked tap shortfall", () => {
+  const cron: CronDef = {
+    cadenceMs: 24 * 60 * 60_000,
+    match: "label-releases",
+    service: "cron.label-releases",
+  };
+  const now = new Date("2026-09-26T10:00:00Z");
+  const dir = mkdtempSync(join(tmpdir(), "fluncle-label-tap-health-"));
+  temporaryDirectories.push(dir);
+  mkdirSync(join(dir, "daily"));
+  writeFileSync(
+    join(dir, "daily", "2026-09-26.json"),
+    JSON.stringify({
+      blockedReasons: ["anchor_priority"],
+      day: "2026-09-26",
+      labelsProbed: 3,
+      nonPriorityFirings: 1,
+      observedDemand: 200,
+      tapDailyBudget: 500,
+      tapDailyCallsSpent: 30,
+    }),
+  );
+  const early = join(dir, "early.md");
+  const later = join(dir, "later.md");
+  writeFileSync(
+    early,
+    marker(
+      JSON.stringify({
+        blockedReason: "anchor_priority",
+        labelsDue: 200,
+        labelsProbed: 0,
+        ok: true,
+      }),
+    ),
+  );
+  writeFileSync(later, marker(JSON.stringify({ labelsDue: 197, labelsProbed: 3, ok: true })));
+  utimesSync(early, new Date("2026-09-26T03:00:00Z"), new Date("2026-09-26T03:00:00Z"));
+  utimesSync(later, new Date("2026-09-26T08:45:00Z"), new Date("2026-09-26T08:45:00Z"));
+  expect(judgeCron(cron, dir, null, now)).toBe("incomplete");
+
+  rmSync(join(dir, "daily", "2026-09-26.json"));
+  expect(judgeCron(cron, dir, null, now)).toBe("incomplete");
 });
 
 test("tap health notices labels becoming due later and a missing first window", () => {

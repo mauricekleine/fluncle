@@ -303,7 +303,7 @@ async function hydrateWorkRows(db: DueWorkClient, trackIds: readonly string[]): 
 export async function listTrackWork(options: {
   kind: TrackWorkKind;
   limit?: number;
-  paidMode?: "prior" | "quota";
+  paidMode?: "prior" | "quota" | "unasked";
   scope?: TrackWorkScope;
 }): Promise<TrackWorkItem[]> {
   const { kind, limit = 50, paidMode, scope = "all" } = options;
@@ -331,6 +331,7 @@ export async function listTrackWork(options: {
             where ${scopeClause(effectiveScope)} and ${kindWhere.sql}
               and t.has_isrc = 1
               ${paidMode === "prior" ? "and t.spotify_isrc_asked_at is not null" : ""}
+              ${paidMode === "unasked" ? "and t.spotify_isrc_asked_at is null" : ""}
             ${ANCHOR_ORDER}
             limit ?`,
     });
@@ -486,7 +487,7 @@ export async function oldestQueuedEmbedCaptureOver24h(): Promise<boolean> {
 export async function countTrackWork(options: {
   captureState?: CatalogueCaptureState;
   kind: TrackWorkKind;
-  paidMode?: "prior" | "quota";
+  paidMode?: "prior" | "quota" | "unasked";
   scope?: TrackWorkScope;
 }): Promise<number> {
   const { captureState, kind, paidMode, scope = "all" } = options;
@@ -510,7 +511,8 @@ export async function countTrackWork(options: {
             left join findings f on f.track_id = t.track_id
             where ${scopeClause(effectiveScope)} and ${kindWhere.sql}
               and t.has_isrc = 1
-              ${paidMode === "prior" ? "and t.spotify_isrc_asked_at is not null" : ""}`,
+              ${paidMode === "prior" ? "and t.spotify_isrc_asked_at is not null" : ""}
+              ${paidMode === "unasked" ? "and t.spotify_isrc_asked_at is null" : ""}`,
     });
     return Number(typedRows<{ queued: number }>(result.rows)[0]?.queued ?? 0);
   }

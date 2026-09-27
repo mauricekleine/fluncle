@@ -155,6 +155,7 @@ export type TapDailyState = {
   blockedReasons: string[];
   day: string;
   labelsProbed: number;
+  nonPriorityFirings: number;
   observedDemand: number | null;
   tapDailyBudget: number;
   tapDailyCallsSpent: number;
@@ -190,6 +191,8 @@ export function recordTapDailyState(
     ],
     day,
     labelsProbed,
+    nonPriorityFirings:
+      (previous?.nonPriorityFirings ?? 0) + (summary.blockedReason === "anchor_priority" ? 0 : 1),
     observedDemand:
       demand === null
         ? (previous?.observedDemand ?? null)

@@ -737,7 +737,11 @@ function labelReleaseDailyStateIncomplete(dir: string, target: string): boolean 
       return null;
     }
     const blocked = Array.isArray(state.blockedReasons) ? state.blockedReasons : [];
-    if (blocked.includes("spotify_quota") || blocked.includes("spotify_budget_spent")) {
+    if (
+      blocked.includes("spotify_quota") ||
+      blocked.includes("spotify_budget_spent") ||
+      (blocked.includes("anchor_priority") && state.nonPriorityFirings === 0)
+    ) {
       return false;
     }
     const demand = state.observedDemand;
@@ -769,6 +773,8 @@ function labelReleaseDayIncomplete(
   let observedDemand: number | null = null;
   let probed = 0;
   let tapDailyBudget = 500;
+  let priorityPauseSeen = false;
+  let nonPriorityFiringSeen = false;
 
   for (const file of [...runFiles].reverse()) {
     if (new Date(file.mtimeMs).toISOString().slice(0, 10) !== target) {
@@ -795,6 +801,17 @@ function labelReleaseDayIncomplete(
     ) {
       return false;
     }
+    if (summary) {
+      if (summary.blockedReason === "anchor_priority") {
+        priorityPauseSeen = true;
+      } else {
+        nonPriorityFiringSeen = true;
+      }
+    }
+  }
+
+  if (priorityPauseSeen && !nonPriorityFiringSeen) {
+    return false;
   }
 
   return (

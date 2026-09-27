@@ -1,9 +1,10 @@
 import { type Client } from "@libsql/client";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createIntegrationDb, rowCount, seedUser } from "./integration-db";
 import { type PublicUser } from "./public-auth";
 import { readSpotifyDailyCallCount } from "./spotify-budget";
+import { takeWaitUntilPromises } from "../../test/cloudflare-workers-stub";
 
 let db: Client;
 
@@ -191,6 +192,11 @@ beforeEach(async () => {
   spotifyCalls.length = 0;
   recs = { catalogue: [], findings: [], seedsSkipped: [], seedsUsed: 0 };
   failFetch = false;
+});
+
+afterEach(async () => {
+  await Promise.all(takeWaitUntilPromises());
+  vi.unstubAllGlobals();
 });
 
 describe("the kill switch (default-deny) — D1: the edition is never gated", () => {
@@ -680,8 +686,38 @@ describe("putFrontierCover (the INERT-until-scope upload leg)", () => {
       vi.fn(() => Promise.reject(new Error("network down"))),
     );
     await putFrontierCover("u1", "pl-1", "BASE64", now);
+    await Promise.all(takeWaitUntilPromises());
     expect(await readSpotifyDailyCallCount(now)).toBe(1);
     vi.unstubAllGlobals();
+  });
+
+  it("starts a raw cover request before its daily counter write settles", async () => {
+    const { putFrontierCover } = await import("./frontier-playlist");
+    const originalExecute = db.execute.bind(db);
+    let finishRecord: (() => void) | undefined;
+    vi.spyOn(db, "execute").mockImplementation(async (statement) => {
+      if (
+        String((statement as unknown as { sql?: string }).sql ?? "").includes(
+          "insert into rate_limit_counters",
+        )
+      ) {
+        await new Promise<void>((resolve) => {
+          finishRecord = resolve;
+        });
+      }
+      return originalExecute(statement);
+    });
+    const fetchMock = vi.fn(() => Promise.reject(new Error("network down")));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const upload = putFrontierCover("u1", "pl-1", "BASE64");
+    try {
+      await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    } finally {
+      finishRecord?.();
+    }
+    await upload;
+    await Promise.all(takeWaitUntilPromises());
   });
 
   it("degrades cleanly on a 403 missing scope — stamps nothing", async () => {

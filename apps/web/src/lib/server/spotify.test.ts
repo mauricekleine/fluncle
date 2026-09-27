@@ -218,6 +218,27 @@ describe("spotifyFetch 429 backoff", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it("starts a user Spotify request before the daily counter write settles", async () => {
+    const { spotifyFetch } = await import("./spotify");
+    let finishRecord: (() => void) | undefined;
+    spotifyBudget.recordDaily.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finishRecord = resolve;
+        }),
+    );
+    const fetchMock = vi.fn(async () => new Response("{}", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const response = spotifyFetch("/me", "token");
+    try {
+      await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    } finally {
+      finishRecord?.();
+    }
+    await expect(response).resolves.toHaveProperty("status", 200);
+  });
+
   it("waits out a 429 Retry-After on an idempotent GET, then succeeds", async () => {
     vi.useFakeTimers();
     selectQueue = [{ access_token: "at-valid", expires_at: future(), refresh_token: "rt" }];

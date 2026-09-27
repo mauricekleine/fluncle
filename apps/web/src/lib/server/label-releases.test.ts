@@ -1237,10 +1237,14 @@ describe("probeLabelReleases", () => {
       searchAlbumIds: albums.map((album) => album.id),
       tracks: albums.flatMap((album) => album.trackIds.map((id) => ({ id, title: id }))),
     });
+    const respond = spotify.respond;
+    spotify.respond = (path) =>
+      path.startsWith("/search?") && path.includes("Zzz") ? searchBody([]) : respond(path);
 
+    let albumsSeen = 0;
     for (let pass = 0; pass < 12; pass += 1) {
       await setSpotifyCallMeter(db, 0);
-      await probeLabelReleases();
+      albumsSeen += (await probeLabelReleases()).albumsSeen;
     }
 
     const stamps = await db.execute(
@@ -1250,6 +1254,54 @@ describe("probeLabelReleases", () => {
     expect(stamps.rows[1]?.label_releases_checked_at).not.toBeNull();
     const tracks = await db.execute("select count(*) as n from tracks where label_id = 'lbl_big'");
     expect(Number(tracks.rows[0]?.n)).toBe(20);
+    expect(albumsSeen).toBe(10);
+  });
+
+  it("saves one album cursor when every already-minted track is skipped", async () => {
+    await seedEnabledLabel(db, { id: "lbl_1", name: "Medschool", slug: "medschool" });
+    await seedTrack(db, { logId: "AAA.01.01", title: "One", trackId: "t1" });
+    await seedTrack(db, { logId: "AAA.01.02", title: "Two", trackId: "t2" });
+    setSpotifyFixture({
+      albums: [
+        {
+          copyrights: ["℗ 2026 Medschool"],
+          id: "alb1",
+          name: "EP",
+          releaseDate: "2026-07-19",
+          trackIds: ["t1", "t2"],
+        },
+      ],
+      searchAlbumIds: ["alb1"],
+    });
+    const execute = vi.spyOn(db, "execute");
+
+    const result = await probeLabelReleases();
+    const progressWrites = execute.mock.calls.filter(([statement]) =>
+      String((statement as unknown as { sql?: string }).sql ?? "").includes(
+        "set label_releases_progress_json = ?",
+      ),
+    );
+    expect(result.labelsProbed).toBe(1);
+    expect(spotify.calls.some((path) => path.startsWith("/tracks/"))).toBe(false);
+    expect(progressWrites).toHaveLength(2);
+  });
+
+  it("does not restart failure cooldown when a due label pauses at the meter", async () => {
+    await seedEnabledLabel(db, { id: "lbl_1", name: "Medschool", slug: "medschool" });
+    setMintableFixture();
+    const attemptedAt = new Date(Date.now() - 13 * 60 * 60_000).toISOString();
+    await db.execute({
+      args: [attemptedAt, "medschool"],
+      sql: "update labels set label_releases_failures = 1, label_releases_attempted_at = ? where slug = ?",
+    });
+    await setSpotifyCallMeter(db, TAP_BUDGET_CEILING - 1);
+
+    const result = await probeLabelReleases();
+    const row = await db.execute(
+      "select label_releases_attempted_at from labels where slug = 'medschool'",
+    );
+    expect(result.budgetPaused).toBe(true);
+    expect(row.rows[0]?.label_releases_attempted_at).toBe(attemptedAt);
   });
 
   it("charges an atomic daily tap cap without repeat requests", async () => {
