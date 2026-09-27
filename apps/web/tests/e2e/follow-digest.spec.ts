@@ -3,7 +3,7 @@ import { expect, test } from "@playwright/test";
 import { LOCAL_DB_CONCURRENCY } from "../../src/lib/database-concurrency";
 import { blockExternalRequests } from "./browser";
 import { capturedEmails } from "./fake-resend";
-import { BASE_URL, LIBSQL_URL } from "./stack";
+import { BASE_URL, LIBSQL_URL, readE2eDigestNow } from "./stack";
 
 const ARTIST = { id: "e2e-artist-digest", name: "Harbour Static", slug: "harbour-static" };
 const TRACK = { id: "e2e-track-digest", title: "Low Tide Protocol" };
@@ -12,7 +12,7 @@ const API_TOKEN = "e2e-fake-api-token";
 let db: Client;
 
 function yesterdayUtc(): string {
-  return new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  return new Date(readE2eDigestNow().getTime() - 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
 }
 
 test.beforeAll(async () => {
@@ -70,7 +70,7 @@ async function sendDigests(request: import("@playwright/test").APIRequestContext
 
   expect(response.ok(), await response.text()).toBe(true);
 
-  return (await response.json()) as { paused: boolean; sent: number };
+  return (await response.json()) as { paused: boolean; sent: number; windowClosed: boolean };
 }
 
 test("Dave follows an artist with one email and gets the Friday digest, once, and can stop it", async ({
@@ -115,6 +115,7 @@ test("Dave follows an artist with one email and gets the Friday digest, once, an
   const first = await sendDigests(page.request);
 
   expect(first.paused).toBe(false);
+  expect(first.windowClosed).toBe(false);
   expect(first.sent).toBeGreaterThanOrEqual(1);
 
   const digests = (await capturedEmails(email)).filter((message) =>

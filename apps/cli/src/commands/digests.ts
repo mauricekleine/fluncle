@@ -11,6 +11,7 @@ export type FollowDigestResponse = {
   sent: number;
   skipped: number;
   weekKey: string;
+  windowClosed: boolean;
 };
 
 export async function sendFollowDigestsCommand(options: {

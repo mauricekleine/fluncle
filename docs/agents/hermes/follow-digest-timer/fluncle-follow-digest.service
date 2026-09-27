@@ -8,7 +8,7 @@ OnFailure=fluncle-sweep-failure@%n.service
 [Service]
 Type=oneshot
 EnvironmentFile=-/etc/fluncle/database-admission.env
-ExecStart=/usr/bin/docker exec -e DATABASE_ADMISSION_FAIL_CLOSED -e DATABASE_ADMISSION_POLL_SECS=2 -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/database-admission-runner.sh fluncle-follow-digest -- bash /opt/hermes-scripts/follow-digest-sweep.sh
+ExecStart=/usr/bin/docker exec -e DATABASE_ADMISSION_FAIL_CLOSED -e DATABASE_ADMISSION_POLL_SECS=2 -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/daily-retry-runner.sh fluncle-follow-digest Europe/Amsterdam 17:00 18:15 --weekday Fri -- bash /opt/hermes-scripts/database-admission-runner.sh fluncle-follow-digest -- bash /opt/hermes-scripts/follow-digest-sweep.sh
 TimeoutStartSec=1800
 NoNewPrivileges=true
 ProtectControlGroups=true

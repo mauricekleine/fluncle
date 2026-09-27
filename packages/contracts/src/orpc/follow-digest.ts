@@ -32,6 +32,7 @@ export const sendFollowDigests = oc
       skipped: z.number(),
       unknown: z.number(),
       weekKey: z.string(),
+      windowClosed: z.boolean(),
     }),
   );
 
