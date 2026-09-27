@@ -46,6 +46,7 @@ async function until(predicate: () => boolean, timeoutMs = 5000): Promise<void> 
 async function rig(options: { paid?: boolean } = {}) {
   const directory = mkdtempSync(join(tmpdir(), "anchor-admission-phase-"));
   temporaryDirectories.push(directory);
+  writeFileSync(join(directory, "actor-list-clock"), String(Date.now()));
   if (options.paid) {
     writeFileSync(join(directory, "paid-mode"), "1");
   }
@@ -219,7 +220,7 @@ const server = Bun.serve({ port: 0, async fetch(request) {
     if (request.method === "GET") {
       appendFileSync(at("timeline"), "actor-list\\n");
       const search = new URL(request.url).searchParams;
-      const now = Date.now();
+      const now = Number(readFileSync(at("actor-list-clock"), "utf8"));
       const recent = existsSync(at("actor-list-overflow")) ? Array.from({ length: 51 }, (_, index) => ({ id: "run-overflow-" + index, startedAt: new Date(now - index).toISOString() })) : existsSync(at("actor-list-many")) ? Array.from({ length: 26 }, (_, index) => ({ id: "run-other-" + index, startedAt: new Date(now - index).toISOString() })) : [];
       const matches = existsSync(at("actor-list-match")) ? [{ id: "run-ambiguous", startedAt: new Date(existsSync(at("actor-clock-behind-19m")) ? now - 19 * 60_000 : existsSync(at("actor-clock-behind")) ? now - 30_000 : now).toISOString() }] : [];
       if (existsSync(at("actor-list-double-match"))) matches.push({ id: "run-earlier", startedAt: new Date(now - 10_000).toISOString() });
