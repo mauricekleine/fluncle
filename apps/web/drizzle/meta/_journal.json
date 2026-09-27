@@ -1387,6 +1387,13 @@
       "when": 1790532707150,
       "tag": "0197_volatile_calypso",
       "breakpoints": true
+    },
+    {
+      "idx": 198,
+      "version": "6",
+      "when": 1790541164197,
+      "tag": "0198_wonderful_stone_men",
+      "breakpoints": true
     }
   ]
 }
