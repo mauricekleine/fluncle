@@ -122,6 +122,12 @@ test("a weekly job's final-slot window only applies on its weekday", () => {
   expect(
     runNotifier("fluncle-newsletter.service", "137", { time: "1505", weekday: "Sun" }),
   ).toContain("fluncle-newsletter.service");
+  expect(
+    runNotifier("fluncle-follow-digest.service", "137", { time: "1705", weekday: "Fri" }),
+  ).toBe("");
+  expect(
+    runNotifier("fluncle-follow-digest.service", "137", { time: "1816", weekday: "Fri" }),
+  ).toContain("fluncle-follow-digest.service");
 });
 
 test("the notifier's final slots match every retry-runner service", () => {

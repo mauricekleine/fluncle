@@ -19,6 +19,7 @@ export const RERUN_SAFE_JOBS: ReadonlySet<string> = new Set([
   "fluncle-cluster",
   "fluncle-demand",
   "fluncle-funnel-snapshot",
+  "fluncle-follow-digest",
   "fluncle-label-releases",
   "fluncle-label-triage",
   "fluncle-logbook",
@@ -48,6 +49,7 @@ export const DAILY_RETRY_SCHEDULES: Readonly<Record<string, DailyRetrySchedule>>
   "fluncle-backup": amsterdam("03:00", "05:20"),
   "fluncle-cluster": amsterdam("03:20", "04:30"),
   "fluncle-demand": amsterdam("04:40", "05:50"),
+  "fluncle-follow-digest": amsterdam("17:00", "18:15", "Fri"),
   "fluncle-funnel-snapshot": { finalSlot: "23:57", primarySlot: "23:45", timeZone: "UTC" },
   "fluncle-label-releases": amsterdam("07:20", "08:20"),
   "fluncle-label-triage": amsterdam("06:40", "07:50"),
@@ -149,6 +151,13 @@ function slotDay(date: Date, timeZone: string, primarySlot: string): string {
   return prior.toISOString().slice(0, 10);
 }
 
+function markerTime(name: string, modified: Date): Date {
+  const timestamp = /^(\d{4}-\d{2}-\d{2})T(\d{2}):?(\d{2}):?(\d{2})Z-\d+\.md$/.exec(name);
+  return timestamp
+    ? new Date(`${timestamp[1]}T${timestamp[2]}:${timestamp[3]}:${timestamp[4]}Z`)
+    : modified;
+}
+
 function summaryFromMarker(marker: string): Record<string, unknown> | null {
   const output = marker.split("<!-- fluncle-cron-output: stderr tail -->", 1)[0] ?? "";
 
@@ -225,6 +234,10 @@ function markerOutcome(
       : "started";
   }
 
+  if (job === "fluncle-follow-digest" && summary.ok === false) {
+    return "partial";
+  }
+
   if (
     (job === "fluncle-funnel-snapshot" || job === "fluncle-social-metrics") &&
     summary.ok === true &&
@@ -276,7 +289,7 @@ export function dailyRetryState(options: {
 
     try {
       modified = statSync(path).mtime;
-      if (slotDay(modified, options.timeZone, options.primarySlot) !== day) {
+      if (slotDay(markerTime(name, modified), options.timeZone, options.primarySlot) !== day) {
         continue;
       }
       marker = readFileSync(path, "utf8");
