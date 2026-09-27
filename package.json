@@ -107,7 +107,7 @@
       "oxfmt --write --ignore-path .prettierignore --no-error-on-unmatched-pattern"
     ],
     "**/*.{js,jsx,ts,tsx}": [
-      "oxlint --fix"
+      "oxlint --fix --no-error-on-unmatched-pattern"
     ]
   },
   "engines": {

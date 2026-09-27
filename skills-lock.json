@@ -3,6 +3,7 @@
   "skills": {
     "ai-seo": {
       "source": "coreyhaines31/marketingskills",
+      "ref": "7f4af1ea8e7809e0142c55bf19243a706f539c25",
       "sourceType": "github",
       "skillPath": "skills/ai-seo/SKILL.md",
       "computedHash": "a6befed362ed7127d051db085bc8be9470abbe87f70a40ee9a05e201dd8c693f"
@@ -126,9 +127,10 @@
     },
     "impeccable": {
       "source": "pbakaus/impeccable",
+      "ref": "7d6109b7232a727534153970d13c2855e0ecda48",
       "sourceType": "github",
       "skillPath": ".agents/skills/impeccable/SKILL.md",
-      "computedHash": "8e68c45ab038a3707795034a060b90098e08250ae60ad9987e9e73ec269aaf7e"
+      "computedHash": "5e539d6bfd03da45238437d38eff5986720c2935ad624fe7ccc9ab55b6c922ca"
     },
     "improve": {
       "source": "shadcn/improve",
@@ -138,36 +140,42 @@
     },
     "react-doctor": {
       "source": "millionco/react-doctor",
+      "ref": "80e89c5ff563c88a2cc720afabf924062c103382",
       "sourceType": "github",
       "skillPath": "skills/react-doctor/SKILL.md",
       "computedHash": "99ce09a65a0c78f23bc685739e106f02edb1279699a94805368d54ea7f399d6f"
     },
     "react-email": {
       "source": "resend/resend-skills",
+      "ref": "288efc7103c8177c9019dea79cf0099bacabb81d",
       "sourceType": "github",
       "skillPath": "skills/react-email/SKILL.md",
       "computedHash": "070a814e7ae89542250de27a0b03d8020ca1e8c57abf6304ecff527057c70256"
     },
     "remotion-best-practices": {
       "source": "remotion-dev/skills",
+      "ref": "6726bf2d4bcce0359806749b3656b0c886d74aaa",
       "sourceType": "github",
       "skillPath": "skills/remotion/SKILL.md",
-      "computedHash": "006f8413941b59eff54a7ce64851b8a2fb79e7a3a5f1a895e97a48f01482553d"
+      "computedHash": "5284f294f0bad7c1217d24af5044a5c672d9202b218331db33e833d64ce121a4"
     },
     "resend": {
       "source": "resend/resend-skills",
+      "ref": "288efc7103c8177c9019dea79cf0099bacabb81d",
       "sourceType": "github",
       "skillPath": "skills/resend/SKILL.md",
       "computedHash": "9de632cf0e2a3f68b458f66ce95bb26999122277d126d53e7eafa6f0cdd0f013"
     },
     "resend-cli": {
       "source": "resend/resend-skills",
+      "ref": "288efc7103c8177c9019dea79cf0099bacabb81d",
       "sourceType": "github",
       "skillPath": "skills/resend-cli/SKILL.md",
       "computedHash": "d3514da9f8e21c77697afcf4a499150e327d0277fb8c7b25b74340f98a4118a9"
     },
     "seo-audit": {
       "source": "coreyhaines31/marketingskills",
+      "ref": "7f4af1ea8e7809e0142c55bf19243a706f539c25",
       "sourceType": "github",
       "skillPath": "skills/seo-audit/SKILL.md",
       "computedHash": "f2dc52130189068981f21e1c0bdc4471ac7cd9b08d8a1320604411aa0f950385"
@@ -179,6 +187,7 @@
     },
     "shadcn": {
       "source": "shadcn/ui",
+      "ref": "d84c4a8ca5aeac51a6311023bef36e5b04a3de50",
       "sourceType": "github",
       "skillPath": "skills/shadcn/SKILL.md",
       "computedHash": "8f8bcc9024aa068245fac646d654a18c80280e4b06112ccd3e691a8c96cd66bd"

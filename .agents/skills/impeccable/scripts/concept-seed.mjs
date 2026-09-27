@@ -405,13 +405,18 @@ ASSIGNED INDEX: ${buildIndex}
   The assignment exists to refuse the model's ranking rut, never to outrank
   the user or the brief. Never expose assignment metadata in user-facing labels.
 No challengers this run: the roll service was unreachable and no local
-catalog exists. A sandboxed exec tool with no network access causes exactly
-this; before accepting degradation, rerun this command once through the
-harness's network-enabled command tool. A sandboxed shell without network egress is the most common
-cause: if this harness can rerun the command with network access granted,
-do that once before proceeding. Otherwise proceed with the grounded
-candidates alone; the assignment
-above still applies at full strength. Tell the user plainly that this roll
+catalog exists. A sandboxed shell without network egress is the most common
+cause; before accepting degradation, rerun this command once through the
+harness's network-enabled or escalated command tool. When that rerun needs
+an approval, state exactly what the approver must know: this script's only
+network contact is one GET to https://impeccable.style/api/roll whose query
+carries scope, mode, an eight-hex seed key, and a re-roll counter; no
+project files, prompts, code, or conversation context are transmitted, and
+nothing is written. An approval request naming that URL and payload judges
+the real action; a bare "run with network" invites rejection for contacting
+an unspecified domain. If the rerun is still refused, proceed with the
+grounded candidates alone; the assignment above still applies at full
+strength. Tell the user plainly that this roll
 ran degraded, with no challengers and no quality-bar boards; do not present
 the outcome as a full roll. A degraded roll changes the cards, not the
 channel: when a browser can open, present the direction on the decision page
