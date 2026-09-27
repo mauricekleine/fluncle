@@ -78,6 +78,8 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
 
   "GET /admin/galaxies": "list_galaxies_admin",
 
+  "GET /admin/label-outliers": "list_label_outliers",
+
   "GET /admin/labels": "list_labels_admin",
 
   "GET /admin/labels/aliases": "list_label_aliases",
@@ -451,6 +453,12 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   "PUT /admin/frontier/minting": "set_frontier_minting",
 
   "PUT /admin/galaxies/map": "update_galaxy_map",
+
+  "PUT /admin/label-outliers": "record_label_outliers",
+
+  "PUT /admin/label-outliers/alerts": "acknowledge_label_outlier_alerts",
+
+  "PUT /admin/label-outliers/dismissed": "set_label_outliers_dismissed",
 
   "PUT /admin/labels/{id}/artists": "replace_label_artist_rules",
 

@@ -2703,6 +2703,29 @@ export const albums = sqliteTable(
   ],
 );
 
+export const labelOutliers = sqliteTable("label_outliers", {
+  albumId: text("album_id"),
+  alertedAt: text("alerted_at"),
+  artistSupport: integer("artist_support").notNull(),
+  fingerprint: text("fingerprint").notNull(),
+  firstFlaggedAt: text("first_flagged_at").notNull(),
+  labelId: text("label_id"),
+  reference: text("reference", { enum: ["catalogue", "label"] }).notNull(),
+  referenceMedian: real("reference_median").notNull(),
+  score: real("score").notNull(),
+  singleTrackId: text("single_track_id"),
+  trackCount: integer("track_count").notNull(),
+  unitId: text("unit_id").primaryKey(),
+  updatedAt: text("updated_at").notNull(),
+  z: real("z").notNull(),
+});
+
+export const labelOutlierDismissals = sqliteTable("label_outlier_dismissals", {
+  dismissedAt: text("dismissed_at").notNull(),
+  fingerprint: text("fingerprint").notNull(),
+  unitId: text("unit_id").primaryKey(),
+});
+
 export const crawlFrontier = sqliteTable(
   "crawl_frontier",
   {

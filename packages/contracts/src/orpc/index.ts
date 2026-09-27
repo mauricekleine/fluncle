@@ -25,6 +25,7 @@ import { adminFrontierContract } from "./admin-frontier";
 import { adminFunnelContract } from "./admin-funnel";
 import { adminHealthContract } from "./admin-health";
 import { adminHubCountsContract } from "./admin-hub-counts";
+import { adminLabelOutliersContract } from "./admin-label-outliers";
 import { adminLabelsContract } from "./admin-labels";
 import { adminLogbookContract } from "./admin-logbook";
 import { adminMigrationsContract } from "./admin-migrations";
@@ -97,6 +98,16 @@ export {
 } from "./mix";
 export { GalaxyListItemSchema, galaxiesContract, getGalaxy, listGalaxies } from "./galaxies";
 export { getGraphPreview, GraphEntityKindSchema, graphContract, GraphPreviewSchema } from "./graph";
+export {
+  acknowledgeLabelOutlierAlerts,
+  adminLabelOutliersContract,
+  LabelOutlierItemSchema,
+  LabelOutlierRunSchema,
+  listLabelOutliers,
+  recordLabelOutliers,
+  RecordedLabelOutlierSchema,
+  setLabelOutliersDismissed,
+} from "./admin-label-outliers";
 export {
   adminGalaxiesContract,
   GalaxyAdminItemSchema,
@@ -589,6 +600,7 @@ export const contract = {
   ...adminHealthContract,
   ...adminHubCountsContract,
   ...followDigestContract,
+  ...adminLabelOutliersContract,
   ...adminLabelsContract,
   ...adminLogbookContract,
   ...adminMigrationsContract,
