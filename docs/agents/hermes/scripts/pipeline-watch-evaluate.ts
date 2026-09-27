@@ -134,7 +134,9 @@ function mostCommon(values: string[]): string | null {
 }
 
 const NAMED_CAUSE: Record<string, string> = {
+  anchor_tick_busy: "anchor_tick_busy",
   apify_budget_spent: "apify_budget_spent",
+  awaiting_paid_result: "awaiting_paid_result",
   breaker_quota: "breaker_quota",
   breaker_throttle: "breaker_throttle",
   database_admission: "admission_lane_closed",
@@ -143,6 +145,7 @@ const NAMED_CAUSE: Record<string, string> = {
   label_gate: "label_gate",
   mb_throttled: "vendor_gate",
   no_storable_work: "no_storable_work",
+  paid_result_recovery: "paid_result_recovery",
   quota_hold: "quota_hold",
   shared_meter: "shared_meter",
 };

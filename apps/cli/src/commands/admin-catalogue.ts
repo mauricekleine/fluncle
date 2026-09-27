@@ -94,10 +94,14 @@ export async function requeueUnmatchedCommand(): Promise<{
   );
 }
 
-export async function requeueAnchorCommand(trackIds: string[]): Promise<{ requeued: number }> {
-  return adminApiPost<{ ok: true; requeued: number }>("/api/v1/admin/catalogue/anchor/requeue", {
-    trackIds,
-  });
+export async function requeueAnchorCommand(
+  trackIds: string[],
+  clearPaid = false,
+): Promise<{ paidCleared: number; requeued: number }> {
+  return adminApiPost<{ ok: true; paidCleared: number; requeued: number }>(
+    "/api/v1/admin/catalogue/anchor/requeue",
+    { clearPaid, trackIds },
+  );
 }
 
 export async function requeueIsrcRecoveryCommand(input: {

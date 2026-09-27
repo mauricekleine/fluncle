@@ -656,6 +656,19 @@ function isAdmissionSkip(summary: Record<string, unknown> | null): boolean {
   return summary?.gateState === "admission-skipped";
 }
 
+function isHourlyAdmissionInterruption(cron: CronDef, summary: Record<string, unknown>): boolean {
+  if (cron.service !== "cron.anchor" && cron.service !== "cron.device-mirror") {
+    return false;
+  }
+
+  return (
+    isAdmissionSkip(summary) ||
+    (summary.gateState === "paused" &&
+      summary.admissionOutcome === "phase-yielded" &&
+      summary.reason === "database_admission")
+  );
+}
+
 function isReconcilePrePayloadYield(summary: Record<string, unknown> | null): boolean {
   return (
     summary?.gateState === "paused" &&
@@ -905,6 +918,10 @@ export function judgeCron(
   const labelVerdict = labelReleaseCronVerdict(cron, summary, runFiles, dir, now);
   if (labelVerdict !== null) {
     return labelVerdict;
+  }
+
+  if (isHourlyAdmissionInterruption(cron, summary)) {
+    return "incomplete";
   }
 
   if (

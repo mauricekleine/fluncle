@@ -284,14 +284,16 @@ export const DUE_WORK_REVIEWED_NONPRODUCER_WRITERS = [
   },
   {
     disposition: "non-eligibility",
+    file: "anchor-apify.ts",
+    rationale: "Records paid actor admission without changing an anchor worklist predicate.",
+    sites: ["anchor-apify.ts:update:tracks:6acc2df8"],
+  },
+  {
+    disposition: "non-eligibility",
     file: "anchor.ts",
     rationale:
       "Writes anchor-review evidence and paid-admission receipts outside every track due-work source field.",
-    sites: [
-      "anchor.ts:update:tracks:b6e72ebf",
-      "anchor.ts:update:tracks:106f7943",
-      "anchor.ts:update:tracks:c07152e4",
-    ],
+    sites: ["anchor.ts:update:tracks:b6e72ebf", "anchor.ts:update:tracks:106f7943"],
   },
   {
     disposition: "non-eligibility",
@@ -830,14 +832,16 @@ export const GOAL_D_REVIEWED_NONPROJECTION_WRITERS = [
   },
   {
     disposition: "non-projection-fact",
+    file: "anchor-apify.ts",
+    rationale: "Records a paid actor receipt without changing Goal D source facts.",
+    sites: ["anchor-apify.ts:update:tracks:6acc2df8"],
+  },
+  {
+    disposition: "non-projection-fact",
     file: "anchor.ts",
     rationale:
       "Changes anchor-review bookkeeping or a paid-admission receipt; accepted anchor writes use the chokepoint.",
-    sites: [
-      "anchor.ts:update:tracks:b6e72ebf",
-      "anchor.ts:update:tracks:106f7943",
-      "anchor.ts:update:tracks:c07152e4",
-    ],
+    sites: ["anchor.ts:update:tracks:b6e72ebf", "anchor.ts:update:tracks:106f7943"],
   },
   {
     disposition: "non-projection-fact",

@@ -481,6 +481,59 @@ describe("watchdog regression replays", () => {
     ).toBe("measurement_unavailable");
   });
 
+  test("anchor admission skips retain backlog and identify the closed lane", () => {
+    const start = Date.parse("2026-09-23T10:00:00Z");
+    const markers = Array.from({ length: 3 }, (_, index) => ({
+      at: start + index * 60 * 60_000,
+      summary: {
+        admissionOutcome: "wait-expired",
+        checked: null,
+        gateState: "admission-skipped",
+        payloadStarted: false,
+        produced: null,
+        queueDepth: null,
+      },
+    }));
+    const verdict = evaluate("anchor", markers, { anchorQueue: 2000 });
+    expect(verdict).toMatchObject({
+      backlog: { atLeast: false, count: 2000 },
+      cause: "admission_lane_closed",
+      state: "stalled",
+    });
+  });
+
+  test("anchor paid-result deferrals keep their named watchdog cause", () => {
+    const start = Date.parse("2026-09-23T10:00:00Z");
+    const markers = Array.from({ length: 3 }, (_, index) => ({
+      at: start + index * 60 * 60_000,
+      summary: {
+        apifySkippedAwaitingPaidResult: 2,
+        blockedReason: "awaiting_paid_result",
+        checked: 2,
+        produced: 0,
+      },
+    }));
+    expect(evaluate("anchor", markers).cause).toBe("awaiting_paid_result");
+  });
+
+  test("anchor ambiguous paid actor outcomes keep their named watchdog cause", () => {
+    const start = Date.parse("2026-09-23T10:00:00Z");
+    const markers = Array.from({ length: 3 }, (_, index) => ({
+      at: start + index * 60 * 60_000,
+      summary: { blockedReason: "paid_result_recovery", ok: false, produced: 0 },
+    }));
+    expect(evaluate("anchor", markers).cause).toBe("paid_result_recovery");
+  });
+
+  test("anchor tick lock contention has a named watchdog cause", () => {
+    const start = Date.parse("2026-09-23T10:00:00Z");
+    const markers = Array.from({ length: 3 }, (_, index) => ({
+      at: start + index * 60 * 60_000,
+      summary: { blockedReason: "anchor_tick_busy", ok: true, produced: 0 },
+    }));
+    expect(evaluate("anchor", markers).cause).toBe("anchor_tick_busy");
+  });
+
   test("a nonincident degraded span closes an announced stall before a new OPEN", () => {
     const start = Date.parse("2026-09-25T00:00:00Z");
     const stalled = evaluate("embed", asMarkers(fixtures.embedFailure));

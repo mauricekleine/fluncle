@@ -53,13 +53,35 @@ describe("oRPC anchor_track (POST /admin/catalogue/anchor)", () => {
 
     expect(response?.status).toBe(200);
     expect(await readJson(response)).toEqual({ anchored: true, ok: true, verifiedBy: "isrc" });
-    expect(anchorTrackMock).toHaveBeenCalledWith("mb_rec-1", [
-      expect.objectContaining({
-        isrc: "GBCJY1300173",
-        spotifyTrackId: "spot001",
-        title: "Weightless",
+    expect(anchorTrackMock).toHaveBeenCalledWith(
+      "mb_rec-1",
+      [
+        expect.objectContaining({
+          isrc: "GBCJY1300173",
+          spotifyTrackId: "spot001",
+          title: "Weightless",
+        }),
+      ],
+      { paidResultToken: undefined },
+    );
+  });
+
+  it("passes a paid result token to the anchor gate", async () => {
+    anchorTrackMock.mockResolvedValueOnce({ anchored: false, verifiedBy: null });
+
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      req(PATH, "POST", AGENT_TOKEN, {
+        candidates: [],
+        paidResultToken: "signed-result",
+        trackId: "mb_paid",
       }),
-    ]);
+    );
+
+    expect(response?.status).toBe(200);
+    expect(anchorTrackMock).toHaveBeenCalledWith("mb_paid", [], {
+      paidResultToken: "signed-result",
+    });
   });
 
   it("normalises a candidate's uri/url to a bare Spotify id", async () => {

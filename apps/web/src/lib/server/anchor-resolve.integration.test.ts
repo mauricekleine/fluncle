@@ -1,9 +1,13 @@
 import { type Client } from "@libsql/client";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createIntegrationDb } from "./integration-db";
 
 let db: Client;
+let directory: string;
 
 const lookupSpotifyIdsByMbid = vi.fn();
 const fetchTrackMetadata = vi.fn();
@@ -124,12 +128,18 @@ function metadata(over: Partial<Record<string, unknown>> = {}): Record<string, u
 }
 
 beforeEach(async () => {
-  db = await createIntegrationDb();
+  directory = await mkdtemp(join(tmpdir(), "fluncle-anchor-resolve-"));
+  db = await createIntegrationDb({ url: `file:${join(directory, "anchor.db")}` });
   lookupSpotifyIdsByMbid.mockReset();
   fetchTrackMetadata.mockReset();
 
   searchDeezerCandidates.mockReset();
   searchDeezerCandidates.mockResolvedValue([]);
+});
+
+afterEach(async () => {
+  db.close();
+  await rm(directory, { force: true, recursive: true });
 });
 
 describe("resolveAnchorFree — a ListenBrainz hit through the verification gate", () => {

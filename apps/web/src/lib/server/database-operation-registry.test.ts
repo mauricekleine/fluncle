@@ -1089,6 +1089,46 @@ describe("database operation registry", () => {
     ]);
   });
 
+  it("pins anchor's once-retried batched phases around worklist and settlement calls", () => {
+    const anchor = DATABASE_OPERATION_REGISTRY.find(
+      (operation) => operation.operationId === "catalogue.anchor",
+    );
+
+    expect(anchor?.admissionShape).toMatchObject({
+      phaseSource: `${SCRIPTS}/anchor-sweep.ts`,
+      shape: "phased",
+      yieldRetries: 1,
+    });
+    expect(
+      anchor?.triggers.find((trigger) => trigger.operationId === "catalogue.anchor.receipt"),
+    ).toMatchObject({
+      accessClass: "read",
+      mutationTarget: null,
+      target: "POST /api/v1/admin/catalogue/anchor/receipt",
+    });
+    expect(
+      anchor?.triggers.find((trigger) => trigger.operationId === "catalogue.anchor.cancel-paid"),
+    ).toMatchObject({
+      accessClass: "write",
+      mutationTarget: "primary",
+      target: "POST /api/v1/admin/catalogue/anchor/paid-result/cancel",
+    });
+    expect(
+      anchor?.triggers.find((trigger) => trigger.operationId === "catalogue.anchor.paid-token"),
+    ).toMatchObject({
+      accessClass: "read",
+      mutationTarget: null,
+      target: "POST /api/v1/admin/catalogue/anchor/paid-result/token",
+    });
+    expect(
+      anchor?.triggers.find((trigger) => trigger.operationId === "catalogue.anchor.resolve-paid"),
+    ).toMatchObject({
+      accessClass: "write",
+      mutationTarget: "primary",
+      target: "POST /api/v1/admin/catalogue/anchor/paid-result/resolve",
+    });
+  });
+
   it("pins hub-count reconciliation's once-retried phased admission around bounded windows", () => {
     const reconcile = DATABASE_OPERATION_REGISTRY.find(
       (operation) => operation.operationId === "catalogue.reconcile-hub-counts",
