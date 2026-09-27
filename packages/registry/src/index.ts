@@ -1542,6 +1542,24 @@ export const SURFACES: readonly Surface[] = [
     weights: { status: "hidden" },
   },
   {
+    exposedContent: [
+      "nightly label-outlier review list — every album and label-less single of embedded catalogue tracks scored against the rest of its own label, the far ones flagged onto /admin/label-outliers (--no-agent)",
+    ],
+    kind: "cron",
+    name: "cron.label-outliers",
+    operatorNotes:
+      "05:30 Amsterdam daily, retry slot 06:30. Reads only the scoring export the device mirror writes beside its replica once a day, inside its own lock, by write-then-rename (no hosted-database read, no replica or mirror-lock access; a missing export or one older than 36 h fails loudly and writes nothing). It scores each album's mean cosine to its label's leave-it-out centroid as a robust z against that label's own spread (labels under 8 albums use the whole catalogue), and keeps the ones at z <= -4 whose artists have fewer than 3 typical tracks elsewhere and whose album Discogs does not file under Drum n Bass or Jungle. A corpus under 10,000 usable vectors or under 95% usable, or more than 2,000 flags, fails loudly and writes nothing. It then fires the AGENT-tier record_label_outliers op in its own admitted phase; the Worker refuses a duplicated, partial, or collapsed run (fewer than 80% of the live embedded catalogue), replaces the stored list, and returns every visible unit not yet announced. The sweep posts one Discord summary and only then acknowledges them by unit and fingerprint (acknowledge_label_outlier_alerts), so a lost response re-alerts next run. Dismissing is operator tier (set_label_outliers_dismissed) and holds until the album's tracks change. Zero LLM tokens. Source: docs/agents/hermes/scripts/label-outliers*.ts. See docs/catalogue-crawler.md.",
+    probeConfig: {
+      cadenceMs: 24 * 60 * MINUTE_MS,
+      cronName: "fluncle-label-outliers",
+      kind: "cron",
+      schedule: { time: "05:30", tz: "Europe/Amsterdam" },
+    },
+    statusDescription: "flags albums that sound unlike their label",
+    title: "Label outliers",
+    weights: { status: "hidden" },
+  },
+  {
     command: "fluncle admin albums describe --queue",
     exposedContent: [
       "auto-author the /album/<slug> voiced bio, fill-empty-only (hybrid: one claude -p call)",

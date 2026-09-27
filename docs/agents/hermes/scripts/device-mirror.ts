@@ -22,6 +22,11 @@ import {
   runDatabaseAdmissionPhaseAsync,
   stopDatabaseAdmissionPhases,
 } from "./database-admission-phase";
+import {
+  refreshScoringExport,
+  SCORING_EXPORT_FILE,
+  type ScoringExportStatus,
+} from "./label-outliers-export";
 
 export type DeviceSqlValue = ArrayBuffer | ArrayBufferView | bigint | number | string | null;
 export type DeviceRow = Record<string, DeviceSqlValue>;
@@ -684,11 +689,43 @@ function validateReplicaFile(path: string): string | null {
   }
 }
 
+const CHECKPOINT_ATTEMPTS = 20;
+
+const CHECKPOINT_RETRY_MS = 250;
+
+export function truncateCheckpoint(
+  database: Database,
+  options: { attempts?: number; sleep?: (ms: number) => void } = {},
+): void {
+  const attempts = options.attempts ?? CHECKPOINT_ATTEMPTS;
+  const sleep = options.sleep ?? ((ms: number) => Bun.sleepSync(ms));
+
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    const result = database.query("PRAGMA wal_checkpoint(TRUNCATE)").get() as {
+      busy: number;
+      checkpointed: number;
+      log: number;
+    } | null;
+
+    if (result && result.busy === 0 && result.log === result.checkpointed) {
+      return;
+    }
+
+    if (attempt < attempts) {
+      sleep(CHECKPOINT_RETRY_MS);
+    }
+  }
+
+  throw new Error(
+    `Source replica WAL checkpoint stayed busy after ${attempts} attempts; the replica is not finalized`,
+  );
+}
+
 function checkpointReplica(path: string): void {
   const database = new Database(path, { strict: true });
 
   try {
-    database.run("PRAGMA wal_checkpoint(TRUNCATE)");
+    truncateCheckpoint(database);
     const failure = validateReplicaFile(path);
 
     if (failure) {
@@ -2130,27 +2167,55 @@ export async function publishDeviceGeneration(
   };
 }
 
+export async function takeLockDir(
+  lockDir: string,
+  options: { now?: () => number; staleMs: number },
+): Promise<boolean> {
+  const now = options.now ?? Date.now;
+
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      await mkdir(lockDir);
+      return true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
+        throw error;
+      }
+    }
+
+    const lockStat = await stat(lockDir).catch(() => undefined);
+
+    if (!lockStat) {
+      continue;
+    }
+
+    if (now() - lockStat.mtimeMs <= options.staleMs) {
+      return false;
+    }
+
+    try {
+      await rmdir(lockDir);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        continue;
+      }
+      throw new Error(
+        `Stale device mirror lock at ${lockDir} could not be removed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
+  return false;
+}
+
 async function acquireLock(): Promise<null | (() => Promise<void>)> {
   const home = process.env.HOME ?? "/opt/data/home";
   const lockDir = process.env.DEVICE_MIRROR_LOCK_DIR ?? `${home}/.device-mirror.lock`;
   const staleMs = positiveIntegerEnv("DEVICE_MIRROR_LOCK_STALE_MS", DEFAULT_LOCK_STALE_MS);
   const heartbeatMs = positiveIntegerEnv("DEVICE_MIRROR_LOCK_HEARTBEAT_MS", LOCK_HEARTBEAT_MS);
 
-  try {
-    await mkdir(lockDir);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
-      throw error;
-    }
-
-    const lockStat = await stat(lockDir);
-
-    if (Date.now() - lockStat.mtimeMs <= staleMs) {
-      return null;
-    }
-
-    await rmdir(lockDir);
-    await mkdir(lockDir);
+  if (!(await takeLockDir(lockDir, { staleMs }))) {
+    return null;
   }
 
   const heartbeat = setInterval(() => {
@@ -2210,7 +2275,7 @@ type MirrorSummary = {
   produced: number | null;
   publishPath: DevicePublishPath | null;
   queueDepth: number | null;
-  reason?: "database_admission";
+  reason?: "database_admission" | "lock_held";
   rebuildCause: string | null;
   rewriteReason: DeviceRewriteReason | null;
   rebuildDurationMs: number | null;
@@ -2218,6 +2283,7 @@ type MirrorSummary = {
   replicaFramesSynced: number | null;
   replicaLagFrames: number | null;
   rowCounts: null | Record<DeviceSourceTable, number>;
+  scoringExport: null | ScoringExportStatus;
   throttled?: boolean;
   validation: "failed" | "locked" | "paused" | "verified";
 };
@@ -2250,6 +2316,7 @@ function emptySummary(): MirrorSummary {
     replicaLagFrames: null,
     rewriteReason: null,
     rowCounts: null,
+    scoringExport: null,
     validation: "failed",
   };
 }
@@ -2257,6 +2324,7 @@ function emptySummary(): MirrorSummary {
 export type DeviceMirrorRuntime = {
   createTarget?: () => DeviceTargetClient;
   derive?: typeof runDeriver;
+  refreshExport?: (replicaPath: string, exportPath: string) => Promise<ScoringExportStatus>;
   syncSource?: (
     path: string,
     forceRebuild: boolean,
@@ -2274,9 +2342,12 @@ export async function main(runtime: DeviceMirrorRuntime = {}): Promise<MirrorSum
       const locked = {
         ...summary,
         checked: null,
+        error: "another tick holds the device mirror lock; this tick published nothing",
+        errors: 1,
         gateState: "locked" as const,
-        ok: true,
+        ok: false,
         produced: null,
+        reason: "lock_held",
         validation: "locked" as const,
       };
       console.log(JSON.stringify(locked));
@@ -2337,7 +2408,6 @@ export async function main(runtime: DeviceMirrorRuntime = {}): Promise<MirrorSum
     summary.replicaLagFrames = calculateReplicaLagFrames(sync);
     summary.rebuildCause = sync.rebuildCause;
     summary.rebuildDurationMs = sync.rebuildCause ? sync.durationMs : 0;
-
     const derivation = await (runtime.derive ?? runDeriver)(replicaPath, generationPath);
     const generation = inspectDeviceGeneration(generationPath);
     const replicaBytes = (await stat(replicaPath)).size;
@@ -2377,6 +2447,23 @@ export async function main(runtime: DeviceMirrorRuntime = {}): Promise<MirrorSum
     summary.queueDepth = publication.published ? 0 : publication.backlogRows;
     summary.ok = true;
     summary.validation = "verified";
+    summary.scoringExport = await (runtime.refreshExport ?? refreshScoringExport)(
+      replicaPath,
+      join(stateDirectory, SCORING_EXPORT_FILE),
+    ).catch(
+      (error: unknown): ScoringExportStatus => ({
+        durationMs: null,
+        error: (error instanceof Error ? error.message : String(error)).slice(0, 300),
+        exportedAt: null,
+        status: "failed",
+      }),
+    );
+
+    if (summary.scoringExport.status === "failed" || summary.scoringExport.status === "timeout") {
+      log(
+        `label-outliers scoring export ${summary.scoringExport.status}; the publish already landed: ${summary.scoringExport.error}`,
+      );
+    }
   } catch (error) {
     if (error instanceof DeviceMirrorAdmissionYield) {
       summary.admissionOutcome = "phase-yielded";

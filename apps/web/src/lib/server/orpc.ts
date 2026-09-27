@@ -19,6 +19,7 @@ import { adminCatalogueHandlers } from "./orpc/admin-catalogue";
 import { adminCostsHandlers } from "./orpc/admin-costs";
 import { adminDatabaseAdmissionHandlers } from "./orpc/admin-database-admission";
 import { adminGalaxiesHandlers } from "./orpc/admin-galaxies";
+import { adminLabelOutliersHandlers } from "./orpc/admin-label-outliers";
 import { adminPromptsHandlers } from "./orpc/admin-prompts";
 import { adminProjectionHandlers } from "./orpc/admin-projections";
 import { adminVectorHandlers } from "./orpc/admin-vectors";
@@ -86,6 +87,7 @@ export const router = os.use(dueWorkMaintenancePendingMiddleware).router({
   ...adminCostsHandlers(os),
   ...adminDatabaseAdmissionHandlers(os),
   ...adminGalaxiesHandlers(os),
+  ...adminLabelOutliersHandlers(os),
   ...adminPromptsHandlers(os),
   ...adminProjectionHandlers(os),
   ...adminVectorHandlers(os),

@@ -35,6 +35,7 @@ const SETTINGS_INVENTORY = {
   "follow-digest.ts": ["follow_digest_paused"],
   "frontier-playlist.ts": ["frontier.minting"],
   "health-receipt-cutover.ts": ["health_snapshot_receipts_enabled"],
+  "label-outliers.ts": ["label_outliers_last_run"],
   "label-releases.ts": [
     "spotify_label_releases_quota_until",
     "spotify_label_releases_throttle_until",
@@ -171,7 +172,7 @@ describe("settings inventory drift", () => {
     expect(orphaned, "Registered settings keys with no reader and no writer").toEqual([]);
     expect(unregistered, "Settings keys used by code but missing from the inventory").toEqual([]);
     expect(wrongOwner, "Settings keys used outside their registered owner module").toEqual([]);
-    expect(registered.size).toBe(50);
-    expect(Object.keys(SETTINGS_INVENTORY)).toHaveLength(23);
+    expect(registered.size).toBe(51);
+    expect(Object.keys(SETTINGS_INVENTORY)).toHaveLength(24);
   });
 });

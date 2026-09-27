@@ -984,6 +984,7 @@ describe("daily and weekly retry", () => {
       "demand",
       "follow-digest",
       "funnel-snapshot",
+      "label-outliers",
       "label-triage",
       "logbook",
       "newsletter",

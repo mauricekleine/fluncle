@@ -1,3 +1,4 @@
+import { refreshScoringExport } from "./label-outliers-export";
 import { Database, type SQLQueryBindings } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
 import {
@@ -836,6 +837,145 @@ await main({
       rig.restore();
     }
   }, 30_000);
+
+  test("a failing label-outliers export never fails the publish", async () => {
+    const generation = trackGenerationFixture(sequentialTracks(4), "export-fails");
+    const { client } = targetFixture();
+    const rig = admittedMirrorRig();
+
+    try {
+      const summary = await main({
+        createTarget: () => client,
+        derive: async (_source, out) => {
+          copyFileSync(generation.path, out);
+          return {
+            bytes: generation.artifactBytes,
+            derivedAt: generation.derivedAt,
+            elapsedMs: 0,
+            preVacuumBytes: generation.artifactBytes,
+          };
+        },
+        refreshExport: async () => {
+          throw new Error("disk full");
+        },
+      });
+
+      expect(summary.ok).toBe(true);
+      expect(summary.validation).toBe("verified");
+      expect(summary.scoringExport).toMatchObject({ error: "disk full", status: "failed" });
+      expect(liveTracks(client)).toHaveLength(4);
+    } finally {
+      client.close();
+      rig.restore();
+    }
+  }, 30_000);
+
+  test("a publish refreshes the label-outliers export only after the cutover, under the mirror lock", async () => {
+    const generation = trackGenerationFixture(sequentialTracks(4), "export-writes");
+    const { client } = targetFixture();
+    const rig = admittedMirrorRig();
+    const calls: {
+      exportPath: string;
+      liveTracks: number;
+      lockHeld: boolean;
+      replicaExists: boolean;
+    }[] = [];
+
+    try {
+      const summary = await main({
+        createTarget: () => client,
+        derive: async (_source, out) => {
+          copyFileSync(generation.path, out);
+          return {
+            bytes: generation.artifactBytes,
+            derivedAt: generation.derivedAt,
+            elapsedMs: 0,
+            preVacuumBytes: generation.artifactBytes,
+          };
+        },
+        refreshExport: async (replicaPath, exportPath) => {
+          calls.push({
+            exportPath,
+            liveTracks: liveTracks(client).length,
+            lockHeld: existsSync(rig.lock),
+            replicaExists: existsSync(replicaPath),
+          });
+          return {
+            durationMs: 1,
+            error: null,
+            exportedAt: "2026-09-27T05:00:00.000Z",
+            status: "written",
+          };
+        },
+      });
+
+      expect(summary.validation).toBe("verified");
+      expect(summary.scoringExport?.status).toBe("written");
+      expect(calls).toEqual([
+        {
+          exportPath: join(process.env.DEVICE_MIRROR_STATE_DIR ?? "", "label-outliers-inputs.db"),
+          liveTracks: 4,
+          lockHeld: true,
+          replicaExists: true,
+        },
+      ]);
+    } finally {
+      client.close();
+      rig.restore();
+    }
+  }, 30_000);
+
+  test("an export that stalls past its budget is abandoned after the publish and never fails the tick", async () => {
+    const generation = trackGenerationFixture(sequentialTracks(4), "export-stalls");
+    const { client } = targetFixture();
+    const rig = admittedMirrorRig();
+
+    try {
+      const summary = await main({
+        createTarget: () => client,
+        derive: async (_source, out) => {
+          copyFileSync(generation.path, out);
+          return {
+            bytes: generation.artifactBytes,
+            derivedAt: generation.derivedAt,
+            elapsedMs: 0,
+            preVacuumBytes: generation.artifactBytes,
+          };
+        },
+        refreshExport: (replicaPath, exportPath) =>
+          refreshScoringExport(replicaPath, exportPath, {
+            budgetMs: 50,
+            write: () => new Promise<void>(() => {}),
+          }),
+      });
+
+      expect(summary).toMatchObject({ ok: true, validation: "verified" });
+      expect(summary.scoringExport?.status).toBe("timeout");
+      expect(liveTracks(client)).toHaveLength(4);
+    } finally {
+      client.close();
+      rig.restore();
+    }
+  }, 30_000);
+
+  test("a tick that finds the lock held reports a failed, visible skip", async () => {
+    const rig = admittedMirrorRig();
+    mkdirSync(rig.lock);
+
+    try {
+      const summary = await main({ createTarget: () => targetFixture().client });
+
+      expect(summary).toMatchObject({
+        gateState: "locked",
+        ok: false,
+        reason: "lock_held",
+        validation: "locked",
+      });
+    } finally {
+      rmdirSync(rig.lock);
+      rig.restore();
+    }
+  });
 
   test("a source-sync phase yield after an interrupted stage leaves the old generation live", async () => {
     const generation = trackGenerationFixture(sequentialTracks(8), "phase-yield");

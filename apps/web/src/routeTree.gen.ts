@@ -51,6 +51,7 @@ import { Route as AdminCostsRouteImport } from './routes/admin/costs'
 import { Route as AdminFindingsRouteImport } from './routes/admin/findings'
 import { Route as AdminFunnelRouteImport } from './routes/admin/funnel'
 import { Route as AdminGalaxiesRouteImport } from './routes/admin/galaxies'
+import { Route as AdminLabelOutliersRouteImport } from './routes/admin/label-outliers'
 import { Route as AdminLabelsRouteImport } from './routes/admin/labels'
 import { Route as AdminLoginRouteImport } from './routes/admin/login'
 import { Route as AdminMixableOrderRouteImport } from './routes/admin/mixable-order'
@@ -361,6 +362,11 @@ const AdminFunnelRoute = AdminFunnelRouteImport.update({
 const AdminGalaxiesRoute = AdminGalaxiesRouteImport.update({
   id: '/galaxies',
   path: '/galaxies',
+  getParentRoute: () => AdminRouteRoute,
+} as any)
+const AdminLabelOutliersRoute = AdminLabelOutliersRouteImport.update({
+  id: '/label-outliers',
+  path: '/label-outliers',
   getParentRoute: () => AdminRouteRoute,
 } as any)
 const AdminLabelsRoute = AdminLabelsRouteImport.update({
@@ -939,6 +945,7 @@ export interface FileRoutesByFullPath {
   '/admin/findings': typeof AdminFindingsRoute
   '/admin/funnel': typeof AdminFunnelRoute
   '/admin/galaxies': typeof AdminGalaxiesRoute
+  '/admin/label-outliers': typeof AdminLabelOutliersRoute
   '/admin/labels': typeof AdminLabelsRoute
   '/admin/login': typeof AdminLoginRoute
   '/admin/mixable-order': typeof AdminMixableOrderRoute
@@ -1081,6 +1088,7 @@ export interface FileRoutesByTo {
   '/admin/findings': typeof AdminFindingsRoute
   '/admin/funnel': typeof AdminFunnelRoute
   '/admin/galaxies': typeof AdminGalaxiesRoute
+  '/admin/label-outliers': typeof AdminLabelOutliersRoute
   '/admin/labels': typeof AdminLabelsRoute
   '/admin/login': typeof AdminLoginRoute
   '/admin/mixable-order': typeof AdminMixableOrderRoute
@@ -1226,6 +1234,7 @@ export interface FileRoutesById {
   '/admin/findings': typeof AdminFindingsRoute
   '/admin/funnel': typeof AdminFunnelRoute
   '/admin/galaxies': typeof AdminGalaxiesRoute
+  '/admin/label-outliers': typeof AdminLabelOutliersRoute
   '/admin/labels': typeof AdminLabelsRoute
   '/admin/login': typeof AdminLoginRoute
   '/admin/mixable-order': typeof AdminMixableOrderRoute
@@ -1372,6 +1381,7 @@ export interface FileRouteTypes {
     | '/admin/findings'
     | '/admin/funnel'
     | '/admin/galaxies'
+    | '/admin/label-outliers'
     | '/admin/labels'
     | '/admin/login'
     | '/admin/mixable-order'
@@ -1514,6 +1524,7 @@ export interface FileRouteTypes {
     | '/admin/findings'
     | '/admin/funnel'
     | '/admin/galaxies'
+    | '/admin/label-outliers'
     | '/admin/labels'
     | '/admin/login'
     | '/admin/mixable-order'
@@ -1658,6 +1669,7 @@ export interface FileRouteTypes {
     | '/admin/findings'
     | '/admin/funnel'
     | '/admin/galaxies'
+    | '/admin/label-outliers'
     | '/admin/labels'
     | '/admin/login'
     | '/admin/mixable-order'
@@ -2173,6 +2185,13 @@ declare module '@tanstack/react-router' {
       path: '/galaxies'
       fullPath: '/admin/galaxies'
       preLoaderRoute: typeof AdminGalaxiesRouteImport
+      parentRoute: typeof AdminRouteRoute
+    }
+    '/admin/label-outliers': {
+      id: '/admin/label-outliers'
+      path: '/label-outliers'
+      fullPath: '/admin/label-outliers'
+      preLoaderRoute: typeof AdminLabelOutliersRouteImport
       parentRoute: typeof AdminRouteRoute
     }
     '/admin/labels': {
@@ -2887,6 +2906,7 @@ interface AdminRouteRouteChildren {
   AdminFindingsRoute: typeof AdminFindingsRoute
   AdminFunnelRoute: typeof AdminFunnelRoute
   AdminGalaxiesRoute: typeof AdminGalaxiesRoute
+  AdminLabelOutliersRoute: typeof AdminLabelOutliersRoute
   AdminLabelsRoute: typeof AdminLabelsRoute
   AdminLoginRoute: typeof AdminLoginRoute
   AdminMixableOrderRoute: typeof AdminMixableOrderRoute
@@ -2912,6 +2932,7 @@ const AdminRouteRouteChildren: AdminRouteRouteChildren = {
   AdminFindingsRoute: AdminFindingsRoute,
   AdminFunnelRoute: AdminFunnelRoute,
   AdminGalaxiesRoute: AdminGalaxiesRoute,
+  AdminLabelOutliersRoute: AdminLabelOutliersRoute,
   AdminLabelsRoute: AdminLabelsRoute,
   AdminLoginRoute: AdminLoginRoute,
   AdminMixableOrderRoute: AdminMixableOrderRoute,

@@ -14,6 +14,7 @@ import {
   PaperPlaneTiltIcon,
   PlanetIcon,
   PulseIcon,
+  SealWarningIcon,
   ReceiptIcon,
   SignOutIcon,
   SquaresFourIcon,
@@ -58,6 +59,7 @@ export type AdminNavCurrent =
   | "findings"
   | "funnel"
   | "galaxies"
+  | "label-outliers"
   | "labels"
   | "mixable-order"
   | "mixtapes"
@@ -81,6 +83,7 @@ type AdminNavPath =
   | "/admin/findings"
   | "/admin/funnel"
   | "/admin/galaxies"
+  | "/admin/label-outliers"
   | "/admin/labels"
   | "/admin/mixable-order"
   | "/admin/mixtapes"
@@ -145,6 +148,12 @@ const OBJECT_SECTIONS: NavSection[] = [
 
       { icon: BinocularsIcon, key: "catalogue", label: "The Ear", to: "/admin/catalogue" },
       { icon: TagIcon, key: "labels", label: "Labels", to: "/admin/labels" },
+      {
+        icon: SealWarningIcon,
+        key: "label-outliers",
+        label: "Outliers",
+        to: "/admin/label-outliers",
+      },
     ],
     key: "catalogue",
     label: "Catalogue",
