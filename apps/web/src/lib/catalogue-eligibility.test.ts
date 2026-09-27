@@ -2,6 +2,7 @@ import { createClient } from "@libsql/client";
 import { LOCAL_DB_CONCURRENCY } from "./database-concurrency";
 import { describe, expect, it } from "vitest";
 import {
+  balancedOr,
   catalogueTrackHiddenReason,
   catalogueTrackPublicWhere,
   isSpokenWordTitle,
@@ -88,6 +89,31 @@ describe("the spoken-word qualifier rule", () => {
     } finally {
       client.close();
     }
+  });
+});
+
+function parenthesisDepth(sql: string): number {
+  let depth = 0;
+  let deepest = 0;
+  for (const char of sql.replace(/'[^']*'/g, "''")) {
+    if (char === "(") {
+      depth += 1;
+      deepest = Math.max(deepest, depth);
+    } else if (char === ")") {
+      depth -= 1;
+    }
+  }
+
+  return deepest;
+}
+
+describe("the rule's SQL stays under hosted Turso's expression depth limit of 100", () => {
+  it("nests its alternatives as a balanced tree rather than a left-deep or-chain", () => {
+    expect(balancedOr(["a", "b", "c", "d", "e"])).toBe("((((a) or (b)) or (c)) or ((d) or (e)))");
+  });
+
+  it("keeps the whole public rule shallow enough to embed twice in one hub query", () => {
+    expect(parenthesisDepth(catalogueTrackPublicWhere("t"))).toBeLessThanOrEqual(15);
   });
 });
 

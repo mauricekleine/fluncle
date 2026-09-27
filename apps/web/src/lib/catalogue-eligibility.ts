@@ -68,13 +68,29 @@ function column(alias: string | undefined, name: string): string {
   return alias === undefined ? name : `${alias}.${name}`;
 }
 
+export function balancedOr(terms: readonly string[]): string {
+  if (terms.length === 0) {
+    return "0";
+  }
+
+  if (terms.length === 1) {
+    return `(${terms[0]})`;
+  }
+
+  const middle = Math.ceil(terms.length / 2);
+
+  return `(${balancedOr(terms.slice(0, middle))} or ${balancedOr(terms.slice(middle))})`;
+}
+
 export function spokenWordTitleWhere(alias?: string): string {
   const title = column(alias, "title");
 
-  return `(${SPOKEN_WORD_TITLE_PATTERNS.map(
-    ({ gate, patterns }) =>
-      `(${title} like '${gate}' and (${patterns.map((pattern) => `${title} like '${pattern}'`).join(" or ")}))`,
-  ).join(" or ")})`;
+  return balancedOr(
+    SPOKEN_WORD_TITLE_PATTERNS.map(
+      ({ gate, patterns }) =>
+        `${title} like '${gate}' and ${balancedOr(patterns.map((pattern) => `${title} like '${pattern}'`))}`,
+    ),
+  );
 }
 
 export function catalogueTrackPublicWhere(alias?: string): string {
