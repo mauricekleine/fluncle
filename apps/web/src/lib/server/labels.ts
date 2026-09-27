@@ -20,6 +20,7 @@ import {
 } from "./crawl-due-work";
 import { getDb, typedRows } from "./db";
 import { FRESH_WINDOW_DAYS, releaseTodayUtc, releaseWindowLowerBound } from "./release-day";
+import { entityPlayableSql } from "./entity-queue";
 import { isDueWorkCutoverEnabled, readPromotedDueWorkPage } from "./due-work-cutover";
 import {
   type DueWorkStatement,
@@ -520,6 +521,7 @@ export type LabelHubEntry = {
 
   logoImageUrl: string | undefined;
   name: string;
+  playable: boolean;
   slug: string;
 
   trackCount: number;
@@ -560,6 +562,7 @@ type CatalogueHubRow = {
   image_updated_at?: string | null;
   image_url?: string | null;
   name: string;
+  playable?: number | null;
   slug: string;
   track_count: number;
 };
@@ -1172,13 +1175,15 @@ export const LABELS_HUB_QUERY: CatalogueHubQuery<LabelHubEntry> = {
     coverImageUrl: coverFromJson(row.cover_json),
     logoImageUrl: labelLogoUrl(row.image_key ?? null, row.image_updated_at ?? null),
     name: row.name,
+    playable: Number(row.playable) === 1,
     slug: row.slug,
     trackCount: Number(row.track_count),
   }),
   nameExpr: "labels.name",
   select: `labels.name as name, labels.image_key as image_key,
            labels.image_updated_at as image_updated_at,
-           ${LABEL_CATALOGUE_COVER_JSON} as cover_json`,
+           ${LABEL_CATALOGUE_COVER_JSON} as cover_json,
+           ${entityPlayableSql("label", "labels.id")} as playable`,
   slugExpr: "labels.slug",
 };
 

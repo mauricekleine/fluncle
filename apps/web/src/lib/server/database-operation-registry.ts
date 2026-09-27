@@ -2793,7 +2793,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
   }),
   defineOperation({
     accessClass: "read",
-    cadence: daemon("SONAR_DELTA_SECS", 30, "SONAR_RECONCILE_SECS", 3600),
+    cadence: daemon("SONAR_DELTA_SECS", 30, "SONAR_RECONCILE_SECS", 21600),
     cadenceSource: "apps/sonar/src/config.rs",
     heavy: false,
     mutationTarget: "derived-local",

@@ -66,6 +66,7 @@ export function HubTile({
   kind,
   lit,
   name,
+  playable,
   round,
   slug,
 }: {
@@ -73,13 +74,14 @@ export function HubTile({
   kind: HubTileKind;
   lit: boolean;
   name: string;
+  playable: boolean;
   round?: boolean;
   slug: string;
 }): ReactNode {
   return (
     <li className="hub-tile" data-round={round ? "" : undefined}>
       {children}
-      <HubTilePlay kind={kind} lit={lit} name={name} slug={slug} />
+      {playable ? <HubTilePlay kind={kind} lit={lit} name={name} slug={slug} /> : null}
     </li>
   );
 }

@@ -11,6 +11,7 @@ import {
   markDueWorkSourceMaintenanceFromSelectStatements,
   markDueWorkSourceMaintenanceStatements,
 } from "./due-work";
+import { entityPlayableSql } from "./entity-queue";
 import { isDueWorkCutoverEnabled, readPromotedDueWorkPage } from "./due-work-cutover";
 import { hasPublicGraphTracks, relinkTracksToEntity } from "./hub-counts";
 import { validReleaseDateSql } from "./release-day";
@@ -445,6 +446,7 @@ export type AlbumHubEntry = {
 
   coverImageUrl: string | undefined;
   name: string;
+  playable: boolean;
   slug: string;
 
   trackCount: number;
@@ -466,12 +468,14 @@ export const ALBUMS_HUB_QUERY: CatalogueHubQuery<AlbumHubEntry> = {
     certified: Boolean(row.certified),
     coverImageUrl: albumCover(row),
     name: row.name,
+    playable: Number(row.playable) === 1,
     slug: row.slug,
     trackCount: Number(row.track_count),
     year: row.latest_release_date?.slice(0, 4) ?? undefined,
   }),
   nameExpr: "albums.name",
   select: `albums.name as name, ${ALBUM_COVER_SELECT},
+           ${entityPlayableSql("album", "albums.id")} as playable,
            (select max(t2.release_date) from tracks t2
               where t2.album_id = albums.id
                 and t2.dismissed_at is null and t2.duplicate_of_track_id is null

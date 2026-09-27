@@ -190,7 +190,13 @@ function LabelTile({
   const image = label.logoImageUrl || label.coverImageUrl || undefined;
 
   return (
-    <HubTile kind="label" lit={label.certified} name={label.name} slug={label.slug}>
+    <HubTile
+      kind="label"
+      lit={label.certified}
+      name={label.name}
+      playable={label.playable}
+      slug={label.slug}
+    >
       <Link
         className={label.certified ? "hub-tile-certified" : undefined}
         params={{ slug: label.slug }}

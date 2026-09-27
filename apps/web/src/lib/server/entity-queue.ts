@@ -43,10 +43,37 @@ const QUEUE_COLUMNS = `tracks.track_id, tracks.title, tracks.artists_json, track
        albums.image_state as album_image_state,
        albums.image_updated_at as album_image_updated_at`;
 
-const PLAYABLE_WHERE = `(nullif(trim(tracks.preview_url), '') is not null
-         or nullif(trim(tracks.isrc), '') is not null)
-     and ${releasedByTodaySql("tracks.release_date")}
-     and tracks.dismissed_at is null and tracks.duplicate_of_track_id is null`;
+const TODAY_SQL = "strftime('%Y-%m-%d', 'now')";
+
+function playableTrackWhere(alias: string, today = "?"): string {
+  return `(nullif(trim(${alias}.preview_url), '') is not null
+         or nullif(trim(${alias}.isrc), '') is not null)
+     and ${releasedByTodaySql(`${alias}.release_date`, today)}
+     and ${alias}.dismissed_at is null and ${alias}.duplicate_of_track_id is null`;
+}
+
+const PLAYABLE_WHERE = playableTrackWhere("tracks");
+
+export function entityPlayableSql(kind: EntityQueueKind, idExpr: string): string {
+  const playable = playableTrackWhere("t", TODAY_SQL);
+
+  if (kind === "album") {
+    return `exists (select 1 from tracks t
+                    where t.album_id = ${idExpr} and ${playable}
+                      and ${publicTrackDurationWhere("t")})`;
+  }
+
+  const source =
+    kind === "artist"
+      ? "track_artists ta cross join tracks t on t.track_id = ta.track_id"
+      : "tracks t";
+  const pointer = kind === "artist" ? `ta.artist_id = ${idExpr}` : `t.label_id = ${idExpr}`;
+
+  return `exists (select 1 from ${source}
+                  where ${pointer} and ${playable}
+                    and (exists (select 1 from findings f where f.track_id = t.track_id)
+                         or (t.is_catalogue = 1 and ${catalogueTrackDurationWhere("t")})))`;
+}
 
 function toEntityQueueTrack(row: QueueRow): EntityQueueTrack {
   return {

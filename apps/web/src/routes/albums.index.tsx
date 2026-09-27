@@ -196,7 +196,13 @@ function AlbumTile({
   priority?: boolean;
 }) {
   return (
-    <HubTile kind="album" lit={album.certified} name={album.name} slug={album.slug}>
+    <HubTile
+      kind="album"
+      lit={album.certified}
+      name={album.name}
+      playable={album.playable}
+      slug={album.slug}
+    >
       <Link
         className={album.certified ? "hub-tile-certified" : undefined}
         params={{ slug: album.slug }}
