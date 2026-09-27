@@ -353,6 +353,41 @@ describe("listRecommendations (real SQL)", () => {
     expect(catalogueRow).not.toHaveProperty("logId");
   });
 
+  it("marks a recommended finding previewable only when it has a stored preview or an ISRC", async () => {
+    const { listRecommendations, saveRecSeed } = await import("./recommendations");
+    const user = publicUser("user-A");
+    const home = axis(0);
+
+    await seedCatalogue("seed-1", { vector: home });
+    await saveRecSeed(user, { trackId: "seed-1" });
+
+    await seedFinding("find-1", { logId: "001.1.1A", vector: blend(home, axis(1), 0.05) });
+    await seedFinding("find-2", { logId: "002.1.1A", vector: blend(home, axis(1), 0.1) });
+    await seedFinding("find-3", { logId: "003.1.1A", vector: blend(home, axis(1), 0.15) });
+
+    await db.execute(
+      "update tracks set isrc = null, preview_url = null where track_id in ('find-1', 'find-2', 'find-3')",
+    );
+    await db.execute("update tracks set isrc = 'GBAAA2600004' where track_id = 'find-2'");
+    await db.execute(
+      "update tracks set preview_url = 'https://preview.example/b.mp3' where track_id = 'find-3'",
+    );
+
+    const result = await listRecommendations(user);
+
+    expect(result).not.toBeInstanceOf(Response);
+
+    if (result instanceof Response) {
+      return;
+    }
+
+    expect(result.findings.map((row) => [row.trackId, row.previewable])).toEqual([
+      ["find-1", false],
+      ["find-2", true],
+      ["find-3", true],
+    ]);
+  });
+
   it("carries the instrument readout (bpm/durationMs/key/year) onto BOTH registers, and omits a field the row cannot back", async () => {
     const { listRecommendations, saveRecSeed } = await import("./recommendations");
     const user = publicUser("user-A");

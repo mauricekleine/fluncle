@@ -55,6 +55,7 @@ export type SavedFinding = {
   imageUrl?: string;
   logId?: string;
   note?: string;
+  previewable: boolean;
   savedAt: string;
   title: string;
   trackId: string;

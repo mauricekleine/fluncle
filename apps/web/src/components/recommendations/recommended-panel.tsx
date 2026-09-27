@@ -1,8 +1,7 @@
-import { PauseIcon, PlayIcon } from "@phosphor-icons/react";
 import { useMemo, useState } from "react";
 import { type KeyNotation, useKeyNotation } from "@/lib/key-notation";
 import { toQueueTrack } from "@/lib/player-tracks";
-import { usePreviewPlayer } from "@/lib/preview-player";
+import { PreviewArtButton } from "@/components/player/preview-art-button";
 import { cn } from "@/lib/utils";
 import { AddPill, RecCover, RecImprint, RecSeal, TrackReadout } from "./rec-rows";
 import {
@@ -139,30 +138,13 @@ function FindingRow({
     () => toQueueTrack({ ...finding, albumImageUrl: finding.imageUrl }),
     [finding],
   );
-  const preview = usePreviewPlayer(finding.trackId, { publicPreview: true, track: queued });
   const trackLine = `${finding.artists.join(", ")} — ${finding.title}`;
 
   return (
     <li className="rec-row">
       <span className="preview-art rec-cover-wrap">
         <RecCover url={finding.imageUrl} />
-        <button
-          aria-label={
-            preview.isActive
-              ? `Pause the preview of ${finding.title}`
-              : `Play the preview of ${finding.title}`
-          }
-          aria-pressed={preview.isActive}
-          className="preview-art-btn"
-          onClick={preview.toggle}
-          type="button"
-        >
-          {preview.isActive ? (
-            <PauseIcon aria-hidden="true" className="size-4" weight="fill" />
-          ) : (
-            <PlayIcon aria-hidden="true" className="size-4" weight="fill" />
-          )}
-        </button>
+        {finding.previewable ? <PreviewArtButton track={queued} /> : null}
       </span>
 
       <span className="rec-row-body min-w-0">

@@ -11,6 +11,7 @@ import {
 import { bestAlbumCoverUrl } from "../media";
 import { parseSetParam, parseTasteParam, serializeSet, serializeTaste } from "../mix-set";
 import { hasTrackPageIdentity, trackPagePath } from "../track-page";
+import { hasPreviewSource } from "../track-preview";
 import { parseArtistsJson } from "./artists";
 import { listedArtistWhere } from "./artist-visibility";
 import { type FollowTarget, parseFollowTarget, verifyFollowIntent } from "./follow-intent";
@@ -57,9 +58,11 @@ type SavedRow = {
   album_image_updated_at: string | null;
   album_image_url: string | null;
   artists_json: string;
+  isrc: string | null;
 
   log_id: string | null;
   note: string | null;
+  preview_url: string | null;
   saved_at: string;
   title: string;
   track_id: string;
@@ -129,6 +132,7 @@ export type SavedFindingItem = {
   imageUrl?: string;
   logId?: string;
   note?: string;
+  previewable: boolean;
   savedAt: string;
   title: string;
   trackId: string;
@@ -537,6 +541,7 @@ export async function listSavedFindings(
     args: [user.id],
 
     sql: `select s.track_id, s.log_id, s.saved_at, s.note, t.title, t.artists_json, t.album_image_url,
+        t.isrc, t.preview_url,
         (select image_key from albums where albums.id = t.album_id) as album_image_key,
         (select image_state from albums where albums.id = t.album_id) as album_image_state,
         (select image_updated_at from albums where albums.id = t.album_id) as album_image_updated_at
@@ -563,6 +568,7 @@ export async function listSavedFindings(
         }),
         logId,
         note: row.note ?? undefined,
+        previewable: hasPreviewSource({ isrc: row.isrc, previewUrl: row.preview_url }),
         savedAt: row.saved_at,
         title: row.title,
         trackId: row.track_id,
