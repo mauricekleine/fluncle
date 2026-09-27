@@ -344,6 +344,45 @@ describe("projection operator commands", () => {
     ]);
   });
 
+  test("keeps walked rebuild rows when a walk finishes inside one invocation", async () => {
+    postResponses.push(
+      {
+        action: "repair",
+        complete: false,
+        ok: true,
+        processed: 4,
+        rebuildRowsWalked: 4,
+        rebuildStaleFamilies: 1,
+        scheduled: 0,
+        target: "public_aggregates",
+      },
+      {
+        action: "repair",
+        complete: true,
+        ok: true,
+        processed: 0,
+        scheduled: 0,
+        target: "public_aggregates",
+      },
+    );
+
+    const result = await projections.advanceProjectionCommand({
+      action: "repair",
+      includeTerminalStatus: false,
+      limit: 500,
+      maxSteps: 4,
+      target: "public_aggregates",
+    });
+
+    expect(result).toMatchObject({
+      complete: true,
+      processed: 4,
+      rebuildRowsWalked: 4,
+      rebuildStaleFamilies: 0,
+      steps: 2,
+    });
+  });
+
   test("keeps terminal-status omission scoped to repair automation", async () => {
     let thrown: unknown;
     try {

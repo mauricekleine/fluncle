@@ -2121,11 +2121,12 @@ async function advancePublicProjectionFor(
   };
 }
 
-function visibilityWalkProgress(visibility: { complete: boolean; scanned: number }): {
-  rebuildRowsWalked?: number;
-  rebuildStaleFamilies?: number;
-} {
-  return visibility.complete && visibility.scanned === 0
+function visibilityWalkProgress(visibility: {
+  complete: boolean;
+  scanned: number;
+  walked: boolean;
+}): { rebuildRowsWalked?: number; rebuildStaleFamilies?: number } {
+  return !visibility.walked
     ? {}
     : {
         rebuildRowsWalked: visibility.scanned,
@@ -2137,10 +2138,10 @@ function reconcileVisibilityFor(
   client: ProjectionClient,
   projection: PublicProjectionName,
   limit: number,
-): Promise<{ complete: boolean; enqueued: number; scanned: number }> {
+): Promise<{ complete: boolean; enqueued: number; scanned: number; walked: boolean }> {
   return projection === "public_aggregates"
     ? reconcilePublicAggregateVisibilityChunk(client, { limit })
-    : Promise.resolve({ complete: true, enqueued: 0, scanned: 0 });
+    : Promise.resolve({ complete: true, enqueued: 0, scanned: 0, walked: false });
 }
 
 async function readAggregateDurationGeneration(client: ProjectionClient): Promise<{
