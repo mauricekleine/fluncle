@@ -168,6 +168,44 @@ describe("public aggregate visibility reconcile", () => {
     expect(await readProjectedDefaultTrackTotal(db)).toBe(3);
   });
 
+  it("counts each table row once even when the repair limit cuts a window short", async () => {
+    await simulateProjectionBuiltUnderOlderRule();
+
+    const steps = [];
+    for (let step = 0; step < 10; step += 1) {
+      const result = await reconcilePublicAggregateVisibilityChunk(db, { limit: 1, now: NOW });
+      steps.push(result);
+      if (result.complete) {
+        break;
+      }
+    }
+
+    expect(steps.map((step) => step.scanned)).toEqual([1, 2, 0]);
+    expect(steps.reduce((total, step) => total + step.enqueued, 0)).toBe(2);
+    expect(steps.at(-1)).toMatchObject({ complete: true, walked: true });
+  });
+
+  it("keeps the walk diagnostic on the step that stamps the version", async () => {
+    await db.execute({
+      args: [PUBLIC_AGGREGATE_VISIBILITY_VERSION_KEY],
+      sql: `update settings set value = 'older-rule' where key = ?`,
+    });
+    const advance = () =>
+      advanceProjectionFor(db, {
+        action: "repair",
+        includeStatus: false,
+        limit: 2,
+        target: "public_aggregates",
+      });
+
+    await advance();
+    const stamping = await advance();
+
+    expect(stamping).toMatchObject({ rebuildRowsWalked: 0, rebuildStaleFamilies: 0 });
+    const settled = await advance();
+    expect(settled).not.toHaveProperty("rebuildRowsWalked");
+  });
+
   it("walks the table in bounded windows and resumes from its durable cursor", async () => {
     await simulateProjectionBuiltUnderOlderRule();
 
@@ -176,19 +214,19 @@ describe("public aggregate visibility reconcile", () => {
       now: NOW,
       scanWindow: 2,
     });
-    expect(first).toEqual({ complete: false, enqueued: 1, scanned: 2 });
+    expect(first).toEqual({ complete: false, enqueued: 1, scanned: 2, walked: true });
     const second = await reconcilePublicAggregateVisibilityChunk(db, {
       limit: 10,
       now: NOW,
       scanWindow: 2,
     });
-    expect(second).toEqual({ complete: false, enqueued: 1, scanned: 1 });
+    expect(second).toEqual({ complete: false, enqueued: 1, scanned: 1, walked: true });
     const third = await reconcilePublicAggregateVisibilityChunk(db, {
       limit: 10,
       now: NOW,
       scanWindow: 2,
     });
-    expect(third).toEqual({ complete: true, enqueued: 0, scanned: 0 });
+    expect(third).toEqual({ complete: true, enqueued: 0, scanned: 0, walked: true });
     const queued = await db.execute(
       `select subject_id from projection_repairs where projection = 'public_aggregates'
         order by subject_id`,

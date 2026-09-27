@@ -278,6 +278,7 @@ export type PublicAggregateVisibilityReconcile = {
   complete: boolean;
   enqueued: number;
   scanned: number;
+  walked: boolean;
 };
 
 export async function reconcilePublicAggregateVisibilityChunk(
@@ -296,14 +297,14 @@ export async function reconcilePublicAggregateVisibilityChunk(
     ),
   );
   if (values.get(PUBLIC_AGGREGATE_VISIBILITY_VERSION_KEY) === PUBLIC_AGGREGATE_VISIBILITY_VERSION) {
-    return { complete: true, enqueued: 0, scanned: 0 };
+    return { complete: true, enqueued: 0, scanned: 0, walked: false };
   }
   const aggregateState = await client.execute(
     `select state from public_aggregate_state where scope = 'tracks' limit 1`,
   );
   const state = aggregateState.rows[0]?.state;
   if (state !== "complete") {
-    return { complete: state === undefined, enqueued: 0, scanned: 0 };
+    return { complete: state === undefined, enqueued: 0, scanned: 0, walked: state !== undefined };
   }
   const storedCursor = values.get(PUBLIC_AGGREGATE_VISIBILITY_CURSOR_KEY) ?? null;
   const cursorPrefix = `${PUBLIC_AGGREGATE_VISIBILITY_VERSION}:`;
@@ -329,7 +330,7 @@ export async function reconcilePublicAggregateVisibilityChunk(
       ],
       "write",
     );
-    return { complete: true, enqueued: 0, scanned: 0 };
+    return { complete: true, enqueued: 0, scanned: 0, walked: true };
   }
   const limit = Math.max(1, Math.min(options.limit, MAX_PUBLIC_PROJECTION_CHUNK_SIZE));
   const mismatches = await client.execute({
@@ -347,7 +348,18 @@ export async function reconcilePublicAggregateVisibilityChunk(
     release_date: null | string;
     track_id: string;
   }[];
-  const nextAfter = rows.length === limit ? (rows.at(-1)?.track_id ?? last) : last;
+  const truncated = rows.length === limit;
+  const nextAfter = truncated ? (rows.at(-1)?.track_id ?? last) : last;
+  const advancedPast = truncated
+    ? Number(
+        (
+          await client.execute({
+            args: [after, nextAfter],
+            sql: `select count(*) as advanced from tracks where track_id > ? and track_id <= ?`,
+          })
+        ).rows[0]?.advanced ?? 0,
+      )
+    : scanned;
   const now = options.now ?? new Date();
   await client.batch(
     [
@@ -366,7 +378,7 @@ export async function reconcilePublicAggregateVisibilityChunk(
     ],
     "write",
   );
-  return { complete: false, enqueued: rows.length, scanned };
+  return { complete: false, enqueued: rows.length, scanned: advancedPast, walked: true };
 }
 
 function releaseDateFromSourceVersion(sourceVersion: string): null | string | undefined {
