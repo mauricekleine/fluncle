@@ -6,7 +6,7 @@ import { config } from "dotenv";
 import { randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { publicTrackDurationWhere } from "../src/db/public-track-visibility";
+import { publicTrackWhere } from "../src/db/public-track-visibility";
 import { markDueWorkSourceMaintenanceFromSelectStatements } from "../src/lib/server/due-work";
 
 export type HubCountsBackfillResult = {
@@ -15,8 +15,11 @@ export type HubCountsBackfillResult = {
   skipped: boolean;
 };
 
-export const HUB_COUNTS_BACKFILL_MARKER_KEY = "backfill_hub_counts_v2_state";
-export const HUB_COUNTS_BACKFILL_COMPLETE_VALUE = "complete:v2";
+export const HUB_COUNTS_BACKFILL_MARKER_KEY = "backfill_hub_counts_v3_state";
+export const HUB_COUNTS_BACKFILL_COMPLETE_VALUE = "complete:v3";
+export const HUB_COUNTS_BACKFILL_SUPERSEDED_MARKERS = [
+  { completeValue: "complete:v2", key: "backfill_hub_counts_v2_state" },
+] as const;
 const HUB_COUNTS_BACKFILL_RUNNING_PREFIX = "running:";
 const HUB_COUNTS_MARKER_RETRY_LIMIT = 3;
 
@@ -218,7 +221,7 @@ const PASSES = [
                    coalesce(src.certified, 0)
             from labels
             left join (select label_id,
-                              sum(case when ${publicTrackDurationWhere("tracks")} then 1 else 0 end) as renderable,
+                              sum(case when ${publicTrackWhere("tracks")} then 1 else 0 end) as renderable,
                               sum(case when is_catalogue = 0 then 1 else 0 end) as certified
                        from tracks
                        where label_id is not null
@@ -251,7 +254,7 @@ const PASSES = [
                    coalesce(src.certified, 0)
             from albums
             left join (select album_id,
-                              sum(case when ${publicTrackDurationWhere("tracks")} then 1 else 0 end) as renderable,
+                              sum(case when ${publicTrackWhere("tracks")} then 1 else 0 end) as renderable,
                               sum(case when is_catalogue = 0 then 1 else 0 end) as certified
                        from tracks
                        where album_id is not null
@@ -285,7 +288,7 @@ const PASSES = [
                    coalesce(src.certified, 0)
             from artists
             left join (select ta.artist_id,
-                              sum(case when ${publicTrackDurationWhere("t")} then 1 else 0 end) as renderable,
+                              sum(case when ${publicTrackWhere("t")} then 1 else 0 end) as renderable,
                               sum(case when t.is_catalogue = 0 then 1 else 0 end) as certified
                        from track_artists ta
                        join tracks t on t.track_id = ta.track_id

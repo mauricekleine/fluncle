@@ -123,6 +123,28 @@ describe("rec seeds (real SQL)", () => {
     expect((await listRecSeeds(user)).seeds.map((seed) => seed.trackId)).toEqual(["long-finding"]);
   });
 
+  it("rejects spoken-word catalogue seeds and keeps spoken-word findings available", async () => {
+    const { listRecSeeds, saveRecSeed } = await import("./recommendations");
+    const user = publicUser("spoken-seeds");
+    await seedCatalogue("spoken-catalogue");
+    await seedFinding("spoken-finding", { logId: "001.1.2A" });
+    await db.execute(
+      `update tracks set title = 'Rewind (Commentary)'
+       where track_id in ('spoken-catalogue', 'spoken-finding')`,
+    );
+
+    const hidden = await saveRecSeed(user, { trackId: "spoken-catalogue" });
+    expect(hidden).toBeInstanceOf(Response);
+    if (hidden instanceof Response) {
+      expect(hidden.status).toBe(404);
+    }
+    const finding = await saveRecSeed(user, { trackId: "spoken-finding" });
+    expect(finding).not.toBeInstanceOf(Response);
+    expect((await listRecSeeds(user)).seeds.map((seed) => seed.trackId)).toEqual([
+      "spoken-finding",
+    ]);
+  });
+
   it("saves by trackId AND by Log ID, lists hydrated newest-first, and only a finding carries a logId", async () => {
     const { listRecSeeds, saveRecSeed } = await import("./recommendations");
     const user = publicUser("user-A");

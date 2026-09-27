@@ -299,6 +299,7 @@ export const tracks = sqliteTable(
       table.spotifyAnchorAttempts,
       table.artistsJson,
       table.labelId,
+      table.title,
     ),
 
     index("tracks_release_date_idx").on(table.releaseDate),

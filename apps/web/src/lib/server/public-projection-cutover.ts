@@ -10,7 +10,7 @@ import {
 } from "./hub-page-anchors";
 import { getSetting } from "./settings";
 import { upcomingAfterTodaySql } from "./release-day";
-import { publicTrackDurationWhere } from "../../db/public-track-visibility";
+import { publicTrackWhere } from "../../db/public-track-visibility";
 
 export const PUBLIC_PROJECTION_CUTOVER_ENABLED_KEY = "public_projection_cutover_enabled";
 
@@ -237,7 +237,7 @@ export async function readProjectedAggregateBuckets(
       kind === "release_date_bucket" && today !== undefined
         ? ` - (select count(*) from tracks indexed by tracks_release_date_track_id_idx
             where ${upcomingAfterTodaySql("tracks.release_date")}
-              and ${publicTrackDurationWhere("tracks")}
+              and ${publicTrackWhere("tracks")}
               and tracks.release_date >= counts.bucket
               and tracks.release_date < counts.bucket || '~')`
         : "";

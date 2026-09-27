@@ -117,6 +117,7 @@ describe("projection production operations", () => {
       create table tracks (
         track_id text primary key, release_date text, key text, label_id text,
         duration_ms integer not null default 210000,
+        title text not null default '',
         has_embedding integer not null default 0
       );
       create index tracks_release_date_track_id_idx on tracks(release_date desc, track_id desc);

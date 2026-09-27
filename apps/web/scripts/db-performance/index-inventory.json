@@ -277,7 +277,8 @@
         "isrc",
         "spotify_anchor_attempts",
         "artists_json",
-        "label_id"
+        "label_id",
+        "title"
       ],
       "partialPredicate": null,
       "decision": "keep",

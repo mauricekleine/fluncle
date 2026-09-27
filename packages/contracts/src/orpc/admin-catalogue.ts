@@ -49,6 +49,8 @@ export const CatalogueTrackItemSchema = z
 
     hiddenFromPublic: z.boolean(),
 
+    hiddenReason: z.enum(["long_form", "spoken_word"]).nullable(),
+
     isrc: z.string().nullable(),
 
     key: z.string().nullable(),

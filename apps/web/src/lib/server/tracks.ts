@@ -59,10 +59,7 @@ import {
 } from "./mixability";
 import { type Camelot, keyToCamelotCode, parseKey, toCamelot } from "../key-camelot";
 import { extractYoutubeChannelId } from "./youtube";
-import {
-  catalogueTrackDurationWhere,
-  publicTrackDurationWhere,
-} from "../../db/public-track-visibility";
+import { catalogueTrackPublicWhere, publicTrackWhere } from "../../db/public-track-visibility";
 
 export type { FeedListPage, TrackCursor, TrackFeatures, TrackListPage, TrackListItem };
 export type { RadioScheduleEntry };
@@ -487,7 +484,7 @@ export async function getLivePreviewTrack(
           select tracks.title, tracks.artists_json, tracks.isrc, tracks.preview_url
           from resolved_track
           join tracks on tracks.track_id = resolved_track.track_id
-          where ${publicTrackDurationWhere("tracks")}
+          where ${publicTrackWhere("tracks")}
           limit 1`,
   });
   const row = typedRow<{
@@ -769,7 +766,7 @@ export async function listCatalogueTracksByAlbum(albumId: string): Promise<Catal
           from tracks
           left join findings on findings.track_id = tracks.track_id
           where tracks.album_id = ? and findings.track_id is null
-                and ${catalogueTrackDurationWhere("tracks")}
+                and ${catalogueTrackPublicWhere("tracks")}
                 and tracks.duplicate_of_track_id is null and tracks.dismissed_at is null
           order by tracks.release_date is null asc, tracks.release_date desc,
                    tracks.title collate nocase asc
@@ -1366,7 +1363,7 @@ async function mixRail(
           join tracks on tracks.track_id = resolved_track.track_id
           left join findings on findings.track_id = tracks.track_id
           left join track_embeddings emb on emb.track_id = tracks.track_id
-          where ${publicTrackDurationWhere("tracks", "findings")}
+          where ${publicTrackWhere("tracks", "findings")}
           limit 1`,
   });
   const targetRow = typedRow<MixRow>(targetResult.rows);
@@ -1441,7 +1438,7 @@ async function mixRail(
             select tracks.track_id
             from ${candidateFrom}
             where tracks.key in (${keyClause})
-              and ${publicTrackDurationWhere("tracks")}
+              and ${publicTrackWhere("tracks")}
               and tracks.track_id != ? ${logIdClause} ${trackIdClause}
             order by tracks.rowid
             ${vectorFallbackCandidateLimitSql()}
@@ -1566,7 +1563,7 @@ async function getMixScoringRows(trackIds: string[]): Promise<Omit<MixRow, "embe
     sql: `select tracks.track_id, findings.log_id, tracks.key, tracks.bpm, tracks.features_json
           from ${MIX_FROM}
           where tracks.track_id in (${trackIds.map(() => "?").join(", ")})
-            and ${publicTrackDurationWhere("tracks", "findings")}`,
+            and ${publicTrackWhere("tracks", "findings")}`,
   });
 
   return typedRows<Omit<MixRow, "embedding_blob">>(result.rows);
@@ -1600,7 +1597,7 @@ async function getMixTracksByIds(trackIds: string[]): Promise<Record<string, Mix
     args: unique,
     sql: `select ${MIX_TRACK_SELECT} from ${MIX_FROM}
           where tracks.track_id in (${unique.map(() => "?").join(", ")})
-            and ${publicTrackDurationWhere("tracks", "findings")}`,
+            and ${publicTrackWhere("tracks", "findings")}`,
   });
 
   const byTrackId: Record<string, MixTrackDTO> = {};
@@ -1634,7 +1631,7 @@ export async function getMixTracksByTokens(tokens: string[]): Promise<MixTrackDT
   const result = await db.execute({
     args: [...logIds, ...trackIds],
     sql: `select ${MIX_TRACK_SELECT} from ${MIX_FROM}
-          where (${clauses.join(" or ")}) and ${publicTrackDurationWhere("tracks", "findings")}`,
+          where (${clauses.join(" or ")}) and ${publicTrackWhere("tracks", "findings")}`,
   });
 
   const byToken = new Map<string, MixTrackDTO>();

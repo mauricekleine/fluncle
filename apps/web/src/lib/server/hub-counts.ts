@@ -1,5 +1,5 @@
 import { type Client } from "@libsql/client";
-import { publicTrackDurationWhere } from "../../db/public-track-visibility";
+import { publicTrackWhere } from "../../db/public-track-visibility";
 
 import { getDb, typedRows } from "./db";
 import { artistCandidateIdsSql } from "./artist-membership";
@@ -152,7 +152,7 @@ export function hubCountCensusQuery(
   return {
     args: [...trackIds],
     sql: `select ${foreignKey} as from_id,
-                 sum(case when ${publicTrackDurationWhere("tracks")} then 1 else 0 end) as renderable,
+                 sum(case when ${publicTrackWhere("tracks")} then 1 else 0 end) as renderable,
                  sum(case when is_catalogue = 0 then 1 else 0 end) as certified
           from tracks
           where track_id in (${placeholders})
@@ -217,7 +217,7 @@ export function hubCountArtistEdgeStatements(
             set renderable_track_count = renderable_track_count + (
                   select count(*) from tracks
                   where track_id in (${delta.trackIds.map(() => "?").join(", ")})
-                    and ${publicTrackDurationWhere("tracks")}
+                    and ${publicTrackWhere("tracks")}
                 ),
                 certified_finding_count = certified_finding_count + ?,
                 rankable_track_count = rankable_track_count + ?
@@ -252,7 +252,7 @@ export async function hasPublicGraphTracks(
         ? [entityId, entityId, releaseTodayUtc(new Date()), entityId]
         : [entityId],
     sql: `select 1 from ${from}
-          where ${seek} and ${publicTrackDurationWhere("tracks")}
+          where ${seek} and ${publicTrackWhere("tracks")}
           limit 1`,
   });
 

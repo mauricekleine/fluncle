@@ -1,6 +1,6 @@
 import { type Client, type InValue } from "@libsql/client";
 import { createHash } from "node:crypto";
-import { publicTrackDurationWhere } from "../../db/public-track-visibility";
+import { publicTrackWhere } from "../../db/public-track-visibility";
 
 import { QUALIFIED_ARTISTS_SQL } from "./catalogue";
 import {
@@ -169,14 +169,14 @@ export function trackAnchorSourcePageQuery(
           args: [limit],
           sql: `select release_date, track_id from tracks
             indexed by tracks_release_date_track_id_idx
-            where release_date is null and ${publicTrackDurationWhere("tracks")}
+            where release_date is null and ${publicTrackWhere("tracks")}
             order by track_id desc limit ?`,
         }
       : {
           args: [cursor.id, limit],
           sql: `select release_date, track_id from tracks
             indexed by tracks_release_date_track_id_idx
-            where release_date is null and track_id < ? and ${publicTrackDurationWhere("tracks")}
+            where release_date is null and track_id < ? and ${publicTrackWhere("tracks")}
             order by track_id desc limit ?`,
         };
   }
@@ -188,7 +188,7 @@ export function trackAnchorSourcePageQuery(
       args: [limit],
       sql: `select release_date, track_id from tracks
         indexed by tracks_release_date_track_id_idx
-        where release_date is not null and ${publicTrackDurationWhere("tracks")}
+        where release_date is not null and ${publicTrackWhere("tracks")}
         order by release_date desc, track_id desc limit ?`,
     };
   }
@@ -196,7 +196,7 @@ export function trackAnchorSourcePageQuery(
     args: [cursor.key, cursor.id, limit],
     sql: `select release_date, track_id from tracks
       indexed by tracks_release_date_track_id_idx
-      where (release_date, track_id) < (?, ?) and ${publicTrackDurationWhere("tracks")}
+      where (release_date, track_id) < (?, ?) and ${publicTrackWhere("tracks")}
       order by release_date desc, track_id desc limit ?`,
   };
 }
@@ -451,7 +451,7 @@ async function readAggregateProjectionPage(
         membership.source_version as membership_source_version, membership.updated_at
       from selected
       left join tracks source on source.track_id = selected.track_id
-        and ${publicTrackDurationWhere("source")}
+        and ${publicTrackWhere("source")}
       left join public_aggregate_membership membership
         on membership.track_id = selected.track_id
       order by selected.track_id`,
@@ -1699,23 +1699,21 @@ async function aggregateDigests(client: PublicProjectionClient): Promise<{
     projectedTotal,
   ] = await Promise.all([
     client.execute(`select track_id, substr(release_date, 1, 4) as release_date_bucket,
-          key as key_bucket from tracks where ${publicTrackDurationWhere("tracks")}
+          key as key_bucket from tracks where ${publicTrackWhere("tracks")}
           order by track_id`),
     client.execute(`select track_id, release_date_bucket, key_bucket
           from public_aggregate_membership order by track_id`),
     client.execute(`select aggregate_kind, bucket, count(*) as track_count from (
           select 'release_date_bucket' as aggregate_kind,
                  substr(release_date, 1, 4) as bucket from tracks
-                 where release_date is not null and ${publicTrackDurationWhere("tracks")}
+                 where release_date is not null and ${publicTrackWhere("tracks")}
           union all
           select 'key' as aggregate_kind, key as bucket from tracks
-          where key is not null and ${publicTrackDurationWhere("tracks")}
+          where key is not null and ${publicTrackWhere("tracks")}
         ) group by aggregate_kind, bucket order by aggregate_kind, bucket`),
     client.execute(`select aggregate_kind, bucket, track_count
           from public_aggregate_counts order by aggregate_kind, bucket`),
-    client.execute(
-      `select count(*) as total from tracks where ${publicTrackDurationWhere("tracks")}`,
-    ),
+    client.execute(`select count(*) as total from tracks where ${publicTrackWhere("tracks")}`),
     client.execute(`select default_track_total as total from public_aggregate_state
           where scope = 'tracks'`),
   ]);
@@ -2257,7 +2255,7 @@ async function readRemainingPublicProjectionAuditChunk(
       args: [options.cursor ?? "", options.limit],
       sql: source
         ? `select track_id, substr(release_date, 1, 4) as release_date_bucket, key as key_bucket
-          from tracks where track_id > ? and ${publicTrackDurationWhere("tracks")}
+          from tracks where track_id > ? and ${publicTrackWhere("tracks")}
           order by track_id limit ?`
         : `select track_id, release_date_bucket, key_bucket from public_aggregate_membership
           where track_id > ? order by track_id limit ?`,
@@ -3137,7 +3135,7 @@ async function auditPublicProjectionState(
       sql: `select t.track_id, t.release_date, t.key
         from tracks t
         left join public_aggregate_membership pam on pam.track_id = t.track_id
-        where ${publicTrackDurationWhere("t")}
+        where ${publicTrackWhere("t")}
           and (pam.track_id is null
             or pam.release_date_bucket is not substr(t.release_date, 1, 4)
             or pam.key_bucket is not t.key)
@@ -3165,7 +3163,7 @@ async function auditPublicProjectionState(
         args: [repairLimit - scheduledTrackRepairs.length],
         sql: `select pam.track_id from public_aggregate_membership pam
           where not exists (select 1 from tracks t where t.track_id = pam.track_id
-            and ${publicTrackDurationWhere("t")})
+            and ${publicTrackWhere("t")})
           order by pam.track_id limit ?`,
       });
       for (const row of unexpected.rows as unknown as { track_id: string }[]) {
@@ -3180,9 +3178,9 @@ async function auditPublicProjectionState(
         client.execute(`select aggregate_kind, bucket, count(*) as track_count from (
             select 'release_date_bucket' as aggregate_kind,
                    substr(release_date, 1, 4) as bucket from tracks
-                   where release_date is not null and ${publicTrackDurationWhere("tracks")}
+                   where release_date is not null and ${publicTrackWhere("tracks")}
             union all select 'key', key from tracks
-              where key is not null and ${publicTrackDurationWhere("tracks")}
+              where key is not null and ${publicTrackWhere("tracks")}
           ) group by aggregate_kind, bucket order by aggregate_kind, bucket`),
         client.execute(`select aggregate_kind, bucket, track_count
           from public_aggregate_counts order by aggregate_kind, bucket`),
@@ -3249,7 +3247,7 @@ async function auditPublicProjectionState(
           args: [now],
           sql: `update public_aggregate_state
             set default_track_total = (select count(*) from tracks
-              where ${publicTrackDurationWhere("tracks")}), updated_at = ?
+              where ${publicTrackWhere("tracks")}), updated_at = ?
             where scope = 'tracks'`,
         });
       }
@@ -3404,17 +3402,15 @@ export async function shadowPublicProjections(client: PublicProjectionClient): P
     aggregateState,
     anchorValidity,
   ] = await Promise.all([
-    client.execute(
-      `select count(*) as total from tracks where ${publicTrackDurationWhere("tracks")}`,
-    ),
+    client.execute(`select count(*) as total from tracks where ${publicTrackWhere("tracks")}`),
     client.execute(`select default_track_total as total from public_aggregate_state
         where scope = 'tracks'`),
     client.execute(`select aggregate_kind, bucket, count(*) as track_count from (
           select 'release_date_bucket' as aggregate_kind,
                  substr(release_date, 1, 4) as bucket from tracks
-                 where release_date is not null and ${publicTrackDurationWhere("tracks")}
+                 where release_date is not null and ${publicTrackWhere("tracks")}
           union all select 'key', key from tracks
-            where key is not null and ${publicTrackDurationWhere("tracks")}
+            where key is not null and ${publicTrackWhere("tracks")}
         ) group by aggregate_kind, bucket order by aggregate_kind, bucket`),
     client.execute(`select aggregate_kind, bucket, track_count from public_aggregate_counts
         order by aggregate_kind, bucket`),

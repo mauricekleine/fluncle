@@ -15,7 +15,7 @@ import {
   trackPageIndexableCountQueryWhere,
   trackPageIndexableWhere,
 } from "../../db/track-page-indexability";
-import { publicTrackDurationOk, publicTrackDurationWhere } from "../../db/public-track-visibility";
+import { publicTrackOk, publicTrackWhere } from "../../db/public-track-visibility";
 import { LONG_FORM_MS } from "../catalogue-eligibility";
 
 export const TRACK_PAGE_IDENTITY_WHERE = trackPageIdentityWhere("tracks");
@@ -216,7 +216,7 @@ export async function readTrackDestination(trackId: string): Promise<TrackPageRo
       : { kind: "duplicate", principalTrackId: row.duplicate_of_track_id };
   }
 
-  if (!publicTrackDurationOk(row.duration_ms, false)) {
+  if (!publicTrackOk({ durationMs: row.duration_ms, title: row.title }, false)) {
     return { kind: "missing" };
   }
 
@@ -291,7 +291,7 @@ const NEIGHBOUR_SELECT = `tracks.track_id, tracks.title, tracks.artists_json, tr
   (select image_updated_at from albums where albums.id = tracks.album_id) as album_image_updated_at,
   findings.log_id`;
 
-const NEIGHBOUR_WHERE = `${TRACK_PAGE_IDENTITY_WHERE} and tracks.duplicate_of_track_id is null and ${publicTrackDurationWhere("tracks", "findings")}`;
+const NEIGHBOUR_WHERE = `${TRACK_PAGE_IDENTITY_WHERE} and tracks.duplicate_of_track_id is null and ${publicTrackWhere("tracks", "findings")}`;
 
 function toNeighbour(row: NeighbourRow): SonicNeighbour {
   return {
