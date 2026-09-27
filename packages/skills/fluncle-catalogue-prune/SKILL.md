@@ -73,11 +73,15 @@ Re-run the scan and watch the safe-purge count move. Note: a big jump after disa
 
 ### 3 — Backup
 
+The backup is Turso's point-in-time recovery, which records every commit and keeps 30 days on the current plan. Record the restore point immediately before each `--confirm`:
+
 ```bash
-bun run --cwd apps/web db:pull-prod   # reads FLUNCLE_TURSO_OP_ITEM; writes apps/web/.dev/seed.sql
-mkdir -p apps/web/.dev/backups
-cp apps/web/.dev/seed.sql "apps/web/.dev/backups/prod-seed-$(date +%Y%m%d-%H%M%S)-pre-purge.sql"
+echo "PITR restore point: $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$PRUNE_OUT_DIR/restore-points.txt"
+# restoring means a NEW database from that instant, then repointing to it:
+# turso db create <new-name> --from-db <prod-db> --timestamp <restore point>
 ```
+
+Every destructive script here also writes its per-row rollback JSON before it deletes, and `restore-from-rollback.ts` replays it; that is the everyday undo, and PITR is the whole-database net behind it. `db:pull-prod` is not a backup at the current corpus size: it reads each table in a single `select *`, which fails on the hosted database, and when it fails the `seed.sql` it would have replaced is a stale earlier dump. Never copy `seed.sql` into a backup without checking its timestamp.
 
 ### 4 — Purge (dry-run, then confirm)
 
@@ -162,7 +166,7 @@ bun run packages/skills/fluncle-catalogue-prune/scripts/purge-artists.ts --artis
 
 The run **hard-aborts** rather than skipping on: a slug with no `artists` row, a named artist carrying a finding-bearing track, and any deletable track entangled in a mixtape, save, published post, or frontier edition. A refusal means your list is wrong; fix the list, don't work around it.
 
-**5 — Backup, then confirm.** Same backup as § 3 above (`db:pull-prod` into a timestamped copy), then:
+**5 — Backup, then confirm.** Record the restore point as in § 3 above, then:
 
 ```bash
 bun run packages/skills/fluncle-catalogue-prune/scripts/purge-artists.ts --artists-file "$PRUNE_OUT_DIR/radar-namesake.txt" --confirm
@@ -221,6 +225,17 @@ Pass `--into-mbid` whenever the detector named the impostor side's MusicBrainz a
 
 Re-run with `--confirm` after a fresh backup (§ 3 above). The `artists` row itself is never deleted by this tool — that is the whole difference from `purge-artists.ts`. Hub counts lag as after any purge.
 
+### Whole off-genre albums (the album-level purge)
+
+An artist purge leaves an album standing when some of its credits are not named: a various-artists Christmas compilation keeps every crooner you did not list, and a strip skips any co-credited track. When the ALBUM itself is the off-genre object — a reissue compilation, a soundtrack, a reggae LP under a misattributed label credit — purge it by id:
+
+```bash
+bun run …/purge-albums.ts --albums-file "$PRUNE_OUT_DIR/off-genre-albums.txt"            # album ids, one per line, `#` comments
+bun run …/purge-albums.ts --albums-file "$PRUNE_OUT_DIR/off-genre-albums.txt" --confirm
+```
+
+It deletes every track on the named albums (co-credits included), the albums, and every artist left with no track anywhere; an artist with a track on another album keeps their row and that track, which is how a crooner's drum & bass remix elsewhere survives. The dry-run prints each album with its label and credits, and the orphaned artists. **Hard aborts:** an unknown album id, any findings track on a named album, and any entangled track. Read the label next to each album before confirming: a triage verdict made from one track can name an album whose other tracks are drum & bass. Follow a confirmed run with a global `block` for the orphaned artists whose labels stay enabled, or the next walk re-stores them.
+
 ### Duplicate rows (two artists rows, ONE real act)
 
 The exact inverse of a conflation, and the tail a repair pass leaves behind. The crawler mints an artist per MusicBrainz identity it walks, so an act MusicBrainz carries under two MBIDs — or one Fluncle met twice before an MBID was known — lands as `orion` and `orion-2`: two `/artist` pages, one discography split across them, and usually at least one row wearing an MBID that belongs to **neither** act.
@@ -263,9 +278,9 @@ Deliberately NOT restored: `cost_events` (a ledger of spend that already happene
 
 ## Rollback
 
-Every write leaves a JSON in `$PRUNE_OUT_DIR`: `label-rulings-rollback.json`, `purge-rollback.json`, `purge-artists-rollback.json`, `reseed-label-<slug>-rollback.json`, `orphan-edges-rollback.json`, `split-artist-<slug>-rollback.json`, `merge-artist-<dup>-into-<canonical>-rollback.json`, `repoint-artist-<slug>-rollback.json`. They are full `select *` snapshots.
+Every write leaves a JSON in `$PRUNE_OUT_DIR`: `label-rulings-rollback.json`, `purge-rollback.json`, `purge-artists-rollback.json`, `purge-albums-rollback.json`, `reseed-label-<slug>-rollback.json`, `orphan-edges-rollback.json`, `split-artist-<slug>-rollback.json`, `merge-artist-<dup>-into-<canonical>-rollback.json`, `repoint-artist-<slug>-rollback.json`. They are full `select *` snapshots.
 
-**For a track-level undo, use `restore-from-rollback.ts` (§ Restore rows a purge deleted, above)** rather than hand-writing inserts — it is idempotent, closes over each track's album + artists + edges, and guards schema drift. For anything else, re-insert the captured rows by hand or restore the pre-purge `.sql` backup. The label rollback restores prior `seed_state`; the reseed rollback restores each frontier node's prior `state` / `cursor` / `note`. A merge rollback captures BOTH artists rows and every referencing row for both, because the merge edits the canonical as well as deleting the duplicate.
+**For a track-level undo, use `restore-from-rollback.ts` (§ Restore rows a purge deleted, above)** rather than hand-writing inserts — it is idempotent, closes over each track's album + artists + edges, and guards schema drift. For anything else, re-insert the captured rows by hand or restore from the recorded point-in-time restore point. The label rollback restores prior `seed_state`; the reseed rollback restores each frontier node's prior `state` / `cursor` / `note`. A merge rollback captures BOTH artists rows and every referencing row for both, because the merge edits the canonical as well as deleting the duplicate.
 
 ## Files
 
@@ -273,6 +288,7 @@ Every write leaves a JSON in `$PRUNE_OUT_DIR`: `label-rulings-rollback.json`, `p
 - `scripts/rule-labels.ts` — enable/disable labels by name (dry-run/`--confirm`, rollback).
 - `scripts/purge.ts` — LABEL-driven purge (safe-purge artists) with entanglement guard + rollback.
 - `scripts/purge-artists.ts` — TARGETED purge of an operator-named artist list, for the namesake case (dry-run/`--confirm`, rollback). Same cascade as `purge.ts`; hard-aborts on an unresolved slug, a findings track, or entanglement.
+- `scripts/purge-albums.ts` — TARGETED purge of operator-named albums by id: every track on them, the albums, and artists left with no track (dry-run/`--confirm`, rollback, shared cascade + guard).
 - `scripts/reseed-label.ts` — frontier repair for a wrong-namesake seed: re-arm the resolver node, retire the impostor MusicBrainz nodes without deleting them (dry-run/`--confirm`, rollback).
 - `scripts/find-conflated-artists.ts` — READ-ONLY detector for one `artists` row holding two real acts: per-side evidence plus the MusicBrainz identity of each side's recordings.
 - `scripts/split-artist.ts` — the conflation repair: SPLIT the other act onto a new row (re-point edges) or STRIP its tracks (dry-run/`--confirm`, rollback, shared cascade + guard).
@@ -282,6 +298,7 @@ Every write leaves a JSON in `$PRUNE_OUT_DIR`: `label-rulings-rollback.json`, `p
 - `scripts/lib.ts` — shared creds + catalogue loader + the safe-purge definition + the named-artist resolution + the shared-credit survival rule + the one artist cascade (guard, rollback, FK-safe delete) both purges use + the atomic track/edge delete.
 - `scripts/orphan-edges.test.ts` — the delete pair's order/atomicity and the orphan predicate, against a stubbed client.
 - `scripts/purge-artists.test.ts` — the shared-credit survival rule, the findings/unknown-slug/entanglement hard aborts, the zero-write dry-run, and the cascade's delete order.
+- `scripts/purge-albums.test.ts` — the whole-album take including co-credits, the orphaned-artist rule, the findings/unknown-album aborts, and the zero-write dry-run.
 - `scripts/reseed-label.test.ts` — the namesake classification against `mb_label_id`, the three refusals, the zero-write dry-run, and that a namesake node is noted rather than deleted.
 - `scripts/find-conflated-artists.test.ts` — the candidate gate, the edge-writer attribution, the MB verdict (and its refusal to guess), and that the whole run only reads.
 - `scripts/split-artist.test.ts` — the shared-credit hold-back, the findings / not-actually-conflated / entanglement aborts, both zero-write dry-runs, and the two apply shapes.
