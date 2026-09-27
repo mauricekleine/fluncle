@@ -46,6 +46,7 @@ import {
   videoObjectJsonLd,
 } from "@/lib/log-schema";
 import { mixtapeSetVideoUrl, albumCoverAtSize, trackMedia } from "@/lib/media";
+import { bioMetaDescription } from "@/lib/meta-description";
 import { type MixtapeDTO, mixtapeCoverUrl, mixtapeDisplayTitle } from "@/lib/mixtapes";
 import { resolveLogPageTarget } from "@/lib/server/log-resolver";
 import {
@@ -122,8 +123,11 @@ function logHead(loaderData: LogPageData | undefined) {
     const { mixtape } = loaderData;
     const logId = mixtape.logId as string;
     const pageUrl = logPageUrl(logId);
-    const title = `${logId} · ${mixtape.title} · Fluncle`;
-    const description = mixtape.note ?? "A checkpoint in Fluncle's Findings.";
+    const displayTitle = mixtapeDisplayTitle(mixtape.title);
+    const title = `${logId} · ${displayTitle} · Fluncle`;
+    const description = mixtape.note
+      ? bioMetaDescription(mixtape.note)
+      : "A checkpoint in Fluncle's Findings.";
 
     const ogImageUrl = mixtape.logId
       ? mixtapeCoverUrl(logId, "og")
@@ -144,7 +148,7 @@ function logHead(loaderData: LogPageData | undefined) {
         {
           href: `${siteUrl}/oembed?url=${encodeURIComponent(pageUrl)}&format=json`,
           rel: "alternate",
-          title: `${mixtape.title} · Fluncle`,
+          title: `${displayTitle} · Fluncle`,
           type: "application/json+oembed",
         },
       ],

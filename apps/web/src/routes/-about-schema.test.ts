@@ -177,7 +177,9 @@ describe("the @id entity graph — every #fluncle reference resolves to the one 
       loaderData: { series: [] },
     } as never) as HeadResult;
     const entity = schemasOf(reachHead).find((schema) => schema["@type"] === "Person");
+    const person = aboutSchemas().find((schema) => schema["@type"] === "Person");
 
     expect(entity?.["@id"]).toBe(fluncleEntityId);
+    expect(entity?.url).toBe(person?.url);
   });
 });

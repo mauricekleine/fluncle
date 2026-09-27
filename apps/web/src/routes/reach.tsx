@@ -439,7 +439,7 @@ function reachHead({ loaderData }: { loaderData?: PlatformStatsView }) {
     image: `${siteUrl}/fluncle-cover.png`,
     ...(counters.length > 0 ? { interactionStatistic: counters } : {}),
     name: "Fluncle",
-    url: siteUrl,
+    url: `${siteUrl}/`,
   };
 
   return {
