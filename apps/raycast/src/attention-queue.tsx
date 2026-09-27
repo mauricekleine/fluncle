@@ -13,6 +13,7 @@ const SOURCE_META: Record<Source, { icon: Icon; title: string }> = {
   "attach-cues": { icon: Icon.BulletPoints, title: "Attach cues" },
   "bio-review": { icon: Icon.QuoteBlock, title: "Bios past the gate" },
   "capture-suspect": { icon: Icon.Waveform, title: "Capture checks" },
+  "crawl-hold": { icon: Icon.Pause, title: "Held releases" },
   distribute: { icon: Icon.Globe, title: "Distribute" },
   "drip-empty": { icon: Icon.Image, title: "Clip drip" },
   "label-review": { icon: Icon.Tag, title: "Labels" },

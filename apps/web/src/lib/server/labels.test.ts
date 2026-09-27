@@ -1310,6 +1310,22 @@ describe("mergeLabel (the operator's slug-split cleanup)", () => {
     expect(await seedStateOf("canon")).toBe("disabled");
   });
 
+  it("carries the loser's held releases onto the canonical label", async () => {
+    await insertFullLabel({ id: "lbl_canon", name: "Canon", slug: "canon" });
+    await insertFullLabel({ id: "lbl_loser", name: "Loser", slug: "loser" });
+    await db.execute(`insert into crawl_release_holds
+      (release_mbid, label_id, artists, track_count, reason, threshold_year, created_at, updated_at)
+      values ('release-held', 'lbl_loser', '[]', 3, 'before_founding', 2009,
+              '2026-09-27T00:00:00.000Z', '2026-09-27T00:00:00.000Z')`);
+
+    await mergeLabel("loser", "canon");
+
+    const held = await db.execute(
+      "select label_id from crawl_release_holds where release_mbid = 'release-held'",
+    );
+    expect(held.rows[0]?.label_id).toBe("lbl_canon");
+  });
+
   it("drops only the loser's scoped rules and reports the deliberate loss", async () => {
     await insertFullLabel({ id: "lbl_canon", name: "Canon", slug: "canon" });
     await insertFullLabel({ id: "lbl_loser", name: "Loser", slug: "loser" });

@@ -2063,6 +2063,11 @@ export async function mergeLabel(
       args: [loser.id, loser.slug],
       sql: `delete from due_work where subject_type = 'label' and subject_id in (?, ?)`,
     },
+
+    {
+      args: [canonical.id, loser.id],
+      sql: `update crawl_release_holds set label_id = ? where label_id = ?`,
+    },
   ];
 
   const trackMaintenance = markDueWorkSourceMaintenanceFromSelectStatements(

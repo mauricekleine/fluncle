@@ -18,6 +18,7 @@ import {
   markCrawlNodeRepairsByUpdatedAtStatement,
   markCrawlProjectionRepairStatement,
 } from "./crawl-due-work";
+import { decideReleaseHold } from "./crawl-plausibility";
 import { currentSeedRearmBoundary } from "./crawl-rearm-schedule";
 import {
   CRAWL_CATALOGUE_CLAIM_OWNER,
@@ -202,6 +203,8 @@ export type CrawlPass = {
   tracksFound: number;
 
   tracksAllowedIn: number;
+
+  tracksHeldImplausible: number;
 
   tracksSkippedArtistRule: number;
 
@@ -661,6 +664,59 @@ async function rearmSkippedDisabledReleases(maxHop: number): Promise<number> {
   return result[0]?.rowsAffected ?? 0;
 }
 
+async function rearmReleasedHolds(): Promise<number> {
+  const db = await getDb();
+  const selected = await db.execute({
+    args: [REARM_SCOPED_BATCH],
+    sql: `select hold.release_mbid, labels.slug as label_slug
+          from crawl_release_holds as hold indexed by crawl_release_holds_rearm_idx
+          left join labels on labels.id = hold.label_id
+          where hold.state = 'released' and hold.rearmed_at is null
+          order by hold.release_mbid limit ?`,
+  });
+  const holds = typedRows<{ label_slug: null | string; release_mbid: string }>(selected.rows);
+
+  if (holds.length === 0) {
+    return 0;
+  }
+
+  const now = new Date().toISOString();
+  const sourceVersion = `crawl-hold-rearm:${crypto.randomUUID()}`;
+  const writes: DueWorkStatement[] = [];
+
+  for (const hold of holds) {
+    const nodeId = frontierId("musicbrainz", "release", hold.release_mbid);
+    writes.push(
+      {
+        args: [nodeId, hold.release_mbid, hold.label_slug, now, now],
+        sql: `insert into crawl_frontier
+                (id, kind, source, external_id, hop, parent_id, label_slug, state, cursor,
+                 created_at, updated_at)
+              values (?, 'release', 'musicbrainz', ?, 0, null, ?, 'pending', 0, ?, ?)
+              on conflict (id) do update set
+                state = 'pending', cursor = 0, note = null, updated_at = excluded.updated_at
+              where crawl_frontier.state in ('done', 'skipped')`,
+      },
+      markCrawlNodeRepairStatement(nodeId, sourceVersion, {
+        now,
+        onlyIfPreviousStatementChanged: true,
+      }),
+    );
+  }
+
+  const releaseMbids = holds.map((hold) => hold.release_mbid);
+  writes.push({
+    args: [now, ...releaseMbids],
+    sql: `update crawl_release_holds set rearmed_at = ?
+          where state = 'released' and rearmed_at is null
+            and release_mbid in (${releaseMbids.map(() => "?").join(", ")})`,
+  });
+  await db.batch(writes, "write");
+
+  logEvent("info", "crawl.holds-rearmed", { count: holds.length });
+  return holds.length;
+}
+
 async function rearmAllowedArtists(): Promise<number> {
   const db = await getDb();
   const selected = await db.execute({
@@ -1022,6 +1078,7 @@ type Expansion = {
   next: { cursor: number; state: CrawlNodeState; note?: string };
   tracksAllowedIn: number;
   tracksFound: number;
+  tracksHeldImplausible: number;
   tracksSkippedArtistRule: number;
   tracksSkippedHeld: number;
   tracksSkippedLabelGate: number;
@@ -1035,6 +1092,7 @@ const EMPTY: Expansion = {
   next: { cursor: 0, state: "done" },
   tracksAllowedIn: 0,
   tracksFound: 0,
+  tracksHeldImplausible: 0,
   tracksSkipped: 0,
   tracksSkippedArtistRule: 0,
   tracksSkippedHeld: 0,
@@ -1731,7 +1789,7 @@ async function applyRearmedBrowse(
   };
 }
 
-type LabelScopeEntry = { enabled: boolean; labelId: string };
+type LabelScopeEntry = { enabled: boolean; foundingDate: null | string; labelId: string };
 type FoldScopeEntry = "ambiguous" | LabelScopeEntry;
 type ScopeMemo = {
   enabledLabelFolds: Set<string>;
@@ -1748,7 +1806,12 @@ type ArtistRuleMemoRow = {
 
   verdict: "allow" | "block";
 };
-type ReleaseLabelScope = { enabled: boolean; labelId: string | null; rulesAllowed: boolean };
+type ReleaseLabelScope = {
+  enabled: boolean;
+  foundingDate: null | string;
+  labelId: string | null;
+  rulesAllowed: boolean;
+};
 type ScopeDecision = "allow" | "block" | "default";
 
 function addLabelRule(map: Map<string, Set<string>>, labelId: string, artistMbid: string): void {
@@ -1784,7 +1847,11 @@ async function getScopeMemo(client?: Pick<Client, "execute">): Promise<ScopeMemo
   };
 
   for (const label of labels) {
-    const entry = { enabled: label.seedState === "enabled", labelId: label.id };
+    const entry = {
+      enabled: label.seedState === "enabled",
+      foundingDate: label.foundingDate ?? null,
+      labelId: label.id,
+    };
     const key = fold(label.name);
 
     if (label.mbLabelId) {
@@ -1856,12 +1923,13 @@ function releaseLabelScope(
 
     return {
       enabled: memo.enabledLabelFolds.has(key),
+      foundingDate: null,
       labelId: null,
       rulesAllowed: false,
     };
   }
 
-  return { enabled: false, labelId: null, rulesAllowed: true };
+  return { enabled: false, foundingDate: null, labelId: null, rulesAllowed: true };
 }
 
 function artistScopeVerdict(
@@ -1913,6 +1981,43 @@ function discogsIdsForRelease(release: MbReleaseDetail): {
   }
 
   return { inMasterId, inReleaseId };
+}
+
+async function holdImplausibleCredit(
+  release: MbReleaseDetail,
+  releaseMbid: string,
+  scope: ReleaseLabelScope,
+  kept: TrackCandidate[],
+  client?: CrawlDbClient,
+): Promise<{ heldNote: string; tracksHeldImplausible: number }> {
+  if (kept.length === 0 || !scope.enabled || !scope.labelId) {
+    return { heldNote: "", tracksHeldImplausible: 0 };
+  }
+
+  const decision = await decideReleaseHold(client ?? (await getDb()), {
+    artistMbids: kept.flatMap((candidate) =>
+      candidate.creditMbids.filter((mbid): mbid is string => mbid !== null),
+    ),
+    artistNames: kept.flatMap((candidate) => candidate.artists),
+    foundingDate: scope.foundingDate,
+    labelId: scope.labelId,
+    releaseDate: release.date,
+    releaseMbid,
+    releaseTitle: release.title,
+    trackIds: kept.map((candidate) => catalogueTrackId(candidate.recordingId)),
+  });
+
+  if (decision.kind === "store") {
+    return { heldNote: "", tracksHeldImplausible: 0 };
+  }
+
+  const held = kept.length;
+  kept.length = 0;
+
+  return {
+    heldNote: ` held=${held} held_reason=${decision.reason}:${decision.thresholdYear}`,
+    tracksHeldImplausible: held,
+  };
 }
 
 async function applyRelease(
@@ -2046,6 +2151,14 @@ async function applyRelease(
 
   applyStorageGate();
 
+  const { heldNote, tracksHeldImplausible } = await holdImplausibleCredit(
+    release,
+    release.id,
+    scope,
+    kept,
+    client,
+  );
+
   let tracksSkippedHeld = 0;
   let written = 0;
 
@@ -2078,7 +2191,7 @@ async function applyRelease(
 
   const artistHop = node.hop + 1;
   const enqueued =
-    artistHop <= maxHop
+    artistHop <= maxHop && tracksHeldImplausible === 0
       ? await enqueueMany(
           [...artistMbids].map((mbid) => ({
             externalId: mbid,
@@ -2097,12 +2210,14 @@ async function applyRelease(
     labelsDiscovered,
     next: {
       cursor: 0,
-      note: `stored=${written} skipped_held=${tracksSkippedHeld} skipped_label=${tracksSkippedLabelGate} skipped_rule=${tracksSkippedArtistRule}`,
+      note: `stored=${written} skipped_held=${tracksSkippedHeld} skipped_label=${tracksSkippedLabelGate} skipped_rule=${tracksSkippedArtistRule}${heldNote}`,
       state: "done",
     },
     tracksAllowedIn,
     tracksFound: candidates.length,
-    tracksSkipped: tracksSkippedHeld + tracksSkippedLabelGate + tracksSkippedArtistRule,
+    tracksHeldImplausible,
+    tracksSkipped:
+      tracksSkippedHeld + tracksSkippedLabelGate + tracksSkippedArtistRule + tracksHeldImplausible,
     tracksSkippedArtistRule,
     tracksSkippedHeld,
     tracksSkippedLabelGate,
@@ -2423,6 +2538,7 @@ export async function prepareCrawlPhase({
   }
 
   await rearmSkippedDisabledReleases(maxHop);
+  await rearmReleasedHolds();
 
   const db = await getDb();
   const storableReady = await storableReleaseExists(db, sampleStorableRepair);
@@ -2556,6 +2672,7 @@ function expansionResult(expansion: Expansion, plan: CrawlProviderPlan): JsonVal
     releaseDetailsStored: plan.kind === "release" && expansion.tracksWritten > 0 ? 1 : 0,
     tracksAllowedIn: expansion.tracksAllowedIn,
     tracksFound: expansion.tracksFound,
+    tracksHeldImplausible: expansion.tracksHeldImplausible,
     tracksSkipped: expansion.tracksSkipped,
     tracksSkippedArtistRule: expansion.tracksSkippedArtistRule,
     tracksSkippedHeld: expansion.tracksSkippedHeld,
@@ -2622,6 +2739,7 @@ export async function commitCrawlPhase(
             rateLimited: fetched.outcome.rateLimited,
             tracksAllowedIn: 0,
             tracksFound: 0,
+            tracksHeldImplausible: 0,
             tracksSkipped: 0,
             tracksSkippedArtistRule: 0,
             tracksSkippedHeld: 0,
@@ -2775,6 +2893,7 @@ export async function crawlCatalogue({
     seedsRearmed: 0,
     tracksAllowedIn: 0,
     tracksFound: 0,
+    tracksHeldImplausible: 0,
     tracksSkipped: 0,
     tracksSkippedArtistRule: 0,
     tracksSkippedHeld: 0,
@@ -2791,6 +2910,7 @@ export async function crawlCatalogue({
   const cutoverEnabled = await isCrawlDueCutoverEnabled();
   const initialization = await initializeCrawlPhaseState(cutoverEnabled);
   await rearmSkippedDisabledReleases(hopLimit);
+  await rearmReleasedHolds();
   pass.seeded = initialization.seeded;
   pass.releasesRearmed = initialization.releasesRearmed;
   pass.artistsRearmed = initialization.artistsRearmed;
@@ -2877,6 +2997,7 @@ export async function crawlCatalogue({
       pass.releaseDetailsStored += 1;
     }
     pass.tracksSkippedArtistRule += expansion.tracksSkippedArtistRule;
+    pass.tracksHeldImplausible += expansion.tracksHeldImplausible;
     pass.tracksSkippedHeld += expansion.tracksSkippedHeld;
     pass.tracksSkippedLabelGate += expansion.tracksSkippedLabelGate;
     pass.tracksSkipped += expansion.tracksSkipped;

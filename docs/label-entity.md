@@ -78,7 +78,7 @@ An existing label is never clobbered: its seed state, its ruling stamp, its disp
 
 ## The surfaces
 
-**`/admin/labels`** is the management station (sidebar: Labels, beside Artists). Sections in the order the work arrives: _Waiting on a ruling_ (the queue), then _Seeding named artists_, then _Seeding from_, then _Not seeding_. An unruled row's two ruling buttons are the loudest thing on the page (the disclosure law); re-ruling a settled label is the rare act, behind the row's `⋮`.
+**`/admin/labels`** is the management station (sidebar: Labels, beside Artists). Sections in the order the work arrives: _Waiting on a ruling_ (the queue), then _Held releases_ (releases the crawl's plausibility hold kept out of storage; [catalogue-crawler.md](./catalogue-crawler.md#the-plausibility-hold-a-credit-the-label-cannot-have-issued) owns it), then _Seeding named artists_, then _Seeding from_, then _Not seeding_. An unruled row's two ruling buttons are the loudest thing on the page (the disclosure law); re-ruling a settled label is the rare act, behind the row's `⋮`.
 
 **`undecided` is TWO sections, because a settled verdict is not a gap.** Writing per-label allows and leaving the seed state alone IS a ruling — the `dnb_partial` verdict of the [fluncle-label-triage](../packages/skills/fluncle-label-triage) skill: the label stays out of the seed set and the next crawl takes the named artists off it and nobody else. So _Waiting on a ruling_ is `undecided` AND carrying no per-label rule, and _Seeding named artists_ is the rest, each row stating how many artists it takes. The distinguishing check is EXACT rather than a heuristic (an undecided label has no other way to acquire per-label rules) and it is the same one the triage pull partitions on, so the station and the pull agree about what is still open. A GLOBAL rule (`label_id` null) is the other axis and never counts. The split is decided in SQL — one `exists` term on `artist_rules_label_id_idx` over the same `(seed_state, name)` index walk (`listLabelsPage`) — so the two sections are disjoint, their totals sum to the seed state's, and the **header count leads with the waiting set alone**: a number that calls 178 settled verdicts an open queue is a number the operator learns to stop believing. A settled-partial row keeps its ruling options behind the `⋮`; a WAITING row carries the third verdict there too ("Allow an artist from it…", the same whole-set rules dialog), since its two buttons cannot say it.
 
@@ -87,6 +87,8 @@ A label's SECTION follows its ruling, never its rules: an `enabled` label with b
 Each ruling row displays the label name plus any MusicBrainz disambiguation, founding date and location, and an outbound MBID link.
 
 **The attention queue** carries `label-review` as a source (`apps/web/src/lib/attention.ts`): every `undecided` label is one row, oldest-first, deep-linking to `/admin/labels`. It never rides the deadline tier — a ruling steers the next crawl and blocks nothing.
+
+A held release is its own source, `crawl-hold`: one row per `held` release, oldest-first, deep-linking to `/admin/labels?hold=<release-mbid>`, where the row is focused and ruled with **Keep it out** or **Store it**.
 
 ## The ops (`packages/contracts/src/orpc/admin-labels.ts`)
 

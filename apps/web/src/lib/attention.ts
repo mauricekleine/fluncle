@@ -106,6 +106,13 @@ export type ArtistReviewInput = {
   pending: number;
 };
 
+export type CrawlHoldInput = {
+  anchorAt: string;
+  labelName: null | string;
+  releaseMbid: string;
+  releaseTitle: null | string;
+};
+
 export type LabelReviewInput = {
   anchorAt: string;
   labelId: string;
@@ -213,6 +220,7 @@ export type AttentionInputs = {
   captureSuspects: CaptureSuspectInput[];
   clipPosts: ClipPostInput[];
   clips: ClipInput[];
+  crawlHolds?: CrawlHoldInput[];
   labelReviews: LabelReviewInput[];
   mixtapes: MixtapeInput[];
   newsletters: NewsletterInput[];
@@ -386,6 +394,16 @@ export function deriveAttentionItems(inputs: AttentionInputs, now: number): Atte
       id: `label-review:${review.labelId}`,
       source: "label-review",
       title: review.name,
+    });
+  }
+
+  for (const hold of inputs.crawlHolds ?? []) {
+    items.push({
+      anchorAt: hold.anchorAt,
+      href: `/admin/labels?hold=${encodeURIComponent(hold.releaseMbid)}`,
+      id: `crawl-hold:${hold.releaseMbid}`,
+      source: "crawl-hold",
+      title: `${hold.releaseTitle ?? "Untitled release"} · ${hold.labelName ?? "unknown label"}`,
     });
   }
 
@@ -650,6 +668,8 @@ export function primaryFor(item: AttentionItem, now: number): PrimaryAction {
       return { kind: "keep-bio", label: "Bio stands" };
     case "capture-suspect":
       return { href: item.href ?? "/admin/catalogue", kind: "open", label: "Check it" };
+    case "crawl-hold":
+      return { href: item.href ?? "/admin/labels", kind: "open", label: "Rule on it" };
     case "distribute":
       return { href: item.href ?? "/admin/plans", kind: "open", label: "Distribute" };
     case "drip-empty":
@@ -691,6 +711,8 @@ const SOURCE_ORDER: AttentionSource[] = [
   "artist-review",
 
   "label-review",
+
+  "crawl-hold",
 
   "capture-suspect",
 
@@ -759,6 +781,10 @@ function briefPhrase(source: AttentionSource, rows: AttentionItem[]): string {
       return n === 1
         ? "a capture that doesn't sound right"
         : `${countWord(n)} captures that don't sound right`;
+    case "crawl-hold":
+      return n === 1
+        ? "a release the crawl held back"
+        : `${countWord(n)} releases the crawl held back`;
     case "distribute": {
       if (n !== 1) {
         return `${countWord(n)} mixtapes to distribute`;

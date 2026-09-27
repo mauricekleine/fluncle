@@ -2544,6 +2544,34 @@ export const labelTriageRuleProposals = sqliteTable(
   ],
 );
 
+export const crawlReleaseHolds = sqliteTable(
+  "crawl_release_holds",
+  {
+    artists: text("artists").notNull(),
+    createdAt: text("created_at").notNull(),
+    labelId: text("label_id").notNull(),
+    rearmedAt: text("rearmed_at"),
+    reason: text("reason", { enum: ["before_founding", "before_label_era"] }).notNull(),
+    releaseDate: text("release_date"),
+    releaseMbid: text("release_mbid").primaryKey(),
+    releaseTitle: text("release_title"),
+    ruledAt: text("ruled_at"),
+    state: text("state", { enum: ["held", "released", "kept_out"] })
+      .notNull()
+      .default("held"),
+    thresholdYear: integer("threshold_year").notNull(),
+    trackCount: integer("track_count").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    index("crawl_release_holds_state_idx").on(table.state, table.createdAt),
+    index("crawl_release_holds_label_id_idx").on(table.labelId),
+    index("crawl_release_holds_rearm_idx")
+      .on(table.releaseMbid)
+      .where(sql`${table.state} = 'released' and ${table.rearmedAt} is null`),
+  ],
+);
+
 export const labelAliases = sqliteTable(
   "label_aliases",
   {

@@ -24,6 +24,8 @@ import {
   type CatalogueMatchSchema,
   type CatalogueSummarySchema,
   type CatalogueTrackItemSchema,
+  type CrawlHoldSchema,
+  type CrawlHoldStateSchema,
 } from "./orpc/admin-catalogue.js";
 import {
   type TrackWorkItemSchema,
@@ -184,6 +186,8 @@ export type CapturePriorityReason = z.infer<typeof CapturePriorityReasonSchema>;
 export type CatalogueMatch = z.infer<typeof CatalogueMatchSchema>;
 
 export type CatalogueTrackItem = z.infer<typeof CatalogueTrackItemSchema>;
+export type CrawlHold = z.infer<typeof CrawlHoldSchema>;
+export type CrawlHoldState = z.infer<typeof CrawlHoldStateSchema>;
 
 export type CatalogueSummary = z.infer<typeof CatalogueSummarySchema>;
 
