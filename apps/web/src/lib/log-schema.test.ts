@@ -9,6 +9,7 @@ import {
   galaxyBreadcrumbsJsonLd,
   logbookBreadcrumbsJsonLd,
   mixtapeAlbumJsonLd,
+  mixtapeVideoObjectJsonLd,
   musicAlbumJsonLd,
   musicGroupJsonLd,
   musicPlaylistJsonLd,
@@ -18,6 +19,7 @@ import {
   recordLabelJsonLd,
   videoObjectJsonLd,
 } from "./log-schema";
+import { type MixtapeDTO } from "./mixtapes";
 import { fold } from "./server/track-match";
 
 const track = {
@@ -831,6 +833,29 @@ describe("mixtapeAlbumJsonLd", () => {
     expect(jsonLd.datePublished).toBe("2026-06-14");
 
     expect(jsonLd.numTracks).toBe(0);
+  });
+
+  it("names the album and its set video by the display title, never the platform title's coordinate tail", () => {
+    const mixtape: MixtapeDTO = {
+      addedAt: "2026-06-18T21:00:00.000Z",
+      artists: ["Fluncle"],
+      externalUrls: {},
+      logId: "019.F.1A",
+      memberCount: 0,
+      members: [],
+      status: "published",
+      title: "Fluncle Drum & Bass Mixtape #1 | 019.F.1A",
+      type: "mixtape",
+    };
+    const video = mixtapeVideoObjectJsonLd(mixtape, {
+      contentUrl: "https://found.fluncle.com/019.F.1A/set.mp4",
+      thumbnailUrl: "https://www.fluncle.com/api/mixtape-cover/019.F.1A?size=card",
+      uploadDate: "2026-06-29T06:48:02.531Z",
+    });
+
+    expect(mixtapeAlbumJsonLd(mixtape).name).toBe("Fluncle Drum & Bass Mixtape #1");
+    expect(video.name).toBe("Fluncle Drum & Bass Mixtape #1");
+    expect(video.description).toBe("Fluncle drum & bass mixtape: Fluncle Drum & Bass Mixtape #1.");
   });
 });
 
