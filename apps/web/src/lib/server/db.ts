@@ -13,8 +13,10 @@ import * as schema from "../../db/schema";
 import {
   PRIMARY_DB_CONCURRENCY,
   TELEMETRY_DB_CONCURRENCY,
+  type WorkerDatabaseConcurrencyGate,
   workerDatabaseConcurrencyGate,
   type WorkerDatabaseConcurrencyLease,
+  workerTelemetryDatabaseConcurrencyGate,
 } from "../database-concurrency";
 import { SENTRY_RELEASE } from "../sentry-config";
 import {
@@ -360,7 +362,10 @@ function instrumentTransaction(
   });
 }
 
-function instrument(client: Client): Client {
+function instrument(
+  client: Client,
+  gate: WorkerDatabaseConcurrencyGate = workerDatabaseConcurrencyGate,
+): Client {
   return new Proxy(client, {
     get(target, property) {
       if (property === "execute") {
@@ -378,7 +383,7 @@ function instrument(client: Client): Client {
             },
             async (span) => {
               const startedAt = Date.now();
-              const lease = await workerDatabaseConcurrencyGate.acquire(accessClass);
+              const lease = await gate.acquire(accessClass);
               const requestOperation = enterDatabaseRequestOperation();
               recordAdmission(span, lease);
               const run = () =>
@@ -440,7 +445,7 @@ function instrument(client: Client): Client {
             },
             async (span) => {
               const startedAt = Date.now();
-              const lease = await workerDatabaseConcurrencyGate.acquire(accessClass);
+              const lease = await gate.acquire(accessClass);
               const requestOperation = enterDatabaseRequestOperation();
               recordAdmission(span, lease);
 
@@ -474,7 +479,7 @@ function instrument(client: Client): Client {
             name: `db.query ${operationId}`,
             op: "db.query",
           });
-          const lease = await workerDatabaseConcurrencyGate.acquire(accessClass);
+          const lease = await gate.acquire(accessClass);
           const requestOperation = enterDatabaseRequestOperation();
           recordAdmission(span, lease);
 
@@ -528,7 +533,10 @@ export async function getTelemetryDb(): Promise<Client | undefined> {
       return undefined;
     }
 
-    return instrument(createClient({ authToken, concurrency: TELEMETRY_DB_CONCURRENCY, url }));
+    return instrument(
+      createClient({ authToken, concurrency: TELEMETRY_DB_CONCURRENCY, url }),
+      workerTelemetryDatabaseConcurrencyGate,
+    );
   });
 }
 

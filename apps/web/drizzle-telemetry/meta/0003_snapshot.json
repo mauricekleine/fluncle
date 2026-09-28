@@ -1,0 +1,662 @@
+{
+  "version": "6",
+  "dialect": "sqlite",
+  "id": "88041a0a-d756-446d-bc6b-37ae7ec0b392",
+  "prevId": "e4382879-9784-4dd6-b41e-292d8b4a787a",
+  "tables": {
+    "database_admission_control": {
+      "name": "database_admission_control",
+      "columns": {
+        "epoch": {
+          "name": "epoch",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "id": {
+          "name": "id",
+          "type": "integer",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "store_open": {
+          "name": "store_open",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "updated_at_ms": {
+          "name": "updated_at_ms",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "database_admission_control_singleton_check": {
+          "name": "database_admission_control_singleton_check",
+          "value": "\"database_admission_control\".\"id\" = 1 and \"database_admission_control\".\"epoch\" >= 0 and \"database_admission_control\".\"store_open\" in (0, 1) and \"database_admission_control\".\"updated_at_ms\" >= 0"
+        }
+      }
+    },
+    "database_write_probes": {
+      "name": "database_write_probes",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "latency_ms": {
+          "name": "latency_ms",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "observed_at_ms": {
+          "name": "observed_at_ms",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "outcome": {
+          "name": "outcome",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "database_write_probes_observed_at_idx": {
+          "name": "database_write_probes_observed_at_idx",
+          "columns": ["observed_at_ms", "id"],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "database_write_probes_outcome_check": {
+          "name": "database_write_probes_outcome_check",
+          "value": "\"database_write_probes\".\"outcome\" in ('failed', 'ok', 'slow', 'stalled')"
+        }
+      }
+    },
+    "run_events": {
+      "name": "run_events",
+      "columns": {
+        "access_class": {
+          "name": "access_class",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "attempt_count": {
+          "name": "attempt_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "batch_count": {
+          "name": "batch_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "checked": {
+          "name": "checked",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "ended_at": {
+          "name": "ended_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "errors": {
+          "name": "errors",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "exit_code": {
+          "name": "exit_code",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "expected_interval_ms": {
+          "name": "expected_interval_ms",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "gate_state": {
+          "name": "gate_state",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "missing_fields": {
+          "name": "missing_fields",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "occurred_at": {
+          "name": "occurred_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "ok": {
+          "name": "ok",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "operation_id": {
+          "name": "operation_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "outcome": {
+          "name": "outcome",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "produced": {
+          "name": "produced",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "queue_depth": {
+          "name": "queue_depth",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "release": {
+          "name": "release",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'unknown'"
+        },
+        "run_duration_ms": {
+          "name": "run_duration_ms",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "self_asserted_ok": {
+          "name": "self_asserted_ok",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "summary_raw": {
+          "name": "summary_raw",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "summary_status": {
+          "name": "summary_status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "unit": {
+          "name": "unit",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "unrecognised_fields": {
+          "name": "unrecognised_fields",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "vendor_calls": {
+          "name": "vendor_calls",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "run_events_unit_occurred_at_idx": {
+          "name": "run_events_unit_occurred_at_idx",
+          "columns": ["unit", "occurred_at"],
+          "isUnique": false
+        },
+        "run_events_occurred_at_idx": {
+          "name": "run_events_occurred_at_idx",
+          "columns": ["occurred_at"],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "database_admission_contenders": {
+      "name": "database_admission_contenders",
+      "columns": {
+        "acquired_at_ms": {
+          "name": "acquired_at_ms",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "contender_id": {
+          "name": "contender_id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "enqueued_at_ms": {
+          "name": "enqueued_at_ms",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "fencing_token": {
+          "name": "fencing_token",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "lane": {
+          "name": "lane",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "lease_expires_at_ms": {
+          "name": "lease_expires_at_ms",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "operation_id": {
+          "name": "operation_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "owner_id": {
+          "name": "owner_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "queue_heartbeat_at_ms": {
+          "name": "queue_heartbeat_at_ms",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "run_id": {
+          "name": "run_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "state": {
+          "name": "state",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "updated_at_ms": {
+          "name": "updated_at_ms",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "database_admission_contenders_owner_run_idx": {
+          "name": "database_admission_contenders_owner_run_idx",
+          "columns": ["owner_id", "run_id"],
+          "isUnique": true
+        },
+        "database_admission_contenders_active_lane_idx": {
+          "name": "database_admission_contenders_active_lane_idx",
+          "columns": ["lane"],
+          "isUnique": true,
+          "where": "\"database_admission_contenders\".\"state\" = 'active'"
+        },
+        "database_admission_contenders_queue_idx": {
+          "name": "database_admission_contenders_queue_idx",
+          "columns": ["lane", "state", "enqueued_at_ms", "contender_id"],
+          "isUnique": false,
+          "where": "\"database_admission_contenders\".\"state\" = 'queued'"
+        },
+        "database_admission_contenders_queue_heartbeat_idx": {
+          "name": "database_admission_contenders_queue_heartbeat_idx",
+          "columns": ["state", "queue_heartbeat_at_ms", "contender_id"],
+          "isUnique": false,
+          "where": "\"database_admission_contenders\".\"state\" = 'queued'"
+        },
+        "database_admission_contenders_lease_idx": {
+          "name": "database_admission_contenders_lease_idx",
+          "columns": ["state", "lease_expires_at_ms", "lane", "contender_id"],
+          "isUnique": false,
+          "where": "\"database_admission_contenders\".\"state\" = 'active'"
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "database_admission_contenders_lane_check": {
+          "name": "database_admission_contenders_lane_check",
+          "value": "\"database_admission_contenders\".\"lane\" in ('heavy-read', 'write')"
+        },
+        "database_admission_contenders_state_check": {
+          "name": "database_admission_contenders_state_check",
+          "value": "\"database_admission_contenders\".\"state\" in ('active', 'queued')"
+        },
+        "database_admission_contenders_identity_bounds_check": {
+          "name": "database_admission_contenders_identity_bounds_check",
+          "value": "typeof(\"database_admission_contenders\".\"contender_id\") = 'text' and length(cast(\"database_admission_contenders\".\"contender_id\" as blob)) between 1 and 192\n        and typeof(\"database_admission_contenders\".\"operation_id\") = 'text' and length(cast(\"database_admission_contenders\".\"operation_id\" as blob)) between 1 and 64\n        and typeof(\"database_admission_contenders\".\"owner_id\") = 'text' and length(cast(\"database_admission_contenders\".\"owner_id\" as blob)) between 1 and 128\n        and typeof(\"database_admission_contenders\".\"run_id\") = 'text' and length(cast(\"database_admission_contenders\".\"run_id\" as blob)) between 1 and 128"
+        },
+        "database_admission_contenders_time_check": {
+          "name": "database_admission_contenders_time_check",
+          "value": "\"database_admission_contenders\".\"enqueued_at_ms\" >= 0 and \"database_admission_contenders\".\"queue_heartbeat_at_ms\" >= \"database_admission_contenders\".\"enqueued_at_ms\"\n        and \"database_admission_contenders\".\"updated_at_ms\" >= \"database_admission_contenders\".\"enqueued_at_ms\"\n        and (\"database_admission_contenders\".\"acquired_at_ms\" is null or \"database_admission_contenders\".\"acquired_at_ms\" >= \"database_admission_contenders\".\"enqueued_at_ms\")\n        and (\"database_admission_contenders\".\"lease_expires_at_ms\" is null or \"database_admission_contenders\".\"lease_expires_at_ms\" >= \"database_admission_contenders\".\"enqueued_at_ms\")"
+        },
+        "database_admission_contenders_lifecycle_check": {
+          "name": "database_admission_contenders_lifecycle_check",
+          "value": "(\"database_admission_contenders\".\"state\" = 'queued' and \"database_admission_contenders\".\"acquired_at_ms\" is null and \"database_admission_contenders\".\"fencing_token\" is null and \"database_admission_contenders\".\"lease_expires_at_ms\" is null)\n        or (\"database_admission_contenders\".\"state\" = 'active' and \"database_admission_contenders\".\"acquired_at_ms\" is not null and \"database_admission_contenders\".\"fencing_token\" is not null and \"database_admission_contenders\".\"fencing_token\" > 0 and \"database_admission_contenders\".\"lease_expires_at_ms\" is not null and \"database_admission_contenders\".\"lease_expires_at_ms\" > \"database_admission_contenders\".\"acquired_at_ms\")"
+        }
+      }
+    },
+    "database_admission_lanes": {
+      "name": "database_admission_lanes",
+      "columns": {
+        "lane": {
+          "name": "lane",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "next_fencing_token": {
+          "name": "next_fencing_token",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        },
+        "updated_at_ms": {
+          "name": "updated_at_ms",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "database_admission_lanes_lane_check": {
+          "name": "database_admission_lanes_lane_check",
+          "value": "\"database_admission_lanes\".\"lane\" in ('heavy-read', 'write')"
+        },
+        "database_admission_lanes_token_check": {
+          "name": "database_admission_lanes_token_check",
+          "value": "\"database_admission_lanes\".\"next_fencing_token\" >= 0 and \"database_admission_lanes\".\"updated_at_ms\" >= 0"
+        }
+      }
+    },
+    "turso_usage_alerts": {
+      "name": "turso_usage_alerts",
+      "columns": {
+        "cycle": {
+          "name": "cycle",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "delivered_at": {
+          "name": "delivered_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "level_cents": {
+          "name": "level_cents",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "projected_overage_usd": {
+          "name": "projected_overage_usd",
+          "type": "real",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "raised_at": {
+          "name": "raised_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {
+        "turso_usage_alerts_cycle_level_cents_pk": {
+          "columns": ["cycle", "level_cents"],
+          "name": "turso_usage_alerts_cycle_level_cents_pk"
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "turso_usage_snapshots": {
+      "name": "turso_usage_snapshots",
+      "columns": {
+        "bytes_synced": {
+          "name": "bytes_synced",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "cycle": {
+          "name": "cycle",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "detail_json": {
+          "name": "detail_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "observed_at": {
+          "name": "observed_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "overage_usd": {
+          "name": "overage_usd",
+          "type": "real",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "plan": {
+          "name": "plan",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "price_table_version": {
+          "name": "price_table_version",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "projected_overage_usd": {
+          "name": "projected_overage_usd",
+          "type": "real",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "rows_read": {
+          "name": "rows_read",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "rows_written": {
+          "name": "rows_written",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "storage_bytes": {
+          "name": "storage_bytes",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "turso_usage_snapshots_observed_at_idx": {
+          "name": "turso_usage_snapshots_observed_at_idx",
+          "columns": ["observed_at"],
+          "isUnique": false
+        },
+        "turso_usage_snapshots_cycle_observed_at_idx": {
+          "name": "turso_usage_snapshots_cycle_observed_at_idx",
+          "columns": ["cycle", "observed_at"],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    }
+  },
+  "views": {},
+  "enums": {},
+  "_meta": {
+    "schemas": {},
+    "tables": {},
+    "columns": {}
+  },
+  "internal": {
+    "indexes": {}
+  }
+}

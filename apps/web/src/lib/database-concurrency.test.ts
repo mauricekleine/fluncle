@@ -12,6 +12,8 @@ import {
   TELEMETRY_DB_CONCURRENCY,
   WORKER_DB_AGGREGATE_CONCURRENCY,
   WORKER_DB_HEAVY_READ_CONCURRENCY,
+  workerDatabaseConcurrencyGate,
+  workerTelemetryDatabaseConcurrencyGate,
 } from "./database-concurrency";
 
 const REPO_ROOT = fileURLToPath(new URL("../../../../", import.meta.url));
@@ -472,6 +474,36 @@ function resolveExportedNumericValue(
 function describeCall(call: CallSite): string {
   return `${relative(REPO_ROOT, call.file)}:${call.line}`;
 }
+
+describe("the telemetry client's isolate gate", () => {
+  it("admits telemetry work while every primary slot is held by a stalled write", async () => {
+    const held = await Promise.all(
+      Array.from({ length: WORKER_DB_AGGREGATE_CONCURRENCY }, () =>
+        workerDatabaseConcurrencyGate.acquire("write"),
+      ),
+    );
+    try {
+      expect(workerDatabaseConcurrencyGate.snapshot().aggregateInFlight).toBe(
+        WORKER_DB_AGGREGATE_CONCURRENCY,
+      );
+      const telemetryLeases = await Promise.all(
+        Array.from({ length: TELEMETRY_DB_CONCURRENCY }, () =>
+          workerTelemetryDatabaseConcurrencyGate.acquire("write"),
+        ),
+      );
+      expect(workerTelemetryDatabaseConcurrencyGate.snapshot().aggregateInFlight).toBe(
+        TELEMETRY_DB_CONCURRENCY,
+      );
+      for (const lease of telemetryLeases) {
+        lease.release();
+      }
+    } finally {
+      for (const lease of held) {
+        lease.release();
+      }
+    }
+  });
+});
 
 describe("database concurrency bounds", () => {
   it("pins the shared vocabulary", () => {

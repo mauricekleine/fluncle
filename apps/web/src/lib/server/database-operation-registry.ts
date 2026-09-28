@@ -491,6 +491,13 @@ export const DATABASE_MUTATION_POLICIES = {
     reconciliation:
       "Inspect the stored snapshot, events, and samples before repeating the request.",
   },
+  "health.write-probe": {
+    evidenceSource: "apps/web/src/lib/server/database-admission.ts",
+    kind: "replay-safe-idempotent",
+    rationale:
+      "The probe upserts one fixed settings key with the current time and appends a bounded telemetry sample.",
+    reconciliation: "No reconciliation is needed; a repeated probe overwrites the same key.",
+  },
   "live.snapshot": {
     evidenceSource: "apps/web/src/lib/server/live.ts",
     kind: "deliberately-non-replayable",
@@ -690,6 +697,7 @@ export const TRIGGER_MUTATION_POLICY_IDS = {
   "frontier.refresh": "frontier.refresh",
   "galaxies.map.write": "galaxies.cluster",
   "health.snapshot": "health.snapshot",
+  "health.write-probe": "health.write-probe",
   "live.snapshot": "live.snapshot",
   "logbook.create": "logbook.draft",
   "newsletter.draft": "newsletter.draft",
@@ -1957,6 +1965,14 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
           compatibility: HEALTH_RECEIPT_FLAG_OFF_COMPATIBILITY,
           mutationTarget: "primary",
         },
+      ),
+      endpoint(
+        "health.write-probe",
+        "write",
+        "POST",
+        "/api/v1/admin/database-admission/write-probe",
+        `${SCRIPTS}/fluncle-healthcheck.ts`,
+        { mutationTarget: "primary" },
       ),
     ],
     wrapperSource: `${SCRIPTS}/fluncle-healthcheck.sh`,

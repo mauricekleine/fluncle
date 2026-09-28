@@ -348,6 +348,10 @@ export {
   type DatabaseAdmissionResponse,
   DatabaseAdmissionResponseSchema,
   DatabaseAdmissionYieldReasonSchema,
+  DatabaseWriteProbeOutcomeSchema,
+  type DatabaseWriteProbeResponse,
+  DatabaseWriteProbeResponseSchema,
+  recordDatabaseWriteProbe,
 } from "./admin-database-admission";
 export {
   adminTelemetryContract,
