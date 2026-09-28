@@ -1,0 +1,15 @@
+[Unit]
+Description=fluncle-turso-usage timer — read Turso usage and price the cycle's overage every 6 hours on the rave-02 host
+
+[Timer]
+# Four readings a day. A missed tick needs no retry slot: the usage counters are cumulative, so the
+# next tick loses nothing, and the board's per-day history keeps the last reading of each UTC day.
+OnBootSec=25min
+OnUnitActiveSec=6h
+# Per-firing jitter dissolves timer-phase alignment: mass timer restarts, including a pin-watch
+# rebake's quiesce/restore, can re-align every sweep to fire the same second.
+RandomizedDelaySec=90
+Persistent=true
+
+[Install]
+WantedBy=timers.target

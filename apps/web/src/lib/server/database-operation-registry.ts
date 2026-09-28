@@ -205,7 +205,7 @@ export const DATABASE_ADMISSION_SHAPES: Readonly<Record<string, DatabaseAdmissio
   ),
   "catalogue.label-outliers": phased(
     `${SCRIPTS}/label-outliers-sweep.ts`,
-    "Each keyset page of scoring inputs is one admitted heavy-read phase, scoring runs locally with no lease, and the replace-the-list write and the alert acknowledgement are each admitted as their own short phase.",
+    "The keyset pages of scoring inputs are plain reads taken one at a time with no lease, since reads leave the primary's write capacity alone, scoring runs locally, and only the replace-the-list write and the alert acknowledgement are admitted, each as its own short phase.",
     1,
   ),
   "catalogue.label-releases": wholeLifetime(
@@ -2152,7 +2152,7 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     triggers: [
       endpoint(
         "catalogue.label-outliers.inputs",
-        "heavy-read",
+        "read",
         "GET",
         "/api/v1/admin/label-outliers/inputs",
         `${SCRIPTS}/label-outliers-sweep.ts`,
@@ -2690,6 +2690,36 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
       ),
     ],
     wrapperSource: `${SCRIPTS}/sentry-triage-sweep.sh`,
+  }),
+  defineOperation({
+    accessClass: "read",
+    cadence: every("25min", "6h"),
+    directory: "turso-usage-timer",
+    heavy: false,
+    mutationTarget: null,
+    operationId: "ops.turso-usage",
+    service: "fluncle-turso-usage.service",
+    telemetryUnit: "turso-usage",
+    timer: "fluncle-turso-usage.timer",
+    triggers: [
+      endpoint(
+        "ops.turso-usage.record",
+        "read",
+        "POST",
+        "/api/v1/admin/costs/turso-usage",
+        `${SCRIPTS}/turso-usage-sweep.ts`,
+        { mutationTarget: null },
+      ),
+      endpoint(
+        "ops.turso-usage.acknowledge",
+        null,
+        "PUT",
+        "/api/v1/admin/costs/turso-usage/alerts",
+        `${SCRIPTS}/turso-usage-sweep.ts`,
+        { mutationTarget: null },
+      ),
+    ],
+    wrapperSource: `${SCRIPTS}/turso-usage-sweep.sh`,
   }),
   defineOperation({
     accessClass: "write",

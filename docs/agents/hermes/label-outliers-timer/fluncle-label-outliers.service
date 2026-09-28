@@ -15,12 +15,12 @@ EnvironmentFile=-/etc/fluncle/database-admission.env
 # hermes user. The .sh/.ts pair is BAKED at /opt/hermes-scripts/ (auto-updates from main via
 # pin-watch); this host unit only TRIGGERS it, and the sweep self-writes its /status marker
 # (cron-output.sh). The sweep reads its scoring inputs from the Worker in keyset pages
-# (list_label_outlier_inputs), each page its own admitted heavy-read phase, into a local file it
-# scores and deletes; the record and alert-acknowledge writes are admitted as their own short
-# phases.
+# (list_label_outlier_inputs), one page at a time with no admission slot, into a local file it
+# scores and deletes; only the record and alert-acknowledge writes are admitted, each as its own
+# short phase.
 ExecStart=/usr/bin/docker exec -e DATABASE_ADMISSION_FAIL_CLOSED -e DATABASE_ADMISSION_POLL_SECS=2 -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/daily-retry-runner.sh fluncle-label-outliers Europe/Amsterdam 05:30 06:30 -- bash /opt/hermes-scripts/label-outliers-sweep.sh
-# About fifty admitted input pages, seconds of scoring, and two admitted writes, with room for
-# an admission wait on each phase.
+# About fifty unadmitted input pages, seconds of scoring, and two admitted writes, with room for
+# an admission wait on each write.
 TimeoutStartSec=1800
 # Modest hardening for a root docker-driving oneshot.
 NoNewPrivileges=true

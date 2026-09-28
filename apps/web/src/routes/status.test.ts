@@ -1,4 +1,4 @@
-import { cronSurfaces } from "@fluncle/registry";
+import { cronSurfaces, publicStatusCronSurfaces } from "@fluncle/registry";
 import { describe, expect, it } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -28,8 +28,8 @@ describe("/status label coverage", () => {
     }
   });
 
-  it("every registry cron resolves its title + description from the registry", () => {
-    const surfaces = cronSurfaces();
+  it("every public registry cron resolves its title + description from the registry", () => {
+    const surfaces = publicStatusCronSurfaces();
     expect(cronConfig.order).toEqual(surfaces.map((surface) => surface.name));
 
     for (const surface of surfaces) {

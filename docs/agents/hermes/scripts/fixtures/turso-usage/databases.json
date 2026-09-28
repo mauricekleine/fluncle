@@ -1,0 +1,24 @@
+{
+  "databases": [
+    {
+      "Name": "app-primary",
+      "DbId": "392d53be-f751-4c16-a1a5-49dd57fe99df",
+      "Hostname": "[databaseName]-[organizationSlug].turso.io",
+      "block_reads": false,
+      "block_writes": false,
+      "primaryRegion": "aws-us-east-1",
+      "group": "default",
+      "delete_protection": true
+    },
+    {
+      "Name": "app-telemetry",
+      "DbId": "0eb771dd-6906-11ee-8553-eaa7715aeaf2",
+      "Hostname": "[databaseName]-[organizationSlug].turso.io",
+      "block_reads": false,
+      "block_writes": false,
+      "primaryRegion": "aws-us-east-1",
+      "group": "default",
+      "delete_protection": false
+    }
+  ]
+}

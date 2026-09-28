@@ -1,0 +1,53 @@
+{
+  "organization": {
+    "uuid": "fa72ba58-7db3-436b-bcab-14b83eb1dd88",
+    "usage": {
+      "rows_read": 61234567890,
+      "rows_written": 182345678,
+      "databases": 3,
+      "locations": 1,
+      "storage_bytes": 21456789012,
+      "groups": 1,
+      "bytes_synced": 353123456789
+    },
+    "databases": [
+      {
+        "uuid": "392d53be-f751-4c16-a1a5-49dd57fe99df",
+        "instances": [
+          {
+            "uuid": "cd831986-94e5-11ee-a6fe-7a52e1f7759a",
+            "usage": {
+              "rows_read": 60000000000,
+              "rows_written": 170000000,
+              "storage_bytes": 20000000000,
+              "bytes_synced": 353000000000
+            }
+          }
+        ],
+        "total": {
+          "rows_read": 60000000000,
+          "rows_written": 170000000,
+          "storage_bytes": 20000000000,
+          "bytes_synced": 353000000000
+        }
+      },
+      {
+        "uuid": "0eb771dd-6906-11ee-8553-eaa7715aeaf2",
+        "instances": [],
+        "total": {
+          "rows_read": 1234567890,
+          "rows_written": 12345678,
+          "storage_bytes": 1456789012,
+          "bytes_synced": 123456789
+        }
+      },
+      {
+        "uuid": "7c1e0f4a-0000-4000-8000-000000000003",
+        "instances": [],
+        "total": {
+          "storage_bytes": 4096
+        }
+      }
+    ]
+  }
+}

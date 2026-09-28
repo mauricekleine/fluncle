@@ -7,10 +7,8 @@ import { join } from "node:path";
 
 import { runDatabaseAdmissionPhaseAsync } from "./database-admission-phase";
 import {
-  type Admitted,
   buildScoringFile,
   createScoringFile,
-  type FetchedPage,
   INPUTS_PAGE_LIMIT,
   type InputsRead,
   type PageFetch,
@@ -83,7 +81,9 @@ export type RecordResponse = {
 
 export type AcknowledgeResponse = { acknowledged?: number; ok?: boolean };
 
-export type { Admitted };
+export type Admitted<T> =
+  | { kind: "completed"; response: T }
+  | { kind: "yielded"; reason: string | null };
 
 export type ScoredCorpus = {
   embeddedTracks: number;
@@ -305,9 +305,7 @@ export function readScoringInputs(database: Database): ScoringInputs {
   return { artistsByTrack, dnbTaggedAlbumIds, embeddedTracks, globalSum, groups };
 }
 
-export type ScoreOutcome =
-  | ({ kind: "scored"; read: InputsRead } & ScoredCorpus)
-  | { kind: "yielded"; read: InputsRead; reason: string | null };
+export type ScoreOutcome = { read: InputsRead } & ScoredCorpus;
 
 export async function scoreFromPages(
   scoringFile: string,
@@ -319,28 +317,11 @@ export async function scoreFromPages(
   const database = createScoringFile(scoringFile);
 
   try {
-    const built = await buildScoringFile(database, fetchPage, { maxPages: options.maxPages });
-    const read: InputsRead = {
-      bytes: built.bytes,
-      durationMs: built.durationMs,
-      pages: built.pages,
-      tracks: built.tracks,
-    };
-
-    if (built.kind === "yielded") {
-      return { kind: "yielded", read, reason: built.reason };
-    }
-
+    const read = await buildScoringFile(database, fetchPage, { maxPages: options.maxPages });
     const inputs = readScoringInputs(database);
     const run = scoreCatalogue({ ...inputs, groups: inputs.groups() });
 
-    return {
-      embeddedTracks: inputs.embeddedTracks,
-      kind: "scored",
-      read,
-      readAt,
-      run,
-    };
+    return { embeddedTracks: inputs.embeddedTracks, read, readAt, run };
   } finally {
     database.close();
     await rm(scoringFile, { force: true });
@@ -404,10 +385,6 @@ export async function runLabelOutliersSweep(
   summary.inputPages = scored.read.pages;
   summary.inputReadMs = scored.read.durationMs;
 
-  if (scored.kind === "yielded") {
-    return { ...summary, reason: admissionReason(scored.reason) };
-  }
-
   summary.checked = scored.run.unitsScored;
   summary.embeddedTracks = scored.embeddedTracks;
   summary.labelsScored = scored.run.labelsScored;
@@ -453,6 +430,32 @@ export async function runLabelOutliersSweep(
   return summary;
 }
 
+export type AdmitPhase = typeof runDatabaseAdmissionPhaseAsync;
+
+export type SweepIo = {
+  admit: AdmitPhase;
+  fetchInputsPage: (cursor: string | null) => Promise<string>;
+  notify: (message: string) => Promise<boolean>;
+  scoringFile: () => Promise<string>;
+};
+
+function inputsPageFetch(fetchInputsPage: SweepIo["fetchInputsPage"]): PageFetch {
+  return async (cursor) => {
+    const body = await fetchInputsPage(cursor);
+
+    return { bytes: body.length, page: parseInputsPage(JSON.parse(body)) };
+  };
+}
+
+export function sweepDeps(io: SweepIo): SweepDeps {
+  return {
+    acknowledge: (units) => admittedPut<AcknowledgeResponse>(io.admit, "acknowledge", { units }),
+    notify: io.notify,
+    record: (payload) => admittedPut<RecordResponse>(io.admit, "record", payload),
+    score: async () => scoreFromPages(await io.scoringFile(), inputsPageFetch(io.fetchInputsPage)),
+  };
+}
+
 async function scoringFilePath(): Promise<string> {
   const home = process.env.HOME ?? "/opt/data/home";
   const stateDirectory = process.env.LABEL_OUTLIERS_STATE_DIR ?? join(home, "label-outliers");
@@ -482,29 +485,6 @@ async function getInputsPage(cursor: string | null): Promise<string> {
   return body;
 }
 
-async function admittedInputsPage(cursor: string | null): Promise<Admitted<FetchedPage>> {
-  const result = await runDatabaseAdmissionPhaseAsync({
-    command: [
-      process.execPath,
-      import.meta.filename,
-      "--admission-phase",
-      "inputs",
-      ...(cursor === null ? [] : ["--cursor", cursor]),
-    ],
-    owner: ADMISSION_OWNER,
-    yieldRetries: 1,
-  });
-
-  if (result.kind === "yielded") {
-    return { kind: "yielded", reason: result.yieldReason };
-  }
-
-  return {
-    kind: "completed",
-    response: { bytes: result.stdout.length, page: parseInputsPage(JSON.parse(result.stdout)) },
-  };
-}
-
 async function putJson<T>(path: string, body: unknown, what: string): Promise<T> {
   const response = await fetch(`${API_BASE_URL}${path}`, {
     body: JSON.stringify(body),
@@ -529,13 +509,17 @@ const PHASES: Record<PhaseName, { path: string; what: string }> = {
   record: { path: RECORD_PATH, what: "record_label_outliers" },
 };
 
-async function admittedPut<T>(phase: PhaseName, body: unknown): Promise<Admitted<T>> {
+async function admittedPut<T>(
+  admit: AdmitPhase,
+  phase: PhaseName,
+  body: unknown,
+): Promise<Admitted<T>> {
   const directory = await mkdtemp(join(tmpdir(), "label-outliers-"));
   const file = join(directory, "payload.json");
 
   try {
     await writeFile(file, JSON.stringify(body));
-    const result = await runDatabaseAdmissionPhaseAsync({
+    const result = await admit({
       command: [
         process.execPath,
         import.meta.filename,
@@ -591,25 +575,19 @@ async function main(): Promise<LabelOutliersSummary> {
     return { ...emptySummary(), errors: 1, ok: false, reason: "missing_api_token" };
   }
 
-  const summary = await runLabelOutliersSweep({
-    acknowledge: (units) => admittedPut<AcknowledgeResponse>("acknowledge", { units }),
-    notify: notifyDiscord,
-    record: (payload) => admittedPut<RecordResponse>("record", payload),
-    score: async () => scoreFromPages(await scoringFilePath(), admittedInputsPage),
-  });
+  const summary = await runLabelOutliersSweep(
+    sweepDeps({
+      admit: runDatabaseAdmissionPhaseAsync,
+      fetchInputsPage: getInputsPage,
+      notify: notifyDiscord,
+      scoringFile: scoringFilePath,
+    }),
+  );
 
   return { ...summary, elapsedMs: Date.now() - started };
 }
 
 async function runPhase(args: string[]): Promise<void> {
-  if (args[1] === "inputs") {
-    const cursorIndex = args.indexOf("--cursor");
-    process.stdout.write(
-      await getInputsPage(cursorIndex >= 0 ? (args[cursorIndex + 1] ?? null) : null),
-    );
-    return;
-  }
-
   const phase = args[1] === "acknowledge" || args[1] === "record" ? args[1] : undefined;
   const payloadIndex = args.indexOf("--payload");
   const payloadFile = payloadIndex >= 0 ? args[payloadIndex + 1] : undefined;

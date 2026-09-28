@@ -18,7 +18,7 @@ import { createFileRoute, redirect } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { type FormEvent, type ReactNode, useId, useMemo, useState } from "react";
 import { toast } from "sonner";
-import { type SubscriptionDTO } from "@fluncle/contracts";
+import { type SubscriptionDTO, type TursoUsageBoard } from "@fluncle/contracts";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -52,11 +52,14 @@ import { Textarea } from "@fluncle/ui/components/textarea";
 import { ensureAdmin } from "@/lib/admin-guard";
 import { AdminShell } from "@/components/admin/admin-shell";
 import { StatTile } from "@/components/admin/stat-tile";
+import { TursoUsagePanel } from "@/components/admin/turso-usage-panel";
 import { formatDate } from "@/lib/format";
 import { convertToEurCents, type CurrencyTotals } from "@/lib/fx-convert";
 import { isAdminRequest } from "@/lib/server/admin-auth";
 import { getEurRates, type FxRatesDTO } from "@/lib/server/fx";
 import { listSubscriptions } from "@/lib/server/subscriptions";
+import { logEvent } from "@/lib/server/log";
+import { getTursoUsageBoard, TURSO_USAGE_THRESHOLD_DEFAULT_USD } from "@/lib/server/turso-usage";
 
 const OXANIUM_STACK = '"Oxanium", ui-sans-serif, system-ui, sans-serif';
 
@@ -107,6 +110,8 @@ const CADENCE_SUFFIX: Record<Cadence, string> = {
 
 const SUBSCRIPTIONS_KEY = ["admin", "subscriptions"] as const;
 
+const TURSO_USAGE_KEY = ["admin", "turso-usage"] as const;
+
 const fetchSubscriptions = createServerFn({ method: "GET" }).handler(
   async (): Promise<SubscriptionDTO[]> => {
     if (!(await isAdminRequest())) {
@@ -114,6 +119,28 @@ const fetchSubscriptions = createServerFn({ method: "GET" }).handler(
     }
 
     return listSubscriptions();
+  },
+);
+
+const fetchTursoUsage = createServerFn({ method: "GET" }).handler(
+  async (): Promise<TursoUsageBoard> => {
+    if (!(await isAdminRequest())) {
+      throw redirect({ to: "/admin/login" });
+    }
+
+    try {
+      return await getTursoUsageBoard();
+    } catch (error) {
+      logEvent("error", "admin.turso-usage-board-failed", { error });
+
+      return {
+        alerts: [],
+        available: false,
+        history: [],
+        latest: null,
+        thresholdUsd: TURSO_USAGE_THRESHOLD_DEFAULT_USD,
+      };
+    }
   },
 );
 
@@ -131,9 +158,13 @@ export const Route = createFileRoute("/admin/costs")({
   beforeLoad: () => ensureAdmin(),
   component: CostsPage,
   loader: async () => {
-    const [subscriptions, fx] = await Promise.all([fetchSubscriptions(), fetchFxRates()]);
+    const [subscriptions, fx, tursoUsage] = await Promise.all([
+      fetchSubscriptions(),
+      fetchFxRates(),
+      fetchTursoUsage(),
+    ]);
 
-    return { fx, subscriptions };
+    return { fx, subscriptions, tursoUsage };
   },
 });
 
@@ -273,6 +304,31 @@ function CostsPage() {
     refetchOnWindowFocus: true,
   });
 
+  const { data: tursoUsage } = useQuery<TursoUsageBoard>({
+    initialData: initial.tursoUsage,
+    queryFn: () => fetchTursoUsage(),
+    queryKey: TURSO_USAGE_KEY,
+    refetchOnWindowFocus: true,
+  });
+
+  const thresholdMutation = useMutation({
+    mutationFn: async (thresholdUsd: number) => {
+      const response = await fetch("/api/v1/admin/costs/turso-usage/threshold", {
+        body: JSON.stringify({ thresholdUsd }),
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        method: "PUT",
+      });
+      const result = (await response.json()) as { message?: string; ok?: boolean };
+
+      if (!response.ok || !result.ok) {
+        throw new Error(result.message ?? `Save failed (${response.status})`);
+      }
+    },
+    onError: (error) => toast.error(error instanceof Error ? error.message : String(error)),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: TURSO_USAGE_KEY }),
+  });
+
   const fx = initial.fx;
 
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -328,6 +384,19 @@ function CostsPage() {
       subtitle={subtitle}
       title="Costs"
     >
+      <div className="p-4 pb-0 sm:p-5 sm:pb-0">
+        <TursoUsagePanel
+          board={tursoUsage}
+          onSetThreshold={(value) =>
+            thresholdMutation.mutateAsync(value).then(
+              () => true,
+              () => false,
+            )
+          }
+          settingThreshold={thresholdMutation.isPending}
+        />
+      </div>
+
       {subscriptions.length === 0 ? (
         <div className="p-4 sm:p-5">
           <EmptyLedger onAdd={openNew} />

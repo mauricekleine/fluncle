@@ -70,6 +70,7 @@ const SETTINGS_INVENTORY = {
     "spotify_label_releases_daily_budget",
   ],
   "telescope-playlist.ts": ["telescope.last_mirror", "telescope.spotify_playlist_id"],
+  "turso-usage.ts": ["turso_usage_alert_threshold_usd"],
 } as const satisfies Record<string, readonly string[]>;
 
 type SettingUsage = {
@@ -172,7 +173,7 @@ describe("settings inventory drift", () => {
     expect(orphaned, "Registered settings keys with no reader and no writer").toEqual([]);
     expect(unregistered, "Settings keys used by code but missing from the inventory").toEqual([]);
     expect(wrongOwner, "Settings keys used outside their registered owner module").toEqual([]);
-    expect(registered.size).toBe(51);
-    expect(Object.keys(SETTINGS_INVENTORY)).toHaveLength(24);
+    expect(registered.size).toBe(52);
+    expect(Object.keys(SETTINGS_INVENTORY)).toHaveLength(25);
   });
 });

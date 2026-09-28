@@ -1,4 +1,4 @@
-import { index, integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import { index, integer, primaryKey, real, sqliteTable, text } from "drizzle-orm/sqlite-core";
 
 export const runEvents = sqliteTable(
   "run_events",
@@ -63,4 +63,55 @@ export const runEvents = sqliteTable(
     index("run_events_unit_occurred_at_idx").on(table.unit, table.occurredAt),
     index("run_events_occurred_at_idx").on(table.occurredAt),
   ],
+);
+
+export const tursoUsageSnapshots = sqliteTable(
+  "turso_usage_snapshots",
+  {
+    bytesSynced: integer("bytes_synced").notNull(),
+
+    createdAt: text("created_at").notNull(),
+
+    cycle: text("cycle").notNull(),
+
+    detailJson: text("detail_json").notNull(),
+
+    id: text("id").primaryKey(),
+
+    observedAt: text("observed_at").notNull(),
+
+    overageUsd: real("overage_usd").notNull(),
+
+    plan: text("plan").notNull(),
+
+    priceTableVersion: text("price_table_version").notNull(),
+
+    projectedOverageUsd: real("projected_overage_usd").notNull(),
+
+    rowsRead: integer("rows_read").notNull(),
+
+    rowsWritten: integer("rows_written").notNull(),
+
+    storageBytes: integer("storage_bytes").notNull(),
+  },
+  (table) => [
+    index("turso_usage_snapshots_observed_at_idx").on(table.observedAt),
+    index("turso_usage_snapshots_cycle_observed_at_idx").on(table.cycle, table.observedAt),
+  ],
+);
+
+export const tursoUsageAlerts = sqliteTable(
+  "turso_usage_alerts",
+  {
+    cycle: text("cycle").notNull(),
+
+    deliveredAt: text("delivered_at"),
+
+    levelCents: integer("level_cents").notNull(),
+
+    projectedOverageUsd: real("projected_overage_usd").notNull(),
+
+    raisedAt: text("raised_at").notNull(),
+  },
+  (table) => [primaryKey({ columns: [table.cycle, table.levelCents] })],
 );

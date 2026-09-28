@@ -40,6 +40,7 @@ import { adminSubscriptionsContract } from "./admin-subscriptions";
 import { adminTokensContract } from "./admin-tokens";
 import { adminTracksContract } from "./admin-tracks";
 import { adminTelemetryContract } from "./admin-telemetry";
+import { adminTursoUsageContract } from "./admin-turso-usage";
 import { adminTwitchContract } from "./admin-twitch";
 import { adminUsersContract } from "./admin-users";
 import { devicesContract } from "./devices";
@@ -319,6 +320,25 @@ export {
   updateObservationGate,
 } from "./admin-observations";
 export { type CostEventInput, CostEventInputSchema, recordCost } from "./admin-costs";
+export {
+  acknowledgeTursoUsageAlerts,
+  adminTursoUsageContract,
+  getTursoUsage,
+  recordTursoUsage,
+  setTursoUsageThreshold,
+  TURSO_USAGE_THRESHOLD_MAX_USD,
+  TURSO_USAGE_THRESHOLD_MIN_USD,
+  TursoAttributedDatabaseSchema,
+  TursoDatabaseUsageSchema,
+  TursoUsageAlertKeySchema,
+  TursoUsageAlertSchema,
+  TursoUsageHistoryDaySchema,
+  TursoUsageRateBasisSchema,
+  TursoUsageResourceKeySchema,
+  TursoUsageResourceSchema,
+  TursoUsageSnapshotSchema,
+  TursoUsageTotalsSchema,
+} from "./admin-turso-usage";
 export {
   adminDatabaseAdmissionContract,
   coordinateDatabaseAdmission,
@@ -620,6 +640,7 @@ export const contract = {
   ...adminTokensContract,
   ...adminTracksContract,
   ...adminTelemetryContract,
+  ...adminTursoUsageContract,
   ...adminTwitchContract,
   ...adminUsersContract,
   ...devicesContract,
