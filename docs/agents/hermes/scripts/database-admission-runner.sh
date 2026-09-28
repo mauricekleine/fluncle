@@ -201,7 +201,7 @@ emit_admission_skip() {
 
 safe_admission_yield_reason() {
 	case "$1" in
-	authentication-failed | breaker-open | containment-unavailable | coordinator-unavailable | database-busy | database-health | direct-read-latency | enforcement-not-active | gateway-transport | heartbeat-deadline | invalid-grant | public-latency | queue)
+	authentication-failed | breaker-open | containment-unavailable | coordinator-unavailable | database-busy | database-health | direct-read-latency | enforcement-not-active | gateway-transport | heartbeat-deadline | invalid-grant | public-latency | queue | write-latency)
 		printf '%s' "$1"
 		;;
 	*) printf '%s' 'queue' ;;

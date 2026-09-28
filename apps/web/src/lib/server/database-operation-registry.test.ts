@@ -89,6 +89,7 @@ const EXPECTED_MUTATION_POLICY_IDS = [
   ...EXPECTED_MUTATING_OPERATION_IDS,
   "due-work.queue-maintenance",
   "health.snapshot.compatibility",
+  "health.write-probe",
 ] as const;
 const EXPECTED_DUE_WORK_QUEUE_TRIGGER_IDS = [
   "bio.album.queue",

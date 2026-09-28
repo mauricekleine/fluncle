@@ -38,6 +38,7 @@ import {
   nextServiceState,
   normalizeState,
   normalizeStrain,
+  probeDatabaseWrite,
   probeSweepStrain,
   postSnapshot,
   PROJECTION_JUDGEMENT_LOOKBACK_MARKERS,
@@ -2200,5 +2201,74 @@ describe("database admission breaker alert", () => {
     expect(readAdmissionBreaker(stateDir)).toEqual({ sinceMs: 1_000_000, untilMs: 1_090_000 });
     writeFileSync(join(stateDir, "breaker"), "not a breaker\n");
     expect(readAdmissionBreaker(stateDir)).toBeNull();
+  });
+});
+
+describe("the primary write probe the healthcheck fires once per run", () => {
+  const config = { token: "agent-token", workerUrl: "https://example.invalid" };
+
+  test("posts one bounded probe and reports the Worker's measured outcome", async () => {
+    const calls: { init: RequestInit; timeoutMs: number | undefined; url: string }[] = [];
+    const transport = async (url: string, init: RequestInit, timeoutMs?: number) => {
+      calls.push({ init, timeoutMs, url });
+      return Response.json({ latencyMs: 41, ok: true, outcome: "ok", recorded: true });
+    };
+
+    expect(await probeDatabaseWrite(transport, config)).toEqual({
+      latencyMs: 41,
+      outcome: "ok",
+      recorded: true,
+    });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.url).toBe(
+      "https://example.invalid/api/v1/admin/database-admission/write-probe",
+    );
+    expect(calls[0]?.init.method).toBe("POST");
+    expect(calls[0]?.timeoutMs).toBeGreaterThan(5_000);
+  });
+
+  test("passes a stalled write through so the coordinator can smooth it", async () => {
+    const transport = async () =>
+      Response.json({ latencyMs: null, ok: true, outcome: "stalled", recorded: true });
+
+    expect(await probeDatabaseWrite(transport, config)).toEqual({
+      latencyMs: null,
+      outcome: "stalled",
+      recorded: true,
+    });
+  });
+
+  test("never retries and reports why a probe did not land", async () => {
+    let calls = 0;
+    const failing = async () => {
+      calls += 1;
+      return new Response(null, { status: 524 });
+    };
+    expect(await probeDatabaseWrite(failing, config)).toEqual({
+      outcome: "unposted",
+      reason: "HTTP 524",
+    });
+    expect(calls).toBe(1);
+
+    const unreadable = async () => Response.json({ outcome: "fine" });
+    expect(await probeDatabaseWrite(unreadable, config)).toEqual({
+      outcome: "unposted",
+      reason: "unreadable response",
+    });
+
+    const aborted = async () => {
+      const error = new Error("aborted");
+      error.name = "AbortError";
+      throw error;
+    };
+    expect(await probeDatabaseWrite(aborted, config)).toEqual({
+      outcome: "unposted",
+      reason: "timeout",
+    });
+
+    expect(await probeDatabaseWrite(failing, { token: "", workerUrl: "" })).toEqual({
+      outcome: "unposted",
+      reason: "not configured",
+    });
   });
 });

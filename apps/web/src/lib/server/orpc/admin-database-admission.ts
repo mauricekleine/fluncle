@@ -1,18 +1,28 @@
 import { type InferContractRouterInputs } from "@orpc/contract";
 import { type contract } from "@fluncle/contracts/orpc";
 import { ORPCError } from "@orpc/server";
-import { getDb } from "../db";
-import { coordinateDatabaseAdmissionFor, isDatabaseBusy } from "../database-admission";
+import { getDb, getTelemetryDb } from "../db";
+import {
+  coordinateDatabaseAdmissionAcross,
+  type DatabaseAdmissionStores,
+  isDatabaseBusy,
+  recordDatabaseWriteProbeFor,
+} from "../database-admission";
 import { adminAuth } from "../orpc-auth";
 import { type Implementer, toFault } from "./_shared";
 
 type AdmissionInput = InferContractRouterInputs<typeof contract>["coordinate_database_admission"];
 
+async function admissionStores(): Promise<DatabaseAdmissionStores> {
+  const [primary, telemetry] = await Promise.all([getDb(), getTelemetryDb()]);
+  return telemetry === undefined ? { primary } : { primary, telemetry };
+}
+
 async function coordinateDatabaseAdmissionRequestFor(
-  client: Parameters<typeof coordinateDatabaseAdmissionFor>[0],
+  stores: DatabaseAdmissionStores,
   input: AdmissionInput,
 ) {
-  return coordinateDatabaseAdmissionFor(client, input);
+  return coordinateDatabaseAdmissionAcross(stores, input);
 }
 
 export function databaseAdmissionFault(error: unknown) {
@@ -31,11 +41,27 @@ export function adminDatabaseAdmissionHandlers(os: Implementer) {
     .use(adminAuth)
     .handler(async ({ input }) => {
       try {
-        return await coordinateDatabaseAdmissionRequestFor(await getDb(), input);
+        return await coordinateDatabaseAdmissionRequestFor(await admissionStores(), input);
       } catch (error) {
         throw databaseAdmissionFault(error);
       }
     });
 
-  return { coordinate_database_admission: coordinateHandler };
+  const recordWriteProbeHandler = os.record_database_write_probe
+    .use(adminAuth)
+    .handler(async () => {
+      try {
+        return {
+          ...(await recordDatabaseWriteProbeFor(await admissionStores())),
+          ok: true,
+        } as const;
+      } catch (error) {
+        throw databaseAdmissionFault(error);
+      }
+    });
+
+  return {
+    coordinate_database_admission: coordinateHandler,
+    record_database_write_probe: recordWriteProbeHandler,
+  };
 }
