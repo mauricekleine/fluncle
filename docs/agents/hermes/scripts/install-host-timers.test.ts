@@ -142,9 +142,29 @@ function createInstallerFixture(): InstallerFixture {
     [
       "#!/usr/bin/env bash",
       'printf \'%s\\n\' "$*" >> "$FAKE_SYSTEMCTL_LOG"',
+      'unit="${*: -1}"',
+      "parked() {",
+      '  [ "${FAKE_SYSTEMCTL_STILL_ENABLED:-0}" = "1" ] && return 1',
+      '  [ "${FAKE_SYSTEMCTL_INITIALLY_PARKED:-0}" = "1" ] && return 0',
+      '  grep -qxF "disable --now ${unit}" "$FAKE_SYSTEMCTL_LOG"',
+      "}",
       'case "${1:-}" in',
-      '  disable) [ "${FAKE_SYSTEMCTL_DISABLE_FAILS:-0}" = "1" ] && exit 1 ;;',
-      '  is-enabled | is-active) [ "${FAKE_SYSTEMCTL_STILL_ENABLED:-0}" = "1" ] && exit 0; exit 1 ;;',
+      "  show)",
+      '    if [ "${FAKE_SYSTEMCTL_NOT_FOUND:-0}" = "1" ]; then echo not-found; else echo loaded; fi',
+      "    ;;",
+      "  disable)",
+      '    [ "${FAKE_SYSTEMCTL_DISABLE_FAILS:-0}" = "1" ] && exit 1',
+      '    [ "${FAKE_SYSTEMCTL_NOT_FOUND:-0}" = "1" ] && exit 1',
+      "    ;;",
+      "  is-enabled)",
+      '    [ "${FAKE_SYSTEMCTL_PROBE_ERROR:-0}" = "1" ] && exit 1',
+      "    if parked; then echo disabled; exit 1; fi",
+      "    echo enabled",
+      "    ;;",
+      "  is-active)",
+      "    if parked; then echo inactive; exit 3; fi",
+      "    echo active",
+      "    ;;",
       "esac",
       "exit 0",
       "",
@@ -619,7 +639,7 @@ describe("a full install keeps a dormant job parked", () => {
       expect(systemctl).toContain("enable --now fluncle-alpha.timer");
       expect(systemctl).not.toContain("enable --now fluncle-beta.timer");
       expect(systemctl).toContain("disable --now fluncle-beta.timer");
-      expect(systemctl).toContain("is-enabled --quiet fluncle-beta.timer");
+      expect(systemctl).toContain("is-enabled fluncle-beta.timer");
       expect(installed.stdout).toContain(
         "dormant (installed, verified disabled): fluncle-beta.timer",
       );
@@ -673,9 +693,56 @@ describe("a full install keeps a dormant job parked", () => {
 
       expect(refreshed.status).toBe(0);
       expect(systemctl).toContain("disable --now fluncle-beta.timer");
-      expect(systemctl).toContain("is-active --quiet fluncle-beta.timer");
+      expect(systemctl).toContain("is-active fluncle-beta.timer");
       expect(systemctl.some((call) => call.startsWith("enable"))).toBe(false);
       expect(refreshed.stdout).toContain("dormant (verified disabled): fluncle-beta.timer");
+    } finally {
+      rmSync(fixture.root, { force: true, recursive: true });
+    }
+  });
+
+  test("a service-only refresh of a dormant unit whose timer was never installed succeeds", () => {
+    const fixture = dormantFixture();
+
+    try {
+      const refreshed = runFixture(fixture, ["--refresh-unit", "fluncle-beta.service"], {
+        FAKE_SYSTEMCTL_NOT_FOUND: "1",
+      });
+      const systemctl = readLog(fixture.systemctlLog);
+
+      expect(refreshed.status, refreshed.stderr).toBe(0);
+      expect(systemctl.some((call) => call.startsWith("disable"))).toBe(false);
+      expect(refreshed.stdout).toContain("dormant fluncle-beta.timer: not-installed");
+    } finally {
+      rmSync(fixture.root, { force: true, recursive: true });
+    }
+  });
+
+  test("an already-parked dormant timer is left alone", () => {
+    const fixture = dormantFixture();
+
+    try {
+      const refreshed = runFixture(fixture, ["--refresh-unit", "fluncle-beta.service"], {
+        FAKE_SYSTEMCTL_INITIALLY_PARKED: "1",
+      });
+
+      expect(refreshed.status, refreshed.stderr).toBe(0);
+      expect(readLog(fixture.systemctlLog).some((call) => call.startsWith("disable"))).toBe(false);
+    } finally {
+      rmSync(fixture.root, { force: true, recursive: true });
+    }
+  });
+
+  test("a dormant timer whose state cannot be read is never treated as parked", () => {
+    const fixture = dormantFixture();
+
+    try {
+      const refreshed = runFixture(fixture, ["--refresh-unit", "fluncle-beta.service"], {
+        FAKE_SYSTEMCTL_PROBE_ERROR: "1",
+      });
+
+      expect(refreshed.status).toBe(1);
+      expect(refreshed.stderr).toContain("could not read the state of dormant fluncle-beta.timer");
     } finally {
       rmSync(fixture.root, { force: true, recursive: true });
     }

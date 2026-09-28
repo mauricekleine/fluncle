@@ -37,6 +37,10 @@ function extractFunction(source: string, functionName: string): string {
   throw new Error(`unterminated ${functionName}`);
 }
 
+function flag(value: boolean | undefined): string {
+  return value === true ? "1" : "0";
+}
+
 type Run = {
   calls: string[];
   status: number | null;
@@ -47,7 +51,10 @@ type Run = {
 function runPinWatch(options: {
   action: "quiesce" | "restore";
   active: readonly string[];
+  disableFails?: boolean;
   disableSticks?: boolean;
+  notInstalled?: boolean;
+  probeError?: boolean;
   stopped?: readonly string[];
 }): Run {
   const root = mkdtempSync(join(tmpdir(), "fluncle-pin-watch-dormant-"));
@@ -83,24 +90,37 @@ docker() { return 0; }
 release_order() { printf '%s\\n' "\${STOPPED_TIMERS[@]}"; }
 rearm_stalled_timer() { return 1; }
 systemctl() {
+  local unit="\${*: -1}"
   printf '%s\\n' "$*" >>"${calls}"
   case "$1" in
     list-units) cat "${state}" ;;
+    show)
+      if [ "${flag(options.notInstalled)}" = "1" ]; then echo not-found; else echo loaded; fi
+      ;;
     disable)
-      if [ "${options.disableSticks === true ? "1" : "0"}" = "0" ]; then
-        grep -vxF "$3" "${state}" >"${state}.next" || true
+      [ "${flag(options.disableFails)}" = "1" ] && return 1
+      if [ "${flag(options.disableSticks)}" = "0" ]; then
+        grep -vxF "$unit" "${state}" >"${state}.next" || true
         mv "${state}.next" "${state}"
       fi
       ;;
-    is-enabled | is-active)
-      grep -qxF "$3" "${state}"
-      return
+    is-enabled)
+      [ "${flag(options.probeError)}" = "1" ] && return 1
+      if grep -qxF "$unit" "${state}"; then echo enabled; return 0; fi
+      echo disabled
+      return 1
+      ;;
+    is-active)
+      if grep -qxF "$unit" "${state}"; then echo active; return 0; fi
+      echo inactive
+      return 3
       ;;
   esac
   return 0
 }
 ${extractFunction(source, "dormant_timer_names")}
 ${extractFunction(source, "in_timer_list")}
+${extractFunction(source, "dormant_timer_state")}
 ${extractFunction(source, "park_dormant_timer")}
 ${extractFunction(source, "enforce_dormant_timers")}
 ${extractFunction(source, "restore_sweep_timers")}
@@ -177,6 +197,41 @@ describe("pin-watch keeps a dormant timer parked", () => {
     expect(run.status).toBe(1);
     expect(run.calls).toContain("start fluncle-live.timer");
     expect(run.calls).not.toContain("start fluncle-parked.timer");
+  });
+
+  test("a failed disable aborts the quiesce instead of reading as parked", () => {
+    const run = runPinWatch({
+      action: "quiesce",
+      active: ["fluncle-live.timer", "fluncle-parked.timer"],
+      disableFails: true,
+    });
+
+    expect(run.status).toBe(1);
+    expect(run.stderr).toContain("disable --now fluncle-parked.timer failed");
+    expect(run.calls.some((call) => call.startsWith("stop "))).toBe(false);
+  });
+
+  test("a probe error is never read as parked", () => {
+    const run = runPinWatch({
+      action: "quiesce",
+      active: ["fluncle-live.timer"],
+      probeError: true,
+    });
+
+    expect(run.status).toBe(1);
+    expect(run.stderr).toContain("could not read the state of dormant timer fluncle-parked.timer");
+  });
+
+  test("a dormant timer that was never installed counts as parked", () => {
+    const run = runPinWatch({
+      action: "quiesce",
+      active: ["fluncle-live.timer"],
+      notInstalled: true,
+    });
+
+    expect(run.status, run.stderr).toBe(0);
+    expect(run.calls.some((call) => call.startsWith("disable"))).toBe(false);
+    expect(run.calls).toContain("stop fluncle-live.timer");
   });
 
   test("an already-disabled dormant timer is left alone by the quiesce", () => {

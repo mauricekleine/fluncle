@@ -408,11 +408,60 @@ in_timer_list() {
 	return 1
 }
 
+dormant_timer_state() {
+	local timer="$1" load enabled active
+	load="$(systemctl show -p LoadState --value "$timer" 2>/dev/null)" || {
+		printf 'probe-error\n'
+		return 0
+	}
+	case "$load" in
+	not-found)
+		printf 'not-installed\n'
+		return 0
+		;;
+	loaded | masked) ;;
+	*)
+		printf 'probe-error\n'
+		return 0
+		;;
+	esac
+	enabled="$(systemctl is-enabled "$timer" 2>/dev/null || true)"
+	active="$(systemctl is-active "$timer" 2>/dev/null || true)"
+	case "$enabled" in
+	disabled | masked | masked-runtime) ;;
+	enabled | enabled-runtime | static | indirect | generated | transient | linked | linked-runtime | alias)
+		printf 'live\n'
+		return 0
+		;;
+	*)
+		printf 'probe-error\n'
+		return 0
+		;;
+	esac
+	case "$active" in
+	inactive | failed) printf 'parked\n' ;;
+	active | activating | deactivating | reloading) printf 'live\n' ;;
+	*) printf 'probe-error\n' ;;
+	esac
+}
+
 park_dormant_timer() {
-	local timer="$1"
-	systemctl disable --now "$timer" >/dev/null 2>&1 || true
-	if systemctl is-enabled --quiet "$timer" 2>/dev/null || systemctl is-active --quiet "$timer" 2>/dev/null; then
-		log "dormant timer ${timer} is still enabled or active after disable --now"
+	local timer="$1" state
+	state="$(dormant_timer_state "$timer")"
+	case "$state" in
+	not-installed | parked) return 0 ;;
+	probe-error)
+		log "could not read the state of dormant timer ${timer}"
+		return 1
+		;;
+	esac
+	if ! systemctl disable --now "$timer" >/dev/null 2>&1; then
+		log "systemctl disable --now ${timer} failed"
+		return 1
+	fi
+	state="$(dormant_timer_state "$timer")"
+	if [ "$state" != "parked" ]; then
+		log "dormant timer ${timer} is ${state} after disable --now"
 		return 1
 	fi
 	log "kept dormant timer ${timer} disabled"
@@ -423,9 +472,7 @@ enforce_dormant_timers() {
 	local timer
 	while IFS= read -r timer; do
 		[ -n "$timer" ] || continue
-		if systemctl is-enabled --quiet "$timer" 2>/dev/null || systemctl is-active --quiet "$timer" 2>/dev/null; then
-			park_dormant_timer "$timer" || die "could not park dormant timer ${timer}"
-		fi
+		park_dormant_timer "$timer" || die "could not park dormant timer ${timer}"
 	done < <(dormant_timer_names)
 }
 
