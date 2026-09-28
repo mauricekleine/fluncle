@@ -2,7 +2,7 @@ import { fluncleEntityId, logPageUrl, siteUrl } from "./fluncle-links";
 import { trackPageUrl } from "./track-page";
 import { formatIsoDuration } from "./format";
 import { artistTitleLine, definitionalProse, type LogProseInput } from "./log-prose";
-import { type MixtapeDTO } from "./mixtapes";
+import { type MixtapeDTO, mixtapeDisplayTitle } from "./mixtapes";
 import { deriveRemixerNames, fold } from "./server/track-match";
 
 export { logPageUrl };
@@ -269,8 +269,9 @@ export function mixtapeVideoObjectJsonLd(
     "@type": "VideoObject",
     contentUrl,
     creator: { "@id": fluncleEntityId },
-    description: mixtape.note ?? `Fluncle drum & bass mixtape: ${mixtape.title}.`,
-    name: mixtape.title,
+    description:
+      mixtape.note ?? `Fluncle drum & bass mixtape: ${mixtapeDisplayTitle(mixtape.title)}.`,
+    name: mixtapeDisplayTitle(mixtape.title),
     publisher: { "@id": fluncleEntityId },
     thumbnailUrl,
     uploadDate: uploadDateIso(uploadDate),
@@ -296,7 +297,7 @@ export function mixtapeAlbumJsonLd(mixtape: MixtapeDTO): Record<string, unknown>
       { "@type": "PropertyValue", propertyID: "fluncle-log-id", value: `fluncle://${logId}` },
     ],
     image: mixtape.coverImageUrl,
-    name: mixtape.title,
+    name: mixtapeDisplayTitle(mixtape.title),
 
     numTracks: mixtape.members.filter((member) => member.logId).length,
     publisher: { "@id": fluncleEntityId },
