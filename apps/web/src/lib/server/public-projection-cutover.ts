@@ -9,7 +9,7 @@ import {
   nearestHubPageAnchor,
   parseHubAnchorLeafMeta,
 } from "./hub-page-anchors";
-import { databaseIdentityOf } from "./database-identity";
+import { getRequestScopedValue } from "./database-request-scope";
 import { getSetting } from "./settings";
 import { upcomingAfterTodaySql } from "./release-day";
 import { publicTrackWhere } from "../../db/public-track-visibility";
@@ -285,39 +285,43 @@ export async function readProjectedAggregateBuckets(
   }
 }
 
-export const LEGACY_QUALIFIED_ARTISTS_MEMO_TTL_MS = 10 * 60 * 1000;
-
 type LegacyQualifiedArtistsMemo = {
   artistIds: readonly string[];
   key: string;
-  storedAt: number;
 };
 
-const identifiedLegacyQualifiedArtistsMemos = new Map<string, LegacyQualifiedArtistsMemo>();
+const LEGACY_QUALIFIED_ARTISTS_MEMO = Symbol("fluncle.legacy-qualified-artists-memo");
 
 const clientLegacyQualifiedArtistsMemos = new WeakMap<
   PublicProjectionReadClient,
   LegacyQualifiedArtistsMemo
 >();
 
+type RequestLegacyQualifiedArtistsMemo = { memo?: LegacyQualifiedArtistsMemo };
+
+function requestLegacyQualifiedArtistsMemo(): RequestLegacyQualifiedArtistsMemo | undefined {
+  return getRequestScopedValue<RequestLegacyQualifiedArtistsMemo>(
+    LEGACY_QUALIFIED_ARTISTS_MEMO,
+    () => ({}),
+  );
+}
+
 function readLegacyQualifiedArtistsMemo(
   client: PublicProjectionReadClient,
 ): LegacyQualifiedArtistsMemo | undefined {
-  const identity = databaseIdentityOf(client);
-  return identity === undefined
-    ? clientLegacyQualifiedArtistsMemos.get(client)
-    : identifiedLegacyQualifiedArtistsMemos.get(identity);
+  const request = requestLegacyQualifiedArtistsMemo();
+  return request === undefined ? clientLegacyQualifiedArtistsMemos.get(client) : request.memo;
 }
 
 function storeLegacyQualifiedArtistsMemo(
   client: PublicProjectionReadClient,
   memo: LegacyQualifiedArtistsMemo,
 ): void {
-  const identity = databaseIdentityOf(client);
-  if (identity === undefined) {
+  const request = requestLegacyQualifiedArtistsMemo();
+  if (request === undefined) {
     clientLegacyQualifiedArtistsMemos.set(client, memo);
   } else {
-    identifiedLegacyQualifiedArtistsMemos.set(identity, memo);
+    request.memo = memo;
   }
 }
 
@@ -338,20 +342,14 @@ async function readLegacyQualifiedArtistIds(
   client: PublicProjectionReadClient,
   legacyQualifiedArtistsSql: string,
   memoize: boolean,
-  now: () => number,
 ): Promise<string[]> {
   const sourceEpoch = memoize ? await readArtistQualificationSourceEpoch(client) : undefined;
   const key =
     sourceEpoch === undefined ? undefined : `${sourceEpoch}\u0000${legacyQualifiedArtistsSql}`;
   const memo = readLegacyQualifiedArtistsMemo(client);
-  if (
-    key !== undefined &&
-    memo?.key === key &&
-    now() - memo.storedAt < LEGACY_QUALIFIED_ARTISTS_MEMO_TTL_MS
-  ) {
+  if (key !== undefined && memo?.key === key) {
     return [...memo.artistIds];
   }
-  const startedAt = now();
   const legacy = await client.execute(
     `select artist_id from (${legacyQualifiedArtistsSql}) order by artist_id`,
   );
@@ -362,7 +360,6 @@ async function readLegacyQualifiedArtistIds(
     storeLegacyQualifiedArtistsMemo(client, {
       artistIds: [...artistIds],
       key,
-      storedAt: startedAt,
     });
   }
   return artistIds;
@@ -371,7 +368,6 @@ async function readLegacyQualifiedArtistIds(
 export async function readQualifiedArtistIds(
   client: PublicProjectionReadClient,
   legacyQualifiedArtistsSql: string,
-  options: { now?: () => number } = {},
 ): Promise<string[]> {
   const cutoverEnabled = await isPublicProjectionCutoverEnabledFor(client);
   if (cutoverEnabled) {
@@ -399,12 +395,7 @@ export async function readQualifiedArtistIds(
     } catch {}
   }
 
-  return readLegacyQualifiedArtistIds(
-    client,
-    legacyQualifiedArtistsSql,
-    cutoverEnabled,
-    options.now ?? Date.now,
-  );
+  return readLegacyQualifiedArtistIds(client, legacyQualifiedArtistsSql, cutoverEnabled);
 }
 
 export const ANCHOR_LEAF_META_VALID_SQL = `coalesce(case when json_valid(shard.fingerprint) then

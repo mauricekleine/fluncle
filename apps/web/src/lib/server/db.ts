@@ -31,7 +31,6 @@ import {
   getRequestScopedDatabaseClient,
   type DatabaseRequestOperationLease,
 } from "./database-request-scope";
-import { registerDatabaseIdentity } from "./database-identity";
 import { readEnvs, readOptionalEnv } from "./env";
 
 const DATABASE_OPERATION_METADATA = Symbol("fluncle.database-operation");
@@ -502,15 +501,12 @@ export async function getDb() {
   return getRequestScopedDatabaseClient("primary", async () => {
     const env = await readEnvs(["TURSO_DATABASE_URL", "TURSO_AUTH_TOKEN"]);
 
-    return registerDatabaseIdentity(
-      instrument(
-        createClient({
-          authToken: env.TURSO_AUTH_TOKEN,
-          concurrency: PRIMARY_DB_CONCURRENCY,
-          url: env.TURSO_DATABASE_URL,
-        }),
-      ),
-      `primary:${env.TURSO_DATABASE_URL}`,
+    return instrument(
+      createClient({
+        authToken: env.TURSO_AUTH_TOKEN,
+        concurrency: PRIMARY_DB_CONCURRENCY,
+        url: env.TURSO_DATABASE_URL,
+      }),
     );
   });
 }

@@ -3,10 +3,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { createIntegrationDb, seedCatalogueTrack, seedTrack } from "./integration-db";
 import { batchDueWorkSourceMutation } from "./due-work";
-import { registerDatabaseIdentity } from "./database-identity";
 import { markPublicProjectionSourceChangedStatements } from "./public-projection-source-maintenance";
 import {
-  LEGACY_QUALIFIED_ARTISTS_MEMO_TTL_MS,
   PUBLIC_PROJECTION_CUTOVER_ENABLED_KEY,
   readProjectedAggregateBuckets,
   readProjectedDefaultTrackTotal,
@@ -572,67 +570,6 @@ describe("public shadow projections", () => {
       "primary",
     ]);
     expect(legacyScans).toHaveLength(2);
-  });
-
-  it("shares the legacy qualified-artist memo across request clients of one database", async () => {
-    await seedProjectionWorld();
-    await rebuildAll();
-    await setCutover("true");
-    await db.execute(`update artist_qualification_state
-      set state = 'running', completed_at = null, source_digest = null, projected_digest = null
-      where scope = 'artists'`);
-    let legacyScans = 0;
-    const requestClient = (): PublicProjectionReadClient => ({
-      execute: async (statement) => {
-        const sql = typeof statement === "string" ? statement : statement.sql;
-        legacyScans += sql.includes("select artist_id from (") ? 1 : 0;
-        return db.execute(statement);
-      },
-    });
-    const identity = `primary:${crypto.randomUUID()}`;
-
-    await readQualifiedArtistIds(
-      registerDatabaseIdentity(requestClient(), identity),
-      QUALIFIED_ARTISTS_SQL,
-    );
-    await readQualifiedArtistIds(
-      registerDatabaseIdentity(requestClient(), identity),
-      QUALIFIED_ARTISTS_SQL,
-    );
-    expect(legacyScans).toBe(1);
-    await readQualifiedArtistIds(
-      registerDatabaseIdentity(requestClient(), `primary:${crypto.randomUUID()}`),
-      QUALIFIED_ARTISTS_SQL,
-    );
-    await readQualifiedArtistIds(requestClient(), QUALIFIED_ARTISTS_SQL);
-    expect(legacyScans).toBe(3);
-  });
-
-  it("rescans the legacy qualified artists once the memo ages past its bound", async () => {
-    await seedProjectionWorld();
-    await rebuildAll();
-    await setCutover("true");
-    await db.execute(`update artist_qualification_state
-      set state = 'running', completed_at = null, source_digest = null, projected_digest = null
-      where scope = 'artists'`);
-    let legacyScans = 0;
-    const traced: PublicProjectionReadClient = {
-      execute: async (statement) => {
-        const sql = typeof statement === "string" ? statement : statement.sql;
-        legacyScans += sql.includes("select artist_id from (") ? 1 : 0;
-        return db.execute(statement);
-      },
-    };
-    let clock = NOW.getTime();
-    const now = () => clock;
-
-    await readQualifiedArtistIds(traced, QUALIFIED_ARTISTS_SQL, { now });
-    clock += LEGACY_QUALIFIED_ARTISTS_MEMO_TTL_MS - 1;
-    await readQualifiedArtistIds(traced, QUALIFIED_ARTISTS_SQL, { now });
-    expect(legacyScans).toBe(1);
-    clock += 1;
-    await readQualifiedArtistIds(traced, QUALIFIED_ARTISTS_SQL, { now });
-    expect(legacyScans).toBe(2);
   });
 
   it("never memoizes a legacy scan that raced a source-epoch advance", async () => {
