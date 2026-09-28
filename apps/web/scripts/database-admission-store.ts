@@ -94,6 +94,29 @@ function count(value: unknown): number {
   return typeof value === "bigint" ? Number(value) : typeof value === "number" ? value : 0;
 }
 
+export async function compareAndSetStoreRoute(
+  primary: Pick<Client, "batch">,
+  expected: string | null,
+  value: string,
+): Promise<boolean> {
+  const [updated, inserted] = await primary.batch(
+    [
+      {
+        args: [value, DATABASE_ADMISSION_STORE_KEY, expected],
+        sql: `update settings set value = ? where key = ? and value = ?`,
+      },
+      {
+        args: [DATABASE_ADMISSION_STORE_KEY, value, expected, DATABASE_ADMISSION_STORE_KEY],
+        sql: `insert into settings (key, value)
+              select ?, ? where ? is null
+                and not exists (select 1 from settings where key = ?)`,
+      },
+    ],
+    "write",
+  );
+  return (updated?.rowsAffected ?? 0) + (inserted?.rowsAffected ?? 0) === 1;
+}
+
 async function readSnapshot(primary: Client, telemetry: Client): Promise<StoreSnapshot> {
   const [primaryState, telemetryState] = await Promise.all([
     primary.execute({
@@ -162,11 +185,13 @@ async function main(): Promise<void> {
     process.exitCode = 1;
     return;
   }
-  await primary.execute({
-    args: [DATABASE_ADMISSION_STORE_KEY, plan.value],
-    sql: `insert into settings (key, value) values (?, ?)
-          on conflict(key) do update set value = excluded.value`,
-  });
+  if (!(await compareAndSetStoreRoute(primary, before.rawRoute, plan.value))) {
+    console.error(
+      `database-admission-store ${command}: the route changed since it was read; re-run status and decide again`,
+    );
+    process.exitCode = 1;
+    return;
+  }
   console.log(
     JSON.stringify(
       { after: await readSnapshot(primary, telemetry), before, set: plan.value },

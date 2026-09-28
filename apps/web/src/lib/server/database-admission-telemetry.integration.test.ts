@@ -377,6 +377,61 @@ describe("the primary to telemetry cutover and its rollback", () => {
     expect(await liveLeases(telemetry, "write")).toBe(1);
   });
 
+  it("never grants on a plain primary route while telemetry is open or holds a live lease", async () => {
+    await setSetting(DATABASE_ADMISSION_STORE_KEY, "telemetry:1");
+    const held = await coordinate("fluncle-enrich", "telemetry-held");
+    expect(held.outcome).toBe("acquired");
+
+    await setSetting(DATABASE_ADMISSION_STORE_KEY, "primary");
+    expect(await coordinate("fluncle-note", "plain-primary")).toMatchObject({
+      outcome: "queued",
+      yieldReason: "queue",
+    });
+    expect(await liveLeases(primary, "write")).toBe(0);
+
+    await coordinate("fluncle-enrich", "telemetry-held", "release", held.fencingToken ?? undefined);
+    await telemetry.execute(`update database_admission_control set store_open = 0`);
+    expect((await coordinate("fluncle-note", "plain-primary")).outcome).toBe("acquired");
+  });
+
+  it("never renews a telemetry lease that expired while its heartbeat awaited a guardrail", async () => {
+    await setSetting(DATABASE_ADMISSION_STORE_KEY, "telemetry:1");
+    const held = await coordinate("fluncle-enrich", "slow-heartbeat");
+    expect(held.outcome).toBe("acquired");
+    const expiresAt = held.leaseExpiresAtMs ?? 0;
+    nowMs = expiresAt - 1;
+
+    let rolledBack: Awaited<ReturnType<typeof coordinate>> | undefined;
+    const racingPrimary: AdmissionClient = {
+      batch: primary.batch.bind(primary),
+      execute: (async (statement: InStatement) => {
+        if (rolledBack === undefined && statementSql(statement).includes("service_check_samples")) {
+          nowMs = expiresAt + 1;
+          await setSetting(DATABASE_ADMISSION_STORE_KEY, "primary:2");
+          rolledBack = await coordinate("fluncle-note", "primary-winner");
+        }
+        return primary.execute(statement);
+      }) as Client["execute"],
+    };
+
+    const heartbeat = await coordinateDatabaseAdmissionAcross(
+      stores({ primary: racingPrimary }),
+      {
+        action: "heartbeat",
+        fencingToken: held.fencingToken ?? undefined,
+        owner: "fluncle-enrich",
+        protocolVersion: 2,
+        runId: "slow-heartbeat",
+      },
+      { databaseNowMs: () => nowMs, monotonicNow: () => 0, primaryReadTimeoutMs: 50 },
+    );
+
+    expect(rolledBack?.outcome).toBe("acquired");
+    expect(heartbeat.outcome).toBe("lost");
+    expect(await liveLeases(primary, "write")).toBe(1);
+    expect(await liveLeases(telemetry, "write")).toBe(0);
+  });
+
   it("rolls back to the primary only after telemetry is closed and drained", async () => {
     await setSetting(DATABASE_ADMISSION_STORE_KEY, "telemetry:1");
     const held = await coordinate("fluncle-enrich", "telemetry-held");

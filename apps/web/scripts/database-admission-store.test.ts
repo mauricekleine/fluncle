@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { parseStoreCommand, planStoreChange, type StoreSnapshot } from "./database-admission-store";
+import { DATABASE_ADMISSION_STORE_KEY } from "../src/lib/server/database-admission";
+import { createIntegrationDb } from "../src/lib/server/integration-db";
+import {
+  compareAndSetStoreRoute,
+  parseStoreCommand,
+  planStoreChange,
+  type StoreSnapshot,
+} from "./database-admission-store";
 
 function snapshot(overrides: Partial<StoreSnapshot> = {}): StoreSnapshot {
   return {
@@ -64,5 +71,39 @@ describe("the admission store switch", () => {
       planStoreChange("finalize", snapshot({ ...rolledBack, control: { epoch: 6, open: false } })),
     ).toEqual({ kind: "set", value: "primary" });
     expect(planStoreChange("finalize", snapshot()).kind).toBe("refuse");
+  });
+});
+
+describe("the admission store route write", () => {
+  async function route(db: Awaited<ReturnType<typeof createIntegrationDb>>) {
+    const result = await db.execute({
+      args: [DATABASE_ADMISSION_STORE_KEY],
+      sql: `select value from settings where key = ?`,
+    });
+    return result.rows[0]?.value ?? null;
+  }
+
+  it("refuses a delayed finalize after a concurrent cutover changed the route", async () => {
+    const db = await createIntegrationDb();
+    await db.execute({
+      args: [DATABASE_ADMISSION_STORE_KEY, "primary:2"],
+      sql: `insert into settings (key, value) values (?, ?)`,
+    });
+    await db.execute({
+      args: ["telemetry:3", DATABASE_ADMISSION_STORE_KEY],
+      sql: `update settings set value = ? where key = ?`,
+    });
+
+    expect(await compareAndSetStoreRoute(db, "primary:2", "primary")).toBe(false);
+    expect(await route(db)).toBe("telemetry:3");
+  });
+
+  it("writes only over the exact prior route, including an absent one", async () => {
+    const db = await createIntegrationDb();
+    expect(await compareAndSetStoreRoute(db, null, "telemetry:1")).toBe(true);
+    expect(await route(db)).toBe("telemetry:1");
+    expect(await compareAndSetStoreRoute(db, null, "telemetry:2")).toBe(false);
+    expect(await compareAndSetStoreRoute(db, "telemetry:1", "primary:2")).toBe(true);
+    expect(await route(db)).toBe("primary:2");
   });
 });
