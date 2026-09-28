@@ -297,6 +297,7 @@ export function adminCatalogueHandlers(os: Implementer) {
             limit: phase.limit,
             maxHop: phase.maxHop,
             sampleStorableRepair: phase.sampleStorableRepair,
+            skipFrontierPendingCount: phase.skipFrontierPendingCount,
           })),
           ok: true as const,
           phase: phase.phase,

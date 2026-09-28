@@ -305,6 +305,8 @@ Two companion counts size that bottleneck instead of only naming it. **`unstorab
 
 Per-node attribution — which undecided label is holding which blocked node — is deliberately NOT reported. `label_slug` is not in `crawl_due_work_release_ready_idx`, so attributing the blocked lane node by node costs a table row for every one of them, which is a growing-table read on a status command. The pair above answers the same operator question (how big is the held lane, and how many rulings open it) while staying index-only; `/admin/labels` is where a specific label's own queue is worked.
 
+**The pending count is taken once per tick.** `count(*) where state = 'pending'` reads one index entry per pending node (about 209,000 on 2026-09-28), and at up to ten prepares per tick it had become the single largest read on the primary (roughly 254 million rows a day across 131 ticks). The sweep now asks for it only on the tick's first prepare; every later prepare sends `skipFrontierPendingCount: true` and gets no `frontierPending` back, which cuts the count to one per tick (about 27 million rows a day). The ledger's `queueDepth` is therefore the frontier depth when the tick began, never a figure from mid-tick. The flag is opt-in so both rollout orders work: an older baked sweep never sends it and still gets a count on every prepare, and an older Worker drops the unknown field and counts anyway, while the sweep keeps its latest value.
+
 In production it runs unattended as the on-box `fluncle-crawl` sweep — a `--no-agent` deterministic poller behind the server boundary, one bounded pass every 10 minutes. See [agents/hermes/crawl-timer/README.md](./agents/hermes/crawl-timer/README.md) (box activation is operator-gated).
 
 ## The shape of the frontier

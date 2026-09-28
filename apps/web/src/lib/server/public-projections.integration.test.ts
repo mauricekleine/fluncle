@@ -33,7 +33,7 @@ import {
   TRACKS_HUB_ANCHOR_ADDRESS,
   TRACKS_HUB_PAGE_SIZE,
 } from "./tracks-hub";
-import { QUALIFIED_ARTISTS_SQL } from "./catalogue";
+import { QUALIFIED_ARTISTS_SQL, qualifiedArtistsDigest } from "./catalogue";
 import { LONG_FORM_MS } from "../catalogue-eligibility";
 import { PUBLIC_AGGREGATE_DURATION_GENERATION_KEY } from "./public-projection-cutover";
 
@@ -516,6 +516,103 @@ describe("public shadow projections", () => {
       "certified",
       "primary",
     ]);
+  });
+
+  it("serves one legacy qualified-artist scan per source epoch while the projection is not ready", async () => {
+    await seedProjectionWorld();
+    await rebuildAll();
+    await setCutover("true");
+    await db.execute(`insert into projection_repairs
+      (projection, subject_type, subject_id, source_epoch, source_version, created_at, updated_at)
+      values ('artist_qualification', 'artist', 'primary', 1, 'repair', '${OLD}', '${OLD}')`);
+    const legacyScans: string[] = [];
+    const traced: PublicProjectionReadClient = {
+      execute: async (statement) => {
+        const sql = typeof statement === "string" ? statement : statement.sql;
+        if (sql.includes("select artist_id from (")) {
+          legacyScans.push(sql);
+        }
+        return db.execute(statement);
+      },
+    };
+
+    const first = await readQualifiedArtistIds(traced, QUALIFIED_ARTISTS_SQL);
+    const second = await readQualifiedArtistIds(traced, QUALIFIED_ARTISTS_SQL);
+    expect(first).toEqual(["certified", "primary"]);
+    expect(second).toEqual(first);
+    expect(legacyScans).toHaveLength(1);
+    expect(qualifiedArtistsDigest(second)).toBe(
+      qualifiedArtistsDigest(await readQualifiedArtistIds(db, QUALIFIED_ARTISTS_SQL)),
+    );
+
+    await seedArtist("fresh");
+    await seedProjectedTrack({
+      artistIds: [{ id: "fresh" }],
+      certified: true,
+      key: null,
+      labelId: "off",
+      releaseDate: null,
+      trackId: "track-fresh",
+    });
+    await db.batch(
+      markPublicProjectionSourceChangedStatements(
+        [{ subjectId: "track-fresh", subjectType: "track" }],
+        "fresh-edge",
+        ["artist_qualification"],
+        { now: NOW },
+      ),
+      "write",
+    );
+
+    expect(await readQualifiedArtistIds(traced, QUALIFIED_ARTISTS_SQL)).toEqual([
+      "certified",
+      "fresh",
+      "primary",
+    ]);
+    expect(legacyScans).toHaveLength(2);
+  });
+
+  it("never memoizes a legacy scan that raced a source-epoch advance", async () => {
+    await seedProjectionWorld();
+    await rebuildAll();
+    await setCutover("true");
+    await db.execute(`update artist_qualification_state
+      set state = 'running', completed_at = null, source_digest = null, projected_digest = null
+      where scope = 'artists'`);
+    let legacyScans = 0;
+    const racing: PublicProjectionReadClient = {
+      execute: async (statement) => {
+        const sql = typeof statement === "string" ? statement : statement.sql;
+        if (sql.includes("select artist_id from (")) {
+          legacyScans += 1;
+          const result = await db.execute(statement);
+          await db.execute(`update artist_qualification_state
+            set source_epoch = source_epoch + 1 where scope = 'artists'`);
+          return result;
+        }
+        return db.execute(statement);
+      },
+    };
+
+    await readQualifiedArtistIds(racing, QUALIFIED_ARTISTS_SQL);
+    await readQualifiedArtistIds(racing, QUALIFIED_ARTISTS_SQL);
+    expect(legacyScans).toBe(2);
+  });
+
+  it("keeps the legacy qualified-artist scan uncached while the projection cutover is dark", async () => {
+    await seedProjectionWorld();
+    let legacyScans = 0;
+    const traced: PublicProjectionReadClient = {
+      execute: async (statement) => {
+        const sql = typeof statement === "string" ? statement : statement.sql;
+        legacyScans += sql.includes("select artist_id from (") ? 1 : 0;
+        return db.execute(statement);
+      },
+    };
+
+    await readQualifiedArtistIds(traced, QUALIFIED_ARTISTS_SQL);
+    await readQualifiedArtistIds(traced, QUALIFIED_ARTISTS_SQL);
+    expect(legacyScans).toBe(2);
   });
 
   it("falls back on running, epoch-stale, repair-marked, and malformed-anchor states", async () => {
