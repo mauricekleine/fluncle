@@ -9,6 +9,7 @@ import {
   nearestHubPageAnchor,
   parseHubAnchorLeafMeta,
 } from "./hub-page-anchors";
+import { databaseIdentityOf } from "./database-identity";
 import { getSetting } from "./settings";
 import { upcomingAfterTodaySql } from "./release-day";
 import { publicTrackWhere } from "../../db/public-track-visibility";
@@ -284,11 +285,96 @@ export async function readProjectedAggregateBuckets(
   }
 }
 
+export const LEGACY_QUALIFIED_ARTISTS_MEMO_TTL_MS = 10 * 60 * 1000;
+
+type LegacyQualifiedArtistsMemo = {
+  artistIds: readonly string[];
+  key: string;
+  storedAt: number;
+};
+
+const identifiedLegacyQualifiedArtistsMemos = new Map<string, LegacyQualifiedArtistsMemo>();
+
+const clientLegacyQualifiedArtistsMemos = new WeakMap<
+  PublicProjectionReadClient,
+  LegacyQualifiedArtistsMemo
+>();
+
+function readLegacyQualifiedArtistsMemo(
+  client: PublicProjectionReadClient,
+): LegacyQualifiedArtistsMemo | undefined {
+  const identity = databaseIdentityOf(client);
+  return identity === undefined
+    ? clientLegacyQualifiedArtistsMemos.get(client)
+    : identifiedLegacyQualifiedArtistsMemos.get(identity);
+}
+
+function storeLegacyQualifiedArtistsMemo(
+  client: PublicProjectionReadClient,
+  memo: LegacyQualifiedArtistsMemo,
+): void {
+  const identity = databaseIdentityOf(client);
+  if (identity === undefined) {
+    clientLegacyQualifiedArtistsMemos.set(client, memo);
+  } else {
+    identifiedLegacyQualifiedArtistsMemos.set(identity, memo);
+  }
+}
+
+async function readArtistQualificationSourceEpoch(
+  client: PublicProjectionReadClient,
+): Promise<string | undefined> {
+  try {
+    const result = await client.execute(`select source_epoch from artist_qualification_state
+      where scope = 'artists' limit 1`);
+    const epoch = result.rows[0]?.source_epoch;
+    return typeof epoch === "number" || typeof epoch === "bigint" ? String(epoch) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function readLegacyQualifiedArtistIds(
+  client: PublicProjectionReadClient,
+  legacyQualifiedArtistsSql: string,
+  memoize: boolean,
+  now: () => number,
+): Promise<string[]> {
+  const sourceEpoch = memoize ? await readArtistQualificationSourceEpoch(client) : undefined;
+  const key =
+    sourceEpoch === undefined ? undefined : `${sourceEpoch}\u0000${legacyQualifiedArtistsSql}`;
+  const memo = readLegacyQualifiedArtistsMemo(client);
+  if (
+    key !== undefined &&
+    memo?.key === key &&
+    now() - memo.storedAt < LEGACY_QUALIFIED_ARTISTS_MEMO_TTL_MS
+  ) {
+    return [...memo.artistIds];
+  }
+  const startedAt = now();
+  const legacy = await client.execute(
+    `select artist_id from (${legacyQualifiedArtistsSql}) order by artist_id`,
+  );
+  const artistIds = legacy.rows.flatMap((row) =>
+    typeof row.artist_id === "string" ? [row.artist_id] : [],
+  );
+  if (key !== undefined && (await readArtistQualificationSourceEpoch(client)) === sourceEpoch) {
+    storeLegacyQualifiedArtistsMemo(client, {
+      artistIds: [...artistIds],
+      key,
+      storedAt: startedAt,
+    });
+  }
+  return artistIds;
+}
+
 export async function readQualifiedArtistIds(
   client: PublicProjectionReadClient,
   legacyQualifiedArtistsSql: string,
+  options: { now?: () => number } = {},
 ): Promise<string[]> {
-  if (await isPublicProjectionCutoverEnabledFor(client)) {
+  const cutoverEnabled = await isPublicProjectionCutoverEnabledFor(client);
+  if (cutoverEnabled) {
     try {
       const result = await client.execute(`select qualification.artist_id
         from artist_qualification_state as artist_state
@@ -313,10 +399,12 @@ export async function readQualifiedArtistIds(
     } catch {}
   }
 
-  const legacy = await client.execute(
-    `select artist_id from (${legacyQualifiedArtistsSql}) order by artist_id`,
+  return readLegacyQualifiedArtistIds(
+    client,
+    legacyQualifiedArtistsSql,
+    cutoverEnabled,
+    options.now ?? Date.now,
   );
-  return legacy.rows.flatMap((row) => (typeof row.artist_id === "string" ? [row.artist_id] : []));
 }
 
 export const ANCHOR_LEAF_META_VALID_SQL = `coalesce(case when json_valid(shard.fingerprint) then
