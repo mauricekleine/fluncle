@@ -9,7 +9,8 @@ vi.mock("./db", () => ({
   typedRows: <T extends object>(rows: T[]) => rows,
 }));
 
-const { getServiceStatuses } = await import("./status");
+const { getRecentStatusEvents, getServiceCheckSamples, getServiceStatuses, getStatusCronConfig } =
+  await import("./status");
 
 function row(service: string, overrides: Partial<ServiceStatusRow> = {}): ServiceStatusRow {
   return {
@@ -74,6 +75,22 @@ describe("getServiceStatuses retired-row filter", () => {
     const services = await getServiceStatuses(NOW);
 
     expect(services.map((service) => service.service)).not.toContain("cron.device-mirror");
+  });
+
+  it("keeps an operator-only cron off every public status read, reported or not", async () => {
+    execute.mockResolvedValue({
+      rows: [row("cron.turso-usage"), row("cron.enrich")],
+    });
+
+    const reported = await getServiceStatuses(NOW);
+
+    expect(reported.map((service) => service.service)).not.toContain("cron.turso-usage");
+
+    execute.mockResolvedValue({ rows: [row("cron.enrich")] });
+
+    const unreported = await getServiceStatuses(NOW);
+
+    expect(unreported.map((service) => service.service)).not.toContain("cron.turso-usage");
   });
 
   it("leaves every reported row unchanged when no retired id is present", async () => {
@@ -213,5 +230,48 @@ describe("getServiceStatuses — a cron stuck on 'no runs yet' stops being green
 
     expect(service?.status).toBe("ok");
     expect(service?.message).toBe("fresh");
+  });
+});
+
+describe("operator-only crons on the public status board", () => {
+  beforeEach(() => {
+    execute.mockReset();
+  });
+
+  it("render no row, schedule, or copy on /status", () => {
+    const config = getStatusCronConfig();
+
+    expect(config.order).not.toContain("cron.turso-usage");
+    expect(config.rows["cron.turso-usage"]).toBeUndefined();
+    expect(config.order).toContain("cron.enrich");
+  });
+
+  it("never surface in the public incident feed", async () => {
+    execute.mockResolvedValue({ rows: [] });
+
+    await getRecentStatusEvents(15);
+
+    const query = execute.mock.calls[0]?.[0] as { args: unknown[]; sql: string };
+
+    expect(query.sql).toContain("where service not in (?)");
+    expect(query.args).toEqual(["cron.turso-usage", 15]);
+  });
+
+  it("never surface in the public uptime samples", async () => {
+    execute.mockResolvedValue({
+      rows: [
+        {
+          at: "2026-06-25T00:00:00.000Z",
+          latency_ms: 1,
+          service: "cron.turso-usage",
+          status: "ok",
+        },
+        { at: "2026-06-25T00:00:00.000Z", latency_ms: 1, service: "cron.enrich", status: "ok" },
+      ],
+    });
+
+    const samples = await getServiceCheckSamples();
+
+    expect(Object.keys(samples)).toEqual(["cron.enrich"]);
   });
 });
