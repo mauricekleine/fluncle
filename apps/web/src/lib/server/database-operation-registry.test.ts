@@ -1167,6 +1167,27 @@ describe("database operation registry", () => {
     expect(source).toContain('await target.batch(statements, "write")');
   });
 
+  it("admits only the label-outlier writes, never its paged input reads", () => {
+    const operation = DATABASE_OPERATION_REGISTRY.find(
+      (candidate) => candidate.operationId === "catalogue.label-outliers",
+    );
+    const source = readFileSync(join(REPO_ROOT, `${SCRIPTS}/label-outliers-sweep.ts`), "utf8");
+    const accessByTrigger = new Map(
+      operation?.triggers.map((trigger) => [trigger.operationId, trigger.accessClass]),
+    );
+
+    expect(accessByTrigger.get("catalogue.label-outliers.inputs")).toBe("read");
+    expect(accessByTrigger.get("catalogue.label-outliers.record")).toBe("write");
+    expect(accessByTrigger.get("catalogue.label-outliers.acknowledge")).toBe("write");
+    expect(resolveDatabaseOperationOwner("fluncle-label-outliers")).toMatchObject({
+      accessClass: "write",
+      heavyRead: false,
+    });
+    expect(operation?.admissionShape).toMatchObject({ shape: "phased", yieldRetries: 1 });
+    expect(source).not.toContain('"inputs",');
+    expect(source).toContain('admittedPut<RecordResponse>(io.admit, "record", payload)');
+  });
+
   it("registers the continuous Sonar replica consumer independently from freshening", () => {
     const operation = DATABASE_OPERATION_REGISTRY.find(
       (candidate) => candidate.operationId === "sonar.service",

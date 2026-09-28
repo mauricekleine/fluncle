@@ -20,13 +20,9 @@ export type InputsPage = {
   tracks: InputTrack[];
 };
 
-export type Admitted<T> =
-  | { kind: "completed"; response: T }
-  | { kind: "yielded"; reason: string | null };
-
 export type FetchedPage = { bytes: number; page: InputsPage };
 
-export type PageFetch = (cursor: string | null) => Promise<Admitted<FetchedPage>>;
+export type PageFetch = (cursor: string | null) => Promise<FetchedPage>;
 
 export type InputsRead = {
   bytes: number;
@@ -34,10 +30,6 @@ export type InputsRead = {
   pages: number;
   tracks: number;
 };
-
-export type BuildOutcome =
-  | ({ kind: "built" } & InputsRead)
-  | ({ kind: "yielded"; reason: string | null } & InputsRead);
 
 const SCORING_SCHEMA = [
   `create table tracks (track_id text primary key, label_id text, album_id text,
@@ -151,7 +143,7 @@ export async function buildScoringFile(
   database: Database,
   fetchPage: PageFetch,
   options: { maxPages?: number; now?: () => number } = {},
-): Promise<BuildOutcome> {
+): Promise<InputsRead> {
   const maxPages = options.maxPages ?? MAX_INPUT_PAGES;
   const now = options.now ?? (() => performance.now());
   const started = now();
@@ -163,15 +155,7 @@ export async function buildScoringFile(
       throw new Error(`the label-outlier inputs walk did not end within ${maxPages} pages`);
     }
 
-    const fetched = await fetchPage(cursor);
-
-    if (fetched.kind === "yielded") {
-      read.durationMs = Math.round(now() - started);
-
-      return { ...read, kind: "yielded", reason: fetched.reason };
-    }
-
-    const { bytes, page } = fetched.response;
+    const { bytes, page } = await fetchPage(cursor);
 
     if (page.nextCursor !== null && (page.nextCursor === cursor || page.tracks.length === 0)) {
       throw new Error("the label-outlier inputs cursor stopped advancing");
@@ -192,5 +176,5 @@ export async function buildScoringFile(
   finishScoringFile(database);
   read.durationMs = Math.round(now() - started);
 
-  return { ...read, kind: "built" };
+  return read;
 }
