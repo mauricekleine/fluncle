@@ -1,13 +1,6 @@
 {
   "version": 1,
   "skills": {
-    "ai-seo": {
-      "source": "coreyhaines31/marketingskills",
-      "ref": "7f4af1ea8e7809e0142c55bf19243a706f539c25",
-      "sourceType": "github",
-      "skillPath": "skills/ai-seo/SKILL.md",
-      "computedHash": "a6befed362ed7127d051db085bc8be9470abbe87f70a40ee9a05e201dd8c693f"
-    },
     "copywriting-fluncle": {
       "source": "./packages/skills/copywriting-fluncle",
       "sourceType": "local",
@@ -89,11 +82,6 @@
       "sourceType": "local",
       "computedHash": "aad347ef5655f8f84d1b767915e3c322578cdade8c16b833b7ee394e376d4447"
     },
-    "fluncle-rfc-writer": {
-      "source": "./packages/skills/fluncle-rfc-writer",
-      "sourceType": "local",
-      "computedHash": "118e8681e4ae9c46bc71ed5aec032f1010e02211a908c056f8815ab6026bdabe"
-    },
     "fluncle-smoke": {
       "source": "./packages/skills/fluncle-smoke",
       "sourceType": "local",
@@ -138,13 +126,6 @@
       "skillPath": "skills/react-doctor/SKILL.md",
       "computedHash": "99ce09a65a0c78f23bc685739e106f02edb1279699a94805368d54ea7f399d6f"
     },
-    "react-email": {
-      "source": "resend/resend-skills",
-      "ref": "288efc7103c8177c9019dea79cf0099bacabb81d",
-      "sourceType": "github",
-      "skillPath": "skills/react-email/SKILL.md",
-      "computedHash": "070a814e7ae89542250de27a0b03d8020ca1e8c57abf6304ecff527057c70256"
-    },
     "remotion-best-practices": {
       "source": "remotion-dev/skills",
       "ref": "6726bf2d4bcce0359806749b3656b0c886d74aaa",
@@ -159,13 +140,6 @@
       "skillPath": "skills/resend/SKILL.md",
       "computedHash": "9de632cf0e2a3f68b458f66ce95bb26999122277d126d53e7eafa6f0cdd0f013"
     },
-    "resend-cli": {
-      "source": "resend/resend-skills",
-      "ref": "288efc7103c8177c9019dea79cf0099bacabb81d",
-      "sourceType": "github",
-      "skillPath": "skills/resend-cli/SKILL.md",
-      "computedHash": "d3514da9f8e21c77697afcf4a499150e327d0277fb8c7b25b74340f98a4118a9"
-    },
     "seo-audit": {
       "source": "coreyhaines31/marketingskills",
       "ref": "7f4af1ea8e7809e0142c55bf19243a706f539c25",
@@ -178,36 +152,11 @@
       "sourceType": "local",
       "computedHash": "0c038934d3c864193a8484c4cbddee2a58adc206d9b3c3d9d328b84c7e81c882"
     },
-    "shadcn": {
-      "source": "shadcn/ui",
-      "ref": "d84c4a8ca5aeac51a6311023bef36e5b04a3de50",
-      "sourceType": "github",
-      "skillPath": "skills/shadcn/SKILL.md",
-      "computedHash": "8f8bcc9024aa068245fac646d654a18c80280e4b06112ccd3e691a8c96cd66bd"
-    },
-    "taste": {
-      "source": "mauricekleine/nucleus",
-      "sourceType": "github",
-      "skillPath": "skills/taste/SKILL.md",
-      "computedHash": "3b05435693bc5d40c40e00ba837a1dba874c2103da3305f9bad25f4e8a705515"
-    },
     "turso-cloud": {
       "source": "tursodatabase/agent-skills",
       "sourceType": "github",
       "skillPath": "skills/turso-cloud/SKILL.md",
       "computedHash": "6bdc1ca45154caeb33e42ad232f760db7f5483f2a29f41339cbb3e998b519d5b"
-    },
-    "turso-db": {
-      "source": "tursodatabase/agent-skills",
-      "sourceType": "github",
-      "skillPath": "skills/turso-db/SKILL.md",
-      "computedHash": "d1aa5693c437b9bb848642fe04d613097fe54200c8190f09e7351f7d473c6b83"
-    },
-    "vercel-composition-patterns": {
-      "source": "vercel-labs/agent-skills",
-      "sourceType": "github",
-      "skillPath": "skills/composition-patterns/SKILL.md",
-      "computedHash": "575757e3e25761c8c562d6e395d29f0b76c98b1273c0bd72d88e6ab1bc9c7d42"
     },
     "vercel-react-best-practices": {
       "source": "vercel-labs/agent-skills",
