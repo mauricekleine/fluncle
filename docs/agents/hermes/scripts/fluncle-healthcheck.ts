@@ -2233,15 +2233,74 @@ export async function postSnapshot(
   return false;
 }
 
+export const WRITE_PROBE_TIMEOUT_MS =
+  Number.parseInt(process.env.HEALTHCHECK_WRITE_PROBE_TIMEOUT_MS ?? "", 10) || 15_000;
+
+export type WriteProbeReport =
+  | { latencyMs: number | null; outcome: "failed" | "ok" | "slow" | "stalled"; recorded: boolean }
+  | { outcome: "unposted"; reason: string };
+
+const WRITE_PROBE_OUTCOMES = new Set(["failed", "ok", "slow", "stalled"]);
+
+export async function probeDatabaseWrite(
+  transport: SnapshotFetch = fetchWithTimeout,
+  config: { token?: string; workerUrl?: string } = {},
+): Promise<WriteProbeReport> {
+  const workerUrl = config.workerUrl ?? WORKER_URL;
+  const token = config.token ?? FLUNCLE_API_TOKEN;
+
+  if (!workerUrl || !token) {
+    return { outcome: "unposted", reason: "not configured" };
+  }
+
+  try {
+    const response = await transport(
+      `${workerUrl}/api/v1/admin/database-admission/write-probe`,
+      {
+        body: "{}",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        method: "POST",
+      },
+      WRITE_PROBE_TIMEOUT_MS,
+    );
+
+    if (!response.ok) {
+      return { outcome: "unposted", reason: `HTTP ${response.status}` };
+    }
+
+    const body = (await response.json()) as {
+      latencyMs?: unknown;
+      outcome?: unknown;
+      recorded?: unknown;
+    };
+
+    if (typeof body.outcome !== "string" || !WRITE_PROBE_OUTCOMES.has(body.outcome)) {
+      return { outcome: "unposted", reason: "unreadable response" };
+    }
+
+    return {
+      latencyMs: typeof body.latencyMs === "number" ? body.latencyMs : null,
+      outcome: body.outcome as "failed" | "ok" | "slow" | "stalled",
+      recorded: body.recorded === true,
+    };
+  } catch (error) {
+    return {
+      outcome: "unposted",
+      reason: error instanceof Error && error.name === "AbortError" ? "timeout" : "unreachable",
+    };
+  }
+}
+
 async function main(): Promise<void> {
   const at = new Date().toISOString();
 
-  const [web, db, r2, sonar, ssh] = await Promise.all([
+  const [web, db, r2, sonar, ssh, dbWrite] = await Promise.all([
     probeWeb(),
     probeDb(),
     probeR2(),
     probeSonar(),
     probeSsh(),
+    probeDatabaseWrite(),
   ]);
   const dns = probeDns();
   const disk = probeDisk();
@@ -2333,6 +2392,7 @@ async function main(): Promise<void> {
     at,
 
     backpressured: sweepStrain.backpressured,
+    dbWrite,
     down: withTransition.filter((c) => c.status === "down").map((c) => c.service),
 
     escalated: escalations,

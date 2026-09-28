@@ -205,6 +205,41 @@ describe("crawl admission phases", () => {
     expect(delivered.body).toMatchObject({ phase: "prepare", sampleStorableRepair: true });
   });
 
+  it("preserves the skip-pending-count flag through the oRPC input contract", () => {
+    const delivered = crawlInputSchema.parse({
+      body: { limit: 1, maxHop: 2, phase: "prepare", skipFrontierPendingCount: true },
+      query: {},
+    });
+    expect(delivered.body).toMatchObject({ phase: "prepare", skipFrontierPendingCount: true });
+  });
+
+  it("counts the pending frontier on a prepare that does not opt out", async () => {
+    const execute = vi.spyOn(db, "execute");
+    const prepared = await prepareCrawlPhase({ limit: 1, maxHop: 2 });
+    const counted = execute.mock.calls.filter(([statement]) =>
+      executedSql(statement).includes("from crawl_frontier where state = 'pending'"),
+    );
+    expect(counted).toHaveLength(1);
+    expect(typeof prepared.frontierPending).toBe("number");
+  });
+
+  it("skips the full pending-frontier count when the prepare opts out", async () => {
+    const execute = vi.spyOn(db, "execute");
+    const prepared = await prepareCrawlPhase({
+      limit: 1,
+      maxHop: 2,
+      skipFrontierPendingCount: true,
+    });
+    const counted = execute.mock.calls.some(([statement]) =>
+      executedSql(statement).includes("from crawl_frontier where state = 'pending'"),
+    );
+    expect(counted).toBe(false);
+    expect(prepared.kind).toBe("prepared");
+    expect(prepared).not.toHaveProperty("frontierPending");
+    const delivered = crawlOutputSchema.parse({ ...prepared, ok: true, phase: "prepare" });
+    expect(delivered).not.toHaveProperty("frontierPending");
+  });
+
   it("preserves prepare telemetry through the oRPC output contract", async () => {
     const prepared = await prepareCrawlPhase({ limit: 1, maxHop: 2 });
     const delivered = crawlOutputSchema.parse({

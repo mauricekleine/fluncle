@@ -19,6 +19,14 @@ export const DATABASE_ADMISSION_HEALTH_BAD_STREAK = 2;
 export const DATABASE_ADMISSION_DIRECT_READ_LIMIT_MS = 250;
 export const DATABASE_ADMISSION_PUBLIC_LATENCY_LIMIT_MS = 500;
 export const DATABASE_ADMISSION_ENFORCED_KEY = "database_admission_enforced";
+export const DATABASE_ADMISSION_STORE_KEY = "database_admission_store";
+export const DATABASE_ADMISSION_STORE_EPOCH_KEY = "database_admission_store_epoch";
+export const DATABASE_ADMISSION_PRIMARY_READ_TIMEOUT_MS = 2_000;
+export const DATABASE_WRITE_PROBE_KEY = "database_write_probe";
+export const DATABASE_WRITE_PROBE_TIMEOUT_MS = 5_000;
+export const DATABASE_WRITE_PROBE_SLOW_MS = 1_000;
+export const DATABASE_WRITE_PROBE_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+export const DATABASE_WRITE_PROBE_PRUNE_LIMIT = 100;
 export const DATABASE_ADMISSION_TRANSACTION_RETRIES = 12;
 export const DATABASE_ADMISSION_RECOVERY_LIMIT = 128;
 
@@ -36,7 +44,23 @@ export type DatabaseAdmissionYieldReason =
   | "database-health"
   | "direct-read-latency"
   | "public-latency"
-  | "queue";
+  | "queue"
+  | "write-latency";
+
+export type DatabaseAdmissionStoreKind = "primary" | "telemetry";
+
+export type DatabaseAdmissionStoreRoute = Readonly<{
+  epoch: number | null;
+  store: DatabaseAdmissionStoreKind;
+}>;
+
+export type DatabaseWriteProbeOutcome = "failed" | "ok" | "slow" | "stalled";
+
+export type DatabaseWriteProbeResult = Readonly<{
+  latencyMs: number | null;
+  outcome: DatabaseWriteProbeOutcome;
+  recorded: boolean;
+}>;
 
 export type DatabaseAdmissionRequest = Readonly<{
   action: DatabaseAdmissionAction;
@@ -68,8 +92,28 @@ export type DatabaseAdmissionResult = Readonly<{
 
 type AdmissionClient = Pick<Client, "batch" | "execute">;
 
+export type DatabaseAdmissionStores = Readonly<{
+  primary: AdmissionClient;
+  telemetry?: AdmissionClient;
+}>;
+
+type LeaseStore = Readonly<{
+  client: AdmissionClient;
+  gate: SqlPredicate;
+  kind: DatabaseAdmissionStoreKind;
+  tokenFloors: Readonly<Record<DatabaseAdmissionLane, number>>;
+}>;
+
+type GuardrailSources = Readonly<{
+  lease: AdmissionClient;
+  primary: AdmissionClient;
+  probes?: AdmissionClient;
+}>;
+
 type AdmissionDependencies = Readonly<{
+  databaseNowMs?: () => number;
   monotonicNow?: () => number;
+  primaryReadTimeoutMs?: number;
   serverNowMs?: number;
   wait?: (delayMs: number) => Promise<void>;
 }>;
@@ -267,6 +311,45 @@ export function storedHealthReasonFromSamples(
   return null;
 }
 
+type Deadline<T> = Readonly<{ settled: true; value: T }> | Readonly<{ settled: false }>;
+
+function withinDeadline<T>(work: Promise<T>, timeoutMs: number): Promise<Deadline<T>> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => resolve({ settled: false }), timeoutMs);
+    work.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve({ settled: true, value });
+      },
+      (error: unknown) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
+
+function injectedNowMs(dependencies: AdmissionDependencies): number | null {
+  return dependencies.databaseNowMs?.() ?? dependencies.serverNowMs ?? null;
+}
+
+function primaryReadTimeoutMs(dependencies: AdmissionDependencies): number {
+  return dependencies.primaryReadTimeoutMs ?? DATABASE_ADMISSION_PRIMARY_READ_TIMEOUT_MS;
+}
+
+function isBadWriteProbe(outcome: unknown): boolean {
+  return outcome !== "ok";
+}
+
+export function writeProbeReasonFromSamples(
+  newestFirstFreshOutcomes: readonly string[],
+): DatabaseAdmissionYieldReason | null {
+  const newest = newestFirstFreshOutcomes.slice(0, DATABASE_ADMISSION_HEALTH_BAD_STREAK);
+  return newest.length === DATABASE_ADMISSION_HEALTH_BAD_STREAK && newest.every(isBadWriteProbe)
+    ? "write-latency"
+    : null;
+}
+
 async function readStoredHealthReason(
   client: AdmissionClient,
   nowMs: number,
@@ -302,18 +385,93 @@ async function readStoredHealthReason(
   return storedHealthReasonFromSamples(samples);
 }
 
-async function observeClock(
+async function readWriteProbeReason(
+  client: AdmissionClient,
+  nowMs: number,
+): Promise<DatabaseAdmissionYieldReason | null> {
+  const result = await client.execute({
+    args: [nowMs - DATABASE_ADMISSION_HEALTH_STALE_MS, DATABASE_ADMISSION_HEALTH_BAD_STREAK],
+    sql: `select outcome from database_write_probes
+          where observed_at_ms >= ?
+          order by observed_at_ms desc, id desc limit ?`,
+  });
+  return writeProbeReasonFromSamples(
+    result.rows.flatMap((row) => (typeof row.outcome === "string" ? [row.outcome] : [])),
+  );
+}
+
+async function observeStoredGuardrails(
+  sources: GuardrailSources,
+  nowMs: number,
+  dependencies: AdmissionDependencies,
+): Promise<DatabaseAdmissionYieldReason | null> {
+  const [health, write] = await Promise.all([
+    withinDeadline(
+      readStoredHealthReason(sources.primary, nowMs).catch(() => null),
+      primaryReadTimeoutMs(dependencies),
+    ),
+    sources.probes === undefined
+      ? Promise.resolve({ settled: true, value: null } as const)
+      : withinDeadline(
+          readWriteProbeReason(sources.probes, nowMs).catch(() => null),
+          primaryReadTimeoutMs(dependencies),
+        ),
+  ]);
+  return (health.settled ? health.value : null) ?? (write.settled ? write.value : null);
+}
+
+const DATABASE_CLOCK_SQL = `select cast(unixepoch('subsec') * 1000 as integer) as now_ms`;
+
+async function readStoreClock(
   client: AdmissionClient,
   dependencies: AdmissionDependencies,
-): Promise<ClockObservation> {
+): Promise<number> {
+  const injected = injectedNowMs(dependencies);
+  if (injected !== null) {
+    return injected;
+  }
+  const clock = await client.execute(DATABASE_CLOCK_SQL);
+  const nowMs = rowNumber(clock.rows[0]?.now_ms);
+  if (nowMs === null) {
+    throw new Error("database admission could not read the database clock");
+  }
+  return nowMs;
+}
+
+async function probePrimaryRead(
+  primary: AdmissionClient,
+  dependencies: AdmissionDependencies,
+): Promise<boolean> {
   const monotonicNow = dependencies.monotonicNow ?? performance.now.bind(performance);
   const startedAt = monotonicNow();
-  const clock = await client.execute(
-    `select cast(unixepoch('subsec') * 1000 as integer) as now_ms`,
+  const probe = await withinDeadline(
+    primary.execute("select 1 as ok").then(
+      () => true,
+      () => false,
+    ),
+    primaryReadTimeoutMs(dependencies),
   );
+  const latencyMs = boundedDuration(monotonicNow() - startedAt);
+  return !probe.settled || !probe.value || latencyMs > DATABASE_ADMISSION_DIRECT_READ_LIMIT_MS;
+}
+
+async function observeClock(
+  sources: GuardrailSources,
+  dependencies: AdmissionDependencies,
+): Promise<ClockObservation> {
+  if (sources.lease !== sources.primary) {
+    const [nowMs, directReadSlow] = await Promise.all([
+      readStoreClock(sources.lease, dependencies),
+      probePrimaryRead(sources.primary, dependencies),
+    ]);
+    return { directReadSlow, nowMs };
+  }
+  const monotonicNow = dependencies.monotonicNow ?? performance.now.bind(performance);
+  const startedAt = monotonicNow();
+  const clock = await sources.primary.execute(DATABASE_CLOCK_SQL);
   const directReadLatencyMs = boundedDuration(monotonicNow() - startedAt);
   const databaseNowMs = rowNumber(clock.rows[0]?.now_ms);
-  const nowMs = dependencies.serverNowMs ?? databaseNowMs;
+  const nowMs = injectedNowMs(dependencies) ?? databaseNowMs;
   if (nowMs === null) {
     throw new Error("database admission could not read the database clock");
   }
@@ -325,12 +483,12 @@ async function observeClock(
 }
 
 async function observeAcquisitionGuardrails(
-  client: AdmissionClient,
+  sources: GuardrailSources,
   profile: AdmissionResourceProfile,
   dependencies: AdmissionDependencies,
 ): Promise<AcquisitionGuardrails> {
-  const clock = await observeClock(client, dependencies);
-  const storedHealthReason = await readStoredHealthReason(client, clock.nowMs);
+  const clock = await observeClock(sources, dependencies);
+  const storedHealthReason = await observeStoredGuardrails(sources, clock.nowMs, dependencies);
   const storedHealthBlocked = storedHealthReason !== null;
   if (clock.directReadSlow) {
     return { nowMs: clock.nowMs, reason: "direct-read-latency", storedHealthBlocked };
@@ -345,6 +503,7 @@ async function observeAcquisitionGuardrails(
 function emitAdmissionTelemetry(
   request: DatabaseAdmissionRequest,
   result: DatabaseAdmissionResult,
+  store: DatabaseAdmissionStoreKind = "primary",
 ): void {
   logEvent("info", "database.admission", {
     access_class: result.lane,
@@ -358,6 +517,7 @@ function emitAdmissionTelemetry(
     queue_age_ms: result.queueAgeMs,
     recovered: result.recovered,
     run_id: request.runId,
+    store,
     wait_ms: result.waitMs,
     yield_reason: result.yieldReason,
   });
@@ -421,7 +581,11 @@ export function suggestedRetryAfterMs(
   yieldReason: DatabaseAdmissionYieldReason,
   aheadCount: number,
 ): number {
-  if (yieldReason === "database-health" || yieldReason === "public-latency") {
+  if (
+    yieldReason === "database-health" ||
+    yieldReason === "public-latency" ||
+    yieldReason === "write-latency"
+  ) {
     return DATABASE_ADMISSION_MAX_RETRY_AFTER_MS;
   }
   if (yieldReason === "direct-read-latency") {
@@ -575,11 +739,12 @@ async function abandonLateAcquisition(
 }
 
 async function acquireEnforcedDatabaseAdmissionFor(
-  client: AdmissionClient,
+  store: LeaseStore,
   request: DatabaseAdmissionRequest,
   profile: AdmissionResourceProfile,
   guardrails: AcquisitionGuardrails,
 ): Promise<DatabaseAdmissionResult> {
+  const { client } = store;
   if (request.notAfterMs !== undefined && guardrails.nowMs > request.notAfterMs) {
     return abandonLateAcquisition(client, request, profile, guardrails.nowMs);
   }
@@ -633,10 +798,13 @@ async function acquireEnforcedDatabaseAdmissionFor(
               )`,
       },
       {
-        args: [profile.lane, guardrails.nowMs],
+        args: [profile.lane, store.tokenFloors[profile.lane], guardrails.nowMs],
         sql: `insert into database_admission_lanes (lane, next_fencing_token, updated_at_ms)
-              values (?, 0, ?)
-              on conflict(lane) do nothing`,
+              values (?, ?, ?)
+              on conflict(lane) do update set
+                next_fencing_token = excluded.next_fencing_token,
+                updated_at_ms = excluded.updated_at_ms
+              where excluded.next_fencing_token > database_admission_lanes.next_fencing_token`,
       },
       {
         args: [
@@ -664,13 +832,14 @@ async function acquireEnforcedDatabaseAdmissionFor(
           guardrails.nowMs,
           profile.lane,
           mayAcquire,
+          ...store.gate.args,
           ...conflict.args,
           contenderId,
           ...queuedResource.args,
         ],
         sql: `update database_admission_lanes
               set next_fencing_token = next_fencing_token + 1, updated_at_ms = ?
-              where lane = ? and ? = 1
+              where lane = ? and ? = 1 and ${store.gate.sql}
                 and not exists (
                   select 1 from database_admission_contenders
                   where ${conflict.sql} and state = 'active'
@@ -689,6 +858,7 @@ async function acquireEnforcedDatabaseAdmissionFor(
           guardrails.nowMs,
           contenderId,
           mayAcquire,
+          ...store.gate.args,
           ...conflict.args,
           ...queuedResource.args,
         ],
@@ -696,7 +866,7 @@ async function acquireEnforcedDatabaseAdmissionFor(
               set state = 'active', acquired_at_ms = ?,
                   fencing_token = (select next_fencing_token from database_admission_lanes where lane = ?),
                   lease_expires_at_ms = ?, updated_at_ms = ?
-              where contender_id = ? and state = 'queued' and ? = 1
+              where contender_id = ? and state = 'queued' and ? = 1 and ${store.gate.sql}
                 and not exists (
                   select 1 from database_admission_contenders
                   where ${conflict.sql} and state = 'active'
@@ -727,15 +897,17 @@ async function acquireEnforcedDatabaseAdmissionFor(
 }
 
 async function renewLease(
-  client: AdmissionClient,
+  store: LeaseStore,
+  sources: GuardrailSources,
   request: DatabaseAdmissionRequest,
   profile: AdmissionResourceProfile,
   existing: ContenderRow,
   nowMs: number,
+  dependencies: AdmissionDependencies,
 ): Promise<DatabaseAdmissionResult> {
   const reason = isHealthSnapshotWriter(profile)
     ? null
-    : await readStoredHealthReason(client, nowMs);
+    : await observeStoredGuardrails(sources, nowMs, dependencies);
   if (reason !== null) {
     return enforcedResult(request, profile, {
       contender: existing,
@@ -745,31 +917,51 @@ async function renewLease(
     });
   }
 
-  const leaseExpiresAtMs = nowMs + renewedLeaseMs(request);
-  const renewed = await client.execute({
-    args: [leaseExpiresAtMs, nowMs, nowMs, existing.contender_id, request.fencingToken ?? 0, nowMs],
+  const writeNowMs = injectedNowMs(dependencies);
+  const renewed = await store.client.execute({
+    args: [
+      writeNowMs,
+      renewedLeaseMs(request),
+      writeNowMs,
+      writeNowMs,
+      existing.contender_id,
+      request.fencingToken ?? 0,
+      writeNowMs,
+    ],
     sql: `update database_admission_contenders
-          set lease_expires_at_ms = ?, queue_heartbeat_at_ms = ?, updated_at_ms = ?
+          set lease_expires_at_ms = ${CLOCK_OR_INJECTED_SQL} + ?,
+              queue_heartbeat_at_ms = ${CLOCK_OR_INJECTED_SQL},
+              updated_at_ms = ${CLOCK_OR_INJECTED_SQL}
           where contender_id = ? and fencing_token = ? and state = 'active'
-            and lease_expires_at_ms > ?`,
+            and lease_expires_at_ms > ${CLOCK_OR_INJECTED_SQL}
+          returning lease_expires_at_ms, updated_at_ms`,
   });
+  const renewedRow = renewed.rows[0];
+  const renewedExpiresAtMs = rowNumber(renewedRow?.lease_expires_at_ms);
+  if (renewedExpiresAtMs === null) {
+    return enforcedResult(request, profile, { contender: existing, nowMs, outcome: "lost" });
+  }
   return enforcedResult(request, profile, {
-    contender:
-      renewed.rowsAffected === 1
-        ? { ...existing, lease_expires_at_ms: leaseExpiresAtMs }
-        : existing,
-    nowMs,
-    outcome: renewed.rowsAffected === 1 ? "acquired" : "lost",
+    contender: { ...existing, lease_expires_at_ms: renewedExpiresAtMs },
+    nowMs: rowNumber(renewedRow?.updated_at_ms) ?? nowMs,
+    outcome: "acquired",
   });
 }
 
 async function settleEnforcedDatabaseAdmissionFor(
-  client: AdmissionClient,
+  store: LeaseStore,
+  sources: GuardrailSources,
   request: DatabaseAdmissionRequest,
   profile: AdmissionResourceProfile,
   nowMs: number,
+  dependencies: AdmissionDependencies,
+  known?: Readonly<{ contender: ContenderRow | undefined }>,
 ): Promise<DatabaseAdmissionResult> {
-  const existing = await readContender(client, request.owner, request.runId);
+  const { client } = store;
+  const existing =
+    known === undefined
+      ? await readContender(client, request.owner, request.runId)
+      : known.contender;
   let result: DatabaseAdmissionResult;
   if (request.action === "cancel") {
     const cancelled = await client.execute({
@@ -795,7 +987,7 @@ async function settleEnforcedDatabaseAdmissionFor(
     });
     result = enforcedResult(request, profile, { contender: existing, nowMs, outcome: "lost" });
   } else if (request.action === "heartbeat") {
-    result = await renewLease(client, request, profile, existing, nowMs);
+    result = await renewLease(store, sources, request, profile, existing, nowMs, dependencies);
   } else {
     const settled = await client.execute({
       args: [existing.contender_id, request.fencingToken ?? 0, nowMs],
@@ -809,7 +1001,7 @@ async function settleEnforcedDatabaseAdmissionFor(
       outcome: settled.rowsAffected === 1 ? "released" : "lost",
     });
   }
-  emitAdmissionTelemetry(request, result);
+  emitAdmissionTelemetry(request, result, store.kind);
   return result;
 }
 
@@ -852,7 +1044,11 @@ export async function observeDatabaseAdmissionFor(
     return result;
   }
 
-  const guardrails = await observeAcquisitionGuardrails(client, profile, dependencies);
+  const guardrails = await observeAcquisitionGuardrails(
+    { lease: client, primary: client },
+    profile,
+    dependencies,
+  );
   const conflict = conflictingResourcePredicate(profile);
   const queuedResource = queuedResourcePredicate(profile, guardrails.storedHealthBlocked);
   const queue = await client.execute({
@@ -888,6 +1084,88 @@ export async function observeDatabaseAdmissionFor(
   return result;
 }
 
+const LEGACY_STORE_ROUTE: DatabaseAdmissionStoreRoute = { epoch: null, store: "primary" };
+const ZERO_TOKEN_FLOORS: Readonly<Record<DatabaseAdmissionLane, number>> = {
+  "heavy-read": 0,
+  write: 0,
+};
+const STORE_EPOCH_PATTERN = /^(primary|telemetry):([1-9][0-9]{0,8})$/;
+
+export function parseDatabaseAdmissionStoreRoute(
+  value: unknown,
+): DatabaseAdmissionStoreRoute | null {
+  if (value === undefined || value === null || value === "primary") {
+    return LEGACY_STORE_ROUTE;
+  }
+  if (typeof value !== "string") {
+    return null;
+  }
+  const match = STORE_EPOCH_PATTERN.exec(value);
+  if (match === null) {
+    return null;
+  }
+  return {
+    epoch: Number(match[2]),
+    store: match[1] === "telemetry" ? "telemetry" : "primary",
+  };
+}
+
+type AdmissionSettings =
+  | Readonly<{
+      enforced: boolean;
+      kind: "read";
+      route: DatabaseAdmissionStoreRoute;
+      telemetryEverUsed: boolean;
+    }>
+  | Readonly<{ kind: "unavailable" }>;
+
+export function parseStoreEpochMarker(value: unknown): number {
+  if (typeof value !== "string" || !/^[0-9]{1,9}$/.test(value)) {
+    return 0;
+  }
+  return Number(value);
+}
+
+async function readAdmissionSettings(
+  primary: AdmissionClient,
+  dependencies: AdmissionDependencies,
+): Promise<AdmissionSettings> {
+  let read: Deadline<Awaited<ReturnType<AdmissionClient["execute"]>>>;
+  try {
+    read = await withinDeadline(
+      primary.execute({
+        args: [
+          DATABASE_ADMISSION_ENFORCED_KEY,
+          DATABASE_ADMISSION_STORE_KEY,
+          DATABASE_ADMISSION_STORE_EPOCH_KEY,
+        ],
+        sql: `select key, value from settings where key in (?, ?, ?)`,
+      }),
+      primaryReadTimeoutMs(dependencies),
+    );
+  } catch {
+    return { enforced: false, kind: "read", route: LEGACY_STORE_ROUTE, telemetryEverUsed: false };
+  }
+  if (!read.settled) {
+    return { kind: "unavailable" };
+  }
+  const values = new Map(
+    read.value.rows.flatMap((row): [string, unknown][] =>
+      typeof row.key === "string" ? [[row.key, row.value]] : [],
+    ),
+  );
+  const route = parseDatabaseAdmissionStoreRoute(values.get(DATABASE_ADMISSION_STORE_KEY));
+  if (route === null) {
+    throw new Error("database admission store setting is not a recognized route");
+  }
+  return {
+    enforced: values.get(DATABASE_ADMISSION_ENFORCED_KEY) === "true",
+    kind: "read",
+    route,
+    telemetryEverUsed: route.epoch !== null || values.has(DATABASE_ADMISSION_STORE_EPOCH_KEY),
+  };
+}
+
 export async function isDatabaseAdmissionEnforcedFor(client: AdmissionClient): Promise<boolean> {
   try {
     const setting = await client.execute({
@@ -900,29 +1178,226 @@ export async function isDatabaseAdmissionEnforcedFor(client: AdmissionClient): P
   }
 }
 
-export async function coordinateDatabaseAdmissionFor(
-  client: AdmissionClient,
+function primaryLeaseStore(
+  primary: AdmissionClient,
+  tokenFloors: Readonly<Record<DatabaseAdmissionLane, number>> = ZERO_TOKEN_FLOORS,
+): LeaseStore {
+  return {
+    client: primary,
+    gate: {
+      args: [DATABASE_ADMISSION_STORE_KEY],
+      sql: `(select coalesce(max(case when value = 'primary' or value glob 'primary:[1-9]*'
+              then 1 else 0 end), 1) from settings where key = ?) = 1`,
+    },
+    kind: "primary",
+    tokenFloors,
+  };
+}
+
+function telemetryLeaseStore(telemetry: AdmissionClient, epoch: number): LeaseStore {
+  return {
+    client: telemetry,
+    gate: {
+      args: [epoch],
+      sql: `exists (select 1 from database_admission_control
+              where id = 1 and store_open = 1 and epoch = ?)`,
+    },
+    kind: "telemetry",
+    tokenFloors: ZERO_TOKEN_FLOORS,
+  };
+}
+
+function tokenFloorsFrom(
+  rows: readonly Record<string, unknown>[],
+): Record<DatabaseAdmissionLane, number> {
+  const floors: Record<DatabaseAdmissionLane, number> = { ...ZERO_TOKEN_FLOORS };
+  for (const row of rows) {
+    const token = rowNumber(row.next_fencing_token) ?? 0;
+    if (row.lane === "write" || row.lane === "heavy-read") {
+      floors[row.lane] = Math.max(floors[row.lane], token);
+    }
+  }
+  return floors;
+}
+
+const CLOCK_OR_INJECTED_SQL = `coalesce(?, cast(unixepoch('subsec') * 1000 as integer))`;
+
+type StoreControl = Readonly<{ epoch: number; open: boolean }>;
+
+function storeControl(row: Record<string, unknown> | undefined): StoreControl | undefined {
+  const epoch = rowNumber(row?.control_epoch);
+  const open = rowNumber(row?.control_open);
+  return epoch === null || open === null ? undefined : { epoch, open: open === 1 };
+}
+
+type StoreHandoff =
+  | Readonly<{ floors: Record<DatabaseAdmissionLane, number>; kind: "ready" }>
+  | Readonly<{ kind: "draining" | "unavailable" }>;
+
+async function readPrimaryHandoff(
+  primary: AdmissionClient,
+  epoch: number,
+  dependencies: AdmissionDependencies,
+): Promise<StoreHandoff> {
+  const read = await withinDeadline(
+    primary.batch(
+      [
+        {
+          args: [
+            DATABASE_ADMISSION_STORE_KEY,
+            DATABASE_ADMISSION_STORE_EPOCH_KEY,
+            injectedNowMs(dependencies),
+          ],
+          sql: `select
+                  (select value from settings where key = ?) as store_route,
+                  (select value from settings where key = ?) as store_epoch,
+                  (select count(*) from database_admission_contenders
+                    where state = 'active'
+                      and lease_expires_at_ms > ${CLOCK_OR_INJECTED_SQL}) as live_count`,
+        },
+        { args: [], sql: `select lane, next_fencing_token from database_admission_lanes` },
+      ],
+      "read",
+    ),
+    primaryReadTimeoutMs(dependencies),
+  );
+  if (!read.settled) {
+    return { kind: "unavailable" };
+  }
+  const [state, lanes] = read.value;
+  const route = parseDatabaseAdmissionStoreRoute(state?.rows[0]?.store_route);
+  const live = rowNumber(state?.rows[0]?.live_count) ?? 0;
+  const recordedEpoch = parseStoreEpochMarker(state?.rows[0]?.store_epoch);
+  if (route?.store !== "telemetry" || route.epoch !== epoch || recordedEpoch < epoch || live > 0) {
+    return { kind: "draining" };
+  }
+  return { floors: tokenFloorsFrom(lanes?.rows ?? []), kind: "ready" };
+}
+
+async function openTelemetryStore(
+  telemetry: AdmissionClient,
+  epoch: number,
+  floors: Readonly<Record<DatabaseAdmissionLane, number>>,
+  nowMs: number,
+): Promise<void> {
+  await telemetry.batch(
+    [
+      {
+        args: [epoch, nowMs],
+        sql: `insert into database_admission_control (id, epoch, store_open, updated_at_ms)
+              values (1, ?, 1, ?)
+              on conflict(id) do update set
+                epoch = excluded.epoch, store_open = 1, updated_at_ms = excluded.updated_at_ms
+              where database_admission_control.epoch < excluded.epoch`,
+      },
+      ...(["write", "heavy-read"] as const).map((lane) => ({
+        args: [lane, floors[lane], nowMs],
+        sql: `insert into database_admission_lanes (lane, next_fencing_token, updated_at_ms)
+              values (?, ?, ?)
+              on conflict(lane) do update set
+                next_fencing_token = excluded.next_fencing_token,
+                updated_at_ms = excluded.updated_at_ms
+              where excluded.next_fencing_token > database_admission_lanes.next_fencing_token`,
+      })),
+    ],
+    "write",
+  );
+}
+
+async function releaseTelemetryStore(
+  telemetry: AdmissionClient,
+  epoch: number,
+  nowMs: number,
+): Promise<StoreHandoff> {
+  const results = await telemetry.batch(
+    [
+      {
+        args: [epoch, nowMs],
+        sql: `insert into database_admission_control (id, epoch, store_open, updated_at_ms)
+              values (1, ?, 0, ?)
+              on conflict(id) do update set
+                epoch = excluded.epoch, store_open = 0, updated_at_ms = excluded.updated_at_ms
+              where database_admission_control.epoch < excluded.epoch
+                or (database_admission_control.epoch = excluded.epoch
+                  and database_admission_control.store_open = 1)`,
+      },
+      {
+        args: [nowMs],
+        sql: `select
+                (select epoch from database_admission_control where id = 1) as control_epoch,
+                (select store_open from database_admission_control where id = 1) as control_open,
+                (select count(*) from database_admission_contenders
+                  where state = 'active' and lease_expires_at_ms > ?) as live_count`,
+      },
+      { args: [], sql: `select lane, next_fencing_token from database_admission_lanes` },
+    ],
+    "write",
+  );
+  const control = storeControl(results[1]?.rows[0]);
+  const live = rowNumber(results[1]?.rows[0]?.live_count) ?? 0;
+  if (control === undefined || control.epoch !== epoch || control.open || live > 0) {
+    return { kind: "draining" };
+  }
+  return { floors: tokenFloorsFrom(results[2]?.rows ?? []), kind: "ready" };
+}
+
+async function readRetiredTelemetryStore(
+  telemetry: AdmissionClient,
+  dependencies: AdmissionDependencies,
+): Promise<boolean | undefined> {
+  try {
+    const result = await telemetry.execute({
+      args: [injectedNowMs(dependencies)],
+      sql: `select
+              (select store_open from database_admission_control where id = 1) as control_open,
+              (select count(*) from database_admission_contenders
+                where state = 'active'
+                  and lease_expires_at_ms > ${CLOCK_OR_INJECTED_SQL}) as live_count`,
+    });
+    const row = result.rows[0];
+    return rowNumber(row?.control_open) !== 1 && (rowNumber(row?.live_count) ?? 0) === 0;
+  } catch {
+    return undefined;
+  }
+}
+
+async function readTelemetryControl(telemetry: AdmissionClient): Promise<StoreControl | undefined> {
+  const result = await telemetry.execute(
+    `select epoch as control_epoch, store_open as control_open
+     from database_admission_control where id = 1`,
+  );
+  return storeControl(result.rows[0]);
+}
+
+function handoffResult(
   request: DatabaseAdmissionRequest,
-  dependencies: AdmissionDependencies & { enforced?: boolean } = {},
+  profile: AdmissionResourceProfile,
+  nowMs: number,
+  yieldReason: DatabaseAdmissionYieldReason,
+  store: DatabaseAdmissionStoreKind,
+): DatabaseAdmissionResult {
+  const result = {
+    ...enforcedResult(request, profile, { nowMs, outcome: "queued", yieldReason }),
+    retryAfterMs: DATABASE_ADMISSION_MAX_RETRY_AFTER_MS,
+  };
+  emitAdmissionTelemetry(request, result, store);
+  return result;
+}
+
+async function acquireWithBusyRetry(
+  store: LeaseStore,
+  sources: GuardrailSources,
+  request: DatabaseAdmissionRequest,
+  profile: AdmissionResourceProfile,
+  dependencies: AdmissionDependencies,
 ): Promise<DatabaseAdmissionResult> {
-  const enforced = dependencies.enforced ?? (await isDatabaseAdmissionEnforcedFor(client));
-  if (!enforced) {
-    return observeDatabaseAdmissionFor(client, request, dependencies);
-  }
-
-  const profile = resourceProfileForOwner(request.owner);
-  if (request.action !== "acquire") {
-    const clock = await observeClock(client, dependencies);
-    return settleEnforcedDatabaseAdmissionFor(client, request, profile, clock.nowMs);
-  }
-
-  const guardrails = await observeAcquisitionGuardrails(client, profile, dependencies);
+  const guardrails = await observeAcquisitionGuardrails(sources, profile, dependencies);
   const wait = dependencies.wait ?? waitFor;
   let attempt = 0;
   let result: DatabaseAdmissionResult;
   while (true) {
     try {
-      result = await acquireEnforcedDatabaseAdmissionFor(client, request, profile, guardrails);
+      result = await acquireEnforcedDatabaseAdmissionFor(store, request, profile, guardrails);
       break;
     } catch (error) {
       if (!isDatabaseBusy(error) || attempt >= DATABASE_ADMISSION_TRANSACTION_RETRIES) {
@@ -932,6 +1407,271 @@ export async function coordinateDatabaseAdmissionFor(
       await wait(Math.min(5 * attempt, 25));
     }
   }
-  emitAdmissionTelemetry(request, result);
+  emitAdmissionTelemetry(request, result, store.kind);
   return result;
+}
+
+async function acquireInPrimaryStore(
+  stores: DatabaseAdmissionStores,
+  route: DatabaseAdmissionStoreRoute,
+  telemetryEverUsed: boolean,
+  request: DatabaseAdmissionRequest,
+  profile: AdmissionResourceProfile,
+  dependencies: AdmissionDependencies,
+): Promise<DatabaseAdmissionResult> {
+  let floors = ZERO_TOKEN_FLOORS;
+  if (route.epoch === null && (telemetryEverUsed || stores.telemetry !== undefined)) {
+    const retired =
+      stores.telemetry === undefined
+        ? undefined
+        : await readRetiredTelemetryStore(stores.telemetry, dependencies);
+    if (retired === false || (retired === undefined && telemetryEverUsed)) {
+      return handoffResult(
+        request,
+        profile,
+        await readStoreClock(stores.primary, dependencies),
+        "queue",
+        "primary",
+      );
+    }
+  }
+  if (route.epoch !== null) {
+    if (stores.telemetry === undefined) {
+      throw new Error(
+        "database admission is rolling back to the primary store, which needs the telemetry store to confirm the handoff",
+      );
+    }
+    const nowMs = await readStoreClock(stores.telemetry, dependencies);
+    const handoff = await releaseTelemetryStore(stores.telemetry, route.epoch, nowMs);
+    if (handoff.kind !== "ready") {
+      return handoffResult(request, profile, nowMs, "queue", "primary");
+    }
+    floors = handoff.floors;
+  }
+  return acquireWithBusyRetry(
+    primaryLeaseStore(stores.primary, floors),
+    { lease: stores.primary, primary: stores.primary, probes: stores.telemetry },
+    request,
+    profile,
+    dependencies,
+  );
+}
+
+async function acquireInTelemetryStore(
+  stores: DatabaseAdmissionStores,
+  epoch: number,
+  request: DatabaseAdmissionRequest,
+  profile: AdmissionResourceProfile,
+  dependencies: AdmissionDependencies,
+): Promise<DatabaseAdmissionResult> {
+  const telemetry = stores.telemetry;
+  if (telemetry === undefined) {
+    throw new Error("database admission is routed to the telemetry store, which is not configured");
+  }
+  const control = await readTelemetryControl(telemetry);
+  if (control === undefined || control.epoch !== epoch || !control.open) {
+    const nowMs = await readStoreClock(telemetry, dependencies);
+    if (control !== undefined && control.epoch >= epoch) {
+      return handoffResult(request, profile, nowMs, "queue", "telemetry");
+    }
+    const handoff = await readPrimaryHandoff(stores.primary, epoch, dependencies);
+    if (handoff.kind !== "ready") {
+      return handoffResult(
+        request,
+        profile,
+        nowMs,
+        handoff.kind === "unavailable" ? "direct-read-latency" : "queue",
+        "telemetry",
+      );
+    }
+    await openTelemetryStore(telemetry, epoch, handoff.floors, nowMs);
+  }
+  return acquireWithBusyRetry(
+    telemetryLeaseStore(telemetry, epoch),
+    { lease: telemetry, primary: stores.primary, probes: telemetry },
+    request,
+    profile,
+    dependencies,
+  );
+}
+
+type TelemetryLookup = Readonly<{
+  contender: ContenderRow | undefined;
+  control: StoreControl | undefined;
+}>;
+
+async function lookupTelemetryContender(
+  telemetry: AdmissionClient,
+  request: DatabaseAdmissionRequest,
+): Promise<TelemetryLookup | undefined> {
+  try {
+    const result = await telemetry.execute({
+      args: [request.owner, request.runId],
+      sql: `select c.contender_id, c.state, c.enqueued_at_ms, c.acquired_at_ms, c.fencing_token,
+                   c.operation_id, c.lease_expires_at_ms, c.queue_heartbeat_at_ms,
+                   control.epoch as control_epoch, control.store_open as control_open
+            from (select 1) as anchor
+            left join database_admission_contenders as c
+              on c.owner_id = ? and c.run_id = ?
+            left join database_admission_control as control on control.id = 1
+            limit 1`,
+    });
+    const row = result.rows[0];
+    return { contender: contenderRow(row), control: storeControl(row) };
+  } catch {
+    return undefined;
+  }
+}
+
+function settlesInTelemetry(request: DatabaseAdmissionRequest, lookup: TelemetryLookup): boolean {
+  const contender = lookup.contender;
+  if (contender !== undefined && request.action === "cancel") {
+    return true;
+  }
+  if (contender?.state === "active" && contender.fencing_token === request.fencingToken) {
+    return true;
+  }
+  return lookup.control?.open === true;
+}
+
+export async function coordinateDatabaseAdmissionAcross(
+  stores: DatabaseAdmissionStores,
+  request: DatabaseAdmissionRequest,
+  dependencies: AdmissionDependencies & { enforced?: boolean } = {},
+): Promise<DatabaseAdmissionResult> {
+  const profile = resourceProfileForOwner(request.owner);
+  if (request.action !== "acquire" && stores.telemetry !== undefined) {
+    const lookup = await lookupTelemetryContender(stores.telemetry, request);
+    if (lookup !== undefined && settlesInTelemetry(request, lookup)) {
+      const nowMs = await readStoreClock(stores.telemetry, dependencies);
+      return settleEnforcedDatabaseAdmissionFor(
+        telemetryLeaseStore(stores.telemetry, lookup.control?.epoch ?? 0),
+        { lease: stores.telemetry, primary: stores.primary, probes: stores.telemetry },
+        request,
+        profile,
+        nowMs,
+        dependencies,
+        { contender: lookup.contender },
+      );
+    }
+  }
+
+  const settings: AdmissionSettings =
+    dependencies.enforced === undefined
+      ? await readAdmissionSettings(stores.primary, dependencies)
+      : {
+          enforced: dependencies.enforced,
+          kind: "read",
+          route: LEGACY_STORE_ROUTE,
+          telemetryEverUsed: false,
+        };
+  if (settings.kind === "unavailable") {
+    const result = shadowResult(
+      request,
+      profile,
+      request.action === "acquire" ? "shadow-yield" : "shadow-acquire",
+      0,
+      request.action === "acquire" ? "direct-read-latency" : null,
+    );
+    emitAdmissionTelemetry(request, result);
+    return result;
+  }
+  if (!settings.enforced) {
+    return observeDatabaseAdmissionFor(stores.primary, request, dependencies);
+  }
+
+  if (request.action !== "acquire") {
+    const nowMs = await readStoreClock(stores.primary, dependencies);
+    return settleEnforcedDatabaseAdmissionFor(
+      primaryLeaseStore(stores.primary),
+      { lease: stores.primary, primary: stores.primary, probes: stores.telemetry },
+      request,
+      profile,
+      nowMs,
+      dependencies,
+    );
+  }
+
+  if (settings.route.store === "telemetry" && settings.route.epoch !== null) {
+    return acquireInTelemetryStore(stores, settings.route.epoch, request, profile, dependencies);
+  }
+  return acquireInPrimaryStore(
+    stores,
+    settings.route,
+    settings.telemetryEverUsed,
+    request,
+    profile,
+    dependencies,
+  );
+}
+
+export async function coordinateDatabaseAdmissionFor(
+  client: AdmissionClient,
+  request: DatabaseAdmissionRequest,
+  dependencies: AdmissionDependencies & { enforced?: boolean } = {},
+): Promise<DatabaseAdmissionResult> {
+  return coordinateDatabaseAdmissionAcross({ primary: client }, request, dependencies);
+}
+
+export async function recordDatabaseWriteProbeFor(
+  stores: DatabaseAdmissionStores,
+  dependencies: Pick<AdmissionDependencies, "monotonicNow" | "serverNowMs"> & {
+    timeoutMs?: number;
+  } = {},
+): Promise<DatabaseWriteProbeResult> {
+  const monotonicNow = dependencies.monotonicNow ?? performance.now.bind(performance);
+  const startedAt = monotonicNow();
+  let outcome: DatabaseWriteProbeOutcome;
+  let latencyMs: number | null;
+  try {
+    const write = await withinDeadline(
+      stores.primary.execute({
+        args: [DATABASE_WRITE_PROBE_KEY, new Date().toISOString()],
+        sql: `insert into settings (key, value) values (?, ?)
+              on conflict(key) do update set value = excluded.value`,
+      }),
+      dependencies.timeoutMs ?? DATABASE_WRITE_PROBE_TIMEOUT_MS,
+    );
+    const elapsedMs = boundedDuration(monotonicNow() - startedAt);
+    latencyMs = write.settled ? elapsedMs : null;
+    outcome = !write.settled ? "stalled" : elapsedMs > DATABASE_WRITE_PROBE_SLOW_MS ? "slow" : "ok";
+  } catch {
+    latencyMs = null;
+    outcome = "failed";
+  }
+
+  let recorded = false;
+  if (stores.telemetry !== undefined) {
+    try {
+      const observedAt = dependencies.serverNowMs ?? null;
+      await stores.telemetry.batch(
+        [
+          {
+            args: [crypto.randomUUID(), observedAt, latencyMs, outcome],
+            sql: `insert into database_write_probes (id, observed_at_ms, latency_ms, outcome)
+                  values (?, ${CLOCK_OR_INJECTED_SQL}, ?, ?)`,
+          },
+          {
+            args: [observedAt, DATABASE_WRITE_PROBE_RETENTION_MS, DATABASE_WRITE_PROBE_PRUNE_LIMIT],
+            sql: `delete from database_write_probes where id in (
+                    select id from database_write_probes
+                    where observed_at_ms < ${CLOCK_OR_INJECTED_SQL} - ?
+                    order by observed_at_ms asc, id asc limit ?
+                  )`,
+          },
+        ],
+        "write",
+      );
+      recorded = true;
+    } catch {
+      recorded = false;
+    }
+  }
+
+  logEvent("info", "database.write_probe", {
+    latency_ms: latencyMs,
+    outcome,
+    recorded,
+  });
+  return { latencyMs, outcome, recorded };
 }
