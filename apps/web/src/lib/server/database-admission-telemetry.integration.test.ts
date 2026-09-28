@@ -10,6 +10,7 @@ import {
   DATABASE_ADMISSION_HEALTH_STALE_MS,
   DATABASE_ADMISSION_MAX_RETRY_AFTER_MS,
   DATABASE_ADMISSION_RENEWED_LEASE_MS,
+  DATABASE_ADMISSION_STORE_EPOCH_KEY,
   DATABASE_ADMISSION_STORE_KEY,
   DATABASE_WRITE_PROBE_KEY,
   DATABASE_WRITE_PROBE_SLOW_MS,
@@ -50,6 +51,18 @@ async function setSetting(key: string, value: string): Promise<void> {
     sql: `insert into settings (key, value) values (?, ?)
           on conflict(key) do update set value = excluded.value`,
   });
+}
+
+async function setRoute(value: string): Promise<void> {
+  await setSetting(DATABASE_ADMISSION_STORE_KEY, value);
+  const epoch = /:(\d+)$/.exec(value)?.[1];
+  if (epoch !== undefined) {
+    await primary.execute({
+      args: [DATABASE_ADMISSION_STORE_EPOCH_KEY, epoch],
+      sql: `insert into settings (key, value) values (?, ?)
+            on conflict(key) do update set value = max(cast(value as integer), cast(excluded.value as integer))`,
+    });
+  }
 }
 
 function statementSql(statement: InStatement | [string, unknown?]): string {
@@ -181,13 +194,13 @@ describe("the telemetry-store admission route", () => {
   });
 
   it("fails closed on an unrecognized store setting", async () => {
-    await setSetting(DATABASE_ADMISSION_STORE_KEY, "telemetry");
+    await setRoute("telemetry");
     await expect(coordinate("fluncle-enrich", "typo")).rejects.toThrow(/not a recognized route/);
     expect(await contenderCount(primary)).toBe(0);
   });
 
   it("fails closed when routed to a telemetry store the Worker cannot reach", async () => {
-    await setSetting(DATABASE_ADMISSION_STORE_KEY, "telemetry:1");
+    await setRoute("telemetry:1");
     await expect(
       coordinate("fluncle-enrich", "no-store", "acquire", undefined, { primary }),
     ).rejects.toThrow(/telemetry store, which is not configured/);
@@ -195,7 +208,7 @@ describe("the telemetry-store admission route", () => {
   });
 
   it("fails closed when a rollback cannot confirm the telemetry handoff", async () => {
-    await setSetting(DATABASE_ADMISSION_STORE_KEY, "primary:2");
+    await setRoute("primary:2");
     await expect(
       coordinate("fluncle-enrich", "no-handoff", "acquire", undefined, { primary }),
     ).rejects.toThrow(/needs the telemetry store to confirm the handoff/);
@@ -203,7 +216,7 @@ describe("the telemetry-store admission route", () => {
   });
 
   it("grants, renews, and releases entirely in telemetry without writing the primary", async () => {
-    await setSetting(DATABASE_ADMISSION_STORE_KEY, "telemetry:1");
+    await setRoute("telemetry:1");
     const guarded = stalledWrites(primary);
     const target = stores({ primary: guarded });
 
@@ -241,7 +254,7 @@ describe("the telemetry-store admission route", () => {
   });
 
   it("keeps renewing and releasing a telemetry lease while the primary is completely stalled", async () => {
-    await setSetting(DATABASE_ADMISSION_STORE_KEY, "telemetry:1");
+    await setRoute("telemetry:1");
     const acquired = await coordinate("fluncle-enrich", "held");
     expect(acquired.outcome).toBe("acquired");
 
@@ -272,7 +285,7 @@ describe("the telemetry-store admission route", () => {
   });
 
   it("answers a new acquire during a primary read stall with a bounded yield and no write", async () => {
-    await setSetting(DATABASE_ADMISSION_STORE_KEY, "telemetry:1");
+    await setRoute("telemetry:1");
     const result = await coordinate(
       "fluncle-enrich",
       "blocked",
@@ -285,7 +298,7 @@ describe("the telemetry-store admission route", () => {
   });
 
   it("keeps mutual exclusion, FIFO, and idempotent acquire in the telemetry store", async () => {
-    await setSetting(DATABASE_ADMISSION_STORE_KEY, "telemetry:1");
+    await setRoute("telemetry:1");
     const first = await coordinate("fluncle-enrich", "first");
     nowMs += 1;
     const second = await coordinate("fluncle-note", "second");
@@ -310,7 +323,7 @@ describe("the telemetry-store admission route", () => {
   });
 
   it("cancels only queued or expired telemetry rows, never a live grant", async () => {
-    await setSetting(DATABASE_ADMISSION_STORE_KEY, "telemetry:1");
+    await setRoute("telemetry:1");
     const live = await coordinate("fluncle-enrich", "live");
     expect((await coordinate("fluncle-enrich", "live", "cancel")).outcome).toBe("cancelled");
     expect(await liveLeases(telemetry, "write")).toBe(1);
@@ -329,7 +342,7 @@ describe("the primary to telemetry cutover and its rollback", () => {
     expect(held).toMatchObject({ fencingToken: 1, outcome: "acquired" });
     expect(await liveLeases(primary, "write")).toBe(1);
 
-    await setSetting(DATABASE_ADMISSION_STORE_KEY, "telemetry:1");
+    await setRoute("telemetry:1");
     const waiting = await coordinate("fluncle-note", "telemetry-waiter");
     expect(waiting).toMatchObject({
       outcome: "queued",
@@ -378,11 +391,11 @@ describe("the primary to telemetry cutover and its rollback", () => {
   });
 
   it("never grants on a plain primary route while telemetry is open or holds a live lease", async () => {
-    await setSetting(DATABASE_ADMISSION_STORE_KEY, "telemetry:1");
+    await setRoute("telemetry:1");
     const held = await coordinate("fluncle-enrich", "telemetry-held");
     expect(held.outcome).toBe("acquired");
 
-    await setSetting(DATABASE_ADMISSION_STORE_KEY, "primary");
+    await setRoute("primary");
     expect(await coordinate("fluncle-note", "plain-primary")).toMatchObject({
       outcome: "queued",
       yieldReason: "queue",
@@ -394,8 +407,60 @@ describe("the primary to telemetry cutover and its rollback", () => {
     expect((await coordinate("fluncle-note", "plain-primary")).outcome).toBe("acquired");
   });
 
-  it("never renews a telemetry lease that expired while its heartbeat awaited a guardrail", async () => {
+  it("fails closed on a plain primary route when telemetry was used and cannot be read", async () => {
+    await setRoute("telemetry:1");
+    const held = await coordinate("fluncle-enrich", "telemetry-held");
+    expect(held.outcome).toBe("acquired");
+    await setRoute("primary");
+
+    const unreachable: AdmissionClient = {
+      batch: () => Promise.reject(new Error("telemetry unreachable")),
+      execute: (() => Promise.reject(new Error("telemetry unreachable"))) as Client["execute"],
+    };
+    expect(
+      await coordinate(
+        "fluncle-note",
+        "blind",
+        "acquire",
+        undefined,
+        stores({ telemetry: unreachable }),
+      ),
+    ).toMatchObject({ outcome: "queued", yieldReason: "queue" });
+    expect(
+      await coordinate("fluncle-note", "no-client", "acquire", undefined, { primary }),
+    ).toMatchObject({ outcome: "queued", yieldReason: "queue" });
+    expect(await liveLeases(primary, "write")).toBe(0);
+  });
+
+  it("keeps a never-cut-over Worker independent of an unreadable telemetry database", async () => {
+    const unreachable: AdmissionClient = {
+      batch: () => Promise.reject(new Error("telemetry unreachable")),
+      execute: (() => Promise.reject(new Error("telemetry unreachable"))) as Client["execute"],
+    };
+    expect(
+      (
+        await coordinate(
+          "fluncle-note",
+          "legacy",
+          "acquire",
+          undefined,
+          stores({ telemetry: unreachable }),
+        )
+      ).outcome,
+    ).toBe("acquired");
+  });
+
+  it("never opens telemetry for an epoch the main database has not recorded", async () => {
     await setSetting(DATABASE_ADMISSION_STORE_KEY, "telemetry:1");
+    expect(await coordinate("fluncle-enrich", "unrecorded")).toMatchObject({
+      outcome: "queued",
+      yieldReason: "queue",
+    });
+    expect(await control()).toBeUndefined();
+  });
+
+  it("never renews a telemetry lease that expired while its heartbeat awaited a guardrail", async () => {
+    await setRoute("telemetry:1");
     const held = await coordinate("fluncle-enrich", "slow-heartbeat");
     expect(held.outcome).toBe("acquired");
     const expiresAt = held.leaseExpiresAtMs ?? 0;
@@ -407,7 +472,7 @@ describe("the primary to telemetry cutover and its rollback", () => {
       execute: (async (statement: InStatement) => {
         if (rolledBack === undefined && statementSql(statement).includes("service_check_samples")) {
           nowMs = expiresAt + 1;
-          await setSetting(DATABASE_ADMISSION_STORE_KEY, "primary:2");
+          await setRoute("primary:2");
           rolledBack = await coordinate("fluncle-note", "primary-winner");
         }
         return primary.execute(statement);
@@ -433,11 +498,11 @@ describe("the primary to telemetry cutover and its rollback", () => {
   });
 
   it("rolls back to the primary only after telemetry is closed and drained", async () => {
-    await setSetting(DATABASE_ADMISSION_STORE_KEY, "telemetry:1");
+    await setRoute("telemetry:1");
     const held = await coordinate("fluncle-enrich", "telemetry-held");
     expect(held.outcome).toBe("acquired");
 
-    await setSetting(DATABASE_ADMISSION_STORE_KEY, "primary:2");
+    await setRoute("primary:2");
     const waiting = await coordinate("fluncle-note", "primary-waiter");
     expect(waiting).toMatchObject({ outcome: "queued", yieldReason: "queue" });
     expect(await control()).toEqual({ epoch: 2, open: 0 });
@@ -484,12 +549,12 @@ describe("the primary to telemetry cutover and its rollback", () => {
   });
 
   it("fences a primary grant whose handoff check raced a cutover to telemetry", async () => {
-    await setSetting(DATABASE_ADMISSION_STORE_KEY, "primary:2");
+    await setRoute("primary:2");
     let raced: Awaited<ReturnType<typeof coordinate>> | undefined;
     const racingPrimary: AdmissionClient = {
       batch: async (statements, mode) => {
         if (mode === "write" && raced === undefined) {
-          await setSetting(DATABASE_ADMISSION_STORE_KEY, "telemetry:3");
+          await setRoute("telemetry:3");
           raced = await coordinate("fluncle-note", "telemetry-winner");
         }
         return primary.batch(statements, mode);
@@ -511,12 +576,12 @@ describe("the primary to telemetry cutover and its rollback", () => {
   });
 
   it("fences a telemetry grant whose drain check raced a rollback to the primary", async () => {
-    await setSetting(DATABASE_ADMISSION_STORE_KEY, "telemetry:1");
+    await setRoute("telemetry:1");
     let raced: Awaited<ReturnType<typeof coordinate>> | undefined;
     const racingTelemetry: AdmissionClient = {
       batch: async (statements, mode) => {
         if (mode === "write" && raced === undefined) {
-          await setSetting(DATABASE_ADMISSION_STORE_KEY, "primary:2");
+          await setRoute("primary:2");
           raced = await coordinate("fluncle-note", "primary-winner");
         }
         return telemetry.batch(statements, mode);
@@ -539,13 +604,13 @@ describe("the primary to telemetry cutover and its rollback", () => {
   });
 
   it("refuses to reopen telemetry at an epoch that was already closed", async () => {
-    await setSetting(DATABASE_ADMISSION_STORE_KEY, "telemetry:1");
+    await setRoute("telemetry:1");
     const first = await coordinate("fluncle-enrich", "first-epoch");
     await coordinate("fluncle-enrich", "first-epoch", "release", first.fencingToken ?? undefined);
-    await setSetting(DATABASE_ADMISSION_STORE_KEY, "primary:2");
+    await setRoute("primary:2");
     expect((await coordinate("fluncle-note", "closer")).outcome).toBe("acquired");
 
-    await setSetting(DATABASE_ADMISSION_STORE_KEY, "telemetry:2");
+    await setRoute("telemetry:2");
     expect(await coordinate("fluncle-crawl", "same-epoch")).toMatchObject({
       outcome: "queued",
       yieldReason: "queue",
@@ -572,7 +637,7 @@ describe("the primary to telemetry cutover and its rollback", () => {
       if (roll < 0.04 && routeIndex < routes.length - 1) {
         routeIndex += 1;
         previousRoute = routeIndex === 0 ? "primary" : (routes[routeIndex - 1] ?? "primary");
-        await setSetting(DATABASE_ADMISSION_STORE_KEY, routes[routeIndex] ?? "primary");
+        await setRoute(routes[routeIndex] ?? "primary");
         continue;
       }
       const owner = owners[Math.floor(random() * owners.length)] ?? "fluncle-enrich";
@@ -673,7 +738,7 @@ describe("the primary write probe", () => {
   });
 
   it("yields new writers on a smoothed write stall and treats stale samples as unknown", async () => {
-    await setSetting(DATABASE_ADMISSION_STORE_KEY, "telemetry:1");
+    await setRoute("telemetry:1");
     await seedWriteProbes(["stalled"], nowMs - 1_000);
     expect((await coordinate("fluncle-enrich", "one-bad")).outcome).toBe("acquired");
     await coordinate("fluncle-enrich", "one-bad", "cancel");
@@ -691,7 +756,7 @@ describe("the primary write probe", () => {
   });
 
   it("fences a running payload on a smoothed write stall observed at heartbeat", async () => {
-    await setSetting(DATABASE_ADMISSION_STORE_KEY, "telemetry:1");
+    await setRoute("telemetry:1");
     const held = await coordinate("fluncle-enrich", "held");
     await seedWriteProbes(["stalled", "stalled"], nowMs);
     nowMs += 30_000;

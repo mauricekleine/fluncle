@@ -20,6 +20,7 @@ export const DATABASE_ADMISSION_DIRECT_READ_LIMIT_MS = 250;
 export const DATABASE_ADMISSION_PUBLIC_LATENCY_LIMIT_MS = 500;
 export const DATABASE_ADMISSION_ENFORCED_KEY = "database_admission_enforced";
 export const DATABASE_ADMISSION_STORE_KEY = "database_admission_store";
+export const DATABASE_ADMISSION_STORE_EPOCH_KEY = "database_admission_store_epoch";
 export const DATABASE_ADMISSION_PRIMARY_READ_TIMEOUT_MS = 2_000;
 export const DATABASE_WRITE_PROBE_KEY = "database_write_probe";
 export const DATABASE_WRITE_PROBE_TIMEOUT_MS = 5_000;
@@ -1110,8 +1111,20 @@ export function parseDatabaseAdmissionStoreRoute(
 }
 
 type AdmissionSettings =
-  | Readonly<{ enforced: boolean; kind: "read"; route: DatabaseAdmissionStoreRoute }>
+  | Readonly<{
+      enforced: boolean;
+      kind: "read";
+      route: DatabaseAdmissionStoreRoute;
+      telemetryEverUsed: boolean;
+    }>
   | Readonly<{ kind: "unavailable" }>;
+
+export function parseStoreEpochMarker(value: unknown): number {
+  if (typeof value !== "string" || !/^[0-9]{1,9}$/.test(value)) {
+    return 0;
+  }
+  return Number(value);
+}
 
 async function readAdmissionSettings(
   primary: AdmissionClient,
@@ -1121,13 +1134,17 @@ async function readAdmissionSettings(
   try {
     read = await withinDeadline(
       primary.execute({
-        args: [DATABASE_ADMISSION_ENFORCED_KEY, DATABASE_ADMISSION_STORE_KEY],
-        sql: `select key, value from settings where key in (?, ?)`,
+        args: [
+          DATABASE_ADMISSION_ENFORCED_KEY,
+          DATABASE_ADMISSION_STORE_KEY,
+          DATABASE_ADMISSION_STORE_EPOCH_KEY,
+        ],
+        sql: `select key, value from settings where key in (?, ?, ?)`,
       }),
       primaryReadTimeoutMs(dependencies),
     );
   } catch {
-    return { enforced: false, kind: "read", route: LEGACY_STORE_ROUTE };
+    return { enforced: false, kind: "read", route: LEGACY_STORE_ROUTE, telemetryEverUsed: false };
   }
   if (!read.settled) {
     return { kind: "unavailable" };
@@ -1145,6 +1162,7 @@ async function readAdmissionSettings(
     enforced: values.get(DATABASE_ADMISSION_ENFORCED_KEY) === "true",
     kind: "read",
     route,
+    telemetryEverUsed: route.epoch !== null || values.has(DATABASE_ADMISSION_STORE_EPOCH_KEY),
   };
 }
 
@@ -1225,9 +1243,14 @@ async function readPrimaryHandoff(
     primary.batch(
       [
         {
-          args: [DATABASE_ADMISSION_STORE_KEY, injectedNowMs(dependencies)],
+          args: [
+            DATABASE_ADMISSION_STORE_KEY,
+            DATABASE_ADMISSION_STORE_EPOCH_KEY,
+            injectedNowMs(dependencies),
+          ],
           sql: `select
                   (select value from settings where key = ?) as store_route,
+                  (select value from settings where key = ?) as store_epoch,
                   (select count(*) from database_admission_contenders
                     where state = 'active'
                       and lease_expires_at_ms > ${CLOCK_OR_INJECTED_SQL}) as live_count`,
@@ -1244,7 +1267,8 @@ async function readPrimaryHandoff(
   const [state, lanes] = read.value;
   const route = parseDatabaseAdmissionStoreRoute(state?.rows[0]?.store_route);
   const live = rowNumber(state?.rows[0]?.live_count) ?? 0;
-  if (route?.store !== "telemetry" || route.epoch !== epoch || live > 0) {
+  const recordedEpoch = parseStoreEpochMarker(state?.rows[0]?.store_epoch);
+  if (route?.store !== "telemetry" || route.epoch !== epoch || recordedEpoch < epoch || live > 0) {
     return { kind: "draining" };
   }
   return { floors: tokenFloorsFrom(lanes?.rows ?? []), kind: "ready" };
@@ -1390,14 +1414,18 @@ async function acquireWithBusyRetry(
 async function acquireInPrimaryStore(
   stores: DatabaseAdmissionStores,
   route: DatabaseAdmissionStoreRoute,
+  telemetryEverUsed: boolean,
   request: DatabaseAdmissionRequest,
   profile: AdmissionResourceProfile,
   dependencies: AdmissionDependencies,
 ): Promise<DatabaseAdmissionResult> {
   let floors = ZERO_TOKEN_FLOORS;
-  if (route.epoch === null && stores.telemetry !== undefined) {
-    const retired = await readRetiredTelemetryStore(stores.telemetry, dependencies);
-    if (retired === false) {
+  if (route.epoch === null && (telemetryEverUsed || stores.telemetry !== undefined)) {
+    const retired =
+      stores.telemetry === undefined
+        ? undefined
+        : await readRetiredTelemetryStore(stores.telemetry, dependencies);
+    if (retired === false || (retired === undefined && telemetryEverUsed)) {
       return handoffResult(
         request,
         profile,
@@ -1531,7 +1559,12 @@ export async function coordinateDatabaseAdmissionAcross(
   const settings: AdmissionSettings =
     dependencies.enforced === undefined
       ? await readAdmissionSettings(stores.primary, dependencies)
-      : { enforced: dependencies.enforced, kind: "read", route: LEGACY_STORE_ROUTE };
+      : {
+          enforced: dependencies.enforced,
+          kind: "read",
+          route: LEGACY_STORE_ROUTE,
+          telemetryEverUsed: false,
+        };
   if (settings.kind === "unavailable") {
     const result = shadowResult(
       request,
@@ -1562,7 +1595,14 @@ export async function coordinateDatabaseAdmissionAcross(
   if (settings.route.store === "telemetry" && settings.route.epoch !== null) {
     return acquireInTelemetryStore(stores, settings.route.epoch, request, profile, dependencies);
   }
-  return acquireInPrimaryStore(stores, settings.route, request, profile, dependencies);
+  return acquireInPrimaryStore(
+    stores,
+    settings.route,
+    settings.telemetryEverUsed,
+    request,
+    profile,
+    dependencies,
+  );
 }
 
 export async function coordinateDatabaseAdmissionFor(
