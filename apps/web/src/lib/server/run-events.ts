@@ -72,7 +72,11 @@ const GATE_STATES = new Set<string>([
 ]);
 
 const ADMISSION_SKIP_OUTCOMES = new Set<string>([
+  "acquisition-authentication-failed",
+  "acquisition-database-busy",
+  "acquisition-gateway-transport",
   "acquisition-unavailable",
+  "breaker-open",
   "containment-unavailable",
   "enforcement-not-active",
   "invalid-grant",
