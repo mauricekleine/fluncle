@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 
 import {
   cronSurfaces,
+  dormantSurfaces,
   liveSurfaces,
   runLedgerWriters,
   statusProbes,
@@ -87,7 +88,7 @@ assert.equal(
   ledgerWriterNames.length,
   "ledger writers are unique",
 );
-assert.equal(ledgerWriters.length, 52, "the run-ledger roster has 48 cron + 4 direct writers");
+assert.equal(ledgerWriters.length, 51, "the run-ledger roster has 47 live cron + 4 direct writers");
 assert.ok(
   !ledgerWriterNames.includes("fluncle-healthcheck"),
   "the non-ledger healthcheck is excluded from the run-ledger roster",
@@ -160,9 +161,45 @@ assert.ok(
 const live = liveSurfaces();
 assert.equal(
   live.length,
-  SURFACES.filter((surface) => surface.pending !== true).length,
-  "liveSurfaces is the catalog minus pending surfaces",
+  SURFACES.filter((surface) => surface.pending !== true && surface.dormant === undefined).length,
+  "liveSurfaces is the catalog minus pending and dormant surfaces",
 );
+
+const dormant = dormantSurfaces();
+assert.ok(
+  dormant.some((surface) => surface.name === "cron.device-mirror"),
+  "the device mirror is parked as a dormant cron",
+);
+for (const surface of dormant) {
+  assert.ok(
+    (surface.dormant ?? "").trim().length > 20,
+    `${surface.name}: a dormant surface says why in a sentence`,
+  );
+  assert.notEqual(surface.pending, true, `${surface.name}: dormant and pending are exclusive`);
+  assert.ok(
+    !liveSurfaces().some((s) => s.name === surface.name),
+    `${surface.name}: a dormant surface is absent from liveSurfaces`,
+  );
+  assert.ok(
+    !statusProbes().some((s) => s.name === surface.name),
+    `${surface.name}: a dormant surface is never probed on /status`,
+  );
+  assert.ok(
+    !cronSurfaces().some((s) => s.name === surface.name),
+    `${surface.name}: a dormant cron leaves the cron roster`,
+  );
+  const unit = surface.probeConfig?.cronName;
+  assert.ok(
+    unit === undefined || !ledgerWriterNames.includes(unit),
+    `${surface.name}: a dormant cron is never an expected run-ledger writer`,
+  );
+  for (const ctx of contexts) {
+    assert.ok(
+      !surfacesForContext(ctx).some((s) => s.name === surface.name),
+      `${surface.name}: a dormant surface is absent from surfacesForContext("${ctx}")`,
+    );
+  }
+}
 assert.ok(
   live.every((surface) => surface.pending !== true),
   "liveSurfaces excludes every pending surface",

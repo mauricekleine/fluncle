@@ -106,6 +106,8 @@ ${extractFunction(source, "validate_release_stagger")}
 ${extractFunction(source, "resolve_release_window")}
 ${extractFunction(source, "release_is_heavy")}
 ${extractFunction(source, "release_order")}
+${extractFunction(source, "dormant_timer_names")}
+${extractFunction(source, "in_timer_list")}
 ${extractFunction(source, "restore_sweep_timers")}
 validate_release_stagger
 restore_sweep_timers ${options.mode === "staggered" ? "staggered" : ""}

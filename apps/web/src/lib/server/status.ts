@@ -5,7 +5,7 @@ import {
   HEALTH_SNAPSHOT_PRODUCER_MAX,
   HEALTH_SNAPSHOT_PRODUCER_PATTERN,
 } from "@fluncle/contracts/orpc";
-import { cronSurfaces, type CronSchedule } from "@fluncle/registry";
+import { cronSurfaces, type CronSchedule, dormantSurfaces } from "@fluncle/registry";
 import { SELF_POSTED_AUTOMATION_ORDER } from "../status-services";
 import { getDb, typedRows } from "./db";
 import { logEvent } from "./log";
@@ -185,6 +185,7 @@ const RETIRED_SERVICE_IDS = new Set([
   "cron.apple-releases",
   "cron.artist-follow",
   "cron.clip-drip",
+  ...dormantSurfaces().map((surface) => surface.name),
 ]);
 
 const NO_RUNS_GRACE_MS = 24 * 60 * 60 * 1000;

@@ -387,6 +387,95 @@ release_order() {
 	printf '%s\n' "${ordered[@]}"
 }
 
+dormant_timer_names() {
+	local root="${REPO_DIR:-}/docs/agents/hermes" dir timer name
+	[ -n "${REPO_DIR:-}" ] && [ -d "$root" ] || return 0
+	for dir in "$root"/*/; do
+		[ -e "${dir}DORMANT" ] || continue
+		for timer in "$dir"*.timer; do
+			[ -e "$timer" ] || continue
+			name="$(basename "$timer")"
+			case "$name" in *@*) continue ;; esac
+			printf '%s\n' "$name"
+		done
+	done
+}
+
+in_timer_list() {
+	case $'\n'"$2"$'\n' in
+	*$'\n'"$1"$'\n'*) return 0 ;;
+	esac
+	return 1
+}
+
+dormant_timer_state() {
+	local timer="$1" load enabled active
+	load="$(systemctl show -p LoadState --value "$timer" 2>/dev/null)" || {
+		printf 'probe-error\n'
+		return 0
+	}
+	case "$load" in
+	not-found)
+		printf 'not-installed\n'
+		return 0
+		;;
+	loaded | masked) ;;
+	*)
+		printf 'probe-error\n'
+		return 0
+		;;
+	esac
+	enabled="$(systemctl is-enabled "$timer" 2>/dev/null || true)"
+	active="$(systemctl is-active "$timer" 2>/dev/null || true)"
+	case "$enabled" in
+	disabled | masked | masked-runtime) ;;
+	enabled | enabled-runtime | static | indirect | generated | transient | linked | linked-runtime | alias)
+		printf 'live\n'
+		return 0
+		;;
+	*)
+		printf 'probe-error\n'
+		return 0
+		;;
+	esac
+	case "$active" in
+	inactive | failed) printf 'parked\n' ;;
+	active | activating | deactivating | reloading) printf 'live\n' ;;
+	*) printf 'probe-error\n' ;;
+	esac
+}
+
+park_dormant_timer() {
+	local timer="$1" state
+	state="$(dormant_timer_state "$timer")"
+	case "$state" in
+	not-installed | parked) return 0 ;;
+	probe-error)
+		log "could not read the state of dormant timer ${timer}"
+		return 1
+		;;
+	esac
+	if ! systemctl disable --now "$timer" >/dev/null 2>&1; then
+		log "systemctl disable --now ${timer} failed"
+		return 1
+	fi
+	state="$(dormant_timer_state "$timer")"
+	if [ "$state" != "parked" ]; then
+		log "dormant timer ${timer} is ${state} after disable --now"
+		return 1
+	fi
+	log "kept dormant timer ${timer} disabled"
+	return 0
+}
+
+enforce_dormant_timers() {
+	local timer
+	while IFS= read -r timer; do
+		[ -n "$timer" ] || continue
+		park_dormant_timer "$timer" || die "could not park dormant timer ${timer}"
+	done < <(dormant_timer_names)
+}
+
 # shellcheck disable=SC2329  # invoked indirectly from the EXIT trap set in quiesce_sweeps
 restore_sweep_timers() {
 	local mode="${1:-immediate}"
@@ -396,8 +485,9 @@ restore_sweep_timers() {
 	fi
 	[ "${#STOPPED_TIMERS[@]}" -gt 0 ] || return 0
 
-	local t rearmed=0 count started=0 window=0 spacing=0
+	local t rearmed=0 count started=0 window=0 spacing=0 dormant
 	local order=()
+	dormant="$(dormant_timer_names)"
 	count="${#STOPPED_TIMERS[@]}"
 	while IFS= read -r t; do
 		if [ -n "$t" ]; then order+=("$t"); fi
@@ -420,6 +510,10 @@ restore_sweep_timers() {
 			sleep "$spacing"
 		fi
 		started=$((started + 1))
+		if in_timer_list "$t" "$dormant"; then
+			park_dormant_timer "$t" || ERRORS=1
+			continue
+		fi
 		systemctl start "$t" >/dev/null 2>&1 || true
 
 		if rearm_stalled_timer "$t"; then
@@ -440,11 +534,13 @@ restore_sweep_timers() {
 }
 
 quiesce_sweeps() {
-	local t svc waited
+	local t svc waited dormant
 
+	enforce_dormant_timers
+	dormant="$(dormant_timer_names)"
 	STOPPED_TIMERS=()
 	while IFS= read -r t; do
-		[ -n "$t" ] && STOPPED_TIMERS+=("$t")
+		if [ -n "$t" ] && ! in_timer_list "$t" "$dormant"; then STOPPED_TIMERS+=("$t"); fi
 	done < <(
 		systemctl list-units --type=timer --state=active --no-legend --plain 'fluncle-*.timer' 2>/dev/null |
 			awk '{print $1}' |

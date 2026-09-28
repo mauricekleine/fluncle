@@ -80,6 +80,8 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
 
   "GET /admin/label-outliers": "list_label_outliers",
 
+  "GET /admin/label-outliers/inputs": "list_label_outlier_inputs",
+
   "GET /admin/labels": "list_labels_admin",
 
   "GET /admin/labels/aliases": "list_label_aliases",

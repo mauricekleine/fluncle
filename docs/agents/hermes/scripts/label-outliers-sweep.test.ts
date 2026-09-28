@@ -1,22 +1,22 @@
 import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { EMBEDDING_DIMENSIONS, type LabelOutlierRun, scoreCatalogue } from "./label-outliers";
-import { writeScoringExport } from "./label-outliers-export";
+import { type InputsPage, type PageFetch, parseInputsPage } from "./label-outliers-inputs";
 import {
   type AlertedUnit,
   type CorpusFloor,
   discordMessage,
   MAX_RECORDED_OUTLIERS,
   readEmbedding,
-  readReplicaInputs,
+  readScoringInputs,
   type RecordPayload,
   runLabelOutliersSweep,
   type ScoreOutcome,
-  scoreExportFile,
+  scoreFromPages,
   type SweepDeps,
   toPayload,
 } from "./label-outliers-sweep";
@@ -91,20 +91,10 @@ function replica(): Database {
   return database;
 }
 
-function replicaFile(): string {
-  const path = join(scratchDir(), "source-replica.db");
-  const database = new Database(path, { create: true, strict: true });
-  database.run("PRAGMA journal_mode = WAL");
-  seedReplica(database);
-  database.close();
-
-  return path;
-}
-
-describe("the replica read", () => {
+describe("the scoring-file read", () => {
   test("reads only embedded catalogue tracks, grouped per label, and flags the unlike album", () => {
     const database = replica();
-    const inputs = readReplicaInputs(database);
+    const inputs = readScoringInputs(database);
     const groups = [...inputs.groups()];
 
     expect(new Map(groups.map((group) => [group.labelId, group.tracks.length]))).toEqual(
@@ -145,75 +135,197 @@ describe("the replica read", () => {
   });
 });
 
-async function exportOf(exportedAt: string): Promise<string> {
-  const replica = replicaFile();
-  const exportFile = join(scratchDir(), "label-outliers-inputs.db");
-  await writeScoringExport(replica, exportFile, exportedAt);
+function workerPages(source: Database, limit: number): InputsPage[] {
+  const pages: InputsPage[] = [];
+  let after = "";
 
-  return exportFile;
+  while (true) {
+    const rows = source
+      .query<
+        {
+          album_id: string | null;
+          embedding_blob: Uint8Array;
+          label_id: string | null;
+          track_id: string;
+        },
+        [string, number]
+      >(
+        `select e.track_id, t.label_id, t.album_id, e.embedding_blob
+           from track_embeddings e cross join tracks t on t.track_id = e.track_id
+          where t.is_catalogue = 1 and e.track_id > ? order by e.track_id limit ?`,
+      )
+      .all(after, limit + 1);
+    const page = rows.slice(0, limit);
+    const last = page.at(-1)?.track_id ?? after;
+    const artists = source
+      .query<{ artist_id: string; track_id: string }, [string, string]>(
+        "select track_id, artist_id from track_artists where track_id > ? and track_id <= ?",
+      )
+      .all(after, last);
+    const albums = source
+      .query<{ discogs_styles: string; id: string }, [string, string]>(
+        `select id, discogs_styles from albums where discogs_styles is not null and id in (
+           select t.album_id from tracks t join track_embeddings e on e.track_id = t.track_id
+            where t.is_catalogue = 1 and t.track_id > ? and t.track_id <= ?)`,
+      )
+      .all(after, last);
+
+    pages.push({
+      albums: albums.map((album) => ({ discogsStyles: album.discogs_styles, id: album.id })),
+      nextCursor: rows.length > limit ? `c:${last}` : null,
+      tracks: page.map((row) => ({
+        albumId: row.album_id,
+        artistIds: artists.filter((a) => a.track_id === row.track_id).map((a) => a.artist_id),
+        embeddingBase64: Buffer.from(row.embedding_blob).toString("base64"),
+        labelId: row.label_id,
+        trackId: row.track_id,
+      })),
+    });
+
+    if (rows.length <= limit) {
+      return pages;
+    }
+
+    after = last;
+  }
 }
 
-const NOW = Date.parse("2026-09-28T05:30:00.000Z");
+function servePages(pages: readonly InputsPage[], cursors: (string | null)[] = []): PageFetch {
+  return async (cursor) => {
+    cursors.push(cursor);
+    const index =
+      cursor === null ? 0 : pages.findIndex((_, i) => pages[i - 1]?.nextCursor === cursor);
+    const page = pages[index];
 
-describe("the sweep reads only the device mirror's scoring export", () => {
-  test("a fresh export is scored", async () => {
-    const exportFile = await exportOf("2026-09-28T02:00:00.000Z");
+    if (!page) {
+      throw new Error(`no page after ${cursor}`);
+    }
 
-    const outcome = await scoreExportFile(exportFile, { now: () => NOW });
+    return { kind: "completed", response: { bytes: JSON.stringify(page).length, page } };
+  };
+}
+
+const READ_AT = new Date("2026-09-28T05:30:00.000Z");
+
+describe("the sweep scores from paged Worker reads", () => {
+  test("scoring the paged inputs gives exactly the result of scoring the source directly", async () => {
+    const source = replica();
+    const direct = readScoringInputs(source);
+    const expected = scoreCatalogue({ ...direct, groups: direct.groups() });
+    const cursors: (string | null)[] = [];
+    const file = join(scratchDir(), "scoring-inputs.db");
+
+    const outcome = await scoreFromPages(file, servePages(workerPages(source, 4), cursors), {
+      now: () => READ_AT,
+    });
 
     expect(outcome.kind).toBe("scored");
     if (outcome.kind === "scored") {
+      expect(outcome.run).toEqual(expected);
       expect(outcome.run.flagged.map((unit) => unit.unitId)).toEqual(["album:alb_xmas:lbl_dnb"]);
       expect(outcome.embeddedTracks).toBe(23);
-      expect(outcome.replicaSyncedAt).toBe("2026-09-28T02:00:00.000Z");
+      expect(outcome.readAt).toBe("2026-09-28T05:30:00.000Z");
+      expect(outcome.read).toMatchObject({ pages: 6, tracks: 23 });
+      expect(outcome.read.bytes).toBeGreaterThan(23 * EMBEDDING_DIMENSIONS * 4);
     }
+    expect(cursors[0]).toBeNull();
+    expect(new Set(cursors).size).toBe(cursors.length);
+    expect(existsSync(file)).toBe(false);
+    source.close();
   });
 
-  test("a missing export is reported as missing", async () => {
-    const outcome = await scoreExportFile(join(scratchDir(), "absent.db"), { now: () => NOW });
+  test("an admission yield mid-walk stops the read and scores nothing", async () => {
+    const pages = workerPages(replica(), 4);
+    const serve = servePages(pages);
+    let calls = 0;
+    const file = join(scratchDir(), "scoring-inputs.db");
 
-    expect(outcome).toEqual({ kind: "missing" });
-  });
+    const outcome = await scoreFromPages(file, async (cursor) => {
+      calls += 1;
 
-  test("an export older than the sweep accepts is reported as stale", async () => {
-    const exportFile = await exportOf("2026-09-26T05:00:00.000Z");
-
-    const outcome = await scoreExportFile(exportFile, { now: () => NOW });
-
-    expect(outcome).toEqual({ exportedAt: "2026-09-26T05:00:00.000Z", kind: "stale" });
-  });
-
-  test("a missing export fails the run loudly and writes nothing", async () => {
-    const fake = deps({ score: async () => ({ kind: "missing" }) });
-    const summary = await runLabelOutliersSweep(fake, TEST_FLOOR);
-
-    expect(summary).toMatchObject({
-      ok: false,
-      payloadStarted: false,
-      reason: "scoring_export_missing",
+      return calls === 3 ? { kind: "yielded", reason: "queue" } : serve(cursor);
     });
-    expect(fake.recorded).toEqual([]);
+
+    expect(outcome).toMatchObject({ kind: "yielded", read: { pages: 2 }, reason: "queue" });
+    expect(existsSync(file)).toBe(false);
   });
 
-  test("a stale export fails the run loudly and writes nothing", async () => {
+  test("a cursor that stops advancing fails the read instead of looping", async () => {
+    const [first] = workerPages(replica(), 4);
+    if (!first) {
+      throw new Error("the fixture yields at least one page");
+    }
+    const stuck: InputsPage = { ...first, nextCursor: "c:again" };
+
+    const failure = await scoreFromPages(join(scratchDir(), "s.db"), async () => ({
+      kind: "completed",
+      response: { bytes: 1, page: stuck },
+    })).then(
+      () => "resolved",
+      (error: unknown) => (error instanceof Error ? error.message : String(error)),
+    );
+
+    expect(failure).toContain("stopped advancing");
+  });
+
+  test("a walk longer than its page bound fails instead of reading forever", async () => {
+    const failure = await scoreFromPages(
+      join(scratchDir(), "s.db"),
+      servePages(workerPages(replica(), 4)),
+      { maxPages: 3 },
+    ).then(
+      () => "resolved",
+      (error: unknown) => (error instanceof Error ? error.message : String(error)),
+    );
+
+    expect(failure).toContain("did not end within 3 pages");
+  });
+
+  test("a page that is not the op's shape is refused", () => {
+    expect(() => parseInputsPage({ albums: [], ok: true, tracks: [{ trackId: "t" }] })).toThrow(
+      "without artistIds",
+    );
+    expect(() => parseInputsPage({ ok: false })).toThrow("missing ok, tracks, or albums");
+    expect(() =>
+      parseInputsPage({
+        albums: [],
+        ok: true,
+        tracks: [
+          { albumId: null, artistIds: [], embeddingBase64: "", labelId: null, trackId: "t" },
+        ],
+      }),
+    ).toThrow("no embeddingBase64");
+    expect(parseInputsPage({ albums: [], nextCursor: null, ok: true, tracks: [] })).toEqual({
+      albums: [],
+      nextCursor: null,
+      tracks: [],
+    });
+  });
+
+  test("an admission yield leaves the payload unstarted so the retry slot runs it", async () => {
     const fake = deps({
-      score: async () => ({ exportedAt: "2026-09-26T05:00:00.000Z", kind: "stale" }),
+      score: async () => ({
+        kind: "yielded",
+        read: { bytes: 10, durationMs: 5, pages: 2, tracks: 2000 },
+        reason: "queue",
+      }),
     });
     const summary = await runLabelOutliersSweep(fake, TEST_FLOOR);
 
     expect(summary).toMatchObject({
-      ok: false,
+      inputPages: 2,
+      ok: true,
       payloadStarted: false,
-      reason: "scoring_export_stale",
+      reason: "admission_queue",
     });
     expect(fake.recorded).toEqual([]);
   });
 
-  test("the sweep source never names the device mirror's lock or replica", () => {
+  test("the sweep source never reaches the device mirror's state", () => {
     const source = readFileSync(join(import.meta.dir, "label-outliers-sweep.ts"), "utf8");
 
-    expect(source).not.toContain("device-mirror.lock");
-    expect(source).not.toContain("DEVICE_MIRROR_LOCK_DIR");
+    expect(source).not.toContain("device-mirror");
+    expect(source).not.toContain("DEVICE_MIRROR");
     expect(source).not.toContain("source-replica.db");
   });
 });
@@ -244,7 +356,8 @@ function scored(outliers: number, tracksScored = 40, embeddedTracks = 40): Score
   return {
     embeddedTracks,
     kind: "scored",
-    replicaSyncedAt: "2026-09-27T03:00:00.000Z",
+    read: { bytes: 5_600_000, durationMs: 2_000, pages: 1, tracks: embeddedTracks },
+    readAt: "2026-09-27T03:00:00.000Z",
     run: run(outliers, tracksScored),
   };
 }
@@ -295,6 +408,10 @@ describe("the nightly sweep", () => {
     expect(summary).toMatchObject({
       checked: 20,
       flagged: 2,
+      inputBytes: 5_600_000,
+      inputPages: 1,
+      inputReadMs: 2_000,
+      inputsReadAt: "2026-09-27T03:00:00.000Z",
       notified: false,
       ok: true,
       payloadStarted: true,
@@ -303,6 +420,7 @@ describe("the nightly sweep", () => {
     });
     expect(fake.notified).toEqual([]);
     expect(fake.acknowledged).toEqual([]);
+    expect(fake.recorded[0]?.replicaSyncedAt).toBe("2026-09-27T03:00:00.000Z");
     expect(fake.recorded[0]?.outliers[0]).toMatchObject({
       referenceMedian: 0.8712,
       score: 0.4123,

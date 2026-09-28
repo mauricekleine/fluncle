@@ -1,12 +1,21 @@
 #!/usr/bin/env bun
 
-import { Database } from "bun:sqlite";
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { type Database } from "bun:sqlite";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { runDatabaseAdmissionPhaseAsync } from "./database-admission-phase";
-import { readExportMeta, SCORING_EXPORT_FILE } from "./label-outliers-export";
+import {
+  type Admitted,
+  buildScoringFile,
+  createScoringFile,
+  type FetchedPage,
+  INPUTS_PAGE_LIMIT,
+  type InputsRead,
+  type PageFetch,
+  parseInputsPage,
+} from "./label-outliers-inputs";
 import {
   addInto,
   EMBEDDING_DIMENSIONS,
@@ -21,6 +30,7 @@ const API_BASE_URL = process.env.FLUNCLE_API_BASE_URL ?? "https://www.fluncle.co
 const API_TOKEN = process.env.FLUNCLE_API_TOKEN ?? "";
 const DISCORD_ALERT_WEBHOOK = process.env.DISCORD_ALERT_WEBHOOK;
 
+const INPUTS_PATH = "/api/v1/admin/label-outliers/inputs";
 const RECORD_PATH = "/api/v1/admin/label-outliers";
 const ACKNOWLEDGE_PATH = "/api/v1/admin/label-outliers/alerts";
 const BOARD_URL = "https://www.fluncle.com/admin/label-outliers";
@@ -73,13 +83,11 @@ export type RecordResponse = {
 
 export type AcknowledgeResponse = { acknowledged?: number; ok?: boolean };
 
-export type Admitted<T> =
-  | { kind: "completed"; response: T }
-  | { kind: "yielded"; reason: string | null };
+export type { Admitted };
 
-export type ScoredReplica = {
+export type ScoredCorpus = {
   embeddedTracks: number;
-  replicaSyncedAt: string | null;
+  readAt: string;
   run: LabelOutlierRun;
 };
 
@@ -91,6 +99,10 @@ export type LabelOutliersSummary = {
   error?: string;
   errors: number;
   flagged: null | number;
+  inputBytes: null | number;
+  inputPages: null | number;
+  inputReadMs: null | number;
+  inputsReadAt: null | string;
   labelsScored: null | number;
   notified: boolean;
   ok: boolean;
@@ -98,7 +110,6 @@ export type LabelOutliersSummary = {
   pendingAlerts: null | number;
   produced: null | number;
   reason?: string;
-  replicaSyncedAt: null | string;
   tracksScored: null | number;
 };
 
@@ -109,13 +120,16 @@ export function emptySummary(): LabelOutliersSummary {
     embeddedTracks: null,
     errors: 0,
     flagged: null,
+    inputBytes: null,
+    inputPages: null,
+    inputReadMs: null,
+    inputsReadAt: null,
     labelsScored: null,
     notified: false,
     ok: true,
     payloadStarted: false,
     pendingAlerts: null,
     produced: null,
-    replicaSyncedAt: null,
     tracksScored: null,
   };
 }
@@ -147,7 +161,7 @@ function round(value: number): number {
   return Math.round(value * 10_000) / 10_000;
 }
 
-export function corpusFloorViolation(scored: ScoredReplica, floor: CorpusFloor): string | null {
+export function corpusFloorViolation(scored: ScoredCorpus, floor: CorpusFloor): string | null {
   const usable = scored.run.tracksScored;
 
   if (usable < floor.minTracks) {
@@ -206,7 +220,7 @@ const CATALOGUE_EMBEDDED = `from tracks t
   join track_embeddings e on e.track_id = t.track_id
   where t.is_catalogue = 1`;
 
-export type ReplicaInputs = {
+export type ScoringInputs = {
   artistsByTrack: Map<string, string[]>;
   dnbTaggedAlbumIds: Set<string>;
   embeddedTracks: number;
@@ -214,7 +228,7 @@ export type ReplicaInputs = {
   groups: () => Iterable<LabelGroup>;
 };
 
-export function readReplicaInputs(database: Database): ReplicaInputs {
+export function readScoringInputs(database: Database): ScoringInputs {
   const globalSum = new Float64Array(EMBEDDING_DIMENSIONS);
   let embeddedTracks = 0;
 
@@ -291,52 +305,45 @@ export function readReplicaInputs(database: Database): ReplicaInputs {
   return { artistsByTrack, dnbTaggedAlbumIds, embeddedTracks, globalSum, groups };
 }
 
-export const SCORING_EXPORT_MAX_AGE_MS = 36 * 60 * 60 * 1000;
-
 export type ScoreOutcome =
-  | ({ kind: "scored" } & ScoredReplica)
-  | { exportedAt: string; kind: "stale" }
-  | { kind: "missing" };
+  | ({ kind: "scored"; read: InputsRead } & ScoredCorpus)
+  | { kind: "yielded"; read: InputsRead; reason: string | null };
 
-export async function scoreExportFile(
-  exportFile: string,
-  options: { maxAgeMs?: number; now?: () => number } = {},
+export async function scoreFromPages(
+  scoringFile: string,
+  fetchPage: PageFetch,
+  options: { maxPages?: number; now?: () => Date } = {},
 ): Promise<ScoreOutcome> {
-  const maxAgeMs = options.maxAgeMs ?? SCORING_EXPORT_MAX_AGE_MS;
-  const now = options.now ?? Date.now;
-
-  if (!(await stat(exportFile).catch(() => undefined))) {
-    return { kind: "missing" };
-  }
-
-  const database = new Database(exportFile, { readonly: true, strict: true });
+  const readAt = (options.now ?? (() => new Date()))().toISOString();
+  await rm(scoringFile, { force: true });
+  const database = createScoringFile(scoringFile);
 
   try {
-    const meta = readExportMeta(database);
+    const built = await buildScoringFile(database, fetchPage, { maxPages: options.maxPages });
+    const read: InputsRead = {
+      bytes: built.bytes,
+      durationMs: built.durationMs,
+      pages: built.pages,
+      tracks: built.tracks,
+    };
 
-    if (!meta) {
-      return { kind: "missing" };
+    if (built.kind === "yielded") {
+      return { kind: "yielded", read, reason: built.reason };
     }
 
-    const exportedTime = Date.parse(meta.exportedAt);
-
-    if (!Number.isFinite(exportedTime) || now() - exportedTime > maxAgeMs) {
-      return { exportedAt: meta.exportedAt, kind: "stale" };
-    }
-
-    database.run("BEGIN");
-    const inputs = readReplicaInputs(database);
+    const inputs = readScoringInputs(database);
     const run = scoreCatalogue({ ...inputs, groups: inputs.groups() });
-    database.run("COMMIT");
 
     return {
       embeddedTracks: inputs.embeddedTracks,
       kind: "scored",
-      replicaSyncedAt: meta.exportedAt,
+      read,
+      readAt,
       run,
     };
   } finally {
     database.close();
+    await rm(scoringFile, { force: true });
   }
 }
 
@@ -393,32 +400,19 @@ export async function runLabelOutliersSweep(
   const summary = emptySummary();
   const scored = await deps.score();
 
-  if (scored.kind === "missing") {
-    return {
-      ...summary,
-      error: "the device mirror has not written a scoring export; nothing written",
-      errors: 1,
-      ok: false,
-      reason: "scoring_export_missing",
-    };
-  }
+  summary.inputBytes = scored.read.bytes;
+  summary.inputPages = scored.read.pages;
+  summary.inputReadMs = scored.read.durationMs;
 
-  if (scored.kind === "stale") {
-    return {
-      ...summary,
-      error: `the scoring export dates from ${scored.exportedAt}, older than the sweep accepts; nothing written`,
-      errors: 1,
-      ok: false,
-      reason: "scoring_export_stale",
-      replicaSyncedAt: scored.exportedAt,
-    };
+  if (scored.kind === "yielded") {
+    return { ...summary, reason: admissionReason(scored.reason) };
   }
 
   summary.checked = scored.run.unitsScored;
   summary.embeddedTracks = scored.embeddedTracks;
   summary.labelsScored = scored.run.labelsScored;
   summary.tracksScored = scored.run.tracksScored;
-  summary.replicaSyncedAt = scored.replicaSyncedAt;
+  summary.inputsReadAt = scored.readAt;
 
   const violation = corpusFloorViolation(scored, floor);
 
@@ -437,7 +431,7 @@ export async function runLabelOutliersSweep(
     };
   }
 
-  const payload = toPayload(scored.run, scored.replicaSyncedAt);
+  const payload = toPayload(scored.run, scored.readAt);
   const recorded = await deps.record(payload);
 
   if (recorded.kind === "yielded") {
@@ -459,11 +453,56 @@ export async function runLabelOutliersSweep(
   return summary;
 }
 
-function scoringExportPath(): string {
+async function scoringFilePath(): Promise<string> {
   const home = process.env.HOME ?? "/opt/data/home";
-  const stateDirectory = process.env.DEVICE_MIRROR_STATE_DIR ?? join(home, "device-mirror");
+  const stateDirectory = process.env.LABEL_OUTLIERS_STATE_DIR ?? join(home, "label-outliers");
+  await mkdir(stateDirectory, { recursive: true });
 
-  return join(stateDirectory, SCORING_EXPORT_FILE);
+  return join(stateDirectory, "scoring-inputs.db");
+}
+
+async function getInputsPage(cursor: string | null): Promise<string> {
+  const url = new URL(`${API_BASE_URL}${INPUTS_PATH}`);
+  url.searchParams.set("limit", String(INPUTS_PAGE_LIMIT));
+
+  if (cursor !== null) {
+    url.searchParams.set("cursor", cursor);
+  }
+
+  const response = await fetch(url, {
+    headers: { Authorization: `Bearer ${API_TOKEN}` },
+    signal: AbortSignal.timeout(120_000),
+  });
+  const body = await response.text();
+
+  if (!response.ok) {
+    throw new Error(`list_label_outlier_inputs failed (${response.status}): ${body.slice(0, 200)}`);
+  }
+
+  return body;
+}
+
+async function admittedInputsPage(cursor: string | null): Promise<Admitted<FetchedPage>> {
+  const result = await runDatabaseAdmissionPhaseAsync({
+    command: [
+      process.execPath,
+      import.meta.filename,
+      "--admission-phase",
+      "inputs",
+      ...(cursor === null ? [] : ["--cursor", cursor]),
+    ],
+    owner: ADMISSION_OWNER,
+    yieldRetries: 1,
+  });
+
+  if (result.kind === "yielded") {
+    return { kind: "yielded", reason: result.yieldReason };
+  }
+
+  return {
+    kind: "completed",
+    response: { bytes: result.stdout.length, page: parseInputsPage(JSON.parse(result.stdout)) },
+  };
 }
 
 async function putJson<T>(path: string, body: unknown, what: string): Promise<T> {
@@ -556,13 +595,21 @@ async function main(): Promise<LabelOutliersSummary> {
     acknowledge: (units) => admittedPut<AcknowledgeResponse>("acknowledge", { units }),
     notify: notifyDiscord,
     record: (payload) => admittedPut<RecordResponse>("record", payload),
-    score: () => scoreExportFile(scoringExportPath()),
+    score: async () => scoreFromPages(await scoringFilePath(), admittedInputsPage),
   });
 
   return { ...summary, elapsedMs: Date.now() - started };
 }
 
 async function runPhase(args: string[]): Promise<void> {
+  if (args[1] === "inputs") {
+    const cursorIndex = args.indexOf("--cursor");
+    process.stdout.write(
+      await getInputsPage(cursorIndex >= 0 ? (args[cursorIndex + 1] ?? null) : null),
+    );
+    return;
+  }
+
   const phase = args[1] === "acknowledge" || args[1] === "record" ? args[1] : undefined;
   const payloadIndex = args.indexOf("--payload");
   const payloadFile = payloadIndex >= 0 ? args[payloadIndex + 1] : undefined;

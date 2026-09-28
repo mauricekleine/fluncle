@@ -87,6 +87,68 @@ plan() {
 	fi
 }
 
+dormant_timer_state() {
+	local timer="$1" load enabled active
+	load="$(systemctl show -p LoadState --value "$timer" 2>/dev/null)" || {
+		printf 'probe-error\n'
+		return 0
+	}
+	case "$load" in
+	not-found)
+		printf 'not-installed\n'
+		return 0
+		;;
+	loaded | masked) ;;
+	*)
+		printf 'probe-error\n'
+		return 0
+		;;
+	esac
+	enabled="$(systemctl is-enabled "$timer" 2>/dev/null || true)"
+	active="$(systemctl is-active "$timer" 2>/dev/null || true)"
+	case "$enabled" in
+	disabled | masked | masked-runtime) ;;
+	enabled | enabled-runtime | static | indirect | generated | transient | linked | linked-runtime | alias)
+		printf 'live\n'
+		return 0
+		;;
+	*)
+		printf 'probe-error\n'
+		return 0
+		;;
+	esac
+	case "$active" in
+	inactive | failed) printf 'parked\n' ;;
+	active | activating | deactivating | reloading) printf 'live\n' ;;
+	*) printf 'probe-error\n' ;;
+	esac
+}
+
+park_dormant_timer() {
+	local name="$1" state
+	state="$(dormant_timer_state "$name")"
+	case "$state" in
+	not-installed | parked)
+		printf '  dormant %s: %s\n' "$name" "$state"
+		return 0
+		;;
+	probe-error)
+		echo "install-host-timers.sh: could not read the state of dormant ${name}; refusing to report success" >&2
+		exit 1
+		;;
+	esac
+	if ! systemctl disable --now "$name"; then
+		echo "install-host-timers.sh: could not disable dormant ${name}; refusing to report success" >&2
+		exit 1
+	fi
+	state="$(dormant_timer_state "$name")"
+	if [ "$state" != "parked" ]; then
+		echo "install-host-timers.sh: dormant ${name} is still enabled or active after disable --now (${state})" >&2
+		exit 1
+	fi
+	printf '  dormant %s: disabled\n' "$name"
+}
+
 unit_dirs=()
 skipped_dirs=()
 for dir in "${REPO_DIR}"/*/; do
@@ -225,7 +287,22 @@ for unit in "${unit_files[@]}"; do
 done
 
 timers=()
+dormant_timers=()
 skipped_enables=()
+if [ "$refresh_mode" -eq 1 ]; then
+	for unit in "${unit_files[@]}"; do
+		dir="$(dirname "$unit")"
+		[ -e "${dir}/DORMANT" ] || continue
+		for timer in "$dir"/*.timer; do
+			name="$(basename "$timer")"
+			case "$name" in *@*) continue ;; esac
+			if ! contains "$name" ${dormant_timers[@]+"${dormant_timers[@]}"}; then
+				dormant_timers+=("$name")
+				plan "dormant-timer ${name} ($(rel "$dir")/DORMANT: refreshed, kept disabled)"
+			fi
+		done
+	done
+fi
 if [ "$refresh_mode" -eq 0 ]; then
 	for dir in "${unit_dirs[@]}"; do
 		for timer in "$dir"/*.timer; do
@@ -236,6 +313,11 @@ if [ "$refresh_mode" -eq 0 ]; then
 				continue
 				;;
 			esac
+			if [ -e "${dir}/DORMANT" ]; then
+				dormant_timers+=("$name")
+				plan "dormant-timer ${name} ($(rel "$dir")/DORMANT: installed, never enabled, disabled if running)"
+				continue
+			fi
 			timers+=("$name")
 		done
 		for service in "$dir"/*@.service; do
@@ -272,8 +354,8 @@ if [ "$dry_run" -eq 1 ]; then
 		printf 'Would refresh %d selected unit files and %d host scripts; no timers or services would be activated.\n' \
 			"${#unit_files[@]}" "${#host_pairs[@]}"
 	else
-		printf 'Would install %d unit files from %d dirs and %d host scripts; enable %d timers.\n' \
-			"${#unit_files[@]}" "${#unit_dirs[@]}" "${#host_pairs[@]}" "${#timers[@]}"
+		printf 'Would install %d unit files from %d dirs and %d host scripts; enable %d timers; keep %d dormant timers disabled.\n' \
+			"${#unit_files[@]}" "${#unit_dirs[@]}" "${#host_pairs[@]}" "${#timers[@]}" "${#dormant_timers[@]}"
 	fi
 	exit 0
 fi
@@ -289,8 +371,14 @@ done
 systemctl daemon-reload
 
 if [ "$refresh_mode" -eq 1 ]; then
+	for name in ${dormant_timers[@]+"${dormant_timers[@]}"}; do
+		park_dormant_timer "$name"
+	done
 	printf 'Refreshed %d selected unit files and %d host scripts; no timers or services activated.\n' \
 		"${#unit_files[@]}" "${#host_pairs[@]}"
+	if [ "${#dormant_timers[@]}" -ne 0 ]; then
+		printf '  dormant (verified disabled): %s\n' "${dormant_timers[@]}"
+	fi
 	if [ "${#host_pairs[@]}" -ne 0 ]; then
 		printf '  host script: %s\n' "${host_pairs[@]//|/ -> }"
 	fi
@@ -310,12 +398,19 @@ for name in "${timers[@]}"; do
 	fi
 done
 
+for name in ${dormant_timers[@]+"${dormant_timers[@]}"}; do
+	park_dormant_timer "$name"
+done
+
 printf 'Installed %d unit files from %d dirs and %d host scripts; enabled %d timers.\n' \
 	"${#unit_files[@]}" "${#unit_dirs[@]}" "${#host_pairs[@]}" "${#enabled[@]}"
 if [ "${#host_pairs[@]}" -ne 0 ]; then
 	printf '  host script: %s\n' "${host_pairs[@]//|/ -> }"
 fi
 printf '  enabled: %s\n' "${enabled[@]}"
+if [ "${#dormant_timers[@]}" -ne 0 ]; then
+	printf '  dormant (installed, verified disabled): %s\n' "${dormant_timers[@]}"
+fi
 if [ "${#skipped_enables[@]}" -ne 0 ]; then
 	printf '  skipped (not enabled): %s\n' "${skipped_enables[@]}"
 fi
