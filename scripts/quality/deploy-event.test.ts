@@ -130,4 +130,21 @@ describe("post-deploy event handling", () => {
       expect((error as Error).message).toContain("deployment did not correlate");
     }
   });
+
+  test("a failed post-deploy probe stops polling before the deadline", async () => {
+    try {
+      await pollForDeployment({
+        deadlineSeconds: 1200,
+        fetchImpl: async () => Response.json({ sha: "c".repeat(40) }),
+        isAncestor: () => false,
+        onMiss: () => {
+          throw new Error("post-deploy probe failed");
+        },
+        target: SHA,
+      });
+      throw new Error("poll unexpectedly succeeded");
+    } catch (error) {
+      expect((error as Error).message).toBe("post-deploy probe failed");
+    }
+  });
 });
