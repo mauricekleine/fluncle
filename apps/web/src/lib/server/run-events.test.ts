@@ -306,6 +306,32 @@ describe("normalizeRunSummary — the third state", () => {
     expect(deriveRunOk(0, result.errors)).toBe(true);
   });
 
+  it.each([
+    ["acquisition-authentication-failed", "authentication-failed"],
+    ["acquisition-database-busy", "database-busy"],
+    ["acquisition-gateway-transport", "gateway-transport"],
+    ["acquisition-unavailable", "coordinator-unavailable"],
+    ["breaker-open", "breaker-open"],
+  ])("accepts the runner's %s pre-payload skip as a ledger skip", (outcome, reason) => {
+    const result = normalizeRunSummary(
+      JSON.stringify({
+        admissionOutcome: outcome,
+        admissionWaitMs: 0,
+        admissionYieldReason: reason,
+        checked: null,
+        errors: 0,
+        expectedIntervalMs: null,
+        gateState: "admission-skipped",
+        payloadStarted: false,
+        produced: null,
+        queueDepth: null,
+      }),
+    );
+
+    expect(result).toMatchObject({ errors: 0, gateState: "admission-skipped" });
+    expect(deriveRunOk(0, result.errors)).toBe(true);
+  });
+
   it("rejects an admission-skipped claim that could conceal a payload run", () => {
     expect(() =>
       normalizeRunSummary(

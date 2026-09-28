@@ -81,29 +81,37 @@ ${body}
   chmodSync(path, 0o755);
 }
 
-function fakeAdmissionClock(...timesMs: number[]): void {
-  const clock = join(directory, "admission-clock");
-  writeFileSync(clock, `${timesMs.join("\n")}\n`);
+function fakeVirtualClock(startMs: number): string {
+  const clock = join(directory, "virtual-clock");
+  writeFileSync(clock, `${startMs}\n`);
   fakeExecutable(
     "date",
     `case "$*" in
-  "+%s%3N")
-    value="$(sed -n '1p' "${clock}")"
-    [ -n "$value" ] || exit 1
-    sed '1d' "${clock}" > "${clock}.next"
-    mv "${clock}.next" "${clock}"
-    printf '%s' "$value"
-    ;;
+  "+%s%3N") printf '%s' "$(sed -n '1p' "${clock}")" ;;
   "-u +%Y%m%dT%H%M%SZ") printf '20260908T000000Z' ;;
   "+%s") printf '1' ;;
   *) exit 1 ;;
 esac`,
+  );
+  return clock;
+}
+
+function setVirtualClock(clock: string, atMs: number): string {
+  return `printf '%s\\n' ${atMs} > "${clock}"`;
+}
+
+function advancingVirtualSleep(clock: string): void {
+  fakeExecutable(
+    "sleep",
+    `perl -e 'my ($file, $seconds) = @ARGV; open(my $in, "<", $file) or die; my $now = <$in>; close $in; chomp $now; open(my $out, ">", $file) or die; printf $out "%d\\n", $now + $seconds * 1000; close $out' "${clock}" "$1"`,
   );
 }
 
 async function run(
   command: string[],
   options: {
+    breakerFailures?: number;
+    env?: NodeJS.ProcessEnv;
     failClosed?: boolean;
     home?: string;
     maxWaitSecs?: number;
@@ -159,6 +167,8 @@ async function run(
 
 function runnerEnvironment(
   options: {
+    breakerFailures?: number;
+    env?: NodeJS.ProcessEnv;
     failClosed?: boolean;
     home?: string;
     maxWaitSecs?: number;
@@ -169,6 +179,7 @@ function runnerEnvironment(
   const inheritedPath = process.env.PATH ?? "/usr/bin:/bin";
   const home = options.home ?? directory;
   const environment: NodeJS.ProcessEnv = {
+    DATABASE_ADMISSION_BREAKER_FAILURES: String(options.breakerFailures ?? 1000),
     DATABASE_ADMISSION_FAIL_CLOSED: options.failClosed === true ? "true" : "false",
     DATABASE_ADMISSION_HTTP_TIMEOUT_SECS: "1",
     DATABASE_ADMISSION_KILL_GRACE_SECS: "1",
@@ -182,7 +193,7 @@ function runnerEnvironment(
   if (options.pollSecs !== null) {
     environment.DATABASE_ADMISSION_POLL_SECS = options.pollSecs ?? "1";
   }
-  return environment;
+  return { ...environment, ...options.env };
 }
 
 function liveRebakeHome(): string {
@@ -338,6 +349,8 @@ const SHADOW_RESPONSE = `echo '{"contenderId":"fluncle-enrich:run","enforced":fa
 const ACQUIRED_RESPONSE = `echo '{"contenderId":"fluncle-enrich:run","enforced":true,"fencingToken":7,"heavyRead":false,"heartbeatAfterMs":1,"holdMs":0,"lane":"write","leaseExpiresAtMs":91000,"operationId":"track.enrich","outcome":"acquired","queueAgeMs":12,"recovered":false,"waitMs":12,"yieldReason":null}'`;
 const QUEUED_RESPONSE = `echo '{"contenderId":"fluncle-enrich:run","enforced":true,"fencingToken":null,"heavyRead":false,"heartbeatAfterMs":30000,"holdMs":0,"lane":"write","leaseExpiresAtMs":null,"operationId":"track.enrich","outcome":"queued","queueAgeMs":12,"recovered":false,"waitMs":12,"yieldReason":"queue"}'`;
 const PUBLIC_LATENCY_RESPONSE = `echo '{"contenderId":"fluncle-enrich:run","enforced":true,"fencingToken":null,"heavyRead":false,"heartbeatAfterMs":30000,"holdMs":0,"lane":"write","leaseExpiresAtMs":null,"operationId":"track.enrich","outcome":"queued","queueAgeMs":12,"recovered":false,"waitMs":12,"yieldReason":"public-latency"}'`;
+const STALL_TOLERANT_GRANT = (leaseRemainingMs: number, heartbeatAfterMs: number) =>
+  `echo '{"contenderId":"fluncle-enrich:run","enforced":true,"fencingToken":7,"heavyRead":false,"heartbeatAfterMs":${heartbeatAfterMs},"holdMs":0,"lane":"write","leaseExpiresAtMs":91000,"leaseRemainingMs":${leaseRemainingMs},"operationId":"track.enrich","outcome":"acquired","queueAgeMs":12,"recovered":false,"retryAfterMs":null,"waitMs":12,"yieldReason":null}'`;
 const MALFORMED_YIELD_QUEUED_RESPONSE = `echo '{"contenderId":"fluncle-enrich:run","enforced":true,"fencingToken":null,"heavyRead":false,"heartbeatAfterMs":30000,"holdMs":0,"lane":"write","leaseExpiresAtMs":null,"operationId":"track.enrich","outcome":"queued","queueAgeMs":12,"recovered":false,"waitMs":12,"yieldReason":"queue\\\\malformed"}'`;
 
 describe("database admission unit runner", () => {
@@ -430,14 +443,14 @@ printf '{}'
       expect(result.status).toBe(0);
       expect(existsSync(payloadMarker)).toBe(false);
       expect(result.stderr).toContain('"outcome":"acquire-retry"');
-      expect(result.stderr).toContain('"outcome":"acquisition-unavailable"');
-      expect(result.stderr).toContain('"yield_reason":"coordinator-unavailable"');
+      expect(result.stderr).toContain('"outcome":"acquisition-gateway-transport"');
+      expect(result.stderr).toContain('"yield_reason":"gateway-transport"');
       const calls = readFileSync(curlLog, "utf8");
       expect(calls.match(/"action":"acquire"/g)?.length ?? 0).toBeGreaterThanOrEqual(2);
       const summary = markerSummary();
       expect(summary).toMatchObject({
-        admissionOutcome: "acquisition-unavailable",
-        admissionYieldReason: "coordinator-unavailable",
+        admissionOutcome: "acquisition-gateway-transport",
+        admissionYieldReason: "gateway-transport",
         checked: null,
         errors: 0,
         expectedIntervalMs: null,
@@ -473,9 +486,9 @@ ${ACQUIRED_RESPONSE}
       expect(result.status).toBe(0);
       expect(existsSync(payloadMarker)).toBe(true);
       expect(result.stderr.match(/"outcome":"acquire-retry"/g)).toHaveLength(2);
-      expect(result.stderr).toContain('"yield_reason":"coordinator-unavailable"');
+      expect(result.stderr).toContain('"yield_reason":"gateway-transport"');
       expect(result.stderr).toContain('"outcome":"released"');
-      expect(result.stderr).not.toContain('"outcome":"acquisition-unavailable"');
+      expect(result.stderr).not.toContain('"outcome":"acquisition-gateway-transport"');
       const calls = readFileSync(curlLog, "utf8");
       expect(calls.match(/"action":"acquire"/g)?.length ?? 0).toBe(3);
       expect(calls).toContain('"action":"release"');
@@ -645,7 +658,7 @@ fi
     "cancels a bounded queued acquisition without starting the payload",
     PROCESS_TEST_OPTIONS,
     async () => {
-      fakeAdmissionClock(1_000, 1_000, 1_000, 1_000);
+      fakeVirtualClock(1_000);
       fakeCurl(QUEUED_RESPONSE);
       const payloadMarker = join(directory, "payload-started");
       const result = await run(["bash", "-c", `printf started > "${payloadMarker}"`], {
@@ -675,8 +688,7 @@ fi
     "preserves public latency when the final poll sleep exhausts acquisition",
     PROCESS_TEST_OPTIONS,
     async () => {
-      fakeAdmissionClock(1_000, 1_000, 1_100, 2_000, 2_000);
-      fakeExecutable("sleep", ":");
+      advancingVirtualSleep(fakeVirtualClock(1_000));
       fakeCurl(PUBLIC_LATENCY_RESPONSE);
       const payloadMarker = join(directory, "payload-started");
       const result = await run(["bash", "-c", `printf started > "${payloadMarker}"`], {
@@ -685,7 +697,9 @@ fi
 
       expect(result.status).toBe(0);
       expect(existsSync(payloadMarker)).toBe(false);
-      expect(readFileSync(curlLog, "utf8").match(/"action":"acquire"/g)?.length ?? 0).toBe(1);
+      expect(
+        readFileSync(curlLog, "utf8").match(/"action":"acquire"/g)?.length ?? 0,
+      ).toBeGreaterThanOrEqual(1);
       expect(result.stderr).toContain('"outcome":"wait-expired"');
       expect(result.stderr).toContain('"yield_reason":"public-latency"');
       expect(markerSummary()).toMatchObject({
@@ -700,13 +714,14 @@ fi
     "preserves the last admitted reason when an in-flight retry exhausts acquisition",
     PROCESS_TEST_OPTIONS,
     async () => {
-      fakeAdmissionClock(1_000, 1_000, 1_100, 1_200, 1_200, 2_000, 2_000);
+      const clock = fakeVirtualClock(1_000);
       fakeExecutable("sleep", ":");
       fakeCurl(`
 acquire_count="$(grep -c '"action":"acquire"' "${curlLog}")"
 if [ "$acquire_count" -eq 1 ]; then
   ${PUBLIC_LATENCY_RESPONSE}
 elif [ "$acquire_count" -eq 2 ]; then
+  ${setVirtualClock(clock, 2_000)}
   exit 28
 else
   printf '{}'
@@ -730,14 +745,14 @@ fi
     "keeps a known HTTP failure typed when it arrives at the deadline boundary",
     PROCESS_TEST_OPTIONS,
     async () => {
-      fakeAdmissionClock(1_000, 1_000, 1_100, 1_200, 1_200, 2_000);
+      const clock = fakeVirtualClock(1_000);
       fakeExecutable("sleep", ":");
       fakeCurl(`
 acquire_count="$(grep -c '"action":"acquire"' "${curlLog}")"
 if [ "$acquire_count" -eq 1 ]; then
   ${PUBLIC_LATENCY_RESPONSE}
 elif [ "$acquire_count" -eq 2 ]; then
-  date +%s%3N >/dev/null
+  ${setVirtualClock(clock, 2_000)}
   printf '{}\\n401\\n'
 else
   printf '{}'
@@ -760,13 +775,15 @@ fi
     "retries a pre-deadline gateway failure and keeps the last admitted reason at the deadline",
     PROCESS_TEST_OPTIONS,
     async () => {
-      fakeAdmissionClock(1_000, 1_000, 1_100, 1_200, 1_200, 1_300, 1_300, 2_000, 2_000);
-      fakeExecutable("sleep", ":");
+      const clock = fakeVirtualClock(1_000);
+      fakeExecutable(
+        "sleep",
+        `if [ "$(wc -l < "${curlLog}")" -ge 2 ]; then ${setVirtualClock(clock, 2_000)}; fi`,
+      );
       fakeCurl(`
 if [ "$(wc -l < "${curlLog}")" -eq 1 ]; then
   ${PUBLIC_LATENCY_RESPONSE}
 else
-  date +%s%3N >/dev/null
   printf '{}\\n503\\n'
 fi
 `);
@@ -887,7 +904,7 @@ ${ACQUIRED_RESPONSE}`);
   );
 
   it(
-    "uses the two-second default when the polling interval is absent",
+    "polls within the two-second default when the polling interval is absent",
     PROCESS_TEST_OPTIONS,
     async () => {
       const sleepLog = join(directory, "sleep.log");
@@ -908,7 +925,9 @@ fi
 
       expect(result.status).toBe(0);
       expect(existsSync(payloadMarker)).toBe(true);
-      expect(readFileSync(sleepLog, "utf8").split("\n")[0]).toBe("2.000");
+      const firstPollSeconds = Number(readFileSync(sleepLog, "utf8").split("\n")[0]);
+      expect(firstPollSeconds).toBeGreaterThanOrEqual(1);
+      expect(firstPollSeconds).toBeLessThanOrEqual(2);
       expect(result.stderr).toContain('"outcome":"released"');
       expect(readFileSync(curlLog, "utf8")).toContain('"action":"release"');
     },
@@ -1264,7 +1283,7 @@ if printf '%s' "$*" | grep -q '"action":"heartbeat"'; then
     exit 28
   fi
   if [ "$heartbeat_count" -eq 2 ]; then
-    printf '%s\\n%s\\n' '{}' '503'
+    printf '%s\\n%s\\n' '{}' '500'
     exit 0
   fi
 fi
@@ -1275,8 +1294,8 @@ ${ACQUIRED_RESPONSE}
       expect(result.status).toBe(0);
       expect(result.stdout).toBe("complete");
       expect(result.stderr.match(/"outcome":"heartbeat-retry"/g)).toHaveLength(2);
-      expect(result.stderr).toContain('"yield_reason":"coordinator-unavailable"');
       expect(result.stderr).toContain('"yield_reason":"gateway-transport"');
+      expect(result.stderr).toContain('"yield_reason":"coordinator-unavailable"');
       expect(result.stderr).toMatch(/"outcome":"released"[^\n]*"yield_reason":""/);
       expect(result.stderr).not.toContain('"outcome":"fenced"');
       const calls = readFileSync(curlLog, "utf8");
@@ -1290,13 +1309,14 @@ ${ACQUIRED_RESPONSE}
     PROCESS_TEST_OPTIONS,
     async () => {
       const advanceClock = join(directory, "advance-heartbeat-clock");
+      const startedAtMs = Date.now();
       fakeExecutable(
         "date",
         `if [ "$1" = "+%s%3N" ]; then
-  if [ -e "${advanceClock}" ]; then printf '100000000'; else printf '1000'; fi
+  if [ -e "${advanceClock}" ]; then printf '100000000'; else perl -MTime::HiRes=time -e 'printf "%.0f", time() * 1000 - ${startedAtMs} + 1000'; fi
   exit 0
 fi
-exec /usr/bin/date "$@"`,
+exec /bin/date "$@"`,
       );
       fakeCurl(`
 if printf '%s' "$*" | grep -q '"action":"heartbeat"'; then
@@ -1514,6 +1534,433 @@ ${ACQUIRED_RESPONSE}
       expect(calls).toContain('"fencingToken":7');
       expect(calls.match(/"action":"release"/g)?.length ?? 0).toBe(1);
       expect(result.stderr).toContain('"outcome":"cancelled"');
+    },
+  );
+});
+
+function breakerState(): { cooldownMs: number; sinceMs: number; untilMs: number } | null {
+  const file = join(directory, ".database-admission", "breaker");
+  if (!existsSync(file)) {
+    return null;
+  }
+  const [sinceMs, untilMs, cooldownMs] = readFileSync(file, "utf8").trim().split(" ").map(Number);
+  return { cooldownMs: cooldownMs ?? 0, sinceMs: sinceMs ?? 0, untilMs: untilMs ?? 0 };
+}
+
+function pendingDebts(): string[] {
+  const pending = join(directory, ".database-admission", "pending");
+  return existsSync(pending) ? readdirSync(pending).filter((entry) => !entry.startsWith(".")) : [];
+}
+
+function runIdOf(stderr: string): string {
+  const runId = /"run_id":"([^"]+)"/.exec(stderr)?.[1];
+  expect(runId).toBeTruthy();
+  return runId ?? "";
+}
+
+function acquireCount(): number {
+  return existsSync(curlLog)
+    ? (readFileSync(curlLog, "utf8").match(/"action":"acquire"/g)?.length ?? 0)
+    : 0;
+}
+
+describe("database admission stall behaviour", () => {
+  it(
+    "backs acquire retries off exponentially with full jitter under a capped ceiling",
+    PROCESS_TEST_OPTIONS,
+    async () => {
+      const clock = fakeVirtualClock(1_000_000);
+      const sleepLog = join(directory, "sleep.log");
+      fakeExecutable(
+        "sleep",
+        `printf '%s\\n' "$1" >> "${sleepLog}"
+perl -e 'my ($file, $seconds) = @ARGV; open(my $in, "<", $file) or die; my $now = <$in>; close $in; chomp $now; open(my $out, ">", $file) or die; printf $out "%d\\n", $now + $seconds * 1000; close $out' "${clock}" "$1"`,
+      );
+      fakeCurl("exit 28");
+      const result = await run(["bash", "-c", "exit 0"], {
+        failClosed: true,
+        maxWaitSecs: 120,
+        pollSecs: "2",
+      });
+
+      expect(result.status).toBe(0);
+      expect(result.stderr).toContain('"outcome":"acquisition-gateway-transport"');
+      const sleeps = readFileSync(sleepLog, "utf8").trim().split("\n").map(Number);
+      sleeps.forEach((seconds, index) => {
+        expect(seconds).toBeGreaterThanOrEqual(0);
+        expect(seconds).toBeLessThanOrEqual(Math.min(30, 2 * 2 ** index));
+      });
+      expect(acquireCount()).toBeGreaterThanOrEqual(5);
+      expect(acquireCount()).toBeLessThan(40);
+    },
+  );
+
+  it("retries a 524 origin timeout as a gateway failure", PROCESS_TEST_OPTIONS, async () => {
+    fakeCurl(`
+if printf '%s' "$*" | grep -q '"action":"acquire"' && [ "$(grep -c '"action":"acquire"' "${curlLog}")" -eq 1 ]; then
+  printf '%s\\n%s\\n' '{}' '524'
+  exit 0
+fi
+${ACQUIRED_RESPONSE}
+`);
+    const result = await run(["bash", "-c", "printf done"], { failClosed: true, maxWaitSecs: 10 });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe("done");
+    expect(result.stderr).toMatch(
+      /"outcome":"acquire-retry"[^\n]*"yield_reason":"gateway-transport"/,
+    );
+    expect(acquireCount()).toBe(2);
+  });
+
+  it(
+    "sends the stall-tolerant protocol version and its acquisition deadline",
+    PROCESS_TEST_OPTIONS,
+    async () => {
+      fakeCurl(ACQUIRED_RESPONSE);
+      await run(["bash", "-c", "exit 0"]);
+
+      const acquire = readFileSync(curlLog, "utf8")
+        .split("\n")
+        .find((call) => call.includes('"action":"acquire"'));
+      expect(acquire).toContain('"protocolVersion":2');
+      expect(acquire).toMatch(/"notAfterMs":\d+/);
+    },
+  );
+
+  it(
+    "keeps a healthy payload running through a heartbeat outage its lease still covers",
+    PROCESS_TEST_OPTIONS,
+    async () => {
+      fakeCurl(`
+if printf '%s' "$*" | grep -q '"action":"heartbeat"'; then
+  if [ "$(grep -c '"action":"heartbeat"' "${curlLog}")" -le 4 ]; then
+    exit 28
+  fi
+  ${STALL_TOLERANT_GRANT(420_000, 1_000)}
+  exit 0
+fi
+${STALL_TOLERANT_GRANT(420_000, 1_000)}
+`);
+      const result = await run(["bash", "-c", "sleep 8; printf complete"]);
+
+      expect(result.status).toBe(0);
+      expect(result.stdout).toBe("complete");
+      expect(
+        result.stderr.match(/"outcome":"heartbeat-retry"/g)?.length ?? 0,
+      ).toBeGreaterThanOrEqual(2);
+      expect(result.stderr).toContain('"outcome":"released"');
+      expect(result.stderr).not.toContain('"outcome":"fenced"');
+    },
+  );
+
+  it(
+    "fences the payload before a short granted lease can expire on the server",
+    PROCESS_TEST_OPTIONS,
+    async () => {
+      fakeCurl(`
+if printf '%s' "$*" | grep -q '"action":"heartbeat"'; then
+  exit 28
+fi
+${STALL_TOLERANT_GRANT(7_500, 1_000)}
+`);
+      const startedAt = Date.now();
+      const result = await run(["bash", "-c", "sleep 30"]);
+
+      expect(result.status).toBe(75);
+      expect(result.stderr).toContain('"outcome":"fenced"');
+      expect(result.stderr).toContain('"yield_reason":"heartbeat-deadline"');
+      expect(Date.now() - startedAt).toBeLessThan(7_500);
+    },
+  );
+
+  it(
+    "opens the box-wide breaker after repeated gateway failures and records a non-alerting skip",
+    PROCESS_TEST_OPTIONS,
+    async () => {
+      advancingVirtualSleep(fakeVirtualClock(1_000_000));
+      fakeCurl("exit 28");
+      const payloadMarker = join(directory, "payload-started");
+      const first = await run(["bash", "-c", `printf started > "${payloadMarker}"`], {
+        breakerFailures: 2,
+        failClosed: true,
+        maxWaitSecs: 120,
+      });
+
+      expect(first.status).toBe(0);
+      expect(existsSync(payloadMarker)).toBe(false);
+      expect(acquireCount()).toBe(2);
+      expect(first.stderr).toContain('"event":"database.admission.breaker"');
+      expect(first.stderr).toMatch(/"outcome":"breaker-open"[^\n]*"yield_reason":"breaker-open"/);
+      expect(markerSummary()).toEqual({
+        admissionOutcome: "breaker-open",
+        admissionWaitMs: expect.any(Number),
+        admissionYieldReason: "breaker-open",
+        checked: null,
+        errors: 0,
+        expectedIntervalMs: null,
+        gateState: "admission-skipped",
+        payloadStarted: false,
+        produced: null,
+        queueDepth: null,
+      });
+      expect(breakerState()).toMatchObject({ cooldownMs: 60_000 });
+      expect(pendingDebts()).toEqual([`${runIdOf(first.stderr)}.cancel`]);
+
+      const second = await run(["bash", "-c", `printf started > "${payloadMarker}"`], {
+        breakerFailures: 2,
+        failClosed: true,
+      });
+      expect(second.status).toBe(0);
+      expect(acquireCount()).toBe(2);
+      expect(second.stderr).toMatch(/"outcome":"breaker-open"/);
+      expect(existsSync(payloadMarker)).toBe(false);
+
+      const phase = await run(["bash", "-c", `printf started > "${payloadMarker}"`], {
+        breakerFailures: 2,
+        failClosed: true,
+        phase: true,
+      });
+      expect(phase.status).toBe(75);
+      expect(phase.stderr).toMatch(/"outcome":"breaker-open"[^\n]*"phase_scoped":true/);
+      expect(acquireCount()).toBe(2);
+    },
+  );
+
+  it(
+    "keeps shadow firings on their fail-open path while the breaker is open",
+    PROCESS_TEST_OPTIONS,
+    async () => {
+      advancingVirtualSleep(fakeVirtualClock(1_000_000));
+      fakeCurl("exit 28");
+      await run(["bash", "-c", "exit 0"], { breakerFailures: 1, failClosed: true });
+      expect(breakerState()).not.toBeNull();
+
+      const shadow = await run(["bash", "-c", "printf fallback"], { breakerFailures: 1 });
+      expect(shadow.stdout).toBe("fallback");
+      expect(shadow.stderr).toMatch(
+        /"outcome":"shadow-unavailable"[^\n]*"yield_reason":"breaker-open"/,
+      );
+      expect(acquireCount()).toBe(1);
+    },
+  );
+
+  it(
+    "lets exactly one half-open probe close the breaker and settle the stood-aside run's debt",
+    PROCESS_TEST_OPTIONS,
+    async () => {
+      const clock = fakeVirtualClock(1_000_000);
+      advancingVirtualSleep(clock);
+      fakeCurl("exit 28");
+      const stoodAside = await run(["bash", "-c", "exit 0"], {
+        breakerFailures: 2,
+        failClosed: true,
+        maxWaitSecs: 120,
+      });
+      const stoodAsideRunId = runIdOf(stoodAside.stderr);
+      const opened = breakerState();
+      expect(opened).not.toBeNull();
+
+      writeFileSync(clock, `${(opened?.untilMs ?? 0) + 1}\n`);
+      writeFileSync(
+        join(directory, ".database-admission", "breaker-probe"),
+        `${(opened?.untilMs ?? 0) + 1}\n`,
+      );
+      const blocked = await run(["bash", "-c", "exit 0"], { breakerFailures: 2, failClosed: true });
+      expect(blocked.stderr).toMatch(/"outcome":"breaker-open"/);
+      expect(acquireCount()).toBe(2);
+      rmSync(join(directory, ".database-admission", "breaker-probe"));
+
+      fakeCurl(ACQUIRED_RESPONSE);
+      const payloadMarker = join(directory, "payload-started");
+      const probe = await run(["bash", "-c", `printf started > "${payloadMarker}"`], {
+        breakerFailures: 2,
+        failClosed: true,
+      });
+
+      expect(probe.status).toBe(0);
+      expect(existsSync(payloadMarker)).toBe(true);
+      expect(probe.stderr).toContain('"state":"half-open"');
+      expect(probe.stderr).toContain('"state":"closed"');
+      expect(breakerState()).toBeNull();
+      expect(readFileSync(curlLog, "utf8")).toMatch(
+        new RegExp(`"action":"cancel"[^\\n]*"runId":"${stoodAsideRunId}"`),
+      );
+      expect(pendingDebts()).toEqual([]);
+    },
+  );
+
+  it(
+    "reopens the breaker with a doubled cooldown when its half-open probe fails",
+    PROCESS_TEST_OPTIONS,
+    async () => {
+      const clock = fakeVirtualClock(1_000_000);
+      advancingVirtualSleep(clock);
+      fakeCurl("exit 28");
+      await run(["bash", "-c", "exit 0"], {
+        breakerFailures: 2,
+        failClosed: true,
+        maxWaitSecs: 120,
+      });
+      const opened = breakerState();
+      expect(opened).toMatchObject({ cooldownMs: 60_000 });
+
+      writeFileSync(clock, `${(opened?.untilMs ?? 0) + 1}\n`);
+      const probe = await run(["bash", "-c", "exit 0"], { breakerFailures: 2, failClosed: true });
+
+      expect(probe.status).toBe(0);
+      expect(probe.stderr).toContain('"state":"half-open"');
+      expect(probe.stderr).toMatch(/"outcome":"breaker-open"/);
+      expect(acquireCount()).toBe(3);
+      expect(breakerState()).toMatchObject({ cooldownMs: 120_000, sinceMs: opened?.sinceMs });
+      expect(existsSync(join(directory, ".database-admission", "breaker-probe"))).toBe(false);
+    },
+  );
+
+  it(
+    "leaves an unanswered release as debt that the next reachable run settles",
+    PROCESS_TEST_OPTIONS,
+    async () => {
+      fakeExecutable("sleep", ":");
+      fakeCurl(`case "$*" in
+  *'"action":"release"'*) exit 28 ;;
+  *) ${ACQUIRED_RESPONSE} ;;
+esac`);
+      const stranded = await run(["bash", "-c", "printf complete"]);
+      const strandedRunId = runIdOf(stranded.stderr);
+      expect(stranded.status).toBe(0);
+      expect(pendingDebts()).toEqual([`${strandedRunId}.release`]);
+
+      fakeCurl(ACQUIRED_RESPONSE);
+      const next = await run(["bash", "-c", "printf again"]);
+      expect(next.status).toBe(0);
+      expect(readFileSync(curlLog, "utf8")).toMatch(
+        new RegExp(`"action":"release"[^\\n]*"runId":"${strandedRunId}"[^\\n]*"fencingToken":7`),
+      );
+      expect(pendingDebts()).toEqual([]);
+    },
+  );
+
+  it(
+    "rides out a five-minute coordinator stall without a retry storm, a killed payload, or a ghost lease",
+    { timeout: 150_000 },
+    async () => {
+      const scale = 20;
+      const epochMs = Date.now();
+      const virtualStartMs = 1_000_000;
+      const stallFromMs = virtualStartMs + 60_000;
+      const stallUntilMs = virtualStartMs + 360_000;
+      const holder = join(directory, "lane-holder");
+      writeFileSync(holder, "");
+      fakeExecutable(
+        "date",
+        `case "$*" in
+  "+%s%3N") perl -MTime::HiRes=time -e 'printf "%.0f", ${virtualStartMs} + (time() * 1000 - ${epochMs}) * ${scale}' ;;
+  "-u +%Y%m%dT%H%M%SZ") printf '20260908T000000Z' ;;
+  "+%s") printf '1' ;;
+  *) exit 1 ;;
+esac`,
+      );
+      fakeExecutable(
+        "sleep",
+        `perl -MTime::HiRes=sleep -e 'my $real = $ARGV[0] / ${scale}; sleep($real < 0.02 ? 0.02 : $real)' "$1"`,
+      );
+      fakeExecutable(
+        "curl",
+        `now="$(date +%s%3N)"
+request_timeout=10
+body=""
+previous=""
+for argument in "$@"; do
+  case "$previous" in
+    --max-time) request_timeout="$argument" ;;
+    --data-binary) body="$argument" ;;
+  esac
+  previous="$argument"
+done
+printf '%s %s\\n' "$now" "$body" >> "${curlLog}"
+if [ "$now" -ge ${stallFromMs} ] && [ "$now" -lt ${stallUntilMs} ]; then
+  perl -MTime::HiRes=sleep -e 'sleep($ARGV[0] / ${scale})' "$request_timeout"
+  exit 28
+fi
+run_id="$(printf '%s' "$body" | sed -n 's/.*"runId":"\\([^"]*\\)".*/\\1/p')"
+case "$body" in
+  *'"action":"acquire"'*)
+    if [ ! -s "${holder}" ] || [ "$(cat "${holder}")" = "$run_id" ]; then
+      printf '%s' "$run_id" > "${holder}"
+      ${STALL_TOLERANT_GRANT(90_000, 15_000)}
+    else
+      ${QUEUED_RESPONSE}
+    fi
+    ;;
+  *'"action":"heartbeat"'*) ${STALL_TOLERANT_GRANT(420_000, 30_000)} ;;
+  *'"action":"release"'*)
+    if [ "$(cat "${holder}")" = "$run_id" ]; then : > "${holder}"; fi
+    echo '{}'
+    ;;
+  *) echo '{}' ;;
+esac`,
+      );
+      const stallOptions = {
+        breakerFailures: 4,
+        env: {
+          DATABASE_ADMISSION_BREAKER_COOLDOWN_SECS: "30",
+          DATABASE_ADMISSION_BREAKER_MAX_COOLDOWN_SECS: "120",
+          DATABASE_ADMISSION_HTTP_TIMEOUT_SECS: "10",
+        },
+        failClosed: true,
+        maxWaitSecs: 120,
+      };
+      const atVirtual = (virtualMs: number) =>
+        new Promise((resolvePromise) =>
+          setTimeout(resolvePromise, Math.max(0, epochMs + virtualMs / scale - Date.now())),
+        );
+      const holderMarker = join(directory, "holder-finished");
+      const latecomerMarker = join(directory, "latecomer-finished");
+
+      const running = run(
+        ["bash", "-c", `sleep 400; printf done > "${holderMarker}"`],
+        stallOptions,
+        60_000,
+      );
+      const newcomers: ReturnType<typeof run>[] = [];
+      for (const arrival of [80_000, 140_000, 200_000, 260_000]) {
+        await atVirtual(arrival);
+        newcomers.push(run(["bash", "-c", "exit 0"], stallOptions, 60_000));
+      }
+      const holderResult = await running;
+      const newcomerResults = await Promise.all(newcomers);
+      await atVirtual(560_000);
+      const latecomer = await run(
+        ["bash", "-c", `printf done > "${latecomerMarker}"`],
+        stallOptions,
+        60_000,
+      );
+
+      expect(holderResult.status, holderResult.stderr).toBe(0);
+      expect(existsSync(holderMarker), holderResult.stderr).toBe(true);
+      expect(holderResult.stderr).toContain('"outcome":"heartbeat-retry"');
+      expect(holderResult.stderr).toContain('"outcome":"released"');
+      expect(holderResult.stderr).not.toContain('"outcome":"fenced"');
+
+      for (const newcomer of newcomerResults) {
+        expect(newcomer.status).toBe(0);
+        expect(newcomer.stderr).toMatch(/"outcome":"breaker-open"/);
+      }
+
+      const calls = readFileSync(curlLog, "utf8").trim().split("\n");
+      const stalledAcquires = calls.filter((call) => {
+        const at = Number(call.split(" ", 1)[0]);
+        return at >= stallFromMs && at < stallUntilMs && call.includes('"action":"acquire"');
+      });
+      expect(stalledAcquires.length).toBeLessThanOrEqual(10);
+
+      expect(latecomer.status, latecomer.stderr).toBe(0);
+      expect(existsSync(latecomerMarker)).toBe(true);
+      expect(latecomer.stderr).toContain('"outcome":"released"');
+      expect(breakerState()).toBeNull();
+      expect(readFileSync(holder, "utf8")).toBe("");
+      expect(pendingDebts()).toEqual([]);
     },
   );
 });

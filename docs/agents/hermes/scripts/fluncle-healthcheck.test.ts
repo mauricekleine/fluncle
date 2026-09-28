@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
+  admissionBreakerAlert,
   backpressureStallTicks,
   backpressureTotal,
   boxUptimeMs,
@@ -40,6 +41,7 @@ import {
   probeSweepStrain,
   postSnapshot,
   PROJECTION_JUDGEMENT_LOOKBACK_MARKERS,
+  readAdmissionBreaker,
   readProjectionMaintenanceState,
   serializeState,
   type ServiceState,
@@ -2149,5 +2151,54 @@ describe("judgeCron — a retry-runner job owes its scheduled slot day", () => {
       expect(verdict).toBe("incomplete");
       expect(cronCheck(followDigest, verdict).status).toBe("degraded");
     }
+  });
+});
+
+describe("database admission breaker alert", () => {
+  const boundMs = 15 * 60_000;
+  const opened = { sinceMs: 1_000_000, untilMs: 1_090_000 };
+
+  test("stays quiet while the breaker is closed or has been open for less than the bound", () => {
+    expect(admissionBreakerAlert(null, null, 5_000_000, boundMs)).toEqual({
+      alertedSinceMs: null,
+      message: null,
+    });
+    expect(admissionBreakerAlert(opened, null, opened.sinceMs + boundMs - 1, boundMs)).toEqual({
+      alertedSinceMs: null,
+      message: null,
+    });
+  });
+
+  test("alerts exactly once per opening that outlasts the bound", () => {
+    const first = admissionBreakerAlert(opened, null, opened.sinceMs + boundMs, boundMs);
+    expect(first.alertedSinceMs).toBe(opened.sinceMs);
+    expect(first.message).toContain("breaker open for ~15m");
+
+    expect(
+      admissionBreakerAlert(opened, first.alertedSinceMs, opened.sinceMs + 3 * boundMs, boundMs),
+    ).toEqual({ alertedSinceMs: opened.sinceMs, message: null });
+
+    const reopened = { sinceMs: opened.sinceMs + 4 * boundMs, untilMs: 0 };
+    expect(
+      admissionBreakerAlert(reopened, first.alertedSinceMs, reopened.sinceMs + boundMs, boundMs)
+        .alertedSinceMs,
+    ).toBe(reopened.sinceMs);
+  });
+
+  test("announces the close only after an open alert went out", () => {
+    const closed = admissionBreakerAlert(null, opened.sinceMs, 9_000_000, boundMs);
+    expect(closed.alertedSinceMs).toBeNull();
+    expect(closed.message).toContain("breaker closed");
+  });
+
+  test("reads the runner's shared breaker file and ignores a malformed one", () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "fluncle-breaker-"));
+    temporaryDirectories.push(stateDir);
+
+    expect(readAdmissionBreaker(stateDir)).toBeNull();
+    writeFileSync(join(stateDir, "breaker"), "1000000 1090000 60000\n");
+    expect(readAdmissionBreaker(stateDir)).toEqual({ sinceMs: 1_000_000, untilMs: 1_090_000 });
+    writeFileSync(join(stateDir, "breaker"), "not a breaker\n");
+    expect(readAdmissionBreaker(stateDir)).toBeNull();
   });
 });

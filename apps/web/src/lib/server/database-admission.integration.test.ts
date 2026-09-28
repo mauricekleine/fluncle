@@ -1,3 +1,4 @@
+import { DatabaseAdmissionResponseSchema } from "@fluncle/contracts/orpc";
 import { type Client } from "@libsql/client";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -5,12 +6,18 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   coordinateDatabaseAdmissionFor,
+  DATABASE_ADMISSION_HEAD_RETRY_AFTER_MS,
   DATABASE_ADMISSION_HEALTH_STALE_MS,
+  DATABASE_ADMISSION_INITIAL_LEASE_MS,
   DATABASE_ADMISSION_LEASE_MS,
+  DATABASE_ADMISSION_MAX_RETRY_AFTER_MS,
+  DATABASE_ADMISSION_QUEUE_REFRESH_MS,
   DATABASE_ADMISSION_QUEUE_TTL_MS,
+  DATABASE_ADMISSION_RENEWED_LEASE_MS,
   DATABASE_ADMISSION_TRANSACTION_RETRIES,
   type DatabaseAdmissionAction,
   isDatabaseBusy,
+  storedHealthReasonFromSamples,
 } from "./database-admission";
 import { createIntegrationDb } from "./integration-db";
 
@@ -45,10 +52,13 @@ function coordinate(
   );
 }
 
+let sampleSequence = 0;
+
 async function seedHealth(
   service: "db" | "web",
   status: "degraded" | "down" | "ok",
   latencyMs: number,
+  readings = 2,
 ): Promise<void> {
   const at = new Date(nowMs).toISOString();
   await db.execute({
@@ -60,6 +70,14 @@ async function seedHealth(
             status = excluded.status, latency_ms = excluded.latency_ms,
             checked_at = excluded.checked_at, since = excluded.since`,
   });
+  for (let reading = 0; reading < readings; reading += 1) {
+    sampleSequence += 1;
+    await db.execute({
+      args: [`sample-${String(sampleSequence).padStart(8, "0")}`, service, status, latencyMs, at],
+      sql: `insert into service_check_samples (id, service, status, latency_ms, at)
+            values (?, ?, ?, ?, ?)`,
+    });
+  }
 }
 
 async function activeCounts(): Promise<Record<string, number>> {
@@ -103,7 +121,7 @@ describe("enforced database admission", () => {
       execute: vi
         .fn()
         .mockResolvedValueOnce({ rows: [{ now_ms: nowMs }] })
-        .mockResolvedValueOnce({ rows: [] }),
+        .mockResolvedValue({ rows: [] }),
     };
     const wait = vi.fn().mockResolvedValue(undefined);
 
@@ -351,7 +369,7 @@ describe("enforced database admission", () => {
     expect(await activeCounts()).toEqual({});
   });
 
-  it("yields acquisition and renewal on guardrail breach, then recovers without losing queued work", async () => {
+  it("yields acquisition and renewal on guardrail breach and keeps the fenced lease until its owner releases it", async () => {
     await seedHealth("db", "degraded", 10);
     const queued = await coordinate("fluncle-enrich", "guarded");
     expect(queued).toMatchObject({ outcome: "queued", yieldReason: "database-health" });
@@ -370,9 +388,14 @@ describe("enforced database admission", () => {
       acquired.fencingToken ?? undefined,
     );
     expect(stopped).toMatchObject({ outcome: "lost", yieldReason: "public-latency" });
+    expect(await activeCounts()).toEqual({ write: 1 });
 
     await seedHealth("web", "ok", 10);
     nowMs += 10;
+    expect((await coordinate("fluncle-note", "after-recovery")).outcome).toBe("queued");
+    expect(
+      await coordinate("fluncle-enrich", "guarded", "release", acquired.fencingToken ?? undefined),
+    ).toMatchObject({ outcome: "released" });
     const next = await coordinate("fluncle-note", "after-recovery");
     expect(next.outcome).toBe("acquired");
   });
@@ -443,15 +466,11 @@ describe("enforced database admission", () => {
     expect((await coordinate("fluncle-healthcheck", "healthy-later")).outcome).toBe("acquired");
   });
 
-  it("admits the recovery writer past a contender blocked by stale stored health", async () => {
-    await seedHealth("db", "ok", 10);
+  it("treats stale stored health as unknown rather than bad", async () => {
+    await seedHealth("db", "down", 4_000);
+    await seedHealth("web", "down", 4_000);
     nowMs += DATABASE_ADMISSION_HEALTH_STALE_MS + 1;
-    expect(await coordinate("fluncle-enrich", "stale-health-blocked")).toMatchObject({
-      outcome: "queued",
-      yieldReason: "database-health",
-    });
-
-    expect(await coordinate("fluncle-healthcheck", "stale-health-recovery")).toMatchObject({
+    expect(await coordinate("fluncle-enrich", "stale-health-unknown")).toMatchObject({
       outcome: "acquired",
       yieldReason: null,
     });
@@ -503,6 +522,304 @@ describe("enforced database admission", () => {
       `select count(*) as count from database_admission_contenders`,
     );
     expect(remaining.rows[0]?.count).toBe(0);
+  });
+});
+
+function countingClient() {
+  const batch = vi.fn((...args: Parameters<Client["batch"]>) => db.batch(...args));
+  return { batch, client: { batch, execute: db.execute.bind(db) } };
+}
+
+function tolerant(
+  owner: string,
+  runId: string,
+  action: DatabaseAdmissionAction = "acquire",
+  options: {
+    client?: Pick<Client, "batch" | "execute">;
+    fencingToken?: number;
+    notAfterMs?: number;
+  } = {},
+) {
+  return coordinateDatabaseAdmissionFor(
+    options.client ?? db,
+    {
+      action,
+      fencingToken: options.fencingToken,
+      notAfterMs: options.notAfterMs,
+      owner,
+      protocolVersion: 2,
+      runId,
+    },
+    { enforced: true, monotonicNow: () => 0, serverNowMs: nowMs },
+  );
+}
+
+describe("stored health smoothing", () => {
+  it("closes the lane only on two consecutive bad readings of the same service", () => {
+    const ok = { latency_ms: 10, service: "db", status: "ok" };
+    const down = { latency_ms: 4_000, service: "db", status: "down" };
+    const slowWeb = { latency_ms: 900, service: "web", status: "ok" };
+    const fastWeb = { latency_ms: 90, service: "web", status: "ok" };
+
+    expect(storedHealthReasonFromSamples([down])).toBeNull();
+    expect(storedHealthReasonFromSamples([down, ok])).toBeNull();
+    expect(storedHealthReasonFromSamples([ok, down])).toBeNull();
+    expect(storedHealthReasonFromSamples([down, down])).toBe("database-health");
+    expect(storedHealthReasonFromSamples([slowWeb, fastWeb])).toBeNull();
+    expect(storedHealthReasonFromSamples([slowWeb, slowWeb])).toBe("public-latency");
+    expect(storedHealthReasonFromSamples([])).toBeNull();
+  });
+
+  it("lets one bad health reading through and reopens on the first good one", async () => {
+    await seedHealth("db", "down", 4_000, 1);
+    expect((await coordinate("fluncle-enrich", "one-bad-reading")).outcome).toBe("acquired");
+
+    await seedHealth("db", "down", 4_000, 1);
+    nowMs += 1;
+    expect(await coordinate("fluncle-note", "two-bad-readings")).toMatchObject({
+      outcome: "queued",
+      retryAfterMs: DATABASE_ADMISSION_MAX_RETRY_AFTER_MS,
+      yieldReason: "database-health",
+    });
+
+    await seedHealth("db", "ok", 10, 1);
+    nowMs += 1;
+    expect(await coordinate("fluncle-note", "two-bad-readings")).toMatchObject({
+      outcome: "queued",
+      yieldReason: "queue",
+    });
+  });
+
+  it("never fences a running payload on a single slow direct read during its heartbeat", async () => {
+    const acquired = await coordinate("fluncle-enrich", "slow-read-heartbeat");
+    const monotonicSamples = [0, 5_000];
+    nowMs += 10;
+    const renewed = await coordinateDatabaseAdmissionFor(
+      db,
+      {
+        action: "heartbeat",
+        fencingToken: acquired.fencingToken ?? undefined,
+        owner: "fluncle-enrich",
+        runId: "slow-read-heartbeat",
+      },
+      { enforced: true, monotonicNow: () => monotonicSamples.shift() ?? 0, serverNowMs: nowMs },
+    );
+    expect(renewed).toMatchObject({ outcome: "acquired", yieldReason: null });
+  });
+});
+
+describe("stall-tolerant admission protocol", () => {
+  it("answers every stall-tolerant outcome inside the published response contract", async () => {
+    const results = [await tolerant("fluncle-enrich", "contract-holder")];
+    nowMs += 1;
+    results.push(await tolerant("fluncle-note", "contract-queued"));
+    results.push(
+      await tolerant("fluncle-crawl", "contract-late", "acquire", { notAfterMs: nowMs - 1 }),
+    );
+    results.push(
+      await tolerant("fluncle-enrich", "contract-holder", "heartbeat", {
+        fencingToken: results[0]?.fencingToken ?? undefined,
+      }),
+    );
+    results.push(
+      await tolerant("fluncle-note", "contract-queued", "heartbeat", { fencingToken: 99 }),
+    );
+    results.push(
+      await coordinateDatabaseAdmissionFor(
+        db,
+        {
+          action: "acquire",
+          owner: "fluncle-enrich",
+          protocolVersion: 2,
+          runId: "contract-shadow",
+        },
+        { enforced: false, monotonicNow: () => 0, serverNowMs: nowMs },
+      ),
+    );
+
+    expect(results.map((result) => result.outcome)).toEqual([
+      "acquired",
+      "queued",
+      "cancelled",
+      "acquired",
+      "lost",
+      "shadow-yield",
+    ]);
+    for (const result of results) {
+      expect(DatabaseAdmissionResponseSchema.parse(result)).toEqual(result);
+    }
+  });
+
+  it("grants a short initial lease that the first heartbeat extends to the stall-tolerant lease", async () => {
+    const granted = await tolerant("fluncle-enrich", "tolerant-grant");
+    expect(granted).toMatchObject({
+      heartbeatAfterMs: DATABASE_ADMISSION_INITIAL_LEASE_MS / 3,
+      leaseExpiresAtMs: nowMs + DATABASE_ADMISSION_INITIAL_LEASE_MS,
+      leaseRemainingMs: DATABASE_ADMISSION_INITIAL_LEASE_MS,
+      outcome: "acquired",
+    });
+
+    nowMs += 10_000;
+    const renewed = await tolerant("fluncle-enrich", "tolerant-grant", "heartbeat", {
+      fencingToken: granted.fencingToken ?? undefined,
+    });
+    expect(renewed).toMatchObject({
+      heartbeatAfterMs: 30_000,
+      leaseRemainingMs: DATABASE_ADMISSION_RENEWED_LEASE_MS,
+      outcome: "acquired",
+    });
+
+    nowMs += DATABASE_ADMISSION_RENEWED_LEASE_MS - 1;
+    expect(await tolerant("fluncle-note", "behind-tolerant-holder")).toMatchObject({
+      outcome: "queued",
+    });
+    nowMs += 2;
+    const next = await tolerant("fluncle-note", "behind-tolerant-holder");
+    expect(next).toMatchObject({ outcome: "acquired", recovered: true });
+    expect(next.fencingToken).toBe((granted.fencingToken ?? 0) + 1);
+  });
+
+  it("answers a repeated acquire for the same run with its existing grant and no write", async () => {
+    const { batch, client } = countingClient();
+    const first = await tolerant("fluncle-enrich", "idempotent", "acquire", { client });
+    expect(batch).toHaveBeenCalledTimes(1);
+
+    nowMs += 1_000;
+    const again = await tolerant("fluncle-enrich", "idempotent", "acquire", { client });
+    expect(batch).toHaveBeenCalledTimes(1);
+    expect(again).toMatchObject({
+      fencingToken: first.fencingToken,
+      leaseRemainingMs: DATABASE_ADMISSION_INITIAL_LEASE_MS - 1_000,
+      outcome: "acquired",
+    });
+    expect(await activeCounts()).toEqual({ write: 1 });
+  });
+
+  it("reaps a grant nobody ever heartbeats after the short initial lease", async () => {
+    const ghost = await tolerant("fluncle-enrich", "never-heartbeats");
+    expect(ghost.outcome).toBe("acquired");
+
+    nowMs += DATABASE_ADMISSION_INITIAL_LEASE_MS + 1;
+    const next = await tolerant("fluncle-note", "after-ghost");
+    expect(next).toMatchObject({ outcome: "acquired", recovered: true });
+    expect(DATABASE_ADMISSION_INITIAL_LEASE_MS).toBeLessThan(DATABASE_ADMISSION_LEASE_MS);
+  });
+
+  it("frees the lane when a runner that gave up cancels a grant its timed-out acquire committed", async () => {
+    const lateGrant = await tolerant("fluncle-enrich", "gave-up");
+    expect(lateGrant.outcome).toBe("acquired");
+    nowMs += 1;
+    expect((await tolerant("fluncle-note", "waiting")).outcome).toBe("queued");
+
+    expect(await tolerant("fluncle-enrich", "gave-up", "cancel")).toMatchObject({
+      outcome: "cancelled",
+      recovered: true,
+    });
+    expect(await activeCounts()).toEqual({});
+    expect((await tolerant("fluncle-note", "waiting")).outcome).toBe("acquired");
+  });
+
+  it("refuses an acquire that reaches the database after its runner's deadline", async () => {
+    const deadlineMs = nowMs + 5_000;
+    nowMs = deadlineMs + 1;
+    expect(
+      await tolerant("fluncle-enrich", "arrived-late", "acquire", { notAfterMs: deadlineMs }),
+    ).toMatchObject({ fencingToken: null, outcome: "cancelled", yieldReason: "queue" });
+    const rows = await db.execute(`select count(*) as count from database_admission_contenders`);
+    expect(rows.rows[0]?.count).toBe(0);
+    expect((await tolerant("fluncle-note", "on-time")).outcome).toBe("acquired");
+  });
+
+  it("drops an earlier committed row when the same run's acquire arrives after its deadline", async () => {
+    const deadlineMs = nowMs + 5_000;
+    expect(
+      (await tolerant("fluncle-enrich", "late-retry", "acquire", { notAfterMs: deadlineMs }))
+        .outcome,
+    ).toBe("acquired");
+    nowMs = deadlineMs + 1;
+    expect(
+      await tolerant("fluncle-enrich", "late-retry", "acquire", { notAfterMs: deadlineMs }),
+    ).toMatchObject({ outcome: "cancelled", recovered: true });
+    expect(await activeCounts()).toEqual({});
+  });
+
+  it("lets a queued contender behind the head wait without re-sending the write batch", async () => {
+    const { batch, client } = countingClient();
+    await tolerant("fluncle-enrich", "holder", "acquire", { client });
+    nowMs += 1;
+    await tolerant("fluncle-note", "head", "acquire", { client });
+    nowMs += 1;
+    const behind = await tolerant("fluncle-crawl", "behind", "acquire", { client });
+    expect(behind).toMatchObject({
+      outcome: "queued",
+      retryAfterMs: DATABASE_ADMISSION_HEAD_RETRY_AFTER_MS * 2,
+      yieldReason: "queue",
+    });
+    expect(batch).toHaveBeenCalledTimes(3);
+
+    for (let poll = 0; poll < 5; poll += 1) {
+      nowMs += 2_000;
+      expect(await tolerant("fluncle-crawl", "behind", "acquire", { client })).toMatchObject({
+        outcome: "queued",
+        retryAfterMs: DATABASE_ADMISSION_HEAD_RETRY_AFTER_MS * 2,
+      });
+      expect(await tolerant("fluncle-note", "head", "acquire", { client })).toMatchObject({
+        outcome: "queued",
+        retryAfterMs: DATABASE_ADMISSION_HEAD_RETRY_AFTER_MS,
+      });
+    }
+    expect(batch).toHaveBeenCalledTimes(3);
+
+    nowMs += DATABASE_ADMISSION_QUEUE_REFRESH_MS;
+    await tolerant("fluncle-crawl", "behind", "acquire", { client });
+    expect(batch).toHaveBeenCalledTimes(4);
+    const refreshed = await db.execute({
+      args: ["behind"],
+      sql: `select queue_heartbeat_at_ms from database_admission_contenders where run_id = ?`,
+    });
+    expect(refreshed.rows[0]?.queue_heartbeat_at_ms).toBe(nowMs);
+  });
+
+  it("leaves no stall leftover holding the lane once a five-minute coordinator stall clears", async () => {
+    const stallStart = nowMs;
+    const running = await tolerant("fluncle-enrich", "running-before-stall");
+    nowMs += 10_000;
+    expect(
+      (
+        await tolerant("fluncle-enrich", "running-before-stall", "heartbeat", {
+          fencingToken: running.fencingToken ?? undefined,
+        })
+      ).outcome,
+    ).toBe("acquired");
+
+    const giveUpAtMs = stallStart + 60_000;
+    nowMs = stallStart + 20_000;
+    expect(
+      (
+        await tolerant("fluncle-note", "committed-while-stalled", "acquire", {
+          notAfterMs: giveUpAtMs,
+        })
+      ).outcome,
+    ).toBe("queued");
+
+    nowMs = stallStart + 5 * 60_000;
+    expect(
+      await tolerant("fluncle-enrich", "running-before-stall", "heartbeat", {
+        fencingToken: running.fencingToken ?? undefined,
+      }),
+    ).toMatchObject({ fencingToken: running.fencingToken, outcome: "acquired" });
+    expect(
+      await tolerant("fluncle-note", "committed-while-stalled", "acquire", {
+        notAfterMs: giveUpAtMs,
+      }),
+    ).toMatchObject({ outcome: "cancelled", recovered: true });
+    expect(
+      await tolerant("fluncle-enrich", "running-before-stall", "release", {
+        fencingToken: running.fencingToken ?? undefined,
+      }),
+    ).toMatchObject({ outcome: "released" });
+
+    expect((await tolerant("fluncle-crawl", "after-recovery")).outcome).toBe("acquired");
   });
 });
 

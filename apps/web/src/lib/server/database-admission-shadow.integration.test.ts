@@ -103,20 +103,17 @@ describe("database admission shadow observation", () => {
   });
 
   it("observes explicit database-health and public-latency breaches", async () => {
+    const reading = (id: string, service: string, status: string, latencyMs: number) => ({
+      args: [id, service, status, latencyMs, "1970-01-01T00:00:10.000Z"],
+      sql: `insert into service_check_samples (id, service, status, latency_ms, at)
+            values (?, ?, ?, ?, ?)`,
+    });
     await db.batch(
       [
-        {
-          args: ["db", "degraded", "slow", 300, "1970-01-01T00:00:10.000Z"],
-          sql: `insert into service_status
-            (service, status, message, latency_ms, checked_at, since)
-            values (?, ?, ?, ?, ?, '1970-01-01T00:00:10.000Z')`,
-        },
-        {
-          args: ["web", "ok", null, 700, "1970-01-01T00:00:10.000Z"],
-          sql: `insert into service_status
-            (service, status, message, latency_ms, checked_at, since)
-            values (?, ?, ?, ?, ?, '1970-01-01T00:00:10.000Z')`,
-        },
+        reading("db-1", "db", "degraded", 300),
+        reading("db-2", "db", "degraded", 300),
+        reading("web-1", "web", "ok", 700),
+        reading("web-2", "web", "ok", 700),
       ],
       "write",
     );
@@ -129,9 +126,7 @@ describe("database admission shadow observation", () => {
     );
     expect(unhealthy.yieldReason).toBe("database-health");
 
-    await db.execute(
-      `update service_status set status = 'ok', latency_ms = 100 where service = 'db'`,
-    );
+    await db.execute(reading("db-3", "db", "ok", 100));
     const publicSlow = await observeDatabaseAdmissionFor(
       db,
       { action: "acquire", owner: "fluncle-enrich", runId: "public" },

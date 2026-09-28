@@ -47,7 +47,7 @@
     "fluncle-hermes-operator": {
       "source": "./packages/skills/fluncle-hermes-operator",
       "sourceType": "local",
-      "computedHash": "4c798f7e9ca40cd25664d5a93fe9502c7fc72ff198fa49da2f60e921363c6f5d"
+      "computedHash": "ac4825fe2c218ee1da39ffbb6064b23cb7ab843f878220a6118a3bc06c23bc5b"
     },
     "fluncle-hetzner-ops": {
       "source": "./packages/skills/fluncle-hetzner-ops",
@@ -62,7 +62,7 @@
     "fluncle-ledger": {
       "source": "./packages/skills/fluncle-ledger",
       "sourceType": "local",
-      "computedHash": "84d76d574a8157c612508dd9bca806b875c45d35334e984893b6c546e3010f27"
+      "computedHash": "7198ded67c413519e1a4ef0d961ec011714533f387d3e685aae2b3659d29dce4"
     },
     "fluncle-maintenance": {
       "source": "./packages/skills/fluncle-maintenance",
