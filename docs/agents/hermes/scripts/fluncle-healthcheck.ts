@@ -1,7 +1,15 @@
 #!/usr/bin/env bun
 
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { connect } from "node:net";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
@@ -38,6 +46,12 @@ const POST_ATTEMPTS = Number.parseInt(process.env.HEALTHCHECK_POST_ATTEMPTS ?? "
 const ESCALATE_AFTER_TICKS = Number.parseInt(process.env.HEALTHCHECK_ESCALATE_AFTER ?? "", 10) || 6;
 
 const TICK_INTERVAL_MS = Number.parseInt(process.env.HEALTHCHECK_TICK_MS ?? "", 10) || 10 * 60_000;
+
+const ADMISSION_STATE_DIR =
+  process.env.DATABASE_ADMISSION_STATE_DIR ?? join(HOME, ".database-admission");
+
+export const ADMISSION_BREAKER_ALERT_AFTER_MS =
+  Number.parseInt(process.env.HEALTHCHECK_ADMISSION_BREAKER_ALERT_MS ?? "", 10) || 15 * 60_000;
 
 const STATE_DIR = join(HOME, ".healthcheck");
 const STATE_FILE = join(STATE_DIR, "state.json");
@@ -1987,6 +2001,75 @@ export function buildStrainAlert(
   return parts.join("\n");
 }
 
+export type AdmissionBreakerReading = { sinceMs: number; untilMs: number };
+
+function readNumberFields(path: string): number[] | null {
+  try {
+    const fields = readFileSync(path, "utf8").trim().split(/\s+/).map(Number);
+    return fields.every((field) => Number.isSafeInteger(field) && field >= 0) ? fields : null;
+  } catch {
+    return null;
+  }
+}
+
+export function readAdmissionBreaker(
+  stateDir: string = ADMISSION_STATE_DIR,
+): AdmissionBreakerReading | null {
+  const [sinceMs, untilMs] = readNumberFields(join(stateDir, "breaker")) ?? [];
+
+  return sinceMs === undefined || untilMs === undefined ? null : { sinceMs, untilMs };
+}
+
+export function admissionBreakerAlert(
+  reading: AdmissionBreakerReading | null,
+  alertedSinceMs: number | null,
+  nowMs: number,
+  boundMs: number = ADMISSION_BREAKER_ALERT_AFTER_MS,
+): { alertedSinceMs: number | null; message: string | null } {
+  if (reading === null) {
+    return alertedSinceMs === null
+      ? { alertedSinceMs: null, message: null }
+      : {
+          alertedSinceMs: null,
+          message: "🟢 database admission breaker closed: admitted sweeps are running again.",
+        };
+  }
+
+  const openMs = nowMs - reading.sinceMs;
+
+  if (openMs < boundMs || alertedSinceMs === reading.sinceMs) {
+    return { alertedSinceMs, message: null };
+  }
+
+  return {
+    alertedSinceMs: reading.sinceMs,
+    message: `🧯 database admission breaker open for ~${Math.round(openMs / 60_000)}m: the coordinator keeps failing, so every admitted sweep on rave-02 is standing aside instead of retrying. Each skip lands in the ledger as admission-skipped (breaker-open); a half-open probe closes it once the coordinator answers.`,
+  };
+}
+
+function checkAdmissionBreaker(nowMs: number): string | null {
+  const alertedPath = join(ADMISSION_STATE_DIR, "breaker-alerted");
+  const [alertedSinceMs] = readNumberFields(alertedPath) ?? [];
+  const next = admissionBreakerAlert(readAdmissionBreaker(), alertedSinceMs ?? null, nowMs);
+
+  if (next.alertedSinceMs !== (alertedSinceMs ?? null)) {
+    try {
+      if (next.alertedSinceMs === null) {
+        rmSync(alertedPath, { force: true });
+      } else {
+        mkdirSync(ADMISSION_STATE_DIR, { recursive: true });
+        writeFileSync(alertedPath, `${next.alertedSinceMs}\n`, "utf8");
+      }
+    } catch (error) {
+      log(
+        `could not record the breaker alert (${error instanceof Error ? error.message : String(error)})`,
+      );
+    }
+  }
+
+  return next.message;
+}
+
 const HEALTH_SNAPSHOT_PRODUCER = "hermes-healthcheck";
 
 type SnapshotFetch = (input: string, init: RequestInit, timeoutMs?: number) => Promise<Response>;
@@ -2233,12 +2316,20 @@ async function main(): Promise<void> {
     pingDiscord(strainAlert);
   }
 
+  const breakerAlert = checkAdmissionBreaker(Date.now());
+
+  if (breakerAlert) {
+    pingDiscord(breakerAlert);
+  }
+
   pingBeacon();
 
   const posted = await postSnapshot(at, withTransition);
 
   const summary = {
-    alerted: alert !== null || escalationAlert !== null || strainAlert !== null,
+    admissionBreaker: readAdmissionBreaker(),
+    alerted:
+      alert !== null || escalationAlert !== null || strainAlert !== null || breakerAlert !== null,
     at,
 
     backpressured: sweepStrain.backpressured,

@@ -9,6 +9,7 @@ export type DatabaseAdmissionPhaseResult =
 
 export const ADMISSION_YIELD_REASONS: readonly string[] = [
   "authentication-failed",
+  "breaker-open",
   "containment-unavailable",
   "coordinator-unavailable",
   "database-busy",

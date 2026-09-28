@@ -23,11 +23,13 @@ const DatabaseAdmissionInputSchema = z
   .object({
     action: DatabaseAdmissionActionSchema,
     fencingToken: z.number().int().positive().optional(),
+    notAfterMs: z.number().int().nonnegative().optional(),
     owner: z
       .string()
       .min(1)
       .max(64)
       .regex(/^[a-z0-9][a-z0-9.-]*$/),
+    protocolVersion: z.literal(2).optional(),
     runId: z
       .string()
       .min(1)
@@ -49,10 +51,12 @@ export const DatabaseAdmissionResponseSchema = z.object({
   holdMs: z.number().int().nonnegative(),
   lane: DatabaseAdmissionLaneSchema,
   leaseExpiresAtMs: z.number().int().nonnegative().nullable(),
+  leaseRemainingMs: z.number().int().nonnegative().nullable(),
   operationId: z.string().min(1).max(64),
   outcome: DatabaseAdmissionOutcomeSchema,
   queueAgeMs: z.number().int().nonnegative(),
   recovered: z.boolean(),
+  retryAfterMs: z.number().int().nonnegative().nullable(),
   waitMs: z.number().int().nonnegative(),
   yieldReason: DatabaseAdmissionYieldReasonSchema.nullable(),
 });
