@@ -2315,7 +2315,7 @@ export type CrawlPhaseCapabilities = {
 export type CrawlPhasePrepareResult = {
   boxFetch: boolean;
   capabilities?: CrawlPhaseCapabilities;
-  frontierPending: number;
+  frontierPending?: number;
   initialization: CrawlPhaseInitialization;
   items: {
     fetchPlan: CrawlFetchPlan;
@@ -2528,11 +2528,15 @@ export async function prepareCrawlPhase({
   limit = 2,
   maxHop = DEFAULT_MAX_HOP,
   sampleStorableRepair = false,
+  skipFrontierPendingCount = false,
 }: {
   limit?: number;
   maxHop?: number;
   sampleStorableRepair?: boolean;
+  skipFrontierPendingCount?: boolean;
 } = {}): Promise<CrawlPhasePrepareResult> {
+  const frontierPending = async (): Promise<{ frontierPending?: number }> =>
+    skipFrontierPendingCount ? {} : { frontierPending: await countFrontierPending() };
   if (!Number.isInteger(limit) || limit < 1 || limit > MAX_CRAWL_PREPARE_LIMIT) {
     throw new Error(
       `crawl prepare limit must be an integer from 1 through ${MAX_CRAWL_PREPARE_LIMIT}`,
@@ -2542,7 +2546,7 @@ export async function prepareCrawlPhase({
   if (!(await isCrawlDueCutoverEnabled())) {
     return {
       boxFetch,
-      frontierPending: await countFrontierPending(),
+      ...(await frontierPending()),
       initialization: emptyCrawlPhaseInitialization(),
       items: [],
       kind: "unavailable",
@@ -2564,7 +2568,7 @@ export async function prepareCrawlPhase({
   if (claimed.rows.length === 0) {
     return {
       boxFetch,
-      frontierPending: await countFrontierPending(),
+      ...(await frontierPending()),
       initialization: {
         ...emptyCrawlPhaseInitialization(),
         artistsRearmed: claimed.artistsRearmed,
@@ -2597,7 +2601,7 @@ export async function prepareCrawlPhase({
   return {
     boxFetch,
     capabilities: CRAWL_PHASE_CAPABILITIES,
-    frontierPending: await countFrontierPending(),
+    ...(await frontierPending()),
     initialization: {
       ...emptyCrawlPhaseInitialization(),
       artistsRearmed: claimed.artistsRearmed,

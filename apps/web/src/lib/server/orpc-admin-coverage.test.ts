@@ -313,6 +313,8 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
 
   "POST /admin/database-admission": "coordinate_database_admission",
 
+  "POST /admin/database-admission/write-probe": "record_database_write_probe",
+
   "POST /admin/follow-digests/send": "send_follow_digests",
 
   "POST /admin/frontier-playlists/refresh": "refresh_frontier_playlists",

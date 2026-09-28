@@ -895,7 +895,7 @@ async function drainFrontier(directory: string, summary: SweepSummary): Promise<
       limit: Math.min(PREPARE_LIMIT, NODES - processed),
       maxHop: MAX_HOP,
       phase: "prepare",
-      ...(firstPrepare ? { sampleStorableRepair: true } : {}),
+      ...(firstPrepare ? { sampleStorableRepair: true } : { skipFrontierPendingCount: true }),
     });
     if (!prepared) {
       recordPhaseYield(summary);

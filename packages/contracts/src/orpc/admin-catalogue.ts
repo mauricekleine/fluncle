@@ -479,6 +479,7 @@ const CrawlPhaseInputSchema = z.discriminatedUnion("phase", [
     maxHop: z.number().int().min(0).max(3).default(2),
     phase: z.literal("prepare"),
     sampleStorableRepair: z.boolean().optional(),
+    skipFrontierPendingCount: z.boolean().optional(),
   }),
   z.object({
     phase: z.literal("fetch"),
@@ -505,7 +506,7 @@ const CrawlPhaseOutputSchema = z.discriminatedUnion("phase", [
   z.object({
     boxFetch: z.boolean(),
     capabilities: CrawlPhaseCapabilitiesSchema.optional(),
-    frontierPending: z.number(),
+    frontierPending: z.number().optional(),
     initialization: CrawlPhaseInitializationSchema,
     items: z
       .array(
