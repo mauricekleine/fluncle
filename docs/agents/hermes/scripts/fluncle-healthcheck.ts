@@ -469,6 +469,7 @@ export const AUTOMATION_CRONS: CronDef[] = [
   { cadenceMs: 24 * 60 * 60_000, match: "demand", service: "cron.demand" },
 
   { cadenceMs: 24 * 60 * 60_000, match: "funnel-snapshot", service: "cron.funnel-snapshot" },
+  { cadenceMs: 6 * 60 * 60_000, match: "turso-usage", service: "cron.turso-usage" },
 
   { cadenceMs: 24 * 60 * 60_000, match: "social-metrics", service: "cron.social-metrics" },
 

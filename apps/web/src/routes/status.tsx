@@ -36,6 +36,7 @@ const OPS_AUTOMATION_IDS = new Set([
 
   "cron.reconcile-hub-counts",
   "cron.sentry-triage",
+  "cron.turso-usage",
   "self-deploy",
   "self-deploy-sonar",
   "self-deploy-ssh",

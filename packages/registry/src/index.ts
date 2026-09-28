@@ -1884,6 +1884,23 @@ export const SURFACES: readonly Surface[] = [
   },
   {
     exposedContent: [
+      "Turso usage and overage reading — the organisation's current-cycle usage priced against the plan and projected to the reset, stored in the telemetry database for the /admin/costs Turso panel (--no-agent)",
+    ],
+    kind: "cron",
+    name: "cron.turso-usage",
+    operatorNotes:
+      "Every 6 hours (OnUnitActiveSec), no retry slot: the counters are cumulative, so the next tick loses nothing. Reads the Turso Platform API (organization usage, database list, subscription, upcoming invoice) with TURSO_PLATFORM_API_TOKEN + TURSO_PLATFORM_ORG from the sweep secrets file, then fires the AGENT-tier record_turso_usage op. The Worker prices the reading with the versioned table in apps/web/src/lib/turso-pricing.ts (list rates, so an upper bound), projects the UTC-month cycle from the recent daily run-rate, stores it in the telemetry database, and claims a (cycle, level) alert row when the projected overage reaches the turso_usage_alert_threshold_usd setting (default $50) or twice it. The sweep posts one Discord message and only then acknowledges the levels (acknowledge_turso_usage_alerts), so a lost post re-sends next run. Missing credentials fail the run by name. Zero LLM tokens. Source: docs/agents/hermes/scripts/turso-usage-sweep.*. See docs/agents/hermes/turso-usage-timer/README.md.",
+    probeConfig: {
+      cadenceMs: 6 * 60 * MINUTE_MS,
+      cronName: "fluncle-turso-usage",
+      kind: "cron",
+    },
+    statusDescription: "tallies what the archive costs to keep",
+    title: "Database costs",
+    weights: { status: "hidden" },
+  },
+  {
+    exposedContent: [
       "daily per-post social-metrics snapshot — appends each published post's Postiz reach (views/likes/comments/…) into an append-only ledger, one row per post per day (--no-agent)",
     ],
     kind: "cron",

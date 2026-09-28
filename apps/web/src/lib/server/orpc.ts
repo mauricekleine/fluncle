@@ -46,6 +46,7 @@ import { adminSocialHandlers } from "./orpc/admin-social";
 import { adminSubmissionsHandlers } from "./orpc/admin-submissions";
 import { adminSubscriptionsHandlers } from "./orpc/admin-subscriptions";
 import { adminTelemetryHandlers } from "./orpc/admin-telemetry";
+import { adminTursoUsageHandlers } from "./orpc/admin-turso-usage";
 import { adminTokensHandlers } from "./orpc/admin-tokens";
 import { adminTracksHandlers } from "./orpc/admin-tracks";
 import { adminTwitchHandlers } from "./orpc/admin-twitch";
@@ -115,6 +116,7 @@ export const router = os.use(dueWorkMaintenancePendingMiddleware).router({
   ...adminSubmissionsHandlers(os),
   ...adminSubscriptionsHandlers(os),
   ...adminTelemetryHandlers(os),
+  ...adminTursoUsageHandlers(os),
   ...adminTokensHandlers(os),
   ...adminTracksHandlers(os),
   ...adminTwitchHandlers(os),

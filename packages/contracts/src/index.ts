@@ -42,6 +42,18 @@ import {
   type RecordedLabelOutlierSchema,
 } from "./orpc/admin-label-outliers.js";
 import {
+  type TursoAttributedDatabaseSchema,
+  type TursoDatabaseUsageSchema,
+  type TursoUsageAlertKeySchema,
+  type TursoUsageAlertSchema,
+  type TursoUsageHistoryDaySchema,
+  type TursoUsageRateBasisSchema,
+  type TursoUsageResourceKeySchema,
+  type TursoUsageResourceSchema,
+  type TursoUsageSnapshotSchema,
+  type TursoUsageTotalsSchema,
+} from "./orpc/admin-turso-usage.js";
+import {
   type LabelAdminItemSchema,
   type LabelAliasCandidateSchema,
   type LabelAliasKindSchema,
@@ -137,6 +149,34 @@ export type LabelOutlierInputAlbum = z.infer<typeof LabelOutlierInputAlbumSchema
 export type LabelOutlierRun = z.infer<typeof LabelOutlierRunSchema>;
 
 export type RecordedLabelOutlier = z.infer<typeof RecordedLabelOutlierSchema>;
+
+export type TursoUsageTotals = z.infer<typeof TursoUsageTotalsSchema>;
+
+export type TursoDatabaseUsage = z.infer<typeof TursoDatabaseUsageSchema>;
+
+export type TursoAttributedDatabase = z.infer<typeof TursoAttributedDatabaseSchema>;
+
+export type TursoUsageResourceKey = z.infer<typeof TursoUsageResourceKeySchema>;
+
+export type TursoUsageRateBasis = z.infer<typeof TursoUsageRateBasisSchema>;
+
+export type TursoUsageResource = z.infer<typeof TursoUsageResourceSchema>;
+
+export type TursoUsageSnapshot = z.infer<typeof TursoUsageSnapshotSchema>;
+
+export type TursoUsageHistoryDay = z.infer<typeof TursoUsageHistoryDaySchema>;
+
+export type TursoUsageAlert = z.infer<typeof TursoUsageAlertSchema>;
+
+export type TursoUsageAlertKey = z.infer<typeof TursoUsageAlertKeySchema>;
+
+export type TursoUsageBoard = {
+  alerts: TursoUsageAlert[];
+  available: boolean;
+  history: TursoUsageHistoryDay[];
+  latest: TursoUsageSnapshot | null;
+  thresholdUsd: number;
+};
 
 export type GalaxiesAdminResponse = Ok<{ galaxies: GalaxyAdminItem[] }>;
 

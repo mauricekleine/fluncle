@@ -70,6 +70,8 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
 
   "GET /admin/clips/{clipId}/caption": "get_clip_caption",
 
+  "GET /admin/costs/turso-usage": "get_turso_usage",
+
   "GET /admin/follow-digests/state": "get_follow_digest_state",
 
   "GET /admin/frontier/minting": "get_frontier_minting",
@@ -307,6 +309,8 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
 
   "POST /admin/costs/events": "record_cost",
 
+  "POST /admin/costs/turso-usage": "record_turso_usage",
+
   "POST /admin/database-admission": "coordinate_database_admission",
 
   "POST /admin/follow-digests/send": "send_follow_digests",
@@ -449,6 +453,10 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   "PUT /admin/catalogue/label-releases-budget": "set_label_releases_budget",
 
   "PUT /admin/clips/drip/state": "set_clip_drip",
+
+  "PUT /admin/costs/turso-usage/alerts": "acknowledge_turso_usage_alerts",
+
+  "PUT /admin/costs/turso-usage/threshold": "set_turso_usage_threshold",
 
   "PUT /admin/follow-digests/state": "set_follow_digest_state",
 
