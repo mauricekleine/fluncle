@@ -4,6 +4,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { LOCAL_DB_CONCURRENCY } from "../database-concurrency";
 import { QUALIFIED_ARTISTS_SQL } from "./catalogue";
 import { getDb } from "./db";
 import { runWithDatabaseRequestScope } from "./database-request-scope";
@@ -21,7 +22,8 @@ vi.mock("@libsql/client/web", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@libsql/client/web")>();
   return {
     ...actual,
-    createClient: (config: { url: string }) => createNodeClient({ url: config.url }),
+    createClient: (config: { url: string }) =>
+      createNodeClient({ concurrency: LOCAL_DB_CONCURRENCY, url: config.url }),
   };
 });
 
