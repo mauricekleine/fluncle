@@ -140,7 +140,11 @@ function UsageBody({
       <div className="grid gap-3 sm:grid-cols-3">
         <StatTile
           accent={snapshot.overageUsd > 0}
-          hint={`over the plan's included usage, plus ${formatUsd(snapshot.baseUsd)} base`}
+          hint={
+            snapshot.baseUsd === null
+              ? "over the plan's included usage; base price unknown for this billing timeline"
+              : `over the plan's included usage, plus ${formatUsd(snapshot.baseUsd)} base`
+          }
           icon={<ReceiptIcon aria-hidden="true" className="size-4" />}
           label="Overage so far"
           value={formatUsd(snapshot.overageUsd)}
@@ -184,13 +188,19 @@ function UsageBody({
   );
 }
 
+function billHint(snapshot: TursoUsageSnapshot): string {
+  return snapshot.projectedBillUsd === null
+    ? "bill unpriced"
+    : `bill ≈ ${formatUsd(snapshot.projectedBillUsd)}`;
+}
+
 function projectionHint(snapshot: TursoUsageSnapshot): string {
   if (snapshot.rateBasis === "recent" && snapshot.rateWindowHours !== null) {
-    return `run-rate over the last ${Math.round(snapshot.rateWindowHours)}h · bill ≈ ${formatUsd(snapshot.projectedBillUsd)}`;
+    return `run-rate over the last ${Math.round(snapshot.rateWindowHours)}h · ${billHint(snapshot)}`;
   }
 
   if (snapshot.rateBasis === "cycle-to-date") {
-    return `cycle-to-date average · bill ≈ ${formatUsd(snapshot.projectedBillUsd)}`;
+    return `cycle-to-date average · ${billHint(snapshot)}`;
   }
 
   return "too early in the cycle for a run-rate";

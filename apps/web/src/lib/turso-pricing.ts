@@ -15,7 +15,7 @@ export type TursoResourcePrice = {
 };
 
 export type TursoPriceTable = {
-  baseMonthlyUsd: number;
+  baseMonthlyUsdByTimeline: Readonly<Record<string, number>>;
   plan: string;
   resources: Record<TursoUsageResourceKey, TursoResourcePrice>;
   source: string;
@@ -31,7 +31,7 @@ export const TURSO_RESOURCE_ORDER: readonly TursoUsageResourceKey[] = [
 
 export const TURSO_PRICE_TABLES: Readonly<Record<string, TursoPriceTable>> = {
   "scaler-2026-09": {
-    baseMonthlyUsd: 24.92,
+    baseMonthlyUsdByTimeline: { monthly: 29, yearly: 24.92 },
     plan: "scaler",
     resources: {
       embeddedSyncs: { included: 24e9, kind: "cumulative", unitSize: 1e9, usdPerUnit: 0.25 },
@@ -172,13 +172,13 @@ function ratesBetween(
 }
 
 export type PricedReading = {
-  baseUsd: number;
+  baseUsd: number | null;
   databases: TursoAttributedDatabase[];
   overageUsd: number;
   priced: boolean;
   priceSource: string;
   priceTableVersion: string;
-  projectedBillUsd: number;
+  projectedBillUsd: number | null;
   projectedOverageUsd: number;
   rateBasis: TursoUsageRateBasis;
   rateWindowHours: number | null;
@@ -192,6 +192,7 @@ export function priceReading(input: {
   overagesEnabled: boolean;
   plan: string;
   priors: readonly PriorReading[];
+  timeline: string | null;
   usage: TursoUsageTotals;
 }): PricedReading {
   const table = priceTableForPlan(input.plan);
@@ -227,7 +228,7 @@ export function priceReading(input: {
   const projectedOverage = roundCents(
     resources.reduce((sum, resource) => sum + resource.projectedOverageUsd, 0),
   );
-  const baseUsd = table?.baseMonthlyUsd ?? 0;
+  const baseUsd = basePrice(table, input.timeline);
 
   return {
     baseUsd,
@@ -236,12 +237,23 @@ export function priceReading(input: {
     priceSource: table?.source ?? "",
     priceTableVersion: table?.version ?? "unpriced",
     priced: table !== undefined,
-    projectedBillUsd: roundCents(baseUsd + projectedOverage),
+    projectedBillUsd: baseUsd === null ? null : roundCents(baseUsd + projectedOverage),
     projectedOverageUsd: projectedOverage,
     rateBasis: rate.basis,
     rateWindowHours: rate.windowHours,
     resources,
   };
+}
+
+export function basePrice(
+  table: TursoPriceTable | undefined,
+  timeline: string | null,
+): number | null {
+  if (!table || timeline === null) {
+    return null;
+  }
+
+  return table.baseMonthlyUsdByTimeline[timeline.toLowerCase()] ?? null;
 }
 
 export function attributeDatabases(

@@ -55,9 +55,9 @@ describe("the Turso usage ops' auth tiers", () => {
     expect(settings.size).toBe(0);
   });
 
-  it("lets the agent token read the board", async () => {
+  it("lets the operator read the board", async () => {
     const { handleOrpc } = await import("./orpc");
-    const response = await handleOrpc(req("/admin/costs/turso-usage", "GET", AGENT_TOKEN));
+    const response = await handleOrpc(req("/admin/costs/turso-usage", "GET", OPERATOR_TOKEN));
 
     expect(response?.status).toBe(200);
     expect(await readJson(response)).toMatchObject({
@@ -67,13 +67,20 @@ describe("the Turso usage ops' auth tiers", () => {
     });
   });
 
+  it("refuses the agent token on the board, which carries the bill and the invoice", async () => {
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(req("/admin/costs/turso-usage", "GET", AGENT_TOKEN));
+
+    expect(response?.status).toBe(403);
+  });
+
   it("401s an anonymous record", async () => {
     const { handleOrpc } = await import("./orpc");
     const response = await handleOrpc(
       req("/admin/costs/turso-usage", "POST", undefined, {
         databases: [],
         observedAt: "2026-09-28T00:00:00.000Z",
-        plan: { name: "scaler", overages: true },
+        plan: { name: "scaler", overages: true, timeline: "yearly" },
         upcomingInvoiceUsd: null,
         usage: { bytesSynced: 0, rowsRead: 0, rowsWritten: 0, storageBytes: 0 },
       }),

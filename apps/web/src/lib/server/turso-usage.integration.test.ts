@@ -47,7 +47,7 @@ function reading(
       { bytesSynced: 0, name: "telemetry", rowsRead: 1e9, rowsWritten: 2e6, storageBytes: 1e9 },
     ],
     observedAt,
-    plan: { name: "scaler", overages: true },
+    plan: { name: "scaler", overages: true, timeline: "yearly" },
     upcomingInvoiceUsd: 120.5,
     usage: {
       bytesSynced: 300e9,

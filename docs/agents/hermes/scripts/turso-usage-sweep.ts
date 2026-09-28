@@ -27,7 +27,7 @@ export type OrganizationUsage = {
   totals: UsageTotals;
 };
 
-export type Subscription = { name: string; overages: boolean };
+export type Subscription = { name: string; overages: boolean; timeline: string | null };
 
 export type RecordPayload = {
   databases: DatabaseUsage[];
@@ -164,6 +164,7 @@ export function parseSubscription(body: unknown): Subscription {
   return {
     name,
     overages: subscription.overages === true,
+    timeline: typeof subscription.timeline === "string" ? subscription.timeline : null,
   };
 }
 
@@ -338,9 +339,14 @@ export async function runTursoUsageSweep(deps: SweepDeps): Promise<TursoUsageSum
   summary.notified = await deps.notify(discordMessage(response, pending));
 
   if (!summary.notified) {
-    summary.alertAcknowledged = false;
-
-    return summary;
+    return {
+      ...summary,
+      alertAcknowledged: false,
+      error: `${pending.length} overage alert(s) pending and the Discord post did not land; the next run re-sends`,
+      errors: 1,
+      ok: false,
+      reason: "alert_undelivered",
+    };
   }
 
   try {
@@ -354,6 +360,16 @@ export async function runTursoUsageSweep(deps: SweepDeps): Promise<TursoUsageSum
     log(
       `alert acknowledgement failed; the next run re-sends it: ${error instanceof Error ? error.message : String(error)}`,
     );
+  }
+
+  if (!summary.alertAcknowledged) {
+    return {
+      ...summary,
+      error: "the Discord alert landed but its acknowledgement did not; the next run re-sends it",
+      errors: 1,
+      ok: false,
+      reason: "alert_unacknowledged",
+    };
   }
 
   return summary;

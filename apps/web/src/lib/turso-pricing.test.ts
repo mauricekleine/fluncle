@@ -41,7 +41,7 @@ describe("the Scaler price table", () => {
 
   it("carries its source and base price", () => {
     expect(SCALER?.source).toBe("https://turso.tech/pricing");
-    expect(SCALER?.baseMonthlyUsd).toBe(24.92);
+    expect(SCALER?.baseMonthlyUsdByTimeline).toEqual({ monthly: 29, yearly: 24.92 });
   });
 });
 
@@ -73,6 +73,7 @@ describe("priceReading", () => {
       overagesEnabled: true,
       plan: "scaler",
       priors: [],
+      timeline: "yearly",
       usage: { bytesSynced: 1e9, rowsRead: 1e9, rowsWritten: 1e6, storageBytes: 1e9 },
     });
 
@@ -100,6 +101,7 @@ describe("priceReading", () => {
           usage: { ...usage, bytesSynced: 100e9, rowsWritten: 100e6 },
         },
       ],
+      timeline: "yearly",
       usage,
     });
     const written = priced.resources.find((resource) => resource.key === "rowsWritten");
@@ -128,6 +130,7 @@ describe("priceReading", () => {
       overagesEnabled: true,
       plan: "scaler",
       priors: [{ observedAtMs: observedAtMs - HOUR_MS, usage }],
+      timeline: "yearly",
       usage: { ...usage, rowsWritten: 100e6 },
     });
     const written = priced.resources.find((resource) => resource.key === "rowsWritten");
@@ -147,6 +150,7 @@ describe("priceReading", () => {
       overagesEnabled: true,
       plan: "scaler",
       priors: [{ observedAtMs: observedAtMs - DAY_MS, usage }],
+      timeline: "yearly",
       usage: { ...usage, rowsWritten: 1e6 },
     });
 
@@ -162,6 +166,7 @@ describe("priceReading", () => {
       overagesEnabled: false,
       plan: "scaler",
       priors: [],
+      timeline: "yearly",
       usage,
     });
 
@@ -177,12 +182,42 @@ describe("priceReading", () => {
       overagesEnabled: true,
       plan: "enterprise",
       priors: [],
+      timeline: "yearly",
       usage,
     });
 
     expect(priced.priced).toBe(false);
     expect(priced.priceTableVersion).toBe("unpriced");
     expect(priced.overageUsd).toBe(0);
+  });
+});
+
+describe("the base price", () => {
+  const cycle = billingCycle(Date.parse("2026-09-01T00:00:00Z"));
+  const quiet = { bytesSynced: 0, rowsRead: 0, rowsWritten: 0, storageBytes: 0 };
+  const read = (timeline: string | null) =>
+    priceReading({
+      cycle,
+      databases: [],
+      observedAtMs: Date.parse("2026-09-10T00:00:00Z"),
+      overagesEnabled: true,
+      plan: "scaler",
+      priors: [],
+      timeline,
+      usage: quiet,
+    });
+
+  it("bills the yearly and the monthly Scaler base at their own rates", () => {
+    expect(read("yearly").projectedBillUsd).toBe(24.92);
+    expect(read("monthly").projectedBillUsd).toBe(29);
+    expect(read("Monthly").baseUsd).toBe(29);
+  });
+
+  it("leaves the base unpriced for an unknown or missing billing timeline", () => {
+    expect(read("quarterly").baseUsd).toBeNull();
+    expect(read("quarterly").projectedBillUsd).toBeNull();
+    expect(read(null).baseUsd).toBeNull();
+    expect(read(null).projectedOverageUsd).toBe(0);
   });
 });
 

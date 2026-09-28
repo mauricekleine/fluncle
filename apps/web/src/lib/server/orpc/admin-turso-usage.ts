@@ -18,13 +18,16 @@ export function adminTursoUsageHandlers(os: Implementer) {
       }
     });
 
-  const getTursoUsageHandler = os.get_turso_usage.use(adminAuth).handler(async () => {
-    try {
-      return { ...(await getTursoUsageBoard()), ok: true } as const;
-    } catch (error) {
-      throw apiFault(error);
-    }
-  });
+  const getTursoUsageHandler = os.get_turso_usage
+    .use(adminAuth)
+    .use(operatorGuard)
+    .handler(async () => {
+      try {
+        return { ...(await getTursoUsageBoard()), ok: true } as const;
+      } catch (error) {
+        throw apiFault(error);
+      }
+    });
 
   const acknowledgeTursoUsageAlertsHandler = os.acknowledge_turso_usage_alerts
     .use(adminAuth)

@@ -214,7 +214,7 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   get_spotify_anchor_breaker: "admin",
   get_submission: "admin",
   get_track_admin: "admin",
-  get_turso_usage: "admin",
+  get_turso_usage: "operator",
   get_vector_serving: "operator",
   inactivate_artifact_consumer: "admin",
   initiate_mixtape_youtube: "operator",

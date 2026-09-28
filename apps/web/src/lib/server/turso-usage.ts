@@ -34,7 +34,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 export type RecordTursoUsageInput = {
   databases: TursoDatabaseUsage[];
   observedAt: string;
-  plan: { name: string; overages: boolean };
+  plan: { name: string; overages: boolean; timeline: string | null };
   upcomingInvoiceUsd: number | null;
   usage: TursoUsageTotals;
 };
@@ -91,6 +91,7 @@ export function buildSnapshot(
     overagesEnabled: input.plan.overages,
     plan: input.plan.name,
     priors,
+    timeline: input.plan.timeline,
     usage: input.usage,
   });
 
@@ -102,6 +103,7 @@ export function buildSnapshot(
     observedAt: new Date(observedAtMs).toISOString(),
     overagesEnabled: input.plan.overages,
     plan: input.plan.name,
+    timeline: input.plan.timeline,
     upcomingInvoiceUsd: input.upcomingInvoiceUsd,
   };
 }

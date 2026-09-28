@@ -144,7 +144,12 @@ describe("parsing the recorded Turso platform responses", () => {
   });
 
   test("reads the plan and whether overages bill", () => {
-    expect(parseSubscription(subscription)).toEqual({ name: "scaler", overages: true });
+    expect(parseSubscription(subscription)).toEqual({
+      name: "scaler",
+      overages: true,
+      timeline: "yearly",
+    });
+    expect(parseSubscription({ subscription: { plan: "scaler" } }).timeline).toBeNull();
     expect(() => parseSubscription({ subscription: {} })).toThrow(/no plan/);
   });
 
@@ -191,7 +196,7 @@ describe("runTursoUsageSweep", () => {
     });
     expect(calls.recorded).toHaveLength(1);
     expect(calls.recorded[0]?.observedAt).toBe("2026-09-28T00:00:00.000Z");
-    expect(calls.recorded[0]?.plan).toEqual({ name: "scaler", overages: true });
+    expect(calls.recorded[0]?.plan).toEqual({ name: "scaler", overages: true, timeline: "yearly" });
     expect(calls.notified).toEqual([]);
   });
 
@@ -214,7 +219,7 @@ describe("runTursoUsageSweep", () => {
     expect(summary).toMatchObject({ alertAcknowledged: true, notified: true, pendingAlerts: 2 });
   });
 
-  test("a failed Discord post leaves the alert unacknowledged for the next run", async () => {
+  test("an undelivered Discord alert fails the run and stays pending for the next run", async () => {
     const { calls, deps: sweepDeps } = deps({
       notify: () => Promise.resolve(false),
       record: () => Promise.resolve(recorded({ pendingAlerts: PENDING })),
@@ -222,17 +227,31 @@ describe("runTursoUsageSweep", () => {
     const summary = await runTursoUsageSweep(sweepDeps);
 
     expect(calls.acknowledged).toEqual([]);
-    expect(summary).toMatchObject({ alertAcknowledged: false, notified: false, ok: true });
+    expect(summary).toMatchObject({
+      alertAcknowledged: false,
+      errors: 1,
+      notified: false,
+      ok: false,
+      pendingAlerts: 2,
+      produced: 1,
+      reason: "alert_undelivered",
+    });
   });
 
-  test("a failed acknowledgement is reported, not thrown", async () => {
+  test("a failed acknowledgement fails the run, not thrown", async () => {
     const { deps: sweepDeps } = deps({
       acknowledge: () => Promise.reject(new Error("boom")),
       record: () => Promise.resolve(recorded({ pendingAlerts: PENDING })),
     });
     const summary = await runTursoUsageSweep(sweepDeps);
 
-    expect(summary).toMatchObject({ alertAcknowledged: false, notified: true, ok: true });
+    expect(summary).toMatchObject({
+      alertAcknowledged: false,
+      errors: 1,
+      notified: true,
+      ok: false,
+      reason: "alert_unacknowledged",
+    });
   });
 
   test("records without the invoice when the invoice read fails", async () => {

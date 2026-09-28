@@ -53,7 +53,7 @@ export const TursoAttributedDatabaseSchema = TursoDatabaseUsageSchema.extend({
 
 export const TursoUsageSnapshotSchema = z
   .object({
-    baseUsd: z.number().min(0),
+    baseUsd: z.number().min(0).nullable(),
     cycle: CycleKey,
     cycleEnd: z.string(),
     cycleStart: z.string(),
@@ -65,11 +65,12 @@ export const TursoUsageSnapshotSchema = z
     priceSource: z.string(),
     priceTableVersion: z.string(),
     priced: z.boolean(),
-    projectedBillUsd: z.number().min(0),
+    projectedBillUsd: z.number().min(0).nullable(),
     projectedOverageUsd: z.number().min(0),
     rateBasis: TursoUsageRateBasisSchema,
     rateWindowHours: z.number().min(0).nullable(),
     resources: z.array(TursoUsageResourceSchema),
+    timeline: z.string().nullable(),
     upcomingInvoiceUsd: z.number().min(0).nullable(),
   })
   .meta({ id: "TursoUsageSnapshot" });
@@ -118,6 +119,7 @@ export const recordTursoUsage = oc
       plan: z.object({
         name: z.string().min(1).max(64),
         overages: z.boolean(),
+        timeline: z.string().max(32).nullable(),
       }),
       upcomingInvoiceUsd: z.number().min(0).nullable(),
       usage: TursoUsageTotalsSchema,
@@ -138,7 +140,8 @@ export const getTursoUsage = oc
     method: "GET",
     operationId: "getTursoUsage",
     path: "/admin/costs/turso-usage",
-    summary: "The latest priced Turso usage reading, its per-day history, and this cycle's alerts",
+    summary:
+      "The latest priced Turso usage reading, its per-day history, and this cycle's alerts (operator)",
     tags: ["Admin"],
   })
   .output(
