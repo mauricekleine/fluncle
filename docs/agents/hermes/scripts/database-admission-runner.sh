@@ -130,6 +130,8 @@ acquire_attempted=false
 coordinator_answered=false
 admission_transport_failed=false
 breaker_probe_held=false
+probe_claim_id="$$.${RANDOM:-0}.${run_id}"
+probe_claim_content=""
 breaker_since=0
 breaker_until=0
 breaker_cooldown_ms=0
@@ -265,10 +267,23 @@ open_breaker() {
 	emit_breaker_event open
 }
 
+take_probe_claim_if() {
+	local expected="$1" moved="${ADMISSION_STATE_DIR}/.probe-taken.${probe_claim_id}" taken
+	mv -- "$BREAKER_PROBE_FILE" "$moved" 2>/dev/null || return 1
+	taken="$(cat -- "$moved" 2>/dev/null)"
+	if [ "$taken" != "$expected" ]; then
+		ln -- "$moved" "$BREAKER_PROBE_FILE" 2>/dev/null || true
+		rm -f -- "$moved"
+		return 1
+	fi
+	rm -f -- "$moved"
+	return 0
+}
+
 release_breaker_probe() {
 	[ "$breaker_probe_held" = true ] || return 0
 	breaker_probe_held=false
-	rm -f -- "$BREAKER_PROBE_FILE"
+	take_probe_claim_if "$probe_claim_content" || true
 }
 
 close_breaker() {
@@ -324,19 +339,28 @@ breaker_note_answer() {
 }
 
 claim_breaker_probe() {
-	local now_ms="$1"
-	if (
-		set -C
-		printf '%s\n' "$now_ms" >"$BREAKER_PROBE_FILE"
-	) 2>/dev/null; then
+	local now_ms="$1" staged="${ADMISSION_STATE_DIR}/.probe-claim.${probe_claim_id}"
+	printf '%s %s\n' "$now_ms" "$probe_claim_id" >"$staged" 2>/dev/null || return 1
+	if ln -- "$staged" "$BREAKER_PROBE_FILE" 2>/dev/null; then
+		probe_claim_content="$(cat -- "$staged")"
+		rm -f -- "$staged"
 		breaker_probe_held=true
 		return 0
 	fi
+	rm -f -- "$staged"
 	return 1
 }
 
+probe_claim_is_stale() {
+	local claim="$1" now_ms="$2" started claimant
+	read -r started claimant _ <<<"$claim"
+	case "${started:-x}" in *[!0-9]*) return 0 ;; esac
+	[ -n "${claimant:-}" ] || return 0
+	[ "$((now_ms - started))" -gt $(((ADMISSION_HTTP_TIMEOUT_SECS + 5) * 1000)) ]
+}
+
 breaker_admits() {
-	local now_ms started
+	local now_ms claim
 	[ "$breaker_probe_held" = false ] || return 0
 	read_breaker || return 0
 	now_ms="$(current_time_ms)"
@@ -345,10 +369,9 @@ breaker_admits() {
 		emit_breaker_event half-open
 		return 0
 	fi
-	started="$(sed -n '1p' "$BREAKER_PROBE_FILE" 2>/dev/null)"
-	case "$started" in '' | *[!0-9]*) return 1 ;; esac
-	[ "$((now_ms - started))" -gt $(((ADMISSION_HTTP_TIMEOUT_SECS + 5) * 1000)) ] || return 1
-	rm -f -- "$BREAKER_PROBE_FILE"
+	claim="$(cat -- "$BREAKER_PROBE_FILE" 2>/dev/null)"
+	probe_claim_is_stale "$claim" "$now_ms" || return 1
+	take_probe_claim_if "$claim" || return 1
 	if claim_breaker_probe "$now_ms"; then
 		emit_breaker_event half-open
 		return 0

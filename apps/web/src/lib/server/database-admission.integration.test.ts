@@ -730,17 +730,76 @@ describe("stall-tolerant admission protocol", () => {
     expect((await tolerant("fluncle-note", "on-time")).outcome).toBe("acquired");
   });
 
-  it("drops an earlier committed row when the same run's acquire arrives after its deadline", async () => {
+  it("drops a queued row when the same run's acquire arrives after its deadline", async () => {
+    const holder = await tolerant("fluncle-enrich", "holder-before-late-retry");
+    nowMs += 1;
     const deadlineMs = nowMs + 5_000;
     expect(
-      (await tolerant("fluncle-enrich", "late-retry", "acquire", { notAfterMs: deadlineMs }))
-        .outcome,
-    ).toBe("acquired");
+      (await tolerant("fluncle-note", "late-retry", "acquire", { notAfterMs: deadlineMs })).outcome,
+    ).toBe("queued");
     nowMs = deadlineMs + 1;
     expect(
-      await tolerant("fluncle-enrich", "late-retry", "acquire", { notAfterMs: deadlineMs }),
+      await tolerant("fluncle-note", "late-retry", "acquire", { notAfterMs: deadlineMs }),
     ).toMatchObject({ outcome: "cancelled", recovered: true });
-    expect(await activeCounts()).toEqual({});
+    const rows = await db.execute(
+      `select run_id, state, fencing_token from database_admission_contenders`,
+    );
+    expect(rows.rows).toEqual([
+      { fencing_token: holder.fencingToken, run_id: "holder-before-late-retry", state: "active" },
+    ]);
+  });
+
+  it("never lets a timed-out acquire that lands after the deadline free the grant its retry is running under", async () => {
+    const deadlineMs = nowMs + 120_000;
+    const retried = await tolerant("fluncle-enrich", "retried-run", "acquire", {
+      notAfterMs: deadlineMs,
+    });
+    expect(retried.outcome).toBe("acquired");
+    nowMs += 10_000;
+    expect(
+      (
+        await tolerant("fluncle-enrich", "retried-run", "heartbeat", {
+          fencingToken: retried.fencingToken ?? undefined,
+        })
+      ).outcome,
+    ).toBe("acquired");
+
+    nowMs = deadlineMs + 1;
+    expect(
+      await tolerant("fluncle-enrich", "retried-run", "acquire", { notAfterMs: deadlineMs }),
+    ).toMatchObject({ fencingToken: retried.fencingToken, outcome: "acquired" });
+    expect(await activeCounts()).toEqual({ write: 1 });
+    expect((await tolerant("fluncle-note", "must-wait")).outcome).toBe("queued");
+  });
+
+  it("refuses to let a late acquire free a grant whose payload started before its first heartbeat", async () => {
+    const deadlineMs = nowMs + 10_000;
+    const retried = await tolerant("fluncle-enrich", "fresh-grant", "acquire", {
+      notAfterMs: deadlineMs,
+    });
+    expect(retried.outcome).toBe("acquired");
+
+    nowMs = deadlineMs + 1;
+    expect(
+      await tolerant("fluncle-enrich", "fresh-grant", "acquire", { notAfterMs: deadlineMs }),
+    ).toMatchObject({ fencingToken: retried.fencingToken, outcome: "acquired" });
+    expect(await activeCounts()).toEqual({ write: 1 });
+    expect((await tolerant("fluncle-note", "must-wait")).outcome).toBe("queued");
+  });
+
+  it("never lets a cancel remove a lease its payload has already renewed", async () => {
+    const running = await tolerant("fluncle-enrich", "renewed-run");
+    nowMs += 10_000;
+    await tolerant("fluncle-enrich", "renewed-run", "heartbeat", {
+      fencingToken: running.fencingToken ?? undefined,
+    });
+
+    expect(await tolerant("fluncle-enrich", "renewed-run", "cancel")).toMatchObject({
+      outcome: "cancelled",
+      recovered: false,
+    });
+    expect(await activeCounts()).toEqual({ write: 1 });
+    expect((await tolerant("fluncle-note", "must-wait")).outcome).toBe("queued");
   });
 
   it("lets a queued contender behind the head wait without re-sending the write batch", async () => {

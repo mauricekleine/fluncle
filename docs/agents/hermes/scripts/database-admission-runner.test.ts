@@ -1764,7 +1764,7 @@ ${STALL_TOLERANT_GRANT(7_500, 1_000)}
       writeFileSync(clock, `${(opened?.untilMs ?? 0) + 1}\n`);
       writeFileSync(
         join(directory, ".database-admission", "breaker-probe"),
-        `${(opened?.untilMs ?? 0) + 1}\n`,
+        `${(opened?.untilMs ?? 0) + 1} in-flight-prober\n`,
       );
       const blocked = await run(["bash", "-c", "exit 0"], { breakerFailures: 2, failClosed: true });
       expect(blocked.stderr).toMatch(/"outcome":"breaker-open"/);
@@ -1814,6 +1814,110 @@ ${STALL_TOLERANT_GRANT(7_500, 1_000)}
       expect(acquireCount()).toBe(3);
       expect(breakerState()).toMatchObject({ cooldownMs: 120_000, sinceMs: opened?.sinceMs });
       expect(existsSync(join(directory, ".database-admission", "breaker-probe"))).toBe(false);
+    },
+  );
+
+  function halfOpenBreaker(clock: string, nowMs: number): string {
+    const stateDirectory = join(directory, ".database-admission");
+    mkdirSync(stateDirectory, { recursive: true });
+    writeFileSync(join(stateDirectory, "breaker"), `${nowMs - 120_000} ${nowMs - 1} 60000\n`);
+    writeFileSync(clock, `${nowMs}\n`);
+    return join(stateDirectory, "breaker-probe");
+  }
+
+  it(
+    "reclaims an empty probe claim a crashed prober left behind so the breaker still half-opens",
+    PROCESS_TEST_OPTIONS,
+    async () => {
+      const clock = fakeVirtualClock(1_000_000);
+      advancingVirtualSleep(clock);
+      const probeClaim = halfOpenBreaker(clock, 1_000_000);
+      writeFileSync(probeClaim, "");
+      fakeCurl(ACQUIRED_RESPONSE);
+      const payloadMarker = join(directory, "payload-started");
+
+      const result = await run(["bash", "-c", `printf started > "${payloadMarker}"`], {
+        breakerFailures: 2,
+        failClosed: true,
+      });
+
+      expect(result.status).toBe(0);
+      expect(result.stderr).toContain('"state":"half-open"');
+      expect(result.stderr).toContain('"state":"closed"');
+      expect(existsSync(payloadMarker)).toBe(true);
+      expect(breakerState()).toBeNull();
+      expect(existsSync(probeClaim)).toBe(false);
+    },
+  );
+
+  it(
+    "backs off when a stale probe claim was reclaimed by another firing between its read and its reclaim",
+    PROCESS_TEST_OPTIONS,
+    async () => {
+      const clock = fakeVirtualClock(1_000_000);
+      advancingVirtualSleep(clock);
+      const probeClaim = halfOpenBreaker(clock, 1_000_000);
+      writeFileSync(probeClaim, "1 crashed-prober\n");
+      const freshClaim = "1000000 racing-prober";
+      const racedMarker = join(directory, "raced");
+      fakeExecutable(
+        "mv",
+        `arguments=("$@")
+source_path="\${arguments[$((\${#arguments[@]} - 2))]}"
+if [ "$source_path" = "${probeClaim}" ] && [ ! -e "${racedMarker}" ]; then
+  : > "${racedMarker}"
+  printf '%s\\n' "${freshClaim}" > "${probeClaim}"
+fi
+exec /bin/mv "$@"`,
+      );
+      fakeExecutable(
+        "rm",
+        `for argument in "$@"; do
+  if [ "$argument" = "${probeClaim}" ] && [ ! -e "${racedMarker}" ]; then
+    : > "${racedMarker}"
+    printf '%s\\n' "${freshClaim}" > "${probeClaim}"
+  fi
+done
+exec /bin/rm "$@"`,
+      );
+      fakeCurl(ACQUIRED_RESPONSE);
+
+      const result = await run(["bash", "-c", "exit 0"], {
+        breakerFailures: 2,
+        failClosed: true,
+      });
+
+      expect(result.status).toBe(0);
+      expect(result.stderr).toMatch(/"outcome":"breaker-open"/);
+      expect(result.stderr).not.toContain('"state":"half-open"');
+      expect(acquireCount()).toBe(0);
+      expect(readFileSync(probeClaim, "utf8").trim()).toBe(freshClaim);
+    },
+  );
+
+  it(
+    "never removes a probe claim it does not own when its own probe finishes",
+    PROCESS_TEST_OPTIONS,
+    async () => {
+      const clock = fakeVirtualClock(1_000_000);
+      advancingVirtualSleep(clock);
+      const probeClaim = halfOpenBreaker(clock, 1_000_000);
+      const foreignClaim = "1000000 another-prober";
+      fakeCurl(`
+if printf '%s' "$*" | grep -q '"action":"acquire"'; then
+  printf '%s\\n' "${foreignClaim}" > "${probeClaim}"
+fi
+${ACQUIRED_RESPONSE}
+`);
+
+      const result = await run(["bash", "-c", "exit 0"], {
+        breakerFailures: 2,
+        failClosed: true,
+      });
+
+      expect(result.status).toBe(0);
+      expect(result.stderr).toContain('"state":"closed"');
+      expect(readFileSync(probeClaim, "utf8").trim()).toBe(foreignClaim);
     },
   );
 

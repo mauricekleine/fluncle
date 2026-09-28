@@ -552,9 +552,19 @@ async function abandonLateAcquisition(
   profile: AdmissionResourceProfile,
   nowMs: number,
 ): Promise<DatabaseAdmissionResult> {
+  const existing = await readContender(client, request.owner, request.runId);
+  if (
+    existing?.state === "active" &&
+    existing.lease_expires_at_ms !== null &&
+    existing.lease_expires_at_ms > nowMs
+  ) {
+    return enforcedResult(request, profile, { contender: existing, nowMs, outcome: "acquired" });
+  }
   const abandoned = await client.execute({
-    args: [request.owner, request.runId],
-    sql: `delete from database_admission_contenders where owner_id = ? and run_id = ?`,
+    args: [request.owner, request.runId, nowMs],
+    sql: `delete from database_admission_contenders
+          where owner_id = ? and run_id = ?
+            and (state = 'queued' or lease_expires_at_ms <= ?)`,
   });
   return enforcedResult(request, profile, {
     nowMs,
@@ -763,9 +773,11 @@ async function settleEnforcedDatabaseAdmissionFor(
   let result: DatabaseAdmissionResult;
   if (request.action === "cancel") {
     const cancelled = await client.execute({
-      args: [request.owner, request.runId],
+      args: [request.owner, request.runId, nowMs],
       sql: `delete from database_admission_contenders
-            where owner_id = ? and run_id = ?`,
+            where owner_id = ? and run_id = ?
+              and (state = 'queued' or lease_expires_at_ms <= ?
+                or queue_heartbeat_at_ms <= acquired_at_ms)`,
     });
     result = enforcedResult(request, profile, {
       contender: existing,
