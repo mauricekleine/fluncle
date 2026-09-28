@@ -19,6 +19,7 @@ import {
   recordLabelJsonLd,
   videoObjectJsonLd,
 } from "./log-schema";
+import { type MixtapeDTO } from "./mixtapes";
 import { fold } from "./server/track-match";
 
 const track = {
@@ -835,16 +836,16 @@ describe("mixtapeAlbumJsonLd", () => {
   });
 
   it("names the album and its set video by the display title, never the platform title's coordinate tail", () => {
-    const mixtape = {
+    const mixtape: MixtapeDTO = {
       addedAt: "2026-06-18T21:00:00.000Z",
       artists: ["Fluncle"],
       externalUrls: {},
       logId: "019.F.1A",
       memberCount: 0,
       members: [],
-      status: "published" as const,
+      status: "published",
       title: "Fluncle Drum & Bass Mixtape #1 | 019.F.1A",
-      type: "mixtape" as const,
+      type: "mixtape",
     };
     const video = mixtapeVideoObjectJsonLd(mixtape, {
       contentUrl: "https://found.fluncle.com/019.F.1A/set.mp4",
