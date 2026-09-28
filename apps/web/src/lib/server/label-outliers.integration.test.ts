@@ -512,6 +512,23 @@ describe("listLabelOutlierInputsPage", () => {
     ]);
   });
 
+  it("reads a page, its credits, and its album styles in one statement, so they share a snapshot", async () => {
+    await seedScoringInputs();
+    const execute = vi.spyOn(db, "execute");
+    const batch = vi.spyOn(db, "batch");
+    const transaction = vi.spyOn(db, "transaction");
+
+    const page = await listLabelOutlierInputsPage(undefined, 10);
+
+    expect(page.tracks.find((track) => track.trackId === "t_a")?.artistIds.sort()).toEqual([
+      "art_bing",
+      "art_roller",
+    ]);
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(batch).not.toHaveBeenCalled();
+    expect(transaction).not.toHaveBeenCalled();
+  });
+
   it("an empty archive is one empty terminal page", async () => {
     expect(await listLabelOutlierInputsPage(undefined, 5)).toEqual({
       albums: [],

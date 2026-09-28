@@ -98,13 +98,21 @@ export async function listLabelOutlierInputsPage(
   const db = await getDb();
   const result = await db.execute({
     args: [after, limit + 1],
-    sql: `select e.track_id, t.label_id, t.album_id, e.embedding_blob
+    sql: `select e.track_id, t.label_id, t.album_id, e.embedding_blob,
+                 (select json_group_array(ta.artist_id)
+                    from track_artists ta
+                   where ta.track_id = e.track_id) as artist_ids,
+                 (select a.discogs_styles
+                    from albums a
+                   where a.id = t.album_id) as album_styles
             ${EMBEDDED_CATALOGUE_RANGE}
            order by e.track_id
            limit ?`,
   });
   const rows = typedRows<{
     album_id: string | null;
+    album_styles: string | null;
+    artist_ids: string | null;
     embedding_blob: unknown;
     label_id: string | null;
     track_id: string;
@@ -112,56 +120,35 @@ export async function listLabelOutlierInputsPage(
   const hasMore = rows.length > limit;
   const page = hasMore ? rows.slice(0, limit) : rows;
   const last = page.at(-1)?.track_id;
+  const albums = new Map<string, string>();
 
-  if (last === undefined) {
-    return { albums: [], nextCursor: null, tracks: [] };
-  }
-
-  const [credits, albums] = await db.batch(
-    [
-      {
-        args: [after, last],
-        sql: `select ta.track_id, ta.artist_id
-                from track_embeddings e
-                cross join tracks t on t.track_id = e.track_id
-                cross join track_artists ta on ta.track_id = e.track_id
-               where t.is_catalogue = 1 and e.track_id > ? and e.track_id <= ?`,
-      },
-      {
-        args: [after, last],
-        sql: `select a.id, a.discogs_styles
-                from albums a
-               where a.discogs_styles is not null
-                 and a.id in (
-                   select t.album_id
-                     ${EMBEDDED_CATALOGUE_RANGE} and e.track_id <= ? and t.album_id is not null
-                 )`,
-      },
-    ],
-    "read",
-  );
-  const artistsByTrack = new Map<string, string[]>();
-
-  for (const credit of typedRows<{ artist_id: string; track_id: string }>(credits?.rows ?? [])) {
-    const list = artistsByTrack.get(credit.track_id) ?? [];
-    list.push(credit.artist_id);
-    artistsByTrack.set(credit.track_id, list);
+  for (const row of page) {
+    if (row.album_id !== null && row.album_styles !== null) {
+      albums.set(row.album_id, row.album_styles);
+    }
   }
 
   return {
-    albums: typedRows<{ discogs_styles: string; id: string }>(albums?.rows ?? []).map((album) => ({
-      discogsStyles: album.discogs_styles,
-      id: album.id,
-    })),
-    nextCursor: hasMore ? encodeLabelOutlierInputsCursor(last) : null,
+    albums: [...albums].map(([id, discogsStyles]) => ({ discogsStyles, id })),
+    nextCursor: hasMore && last !== undefined ? encodeLabelOutlierInputsCursor(last) : null,
     tracks: page.map((row) => ({
       albumId: row.album_id,
-      artistIds: artistsByTrack.get(row.track_id) ?? [],
+      artistIds: parseArtistIds(row.artist_ids),
       embeddingBase64: blobBase64(row.embedding_blob),
       labelId: row.label_id,
       trackId: row.track_id,
     })),
   };
+}
+
+function parseArtistIds(raw: string | null): string[] {
+  const parsed: unknown = JSON.parse(raw ?? "[]");
+
+  if (!Array.isArray(parsed) || !parsed.every((value) => typeof value === "string")) {
+    throw new Error("a track's artist credits did not read back as a list of ids");
+  }
+
+  return parsed;
 }
 
 type StoredOutlierRow = {
