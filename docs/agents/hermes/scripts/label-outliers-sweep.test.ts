@@ -18,6 +18,7 @@ import {
   type ScoreOutcome,
   scoreFromPages,
   type SweepDeps,
+  sweepDeps,
   toPayload,
 } from "./label-outliers-sweep";
 
@@ -201,7 +202,7 @@ function servePages(pages: readonly InputsPage[], cursors: (string | null)[] = [
       throw new Error(`no page after ${cursor}`);
     }
 
-    return { kind: "completed", response: { bytes: JSON.stringify(page).length, page } };
+    return { bytes: JSON.stringify(page).length, page };
   };
 }
 
@@ -219,34 +220,38 @@ describe("the sweep scores from paged Worker reads", () => {
       now: () => READ_AT,
     });
 
-    expect(outcome.kind).toBe("scored");
-    if (outcome.kind === "scored") {
-      expect(outcome.run).toEqual(expected);
-      expect(outcome.run.flagged.map((unit) => unit.unitId)).toEqual(["album:alb_xmas:lbl_dnb"]);
-      expect(outcome.embeddedTracks).toBe(23);
-      expect(outcome.readAt).toBe("2026-09-28T05:30:00.000Z");
-      expect(outcome.read).toMatchObject({ pages: 6, tracks: 23 });
-      expect(outcome.read.bytes).toBeGreaterThan(23 * EMBEDDING_DIMENSIONS * 4);
-    }
+    expect(outcome.run).toEqual(expected);
+    expect(outcome.run.flagged.map((unit) => unit.unitId)).toEqual(["album:alb_xmas:lbl_dnb"]);
+    expect(outcome.embeddedTracks).toBe(23);
+    expect(outcome.readAt).toBe("2026-09-28T05:30:00.000Z");
+    expect(outcome.read).toMatchObject({ pages: 6, tracks: 23 });
+    expect(outcome.read.bytes).toBeGreaterThan(23 * EMBEDDING_DIMENSIONS * 4);
     expect(cursors[0]).toBeNull();
     expect(new Set(cursors).size).toBe(cursors.length);
     expect(existsSync(file)).toBe(false);
     source.close();
   });
 
-  test("an admission yield mid-walk stops the read and scores nothing", async () => {
-    const pages = workerPages(replica(), 4);
-    const serve = servePages(pages);
+  test("a failed page read mid-walk stops the read, scores nothing, and leaves no file", async () => {
+    const serve = servePages(workerPages(replica(), 4));
     let calls = 0;
     const file = join(scratchDir(), "scoring-inputs.db");
 
-    const outcome = await scoreFromPages(file, async (cursor) => {
+    const failure = await scoreFromPages(file, async (cursor) => {
       calls += 1;
 
-      return calls === 3 ? { kind: "yielded", reason: "queue" } : serve(cursor);
-    });
+      if (calls === 3) {
+        throw new Error("list_label_outlier_inputs failed (503)");
+      }
 
-    expect(outcome).toMatchObject({ kind: "yielded", read: { pages: 2 }, reason: "queue" });
+      return serve(cursor);
+    }).then(
+      () => "resolved",
+      (error: unknown) => (error instanceof Error ? error.message : String(error)),
+    );
+
+    expect(failure).toContain("(503)");
+    expect(calls).toBe(3);
     expect(existsSync(file)).toBe(false);
   });
 
@@ -258,8 +263,8 @@ describe("the sweep scores from paged Worker reads", () => {
     const stuck: InputsPage = { ...first, nextCursor: "c:again" };
 
     const failure = await scoreFromPages(join(scratchDir(), "s.db"), async () => ({
-      kind: "completed",
-      response: { bytes: 1, page: stuck },
+      bytes: 1,
+      page: stuck,
     })).then(
       () => "resolved",
       (error: unknown) => (error instanceof Error ? error.message : String(error)),
@@ -302,23 +307,71 @@ describe("the sweep scores from paged Worker reads", () => {
     });
   });
 
-  test("an admission yield leaves the payload unstarted so the retry slot runs it", async () => {
-    const fake = deps({
-      score: async () => ({
-        kind: "yielded",
-        read: { bytes: 10, durationMs: 5, pages: 2, tracks: 2000 },
-        reason: "queue",
-      }),
-    });
-    const summary = await runLabelOutliersSweep(fake, TEST_FLOOR);
+  test("the input walk takes no admission slot, one page at a time; only the two writes are admitted", async () => {
+    const pages = workerPages(replica(), 4);
+    const serve = servePages(pages);
+    const directory = scratchDir();
+    const admitted: { owner: string; phase: string | undefined; yieldRetries: number }[] = [];
+    let inFlight = 0;
+    let maxInFlight = 0;
+    let pageReads = 0;
+    let recordedOutliers = -1;
 
+    const summary = await runLabelOutliersSweep(
+      sweepDeps({
+        admit: async (input) => {
+          const phase = input.command[input.command.indexOf("--admission-phase") + 1];
+          admitted.push({ owner: input.owner, phase, yieldRetries: input.yieldRetries });
+          const payloadFile = input.command[input.command.indexOf("--payload") + 1] ?? "";
+          const posted = JSON.parse(readFileSync(payloadFile, "utf8")) as RecordPayload;
+
+          if (phase === "record") {
+            recordedOutliers = posted.outliers.length;
+          }
+
+          const stdout =
+            phase === "record"
+              ? {
+                  flagged: posted.outliers.length,
+                  ok: true,
+                  pendingAlertUnits: [{ fingerprint: "fp-xmas", unitId: "u-xmas" }],
+                  pendingAlerts: [{ albumName: "Xmas", labelName: "DnB", title: "Bells" }],
+                }
+              : { acknowledged: 1, ok: true };
+
+          return { attempts: 1, kind: "completed", stdout: JSON.stringify(stdout) };
+        },
+        fetchInputsPage: async (cursor) => {
+          pageReads += 1;
+          inFlight += 1;
+          maxInFlight = Math.max(maxInFlight, inFlight);
+          await Bun.sleep(1);
+          const { page } = await serve(cursor);
+          inFlight -= 1;
+
+          return JSON.stringify({ ...page, ok: true });
+        },
+        notify: async () => true,
+        scoringFile: async () => join(directory, "scoring-inputs.db"),
+      }),
+      TEST_FLOOR,
+    );
+
+    expect(pageReads).toBe(pages.length);
+    expect(maxInFlight).toBe(1);
+    expect(admitted).toEqual([
+      { owner: "fluncle-label-outliers", phase: "record", yieldRetries: 1 },
+      { owner: "fluncle-label-outliers", phase: "acknowledge", yieldRetries: 1 },
+    ]);
+    expect(recordedOutliers).toBe(1);
     expect(summary).toMatchObject({
-      inputPages: 2,
+      alertAcknowledged: true,
+      inputPages: pages.length,
+      notified: true,
       ok: true,
-      payloadStarted: false,
-      reason: "admission_queue",
+      payloadStarted: true,
+      pendingAlerts: 1,
     });
-    expect(fake.recorded).toEqual([]);
   });
 
   test("the sweep source never reaches the device mirror's state", () => {
@@ -355,7 +408,6 @@ function run(outliers: number, tracksScored = 40): LabelOutlierRun {
 function scored(outliers: number, tracksScored = 40, embeddedTracks = 40): ScoreOutcome {
   return {
     embeddedTracks,
-    kind: "scored",
     read: { bytes: 5_600_000, durationMs: 2_000, pages: 1, tracks: embeddedTracks },
     readAt: "2026-09-27T03:00:00.000Z",
     run: run(outliers, tracksScored),
