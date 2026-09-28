@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import {
   cronSurfaces,
   dormantSurfaces,
+  operatorOnlySurfaces,
+  publicStatusCronSurfaces,
   liveSurfaces,
   runLedgerWriters,
   statusProbes,
@@ -109,7 +111,7 @@ assert.deepEqual(
   "the direct ledger writers and their cadences stay declared",
 );
 
-for (const cron of crons) {
+for (const cron of publicStatusCronSurfaces()) {
   assert.ok(
     cron.title !== undefined && cron.title.trim().length > 0,
     `${cron.name}: a status-visible surface must carry a non-empty title`,
@@ -163,6 +165,51 @@ assert.equal(
   live.length,
   SURFACES.filter((surface) => surface.pending !== true && surface.dormant === undefined).length,
   "liveSurfaces is the catalog minus pending and dormant surfaces",
+);
+
+const operatorOnly = operatorOnlySurfaces();
+assert.ok(
+  operatorOnly.some((surface) => surface.name === "cron.turso-usage"),
+  "the Turso usage cron is kept off the public status board",
+);
+for (const surface of operatorOnly) {
+  assert.ok(
+    (surface.operatorOnly ?? "").trim().length > 20,
+    `${surface.name}: an operator-only surface says why in a sentence`,
+  );
+  assert.equal(
+    surface.dormant,
+    undefined,
+    `${surface.name}: operator-only and dormant are exclusive`,
+  );
+  assert.ok(
+    surface.title === undefined && surface.statusDescription === undefined,
+    `${surface.name}: an operator-only surface carries no public status copy`,
+  );
+  assert.ok(
+    !publicStatusCronSurfaces().some((s) => s.name === surface.name),
+    `${surface.name}: an operator-only cron never renders a public status row`,
+  );
+  assert.ok(
+    !surfacesForContext("status").some((s) => s.name === surface.name),
+    `${surface.name}: an operator-only surface is absent from the status context`,
+  );
+  if (surface.kind === "cron") {
+    assert.ok(
+      cronSurfaces().some((s) => s.name === surface.name),
+      `${surface.name}: an operator-only cron stays in the prober's cron roster`,
+    );
+    const unit = surface.probeConfig?.cronName;
+    assert.ok(
+      unit !== undefined && ledgerWriterNames.includes(unit),
+      `${surface.name}: an operator-only cron stays an expected run-ledger writer`,
+    );
+  }
+}
+assert.equal(
+  publicStatusCronSurfaces().length,
+  cronSurfaces().length - operatorOnly.filter((surface) => surface.kind === "cron").length,
+  "the public status crons are the cron roster minus the operator-only crons",
 );
 
 const dormant = dormantSurfaces();

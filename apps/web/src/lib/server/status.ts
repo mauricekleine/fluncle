@@ -5,7 +5,13 @@ import {
   HEALTH_SNAPSHOT_PRODUCER_MAX,
   HEALTH_SNAPSHOT_PRODUCER_PATTERN,
 } from "@fluncle/contracts/orpc";
-import { cronSurfaces, type CronSchedule, dormantSurfaces } from "@fluncle/registry";
+import {
+  cronSurfaces,
+  type CronSchedule,
+  dormantSurfaces,
+  operatorOnlySurfaces,
+  publicStatusCronSurfaces,
+} from "@fluncle/registry";
 import { SELF_POSTED_AUTOMATION_ORDER } from "../status-services";
 import { getDb, typedRows } from "./db";
 import { logEvent } from "./log";
@@ -135,10 +141,17 @@ const SERVICE_CHECK_SAMPLES_KEEP = 90;
 type HealthSnapshotWriteClient = Pick<Client, "execute">;
 
 const CRON_SURFACES = cronSurfaces();
+const PUBLIC_CRON_SURFACES = publicStatusCronSurfaces();
+const OPERATOR_ONLY_SERVICE_IDS = new Set(operatorOnlySurfaces().map((surface) => surface.name));
+
+export function isPublicStatusService(service: string): boolean {
+  return !OPERATOR_ONLY_SERVICE_IDS.has(service);
+}
+
 const STATUS_CRON_CONFIG: StatusCronConfig = {
-  order: CRON_SURFACES.map((surface) => surface.name),
+  order: PUBLIC_CRON_SURFACES.map((surface) => surface.name),
   rows: Object.fromEntries(
-    CRON_SURFACES.map((surface) => [
+    PUBLIC_CRON_SURFACES.map((surface) => [
       surface.name,
       {
         ...(surface.probeConfig?.cadenceMs === undefined
@@ -266,15 +279,19 @@ export async function getServiceStatuses(now = Date.now()): Promise<ServiceStatu
     .filter((row) => !RETIRED_SERVICE_IDS.has(row.service))
     .map((row) => honestFreshness(honestNoRuns(row, now), now));
 
-  return storedRows.length === 0 ? [] : [...rows, ...neverReportedStatuses(rows)];
+  return storedRows.length === 0
+    ? []
+    : [...rows, ...neverReportedStatuses(rows)].filter((row) => isPublicStatusService(row.service));
 }
 
 export async function getRecentStatusEvents(limit = 15): Promise<StatusEventRow[]> {
   const db = await getDb();
+  const hidden = [...OPERATOR_ONLY_SERVICE_IDS];
   const result = await db.execute({
-    args: [limit],
+    args: [...hidden, limit],
     sql: `select id, service, status, message, at
             from status_events
+            ${hidden.length === 0 ? "" : `where service not in (${hidden.map(() => "?").join(", ")})`}
             order by at desc, id desc
             limit ?`,
   });
@@ -293,6 +310,10 @@ export async function getServiceCheckSamples(): Promise<Record<string, ServiceCh
   const byService: Record<string, ServiceCheckSampleRow[]> = {};
 
   for (const row of typedRows<ServiceCheckSampleRow>(result.rows)) {
+    if (!isPublicStatusService(row.service)) {
+      continue;
+    }
+
     (byService[row.service] ??= []).push(row);
   }
 
