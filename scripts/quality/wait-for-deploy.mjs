@@ -37,6 +37,7 @@ export async function pollForDeployment({
   intervalSeconds = 15,
   isAncestor,
   now = () => Date.now(),
+  onMiss = async () => {},
   sleep = (milliseconds) =>
     new Promise((resolvePromise) => setTimeout(resolvePromise, milliseconds)),
   target,
@@ -59,6 +60,7 @@ export async function pollForDeployment({
         }
       }
     } catch {}
+    await onMiss();
     await sleep(intervalSeconds * 1000);
   }
 
