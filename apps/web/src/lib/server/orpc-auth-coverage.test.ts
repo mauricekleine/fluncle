@@ -291,6 +291,7 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   record_anchor_failure: "admin",
   record_catalogue_snapshot: "admin",
   record_cost: "admin",
+  record_database_write_probe: "admin",
   record_demand: "admin",
   record_health: "admin",
   record_label_outliers: "admin",

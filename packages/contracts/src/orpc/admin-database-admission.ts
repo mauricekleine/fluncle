@@ -17,6 +17,7 @@ export const DatabaseAdmissionYieldReasonSchema = z.enum([
   "direct-read-latency",
   "public-latency",
   "queue",
+  "write-latency",
 ]);
 
 const DatabaseAdmissionInputSchema = z
@@ -74,6 +75,29 @@ export const coordinateDatabaseAdmission = oc
   .input(DatabaseAdmissionInputSchema)
   .output(DatabaseAdmissionResponseSchema);
 
+export const DatabaseWriteProbeOutcomeSchema = z.enum(["failed", "ok", "slow", "stalled"]);
+
+export const DatabaseWriteProbeResponseSchema = z.object({
+  latencyMs: z.number().int().nonnegative().nullable(),
+  ok: z.literal(true),
+  outcome: DatabaseWriteProbeOutcomeSchema,
+  recorded: z.boolean(),
+});
+
+export type DatabaseWriteProbeResponse = z.infer<typeof DatabaseWriteProbeResponseSchema>;
+
+export const recordDatabaseWriteProbe = oc
+  .route({
+    method: "POST",
+    operationId: "recordDatabaseWriteProbe",
+    path: "/admin/database-admission/write-probe",
+    summary: "Time one bounded write to the primary database and record it for admission",
+    tags: ["Admin"],
+  })
+  .input(z.object({}))
+  .output(DatabaseWriteProbeResponseSchema);
+
 export const adminDatabaseAdmissionContract = {
   coordinate_database_admission: coordinateDatabaseAdmission,
+  record_database_write_probe: recordDatabaseWriteProbe,
 };

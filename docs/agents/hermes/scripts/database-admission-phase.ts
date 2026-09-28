@@ -21,6 +21,7 @@ export const ADMISSION_YIELD_REASONS: readonly string[] = [
   "invalid-grant",
   "public-latency",
   "queue",
+  "write-latency",
 ];
 
 export function parseAdmissionYieldReason(stderr: string): string | null {

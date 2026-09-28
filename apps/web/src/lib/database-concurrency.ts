@@ -122,3 +122,8 @@ export class WorkerDatabaseConcurrencyGate {
 }
 
 export const workerDatabaseConcurrencyGate = new WorkerDatabaseConcurrencyGate();
+
+export const workerTelemetryDatabaseConcurrencyGate = new WorkerDatabaseConcurrencyGate(
+  TELEMETRY_DB_CONCURRENCY,
+  1,
+);
