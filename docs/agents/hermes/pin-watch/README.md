@@ -47,6 +47,8 @@ So the rebuild **quiesces the sweeps** for its docker-heavy section. Immediately
 
 The quiesce is a no-op when there are no active sweep timers, and the whole mechanism only engages once a rebuild is actually committed to.
 
+**A dormant timer is never restarted.** Before it builds the stop set, the quiesce reads the `DORMANT` markers in the freshly checked-out repo and runs `systemctl disable --now` on any dormant timer that is still enabled or active, then verifies it with `is-enabled`/`is-active`. A timer systemd has no unit for (`LoadState=not-found`) already counts as parked; a failed disable, a timer still on afterwards, or a state probe that errors aborts the rebuild before anything is stopped. Dormant timers never enter the stop set, and the release re-checks the markers, so a timer that turned dormant in the same commit is disabled instead of started (and a failure to park it marks the run as an error).
+
 ### Releasing the roster over a window
 
 Getting the timers back is only half the problem: getting them back **all at once** is its own incident. A timer whose slot went by during the ~6-minute build comes back with an elapse already in the past, and systemd fires it **at the moment the timer unit is started** — by two different routes, and both land on the same instant:

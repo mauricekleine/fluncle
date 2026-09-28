@@ -101,8 +101,13 @@ export { getGraphPreview, GraphEntityKindSchema, graphContract, GraphPreviewSche
 export {
   acknowledgeLabelOutlierAlerts,
   adminLabelOutliersContract,
+  LABEL_OUTLIER_INPUTS_DEFAULT_PAGE,
+  LABEL_OUTLIER_INPUTS_MAX_PAGE,
   LabelOutlierItemSchema,
+  LabelOutlierInputAlbumSchema,
+  LabelOutlierInputTrackSchema,
   LabelOutlierRunSchema,
+  listLabelOutlierInputs,
   listLabelOutliers,
   recordLabelOutliers,
   RecordedLabelOutlierSchema,

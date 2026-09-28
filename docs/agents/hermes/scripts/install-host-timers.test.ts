@@ -29,6 +29,7 @@ afterEach(() => {
 const SYSTEM_BINDIRS = ["/bin/", "/sbin/", "/usr/bin/", "/usr/sbin/"];
 
 type Plan = {
+  dormantTimers: Set<string>;
   hostScripts: Map<string, string>;
   skippedDirs: Set<string>;
   timers: Set<string>;
@@ -138,7 +139,36 @@ function createInstallerFixture(): InstallerFixture {
   );
   writeExecutable(
     join(fakeBin, "systemctl"),
-    '#!/usr/bin/env bash\nprintf \'%s\\n\' "$*" >> "$FAKE_SYSTEMCTL_LOG"\n',
+    [
+      "#!/usr/bin/env bash",
+      'printf \'%s\\n\' "$*" >> "$FAKE_SYSTEMCTL_LOG"',
+      'unit="${*: -1}"',
+      "parked() {",
+      '  [ "${FAKE_SYSTEMCTL_STILL_ENABLED:-0}" = "1" ] && return 1',
+      '  [ "${FAKE_SYSTEMCTL_INITIALLY_PARKED:-0}" = "1" ] && return 0',
+      '  grep -qxF "disable --now ${unit}" "$FAKE_SYSTEMCTL_LOG"',
+      "}",
+      'case "${1:-}" in',
+      "  show)",
+      '    if [ "${FAKE_SYSTEMCTL_NOT_FOUND:-0}" = "1" ]; then echo not-found; else echo loaded; fi',
+      "    ;;",
+      "  disable)",
+      '    [ "${FAKE_SYSTEMCTL_DISABLE_FAILS:-0}" = "1" ] && exit 1',
+      '    [ "${FAKE_SYSTEMCTL_NOT_FOUND:-0}" = "1" ] && exit 1',
+      "    ;;",
+      "  is-enabled)",
+      '    [ "${FAKE_SYSTEMCTL_PROBE_ERROR:-0}" = "1" ] && exit 1',
+      "    if parked; then echo disabled; exit 1; fi",
+      "    echo enabled",
+      "    ;;",
+      "  is-active)",
+      "    if parked; then echo inactive; exit 3; fi",
+      "    echo active",
+      "    ;;",
+      "esac",
+      "exit 0",
+      "",
+    ].join("\n"),
   );
   writeExecutable(
     join(fakeBin, "op"),
@@ -148,12 +178,17 @@ function createInstallerFixture(): InstallerFixture {
   return { dest, installLog, opLog, root, script, systemctlLog };
 }
 
-function runFixture(fixture: InstallerFixture, args: string[]) {
+function runFixture(
+  fixture: InstallerFixture,
+  args: string[],
+  extraEnv: Record<string, string> = {},
+) {
   return spawnSync("bash", [fixture.script, ...args], {
     cwd: fixture.root,
     encoding: "utf8",
     env: {
       ...process.env,
+      ...extraEnv,
       FAKE_INSTALL_LOG: fixture.installLog,
       FAKE_INSTALL_ROOT: join(fixture.root, "host-root"),
       FAKE_OP_LOG: fixture.opLog,
@@ -174,6 +209,7 @@ function readLog(path: string): string[] {
 
 function parsePlan(stdout: string): Plan {
   const plan: Plan = {
+    dormantTimers: new Set(),
     hostScripts: new Map(),
     skippedDirs: new Set(),
     timers: new Set(),
@@ -198,6 +234,8 @@ function parsePlan(stdout: string): Plan {
       plan.units.add(value);
     } else if (kind === "timer") {
       plan.timers.add(value);
+    } else if (kind === "dormant-timer") {
+      plan.dormantTimers.add(value.split(" ")[0] ?? value);
     } else if (kind === "skip-dir") {
       plan.skippedDirs.add(value.split(" ")[0] ?? value);
     } else if (kind === "host-script") {
@@ -212,7 +250,12 @@ function parsePlan(stdout: string): Plan {
   return plan;
 }
 
-function walkUnitDirs(): { dir: string; services: string[]; timers: string[] }[] {
+function walkUnitDirs(): {
+  dir: string;
+  dormant: boolean;
+  services: string[];
+  timers: string[];
+}[] {
   return readdirSync(HERMES_DIR)
     .filter((entry) => statSync(join(HERMES_DIR, entry)).isDirectory())
     .sort()
@@ -221,6 +264,7 @@ function walkUnitDirs(): { dir: string; services: string[]; timers: string[] }[]
 
       return {
         dir,
+        dormant: files.includes("DORMANT"),
         services: files.filter((file) => file.endsWith(".service")).sort(),
         timers: files.filter((file) => file.endsWith(".timer")).sort(),
       };
@@ -337,11 +381,11 @@ describe("every installed service has a failure-reporting path", () => {
   });
 });
 
-describe("the installer enables every timer and skips only templates", () => {
-  test("every non-template .timer is enabled by the plan", () => {
+describe("the installer enables every timer and skips only templates and dormant jobs", () => {
+  test("every non-template .timer outside a dormant directory is enabled by the plan", () => {
     const missing: string[] = [];
 
-    for (const entry of unitDirs) {
+    for (const entry of unitDirs.filter((candidate) => !candidate.dormant)) {
       for (const timer of entry.timers) {
         if (!timer.includes("@") && !plan.timers.has(timer)) {
           missing.push(`${entry.dir}/${timer}`);
@@ -350,6 +394,19 @@ describe("the installer enables every timer and skips only templates", () => {
     }
 
     expect(missing).toEqual([]);
+  });
+
+  test("a timer in a DORMANT directory is installed but never enabled", () => {
+    const dormantTimers = unitDirs
+      .filter((entry) => entry.dormant)
+      .flatMap((entry) => entry.timers.map((timer) => ({ dir: entry.dir, timer })));
+
+    expect(dormantTimers.map((entry) => entry.timer)).toContain("fluncle-device-mirror.timer");
+    for (const { dir, timer } of dormantTimers) {
+      expect(plan.timers.has(timer)).toBe(false);
+      expect(plan.dormantTimers.has(timer)).toBe(true);
+      expect(plan.units.has(`${dir}/${timer}`)).toBe(true);
+    }
   });
 
   test("template units are never enabled", () => {
@@ -556,6 +613,153 @@ describe("the installer refreshes an authorized unit subset without activation",
       } finally {
         rmSync(fixture.root, { force: true, recursive: true });
       }
+    }
+  });
+});
+
+describe("a full install keeps a dormant job parked", () => {
+  test("installs the dormant units, enables the rest, and disables the dormant timer", () => {
+    const fixture = createInstallerFixture();
+
+    try {
+      rmSync(join(fixture.root, "ambiguous-one"), { force: true, recursive: true });
+      rmSync(join(fixture.root, "ambiguous-two"), { force: true, recursive: true });
+      writeFileSync(join(fixture.root, "beta-timer", "DORMANT"), "parked for a stated reason\n");
+
+      const installed = runFixture(fixture, []);
+
+      expect(installed.status).toBe(0);
+      expect(readdirSync(fixture.dest).sort()).toEqual([
+        "fluncle-alpha.service",
+        "fluncle-alpha.timer",
+        "fluncle-beta.service",
+        "fluncle-beta.timer",
+      ]);
+      const systemctl = readLog(fixture.systemctlLog);
+      expect(systemctl).toContain("enable --now fluncle-alpha.timer");
+      expect(systemctl).not.toContain("enable --now fluncle-beta.timer");
+      expect(systemctl).toContain("disable --now fluncle-beta.timer");
+      expect(systemctl).toContain("is-enabled fluncle-beta.timer");
+      expect(installed.stdout).toContain(
+        "dormant (installed, verified disabled): fluncle-beta.timer",
+      );
+    } finally {
+      rmSync(fixture.root, { force: true, recursive: true });
+    }
+  });
+
+  function dormantFixture(): InstallerFixture {
+    const fixture = createInstallerFixture();
+    rmSync(join(fixture.root, "ambiguous-one"), { force: true, recursive: true });
+    rmSync(join(fixture.root, "ambiguous-two"), { force: true, recursive: true });
+    writeFileSync(join(fixture.root, "beta-timer", "DORMANT"), "parked for a stated reason\n");
+
+    return fixture;
+  }
+
+  test("a failed disable of a dormant timer fails the install instead of reporting success", () => {
+    const fixture = dormantFixture();
+
+    try {
+      const installed = runFixture(fixture, [], { FAKE_SYSTEMCTL_DISABLE_FAILS: "1" });
+
+      expect(installed.status).toBe(1);
+      expect(installed.stderr).toContain("could not disable dormant fluncle-beta.timer");
+      expect(installed.stdout).not.toContain("Installed ");
+    } finally {
+      rmSync(fixture.root, { force: true, recursive: true });
+    }
+  });
+
+  test("a dormant timer still enabled or active after the disable fails the install", () => {
+    const fixture = dormantFixture();
+
+    try {
+      const installed = runFixture(fixture, [], { FAKE_SYSTEMCTL_STILL_ENABLED: "1" });
+
+      expect(installed.status).toBe(1);
+      expect(installed.stderr).toContain("still enabled or active");
+    } finally {
+      rmSync(fixture.root, { force: true, recursive: true });
+    }
+  });
+
+  test("refreshing a dormant unit disables and verifies its timer, never enables it", () => {
+    const fixture = dormantFixture();
+
+    try {
+      const refreshed = runFixture(fixture, ["--refresh-unit", "fluncle-beta.service"]);
+      const systemctl = readLog(fixture.systemctlLog);
+
+      expect(refreshed.status).toBe(0);
+      expect(systemctl).toContain("disable --now fluncle-beta.timer");
+      expect(systemctl).toContain("is-active fluncle-beta.timer");
+      expect(systemctl.some((call) => call.startsWith("enable"))).toBe(false);
+      expect(refreshed.stdout).toContain("dormant (verified disabled): fluncle-beta.timer");
+    } finally {
+      rmSync(fixture.root, { force: true, recursive: true });
+    }
+  });
+
+  test("a service-only refresh of a dormant unit whose timer was never installed succeeds", () => {
+    const fixture = dormantFixture();
+
+    try {
+      const refreshed = runFixture(fixture, ["--refresh-unit", "fluncle-beta.service"], {
+        FAKE_SYSTEMCTL_NOT_FOUND: "1",
+      });
+      const systemctl = readLog(fixture.systemctlLog);
+
+      expect(refreshed.status, refreshed.stderr).toBe(0);
+      expect(systemctl.some((call) => call.startsWith("disable"))).toBe(false);
+      expect(refreshed.stdout).toContain("dormant fluncle-beta.timer: not-installed");
+    } finally {
+      rmSync(fixture.root, { force: true, recursive: true });
+    }
+  });
+
+  test("an already-parked dormant timer is left alone", () => {
+    const fixture = dormantFixture();
+
+    try {
+      const refreshed = runFixture(fixture, ["--refresh-unit", "fluncle-beta.service"], {
+        FAKE_SYSTEMCTL_INITIALLY_PARKED: "1",
+      });
+
+      expect(refreshed.status, refreshed.stderr).toBe(0);
+      expect(readLog(fixture.systemctlLog).some((call) => call.startsWith("disable"))).toBe(false);
+    } finally {
+      rmSync(fixture.root, { force: true, recursive: true });
+    }
+  });
+
+  test("a dormant timer whose state cannot be read is never treated as parked", () => {
+    const fixture = dormantFixture();
+
+    try {
+      const refreshed = runFixture(fixture, ["--refresh-unit", "fluncle-beta.service"], {
+        FAKE_SYSTEMCTL_PROBE_ERROR: "1",
+      });
+
+      expect(refreshed.status).toBe(1);
+      expect(refreshed.stderr).toContain("could not read the state of dormant fluncle-beta.timer");
+    } finally {
+      rmSync(fixture.root, { force: true, recursive: true });
+    }
+  });
+
+  test("refreshing a dormant unit whose disable fails is fatal", () => {
+    const fixture = dormantFixture();
+
+    try {
+      const refreshed = runFixture(fixture, ["--refresh-unit", "fluncle-beta.timer"], {
+        FAKE_SYSTEMCTL_DISABLE_FAILS: "1",
+      });
+
+      expect(refreshed.status).toBe(1);
+      expect(refreshed.stdout).not.toContain("Refreshed ");
+    } finally {
+      rmSync(fixture.root, { force: true, recursive: true });
     }
   });
 });

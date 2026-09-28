@@ -151,8 +151,46 @@ export const setLabelOutliersDismissed = oc
   )
   .output(z.object({ changed: z.number().int(), ok: z.literal(true) }));
 
+export const LABEL_OUTLIER_INPUTS_DEFAULT_PAGE = 500;
+
+export const LABEL_OUTLIER_INPUTS_MAX_PAGE = 1000;
+
+export const LabelOutlierInputTrackSchema = z
+  .object({
+    albumId: z.string().nullable(),
+    artistIds: z.array(z.string()),
+    embeddingBase64: z.string(),
+    labelId: z.string().nullable(),
+    trackId: z.string(),
+  })
+  .meta({ id: "LabelOutlierInputTrack" });
+
+export const LabelOutlierInputAlbumSchema = z
+  .object({ discogsStyles: z.string(), id: z.string() })
+  .meta({ id: "LabelOutlierInputAlbum" });
+
+export const listLabelOutlierInputs = oc
+  .route({
+    method: "GET",
+    operationId: "listLabelOutlierInputs",
+    path: "/admin/label-outliers/inputs",
+    summary:
+      "One keyset page of the label-outlier scoring inputs: embedded catalogue tracks with their raw vector bytes, artist credits, and album Discogs styles",
+    tags: ["Admin"],
+  })
+  .input(z.object({ cursor: z.string().max(512).optional(), limit: z.string().optional() }))
+  .output(
+    z.object({
+      albums: z.array(LabelOutlierInputAlbumSchema),
+      nextCursor: z.string().nullable(),
+      ok: z.literal(true),
+      tracks: z.array(LabelOutlierInputTrackSchema),
+    }),
+  );
+
 export const adminLabelOutliersContract = {
   acknowledge_label_outlier_alerts: acknowledgeLabelOutlierAlerts,
+  list_label_outlier_inputs: listLabelOutlierInputs,
   list_label_outliers: listLabelOutliers,
   record_label_outliers: recordLabelOutliers,
   set_label_outliers_dismissed: setLabelOutliersDismissed,

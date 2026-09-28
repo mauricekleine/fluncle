@@ -5,8 +5,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createIntegrationDb } from "./integration-db";
 import {
   acknowledgeLabelOutlierAlerts,
+  InvalidLabelOutlierInputsCursor,
   LABEL_OUTLIERS_LAST_RUN_KEY,
   LabelOutlierRunRejected,
+  listLabelOutlierInputsPage,
   listLabelOutliers,
   recordLabelOutliers,
   setLabelOutliersDismissed,
@@ -391,5 +393,153 @@ describe("listLabelOutliers", () => {
 
     expect(await setLabelOutliersDismissed([ALBUM_UNIT], false)).toBe(1);
     expect((await listLabelOutliers()).items[0]?.dismissedAt).toBeNull();
+  });
+});
+
+describe("listLabelOutlierInputsPage", () => {
+  function vectorBytes(seed: number): Uint8Array {
+    const vector = new Float32Array(1024);
+    vector[seed % 1024] = 1;
+    vector[(seed + 1) % 1024] = seed / 10;
+
+    return new Uint8Array(vector.buffer);
+  }
+
+  async function seedScoringInputs(): Promise<void> {
+    await db.batch(
+      [
+        {
+          args: [STAMP, STAMP],
+          sql: `insert into albums (id, name, slug, created_at, updated_at, discogs_styles)
+                values ('alb_dnb', 'Rollers', 'rollers', ?, ?, '["Drum n Bass"]')`,
+        },
+        {
+          args: [STAMP, STAMP],
+          sql: `insert into albums (id, name, slug, created_at, updated_at, discogs_styles)
+                values ('alb_orphan', 'Unheard', 'unheard', ?, ?, '["Jungle"]')`,
+        },
+        ...["t_silent", "t_white"].map((trackId, index) => ({
+          args: [trackId, vectorBytes(index + 1)],
+          sql: "insert into track_embeddings (track_id, embedding_blob) values (?, ?)",
+        })),
+        ...["t_a", "t_b", "t_c", "t_finding"].map((trackId) => ({
+          args: [trackId, trackId === "t_finding" ? 0 : 1],
+          sql: `insert into tracks (track_id, title, artists_json, duration_ms, album_id, label_id, is_catalogue)
+                values (?, 'Roller', '[]', 180000, 'alb_dnb', 'lbl_penny', ?)`,
+        })),
+        ...["t_a", "t_b", "t_c", "t_finding"].map((trackId, index) => ({
+          args: [trackId, vectorBytes(index + 10)],
+          sql: "insert into track_embeddings (track_id, embedding_blob) values (?, ?)",
+        })),
+        {
+          args: [STAMP, STAMP],
+          sql: `insert into artists (id, name, slug, created_at, updated_at)
+                values ('art_roller', 'Roller', 'roller', ?, ?)`,
+        },
+        {
+          args: [],
+          sql: `insert into track_artists (track_id, artist_id, position)
+                values ('t_a', 'art_roller', 0), ('t_a', 'art_bing', 1), ('t_finding', 'art_roller', 0)`,
+        },
+      ],
+      "write",
+    );
+  }
+
+  async function readAll(limit: number) {
+    const pages = [];
+    let cursor: string | undefined;
+
+    do {
+      const page = await listLabelOutlierInputsPage(cursor, limit);
+      pages.push(page);
+      cursor = page.nextCursor ?? undefined;
+    } while (cursor !== undefined);
+
+    return pages;
+  }
+
+  it("walks every embedded catalogue track once, in keyset pages no larger than the limit", async () => {
+    await seedScoringInputs();
+
+    const pages = await readAll(2);
+    const trackIds = pages.flatMap((page) => page.tracks.map((track) => track.trackId));
+
+    expect(pages.map((page) => page.tracks.length)).toEqual([2, 2, 1]);
+    expect(trackIds).toEqual(["t_a", "t_b", "t_c", "t_silent", "t_white"]);
+    expect(pages.at(-1)?.nextCursor).toBeNull();
+  });
+
+  it("carries each vector's exact stored bytes, its artist credits, and its album's Discogs styles", async () => {
+    await seedScoringInputs();
+
+    const [first] = await readAll(10);
+    const trackA = first?.tracks.find((track) => track.trackId === "t_a");
+
+    expect(Buffer.from(trackA?.embeddingBase64 ?? "", "base64")).toEqual(
+      Buffer.from(vectorBytes(10)),
+    );
+    expect(trackA).toMatchObject({ albumId: "alb_dnb", labelId: "lbl_penny" });
+    expect([...(trackA?.artistIds ?? [])].sort()).toEqual(["art_bing", "art_roller"]);
+    expect([...(first?.albums ?? [])].sort((a, b) => a.id.localeCompare(b.id))).toEqual([
+      { discogsStyles: '["Drum n Bass"]', id: "alb_dnb" },
+      { discogsStyles: '["Holiday"]', id: "alb_xmas" },
+    ]);
+  });
+
+  it("scopes credits and albums to the page's own key range", async () => {
+    await seedScoringInputs();
+
+    const pages = await readAll(1);
+    const credits = pages.flatMap((page) =>
+      page.tracks.flatMap((track) =>
+        track.artistIds.map((artistId) => `${track.trackId}:${artistId}`),
+      ),
+    );
+
+    expect(credits.sort()).toEqual([
+      "t_a:art_bing",
+      "t_a:art_roller",
+      "t_silent:art_bing",
+      "t_white:art_bing",
+    ]);
+    expect(pages.map((page) => page.albums.map((album) => album.id))).toEqual([
+      ["alb_dnb"],
+      ["alb_dnb"],
+      ["alb_dnb"],
+      ["alb_xmas"],
+      ["alb_xmas"],
+    ]);
+  });
+
+  it("reads a page, its credits, and its album styles in one statement, so they share a snapshot", async () => {
+    await seedScoringInputs();
+    const execute = vi.spyOn(db, "execute");
+    const batch = vi.spyOn(db, "batch");
+    const transaction = vi.spyOn(db, "transaction");
+
+    const page = await listLabelOutlierInputsPage(undefined, 10);
+
+    expect(page.tracks.find((track) => track.trackId === "t_a")?.artistIds.sort()).toEqual([
+      "art_bing",
+      "art_roller",
+    ]);
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(batch).not.toHaveBeenCalled();
+    expect(transaction).not.toHaveBeenCalled();
+  });
+
+  it("an empty archive is one empty terminal page", async () => {
+    expect(await listLabelOutlierInputsPage(undefined, 5)).toEqual({
+      albums: [],
+      nextCursor: null,
+      tracks: [],
+    });
+  });
+
+  it("refuses a cursor it never issued instead of restarting the walk", async () => {
+    const error = await rejection(listLabelOutlierInputsPage("not a cursor!", 5));
+
+    expect(error).toBeInstanceOf(InvalidLabelOutlierInputsCursor);
   });
 });

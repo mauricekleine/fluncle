@@ -1,0 +1,1 @@
+Parked: the iOS app has no users, and the mirror's embedded-replica sync of the main database halves the primary's write capacity while it runs. Revival steps: README.md in this directory.

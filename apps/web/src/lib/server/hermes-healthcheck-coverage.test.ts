@@ -15,7 +15,9 @@ function proberCronServices(): Set<string> {
 
 function registryCronNames(): Set<string> {
   return new Set(
-    SURFACES.filter((s) => s.kind === "cron" && s.name.startsWith("cron.")).map((s) => s.name),
+    SURFACES.filter(
+      (s) => s.kind === "cron" && s.name.startsWith("cron.") && s.dormant === undefined,
+    ).map((s) => s.name),
   );
 }
 
@@ -35,5 +37,14 @@ describe("the box healthcheck prober mirrors the registry's crons", () => {
     const ghosts = [...proberCronServices()].filter((service) => !registered.has(service)).sort();
 
     expect(ghosts).toEqual([]);
+  });
+
+  it("probes no dormant cron (a parked job must never read as a missed run)", () => {
+    const prober = proberCronServices();
+    const probedDormant = SURFACES.filter((s) => s.dormant !== undefined)
+      .map((s) => s.name)
+      .filter((name) => prober.has(name));
+
+    expect(probedDormant).toEqual([]);
   });
 });

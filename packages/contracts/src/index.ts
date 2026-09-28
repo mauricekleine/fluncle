@@ -35,6 +35,8 @@ import {
 import { type ServiceHealthStatusSchema } from "./orpc/admin-health.js";
 import { type GalaxyAdminItemSchema, type TrackEmbeddingSchema } from "./orpc/admin-galaxies.js";
 import {
+  type LabelOutlierInputAlbumSchema,
+  type LabelOutlierInputTrackSchema,
   type LabelOutlierItemSchema,
   type LabelOutlierRunSchema,
   type RecordedLabelOutlierSchema,
@@ -127,6 +129,10 @@ export type GalaxyResponse = Ok<{ findings: TrackListItem[]; galaxy: GalaxyListI
 export type GalaxyAdminItem = z.infer<typeof GalaxyAdminItemSchema>;
 
 export type LabelOutlierItem = z.infer<typeof LabelOutlierItemSchema>;
+
+export type LabelOutlierInputTrack = z.infer<typeof LabelOutlierInputTrackSchema>;
+
+export type LabelOutlierInputAlbum = z.infer<typeof LabelOutlierInputAlbumSchema>;
 
 export type LabelOutlierRun = z.infer<typeof LabelOutlierRunSchema>;
 

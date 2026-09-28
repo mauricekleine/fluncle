@@ -63,6 +63,19 @@ describe("getServiceStatuses retired-row filter", () => {
     ]);
   });
 
+  it("drops a dormant cron's last report and never lists it as never reported", async () => {
+    execute.mockResolvedValue({
+      rows: [
+        row("cron.device-mirror", { checked_at: "2026-06-20T00:00:00.000Z" }),
+        row("cron.enrich"),
+      ],
+    });
+
+    const services = await getServiceStatuses(NOW);
+
+    expect(services.map((service) => service.service)).not.toContain("cron.device-mirror");
+  });
+
   it("leaves every reported row unchanged when no retired id is present", async () => {
     const reported = [row("web"), row("db"), row("hermes")];
     execute.mockResolvedValue({ rows: reported });

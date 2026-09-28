@@ -72,6 +72,8 @@ export type Surface = {
 
   pending?: boolean;
 
+  dormant?: string;
+
   operatorNotes?: string;
 };
 
@@ -1327,13 +1329,15 @@ export const SURFACES: readonly Surface[] = [
     weights: { status: "hidden" },
   },
   {
+    dormant:
+      "the iOS app has no users, and the mirror's embedded-replica sync of the main database halves the primary's write capacity while it runs",
     exposedContent: [
       "mirror the anchored, explicitly allowlisted public catalogue into the shared read-only device replica",
     ],
     kind: "cron",
     name: "cron.device-mirror",
     operatorNotes:
-      "hourly, run by a host systemd timer (docs/agents/hermes/device-mirror-timer/). Explicitly synchronizes one restart-safe local embedded replica, materializes the anchored track IDs once, derives and validates one allowlisted generation locally, then stages bounded changes and atomically cuts the complete verified generation into the shared device database. Sync, derivation, upload, validation, or cutover failure leaves the previous generation visible; rebuilding the target database remains forbidden because it would reset the libSQL replication log and force every device to bootstrap again. A schema-version mismatch stops for an operator migration. Zero LLM tokens. Source: docs/agents/hermes/scripts/device-mirror.*.",
+      "DORMANT: parked by docs/agents/hermes/device-mirror-timer/DORMANT, which keeps the installer from enabling its timer and keeps the healthcheck, /status, and the run-ledger roster from expecting it; revival steps are in that directory's README. When live: hourly, run by a host systemd timer (docs/agents/hermes/device-mirror-timer/). Explicitly synchronizes one restart-safe local embedded replica, materializes the anchored track IDs once, derives and validates one allowlisted generation locally, then stages bounded changes and atomically cuts the complete verified generation into the shared device database. Sync, derivation, upload, validation, or cutover failure leaves the previous generation visible; rebuilding the target database remains forbidden because it would reset the libSQL replication log and force every device to bootstrap again. A schema-version mismatch stops for an operator migration. Zero LLM tokens. Source: docs/agents/hermes/scripts/device-mirror.*.",
     probeConfig: {
       cadenceMs: 60 * MINUTE_MS,
       cronName: "fluncle-device-mirror",
@@ -1548,7 +1552,7 @@ export const SURFACES: readonly Surface[] = [
     kind: "cron",
     name: "cron.label-outliers",
     operatorNotes:
-      "05:30 Amsterdam daily, retry slot 06:30. Reads only the scoring export the device mirror writes beside its replica once a day, inside its own lock, by write-then-rename (no hosted-database read, no replica or mirror-lock access; a missing export or one older than 36 h fails loudly and writes nothing). It scores each album's mean cosine to its label's leave-it-out centroid as a robust z against that label's own spread (labels under 8 albums use the whole catalogue), and keeps the ones at z <= -4 whose artists have fewer than 3 typical tracks elsewhere and whose album Discogs does not file under Drum n Bass or Jungle. A corpus under 10,000 usable vectors or under 95% usable, or more than 2,000 flags, fails loudly and writes nothing. It then fires the AGENT-tier record_label_outliers op in its own admitted phase; the Worker refuses a duplicated, partial, or collapsed run (fewer than 80% of the live embedded catalogue), replaces the stored list, and returns every visible unit not yet announced. The sweep posts one Discord summary and only then acknowledges them by unit and fingerprint (acknowledge_label_outlier_alerts), so a lost response re-alerts next run. Dismissing is operator tier (set_label_outliers_dismissed) and holds until the album's tracks change. Zero LLM tokens. Source: docs/agents/hermes/scripts/label-outliers*.ts. See docs/catalogue-crawler.md.",
+      "05:30 Amsterdam daily, retry slot 06:30. Reads its scoring inputs (embedded catalogue tracks with their raw vector bytes, artist credits, album Discogs styles) from the AGENT-tier list_label_outlier_inputs op in keyset pages of 1,000, each page its own admitted heavy-read phase, into a local file it scores and deletes (about 51 pages and 280 MB a night at 50k tracks; an admission yield mid-walk leaves the payload unstarted for the retry slot). It scores each album's mean cosine to its label's leave-it-out centroid as a robust z against that label's own spread (labels under 8 albums use the whole catalogue), and keeps the ones at z <= -4 whose artists have fewer than 3 typical tracks elsewhere and whose album Discogs does not file under Drum n Bass or Jungle. A corpus under 10,000 usable vectors or under 95% usable, or more than 2,000 flags, fails loudly and writes nothing. It then fires the AGENT-tier record_label_outliers op in its own admitted phase; the Worker refuses a duplicated, partial, or collapsed run (fewer than 80% of the live embedded catalogue), replaces the stored list, and returns every visible unit not yet announced. The sweep posts one Discord summary and only then acknowledges them by unit and fingerprint (acknowledge_label_outlier_alerts), so a lost response re-alerts next run. Dismissing is operator tier (set_label_outliers_dismissed) and holds until the album's tracks change. Zero LLM tokens. Source: docs/agents/hermes/scripts/label-outliers*.ts. See docs/catalogue-crawler.md.",
     probeConfig: {
       cadenceMs: 24 * 60 * MINUTE_MS,
       cronName: "fluncle-label-outliers",
@@ -1960,7 +1964,11 @@ const WEIGHT_ORDER: Record<SurfaceWeight, number> = {
 };
 
 export function liveSurfaces(): Surface[] {
-  return SURFACES.filter((surface) => surface.pending !== true);
+  return SURFACES.filter((surface) => surface.pending !== true && surface.dormant === undefined);
+}
+
+export function dormantSurfaces(): Surface[] {
+  return SURFACES.filter((surface) => surface.dormant !== undefined);
 }
 
 export function surfacesForContext(ctx: SurfaceContext): Surface[] {

@@ -22,11 +22,6 @@ import {
   runDatabaseAdmissionPhaseAsync,
   stopDatabaseAdmissionPhases,
 } from "./database-admission-phase";
-import {
-  refreshScoringExport,
-  SCORING_EXPORT_FILE,
-  type ScoringExportStatus,
-} from "./label-outliers-export";
 
 export type DeviceSqlValue = ArrayBuffer | ArrayBufferView | bigint | number | string | null;
 export type DeviceRow = Record<string, DeviceSqlValue>;
@@ -2283,7 +2278,6 @@ type MirrorSummary = {
   replicaFramesSynced: number | null;
   replicaLagFrames: number | null;
   rowCounts: null | Record<DeviceSourceTable, number>;
-  scoringExport: null | ScoringExportStatus;
   throttled?: boolean;
   validation: "failed" | "locked" | "paused" | "verified";
 };
@@ -2316,7 +2310,6 @@ function emptySummary(): MirrorSummary {
     replicaLagFrames: null,
     rewriteReason: null,
     rowCounts: null,
-    scoringExport: null,
     validation: "failed",
   };
 }
@@ -2324,7 +2317,6 @@ function emptySummary(): MirrorSummary {
 export type DeviceMirrorRuntime = {
   createTarget?: () => DeviceTargetClient;
   derive?: typeof runDeriver;
-  refreshExport?: (replicaPath: string, exportPath: string) => Promise<ScoringExportStatus>;
   syncSource?: (
     path: string,
     forceRebuild: boolean,
@@ -2447,23 +2439,6 @@ export async function main(runtime: DeviceMirrorRuntime = {}): Promise<MirrorSum
     summary.queueDepth = publication.published ? 0 : publication.backlogRows;
     summary.ok = true;
     summary.validation = "verified";
-    summary.scoringExport = await (runtime.refreshExport ?? refreshScoringExport)(
-      replicaPath,
-      join(stateDirectory, SCORING_EXPORT_FILE),
-    ).catch(
-      (error: unknown): ScoringExportStatus => ({
-        durationMs: null,
-        error: (error instanceof Error ? error.message : String(error)).slice(0, 300),
-        exportedAt: null,
-        status: "failed",
-      }),
-    );
-
-    if (summary.scoringExport.status === "failed" || summary.scoringExport.status === "timeout") {
-      log(
-        `label-outliers scoring export ${summary.scoringExport.status}; the publish already landed: ${summary.scoringExport.error}`,
-      );
-    }
   } catch (error) {
     if (error instanceof DeviceMirrorAdmissionYield) {
       summary.admissionOutcome = "phase-yielded";
