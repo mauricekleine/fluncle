@@ -16,7 +16,7 @@ This sweep never calls `anchor_track` and never invokes Apify. Deezer search is 
 
 ## Where the write lease is held
 
-Step 2 above is minutes of paced third-party waiting, so it runs under **no database lease at all**. The sweep uses phased admission ([docs/database-performance.md](../../database-performance.md)): the unit invokes the wrapper directly rather than through `database-admission-runner.sh`, and the orchestrator opens its own bounded phases — one **claim window** for the worklist read (step 1), then **settle windows** for the resolver verdicts (step 3), each bounded to ten rows and twenty seconds. Every Deezer search falls between those phase processes.
+Step 2 above is minutes of paced third-party waiting, so it runs under **no database lease at all**. The sweep uses phased admission ([docs/database-performance.md](../../../database-performance.md)): the unit invokes the wrapper directly rather than through `database-admission-runner.sh`, and the orchestrator opens its own bounded phases — one **claim window** for the worklist read (step 1), then **settle windows** for the resolver verdicts (step 3), each bounded to ten rows and twenty seconds. Every Deezer search falls between those phase processes.
 
 Nothing is claimed or fenced, which is what makes that safe: a row leaves the worklist only when `resolve_anchor` stamps its recovery ledger. A yielded window, a window that defers its tail, and a tick stopped by its wall budget therefore all leave the affected rows eligible on the very next tick, with nothing to reconcile. A yielded tick reports `gateState: "paused"`, `reason: "database_admission"`, and `throttled: true` at exit 0 — designed backpressure, never a failure — and `unsettled` counts the rows it handed forward.
 
