@@ -705,18 +705,42 @@ describe("stall-tolerant admission protocol", () => {
     expect(DATABASE_ADMISSION_INITIAL_LEASE_MS).toBeLessThan(DATABASE_ADMISSION_LEASE_MS);
   });
 
-  it("frees the lane when a runner that gave up cancels a grant its timed-out acquire committed", async () => {
-    const lateGrant = await tolerant("fluncle-enrich", "gave-up");
-    expect(lateGrant.outcome).toBe("acquired");
+  it("never lets a tokenless cancel free an unexpired grant whose payload started before its first heartbeat", async () => {
+    const granted = await tolerant("fluncle-enrich", "payload-started");
+    expect(granted.outcome).toBe("acquired");
     nowMs += 1;
-    expect((await tolerant("fluncle-note", "waiting")).outcome).toBe("queued");
 
-    expect(await tolerant("fluncle-enrich", "gave-up", "cancel")).toMatchObject({
+    expect(await tolerant("fluncle-enrich", "payload-started", "cancel")).toMatchObject({
       outcome: "cancelled",
+      recovered: false,
+    });
+    expect(await activeCounts()).toEqual({ write: 1 });
+    expect((await tolerant("fluncle-note", "conflicting")).outcome).toBe("queued");
+  });
+
+  it("lets an unanswered grant age out under its short initial lease after its runner cancelled", async () => {
+    await tolerant("fluncle-enrich", "gave-up");
+    await tolerant("fluncle-enrich", "gave-up", "cancel");
+    nowMs += DATABASE_ADMISSION_INITIAL_LEASE_MS + 1;
+    expect(await tolerant("fluncle-note", "after-age-out")).toMatchObject({
+      outcome: "acquired",
       recovered: true,
     });
-    expect(await activeCounts()).toEqual({});
-    expect((await tolerant("fluncle-note", "waiting")).outcome).toBe("acquired");
+  });
+
+  it("removes a queued row or an expired grant on cancel", async () => {
+    await tolerant("fluncle-enrich", "holder");
+    nowMs += 1;
+    expect((await tolerant("fluncle-note", "queued-then-cancelled")).outcome).toBe("queued");
+    expect(await tolerant("fluncle-note", "queued-then-cancelled", "cancel")).toMatchObject({
+      outcome: "cancelled",
+    });
+    nowMs += DATABASE_ADMISSION_INITIAL_LEASE_MS + 1;
+    expect(await tolerant("fluncle-enrich", "holder", "cancel")).toMatchObject({
+      outcome: "cancelled",
+    });
+    const rows = await db.execute(`select count(*) as count from database_admission_contenders`);
+    expect(rows.rows[0]?.count).toBe(0);
   });
 
   it("refuses an acquire that reaches the database after its runner's deadline", async () => {

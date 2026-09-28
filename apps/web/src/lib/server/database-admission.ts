@@ -776,8 +776,7 @@ async function settleEnforcedDatabaseAdmissionFor(
       args: [request.owner, request.runId, nowMs],
       sql: `delete from database_admission_contenders
             where owner_id = ? and run_id = ?
-              and (state = 'queued' or lease_expires_at_ms <= ?
-                or queue_heartbeat_at_ms <= acquired_at_ms)`,
+              and (state = 'queued' or lease_expires_at_ms <= ?)`,
     });
     result = enforcedResult(request, profile, {
       contender: existing,
