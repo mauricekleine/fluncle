@@ -28,11 +28,14 @@ const ROSTER = deriveTimerRoster(HERMES_DIR);
 
 const SELF_EVIDENT_CRON_SURFACES = new Set(["cron.healthcheck"]);
 
-function registryCrons(): Map<string, number | undefined> {
+function registryCrons(which: "dormant" | "live" = "live"): Map<string, number | undefined> {
   const crons = new Map<string, number | undefined>();
 
   for (const surface of SURFACES) {
-    if (surface.probeConfig?.kind === "cron") {
+    if (
+      surface.probeConfig?.kind === "cron" &&
+      (surface.dormant !== undefined) === (which === "dormant")
+    ) {
       crons.set(surface.name, surface.probeConfig.cadenceMs);
     }
   }
@@ -109,6 +112,29 @@ describe("the registry agrees with the timer units", () => {
       .sort();
 
     expect(registered).toEqual(derived);
+  });
+
+  test("a dormant timer directory is exactly a dormant registry cron", () => {
+    const derived = ROSTER.dormant.map((cron) => cron.service).sort();
+    const registered = [...registryCrons("dormant").keys()].sort();
+
+    expect(registered).toEqual(derived);
+    expect(derived).toContain("cron.device-mirror");
+  });
+
+  test("a dormant cron keeps its registered cadence for revival", () => {
+    const registry = registryCrons("dormant");
+    const drifted = ROSTER.dormant
+      .filter((cron) => registry.get(cron.service) !== cron.cadenceMs)
+      .map((cron) => cron.service);
+
+    expect(drifted).toEqual([]);
+  });
+
+  test("the healthcheck never probes a dormant cron", () => {
+    const probed = new Set(AUTOMATION_CRONS.map((cron) => cron.service));
+
+    expect(ROSTER.dormant.filter((cron) => probed.has(cron.service))).toEqual([]);
   });
 
   test("the registry's cadence matches the timer's", () => {
@@ -384,6 +410,20 @@ describe("the guard fires — a synthetic drift", () => {
     );
 
     expect(deriveTimerRoster(root).crons[0]?.match).toBe("render");
+  });
+
+  test("a timer in a directory marked DORMANT is parked, not expected", () => {
+    const root = fakeHermes({
+      script: "emit_cron_output made-up -- bun made-up-sweep.ts\n",
+      service: `[Service]\n${EXEC}`,
+      timer: "[Timer]\nOnUnitActiveSec=7min\n",
+      unit: "fluncle-made-up",
+    });
+    writeFileSync(join(root, "some-timer", "DORMANT"), "parked for a stated reason\n");
+    const roster = deriveTimerRoster(root);
+
+    expect(roster.crons).toEqual([]);
+    expect(roster.dormant.map((cron) => cron.service)).toEqual(["cron.made-up"]);
   });
 
   test("a template unit is skipped, exactly as the installer skips it", () => {

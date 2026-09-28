@@ -225,6 +225,7 @@ for unit in "${unit_files[@]}"; do
 done
 
 timers=()
+dormant_timers=()
 skipped_enables=()
 if [ "$refresh_mode" -eq 0 ]; then
 	for dir in "${unit_dirs[@]}"; do
@@ -236,6 +237,11 @@ if [ "$refresh_mode" -eq 0 ]; then
 				continue
 				;;
 			esac
+			if [ -e "${dir}/DORMANT" ]; then
+				dormant_timers+=("$name")
+				plan "dormant-timer ${name} ($(rel "$dir")/DORMANT: installed, never enabled, disabled if running)"
+				continue
+			fi
 			timers+=("$name")
 		done
 		for service in "$dir"/*@.service; do
@@ -272,8 +278,8 @@ if [ "$dry_run" -eq 1 ]; then
 		printf 'Would refresh %d selected unit files and %d host scripts; no timers or services would be activated.\n' \
 			"${#unit_files[@]}" "${#host_pairs[@]}"
 	else
-		printf 'Would install %d unit files from %d dirs and %d host scripts; enable %d timers.\n' \
-			"${#unit_files[@]}" "${#unit_dirs[@]}" "${#host_pairs[@]}" "${#timers[@]}"
+		printf 'Would install %d unit files from %d dirs and %d host scripts; enable %d timers; keep %d dormant timers disabled.\n' \
+			"${#unit_files[@]}" "${#unit_dirs[@]}" "${#host_pairs[@]}" "${#timers[@]}" "${#dormant_timers[@]}"
 	fi
 	exit 0
 fi
@@ -310,12 +316,19 @@ for name in "${timers[@]}"; do
 	fi
 done
 
+for name in ${dormant_timers[@]+"${dormant_timers[@]}"}; do
+	systemctl disable --now "$name" || true
+done
+
 printf 'Installed %d unit files from %d dirs and %d host scripts; enabled %d timers.\n' \
 	"${#unit_files[@]}" "${#unit_dirs[@]}" "${#host_pairs[@]}" "${#enabled[@]}"
 if [ "${#host_pairs[@]}" -ne 0 ]; then
 	printf '  host script: %s\n' "${host_pairs[@]//|/ -> }"
 fi
 printf '  enabled: %s\n' "${enabled[@]}"
+if [ "${#dormant_timers[@]}" -ne 0 ]; then
+	printf '  dormant (installed, disabled): %s\n' "${dormant_timers[@]}"
+fi
 if [ "${#skipped_enables[@]}" -ne 0 ]; then
 	printf '  skipped (not enabled): %s\n' "${skipped_enables[@]}"
 fi

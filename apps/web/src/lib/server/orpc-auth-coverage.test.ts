@@ -230,6 +230,7 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   list_galaxies_admin: "admin",
   list_label_aliases: "admin",
   list_label_artist_rules: "admin",
+  list_label_outlier_inputs: "admin",
   list_label_outliers: "admin",
   list_labels_admin: "admin",
   list_labels_missing_bio: "admin",

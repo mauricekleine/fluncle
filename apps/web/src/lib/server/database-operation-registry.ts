@@ -205,7 +205,7 @@ export const DATABASE_ADMISSION_SHAPES: Readonly<Record<string, DatabaseAdmissio
   ),
   "catalogue.label-outliers": phased(
     `${SCRIPTS}/label-outliers-sweep.ts`,
-    "Scoring reads the scoring export the device mirror writes beside its replica, with no lease and no replica or lock access; the replace-the-list write and the alert acknowledgement are each admitted as their own short phase.",
+    "Each keyset page of scoring inputs is one admitted heavy-read phase, scoring runs locally with no lease, and the replace-the-list write and the alert acknowledgement are each admitted as their own short phase.",
     1,
   ),
   "catalogue.label-releases": wholeLifetime(
@@ -2143,17 +2143,25 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
       "*-*-* 06:30:00 Europe/Amsterdam",
     ),
     directory: "label-outliers-timer",
-    heavy: false,
+    heavy: true,
     mutationTarget: "primary",
     operationId: "catalogue.label-outliers",
     service: "fluncle-label-outliers.service",
     telemetryUnit: "label-outliers",
     timer: "fluncle-label-outliers.timer",
     triggers: [
+      endpoint(
+        "catalogue.label-outliers.inputs",
+        "heavy-read",
+        "GET",
+        "/api/v1/admin/label-outliers/inputs",
+        `${SCRIPTS}/label-outliers-sweep.ts`,
+        { mutationTarget: null },
+      ),
       noDatabase(
         "catalogue.label-outliers.score",
         null,
-        "score the device mirror's daily scoring export",
+        "score the paged inputs in a local file",
         `${SCRIPTS}/label-outliers-sweep.ts`,
         { mutationTarget: null },
       ),

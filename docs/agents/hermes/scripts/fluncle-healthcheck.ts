@@ -434,7 +434,6 @@ export const AUTOMATION_CRONS: CronDef[] = [
   },
   { cadenceMs: 60 * 60_000, match: "anchor", service: "cron.anchor" },
   { cadenceMs: 10 * 60_000, match: "isrc-recovery", service: "cron.isrc-recovery" },
-  { cadenceMs: 60 * 60_000, match: "device-mirror", service: "cron.device-mirror" },
   { cadenceMs: 60 * 60_000, match: "label-images", service: "cron.label-images" },
   { cadenceMs: 60 * 60_000, match: "recording-mbids", service: "cron.recording-mbids" },
   { cadenceMs: 60 * 60_000, match: "artist-edges", service: "cron.artist-edges" },

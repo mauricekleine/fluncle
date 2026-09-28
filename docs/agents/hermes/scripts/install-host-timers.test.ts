@@ -29,6 +29,7 @@ afterEach(() => {
 const SYSTEM_BINDIRS = ["/bin/", "/sbin/", "/usr/bin/", "/usr/sbin/"];
 
 type Plan = {
+  dormantTimers: Set<string>;
   hostScripts: Map<string, string>;
   skippedDirs: Set<string>;
   timers: Set<string>;
@@ -174,6 +175,7 @@ function readLog(path: string): string[] {
 
 function parsePlan(stdout: string): Plan {
   const plan: Plan = {
+    dormantTimers: new Set(),
     hostScripts: new Map(),
     skippedDirs: new Set(),
     timers: new Set(),
@@ -198,6 +200,8 @@ function parsePlan(stdout: string): Plan {
       plan.units.add(value);
     } else if (kind === "timer") {
       plan.timers.add(value);
+    } else if (kind === "dormant-timer") {
+      plan.dormantTimers.add(value.split(" ")[0] ?? value);
     } else if (kind === "skip-dir") {
       plan.skippedDirs.add(value.split(" ")[0] ?? value);
     } else if (kind === "host-script") {
@@ -212,7 +216,12 @@ function parsePlan(stdout: string): Plan {
   return plan;
 }
 
-function walkUnitDirs(): { dir: string; services: string[]; timers: string[] }[] {
+function walkUnitDirs(): {
+  dir: string;
+  dormant: boolean;
+  services: string[];
+  timers: string[];
+}[] {
   return readdirSync(HERMES_DIR)
     .filter((entry) => statSync(join(HERMES_DIR, entry)).isDirectory())
     .sort()
@@ -221,6 +230,7 @@ function walkUnitDirs(): { dir: string; services: string[]; timers: string[] }[]
 
       return {
         dir,
+        dormant: files.includes("DORMANT"),
         services: files.filter((file) => file.endsWith(".service")).sort(),
         timers: files.filter((file) => file.endsWith(".timer")).sort(),
       };
@@ -337,11 +347,11 @@ describe("every installed service has a failure-reporting path", () => {
   });
 });
 
-describe("the installer enables every timer and skips only templates", () => {
-  test("every non-template .timer is enabled by the plan", () => {
+describe("the installer enables every timer and skips only templates and dormant jobs", () => {
+  test("every non-template .timer outside a dormant directory is enabled by the plan", () => {
     const missing: string[] = [];
 
-    for (const entry of unitDirs) {
+    for (const entry of unitDirs.filter((candidate) => !candidate.dormant)) {
       for (const timer of entry.timers) {
         if (!timer.includes("@") && !plan.timers.has(timer)) {
           missing.push(`${entry.dir}/${timer}`);
@@ -350,6 +360,19 @@ describe("the installer enables every timer and skips only templates", () => {
     }
 
     expect(missing).toEqual([]);
+  });
+
+  test("a timer in a DORMANT directory is installed but never enabled", () => {
+    const dormantTimers = unitDirs
+      .filter((entry) => entry.dormant)
+      .flatMap((entry) => entry.timers.map((timer) => ({ dir: entry.dir, timer })));
+
+    expect(dormantTimers.map((entry) => entry.timer)).toContain("fluncle-device-mirror.timer");
+    for (const { dir, timer } of dormantTimers) {
+      expect(plan.timers.has(timer)).toBe(false);
+      expect(plan.dormantTimers.has(timer)).toBe(true);
+      expect(plan.units.has(`${dir}/${timer}`)).toBe(true);
+    }
   });
 
   test("template units are never enabled", () => {
@@ -556,6 +579,35 @@ describe("the installer refreshes an authorized unit subset without activation",
       } finally {
         rmSync(fixture.root, { force: true, recursive: true });
       }
+    }
+  });
+});
+
+describe("a full install keeps a dormant job parked", () => {
+  test("installs the dormant units, enables the rest, and disables the dormant timer", () => {
+    const fixture = createInstallerFixture();
+
+    try {
+      rmSync(join(fixture.root, "ambiguous-one"), { force: true, recursive: true });
+      rmSync(join(fixture.root, "ambiguous-two"), { force: true, recursive: true });
+      writeFileSync(join(fixture.root, "beta-timer", "DORMANT"), "parked for a stated reason\n");
+
+      const installed = runFixture(fixture, []);
+
+      expect(installed.status).toBe(0);
+      expect(readdirSync(fixture.dest).sort()).toEqual([
+        "fluncle-alpha.service",
+        "fluncle-alpha.timer",
+        "fluncle-beta.service",
+        "fluncle-beta.timer",
+      ]);
+      const systemctl = readLog(fixture.systemctlLog);
+      expect(systemctl).toContain("enable --now fluncle-alpha.timer");
+      expect(systemctl).not.toContain("enable --now fluncle-beta.timer");
+      expect(systemctl).toContain("disable --now fluncle-beta.timer");
+      expect(installed.stdout).toContain("dormant (installed, disabled): fluncle-beta.timer");
+    } finally {
+      rmSync(fixture.root, { force: true, recursive: true });
     }
   });
 });

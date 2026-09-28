@@ -19,10 +19,18 @@ export type TimerReading =
 export type Roster = {
   crons: DerivedCron[];
 
+  dormant: DerivedCron[];
+
   nonWriters: string[];
 
   unreadable: { problem: string; unit: string }[];
 };
+
+export const DORMANT_MARKER = "DORMANT";
+
+export function isDormantUnitDir(dir: string): boolean {
+  return existsSync(join(dir, DORMANT_MARKER));
+}
 
 export const NON_WRITER_TIMERS: Record<string, string> = {
   "fluncle-healthcheck.timer":
@@ -319,6 +327,7 @@ export function readTimer(timerPath: string, scriptsDir: string): TimerReading {
 export function deriveTimerRoster(hermesDir: string): Roster {
   const scriptsDir = join(hermesDir, "scripts");
   const crons: DerivedCron[] = [];
+  const dormant: DerivedCron[] = [];
   const nonWriters: string[] = [];
   const unreadable: { problem: string; unit: string }[] = [];
 
@@ -329,6 +338,8 @@ export function deriveTimerRoster(hermesDir: string): Roster {
       continue;
     }
 
+    const parked = isDormantUnitDir(dir);
+
     for (const file of readdirSync(dir).sort()) {
       if (!file.endsWith(".timer") || file.includes("@")) {
         continue;
@@ -337,7 +348,7 @@ export function deriveTimerRoster(hermesDir: string): Roster {
       const reading = readTimer(join(dir, file), scriptsDir);
 
       if (reading.kind === "writer") {
-        crons.push({
+        (parked ? dormant : crons).push({
           cadenceMs: reading.cadenceMs,
           match: reading.match,
           service: `cron.${reading.match}`,
@@ -352,8 +363,9 @@ export function deriveTimerRoster(hermesDir: string): Roster {
   }
 
   crons.sort((a, b) => a.service.localeCompare(b.service));
+  dormant.sort((a, b) => a.service.localeCompare(b.service));
   nonWriters.sort();
   unreadable.sort((a, b) => a.unit.localeCompare(b.unit));
 
-  return { crons, nonWriters, unreadable };
+  return { crons, dormant, nonWriters, unreadable };
 }
