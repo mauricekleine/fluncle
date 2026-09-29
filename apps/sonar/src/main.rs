@@ -105,7 +105,7 @@ async fn main() -> Result<()> {
     if let Some(consumer) = consumer {
         if let Some(snapshot_seq) = activation {
             consumer.activate_prepared(snapshot_seq).await?;
-            state.record_reconcile();
+            state.record_reconcile(stored.manifest.reconciled_at);
             state.record_rebuild(
                 if state_corrupt {
                     sonar::server::RebuildCause::StateCorrupt

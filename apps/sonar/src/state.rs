@@ -82,6 +82,7 @@ pub struct Manifest {
     pub pending: Option<PendingAck>,
     pub raw_bytes: u64,
     pub track_rows: usize,
+    pub reconciled_at: i64,
     pub validated_at: i64,
 }
 
@@ -136,7 +137,7 @@ impl StateStore {
                overlap_through integer not null default 0, served_digest text not null default '',
                artifact_digest text not null, track_rows integer not null,
                centroid_rows integer not null, raw_bytes integer not null,
-               validated_at integer not null,
+               validated_at integer not null, reconciled_at integer not null default 0,
                pending_from integer, pending_through integer, pending_count integer, pending_digest text
              );
              create table if not exists sonar_tracks (
@@ -184,6 +185,15 @@ impl StateStore {
                 conn.execute(
                     &format!(
                         "alter table {table} add column served_digest text not null default ''"
+                    ),
+                    (),
+                )
+                .await?;
+            }
+            if !names.iter().any(|name| name == "reconciled_at") {
+                conn.execute(
+                    &format!(
+                        "alter table {table} add column reconciled_at integer not null default 0"
                     ),
                     (),
                 )
@@ -390,7 +400,10 @@ impl StateStore {
             baseline_seq,
             &built,
             None,
-            validated_at,
+            ManifestTimes {
+                validated_at,
+                reconciled_at: validated_at,
+            },
         )
         .await?;
         tx.commit().await?;
@@ -400,6 +413,7 @@ impl StateStore {
             baseline_seq,
             baseline_seq,
             None,
+            validated_at,
             validated_at,
         ))
     }
@@ -508,7 +522,10 @@ impl StateStore {
             baseline_seq,
             &built,
             None,
-            validated_at,
+            ManifestTimes {
+                validated_at,
+                reconciled_at: validated_at,
+            },
         )
         .await?;
         tx.commit().await?;
@@ -518,6 +535,7 @@ impl StateStore {
             baseline_seq,
             baseline_seq,
             None,
+            validated_at,
             validated_at,
         ))
     }
@@ -810,7 +828,10 @@ impl StateStore {
                 overlap_through,
                 &built,
                 None,
-                validated_at,
+                ManifestTimes {
+                    validated_at,
+                    reconciled_at: validated_at,
+                },
             )
             .await?;
         }
@@ -820,6 +841,7 @@ impl StateStore {
             baseline_seq,
             overlap_through,
             None,
+            validated_at,
             validated_at,
         );
         if shadow {
@@ -926,7 +948,10 @@ impl StateStore {
             current.overlap_through,
             &built,
             Some(&pending),
-            validated_at,
+            ManifestTimes {
+                validated_at,
+                reconciled_at: current.reconciled_at,
+            },
         )
         .await?;
         tx.commit().await?;
@@ -937,6 +962,7 @@ impl StateStore {
             current.overlap_through,
             Some(pending),
             validated_at,
+            current.reconciled_at,
         ))
     }
 
@@ -996,7 +1022,10 @@ impl StateStore {
             manifest.overlap_through,
             &built,
             None,
-            validated_at,
+            ManifestTimes {
+                validated_at,
+                reconciled_at: manifest.reconciled_at,
+            },
         )
         .await?;
         tx.execute("insert into sonar_activation_proof(id,checkpoint,artifact_digest) values(1,?,?) on conflict(id) do update set checkpoint=excluded.checkpoint,artifact_digest=excluded.artifact_digest", params![to_i64(manifest.checkpoint)?, built.digest.clone()]).await?;
@@ -1008,6 +1037,7 @@ impl StateStore {
             manifest.overlap_through,
             None,
             validated_at,
+            manifest.reconciled_at,
         ))
     }
 
@@ -1122,7 +1152,7 @@ impl StateStore {
         let mut rows = conn
             .query(
                 "select schema_version,checkpoint,baseline_seq,artifact_digest,track_rows,centroid_rows,raw_bytes,validated_at,\
-                 pending_from,pending_through,pending_count,pending_digest,overlap_through,served_digest from sonar_staged_manifest where id=1",
+                 pending_from,pending_through,pending_count,pending_digest,overlap_through,served_digest,reconciled_at from sonar_staged_manifest where id=1",
                 (),
             )
             .await?;
@@ -1418,6 +1448,11 @@ pub(crate) fn centroid_digest(id: &str, blob: &[u8]) -> String {
     sha256_hex(&[&id_len, id.as_bytes(), &blob_len, blob])
 }
 
+struct ManifestTimes {
+    validated_at: i64,
+    reconciled_at: i64,
+}
+
 async fn write_manifest(
     conn: &Transaction,
     checkpoint: u64,
@@ -1425,7 +1460,7 @@ async fn write_manifest(
     overlap_through: u64,
     built: &BuiltState,
     pending: Option<&PendingAck>,
-    validated_at: i64,
+    times: ManifestTimes,
 ) -> Result<()> {
     let (from, through, count, digest) = match pending {
         Some(pending) => (
@@ -1437,9 +1472,9 @@ async fn write_manifest(
         None => (None, None, None, None),
     };
     conn.execute(
-        "insert into sonar_manifest(id,schema_version,checkpoint,baseline_seq,overlap_through,served_digest,artifact_digest,track_rows,centroid_rows,raw_bytes,validated_at,pending_from,pending_through,pending_count,pending_digest) \
-         values(1,?,?,?,?,?,?,?,?,?,?,?,?,?,?) on conflict(id) do update set schema_version=excluded.schema_version,checkpoint=excluded.checkpoint,baseline_seq=excluded.baseline_seq,overlap_through=excluded.overlap_through,served_digest=excluded.served_digest,artifact_digest=excluded.artifact_digest,track_rows=excluded.track_rows,centroid_rows=excluded.centroid_rows,raw_bytes=excluded.raw_bytes,validated_at=excluded.validated_at,pending_from=excluded.pending_from,pending_through=excluded.pending_through,pending_count=excluded.pending_count,pending_digest=excluded.pending_digest",
-        params![SCHEMA_VERSION, to_i64(checkpoint)?, to_i64(baseline_seq)?, to_i64(overlap_through)?, built.served_digest.clone(), built.digest.clone(), i64::try_from(built.track_rows)?, i64::try_from(built.centroid_rows)?, to_i64(built.raw_bytes)?, validated_at, from, through, count, digest],
+        "insert into sonar_manifest(id,schema_version,checkpoint,baseline_seq,overlap_through,served_digest,artifact_digest,track_rows,centroid_rows,raw_bytes,validated_at,reconciled_at,pending_from,pending_through,pending_count,pending_digest) \
+         values(1,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) on conflict(id) do update set schema_version=excluded.schema_version,checkpoint=excluded.checkpoint,baseline_seq=excluded.baseline_seq,overlap_through=excluded.overlap_through,served_digest=excluded.served_digest,artifact_digest=excluded.artifact_digest,track_rows=excluded.track_rows,centroid_rows=excluded.centroid_rows,raw_bytes=excluded.raw_bytes,validated_at=excluded.validated_at,reconciled_at=excluded.reconciled_at,pending_from=excluded.pending_from,pending_through=excluded.pending_through,pending_count=excluded.pending_count,pending_digest=excluded.pending_digest",
+        params![SCHEMA_VERSION, to_i64(checkpoint)?, to_i64(baseline_seq)?, to_i64(overlap_through)?, built.served_digest.clone(), built.digest.clone(), i64::try_from(built.track_rows)?, i64::try_from(built.centroid_rows)?, to_i64(built.raw_bytes)?, times.validated_at, times.reconciled_at, from, through, count, digest],
     ).await?;
     Ok(())
 }
@@ -1467,10 +1502,13 @@ async fn load_from(conn: &Connection) -> Result<StoredSnapshot> {
 }
 
 async fn read_manifest(conn: &impl Queryable) -> Result<Manifest> {
-    let query = "select schema_version,checkpoint,baseline_seq,artifact_digest,track_rows,centroid_rows,raw_bytes,validated_at,pending_from,pending_through,pending_count,pending_digest,overlap_through,served_digest from sonar_manifest where id=1";
+    let query = "select schema_version,checkpoint,baseline_seq,artifact_digest,track_rows,centroid_rows,raw_bytes,validated_at,pending_from,pending_through,pending_count,pending_digest,overlap_through,served_digest,reconciled_at from sonar_manifest where id=1";
     let mut rows = match conn.query_rows(query).await {
         Ok(rows) => rows,
-        Err(_) => conn.query_rows("select schema_version,checkpoint,baseline_seq,artifact_digest,track_rows,centroid_rows,raw_bytes,validated_at,pending_from,pending_through,pending_count,pending_digest,baseline_seq,'' from sonar_manifest where id=1").await?,
+        Err(_) => match conn.query_rows("select schema_version,checkpoint,baseline_seq,artifact_digest,track_rows,centroid_rows,raw_bytes,validated_at,pending_from,pending_through,pending_count,pending_digest,overlap_through,served_digest,0 from sonar_manifest where id=1").await {
+            Ok(rows) => rows,
+            Err(_) => conn.query_rows("select schema_version,checkpoint,baseline_seq,artifact_digest,track_rows,centroid_rows,raw_bytes,validated_at,pending_from,pending_through,pending_count,pending_digest,baseline_seq,'',0 from sonar_manifest where id=1").await?,
+        },
     };
     let row = rows
         .next()
@@ -1532,6 +1570,7 @@ fn manifest_from_row(row: &libsql::Row) -> Result<Manifest> {
         pending,
         raw_bytes: required_u64(&row.get_value(6)?, "raw bytes")?,
         track_rows: usize::try_from(required_u64(&row.get_value(4)?, "track count")?)?,
+        reconciled_at: required_i64(&row.get_value(14)?, "reconcile time")?,
         validated_at: required_i64(&row.get_value(7)?, "validation time")?,
     })
 }
@@ -1633,6 +1672,7 @@ fn stored_snapshot(
     overlap_through: u64,
     pending: Option<PendingAck>,
     validated_at: i64,
+    reconciled_at: i64,
 ) -> StoredSnapshot {
     StoredSnapshot {
         centroids: built.centroids,
@@ -1646,6 +1686,7 @@ fn stored_snapshot(
             pending,
             raw_bytes: built.raw_bytes,
             track_rows: built.track_rows,
+            reconciled_at,
             validated_at,
         },
         tracks: built.tracks,
@@ -1931,6 +1972,7 @@ mod tests {
         let migrated = StateStore::open(&path).await.unwrap();
         let loaded = migrated.load().await.unwrap();
         assert_eq!(loaded.manifest.overlap_through, 3);
+        assert_eq!(loaded.manifest.reconciled_at, 0);
         let mut staged_columns = migrated
             .connection()
             .unwrap()
@@ -1951,6 +1993,86 @@ mod tests {
             loaded.manifest.artifact_digest,
             original.manifest.artifact_digest
         );
+    }
+
+    #[tokio::test]
+    async fn version_three_state_without_reconcile_column_migrates_to_unknown() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("state.db");
+        let store = StateStore::open(&path).await.unwrap();
+        store
+            .replace_from_replica(&[track("a", 1, 1.0)], &[], &[], 1, 1, 100)
+            .await
+            .unwrap();
+        drop(store);
+        let db = Builder::new_local(&path).build().await.unwrap();
+        let conn = db.connect().unwrap();
+        conn.execute_batch("alter table sonar_manifest drop column reconciled_at; alter table sonar_staged_manifest drop column reconciled_at")
+            .await
+            .unwrap();
+        drop(conn);
+        drop(db);
+
+        let readonly = StateStore::open_readonly(&path).await.unwrap();
+        assert_eq!(readonly.load().await.unwrap().manifest.reconciled_at, 0);
+        drop(readonly);
+        let migrated = StateStore::open(&path).await.unwrap();
+        let stored = migrated.load().await.unwrap();
+        assert_eq!(stored.manifest.validated_at, 100);
+        assert_eq!(stored.manifest.reconciled_at, 0);
+        assert!(migrated.staged_manifest().await.unwrap().is_none());
+
+        let app = std::sync::Arc::new(crate::server::AppState::from_snapshot(
+            crate::consumer::published(&stored),
+            "secret".into(),
+        ));
+        let response = tower::ServiceExt::oneshot(
+            crate::server::router(app),
+            axum::http::Request::builder()
+                .uri("/health")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let health: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(health["reconcile_age_seconds"].is_null());
+    }
+
+    #[tokio::test]
+    async fn full_source_reads_advance_reconcile_time_but_delta_and_activation_do_not() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("state.db");
+        let store = StateStore::open(&path).await.unwrap();
+        let bootstrap = store
+            .replace_from_replica(&[track("a", 1, 1.0)], &[], &[], 1, 1, 100)
+            .await
+            .unwrap();
+        assert_eq!(bootstrap.manifest.reconciled_at, 100);
+        store.mark_activated(&bootstrap.manifest).await.unwrap();
+        assert_eq!(store.manifest().await.unwrap().reconciled_at, 100);
+
+        let delta = store
+            .apply_batch(&batch(1, vec![upsert(2, 2, "a", 2.0)]), 200)
+            .await
+            .unwrap();
+        assert_eq!(delta.manifest.validated_at, 200);
+        assert_eq!(delta.manifest.reconciled_at, 100);
+        store.finalize_pending_activated(2).await.unwrap();
+        assert_eq!(store.manifest().await.unwrap().reconciled_at, 100);
+        drop(store);
+        let store = StateStore::open(&path).await.unwrap();
+        assert_eq!(store.load().await.unwrap().manifest.reconciled_at, 100);
+
+        let rebuilt = store
+            .replace_from_replica(&[track("a", 2, 2.0)], &[], &[], 2, 2, 300)
+            .await
+            .unwrap();
+        assert_eq!(rebuilt.manifest.reconciled_at, 300);
+        assert_eq!(store.load().await.unwrap().manifest.reconciled_at, 300);
     }
 
     fn delete(seq: u64, revision: u64, id: &str) -> ValidatedEvent {

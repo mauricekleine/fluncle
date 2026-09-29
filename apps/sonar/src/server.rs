@@ -71,6 +71,7 @@ pub struct PublishedSnapshot {
     pub checkpoint: u64,
     pub baseline_seq: u64,
     pub raw_vector_bytes: u64,
+    pub reconciled_at: i64,
     pub validated_at: i64,
     pub pending_ack: bool,
 }
@@ -99,6 +100,7 @@ impl AppState {
                 centroids: Arc::new(centroids),
                 checkpoint: 0,
                 baseline_seq: 0,
+                reconciled_at: 0,
                 validated_at: now,
                 pending_ack: false,
             }),
@@ -121,7 +123,7 @@ impl AppState {
         let pending_ack = snapshot.pending_ack;
         Self {
             source: SourceMode::Replica,
-            reconcile_at: AtomicI64::new(snapshot.validated_at),
+            reconcile_at: AtomicI64::new(snapshot.reconciled_at),
             shadow: Mutex::new(None),
             reconcile_guard: Mutex::new(None),
             last_refresh: AtomicI64::new(snapshot.validated_at),
@@ -153,8 +155,8 @@ impl AppState {
         self
     }
 
-    pub fn record_reconcile(&self) {
-        self.reconcile_at.store(now_unix(), Ordering::Relaxed);
+    pub fn record_reconcile(&self, reconciled_at: i64) {
+        self.reconcile_at.store(reconciled_at, Ordering::Relaxed);
     }
 
     pub fn record_shadow(&self, comparison: ShadowComparison) {
@@ -478,6 +480,7 @@ mod tests {
             checkpoint: 1,
             baseline_seq: 1,
             raw_vector_bytes: 0,
+            reconciled_at: 0,
             validated_at: now_unix(),
             pending_ack: false,
         };
@@ -490,6 +493,7 @@ mod tests {
             checkpoint: 2,
             baseline_seq: 2,
             raw_vector_bytes: 0,
+            reconciled_at: 0,
             validated_at: now_unix(),
             pending_ack: false,
         };
