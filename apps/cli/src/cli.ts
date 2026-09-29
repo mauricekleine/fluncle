@@ -3846,7 +3846,8 @@ JSON field reference:
 
       for (const label of labels) {
         const looked = label.triageCheckedAt ? label.triageVerdict : "never looked";
-        console.log(`${label.slug}  ${label.seedState}  ${looked ?? ""}`.trimEnd());
+        const rules = label.carriesArtistRules ? "  artist rules" : "";
+        console.log(`${label.slug}  ${label.seedState}  ${looked ?? ""}${rules}`.trimEnd());
       }
     });
 

@@ -222,7 +222,7 @@ describe("the ratification read", () => {
 
   it("carries the census arithmetic and the second opinion back to the station", async () => {
     await seedLabel("acme");
-    await recordLabelTriage("acme", {
+    const recorded = await recordLabelTriage("acme", {
       ...BASE,
       censusSummary: "9 releases, 74 recordings",
       offLaneShare: 0.59,
@@ -239,6 +239,10 @@ describe("the ratification read", () => {
     expect(proposal?.residualOffLaneShare).toBeCloseTo(0.42);
     expect(proposal?.verifyAgrees).toBe(false);
     expect(proposal?.verifyEvidence).toBe("Discogs styles contradict the first pass");
+    expect(proposal?.recordedAt).toBe(recorded?.triageCheckedAt);
+    expect(proposal?.roundId).toBe("r14");
+    expect(proposal?.verdict).toBe("unclear");
+    expect(proposal?.confidence).toBe("high");
   });
 
   it("orders a proposal's rules by first-credit weight, so the load-bearing act reads first", async () => {

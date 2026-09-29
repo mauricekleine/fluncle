@@ -1,6 +1,6 @@
 # RFC: the label-triage sweep — the round runs itself, the ruling stays his
 
-**Status:** In flight — nothing built. All twelve design decisions ratified in session; this file carries the build.
+**Status:** In flight. The gate and the box research round are built ([label-triage-timer](../agents/hermes/label-triage-timer/README.md)); the round stays provisional until the operator has used two of its rounds, and the station's tier bulk-actions are not built. Prune this RFC once both land.
 **Scope:** the recurring triage round defined by the [fluncle-label-triage](../../packages/skills/fluncle-label-triage) skill. It does not change the crawl, the storage gate, the exception model, or what a ruling means.
 
 ## The problem

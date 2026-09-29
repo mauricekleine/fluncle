@@ -17,6 +17,7 @@ import {
   confirmLabelAlias,
   fillEmptyLabelBio,
   getLabelBySlug,
+  labelIdsCarryingArtistRules,
   LabelMergeConflictError,
   LabelMergeSameRowError,
   LabelNotFoundError,
@@ -36,8 +37,13 @@ import { apiFault, type Implementer, parseLimit, toFault } from "./_shared";
 export function adminLabelsHandlers(os: Implementer) {
   const listLabelsAdminHandler = os.list_labels_admin.use(adminAuth).handler(async ({ input }) => {
     try {
-      const labels = (await listLabels(input.seedState)).map((label) => ({
+      const [rows, ruleCarriers] = await Promise.all([
+        listLabels(input.seedState),
+        labelIdsCarryingArtistRules(),
+      ]);
+      const labels = rows.map((label) => ({
         ...label,
+        carriesArtistRules: ruleCarriers.has(label.id),
         findingCount: 0,
       }));
 

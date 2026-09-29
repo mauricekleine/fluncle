@@ -86,6 +86,8 @@ A label's SECTION follows its ruling, never its rules: an `enabled` label with b
 
 Each ruling row displays the label name plus any MusicBrainz disambiguation, founding date and location, and an outbound MBID link.
 
+**An undecided row shows the triage round's proposal, read-only.** When a round has recorded a finding for the label (`record_label_triage`, one `label_triage_proposals` row per label), the row's triage chip states the proposed verdict (dnb / not dnb / partial / unclear with its reason), the confidence, and how many artist rules it proposes, and the evidence runs as one truncated line under the identity. The chip opens the round id, the date it was recorded, the full evidence, the census summary and the raw and residual off-lane shares when the round measured them, and each proposed artist rule with its verdict, first-credit count and evidence. The proposal is advice: the chip carries no ruling, and ruling stays the row's own buttons. The board reads a page's undecided proposals and their rules in two statements (`labelTriageProposalsByIds`), never per row.
+
 **The attention queue** carries `label-review` as a source (`apps/web/src/lib/attention.ts`): every `undecided` label is one row, oldest-first, deep-linking to `/admin/labels`. It never rides the deadline tier — a ruling steers the next crawl and blocks nothing.
 
 A held release is its own source, `crawl-hold`: one row per `held` release, oldest-first, deep-linking to `/admin/labels?hold=<release-mbid>`, where the row is focused and ruled with **Keep it out** or **Store it**.
@@ -102,7 +104,7 @@ A held release is its own source, `crawl-hold`: one row per `held` release, olde
 
 Global artist rules ride their own contract file (`admin-artist-rules.ts`): `list_artist_rules` (admin) plus `add_artist_rule` / `remove_artist_rule` (operator) on `/admin/artist-rules` — they belong to the artist entity's surface ([artist-relationship.md](./artist-relationship.md)), not to any label. `replace_label_artist_rules` is a transactional whole-set swap that resolves each rule's Spotify bridge from the artist's MB url-rels at write and stamps `scope_changed_at`; `update_label` gains `rewalk` for a bare re-walk arm.
 
-`?seedState=enabled` is the crawler's agent-authenticated seed-set read. The `_admin` suffix distinguishes it from the public `list_labels` and `get_label` operations.
+`?seedState=enabled` is the crawler's agent-authenticated seed-set read. Each `list_labels_admin` item carries `carriesArtistRules`, true when the label holds at least one per-label artist rule (a global rule never counts); the triage box gate reads it to leave a settled `dnb_partial` label out of its pull. It costs one extra statement for the whole list. The `_admin` suffix distinguishes it from the public `list_labels` and `get_label` operations.
 
 `update_label` is operator tier: ruling steers what Fluncle crawls next, which is an editorial act, so an agent token 403s at `operatorGuard` (the `update_galaxy` precedent). `mint_label` is operator tier for the same reason one rung earlier — bringing a label into the archive decides what may be crawled at all and what earns a public page. Both are enforced by the build-fail coverage tests (`orpc-auth-coverage`, `orpc-naming`).
 

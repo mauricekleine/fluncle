@@ -73,6 +73,7 @@ const EXPECTED_WRITE_OPERATION_IDS = [
   "social.metrics",
   "social.publish-advance",
   "submissions.triage",
+  "triage.label-gate",
   "track.capture",
   "track.context",
   "track.embed",
