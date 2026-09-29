@@ -73,7 +73,7 @@ export async function setSonarTrackEnabled(enabled: boolean): Promise<void> {
 
 export const SONAR_TIMEOUT_MS = 800;
 export const SONAR_DELTA_CADENCE_SECS = 30;
-export const SONAR_RECONCILE_CADENCE_SECS = 3600;
+export const SONAR_RECONCILE_CADENCE_SECS = 21600;
 
 export const SONAR_MAX_TOP_K = 1000;
 

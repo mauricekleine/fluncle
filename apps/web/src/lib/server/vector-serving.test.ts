@@ -10,7 +10,7 @@ let enabled = false;
 vi.mock("./artifact-changes", () => ({ getArtifactConsumerStatusLive }));
 vi.mock("./sonar", () => ({
   SONAR_DELTA_CADENCE_SECS: 30,
-  SONAR_RECONCILE_CADENCE_SECS: 3600,
+  SONAR_RECONCILE_CADENCE_SECS: 21600,
   isSonarTrackEnabled: async () => enabled,
   readSonarHealth,
   setSonarTrackEnabled,
@@ -151,14 +151,14 @@ describe("track vector-serving readiness", () => {
     expect(status.runtime.reasons).not.toContain("build_identity_missing");
   });
 
-  it("blocks pending validation and uses the hourly replica cadence", () => {
+  it("blocks pending validation and uses the six-hourly replica cadence", () => {
     const status = assessVectorServing({
       consumer,
       enabled: false,
       health: {
         ...health,
         pendingAck: true,
-        replicaLagSeconds: 10_801,
+        replicaLagSeconds: 64_801,
         validation: "last_attempt_failed",
       },
       nowMs: NOW,
@@ -169,6 +169,17 @@ describe("track vector-serving readiness", () => {
       "pending_ack",
       "replica_stale",
     ]);
+  });
+
+  it("keeps runtime ready between six-hourly replica reconciles", () => {
+    const status = assessVectorServing({
+      consumer,
+      enabled: true,
+      health: { ...health, replicaLagSeconds: 21_599 },
+      nowMs: NOW,
+    });
+
+    expect(status.runtime.reasons).not.toContain("replica_stale");
   });
 
   it("disables unconditionally even while Sonar is unavailable", async () => {
