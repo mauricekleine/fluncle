@@ -10,6 +10,12 @@ import {
   registerArtifactConsumerLive,
 } from "../artifact-changes";
 import { adminAuth, operatorGuard } from "../orpc-auth";
+import {
+  listSonarCentroidDigestsLive,
+  listSonarCentroidsLive,
+  listSonarTrackDigestsLive,
+  listSonarTracksLive,
+} from "../sonar-source-reads";
 import { type Implementer, toFault } from "./_shared";
 
 export function adminArtifactsHandlers(os: Implementer) {
@@ -47,6 +53,44 @@ export function adminArtifactsHandlers(os: Implementer) {
           ...(await listArtifactSnapshotLive(input)),
           ok: true as const,
         };
+      } catch (error) {
+        throw toFault(error);
+      }
+    });
+
+  const listSonarTrackDigestsHandler = os.list_sonar_track_digests
+    .use(adminAuth)
+    .handler(async ({ input }) => {
+      try {
+        return { ...(await listSonarTrackDigestsLive(input)), ok: true as const };
+      } catch (error) {
+        throw toFault(error);
+      }
+    });
+
+  const listSonarTracksHandler = os.list_sonar_tracks.use(adminAuth).handler(async ({ input }) => {
+    try {
+      return { ...(await listSonarTracksLive(input)), ok: true as const };
+    } catch (error) {
+      throw toFault(error);
+    }
+  });
+
+  const listSonarCentroidDigestsHandler = os.list_sonar_centroid_digests
+    .use(adminAuth)
+    .handler(async ({ input }) => {
+      try {
+        return { ...(await listSonarCentroidDigestsLive(input)), ok: true as const };
+      } catch (error) {
+        throw toFault(error);
+      }
+    });
+
+  const listSonarCentroidsHandler = os.list_sonar_centroids
+    .use(adminAuth)
+    .handler(async ({ input }) => {
+      try {
+        return { ...(await listSonarCentroidsLive(input)), ok: true as const };
       } catch (error) {
         throw toFault(error);
       }
@@ -140,6 +184,10 @@ export function adminArtifactsHandlers(os: Implementer) {
     inactivate_artifact_consumer: inactivateArtifactConsumerHandler,
     list_artifact_changes: listArtifactChangesHandler,
     list_artifact_snapshot: listArtifactSnapshotHandler,
+    list_sonar_centroid_digests: listSonarCentroidDigestsHandler,
+    list_sonar_centroids: listSonarCentroidsHandler,
+    list_sonar_track_digests: listSonarTrackDigestsHandler,
+    list_sonar_tracks: listSonarTracksHandler,
     register_artifact_consumer: registerArtifactConsumerHandler,
   };
 }
