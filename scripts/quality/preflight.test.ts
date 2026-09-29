@@ -301,6 +301,37 @@ describe("preflight supersession", () => {
     expect(processExists(-(child.pid ?? 0))).toBe(false);
   });
 
+  test("a lane that already exited is never signalled, since its group id may be reused", async () => {
+    const bystander = spawn("sleep", ["30"], { detached: true, stdio: "ignore" });
+    let current = true;
+    setTimeout(() => {
+      current = false;
+    }, 100);
+
+    const outcome = await runSupervisedWave(["finished", "running"], {
+      graceMs: 300,
+      isCurrent: () => current,
+      pollMs: 20,
+      start: (lane: string) => {
+        if (lane === "finished") {
+          return {
+            child: { exitCode: 0, pid: bystander.pid ?? 0, signalCode: null },
+            done: Promise.resolve(0),
+          };
+        }
+        const child = spawn("sleep", ["30"], { detached: true, stdio: "ignore" });
+        const done = new Promise<number>((resolvePromise) => {
+          child.on("exit", (code) => resolvePromise(code ?? 1));
+        });
+        return { child, done };
+      },
+    });
+
+    expect(outcome.superseded).toBe(true);
+    expect(processExists(bystander.pid ?? 0)).toBe(true);
+    bystander.kill("SIGKILL");
+  });
+
   test("a current wave runs to completion untouched", async () => {
     const outcome = await runSupervisedWave(["one", "two"], {
       isCurrent: () => true,

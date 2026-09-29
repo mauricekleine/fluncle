@@ -259,17 +259,21 @@ export async function runSupervisedWave(
   { graceMs = TERMINATION_GRACE_MS, isCurrent, pollMs = SUPERSEDED_POLL_MS, start },
 ) {
   const running = lanes.map((lane) => start(lane));
+  let superseded = false;
   let reaping = [];
   const watcher = setInterval(() => {
-    if (reaping.length > 0 || isCurrent()) {
+    if (superseded || isCurrent()) {
       return;
     }
-    reaping = running.map(({ child }) => reapProcessGroup(child.pid, { graceMs }));
+    superseded = true;
+    reaping = running
+      .filter(({ child }) => child.exitCode === null && child.signalCode === null)
+      .map(({ child }) => reapProcessGroup(child.pid, { graceMs }));
   }, pollMs);
   try {
     const results = await Promise.all(running.map(({ done }) => done));
     await Promise.all(reaping);
-    return { results, superseded: reaping.length > 0 };
+    return { results, superseded };
   } finally {
     clearInterval(watcher);
   }
