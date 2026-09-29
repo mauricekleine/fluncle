@@ -16,6 +16,7 @@ import {
   researchEnv,
   type CarryStore,
   fileCarryStore,
+  parseLabelList,
   type RoundDeps,
   runSweep,
   summarize,
@@ -605,5 +606,24 @@ describe("the carry-over file", () => {
     writeFileSync(path, '{"slugs":["a"');
 
     expect(() => fileCarryStore(path).read()).toThrow();
+  });
+});
+
+describe("reading the pile", () => {
+  test("an error object from a CLI without the list command is a failure, never an empty pile", () => {
+    const stdout = JSON.stringify({ code: "error", message: "unknown command 'list'", ok: false });
+
+    expect(() => parseLabelList(stdout, 1, "admin labels list")).toThrow("no label list");
+    expect(() => parseLabelList(stdout, 0, "admin labels list")).toThrow("no label list");
+  });
+
+  test("help text instead of JSON is a failure", () => {
+    expect(() => parseLabelList("Usage: fluncle admin labels", 0, "admin labels list")).toThrow(
+      "did not return JSON",
+    );
+  });
+
+  test("a genuinely empty pile is still an empty list", () => {
+    expect(parseLabelList(JSON.stringify({ labels: [] }), 0, "admin labels list")).toEqual([]);
   });
 });
