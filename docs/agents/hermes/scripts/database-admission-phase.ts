@@ -55,6 +55,7 @@ export async function stopDatabaseAdmissionPhases(): Promise<void> {
 type DatabaseAdmissionPhaseInput = Readonly<{
   command: readonly string[];
   owner: string;
+  phase?: string;
   signal?: AbortSignal;
 
   yieldRetries: 0 | 1;
@@ -65,6 +66,17 @@ function phaseRunner(): string {
     process.env.DATABASE_ADMISSION_RUNNER ??
     join(import.meta.dirname, "database-admission-runner.sh")
   );
+}
+
+function phaseRunnerArguments(input: DatabaseAdmissionPhaseInput): string[] {
+  return [
+    phaseRunner(),
+    "phase",
+    input.owner,
+    ...(input.phase === undefined ? [] : ["--phase", input.phase]),
+    "--",
+    ...input.command,
+  ];
 }
 
 export function runDatabaseAdmissionPhase(
@@ -79,11 +91,10 @@ export function runDatabaseAdmissionPhase(
   lastYieldReason = null;
 
   for (let attempt = 1; attempt <= maximumAttempts; attempt += 1) {
-    const result = spawnSync(
-      "bash",
-      [phaseRunner(), "phase", input.owner, "--", ...input.command],
-      { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 },
-    );
+    const result = spawnSync("bash", phaseRunnerArguments(input), {
+      encoding: "utf8",
+      maxBuffer: 64 * 1024 * 1024,
+    });
 
     if (result.stderr) {
       process.stderr.write(result.stderr);
@@ -129,7 +140,7 @@ export async function runDatabaseAdmissionPhaseAsync(
     }
     const result = await new Promise<{ status: number | null; stderr: string; stdout: string }>(
       (resolve, reject) => {
-        const child = spawn("bash", [phaseRunner(), "phase", input.owner, "--", ...input.command], {
+        const child = spawn("bash", phaseRunnerArguments(input), {
           stdio: ["ignore", "pipe", "pipe"],
         });
         let resolveClosed: (() => void) | undefined;
