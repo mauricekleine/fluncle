@@ -1241,7 +1241,7 @@ describe("database operation registry", () => {
     expect(config).toMatch(/None => 30,/);
     expect(config).toMatch(/parsed\("SONAR_RECONCILE_SECS", 21600\)/);
     expect(main).toContain("tokio::spawn(consumer.run(");
-    expect(consumer).toContain("self.replica.sync().await?");
+    expect(consumer).toContain("self.source.sync().await?");
     expect(consumer).toContain("replace_from_local_replica");
   });
 

@@ -2094,7 +2094,7 @@ async function verifyChangesFromCheckpoint(
 
 export async function listArtifactChanges(
   client: ArtifactReadClient,
-  input: { consumerId: string; limit?: number },
+  input: { consumerId: string; fromSeq?: number; limit?: number },
 ): Promise<ArtifactChangePage> {
   assertConsumerId(input.consumerId);
   const limit = input.limit ?? ARTIFACT_CHANGE_READ_LIMIT;
@@ -2105,12 +2105,15 @@ export async function listArtifactChanges(
     apiError("artifact_consumer_not_active", "Consumer must be active", 409);
   }
 
-  return changesFromCheckpoint(
-    client,
-    input.consumerId,
-    Number(consumer.applied_through_seq),
-    limit,
-  );
+  const fromSeq = input.fromSeq ?? Number(consumer.applied_through_seq);
+  if (fromSeq < Number(consumer.applied_through_seq)) {
+    apiError(
+      "invalid_artifact_checkpoint",
+      "Change read starts before the consumer checkpoint",
+      409,
+    );
+  }
+  return changesFromCheckpoint(client, input.consumerId, fromSeq, limit);
 }
 
 export async function acknowledgeArtifactChanges(
@@ -2475,6 +2478,7 @@ export async function activateArtifactConsumerLive(
 
 export async function listArtifactChangesLive(input: {
   consumerId: string;
+  fromSeq?: number;
   limit?: number;
 }): Promise<ArtifactChangePage> {
   return listArtifactChanges(await getDb(), input);

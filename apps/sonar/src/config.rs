@@ -1,12 +1,14 @@
 //! Runtime configuration, read from the environment. Fails fast with a clear
 //! message when a required variable is missing or a value cannot be parsed.
 
+use crate::source::SourceMode;
 use anyhow::{bail, Context, Result};
 use std::path::Path;
 
 /// Fully-resolved runtime config.
 #[derive(Debug, Clone)]
 pub struct Config {
+    pub source: SourceMode,
     /// Remote Turso database URL used only by explicit replica sync.
     pub turso_url: Option<String>,
     /// Read-only Turso auth token used only by explicit replica sync.
@@ -47,6 +49,12 @@ impl Config {
         let state_path = required("SONAR_STATE_PATH")?;
         let secret = required("SONAR_SECRET")?;
         let validate_only = optional("SONAR_VALIDATE_ONLY").as_deref() == Some("true");
+        let source = match optional("SONAR_SOURCE").as_deref().unwrap_or("replica") {
+            "replica" => SourceMode::Replica,
+            "worker" => SourceMode::Worker,
+            "shadow" => SourceMode::Shadow,
+            _ => bail!("SONAR_SOURCE must be replica, worker, or shadow"),
+        };
         let turso_url = optional("TURSO_DATABASE_URL");
         let turso_token = optional("TURSO_AUTH_TOKEN");
         let replica_path = optional("SONAR_REPLICA_PATH");
@@ -56,12 +64,11 @@ impl Config {
         if !validate_only
             && (api_base_url.is_none()
                 || api_token.is_none()
-                || turso_url.is_none()
-                || turso_token.is_none()
-                || replica_path.is_none()
+                || (source != SourceMode::Worker
+                    && (turso_url.is_none() || turso_token.is_none() || replica_path.is_none()))
                 || consumer_id.is_empty())
         {
-            bail!("replica and artifact API configuration is required outside SONAR_VALIDATE_ONLY=true");
+            bail!("selected source and artifact API configuration is required outside SONAR_VALIDATE_ONLY=true");
         }
         if !consumer_id.is_empty()
             && (consumer_id.len() > 128
@@ -96,7 +103,10 @@ impl Config {
         }
         let batch_limit = usize::try_from(parsed("SONAR_BATCH_LIMIT", 100)?)?;
         let snapshot_limit = usize::try_from(parsed("SONAR_SNAPSHOT_LIMIT", 200)?)?;
-        if let Some(replica_path) = replica_path.as_deref() {
+        if let Some(replica_path) = replica_path
+            .as_deref()
+            .filter(|_| source != SourceMode::Worker)
+        {
             if same_path(Path::new(&state_path), Path::new(replica_path))? {
                 bail!("SONAR_STATE_PATH and SONAR_REPLICA_PATH must be different files");
             }
@@ -109,6 +119,7 @@ impl Config {
         }
 
         Ok(Self {
+            source,
             turso_url,
             turso_token,
             replica_path,
@@ -167,6 +178,61 @@ fn parsed(key: &str, default: u64) -> Result<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn worker_config_needs_no_turso_credentials_or_replica_path() {
+        const KEYS: &[&str] = &[
+            "SONAR_STATE_PATH",
+            "SONAR_SECRET",
+            "SONAR_VALIDATE_ONLY",
+            "SONAR_SOURCE",
+            "TURSO_DATABASE_URL",
+            "TURSO_AUTH_TOKEN",
+            "SONAR_REPLICA_PATH",
+            "FLUNCLE_API_BASE_URL",
+            "FLUNCLE_API_TOKEN",
+            "SONAR_CONSUMER_ID",
+            "SONAR_PORT",
+            "SONAR_BIND",
+            "SONAR_DELTA_SECS",
+            "SONAR_RECONCILE_SECS",
+            "SONAR_BATCH_LIMIT",
+            "SONAR_SNAPSHOT_LIMIT",
+            "SONAR_TLS_CERT",
+            "SONAR_TLS_KEY",
+        ];
+        struct Restore(Vec<(&'static str, Option<std::ffi::OsString>)>);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                for (key, value) in &self.0 {
+                    match value {
+                        Some(value) => std::env::set_var(key, value),
+                        None => std::env::remove_var(key),
+                    }
+                }
+            }
+        }
+        let restore = Restore(
+            KEYS.iter()
+                .map(|key| (*key, std::env::var_os(key)))
+                .collect(),
+        );
+        for key in KEYS {
+            std::env::remove_var(key);
+        }
+        let dir = tempfile::tempdir().unwrap();
+        std::env::set_var("SONAR_STATE_PATH", dir.path().join("state.db"));
+        std::env::set_var("SONAR_SECRET", "test");
+        std::env::set_var("SONAR_SOURCE", "worker");
+        std::env::set_var("FLUNCLE_API_BASE_URL", "http://127.0.0.1:1");
+        std::env::set_var("FLUNCLE_API_TOKEN", "test");
+        std::env::set_var("SONAR_CONSUMER_ID", "sonar-test");
+        let config = Config::from_env().unwrap();
+        assert_eq!(config.source, SourceMode::Worker);
+        assert!(config.turso_url.is_none());
+        assert!(config.replica_path.is_none());
+        drop(restore);
+    }
 
     #[test]
     fn replica_and_state_paths_must_resolve_to_different_files() {

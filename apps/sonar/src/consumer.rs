@@ -1,5 +1,6 @@
 //! Crash-recoverable artifact consumer and periodic full-local reconciliation.
 
+use std::collections::BTreeSet;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -12,8 +13,14 @@ use crate::artifact::{
     RebuildCheckpoint, STREAM,
 };
 use crate::replica::{Replica, SyncStats};
-use crate::server::{now_unix, AppState, PublishedSnapshot, RebuildCause};
-use crate::state::{Manifest, StateStore, StoredSnapshot};
+use crate::server::{
+    now_unix, AppState, PublishedSnapshot, RebuildCause, ReconcileGuardTrip, ShadowComparison,
+};
+use crate::source::Source;
+use crate::state::{
+    ConsumerChanged, ConsumerStatusRead, Manifest, ReconcileGuard, StateStore, StoredSnapshot,
+    WorkerReconcile,
+};
 
 const MAX_CONSECUTIVE_STALE_SNAPSHOT_PAGES: usize = 3;
 
@@ -41,15 +48,39 @@ fn rebuild_checkpoint_advanced(before: &RebuildCheckpoint, after: &RebuildCheckp
 pub struct Consumer {
     api: ArtifactClient,
     batch_limit: usize,
-    replica: Replica,
+    source: Source,
     snapshot_limit: usize,
     state: StateStore,
+}
+
+struct ShadowReference {
+    checkpoint: u64,
+    replica_head: u64,
+    served_digest: String,
+    track_rows: usize,
+    centroid_rows: usize,
 }
 
 impl Consumer {
     pub fn new(
         api: ArtifactClient,
         replica: Replica,
+        state: StateStore,
+        batch_limit: usize,
+        snapshot_limit: usize,
+    ) -> Result<Self> {
+        Self::with_source(
+            api,
+            Source::Replica(replica),
+            state,
+            batch_limit,
+            snapshot_limit,
+        )
+    }
+
+    pub fn with_source(
+        api: ArtifactClient,
+        source: Source,
         state: StateStore,
         batch_limit: usize,
         snapshot_limit: usize,
@@ -63,7 +94,7 @@ impl Consumer {
         Ok(Self {
             api,
             batch_limit,
-            replica,
+            source,
             snapshot_limit,
             state,
         })
@@ -76,6 +107,10 @@ impl Consumer {
             Ok(true) => match self.state.load().await {
                 Ok(stored) => {
                     if let Some(stored) = self.reconcile_startup_state(stored).await? {
+                        let stored = self
+                            .finish_overlap_recheck(&stored.manifest)
+                            .await?
+                            .unwrap_or(stored);
                         return Ok((stored, None, false, None));
                     }
                     warn!(
@@ -208,21 +243,78 @@ impl Consumer {
             .snapshot_seq
             .context("registered consumer has no snapshot fence")?;
         self.sync_through(snapshot_seq).await?;
+        if self.source.replica().is_none() {
+            self.state.clear_worker_snapshot().await?;
+        }
         self.attest_local_snapshot().await?;
 
-        // A final sync may include writes newer than the fence. Seed durable
-        // state at local head H before activation, then validate/ack <=H as
-        // baseline-covered only after this candidate has been published.
-        let sync = self.replica.sync().await?;
-        let baseline = self.replica.artifact_head().await?;
-        if baseline < snapshot_seq {
-            bail!("local replica head is behind the activation fence");
+        // Seed durable state at source head H before activation; later events replay.
+        let sync = self.source.sync().await?;
+        let stored = if let Some(worker) = self
+            .source
+            .worker()
+            .filter(|_| self.source.replica().is_none())
+        {
+            self.worker_candidate_in_overlap_window(worker, snapshot_seq, "rebuilding", true)
+                .await?
+                .0
+        } else {
+            let baseline = self.source.head(&self.api).await?;
+            if baseline < snapshot_seq {
+                bail!("source head is behind the activation fence");
+            }
+            self.state
+                .replace_from_local_replica(
+                    self.source.replica().context("missing source replica")?,
+                    snapshot_seq,
+                    baseline,
+                    now_unix(),
+                )
+                .await?
+        };
+        if self.source.replica().is_none() {
+            if let Err(error) = self.state.finish_worker_snapshot().await {
+                warn!(error = %format!("{error:#}"), "could not release Worker bootstrap scratch state");
+            }
         }
-        let stored = self
-            .state
-            .replace_from_local_replica(&self.replica, snapshot_seq, baseline, now_unix())
-            .await?;
         Ok((stored, snapshot_seq, sync))
+    }
+
+    async fn worker_candidate_in_overlap_window(
+        &self,
+        worker: &crate::source::WorkerSource,
+        checkpoint: u64,
+        expected_state: &str,
+        replace: bool,
+    ) -> Result<(StoredSnapshot, u64)> {
+        let before = self.api.status().await?;
+        validate_contract(&before)?;
+        if before.state != expected_state
+            || (expected_state == "active" && before.applied_through_seq != Some(checkpoint))
+            || (expected_state == "rebuilding" && before.snapshot_seq != Some(checkpoint))
+        {
+            bail!("artifact consumer changed before Worker source read");
+        }
+        let baseline = before.head_seq;
+        if baseline < checkpoint {
+            bail!("Worker source head is behind the consumer checkpoint");
+        }
+        let (stored, _, overlap_through) = self
+            .state
+            .reconcile_worker_window(
+                worker,
+                &self.api,
+                WorkerReconcile {
+                    checkpoint,
+                    baseline_seq: baseline,
+                    validated_at: now_unix(),
+                    replace,
+                    shadow: false,
+                },
+                expected_state,
+            )
+            .await?;
+        Ok((stored, overlap_through))
     }
 
     pub async fn activate_prepared(&self, snapshot_seq: u64) -> Result<()> {
@@ -267,10 +359,10 @@ impl Consumer {
     }
 
     async fn sync_through(&self, fence: u64) -> Result<()> {
-        self.replica.sync().await?;
-        let head = self.replica.artifact_head().await?;
+        self.source.sync().await?;
+        let head = self.source.head(&self.api).await?;
         if head < fence {
-            bail!("successful replica sync stopped before artifact snapshot fence");
+            bail!("source head stopped before artifact snapshot fence");
         }
         Ok(())
     }
@@ -289,12 +381,14 @@ impl Consumer {
             }
             let after = parse_cursor(rebuild.cursor.as_deref())?;
             let page = self
-                .replica
+                .source
                 .snapshot_page(
                     after.as_deref(),
                     self.snapshot_limit,
                     &rebuild.source_digest,
                     rebuild.source_item_count,
+                    &rebuild.generation,
+                    rebuild.snapshot_seq,
                 )
                 .await?;
             match self
@@ -317,6 +411,9 @@ impl Consumer {
                     if !rebuild_checkpoint_advanced(rebuild, &checkpoint) {
                         bail!("remote rebuild checkpoint did not advance the snapshot cursor");
                     }
+                    if self.source.replica().is_none() {
+                        self.state.append_worker_snapshot(&page.rows).await?;
+                    }
                     stale_page_retries.accepted_progress();
                 }
                 Err(error) => {
@@ -328,6 +425,9 @@ impl Consumer {
                         && checkpoint.consumer_item_count == page.consumer_item_count
                         && rebuild_checkpoint_advanced(rebuild, checkpoint)
                     {
+                        if self.source.replica().is_none() {
+                            self.state.append_worker_snapshot(&page.rows).await?;
+                        }
                         stale_page_retries.accepted_progress();
                         continue;
                     }
@@ -347,9 +447,10 @@ impl Consumer {
                                 "artifact snapshot page made no progress after {MAX_CONSECUTIVE_STALE_SNAPSHOT_PAGES} stale-page retries"
                             ));
                         }
-                        self.replica.sync().await.context(
-                            "resynchronising a snapshot page rejected after source churn",
-                        )?;
+                        self.source
+                            .sync()
+                            .await
+                            .context("retrying a snapshot page rejected after source churn")?;
                         continue;
                     }
                     return Err(error)
@@ -391,7 +492,7 @@ impl Consumer {
         let current = match self.state.manifest().await {
             Ok(current) => current,
             Err(error) => {
-                warn!(cause = "state_corrupt", error = %format!("{error:#}"), "rebuilding corrupt sonar state from the local replica");
+                warn!(cause = "state_corrupt", error = %format!("{error:#}"), "rebuilding corrupt sonar state from the selected source");
                 return self
                     .full_local_rebuild(app, RebuildCause::StateCorrupt)
                     .await;
@@ -419,45 +520,86 @@ impl Consumer {
             self.state.clear_activation_proof().await?;
             bail!("artifact consumer changed before local reconciliation");
         }
+        if let Some(corrected) = self.finish_overlap_recheck(&current).await? {
+            publish(app, corrected)?;
+        }
         app.head_seq.store(status.head_seq, Ordering::Relaxed);
-        let sync = self.replica.sync().await?;
-        app.record_replica_sync(sync.frame_no, sync.frames_synced);
-        let baseline = self.replica.artifact_head().await?;
+        let sync = self.source.sync().await?;
+        if self.source.replica().is_some() {
+            app.record_replica_sync(sync.frame_no, sync.frames_synced);
+        }
+        let mut baseline = self.source.head(&self.api).await?;
         if baseline < current.checkpoint {
-            bail!("local replica head regressed behind the durable consumer checkpoint");
+            bail!("source head regressed behind the durable consumer checkpoint");
         }
         self.state.stage_activated_generation().await?;
         self.state.clear_activation_proof().await?;
-        let stored = match self
-            .state
-            .replace_from_local_replica(&self.replica, current.checkpoint, baseline, now_unix())
+        let candidate = if let Some(replica) = self.source.replica() {
+            self.state
+                .replace_from_local_replica_checked(
+                    replica,
+                    current.checkpoint,
+                    baseline,
+                    now_unix(),
+                    Some(&self.api),
+                )
+                .await
+        } else {
+            self.worker_candidate_in_overlap_window(
+                self.source.worker().context("missing Worker source")?,
+                current.checkpoint,
+                "active",
+                false,
+            )
             .await
-        {
+            .map(|(stored, _)| {
+                baseline = stored.manifest.baseline_seq;
+                stored
+            })
+        };
+        let stored = match candidate {
             Ok(stored) => stored,
             Err(error) => {
-                self.state.restore_staged_generation(true).await?;
+                let consumer_changed = error.downcast_ref::<ConsumerChanged>().is_some();
+                let guard =
+                    error
+                        .downcast_ref::<ReconcileGuard>()
+                        .map(|guard| ReconcileGuardTrip {
+                            tripped_at: now_unix(),
+                            deletions: guard.deletions,
+                            manifest: guard.manifest.clone(),
+                        });
+                let restore_proof = !consumer_changed
+                    && guard.is_none()
+                    && (ArtifactClient::is_transport_failure(&error)
+                        || (self.source.replica().is_some()
+                            && error.downcast_ref::<ConsumerStatusRead>().is_none()));
+                self.state.restore_staged_generation(restore_proof).await?;
+                if let Some(trip) = guard {
+                    app.record_reconcile_guard(trip);
+                    return self
+                        .full_local_rebuild(app, RebuildCause::ReconcileGuard)
+                        .await;
+                }
                 return Err(error);
             }
         };
-        let after = match self.api.status().await {
-            Ok(status) => status,
-            Err(error) if ArtifactClient::is_transport_failure(&error) => {
-                self.state.restore_staged_generation(true).await?;
-                return Err(error);
-            }
-            Err(error) => {
-                return Err(error).context("revalidating reconciliation consumer identity")
-            }
-        };
-        validate_contract(&after).context("revalidating reconciliation consumer contract")?;
-        if after.state != "active" || after.applied_through_seq != Some(current.checkpoint) {
-            bail!("artifact consumer changed during local reconciliation");
-        }
         self.state.mark_activated(&stored.manifest).await?;
         self.state.discard_staged_generation().await?;
-        app.head_seq.store(after.head_seq, Ordering::Relaxed);
+        app.head_seq.store(
+            stored.manifest.overlap_through.max(status.head_seq),
+            Ordering::Relaxed,
+        );
         let rows = stored.manifest.track_rows;
+        let shadow_reference = ShadowReference {
+            checkpoint: current.checkpoint,
+            replica_head: baseline,
+            served_digest: stored.manifest.served_digest.clone(),
+            track_rows: stored.manifest.track_rows,
+            centroid_rows: stored.manifest.centroid_rows,
+        };
         publish(app, stored)?;
+        app.record_reconcile();
         app.record_rebuild(
             RebuildCause::ScheduledLocal,
             u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
@@ -468,7 +610,95 @@ impl Consumer {
             baseline_seq = baseline,
             "published full local sonar reconciliation"
         );
+        if let Source::Shadow(_, worker) = &self.source {
+            self.compare_shadow(app, worker, &shadow_reference).await;
+        }
         Ok(())
+    }
+
+    async fn compare_shadow(
+        &self,
+        app: &AppState,
+        worker: &crate::source::WorkerSource,
+        reference: &ShadowReference,
+    ) {
+        let mut comparison = ShadowComparison {
+            result: "error",
+            compared_unix: now_unix(),
+            replica_head: reference.replica_head,
+            worker_h0: None,
+            worker_h1: None,
+            differing_ids: Vec::new(),
+            error: None,
+        };
+        let result: Result<()> = async {
+            let before = self.api.status().await?;
+            validate_contract(&before)?;
+            if before.state != "active" || before.applied_through_seq != Some(reference.checkpoint)
+            {
+                bail!("artifact consumer changed before shadow read");
+            }
+            comparison.worker_h0 = Some(before.head_seq);
+            let (shadow, differing_ids, h1) = self
+                .state
+                .reconcile_worker_window(
+                    worker,
+                    &self.api,
+                    WorkerReconcile {
+                        checkpoint: reference.checkpoint,
+                        baseline_seq: before.head_seq,
+                        validated_at: now_unix(),
+                        replace: false,
+                        shadow: true,
+                    },
+                    "active",
+                )
+                .await?;
+            comparison.worker_h1 = Some(h1);
+            if shadow.manifest.served_digest == reference.served_digest
+                && shadow.manifest.track_rows == reference.track_rows
+                && shadow.manifest.centroid_rows == reference.centroid_rows
+            {
+                comparison.result = "match";
+            } else {
+                let start = reference.replica_head.min(before.head_seq);
+                let end = reference.replica_head.max(h1);
+                let mut changed = BTreeSet::new();
+                let mut cursor = start;
+                while cursor < end {
+                    let page = self.api.changes_from(Some(cursor), 500).await?;
+                    for event in &page.events {
+                        if event.seq <= end && event.stream == STREAM {
+                            changed.insert(event.subject_id.clone());
+                        }
+                    }
+                    let batch = validate_change_page(page, self.api.consumer_id(), cursor)?;
+                    if batch.through_seq == cursor {
+                        bail!("shadow change feed ended before the comparison window");
+                    }
+                    cursor = batch.through_seq;
+                }
+                let has_differences = !differing_ids.is_empty();
+                let unexplained: Vec<String> = differing_ids
+                    .into_iter()
+                    .filter(|id| !changed.contains(id))
+                    .collect();
+                comparison.result = if has_differences && unexplained.is_empty() {
+                    "inconclusive"
+                } else {
+                    "mismatch"
+                };
+                comparison.differing_ids = unexplained.into_iter().take(10).collect();
+            }
+            Ok(())
+        }
+        .await;
+        if let Err(error) = result {
+            comparison.error = Some(format!("{error:#}").chars().take(240).collect());
+            warn!(error = %format!("{error:#}"), "sonar Worker shadow comparison failed");
+        }
+        info!(result = comparison.result, ?comparison.differing_ids, "sonar Worker shadow comparison");
+        app.record_shadow(comparison);
     }
 
     pub async fn consume_once(&self, app: &AppState) -> Result<()> {
@@ -476,14 +706,21 @@ impl Consumer {
         let manifest = match self.state.manifest().await {
             Ok(manifest) => manifest,
             Err(error) => {
-                warn!(cause = "state_corrupt", error = %format!("{error:#}"), "rebuilding corrupt sonar state from the local replica");
+                warn!(cause = "state_corrupt", error = %format!("{error:#}"), "rebuilding corrupt sonar state from the selected source");
                 return self
                     .full_local_rebuild(app, RebuildCause::StateCorrupt)
                     .await;
             }
         };
         if manifest.pending.is_some() {
-            return self.recover_pending(app, self.state.load().await?).await;
+            self.recover_pending(app, self.state.load().await?).await?;
+            if let Some(corrected) = self
+                .finish_overlap_recheck(&self.state.manifest().await?)
+                .await?
+            {
+                publish(app, corrected)?;
+            }
+            return Ok(());
         }
         let status = match self.api.status().await {
             Ok(status) => status,
@@ -539,6 +776,10 @@ impl Consumer {
         };
         app.head_seq.store(batch.head_seq, Ordering::Relaxed);
         if batch.events.is_empty() {
+            if let Some(corrected) = self.finish_overlap_recheck(&manifest).await? {
+                publish(app, corrected)?;
+                return Ok(());
+            }
             if !app.serves(&manifest.artifact_digest, manifest.checkpoint) {
                 publish(app, self.state.load().await?)?;
             }
@@ -560,7 +801,37 @@ impl Consumer {
             batch.through_seq,
         )
         .await?;
+        if let Some(corrected) = self
+            .finish_overlap_recheck(&self.state.manifest().await?)
+            .await?
+        {
+            publish(app, corrected)?;
+        }
         Ok(())
+    }
+
+    async fn finish_overlap_recheck(&self, manifest: &Manifest) -> Result<Option<StoredSnapshot>> {
+        if self.source.replica().is_some()
+            || manifest.pending.is_some()
+            || manifest.checkpoint < manifest.overlap_through
+        {
+            return Ok(None);
+        }
+        let ids = self.state.pending_overlap_recheck().await?;
+        if ids.is_empty() {
+            return Ok(None);
+        }
+        let worker = self
+            .source
+            .worker()
+            .context("missing Worker source for overlap recheck")?;
+        for batch in ids.chunks(200) {
+            let (tracks, absent) = worker.recheck_tracks(batch).await?;
+            self.state
+                .apply_overlap_recheck(&tracks, &absent, now_unix())
+                .await?;
+        }
+        Ok(Some(self.state.load().await?))
     }
 
     async fn recover_pending(&self, app: &AppState, stored: StoredSnapshot) -> Result<()> {
@@ -633,7 +904,10 @@ impl Consumer {
             return Err(error);
         }
         publish(app, stored)?;
-        app.record_replica_sync(sync.frame_no, sync.frames_synced);
+        app.record_reconcile();
+        if self.source.replica().is_some() {
+            app.record_replica_sync(sync.frame_no, sync.frames_synced);
+        }
         app.record_rebuild(
             cause,
             u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),

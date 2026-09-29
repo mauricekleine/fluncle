@@ -8,9 +8,10 @@ use anyhow::{bail, Context, Result};
 use libsql::{params, Builder, Connection, OpenFlags, Transaction, TransactionBehavior, Value};
 use sha2::{Digest, Sha256};
 
+use crate::artifact::validate_contract;
 use crate::artifact::{
-    canonical_payload, canonical_sonar_payload, sha256_hex, SonarPayload, ValidatedBatch,
-    ValidatedOperation,
+    canonical_payload, canonical_sonar_payload, sha256_hex, snapshot_item_digest, ArtifactClient,
+    SonarPayload, ValidatedBatch, ValidatedOperation,
 };
 use crate::decode::decode_le_f32;
 use crate::index::{Index, IndexBuilder};
@@ -18,8 +19,49 @@ use crate::replica::{
     source_centroid, source_revision, source_track, Replica, SourceCentroid, SourceRevision,
     SourceTrack,
 };
+use crate::source::{CentroidDigest, TrackDigest, WorkerSource};
 
-const SCHEMA_VERSION: i64 = 2;
+const SCHEMA_VERSION: i64 = 3;
+
+#[derive(Debug)]
+pub struct ConsumerChanged;
+
+#[derive(Debug)]
+pub struct ConsumerStatusRead;
+
+impl std::fmt::Display for ConsumerStatusRead {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "reading reconciliation consumer status")
+    }
+}
+
+impl std::error::Error for ConsumerStatusRead {}
+
+impl std::fmt::Display for ConsumerChanged {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "artifact consumer changed during reconciliation")
+    }
+}
+
+impl std::error::Error for ConsumerChanged {}
+
+#[derive(Debug)]
+pub struct ReconcileGuard {
+    pub deletions: usize,
+    pub manifest: String,
+}
+
+impl std::fmt::Display for ReconcileGuard {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Worker listing would delete {} subjects from manifest {}",
+            self.deletions, self.manifest
+        )
+    }
+}
+
+impl std::error::Error for ReconcileGuard {}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PendingAck {
@@ -33,6 +75,8 @@ pub struct PendingAck {
 pub struct Manifest {
     pub artifact_digest: String,
     pub baseline_seq: u64,
+    pub overlap_through: u64,
+    pub served_digest: String,
     pub centroid_rows: usize,
     pub checkpoint: u64,
     pub pending: Option<PendingAck>,
@@ -50,6 +94,14 @@ pub struct StoredSnapshot {
 pub struct StateStore {
     conn: RwLock<Connection>,
     path: PathBuf,
+}
+
+pub struct WorkerReconcile {
+    pub checkpoint: u64,
+    pub baseline_seq: u64,
+    pub validated_at: i64,
+    pub replace: bool,
+    pub shadow: bool,
 }
 
 impl StateStore {
@@ -81,6 +133,7 @@ impl StateStore {
              create table if not exists sonar_manifest (
                id integer primary key check(id=1), schema_version integer not null,
                checkpoint integer not null, baseline_seq integer not null,
+               overlap_through integer not null default 0, served_digest text not null default '',
                artifact_digest text not null, track_rows integer not null,
                centroid_rows integer not null, raw_bytes integer not null,
                validated_at integer not null,
@@ -105,8 +158,55 @@ impl StateStore {
              create table if not exists sonar_staged_tracks as select * from sonar_tracks where 0;
              create table if not exists sonar_staged_revisions as select * from sonar_revisions where 0;
              create table if not exists sonar_staged_centroids as select * from sonar_centroids where 0;
-             create table if not exists sonar_staged_activation_proof as select * from sonar_activation_proof where 0;",
+            create table if not exists sonar_staged_activation_proof as select * from sonar_activation_proof where 0;
+            create table if not exists sonar_overlap_recheck(id text primary key) without rowid;",
         ).await.context("initialising sonar consumer state schema")?;
+        conn.execute_batch("create temp table if not exists sonar_snapshot_tracks(id text primary key,payload_json text not null,vector blob not null,value_digest text not null) without rowid;").await?;
+        conn.execute_batch("begin immediate").await?;
+        for table in ["sonar_manifest", "sonar_staged_manifest"] {
+            let mut columns = conn
+                .query(&format!("pragma table_info({table})"), ())
+                .await?;
+            let mut names = Vec::new();
+            while let Some(row) = columns.next().await? {
+                names.push(required_text(&row.get_value(1)?, "manifest column")?);
+            }
+            if !names.iter().any(|name| name == "overlap_through") {
+                conn.execute(
+                    &format!(
+                        "alter table {table} add column overlap_through integer not null default 0"
+                    ),
+                    (),
+                )
+                .await?;
+            }
+            if !names.iter().any(|name| name == "served_digest") {
+                conn.execute(
+                    &format!(
+                        "alter table {table} add column served_digest text not null default ''"
+                    ),
+                    (),
+                )
+                .await?;
+            }
+            conn.execute(&format!("update {table} set schema_version=3,overlap_through=baseline_seq where schema_version=2"), ()).await?;
+        }
+        conn.execute_batch("commit").await?;
+        if let Some(row) = conn
+            .query("select served_digest from sonar_manifest where id=1", ())
+            .await?
+            .next()
+            .await?
+        {
+            if required_text(&row.get_value(0)?, "served digest")?.is_empty() {
+                let built = build_state(&conn).await?;
+                conn.execute(
+                    "update sonar_manifest set served_digest=? where id=1",
+                    [built.served_digest],
+                )
+                .await?;
+            }
+        }
         Ok(Self {
             conn: RwLock::new(conn),
             path,
@@ -172,6 +272,35 @@ impl StateStore {
         Ok(rows.next().await?.is_some())
     }
 
+    pub async fn clear_worker_snapshot(&self) -> Result<()> {
+        let conn = self.connection()?;
+        conn.execute_batch("create temp table if not exists sonar_snapshot_tracks(id text primary key,payload_json text not null,vector blob not null,value_digest text not null) without rowid;").await?;
+        conn.execute("delete from sonar_snapshot_tracks", ())
+            .await?;
+        Ok(())
+    }
+
+    pub async fn finish_worker_snapshot(&self) -> Result<()> {
+        self.connection()?
+            .execute("drop table if exists temp.sonar_snapshot_tracks", ())
+            .await?;
+        Ok(())
+    }
+
+    pub async fn append_worker_snapshot(&self, rows: &[SourceTrack]) -> Result<()> {
+        let conn = self.connection()?;
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .await?;
+        for track in rows {
+            let payload = canonical_payload(&track.meta)?;
+            let digest = value_digest(&payload, &track.blob);
+            tx.execute("insert into sonar_snapshot_tracks(id,payload_json,vector,value_digest) values(?,?,?,?) on conflict(id) do update set payload_json=excluded.payload_json,vector=excluded.vector,value_digest=excluded.value_digest", params![track.id.clone(), payload, track.blob.clone(), digest]).await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
     pub async fn load(&self) -> Result<StoredSnapshot> {
         load_from(&self.connection()?).await
     }
@@ -214,6 +343,7 @@ impl StateStore {
         tx.execute("delete from sonar_tracks", ()).await?;
         tx.execute("delete from sonar_revisions", ()).await?;
         tx.execute("delete from sonar_centroids", ()).await?;
+        tx.execute("delete from sonar_overlap_recheck", ()).await?;
         for revision in revisions {
             tx.execute(
                 "insert into sonar_revisions(id,revision,present,value_digest) values(?,?,0,?)",
@@ -253,11 +383,21 @@ impl StateStore {
             .await?;
         }
         let built = build_state(&tx).await?;
-        write_manifest(&tx, checkpoint, baseline_seq, &built, None, validated_at).await?;
+        write_manifest(
+            &tx,
+            checkpoint,
+            baseline_seq,
+            baseline_seq,
+            &built,
+            None,
+            validated_at,
+        )
+        .await?;
         tx.commit().await?;
         Ok(stored_snapshot(
             built,
             checkpoint,
+            baseline_seq,
             baseline_seq,
             None,
             validated_at,
@@ -274,6 +414,24 @@ impl StateStore {
         baseline_seq: u64,
         validated_at: i64,
     ) -> Result<StoredSnapshot> {
+        self.replace_from_local_replica_checked(
+            replica,
+            checkpoint,
+            baseline_seq,
+            validated_at,
+            None,
+        )
+        .await
+    }
+
+    pub async fn replace_from_local_replica_checked(
+        &self,
+        replica: &Replica,
+        checkpoint: u64,
+        baseline_seq: u64,
+        validated_at: i64,
+        api: Option<&ArtifactClient>,
+    ) -> Result<StoredSnapshot> {
         let conn = self.connection()?;
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -281,6 +439,7 @@ impl StateStore {
         tx.execute("delete from sonar_tracks", ()).await?;
         tx.execute("delete from sonar_revisions", ()).await?;
         tx.execute("delete from sonar_centroids", ()).await?;
+        tx.execute("delete from sonar_overlap_recheck", ()).await?;
 
         let mut revisions = replica.revision_rows().await?;
         while let Some(row) = revisions.next().await? {
@@ -334,16 +493,341 @@ impl StateStore {
             .await?;
         }
 
+        if let Some(api) = api {
+            let status = api.status().await.context(ConsumerStatusRead)?;
+            validate_contract(&status).map_err(|_| ConsumerChanged)?;
+            if status.state != "active" || status.applied_through_seq != Some(checkpoint) {
+                return Err(ConsumerChanged.into());
+            }
+        }
         let built = build_state(&tx).await?;
-        write_manifest(&tx, checkpoint, baseline_seq, &built, None, validated_at).await?;
+        write_manifest(
+            &tx,
+            checkpoint,
+            baseline_seq,
+            baseline_seq,
+            &built,
+            None,
+            validated_at,
+        )
+        .await?;
         tx.commit().await?;
         Ok(stored_snapshot(
             built,
             checkpoint,
             baseline_seq,
+            baseline_seq,
             None,
             validated_at,
         ))
+    }
+
+    pub async fn reconcile_worker(
+        &self,
+        worker: &WorkerSource,
+        checkpoint: u64,
+        baseline_seq: u64,
+        validated_at: i64,
+        replace: bool,
+        shadow: bool,
+    ) -> Result<(StoredSnapshot, Vec<String>)> {
+        let request = WorkerReconcile {
+            checkpoint,
+            baseline_seq,
+            validated_at,
+            replace,
+            shadow,
+        };
+        let (stored, differences, _) = self.reconcile_worker_inner(worker, request, None).await?;
+        Ok((stored, differences))
+    }
+
+    pub async fn reconcile_worker_window(
+        &self,
+        worker: &WorkerSource,
+        api: &ArtifactClient,
+        request: WorkerReconcile,
+        expected_state: &str,
+    ) -> Result<(StoredSnapshot, Vec<String>, u64)> {
+        self.reconcile_worker_inner(worker, request, Some((api, expected_state)))
+            .await
+    }
+
+    async fn reconcile_worker_inner(
+        &self,
+        worker: &WorkerSource,
+        request: WorkerReconcile,
+        window: Option<(&ArtifactClient, &str)>,
+    ) -> Result<(StoredSnapshot, Vec<String>, u64)> {
+        let WorkerReconcile {
+            checkpoint,
+            baseline_seq,
+            validated_at,
+            replace,
+            shadow,
+        } = request;
+        let conn = self.connection()?;
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .await?;
+        tx.execute(
+            "create temp table if not exists sonar_seen_tracks(id text primary key) without rowid",
+            (),
+        )
+        .await?;
+        tx.execute("create temp table if not exists sonar_seen_centroids(id text primary key) without rowid", ()).await?;
+        tx.execute("delete from sonar_seen_tracks", ()).await?;
+        tx.execute("delete from sonar_seen_centroids", ()).await?;
+        let current_tracks = count_rows(&tx, "sonar_tracks").await?;
+        let current_centroids = count_rows(&tx, "sonar_centroids").await?;
+        if replace {
+            tx.execute("delete from sonar_overlap_recheck", ()).await?;
+            tx.execute("create temp table if not exists sonar_snapshot_tracks(id text primary key,payload_json text not null,vector blob not null,value_digest text not null) without rowid", ()).await?;
+            tx.execute("delete from sonar_tracks", ()).await?;
+            tx.execute("delete from sonar_revisions", ()).await?;
+            tx.execute("delete from sonar_centroids", ()).await?;
+            tx.execute("insert into sonar_tracks(id,payload_json,vector,revision,value_digest) select id,payload_json,vector,0,value_digest from sonar_snapshot_tracks", ()).await?;
+            tx.execute("insert into sonar_revisions(id,revision,present,value_digest) select id,0,1,value_digest from sonar_snapshot_tracks", ()).await?;
+        }
+        let mut differences = Vec::new();
+        let mut after = None;
+        loop {
+            let (page, next) = worker.track_digests(after.as_deref()).await?;
+            let mut changed: Vec<TrackDigest> = Vec::new();
+            let mut preceding = after.clone();
+            let mut changed_cursors = Vec::new();
+            for item in &page {
+                tx.execute(
+                    "insert into sonar_seen_tracks(id) values(?)",
+                    [item.subject_id.clone()],
+                )
+                .await?;
+                let mut rows = tx
+                    .query(
+                        "select payload_json,vector,revision from sonar_tracks where id=?",
+                        [item.subject_id.clone()],
+                    )
+                    .await?;
+                let matched = if let Some(row) = rows.next().await? {
+                    let payload = required_text(&row.get_value(0)?, "stored payload")?;
+                    let blob = match row.get_value(1)? {
+                        Value::Blob(blob) => blob,
+                        _ => bail!("stored vector is not a blob"),
+                    };
+                    let revision = required_u64(&row.get_value(2)?, "stored revision")?;
+                    (revision == item.revision || (replace && revision == 0))
+                        && snapshot_item_digest(&item.subject_id, &payload, &blob)?
+                            == item.payload_digest
+                } else {
+                    false
+                };
+                if !matched {
+                    changed.push(item.clone());
+                    changed_cursors.push(preceding.clone());
+                    if shadow || differences.len() < 10 {
+                        differences.push(item.subject_id.clone());
+                    }
+                }
+                preceding = Some(item.subject_id.clone());
+                if matched && replace {
+                    let mut rows = tx
+                        .query(
+                            "select payload_json,vector from sonar_tracks where id=?",
+                            [item.subject_id.clone()],
+                        )
+                        .await?;
+                    let row = rows
+                        .next()
+                        .await?
+                        .context("matched snapshot track missing")?;
+                    let payload = required_text(&row.get_value(0)?, "snapshot payload")?;
+                    let blob = match row.get_value(1)? {
+                        Value::Blob(blob) => blob,
+                        _ => bail!("snapshot vector is not a blob"),
+                    };
+                    let digest = value_digest(&payload, &blob);
+                    tx.execute(
+                        "update sonar_tracks set revision=?,value_digest=? where id=?",
+                        params![
+                            to_i64(item.revision)?,
+                            digest.clone(),
+                            item.subject_id.clone()
+                        ],
+                    )
+                    .await?;
+                    tx.execute(
+                        "update sonar_revisions set revision=?,value_digest=? where id=?",
+                        params![to_i64(item.revision)?, digest, item.subject_id.clone()],
+                    )
+                    .await?;
+                }
+            }
+            for (batch_number, batch) in changed.chunks(200).enumerate() {
+                let start = batch_number * 200;
+                for track in worker
+                    .tracks(batch, &changed_cursors[start..start + batch.len()])
+                    .await?
+                {
+                    if read_revision(&tx, &track.id)
+                        .await?
+                        .is_some_and(|(revision, _, _)| revision > track.revision)
+                    {
+                        tracing::warn!(subject_id = %track.id, "Worker item revision is behind local state; retaining local subject");
+                        continue;
+                    }
+                    let payload = canonical_payload(&track.meta)?;
+                    let digest = value_digest(&payload, &track.blob);
+                    tx.execute("insert into sonar_tracks(id,payload_json,vector,revision,value_digest) values(?,?,?,?,?) on conflict(id) do update set payload_json=excluded.payload_json,vector=excluded.vector,revision=excluded.revision,value_digest=excluded.value_digest", params![track.id.clone(), payload, track.blob, to_i64(track.revision)?, digest.clone()]).await?;
+                    tx.execute("insert into sonar_revisions(id,revision,present,value_digest) values(?,?,1,?) on conflict(id) do update set revision=excluded.revision,present=1,value_digest=excluded.value_digest", params![track.id, to_i64(track.revision)?, digest]).await?;
+                }
+            }
+            after = next;
+            if after.is_none() {
+                break;
+            }
+        }
+        let mut deleted = tx.query("select id from sonar_tracks where id not in (select id from sonar_seen_tracks) order by id", ()).await?;
+        let mut deleted_ids = Vec::new();
+        while let Some(row) = deleted.next().await? {
+            deleted_ids.push(required_text(&row.get_value(0)?, "deleted track id")?);
+        }
+        let listed_tracks = count_rows(&tx, "sonar_seen_tracks").await?;
+        if !replace && !shadow && current_tracks > 0 && listed_tracks == 0 {
+            return Err(ReconcileGuard {
+                deletions: current_tracks,
+                manifest: read_manifest(&tx).await?.artifact_digest,
+            }
+            .into());
+        }
+        let maximum_deletes = 100usize.max((current_tracks + current_centroids).div_ceil(50));
+        let track_deletions = deleted_ids.len();
+        for id in deleted_ids {
+            if shadow || differences.len() < 10 {
+                differences.push(id.clone());
+            }
+            tx.execute("delete from sonar_tracks where id=?", [id.clone()])
+                .await?;
+            tx.execute(
+                "update sonar_revisions set present=0,value_digest=? where id=?",
+                params![delete_value_digest(), id],
+            )
+            .await?;
+        }
+        let mut after = None;
+        loop {
+            let (page, next) = worker.centroid_digests(after.as_deref()).await?;
+            let mut changed: Vec<CentroidDigest> = Vec::new();
+            let mut preceding = after.clone();
+            let mut changed_cursors = Vec::new();
+            for item in &page {
+                tx.execute(
+                    "insert into sonar_seen_centroids(id) values(?)",
+                    [item.artist_id.clone()],
+                )
+                .await?;
+                let mut rows = tx
+                    .query(
+                        "select value_digest from sonar_centroids where id=?",
+                        [item.artist_id.clone()],
+                    )
+                    .await?;
+                let matched = if let Some(row) = rows.next().await? {
+                    required_text(&row.get_value(0)?, "centroid digest")? == item.digest
+                } else {
+                    false
+                };
+                if !matched {
+                    changed.push(item.clone());
+                    changed_cursors.push(preceding.clone());
+                    if shadow || differences.len() < 10 {
+                        differences.push(item.artist_id.clone());
+                    }
+                }
+                preceding = Some(item.artist_id.clone());
+            }
+            for (batch_number, batch) in changed.chunks(200).enumerate() {
+                let start = batch_number * 200;
+                for centroid in worker
+                    .centroids(batch, &changed_cursors[start..start + batch.len()])
+                    .await?
+                {
+                    let digest = centroid_digest(&centroid.id, &centroid.blob);
+                    tx.execute("insert into sonar_centroids(id,vector,value_digest) values(?,?,?) on conflict(id) do update set vector=excluded.vector,value_digest=excluded.value_digest", params![centroid.id, centroid.blob, digest]).await?;
+                }
+            }
+            after = next;
+            if after.is_none() {
+                break;
+            }
+        }
+        let mut deleted = tx.query("select id from sonar_centroids where id not in (select id from sonar_seen_centroids) order by id", ()).await?;
+        let mut deleted_ids = Vec::new();
+        while let Some(row) = deleted.next().await? {
+            deleted_ids.push(required_text(&row.get_value(0)?, "deleted centroid id")?);
+        }
+        let listed_centroids = count_rows(&tx, "sonar_seen_centroids").await?;
+        if !replace && !shadow && current_centroids > 0 && listed_centroids == 0 {
+            return Err(ReconcileGuard {
+                deletions: track_deletions + current_centroids,
+                manifest: read_manifest(&tx).await?.artifact_digest,
+            }
+            .into());
+        }
+        if !replace && !shadow && track_deletions + deleted_ids.len() > maximum_deletes {
+            return Err(ReconcileGuard {
+                deletions: track_deletions + deleted_ids.len(),
+                manifest: read_manifest(&tx).await?.artifact_digest,
+            }
+            .into());
+        }
+        for id in deleted_ids {
+            if shadow || differences.len() < 10 {
+                differences.push(id.clone());
+            }
+            tx.execute("delete from sonar_centroids where id=?", [id])
+                .await?;
+        }
+        let overlap_through = if let Some((api, expected_state)) = window {
+            let status = api.status().await.context(ConsumerStatusRead)?;
+            validate_contract(&status).map_err(|_| ConsumerChanged)?;
+            if status.state != expected_state
+                || (expected_state == "active" && status.applied_through_seq != Some(checkpoint))
+                || (expected_state == "rebuilding" && status.snapshot_seq != Some(checkpoint))
+                || status.head_seq < baseline_seq
+            {
+                return Err(ConsumerChanged.into());
+            }
+            status.head_seq
+        } else {
+            baseline_seq
+        };
+        let built = build_state(&tx).await?;
+        if !shadow {
+            write_manifest(
+                &tx,
+                checkpoint,
+                baseline_seq,
+                overlap_through,
+                &built,
+                None,
+                validated_at,
+            )
+            .await?;
+        }
+        let stored = stored_snapshot(
+            built,
+            checkpoint,
+            baseline_seq,
+            overlap_through,
+            None,
+            validated_at,
+        );
+        if shadow {
+            tx.rollback().await?;
+        } else {
+            tx.commit().await?;
+        }
+        Ok((stored, differences, overlap_through))
     }
 
     pub async fn apply_batch(
@@ -370,6 +854,9 @@ impl StateStore {
             }
             let prior = read_revision(&tx, &event.subject_id).await?;
             if let Some((revision, present, digest)) = prior {
+                if event.seq <= current.overlap_through && event.revision <= revision {
+                    continue;
+                }
                 if event.revision < revision {
                     bail!("artifact subject revision regressed after the local baseline");
                 }
@@ -387,6 +874,13 @@ impl StateStore {
                     }
                     bail!("artifact subject revision was reused with different immutable bytes");
                 }
+            }
+            if event.seq <= current.overlap_through {
+                tx.execute(
+                    "insert or ignore into sonar_overlap_recheck(id) values(?)",
+                    [event.subject_id.clone()],
+                )
+                .await?;
             }
             match &event.operation {
                 ValidatedOperation::Delete => {
@@ -429,6 +923,7 @@ impl StateStore {
             &tx,
             batch.through_seq,
             current.baseline_seq,
+            current.overlap_through,
             &built,
             Some(&pending),
             validated_at,
@@ -439,7 +934,79 @@ impl StateStore {
             built,
             batch.through_seq,
             current.baseline_seq,
+            current.overlap_through,
             Some(pending),
+            validated_at,
+        ))
+    }
+
+    pub async fn pending_overlap_recheck(&self) -> Result<Vec<String>> {
+        let mut rows = self
+            .connection()?
+            .query("select id from sonar_overlap_recheck order by id", ())
+            .await?;
+        let mut ids = Vec::new();
+        while let Some(row) = rows.next().await? {
+            ids.push(required_text(&row.get_value(0)?, "overlap subject")?);
+        }
+        Ok(ids)
+    }
+
+    pub async fn apply_overlap_recheck(
+        &self,
+        tracks: &[SourceTrack],
+        absent: &[String],
+        validated_at: i64,
+    ) -> Result<StoredSnapshot> {
+        let conn = self.connection()?;
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .await?;
+        let manifest = read_manifest(&tx).await?;
+        if manifest.pending.is_some() || manifest.checkpoint < manifest.overlap_through {
+            bail!("overlap recheck cannot precede catch-up and acknowledgement");
+        }
+        for track in tracks {
+            let payload = canonical_payload(&track.meta)?;
+            let digest = value_digest(&payload, &track.blob);
+            tx.execute("insert into sonar_tracks(id,payload_json,vector,revision,value_digest) values(?,?,?,?,?) on conflict(id) do update set payload_json=excluded.payload_json,vector=excluded.vector,revision=excluded.revision,value_digest=excluded.value_digest", params![track.id.clone(), payload, track.blob.clone(), to_i64(track.revision)?, digest.clone()]).await?;
+            tx.execute("insert into sonar_revisions(id,revision,present,value_digest) values(?,?,1,?) on conflict(id) do update set revision=excluded.revision,present=1,value_digest=excluded.value_digest", params![track.id.clone(), to_i64(track.revision)?, digest]).await?;
+            tx.execute(
+                "delete from sonar_overlap_recheck where id=?",
+                [track.id.clone()],
+            )
+            .await?;
+        }
+        for id in absent {
+            tx.execute("delete from sonar_tracks where id=?", [id.clone()])
+                .await?;
+            tx.execute(
+                "update sonar_revisions set present=0,value_digest=? where id=?",
+                params![delete_value_digest(), id.clone()],
+            )
+            .await?;
+            tx.execute("delete from sonar_overlap_recheck where id=?", [id.clone()])
+                .await?;
+        }
+        let built = build_state(&tx).await?;
+        write_manifest(
+            &tx,
+            manifest.checkpoint,
+            manifest.baseline_seq,
+            manifest.overlap_through,
+            &built,
+            None,
+            validated_at,
+        )
+        .await?;
+        tx.execute("insert into sonar_activation_proof(id,checkpoint,artifact_digest) values(1,?,?) on conflict(id) do update set checkpoint=excluded.checkpoint,artifact_digest=excluded.artifact_digest", params![to_i64(manifest.checkpoint)?, built.digest.clone()]).await?;
+        tx.commit().await?;
+        Ok(stored_snapshot(
+            built,
+            manifest.checkpoint,
+            manifest.baseline_seq,
+            manifest.overlap_through,
+            None,
             validated_at,
         ))
     }
@@ -555,7 +1122,7 @@ impl StateStore {
         let mut rows = conn
             .query(
                 "select schema_version,checkpoint,baseline_seq,artifact_digest,track_rows,centroid_rows,raw_bytes,validated_at,\
-                 pending_from,pending_through,pending_count,pending_digest from sonar_staged_manifest where id=1",
+                 pending_from,pending_through,pending_count,pending_digest,overlap_through,served_digest from sonar_staged_manifest where id=1",
                 (),
             )
             .await?;
@@ -598,6 +1165,12 @@ impl StateStore {
             (),
         )
         .await?;
+        let built = build_state(&tx).await?;
+        tx.execute(
+            "update sonar_manifest set served_digest=? where id=1 and served_digest=''",
+            [built.served_digest],
+        )
+        .await?;
         if restore_proof {
             tx.execute(
                 "insert into sonar_activation_proof select * from sonar_staged_activation_proof",
@@ -622,6 +1195,9 @@ impl StateStore {
 
     pub async fn activation_proves(&self, manifest: &Manifest) -> Result<bool> {
         if manifest.pending.is_some() {
+            return Ok(false);
+        }
+        if !self.pending_overlap_recheck().await?.is_empty() {
             return Ok(false);
         }
         let mut rows = self
@@ -692,6 +1268,7 @@ fn quarantine_files(path: &Path) -> Result<()> {
 struct BuiltState {
     centroids: Arc<Index>,
     digest: String,
+    served_digest: String,
     centroid_rows: usize,
     raw_bytes: u64,
     track_rows: usize,
@@ -702,6 +1279,7 @@ async fn build_state(conn: &impl Queryable) -> Result<BuiltState> {
     let track_count = count_rows(conn, "sonar_tracks").await?;
     let mut track_builder = IndexBuilder::with_capacity(track_count);
     let mut track_hasher = Sha256::new();
+    let mut track_content_hasher = Sha256::new();
     let mut raw_bytes = 0u64;
     let mut track_seen = 0usize;
     let mut rows = conn
@@ -730,6 +1308,9 @@ async fn build_state(conn: &impl Queryable) -> Result<BuiltState> {
         digest_field(&mut track_hasher, id.as_bytes());
         digest_field(&mut track_hasher, payload_json.as_bytes());
         digest_field(&mut track_hasher, &blob);
+        digest_field(&mut track_content_hasher, id.as_bytes());
+        digest_field(&mut track_content_hasher, payload_json.as_bytes());
+        digest_field(&mut track_content_hasher, &blob);
         track_hasher.update(revision.to_be_bytes());
         raw_bytes = raw_bytes
             .checked_add(u64::try_from(blob.len())?)
@@ -801,10 +1382,12 @@ async fn build_state(conn: &impl Queryable) -> Result<BuiltState> {
     let track_digest = track_hasher.finalize();
     let revision_digest = revision_hasher.finalize();
     let centroid_digest = centroid_hasher.finalize();
+    let served_digest = sha256_hex(&[&track_content_hasher.finalize(), &centroid_digest]);
     let digest = sha256_hex(&[&track_digest, &revision_digest, &centroid_digest]);
     Ok(BuiltState {
         centroids: Arc::new(centroid_builder.finish()),
         digest,
+        served_digest,
         centroid_rows: centroid_seen,
         raw_bytes,
         track_rows: track_seen,
@@ -829,7 +1412,7 @@ fn delete_value_digest() -> String {
     value_digest("{}", &[])
 }
 
-fn centroid_digest(id: &str, blob: &[u8]) -> String {
+pub(crate) fn centroid_digest(id: &str, blob: &[u8]) -> String {
     let id_len = u64::try_from(id.len()).unwrap_or(u64::MAX).to_be_bytes();
     let blob_len = u64::try_from(blob.len()).unwrap_or(u64::MAX).to_be_bytes();
     sha256_hex(&[&id_len, id.as_bytes(), &blob_len, blob])
@@ -839,6 +1422,7 @@ async fn write_manifest(
     conn: &Transaction,
     checkpoint: u64,
     baseline_seq: u64,
+    overlap_through: u64,
     built: &BuiltState,
     pending: Option<&PendingAck>,
     validated_at: i64,
@@ -853,9 +1437,9 @@ async fn write_manifest(
         None => (None, None, None, None),
     };
     conn.execute(
-        "insert into sonar_manifest(id,schema_version,checkpoint,baseline_seq,artifact_digest,track_rows,centroid_rows,raw_bytes,validated_at,pending_from,pending_through,pending_count,pending_digest) \
-         values(1,?,?,?,?,?,?,?,?,?,?,?,?) on conflict(id) do update set schema_version=excluded.schema_version,checkpoint=excluded.checkpoint,baseline_seq=excluded.baseline_seq,artifact_digest=excluded.artifact_digest,track_rows=excluded.track_rows,centroid_rows=excluded.centroid_rows,raw_bytes=excluded.raw_bytes,validated_at=excluded.validated_at,pending_from=excluded.pending_from,pending_through=excluded.pending_through,pending_count=excluded.pending_count,pending_digest=excluded.pending_digest",
-        params![SCHEMA_VERSION, to_i64(checkpoint)?, to_i64(baseline_seq)?, built.digest.clone(), i64::try_from(built.track_rows)?, i64::try_from(built.centroid_rows)?, to_i64(built.raw_bytes)?, validated_at, from, through, count, digest],
+        "insert into sonar_manifest(id,schema_version,checkpoint,baseline_seq,overlap_through,served_digest,artifact_digest,track_rows,centroid_rows,raw_bytes,validated_at,pending_from,pending_through,pending_count,pending_digest) \
+         values(1,?,?,?,?,?,?,?,?,?,?,?,?,?,?) on conflict(id) do update set schema_version=excluded.schema_version,checkpoint=excluded.checkpoint,baseline_seq=excluded.baseline_seq,overlap_through=excluded.overlap_through,served_digest=excluded.served_digest,artifact_digest=excluded.artifact_digest,track_rows=excluded.track_rows,centroid_rows=excluded.centroid_rows,raw_bytes=excluded.raw_bytes,validated_at=excluded.validated_at,pending_from=excluded.pending_from,pending_through=excluded.pending_through,pending_count=excluded.pending_count,pending_digest=excluded.pending_digest",
+        params![SCHEMA_VERSION, to_i64(checkpoint)?, to_i64(baseline_seq)?, to_i64(overlap_through)?, built.served_digest.clone(), built.digest.clone(), i64::try_from(built.track_rows)?, i64::try_from(built.centroid_rows)?, to_i64(built.raw_bytes)?, validated_at, from, through, count, digest],
     ).await?;
     Ok(())
 }
@@ -864,11 +1448,16 @@ async fn load_from(conn: &Connection) -> Result<StoredSnapshot> {
     let manifest = read_manifest(conn).await?;
     let built = build_state(conn).await?;
     if built.digest != manifest.artifact_digest
+        || (!manifest.served_digest.is_empty() && built.served_digest != manifest.served_digest)
         || built.track_rows != manifest.track_rows
         || built.centroid_rows != manifest.centroid_rows
         || built.raw_bytes != manifest.raw_bytes
     {
         bail!("sonar consumer state manifest does not match durable rows");
+    }
+    let mut manifest = manifest;
+    if manifest.served_digest.is_empty() {
+        manifest.served_digest = built.served_digest.clone();
     }
     Ok(StoredSnapshot {
         centroids: built.centroids,
@@ -878,7 +1467,11 @@ async fn load_from(conn: &Connection) -> Result<StoredSnapshot> {
 }
 
 async fn read_manifest(conn: &impl Queryable) -> Result<Manifest> {
-    let mut rows = conn.query_rows("select schema_version,checkpoint,baseline_seq,artifact_digest,track_rows,centroid_rows,raw_bytes,validated_at,pending_from,pending_through,pending_count,pending_digest from sonar_manifest where id=1").await?;
+    let query = "select schema_version,checkpoint,baseline_seq,artifact_digest,track_rows,centroid_rows,raw_bytes,validated_at,pending_from,pending_through,pending_count,pending_digest,overlap_through,served_digest from sonar_manifest where id=1";
+    let mut rows = match conn.query_rows(query).await {
+        Ok(rows) => rows,
+        Err(_) => conn.query_rows("select schema_version,checkpoint,baseline_seq,artifact_digest,track_rows,centroid_rows,raw_bytes,validated_at,pending_from,pending_through,pending_count,pending_digest,baseline_seq,'' from sonar_manifest where id=1").await?,
+    };
     let row = rows
         .next()
         .await?
@@ -888,7 +1481,7 @@ async fn read_manifest(conn: &impl Queryable) -> Result<Manifest> {
 
 fn manifest_from_row(row: &libsql::Row) -> Result<Manifest> {
     let schema = required_i64(&row.get_value(0)?, "schema version")?;
-    if schema != SCHEMA_VERSION {
+    if schema != SCHEMA_VERSION && schema != 2 {
         bail!("unsupported sonar state schema version {schema}");
     }
     let pending = match (
@@ -914,6 +1507,15 @@ fn manifest_from_row(row: &libsql::Row) -> Result<Manifest> {
         (None, None, None, None) => None,
         _ => bail!("partial pending acknowledgement in sonar state"),
     };
+    let baseline_seq = required_u64(&row.get_value(2)?, "baseline sequence")?;
+    let overlap_through = required_u64(&row.get_value(12)?, "overlap through")?;
+    if overlap_through < baseline_seq {
+        bail!("overlap head precedes the local baseline");
+    }
+    let served_digest = required_text(&row.get_value(13)?, "served digest")?;
+    if !served_digest.is_empty() && !is_digest(&served_digest) {
+        bail!("manifest served digest is invalid");
+    }
     Ok(Manifest {
         artifact_digest: {
             let digest = required_text(&row.get_value(3)?, "artifact digest")?;
@@ -922,7 +1524,9 @@ fn manifest_from_row(row: &libsql::Row) -> Result<Manifest> {
             }
             digest
         },
-        baseline_seq: required_u64(&row.get_value(2)?, "baseline sequence")?,
+        baseline_seq,
+        overlap_through,
+        served_digest,
         centroid_rows: usize::try_from(required_u64(&row.get_value(5)?, "centroid count")?)?,
         checkpoint: required_u64(&row.get_value(1)?, "checkpoint")?,
         pending,
@@ -975,6 +1579,8 @@ async fn count_rows(conn: &impl Queryable, table: &str) -> Result<usize> {
         "sonar_tracks" => "select count(*) from sonar_tracks",
         "sonar_revisions" => "select count(*) from sonar_revisions",
         "sonar_centroids" => "select count(*) from sonar_centroids",
+        "sonar_seen_tracks" => "select count(*) from sonar_seen_tracks",
+        "sonar_seen_centroids" => "select count(*) from sonar_seen_centroids",
         _ => bail!("unsupported state table"),
     };
     let mut rows = conn.query_rows(sql).await?;
@@ -1024,6 +1630,7 @@ fn stored_snapshot(
     built: BuiltState,
     checkpoint: u64,
     baseline_seq: u64,
+    overlap_through: u64,
     pending: Option<PendingAck>,
     validated_at: i64,
 ) -> StoredSnapshot {
@@ -1031,7 +1638,9 @@ fn stored_snapshot(
         centroids: built.centroids,
         manifest: Manifest {
             artifact_digest: built.digest,
+            served_digest: built.served_digest,
             baseline_seq,
+            overlap_through,
             centroid_rows: built.centroid_rows,
             checkpoint,
             pending,
@@ -1092,7 +1701,24 @@ mod tests {
     use crate::artifact::{SonarPayload, ValidatedEvent};
     use crate::decode::BLOB_LEN;
     use crate::replica::SourceRevision;
+    use base64::Engine;
     use tempfile::tempdir;
+
+    #[test]
+    fn centroid_digest_matches_shared_wire_fixture() {
+        let cases: Vec<serde_json::Value> = serde_json::from_str(include_str!(
+            "../tests/fixtures/sonar-centroid-digests.json"
+        ))
+        .unwrap();
+        assert!(cases.len() >= 3);
+        for case in cases {
+            let id = case["artistId"].as_str().unwrap();
+            let blob = base64::engine::general_purpose::STANDARD
+                .decode(case["blobBase64"].as_str().unwrap())
+                .unwrap();
+            assert_eq!(centroid_digest(id, &blob), case["digest"].as_str().unwrap());
+        }
+    }
 
     fn blob(seed: f32) -> Vec<u8> {
         let mut bytes = vec![0_u8; BLOB_LEN];
@@ -1156,6 +1782,175 @@ mod tests {
             seq,
             subject_id: id.into(),
         }
+    }
+
+    #[tokio::test]
+    async fn overlap_replay_skips_covered_revisions_applies_newer_and_keeps_strict_tail() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("state.db");
+        let store = StateStore::open(&path).await.unwrap();
+        let listed = track("a", 4, 1.0);
+        let original = store
+            .replace_from_replica(
+                &[listed],
+                &[SourceRevision {
+                    id: "a".into(),
+                    revision: 4,
+                }],
+                &[],
+                3,
+                3,
+                1,
+            )
+            .await
+            .unwrap();
+        store
+            .connection()
+            .unwrap()
+            .execute("update sonar_manifest set overlap_through=5 where id=1", ())
+            .await
+            .unwrap();
+        let skipped = store
+            .apply_batch(&batch(3, vec![upsert(4, 3, "a", 2.0)]), 2)
+            .await
+            .unwrap();
+        assert_eq!(
+            skipped.manifest.served_digest,
+            original.manifest.served_digest
+        );
+        store.clear_pending(4).await.unwrap();
+        let candidate = store
+            .apply_batch(&batch(4, vec![upsert(5, 5, "a", 3.0)]), 2)
+            .await
+            .unwrap();
+        assert_ne!(
+            candidate.manifest.served_digest,
+            original.manifest.served_digest
+        );
+        assert_eq!(candidate.manifest.overlap_through, 5);
+        drop(store);
+        let reopened = StateStore::open(&path).await.unwrap();
+        let recovered = reopened.load().await.unwrap();
+        assert_eq!(recovered.manifest.overlap_through, 5);
+        assert!(recovered.manifest.pending.is_some());
+        reopened.clear_pending(5).await.unwrap();
+        assert!(reopened
+            .apply_batch(&batch(5, vec![upsert(6, 4, "a", 4.0)]), 3)
+            .await
+            .is_err());
+        assert!(reopened
+            .apply_batch(&batch(5, vec![upsert(6, 5, "a", 4.0)]), 3)
+            .await
+            .is_err());
+        assert_eq!(reopened.load().await.unwrap().manifest.checkpoint, 5);
+    }
+
+    #[tokio::test]
+    async fn served_digest_excludes_revision_and_tombstone_ledger() {
+        let dir = tempdir().unwrap();
+        let first = StateStore::open(dir.path().join("first.db")).await.unwrap();
+        let second = StateStore::open(dir.path().join("second.db"))
+            .await
+            .unwrap();
+        let left = first
+            .replace_from_replica(
+                &[track("a", 1, 1.0)],
+                &[
+                    SourceRevision {
+                        id: "a".into(),
+                        revision: 1,
+                    },
+                    SourceRevision {
+                        id: "deleted".into(),
+                        revision: 7,
+                    },
+                ],
+                &[],
+                1,
+                1,
+                1,
+            )
+            .await
+            .unwrap();
+        let right = second
+            .replace_from_replica(
+                &[track("a", 9, 1.0)],
+                &[SourceRevision {
+                    id: "a".into(),
+                    revision: 9,
+                }],
+                &[],
+                1,
+                1,
+                1,
+            )
+            .await
+            .unwrap();
+        assert_eq!(left.manifest.served_digest, right.manifest.served_digest);
+        assert_ne!(
+            left.manifest.artifact_digest,
+            right.manifest.artifact_digest
+        );
+    }
+
+    #[tokio::test]
+    async fn version_two_state_loads_readonly_and_migrates_with_its_baseline() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("state.db");
+        let store = StateStore::open(&path).await.unwrap();
+        let original = store
+            .replace_from_replica(
+                &[track("a", 2, 1.0)],
+                &[SourceRevision {
+                    id: "a".into(),
+                    revision: 2,
+                }],
+                &[],
+                3,
+                3,
+                1,
+            )
+            .await
+            .unwrap();
+        drop(store);
+        let db = Builder::new_local(&path).build().await.unwrap();
+        let conn = db.connect().unwrap();
+        conn.execute_batch("alter table sonar_manifest rename to sonar_manifest_new; create table sonar_manifest(id integer primary key check(id=1),schema_version integer not null,checkpoint integer not null,baseline_seq integer not null,artifact_digest text not null,track_rows integer not null,centroid_rows integer not null,raw_bytes integer not null,validated_at integer not null,pending_from integer,pending_through integer,pending_count integer,pending_digest text); insert into sonar_manifest select id,2,checkpoint,baseline_seq,artifact_digest,track_rows,centroid_rows,raw_bytes,validated_at,pending_from,pending_through,pending_count,pending_digest from sonar_manifest_new; drop table sonar_manifest_new; drop table sonar_staged_manifest; create table sonar_staged_manifest as select * from sonar_manifest where 0; alter table sonar_staged_manifest add column overlap_through integer not null default 0;").await.unwrap();
+        drop(conn);
+        drop(db);
+        let readonly = StateStore::open_readonly(&path)
+            .await
+            .unwrap()
+            .load()
+            .await
+            .unwrap();
+        assert_eq!(
+            readonly.manifest.served_digest,
+            original.manifest.served_digest
+        );
+        let migrated = StateStore::open(&path).await.unwrap();
+        let loaded = migrated.load().await.unwrap();
+        assert_eq!(loaded.manifest.overlap_through, 3);
+        let mut staged_columns = migrated
+            .connection()
+            .unwrap()
+            .query("pragma table_info(sonar_staged_manifest)", ())
+            .await
+            .unwrap();
+        let mut has_served_digest = false;
+        while let Some(row) = staged_columns.next().await.unwrap() {
+            has_served_digest |=
+                required_text(&row.get_value(1).unwrap(), "column").unwrap() == "served_digest";
+        }
+        assert!(has_served_digest);
+        assert_eq!(
+            loaded.manifest.served_digest,
+            original.manifest.served_digest
+        );
+        assert_eq!(
+            loaded.manifest.artifact_digest,
+            original.manifest.artifact_digest
+        );
     }
 
     fn delete(seq: u64, revision: u64, id: &str) -> ValidatedEvent {

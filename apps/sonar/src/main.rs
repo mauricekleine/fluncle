@@ -12,8 +12,8 @@ use tracing::info;
 use sonar::artifact::ArtifactClient;
 use sonar::config::Config;
 use sonar::consumer::{published, Consumer};
-use sonar::replica::Replica;
 use sonar::server::{router, AppState};
+use sonar::source::Source;
 use sonar::state::StateStore;
 
 #[tokio::main]
@@ -51,15 +51,6 @@ async fn main() -> Result<()> {
                 .context("validating existing durable state")?;
             (stored, None, None, false, None, None)
         } else {
-            let replica = Replica::open(
-                cfg.replica_path
-                    .as_deref()
-                    .context("missing local replica path")?,
-                cfg.turso_url.clone().context("missing replica URL")?,
-                cfg.turso_token.clone().context("missing replica token")?,
-            )
-            .await
-            .context("opening local source replica")?;
             let api = ArtifactClient::new(
                 cfg.api_base_url
                     .clone()
@@ -69,9 +60,17 @@ async fn main() -> Result<()> {
                     .context("missing artifact API token")?,
                 cfg.consumer_id.clone(),
             )?;
-            let consumer = Arc::new(Consumer::new(
+            let source = Source::open(
+                cfg.source,
+                api.clone(),
+                cfg.replica_path.as_deref(),
+                cfg.turso_url.clone(),
+                cfg.turso_token.clone(),
+            )
+            .await?;
+            let consumer = Arc::new(Consumer::with_source(
                 api,
-                replica,
+                source,
                 store,
                 cfg.batch_limit,
                 cfg.snapshot_limit,
@@ -97,14 +96,16 @@ async fn main() -> Result<()> {
 
     let state = Arc::new(
         AppState::from_snapshot(published(&stored), cfg.secret.clone())
-            .with_consumer_id(cfg.consumer_id.clone()),
+            .with_consumer_id(cfg.consumer_id.clone())
+            .with_source(cfg.source),
     );
-    if let Some(sync) = replica_sync {
+    if let Some(sync) = replica_sync.filter(|_| cfg.source != sonar::source::SourceMode::Worker) {
         state.record_replica_sync(sync.frame_no, sync.frames_synced);
     }
     if let Some(consumer) = consumer {
         if let Some(snapshot_seq) = activation {
             consumer.activate_prepared(snapshot_seq).await?;
+            state.record_reconcile();
             state.record_rebuild(
                 if state_corrupt {
                     sonar::server::RebuildCause::StateCorrupt

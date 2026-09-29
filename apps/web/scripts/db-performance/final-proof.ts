@@ -866,11 +866,11 @@ export function checkSonarArchitecture(
     ["Sonar bounded local snapshot page", "pub async fn snapshot_page("],
     ["Sonar delta API", "self.api.changes(self.batch_limit).await"],
     ["Sonar delta state apply", "self.state.apply_batch(&batch, now_unix()).await"],
-    ["Sonar local reconciliation", ".replace_from_local_replica(&self.replica"],
+    ["Sonar local reconciliation", ".replace_from_local_replica_checked("],
     ["Sonar local reconcile entrypoint", "pub async fn reconcile_local("],
     ["Sonar durable state delta method", "pub async fn apply_batch("],
     ["Sonar durable state transaction", "TransactionBehavior::Immediate"],
-    ["Sonar durable state manifest", "write_manifest(&tx"],
+    ["Sonar durable state manifest", "write_manifest(\n            &tx,"],
   ] as const) {
     requireText(report, `${replicaSource}\n${consumerSource}\n${stateSource}`, label, text);
   }
@@ -884,8 +884,8 @@ export function checkSonarArchitecture(
     report,
     consumerSource,
     "Sonar sync is not used by refresh paths",
-    "self.replica.sync().await?",
-    2,
+    "self.source.sync().await?",
+    3,
   );
   forbidPattern(
     report,

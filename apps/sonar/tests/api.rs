@@ -11,6 +11,41 @@ use tower::ServiceExt; // for `oneshot`
 use sonar::index::{Entry, Index, TrackMeta};
 use sonar::server::{router, AppState};
 
+#[tokio::test]
+async fn restarted_health_uses_manifest_validation_time_for_reconcile_age() {
+    let original = test_state();
+    let previous = original.snapshot.load_full();
+    let validated_at = sonar::server::now_unix() - 37;
+    let restarted = Arc::new(AppState::from_snapshot(
+        sonar::server::PublishedSnapshot {
+            artifact_digest: previous.artifact_digest.clone(),
+            tracks: previous.tracks.clone(),
+            centroids: previous.centroids.clone(),
+            checkpoint: previous.checkpoint,
+            baseline_seq: previous.baseline_seq,
+            raw_vector_bytes: previous.raw_vector_bytes,
+            validated_at,
+            pending_ack: false,
+        },
+        SECRET.into(),
+    ));
+    let response = router(restarted)
+        .oneshot(
+            Request::builder()
+                .uri("/health")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert!(
+        body_json(response).await["reconcile_age_seconds"]
+            .as_i64()
+            .unwrap()
+            >= 37
+    );
+}
+
 const SECRET: &str = "test-secret";
 
 fn padded(values: &[f32]) -> Vec<f32> {
@@ -381,4 +416,69 @@ async fn an_unknown_filter_field_degrades_to_empty_rather_than_a_wider_answer() 
     assert_eq!(resp.status(), StatusCode::OK);
     let v = body_json(resp).await;
     assert!(v["matches"].as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn health_reports_source_reconcile_age_and_shadow_match_then_mismatch() {
+    let state = Arc::try_unwrap(test_state())
+        .ok()
+        .unwrap()
+        .with_source(sonar::source::SourceMode::Shadow);
+    state.record_reconcile();
+    state.record_reconcile_guard(sonar::server::ReconcileGuardTrip {
+        tripped_at: sonar::server::now_unix(),
+        deletions: 7_722,
+        manifest: "manifest-digest".into(),
+    });
+    state.record_shadow(sonar::server::ShadowComparison {
+        result: "match",
+        compared_unix: sonar::server::now_unix(),
+        replica_head: 3,
+        worker_h0: Some(3),
+        worker_h1: Some(3),
+        differing_ids: Vec::new(),
+        error: None,
+    });
+    let state = Arc::new(state);
+    let app = router(state.clone());
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/health")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = body_json(response).await;
+    assert_eq!(body["source"], "shadow");
+    assert!(body["reconcile_age_seconds"].as_i64().unwrap() >= 0);
+    assert_eq!(body["last_shadow_comparison"]["result"], "match");
+    assert_eq!(body["last_reconcile_guard"]["deletions"], 7_722);
+    assert_eq!(body["last_reconcile_guard"]["manifest"], "manifest-digest");
+    state.record_shadow(sonar::server::ShadowComparison {
+        result: "mismatch",
+        compared_unix: sonar::server::now_unix(),
+        replica_head: 3,
+        worker_h0: Some(3),
+        worker_h1: Some(3),
+        differing_ids: vec!["drift".into()],
+        error: None,
+    });
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/health")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = body_json(response).await;
+    assert_eq!(body["last_shadow_comparison"]["result"], "mismatch");
+    assert_eq!(
+        body["last_shadow_comparison"]["differing_ids"],
+        json!(["drift"])
+    );
 }

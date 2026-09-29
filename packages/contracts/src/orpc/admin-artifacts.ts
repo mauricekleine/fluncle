@@ -325,6 +325,7 @@ export const listArtifactChanges = oc
   .input(
     z.strictObject({
       consumerId: ConsumerIdSchema,
+      fromSeq: z.coerce.number().int().nonnegative().optional(),
       limit: z.coerce.number().int().min(1).max(ARTIFACT_CHANGE_API_MAX_LIMIT).default(100),
     }),
   )
