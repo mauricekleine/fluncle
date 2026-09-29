@@ -11,6 +11,7 @@ import {
   executionWaves,
   fingerprintWorktree,
   planForWorktree,
+  reapProcessGroup,
   releaseLaunchLock,
   resultIsReusable,
   runSupervisedWave,
@@ -177,15 +178,27 @@ describe("preflight change scope", () => {
     expect(Object.values(plan.lanes).some(Boolean)).toBe(false);
   });
 
-  test("an empty change set without a merge-base still fails closed", () => {
-    const plan = planForWorktree(
-      { base: { ref: "HEAD", source: "HEAD" }, paths: [] },
-      repositoryRoot(),
-    );
+  test("without a merge-base every local change set fails closed to the full matrix", () => {
+    for (const paths of [[], ["docs/quality-system.md"]]) {
+      const plan = planForWorktree(
+        { base: { ref: "HEAD", source: "HEAD" }, paths },
+        repositoryRoot(),
+      );
 
-    expect(plan.full).toBe(true);
-    expect(plan.lanes.e2e).toBe(true);
-    expect(plan.lanes.sonar).toBe(true);
+      expect(plan.full).toBe(true);
+      expect(plan.lanes.e2e).toBe(true);
+      expect(plan.lanes.sonar).toBe(true);
+    }
+  });
+
+  test("a changed comparison base invalidates a result for the same tree", () => {
+    const root = fixtureRepository();
+    const withoutBase = fingerprintWorktree(root).fingerprint;
+    git(root, "update-ref", "refs/remotes/origin/main", "HEAD");
+    const withBase = fingerprintWorktree(root).fingerprint;
+
+    expect(withBase).not.toBe(withoutBase);
+    rmSync(root, { force: true, recursive: true });
   });
 });
 
@@ -271,6 +284,21 @@ describe("preflight supersession", () => {
     await new Promise((resolvePromise) => setTimeout(resolvePromise, 100));
     expect(processExists(grandchild)).toBe(false);
     rmSync(directory, { force: true, recursive: true });
+  });
+
+  test("a group that ignores the interrupt is killed after the grace period", async () => {
+    const child = spawn("sh", ["-c", "trap '' INT; sleep 30 & wait"], {
+      detached: true,
+      stdio: "ignore",
+    });
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 100));
+    const started = Date.now();
+
+    await reapProcessGroup(child.pid ?? 0, { graceMs: 300, pollMs: 20 });
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 100));
+
+    expect(Date.now() - started).toBeGreaterThanOrEqual(300);
+    expect(processExists(-(child.pid ?? 0))).toBe(false);
   });
 
   test("a current wave runs to completion untouched", async () => {

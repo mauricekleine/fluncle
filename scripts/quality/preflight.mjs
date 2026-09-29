@@ -178,6 +178,8 @@ export function fingerprintWorktree(root = repositoryRoot()) {
   hash.update("quality-preflight-v1\0");
   hash.update(process.version);
   hash.update("\0");
+  const base = comparisonBase(root);
+  hash.update(`${base.source}:${base.ref}\0`);
   const temporaryDirectory = mkdtempSync(join(tmpdir(), "fluncle-quality-tree-"));
   try {
     const environment = { GIT_INDEX_FILE: join(temporaryDirectory, "index") };
@@ -188,7 +190,6 @@ export function fingerprintWorktree(root = repositoryRoot()) {
     rmSync(temporaryDirectory, { force: true, recursive: true });
   }
 
-  const base = comparisonBase(root);
   const paths = changedPaths(root, base.ref);
 
   return { base, fingerprint: hash.digest("hex"), paths };
@@ -198,7 +199,11 @@ export function planForWorktree(current, root) {
   if (current.base.source === "merge-base") {
     return classifyPaths(current.paths, { base: current.base.ref, emptyChangeSet: "pass", root });
   }
-  return classifyPaths(current.paths, { fullReason: "local empty change set", root });
+  return classifyPaths(current.paths, {
+    forceFull: true,
+    fullReason: "no merge-base with origin/main",
+    root,
+  });
 }
 
 export async function waitForQuietPeriod(
@@ -228,25 +233,43 @@ function signalProcessGroup(pid, signal) {
   } catch {}
 }
 
+function processGroupAlive(pid) {
+  try {
+    process.kill(-pid, 0);
+    return true;
+  } catch (error) {
+    return error instanceof Error && "code" in error && error.code === "EPERM";
+  }
+}
+
+export async function reapProcessGroup(pid, { graceMs = TERMINATION_GRACE_MS, pollMs = 100 } = {}) {
+  signalProcessGroup(pid, "SIGINT");
+  const deadline = Date.now() + graceMs;
+  while (processGroupAlive(pid)) {
+    if (Date.now() >= deadline) {
+      signalProcessGroup(pid, "SIGKILL");
+      return;
+    }
+    await delay(pollMs);
+  }
+}
+
 export async function runSupervisedWave(
   lanes,
   { graceMs = TERMINATION_GRACE_MS, isCurrent, pollMs = SUPERSEDED_POLL_MS, start },
 ) {
   const running = lanes.map((lane) => start(lane));
-  let superseded = false;
+  let reaping = [];
   const watcher = setInterval(() => {
-    if (superseded || isCurrent()) {
+    if (reaping.length > 0 || isCurrent()) {
       return;
     }
-    superseded = true;
-    for (const { child } of running) {
-      signalProcessGroup(child.pid, "SIGTERM");
-      setTimeout(() => signalProcessGroup(child.pid, "SIGKILL"), graceMs);
-    }
+    reaping = running.map(({ child }) => reapProcessGroup(child.pid, { graceMs }));
   }, pollMs);
   try {
     const results = await Promise.all(running.map(({ done }) => done));
-    return { results, superseded };
+    await Promise.all(reaping);
+    return { results, superseded: reaping.length > 0 };
   } finally {
     clearInterval(watcher);
   }
@@ -419,6 +442,7 @@ async function workerLoop(root) {
       const current = fingerprintWorktree(root);
       const latestDesired = readJson(join(directory, "desired.json"));
       if (
+        superseded ||
         current.fingerprint !== desired.fingerprint ||
         latestDesired?.fingerprint !== desired.fingerprint
       ) {
