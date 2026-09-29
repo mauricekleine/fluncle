@@ -1,5 +1,7 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { PublicAnchorRebuildCountMismatchError } from "./projection-operations";
+
 import {
   AGENT_TOKEN,
   OPERATOR_TOKEN,
@@ -14,6 +16,11 @@ const setProjectionCutoverFor = vi.fn();
 
 vi.mock("./db", () => ({ getDb: async () => ({}) }));
 vi.mock("./projection-operations", () => ({
+  PublicAnchorRebuildCountMismatchError: class PublicAnchorRebuildCountMismatchError extends Error {
+    constructor(state: { total: number }, processed: number) {
+      super(`processed ${processed}, expected ${state.total}`);
+    }
+  },
   advanceProjectionFor: (...args: unknown[]) => advanceProjectionFor(...args),
   getProjectionStatusFor: (...args: unknown[]) => getProjectionStatusFor(...args),
   setProjectionCutoverFor: (...args: unknown[]) => setProjectionCutoverFor(...args),
@@ -277,5 +284,28 @@ describe("projection operator authorization stays complete", () => {
 
     expect(response?.status).toBe(409);
     expect(await response?.json()).toMatchObject({ code: "projection_step_conflict" });
+  });
+
+  it("reports a persistent public anchor count mismatch as a projection conflict", async () => {
+    advanceProjectionFor.mockRejectedValueOnce(
+      new PublicAnchorRebuildCountMismatchError(
+        { generation: "api-mismatch", orderEpoch: 1, total: 3 },
+        2,
+      ),
+    );
+    const { handleOrpc } = await import("./orpc");
+    const response = await handleOrpc(
+      req("/admin/projections/public_aggregates/advance", "POST", OPERATOR_TOKEN, {
+        action: "repair",
+        includeStatus: false,
+        limit: 100,
+      }),
+    );
+
+    expect(response?.status).toBe(409);
+    expect(await response?.json()).toMatchObject({
+      code: "public_anchor_rebuild_count_mismatch",
+      message: "processed 2, expected 3",
+    });
   });
 });

@@ -1,6 +1,8 @@
 import { $ } from "bun";
 import { createClient, type Client, type Row } from "@libsql/client/web";
 
+import { markPublicProjectionSourceChangedStatements } from "../../../../apps/web/src/lib/server/public-projection-source-maintenance";
+
 const CATALOGUE_PRUNE_DB_CONCURRENCY = 1;
 
 export async function getDb(): Promise<Client> {
@@ -328,6 +330,12 @@ export async function deleteTracksWithEdges(
         { args: c, sql: `delete from track_artists where track_id in (${holes})` },
         { args: c, sql: `delete from track_embeddings where track_id in (${holes})` },
         { args: c, sql: `delete from tracks where track_id in (${holes})` },
+        ...markPublicProjectionSourceChangedStatements(
+          c.map((subjectId) => ({ subjectId, subjectType: "track" as const })),
+          "catalogue-prune:delete",
+          ["public_aggregates", "artist_qualification"],
+          { onlyIfPreviousStatementChanged: true },
+        ),
       ],
       "write",
     );

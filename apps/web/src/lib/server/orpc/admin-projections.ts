@@ -3,6 +3,7 @@ import { rekeyDueWorkQueue, UnknownDueWorkQueueError } from "../due-work-rekey";
 import {
   advanceProjectionFor,
   getProjectionStatusFor,
+  PublicAnchorRebuildCountMismatchError,
   setProjectionCutoverFor,
 } from "../projection-operations";
 import { adminAuth, operatorGuard } from "../orpc-auth";
@@ -43,6 +44,9 @@ export function adminProjectionHandlers(os: Implementer) {
           target: input.target,
         };
       } catch (error) {
+        if (error instanceof PublicAnchorRebuildCountMismatchError) {
+          throw toFault(new ApiError("public_anchor_rebuild_count_mismatch", error.message, 409));
+        }
         if (
           error instanceof Error &&
           (/projection audit requires/.test(error.message) || /digest mismatch/.test(error.message))

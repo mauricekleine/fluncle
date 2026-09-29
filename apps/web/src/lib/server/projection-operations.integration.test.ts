@@ -1,6 +1,6 @@
 import { createClient, type Client, type InStatement } from "@libsql/client";
 import { ProjectionStatusSchema } from "@fluncle/contracts/orpc";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { LOCAL_DB_CONCURRENCY } from "../database-concurrency";
 import { CATALOGUE_RANK_STATE_KEY } from "./catalogue";
@@ -37,6 +37,7 @@ import {
   advanceProjectionFor,
   advancePublicAnchors,
   getProjectionStatusFor,
+  PublicAnchorRebuildCountMismatchError,
   setProjectionCutoverFor,
 } from "./projection-operations";
 import { TRACKS_HUB_ANCHOR_ADDRESS, TRACKS_HUB_PAGE_SIZE } from "./tracks-hub";
@@ -1561,6 +1562,318 @@ describe("projection production operations", () => {
     expect(actual).toEqual(expected);
     expect(phases).toContain("non_null");
     expect(phases).toContain("null");
+  });
+
+  async function seedPublicAggregateMembers(generation: string, trackIds: string[]) {
+    for (const trackId of trackIds) {
+      await db.execute({
+        args: [trackId],
+        sql: `insert into tracks (track_id, release_date) values (?, '2026-01-01')`,
+      });
+    }
+    await db.executeMultiple(`
+      insert into public_aggregate_membership
+        (track_id, release_date_bucket, key_bucket, generation, source_version, updated_at)
+        select track_id, '2026', null, 'live', '["2026-01-01",null]', '2026-01-01T00:00:00.000Z'
+        from tracks;
+      insert into public_aggregate_counts
+        (aggregate_kind, bucket, track_count, generation, source_version, updated_at)
+        values ('release_date_bucket', '2026', ${trackIds.length}, 'live', '["2026-01-01",null]',
+          '2026-01-01T00:00:00.000Z');
+      update public_aggregate_state
+        set default_track_total = ${trackIds.length}, projected_entry_count = ${trackIds.length},
+            generation = '${generation}', release_hub_order_epoch = 1
+        where scope = 'tracks';
+      update settings set value = '${generation}:2026-01-01'
+        where key = '${PUBLIC_AGGREGATE_DURATION_GENERATION_KEY}';
+      delete from hub_page_anchor_validity;
+      delete from hub_page_anchors;
+      create table repair_log (subject_id text not null);
+      create trigger repair_log_insert after insert on projection_repairs
+        when new.projection = 'public_aggregates'
+        begin insert into repair_log (subject_id) values (new.subject_id); end;
+      create trigger repair_log_update after update on projection_repairs
+        when new.projection = 'public_aggregates'
+        begin insert into repair_log (subject_id) values (new.subject_id); end;
+    `);
+  }
+
+  async function settingRows(key: string) {
+    return (await db.execute({ args: [key], sql: `select value from settings where key = ?` }))
+      .rows;
+  }
+
+  async function aggregateTotals() {
+    return (
+      await db.execute(`select default_track_total as total, release_hub_order_epoch as epoch
+        from public_aggregate_state where scope = 'tracks'`)
+    ).rows[0];
+  }
+
+  async function repairUntilComplete(client: Pick<Client, "batch" | "execute">, steps: number) {
+    for (let step = 0; step < steps; step += 1) {
+      const result = await advanceProjectionFor(client, {
+        action: "repair",
+        includeStatus: false,
+        limit: 2,
+        target: "public_aggregates",
+      });
+      if (result.complete) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  async function expectPublishedAnchorsSettled(generation: string, total: number) {
+    expect((await getProjectionStatusFor(db)).projections.publicAggregates.anchorsReady).toBe(true);
+    expect(
+      await readCurrentProjectedTrackHubAnchors(
+        db,
+        TRACKS_HUB_ANCHOR_ADDRESS,
+        TRACKS_HUB_PAGE_SIZE,
+      ),
+    ).toMatchObject({ total });
+    expect(await settingRows("projection_public_anchor_mismatch_repair_v1")).toHaveLength(0);
+    expect(await settingRows(`projection_restart_public_anchors_v1:${generation}`)).toHaveLength(0);
+    expect(await settingRows("projection_rebuild_public_anchors_v1")).toHaveLength(0);
+  }
+
+  it("queues a public aggregate repair when an out-of-band delete leaves the anchor total stale", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    await seedPublicAggregateMembers("pruned", [
+      "pruned-1",
+      "pruned-2",
+      "pruned-3",
+      "pruned-4",
+      "pruned-5",
+    ]);
+    const repair = () =>
+      advanceProjectionFor(db, {
+        action: "repair",
+        includeStatus: false,
+        limit: 2,
+        target: "public_aggregates",
+      });
+
+    expect((await repair()).complete).toBe(false);
+    expect(await settingRows("projection_rebuild_public_anchors_v1")).toHaveLength(1);
+    await db.execute(`delete from tracks where track_id = 'pruned-1'`);
+
+    let queued = false;
+    for (let step = 0; step < 8 && !queued; step += 1) {
+      expect((await repair()).complete).toBe(false);
+      queued =
+        (await db.execute(`select subject_id from projection_repairs`)).rows[0]?.subject_id ===
+        "pruned-1";
+    }
+    expect(queued).toBe(true);
+    expect(await aggregateTotals()).toMatchObject({ epoch: 1, total: 5 });
+    expect(warn.mock.calls.map(([line]) => JSON.parse(String(line)) as unknown)).toEqual([
+      {
+        event: "public-anchor.rebuild-count-mismatch",
+        generation: "pruned",
+        orderEpoch: 1,
+        processed: 4,
+        repaired: false,
+        total: 5,
+      },
+    ]);
+
+    expect((await repair()).complete).toBe(false);
+    expect((await db.execute(`select 1 from projection_repairs`)).rows).toHaveLength(0);
+    expect(await aggregateTotals()).toMatchObject({ epoch: 2, total: 4 });
+
+    expect(await repairUntilComplete(db, 30)).toBe(true);
+    await expectPublishedAnchorsSettled("pruned", 4);
+    warn.mockRestore();
+  });
+
+  it("scans stale membership in bounded keyset pages and queues each stale row exactly once", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    await seedPublicAggregateMembers(
+      "paged",
+      Array.from({ length: 9 }, (_, index) => `paged-${index + 1}`),
+    );
+    await db.execute(`delete from tracks where track_id in ('paged-2', 'paged-5', 'paged-9')`);
+
+    const cursors = new Set<string>();
+    let complete = false;
+    for (let step = 0; step < 60 && !complete; step += 1) {
+      const result = await advanceProjectionFor(db, {
+        action: "repair",
+        includeStatus: false,
+        limit: 2,
+        target: "public_aggregates",
+      });
+      expect(result.processed).toBeLessThanOrEqual(4);
+      const round = (await settingRows("projection_public_anchor_mismatch_repair_v1"))[0]?.value;
+      if (typeof round === "string") {
+        const parsed = JSON.parse(round) as { cursor: null | string; phase: string };
+        if (parsed.phase === "scanning" && parsed.cursor !== null) {
+          cursors.add(parsed.cursor);
+        }
+      }
+      complete = result.complete;
+    }
+
+    expect(complete).toBe(true);
+    expect([...cursors].sort()).toEqual(["paged-2", "paged-4", "paged-6", "paged-8"]);
+    expect(
+      (await db.execute(`select subject_id from repair_log order by subject_id`)).rows.map(
+        (row) => row.subject_id,
+      ),
+    ).toEqual(["paged-2", "paged-5", "paged-9"]);
+    expect(await aggregateTotals()).toMatchObject({ total: 6 });
+    await expectPublishedAnchorsSettled("paged", 6);
+    warn.mockRestore();
+  });
+
+  it("resumes an interrupted stale-membership scan from its durable cursor", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    await seedPublicAggregateMembers(
+      "interrupted",
+      Array.from({ length: 5 }, (_, index) => `interrupted-${index + 1}`),
+    );
+    await db.execute(`delete from tracks where track_id in ('interrupted-1', 'interrupted-4')`);
+    let interruptions = 0;
+    const flaky: Pick<Client, "batch" | "execute"> = {
+      batch: (async (statements: InStatement[], mode?: "deferred" | "read" | "write") => {
+        const first = statements[0];
+        const expected = typeof first === "object" ? first.args : undefined;
+        if (
+          interruptions === 0 &&
+          Array.isArray(expected) &&
+          expected[1] === "projection_public_anchor_mismatch_repair_v1" &&
+          typeof expected[2] === "string" &&
+          (JSON.parse(expected[2]) as { cursor: null | string }).cursor === "interrupted-2"
+        ) {
+          interruptions += 1;
+          throw new Error("simulated scan interruption");
+        }
+        return db.batch(statements, mode);
+      }) as Client["batch"],
+      execute: db.execute.bind(db),
+    };
+
+    let failure: unknown;
+    for (let step = 0; step < 20 && failure === undefined; step += 1) {
+      try {
+        await advanceProjectionFor(flaky, {
+          action: "repair",
+          includeStatus: false,
+          limit: 2,
+          target: "public_aggregates",
+        });
+      } catch (error) {
+        failure = error;
+      }
+    }
+    expect(failure).toMatchObject({ message: "simulated scan interruption" });
+    const round = (await settingRows("projection_public_anchor_mismatch_repair_v1"))[0]?.value;
+    expect(typeof round === "string" ? (JSON.parse(round) as unknown) : round).toMatchObject({
+      cursor: "interrupted-2",
+      phase: "scanning",
+      queued: 1,
+    });
+    expect((await db.execute(`select subject_id from repair_log`)).rows).toHaveLength(1);
+
+    expect(await repairUntilComplete(flaky, 30)).toBe(true);
+    expect(
+      (await db.execute(`select subject_id from repair_log order by subject_id`)).rows.map(
+        (row) => row.subject_id,
+      ),
+    ).toEqual(["interrupted-1", "interrupted-4"]);
+    await expectPublishedAnchorsSettled("interrupted", 3);
+    warn.mockRestore();
+  });
+
+  it("raises one typed count mismatch per advance once a repaired walk still disagrees", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    await db.executeMultiple(`
+      insert into tracks (track_id, release_date) values
+        ('persistent-a', '2026-01-01'), ('persistent-b', '2026-01-01');
+      update public_aggregate_state set generation = 'persistent',
+        default_track_total = 3, release_hub_order_epoch = 1 where scope = 'tracks';
+    `);
+
+    let failure: unknown;
+    let advances = 0;
+    for (; advances < 20 && failure === undefined; advances += 1) {
+      try {
+        expect((await advancePublicAnchors(db, 2)).complete).toBe(false);
+      } catch (error) {
+        failure = error;
+      }
+    }
+    expect(advances).toBeGreaterThan(4);
+    expect(failure).toBeInstanceOf(PublicAnchorRebuildCountMismatchError);
+    expect(failure).toMatchObject({
+      generation: "persistent",
+      orderEpoch: 1,
+      processed: 2,
+      total: 3,
+    });
+    expect(
+      warn.mock.calls.map(([line]) => (JSON.parse(String(line)) as { repaired: boolean }).repaired),
+    ).toEqual([false, true]);
+
+    const persisted = await db.execute(`select key, value from settings
+      where key like 'projection_%public_anchor%' order by key`);
+    for (let repeat = 0; repeat < 2; repeat += 1) {
+      await expect(advancePublicAnchors(db, 2)).rejects.toBeInstanceOf(
+        PublicAnchorRebuildCountMismatchError,
+      );
+    }
+    expect(
+      (
+        await db.execute(`select key, value from settings
+          where key like 'projection_%public_anchor%' order by key`)
+      ).rows,
+    ).toEqual(persisted.rows);
+    expect(warn).toHaveBeenCalledTimes(2);
+    expect((await db.execute(`select 1 from projection_repairs`)).rows).toHaveLength(0);
+    warn.mockRestore();
+  });
+
+  it("ignores and clears a mismatch round left by an older generation", async () => {
+    await db.executeMultiple(`
+      insert into tracks (track_id, release_date) values
+        ('fresh-a', '2026-01-01'), ('fresh-b', '2026-01-01');
+      update public_aggregate_state set generation = 'fresh',
+        default_track_total = 2, release_hub_order_epoch = 1 where scope = 'tracks';
+    `);
+    await db.execute({
+      args: [
+        "projection_public_anchor_mismatch_repair_v1",
+        JSON.stringify({
+          cursor: "stale-cursor",
+          generation: "older",
+          orderEpoch: 1,
+          phase: "persistent",
+          processed: 7,
+          queued: 0,
+          repaired: true,
+          version: 1,
+        }),
+      ],
+      sql: `insert into settings (key, value) values (?, ?)`,
+    });
+
+    let complete = false;
+    for (let step = 0; step < 10 && !complete; step += 1) {
+      complete = (await advancePublicAnchors(db, 10)).complete;
+    }
+
+    expect(complete).toBe(true);
+    expect(
+      (
+        await db.execute(`select generation from hub_page_anchor_validity
+          where hub = '${TRACKS_HUB_ANCHOR_ADDRESS.hub}'`)
+      ).rows[0]?.generation,
+    ).toBe("fresh");
+    expect(await settingRows("projection_public_anchor_mismatch_repair_v1")).toHaveLength(0);
+    expect((await db.execute(`select 1 from projection_repairs`)).rows).toHaveLength(0);
   });
 
   it("persists anchor audit phase and absolute position across the NULL boundary", async () => {
