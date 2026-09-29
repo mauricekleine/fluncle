@@ -261,16 +261,25 @@ BAKED_PATHS_FALLBACK=(
 	.agents/skills
 	packages/skills
 	apps/cli/assets/fonts
+	apps/web/src/lib
+	apps/web/scripts
 )
 BAKED_PATHS=()
 
 derive_baked_paths() {
 	awk '
-    toupper($1) == "COPY" {
-      if ($0 ~ /--from=/) next
-      n = 0
-      for (i = 2; i <= NF; i++) if ($i !~ /^--/) tok[++n] = $i
-      for (i = 1; i < n; i++) { sub(/\/+$/, "", tok[i]); print tok[i] }
+    /^[ \t]*#/ { next }
+    {
+      if (sub(/\\[ \t]*$/, "")) { pending = pending $0 " "; next }
+      stmt = pending $0
+      pending = ""
+      n = split(stmt, f, /[ \t]+/)
+      k = 0
+      for (i = 1; i <= n; i++) if (f[i] != "") tok[++k] = f[i]
+      if (k == 0 || toupper(tok[1]) != "COPY" || stmt ~ /--from=/) next
+      m = 0
+      for (i = 2; i <= k; i++) if (tok[i] !~ /^--/) src[++m] = tok[i]
+      for (i = 1; i < m; i++) { sub(/\/+$/, "", src[i]); print src[i] }
     }
   ' "$REPO_DIR/$DOCKERFILE" | LC_ALL=C sort -u
 }
