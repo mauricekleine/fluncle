@@ -70,6 +70,20 @@ rel() {
 	printf '%s\n' "${1#"${REPO_DIR}/"}"
 }
 
+unit_key() {
+	sed -n "s/^${2}=//p" "$1" | head -n 1
+}
+
+baked_capability_probe() {
+	local baked_path="$1" marker="$2" count
+	count="$(docker exec hermes grep -cF -- "$marker" "$baked_path" 2>/dev/null)" || true
+	case "$count" in
+	'' | *[!0-9]*) printf 'unavailable\n' ;;
+	0) printf 'absent\n' ;;
+	*) printf 'present\n' ;;
+	esac
+}
+
 contains() {
 	local needle="$1" item
 	shift
@@ -235,9 +249,45 @@ else
 	done
 fi
 
+install_sources=()
+held_back=()
+probe_unavailable=()
 for unit in "${unit_files[@]}"; do
+	source_file="$unit"
+	capability=""
 	case "$unit" in
-	*.service) ;;
+	*.service) capability="$(unit_key "$unit" X-Fluncle-Baked-Capability)" ;;
+	esac
+	if [ -n "$capability" ]; then
+		baked_path="${capability%% *}"
+		marker="${capability#* }"
+		fallback_name="$(unit_key "$unit" X-Fluncle-Capability-Fallback)"
+		fallback="$(dirname "$unit")/${fallback_name}"
+		if [ "$baked_path" = "$capability" ] || [ -z "$marker" ] || [ -z "$fallback_name" ] || [ ! -f "$fallback" ]; then
+			unresolved+=("$(rel "$unit"): X-Fluncle-Baked-Capability needs '<baked path> <marker>' and an existing X-Fluncle-Capability-Fallback")
+		elif [ "$dry_run" -eq 1 ]; then
+			plan "capability-gate $(rel "$unit") needs ${marker} in ${baked_path}, else $(rel "$fallback")"
+		else
+			case "$(baked_capability_probe "$baked_path" "$marker")" in
+			present) ;;
+			absent)
+				source_file="$fallback"
+				held_back+=("$(basename "$unit") (baked ${baked_path} lacks ${marker}; installed $(rel "$fallback"))")
+				;;
+			*)
+				source_file=""
+				probe_unavailable+=("$(basename "$unit") (could not read ${baked_path} in the hermes container; the installed unit is left unchanged)")
+				;;
+			esac
+		fi
+	fi
+	install_sources+=("$source_file")
+done
+
+for unit in "${install_sources[@]}"; do
+	case "$unit" in
+	'') continue ;;
+	*.service | *.service.*) ;;
 	*) continue ;;
 	esac
 	dir="$(dirname "$unit")"
@@ -360,9 +410,18 @@ if [ "$dry_run" -eq 1 ]; then
 	exit 0
 fi
 
-for unit in "${unit_files[@]}"; do
-	install -m 0644 "$unit" "${DEST}/"
+for index in "${!unit_files[@]}"; do
+	[ -n "${install_sources[$index]}" ] || continue
+	install -m 0644 "${install_sources[$index]}" "${DEST}/$(basename "${unit_files[$index]}")"
 done
+
+report_probe_unavailable() {
+	if [ "${#probe_unavailable[@]}" -ne 0 ]; then
+		echo "install-host-timers.sh: capability probe unavailable, left unchanged (rerun once the hermes container is up):" >&2
+		printf '  - %s\n' "${probe_unavailable[@]}" >&2
+		exit 1
+	fi
+}
 
 for pair in ${host_pairs[@]+"${host_pairs[@]}"}; do
 	install -D -m 0755 "${pair%%|*}" "${pair##*|}"
@@ -383,6 +442,10 @@ if [ "$refresh_mode" -eq 1 ]; then
 		printf '  host script: %s\n' "${host_pairs[@]//|/ -> }"
 	fi
 	printf '  refreshed: %s\n' "${unit_files[@]/#${REPO_DIR}\//}"
+	if [ "${#held_back[@]}" -ne 0 ]; then
+		printf '  held on fallback (rerun after the image rebake): %s\n' "${held_back[@]}"
+	fi
+	report_probe_unavailable
 	exit 0
 fi
 
@@ -408,6 +471,9 @@ if [ "${#host_pairs[@]}" -ne 0 ]; then
 	printf '  host script: %s\n' "${host_pairs[@]//|/ -> }"
 fi
 printf '  enabled: %s\n' "${enabled[@]}"
+if [ "${#held_back[@]}" -ne 0 ]; then
+	printf '  held on fallback (rerun after the image rebake): %s\n' "${held_back[@]}"
+fi
 if [ "${#dormant_timers[@]}" -ne 0 ]; then
 	printf '  dormant (installed, verified disabled): %s\n' "${dormant_timers[@]}"
 fi
@@ -422,3 +488,4 @@ if [ "${#system_bins[@]}" -ne 0 ]; then
 fi
 echo
 systemctl list-timers 'fluncle-*' 'pin-watch*' --no-pager || true
+report_probe_unavailable

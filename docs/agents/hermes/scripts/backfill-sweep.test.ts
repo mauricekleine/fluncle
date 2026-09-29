@@ -27,6 +27,9 @@ case "$1" in
   not-json) printf 'plain text\\n' ;;
   admin)
     printf '%s\\n' "$*" >> ${JSON.stringify(callsFile)}
+    if [ -n "\${BACKFILL_TEST_TIMELINE:-}" ]; then
+      printf 'cli:%s:%s\\n' "$3" "$(cat "\${BACKFILL_TEST_LEASE}" 2>/dev/null || printf none)" >> "\${BACKFILL_TEST_TIMELINE}"
+    fi
     case "$3" in
       discogs) printf '{"ok":true,"resolvedCount":1,"unresolvedCount":2,"skippedCount":3,"rateLimited":true,"rateLimitedBy":"musicbrainz"}\\n' ;;
       lastfm) printf '{"ok":true,"lovedCount":4,"failedCount":0,"skippedCount":5,"rateLimited":false}\\n' ;;
@@ -272,6 +275,7 @@ async function runBackfillSweep(): Promise<Record<string, unknown>> {
     }),
     env: {
       DISCOGS_USER_TOKEN: "discogs-test-token",
+      FLUNCLE_ADMISSION_RUNNER_PID: "4242",
       FLUNCLE_API_BASE_URL: "https://worker.example",
       FLUNCLE_API_TOKEN: "agent-test-token",
     },
@@ -718,5 +722,561 @@ describe("the tick's legs", () => {
     });
     expect((summary.beatport as { resolved: number }).resolved).toBe(13);
     expect((summary["discogs-facts"] as { resolved: number }).resolved).toBe(17);
+  });
+});
+
+describe("phase-scoped database admission", () => {
+  const phaseEnvironmentKeys = [
+    "BACKFILL_TEST_LEASE",
+    "BACKFILL_TEST_TIMELINE",
+    "DATABASE_ADMISSION_RUNNER",
+    "FLUNCLE_ADMISSION_RUNNER_PID",
+    "FLUNCLE_API_BASE_URL",
+    "FLUNCLE_API_TOKEN",
+  ] as const;
+  const savedEnvironment = new Map<string, string | undefined>();
+  let phaseDir: string;
+  let timelineFile: string;
+  let leaseFile: string;
+  let beatportPagesFile: string;
+  let hangFile: string;
+  let server: ReturnType<typeof Bun.serve>;
+
+  const pageBodies: Record<string, Record<string, unknown>> = {
+    "apple-catalogue": {
+      albumFactsWritten: 12,
+      breakerTripped: true,
+      configured: true,
+      failedCount: 11,
+      rateLimited: true,
+      resolvedCount: 9,
+      unresolvedCount: 10,
+    },
+    "apple-music": {
+      configured: true,
+      failedCount: 0,
+      nextCursor: null,
+      rateLimited: false,
+      resolvedCount: 6,
+      skippedCount: 8,
+      unresolvedCount: 7,
+    },
+    beatport: {
+      catalogueFailedCount: 22,
+      catalogueResolvedCount: 20,
+      catalogueUnresolvedCount: 21,
+      configured: true,
+      failedCount: 15,
+      nextCursor: null,
+      resolvedCount: 13,
+      skippedCount: 16,
+      unresolvedCount: 14,
+    },
+    deezer: {
+      failedCount: 26,
+      rateLimited: false,
+      resolvedCount: 23,
+      unresolvedCount: 24,
+      unvouchableCount: 25,
+    },
+    lastfm: {
+      failedCount: 0,
+      lovedCount: 4,
+      nextCursor: null,
+      rateLimited: false,
+      skippedCount: 5,
+    },
+  };
+
+  beforeAll(() => {
+    phaseDir = mkdtempSync(join(tmpdir(), "fluncle-backfill-phase-"));
+    timelineFile = join(phaseDir, "timeline");
+    leaseFile = join(phaseDir, "lease");
+    beatportPagesFile = join(phaseDir, "beatport-pages");
+    hangFile = join(phaseDir, "hang");
+    const countFile = join(phaseDir, "count");
+    const yieldAtFile = join(phaseDir, "yield-at");
+    const runner = join(phaseDir, "runner");
+    writeFileSync(
+      runner,
+      `#!/usr/bin/env bash
+set -uo pipefail
+[ "\${1:-}" = "phase" ] || exit 2
+owner="$2"
+shift 2
+[ "\${1:-}" = "--" ] && shift
+count=$(( $(cat ${JSON.stringify(countFile)} 2>/dev/null || printf 0) + 1 ))
+printf '%s' "$count" > ${JSON.stringify(countFile)}
+if [ "$count" = "$(cat ${JSON.stringify(yieldAtFile)} 2>/dev/null)" ]; then
+  printf 'yield:%s\\n' "$owner" >> ${JSON.stringify(timelineFile)}
+  printf '{"event":"database.admission.runner","outcome":"wait-expired","owner":"%s","phase_scoped":true,"yield_reason":"queue"}\\n' "$owner" >&2
+  exit 75
+fi
+printf 'acquire:%s\\n' "$owner" >> ${JSON.stringify(timelineFile)}
+printf held > ${JSON.stringify(leaseFile)}
+"$@" &
+payload=$!
+trap 'kill -TERM "$payload" 2>/dev/null; printf free > ${JSON.stringify(leaseFile)}; printf "release:%s\\n" "$owner" >> ${JSON.stringify(timelineFile)}; exit 143' TERM
+wait "$payload"
+status=$?
+printf free > ${JSON.stringify(leaseFile)}
+printf 'release:%s\\n' "$owner" >> ${JSON.stringify(timelineFile)}
+exit "$status"
+`,
+    );
+    chmodSync(runner, 0o755);
+    const lease = () => (existsSync(leaseFile) ? readFileSync(leaseFile, "utf8") : "none");
+    server = Bun.serve({
+      async fetch(request) {
+        const url = new URL(request.url);
+        const operation = url.pathname.slice("/api/v1/admin/backfill/".length);
+        const body = await request.text();
+
+        if (request.headers.get("Authorization") !== "Bearer agent-test-token") {
+          appendFileSync(timelineFile, `unauthorized:${operation}\n`);
+          return Response.json({ error: "unauthorized" }, { status: 401 });
+        }
+
+        if (operation === "discogs" || operation === "discogs-facts") {
+          const stage = body === "" ? "prepare" : "decide";
+          appendFileSync(timelineFile, `worker:${operation}:${stage}:${lease()}\n`);
+
+          if (operation === "discogs-facts") {
+            return stage === "prepare"
+              ? Response.json({
+                  configured: true,
+                  discogsWork: [{ releaseId: 7, slug: "album" }],
+                  ok: true,
+                  rateLimited: false,
+                })
+              : Response.json({
+                  configured: true,
+                  failedCount: 0,
+                  noneCount: 18,
+                  ok: true,
+                  rateLimited: false,
+                  resolvedCount: 17,
+                });
+          }
+
+          return stage === "prepare"
+            ? Response.json({
+                discogsWork: [{ queries: ["track=Tune&type=release"], trackId: "trk_1" }],
+                ok: true,
+                rateLimited: false,
+              })
+            : Response.json({
+                ok: true,
+                rateLimited: false,
+                resolvedCount: 1,
+                skippedCount: 3,
+                unresolvedCount: 2,
+              });
+        }
+
+        const cursor = url.searchParams.get("cursor");
+        appendFileSync(
+          timelineFile,
+          `worker:${operation}:limit=${url.searchParams.get("limit")}${cursor === null ? "" : `:cursor=${cursor}`}:${lease()}\n`,
+        );
+
+        if (operation === "lastfm" && existsSync(hangFile)) {
+          await Bun.sleep(5_000);
+        }
+
+        if (operation === "beatport" && existsSync(beatportPagesFile)) {
+          const page = Number(cursor ?? "0") + 1;
+          return Response.json({
+            configured: true,
+            failedCount: 0,
+            nextCursor: page < 8 ? String(page) : null,
+            resolvedCount: 1,
+            skippedCount: 0,
+            unresolvedCount: 1,
+          });
+        }
+
+        return Response.json(pageBodies[operation] ?? {});
+      },
+      port: 0,
+    });
+
+    for (const key of phaseEnvironmentKeys) {
+      savedEnvironment.set(key, process.env[key]);
+    }
+    process.env.BACKFILL_TEST_LEASE = leaseFile;
+    process.env.BACKFILL_TEST_TIMELINE = timelineFile;
+    process.env.DATABASE_ADMISSION_RUNNER = runner;
+    process.env.FLUNCLE_API_BASE_URL = server.url.origin;
+    process.env.FLUNCLE_API_TOKEN = "agent-test-token";
+    delete process.env.FLUNCLE_ADMISSION_RUNNER_PID;
+  });
+
+  afterEach(() => {
+    for (const name of ["count", "yield-at", "timeline", "lease", "beatport-pages", "hang"]) {
+      rmSync(join(phaseDir, name), { force: true });
+    }
+  });
+
+  afterAll(async () => {
+    await server.stop(true);
+    for (const [key, value] of savedEnvironment) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+    rmSync(phaseDir, { force: true, recursive: true });
+  });
+
+  function timeline(): string[] {
+    return existsSync(timelineFile)
+      ? readFileSync(timelineFile, "utf8").trim().split("\n").filter(Boolean)
+      : [];
+  }
+
+  const roomyBudget = { deadlineMs: 600_000, discogsFetchAllowanceMs: 60_000, phaseWorstMs: 1 };
+
+  function sweep(
+    options: {
+      budget?: import("./backfill-sweep").BackfillBudget;
+      inheritedRunner?: string;
+      now?: () => number;
+    } = {},
+  ) {
+    const lease = () => (existsSync(leaseFile) ? readFileSync(leaseFile, "utf8") : "none");
+    const fetched = (operation: string) => {
+      appendFileSync(timelineFile, `discogs-fetch:${operation}:${lease()}\n`);
+    };
+
+    return runBackfillSweepImpl({
+      budget: options.budget ?? roomyBudget,
+      createFetcher: () => ({
+        fetchFactsCandidates: async () => {
+          fetched("discogs-facts");
+          return {
+            candidates: [
+              {
+                release: { artists: [], formats: [], id: 7, labels: [], styles: [], tracklist: [] },
+                slug: "album",
+              },
+            ],
+            ok: true,
+            rateLimited: false,
+          };
+        },
+        fetchReleaseCandidates: async () => {
+          fetched("discogs");
+          return { candidates: [{ releases: [], trackId: "trk_1" }], ok: true, rateLimited: false };
+        },
+      }),
+      env: {
+        DISCOGS_USER_TOKEN: "discogs-test-token",
+        FLUNCLE_ADMISSION_RUNNER_PID: options.inheritedRunner,
+        FLUNCLE_API_BASE_URL: server.url.origin,
+        FLUNCLE_API_TOKEN: "agent-test-token",
+      },
+      now: options.now,
+    });
+  }
+
+  const laterLegs = [
+    "lastfm",
+    "apple-music",
+    "apple-catalogue",
+    "beatport",
+    "discogs-facts",
+    "deezer",
+  ];
+
+  function assertEveryRequestHasItsOwnLease(events: string[]): void {
+    let held = false;
+    let requestsInLease = 0;
+
+    for (const event of events) {
+      if (event.startsWith("acquire:")) {
+        expect(held).toBe(false);
+        held = true;
+        requestsInLease = 0;
+      } else if (event.startsWith("release:")) {
+        expect(held).toBe(true);
+        expect(requestsInLease).toBe(1);
+        held = false;
+      } else if (event.startsWith("worker:")) {
+        expect(held, event).toBe(true);
+        expect(event.endsWith(":held"), event).toBe(true);
+        requestsInLease += 1;
+      }
+    }
+
+    expect(held).toBe(false);
+  }
+
+  test("under the direct unit every Worker request takes its own admitted phase, nine in all", async () => {
+    const summary = await sweep();
+    const events = timeline();
+
+    expect(events.filter((event) => event === "acquire:fluncle-backfill")).toHaveLength(9);
+    expect(events.filter((event) => event.startsWith("worker:"))).toEqual([
+      "worker:discogs:prepare:held",
+      "worker:discogs:decide:held",
+      "worker:lastfm:limit=3:held",
+      "worker:apple-music:limit=3:held",
+      "worker:apple-catalogue:limit=100:held",
+      "worker:beatport:limit=10:held",
+      "worker:discogs-facts:prepare:held",
+      "worker:discogs-facts:decide:held",
+      "worker:deezer:limit=25:held",
+    ]);
+    expect(events.some((event) => event.startsWith("cli:"))).toBe(false);
+    assertEveryRequestHasItsOwnLease(events);
+    expect(summary).toMatchObject({ admissionMode: "phased", errors: 0 });
+    expect(summary.discogs).toMatchObject({ resolved: 1, skipped: 3, unresolved: 2 });
+    expect(summary.lastfm).toMatchObject({ loved: 4, skipped: 5 });
+    expect(summary["apple-music"]).toMatchObject({ resolved: 6, skipped: 8, unresolved: 7 });
+    expect(summary["apple-catalogue"]).toMatchObject({
+      albumFacts: 12,
+      breakerTripped: true,
+      failed: 11,
+      resolved: 9,
+      throttled: true,
+    });
+    expect(summary.beatport).toMatchObject({
+      catalogueFailed: 22,
+      catalogueResolved: 20,
+      failed: 37,
+      resolved: 13,
+    });
+    expect(summary["discogs-facts"]).toMatchObject({ none: 18, resolved: 17 });
+    expect(summary.deezer).toMatchObject({ failed: 26, resolved: 23, unvouchable: 25 });
+  });
+
+  test("a paginating leg takes one phase per Worker page and follows the cursor to its limit", async () => {
+    writeFileSync(beatportPagesFile, "1");
+
+    const summary = await sweep();
+    const events = timeline();
+    const beatportPages = events.filter((event) => event.startsWith("worker:beatport:"));
+
+    expect(beatportPages).toEqual([
+      "worker:beatport:limit=10:held",
+      "worker:beatport:limit=8:cursor=1:held",
+      "worker:beatport:limit=6:cursor=2:held",
+      "worker:beatport:limit=4:cursor=3:held",
+      "worker:beatport:limit=2:cursor=4:held",
+    ]);
+    assertEveryRequestHasItsOwnLease(events);
+    expect(summary.beatport).toMatchObject({ resolved: 5, unresolved: 5 });
+  });
+
+  test("no lease is held across the box's Discogs reads", async () => {
+    await sweep();
+    const events = timeline();
+
+    for (const operation of ["discogs", "discogs-facts"]) {
+      const fetchIndex = events.indexOf(`discogs-fetch:${operation}:free`);
+      expect(fetchIndex).toBeGreaterThan(1);
+      expect(events[fetchIndex - 2]).toBe(`worker:${operation}:prepare:held`);
+      expect(events[fetchIndex - 1]).toBe("release:fluncle-backfill");
+      expect(events[fetchIndex + 1]).toBe("acquire:fluncle-backfill");
+      expect(events[fetchIndex + 2]).toBe(`worker:${operation}:decide:held`);
+    }
+  });
+
+  test("under the previous whole-lifetime unit the inherited lease covers every leg through the CLI with no nested acquisition", async () => {
+    writeFileSync(leaseFile, "inherited");
+
+    const summary = await sweep({ inheritedRunner: "4242" });
+
+    expect(timeline()).toEqual([
+      "worker:discogs:prepare:inherited",
+      "discogs-fetch:discogs:inherited",
+      "worker:discogs:decide:inherited",
+      "cli:lastfm:inherited",
+      "cli:apple-music:inherited",
+      "cli:apple-catalogue:inherited",
+      "cli:beatport:inherited",
+      "worker:discogs-facts:prepare:inherited",
+      "discogs-fetch:discogs-facts:inherited",
+      "worker:discogs-facts:decide:inherited",
+      "cli:deezer:inherited",
+    ]);
+    expect(summary).toMatchObject({ admissionMode: "inherited-lease", errors: 0 });
+    expect(summary.deferredLegs).toBeUndefined();
+    expect((summary.deezer as { resolved: number }).resolved).toBe(23);
+  });
+
+  test("a yielded phase pauses the tick healthily, keeps earlier counts, and defers the rest", async () => {
+    writeFileSync(join(phaseDir, "yield-at"), "3");
+
+    const summary = await sweep();
+
+    expect(timeline()).toContain("yield:fluncle-backfill");
+    expect(timeline().some((event) => event.startsWith("worker:lastfm"))).toBe(false);
+    expect(summary).toMatchObject({
+      admissionMode: "phased",
+      admissionOutcome: "phase-yielded",
+      admissionYieldReason: "queue",
+      deferredLegs: laterLegs,
+      errors: 0,
+      gateState: "paused",
+      ok: true,
+      produced: 1,
+      reason: "database_admission",
+      throttled: true,
+    });
+    expect(summary.discogs).toMatchObject({ resolved: 1 });
+  });
+
+  test("a yielded decide phase writes nothing, so the next prepare hands the same work out again", async () => {
+    writeFileSync(join(phaseDir, "yield-at"), "2");
+
+    const summary = await sweep();
+
+    expect(timeline()).toContain("discogs-fetch:discogs:free");
+    expect(timeline().some((event) => event.startsWith("worker:discogs:decide"))).toBe(false);
+    expect(summary).toMatchObject({ errors: 0, ok: true, reason: "database_admission" });
+    expect(summary.deferredLegs).toEqual(["discogs", ...laterLegs]);
+  });
+
+  test("a yield mid-pagination keeps the pages already written and defers the rest", async () => {
+    writeFileSync(beatportPagesFile, "1");
+    writeFileSync(join(phaseDir, "yield-at"), "8");
+
+    const summary = await sweep();
+
+    expect(timeline().filter((event) => event.startsWith("worker:beatport:"))).toHaveLength(2);
+    expect(summary.beatport).toMatchObject({ resolved: 2, unresolved: 2 });
+    expect(summary).toMatchObject({
+      deferredLegs: ["beatport", "discogs-facts", "deezer"],
+      errors: 0,
+      reason: "database_admission",
+    });
+  });
+
+  test("a phase whose worst-case queue and request would cross the deadline is never started", async () => {
+    const clock = [0, 0, 0, 0];
+    const summary = await sweep({
+      budget: { deadlineMs: 600_000, discogsFetchAllowanceMs: 60_000, phaseWorstMs: 250_000 },
+      now: () => clock.shift() ?? 400_000,
+    });
+
+    expect(timeline().filter((event) => event === "acquire:fluncle-backfill")).toHaveLength(2);
+    expect(summary).toMatchObject({
+      deferredLegs: laterLegs,
+      errors: 0,
+      gateState: "paused",
+      ok: true,
+      reason: "phase_budget",
+      throttled: true,
+    });
+  });
+
+  test("a Discogs leg needs room for both of its phases and the fetch before it prepares", async () => {
+    const summary = await sweep({
+      budget: { deadlineMs: 500_000, discogsFetchAllowanceMs: 60_000, phaseWorstMs: 250_000 },
+    });
+
+    expect(timeline()).toEqual([]);
+    expect(summary).toMatchObject({
+      deferredLegs: ["discogs", ...laterLegs],
+      ok: true,
+      reason: "phase_budget",
+    });
+  });
+
+  test("the hard deadline stops a stuck phase and still returns the summary well before the unit timeout", async () => {
+    writeFileSync(hangFile, "1");
+    const started = Date.now();
+
+    const summary = await sweep({
+      budget: { deadlineMs: 1_500, discogsFetchAllowanceMs: 0, phaseWorstMs: 1 },
+    });
+
+    expect(Date.now() - started).toBeLessThan(4_500);
+    expect(summary).toMatchObject({
+      deferredLegs: laterLegs,
+      gateState: "paused",
+      reason: "deadline",
+      throttled: true,
+    });
+    expect(summary.discogs).toMatchObject({ resolved: 1 });
+  });
+});
+
+describe("the admission phase child allowlist", () => {
+  let childDir: string;
+  let requests: string[];
+  let childServer: ReturnType<typeof Bun.serve>;
+
+  beforeAll(() => {
+    childDir = mkdtempSync(join(tmpdir(), "fluncle-backfill-child-"));
+    requests = [];
+    childServer = Bun.serve({
+      fetch(request) {
+        requests.push(new URL(request.url).pathname);
+        return Response.json({ ok: true });
+      },
+      port: 0,
+    });
+  });
+
+  afterAll(async () => {
+    await childServer.stop(true);
+    rmSync(childDir, { force: true, recursive: true });
+  });
+
+  async function child(state: unknown) {
+    const statePath = join(childDir, "state.json");
+    writeFileSync(statePath, JSON.stringify(state));
+    const { runBackfillPhaseChild } = await import("./backfill-sweep");
+
+    return runBackfillPhaseChild(statePath, {
+      FLUNCLE_API_BASE_URL: childServer.url.origin,
+      FLUNCLE_API_TOKEN: "agent-test-token",
+    });
+  }
+
+  test("each of the sweep's seven legs is allowed, with only its own query keys", async () => {
+    const base = childServer.url.origin;
+
+    for (const leg of [
+      "discogs",
+      "discogs-facts",
+      "lastfm",
+      "apple-music",
+      "apple-catalogue",
+      "beatport",
+      "deezer",
+    ]) {
+      expect(
+        await child({ url: `${base}/api/v1/admin/backfill/${leg}?dryRun=false&limit=3&cursor=c` }),
+      ).toMatchObject({ kind: "worker", status: 200 });
+    }
+    expect(
+      await child({ body: "{}", url: `${base}/api/v1/admin/backfill/discogs?boxFetch=true` }),
+    ).toMatchObject({ kind: "worker" });
+  });
+
+  test("any other backfill endpoint, origin, query key, or body is refused before a request", async () => {
+    const base = childServer.url.origin;
+    requests.length = 0;
+
+    for (const state of [
+      { url: `${base}/api/v1/admin/backfill/label-images` },
+      { url: `${base}/api/v1/admin/backfill/lastfm/extra` },
+      { url: `${base}/api/v1/admin/tracks/work` },
+      { url: "https://elsewhere.example/api/v1/admin/backfill/lastfm" },
+      { url: `${base}/api/v1/admin/backfill/lastfm?dryRun=false&force=true` },
+      { body: "{}", url: `${base}/api/v1/admin/backfill/lastfm` },
+      { args: ["admin", "backfills", "lastfm"], kind: "cli" },
+    ]) {
+      expect(await child(state)).toEqual({
+        error: "invalid backfill admission phase request",
+        kind: "failed",
+      });
+    }
+    expect(requests).toEqual([]);
   });
 });
