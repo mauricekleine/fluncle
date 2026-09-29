@@ -1,17 +1,22 @@
-import { createClient } from "@libsql/client";
+import { type Client, createClient } from "@libsql/client";
 import { LOCAL_DB_CONCURRENCY } from "../database-concurrency";
+import { ensureSearchIndex } from "../../db/search-index";
 import { describe, expect, it } from "vitest";
 
-import { type DumpManifest, type DumpTable, type SchemaObject } from "./db-dump";
+import { type DumpManifest, type DumpTable, type SchemaObject, type SqlValue } from "./db-dump";
 
 import {
   buildDumpSql,
   chooseAnchor,
+  DUMP_SCHEMA_SQL,
   quoteIdent,
   selectExpiredBackupKeys,
+  splitSqlStatements,
   spotCell,
   sqlLiteral,
+  stripSearchIndex,
   verifyManifest,
+  withoutSearchIndexTables,
 } from "./db-dump";
 
 describe("sqlLiteral", () => {
@@ -313,5 +318,127 @@ describe("dump/restore round trip", () => {
       tables: { ...actual.tables, tracks: Number(tampered.rows[0]?.c) },
     });
     expect(failing.ok).toBe(false);
+  });
+});
+
+describe("splitSqlStatements", () => {
+  it("splits at statement ends only, and rejoins to the exact input", () => {
+    const sql = [
+      "-- header; not a statement end",
+      "PRAGMA foreign_keys=OFF;",
+      "INSERT INTO \"t\" (\"a\") VALUES ('semi; colon', 'it''s', 'line one",
+      "line two;');",
+      '/* block; comment */ INSERT INTO [odd;name] VALUES ("q;q", `b;t`);',
+      "CREATE TRIGGER tr AFTER INSERT ON t BEGIN",
+      "  INSERT INTO u VALUES (1);",
+      "  DELETE FROM u WHERE a = 'END;';",
+      "END;",
+      "COMMIT;",
+      "",
+    ].join("\n");
+    const statements = splitSqlStatements(sql);
+
+    expect(statements.join("")).toBe(sql);
+    expect(
+      statements.map((statement) => statement.trim().split(/\s+/).slice(0, 2).join(" ")),
+    ).toEqual(["-- header;", "INSERT INTO", "/* block;", "CREATE TRIGGER", "COMMIT;"]);
+  });
+});
+
+async function searchIndexedSource(): Promise<Client> {
+  const source = createClient({ concurrency: LOCAL_DB_CONCURRENCY, url: ":memory:" });
+
+  await source.execute(
+    "CREATE TABLE tracks (track_id TEXT PRIMARY KEY, title TEXT, artists_json TEXT, album TEXT, label TEXT)",
+  );
+  await ensureSearchIndex(source);
+
+  for (const [id, title] of [
+    ["a1", "Valley; of the Shadow"],
+    ["b2", "tracks_fts\nINSERT INTO tracks_fts VALUES ('x');"],
+    ["c3", "Don't Stop"],
+  ] as const) {
+    await source.execute({
+      args: [id, title, '["Artist"]', "Album", "Label"],
+      sql: "INSERT INTO tracks VALUES (?, ?, ?, ?, ?)",
+    });
+  }
+
+  return source;
+}
+
+async function dumpWith(source: Client, schemaSql: string): Promise<string> {
+  const schema = (await source.execute(schemaSql)).rows.map((row) => ({
+    name: row.name as string,
+    sql: row.sql as string,
+    type: row.type as string,
+  }));
+  const tables: DumpTable[] = [];
+
+  for (const object of schema.filter((candidate) => candidate.type === "table")) {
+    const result = await source.execute(`SELECT * FROM ${quoteIdent(object.name)}`);
+
+    tables.push({
+      columns: result.columns,
+      name: object.name,
+      rows: result.rows.map((row) => Array.from(row) as SqlValue[]),
+    });
+  }
+
+  return buildDumpSql(schema, tables);
+}
+
+const LEGACY_SCHEMA_SQL = DUMP_SCHEMA_SQL.replace("AND name NOT LIKE 'tracks_fts%'", "");
+
+describe("the derived search index in a dump", () => {
+  it("DUMP_SCHEMA_SQL leaves the search table, its shadow tables and its triggers out", async () => {
+    const source = await searchIndexedSource();
+    const names = (await source.execute(DUMP_SCHEMA_SQL)).rows.map((row) => row.name as string);
+
+    expect(names).toEqual(["tracks"]);
+    expect(LEGACY_SCHEMA_SQL).not.toBe(DUMP_SCHEMA_SQL);
+  });
+
+  it("a dump carrying the search index cannot restore until it is stripped, then rebuilds", async () => {
+    const source = await searchIndexedSource();
+    const legacy = await dumpWith(source, LEGACY_SCHEMA_SQL);
+    const failing = createClient({ concurrency: LOCAL_DB_CONCURRENCY, url: ":memory:" });
+
+    await expect(failing.executeMultiple(legacy)).rejects.toThrow(/already exists/);
+
+    const { dropped, sql } = stripSearchIndex(legacy);
+    const restored = createClient({ concurrency: LOCAL_DB_CONCURRENCY, url: ":memory:" });
+
+    await restored.executeMultiple(sql);
+
+    expect(dropped).toBeGreaterThan(8);
+    expect(sql).toBe(await dumpWith(source, DUMP_SCHEMA_SQL));
+
+    await ensureSearchIndex(restored);
+
+    const titles = await restored.execute(
+      "SELECT title FROM tracks WHERE rowid IN (SELECT rowid FROM tracks_fts WHERE tracks_fts MATCH 'valley')",
+    );
+
+    expect(titles.rows.map((row) => row.title)).toEqual(["Valley; of the Shadow"]);
+    expect(
+      (await restored.execute("SELECT title FROM tracks WHERE track_id = 'b2'")).rows[0]?.title,
+    ).toBe("tracks_fts\nINSERT INTO tracks_fts VALUES ('x');");
+  });
+
+  it("a current dump passes through the strip unchanged", async () => {
+    const current = await dumpWith(await searchIndexedSource(), DUMP_SCHEMA_SQL);
+
+    expect(stripSearchIndex(current)).toEqual({ dropped: 0, sql: current });
+  });
+
+  it("a manifest from before the exclusion is checked without its search tables", () => {
+    expect(
+      withoutSearchIndexTables({
+        spot: null,
+        tableCount: 4,
+        tables: { tracks: 3, tracks_fts: 3, tracks_fts_config: 1, tracks_fts_data: 2 },
+      }),
+    ).toEqual({ spot: null, tableCount: 1, tables: { tracks: 3 } });
   });
 });

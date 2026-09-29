@@ -25,7 +25,20 @@ Now rows are paged out of libSQL a batch at a time (`FLUNCLE_BACKUP_ROW_BATCH`, 
 
 **AUTOINCREMENT heads survive.** After the rows, the dump writes each dumped table's `sqlite_sequence` head, so a restored `artifact_changes` resumes numbering where production did even after compaction deleted its newest rows.
 
+**The search index is not in the dump.** `tracks_fts`, its FTS5 shadow tables, and its three triggers are derived from `tracks` ([docs/search.md](../../../search.md)), so the schema query (`DUMP_SCHEMA_SQL` in `db-dump.ts`, shared with `db:pull-prod`) leaves every object named `tracks_fts%` out. Replaying them cannot work anyway: `CREATE VIRTUAL TABLE tracks_fts` creates its shadow tables itself, so the dump's own `CREATE TABLE 'tracks_fts_config'` stops the restore with "already exists". Older dumps still carry them; the restore drill strips them (see below), so every retained backup restores.
+
 The dump FORMAT is byte-for-byte enforced: `backup-sweep.test.ts` imports the real `buildDumpSql` from `apps/web/src/lib/server/db-dump.ts` and asserts equality with the streamed output, both from fixtures and from a real SQLite database holding every primary-key shape, so a drift on either side goes red.
+
+### The restore drill, and restoring for real
+
+`apps/web/scripts/restore-drill.ts` loads a dump into a scratch database, checks every table's row count and the spot check against the manifest, rebuilds the search index with `ensureSearchIndex`, and checks that it indexed every track. Before loading, it drops any `tracks_fts` statement an older dump still carries, splitting the dump into whole statements so a trigger body or a quoted value that mentions `tracks_fts` is never cut, and it ignores those tables in the old manifest.
+
+```bash
+bun run --cwd apps/web db:restore-drill <fluncle.sql.gz> [manifest.json]
+bun run --cwd apps/web db:restore-drill <fluncle.sql.gz> --keep <restored.db>   # keep the verified database
+```
+
+A real restore is the drill with `--keep`: the kept file is a complete SQLite database that passed the manifest check and carries a rebuilt search index. Load it into a new Turso database with `turso db create <name> --from-file <restored.db>`, point the app at it, and run `db:migrate`. A dump written before the keyset change (#1561) carries no `sqlite_sequence` head, so a restored `artifact_changes` can resume numbering below production's last value; re-register its consumers after such a restore.
 
 **Leg 1 needs temp disk** for the gzip artifact (`FLUNCLE_BACKUP_TMPDIR`, default the system temp dir) — currently ~90 MB. The `/status` `disk` probe already degrades past ~85% full, which is the early warning.
 
