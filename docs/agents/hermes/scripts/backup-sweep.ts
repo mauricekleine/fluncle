@@ -16,6 +16,17 @@ import {
   boxStateKeyFromEnv,
   selectBoxStatePaths,
 } from "./box-state-snapshot";
+import {
+  isWithoutRowid,
+  keysetPageSql,
+  PRIMARY_KEY_COLUMNS_SQL,
+  quoteIdent,
+  type SchemaObject,
+  type SequenceHead,
+  sequenceHeadStatements,
+  sqlLiteral,
+  type SqlValue,
+} from "./db-dump";
 
 function argValue(flag: string): string | undefined {
   const index = process.argv.indexOf(flag);
@@ -77,40 +88,6 @@ export const BOXSTATE_ARTIFACT_NAME = "box-state.tar.gz.enc";
 export const MANIFEST_NAME = "manifest.json";
 
 const log = (message: string) => console.error(`[backup-sweep] ${message}`);
-
-type SqlValue = ArrayBuffer | ArrayBufferView | bigint | boolean | number | string | null;
-type SchemaObject = { name: string; sql: string; type: string };
-
-export function quoteIdent(name: string): string {
-  return `"${name.replace(/"/g, '""')}"`;
-}
-
-export function sqlLiteral(value: SqlValue): string {
-  if (value === null || value === undefined) {
-    return "NULL";
-  }
-  if (typeof value === "number") {
-    return Number.isFinite(value) ? String(value) : "NULL";
-  }
-  if (typeof value === "bigint") {
-    return value.toString();
-  }
-  if (typeof value === "boolean") {
-    return value ? "1" : "0";
-  }
-  if (value instanceof ArrayBuffer || ArrayBuffer.isView(value)) {
-    const bytes =
-      value instanceof ArrayBuffer
-        ? new Uint8Array(value)
-        : new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
-    let hex = "";
-    for (const byte of bytes) {
-      hex += byte.toString(16).padStart(2, "0");
-    }
-    return `X'${hex}'`;
-  }
-  return `'${value.replace(/'/g, "''")}'`;
-}
 
 export function chooseAnchor(
   candidates: readonly { firstColumn: string; name: string; rowCount: number }[],
@@ -284,6 +261,31 @@ export async function signS3Request(options: {
 
 type HranaCell = { base64?: string; type: string; value?: unknown };
 
+function encodeArg(value: SqlValue): HranaCell {
+  if (value === null || value === undefined) {
+    return { type: "null" };
+  }
+  if (typeof value === "bigint") {
+    return { type: "integer", value: value.toString() };
+  }
+  if (typeof value === "boolean") {
+    return { type: "integer", value: value ? "1" : "0" };
+  }
+  if (typeof value === "number") {
+    return Number.isInteger(value)
+      ? { type: "integer", value: String(value) }
+      : { type: "float", value };
+  }
+  if (typeof value === "string") {
+    return { type: "text", value };
+  }
+  const bytes =
+    value instanceof ArrayBuffer
+      ? new Uint8Array(value)
+      : new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+  return { base64: Buffer.from(bytes).toString("base64"), type: "blob" };
+}
+
 function decodeCell(cell: HranaCell): SqlValue {
   switch (cell.type) {
     case "null":
@@ -299,21 +301,42 @@ function decodeCell(cell: HranaCell): SqlValue {
   }
 }
 
+function textCell(cell: HranaCell | undefined, what: string): string {
+  const value = cell ? decodeCell(cell) : null;
+  if (typeof value !== "string") {
+    throw new Error(`expected text for ${what}, got ${typeof value}`);
+  }
+  return value;
+}
+
 type HranaResult = { cols: { name: string }[]; rows: HranaCell[][] };
 
-async function pipeline(sqls: string[]): Promise<HranaResult[]> {
-  const base = TURSO_URL.replace(/^libsql:\/\//, "https://").replace(/\/$/, "");
+export type LibsqlConnection = { token: string; url: string };
+
+type Statement = string | { args: SqlValue[]; sql: string };
+
+async function pipeline(
+  connection: LibsqlConnection,
+  statements: Statement[],
+): Promise<HranaResult[]> {
+  const base = connection.url.replace(/^libsql:\/\//, "https://").replace(/\/$/, "");
   const res = await fetch(`${base}/v2/pipeline`, {
     body: JSON.stringify({
       requests: [
-        ...sqls.map((sql) => ({ stmt: { sql }, type: "execute" as const })),
+        ...statements.map((statement) => ({
+          stmt:
+            typeof statement === "string"
+              ? { sql: statement }
+              : { args: statement.args.map(encodeArg), sql: statement.sql },
+          type: "execute" as const,
+        })),
         { type: "close" as const },
       ],
     }),
     headers: {
       "Content-Type": "application/json",
-      ...(TURSO_TOKEN && TURSO_TOKEN !== "local-dev"
-        ? { Authorization: `Bearer ${TURSO_TOKEN}` }
+      ...(connection.token && connection.token !== "local-dev"
+        ? { Authorization: `Bearer ${connection.token}` }
         : {}),
     },
     method: "POST",
@@ -324,14 +347,16 @@ async function pipeline(sqls: string[]): Promise<HranaResult[]> {
   const data = (await res.json()) as {
     results: { error?: { message?: string }; response?: { result?: HranaResult }; type: string }[];
   };
-  return data.results
-    .filter((r) => r.type === "ok" && r.response?.result)
-    .map((r) => {
-      if (r.type === "error") {
-        throw new Error(`libSQL statement error: ${r.error?.message ?? "unknown"}`);
-      }
-      return r.response?.result as HranaResult;
-    });
+  const results: HranaResult[] = [];
+  for (const r of data.results) {
+    if (r.type === "error") {
+      throw new Error(`libSQL statement error: ${r.error?.message ?? "unknown"}`);
+    }
+    if (r.type === "ok" && r.response?.result) {
+      results.push(r.response.result);
+    }
+  }
+  return results;
 }
 
 export function encodeKey(key: string): string {
@@ -478,14 +503,14 @@ export type DumpManifest = {
   tables: Record<string, number>;
 };
 
+export type DumpPage = { columns: string[]; cursor: SqlValue[] | null; rows: SqlValue[][] };
+
 export type DumpSource = {
   fetchSchema: () => Promise<SchemaObject[]>;
 
-  fetchPage: (
-    table: string,
-    limit: number,
-    offset: number,
-  ) => Promise<{ columns: string[]; rows: SqlValue[][] } | null>;
+  fetchPage: (table: string, limit: number, after: SqlValue[] | null) => Promise<DumpPage | null>;
+
+  fetchSequences: (tables: readonly string[]) => Promise<SequenceHead[]>;
 
   fetchSpot: (
     table: string,
@@ -548,7 +573,7 @@ export async function streamDumpSql(
       continue;
     }
 
-    const first = await source.fetchPage(object.name, batchRows, 0);
+    const first = await source.fetchPage(object.name, batchRows, null);
 
     if (!first) {
       continue;
@@ -570,11 +595,11 @@ export async function streamDumpSql(
 
       rowCount += page.rows.length;
 
-      if (page.rows.length < batchRows) {
+      if (page.rows.length < batchRows || !page.cursor) {
         break;
       }
 
-      const next = await source.fetchPage(object.name, batchRows, rowCount);
+      const next = await source.fetchPage(object.name, batchRows, page.cursor);
 
       if (!next || next.rows.length === 0) {
         break;
@@ -589,6 +614,12 @@ export async function streamDumpSql(
       name: object.name,
       rowCount,
     });
+  }
+
+  for (const head of await source.fetchSequences(Object.keys(tableCounts))) {
+    for (const statement of sequenceHeadStatements(head)) {
+      await emit(statement);
+    }
   }
 
   for (const object of schema) {
@@ -666,25 +697,65 @@ export async function writeGzippedDump(
   };
 }
 
-function libsqlSource(): DumpSource {
+export function libsqlSource(
+  connection: LibsqlConnection = { token: TURSO_TOKEN, url: TURSO_URL },
+): DumpSource {
+  const schemaByName = new Map<string, SchemaObject>();
+  const keysByTable = new Map<string, string[]>();
+
+  const keyColumns = async (table: string): Promise<string[]> => {
+    const known = keysByTable.get(table);
+
+    if (known) {
+      return known;
+    }
+
+    const object = schemaByName.get(table);
+    let keys = ["rowid"];
+
+    if (object && isWithoutRowid(object)) {
+      const [result] = await pipeline(connection, [
+        { args: [table], sql: PRIMARY_KEY_COLUMNS_SQL },
+      ]);
+
+      if (!result || result.rows.length === 0) {
+        throw new Error(`WITHOUT ROWID table "${table}" reports no primary key columns`);
+      }
+
+      keys = result.rows.map((row) => textCell(row[0], "a primary key column name"));
+    }
+
+    keysByTable.set(table, keys);
+
+    return keys;
+  };
+
   return {
-    fetchPage: async (table, limit, offset) => {
-      const [result] = await pipeline([
-        `SELECT * FROM ${quoteIdent(table)} LIMIT ${Number(limit)} OFFSET ${Number(offset)}`,
+    fetchPage: async (table, limit, after) => {
+      const keys = await keyColumns(table);
+      const [result] = await pipeline(connection, [
+        {
+          args: [...(after ?? []), limit],
+          sql: keysetPageSql(table, keys, after !== null),
+        },
       ]);
 
       if (!result) {
         return null;
       }
 
+      const rows = result.rows.map((row) => row.map((cell) => decodeCell(cell)));
+      const last = rows.at(-1);
+
       return {
-        columns: result.cols.map((col) => col.name),
-        rows: result.rows.map((row) => row.map((cell) => decodeCell(cell))),
+        columns: result.cols.slice(keys.length).map((col) => col.name),
+        cursor: last ? last.slice(0, keys.length) : null,
+        rows: rows.map((row) => row.slice(keys.length)),
       };
     },
 
     fetchSchema: async () => {
-      const [schemaResult] = await pipeline([
+      const [schemaResult] = await pipeline(connection, [
         `SELECT type, name, sql FROM sqlite_master
      WHERE sql IS NOT NULL
        AND name NOT LIKE 'sqlite_%'
@@ -697,15 +768,51 @@ function libsqlSource(): DumpSource {
         throw new Error("no schema returned from libSQL");
       }
 
-      return schemaResult.rows.map((row) => ({
+      const schema = schemaResult.rows.map((row) => ({
         name: decodeCell(row[1] as HranaCell) as string,
         sql: decodeCell(row[2] as HranaCell) as string,
         type: decodeCell(row[0] as HranaCell) as string,
       }));
+
+      schemaByName.clear();
+      keysByTable.clear();
+
+      for (const object of schema) {
+        schemaByName.set(object.name, object);
+      }
+
+      return schema;
+    },
+
+    fetchSequences: async (tables) => {
+      const [present] = await pipeline(connection, [
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'sqlite_sequence'",
+      ]);
+
+      if (!present || present.rows.length === 0) {
+        return [];
+      }
+
+      const [result] = await pipeline(connection, [
+        "SELECT name, seq FROM sqlite_sequence ORDER BY name",
+      ]);
+
+      if (!result) {
+        throw new Error("sqlite_sequence is present but unreadable");
+      }
+
+      const dumped = new Set(tables);
+
+      return result.rows
+        .map((row) => ({
+          name: textCell(row[0], "a sequence name"),
+          seq: decodeCell(row[1] as HranaCell),
+        }))
+        .filter((head) => dumped.has(head.name));
     },
 
     fetchSpot: async (table, column) => {
-      const [result] = await pipeline([
+      const [result] = await pipeline(connection, [
         `SELECT count(*) AS c, min(${quoteIdent(column)}) AS mn, max(${quoteIdent(
           column,
         )}) AS mx FROM ${quoteIdent(table)}`,
