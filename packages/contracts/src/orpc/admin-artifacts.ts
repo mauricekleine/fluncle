@@ -150,6 +150,90 @@ export const ArtifactCompactionResultSchema = z.strictObject({
   reason: z.enum(["compacted", "empty", "no_safe_barrier"]),
 });
 
+const SonarSourceAfterSchema = z.string().min(1).max(1_024).optional();
+const SonarSourceLimitSchema = z.coerce.number().int().min(1).max(2_000).default(1_000);
+const SonarSourceIdsSchema = z
+  .array(z.string().min(1).max(1_024))
+  .min(1)
+  .max(200)
+  .refine((ids) => new Set(ids).size === ids.length);
+
+export const listSonarTrackDigests = oc
+  .route({
+    method: "GET",
+    operationId: "listSonarTrackDigests",
+    path: "/admin/sonar/source/tracks",
+    summary: "List source track digests and revisions",
+    tags: ["Admin"],
+  })
+  .input(z.strictObject({ after: SonarSourceAfterSchema, limit: SonarSourceLimitSchema }))
+  .output(
+    z.strictObject({
+      items: z.array(
+        z.strictObject({
+          payloadDigest: DigestSchema,
+          revision: SequenceSchema,
+          subjectId: z.string().min(1).max(1_024),
+        }),
+      ),
+      nextAfter: z.string().nullable(),
+      ok: z.literal(true),
+    }),
+  );
+
+export const listSonarTracks = oc
+  .route({
+    method: "POST",
+    operationId: "listSonarTracks",
+    path: "/admin/sonar/source/tracks/items",
+    summary: "Read selected source tracks",
+    tags: ["Admin"],
+  })
+  .input(z.strictObject({ subjectIds: SonarSourceIdsSchema }))
+  .output(
+    z.strictObject({
+      absentIds: z.array(z.string()),
+      items: z.array(ArtifactSnapshotItemSchema.extend({ revision: SequenceSchema })),
+      ok: z.literal(true),
+    }),
+  );
+
+export const listSonarCentroidDigests = oc
+  .route({
+    method: "GET",
+    operationId: "listSonarCentroidDigests",
+    path: "/admin/sonar/source/centroids",
+    summary: "List source artist centroid digests",
+    tags: ["Admin"],
+  })
+  .input(z.strictObject({ after: SonarSourceAfterSchema, limit: SonarSourceLimitSchema }))
+  .output(
+    z.strictObject({
+      items: z.array(z.strictObject({ artistId: z.string(), digest: DigestSchema })),
+      nextAfter: z.string().nullable(),
+      ok: z.literal(true),
+    }),
+  );
+
+export const listSonarCentroids = oc
+  .route({
+    method: "POST",
+    operationId: "listSonarCentroids",
+    path: "/admin/sonar/source/centroids/items",
+    summary: "Read selected artist centroids",
+    tags: ["Admin"],
+  })
+  .input(z.strictObject({ artistIds: SonarSourceIdsSchema }))
+  .output(
+    z.strictObject({
+      absentIds: z.array(z.string()),
+      items: z.array(
+        z.strictObject({ artistId: z.string(), blobBase64: z.string(), digest: DigestSchema }),
+      ),
+      ok: z.literal(true),
+    }),
+  );
+
 export type ArtifactCompactionResult = z.infer<typeof ArtifactCompactionResultSchema>;
 
 export const registerArtifactConsumer = oc
@@ -300,5 +384,9 @@ export const adminArtifactsContract = {
   inactivate_artifact_consumer: inactivateArtifactConsumer,
   list_artifact_changes: listArtifactChanges,
   list_artifact_snapshot: listArtifactSnapshot,
+  list_sonar_centroid_digests: listSonarCentroidDigests,
+  list_sonar_centroids: listSonarCentroids,
+  list_sonar_track_digests: listSonarTrackDigests,
+  list_sonar_tracks: listSonarTracks,
   register_artifact_consumer: registerArtifactConsumer,
 };

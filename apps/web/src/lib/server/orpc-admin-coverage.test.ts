@@ -120,6 +120,10 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
 
   "GET /admin/social/metrics": "get_social_metrics",
 
+  "GET /admin/sonar/source/centroids": "list_sonar_centroid_digests",
+
+  "GET /admin/sonar/source/tracks": "list_sonar_track_digests",
+
   "GET /admin/submissions": "list_submissions",
 
   "GET /admin/submissions/{submissionId}": "get_submission",
@@ -398,6 +402,10 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   "POST /admin/social/posts/capture": "capture_post_urls",
 
   "POST /admin/social/publish/advance": "advance_publish_queue",
+
+  "POST /admin/sonar/source/centroids/items": "list_sonar_centroids",
+
+  "POST /admin/sonar/source/tracks/items": "list_sonar_tracks",
 
   "POST /admin/submissions/{submissionId}/approve": "approve_submission",
 
