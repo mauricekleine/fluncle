@@ -4,6 +4,16 @@ import { join } from "node:path";
 import { classifyPaths, cloudflareExcludePatterns, triggersWorkerBuild } from "./classifier.mjs";
 
 describe("dependency-closure classifier", () => {
+  test("an empty change set fails closed unless the caller proves a comparison base", () => {
+    expect(classifyPaths([]).full).toBe(true);
+
+    const local = classifyPaths([], { emptyChangeSet: "pass" });
+    expect(local.full).toBe(false);
+    expect(local.packages).toEqual([]);
+    expect(local.lanes.e2e).toBe(false);
+    expect(local.lanes.static).toBe(false);
+  });
+
   test("a CLI-only change excludes web E2E and includes the CLI", () => {
     const plan = classifyPaths(["apps/cli/src/commands/recent.ts"]);
 

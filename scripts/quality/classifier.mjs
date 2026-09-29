@@ -319,7 +319,9 @@ export function classifyPaths(paths, options = {}) {
     lanes.e2e = true;
   }
 
-  if (changedFiles.length === 0 && !full) {
+  if (changedFiles.length === 0 && !full && options.emptyChangeSet === "pass") {
+    reasons.add("no changes against the comparison base");
+  } else if (changedFiles.length === 0 && !full) {
     full = true;
     reasons.add("empty change set fails closed");
     selectedPackages = new Set(allTypeScriptPackages(packages));

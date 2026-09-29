@@ -37,7 +37,9 @@ Formatting exclusions stay in `.oxfmtrc.json`: `.prettierignore` also feeds oxli
 
 ## Local start early, join late
 
-Agent edit hooks run `bun run quality:preflight -- start --quiet` (skipped under `FLUNCLE_UNATTENDED=1`, the unattended box sweeps' marker — the lanes do not fit the Hermes container's memory cap; see `.claude/README.md`). It fingerprints the resulting tracked worktree tree, every untracked path and file body, Node, and classifier configuration; the same bytes therefore keep one identity across unstaged, staged, and committed states. It starts selected leaves in the background and returns immediately. Concurrent edit hooks use an atomic, recoverable launch election so one detached worker owns the shared worktree state. Repeated edits update the desired fingerprint instead of blocking the writer after each edit.
+Agent edit hooks run `bun run quality:preflight -- start --quiet` (skipped under `FLUNCLE_UNATTENDED=1`, the unattended box sweeps' marker — the lanes do not fit the Hermes container's memory cap; see `.claude/README.md`). It fingerprints the resulting tracked worktree tree, every untracked path and file body, Node, and classifier configuration; the same bytes therefore keep one identity across unstaged, staged, and committed states. It starts selected leaves in the background and returns immediately. Concurrent edit hooks use an atomic, recoverable launch election so one detached worker owns the shared worktree state. Repeated edits update the desired fingerprint instead of blocking the writer after each edit; the worker starts a fingerprint only after it has been quiet for four seconds, so a burst of edits costs one run.
+
+Local preflight classifies the worktree against its merge-base with `origin/main`, so a committed branch keeps its real closure and a clean branch selects nothing. Only a checkout without an `origin/main` ref falls back to comparing with `HEAD`, where an empty change set still fails closed to the full matrix; CI and explicit backstops keep that fail-closed rule. Local package lanes run web Vitest without V8 coverage (`FLUNCLE_VITEST_COVERAGE=false`); the coverage thresholds are enforced by Quality Checks and `deploy:gate`.
 
 Independent lightweight leaves run in parallel. Package, script, and browser suites run as separate waves on the shared local host so their deadline-bearing tests do not compete for CPU; CI still runs core and browser evidence concurrently on separate hosted runners. A failed wave is recorded immediately and stops later work, making `status` actionable without wasting the remaining expensive evidence.
 
@@ -49,7 +51,7 @@ bun run quality:preflight -- status
 bun run quality:preflight -- join
 ```
 
-`join` is the commit and handoff boundary and is also called by the Husky pre-commit hook when dependencies are present. If content changes while work is running, the old result is rejected and the worker converges on the new fingerprint. Failures print the owning lane's log. A successful result for any other fingerprint is never accepted.
+`join` is the commit and handoff boundary and is also called by the Husky pre-commit hook when dependencies are present. If content changes while work is running, the worker terminates each running lane's process group (SIGTERM, then SIGKILL after twenty seconds, longer than Playwright's fifteen-second web-server shutdown), rejects the old result, and converges on the new fingerprint instead of finishing obsolete waves. Failures print the owning lane's log. A successful result for any other fingerprint is never accepted.
 
 ## CI topology and measurement
 
