@@ -52,12 +52,14 @@ import {
 import { Input } from "@fluncle/ui/components/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@fluncle/ui/components/popover";
 import { albumCoverAtSize } from "@/lib/media";
-import { findingsCount } from "@/lib/format";
+import { findingsCount, formatDate } from "@/lib/format";
 import { isAdminRequest } from "@/lib/server/admin-auth";
 import { listCrawlHolds } from "@/lib/server/crawl-plausibility";
 import {
   type LabelsAdminPage,
   type LabelsAdminSection,
+  type LabelTriageProposal,
+  labelTriageProposalsByIds,
   listLabelAliasCandidates,
   listLabelsPage,
 } from "@/lib/server/labels";
@@ -111,6 +113,7 @@ const SECTIONS: {
 type LabelsSectionPage = LabelsAdminPage & {
   queued: Record<string, number>;
   rules: Record<string, LabelRuleCounts>;
+  triage: Record<string, LabelTriageProposal>;
 };
 
 type HeldReleases = { holds: CrawlHold[]; nextCursor?: string; total: number };
@@ -130,12 +133,16 @@ type LabelsBoard = {
 };
 
 async function withRuleContext(page: LabelsAdminPage): Promise<LabelsSectionPage> {
-  const [rules, queued] = await Promise.all([
+  const undecidedIds = page.items
+    .filter((item) => item.seedState === "undecided")
+    .map((item) => item.id);
+  const [rules, queued, triage] = await Promise.all([
     labelRuleCounts(page.items.map((item) => item.id)),
     queuedReleaseCounts(page.items.map((item) => item.slug)),
+    labelTriageProposalsByIds(undecidedIds),
   ]);
 
-  return { ...page, queued, rules };
+  return { ...page, queued, rules, triage: Object.fromEntries(triage) };
 }
 
 const fetchBoard = createServerFn({ method: "GET" }).handler(async (): Promise<LabelsBoard> => {
@@ -336,6 +343,10 @@ function LabelSection({
     string,
     LabelRuleCounts
   >;
+  const triage = Object.assign({}, ...data.pages.map((page) => page.triage)) as Record<
+    string,
+    LabelTriageProposal
+  >;
 
   if (total === 0) {
     return null;
@@ -353,6 +364,7 @@ function LabelSection({
             queued={queued[label.slug] ?? 0}
             ruleCounts={rules[label.id]}
             section={section}
+            triage={triage[label.id]}
           />
         ))}
       </ObjectList>
@@ -601,6 +613,7 @@ function LabelRow({
   queued,
   ruleCounts,
   section,
+  triage,
 }: {
   focused: boolean;
   label: LabelAdminItem;
@@ -608,6 +621,7 @@ function LabelRow({
   queued: number;
   ruleCounts: LabelRuleCounts | undefined;
   section: LabelsAdminSection;
+  triage: LabelTriageProposal | undefined;
 }) {
   const queryClient = useQueryClient();
   const [error, setError] = useState<string | undefined>();
@@ -635,7 +649,7 @@ function LabelRow({
       ref={rowRef}
       trailing={
         <>
-          <TriageChip label={label} />
+          <TriageChip label={label} triage={triage} />
           <RuleChip ruleCounts={ruleCounts} section={section} seedState={label.seedState} />
           <span className="text-xs text-muted-foreground tabular-nums">
             {findingsCount(label.findingCount)}
@@ -689,6 +703,13 @@ function LabelRow({
             <span className="text-destructive" role="alert">
               {error}
             </span>
+          ) : triage ? (
+            <>
+              {labelIdentity(label, queued)}
+              <span className="basis-full truncate" title={triage.evidence}>
+                {triage.evidence}
+              </span>
+            </>
           ) : (
             labelIdentity(label, queued)
           )
@@ -746,7 +767,97 @@ function labelIdentity(label: LabelAdminItem, queued: number): ReactNode | undef
   );
 }
 
-function TriageChip({ label }: { label: LabelAdminItem }) {
+function formatShare(share: number): string {
+  return `${Math.round(share * 100)}%`;
+}
+
+const TRIAGE_VERDICT_LABEL: Record<LabelTriageProposal["verdict"], string> = {
+  dnb: "dnb",
+  dnb_partial: "partial",
+  not_dnb: "not dnb",
+  unclear: "unclear",
+};
+
+function TriageChip({
+  label,
+  triage,
+}: {
+  label: LabelAdminItem;
+  triage: LabelTriageProposal | undefined;
+}) {
+  if (triage) {
+    const verdict =
+      triage.verdict === "unclear" && triage.reason
+        ? `unclear: ${triage.reason}`
+        : TRIAGE_VERDICT_LABEL[triage.verdict];
+    const ruleCount = triage.rules.length;
+    const rules =
+      ruleCount > 0 ? `${ruleCount} artist ${ruleCount === 1 ? "rule" : "rules"}` : undefined;
+    const shares = [
+      triage.offLaneShare === null ? undefined : `${formatShare(triage.offLaneShare)} off-lane raw`,
+      triage.residualOffLaneShare === null
+        ? undefined
+        : `${formatShare(triage.residualOffLaneShare)} residual`,
+    ].filter((share): share is string => share !== undefined);
+
+    return (
+      <Popover>
+        <PopoverTrigger
+          render={
+            <Button
+              aria-label={`Triage proposal for ${label.name}: ${verdict}, ${triage.confidence} confidence${rules ? `, ${rules}` : ""}`}
+              className="h-auto rounded-sm bg-muted px-1.5 py-0.5 font-mono text-[0.65rem] font-normal text-muted-foreground uppercase"
+              size="sm"
+              variant="ghost"
+            />
+          }
+        >
+          {verdict} · {triage.confidence}
+          {rules ? ` · ${rules}` : ""}
+        </PopoverTrigger>
+        <PopoverContent
+          align="end"
+          className="max-h-[70vh] w-80 space-y-2 overflow-y-auto text-xs text-muted-foreground"
+        >
+          <p className="font-mono text-[0.65rem] uppercase">
+            Round {triage.roundId} · {formatDate(triage.recordedAt)}
+          </p>
+          <p className="text-foreground">
+            Proposes {verdict}, {triage.confidence} confidence
+            {rules ? `, ${rules}` : ""}. Not a ruling.
+          </p>
+          <p className="break-words whitespace-pre-wrap">{triage.evidence}</p>
+          {triage.censusSummary || shares.length > 0 ? (
+            <p className="tabular-nums">
+              {[triage.censusSummary, ...shares].filter(Boolean).join(" · ")}
+            </p>
+          ) : null}
+          {ruleCount > 0 ? (
+            <ul className="m-0 list-none space-y-1 border-t border-border p-0 pt-2">
+              {triage.rules.map((proposed) => (
+                <li className="min-w-0" key={proposed.artistMbid}>
+                  <p className="truncate">
+                    <span className="font-mono text-[0.65rem] uppercase">{proposed.verdict}</span>{" "}
+                    <span className="text-foreground">{proposed.artistName}</span>{" "}
+                    <span className="tabular-nums">
+                      · {proposed.firstCreditCount} first{" "}
+                      {proposed.firstCreditCount === 1 ? "credit" : "credits"}
+                    </span>
+                  </p>
+                  {proposed.evidence ? (
+                    <p className="truncate" title={proposed.evidence}>
+                      {proposed.evidence}
+                    </p>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </PopoverContent>
+      </Popover>
+    );
+  }
+
   if (!label.triageCheckedAt || label.triageVerdict !== "unclear") {
     return null;
   }

@@ -109,7 +109,7 @@ BASE_URL=http://127.0.0.1:3000 OUT_DIR=/tmp/shell-smoke bun tests/browser/shell-
 BASE_URL=http://127.0.0.1:3000 OUT_DIR=/tmp/queue-smoke SEED=1 bun tests/browser/queue-smoke.ts
 ```
 
-- `labels-smoke.ts` — pins the `/admin/labels` section split: the queue leads, the settled partials follow it, the waiting intro names both ways a label reaches the queue, and the header count reads the waiting section's total alone. `SEED=1` mints two undecided labels around the run — one bare, one carrying a per-label allow rule — so the assertion that a rule-carrying undecided label is a settled verdict rather than pending work is deterministic rather than hostage to the local database (removed in a `finally`; it refuses a non-local database URL):
+- `labels-smoke.ts` — pins the `/admin/labels` section split: the queue leads, the settled partials follow it, the waiting intro names both ways a label reaches the queue, and the header count reads the waiting section's total alone. `SEED=1` mints two undecided labels around the run — one bare with a recorded triage proposal, one carrying a per-label allow rule — so the assertion that a rule-carrying undecided label is a settled verdict rather than pending work is deterministic rather than hostage to the local database, and the waiting row's proposal chip and evidence line are asserted too (removed in a `finally`; it refuses a non-local database URL):
 
 ```bash
 BASE_URL=http://127.0.0.1:3000 OUT_DIR=/tmp/labels-smoke SEED=1 bun tests/browser/labels-smoke.ts
