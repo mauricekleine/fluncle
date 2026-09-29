@@ -27,6 +27,9 @@ case "$1" in
   not-json) printf 'plain text\\n' ;;
   admin)
     printf '%s\\n' "$*" >> ${JSON.stringify(callsFile)}
+    if [ -n "\${BACKFILL_TEST_TIMELINE:-}" ]; then
+      printf 'cli:%s:%s\\n' "$3" "$(cat "\${BACKFILL_TEST_LEASE}" 2>/dev/null || printf none)" >> "\${BACKFILL_TEST_TIMELINE}"
+    fi
     case "$3" in
       discogs) printf '{"ok":true,"resolvedCount":1,"unresolvedCount":2,"skippedCount":3,"rateLimited":true,"rateLimitedBy":"musicbrainz"}\\n' ;;
       lastfm) printf '{"ok":true,"lovedCount":4,"failedCount":0,"skippedCount":5,"rateLimited":false}\\n' ;;
@@ -272,6 +275,7 @@ async function runBackfillSweep(): Promise<Record<string, unknown>> {
     }),
     env: {
       DISCOGS_USER_TOKEN: "discogs-test-token",
+      FLUNCLE_ADMISSION_RUNNER_PID: "4242",
       FLUNCLE_API_BASE_URL: "https://worker.example",
       FLUNCLE_API_TOKEN: "agent-test-token",
     },
@@ -718,5 +722,305 @@ describe("the tick's legs", () => {
     });
     expect((summary.beatport as { resolved: number }).resolved).toBe(13);
     expect((summary["discogs-facts"] as { resolved: number }).resolved).toBe(17);
+  });
+});
+
+describe("phase-scoped database admission", () => {
+  const phaseEnvironmentKeys = [
+    "BACKFILL_TEST_LEASE",
+    "BACKFILL_TEST_TIMELINE",
+    "DATABASE_ADMISSION_RUNNER",
+    "FLUNCLE_ADMISSION_RUNNER_PID",
+    "FLUNCLE_API_BASE_URL",
+    "FLUNCLE_API_TOKEN",
+  ] as const;
+  const savedEnvironment = new Map<string, string | undefined>();
+  let phaseDir: string;
+  let timelineFile: string;
+  let leaseFile: string;
+  let server: ReturnType<typeof Bun.serve>;
+
+  beforeAll(() => {
+    phaseDir = mkdtempSync(join(tmpdir(), "fluncle-backfill-phase-"));
+    timelineFile = join(phaseDir, "timeline");
+    leaseFile = join(phaseDir, "lease");
+    const countFile = join(phaseDir, "count");
+    const yieldAtFile = join(phaseDir, "yield-at");
+    const runner = join(phaseDir, "runner");
+    writeFileSync(
+      runner,
+      `#!/usr/bin/env bash
+set -uo pipefail
+[ "\${1:-}" = "phase" ] || exit 2
+owner="$2"
+shift 2
+[ "\${1:-}" = "--" ] && shift
+count=$(( $(cat ${JSON.stringify(countFile)} 2>/dev/null || printf 0) + 1 ))
+printf '%s' "$count" > ${JSON.stringify(countFile)}
+if [ "$count" = "$(cat ${JSON.stringify(yieldAtFile)} 2>/dev/null)" ]; then
+  printf 'yield:%s\\n' "$owner" >> ${JSON.stringify(timelineFile)}
+  printf '{"event":"database.admission.runner","outcome":"wait-expired","owner":"%s","phase_scoped":true,"yield_reason":"queue"}\\n' "$owner" >&2
+  exit 75
+fi
+printf 'acquire:%s\\n' "$owner" >> ${JSON.stringify(timelineFile)}
+printf held > ${JSON.stringify(leaseFile)}
+"$@"
+status=$?
+printf free > ${JSON.stringify(leaseFile)}
+printf 'release:%s\\n' "$owner" >> ${JSON.stringify(timelineFile)}
+exit "$status"
+`,
+    );
+    chmodSync(runner, 0o755);
+    const lease = () => (existsSync(leaseFile) ? readFileSync(leaseFile, "utf8") : "none");
+    server = Bun.serve({
+      async fetch(request) {
+        const url = new URL(request.url);
+        const operation = url.pathname.endsWith("/discogs-facts") ? "discogs-facts" : "discogs";
+        const body = await request.text();
+        const stage = body === "" ? "prepare" : "decide";
+
+        appendFileSync(timelineFile, `worker:${operation}:${stage}:${lease()}\n`);
+
+        if (request.headers.get("Authorization") !== "Bearer agent-test-token") {
+          return Response.json({ error: "unauthorized" }, { status: 401 });
+        }
+
+        if (operation === "discogs-facts") {
+          return stage === "prepare"
+            ? Response.json({
+                configured: true,
+                discogsWork: [{ releaseId: 7, slug: "album" }],
+                ok: true,
+                rateLimited: false,
+              })
+            : Response.json({
+                configured: true,
+                failedCount: 0,
+                noneCount: 18,
+                ok: true,
+                rateLimited: false,
+                resolvedCount: 17,
+              });
+        }
+
+        return stage === "prepare"
+          ? Response.json({
+              discogsWork: [{ queries: ["track=Tune&type=release"], trackId: "trk_1" }],
+              ok: true,
+              rateLimited: false,
+            })
+          : Response.json({
+              ok: true,
+              rateLimited: false,
+              resolvedCount: 1,
+              skippedCount: 3,
+              unresolvedCount: 2,
+            });
+      },
+      port: 0,
+    });
+
+    for (const key of phaseEnvironmentKeys) {
+      savedEnvironment.set(key, process.env[key]);
+    }
+    process.env.BACKFILL_TEST_LEASE = leaseFile;
+    process.env.BACKFILL_TEST_TIMELINE = timelineFile;
+    process.env.DATABASE_ADMISSION_RUNNER = runner;
+    process.env.FLUNCLE_API_BASE_URL = server.url.origin;
+    process.env.FLUNCLE_API_TOKEN = "agent-test-token";
+    delete process.env.FLUNCLE_ADMISSION_RUNNER_PID;
+  });
+
+  afterEach(() => {
+    for (const name of ["count", "yield-at", "timeline", "lease"]) {
+      rmSync(join(phaseDir, name), { force: true });
+    }
+  });
+
+  afterAll(async () => {
+    await server.stop(true);
+    for (const [key, value] of savedEnvironment) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+    rmSync(phaseDir, { force: true, recursive: true });
+  });
+
+  function timeline(): string[] {
+    return existsSync(timelineFile)
+      ? readFileSync(timelineFile, "utf8").trim().split("\n").filter(Boolean)
+      : [];
+  }
+
+  function sweep(options: { inheritedRunner?: string; now?: () => number } = {}) {
+    const lease = () => (existsSync(leaseFile) ? readFileSync(leaseFile, "utf8") : "none");
+    const fetched = (operation: string) => {
+      appendFileSync(timelineFile, `discogs-fetch:${operation}:${lease()}\n`);
+    };
+
+    return runBackfillSweepImpl({
+      createFetcher: () => ({
+        fetchFactsCandidates: async () => {
+          fetched("discogs-facts");
+          return {
+            candidates: [
+              {
+                release: { artists: [], formats: [], id: 7, labels: [], styles: [], tracklist: [] },
+                slug: "album",
+              },
+            ],
+            ok: true,
+            rateLimited: false,
+          };
+        },
+        fetchReleaseCandidates: async () => {
+          fetched("discogs");
+          return { candidates: [{ releases: [], trackId: "trk_1" }], ok: true, rateLimited: false };
+        },
+      }),
+      env: {
+        DISCOGS_USER_TOKEN: "discogs-test-token",
+        FLUNCLE_ADMISSION_RUNNER_PID: options.inheritedRunner,
+        FLUNCLE_API_BASE_URL: server.url.origin,
+        FLUNCLE_API_TOKEN: "agent-test-token",
+      },
+      now: options.now,
+    });
+  }
+
+  const laterLegs = [
+    "lastfm",
+    "apple-music",
+    "apple-catalogue",
+    "beatport",
+    "discogs-facts",
+    "deezer",
+  ];
+
+  test("under the direct unit every database step takes its own admitted phase, nine in all", async () => {
+    const summary = await sweep();
+    const events = timeline();
+
+    expect(events.filter((event) => event === "acquire:fluncle-backfill")).toHaveLength(9);
+    expect(events.filter((event) => event === "release:fluncle-backfill")).toHaveLength(9);
+    expect(
+      events.filter((event) => event.startsWith("cli:") || event.startsWith("worker:")),
+    ).toEqual([
+      "worker:discogs:prepare:held",
+      "worker:discogs:decide:held",
+      "cli:lastfm:held",
+      "cli:apple-music:held",
+      "cli:apple-catalogue:held",
+      "cli:beatport:held",
+      "worker:discogs-facts:prepare:held",
+      "worker:discogs-facts:decide:held",
+      "cli:deezer:held",
+    ]);
+    expect(summary).toMatchObject({ admissionMode: "phased", errors: 0 });
+    expect(summary.discogs).toMatchObject({ resolved: 1, skipped: 3, unresolved: 2 });
+    expect(summary["discogs-facts"]).toMatchObject({ none: 18, resolved: 17 });
+    expect((summary.beatport as { resolved: number }).resolved).toBe(13);
+    expect((summary.deezer as { resolved: number }).resolved).toBe(23);
+  });
+
+  test("no lease is held across the box's Discogs reads or between phases", async () => {
+    await sweep();
+    const events = timeline();
+
+    for (const operation of ["discogs", "discogs-facts"]) {
+      const fetchIndex = events.indexOf(`discogs-fetch:${operation}:free`);
+      expect(fetchIndex).toBeGreaterThan(1);
+      expect(events[fetchIndex - 2]).toBe(`worker:${operation}:prepare:held`);
+      expect(events[fetchIndex - 1]).toBe("release:fluncle-backfill");
+      expect(events[fetchIndex + 1]).toBe("acquire:fluncle-backfill");
+      expect(events[fetchIndex + 2]).toBe(`worker:${operation}:decide:held`);
+    }
+
+    let held = false;
+    for (const event of events) {
+      if (event.startsWith("acquire:")) {
+        expect(held).toBe(false);
+        held = true;
+      } else if (event.startsWith("release:")) {
+        expect(held).toBe(true);
+        held = false;
+      }
+    }
+    expect(held).toBe(false);
+  });
+
+  test("under the previous whole-lifetime unit the inherited lease covers every leg with no nested acquisition", async () => {
+    writeFileSync(leaseFile, "inherited");
+
+    const summary = await sweep({ inheritedRunner: "4242" });
+
+    expect(timeline()).toEqual([
+      "worker:discogs:prepare:inherited",
+      "discogs-fetch:discogs:inherited",
+      "worker:discogs:decide:inherited",
+      "cli:lastfm:inherited",
+      "cli:apple-music:inherited",
+      "cli:apple-catalogue:inherited",
+      "cli:beatport:inherited",
+      "worker:discogs-facts:prepare:inherited",
+      "discogs-fetch:discogs-facts:inherited",
+      "worker:discogs-facts:decide:inherited",
+      "cli:deezer:inherited",
+    ]);
+    expect(summary).toMatchObject({ admissionMode: "inherited-lease", errors: 0 });
+    expect(summary.deferredLegs).toBeUndefined();
+    expect((summary.deezer as { resolved: number }).resolved).toBe(23);
+  });
+
+  test("a yielded phase pauses the tick healthily, keeps earlier counts, and defers the rest", async () => {
+    writeFileSync(join(phaseDir, "yield-at"), "3");
+
+    const summary = await sweep();
+
+    expect(timeline()).toContain("yield:fluncle-backfill");
+    expect(timeline().some((event) => event.startsWith("cli:"))).toBe(false);
+    expect(summary).toMatchObject({
+      admissionMode: "phased",
+      admissionOutcome: "phase-yielded",
+      admissionYieldReason: "queue",
+      deferredLegs: laterLegs,
+      errors: 0,
+      gateState: "paused",
+      ok: true,
+      produced: 1,
+      reason: "database_admission",
+      throttled: true,
+    });
+    expect(summary.discogs).toMatchObject({ resolved: 1 });
+  });
+
+  test("a yielded decide phase writes nothing, so the next prepare hands the same work out again", async () => {
+    writeFileSync(join(phaseDir, "yield-at"), "2");
+
+    const summary = await sweep();
+
+    expect(timeline()).toContain("discogs-fetch:discogs:free");
+    expect(timeline().some((event) => event.startsWith("worker:discogs:decide"))).toBe(false);
+    expect(summary).toMatchObject({ errors: 0, ok: true, reason: "database_admission" });
+    expect(summary.deferredLegs).toEqual(["discogs", ...laterLegs]);
+  });
+
+  test("the wall budget stops starting new phases and defers the remaining legs to the next tick", async () => {
+    const clock = [0, 0];
+    const summary = await sweep({ now: () => clock.shift() ?? 400_000 });
+
+    expect(timeline().filter((event) => event === "acquire:fluncle-backfill")).toHaveLength(2);
+    expect(summary).toMatchObject({
+      deferredLegs: laterLegs,
+      errors: 0,
+      gateState: "paused",
+      ok: true,
+      reason: "wall_budget",
+      throttled: true,
+    });
   });
 });

@@ -169,8 +169,10 @@ export const DATABASE_ADMISSION_SHAPES: Readonly<Record<string, DatabaseAdmissio
   "backfill.recording-mbids": wholeLifetime(
     "One bounded identity backfill command owns the complete tick.",
   ),
-  "backfill.vendor-sweep": wholeLifetime(
-    "Provider reads and guarded vendor writes are interleaved across several independently bounded passes.",
+  "backfill.vendor-sweep": phased(
+    `${SCRIPTS}/backfill-sweep.ts`,
+    "Each vendor leg's single Worker call is its own admitted phase, and each Discogs leg admits only its prepare and decide calls with the box's paced Discogs reads between them unleased; nothing between legs holds the lease.",
+    0,
   ),
   "bio.album": phased(
     `${SCRIPTS}/entity-bio-sweep.ts`,
