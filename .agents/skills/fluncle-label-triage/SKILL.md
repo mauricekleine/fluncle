@@ -78,17 +78,26 @@ Workflow({ scriptPath: "<skill>/scripts/triage-workflow.js",
                    total: <n>, batch: 10, censusBatch: 5 } })
 ```
 
-The script already guards the harness's stringified-`args` delivery (a workflow that returns instantly with zero agents IS that trap) and embeds both research briefs. It runs in two phases:
+The script already guards the harness's stringified-`args` delivery (a workflow that returns instantly with zero agents IS that trap) and embeds both research briefs. Every brief names this file by path, so each worker reads the standing rulings and the oracle ladder below, and hands out the evidence command. It runs in two phases:
 
 - **Research** (batch ≈ 10 labels/agent) — the three-bucket call, plus a `needsCensus` flag on any label that is genuinely two-sided.
-- **Census** (batch **5** labels/agent, and ONLY the flagged ones) — the phase-2 read `?inc=artist-credits+recordings` at `limit=100`, paged to a hard 5-page cap with a verbatim sampling caveat when the cap is hit. It counts FIRST credits per MBID, applies the 15 % share test, runs the imprint-child check, and returns the rule proposals with per-artist evidence, first-credit counts, and tap-bridge status. A census verdict replaces phase 1's provisional read for that label.
+- **Census** (batch **5** labels/agent, and ONLY the flagged ones) — the evidence command's `--census` count, applied to the 15 % share test and the imprint-child check, returning the rule proposals with per-artist evidence, first-credit counts, and tap-bridge status. A census verdict replaces phase 1's provisional read for that label.
+
+**Evidence comes from one command, never from hand-written fetchers:**
+
+```bash
+fluncle admin labels evidence <mb_label_id> --json            # research + verify
+fluncle admin labels evidence <mb_label_id> --census --json   # the census
+```
+
+Run it from the repo root (`bun apps/cli/src/cli.ts admin labels evidence …` when the installed `fluncle` predates it). It reads MusicBrainz, Discogs (styles matched by release id, so a namesake never counts), Beatport's genre facet (needs `FIRECRAWL_API_KEY` or the `firecrawl` CLI) and Apple's barcode lookup, and every source reports its own `status` and `errors`. Rate limits are shared across worker processes and answers are cached for a week (`--refresh` skips the cache). `--census` counts DISTINCT recordings, the unit the crawl stores, so it reads lower than a per-track hand count.
 
 The method the briefs enforce, and why:
 
 - **Four standing rulings the operator has ratified, so a round applies them rather than re-deriving them.** (1) A **1990–1994 UK breakbeat-hardcore imprint** whose catalogue is styled Breakbeat/Hardcore with no house, techno, trance or happy-hardcore drift is IN, whether or not any release carries a Jungle tag — it is the proto-jungle shelf the archive already holds beside Ibiza Records, Production House, Suburban Base, Reinforced, Lucky Spin, Labello Blanco, Bear Necessities, Shut Up and Dance and Kickin' Underground Sound. A parent label whose hardcore SUBLABEL is the in-lane one stays out on its own merits (Kickin Records out, Kickin' Underground Sound in). (2) A **DISTRIBUTOR is out on identity, never on genre** — MusicBrainz typing the entity `Distributor`, or a Discogs page whose entries are mostly other labels' records, settles it before the catalogue is read. (3) **Two independent passes agreeing `not_dnb` at medium confidence is sufficient to DISABLE**, because the cost is asymmetric: a wrong disable stores nothing and reverses with one flag, while a wrong enable mints public pages that need the prune skill to undo. The one exception is a label that collides with another standing ruling — that goes to the operator rather than the bulk. (4) A **label whose catalogue is one release (or a handful) is decided by a DSP genre oracle, never by prose**: in-lane reading enables it, anything else disables it, and `unclear` is available only when no rung of the ladder answers at all. A previous round has already read the blurbs and failed on exactly these; the oracle is what breaks the tie.
-- **The DSP oracle ladder, strongest rung first.** (1) **Apple/iTunes** — take the release barcode from MusicBrainz, then `itunes.apple.com/lookup?upc=<barcode>`. Apple has a distinct `Jungle/Drum'n'bass` genre, so its ABSENCE on an electronic release is real evidence: check whether Apple applies that genre to the same artist elsewhere, and a withheld genre is a verdict rather than a gap. (2) **Beatport's label/artist genre facet** (track counts per genre). (3) **Deezer** `api.deezer.com/album/<id>` — its `label` field also catches a rights-line entity standing in for a different imprint. (4) **Discogs** per-release `styles`. (5) **Bandcamp** JSON-LD keywords. Record which rung answered and the exact string it returned; a lower rung never overrides a higher one that answered.
+- **The DSP oracle ladder, strongest rung first.** (1) **Apple/iTunes** — the evidence's `apple` source. Apple has a distinct `Jungle/Drum'n'bass` genre, so its ABSENCE on an electronic release is real evidence: check whether Apple applies that genre to the same artist elsewhere, and a withheld genre is a verdict rather than a gap. (2) **Beatport's genre facet** — `beatport.genres` (track counts and shares). (3) **Deezer** `api.deezer.com/album/<id>` — its `label` field also catches a rights-line entity standing in for a different imprint. (4) **Discogs** per-release styles — `discogs.styles`. (5) **Bandcamp** JSON-LD keywords. Record which rung answered and the exact string it returned; a lower rung never overrides a higher one that answered.
 - **Calibrate to the operator's live rulings, not a genre notion.** Agents read the calibration lists first. The boundary has a specific learned shape: majors, subsidiaries, distributors and aggregators are OUT even when they carry DnB; **DnB-specific media brands are IN** (Drum&BassArena, UKF enabled; DJ Magazine disabled); genre-adjacent scenes (dubstep, grime, UKG, jungle-adjacent electronica) are OUT.
-- **MusicBrainz artists are the genre signal; MB `tags`/`genres` are usually EMPTY** — don't rely on them. Release credits (25 releases with artist-credits) decide most labels; the Discogs url-rel from the MB label settles the rest; firecrawl/web search only for what's still open. MB pacing: 1 req/s with a real User-Agent, or 403s.
+- **MusicBrainz artists are the genre signal; MB `tags`/`genres` are usually EMPTY** — don't rely on them. Release credits decide most labels; the Discogs and Beatport facts settle the rest; firecrawl/web search only for what's still open.
 - **One act is often several MBIDs.** The census expands every act it rules on into all its collaboration entities (measured: DJ Die alone was 44/130 first credits, DJ Die + DieMantle 57/130) and gives each its own rule row and count. A missed entity under-imports; it never mis-imports.
 - Return `unclear` for mixed-genre labels the census cannot carve, minority-DnB catalogues not worth allow rules, or evidence too sparse to support a ruling; the operator reviews these manually.
 - Return `unclear` and name the conflation when one MBID contains releases from distinct labels; enabling crawls by MBID, so split the upstream entity before enabling.
@@ -176,11 +185,12 @@ The audit-only `update_artist_rule` PATCH carries the drift stamps: `checked_at`
   ```bash
   python3 <skill>/scripts/apply-rulings.py apply --dry-run   # prints the planned HTTP calls
   uv run --with pytest pytest <skill>/scripts/tests/
+  bun test --cwd <skill>/scripts                             # every worker brief names this skill + the evidence command
   ```
 
 ## Where the concrete detail lives
 
 - The storage gate, the crawl-time rule check + re-arms: docs/catalogue-crawler.md; the label entity, its seed states, and the exception model: docs/label-entity.md.
-- The CLI carriers: `fluncle admin labels update` / `fluncle admin labels artists` / `fluncle admin artists rule` (docs/naming-conventions.md).
+- The CLI carriers: `fluncle admin labels evidence` / `fluncle admin labels update` / `fluncle admin labels artists` / `fluncle admin artists rule` (docs/naming-conventions.md).
 - Secrets/topology (operator env file, Turso op item): the private companion runbook. This skill holds procedure + placeholders only.
 - The removal counterpart (already-stored off-genre content): the fluncle-catalogue-prune skill.

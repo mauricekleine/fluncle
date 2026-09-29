@@ -3851,6 +3851,51 @@ JSON field reference:
     });
 
   labels
+    .command("evidence")
+    .description(
+      "Gather a label's MusicBrainz, Discogs, Beatport and Apple evidence for triage (cached, rate-limited)",
+    )
+    .argument("<label>", "The label's MusicBrainz MBID, slug, or lbl_… id")
+    .option("--census", "Also count FIRST credits per recording over the label's releases", false)
+    .option("--census-pages <n>", "MusicBrainz pages the census may read, 1-5", "5")
+    .option("--sources <list>", "Comma list of musicbrainz,discogs,beatport,apple (default all)")
+    .option("--refresh", "Ignore cached responses and fetch fresh", false)
+    .option("--json", "Print JSON", false)
+    .action(
+      async (
+        input: string,
+        options: {
+          census: boolean;
+          censusPages: string;
+          json: boolean;
+          refresh: boolean;
+          sources?: string;
+        },
+      ) => {
+        const { labelEvidenceCommand, labelEvidenceLines, parseCensusPages, parseEvidenceSources } =
+          await import("./commands/admin-label-evidence");
+        const censusPages = parseCensusPages(options.censusPages);
+        const evidence = await labelEvidenceCommand(input, {
+          census: options.census,
+          censusPages,
+          refresh: options.refresh,
+          sources: parseEvidenceSources(options.sources),
+        });
+
+        if (!evidence.ok) {
+          process.exitCode = 1;
+        }
+
+        if (options.json) {
+          printJson(evidence);
+          return;
+        }
+
+        console.log(labelEvidenceLines(evidence).join("\n"));
+      },
+    );
+
+  labels
     .command("triage")
     .description("Record what a triage round found for a label (agent; never rules)")
     .argument("<slug>", "The label slug")
@@ -8553,6 +8598,7 @@ const stringOptions = new Set([
   "--bpm-confidence",
   "--bpm-source",
   "--calls",
+  "--census-pages",
   "--composition",
   "--consumer-digest",
   "--consumer-item-count",
@@ -8632,6 +8678,7 @@ const stringOptions = new Set([
   "--since",
   "--soundcloud-url",
   "--source",
+  "--sources",
   "--status",
   "--stale-before",
   "--stream",

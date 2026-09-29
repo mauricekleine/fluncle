@@ -48,6 +48,14 @@ export function loadEnv(keys: readonly EnvKey[]): Record<EnvKey, string> {
   return result;
 }
 
+export function readOptionalEnv(
+  key: "DISCOGS_USER_TOKEN" | "FIRECRAWL_API_KEY",
+): string | undefined {
+  loadConfig();
+
+  return process.env[key] || undefined;
+}
+
 export function getApiBaseUrl(): string {
   loadConfig();
 
