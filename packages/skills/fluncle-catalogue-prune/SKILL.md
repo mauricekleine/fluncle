@@ -100,6 +100,8 @@ The purge is **artist-driven**: it deletes only safe-purge artists (no finding, 
 
 **After a purge, the hub counts lag.** The maintained `renderable_track_count` / `certified_finding_count` on artists/labels/albums are delta-maintained by the server's write paths, and this purge writes straight to prod out of band — so they overstate the truth until the nightly `reconcile_hub_counts` sweep recomputes them (within a day; it names this skill as one of its three drift sources). To correct them immediately instead of waiting, fire that sweep's trigger by hand: `POST /api/v1/admin/hub-counts/reconcile` with an admin token.
 
+Track deletion also queues public aggregate and artist qualification repairs in the same database batch. The projection maintenance timer drains those repairs and advances the release hub order epoch before rebuilding anchors.
+
 ### 5 — Verify
 
 ```bash

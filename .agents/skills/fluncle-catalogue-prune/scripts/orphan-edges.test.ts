@@ -2,6 +2,9 @@ import { describe, expect, test } from "bun:test";
 
 import { type Client } from "@libsql/client/web";
 
+import { repairPublicProjectionChunk } from "../../../../apps/web/src/lib/server/public-projections";
+import { createProjectionTestDb } from "../../../../apps/web/src/test/projection-schema";
+
 import { countOrphanEdges, deleteOrphanEdges, orphanEdgesByArtist } from "./clean-orphan-edges";
 import {
   ORPHAN_EDGE_BY_ARTIST_SQL,
@@ -39,6 +42,54 @@ function stub(rows: Record<string, unknown>[] = [], rowsAffected = 0): Stub {
 }
 
 describe("deleteTracksWithEdges", () => {
+  test("pruned tracks repair both projections and advance the public order epoch", async () => {
+    const db = await createProjectionTestDb();
+    await db.executeMultiple(`
+      create table track_embeddings (track_id text primary key);
+      insert into tracks (track_id) values ('pruned');
+      insert into track_artists (track_id, artist_id) values ('pruned', 'artist');
+      insert into public_aggregate_state
+        (scope, state, scanned_count, projected_entry_count, source_epoch, aggregate_epoch,
+         default_track_total, release_hub_order_epoch, generation)
+        values ('tracks', 'complete', 0, 0, 0, 0, 1, 0, 'generation');
+      insert into public_aggregate_membership
+        (track_id, source_version) values ('pruned', '[null,null]');
+      insert into artist_qualification_state
+        (scope, state, scanned_count, projected_qualified_count, source_epoch, projection_epoch)
+        values ('artists', 'complete', 0, 0, 0, 0);
+    `);
+
+    expect(await deleteTracksWithEdges(db as unknown as Client, ["pruned"])).toEqual({
+      edges: 1,
+      tracks: 1,
+    });
+    expect((await db.execute(`select track_id from tracks`)).rows).toHaveLength(0);
+    expect(
+      (await db.execute(`select source_epoch from public_aggregate_state`)).rows[0]?.source_epoch,
+    ).toBe(1);
+    expect(
+      (await db.execute(`select source_epoch from artist_qualification_state`)).rows[0]
+        ?.source_epoch,
+    ).toBe(1);
+    expect(
+      (
+        await db.execute(`select projection, subject_id from projection_repairs
+      order by projection`)
+      ).rows.map((row) => [row.projection, row.subject_id]),
+    ).toEqual([
+      ["artist_qualification", "pruned"],
+      ["public_aggregates", "pruned"],
+    ]);
+    await repairPublicProjectionChunk(db, { projection: "public_aggregates" });
+    expect(
+      (
+        await db.execute(`select default_track_total, release_hub_order_epoch
+        from public_aggregate_state`)
+      ).rows[0],
+    ).toMatchObject({ default_track_total: 0, release_hub_order_epoch: 1 });
+    db.close();
+  });
+
   test("deletes the edges, the vectors and the tracks in ONE batch, dependants first, over the same id set", async () => {
     const s = stub();
     await deleteTracksWithEdges(s.client, ["t1", "t2"]);
@@ -46,7 +97,7 @@ describe("deleteTracksWithEdges", () => {
     expect(s.batches).toHaveLength(1);
     const [batch] = s.batches;
     expect(batch?.mode).toBe("write");
-    expect(batch?.stmts).toHaveLength(3);
+    expect(batch?.stmts).toHaveLength(7);
 
     expect(batch?.stmts[0]?.sql).toBe("delete from track_artists where track_id in (?,?)");
     expect(batch?.stmts[1]?.sql).toBe("delete from track_embeddings where track_id in (?,?)");
@@ -70,8 +121,8 @@ describe("deleteTracksWithEdges", () => {
     await deleteTracksWithEdges(s.client, ids);
 
     expect(s.batches).toHaveLength(2);
-    expect(s.batches[0]?.stmts).toHaveLength(3);
-    expect(s.batches[1]?.stmts).toHaveLength(3);
+    expect(s.batches[0]?.stmts).toHaveLength(7);
+    expect(s.batches[1]?.stmts).toHaveLength(7);
     expect(s.batches[0]?.stmts[0]?.args).toHaveLength(200);
     expect(s.batches[1]?.stmts[0]?.args).toHaveLength(50);
 

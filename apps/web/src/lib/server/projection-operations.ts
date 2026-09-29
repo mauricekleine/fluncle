@@ -1,5 +1,6 @@
 import { type Client, type InStatement, type ResultSet } from "@libsql/client";
 
+import { publicTrackWhere } from "../../db/public-track-visibility";
 import {
   crawlDueDefinitionVersion,
   fanOutCrawlProjectionRepairs,
@@ -8,6 +9,8 @@ import {
   runCrawlDueRebuildChunk,
 } from "./crawl-due-work";
 import { CRAWL_DUE_CUTOVER_ENABLED_KEY } from "./crawl-cutover";
+import { logEvent } from "./log";
+import { markPublicProjectionSourceChangedStatements } from "./public-projection-source-maintenance";
 import {
   DUE_WORK_CATALOGUE_RANK_REPAIR_SUBJECT_ID,
   repairDueWorkChunk,
@@ -919,6 +922,7 @@ const PUBLIC_ANCHOR_CLEANUP_KEY = "projection_cleanup_public_anchor_generations_
 const PUBLIC_ANCHOR_PUBLICATION_KEY = "projection_public_anchor_publication_v1";
 const PUBLIC_ANCHOR_ROLLBACK_KEY = "projection_public_anchor_rollback_generation_v1";
 const PUBLIC_ANCHOR_RESTART_PREFIX = "projection_restart_public_anchors_v1:";
+const PUBLIC_ANCHOR_MISMATCH_REPAIR_KEY = "projection_public_anchor_mismatch_repair_v1";
 const PUBLIC_ANCHOR_SOURCE_READY_SQL = `exists (select 1 from public_aggregate_state aggregate
   where aggregate.scope = 'tracks' and aggregate.state = 'complete'
     and aggregate.generation = ? and aggregate.release_hub_order_epoch = ?
@@ -945,6 +949,24 @@ type AnchorProjectionState = {
   orderEpoch: number;
   total: number;
 };
+
+export class PublicAnchorRebuildCountMismatchError extends Error {
+  readonly generation: string;
+  readonly orderEpoch: number;
+  readonly processed: number;
+  readonly total: number;
+
+  constructor(state: AnchorProjectionState, processed: number) {
+    super(
+      `public anchor rebuild count mismatch persists after a projection repair: processed ${processed}, expected ${state.total} (generation ${state.generation}, order epoch ${state.orderEpoch})`,
+    );
+    this.name = "PublicAnchorRebuildCountMismatchError";
+    this.generation = state.generation;
+    this.orderEpoch = state.orderEpoch;
+    this.processed = processed;
+    this.total = state.total;
+  }
+}
 
 type PublishedAnchorState = {
   anchor_format_version: number;
@@ -1525,6 +1547,259 @@ function assertPublicAnchorLimit(limit: number): void {
   }
 }
 
+function sameGenerationPublication(
+  published: PublishedAnchorState | undefined,
+  generation: string,
+): PublishedAnchorState | undefined {
+  return published?.generation === generation ? published : undefined;
+}
+
+type AnchorMismatchRoundPhase = "persistent" | "repaired" | "restarting" | "scanning";
+
+type AnchorMismatchRound = {
+  cursor: null | string;
+  generation: string;
+  orderEpoch: number;
+  phase: AnchorMismatchRoundPhase;
+  processed: number;
+  queued: number;
+  repaired: boolean;
+  version: 1;
+};
+
+const ANCHOR_MISMATCH_ROUND_PHASES: readonly string[] = [
+  "persistent",
+  "repaired",
+  "restarting",
+  "scanning",
+];
+
+function isNonNegativeInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+function parseAnchorMismatchRound(value: unknown): AnchorMismatchRound | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      return undefined;
+    }
+    const state = parsed as Record<string, unknown>;
+    const { cursor, generation, orderEpoch, phase, processed, queued, repaired } = state;
+    return Object.keys(state).sort().join(",") ===
+      "cursor,generation,orderEpoch,phase,processed,queued,repaired,version" &&
+      state["version"] === 1 &&
+      (cursor === null || (typeof cursor === "string" && cursor.length > 0)) &&
+      typeof generation === "string" &&
+      generation.length > 0 &&
+      !generation.includes(":") &&
+      isNonNegativeInteger(orderEpoch) &&
+      typeof phase === "string" &&
+      ANCHOR_MISMATCH_ROUND_PHASES.includes(phase) &&
+      isNonNegativeInteger(processed) &&
+      isNonNegativeInteger(queued) &&
+      typeof repaired === "boolean"
+      ? {
+          cursor,
+          generation,
+          orderEpoch,
+          phase: phase as AnchorMismatchRoundPhase,
+          processed,
+          queued,
+          repaired,
+          version: 1,
+        }
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function anchorWalkDisagreesWithTotal(complete: boolean, processed: number, total: number) {
+  return complete ? processed !== total : processed > total;
+}
+
+function writeAnchorMismatchRoundStatement(
+  next: AnchorMismatchRound | null,
+  expected: string | undefined,
+  projection: AnchorProjectionState,
+  restartKey: string,
+): InStatement {
+  const ready = [projection.generation, projection.orderEpoch, restartKey];
+  if (next === null) {
+    return {
+      args: [PUBLIC_ANCHOR_MISMATCH_REPAIR_KEY, expected ?? null, ...ready],
+      sql: `delete from settings where key = ? and value = ?
+        and ${PUBLIC_ANCHOR_SOURCE_READY_SQL}`,
+    };
+  }
+  const serialized = JSON.stringify(next);
+  return expected === undefined
+    ? {
+        args: [PUBLIC_ANCHOR_MISMATCH_REPAIR_KEY, serialized, ...ready],
+        sql: `insert into settings (key, value)
+          select ?, ? where ${PUBLIC_ANCHOR_SOURCE_READY_SQL}
+          on conflict(key) do update set value = excluded.value`,
+      }
+    : {
+        args: [serialized, PUBLIC_ANCHOR_MISMATCH_REPAIR_KEY, expected, ...ready],
+        sql: `update settings set value = ? where key = ? and value = ?
+          and ${PUBLIC_ANCHOR_SOURCE_READY_SQL}`,
+      };
+}
+
+async function startAnchorMismatchRound(
+  client: ProjectionClient,
+  options: {
+    prior: AnchorMismatchRound | undefined;
+    projectionState: AnchorProjectionState;
+    restartKey: string;
+    state: AnchorRebuildState;
+    walked: number;
+  },
+): Promise<{ complete: boolean; processed: number }> {
+  const { prior, projectionState, restartKey, state, walked } = options;
+  const repaired = prior?.generation === projectionState.generation && prior.phase === "repaired";
+  logEvent("warn", "public-anchor.rebuild-count-mismatch", {
+    generation: projectionState.generation,
+    orderEpoch: projectionState.orderEpoch,
+    processed: state.processed,
+    repaired,
+    total: projectionState.total,
+  });
+  await client.execute(
+    writeAnchorMismatchRoundStatement(
+      {
+        cursor: null,
+        generation: projectionState.generation,
+        orderEpoch: projectionState.orderEpoch,
+        phase: "scanning",
+        processed: state.processed,
+        queued: 0,
+        repaired,
+        version: 1,
+      },
+      undefined,
+      projectionState,
+      restartKey,
+    ),
+  );
+  return { complete: false, processed: walked };
+}
+
+async function scanAnchorMismatchMembership(
+  client: ProjectionClient,
+  round: AnchorMismatchRound,
+  serialized: string,
+  options: { limit: number; projectionState: AnchorProjectionState; restartKey: string },
+): Promise<{ complete: boolean; processed: number }> {
+  const { limit, projectionState, restartKey } = options;
+  const page = await client.execute({
+    args: [round.cursor ?? "", limit],
+    sql: `select membership.track_id,
+        not exists (select 1 from tracks t
+          where t.track_id = membership.track_id and ${publicTrackWhere("t")}) as stale
+      from public_aggregate_membership membership
+      where membership.track_id > ? order by membership.track_id limit ?`,
+  });
+  const rows = page.rows.flatMap((row) =>
+    typeof row.track_id === "string"
+      ? [{ stale: Number(row.stale) === 1, trackId: row.track_id }]
+      : [],
+  );
+  const stale = rows.filter((row) => row.stale).map((row) => row.trackId);
+  const queued = round.queued + stale.length;
+  const scanned = rows.length < limit;
+  let phase: AnchorMismatchRoundPhase = "scanning";
+  if (scanned) {
+    phase = queued === 0 && round.repaired ? "persistent" : "restarting";
+  }
+  const next: AnchorMismatchRound = {
+    ...round,
+    cursor: rows.at(-1)?.trackId ?? round.cursor,
+    orderEpoch: projectionState.orderEpoch,
+    phase,
+    queued,
+  };
+  const results = await client.batch(
+    [
+      writeAnchorMismatchRoundStatement(next, serialized, projectionState, restartKey),
+      ...markPublicProjectionSourceChangedStatements(
+        stale.map((subjectId) => ({ subjectId, subjectType: "track" as const })),
+        "public-anchor:count-mismatch",
+        ["public_aggregates"],
+        { onlyIfPreviousStatementChanged: true },
+      ),
+    ],
+    "write",
+  );
+  if (phase === "persistent" && (results[0]?.rowsAffected ?? 0) > 0) {
+    throw new PublicAnchorRebuildCountMismatchError(projectionState, round.processed);
+  }
+  return { complete: false, processed: rows.length };
+}
+
+async function advanceAnchorMismatchRound(
+  client: ProjectionClient,
+  options: {
+    limit: number;
+    persistedValue: unknown;
+    projectionState: AnchorProjectionState;
+    published: PublishedAnchorState | undefined;
+    restartKey: string;
+    roundValue: unknown;
+  },
+): Promise<{ complete: boolean; processed: number } | undefined> {
+  const { limit, persistedValue, projectionState, published, restartKey, roundValue } = options;
+  const round = parseAnchorMismatchRound(roundValue);
+  if (
+    round === undefined ||
+    typeof roundValue !== "string" ||
+    round.generation !== projectionState.generation ||
+    round.phase === "repaired"
+  ) {
+    return undefined;
+  }
+  if (round.phase === "persistent") {
+    if (round.orderEpoch === projectionState.orderEpoch) {
+      throw new PublicAnchorRebuildCountMismatchError(projectionState, round.processed);
+    }
+    await client.execute(
+      writeAnchorMismatchRoundStatement(null, roundValue, projectionState, restartKey),
+    );
+    return { complete: false, processed: 0 };
+  }
+  if (round.phase === "scanning") {
+    return scanAnchorMismatchMembership(client, round, roundValue, {
+      limit,
+      projectionState,
+      restartKey,
+    });
+  }
+  const publication = sameGenerationPublication(published, projectionState.generation);
+  if (persistedValue === undefined && publication === undefined) {
+    await client.execute(
+      writeAnchorMismatchRoundStatement(
+        { ...round, cursor: null, phase: "repaired", repaired: true },
+        roundValue,
+        projectionState,
+        restartKey,
+      ),
+    );
+    return { complete: false, processed: 0 };
+  }
+  return restartMalformedAnchorBuild(
+    client,
+    projectionState.generation,
+    limit,
+    publication,
+    persistedValue,
+  );
+}
+
 async function advanceCurrentAnchorCleanup(
   client: ProjectionClient,
   cleanup: AnchorCleanupState | undefined,
@@ -1716,8 +1991,8 @@ export async function advancePublicAnchors(
   limit: number,
 ): Promise<{ complete: boolean; processed: number }> {
   assertPublicAnchorLimit(limit);
-  const [projection, persisted, cleanupResult, publishedResult, rollbackResult] = await Promise.all(
-    [
+  const [projection, persisted, cleanupResult, publishedResult, rollbackResult, mismatchResult] =
+    await Promise.all([
       client.execute(`select default_track_total, generation, release_hub_order_epoch
       from public_aggregate_state aggregate
       where aggregate.scope = 'tracks' and aggregate.state = 'complete'
@@ -1746,8 +2021,11 @@ export async function advancePublicAnchors(
         args: [PUBLIC_ANCHOR_ROLLBACK_KEY],
         sql: `select value from settings where key = ? limit 1`,
       }),
-    ],
-  );
+      client.execute({
+        args: [PUBLIC_ANCHOR_MISMATCH_REPAIR_KEY],
+        sql: `select value from settings where key = ? limit 1`,
+      }),
+    ]);
   const projectionState = anchorProjectionState(projection.rows[0]);
   if (projectionState === undefined) {
     return { complete: false, processed: 0 };
@@ -1771,6 +2049,18 @@ export async function advancePublicAnchors(
   const publishedCurrent = publishedAnchorIsCurrent(published, projectionState);
   const persistedValue = persisted.rows[0]?.value;
   const saved = parseAnchorState(persistedValue);
+  const roundValue = mismatchResult.rows[0]?.value;
+  const mismatchRound = await advanceAnchorMismatchRound(client, {
+    limit,
+    persistedValue,
+    projectionState,
+    published,
+    restartKey,
+    roundValue,
+  });
+  if (mismatchRound !== undefined) {
+    return mismatchRound;
+  }
   if (!publishedCurrent) {
     const amended = await amendPublicAnchorsFromLedger(client, {
       persistedValue,
@@ -1872,6 +2162,15 @@ export async function advancePublicAnchors(
       on conflict(hub, clause_hash) do update set anchors_json = excluded.anchors_json,
         fingerprint = excluded.fingerprint, computed_at = excluded.computed_at`,
   };
+  if (anchorWalkDisagreesWithTotal(page.complete, state.processed, total)) {
+    return startAnchorMismatchRound(client, {
+      prior: parseAnchorMismatchRound(roundValue),
+      projectionState,
+      restartKey,
+      state,
+      walked: tracks.length,
+    });
+  }
   if (!page.complete) {
     state.shard += 1;
     const stateStatement = {
@@ -1888,9 +2187,6 @@ export async function advancePublicAnchors(
       "write",
     );
     return { complete: false, processed: tracks.length };
-  }
-  if (state.processed !== total) {
-    throw new Error("public anchor rebuild total changed without an order epoch change");
   }
   const statements: InStatement[] = [];
   if (anchors.length > 0 || tracks.length > 0 || state.processed < TRACKS_HUB_PAGE_SIZE) {
@@ -1963,9 +2259,9 @@ export async function advancePublicAnchors(
         and ${PUBLIC_ANCHOR_SOURCE_READY_SQL}
         on conflict(key) do update set value = excluded.value`,
     },
-    {
+    ...[PUBLIC_ANCHOR_REBUILD_KEY, PUBLIC_ANCHOR_MISMATCH_REPAIR_KEY].map((key) => ({
       args: [
-        PUBLIC_ANCHOR_REBUILD_KEY,
+        key,
         TRACKS_HUB_ANCHOR_ADDRESS.hub,
         TRACKS_HUB_ANCHOR_ADDRESS.clauseHash,
         generation,
@@ -1981,7 +2277,7 @@ export async function advancePublicAnchors(
           where hub = ? and clause_hash = ? and generation = ? and order_epoch = ?)
         and exists (select 1 from settings where key = ? and value = ?)
         and ${PUBLIC_ANCHOR_SOURCE_READY_SQL}`,
-    },
+    })),
   );
   const results = await client.batch(statements, "write");
   if ((results[validityIndex]?.rowsAffected ?? 0) === 0) {

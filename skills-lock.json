@@ -25,7 +25,7 @@
     "fluncle-catalogue-prune": {
       "source": "./packages/skills/fluncle-catalogue-prune",
       "sourceType": "local",
-      "computedHash": "a8cceaaffbb79b94ba0675769601fbe253f91a7c150a3284de978bf560e0a709"
+      "computedHash": "fe746f040f1c9d14d5ef604a889f8cadc4320786c3eaffbc88798bf73766eda1"
     },
     "fluncle-embed-batch": {
       "source": "./packages/skills/fluncle-embed-batch",
