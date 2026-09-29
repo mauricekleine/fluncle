@@ -54,9 +54,16 @@ Every knob is an `Environment=` line on the unit, passed into the container by t
 
 ## What a round costs
 
-Measured on one attended batch of three labels (one large DnB label that needed a census, one clear not-DnB, one clean DnB imprint): 139 s, **621k tokens** (input + output + cache, almost all cache reads) and **$0.94** list-price equivalent — about 200k tokens and $0.30 per label. A large catalogue's census dominates; a small undecided label costs less. So a default round of 30 labels is up to about **6M tokens and $9 list-price equivalent**, spent on the shared Claude Max subscription rather than billed, across three `claude -p` calls. At the current refill rate of single digits a day, a round fires about once a week.
+Two attended measurements bracket the cost:
 
-Every run's summary carries the measured `tokens` and `usd` (the CLI's list-price figure, not a bill), so the ledger holds the real figure per round. Lower `LABEL_TRIAGE_MAX_LABELS` or `LABEL_TRIAGE_MAX_BATCHES` to spend less per round.
+- **On the box, a typical batch:** four never-looked labels from the real pile (three `not_dnb`, one `unclear`) cost **145k tokens and $0.37** list-price equivalent — about 36k tokens and $0.09 per label.
+- **Off the box, a heavy batch:** three well-known labels, one a large DnB catalogue that needed a full census, cost **621k tokens and $0.94** — about 200k tokens and $0.30 per label. A large catalogue's census dominates.
+
+Tokens are input + output + cache, almost all cache reads. So a default round of 30 labels costs about **1–2M tokens and $3** typically, and at most about 6M tokens and $9. The shared Claude Max subscription pays for it; the dollar figure is a list-price equivalent, not a bill.
+
+**The pile is a backlog, not a trickle.** The first box reading found 1,153 never-looked labels. Once the gate fires, the carry-over keeps the round firing daily at `MAX_LABELS` a day until the backlog drains — about 38 days at the default 30. Raise or lower `LABEL_TRIAGE_MAX_LABELS` and `LABEL_TRIAGE_MAX_BATCHES` to change that pace.
+
+Every run's summary carries the measured `tokens` and `usd`, so the run ledger holds the real figure for each round.
 
 ## Reading a run
 
