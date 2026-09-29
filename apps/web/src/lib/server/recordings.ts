@@ -257,9 +257,17 @@ export async function listPlanMembershipsForTracks(
 
 async function mintPlanHandle(id: string): Promise<string> {
   const db = await getDb();
+  const probed = new Set<string>();
 
   for (let attempt = 0; attempt < planHandleMaxAttempts; attempt++) {
     const slug = galaxySlug(id, attempt);
+
+    if (probed.has(slug)) {
+      continue;
+    }
+
+    probed.add(slug);
+
     const clash = await db.execute({
       args: [slug],
       sql: `select 1 from recordings where title = ? limit 1`,

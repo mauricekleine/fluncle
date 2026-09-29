@@ -1,5 +1,5 @@
 import { type Client } from "@libsql/client";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const holder = vi.hoisted(() => ({ db: undefined as Client | undefined }));
 
@@ -48,7 +48,18 @@ async function counterRows(action: string): Promise<number> {
   return Number(result.rows[0]?.n ?? 0);
 }
 
+const MID_BURST_WINDOW = new Date("2026-09-25T15:00:10.000Z");
+
 describe("the burst dial", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(MID_BURST_WINDOW);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("allows the ceiling and refuses the one past it", async () => {
     const request = fromIp("1.1.1.1");
 

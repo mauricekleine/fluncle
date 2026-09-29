@@ -370,6 +370,13 @@ export const DUE_WORK_REVIEWED_NONPRODUCER_WRITERS = [
     sites: ["db-dump.ts:insert:dynamic:3511a2ab"],
   },
   {
+    disposition: "serialization",
+    file: "scripts/lib/db-snapshot.ts",
+    rationale:
+      "Streams inert SQL dump text to a local file and never executes a database mutation.",
+    sites: ["scripts/lib/db-snapshot.ts:insert:dynamic:3511a2ab"],
+  },
+  {
     disposition: "non-eligibility",
     file: "embedding.ts",
     rationale:
@@ -753,6 +760,12 @@ export const GOAL_D_REVIEWED_NONPROJECTION_WRITERS = [
     file: "db-dump.ts",
     rationale: "Generates restore SQL and does not execute an application source mutation.",
     sites: ["db-dump.ts:insert:dynamic:3511a2ab"],
+  },
+  {
+    disposition: "serialization",
+    file: "scripts/lib/db-snapshot.ts",
+    rationale: "Generates restore SQL for a local snapshot file and does not execute a mutation.",
+    sites: ["scripts/lib/db-snapshot.ts:insert:dynamic:3511a2ab"],
   },
   {
     disposition: "derived-projection-write",
