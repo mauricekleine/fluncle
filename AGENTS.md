@@ -71,6 +71,7 @@ Use the globally installed `mk-agent-orchestration` skill for provider, model, e
 
 - Every change uses the dependency-closure contract in `scripts/quality/classifier.mjs`; unknown paths, lockfiles, root configuration, workflow topology, and scheduled/manual runs fail closed to the full matrix. `bun run quality:classify -- --base <sha> --head <sha>` explains the selected leaves.
 - Edit hooks start the fingerprinted affected preflight without blocking. Run `bun run quality:preflight -- status` while working and `bun run quality:preflight -- join` before a commit or handoff; a content or configuration change rejects stale results and queues the new fingerprint. Targeted browser tests are early feedback only; the selected web closure still gates on the full deterministic E2E suite.
+- To inspect or verify a running UI, use the global `agent-browser` skill (the pinned `agent-browser` CLI); use Chrome DevTools MCP only for performance traces.
 - TypeScript: `bun run typecheck` from the repo root, or the nearest package `typecheck` for focused changes.
 - Lint and format: `bun run check` from the repo root for broad validation.
 - Web changes: `bun run --cwd apps/web typecheck`, `bun run --cwd apps/web build`, and `bun run --cwd apps/web lint` when relevant.
