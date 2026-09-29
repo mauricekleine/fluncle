@@ -253,15 +253,18 @@ RUN arch="$(uname -m)" \
 # workspace package does not exist on the box), and clip-drip-sweep.sh (an un-deployed cron). Keep
 # provision-rave-03.sh — it is NOT operator-only: render-conductor.sh execs it as a sibling
 # (`$SCRIPT_DIR/provision-rave-03.sh`) on a render-box cold start, so the render timer needs it
-# baked here too. The two device-mirror development shims are overwritten immediately afterward
-# by their canonical modules from apps/web; this keeps the box script self-contained without
-# duplicating the device whitelist or anchored-cut SQL. The complete local deriver is copied under
-# its repository-relative tree because its imports deliberately share those same canonical files.
+# baked here too. The two device-mirror development shims and the backup sweep's db-dump shim are
+# overwritten immediately afterward by their canonical modules from apps/web; this keeps the box
+# scripts self-contained without duplicating the device whitelist, the anchored-cut SQL, or the
+# dump format. The db-dump COPY stays on one line so pin-watch's COPY parser fingerprints it. The
+# complete local deriver is copied under its repository-relative tree because its imports
+# deliberately share those same canonical files.
 # World-readable + exec so the non-root hermes user runs them.
 COPY docs/agents/hermes/scripts/ /opt/hermes-scripts/
 COPY apps/web/src/lib/catalogue-eligibility.ts \
      apps/web/scripts/lib/device-db-schema.ts \
      /opt/hermes-scripts/
+COPY apps/web/src/lib/server/db-dump.ts /opt/hermes-scripts/db-dump.ts
 # The device deriver is baked under its REPOSITORY-RELATIVE tree, because its imports reach
 # sideways into apps/web (`../../src/lib/...`) and only that tree shape resolves them. Every file
 # in its import closure is listed here, and device-bake-closure.test.ts walks that closure against

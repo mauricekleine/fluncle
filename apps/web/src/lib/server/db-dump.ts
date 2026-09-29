@@ -4,6 +4,11 @@ export type SchemaObject = { name: string; sql: string; type: string };
 
 export type DumpTable = { columns: string[]; name: string; rows: SqlValue[][] };
 
+export type SequenceHead = { name: string; seq: SqlValue };
+
+export const PRIMARY_KEY_COLUMNS_SQL =
+  "SELECT name FROM pragma_table_info(?) WHERE pk > 0 ORDER BY pk";
+
 export function quoteIdent(name: string): string {
   return `"${name.replace(/"/g, '""')}"`;
 }
@@ -42,10 +47,31 @@ export function sqlLiteral(value: SqlValue): string {
   return `'${value.replace(/'/g, "''")}'`;
 }
 
+export function isWithoutRowid(object: SchemaObject): boolean {
+  return /\bwithout\s+rowid\b/i.test(object.sql);
+}
+
+export function keysetPageSql(table: string, keys: readonly string[], after: boolean): string {
+  const keyList = keys.map((key) => (key === "rowid" ? "rowid" : quoteIdent(key))).join(", ");
+  const where = after ? ` WHERE (${keyList}) > (${keys.map(() => "?").join(", ")})` : "";
+
+  return `SELECT ${keyList}, * FROM ${quoteIdent(table)}${where} ORDER BY ${keyList} LIMIT ?`;
+}
+
+export function sequenceHeadStatements(head: SequenceHead): string[] {
+  const name = sqlLiteral(head.name);
+
+  return [
+    `DELETE FROM sqlite_sequence WHERE name = ${name};`,
+    `INSERT INTO sqlite_sequence (name, seq) VALUES (${name}, ${sqlLiteral(head.seq)});`,
+  ];
+}
+
 export function buildDumpSql(
   schema: readonly SchemaObject[],
   tables: readonly DumpTable[],
   header = "-- Fluncle database dump. Do not edit by hand.",
+  sequences: readonly SequenceHead[] = [],
 ): string {
   const parts: string[] = [header, "PRAGMA foreign_keys=OFF;", "BEGIN TRANSACTION;"];
 
@@ -67,6 +93,10 @@ export function buildDumpSql(
 
       parts.push(`INSERT INTO ${quoteIdent(table.name)} (${columnList}) VALUES (${values});`);
     }
+  }
+
+  for (const head of sequences) {
+    parts.push(...sequenceHeadStatements(head));
   }
 
   for (const object of schema) {

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
@@ -10,6 +11,7 @@ import {
   buildDumpSql,
   type DumpTable,
   type SchemaObject,
+  type SequenceHead,
   type SqlValue,
 } from "../../../../apps/web/src/lib/server/db-dump";
 
@@ -20,6 +22,7 @@ import {
   createBackupRunCounters,
   failBackupOperation,
   hashFile,
+  libsqlSource,
   reusableDailyDump,
   selectExpiredBackupKeys,
   signedPut,
@@ -46,18 +49,30 @@ async function rejectionMessage(promise: Promise<unknown>): Promise<string> {
   }
 }
 
-function fixtureSource(schema: SchemaObject[], tables: DumpTable[]): DumpSource {
+function fixtureSource(
+  schema: SchemaObject[],
+  tables: DumpTable[],
+  sequences: SequenceHead[] = [],
+): DumpSource {
   return {
-    fetchPage: async (name, limit, offset) => {
+    fetchPage: async (name, limit, after) => {
       const table = tables.find((candidate) => candidate.name === name);
 
       if (!table) {
         return null;
       }
 
-      return { columns: table.columns, rows: table.rows.slice(offset, offset + limit) };
+      const start = after === null ? 0 : Number(after[0]) + 1;
+      const rows = table.rows.slice(start, start + limit);
+
+      return {
+        columns: table.columns,
+        cursor: rows.length === 0 ? null : [start + rows.length - 1],
+        rows,
+      };
     },
     fetchSchema: async () => schema,
+    fetchSequences: async (names) => sequences.filter((head) => names.includes(head.name)),
     fetchSpot: async () => ({ count: 3, max: "zzz", min: "aaa" }),
   };
 }
@@ -145,18 +160,299 @@ describe("streamDumpSql — byte-for-byte the format the restore drill expects",
     });
   });
 
+  test("AUTOINCREMENT heads of dumped tables land after the rows, in the oracle's format", async () => {
+    const sequences: SequenceHead[] = [
+      { name: "ghost_table", seq: 9n },
+      { name: "tracks", seq: 90n },
+    ];
+    const { sql } = await collect(fixtureSource(SCHEMA, TABLES, sequences), { batchRows: 2 });
+
+    expect(sql).toBe(buildDumpSql(SCHEMA, TABLES, HEADER, [{ name: "tracks", seq: 90n }]));
+    expect(sql).toContain("INSERT INTO sqlite_sequence (name, seq) VALUES ('tracks', 90);");
+    expect(sql).not.toContain("ghost_table");
+  });
+
   test("an unreadable table is skipped whole, exactly as before", async () => {
     const source = fixtureSource(SCHEMA, TABLES);
     const guarded: DumpSource = {
       ...source,
-      fetchPage: async (name, limit, offset) =>
-        name === "empty_table" ? null : source.fetchPage(name, limit, offset),
+      fetchPage: async (name, limit, after) =>
+        name === "empty_table" ? null : source.fetchPage(name, limit, after),
     };
 
     const { manifest } = await collect(guarded);
 
     expect(manifest.tableCount).toBe(1);
     expect(manifest.tables).toEqual({ tracks: 3 });
+  });
+});
+
+type HranaCellJson = { base64?: string; type: string; value?: number | string };
+
+function toHranaCell(value: unknown): HranaCellJson {
+  if (value === null || value === undefined) {
+    return { type: "null" };
+  }
+  if (typeof value === "bigint") {
+    return { type: "integer", value: value.toString() };
+  }
+  if (typeof value === "number") {
+    return { type: "float", value };
+  }
+  if (value instanceof Uint8Array) {
+    return { base64: Buffer.from(value).toString("base64"), type: "blob" };
+  }
+  if (typeof value !== "string") {
+    throw new Error(`unexpected SQLite value of type ${typeof value}`);
+  }
+  return { type: "text", value };
+}
+
+function fromHranaCell(cell: HranaCellJson): bigint | Buffer | number | string | null {
+  switch (cell.type) {
+    case "integer":
+      return BigInt(String(cell.value));
+    case "float":
+      return Number(cell.value);
+    case "blob":
+      return Buffer.from(cell.base64 ?? "", "base64");
+    case "text":
+      return String(cell.value);
+    default:
+      return null;
+  }
+}
+
+function serveHrana(db: Database): {
+  close: () => Promise<void>;
+  statements: string[];
+  url: string;
+} {
+  const statements: string[] = [];
+  const server = Bun.serve({
+    fetch: async (request) => {
+      const body = (await request.json()) as {
+        requests: { stmt?: { args?: HranaCellJson[]; sql: string }; type: string }[];
+      };
+      const results = body.requests.map((entry) => {
+        if (entry.type !== "execute" || !entry.stmt) {
+          return { type: "ok" };
+        }
+
+        statements.push(entry.stmt.sql);
+
+        try {
+          const query = db.query(entry.stmt.sql);
+          const rows = query.values(...(entry.stmt.args ?? []).map(fromHranaCell));
+
+          return {
+            response: {
+              result: {
+                cols: query.columnNames.map((name) => ({ name })),
+                rows: rows.map((row) => row.map(toHranaCell)),
+              },
+              type: "execute",
+            },
+            type: "ok",
+          };
+        } catch (error) {
+          return { error: { message: String(error) }, type: "error" };
+        }
+      });
+
+      return Response.json({ results });
+    },
+    hostname: "127.0.0.1",
+    port: 0,
+  });
+
+  return { close: () => server.stop(true), statements, url: server.url.origin };
+}
+
+const KEY_SHAPES_DDL = [
+  "CREATE TABLE seq_rows (seq INTEGER PRIMARY KEY AUTOINCREMENT, v TEXT)",
+  "CREATE TABLE text_pk (id TEXT PRIMARY KEY, v TEXT)",
+  "CREATE TABLE composite_pk (a TEXT, b INTEGER, v TEXT, PRIMARY KEY (a, b))",
+  "CREATE TABLE no_pk (a TEXT, b REAL)",
+  "CREATE TABLE wr_text (k TEXT PRIMARY KEY, v TEXT) WITHOUT ROWID",
+  "CREATE TABLE wr_composite (b INTEGER NOT NULL, a TEXT NOT NULL, v BLOB, PRIMARY KEY (a, b)) WITHOUT ROWID",
+  "CREATE TABLE wr_real (r REAL PRIMARY KEY, v TEXT) WITHOUT ROWID",
+  "CREATE TABLE wr_blob (k BLOB PRIMARY KEY, v TEXT) WITHOUT ROWID",
+  "CREATE TABLE empty_rows (a TEXT)",
+  "CREATE INDEX text_pk_v_idx ON text_pk (v)",
+  "CREATE VIEW text_pk_view AS SELECT id FROM text_pk",
+  "CREATE TRIGGER no_pk_touch AFTER INSERT ON no_pk BEGIN SELECT 1; END",
+];
+
+function seedKeyShapes(): Database {
+  const db = new Database(":memory:", { safeIntegers: true });
+
+  for (const ddl of KEY_SHAPES_DDL) {
+    db.run(ddl);
+  }
+
+  for (let index = 1; index <= 9; index += 1) {
+    db.run("INSERT INTO seq_rows (v) VALUES (?)", [`row ${index} it's`]);
+    db.run("INSERT INTO text_pk VALUES (?, ?)", [`id-${(index * 7) % 10}`, `v${index % 3}`]);
+    db.run("INSERT INTO composite_pk VALUES (?, ?, ?)", [`a${index % 3}`, 10 - index, `c${index}`]);
+    db.run("INSERT INTO no_pk VALUES (?, ?)", ["dup", 0.5]);
+    db.run("INSERT INTO wr_text VALUES (?, ?)", [`k${(index * 4) % 9}`, null]);
+    db.run("INSERT INTO wr_composite VALUES (?, ?, ?)", [
+      index % 4,
+      `a${index % 3}`,
+      new Uint8Array([index, 0, 255]),
+    ]);
+    db.run("INSERT INTO wr_real VALUES (?, ?)", [index / 4, `r${index}`]);
+    db.run("INSERT INTO wr_blob VALUES (?, ?)", [new Uint8Array([9 - index, index]), `b${index}`]);
+  }
+
+  db.run("DELETE FROM seq_rows WHERE seq > 6");
+
+  return db;
+}
+
+const SCHEMA_SQL = `SELECT type, name, sql FROM sqlite_master
+  WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%'
+  ORDER BY CASE type WHEN 'table' THEN 0 WHEN 'index' THEN 1 WHEN 'trigger' THEN 2 ELSE 3 END, name`;
+
+function plainScanOracle(db: Database): string {
+  const schema = db.query(SCHEMA_SQL).all() as SchemaObject[];
+  const tables: DumpTable[] = schema
+    .filter((object) => object.type === "table")
+    .map((object) => {
+      const query = db.query(`SELECT * FROM "${object.name}"`);
+      const rows = query.values() as SqlValue[][];
+
+      return { columns: query.columnNames, name: object.name, rows };
+    });
+  const hasSequences = db.query("SELECT 1 FROM sqlite_master WHERE name = 'sqlite_sequence'").get();
+  const sequences = hasSequences
+    ? (db.query("SELECT name, seq FROM sqlite_sequence ORDER BY name").all() as SequenceHead[])
+    : [];
+
+  return buildDumpSql(schema, tables, HEADER, sequences);
+}
+
+describe("libsqlSource — keyset paging over every primary-key shape", () => {
+  test("pages each shape by its key and reproduces the unpaged scan byte for byte", async () => {
+    const db = seedKeyShapes();
+    const server = serveHrana(db);
+
+    try {
+      const expected = plainScanOracle(db);
+
+      for (const batchRows of [1, 2, 3, 1000]) {
+        const { manifest, sql } = await collect(
+          libsqlSource({ token: "local-dev", url: server.url }),
+          { batchRows },
+        );
+
+        expect(sql).toBe(expected);
+        expect(manifest.tables).toEqual({
+          composite_pk: 9,
+          empty_rows: 0,
+          no_pk: 9,
+          seq_rows: 6,
+          text_pk: 9,
+          wr_blob: 9,
+          wr_composite: 9,
+          wr_real: 9,
+          wr_text: 9,
+        });
+      }
+    } finally {
+      await server.close();
+    }
+  });
+
+  test("rowid tables page by rowid and WITHOUT ROWID tables by their primary key in pk order", async () => {
+    const db = seedKeyShapes();
+    const server = serveHrana(db);
+
+    try {
+      await collect(libsqlSource({ token: "local-dev", url: server.url }), { batchRows: 4 });
+    } finally {
+      await server.close();
+    }
+
+    const pages = server.statements.filter((sql) => sql.includes(" LIMIT ?"));
+    const pageFor = (table: string) =>
+      pages.find((sql) => sql.includes(`FROM "${table}" WHERE`)) ?? "";
+
+    for (const table of ["seq_rows", "text_pk", "composite_pk", "no_pk"]) {
+      expect(pageFor(table)).toBe(
+        `SELECT rowid, * FROM "${table}" WHERE (rowid) > (?) ORDER BY rowid LIMIT ?`,
+      );
+    }
+    expect(pageFor("wr_text")).toBe(
+      `SELECT "k", * FROM "wr_text" WHERE ("k") > (?) ORDER BY "k" LIMIT ?`,
+    );
+    expect(pageFor("wr_composite")).toBe(
+      `SELECT "a", "b", * FROM "wr_composite" WHERE ("a", "b") > (?, ?) ORDER BY "a", "b" LIMIT ?`,
+    );
+    expect(server.statements.some((sql) => /\boffset\b/i.test(sql))).toBe(false);
+
+    for (const sql of pages) {
+      const plan = (db.query(`EXPLAIN QUERY PLAN ${sql}`).all() as { detail: string }[])
+        .map((row) => row.detail)
+        .join("; ");
+
+      expect(plan).not.toContain("TEMP B-TREE");
+
+      if (sql.includes(" WHERE ")) {
+        expect(plan).toMatch(/^SEARCH /);
+      }
+    }
+  });
+
+  test("the dump restores with every row and the compacted AUTOINCREMENT head intact", async () => {
+    const db = seedKeyShapes();
+    const server = serveHrana(db);
+    let sql = "";
+
+    try {
+      ({ sql } = await collect(libsqlSource({ token: "local-dev", url: server.url }), {
+        batchRows: 2,
+      }));
+    } finally {
+      await server.close();
+    }
+
+    const restored = new Database(":memory:", { safeIntegers: true });
+
+    restored.exec(sql);
+
+    expect(restored.query("SELECT seq FROM sqlite_sequence WHERE name = 'seq_rows'").get()).toEqual(
+      { seq: 9n },
+    );
+
+    restored.run("INSERT INTO seq_rows (v) VALUES ('next')");
+
+    expect(restored.query("SELECT max(seq) AS seq FROM seq_rows").get()).toEqual({ seq: 10n });
+
+    for (const table of ["text_pk", "composite_pk", "wr_composite", "wr_blob", "wr_real"]) {
+      expect(restored.query(`SELECT * FROM "${table}"`).values()).toEqual(
+        db.query(`SELECT * FROM "${table}"`).values(),
+      );
+    }
+  });
+
+  test("a database without AUTOINCREMENT tables emits no sequence statements", async () => {
+    const db = new Database(":memory:", { safeIntegers: true });
+
+    db.run("CREATE TABLE plain (id TEXT PRIMARY KEY)");
+    db.run("INSERT INTO plain VALUES ('x')");
+
+    const server = serveHrana(db);
+
+    try {
+      const { sql } = await collect(libsqlSource({ token: "local-dev", url: server.url }));
+
+      expect(sql).toBe(plainScanOracle(db));
+      expect(sql).not.toContain("sqlite_sequence");
+    } finally {
+      await server.close();
+    }
   });
 });
 
@@ -192,16 +488,20 @@ describe("the memory bound (the whole point of the rewrite)", () => {
     ];
 
     const source: DumpSource = {
-      fetchPage: async (_name, limit, offset) => {
+      fetchPage: async (_name, limit, after) => {
+        const start = after === null ? 0 : Number(after[0]) + 1;
         const rows: SqlValue[][] = [];
 
-        for (let index = offset; index < Math.min(offset + limit, ROW_COUNT); index += 1) {
+        for (let index = start; index < Math.min(start + limit, ROW_COUNT); index += 1) {
           rows.push([index, PAYLOAD]);
         }
 
-        return { columns: ["id", "payload"], rows };
+        const last = rows.at(-1);
+
+        return { columns: ["id", "payload"], cursor: last ? [last[0] ?? null] : null, rows };
       },
       fetchSchema: async () => schema,
+      fetchSequences: async () => [],
       fetchSpot: async () => ({ count: ROW_COUNT, max: ROW_COUNT - 1, min: 0 }),
     };
 

@@ -3,8 +3,13 @@ import { mkdir, open, rename, rm, stat } from "node:fs/promises";
 import { dirname } from "node:path";
 
 import {
+  isWithoutRowid,
+  keysetPageSql,
+  PRIMARY_KEY_COLUMNS_SQL,
   quoteIdent,
   type SchemaObject,
+  type SequenceHead,
+  sequenceHeadStatements,
   sqlLiteral,
   type SqlValue,
 } from "../../src/lib/server/db-dump";
@@ -63,10 +68,6 @@ function textCell(value: Value | undefined, what: string): string {
   return value;
 }
 
-function isWithoutRowid(object: SchemaObject): boolean {
-  return /\bwithout\s+rowid\b/i.test(object.sql);
-}
-
 async function keyColumnsFor(client: SnapshotClient, object: SchemaObject): Promise<string[]> {
   if (!isWithoutRowid(object)) {
     return ["rowid"];
@@ -74,7 +75,7 @@ async function keyColumnsFor(client: SnapshotClient, object: SchemaObject): Prom
 
   const result = await client.execute({
     args: [object.name],
-    sql: `SELECT name FROM pragma_table_info(?) WHERE pk > 0 ORDER BY pk`,
+    sql: PRIMARY_KEY_COLUMNS_SQL,
   });
   const keys = result.rows.map((row) => textCell(row[0], "a primary key column name"));
 
@@ -84,8 +85,6 @@ async function keyColumnsFor(client: SnapshotClient, object: SchemaObject): Prom
 
   return keys;
 }
-
-type SequenceHead = { name: string; seq: Value };
 
 async function readSequenceHeads(
   client: SnapshotClient,
@@ -105,15 +104,11 @@ async function readSequenceHeads(
   const result = await client.execute("SELECT name, seq FROM sqlite_sequence ORDER BY name");
 
   return result.rows
-    .map((row) => ({ name: textCell(row[0], "a sequence name"), seq: row[1] ?? null }))
+    .map((row) => ({
+      name: textCell(row[0], "a sequence name"),
+      seq: (row[1] ?? null) as SqlValue,
+    }))
     .filter((head) => dumped.has(head.name));
-}
-
-export function keysetPageSql(table: string, keys: readonly string[], after: boolean): string {
-  const keyList = keys.map((key) => (key === "rowid" ? "rowid" : quoteIdent(key))).join(", ");
-  const where = after ? ` WHERE (${keyList}) > (${keys.map(() => "?").join(", ")})` : "";
-
-  return `SELECT ${keyList}, * FROM ${quoteIdent(table)}${where} ORDER BY ${keyList} LIMIT ?`;
 }
 
 async function fileExists(path: string): Promise<boolean> {
@@ -241,12 +236,9 @@ export async function pullSnapshot(options: SnapshotOptions): Promise<SnapshotRe
     }
 
     for (const sequence of await readSequenceHeads(client, schema)) {
-      const name = sqlLiteral(sequence.name);
-
-      await emit(`DELETE FROM sqlite_sequence WHERE name = ${name};`);
-      await emit(
-        `INSERT INTO sqlite_sequence (name, seq) VALUES (${name}, ${sqlLiteral(sequence.seq as SqlValue)});`,
-      );
+      for (const statement of sequenceHeadStatements(sequence)) {
+        await emit(statement);
+      }
     }
 
     for (const object of schema) {
