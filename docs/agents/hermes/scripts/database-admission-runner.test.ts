@@ -116,6 +116,7 @@ async function run(
     home?: string;
     maxWaitSecs?: number;
     phase?: boolean;
+    phaseName?: string;
     pollSecs?: string | null;
     token?: string;
   } = {},
@@ -128,7 +129,14 @@ async function run(
 }> {
   const child = spawn(
     "bash",
-    [RUNNER, ...(options.phase === true ? ["phase"] : []), "fluncle-enrich", "--", ...command],
+    [
+      RUNNER,
+      ...(options.phase === true ? ["phase"] : []),
+      "fluncle-enrich",
+      ...(options.phaseName === undefined ? [] : ["--phase", options.phaseName]),
+      "--",
+      ...command,
+    ],
     {
       detached: true,
       env: runnerEnvironment(options),
@@ -990,6 +998,7 @@ fi
       const result = await run(["bash", "-c", `printf started > "${payloadMarker}"`], {
         maxWaitSecs: 0,
         phase: true,
+        phaseName: "beatport",
       });
 
       expect(result.status).toBe(75);
@@ -998,6 +1007,7 @@ fi
       expect(readFileSync(curlLog, "utf8")).not.toContain('"summary_raw"');
       expect(result.stderr).toContain('"outcome":"wait-expired"');
       expect(result.stderr).toContain('"phase_scoped":true');
+      expect(result.stderr).toContain('"phase":"beatport"');
     },
   );
 

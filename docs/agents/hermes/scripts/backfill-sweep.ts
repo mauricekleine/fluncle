@@ -292,6 +292,7 @@ async function runBackfillPhase(
     const phase = await runDatabaseAdmissionPhaseAsync({
       command: [process.execPath, import.meta.filename, "--admission-phase", statePath],
       owner: ADMISSION_OWNER,
+      phase: new URL(state.url).pathname.slice(WORKER_PHASE_PATH_PREFIX.length),
       signal,
       yieldRetries: BACKFILL_PHASE_YIELD_RETRIES,
     });

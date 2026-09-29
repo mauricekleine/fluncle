@@ -738,6 +738,7 @@ describe("phase-scoped database admission", () => {
   let phaseDir: string;
   let timelineFile: string;
   let leaseFile: string;
+  let phaseNamesFile: string;
   let beatportPagesFile: string;
   let hangFile: string;
   let server: ReturnType<typeof Bun.serve>;
@@ -792,6 +793,7 @@ describe("phase-scoped database admission", () => {
     phaseDir = mkdtempSync(join(tmpdir(), "fluncle-backfill-phase-"));
     timelineFile = join(phaseDir, "timeline");
     leaseFile = join(phaseDir, "lease");
+    phaseNamesFile = join(phaseDir, "phase-names");
     beatportPagesFile = join(phaseDir, "beatport-pages");
     hangFile = join(phaseDir, "hang");
     const countFile = join(phaseDir, "count");
@@ -804,7 +806,13 @@ set -uo pipefail
 [ "\${1:-}" = "phase" ] || exit 2
 owner="$2"
 shift 2
+phase_name=""
+if [ "\${1:-}" = "--phase" ]; then
+  phase_name="$2"
+  shift 2
+fi
 [ "\${1:-}" = "--" ] && shift
+printf '%s\\n' "$phase_name" >> ${JSON.stringify(phaseNamesFile)}
 count=$(( $(cat ${JSON.stringify(countFile)} 2>/dev/null || printf 0) + 1 ))
 printf '%s' "$count" > ${JSON.stringify(countFile)}
 if [ "$count" = "$(cat ${JSON.stringify(yieldAtFile)} 2>/dev/null)" ]; then
@@ -913,7 +921,15 @@ exit "$status"
   });
 
   afterEach(() => {
-    for (const name of ["count", "yield-at", "timeline", "lease", "beatport-pages", "hang"]) {
+    for (const name of [
+      "count",
+      "yield-at",
+      "timeline",
+      "lease",
+      "phase-names",
+      "beatport-pages",
+      "hang",
+    ]) {
       rmSync(join(phaseDir, name), { force: true });
     }
   });
@@ -1018,6 +1034,17 @@ exit "$status"
     const events = timeline();
 
     expect(events.filter((event) => event === "acquire:fluncle-backfill")).toHaveLength(9);
+    expect(readFileSync(phaseNamesFile, "utf8").trim().split("\n")).toEqual([
+      "discogs",
+      "discogs",
+      "lastfm",
+      "apple-music",
+      "apple-catalogue",
+      "beatport",
+      "discogs-facts",
+      "discogs-facts",
+      "deezer",
+    ]);
     expect(events.filter((event) => event.startsWith("worker:"))).toEqual([
       "worker:discogs:prepare:held",
       "worker:discogs:decide:held",
