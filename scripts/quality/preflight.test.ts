@@ -1,14 +1,21 @@
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import { repositoryRoot } from "./classifier.mjs";
 import {
   acquireLaunchLock,
+  changedPaths,
+  comparisonBase,
   executionWaves,
   fingerprintWorktree,
+  planForWorktree,
+  reapProcessGroup,
   releaseLaunchLock,
   resultIsReusable,
+  runSupervisedWave,
+  waitForQuietPeriod,
   withoutGitEnvironment,
   workerIsActive,
 } from "./preflight.mjs";
@@ -113,5 +120,231 @@ describe("preflight scheduling", () => {
     expect(acquireLaunchLock(directory, { now: () => clock + 31_002 })).toBeString();
 
     rmSync(directory, { force: true, recursive: true });
+  });
+});
+
+function fixtureRepository() {
+  const root = join(tmpdir(), `fluncle-preflight-${crypto.randomUUID()}`);
+  mkdirSync(root, { recursive: true });
+  git(root, "init", "-q");
+  git(root, "config", "user.email", "test@example.invalid");
+  git(root, "config", "user.name", "Preflight Test");
+  writeFileSync(join(root, "base.txt"), "base\n");
+  git(root, "add", "base.txt");
+  git(root, "-c", "commit.gpgsign=false", "commit", "-qm", "base");
+  return root;
+}
+
+function processExists(pid: number) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+describe("preflight change scope", () => {
+  test("a committed branch is classified against its merge-base with origin/main", () => {
+    const root = fixtureRepository();
+    git(root, "update-ref", "refs/remotes/origin/main", "HEAD");
+    expect(changedPaths(root)).toEqual([]);
+
+    writeFileSync(join(root, "committed.txt"), "branch\n");
+    git(root, "add", "committed.txt");
+    git(root, "-c", "commit.gpgsign=false", "commit", "-qm", "branch work");
+    writeFileSync(join(root, "untracked.txt"), "draft\n");
+
+    expect(comparisonBase(root).source).toBe("merge-base");
+    expect(changedPaths(root)).toEqual(["committed.txt", "untracked.txt"]);
+    rmSync(root, { force: true, recursive: true });
+  });
+
+  test("without an origin/main ref the comparison falls back to HEAD", () => {
+    const root = fixtureRepository();
+
+    expect(comparisonBase(root)).toEqual({ ref: "HEAD", source: "HEAD" });
+    rmSync(root, { force: true, recursive: true });
+  });
+
+  test("a tree identical to its merge-base selects no lanes locally", () => {
+    const plan = planForWorktree(
+      { base: { ref: "abc123", source: "merge-base" }, paths: [] },
+      repositoryRoot(),
+    );
+
+    expect(plan.full).toBe(false);
+    expect(plan.packages).toEqual([]);
+    expect(Object.values(plan.lanes).some(Boolean)).toBe(false);
+  });
+
+  test("without a merge-base every local change set fails closed to the full matrix", () => {
+    for (const paths of [[], ["docs/quality-system.md"]]) {
+      const plan = planForWorktree(
+        { base: { ref: "HEAD", source: "HEAD" }, paths },
+        repositoryRoot(),
+      );
+
+      expect(plan.full).toBe(true);
+      expect(plan.lanes.e2e).toBe(true);
+      expect(plan.lanes.sonar).toBe(true);
+    }
+  });
+
+  test("a changed comparison base invalidates a result for the same tree", () => {
+    const root = fixtureRepository();
+    const withoutBase = fingerprintWorktree(root).fingerprint;
+    git(root, "update-ref", "refs/remotes/origin/main", "HEAD");
+    const withBase = fingerprintWorktree(root).fingerprint;
+
+    expect(withBase).not.toBe(withoutBase);
+    rmSync(root, { force: true, recursive: true });
+  });
+});
+
+describe("preflight edit settling", () => {
+  test("the worker waits until the desired fingerprint has been quiet", async () => {
+    let clock = 10_000;
+    const slept: number[] = [];
+    const desired = { fingerprint: "a", requestedAt: new Date(9_000).toISOString() };
+
+    const settled = await waitForQuietPeriod(() => desired, {
+      now: () => clock,
+      quietMs: 4_000,
+      sleep: async (milliseconds: number) => {
+        slept.push(milliseconds);
+        clock += milliseconds;
+      },
+    });
+
+    expect(settled).toBe(desired);
+    expect(slept).toEqual([3_000]);
+  });
+
+  test("a later edit restarts the quiet period", async () => {
+    let clock = 0;
+    let reads = 0;
+    const slept: number[] = [];
+
+    const settled = await waitForQuietPeriod(
+      () => {
+        reads += 1;
+        return {
+          fingerprint: reads === 1 ? "a" : "b",
+          requestedAt: new Date(reads === 1 ? 0 : 2_000).toISOString(),
+        };
+      },
+      {
+        now: () => clock,
+        quietMs: 4_000,
+        sleep: async (milliseconds: number) => {
+          slept.push(milliseconds);
+          clock += milliseconds;
+        },
+      },
+    );
+
+    expect(settled?.fingerprint).toBe("b");
+    expect(slept).toEqual([4_000, 2_000]);
+  });
+});
+
+describe("preflight supersession", () => {
+  test("a superseded wave terminates each lane's whole process group", async () => {
+    const directory = join(tmpdir(), `fluncle-preflight-group-${crypto.randomUUID()}`);
+    mkdirSync(directory, { recursive: true });
+    const pidFile = join(directory, "grandchild.pid");
+    let current = true;
+    setTimeout(() => {
+      current = false;
+    }, 200);
+    const started = Date.now();
+
+    const outcome = await runSupervisedWave(["lane"], {
+      graceMs: 500,
+      isCurrent: () => current,
+      pollMs: 20,
+      start: () => {
+        const child = spawn("sh", ["-c", `sleep 30 & echo $! > "${pidFile}"; wait`], {
+          detached: true,
+          stdio: "ignore",
+        });
+        const done = new Promise<number>((resolvePromise) => {
+          child.on("exit", (code) => resolvePromise(code ?? 1));
+        });
+        return { child, done };
+      },
+    });
+
+    expect(outcome.superseded).toBe(true);
+    expect(outcome.results[0]).not.toBe(0);
+    expect(Date.now() - started).toBeLessThan(5_000);
+    expect(existsSync(pidFile)).toBe(true);
+    const grandchild = Number(readFileSync(pidFile, "utf8").trim());
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 100));
+    expect(processExists(grandchild)).toBe(false);
+    rmSync(directory, { force: true, recursive: true });
+  });
+
+  test("a group that ignores the interrupt is killed after the grace period", async () => {
+    const child = spawn("sh", ["-c", "trap '' INT; sleep 30 & wait"], {
+      detached: true,
+      stdio: "ignore",
+    });
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 100));
+    const started = Date.now();
+
+    await reapProcessGroup(child.pid ?? 0, { graceMs: 300, pollMs: 20 });
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 100));
+
+    expect(Date.now() - started).toBeGreaterThanOrEqual(300);
+    expect(processExists(-(child.pid ?? 0))).toBe(false);
+  });
+
+  test("a lane that already exited is never signalled, since its group id may be reused", async () => {
+    const bystander = spawn("sleep", ["30"], { detached: true, stdio: "ignore" });
+    let current = true;
+    setTimeout(() => {
+      current = false;
+    }, 100);
+
+    const outcome = await runSupervisedWave(["finished", "running"], {
+      graceMs: 300,
+      isCurrent: () => current,
+      pollMs: 20,
+      start: (lane: string) => {
+        if (lane === "finished") {
+          return {
+            child: { exitCode: 0, pid: bystander.pid ?? 0, signalCode: null },
+            done: Promise.resolve(0),
+          };
+        }
+        const child = spawn("sleep", ["30"], { detached: true, stdio: "ignore" });
+        const done = new Promise<number>((resolvePromise) => {
+          child.on("exit", (code) => resolvePromise(code ?? 1));
+        });
+        return { child, done };
+      },
+    });
+
+    expect(outcome.superseded).toBe(true);
+    expect(processExists(bystander.pid ?? 0)).toBe(true);
+    bystander.kill("SIGKILL");
+  });
+
+  test("a current wave runs to completion untouched", async () => {
+    const outcome = await runSupervisedWave(["one", "two"], {
+      isCurrent: () => true,
+      pollMs: 20,
+      start: (lane: string) => {
+        const child = spawn("sh", ["-c", "exit 0"], { detached: true, stdio: "ignore" });
+        const done = new Promise<string>((resolvePromise) => {
+          child.on("exit", () => resolvePromise(lane));
+        });
+        return { child, done };
+      },
+    });
+
+    expect(outcome).toEqual({ results: ["one", "two"], superseded: false });
   });
 });

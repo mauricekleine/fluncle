@@ -24,7 +24,8 @@
       "cache": false
     },
     "test": {
-      "dependsOn": ["^build"]
+      "dependsOn": ["^build"],
+      "env": ["FLUNCLE_VITEST_COVERAGE"]
     },
     "typecheck": {
       "dependsOn": ["^build"]

@@ -25,6 +25,16 @@ const LANES = ["static", "packages", "scripts", "go-ssh", "go-dns", "sonar", "wo
 
 const RESOURCE_HEAVY_LANES = new Set(["packages", "scripts", "e2e"]);
 
+const COMPARISON_REF = "refs/remotes/origin/main";
+
+const QUIET_PERIOD_MS = 4_000;
+
+const SUPERSEDED_POLL_MS = 1_000;
+
+const TERMINATION_GRACE_MS = 20_000;
+
+const LOCAL_PREFLIGHT_ENVIRONMENT = { FLUNCLE_VITEST_COVERAGE: "false" };
+
 export function withoutGitEnvironment(environment = process.env) {
   const isolated = { ...environment };
   for (const name of Object.keys(isolated)) {
@@ -142,8 +152,18 @@ export function releaseLaunchLock(directory, token) {
   } catch {}
 }
 
-function changedPaths(root) {
-  const tracked = git(root, "diff", "--name-only", "--diff-filter=ACDMRTUXB", "HEAD", "--")
+export function comparisonBase(root) {
+  const result = spawnSync("git", ["merge-base", "HEAD", COMPARISON_REF], {
+    cwd: root,
+    encoding: "utf8",
+    env: withoutGitEnvironment(),
+  });
+  const base = result.status === 0 ? result.stdout.trim() : "";
+  return base ? { ref: base, source: "merge-base" } : { ref: "HEAD", source: "HEAD" };
+}
+
+export function changedPaths(root, base = comparisonBase(root).ref) {
+  const tracked = git(root, "diff", "--name-only", "--diff-filter=ACDMRTUXB", base, "--")
     .trim()
     .split("\n")
     .filter(Boolean);
@@ -158,6 +178,8 @@ export function fingerprintWorktree(root = repositoryRoot()) {
   hash.update("quality-preflight-v1\0");
   hash.update(process.version);
   hash.update("\0");
+  const base = comparisonBase(root);
+  hash.update(`${base.source}:${base.ref}\0`);
   const temporaryDirectory = mkdtempSync(join(tmpdir(), "fluncle-quality-tree-"));
   try {
     const environment = { GIT_INDEX_FILE: join(temporaryDirectory, "index") };
@@ -168,9 +190,93 @@ export function fingerprintWorktree(root = repositoryRoot()) {
     rmSync(temporaryDirectory, { force: true, recursive: true });
   }
 
-  const paths = changedPaths(root);
+  const paths = changedPaths(root, base.ref);
 
-  return { fingerprint: hash.digest("hex"), paths };
+  return { base, fingerprint: hash.digest("hex"), paths };
+}
+
+export function planForWorktree(current, root) {
+  if (current.base.source === "merge-base") {
+    return classifyPaths(current.paths, { base: current.base.ref, emptyChangeSet: "pass", root });
+  }
+  return classifyPaths(current.paths, {
+    forceFull: true,
+    fullReason: "no merge-base with origin/main",
+    root,
+  });
+}
+
+export async function waitForQuietPeriod(
+  readDesired,
+  { now = () => Date.now(), quietMs = QUIET_PERIOD_MS, sleep = delay } = {},
+) {
+  while (true) {
+    const desired = readDesired();
+    if (!desired) {
+      return null;
+    }
+    const remaining = quietMs - (now() - Date.parse(desired.requestedAt));
+    if (!(remaining > 0)) {
+      return desired;
+    }
+    await sleep(remaining);
+  }
+}
+
+function delay(milliseconds) {
+  return new Promise((resolvePromise) => setTimeout(resolvePromise, milliseconds));
+}
+
+function signalProcessGroup(pid, signal) {
+  try {
+    process.kill(-pid, signal);
+  } catch {}
+}
+
+function processGroupAlive(pid) {
+  try {
+    process.kill(-pid, 0);
+    return true;
+  } catch (error) {
+    return error instanceof Error && "code" in error && error.code === "EPERM";
+  }
+}
+
+export async function reapProcessGroup(pid, { graceMs = TERMINATION_GRACE_MS, pollMs = 100 } = {}) {
+  signalProcessGroup(pid, "SIGINT");
+  const deadline = Date.now() + graceMs;
+  while (processGroupAlive(pid)) {
+    if (Date.now() >= deadline) {
+      signalProcessGroup(pid, "SIGKILL");
+      return;
+    }
+    await delay(pollMs);
+  }
+}
+
+export async function runSupervisedWave(
+  lanes,
+  { graceMs = TERMINATION_GRACE_MS, isCurrent, pollMs = SUPERSEDED_POLL_MS, start },
+) {
+  const running = lanes.map((lane) => start(lane));
+  let superseded = false;
+  let reaping = [];
+  const watcher = setInterval(() => {
+    if (superseded || isCurrent()) {
+      return;
+    }
+    superseded = true;
+    reaping = running
+      .filter(({ child }) => child.exitCode === null && child.signalCode === null)
+      .map(({ child }) => reapProcessGroup(child.pid, { graceMs }));
+  }, pollMs);
+  try {
+    const results = await Promise.all(running.map(({ done }) => done));
+    await Promise.all(reaping);
+    return { results, superseded };
+  } finally {
+    clearInterval(watcher);
+  }
 }
 
 function processAlive(pid) {
@@ -220,14 +326,14 @@ function requestStart(root, quiet = false) {
   const directory = stateDirectory(root);
   mkdirSync(directory, { recursive: true });
   const fingerprint = fingerprintWorktree(root);
-  const plan = classifyPaths(fingerprint.paths, {
-    fullReason: "local empty change set",
-    root,
-  });
+  const previous = readJson(join(directory, "desired.json"));
   atomicJson(join(directory, "desired.json"), {
     fingerprint: fingerprint.fingerprint,
-    plan,
-    requestedAt: new Date().toISOString(),
+    plan: planForWorktree(fingerprint, root),
+    requestedAt:
+      previous?.fingerprint === fingerprint.fingerprint && previous.requestedAt
+        ? previous.requestedAt
+        : new Date().toISOString(),
   });
 
   const result = readJson(join(directory, "result.json"));
@@ -264,37 +370,46 @@ function requestStart(root, quiet = false) {
   return fingerprint;
 }
 
-async function runLane(root, directory, planPath, lane, fingerprint) {
+function startLane(root, directory, planPath, lane, fingerprint) {
   const logPath = join(directory, `${fingerprint}.${lane}.log`);
   const descriptor = openSync(logPath, "w");
   const started = Date.now();
   const child = spawn(
     process.execPath,
     [join(root, "scripts/quality/run-lane.mjs"), "--plan", planPath, "--lane", lane],
-    { cwd: root, env: process.env, stdio: ["ignore", descriptor, descriptor] },
+    {
+      cwd: root,
+      detached: true,
+      env: { ...process.env, ...LOCAL_PREFLIGHT_ENVIRONMENT },
+      stdio: ["ignore", descriptor, descriptor],
+    },
   );
-  const status = await new Promise((resolvePromise) => {
+  const done = new Promise((resolvePromise) => {
     child.on("error", () => resolvePromise(1));
     child.on("exit", (code) => resolvePromise(code ?? 1));
+  }).then((status) => {
+    closeSync(descriptor);
+    return {
+      durationSeconds: Number(((Date.now() - started) / 1000).toFixed(3)),
+      lane,
+      logPath,
+      outcome: status === 0 ? "success" : "failure",
+      status,
+    };
   });
-  closeSync(descriptor);
-  return {
-    durationSeconds: Number(((Date.now() - started) / 1000).toFixed(3)),
-    lane,
-    logPath,
-    outcome: status === 0 ? "success" : "failure",
-    status,
-  };
+  return { child, done };
 }
 
 async function workerLoop(root) {
   const directory = stateDirectory(root);
   try {
     while (true) {
-      const desired = readJson(join(directory, "desired.json"));
+      const desired = await waitForQuietPeriod(() => readJson(join(directory, "desired.json")));
       if (!desired) {
         return;
       }
+      const isCurrent = () =>
+        readJson(join(directory, "desired.json"))?.fingerprint === desired.fingerprint;
       const planPath = join(directory, `${desired.fingerprint}.plan.json`);
       atomicJson(planPath, desired.plan);
       atomicJson(join(directory, "result.json"), {
@@ -304,10 +419,18 @@ async function workerLoop(root) {
       });
 
       const results = [];
+      let superseded = false;
       for (const wave of executionWaves()) {
-        const waveResults = await Promise.all(
-          wave.map((lane) => runLane(root, directory, planPath, lane, desired.fingerprint)),
-        );
+        if (!isCurrent()) {
+          superseded = true;
+          break;
+        }
+        const supervised = await runSupervisedWave(wave, {
+          isCurrent,
+          start: (lane) => startLane(root, directory, planPath, lane, desired.fingerprint),
+        });
+        const waveResults = supervised.results;
+        superseded = supervised.superseded;
         results.push(...waveResults);
         atomicJson(join(directory, "result.json"), {
           fingerprint: desired.fingerprint,
@@ -316,26 +439,30 @@ async function workerLoop(root) {
           results,
           startedAt: desired.requestedAt,
         });
-        if (waveResults.some((result) => result.status !== 0)) {
+        if (superseded || waveResults.some((result) => result.status !== 0)) {
           break;
         }
       }
       const current = fingerprintWorktree(root);
       const latestDesired = readJson(join(directory, "desired.json"));
       if (
+        superseded ||
         current.fingerprint !== desired.fingerprint ||
         latestDesired?.fingerprint !== desired.fingerprint
       ) {
         appendFileSync(
           join(directory, "worker.log"),
-          `quality preflight: rejected stale result ${desired.fingerprint}\n`,
+          superseded
+            ? `quality preflight: cancelled superseded run ${desired.fingerprint}\n`
+            : `quality preflight: rejected stale result ${desired.fingerprint}\n`,
         );
-        const currentPlan = classifyPaths(current.paths, { root });
-        atomicJson(join(directory, "desired.json"), {
-          fingerprint: current.fingerprint,
-          plan: currentPlan,
-          requestedAt: new Date().toISOString(),
-        });
+        if (latestDesired?.fingerprint !== current.fingerprint) {
+          atomicJson(join(directory, "desired.json"), {
+            fingerprint: current.fingerprint,
+            plan: planForWorktree(current, root),
+            requestedAt: new Date().toISOString(),
+          });
+        }
         continue;
       }
 

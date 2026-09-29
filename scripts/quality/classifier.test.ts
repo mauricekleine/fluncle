@@ -2,8 +2,24 @@ import { describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { classifyPaths, cloudflareExcludePatterns, triggersWorkerBuild } from "./classifier.mjs";
+import { commandsForLane } from "./run-lane.mjs";
 
 describe("dependency-closure classifier", () => {
+  test("an empty change set fails closed unless the caller proves a comparison base", () => {
+    expect(classifyPaths([]).full).toBe(true);
+
+    const local = classifyPaths([], { emptyChangeSet: "pass" });
+    expect(local.full).toBe(false);
+    expect(local.packages).toEqual([]);
+    expect(local.lanes.e2e).toBe(false);
+    expect(local.lanes.static).toBe(false);
+    expect(
+      ["static", "packages", "scripts", "go-ssh", "go-dns", "sonar", "workflows", "e2e"].flatMap(
+        (lane) => commandsForLane(local, lane),
+      ),
+    ).toEqual([]);
+  });
+
   test("a CLI-only change excludes web E2E and includes the CLI", () => {
     const plan = classifyPaths(["apps/cli/src/commands/recent.ts"]);
 

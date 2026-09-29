@@ -29,7 +29,9 @@ function command(program, args, options = {}) {
 
 export function commandsForLane(plan, lane) {
   if (lane === "static") {
-    return [command("bun", ["run", "lint"]), command("bun", ["run", "format:check"])];
+    return plan.lanes.static
+      ? [command("bun", ["run", "lint"]), command("bun", ["run", "format:check"])]
+      : [];
   }
 
   if (lane === "packages") {
