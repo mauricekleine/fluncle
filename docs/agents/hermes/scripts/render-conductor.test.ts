@@ -131,7 +131,7 @@ case "$verb" in
         exit 0
       fi
       if [ "\${STUB_RUN_FRESHEN:-0}" = "1" ]; then
-        printf '%s\\n' "$payload" | bash -s
+        printf '%s\\n' "$payload" | PATH="$STUB_DIR:$PATH" bash -s
         exit $?
       fi
       printf '%s\\n' "\${STUB_FRESHEN_OUT:-}"
