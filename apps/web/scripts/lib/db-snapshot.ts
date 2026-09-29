@@ -85,6 +85,30 @@ async function keyColumnsFor(client: SnapshotClient, object: SchemaObject): Prom
   return keys;
 }
 
+type SequenceHead = { name: string; seq: Value };
+
+async function readSequenceHeads(
+  client: SnapshotClient,
+  schema: readonly SchemaObject[],
+): Promise<SequenceHead[]> {
+  const present = await client.execute(
+    "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'sqlite_sequence'",
+  );
+
+  if (present.rows.length === 0) {
+    return [];
+  }
+
+  const dumped = new Set(
+    schema.filter((object) => object.type === "table").map((object) => object.name),
+  );
+  const result = await client.execute("SELECT name, seq FROM sqlite_sequence ORDER BY name");
+
+  return result.rows
+    .map((row) => ({ name: textCell(row[0], "a sequence name"), seq: row[1] ?? null }))
+    .filter((head) => dumped.has(head.name));
+}
+
 export function keysetPageSql(table: string, keys: readonly string[], after: boolean): string {
   const keyList = keys.map((key) => (key === "rowid" ? "rowid" : quoteIdent(key))).join(", ");
   const where = after ? ` WHERE (${keyList}) > (${keys.map(() => "?").join(", ")})` : "";
@@ -115,11 +139,11 @@ export async function pullSnapshot(options: SnapshotOptions): Promise<SnapshotRe
   await mkdir(dirname(outPath), { recursive: true });
   await rm(partialPath, { force: true });
 
-  let movedPrevious: string | null = null;
+  let movedPrevious = false;
 
   if (await fileExists(outPath)) {
     await rename(outPath, previousPath);
-    movedPrevious = previousPath;
+    movedPrevious = true;
     log(`Moved the previous snapshot aside to ${previousPath}; it is not a fresh backup.`);
   }
 
@@ -216,6 +240,15 @@ export async function pullSnapshot(options: SnapshotOptions): Promise<SnapshotRe
       log(`  ${object.name}: ${rowCount} rows`);
     }
 
+    for (const sequence of await readSequenceHeads(client, schema)) {
+      const name = sqlLiteral(sequence.name);
+
+      await emit(`DELETE FROM sqlite_sequence WHERE name = ${name};`);
+      await emit(
+        `INSERT INTO sqlite_sequence (name, seq) VALUES (${name}, ${sqlLiteral(sequence.seq as SqlValue)});`,
+      );
+    }
+
     for (const object of schema) {
       if (object.type !== "table") {
         await emit(`${object.sql};`);
@@ -231,9 +264,7 @@ export async function pullSnapshot(options: SnapshotOptions): Promise<SnapshotRe
     await handle.close();
     await rename(partialPath, outPath);
 
-    if (movedPrevious) {
-      await rm(movedPrevious, { force: true });
-    }
+    await rm(previousPath, { force: true });
 
     return {
       bytes,
@@ -246,9 +277,10 @@ export async function pullSnapshot(options: SnapshotOptions): Promise<SnapshotRe
     await handle.close().catch(() => {});
     await rm(partialPath, { force: true });
 
-    const kept = movedPrevious
-      ? ` The previous snapshot stays at ${movedPrevious}, named so it cannot pass for a fresh one.`
-      : "";
+    const kept =
+      movedPrevious || (await fileExists(previousPath))
+        ? ` The previous snapshot stays at ${previousPath}, named so it cannot pass for a fresh one.`
+        : "";
 
     throw new Error(
       `Snapshot failed; no ${outPath} was written.${kept} Cause: ${

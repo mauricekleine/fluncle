@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { LOCAL_DB_CONCURRENCY } from "../../src/lib/database-concurrency";
 import { createIntegrationDb, seedCatalogueTrack } from "../../src/lib/server/integration-db";
 import {
   formatSnapshotReport,
@@ -110,7 +111,11 @@ function pageQueries(calls: Recorded[], table: string): Recorded[] {
 
 beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), "fluncle-db-snapshot-"));
-  source = createClient({ intMode: "bigint", url: `file:${join(dir, "source.db")}` });
+  source = createClient({
+    concurrency: LOCAL_DB_CONCURRENCY,
+    intMode: "bigint",
+    url: `file:${join(dir, "source.db")}`,
+  });
   outPath = join(dir, "dev", "seed.sql");
   await seedSource(source);
 });
@@ -129,7 +134,11 @@ describe("pullSnapshot", () => {
       pageRows: 2,
     });
 
-    const restored = createClient({ intMode: "bigint", url: `file:${join(dir, "restored.db")}` });
+    const restored = createClient({
+      concurrency: LOCAL_DB_CONCURRENCY,
+      intMode: "bigint",
+      url: `file:${join(dir, "restored.db")}`,
+    });
 
     try {
       await restored.executeMultiple(await readFile(outPath, "utf8"));
@@ -276,7 +285,7 @@ describe("pullSnapshot", () => {
         outPath,
         pageRows: 1,
       });
-      const restored = createClient({ url: ":memory:" });
+      const restored = createClient({ concurrency: LOCAL_DB_CONCURRENCY, url: ":memory:" });
 
       try {
         await restored.executeMultiple(await readFile(outPath, "utf8"));
@@ -295,5 +304,73 @@ describe("pullSnapshot", () => {
     } finally {
       migrated.close();
     }
+  });
+
+  it("carries AUTOINCREMENT heads across a restore, including a compacted table with no rows left", async () => {
+    await source.executeMultiple(`
+      CREATE TABLE events (seq integer primary key autoincrement, body text);
+      CREATE TABLE ledger (id integer primary key autoincrement, body text);
+      INSERT INTO events (body) VALUES ('a'), ('b'), ('c');
+      DELETE FROM events;
+      INSERT INTO ledger (body) VALUES ('x'), ('y'), ('z'), ('w');
+      DELETE FROM ledger WHERE id > 2;
+    `);
+
+    await pullSnapshot({ client: source, header: "-- sequences", outPath, pageRows: 2 });
+
+    const restored = createClient({
+      concurrency: LOCAL_DB_CONCURRENCY,
+      intMode: "bigint",
+      url: `file:${join(dir, "restored.db")}`,
+    });
+    const head = (client: Client, name: string) =>
+      rowsOf(
+        client,
+        `select coalesce((select seq from sqlite_sequence where name = '${name}'), 0) as seq`,
+      );
+
+    try {
+      await restored.executeMultiple(await readFile(outPath, "utf8"));
+
+      expect(await head(source, "events")).toEqual([[3n]]);
+      expect(await head(restored, "events")).toEqual([[3n]]);
+      expect(await head(restored, "ledger")).toEqual([[4n]]);
+      expect(await rowsOf(restored, "SELECT count(*) FROM events")).toEqual([[0n]]);
+
+      await restored.execute("INSERT INTO events (body) VALUES ('d')");
+      await restored.execute("INSERT INTO ledger (body) VALUES ('v')");
+
+      expect(await rowsOf(restored, "SELECT seq FROM events")).toEqual([[4n]]);
+      expect(await rowsOf(restored, "SELECT max(id) FROM ledger")).toEqual([[5n]]);
+    } finally {
+      restored.close();
+    }
+  });
+
+  it("clears a previous copy stranded by an earlier failed pull once a pull succeeds", async () => {
+    await pullSnapshot({ client: source, header: "-- first", outPath, pageRows: 2 });
+
+    const { wrapped } = recording(source, (call) => {
+      if (call.sql.includes('FROM "tags"')) {
+        throw new Error("connection reset");
+      }
+    });
+
+    await expect(
+      pullSnapshot({ client: wrapped, header: "-- doomed", outPath, pageRows: 2 }),
+    ).rejects.toThrow(/Snapshot failed/);
+
+    expect(existsSync(outPath)).toBe(false);
+    expect(existsSync(previousSnapshotPath(outPath))).toBe(true);
+
+    await expect(
+      pullSnapshot({ client: wrapped, header: "-- doomed again", outPath, pageRows: 2 }),
+    ).rejects.toThrow(/previous snapshot stays at .*seed\.previous\.sql/s);
+
+    await pullSnapshot({ client: source, header: "-- fresh", outPath, pageRows: 2 });
+
+    expect((await readFile(outPath, "utf8")).startsWith("-- fresh\n")).toBe(true);
+    expect(existsSync(previousSnapshotPath(outPath))).toBe(false);
+    expect(existsSync(partialSnapshotPath(outPath))).toBe(false);
   });
 });
