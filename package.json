@@ -101,7 +101,7 @@
     "js-yaml": "4.3.2",
     "nanoid@^3.0.0": "3.3.18",
     "sharp": "0.35.4",
-    "undici": "7.29.0"
+    "undici": "7.29.1"
   },
   "lint-staged": {
     "*": [
@@ -121,7 +121,7 @@
     "js-yaml": "Drop when every parent chain resolves to js-yaml 4.3.2 or newer on its own.",
     "nanoid@^3.0.0": "Drop when every parent chain resolves to nanoid 3.3.18 or newer on its own.",
     "sharp": "Drop when every parent chain resolves to sharp 0.35.4 or newer on its own.",
-    "undici": "Drop when Miniflare's exact undici dependency is 7.29.0 or newer."
+    "undici": "Drop when Miniflare's exact undici dependency is 7.29.1 or newer."
   },
   "patchedDependencies": {
     "@remotion/bundler@4.0.499": "patches/@remotion%2Fbundler@4.0.499.patch",
