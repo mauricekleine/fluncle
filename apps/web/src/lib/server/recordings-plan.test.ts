@@ -35,6 +35,24 @@ const defaultExecute = vi.hoisted(() => async (query: { args: unknown[]; sql: st
 
 const execute = vi.hoisted(() => vi.fn());
 
+const uuid = vi.hoisted(() => ({ fixed: undefined as string | undefined }));
+
+vi.mock("node:crypto", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:crypto")>();
+
+  return { ...actual, randomUUID: () => uuid.fixed ?? actual.randomUUID() };
+});
+
+const DISTINCT_FIRST_ROLLS_ID = "00000000-0000-4000-8000-000000000000";
+const REPEATED_FIRST_ROLL_ID = "00000000-0000-4000-8000-000000000090";
+
+function titleProbes(): string[] {
+  return execute.mock.calls
+    .map((call) => call[0] as { args: unknown[]; sql: string })
+    .filter((query) => query.sql.includes("from recordings where title"))
+    .map((query) => String(query.args[0]));
+}
+
 vi.mock("./db", () => ({
   getDb: async () => ({ batch, execute }),
   typedRow: <T extends object>(rows: T[]) => rows[0],
@@ -70,6 +88,7 @@ function seedRecording(overrides: Row = {}): void {
 
 beforeEach(() => {
   state.existingTitles = new Set();
+  uuid.fixed = undefined;
   seedRecording();
   execute.mockReset();
   execute.mockImplementation(defaultExecute);
@@ -88,24 +107,40 @@ describe("createRecording — a plan (videoless)", () => {
 
   it("re-rolls the handle on a collision among existing recording titles", async () => {
     const { galaxySlug } = await import("@fluncle/contracts/util/galaxy-slug");
-    let firstProbe = true;
-    execute.mockImplementation(async (query: { args: unknown[]; sql: string }) => {
-      if (query.sql.includes("from recordings where title")) {
-        if (firstProbe) {
-          firstProbe = false;
-          return { rows: [{ 1: 1 }] };
-        }
-        return { rows: [] };
-      }
-      return defaultExecute(query);
-    });
+    uuid.fixed = DISTINCT_FIRST_ROLLS_ID;
+    const firstRoll = galaxySlug(DISTINCT_FIRST_ROLLS_ID, 0);
+    const secondRoll = galaxySlug(DISTINCT_FIRST_ROLLS_ID, 1);
+
+    expect(secondRoll).not.toBe(firstRoll);
+
+    state.existingTitles = new Set([firstRoll]);
 
     await createRecording({ kind: "plan" });
 
     const [id, title] = recordingInsertArgs();
 
-    expect(title).toBe(galaxySlug(String(id), 1));
-    expect(title).not.toBe(galaxySlug(String(id), 0));
+    expect(id).toBe(DISTINCT_FIRST_ROLLS_ID);
+    expect(title).toBe(secondRoll);
+    expect(titleProbes()).toEqual([firstRoll, secondRoll]);
+  });
+
+  it("never probes the same handle twice when two attempts roll the same slug", async () => {
+    const { galaxySlug } = await import("@fluncle/contracts/util/galaxy-slug");
+    uuid.fixed = REPEATED_FIRST_ROLL_ID;
+    const firstRoll = galaxySlug(REPEATED_FIRST_ROLL_ID, 0);
+    const thirdRoll = galaxySlug(REPEATED_FIRST_ROLL_ID, 2);
+
+    expect(galaxySlug(REPEATED_FIRST_ROLL_ID, 1)).toBe(firstRoll);
+    expect(thirdRoll).not.toBe(firstRoll);
+
+    state.existingTitles = new Set([firstRoll]);
+
+    await createRecording({ kind: "plan" });
+
+    const [, title] = recordingInsertArgs();
+
+    expect(title).toBe(thirdRoll);
+    expect(titleProbes()).toEqual([firstRoll, thirdRoll]);
   });
 
   it("still requires a title for a TAKE (non-plan) create", async () => {
