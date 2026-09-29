@@ -171,7 +171,7 @@ export const DATABASE_ADMISSION_SHAPES: Readonly<Record<string, DatabaseAdmissio
   ),
   "backfill.vendor-sweep": phased(
     `${SCRIPTS}/backfill-sweep.ts`,
-    "Each vendor leg's single Worker call is its own admitted phase, and each Discogs leg admits only its prepare and decide calls with the box's paced Discogs reads between them unleased; nothing between legs holds the lease.",
+    "Every Worker request is its own admitted phase: each leg's pages are driven one phase at a time, and each Discogs leg admits its prepare and decide with the box's paced Discogs reads unleased between them.",
     0,
   ),
   "bio.album": phased(

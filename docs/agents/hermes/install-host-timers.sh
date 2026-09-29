@@ -70,6 +70,15 @@ rel() {
 	printf '%s\n' "${1#"${REPO_DIR}/"}"
 }
 
+unit_key() {
+	sed -n "s/^${2}=//p" "$1" | head -n 1
+}
+
+baked_capability_present() {
+	local baked_path="$1" marker="$2"
+	docker exec hermes grep -qF -- "$marker" "$baked_path" >/dev/null 2>&1
+}
+
 contains() {
 	local needle="$1" item
 	shift
@@ -235,9 +244,34 @@ else
 	done
 fi
 
+install_sources=()
+held_back=()
 for unit in "${unit_files[@]}"; do
+	source_file="$unit"
+	capability=""
 	case "$unit" in
-	*.service) ;;
+	*.service) capability="$(unit_key "$unit" X-Fluncle-Baked-Capability)" ;;
+	esac
+	if [ -n "$capability" ]; then
+		baked_path="${capability%% *}"
+		marker="${capability#* }"
+		fallback_name="$(unit_key "$unit" X-Fluncle-Capability-Fallback)"
+		fallback="$(dirname "$unit")/${fallback_name}"
+		if [ "$baked_path" = "$capability" ] || [ -z "$marker" ] || [ -z "$fallback_name" ] || [ ! -f "$fallback" ]; then
+			unresolved+=("$(rel "$unit"): X-Fluncle-Baked-Capability needs '<baked path> <marker>' and an existing X-Fluncle-Capability-Fallback")
+		elif [ "$dry_run" -eq 1 ]; then
+			plan "capability-gate $(rel "$unit") needs ${marker} in ${baked_path}, else $(rel "$fallback")"
+		elif ! baked_capability_present "$baked_path" "$marker"; then
+			source_file="$fallback"
+			held_back+=("$(basename "$unit") (baked ${baked_path} lacks ${marker}; installed $(rel "$fallback"))")
+		fi
+	fi
+	install_sources+=("$source_file")
+done
+
+for unit in "${install_sources[@]}"; do
+	case "$unit" in
+	*.service | *.service.*) ;;
 	*) continue ;;
 	esac
 	dir="$(dirname "$unit")"
@@ -360,8 +394,8 @@ if [ "$dry_run" -eq 1 ]; then
 	exit 0
 fi
 
-for unit in "${unit_files[@]}"; do
-	install -m 0644 "$unit" "${DEST}/"
+for index in "${!unit_files[@]}"; do
+	install -m 0644 "${install_sources[$index]}" "${DEST}/$(basename "${unit_files[$index]}")"
 done
 
 for pair in ${host_pairs[@]+"${host_pairs[@]}"}; do
@@ -383,6 +417,9 @@ if [ "$refresh_mode" -eq 1 ]; then
 		printf '  host script: %s\n' "${host_pairs[@]//|/ -> }"
 	fi
 	printf '  refreshed: %s\n' "${unit_files[@]/#${REPO_DIR}\//}"
+	if [ "${#held_back[@]}" -ne 0 ]; then
+		printf '  held on fallback (rerun after the image rebake): %s\n' "${held_back[@]}"
+	fi
 	exit 0
 fi
 
@@ -408,6 +445,9 @@ if [ "${#host_pairs[@]}" -ne 0 ]; then
 	printf '  host script: %s\n' "${host_pairs[@]//|/ -> }"
 fi
 printf '  enabled: %s\n' "${enabled[@]}"
+if [ "${#held_back[@]}" -ne 0 ]; then
+	printf '  held on fallback (rerun after the image rebake): %s\n' "${held_back[@]}"
+fi
 if [ "${#dormant_timers[@]}" -ne 0 ]; then
 	printf '  dormant (installed, verified disabled): %s\n' "${dormant_timers[@]}"
 fi

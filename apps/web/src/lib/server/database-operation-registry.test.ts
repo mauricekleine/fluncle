@@ -1147,7 +1147,7 @@ describe("database operation registry", () => {
     expect(Number(retries?.[1])).toBe(backfill?.admissionShape?.yieldRetries);
     expect(script).toContain("owner: ADMISSION_OWNER");
     expect(script).toContain('const ADMISSION_OWNER = "fluncle-backfill";');
-    expect(script).toContain("env.FLUNCLE_ADMISSION_RUNNER_PID ? inheritedLeaseWindows");
+    expect(script).toMatch(/env\.FLUNCLE_ADMISSION_RUNNER_PID\s*\?\s*inheritedLeaseWindows\(/);
   });
 
   it("pins hub-count reconciliation's once-retried phased admission around bounded windows", () => {
