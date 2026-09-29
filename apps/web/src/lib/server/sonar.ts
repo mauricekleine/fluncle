@@ -126,6 +126,7 @@ export type SonarHealth = {
   headSeq: number;
   ok: boolean;
   pendingAck: boolean;
+  reconcileAgeSeconds: number | null;
   replicaLagSeconds: number;
   tracks: number;
   validation: "last_attempt_failed" | "valid";
@@ -187,7 +188,12 @@ function parseHealth(payload: unknown): SonarHealth | null {
     typeof value.pending_ack !== "boolean" ||
     (value.validation !== "valid" && value.validation !== "last_attempt_failed") ||
     typeof value.replica_lag_seconds !== "number" ||
-    !Number.isSafeInteger(value.replica_lag_seconds)
+    !Number.isSafeInteger(value.replica_lag_seconds) ||
+    (value.reconcile_age_seconds !== undefined &&
+      value.reconcile_age_seconds !== null &&
+      (typeof value.reconcile_age_seconds !== "number" ||
+        !Number.isSafeInteger(value.reconcile_age_seconds) ||
+        value.reconcile_age_seconds < 0))
   ) {
     return null;
   }
@@ -202,6 +208,8 @@ function parseHealth(payload: unknown): SonarHealth | null {
     headSeq,
     ok: value.ok,
     pendingAck: value.pending_ack,
+    reconcileAgeSeconds:
+      typeof value.reconcile_age_seconds === "number" ? value.reconcile_age_seconds : null,
     replicaLagSeconds: value.replica_lag_seconds,
     tracks,
     validation: value.validation,

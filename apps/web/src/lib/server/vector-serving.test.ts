@@ -30,6 +30,7 @@ const health = {
   headSeq: 42,
   ok: true,
   pendingAck: false,
+  reconcileAgeSeconds: null,
   replicaLagSeconds: 30,
   tracks: 12,
   validation: "valid" as const,
@@ -181,6 +182,31 @@ describe("track vector-serving readiness", () => {
     });
 
     expect(status.runtime.reasons).not.toContain("replica_stale");
+  });
+
+  it("judges source freshness by reconcile age when Sonar reports it", () => {
+    const fresh = assessVectorServing({
+      consumer,
+      enabled: true,
+      health: { ...health, reconcileAgeSeconds: 300, replicaLagSeconds: -1 },
+      nowMs: NOW,
+    });
+    const stale = assessVectorServing({
+      consumer,
+      enabled: true,
+      health: { ...health, reconcileAgeSeconds: 64_801, replicaLagSeconds: 30 },
+      nowMs: NOW,
+    });
+    const unreported = assessVectorServing({
+      consumer,
+      enabled: true,
+      health: { ...health, reconcileAgeSeconds: null, replicaLagSeconds: -1 },
+      nowMs: NOW,
+    });
+
+    expect(fresh.runtime.reasons).not.toContain("replica_stale");
+    expect(stale.runtime.reasons).toContain("replica_stale");
+    expect(unreported.runtime.reasons).toContain("replica_stale");
   });
 
   it("disables unconditionally even while Sonar is unavailable", async () => {

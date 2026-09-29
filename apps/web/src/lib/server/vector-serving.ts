@@ -110,7 +110,8 @@ function healthReasons(health: SonarHealth | null): {
   if (health.pendingAck) {
     add(commissioning, "pending_ack");
   }
-  if (health.replicaLagSeconds < 0 || health.replicaLagSeconds > REPLICA_STALE_SECS) {
+  const sourceAgeSeconds = health.reconcileAgeSeconds ?? health.replicaLagSeconds;
+  if (sourceAgeSeconds < 0 || sourceAgeSeconds > REPLICA_STALE_SECS) {
     both("replica_stale");
   }
   if (health.deltaBacklog > 0 && health.deltaAgeSeconds > DELTA_STALE_SECS) {

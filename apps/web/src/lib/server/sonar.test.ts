@@ -81,6 +81,7 @@ describe("readSonarHealth — authenticated commissioning evidence", () => {
       headSeq: 42,
       ok: true,
       pendingAck: false,
+      reconcileAgeSeconds: null,
       replicaLagSeconds: 10,
       tracks: 12,
       validation: "valid",
@@ -89,6 +90,23 @@ describe("readSonarHealth — authenticated commissioning evidence", () => {
     expect(init?.headers).toEqual({
       "x-sonar-secret": "shhh",
     });
+  });
+
+  it("reads the reconcile age when Sonar reports one and rejects a malformed one", async () => {
+    fetchMock.mockResolvedValue({
+      json: async () => ({ ...HEALTH, reconcile_age_seconds: 329, replica_lag_seconds: -1 }),
+      ok: true,
+    });
+    await expect(readSonarHealth()).resolves.toMatchObject({
+      reconcileAgeSeconds: 329,
+      replicaLagSeconds: -1,
+    });
+
+    fetchMock.mockResolvedValue({
+      json: async () => ({ ...HEALTH, reconcile_age_seconds: -5 }),
+      ok: true,
+    });
+    await expect(readSonarHealth()).resolves.toBeNull();
   });
 
   it("rejects unauthenticated-shaped or malformed health evidence", async () => {
