@@ -622,7 +622,7 @@ await main({
     try {
       await waitUntil(() => existsSync(started) && existsSync(lock));
       const initialMtime = statSync(lock).mtimeMs;
-      await Bun.sleep(180);
+      await waitUntil(() => statSync(lock).mtimeMs > initialMtime + 100);
       expect(existsSync(stopped)).toBe(false);
       expect(statSync(lock).mtimeMs).toBeGreaterThan(initialMtime + 100);
 

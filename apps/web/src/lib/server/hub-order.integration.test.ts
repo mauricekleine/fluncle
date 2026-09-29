@@ -90,7 +90,6 @@ describe.each(hubs)("$table hub orders", ({ table, query, list, strip }) => {
   it("never skips or repeats a Most tracks row on a deep page after counts move", async () => {
     await seed(table, 900);
     await list(11, undefined, "most");
-    await new Promise((resolve) => setTimeout(resolve, 250));
     await db.execute(
       `update ${table} set renderable_track_count = 12 where id in (select id from ${table} order by id desc limit 30)`,
     );
