@@ -22,6 +22,17 @@ if [ "${1:-}" = "phase" ]; then
 fi
 owner="${1:-}"
 shift || true
+phase_name=""
+if [ "$phase_scoped" = "true" ] && [ "${1:-}" = "--phase" ]; then
+	shift
+	phase_name="${1:-}"
+	shift || true
+	case "$phase_name" in *[!a-z0-9-]* | '')
+		echo 'invalid database admission phase' >&2
+		exit 2
+		;;
+	esac
+fi
 if [ "${1:-}" = "--" ]; then
 	shift
 fi
@@ -561,9 +572,9 @@ terminal_admission() {
 
 emit_admission_event() {
 	local outcome="$1" hold_ms="$2"
-	printf '{"event":"database.admission.runner","access_class":"%s","contender":"%s","enforced":%s,"heavy_read":%s,"hold_ms":%s,"operation_id":"%s","outcome":"%s","owner":"%s","phase_scoped":%s,"queue_age_ms":%s,"recovered":%s,"run_id":"%s","wait_ms":%s,"yield_reason":"%s"}\n' \
+	printf '{"event":"database.admission.runner","access_class":"%s","contender":"%s","enforced":%s,"heavy_read":%s,"hold_ms":%s,"operation_id":"%s","outcome":"%s","owner":"%s","phase":"%s","phase_scoped":%s,"queue_age_ms":%s,"recovered":%s,"run_id":"%s","wait_ms":%s,"yield_reason":"%s"}\n' \
 		"$lane" "$contender_id" "$enforcement_mode" "$heavy_read" "$hold_ms" "$operation_id" \
-		"$outcome" "$owner" "$phase_scoped" "$queue_age_ms" "$recovered" "$run_id" "$wait_ms" "$yield_reason" >&2
+		"$outcome" "$owner" "$phase_name" "$phase_scoped" "$queue_age_ms" "$recovered" "$run_id" "$wait_ms" "$yield_reason" >&2
 }
 
 finish_admission_bookkeeping() {

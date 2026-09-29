@@ -1144,7 +1144,7 @@ async function readAdmissionSettings(
       primaryReadTimeoutMs(dependencies),
     );
   } catch {
-    return { enforced: false, kind: "read", route: LEGACY_STORE_ROUTE, telemetryEverUsed: false };
+    return { kind: "unavailable" };
   }
   if (!read.settled) {
     return { kind: "unavailable" };
@@ -1566,13 +1566,11 @@ export async function coordinateDatabaseAdmissionAcross(
           telemetryEverUsed: false,
         };
   if (settings.kind === "unavailable") {
-    const result = shadowResult(
-      request,
-      profile,
-      request.action === "acquire" ? "shadow-yield" : "shadow-acquire",
-      0,
-      request.action === "acquire" ? "direct-read-latency" : null,
-    );
+    const result = enforcedResult(request, profile, {
+      nowMs: 0,
+      outcome: request.action === "acquire" ? "queued" : "lost",
+      yieldReason: "direct-read-latency",
+    });
     emitAdmissionTelemetry(request, result);
     return result;
   }

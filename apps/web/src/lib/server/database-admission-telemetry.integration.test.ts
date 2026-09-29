@@ -293,7 +293,46 @@ describe("the telemetry-store admission route", () => {
       undefined,
       stores({ primary: stalledEverything() }),
     );
-    expect(result).toMatchObject({ outcome: "shadow-yield", yieldReason: "direct-read-latency" });
+    expect(result).toMatchObject({
+      enforced: true,
+      outcome: "queued",
+      yieldReason: "direct-read-latency",
+    });
+    expect(await contenderCount(telemetry)).toBe(0);
+  });
+
+  it("yields an acquire when the primary settings read throws without granting a lease", async () => {
+    await setRoute("telemetry:1");
+    const failedPrimary = {
+      batch: primary.batch.bind(primary),
+      execute: vi.fn().mockRejectedValue(new Error("primary settings read failed")),
+    };
+    const result = await coordinate(
+      "fluncle-enrich",
+      "settings-error",
+      "acquire",
+      undefined,
+      stores({ primary: failedPrimary }),
+    );
+
+    expect(result).toMatchObject({
+      enforced: true,
+      outcome: "queued",
+      yieldReason: "direct-read-latency",
+    });
+    expect(failedPrimary.execute).toHaveBeenCalledTimes(1);
+    expect(await contenderCount(primary)).toBe(0);
+    expect(await contenderCount(telemetry)).toBe(0);
+  });
+
+  it("keeps a settled enforcement-off settings read in shadow mode", async () => {
+    await setRoute("telemetry:1");
+    await setSetting("database_admission_enforced", "false");
+
+    expect(await coordinate("fluncle-enrich", "settings-off")).toMatchObject({
+      enforced: false,
+      outcome: "shadow-acquire",
+    });
     expect(await contenderCount(telemetry)).toBe(0);
   });
 
