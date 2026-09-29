@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -587,6 +587,10 @@ describe("the carry-over file", () => {
   const dir = mkdtempSync(join(tmpdir(), "label-triage-carry-"));
   const path = join(dir, "carry.json");
 
+  afterAll(() => {
+    rmSync(dir, { force: true, recursive: true });
+  });
+
   test("a missing file means nothing is carried", () => {
     expect(fileCarryStore(join(dir, "absent.json")).read()).toEqual([]);
   });
@@ -601,6 +605,5 @@ describe("the carry-over file", () => {
     writeFileSync(path, '{"slugs":["a"');
 
     expect(() => fileCarryStore(path).read()).toThrow();
-    rmSync(dir, { force: true, recursive: true });
   });
 });
