@@ -132,6 +132,26 @@ export type RoundSummary = {
 
 const log = (message: string) => console.error(`[label-triage] ${message}`);
 
+export function parseLabelList(stdout: string, status: number | null, what: string): TriageLabel[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stdout);
+  } catch {
+    throw new Error(
+      `${what} did not return JSON (status ${status}): ${stdout.trim().slice(0, 200)}`,
+    );
+  }
+
+  const labels = (parsed as { labels?: unknown } | null)?.labels;
+  if (status !== 0 || !Array.isArray(labels)) {
+    throw new Error(
+      `${what} returned no label list (status ${status}): ${stdout.trim().slice(0, 300)}`,
+    );
+  }
+
+  return labels as TriageLabel[];
+}
+
 export function readUndecided(bin = FLUNCLE_BIN): TriageLabel[] {
   const result = spawnSync(
     bin,
@@ -142,16 +162,11 @@ export function readUndecided(bin = FLUNCLE_BIN): TriageLabel[] {
     },
   );
 
-  const stdout = result.stdout ?? "";
-  if (!stdout.trim()) {
-    throw new Error(
-      `admin labels list produced no output (status ${result.status}): ${(result.stderr ?? "").slice(0, 400)}`,
-    );
-  }
-
-  const parsed = JSON.parse(stdout) as { labels?: TriageLabel[] };
-
-  return parsed.labels ?? [];
+  return parseLabelList(
+    `${result.stdout ?? ""}`.trim() || `${result.stderr ?? ""}`,
+    result.status,
+    "admin labels list",
+  );
 }
 
 function ageMs(label: TriageLabel, now: number): number {
@@ -802,15 +817,22 @@ async function fluncleJson<T>(args: string[]): Promise<T> {
 }
 
 async function readCalibration(): Promise<Calibration> {
+  const list = async (seedState: string) => {
+    const result = await capture(
+      FLUNCLE_BIN,
+      ["admin", "labels", "list", "--seed-state", seedState, "--json"],
+      { timeoutMs: 120_000 },
+    );
+
+    return parseLabelList(
+      result.stdout,
+      result.code,
+      `admin labels list --seed-state ${seedState}`,
+    );
+  };
   const [enabled, disabled, rules] = await Promise.all([
-    fluncleJson<{ labels?: TriageLabel[] }>(["admin", "labels", "list", "--seed-state", "enabled"]),
-    fluncleJson<{ labels?: TriageLabel[] }>([
-      "admin",
-      "labels",
-      "list",
-      "--seed-state",
-      "disabled",
-    ]),
+    list("enabled"),
+    list("disabled"),
     fluncleJson<{
       rules?: Array<{
         artistMbid?: string;
@@ -821,10 +843,14 @@ async function readCalibration(): Promise<Calibration> {
     }>(["admin", "artists", "rules"]),
   ]);
 
+  if (enabled.length === 0 || !Array.isArray(rules.rules)) {
+    throw new Error("the operator's boundary came back empty — refusing to research without it");
+  }
+
   return {
-    disabled: (disabled.labels ?? []).map((label) => label.name),
-    enabled: (enabled.labels ?? []).map((label) => label.name),
-    globalRules: (rules.rules ?? []).map(
+    disabled: disabled.map((label) => label.name),
+    enabled: enabled.map((label) => label.name),
+    globalRules: rules.rules.map(
       (rule) =>
         `${rule.verdict ?? "?"} | GLOBAL | ${rule.resolvedName ?? rule.artistName ?? "?"} (${rule.artistMbid ?? "?"})`,
     ),
