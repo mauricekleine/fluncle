@@ -76,7 +76,7 @@ export function parseLabelArtistRulesJson(source: string): ArtistRuleInput[] {
   });
 }
 
-async function resolveLabel(slugOrId: string): Promise<LabelAdminItem> {
+export async function resolveLabel(slugOrId: string): Promise<LabelAdminItem> {
   const { labels } = await adminApiGet<{ labels: LabelAdminItem[]; ok: boolean }>(
     "/api/v1/admin/labels",
   );

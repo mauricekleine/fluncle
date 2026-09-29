@@ -156,6 +156,15 @@ for (let s = 0; s < total; s += batch) {
   starts.push(s);
 }
 
+const SKILL_PATH = ".agents/skills/fluncle-label-triage/SKILL.md";
+
+const READ_FIRST = `## Read first
+Read \`${SKILL_PATH}\` (repo-relative) before your first label. Its standing rulings and its DSP oracle ladder bind this pass and are not repeated here.`;
+
+const EVIDENCE_COMMAND = `\`fluncle admin labels evidence <mb_label_id> --json\` (run from the repo root; when the installed \`fluncle\` lacks the command, use \`bun apps/cli/src/cli.ts admin labels evidence …\`)`;
+
+const NO_FETCHERS = `**Do not write fetchers.** Never curl MusicBrainz, Discogs, Beatport or Apple for what the evidence command returns: it shares rate limits across workers, retries and caches. Re-run it instead (\`--refresh\` skips the cache).`;
+
 const RULE_PRECEDENT = rules
   ? `- Artist rules already RATIFIED (the precedent for any rule you propose): read \`${rules}\`\n`
   : "";
@@ -163,6 +172,8 @@ const RULE_PRECEDENT = rules
 const brief = (
   start,
 ) => `You are triaging crawl-seed labels for **Fluncle**, a drum & bass archive. Fluncle's catalogue crawler only STORES tracks from labels the operator marks \`enabled\`, so your verdict decides whether a label's releases enter a DnB archive. A wrong "dnb" pollutes the catalogue with off-genre music; a wrong "not_dnb" silently loses good music. Be accurate over decisive.
+
+${READ_FIRST}
 
 ## Your slice
 Read the JSON array at \`${file}\` and take **items [${start}, ${start + batch})** (0-indexed, may run past the end — just take what exists). Each item has \`name\`, \`slug\`, \`mb_label_id\` (a MusicBrainz label MBID that identifies the EXACT entity — never research a same-named label), and \`rules\` (artist rules this label ALREADY carries — read them; they are the operator's standing exceptions for it).
@@ -184,12 +195,9 @@ Fluncle can now carve a mixed label with per-artist FIRST-CREDIT exceptions: kee
 Set \`needsCensus: true\` when the label is genuinely two-sided: mostly DnB with a recurring off-lane act (provisional \`dnb\`), or mostly off-lane with a real DnB minority worth taking (provisional \`dnb_partial\`). Do NOT set it for a clean call either way, for a conflated MBID (that stays \`unclear\` — the fix is upstream), or for a label with too little evidence to count.
 
 ## Method (in order, stop when confident)
-1. **MusicBrainz label**: \`curl -sS -H "User-Agent: FluncleLabelTriage/1.0 ( https://www.fluncle.com )" "https://musicbrainz.org/ws/2/label/<MBID>?inc=tags+genres+url-rels&fmt=json"\` — gives type, area, and often a **Discogs URL** in \`relations\`. NOTE: MB \`tags\`/\`genres\` are usually EMPTY, so do not rely on them.
-2. **MusicBrainz releases** (the strongest signal — the ARTISTS tell you the genre): \`curl -sS -H "User-Agent: ..." "https://musicbrainz.org/ws/2/release?label=<MBID>&limit=25&inc=artist-credits&fmt=json"\`. Read \`release-count\`, titles, and artist credits. Recognisable DnB artists ⇒ dnb.
-3. **Discogs** via the url-rel from step 1 — its label page lists releases with genre/style tags, which is often decisive. Fetch with \`firecrawl scrape <url>\` (the CLI is authenticated) or WebFetch.
-4. **Web** for anything still open: \`firecrawl search "<label name> drum and bass label"\`, or WebSearch. Check the label's own site, Bandcamp, RA, Juno.
-
-**RATE LIMIT: MusicBrainz allows 1 request/second — \`sleep 1.2\` between every MB call, and always send the User-Agent or you get 403.** Work through your labels one at a time.
+1. **The evidence command, once per label**: ${EVIDENCE_COMMAND}. It returns the MusicBrainz label and a first-credit release sample (the ARTISTS are the strongest genre signal; MB \`tags\`/\`genres\` are usually empty), Discogs per-release styles, Beatport's genre facet and Apple's genre for sampled barcodes. Each source carries a \`status\` and its own \`errors\`; \`no_link\` means the MB entity links no page on that site, and Discogs \`candidates\` there are unverified name matches.
+2. ${NO_FETCHERS}
+3. **Web** only for what the evidence leaves open: \`firecrawl search "<label name> drum and bass label"\` or WebSearch, the label's own site, Bandcamp, RA, Juno.
 
 ## Output
 Return one entry per label in your slice via the structured schema. \`evidence\` must cite what you actually saw (artist names, Discogs styles, release titles) — never a guess restated. If a label had no findable evidence, say so and mark it \`unclear\` with \`low\` confidence. Do not write any files.`;
@@ -209,8 +217,13 @@ Look each slug up in the JSON array at \`${file}\` for its \`mb_label_id\` (the 
 - **enabled + block** — the label is mainly in lane, so enable it, and block the acts whose OWN records are off-lane. Their guest features on the label's DnB tracks still come in (that is measured behaviour, not a hope).
 - **disabled + allow** (\`dnb_partial\`) — the label is mainly off-lane, so it stays disabled, and the DnB acts' own records are allowed in. Nothing else from the label arrives.
 
+${READ_FIRST}
+
+## Evidence
+Run ${EVIDENCE_COMMAND.replace("--json", "--census --json")} once per label. \`musicbrainz.data.census\` counts FIRST credits per artist MBID over DISTINCT recordings exactly as the crawler's artist rules read them (the recording's credit, else the release's; the first entry with an MBID that is not Various Artists), 5-page cap, sampling caveat in \`caveat\`; \`musicbrainz.data.label.labelRelations\` is the imprint check. ${NO_FETCHERS} Artist-level lookups the command does not cover (an act's own catalogue, its Spotify url-rel) may call MusicBrainz directly: \`sleep 1.2\` between calls and always send \`User-Agent: FluncleLabelTriage/1.0 ( https://www.fluncle.com )\`.
+
 ## Non-negotiable rails
-1. **Imprint child first.** \`curl -sS -H "User-Agent: FluncleLabelTriage/1.0 ( https://www.fluncle.com )" "https://musicbrainz.org/ws/2/label/<MBID>?inc=label-rels&fmt=json"\`. If MusicBrainz already models the boundary as a child imprint / sub-label (a DnB imprint of a bigger house), say so in \`imprintChild\` and **propose no rules** — the right move is to rule that MB entity, not to hand-carve artists. Otherwise \`imprintChild: "none"\`.
+1. **Imprint child first.** Read \`labelRelations\` in the evidence. If MusicBrainz already models the boundary as a child imprint / sub-label (a DnB imprint of a bigger house), say so in \`imprintChild\` and **propose no rules** — the right move is to rule that MB entity, not to hand-carve artists. Otherwise \`imprintChild: "none"\`.
 2. **The 15% share test, measured RAW.** Compute \`offLaneFirstCreditShare\` = off-lane FIRST credits ÷ censused recordings, counting **every** off-lane credit. **≤ 0.15 ⇒ \`dnb\` + block rules.** Above it the label is not mainly DnB: return \`unclear\` (the operator rules it himself) unless the mirror case holds — a mostly-off-lane label whose DnB acts are worth taking, which is \`dnb_partial\` + allow rules. Raw is the rail because enabling a label is a standing commitment to what it releases NEXT, which no existing rule covers.
 2b. **Also report the RESIDUAL share, which is never a rail.** Recompute the same fraction dropping every off-lane credit whose artist already carries a **global** rule in the calibration list, and put it in \`residualOffLaneShare\`. When the two straddle the threshold (\`residual ≤ 0.15 < raw\`), the label is the operator's judgment call rather than a plain \`unclear\`: fill \`residualNote\` with the globally-ruled acts and their counts. Measured type specimen: a label at 0.205 raw and 0.147 residual, the gap being two acts already globally blocked. Do not let the residual change your verdict — it changes only whether he is shown the label by name.
 3. **No inert rules.** A proposed rule needs \`firstCreditCount > 0\` on YOUR census. An act you only ever see as a guest credit can never trigger a first-credit rule — leave it out and say so in the evidence if it matters. (Measured case: Maddslinky on Gutterfunk, 0 first credits, an intuitive block that would never have fired.)
@@ -220,15 +233,9 @@ Look each slug up in the JSON array at \`${file}\` for its \`mb_label_id\` (the 
 7. **Same alias, different act.** Two acts can share a name. Verify each MBID's own release list before you rule it.
 
 ## The census
-Page the label's releases WITH credits and recordings:
-\`curl -sS -H "User-Agent: FluncleLabelTriage/1.0 ( https://www.fluncle.com )" "https://musicbrainz.org/ws/2/release?label=<MBID>&inc=artist-credits+recordings&limit=100&offset=<N>&fmt=json"\`
-
-- **1 request/second — \`sleep 1.2\` between every MB call, and always send the User-Agent or you get 403.**
-- \`limit=100\` is MusicBrainz's ceiling. Page with \`offset\` until you have the catalogue **or you have fetched 5 pages** — whichever comes first. If you hit the cap, the census is a SAMPLE: say so verbatim in \`censusSummary\` ("sampled: first 500 of N releases") and drop your confidence a step.
-- For each release, walk its media → tracks → recordings and take the **first** entry of the track's \`artist-credit\` array. That MBID is the one a rule matches. Count first credits per MBID across the whole census.
+- Take the counts from \`census.firstCredits\`; \`recordingsCounted\` is the denominator, and it includes \`uncreditedRecordings\` (stored under the label default, never matched by a rule). When \`caveat\` is set the census is a SAMPLE: copy it verbatim into \`censusSummary\` and drop your confidence a step.
 - Judge each recurring first-credit act in or out of lane on its OWN catalogue (its MB releases, its Discogs styles), not on the label's average.
-- Report the totals in \`censusSummary\`: releases read, recordings counted, pages fetched, in-lane vs off-lane first credits, and what a rule set would take vs drop.
-- **Count credits, not releases.** The share is over censused RECORDINGS because that is what the crawl stores: one various-artists compilation of 19 off-lane tracks imports 19 off-lane tracks, however in-lane the other releases look. A release-level reading of the same label can look twice as clean and is the wrong measure. (Measured: a label reading 10-of-12 releases in lane on Discogs was 43–58% off-lane by credit.)
+- Report the totals in \`censusSummary\`: releases read, recordings counted, pages fetched (all in the census object), in-lane vs off-lane first credits, and what a rule set would take vs drop.
 
 ## Output
 One entry per label via the structured schema. \`rules\` is empty unless you are proposing exceptions, and every rule carries its own \`evidence\` + \`firstCreditCount\`. Check each proposed artist's MB entity for a Spotify url-rel (\`?inc=url-rels\`) and set \`tapBridge\` — \`no\` means the rule is tap-blind (the crawler still enforces it; the freshness tap cannot), which the operator wants to see. Do not write any files.`;

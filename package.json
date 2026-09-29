@@ -72,7 +72,7 @@
     "test": "turbo run test",
     "test:scripts": "bun run test:scripts:worker && bun run test:scripts:box",
     "test:scripts:box": "bun test --cwd docs/agents/hermes/scripts",
-    "test:scripts:worker": "bun run typecheck:ux-capture && bun test --cwd scripts && bun test --cwd .claude/hooks && bun test --cwd packages/skills/fluncle-track-enrichment/scripts && bun test --cwd packages/skills/fluncle-box-restore/scripts && bun test --cwd packages/skills/fluncle-catalogue-prune/scripts",
+    "test:scripts:worker": "bun run typecheck:ux-capture && bun test --cwd scripts && bun test --cwd .claude/hooks && bun test --cwd packages/skills/fluncle-track-enrichment/scripts && bun test --cwd packages/skills/fluncle-box-restore/scripts && bun test --cwd packages/skills/fluncle-catalogue-prune/scripts && bun test --cwd packages/skills/fluncle-label-triage/scripts",
     "prepare": "command -v husky > /dev/null 2>&1 && husky || true",
     "pretypecheck": "node scripts/quality/workspace-install.mjs",
     "typecheck": "turbo run typecheck",
