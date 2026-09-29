@@ -1537,14 +1537,16 @@ export const SURFACES: readonly Surface[] = [
   },
   {
     command: "fluncle admin labels list --seed-state undecided",
-    exposedContent: ["read the undecided crawl-seed pile and report whether a triage round is due"],
+    exposedContent: [
+      "read the undecided crawl-seed pile and, once a round is due, research it into proposals",
+    ],
     kind: "cron",
     name: "cron.label-triage",
     operatorNotes:
-      "daily. A PURE trigger — zero model tokens, one countless admin read and a sort. Fires only when 40+ NEVER-LOOKED labels have accumulated; stale ones ride along but never trigger a round. It cannot rule: recording a finding is record_label_triage (agent tier) and ruling is update_label (operator tier), which 403s the box token. The batched research leg is deliberately unwired until the gate proves it reports honestly. Source: docs/agents/hermes/scripts/{label-triage-sweep.ts,label-triage-sweep.sh}.",
+      "daily. The gate is one countless admin read and a sort; it fires only when 40+ NEVER-LOOKED labels with a MusicBrainz identity and no artist rules have accumulated, and stale ones ride along. A fired round runs one claude -p per batch of 10 labels (capped at 3 batches and 30 labels) whose only fetcher is `fluncle admin labels evidence`; the model holds no Fluncle token, and the script records each verdict with record_label_triage (agent tier). It cannot rule: update_label is operator tier and 403s the box token. A fired round that records zero proposals, or any failed batch, exits non-zero, reads failed on /status and posts to Discord. Source: docs/agents/hermes/scripts/{label-triage-sweep.ts,label-triage-sweep.sh}.",
     probeConfig: { cadenceMs: 24 * 60 * MINUTE_MS, cronName: "fluncle-label-triage", kind: "cron" },
-    statusDescription: "reports when the label pile needs a round",
-    title: "Label triage gate",
+    statusDescription: "researches the label pile when it needs a round",
+    title: "Label triage",
     weights: { status: "hidden" },
   },
   {

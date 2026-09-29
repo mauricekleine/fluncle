@@ -16,6 +16,7 @@ export const LabelTriageVerdictSchema = z
 
 export const LabelAdminItemSchema = z
   .object({
+    carriesArtistRules: z.boolean().optional(),
     createdAt: z.string(),
 
     disambiguation: z.string().nullable().optional(),

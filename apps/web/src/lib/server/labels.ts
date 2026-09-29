@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import {
   type LabelAdminItem,
   type LabelAliasCandidate,
+  type LabelArtistRuleVerdict,
   type LabelDetail,
   type LabelListItem,
   type LabelSeedState,
@@ -1505,6 +1506,16 @@ export type LabelsAdminSection = LabelSeedState | "partial";
 const LABEL_CARRIES_ARTIST_RULE = `exists (select 1 from artist_rules
                                             where artist_rules.label_id = labels.id)`;
 
+export async function labelIdsCarryingArtistRules(): Promise<Set<string>> {
+  const db = await getDb();
+  const result = await db.execute({
+    args: [],
+    sql: `select distinct label_id from artist_rules where label_id is not null`,
+  });
+
+  return new Set(typedRows<{ label_id: string }>(result.rows).map((row) => row.label_id));
+}
+
 export async function listLabelsPage(
   section: LabelsAdminSection,
   page: number,
@@ -2242,22 +2253,25 @@ export async function recordLabelTriage(
   };
 }
 
+type LabelTriageConfidence = RecordLabelTriageInput["confidence"];
+
 export type LabelTriageProposal = {
   censusSummary: string | null;
-  confidence: string;
+  confidence: LabelTriageConfidence;
   evidence: string;
   offLaneShare: number | null;
   reason: string | null;
   residualOffLaneShare: number | null;
+  recordedAt: string;
   roundId: string;
   rules: {
     artistMbid: string;
     artistName: string;
     evidence: string | null;
     firstCreditCount: number;
-    verdict: string;
+    verdict: LabelArtistRuleVerdict;
   }[];
-  verdict: string;
+  verdict: LabelTriageVerdict;
   verifyAgrees: boolean | null;
   verifyEvidence: string | null;
 };
@@ -2275,14 +2289,16 @@ export async function labelTriageProposalsByIds(
   const proposals = await db.execute({
     args: labelIds,
     sql: `select id, label_id, round_id, verdict, confidence, evidence, reason, census_summary,
-                 off_lane_share, residual_off_lane_share, verify_agrees, verify_evidence
+                 off_lane_share, residual_off_lane_share, verify_agrees, verify_evidence,
+                 created_at
           from label_triage_proposals
           where label_id in (${placeholders})`,
   });
 
   const rows = typedRows<{
     census_summary: string | null;
-    confidence: string;
+    confidence: LabelTriageConfidence;
+    created_at: string;
     evidence: string;
     id: string;
     label_id: string;
@@ -2290,7 +2306,7 @@ export async function labelTriageProposalsByIds(
     reason: string | null;
     residual_off_lane_share: number | null;
     round_id: string;
-    verdict: string;
+    verdict: LabelTriageVerdict;
     verify_agrees: number | null;
     verify_evidence: string | null;
   }>(proposals.rows);
@@ -2307,6 +2323,7 @@ export async function labelTriageProposalsByIds(
       evidence: row.evidence,
       offLaneShare: row.off_lane_share,
       reason: row.reason,
+      recordedAt: row.created_at,
       residualOffLaneShare: row.residual_off_lane_share,
       roundId: row.round_id,
       rules: [],
@@ -2333,7 +2350,7 @@ export async function labelTriageProposalsByIds(
     evidence: string | null;
     first_credit_count: number;
     proposal_id: string;
-    verdict: string;
+    verdict: LabelArtistRuleVerdict;
   }>(ruleRows.rows)) {
     byProposal.get(rule.proposal_id)?.rules.push({
       artistMbid: rule.artist_mbid,

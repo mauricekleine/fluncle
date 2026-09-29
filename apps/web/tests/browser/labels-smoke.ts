@@ -28,6 +28,8 @@ function expect(condition: boolean, label: string): void {
 }
 
 const QA = {
+  proposalId: "qa-labels-proposal",
+  proposalRuleId: "qa-labels-proposal-rule",
   ruleId: "qa-labels-rule",
   ruled: "qa-labels-ruled",
   waiting: "qa-labels-waiting",
@@ -37,6 +39,9 @@ const QA_NAMES = {
   ruled: "zz QA Partial Label",
   waiting: "zz QA Waiting Label",
 } as const;
+
+const QA_EVIDENCE =
+  "QA evidence: MusicBrainz lists mostly liquid releases, with one house act credited first on a third of the catalogue since the label began pressing records";
 
 function seedClient(): Client {
   loadDevVars();
@@ -74,9 +79,29 @@ async function seedLabels(db: Client): Promise<void> {
           values (?, ?, '00000000-0000-4000-8000-00000000qa01', 'QA Allowed Act',
                   'allow', 'operator', ?, ?)`,
   });
+
+  await db.execute({
+    args: [QA.proposalId, QA.waiting, QA_EVIDENCE, now, now],
+    sql: `insert or replace into label_triage_proposals
+            (id, label_id, round_id, verdict, confidence, evidence, census_summary,
+             off_lane_share, residual_off_lane_share, created_at, updated_at)
+          values (?, ?, 'qa-round', 'dnb_partial', 'medium', ?, '9 releases, 74 recordings',
+                  0.205, 0.147, ?, ?)`,
+  });
+
+  await db.execute({
+    args: [QA.proposalRuleId, QA.proposalId, now],
+    sql: `insert or replace into label_triage_rule_proposals
+            (id, proposal_id, artist_mbid, artist_name, verdict, first_credit_count, evidence,
+             created_at)
+          values (?, ?, '00000000-0000-4000-8000-00000000qa02', 'QA Proposed Act',
+                  'allow', 3, 'QA rule evidence: every release is liquid', ?)`,
+  });
 }
 
 async function cleanupLabels(db: Client): Promise<void> {
+  await db.execute(`delete from label_triage_rule_proposals where id = '${QA.proposalRuleId}'`);
+  await db.execute(`delete from label_triage_proposals where id = '${QA.proposalId}'`);
   await db.execute(`delete from artist_rules where id = '${QA.ruleId}'`);
   await db.execute(`delete from labels where id in ('${QA.waiting}', '${QA.ruled}')`);
 }
@@ -195,6 +220,44 @@ async function drive(browser: Awaited<ReturnType<typeof launchBrowser>>): Promis
         1,
       "a waiting row offers the artist-rule affordance behind its ⋮",
     );
+
+    const waitingRow = waitingRows.find((row) => row.includes(QA_NAMES.waiting)) ?? "";
+
+    expect(
+      waitingRow.includes("partial · medium · 1 artist rule"),
+      "a waiting row shows its recorded triage proposal: verdict, confidence, proposed rules",
+    );
+    expect(waitingRow.includes(QA_EVIDENCE), "a waiting row carries the proposal's evidence line");
+
+    await page
+      .getByRole("button", {
+        name: `Triage proposal for ${QA_NAMES.waiting}: partial, medium confidence`,
+      })
+      .click();
+
+    const detail =
+      (await page.locator('[data-slot="popover-content"]').first().textContent()) ?? "";
+
+    expect(
+      detail.includes("Round qa-round") &&
+        detail.includes("Not a ruling") &&
+        detail.includes(QA_EVIDENCE),
+      "the proposal chip opens the round, the full evidence, and says it is not a ruling",
+    );
+    expect(
+      detail.includes("9 releases, 74 recordings") &&
+        detail.includes("off-lane raw") &&
+        detail.includes("residual"),
+      "the proposal detail carries the census summary and the raw and residual off-lane shares",
+    );
+    expect(
+      detail.includes("QA Proposed Act") &&
+        detail.includes("3 first credits") &&
+        detail.includes("QA rule evidence: every release is liquid"),
+      "the proposal detail lists each proposed artist rule with its first credits and evidence",
+    );
+
+    await page.keyboard.press("Escape");
   }
 
   await page.screenshot({ fullPage: true, path: join(OUT_DIR, "labels-desktop.png") });
@@ -227,7 +290,7 @@ async function main(): Promise<void> {
 
   if (db) {
     await seedLabels(db);
-    console.log("seeded the two QA labels (SEED=1)");
+    console.log("seeded the two QA labels and a triage proposal (SEED=1)");
   }
 
   const browser = await launchBrowser();

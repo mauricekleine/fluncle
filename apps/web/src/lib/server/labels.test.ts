@@ -27,6 +27,7 @@ import {
   getConfirmedAliasNames,
   getLabelBySlug,
   isDistributorLabel,
+  labelIdsCarryingArtistRules,
   labelSlug,
   LabelMergeConflictError,
   LabelMergeSameRowError,
@@ -576,6 +577,17 @@ describe("listLabelsPage sections (the waiting queue vs the settled partials)", 
       ),
     );
     expect(details.filter((detail) => detail.startsWith("SCAN labels"))).toEqual([]);
+  });
+
+  it("names every label carrying a per-label rule for the box gate, and never a global rule's null", async () => {
+    await ensureLabel("Alpha Records");
+    await ensureLabel("Beta Records");
+    const alpha = await labelIdBySlug("alpha-records");
+    await seedArtistRule(alpha, "mbid-alpha-1");
+    await seedArtistRule(alpha, "mbid-alpha-2", "block");
+    await seedArtistRule(null, "mbid-global");
+
+    expect([...(await labelIdsCarryingArtistRules())]).toEqual([alpha]);
   });
 
   it("counts only the unruled labels as waiting, and the two totals sum to the undecided pile", async () => {
