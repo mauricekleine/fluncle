@@ -20,7 +20,7 @@
     "fluncle-box-restore": {
       "source": "./packages/skills/fluncle-box-restore",
       "sourceType": "local",
-      "computedHash": "35a571ad80ca7c8d8b91e7df2ba10669212d9c1b4c2db8b9487b22a25ea37bce"
+      "computedHash": "9d6bc458bd73da47066b7fa2e6c69b7d608a55f6041fee557fbb343b151e7946"
     },
     "fluncle-catalogue-prune": {
       "source": "./packages/skills/fluncle-catalogue-prune",
@@ -45,7 +45,7 @@
     "fluncle-hetzner-ops": {
       "source": "./packages/skills/fluncle-hetzner-ops",
       "sourceType": "local",
-      "computedHash": "9ec527d72a7773086edd39a48b79d27b0545a646f3ff24b159b888dc67bf05c2"
+      "computedHash": "969dcffa94402d0989c521a87a1cb97bb3184e300a84931f920b21cb2f90427a"
     },
     "fluncle-label-triage": {
       "source": "./packages/skills/fluncle-label-triage",

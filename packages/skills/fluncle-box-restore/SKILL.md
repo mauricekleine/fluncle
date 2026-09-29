@@ -1,7 +1,7 @@
 ---
 name: fluncle-box-restore
 description: >-
-  Rebuild or restore Fluncle's rave-02 agent box (the Hermes/devbox host running every automation sweep) after it is lost, and prove ahead of time that it could be. USE THIS whenever the box is gone, dead, deleted, wiped, unreachable, or being replaced: "rave-02 is gone", "the box died", "rebuild the box", "restore the agent box", "the devbox is dead", "provision a replacement box", "restore the box-state backup", "the crons all stopped and the box is unreachable", "disaster recovery". USE IT EQUALLY for the preventive "could we actually restore the box if we had to?" / "drill the restore", which its read-only preflight answers in one safe command. It is the ordered runbook — provision → harden → op → bootstrap token → secret templates → host timers → image → restore box state → verify — plus the load-bearing ordering constraints. NOT for changing a live box (pins, secrets, crons): that is fluncle-hermes-operator. NOT generic Hetzner VPS profiles: that is hetzner-devbox, which this skill calls and sequences.
+  Rebuild or restore Fluncle's rave-02 agent box (the Hermes/devbox host running every automation sweep) after it is lost, and prove ahead of time that it could be. USE THIS whenever the box is gone, dead, deleted, wiped, unreachable, or being replaced: "rave-02 is gone", "the box died", "rebuild the box", "restore the agent box", "the devbox is dead", "provision a replacement box", "restore the box-state backup", "the crons all stopped and the box is unreachable", "disaster recovery". USE IT EQUALLY for the preventive "could we actually restore the box if we had to?" / "drill the restore", which its read-only preflight answers in one safe command. It is the ordered runbook — provision → harden → op → bootstrap token → secret templates → host timers → image → restore box state → verify — plus the load-bearing ordering constraints. NOT for changing a live box (pins, secrets, crons): that is fluncle-hermes-operator. NOT generic Hetzner VPS profiles: that is mk-hetzner-devbox, which this skill calls and sequences.
 ---
 
 # Fluncle box restore — putting rave-02 back
@@ -10,7 +10,7 @@ rave-02 is the box every Fluncle automation runs on: the Hermes container (a lon
 
 The rebuild is assembled from the linked assets across the public repository and private companion; follow them in the order below. **Do not reconstruct any of it from source.** Each step below names the asset that does the work; follow the link, run the thing, come back.
 
-**Neighbours, so the right skill wins:** [`fluncle-hermes-operator`](../fluncle-hermes-operator) changes a box that is still alive (pins, secrets, crons). The [canonical `hetzner-devbox` skill in Nucleus](https://github.com/mauricekleine/nucleus/blob/main/skills/hetzner-devbox/SKILL.md) is the generic VPS provisioning kit; [`fluncle-hetzner-ops`](../fluncle-hetzner-ops) holds the Hermes host profile. This skill is the box being **gone**, and it drives both of those in order.
+**Neighbours, so the right skill wins:** [`fluncle-hermes-operator`](../fluncle-hermes-operator) changes a box that is still alive (pins, secrets, crons). The [canonical `mk-hetzner-devbox` skill in Nucleus](https://github.com/mauricekleine/nucleus/blob/main/skills/mk-hetzner-devbox/SKILL.md) is the generic VPS provisioning kit; [`fluncle-hetzner-ops`](../fluncle-hetzner-ops) holds the Hermes host profile. This skill is the box being **gone**, and it drives both of those in order.
 
 ## Read this first — the two halves
 
@@ -51,7 +51,7 @@ Do not rebuild a box that is merely unreachable — a re-provision throws away a
 
 The order is load-bearing. Each step names the asset that does the work.
 
-**1. Create the server.** Follow the canonical [`hetzner-devbox` skill in Nucleus](https://github.com/mauricekleine/nucleus/blob/main/skills/hetzner-devbox/SKILL.md): run its `scripts/check-prereqs.sh`, then `scripts/create-server.sh`. Size, image, and firewall name are box facts — read them from the labs doc, do not re-derive them.
+**1. Create the server.** Follow the canonical [`mk-hetzner-devbox` skill in Nucleus](https://github.com/mauricekleine/nucleus/blob/main/skills/mk-hetzner-devbox/SKILL.md): run its `scripts/check-prereqs.sh`, then `scripts/create-server.sh`. Size, image, and firewall name are box facts — read them from the labs doc, do not re-derive them.
 
 **2. Harden the host.** [`bootstrap-hardening.sh`](../fluncle-hetzner-ops/scripts/bootstrap-hardening.sh), which streams [`bootstrap-private-vps.sh`](../fluncle-hetzner-ops/scripts/bootstrap-private-vps.sh): admin user, sshd off :22, UFW, Tailscale, **and `op`**. Then [`apply-firewall.sh`](../fluncle-hetzner-ops/scripts/apply-firewall.sh) for the provider layer.
 
