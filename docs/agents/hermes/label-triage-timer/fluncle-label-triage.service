@@ -27,7 +27,7 @@ Environment=LABEL_TRIAGE_MAX_TURNS=120
 # user. The .sh/.ts pair is BAKED at /opt/hermes-scripts/ (auto-updates from main via pin-watch);
 # this host unit only TRIGGERS it, and the sweep self-writes its /status marker (cron-output.sh) so
 # the prober stays honest.
-ExecStart=/usr/bin/docker exec -e DATABASE_ADMISSION_FAIL_CLOSED -e DATABASE_ADMISSION_POLL_SECS=2 -e LABEL_TRIAGE_THRESHOLD -e LABEL_TRIAGE_STALE_DAYS -e LABEL_TRIAGE_MAX_LABELS -e LABEL_TRIAGE_BATCH_SIZE -e LABEL_TRIAGE_MAX_BATCHES -e LABEL_TRIAGE_CONCURRENCY -e LABEL_TRIAGE_BATCH_TIMEOUT_SECS -e LABEL_TRIAGE_MAX_TURNS -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/daily-retry-runner.sh fluncle-label-triage Europe/Amsterdam 06:40 07:50 -- bash /opt/hermes-scripts/label-triage-sweep.sh
+ExecStart=/usr/bin/docker exec -e DATABASE_ADMISSION_FAIL_CLOSED -e DATABASE_ADMISSION_POLL_SECS=2 -e LABEL_TRIAGE_THRESHOLD -e LABEL_TRIAGE_STALE_DAYS -e LABEL_TRIAGE_MAX_LABELS -e LABEL_TRIAGE_BATCH_SIZE -e LABEL_TRIAGE_MAX_BATCHES -e LABEL_TRIAGE_CONCURRENCY -e LABEL_TRIAGE_BATCH_TIMEOUT_SECS -e LABEL_TRIAGE_MAX_TURNS -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/daily-retry-runner.sh fluncle-label-triage Europe/Amsterdam 06:40 07:50 -- bash /opt/hermes-scripts/database-admission-runner.sh fluncle-label-triage -- bash /opt/hermes-scripts/label-triage-sweep.sh
 # A held gate is one read; a fired round runs two waves of 30-minute research batches.
 TimeoutStartSec=4200
 # Modest hardening for a root docker-driving oneshot.

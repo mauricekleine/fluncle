@@ -276,6 +276,9 @@ export const DATABASE_ADMISSION_SHAPES: Readonly<Record<string, DatabaseAdmissio
   "submissions.triage": wholeLifetime(
     "Each moderation decision immediately determines the next database-backed queue state.",
   ),
+  "triage.label-gate": wholeLifetime(
+    "The gate read, the model batches, and each proposal write form one bounded daily round.",
+  ),
   "track.capture": phased(
     `${SCRIPTS}/capture-sweep.ts`,
     "The queue read, the batch prepare, each receipt reconciliation, and the batch commits are bounded phases; provider, fingerprint, and object-storage work runs between leases.",
@@ -604,6 +607,13 @@ export const DATABASE_MUTATION_POLICIES = {
     rationale: "A verdict converges on the same stable submission row and terminal state.",
     reconciliation: "Read the submission's current state before applying the verdict again.",
   },
+  "triage.label-gate": {
+    evidenceSource: "apps/web/src/lib/server/labels.ts",
+    kind: "replay-safe-idempotent",
+    rationale:
+      "A proposal replaces the label's previous proposal and restamps its triage cursor; it never rules.",
+    reconciliation: "A stamped label leaves the never-looked worklist, so a re-run skips it.",
+  },
   "track.capture": {
     evidenceSource: "apps/web/src/lib/server/track-capture-reconciliation.ts",
     kind: "receipt-backed",
@@ -711,6 +721,7 @@ export const TRIGGER_MUTATION_POLICY_IDS = {
   "social.publish-advance": "social.publish-advance",
   "sonar.service": "sonar.service",
   "submissions.triage": "submissions.triage",
+  "triage.label-record": "triage.label-gate",
   "track.capture.queue": "due-work.queue-maintenance",
   "track.capture.write": "track.capture",
   "track.capture.write-batch": "track.capture",
@@ -2048,14 +2059,14 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
     wrapperSource: `${SCRIPTS}/isrc-recovery-sweep.sh`,
   }),
   defineOperation({
-    accessClass: "read",
+    accessClass: "write",
     cadence: withRetrySlot(
       calendar("*-*-* 06:40:00 Europe/Amsterdam", "90"),
       "*-*-* 07:50:00 Europe/Amsterdam",
     ),
     directory: "label-triage-timer",
     heavy: false,
-    mutationTarget: null,
+    mutationTarget: "primary",
     operationId: "triage.label-gate",
     service: "fluncle-label-triage.service",
     telemetryUnit: "label-triage",
@@ -2068,6 +2079,22 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         "the undecided crawl-seed pile",
         `${SCRIPTS}/label-triage-sweep.ts`,
         { mutationTarget: null },
+      ),
+      cli(
+        "artist-rules.list",
+        "read",
+        ["admin", "artists", "rules"],
+        "the global artist rules the round calibrates against",
+        `${SCRIPTS}/label-triage-sweep.ts`,
+        { mutationTarget: null },
+      ),
+      cli(
+        "triage.label-record",
+        "write",
+        ["admin", "labels", "triage"],
+        "fluncle admin labels triage <slug> --payload <file> --json",
+        `${SCRIPTS}/label-triage-sweep.ts`,
+        { mutationTarget: "primary" },
       ),
     ],
     wrapperSource: `${SCRIPTS}/label-triage-sweep.sh`,

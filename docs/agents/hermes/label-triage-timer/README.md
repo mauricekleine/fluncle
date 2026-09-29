@@ -4,7 +4,7 @@ The rave-02 host trigger for the **label-triage round**. Once a day it reads the
 
 The work is BAKED at `/opt/hermes-scripts/` — [`../scripts/label-triage-sweep.sh`](../scripts/label-triage-sweep.sh) over [`../scripts/label-triage-sweep.ts`](../scripts/label-triage-sweep.ts) — riding the image and auto-updating from `main` via pin-watch (Unit A). The research method is the [fluncle-label-triage](../../../../packages/skills/fluncle-label-triage) skill, baked at `/opt/claude/skills/fluncle-label-triage/`; the design is [docs/rfcs/label-triage-sweep-rfc.md](../../../rfcs/label-triage-sweep-rfc.md).
 
-The wrapper sets absolute `bun` and `fluncle` paths because a host timer can start with a minimal `PATH`, and sources the shared sweep secrets file for `CLAUDE_CODE_OAUTH_TOKEN` and `DISCOGS_USER_TOKEN` (both op-injected by `fluncle-secrets-sync`; nothing is placed on the box by hand). It sources `cron-output.sh` and wraps the payload instead of replacing the shell process, so the `/status` freshness marker is written even when the payload fails.
+The wrapper sets absolute `bun` and `fluncle` paths because a host timer can start with a minimal `PATH`, and sources the shared sweep secrets file for `CLAUDE_CODE_OAUTH_TOKEN` and `DISCOGS_USER_TOKEN` (both op-injected by `fluncle-secrets-sync`; nothing is placed on the box by hand). Because a round writes proposals, the unit runs the payload under `database-admission-runner.sh` as one whole-lifetime lease, the same shape as the newsletter draft. It sources `cron-output.sh` and wraps the payload instead of replacing the shell process, so the `/status` freshness marker is written even when the payload fails.
 
 ## The two halves
 
