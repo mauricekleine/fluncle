@@ -1393,7 +1393,7 @@ async function readRebuildCheckpoint(
   return checkpointFromRow(row);
 }
 
-function encodeSnapshotCursor(values: readonly string[]): string {
+export function encodeSnapshotCursor(values: readonly string[]): string {
   const json = canonicalArtifactJson(values as JsonValue[]);
   const bytes = new TextEncoder().encode(json);
 
@@ -1458,7 +1458,7 @@ function projectedColumns(alias: string, columns: readonly string[]): string {
   return columns.map((column) => `${alias}.\`${column}\` as \`${column}\``).join(", ");
 }
 
-const SONAR_TRACK_SOURCE_COLUMNS = `t.track_id, e.embedding_blob, t.key, t.bpm, t.spotify_uri,
+export const SONAR_TRACK_SOURCE_COLUMNS = `t.track_id, e.embedding_blob, t.key, t.bpm, t.spotify_uri,
   f.track_id as finding_id, f.log_id as finding_log_id, t.dismissed_at,
   t.duplicate_of_track_id, t.nearest_finding_score, t.duration_ms`;
 
@@ -1470,7 +1470,7 @@ export function buildArtifactSnapshotStatement(
   stream: ArtifactStream,
   cursor: string | null,
   limit: number,
-): InStatement {
+): { args: InValue[]; sql: string } {
   assertLimit(limit, ARTIFACT_SNAPSHOT_MAX_LIMIT, "Artifact snapshot");
   const definition = ARTIFACT_STREAM_REGISTRY[stream];
 
@@ -1670,7 +1670,7 @@ export async function insertCurrentSonarTrackArtifactChangeInTransaction(
   );
 }
 
-async function snapshotMaterial(
+export async function snapshotMaterial(
   stream: ArtifactStream,
   row: Record<string, unknown>,
 ): Promise<ArtifactSnapshotMaterial> {
