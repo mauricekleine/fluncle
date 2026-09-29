@@ -347,14 +347,16 @@ async function pipeline(
   const data = (await res.json()) as {
     results: { error?: { message?: string }; response?: { result?: HranaResult }; type: string }[];
   };
-  return data.results
-    .filter((r) => r.type === "ok" && r.response?.result)
-    .map((r) => {
-      if (r.type === "error") {
-        throw new Error(`libSQL statement error: ${r.error?.message ?? "unknown"}`);
-      }
-      return r.response?.result as HranaResult;
-    });
+  const results: HranaResult[] = [];
+  for (const r of data.results) {
+    if (r.type === "error") {
+      throw new Error(`libSQL statement error: ${r.error?.message ?? "unknown"}`);
+    }
+    if (r.type === "ok" && r.response?.result) {
+      results.push(r.response.result);
+    }
+  }
+  return results;
 }
 
 export function encodeKey(key: string): string {
@@ -701,7 +703,7 @@ export function libsqlSource(
   const schemaByName = new Map<string, SchemaObject>();
   const keysByTable = new Map<string, string[]>();
 
-  const keyColumns = async (table: string): Promise<string[] | null> => {
+  const keyColumns = async (table: string): Promise<string[]> => {
     const known = keysByTable.get(table);
 
     if (known) {
@@ -717,7 +719,7 @@ export function libsqlSource(
       ]);
 
       if (!result || result.rows.length === 0) {
-        return null;
+        throw new Error(`WITHOUT ROWID table "${table}" reports no primary key columns`);
       }
 
       keys = result.rows.map((row) => textCell(row[0], "a primary key column name"));
@@ -731,11 +733,6 @@ export function libsqlSource(
   return {
     fetchPage: async (table, limit, after) => {
       const keys = await keyColumns(table);
-
-      if (!keys) {
-        return null;
-      }
-
       const [result] = await pipeline(connection, [
         {
           args: [...(after ?? []), limit],

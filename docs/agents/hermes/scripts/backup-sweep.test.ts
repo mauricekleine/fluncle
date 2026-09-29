@@ -223,11 +223,11 @@ function fromHranaCell(cell: HranaCellJson): bigint | Buffer | number | string |
   }
 }
 
-function serveHrana(db: Database): {
-  close: () => Promise<void>;
-  statements: string[];
-  url: string;
-} {
+function serveHrana(
+  db: Database,
+  fails: (sql: string) => boolean = () => false,
+  rewrite: (sql: string) => string = (sql) => sql,
+): { close: () => Promise<void>; statements: string[]; url: string } {
   const statements: string[] = [];
   const server = Bun.serve({
     fetch: async (request) => {
@@ -242,7 +242,11 @@ function serveHrana(db: Database): {
         statements.push(entry.stmt.sql);
 
         try {
-          const query = db.query(entry.stmt.sql);
+          if (fails(entry.stmt.sql)) {
+            throw new Error("injected failure");
+          }
+
+          const query = db.query(rewrite(entry.stmt.sql));
           const rows = query.values(...(entry.stmt.args ?? []).map(fromHranaCell));
 
           return {
@@ -434,6 +438,49 @@ describe("libsqlSource — keyset paging over every primary-key shape", () => {
       expect(restored.query(`SELECT * FROM "${table}"`).values()).toEqual(
         db.query(`SELECT * FROM "${table}"`).values(),
       );
+    }
+  });
+
+  test("a failed primary-key lookup fails the dump instead of dropping the table", async () => {
+    const db = seedKeyShapes();
+    const server = serveHrana(db, (sql) => sql.includes("pragma_table_info"));
+
+    try {
+      expect(
+        await rejectionMessage(collect(libsqlSource({ token: "local-dev", url: server.url }))),
+      ).toContain("libSQL statement error");
+    } finally {
+      await server.close();
+    }
+  });
+
+  test("a failed page mid-table fails the dump instead of truncating the table", async () => {
+    const db = seedKeyShapes();
+    const server = serveHrana(db, (sql) => sql.includes('FROM "wr_composite" WHERE'));
+
+    try {
+      expect(
+        await rejectionMessage(
+          collect(libsqlSource({ token: "local-dev", url: server.url }), { batchRows: 2 }),
+        ),
+      ).toContain("libSQL statement error");
+    } finally {
+      await server.close();
+    }
+  });
+
+  test("a WITHOUT ROWID table that reports no primary key fails the dump", async () => {
+    const db = seedKeyShapes();
+    const server = serveHrana(db, undefined, (sql) =>
+      sql.includes("pragma_table_info") ? "SELECT name FROM pragma_table_info(?) WHERE 0" : sql,
+    );
+
+    try {
+      expect(
+        await rejectionMessage(collect(libsqlSource({ token: "local-dev", url: server.url }))),
+      ).toContain("reports no primary key columns");
+    } finally {
+      await server.close();
     }
   });
 
