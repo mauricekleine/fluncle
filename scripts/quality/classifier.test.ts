@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import { classifyPaths, cloudflareExcludePatterns, triggersWorkerBuild } from "./classifier.mjs";
 
 describe("dependency-closure classifier", () => {
@@ -130,6 +132,32 @@ describe("Cloudflare deploy watch paths", () => {
     expect(triggersWorkerBuild("apps/web/src/routes/index.tsx")).toBe(true);
     expect(triggersWorkerBuild("packages/contracts/src/orpc/tracks.ts")).toBe(true);
     expect(triggersWorkerBuild("packages/new-shared/src/index.ts")).toBe(true);
+  });
+
+  test("an agent-skill-only change is an expected deploy skip, never a waited-for build", () => {
+    const skillsOnly = [
+      ".agents/skills/fluncle-rfc-writer/SKILL.md",
+      ".claude/skills/fluncle-rfc-writer",
+      "packages/skills/fluncle-rfc-writer/SKILL.md",
+      "packages/skills/fluncle-rfc-writer/references/rfc-template.md",
+      "skills-lock.json",
+    ];
+
+    for (const path of skillsOnly) {
+      expect(triggersWorkerBuild(path)).toBe(false);
+    }
+    expect(classifyPaths(skillsOnly).deploy).toBe(false);
+    expect(classifyPaths(skillsOnly).full).toBe(true);
+    expect(cloudflareExcludePatterns()).toEqual(
+      expect.arrayContaining(["packages/skills/*", "skills-lock.json"]),
+    );
+  });
+
+  test("agent-skill sources stay outside every workspace the Worker can build", () => {
+    const repositoryRoot = join(import.meta.dir, "..", "..");
+
+    expect(existsSync(join(repositoryRoot, "packages/skills/package.json"))).toBe(false);
+    expect(existsSync(join(repositoryRoot, ".agents/package.json"))).toBe(false);
   });
 
   test("Cloudflare bypasses watch paths for empty, 3000-file, and 20-commit pushes", () => {
