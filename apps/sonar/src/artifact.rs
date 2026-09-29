@@ -431,6 +431,18 @@ pub struct ArtifactClient {
 }
 
 impl ArtifactClient {
+    pub fn consumer_id(&self) -> &str {
+        &self.consumer_id
+    }
+
+    pub async fn get(&self, path: &str, query: &[(&str, &str)]) -> Result<reqwest::Response> {
+        Self::checked(self.client.get(self.url(path)).query(query).send().await?).await
+    }
+
+    pub async fn post(&self, path: &str, body: Value) -> Result<reqwest::Response> {
+        Self::checked(self.client.post(self.url(path)).json(&body).send().await?).await
+    }
+
     pub fn new(base_url: String, token: &str, consumer_id: String) -> Result<Self> {
         Self::with_timeouts(
             base_url,
@@ -600,13 +612,23 @@ impl ArtifactClient {
     }
 
     pub async fn changes(&self, limit: usize) -> Result<ChangePage> {
+        self.changes_from(None, limit).await
+    }
+
+    pub async fn changes_from(&self, from_seq: Option<u64>, limit: usize) -> Result<ChangePage> {
+        let limit_text = limit.to_string();
+        let mut query = vec![
+            ("consumerId", self.consumer_id.as_str()),
+            ("limit", limit_text.as_str()),
+        ];
+        let from_text = from_seq.map(|value| value.to_string());
+        if let Some(from_text) = from_text.as_deref() {
+            query.push(("fromSeq", from_text));
+        }
         let response = Self::checked(
             self.client
                 .get(self.url("/admin/artifacts/changes"))
-                .query(&[
-                    ("consumerId", self.consumer_id.as_str()),
-                    ("limit", &limit.to_string()),
-                ])
+                .query(&query)
                 .send()
                 .await?,
         )

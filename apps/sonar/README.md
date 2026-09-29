@@ -16,22 +16,22 @@ The HTTP search contract, filter null laws, request caps, and fallback behavior 
 
 Sonar never runs a full corpus SELECT against hosted Turso.
 
-It opens an official libSQL embedded replica at `SONAR_REPLICA_PATH` with `Builder::new_remote_replica`. No automatic sync interval is configured. Sonar calls `Database::sync()` explicitly, then every track, revision, and centroid query runs against that local file.
+In `replica` and `shadow` modes Sonar opens an official libSQL embedded replica at `SONAR_REPLICA_PATH` with `Builder::new_remote_replica`. No automatic sync interval is configured. Sonar calls `Database::sync()` explicitly, then source queries run against that local file. In `worker` mode it opens no replica and reads bounded source pages over the authenticated Worker API.
 
 A separate embedded libSQL database at `SONAR_STATE_PATH` owns the consumer checkpoint and exact raw track projection. Source-replica files and consumer-state files must never share a path.
 
 The steady loop has two lanes:
 
 - Every `SONAR_DELTA_SECS`, Sonar reads a bounded, globally ordered artifact batch and consumes `sonar.track@1/1`.
-- Every `SONAR_RECONCILE_SECS`, Sonar explicitly syncs the replica and runs a full local reconciliation of tracks and centroids. This catches metadata mutations that do not emit an embedding event. A sync or reconciliation failure leaves the served generation alone.
+- Every `SONAR_RECONCILE_SECS`, Sonar reconciles tracks and centroids from the selected source, syncing the replica in `replica` and `shadow` modes. This catches metadata mutations and deletions that do not emit an embedding event. A source or reconciliation failure leaves the served generation alone. A Worker listing that crosses the deletion guard starts a fenced, attested full rebuild.
 
 There is no remote full-scan fallback. State corruption, a checkpoint divergence, or a compaction gap starts an exceptional full local rebuild. Corrupt derived state is retained as one bounded `.corrupt` generation and recreated automatically; the served in-memory generation stays untouched until its replacement validates.
 
 ## Bootstrap and rebuild
 
-Registration establishes the producer fence. Sonar explicitly syncs the local replica through that fence, computes each deterministic `sonar.track` snapshot page from the local keyset projection, and posts only the page checkpoint. The Worker re-reads and attests the same page. Snapshot vectors never travel back to Sonar over the admin API.
+Registration establishes the producer fence. In replica and shadow modes Sonar syncs the local replica through that fence, computes each deterministic `sonar.track` snapshot page from the local keyset projection, and posts only the page checkpoint; the Worker re-reads and attests the same page. In worker mode Sonar downloads each snapshot page with its blobs through `listArtifactSnapshot`, checks the page and running digests, posts the same checkpoint, and retains accepted rows as local scratch state.
 
-Before activation, Sonar syncs once more, records local artifact head `H`, durably builds the complete track and centroid candidate from the local replica, and makes that generation visible. Only then does it activate the producer checkpoint. Events through `H` are still validated in global order and acknowledged as baseline-covered. Events above `H` apply normally.
+Before activation, replica and shadow modes sync once more, record local artifact head `H`, and build the candidate from the replica. Worker mode builds it from attested snapshot rows plus digest and selective item pages under the H0/H1 overlap window below. Sonar commits the complete candidate before activating the producer checkpoint; replay then catches the events after its baseline.
 
 The local snapshot preserves producer revisions, including receipts whose event bodies were compacted. Tombstones retain their subject revision after the row disappears, so delayed delivery cannot resurrect a deleted track.
 
@@ -53,33 +53,36 @@ Tracks, centroids, and checkpoint metadata live in one published generation. A r
 
 ## Health
 
-`GET /health` remains open. It reports the served track and centroid counts, build commit, checkpoint, local baseline, producer head, delta backlog and age, last successful replica sync, raw vector bytes, artifact contract, validation state, and the last rebuild duration. A request carrying the valid existing `x-sonar-secret` additionally receives `consumer_id`, which binds commissioning evidence to the exact artifact consumer without exposing that deployment identity to public probes. Authenticated and anonymous responses both carry `Cache-Control: no-store`, preventing an intermediary from reusing the private body for a public request. Fields have bounded names and values. Structured logs use closed stage and rebuild-cause names plus numeric counters.
+`GET /health` remains open. It reports the served track and centroid counts, build commit, checkpoint, local baseline, producer head, delta backlog and age, last successful replica sync, selected source, age of the last reconcile, the last shadow comparison, the last deletion guard trip, raw vector bytes, artifact contract, validation state, and the last rebuild duration. A request carrying the valid existing `x-sonar-secret` additionally receives `consumer_id`, which binds commissioning evidence to the exact artifact consumer without exposing that deployment identity to public probes. Authenticated and anonymous responses both carry `Cache-Control: no-store`, preventing an intermediary from reusing the private body for a public request. Fields have bounded names and values. Structured logs use closed stage and rebuild-cause names plus numeric counters.
 
 `POST /search` still requires `x-sonar-secret`, compared in constant time.
 
 ## Configuration
 
-| Variable               | Required | Default   | Meaning                                                                                                             |
-| ---------------------- | -------- | --------- | ------------------------------------------------------------------------------------------------------------------- |
-| `TURSO_DATABASE_URL`   | yes      | none      | Remote source used only by embedded-replica sync.                                                                   |
-| `TURSO_AUTH_TOKEN`     | yes      | none      | Read credential used only by embedded-replica sync.                                                                 |
-| `SONAR_REPLICA_PATH`   | yes      | none      | Writable local embedded-replica file.                                                                               |
-| `SONAR_STATE_PATH`     | yes      | none      | Writable local consumer-state database.                                                                             |
-| `FLUNCLE_API_BASE_URL` | yes      | none      | Base URL for agent-authenticated artifact operations.                                                               |
-| `FLUNCLE_API_TOKEN`    | yes      | none      | Agent token for artifact operations.                                                                                |
-| `SONAR_CONSUMER_ID`    | yes      | none      | Stable artifact consumer identity.                                                                                  |
-| `SONAR_SECRET`         | yes      | none      | Shared secret for search requests.                                                                                  |
-| `SONAR_DELTA_SECS`     | no       | `30`      | Delay between bounded change reads.                                                                                 |
-| `SONAR_RECONCILE_SECS` | no       | `21600`   | Delay between explicit replica sync plus full local reconciliation.                                                 |
-| `SONAR_BATCH_LIMIT`    | no       | `100`     | Change batch size, maximum 500.                                                                                     |
-| `SONAR_SNAPSHOT_LIMIT` | no       | `200`     | Local snapshot attestation page size, maximum 200.                                                                  |
-| `SONAR_PORT`           | no       | `8080`    | Listen port.                                                                                                        |
-| `SONAR_BIND`           | no       | `0.0.0.0` | Bind address.                                                                                                       |
-| `SONAR_TLS_CERT`       | no       | none      | PEM certificate path. Set with the key.                                                                             |
-| `SONAR_TLS_KEY`        | no       | none      | PEM key path. Set with the certificate.                                                                             |
-| `SONAR_VALIDATE_ONLY`  | no       | `false`   | Pre-smoke mode. Reads and validates existing local state, serves health, and performs no sync or artifact mutation. |
+| Variable               | Required       | Default   | Meaning                                                                                                                                                              |
+| ---------------------- | -------------- | --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `TURSO_DATABASE_URL`   | replica/shadow | none      | Remote source used only by embedded-replica sync.                                                                                                                    |
+| `TURSO_AUTH_TOKEN`     | replica/shadow | none      | Read credential used only by embedded-replica sync.                                                                                                                  |
+| `SONAR_REPLICA_PATH`   | replica/shadow | none      | Writable local embedded-replica file.                                                                                                                                |
+| `SONAR_SOURCE`         | no             | `replica` | `replica`, `worker`, or `shadow`. Worker uses bounded read-only source pages and never opens a replica; shadow serves replica state and compares a Worker candidate. |
+| `SONAR_STATE_PATH`     | yes            | none      | Writable local consumer-state database.                                                                                                                              |
+| `FLUNCLE_API_BASE_URL` | yes            | none      | Base URL for agent-authenticated artifact operations.                                                                                                                |
+| `FLUNCLE_API_TOKEN`    | yes            | none      | Agent token for artifact operations.                                                                                                                                 |
+| `SONAR_CONSUMER_ID`    | yes            | none      | Stable artifact consumer identity.                                                                                                                                   |
+| `SONAR_SECRET`         | yes            | none      | Shared secret for search requests.                                                                                                                                   |
+| `SONAR_DELTA_SECS`     | no             | `30`      | Delay between bounded change reads.                                                                                                                                  |
+| `SONAR_RECONCILE_SECS` | no             | `21600`   | Delay between source reconciliations.                                                                                                                                |
+| `SONAR_BATCH_LIMIT`    | no             | `100`     | Change batch size, maximum 500.                                                                                                                                      |
+| `SONAR_SNAPSHOT_LIMIT` | no             | `200`     | Fenced snapshot attestation page size, maximum 200.                                                                                                                  |
+| `SONAR_PORT`           | no             | `8080`    | Listen port.                                                                                                                                                         |
+| `SONAR_BIND`           | no             | `0.0.0.0` | Bind address.                                                                                                                                                        |
+| `SONAR_TLS_CERT`       | no             | none      | PEM certificate path. Set with the key.                                                                                                                              |
+| `SONAR_TLS_KEY`        | no             | none      | PEM key path. Set with the certificate.                                                                                                                              |
+| `SONAR_VALIDATE_ONLY`  | no             | `false`   | Pre-smoke mode. Reads and validates existing local state, serves health, and performs no sync or artifact mutation.                                                  |
 
-The committed systemd unit creates a private writable state directory. Operator configuration points both local paths into it. Concrete credentials and topology stay outside this public repository.
+Worker source paging uses an overlap window. Sonar reads the artifact head H0 before listing and H1 after all track and centroid pages, then commits the candidate with `baseline_seq=H0` and `overlap_through=H1`. It skips replay through H0. In `(H0,H1]`, an event at or below the stored subject revision is covered by the later source row; a higher revision applies. After catch-up passes H1, Sonar rechecks every subject whose overlap event applied against bounded Worker item reads. It removes absent tracks and corrects changed revisions or bytes before publishing the corrected generation. The pending subject set survives a crash. Above H1, strict immutable revision and byte checks apply. The window is durable in the local manifest, including across a crash after candidate commit. A moving head does not make a valid listing fail. The committed systemd unit creates a private writable state directory. Operator configuration points both local paths into it. Concrete credentials and topology stay outside this public repository.
+
+The Worker rebuild retains the blobs from attested `listArtifactSnapshot` pages in local scratch state. Digest listing pages supply their revisions; unchanged snapshot rows are reused, and only rows changed during paging need another item fetch. Worker and replica shadow parity compares the served-content digest of the track and centroid indexes. Equal digests match even if the sampled heads differ. On a digest mismatch, Sonar reads the change feed without acknowledging it and marks the comparison inconclusive only when every differing subject changed between the sampled heads. The revision and tombstone ledger is excluded because the Worker source has no tombstone listing; revisions do not enter search results, while overlap rechecks and strict checks above H1 protect serving state. An empty listing against a non-empty manifest, or a listing that would remove more than `max(100, 2% of current subjects)`, triggers a fenced full rebuild; `/health.last_reconcile_guard` records the time, gross deletion count, and prior manifest digest.
 
 ## Static build
 
@@ -99,6 +102,7 @@ The deterministic tests cover the existing API and search behavior, digest fixtu
 
 - `artifact.rs` owns the exact `sonar.track@1/1` wire types, HTTP calls, and digests.
 - `replica.rs` owns explicit sync and local source projections.
+- `source.rs` owns source selection, Worker page validation, and bounded source item reads.
 - `state.rs` owns durable raw state, pending acknowledgements, validation, and candidate builds.
 - `consumer.rs` owns bootstrap, reconciliation, delta application, recovery, and publication ordering.
 - `index.rs`, `kernel.rs`, and `search.rs` own the exact scan and filter semantics.

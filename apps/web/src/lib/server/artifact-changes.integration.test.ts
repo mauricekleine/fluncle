@@ -973,6 +973,19 @@ describe("artifact ordered reads and acknowledgements", () => {
 
     expect(page.events.map(({ seq }) => seq)).toEqual([1, 2]);
     expect(page).toMatchObject({ fromSeq: 0, hasMore: true, throughSeq: 2 });
+    const inspection = await listArtifactChanges(db, {
+      consumerId: "bounded-reader",
+      fromSeq: 2,
+      limit: 2,
+    });
+    expect(inspection.events.map(({ seq }) => seq)).toEqual([3, 4]);
+    expect(
+      (await listArtifactChanges(db, { consumerId: "bounded-reader", limit: 2 })).fromSeq,
+    ).toBe(0);
+    await ackPage("bounded-reader", 2);
+    await expect(
+      listArtifactChanges(db, { consumerId: "bounded-reader", fromSeq: 0 }),
+    ).rejects.toThrow(/before the consumer checkpoint/);
     await expect(
       listArtifactChanges(db, {
         consumerId: "bounded-reader",

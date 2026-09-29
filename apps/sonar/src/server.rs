@@ -20,9 +20,32 @@ use subtle::ConstantTimeEq;
 
 use crate::index::Index;
 use crate::search::{cap_violation, search, IndexName, SearchRequest, SearchResponse};
+use crate::source::SourceMode;
+
+#[derive(Clone, Serialize)]
+pub struct ShadowComparison {
+    pub result: &'static str,
+    pub compared_unix: i64,
+    pub replica_head: u64,
+    pub worker_h0: Option<u64>,
+    pub worker_h1: Option<u64>,
+    pub differing_ids: Vec<String>,
+    pub error: Option<String>,
+}
+
+#[derive(Clone, Serialize)]
+pub struct ReconcileGuardTrip {
+    pub tripped_at: i64,
+    pub deletions: usize,
+    pub manifest: String,
+}
 
 /// Shared, atomically-swappable server state.
 pub struct AppState {
+    source: SourceMode,
+    reconcile_at: AtomicI64,
+    shadow: Mutex<Option<ShadowComparison>>,
+    reconcile_guard: Mutex<Option<ReconcileGuardTrip>>,
     pub snapshot: ArcSwap<PublishedSnapshot>,
     pub last_refresh: AtomicI64,
     pub head_seq: AtomicU64,
@@ -65,6 +88,10 @@ impl AppState {
     pub fn new(tracks: Index, centroids: Index, secret: String) -> Self {
         let now = now_unix();
         Self {
+            source: SourceMode::Replica,
+            reconcile_at: AtomicI64::new(0),
+            shadow: Mutex::new(None),
+            reconcile_guard: Mutex::new(None),
             snapshot: ArcSwap::from_pointee(PublishedSnapshot {
                 artifact_digest: String::new(),
                 raw_vector_bytes: (tracks.vector_bytes() + centroids.vector_bytes()) as u64,
@@ -93,6 +120,10 @@ impl AppState {
     pub fn from_snapshot(snapshot: PublishedSnapshot, secret: String) -> Self {
         let pending_ack = snapshot.pending_ack;
         Self {
+            source: SourceMode::Replica,
+            reconcile_at: AtomicI64::new(snapshot.validated_at),
+            shadow: Mutex::new(None),
+            reconcile_guard: Mutex::new(None),
             last_refresh: AtomicI64::new(snapshot.validated_at),
             head_seq: AtomicU64::new(snapshot.checkpoint),
             replica_synced_at: AtomicI64::new(0),
@@ -115,6 +146,31 @@ impl AppState {
             self.consumer_id = Some(consumer_id);
         }
         self
+    }
+
+    pub fn with_source(mut self, source: SourceMode) -> Self {
+        self.source = source;
+        self
+    }
+
+    pub fn record_reconcile(&self) {
+        self.reconcile_at.store(now_unix(), Ordering::Relaxed);
+    }
+
+    pub fn record_shadow(&self, comparison: ShadowComparison) {
+        if let Ok(mut slot) = self.shadow.lock() {
+            *slot = Some(comparison);
+        }
+    }
+
+    pub fn shadow_comparison(&self) -> Option<ShadowComparison> {
+        self.shadow.lock().ok().and_then(|value| value.clone())
+    }
+
+    pub fn record_reconcile_guard(&self, trip: ReconcileGuardTrip) {
+        if let Ok(mut slot) = self.reconcile_guard.lock() {
+            *slot = Some(trip);
+        }
     }
 
     /// Publish only when the prior retired generation is no longer held by a
@@ -182,6 +238,7 @@ pub enum RebuildCause {
     CompactionGap = 3,
     CheckpointDivergence = 4,
     PendingDivergence = 5,
+    ReconcileGuard = 6,
 }
 
 fn rebuild_cause(value: u64) -> &'static str {
@@ -191,6 +248,7 @@ fn rebuild_cause(value: u64) -> &'static str {
         3 => "compaction_gap",
         4 => "checkpoint_divergence",
         5 => "pending_divergence",
+        6 => "reconcile_guard",
         _ => "startup",
     }
 }
@@ -225,6 +283,10 @@ pub const BUILD_COMMIT: &str = match option_env!("GIT_SHA") {
 
 #[derive(Serialize)]
 struct Health {
+    source: &'static str,
+    reconcile_age_seconds: Option<i64>,
+    last_shadow_comparison: Option<ShadowComparison>,
+    last_reconcile_guard: Option<ReconcileGuardTrip>,
     tracks: usize,
     centroids: usize,
     last_refresh_unix: i64,
@@ -259,6 +321,17 @@ async fn health(
     let (delta_backlog, delta_age_seconds) = freshness_metrics(head, &snapshot, now);
     let replica_synced = state.replica_synced_at.load(Ordering::Relaxed);
     let health = Json(Health {
+        source: state.source.as_str(),
+        reconcile_age_seconds: match state.reconcile_at.load(Ordering::Relaxed) {
+            0 => None,
+            value => Some(now.saturating_sub(value)),
+        },
+        last_shadow_comparison: state.shadow_comparison(),
+        last_reconcile_guard: state
+            .reconcile_guard
+            .lock()
+            .ok()
+            .and_then(|slot| slot.clone()),
         tracks: snapshot.tracks.len(),
         centroids: snapshot.centroids.len(),
         last_refresh_unix: state.last_refresh.load(Ordering::Relaxed),

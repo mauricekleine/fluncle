@@ -22,6 +22,7 @@ pub mod kernel;
 pub mod replica;
 pub mod search;
 pub mod server;
+pub mod source;
 pub mod state;
 
 pub use decode::{BLOB_LEN, DIM};
