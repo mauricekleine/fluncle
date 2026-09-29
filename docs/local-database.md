@@ -66,6 +66,17 @@ To preview a worktree's DB-backed route in a browser without provisioning anythi
 
 The snapshot comes straight from production, so it is as fresh as the last `db:pull-prod`. Everyday local work needs no credentials at all — it only reads the already-dumped `seed.sql`. When you want newer data, unlock 1Password and run `db:pull-prod` in the main checkout, then `db:refresh-dev` in each worktree to adopt it. The pull is read-only (`SELECT`s); production credentials are read at run time from the 1Password item that `FLUNCLE_TURSO_OP_ITEM` points at (`db-pull-prod.ts` reads that env var; the concrete item lives in the ops runbook note) and never touch `.dev.vars`.
 
+### How the pull scales
+
+The production corpus is gigabytes (hundreds of thousands of tracks, each carrying 4 KiB vector BLOBs), so `db:pull-prod` never reads a table in one request and never holds the dump in memory:
+
+- **Keyset pages.** Each table is read `WHERE rowid > ? ORDER BY rowid LIMIT ?` (a `WITHOUT ROWID` table pages on its primary key), 250 rows per request by default; `--page-rows <n>` changes it. The cursor is bound as the value the previous page returned, so a BLOB key goes back as a BLOB, never as text.
+- **Streamed to disk.** Rows are written to `.dev/seed.sql.partial` as they arrive, and only a fully written file is renamed to `.dev/seed.sql`. The last line reads `-- Complete: <tables> tables, <rows> rows.`, and the second line records when the pull started.
+- **No stale file posing as fresh.** At start the existing `seed.sql` is moved to `seed.previous.sql`. A successful pull deletes it; a failed pull removes the partial file, leaves the old dump under its `previous` name, prints why, and exits non-zero. `db:refresh-dev` only reads `seed.sql`, so a failed pull can never be adopted by mistake.
+- **A receipt.** A successful pull prints each table's row count, the total rows, the bytes written, and the elapsed time.
+
+The pages are separate reads, not one transaction, so rows written during a pull may be half-captured. That is fine for dev data and for a secondary backup; the point-in-time restore point is the consistent one.
+
 ## Production deploy & migrations
 
 Cloudflare deploys via Workers Builds, and migrations run as part of the **deploy step**, captured in a committed script so it is not hidden in the dashboard:
@@ -92,7 +103,7 @@ The Cloudflare **Deploy command** is `bun run --cwd apps/web deploy:cf` (build s
 - `apps/web/scripts/dev.ts` — local dev orchestrator (server + migrate + Vite).
 - `apps/web/scripts/render-dev-vars.ts` — render `apps/web/.dev.vars` from `apps/web/.dev.vars.tpl` via `op inject --account "$FLUNCLE_1PASSWORD_ACCOUNT"`; the 1Password item path comes from `FLUNCLE_1PASSWORD_ENV_ITEM`.
 - `apps/web/scripts/db-refresh.ts` — clone the snapshot into this worktree's `local.db` and point `.dev.vars` at a local port.
-- `apps/web/scripts/db-pull-prod.ts` — dump production to `.dev/seed.sql` over libSQL HTTP, with prod creds read from 1Password at run time (no `turso` CLI login, no creds in `.dev.vars`). The dump skips `tracks_fts` and its FTS5 shadow tables — a derived artifact ([docs/search.md](./search.md)) the dev flow's own `db:migrate` rebuilds; dumping them double-creates the shadow tables on restore.
+- `apps/web/scripts/db-pull-prod.ts` — dump production to `.dev/seed.sql` over libSQL HTTP, with prod creds read from 1Password at run time (no `turso` CLI login, no creds in `.dev.vars`). The paging, streaming, and atomic-rename logic lives in `apps/web/scripts/lib/db-snapshot.ts` (see _How the pull scales_). The dump skips `tracks_fts` and its FTS5 shadow tables — a derived artifact ([docs/search.md](./search.md)) the dev flow's own `db:migrate` rebuilds; dumping them double-creates the shadow tables on restore.
 - `apps/web/scripts/migrate.ts`: load the generated SQL, pair it with the journal, and atomically apply the pending suffix with its ledger stamps.
 - `apps/web/scripts/guard-production-migrations.ts`: validate the generated journal and read the target ledger maximum that determines the pending suffix.
 - `apps/web/scripts/migrate-telemetry.ts`: keep local unprovisioned runs optional, but make the pre-publication production telemetry migration required and fatal on failure.
