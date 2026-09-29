@@ -1482,12 +1482,12 @@ export const SURFACES: readonly Surface[] = [
   {
     command: "fluncle admin tracks context --queue",
     exposedContent: [
-      "Firecrawl facts → distilled context_note + a Texture: line (Worker-side Haiku)",
+      "Firecrawl facts → distilled context_note + a Texture: line (Worker-side OpenRouter distill)",
     ],
     kind: "cron",
     name: "cron.context-note",
     operatorNotes:
-      "every 5m. --no-agent trigger; the Worker does the Firecrawl + Haiku distill. Zero on-box tokens.",
+      "every 5m. --no-agent trigger; the Worker does the Firecrawl + OpenRouter distill. Zero on-box tokens.",
     probeConfig: { cadenceMs: 5 * MINUTE_MS, cronName: "fluncle-context-note", kind: "cron" },
     statusDescription: "distills the facts behind each finding",
     title: "Context notes",
@@ -1921,7 +1921,7 @@ export const SURFACES: readonly Surface[] = [
   },
   {
     exposedContent: [
-      "nightly codebase audit — one domain/night on a 7-day rotation; opens a PR the reviewer merges (claude -p, subscription auth)",
+      "nightly codebase audit — one domain/night on an 8-domain rotation; opens a PR the reviewer merges (claude -p, subscription auth)",
     ],
     kind: "cron",
     name: "cron.audit",
