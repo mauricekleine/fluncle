@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
@@ -14,6 +15,7 @@ import {
   researchConfig,
   researchEnv,
   type CarryStore,
+  fileCarryStore,
   type RoundDeps,
   runSweep,
   summarize,
@@ -545,12 +547,24 @@ describe("unfinished work", () => {
     expect(h.carry.slugs).toEqual(["new-4", "new-5"]);
   });
 
-  test("a carried label that has since been ruled drops out and does not fire the gate", async () => {
+  test("a carried label triaged elsewhere drops out, and the hold prunes it so it cannot fire later", async () => {
     const h = harness(() => []);
-    h.carry.slugs = ["gone"];
+    h.carry.slugs = ["looked-elsewhere"];
 
-    expect(await sweep(h, neverLooked(1))).toBe(0);
+    expect(await sweep(h, [...neverLooked(1), label("looked-elsewhere", 1)])).toBe(0);
     expect(finalSummary(h)).toMatchObject({ carried: 0, gate: "hold" });
+    expect(h.carry.slugs).toEqual([]);
+  });
+
+  test("an unreadable carry-over fails the run loudly instead of holding", async () => {
+    const h = harness(() => []);
+    h.carry.read = () => {
+      throw new SyntaxError("Unexpected end of JSON input");
+    };
+
+    expect(await sweep(h, neverLooked(1))).toBe(1);
+    expect(finalSummary(h)).toMatchObject({ ok: false, reason: "carry_unreadable" });
+    expect(h.alerts).toHaveLength(1);
   });
 
   test("a carry-over that cannot be saved fails the run loudly", async () => {
@@ -566,5 +580,27 @@ describe("unfinished work", () => {
       reason: "carry_unwritten",
     });
     expect(h.alerts).toHaveLength(1);
+  });
+});
+
+describe("the carry-over file", () => {
+  const dir = mkdtempSync(join(tmpdir(), "label-triage-carry-"));
+  const path = join(dir, "carry.json");
+
+  test("a missing file means nothing is carried", () => {
+    expect(fileCarryStore(join(dir, "absent.json")).read()).toEqual([]);
+  });
+
+  test("round-trips the slugs it saved", () => {
+    fileCarryStore(path).write(["a", "b"]);
+
+    expect(fileCarryStore(path).read()).toEqual(["a", "b"]);
+  });
+
+  test("a truncated file is an error, never an empty carry-over", () => {
+    writeFileSync(path, '{"slugs":["a"');
+
+    expect(() => fileCarryStore(path).read()).toThrow();
+    rmSync(dir, { force: true, recursive: true });
   });
 });

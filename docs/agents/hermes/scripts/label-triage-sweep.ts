@@ -2,7 +2,7 @@
 
 import { spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { defaultStateDir } from "./attempt-ledger";
@@ -901,19 +901,28 @@ export function fileCarryStore(
 ): CarryStore {
   return {
     read: () => {
+      let text: string;
       try {
-        const parsed = JSON.parse(readFileSync(path, "utf8")) as { slugs?: unknown };
-
-        return Array.isArray(parsed.slugs)
-          ? parsed.slugs.filter((slug): slug is string => typeof slug === "string")
-          : [];
-      } catch {
-        return [];
+        text = readFileSync(path, "utf8");
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+          return [];
+        }
+        throw error;
       }
+
+      const parsed = JSON.parse(text) as { slugs?: unknown };
+      if (!Array.isArray(parsed.slugs) || parsed.slugs.some((slug) => typeof slug !== "string")) {
+        throw new Error(`${path} holds no slug list`);
+      }
+
+      return parsed.slugs as string[];
     },
     write: (slugs) => {
       mkdirSync(dirname(path), { recursive: true });
-      writeFileSync(path, JSON.stringify({ slugs, writtenAt: new Date().toISOString() }));
+      const staged = `${path}.${process.pid}.tmp`;
+      writeFileSync(staged, JSON.stringify({ slugs, writtenAt: new Date().toISOString() }));
+      renameSync(staged, path);
     },
   };
 }
@@ -950,13 +959,30 @@ export async function runSweep(
   } = {},
 ): Promise<number> {
   const carry = options.carry ?? fileCarryStore();
+  let carried: string[];
+  try {
+    carried = carry.read();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    log(`could not read the carry-over: ${message}`);
+    const alerted = await deps
+      .alert(
+        `Fluncle label-triage: the carry-over of unfinished labels is unreadable — ${message.slice(0, 300)}`,
+      )
+      .catch(() => false);
+    (options.print ?? ((line: string) => console.log(line)))(
+      JSON.stringify({ alerted, gate: "unread", ok: false, reason: "carry_unreadable" }),
+    );
+
+    return 1;
+  }
   const print = options.print ?? ((line: string) => console.log(line));
   const now = options.now ?? new Date();
   const threshold = Number(env.LABEL_TRIAGE_THRESHOLD ?? DEFAULT_THRESHOLD);
   const staleDays = Number(env.LABEL_TRIAGE_STALE_DAYS ?? DEFAULT_STALE_DAYS);
 
   const verdict = decide(labels, {
-    carry: carry.read(),
+    carry: carried,
     now: now.getTime(),
     staleDays,
     threshold,
@@ -973,6 +999,25 @@ export async function runSweep(
   };
 
   if (!verdict.fire) {
+    if (carried.length > 0) {
+      try {
+        carry.write([]);
+      } catch (error) {
+        log(
+          `could not prune the carry-over: ${error instanceof Error ? error.message : String(error)}`,
+        );
+        const alerted = await deps
+          .alert(
+            "Fluncle label-triage: could not prune the carry-over of labels that are no longer waiting.",
+          )
+          .catch(() => false);
+        print(
+          JSON.stringify({ alerted, gate: "hold", ok: false, reason: "carry_unwritten", ...gate }),
+        );
+
+        return 1;
+      }
+    }
     print(JSON.stringify({ checked: 0, gate: "hold", ok: true, produced: 0, ...gate }));
 
     return 0;
