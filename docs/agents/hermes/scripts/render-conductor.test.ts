@@ -23,6 +23,7 @@ const PROCESS_FIXTURE_TIMEOUT_MS = 60_000;
 
 type Tick = {
   args?: readonly string[];
+  bunInstallFailsTwice?: boolean;
   boxNow?: number;
   claudeProcs?: number;
   doneResult?: string;
@@ -44,6 +45,7 @@ type Tick = {
   queueResponse?: string;
   queueStderr?: string;
   readyTimeout?: number;
+  runFreshen?: boolean;
   restoringCode?: string;
   restoringCalls: number;
   resumeExitCode?: number;
@@ -56,8 +58,10 @@ type Tick = {
 
 type TickResult = {
   boxIdFile: string;
+  bunCalls: string[];
   calls: string[];
   curlCalls: string[];
+  dfCalls: string[];
   exitCode: number;
   log: string;
   noUpdateViolations: string[];
@@ -125,6 +129,10 @@ case "$verb" in
         printf 'MEM-AVAILABLE-MB %s\\n' "\${STUB_MEM_MB:-4096}"
         printf 'OOM-KILLS %s\\n' "\${STUB_OOM_KILLS:-0}"
         exit 0
+      fi
+      if [ "\${STUB_RUN_FRESHEN:-0}" = "1" ]; then
+        printf '%s\\n' "$payload" | bash -s
+        exit $?
       fi
       printf '%s\\n' "\${STUB_FRESHEN_OUT:-}"
       exit 0
@@ -196,6 +204,48 @@ printf '%s\\n' "$*" >>"$STUB_DIR/curl-calls"
 exit 0
 `;
 
+const GIT_STUB = `#!/usr/bin/env bash
+case "$*" in
+  'fetch --depth 1 origin main -q') exit 0 ;;
+  'rev-parse HEAD' | 'rev-parse FETCH_HEAD') printf 'fixture-head\\n' ;;
+  *) exit 1 ;;
+esac
+`;
+
+const BUN_STUB = `#!/usr/bin/env bash
+if [ "\${1:-}" = "--version" ]; then
+  printf '1.4.2\\n'
+  exit 0
+fi
+[ "$*" = 'install --frozen-lockfile' ] || exit 2
+count="$(cat "$STUB_DIR/bun-count" 2>/dev/null || printf 0)"
+count="$((count + 1))"
+printf '%s' "$count" >"$STUB_DIR/bun-count"
+printf '%s\\n' "$*" >>"$STUB_DIR/bun-calls"
+if [ "$count" = "1" ]; then
+  mkdir -p node_modules/bun-types node_modules/fast-uri node_modules/undici node_modules/@types/bun
+  printf 'error: failed to install @types/bun: the downloaded package was not found in the cache\\n' >&2
+  exit 1
+fi
+if [ -d "$HOME/.bun/install/cache" ] || [ -d node_modules/bun-types ] || [ -d node_modules/@types/bun ]; then
+  printf 'retry saw the old cache or empty package directories\\n' >&2
+  exit 1
+fi
+if [ "\${STUB_BUN_FAILS_TWICE:-0}" = "1" ]; then
+  printf 'error: download unavailable after cache reset\\n' >&2
+  exit 1
+fi
+mkdir -p node_modules/bun-types node_modules/fast-uri node_modules/undici node_modules/@types/bun
+for package in bun-types fast-uri undici @types/bun; do
+  printf '{}\\n' >"node_modules/$package/package.json"
+done
+`;
+
+const DF_STUB = `#!/usr/bin/env bash
+printf '%s\\n' "$*" >>"$STUB_DIR/df-calls"
+printf 'Filesystem Size Used Avail Use%% Mounted on\\nfixture 10G 10G 0 100%% %s\\n' "$HOME"
+`;
+
 function write(path: string, body: string) {
   writeFileSync(path, body);
   chmodSync(path, 0o755);
@@ -221,6 +271,7 @@ function stubEnv(tick: Tick, home: string, stub: string): Record<string, string>
     PROVISION: join(stub, "provision.sh"),
     STUB_BOX_ID: BOX_ID,
     STUB_BOX_NOW: String(tick.boxNow ?? 0),
+    STUB_BUN_FAILS_TWICE: tick.bunInstallFailsTwice ? "1" : "0",
     STUB_CLAUDE_PROCS: String(tick.claudeProcs ?? 0),
     STUB_DIR: stub,
     STUB_DONE_RESULT: tick.doneResult ?? "",
@@ -236,6 +287,7 @@ function stubEnv(tick: Tick, home: string, stub: string): Record<string, string>
     STUB_QUEUE_STDERR: tick.queueStderr ?? "",
     STUB_RESTORING_CODE: tick.restoringCode ?? "boat_restoring",
     STUB_RESUME_EXIT: String(tick.resumeExitCode ?? 0),
+    STUB_RUN_FRESHEN: tick.runFreshen ? "1" : "0",
     STUB_SESSION_MTIME: String(tick.sessionMtime ?? 0),
     STUB_TRACK_HAS_VIDEO: tick.trackHasVideo ? "1" : "0",
     STUB_TRIGGER_OUT: tick.triggerOut ?? "render-detached: launched",
@@ -263,6 +315,19 @@ function runTick(tick: Tick): TickResult {
     write(join(stub, "timeout"), TIMEOUT_STUB);
     write(join(stub, "fluncle"), FLUNCLE_STUB);
     write(join(stub, "provision.sh"), PROVISION_STUB);
+    if (tick.runFreshen) {
+      const workspace = join(home, "fluncle");
+      mkdirSync(join(workspace, "node_modules/browserslist"), { recursive: true });
+      mkdirSync(join(home, ".bun/install/cache/valid@1.0.0"), { recursive: true });
+      mkdirSync(join(home, ".bun/install/cache/hollow@1.0.0"), { recursive: true });
+      writeFileSync(join(workspace, "package.json"), '{"packageManager":"bun@1.4.2"}\n');
+      writeFileSync(join(workspace, "node_modules/browserslist/package.json"), "{}\n");
+      writeFileSync(join(home, ".bun/install/cache/valid@1.0.0/package.json"), "{}\n");
+      mkdirSync(join(workspace, "node_modules/undici"));
+      write(join(stub, "git"), GIT_STUB);
+      write(join(stub, "bun"), BUN_STUB);
+      write(join(stub, "df"), DF_STUB);
+    }
 
     writeFileSync(join(stateDir, "state"), initialState);
     writeFileSync(join(stateDir, "box-id"), BOX_ID);
@@ -304,8 +369,10 @@ function runTick(tick: Tick): TickResult {
     };
     return {
       boxIdFile: read(join(stateDir, "box-id")),
+      bunCalls: read(join(stub, "bun-calls")).split("\n").filter(Boolean),
       calls: read(join(stub, "calls")).split("\n").filter(Boolean),
       curlCalls: read(join(stub, "curl-calls")).split("\n").filter(Boolean),
+      dfCalls: read(join(stub, "df-calls")).split("\n").filter(Boolean),
       exitCode: run.status ?? -1,
       log: read(join(stateDir, "conductor.log")),
       noUpdateViolations: read(join(stub, "no-update-violations")).split("\n").filter(Boolean),
@@ -970,6 +1037,43 @@ describe("the done-marker probe and the liveness verdict", () => {
 });
 
 describe("the wake-time preconditions", () => {
+  test(
+    "a cache download failure wipes the cache, retries once, and starts the render",
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
+    () => {
+      const tick = runTick({ restoringCalls: 0, runFreshen: true });
+
+      expect(tick.bunCalls).toEqual(["install --frozen-lockfile", "install --frozen-lockfile"]);
+      expect(tick.log).toContain("[freshen] deps-ok");
+      expect(tick.log).not.toContain("[freshen] deps-failed");
+      expect(tick.calls.join("\n")).toContain("render-detached.sh");
+      expect(tick.state).toBe("rendering");
+      expect(lastJsonLine(tick.stdout)).toMatchObject({ errors: 0, produced: 1 });
+    },
+  );
+
+  test(
+    "two failed installs park the box with disk space and install errors in the log",
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
+    () => {
+      const tick = runTick({ bunInstallFailsTwice: true, restoringCalls: 0, runFreshen: true });
+
+      expect(tick.bunCalls).toEqual(["install --frozen-lockfile", "install --frozen-lockfile"]);
+      expect(tick.dfCalls).toHaveLength(2);
+      expect(tick.log).toContain("fixture 10G 10G 0 100%");
+      expect(tick.log).toContain("downloaded package was not found in the cache");
+      expect(tick.log).toContain("download unavailable after cache reset");
+      expect(tick.log).toContain("[freshen] deps-failed");
+      expect(tick.calls).toContain(`--no-update stop ${BOX_ID}`);
+      expect(tick.calls.join("\n")).not.toContain("render-detached.sh");
+      expect(tick.state).toBe("idle");
+      expect(lastJsonLine(tick.stdout)).toMatchObject({
+        ok: false,
+        reason: "render_deps_install_failed",
+      });
+    },
+  );
+
   test(
     "a failed dependency install parks the box and refuses to render into it",
     { timeout: PROCESS_FIXTURE_TIMEOUT_MS },

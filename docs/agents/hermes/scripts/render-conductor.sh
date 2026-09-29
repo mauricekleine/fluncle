@@ -417,7 +417,19 @@ install_deps() {
     echo "[freshen] deps-ok"
     return 0
   fi
+  echo "[freshen] first install failed or left the tree incomplete — clearing bun cache and retrying"
+  df -h "$HOME" 2>&1
+  tail -c 1000 "$HOME/.freshen-install.log" 2>/dev/null
+  deps_incomplete && echo "the tree is still incomplete after the install: $(empty_packages | head -5 | tr '\n' ' ')"
+  rm -rf "$HOME/.bun/install/cache"
+  empty_packages | xargs -r rmdir 2>/dev/null
+  empty_packages | xargs -r rmdir 2>/dev/null
+  if timeout 900 bun install --frozen-lockfile </dev/null >"$HOME/.freshen-install.log" 2>&1 && ! deps_incomplete; then
+    echo "[freshen] deps-ok"
+    return 0
+  fi
   echo "[freshen] deps-failed"
+  df -h "$HOME" 2>&1
   tail -c 1000 "$HOME/.freshen-install.log" 2>/dev/null
   deps_incomplete && echo "the tree is still incomplete after the install: $(empty_packages | head -5 | tr '\n' ' ')"
   return 1
