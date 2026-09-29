@@ -6,6 +6,7 @@ import { type LabelAdminItem } from "@fluncle/contracts";
 import { createEvidenceHttp, type RawResponse, SOURCE_POLICIES } from "../evidence-http";
 import {
   beatportLabelUrlFrom,
+  crawlRuleCredit,
   type BeatportScraper,
   discogsLabelIdFrom,
   discogsSearchName,
@@ -518,27 +519,38 @@ describe("gatherLabelEvidence", () => {
 
 describe("the first-credit census", () => {
   function censusPage(offset: number) {
-    const tracks =
-      offset === 0
-        ? [
-            { "artist-credit": credit(DNB_ACT, "Roller"), recording: { id: "rec1" } },
-            { "artist-credit": credit(HOUSE_ACT, "Housey"), recording: { id: "rec2" } },
-            { recording: { "artist-credit": credit(DNB_ACT, "Roller"), id: "rec3" } },
-          ]
-        : [
-            { "artist-credit": credit(DNB_ACT, "Roller"), recording: { id: "rec1" } },
-            { "artist-credit": credit(DNB_ACT, "Roller"), recording: { id: "rec4" } },
-          ];
+    const firstPage = [
+      {
+        "artist-credit": credit(HOUSE_ACT, "Housey"),
+        recording: { "artist-credit": credit(DNB_ACT, "Roller"), id: "rec1" },
+      },
+      { recording: { id: "rec2" } },
+      {
+        recording: {
+          "artist-credit": [{ name: "Uncredited MC" }, ...credit(DNB_ACT, "Roller")],
+          id: "rec3",
+        },
+      },
+      { recording: { "artist-credit": credit(VARIOUS, "Various Artists"), id: "rec5" } },
+    ];
+    const secondPage = [
+      { recording: { "artist-credit": credit(DNB_ACT, "Roller"), id: "rec1" } },
+      { "artist-credit": credit(HOUSE_ACT, "Housey"), recording: { id: "rec4" } },
+    ];
 
     return {
       "release-count": 3,
       releases:
         offset === 0
           ? [
-              { id: "a", media: [{ tracks }] },
+              {
+                "artist-credit": credit(HOUSE_ACT, "Housey"),
+                id: "a",
+                media: [{ tracks: firstPage }],
+              },
               { id: "b", media: [] },
             ]
-          : [{ id: "c", media: [{ tracks }] }],
+          : [{ id: "c", media: [{ tracks: secondPage }] }],
     };
   }
 
@@ -550,7 +562,7 @@ describe("the first-credit census", () => {
     };
   }
 
-  test("counts each recording once under its FIRST credit across pages", async () => {
+  test("attributes each recording once, the way the crawler's artist rules read it", async () => {
     const { deps } = setup(censusRoutes());
 
     const evidence = await gatherLabelEvidence(
@@ -562,14 +574,15 @@ describe("the first-credit census", () => {
     expect(evidence.sources.musicbrainz.data?.census).toEqual({
       caveat: null,
       firstCredits: [
-        { artistMbid: DNB_ACT, artistName: "Roller", recordings: 3 },
+        { artistMbid: DNB_ACT, artistName: "Roller", recordings: 2 },
         { artistMbid: HOUSE_ACT, artistName: "Housey", recordings: 1 },
       ],
       pagesFetched: 2,
-      recordingsCounted: 4,
+      recordingsCounted: 5,
       releaseCount: 3,
       releasesRead: 3,
       sampled: false,
+      uncreditedRecordings: 2,
     });
   });
 
@@ -591,8 +604,9 @@ describe("the first-credit census", () => {
     expect(evidence.sources.musicbrainz.data?.census).toMatchObject({
       caveat: "sampled: first 2 of 3 releases (a later page failed)",
       pagesFetched: 1,
-      recordingsCounted: 3,
+      recordingsCounted: 4,
       sampled: true,
+      uncreditedRecordings: 1,
     });
     expect(evidence.errors[0]).toMatchObject({ kind: "http", source: "musicbrainz", status: 500 });
   });
@@ -644,6 +658,15 @@ describe("parsers", () => {
     expect(beatportLabelUrlFrom("https://www.beatport.com/label/x/1/tracks?page=2")).toBe(
       "https://www.beatport.com/label/x/1",
     );
+  });
+
+  test("picks the crawler's rule credit: the first MBID-bearing entry that is not Various Artists", () => {
+    expect(crawlRuleCredit([{ name: "MC" }, ...credit(DNB_ACT, "Roller")])).toEqual({
+      mbid: DNB_ACT,
+      name: "Roller",
+    });
+    expect(crawlRuleCredit(credit(VARIOUS, "Various Artists"))).toBeNull();
+    expect(crawlRuleCredit(undefined)).toBeNull();
   });
 
   test("returns null for a Beatport page without the tracks facet", () => {

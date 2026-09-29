@@ -220,7 +220,7 @@ Look each slug up in the JSON array at \`${file}\` for its \`mb_label_id\` (the 
 ${READ_FIRST}
 
 ## Evidence
-Run ${EVIDENCE_COMMAND.replace("--json", "--census --json")} once per label. \`musicbrainz.data.census\` counts FIRST credits per artist MBID over DISTINCT recordings (the unit the crawl stores), 5-page cap, sampling caveat in \`caveat\`; \`musicbrainz.data.label.labelRelations\` is the imprint check. ${NO_FETCHERS} Artist-level lookups the command does not cover (an act's own catalogue, its Spotify url-rel) may call MusicBrainz directly: \`sleep 1.2\` between calls and always send \`User-Agent: FluncleLabelTriage/1.0 ( https://www.fluncle.com )\`.
+Run ${EVIDENCE_COMMAND.replace("--json", "--census --json")} once per label. \`musicbrainz.data.census\` counts FIRST credits per artist MBID over DISTINCT recordings exactly as the crawler's artist rules read them (the recording's credit, else the release's; the first entry with an MBID that is not Various Artists), 5-page cap, sampling caveat in \`caveat\`; \`musicbrainz.data.label.labelRelations\` is the imprint check. ${NO_FETCHERS} Artist-level lookups the command does not cover (an act's own catalogue, its Spotify url-rel) may call MusicBrainz directly: \`sleep 1.2\` between calls and always send \`User-Agent: FluncleLabelTriage/1.0 ( https://www.fluncle.com )\`.
 
 ## Non-negotiable rails
 1. **Imprint child first.** Read \`labelRelations\` in the evidence. If MusicBrainz already models the boundary as a child imprint / sub-label (a DnB imprint of a bigger house), say so in \`imprintChild\` and **propose no rules** — the right move is to rule that MB entity, not to hand-carve artists. Otherwise \`imprintChild: "none"\`.
@@ -233,7 +233,7 @@ Run ${EVIDENCE_COMMAND.replace("--json", "--census --json")} once per label. \`m
 7. **Same alias, different act.** Two acts can share a name. Verify each MBID's own release list before you rule it.
 
 ## The census
-- Take the counts from \`census.firstCredits\`; \`recordingsCounted\` is the denominator. When \`caveat\` is set the census is a SAMPLE: copy it verbatim into \`censusSummary\` and drop your confidence a step.
+- Take the counts from \`census.firstCredits\`; \`recordingsCounted\` is the denominator, and it includes \`uncreditedRecordings\` (stored under the label default, never matched by a rule). When \`caveat\` is set the census is a SAMPLE: copy it verbatim into \`censusSummary\` and drop your confidence a step.
 - Judge each recurring first-credit act in or out of lane on its OWN catalogue (its MB releases, its Discogs styles), not on the label's average.
 - Report the totals in \`censusSummary\`: releases read, recordings counted, pages fetched (all in the census object), in-lane vs off-lane first credits, and what a rule set would take vs drop.
 

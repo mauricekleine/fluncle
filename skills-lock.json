@@ -50,7 +50,7 @@
     "fluncle-label-triage": {
       "source": "./packages/skills/fluncle-label-triage",
       "sourceType": "local",
-      "computedHash": "0cfda2b6ce2637dce5d4a464930949639556b400d6605ef68b11a245ba59f436"
+      "computedHash": "474cc505bfaaa6db633fe8d97361063ad5f870e58bc02a1c4e197af504e4d10c"
     },
     "fluncle-ledger": {
       "source": "./packages/skills/fluncle-ledger",

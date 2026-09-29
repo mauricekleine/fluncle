@@ -90,7 +90,7 @@ fluncle admin labels evidence <mb_label_id> --json            # research + verif
 fluncle admin labels evidence <mb_label_id> --census --json   # the census
 ```
 
-Run it from the repo root (`bun apps/cli/src/cli.ts admin labels evidence …` when the installed `fluncle` predates it). It reads MusicBrainz, Discogs (styles matched by release id, so a namesake never counts), Beatport's genre facet (needs `FIRECRAWL_API_KEY` or the `firecrawl` CLI) and Apple's barcode lookup, and every source reports its own `status` and `errors`. Rate limits are shared across worker processes and answers are cached for a week (`--refresh` skips the cache). `--census` counts DISTINCT recordings, the unit the crawl stores, so it reads lower than a per-track hand count.
+Run it from the repo root (`bun apps/cli/src/cli.ts admin labels evidence …` when the installed `fluncle` predates it). It reads MusicBrainz, Discogs (styles matched by release id, so a namesake never counts), Beatport's genre facet (needs `FIRECRAWL_API_KEY` or the `firecrawl` CLI) and Apple's barcode lookup, and every source reports its own `status` and `errors`. Rate limits are shared across worker processes and answers are cached for a week (`--refresh` skips the cache). `--census` counts DISTINCT recordings, the unit the crawl stores, under the same credit the crawler's artist rules read (the recording's, else the release's), so it reads lower than a per-track hand count.
 
 The method the briefs enforce, and why:
 

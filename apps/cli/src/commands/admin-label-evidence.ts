@@ -88,6 +88,7 @@ export type MbCensus = {
   releaseCount: number;
   releasesRead: number;
   sampled: boolean;
+  uncreditedRecordings: number;
 };
 
 export type MusicBrainzEvidence = {
@@ -220,7 +221,6 @@ type MbReleasePayload = {
   media?: Array<{
     format?: null | string;
     tracks?: Array<{
-      "artist-credit"?: MbArtistCredit;
       recording?: { "artist-credit"?: MbArtistCredit; id?: string };
     }>;
   }>;
@@ -306,6 +306,21 @@ function firstCredit(credit: MbArtistCredit | undefined): null | { mbid: string;
   }
 
   return { mbid, name: head?.artist?.name ?? head?.name ?? mbid };
+}
+
+export function crawlRuleCredit(
+  credit: MbArtistCredit | undefined,
+): null | { mbid: string; name: string } {
+  for (const entry of credit ?? []) {
+    const name = entry.artist?.name ?? entry.name;
+    const mbid = entry.artist?.id;
+
+    if (name && mbid && mbid !== VARIOUS_ARTISTS_MBID) {
+      return { mbid, name };
+    }
+  }
+
+  return null;
 }
 
 function creditString(credit: MbArtistCredit | undefined): string {
@@ -412,6 +427,7 @@ async function runCensus(
   let releaseCount = 0;
   let allCached = true;
   let failure: SourceFailure | undefined;
+  let uncredited = 0;
 
   while (pagesFetched < maxPages) {
     const url = `${MB_ROOT}/release?label=${mbid}&inc=artist-credits+recordings&limit=100&offset=${offset}&fmt=json`;
@@ -442,12 +458,12 @@ async function runCensus(
           }
 
           seen.add(recordingId);
-          const head =
-            firstCredit(track["artist-credit"]) ??
-            firstCredit(track.recording?.["artist-credit"]) ??
-            firstCredit(release["artist-credit"]);
+          const head = crawlRuleCredit(
+            track.recording?.["artist-credit"] ?? release["artist-credit"],
+          );
 
           if (!head) {
+            uncredited += 1;
             continue;
           }
 
@@ -483,10 +499,11 @@ async function runCensus(
         : null,
       firstCredits,
       pagesFetched,
-      recordingsCounted: firstCredits.reduce((sum, entry) => sum + entry.recordings, 0),
+      recordingsCounted: firstCredits.reduce((sum, entry) => sum + entry.recordings, uncredited),
       releaseCount,
       releasesRead: offset,
       sampled,
+      uncreditedRecordings: uncredited,
     },
   };
 }
