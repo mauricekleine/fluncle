@@ -1,11 +1,19 @@
-import { describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { afterEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const SKILL_PATH = ".agents/skills/fluncle-label-triage/SKILL.md";
 
 type Verdict = Record<string, unknown>;
+
+const dirs: string[] = [];
+
+afterEach(() => {
+  for (const dir of dirs.splice(0)) {
+    rmSync(dir, { force: true, recursive: true });
+  }
+});
 
 async function renderBriefs(script: string, research: Verdict[]): Promise<string[]> {
   const source = readFileSync(join(import.meta.dir, script), "utf8").replace(
@@ -21,7 +29,9 @@ async function renderBriefs(script: string, research: Verdict[]): Promise<string
   const parallel = (thunks: Array<() => Promise<unknown>>) =>
     Promise.all(thunks.map((thunk) => thunk()));
   const noop = () => undefined;
-  const module = join(mkdtempSync(join(tmpdir(), "label-triage-briefs-")), `${script}.mjs`);
+  const dir = mkdtempSync(join(tmpdir(), "label-triage-briefs-"));
+  dirs.push(dir);
+  const module = join(dir, `${script}.mjs`);
   writeFileSync(
     module,
     `export default async function run(args, agent, parallel, phase, log) {\n${source}\n}`,
