@@ -29,8 +29,6 @@ export const REQUIRED_REPO_ASSETS: readonly string[] = [
   "packages/skills/fluncle-hetzner-ops/scripts/apply-firewall.sh",
   "packages/skills/fluncle-hetzner-ops/scripts/bootstrap-hardening.sh",
   "packages/skills/fluncle-hetzner-ops/scripts/bootstrap-private-vps.sh",
-  ".agents/skills/hetzner-devbox/scripts/check-prereqs.sh",
-  ".agents/skills/hetzner-devbox/scripts/create-server.sh",
   "packages/skills/fluncle-hetzner-ops/scripts/install-toolchain.sh",
 ];
 

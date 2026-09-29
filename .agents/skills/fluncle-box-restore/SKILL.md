@@ -10,7 +10,7 @@ rave-02 is the box every Fluncle automation runs on: the Hermes container (a lon
 
 The rebuild is assembled from the linked assets across the public repository and private companion; follow them in the order below. **Do not reconstruct any of it from source.** Each step below names the asset that does the work; follow the link, run the thing, come back.
 
-**Neighbours, so the right skill wins:** [`fluncle-hermes-operator`](../fluncle-hermes-operator) changes a box that is still alive (pins, secrets, crons). [`hetzner-devbox`](../../../.agents/skills/hetzner-devbox) is the generic VPS provisioning kit; [`fluncle-hetzner-ops`](../fluncle-hetzner-ops) holds the Hermes host profile. This skill is the box being **gone**, and it drives both of those in order.
+**Neighbours, so the right skill wins:** [`fluncle-hermes-operator`](../fluncle-hermes-operator) changes a box that is still alive (pins, secrets, crons). The [canonical `hetzner-devbox` skill in Nucleus](https://github.com/mauricekleine/nucleus/blob/main/skills/hetzner-devbox/SKILL.md) is the generic VPS provisioning kit; [`fluncle-hetzner-ops`](../fluncle-hetzner-ops) holds the Hermes host profile. This skill is the box being **gone**, and it drives both of those in order.
 
 ## Read this first — the two halves
 
@@ -51,7 +51,7 @@ Do not rebuild a box that is merely unreachable — a re-provision throws away a
 
 The order is load-bearing. Each step names the asset that does the work.
 
-**1. Create the server.** [`create-server.sh`](../../../.agents/skills/hetzner-devbox/scripts/create-server.sh), after [`check-prereqs.sh`](../../../.agents/skills/hetzner-devbox/scripts/check-prereqs.sh). Size, image, and firewall name are box facts — read them from the labs doc, do not re-derive them.
+**1. Create the server.** Follow the canonical [`hetzner-devbox` skill in Nucleus](https://github.com/mauricekleine/nucleus/blob/main/skills/hetzner-devbox/SKILL.md): run its `scripts/check-prereqs.sh`, then `scripts/create-server.sh`. Size, image, and firewall name are box facts — read them from the labs doc, do not re-derive them.
 
 **2. Harden the host.** [`bootstrap-hardening.sh`](../fluncle-hetzner-ops/scripts/bootstrap-hardening.sh), which streams [`bootstrap-private-vps.sh`](../fluncle-hetzner-ops/scripts/bootstrap-private-vps.sh): admin user, sshd off :22, UFW, Tailscale, **and `op`**. Then [`apply-firewall.sh`](../fluncle-hetzner-ops/scripts/apply-firewall.sh) for the provider layer.
 

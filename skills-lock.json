@@ -20,7 +20,7 @@
     "fluncle-box-restore": {
       "source": "./packages/skills/fluncle-box-restore",
       "sourceType": "local",
-      "computedHash": "795ddfb6a7081dde820f4a6df0b36479e695a1fee250746b7581a9bc3a574915"
+      "computedHash": "35a571ad80ca7c8d8b91e7df2ba10669212d9c1b4c2db8b9487b22a25ea37bce"
     },
     "fluncle-catalogue-prune": {
       "source": "./packages/skills/fluncle-catalogue-prune",
@@ -45,7 +45,7 @@
     "fluncle-hetzner-ops": {
       "source": "./packages/skills/fluncle-hetzner-ops",
       "sourceType": "local",
-      "computedHash": "29d04591ef028bbad067931a93a537ebb4ba7db251356c684c6a2f5be54d1a44"
+      "computedHash": "9ec527d72a7773086edd39a48b79d27b0545a646f3ff24b159b888dc67bf05c2"
     },
     "fluncle-label-triage": {
       "source": "./packages/skills/fluncle-label-triage",
@@ -106,12 +106,6 @@
       "source": "./packages/skills/fluncle-video",
       "sourceType": "local",
       "computedHash": "605a09e0ade8d8cb064f7fd116edaea6071b204566bc098fc17655afeaa671a8"
-    },
-    "hetzner-devbox": {
-      "source": "mauricekleine/nucleus",
-      "sourceType": "github",
-      "skillPath": "skills/hetzner-devbox/SKILL.md",
-      "computedHash": "fe0333b735fc80b5db248bfba9891ce51e8c93047f085278cc0c743977496489"
     },
     "improve": {
       "source": "shadcn/improve",
