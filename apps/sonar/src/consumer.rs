@@ -24,6 +24,14 @@ use crate::state::{
 
 const MAX_CONSECUTIVE_STALE_SNAPSHOT_PAGES: usize = 3;
 
+fn first_reconcile_delay(reconciled_at: i64, now: i64, interval: Duration) -> Duration {
+    if reconciled_at <= 0 {
+        return Duration::ZERO;
+    }
+    let age = u64::try_from(now.saturating_sub(reconciled_at)).unwrap_or(0);
+    interval.saturating_sub(Duration::from_secs(age))
+}
+
 #[derive(Default)]
 struct StaleSnapshotPageRetries {
     consecutive: usize,
@@ -467,14 +475,20 @@ impl Consumer {
         reconcile_interval: Duration,
     ) {
         let mut delta = tokio::time::interval(delta_interval.max(Duration::from_secs(1)));
-        let mut last_reconcile = Instant::now();
+        let reconciled_at = app.snapshot.load().reconciled_at;
+        let mut reconcile = Box::pin(tokio::time::sleep(first_reconcile_delay(
+            reconciled_at,
+            now_unix(),
+            reconcile_interval,
+        )));
         loop {
-            delta.tick().await;
-            let result = if last_reconcile.elapsed() >= reconcile_interval {
-                last_reconcile = Instant::now();
-                self.reconcile_local(&app).await
-            } else {
-                self.consume_once(&app).await
+            let result = tokio::select! {
+                biased;
+                _ = &mut reconcile => {
+                    reconcile.as_mut().reset(tokio::time::Instant::now() + reconcile_interval);
+                    self.reconcile_local(&app).await
+                }
+                _ = delta.tick() => self.consume_once(&app).await,
             };
             match result {
                 Ok(()) => record_validation_outcome(&app, true),
@@ -598,8 +612,9 @@ impl Consumer {
             track_rows: stored.manifest.track_rows,
             centroid_rows: stored.manifest.centroid_rows,
         };
+        let reconciled_at = stored.manifest.reconciled_at;
         publish(app, stored)?;
-        app.record_reconcile();
+        app.record_reconcile(reconciled_at);
         app.record_rebuild(
             RebuildCause::ScheduledLocal,
             u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
@@ -903,8 +918,9 @@ impl Consumer {
             self.restore_staged_if_authoritatively_active().await?;
             return Err(error);
         }
+        let reconciled_at = stored.manifest.reconciled_at;
         publish(app, stored)?;
-        app.record_reconcile();
+        app.record_reconcile(reconciled_at);
         if self.source.replica().is_some() {
             app.record_replica_sync(sync.frame_no, sync.frames_synced);
         }
@@ -973,6 +989,7 @@ fn publish(app: &AppState, stored: StoredSnapshot) -> Result<()> {
         checkpoint: stored.manifest.checkpoint,
         baseline_seq: stored.manifest.baseline_seq,
         raw_vector_bytes: stored.manifest.raw_bytes,
+        reconciled_at: stored.manifest.reconciled_at,
         validated_at: stored.manifest.validated_at,
         pending_ack: stored.manifest.pending.is_some(),
     })
@@ -986,6 +1003,7 @@ pub fn published(stored: &StoredSnapshot) -> PublishedSnapshot {
         checkpoint: stored.manifest.checkpoint,
         baseline_seq: stored.manifest.baseline_seq,
         raw_vector_bytes: stored.manifest.raw_bytes,
+        reconciled_at: stored.manifest.reconciled_at,
         validated_at: stored.manifest.validated_at,
         pending_ack: stored.manifest.pending.is_some(),
     }
@@ -1020,6 +1038,21 @@ mod tests {
     use std::sync::Mutex;
     use tempfile::tempdir;
     use tokio::sync::Notify;
+
+    #[test]
+    fn first_reconcile_uses_persisted_age_and_overdue_state_is_immediate() {
+        let interval = Duration::from_secs(3600);
+        assert_eq!(first_reconcile_delay(0, 10_000, interval), Duration::ZERO);
+        assert_eq!(
+            first_reconcile_delay(6_399, 10_000, interval),
+            Duration::ZERO
+        );
+        assert_eq!(
+            first_reconcile_delay(8_200, 10_000, interval),
+            Duration::from_secs(1800)
+        );
+        assert_eq!(first_reconcile_delay(10_100, 10_000, interval), interval);
+    }
 
     fn test_blob(seed: f32) -> Vec<u8> {
         let mut bytes = vec![0_u8; BLOB_LEN];
@@ -2100,6 +2133,7 @@ mod tests {
         let durable = consumer.state.load().await.unwrap();
         let served = app.snapshot.load_full();
         assert_eq!(durable.manifest.artifact_digest, original_digest);
+        assert_eq!(durable.manifest.reconciled_at, 1);
         assert_eq!(durable.tracks.id_at(0), "last-good");
         assert_eq!(served.artifact_digest, original_digest);
         assert_eq!(served.tracks.id_at(0), "last-good");
@@ -2112,6 +2146,8 @@ mod tests {
             published.artifact_digest
         );
         assert_ne!(published.artifact_digest, original_digest);
+        assert_eq!(recovered.manifest.reconciled_at, published.reconciled_at);
+        assert!(recovered.manifest.reconciled_at > 1);
         assert_eq!(recovered.tracks.id_at(0), "replacement");
         assert_eq!(published.tracks.id_at(0), "replacement");
         assert!(consumer
@@ -2343,6 +2379,8 @@ mod tests {
         );
         assert_eq!(current.artifact_digest, expected.manifest.artifact_digest);
         assert_eq!(current.checkpoint, 3);
+        assert_eq!(durable.manifest.reconciled_at, current.reconciled_at);
+        assert!(durable.manifest.reconciled_at > 1);
         assert_eq!(current.baseline_seq, 3);
         assert_eq!(current.tracks.id_at(0), "after-compaction");
         assert_eq!(app.rebuild_cause.load(Ordering::Relaxed), 3);
@@ -2401,6 +2439,9 @@ mod tests {
             .activate_prepared(retry_activation.unwrap())
             .await
             .unwrap();
+
+        let activated = retry.state.manifest().await.unwrap();
+        assert!(activated.reconciled_at > 1);
 
         assert_eq!(registrations.load(Ordering::SeqCst), 2);
         assert_eq!(activations.load(Ordering::SeqCst), 1);

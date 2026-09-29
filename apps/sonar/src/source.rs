@@ -1182,6 +1182,8 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(stored.manifest.track_rows, 3);
+        assert_eq!(stored.manifest.reconciled_at, 2);
+        assert_eq!(store.manifest().await.unwrap().reconciled_at, 2);
         assert_eq!(stored.manifest.centroid_rows, 1);
         assert!(differences.contains(&"drift".into()));
         assert!(differences.contains(&"new".into()));

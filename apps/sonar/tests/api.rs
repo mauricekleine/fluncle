@@ -12,10 +12,11 @@ use sonar::index::{Entry, Index, TrackMeta};
 use sonar::server::{router, AppState};
 
 #[tokio::test]
-async fn restarted_health_uses_manifest_validation_time_for_reconcile_age() {
+async fn restarted_health_uses_manifest_reconcile_time_for_reconcile_age() {
     let original = test_state();
     let previous = original.snapshot.load_full();
     let validated_at = sonar::server::now_unix() - 37;
+    let reconciled_at = validated_at - 63;
     let restarted = Arc::new(AppState::from_snapshot(
         sonar::server::PublishedSnapshot {
             artifact_digest: previous.artifact_digest.clone(),
@@ -24,6 +25,7 @@ async fn restarted_health_uses_manifest_validation_time_for_reconcile_age() {
             checkpoint: previous.checkpoint,
             baseline_seq: previous.baseline_seq,
             raw_vector_bytes: previous.raw_vector_bytes,
+            reconciled_at,
             validated_at,
             pending_ack: false,
         },
@@ -42,7 +44,7 @@ async fn restarted_health_uses_manifest_validation_time_for_reconcile_age() {
         body_json(response).await["reconcile_age_seconds"]
             .as_i64()
             .unwrap()
-            >= 37
+            >= 100
     );
 }
 
@@ -424,7 +426,7 @@ async fn health_reports_source_reconcile_age_and_shadow_match_then_mismatch() {
         .ok()
         .unwrap()
         .with_source(sonar::source::SourceMode::Shadow);
-    state.record_reconcile();
+    state.record_reconcile(sonar::server::now_unix());
     state.record_reconcile_guard(sonar::server::ReconcileGuardTrip {
         tripped_at: sonar::server::now_unix(),
         deletions: 7_722,
