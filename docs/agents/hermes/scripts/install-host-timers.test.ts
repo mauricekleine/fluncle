@@ -795,7 +795,7 @@ describe("the installer refuses to half-install", () => {
 describe("a baked-capability gate holds a unit on its fallback until the image carries the script", () => {
   const MARKER = "fluncle-gamma-phased-v1";
 
-  function gatedFixture(bakedHasMarker: boolean): InstallerFixture {
+  function gatedFixture(baked: "absent" | "down" | "present"): InstallerFixture {
     const fixture = createInstallerFixture();
     rmSync(join(fixture.root, "ambiguous-one"), { force: true, recursive: true });
     rmSync(join(fixture.root, "ambiguous-two"), { force: true, recursive: true });
@@ -832,7 +832,11 @@ describe("a baked-capability gate holds a unit on its fallback until the image c
       [
         "#!/usr/bin/env bash",
         'printf \'%s\\n\' "$*" >> "$FAKE_DOCKER_LOG"',
-        bakedHasMarker ? "exit 0" : "exit 1",
+        baked === "present"
+          ? "printf '1\\n'; exit 0"
+          : baked === "absent"
+            ? "printf '0\\n'; exit 1"
+            : "printf 'Error response from daemon: container hermes is not running\\n' >&2; exit 1",
         "",
       ].join("\n"),
     );
@@ -849,7 +853,7 @@ describe("a baked-capability gate holds a unit on its fallback until the image c
     ["a single-unit refresh", ["--refresh-unit", "fluncle-gamma.service"]],
   ] as const) {
     test(`${label} before the rebake installs the whole-lifetime fallback under the unit's name`, () => {
-      const fixture = gatedFixture(false);
+      const fixture = gatedFixture("absent");
       const dockerLog = join(fixture.root, "docker.log");
 
       try {
@@ -862,7 +866,7 @@ describe("a baked-capability gate holds a unit on its fallback until the image c
         expect(installedGamma(fixture)).not.toContain("X-Fluncle-Baked-Capability");
         expect(existsSync(join(fixture.dest, "fluncle-gamma.service.whole-lifetime"))).toBe(false);
         expect(readLog(dockerLog)).toEqual([
-          `exec hermes grep -qF -- ${MARKER} /opt/hermes-scripts/gamma-sweep.ts`,
+          `exec hermes grep -cF -- ${MARKER} /opt/hermes-scripts/gamma-sweep.ts`,
         ]);
         expect(installed.stdout).toContain("held on fallback");
       } finally {
@@ -871,7 +875,7 @@ describe("a baked-capability gate holds a unit on its fallback until the image c
     });
 
     test(`${label} after the rebake installs the phased unit itself`, () => {
-      const fixture = gatedFixture(true);
+      const fixture = gatedFixture("present");
       const dockerLog = join(fixture.root, "docker.log");
 
       try {
@@ -887,8 +891,34 @@ describe("a baked-capability gate holds a unit on its fallback until the image c
     });
   }
 
+  for (const [label, args] of [
+    ["a full install", []],
+    ["a single-unit refresh", ["--refresh-unit", "fluncle-gamma.service"]],
+  ] as const) {
+    test(`${label} while the container is down leaves the installed unit untouched and fails`, () => {
+      const fixture = gatedFixture("down");
+
+      try {
+        const installed = runFixture(fixture, [...args], {
+          FAKE_DOCKER_LOG: join(fixture.root, "docker.log"),
+        });
+
+        expect(installed.status).toBe(1);
+        expect(installed.stderr).toContain("capability probe unavailable, left unchanged");
+        expect(installed.stderr).toContain("fluncle-gamma.service");
+        expect(existsSync(join(fixture.dest, "fluncle-gamma.service"))).toBe(false);
+        expect(readLog(fixture.installLog)).not.toContain(
+          join(fixture.dest, "fluncle-gamma.service"),
+        );
+        expect(installed.stdout).not.toContain("held on fallback");
+      } finally {
+        rmSync(fixture.root, { force: true, recursive: true });
+      }
+    });
+  }
+
   test("a gate that names no existing fallback refuses the whole install", () => {
-    const fixture = gatedFixture(true);
+    const fixture = gatedFixture("present");
 
     try {
       rmSync(join(fixture.root, "gamma-timer", "fluncle-gamma.service.whole-lifetime"));

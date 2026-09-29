@@ -45,7 +45,7 @@ Operator steps, in order:
    sudo bash docs/agents/hermes/install-host-timers.sh --refresh-unit fluncle-backfill.service
    ```
 
-   If the output lists `fluncle-backfill.service` under `held on fallback`, the image does not carry the phased script yet. Go back to step 2 and rerun this step after the rebake.
+   If the output lists `fluncle-backfill.service` under `held on fallback`, the image does not carry the phased script yet. Go back to step 2 and rerun this step after the rebake. If it instead exits non-zero with `capability probe unavailable, left unchanged`, the hermes container was not running (for example mid pin-watch swap): the installer wrote neither variant and left the installed unit as it was, so rerun this step once the container is up.
 
 4. **Verify.** `systemctl cat fluncle-backfill.service` shows the `ExecStartPre` capability check and an `ExecStart` that starts `backfill-sweep.sh` directly, with no `database-admission-runner.sh`. Run one attended tick with `sudo systemctl start fluncle-backfill.service`, then read `journalctl -u fluncle-backfill.service -n 80 --no-pager`. Expect runner events with `"owner":"fluncle-backfill"` and `"phase_scoped":true`, one per Worker request, each with a `hold_ms` of that one request, and a summary line with `"admissionMode":"phased"`.
 
