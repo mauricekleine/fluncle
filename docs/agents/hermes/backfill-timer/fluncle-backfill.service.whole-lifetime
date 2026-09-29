@@ -1,3 +1,6 @@
+# Fallback for fluncle-backfill.service. install-host-timers.sh installs this file under that
+# unit name only while the baked backfill-sweep.ts lacks phase-scoped admission, keeping the
+# whole-lifetime admission wrap until pin-watch rebakes the phased script.
 [Unit]
 Description=fluncle-backfill — rave-02 host trigger for the catalogue-backfill sweep
 Documentation=https://github.com/mauricekleine/fluncle/blob/main/docs/agents/hermes/backfill-timer/README.md
@@ -7,11 +10,6 @@ After=network-online.target docker.service
 # before the sweep catch runs), the healthcheck prober never sees a failure. This catch-all
 # posts a minimal Discord alert; %n is this unit's full name.
 OnFailure=fluncle-sweep-failure@%n.service
-# install-host-timers.sh installs this unit only when the baked sweep carries the capability
-# marker below; otherwise it installs the whole-lifetime fallback beside it, so a full install
-# that lands before the pin-watch rebake never runs the older script without admission.
-X-Fluncle-Baked-Capability=/opt/hermes-scripts/backfill-sweep.ts fluncle-backfill-phased-admission-v1
-X-Fluncle-Capability-Fallback=fluncle-backfill.service.whole-lifetime
 
 [Service]
 Type=oneshot
@@ -19,13 +17,8 @@ EnvironmentFile=-/etc/fluncle/database-admission.env
 # Root drives the Docker daemon; `docker exec -u hermes` runs the WORK as the unprivileged
 # hermes user. The .sh/.ts pair is BAKED at /opt/hermes-scripts/ (Unit A — auto-updates from
 # main via pin-watch); this host unit only TRIGGERS it, and the sweep self-writes its /status
-# marker (cron-output.sh) so the prober stays honest. The sweep takes its own phase-scoped
-# database admission per leg (backfill-sweep.ts); this unit must NOT wrap it in the admission
-# runner. Install this unit only after the image carries the phased script (README "Rollout").
-# The same capability check guards a unit installed by hand: an image that still bakes the
-# pre-phase sweep fails this precondition, so the unit refuses to run the payload unadmitted.
-ExecStartPre=/usr/bin/docker exec hermes grep -qF fluncle-backfill-phased-admission-v1 /opt/hermes-scripts/backfill-sweep.ts
-ExecStart=/usr/bin/docker exec -e DATABASE_ADMISSION_FAIL_CLOSED -e DATABASE_ADMISSION_POLL_SECS=2 -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/backfill-sweep.sh
+# marker (cron-output.sh) so the prober stays honest.
+ExecStart=/usr/bin/docker exec -e DATABASE_ADMISSION_FAIL_CLOSED -e DATABASE_ADMISSION_POLL_SECS=2 -u hermes -e HOME=/opt/data/home hermes bash /opt/hermes-scripts/database-admission-runner.sh fluncle-backfill -- bash /opt/hermes-scripts/backfill-sweep.sh
 # A pure Worker-trigger (Discogs id, Last.fm love, Apple URL over findings, then Apple URL +
 # album facts over the catalogue), one bounded batch of each source per tick. The Worker carries
 # the Retry-After backoff, so the box stays dumb + fast. The old 180s ceiling false-killed a tick

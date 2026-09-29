@@ -1131,6 +1131,25 @@ describe("database operation registry", () => {
     });
   });
 
+  it("pins the vendor backfill's non-retried phases per leg with a whole-pass branch for the inherited lease", () => {
+    const backfill = DATABASE_OPERATION_REGISTRY.find(
+      (operation) => operation.operationId === "backfill.vendor-sweep",
+    );
+    const script = readFileSync(join(REPO_ROOT, SCRIPTS, "backfill-sweep.ts"), "utf8");
+    const retries = /^export const BACKFILL_PHASE_YIELD_RETRIES = (\d+);$/m.exec(script);
+
+    expect(backfill?.admissionShape).toMatchObject({
+      phaseSource: `${SCRIPTS}/backfill-sweep.ts`,
+      shape: "phased",
+      yieldRetries: 0,
+    });
+    expect(backfill?.mutationDisposition.kind).toBe("replay-safe-idempotent");
+    expect(Number(retries?.[1])).toBe(backfill?.admissionShape?.yieldRetries);
+    expect(script).toContain("owner: ADMISSION_OWNER");
+    expect(script).toContain('const ADMISSION_OWNER = "fluncle-backfill";');
+    expect(script).toMatch(/env\.FLUNCLE_ADMISSION_RUNNER_PID\s*\?\s*inheritedLeaseWindows\(/);
+  });
+
   it("pins hub-count reconciliation's once-retried phased admission around bounded windows", () => {
     const reconcile = DATABASE_OPERATION_REGISTRY.find(
       (operation) => operation.operationId === "catalogue.reconcile-hub-counts",

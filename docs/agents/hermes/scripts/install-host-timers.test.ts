@@ -791,3 +791,173 @@ describe("the installer refuses to half-install", () => {
     }
   });
 });
+
+describe("a baked-capability gate holds a unit on its fallback until the image carries the script", () => {
+  const MARKER = "fluncle-gamma-phased-v1";
+
+  function gatedFixture(baked: "absent" | "down" | "present"): InstallerFixture {
+    const fixture = createInstallerFixture();
+    rmSync(join(fixture.root, "ambiguous-one"), { force: true, recursive: true });
+    rmSync(join(fixture.root, "ambiguous-two"), { force: true, recursive: true });
+    mkdirSync(join(fixture.root, "gamma-timer"), { recursive: true });
+    writeFileSync(
+      join(fixture.root, "gamma-timer", "fluncle-gamma.service"),
+      [
+        "[Unit]",
+        `X-Fluncle-Baked-Capability=/opt/hermes-scripts/gamma-sweep.ts ${MARKER}`,
+        "X-Fluncle-Capability-Fallback=fluncle-gamma.service.whole-lifetime",
+        "",
+        "[Service]",
+        "Type=oneshot",
+        `ExecStartPre=/usr/bin/docker exec hermes grep -qF ${MARKER} /opt/hermes-scripts/gamma-sweep.ts`,
+        "ExecStart=/usr/bin/docker exec hermes bash /opt/hermes-scripts/gamma-sweep.sh",
+        "",
+      ].join("\n"),
+    );
+    writeFileSync(
+      join(fixture.root, "gamma-timer", "fluncle-gamma.service.whole-lifetime"),
+      [
+        "[Service]",
+        "Type=oneshot",
+        "ExecStart=/usr/bin/docker exec hermes bash /opt/hermes-scripts/database-admission-runner.sh fluncle-gamma -- bash /opt/hermes-scripts/gamma-sweep.sh",
+        "",
+      ].join("\n"),
+    );
+    writeFileSync(
+      join(fixture.root, "gamma-timer", "fluncle-gamma.timer"),
+      "[Timer]\nOnUnitActiveSec=1h\n\n[Install]\nWantedBy=timers.target\n",
+    );
+    writeExecutable(
+      join(fixture.root, "fake-bin", "docker"),
+      [
+        "#!/usr/bin/env bash",
+        'printf \'%s\\n\' "$*" >> "$FAKE_DOCKER_LOG"',
+        baked === "present"
+          ? "printf '1\\n'; exit 0"
+          : baked === "absent"
+            ? "printf '0\\n'; exit 1"
+            : "printf 'Error response from daemon: container hermes is not running\\n' >&2; exit 1",
+        "",
+      ].join("\n"),
+    );
+
+    return fixture;
+  }
+
+  function installedGamma(fixture: InstallerFixture): string {
+    return readFileSync(join(fixture.dest, "fluncle-gamma.service"), "utf8");
+  }
+
+  for (const [label, args] of [
+    ["a full install", []],
+    ["a single-unit refresh", ["--refresh-unit", "fluncle-gamma.service"]],
+  ] as const) {
+    test(`${label} before the rebake installs the whole-lifetime fallback under the unit's name`, () => {
+      const fixture = gatedFixture("absent");
+      const dockerLog = join(fixture.root, "docker.log");
+
+      try {
+        const installed = runFixture(fixture, [...args], { FAKE_DOCKER_LOG: dockerLog });
+
+        expect(installed.status, installed.stderr).toBe(0);
+        expect(installedGamma(fixture)).toContain(
+          "database-admission-runner.sh fluncle-gamma -- bash /opt/hermes-scripts/gamma-sweep.sh",
+        );
+        expect(installedGamma(fixture)).not.toContain("X-Fluncle-Baked-Capability");
+        expect(existsSync(join(fixture.dest, "fluncle-gamma.service.whole-lifetime"))).toBe(false);
+        expect(readLog(dockerLog)).toEqual([
+          `exec hermes grep -cF -- ${MARKER} /opt/hermes-scripts/gamma-sweep.ts`,
+        ]);
+        expect(installed.stdout).toContain("held on fallback");
+      } finally {
+        rmSync(fixture.root, { force: true, recursive: true });
+      }
+    });
+
+    test(`${label} after the rebake installs the phased unit itself`, () => {
+      const fixture = gatedFixture("present");
+      const dockerLog = join(fixture.root, "docker.log");
+
+      try {
+        const installed = runFixture(fixture, [...args], { FAKE_DOCKER_LOG: dockerLog });
+
+        expect(installed.status, installed.stderr).toBe(0);
+        expect(installedGamma(fixture)).toContain(`X-Fluncle-Baked-Capability=`);
+        expect(installedGamma(fixture)).not.toContain("database-admission-runner.sh");
+        expect(installed.stdout).not.toContain("held on fallback");
+      } finally {
+        rmSync(fixture.root, { force: true, recursive: true });
+      }
+    });
+  }
+
+  for (const [label, args] of [
+    ["a full install", []],
+    ["a single-unit refresh", ["--refresh-unit", "fluncle-gamma.service"]],
+  ] as const) {
+    test(`${label} while the container is down leaves the installed unit untouched and fails`, () => {
+      const fixture = gatedFixture("down");
+
+      try {
+        const installed = runFixture(fixture, [...args], {
+          FAKE_DOCKER_LOG: join(fixture.root, "docker.log"),
+        });
+
+        expect(installed.status).toBe(1);
+        expect(installed.stderr).toContain("capability probe unavailable, left unchanged");
+        expect(installed.stderr).toContain("fluncle-gamma.service");
+        expect(existsSync(join(fixture.dest, "fluncle-gamma.service"))).toBe(false);
+        expect(readLog(fixture.installLog)).not.toContain(
+          join(fixture.dest, "fluncle-gamma.service"),
+        );
+        expect(installed.stdout).not.toContain("held on fallback");
+      } finally {
+        rmSync(fixture.root, { force: true, recursive: true });
+      }
+    });
+  }
+
+  test("a gate that names no existing fallback refuses the whole install", () => {
+    const fixture = gatedFixture("present");
+
+    try {
+      rmSync(join(fixture.root, "gamma-timer", "fluncle-gamma.service.whole-lifetime"));
+      const refused = runFixture(fixture, [], {
+        FAKE_DOCKER_LOG: join(fixture.root, "docker.log"),
+      });
+
+      expect(refused.status).not.toBe(0);
+      expect(refused.stderr).toContain("X-Fluncle-Capability-Fallback");
+      expect(readdirSync(fixture.dest)).toEqual([]);
+    } finally {
+      rmSync(fixture.root, { force: true, recursive: true });
+    }
+  });
+
+  test("the backfill unit gates on the marker its baked script exports and falls back to the admission wrap", () => {
+    const unit = readFileSync(
+      join(HERMES_DIR, "backfill-timer", "fluncle-backfill.service"),
+      "utf8",
+    );
+    const fallback = readFileSync(
+      join(HERMES_DIR, "backfill-timer", "fluncle-backfill.service.whole-lifetime"),
+      "utf8",
+    );
+    const script = readFileSync(join(HERMES_DIR, "scripts", "backfill-sweep.ts"), "utf8");
+    const marker = /^export const BACKFILL_ADMISSION_CAPABILITY = "([^"]+)";$/m.exec(script)?.[1];
+
+    expect(marker).toBeDefined();
+    expect(unit).toContain(
+      `X-Fluncle-Baked-Capability=/opt/hermes-scripts/backfill-sweep.ts ${marker}`,
+    );
+    expect(unit).toContain("X-Fluncle-Capability-Fallback=fluncle-backfill.service.whole-lifetime");
+    expect(unit).toContain(
+      `ExecStartPre=/usr/bin/docker exec hermes grep -qF ${marker} /opt/hermes-scripts/backfill-sweep.ts`,
+    );
+    expect(unit).not.toContain("database-admission-runner.sh fluncle-backfill");
+    expect(fallback).toContain(
+      "hermes bash /opt/hermes-scripts/database-admission-runner.sh fluncle-backfill -- bash /opt/hermes-scripts/backfill-sweep.sh",
+    );
+    expect(fallback).not.toContain("X-Fluncle-Baked-Capability");
+  });
+});

@@ -55,6 +55,7 @@ export async function stopDatabaseAdmissionPhases(): Promise<void> {
 type DatabaseAdmissionPhaseInput = Readonly<{
   command: readonly string[];
   owner: string;
+  signal?: AbortSignal;
 
   yieldRetries: 0 | 1;
 }>;
@@ -123,6 +124,9 @@ export async function runDatabaseAdmissionPhaseAsync(
     if (admissionPhasesStopping) {
       throw new Error("database admission phase stopped for shutdown");
     }
+    if (input.signal?.aborted) {
+      throw new Error("database admission phase aborted before it started");
+    }
     const result = await new Promise<{ status: number | null; stderr: string; stdout: string }>(
       (resolve, reject) => {
         const child = spawn("bash", [phaseRunner(), "phase", input.owner, "--", ...input.command], {
@@ -137,6 +141,8 @@ export async function runDatabaseAdmissionPhaseAsync(
           await closed;
         };
         activePhaseStops.add(stop);
+        const abort = () => child.kill("SIGTERM");
+        input.signal?.addEventListener("abort", abort, { once: true });
         const signals = ["SIGTERM", "SIGINT", "SIGHUP"] as const;
         const forwardSignal = (signal: NodeJS.Signals) => child.kill(signal);
         const listeners = signals.map((signal) => {
@@ -176,6 +182,7 @@ export async function runDatabaseAdmissionPhaseAsync(
         });
         child.once("close", (status) => {
           activePhaseStops.delete(stop);
+          input.signal?.removeEventListener("abort", abort);
           resolveClosed?.();
           for (const { listener, signal } of listeners) {
             process.off(signal, listener);
