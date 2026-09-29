@@ -256,9 +256,8 @@ RUN arch="$(uname -m)" \
 # baked here too. The two device-mirror development shims and the backup sweep's db-dump shim are
 # overwritten immediately afterward by their canonical modules from apps/web; this keeps the box
 # scripts self-contained without duplicating the device whitelist, the anchored-cut SQL, or the
-# dump format. The db-dump COPY stays on one line so pin-watch's COPY parser fingerprints it. The
-# complete local deriver is copied under its repository-relative tree because its imports
-# deliberately share those same canonical files.
+# dump format. The complete local deriver is copied under its repository-relative tree because its
+# imports deliberately share those same canonical files.
 # World-readable + exec so the non-root hermes user runs them.
 COPY docs/agents/hermes/scripts/ /opt/hermes-scripts/
 COPY apps/web/src/lib/catalogue-eligibility.ts \
