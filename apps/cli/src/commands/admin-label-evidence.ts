@@ -404,21 +404,29 @@ async function runCensus(
   deps: LabelEvidenceDeps,
   mbid: string,
   maxPages: number,
-): Promise<{ cached: boolean; census: MbCensus }> {
+): Promise<{ cached: boolean; census: MbCensus; failure?: SourceFailure }> {
   const credits = new Map<string, { artistMbid: string; artistName: string; recordings: number }>();
   const seen = new Set<string>();
   let offset = 0;
   let pagesFetched = 0;
   let releaseCount = 0;
   let allCached = true;
+  let failure: SourceFailure | undefined;
 
   while (pagesFetched < maxPages) {
     const url = `${MB_ROOT}/release?label=${mbid}&inc=artist-credits+recordings&limit=100&offset=${offset}&fmt=json`;
-    const { cached, data } = await fetchEvidenceJson<MbReleaseBrowse>(
-      deps.http,
-      "musicbrainz",
-      url,
-    );
+    let page: { cached: boolean; data: MbReleaseBrowse };
+    try {
+      page = await fetchEvidenceJson<MbReleaseBrowse>(deps.http, "musicbrainz", url);
+    } catch (error) {
+      if (pagesFetched === 0) {
+        throw error;
+      }
+
+      failure = failureOf(error, url);
+      break;
+    }
+    const { cached, data } = page;
     const releases = data.releases ?? [];
     allCached &&= cached;
     pagesFetched += 1;
@@ -468,8 +476,11 @@ async function runCensus(
 
   return {
     cached: allCached,
+    ...(failure ? { failure } : {}),
     census: {
-      caveat: sampled ? `sampled: first ${offset} of ${releaseCount} releases` : null,
+      caveat: sampled
+        ? `sampled: first ${offset} of ${releaseCount} releases${failure ? " (a later page failed)" : ""}`
+        : null,
       firstCredits,
       pagesFetched,
       recordingsCounted: firstCredits.reduce((sum, entry) => sum + entry.recordings, 0),
@@ -519,9 +530,13 @@ async function gatherMusicBrainz(
   if (options.census) {
     parts += 1;
     try {
-      const { cached, census } = await runCensus(deps, mbid, options.censusPages);
+      const { cached, census, failure } = await runCensus(deps, mbid, options.censusPages);
       allCached &&= cached;
       data.census = census;
+
+      if (failure) {
+        errors.push(failure);
+      }
     } catch (error) {
       errors.push(failureOf(error, `${MB_ROOT}/release?label=${mbid}&inc=recordings (census)`));
     }
@@ -940,6 +955,7 @@ async function gatherBeatport(
       "beatport",
       `SCRAPE ${tracksUrl}`,
       (signal) => scraper(tracksUrl, signal),
+      (html) => parseBeatportTracksPage(html) !== null,
     );
     const facts = parseBeatportTracksPage(text);
 

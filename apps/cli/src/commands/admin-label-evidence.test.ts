@@ -573,6 +573,47 @@ describe("the first-credit census", () => {
     });
   });
 
+  test("keeps the pages it read when a later census page fails", async () => {
+    const routes = censusRoutes();
+    routes[`release?label=${LABEL_MBID}&inc=artist-credits+recordings`] = (url) =>
+      new URL(url).searchParams.get("offset") === "0"
+        ? json(censusPage(0))
+        : new Response("", { status: 500 });
+    const { deps } = setup(routes);
+
+    const evidence = await gatherLabelEvidence(
+      LABEL_MBID,
+      { census: true, censusPages: 5, sources: ["musicbrainz"] },
+      deps,
+    );
+
+    expect(evidence.sources.musicbrainz.status).toBe("partial");
+    expect(evidence.sources.musicbrainz.data?.census).toMatchObject({
+      caveat: "sampled: first 2 of 3 releases (a later page failed)",
+      pagesFetched: 1,
+      recordingsCounted: 3,
+      sampled: true,
+    });
+    expect(evidence.errors[0]).toMatchObject({ kind: "http", source: "musicbrainz", status: 500 });
+  });
+
+  test("reports an unusable Beatport page as invalid without caching it", async () => {
+    let calls = 0;
+    const challenge: BeatportScraper = async () => {
+      calls += 1;
+
+      return { headers: { get: () => null }, status: 200, text: "<html>Just a moment</html>" };
+    };
+    const { deps } = setup(defaultRoutes(), { scraper: challenge });
+
+    const first = await gatherLabelEvidence(LABEL_MBID, ALL, deps);
+    await gatherLabelEvidence(LABEL_MBID, ALL, deps);
+
+    expect(first.sources.beatport.status).toBe("error");
+    expect(first.sources.beatport.errors?.[0]).toMatchObject({ kind: "invalid" });
+    expect(calls).toBe(4);
+  });
+
   test("states the sampling caveat when the page cap stops it early", async () => {
     const { deps } = setup(censusRoutes());
 

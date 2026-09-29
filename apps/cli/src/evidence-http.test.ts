@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -118,7 +118,7 @@ describe("fetchEvidenceText", () => {
     expect(calls()).toBe(2);
   });
 
-  test("honours Retry-After on a 429 and pushes the shared slot back for other callers", async () => {
+  test("honours Retry-After on a 429 before retrying", async () => {
     const http = fakeHttp({ attempts: 3, intervalMs: 100 });
     const { calls, perform } = scripted([reply(429, "", { "retry-after": "7" }), reply(200, "ok")]);
 
@@ -127,8 +127,80 @@ describe("fetchEvidenceText", () => {
     expect(result.text).toBe("ok");
     expect(calls()).toBe(2);
     expect(http.sleeps).toContain(7_000);
-    const nextSlot = Number(readFileSync(join(http.cacheDir, "slots", "musicbrainz.next"), "utf8"));
-    expect(nextSlot).toBeGreaterThanOrEqual(1_000_000 + 7_000);
+  });
+
+  test("a throttled final attempt still makes every other caller wait out Retry-After", async () => {
+    const throttled = fakeHttp({ attempts: 1, intervalMs: 100 });
+    const other = fakeHttp({ intervalMs: 100 }, { cacheDir: throttled.cacheDir });
+    other.clock.now = throttled.clock.now;
+
+    await fetchEvidenceText(
+      throttled,
+      "musicbrainz",
+      "k",
+      scripted([reply(429, "", { "retry-after": "7" })]).perform,
+    ).catch(() => undefined);
+    await reserveSlot(other, "musicbrainz");
+
+    expect(other.sleeps).toEqual([7_000]);
+  });
+
+  test("gives up at once when Retry-After exceeds the backoff cap, and caps the shared wait", async () => {
+    const http = fakeHttp({ attempts: 3, intervalMs: 100, maxBackoffMs: 30_000 });
+    const other = fakeHttp({ intervalMs: 100 }, { cacheDir: http.cacheDir });
+    other.clock.now = http.clock.now;
+    const { calls, perform } = scripted([reply(429, "", { "retry-after": "3600" })]);
+
+    const failure = (await fetchEvidenceText(http, "musicbrainz", "k", perform).catch(
+      (error: unknown) => error,
+    )) as EvidenceFetchError;
+    await reserveSlot(other, "musicbrainz");
+
+    expect(failure.kind).toBe("rate_limited");
+    expect(failure.message).toContain("asked to wait 3600 s");
+    expect(calls()).toBe(1);
+    expect(http.sleeps).toEqual([]);
+    expect(other.sleeps).toEqual([30_000]);
+  });
+
+  test("retries a 2xx body the caller rejects and never caches it", async () => {
+    const http = fakeHttp({ attempts: 2 });
+    const accept = (text: string) => text.startsWith("{");
+    const { calls, perform } = scripted([reply(200, "<html>challenge</html>"), reply(200, "{}")]);
+
+    expect(await fetchEvidenceText(http, "musicbrainz", "k", perform, accept)).toEqual({
+      cached: false,
+      text: "{}",
+    });
+    expect(calls()).toBe(2);
+
+    const stuck = fakeHttp({ attempts: 2 });
+    const failure = (await fetchEvidenceText(
+      stuck,
+      "musicbrainz",
+      "k",
+      scripted([reply(200, "<html>challenge</html>")]).perform,
+      accept,
+    ).catch((error: unknown) => error)) as EvidenceFetchError;
+    expect(failure.kind).toBe("invalid");
+
+    const next = scripted([reply(200, "{}")]);
+    expect((await fetchEvidenceText(stuck, "musicbrainz", "k", next.perform, accept)).cached).toBe(
+      false,
+    );
+    expect(next.calls()).toBe(1);
+  });
+
+  test("ignores a cached body the caller now rejects", async () => {
+    const http = fakeHttp();
+    await fetchEvidenceText(http, "musicbrainz", "k", scripted([reply(200, "bad")]).perform);
+    const next = scripted([reply(200, "{}")]);
+
+    const result = await fetchEvidenceText(http, "musicbrainz", "k", next.perform, (text) =>
+      text.startsWith("{"),
+    );
+
+    expect(result).toEqual({ cached: false, text: "{}" });
   });
 
   test("reports a rate-limited failure when every attempt is throttled", async () => {

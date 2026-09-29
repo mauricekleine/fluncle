@@ -21,7 +21,13 @@ export const SOURCE_POLICIES: Record<EvidenceSource, SourcePolicy> = {
 
 export const EVIDENCE_USER_AGENT = "FluncleLabelTriage/1.0 ( https://www.fluncle.com )";
 
-export type EvidenceFailureKind = "http" | "network" | "not_found" | "rate_limited" | "timeout";
+export type EvidenceFailureKind =
+  | "http"
+  | "invalid"
+  | "network"
+  | "not_found"
+  | "rate_limited"
+  | "timeout";
 
 export class EvidenceFetchError extends Error {
   readonly attempts: number;
@@ -153,7 +159,16 @@ async function withSlotLock<T>(
       const held = await stat(lock).catch(() => null);
 
       if (held && Date.now() - held.mtimeMs > LOCK_STALE_MS) {
-        await rm(lock, { force: true, recursive: true });
+        const evicted = `${lock}.stale.${process.pid}.${Math.floor(Math.random() * 1e9)}`;
+        const won = await rename(lock, evicted).then(
+          () => true,
+          () => false,
+        );
+
+        if (won) {
+          await rm(evicted, { force: true, recursive: true });
+        }
+
         continue;
       }
 
@@ -257,15 +272,18 @@ async function performWithTimeout(
   }
 }
 
+export type AcceptBody = (text: string) => boolean;
+
 export async function fetchEvidenceText(
   http: EvidenceHttp,
   source: EvidenceSource,
   cacheKey: string,
   perform: Perform,
+  accept: AcceptBody = () => true,
 ): Promise<{ cached: boolean; text: string }> {
   const hit = await readCache(http, source, cacheKey);
 
-  if (hit !== null) {
+  if (hit !== null && accept(hit)) {
     http.stats.cacheHits += 1;
 
     return { cached: true, text: hit };
@@ -283,24 +301,52 @@ export async function fetchEvidenceText(
     if ("response" in outcome) {
       const { response } = outcome;
 
-      if (response.status >= 200 && response.status < 300) {
+      const success = response.status >= 200 && response.status < 300;
+
+      if (success && accept(response.text)) {
         await writeCache(http, source, cacheKey, response.text);
 
         return { cached: false, text: response.text };
       }
 
-      last = new EvidenceFetchError(
-        failureKind(response.status),
-        `${source} answered HTTP ${response.status}`,
-        attempt,
-        response.status,
-      );
+      if (success) {
+        last = new EvidenceFetchError(
+          "invalid",
+          `${source} answered HTTP ${response.status} with a body that is not the expected data`,
+          attempt,
+          response.status,
+        );
+      } else {
+        last = new EvidenceFetchError(
+          failureKind(response.status),
+          `${source} answered HTTP ${response.status}`,
+          attempt,
+          response.status,
+        );
 
-      if (!isRetryableStatus(response.status)) {
-        throw last;
+        if (!isRetryableStatus(response.status)) {
+          throw last;
+        }
+
+        retryAfterMs = parseRetryAfter(response.headers.get("retry-after"), http.now());
+
+        if (retryAfterMs !== null) {
+          await pushSlotBack(
+            http,
+            source,
+            http.now() + Math.min(retryAfterMs, policy.maxBackoffMs),
+          );
+        }
+
+        if (retryAfterMs !== null && retryAfterMs > policy.maxBackoffMs) {
+          throw new EvidenceFetchError(
+            "rate_limited",
+            `${source} asked to wait ${Math.ceil(retryAfterMs / 1000)} s, past the ${policy.maxBackoffMs / 1000} s limit`,
+            attempt,
+            response.status,
+          );
+        }
       }
-
-      retryAfterMs = parseRetryAfter(response.headers.get("retry-after"), http.now());
     } else if ("timedOut" in outcome) {
       last = new EvidenceFetchError(
         "timeout",
@@ -322,10 +368,6 @@ export async function fetchEvidenceText(
       Math.max(retryAfterMs ?? 0, exponential) + Math.floor(http.random() * 250),
     );
 
-    if (retryAfterMs !== null) {
-      await pushSlotBack(http, source, http.now() + retryAfterMs);
-    }
-
     await http.sleep(backoff);
   }
 
@@ -337,20 +379,36 @@ export async function fetchEvidenceText(
   );
 }
 
+function isJson(text: string): boolean {
+  try {
+    JSON.parse(text);
+
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function fetchEvidenceJson<T>(
   http: EvidenceHttp,
   source: EvidenceSource,
   url: string,
   headers: Record<string, string> = {},
 ): Promise<{ cached: boolean; data: T }> {
-  const { cached, text } = await fetchEvidenceText(http, source, `GET ${url}`, async (signal) => {
-    const response = await http.fetch(url, {
-      headers: { Accept: "application/json", "User-Agent": EVIDENCE_USER_AGENT, ...headers },
-      signal,
-    });
+  const { cached, text } = await fetchEvidenceText(
+    http,
+    source,
+    `GET ${url}`,
+    async (signal) => {
+      const response = await http.fetch(url, {
+        headers: { Accept: "application/json", "User-Agent": EVIDENCE_USER_AGENT, ...headers },
+        signal,
+      });
 
-    return { headers: response.headers, status: response.status, text: await response.text() };
-  });
+      return { headers: response.headers, status: response.status, text: await response.text() };
+    },
+    isJson,
+  );
 
   return { cached, data: JSON.parse(text) as T };
 }
