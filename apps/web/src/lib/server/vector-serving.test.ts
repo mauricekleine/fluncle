@@ -8,9 +8,10 @@ const setSonarTrackEnabled = vi.hoisted(() => vi.fn());
 let enabled = false;
 
 vi.mock("./artifact-changes", () => ({ getArtifactConsumerStatusLive }));
-vi.mock("./sonar", () => ({
+vi.mock("./sonar", async (importOriginal) => ({
   SONAR_DELTA_CADENCE_SECS: 30,
-  SONAR_RECONCILE_CADENCE_SECS: 21600,
+  SONAR_RECONCILE_CADENCE_SECS: (await importOriginal<typeof import("./sonar")>())
+    .SONAR_RECONCILE_CADENCE_SECS,
   isSonarTrackEnabled: async () => enabled,
   readSonarHealth,
   setSonarTrackEnabled,
