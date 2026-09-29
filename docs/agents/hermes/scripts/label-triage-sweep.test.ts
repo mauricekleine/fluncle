@@ -13,6 +13,7 @@ import {
   type ResearchedLabel,
   researchConfig,
   researchEnv,
+  type CarryStore,
   type RoundDeps,
   runSweep,
   summarize,
@@ -176,14 +177,18 @@ describe("the round's cost bounds", () => {
 
 describe("the research process", () => {
   test("holds no Fluncle token, no webhook and no database credential", () => {
-    const env = researchEnv({
-      CLAUDE_CODE_OAUTH_TOKEN: "claude",
-      DISCOGS_USER_TOKEN: "discogs",
-      DISCORD_ALERT_WEBHOOK: "hook",
-      FLUNCLE_API_TOKEN: "agent-token",
-      PATH: "/usr/bin",
-      TURSO_AUTH_TOKEN: "turso",
-    });
+    const env = researchEnv(
+      {
+        CLAUDE_CODE_OAUTH_TOKEN: "claude",
+        DISCOGS_USER_TOKEN: "discogs",
+        DISCORD_ALERT_WEBHOOK: "hook",
+        FLUNCLE_API_TOKEN: "agent-token",
+        HOME: "/opt/data/home",
+        PATH: "/usr/bin",
+        TURSO_AUTH_TOKEN: "turso",
+      },
+      "/tmp/batch",
+    );
 
     expect(env).toMatchObject({
       CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1",
@@ -196,11 +201,22 @@ describe("the research process", () => {
     expect(env).not.toHaveProperty("TURSO_AUTH_TOKEN");
   });
 
-  test("may run the evidence command and read files, and nothing else", () => {
+  test("gets its own HOME, so the sweep secrets file is not under its home directory", () => {
+    const env = researchEnv({ HOME: "/opt/data/home" }, "/tmp/batch");
+
+    expect(env.HOME).toBe("/tmp/batch");
+    expect(env.XDG_CACHE_HOME).toBe("/opt/data/home/.cache");
+  });
+
+  test("may run the evidence command, and reads only its working directory and the skill", () => {
     const args = claudeArgs(researchConfig({}));
     const allowed = args[args.indexOf("--allowedTools") + 1];
 
-    expect(allowed).toBe("Read,Glob,Grep,Bash(fluncle admin labels evidence:*)");
+    expect(allowed).toBe("Bash(fluncle admin labels evidence:*)");
+    expect(args).toContain("--restricted");
+    expect(args).toContain("--strict-mcp-config");
+    expect(args[args.indexOf("--permission-mode") + 1]).toBe("dontAsk");
+    expect(args[args.indexOf("--add-dir") + 1]).toBe("/opt/claude/skills/fluncle-label-triage");
     expect(args).toContain("--max-turns");
   });
 
@@ -250,6 +266,7 @@ describe("the research process", () => {
 
 type Harness = {
   alerts: string[];
+  carry: CarryStore & { slugs: string[] };
   deps: RoundDeps;
   lines: string[];
   recorded: Array<{ payload: TriagePayload; slug: string }>;
@@ -263,8 +280,17 @@ function harness(
   const recorded: Harness["recorded"] = [];
   const researched: string[][] = [];
 
+  const carry = {
+    read: () => carry.slugs,
+    slugs: [] as string[],
+    write: (slugs: string[]) => {
+      carry.slugs = slugs;
+    },
+  };
+
   return {
     alerts,
+    carry,
     deps: {
       alert: async (text) => {
         alerts.push(text);
@@ -310,6 +336,7 @@ const FIRE_ENV = {
 
 function sweep(h: Harness, pile = neverLooked(4), env: Record<string, string> = FIRE_ENV) {
   return runSweep(env, pile, h.deps, {
+    carry: h.carry,
     now: new Date(NOW),
     print: (line) => h.lines.push(line),
     roundId: "box-test",
@@ -487,5 +514,57 @@ describe("the host unit", () => {
     expect(Number(knob("LABEL_TRIAGE_BATCH_SIZE"))).toBe(RESEARCH_DEFAULTS.batchSize);
     expect(Number(knob("LABEL_TRIAGE_MAX_BATCHES"))).toBe(RESEARCH_DEFAULTS.maxBatches);
     expect(Number(knob("LABEL_TRIAGE_CONCURRENCY"))).toBe(RESEARCH_DEFAULTS.concurrency);
+  });
+});
+
+describe("unfinished work", () => {
+  test("labels a failed batch left behind fire the next run even below the threshold", async () => {
+    const h = harness((slugs, index) =>
+      index === 1 ? new Error("claude -p exited 1") : slugs.map((slug) => verdictFor(slug)),
+    );
+    await sweep(h);
+
+    expect(h.carry.slugs).toEqual(["new-2", "new-3"]);
+
+    const stamped = ["new-0", "new-1"].map((slug) => label(slug, 0, "not_dnb"));
+    const next = harness((slugs) => slugs.map((slug) => verdictFor(slug)));
+    next.carry.slugs = h.carry.slugs;
+    const exitCode = await sweep(next, [...stamped, label("new-2"), label("new-3")]);
+
+    expect(exitCode).toBe(0);
+    expect(next.researched.flat()).toEqual(["new-2", "new-3"]);
+    expect(next.carry.slugs).toEqual([]);
+  });
+
+  test("never-looked labels past the round's cap are carried rather than left for the threshold", async () => {
+    const h = harness((slugs) => slugs.map((slug) => verdictFor(slug)));
+
+    await sweep(h, neverLooked(6));
+
+    expect(h.recorded).toHaveLength(4);
+    expect(h.carry.slugs).toEqual(["new-4", "new-5"]);
+  });
+
+  test("a carried label that has since been ruled drops out and does not fire the gate", async () => {
+    const h = harness(() => []);
+    h.carry.slugs = ["gone"];
+
+    expect(await sweep(h, neverLooked(1))).toBe(0);
+    expect(finalSummary(h)).toMatchObject({ carried: 0, gate: "hold" });
+  });
+
+  test("a carry-over that cannot be saved fails the run loudly", async () => {
+    const h = harness((slugs) => slugs.map((slug) => verdictFor(slug)));
+    h.carry.write = () => {
+      throw new Error("read-only file system");
+    };
+
+    expect(await sweep(h, neverLooked(6))).toBe(1);
+    expect(finalSummary(h)).toMatchObject({
+      carryWritten: false,
+      ok: false,
+      reason: "carry_unwritten",
+    });
+    expect(h.alerts).toHaveLength(1);
   });
 });

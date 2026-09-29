@@ -16,7 +16,7 @@ The split is the whole design. **Every agent-bearing cron in this repo has had a
 
 ## What it cannot do
 
-- **The model holds no Fluncle credential.** Its process gets an allowlisted environment: the Claude token, the Discogs token, `PATH`, `HOME` and locale. Its only tools are `Read`, `Glob`, `Grep` and `Bash(fluncle admin labels evidence:*)`, the one fetcher; with an MBID argument that command reads MusicBrainz, Discogs, Beatport and Apple and never calls the Fluncle API.
+- **The model holds no Fluncle credential and cannot reach the sweep secrets file.** Its process gets an allowlisted environment (the Claude token, the Discogs token, `PATH`, locale) and its own `HOME`, the batch's temporary directory. It runs `--restricted --strict-mcp-config --permission-mode dontAsk`: user, project and local Claude settings are ignored, bypass mode is refused, the file tools (`Read`, `Glob`, `Grep`) are confined to the batch directory and the skill, and Bash is denied except `fluncle admin labels evidence …`, the one fetcher. Chained commands and command substitution around it are denied too. With an MBID argument that command reads MusicBrainz, Discogs, Beatport and Apple and never calls the Fluncle API. A live probe against a planted secrets file confirmed all of this; without `--restricted`, a bypass-mode user setting overrode `--allowedTools` and the file was read.
 - **The script can only record.** Recording is `record_label_triage` → `fluncle admin labels triage` — **agent tier**. It stamps the cursor and stores a proposal. RULING on a label (`update_label`) and writing artist rules (`replace_label_artist_rules`, `rule_artist`) are **operator tier** and 403 the box's agent token at `operatorGuard`, pinned by `orpc-auth-coverage`.
 
 So nothing this sweep does can enable a label, disable one, or write an artist rule, however wrong a batch goes.
@@ -31,7 +31,7 @@ A fired round is healthy only when every batch returned a verdict for every labe
 
 The failure reasons are `zero_proposals` (the gate fired and nothing was recorded), `batch_failed` (a batch errored, timed out, left a label without a verdict, or a record call failed), `claude_auth` (the Claude token is dead; the round stops before spending another batch) and `calibration_unreadable` (the boundary read failed, so no model ran). An unreadable pile alerts the same way. `label-triage-sweep.test.ts` proves the zero-output round alerts through the webhook.
 
-A failed round is not retried at the second slot the same day: the labels it recorded are stamped, the rest stay never-looked, and the next day's gate picks them up.
+Unfinished work never waits for the threshold. After every fired round the sweep saves the labels it did not record — a failed batch's labels, and never-looked labels past the round's cap — to `carry.json` in its state dir (`~/.label-triage/`, or `LABEL_TRIAGE_STATE_DIR`). The next day's gate fires whenever any of them are still waiting, researching them first, so a partial round cannot turn into a healthy `HOLD`. A carried label that has since been triaged or ruled drops out on its own. If the carry-over cannot be saved, the run fails and alerts. A failed round is not retried at the same day's second slot.
 
 ## The knobs
 
@@ -50,7 +50,7 @@ Every knob is an `Environment=` line on the unit, passed into the container by t
 
 `LABEL_TRIAGE_CLAUDE_MODEL` (default `opus`) and `LABEL_TRIAGE_CLAUDE_EFFORT` (default `medium`) are read too, but not set on the unit. The unit's `TimeoutStartSec` covers two waves of batch timeouts plus the reads and the recording; the sweep's test fails if a knob change outgrows it.
 
-**The threshold counts only never-looked labels, deliberately.** Counting the whole undecided pile would fire every day forever, because the stuck core never shrinks. Stale labels ride ALONG once a round fires (a conflation fixed upstream in MusicBrainz resolves only if something looks again); they never trigger a round by themselves. The worklist is never-looked first, then stalest, and a round takes at most `MAX_LABELS` of it; the rest wait for the next firing.
+**The threshold counts only never-looked labels, deliberately.** Counting the whole undecided pile would fire every day forever, because the stuck core never shrinks. Stale labels ride ALONG once a round fires (a conflation fixed upstream in MusicBrainz resolves only if something looks again); they never trigger a round by themselves. The worklist is never-looked first, then stalest, and a round takes at most `MAX_LABELS` of it; the rest are carried and fire the next day's round.
 
 ## What a round costs
 

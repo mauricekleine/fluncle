@@ -2,9 +2,10 @@
 
 import { spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { defaultStateDir } from "./attempt-ledger";
 
 const FLUNCLE_BIN = process.env.FLUNCLE_BIN ?? "fluncle";
 
@@ -37,6 +38,7 @@ export type TriageLabel = {
 
 export type GateVerdict = {
   candidates: TriageLabel[];
+  carried: number;
   excluded: number;
   fire: boolean;
   neverLooked: number;
@@ -167,7 +169,7 @@ export function researchable(label: TriageLabel): boolean {
 
 export function decide(
   labels: TriageLabel[],
-  options: { now?: number; staleDays?: number; threshold?: number } = {},
+  options: { carry?: readonly string[]; now?: number; staleDays?: number; threshold?: number } = {},
 ): GateVerdict {
   const now = options.now ?? Date.now();
   const threshold = options.threshold ?? DEFAULT_THRESHOLD;
@@ -179,17 +181,27 @@ export function decide(
     (label) => Boolean(label.triageCheckedAt) && ageMs(label, now) >= staleMs,
   );
 
-  const candidates = [...neverLooked, ...stale].sort((a, b) => ageMs(b, now) - ageMs(a, now));
-  const fire = neverLooked.length >= threshold;
+  const carry = new Set(options.carry ?? []);
+  const candidates = [...neverLooked, ...stale].sort((a, b) => {
+    const carriedFirst = Number(carry.has(b.slug)) - Number(carry.has(a.slug));
+
+    return carriedFirst === 0 ? ageMs(b, now) - ageMs(a, now) : carriedFirst;
+  });
+  const carried = candidates.filter((label) => carry.has(label.slug)).length;
+  const reached = neverLooked.length >= threshold;
+  const fire = reached || carried > 0;
 
   return {
     candidates,
+    carried,
     excluded: labels.length - eligible.length,
     fire,
     neverLooked: neverLooked.length,
-    reason: fire
+    reason: reached
       ? `${neverLooked.length} never-looked labels reached the threshold of ${threshold}`
-      : `${neverLooked.length} never-looked labels, below the threshold of ${threshold}`,
+      : carried > 0
+        ? `${carried} labels an earlier round left unfinished`
+        : `${neverLooked.length} never-looked labels, below the threshold of ${threshold}`,
     stale: stale.length,
     undecided: labels.length,
   };
@@ -200,6 +212,7 @@ export function summarize(verdict: GateVerdict): string {
     `LABEL TRIAGE GATE: ${verdict.fire ? "FIRE" : "HOLD"}`,
     `undecided=${verdict.undecided}`,
     `excluded=${verdict.excluded}`,
+    `carried=${verdict.carried}`,
     `never-looked=${verdict.neverLooked}`,
     `stale=${verdict.stale}`,
     `candidates=${verdict.candidates.length}`,
@@ -558,8 +571,14 @@ export function claudeArgs(config: ResearchConfig): string[] {
     config.effort,
     "--max-turns",
     String(config.maxTurns),
+    "--restricted",
+    "--strict-mcp-config",
+    "--permission-mode",
+    "dontAsk",
+    "--tools",
+    "Read,Glob,Grep,Bash",
     "--allowedTools",
-    `Read,Glob,Grep,${EVIDENCE_TOOL}`,
+    EVIDENCE_TOOL,
     "--add-dir",
     dirname(config.skillPath),
     "--output-format",
@@ -574,7 +593,6 @@ const RESEARCH_ENV_ALLOW = [
   "CLAUDE_CONFIG_DIR",
   "DISCOGS_USER_TOKEN",
   "FIRECRAWL_API_KEY",
-  "HOME",
   "LANG",
   "LC_ALL",
   "PATH",
@@ -583,10 +601,12 @@ const RESEARCH_ENV_ALLOW = [
   "XDG_CACHE_HOME",
 ];
 
-export function researchEnv(env: NodeJS.ProcessEnv): Record<string, string> {
+export function researchEnv(env: NodeJS.ProcessEnv, workdir: string): Record<string, string> {
   const scoped: Record<string, string> = {
     CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1",
     FLUNCLE_UNATTENDED: "1",
+    HOME: workdir,
+    XDG_CACHE_HOME: env.XDG_CACHE_HOME ?? join(env.HOME ?? workdir, ".cache"),
   };
 
   for (const key of RESEARCH_ENV_ALLOW) {
@@ -825,7 +845,7 @@ async function researchWithClaude(
     log(`batch ${index + 1}: researching ${batch.map((label) => label.slug).join(", ")}`);
     const result = await capture(process.env.CLAUDE_BIN ?? "claude", claudeArgs(config), {
       cwd: workdir,
-      env: researchEnv(process.env),
+      env: researchEnv(process.env, workdir),
       input: buildResearchPrompt(batch, config),
       timeoutMs: config.batchTimeoutSecs * 1000,
     });
@@ -874,6 +894,43 @@ async function recordWithFluncle(slug: string, payload: TriagePayload): Promise<
   }
 }
 
+export type CarryStore = { read: () => string[]; write: (slugs: string[]) => void };
+
+export function fileCarryStore(
+  path = join(process.env.LABEL_TRIAGE_STATE_DIR ?? defaultStateDir("label-triage"), "carry.json"),
+): CarryStore {
+  return {
+    read: () => {
+      try {
+        const parsed = JSON.parse(readFileSync(path, "utf8")) as { slugs?: unknown };
+
+        return Array.isArray(parsed.slugs)
+          ? parsed.slugs.filter((slug): slug is string => typeof slug === "string")
+          : [];
+      } catch {
+        return [];
+      }
+    },
+    write: (slugs) => {
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, JSON.stringify({ slugs, writtenAt: new Date().toISOString() }));
+    },
+  };
+}
+
+export function unfinished(
+  candidates: TriageLabel[],
+  selected: TriageLabel[],
+  recorded: ReadonlySet<string>,
+): string[] {
+  const chosen = new Set(selected.map((label) => label.slug));
+
+  return candidates
+    .filter((label) => !recorded.has(label.slug))
+    .filter((label) => !label.triageCheckedAt || chosen.has(label.slug))
+    .map((label) => label.slug);
+}
+
 export const LIVE_DEPS: RoundDeps = {
   alert: (text) => postDiscordAlert(text),
   calibration: readCalibration,
@@ -885,18 +942,30 @@ export async function runSweep(
   env: NodeJS.ProcessEnv,
   labels: TriageLabel[],
   deps: RoundDeps,
-  options: { now?: Date; print?: (line: string) => void; roundId?: string } = {},
+  options: {
+    carry?: CarryStore;
+    now?: Date;
+    print?: (line: string) => void;
+    roundId?: string;
+  } = {},
 ): Promise<number> {
+  const carry = options.carry ?? fileCarryStore();
   const print = options.print ?? ((line: string) => console.log(line));
   const now = options.now ?? new Date();
   const threshold = Number(env.LABEL_TRIAGE_THRESHOLD ?? DEFAULT_THRESHOLD);
   const staleDays = Number(env.LABEL_TRIAGE_STALE_DAYS ?? DEFAULT_STALE_DAYS);
 
-  const verdict = decide(labels, { now: now.getTime(), staleDays, threshold });
+  const verdict = decide(labels, {
+    carry: carry.read(),
+    now: now.getTime(),
+    staleDays,
+    threshold,
+  });
   print(summarize(verdict));
 
   const gate = {
     candidates: verdict.candidates.length,
+    carried: verdict.carried,
     excluded: verdict.excluded,
     neverLooked: verdict.neverLooked,
     stale: verdict.stale,
@@ -918,14 +987,41 @@ export async function runSweep(
       .join(" ")}`,
   );
 
+  const recorded = new Set<string>();
   const round = await runRound(
     verdict.candidates,
     config,
-    deps,
+    {
+      ...deps,
+      record: async (slug, payload) => {
+        await deps.record(slug, payload);
+        recorded.add(slug);
+      },
+    },
     options.roundId ?? roundIdFor(now),
   );
 
-  print(JSON.stringify({ gate: "fire", ...gate, ...round }));
+  const left = unfinished(verdict.candidates, batches.flat(), recorded);
+  let carryWritten = true;
+  try {
+    carry.write(left);
+  } catch (error) {
+    carryWritten = false;
+    log(
+      `could not write the carry-over: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    if (round.ok) {
+      round.ok = false;
+      round.reason = "carry_unwritten";
+      round.alerted = await deps
+        .alert(
+          `Fluncle label-triage: round ${round.roundId} could not save its unfinished labels (${left.length}); they wait for the threshold instead.`,
+        )
+        .catch(() => false);
+    }
+  }
+
+  print(JSON.stringify({ gate: "fire", ...gate, ...round, carryWritten, unfinished: left.length }));
 
   return round.ok ? 0 : 1;
 }
