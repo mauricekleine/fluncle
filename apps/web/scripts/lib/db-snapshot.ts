@@ -3,6 +3,7 @@ import { mkdir, open, rename, rm, stat } from "node:fs/promises";
 import { dirname } from "node:path";
 
 import {
+  DUMP_SCHEMA_SQL,
   isWithoutRowid,
   keysetPageSql,
   PRIMARY_KEY_COLUMNS_SQL,
@@ -41,14 +42,6 @@ export type SnapshotOptions = {
   outPath: string;
   pageRows?: number;
 };
-
-export const SNAPSHOT_SCHEMA_SQL = `SELECT type, name, sql FROM sqlite_master
-   WHERE sql IS NOT NULL
-     AND name NOT LIKE 'sqlite_%'
-     AND name NOT LIKE 'libsql_%'
-     AND name NOT LIKE '_litestream%'
-     AND name NOT LIKE 'tracks_fts%'
-   ORDER BY CASE type WHEN 'table' THEN 0 WHEN 'index' THEN 1 WHEN 'trigger' THEN 2 ELSE 3 END, name`;
 
 export function previousSnapshotPath(outPath: string): string {
   return outPath.endsWith(".sql")
@@ -175,7 +168,7 @@ export async function pullSnapshot(options: SnapshotOptions): Promise<SnapshotRe
   const tables: SnapshotTableCount[] = [];
 
   try {
-    const schemaResult = await client.execute(SNAPSHOT_SCHEMA_SQL);
+    const schemaResult = await client.execute(DUMP_SCHEMA_SQL);
     const schema: SchemaObject[] = schemaResult.rows.map((row) => ({
       name: textCell(row[1], "a schema object name"),
       sql: textCell(row[2], "a schema object definition"),

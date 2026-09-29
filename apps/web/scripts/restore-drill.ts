@@ -1,29 +1,48 @@
 #!/usr/bin/env bun
 
-import { createClient } from "@libsql/client";
+import { type Client, createClient } from "@libsql/client";
 import { LOCAL_DB_CONCURRENCY } from "../src/lib/database-concurrency";
 import { gunzipSync } from "node:zlib";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
+import { parseArgs } from "node:util";
 
+import { ensureSearchIndex } from "../src/db/search-index";
 import { type DumpManifest, type ManifestCheck } from "../src/lib/server/db-dump";
 
-import { quoteIdent, spotCell, verifyManifest } from "../src/lib/server/db-dump";
+import {
+  quoteIdent,
+  spotCell,
+  stripSearchIndex,
+  verifyManifest,
+  withoutSearchIndexTables,
+} from "../src/lib/server/db-dump";
 
 function fail(message: string): never {
   console.error(`restore-drill: ${message}`);
   process.exit(1);
 }
 
-const [dumpPath, manifestArg] = process.argv.slice(2);
+const { positionals, values } = parseArgs({
+  allowPositionals: true,
+  options: { keep: { type: "string" } },
+});
+const [dumpPath, manifestArg] = positionals;
+const keepPath = values.keep;
 
 if (!dumpPath) {
-  fail("usage: bun run scripts/restore-drill.ts <dump.sql.gz> [manifest.json]");
+  fail(
+    "usage: bun run scripts/restore-drill.ts <dump.sql.gz> [manifest.json] [--keep <restored.db>]",
+  );
 }
 
 if (!existsSync(dumpPath)) {
   fail(`dump not found: ${dumpPath}`);
+}
+
+if (keepPath && existsSync(keepPath)) {
+  fail(`--keep target already exists: ${keepPath}`);
 }
 
 function resolveManifestPath(): string {
@@ -53,10 +72,14 @@ if (!existsSync(manifestPath)) {
   fail(`manifest not found (looked at ${manifestPath}); pass it as the 2nd argument`);
 }
 
-const expected = JSON.parse(readFileSync(manifestPath, "utf8")) as DumpManifest;
+const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as DumpManifest;
+const expected = { ...manifest, ...withoutSearchIndexTables(manifest) };
 
 const raw = readFileSync(dumpPath);
-const sql = dumpPath.endsWith(".gz") ? gunzipSync(raw).toString("utf8") : raw.toString("utf8");
+const stripped = stripSearchIndex(
+  dumpPath.endsWith(".gz") ? gunzipSync(raw).toString("utf8") : raw.toString("utf8"),
+);
+const { sql } = stripped;
 
 const scratchDir = mkdtempSync(join(tmpdir(), "fluncle-restore-drill-"));
 const scratchDb = join(scratchDir, "scratch.db");
@@ -113,7 +136,10 @@ async function main(): Promise<void> {
   }
 
   const actual: ManifestCheck = { spot, tableCount: tableRows.rows.length, tables };
-  const report = verifyManifest(expected, actual);
+  const verified = verifyManifest(expected, actual);
+  const searchIndex = await rebuildSearchIndex(client);
+  const problems = [...verified.problems, ...searchIndex.problems];
+  const report = { ok: problems.length === 0, problems };
   const elapsed = Date.now() - started;
 
   const totalRows = Object.values(tables).reduce((sum, count) => sum + count, 0);
@@ -127,11 +153,14 @@ async function main(): Promise<void> {
         expectedGeneratedAt: expected.generatedAt,
         expectedSource: expected.source,
         expectedTables: expected.tableCount,
+        kept: keepPath ?? null,
         ok: report.ok,
         problems: report.problems,
+        searchIndex: searchIndex.indexed,
         spot: expected.spot
           ? `${expected.spot.table}.${expected.spot.column} count=${expected.spot.count}`
           : null,
+        strippedSearchStatements: stripped.dropped,
       },
       null,
       2,
@@ -142,9 +171,44 @@ async function main(): Promise<void> {
     fail(`RESTORE VERIFICATION FAILED (${report.problems.length} problem(s)) — see above`);
   }
 
+  if (keepPath) {
+    client.close();
+    copyFileSync(scratchDb, keepPath);
+  }
+
   console.log(
-    `restore-drill: OK — ${actual.tableCount} tables, ${totalRows} rows restored + verified against the manifest in ${elapsed}ms.`,
+    `restore-drill: OK — ${actual.tableCount} tables, ${totalRows} rows restored + verified against the manifest, search index rebuilt over ${searchIndex.indexed ?? 0} tracks, in ${elapsed}ms.${
+      keepPath ? ` Restored database kept at ${keepPath}.` : ""
+    }`,
   );
+}
+
+async function rebuildSearchIndex(
+  client: Client,
+): Promise<{ indexed: number | null; problems: string[] }> {
+  const hasTracks = await client.execute(
+    "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'tracks'",
+  );
+
+  if (hasTracks.rows.length === 0) {
+    return { indexed: null, problems: [] };
+  }
+
+  await ensureSearchIndex(client);
+
+  const counts = await client.execute(
+    "SELECT (SELECT count(*) FROM tracks) AS tracks, (SELECT count(*) FROM tracks_fts) AS indexed",
+  );
+  const tracks = Number(counts.rows[0]?.tracks);
+  const indexed = Number(counts.rows[0]?.indexed);
+
+  return {
+    indexed,
+    problems:
+      indexed === tracks
+        ? []
+        : [`search index rebuilt over ${indexed} rows, but tracks holds ${tracks}`],
+  };
 }
 
 try {

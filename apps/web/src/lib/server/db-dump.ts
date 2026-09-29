@@ -6,6 +6,16 @@ export type DumpTable = { columns: string[]; name: string; rows: SqlValue[][] };
 
 export type SequenceHead = { name: string; seq: SqlValue };
 
+export const DUMP_SCHEMA_SQL = `SELECT type, name, sql FROM sqlite_master
+   WHERE sql IS NOT NULL
+     AND name NOT LIKE 'sqlite_%'
+     AND name NOT LIKE 'libsql_%'
+     AND name NOT LIKE '_litestream%'
+     AND name NOT LIKE 'tracks_fts%'
+   ORDER BY CASE type WHEN 'table' THEN 0 WHEN 'index' THEN 1 WHEN 'trigger' THEN 2 ELSE 3 END, name`;
+
+export const SEARCH_INDEX_PREFIX = "tracks_fts";
+
 export const PRIMARY_KEY_COLUMNS_SQL =
   "SELECT name FROM pragma_table_info(?) WHERE pk > 0 ORDER BY pk";
 
@@ -110,6 +120,85 @@ export function buildDumpSql(
   return `${parts.join("\n")}\n`;
 }
 
+const LEADING_TRIVIA = String.raw`(?:\s|--[^\n]*(?:\n|$)|/\*[\s\S]*?\*/)*`;
+const TRIGGER_START = new RegExp(
+  `^${LEADING_TRIVIA}CREATE\\s+(?:TEMP\\s+|TEMPORARY\\s+)?TRIGGER\\b`,
+  "i",
+);
+const SEARCH_INDEX_STATEMENT = new RegExp(
+  `^${LEADING_TRIVIA}(?:CREATE\\s+(?:VIRTUAL\\s+)?TABLE|CREATE\\s+(?:TEMP\\s+|TEMPORARY\\s+)?TRIGGER|INSERT\\s+INTO)\\s+(?:IF\\s+NOT\\s+EXISTS\\s+)?["'\`\\[]?${SEARCH_INDEX_PREFIX}`,
+  "i",
+);
+
+export function splitSqlStatements(sql: string): string[] {
+  const statements: string[] = [];
+  let start = 0;
+  let index = 0;
+
+  while (index < sql.length) {
+    const char = sql[index];
+    const next = sql[index + 1];
+
+    if (char === "'" || char === '"' || char === "`" || char === "[") {
+      const close = char === "[" ? "]" : char;
+      index += 1;
+
+      while (index < sql.length) {
+        if (sql[index] === close) {
+          if (close !== "]" && sql[index + 1] === close) {
+            index += 2;
+            continue;
+          }
+
+          break;
+        }
+
+        index += 1;
+      }
+    } else if (char === "-" && next === "-") {
+      const end = sql.indexOf("\n", index);
+      index = end === -1 ? sql.length : end;
+    } else if (char === "/" && next === "*") {
+      const end = sql.indexOf("*/", index + 2);
+      index = end === -1 ? sql.length : end + 1;
+    } else if (char === ";") {
+      const candidate = sql.slice(start, index);
+
+      if (!TRIGGER_START.test(candidate) || /\bEND\s*$/i.test(candidate)) {
+        const end = sql[index + 1] === "\n" ? index + 2 : index + 1;
+
+        statements.push(sql.slice(start, end));
+        start = end;
+        index = end;
+        continue;
+      }
+    }
+
+    index += 1;
+  }
+
+  if (start < sql.length) {
+    statements.push(sql.slice(start));
+  }
+
+  return statements;
+}
+
+export function stripSearchIndex(sql: string): { dropped: number; sql: string } {
+  const kept: string[] = [];
+  let dropped = 0;
+
+  for (const statement of splitSqlStatements(sql)) {
+    if (SEARCH_INDEX_STATEMENT.test(statement)) {
+      dropped += 1;
+    } else {
+      kept.push(statement);
+    }
+  }
+
+  return { dropped, sql: kept.join("") };
+}
+
 type DumpSpot = {
   column: string;
   count: number;
@@ -184,6 +273,18 @@ export function spotCell(value: unknown): string | null {
 export type ManifestCheck = Pick<DumpManifest, "spot" | "tableCount" | "tables">;
 
 export type VerifyReport = { ok: boolean; problems: string[] };
+
+export function withoutSearchIndexTables(check: ManifestCheck): ManifestCheck {
+  const kept = Object.entries(check.tables).filter(
+    ([name]) => !name.startsWith(SEARCH_INDEX_PREFIX),
+  );
+
+  return {
+    spot: check.spot,
+    tableCount: check.tableCount - (Object.keys(check.tables).length - kept.length),
+    tables: Object.fromEntries(kept),
+  };
+}
 
 export function verifyManifest(expected: ManifestCheck, actual: ManifestCheck): VerifyReport {
   const problems: string[] = [];

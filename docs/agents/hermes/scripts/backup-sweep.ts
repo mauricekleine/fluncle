@@ -17,6 +17,7 @@ import {
   selectBoxStatePaths,
 } from "./box-state-snapshot";
 import {
+  DUMP_SCHEMA_SQL,
   isWithoutRowid,
   keysetPageSql,
   PRIMARY_KEY_COLUMNS_SQL,
@@ -755,14 +756,7 @@ export function libsqlSource(
     },
 
     fetchSchema: async () => {
-      const [schemaResult] = await pipeline(connection, [
-        `SELECT type, name, sql FROM sqlite_master
-     WHERE sql IS NOT NULL
-       AND name NOT LIKE 'sqlite_%'
-       AND name NOT LIKE 'libsql_%'
-       AND name NOT LIKE '_litestream%'
-     ORDER BY CASE type WHEN 'table' THEN 0 WHEN 'index' THEN 1 WHEN 'trigger' THEN 2 ELSE 3 END, name`,
-      ]);
+      const [schemaResult] = await pipeline(connection, [DUMP_SCHEMA_SQL]);
 
       if (!schemaResult) {
         throw new Error("no schema returned from libSQL");
