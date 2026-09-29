@@ -144,6 +144,13 @@ function processExists(pid: number) {
   }
 }
 
+async function until(condition: () => boolean, timeoutMs = 5_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (!condition() && Date.now() < deadline) {
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 10));
+  }
+}
+
 describe("preflight change scope", () => {
   test("a committed branch is classified against its merge-base with origin/main", () => {
     const root = fixtureRepository();
@@ -281,21 +288,25 @@ describe("preflight supersession", () => {
     expect(Date.now() - started).toBeLessThan(5_000);
     expect(existsSync(pidFile)).toBe(true);
     const grandchild = Number(readFileSync(pidFile, "utf8").trim());
-    await new Promise((resolvePromise) => setTimeout(resolvePromise, 100));
+    await until(() => !processExists(grandchild));
     expect(processExists(grandchild)).toBe(false);
     rmSync(directory, { force: true, recursive: true });
   });
 
   test("a group that ignores the interrupt is killed after the grace period", async () => {
-    const child = spawn("sh", ["-c", "trap '' INT; sleep 30 & wait"], {
+    const directory = join(tmpdir(), `fluncle-preflight-trap-${crypto.randomUUID()}`);
+    mkdirSync(directory, { recursive: true });
+    const readyFile = join(directory, "ready");
+    const child = spawn("sh", ["-c", `trap '' INT; sleep 30 & echo ready > "${readyFile}"; wait`], {
       detached: true,
       stdio: "ignore",
     });
-    await new Promise((resolvePromise) => setTimeout(resolvePromise, 100));
+    await until(() => existsSync(readyFile));
     const started = Date.now();
 
     await reapProcessGroup(child.pid ?? 0, { graceMs: 300, pollMs: 20 });
-    await new Promise((resolvePromise) => setTimeout(resolvePromise, 100));
+    await until(() => !processExists(-(child.pid ?? 0)));
+    rmSync(directory, { force: true, recursive: true });
 
     expect(Date.now() - started).toBeGreaterThanOrEqual(300);
     expect(processExists(-(child.pid ?? 0))).toBe(false);

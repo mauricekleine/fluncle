@@ -196,6 +196,27 @@ describe("oRPC public-route contract coverage", () => {
     }
   });
 
+  it("every public map key matches the op's declared route", () => {
+    for (const [key, op] of Object.entries(PUBLIC_ROUTE_OPS)) {
+      if (PENDING_PUBLIC_OPS.has(op)) {
+        continue;
+      }
+
+      const route = CONTRACT_OPERATION_ROUTES[op];
+
+      expect(route, `public op "${op}" (${key}) is not in the contract registry`).toBeDefined();
+
+      if (!route) {
+        continue;
+      }
+
+      expect(
+        `${route.method} ${route.path}`,
+        `public map key for "${op}" does not match its declared route`,
+      ).toBe(key);
+    }
+  });
+
   it("has no stale pending entries (every pending op maps to a real route)", () => {
     const knownOps = new Set(Object.values(PUBLIC_ROUTE_OPS));
 
