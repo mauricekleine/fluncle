@@ -192,10 +192,6 @@ if [ -n "\${STUB_TIMEOUT_EXIT:-}" ]; then
   printf 'timeout %s %s\\n' "$secs" "$*" >>"$STUB_DIR/calls"
   exit "$STUB_TIMEOUT_EXIT"
 fi
-if [ "\${1:-}" = "bun" ]; then
-  shift
-  exec "$STUB_DIR/bun" "$@"
-fi
 exec "$@"
 `;
 

@@ -1,11 +1,11 @@
 import {
   createMcpHandler,
-  hostHeaderValidationResponse,
+  isLegacyRequest,
   McpServer,
-  originValidationResponse,
   ResourceNotFoundError,
   ResourceTemplate,
   SUPPORTED_PROTOCOL_VERSIONS,
+  WebStandardStreamableHTTPServerTransport,
 } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { onionUrl, siteUrl, twitchUrl } from "../fluncle-links";
@@ -222,18 +222,15 @@ function serverCard() {
 const SERVER_INSTRUCTIONS =
   "Fluncle's drum & bass archive over MCP. TOOLS: list recent findings, list the newest releases (what just came out), read one in full by coordinate, pull a random one, search the archive itself, look up an artist or a label, browse every artist, album, and label in the archive A to Z (each flagged when Fluncle has certified a finding there), list the tracks on one album, artist, or label, find the artists nearest another in sound, chain a mixable set from a finding, check whether all of Fluncle's systems are operational, search Spotify candidates, submit a track for review, or board the newsletter. RESOURCES: read the archive as a corpus, each finding/mixtape at fluncle://finding/<logId> or fluncle://mixtape/<logId>, its public record. PROMPTS: Fluncle-voiced starting points (recommend a finding for a mood, walk a recent night, decode a Log ID). A submission is a recommendation, not a publish; Fluncle listens before anything goes out.";
 
-const ORIGIN_HOSTNAMES = [
-  new URL(siteUrl).hostname,
-  new URL(siteUrl).hostname.replace(/^www\./, ""),
-  "localhost",
-  "127.0.0.1",
+const SITE_ORIGINS = [
+  new URL(siteUrl).origin,
+  new URL(siteUrl.replace("//www.", "//")).origin,
+  new URL(onionUrl).origin,
 ];
-const SITE_ORIGINS = [new URL(siteUrl).origin, new URL(siteUrl.replace("//www.", "//")).origin];
-const HOSTNAMES = [...ORIGIN_HOSTNAMES, new URL(onionUrl).hostname];
 const CATALOG_CACHE = { cacheScope: "public", ttlMs: 3_600_000 } as const;
 const ARCHIVE_CACHE = { cacheScope: "public", ttlMs: 30_000 } as const;
 
-const mcpHandler = createMcpHandler(({ requestInfo }) => {
+function createServer(requestInfo?: Request): McpServer {
   const server = new McpServer(
     { name: SERVER_NAME, title: "Fluncle", version: SERVER_VERSION },
     {
@@ -343,7 +340,29 @@ const mcpHandler = createMcpHandler(({ requestInfo }) => {
   }
 
   return server;
+}
+
+const mcpHandler = createMcpHandler(({ requestInfo }) => createServer(requestInfo), {
+  legacy: "reject",
+  responseMode: "json",
 });
+
+async function handleLegacyRequest(request: Request): Promise<Response> {
+  const server = createServer(request);
+  const transport = new WebStandardStreamableHTTPServerTransport({
+    enableJsonResponse: true,
+    sessionIdGenerator: undefined,
+  });
+  const headers = new Headers(request.headers);
+  headers.set("Accept", "application/json, text/event-stream");
+  try {
+    await server.connect(transport);
+    return await transport.handleRequest(new Request(request, { headers }));
+  } finally {
+    await transport.close();
+    await server.close();
+  }
+}
 
 async function executeTool(run: () => Promise<unknown>): Promise<ToolResult> {
   try {
@@ -375,24 +394,22 @@ export async function handleMcp(request: Request): Promise<Response | undefined>
     return undefined;
   }
 
-  if (!HOSTNAMES.includes(url.hostname)) {
-    return new Response(null, { status: 403 });
-  }
-
-  const hostRejected = request.headers.has("host")
-    ? hostHeaderValidationResponse(request, HOSTNAMES)
-    : undefined;
-  if (hostRejected) {
-    return hostRejected;
-  }
-  const originRejected = originValidationResponse(request, ORIGIN_HOSTNAMES);
-  if (originRejected || !allowedOrigin(request.headers.get("origin"))) {
-    return originRejected ?? new Response(null, { status: 403 });
+  if (!allowedOrigin(request.headers.get("origin"))) {
+    return new Response(null, { headers: { Vary: "Origin" }, status: 403 });
   }
   if (request.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders(request), status: 204 });
   }
-  const response = await mcpHandler.fetch(request);
+  if (request.method !== "POST") {
+    return withCors(methodNotAllowed("POST, OPTIONS"), request);
+  }
+  const response = (await isLegacyRequest(request))
+    ? await handleLegacyRequest(request)
+    : await mcpHandler.fetch(request);
+  return withCors(response, request);
+}
+
+function withCors(response: Response, request: Request): Response {
   const headers = new Headers(response.headers);
   for (const [name, value] of Object.entries(corsHeaders(request))) {
     headers.set(name, value);
@@ -450,11 +467,11 @@ function methodNotAllowed(allow: string): Response {
 function corsHeaders(request: Request): Record<string, string> {
   const origin = request.headers.get("origin");
   if (!origin) {
-    return {};
+    return { Vary: "Origin" };
   }
   return {
     "Access-Control-Allow-Headers": "Content-Type, MCP-Protocol-Version, Mcp-Method, Mcp-Name",
-    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+    "Access-Control-Allow-Methods": "POST, OPTIONS",
     "Access-Control-Allow-Origin": origin,
     "Access-Control-Expose-Headers": "MCP-Protocol-Version",
     "Access-Control-Max-Age": "86400",

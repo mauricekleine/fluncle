@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
+import { onionUrl } from "../fluncle-links";
 import { type MixtapeDTO } from "../mixtapes";
 import { type ServiceStatusRow } from "./status";
 import { type TrackListItem } from "./tracks";
@@ -145,12 +146,8 @@ function mixtapeFixture(overrides: Partial<MixtapeDTO> = {}): MixtapeDTO {
 }
 
 async function responseBody(response: Response): Promise<unknown> {
-  const text = await response.text();
-  if (!response.headers.get("content-type")?.includes("text/event-stream")) {
-    return JSON.parse(text) as unknown;
-  }
-  const data = text.split("\n").find((line) => line.startsWith("data: "));
-  return JSON.parse(data?.slice(6) ?? "{}") as unknown;
+  expect(response.headers.get("content-type")).toContain("application/json");
+  return response.json();
 }
 
 async function rpc(
@@ -456,6 +453,7 @@ describe("MCP SDK wire contract", () => {
         }),
       );
       expect(invalidOrigin?.status).toBe(403);
+      expect(invalidOrigin?.headers.get("Vary")).toBe("Origin");
 
       const wrongSitePort = await handleMcp(
         new Request("https://www.fluncle.com/mcp", {
@@ -469,24 +467,6 @@ describe("MCP SDK wire contract", () => {
       );
       expect(wrongSitePort?.status).toBe(403);
 
-      const invalidHost = await handleMcp(
-        new Request("https://www.fluncle.com/mcp", {
-          body: JSON.stringify(listBody),
-          headers: new Headers([...listRequest.headers, ["Host", "example.com"]]),
-          method: "POST",
-        }),
-      );
-      expect(invalidHost?.status).toBe(403);
-
-      const invalidUrlHost = await handleMcp(
-        new Request("https://example.com/mcp", {
-          body: JSON.stringify(listBody),
-          headers: listRequest.headers,
-          method: "POST",
-        }),
-      );
-      expect(invalidUrlHost?.status).toBe(403);
-
       const allowedOrigin = await handleMcp(
         new Request("https://www.fluncle.com/mcp", {
           body: JSON.stringify(listBody),
@@ -496,6 +476,16 @@ describe("MCP SDK wire contract", () => {
       );
       expect(allowedOrigin?.status).toBe(200);
       expect(allowedOrigin?.headers.get("Access-Control-Allow-Origin")).toBe("https://fluncle.com");
+
+      const allowedOnionOrigin = await handleMcp(
+        new Request("https://www.fluncle.com/mcp", {
+          body: JSON.stringify(listBody),
+          headers: new Headers([...listRequest.headers, ["Origin", onionUrl]]),
+          method: "POST",
+        }),
+      );
+      expect(allowedOnionOrigin?.status).toBe(200);
+      expect(allowedOnionOrigin?.headers.get("Access-Control-Allow-Origin")).toBe(onionUrl);
 
       const preflight = await handleMcp(
         new Request("https://www.fluncle.com/mcp", {
@@ -543,6 +533,70 @@ describe("MCP SDK wire contract", () => {
       expect((await client.listTools()).tools).toHaveLength(20);
     } finally {
       await client.close();
+    }
+  });
+
+  it("returns JSON for raw 2026 and 2025 requests", async () => {
+    const url = "https://www.fluncle.com/mcp";
+    const modern = await handleMcp(
+      new Request(url, {
+        body: JSON.stringify({
+          id: 1,
+          jsonrpc: "2.0",
+          method: "tools/list",
+          params: {
+            _meta: {
+              "io.modelcontextprotocol/clientCapabilities": {},
+              "io.modelcontextprotocol/clientInfo": { name: "raw-test", version: "1.0.0" },
+              "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+            },
+          },
+        }),
+        headers: {
+          Accept: "text/event-stream",
+          "Content-Type": "application/json",
+          "MCP-Protocol-Version": "2026-07-28",
+          "Mcp-Method": "tools/list",
+        },
+        method: "POST",
+      }),
+    );
+    expect(modern?.status).toBe(200);
+    expect(modern?.headers.get("content-type")).toContain("application/json");
+    expect(modern?.headers.get("Vary")).toBe("Origin");
+    expect((await modern?.json()) as Record<string, unknown>).toHaveProperty("result");
+
+    for (const [method, params] of [
+      [
+        "initialize",
+        {
+          capabilities: {},
+          clientInfo: { name: "raw-legacy-test", version: "1.0.0" },
+          protocolVersion: "2025-06-18",
+        },
+      ],
+      ["tools/list", {}],
+    ] as const) {
+      const legacy = await handleMcp(
+        new Request(url, {
+          body: JSON.stringify({ id: 1, jsonrpc: "2.0", method, params }),
+          headers: { Accept: "application/json", "Content-Type": "application/json" },
+          method: "POST",
+        }),
+      );
+      expect(legacy?.status).toBe(200);
+      expect(legacy?.headers.get("content-type")).toContain("application/json");
+      expect(legacy?.headers.get("Vary")).toBe("Origin");
+      expect((await legacy?.json()) as Record<string, unknown>).toHaveProperty("result");
+    }
+  });
+
+  it("rejects GET and DELETE with the allowed methods", async () => {
+    for (const method of ["GET", "DELETE"]) {
+      const response = await handleMcp(new Request("https://www.fluncle.com/mcp", { method }));
+      expect(response?.status).toBe(405);
+      expect(response?.headers.get("Allow")).toBe("POST, OPTIONS");
+      expect(response?.headers.get("Vary")).toBe("Origin");
     }
   });
 
