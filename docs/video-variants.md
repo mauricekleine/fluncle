@@ -74,7 +74,7 @@ Consequence to confirm in the UI slice: today `/log` plays the text portrait; un
 
 `fit=cover` is a **center crop**. A `1920×1920` square keeps both the `1080×1920` and `1920×1080` crops at native resolution (no upscale), but only the center "plus/cross" of the square is ever seen — the four corners never appear in either crop. So compositions destined for cropping must keep their centre of gravity centered.
 
-A center-crop is **not** the bespoke 16:9 reflow a dedicated landscape render produces. For abstract shader vehicles (fbm/flow/voronoi fields) the crop reads beautifully; for vehicles with a strong off-centre subject it can feel arbitrary. Play it by ear: when a crop fails the eye test, render a dedicated **`footage.landscape.mp4`** (landscape, clean, audio) for that finding and let `media.ts` prefer it over the cropped square. That file is the escape hatch, not the default.
+A center-crop is **not** the bespoke 16:9 reflow a dedicated landscape render produces. For abstract shader vehicles (fbm/flow/voronoi fields) the crop reads beautifully; for vehicles with a strong off-centre subject it can feel arbitrary. Play it by ear: when a crop fails the eye test, render a dedicated **`footage.landscape.mp4`** (landscape, clean, audio) for that finding. It uploads beside the masters (`apps/web/src/lib/server/video-bundle.ts`), but no surface reads it yet: `media.ts` still serves the cropped square, so a surface preferring it is the unbuilt half of the escape hatch. That file is the escape hatch, not the default.
 
 ## Optional stored variant cuts
 

@@ -72,7 +72,7 @@ Cloudflare deploys via Workers Builds, and migrations run as part of the **deplo
 
 ```jsonc
 // apps/web/package.json
-"deploy:cf": "bun run db:migrate:production && bun run db:migrate:telemetry:production && wrangler deploy && bun run scripts/backfill-mixable-artists-projection.ts --activate && bun scripts/purge-edge-cache.ts"
+"deploy:cf": "bun run db:migrate:production && bun run db:migrate:telemetry:production && bun run scripts/repair-hidden-graph-counts.ts && wrangler deploy && bun run scripts/backfill-mixable-artists-projection.ts --activate && bun scripts/purge-edge-cache.ts"
 ```
 
 `db:migrate:production` validates the generated journal against the loaded migration files, reads the target database's Drizzle ledger, and sends the complete pending journal suffix as one atomic libSQL migration batch. Each migration's ledger stamp is part of the same transaction, so a failed statement rolls back the schema changes and stamps together. The local `db:migrate` command and the `dev` startup path remain the ordinary full-journal Drizzle path.

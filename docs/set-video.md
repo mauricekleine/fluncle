@@ -28,7 +28,7 @@ Preps + analyzes + renders **one** chapter end-to-end (draft quality, half-res),
 
 ## The pipeline
 
-Four modules under `src/set-video/`, each with tests inside it:
+Four modules under `src/set-video/` (`chapter-prep.ts` and `render-set.ts` have sibling tests):
 
 1. **`chapter-prep.ts` — the transform.** Fetches a finding's archived `composition.tsx` + `props.json` from R2 and turns it into a chapter-ready comp. An archived comp re-drives correctly at chapter length **inside a `<Sequence>`** — Remotion scopes `useVideoConfig().durationInFrames` to the sequence and `useCurrentFrame()` to its start, so everything on `useJourney()`/`u_progress`/the audio bus reflows for free (032-class comps need nothing more). The **one** defect is absolute-second keyframes: a scene easing its arc with `interpolate(sec, [0, 13, 20], …)` (`sec = frame / fps`) clamps at the authored 20 s, so a 4-minute chapter freezes at 20 s (a permanent settle-dim + a spent one-shot climax). The transform finds every clock-driven `interpolate(…)`, **classifies** it, and rewrites it:
    - **whole-clip ramp** (starts ~0, ends ~authored length) → **rescaled**: keyframes × `scale` (`chapterMs / authoredMs`), so the ease spans the whole chapter.
@@ -56,7 +56,7 @@ Full renders use the RFC §6 encode (h264, `crf 20` under a `~22 Mbit` VBV cap, 
 
 ## The data source
 
-When stored cues have no `start_ms`, `render-set` uses committed fingerprint-alignment fixtures. The reference alignments score 0.87–0.985 cosine and preserve track order. Persisted cue offsets take precedence when available. Chapters always have a Log ID + a rendered archived video (mixtapes never carry out-of-canon songs), so no default/holding scenes appear in the hour render.
+`render-set` builds its chapter plan from the committed fingerprint-alignment fixture `src/set-video/__fixtures__/<mixtapeLogId>.anchors.json` (`loadAnchors` in `render-set.ts`); it does not read stored cue offsets, so a mixtape without a committed anchors fixture cannot render yet. The reference alignments score 0.87–0.985 cosine and preserve track order. Chapters always have a Log ID + a rendered archived video (mixtapes never carry out-of-canon songs), so no default/holding scenes appear in the hour render.
 
 ## The overlay policy
 
