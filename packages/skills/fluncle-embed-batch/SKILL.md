@@ -71,7 +71,7 @@ Run this directly (agent or operator, **sandbox OFF** so `op` reaches the app so
 
 ```bash
 set -a; source ~/l/.env.production; set +a                    # EXPORTS FLUNCLE_API_TOKEN + FLUNCLE_API_BASE_URL
-[ -n "${FLUNCLE_API_TOKEN_REF:-}" ] && export FLUNCLE_API_TOKEN="$(op read -n "$FLUNCLE_API_TOKEN_REF")"  # agent host: no env file
+[ -n "${FLUNCLE_API_TOKEN_REF:-}" ] && export FLUNCLE_API_TOKEN="$(op read -n "op://${FLUNCLE_API_TOKEN_REF#op://}")"  # agent host: no env file
 export PYTHON_BIN=<muq venv python — see the private runbook>
 export R2_ACCOUNT_ID="$(op read 'op://<vault>/<source-audio R2 item>/account_id')"
 export FLUNCLE_SOURCE_AUDIO_R2_ACCESS_KEY_ID="$(op read 'op://<vault>/<source-audio R2 item>/access_key_id')"

@@ -75,7 +75,9 @@ function resolveTokenRef(): void {
   }
 
   try {
-    process.env.FLUNCLE_API_TOKEN = execFileSync("op", ["read", "--no-newline", ref], {
+    const secretRef = ref.startsWith("op://") ? ref : `op://${ref}`;
+
+    process.env.FLUNCLE_API_TOKEN = execFileSync("op", ["read", "--no-newline", secretRef], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
     });

@@ -30,7 +30,7 @@
     "fluncle-embed-batch": {
       "source": "./packages/skills/fluncle-embed-batch",
       "sourceType": "local",
-      "computedHash": "f5390d7e283f278a9b2767e91c51e5cc31b17a92ba5818ddfce94860144e505a"
+      "computedHash": "34f9c8cf602a43359b4bf49cf743c348d0467e4dbd196c57baecb407b73084ef"
     },
     "fluncle-goal-writer": {
       "source": "./packages/skills/fluncle-goal-writer",
@@ -50,7 +50,7 @@
     "fluncle-label-triage": {
       "source": "./packages/skills/fluncle-label-triage",
       "sourceType": "local",
-      "computedHash": "c460667530953ce2f01bfdbd22dddbcb1602089853cd58e5bc0ec41a536276ab"
+      "computedHash": "b0d4d8f5d119327f36034002ac94aca6d74fd0b8bedb1ef8c402a2c0e72aa052"
     },
     "fluncle-ledger": {
       "source": "./packages/skills/fluncle-ledger",
