@@ -47,7 +47,7 @@ Every path that ends a render the conductor did not see finish does all three of
 
 1. **The box's `~/conductor-run.log` tail is pulled into the conductor log FIRST**, while the box is still up — after `boat stop` reading it again costs a paid wake.
 2. **The operator is PAGED** on Discord with the log id, the box, the elapsed time, and the liveness verdict.
-3. **The run-ledger row says `ok:false` with a named reason** — `render_died`, `render_stuck`, `render_box_wedged`, `render_probe_transport`, `render_deps_install_failed`, `render_launch_refused` — so `/status` cannot stay green over a lost window.
+3. **The run-ledger row says `ok:false` with a named reason** — `render_died`, `render_stuck`, `render_box_wedged`, `render_probe_transport`, `render_resume_hold`, `render_deps_install_failed`, `render_launch_refused` — so `/status` cannot stay green over a lost window.
 
 **The done-marker freshness guard.** The render box's home persists across stop/resume snapshots, so a done-marker from a PREVIOUS render can outlive it. `render-detached.sh` removes the marker before forking — but only if its trigger actually ran; a wedged box silently no-ops the trigger and leaves the OLD marker in place, which a bare `test -f` would misread as "finished" and chain to the same never-shipped finding forever. So the conductor trusts a marker only when its finish timestamp (`@ <iso>`) is at/after this render's start (minus a clock-skew grace). A stale/undated marker is treated as still-in-flight and the stuck-guard force-parks it, rather than a false "finished".
 
@@ -132,7 +132,7 @@ A resume can report ready while the box is still `RESTORING`, and every call ins
 
 The renamed CLI's `resume` waits for a ready state and a successful no-op command before it returns, **bounded at thirty minutes**. The conductor's host unit kills a tick at `TimeoutStartSec=180`, so an unbounded resume can consume the whole tick and die silently between resume and trigger. The conductor therefore runs the resume under `timeout` (`RESUME_TIMEOUT`, default 90s).
 
-A cap alone is not enough. A resume that ran out of budget is **not** a dead box — the API keeps converging — so the old rule "any non-zero resume means reprovision" would build a second box on top of a live one and leave the first running with nobody to stop it. The conductor asks `box_present` (a `boat list --all` that spans every state) and only abandons an id the platform no longer lists; anything else holds the id and the next tick picks it up.
+A cap alone is not enough. A resume that ran out of budget can still be converging, so the conductor asks `box_present` (a `boat list --all` that spans every state) before abandoning its id. A listed box gets one healthy hold. From the second consecutive hold, the tick reports `ok:false` with `reason: render_resume_hold` so `/status` shows the failure. At `RESUME_HOLD_LIMIT` (default 3, environment-overridable), the conductor alerts once with the box id and hold count, condemns it through the stop + TTL + orphan-ledger path, clears its id, and reprovisions on the next tick. A successful resume or a fresh box resets the persisted hold count.
 
 ### The verb trap: check the verb before you rely on it
 

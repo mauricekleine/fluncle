@@ -40,6 +40,7 @@ RENDER_LOGID_FILE="$STATE_DIR/render-logid"
 FAILS_FILE="$STATE_DIR/fail-counts"
 ORPHANS_FILE="$STATE_DIR/orphan-boxes"
 PROBE_FAILS_FILE="$STATE_DIR/probe-failures"
+RESUME_HOLDS_FILE="$STATE_DIR/resume-holds"
 LOCK_DIR="$STATE_DIR/lock.d"
 LOG_FILE="$STATE_DIR/conductor.log"
 [ -f "$FAILS_FILE" ] || : >"$FAILS_FILE"
@@ -61,6 +62,7 @@ ORPHAN_ALERT_AFTER="${ORPHAN_ALERT_AFTER:-21600}"
 
 LIVENESS_IDLE="${LIVENESS_IDLE:-600}"
 PROBE_FAIL_LIMIT="${PROBE_FAIL_LIMIT:-3}"
+RESUME_HOLD_LIMIT="${RESUME_HOLD_LIMIT:-3}"
 API_URL="${FLUNCLE_API_URL:-https://www.fluncle.com}"
 
 log() { printf '[%s] %s\n' "$(date -u +%FT%TZ)" "$*" >>"$LOG_FILE" 2>/dev/null || true; }
@@ -757,11 +759,30 @@ else
 	resume_rc=1
 fi
 if [ -n "$boxid" ] && [ "$resume_rc" != "0" ] && box_present "$boxid"; then
-	log "resume of $boxid did not complete (rc=$resume_rc) but boat.dev still lists it — holding the id for the next tick"
-	emit "render-conductor: resume of $boxid still converging — holding"
+	resume_holds="$(numeric_or "$(read_or "$RESUME_HOLDS_FILE" 0)" 0)"
+	resume_holds=$((resume_holds + 1))
+	printf '%s' "$resume_holds" >"$RESUME_HOLDS_FILE"
+	log "resume of $boxid did not complete (rc=$resume_rc) but boat.dev still lists it — hold $resume_holds of $RESUME_HOLD_LIMIT"
+	if [ "$resume_holds" -ge "$RESUME_HOLD_LIMIT" ]; then
+		discord_alert "render conductor: render box $boxid did not complete resume after $resume_holds consecutive resume holds — condemning and reprovisioning next tick ($API_URL/admin)"
+		condemn_box "$boxid" || true
+		: >"$BOXID_FILE"
+		printf 'idle' >"$STATE_FILE"
+		: >"$RESUME_HOLDS_FILE"
+		EMIT_REASON=render_resume_hold
+		emit_fail "render-conductor: resume of $boxid held $resume_holds ticks — box condemned, reprovision next tick"
+		exit 1
+	fi
+	if [ "$resume_holds" -ge 2 ]; then
+		EMIT_REASON=render_resume_hold
+		emit_fail "render-conductor: resume of $boxid still converging (hold $resume_holds of $RESUME_HOLD_LIMIT) — holding"
+		exit 1
+	fi
+	emit "render-conductor: resume of $boxid still converging (hold $resume_holds of $RESUME_HOLD_LIMIT) — holding"
 	exit 0
 fi
 if [ -n "$boxid" ] && [ "$resume_rc" = "0" ]; then
+	: >"$RESUME_HOLDS_FILE"
 	log "resumed box $boxid"
 
 	await_box_ready "$boxid" || log "no ready signal from $boxid — proceeding; the trigger check decides"
@@ -810,6 +831,7 @@ if [ -z "$boxid" ]; then
 		exit 1
 	fi
 	printf '%s' "$boxid" >"$BOXID_FILE"
+	: >"$RESUME_HOLDS_FILE"
 	log "provisioned box $boxid"
 fi
 
@@ -865,6 +887,7 @@ fi
 printf 'rendering' >"$STATE_FILE"
 now >"$STARTED_FILE"
 : >"$PROBE_FAILS_FILE"
+: >"$RESUME_HOLDS_FILE"
 printf '%s' "$head" >"$RENDER_LOGID_FILE"
 log "started detached render of $head on box $boxid"
 RUN_PRODUCED=$((RUN_PRODUCED + 1))

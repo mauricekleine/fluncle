@@ -45,6 +45,8 @@ type Tick = {
   queueResponse?: string;
   queueStderr?: string;
   readyTimeout?: number;
+  resumeHolds?: number;
+  resumeHoldLimit?: number;
   runFreshen?: boolean;
   restoringCode?: string;
   restoringCalls: number;
@@ -67,6 +69,7 @@ type TickResult = {
   noUpdateViolations: string[];
   orphans: string;
   probeFailures: string;
+  resumeHolds: string;
   sleepCalls: string[];
   state: string;
   stdout: string;
@@ -288,6 +291,9 @@ function stubEnv(tick: Tick, home: string, stub: string): Record<string, string>
     STUB_RESTORING_CODE: tick.restoringCode ?? "boat_restoring",
     STUB_RESUME_EXIT: String(tick.resumeExitCode ?? 0),
     STUB_RUN_FRESHEN: tick.runFreshen ? "1" : "0",
+    ...(tick.resumeHoldLimit === undefined
+      ? {}
+      : { RESUME_HOLD_LIMIT: String(tick.resumeHoldLimit) }),
     STUB_SESSION_MTIME: String(tick.sessionMtime ?? 0),
     STUB_TRACK_HAS_VIDEO: tick.trackHasVideo ? "1" : "0",
     STUB_TRIGGER_OUT: tick.triggerOut ?? "render-detached: launched",
@@ -337,6 +343,9 @@ function runTick(tick: Tick): TickResult {
     if (tick.probeFailures !== undefined) {
       writeFileSync(join(stateDir, "probe-failures"), String(tick.probeFailures));
     }
+    if (tick.resumeHolds !== undefined) {
+      writeFileSync(join(stateDir, "resume-holds"), String(tick.resumeHolds));
+    }
     if (initialState === "rendering") {
       writeFileSync(join(stateDir, "started-at"), String(tick.startedAt ?? 0));
       writeFileSync(join(stateDir, "render-logid"), QUEUE_HEAD);
@@ -378,6 +387,7 @@ function runTick(tick: Tick): TickResult {
       noUpdateViolations: read(join(stub, "no-update-violations")).split("\n").filter(Boolean),
       orphans: read(join(stateDir, "orphan-boxes")),
       probeFailures: read(join(stateDir, "probe-failures")),
+      resumeHolds: read(join(stateDir, "resume-holds")),
       sleepCalls: read(join(stub, "sleep-calls")).split("\n").filter(Boolean),
       state: read(join(stateDir, "state")),
       stdout: run.stdout ?? "",
@@ -647,11 +657,75 @@ describe("the bounded resume", () => {
       expect(tick.log).toContain(`resume of ${BOX_ID} did not complete (rc=124)`);
       expect(tick.stdout).toContain(`resume of ${BOX_ID} still converging`);
       expect(tick.boxIdFile).toBe(BOX_ID);
+      expect(tick.resumeHolds).toBe("1");
       expect(tick.state).toBe("idle");
       expect(tick.log).not.toContain("reprovisioning");
       expect(tick.calls.join("\n")).not.toContain("--no-update new");
     },
   );
+
+  test(
+    "a second held resume reports failure while retaining the box",
+    { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
+    () => {
+      const tick = runTick({ restoringCalls: 0, resumeExitCode: 1, resumeHolds: 1 });
+
+      expect(tick.exitCode).toBe(1);
+      expect(tick.resumeHolds).toBe("2");
+      expect(tick.boxIdFile).toBe(BOX_ID);
+      expect(tick.state).toBe("idle");
+      expect(tick.orphans.trim()).toBe("");
+      expect(tick.curlCalls).toEqual([]);
+      expect(lastJsonLine(tick.stdout)).toMatchObject({
+        errors: 1,
+        ok: false,
+        reason: "render_resume_hold",
+      });
+    },
+  );
+
+  for (const [initialHolds, limit] of [
+    [2, undefined],
+    [1, 2],
+  ] as const) {
+    test(
+      `resume hold limit ${limit ?? 3} alerts once and condemns the box`,
+      { timeout: PROCESS_FIXTURE_TIMEOUT_MS },
+      () => {
+        const tick = runTick({
+          restoringCalls: 0,
+          resumeExitCode: 1,
+          resumeHolds: initialHolds,
+          resumeHoldLimit: limit,
+        });
+
+        expect(tick.exitCode).toBe(1);
+        expect(tick.resumeHolds).toBe("");
+        expect(tick.boxIdFile).toBe("");
+        expect(tick.state).toBe("idle");
+        expect(tick.orphans).toContain(BOX_ID);
+        expect(tick.calls).toContain(`--no-update stop ${BOX_ID}`);
+        expect(tick.calls).toContain(`--no-update extend ${BOX_ID} --ttl 60`);
+        expect(tick.curlCalls).toHaveLength(1);
+        expect(tick.curlCalls[0]).toContain(`render box ${BOX_ID}`);
+        expect(tick.curlCalls[0]).toContain(`${initialHolds + 1} consecutive resume holds`);
+        expect(lastJsonLine(tick.stdout)).toMatchObject({
+          errors: 1,
+          ok: false,
+          reason: "render_resume_hold",
+        });
+      },
+    );
+  }
+
+  test("a successful resume clears previous holds", { timeout: PROCESS_FIXTURE_TIMEOUT_MS }, () => {
+    const tick = runTick({ restoringCalls: 0, resumeHolds: 2 });
+
+    expect(tick.exitCode).toBe(0);
+    expect(tick.resumeHolds).toBe("");
+    expect(tick.state).toBe("rendering");
+    expect(lastJsonLine(tick.stdout)).toMatchObject({ errors: 0, ok: true, produced: 1 });
+  });
 
   test(
     "a failed resume on a sandbox boat.dev no longer lists reprovisions",
