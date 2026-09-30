@@ -110,16 +110,17 @@ def test_a_refuted_enable_drops_the_block_rules_it_was_proposed_with():
 
 
 @pytest.mark.parametrize(
-    ("answers", "outcome"),
+    ("answers", "outcome", "warning"),
     [
-        ([], "missing"),
+        ([], "missing", "no answer for 1: x"),
         (
             [_answer("x", "not_dnb", "high", True), _answer("x", "dnb", "medium", False)],
             "conflicting",
+            "conflicting answers, left as they were, for 1: x",
         ),
     ],
 )
-def test_a_row_without_one_clear_answer_is_left_exactly_as_it_was(answers, outcome):
+def test_a_row_without_one_clear_answer_is_left_as_it_was_and_named(answers, outcome, warning):
     triage = _round([("x", "not_dnb", "medium")])
     merged, report = merge_verify.merge(triage, [_checked("x", "not_dnb")], answers)
 
@@ -127,7 +128,7 @@ def test_a_row_without_one_clear_answer_is_left_exactly_as_it_was(answers, outco
     assert (bucket, row["confidence"], row["evidence"]) == ("not_dnb", "medium", "x first evidence")
     assert row["verifyOutcome"] == outcome
     assert "verifyAgrees" not in row
-    assert report["outcomes"][outcome] == 1
+    assert any(warning in line for line in merge_verify.report_lines(report))
 
 
 def test_a_drifted_verifier_slug_still_finds_its_label():
@@ -161,6 +162,23 @@ def test_two_labels_sharing_a_fallback_key_never_swap_answers():
     stayed_in, untouched = _find(merged, "reload")
     assert (moved_to, stayed_in, untouched["verifyOutcome"]) == ("not_dnb", "dnb", "missing")
     assert report["unmatched"] == ["reload", "re-load-"]
+
+
+def test_an_unchecked_sibling_still_blocks_a_fallback_match():
+    """Only `re-load` was checked; the answer's name belongs to the unchecked `reload`."""
+    triage = _round([("re-load", "dnb", "medium"), ("reload", "dnb", "high")])
+    triage["dnb"][0]["name"] = "Re:Load"
+    triage["dnb"][1]["name"] = "Reload"
+    checked = [{**_checked("re-load", "dnb"), "name": "Re:Load"}]
+    drifted = {**_answer("re-load-", "not_dnb", "high", False), "name": "Reload"}
+
+    merged, report = merge_verify.merge(triage, checked, [drifted])
+
+    checked_in, checked_row = _find(merged, "re-load")
+    sibling_in, sibling_row = _find(merged, "reload")
+    assert (checked_in, checked_row["verifyOutcome"]) == ("dnb", "missing")
+    assert (sibling_in, "verifyOutcome" in sibling_row) == ("dnb", False)
+    assert report["unmatched"] == ["re-load-"]
 
 
 @pytest.mark.parametrize("marker", ["verifyOutcome", "verifyAgrees", "refutedFrom"])

@@ -124,22 +124,25 @@ def unique_index(pairs: list[tuple[str, str]]) -> dict[str, str]:
 
 
 def resolve_slugs(
-    answers: list[dict[str, Any]], checked: dict[str, dict[str, Any]]
+    answers: list[dict[str, Any]],
+    checked: dict[str, dict[str, Any]],
+    labels: dict[str, dict[str, Any]],
 ) -> tuple[dict[str, list[dict[str, Any]]], list[str]]:
     """Group answers by the checked slug they belong to.
 
     Verifier agents occasionally drift a slug (`3xp50und-b4t` for `3xp-50und-b4t`), so an answer
     that misses exactly falls back to its punctuation-free slug and to its label name. Two real
     labels can share those fallback keys (`re-load` and `reload`), so a key that more than one
-    label shares never resolves. An answer is left unmatched rather than guessed whenever its slug
-    and its name point at different labels, including an exact slug whose name belongs to a
-    sibling label.
+    label shares never resolves, and `labels` is every label in the round, not only the checked
+    ones: an unchecked sibling still makes a key ambiguous. An answer is left unmatched rather than
+    guessed whenever its slug and its name point at different labels (including an exact slug whose
+    name belongs to a sibling) or it resolves to a label the verify pass never checked.
     """
     exact_name = unique_index(
-        [((row.get("name") or "").strip().casefold(), slug) for slug, row in checked.items()]
+        [((row.get("name") or "").strip().casefold(), slug) for slug, row in labels.items()]
     )
-    loose_name = unique_index([(normalize(row.get("name")), slug) for slug, row in checked.items()])
-    loose_slug = unique_index([(normalize(slug), slug) for slug in checked])
+    loose_name = unique_index([(normalize(row.get("name")), slug) for slug, row in labels.items()])
+    loose_slug = unique_index([(normalize(slug), slug) for slug in labels])
     grouped: dict[str, list[dict[str, Any]]] = {}
     unmatched: list[str] = []
 
@@ -148,14 +151,14 @@ def resolve_slugs(
         by_name = exact_name.get((answer.get("name") or "").strip().casefold()) or loose_name.get(
             normalize(answer.get("name"))
         )
-        by_slug = raw_slug if raw_slug in checked else loose_slug.get(normalize(raw_slug))
+        by_slug = raw_slug if raw_slug in labels else loose_slug.get(normalize(raw_slug))
 
         if by_slug and by_name and by_slug != by_name:
             slug = None
         else:
             slug = by_slug or by_name
 
-        if slug is None:
+        if slug not in checked:
             unmatched.append(str(raw_slug))
             continue
         grouped.setdefault(slug, []).append(answer)
@@ -201,8 +204,9 @@ def merge(
                 )
 
     checked = {row["slug"]: row for row in checked_rows}
-    grouped, unmatched = resolve_slugs(answers, checked)
-    in_round = {row.get("slug") for bucket in BUCKETS for row in triage.get(bucket) or []}
+    round_rows = {row.get("slug"): row for bucket in BUCKETS for row in triage.get(bucket) or []}
+    grouped, unmatched = resolve_slugs(answers, checked, {**checked, **round_rows})
+    in_round = set(round_rows)
 
     merged: dict[str, Any] = {key: value for key, value in triage.items() if key not in BUCKETS}
     for bucket in BUCKETS:
@@ -210,6 +214,7 @@ def merge(
 
     tally: Counter[tuple[str, str]] = Counter()
     per_row: Counter[str] = Counter()
+    conflicting: list[str] = []
     flips: list[tuple[str, str, str, str]] = []
 
     for bucket in BUCKETS:
@@ -243,6 +248,8 @@ def merge(
                     flips.append((slug, bucket, destination, str(answer.get("confidence"))))
 
                 per_row[outcome] += 1
+                if outcome == CONFLICTING:
+                    conflicting.append(slug)
                 for reason in (row["verifyReason"] or "unspecified").split(","):
                     tally[(reason, outcome)] += 1
 
@@ -265,6 +272,7 @@ def merge(
 
     report = {
         "checked": len(checked),
+        "conflicting": sorted(conflicting),
         "flips": flips,
         "notInRound": sorted(set(checked) - in_round),
         "outcomes": {outcome: per_row[outcome] for outcome in OUTCOMES},
@@ -304,6 +312,11 @@ def report_lines(report: dict[str, Any]) -> list[str]:
     for slug, origin, destination, confidence in report["flips"]:
         if destination != "unclear":
             lines.append(f"  FLIP {slug}: {origin} -> {destination} ({confidence})")
+    if report["conflicting"]:
+        lines.append(
+            f"  WARNING conflicting answers, left as they were, for {len(report['conflicting'])}: "
+            + ", ".join(report["conflicting"])
+        )
     if report["unanswered"]:
         lines.append(
             f"  WARNING no answer for {len(report['unanswered'])}: "
