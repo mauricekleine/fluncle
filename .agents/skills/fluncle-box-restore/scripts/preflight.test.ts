@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 
 import {
   REQUIRED_REPO_ASSETS,
@@ -9,6 +10,7 @@ import {
   latestDatedFolder,
   redactTopology,
   resolveLabsDir,
+  resolveServerSkill,
   resolveRepoRoot,
   scanSecretTemplate,
   summariseDrillReport,
@@ -254,6 +256,26 @@ describe("summariseDrillReport", () => {
 describe("resolveLabsDir", () => {
   test("returns undefined when no candidate holds the box doc dir", () => {
     expect(resolveLabsDir("/nowhere/repo", "/nowhere/labs", {}, "/nowhere/home")).toBeUndefined();
+  });
+});
+
+describe("resolveServerSkill", () => {
+  test("returns undefined when no Nucleus checkout holds mk-hetzner-devbox", () => {
+    expect(resolveServerSkill("/nowhere/repo", {}, "/nowhere/home")).toBeUndefined();
+  });
+
+  test("finds the skill through NUCLEUS_DIR", () => {
+    const nucleus = mkdtempSync(join(tmpdir(), "nucleus-"));
+    const skill = join(nucleus, "skills", "mk-hetzner-devbox", "SKILL.md");
+    mkdirSync(dirname(skill), { recursive: true });
+    writeFileSync(skill, "---\nname: mk-hetzner-devbox\n---\n");
+    try {
+      expect(resolveServerSkill("/nowhere/repo", { NUCLEUS_DIR: nucleus }, "/nowhere/home")).toBe(
+        skill,
+      );
+    } finally {
+      rmSync(nucleus, { force: true, recursive: true });
+    }
   });
 });
 
