@@ -260,21 +260,45 @@ describe("resolveLabsDir", () => {
 });
 
 describe("resolveServerSkill", () => {
-  test("returns undefined when no Nucleus checkout holds mk-hetzner-devbox", () => {
+  test("returns undefined when no dotfiles checkout holds mk-hetzner-devbox", () => {
     expect(resolveServerSkill("/nowhere/repo", {}, "/nowhere/home")).toBeUndefined();
   });
 
-  test("finds the skill through NUCLEUS_DIR", () => {
-    const nucleus = mkdtempSync(join(tmpdir(), "nucleus-"));
-    const skill = join(nucleus, "skills", "mk-hetzner-devbox", "SKILL.md");
-    mkdirSync(dirname(skill), { recursive: true });
-    writeFileSync(skill, "---\nname: mk-hetzner-devbox\n---\n");
+  test("prefers DOTFILES_DIR, then the agent layer, sibling, and home checkouts", () => {
+    const root = mkdtempSync(join(tmpdir(), "server-skill-"));
+    const home = join(root, "home");
+    const repo = join(root, "repos", "fluncle");
+    const dotfiles = join(root, "override");
+    const candidates = [
+      dotfiles,
+      join(home, ".local", "share", "agent-layer", "dotfiles"),
+      join(root, "repos", "dotfiles"),
+      join(home, "Projects", "dotfiles"),
+      join(home, "projects", "dotfiles"),
+    ];
+    const skills = candidates.map((dir) => join(dir, "skills", "mk-hetzner-devbox", "SKILL.md"));
     try {
-      expect(resolveServerSkill("/nowhere/repo", { NUCLEUS_DIR: nucleus }, "/nowhere/home")).toBe(
-        skill,
-      );
+      for (const skill of skills) {
+        mkdirSync(dirname(skill), { recursive: true });
+        writeFileSync(skill, "---\nname: mk-hetzner-devbox\n---\n");
+      }
+      const remaining = new Set(skills);
+      while (remaining.size > 0) {
+        const expected = skills.find((skill) => remaining.has(skill));
+        expect(resolveServerSkill(repo, { DOTFILES_DIR: dotfiles }, home)).toBe(expected);
+        if (expected === undefined) {
+          throw new Error("expected a remaining skill");
+        }
+        rmSync(expected);
+        for (const skill of remaining) {
+          if (!existsSync(skill)) {
+            remaining.delete(skill);
+          }
+        }
+      }
+      expect(resolveServerSkill(repo, { DOTFILES_DIR: dotfiles }, home)).toBeUndefined();
     } finally {
-      rmSync(nucleus, { force: true, recursive: true });
+      rmSync(root, { force: true, recursive: true });
     }
   });
 });

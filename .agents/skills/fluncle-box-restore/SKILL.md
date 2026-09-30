@@ -1,7 +1,7 @@
 ---
 name: fluncle-box-restore
 description: >-
-  Rebuild or restore Fluncle's rave-02 agent box (the Hermes/devbox host running every automation sweep) after it is lost, and prove ahead of time that it could be. USE THIS whenever the box is gone, dead, deleted, wiped, unreachable, or being replaced: "rave-02 is gone", "the box died", "rebuild the box", "restore the agent box", "the devbox is dead", "provision a replacement box", "restore the box-state backup", "the crons all stopped and the box is unreachable", "disaster recovery". USE IT EQUALLY for the preventive "could we actually restore the box if we had to?" / "drill the restore", which its read-only preflight answers in one safe command. It is the ordered runbook — provision → harden → op → bootstrap token → secret templates → host timers → image → restore box state → verify — plus the load-bearing ordering constraints. NOT for changing a live box (pins, secrets, crons): that is fluncle-hermes-operator. NOT generic Hetzner VPS profiles: that is Nucleus's mk-hetzner-devbox skill, which step 1 follows from a local Nucleus checkout (this repo doesn't install it; the preflight checks it's there).
+  Rebuild or restore Fluncle's rave-02 agent box after it is lost, and prove ahead of time that it could be. USE THIS whenever the box is gone, dead, deleted, wiped, unreachable, or being replaced: "rave-02 is gone", "the box died", "rebuild the box", "restore the agent box", "the devbox is dead", "provision a replacement box", "restore the box-state backup", "the crons all stopped and the box is unreachable", "disaster recovery". USE IT EQUALLY for the preventive "could we actually restore the box if we had to?" / "drill the restore", which its read-only preflight answers in one safe command. It is the ordered runbook — provision → harden → op → bootstrap token → secret templates → host timers → image → restore box state → verify — plus the load-bearing ordering constraints. NOT for changing a live box (pins, secrets, crons): that is fluncle-hermes-operator. NOT generic Hetzner VPS profiles: that is mk-hetzner-devbox, which step 1 follows from a local dotfiles checkout. The preflight checks its availability.
 ---
 
 # Fluncle box restore — putting rave-02 back
@@ -10,7 +10,7 @@ rave-02 is the box every Fluncle automation runs on: the Hermes container (a lon
 
 The rebuild is assembled from the linked assets across the public repository and private companion; follow them in the order below. **Do not reconstruct any of it from source.** Each step below names the asset that does the work; follow the link, run the thing, come back.
 
-**Neighbours, so the right skill wins:** [`fluncle-hermes-operator`](../fluncle-hermes-operator) changes a box that is still alive (pins, secrets, crons). The [canonical `mk-hetzner-devbox` skill in Nucleus](https://github.com/mauricekleine/nucleus/blob/main/skills/mk-hetzner-devbox/SKILL.md) is the generic VPS provisioning kit; [`fluncle-hetzner-ops`](../fluncle-hetzner-ops) holds the Hermes host profile. This skill is the box being **gone**, and it drives both of those in order.
+**Neighbours, so the right skill wins:** [`fluncle-hermes-operator`](../fluncle-hermes-operator) changes a box that is still alive (pins, secrets, crons). The [canonical `mk-hetzner-devbox` skill](https://github.com/mauricekleine/dotfiles/blob/main/skills/mk-hetzner-devbox/SKILL.md) is the generic VPS provisioning kit; [`fluncle-hetzner-ops`](../fluncle-hetzner-ops) holds the Hermes host profile. This skill is the box being **gone**, and it drives both of those in order.
 
 ## Read this first — the two halves
 
@@ -30,9 +30,11 @@ bun packages/skills/fluncle-box-restore/scripts/preflight.ts --json          # m
 bun packages/skills/fluncle-box-restore/scripts/preflight.ts --drill         # + the full restore drill
 ```
 
-It answers seven questions: are the runbook's assets still in the repo; does the schedule still lay down (including the secrets timer); is the box-state encryption key present and 32 bytes; is there a recent box-state artifact whose manifest parses and whose sealed object matches the recorded size; is there a recent database dump; are both secret templates present holding only `op://` pointers; and does every one of those references still resolve.
+It answers eight questions: are the runbook's assets still in the repo; is `mk-hetzner-devbox` available locally; does the schedule still lay down (including the secrets timer); is the box-state encryption key present and 32 bytes; is there a recent box-state artifact whose manifest parses and whose sealed object matches the recorded size; is there a recent database dump; are both secret templates present holding only `op://` pointers; and does every one of those references still resolve.
 
 **Its `unknown` is not a pass.** A check it cannot run — no bucket credentials, no `op`, no labs checkout — reports "could not verify" and the run exits **2**, distinct from a clean **0** and a failing **1**. Each non-passing check prints what to do about it. Env it reads (never prints): `FLUNCLE_BOXSTATE_KEY`, `R2_ACCOUNT_ID`, `FLUNCLE_BACKUP_R2_ACCESS_KEY_ID`, `FLUNCLE_BACKUP_R2_SECRET_ACCESS_KEY`, plus `FLUNCLE_LABS_DIR` or `--labs <dir>` for the companion checkout.
+
+For `mk-hetzner-devbox`, the preflight searches `DOTFILES_DIR`, then `~/.local/share/agent-layer/dotfiles`, a sibling `dotfiles` checkout, `~/Projects/dotfiles`, and `~/projects/dotfiles`. The skill is loaded by path and is deliberately not installed.
 
 Child diagnostics may contain concrete vault paths or URLs. The preflight redacts those before reporting errors; preserve that boundary when adding checks or surfacing stderr.
 
@@ -51,7 +53,7 @@ Do not rebuild a box that is merely unreachable — a re-provision throws away a
 
 The order is load-bearing. Each step names the asset that does the work.
 
-**1. Create the server.** Follow the canonical [`mk-hetzner-devbox` skill in Nucleus](https://github.com/mauricekleine/nucleus/blob/main/skills/mk-hetzner-devbox/SKILL.md): run its `scripts/check-prereqs.sh`, then `scripts/create-server.sh`. Size, image, and firewall name are box facts — read them from the labs doc, do not re-derive them.
+**1. Create the server.** Follow the canonical [`mk-hetzner-devbox` skill](https://github.com/mauricekleine/dotfiles/blob/main/skills/mk-hetzner-devbox/SKILL.md): run its `scripts/check-prereqs.sh`, then `scripts/create-server.sh`. Size, image, and firewall name are box facts — read them from the labs doc, do not re-derive them.
 
 **2. Harden the host.** [`bootstrap-hardening.sh`](../fluncle-hetzner-ops/scripts/bootstrap-hardening.sh), which streams [`bootstrap-private-vps.sh`](../fluncle-hetzner-ops/scripts/bootstrap-private-vps.sh): admin user, sshd off :22, UFW, Tailscale, **and `op`**. Then [`apply-firewall.sh`](../fluncle-hetzner-ops/scripts/apply-firewall.sh) for the provider layer.
 
@@ -105,6 +107,6 @@ Not "it should be fine". Concretely, in this order:
 3. **One sweep, by hand, before trusting the schedule.** `sudo systemctl start fluncle-<job>.service`, then `journalctl -u fluncle-<job>.service` — expect the sweep's JSON summary line with `ok: true`, and a fresh marker under the cron-output dir.
 4. **`/status` green for the right reason.** Cross-check each green row against a fresh marker or backup object.
 5. **The role boundary intact.** An agent-token read returns `{ok:true}` and a publish-class command comes back **403**. That is [`hermes-agent.md` § Verify](../../../docs/agents/hermes-agent.md); the pre-smoke in `pin-watch` runs the same pair, so a rebuilt box that passes it is a box whose credential is correctly scoped.
-6. **The backup loop closed.** Run `preflight.ts` again against the rebuilt box. All seven checks passing is the definition of done, because it means the next rebuild is possible too.
+6. **The backup loop closed.** Run `preflight.ts` again against the rebuilt box. All eight checks passing is the definition of done, because it means the next rebuild is possible too.
 
 Two timers ship operator-gated on a genuinely new box (the embed sweep wants a peak-RAM validation, the capture sweep wants its bucket) — `install-host-timers.sh` assumes a previously-validated box and starts everything. On a first-ever provision, read those two timer READMEs before trusting them.
