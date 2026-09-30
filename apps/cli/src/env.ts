@@ -1,4 +1,5 @@
 import { config } from "dotenv";
+import { execFileSync } from "node:child_process";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -30,6 +31,10 @@ export function loadEnv(keys: readonly EnvKey[]): Record<EnvKey, string> {
   const result = {} as Record<EnvKey, string>;
   const missing: EnvKey[] = [];
 
+  if (keys.includes("FLUNCLE_API_TOKEN")) {
+    resolveTokenRef();
+  }
+
   for (const key of keys) {
     const value = process.env[key];
 
@@ -60,6 +65,25 @@ export function getApiBaseUrl(): string {
   loadConfig();
 
   return (process.env.FLUNCLE_API_BASE_URL ?? "https://www.fluncle.com").replace(/\/+$/, "");
+}
+
+function resolveTokenRef(): void {
+  const ref = process.env.FLUNCLE_API_TOKEN_REF;
+
+  if (process.env.FLUNCLE_API_TOKEN !== undefined || !ref || process.env.NODE_ENV === "test") {
+    return;
+  }
+
+  try {
+    const secretRef = ref.startsWith("op://") ? ref : `op://${ref}`;
+
+    process.env.FLUNCLE_API_TOKEN = execFileSync("op", ["read", "--no-newline", secretRef], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  } catch {
+    throw new Error(`Could not read FLUNCLE_API_TOKEN_REF (${ref}) with op.`);
+  }
 }
 
 function loadConfig(): void {

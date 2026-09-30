@@ -3,8 +3,9 @@
 set -euo pipefail
 
 : "${FLUNCLE_TURSO_OP_ITEM:?set FLUNCLE_TURSO_OP_ITEM (see the private ops runbook)}"
-URL="$(op read "${FLUNCLE_TURSO_OP_ITEM}/TURSO_DATABASE_URL")"
-TOK="$(op read "${FLUNCLE_TURSO_OP_ITEM}/TURSO_AUTH_TOKEN")"
+ITEM="op://${FLUNCLE_TURSO_OP_ITEM#op://}"
+URL="$(op read "${ITEM}/TURSO_DATABASE_URL")"
+TOK="$(op read "${ITEM}/TURSO_AUTH_TOKEN")"
 HTTP="https://${URL#libsql://}"
 
 query() {

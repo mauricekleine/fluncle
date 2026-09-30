@@ -41,12 +41,12 @@ curl -sS "$FLUNCLE_API_BASE_URL/api/v1/admin/tracks/work?kind=embed&count=true&l
 
 Both targets need the same four. **The concrete `op://` item paths and the M5 muq-venv path are operator/topology detail — they live in the private companion runbook, NOT in this public repo.** Read them from `~/Projects/fluncle-labs/docs/ops-runbook.md` (the embed section). Placeholders here:
 
-| env var                                     | what it is                                                                   | source                                                                                                                      |
-| ------------------------------------------- | ---------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `FLUNCLE_API_TOKEN`                         | writes the vectors back (agent-tier is enough; an operator token also works) | `op://<vault>/<token item>/credential` — on an operator machine the `~/l/.env.production` file already has one (see README) |
-| `R2_ACCOUNT_ID`                             | the source-audio R2 account                                                  | `op://<vault>/<source-audio R2 item>/account_id`                                                                            |
-| `FLUNCLE_SOURCE_AUDIO_R2_ACCESS_KEY_ID`     | private-bucket read key                                                      | `op://<vault>/<source-audio R2 item>/access_key_id`                                                                         |
-| `FLUNCLE_SOURCE_AUDIO_R2_SECRET_ACCESS_KEY` | private-bucket read secret                                                   | `op://<vault>/<source-audio R2 item>/secret_access_key`                                                                     |
+| env var                                     | what it is                                                                   | source                                                                                                                                                                          |
+| ------------------------------------------- | ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `FLUNCLE_API_TOKEN`                         | writes the vectors back (agent-tier is enough; an operator token also works) | `op://<vault>/<token item>/credential` — on an operator machine the `~/l/.env.production` file already has one (see README); on an agent host, `FLUNCLE_API_TOKEN_REF` names it |
+| `R2_ACCOUNT_ID`                             | the source-audio R2 account                                                  | `op://<vault>/<source-audio R2 item>/account_id`                                                                                                                                |
+| `FLUNCLE_SOURCE_AUDIO_R2_ACCESS_KEY_ID`     | private-bucket read key                                                      | `op://<vault>/<source-audio R2 item>/access_key_id`                                                                                                                             |
+| `FLUNCLE_SOURCE_AUDIO_R2_SECRET_ACCESS_KEY` | private-bucket read secret                                                   | `op://<vault>/<source-audio R2 item>/secret_access_key`                                                                                                                         |
 
 Plus `PYTHON_BIN` → the muq venv's `python3` (its exact path is in the private runbook; on a RunPod pod the bootstrap script installs muq for you).
 
@@ -71,6 +71,7 @@ Run this directly (agent or operator, **sandbox OFF** so `op` reaches the app so
 
 ```bash
 set -a; source ~/l/.env.production; set +a                    # EXPORTS FLUNCLE_API_TOKEN + FLUNCLE_API_BASE_URL
+[ -n "${FLUNCLE_API_TOKEN_REF:-}" ] && export FLUNCLE_API_TOKEN="$(op read -n "op://${FLUNCLE_API_TOKEN_REF#op://}")"  # agent host: no env file
 export PYTHON_BIN=<muq venv python — see the private runbook>
 export R2_ACCOUNT_ID="$(op read 'op://<vault>/<source-audio R2 item>/account_id')"
 export FLUNCLE_SOURCE_AUDIO_R2_ACCESS_KEY_ID="$(op read 'op://<vault>/<source-audio R2 item>/access_key_id')"
