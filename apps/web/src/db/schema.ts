@@ -2781,6 +2781,9 @@ export const crawlFrontier = sqliteTable(
       .where(
         sql`${table.kind} = 'release' and ${table.note} = 'disabled own label at terminal hop'`,
       ),
+    index("crawl_frontier_global_block_skip_idx")
+      .on(table.state, table.id)
+      .where(sql`${table.note} in ('global artist block', 'global parent artist block')`),
   ],
 );
 

@@ -1,0 +1,1 @@
+CREATE INDEX `crawl_frontier_global_block_skip_idx` ON `crawl_frontier` (`state`,`id`) WHERE "crawl_frontier"."note" in ('global artist block', 'global parent artist block');
