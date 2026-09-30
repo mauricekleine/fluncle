@@ -566,6 +566,37 @@ describe("MCP SDK wire contract", () => {
     expect(modern?.headers.get("Vary")).toBe("Origin");
     expect((await modern?.json()) as Record<string, unknown>).toHaveProperty("result");
 
+    const listen = await handleMcp(
+      new Request(url, {
+        body: JSON.stringify({
+          id: 2,
+          jsonrpc: "2.0",
+          method: "subscriptions/listen",
+          params: {
+            _meta: {
+              "io.modelcontextprotocol/clientCapabilities": {},
+              "io.modelcontextprotocol/clientInfo": { name: "raw-test", version: "1.0.0" },
+              "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+            },
+            notifications: { toolsListChanged: true },
+          },
+        }),
+        headers: {
+          Accept: "text/event-stream",
+          "Content-Type": "application/json",
+          "MCP-Protocol-Version": "2026-07-28",
+          "Mcp-Method": "subscriptions/listen",
+        },
+        method: "POST",
+      }),
+    );
+    expect(listen?.headers.get("content-type")).toContain("application/json");
+    if (!listen) {
+      throw new Error("MCP route was not handled");
+    }
+    const listenBody = (await listen.json()) as { error?: { code: number } };
+    expect(listenBody.error?.code).toBe(-32603);
+
     for (const [method, params] of [
       [
         "initialize",

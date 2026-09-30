@@ -344,6 +344,7 @@ function createServer(requestInfo?: Request): McpServer {
 
 const mcpHandler = createMcpHandler(({ requestInfo }) => createServer(requestInfo), {
   legacy: "reject",
+  maxSubscriptions: 0,
   responseMode: "json",
 });
 
