@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
+import { onionUrl } from "../fluncle-links";
 import { type MixtapeDTO } from "../mixtapes";
 import { type ServiceStatusRow } from "./status";
 import { type TrackListItem } from "./tracks";
@@ -143,6 +145,11 @@ function mixtapeFixture(overrides: Partial<MixtapeDTO> = {}): MixtapeDTO {
   } as MixtapeDTO;
 }
 
+async function responseBody(response: Response): Promise<unknown> {
+  expect(response.headers.get("content-type")).toContain("application/json");
+  return response.json();
+}
+
 async function rpc(
   method: string,
   params?: Record<string, unknown>,
@@ -150,7 +157,10 @@ async function rpc(
   const response = await handleMcp(
     new Request("https://www.fluncle.com/mcp", {
       body: JSON.stringify({ id: 1, jsonrpc: "2.0", method, ...(params ? { params } : {}) }),
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        Accept: "application/json, text/event-stream",
+        "Content-Type": "application/json",
+      },
       method: "POST",
     }),
   );
@@ -159,7 +169,7 @@ async function rpc(
     throw new Error("handleMcp returned no response");
   }
 
-  return (await response.json()) as Record<string, unknown>;
+  return (await responseBody(response)) as Record<string, unknown>;
 }
 
 function row(overrides: Partial<ServiceStatusRow> & Pick<ServiceStatusRow, "service" | "status">) {
@@ -184,7 +194,10 @@ async function callTool(
         method: "tools/call",
         params: { arguments: args, name },
       }),
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        Accept: "application/json, text/event-stream",
+        "Content-Type": "application/json",
+      },
       method: "POST",
     }),
   );
@@ -193,7 +206,7 @@ async function callTool(
     throw new Error("handleMcp returned no response");
   }
 
-  const body = (await response.json()) as {
+  const body = (await responseBody(response)) as {
     result: { content: Array<{ text: string }>; isError: boolean };
   };
   const text = body.result.content[0]?.text ?? "{}";
@@ -210,7 +223,10 @@ describe("MCP get_status tool", () => {
     const response = await handleMcp(
       new Request("https://www.fluncle.com/mcp", {
         body: JSON.stringify({ id: 1, jsonrpc: "2.0", method: "tools/list" }),
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          Accept: "application/json, text/event-stream",
+          "Content-Type": "application/json",
+        },
         method: "POST",
       }),
     );
@@ -219,7 +235,7 @@ describe("MCP get_status tool", () => {
       throw new Error("handleMcp returned no response");
     }
 
-    const body = (await response.json()) as {
+    const body = (await responseBody(response)) as {
       result: { tools: Array<{ description: string; name: string; title: string }> };
     };
     const tool = body.result.tools.find((candidate) => candidate.name === "get_status");
@@ -320,7 +336,11 @@ describe("MCP get_status tool", () => {
 
 describe("MCP initialize", () => {
   it("advertises tools, resources, and prompts capabilities", async () => {
-    const body = (await rpc("initialize", { protocolVersion: "2025-06-18" })) as {
+    const body = (await rpc("initialize", {
+      capabilities: {},
+      clientInfo: { name: "test-client", version: "1.0.0" },
+      protocolVersion: "2025-06-18",
+    })) as {
       result: { capabilities: Record<string, unknown> };
     };
 
@@ -329,6 +349,298 @@ describe("MCP initialize", () => {
       resources: { listChanged: false },
       tools: { listChanged: false },
     });
+  });
+});
+
+describe("MCP SDK wire contract", () => {
+  it("serves 2026 discovery, ordered catalogs, cache hints, and a tool call without initialize", async () => {
+    statuses.mockResolvedValue([]);
+    recentTracksMock.mockResolvedValue({ tracks: [findingFixture()] });
+    resolveTargetMock.mockResolvedValue({ kind: "track", track: findingFixture() });
+    const requests: Array<{ body: Promise<Record<string, unknown>>; headers: Headers }> = [];
+    const client = new Client(
+      { name: "wire-test", version: "1.0.0" },
+      { versionNegotiation: { mode: "auto" } },
+    );
+    const transport = new StreamableHTTPClientTransport(new URL("https://www.fluncle.com/mcp"), {
+      fetch: async (input, init) => {
+        const request = new Request(input, init);
+        requests.push({
+          body: request.clone().json() as Promise<Record<string, unknown>>,
+          headers: new Headers(request.headers),
+        });
+        const response = await handleMcp(request);
+        if (!response) {
+          throw new Error("MCP route was not handled");
+        }
+        return response;
+      },
+    });
+
+    try {
+      await client.connect(transport);
+      expect(client.getDiscoverResult()?.supportedVersions).toContain("2026-07-28");
+      const catalog = await client.listTools();
+      expect(catalog.tools.map((tool) => tool.name)).toEqual([
+        "list_findings",
+        "list_tracks",
+        "list_fresh",
+        "get_track",
+        "get_random_track",
+        "get_status",
+        "search_archive",
+        "get_artist",
+        "get_label",
+        "build_set",
+        "list_similar_artists",
+        "list_album_catalogue",
+        "list_artist_catalogue",
+        "list_label_catalogue",
+        "list_artists",
+        "list_albums",
+        "list_labels",
+        "submit_track",
+        "subscribe_newsletter",
+        "search_tracks",
+      ]);
+      expect(catalog).toMatchObject({ cacheScope: "public", ttlMs: 3_600_000 });
+      expect(await client.listPrompts()).toMatchObject({ cacheScope: "public", ttlMs: 3_600_000 });
+      expect(await client.listResources()).toMatchObject({
+        cacheScope: "public",
+        resources: [{ uri: "fluncle://finding/012.8.0A" }],
+        ttlMs: 30_000,
+      });
+      expect(await client.readResource({ uri: "fluncle://finding/012.8.0A" })).toMatchObject({
+        cacheScope: "public",
+        ttlMs: 30_000,
+      });
+      expect(
+        await client.getPrompt({ arguments: { mood: "night" }, name: "recommend_finding" }),
+      ).toMatchObject({ messages: [{ role: "user" }] });
+      const result = await client.callTool({ arguments: {}, name: "get_status" });
+      expect(result.content[0]).toMatchObject({ type: "text" });
+      const track = await client.callTool({
+        arguments: { idOrLogId: "012.8.0A" },
+        name: "get_track",
+      });
+      expect(track.content[0]).toMatchObject({ type: "text" });
+
+      const bodies = await Promise.all(requests.map((request) => request.body));
+      expect(bodies.some((body) => body.method === "server/discover")).toBe(true);
+      expect(bodies.some((body) => body.method === "initialize")).toBe(false);
+      const listRequest = requests[bodies.findIndex((body) => body.method === "tools/list")];
+      if (!listRequest) {
+        throw new Error("Missing tools/list request");
+      }
+      const listBody = bodies.find((body) => body.method === "tools/list");
+
+      const mismatchHeaders = new Headers(listRequest.headers);
+      mismatchHeaders.set("Mcp-Method", "prompts/list");
+      const mismatch = await handleMcp(
+        new Request("https://www.fluncle.com/mcp", {
+          body: JSON.stringify(listBody),
+          headers: mismatchHeaders,
+          method: "POST",
+        }),
+      );
+      expect(mismatch?.status).toBe(400);
+
+      const invalidOrigin = await handleMcp(
+        new Request("https://www.fluncle.com/mcp", {
+          body: JSON.stringify(listBody),
+          headers: new Headers([...listRequest.headers, ["Origin", "https://example.com"]]),
+          method: "POST",
+        }),
+      );
+      expect(invalidOrigin?.status).toBe(403);
+      expect(invalidOrigin?.headers.get("Vary")).toBe("Origin");
+
+      const wrongSitePort = await handleMcp(
+        new Request("https://www.fluncle.com/mcp", {
+          body: JSON.stringify(listBody),
+          headers: new Headers([
+            ...listRequest.headers,
+            ["Origin", "https://www.fluncle.com:8443"],
+          ]),
+          method: "POST",
+        }),
+      );
+      expect(wrongSitePort?.status).toBe(403);
+
+      const allowedOrigin = await handleMcp(
+        new Request("https://www.fluncle.com/mcp", {
+          body: JSON.stringify(listBody),
+          headers: new Headers([...listRequest.headers, ["Origin", "https://fluncle.com"]]),
+          method: "POST",
+        }),
+      );
+      expect(allowedOrigin?.status).toBe(200);
+      expect(allowedOrigin?.headers.get("Access-Control-Allow-Origin")).toBe("https://fluncle.com");
+
+      const allowedOnionOrigin = await handleMcp(
+        new Request("https://www.fluncle.com/mcp", {
+          body: JSON.stringify(listBody),
+          headers: new Headers([...listRequest.headers, ["Origin", onionUrl]]),
+          method: "POST",
+        }),
+      );
+      expect(allowedOnionOrigin?.status).toBe(200);
+      expect(allowedOnionOrigin?.headers.get("Access-Control-Allow-Origin")).toBe(onionUrl);
+
+      const preflight = await handleMcp(
+        new Request("https://www.fluncle.com/mcp", {
+          headers: { Origin: "http://localhost:3000" },
+          method: "OPTIONS",
+        }),
+      );
+      expect(preflight?.status).toBe(204);
+      expect(preflight?.headers.get("Access-Control-Allow-Headers")).toContain("Mcp-Method");
+      expect(preflight?.headers.get("Access-Control-Allow-Headers")).not.toContain(
+        "Mcp-Session-Id",
+      );
+      expect(preflight?.headers.get("Access-Control-Allow-Origin")).toBe("http://localhost:3000");
+
+      const unknownHeaders = new Headers(listRequest.headers);
+      unknownHeaders.set("Mcp-Method", "fluncle/unknown");
+      const unknown = await handleMcp(
+        new Request("https://www.fluncle.com/mcp", {
+          body: JSON.stringify({ ...listBody, method: "fluncle/unknown" }),
+          headers: unknownHeaders,
+          method: "POST",
+        }),
+      );
+      expect(unknown?.status).toBe(404);
+      expect(((await unknown?.json()) as { error?: { code: number } })?.error?.code).toBe(-32601);
+    } finally {
+      await client.close();
+    }
+  });
+
+  it("keeps a 2025 client on the same URL", async () => {
+    const client = new Client({ name: "legacy-test", version: "1.0.0" });
+    const transport = new StreamableHTTPClientTransport(new URL("https://www.fluncle.com/mcp"), {
+      fetch: async (input, init) => {
+        const response = await handleMcp(new Request(input, init));
+        if (!response) {
+          throw new Error("MCP route was not handled");
+        }
+        return response;
+      },
+    });
+    try {
+      await client.connect(transport);
+      expect(client.getServerCapabilities()).toMatchObject({ tools: { listChanged: false } });
+      expect((await client.listTools()).tools).toHaveLength(20);
+    } finally {
+      await client.close();
+    }
+  });
+
+  it("returns JSON for raw 2026 and 2025 requests", async () => {
+    const url = "https://www.fluncle.com/mcp";
+    const modern = await handleMcp(
+      new Request(url, {
+        body: JSON.stringify({
+          id: 1,
+          jsonrpc: "2.0",
+          method: "tools/list",
+          params: {
+            _meta: {
+              "io.modelcontextprotocol/clientCapabilities": {},
+              "io.modelcontextprotocol/clientInfo": { name: "raw-test", version: "1.0.0" },
+              "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+            },
+          },
+        }),
+        headers: {
+          Accept: "text/event-stream",
+          "Content-Type": "application/json",
+          "MCP-Protocol-Version": "2026-07-28",
+          "Mcp-Method": "tools/list",
+        },
+        method: "POST",
+      }),
+    );
+    expect(modern?.status).toBe(200);
+    expect(modern?.headers.get("content-type")).toContain("application/json");
+    expect(modern?.headers.get("Vary")).toBe("Origin");
+    expect((await modern?.json()) as Record<string, unknown>).toHaveProperty("result");
+
+    const listen = await handleMcp(
+      new Request(url, {
+        body: JSON.stringify({
+          id: 2,
+          jsonrpc: "2.0",
+          method: "subscriptions/listen",
+          params: {
+            _meta: {
+              "io.modelcontextprotocol/clientCapabilities": {},
+              "io.modelcontextprotocol/clientInfo": { name: "raw-test", version: "1.0.0" },
+              "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+            },
+            notifications: { toolsListChanged: true },
+          },
+        }),
+        headers: {
+          Accept: "text/event-stream",
+          "Content-Type": "application/json",
+          "MCP-Protocol-Version": "2026-07-28",
+          "Mcp-Method": "subscriptions/listen",
+        },
+        method: "POST",
+      }),
+    );
+    expect(listen?.headers.get("content-type")).toContain("application/json");
+    if (!listen) {
+      throw new Error("MCP route was not handled");
+    }
+    const listenBody = (await listen.json()) as { error?: { code: number } };
+    expect(listenBody.error?.code).toBe(-32603);
+
+    for (const [method, params] of [
+      [
+        "initialize",
+        {
+          capabilities: {},
+          clientInfo: { name: "raw-legacy-test", version: "1.0.0" },
+          protocolVersion: "2025-06-18",
+        },
+      ],
+      ["tools/list", {}],
+    ] as const) {
+      const legacy = await handleMcp(
+        new Request(url, {
+          body: JSON.stringify({ id: 1, jsonrpc: "2.0", method, params }),
+          headers: { Accept: "application/json", "Content-Type": "application/json" },
+          method: "POST",
+        }),
+      );
+      expect(legacy?.status).toBe(200);
+      expect(legacy?.headers.get("content-type")).toContain("application/json");
+      expect(legacy?.headers.get("Vary")).toBe("Origin");
+      expect((await legacy?.json()) as Record<string, unknown>).toHaveProperty("result");
+    }
+  });
+
+  it("rejects GET and DELETE with the allowed methods", async () => {
+    for (const method of ["GET", "DELETE"]) {
+      const response = await handleMcp(new Request("https://www.fluncle.com/mcp", { method }));
+      expect(response?.status).toBe(405);
+      expect(response?.headers.get("Allow")).toBe("POST, OPTIONS");
+      expect(response?.headers.get("Vary")).toBe("Origin");
+    }
+  });
+
+  it("advertises the served revisions on the server card", async () => {
+    const response = await handleMcp(
+      new Request("https://www.fluncle.com/.well-known/mcp/server-card.json"),
+    );
+    const card = (await response?.json()) as {
+      remotes: Array<{ supportedProtocolVersions: string[] }>;
+    };
+    expect(card.remotes[0]?.supportedProtocolVersions).toEqual(
+      expect.arrayContaining(["2026-07-28", "2025-11-25", "2025-06-18", "2025-03-26"]),
+    );
   });
 });
 
@@ -603,7 +915,7 @@ describe("MCP resources", () => {
       error?: { code: number };
     };
 
-    expect(body.error?.code).toBe(-32002);
+    expect(body.error?.code).toBe(-32602);
   });
 });
 

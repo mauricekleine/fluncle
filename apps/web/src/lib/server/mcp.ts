@@ -1,4 +1,14 @@
-import { siteUrl, twitchUrl } from "../fluncle-links";
+import {
+  createMcpHandler,
+  isLegacyRequest,
+  McpServer,
+  ResourceNotFoundError,
+  ResourceTemplate,
+  SUPPORTED_PROTOCOL_VERSIONS,
+  WebStandardStreamableHTTPServerTransport,
+} from "@modelcontextprotocol/server";
+import { z } from "zod";
+import { onionUrl, siteUrl, twitchUrl } from "../fluncle-links";
 import { fluncleDescription } from "../identity";
 import { type FeedItem, mixtapeDisplayTitle } from "../mixtapes";
 import { getLiveState, type LiveState } from "./live";
@@ -6,9 +16,6 @@ import { ApiError } from "./spotify";
 import { readCoordinate, resourceUri, SHARED_TOOLS, toMcpTool } from "./tools/registry";
 import { searchTracks } from "./track-search";
 import { listTracks } from "./tracks";
-
-const PROTOCOL_VERSION = "2025-06-18";
-const SUPPORTED_PROTOCOL_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26"];
 
 const SERVER_NAME = "com.fluncle/fluncle-api";
 const SERVER_VERSION = "1.0.0";
@@ -18,18 +25,6 @@ const maxRecentLimit = 48;
 const minQueryLength = 2;
 
 const resourceListLimit = 25;
-
-type JsonRpcId = number | string | null;
-
-type JsonRpcSuccess = { id: JsonRpcId; jsonrpc: "2.0"; result: unknown };
-
-type JsonRpcFailure = {
-  error: { code: number; data?: unknown; message: string };
-  id: JsonRpcId;
-  jsonrpc: "2.0";
-};
-
-type JsonRpcResponse = JsonRpcFailure | JsonRpcSuccess;
 
 type ToolResult = {
   content: Array<{ text: string; type: "text" }>;
@@ -79,20 +74,6 @@ const tools: McpTool[] = [
 ];
 
 export const mcpToolNames: string[] = tools.map((tool) => tool.name);
-
-const RESOURCE_SCHEME = "fluncle://";
-
-function coordinateFromUri(uri: string): string | undefined {
-  if (!uri.startsWith(RESOURCE_SCHEME)) {
-    return undefined;
-  }
-
-  const path = uri.slice(RESOURCE_SCHEME.length);
-  const typed = /^(?:finding|mixtape)\/(.+)$/.exec(path);
-  const coordinate = (typed?.[1] ?? path).trim();
-
-  return coordinate.length > 0 ? coordinate : undefined;
-}
 
 function resourceDescriptor(item: FeedItem): {
   description?: string;
@@ -219,7 +200,7 @@ function serverCard() {
     remotes: [
       {
         authentication: { required: false },
-        supportedProtocolVersions: SUPPORTED_PROTOCOL_VERSIONS,
+        supportedProtocolVersions: ["2026-07-28", ...SUPPORTED_PROTOCOL_VERSIONS],
         type: "streamable-http",
         url: MCP_ENDPOINT,
       },
@@ -238,210 +219,225 @@ function serverCard() {
   };
 }
 
-export async function handleMcp(request: Request): Promise<Response | undefined> {
-  const { pathname } = new URL(request.url);
+const SERVER_INSTRUCTIONS =
+  "Fluncle's drum & bass archive over MCP. TOOLS: list recent findings, list the newest releases (what just came out), read one in full by coordinate, pull a random one, search the archive itself, look up an artist or a label, browse every artist, album, and label in the archive A to Z (each flagged when Fluncle has certified a finding there), list the tracks on one album, artist, or label, find the artists nearest another in sound, chain a mixable set from a finding, check whether all of Fluncle's systems are operational, search Spotify candidates, submit a track for review, or board the newsletter. RESOURCES: read the archive as a corpus, each finding/mixtape at fluncle://finding/<logId> or fluncle://mixtape/<logId>, its public record. PROMPTS: Fluncle-voiced starting points (recommend a finding for a mood, walk a recent night, decode a Log ID). A submission is a recommendation, not a publish; Fluncle listens before anything goes out.";
 
+const SITE_ORIGINS = [
+  new URL(siteUrl).origin,
+  new URL(siteUrl.replace("//www.", "//")).origin,
+  new URL(onionUrl).origin,
+];
+const CATALOG_CACHE = { cacheScope: "public", ttlMs: 3_600_000 } as const;
+const ARCHIVE_CACHE = { cacheScope: "public", ttlMs: 30_000 } as const;
+
+function createServer(requestInfo?: Request): McpServer {
+  const server = new McpServer(
+    { name: SERVER_NAME, title: "Fluncle", version: SERVER_VERSION },
+    {
+      cacheHints: {
+        "prompts/list": CATALOG_CACHE,
+        "resources/list": ARCHIVE_CACHE,
+        "resources/read": ARCHIVE_CACHE,
+        "resources/templates/list": CATALOG_CACHE,
+        "server/discover": CATALOG_CACHE,
+        "tools/list": CATALOG_CACHE,
+      },
+      capabilities: MCP_CAPABILITIES,
+      instructions: SERVER_INSTRUCTIONS,
+    },
+  );
+
+  for (const tool of SHARED_TOOLS.filter((candidate) => candidate.transports.includes("mcp"))) {
+    server.registerTool(
+      tool.name,
+      { description: tool.description, inputSchema: tool.input, title: tool.title },
+      async (args) =>
+        executeTool(() =>
+          tool.execute(args as Record<string, unknown>, { request: requestInfo, transport: "mcp" }),
+        ),
+    );
+  }
+
+  for (const tool of mcpOnlyTools) {
+    server.registerTool(
+      tool.name,
+      {
+        description: tool.description,
+        inputSchema: z.object({
+          query: z
+            .string()
+            .describe("Track search query or Spotify track URL, minimum 2 characters.")
+            .meta({ minLength: minQueryLength }),
+        }),
+        title: tool.title,
+      },
+      async (args) =>
+        executeTool(() => tool.execute(args, requestInfo ?? new Request(MCP_ENDPOINT))),
+    );
+  }
+
+  const recentResources = async () => {
+    const page = await listTracks({ includeMixtapes: true, limit: resourceListLimit });
+    return { resources: page.tracks.filter((item) => item.logId).map(resourceDescriptor) };
+  };
+  const readResource = async (uri: URL, variables: Record<string, string | string[]>) => {
+    const coordinate = variables.coordinate;
+    const value = typeof coordinate === "string" ? coordinate.trim() : "";
+    const resolved = value ? await readCoordinate(value) : undefined;
+    if (!resolved) {
+      throw new ResourceNotFoundError(uri.href, `No finding found at ${uri.href}`);
+    }
+    return {
+      contents: [
+        {
+          mimeType: "application/json" as const,
+          text: JSON.stringify(resolved.record),
+          uri: uri.href,
+        },
+      ],
+    };
+  };
+  server.registerResource(
+    "finding",
+    new ResourceTemplate("fluncle://finding/{coordinate}", { list: recentResources }),
+    { cacheHint: ARCHIVE_CACHE, mimeType: "application/json" },
+    readResource,
+  );
+  server.registerResource(
+    "mixtape",
+    new ResourceTemplate("fluncle://mixtape/{coordinate}", { list: undefined }),
+    { cacheHint: ARCHIVE_CACHE, mimeType: "application/json" },
+    readResource,
+  );
+  server.registerResource(
+    "coordinate",
+    new ResourceTemplate("fluncle://{coordinate}", { list: undefined }),
+    { cacheHint: ARCHIVE_CACHE, mimeType: "application/json" },
+    readResource,
+  );
+
+  for (const prompt of prompts) {
+    const fields = Object.fromEntries(
+      prompt.arguments.map((argument) => [
+        argument.name,
+        argument.required
+          ? z.string().describe(argument.description)
+          : z.string().optional().describe(argument.description),
+      ]),
+    );
+    server.registerPrompt(
+      prompt.name,
+      {
+        argsSchema: z.object(fields).default({}),
+        description: prompt.description,
+        title: prompt.title,
+      },
+      (args) => ({
+        description: prompt.description,
+        messages: [{ content: { text: prompt.build(args), type: "text" }, role: "user" }],
+      }),
+    );
+  }
+
+  return server;
+}
+
+const mcpHandler = createMcpHandler(({ requestInfo }) => createServer(requestInfo), {
+  legacy: "reject",
+  maxSubscriptions: 0,
+  responseMode: "json",
+});
+
+async function handleLegacyRequest(request: Request): Promise<Response> {
+  const server = createServer(request);
+  const transport = new WebStandardStreamableHTTPServerTransport({
+    enableJsonResponse: true,
+    sessionIdGenerator: undefined,
+  });
+  const headers = new Headers(request.headers);
+  headers.set("Accept", "application/json, text/event-stream");
+  try {
+    await server.connect(transport);
+    return await transport.handleRequest(new Request(request, { headers }));
+  } finally {
+    await transport.close();
+    await server.close();
+  }
+}
+
+async function executeTool(run: () => Promise<unknown>): Promise<ToolResult> {
+  try {
+    const [result, live] = await Promise.all([run(), getLiveState()]);
+    return toolResult(result, false, live);
+  } catch (error) {
+    if (error instanceof ApiError) {
+      return toolResult({ code: error.code, message: error.message, ok: false }, true);
+    }
+    return toolResult(
+      { code: "error", message: error instanceof Error ? error.message : String(error), ok: false },
+      true,
+    );
+  }
+}
+
+export async function handleMcp(request: Request): Promise<Response | undefined> {
+  const url = new URL(request.url);
+  const { pathname } = url;
   if (pathname === "/.well-known/mcp/server-card.json") {
     if (request.method !== "GET" && request.method !== "HEAD") {
       return methodNotAllowed("GET");
     }
-
-    return new Response(JSON.stringify(serverCard(), null, 2), {
-      headers: {
-        "Cache-Control": "public, max-age=3600",
-        "Content-Type": "application/json",
-        ...corsHeaders(),
-      },
+    return new Response(request.method === "HEAD" ? null : JSON.stringify(serverCard(), null, 2), {
+      headers: { "Cache-Control": "public, max-age=3600", "Content-Type": "application/json" },
     });
   }
-
   if (pathname !== "/mcp") {
     return undefined;
   }
 
+  if (!allowedOrigin(request.headers.get("origin"))) {
+    return new Response(null, { headers: { Vary: "Origin" }, status: 403 });
+  }
   if (request.method === "OPTIONS") {
-    return new Response(null, { headers: corsHeaders(), status: 204 });
+    return new Response(null, { headers: corsHeaders(request), status: 204 });
   }
-
   if (request.method !== "POST") {
-    return methodNotAllowed("POST, OPTIONS");
+    return withCors(methodNotAllowed("POST, OPTIONS"), request);
   }
-
-  let payload: unknown;
-
-  try {
-    payload = await request.json();
-  } catch {
-    return jsonRpcResponse(failure(null, -32700, "Parse error"), 400);
-  }
-
-  if (Array.isArray(payload)) {
-    const responses = (
-      await Promise.all(payload.map((message) => dispatch(message, request)))
-    ).filter((response): response is JsonRpcResponse => response !== undefined);
-
-    return responses.length === 0
-      ? new Response(null, { headers: corsHeaders(), status: 202 })
-      : jsonRpcResponse(responses);
-  }
-
-  const response = await dispatch(payload, request);
-
-  return response === undefined
-    ? new Response(null, { headers: corsHeaders(), status: 202 })
-    : jsonRpcResponse(response);
+  const response = (await isLegacyRequest(request))
+    ? await handleLegacyRequest(request)
+    : await mcpHandler.fetch(request);
+  return withCors(response, request);
 }
 
-async function dispatch(message: unknown, request: Request): Promise<JsonRpcResponse | undefined> {
-  if (!isObject(message) || message.jsonrpc !== "2.0" || typeof message.method !== "string") {
-    return failure(idOf(message), -32600, "Invalid Request");
+function withCors(response: Response, request: Request): Response {
+  const headers = new Headers(response.headers);
+  for (const [name, value] of Object.entries(corsHeaders(request))) {
+    headers.set(name, value);
   }
+  return new Response(response.body, { headers, status: response.status });
+}
 
-  const { method } = message;
-  const params = isObject(message.params) ? message.params : undefined;
-  const id = idOf(message);
-
-  if (method.startsWith("notifications/")) {
-    return undefined;
+function allowedOrigin(origin: string | null): boolean {
+  if (origin === null) {
+    return true;
   }
-
-  switch (method) {
-    case "initialize": {
-      const requested = typeof params?.protocolVersion === "string" ? params.protocolVersion : "";
-
-      return success(id, {
-        capabilities: MCP_CAPABILITIES,
-        instructions:
-          "Fluncle's drum & bass archive over MCP. TOOLS: list recent findings, list the newest releases (what just came out), read one in full by coordinate, pull a random one, search the archive itself, look up an artist or a label, browse every artist, album, and label in the archive A to Z (each flagged when Fluncle has certified a finding there), list the tracks on one album, artist, or label, find the artists nearest another in sound, chain a mixable set from a finding, check whether all of Fluncle's systems are operational, search Spotify candidates, submit a track for review, or board the newsletter. RESOURCES: read the archive as a corpus, each finding/mixtape at fluncle://finding/<logId> or fluncle://mixtape/<logId>, its public record. PROMPTS: Fluncle-voiced starting points (recommend a finding for a mood, walk a recent night, decode a Log ID). A submission is a recommendation, not a publish; Fluncle listens before anything goes out.",
-        protocolVersion: requested || PROTOCOL_VERSION,
-        serverInfo: { name: SERVER_NAME, title: "Fluncle", version: SERVER_VERSION },
-      });
+  try {
+    const parsed = new URL(origin);
+    if (parsed.origin !== origin) {
+      return false;
     }
-    case "ping":
-      return success(id, {});
-    case "tools/list":
-      return success(id, {
-        tools: tools.map((tool) => ({
-          description: tool.description,
-          inputSchema: tool.inputSchema,
-          name: tool.name,
-          title: tool.title,
-        })),
-      });
-    case "resources/list": {
-      const page = await listTracks({ includeMixtapes: true, limit: resourceListLimit });
-      const resources = page.tracks
-        .filter((item) => item.logId)
-        .map((item) => resourceDescriptor(item));
-
-      return success(id, { resources });
+    if (parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1") {
+      return parsed.protocol === "http:";
     }
-    case "resources/read": {
-      const uri = typeof params?.uri === "string" ? params.uri : "";
-      const coordinate = coordinateFromUri(uri);
-
-      if (!coordinate) {
-        return failure(id, -32602, `Not a Fluncle resource URI: ${uri || "(missing)"}`);
-      }
-
-      const resolved = await readCoordinate(coordinate);
-
-      if (!resolved) {
-        return failure(id, -32002, `No finding found at ${uri}`);
-      }
-
-      return success(id, {
-        contents: [{ mimeType: "application/json", text: JSON.stringify(resolved.record), uri }],
-      });
-    }
-    case "prompts/list":
-      return success(id, {
-        prompts: prompts.map((prompt) => ({
-          arguments: prompt.arguments,
-          description: prompt.description,
-          name: prompt.name,
-          title: prompt.title,
-        })),
-      });
-    case "prompts/get": {
-      const name = typeof params?.name === "string" ? params.name : "";
-      const prompt = prompts.find((candidate) => candidate.name === name);
-
-      if (!prompt) {
-        return failure(id, -32602, `Unknown prompt: ${name || "(missing)"}`);
-      }
-
-      const args = isObject(params?.arguments) ? params.arguments : {};
-
-      return success(id, {
-        description: prompt.description,
-        messages: [{ content: { text: prompt.build(args), type: "text" }, role: "user" }],
-      });
-    }
-    case "tools/call": {
-      const name = typeof params?.name === "string" ? params.name : "";
-      const tool = tools.find((candidate) => candidate.name === name);
-
-      if (!tool) {
-        return success(
-          id,
-          toolResult({ code: "unknown_tool", message: `Unknown tool: ${name}`, ok: false }, true),
-        );
-      }
-
-      const args = isObject(params?.arguments) ? params.arguments : {};
-
-      try {
-        const [result, live] = await Promise.all([tool.execute(args, request), getLiveState()]);
-        return success(id, toolResult(result, false, live));
-      } catch (error) {
-        if (error instanceof ApiError) {
-          return success(
-            id,
-            toolResult({ code: error.code, message: error.message, ok: false }, true),
-          );
-        }
-
-        return success(
-          id,
-          toolResult(
-            {
-              code: "error",
-              message: error instanceof Error ? error.message : String(error),
-              ok: false,
-            },
-            true,
-          ),
-        );
-      }
-    }
-    default:
-      return failure(id, -32601, `Method not found: ${method}`);
+    return SITE_ORIGINS.includes(parsed.origin);
+  } catch {
+    return false;
   }
 }
 
 function asTrimmedString(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
-}
-
-function isObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function idOf(message: unknown): JsonRpcId {
-  if (isObject(message) && (typeof message.id === "string" || typeof message.id === "number")) {
-    return message.id;
-  }
-
-  return null;
-}
-
-function success(id: JsonRpcId, result: unknown): JsonRpcSuccess {
-  return { id, jsonrpc: "2.0", result };
-}
-
-function failure(id: JsonRpcId, code: number, message: string): JsonRpcFailure {
-  return { error: { code, message }, id, jsonrpc: "2.0" };
 }
 
 function liveNote(live: LiveState): string {
@@ -459,30 +455,27 @@ function toolResult(data: unknown, isError = false, live?: LiveState): ToolResul
   return { content, isError };
 }
 
-function jsonRpcResponse(body: JsonRpcResponse | JsonRpcResponse[], status = 200): Response {
-  return new Response(JSON.stringify(body), {
-    headers: { "Content-Type": "application/json", ...corsHeaders() },
-    status,
-  });
-}
-
 function methodNotAllowed(allow: string): Response {
   return new Response(
     JSON.stringify({ code: "method_not_allowed", message: `Use ${allow}.`, ok: false }),
     {
-      headers: { Allow: allow, "Content-Type": "application/json", ...corsHeaders() },
+      headers: { Allow: allow, "Content-Type": "application/json" },
       status: 405,
     },
   );
 }
 
-function corsHeaders(): Record<string, string> {
+function corsHeaders(request: Request): Record<string, string> {
+  const origin = request.headers.get("origin");
+  if (!origin) {
+    return { Vary: "Origin" };
+  }
   return {
-    "Access-Control-Allow-Headers":
-      "Authorization, Content-Type, Mcp-Session-Id, MCP-Protocol-Version",
-    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-    "Access-Control-Allow-Origin": "*",
-    "Access-Control-Expose-Headers": "Mcp-Session-Id, MCP-Protocol-Version",
+    "Access-Control-Allow-Headers": "Content-Type, MCP-Protocol-Version, Mcp-Method, Mcp-Name",
+    "Access-Control-Allow-Methods": "POST, OPTIONS",
+    "Access-Control-Allow-Origin": origin,
+    "Access-Control-Expose-Headers": "MCP-Protocol-Version",
     "Access-Control-Max-Age": "86400",
+    Vary: "Origin",
   };
 }
