@@ -753,9 +753,9 @@ async function rearmAllowedArtists(): Promise<number> {
               on conflict (id) do update set
                 state = case
                   when crawl_frontier.state = 'failed' then 'failed' else 'pending' end,
-                cursor = 0, hop = 0, parent_id = null,
+                cursor = 0, hop = 0, parent_id = null, note = null,
                 label_slug = null, updated_at = excluded.updated_at
-              where crawl_frontier.state in ('done', 'failed', 'pending')`,
+              where crawl_frontier.state in ('done', 'failed', 'pending', 'skipped')`,
       },
       markCrawlNodeRepairStatement(nodeId, sourceVersion, {
         now,
@@ -1106,6 +1106,7 @@ type CrawlProviderPlan =
   | { kind: "browse-rearmed"; childHop: number; key: "artist" | "label" }
   | { kind: "release" }
   | { kind: "skip-disabled" }
+  | { kind: "skip-global-block" }
   | {
       kind: "seed";
       label: null | { mbLabelId: string | null; name: string; slug: string };
@@ -1170,6 +1171,9 @@ async function planCrawlNode(
   client?: Pick<Client, "execute">,
 ): Promise<CrawlProviderPlan> {
   if (node.kind === "release") {
+    if (node.hop > 0 && (await globallyBlockedFrontierNode(node, client))) {
+      return { kind: "skip-global-block" };
+    }
     if (node.hop === 2 && maxHop <= 2 && (await disabledTerminalRelease(node, client))) {
       return { kind: "skip-disabled" };
     }
@@ -1189,6 +1193,10 @@ async function planCrawlNode(
     };
   }
 
+  if (node.kind === "artist" && (await globallyBlockedFrontierNode(node, client))) {
+    return { kind: "skip-global-block" };
+  }
+
   const childHop = node.kind === "label" ? 0 : node.hop + 1;
   if (childHop > maxHop) {
     return {
@@ -1200,6 +1208,113 @@ async function planCrawlNode(
   return node.cursor < 0
     ? { childHop, key, kind: "browse-rearmed" }
     : { childHop, key, kind: "browse-forward" };
+}
+
+const GLOBALLY_BLOCKED_FRONTIER_SQL = `(
+  (node.kind = 'artist' and exists (
+    select 1 from artist_rules as rule
+    where rule.artist_mbid = node.external_id and rule.label_id is null
+      and rule.verdict = 'block'
+      and not exists (select 1 from artist_rules as scoped
+        where scoped.artist_mbid = node.external_id and scoped.label_id is not null
+          and scoped.verdict = 'allow')
+  )) or (node.kind = 'release' and node.hop > 0 and exists (
+    select 1 from crawl_frontier as parent
+    join artist_rules as rule on rule.artist_mbid = parent.external_id
+    where parent.id = node.parent_id and parent.kind = 'artist'
+      and rule.label_id is null and rule.verdict = 'block'
+      and not exists (select 1 from artist_rules as scoped
+        where scoped.artist_mbid = parent.external_id and scoped.label_id is not null
+          and scoped.verdict = 'allow')
+  ))
+)`;
+
+async function globallyBlockedFrontierNode(
+  node: FrontierRow,
+  client?: Pick<Client, "execute">,
+): Promise<boolean> {
+  const db = client ?? (await getDb());
+  const result = await db.execute({
+    args: [node.id],
+    sql: `select 1 from crawl_frontier as node
+          where node.id = ? and ${GLOBALLY_BLOCKED_FRONTIER_SQL} limit 1`,
+  });
+  return result.rows.length > 0;
+}
+
+export async function settleGloballyBlockedFrontier(
+  client: CrawlDbClient,
+  limit = 100,
+): Promise<number> {
+  if (!Number.isInteger(limit) || limit < 1 || limit > 500) {
+    throw new Error("blocked frontier settlement limit must be 1 through 500");
+  }
+  const pending = await client.execute({
+    args: [limit],
+    sql: `select node.id from crawl_frontier as node
+          where node.state = 'pending' and ${GLOBALLY_BLOCKED_FRONTIER_SQL}
+            and not exists (select 1 from crawl_due_work as due
+              where due.node_id = node.id and due.state = 'leased')
+          order by node.id limit ?`,
+  });
+  const ids = typedRows<{ id: string }>(pending.rows).map((row) => row.id);
+  const groups: InStatement[][] = [];
+  for (const id of ids) {
+    const now = new Date().toISOString();
+    groups.push([
+      {
+        args: [now, now, id],
+        sql: `update crawl_frontier as node
+              set state = 'skipped', cursor = 0,
+                  note = case when node.kind = 'artist'
+                    then 'global artist block' else 'global parent artist block' end,
+                  attempted_at = ?, updated_at = ?, attempts = attempts + 1
+              where node.id = ? and node.state = 'pending'
+                and ${GLOBALLY_BLOCKED_FRONTIER_SQL}
+                and not exists (select 1 from crawl_due_work as due
+                  where due.node_id = node.id and due.state = 'leased')`,
+      },
+      markCrawlNodeRepairStatement(id, `crawl-block-settle:${crypto.randomUUID()}`, {
+        now,
+        onlyIfPreviousStatementChanged: true,
+      }),
+    ]);
+  }
+  const results = await batchDueWorkMutationGroups(client, groups, MAX_CRAWL_DUE_CHUNK_SIZE);
+  return results.reduce((count, group) => count + (group[0]?.rowsAffected ?? 0), 0);
+}
+
+async function rearmNoLongerBlockedFrontier(client?: CrawlDbClient): Promise<number> {
+  const db = client ?? (await getDb());
+  const result = await db.execute({
+    args: [REARM_BATCH],
+    sql: `select node.id from crawl_frontier as node
+          indexed by crawl_frontier_global_block_skip_idx
+          where node.state = 'skipped'
+            and node.note in ('global artist block', 'global parent artist block')
+            and not ${GLOBALLY_BLOCKED_FRONTIER_SQL}
+          order by node.id limit ?`,
+  });
+  const groups: InStatement[][] = [];
+  for (const { id } of typedRows<{ id: string }>(result.rows)) {
+    const now = new Date().toISOString();
+    groups.push([
+      {
+        args: [now, id],
+        sql: `update crawl_frontier as node
+              set state = 'pending', note = null, cursor = 0, updated_at = ?
+              where node.id = ? and node.state = 'skipped'
+                and node.note in ('global artist block', 'global parent artist block')
+                and not ${GLOBALLY_BLOCKED_FRONTIER_SQL}`,
+      },
+      markCrawlNodeRepairStatement(id, `crawl-block-rearm:${crypto.randomUUID()}`, {
+        now,
+        onlyIfPreviousStatementChanged: true,
+      }),
+    ]);
+  }
+  const results = await batchDueWorkMutationGroups(db, groups, MAX_CRAWL_DUE_CHUNK_SIZE);
+  return results.reduce((count, group) => count + (group[0]?.rowsAffected ?? 0), 0);
 }
 
 async function disabledTerminalRelease(
@@ -1229,7 +1344,11 @@ async function fetchCrawlProvider(
 ): Promise<CrawlProviderData> {
   const request = <T>(path: string, requestKind: MbRequestContext["requestKind"]) =>
     read<T>(path, { nodeKind: node.kind, requestKind });
-  if (plan.kind === "terminal" || plan.kind === "skip-disabled") {
+  if (
+    plan.kind === "terminal" ||
+    plan.kind === "skip-disabled" ||
+    plan.kind === "skip-global-block"
+  ) {
     return { kind: "terminal" };
   }
   if (plan.kind === "release") {
@@ -1306,7 +1425,11 @@ export type CrawlFetchPlan =
 export const CRAWL_FETCH_OFFSET_SLOT = "{offset}";
 
 export function crawlFetchPlan(plan: CrawlProviderPlan, node: FrontierRow): CrawlFetchPlan {
-  if (plan.kind === "terminal" || plan.kind === "skip-disabled") {
+  if (
+    plan.kind === "terminal" ||
+    plan.kind === "skip-disabled" ||
+    plan.kind === "skip-global-block"
+  ) {
     return { kind: "none" };
   }
   if (plan.kind === "release") {
@@ -1638,7 +1761,8 @@ async function enqueueReleaseNodes(
                 where (crawl_frontier.state = 'done'
                        and crawl_frontier.done_at < :watermark)
                    or (crawl_frontier.state = 'skipped'
-                       and crawl_frontier.note = 'disabled own label at terminal hop')
+                       and crawl_frontier.note in
+                         ('disabled own label at terminal hop', 'global parent artist block'))
                    or (crawl_frontier.state = 'pending'
                        and (crawl_frontier.parent_id is not :parentId
                             or crawl_frontier.hop <> 0
@@ -1658,7 +1782,25 @@ async function enqueueReleaseNodes(
                    created_at, updated_at)
                 values (:id, :kind, :source, :externalId, :hop, :parentId, :labelSlug,
                         :releaseLabelSlug, :createdAt, :updatedAt)
-                on conflict (id) do nothing`,
+                on conflict (id) do update set
+                  state = 'pending', cursor = 0, note = null,
+                  hop = excluded.hop, parent_id = excluded.parent_id,
+                  label_slug = excluded.label_slug,
+                  release_label_slug = coalesce(excluded.release_label_slug,
+                                                crawl_frontier.release_label_slug),
+                  updated_at = excluded.updated_at
+                where (crawl_frontier.state = 'skipped'
+                       and crawl_frontier.note = 'global parent artist block')
+                   or (crawl_frontier.state = 'pending'
+                       and crawl_frontier.parent_id is not :parentId
+                       and exists (
+                         select 1 from crawl_frontier as parent
+                         join artist_rules as rule
+                           on rule.artist_mbid = parent.external_id
+                         where parent.id = crawl_frontier.parent_id
+                           and parent.kind = 'artist'
+                           and rule.label_id is null and rule.verdict = 'block'
+                       ))`,
         },
         markCrawlNodeRepairStatement(nodeId, `crawl-enqueue:${crypto.randomUUID()}`, {
           now,
@@ -2262,6 +2404,21 @@ async function applyCrawlProvider(
         }
       : { ...EMPTY, next: { cursor: 0, note: "scope changed before skip", state: "pending" } };
   }
+  if (plan.kind === "skip-global-block" && outcome.data.kind === "terminal") {
+    return (await globallyBlockedFrontierNode(node, client))
+      ? {
+          ...EMPTY,
+          next: {
+            cursor: 0,
+            note: node.kind === "artist" ? "global artist block" : "global parent artist block",
+            state: "skipped",
+          },
+        }
+      : {
+          ...EMPTY,
+          next: { cursor: node.cursor, note: "artist rule changed before skip", state: "pending" },
+        };
+  }
   if (plan.kind === "seed" && outcome.data.kind === "seed") {
     return applySeedLabel(node, plan, outcome.data.search, client);
   }
@@ -2464,6 +2621,7 @@ async function initializeCrawlPhaseState(
   const seed = await seedFromEnabledLabels();
   const releasesRearmed = await rearmScopedLabelReleases();
   let artistsRearmed = await rearmAllowedArtists();
+  await rearmNoLongerBlockedFrontier();
   const seedsRearmed = await rearmSeedLabels();
   if (!cutoverEnabled) {
     artistsRearmed += await rearmStaleAllowedArtists();

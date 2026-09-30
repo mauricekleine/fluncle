@@ -19,6 +19,7 @@ import {
   fetchCrawlPhase,
   initializeCrawlPhase,
   prepareCrawlPhase,
+  settleGloballyBlockedFrontier,
 } from "./crawl";
 import { CRAWL_BOX_FETCH_ENABLED_KEY, CRAWL_DUE_CUTOVER_ENABLED_KEY } from "./crawl-cutover";
 import { resolveCrawlHold } from "./crawl-plausibility";
@@ -197,6 +198,251 @@ afterEach(async () => {
 });
 
 describe("crawl admission phases", () => {
+  it("settles a globally blocked artist browse without fetching MusicBrainz", async () => {
+    await seedBrowseNode();
+    await db.execute({
+      args: [timestamp, timestamp],
+      sql: `insert into artist_rules
+        (id, artist_mbid, artist_name, verdict, source, created_at, updated_at)
+        values ('rule-blocked', 'browse-artist', 'Blocked', 'block', 'operator', ?, ?)`,
+    });
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const prepared = await prepareCrawlPhase({ limit: 1 });
+    expect(prepared.items[0]?.fetchPlan).toEqual({ kind: "none" });
+    await commitCrawlPhase(await fetchCrawlPhase(prepared.items[0]?.preparedToken ?? ""));
+    const node = await db.execute(`select state, note from crawl_frontier
+      where id = 'musicbrainz:artist:browse-artist'`);
+    expect(node.rows[0]).toMatchObject({ note: "global artist block", state: "skipped" });
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    await db.execute("delete from artist_rules where id = 'rule-blocked'");
+    await db.execute("update labels set seed_state = 'disabled'");
+    await initializeCrawlPhase();
+    const rearmed = await prepareCrawlPhase({ limit: 1 });
+    expect(rearmed.items[0]?.fetchPlan.kind).toBe("single");
+  });
+
+  it("settles releases under a globally blocked artist and rechecks the rule at commit", async () => {
+    await db.execute({
+      args: [timestamp, timestamp],
+      sql: `insert into crawl_frontier
+        (id, kind, source, external_id, hop, created_at, updated_at)
+        values ('musicbrainz:artist:blocked-parent', 'artist', 'musicbrainz',
+          'blocked-parent', 1, ?, ?)`,
+    });
+    await db.execute(`update crawl_frontier set hop = 2,
+      parent_id = 'musicbrainz:artist:blocked-parent' where external_id = 'release-phase'`);
+    await db.execute({
+      args: [timestamp, timestamp],
+      sql: `insert into artist_rules
+        (id, artist_mbid, artist_name, verdict, source, created_at, updated_at)
+        values ('rule-blocked', 'blocked-parent', 'Blocked', 'block', 'operator', ?, ?)`,
+    });
+    const prepared = await prepareCrawlPhase({ limit: 1 });
+    expect(prepared.items[0]?.fetchPlan).toEqual({ kind: "none" });
+    await db.execute("delete from artist_rules where id = 'rule-blocked'");
+    await commitCrawlPhase(await fetchCrawlPhase(prepared.items[0]?.preparedToken ?? ""));
+    const node = await db.execute(`select state, note from crawl_frontier
+      where external_id = 'release-phase'`);
+    expect(node.rows[0]).toMatchObject({
+      note: "artist rule changed before skip",
+      state: "pending",
+    });
+    const next = await prepareCrawlPhase({ limit: 1 });
+    expect(next.items[0]?.fetchPlan.kind).toBe("single");
+  });
+
+  it("settles a blocked parent's release without fetching details", async () => {
+    await db.execute({
+      args: [timestamp, timestamp],
+      sql: `insert into crawl_frontier
+        (id, kind, source, external_id, hop, created_at, updated_at)
+        values ('musicbrainz:artist:blocked-parent', 'artist', 'musicbrainz',
+          'blocked-parent', 1, ?, ?)`,
+    });
+    await db.execute(`update crawl_frontier set hop = 2,
+      parent_id = 'musicbrainz:artist:blocked-parent' where external_id = 'release-phase'`);
+    await db.execute({
+      args: [timestamp, timestamp],
+      sql: `insert into artist_rules
+        (id, artist_mbid, artist_name, verdict, source, created_at, updated_at)
+        values ('rule-blocked', 'blocked-parent', 'Blocked', 'block', 'operator', ?, ?)`,
+    });
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const prepared = await prepareCrawlPhase({ limit: 1 });
+    expect(prepared.items[0]?.fetchPlan).toEqual({ kind: "none" });
+    await commitCrawlPhase(await fetchCrawlPhase(prepared.items[0]?.preparedToken ?? ""));
+
+    const release = await db.execute(`select state, note from crawl_frontier
+      where external_id = 'release-phase'`);
+    expect(release.rows[0]).toMatchObject({
+      note: "global parent artist block",
+      state: "skipped",
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    await db.execute("delete from artist_rules where id = 'rule-blocked'");
+    await db.execute("update labels set seed_state = 'disabled'");
+    await initializeCrawlPhase();
+    const rearmed = await prepareCrawlPhase({ limit: 1 });
+    expect(rearmed.items[0]?.fetchPlan.kind).toBe("single");
+  });
+
+  it("settles an existing blocked backlog in bounded resumable passes", async () => {
+    await db.execute({
+      args: [timestamp, timestamp],
+      sql: `insert into crawl_frontier
+        (id, kind, source, external_id, hop, created_at, updated_at)
+        values ('musicbrainz:artist:blocked-parent', 'artist', 'musicbrainz',
+          'blocked-parent', 1, ?, ?)`,
+    });
+    await db.execute(`update crawl_frontier set hop = 2,
+      parent_id = 'musicbrainz:artist:blocked-parent' where external_id = 'release-phase'`);
+    await db.execute({
+      args: [timestamp, timestamp],
+      sql: `insert into artist_rules
+        (id, artist_mbid, artist_name, verdict, source, created_at, updated_at)
+        values ('rule-blocked', 'blocked-parent', 'Blocked', 'block', 'operator', ?, ?)`,
+    });
+    expect(await settleGloballyBlockedFrontier(db, 1)).toBe(1);
+    expect(await settleGloballyBlockedFrontier(db, 1)).toBe(1);
+    expect(await settleGloballyBlockedFrontier(db, 1)).toBe(0);
+    const nodes = await db.execute(`select state, note from crawl_frontier order by id`);
+    expect(nodes.rows.map((row) => row.state)).toEqual(["skipped", "skipped"]);
+  });
+
+  it.each(["allow", "block", "unlisted"] as const)(
+    "keeps %s rules outside the global block gate",
+    async (verdict) => {
+      await seedBrowseNode();
+      await db.execute({
+        args: [verdict, verdict === "unlisted" ? null : "label-phase", timestamp, timestamp],
+        sql: `insert into artist_rules
+          (id, artist_mbid, artist_name, verdict, label_id, source, created_at, updated_at)
+          values ('rule-other', 'browse-artist', 'Other', ?, ?, 'operator', ?, ?)`,
+      });
+      const prepared = await prepareCrawlPhase({ limit: 1 });
+      expect(prepared.items[0]?.fetchPlan.kind).toBe("single");
+    },
+  );
+
+  it("keeps browsing a global block with a scoped allow that can still store tracks", async () => {
+    await seedBrowseNode();
+    await db.batch(
+      [
+        {
+          args: [timestamp, timestamp],
+          sql: `insert into artist_rules
+            (id, artist_mbid, artist_name, verdict, source, created_at, updated_at)
+            values ('rule-global-block', 'browse-artist', 'Blocked', 'block', 'operator', ?, ?)`,
+        },
+        {
+          args: [timestamp, timestamp],
+          sql: `insert into artist_rules
+            (id, artist_mbid, artist_name, verdict, label_id, source, created_at, updated_at)
+            values ('rule-scoped-allow', 'browse-artist', 'Blocked', 'allow',
+              'label-phase', 'operator', ?, ?)`,
+        },
+      ],
+      "write",
+    );
+    const prepared = await prepareCrawlPhase({ limit: 1 });
+    expect(prepared.items[0]?.fetchPlan.kind).toBe("single");
+  });
+
+  it("re-arms a skipped blocked artist at hop zero when a scoped allow is added", async () => {
+    await seedBrowseNode();
+    await db.execute(`update crawl_frontier
+      set hop = 2, state = 'skipped', note = 'global artist block'
+      where id = 'musicbrainz:artist:browse-artist'`);
+    await db.execute("update labels set seed_state = 'disabled'");
+    await db.batch(
+      [
+        {
+          args: [timestamp, timestamp],
+          sql: `insert into artist_rules
+            (id, artist_mbid, artist_name, verdict, source, created_at, updated_at)
+            values ('rule-global-block', 'browse-artist', 'Blocked', 'block', 'operator', ?, ?)`,
+        },
+        {
+          args: [timestamp, timestamp],
+          sql: `insert into artist_rules
+            (id, artist_mbid, artist_name, verdict, label_id, source, created_at, updated_at)
+            values ('rule-scoped-allow', 'browse-artist', 'Blocked', 'allow',
+              'label-phase', 'operator', ?, ?)`,
+        },
+      ],
+      "write",
+    );
+
+    await initializeCrawlPhase();
+
+    const artist = await db.execute(`select hop, parent_id, state, note from crawl_frontier
+      where id = 'musicbrainz:artist:browse-artist'`);
+    expect(artist.rows[0]).toMatchObject({
+      hop: 0,
+      note: null,
+      parent_id: null,
+      state: "pending",
+    });
+    const prepared = await prepareCrawlPhase({ limit: 1 });
+    expect(prepared.items[0]?.fetchPlan.kind).toBe("single");
+  });
+
+  it("keeps a pending release when another artist discovers it", async () => {
+    await seedBrowseNode();
+    await db.batch(
+      [
+        {
+          args: [timestamp, timestamp],
+          sql: `insert into crawl_frontier
+            (id, kind, source, external_id, hop, state, created_at, updated_at)
+            values ('musicbrainz:artist:blocked-parent', 'artist', 'musicbrainz',
+              'blocked-parent', 1, 'skipped', ?, ?)`,
+        },
+        {
+          args: [timestamp, timestamp],
+          sql: `insert into crawl_frontier
+            (id, kind, source, external_id, hop, parent_id, state, created_at, updated_at)
+            values ('musicbrainz:release:shared-release', 'release', 'musicbrainz',
+              'shared-release', 2, 'musicbrainz:artist:blocked-parent', 'pending', ?, ?)`,
+        },
+        {
+          args: [timestamp, timestamp],
+          sql: `insert into artist_rules
+            (id, artist_mbid, artist_name, verdict, source, created_at, updated_at)
+            values ('rule-blocked', 'blocked-parent', 'Blocked', 'block', 'operator', ?, ?)`,
+        },
+      ],
+      "write",
+    );
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        Promise.resolve(
+          new Response(
+            JSON.stringify({ "release-count": 1, releases: [{ id: "shared-release" }] }),
+            { status: 200 },
+          ),
+        ),
+      ),
+    );
+
+    const prepared = await prepareCrawlPhase({ limit: 1 });
+    await commitCrawlPhase(await fetchCrawlPhase(prepared.items[0]?.preparedToken ?? ""));
+
+    const release = await db.execute(`select parent_id, state from crawl_frontier
+      where id = 'musicbrainz:release:shared-release'`);
+    expect(release.rows[0]).toMatchObject({
+      parent_id: "musicbrainz:artist:browse-artist",
+      state: "pending",
+    });
+  });
+
   it("preserves the first-prepare repair sample flag through the oRPC input contract", () => {
     const delivered = crawlInputSchema.parse({
       body: { limit: 1, maxHop: 2, phase: "prepare", sampleStorableRepair: true },
