@@ -128,6 +128,7 @@ const REVERDICT_LIMIT = Number(process.env.FLUNCLE_CAPTURE_REVERDICT_LIMIT ?? "5
 
 const YT_SEARCH_TIMEOUT_MS = 60_000;
 const YT_DOWNLOAD_TIMEOUT_MS = 180_000;
+export const AMBIGUOUS_PROVIDER_EXPIRY_MS = 48 * 60 * 60 * 1_000;
 
 const log = (message: string) => console.error(`[capture-sweep] ${message}`);
 
@@ -2060,6 +2061,25 @@ async function finishCaptureAttempt(
     return finishProgress(path, ports);
   }
   const localDownload = completedLocalDownload(path, progress);
+  const attemptedAt = Date.parse(progress.attempt.attemptedAt);
+  if (
+    !localDownload &&
+    Number.isFinite(attemptedAt) &&
+    Date.now() - attemptedAt >= AMBIGUOUS_PROVIDER_EXPIRY_MS
+  ) {
+    const result: CaptureExternalResult =
+      progress.attempt.kind === "capture"
+        ? { attemptedAt: new Date().toISOString(), kind: "capture", outcome: "failed" }
+        : { kind: "youtube-provenance", outcome: "none", verification: "inconclusive" };
+    log(`ambiguous provider attempt expired for ${progress.trackId} (${progress.attempt.kind})`);
+    writeJsonAtomic(path, {
+      result,
+      snapshotToken: progress.snapshotToken,
+      trackId: progress.trackId,
+    } satisfies CaptureResultProgress);
+    rmSync(progress.attempt.workDirectory, { force: true, recursive: true });
+    return finishProgress(path, ports);
+  }
   writeJsonAtomic(path, {
     ...progress,
     attempt: {

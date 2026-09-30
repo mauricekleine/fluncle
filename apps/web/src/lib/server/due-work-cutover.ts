@@ -154,7 +154,7 @@ async function readReadyPage(
 ): Promise<ReadyTrackRow[]> {
   const repair = await maintainDueWork(client, entry.workKind);
   await promoteDueWork(client, entry.workKind, { limit: Math.max(limit, 100) });
-  const page = await listServableDueWork(client, entry.workKind, { limit });
+  const page = await listServableDueWork(client, entry.workKind, { limit, requireTrack: true });
   if (page.items.length === 0 && !repair.sourceConverged) {
     throw new DueWorkMaintenancePendingError(entry.workKind);
   }

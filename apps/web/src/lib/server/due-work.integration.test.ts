@@ -1350,7 +1350,7 @@ describe("servable ready pages", () => {
     ).toEqual(["subject-0", "subject-3"]);
   });
 
-  it("serves nothing rather than walking the index when a whole window is withheld", async () => {
+  it("continues past a whole window of withheld rows", async () => {
     const subjectIds = Array.from(
       { length: dueWorkReadyScanWindow(1) + 2 },
       (_, index) => `head-${String(index).padStart(3, "0")}`,
@@ -1369,8 +1369,64 @@ describe("servable ready pages", () => {
     );
 
     const page = await listServableDueWork(db, "servable", { limit: 1 });
-    expect(page.items).toEqual([]);
+    expect(page.items.map((row) => row.subjectId)).toEqual(subjectIds.slice(-2, -1));
     expect(page.withheld).toBe(dueWorkReadyScanWindow(1));
     expect(page.hasMore).toBe(true);
+  });
+
+  async function seedOrphansAndLiveTracks(orphans: number): Promise<void> {
+    for (let index = 0; index < orphans; index += 1) {
+      await upsertDueWork(
+        db,
+        ready(`gone-${index}`, String(index).padStart(3, "0"), "track-page"),
+        {
+          now: T0,
+        },
+      );
+    }
+    for (let index = 0; index < 3; index += 1) {
+      const trackId = `live-${index}`;
+      await db.execute({
+        args: [trackId],
+        sql: "insert into tracks (track_id, title, artists_json, duration_ms) values (?, 'Live', '[]', 180000)",
+      });
+      await upsertDueWork(db, ready(trackId, `1${index}`, "track-page"), { now: T0 });
+    }
+  }
+
+  async function trackPageRows(): Promise<unknown> {
+    return (await db.execute("select count(*) as n from due_work where work_kind = 'track-page'"))
+      .rows[0]?.n;
+  }
+
+  it("retires missing tracks and refills a track page past more than one scan window", async () => {
+    await seedOrphansAndLiveTracks(30);
+
+    const page = await listServableDueWork(db, "track-page", { limit: 2, requireTrack: true });
+    expect(page.items.map((row) => row.subjectId)).toEqual(["live-0", "live-1"]);
+    expect(page.hasMore).toBe(true);
+    expect(await trackPageRows()).toBe(3);
+  });
+
+  it("keeps a synthetic subject on a track-bound read", async () => {
+    await upsertDueWork(db, ready("@catalogue-rank-corpus", "000", "track-page"), { now: T0 });
+    await seedOrphansAndLiveTracks(2);
+
+    const page = await listServableDueWork(db, "track-page", { limit: 2, requireTrack: true });
+    expect(page.items.map((row) => row.subjectId)).toEqual(["@catalogue-rank-corpus", "live-0"]);
+    expect(await trackPageRows()).toBe(4);
+  });
+
+  it("bounds one read to a fixed number of scan windows and finishes retiring on the next read", async () => {
+    await seedOrphansAndLiveTracks(50);
+
+    const first = await listServableDueWork(db, "track-page", { limit: 2, requireTrack: true });
+    expect(first.items).toEqual([]);
+    expect(first.hasMore).toBe(true);
+    expect(await trackPageRows()).toBeLessThan(53);
+
+    const second = await listServableDueWork(db, "track-page", { limit: 2, requireTrack: true });
+    expect(second.items.map((row) => row.subjectId)).toEqual(["live-0", "live-1"]);
+    expect(await trackPageRows()).toBe(3);
   });
 });

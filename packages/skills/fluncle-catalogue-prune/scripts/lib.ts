@@ -325,10 +325,14 @@ export async function deleteTracksWithEdges(
   let tracks = 0;
   for (const c of chunk(trackIds)) {
     const holes = c.map(() => "?").join(",");
-    const [edgeResult, , trackResult] = await db.batch(
+    const [edgeResult, , , trackResult] = await db.batch(
       [
         { args: c, sql: `delete from track_artists where track_id in (${holes})` },
         { args: c, sql: `delete from track_embeddings where track_id in (${holes})` },
+        {
+          args: c,
+          sql: `delete from due_work where subject_type = 'track' and subject_id in (${holes})`,
+        },
         { args: c, sql: `delete from tracks where track_id in (${holes})` },
         ...markPublicProjectionSourceChangedStatements(
           c.map((subjectId) => ({ subjectId, subjectType: "track" as const })),

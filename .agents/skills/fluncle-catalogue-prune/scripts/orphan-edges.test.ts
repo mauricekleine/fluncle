@@ -48,6 +48,8 @@ describe("deleteTracksWithEdges", () => {
       create table track_embeddings (track_id text primary key);
       insert into tracks (track_id) values ('pruned');
       insert into track_artists (track_id, artist_id) values ('pruned', 'artist');
+      insert into due_work (work_kind, subject_type, subject_id, state)
+        values ('capture-catalogue', 'track', 'pruned', 'ready');
       insert into public_aggregate_state
         (scope, state, scanned_count, projected_entry_count, source_epoch, aggregate_epoch,
          default_track_total, release_hub_order_epoch, generation)
@@ -64,6 +66,7 @@ describe("deleteTracksWithEdges", () => {
       tracks: 1,
     });
     expect((await db.execute(`select track_id from tracks`)).rows).toHaveLength(0);
+    expect((await db.execute(`select subject_id from due_work`)).rows).toHaveLength(0);
     expect(
       (await db.execute(`select source_epoch from public_aggregate_state`)).rows[0]?.source_epoch,
     ).toBe(1);
@@ -97,15 +100,19 @@ describe("deleteTracksWithEdges", () => {
     expect(s.batches).toHaveLength(1);
     const [batch] = s.batches;
     expect(batch?.mode).toBe("write");
-    expect(batch?.stmts).toHaveLength(7);
+    expect(batch?.stmts).toHaveLength(8);
 
     expect(batch?.stmts[0]?.sql).toBe("delete from track_artists where track_id in (?,?)");
     expect(batch?.stmts[1]?.sql).toBe("delete from track_embeddings where track_id in (?,?)");
-    expect(batch?.stmts[2]?.sql).toBe("delete from tracks where track_id in (?,?)");
+    expect(batch?.stmts[2]?.sql).toBe(
+      "delete from due_work where subject_type = 'track' and subject_id in (?,?)",
+    );
+    expect(batch?.stmts[3]?.sql).toBe("delete from tracks where track_id in (?,?)");
 
     expect(batch?.stmts[0]?.args).toEqual(["t1", "t2"]);
     expect(batch?.stmts[1]?.args).toEqual(["t1", "t2"]);
     expect(batch?.stmts[2]?.args).toEqual(["t1", "t2"]);
+    expect(batch?.stmts[3]?.args).toEqual(["t1", "t2"]);
   });
 
   test("never issues a bare execute — the pair is always transactional", async () => {
@@ -121,20 +128,21 @@ describe("deleteTracksWithEdges", () => {
     await deleteTracksWithEdges(s.client, ids);
 
     expect(s.batches).toHaveLength(2);
-    expect(s.batches[0]?.stmts).toHaveLength(7);
-    expect(s.batches[1]?.stmts).toHaveLength(7);
+    expect(s.batches[0]?.stmts).toHaveLength(8);
+    expect(s.batches[1]?.stmts).toHaveLength(8);
     expect(s.batches[0]?.stmts[0]?.args).toHaveLength(200);
     expect(s.batches[1]?.stmts[0]?.args).toHaveLength(50);
 
     expect(s.batches[1]?.stmts[0]?.args).toEqual(s.batches[1]?.stmts[1]?.args);
     expect(s.batches[1]?.stmts[0]?.args).toEqual(s.batches[1]?.stmts[2]?.args);
+    expect(s.batches[1]?.stmts[0]?.args).toEqual(s.batches[1]?.stmts[3]?.args);
   });
 
   test("reports the rows removed from each table", async () => {
     const s = stub();
     const removed = await deleteTracksWithEdges(s.client, ["t1"]);
 
-    expect(removed).toEqual({ edges: 10, tracks: 30 });
+    expect(removed).toEqual({ edges: 10, tracks: 40 });
   });
 
   test("an empty id set touches nothing", async () => {
