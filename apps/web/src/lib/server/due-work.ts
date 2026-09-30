@@ -761,7 +761,7 @@ export async function listServableDueWork<WorkKind extends string>(
         ? [workKind, continuation.sortKey, continuation.subjectId, scanWindow]
         : [workKind, scanWindow],
       sql: `select ${DUE_WORK_COLUMNS}, ${DUE_WORK_SOURCE_MARKED_SQL} as source_marked,
-          ${options.requireTrack ? "exists (select 1 from tracks t where t.track_id = ready.subject_id)" : "1"} as track_exists
+          ${options.requireTrack ? "(ready.subject_id like '@%' or exists (select 1 from tracks t where t.track_id = ready.subject_id))" : "1"} as track_exists
         from due_work ready
         where work_kind = ? and state = 'ready'
           ${continuation ? "and (sort_key, subject_id) > (?, ?)" : ""}
@@ -786,6 +786,7 @@ export async function listServableDueWork<WorkKind extends string>(
         args: [workKind, ...chunk],
         sql: `delete from due_work where work_kind = ? and subject_type = 'track'
           and subject_id in (${chunk.map(() => "?").join(", ")})
+          and due_work.subject_id not like '@%'
           and not exists (select 1 from tracks t where t.track_id = due_work.subject_id)`,
       });
     }

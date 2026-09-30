@@ -25,7 +25,7 @@ export async function cleanOrphanDueWork(
         ? [cursor.workKind, cursor.subjectType, cursor.subjectId, PAGE_SIZE]
         : [PAGE_SIZE],
       sql: `select work_kind, subject_type, subject_id,
-          exists (select 1 from tracks t where t.track_id = due_work.subject_id) as track_exists
+          (due_work.subject_id like '@%' or exists (select 1 from tracks t where t.track_id = due_work.subject_id)) as track_exists
         from due_work
         where ${cursor ? "(work_kind, subject_type, subject_id) > (?, ?, ?) and " : ""}subject_type = 'track'
         order by work_kind, subject_type, subject_id
@@ -52,6 +52,7 @@ export async function cleanOrphanDueWork(
         args: [workKind, ...ids],
         sql: `delete from due_work where work_kind = ? and subject_type = 'track'
           and subject_id in (${ids.map(() => "?").join(", ")})
+          and subject_id not like '@%'
           and not exists (select 1 from tracks t where t.track_id = due_work.subject_id)`,
       }));
       const results = await db.batch(statements, "write");

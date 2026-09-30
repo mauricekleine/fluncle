@@ -1408,6 +1408,15 @@ describe("servable ready pages", () => {
     expect(await trackPageRows()).toBe(3);
   });
 
+  it("keeps a synthetic subject on a track-bound read", async () => {
+    await upsertDueWork(db, ready("@catalogue-rank-corpus", "000", "track-page"), { now: T0 });
+    await seedOrphansAndLiveTracks(2);
+
+    const page = await listServableDueWork(db, "track-page", { limit: 2, requireTrack: true });
+    expect(page.items.map((row) => row.subjectId)).toEqual(["@catalogue-rank-corpus", "live-0"]);
+    expect(await trackPageRows()).toBe(4);
+  });
+
   it("bounds one read to a fixed number of scan windows and finishes retiring on the next read", async () => {
     await seedOrphansAndLiveTracks(50);
 
