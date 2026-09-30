@@ -77,7 +77,7 @@ describe("the credential rail on the CLI's env profile", () => {
 
 async function readTokenWithRef(
   opScript: string,
-  ref = "op://Vault/Item/credential",
+  ref = "op://<vault>/<item>/credential",
 ): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), "fluncle-env-ref-"));
 
@@ -117,7 +117,7 @@ async function readTokenWithRef(
 describe("FLUNCLE_API_TOKEN_REF", () => {
   test("reads the token through op when the env and profile have none", async () => {
     const token = await readTokenWithRef(
-      '#!/bin/sh\n[ "$1 $2 $3" = "read --no-newline op://Vault/Item/credential" ] && printf synthetic-ref-token\n',
+      '#!/bin/sh\n[ "$1 $2 $3" = "read --no-newline op://<vault>/<item>/credential" ] && printf synthetic-ref-token\n',
     );
 
     expect(token).toBe("synthetic-ref-token");
@@ -125,8 +125,8 @@ describe("FLUNCLE_API_TOKEN_REF", () => {
 
   test("adds the op:// scheme to a path-only reference", async () => {
     const token = await readTokenWithRef(
-      '#!/bin/sh\n[ "$3" = "op://Vault/Item/credential" ] && printf synthetic-ref-token\n',
-      "Vault/Item/credential",
+      '#!/bin/sh\n[ "$3" = "op://<vault>/<item>/credential" ] && printf synthetic-ref-token\n',
+      "<vault>/<item>/credential",
     );
 
     expect(token).toBe("synthetic-ref-token");
@@ -136,7 +136,7 @@ describe("FLUNCLE_API_TOKEN_REF", () => {
     const message = await readTokenWithRef("#!/bin/sh\nexit 1\n");
 
     expect(message).toBe(
-      "ERROR Could not read FLUNCLE_API_TOKEN_REF (op://Vault/Item/credential) with op.",
+      "ERROR Could not read FLUNCLE_API_TOKEN_REF (op://<vault>/<item>/credential) with op.",
     );
   });
 });
