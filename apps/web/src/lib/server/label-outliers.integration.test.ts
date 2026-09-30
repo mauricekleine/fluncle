@@ -8,6 +8,7 @@ import {
   InvalidLabelOutlierInputsCursor,
   LABEL_OUTLIERS_LAST_RUN_KEY,
   LabelOutlierRunRejected,
+  labelOutlierTracksStatement,
   listLabelOutlierInputsPage,
   listLabelOutliers,
   recordLabelOutliers,
@@ -128,8 +129,8 @@ async function seedEmbeddedCatalogue(count: number): Promise<void> {
     Array.from({ length: count }, (_, index) => [
       {
         args: [`emb_${index}`],
-        sql: `insert into tracks (track_id, title, artists_json, duration_ms, is_catalogue)
-              values (?, 'Embedded', '[]', 180000, 1)`,
+        sql: `insert into tracks (track_id, title, artists_json, duration_ms, is_catalogue, has_embedding)
+              values (?, 'Embedded', '[]', 180000, 1, 1)`,
       },
       {
         args: [`emb_${index}`, blob],
@@ -313,6 +314,25 @@ describe("recordLabelOutliers", () => {
     expect(after).toMatchObject({ flagged: 1, removed: 1 });
   });
 
+  it("sizes the live embedded catalogue from the has_embedding mirror, never the vector satellite", async () => {
+    await db.batch(
+      Array.from({ length: 100 }, (_, index) => ({
+        args: [`mirror_${index}`, index < 90 ? 1 : 0],
+        sql: `insert into tracks (track_id, title, artists_json, duration_ms, is_catalogue, has_embedding)
+              values (?, 'Mirrored', '[]', 180000, ?, 1)`,
+      })),
+      "write",
+    );
+
+    const refused = await rejection(
+      recordLabelOutliers(run([outlier()], { tracksScored: 71 }), () => STAMP),
+    );
+    const accepted = await recordLabelOutliers(run([outlier()], { tracksScored: 72 }), () => STAMP);
+
+    expect(refused).toBeInstanceOf(LabelOutlierRunRejected);
+    expect(accepted).toMatchObject({ flagged: 1 });
+  });
+
   it("writes the run summary the board reads", async () => {
     await recordLabelOutliers(run([outlier()]), () => STAMP);
     const setting = await db.execute({
@@ -335,6 +355,16 @@ describe("recordLabelOutliers", () => {
 });
 
 describe("listLabelOutliers", () => {
+  it("seeks each outlier's tracks by album and id, never walking the catalogue flag", async () => {
+    const statement = labelOutlierTracksStatement(["alb_xmas"], ["trk_single"]);
+    const plan = await db.execute({ ...statement, sql: `explain query plan ${statement.sql}` });
+    const details = plan.rows.map((row) => row.detail as string).join("\n");
+
+    expect(details).toMatch(/SEARCH t USING INDEX tracks_album_id_idx \(album_id=\?\)/i);
+    expect(details).toMatch(/SEARCH t USING INDEX sqlite_autoindex_tracks_1 \(track_id=\?\)/i);
+    expect(details).not.toMatch(/tracks_is_catalogue_idx/i);
+  });
+
   it("returns each outlier with its album, label, tracks, and artists, furthest first", async () => {
     await recordLabelOutliers(run([single, outlier()]), () => STAMP);
 

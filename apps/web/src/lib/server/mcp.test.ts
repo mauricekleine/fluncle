@@ -756,7 +756,7 @@ describe("MCP list_fresh tool", () => {
     const { data, isError } = await callTool("list_fresh", { limit: 12 });
 
     expect(isError).toBe(false);
-    expect(listFreshMock).toHaveBeenCalledWith({ limit: 12 });
+    expect(listFreshMock).toHaveBeenCalledWith({ albums: true, limit: 12, tracks: true });
     expect(data.windowDays).toBe(30);
     const tracks = data.tracks as Array<Record<string, unknown>>;
     expect(tracks).toHaveLength(2);
@@ -771,7 +771,7 @@ describe("MCP list_fresh tool", () => {
 
     await callTool("list_fresh");
 
-    expect(listFreshMock).toHaveBeenCalledWith({ limit: undefined });
+    expect(listFreshMock).toHaveBeenCalledWith({ albums: true, limit: undefined, tracks: true });
   });
 
   it("view=albums returns only the records; the track stream is emptied", async () => {
@@ -792,6 +792,7 @@ describe("MCP list_fresh tool", () => {
     const { data, isError } = await callTool("list_fresh", { view: "albums" });
 
     expect(isError).toBe(false);
+    expect(listFreshMock).toHaveBeenCalledWith({ albums: true, limit: undefined, tracks: false });
     expect(data.albums).toHaveLength(1);
     expect(data.tracks).toHaveLength(0);
     expect(data.windowDays).toBe(30);
@@ -815,6 +816,7 @@ describe("MCP list_fresh tool", () => {
     const { data, isError } = await callTool("list_fresh", { view: "tracks" });
 
     expect(isError).toBe(false);
+    expect(listFreshMock).toHaveBeenCalledWith({ albums: false, limit: undefined, tracks: true });
     expect(data.tracks).toHaveLength(1);
     expect(data.albums).toHaveLength(0);
   });

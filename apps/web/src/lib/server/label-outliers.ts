@@ -1,4 +1,4 @@
-import { type InStatement } from "@libsql/client";
+import { type InStatement, type InValue } from "@libsql/client";
 import {
   type LabelOutlierInputAlbum,
   type LabelOutlierInputTrack,
@@ -207,12 +207,24 @@ export function runRejection(
   return null;
 }
 
+export function labelOutlierTracksStatement(
+  albumIds: readonly string[],
+  singleTrackIds: readonly string[],
+): { args: InValue[]; sql: string } {
+  return {
+    args: [JSON.stringify(albumIds), JSON.stringify(singleTrackIds)],
+    sql: `select t.track_id, t.title, t.album_id, t.label_id
+            from tracks t
+           where (t.album_id in (select value from json_each(?)) and +t.is_catalogue = 1)
+              or t.track_id in (select value from json_each(?))
+           order by t.title collate nocase asc, t.track_id asc`,
+  };
+}
+
 export async function countLiveEmbeddedCatalogueTracks(): Promise<number> {
   const db = await getDb();
   const result = await db.execute(
-    `select count(*) as n from track_embeddings e
-       cross join tracks t on t.track_id = e.track_id
-      where t.is_catalogue = 1`,
+    `select count(*) as n from tracks where is_catalogue = 1 and has_embedding = 1`,
   );
 
   return Number(typedRows<{ n: number }>(result.rows)[0]?.n ?? 0);
@@ -496,14 +508,7 @@ export async function listLabelOutliers(): Promise<{
   const albumIds = [...new Set(rows.flatMap((row) => (row.album_id ? [row.album_id] : [])))];
   const singleIds = rows.flatMap((row) => (row.single_track_id ? [row.single_track_id] : []));
   const [trackResult, lastRunRaw] = await Promise.all([
-    db.execute({
-      args: [JSON.stringify(albumIds), JSON.stringify(singleIds)],
-      sql: `select t.track_id, t.title, t.album_id, t.label_id
-              from tracks t
-             where (t.album_id in (select value from json_each(?)) and t.is_catalogue = 1)
-                or t.track_id in (select value from json_each(?))
-             order by t.title collate nocase asc, t.track_id asc`,
-    }),
+    db.execute(labelOutlierTracksStatement(albumIds, singleIds)),
     getSetting(LABEL_OUTLIERS_LAST_RUN_KEY),
   ]);
   const trackRows = typedRows<OutlierTrackRow>(trackResult.rows);

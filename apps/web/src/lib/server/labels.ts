@@ -439,27 +439,87 @@ export type EntitySitemapRow = {
   slug: string;
 };
 
+type EntitySitemapLightRow = {
+  added_at: string;
+  album_image_url: null | string;
+  log_id: null | string;
+  slug: string;
+  track_id: string;
+};
+
+export type EntitySitemapLight = {
+  certifiedAt?: string;
+  coverTrackId?: string;
+  coverUrl?: string;
+  lastmod?: string;
+};
+
+export function entitySitemapLight(
+  rows: Parameters<typeof typedRows>[0],
+): Map<string, EntitySitemapLight> {
+  const bySlug = new Map<string, EntitySitemapLight>();
+
+  for (const row of typedRows<EntitySitemapLightRow>(rows)) {
+    const light = bySlug.get(row.slug) ?? {};
+
+    if (light.lastmod === undefined || row.added_at > light.lastmod) {
+      light.lastmod = row.added_at;
+    }
+
+    if (row.log_id !== null) {
+      const newer = light.certifiedAt === undefined || row.added_at > light.certifiedAt;
+      const earlierTie =
+        row.added_at === light.certifiedAt &&
+        (light.coverTrackId === undefined || row.track_id < light.coverTrackId);
+
+      if (newer || earlierTie) {
+        light.certifiedAt = row.added_at;
+        light.coverTrackId = row.track_id;
+        light.coverUrl = row.album_image_url ?? undefined;
+      }
+    }
+
+    bySlug.set(row.slug, light);
+  }
+
+  return bySlug;
+}
+
+export function sitemapSlugSpan(
+  rows: readonly { slug: string }[],
+): { first: string; last: string } | undefined {
+  const first = rows[0]?.slug;
+  const last = rows.at(-1)?.slug;
+
+  return first === undefined || last === undefined ? undefined : { first, last };
+}
+
 export function labelSitemapWindowStatement(minTracks: number, limit: number, afterSlug?: string) {
   const seek = afterSlug === undefined ? "labels.slug >= ?" : "labels.slug > ?";
 
   return {
     args: [afterSlug ?? "", minTracks, limit],
-    sql: `select labels.slug as slug,
-                 (select max(f.added_at)
-                    from tracks t join findings f on f.track_id = t.track_id
-                    where t.label_id = labels.id) as lastmod,
-                 (select t.album_image_url
-                    from tracks t join findings f on f.track_id = t.track_id
-                    where t.label_id = labels.id
-                      and f.log_id is not null
-                      and f.added_at = (select max(f2.added_at)
-                        from tracks t2 join findings f2 on f2.track_id = t2.track_id
-                        where t2.label_id = labels.id and f2.log_id is not null)
-                    limit 1) as cover_url
+    sql: `select labels.slug as slug
           from labels
           where ${seek} and labels.renderable_track_count >= ?
           order by labels.slug asc
           limit ?`,
+  };
+}
+
+export function labelSitemapLightStatement(
+  minTracks: number,
+  span: { first: string; last: string },
+) {
+  return {
+    args: [span.first, span.last, minTracks],
+    sql: `select labels.slug as slug, f.added_at as added_at, f.log_id as log_id,
+                 t.track_id as track_id, t.album_image_url as album_image_url
+          from findings f
+          cross join tracks t on t.track_id = f.track_id
+          cross join labels on labels.id = t.label_id
+          where labels.slug >= ? and labels.slug <= ?
+            and labels.renderable_track_count >= ?`,
   };
 }
 
@@ -468,12 +528,27 @@ export async function listLabelSitemapRows(
   window?: { afterSlug?: string; limit: number },
 ): Promise<EntitySitemapRow[]> {
   const db = await getDb();
-  const result = await db.execute(
-    window
-      ? labelSitemapWindowStatement(minTracks, window.limit, window.afterSlug)
-      : {
-          args: [minTracks],
-          sql: `select labels.slug as slug,
+
+  if (window) {
+    const slugs = typedRows<{ slug: string }>(
+      (await db.execute(labelSitemapWindowStatement(minTracks, window.limit, window.afterSlug)))
+        .rows,
+    );
+    const span = sitemapSlugSpan(slugs);
+    const light = span
+      ? entitySitemapLight((await db.execute(labelSitemapLightStatement(minTracks, span))).rows)
+      : new Map<string, EntitySitemapLight>();
+
+    return slugs.map(({ slug }) => ({
+      coverImageUrl: light.get(slug)?.coverUrl,
+      lastmod: light.get(slug)?.lastmod,
+      slug,
+    }));
+  }
+
+  const result = await db.execute({
+    args: [minTracks],
+    sql: `select labels.slug as slug,
                  max(findings.added_at) as lastmod,
                  (select t2.album_image_url
                     from findings f2 join tracks t2 on t2.track_id = f2.track_id
@@ -485,8 +560,7 @@ export async function listLabelSitemapRows(
           where labels.renderable_track_count >= ?
           group by labels.id
           order by labels.slug asc`,
-        },
-  );
+  });
 
   return typedRows<{
     cover_url: string | null;

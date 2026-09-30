@@ -16,7 +16,7 @@ export const Route = createFileRoute("/fresh.json")({
     handlers: {
       GET: async () => {
         const now = new Date();
-        const { tracks } = await listFreshTracks({ limit: 50, now });
+        const { tracks } = await listFreshTracks({ albums: false, limit: 50, now });
 
         const items = tracks.map((track) => {
           const title = itemTitle(track);

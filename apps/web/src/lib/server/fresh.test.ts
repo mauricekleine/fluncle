@@ -574,6 +574,9 @@ describe("listFreshRecords", () => {
   });
 });
 
+const sqlOf = (statement: unknown): string =>
+  typeof statement === "string" ? statement : (statement as { sql: string }).sql;
+
 describe("listFreshTracks — the flat list the syndication surfaces read", () => {
   it("flattens into a capped list, newest release first, unlit rows coordinate-free", async () => {
     await seedFinding({
@@ -647,5 +650,41 @@ describe("listFreshTracks — the flat list the syndication surfaces read", () =
     ]);
     expect(feed.albums.map((album) => album.slug)).toEqual(["recent-record"]);
     expect(feed.windowDays).toBe(FRESH_WINDOW_DAYS);
+  });
+
+  it("reads only the half a caller asks for, and that half is unchanged", async () => {
+    await seedFinding({
+      artists: ["Dimension"],
+      logId: "200.7.1B",
+      releaseDate: "2026-07-15",
+      trackId: "half_f",
+    });
+    await seedAlbumTrack({
+      albumId: "alb_half",
+      albumName: "Half Record",
+      albumSlug: "half-record",
+      artists: ["Nu:Tone"],
+      releaseDate: "2026-07-12",
+      trackId: "half_c",
+    });
+
+    const both = await listFreshTracks({ now: NOW });
+    const execute = vi.spyOn(db, "execute");
+
+    try {
+      const tracksOnly = await listFreshTracks({ albums: false, now: NOW });
+      const readsForTracks = execute.mock.calls.length;
+      const albumsOnly = await listFreshTracks({ now: NOW, tracks: false });
+      const readsForAlbums = execute.mock.calls.length - readsForTracks;
+
+      expect(tracksOnly).toEqual({ ...both, albums: [] });
+      expect(albumsOnly).toEqual({ ...both, tracks: [] });
+      expect(readsForAlbums).toBe(1);
+      expect(
+        execute.mock.calls.filter(([statement]) => sqlOf(statement).includes("group by al.id")),
+      ).toHaveLength(1);
+    } finally {
+      execute.mockRestore();
+    }
   });
 });

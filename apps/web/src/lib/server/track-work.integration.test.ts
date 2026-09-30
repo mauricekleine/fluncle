@@ -16,6 +16,9 @@ vi.mock("./db", async (importOriginal) => {
   return { ...actual, getDb: () => Promise.resolve(db) };
 });
 
+const sqlOf = (statement: unknown): string =>
+  typeof statement === "string" ? statement : (statement as { sql: string }).sql;
+
 async function openCaptureBudget(): Promise<void> {
   const { setCatalogueCapturePaused } = await import("./capture-budget");
 
@@ -1009,6 +1012,42 @@ describe("listTrackWork — the capture budget stops the money", () => {
     expect(work[0]?.certified).toBe(true);
 
     expect((await listTrackWork({ kind: "capture", scope: "findings" })).length).toBe(1);
+  });
+
+  it("a findings-scoped metered read never prices the catalogue budget it cannot use", async () => {
+    const { countTrackWork, listTrackWork } = await import("./track-work");
+
+    await openCaptureBudget();
+    await seedTrack(db, {
+      logId: "004.7.2J",
+      title: "Another Banger",
+      trackId: "bbbbbbbbbbbbbbbbbbbbbb",
+    });
+
+    const execute = vi.spyOn(db, "execute");
+
+    try {
+      for (const kind of ["capture", "youtube-provenance"] as const) {
+        await listTrackWork({ kind, scope: "findings" });
+        await countTrackWork({ kind, scope: "findings" });
+      }
+
+      const spendReads = execute.mock.calls.filter(([statement]) =>
+        sqlOf(statement).includes("source_audio_attempted_at >= ?"),
+      );
+
+      expect(spendReads).toEqual([]);
+
+      await listTrackWork({ kind: "capture", scope: "all" });
+
+      expect(
+        execute.mock.calls.some(([statement]) =>
+          sqlOf(statement).includes("source_audio_attempted_at >= ?"),
+        ),
+      ).toBe(true);
+    } finally {
+      execute.mockRestore();
+    }
   });
 
   it("PROOF 3b — and the same holds under the KILL SWITCH, not just a spent cap", async () => {
