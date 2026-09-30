@@ -94,7 +94,9 @@ bun run packages/skills/fluncle-catalogue-prune/scripts/purge.ts --confirm  # wr
 
 The purge is **artist-driven**: it deletes only safe-purge artists (no finding, no enabled-label track, AND ≥1 track on a label you've explicitly **disabled** — so an artist with only undecided/no-label tracks is never swept in on a metadata gap), the tracks credited _only_ to them, orphan albums, and the cascade (edges, socials, aliases, centroids/similar, cost_events). It writes a full per-row rollback first. The **entanglement guard** aborts if any deletable track is in a mixtape, a user save, a published post, or a frontier edition — that's a surprise for a human, never a silent delete.
 
-**Edges die with their tracks.** The track delete and the `track_artists` delete for the same ids ride one transaction, so a deleted track can never strand an edge behind it. `track_artists` is the only table referencing `tracks.track_id` that is neither guarded nor swept by the artist cascade — everything else is either protected (`findings`, and the nine guard tables) or cascaded (`cost_events`).
+The shared track delete also clears every due-work row for that track in the same write. For orphans left by older purges, run `bun run packages/skills/fluncle-catalogue-prune/scripts/clean-orphan-due-work.ts` for a read-only count, then the same command with `--apply` to retire them in bounded pages. The script reads the database selected by `getDb`; check its target before `--apply`.
+
+**Edges die with their tracks.** The track delete and the `track_artists` delete for the same ids ride one transaction, so a deleted track can never strand an edge behind it. `track_artists` and track-subject `due_work` rows are cleared explicitly in that write; protected references (`findings` and the guard tables) block the purge, while `cost_events` cascades.
 
 **The dry-run NAMES every artist it would delete, with their labels — eyeball that list; every one should be recognisably off-genre.** If a count is far larger than expected, a label ruling was wrong — go back to step 2.
 

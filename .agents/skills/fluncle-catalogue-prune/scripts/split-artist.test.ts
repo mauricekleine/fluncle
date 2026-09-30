@@ -353,7 +353,7 @@ describe("--confirm", () => {
     expect(s.batches[0]?.stmts[1]?.sql).toBe(
       "delete from track_embeddings where track_id in (?,?)",
     );
-    expect(s.batches[0]?.stmts[2]?.sql).toBe("delete from tracks where track_id in (?,?)");
+    expect(s.batches[0]?.stmts[3]?.sql).toBe("delete from tracks where track_id in (?,?)");
 
     expect(s.executed.some((sql) => /delete from artists\b/.test(sql))).toBe(false);
   });

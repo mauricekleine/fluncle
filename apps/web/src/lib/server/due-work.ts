@@ -730,6 +730,7 @@ const DUE_WORK_SOURCE_MARKED_SQL = `exists (
 
 export const DUE_WORK_READY_SCAN_MULTIPLE = 4;
 export const DUE_WORK_READY_SCAN_CAP = 1_000;
+export const DUE_WORK_READY_SCAN_MAX_WINDOWS = 4;
 
 export function dueWorkReadyScanWindow(limit: number): number {
   return Math.min(limit * DUE_WORK_READY_SCAN_MULTIPLE + 1, DUE_WORK_READY_SCAN_CAP);
@@ -742,30 +743,64 @@ if (DUE_WORK_READY_SCAN_MULTIPLE < 2) {
 export async function listServableDueWork<WorkKind extends string>(
   client: DueWorkClient,
   workKind: WorkKind,
-  options: { limit?: number } = {},
+  options: { limit?: number; requireTrack?: boolean } = {},
 ): Promise<DueWorkPage<WorkKind> & { withheld: number }> {
   const limit = options.limit ?? 100;
   assertLimit(limit);
   const scanWindow = dueWorkReadyScanWindow(limit);
-  const result = await client.execute({
-    args: [workKind, scanWindow],
-    sql: `select ${DUE_WORK_COLUMNS}, ${DUE_WORK_SOURCE_MARKED_SQL} as source_marked
-      from due_work ready
-      where work_kind = ? and state = 'ready'
-      order by sort_key, subject_id
-      limit ?`,
-  });
-  const withheldFlags = (result.rows as unknown as { source_marked: bigint | number }[]).map(
-    (row) => Number(row.source_marked) === 1,
-  );
-  const servable = dueWorkRows<WorkKind>(result).filter(
-    (_, index) => withheldFlags[index] !== true,
-  );
+  const servable: DueWorkRow<WorkKind>[] = [];
+  let continuation: { sortKey: string; subjectId: string } | undefined;
+  let withheld = 0;
+  let windows = 0;
+  let exhausted = false;
+
+  while (servable.length <= limit && windows < DUE_WORK_READY_SCAN_MAX_WINDOWS) {
+    windows += 1;
+    const result = await client.execute({
+      args: continuation
+        ? [workKind, continuation.sortKey, continuation.subjectId, scanWindow]
+        : [workKind, scanWindow],
+      sql: `select ${DUE_WORK_COLUMNS}, ${DUE_WORK_SOURCE_MARKED_SQL} as source_marked,
+          ${options.requireTrack ? "exists (select 1 from tracks t where t.track_id = ready.subject_id)" : "1"} as track_exists
+        from due_work ready
+        where work_kind = ? and state = 'ready'
+          ${continuation ? "and (sort_key, subject_id) > (?, ?)" : ""}
+        order by sort_key, subject_id
+        limit ?`,
+    });
+    const rows = dueWorkRows<WorkKind>(result);
+    const orphanIds: string[] = [];
+    for (const [index, row] of rows.entries()) {
+      const flags = result.rows[index];
+      if (Number(flags?.track_exists) !== 1) {
+        orphanIds.push(row.subjectId);
+      } else if (Number(flags?.source_marked) === 1) {
+        withheld += 1;
+      } else {
+        servable.push(row);
+      }
+    }
+    for (let start = 0; start < orphanIds.length; start += MAX_DUE_WORK_CHUNK_SIZE) {
+      const chunk = orphanIds.slice(start, start + MAX_DUE_WORK_CHUNK_SIZE);
+      await client.execute({
+        args: [workKind, ...chunk],
+        sql: `delete from due_work where work_kind = ? and subject_type = 'track'
+          and subject_id in (${chunk.map(() => "?").join(", ")})
+          and not exists (select 1 from tracks t where t.track_id = due_work.subject_id)`,
+      });
+    }
+    const last = rows.at(-1);
+    if (last === undefined || rows.length < scanWindow) {
+      exhausted = true;
+      break;
+    }
+    continuation = { sortKey: last.sortKey, subjectId: last.subjectId };
+  }
 
   return {
-    hasMore: servable.length > limit || withheldFlags.length >= scanWindow,
+    hasMore: servable.length > limit || !exhausted,
     items: servable.slice(0, limit),
-    withheld: withheldFlags.filter(Boolean).length,
+    withheld,
   };
 }
 

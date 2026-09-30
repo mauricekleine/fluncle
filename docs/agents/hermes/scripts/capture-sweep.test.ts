@@ -459,6 +459,58 @@ describe("capture reconciliation durability and admission boundaries", () => {
     }
   });
 
+  test.each(["capture", "youtube-provenance"] as const)(
+    "an expired ambiguous %s attempt settles and releases its queue slot",
+    async (kind) => {
+      const directory = mkdtempSync(join(tmpdir(), "capture-progress-"));
+      const path = progressFile(directory);
+      try {
+        writeJsonAtomic(path, {
+          attempt: {
+            attemptedAt: "2026-01-01T00:00:00.000Z",
+            finding: { title: "Expired", trackId: "track-1" },
+            kind,
+            state: "provider-ambiguous",
+            workDirectory: join(directory, "old-work"),
+          },
+          snapshotToken: "snapshot-token",
+          trackId: "track-1",
+        });
+        const recovered = await recoverCaptureProgress(
+          directory,
+          ports(directory, {
+            admittedPhase: (action, statePath) => {
+              expect(action).toBe("commit");
+              writePhaseResult(
+                statePath,
+                committedResolution(kind, kind === "capture" ? "failed" : "none"),
+              );
+              return "completed";
+            },
+            authorizeProgress: async (progress) => {
+              expect(progress.result).toMatchObject(
+                kind === "capture"
+                  ? { kind, outcome: "failed" }
+                  : { kind, outcome: "none", verification: "inconclusive" },
+              );
+              return { ...progress, receipt };
+            },
+            prepareCurrentSnapshot: () => ({
+              prepared: true,
+              snapshotToken: "snapshot-token",
+              track: { artists: [], certified: false, title: "Expired", trackId: "track-1" },
+            }),
+          }),
+        );
+        expect(recovered[0]?.disposition).toBe("committed");
+        expect(protectedTrackIdsFromRecovery(recovered).size).toBe(0);
+        expect(existsSync(path)).toBe(false);
+      } finally {
+        rmSync(directory, { force: true, recursive: true });
+      }
+    },
+  );
+
   test("an interruption after provider completion records the provable local download without replay", async () => {
     const directory = mkdtempSync(join(tmpdir(), "capture-progress-"));
     const path = progressFile(directory);

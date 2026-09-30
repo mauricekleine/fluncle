@@ -33,6 +33,8 @@ The anchored term is the metered queue's alone. Audio bought for a row with no S
 
 With the track due-work cutover open, the queue is read from the `due_work` projection's stored `sort_key`, so this term took effect only once the `capture-catalogue` queue was re-keyed under the definition that carries it. Changing an order this way is not a source mutation, and the mechanism that makes such a change land — the stored definition version and the `fluncle admin projections rekey` lever — is specified in [docs/database-performance.md](./database-performance.md) § projections.
 
+Due-work reads advance through bounded, indexed keyset pages until they have the requested number of live tracks or reach the end. Each page removes missing-track work rows before continuing, so a pruned track cannot consume a capture slot. Catalogue-prune deletes a track's due-work rows in the same write as the track; the bounded `clean-orphan-due-work.ts` operator script retires older orphans across all track work kinds and states.
+
 ### The veto is a predicate, not a sort
 
 A disabled label has capture priority −1 and is excluded by `capture_priority >= 0`. Its row remains visible for inspection but never reaches the metered capture worker.
