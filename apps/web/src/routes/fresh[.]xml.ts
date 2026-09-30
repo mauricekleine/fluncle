@@ -16,7 +16,7 @@ export const Route = createFileRoute("/fresh.xml")({
     handlers: {
       GET: async () => {
         const now = new Date();
-        const { tracks } = await listFreshTracks({ limit: 50, now });
+        const { tracks } = await listFreshTracks({ albums: false, limit: 50, now });
         const newest = tracks[0]?.releaseDate;
         const newestInstant = newest ? releaseInstant(newest) : undefined;
 

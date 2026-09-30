@@ -631,7 +631,11 @@ const listFreshTool = {
     const showAlbums = view !== "tracks";
 
     if (ctx.transport === "chat") {
-      const fresh = await listFreshTracks({ limit: clampInt(rawLimit, FRESH_LIMIT_MAX, 12) });
+      const fresh = await listFreshTracks({
+        albums: showAlbums,
+        limit: clampInt(rawLimit, FRESH_LIMIT_MAX, 12),
+        tracks: showTracks,
+      });
 
       const certified = showTracks
         ? fresh.tracks.filter((track) => track.certified && track.logId)
@@ -661,7 +665,7 @@ const listFreshTool = {
     }
 
     const limit = typeof rawLimit === "number" ? rawLimit : undefined;
-    const fresh = await listFreshTracks({ limit });
+    const fresh = await listFreshTracks({ albums: showAlbums, limit, tracks: showTracks });
 
     return {
       albums: showAlbums ? fresh.albums : [],

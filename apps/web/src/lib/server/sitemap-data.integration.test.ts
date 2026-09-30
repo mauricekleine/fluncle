@@ -19,11 +19,26 @@ vi.mock("./db", async () => {
   return { ...actual, getDb: async () => db };
 });
 
-import { ALBUM_INDEX_MIN_TRACKS, linkTrackToAlbum, listAlbumSitemapRows } from "./albums";
+import {
+  ALBUM_INDEX_MIN_TRACKS,
+  albumSitemapLightStatement,
+  linkTrackToAlbum,
+  listAlbumSitemapRows,
+} from "./albums";
 import { typedRows } from "./db";
 import { createIntegrationDb, syncHubCounts } from "./integration-db";
-import { ARTIST_INDEX_MIN_FINDINGS, listArtistSitemapRows } from "./artists";
-import { LABEL_INDEX_MIN_TRACKS, linkTrackToLabel, listLabelSitemapRows } from "./labels";
+import {
+  ARTIST_INDEX_MIN_FINDINGS,
+  artistSitemapLightStatement,
+  listArtistSitemapRows,
+} from "./artists";
+import {
+  type EntitySitemapRow,
+  LABEL_INDEX_MIN_TRACKS,
+  labelSitemapLightStatement,
+  linkTrackToLabel,
+  listLabelSitemapRows,
+} from "./labels";
 import {
   collectSitemapBag,
   collectSitemapIndexStats,
@@ -374,6 +389,98 @@ describe("the sitemap index reads aggregates that match the rows", () => {
 
     expect(details, details).toMatch(/SEARCH member USING COVERING INDEX findings_galaxy_id_idx/i);
     expect(details, details).not.toContain("USE TEMP B-TREE");
+  });
+});
+
+describe("entity sitemap windows — lastmod and cover come from the findings side", () => {
+  type EntityRowsReader = (
+    minTracks: number,
+    window?: { afterSlug?: string; limit: number },
+  ) => Promise<EntitySitemapRow[]>;
+
+  const readers: [string, EntityRowsReader, number][] = [
+    ["albums", listAlbumSitemapRows, ALBUM_INDEX_MIN_TRACKS],
+    ["artists", listArtistSitemapRows, ARTIST_INDEX_MIN_FINDINGS],
+    ["labels", listLabelSitemapRows, LABEL_INDEX_MIN_TRACKS],
+  ];
+
+  it("windows every row, lastmod and cover included, exactly as the unwindowed read does", async () => {
+    const second = {
+      album: "Second Wave",
+      artistId: "artist-second",
+      artistName: "Second",
+      label: "Second Imprint",
+    };
+
+    await seedTrack({
+      ...second,
+      addedAt: "2026-06-20T00:00:00.000Z",
+      logId: "020.7.1A",
+      title: "Lit Early",
+      trackId: "track-5",
+    });
+    await seedTrack({
+      ...second,
+      addedAt: "2026-06-25T00:00:00.000Z",
+      logId: "021.7.1A",
+      title: "Lit Late",
+      trackId: "track-6",
+    });
+    await seedTrack({ ...second, title: "Pending", trackId: "track-7" });
+    await db.execute({
+      args: ["track-7"],
+      sql: `insert into findings (track_id, added_at) values (?, '2026-06-28T00:00:00.000Z')`,
+    });
+    await syncHubCounts(db);
+
+    for (const [kind, read, floor] of readers) {
+      const reference = await read(floor);
+      const windowed: EntitySitemapRow[] = [];
+      let afterSlug: string | undefined;
+
+      for (let page = 0; page <= reference.length; page += 1) {
+        const rows = await read(floor, { afterSlug, limit: 1 });
+
+        if (rows.length === 0) {
+          break;
+        }
+
+        windowed.push(...rows);
+        afterSlug = rows.at(-1)?.slug;
+      }
+
+      expect(windowed, kind).toEqual(reference);
+      expect(
+        reference.find((row) => row.lastmod === "2026-06-28T00:00:00.000Z")?.coverImageUrl,
+        kind,
+      ).toContain("track-6");
+    }
+  });
+
+  it("drives each window's lastmod and cover from findings, never an entity's track walk", async () => {
+    const span = { first: "a", last: "z" };
+
+    for (const statement of [
+      albumSitemapLightStatement(ALBUM_INDEX_MIN_TRACKS, span),
+      artistSitemapLightStatement(ARTIST_INDEX_MIN_FINDINGS, span),
+      labelSitemapLightStatement(LABEL_INDEX_MIN_TRACKS, span),
+    ]) {
+      const plan = await db.execute({
+        args: statement.args,
+        sql: `explain query plan ${statement.sql}`,
+      });
+      const details = typedRows<{ detail: string }>(plan.rows).map((row) => row.detail);
+
+      expect(details[0], details.join("\n")).toBe("SCAN f");
+      expect(details.slice(1).join("\n")).not.toMatch(/^SCAN /im);
+      expect(details.join("\n")).toMatch(/SEARCH t USING INDEX sqlite_autoindex_tracks_1/i);
+    }
+
+    for (const kind of ["albums", "artists", "labels"] as const) {
+      const statement = sitemapWindowStatement(kind, 1, "a");
+
+      expect(statement.sql, kind).not.toMatch(/\bfindings\b|\btracks\b|\btrack_artists\b/i);
+    }
   });
 });
 

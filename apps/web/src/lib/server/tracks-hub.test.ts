@@ -33,6 +33,7 @@ import {
   tracksHubClauses,
   tracksHubAnchorExtractionQuery,
   tracksHubCountQuery,
+  tracksHubHydrateQuery,
   tracksHubIdPageQuery,
   tracksHubYearLaneQuery,
   yearPages,
@@ -237,6 +238,14 @@ describe("listTracksHubPage — the register split + the linked row", () => {
     expect(finding?.kind === "finding" && finding.finding.labelSlug).toBe("hospital-records");
     expect(catalogue?.kind === "catalogue" && catalogue.labelSlug).toBe("hospital-records");
     expect(catalogue?.kind === "catalogue" && catalogue.label).toBe("Hospital Records");
+  });
+});
+
+describe("tracksHubHydrateQuery — one probe per column", () => {
+  it("computes each row's sonic seed once, not once per projection that carries it", () => {
+    const { sql } = tracksHubHydrateQuery(["a", "b"]);
+
+    expect(sql.match(/\bas sonic_seed\b/g)).toHaveLength(1);
   });
 });
 

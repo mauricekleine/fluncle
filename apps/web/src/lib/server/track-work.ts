@@ -309,7 +309,8 @@ export async function listTrackWork(options: {
   const { kind, limit = 50, paidMode, scope = "all" } = options;
   const page = Math.min(Math.max(1, Math.trunc(limit)), MAX_WORK_LIMIT);
 
-  const catalogueShut = METERED_KINDS.has(kind) ? !(await isCatalogueCaptureOpen()) : false;
+  const catalogueShut =
+    METERED_KINDS.has(kind) && scope !== "findings" ? !(await isCatalogueCaptureOpen()) : false;
 
   if (catalogueShut && scope === "catalogue") {
     return [];
@@ -492,9 +493,10 @@ export async function countTrackWork(options: {
 }): Promise<number> {
   const { captureState, kind, paidMode, scope = "all" } = options;
 
-  const catalogueShut = METERED_KINDS.has(kind)
-    ? !(captureState ? captureState.open : await isCatalogueCaptureOpen())
-    : false;
+  const catalogueShut =
+    METERED_KINDS.has(kind) && scope !== "findings"
+      ? !(captureState ? captureState.open : await isCatalogueCaptureOpen())
+      : false;
 
   if (catalogueShut && scope === "catalogue") {
     return 0;

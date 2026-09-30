@@ -35,7 +35,10 @@ import {
   type HubOrder,
   type CatalogueListPage,
   countIndexableHubEntities,
+  type EntitySitemapLight,
   type EntitySitemapRow,
+  entitySitemapLight,
+  sitemapSlugSpan,
   hubCountsBySlug,
   hubCountsBySlugs,
   hubFindingCountsBySlug,
@@ -319,24 +322,7 @@ export function artistSitemapWindowStatement(minTracks: number, limit: number, a
 
   return {
     args: [afterSlug ?? "", minTracks, limit],
-    sql: `select a.slug as slug,
-                 (select max(f.added_at)
-                    from track_artists ta
-                    join tracks t on t.track_id = ta.track_id
-                    join findings f on f.track_id = t.track_id
-                    where ta.artist_id = a.id) as lastmod,
-                 (select t.album_image_url
-                    from track_artists ta
-                    join tracks t on t.track_id = ta.track_id
-                    join findings f on f.track_id = t.track_id
-                    where ta.artist_id = a.id
-                      and f.log_id is not null
-                      and f.added_at = (select max(f2.added_at)
-                        from track_artists ta2
-                        join tracks t2 on t2.track_id = ta2.track_id
-                        join findings f2 on f2.track_id = t2.track_id
-                        where ta2.artist_id = a.id and f2.log_id is not null)
-                    limit 1) as cover_url
+    sql: `select a.slug as slug
           from artists a
           where ${seek} and a.renderable_track_count >= ?
             and ${listedArtistWhere("a")}
@@ -345,17 +331,49 @@ export function artistSitemapWindowStatement(minTracks: number, limit: number, a
   };
 }
 
+export function artistSitemapLightStatement(
+  minTracks: number,
+  span: { first: string; last: string },
+) {
+  return {
+    args: [span.first, span.last, minTracks],
+    sql: `select a.slug as slug, f.added_at as added_at, f.log_id as log_id,
+                 t.track_id as track_id, t.album_image_url as album_image_url
+          from findings f
+          cross join tracks t on t.track_id = f.track_id
+          cross join track_artists ta on ta.track_id = t.track_id
+          cross join artists a on a.id = ta.artist_id
+          where a.slug >= ? and a.slug <= ?
+            and a.renderable_track_count >= ? and ${listedArtistWhere("a")}`,
+  };
+}
+
 export async function listArtistSitemapRows(
   minTracks: number,
   window?: { afterSlug?: string; limit: number },
 ): Promise<EntitySitemapRow[]> {
   const db = await getDb();
-  const result = await db.execute(
-    window
-      ? artistSitemapWindowStatement(minTracks, window.limit, window.afterSlug)
-      : {
-          args: [minTracks],
-          sql: `select a.slug as slug,
+
+  if (window) {
+    const slugs = typedRows<{ slug: string }>(
+      (await db.execute(artistSitemapWindowStatement(minTracks, window.limit, window.afterSlug)))
+        .rows,
+    );
+    const span = sitemapSlugSpan(slugs);
+    const light = span
+      ? entitySitemapLight((await db.execute(artistSitemapLightStatement(minTracks, span))).rows)
+      : new Map<string, EntitySitemapLight>();
+
+    return slugs.map(({ slug }) => ({
+      coverImageUrl: light.get(slug)?.coverUrl,
+      lastmod: light.get(slug)?.lastmod,
+      slug,
+    }));
+  }
+
+  const result = await db.execute({
+    args: [minTracks],
+    sql: `select a.slug as slug,
                  max(findings.added_at) as lastmod,
                  (select t2.album_image_url
                     from (findings join tracks on tracks.track_id = findings.track_id) t2
@@ -369,8 +387,7 @@ export async function listArtistSitemapRows(
           where a.renderable_track_count >= ? and ${listedArtistWhere("a")}
           group by a.id
           order by a.slug asc`,
-        },
-  );
+  });
 
   return typedRows<{
     cover_url: string | null;

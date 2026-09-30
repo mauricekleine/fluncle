@@ -32,7 +32,11 @@ const UNCERTIFIED_BARE = {
 const TRACKS = [CERTIFIED, CERTIFIED_NO_COORD, UNCERTIFIED_SPOTIFY, UNCERTIFIED_BARE];
 
 const listFreshTracks = vi.hoisted(() =>
-  vi.fn(async () => ({ albums: [], tracks: TRACKS, windowDays: 30 })),
+  vi.fn(async (_options?: { albums?: boolean }) => ({
+    albums: [],
+    tracks: TRACKS,
+    windowDays: 30,
+  })),
 );
 
 vi.mock("../lib/server/fresh", () => ({ listFreshTracks }));
@@ -152,5 +156,18 @@ describe("fresh.json — release-framed, two tiers", () => {
     const bare = feed.items.find((item) => item.title === "Ghost Artist — Nowhere To Point");
     expect(bare?.url).toBeUndefined();
     expect(bare?.id).toContain("urn:fluncle:release:2026-07-07:");
+  });
+});
+
+describe("fresh feeds — the read each one pays for", () => {
+  it("never reads the album records a track feed does not render", async () => {
+    for (const importer of [import("./fresh[.]xml"), import("./fresh[.]json")]) {
+      listFreshTracks.mockClear();
+      await (
+        await handlerFor(importer)
+      )();
+
+      expect(listFreshTracks.mock.calls[0]?.[0]).toMatchObject({ albums: false });
+    }
   });
 });

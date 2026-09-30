@@ -23,7 +23,10 @@ import {
   type HubOrder,
   type CatalogueListPage,
   countIndexableHubEntities,
+  type EntitySitemapLight,
   type EntitySitemapRow,
+  entitySitemapLight,
+  sitemapSlugSpan,
   hubCountsBySlug,
   hubFindingCountsBySlug,
   hubInclusionWhere,
@@ -372,22 +375,27 @@ export function albumSitemapWindowStatement(minTracks: number, limit: number, af
 
   return {
     args: [afterSlug ?? "", minTracks, limit],
-    sql: `select albums.slug as slug, ${ALBUM_COVER_SELECT},
-                 (select max(f.added_at)
-                    from tracks t join findings f on f.track_id = t.track_id
-                    where t.album_id = albums.id) as lastmod,
-                 (select t.album_image_url
-                    from tracks t join findings f on f.track_id = t.track_id
-                    where t.album_id = albums.id
-                      and f.log_id is not null
-                      and f.added_at = (select max(f2.added_at)
-                        from tracks t2 join findings f2 on f2.track_id = t2.track_id
-                        where t2.album_id = albums.id and f2.log_id is not null)
-                    limit 1) as cover_url
+    sql: `select albums.slug as slug, ${ALBUM_COVER_SELECT}
           from albums
           where ${seek} and albums.renderable_track_count >= ?
           order by albums.slug asc
           limit ?`,
+  };
+}
+
+export function albumSitemapLightStatement(
+  minTracks: number,
+  span: { first: string; last: string },
+) {
+  return {
+    args: [span.first, span.last, minTracks],
+    sql: `select albums.slug as slug, f.added_at as added_at, f.log_id as log_id,
+                 t.track_id as track_id, t.album_image_url as album_image_url
+          from findings f
+          cross join tracks t on t.track_id = f.track_id
+          cross join albums on albums.id = t.album_id
+          where albums.slug >= ? and albums.slug <= ?
+            and albums.renderable_track_count >= ?`,
   };
 }
 
@@ -396,12 +404,27 @@ export async function listAlbumSitemapRows(
   window?: { afterSlug?: string; limit: number },
 ): Promise<EntitySitemapRow[]> {
   const db = await getDb();
-  const result = await db.execute(
-    window
-      ? albumSitemapWindowStatement(minTracks, window.limit, window.afterSlug)
-      : {
-          args: [minTracks],
-          sql: `select albums.slug as slug, ${ALBUM_COVER_SELECT},
+
+  if (window) {
+    const rows = typedRows<AlbumCoverRow & { slug: string }>(
+      (await db.execute(albumSitemapWindowStatement(minTracks, window.limit, window.afterSlug)))
+        .rows,
+    );
+    const span = sitemapSlugSpan(rows);
+    const light = span
+      ? entitySitemapLight((await db.execute(albumSitemapLightStatement(minTracks, span))).rows)
+      : new Map<string, EntitySitemapLight>();
+
+    return rows.map((row) => ({
+      coverImageUrl: albumCover({ ...row, cover_url: light.get(row.slug)?.coverUrl }),
+      lastmod: light.get(row.slug)?.lastmod,
+      slug: row.slug,
+    }));
+  }
+
+  const result = await db.execute({
+    args: [minTracks],
+    sql: `select albums.slug as slug, ${ALBUM_COVER_SELECT},
                  max(findings.added_at) as lastmod,
                  (select t2.album_image_url
                     from findings f2 join tracks t2 on t2.track_id = f2.track_id
@@ -413,8 +436,7 @@ export async function listAlbumSitemapRows(
           where albums.renderable_track_count >= ?
           group by albums.id
           order by albums.slug asc`,
-        },
-  );
+  });
 
   return typedRows<AlbumCoverRow & { lastmod: string | null; slug: string }>(result.rows).map(
     (row) => ({

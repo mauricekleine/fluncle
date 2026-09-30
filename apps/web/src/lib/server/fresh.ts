@@ -343,13 +343,22 @@ export function clampFreshLimit(limit?: number): number {
 }
 
 export async function listFreshTracks(options?: {
+  albums?: boolean;
   limit?: number;
   now?: Date;
+  tracks?: boolean;
 }): Promise<FreshTracks> {
   const limit = clampFreshLimit(options?.limit);
   const [data, records] = await Promise.all([
-    listFreshReleases(options?.now),
-    listFreshRecords(options?.now),
+    options?.tracks === false
+      ? Promise.resolve<FreshReleases>({
+          catalogue: [],
+          coverage: { kind: "complete" },
+          findings: [],
+          windowDays: FRESH_WINDOW_DAYS,
+        })
+      : listFreshReleases(options?.now),
+    options?.albums === false ? Promise.resolve<FreshRecord[]>([]) : listFreshRecords(options?.now),
   ]);
 
   const findings: FreshTrack[] = data.findings.map((finding) => ({

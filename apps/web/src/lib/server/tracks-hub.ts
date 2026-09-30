@@ -48,7 +48,7 @@ import { fold } from "./track-match";
 import { releasedByTodaySql, releaseTodayUtc, validReleaseDateSql } from "./release-day";
 import { TRACK_SELECT, toPublicTrackListItem, toTrackListItem, type TrackRow } from "./tracks";
 import { type SearchStyle } from "../search-styles";
-import { SONIC_SEED_SELECT, sonicSeedFlag } from "./sonic-seed";
+import { sonicSeedFlag } from "./sonic-seed";
 import { rankTrackIdsByProbe, resolveStyleProbe } from "./style-probe";
 import { publicTrackWhere } from "../../db/public-track-visibility";
 
@@ -526,8 +526,7 @@ export function tracksHubHydrateQuery(ids: string[]): { args: string[]; sql: str
     args: ids,
     sql: `select ${TRACK_SELECT}, ${LEAD_ARTIST_SELECT},
                  (findings.track_id is not null) as certified,
-                 ${ARTIST_SLUGS_SELECT},
-                 ${SONIC_SEED_SELECT}
+                 ${ARTIST_SLUGS_SELECT}
           from tracks
           left join findings on findings.track_id = tracks.track_id
           ${LEAD_ARTIST_JOIN}
