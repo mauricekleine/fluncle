@@ -47,7 +47,12 @@ describe("constantTimeEqual — length-mismatch safety", () => {
 });
 
 describe("adminRole — an unprovisioned deployment answers unauthorized, never throws", () => {
-  const guarded = ["ADMIN_SESSION_SECRET", "FLUNCLE_AGENT_TOKEN", "FLUNCLE_API_TOKEN"] as const;
+  const guarded = [
+    "ADMIN_SESSION_SECRET",
+    "FLUNCLE_AGENT_TOKEN",
+    "FLUNCLE_SOLITON_AGENT_TOKEN",
+    "FLUNCLE_API_TOKEN",
+  ] as const;
   const saved = new Map<string, string | undefined>();
 
   function bearer(token: string): Request {
@@ -84,6 +89,26 @@ describe("adminRole — an unprovisioned deployment answers unauthorized, never 
 
     expect(await adminRole(bearer("the-agent-token"))).toBe("agent");
     expect(await adminRole(bearer("not-the-agent-token"))).toBeNull();
+  });
+
+  it("admits the AGENT on either agent token, each on its own", async () => {
+    process.env["FLUNCLE_AGENT_TOKEN"] = "the-box-agent-token";
+    process.env["FLUNCLE_SOLITON_AGENT_TOKEN"] = "the-soliton-agent-token";
+
+    expect(await adminRole(bearer("the-box-agent-token"))).toBe("agent");
+    expect(await adminRole(bearer("the-soliton-agent-token"))).toBe("agent");
+
+    delete process.env["FLUNCLE_AGENT_TOKEN"];
+
+    expect(await adminRole(bearer("the-box-agent-token"))).toBeNull();
+    expect(await adminRole(bearer("the-soliton-agent-token"))).toBe("agent");
+  });
+
+  it("never admits the OPERATOR on the Soliton agent token", async () => {
+    process.env["FLUNCLE_API_TOKEN"] = "the-operator-token";
+    process.env["FLUNCLE_SOLITON_AGENT_TOKEN"] = "the-soliton-agent-token";
+
+    expect(await adminRole(bearer("the-soliton-agent-token"))).toBe("agent");
   });
 
   it("admits the OPERATOR on an exact FLUNCLE_API_TOKEN match", async () => {
