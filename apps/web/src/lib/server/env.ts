@@ -20,6 +20,7 @@ const envKeys = [
   "FLUNCLE_API_TOKEN",
 
   "FLUNCLE_AGENT_TOKEN",
+  "FLUNCLE_SOLITON_AGENT_TOKEN",
 
   "FOLLOW_DIGEST_TEST_RECIPIENT",
   "FOLLOW_DIGEST_TEST_NOW",
@@ -217,6 +218,8 @@ export async function revokeAdminGrants(): Promise<number> {
 
 export type AdminRole = "operator" | "agent";
 
+const AGENT_TOKEN_ENV_NAMES = ["FLUNCLE_AGENT_TOKEN", "FLUNCLE_SOLITON_AGENT_TOKEN"] as const;
+
 export async function adminRole(request: Request): Promise<AdminRole | null> {
   const header = request.headers.get("Authorization");
   const prefix = "Bearer ";
@@ -229,10 +232,12 @@ export async function adminRole(request: Request): Promise<AdminRole | null> {
       return "operator";
     }
 
-    const agentToken = await readOptionalEnv("FLUNCLE_AGENT_TOKEN");
+    for (const name of AGENT_TOKEN_ENV_NAMES) {
+      const agentToken = await readOptionalEnv(name);
 
-    if (agentToken && constantTimeEqual(token, agentToken)) {
-      return "agent";
+      if (agentToken && constantTimeEqual(token, agentToken)) {
+        return "agent";
+      }
     }
   }
 

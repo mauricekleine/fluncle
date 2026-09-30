@@ -66,7 +66,7 @@ The `/me` session's `PublicUser` may carry the requester's own email for setting
 **Two admin ROLES, three carriers** (`adminRole` in `env.ts` is the single source of truth both `requireAdmin` and `requireOperator` read from):
 
 - **operator** — the human. Carried by the browser grant cookie OR the full `FLUNCLE_API_TOKEN` `Bearer` (the operator's own CLI). Can do everything.
-- **agent** — the box sweeps and Hermes. Carried by `FLUNCLE_AGENT_TOKEN`, a SEPARATE `Bearer` value. Bounded to the reversible/internal surface: `requireAdmin` accepts it, `requireOperator` **403s** it on every publish-/irreversible-class route (it authenticated fine, it just lacks the role). That split is what makes the box gate non-load-bearing — a compromised box holds only the agent token, which the Worker refuses for publish actions.
+- **agent** — the box sweeps and Hermes (`FLUNCLE_AGENT_TOKEN`), and coding agents on Soliton (`FLUNCLE_SOLITON_AGENT_TOKEN`): each a SEPARATE `Bearer` value, revocable on its own. Bounded to the reversible/internal surface: `requireAdmin` accepts it, `requireOperator` **403s** it on every publish-/irreversible-class route (it authenticated fine, it just lacks the role). That split is what makes the box gate non-load-bearing — a compromised box holds only the agent token, which the Worker refuses for publish actions.
 
 The tier of every op is read off the composed oRPC router rather than a hand-kept list: `orpc-auth-coverage.test.ts` derives each op's tier from the middleware singletons on its chain and fails the build on any op that is not deliberately tiered — today 144 `adminAuth` ops (agent-allowed) and 96 `adminAuth` + `operatorGuard` ops (operator-only) beside the `/me` private-session and public tiers.
 

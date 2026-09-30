@@ -124,7 +124,8 @@ R2_ACCOUNT_ID=0651fd3b33d9e0b2fe72a5f13e5cf65d
 # OpenRouter context_note distil (falls back to raw snippets when absent).
 OPENROUTER_API_KEY=op://$FLUNCLE_1PASSWORD_ENV_ITEM/OPENROUTER_API_KEY
 OPENROUTER_CONTEXT_MODEL=op://$FLUNCLE_1PASSWORD_ENV_ITEM/OPENROUTER_CONTEXT_MODEL
-# Hermes box agent Bearer -- the agent-role admin token (absent = operator-only).
+# Agent-role admin Bearers: the Hermes box and Soliton coding agents each have one (absent = operator-only).
 # FLUNCLE_AGENT_TOKEN=op://$FLUNCLE_1PASSWORD_ENV_ITEM/FLUNCLE_AGENT_TOKEN
+# FLUNCLE_SOLITON_AGENT_TOKEN=op://$FLUNCLE_1PASSWORD_ENV_ITEM/FLUNCLE_SOLITON_AGENT_TOKEN
 # Simple Analytics read API key (the demand signal). Absent = record_demand no-ops cleanly.
 # SIMPLE_ANALYTICS_API_KEY=op://$FLUNCLE_1PASSWORD_ENV_ITEM/SIMPLE_ANALYTICS_API_KEY

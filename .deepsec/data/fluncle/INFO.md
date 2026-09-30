@@ -8,7 +8,7 @@ Fluncle is a public drum & bass archive ("Fluncle's Findings"). The product surf
 
 Two completely separate identities, each with its own carrier — do not conflate them:
 
-- **Admin tier** (`adminRole(request)` in `lib/server/env.ts`): resolves to `operator | agent | null`. `operator` = either an HMAC-signed `fluncle_admin` cookie (Login-with-Spotify, allow-listed account) OR a `FLUNCLE_API_TOKEN` Bearer; can do everything. `agent` = `FLUNCLE_AGENT_TOKEN` Bearer (Hermes/enrichment); restricted to analysis-field write-back. Token comparison MUST be constant-time (`timingSafeEqual`, `lib/server/env.ts`).
+- **Admin tier** (`adminRole(request)` in `lib/server/env.ts`): resolves to `operator | agent | null`. `operator` = either an HMAC-signed `fluncle_admin` cookie (Login-with-Spotify, allow-listed account) OR a `FLUNCLE_API_TOKEN` Bearer; can do everything. `agent` = `FLUNCLE_AGENT_TOKEN` or `FLUNCLE_SOLITON_AGENT_TOKEN` Bearer (Hermes/enrichment); restricted to analysis-field write-back. Token comparison MUST be constant-time (`timingSafeEqual`, `lib/server/env.ts`).
 - **oRPC admin spine** (`lib/server/orpc-auth.ts`): `adminProcedure` (any admin), `operatorProcedure`/`operatorGuard` (operator-only → 403 for agent). Field-level role checks (agent may write ONLY analysis fields) are done IN the handler by reading `context.role`. Publish/irreversible ops MUST be `operatorProcedure`.
 - **Private-user tier** (`/me`, `lib/server/public-auth.ts` + `account-data.ts`): Better Auth cookie session (username plugin). Mutations require `requireAccountMutation` → JSON content-type + Origin/Referer check + HMAC CSRF token (`x-fluncle-csrf`) + per-op rate limit.
 
