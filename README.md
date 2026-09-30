@@ -50,11 +50,11 @@ packages/video        Remotion kit for per-track social videos (the Nostalgic Co
 The deployed web app owns the Spotify, Telegram, Turso, and Resend secrets. Every API route is served canonically under `/api/v1/*`. oRPC contract ops — the default for a public or admin HTTP surface — answer at that single prefix only; a bare `/api/*` contract path falls through to the router as a 404. The bare `/api/*` prefix is available only to the file-route carve-outs: auth/OAuth redirects, large-body or streaming media routes, and non-JSON emitters. Each carve-out mounts the same handler at both prefixes so POST bodies are preserved. Public reads are served by `/api/v1/tracks` (with `since`/`until` discovery windows), `/api/v1/tracks/random`, and `/rss.xml`. Newsletter signups post to `/api/v1/newsletter`, which the web app relays to Resend. The mobile app registers for push via `/api/v1/devices` (`register_device` / `deregister_device`); the web app then relays a notification to the Expo Push Service when a finding or mixtape publishes — best-effort and a no-op until `EXPO_ACCESS_TOKEN` is set, like the Telegram/Last.fm side-channels. Admin mutations are served by authenticated `/api/v1/admin/*` routes. Raycast must keep calling `fluncle`.
 Listener submissions are accepted through public `/api/v1/search` and `/api/v1/submissions` routes, then reviewed through authenticated admin submission routes. Approval publishes through the authenticated admin add flow. Optional web accounts are private overlays on the same Log ID spine: signed-in listeners can sync Galaxy lifetime progress, save findings, see their own submissions, export data, and delete the account without changing anonymous Fluncle.
 
-## Private Companion
+## Operator-only Material
 
-Some operator-only material is deliberately not in this repo — exact runtime recipes, the concrete secret/topology map, local-dev support, and work that is not part of the product. It lives in a private companion repo, `fluncle-labs`.
+Exact runtime recipes, the concrete secret/topology map, and operator-only support are deliberately excluded from this public repo. Fluncle builds, runs, tests, and deploys without them.
 
-**This repo is self-contained:** nothing here needs the companion to build, run, test, or deploy. The split is about what should be world-readable, not about hiding a dependency. If you have access, its README states the boundary; if you do not, nothing here requires it.
+The `mk-repos` skill maps how this repo relates to the others.
 
 ## License
 

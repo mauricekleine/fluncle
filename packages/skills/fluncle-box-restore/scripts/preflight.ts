@@ -553,10 +553,11 @@ export function resolveServerSkill(
   home: string = homedir(),
 ): string | undefined {
   const candidates = [
-    env.NUCLEUS_DIR,
-    join(dirname(repoRoot), "nucleus"),
-    join(home, "Projects", "nucleus"),
-    join(home, "projects", "nucleus"),
+    env.DOTFILES_DIR,
+    join(home, ".local", "share", "agent-layer", "dotfiles"),
+    join(dirname(repoRoot), "dotfiles"),
+    join(home, "Projects", "dotfiles"),
+    join(home, "projects", "dotfiles"),
   ].filter((value): value is string => typeof value === "string" && value !== "");
   return candidates.map((dir) => join(dir, SERVER_SKILL)).find((path) => existsSync(path));
 }
@@ -565,16 +566,16 @@ function checkServerSkill(repoRoot: string): CheckResult {
   const path = resolveServerSkill(repoRoot);
   if (!path) {
     return {
-      detail: "no Nucleus checkout with skills/mk-hetzner-devbox found",
+      detail: "no dotfiles checkout with mk-hetzner-devbox found",
       id: "server-skill",
       remedy:
-        "Step 1 creates the server with Nucleus's mk-hetzner-devbox skill. Clone mauricekleine/nucleus next to this repo or set NUCLEUS_DIR, so the drill can run step 1 offline.",
+        "Step 1 creates the server with mk-hetzner-devbox. Refresh the agent layer, clone mauricekleine/dotfiles next to this repo, or set DOTFILES_DIR to a dotfiles checkout, so the drill can run step 1 offline.",
       status: "unknown",
       title: "Server-creation skill (mk-hetzner-devbox) available",
     };
   }
   return {
-    detail: "mk-hetzner-devbox found in a local Nucleus checkout",
+    detail: "mk-hetzner-devbox found in a local dotfiles checkout",
     id: "server-skill",
     status: "pass",
     title: "Server-creation skill (mk-hetzner-devbox) available",
