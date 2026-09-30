@@ -119,7 +119,13 @@ It selects three populations, and the second and third exist because confidence 
 - **A deterministic 10 % sample of HIGH-confidence `not_dnb`.** A disable is terminal — the pull reads only `undecided`, so a disabled label never returns to the pile and a wrong disable silently loses good music forever. High-confidence disables have never been checked, so their error rate is unmeasured rather than low. Three clean sampled rounds retire the sample (`--disable-sample 0`); one wrong disable justifies it permanently.
 - **Contested reversals** — a verdict that flipped against the previous round, flagged separately when a previous verify pass had refuted it.
 
-Merge the verifier's answers back into `label-triage.json` before rendering: a refutation moves the row to the verifier's bucket (dropping any rules it carried), an `agrees` + `high` promotes the row's confidence, and anything else is left for the operator. A refuted row keeps both readings in its evidence.
+Merge the answers back into `label-triage.json` before rendering:
+
+```bash
+python3 <skill>/scripts/merge-verify.py --answers verify-result.json   # or the verify run's journal.jsonl
+```
+
+Every checked row ends in one outcome. **Confirmed** (same bucket at high) is promoted to high. **Unsure** (same bucket below high) keeps its verdict and confidence with both readings in its evidence, so it stays the operator's call. **Refuted** (another bucket) moves there at the verifier's confidence and drops any rules it carried, keeping both readings. **Conflicting** and **missing** rows are left exactly as they were and named on stderr, and so is a row whose answer cannot be pinned to one label (two labels sharing a fallback key, or a slug and name that point at different labels). The report counts sampled disables refuted to `dnb`, which is the wrong-disable count that decides whether the sample can retire. The script refuses answers without the verify schema (the first-pass triage journal has the same shape) and a round that already went through a verify merge, by hand or by script, so a second run cannot stack opinions. Repeat `--answers` and `--input` when a round ran more than one verify workflow.
 
 ### 3 · Present for ratification
 
