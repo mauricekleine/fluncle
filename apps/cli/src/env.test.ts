@@ -36,6 +36,7 @@ async function readTokenAfterLoad(home: string, nodeEnv: string | undefined): Pr
   const env: Record<string, string> = { ...process.env, HOME: home };
 
   delete env.FLUNCLE_API_TOKEN;
+  delete env.FLUNCLE_API_TOKEN_REF;
   delete env.NODE_ENV;
 
   if (nodeEnv !== undefined) {
@@ -78,6 +79,7 @@ describe("the credential rail on the CLI's env profile", () => {
 async function readTokenWithRef(
   opScript: string,
   ref = "op://<vault>/<item>/credential",
+  nodeEnv?: string,
 ): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), "fluncle-env-ref-"));
 
@@ -100,6 +102,11 @@ async function readTokenWithRef(
     };
 
     delete env.FLUNCLE_API_TOKEN;
+    delete env.NODE_ENV;
+
+    if (nodeEnv !== undefined) {
+      env.NODE_ENV = nodeEnv;
+    }
 
     const proc = Bun.spawn([process.execPath, "-e", source], {
       env,
@@ -130,6 +137,16 @@ describe("FLUNCLE_API_TOKEN_REF", () => {
     );
 
     expect(token).toBe("synthetic-ref-token");
+  });
+
+  test("never resolves a reference in test mode", async () => {
+    const message = await readTokenWithRef(
+      "#!/bin/sh\nprintf synthetic-ref-token\n",
+      "op://<vault>/<item>/credential",
+      "test",
+    );
+
+    expect(message).toBe("ERROR Missing required env vars: FLUNCLE_API_TOKEN");
   });
 
   test("names the reference, never a value, when op fails", async () => {

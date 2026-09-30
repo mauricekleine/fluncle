@@ -70,7 +70,7 @@ export function getApiBaseUrl(): string {
 function resolveTokenRef(): void {
   const ref = process.env.FLUNCLE_API_TOKEN_REF;
 
-  if (process.env.FLUNCLE_API_TOKEN !== undefined || !ref) {
+  if (process.env.FLUNCLE_API_TOKEN !== undefined || !ref || process.env.NODE_ENV === "test") {
     return;
   }
 
