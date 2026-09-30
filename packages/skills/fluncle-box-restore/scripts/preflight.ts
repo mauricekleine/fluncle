@@ -545,6 +545,42 @@ export function resolveLabsDir(
   return candidates.find((candidate) => existsSync(join(candidate, LABS_BOX_DOC_DIR)));
 }
 
+export const SERVER_SKILL = join("skills", "mk-hetzner-devbox", "SKILL.md");
+
+export function resolveServerSkill(
+  repoRoot: string,
+  env: NodeJS.ProcessEnv = process.env,
+  home: string = homedir(),
+): string | undefined {
+  const candidates = [
+    env.NUCLEUS_DIR,
+    join(dirname(repoRoot), "nucleus"),
+    join(home, "Projects", "nucleus"),
+    join(home, "projects", "nucleus"),
+  ].filter((value): value is string => typeof value === "string" && value !== "");
+  return candidates.map((dir) => join(dir, SERVER_SKILL)).find((path) => existsSync(path));
+}
+
+function checkServerSkill(repoRoot: string): CheckResult {
+  const path = resolveServerSkill(repoRoot);
+  if (!path) {
+    return {
+      detail: "no Nucleus checkout with skills/mk-hetzner-devbox found",
+      id: "server-skill",
+      remedy:
+        "Step 1 creates the server with Nucleus's mk-hetzner-devbox skill. Clone mauricekleine/nucleus next to this repo or set NUCLEUS_DIR, so the drill can run step 1 offline.",
+      status: "unknown",
+      title: "Server-creation skill (mk-hetzner-devbox) available",
+    };
+  }
+  return {
+    detail: "mk-hetzner-devbox found in a local Nucleus checkout",
+    id: "server-skill",
+    status: "pass",
+    title: "Server-creation skill (mk-hetzner-devbox) available",
+  };
+}
+
 function checkSecretTemplates(labsDir: string | undefined): CheckResult[] {
   const id = "secret-templates";
   const title = "The box's secret templates are present and hold only references";
@@ -723,6 +759,7 @@ export async function runPreflight(options: {
 }): Promise<CheckResult[]> {
   const results: CheckResult[] = [
     checkRepoAssets(options.repoRoot),
+    checkServerSkill(options.repoRoot),
     checkSchedulePlan(options.repoRoot),
     checkEncryptionKey(),
   ];
