@@ -695,8 +695,8 @@ describe("the bounded resume", () => {
         const tick = runTick({
           restoringCalls: 0,
           resumeExitCode: 1,
-          resumeHolds: initialHolds,
           resumeHoldLimit: limit,
+          resumeHolds: initialHolds,
         });
 
         expect(tick.exitCode).toBe(1);
