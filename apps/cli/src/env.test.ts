@@ -74,3 +74,57 @@ describe("the credential rail on the CLI's env profile", () => {
     }
   });
 });
+
+async function readTokenWithRef(opScript: string): Promise<string> {
+  const dir = await mkdtemp(join(tmpdir(), "fluncle-env-ref-"));
+
+  try {
+    await writeFile(join(dir, "op"), opScript, { mode: 0o755 });
+
+    const source = `
+      const { loadEnv } = await import(${JSON.stringify(envModule)});
+      try {
+        process.stdout.write(loadEnv(["FLUNCLE_API_TOKEN"]).FLUNCLE_API_TOKEN);
+      } catch (error) {
+        process.stdout.write("ERROR " + error.message);
+      }
+    `;
+    const env: Record<string, string> = {
+      ...process.env,
+      FLUNCLE_API_TOKEN_REF: "op://Vault/Item/credential",
+      HOME: dir,
+      PATH: `${dir}:${process.env.PATH ?? ""}`,
+    };
+
+    delete env.FLUNCLE_API_TOKEN;
+
+    const proc = Bun.spawn([process.execPath, "-e", source], {
+      env,
+      stderr: "pipe",
+      stdout: "pipe",
+    });
+    const [stdout] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
+
+    return stdout.trim();
+  } finally {
+    await rm(dir, { force: true, recursive: true });
+  }
+}
+
+describe("FLUNCLE_API_TOKEN_REF", () => {
+  test("reads the token through op when the env and profile have none", async () => {
+    const token = await readTokenWithRef(
+      '#!/bin/sh\n[ "$1 $2 $3" = "read --no-newline op://Vault/Item/credential" ] && printf synthetic-ref-token\n',
+    );
+
+    expect(token).toBe("synthetic-ref-token");
+  });
+
+  test("names the reference, never a value, when op fails", async () => {
+    const message = await readTokenWithRef("#!/bin/sh\nexit 1\n");
+
+    expect(message).toBe(
+      "ERROR Could not read FLUNCLE_API_TOKEN_REF (op://Vault/Item/credential) with op.",
+    );
+  });
+});
