@@ -292,6 +292,48 @@ describe("crawl admission phases", () => {
     expect(rearmed.items[0]?.fetchPlan.kind).toBe("single");
   });
 
+  it("reads the global artist block once for a whole prepared batch", async () => {
+    await db.execute({
+      args: [timestamp, timestamp, timestamp, timestamp],
+      sql: `insert into crawl_frontier
+        (id, kind, source, external_id, hop, created_at, updated_at)
+        values ('musicbrainz:artist:blocked-parent', 'artist', 'musicbrainz',
+          'blocked-parent', 1, ?, ?),
+          ('musicbrainz:artist:free-artist', 'artist', 'musicbrainz', 'free-artist', 1, ?, ?)`,
+    });
+    await db.execute(`update crawl_frontier set hop = 2,
+      parent_id = 'musicbrainz:artist:blocked-parent' where external_id = 'release-phase'`);
+    await db.batch(
+      [
+        markCrawlNodeRepairStatement("musicbrainz:artist:blocked-parent", crypto.randomUUID()),
+        markCrawlNodeRepairStatement("musicbrainz:artist:free-artist", crypto.randomUUID()),
+      ],
+      "write",
+    );
+    await db.execute({
+      args: [timestamp, timestamp],
+      sql: `insert into artist_rules
+        (id, artist_mbid, artist_name, verdict, source, created_at, updated_at)
+        values ('rule-blocked', 'blocked-parent', 'Blocked', 'block', 'operator', ?, ?)`,
+    });
+    const execute = vi.spyOn(db, "execute");
+
+    const prepared = await prepareCrawlPhase({ limit: MAX_CRAWL_PREPARE_LIMIT, maxHop: 2 });
+
+    const plans = Object.fromEntries(
+      prepared.items.map((item) => [item.nodeId, item.fetchPlan.kind]),
+    );
+    expect(plans).toEqual({
+      "musicbrainz:artist:blocked-parent": "none",
+      "musicbrainz:artist:free-artist": "single",
+      "musicbrainz:release:release-phase": "none",
+    });
+    const blockReads = execute.mock.calls.filter(([statement]) =>
+      /from crawl_frontier as node\s+where node\.id (?:=|in)/.test(executedSql(statement)),
+    );
+    expect(blockReads).toHaveLength(1);
+  });
+
   it("settles an existing blocked backlog in bounded resumable passes", async () => {
     await db.execute({
       args: [timestamp, timestamp],
