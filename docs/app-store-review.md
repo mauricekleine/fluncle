@@ -15,7 +15,7 @@ These are the facts a reviewer reacts to, grounded in the code:
 - **Deep-links out to Spotify** ("Open in Spotify") — it drives traffic to Spotify, it is not a player substitute.
 - **Opt-in push** for a new finding and a new mixtape (the consent flow in `src/push/`), nothing more.
 - **A native archive** (the four-galaxy lens) and a **finding detail modal** over the same public feed.
-- **An anonymous suggestion box** — the "Submit a track" modal (`apps/mobile/app/submit.tsx`) searches Spotify, the crew member picks a match, and it POSTs the existing public `submit_track` op. It rides the same contract the web dialog posts. There are no accounts and no drafts; a submission is a one-way message for the operator to review.
+- **An anonymous suggestion box** — the "Submit a track" modal (`apps/mobile/app/submit.tsx`) searches Fluncle's catalogue and Deezer (Spotify as the fallback), the crew member picks a match, and it POSTs the existing public `submit_track` op. It rides the same contract the web dialog posts. There are no accounts and no drafts; a submission is a one-way message for the operator to review.
 - **No accounts, no in-app purchase, no user-generated content shown to other users.** The one input surface (the suggestion box) sends the operator a private suggestion — nothing a submitter types is ever displayed in-app to anyone.
 
 ## The two real risks

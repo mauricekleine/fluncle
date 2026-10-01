@@ -62,11 +62,11 @@ test("the submission dialog hydrates and refuses to search on nothing", async ({
   const problems = watchForErrors(page);
 
   await page.goto("/findings", { waitUntil: "networkidle" });
-  await openDialog(page, "Submit a track", "Search Spotify, pick the match");
+  await openDialog(page, "Submit a track", "Search for the track, pick the match");
 
   await expect(page.getByRole("button", { name: "Send for review" })).toHaveCount(0);
   await page.getByRole("button", { name: "Search" }).click();
-  await expect(page.getByText("Enter a Spotify URL or track search.")).toBeVisible({
+  await expect(page.getByText("Enter a track or a Spotify link.")).toBeVisible({
     timeout: 15_000,
   });
 

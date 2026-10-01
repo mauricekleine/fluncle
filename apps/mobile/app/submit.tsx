@@ -22,9 +22,9 @@ import { classifySubmit, submitOutcomeCopy, submitPausedCopy } from "@/lib/submi
 import { color, font, radius } from "@/theme/tokens";
 
 const RESULTS_HEADING = "Select a match";
-const SHORT_QUERY_HINT = "Enter a Spotify URL or track search.";
-const SEARCH_FAILED_LINE = "Couldn't run that search. Give it another go in a sec.";
-const NO_MATCHES_LINE = "Nothing came back for that. Try the artist and the title.";
+const SHORT_QUERY_HINT = "Enter a track or a Spotify link.";
+const SEARCH_FAILED_LINE = "I couldn't run that search. Try again later.";
+const NO_MATCHES_LINE = "Nothing came back for that search. Try the artist and the title.";
 
 export default function SubmitScreen() {
   const router = useRouter();
@@ -88,8 +88,11 @@ export default function SubmitScreen() {
       note: note.trim() || undefined,
 
       source: "web",
-      spotifyTrackId: selected.id,
-      spotifyUrl: selected.spotifyUrl,
+      ...(selected.provider === "deezer"
+        ? { deezerTrackId: selected.id }
+        : selected.provider === "catalogue"
+          ? { catalogueTrackId: selected.id }
+          : { spotifyTrackId: selected.id, spotifyUrl: selected.spotifyUrl }),
       title: selected.title,
     });
   }
@@ -139,15 +142,16 @@ export default function SubmitScreen() {
               Submit a track
             </Text>
             <Text style={[font.body, { color: color.stardust }]}>
-              Search Spotify, pick the match, and send it for review.
+              Search for the track, pick the match, and send it my way. I listen to every track you
+              send.
             </Text>
 
             <View style={{ gap: 8 }}>
               <Text style={[font.label, { color: color.starlightCream }]}>
-                Search or Spotify URL
+                Track or Spotify link
               </Text>
               <TextInput
-                accessibilityLabel="Search or Spotify URL"
+                accessibilityLabel="Track or Spotify link"
                 autoCapitalize="none"
                 autoCorrect={false}
                 autoFocus

@@ -81,6 +81,26 @@ const httpExecutes: Record<string, WebMcpTool["execute"]> = {
   },
 
   submit_track: async (input) => {
+    if (
+      (input.provider === "deezer" || input.provider === "catalogue") &&
+      typeof input.candidateId === "string"
+    ) {
+      return jsonResult(
+        await fetchJson("/api/v1/submissions", {
+          body: JSON.stringify({
+            ...(input.provider === "deezer"
+              ? { deezerTrackId: input.candidateId }
+              : { catalogueTrackId: input.candidateId }),
+            contact: typeof input.contact === "string" ? input.contact : undefined,
+            note: typeof input.note === "string" ? input.note : undefined,
+            source: "web",
+          }),
+          headers: { "Content-Type": "application/json" },
+          method: "POST",
+        }),
+      );
+    }
+
     const spotifyUrl = asString(input.spotifyUrl);
     const search = (await fetchJson(
       `/api/v1/search?${new URLSearchParams({ q: spotifyUrl })}`,
@@ -88,6 +108,7 @@ const httpExecutes: Record<string, WebMcpTool["execute"]> = {
       ok?: boolean;
       results?: Array<{
         id: string;
+        provider?: "catalogue" | "deezer" | "spotify";
         spotifyUrl: string;
         title: string;
         artists: string[];
@@ -109,8 +130,11 @@ const httpExecutes: Record<string, WebMcpTool["execute"]> = {
         contact: typeof input.contact === "string" ? input.contact : undefined,
         note: typeof input.note === "string" ? input.note : undefined,
         source: "web",
-        spotifyTrackId: candidate.id,
-        spotifyUrl: candidate.spotifyUrl,
+        ...(candidate.provider === "deezer"
+          ? { deezerTrackId: candidate.id }
+          : candidate.provider === "catalogue"
+            ? { catalogueTrackId: candidate.id }
+            : { spotifyTrackId: candidate.id, spotifyUrl: candidate.spotifyUrl }),
         title: candidate.title,
       }),
       headers: { "Content-Type": "application/json" },
@@ -132,7 +156,7 @@ const httpExecutes: Record<string, WebMcpTool["execute"]> = {
 export const webmcpOnlyTools: WebMcpTool[] = [
   {
     description:
-      "Search Spotify for track candidates by name or Spotify track URL. Use a result's id and spotifyUrl with submit_track.",
+      "Search for track candidates to submit, by artist and title or a Spotify track URL. Covers Fluncle's catalogue and other music sources such as Deezer. Pass a result's id and provider to submit_track.",
     execute: async (input) => {
       const params = new URLSearchParams({ q: asString(input.query) });
 
@@ -141,7 +165,7 @@ export const webmcpOnlyTools: WebMcpTool[] = [
     inputSchema: {
       properties: {
         query: {
-          description: "Track search query or Spotify track URL, minimum 2 characters.",
+          description: "Artist and title, or a Spotify track URL, minimum 2 characters.",
           minLength: 2,
           type: "string",
         },

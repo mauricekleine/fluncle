@@ -1,6 +1,8 @@
 export type SearchResult = {
   id: string;
   spotifyUrl: string;
+  provider?: "catalogue" | "deezer" | "spotify";
+  externalUrl?: string;
   title: string;
   artists: string[];
   album?: string;
@@ -43,8 +45,11 @@ export async function submitTrack({
       honeypot,
       note,
       source: "web",
-      spotifyTrackId: candidate.id,
-      spotifyUrl: candidate.spotifyUrl,
+      ...(candidate.provider === "deezer"
+        ? { deezerTrackId: candidate.id }
+        : candidate.provider === "catalogue"
+          ? { catalogueTrackId: candidate.id }
+          : { spotifyTrackId: candidate.id, spotifyUrl: candidate.spotifyUrl }),
       title: candidate.title,
     }),
     headers: {

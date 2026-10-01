@@ -249,10 +249,10 @@ export const TrackSearchResultSchema = z
     album: z.string().optional(),
     artists: z.array(z.string()),
     artworkUrl: z.string().optional(),
-
     durationMs: z.number().optional(),
+    externalUrl: z.string().optional(),
     id: z.string(),
-
+    provider: z.enum(["catalogue", "deezer", "spotify"]).optional(),
     spotifyArtistIds: z.array(z.string()).optional(),
     spotifyUrl: z.string(),
     title: z.string(),

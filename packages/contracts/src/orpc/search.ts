@@ -7,7 +7,7 @@ export const searchTracks = oc
     method: "GET",
     operationId: "searchTracks",
     path: "/search",
-    summary: "Search Spotify for finding candidates",
+    summary: "Search for track candidates to submit",
     tags: ["Search"],
   })
   .input(z.object({ q: z.string().max(512).optional() }))

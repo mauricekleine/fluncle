@@ -361,9 +361,10 @@ export const listLabelsSpec = defineSpec({
 export const submitTrackSpec = defineSpec({
   access: "public",
   description:
-    "Submit a track to Fluncle for review by Spotify track URL. Fluncle gives it a listen before anything publishes. Limited to 5 submissions per connection per hour.",
+    "Submit a track to Fluncle for review, from a search_tracks result (candidateId and provider) or a Spotify track URL. Fluncle gives it a listen before anything publishes. Limited to 5 submissions per connection per hour.",
   effect: "write",
   input: z.object({
+    candidateId: z.string().optional().describe("Selected candidate id from search_tracks."),
     contact: z
       .string()
       .max(120)
@@ -374,7 +375,14 @@ export const submitTrackSpec = defineSpec({
       .max(500)
       .optional()
       .describe("Optional: tell Fluncle why it's a banger (max 500 characters)."),
-    spotifyUrl: z.string().describe("Spotify track URL, e.g. https://open.spotify.com/track/..."),
+    provider: z
+      .enum(["catalogue", "deezer", "spotify"])
+      .optional()
+      .describe("Provider of the selected search_tracks candidate."),
+    spotifyUrl: z
+      .string()
+      .optional()
+      .describe("Spotify track URL, e.g. https://open.spotify.com/track/..."),
   }),
   name: "submit_track",
   project: { chat: "acknowledgement", mcp: "acknowledgement", webmcp: "acknowledgement" },

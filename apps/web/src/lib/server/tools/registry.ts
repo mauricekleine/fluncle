@@ -36,12 +36,7 @@ import { resolveLogPageTarget } from "../log-resolver";
 import { subscribeToNewsletter } from "../newsletter";
 import { chargeRateLimit } from "../rate-limit";
 import { searchArchive } from "../search";
-import {
-  ApiError,
-  searchTrackCandidates,
-  SpotifyDeferredError,
-  spotifyDeferredApiError,
-} from "../spotify";
+import { ApiError, parseSpotifyTrackUrl } from "../spotify";
 import { getServiceStatuses, type ServiceHealthStatus } from "../status";
 import { createSubmission } from "../submissions";
 import {
@@ -1072,38 +1067,46 @@ const submitTrackTool = {
       throw new ApiError("invalid_query", "A request context is required to submit", 400);
     }
 
-    const source = args as { contact?: unknown; note?: unknown; spotifyUrl?: unknown };
+    const source = args as {
+      candidateId?: unknown;
+      contact?: unknown;
+      note?: unknown;
+      provider?: unknown;
+      spotifyUrl?: unknown;
+    };
     const spotifyUrl = asTrimmedString(source.spotifyUrl);
+    const candidateId = asTrimmedString(source.candidateId);
 
-    if (!spotifyUrl) {
+    if (candidateId && (source.provider === "deezer" || source.provider === "catalogue")) {
+      const submission = await createSubmission(
+        {
+          ...(source.provider === "deezer"
+            ? { deezerTrackId: candidateId }
+            : { catalogueTrackId: candidateId }),
+          contact: optionalString(source.contact),
+          note: optionalString(source.note),
+          source: "web",
+        },
+        ctx.request,
+      );
+
+      return { ok: true, submission };
+    }
+
+    if (!spotifyUrl && !(candidateId && source.provider === "spotify")) {
       throw new ApiError("invalid_query", "A Spotify track URL is required", 400);
     }
 
-    let candidate: Awaited<ReturnType<typeof searchTrackCandidates>>[number] | undefined;
-    try {
-      candidate = (await searchTrackCandidates(spotifyUrl, "essential"))[0];
-    } catch (error) {
-      if (error instanceof SpotifyDeferredError) {
-        throw spotifyDeferredApiError(error);
-      }
-      throw error;
-    }
-
-    if (!candidate) {
-      throw new ApiError("track_not_found", "No track matched that Spotify URL", 404);
-    }
+    const submittedUrl = spotifyUrl || `https://open.spotify.com/track/${candidateId}`;
+    const spotifyTrackId = parseSpotifyTrackUrl(submittedUrl);
 
     const submission = await createSubmission(
       {
-        album: candidate.album,
-        artists: candidate.artists,
-        artworkUrl: candidate.artworkUrl,
         contact: optionalString(source.contact),
         note: optionalString(source.note),
         source: "web",
-        spotifyTrackId: candidate.id,
-        spotifyUrl: candidate.spotifyUrl,
-        title: candidate.title,
+        spotifyTrackId,
+        spotifyUrl: submittedUrl,
       },
       ctx.request,
     );

@@ -49,7 +49,7 @@ export type SearchResult = {
   results: SearchHit[];
 };
 
-type SearchRow = {
+export type SearchRow = {
   album: string | null;
   album_image_url: string | null;
   artists_json: string;
@@ -64,12 +64,13 @@ type SearchRow = {
   release_date: string | null;
   sonic_seed?: number | null;
   spotify_url: string | null;
+  spotify_uri: string | null;
   title: string;
   track_id: string;
 };
 
 const SEARCH_SELECT = `tracks.track_id, tracks.title, tracks.artists_json, tracks.album, tracks.album_image_url,
-  tracks.bpm, tracks.duration_ms, tracks.isrc, tracks.preview_url, tracks.key, tracks.label, tracks.release_date, tracks.spotify_url, findings.log_id,
+  tracks.bpm, tracks.duration_ms, tracks.isrc, tracks.preview_url, tracks.key, tracks.label, tracks.release_date, tracks.spotify_url, tracks.spotify_uri, findings.log_id,
   (select name from galaxies where galaxies.id = findings.galaxy_id) as galaxy_name,
   ${SONIC_SEED_SELECT}`;
 
@@ -114,7 +115,11 @@ function empty(kind: SearchResult["kind"] = "empty"): SearchResult {
   return { degraded: false, entities: [], kind, results: [] };
 }
 
-async function ftsSearch(match: string, limit: number): Promise<SearchHit[]> {
+export async function ftsSearchRows(
+  match: string,
+  limit: number,
+  submissionCandidates = false,
+): Promise<SearchRow[]> {
   const db = await getDb();
   const result = await db.execute({
     args: [match, limit],
@@ -123,11 +128,16 @@ async function ftsSearch(match: string, limit: number): Promise<SearchHit[]> {
           join tracks on tracks.track_id = tracks_fts.track_id
           left join findings on findings.track_id = tracks.track_id
           where tracks_fts match ? and ${PUBLIC_SEARCH_WHERE}
+            ${submissionCandidates ? "and (tracks.spotify_uri is not null or tracks.spotify_url is not null or (tracks.isrc is not null and trim(tracks.isrc) <> '' and tracks.duration_ms > 0))" : ""}
           order by ${CERTIFIED_FIRST}, bm25(tracks_fts) asc, tracks.track_id asc
           limit ?`,
   });
 
-  return typedRows<SearchRow>(result.rows).map(toHit);
+  return typedRows<SearchRow>(result.rows);
+}
+
+async function ftsSearch(match: string, limit: number): Promise<SearchHit[]> {
+  return (await ftsSearchRows(match, limit)).map(toHit);
 }
 
 type EntityRow = {

@@ -587,12 +587,14 @@ export type SubmissionRequest = {
   album?: string;
   artists: string[];
   artworkUrl?: string;
+  catalogueTrackId?: string;
   contact?: string;
+  deezerTrackId?: string;
   honeypot?: string;
   note?: string;
   source: SubmissionSource;
-  spotifyTrackId: string;
-  spotifyUrl: string;
+  spotifyTrackId?: string;
+  spotifyUrl?: string;
   title: string;
 };
 

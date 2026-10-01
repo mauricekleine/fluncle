@@ -141,7 +141,7 @@ function agentCard() {
     skills: [
       {
         description:
-          "Search Fluncle's drum & bass archive by Log ID coordinate, artist, label, album, a bare word, a plain-language question, or 'sounds like <a real track>'. Findings come first, and an empty answer means nothing in the archive matched. This searches the archive; search-tracks searches Spotify for something to submit.",
+          "Search Fluncle's drum & bass archive by Log ID coordinate, artist, label, album, a bare word, a plain-language question, or 'sounds like <a real track>'. Findings come first, and an empty answer means nothing in the archive matched. This searches the archive; search-tracks finds a track to submit.",
         examples: [
           "Search the archive for rollers above 170 bpm",
           "Look up the finding at 004.7.2I",
@@ -152,11 +152,11 @@ function agentCard() {
       },
       {
         description:
-          "Search Spotify for track candidates by name or Spotify track URL. Use a result to submit a track for Fluncle to review. This searches Spotify, not Fluncle's archive; search-archive searches the archive.",
+          "Search Fluncle's catalogue and other music sources such as Deezer for track candidates, by artist and title or a Spotify track URL. Use a result to submit a track for Fluncle to review. This finds tracks to submit, not findings in the archive; search-archive searches the archive.",
         examples: ["Search for a Camo & Krooked track", "Find candidates for a Spotify track URL"],
         id: "search-tracks",
         name: "Search tracks",
-        tags: ["drum-and-bass", "search", "spotify"],
+        tags: ["drum-and-bass", "search", "submission"],
       },
       {
         description:
@@ -184,8 +184,11 @@ function agentCard() {
       },
       {
         description:
-          "Submit a track to Fluncle for review by Spotify track URL. Fluncle gives it a listen before anything publishes.",
-        examples: ["Submit a Spotify track URL for Fluncle to review"],
+          "Submit a track to Fluncle for review, from a search-tracks result or a Spotify track URL. Fluncle gives it a listen before anything publishes.",
+        examples: [
+          "Submit a search-tracks result for Fluncle to review",
+          "Submit a Spotify track URL for Fluncle to review",
+        ],
         id: "submit-track",
         name: "Submit a track",
         tags: ["drum-and-bass", "submission"],
@@ -220,7 +223,7 @@ async function skillsIndexResponse(): Promise<Response> {
     skills: [
       {
         description:
-          "Read and contribute to Fluncle's drum & bass archive over the public HTTP API: list certified tracks, pull a random one, search the archive, search Spotify candidates, and submit tracks for Fluncle to review.",
+          "Read and contribute to Fluncle's drum & bass archive over the public HTTP API: list certified tracks, pull a random one, search the archive, search for tracks to submit, and submit tracks for Fluncle to review.",
         digest: await skillDigest(),
         name: "fluncle-api",
         type: "skill-md",
@@ -298,7 +301,7 @@ ${tracks.join("\n")}
 - [Tracks API](${siteUrl}/api/v1/tracks): every track, newest release first, numbered pages (page); certified=true narrows to findings, certified=false to the rest
 - [Fresh API](${siteUrl}/api/v1/tracks/fresh): what just came out, the newest releases over a 30-day window, as JSON; accepts limit (max 100)
 - [Random track](${siteUrl}/api/v1/tracks/random): one pick from the archive, as JSON
-- [Archive search API](${siteUrl}/api/v1/search/archive): search the archive by coordinate, artist, label, album, a bare word, or a plain-language question, as JSON. This searches the archive itself; the Spotify candidate search under Submit is a different endpoint
+- [Archive search API](${siteUrl}/api/v1/search/archive): search the archive by coordinate, artist, label, album, a bare word, or a plain-language question, as JSON. This searches the archive itself; the track search under Submit is a different endpoint
 - [Identity](${siteUrl}/identity): look a recording up by ISRC, MusicBrainz recording id, or Log ID and get its identifiers and platform links, one page each at ${siteUrl}/identity/{key}. Every link says how Fluncle came to trust it and when he last checked, and every gap is named: he looked and found nothing, he will not look, or he hands out no such link. Same answer as JSON at ${siteUrl}/api/v1/tracks/-?isrc={isrc} or ?mbid={mbid}. Metered at 30 requests a minute and 1,000 a day per caller; free, no key
 - [Artists API](${siteUrl}/api/v1/artists): every artist Fluncle holds, A to Z, paginated, as JSON; /api/v1/artists/{slug} for one artist. Each resolves to a page at ${siteUrl}/artist/{slug}: that artist's findings plus their verified identity links (MusicGroup + sameAs)
 - [Labels API](${siteUrl}/api/v1/labels): every label Fluncle holds, A to Z, paginated, as JSON; /api/v1/labels/{slug} for one label's identity, imprint lineage, and counts. Each resolves to a page at ${siteUrl}/label/{slug}
@@ -312,7 +315,7 @@ ${tracks.join("\n")}
 
 ## Submit
 
-- [Search API](${siteUrl}/api/v1/search): GET with a q query param (a track search or Spotify URL), returns candidates as JSON
+- [Search API](${siteUrl}/api/v1/search): GET with a q query param (artist and title, or a Spotify track URL), searches Fluncle's catalogue and other music sources such as Deezer, returns candidates to submit as JSON
 - [Submissions API](${siteUrl}/api/v1/submissions): POST a candidate for review; Fluncle gives it a listen before anything publishes
 
 ## For agents
@@ -483,7 +486,7 @@ async function llmsFullResponse(): Promise<Response> {
 
 const skillMarkdown = `---
 name: fluncle-api
-description: Read and contribute to Fluncle's drum & bass archive over the public HTTP API. List certified tracks, pull a random one, search the archive, search Spotify candidates, and submit tracks for Fluncle to review.
+description: Read and contribute to Fluncle's drum & bass archive over the public HTTP API. List certified tracks, pull a random one, search the archive, search for tracks to submit, and submit tracks for Fluncle to review.
 ---
 
 # Fluncle API
@@ -498,7 +501,7 @@ Base URL: \`${siteUrl}\`. Everything below returns JSON. Errors look like \`{"ok
 - \`GET /api/v1/tracks\` lists every track Fluncle holds, newest release first. Query params: \`page\` (1-based), \`certified\` (\`true\` for findings only, \`false\` for the rest).
 - \`GET /api/v1/tracks/{idOrLogId}\` reads one finding or mixtape in full, by its Log ID coordinate (\`004.7.2I\`) or its Spotify track id.
 - \`GET /api/v1/tracks/random\` returns one pick from the archive: \`{"ok": true, "track": {...}}\`.
-- \`GET /api/v1/search/archive\` searches the archive itself by coordinate, artist, label, album, a bare word, or a plain-language question. Query param: \`q\`. An empty result means nothing in the archive matched. This is the archive search; the Spotify candidate search under "Submit a track" is a different endpoint.
+- \`GET /api/v1/search/archive\` searches the archive itself by coordinate, artist, label, album, a bare word, or a plain-language question. Query param: \`q\`. An empty result means nothing in the archive matched. This is the archive search; the track search under "Submit a track" is a different endpoint.
 
 Every recording the archive can name has a page at \`${siteUrl}/track/{trackId}\`, keyed on \`trackId\`; a certified one redirects to its coordinate page at \`${siteUrl}/log/{logId}\`.
 
@@ -508,8 +511,8 @@ Track objects carry \`trackId\`, \`title\`, \`artists\`, \`album\`, \`albumImage
 
 Two steps. Fluncle listens before anything publishes; a submission is a recommendation, not a write.
 
-1. \`GET /api/v1/search?q=...\` with a track name or a Spotify track URL (minimum 2 characters). Returns \`{"ok": true, "results": [...]}\` where each candidate has \`id\`, \`spotifyUrl\`, \`title\`, \`artists\`, \`album\`, and \`artworkUrl\`.
-2. \`POST /api/v1/submissions\` with a JSON body: \`spotifyTrackId\` and \`spotifyUrl\` (both from the chosen candidate; they must agree), \`title\`, \`artists\` (string array), \`source\` (one of "web", "cli", "ssh"), plus optional \`note\` (max 500 characters, tell Fluncle why it's a banger) and \`contact\` (max 120 characters). Response: \`{"ok": true, "submission": {...}}\` with \`status: "pending"\`.
+1. \`GET /api/v1/search?q=...\` with an artist and title or a Spotify track URL (minimum 2 characters). It searches Fluncle's catalogue and other music sources such as Deezer. Returns \`{"ok": true, "results": [...]}\` where each candidate has \`id\`, \`provider\` (\`catalogue\`, \`deezer\`, or \`spotify\`), \`spotifyUrl\`, \`title\`, \`artists\`, \`album\`, and \`artworkUrl\`.
+2. \`POST /api/v1/submissions\` with a JSON body: the chosen candidate's \`id\` as \`catalogueTrackId\` or \`deezerTrackId\` to match its \`provider\`, or for a \`spotify\` candidate \`spotifyTrackId\` and \`spotifyUrl\` (they must agree); then \`title\`, \`artists\` (string array), \`source\` (one of "web", "cli", "ssh"), plus optional \`note\` (max 500 characters, tell Fluncle why it's a banger) and \`contact\` (max 120 characters). Response: \`{"ok": true, "submission": {...}}\` with \`status: "pending"\`.
 
 Rate limit: 5 submissions per connection per hour. Over that returns 429 with code \`rate_limited\`.
 
