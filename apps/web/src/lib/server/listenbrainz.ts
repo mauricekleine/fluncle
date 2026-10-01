@@ -2,6 +2,8 @@ import { logEvent } from "./log";
 import { MB_USER_AGENT } from "./musicbrainz";
 
 const LISTENBRAINZ_MBID_ENDPOINT = "https://labs.api.listenbrainz.org/spotify-id-from-mbid/json";
+const LISTENBRAINZ_METADATA_ENDPOINT =
+  "https://labs.api.listenbrainz.org/spotify-id-from-metadata/json";
 
 const LISTENBRAINZ_TIMEOUT_MS = 10_000;
 
@@ -114,6 +116,65 @@ export async function lookupSpotifyIdsByMbid(
     match: {
       artistName: item.artist_name ?? null,
       recordingMbid: clean,
+      spotifyTrackIds,
+      trackName: item.track_name ?? null,
+    },
+    outcome: "match",
+  };
+}
+
+export async function lookupSpotifyIdsByMetadata(
+  artistName: string,
+  releaseName: string,
+  trackName: string,
+): Promise<ListenBrainzLookupResult> {
+  if (!artistName.trim() || !trackName.trim()) {
+    return { outcome: "no-map" };
+  }
+  let response: Response;
+  try {
+    response = await fetch(LISTENBRAINZ_METADATA_ENDPOINT, {
+      body: JSON.stringify([
+        { artist_name: artistName, release_name: releaseName, track_name: trackName },
+      ]),
+      headers: { "Content-Type": "application/json", "User-Agent": MB_USER_AGENT },
+      method: "POST",
+      signal: AbortSignal.timeout(LISTENBRAINZ_TIMEOUT_MS),
+    });
+  } catch (error) {
+    logEvent("warn", "listenbrainz.metadata-request-threw", { error });
+    return { outcome: "request-threw" };
+  }
+  if (!response.ok) {
+    return { outcome: "request-failed" };
+  }
+  let body: unknown;
+  try {
+    body = await response.json();
+  } catch {
+    return { outcome: "malformed-body" };
+  }
+  if (!Array.isArray(body)) {
+    return { outcome: "non-array-body" };
+  }
+  const item = body.find(
+    (entry): entry is ListenBrainzResponseItem =>
+      typeof entry === "object" && entry !== null && Array.isArray(entry.spotify_track_ids),
+  );
+  if (!item) {
+    return { outcome: "no-map" };
+  }
+  const spotifyTrackIds = (item.spotify_track_ids ?? [])
+    .filter((id): id is string => typeof id === "string")
+    .map((id) => id.trim())
+    .filter(Boolean);
+  if (spotifyTrackIds.length === 0) {
+    return { outcome: "empty-ids" };
+  }
+  return {
+    match: {
+      artistName: item.artist_name ?? null,
+      recordingMbid: "",
       spotifyTrackIds,
       trackName: item.track_name ?? null,
     },

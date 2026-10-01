@@ -307,8 +307,8 @@ describe("distilContextNote", () => {
 
   beforeEach(() => {
     process.env.OPENROUTER_API_KEY = "test-openrouter-key";
-    delete process.env.OPENROUTER_CONTEXT_EFFORT;
-    delete process.env.OPENROUTER_CONTEXT_MODEL;
+    Reflect.deleteProperty(process.env, "OPENROUTER_CONTEXT_EFFORT");
+    Reflect.deleteProperty(process.env, "OPENROUTER_CONTEXT_MODEL");
   });
 
   afterEach(() => {
@@ -413,7 +413,7 @@ describe("fetchTrackContext (status transitions + distil/fallback)", () => {
   beforeEach(() => {
     process.env.FIRECRAWL_API_KEY = "test-firecrawl-key";
     process.env.OPENROUTER_API_KEY = "test-openrouter-key";
-    delete process.env.OPENROUTER_CONTEXT_MODEL;
+    Reflect.deleteProperty(process.env, "OPENROUTER_CONTEXT_MODEL");
   });
 
   afterEach(() => {
@@ -615,7 +615,7 @@ describe("fetchTrackContext (Apple editorial fuel + the echo gate)", () => {
   beforeEach(() => {
     process.env.FIRECRAWL_API_KEY = "test-firecrawl-key";
     process.env.OPENROUTER_API_KEY = "test-openrouter-key";
-    delete process.env.OPENROUTER_CONTEXT_MODEL;
+    Reflect.deleteProperty(process.env, "OPENROUTER_CONTEXT_MODEL");
     appleGate.budget = true;
     appleGate.calls = true;
     appleCatalogLookupByIsrc.mockReset();

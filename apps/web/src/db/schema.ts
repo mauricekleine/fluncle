@@ -2572,6 +2572,12 @@ export const crawlReleaseHolds = sqliteTable(
   ],
 );
 
+export const anchorReleaseLinks = sqliteTable("anchor_release_links", {
+  checkedAt: text("checked_at").notNull(),
+  releaseMbid: text("release_mbid").primaryKey(),
+  spotifyAlbumId: text("spotify_album_id"),
+});
+
 export const labelAliases = sqliteTable(
   "label_aliases",
   {

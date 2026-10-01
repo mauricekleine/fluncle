@@ -51,6 +51,8 @@ const APIFY_QUERY_CHUNK = Number(process.env.FLUNCLE_ANCHOR_APIFY_CHUNK ?? "15")
 const SEARCH_KEYWORD_LIMIT = Number(process.env.FLUNCLE_ANCHOR_KEYWORD_LIMIT ?? "3");
 
 const ISRC_ASK_LIMIT = Number(process.env.FLUNCLE_ANCHOR_ISRC_ASK_LIMIT ?? "25");
+const RELEASE_PROBE_LIMIT = Number(process.env.FLUNCLE_ANCHOR_RELEASE_PROBE_LIMIT ?? "40");
+const RELEASE_PROBE_WALL_MS = 90_000;
 
 const ISRC_WINDOW_UTC = process.env.FLUNCLE_ANCHOR_ISRC_WINDOW_UTC ?? "0-8";
 
@@ -321,6 +323,7 @@ function listAnchorCheckpoints(): {
 
 export type AnchorVerdict = {
   anchored: boolean;
+  anchoredByReleaseLink?: number;
   paidReceiptPending?: boolean;
 
   apifyBudgetRemaining?: number;
@@ -340,6 +343,11 @@ export type AnchorVerdict = {
   freeDurationMsOmitted?: number;
 
   isrcRecoveredByDeezer?: boolean;
+  releaseLinkAlbumsFetched?: number;
+  releaseLinkCacheHits?: number;
+  releaseLinkNoAlbum?: number;
+  releaseLinkBackoffSkipped?: number;
+  releaseLinkAlbumFetchFailed?: number;
 
   listenbrainzOutcome?:
     | "anchored"
@@ -352,7 +360,13 @@ export type AnchorVerdict = {
     | "request-failed"
     | "yielded-on-breaker";
 
-  source?: "listenbrainz" | "spotify-isrc" | "spotify-search" | null;
+  source?:
+    | "listenbrainz"
+    | "listenbrainz-metadata"
+    | "release-link"
+    | "spotify-isrc"
+    | "spotify-search"
+    | null;
 
   spotifyIsrcAsked?: boolean;
 
@@ -364,6 +378,19 @@ export type AnchorVerdict = {
 
   stamped?: boolean;
 
+  verifiedBy: "isrc" | "search" | "search-subset" | null;
+};
+
+type AnchorReleaseVerdict = {
+  albumFetchFailed: number;
+  albumsFetched: number;
+  anchored: boolean;
+  anchoredCount: number;
+  backoffSkipped: number;
+  cacheHits: number;
+  noAlbum: number;
+  remainder?: null | number;
+  throttled: boolean;
   verifiedBy: "isrc" | "search" | "search-subset" | null;
 };
 
@@ -421,6 +448,16 @@ export type AnchorSummary = {
   anchoredByIsrc: number;
 
   anchoredByListenbrainz: number;
+  anchoredByListenbrainzMetadata: number;
+  anchoredByReleaseLink: number;
+  releaseLinkAlbumsFetched: number;
+  releaseLinkCacheHits: number;
+  releaseLinkNoAlbum: number;
+  releaseLinkBackoffSkipped: number;
+  releaseLinkAlbumFetchFailed: number;
+  releaseLinkBudgetSkipped: number;
+  releaseLinkErrors: number;
+  releaseLinkProbes: number;
 
   anchoredBySearch: number;
 
@@ -553,6 +590,7 @@ export type AnchorDeps = {
       | { status: "deferred" | "error"; error?: string }
     )[]
   >;
+  resolveRelease?: (trackId: string, spotifySearch: boolean) => Promise<AnchorReleaseVerdict>;
   runActor: (queries: string[], onStarted?: (runId: string) => void) => Promise<ApifyResultItem[]>;
 
   searchDeezer: (query: string) => Promise<DeezerCandidatePayload[] | DeezerSearchResult | null>;
@@ -783,6 +821,9 @@ export type SpotifyAskState = {
   limit: number;
 
   yielded: boolean;
+  releaseProbes: number;
+  releaseProbeLimit: number;
+  releaseDeadline: number;
 };
 
 export function newSpotifyAskState(
@@ -793,6 +834,12 @@ export function newSpotifyAskState(
     askWindow: parseIsrcAskWindow(windowUtc),
     asksSpent: 0,
     limit: Number.isFinite(limit) && limit >= 0 ? Math.trunc(limit) : 0,
+    releaseDeadline: Date.now() + RELEASE_PROBE_WALL_MS,
+    releaseProbeLimit:
+      Number.isFinite(RELEASE_PROBE_LIMIT) && RELEASE_PROBE_LIMIT >= 0
+        ? Math.trunc(RELEASE_PROBE_LIMIT)
+        : 40,
+    releaseProbes: 0,
     yielded: false,
   };
 }
@@ -1210,12 +1257,27 @@ function tallyFreeVerdict(
   }
 
   tallyListenBrainzOutcome(summary, verdict);
+  summary.anchoredByReleaseLink += verdict.anchoredByReleaseLink ?? 0;
+  summary.releaseLinkAlbumsFetched += verdict.releaseLinkAlbumsFetched ?? 0;
+  summary.releaseLinkCacheHits += verdict.releaseLinkCacheHits ?? 0;
+  summary.releaseLinkNoAlbum += verdict.releaseLinkNoAlbum ?? 0;
+  summary.releaseLinkBackoffSkipped += verdict.releaseLinkBackoffSkipped ?? 0;
+  summary.releaseLinkAlbumFetchFailed += verdict.releaseLinkAlbumFetchFailed ?? 0;
+  summary.produced += verdict.anchoredByReleaseLink ?? 0;
+  if (summary.queueDepth !== null) {
+    summary.queueDepth = Math.max(0, summary.queueDepth - (verdict.anchoredByReleaseLink ?? 0));
+  }
 
   if (!verdict.anchored) {
     return false;
   }
 
-  if (verdict.source === "spotify-isrc") {
+  if (verdict.source === "release-link") {
+    return true;
+  }
+  if (verdict.source === "listenbrainz-metadata") {
+    summary.anchoredByListenbrainzMetadata += 1;
+  } else if (verdict.source === "spotify-isrc") {
     summary.anchoredBySpotifyIsrc += 1;
   } else if (verdict.source === "spotify-search") {
     summary.anchoredBySpotifySearch += 1;
@@ -1314,7 +1376,106 @@ async function runAnchorTickBatched(input: {
     }
     let outcomes: Awaited<ReturnType<NonNullable<AnchorDeps["resolveFreeBatch"]>>>;
     try {
-      outcomes = await deps.resolveFreeBatch(requests);
+      const settled = new Map<number, (typeof outcomes)[number]>();
+      const releaseFields = new Map<
+        number,
+        Pick<
+          AnchorVerdict,
+          | "anchoredByReleaseLink"
+          | "releaseLinkAlbumsFetched"
+          | "releaseLinkCacheHits"
+          | "releaseLinkNoAlbum"
+          | "releaseLinkBackoffSkipped"
+          | "releaseLinkAlbumFetchFailed"
+        >
+      >();
+      const phaseRequests: typeof requests = [];
+      for (let index = 0; index < requests.length; index += 1) {
+        const request = requests[index];
+        if (!request) {
+          continue;
+        }
+        if (!deps.resolveRelease) {
+          phaseRequests.push(request);
+          continue;
+        }
+        if (
+          askState.releaseProbes >= askState.releaseProbeLimit ||
+          Date.now() >= askState.releaseDeadline
+        ) {
+          summary.releaseLinkBudgetSkipped += 1;
+          phaseRequests.push(request);
+          continue;
+        }
+        askState.releaseProbes += 1;
+        summary.releaseLinkProbes += 1;
+        try {
+          const release = await deps.resolveRelease(
+            request.trackId,
+            request.spotifySearch && !askState.yielded,
+          );
+          const fields = {
+            anchoredByReleaseLink: release.anchoredCount,
+            releaseLinkAlbumFetchFailed: release.albumFetchFailed,
+            releaseLinkAlbumsFetched: release.albumsFetched,
+            releaseLinkBackoffSkipped: release.backoffSkipped,
+            releaseLinkCacheHits: release.cacheHits,
+            releaseLinkNoAlbum: release.noAlbum,
+          };
+          releaseFields.set(index, fields);
+          if (release.throttled && !askState.yielded) {
+            askState.yielded = true;
+            deps.log("spotify throttled — yielding the rest of the tick's Spotify asks");
+          }
+          if (release.anchored) {
+            settled.set(index, {
+              status: "done",
+              verdict: {
+                anchored: release.anchored,
+                apifyEligible: false,
+                ...fields,
+                listenbrainzOutcome: "not-attempted",
+                source: release.anchored ? "release-link" : null,
+                spotifyThrottled: release.throttled,
+                verifiedBy: release.verifiedBy,
+              },
+            });
+          } else {
+            phaseRequests.push(request);
+          }
+        } catch (error) {
+          if (error instanceof AnchorAdmissionYieldError) {
+            throw error;
+          }
+          summary.releaseLinkErrors += 1;
+          deps.log(
+            `release rung ${request.trackId}: ${error instanceof Error ? error.message : String(error)}`,
+          );
+          phaseRequests.push(request);
+        }
+      }
+      if (askState.yielded) {
+        for (const request of phaseRequests) {
+          request.spotifySearch = false;
+        }
+      }
+      const phaseOutcomes =
+        phaseRequests.length > 0 ? await deps.resolveFreeBatch(phaseRequests) : [];
+      let phaseIndex = 0;
+      outcomes = requests.map((_request, index) => {
+        const done = settled.get(index);
+        if (done) {
+          return done;
+        }
+        const phase = phaseOutcomes[phaseIndex++];
+        if (!phase || phase.status !== "done") {
+          return phase ?? { status: "deferred" };
+        }
+        return {
+          status: "done",
+          verdict: { ...phase.verdict, ...releaseFields.get(index) },
+        };
+      });
     } catch (error) {
       if (error instanceof AnchorAdmissionYieldError) {
         pauseAnchorAdmission(summary, error);
@@ -1428,6 +1589,8 @@ export async function runAnchorTick(
   const summary: AnchorSummary = {
     anchoredByIsrc: 0,
     anchoredByListenbrainz: 0,
+    anchoredByListenbrainzMetadata: 0,
+    anchoredByReleaseLink: 0,
     anchoredBySearch: 0,
     anchoredBySpotifyIsrc: 0,
     anchoredBySpotifySearch: 0,
@@ -1467,6 +1630,14 @@ export async function runAnchorTick(
     produced: 0,
     queueDepth: null,
     reason: null,
+    releaseLinkAlbumFetchFailed: 0,
+    releaseLinkAlbumsFetched: 0,
+    releaseLinkBackoffSkipped: 0,
+    releaseLinkBudgetSkipped: 0,
+    releaseLinkCacheHits: 0,
+    releaseLinkErrors: 0,
+    releaseLinkNoAlbum: 0,
+    releaseLinkProbes: 0,
     rungsSkipped: [],
     skipped: 0,
     spotifyDeferredBudget: 0,
@@ -2585,6 +2756,69 @@ async function resolveAnchorPhasedBatch(
   return outcomes;
 }
 
+async function resolveAnchorReleaseOnBox(
+  trackId: string,
+  spotifySearch: boolean,
+): Promise<AnchorReleaseVerdict> {
+  const probeResponse = await fetch(`${API_BASE_URL}/api/v1/admin/catalogue/anchor/release/probe`, {
+    body: JSON.stringify({ spotifySearch, trackId }),
+    headers: { Authorization: `Bearer ${API_TOKEN}`, "Content-Type": "application/json" },
+    method: "POST",
+    signal: AbortSignal.timeout(60_000),
+  });
+  if (!probeResponse.ok) {
+    throw new Error(`probe_anchor_release ${trackId} failed (${probeResponse.status})`);
+  }
+  const body = (await probeResponse.json()) as {
+    ok?: boolean;
+    proof?: string;
+    probe?: {
+      evidence: { checkedAt: null | string; siblingTrackIds: string[] }[];
+      result: AnchorReleaseVerdict;
+      trackId: string;
+    };
+  };
+  if (
+    body.ok !== true ||
+    body.probe?.trackId !== trackId ||
+    typeof body.proof !== "string" ||
+    !Array.isArray(body.probe.evidence)
+  ) {
+    throw new Error("probe_anchor_release returned an invalid result");
+  }
+  const result = body.probe.result;
+  if (
+    body.probe.evidence.every(
+      (evidence) => !evidence.checkedAt && evidence.siblingTrackIds.length === 0,
+    )
+  ) {
+    return result;
+  }
+  let cursor = 0;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const response = await runAnchorAdmissionRequest({
+      body: { cursor, probe: body.probe, proof: body.proof },
+      method: "POST",
+      path: "/api/v1/admin/catalogue/anchor/release/commit",
+    });
+    if (!response.ok) {
+      throw new Error(`commit_anchor_release ${trackId} failed (${response.status})`);
+    }
+    const committed = (await response.json()) as AnchorReleaseVerdict & { ok?: boolean };
+    if (committed.ok !== true || typeof committed.anchoredCount !== "number") {
+      throw new Error("commit_anchor_release returned an invalid result");
+    }
+    result.anchoredCount += committed.anchoredCount;
+    result.anchored ||= committed.anchored;
+    result.verifiedBy ??= committed.verifiedBy;
+    if (committed.remainder === null || committed.remainder === undefined) {
+      break;
+    }
+    cursor = committed.remainder;
+  }
+  return result;
+}
+
 async function classifyAnchorFiring(
   deps: AnchorDeps,
   askState: SpotifyAskState,
@@ -2769,6 +3003,8 @@ function newAnchorSweepSummary(): AnchorSweepSummary {
   return {
     anchoredByIsrc: 0,
     anchoredByListenbrainz: 0,
+    anchoredByListenbrainzMetadata: 0,
+    anchoredByReleaseLink: 0,
     anchoredBySearch: 0,
     anchoredBySpotifyIsrc: 0,
     anchoredBySpotifySearch: 0,
@@ -2810,6 +3046,14 @@ function newAnchorSweepSummary(): AnchorSweepSummary {
     pulled: 0,
     queueDepth: null as null | number,
     reason: null as AnchorSummary["reason"],
+    releaseLinkAlbumFetchFailed: 0,
+    releaseLinkAlbumsFetched: 0,
+    releaseLinkBackoffSkipped: 0,
+    releaseLinkBudgetSkipped: 0,
+    releaseLinkCacheHits: 0,
+    releaseLinkErrors: 0,
+    releaseLinkNoAlbum: 0,
+    releaseLinkProbes: 0,
     rungsSkipped: [] as string[],
     skipped: 0,
     spotifyDeferredBudget: 0,
@@ -2855,7 +3099,13 @@ export async function runAnchorSweep(
   if (deferral !== null) {
     merged.reason = deferral;
     merged.blockedReason = deferral;
-    merged.rungsSkipped = ["listenbrainz", "deezer-isrc-recovery", "spotify-search", "apify"];
+    merged.rungsSkipped = [
+      "release-links",
+      "listenbrainz",
+      "deezer-isrc-recovery",
+      "spotify-search",
+      "apify",
+    ];
     return merged;
   }
 
@@ -2909,6 +3159,16 @@ export async function runAnchorSweep(
     merged.apifyBudgetRemaining = page.apifyBudgetRemaining ?? merged.apifyBudgetRemaining;
     merged.anchoredByIsrc += page.anchoredByIsrc;
     merged.anchoredByListenbrainz += page.anchoredByListenbrainz;
+    merged.anchoredByListenbrainzMetadata += page.anchoredByListenbrainzMetadata;
+    merged.anchoredByReleaseLink += page.anchoredByReleaseLink;
+    merged.releaseLinkAlbumsFetched += page.releaseLinkAlbumsFetched;
+    merged.releaseLinkCacheHits += page.releaseLinkCacheHits;
+    merged.releaseLinkNoAlbum += page.releaseLinkNoAlbum;
+    merged.releaseLinkBackoffSkipped += page.releaseLinkBackoffSkipped;
+    merged.releaseLinkAlbumFetchFailed += page.releaseLinkAlbumFetchFailed;
+    merged.releaseLinkBudgetSkipped += page.releaseLinkBudgetSkipped;
+    merged.releaseLinkErrors += page.releaseLinkErrors;
+    merged.releaseLinkProbes += page.releaseLinkProbes;
     merged.anchoredBySearch += page.anchoredBySearch;
     merged.anchoredBySpotifyIsrc += page.anchoredBySpotifyIsrc;
     merged.anchoredBySpotifySearch += page.anchoredBySpotifySearch;
@@ -3623,6 +3883,7 @@ async function main(): Promise<void> {
       }
     },
     resolvePaidReport,
+    resolveRelease: resolveAnchorReleaseOnBox,
     runActor: runApifyActor,
     saveApifyRunId,
     savePaidActorResults,

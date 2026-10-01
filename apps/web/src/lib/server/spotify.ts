@@ -221,6 +221,64 @@ export async function fetchTrackMetadata(trackId: string): Promise<TrackMetadata
   };
 }
 
+export type SpotifyAlbumTrack = {
+  artists: { id: string; name: string }[];
+  discNumber: number;
+  durationMs: number;
+  isrc: null | string;
+  spotifyTrackId: string;
+  title: string;
+  trackNumber: number;
+};
+
+export async function fetchSpotifyAlbumTracks(
+  albumId: string,
+  onPage: () => Promise<void>,
+): Promise<SpotifyAlbumTrack[]> {
+  const accessToken = await getSpotifyAccessToken();
+  const tracks: SpotifyAlbumTrack[] = [];
+  for (let offset = 0; ; offset += 50) {
+    await onPage();
+    const response = await spotifyFetch(
+      `/albums/${encodeURIComponent(albumId)}/tracks?limit=50&offset=${offset}`,
+      accessToken,
+    );
+    const page = (await response.json()) as {
+      items?: Array<{
+        artists?: { id: string; name: string }[];
+        disc_number?: number;
+        duration_ms?: number;
+        external_ids?: { isrc?: string };
+        id?: string;
+        name?: string;
+        track_number?: number;
+      }>;
+      total?: number;
+    };
+    if (!Array.isArray(page.items) || !Number.isSafeInteger(page.total) || Number(page.total) < 0) {
+      throw new Error("Spotify album tracks returned an invalid page");
+    }
+    const items = page.items;
+    for (const item of items) {
+      if (!item.id || !item.name || !Number.isFinite(item.duration_ms)) {
+        continue;
+      }
+      tracks.push({
+        artists: (item.artists ?? []).map((artist) => ({ id: artist.id, name: artist.name })),
+        discNumber: item.disc_number ?? 1,
+        durationMs: Number(item.duration_ms),
+        isrc: item.external_ids?.isrc ?? null,
+        spotifyTrackId: item.id,
+        title: item.name,
+        trackNumber: item.track_number ?? 0,
+      });
+    }
+    if (items.length === 0 || offset + items.length >= Number(page.total)) {
+      return tracks;
+    }
+  }
+}
+
 type SpotifyArtistResponse = {
   id: string;
   images?: SpotifyImage[];

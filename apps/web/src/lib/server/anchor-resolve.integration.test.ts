@@ -33,6 +33,7 @@ vi.mock("./listenbrainz", () => ({
 
     return { match: result, outcome: "match" };
   },
+  lookupSpotifyIdsByMetadata: async () => ({ outcome: "no-map" }),
 }));
 
 vi.mock("./spotify", async (importOriginal) => {
@@ -325,7 +326,7 @@ describe("resolveAnchorFree — a candidate that FAILS verification is never sta
 });
 
 describe("resolveAnchorFree — the zero-Spotify-call misses", () => {
-  it("returns a clean miss with NO vendor call when the row has no recording MBID", async () => {
+  it("tries metadata and returns a clean miss when the row has no recording MBID", async () => {
     const { resolveAnchorFree } = await import("./anchor");
 
     await seedCatalogue({ mbid: null, trackId: "mb_nombid" });

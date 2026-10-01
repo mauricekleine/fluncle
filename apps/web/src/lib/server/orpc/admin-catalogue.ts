@@ -6,15 +6,18 @@ import {
   cancelAnchorPaidResult,
   clearPendingAnchorPaidReceipts,
   commitAnchorFreePhase,
+  commitAnchorReleaseLink,
   getAnchorPaidResultToken,
   prepareAnchorFreePhase,
   probeAnchorFreePhase,
+  probeAnchorReleaseLink,
   readAnchorPaidReceiptStatus,
   readAnchorPreparedCoordinates,
   recordAnchorValidationFailure,
   requeueAnchorStamps,
   requeueIsrcRecoveryStamps,
   resolveAnchorFree,
+  signAnchorReleaseProbe,
   resolveUnavailableAnchorPaidReceipt,
   resolveAnchorReview,
 } from "../anchor";
@@ -445,6 +448,34 @@ export function adminCatalogueHandlers(os: Implementer) {
     }
   });
 
+  const probeAnchorReleaseHandler = os.resolve_anchor_release_probe
+    .use(adminAuth)
+    .handler(async ({ input }) => {
+      try {
+        const probe = await probeAnchorReleaseLink(
+          input.trackId,
+          new Date(),
+          input.spotifySearch !== false,
+        );
+        return { ok: true as const, probe, proof: await signAnchorReleaseProbe(probe) };
+      } catch (error) {
+        throw apiFault(error);
+      }
+    });
+
+  const commitAnchorReleaseHandler = os.commit_anchor_release
+    .use(adminAuth)
+    .handler(async ({ input }) => {
+      try {
+        return {
+          ...(await commitAnchorReleaseLink(input.probe, input.proof, input.cursor)),
+          ok: true as const,
+        };
+      } catch (error) {
+        throw apiFault(error);
+      }
+    });
+
   const prepareAnchorHandler = os.prepare_anchor.use(adminAuth).handler(async ({ input }) => {
     try {
       const prepared = await prepareAnchorFreePhase(input.trackId, input.deezerCandidates);
@@ -867,6 +898,7 @@ export function adminCatalogueHandlers(os: Implementer) {
     clear_wrong_audio: clearWrongAudioHandler,
     commit_anchor: commitAnchorHandler,
     commit_anchor_batch: commitAnchorBatchHandler,
+    commit_anchor_release: commitAnchorReleaseHandler,
     commit_crawl_nodes: commitCrawlNodesHandler,
     crawl_catalogue: crawlCatalogueHandler,
     flag_wrong_audio: flagWrongAudioHandler,
@@ -895,6 +927,7 @@ export function adminCatalogueHandlers(os: Implementer) {
     resolve_anchor: resolveAnchorHandler,
     resolve_anchor_candidate: resolveAnchorCandidateHandler,
     resolve_anchor_paid_result: resolveAnchorPaidResultHandler,
+    resolve_anchor_release_probe: probeAnchorReleaseHandler,
     resolve_anchor_review: resolveAnchorReviewHandler,
     resolve_crawl_hold: resolveCrawlHoldHandler,
     set_anchor_apify: setAnchorApifyHandler,

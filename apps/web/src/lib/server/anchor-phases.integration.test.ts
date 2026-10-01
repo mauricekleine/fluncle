@@ -21,6 +21,7 @@ vi.mock("./db", async (importOriginal) => {
 
 vi.mock("./listenbrainz", () => ({
   lookupSpotifyIdsByMbid: (...args: unknown[]) => lookupSpotifyIdsByMbid(...args),
+  lookupSpotifyIdsByMetadata: async () => ({ outcome: "no-map" }),
 }));
 
 vi.mock("./spotify", async (importOriginal) => {
