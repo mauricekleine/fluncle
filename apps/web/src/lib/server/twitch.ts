@@ -1,6 +1,6 @@
 import { getDb, typedRow } from "./db";
 import { type FetchImpl, readOptionalEnv } from "./env";
-import { ApiError } from "./spotify";
+import { ApiError } from "./api-error";
 
 const twitchAuthorizeUrl = "https://id.twitch.tv/oauth2/authorize";
 const twitchTokenUrl = "https://id.twitch.tv/oauth2/token";

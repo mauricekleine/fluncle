@@ -1,7 +1,7 @@
 import { NOTE_MAX_LENGTH } from "../log-prose";
 import { jsonError } from "./env";
 import { logEvent } from "./log";
-import { ApiError } from "./spotify";
+import { ApiError } from "./api-error";
 
 export function apiErrorResponse(error: unknown): Response {
   if (error instanceof ApiError) {

@@ -1,5 +1,5 @@
 import { readEnv, readOptionalEnv } from "./env";
-import { ApiError } from "./spotify";
+import { ApiError } from "./api-error";
 
 const resendApiUrl = "https://api.resend.com";
 

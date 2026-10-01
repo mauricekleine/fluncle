@@ -1,5 +1,5 @@
 import { getDb, typedRow } from "./db";
-import { ApiError } from "./spotify";
+import { ApiError } from "./api-error";
 import { FINDING_TRACK_OR_LOG_ID_CTE } from "./track-id-resolver";
 
 type PreviewArchiveTrack = {

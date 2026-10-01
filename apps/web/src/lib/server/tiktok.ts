@@ -1,6 +1,6 @@
 import { getDb, typedRow } from "./db";
 import { type FetchImpl, readOptionalEnv } from "./env";
-import { ApiError } from "./spotify";
+import { ApiError } from "./api-error";
 
 const tiktokAuthorizeUrl = "https://www.tiktok.com/v2/auth/authorize/";
 const tiktokTokenUrl = "https://open.tiktokapis.com/v2/oauth/token/";

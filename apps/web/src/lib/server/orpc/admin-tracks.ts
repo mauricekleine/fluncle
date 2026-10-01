@@ -23,7 +23,7 @@ import {
   recordObservationRejection,
 } from "../observation-rejections";
 import { adminAuth, operatorGuard } from "../orpc-auth";
-import { ApiError } from "../spotify";
+import { ApiError } from "../api-error";
 import { VIDEOS_BUCKET, presignUploads } from "../r2-presign";
 import {
   clearCaptureSource,

@@ -17,7 +17,7 @@ import {
 import { resolveDatabaseOperationOwner } from "./database-operation-registry";
 import { getTelemetryDb, retryRunEventInsert } from "./db";
 import { logEvent } from "./log";
-import { ApiError } from "./spotify";
+import { ApiError } from "./api-error";
 
 export type RunGateState =
   | "active"

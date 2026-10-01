@@ -1,7 +1,7 @@
 import * as Sentry from "@sentry/cloudflare";
 import { bumpRateLimitCounter, rateLimitBucket } from "./rate-limit";
 import { logEvent } from "./log";
-import { ApiError } from "./spotify";
+import { ApiError } from "./api-error";
 
 export const IDENTITY_BURST_LIMIT = 30;
 export const IDENTITY_BURST_WINDOW_MS = 60 * 1000;

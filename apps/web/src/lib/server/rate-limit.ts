@@ -2,7 +2,7 @@ import { waitUntil } from "cloudflare:workers";
 import { jsonError } from "./env";
 import { logEvent } from "./log";
 import { hashRequestPart } from "./public-auth";
-import { ApiError } from "./spotify";
+import { ApiError } from "./api-error";
 import { bumpRateLimitCounter } from "./rate-limit-counters";
 
 export {

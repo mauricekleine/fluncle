@@ -5,7 +5,7 @@ import { nextDripSlot, upsertClipPost } from "./clip-social";
 import { getDb, typedRow, typedRows } from "./db";
 import { logEvent } from "./log";
 import { getRecording } from "./recordings";
-import { ApiError } from "./spotify";
+import { ApiError } from "./api-error";
 
 const captionMaxLength = 600;
 

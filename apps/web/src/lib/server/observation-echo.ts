@@ -1,5 +1,5 @@
 import { type Echo, type NoteEchoThresholds, scoreEcho } from "./note";
-import { ApiError } from "./spotify";
+import { ApiError } from "./api-error";
 
 export const OBSERVATION_ECHO_DEFAULTS: NoteEchoThresholds = {
   maxOverlap: 0.3,

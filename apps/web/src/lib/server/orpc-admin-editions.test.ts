@@ -100,7 +100,7 @@ describe("oRPC delete_edition (DELETE /admin/newsletter/editions/{id})", () => {
   });
 
   it("surfaces the not-found code when the row is absent", async () => {
-    const { ApiError } = await import("./spotify");
+    const { ApiError } = await import("./api-error");
     deleteEdition.mockRejectedValueOnce(
       new ApiError("edition_not_found", "Edition not found", 404),
     );

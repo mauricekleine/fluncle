@@ -1,6 +1,6 @@
 import { NOTE_MAX_LENGTH } from "../log-prose";
 import { maskSubjectNames, scanObservationScript } from "./observation";
-import { ApiError } from "./spotify";
+import { ApiError } from "./api-error";
 
 const NOTE_MIN_CHARS = 24;
 const NOTE_MAX_CHARS = NOTE_MAX_LENGTH;

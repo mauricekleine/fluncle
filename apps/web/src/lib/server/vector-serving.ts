@@ -10,7 +10,7 @@ import {
   SONAR_RECONCILE_CADENCE_SECS,
   type SonarHealth,
 } from "./sonar";
-import { ApiError } from "./spotify";
+import { ApiError } from "./api-error";
 
 const SONAR_ARTIFACT_VERSION = "sonar.track@1/1";
 const SONAR_STREAM = "sonar.track";

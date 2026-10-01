@@ -8,7 +8,7 @@ import {
   type VoiceGateViolation,
 } from "./observation";
 import { renderRegisteredPrompt } from "./prompts";
-import { ApiError } from "./spotify";
+import { ApiError } from "./api-error";
 
 export type EntityKind = "artist" | "label" | "album";
 

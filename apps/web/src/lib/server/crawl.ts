@@ -68,7 +68,7 @@ import {
   type OperationReceiptOutcome,
 } from "./operation-receipts";
 import { readEnv } from "./env";
-import { ApiError } from "./spotify";
+import { ApiError } from "./api-error";
 import { insertTrackDuplicateKeyStatement } from "./track-duplicate-keys";
 
 export const DEFAULT_MAX_HOP = 2;

@@ -9,7 +9,8 @@ import { labelFold } from "./labels";
 import { logEvent } from "./log";
 import { getSetting, setSetting } from "./settings";
 import { getSpotifyAnchorBreakerState } from "./spotify-anchor-breaker";
-import { ApiError, getSpotifyAccessToken, SPOTIFY_REAUTH_REQUIRED, spotifyFetch } from "./spotify";
+import { ApiError } from "./api-error";
+import { getSpotifyAccessToken, SPOTIFY_REAUTH_REQUIRED, spotifyFetch } from "./spotify";
 import {
   chargeSpotifyTapDailyCall,
   readSpotifyCallCount,

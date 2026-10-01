@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { DueWorkMaintenancePendingError } from "./due-work";
 import { apiErrorResponse } from "./http-errors";
 import { apiFault, type ApiFaultData, isApiFaultData } from "./orpc/_shared";
-import { ApiError } from "./spotify";
+import { ApiError } from "./api-error";
 
 vi.mock("@sentry/cloudflare", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@sentry/cloudflare")>()),

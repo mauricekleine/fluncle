@@ -1,7 +1,7 @@
 import { DEEZER_CANDIDATE_LIMIT } from "@fluncle/contracts/orpc";
 
+import { ApiError } from "./api-error";
 import { logEvent } from "./log";
-import { ApiError } from "./spotify";
 import { canonicalizeSearchTitle, matchKey } from "./track-match";
 
 type DeezerTrack = {

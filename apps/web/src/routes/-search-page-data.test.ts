@@ -13,7 +13,7 @@ vi.mock("@/lib/server/search", () => ({ searchArchive, searchLikeTrack }));
 vi.mock("@sentry/cloudflare", () => ({ captureException: vi.fn() }));
 vi.mock("@/lib/server/log", () => ({ logEvent: vi.fn() }));
 
-import { ApiError } from "@/lib/server/spotify";
+import { ApiError } from "@/lib/server/api-error";
 import { resolveSearchPageData } from "./-search-page-data";
 
 const request = new Request("https://www.fluncle.com/search?q=liquid");

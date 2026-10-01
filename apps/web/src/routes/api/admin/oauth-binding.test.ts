@@ -202,7 +202,7 @@ describe("youtube connect — a CLI-started flow is handed off, never left unbou
   });
 
   it("an UNCONFIGURED platform still 400s at the CLI instead of printing a dead link", async () => {
-    const { ApiError } = await import("../../../lib/server/spotify");
+    const { ApiError } = await import("../../../lib/server/api-error");
 
     buildYouTubeAuthUrl.mockRejectedValue(
       new ApiError("youtube_not_configured", "YouTube OAuth is not configured", 400),

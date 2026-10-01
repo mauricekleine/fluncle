@@ -4,7 +4,7 @@ import { logEvent } from "@/lib/server/log";
 import { searchArchiveRateLimit, SEARCH_WINDOW_MS } from "@/lib/server/orpc/search";
 import { chargeRateLimit } from "@/lib/server/rate-limit";
 import { searchArchive, searchLikeTrack } from "@/lib/server/search";
-import { ApiError } from "@/lib/server/spotify";
+import { ApiError } from "@/lib/server/api-error";
 
 export const SEARCH_PAGE_LIMIT = 40;
 

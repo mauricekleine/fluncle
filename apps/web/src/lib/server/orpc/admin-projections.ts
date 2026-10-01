@@ -7,7 +7,7 @@ import {
   setProjectionCutoverFor,
 } from "../projection-operations";
 import { adminAuth, operatorGuard } from "../orpc-auth";
-import { ApiError } from "../spotify";
+import { ApiError } from "../api-error";
 import { type Implementer, toFault } from "./_shared";
 
 const AGENT_REPAIR_TARGETS = new Set([

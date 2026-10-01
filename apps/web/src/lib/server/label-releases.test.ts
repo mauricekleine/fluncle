@@ -22,15 +22,8 @@ vi.mock("./db", async (importOriginal) => {
   return { ...actual, getDb: async () => holder.db };
 });
 
-vi.mock("./spotify", () => {
-  class ApiError extends Error {
-    code: string;
-
-    constructor(code: string, message: string) {
-      super(message);
-      this.code = code;
-    }
-  }
+vi.mock("./spotify", async () => {
+  const { ApiError } = await import("./api-error");
 
   return {
     ApiError,

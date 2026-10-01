@@ -13,7 +13,7 @@ import { readEnv, readOptionalEnv } from "./env";
 import { logEvent } from "./log";
 import { samplingFor } from "./model-sampling";
 import { PROMPT_REGISTRY, resolvePrompt } from "./prompts";
-import { ApiError } from "./spotify";
+import { ApiError } from "./api-error";
 import { BANNED_WORDS } from "./voice-words";
 
 export type ObservationScript = {

@@ -4,7 +4,7 @@ import { galaxySlug } from "@fluncle/contracts/util/galaxy-slug";
 import { getDb, typedRow, typedRows } from "./db";
 import { publishMixtape, setMixtapeMembers, updateMixtape } from "./mixtapes";
 import { copyObject, deleteObject } from "./r2-presign";
-import { ApiError } from "./spotify";
+import { ApiError } from "./api-error";
 import { buildTrackMatchIndex, resolveTrackByText } from "./track-match";
 
 const titleMaxLength = 200;

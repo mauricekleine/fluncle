@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { type SubscriptionDTO } from "@fluncle/contracts";
 import { getDb, typedRow, typedRows } from "./db";
-import { ApiError } from "./spotify";
+import { ApiError } from "./api-error";
 
 const NAME_MAX = 200;
 const VENDOR_MAX = 200;

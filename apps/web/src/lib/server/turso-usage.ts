@@ -19,7 +19,7 @@ import {
 import { getTelemetryDb, typedRows } from "./db";
 import { logEvent } from "./log";
 import { getSetting, setSetting } from "./settings";
-import { ApiError } from "./spotify";
+import { ApiError } from "./api-error";
 
 export const TURSO_USAGE_THRESHOLD_KEY = "turso_usage_alert_threshold_usd";
 

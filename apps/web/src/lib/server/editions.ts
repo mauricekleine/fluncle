@@ -5,7 +5,7 @@ import { captureCostEvents, costEventId } from "./costs";
 import { getDb, typedRow, typedRows } from "./db";
 import { renderEditionEmailHtml } from "./edition-email";
 import { countSegmentRecipients, createBroadcast, sendBroadcast } from "./resend";
-import { ApiError } from "./spotify";
+import { ApiError } from "./api-error";
 
 const subjectMaxLength = 200;
 const contentMaxBytes = 200_000;

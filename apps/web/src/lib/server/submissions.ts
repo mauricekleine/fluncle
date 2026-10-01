@@ -12,8 +12,8 @@ import { readOptionalEnv } from "./env";
 import { logEvent } from "./log";
 import { getPublicSession } from "./public-auth";
 import { assertRateLimit } from "./rate-limit";
+import { ApiError } from "./api-error";
 import {
-  ApiError,
   fetchTrackMetadata,
   findSpotifyTrackByIsrc,
   parseSpotifyTrackUrl,

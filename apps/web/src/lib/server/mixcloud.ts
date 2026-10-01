@@ -1,6 +1,6 @@
 import { getDb, typedRow } from "./db";
 import { readEnvs } from "./env";
-import { ApiError } from "./spotify";
+import { ApiError } from "./api-error";
 
 const mixcloudAuthorizeUrl = "https://www.mixcloud.com/oauth/authorize/";
 const mixcloudTokenUrl = "https://www.mixcloud.com/oauth/access_token/";

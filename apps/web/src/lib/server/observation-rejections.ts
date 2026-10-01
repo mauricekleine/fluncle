@@ -4,7 +4,7 @@ import { type NoteEchoThresholds } from "./note";
 import { OBSERVATION_ECHO_DEFAULTS, type ObservationEcho } from "./observation-echo";
 import { type RenderObservationResult, renderAndStoreObservation } from "./observation-render";
 import { getSetting, setSetting } from "./settings";
-import { ApiError } from "./spotify";
+import { ApiError } from "./api-error";
 import { FINDINGS_FROM, getTrackByIdOrLogId } from "./tracks";
 
 const MIN_PHRASE_WORDS_KEY = "observation_echo_min_phrase_words";

@@ -200,7 +200,7 @@ describe("oRPC announce_mixtape (POST .../announce)", () => {
   });
 
   it("surfaces the already_announced 409 (idempotent — no double-post)", async () => {
-    const { ApiError } = await import("./spotify");
+    const { ApiError } = await import("./api-error");
     announceMixtape.mockRejectedValueOnce(
       new ApiError("already_announced", "This mixtape has already been announced to the crew", 409),
     );

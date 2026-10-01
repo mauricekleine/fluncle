@@ -1,6 +1,6 @@
 import { getDb, typedRow } from "./db";
 import { type FetchImpl, readOptionalEnv } from "./env";
-import { ApiError } from "./spotify";
+import { ApiError } from "./api-error";
 
 const instagramAuthorizeUrl = "https://www.instagram.com/oauth/authorize";
 const instagramCodeExchangeUrl = "https://api.instagram.com/oauth/access_token";

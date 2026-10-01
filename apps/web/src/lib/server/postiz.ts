@@ -1,6 +1,6 @@
 import { readEnv, readOptionalEnv } from "./env";
 import { logEvent } from "./log";
-import { ApiError } from "./spotify";
+import { ApiError } from "./api-error";
 
 const DEFAULT_BASE = "https://api.postiz.com/public/v1";
 
