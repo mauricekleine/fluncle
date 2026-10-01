@@ -1,0 +1,4 @@
+.dev.vars*
+.env*
+node_modules/
+apps/sonar/target/
