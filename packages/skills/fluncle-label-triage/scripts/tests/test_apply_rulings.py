@@ -389,3 +389,31 @@ def test_the_page_escapes_what_an_agent_wrote():
     staged["unclear"][0]["evidence"] = "<script>alert(1)</script>"
 
     assert "<script>alert(1)</script>" not in render_ratification.render(staged)
+
+
+def _fake_op(tmp_path, script: str) -> str:
+    op = tmp_path / "op"
+    op.write_text(script)
+    op.chmod(0o755)
+    return f"{tmp_path}:{os.environ.get('PATH', '')}"
+
+
+def test_api_token_prefers_the_env(monkeypatch):
+    monkeypatch.setenv("FLUNCLE_API_TOKEN", "env-token")
+    monkeypatch.setenv("FLUNCLE_API_TOKEN_REF", "<vault>/<item>/credential")
+    assert apply_rulings.api_token() == "env-token"
+
+
+def test_api_token_reads_a_path_only_reference_through_op(monkeypatch, tmp_path):
+    monkeypatch.delenv("FLUNCLE_API_TOKEN", raising=False)
+    monkeypatch.setenv("FLUNCLE_API_TOKEN_REF", "<vault>/<item>/credential")
+    monkeypatch.setenv(
+        "PATH",
+        _fake_op(tmp_path, '#!/bin/sh\n[ "$3" = "op://<vault>/<item>/credential" ] && printf ref-token\n'),
+    )
+    assert apply_rulings.api_token() == "ref-token"
+
+
+def test_api_base_url_defaults_to_production(monkeypatch):
+    monkeypatch.delenv("FLUNCLE_API_BASE_URL", raising=False)
+    assert apply_rulings.api_base_url() == "https://www.fluncle.com"

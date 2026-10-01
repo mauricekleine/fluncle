@@ -7,7 +7,7 @@ description: Run a label triage pass — research Fluncle's undecided crawl-seed
 
 The catalogue crawler stores a track only when its release's label is `enabled` (the STORAGE GATE, docs/catalogue-crawler.md); a newly discovered label lands `undecided` and its releases are walked but written as nothing. So the undecided pile is the throttle on catalogue growth — and it refills itself: **every batch of enables opens new walks that mint the next batch of discoveries within hours**. This skill is the repeatable pass: pull the pile, research every label with real evidence, present the buckets, apply what the operator ratifies.
 
-The ruling itself is an OPERATOR act (`update_label` is operator-tier — crawl scope is editorial control). The skill's job is to make each ruling a one-glance decision, never to make it.
+The ruling itself is an OPERATOR decision — crawl scope is editorial control. The skill's job is to make each ruling a one-glance decision, never to make it. Applying a ratified round is mechanical, so `update_label` and the per-label exception swap accept the agent token too; global artist rules, merges and mints stay operator-tier.
 
 ## The exception model (how a mixed label gets carved)
 

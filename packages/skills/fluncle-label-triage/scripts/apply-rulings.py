@@ -34,8 +34,8 @@ Safety shape, learned over four live rounds (2026-07-26/27) and extended for rul
     by hand and the round did not re-propose are replaced away — the report says so per label.
   - The API sits behind Cloudflare, which 1010-rejects the default Python-urllib signature --
     every request carries a real User-Agent.
-Needs FLUNCLE_API_TOKEN (operator) + FLUNCLE_API_BASE_URL in the env (`set -a; source ...`),
-except under --dry-run, which makes no request at all.
+Needs FLUNCLE_API_TOKEN (operator or agent) in the env, or FLUNCLE_API_TOKEN_REF naming it in 1Password;
+FLUNCLE_API_BASE_URL defaults to production. --dry-run makes no request at all.
 """
 
 from __future__ import annotations
@@ -45,6 +45,7 @@ from datetime import datetime, timezone
 import json
 import os
 import re
+import subprocess
 import sys
 import time
 import urllib.error
@@ -77,14 +78,33 @@ LABEL_SCOPED_VERDICTS = {"allow", "block"}
 # ── HTTP ────────────────────────────────────────────────────────────────────────────────────
 
 
+def api_base_url() -> str:
+    return (os.environ.get("FLUNCLE_API_BASE_URL") or "https://www.fluncle.com").rstrip("/")
+
+
+def api_token() -> str:
+    """The token from the env, or read with op from FLUNCLE_API_TOKEN_REF (agent hosts)."""
+    token = os.environ.get("FLUNCLE_API_TOKEN")
+    if token:
+        return token
+    ref = os.environ.get("FLUNCLE_API_TOKEN_REF")
+    if not ref:
+        sys.exit("apply-rulings: set FLUNCLE_API_TOKEN or FLUNCLE_API_TOKEN_REF")
+    ref = ref if ref.startswith("op://") else f"op://{ref}"
+    result = subprocess.run(["op", "read", "--no-newline", ref], capture_output=True, text=True)
+    if result.returncode or not result.stdout:
+        sys.exit(f"apply-rulings: could not read FLUNCLE_API_TOKEN_REF ({ref}) with op")
+    return result.stdout
+
+
 class Api:
     """The Fluncle admin API, or a dry-run recorder that performs no I/O."""
 
     def __init__(self, dry_run: bool) -> None:
         self.dry_run = dry_run
         self.planned: list[tuple[str, str, object]] = []
-        self.base = "" if dry_run else os.environ["FLUNCLE_API_BASE_URL"].rstrip("/")
-        self.token = "" if dry_run else os.environ["FLUNCLE_API_TOKEN"]
+        self.base = "" if dry_run else api_base_url()
+        self.token = "" if dry_run else api_token()
 
     def call(self, method: str, path: str, body=None):
         if self.dry_run:
