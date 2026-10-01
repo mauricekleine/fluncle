@@ -7,4 +7,16 @@ linker = "hoisted"
 minimumReleaseAge = 259200
 # cf is exempt: its deploy keeps Worker secrets only from 1.0.0-beta.8 (cloudflare/cf#70),
 # and Workers Builds installs it to deploy fluncle-web.
-minimumReleaseAgeExcludes = ["cf"]
+# The Effect packages are exempt while the Effect 4 adoption (docs/rfcs/effect-adoption-rfc.md)
+# lands on effect@4.0.0, published 2026-10-01; @effect/tsgo resolves its binary through the
+# per-platform packages. Remove them once those releases are past the 3-day window.
+minimumReleaseAgeExcludes = [
+  "cf",
+  "effect",
+  "@effect/tsgo",
+  "@effect/tsgo-darwin-arm64",
+  "@effect/tsgo-darwin-x64",
+  "@effect/tsgo-linux-arm64",
+  "@effect/tsgo-linux-x64",
+  "@effect/vitest",
+]

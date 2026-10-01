@@ -47,7 +47,7 @@
     "test:e2e": "playwright test",
     "test:e2e:install": "playwright install chromium",
     "test:e2e:report": "playwright show-report",
-    "typecheck": "cf workers types && tsc --noEmit",
+    "typecheck": "cf workers types && tsc --noEmit && effect-tsgo diagnostics --project tsconfig.json --strict",
     "test": "node ../../node_modules/vitest/vitest.mjs run --coverage.enabled=${FLUNCLE_VITEST_COVERAGE:-true}"
   },
   "dependencies": {
@@ -84,6 +84,7 @@
     "cnfast": "catalog:",
     "dotenv": "catalog:",
     "drizzle-orm": "catalog:",
+    "effect": "catalog:",
     "fumadocs-core": "~16.14.5",
     "fumadocs-mdx": "~15.3.0",
     "fumadocs-ui": "~16.14.5",

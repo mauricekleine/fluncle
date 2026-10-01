@@ -28,10 +28,10 @@ Effect 4 (`effect@4.0.0`, published 2026-10-01) has typed errors, `Schedule`, `E
 ## Decisions
 
 1. **Effect inside, Promise outside.** Every migrated module keeps its exported Promise API until all of its callers are Effect, so no slice forces a change on a caller in another slice. The `runPromise` edge lives in one helper.
-2. **One `ManagedRuntime` per isolate**, built lazily at module scope from infra layers only: config, logger, outbound fetch, `WaitUntil`. Never create a runtime per request.
+2. **One `ManagedRuntime` per isolate**, built lazily at module scope from infra layers only (today: the logger). Never create a runtime per request.
    - Per-request state (the DB client, leases) stays on the existing `AsyncLocalStorage` scope in `server.ts`.
    - Effect reaches that state through a thin service over `getDb()`.
-3. **Errors use `Data.TaggedError`.** `effect/schema` is tagged `@stability unstable` in 4.x, so internal errors stay on the stable core. Effect failures map to `ApiError` and `apiFault` at the boundary. `encodeErrorBody` and the wire format do not change.
+3. **Errors use `Schema.TaggedError`**, the form Effect's own agent docs use. Core `Schema` is stable in 4.0.0; only the `effect/schema` subpath (compilers, `Model`) and the network-address schemas carry `@stability unstable`. `runServerEffect` rejects with the failure itself, so `ApiError` and `apiFault` keep working at the boundary. `encodeErrorBody` and the wire format do not change.
 4. **No change to the data layer.** Keep the libsql client, the `instrument()` proxy, drizzle and the raw-SQL call sites. `@effect/sql-drizzle` has no v4 release, and the proxy carries Sentry spans, the gate and retries for about 3,000 call sites.
 5. **Contracts stay on zod.** Effect Schema would leak `z.infer` breakage and runtime weight into every consumer, including mobile. Effect Schema can implement Standard Schema through `Schema.toStandardSchemaV1` if a later case justifies it.
 6. **No Effect in client chunks.** Extend the `fluncle-client-chunk-purity` gate to fail when `effect` reaches a client chunk. `recording-upload.ts` (browser) stays out for now.
@@ -68,20 +68,18 @@ Slices inside a wave share no files. Shared files (`package.json`, `bun.lock`, `
 
 PR 2 (`effect/foundation`) adds:
 
-- `effect`, `@effect/tsgo` and `@effect/vitest` to the catalog (`~4.0.0`, lockstep), plus their `minimumReleaseAgeExcludes` entries.
-- The `apps/web` dependency.
-- A `@effect/tsgo diagnostics` step in the gate.
-- `lib/server/effect/`:
-  - the isolate runtime
-  - `runPromise` and `runApi` edges mapping tagged errors to `ApiError`
-  - a `Config` layer over `readEnv*`
-  - a logger matching the `logEvent` JSON shape
-  - a `WaitUntil` service
-  - a fetch service over `FetchImpl`
-  - a test-layer helper
-- Client-chunk purity for `effect`.
-- A short AGENTS.md "Effect" section.
-- Proof: the gate passes, startup CPU is measured, and the Sentry span parent survives an Effect hop.
+- `effect` (`~4.0.0`) and `@effect/tsgo` in the catalog, plus `minimumReleaseAgeExcludes` entries for them and the tsgo platform binaries. `@effect/vitest` joins once vitest 5 (1b) is on `main`.
+- `effect-tsgo diagnostics --strict` chained into `apps/web`'s `typecheck`, so CI, `check` and `deploy:gate` all run it.
+- `lib/server/effect/`: the lazy isolate runtime with `runServerEffect`, a logger that writes the `logEvent` JSON shape, and `keepAlive` for `waitUntil` background work.
+- Client-chunk purity for `effect`, and the AGENTS.md "Effect" section.
+
+Left out on purpose, since no slice needs them yet:
+
+- A config layer: Effect's default `ConfigProvider` already reads `process.env`, and slices keep calling `readEnv`.
+- A fetch service: `Effect.tryPromise` passes an abort signal that `Effect.timeout` triggers, and modules keep their `FetchImpl` parameter for tests.
+- `runApi`: it belongs to the oRPC slice.
+
+Startup CPU and the Sentry span parent are measured in the pilot, the first PR whose Effect code the Worker actually loads.
 
 PR 3 is the end-to-end validation required before fan-out. Wave 1 starts only after it merges and its pattern is reviewed.
 

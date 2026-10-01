@@ -6,7 +6,7 @@ The split follows the load graph: the `$initial` group holds statically reachabl
 
 ## Rule 1 — no server-only module in any client chunk
 
-**Enforced. A violation fails the build** (`fluncle-client-chunk-purity`, implemented in [`apps/web/scripts/client-chunk-purity.ts`](../apps/web/scripts/client-chunk-purity.ts) and registered in `vite.config.ts`), the `orpc-coverage` pattern applied to the browser.
+**Enforced. A violation fails the build** (`fluncle-client-chunk-purity`, implemented in [`apps/web/scripts/client-chunk-purity.ts`](../apps/web/scripts/client-chunk-purity.ts) and registered in `vite.config.ts`), the `orpc-coverage` pattern applied to the browser. Server-only means `src/lib/server/**`, `src/db/**`, and the `effect` package, which stays inside server code.
 
 The `app` group in `client-chunk-groups.ts` deliberately folds everything statically reachable from the client entry into one chunk, because those bytes were being fetched before first paint anyway. The consequence is that **a single stray static import does not cost one page — it costs the homepage**, and it does it in total silence: the build stays green, the types pass, the page renders correctly.
 
