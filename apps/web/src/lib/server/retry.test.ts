@@ -31,4 +31,17 @@ describe("withRetries", () => {
     await expect(run).rejects.toMatchObject({ code: "spotify_reauth_required", status: 401 });
     expect(calls).toBe(1);
   });
+
+  it("stops immediately on QUOTA_EXCEEDED and names the deferred playlist write", async () => {
+    let calls = 0;
+    await expect(
+      withRetries("Spotify playlist add", async () => {
+        calls += 1;
+        throw Object.assign(new Error("Spotify API request failed: 429 QUOTA_EXCEEDED"), {
+          quotaExceeded: true,
+        });
+      }),
+    ).rejects.toThrow(/Spotify playlist add deferred: Spotify quota exceeded/);
+    expect(calls).toBe(1);
+  });
 });

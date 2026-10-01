@@ -12,12 +12,12 @@ import {
   isAnchorApifyEnabled,
 } from "./anchor-apify";
 import {
+  ANCHOR_QUOTA_EXCEPTION_START_HOUR_UTC,
   anchorSpotifyBreakerAllows,
   anchorSpotifySearchAllowed,
   anchorSpotifySearchGate,
   type AnchorSpotifyGateReason,
   isAnchorSpotifySearchEnabled,
-  recordAnchorSpotifyCall,
 } from "./anchor-spotify-search";
 import { parseArtistsJson, stampRemixerRoles, upsertTrackArtists } from "./artists";
 import { getDb, typedRows } from "./db";
@@ -312,15 +312,16 @@ async function assertPaidAnchorAdmission(
     }
     return;
   }
+  const now = new Date();
   const paidAdmittedAt = Date.parse(row.spotify_anchor_paid_admitted_at ?? "");
   const paidAdmissionLive =
     Number.isFinite(paidAdmittedAt) &&
-    Date.now() >= paidAdmittedAt &&
-    Date.now() - paidAdmittedAt <= ANCHOR_PAID_ADMISSION_MAX_AGE_MS;
+    now.getTime() >= paidAdmittedAt &&
+    now.getTime() - paidAdmittedAt <= ANCHOR_PAID_ADMISSION_MAX_AGE_MS;
   if (paidAdmissionLive) {
     return;
   }
-  const gateReason = (await anchorSpotifySearchGate(new Date())).reason;
+  const gateReason = (await anchorSpotifySearchGate(now)).reason;
   if (gateReason === "friday_window") {
     throw new AnchorTrackError("awaiting_free_ask", `Track ${trackId} waits for the Friday window`);
   }
@@ -328,7 +329,8 @@ async function assertPaidAnchorAdmission(
     row.isrc?.trim() &&
     !row.spotify_isrc_asked_at &&
     (await isAnchorSpotifySearchEnabled()) &&
-    gateReason !== "breaker_quota"
+    gateReason !== "breaker_quota" &&
+    !(gateReason === "daily_budget" && now.getUTCHours() >= ANCHOR_QUOTA_EXCEPTION_START_HOUR_UTC)
   ) {
     throw new AnchorTrackError(
       "awaiting_free_ask",
@@ -805,15 +807,18 @@ export async function resolveAnchorReleaseLink(
 }
 
 function isSpotifyThrottle(error: unknown): boolean {
-  return error instanceof Error && error.message.includes("429");
+  return (
+    error instanceof Error &&
+    (error.message.includes("429") || error.name === "SpotifyDeferredError")
+  );
 }
 
 async function metadataCandidate(
   spotifyTrackId: string,
-  now: Date,
+  _now: Date,
 ): Promise<{ candidate: AnchorCandidate | undefined; throttled: boolean }> {
   try {
-    const metadata = await fetchTrackMetadata(spotifyTrackId);
+    const metadata = await fetchTrackMetadata(spotifyTrackId, "anchor");
 
     return {
       candidate: {
@@ -833,8 +838,6 @@ async function metadataCandidate(
     logEvent("warn", "anchor.metadata-fetch-failed", { error, spotifyTrackId });
 
     return { candidate: undefined, throttled: isSpotifyThrottle(error) };
-  } finally {
-    await recordAnchorSpotifyCall(now);
   }
 }
 
@@ -949,7 +952,6 @@ async function resolveViaSpotifySearch(
 
   if (isrc?.trim()) {
     const lookup = await findSpotifyTrackByIsrc(isrc);
-    await recordAnchorSpotifyCall(now);
 
     if (lookup.rateLimited || lookup.unauthorized) {
       return {
@@ -1006,7 +1008,7 @@ async function resolveViaSpotifySearch(
   let candidates: TrackSearchResult[];
 
   try {
-    candidates = await searchTrackCandidates(anchorSearchQuery(artists, title));
+    candidates = await searchTrackCandidates(anchorSearchQuery(artists, title), "anchor");
   } catch (error) {
     logEvent("warn", "anchor.spotify-search-failed", { error, trackId });
 
@@ -1018,8 +1020,6 @@ async function resolveViaSpotifySearch(
       spotifySearchDone: true,
       spotifyThrottled: isSpotifyThrottle(error),
     };
-  } finally {
-    await recordAnchorSpotifyCall(now);
   }
 
   const anchorCandidates = candidates.map(searchResultCandidate);
@@ -1408,7 +1408,12 @@ async function admitToApifyRung(
     input.gateReason === "friday_window" ||
     (input.spotifySearchEnabled &&
       !asked &&
-      !(input.hasIsrc && input.gateReason === "breaker_quota"))
+      !(
+        input.hasIsrc &&
+        (input.gateReason === "breaker_quota" ||
+          (input.gateReason === "daily_budget" &&
+            now.getUTCHours() >= ANCHOR_QUOTA_EXCEPTION_START_HOUR_UTC))
+      ))
   ) {
     return withBudget(false, "awaiting_free_ask");
   }
@@ -2235,7 +2240,6 @@ async function probeSpotifyIsrcPhase(
     };
   }
   const lookup = await findSpotifyTrackByIsrc(isrc);
-  await recordAnchorSpotifyCall(now);
   if (lookup.rateLimited || lookup.unauthorized) {
     return {
       candidate: null,
@@ -2266,7 +2270,7 @@ async function probeSpotifyIsrcPhase(
 
 async function probeSpotifyFuzzyPhase(
   plan: AnchorPreparedPhase,
-  now: Date,
+  _now: Date,
 ): Promise<AnchorSpotifyProbe> {
   let candidate: AnchorCandidate | null = null;
   let candidates: AnchorCandidate[] = [];
@@ -2275,6 +2279,7 @@ async function probeSpotifyFuzzyPhase(
   try {
     const results = await searchTrackCandidates(
       anchorSearchQuery(parseArtistsJson(plan.row.artists_json ?? "[]"), plan.row.title ?? ""),
+      "anchor",
     );
     candidates = results.map(searchResultCandidate);
     durationMsOmitted = candidates.filter((item) => typeof item.durationMs !== "number").length;
@@ -2282,8 +2287,6 @@ async function probeSpotifyFuzzyPhase(
   } catch (error) {
     logEvent("warn", "anchor.spotify-search-failed", { error, trackId: plan.trackId });
     throttled = isSpotifyThrottle(error);
-  } finally {
-    await recordAnchorSpotifyCall(now);
   }
   return {
     candidate,

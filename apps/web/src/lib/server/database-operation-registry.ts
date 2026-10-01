@@ -1395,6 +1395,14 @@ export const DATABASE_OPERATION_REGISTRY: readonly RecurringDatabaseOperation[] 
         { mutationTarget: "primary" },
       ),
       cli(
+        "artist.resolve.spotify-hold",
+        "read",
+        ["admin", "catalogue", "anchor-breaker"],
+        "fluncle admin catalogue anchor-breaker --json",
+        `${SCRIPTS}/artist-sweep.ts`,
+        { mutationTarget: null },
+      ),
+      cli(
         "backfill.artist-images",
         "write",
         ["admin", "backfills", "artist-images"],

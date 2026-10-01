@@ -164,6 +164,7 @@ function encodeErrorBody(error: ORPCError<string, unknown>) {
       code: error.data.apiCode,
       message: error.data.apiMessage,
       ok: false as const,
+      ...(error.data.until !== undefined ? { until: error.data.until } : {}),
     };
   }
 

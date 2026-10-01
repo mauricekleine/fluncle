@@ -182,7 +182,7 @@ describe("resolveAnchorFree — a ListenBrainz hit through the verification gate
     expect(state.attempted).not.toBeNull();
 
     expect(fetchTrackMetadata).toHaveBeenCalledTimes(1);
-    expect(fetchTrackMetadata).toHaveBeenCalledWith("lbAnchor001");
+    expect(fetchTrackMetadata).toHaveBeenCalledWith("lbAnchor001", "anchor");
   });
 
   it("anchors a no-ISRC row via the folded artist + title + ±3s search triple", async () => {

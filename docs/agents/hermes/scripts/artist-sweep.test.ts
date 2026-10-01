@@ -25,7 +25,22 @@ case "$1" in
       fi
     elif [[ "$2" == "artists" && "$3" == "resolve" && "$4" == "social-2" ]]; then
       printf '{"artistId":"social-2","mbid":"mbid-2","ok":true,"rateLimited":false,"socialsCount":0}\\n'
+    elif [[ "$2" == "catalogue" && "$3" == "anchor-breaker" ]]; then
+      if [[ "\${ARTIST_STUB_BREAKER_ERROR:-0}" == "1" ]]; then
+        printf '{"code":"error","message":"breaker unavailable","ok":false}\\n'; exit 1
+      fi
+      if [[ "\${ARTIST_STUB_HOLD:-0}" == "1" ]]; then
+        printf '{"quotaHoldState":"held","quotaHoldUntil":"2026-10-02T00:00:00.000Z"}\\n'
+      elif [[ "\${ARTIST_STUB_HOLD_UNKNOWN:-0}" == "1" ]]; then
+        printf '{"quotaHoldState":"unknown","quotaHoldUntil":null}\\n'
+      else
+        printf '{"quotaHoldState":"clear","quotaHoldUntil":null}\\n'
+      fi
     elif [[ "$2" == "backfills" && "$3" == "artist-images" ]]; then
+      if [[ "\${ARTIST_STUB_HOLD:-0}" == "1" ]]; then
+        printf 'image call under quota hold\\n' >&2
+        exit 1
+      fi
       if [[ "\${ARTIST_STUB_RATE_LIMITED:-0}" == "1" ]]; then
         printf '{"budgetLimited":false,"checkedCount":0,"dryRun":false,"failed":[],"failedCount":0,"filled":[],"filledCount":0,"nextCursor":null,"ok":true,"queueDepth":0,"rateLimited":false,"skipped":[],"skippedCount":0}\\n'
       else
@@ -127,6 +142,83 @@ test("main preserves image failures, skips, throttle state, and canonical run co
     queue_depth: 12,
     resolved: 1,
     throttled: true,
+  });
+});
+
+test("artist sweep keeps free resolution running but skips image backfill during a quota hold", async () => {
+  const proc = Bun.spawn([process.execPath, sweepPath], {
+    env: {
+      ...process.env,
+      ARTIST_STUB_HOLD: "1",
+      FLUNCLE_BIN: join(stubDir, "fluncle"),
+      NODE_ENV: "test",
+    },
+    stderr: "pipe",
+    stdout: "pipe",
+  });
+  const [exitCode, stdout] = await Promise.all([
+    proc.exited,
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+  ]);
+  expect(exitCode).toBe(0);
+  expect(JSON.parse(stdout)).toMatchObject({
+    failed: 0,
+    imagesBudgetLimited: true,
+    imagesChecked: 0,
+    imagesDeferredReason: "quota_hold",
+    imagesFilled: 0,
+    noop: 1,
+    resolved: 1,
+  });
+});
+
+test("a breaker read error preserves the artist run summary", async () => {
+  const proc = Bun.spawn([process.execPath, sweepPath], {
+    env: {
+      ...process.env,
+      ARTIST_STUB_BREAKER_ERROR: "1",
+      FLUNCLE_BIN: join(stubDir, "fluncle"),
+      NODE_ENV: "test",
+    },
+    stderr: "pipe",
+    stdout: "pipe",
+  });
+  const [exitCode, stdout] = await Promise.all([
+    proc.exited,
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+  ]);
+  expect(exitCode).toBe(0);
+  expect(JSON.parse(stdout)).toMatchObject({
+    imagesBudgetLimited: true,
+    imagesDeferredReason: "quota_hold_unknown",
+    noop: 1,
+    resolved: 1,
+  });
+});
+
+test("an unreadable quota hold defers the artist image batch", async () => {
+  const proc = Bun.spawn([process.execPath, sweepPath], {
+    env: {
+      ...process.env,
+      ARTIST_STUB_HOLD_UNKNOWN: "1",
+      FLUNCLE_BIN: join(stubDir, "fluncle"),
+      NODE_ENV: "test",
+    },
+    stderr: "pipe",
+    stdout: "pipe",
+  });
+  const [exitCode, stdout] = await Promise.all([
+    proc.exited,
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+  ]);
+  expect(exitCode).toBe(0);
+  expect(JSON.parse(stdout)).toMatchObject({
+    imagesBudgetLimited: true,
+    imagesChecked: 0,
+    imagesDeferredReason: "quota_hold_unknown",
   });
 });
 

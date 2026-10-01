@@ -97,6 +97,18 @@ beforeEach(async () => {
 });
 
 describe("the breaker TRIPS from real 429s on the real fetch path", () => {
+  it("reads the persisted global hold as anchor quota evidence", async () => {
+    const { getSpotifyAnchorQuotaUntil } = await import("./spotify-anchor-breaker");
+    const { recordSpotifyQuotaHold } = await import("./spotify-budget");
+    const now = Date.parse("2026-07-22T00:00:00.000Z");
+    await recordSpotifyQuotaHold(3600, now);
+    expect(await getSpotifyAnchorQuotaUntil(now)).toBe(new Date(now + 3_600_000).toISOString());
+    await recordSpotifyQuotaHold(3600, now + 1_800_000);
+    expect(await getSpotifyAnchorQuotaUntil(now + 3_600_000)).toBe(
+      new Date(now + 5_400_000).toISOString(),
+    );
+  });
+
   it("N throttled Spotify calls close the anchor-search gate", async () => {
     const { anchorSpotifySearchAllowed, setAnchorSpotifySearchEnabled } =
       await import("./anchor-spotify-search");
@@ -140,26 +152,41 @@ describe("the breaker TRIPS from real 429s on the real fetch path", () => {
     expect(typeof stored === "string" ? stored : null).toBe(state.trippedAt);
   });
 
-  it("classifies a real QUOTA_EXCEEDED response through spotifyFetch", async () => {
+  it("records Retry-After from a real quota response and blocks optional callers", async () => {
     const { anchorSpotifySearchGate, setAnchorSpotifySearchEnabled } =
       await import("./anchor-spotify-search");
-    const { getSpotifyAnchorBreakerState, SPOTIFY_ANCHOR_BREAKER_MAX_FAILURES } =
-      await import("./spotify-anchor-breaker");
+    const { readSpotifyQuotaHoldUntil } = await import("./spotify-budget");
+    const { spotifyFetch } = await import("./spotify");
 
     await setAnchorSpotifySearchEnabled(true);
-    stubSpotify({ throttle: true, throttleBody: '{"error":{"reason":"QUOTA_EXCEEDED"}}' });
+    const stub = stubSpotify({
+      throttle: true,
+      throttleBody: '{"error":{"reason":"QUOTA_EXCEEDED"}}',
+    });
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(NON_FRIDAY);
     try {
-      await driveThrottledCalls(SPOTIFY_ANCHOR_BREAKER_MAX_FAILURES);
-      expect((await getSpotifyAnchorBreakerState()).reason).toBe("quota_exceeded");
+      await expect(
+        spotifyFetch("/search", "token", {}, false, true, "anchor"),
+      ).rejects.toMatchObject({ quotaExceeded: true });
+      expect(await readSpotifyQuotaHoldUntil()).toBe(
+        new Date(NON_FRIDAY.getTime() + 20_000).toISOString(),
+      );
       expect((await anchorSpotifySearchGate(NON_FRIDAY)).reason).toBe("breaker_quota");
+      await expect(
+        spotifyFetch("/search", "token", {}, false, true, "anchor"),
+      ).rejects.toMatchObject({ reason: "quota_hold" });
+      expect(stub.calls).toHaveLength(1);
+      await expect(spotifyFetch("/me", "token", {}, false)).rejects.toMatchObject({
+        quotaExceeded: true,
+      });
+      expect(stub.calls).toHaveLength(2);
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it("admits a quota exception after one real 429 and reopens one hour later", async () => {
+  it("admits a quota exception after one real 429 and reopens at Retry-After", async () => {
     const { anchorSpotifySearchGate, setAnchorSpotifySearchEnabled } =
       await import("./anchor-spotify-search");
     const { getSpotifyAnchorBreakerState } = await import("./spotify-anchor-breaker");
@@ -172,10 +199,10 @@ describe("the breaker TRIPS from real 429s on the real fetch path", () => {
       await driveThrottledCalls(1);
       expect((await getSpotifyAnchorBreakerState()).tripped).toBe(false);
       expect(await anchorSpotifySearchGate(quotaAt)).toMatchObject({
-        nextEligibleAt: "2026-07-22T01:30:00.000Z",
+        nextEligibleAt: "2026-07-22T00:30:20.000Z",
         reason: "quota_hold",
       });
-      expect((await anchorSpotifySearchGate(new Date("2026-07-22T01:30:00.000Z"))).reason).toBe(
+      expect((await anchorSpotifySearchGate(new Date("2026-07-22T00:30:20.000Z"))).reason).toBe(
         "open",
       );
     } finally {

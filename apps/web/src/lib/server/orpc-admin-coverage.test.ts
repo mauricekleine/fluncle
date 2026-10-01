@@ -467,6 +467,8 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
 
   "PUT /admin/catalogue/label-releases-budget": "set_label_releases_budget",
 
+  "PUT /admin/catalogue/spotify-budget": "set_spotify_consumer_budget",
+
   "PUT /admin/clips/drip/state": "set_clip_drip",
 
   "PUT /admin/costs/turso-usage/alerts": "acknowledge_turso_usage_alerts",

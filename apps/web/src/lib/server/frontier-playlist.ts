@@ -10,11 +10,7 @@ import { type PublicUser } from "./public-auth";
 import { listRecommendations } from "./recommendations";
 import { getSetting, setSetting } from "./settings";
 import { getSpotifyAccessToken, spotifyFetch } from "./spotify";
-import {
-  isSpotifyCallBudgetAvailable,
-  recordSpotifyCall,
-  recordSpotifyDailyCall,
-} from "./spotify-budget";
+import { isSpotifyCallBudgetAvailable, readSpotifyQuotaHoldUntil } from "./spotify-budget";
 
 export const FRONTIER_MINTING_KEY = "frontier.minting";
 
@@ -310,15 +306,27 @@ async function syncFrontier(user: PublicUser, nowMs: number): Promise<FrontierSy
     };
   }
 
-  if (!(await isSpotifyCallBudgetAvailable(nowMs))) {
-    return existing
-      ? {
+  if (existing) {
+    try {
+      if (
+        (await readSpotifyQuotaHoldUntil(nowMs)) ||
+        !(await isSpotifyCallBudgetAvailable(nowMs))
+      ) {
+        return {
           ok: true,
           playlistId: existing.playlist_id,
           playlistUrl: frontierPlaylistUrl(existing.playlist_id),
           status: "building",
-        }
-      : { ok: true, status: "building" };
+        };
+      }
+    } catch {
+      return {
+        ok: true,
+        playlistId: existing.playlist_id,
+        playlistUrl: frontierPlaylistUrl(existing.playlist_id),
+        status: "building",
+      };
+    }
   }
 
   if (!existing) {
@@ -341,7 +349,6 @@ async function syncFrontier(user: PublicUser, nowMs: number): Promise<FrontierSy
         }),
       )
     ).json()) as { id: string };
-    await recordSpotifyCall(nowMs);
 
     await step(
       "replace",
@@ -351,7 +358,6 @@ async function syncFrontier(user: PublicUser, nowMs: number): Promise<FrontierSy
         method: "PUT",
       }),
     );
-    await recordSpotifyCall(nowMs);
 
     const nowIso = new Date(nowMs).toISOString();
 
@@ -379,23 +385,35 @@ async function syncFrontier(user: PublicUser, nowMs: number): Promise<FrontierSy
 
   await step(
     "details",
-    spotifyFetch(`/playlists/${playlistId}`, accessToken, {
-      body: JSON.stringify({ description }),
-      headers: { "Content-Type": "application/json" },
-      method: "PUT",
-    }),
+    spotifyFetch(
+      `/playlists/${playlistId}`,
+      accessToken,
+      {
+        body: JSON.stringify({ description }),
+        headers: { "Content-Type": "application/json" },
+        method: "PUT",
+      },
+      true,
+      true,
+      "frontier",
+    ),
   );
-  await recordSpotifyCall(nowMs);
 
   await step(
     "replace",
-    spotifyFetch(`/playlists/${playlistId}/items`, accessToken, {
-      body: JSON.stringify({ uris: compute.uris }),
-      headers: { "Content-Type": "application/json" },
-      method: "PUT",
-    }),
+    spotifyFetch(
+      `/playlists/${playlistId}/items`,
+      accessToken,
+      {
+        body: JSON.stringify({ uris: compute.uris }),
+        headers: { "Content-Type": "application/json" },
+        method: "PUT",
+      },
+      true,
+      true,
+      "frontier",
+    ),
   );
-  await recordSpotifyCall(nowMs);
 
   const nowIso = new Date(nowMs).toISOString();
 
@@ -489,16 +507,29 @@ export async function refreshAllFrontierPlaylists(
   const rows = await listDueFrontierUsers(limit, nowMs);
   counts.total = rows.length;
 
+  try {
+    if (await readSpotifyQuotaHoldUntil(nowMs)) {
+      counts.budgetPaused = true;
+      return counts;
+    }
+  } catch {
+    counts.budgetPaused = true;
+    return counts;
+  }
+
   for (const row of rows) {
     if (mintingOpen && !(await isSpotifyCallBudgetAvailable(nowMs))) {
       counts.budgetPaused = true;
       break;
     }
-
     const result = await mintOrRefreshFrontierPlaylist(row.user, nowMs);
 
     if (!result.ok) {
       counts.failed += 1;
+      if (result.reason.includes("QUOTA_EXCEEDED")) {
+        counts.budgetPaused = true;
+        break;
+      }
       continue;
     }
 
@@ -590,36 +621,20 @@ export async function putFrontierCover(
 ): Promise<FrontierCoverUpload> {
   try {
     const accessToken = await getSpotifyAccessToken();
-    const dailyCallRecord = recordSpotifyDailyCall(nowMs).catch((error) => {
-      logEvent("warn", "frontier.daily-call-record-failed", { error });
-    });
-    void import("cloudflare:workers")
-      .then(({ waitUntil }) => waitUntil(dailyCallRecord))
-      .catch((error) => {
-        logEvent("warn", "frontier.daily-call-schedule-failed", { error });
-      });
-    const response = await fetch(`https://api.spotify.com/v1/playlists/${playlistId}/images`, {
-      body: jpegBase64,
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        "Content-Type": "image/jpeg",
+    await spotifyFetch(
+      `/playlists/${playlistId}/images`,
+      accessToken,
+      {
+        body: jpegBase64,
+        headers: {
+          "Content-Type": "image/jpeg",
+        },
+        method: "PUT",
       },
-      method: "PUT",
-    });
-
-    await recordSpotifyCall(nowMs);
-
-    if (response.status === 401 || response.status === 403) {
-      logEvent("info", "frontier.cover-missing-scope", { playlistId, status: response.status });
-
-      return { reason: "missing_scope", uploaded: false };
-    }
-
-    if (!response.ok) {
-      const body = await response.text();
-
-      return { reason: `spotify_${response.status}: ${body.slice(0, 120)}`, uploaded: false };
-    }
+      true,
+      true,
+      "cosmetic",
+    );
 
     await (
       await getDb()
@@ -632,9 +647,14 @@ export async function putFrontierCover(
 
     return { uploaded: true };
   } catch (error) {
+    const message = error instanceof Error ? error.message : "unknown";
+    if (/^Spotify API request failed: (401|403)\b/.test(message)) {
+      logEvent("info", "frontier.cover-missing-scope", { playlistId });
+      return { reason: "missing_scope", uploaded: false };
+    }
     logEvent("warn", "frontier.cover-upload-failed", { error, playlistId });
 
-    return { reason: error instanceof Error ? error.message : "unknown", uploaded: false };
+    return { reason: message, uploaded: false };
   }
 }
 

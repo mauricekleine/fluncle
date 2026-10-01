@@ -1,5 +1,6 @@
 import { logEvent } from "./log";
 import { getSetting, setSetting } from "./settings";
+import { clearSpotifyQuotaHold, readSpotifyQuotaHoldUntil } from "./spotify-budget";
 
 export const SPOTIFY_ANCHOR_BREAKER_TRIPPED_AT_KEY = "spotify_anchor_breaker_tripped_at";
 
@@ -8,15 +9,8 @@ export const SPOTIFY_ANCHOR_BREAKER_FAILURES_KEY = "spotify_anchor_breaker_failu
 export const SPOTIFY_ANCHOR_BREAKER_REASON_KEY = "spotify_anchor_breaker_reason";
 
 const SPOTIFY_ANCHOR_BREAKER_LAST_FAILURE_AT_KEY = "spotify_anchor_breaker_last_failure_at";
-const SPOTIFY_ANCHOR_BREAKER_QUOTA_AT_KEY = "spotify_anchor_breaker_quota_at";
-
 export async function getSpotifyAnchorQuotaUntil(now: number): Promise<null | string> {
-  const quotaMs = parseStamp(await getSetting(SPOTIFY_ANCHOR_BREAKER_QUOTA_AT_KEY));
-  if (!Number.isFinite(quotaMs) || quotaMs > now) {
-    return null;
-  }
-  const until = quotaMs + SPOTIFY_ANCHOR_BREAKER_COOLDOWN_MS;
-  return until > now ? new Date(until).toISOString() : null;
+  return readSpotifyQuotaHoldUntil(now);
 }
 
 export const SPOTIFY_ANCHOR_BREAKER_MAX_FAILURES = 5;
@@ -133,18 +127,13 @@ export async function recordSpotifyThrottle(
   quotaExceeded = false,
 ): Promise<void> {
   try {
-    const [trippedAt, failures, lastFailureAt, quotaAt] = await Promise.all([
+    const [trippedAt, failures, lastFailureAt] = await Promise.all([
       getSetting(SPOTIFY_ANCHOR_BREAKER_TRIPPED_AT_KEY),
       getSetting(SPOTIFY_ANCHOR_BREAKER_FAILURES_KEY),
       getSetting(SPOTIFY_ANCHOR_BREAKER_LAST_FAILURE_AT_KEY),
-      getSetting(SPOTIFY_ANCHOR_BREAKER_QUOTA_AT_KEY),
     ]);
 
     const verdict = spotifyAnchorBreakerVerdict({ now, trippedAt: trippedAt ?? null });
-
-    if (quotaExceeded) {
-      await setSetting(SPOTIFY_ANCHOR_BREAKER_QUOTA_AT_KEY, new Date(now).toISOString());
-    }
 
     if (verdict.corrupt) {
       await Promise.all([
@@ -165,13 +154,8 @@ export async function recordSpotifyThrottle(
       now,
     });
     const stamp = new Date(now).toISOString();
-    const quotaMs = parseStamp(quotaAt);
-    const quotaInWindow =
-      quotaExceeded ||
-      (Number.isFinite(quotaMs) && now - quotaMs < SPOTIFY_ANCHOR_BREAKER_FAILURE_WINDOW_MS);
-
     if (streak >= SPOTIFY_ANCHOR_BREAKER_MAX_FAILURES) {
-      const reason = quotaInWindow
+      const reason = quotaExceeded
         ? SPOTIFY_ANCHOR_BREAKER_REASON_QUOTA
         : SPOTIFY_ANCHOR_BREAKER_REASON_THROTTLED;
       await Promise.all([
@@ -205,7 +189,7 @@ export async function resetSpotifyAnchorBreaker(): Promise<SpotifyAnchorBreakerS
     setSetting(SPOTIFY_ANCHOR_BREAKER_REASON_KEY, ""),
     setSetting(SPOTIFY_ANCHOR_BREAKER_FAILURES_KEY, "0"),
     setSetting(SPOTIFY_ANCHOR_BREAKER_LAST_FAILURE_AT_KEY, ""),
-    setSetting(SPOTIFY_ANCHOR_BREAKER_QUOTA_AT_KEY, ""),
+    clearSpotifyQuotaHold(),
   ]);
 
   return getSpotifyAnchorBreakerState();

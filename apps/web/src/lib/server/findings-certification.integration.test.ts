@@ -679,6 +679,8 @@ describe("certify in place — logging an existing catalogue track without creat
     };
 
     const { logId } = await certifyExistingTrack(CATALOGUE_ID);
+    const { findSpotifyTrackByIsrc } = await import("./spotify");
+    expect(findSpotifyTrackByIsrc).toHaveBeenCalledWith("GBTEST7700043", "essential");
 
     expect(playlistAdds).toEqual(["spotify:track:late43"]);
     expect(telegramPosts).toEqual([{ logId, spotifyUrl: "https://open.spotify.com/track/late43" }]);
@@ -692,5 +694,19 @@ describe("certify in place — logging an existing catalogue track without creat
       sql: "select spotify_uri from tracks where track_id = ?",
     });
     expect(track.rows[0]?.spotify_uri).toBe("spotify:track:late43");
+  });
+
+  it("reports a quota error when the essential ISRC lookup cannot answer", async () => {
+    const { certifyExistingTrack } = await import("./publish");
+    await db.execute({
+      args: ["GBTEST7700043", CATALOGUE_ID],
+      sql: "update tracks set spotify_uri = null, spotify_url = null, isrc = ? where track_id = ?",
+    });
+    isrcLookup = { rateLimited: true };
+    await expect(certifyExistingTrack(CATALOGUE_ID)).rejects.toMatchObject({
+      code: "spotify_quota_deferred",
+      status: 503,
+    });
+    expect((await db.execute("select count(*) as n from findings")).rows).toMatchObject([{ n: 1 }]);
   });
 });

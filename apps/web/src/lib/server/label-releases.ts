@@ -13,6 +13,7 @@ import { ApiError, getSpotifyAccessToken, SPOTIFY_REAUTH_REQUIRED, spotifyFetch 
 import {
   chargeSpotifyTapDailyCall,
   readSpotifyCallCount,
+  readSpotifyQuotaHoldUntil,
   readSpotifyTapDailyBudget,
   readSpotifyTapDailyCallsSpent,
   recordSpotifyCall,
@@ -616,8 +617,7 @@ async function tapHasBudgetHeadroom(): Promise<boolean> {
 
 async function recordTapCall(): Promise<boolean> {
   try {
-    await recordSpotifyCall(Date.now());
-    return true;
+    return await recordSpotifyCall(Date.now());
   } catch {
     return false;
   }
@@ -632,6 +632,19 @@ async function spotifyGet(
     return { kind: "budget" };
   }
 
+  try {
+    const holdUntil = await readSpotifyQuotaHoldUntil();
+    if (holdUntil) {
+      return {
+        kind: "ratelimited",
+        quotaExceeded: true,
+        retryAfterMs: Math.max(1000, Date.parse(holdUntil) - Date.now()),
+      };
+    }
+  } catch {
+    return { kind: "budget" };
+  }
+
   if (!(await chargeSpotifyTapDailyCall(result.tapDailyBudget))) {
     return { kind: "daily-budget" };
   }
@@ -639,11 +652,9 @@ async function spotifyGet(
 
   let response: Response;
   try {
-    response = await spotifyFetch(path, accessToken, {}, false, false);
+    response = await spotifyFetch(path, accessToken, {}, false, false, "label_tap");
   } catch (error) {
-    const recorded = await recordTapCall();
-
-    if (!recorded) {
+    if (!(await recordTapCall())) {
       return { kind: "budget" };
     }
 
@@ -666,9 +677,7 @@ async function spotifyGet(
     return { kind: "failed" };
   }
 
-  if (!(await recordTapCall())) {
-    return { kind: "budget" };
-  }
+  await recordTapCall();
 
   try {
     return { body: await response.json(), kind: "ok" };

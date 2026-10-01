@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createIntegrationDb } from "./integration-db";
+import { recordSpotifyQuotaHold } from "./spotify-budget";
 
 let db: Client;
 let directory: string;
@@ -145,16 +146,41 @@ afterEach(async () => {
 });
 
 describe("quota-aware paid admission", () => {
+  it("holds an unasked ISRC row before 09:00 when the anchor daily budget is spent, then admits it within the paid cap", async () => {
+    const { resolveAnchorFree } = await import("./anchor");
+    const { anchorSpotifySearchGate, setAnchorSpotifySearchEnabled } =
+      await import("./anchor-spotify-search");
+    const { setSpotifyConsumerDailyBudget } = await import("./spotify-budget");
+    const { setAnchorApifyDailyRows } = await import("./anchor-apify");
+    await setAnchorSpotifySearchEnabled(true);
+    await setSpotifyConsumerDailyBudget("anchor", 0);
+    await setAnchorApifyDailyRows(1, new Date("2026-07-22T08:30:00Z"));
+    await seedCatalogue({ isrc: "ROWISRC0001", trackId: "mb_daily_budget" });
+    await seedCatalogue({ isrc: "ROWISRC0002", trackId: "mb_daily_budget_cap" });
+
+    const before = new Date("2026-07-22T08:30:00Z");
+    expect((await anchorSpotifySearchGate(before)).reason).toBe("daily_budget");
+    expect((await resolveAnchorFree("mb_daily_budget", before)).apifyIneligibleReason).toBe(
+      "awaiting_free_ask",
+    );
+
+    const after = new Date("2026-07-22T09:00:00Z");
+    expect((await anchorSpotifySearchGate(after)).reason).toBe("daily_budget");
+    expect((await resolveAnchorFree("mb_daily_budget", after)).apifyEligible).toBe(true);
+    expect((await resolveAnchorFree("mb_daily_budget_cap", after)).apifyIneligibleReason).toBe(
+      "apify_budget_spent",
+    );
+    expect(findSpotifyTrackByIsrc).not.toHaveBeenCalled();
+  });
   it("holds a never-asked ISRC row at 00:30 without charging Apify", async () => {
     const { resolveAnchorFree } = await import("./anchor");
     const { anchorSpotifySearchGate, setAnchorSpotifySearchEnabled } =
       await import("./anchor-spotify-search");
-    const { recordSpotifyThrottle } = await import("./spotify-anchor-breaker");
     const now = new Date("2026-07-22T00:30:00.000Z");
     await setAnchorSpotifySearchEnabled(true);
     await seedCatalogue({ isrc: "ROWISRC0001", trackId: "mb_quota_hold" });
     for (let i = 0; i < 5; i += 1) {
-      await recordSpotifyThrottle(now.getTime(), true);
+      await recordSpotifyQuotaHold(3600, now.getTime());
     }
 
     expect(await anchorSpotifySearchGate(now)).toEqual({
@@ -172,12 +198,11 @@ describe("quota-aware paid admission", () => {
     const { resolveAnchorFree } = await import("./anchor");
     const { anchorSpotifySearchGate, setAnchorSpotifySearchEnabled } =
       await import("./anchor-spotify-search");
-    const { recordSpotifyThrottle } = await import("./spotify-anchor-breaker");
     const now = new Date("2026-07-22T09:05:00.000Z");
     await setAnchorSpotifySearchEnabled(true);
     await seedCatalogue({ isrc: "ROWISRC0001", trackId: "mb_quota_after_hold" });
     for (let i = 0; i < 5; i += 1) {
-      await recordSpotifyThrottle(now.getTime(), true);
+      await recordSpotifyQuotaHold(3600, now.getTime());
     }
 
     expect((await anchorSpotifySearchGate(now)).reason).toBe("breaker_quota");
@@ -190,7 +215,6 @@ describe("quota-aware paid admission", () => {
     const { resolveAnchorFree } = await import("./anchor");
     const { anchorSpotifySearchGate, setAnchorSpotifySearchEnabled } =
       await import("./anchor-spotify-search");
-    const { recordSpotifyThrottle } = await import("./spotify-anchor-breaker");
     const now = new Date("2026-07-22T01:00:00.000Z");
     await setAnchorSpotifySearchEnabled(true);
     await seedCatalogue({ isrc: "ROWISRC0001", trackId: "mb_quota_prior_ask" });
@@ -199,7 +223,7 @@ describe("quota-aware paid admission", () => {
       sql: "update tracks set spotify_isrc_asked_at = ? where track_id = ?",
     });
     for (let i = 0; i < 5; i += 1) {
-      await recordSpotifyThrottle(now.getTime(), true);
+      await recordSpotifyQuotaHold(3600, now.getTime());
     }
 
     expect((await anchorSpotifySearchGate(now)).reason).toBe("quota_hold");
@@ -211,10 +235,9 @@ describe("quota-aware paid admission", () => {
   it("admits only an ISRC row on a quota trip, within the paid cap", async () => {
     const { resolveAnchorFree } = await import("./anchor");
     const { setAnchorSpotifySearchEnabled } = await import("./anchor-spotify-search");
-    const { recordSpotifyThrottle } = await import("./spotify-anchor-breaker");
     await setAnchorSpotifySearchEnabled(true);
     for (let i = 0; i < 5; i += 1) {
-      await recordSpotifyThrottle(NON_FRIDAY.getTime(), true);
+      await recordSpotifyQuotaHold(3600, NON_FRIDAY.getTime());
     }
     await seedCatalogue({ isrc: "ROWISRC0001", trackId: "mb_quota_isrc" });
     await seedCatalogue({ isrc: null, trackId: "mb_quota_no_isrc" });
@@ -248,11 +271,10 @@ describe("quota-aware paid admission", () => {
     const { resolveAnchorFree } = await import("./anchor");
     const { anchorSpotifySearchGate, setAnchorSpotifySearchEnabled } =
       await import("./anchor-spotify-search");
-    const { recordSpotifyThrottle } = await import("./spotify-anchor-breaker");
     const quotaAt = new Date("2026-07-22T00:30:00.000Z");
     await setAnchorSpotifySearchEnabled(true);
     for (let i = 0; i < 5; i += 1) {
-      await recordSpotifyThrottle(quotaAt.getTime(), true);
+      await recordSpotifyQuotaHold(3600, quotaAt.getTime());
     }
     expect(await anchorSpotifySearchGate(quotaAt)).toMatchObject({
       nextEligibleAt: "2026-07-22T01:30:00.000Z",
@@ -618,9 +640,8 @@ describe("resolveAnchorFree — the ListenBrainz by-id read joins the breaker + 
     expect((await resolveAnchorFree("mb_nomap", NON_FRIDAY)).listenbrainzOutcome).toBe("no-map");
   });
 
-  it("a CLEAR breaker lets the read through, and the read is recorded in the shared meter", async () => {
+  it("a clear breaker lets the ListenBrainz by-id read through", async () => {
     const { resolveAnchorFree } = await import("./anchor");
-    const { readSpotifyCallCount } = await import("./spotify-budget");
 
     await seedCatalogue({ isrc: "ROWISRC0001", mbid: "mbid-lb", trackId: "mb_metered" });
     lookupSpotifyIdsByMbid.mockResolvedValue({
@@ -636,21 +657,14 @@ describe("resolveAnchorFree — the ListenBrainz by-id read joins the breaker + 
     const result = await resolveAnchorFree("mb_metered", NON_FRIDAY);
 
     expect(result.anchored).toBe(true);
-
-    expect(await readSpotifyCallCount(NON_FRIDAY.getTime())).toBe(1);
   });
 
-  it("a SPENT shared window still lets the free by-id read through (never trade a free anchor for a paid one)", async () => {
+  it("a spent shared window defers the ListenBrainz by-id Spotify read", async () => {
     const { resolveAnchorFree } = await import("./anchor");
-    const {
-      SPOTIFY_CALL_WINDOW_MAX,
-      SPOTIFY_CALLS_WINDOW_COUNT_KEY,
-      SPOTIFY_CALLS_WINDOW_START_KEY,
-    } = await import("./spotify-budget");
-    const { setSetting } = await import("./settings");
-
-    await setSetting(SPOTIFY_CALLS_WINDOW_START_KEY, NON_FRIDAY.toISOString());
-    await setSetting(SPOTIFY_CALLS_WINDOW_COUNT_KEY, String(SPOTIFY_CALL_WINDOW_MAX));
+    const { SPOTIFY_CALL_WINDOW_MAX, recordSpotifyCall } = await import("./spotify-budget");
+    for (let i = 0; i < SPOTIFY_CALL_WINDOW_MAX; i += 1) {
+      await recordSpotifyCall(NON_FRIDAY.getTime());
+    }
     await seedCatalogue({ isrc: "ROWISRC0001", mbid: "mbid-lb", trackId: "mb_busy" });
     lookupSpotifyIdsByMbid.mockResolvedValue({
       artistName: "Etherwood",
@@ -662,23 +676,19 @@ describe("resolveAnchorFree — the ListenBrainz by-id read joins the breaker + 
       metadata({ spotifyUri: "spotify:track:lbId", trackId: "lbId" }),
     );
 
-    expect((await resolveAnchorFree("mb_busy", NON_FRIDAY)).anchored).toBe(true);
-    expect(fetchTrackMetadata).toHaveBeenCalledTimes(1);
+    expect((await resolveAnchorFree("mb_busy", NON_FRIDAY)).anchored).toBe(false);
+    expect(fetchTrackMetadata).not.toHaveBeenCalled();
   });
 
   it("a SPENT shared window DOES pause the Spotify search rungs (the subordinate-consumer rule)", async () => {
     const { resolveAnchorFree } = await import("./anchor");
     const { setAnchorSpotifySearchEnabled } = await import("./anchor-spotify-search");
-    const {
-      SPOTIFY_CALL_WINDOW_MAX,
-      SPOTIFY_CALLS_WINDOW_COUNT_KEY,
-      SPOTIFY_CALLS_WINDOW_START_KEY,
-    } = await import("./spotify-budget");
-    const { setSetting } = await import("./settings");
+    const { SPOTIFY_CALL_WINDOW_MAX, recordSpotifyCall } = await import("./spotify-budget");
 
     await setAnchorSpotifySearchEnabled(true);
-    await setSetting(SPOTIFY_CALLS_WINDOW_START_KEY, NON_FRIDAY.toISOString());
-    await setSetting(SPOTIFY_CALLS_WINDOW_COUNT_KEY, String(SPOTIFY_CALL_WINDOW_MAX));
+    for (let i = 0; i < SPOTIFY_CALL_WINDOW_MAX; i += 1) {
+      await recordSpotifyCall(NON_FRIDAY.getTime());
+    }
     await seedCatalogue({ isrc: "ROWISRC0001", trackId: "mb_window_spent" });
 
     const result = await resolveAnchorFree("mb_window_spent", NON_FRIDAY);
@@ -1043,12 +1053,11 @@ describe("anchorTrack — the admission rule is re-checked at the write boundary
   it("refuses a never-asked ISRC report while the quota hold is active", async () => {
     const { anchorTrack } = await import("./anchor");
     const { setAnchorSpotifySearchEnabled } = await import("./anchor-spotify-search");
-    const { recordSpotifyThrottle } = await import("./spotify-anchor-breaker");
     const now = new Date("2026-07-22T00:30:00.000Z");
     await setAnchorSpotifySearchEnabled(true);
     await seedCatalogue({ isrc: "ROWISRC0001", trackId: "mb_quota_unasked_report" });
     for (let i = 0; i < 5; i += 1) {
-      await recordSpotifyThrottle(now.getTime(), true);
+      await recordSpotifyQuotaHold(3600, now.getTime());
     }
 
     vi.useFakeTimers({ toFake: ["Date"] });
@@ -1067,8 +1076,7 @@ describe("anchorTrack — the admission rule is re-checked at the write boundary
     const { anchorTrack, resolveAnchorFree } = await import("./anchor");
     const { anchorSpotifySearchGate, setAnchorSpotifySearchEnabled } =
       await import("./anchor-spotify-search");
-    const { recordSpotifyThrottle, resetSpotifyAnchorBreaker } =
-      await import("./spotify-anchor-breaker");
+    const { resetSpotifyAnchorBreaker } = await import("./spotify-anchor-breaker");
     const chargedAt = new Date("2026-07-22T08:59:00.000Z");
     await setAnchorSpotifySearchEnabled(true);
     await seedCatalogue({ isrc: "ROWISRC0001", trackId: "mb_quota_receipt" });
@@ -1077,7 +1085,7 @@ describe("anchorTrack — the admission rule is re-checked at the write boundary
       sql: "update tracks set spotify_isrc_asked_at = ? where track_id = ?",
     });
     for (let i = 0; i < 5; i += 1) {
-      await recordSpotifyThrottle(chargedAt.getTime(), true);
+      await recordSpotifyQuotaHold(60, chargedAt.getTime());
     }
     expect(await anchorSpotifySearchGate(chargedAt)).toMatchObject({
       nextEligibleAt: "2026-07-22T09:00:00.000Z",
@@ -1105,12 +1113,11 @@ describe("anchorTrack — the admission rule is re-checked at the write boundary
   it("honours a charged quota admission when the UTC day changes before the report", async () => {
     const { anchorTrack, resolveAnchorFree } = await import("./anchor");
     const { setAnchorSpotifySearchEnabled } = await import("./anchor-spotify-search");
-    const { recordSpotifyThrottle } = await import("./spotify-anchor-breaker");
     const beforeReset = new Date("2026-07-22T23:59:00.000Z");
     await setAnchorSpotifySearchEnabled(true);
     await seedCatalogue({ isrc: "ROWISRC0001", trackId: "mb_quota_boundary" });
     for (let i = 0; i < 5; i += 1) {
-      await recordSpotifyThrottle(beforeReset.getTime(), true);
+      await recordSpotifyQuotaHold(3600, beforeReset.getTime());
     }
     expect((await resolveAnchorFree("mb_quota_boundary", beforeReset)).apifyEligible).toBe(true);
 
@@ -1126,7 +1133,6 @@ describe("anchorTrack — the admission rule is re-checked at the write boundary
   it("honours a paid receipt when an actor returns inside the Friday window", async () => {
     const { anchorTrack, resolveAnchorFree } = await import("./anchor");
     const { setAnchorSpotifySearchEnabled } = await import("./anchor-spotify-search");
-    const { recordSpotifyThrottle } = await import("./spotify-anchor-breaker");
     const chargedAt = new Date("2026-07-24T03:59:00.000Z");
     await setAnchorSpotifySearchEnabled(true);
     await seedCatalogue({ isrc: "ROWISRC0001", trackId: "mb_friday_edge" });
@@ -1135,7 +1141,7 @@ describe("anchorTrack — the admission rule is re-checked at the write boundary
       sql: "update tracks set spotify_isrc_asked_at = ? where track_id = ?",
     });
     for (let i = 0; i < 5; i += 1) {
-      await recordSpotifyThrottle(chargedAt.getTime(), true);
+      await recordSpotifyQuotaHold(3600, chargedAt.getTime());
     }
     expect((await resolveAnchorFree("mb_friday_edge", chargedAt)).apifyEligible).toBe(true);
 
@@ -1151,7 +1157,6 @@ describe("anchorTrack — the admission rule is re-checked at the write boundary
   it("expires a charged receipt before accepting a late Friday report", async () => {
     const { anchorTrack, resolveAnchorFree } = await import("./anchor");
     const { setAnchorSpotifySearchEnabled } = await import("./anchor-spotify-search");
-    const { recordSpotifyThrottle } = await import("./spotify-anchor-breaker");
     const chargedAt = new Date("2026-07-24T03:59:00.000Z");
     await setAnchorSpotifySearchEnabled(true);
     await seedCatalogue({ isrc: "ROWISRC0001", trackId: "mb_friday_late" });
@@ -1160,7 +1165,7 @@ describe("anchorTrack — the admission rule is re-checked at the write boundary
       sql: "update tracks set spotify_isrc_asked_at = ? where track_id = ?",
     });
     for (let i = 0; i < 5; i += 1) {
-      await recordSpotifyThrottle(chargedAt.getTime(), true);
+      await recordSpotifyQuotaHold(3600, chargedAt.getTime());
     }
     expect((await resolveAnchorFree("mb_friday_late", chargedAt)).apifyEligible).toBe(true);
 
@@ -1178,14 +1183,13 @@ describe("anchorTrack — the admission rule is re-checked at the write boundary
   it("honours a paid no-ISRC row after its settled fuzzy ask when quota trips", async () => {
     const { anchorTrack, resolveAnchorFree } = await import("./anchor");
     const { setAnchorSpotifySearchEnabled } = await import("./anchor-spotify-search");
-    const { recordSpotifyThrottle } = await import("./spotify-anchor-breaker");
     const chargedAt = new Date("2026-07-22T12:00:00.000Z");
     await setAnchorSpotifySearchEnabled(true);
     await seedCatalogue({ isrc: null, trackId: "mb_fuzzy_then_quota" });
     searchTrackCandidates.mockResolvedValue([]);
     expect((await resolveAnchorFree("mb_fuzzy_then_quota", chargedAt)).apifyEligible).toBe(true);
     for (let i = 0; i < 5; i += 1) {
-      await recordSpotifyThrottle(chargedAt.getTime() + 60_000, true);
+      await recordSpotifyQuotaHold(3600, chargedAt.getTime() + 60_000);
     }
 
     vi.useFakeTimers({ toFake: ["Date"] });

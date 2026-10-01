@@ -156,30 +156,13 @@ describe("recordSpotifyThrottle — the trip and the release", () => {
     expect(state.throttlesInWindow).toBe(0);
   });
 
-  it("persists quota as the trip cause when a 429 body reported QUOTA_EXCEEDED", async () => {
+  it("tracks ordinary 429 streaks independently from the global quota hold", async () => {
     const { getSpotifyAnchorBreakerState, recordSpotifyThrottle } =
       await import("./spotify-anchor-breaker");
     const now = 10_000_000;
     await recordSpotifyThrottle(now, true);
     await throttle(4, now);
-    expect((await getSpotifyAnchorBreakerState(now)).reason).toBe("quota_exceeded");
-  });
-
-  it("renews the one-hour quota evidence on a later quota 429", async () => {
-    const {
-      getSpotifyAnchorQuotaUntil,
-      recordSpotifyThrottle,
-      SPOTIFY_ANCHOR_BREAKER_COOLDOWN_MS,
-    } = await import("./spotify-anchor-breaker");
-    const now = 10_000_000;
-    await recordSpotifyThrottle(now, true);
-    expect(await getSpotifyAnchorQuotaUntil(now)).toBe(
-      new Date(now + SPOTIFY_ANCHOR_BREAKER_COOLDOWN_MS).toISOString(),
-    );
-    await recordSpotifyThrottle(now + SPOTIFY_ANCHOR_BREAKER_COOLDOWN_MS / 2, true);
-    expect(await getSpotifyAnchorQuotaUntil(now + SPOTIFY_ANCHOR_BREAKER_COOLDOWN_MS)).toBe(
-      new Date(now + SPOTIFY_ANCHOR_BREAKER_COOLDOWN_MS * 1.5).toISOString(),
-    );
+    expect((await getSpotifyAnchorBreakerState(now)).reason).toBe("throttled");
   });
 
   it("does NOT trip on throttles spread beyond the failure window", async () => {
@@ -282,6 +265,7 @@ describe("resetSpotifyAnchorBreaker", () => {
     const now = 10_000_000;
 
     await throttle(SPOTIFY_ANCHOR_BREAKER_MAX_FAILURES, now);
+    store.set("spotify_quota_hold_until", new Date(Date.now() + 3_600_000).toISOString());
     expect(await spotifyAnchorSearchBreakerTripped(now)).toBe(true);
 
     const state = await resetSpotifyAnchorBreaker();
@@ -290,6 +274,7 @@ describe("resetSpotifyAnchorBreaker", () => {
     expect(state.reason).toBeNull();
     expect(state.throttlesInWindow).toBe(0);
     expect(await spotifyAnchorSearchBreakerTripped(now)).toBe(false);
+    expect(store.get("spotify_quota_hold_until")).toBe("");
   });
 
   it("clears a CORRUPT trip too — the operator's instant escape from a default-deny wedge", async () => {

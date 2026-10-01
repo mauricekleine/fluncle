@@ -5,12 +5,15 @@ import {
   SPOTIFY_ANCHOR_BREAKER_REASON_QUOTA,
 } from "./spotify-anchor-breaker";
 import { getSetting, setSetting } from "./settings";
-import { isSpotifyCallBudgetAvailable, recordSpotifyCall } from "./spotify-budget";
+import {
+  isSpotifyCallBudgetAvailable,
+  readSpotifyConsumerDailyBudget,
+  readSpotifyConsumerDailyCallsSpent,
+  readSpotifyQuotaHoldUntil,
+} from "./spotify-budget";
 
 export const ANCHOR_SPOTIFY_SEARCH_ENABLED_KEY = "anchor_spotify_search_enabled";
 
-// oxlint-disable-next-line no-comments/no-comments
-// The free Spotify window was measured to run through 09:00 UTC.
 export const ANCHOR_QUOTA_EXCEPTION_START_HOUR_UTC = 9;
 
 export async function isAnchorSpotifySearchEnabled(): Promise<boolean> {
@@ -50,6 +53,7 @@ export function isWithinFrontierRefreshWindow(now: Date): boolean {
 export type AnchorSpotifyGateReason =
   | "breaker_quota"
   | "breaker_throttle"
+  | "daily_budget"
   | "flag_off"
   | "friday_window"
   | "open"
@@ -84,20 +88,6 @@ export async function anchorSpotifySearchGate(now: Date): Promise<AnchorSpotifyG
       now.getUTCDate(),
       ANCHOR_QUOTA_EXCEPTION_START_HOUR_UTC,
     );
-    if (breaker.tripped && breaker.reason === SPOTIFY_ANCHOR_BREAKER_REASON_QUOTA) {
-      const cooldownEnd = now.getTime() + breaker.cooldownRemainingMs;
-      if (now.getTime() < quotaHoldEnd) {
-        return {
-          nextEligibleAt: new Date(Math.min(cooldownEnd, quotaHoldEnd)).toISOString(),
-          reason: "quota_hold",
-        };
-      }
-      const quotaEnd = Math.max(cooldownEnd, quotaUntil ? Date.parse(quotaUntil) : 0);
-      return {
-        nextEligibleAt: new Date(quotaEnd).toISOString(),
-        reason: "breaker_quota",
-      };
-    }
     if (quotaUntil) {
       if (now.getTime() < quotaHoldEnd) {
         return {
@@ -107,7 +97,7 @@ export async function anchorSpotifySearchGate(now: Date): Promise<AnchorSpotifyG
       }
       return { nextEligibleAt: quotaUntil, reason: "breaker_quota" };
     }
-    if (breaker.tripped) {
+    if (breaker.tripped && breaker.reason !== SPOTIFY_ANCHOR_BREAKER_REASON_QUOTA) {
       return {
         nextEligibleAt: validTrip
           ? new Date(now.getTime() + breaker.cooldownRemainingMs).toISOString()
@@ -118,6 +108,19 @@ export async function anchorSpotifySearchGate(now: Date): Promise<AnchorSpotifyG
   } catch (error) {
     logEvent("warn", "spotify.anchor-breaker-read-failed", { error });
     return { nextEligibleAt: null, reason: "breaker_throttle" };
+  }
+
+  try {
+    const [spent, budget] = await Promise.all([
+      readSpotifyConsumerDailyCallsSpent("anchor", now.getTime()),
+      readSpotifyConsumerDailyBudget("anchor"),
+    ]);
+    if (spent >= budget) {
+      return { nextEligibleAt: null, reason: "daily_budget" };
+    }
+  } catch (error) {
+    logEvent("warn", "spotify.anchor-budget-read-failed", { error });
+    return { nextEligibleAt: null, reason: "daily_budget" };
   }
 
   return (await isSpotifyCallBudgetAvailable(now.getTime()))
@@ -131,16 +134,20 @@ export async function anchorSpotifySearchAllowed(now: Date): Promise<boolean> {
 
 export async function anchorSpotifyBreakerAllows(now: Date): Promise<boolean> {
   try {
-    return !(await getSpotifyAnchorBreakerState(now.getTime())).tripped;
+    const [breaker, holdUntil, spent, budget, meterAvailable] = await Promise.all([
+      getSpotifyAnchorBreakerState(now.getTime()),
+      readSpotifyQuotaHoldUntil(now.getTime()),
+      readSpotifyConsumerDailyCallsSpent("anchor", now.getTime()),
+      readSpotifyConsumerDailyBudget("anchor"),
+      isSpotifyCallBudgetAvailable(now.getTime()),
+    ]);
+    return (
+      (!breaker.tripped || breaker.reason === SPOTIFY_ANCHOR_BREAKER_REASON_QUOTA) &&
+      !holdUntil &&
+      spent < budget &&
+      meterAvailable
+    );
   } catch {
     return false;
-  }
-}
-
-export async function recordAnchorSpotifyCall(now: Date): Promise<void> {
-  try {
-    await recordSpotifyCall(now.getTime());
-  } catch (error) {
-    logEvent("warn", "anchor.call-meter-record-failed", { error });
   }
 }

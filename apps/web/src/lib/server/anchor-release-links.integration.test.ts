@@ -47,7 +47,6 @@ vi.mock("./anchor-spotify-search", async (importOriginal) => {
     anchorSpotifySearchAllowed: async () => spotifyAllowed,
     anchorSpotifySearchGate: async () => ({ nextEligibleAt: null, reason: "flag_off" }),
     isAnchorSpotifySearchEnabled: async () => false,
-    recordAnchorSpotifyCall: async () => undefined,
   };
 });
 
@@ -427,7 +426,7 @@ describe("release-link anchor rung", () => {
     });
     const result = await resolveAnchorFree("mb_rec-1");
     expect(result.source).toBe("listenbrainz-metadata");
-    expect(fetchTrackMetadata).toHaveBeenCalledWith("lb-track");
+    expect(fetchTrackMetadata).toHaveBeenCalledWith("lb-track", "anchor");
     expect(lookupSpotifyIdsByMetadata).toHaveBeenCalledTimes(1);
 
     await seed("mb_rec-2", "rec-2", "Weightless", 261_901, "GBTEST000001");

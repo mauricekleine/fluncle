@@ -20,6 +20,13 @@ export async function withRetries<T>(
         throw error;
       }
 
+      if (
+        error instanceof Error &&
+        (error as Error & { quotaExceeded?: boolean }).quotaExceeded === true
+      ) {
+        throw new Error(`${label} deferred: Spotify quota exceeded. ${formatError(error)}`);
+      }
+
       if (attempt < attempts) {
         await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
       }

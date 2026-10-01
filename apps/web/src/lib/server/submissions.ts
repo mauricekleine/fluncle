@@ -10,7 +10,13 @@ import { readOptionalEnv } from "./env";
 import { logEvent } from "./log";
 import { getPublicSession } from "./public-auth";
 import { assertRateLimit } from "./rate-limit";
-import { ApiError, fetchTrackMetadata, parseSpotifyTrackUrl } from "./spotify";
+import {
+  ApiError,
+  fetchTrackMetadata,
+  parseSpotifyTrackUrl,
+  SpotifyDeferredError,
+  spotifyDeferredApiError,
+} from "./spotify";
 
 const noteMaxLength = 500;
 const contactMaxLength = 120;
@@ -64,7 +70,15 @@ export async function createSubmission(
     windowMs: rateLimitWindowMs,
   });
 
-  const track = await fetchTrackMetadata(input.spotifyTrackId);
+  let track: Awaited<ReturnType<typeof fetchTrackMetadata>>;
+  try {
+    track = await fetchTrackMetadata(input.spotifyTrackId, "essential");
+  } catch (error) {
+    if (error instanceof SpotifyDeferredError) {
+      throw spotifyDeferredApiError(error);
+    }
+    throw error;
+  }
   const submission: Submission = {
     album: track.album,
     artists: track.artists,

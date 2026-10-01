@@ -359,6 +359,7 @@ const EXPECTED_TIERS: Record<string, "admin" | "operator" | "private-session"> =
   set_mixtape_cues: "operator",
   set_projection_cutover: "operator",
   set_publish_advance: "operator",
+  set_spotify_consumer_budget: "operator",
   set_track_dismissed: "operator",
   set_turso_usage_threshold: "operator",
   set_vector_serving: "operator",

@@ -210,6 +210,7 @@ function main(): void {
     failed: 0,
     imagesBudgetLimited: false,
     imagesChecked: 0,
+    imagesDeferredReason: null as null | string,
     imagesFailed: 0,
     imagesFilled: 0,
     imagesRateLimited: false,
@@ -247,8 +248,37 @@ function main(): void {
   }
 
   summary.queueRemaining = Math.max(0, queue.length - summary.resolved - summary.noop);
-  const images = drainArtistImages();
+  let quota: { quotaHoldState?: "clear" | "held" | "unknown"; quotaHoldUntil?: null | string } = {
+    quotaHoldState: "unknown",
+  };
+  try {
+    quota = fluncleJson<{
+      quotaHoldState?: "clear" | "held" | "unknown";
+      quotaHoldUntil?: null | string;
+    }>(["admin", "catalogue", "anchor-breaker"]);
+  } catch (error) {
+    log(`anchor-breaker read failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  const imagesDeferredReason =
+    quota.quotaHoldState === "unknown"
+      ? "quota_hold_unknown"
+      : quota.quotaHoldUntil
+        ? "quota_hold"
+        : null;
+  const images = imagesDeferredReason
+    ? {
+        budgetLimited: true,
+        checked: 0,
+        failed: 0,
+        filled: 0,
+        queueDepth: null,
+        rateLimited: false,
+        repairPending: false,
+        skipped: 0,
+      }
+    : drainArtistImages();
   summary.imagesBudgetLimited = images.budgetLimited;
+  summary.imagesDeferredReason = imagesDeferredReason;
   summary.imagesChecked = images.checked;
   summary.imagesFailed = images.failed;
   summary.imagesFilled = images.filled;

@@ -8,15 +8,21 @@ vi.mock("./env", () => ({
 }));
 
 const spotifyBudget = vi.hoisted(() => ({
+  charge: vi.fn<() => Promise<boolean>>(),
+  hold: vi.fn<() => Promise<null | string>>(),
   isAvailable: vi.fn<() => Promise<boolean>>(),
-  record: vi.fn<() => Promise<void>>(),
+  record: vi.fn<() => Promise<boolean>>(),
   recordDaily: vi.fn<() => Promise<void>>(),
+  recordHold: vi.fn<() => Promise<string>>(),
 }));
 
 vi.mock("./spotify-budget", () => ({
+  chargeSpotifyConsumerDailyCall: spotifyBudget.charge,
   isSpotifyCallBudgetAvailable: spotifyBudget.isAvailable,
+  readSpotifyQuotaHoldUntil: spotifyBudget.hold,
   recordSpotifyCall: spotifyBudget.record,
   recordSpotifyDailyCall: spotifyBudget.recordDaily,
+  recordSpotifyQuotaHold: spotifyBudget.recordHold,
 }));
 
 const breaker = vi.hoisted(() => ({ record: vi.fn<() => Promise<void>>() }));
@@ -60,7 +66,12 @@ vi.mock("./db", () => ({
   typedRows: <T>(rows: T[]): T[] => rows,
 }));
 
-import { fetchArtistImages, fetchSpotifyAlbumTracks, searchTrackCandidates } from "./spotify";
+import {
+  fetchArtistImages,
+  fetchPlaylistFollowerCount,
+  fetchSpotifyAlbumTracks,
+  searchTrackCandidates,
+} from "./spotify";
 
 const TOKEN_URL = "https://accounts.spotify.com/api/token";
 const ARTIST_PREFIX = "https://api.spotify.com/v1/artists/";
@@ -157,15 +168,34 @@ beforeEach(() => {
   spotifyBudget.isAvailable.mockReset();
   spotifyBudget.isAvailable.mockResolvedValue(true);
   spotifyBudget.record.mockReset();
-  spotifyBudget.record.mockResolvedValue();
+  spotifyBudget.record.mockResolvedValue(true);
   spotifyBudget.recordDaily.mockReset();
   spotifyBudget.recordDaily.mockResolvedValue();
+  spotifyBudget.hold.mockReset();
+  spotifyBudget.hold.mockResolvedValue(null);
+  spotifyBudget.recordHold.mockReset();
+  spotifyBudget.recordHold.mockResolvedValue(new Date(Date.now() + 60_000).toISOString());
+  spotifyBudget.charge.mockReset();
+  spotifyBudget.charge.mockResolvedValue(true);
   breaker.record.mockReset();
   breaker.record.mockResolvedValue();
 });
 
 afterEach(() => {
   vi.unstubAllGlobals();
+});
+
+it("reads the playlist follower metric without spending the public search budget", async () => {
+  selectQueue = [{ access_token: "metric-token", expires_at: future(), refresh_token: "refresh" }];
+  spotifyBudget.charge.mockResolvedValue(false);
+  const fetchMock = vi.fn(
+    async () => new Response(JSON.stringify({ followers: { total: 42 } }), { status: 200 }),
+  );
+  vi.stubGlobal("fetch", fetchMock);
+
+  expect(await fetchPlaylistFollowerCount()).toBe(42);
+  expect(fetchMock).toHaveBeenCalledOnce();
+  expect(spotifyBudget.charge).not.toHaveBeenCalled();
 });
 
 describe("getSpotifyAccessToken refresh lifecycle", () => {
@@ -240,6 +270,72 @@ describe("spotifyFetch 429 backoff", () => {
     });
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(spotifyBudget.recordDaily).toHaveBeenCalledTimes(1);
+    expect(spotifyBudget.recordHold).toHaveBeenCalledWith(37);
+  });
+
+  it("uses the fallback hold when Spotify omits Retry-After", async () => {
+    const { spotifyFetch } = await import("./spotify");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response('{"error":{"reason":"QUOTA_EXCEEDED"}}', { status: 429 })),
+    );
+    await expect(spotifyFetch("/search", "token", {}, false)).rejects.toMatchObject({
+      quotaExceeded: true,
+    });
+    expect(spotifyBudget.recordHold).toHaveBeenCalledWith(null);
+  });
+
+  it("blocks optional callers during a hold while essential calls still reach Spotify", async () => {
+    const { spotifyFetch } = await import("./spotify");
+    spotifyBudget.hold.mockResolvedValue(new Date(Date.now() + 60_000).toISOString());
+    const fetchMock = vi.fn(async () => new Response("{}", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(spotifyFetch("/search", "token", {}, false, true, "anchor")).rejects.toMatchObject(
+      { reason: "quota_hold" },
+    );
+    await expect(
+      spotifyFetch("/playlists/pl/images", "token", { method: "PUT" }, false, true, "cosmetic"),
+    ).rejects.toMatchObject({ reason: "quota_hold" });
+    await expect(spotifyFetch("/me", "token")).resolves.toHaveProperty("status", 200);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(spotifyBudget.recordDaily).toHaveBeenCalledWith(expect.any(Number), "essential");
+  });
+
+  it("fails closed for optional callers when the shared meter is unreadable", async () => {
+    const { spotifyFetch } = await import("./spotify");
+    spotifyBudget.record.mockRejectedValue(new Error("counter unavailable"));
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(spotifyFetch("/search", "token", {}, false, true, "anchor")).rejects.toMatchObject(
+      { reason: "budget_unreadable" },
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(spotifyBudget.charge).not.toHaveBeenCalled();
+  });
+
+  it("does not charge the consumer when the shared meter rejects admission", async () => {
+    const { spotifyFetch } = await import("./spotify");
+    spotifyBudget.record.mockResolvedValue(false);
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(spotifyFetch("/search", "token", {}, false, true, "anchor")).rejects.toMatchObject(
+      { reason: "shared_meter" },
+    );
+    expect(spotifyBudget.charge).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("charges Frontier refresh calls to the shared meter without a consumer daily cap", async () => {
+    const { spotifyFetch } = await import("./spotify");
+    const fetchMock = vi.fn(async () => new Response("{}", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await spotifyFetch("/playlists/pl", "token", { method: "PUT" }, false, true, "frontier");
+    await spotifyFetch("/playlists/pl/items", "token", { method: "PUT" }, false, true, "frontier");
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(spotifyBudget.record).toHaveBeenCalledTimes(2);
+    expect(spotifyBudget.charge).not.toHaveBeenCalled();
   });
 
   it("keeps a tap 429 out of the anchor breaker", async () => {
@@ -440,7 +536,7 @@ describe("fetchArtistImages classifications and shared budget", () => {
     expect(spotifyBudget.record).not.toHaveBeenCalled();
   });
 
-  it("swallows advisory meter write failures after a successful lookup", async () => {
+  it("defers artist images when the shared meter cannot record the call", async () => {
     selectQueue = [{ access_token: "at-valid", expires_at: future(), refresh_token: "rt" }];
     spotifyBudget.record.mockRejectedValue(new Error("settings unavailable"));
     vi.stubGlobal(
@@ -459,7 +555,8 @@ describe("fetchArtistImages classifications and shared budget", () => {
 
     const result = await fetchArtistImages(["artist-1"]);
 
-    expect(result.images.get("artist-1")).toBe("https://i.scdn.co/image/artist-1");
+    expect(result.budgetLimited).toBe(true);
+    expect(result.images.size).toBe(0);
     expect(result.failures.size).toBe(0);
   });
 });

@@ -1,5 +1,10 @@
 import { assertRateLimit } from "./rate-limit";
-import { searchTrackCandidates, type TrackSearchResult } from "./spotify";
+import {
+  searchTrackCandidates,
+  SpotifyDeferredError,
+  spotifyDeferredApiError,
+  type TrackSearchResult,
+} from "./spotify";
 
 export const SEARCH_TRACKS_LIMIT = 30;
 export const SEARCH_TRACKS_WINDOW_MS = 60 * 1000;
@@ -34,7 +39,15 @@ async function cachedSearch(query: string): Promise<TrackSearchResult[]> {
     return hit.results;
   }
 
-  const results = await searchTrackCandidates(query);
+  let results: TrackSearchResult[];
+  try {
+    results = await searchTrackCandidates(query);
+  } catch (error) {
+    if (error instanceof SpotifyDeferredError) {
+      throw spotifyDeferredApiError(error);
+    }
+    throw error;
+  }
 
   searchCache.set(key, { expiresAt: now + CACHE_TTL_MS, results });
 

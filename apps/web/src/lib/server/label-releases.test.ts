@@ -10,6 +10,7 @@ const spotify = vi.hoisted(() => ({
   calls: [] as string[],
   failPath: (_path: string): boolean => false,
   grantGone: false,
+  onFetch: (_path: string): Promise<void> => Promise.resolve(),
   respond: (_path: string): unknown => ({}),
   throttle: (_path: string): null | { quotaExceeded: boolean; retryAfterMs: number } => null,
   throwKind: null as "429" | "error" | null,
@@ -43,6 +44,7 @@ vi.mock("./spotify", () => {
     },
     spotifyFetch: async (path: string) => {
       spotify.calls.push(path);
+      await spotify.onFetch(path);
 
       const throttle = spotify.throttle(path);
       if (throttle) {
@@ -80,7 +82,6 @@ import {
   TAP_BUDGET_CEILING,
 } from "./label-releases";
 import { listFreshReleases } from "./fresh";
-import { recordAnchorSpotifyCall } from "./anchor-spotify-search";
 import {
   chargeSpotifyTapDailyCall,
   readSpotifyTapDailyCallsSpent,
@@ -89,8 +90,6 @@ import {
   setSpotifyTapDailyBudget,
   readSpotifyCallCount,
   SPOTIFY_CALL_WINDOW_MAX,
-  SPOTIFY_CALLS_WINDOW_COUNT_KEY,
-  SPOTIFY_CALLS_WINDOW_START_KEY,
 } from "./spotify-budget";
 
 type AlbumFixture = {
@@ -242,18 +241,17 @@ async function seedArtistRule(
 }
 
 async function setSpotifyCallMeter(client: Client, count: number, ageMs = 0): Promise<void> {
-  const entries: Array<[string, string]> = [
-    [SPOTIFY_CALLS_WINDOW_START_KEY, new Date(Date.now() - ageMs).toISOString()],
-    [SPOTIFY_CALLS_WINDOW_COUNT_KEY, String(count)],
-  ];
-
-  for (const [key, value] of entries) {
-    await client.execute({
-      args: [key, value, value],
-      sql: `insert into settings (key, value) values (?, ?)
-            on conflict(key) do update set value = ?`,
-    });
-  }
+  await client.execute(
+    "delete from rate_limit_counters where action = 'spotify-api-window' and bucket = 'app'",
+  );
+  const now = Date.now() - ageMs;
+  const windowStart = new Date(Math.floor(now / 30_000) * 30_000).toISOString();
+  await client.execute({
+    args: [windowStart, count],
+    sql: `insert into rate_limit_counters (action, bucket, window_start, count)
+      values ('spotify-api-window', 'app', ?, ?)
+      on conflict(action, bucket, window_start) do update set count = excluded.count`,
+  });
 }
 
 function setMintableFixture(): void {
@@ -285,6 +283,7 @@ beforeEach(async () => {
   spotify.grantGone = false;
   spotify.throwKind = null;
   spotify.failPath = () => false;
+  spotify.onFetch = () => Promise.resolve();
   spotify.respond = () => ({});
   spotify.throttle = () => null;
 });
@@ -1153,6 +1152,29 @@ describe("probeLabelReleases", () => {
     expect(await readSpotifyCallCount()).toBe(spotify.calls.length);
   });
 
+  it("keeps a successful search response when another caller fills the meter during the fetch", async () => {
+    await seedEnabledLabel(db, { id: "lbl_1", name: "Medschool", slug: "medschool" });
+    setMintableFixture();
+    spotify.onFetch = async () => setSpotifyCallMeter(db, SPOTIFY_CALL_WINDOW_MAX);
+
+    const result = await probeLabelReleases();
+
+    expect(spotify.calls).toHaveLength(1);
+    expect(result.albumsSeen).toBe(1);
+    expect(result.budgetPaused).toBe(true);
+    const progress = await db.execute(
+      "select label_releases_progress_json from labels where slug = 'medschool'",
+    );
+    const progressJson = progress.rows[0]?.label_releases_progress_json;
+    expect(typeof progressJson).toBe("string");
+    if (typeof progressJson !== "string") {
+      throw new Error("label search progress was not stored");
+    }
+    expect(JSON.parse(progressJson)).toMatchObject({
+      albumIds: ["alb1"],
+    });
+  });
+
   it("holds itself to a FRACTION of the window, so a user path keeps real headroom", async () => {
     expect(TAP_BUDGET_CEILING).toBeLessThan(SPOTIFY_CALL_WINDOW_MAX);
     expect(TAP_BUDGET_CEILING).toBeGreaterThan(0);
@@ -1324,7 +1346,6 @@ describe("probeLabelReleases", () => {
     const day = Date.UTC(2026, 8, 26, 12);
     await recordSpotifyDailyCall(day);
     await recordSpotifyDailyCall(day + 1000);
-    await recordAnchorSpotifyCall(new Date(day + 1000));
     expect(await readSpotifyDailyCallCount(day + 2000)).toBe(2);
     expect(await readSpotifyDailyCallCount(Date.UTC(2026, 8, 27))).toBe(0);
   });

@@ -1050,6 +1050,105 @@ describe("fluncle CLI parsing and JSON output", () => {
     ]);
   });
 
+  testCli("spotify-consumer-budget reads consumer usage and sets the selected cap", async () => {
+    const requests: Array<{ body?: unknown; method: string; path: string }> = [];
+    await withStubApi(
+      async (req, url) => {
+        requests.push({
+          body: req.method === "PUT" ? await req.json() : undefined,
+          method: req.method,
+          path: url.pathname,
+        });
+        if (req.method === "GET") {
+          return Response.json({
+            consumerBudgets: {
+              anchor: { callsSpent: 4, dailyBudget: 700 },
+              artist_images: { callsSpent: 1, dailyBudget: 150 },
+              public_search: { callsSpent: 2, dailyBudget: 150 },
+            },
+            spotifyDailyCalls: 7,
+          });
+        }
+        return Response.json({ ok: true });
+      },
+      async (baseUrl) => {
+        const env = { FLUNCLE_API_BASE_URL: baseUrl, FLUNCLE_API_TOKEN: "test-token" };
+        const read = await runCli(["admin", "catalogue", "spotify-consumer-budget", "--json"], env);
+        const explicitGet = await runCli(
+          ["admin", "catalogue", "spotify-consumer-budget", "get", "--json"],
+          env,
+        );
+        const set = await runCli(
+          [
+            "admin",
+            "catalogue",
+            "spotify-consumer-budget",
+            "set",
+            "--consumer",
+            "anchor",
+            "--calls",
+            "42",
+            "--json",
+          ],
+          env,
+        );
+        expect(read.exitCode).toBe(0);
+        expect(explicitGet.exitCode).toBe(0);
+        expect(JSON.parse(explicitGet.stdout)).toMatchObject({
+          consumerBudgets: { anchor: { callsSpent: 4, dailyBudget: 700 } },
+          ok: true,
+        });
+        expect(JSON.parse(read.stdout)).toMatchObject({
+          consumerBudgets: { anchor: { callsSpent: 4, dailyBudget: 700 } },
+          ok: true,
+        });
+        expect(set.exitCode).toBe(0);
+        expect(JSON.parse(set.stdout)).toMatchObject({ calls: 42, consumer: "anchor", ok: true });
+      },
+    );
+    expect(requests).toEqual([
+      { body: undefined, method: "GET", path: "/api/v1/admin/catalogue/anchor/breaker" },
+      { body: undefined, method: "GET", path: "/api/v1/admin/catalogue/anchor/breaker" },
+      {
+        body: { consumer: "anchor", dailyBudget: 42 },
+        method: "PUT",
+        path: "/api/v1/admin/catalogue/spotify-budget",
+      },
+    ]);
+  });
+
+  testCli(
+    "spotify-consumer-budget validates its consumer and calls before making a request",
+    async () => {
+      const badConsumer = await runCli([
+        "admin",
+        "catalogue",
+        "spotify-consumer-budget",
+        "set",
+        "--consumer",
+        "unknown",
+        "--calls",
+        "5",
+        "--json",
+      ]);
+      const badCalls = await runCli([
+        "admin",
+        "catalogue",
+        "spotify-consumer-budget",
+        "set",
+        "--consumer",
+        "anchor",
+        "--calls",
+        "1.5",
+        "--json",
+      ]);
+      expect(badConsumer.exitCode).toBe(1);
+      expect(JSON.parse(badConsumer.stdout).message).toContain("--consumer must be");
+      expect(badCalls.exitCode).toBe(1);
+      expect(JSON.parse(badCalls.stdout).message).toContain("--calls must be");
+    },
+  );
+
   testCli("projection advance stops after the first completing response", async () => {
     const requests: unknown[] = [];
 

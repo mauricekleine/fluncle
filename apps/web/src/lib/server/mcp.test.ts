@@ -1264,4 +1264,34 @@ describe("MCP search_tracks — the shared Spotify-token guard", () => {
     expect(data).toMatchObject({ code: "rate_limited", ok: false });
     expect(searchTrackCandidatesMock).not.toHaveBeenCalled();
   });
+
+  it("returns a stable deferred code and deadline when public Spotify search is held", async () => {
+    const { SpotifyDeferredError } = await import("./spotify");
+    searchTrackCandidatesMock.mockRejectedValueOnce(
+      new SpotifyDeferredError("quota_hold", "2026-10-02T09:00:00.000Z"),
+    );
+    const { data, isError } = await callTool("search_tracks", { query: "amen break" });
+    expect(isError).toBe(true);
+    expect(data).toMatchObject({
+      code: "spotify_deferred",
+      ok: false,
+      until: "2026-10-02T09:00:00.000Z",
+    });
+  });
+
+  it("uses the essential lane for submit_track and returns a deferred deadline if that lookup fails", async () => {
+    const { SpotifyDeferredError } = await import("./spotify");
+    searchTrackCandidatesMock
+      .mockReset()
+      .mockRejectedValueOnce(new SpotifyDeferredError("quota_hold", "2026-10-02T09:00:00.000Z"));
+    const spotifyUrl = "https://open.spotify.com/track/abcdefghij0123456789AB";
+    const { data, isError } = await callTool("submit_track", { spotifyUrl });
+    expect(searchTrackCandidatesMock).toHaveBeenCalledWith(spotifyUrl, "essential");
+    expect(isError).toBe(true);
+    expect(data).toMatchObject({
+      code: "spotify_deferred",
+      ok: false,
+      until: "2026-10-02T09:00:00.000Z",
+    });
+  });
 });

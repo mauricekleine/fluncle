@@ -31,7 +31,7 @@ export async function requireTrack(idOrLogId: string): Promise<TrackListItem> {
   return track;
 }
 
-export type ApiFaultData = { apiCode: string; apiMessage: string };
+export type ApiFaultData = { apiCode: string; apiMessage: string; until?: null | string };
 
 export function isApiFaultData(data: unknown): data is ApiFaultData {
   return (
@@ -60,7 +60,11 @@ export function apiFault(error: unknown): ORPCError<string, ApiFaultData> {
 
   if (error instanceof ApiError) {
     return new ORPCError("INTERNAL_SERVER_ERROR", {
-      data: { apiCode: error.code, apiMessage: error.message },
+      data: {
+        apiCode: error.code,
+        apiMessage: error.message,
+        ...(error.until !== undefined ? { until: error.until } : {}),
+      },
       message: error.message,
       status: error.status,
     });

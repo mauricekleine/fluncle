@@ -62,8 +62,13 @@ import { recordDemand } from "../demand";
 import { getSpotifyAnchorBreakerState, resetSpotifyAnchorBreaker } from "../spotify-anchor-breaker";
 import {
   readSpotifyDailyCallCount,
+  readSpotifyEssentialDailyCalls,
+  readSpotifyConsumerDailyBudget,
+  readSpotifyConsumerDailyCallsSpent,
+  readSpotifyQuotaHoldUntil,
   readSpotifyTapDailyBudget,
   readSpotifyTapDailyCallsSpent,
+  setSpotifyConsumerDailyBudget,
   setSpotifyTapDailyBudget,
 } from "../spotify-budget";
 import { syncTelescopePlaylist } from "../telescope-playlist";
@@ -811,19 +816,55 @@ export function adminCatalogueHandlers(os: Implementer) {
     .use(adminAuth)
     .handler(async () => {
       try {
-        const [breaker, apifyBudget, apifyEnabled, spotifySearchEnabled, gate, spotifyDailyCalls] =
-          await Promise.all([
-            getSpotifyAnchorBreakerState(),
-            getAnchorApifyBudget(),
-            isAnchorApifyEnabled(),
-            isAnchorSpotifySearchEnabled(),
-            anchorSpotifySearchGate(new Date()),
-            readSpotifyDailyCallCount().catch(() => null),
-          ]);
+        const [
+          breaker,
+          apifyBudget,
+          apifyEnabled,
+          spotifySearchEnabled,
+          gate,
+          spotifyDailyCalls,
+          essentialDailyCalls,
+          quotaHoldUntil,
+          anchorDailyBudget,
+          anchorCallsSpent,
+          artistDailyBudget,
+          artistCallsSpent,
+          publicSearchDailyBudget,
+          publicSearchCallsSpent,
+        ] = await Promise.all([
+          getSpotifyAnchorBreakerState(),
+          getAnchorApifyBudget(),
+          isAnchorApifyEnabled(),
+          isAnchorSpotifySearchEnabled(),
+          anchorSpotifySearchGate(new Date()),
+          readSpotifyDailyCallCount().catch(() => null),
+          readSpotifyEssentialDailyCalls().catch(() => null),
+          readSpotifyQuotaHoldUntil().then(
+            (until) => ({ state: until ? ("held" as const) : ("clear" as const), until }),
+            () => ({ state: "unknown" as const, until: null }),
+          ),
+          readSpotifyConsumerDailyBudget("anchor").catch(() => null),
+          readSpotifyConsumerDailyCallsSpent("anchor").catch(() => null),
+          readSpotifyConsumerDailyBudget("artist_images").catch(() => null),
+          readSpotifyConsumerDailyCallsSpent("artist_images").catch(() => null),
+          readSpotifyConsumerDailyBudget("public_search").catch(() => null),
+          readSpotifyConsumerDailyCallsSpent("public_search").catch(() => null),
+        ]);
 
         return {
           ...breaker,
+          consumerBudgets: {
+            anchor: { callsSpent: anchorCallsSpent, dailyBudget: anchorDailyBudget },
+            artist_images: { callsSpent: artistCallsSpent, dailyBudget: artistDailyBudget },
+            public_search: {
+              callsSpent: publicSearchCallsSpent,
+              dailyBudget: publicSearchDailyBudget,
+            },
+          },
+          essentialDailyCalls,
           ok: true as const,
+          quotaHoldState: quotaHoldUntil.state,
+          quotaHoldUntil: quotaHoldUntil.until,
           rungs: {
             apifyBudget,
             apifyEnabled,
@@ -833,6 +874,18 @@ export function adminCatalogueHandlers(os: Implementer) {
           },
           spotifyDailyCalls,
         };
+      } catch (error) {
+        throw apiFault(error);
+      }
+    });
+
+  const setSpotifyConsumerBudgetHandler = os.set_spotify_consumer_budget
+    .use(adminAuth)
+    .use(operatorGuard)
+    .handler(async ({ input }) => {
+      try {
+        await setSpotifyConsumerDailyBudget(input.consumer, input.dailyBudget);
+        return { ok: true as const };
       } catch (error) {
         throw apiFault(error);
       }
@@ -935,6 +988,7 @@ export function adminCatalogueHandlers(os: Implementer) {
     set_anchor_search: setAnchorSearchHandler,
     set_capture_budget: setCaptureBudgetHandler,
     set_label_releases_budget: setLabelReleasesBudgetHandler,
+    set_spotify_consumer_budget: setSpotifyConsumerBudgetHandler,
     set_track_dismissed: setTrackDismissedHandler,
     verify_capture: verifyCaptureHandler,
   };
