@@ -64,8 +64,6 @@
     "lint:fix": "oxlint --fix",
     "quality:classify": "node scripts/quality/classify.mjs",
     "quality:history": "node scripts/quality/history-report.mjs",
-    "quality:preflight": "node scripts/quality/preflight.mjs",
-    "quality:preflight:start": "node scripts/quality/preflight.mjs start",
     "quality:workflows": "bun test scripts/quality/workflows.test.ts",
     "stories:build": "bun scripts/build-user-story-matrix.ts",
     "social:preview": "bun run --cwd packages/video social:preview",
