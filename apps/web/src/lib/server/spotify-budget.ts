@@ -9,12 +9,9 @@ export const SPOTIFY_QUOTA_HOLD_UNTIL_KEY = "spotify_quota_hold_until";
 export const SPOTIFY_ANCHOR_DAILY_BUDGET_KEY = "anchor_spotify_daily_calls";
 export const SPOTIFY_ARTIST_DAILY_BUDGET_KEY = "artist_spotify_daily_calls";
 export const SPOTIFY_PUBLIC_SEARCH_DAILY_BUDGET_KEY = "public_search_spotify_daily_calls";
-export const SPOTIFY_TAP_DAILY_BUDGET_KEY = "spotify_label_releases_daily_budget";
-export const SPOTIFY_TAP_DAILY_BUDGET_DEFAULT = 500;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const DAILY_CALL_ACTION = "spotify-api-daily";
 const ESSENTIAL_CALL_ACTION = "spotify-essential-daily";
-const TAP_CALL_ACTION = "spotify-tap-daily";
 const DAILY_BUCKET = "app";
 const CALL_WINDOW_ACTION = "spotify-api-window";
 const HOLD_FALLBACK_MS = DAY_MS;
@@ -26,7 +23,6 @@ export type SpotifyConsumer =
   | "cosmetic"
   | "essential"
   | "frontier"
-  | "label_tap"
   | "public_search";
 
 const CONSUMER_BUDGETS: Record<
@@ -40,10 +36,6 @@ const CONSUMER_BUDGETS: Record<
   artist_images: {
     action: "spotify-artist-daily",
     fallback: 150,
-  },
-  label_tap: {
-    action: TAP_CALL_ACTION,
-    fallback: SPOTIFY_TAP_DAILY_BUDGET_DEFAULT,
   },
   public_search: {
     action: "spotify-public-search-daily",
@@ -100,9 +92,7 @@ export async function readSpotifyConsumerDailyBudget(
       ? await getSetting(SPOTIFY_ANCHOR_DAILY_BUDGET_KEY)
       : consumer === "artist_images"
         ? await getSetting(SPOTIFY_ARTIST_DAILY_BUDGET_KEY)
-        : consumer === "label_tap"
-          ? await getSetting(SPOTIFY_TAP_DAILY_BUDGET_KEY)
-          : await getSetting(SPOTIFY_PUBLIC_SEARCH_DAILY_BUDGET_KEY);
+        : await getSetting(SPOTIFY_PUBLIC_SEARCH_DAILY_BUDGET_KEY);
   return parseCount(raw, config.fallback);
 }
 
@@ -117,8 +107,6 @@ export async function setSpotifyConsumerDailyBudget(
     await setSetting(SPOTIFY_ANCHOR_DAILY_BUDGET_KEY, String(calls));
   } else if (consumer === "artist_images") {
     await setSetting(SPOTIFY_ARTIST_DAILY_BUDGET_KEY, String(calls));
-  } else if (consumer === "label_tap") {
-    await setSetting(SPOTIFY_TAP_DAILY_BUDGET_KEY, String(calls));
   } else {
     await setSetting(SPOTIFY_PUBLIC_SEARCH_DAILY_BUDGET_KEY, String(calls));
   }
@@ -194,36 +182,6 @@ export async function recordSpotifyDailyCall(
       windowMs: DAY_MS,
     });
   }
-}
-
-export async function readSpotifyTapDailyBudget(): Promise<number> {
-  return readSpotifyConsumerDailyBudget("label_tap");
-}
-
-export async function setSpotifyTapDailyBudget(calls: number): Promise<void> {
-  await setSpotifyConsumerDailyBudget("label_tap", calls);
-}
-
-export async function readSpotifyTapDailyCallsSpent(now = Date.now()): Promise<number> {
-  return readSpotifyConsumerDailyCallsSpent("label_tap", now);
-}
-
-export async function chargeSpotifyTapDailyCall(
-  budget: number,
-  now = Date.now(),
-): Promise<boolean> {
-  if (budget < 1) {
-    return false;
-  }
-  return (
-    (await bumpRateLimitCounter({
-      action: TAP_CALL_ACTION,
-      bucket: DAILY_BUCKET,
-      limit: budget,
-      now,
-      windowMs: DAY_MS,
-    })) !== undefined
-  );
 }
 
 function parseCount(raw: string | undefined, fallback = 0): number {

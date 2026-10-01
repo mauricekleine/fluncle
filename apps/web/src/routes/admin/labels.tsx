@@ -1132,8 +1132,6 @@ function RuleChipRow({
   saved: ArtistRule | undefined;
 }) {
   const drifted = Boolean(saved?.resolvedMbid && saved.resolvedMbid !== saved.artistMbid);
-  const tapBlind =
-    rule.verdict === "block" && saved !== undefined && saved.artistSpotifyId === null;
 
   return (
     <li className="flex items-center gap-2 px-3 py-2">
@@ -1142,12 +1140,6 @@ function RuleChipRow({
         <RuleMarker label="DRIFTED">
           MusicBrainz now resolves this id to another entity. The rule still matches the id it was
           written with.
-        </RuleMarker>
-      ) : null}
-      {tapBlind ? (
-        <RuleMarker label="TAP-BLIND">
-          No Spotify id resolved, so the freshness tap cannot see this one. The crawler still
-          enforces it exactly.
         </RuleMarker>
       ) : null}
       <Button

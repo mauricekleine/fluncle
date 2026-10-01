@@ -70,7 +70,7 @@ function sharedFills(): string[] {
 describe("the has_isrc mirror cannot drift", () => {
   it("finds the isrc writers at all (the scanner still works)", () => {
     expect(assignments().length + sharedFills().length).toBeGreaterThanOrEqual(3);
-    expect(isrcInserts().length).toBeGreaterThanOrEqual(3);
+    expect(isrcInserts().length).toBeGreaterThanOrEqual(2);
   });
 
   it("pairs every SQL isrc assignment with its has_isrc mirror", () => {

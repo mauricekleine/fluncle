@@ -24,7 +24,6 @@ RELEASE_HEAVY_TIMERS=(
 	fluncle-capture.timer
 	fluncle-cover-masters.timer
 	fluncle-crawl.timer
-	fluncle-label-releases.timer
 	fluncle-projection-maintenance.timer
 )
 

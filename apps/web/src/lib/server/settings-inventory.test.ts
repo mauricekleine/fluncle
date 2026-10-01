@@ -36,10 +36,6 @@ const SETTINGS_INVENTORY = {
   "frontier-playlist.ts": ["frontier.minting"],
   "health-receipt-cutover.ts": ["health_snapshot_receipts_enabled"],
   "label-outliers.ts": ["label_outliers_last_run"],
-  "label-releases.ts": [
-    "spotify_label_releases_quota_until",
-    "spotify_label_releases_throttle_until",
-  ],
   "logbook-echo.ts": ["logbook_echo_max_overlap", "logbook_echo_min_phrase_words"],
   "note-rejections.ts": ["note_echo_max_overlap", "note_echo_min_phrase_words"],
   "observation-rejections.ts": [
@@ -67,7 +63,6 @@ const SETTINGS_INVENTORY = {
     "anchor_spotify_daily_calls",
     "artist_spotify_daily_calls",
     "public_search_spotify_daily_calls",
-    "spotify_label_releases_daily_budget",
     "spotify_quota_hold_until",
   ],
   "telescope-playlist.ts": ["telescope.last_mirror", "telescope.spotify_playlist_id"],
@@ -174,7 +169,7 @@ describe("settings inventory drift", () => {
     expect(orphaned, "Registered settings keys with no reader and no writer").toEqual([]);
     expect(unregistered, "Settings keys used by code but missing from the inventory").toEqual([]);
     expect(wrongOwner, "Settings keys used outside their registered owner module").toEqual([]);
-    expect(registered.size).toBe(53);
-    expect(Object.keys(SETTINGS_INVENTORY)).toHaveLength(25);
+    expect(registered.size).toBe(50);
+    expect(Object.keys(SETTINGS_INVENTORY)).toHaveLength(24);
   });
 });

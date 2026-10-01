@@ -633,7 +633,10 @@ describe("performance registry", () => {
         });
 
         expect(report.profile).toBe(profile);
-        expect(report.passed).toBe(true);
+        expect(
+          report.passed,
+          JSON.stringify(report.contracts.filter((contract) => !contract.passed)),
+        ).toBe(true);
         expect(report.contracts).toHaveLength(CONTRACT_D_CONTRACT_IDS.length);
 
         for (const contract of report.contracts) {

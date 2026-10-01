@@ -50,7 +50,6 @@ const EXPECTED_WRITE_OPERATION_IDS = [
   "catalogue.demand",
   "catalogue.isrc-recovery",
   "catalogue.label-outliers",
-  "catalogue.label-releases",
   "catalogue.rank",
   "catalogue.reconcile-hub-counts",
   "catalogue.verify-captures",
@@ -1254,10 +1253,9 @@ describe("database operation registry", () => {
     );
   });
 
-  it("makes the six direct Worker database timers explicit", () => {
+  it("makes the five direct Worker database timers explicit", () => {
     const expected = [
       "catalogue.anchor",
-      "catalogue.label-releases",
       "catalogue.verify-captures",
       "social.capture",
       "social.publish-advance",

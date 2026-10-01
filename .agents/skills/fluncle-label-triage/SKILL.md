@@ -51,7 +51,7 @@ bash <skill>/scripts/pull-undecided.sh > undecided.json
 Emits every `undecided` label with its **`mb_label_id`** (load-bearing: agents research the EXACT MusicBrainz entity, never a same-named label — "Absolute" the Swedish pop-comp brand is not "Absolute 2 Records" the UK jungle label) and its stored-track count. It also refreshes, in CWD:
 
 - `calib-enabled.txt` / `calib-disabled.txt` — the operator's LIVE ruling boundary.
-- `calib-rules.txt` — every ratified artist rule, one line each, with its scope and tap-bridge state: the precedent a proposal is calibrated against.
+- `calib-rules.txt` — every ratified artist rule, one line each, with its scope: the precedent a proposal is calibrated against.
 - `calib-rules.json` — the same set machine-readable, and the input to the `rescope` round.
 
 The DB read is required: it carries the stored-track counts and the whole-corpus calibration in one query.
@@ -81,7 +81,7 @@ Workflow({ scriptPath: "<skill>/scripts/triage-workflow.js",
 The script already guards the harness's stringified-`args` delivery (a workflow that returns instantly with zero agents IS that trap) and embeds both research briefs. Every brief names this file by path, so each worker reads the standing rulings and the oracle ladder below, and hands out the evidence command. It runs in two phases:
 
 - **Research** (batch ≈ 10 labels/agent) — the three-bucket call, plus a `needsCensus` flag on any label that is genuinely two-sided.
-- **Census** (batch **5** labels/agent, and ONLY the flagged ones) — the evidence command's `--census` count, applied to the 15 % share test and the imprint-child check, returning the rule proposals with per-artist evidence, first-credit counts, and tap-bridge status. A census verdict replaces phase 1's provisional read for that label.
+- **Census** (batch **5** labels/agent, and ONLY the flagged ones) — the evidence command's `--census` count, applied to the 15 % share test and the imprint-child check, returning the rule proposals with per-artist evidence and first-credit counts. A census verdict replaces phase 1's provisional read for that label.
 
 **Evidence comes from one command, never from hand-written fetchers:**
 
@@ -135,7 +135,7 @@ Stage the workflow's result object as `label-triage.json`, then render the revie
 python3 <skill>/scripts/render-ratification.py   # prints the local HTML path
 ```
 
-A local file, never a hosted artifact. The page **leads with the rule proposals** — per artist: the evidence, the census first-credit count, tap-bridge status (a TAP-BLIND rule is enforced by the crawler but invisible to the freshness tap), and the census's would-take / would-drop summary — then the plain buckets with the judgment calls first (every `unclear` and every non-`high` confidence verdict). An inert proposal is flagged on the page as one that will be dropped. Global suggestions render as prose for the operator to author himself.
+A local file, never a hosted artifact. The page **leads with the rule proposals** — per artist: the evidence, the census first-credit count, and the census's would-take / would-drop summary — then the plain buckets with the judgment calls first (every `unclear` and every non-`high` confidence verdict). An inert proposal is flagged on the page as one that will be dropped. Global suggestions render as prose for the operator to author himself.
 
 **Do not apply anything the operator has not ratified.**
 

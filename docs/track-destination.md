@@ -1,6 +1,6 @@
 # The archive track destination
 
-Fluncle holds far more recordings than he has ever certified. A certified one is a **finding** and lives at `/log/<coordinate>`. Everything else — the rows the [catalogue crawler](./catalogue-crawler.md) and the freshness tap put in `tracks` — had no destination at all: it rendered as a quiet line on an [entity page](./album-entity.md) whose only way out was a streaming service. `/track/<trackId>` is that destination.
+Fluncle holds far more recordings than he has ever certified. A certified one is a **finding** and lives at `/log/<coordinate>`. Everything else — the rows the [catalogue crawler](./catalogue-crawler.md) puts in `tracks` — had no destination at all: it rendered as a quiet line on an [entity page](./album-entity.md) whose only way out was a streaming service. `/track/<trackId>` is that destination.
 
 ## The certified rail did not move
 
@@ -16,7 +16,7 @@ What changed is one sentence in [album-entity.md](./album-entity.md): a crawled 
 
 **The address is `tracks.track_id`, the row's own primary key.** The full argument is in the header of [`apps/web/src/lib/track-page.ts`](../apps/web/src/lib/track-page.ts); the four properties that decided it:
 
-1. **Permanence under correction.** Every other candidate on the row is metadata, and metadata gets fixed. `track_id` is assigned once at insert and never rewritten: the crawler's `mb_<recording-mbid>` and the freshness tap's `sp_<spotify-track-id>` are deterministic functions of an identity that already existed, so re-crawling the same recording collides on the primary key and writes nothing.
+1. **Permanence under correction.** Every other candidate on the row is metadata, and metadata gets fixed. `track_id` is assigned once at insert and never rewritten: the crawler's `mb_<recording-mbid>` and legacy Spotify-sourced `sp_<spotify-track-id>` are deterministic functions of an identity that already existed, so re-crawling the same recording collides on the primary key and writes nothing.
 2. **It exists for every row.** `tracks.isrc` is the better recording anchor and it is what the archive reconciles on, but it is nullable — `isrc_attempted_at` exists precisely because "we looked and there is none" is a real answer. An ISRC-keyed URL needs a second scheme for every row without one.
 3. **A late ISRC changes nothing.** Under an ISRC-keyed URL, the day a backfill fills that column the page's address moves — a redirect owed forever, on a column four fill paths write to. Under the primary key a late ISRC is one more fact the page prints.
 4. **One recording, one page.** An ISRC is not unique per _row_: the same recording reaches the catalogue under several barcodes. An ISRC-keyed URL would have to choose one of those rows and would choose a different one as the crawl grows. The archive already answers that ambiguity with `duplicate_of_track_id`, and the destination follows the stamp with a 301 to the principal — **in one hop**. That column is written only when a catalogue row's ISRC matches a _finding's_, so the principal is nearly always certified and a `/track/<principal>` bounce would only 301 again to `/log`; the principal's coordinate is read in the same select so the twin lands on the real page directly. The `/track` arm survives for the case the column's rule does not cover, a principal carrying no coordinate.

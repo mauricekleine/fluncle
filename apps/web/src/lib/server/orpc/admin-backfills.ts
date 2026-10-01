@@ -8,7 +8,6 @@ import {
   backfillDiscogsIds,
   backfillLastfmLoves,
 } from "../backfill";
-import { probeLabelReleases } from "../label-releases";
 import { type CoverMasterKind, resolveCoverMasters } from "../cover-masters";
 import { resolveLabelImages } from "../label-images";
 import { resolveLabelLineage } from "../label-lineage";
@@ -250,44 +249,6 @@ export function adminBackfillsHandlers(os: Implementer) {
       }
     });
 
-  const backfillLabelReleasesHandler = os.backfill_label_releases
-    .use(adminAuth)
-    .handler(async ({ input }) => {
-      try {
-        const result = await probeLabelReleases({ dryRun: input.dryRun, limit: input.limit });
-
-        return {
-          albumsMatched: result.albumsMatched,
-          albumsSeen: result.albumsSeen,
-          blockedReason: result.blockedReason,
-          budgetPaused: result.budgetPaused,
-          configured: result.configured,
-          dryRun: result.dryRun,
-          failedFetches: result.failedFetches,
-          failedLabels: result.failedLabels,
-          fetchCeilingHit: result.fetchCeilingHit,
-          labelSlugs: result.labelSlugs,
-          labelsDue: result.labelsDue,
-          labelsProbed: result.labelsProbed,
-          neverChecked: result.neverChecked,
-          newRows: result.newRows,
-          newTrackIds: result.newTrackIds,
-          ok: true as const,
-          quotaExceeded: result.quotaExceeded,
-          rateLimited: result.rateLimited,
-          retryAfterMs: result.retryAfterMs,
-          skippedKnown: result.skippedKnown,
-          skippedUndated: result.skippedUndated,
-          skippedUngrounded: result.skippedUngrounded,
-          tapDailyBudget: result.tapDailyBudget,
-          tapDailyCallsSpent: result.tapDailyCallsSpent,
-          tracksSkippedArtistRule: result.tracksSkippedArtistRule,
-        };
-      } catch (error) {
-        throw apiFault(error);
-      }
-    });
-
   const backfillLabelImagesHandler = os.backfill_label_images
     .use(adminAuth)
     .handler(async ({ input }) => {
@@ -494,7 +455,6 @@ export function adminBackfillsHandlers(os: Implementer) {
     backfill_discogs_facts: backfillDiscogsFactsHandler,
     backfill_label_images: backfillLabelImagesHandler,
     backfill_label_lineage: backfillLabelLineageHandler,
-    backfill_label_releases: backfillLabelReleasesHandler,
     backfill_lastfm: backfillLastfmHandler,
     backfill_recording_mbids: backfillRecordingMbidsHandler,
   };

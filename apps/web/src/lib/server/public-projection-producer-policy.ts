@@ -144,7 +144,7 @@ export const PUBLIC_PROJECTION_PRODUCER_POLICIES = [
     "track-capture-source-pin-clear",
     "track-note-fill",
   ]),
-  ...staticPolicies("public_aggregates", ["crawl-track-mint", "label-release-track-mint"]),
+  ...staticPolicies("public_aggregates", ["crawl-track-mint"]),
   ...staticPolicies("artist_qualification", [
     "artist-credit-edges",
     "artist-edge-backfill",

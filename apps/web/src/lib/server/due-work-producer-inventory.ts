@@ -213,11 +213,6 @@ export const DUE_WORK_PRODUCER_INVENTORY = [
   },
   { file: "label-mint.ts", producers: ["label-take-over"], subjects: ["label"] },
   {
-    file: "label-releases.ts",
-    producers: ["label-release-track-mint"],
-    subjects: ["track"],
-  },
-  {
     file: "labels.ts",
     producers: [
       "label-bio-fill",
@@ -464,18 +459,6 @@ export const DUE_WORK_REVIEWED_NONPRODUCER_WRITERS = [
     rationale:
       "Carries MusicBrainz founding facts fill-empty-only, outside label bio and artwork eligibility predicates.",
     sites: ["label-mint.ts:update:labels:81d073c0"],
-  },
-  {
-    disposition: "non-eligibility",
-    file: "label-releases.ts",
-    rationale:
-      "Writes the label release cadence and resume cursor, which no due-work projection evaluates.",
-    sites: [
-      "label-releases.ts:update:labels:2b63741a",
-      "label-releases.ts:update:labels:0e8fa4e4",
-      "label-releases.ts:update:labels:b8306969",
-      "label-releases.ts:update:labels:7587a192",
-    ],
   },
   {
     disposition: "non-eligibility",
@@ -859,18 +842,6 @@ export const GOAL_D_REVIEWED_NONPROJECTION_WRITERS = [
     rationale:
       "Changes anchor-review bookkeeping or a paid-admission receipt; accepted anchor writes use the chokepoint.",
     sites: ["anchor.ts:update:tracks:b6e72ebf", "anchor.ts:update:tracks:106f7943"],
-  },
-  {
-    disposition: "non-projection-fact",
-    file: "label-releases.ts",
-    rationale:
-      "Changes label release-sync bookkeeping and resume cursor, not seed state or crawl scope.",
-    sites: [
-      "label-releases.ts:update:labels:2b63741a",
-      "label-releases.ts:update:labels:0e8fa4e4",
-      "label-releases.ts:update:labels:b8306969",
-      "label-releases.ts:update:labels:7587a192",
-    ],
   },
   {
     disposition: "non-projection-fact",

@@ -60,8 +60,6 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
 
   "GET /admin/catalogue/holds": "list_crawl_holds",
 
-  "GET /admin/catalogue/label-releases-budget": "get_label_releases_budget",
-
   "GET /admin/catalogue/pipeline": "get_pipeline",
 
   "GET /admin/clips": "list_clips",
@@ -238,8 +236,6 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   "POST /admin/backfill/label-images": "backfill_label_images",
 
   "POST /admin/backfill/label-lineage": "backfill_label_lineage",
-
-  "POST /admin/backfill/label-releases": "backfill_label_releases",
 
   "POST /admin/backfill/lastfm": "backfill_lastfm",
 
@@ -464,8 +460,6 @@ const ADMIN_ROUTE_OPS: Record<string, string> = {
   "PUT /admin/catalogue/capture-budget": "set_capture_budget",
 
   "PUT /admin/catalogue/dismissed": "set_track_dismissed",
-
-  "PUT /admin/catalogue/label-releases-budget": "set_label_releases_budget",
 
   "PUT /admin/catalogue/spotify-budget": "set_spotify_consumer_budget",
 
