@@ -30,7 +30,9 @@ const sentryRelease = resolveSentryRelease();
 const sentryAuthToken = process.env.SENTRY_AUTH_TOKEN;
 const uploadSentrySourceMaps = Boolean(sentryAuthToken);
 
-function sentryUploadPlugin(project: string, output: "client" | "server"): PluginOption {
+const workerOutput = ".cloudflare/output/v0/workers/default";
+
+function sentryUploadPlugin(project: string, output: "assets" | "bundle"): PluginOption {
   return sentryVitePlugin({
     authToken: sentryAuthToken,
     errorHandler: (err) => {
@@ -40,8 +42,8 @@ function sentryUploadPlugin(project: string, output: "client" | "server"): Plugi
     project,
     release: { name: sentryRelease || undefined },
     sourcemaps: {
-      assets: [`dist/${output}/**`],
-      filesToDeleteAfterUpload: [`dist/${output}/**/*.map`],
+      assets: [`${workerOutput}/${output}/**`],
+      filesToDeleteAfterUpload: [`${workerOutput}/${output}/**/*.map`],
     },
     telemetry: false,
   });
@@ -173,6 +175,7 @@ export default defineConfig({
     mdx(docsConfig),
 
     cloudflare({
+      experimental: { newConfig: { cfBuildOutput: true } },
       inspectorPort: process.env[E2E_BLOCK_OUTBOUND_FLAG] === "1" ? false : undefined,
       viteEnvironment: { name: "ssr" },
     }),
@@ -184,10 +187,10 @@ export default defineConfig({
     clientChunkPurityGate(),
 
     uploadSentrySourceMaps
-      ? sentryUploadPlugin(process.env.SENTRY_PROJECT ?? "fluncle-web", "client")
+      ? sentryUploadPlugin(process.env.SENTRY_PROJECT ?? "fluncle-web", "assets")
       : null,
     uploadSentrySourceMaps
-      ? sentryUploadPlugin(process.env.SENTRY_PROJECT_WORKER ?? "fluncle-worker", "server")
+      ? sentryUploadPlugin(process.env.SENTRY_PROJECT_WORKER ?? "fluncle-worker", "bundle")
       : null,
   ] satisfies PluginOption[],
   resolve: {

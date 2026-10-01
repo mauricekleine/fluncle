@@ -83,13 +83,13 @@ Writing alignment does **not** bump `updated_at` (it describes an existing artif
 - One track per run; one render per Log ID (it costs money).
 - Ground every factual claim in the context note or track properties, and do not quote or closely paraphrase lyrics.
 - The observation carries **no commercial track audio** — only Fluncle's spoken voice. The artifact is internal until the operator stands up a surface that plays it.
-- `CARTESIA_VOICE_ID` points at the cloned Fluncle voice in `wrangler.jsonc`. `observation.ts` sets `DEFAULT_CARTESIA_SPEED = 0.85` and `DEFAULT_CARTESIA_EMOTION = "excited"`.
+- `CARTESIA_VOICE_ID` points at the cloned Fluncle voice in `apps/web/cloudflare.config.ts`. `observation.ts` sets `DEFAULT_CARTESIA_SPEED = 0.85` and `DEFAULT_CARTESIA_EMOTION = "excited"`.
 - Loudness normalization (the render can sit hot vs the ~−24 LUFS observation norm) cannot run in the Worker. If observations drift in loudness, run one `loudnorm` pass before supplying the MP3.
 
 ## Worker secrets (the operator sets these)
 
 - `CARTESIA_API_KEY` — secret (`wrangler secret put CARTESIA_API_KEY`).
-- `CARTESIA_VOICE_ID` — non-secret var in `wrangler.jsonc` (the cloned Fluncle voice).
+- `CARTESIA_VOICE_ID` — non-secret var in `apps/web/cloudflare.config.ts` (the cloned Fluncle voice).
 - `FIRECRAWL_API_KEY` — already a declared Worker secret.
 - `OPENROUTER_API_KEY` — secret, drives the context-note distil pass. Read via `readOptionalEnv`: unset ⇒ the distil degrades gracefully to the cleaned raw snippets (never blocks a render).
 - `OPENROUTER_CONTEXT_MODEL` + `OPENROUTER_CONTEXT_EFFORT` — non-secret vars used as a pair. Production uses `openai/gpt-5.6-luna` at `medium`; the frozen corpus bench found fewer hallucination tripwires and worn-texture phrases at about 8× lower cost per note than Haiku. Removing both restores the baked non-reasoning Haiku default.

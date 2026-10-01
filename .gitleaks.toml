@@ -17,7 +17,7 @@ useDefault = true
 description = "Intentionally-public identifiers (runtime config, not secrets)"
 regexTarget = "match"
 regexes = [
-  # The Cloudflare R2 account id is a runtime Worker binding (wrangler.jsonc) — a
+  # The Cloudflare R2 account id is a runtime Worker binding (apps/web/cloudflare.config.ts) — a
   # public account IDENTIFIER, not a credential. It is useless without the actual
   # R2 token, which is a Worker secret and never in the repo.
   '''0651fd3b33d9e0b2fe72a5f13e5cf65d''',
@@ -25,7 +25,7 @@ regexes = [
   # verify domain ownership before accepting URL submissions. Public by design — it is
   # not a credential and grants nothing beyond proving we control the served file.
   '''8337c1b41068549f248bf56f1fc465df''',
-  # The Cloudflare cache-purge ZONE id, a plain var in apps/web/wrangler.jsonc. Same
+  # The Cloudflare cache-purge ZONE id, a plain var in apps/web/cloudflare.config.ts. Same
   # rationale as the R2 account id above: a public zone IDENTIFIER naming which zone to
   # purge, useless without the Cache-Purge-scoped CF_CACHE_PURGE_TOKEN, which is a
   # Worker secret and never in the repo.

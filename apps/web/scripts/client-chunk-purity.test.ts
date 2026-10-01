@@ -110,7 +110,7 @@ describe("the gate plugin", () => {
     "assets/styles.css": { type: "asset" },
   } as never;
 
-  function runGate(dir: string, bundle: unknown) {
+  function runGate(environment: string, bundle: unknown) {
     const gate = clientChunkPurityGate();
     const error = vi.fn();
     const generateBundle = gate.generateBundle;
@@ -120,8 +120,8 @@ describe("the gate plugin", () => {
     }
 
     void generateBundle.call(
-      { error, getModuleInfo: () => null } as never,
-      { dir } as never,
+      { environment: { name: environment }, error, getModuleInfo: () => null } as never,
+      {} as never,
       bundle as never,
       false,
     );
@@ -134,14 +134,14 @@ describe("the gate plugin", () => {
   });
 
   it("fails the client build on a leak, through the real hook signature", () => {
-    const error = runGate("/repo/apps/web/dist/client", leakyBundle);
+    const error = runGate("client", leakyBundle);
 
     expect(error).toHaveBeenCalledTimes(1);
     expect(String(error.mock.calls[0]?.[0])).toContain("src/lib/server/artists.ts (2444 B)");
   });
 
   it("leaves the SSR bundle alone — the Worker is allowed every server module", () => {
-    expect(runGate("/repo/apps/web/dist/server", leakyBundle)).not.toHaveBeenCalled();
+    expect(runGate("ssr", leakyBundle)).not.toHaveBeenCalled();
   });
 
   it("stays silent on a clean client bundle", () => {
@@ -153,6 +153,6 @@ describe("the gate plugin", () => {
       },
     } as never;
 
-    expect(runGate("/repo/apps/web/dist/client", clean)).not.toHaveBeenCalled();
+    expect(runGate("client", clean)).not.toHaveBeenCalled();
   });
 });

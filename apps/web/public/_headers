@@ -10,7 +10,7 @@
 # at the bottom for the files no other rule names (robots.txt, humans.txt,
 # manifest.webmanifest, the platform verification file). Static assets are served by
 # Cloudflare's asset server and never reach the Worker — /llms.txt is the one
-# worker-first exception (wrangler.jsonc) — so the Worker's security-header layer
+# worker-first exception (cloudflare.config.ts) — so the Worker's security-header layer
 # (src/lib/server/security-headers.ts) cannot stamp them, and this file is the only
 # place that can. It is spelled out per rule rather than relying on a single `/*`
 # because Cloudflare does not document whether several matching rules MERGE or whether

@@ -12,7 +12,7 @@ FIRECRAWL_API_KEY=op://$FLUNCLE_1PASSWORD_ENV_ITEM/FIRECRAWL_API_KEY
 
 # Cartesia (Sonic) TTS for the audio-observation render — the only observation
 # voice. Only the API key is a secret; CARTESIA_VOICE_ID is non-secret config in
-# wrangler.jsonc vars (applied to local dev too), so it does not belong here.
+# cloudflare.config.ts vars (applied to local dev too), so it does not belong here.
 CARTESIA_API_KEY=op://$FLUNCLE_1PASSWORD_ENV_ITEM/CARTESIA_API_KEY
 
 POSTIZ_API_KEY=op://$FLUNCLE_1PASSWORD_ENV_ITEM/POSTIZ_API_KEY
@@ -92,7 +92,7 @@ VITE_FLUNCLE_SPOTIFY_PLAYLIST_URL=https://open.spotify.com/playlist/1m5LADqpLjiB
 VITE_FLUNCLE_TELEGRAM_URL=https://t.me/fluncle
 
 # R2 S3 API credentials for presigned direct-to-bucket uploads. R2_ACCOUNT_ID is
-# non-secret and also lives in wrangler.jsonc for production, but local scripts
+# non-secret and also lives in cloudflare.config.ts for production, but local scripts
 # read it from .dev.vars.
 R2_ACCESS_KEY_ID=op://$FLUNCLE_1PASSWORD_ENV_ITEM/R2_ACCESS_KEY_ID
 R2_SECRET_ACCESS_KEY=op://$FLUNCLE_1PASSWORD_ENV_ITEM/R2_SECRET_ACCESS_KEY
