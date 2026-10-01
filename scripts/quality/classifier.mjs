@@ -40,6 +40,7 @@ const DOCUMENT_FILES = new Set([
 ]);
 
 const FULL_DIRECTORIES = [".deepsec/", ".superset/", "patches/", "tools/"];
+const WORKTREE_SETUP_FILES = new Set([".config/wt.toml", ".worktreeinclude"]);
 const WORKFLOW_DIRECTORIES = [".github/"];
 const SCRIPT_DIRECTORIES = ["scripts/", ".husky/", ".claude/hooks/", ".codex/hooks/"];
 const QUALITY_HARNESS_DIRECTORIES = ["scripts/quality/"];
@@ -205,7 +206,7 @@ function classifyPath(
     changedPackageNames.add("@fluncle/web");
   }
 
-  if (path === ".gitleaks.toml") {
+  if (path === ".gitleaks.toml" || WORKTREE_SETUP_FILES.has(path)) {
     matched = true;
   }
 

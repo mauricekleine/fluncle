@@ -126,6 +126,25 @@ describe("dependency-closure classifier", () => {
     ).toEqual(["apps/new-unowned/surface.ts"]);
   });
 
+  test("worktree setup files run only the static lane", () => {
+    const plan = classifyPaths([".config/wt.toml", ".worktreeinclude"]);
+
+    expect(plan.full).toBe(false);
+    expect(plan.unknownFiles).toEqual([]);
+    expect(plan.packages).toEqual([]);
+    expect(plan.lanes).toEqual({
+      docs: false,
+      e2e: false,
+      goDns: false,
+      goSsh: false,
+      migrations: false,
+      scripts: false,
+      sonar: false,
+      static: true,
+      workflows: false,
+    });
+  });
+
   test("documentation does not run public-web E2E", () => {
     const plan = classifyPaths(["docs/search.md"]);
     expect(plan.lanes.docs).toBe(true);

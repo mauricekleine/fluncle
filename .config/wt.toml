@@ -1,0 +1,5 @@
+[[pre-start]]
+copy = "wt step copy-ignored"
+
+[[pre-start]]
+install = "bun install --frozen-lockfile"
