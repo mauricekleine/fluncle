@@ -6,7 +6,7 @@ import { MarkdownCopyButton } from "fumadocs-ui/layouts/docs/page";
 
 import { ArrowSquareOutIcon, CaretDownIcon, FileTextIcon } from "@phosphor-icons/react";
 import { type ReactNode } from "react";
-import { siAnthropic, siCursor } from "simple-icons";
+import { siClaude, siCursor } from "simple-icons";
 import { BrandIcon } from "@/components/brand-icon";
 import { cn } from "@/lib/utils";
 
@@ -41,7 +41,7 @@ function useOpenItems(markdownUrl: string): OpenItem[] {
     },
     {
       href: `https://claude.ai/new?${new URLSearchParams({ q })}`,
-      icon: <BrandIcon icon={siAnthropic} />,
+      icon: <BrandIcon icon={siClaude} />,
       title: "Open in Claude",
     },
     {

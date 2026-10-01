@@ -677,12 +677,15 @@ body::before {
   padding-right: 1rem;
 }
 
+/* The Track Row's Stardust metadata line takes Stardust STRAIGHT, no `opacity` (the
+   `.graph-card-count` precedent below). Dimmed to 78% it fell to ~4.0:1 on the archive plate
+   wherever the blurred sun sits behind it, under the 4.5:1 floor The Legible Sky Rule holds;
+   unmodified it clears 5.3:1 there. */
 .track-label {
   color: var(--muted-foreground);
   font-size: 0.78rem;
   line-height: 1.25;
   margin-top: 0.3rem;
-  opacity: 0.78;
 }
 
 .cli-command {
